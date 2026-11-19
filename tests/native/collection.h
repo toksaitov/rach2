@@ -50,6 +50,8 @@ struct nc_attempt {
     char why[256];
 };
 int etude_native_collection_main(int argc, char **argv);
+int nc_lock_take(const char *state, const char *lock);
+int nc_lock_release(const char *state, const char *lock);
 int nc_assets(const struct nc_config *conf);
 int nc_inventory_read(struct nc_inventory *out, const struct nc_config *conf, int with_roots);
 void nc_inventory_free(struct nc_inventory *out);

@@ -1,9 +1,6 @@
 /* collection.c: serialize the declared native cases and retain every result. */
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE   700
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-#define _DARWIN_C_SOURCE
-#endif
 #include "collection.h"
 #include "history.h"
 #include <errno.h>
@@ -12,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -44,143 +40,6 @@ static int write_bytes(const char *path, const void *data, size_t size)
         return 0;
     ok = !size || (data && fwrite(data, 1, size, fp) == size);
     return !fclose(fp) && ok;
-}
-/* Read the first line of `path`, up to `size` - 1 bytes; 1, or 0 when
- * it cannot be read or is empty. */
-static int first_line(const char *path, char *line, size_t size)
-{
-    FILE *fp = fopen(path, "r");
-    int ok = fp && fgets(line, (int)size, fp) != NULL;
-    if (fp)
-        fclose(fp);
-    if (ok)
-        line[strcspn(line, "\r\n")] = 0;
-    return ok && *line;
-}
-/* Write STATE/collection.journal in the state directory `state`: `what`, the
- * change of the collection lock about to begin, and this process's PID. The
- * caller holds serial_hold's flock and removes the journal once the change is
- * whole, before it drops the flock, so that a journal seen under the flock was
- * left by a process stopped midway; the next run's setup then removes the
- * lock, with or without its owner record, and the journal. 1, or 0 when it
- * cannot be written. */
-static int journal_begin(const char *state, const char *what)
-{
-    char path[4200], record[64];
-    snprintf(path, sizeof(path), "%s/collection.journal", state);
-    snprintf(record, sizeof(record), "%s %ld\n", what, (long)getpid());
-    if (write_bytes(path, record, strlen(record)))
-        return 1;
-    fprintf(stderr, "native: cannot write %s\n", path);
-    unlink(path);
-    return 0;
-}
-/* Remove the journal of journal_begin; 1, or 0 when it remains. */
-static int journal_end(const char *state)
-{
-    char path[4200];
-    snprintf(path, sizeof(path), "%s/collection.journal", state);
-    return !unlink(path) || errno == ENOENT;
-}
-/* Make the collection lock `lock` in the state directory `state`, a directory,
- * and write in it `owner`: this process's PID, its start in clock ticks since
- * boot (field 22 of /proc/self/stat) and the kernel's boot_id, the fields of
- * the deployment's controller receipt, each `-` where the system gives none.
- * The change is journalled, since a stop between the mkdir and the owner's
- * write would leave a lock with no owner record, which a setup refuses. A
- * journal already there is refused and kept for the setup. 1, or 0 with no
- * lock left behind. */
-static int lock_make(const char *state, const char *lock)
-{
-    char path[4200], self[1024], start[32] = "-", boot[128] = "-", record[256];
-    struct stat st;
-    snprintf(path, sizeof(path), "%s/collection.journal", state);
-    if (!lstat(path, &st)) {
-        fprintf(stderr, "native: %s: a stopped change of %s; a deployment's setup clears it\n",
-                path, lock);
-        return 0;
-    }
-    if (!journal_begin(state, "make"))
-        return 0;
-    if (mkdir(lock, 0700)) {
-        fprintf(stderr, "native: another collection owns %s\n", lock);
-        journal_end(state);
-        return 0;
-    }
-    if (first_line("/proc/self/stat", self, sizeof(self))) {
-        char *at = strrchr(self, ')');
-        int field = 2;
-        for (; at && field < 22; field++)
-            at = strchr(at + 1, ' ');
-        if (at && sscanf(at + 1, "%31[0-9]", start) != 1)
-            strcpy(start, "-");
-    }
-    if (!first_line("/proc/sys/kernel/random/boot_id", boot, sizeof(boot)))
-        strcpy(boot, "-");
-    snprintf(path, sizeof(path), "%s/owner", lock);
-    snprintf(record, sizeof(record), "%ld %s %s\n", (long)getpid(), start, boot);
-    if (!write_bytes(path, record, strlen(record))) {
-        fprintf(stderr, "native: cannot record the owner of %s\n", lock);
-        unlink(path);
-        rmdir(lock);
-        journal_end(state);
-        return 0;
-    }
-    journal_end(state);
-    return 1;
-}
-/* Open STATE/collection.serial in the state directory `state` and hold
- * flock(2) on it. The setup of `native-deploy run` and its cleanup hold the
- * same flock, through flock(1), while they read a lock's owner or a controller
- * claim and remove one, so that none of them removes a lock taken, or reads
- * one released, after its reading. The descriptor, which the caller closes to
- * drop the flock, or -1. */
-static int serial_hold(const char *state)
-{
-    char serial[4200];
-    int fd;
-    snprintf(serial, sizeof(serial), "%s/collection.serial", state);
-    fd = open(serial, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        fprintf(stderr, "native: cannot open %s: %s\n", serial, strerror(errno));
-        return -1;
-    }
-    while (flock(fd, LOCK_EX))
-        if (errno != EINTR) {
-            fprintf(stderr, "native: cannot lock %s: %s\n", serial, strerror(errno));
-            close(fd);
-            return -1;
-        }
-    return fd;
-}
-/* Take the collection lock `lock` in the state directory `state` under
- * serial_hold's flock. 1, or 0 with no lock left behind. */
-static int lock_take(const char *state, const char *lock)
-{
-    int fd = serial_hold(state), ok;
-    if (fd < 0)
-        return 0;
-    ok = lock_make(state, lock);
-    close(fd);
-    return ok;
-}
-/* Remove the collection lock `lock` in the state directory `state` and its
- * owner record under serial_hold's flock, journalled as lock_make's change is.
- * A removal that fails keeps the journal, so that the next run's setup
- * removes the lock. 0, or -1 when the lock remains. */
-static int lock_release(const char *state, const char *lock)
-{
-    char path[4200];
-    int fd = serial_hold(state), status = -1;
-    if (fd < 0)
-        return -1;
-    if (journal_begin(state, "release")) {
-        snprintf(path, sizeof(path), "%s/owner", lock);
-        if ((!unlink(path) || errno == ENOENT) && !rmdir(lock) && journal_end(state))
-            status = 0;
-    }
-    close(fd);
-    return status;
 }
 static void json_string(FILE *fp, const char *s)
 {
@@ -469,22 +328,22 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
     if (!conf->results || !nc_mkdir(conf->results) || !nc_mkdir(conf->state))
         return 2;
     snprintf(lock, sizeof(lock), "%s/collection.lock", conf->state);
-    if (!lock_take(conf->state, lock))
+    if (!nc_lock_take(conf->state, lock))
         return 2;
     if (etude_history_now(&granted)) {
-        lock_release(conf->state, lock);
+        nc_lock_release(conf->state, lock);
         return 2;
     }
     conf->granted = &granted;
     snprintf(summary, sizeof(summary), "%s/summary", conf->results);
     int summary_fd = open(summary, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (summary_fd < 0 || close(summary_fd)) {
-        lock_release(conf->state, lock);
+        nc_lock_release(conf->state, lock);
         return 2;
     }
     if (!nc_history_open(&history, conf, i, argc, argv, first)) {
         nc_history_close(&history);
-        lock_release(conf->state, lock);
+        nc_lock_release(conf->state, lock);
         fputs("native: cannot open identified native history\n", stderr);
         return 2;
     }
@@ -494,7 +353,7 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
         failures += status != 0;
         ran++;
     }
-    if (history.unconfirmed || lock_release(conf->state, lock)) {
+    if (history.unconfirmed || nc_lock_release(conf->state, lock)) {
         failures++;
         history.unconfirmed = 1;
         fprintf(stderr, "native: cleanup unconfirmed; collection claim retained: %s\n", lock);

@@ -17,7 +17,8 @@
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/guest/wire.c tools/etude/history_json.c
  * host-deps: utils/sha256.c
- * host-deps: tests/native/collection.c tests/native/inventory.c
+ * host-deps: tests/native/collection.c tests/native/collection_lock.c
+ * host-deps: tests/native/inventory.c
  * host-deps: tests/native/attempt.c
  * host-deps: tests/native/assets.c tests/native/proof.c
  * host-deps: tests/native/cut_transport.c

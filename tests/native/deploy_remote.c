@@ -76,23 +76,27 @@ int nd_stage(struct nd_deploy *d)
  * that reused the recorded PID. A controller or a collection of an older
  * deployment recorded instead the etude boot token of
  * /dev/shm/etude-guest-boot, which lives as long as the boot, so a recorded
- * boot is this boot's when it is the boot_id or that token. A controller
- * claim or a collection lock of another boot belongs to a process that no
- * longer exists, and is cleared with a line that names it; a collection lock
- * of this boot, or one with no owner record, is refused by name. Every change
- * of the collection lock, the setup's clearing of a stale one and the
- * collection's making and release of its own, writes STATE/collection.journal
- * first and removes it once the change is whole, so that a journal seen under
- * the flock below was left by a process stopped midway: the setup then
- * removes the lock, whole or without its owner record, and the journal, with
- * a line that names them. KRFFS, the root of the installed machine, refuses a
- * directory's rename, so the lock cannot move aside before its removal. The
- * look at the claims and the lock, their removal and the making of this run's
- * claim hold flock(1) on STATE/collection.serial, which the collection holds
- * while it takes or releases its lock and the cleanup while it looks at or
- * removes its claim, so that no setup removes a claim or a lock made after its
- * reading. A claim already gone counts as cleared. The etude boot token is
- * still published for the measurement contexts that read it. */
+ * boot is this boot's when it is the boot_id or that token. A controller claim
+ * or a collection lock of another boot belongs to a process that no longer
+ * exists, and is cleared with a line that names it; a collection lock of this
+ * boot, or one with no owner record, is refused by name. When the etude boot
+ * token cannot be read whole, a recorded boot of hexadecimal digits alone, as
+ * the token is, may be this boot's and is kept. Every change of the collection
+ * lock, the setup's clearing of a stale one and the collection's making and
+ * release of its own, writes STATE/collection.journal first, with the owner
+ * record of the lock it changes, and removes it once the change is whole, so
+ * that a journal seen under the flock below was left by a process stopped
+ * midway: the setup then removes the lock when it has no owner record or the
+ * one the journal names, keeps a lock of any other owner, and removes the
+ * journal, with a line that names what it removed. KRFFS, the root of the
+ * installed machine, refuses a directory's rename, so the lock cannot move
+ * aside before its removal. The look at the claims and the lock, their removal
+ * and the making of this run's claim hold flock(1) on STATE/collection.serial,
+ * which the collection holds while it takes or releases its lock and the
+ * cleanup while it looks at or removes its claim, so that no setup removes a
+ * claim or a lock made after its reading. A claim already gone counts as
+ * cleared. The etude boot token is still published for the measurement contexts
+ * that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -108,9 +112,12 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "ln \"$scratch/value\" \"$bootfile\" || test -f \"$bootfile\"); fi; "
         "boot=$(cat /proc/sys/kernel/random/boot_id); "
         "case $boot in *[!0-9a-f-]*|'') exit 1;; esac; "
-        "token=$(cat \"$bootfile\" 2>/dev/null) || token=; "
-        "thisboot() { test \"$1\" = \"$boot\" || "
-        "{ test -n \"$token\" && test \"$1\" = \"$token\"; }; }; "
+        "token=; if test -f \"$bootfile\" && test ! -L \"$bootfile\"; then "
+        "token=$(head -c 65 \"$bootfile\") || token=; fi; "
+        "case $token in *[!0-9a-f]*) token=;; esac; test ${#token} -eq 64 || token=; "
+        "thisboot() { test \"$1\" = \"$boot\" && return 0; "
+        "if test -n \"$token\"; then test \"$1\" = \"$token\"; return; fi; "
+        "case $1 in *[!0-9a-f]*) return 1;; esac; }; "
         "refuse() { printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$1\" >&2; "
         "exit 1; }; "
         "state='%s/state'; test ! -L \"$state\"; "
@@ -124,17 +131,19 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "printf 'native-deploy: cleared: %%s: pid %%s of boot %%s\\n' "
         "\"$old\" \"$opid\" \"$oboot\" >&2; done; "
         "lock=\"$state/collection.lock\"; journal=\"$state/collection.journal\"; "
-        "if test -f \"$journal\"; then change=$(cat \"$journal\") || change=; "
-        "if test -e \"$lock\"; then rm -rf \"$lock\" || true; test ! -e \"$lock\" || refuse "
-        "\"$lock\"; "
-        "printf 'native-deploy: cleared: %%s: left by a stopped change: %%s\\n' \"$lock\" "
-        "\"$change\" >&2; fi; rm -f \"$journal\"; fi; "
+        "if test -f \"$journal\"; then jop=; jrec=; read jop jrec < \"$journal\" || true; "
+        "if test -d \"$lock\"; then jown=; "
+        "test ! -f \"$lock/owner\" || read jown < \"$lock/owner\" || true; "
+        "if test -z \"$jown\" || test \"$jown\" = \"$jrec\"; then rm -rf \"$lock\" || true; "
+        "test ! -e \"$lock\" || refuse \"$lock\"; "
+        "printf 'native-deploy: cleared: %%s: left by a stopped change: %%s %%s\\n' \"$lock\" "
+        "\"$jop\" \"$jrec\" >&2; fi; fi; rm -f \"$journal\"; fi; "
         "held='held with no owner record'; "
         "if test -d \"$lock\" && test -f \"$lock/owner\"; then "
         "lpid=; lboot=; read lpid lborn lboot < \"$lock/owner\" || true; "
         "held=\"held by pid $lpid of boot $lboot\"; "
         "if test -n \"$lboot\" && test \"$lboot\" != - && ! thisboot \"$lboot\"; then "
-        "printf 'clear %%s\\n' \"$$\" > \"$journal\"; "
+        "printf 'clear %%s %%s %%s\\n' \"$lpid\" \"$lborn\" \"$lboot\" > \"$journal\"; "
         "rm -f \"$lock/owner\"; rmdir \"$lock\" || refuse \"$lock\"; rm -f \"$journal\"; "
         "printf 'native-deploy: cleared: %%s: %%s\\n' \"$lock\" \"$held\" >&2; fi; fi; "
         "if test -d \"$lock\"; then "
