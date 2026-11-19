@@ -20,13 +20,19 @@
  * the DMT modes up to 1024x768; a CEA extension with a bad checksum, kept;
  * an extension of another kind with a bad checksum, dropped with the base
  * block's count and checksum mended; a header with two bytes swapped,
- * mended; a new blob for each probe; and a disconnected sink, which clears
- * the EDID and the modes.
+ * mended; a new blob for each probe; a disconnected sink, which clears
+ * the EDID and the modes; and the ELD Linux's drm_edid_to_eld builds: of
+ * IGT's HDMI audio EDID byte for byte, of an HDMI block with latencies and
+ * AI on a DisplayPort connector with its audio delay, and none without an
+ * EDID.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
 #include "drm_kms_model.c"
+#include "igt_audio_edid.h"
+
+extern int memcmp(const void *a, const void *b, unsigned long n);
 
 /* QEMU 10.2.1's EDID for -device virtio-gpu-pci,edid=on,xres=1280,yres=800,
  * which std-vga gives as well, as Linux 6.12 read it from
@@ -424,6 +430,75 @@ static void row_gtf_full_blank(void)
           "GTF's default curve: 1024x768, 1344 pixels a line");
 }
 
+/** Mend the checksum of the EDID block at `b`. */
+static void sum_block(uint8_t *b)
+{
+    uint8_t sum = 0;
+    int i;
+
+    for (i = 0; i < 127; i++) {
+        sum = (uint8_t)(sum + b[i]);
+    }
+    b[127] = (uint8_t)(0u - sum);
+}
+
+/** IGT's HDMI audio EDID through an HDMI connector gives Linux's ELD byte
+ * for byte, with no audio delay, and a sink unplugged clears it. */
+static void row_eld_igt(void)
+{
+    struct drm_mode_modeinfo m;
+    int i, rest = 0;
+
+    device_init(DRM_MODE_CONNECTOR_HDMIA);
+    probe(igt_audio_edid, sizeof(igt_audio_edid));
+    CHECK(memcmp(conn.eld, igt_audio_eld, sizeof(igt_audio_eld)) == 0,
+          "ELD of IGT's audio EDID: Linux's bytes");
+    for (i = (int)sizeof(igt_audio_eld); i < DRM_ELD_MAX; i++) {
+        rest |= conn.eld[i];
+    }
+    CHECK(rest == 0, "ELD of IGT's audio EDID: zero past its 28 bytes");
+    CHECK(drm_eld_size(conn.eld) == 28, "ELD of IGT's audio EDID: 28 bytes");
+    k_memset(&m, 0, sizeof(m));
+    CHECK(drm_av_sync_delay(&conn, &m) == 0, "ELD of IGT's audio EDID: no latencies, no delay");
+    sink_status = DRM_CONNECTOR_DISCONNECTED;
+    probe(igt_audio_edid, sizeof(igt_audio_edid));
+    CHECK(conn.eld[0] == 0 && conn.eld[DRM_ELD_BASELINE_ELD_LEN] == 0,
+          "ELD of an unplugged sink: cleared");
+    sink_status = DRM_CONNECTOR_CONNECTED;
+    device_fini();
+}
+
+/** An HDMI block with Supports_AI and both latency pairs, on a DisplayPort
+ * connector: the ELD's AI bit and DisplayPort type, and the delays Linux's
+ * drm_av_sync_delay gives, 40 - 20 ms progressive and 60 - 20 interlaced. */
+static void row_eld_latency(void)
+{
+    static const uint8_t data[] = {0x23, 0x09, 0x07, 0x07, 0x6c, 0x03, 0x0c, 0x00, 0x10,
+                                   0x00, 0xb8, 0x2d, 0xc0, 21,   11,   31,   11};
+    uint8_t edid[256];
+    struct drm_mode_modeinfo m;
+
+    k_memcpy(edid, igt_audio_edid, sizeof(edid));
+    k_memset(edid + 128 + 4, 0, 123);
+    k_memcpy(edid + 128 + 4, data, sizeof(data));
+    edid[128 + 2] = (uint8_t)(4u + sizeof(data));
+    sum_block(edid + 128);
+    device_init(DRM_MODE_CONNECTOR_DisplayPort);
+    probe(edid, sizeof(edid));
+    CHECK(conn.eld[DRM_ELD_SAD_COUNT_CONN_TYPE] ==
+              (1u << DRM_ELD_SAD_COUNT_SHIFT | DRM_ELD_CONN_TYPE_DP | DRM_ELD_SUPPORTS_AI),
+          "ELD with latencies: one SAD, DisplayPort, AI");
+    CHECK(conn.eld[DRM_ELD_SPEAKER] == 0, "ELD with no speaker block: no allocation");
+    CHECK(conn.latency_present[0] && conn.latency_present[1] && conn.video_latency[1] == 31 &&
+              conn.audio_latency[1] == 11,
+          "ELD with latencies: both pairs kept");
+    k_memset(&m, 0, sizeof(m));
+    CHECK(drm_av_sync_delay(&conn, &m) == 20, "audio delay of a progressive mode: 20 ms");
+    m.flags = DRM_MODE_FLAG_INTERLACE;
+    CHECK(drm_av_sync_delay(&conn, &m) == 40, "audio delay of an interlaced mode: 40 ms");
+    device_fini();
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -441,6 +516,8 @@ int main(void)
     row_new_blob();
     row_disconnected();
     row_gtf_full_blank();
+    row_eld_igt();
+    row_eld_latency();
     CHECK(allocations == base, "every allocation freed");
     if (failures) {
         return 1;

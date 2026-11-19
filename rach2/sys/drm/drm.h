@@ -897,6 +897,9 @@ int drm_is_file(const fd_entry_t *entry);
  * change is taken under the device's commit lock (`drm_modeset_lock`).
  */
 
+/* The bytes of a connector's ELD, Linux's MAX_ELD_BYTES. */
+#define DRM_ELD_MAX 128
+
 /* A mode object: its ID, its DRM_MODE_OBJECT_* type, and its properties
  * with the values an atomic state does not hold itself (the immutable ones,
  * and every one of a driver without DRIVER_ATOMIC). */
@@ -1297,7 +1300,11 @@ struct drm_display_mode {
  * `max_vfreq` are what that EDID says (`drm_edid_hdmi_info`), Linux's
  * display_info.bpc and monitor_range, 0 without one. `dpms` is the legacy
  * DPMS property's value. `encoder` is the encoder that drives it after the last
- * commit.
+ * commit. `eld` is the EDID-Like Data that EDID gives an audio driver, Linux's
+ * connector->eld (`drm_edid_to_eld`), all zero without an EDID, and the
+ * latencies are those of its HDMI block, Linux's fields of the same names,
+ * for `drm_av_sync_delay`; all are written with the EDID property, under
+ * `mode_lock`.
  */
 struct drm_connector {
     struct drm_mode_object base;
@@ -1323,6 +1330,10 @@ struct drm_connector {
     uint32_t edid_override_len;
     uint32_t bpc;
     uint32_t min_vfreq, max_vfreq;
+    uint8_t eld[DRM_ELD_MAX];
+    int latency_present[2];   /* progressive [0] and interlaced [1] */
+    uint8_t video_latency[2]; /* the EDID's raw values: ms / 2 + 1, 0 unknown */
+    uint8_t audio_latency[2]; /* the same; 255 for no audio or no video */
     const struct drm_connector_funcs *funcs;
     struct drm_connector_state *state;
     struct drm_property *scaling_mode_property, *max_bpc_property; /* NULL until attached */
@@ -2284,6 +2295,40 @@ uint32_t drm_hdmi_avi_infoframe(const struct drm_edid_hdmi_info *info,
  * sink that takes no such frame. */
 uint32_t drm_hdmi_vendor_infoframe(const struct drm_edid_hdmi_info *info,
                                    const struct drm_mode_modeinfo *mode, uint8_t *buf);
+
+/*
+ * The ELD's layout, Linux's drm_eld.h: a header of 4 bytes, then the
+ * baseline block, whose length in dwords the header's third byte gives.
+ */
+#define DRM_ELD_VER                 0
+#define DRM_ELD_VER_CEA861D         (2 << 3) /* supports 861D or below */
+#define DRM_ELD_BASELINE_ELD_LEN    2        /* in dwords */
+#define DRM_ELD_CEA_EDID_VER_MNL    4
+#define DRM_ELD_CEA_EDID_VER_SHIFT  5
+#define DRM_ELD_MNL_MASK            0x1f
+#define DRM_ELD_SAD_COUNT_CONN_TYPE 5
+#define DRM_ELD_SAD_COUNT_SHIFT     4
+#define DRM_ELD_CONN_TYPE_HDMI      (0 << 2)
+#define DRM_ELD_CONN_TYPE_DP        (1 << 2)
+#define DRM_ELD_SUPPORTS_AI         (1 << 1)
+#define DRM_ELD_AUD_SYNCH_DELAY     6 /* in units of 2 ms */
+#define DRM_ELD_SPEAKER             7
+#define DRM_ELD_PORT_ID             8 /* 8 bytes */
+#define DRM_ELD_MANUFACTURER_NAME0  16
+#define DRM_ELD_PRODUCT_CODE0       18
+#define DRM_ELD_MONITOR_NAME_STRING 20
+#define DRM_ELD_CEA_SAD(mnl, sad)   (20 + (mnl) + 3 * (sad))
+
+/** The bytes of the ELD `eld` holds, header and baseline block, Linux's
+ * drm_eld_size; 4 for an ELD of zeroes. */
+uint32_t drm_eld_size(const uint8_t *eld);
+
+/** The sink's delay of audio behind video in ms for `mode`, Linux's
+ * drm_av_sync_delay: from `connector`'s HDMI latencies, the interlaced
+ * ones for an interlaced mode when the sink gives them, 0 when it gives
+ * none or has no audio or video. */
+uint32_t drm_av_sync_delay(const struct drm_connector *connector,
+                           const struct drm_mode_modeinfo *mode);
 
 /** Pack the source product infoframe of `vendor`, `product` and the
  * source type `sdi` into `buf`, Linux's hdmi_spd_infoframe_init and its
