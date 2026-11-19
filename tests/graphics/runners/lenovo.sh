@@ -265,7 +265,10 @@ case $kind in
             run root conformance igt.sh -l "$here/$list" ${LENOVO_IGT:+-t "$LENOVO_IGT"} \
                 -o "$work/out" "$part" || status=$?
         fi
-        if [ "$ref" != - ]; then
+        if [ "$ref" != - ] && [ ! -f "$out/list" ]; then
+            echo "lenovo: igt: igt.sh listed no subtests of the part; nothing judged" >&2
+            status=1
+        elif [ "$ref" != - ]; then
             sed 's/^/=/' "$out/list" > "$work/scope"
             cat "$out"/*.results > "$work/got" 2> /dev/null || : > "$work/got"
             judge results "$here/$ref" "$work/got" -s "$work/scope" > "$work/judge.out" || status=1
