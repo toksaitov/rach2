@@ -21,6 +21,11 @@
 #include "virtio_net.h"
 #include "../net.h"
 #include "../netconf.h"
+#include "../arp/arp.h"
+#include "../ip6/ip6.h"
+#include "../ip6/nd6.h"
+#include "../ip6/route6.h"
+#include "../socket/packet.h"
 #include "../../cmdline.h"
 #include "../../fs/synthfs.h"
 #include "../../fs/sysfs.h"
@@ -33,9 +38,14 @@
 #include "../../vfio/vfio.h"
 
 /* The interfaces: the `niface` cards the probe brought up, in the order it
- * found them, and `lo` after them. */
+ * found them, and `lo` after them; then the `nextra` interfaces registered
+ * since (`netdev_register`). A card of the probe's that was unregistered
+ * since, as a virtio network device unbound, has its bit in `gone`: it is
+ * listed no more, and its record is never used again, so that a pointer to
+ * it kept somewhere reaches no other interface. */
 static struct netdev ifaces[NETDEV_MAX + 1];
 static int niface;
+static unsigned gone;
 static struct netdev *extra[NETDEV_MAX];
 static int nextra;
 static int next_index;
@@ -63,23 +73,44 @@ static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netde
 
 #define NETDEV_COUNT ((int)(sizeof(drivers) / sizeof(drivers[0])))
 
+/** The probe's cards still listed. */
+static int probe_listed(void)
+{
+    int i, n = 0;
+
+    for (i = 0; i < niface; i++) {
+        n += !(gone & 1u << i);
+    }
+    return n;
+}
+
 int netdev_count(void)
 {
-    return niface + nextra;
+    return probe_listed() + nextra;
 }
 
 struct netdev *netdev_at(int n)
 {
-    if (n >= 0 && n < niface)
-        return &ifaces[n];
-    if (n >= niface && n < niface + nextra)
-        return extra[n - niface];
-    return n == niface + nextra && lo_ready ? &ifaces[niface] : 0;
+    int i, cards = probe_listed();
+
+    if (n < 0) {
+        return 0;
+    }
+    if (n < cards) {
+        for (i = 0; i < niface; i++) {
+            if (!(gone & 1u << i) && n-- == 0) {
+                return &ifaces[i];
+            }
+        }
+    }
+    if (n >= cards && n < cards + nextra)
+        return extra[n - cards];
+    return n == cards + nextra && lo_ready ? &ifaces[niface] : 0;
 }
 
 int netdev_listed(void)
 {
-    return niface + nextra + lo_ready;
+    return netdev_count() + lo_ready;
 }
 
 struct netdev *netdev_loopback(void)
@@ -245,7 +276,7 @@ int netdev_member6(const struct netdev *nd, const uint8_t *group)
 
 struct netdev *netdev_first(void)
 {
-    return niface > 0 ? &ifaces[0] : nextra ? extra[0] : 0;
+    return netdev_count() > 0 ? netdev_at(0) : 0;
 }
 
 struct netdev *netdev_by_name(const char *name)
@@ -344,7 +375,7 @@ int netdev_is_broadcast(uint32_t ip)
     return 0;
 }
 
-/** Name `nd`, the interface of card `n` from 0, `ethN`. */
+/** Name `nd`, the interface of card `n` from 0, `ethN`, for N up to 99. */
 static void name_iface(struct netdev *nd, int n)
 {
     nd->name[0] = 'e';
@@ -479,11 +510,12 @@ int netdev_tx(struct netdev *nd, const uint8_t *data, uint16_t len)
 
 void netdev_poll(void)
 {
+    struct netdev *nd;
     int i;
 
-    for (i = 0; i < niface; i++) {
-        if (ifaces[i].ops->poll) {
-            ifaces[i].ops->poll(ifaces[i].dev);
+    for (i = 0; (nd = netdev_at(i)) != 0 && !nd->loopback; i++) {
+        if (nd->ops->poll) {
+            nd->ops->poll(nd->dev);
         }
     }
 }
@@ -577,7 +609,20 @@ void netdev_carrier_changed(struct netdev *nd)
     }
 }
 
-/** Attach a non-PCI interface without moving any existing interface record. */
+void netdev_name_eth(struct netdev *nd)
+{
+    int n;
+
+    for (n = 0; n < 99; n++) {
+        name_iface(nd, n);
+        if (!netdev_by_name(nd->name)) {
+            return;
+        }
+    }
+}
+
+/** Attach an interface after the probe without moving any existing interface
+ * record. */
 int netdev_register(struct netdev *nd)
 {
     unsigned used = 0;
@@ -585,7 +630,7 @@ int netdev_register(struct netdev *nd)
 
     if (!nd || !nd->ops || !nd->ops->tx || !nd->name[0] || netdev_by_name(nd->name))
         return -EINVAL;
-    if (niface + nextra >= NETDEV_MAX || next_index <= 0 || next_index == 0x7fffffff)
+    if (netdev_count() >= NETDEV_MAX || next_index <= 0 || next_index == 0x7fffffff)
         return -ENOSPC;
     for (i = 0; i < netdev_listed(); ++i)
         used |= 1u << netdev_slot(netdev_at(i));
@@ -597,11 +642,18 @@ int netdev_register(struct netdev *nd)
     return 0;
 }
 
-/** Withdraw an attached interface after its driver and work have stopped. */
+/** Withdraw an interface after its driver and work have stopped: a card of
+ * the probe's is marked gone, an attached interface taken off the list. */
 void netdev_unregister(struct netdev *nd)
 {
     int i;
 
+    for (i = 0; i < niface; i++) {
+        if (&ifaces[i] == nd) {
+            gone |= 1u << i;
+            return;
+        }
+    }
     for (i = 0; i < nextra && extra[i] != nd; ++i) {
     }
     if (i == nextra)
@@ -611,13 +663,55 @@ void netdev_unregister(struct netdev *nd)
     extra[--nextra] = 0;
 }
 
+/* The neighbours `netdev_withdraw` reads, under net_lock. */
+static struct arp_row withdraw_arp[ARP_CACHE_SIZE];
+static struct nd6_row withdraw_nd6[ND6_CACHE_SIZE];
+
+void netdev_withdraw(struct netdev *nd)
+{
+    struct netdev_rt r;
+    uint32_t flags;
+    int n, count;
+
+    flags = net_lock();
+    (void)netconf_set_up(nd, 0);
+    nd6_if_down(nd);
+    route6_forget(nd, -1);
+    for (n = 0; netdev_route_at(n, &r);) {
+        if (r.ifindex == nd->index && r.kind == NETDEV_RT_ADDED) {
+            (void)netdev_route_del(nd, r.dst, r.mask, r.gw);
+        } else {
+            ++n;
+        }
+    }
+    (void)netconf_set_address(nd, 0, 0);
+    arp_forget_dev(nd);
+    count = arp_snapshot(withdraw_arp, ARP_CACHE_SIZE);
+    for (n = 0; n < count; ++n) {
+        if (withdraw_arp[n].iface == nd->name) {
+            (void)arp_forget(nd, withdraw_arp[n].ip);
+        }
+    }
+    count = nd6_snapshot(withdraw_nd6, ND6_CACHE_SIZE);
+    for (n = 0; n < count; ++n) {
+        if (withdraw_nd6[n].ifindex == nd->index) {
+            (void)nd6_forget(nd, withdraw_nd6[n].addr);
+        }
+    }
+    ip6_forget_dev(nd);
+    packet_dev_gone(nd->index);
+    netdev_unregister(nd);
+    net_unlock(flags);
+}
+
 /** Return the next service deadline for the stopped idle tick. */
 uint32_t netdev_idle_ticks(void)
 {
+    struct netdev *nd;
     int i;
 
-    for (i = 0; i < niface; i++) {
-        if (ifaces[i].ops->poll) {
+    for (i = 0; (nd = netdev_at(i)) != 0 && !nd->loopback; i++) {
+        if (nd->ops->poll) {
             return 1;
         }
     }
@@ -652,13 +746,13 @@ static int away_set_up(void *dev, int up)
 }
 
 /** The number of the probe's card `nd` in `ifaces`, or -1 for an interface
- * that is no card of the probe's. */
+ * that is no card of the probe's or one unregistered since. */
 static int card_of(const struct netdev *nd)
 {
     int i;
 
     for (i = 0; i < niface; i++) {
-        if (&ifaces[i] == nd) {
+        if (&ifaces[i] == nd && !(gone & 1u << i)) {
             return i;
         }
     }
@@ -820,7 +914,7 @@ static struct netdev *card_named(int n, const char *buf, uint32_t len)
     }
     key = (b1 << 4 | b0) << 8 | (d1 << 4 | d0) << 3 | f;
     for (i = 0; i < niface; i++) {
-        if (ifaces[i].pci_key == key && card_ops[i] == sys_drivers[n].ops) {
+        if (ifaces[i].pci_key == key && card_ops[i] == sys_drivers[n].ops && !(gone & 1u << i)) {
             return &ifaces[i];
         }
     }

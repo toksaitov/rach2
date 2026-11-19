@@ -75,6 +75,15 @@ int packet_ifindex(struct socket *sock);
  */
 int packet_bind(struct socket *sock, int ifindex);
 
+/**
+ * The interface of index `ifindex` is going away: each socket bound to it
+ * is bound to none, -1, so that it receives nothing and its sends find no
+ * interface, and is given the pending error ENETDOWN, which its next
+ * receive or send reports, as Linux's packet_notifier does at
+ * NETDEV_UNREGISTER. Takes `net_lock` itself.
+ */
+void packet_dev_gone(int ifindex);
+
 /* One binding, copied out for /proc/net/packet. */
 struct packet_row {
     int refs;          /* the socket's references */
