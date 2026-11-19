@@ -453,6 +453,16 @@ void smp_service(void)
 /* The processors' records: the caller's, whose thread `caller_proc` is,
    and the claim's holder's. */
 struct percpu cpu_table[NR_CPUS];
+
+/** The exchange behind `sched_mb`, the barrier the wait and its wakers
+ * pass: one thread here, so a plain swap. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
 static struct process caller_proc, holder_proc;
 
 /* Whether the caller is inside a system call, which with interrupts on lets

@@ -58,6 +58,16 @@
 extern int dprintf(int fd, const char *format, ...);
 
 struct percpu cpu_table[NR_CPUS];
+
+/** The exchange behind `sched_mb`, the barrier the wait and its wakers
+ * pass: one thread here, so a plain swap. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
 static int blocks, conds, pending_calls;
 static uint32_t deadline_at_block[4];
 static int post_sig_woken; /* the wake sets the signal-work flag too */
