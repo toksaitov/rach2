@@ -636,6 +636,58 @@ void evdev_set_version(struct evdev *dev, uint16_t version)
     (void)version;
 }
 
+/** The model has no VMware input endpoints. */
+void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
+{
+    (void)dev;
+    (void)phys;
+    (void)flags;
+}
+
+/** The model has no absolute axes. */
+void evdev_set_abs(struct evdev *dev, uint16_t code, int32_t minimum, int32_t maximum, int32_t fuzz,
+                   int32_t flat)
+{
+    (void)dev;
+    (void)code;
+    (void)minimum;
+    (void)maximum;
+    (void)fuzz;
+    (void)flat;
+}
+
+/** VMware events are outside this controller model. */
+void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+{
+    (void)dev;
+    (void)type;
+    (void)code;
+    (void)value;
+}
+
+/** No key of a VMware endpoint is held in this model. */
+int evdev_key_down(struct evdev *dev, uint16_t code)
+{
+    (void)dev;
+    (void)code;
+    return 0;
+}
+
+/** No VMware endpoint is grabbed in this model. */
+int evdev_grabbed(struct evdev *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+/** The model records PS/2 reports through mouse_report. */
+void mouse_push_packet(uint8_t buttons, int dx, int dy)
+{
+    (void)buttons;
+    (void)dx;
+    (void)dy;
+}
+
 void evdev_unregister(struct evdev *dev)
 {
     (void)dev;
