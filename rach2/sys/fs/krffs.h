@@ -751,6 +751,9 @@ int krffs_root_halted(void);
 /** Halt the disk root and retain the dirty flag for recovery. */
 void krffs_root_halt(void);
 
+/** Whether writes on the disk root are part of a last-holder removal. */
+int krffs_root_reaping(void);
+
 /** Set the boot root's `on_halt`, which its VFS mount gives to turn the
  * mounts that show it read-only. */
 void krffs_root_on_halt(void (*fn)(krffs_mount_t *mount));
