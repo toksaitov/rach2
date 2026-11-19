@@ -456,10 +456,15 @@ struct tcb {
     uint32_t retx_seq;  /* sequence number the control occupies   */
 
     /*
-     * The delayed acknowledgement (`tcp_delack_hold`), which counts what
-     * is unacknowledged from `rcv_wup`. `rcv_mss` is the largest payload
-     * received, Linux's icsk_ack.rcv_mss with the same floor of 536;
-     * `delack_due` the tick at which a held acknowledgement goes out, 0
+     * The delayed acknowledgement (`tcp_delack_hold`). `rcv_acked` is the
+     * acknowledgement number of the last segment IP took, which counts
+     * what is unacknowledged; `rcv_wup` moves when a segment is built,
+     * whether or not it goes. `rcv_mss` is the payload Linux's
+     * icsk_ack.rcv_mss takes for a full segment, 536 until data comes, and
+     * `rcv_last_seg` its last_seg_size, the length of the last shorter
+     * segment that may become it. `ack_quick` counts the acknowledgements
+     * of new data still to go at once, Linux's icsk_ack.quick.
+     * `delack_due` is the tick at which a held acknowledgement goes out, 0
      * when none is held. `ack_pushed` counts,
      * up to 2, the segments since the last acknowledgement that ended a
      * write of the peer's, Linux's ICSK_ACK_PUSHED and ICSK_ACK_PUSHED2;
@@ -467,11 +472,14 @@ struct tcb {
      * pingpong mode, and `rcv_data_at` the tick of the last data received,
      * Linux's lrcvtime, valid once `rcv_data_seen`.
      */
+    uint32_t rcv_acked;
     uint32_t rcv_mss;
+    uint32_t rcv_last_seg;
     uint32_t delack_due;
     uint32_t rcv_data_at;
     uint8_t rcv_data_seen;
     uint8_t ack_pushed;
+    uint8_t ack_quick;
     uint8_t pingpong;
     /* 1 while an acknowledgement waits for the end of a batch of frames
      * (`tcp_batch_begin`), on the list `batch_next` links. */
@@ -524,7 +532,9 @@ extern int tcp_ack_batch;
  * transmit pass gives the stack, as Linux's GRO hands TCP one segment for
  * a NAPI poll's worth. Batches nest; until the outermost `tcp_batch_end`,
  * the acknowledgement of in-order data waits, up to TCP_BATCH_ACK_MAX
- * bytes a connection. Takes `net_lock` itself.
+ * bytes a connection. The depth and the list of blocks owed are global, so
+ * a bracket is one receive pass under the big kernel lock that does not
+ * sleep or yield it. Takes `net_lock` itself.
  */
 void tcp_batch_begin(void);
 
@@ -712,8 +722,9 @@ int tcp_is_connected(struct socket *sock);
 void tcp_window_update(struct socket *sock);
 
 /** Set TCP_QUICKACK on the stream socket `sock`: 0 holds acknowledgements
- * for this side's answers to carry, any other value sends a held one now.
- * Takes `net_lock` itself. */
+ * for this side's answers to carry, any other value acknowledges as a read
+ * would and ends that; a socket with no connection keeps the mode for the
+ * one `tcp_connect` opens. Takes `net_lock` itself. */
 void tcp_quickack_set(struct socket *sock, int val);
 
 /** Read TCP_QUICKACK: 0 while the connection of `sock` is in ping-pong

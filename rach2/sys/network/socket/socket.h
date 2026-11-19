@@ -249,6 +249,10 @@ typedef struct socket {
     int keepintvl;
     int keepcnt;
     uint32_t user_timeout;
+    /* 1 when TCP_QUICKACK was last set to 0: the mode a socket with no
+     * connection reads back, and the connection `connect` opens starts
+     * with (`pingpong`). */
+    uint8_t quickack_off;
 
     /* The TCP control block of a stream socket. NULL for the other types,
      * and for a stream before `connect` or `listen` or once the block has
