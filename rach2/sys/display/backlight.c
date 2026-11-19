@@ -96,6 +96,18 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
     return i;
 }
 
+void backlight_level_changed(int i, int level)
+{
+    uint32_t flags;
+
+    if (i < 0 || i >= nlights) {
+        return;
+    }
+    flags = spin_lock_irqsave(&lock);
+    lights[i].level = level < 0 ? 0 : level > lights[i].max ? lights[i].max : level;
+    spin_unlock_irqrestore(&lock, flags);
+}
+
 void backlight_init(void)
 {
     intelbl_init();

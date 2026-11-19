@@ -182,16 +182,18 @@ void intel_backlight_enable(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
     uint32_t ctl1, flags;
+    int raised = 0;
 
     if (d->bl_index < 0) {
         return;
     }
     flags = spin_lock_irqsave(&d->bl_lock);
     /* Linux's __intel_backlight_enable: a level at or below the least
-     * comes on at the most, and lit. */
+     * comes on at the most, and lit, and the class is told below. */
     if (d->bl_level <= d->bl_min) {
         d->bl_level = d->bl.max;
         d->bl_dark = 0;
+        raised = 1;
     }
     /* Linux's lpt_enable_backlight: a PWM left on is turned off first. */
     ctl1 = bl_rd(i915, BLC_PWM_PCH_CTL1);
@@ -209,6 +211,12 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     intelbl_set(&d->bl, d->bl_level);
     d->bl_enabled = 1;
     spin_unlock_irqrestore(&d->bl_lock, flags);
+    /* The class's level, which brightness reads and each blank and unblank
+     * gives back to bl_set, is the most now, as Linux sets props.brightness;
+     * its lock is taken before bl_lock, so only once bl_lock is let go. */
+    if (raised) {
+        backlight_level_changed(d->bl_index, d->bl.max);
+    }
 }
 
 void intel_backlight_disable(struct drm_i915_private *i915)

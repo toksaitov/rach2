@@ -1672,6 +1672,20 @@ static void row_backlight(void)
           "backlight: on with the pipe, the console's plane shown again");
     CHECK((reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508, "backlight: the level kept");
     frame();
+    /* Linux's __intel_backlight_enable: the level 0 root wrote, at the
+     * least, comes on at the most with the pipe, and the class's brightness
+     * reads the most, as Linux's props.brightness does, not the 0. */
+    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "0\n") == 0 && bl_show(BACKLIGHT_BRIGHTNESS) == 0,
+          "backlight: brightness 0 written");
+    CHECK(set_active(0) == 0, "backlight: the pipe off again");
+    frame();
+    CHECK(set_active(1) == 0 && (reg(PP_CONTROL) & EDP_BLC_ENABLE) &&
+              (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 937 && bl_show(BACKLIGHT_BRIGHTNESS) == 937 &&
+              bl_show(BACKLIGHT_ACTUAL) == 937,
+          "backlight: a level at the least comes on at the most, which brightness reads");
+    frame();
+    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "500\n") == 0 && (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508,
+          "backlight: 500 again");
 }
 
 /* ---- 78-9.6: the pipe CRC ---- */
