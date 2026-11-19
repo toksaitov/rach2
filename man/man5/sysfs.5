@@ -1537,6 +1537,10 @@ reads
 and
 .Pa use_zero_page
 0.
+On an AMD family 0x10 processor, which takes no huge page, or when the
+kernel had no memory to count them, the three read so too and take no
+other value: a write of another is
+.Er EINVAL .
 .Pa hpage_pmd_size
 is the page-directory mapping size in bytes, 2097152 on x86-64 and
 4194304 on i686, and is read-only.
