@@ -601,6 +601,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "hdmi_audio",
+          "checks": "tests/host/hdmi_audio_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "hid",
           "checks": "tests/host/hid_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
