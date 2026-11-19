@@ -479,7 +479,8 @@ static uint32_t tcp_mtus(const struct tcb *tcb, uint32_t *link)
     struct netdev *nd;
 
     if (tcb->remote_ip.family == AF_INET6) {
-        nd = ip6_route_find(tcb->remote_ip.v6, (int)tcb->remote_ip.scope, via6);
+        nd = ip6_route_find(tcb->remote_ip.v6,
+                            tcb->remote_ip.scope ? (int)tcb->remote_ip.scope : tcb->ifindex, via6);
         if (!nd) {
             *link = IP6_MTU_MIN;
             return IP6_MTU_MIN;
@@ -491,7 +492,7 @@ static uint32_t tcp_mtus(const struct tcb *tcb, uint32_t *link)
         *link = NETDEV_LOOPBACK_MTU;
         return NETDEV_LOOPBACK_MTU;
     }
-    nd = netdev_route(dst, &via);
+    nd = netdev_route_on(dst, tcb->ifindex, &via);
     if (!nd) {
         *link = NETDEV_ETH_MTU_MAX;
         return NETDEV_ETH_MTU_MAX;
@@ -906,8 +907,9 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
 
 /**
  * Send the segment of `seg_len` bytes in `tcp_tx_buf` from `local_ip` to
- * `remote_ip` in the network namespace `ns`, counting it in `net_mib` when
- * IP takes it, and a reset among the resets. Returns what `ip_tx_from`
+ * `remote_ip` in the network namespace `ns`, by the card of index `ifindex`
+ * or, for 0, the card the route chooses, counting it in `net_mib` when
+ * IP takes it, and a reset among the resets. Returns what `ip_tx_opts`
  * returned, or -ENETUNREACH, counted in OutNoRoutes, when the machine no
  * longer has `local_ip`.
  *
@@ -917,7 +919,7 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
  * is never reached, since it would put the machine's current source in
  * place of the one the checksum covers.
  */
-static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t remote_ip,
+static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t remote_ip, int ifindex,
                      uint16_t seg_len)
 {
     const struct netns *was = ip_ns;
@@ -933,11 +935,11 @@ static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t rem
     }
     ip_ns = ns;
     if (remote_ip.family == AF_INET6) {
-        rc = ip6_tx(local_ip.v6, remote_ip.v6, (int)remote_ip.scope, IP6_NH_TCP, tcp_tx_buf,
-                    seg_len, IP6_HOP_LIMIT_DEFAULT);
+        rc = ip6_tx(local_ip.v6, remote_ip.v6, remote_ip.scope ? (int)remote_ip.scope : ifindex,
+                    IP6_NH_TCP, tcp_tx_buf, seg_len, IP6_HOP_LIMIT_DEFAULT);
     } else {
-        rc = ip_tx_from(local_ip.v4, remote_ip.v4, IP_PROTO_TCP, tcp_tx_buf, seg_len,
-                        IP_TTL_DEFAULT);
+        rc = ip_tx_opts(local_ip.v4, remote_ip.v4, IP_PROTO_TCP, tcp_tx_buf, seg_len,
+                        IP_TTL_DEFAULT, IP_PMTUDISC_WANT, ifindex);
     }
     ip_ns = was;
 
@@ -963,7 +965,7 @@ static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t rem
  */
 static int tcp_tcb_tx(struct tcb *tcb, uint16_t seg_len)
 {
-    int rc = tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len);
+    int rc = tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, tcb->ifindex, seg_len);
 
     if (rc == -ENETUNREACH || rc == -EHOSTUNREACH) {
         tcb->soft_error = (uint32_t)-rc;
@@ -1919,7 +1921,7 @@ static void tcp_send_rst_unmatched(net_addr_t local_ip, net_addr_t remote_ip, ui
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16, tcp_checksum(local_ip, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
-    tcp_ip_tx(ip_ns, local_ip, remote_ip, TCP_HDR_SIZE);
+    tcp_ip_tx(ip_ns, local_ip, remote_ip, 0, TCP_HDR_SIZE);
 }
 
 void tcp_ns_gone(const struct netns *ns, const struct netns *to)
@@ -2739,7 +2741,9 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * the one `ip_source` gives: 127.0.0.1 to 127/8, and otherwise the address of
  * the interface the route to the peer leaves by, the only address the answer
  * can come back to. An address in 127/8 to a peer that is not this machine
- * is refused, since no card may send from one.
+ * is refused, since no card may send from one. A socket bound to a card with
+ * SO_BINDTODEVICE takes its source, route and MTU from that card's routes
+ * alone (`netdev_route_on`), and its segments leave by that card.
  */
 int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
 {
@@ -2750,7 +2754,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     int rc;
 
     flags = net_lock();
-    rc = net_addr_source(sock->local_ip, dst_ip, 0, &from);
+    rc = net_addr_source(sock->local_ip, dst_ip, sock->bound_device, &from);
     if (rc < 0) {
         net_unlock(flags);
         return rc;
@@ -2788,6 +2792,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     tcb_take_port(tcb, local, tcb->port_auto ? TCP_PORT_AUTO : TCP_PORT_FIXED);
     tcb->remote_ip = dst_ip;
     tcb->remote_port = dst_port;
+    tcb->ifindex = sock->bound_device;
     tcb_hash_add(tcb);
     tcb->iss = tcp_isn(tcb);
     tcb->snd_nxt = tcb->iss;
@@ -4840,6 +4845,8 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             conn_sock->keepintvl = tcb->sock->keepintvl;
             conn_sock->keepcnt = tcb->sock->keepcnt;
             conn_sock->user_timeout = tcb->sock->user_timeout;
+            conn_sock->bound_device = tcb->sock->bound_device;
+            conn_tcb->ifindex = tcb->sock->bound_device;
         }
 
         conn_tcb->family = tcb->family;

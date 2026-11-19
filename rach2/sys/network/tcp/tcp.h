@@ -250,6 +250,10 @@ struct tcb {
     uint16_t local_port;
     net_addr_t remote_ip;
     uint16_t remote_port;
+    /* The card its segments leave by, its socket's SO_BINDTODEVICE index
+     * when it connected or its listener's when it was accepted, or 0 for
+     * the card the route chooses. */
+    int ifindex;
 
     /* Send sequence space. */
     uint32_t iss;
