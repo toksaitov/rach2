@@ -278,7 +278,8 @@ def main():
     out = Path(output).resolve()
     out.mkdir(parents=True, exist_ok=False)
     if family == "private" and row == "files":
-        status, _, _ = run_command([str(HERE / "privatefilemusl"), "/tmp"],
+        # /tmp is a tmpfs, as /dev/shm is; /var/tmp is on the root's ext2.
+        status, _, _ = run_command([str(HERE / "privatefilemusl"), "/var/tmp"],
                                    os.environ.copy(), out / "private.log")
         for line in (out / "private.log").read_text(errors="replace").splitlines():
             if not line.startswith("@etude "):
