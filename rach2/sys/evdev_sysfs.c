@@ -34,8 +34,9 @@
  * a device that comes back at the same USB port before a sync finds its
  * interface gone and makes it again.
  *
- * The parent of a device is read from its EVIOCGPHYS, which each driver
- * writes as Linux's do: "isa0060/serioK/input0" is the i8042's port K,
+ * A driver can give the parent's directory handle before registering.
+ * Otherwise the parent comes from EVIOCGPHYS, which the driver writes as
+ * Linux's does: "isa0060/serioK/input0" is the i8042's port K,
  * under /sys/devices/platform/i8042/serioK; "synaptics-pt/serio0/input0"
  * is the touchpad's pass-through port, serio2 below serio1, as Linux
  * numbers it after the i8042's two; and "usb-N/inputI" is interface
@@ -995,14 +996,16 @@ static int starts(const char *s, const char *prefix)
     return *prefix == '\0';
 }
 
-/** The parent of the device `r` by its EVIOCGPHYS: an i8042 port's
- * directory or a USB interface's, its handle; 0 for a device with no
- * parent here; or -errno. */
+/** The sysfs parent handle of `r`, supplied by the driver or found by its
+ * EVIOCGPHYS. Returns 0 for a device with no parent, or -errno. */
 static int parent_of(struct input_sys *r)
 {
     const char *phys = r->d.phys;
     int n;
 
+    if (r->d.parent > 0) {
+        return r->d.parent;
+    }
     if (starts(phys, "isa0060/serio")) {
         n = number_at(phys + 13);
         return n >= 0 && n < SERIO_I8042_PORTS ? serio_dir(n) : 0;

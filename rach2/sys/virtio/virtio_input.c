@@ -121,6 +121,9 @@ static void vi_remove(struct virtio_dev *d)
     virtio_teardown(d);
     d->priv = NULL;
     evdev_unregister(input->evdev);
+    if (d->sys_bound) {
+        evdev_sysfs_sync();
+    }
     if (input->events) {
         virtio_dma_free(d, input->events, input->events_bytes);
     }
@@ -148,6 +151,7 @@ static int vi_identify(struct virtio_dev *d, struct evdev *dev, char *name, uint
     phys[sizeof(phys) - sizeof("/input0")] = '\0';
     k_memcpy(phys + k_strlen(phys), "/input0", sizeof("/input0"));
     evdev_describe(dev, phys, 0);
+    evdev_set_sysfs_parent(dev, virtio_bus_dir(d));
     evdev_set_uniq(dev, serial);
     evdev_set_version(dev, ids[3]);
 
