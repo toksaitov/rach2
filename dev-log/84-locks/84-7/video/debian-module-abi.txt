@@ -1,0 +1,11 @@
+First rebuild, module BTF disabled:
+[   11.690111] scsi_common: disagrees about version of symbol module_layout
+[   11.722389] scsi_common: disagrees about version of symbol module_layout
+[   11.991453] e1000e: disagrees about version of symbol module_layout
+ALERT!  PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 does not exist.  Dropping to a shell!
+
+Second rebuild, Debian module BTF settings:
+[   13.405861] i2c_smbus: disagrees about version of symbol devm_request_threaded_irq
+[   13.881153] scsi_mod: disagrees about version of symbol netlink_capable
+[   14.486165] scsi_mod: disagrees about version of symbol netlink_capable
+ALERT!  PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 does not exist.  Dropping to a shell!
