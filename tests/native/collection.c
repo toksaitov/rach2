@@ -57,16 +57,38 @@ static int first_line(const char *path, char *line, size_t size)
         line[strcspn(line, "\r\n")] = 0;
     return ok && *line;
 }
-/* Make the collection lock `lock`, a directory, and write in it `owner`:
- * this process's PID, its start in clock ticks since boot (field 22 of
- * /proc/self/stat) and the kernel's boot_id, the fields of the deployment's
- * controller receipt, each `-` where the system gives none. 1, or 0 with no
- * lock left behind. */
-static int lock_make(const char *lock)
+/* Remove `dir`, a name under STATE/gone. of this PID that a dead process of
+ * the same PID left, with the owner record it may hold. The caller holds
+ * serial_hold's flock. */
+static void gone_clear(const char *dir)
 {
-    char path[4200], self[1024], start[32] = "-", boot[128] = "-", record[256];
-    if (mkdir(lock, 0700)) {
+    char path[4300];
+    snprintf(path, sizeof(path), "%s/owner", dir);
+    unlink(path);
+    rmdir(dir);
+}
+/* Make the collection lock `lock` in the state directory `state`: a
+ * directory holding `owner`, this process's PID, its start in clock ticks
+ * since boot (field 22 of /proc/self/stat) and the kernel's boot_id, the
+ * fields of the deployment's controller receipt, each `-` where the system
+ * gives none. The directory is made whole as STATE/gone.make-PID and renamed
+ * to `lock`, so that a stop at any point leaves no lock without its owner; a
+ * left name under `gone.` is removed by the next run's setup. The caller
+ * holds serial_hold's flock, which every taker of the lock holds, so that no
+ * lock appears between the look and the rename. 1, or 0 with no lock left
+ * behind. */
+static int lock_make(const char *state, const char *lock)
+{
+    char made[4200], path[4300], self[1024], start[32] = "-", boot[128] = "-", record[256];
+    struct stat st;
+    if (!lstat(lock, &st) || errno != ENOENT) {
         fprintf(stderr, "native: another collection owns %s\n", lock);
+        return 0;
+    }
+    snprintf(made, sizeof(made), "%s/gone.make-%ld", state, (long)getpid());
+    gone_clear(made);
+    if (mkdir(made, 0700)) {
+        fprintf(stderr, "native: cannot make %s: %s\n", made, strerror(errno));
         return 0;
     }
     if (first_line("/proc/self/stat", self, sizeof(self))) {
@@ -79,12 +101,12 @@ static int lock_make(const char *lock)
     }
     if (!first_line("/proc/sys/kernel/random/boot_id", boot, sizeof(boot)))
         strcpy(boot, "-");
-    snprintf(path, sizeof(path), "%s/owner", lock);
+    snprintf(path, sizeof(path), "%s/owner", made);
     snprintf(record, sizeof(record), "%ld %s %s\n", (long)getpid(), start, boot);
-    if (!write_bytes(path, record, strlen(record))) {
+    if (!write_bytes(path, record, strlen(record)) || rename(made, lock)) {
         fprintf(stderr, "native: cannot record the owner of %s\n", lock);
         unlink(path);
-        rmdir(lock);
+        rmdir(made);
         return 0;
     }
     return 1;
@@ -120,21 +142,29 @@ static int lock_take(const char *state, const char *lock)
     int fd = serial_hold(state), ok;
     if (fd < 0)
         return 0;
-    ok = lock_make(lock);
+    ok = lock_make(state, lock);
     close(fd);
     return ok;
 }
 /* Remove the collection lock `lock` in the state directory `state` and its
- * owner record under serial_hold's flock; 0, or -1 when the lock remains. */
+ * owner record under serial_hold's flock: the lock is first renamed to
+ * STATE/gone.lock-PID, so that a stop before its removal leaves no lock
+ * without its owner at `lock`, and the next run's setup removes the left
+ * name. 0, or -1 when the lock remains. */
 static int lock_release(const char *state, const char *lock)
 {
-    char path[4200];
+    char gone[4200], path[4300];
     int fd = serial_hold(state), status = -1;
     if (fd < 0)
         return -1;
-    snprintf(path, sizeof(path), "%s/owner", lock);
-    if (!unlink(path) || errno == ENOENT)
-        status = rmdir(lock);
+    snprintf(gone, sizeof(gone), "%s/gone.lock-%ld", state, (long)getpid());
+    gone_clear(gone);
+    if (!rename(lock, gone)) {
+        snprintf(path, sizeof(path), "%s/owner", gone);
+        if (!unlink(path) || errno == ENOENT)
+            rmdir(gone);
+        status = 0;
+    }
     close(fd);
     return status;
 }

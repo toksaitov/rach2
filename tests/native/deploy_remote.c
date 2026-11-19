@@ -73,16 +73,23 @@ int nd_stage(struct nd_deploy *d)
 /* The receipt records a random owner token plus the PID, the kernel start
  * identity across exec and the kernel's boot_id, which every boot has and no
  * program writes. Cleanup cannot signal another deployment's process, or one
- * that reused the recorded PID. A controller claim or a collection lock whose
- * recorded boot_id is not the running one belongs to a process that no
- * longer exists, and is cleared with a line that names it; a collection lock
- * of this boot, or one with no owner record, is refused by name. The look at
- * the claims and the lock, their removal and the making of this run's claim
- * hold flock(1) on STATE/collection.serial, which the collection holds while
- * it takes or releases its lock and the cleanup while it looks at or removes
- * its claim, so that no setup removes a claim or a lock made after its
- * reading. A claim already gone counts as cleared. The etude boot token is
- * still published for the measurement contexts that read it. */
+ * that reused the recorded PID. A controller or a collection of an older
+ * deployment recorded instead the etude boot token of
+ * /dev/shm/etude-guest-boot, which lives as long as the boot, so a recorded
+ * boot is this boot's when it is the boot_id or that token. A controller
+ * claim or a collection lock of
+ * another boot belongs to a process that no longer exists, and is cleared with
+ * a line that names it; a collection lock of this boot, or one with no owner
+ * record, is refused by name. A claim or a lock is cleared by renaming it to
+ * STATE/gone.NAME and then removing that, and every name under STATE/gone. is
+ * removed first, so that a setup stopped midway leaves nothing at the active
+ * names that a later setup would refuse. The look at the claims and the lock,
+ * their removal and the making of this run's claim hold flock(1) on
+ * STATE/collection.serial, which the collection holds while it takes or
+ * releases its lock and the cleanup while it looks at or removes its claim, so
+ * that no setup removes a claim or a lock made after its reading. A claim
+ * already gone counts as cleared. The etude boot token is still published for
+ * the measurement contexts that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -98,23 +105,31 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "ln \"$scratch/value\" \"$bootfile\" || test -f \"$bootfile\"); fi; "
         "boot=$(cat /proc/sys/kernel/random/boot_id); "
         "case $boot in *[!0-9a-f-]*|'') exit 1;; esac; "
+        "token=$(cat \"$bootfile\" 2>/dev/null) || token=; "
+        "thisboot() { test \"$1\" = \"$boot\" || "
+        "{ test -n \"$token\" && test \"$1\" = \"$token\"; }; }; "
+        "refuse() { printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$1\" >&2; "
+        "exit 1; }; "
         "state='%s/state'; test ! -L \"$state\"; "
         "mkdir -m 700 \"$state\" 2>/dev/null || test -d \"$state\"; "
         "exec 9> \"$state/collection.serial\"; flock 9; "
+        "for gone in \"$state\"/gone.*; do test -e \"$gone\" || test -L \"$gone\" || continue; "
+        "rm -rf \"$gone\" || true; test ! -e \"$gone\" && test ! -L \"$gone\" || refuse \"$gone\"; "
+        "done; "
         "for old in '%s'/controller-*; do test -f \"$old/identity\" || continue; "
         "oboot=; read opid oborn oboot < \"$old/identity\" || true; "
-        "test -n \"$oboot\" && test \"$oboot\" != \"$boot\" || continue; "
-        "rm -f \"$old/identity\" \"$old/owner\"; rmdir \"$old\" || test ! -e \"$old\" || { "
-        "printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$old\" >&2; exit 1; }; "
+        "test -n \"$oboot\" && ! thisboot \"$oboot\" || continue; "
+        "gone=\"$state/gone.${old##*/}\"; "
+        "mv \"$old\" \"$gone\" || test ! -e \"$old\" || refuse \"$old\"; rm -rf \"$gone\" || true; "
         "printf 'native-deploy: cleared: %%s: pid %%s of boot %%s\\n' "
         "\"$old\" \"$opid\" \"$oboot\" >&2; done; "
         "lock=\"$state/collection.lock\"; held='held with no owner record'; "
         "if test -d \"$lock\" && test -f \"$lock/owner\"; then "
         "lpid=; lboot=; read lpid lborn lboot < \"$lock/owner\" || true; "
         "held=\"held by pid $lpid of boot $lboot\"; "
-        "if test -n \"$lboot\" && test \"$lboot\" != - && test \"$lboot\" != \"$boot\"; then "
-        "rm -f \"$lock/owner\"; rmdir \"$lock\" || { "
-        "printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$lock\" >&2; exit 1; }; "
+        "if test -n \"$lboot\" && test \"$lboot\" != - && ! thisboot \"$lboot\"; then "
+        "gone=\"$state/gone.collection.lock\"; mv \"$lock\" \"$gone\" || refuse \"$lock\"; "
+        "rm -rf \"$gone\" || true; "
         "printf 'native-deploy: cleared: %%s: %%s\\n' \"$lock\" \"$held\" >&2; fi; fi; "
         "if test -d \"$lock\"; then "
         "printf 'native-deploy: refused: %%s: %%s\\n' \"$lock\" \"$held\" >&2; "
