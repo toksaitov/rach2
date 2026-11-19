@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 19, 2026
 .Dt E2FSCK 8
 .Os
 .Sh NAME
@@ -87,8 +87,15 @@ from 1 to 15,
 whose superblock has the ext2 magic number.
 It records the result as:
 .Dl init: e2fsck: /dev/diskNpM: status S
+With
+.Ql rach2.fsck= Ns Ar UUID Ns Op , Ns Ar UUID ...
+it checks only the volumes of those UUIDs and then restarts the machine,
+which is how an installed system whose kernel left a volume read-only
+for e2fsck has it checked at boot, as a Linux distribution does.
 See
-.Xr recovery 7 .
+.Xr recovery 7
+and
+.Xr init 8 .
 .Pp
 Menu entry 2 of
 .Xr rach2-recover 8
