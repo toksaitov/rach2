@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -9,8 +9,11 @@
 .Sh DESCRIPTION
 .Nm
 runs as process 1.
-It reaps orphaned children, continues stopped children, and respawns
-the console session when it exits.
+It reaps orphaned children, continues the console session when it is
+stopped, and respawns the console session when it exits.
+Any other stopped child, such as a daemon whose first parent has gone,
+stays stopped until something sends it
+.Dv SIGCONT .
 A pause between attempts prevents a failing login from being retried
 continuously.
 It never exits; the kernel panics if init dies.
