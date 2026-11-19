@@ -169,84 +169,6 @@ int netconf_set_up(struct netdev *nd, int up)
     return 0;
 }
 
-/** The address forgotten: nothing to do here. */
-int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
-{
-    (void)nd;
-    (void)ip;
-    (void)mask;
-    return 0;
-}
-
-/** No route was added to a tap. */
-int netdev_route_at(int n, struct netdev_rt *out)
-{
-    (void)n;
-    (void)out;
-    return 0;
-}
-
-/** Not reached: no route is listed. */
-int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
-{
-    (void)nd;
-    (void)dst;
-    (void)mask;
-    (void)gw;
-    return 0;
-}
-
-/** No neighbour is kept. */
-void arp_forget_dev(struct netdev *nd)
-{
-    (void)nd;
-}
-
-/** No neighbour is kept. */
-int arp_snapshot(struct arp_row *out, int max)
-{
-    (void)out;
-    (void)max;
-    return 0;
-}
-
-/** Not reached: no neighbour is listed. */
-int arp_forget(struct netdev *nd, uint32_t ip)
-{
-    (void)nd;
-    (void)ip;
-    return 0;
-}
-
-/** No IPv6 state is kept. */
-void nd6_if_down(struct netdev *nd)
-{
-    (void)nd;
-}
-
-/** No IPv6 neighbour is kept. */
-int nd6_snapshot(struct nd6_row *out, int max)
-{
-    (void)out;
-    (void)max;
-    return 0;
-}
-
-/** Not reached: no IPv6 neighbour is listed. */
-int nd6_forget(struct netdev *nd, const uint8_t *addr)
-{
-    (void)nd;
-    (void)addr;
-    return 0;
-}
-
-/** No IPv6 route is kept. */
-void route6_forget(struct netdev *nd, int proto)
-{
-    (void)nd;
-    (void)proto;
-}
-
 /** Bytes that are not random, which the address's bits are checked on. */
 void krandom_bytes(void *buf, uint32_t n)
 {
@@ -312,6 +234,15 @@ void ip6_forget_dev(struct netdev *nd)
 {
     (void)nd;
     k.ip6_forgets++;
+}
+
+/** Withdraw `nd` from the stack as netdev.c's does what the rows count:
+ * set down, its IPv6 state forgotten, and unregistered. */
+void netdev_withdraw(struct netdev *nd)
+{
+    (void)netconf_set_up(nd, 0);
+    ip6_forget_dev(nd);
+    netdev_unregister(nd);
 }
 
 /** A plain copy: every buffer is the test's. */
