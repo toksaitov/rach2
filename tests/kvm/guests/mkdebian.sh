@@ -8,11 +8,12 @@
 #
 # Writes OUTDIR/vmlinuz, the kernel of debian.txt's kernel package, and
 # OUTDIR/initrd, an uncompressed newc archive of /bin/busybox, from
-# debian.txt's BusyBox package, and debian-init as /init. MKCPIO names the
-# archive writer, tests/system/wifi/mkcpio.c built. Each package is fetched
-# once into the clone's build/cache/gnu and checked against its digest on
-# every build. The outputs are written beside their names and renamed into
-# place, so a failed build leaves the last good guest.
+# debian.txt's BusyBox package, the kernel's virtio_net module and the two
+# it needs, uncompressed in /lib/modules, and debian-init as /init. MKCPIO
+# names the archive writer, tests/system/wifi/mkcpio.c built. Each package
+# is fetched once into the clone's build/cache/gnu and checked against its
+# digest on every build. The outputs are written beside their names and
+# renamed into place, so a failed build leaves the last good guest.
 
 set -e
 
@@ -57,8 +58,15 @@ release=${kernel##*/linux-image-}
 release=${release%%-unsigned_*}
 member "$kernel" "./boot/vmlinuz-$release" "$work/kernel"
 member "$busybox" ./usr/bin/busybox "$work/busybox"
+mods="./usr/lib/modules/$release/kernel"
 
 printf 'd\t755\tbin\nd\t755\tproc\nd\t755\tsys\nd\t755\tdev\n' > "$work/list"
+printf 'd\t755\tlib\nd\t755\tlib/modules\n' >> "$work/list"
+for m in net/core/failover drivers/net/net_failover drivers/net/virtio_net; do
+    member "$kernel" "$mods/$m.ko.xz" "$work/kernel"
+    xz -dc "$work/kernel/$mods/$m.ko.xz" > "$work/${m##*/}.ko"
+    printf 'f\t644\tlib/modules/%s.ko\t%s\n' "${m##*/}" "$work/${m##*/}.ko" >> "$work/list"
+done
 printf 'f\t755\tbin/busybox\t%s\n' "$work/busybox/usr/bin/busybox" >> "$work/list"
 printf 'f\t755\tinit\t%s\n' "$DIR/debian-init" >> "$work/list"
 "$MKCPIO" "$OUT/initrd.tmp" "$work/list"
