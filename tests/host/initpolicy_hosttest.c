@@ -8,15 +8,17 @@
  * initpolicy_hosttest.c: init's redirection of its services' output, its
  * SSH policy lines and server arguments, the environment it starts the
  * console's login with, its finding wpa_supplicant and wpa_cli where each
- * image with a Wi-Fi configuration stages them, and its reading of the
- * mixer's and the backlights' kept files.
+ * image with a Wi-Fi configuration stages them, its reading of the
+ * mixer's and the backlights' kept files, and which stopped child it
+ * continues.
  *
  * `utils/init.c` is included whole, as the metal build with the console
  * login, with fopen, dup2, unlink, fsync, open, mkdir, stat, rename, the
- * execs, fork, waitpid, reboot, access and if_nametoindex replaced by the
- * functions below, so that a row can fail a call, send a signal at a chosen
- * point, see what a child did by its exit status, give init an image's
- * files and a `wlan0`, and save the levels under a scratch /var.
+ * execs, fork, waitpid, reboot, kill, access and if_nametoindex replaced by
+ * the functions below, so that a row can fail a call, send a signal at a
+ * chosen point, see what a child did by its exit status, see whom init
+ * signals, give init an image's files and a `wlan0`, and save the levels
+ * under a scratch /var.
  */
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -287,6 +289,22 @@ static int policy_sigtimedwait(const sigset_t *set, siginfo_t *info, const struc
     return -1;
 }
 
+/* The calls init made to kill(2) since a row cleared the count, and the
+ * last one's process and signal. */
+static int Kill_calls;
+static pid_t Kill_pid;
+static int Kill_signal;
+
+/** init's kill: record the call and send nothing, since a row's pids are
+ * made up and init's other calls signal every process. */
+static int policy_kill(pid_t pid, int sig)
+{
+    Kill_calls++;
+    Kill_pid = pid;
+    Kill_signal = sig;
+    return 0;
+}
+
 /* The files of the image a row gives init, by their paths on it; `Staged`
  * is -1 while init sees the host's own files. */
 static char Image[256][128];
@@ -333,6 +351,7 @@ static unsigned int policy_if_nametoindex(const char *name)
 #define waitpid        policy_waitpid
 #define reboot         policy_reboot
 #define sigtimedwait   policy_sigtimedwait
+#define kill           policy_kill
 #define open(...)      policy_open(__VA_ARGS__)
 #define mkdir(p, m)    policy_mkdir(p, m)
 #define stat(p, s)     policy_stat(p, s)
@@ -354,6 +373,7 @@ static unsigned int policy_if_nametoindex(const char *name)
 #undef fork
 #undef waitpid
 #undef reboot
+#undef kill
 
 /** Keep no stable secret: init_main, whose set-up calls it, is not run here. */
 int ip6secret_keep(const char *prog)
@@ -894,6 +914,24 @@ static void save_rows(void)
     check(rmdir(dir) == 0, "save: the row's files removed");
 }
 
+/**
+ * init's answer to a stopped child: the console session is continued, and a
+ * daemon init adopted, such as a DHCP client another process stopped, is
+ * left stopped and signalled nothing.
+ */
+static void stopped_rows(void)
+{
+    Kill_calls = 0;
+    stopped_child(41, 41);
+    check(Kill_calls == 1 && Kill_pid == 41 && Kill_signal == SIGCONT,
+          "stopped: the console session is continued");
+    Kill_calls = 0;
+    stopped_child(112, 41);
+    check(Kill_calls == 0, "stopped: an adopted daemon stays stopped");
+    stopped_child(112, -1);
+    check(Kill_calls == 0, "stopped: a child stays stopped while no session runs");
+}
+
 int main(void)
 {
     static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
@@ -965,6 +1003,7 @@ int main(void)
     mute_rows();
     kept_rows();
     save_rows();
+    stopped_rows();
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");
