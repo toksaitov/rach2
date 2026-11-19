@@ -630,7 +630,7 @@
       "assertions": [
         {
           "assertion_id": "netguest",
-          "checks": "run.sh's debian-vhost case: transfers through the guest, at least 5541 frames each way in vhost-net's /proc/stat counts from tap0's one attachment, no vhost line on QEMU's stderr, no packet to port 9 counted, and netguest.sh's checks",
+          "checks": "run.sh's debian-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to port 9 counted, and netguest.sh's checks",
           "source": "scenario"
         }
       ],
@@ -1114,7 +1114,7 @@
       "assertions": [
         {
           "assertion_id": "netguest",
-          "checks": "run.sh's freebsd-vhost case: transfers through the guest, at least 5541 frames each way in vhost-net's /proc/stat counts from tap0's one attachment, no vhost line on QEMU's stderr, no packet to port 9 counted, and netguest.sh's checks",
+          "checks": "run.sh's freebsd-vhost case: transfers through the guest counted by tap0 each way, at least 5541 frames each way in vhost-net's /proc/stat counts of the attachments that ended, no vhost line on QEMU's stderr, no packet to port 9 counted, and netguest.sh's checks",
           "source": "scenario"
         }
       ],

@@ -58,8 +58,10 @@
 # /proc/net/dev tap_rx_bytes, tap_tx_bytes, tap_rx_packets and
 # tap_tx_packets, tap0's. With -V the frames the backend moved, what the
 # vhost_net_detached_ counts grew by from the start to the guest's end, are
-# printed as `netguest: vhost: to_guest=N from_guest=M`; one attachment
-# must have ended meanwhile, tap0's, so that the frames are its own.
+# printed as `netguest: vhost: to_guest=N from_guest=M`; at least one
+# attachment must have ended meanwhile, since FreeBSD attaches tap0 twice,
+# the first time moving no frame. That the frames are tap0's, the machine
+# running no other vhost-net guest, run.sh reads from tap0's own bytes.
 #
 # The run passes when the guest's ready line names the filter asked for,
 # QEMU was still running when its end was asked and ended as asked, the card
@@ -226,9 +228,27 @@ children_of()
             if (index(p, " " f[2] " ")) print $1 }'
 }
 
-# kill_tree PID: stop PID and every process under it, each before its
-# children are looked for, so that none starts another or is orphaned
-# meanwhile, then kill them all and reap PID.
+# stopped PIDS: wait until each of PIDS has stopped or ended, since SIGSTOP
+# takes effect only when the process next runs; a process that sleeps
+# uninterruptibly is waited for 100 times 0.1 s at most.
+stopped()
+{
+    for x in $1; do
+        t=0
+        while [ "$t" -lt 100 ]; do
+            case $(sed -n 's/^.*) \([A-Za-z]\).*/\1/p' "/proc/$x/stat" 2> /dev/null) in
+                '' | T | t | Z | X) break ;;
+            esac
+            t=$((t + 1))
+            sleep 0.1
+        done
+    done
+}
+
+# kill_tree PID: stop PID and every process under it, each stopped before
+# its children are looked for, so that none starts another meanwhile, then
+# kill them, the deepest first, so that none is orphaned while a process
+# above it still lives, and reap PID.
 kill_tree()
 {
     all='' new=$1
@@ -236,7 +256,8 @@ kill_tree()
         for x in $new; do
             kill -STOP "$x" 2> /dev/null
         done
-        all="$all $new"
+        stopped "$new"
+        all="$new $all"
         new=$(children_of "$new" | tr '\n' ' ')
     done
     for x in $all; do
@@ -572,7 +593,7 @@ if [ "$vhost" = 1 ]; then
         fail "QEMU moved the frames itself: $(grep -i vhost "$out/qemu.err" | head -n 1)"
     fi
     ends=$(($(count vhost_net_detaches "$back") - $(count vhost_net_detaches "$start_counts")))
-    [ "$ends" = 1 ] || fail "$ends vhost-net attachments ended during the boot, not tap0's alone"
+    [ "$ends" -ge 1 ] || fail "no vhost-net attachment ended during the boot"
     to=$(($(count vhost_net_detached_to_guest "$back") - $(count vhost_net_detached_to_guest "$start_counts")))
     from=$(($(count vhost_net_detached_from_guest "$back") - $(count vhost_net_detached_from_guest "$start_counts")))
     echo "netguest: vhost: to_guest=$to from_guest=$from"
