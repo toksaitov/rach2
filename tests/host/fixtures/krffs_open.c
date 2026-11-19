@@ -851,6 +851,12 @@ static int vfs_kill_setid(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** The set-id clear by the mount's kind, as syscall_fs.c chooses it. */
+static int mnt_kill_setid(struct vfs_mount *mnt, void *node)
+{
+    return mnt_is_root(mnt) ? cred_kill_setid(node) : vfs_kill_setid(mnt, node);
+}
+
 /** Reject creation through the memory-root adapter. */
 static int krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent, uint32_t mode)
 {
