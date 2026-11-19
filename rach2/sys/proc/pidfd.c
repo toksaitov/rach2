@@ -159,7 +159,7 @@ struct pidfd *pidfd_new(process_t *p, int thread)
     if (pf) {
         pf->anon.name = "[pidfd]";
         pf->tg = p->tg;
-        pf->tg->refs++;
+        tgroup_get(pf->tg);
         pf->ns = pidns_get(proc_pidns(p));
         pf->pid = thread ? p->pid : p->tgid;
         pf->thread = thread != 0;
@@ -229,7 +229,7 @@ int32_t pidfd_ref_get(int fd, struct pidfd_ref *ref)
     }
     pf = (const struct pidfd *)e->priv;
     ref->tg = pf->tg;
-    ref->tg->refs++;
+    tgroup_get(ref->tg);
     ref->ns = pidns_get(pf->ns);
     ref->pid = pf->pid;
     ref->serial = pf->serial;

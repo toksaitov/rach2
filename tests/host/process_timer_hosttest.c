@@ -89,6 +89,10 @@ static int proc_set_ruid(struct process *p, uint32_t uid);
 static uint32_t proc_user_records(const struct process *p);
 static uint32_t proc_work_count(unsigned int index);
 static void proc_alarm_take(struct process *to, const struct process *from);
+static struct process *get_process_ref(uint32_t pid);
+static void proc_ref_get(struct process *p);
+static void proc_ref_put(struct process *p);
+static void tgroup_get(struct tgroup *tg);
 #include "proc/process.c"
 #include "ns_first.h"
 
