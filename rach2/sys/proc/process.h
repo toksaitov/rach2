@@ -206,6 +206,15 @@ struct restart_block {
     uint8_t wide;    /* the remainder is two 64-bit words, not two 32-bit */
 };
 
+/* A record's place in a chain of an index by key (process.c): the next
+ * record, NULL for the last, and the record before it, or for the first
+ * the last, so that a record goes on the end and comes off in constant
+ * time. */
+struct proc_link {
+    struct process *next;
+    struct process *prev;
+};
+
 /*
  * The record of one thread, from the heap (`alloc_process`), on `proc_list`
  * while it lives. The threads of a process share their thread group
@@ -218,7 +227,7 @@ struct process {
     cpu_regs_t regs;        /* What switch_context saves (cpu.h) */
     uintptr_t space_root;   /* Page directory physical address, or 0 */
     uintptr_t kernel_stack; /* Top of kernel stack for this process */
-    uint32_t parent_pid;    /* Parent process ID */
+    uint32_t parent_pid;    /* Parent process ID; changed by proc_set_parent */
     int32_t exit_code;      /* Encoded wait status it ended with */
     fd_table_t *fds;        /* Descriptor table, shared under CLONE_FILES */
     struct fs_struct *fs;   /* Directories and umask, shared under CLONE_FS */
@@ -679,7 +688,7 @@ struct process {
      * the stop's or the one PTRACE_SETSIGINFO gave; the system call a
      * stop is in, -1 for none; whether the tracer has seen the process end;
      * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
-     * last debug exception left it. */
+     * last debug exception left it. `tracer` is changed by proc_set_tracer. */
     uint32_t ptrace;
     uint32_t tracer;
     uint32_t ptrace_opts;
@@ -767,10 +776,15 @@ struct process {
     struct process *ready_prev, *ready_next;
     int ready_linked;
     /* Index links, owned by process.c under the big kernel lock: by pid,
-     * by process group and by session (`proc_set_group`). */
+     * by process group and by session (`proc_set_group`), and by parent
+     * of a leader and by tracer (`proc_set_parent`, `proc_set_tracer`),
+     * which a record whose key is 0 is not in. */
     struct process *pid_next;
     struct process *pgid_next;
     struct process *sid_next;
+    struct proc_link ppid_link;
+    struct proc_link tracer_link;
+    struct proc_link group_link; /* in tg->threads */
     struct proc_user_count *user_count;
     /* Active timed waits and real alarms only; timer_linked marks
      * membership. Under the timer list's spinlock in process.c. */
@@ -973,6 +987,30 @@ void proc_set_last_pid(uint32_t pid);
  * `p`, keeping the index by group and by session (`proc_group_held`). The
  * caller holds the big kernel lock. */
 void proc_set_group(process_t *p, uint32_t sid, uint32_t pgid);
+
+/** Make `ppid` the parent of the record `p`, keeping the index by parent
+ * that a wait walks (`proc_children`). The caller holds the big kernel
+ * lock. */
+void proc_set_parent(process_t *p, uint32_t ppid);
+
+/** Make the process `tgid` the tracer of the record `p`, 0 for none,
+ * keeping the index by tracer that a wait walks (`proc_tracees`). The
+ * caller holds the big kernel lock. */
+void proc_set_tracer(process_t *p, uint32_t tgid);
+
+/** The first record of the chain that holds every process leader whose
+ * parent is `ppid`, NULL when there is none; the chain, followed by
+ * `ppid_link.next`, holds them in the order each took that parent, among
+ * records of other parents, which the caller passes over. As Linux's
+ * `children` list, it lets a wait look at its own children alone. `ppid` 0
+ * has no chain. The caller holds the big kernel lock, and the chain is
+ * valid until it is let go or a record changes parent or is freed. */
+process_t *proc_children(uint32_t ppid);
+
+/** The first record of the chain that holds every record the process
+ * `tgid` traces, as `proc_children` gives the children, followed by
+ * `tracer_link.next`; Linux's `ptraced` list. */
+process_t *proc_tracees(uint32_t tgid);
 
 /** Whether a record other than `gone`, and in a state other than
  * PROC_UNUSED unless `unused` is nonzero, has `id` as its process group,
