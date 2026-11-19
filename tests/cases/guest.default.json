@@ -7662,17 +7662,17 @@
         },
         {
           "assertion_id": "unmap",
-          "checks": "an unmap of the 64 pages costs one shootdown and one interrupt",
+          "checks": "an unmap of 64 present pages, during which the thread ran on processor 1 throughout as the count of the times it was switched in shows, costs one shootdown and one interrupt",
           "source": "program"
         },
         {
           "assertion_id": "mprotect",
-          "checks": "an mprotect of 8 present pages to read-only costs one shootdown and one interrupt",
+          "checks": "an mprotect of 8 present pages to read-only, with the thread on processor 1 throughout, costs one shootdown and one interrupt",
           "source": "program"
         },
         {
           "assertion_id": "unmap-span",
-          "checks": "an unmap of those 8 pages costs one shootdown and one interrupt",
+          "checks": "an unmap of 8 present read-only pages, with the thread on processor 1 throughout, costs one shootdown and one interrupt",
           "source": "program"
         },
         {
