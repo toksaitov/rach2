@@ -624,7 +624,10 @@ refusals() { tr -d '\r' < "$console" 2>/dev/null | grep -c 'backend: map: resour
 
 # readback: readback.txt's piglit tests on the region's card, one at a time
 # on EGL's surfaceless platform as the desktop user, as the bed's piglit
-# scene runs them (bed/measure/measure.sh), and the refusals they met.
+# scene runs them (bed/measure/measure.sh), and the refusals they met: of a
+# blob's export, of a page list, of a resource's backing from the VM's
+# memory, and of the region's heap. The buffers must have been backed from
+# the VM's pages, each a map of the transport's.
 readback()
 {
     kit=$(cd "$(dirname "$0")" && pwd)
@@ -632,6 +635,7 @@ readback()
     mkdir -p "$rb"
     chown desktop "$rb"
     exports0=$(refusals) klog0=$(klog_count 'refused: its page list')
+    backs0=$(klog_count "refused: the VM's backing") maps0=$(info maps) heap0=$(info refused)
     su -s /bin/sh desktop -c "exec sh $kit/piglit.sh -g -o $rb -l $kit/readback.txt" \
         > "$out/readback.out" 2>&1
     piglit_status=$?
@@ -642,6 +646,8 @@ readback()
         n=$((n - 1))
     done
     exports=$(($(refusals) - exports0)) klog=$(($(klog_count 'refused: its page list') - klog0))
+    backs=$(($(klog_count "refused: the VM's backing") - backs0))
+    maps=$(($(info maps) - maps0)) heap=$(($(info refused) - heap0))
     renderer=$(sed -n 's/^renderer //p' "$rb/record" 2>/dev/null | head -n 1)
     results=''
     passed=0 tests=0
@@ -653,8 +659,10 @@ readback()
         [ "$r" != pass ] || passed=$((passed + 1))
         results="$results${results:+, }${t##*@} ${r:-none}"
     done < "$kit/readback.txt"
-    what="$results; $exports refused exports, $klog refused page lists; renderer ${renderer:-unknown}"
+    what="$results; $exports refused exports, $klog refused page lists, $backs refused backings"
+    what="$what, $heap refused heap pages, $maps maps of the VM's pages; renderer ${renderer:-unknown}"
     if [ "$piglit_status" = 0 ] && [ "$passed" = "$tests" ] && [ "$exports" = 0 ] && [ "$klog" = 0 ] &&
+        [ "$backs" = 0 ] && [ "$heap" = 0 ] && [ "$maps" -gt 0 ] &&
         echo "$renderer" | grep -q '^virgl'; then
         pass readback "$what"
     else
