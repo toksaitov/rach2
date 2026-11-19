@@ -127,8 +127,13 @@ if [ -z "$bdf" ]; then
 fi
 sys=/sys/bus/pci/devices/$bdf
 if [ -z "$iface" ]; then
-    # shellcheck disable=SC2012 # one name, the interface's
-    iface=$(ls "$sys/net" 2> /dev/null | head -n 1)
+    # The interface whose device link in /sys/class/net is the card.
+    for n in /sys/class/net/*; do
+        d=$(readlink "$n/device" 2> /dev/null)
+        [ "${d##*/}" = "$bdf" ] || continue
+        iface=${n##*/}
+        break
+    done
 fi
 driver=$(readlink "$sys/driver" 2> /dev/null)
 driver=${driver##*/}
