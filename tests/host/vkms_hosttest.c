@@ -209,15 +209,17 @@ uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff)
 }
 
 /** A frame's mapping is its address. */
-void *kmap_temp(uintptr_t phys)
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
 {
+    *flags = 0;
     return (void *)phys;
 }
 
 /** Nothing to unmap. */
-void kunmap_temp(void *va)
+void kunmap_cpu(void *va, uint32_t flags)
 {
     (void)va;
+    (void)flags;
 }
 
 /* ---- the test's own frame and CRC ---- */

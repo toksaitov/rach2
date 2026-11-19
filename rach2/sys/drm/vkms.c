@@ -160,13 +160,18 @@ struct vkms_pages {
 
 /**
  * Read `len` bytes from byte `off` of the buffer object whose frames `pg`
- * holds into `dst`, a page at a time through a temporary mapping; a page
- * outside them or without a frame reads as zeros. Needs no big lock unless
- * `pg->live`, when a frame without a pin is looked up again.
+ * holds into `dst`, a page at a time through this processor's own slot
+ * (`kmap_cpu`), with interrupts off for each page's copy; a page outside
+ * them or without a frame reads as zeros. The slot takes no lock and has
+ * no other processor drop a translation, where the shared slots of
+ * `kmap_temp` have every processor drop its own each time a pool runs out,
+ * a wait on each virtual processor the host holds back. On x86-64 both are
+ * the direct map. Needs no big lock unless `pg->live`, when a frame
+ * without a pin is looked up again.
  */
 static void vkms_read(const struct vkms_pages *pg, uint64_t off, uint8_t *dst, uint32_t len)
 {
-    uint32_t n, in;
+    uint32_t n, in, flags;
     uint64_t at;
     uintptr_t phys;
     uint8_t *va;
@@ -182,10 +187,10 @@ static void vkms_read(const struct vkms_pages *pg, uint64_t off, uint8_t *dst, u
             phys = drm_gem_shmem_page((struct drm_gem_shmem_object *)pg->obj,
                                       pg->first + (uint32_t)at);
         }
-        va = phys ? (uint8_t *)kmap_temp(phys) : NULL;
-        if (va) {
+        if (phys) {
+            va = (uint8_t *)kmap_cpu(phys, &flags);
             k_memcpy(dst, va + in, n);
-            kunmap_temp(va);
+            kunmap_cpu(va, flags);
         } else {
             k_memset(dst, 0, n);
         }
