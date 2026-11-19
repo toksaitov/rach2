@@ -407,19 +407,22 @@ int proc_nice_allowed(const process_t *p, int32_t nice);
  * Drop the set-id bits a modification must not leave standing on the KRFFS root
  * node `node`: a write or a truncation by a caller without privilege, or a
  * change of owner or group by any caller. A directory keeps its bits, as on
- * Linux, and a NULL `node` is ignored.
+ * Linux, and a NULL `node` is ignored. The caller clears them before it
+ * changes the file, as Linux's file_remove_privs runs before a write, and
+ * makes no change when this fails: 0, or -EROFS on a halted root and -EIO
+ * when the header cannot be read or the mode cannot be stored.
  */
-void cred_kill_setid(krffs_node_t *node);
+int cred_kill_setid(krffs_node_t *node);
 
 /**
  * The rule of `cred_kill_setid` for the file `node` of the mount `mnt` of
  * another type, through the attributes the type reports and sets: a write or a
  * truncation by a caller without the privilege drops the set-id bits, so that a
  * program a group may modify cannot keep root's identity. A directory keeps its
- * bits, as on Linux. Nothing is done for a NULL `mnt` or `node` or a file whose
- * attributes cannot be read, and a failure to set them is ignored.
+ * bits, as on Linux. Nothing is done for a NULL `mnt` or `node`. 0, or the
+ * error of the getattr or the setattr, on which the caller changes nothing.
  */
-void vfs_kill_setid(struct vfs_mount *mnt, void *node);
+int vfs_kill_setid(struct vfs_mount *mnt, void *node);
 
 /* Access-check `want` bits, matching an octal permission digit. */
 #define CRED_R 4
