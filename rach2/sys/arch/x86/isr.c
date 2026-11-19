@@ -1266,15 +1266,16 @@ static void message_enter(uint32_t vector, int timer)
  * blocks every vector of its priority and below, the lines' included; it is
  * an edge, and is ended first, as through the 8259.
  *
- * After any chain but the tick's, a process a device woke runs now, or at
- * its system call's exit (`sched_tick`): woken only at the next tick, a
- * disk's caller that slept for its command would get one command a
- * scheduler round. A thread on the queue that nothing woke waits as at the
- * tick until the current one has run its slice, so that an interrupt does
- * not end a turn the tick would have left running, as Linux's return to
- * user mode switches only when the tick or a wake set TIF_NEED_RESCHED
- * (kernel/entry/common.c:104-105). The tick's own handler makes its switch
- * itself.
+ * After the chain, a process a device woke runs now, or at its system
+ * call's exit, when the wake asked this processor to switch
+ * (`sched_irq_exit`): woken only at the next tick, a disk's caller that
+ * slept for its command would get one command a scheduler round. Only the
+ * tick's handler counts a slice and asks for a switch when it has run out
+ * (`sched_tick`), as Linux's return to user mode switches only when the
+ * tick or a wake set TIF_NEED_RESCHED (kernel/entry/common.c:104-105). The
+ * time from the router's entry to that point is the interrupt's, which the
+ * scheduler's task clock leaves out (`irq_time_exit`); the switch comes
+ * after it.
  *
  * The tick takes no big lock here: its handler runs the clock's pass, the
  * accounting and the timer pass without it, each under a spinlock of its
@@ -1313,6 +1314,39 @@ static void message_enter(uint32_t vector, int timer)
  * arrives before the `cli` that follows the halt, and the processor stays in
  * this router, still marked idle, with ready work on its queue.
  */
+/** Count the start of a device's or the timer's interrupt, with interrupts
+ * off: the outermost one notes the cycle count. */
+static void irq_time_enter(struct percpu *cpu)
+{
+    if (cpu->irq_depth++ == 0) {
+        cpu->irq_entry_cycles = arch_cycles();
+    }
+}
+
+/**
+ * Count the end of an interrupt's handler, before any switch it asks for:
+ * the outermost one adds its cycles to `irq_cycles`, which the scheduler's
+ * task clock leaves out (`sched_clock_task`), as Linux's irqtime_account_irq
+ * adds a hard interrupt's time at its exit (kernel/sched/cputime.c:50-77).
+ * A reader on another processor reads the count within `irq_seq`.
+ */
+static void irq_time_exit(struct percpu *cpu)
+{
+    if (--cpu->irq_depth == 0) {
+        cpu->irq_seq++;
+        cpu->irq_cycles += arch_cycles() - cpu->irq_entry_cycles;
+        cpu->irq_seq++;
+    }
+}
+
+/** End an interrupt that went through its chain: close its time, then take
+ * the switch a wake or the tick asked for (`sched_irq_exit`). */
+static void irq_leave_chain(struct percpu *cpu)
+{
+    irq_time_exit(cpu);
+    sched_irq_exit();
+}
+
 void _irq_router(isr_params_t *params)
 {
     int eoi_word_set = lapic_eoi_enter();
@@ -1328,6 +1362,7 @@ void _irq_router(isr_params_t *params)
 
     message_enter(params->vector, timer);
     user_entry(params);
+    irq_time_enter(cpu);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
         sched_idle_awake();
@@ -1343,6 +1378,7 @@ void _irq_router(isr_params_t *params)
         count_up(&vector_count[params->vector - 32]);
         count_up(&cpu_vector_count[arch_cpu_id()][params->vector - 32]);
         bkl_frame_push(0); /* isr_leave pops it as a tick's without the lock */
+        irq_time_exit(cpu);
         return;
     }
     if (params->vector == IRQ_VECTOR(0) && (timer_kind & APIC_HR_TICK) != 0) {
@@ -1383,21 +1419,16 @@ void _irq_router(isr_params_t *params)
         if (!timer) {
             count_down(&vector_active[params->vector]);
         }
-        sched_tick(); /* a woken reader runs now, or at the call's exit */
+        irq_leave_chain(cpu); /* a woken reader runs now, or at the call's exit */
         return;
     }
 
     if (lines_apic) {
-        if (params->vector == IRQ_VECTOR(0)) {
-            irq_dispatch(params, timer_kind);
-            if ((timer_kind & APIC_HR_TICK) == 0) {
-                sched_tick();
-            }
-            return;
-        }
         irq_dispatch(params, timer_kind);
-        lapic_eoi((uint32_t)params->vector, eoi_word_set);
-        sched_tick();
+        if (params->vector != IRQ_VECTOR(0)) {
+            lapic_eoi((uint32_t)params->vector, eoi_word_set);
+        }
+        irq_leave_chain(cpu);
         return;
     }
 
@@ -1408,9 +1439,7 @@ void _irq_router(isr_params_t *params)
     reset_master_pic();
 
     irq_dispatch(params, timer_kind);
-    if (params->vector != 32) {
-        sched_tick();
-    }
+    irq_leave_chain(cpu);
 }
 
 /**
