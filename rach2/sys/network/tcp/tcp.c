@@ -371,13 +371,16 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
  * is taken from: the SYN of an active open records nothing, as Linux takes
  * rcv_wup from the peer's SYN.
  *
- * Under `tcp_delack` an acknowledgement from the handshake to TIME_WAIT
- * offers the window selected now (`tcp_rcv_window`), data's and probes'
- * too, as Linux's tcp_transmit_skb selects it for each, and ends quick mode
- * while less than half the largest window is free, as __tcp_select_window
- * does. In TIME_WAIT, which takes no more data and may have freed its
- * ring, it offers the saved `rcv_wnd`, the window last selected, even
- * after a read, as Linux's tw_rcv_wnd keeps it.
+ * Under `tcp_delack` a segment with ACK and without SYN before TIME_WAIT
+ * offers the window selected now (`tcp_rcv_window`), data and probes
+ * included, as Linux's tcp_transmit_skb selects it for each, and ends
+ * quick mode while less than half the largest window is free, as Linux's
+ * __tcp_select_window does. A SYN-ACK offers the stored `rcv_wnd`. In
+ * TIME_WAIT, which takes no more data and may have freed its ring, a
+ * segment offers the saved
+ * `rcv_wnd`, selected on entry or before it, even after a read and when
+ * the first acknowledgement of the FIN was refused, as Linux's tw_rcv_wnd
+ * keeps it.
  */
 static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 {

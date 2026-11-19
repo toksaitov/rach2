@@ -99,14 +99,15 @@ that mode, and an acknowledgement held for the whole 40 ms ends the mode.
 Data past a hole, the segment that fills it, data received before, a FIN,
 and data in a closing state are acknowledged at once.
 .Pp
-Every segment before TIME_WAIT offers the window as it stands when it is
-sent: while less than half the buffer is free, less than a sixteenth of it
+Every segment with ACK and without SYN before TIME_WAIT offers the window
+as it stands when it is sent: while less than half the buffer is free, less than a sixteenth of it
 or than a full segment is offered as zero, no window offered is taken back,
 and the quick acknowledgements end, as Linux's
 .Fn __tcp_select_window
 offers it.
-In TIME_WAIT an acknowledgement offers the window last selected before it,
-even after a read.
+In TIME_WAIT an acknowledgement offers the window saved on entering it,
+even after a read and when the first acknowledgement of the FIN was not
+sent.
 A read announces the window it reopened only while the peer has no more
 than half the buffer left, and only when the window as it stands, in whole
 units of the window scale and at least a full segment and a sixteenth of
