@@ -25,7 +25,7 @@ The first lines of the other reports:
 * `big lock at .. under spinlock S at ..`.
 * `lock without a class: ADDR taken at .., keyed by its address`: a lock in allocated memory that no `spin_lock_init` reached.
 * `release of a lock not held: X at ..` and `lock not held: X at ..`, the second from `lockdep_assert_held`.
-* `off: the class pool is full`, or the order pool, the chain table, or too many locks held: the checker stops, once.
+* `off: the class pool is full`, or the order pool, the chain table, or too many locks held: the checker stops, once. A panic stops it too, with no report, as Linux's `debug_locks_off`, so that no hook waits for `graph_lock` held by a processor the panic stopped; `/proc/lockdep_stats` then reads `off: the kernel panicked`.
 
 A class prints as its name, `name/N` at subclass N, and `lock@0xKEY` when it has none. An address is the instruction after the call that took the lock; `addr2line` on the kernel's symbols gives the line.
 

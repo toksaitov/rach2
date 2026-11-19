@@ -89,6 +89,11 @@ void lockdep_acquire(struct lockdep_map *map, unsigned int subclass, int how, ui
 /** Note that the running context lets the lock of `map` go, at `ip`. */
 void lockdep_release(struct lockdep_map *map, uintptr_t ip);
 
+/** Stop the checker for good, at a panic, before the other processors are
+ * stopped, so that no hook the panic reaches waits for the checker's lock
+ * (`debug_locks_off`). Any context. */
+void lockdep_off_for_panic(void);
+
 /** Report, once for each site, a sleep at `ip` under a spinlock, with
  * interrupts off or in an interrupt (`might_sleep`). */
 void lockdep_might_sleep(uintptr_t ip);
@@ -150,6 +155,7 @@ int32_t lockdep_inject_store(void *data, const char __user *buf, uint32_t len);
 #define lockdep_init_map(map, name, key)        ((void)0)
 #define lockdep_acquire(map, subclass, how, ip) ((void)0)
 #define lockdep_release(map, ip)                ((void)0)
+#define lockdep_off_for_panic()                 ((void)0)
 #define lockdep_might_sleep(ip)                 ((void)0)
 #define lockdep_switch(ip)                      ((void)0)
 #define lockdep_bkl_acquire(ip)                 ((void)0)

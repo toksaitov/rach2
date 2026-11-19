@@ -43,6 +43,7 @@
 #define LD_OFF_EDGES   2
 #define LD_OFF_CHAINS  3
 #define LD_OFF_DEPTH   4
+#define LD_OFF_PANIC   5
 
 /* The kinds of report. */
 #define LD_CYCLE        1  /* a new order closes a cycle (check_noncircular) */
@@ -811,6 +812,8 @@ static const char *ld_off_reason(int why)
         return "the chain table is full";
     case LD_OFF_DEPTH:
         return "a context holds too many locks";
+    case LD_OFF_PANIC:
+        return "the kernel panicked";
     default:
         return "on";
     }
@@ -964,6 +967,18 @@ static void ld_leave(uint32_t flags)
     ld_print(cpu);
     cpu->lockdep_busy--;
     kirq_restore(flags);
+}
+
+/**
+ * Stop checking for a panic, with no report, as Linux's panic calls
+ * `debug_locks_off`: a report would take `graph_lock`, which a processor the
+ * panic stops may hold.
+ */
+void lockdep_off_for_panic(void)
+{
+    if (!ld_off) {
+        ld_off = LD_OFF_PANIC;
+    }
 }
 
 void lockdep_init_map(struct lockdep_map *map, const char *name, const struct lockdep_key *key)
