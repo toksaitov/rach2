@@ -728,12 +728,14 @@ struct virtio_gpu_object {
     struct virtio_gpu_object *hv_next;
     /* On a device that maps blobs from its own pages, the frames MAP_BLOB's
      * page lists named, held by the transport, which takes them back first
-     * when the device's memory changes or its VM ends. */
+     * when the device's memory changes or its VM ends; on one that also
+     * backs resources with them, the frames of the backing too, which the
+     * object's pages hold as well (`vgpu_backing_pages`). */
     struct virtio_map *pages_map;
-    /* The zap of every program's mapping of the blob, queued to the commit
-     * worker when the transport takes `pages_map`'s frames back, since the
-     * change notice that takes them must not sleep; the map holds the
-     * frames until it is freed. */
+    /* The zap of every program's mapping of the blob, or for a backing the
+     * device's unplug, queued to the commit worker when the transport takes
+     * `pages_map`'s frames back, since the change notice that takes them
+     * must not sleep; the map holds the frames until it is freed. */
     struct drm_work revoke_zap;
     uintptr_t vmap;
     int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
@@ -830,6 +832,10 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
  * fault maps from it meanwhile and no other drop frees it twice; with `zap`
  * set the caller holds a reference to `bo`, which the sleep could free. */
 void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap);
+/** Back a resource just made with the device's own pages (VGS_TF_BACKING),
+ * which become the object's; 0, -EREMOTEIO when the device refused, or
+ * another error after which the object must be freed. May sleep. */
+int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);

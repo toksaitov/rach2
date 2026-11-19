@@ -348,6 +348,10 @@ struct virtio_dev {
     /* The device maps its buffers from its own pages (`map_pages`), as
      * the transport and the device have agreed; set by the transport. */
     int pages;
+    /* With `pages`, the device also backs a resource with its own pages,
+     * asked for by the transport's command (VGS_TF_BACKING), in place of
+     * the pages `backing_fill` gives; set by the transport. */
+    int backing;
     /* `notify` is one register write that takes no lock and wakes no
      * thread, so a driver may make it without the big lock; set by the
      * transport, as virtio-pci sets it. */

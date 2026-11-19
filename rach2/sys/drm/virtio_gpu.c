@@ -1540,33 +1540,121 @@ void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, u
 }
 
 /**
+ * The RESOURCE_CREATE of resource `id`, not yet started: 2D of `bo`'s
+ * format and size, or with `r3d` the 3D resource it describes. NULL with
+ * no memory. May sleep.
+ */
+static struct virtio_gpu_cmd *create_cmd(struct virtio_gpu_device *vg,
+                                         const struct virtio_gpu_object *bo, uint32_t id,
+                                         const struct drm_virtgpu_resource_create *r3d)
+{
+    struct virtio_gpu_resource_create_2d *req;
+    struct virtio_gpu_resource_create_3d *r;
+    struct virtio_gpu_cmd *create = vgpu_cmd_new_wait(
+        vg, vg->ctrlq, r3d ? VIRTIO_GPU_CMD_RESOURCE_CREATE_3D : VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
+        r3d ? sizeof(*r) : sizeof(*req));
+
+    if (!create) {
+        return NULL;
+    }
+    if (r3d) {
+        r = cmd_req(create, struct virtio_gpu_resource_create_3d);
+        r->resource_id = id;
+        r->target = r3d->target;
+        r->format = r3d->format;
+        r->bind = r3d->bind;
+        r->width = r3d->width;
+        r->height = r3d->height;
+        r->depth = r3d->depth;
+        r->array_size = r3d->array_size;
+        r->last_level = r3d->last_level;
+        r->nr_samples = r3d->nr_samples;
+        r->flags = r3d->flags;
+    } else {
+        req = cmd_req(create, struct virtio_gpu_resource_create_2d);
+        req->resource_id = id;
+        req->format = bo->format;
+        req->width = bo->width;
+        req->height = bo->height;
+    }
+    return create;
+}
+
+/**
+ * Queue `create`, the RESOURCE_CREATE of `bo`'s resource `id`, and back
+ * the resource: with the device's own pages where the transport has them
+ * (`vgpu_backing_pages`), waited for, else, or when the device refuses
+ * them, with an ATTACH_BACKING of the object's pages, queued without a
+ * wait, its fence put in the object's reservation with `fenced`. On an
+ * error `create` is freed if it was not sent; once it was, `bo->res_id` is
+ * set, so that the object's free sends its UNREF. 0, or the error. May
+ * sleep.
+ */
+static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint32_t id,
+                        struct virtio_gpu_cmd *create, int fenced)
+{
+    struct virtio_gpu_cmd *attach = NULL;
+    int32_t err = 0;
+
+    if (!vg->vdev->backing) {
+        attach = vgpu_attach_cmd(vg, bo, id, &err);
+        if (!attach) {
+            vgpu_cmd_free(create);
+            return err;
+        }
+    }
+    /* The device answers a queue's commands in order: the backing follows
+     * the create, and any command on the object follows both. */
+    vgpu_cmd_send(create, NULL, NULL);
+    bo->res_id = id;
+    if (!attach) {
+        err = vgpu_backing_pages(vg, bo);
+        if (err != -EREMOTEIO) {
+            return err;
+        }
+        attach = vgpu_attach_cmd(vg, bo, id, &err);
+        if (!attach) {
+            return err;
+        }
+    }
+    if (fenced) {
+        vgpu_cmd_prepare(attach);
+        err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
+    }
+    vgpu_cmd_send(attach, NULL, NULL);
+    return err;
+}
+
+/**
  * A new object of `size` bytes with a 2D resource of `format` and
- * `width` by `height` pixels over its pages, which are given now, or with
- * `virgl` the 3D resource `params` describes: the RESOURCE_CREATE and the
- * ATTACH_BACKING are queued without a wait, as Linux's
- * virtio_gpu_object_create. With `fenced`, as RESOURCE_CREATE asks for 2D
- * and 3D alike (virtgpu_ioctl.c:172-175 and virtgpu_object.c:226-233 in
- * Linux 6.12.115), the attach's fence is put in the object's reservation,
- * so that a wait on the object waits for both, however slow the host.
- * A dumb buffer's has none, as Linux's virtio_gpu_gem_create passes none
+ * `width` by `height` pixels over its pages, or with `virgl` the 3D
+ * resource `params` describes. The RESOURCE_CREATE and the ATTACH_BACKING
+ * of pages given now are queued without a wait, as Linux's
+ * virtio_gpu_object_create; on a transport whose device backs resources
+ * with its own pages the create is followed by the asks for them, waited
+ * for, and the object's pages are the device's (`obj_back`). With
+ * `fenced`, as RESOURCE_CREATE asks for 2D and 3D alike
+ * (virtgpu_ioctl.c:172-175 and virtgpu_object.c:226-233 in Linux
+ * 6.12.115), the attach's fence is put in the object's reservation, so
+ * that a wait on the object waits for both, however slow the host; the
+ * device's backing, answered before the call returns, needs none. A dumb
+ * buffer's has none, as Linux's virtio_gpu_gem_create passes none
  * (virtgpu_gem.c:42), since a commit's implicit wait for it would rest on
  * a reap of the queue, which over the shared region the waiting thread may
- * be the one to do. An error answer is logged, as Linux does, and the
- * object's UNREF undoes the id. One reference, the caller's; NULL with
- * *err -ENODEV for a dead device, -EINVAL for a size of 0 or past the
- * shmem helper's reach, -ENOSPC when every resource id is taken, -ENOMEM
- * or -E2BIG. May sleep.
+ * be the one to do. An error answer to the create is logged, as Linux
+ * does, and the object's UNREF undoes the id. One reference, the
+ * caller's; NULL with *err -ENODEV for a dead device, -EINVAL for a size of
+ * 0 or past the shmem helper's reach, -ENOSPC when every resource id is
+ * taken, -ENOMEM, -E2BIG, -EINTR at SIGKILL during a wait, or the backing's
+ * error. May sleep.
  */
 struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t size,
                                           const struct drm_virtgpu_resource_create *params,
                                           int virgl, int fenced, int32_t *err)
 {
-    struct virtio_gpu_resource_create_2d *req;
-    struct virtio_gpu_cmd *create, *attach;
+    struct virtio_gpu_cmd *create;
     struct virtio_gpu_object *bo;
     uint32_t id;
-    uint32_t format = params->format, width = params->width, height = params->height;
-    const struct drm_virtgpu_resource_create *r3d = virgl ? params : NULL;
 
     if (vg->dead) {
         *err = -ENODEV;
@@ -1583,61 +1671,21 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
         return NULL;
     }
     vgpu_obj_init(vg, bo, size, 0);
-    bo->format = format;
-    bo->width = width;
-    bo->height = height;
+    bo->format = params->format;
+    bo->width = params->width;
+    bo->height = params->height;
     id = vgpu_res_id_get(vg);
     if (!id) {
         *err = -ENOSPC;
         drm_gem_object_put(&bo->shmem.base);
         return NULL;
     }
-    create = vgpu_cmd_new_wait(
-        vg, vg->ctrlq, r3d ? VIRTIO_GPU_CMD_RESOURCE_CREATE_3D : VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
-        r3d ? sizeof(struct virtio_gpu_resource_create_3d) : sizeof(*req));
-    attach = create ? vgpu_attach_cmd(vg, bo, id, err) : NULL;
-    if (!attach) {
-        if (create) {
-            vgpu_cmd_free(create);
-        } else {
-            *err = -ENOMEM;
-        }
-        vgpu_res_id_put(vg, id);
-        drm_gem_object_put(&bo->shmem.base);
-        return NULL;
-    }
-    if (r3d) {
-        struct virtio_gpu_resource_create_3d *r =
-            cmd_req(create, struct virtio_gpu_resource_create_3d);
-        r->resource_id = id;
-        r->target = r3d->target;
-        r->format = r3d->format;
-        r->bind = r3d->bind;
-        r->width = r3d->width;
-        r->height = r3d->height;
-        r->depth = r3d->depth;
-        r->array_size = r3d->array_size;
-        r->last_level = r3d->last_level;
-        r->nr_samples = r3d->nr_samples;
-        r->flags = r3d->flags;
-    } else {
-        req = cmd_req(create, struct virtio_gpu_resource_create_2d);
-        req->resource_id = id;
-        req->format = format;
-        req->width = width;
-        req->height = height;
-    }
-    /* The device answers a queue's commands in order: the attach follows
-     * the create, and any command on the object follows both. */
-    vgpu_cmd_send(create, NULL, NULL);
-    bo->res_id = id;
-    *err = 0;
-    if (fenced) {
-        vgpu_cmd_prepare(attach);
-        *err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
-    }
-    vgpu_cmd_send(attach, NULL, NULL);
+    create = create_cmd(vg, bo, id, virgl ? params : NULL);
+    *err = create ? obj_back(vg, bo, id, create, fenced) : -ENOMEM;
     if (*err != 0) {
+        if (!bo->res_id) {
+            vgpu_res_id_put(vg, id);
+        }
         drm_gem_object_put(&bo->shmem.base);
         return NULL;
     }
