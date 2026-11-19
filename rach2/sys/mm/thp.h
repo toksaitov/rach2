@@ -126,9 +126,13 @@ void thp_boot(void);
 /**
  * Refuse every huge page from now on, for a processor that fails with them
  * or a kernel with no memory to count them: `thp_region_allows` answers 0
- * whoever asks.
+ * whoever asks, `enabled` and `defrag` read never and the huge zero page is
+ * off, and the sysfs files take no other value, so khugepaged scans nothing.
  */
 void thp_refuse(void);
+
+/** Whether `thp_refuse` has refused huge pages. */
+int thp_refused(void);
 
 /**
  * Register the shrinker of huge pages and start khugepaged, the kernel

@@ -154,6 +154,11 @@ int down_read_trylock(struct rwsem *s);
  * Linux's `down_write` (rwsem.c:1574). */
 void down_write(struct rwsem *s);
 
+/** `down_write` that SIGKILL pending for the thread or its process ends,
+ * as Linux's `down_write_killable` (rwsem.c:1586): 0 once held, or -EINTR
+ * with `s` not held. */
+int down_write_killable(struct rwsem *s);
+
 /** Take `s` to write if nobody holds it and return 1, or return 0 at once,
  * as Linux's `down_write_trylock` (rwsem.c:1603). */
 int down_write_trylock(struct rwsem *s);

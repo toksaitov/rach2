@@ -159,6 +159,28 @@ void mmap_write_lock(struct mm *mm)
     hold_add(mm, 1);
 }
 
+int mmap_write_lock_killable(struct mm *mm)
+{
+    struct mmap_hold *h;
+
+    if (!current_proc) {
+        return 0;
+    }
+    h = hold_of(mm);
+    if (h && !h->write) {
+        k_panic("mmap_lock: a write hold wanted under a read hold");
+    }
+    if (h) {
+        h->depth++;
+        return 0;
+    }
+    if (down_write_killable(&mm->mmap_lock) != 0) {
+        return -EINTR;
+    }
+    hold_add(mm, 1);
+    return 0;
+}
+
 int mmap_write_trylock(struct mm *mm)
 {
     struct mmap_hold *h;
