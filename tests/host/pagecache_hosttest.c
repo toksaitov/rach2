@@ -1,6 +1,7 @@
 /**
  * pagecache_hosttest.c: the bookkeeping of the page cache,
- * rach2/sys/mm/pagecache.c, over a model disk of 64 pages.
+ * rach2/sys/mm/pagecache.c, over a model disk of 64 pages, and the copies
+ * that answer a read the disk fails.
  *
  * host-deps:
  *
@@ -89,14 +90,16 @@ static void (*fake_write_pause)(uint32_t disk_off, const void *page);
 #define FAKE_NO_FAIL 0xFFFFFFFFu
 static uint32_t fake_write_fail = FAKE_NO_FAIL;
 static int fake_write_fail_all;
+/* The page whose reads fail, as a disk's read error does. */
+static uint32_t fake_read_fail = FAKE_NO_FAIL;
 
 /** The backing's read: copy the page at `disk_off` into `page`, counting
- *  the read. Returns 0, or -1 past the disk. */
+ *  the read. Returns 0, or -1 past the disk and for `fake_read_fail`. */
 static int fake_read(uint32_t disk_off, void *page)
 {
     uint32_t p = disk_off / PC_PAGE_SIZE;
     uint32_t i;
-    if (p >= FAKE_PAGES) {
+    if (p >= FAKE_PAGES || p == fake_read_fail) {
         return -1;
     }
     for (i = 0; i < PC_PAGE_SIZE; ++i) {
@@ -163,6 +166,47 @@ static void touch(uint32_t p, int write, uint8_t marker)
             page[0] = marker;
         }
     }
+}
+
+/**
+ * The copies a file system reads and writes the window with when it must
+ * answer a disk's error (`pc_copy_out`, `pc_copy_in`): a copy across two
+ * pages brings both in; a page whose read fails is -1 with nothing of it
+ * resident, where a fault in the window would have panicked, and a later
+ * read that succeeds brings it in; a copy into the cache marks its page
+ * dirty for the sync to write; and a range past the backing is -1.
+ */
+static void test_copies(void)
+{
+    uint8_t buf[4] = {0, 0, 0, 0};
+    const uint8_t mark = 0xABu;
+
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    fake_disk[50][PC_PAGE_SIZE - 2] = 0x11u;
+    fake_disk[50][PC_PAGE_SIZE - 1] = 0x22u;
+    fake_disk[51][0] = 0x33u;
+    fake_disk[51][1] = 0x44u;
+    CHECK(pc_copy_out(51 * PC_PAGE_SIZE - 2, buf, 4) == 0);
+    CHECK(buf[0] == 0x11u && buf[1] == 0x22u && buf[2] == 0x33u && buf[3] == 0x44u);
+    CHECK(pc_test_page(50 * PC_PAGE_SIZE) != 0 && pc_test_page(51 * PC_PAGE_SIZE) != 0);
+
+    fake_read_fail = 53;
+    CHECK(pc_copy_out(53 * PC_PAGE_SIZE + 7, buf, 1) == -1);
+    CHECK(pc_test_page(53 * PC_PAGE_SIZE) == 0);
+    CHECK(pc_copy_out(53 * PC_PAGE_SIZE - 1, buf, 2) == -1);
+    CHECK(pc_test_page(52 * PC_PAGE_SIZE) != 0 && pc_test_page(53 * PC_PAGE_SIZE) == 0);
+    CHECK(pc_copy_in(53 * PC_PAGE_SIZE, &mark, 1) == -1);
+    CHECK(pc_test_page(53 * PC_PAGE_SIZE) == 0);
+    fake_read_fail = FAKE_NO_FAIL;
+    CHECK(pc_copy_out(53 * PC_PAGE_SIZE, buf, 1) == 0 && pc_test_page(53 * PC_PAGE_SIZE) != 0);
+
+    CHECK(pc_copy_in(54 * PC_PAGE_SIZE + 3, &mark, 1) == 0);
+    CHECK(pc_dirty_count() == 1);
+    CHECK(pc_sync() == 0 && fake_disk[54][3] == mark && pc_dirty_count() == 0);
+
+    CHECK(pc_copy_out(FAKE_PAGES * PC_PAGE_SIZE - 1, buf, 2) == -1);
+    CHECK(pc_copy_in(FAKE_PAGES * PC_PAGE_SIZE, &mark, 1) == -1);
 }
 
 /* What the failure hook was told: its calls and the last answer. */
@@ -360,6 +404,13 @@ void bkl_enter(void)
 /** Give nothing back: see `bkl_held`. */
 void bkl_exit(void)
 {}
+
+/** Exchange `*p` for `value`, a full barrier, as the kernel's does: the wait
+ * queue's barrier (`sched_mb`) is one. The old value. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    return __atomic_exchange_n(p, value, __ATOMIC_SEQ_CST);
+}
 
 /**
  * The scheduler, entered when the caller of the kernel's `pc_wait_release`
@@ -619,6 +670,7 @@ int main(void)
 
     test_sleeping_writeback();
     test_failure_hook();
+    test_copies();
 #ifdef PAGECACHE_SYNC_HOSTTEST
     test_sync_wait();
 #endif
