@@ -107,10 +107,12 @@ void console_printf(const char *format, ...)
     (void)format;
 }
 
-/** Use a fixed timestamp. */
+static int64_t clock_seconds = 1000;
+
+/** Report the time set by the row. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 1000;
+    *seconds = clock_seconds;
     *nanoseconds = 0;
 }
 
@@ -630,13 +632,14 @@ static void pinned(void)
 
 /**
  * Fail the first sync after a grow has moved the target and stored its old
- * node's type as free, the removal's own: the operation must return `EIO`,
- * and the file must stay at its new place, which holds the bytes, with every
- * description repointed there. With `truncate`, the grow is a truncate.
+ * node's type as free. A write counts the bytes in the live copy, and a
+ * truncate returns EIO. Both leave a stamped copy on disk with every open
+ * description pointing to it.
  */
 static void failed_relocation(int truncate)
 {
-    void *current;
+    void *current = NULL;
+    krffs_node_t *copy;
     int i, rc;
 
     setup();
@@ -647,12 +650,19 @@ static void failed_relocation(int truncate)
     check(kv_write(&mount, descs[0]->fhandle, "A", 1, 0) == 1, "seed failed relocation");
     create("block-a");
     fail_after_move = 1;
+    clock_seconds++;
     k_memset(payload, 'F', sizeof(payload));
     rc = truncate ? kv_truncate(&mount, descs[0]->fhandle, sizeof(payload))
                   : kv_write(&mount, descs[0]->fhandle, payload, sizeof(payload), 0);
-    check(rc == -EIO && syncs_after_free == 1, "the removal's sync fails after relocation");
+    check(rc == (truncate ? -EIO : (int)sizeof(payload)) && syncs_after_free == 1,
+          "a failed removal sync counts a visible write and fails a truncate");
     check(kv_lookup(&mount, mount.root, "target", &current) == 0 && current != original,
           "failed operation retains relocated node");
+    copy = (krffs_node_t *)(medium + offset_of(&mount, current));
+    check(copy->type == KRFFS_RESERVED_NODE && copy->modification_time.seconds == clock_seconds &&
+              copy->attribute_change_time.seconds == clock_seconds,
+          "both timestamps reached the medium with the published copy");
+    clock_seconds--;
     {
         char byte = 0;
 
@@ -1084,8 +1094,8 @@ static unsigned block_of(uint64_t at)
 /**
  * An fsync writes one file. `one` and `other` each fill blocks of their own;
  * a chmod dirties `other`'s header and eight of its data blocks are left
- * dirty as a neighbour's writeback, and a write to `one` that changes no
- * length leaves its header dirty after the core's sync point. The fsync of
+ * dirty as a neighbour's writeback. A truncate of `one` to its current
+ * length leaves its timestamps dirty. The fsync of
  * `one` writes its header block alone and leaves every block of `other`
  * dirty; the sync of the volume then writes them.
  */
@@ -1115,14 +1125,14 @@ static void owned_fsync(void)
               block_of(offset_of(&mount, other)),
           "fsync row: one's header shares no block with other");
     first = block_of(offset_of(&mount, other) + sizeof(krffs_node_t)) + 1;
-    check(kv_write(&mount, fd_slot(&table, fd_one)->ofd->fhandle, "o", 1, 0) == 1,
-          "fsync row: overwrite one");
+    check(kv_truncate(&mount, fd_slot(&table, fd_one)->ofd->fhandle, 4096) == 0,
+          "fsync row: stamp one at its current length");
     st.mode = 0600;
     check(kv_setattr(&mount, other, VFS_SET_MODE, &st) == 0, "fsync row: chmod other");
     for (i = first; i < first + 8; i++) {
         buffers[i].dirty = 1;
     }
-    check(buffers[block_of(offset_of(&mount, one))].dirty, "write leaves one's header dirty");
+    check(buffers[block_of(offset_of(&mount, one))].dirty, "truncate leaves one's header dirty");
     block_writes = 0;
     check(kv_fsync(&mount, fd_slot(&table, fd_one)->ofd->fhandle) == 0, "fsync of one succeeds");
     check(block_writes == 1 && !buffers[block_of(offset_of(&mount, one))].dirty,
@@ -1646,6 +1656,42 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
+/**
+ * Refuse one fetch of the header block for mtime or ctime. The overwrite
+ * starts in the next block, so its payload never fetches the header.
+ */
+static void stamp_fetch_failure(int skip)
+{
+    struct vfs_stat st;
+    void *node, *handle;
+    uint64_t at;
+    int64_t before = clock_seconds;
+
+    setup();
+    node = create("file");
+    handle = fd_slot(&table, open_node(node))->ofd->fhandle;
+    k_memset(payload, 'a', sizeof(payload));
+    check(kv_write(&mount, handle, payload, sizeof(payload), 0) == (int)sizeof(payload),
+          "stamp row: seed two blocks");
+    at = follow_moves(handle);
+    refuse_block = (int)block_of(at);
+    refuse_skip = skip; /* the header read and, for ctime, the mtime store */
+    clock_seconds++;
+    k_memset(payload, 'b', BCACHE_BLOCK_BYTES);
+    check(kv_write(&mount, handle, payload, BCACHE_BLOCK_BYTES, BCACHE_BLOCK_BYTES) == -EIO &&
+              refuse_block == -1,
+          "the overwrite reports the one failed timestamp fetch");
+    check(kv_getattr(&mount, handle_of(at), &st) == 0 && st.size == sizeof(payload) &&
+              st.mtime_sec == (skip == 1 ? before : clock_seconds) && st.ctime_sec == before,
+          "only timestamps stored before the failure changed");
+    k_memset(payload, 'a', sizeof(payload));
+    check(kv_fsync(&mount, handle) == 0 && bcache_flush(&disk) == 0 &&
+              __builtin_memcmp(medium + at + sizeof(krffs_node_t), payload, sizeof(payload)) == 0,
+          "fsync after the transient error leaves all original bytes on disk");
+    clock_seconds--;
+    teardown();
+}
+
 /** Fail the length store's second block after its comparison read. */
 static void refuse_length_end(void)
 {
@@ -1853,6 +1899,8 @@ static void reclaim_during_store(void)
 /** Run the independent volume failure rows. */
 static void volume_failure_rows(void)
 {
+    stamp_fetch_failure(1);
+    stamp_fetch_failure(2);
     split_length_failure();
     field_failure_rows();
     refused_repair_row();
@@ -1878,6 +1926,15 @@ static void volume_failure_rows(void)
  */
 int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "timestamps") == 0) {
+        stamp_fetch_failure(1);
+        stamp_fetch_failure(2);
+        failed_relocation(0);
+        failed_relocation(1);
+        owned_fsync();
+        printf("krffsmount-hosttest: timestamp rows: %d failures\n", failures);
+        return failures != 0;
+    }
     volume_failure_rows();
     if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
         printf("krffsmount-hosttest: failure rows: %d failures\n", failures);
