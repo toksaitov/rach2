@@ -37,7 +37,7 @@
 #define I915_MODEL_BAR0 0x400000u
 
 /* The accesses the log keeps; later ones are counted in `log_lost`. */
-#define I915_MODEL_LOG 8192
+#define I915_MODEL_LOG 16384
 
 /* The most blocks the table holds. */
 #define I915_MODEL_BLOCKS 28
