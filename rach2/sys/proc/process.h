@@ -148,6 +148,22 @@ struct wq_waiter {
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
 
+/* The most orders one operation of a file system keeps at once
+ * (`bcache_order_after`). */
+#define BCACHE_TOKENS 6
+
+/* An order an operation of a file system asked of the buffer cache: its
+ * later changes of blocks that carry orders reach the device only after
+ * block `blk` of `dev` as it stood at the count of marks `k`. `t` is the
+ * block's buffer then, kept from the heap by a count in its waiters until
+ * the operation ends (bcache.h). */
+struct bcache_token {
+    struct bbuf *t;
+    void *dev;
+    uint64_t blk;
+    uint64_t k;
+};
+
 struct isr_params;
 
 /*
@@ -351,6 +367,11 @@ struct process {
     /* The buffer cache's list of the buffers this process holds, kept by
      * the cache so its hold rules are checked against them alone. */
     struct bbuf *bcache_held;
+    /* The orders the operation of a file system under way has asked of the
+     * buffer cache, and how many (`bcache_order_after`), cleared at its end
+     * (`bcache_order_end`). */
+    struct bcache_token bcache_tokens[BCACHE_TOKENS];
+    uint32_t bcache_ntokens;
     /* Set by a wake from a sleep: a wait queue's (`sched_wake_blocked`), its
      * deadline's (`sched_wake_due`) or a signal's (`sched_wake_signal`).
      * The scheduler may prefer the process once at its next selection, an
