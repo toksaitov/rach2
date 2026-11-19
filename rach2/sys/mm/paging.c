@@ -5417,9 +5417,7 @@ static uint32_t huge_shrink_underused(uint32_t want)
         !mmap_hold_free()) {
         return 0;
     }
-    if (++pass == 0) { /* 0 is no pass */
-        pass = 1;
-    }
+    pass = pass % 0xFFFFFFFFu + 1u; /* 1 to 2^32 - 1: 0 is no pass */
     for (p = proc_list; p && freed < want; p = p->next) {
         struct mm *mm = p->mm;
 
