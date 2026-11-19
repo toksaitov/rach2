@@ -162,7 +162,7 @@ static int transition_done(void *arg)
 static int32_t resume(struct pm_runtime *rpm, int take)
 {
     uint32_t flags;
-    int32_t err;
+    int32_t err, ms;
 
     flags = spin_lock_irqsave(&rpm->lock);
     rpm->usage += take;
@@ -191,8 +191,10 @@ static int32_t resume(struct pm_runtime *rpm, int take)
     if (err != 0) {
         record_error(rpm, "resume", err);
     }
+    ms = idle_after(rpm);
     spin_unlock_irqrestore(&rpm->lock, flags);
     wq_wake_all(&rpm->wait);
+    schedule_idle(rpm, ms);
     return err;
 }
 
