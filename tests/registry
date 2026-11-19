@@ -43,6 +43,7 @@ webgl|qemu|full||8192|x86_64
 video|qemu,qemu-img,ssh,scp,ssh-keygen,xorriso,curl,sha256sum|full||8192|x86_64
 igt|qemu|full||4096|x86_64
 assign|qemu,mke2fs,ar,xz,curl,zstd,mformat,mmd,mcopy|full||4096|x86_64
+netguest|qemu,qemu-img,mke2fs,ar,xz,zstd,curl,xorriso,sha256sum|full||6144|x86_64
 kvm|qemu,mke2fs,ar,xz,curl|full||6144|x86_64
 bed-vtest|qemu,qemu-img,xorriso,curl,sha256sum,sha512sum,python3,mke2fs|full||8192|x86_64
 bed-forward|qemu,qemu-img,mke2fs,ssh,scp,ssh-keygen,xorriso,curl,sha256sum|full||12288|x86_64
