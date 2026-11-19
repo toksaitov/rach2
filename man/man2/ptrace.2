@@ -743,10 +743,9 @@ The attach is not allowed, the target is inside
 and the caller's effective user ID is not 0, or the caller is already
 traced.
 .It Bq Er ESRCH
-No such thread, one the caller's process does not trace, or one not in a
-ptrace stop, which for a request that reads from
-.Fa data
-is judged again after the read.
+No such thread, one the caller's process does not trace, or a required stop
+that the request could not hold because the tracee was running, listening,
+marked for death by SIGKILL, or held by another request.
 .El
 .Sh SEE ALSO
 .Xr execve 2 ,

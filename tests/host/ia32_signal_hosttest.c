@@ -309,12 +309,6 @@ isr_params_t *proc_user_frame(const process_t *t)
     return &tracee_frame;
 }
 
-process_t *ptrace_tracee(uint32_t pid)
-{
-    (void)pid;
-    return &tracee;
-}
-
 /** Debug register `n` reads as 0xD0 + n in the model. */
 unsigned long debugreg_peek(const process_t *t, unsigned n)
 {
@@ -868,25 +862,25 @@ static void run_ptrace(void)
     tracee.regs.ds_sel = GDT_USER_DATA;
     compat = 1;
 
-    check(arch_ptrace(&tracee, 2, PTRACE_GETREGS, 0, buf) == 0, "an i386 tracer's GETREGS");
+    check(arch_ptrace(&tracee, PTRACE_GETREGS, 0, buf) == 0, "an i386 tracer's GETREGS");
     check(word_at(buf) == 0xB0B0u && word_at(buf + 24) == 0xC0C0u &&
               word_at(buf + 28) == GDT_USER_DATA && word_at(buf + 44) == 20u &&
               word_at(buf + 48) == 0x08049200u && word_at(buf + 52) == GDT_USER_CODE32 &&
               word_at(buf + 60) == 0xFFFFD000u && word_at(buf + 64) == GDT_USER_DATA &&
               word_at(buf + 68) == 0,
           "user_regs_struct32's 68 bytes, low halves");
-    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 24, buf) == 0 && word_at(buf) == 0xC0C0u,
+    check(arch_ptrace(&tracee, PTRACE_PEEKUSER, 24, buf) == 0 && word_at(buf) == 0xC0C0u,
           "PEEKUSER of EAX at 24");
-    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 256, buf) == 0 && word_at(buf) == 0xD1u,
+    check(arch_ptrace(&tracee, PTRACE_PEEKUSER, 256, buf) == 0 && word_at(buf) == 0xD1u,
           "PEEKUSER of u_debugreg[1] at 256");
-    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 280, buf) == 0 && word_at(buf) == 0xD7u,
+    check(arch_ptrace(&tracee, PTRACE_PEEKUSER, 280, buf) == 0 && word_at(buf) == 0xD7u,
           "PEEKUSER of u_debugreg[7], struct user32's last word");
-    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 248, buf) == 0 && word_at(buf) == 0,
+    check(arch_ptrace(&tracee, PTRACE_PEEKUSER, 248, buf) == 0 && word_at(buf) == 0,
           "PEEKUSER of a field that is not a register reads 0");
-    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 284, buf) == -EIO &&
-              arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 26, buf) == -EIO,
+    check(arch_ptrace(&tracee, PTRACE_PEEKUSER, 284, buf) == -EIO &&
+              arch_ptrace(&tracee, PTRACE_PEEKUSER, 26, buf) == -EIO,
           "PEEKUSER past struct user32 or unaligned is EIO");
-    check(arch_ptrace(&tracee, 2, PTRACE_ARCH_PRCTL, 0, buf) == -EIO,
+    check(arch_ptrace(&tracee, PTRACE_ARCH_PRCTL, 0, buf) == -EIO,
           "ARCH_PRCTL is not an i386 tracer's");
     compat = 0;
 
@@ -927,8 +921,7 @@ static void run_ptrace_writes(void)
         u.base_addr = 0x654000u + rpl;
         k_memcpy(at(USER_BASE + 0x200u, sizeof(u)), &u, sizeof(u));
         tracee.tls_base = tracee.regs.gs_base = 0xBADu;
-        check(arch_ptrace(&tracee, 2, PTRACE_SET_THREAD_AREA, GDT_TLS_MIN, USER_BASE + 0x200u) ==
-                      0 &&
+        check(arch_ptrace(&tracee, PTRACE_SET_THREAD_AREA, GDT_TLS_MIN, USER_BASE + 0x200u) == 0 &&
                   tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
               "PTRACE_SET_THREAD_AREA updates the saved FS and GS bases at each RPL");
     }

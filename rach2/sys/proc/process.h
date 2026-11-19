@@ -693,7 +693,7 @@ struct process {
      * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
      * last debug exception left it. `tracer` is changed by proc_set_tracer.
      * A stop sets `ptrace_status` and clears `ptrace_reported` under the
-     * signal state's lock (`signal_trap_publish`), under which the tracer's
+     * signal state's lock (`ptrace_stop`), under which the tracer's
      * wait reads them and sets `ptrace_reported`. */
     uint32_t ptrace;
     uint32_t tracer;
@@ -1633,15 +1633,6 @@ uint64_t signal_blocked_now(void);
  * lock, and a mask is two words on i686. Defined in syscall_proc.c. */
 void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uint64_t *blocked);
 
-/** Put the current thread `self` in the ptrace stop whose wait status is
- * `status`, not yet reported: `ptrace_reported` and `ptrace_status` change
- * together under the signal state's lock, under which a wait without the
- * big lock reads a stop and takes its report (`wait_tracee`), as Linux's
- * ptrace_stop sets the stop under the tracee's `siglock`. The caller holds
- * the big lock, or holds neither it nor `sig_lock`. Defined in
- * syscall_proc.c. */
-void signal_trap_publish(process_t *self, uint32_t status);
-
 /** The siginfo of the SIGCHLD a child's end sends to `receiver`, its parent
  * or its tracer: CLD_EXITED with the exit code, or CLD_KILLED or CLD_DUMPED
  * with the signal, from its wait status, and the child's pid and real uid as
@@ -1667,6 +1658,14 @@ uint64_t proc_alarm_at(uint64_t now, uint64_t ticks);
  * held. Defined in syscall_proc.c.
  */
 int signal_pending(void);
+
+/** Lock the signal state and disable interrupts. Returns the flags for
+ * `signal_state_unlock`. Callers outside the big lock must not nest this
+ * lock. A caller with the big lock may nest it in a signal-state region. */
+uint32_t signal_state_lock(void);
+
+/** Release the signal state and restore interrupts to `flags`. */
+void signal_state_unlock(uint32_t flags);
 
 /**
  * Act on the current thread's pending signals on a return to user mode
