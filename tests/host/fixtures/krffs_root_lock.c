@@ -296,6 +296,20 @@ static int sched_spin_on(const struct process *owner, int cpu)
 
 #define krffs_get_next_node watched_next_node
 #include "kfs_data.inc"
+
+/* The repair in krffs.c indexes names with these; no row here reaches it,
+   so the index is never had and the search would be left owed. */
+void *kmalloc(size_t size)
+{
+    (void)size;
+    return (void *)0;
+}
+
+/** Nothing to give back, since `kmalloc` gives nothing. */
+void kfree(void *p)
+{
+    (void)p;
+}
 #undef krffs_get_next_node
 
 /**

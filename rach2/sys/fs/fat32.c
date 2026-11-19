@@ -3339,6 +3339,7 @@ static const struct vfs_ops vfat_ops = {
     0,                           /* rename_flags */
     0,                           /* tmpfile */
     0,                           /* uncache */
+    0,                           /* phase */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops,        0, 0, 0, 0, 0,

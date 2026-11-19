@@ -1157,6 +1157,17 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
 }
 
 /**
+ * Whether `mnt` shows the halted KRFFS root (`krffs_root_halted`), the root
+ * itself or a bind of it: a file system turned read-only, whose changes of
+ * attributes and W_OK are -EROFS before any permission check, as Linux
+ * answers for a read-only file system.
+ */
+static int halted_root_mount(struct vfs_mount *mnt)
+{
+    return mnt_is_root(vfs_mount_base(mnt)) && krffs_root_halted();
+}
+
+/**
  * Write with the description and the locks in `state` already held. Its
  * `own` says the type uses a file lock; `append` is the operation's final
  * end-placement choice, independent of the shared O_APPEND flag. The caller
@@ -6437,6 +6448,9 @@ long sys_close(isr_params_t *params)
  * sequence since the description last looked (`vfs_ino_err_check`), whose
  * cursor moves past it whatever the answer, so that a later pass that wrote
  * the pages does not erase it and the description is not told it twice.
+ * The type's EIO comes before the mapped pages' error, the EROFS a mount
+ * that a failed write or a halt turned read-only gives them, as Linux
+ * reports a failed writeback.
  */
 static long sync_entry(fd_entry_t *e,
                        int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
@@ -6452,8 +6466,8 @@ static long sync_entry(fd_entry_t *e,
         }
         rc = sync_op(e->ofd->vmnt, e->ofd->fhandle, &e->ofd->wb_seen);
         kept = vfs_ino_err_check(e->ofd->vmnt, e->ofd->ino, &e->ofd->ino_seen);
-        if (mapped == 0) {
-            mapped = rc != 0 ? rc : kept;
+        if (mapped == 0 || rc == -EIO) {
+            mapped = rc != 0 ? rc : kept; /* the file's EIO over the mapping's EROFS, as Linux */
         }
         return mapped;
     }
@@ -12548,6 +12562,15 @@ long sys_open_by_handle_at(isr_params_t *params)
 
 #define R_OK 4
 
+/** Whether a file of mode `fmode` is a device, FIFO or socket, which W_OK
+ * on a read-only file system still allows, as Linux's sb_permission. */
+static int special_file(uint32_t fmode)
+{
+    uint32_t type = fmode & 0170000u;
+
+    return type == 0010000u || type == 0140000u || type == 0020000u || type == 0060000u;
+}
+
 /**
  * The core of access(2), faccessat(2) and faccessat2(2): 0 when the file at
  * `name`, leading '/' stripped, exists and grants `mode`, an OR of R_OK,
@@ -12601,7 +12624,10 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
             cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode, real);
         return rc == 0 && ro ? -EROFS : rc;
     }
-    if (!mnt_is_root(ref.mnt)) {
+    if ((mode & W_OK) && halted_root_mount(ref.mnt) &&
+        !special_file(((krffs_node_t *)ref.node)->mode)) {
+        rc = -EROFS;
+    } else if (!mnt_is_root(ref.mnt)) {
         rc = cred_access_ref(&ref, mode, real);
         if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
             rc = -EROFS;
@@ -12946,10 +12972,15 @@ long sys_faccessat2(isr_params_t *params)
  * gid-0 file 02710 by chmod alone and never write it. The clear does not
  * depend on group-execute, as `cred_kill_setid`'s does, since the caller
  * chooses that bit in the same call. Setuid needs no rule here: only the
- * owner may chmod, and the bit grants that owner's own identity.
+ * owner may chmod, and the bit grants that owner's own identity. A halted
+ * root (`krffs_root_halted`) is -EROFS before anything else, as a file
+ * system turned read-only is on Linux.
  */
 static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 {
+    if (krffs_root_halted()) {
+        return -EROFS; /* the mode is stored in place, past the core */
+    }
     if (!cred_fs_privileged() && proc_fsuid(current_proc) != node->uid) {
         return -EPERM;
     }
@@ -12979,13 +13010,18 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
  * chmod. Both happen only when a field changes: `chown(path, -1, -1)`
  * succeeds for every caller and leaves the times alone, and a clear that
  * ran on it would let any user clear the set-user-ID bit of /bin/su with
- * one call.
+ * one call. A halted root (`krffs_root_halted`) is -EROFS before anything
+ * else, for a call that changes nothing too, as a file system turned
+ * read-only is on Linux.
  */
 static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 {
     int uid_changes = (uid != (uint32_t)-1 && uid != node->uid);
     int gid_changes = (gid != (uint32_t)-1 && gid != node->gid);
 
+    if (krffs_root_halted()) {
+        return -EROFS; /* the ids are stored in place, past the core */
+    }
     if (uid_changes && !cred_fs_privileged()) {
         return -EPERM;
     }
@@ -13183,6 +13219,11 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
         }
         return chmod_synth(&vp, mode);
     }
+    if (halted_root_mount(ref.mnt)) {
+        vfs_walk_unlock(ref.mnt);
+        vfs_ref_release(&ref);
+        return -EROFS;
+    }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
 
@@ -13373,6 +13414,11 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return chown_synth(&vp, uid, gid);
+    }
+    if (halted_root_mount(ref.mnt)) {
+        vfs_walk_unlock(ref.mnt);
+        vfs_ref_release(&ref);
+        return -EROFS;
     }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
@@ -13579,6 +13625,9 @@ long sys_fchmod(isr_params_t *params)
  */
 static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
 {
+    if (entry->ofd && entry->ofd->vmnt && halted_root_mount(entry->ofd->vmnt)) {
+        return -EROFS; /* a named FIFO's descriptor of the halted root too */
+    }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         int rc = krffs_chmod_node(entry->node, mode);
 
@@ -13823,6 +13872,9 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
  */
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
+    if (entry->ofd && entry->ofd->vmnt && halted_root_mount(entry->ofd->vmnt)) {
+        return -EROFS; /* a named FIFO's descriptor of the halted root too */
+    }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         int rc = krffs_chown_node(entry->node, uid, gid);
 
@@ -17776,7 +17828,9 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
         return -EROFS;
     }
     if (fd_node_holders(node, NULL) > 0) {
-        krffs_unlink_held(node);
+        if (krffs_unlink_held(node) != 0) {
+            return krffs_root_halted() ? -EROFS : -EIO;
+        }
         return 0;
     }
     return vfs_unlink_name(parent->mnt, parent->node, leaf);
@@ -18558,12 +18612,13 @@ static int rename_same_node(const struct vfs_ref *opar, const char *oleaf,
  * directory destination is -EISDIR; a destination a loop device stands on
  * is -EBUSY.
  *
- * A destination the rename replaces loses its name first when a descriptor
+ * A destination the rename replaces loses only its name when a descriptor
  * holds it, so the holder keeps reading the file it opened, and is freed by
- * the rename when none does. That count comes after every refusal, since a
- * rename that then failed would have taken the name of the file it refused
- * to touch, and it is right only under the lock, which an open holds until
- * it has published its descriptor.
+ * the rename when none does. The root's `rename` counts the holders, under
+ * this lock, which an open holds until it has published its descriptor,
+ * and the core drops the name only once nothing can refuse the rename
+ * (`krffs_rename_err`), since a rename that then failed would have taken
+ * the name of the file it refused to touch.
  */
 static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
                                  const struct vfs_ref *npar, const char *nleaf, int flags,
@@ -18616,9 +18671,6 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
         }
         if (loop_backs(npar->mnt, existing)) {
             return -EBUSY;
-        }
-        if (fd_node_holders(existing, NULL) > 0) {
-            krffs_orphan_node(existing);
         }
     }
     return vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
@@ -18942,6 +18994,14 @@ static int utime_nsec_valid(long nsec)
     return nsec == UTIME_NOW || nsec == UTIME_OMIT || (nsec >= 0 && nsec <= 999999999);
 }
 
+/** Whether utimensat on (`mnt`, `node`) is -EROFS whoever asks: a
+ * synthetic file, which has no stored times, or a file of the halted KRFFS
+ * root (`halted_root_mount`). */
+static int utimes_read_only(struct vfs_mount *mnt, void *node)
+{
+    return vfs_synth_vpath(mnt, node) || halted_root_mount(mnt);
+}
+
 /**
  * Set the access and modification times of the file at (`mnt`, `node`), for
  * utimensat by path and by descriptor. `times` is the pair [atime, mtime];
@@ -18951,7 +19011,8 @@ static int utime_nsec_valid(long nsec)
  * The POSIX permission split: setting both to now is the owner's, or anyone's
  * with write permission, or root's; an explicit time is the owner's or root's
  * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
- * no stored times and is -EROFS; the KRFFS root's times are not changed and
+ * no stored times and is -EROFS, as is a file of the halted KRFFS root,
+ * before any permission check; the KRFFS root's times are not changed and
  * the call succeeds. On another type the read, the check and the store are
  * one step under the file's lock (`vfs_node_lock`), as for chmod and chown.
  */
@@ -18966,7 +19027,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
     if (times && (!utime_nsec_valid(times[0].tv_nsec) || !utime_nsec_valid(times[1].tv_nsec))) {
         return -EINVAL;
     }
-    if (vfs_synth_vpath(mnt, node)) {
+    if (utimes_read_only(mnt, node)) {
         return -EROFS;
     }
     get_current_time(&now_sec, &now_nsec);

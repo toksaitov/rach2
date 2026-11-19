@@ -153,6 +153,27 @@ static int loop_begin(struct loop_device *loop, uint64_t lba, uint32_t count, st
 }
 
 /**
+ * The device's phase (block.h): where in a sector of the medium the file's
+ * first byte lies. The caller holds the file's lock through publication.
+ * A file system that keeps files in whole blocks uses its device's phase.
+ * The device under the file system is a disk or a partition of one, whose
+ * phase is 0, or none for the boot root, whose pages begin on sectors;
+ * attachment refuses a file on a loop device, even one over the boot root,
+ * whose `backing` is NULL. So the file system's own cache blocks begin on
+ * sectors of the medium, and the file's phase places every edge a stop can
+ * cut its image at.
+ */
+static uint32_t loop_phase(const struct vfs_ref *ref, void *handle)
+{
+    struct vfs_mount *mnt = ref->mnt->bind_of ? ref->mnt->bind_of : ref->mnt;
+
+    if (mnt->type->ops && mnt->type->ops->phase) {
+        return mnt->type->ops->phase(mnt, ref->node, handle);
+    }
+    return mnt->dev ? mnt->dev->sector_phase : 0;
+}
+
+/**
  * End a transfer that `loop_begin` began, under `loop_lock`: a write
  * (`wrote`) counts and marks the device unflushed, a sync that succeeded
  * (`synced`) counts and clears the mark unless a write was answered while
@@ -687,11 +708,11 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st, 
 /**
  * Fill in `loop`'s device over the file `node` of `loop->mnt`, `size` bytes
  * on the device `backing`, and publish it under `loop_lock`, after every
- * field a transfer reads is set. The file's identity for `loop_backs` is
- * published with it.
+ * field a transfer reads is set. `phase` is where the first byte lies in
+ * a sector of the medium. Publish the file's identity with it.
  */
 static void loop_publish(struct loop_device *loop, void *node, block_device_t *backing,
-                         uint64_t size)
+                         uint64_t size, uint32_t phase)
 {
     uint32_t flags;
 
@@ -705,6 +726,7 @@ static void loop_publish(struct loop_device *loop, void *node, block_device_t *b
     loop->dev.write = loop_write;
     loop->dev.submit = 0;
     loop->dev.flush = loop_flush;
+    loop->dev.sector_phase = phase;
     loop->dev.backing = backing;
     loop->dev.drvdata = loop;
     flags = spin_lock_irqsave(&loop_lock);
@@ -799,11 +821,12 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EBUSY;
     }
-    if (block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
+    if ((ref.mnt->dev && ref.mnt->dev->read == loop_read) ||
+        block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
-        return -ELOOP; /* deeper than the four buffers a process may hold */
+        return -ELOOP; /* on a loop device, or deeper than the buffer cache serves */
     }
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
@@ -834,7 +857,7 @@ int loop_attach(int index, const char *path, int writable)
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
     loop->attaching = 0;
-    loop_publish(loop, ref.node, ref.mnt->dev, st.size);
+    loop_publish(loop, ref.node, ref.mnt->dev, st.size, loop_phase(&ref, handle));
 
     vfs_node_unlock(&ref);
 

@@ -193,6 +193,30 @@ static int volume_sync(void *ctx)
 }
 
 /**
+ * The core halted the volume (`krffs_withdraw`): every mount that shows it
+ * turns read-only (`vfs_mount_halted`), so that an open for writing, a
+ * creation or a link is refused with -EROFS before it reaches the core.
+ * The cache still writes back whole for a sync and for the unmount, which
+ * keeps the dirty flag.
+ */
+static void kv_halted(krffs_mount_t *fs)
+{
+    struct krffs_volume *vol = fs->ctx;
+
+    vfs_mount_halted(vol->mnt);
+}
+
+/**
+ * Whether the mount takes no change: mounted read-only, made read-only by a
+ * failed write, or halted by the core (`krffs_withdraw`), which refuses every
+ * write until the next mount, as Linux's ext4 turns read-only after an error.
+ */
+static int refuses_writes(struct krffs_volume *vol, struct vfs_mount *mnt)
+{
+    return !vol->writable || (mnt->flags & VFS_MS_RDONLY) || vol->fs.halted;
+}
+
+/**
  * The mount's lock and the writable check for write, truncate and setattr;
  * the namespace operations arrive locked. Returns 0 with the lock held, or
  * -EROFS with it released. Decided under the lock, so a writer queued behind
@@ -204,7 +228,7 @@ static int begin_write(struct vfs_mount *mnt)
 
     vfs_ns_lock(mnt);
     vol = vol_of(mnt);
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         vfs_ns_unlock(mnt);
         return -EROFS;
     }
@@ -251,27 +275,32 @@ static const krffs_backend_t volume_backend = {volume_read, volume_write, volume
 /**
  * The node `name` names in the directory `dir`: `dir` itself for `.`, its
  * parent for `..`, the root's parent being the root, and otherwise its
- * child, or -ENOENT. A handle is no resource, so nothing is held.
+ * child, or -ENOENT, or -EIO for a read that failed before it was found.
+ * A handle is no resource, so nothing is held.
  */
 static int kv_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct krffs_volume *vol = vol_of(mnt);
     uint64_t at = offset_of(mnt, dir);
     uint64_t found;
+    int rc;
 
     if (name[0] == '.' && name[1] == '\0') {
         *node = handle_of(at);
         return 0;
     }
     if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
-        uint64_t parent = krffs_parent_offset(&vol->fs, at);
+        uint64_t parent = krffs_parent_offset_err(&vol->fs, at, &rc);
 
+        if (rc != 0) {
+            return rc;
+        }
         *node = handle_of(parent == KRFFS_NO_NODE ? 0 : parent);
         return 0;
     }
-    found = krffs_child_at(&vol->fs, at, name);
+    found = krffs_child_at_err(&vol->fs, at, name, &rc);
     if (found == KRFFS_NO_NODE) {
-        return -ENOENT;
+        return rc;
     }
     *node = handle_of(found);
     return 0;
@@ -384,6 +413,17 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 static void *kv_handle_node(void *handle)
 {
     return handle_of(((struct krffs_open *)handle)->offset);
+}
+
+/** The `phase` of `vfs_ops`: where in a sector of the medium the first
+ * data byte of the file open as `handle` lies, from the volume's own phase
+ * and the node's offset, which a move updates. */
+static uint32_t kv_phase_of(struct vfs_mount *mnt, void *node, void *handle)
+{
+    uint64_t at = follow_moves((const struct krffs_open *)handle);
+
+    (void)node;
+    return krffs_file_phase(&vol_of(mnt)->fs, at);
 }
 
 /**
@@ -539,7 +579,8 @@ static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
             vfs_ns_unlock(mnt);
             return -EIO;
         }
-        if (head.type == KRFFS_RESERVED_NODE && head.parent_id == dir_id && head.name[0] != '\0') {
+        if (head.type == KRFFS_RESERVED_NODE && head.parent_id == dir_id && head.name[0] != '\0' &&
+            !krffs_hidden(&vol->fs, scan)) {
             uint32_t i;
             uint64_t next = krffs_next_offset(&vol->fs, scan, &head);
 
@@ -719,6 +760,10 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
     int rc;
 
     vfs_ns_lock(mnt);
+    if (o && vol->fs.halted) {
+        vfs_ns_unlock(mnt);
+        return -EIO;
+    }
     if (!o || !vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
         rc = bcache_sync(vol->dev);
         vfs_ns_unlock(mnt);
@@ -809,15 +854,18 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     uint32_t gid, bit;
     int rc;
 
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         return -EROFS;
     }
     rc = join(mnt, dir, name, path, sizeof(path));
     if (rc != 0) {
         return rc;
     }
-    if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
+    if (krffs_child_at_err(&vol->fs, offset_of(mnt, dir), name, &rc) != KRFFS_NO_NODE) {
         return -EEXIST;
+    }
+    if (rc == -EIO) {
+        return rc;
     }
     rc = maker_gid(mnt, dir, &gid, &bit);
     if (rc != 0) {
@@ -852,18 +900,21 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     int rc;
 
     (void)rdev;
+    if (refuses_writes(vol, mnt)) {
+        return -EROFS;
+    }
     if (type != KRFFS_S_IFIFO && type != KRFFS_S_IFSOCK) {
         return -EPERM;
-    }
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
-        return -EROFS;
     }
     rc = join(mnt, dir, name, path, sizeof(path));
     if (rc != 0) {
         return rc;
     }
-    if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
+    if (krffs_child_at_err(&vol->fs, offset_of(mnt, dir), name, &rc) != KRFFS_NO_NODE) {
         return -EEXIST;
+    }
+    if (rc == -EIO) {
+        return rc;
     }
     rc = maker_gid(mnt, dir, &gid, &bit);
     if (rc != 0) {
@@ -897,7 +948,7 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     char path[256];
     int rc;
 
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         return -EROFS;
     }
     rc = join(mnt, dir, name, path, sizeof(path));
@@ -905,11 +956,11 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
         return rc;
     }
     {
-        uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+        uint64_t at = krffs_child_at_err(&vol->fs, offset_of(mnt, dir), name, &rc);
         krffs_node_t head;
 
         if (at == KRFFS_NO_NODE) {
-            return -ENOENT;
+            return rc;
         }
         if (krffs_head(&vol->fs, at, &head) != 0) {
             return -EIO;
@@ -921,7 +972,9 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
             struct krffs_open *o;
 
             krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, at), KRFFS_STAMP_DATA);
-            krffs_orphan_at(&vol->fs, at);
+            if (krffs_orphan_at(&vol->fs, at) != 0) {
+                return -EIO;
+            }
             o = open_at(vol, at);
             if (o) {
                 o->nameless = 1;
@@ -948,7 +1001,7 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     uint32_t gid, bit;
     int rc;
 
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         return -EROFS;
     }
     rc = join(mnt, dir, name, path, sizeof(path));
@@ -1001,16 +1054,16 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     uint64_t at;
     int rc;
 
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         return -EROFS;
     }
     rc = join(mnt, dir, name, path, sizeof(path));
     if (rc != 0) {
         return rc;
     }
-    at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+    at = krffs_child_at_err(&vol->fs, offset_of(mnt, dir), name, &rc);
     if (at == KRFFS_NO_NODE) {
-        return -ENOENT;
+        return rc;
     }
     if (krffs_head(&vol->fs, at, &head) != 0) {
         return -EIO;
@@ -1024,6 +1077,13 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_rmdir_at(&vol->fs, path) == 0 ? 0 : -ENOTEMPTY;
 }
 
+/** Whether the volume `arg` has the node at `offset` open, for
+ * `krffs_rename_err`. */
+static int kv_held(void *arg, uint64_t offset)
+{
+    return open_at((struct krffs_volume *)arg, offset) != 0;
+}
+
 /**
  * Rename `oldname` in `olddir` to `newname` in `newdir`, with the boot
  * root's answers (`rename_root_names`): -ENOENT for a source that is not
@@ -1032,10 +1092,12 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
  * that is one.
  *
  * A rename over a file somebody has open removes it as surely as an unlink
- * does, so the name comes off it here and the node stays for whoever has it
- * open, where the core would free it under them. As in `kv_unlink`, the
- * open record is looked up again after the writes, which sleep. A rename to
- * the name the file has already does nothing. Otherwise 0, -EROFS on a
+ * does, so the core takes the name off it and keeps the node for whoever
+ * has it open (`kv_held`, asked of the destination the core itself
+ * found), only once nothing can refuse the rename, and the open record is
+ * marked to reap it at the last close. As in `kv_unlink`, the record is
+ * looked up again after the writes, which sleep. A rename to the name the
+ * file has already does nothing. Otherwise 0, -EROFS on a
  * read-only mount, -ENAMETOOLONG, or -EIO for a header that cannot be read
  * or a rename that failed in the core.
  */
@@ -1046,11 +1108,12 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     char from[256];
     char to[256];
     krffs_node_t head;
+    uint64_t orphaned;
     uint64_t src;
     uint64_t dst;
     int rc;
 
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         return -EROFS;
     }
     rc = join(mnt, olddir, oldname, from, sizeof(from));
@@ -1061,9 +1124,9 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     if (rc != 0) {
         return rc;
     }
-    src = krffs_child_at(&vol->fs, offset_of(mnt, olddir), oldname);
+    src = krffs_child_at_err(&vol->fs, offset_of(mnt, olddir), oldname, &rc);
     if (src == KRFFS_NO_NODE) {
-        return -ENOENT;
+        return rc;
     }
     if (krffs_head(&vol->fs, src, &head) != 0) {
         return -EIO;
@@ -1071,28 +1134,29 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     if (KRFFS_IS_DIR(head.mode)) {
         return -EPERM;
     }
-    dst = krffs_child_at(&vol->fs, offset_of(mnt, newdir), newname);
+    dst = krffs_child_at_err(&vol->fs, offset_of(mnt, newdir), newname, &rc);
+    if (dst == KRFFS_NO_NODE && rc == -EIO) {
+        return rc;
+    }
     if (dst != KRFFS_NO_NODE && dst != src) {
-        struct krffs_open *o;
-
         if (krffs_head(&vol->fs, dst, &head) != 0) {
             return -EIO;
         }
         if (KRFFS_IS_DIR(head.mode)) {
             return -EISDIR;
         }
-        if (open_at(vol, dst)) {
-            krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, dst), KRFFS_STAMP_DATA);
-            krffs_orphan_at(&vol->fs, dst);
-            o = open_at(vol, dst);
-            if (o) {
-                o->nameless = 1;
-            } else {
-                krffs_remove_at(&vol->fs, dst);
-            }
+    }
+    rc = krffs_rename_err(&vol->fs, from, to, kv_held, vol, &orphaned);
+    if (orphaned != KRFFS_NO_NODE) {
+        struct krffs_open *o = open_at(vol, orphaned);
+
+        if (o) {
+            o->nameless = 1;
+        } else {
+            krffs_remove_at(&vol->fs, orphaned);
         }
     }
-    return krffs_rename_at(&vol->fs, from, to) == 0 ? 0 : -EIO;
+    return rc == 0 ? 0 : -EIO;
 }
 
 /**
@@ -1171,7 +1235,7 @@ static void kv_abort_unmount(struct vfs_mount *mnt)
 {
     struct krffs_volume *vol = vol_of(mnt);
 
-    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+    if (refuses_writes(vol, mnt)) {
         return;
     }
     if (krffs_set_dirty(&vol->fs, 1) != 0 || bcache_sync(vol->dev) != 0 ||
@@ -1186,7 +1250,9 @@ static void kv_abort_unmount(struct vfs_mount *mnt)
  * Flush the volume, then clear and flush its dirty flag.
  *
  * Earlier writes must reach the medium before the cleared flag can.
- * A mount made read-only or with stale backward links keeps its dirty flag.
+ * A mount made read-only, with stale backward links, whose repair left
+ * repeated names unsearched, or with an open file that lost its name, as
+ * at a shutdown, keeps its dirty flag.
  * If the clear fails, the flag may already be on the device, and the mount
  * takes no more writes. Returns 0, the sync's -errno, or -EIO.
  */
@@ -1201,8 +1267,20 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
     if (bcache_flush(vol->dev) != 0) {
         return -EIO;
     }
+    if (vol->fs.halted) {
+        klog(KLOG_WARN, "krffs", "unmount: a moved file's copy was not withdrawn; repair owed");
+        return 0;
+    }
     if (vol->fs.stale_links) {
         klog(KLOG_WARN, "krffs", "unmount: backward link repair owed");
+        return 0;
+    }
+    if (vol->fs.check_owed) {
+        klog(KLOG_WARN, "krffs", "unmount: a check is owed");
+        return 0;
+    }
+    if (vol->fs.orphans != 0) {
+        klog(KLOG_WARN, "krffs", "unmount: nodes without a name; the next mount frees them");
         return 0;
     }
     if (krffs_set_dirty(&vol->fs, 0) != 0) {
@@ -1287,7 +1365,36 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* rename_flags */
     0, /* tmpfile */
     0, /* uncache */
+    kv_phase_of,
 };
+
+/**
+ * Repair the dirty volume of the writable mount `mnt` (`krffs_repair_at`),
+ * and make the mount read-only when the search for repeated names was left
+ * unfinished, since a write could act on one of two nodes of one name.
+ * 0, or -1 when the repair failed and the mount is refused.
+ */
+static int kv_repair(struct krffs_volume *vol, struct vfs_mount *mnt)
+{
+    uint32_t links = 0;
+    uint32_t orphans = 0;
+    uint32_t doubles = 0;
+
+    klog(KLOG_WARN, "krffs", "check: the volume was not unmounted cleanly");
+    if (krffs_repair_at(&vol->fs, &links, &orphans, &doubles) != 0) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be repaired here");
+        return -1;
+    }
+    klog(KLOG_WARN, "krffs",
+         "check: repaired: %d backward link(s), %d orphan(s), %d repeated name(s)", (int)links,
+         (int)orphans, (int)doubles);
+    if (vol->fs.check_owed) {
+        klog(KLOG_WARN, "krffs", "check: left unfinished; mounted read-only; run fsck.krffs");
+        vol->writable = 0;
+        mnt->flags |= VFS_MS_RDONLY;
+    }
+    return 0;
+}
 
 /**
  * Mount the KRFFS volume on `dev`.
@@ -1304,7 +1411,9 @@ static const struct vfs_ops krffs_volume_ops = {
  * link, so its chain need only be walkable. The grain is the cache's block,
  * what the cache puts on the medium at a time, so a write of a field whose
  * changed bytes fall in two blocks fails rather than reach the medium in two
- * pieces.
+ * pieces. The sector is what the device writes whole: a block reaches it as
+ * several sectors, and a stop can fall between them, so a size that
+ * publishes a change to the chain is held to one sector.
  *
  * Returns 0; -EINVAL for a volume smaller than two headers, one whose first
  * node lacks the magic number or the root type, or a malformed ring; -EFBIG
@@ -1340,6 +1449,9 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
     vol->fs.ctx = vol;
     vol->fs.size = (uint32_t)bytes;
     vol->fs.grain = BCACHE_BLOCK_BYTES;
+    vol->fs.sector = dev->sector_size;
+    vol->fs.sector_phase = dev->sector_phase;
+    vol->fs.on_halt = kv_halted;
     mnt->priv = vol;
 
     if (krffs_head(&vol->fs, 0, &root) != 0) {
@@ -1372,24 +1484,13 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
     vol->writable = !(flags & VFS_MS_RDONLY) && !(dev->flags & BLOCK_READ_ONLY);
     if (!vol->writable) {
         mnt->flags |= VFS_MS_RDONLY;
-        if (krffs_is_dirty(&vol->fs)) {
+        if (root.mode & KRFFS_MODE_DIRTY) {
             klog(KLOG_WARN, "krffs", "mount: a check is owed and this mount is read-only");
         }
-    } else if (krffs_is_dirty(&vol->fs)) {
-        uint32_t links = 0;
-        uint32_t orphans = 0;
-        uint32_t doubles = 0;
-
-        klog(KLOG_WARN, "krffs", "check: the volume was not unmounted cleanly");
-        if (krffs_repair_at(&vol->fs, &links, &orphans, &doubles) != 0) {
-            klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be repaired here");
-            kfree(vol);
-            mnt->priv = 0;
-            return -EIO;
-        }
-        klog(KLOG_WARN, "krffs",
-             "check: repaired: %d backward link(s), %d orphan(s), %d repeated name(s)", (int)links,
-             (int)orphans, (int)doubles);
+    } else if ((root.mode & KRFFS_MODE_DIRTY) && kv_repair(vol, mnt) != 0) {
+        kfree(vol);
+        mnt->priv = 0;
+        return -EIO;
     }
 
     if (vol->writable && !krffs_chain_is_valid(&vol->fs)) {

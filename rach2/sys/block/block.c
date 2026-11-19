@@ -117,6 +117,7 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
     partition->start_lba = start_lba;
 
     partition->device.sector_size = backing->sector_size;
+    partition->device.sector_phase = backing->sector_phase;
     block_set_sectors(&partition->device, sector_count);
     partition->device.read = block_partition_read;
     partition->device.write = block_partition_write;
