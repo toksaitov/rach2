@@ -3273,41 +3273,44 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
 }
 
 /**
- * A mount without `sync` or `dirsync` writes back: creates, writes and a
- * remove leave the files' data dirty in the cache and send the device only
- * the root's entries, at each change, as Linux's `ext2_handle_dirsync`
- * writes a directory's pages (`dir_commit`), and before a new name the
- * table block that holds its inode, with the inode in use there, in the
- * write just before the root's (`inode_commit`), so that a stop never
- * leaves an entry naming a zeroed inode. No create flushes the disk, as
- * Linux's `ext2_handle_dirsync` does not (`bcache_sync_block_ordered`), and
- * every write is of a block at or before the root's, never the files' data
- * past it. An fsync writes the
- * rest and flushes the disk, and the volume unmounts clean. The device is
- * marked write-through, so that a write sent without `BLOCK_REQ_NOFLUSH`
- * would count as a flush; the removed file's inode and blocks are freed at
- * its last put.
+ * A mount without `sync` or `dirsync` writes back: creates and writes leave
+ * the new inodes, the root's entries and the files' data dirty in the
+ * cache, each entry ordered after the table block that holds its inode
+ * (`inode_commit`), and send the device nothing. A remove writes the
+ * root's block at once, as Linux's `ext2_handle_dirsync` writes a
+ * directory's pages (`dir_commit`), and so first the table block its new
+ * names wait for, with both inodes in use there, so that a stop never
+ * leaves an entry naming a zeroed inode. It does not flush the disk, as
+ * `ext2_handle_dirsync` does not (`bcache_sync_block_ordered`). An fsync
+ * writes the rest and flushes the disk, and the volume unmounts clean. The
+ * device is marked write-through, so that a write sent without
+ * `BLOCK_REQ_NOFLUSH` would count as a flush; the removed file's inode and
+ * blocks are freed at its last put.
  */
 static uint64_t node_table_lba(void *node, uint32_t *slot);
 
-/** Whether the writes `wlog[from, to)` of a create hold the table block of
- * `node`'s inode, with that inode in use, in the write just before the
- * first write of the root's block `root`, and that write of the root. */
+/** Whether the writes `wlog[from, to)` hold the table block of `node`'s
+ * inode, with that inode in use, before the first write of the root's block
+ * `root`, and that write of the root. */
 static int inode_before_name(void *node, int from, int to, uint64_t root)
 {
     uint32_t slot = 0;
     uint64_t table = node ? node_table_lba(node, &slot) : 0;
     const unsigned char *p;
-    int r = from;
+    int r = from, t;
 
     while (r < to && wlog_lba[r] != root * 8) {
         r++;
     }
-    if (!node || wlog_overflow || r == to || r == from || wlog_lba[r - 1] != table ||
-        !wlog_data[r - 1] || slot + 28 > wlog_count[r - 1] * 512) {
+    t = r - 1;
+    while (t >= from && wlog_lba[t] != table) {
+        t--;
+    }
+    if (!node || wlog_overflow || r == to || t < from || !wlog_data[t] ||
+        slot + 28 > wlog_count[t] * 512) {
         return 0;
     }
-    p = wlog_data[r - 1] + slot;
+    p = wlog_data[t] + slot;
     return (p[0] | p[1] << 8) != 0 && (p[26] | p[27] << 8) != 0;
 }
 
@@ -3316,7 +3319,7 @@ static void default_mount_row(void)
     static unsigned char block[3 * 4096];
     void *f, *g;
     uint64_t root = 0;
-    int rc, flushes, i, entries, f0, f1, g1;
+    int rc, flushes, i, entries, f0, g1;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     (void)debugfs_numbers("stat /", "(0):", &root, 1);
@@ -3334,22 +3337,22 @@ static void default_mount_row(void)
     memset(block, 0x5a, sizeof(block));
     f0 = wlog_n;
     f = make_file(mnt.root, "plain", &rc);
-    f1 = wlog_n;
     g = f ? make_file(mnt.root, "gone", &rc) : 0;
-    g1 = wlog_n;
-    entries = inode_before_name(f, f0, f1, root) && inode_before_name(g, f1, g1, root);
     check(f && g && write_at(f, block, sizeof(block), 0) == 0 &&
-              write_at(g, block, sizeof(block), 0) == 0 && OPS->unlink(&mnt, mnt.root, "gone") == 0,
-          "two creates, writes of three blocks to each and the remove of one");
+              write_at(g, block, sizeof(block), 0) == 0 && wlog_n == f0,
+          "two creates and writes of three blocks to each send the device nothing");
+    g1 = wlog_n;
+    check(g && OPS->unlink(&mnt, mnt.root, "gone") == 0, "and the remove of one");
+    entries = inode_before_name(f, g1, wlog_n, root) && inode_before_name(g, g1, wlog_n, root);
     if (g) {
         OPS->put(&mnt, g);
     }
     entries = entries && root > 0 && flush_n == 0 && !wlog_overflow;
     for (i = 0; i < wlog_n; i++) {
-        entries = entries && wlog_lba[i] <= root * 8 && wlog_count[i] == 8;
+        entries = entries && wlog_count[i] % 8 == 0;
     }
-    check(entries, "send the device each new inode's table block, the inode in use, just before "
-                   "the root's entry, with no flush and no file data, on a mount without dirsync");
+    check(entries, "the remove sends the table block of both new inodes, in use, before the "
+                   "root's entries, with no flush, on a mount without dirsync");
     flushes = flush_n;
     check(f && OPS->fsync(&mnt, 0) == 0 && wlog_n > 0 && flush_n > flushes,
           "and an fsync writes them and flushes the disk");
@@ -8804,12 +8807,60 @@ static void attr_rows(void)
 #include "ext2_xattr_rows.h"
 
 /**
+ * Judge the stop of sequence `i` after write `k` of `n`, whose crash state
+ * is on the write rows' image, by the matrix's four judges (`matrix_rows`),
+ * with `mark` the sequence's `op_mark` and `how` the words that name the
+ * mount in each row.
+ */
+static void matrix_judge(int i, int k, int n, int mark, const char *how)
+{
+    char what[240];
+    int status, named_before = 0;
+
+    snprintf(what, sizeof(what), "'%s'%s stopped after write %d of %d mounts and reads its base",
+             sequences[i].name, how, k, n);
+    if (mount_ro() == 0) {
+        check(base_intact(), what);
+        snprintf(what, sizeof(what),
+                 "'%s'%s stopped after write %d of %d reads only what was written or zeros",
+                 sequences[i].name, how, k, n);
+        check(crash_ok(i), what);
+        named_before = names_present(i);
+        if (mark >= 0 && k > mark) {
+            snprintf(what, sizeof(what),
+                     "'%s'%s stopped after write %d of %d keeps a name for its file",
+                     sequences[i].name, how, k, n);
+            check(named_before, what);
+            named_before = 1;
+        }
+        unmount_image();
+    } else {
+        check(0, what);
+    }
+    status = e2fsck_status(wimg);
+    snprintf(what, sizeof(what), "'%s'%s stopped after write %d of %d is a state e2fsck can judge",
+             sequences[i].name, how, k, n);
+    if (status != 0 && status != 4) {
+        printf("  e2fsck -fn exited %d:\n", status);
+        ext2_fixture_head(fix_path("fsck.out"), 14);
+    }
+    check((status == 0 || status == 4) && findings_allowed(sequences[i].counts), what);
+    snprintf(what, sizeof(what), "'%s'%s stopped after write %d of %d repairs with its base intact",
+             sequences[i].name, how, k, n);
+    check(repaired_ok(wimg, wbytes, i, k, named_before), what);
+    snprintf(what, sizeof(what),
+             "'%s'%s stopped after write %d of %d passes the check or fails it on a count",
+             sequences[i].name, how, k, n);
+    check(check_accepts(wimg, wbytes, sequences[i].counts), what);
+}
+
+/**
  * The interruption matrix. Each sequence but the one of many files, which
  * would need thousands of stops that the others cover, runs once to count
  * its writes, not the mount's own, and then once for each count k, on the
  * junk volume, stopped after write k. At a stop the cache is dropped as a
  * gone device's buffers are, so that the image is the crash state and
- * nothing unsynced reaches it. Four judges follow:
+ * nothing unsynced reaches it. Four judges follow (`matrix_judge`):
  *
  * - a read-only mount reads the base files, and the sequence's files read
  *   only what was written or zeros; past `op_mark`, the file has a name;
@@ -8845,9 +8896,6 @@ static void matrix_rows(void)
         mark = op_mark;
         unmount_rw();
         for (k = 1; k <= n; k++) {
-            char what[200];
-            int status, named_before = 0;
-
             wbytes = build_junk_image();
             use_image(wimg, wbytes);
             stop_after = -1;
@@ -8866,44 +8914,7 @@ static void matrix_rows(void)
             dev.flags = BLOCK_FAULT_SAFE;
             stop_after = -1;
             use_image(wimg, wbytes);
-            snprintf(what, sizeof(what),
-                     "'%s' stopped after write %d of %d mounts and reads its base",
-                     sequences[i].name, k, n);
-            if (mount_ro() == 0) {
-                check(base_intact(), what);
-                snprintf(what, sizeof(what),
-                         "'%s' stopped after write %d of %d reads only what was written or zeros",
-                         sequences[i].name, k, n);
-                check(crash_ok(i), what);
-                named_before = names_present(i);
-                if (mark >= 0 && k > mark) {
-                    snprintf(what, sizeof(what),
-                             "'%s' stopped after write %d of %d keeps a name for its file",
-                             sequences[i].name, k, n);
-                    check(named_before, what);
-                    named_before = 1;
-                }
-                unmount_image();
-            } else {
-                check(0, what);
-            }
-            status = e2fsck_status(wimg);
-            snprintf(what, sizeof(what),
-                     "'%s' stopped after write %d of %d is a state e2fsck can judge",
-                     sequences[i].name, k, n);
-            if (status != 0 && status != 4) {
-                printf("  e2fsck -fn exited %d:\n", status);
-                ext2_fixture_head(fix_path("fsck.out"), 14);
-            }
-            check((status == 0 || status == 4) && findings_allowed(sequences[i].counts), what);
-            snprintf(what, sizeof(what),
-                     "'%s' stopped after write %d of %d repairs with its base intact",
-                     sequences[i].name, k, n);
-            check(repaired_ok(wimg, wbytes, i, k, named_before), what);
-            snprintf(what, sizeof(what),
-                     "'%s' stopped after write %d of %d passes the check or fails it on a count",
-                     sequences[i].name, k, n);
-            check(check_accepts(wimg, wbytes, sequences[i].counts), what);
+            matrix_judge(i, k, n, mark, "");
             total++;
         }
     }
@@ -9265,15 +9276,15 @@ static void fail_block_reads(void)
 #include "ext2_fence_rows.h"
 
 /**
- * A symlink whose name is on the device keeps its inode when the store of
- * the directory's times fails after it, as create and mknod keep theirs.
- * On a mount that writes back, files are made in the root until the next
- * inode lies in another table block than the root's; the cache is emptied,
- * and every read of the root's table block fails while a fast symlink is
- * made. The entry is written to the device before the times are stored
- * (`dir_commit`), so the store's read fails after the name is out: the
- * call must succeed, and after a sync and an unmount the name must name an
- * inode in use, with no finding of e2fsck about it.
+ * A symlink whose name is made keeps its inode when the store of the
+ * directory's times fails after it, as create and mknod keep theirs. On a
+ * mount that writes back, files are made in the root until the next inode
+ * lies in another table block than the root's; the cache is emptied, and
+ * every read of the root's table block fails while a fast symlink is made.
+ * The entry is in the cache, ordered after the inode, before the times are
+ * stored, so the store's read fails after the name is made: the call must
+ * succeed, and after a sync and an unmount the name must be on the disk
+ * and name an inode in use, with no finding of e2fsck about it.
  */
 static void symlink_kept_row(void)
 {
@@ -9281,7 +9292,7 @@ static void symlink_kept_row(void)
     void *n;
     uint64_t ino = 0;
     int64_t table;
-    int i, rc = 0, published;
+    int i, rc = 0;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
@@ -9308,18 +9319,16 @@ static void symlink_kept_row(void)
     read_pause = 0;
     read_fails = 0;
     fail_read_block = -1;
-    fflush(image);
-    published = debugfs_lists(wimg, "/", "link");
-    check(rc == 0 && fail_read_hits > 0 && published,
+    check(rc == 0 && fail_read_hits > 0,
           "a symlink whose directory's times fail at the root's table block, after its "
-          "name reached the device, succeeds");
-    if (rc != 0 || fail_read_hits == 0 || !published) {
-        printf("  rc %d, failed reads %d, name on the device %d\n", rc, fail_read_hits, published);
+          "name was made, succeeds");
+    if (rc != 0 || fail_read_hits == 0) {
+        printf("  rc %d, failed reads %d\n", rc, fail_read_hits);
     }
     rc = unmount_rw();
     fflush(image);
-    check(rc == 0 && inode_block_of(wimg, "/link") != table,
-          "and its inode lies in another table block than the root's");
+    check(rc == 0 && debugfs_lists(wimg, "/", "link") && inode_block_of(wimg, "/link") != table,
+          "and its name is on the disk, its inode in another table block than the root's");
     check(fsck_judged(wimg) >= 0 && !ext2_fixture_contains(fix_path("fsck.out"), "'link'") &&
               debugfs_says(wimg, "testi /link", "is marked in use") &&
               debugfs_says(wimg, "stat /link", "Fast link dest: \"hello.txt\""),
@@ -10556,6 +10565,8 @@ static void time_rows(void)
     time_row(256, PROFILE_LARGE);
 }
 
+#include "ext2_async_rows.h"
+
 /* The options that run some rows alone, each with the rows it runs. */
 static const struct {
     const char *option;
@@ -10589,6 +10600,7 @@ static const struct {
     {"--stop-only", stop_rows},
     {"--fence-only", fence_rows},
     {"--matrix-only", matrix_rows},
+    {"--async-only", async_rows},
 };
 
 /**
@@ -10662,6 +10674,7 @@ int main(int argc, char **argv)
     node_rows();
     fsync_rows();
     writeback_order_rows();
+    async_rows();
     pair_rows();
     service_rows();
     group_rows();
