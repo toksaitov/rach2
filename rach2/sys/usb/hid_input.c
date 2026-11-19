@@ -1481,7 +1481,8 @@ static int setup_mt_slots(struct hid_dev *hid, struct hid_input *in, struct evde
         const struct hid_usage *u = usages_of(hid, f);
 
         if (hid->desc.reports[f->report].type != HID_FEATURE_REPORT ||
-            (f->application != in->application && touch_surface(f->application))) {
+            (touch_surface(in->application) && f->application != in->application &&
+             touch_surface(f->application))) {
             continue;
         }
         for (j = 0; j < f->maxusage; j++) {
@@ -1881,7 +1882,13 @@ static void configure_input_field(struct hid_dev *hid, struct hid_input *in, str
     }
 }
 
-/** Map fields on a multitouch interface to their own applications. */
+/** The application of a field, or its report's when it has none. */
+static uint32_t field_application(const struct hid_dev *hid, const struct hid_field *f)
+{
+    return f->application ? f->application : hid->desc.reports[f->report].application;
+}
+
+/** Map the useful fields on a multitouch interface to their applications. */
 static void configure_mixed_report(struct hid_dev *hid, uint32_t report)
 {
     uint32_t i, app;
@@ -1889,18 +1896,45 @@ static void configure_mixed_report(struct hid_dev *hid, uint32_t report)
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
         struct hid_input *in;
+        int new_input;
 
         if (f->report != report || !input_field_enabled(hid, f) || !f->count ||
             (f->flags & HID_MAIN_ITEM_CONSTANT)) {
             continue;
         }
-        app = f->application ? f->application : hid->desc.reports[report].application;
+        app = field_application(hid, f);
         in = match_application(hid, app);
-        if (!in) {
+        new_input = in == NULL;
+        if (new_input) {
             in = allocate_input(hid, app);
         }
+        if (!in) {
+            continue;
+        }
+        configure_input_field(hid, in, f);
+        if (new_input && !populated(in) && !in->mt_flags) {
+            f->input = HID_NO_INPUT;
+            hid->ninputs--;
+        }
+    }
+}
+
+/** Keep unpopulated usages in the keymap of an application that has a node. */
+static void assign_unmapped_fields(struct hid_dev *hid)
+{
+    uint32_t i;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+        struct hid_input *in;
+
+        if (f->input != HID_NO_INPUT || !input_field_enabled(hid, f) ||
+            hid->desc.reports[f->report].type == HID_FEATURE_REPORT) {
+            continue;
+        }
+        in = match_application(hid, field_application(hid, f));
         if (in) {
-            configure_input_field(hid, in, f);
+            f->input = input_index(hid, in);
         }
     }
 }
@@ -1911,32 +1945,26 @@ static void configure_reports(struct hid_dev *hid)
     struct hid_input *in = NULL;
     uint32_t i, k, f;
     int per_app = hid->desc.maxapplication > 1;
+    int split = per_app && hid->mt_surfaces != 0;
 
     for (k = HID_INPUT_REPORT; k <= HID_OUTPUT_REPORT; k++) {
         for (i = 0; i < hid->desc.nreports; i++) {
             struct hid_report *r = &hid->desc.reports[i];
-            int fields = 0, split = r->multitouch;
+            int fields = 0;
 
             if (r->type != k) {
+                continue;
+            }
+            if (split) {
+                configure_mixed_report(hid, i);
                 continue;
             }
             for (f = 0; f < hid->desc.nfields; f++) {
                 const struct hid_field *field = field_at(hid, f);
 
-                if (field->report != i) {
-                    continue;
-                }
-                if (input_field_enabled(hid, field)) {
-                    fields++;
-                } else {
-                    split = 1;
-                }
+                fields += field->report == i && input_field_enabled(hid, field);
             }
             if (!fields) {
-                continue;
-            }
-            if (split && per_app) {
-                configure_mixed_report(hid, i);
                 continue;
             }
             if (per_app) {
@@ -1956,6 +1984,9 @@ static void configure_reports(struct hid_dev *hid)
                 }
             }
         }
+    }
+    if (split) {
+        assign_unmapped_fields(hid);
     }
 }
 
