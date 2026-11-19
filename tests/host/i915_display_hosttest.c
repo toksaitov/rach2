@@ -1690,6 +1690,24 @@ static void row_backlight(void)
           "backlight: a level written lights it again");
 }
 
+/** Linux's __intel_backlight_enable: a level at the least that nobody
+ * wrote, as the PWM reads after the GPU's return from VFIO, comes on at
+ * the most when the pipe does, and brightness reads it, as Linux's
+ * props.brightness. */
+static void row_backlight_raise(void)
+{
+    gpu.display.bl_level = gpu.display.bl_min;
+    CHECK(set_active(0) == 0, "backlight: the pipe off at the least");
+    frame();
+    CHECK(set_active(1) == 0 && (reg(PP_CONTROL) & EDP_BLC_ENABLE) &&
+              (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 937 && bl_show(BACKLIGHT_BRIGHTNESS) == 937 &&
+              bl_show(BACKLIGHT_ACTUAL) == 937,
+          "backlight: a level at the least comes on at the most, which brightness reads");
+    frame();
+    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "500\n") == 0 && (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508,
+          "backlight: 500 again");
+}
+
 /* ---- 78-9.6: the pipe CRC ---- */
 
 /** crc/data's next line as its frame and CRC. */
@@ -1978,6 +1996,7 @@ int main(void)
     row_mode_limits();
     row_fb_limit();
     row_backlight();
+    row_backlight_raise();
     row_crc();
     row_modeset();
     row_link_retry();
