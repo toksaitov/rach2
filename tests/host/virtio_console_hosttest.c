@@ -9,23 +9,28 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  *
- * The model is the device as QEMU's hw/char/virtio-serial-bus.c makes it:
- * port 0, a console (`virtconsole`), and port 1, a generic port
- * (`virtserialport`) with a name, each with a host's end that reads what the
- * port's transmit queue carries and writes into its receive queue; the
- * control queues, on which the device announces its ports once the driver
- * is ready and tells each port's kind, name and open end once the driver
- * has it; a port whose end the driver has not opened is given no input, and
- * one whose host's end is closed has its output discarded; the size and the
- * emergency write of the configuration. A row may make the host's end stop
- * taking for a number of the driver's reads of the clock or for ever, make
- * the device take a buffer only some reads after the kick, keep the device
- * silent after DEVICE_READY, leave the control transmit queue unserved,
- * give no interrupt, take the interrupts at a restore of the interrupt
- * flag, and fail the Nth allocation. The driver's clock, `arch_cycles`,
- * advances 200 ms a read, and the model's time with it. The UART is a
- * transmitter that is always ready and whose bytes and interrupt enable
- * the test keeps.
+ * The model is the device as QEMU's hw/char/virtio-serial-bus.c makes it,
+ * twice over for a machine of two: port 0, a console (`virtconsole`), port
+ * 1, a generic port (`virtserialport`) with a name, and a third port a row
+ * may add, each with a host's end that reads what the port's transmit
+ * queue carries and writes into its receive queue; the control queues, on
+ * which the device announces its ports once the driver is ready and tells
+ * each port's kind, name and open end once the driver has it; a port whose
+ * end the driver has not opened is given no input, what waited going once
+ * it opens, and one whose host's end is closed has its output discarded;
+ * the size and the emergency write of the configuration. A row may make
+ * the host's end stop taking for a number of the driver's reads of the
+ * clock or for ever, make the device take a buffer only some reads after
+ * the kick, keep the device silent after DEVICE_READY, leave the control
+ * transmit queue unserved, give no interrupt, take the interrupts at a
+ * restore of the interrupt flag, and fail the Nth allocation. The driver's
+ * clock, `arch_cycles`, advances 200 ms a read, and the model's time with
+ * it. The UART is a transmitter that is always ready and whose bytes and
+ * interrupt enable the test keeps. Around the driver are devfs's registry,
+ * the pairs whose master the driver holds, each keeping what its slave's
+ * discipline took and the output a row gives it, and the wait queues, on
+ * which a wait whose condition is not met ends as a signal ends it. A
+ * row's `irq` takes the interrupts and then runs khvcd's work.
  *
  * The rows, each on a device with and without VIRTIO_F_EVENT_IDX: the boot
  * on `console=vport0p1`, with the handshake's messages in order, the six
@@ -33,27 +38,33 @@
  * and not on one with it, and the nodes; `console=hvc0` on the same device
  * and on one of a single port, with the size of its configuration and a
  * change of it; the `console=` words, each in turn, with a line for output
- * alone beside the UART; output of 100,000 bytes to a device that takes
- * late and to a host that stops reading for a while, with no byte lost and
- * no interrupt asked for on the transmit queue; a host that stops for ever,
- * which costs one wait of 30 s, drops what the four buffers cannot hold and
- * waits 2 ms a byte after, until the host reads again; input, in order,
- * with a full ring holding the port's buffers back and the host's end with
- * them, a take that makes room, and a flush that drops what is held; a
- * console port's RESIZE; a port removed and added again; the device removed
- * through the transport and bound again through the driver's probe, with
- * the terminal hung up; a panic that finds the transmit side held, whose
- * bytes reach the host's port through the port's panic buffer, and one
- * that finds the queue's lock held, whose bytes go to `emerg_wr`, which
- * the model gives port 0 as QEMU does; a second device, refused; each
- * allocation failing in turn; a device that announces its port late; one
- * without port 1; a boot with no device; a removal met by a pending
- * control message's interrupt; the shutdown; a device that takes its
- * control messages late; a transmit queue of one descriptor; a device with
- * no interrupt; the input port removed with input in the ring; a port that
- * comes late on a machine without a UART, given the log's ring then; a
- * console port found after another took hvc0; and two ports named, both
- * given the log.
+ * alone beside the UART, whose port is hvc0's own terminal; output of
+ * 100,000 bytes to a device that takes late and to a host that stops
+ * reading for a while, with no byte lost and no interrupt asked for on the
+ * transmit queue; a host that stops for ever, which costs one wait of 30
+ * s, drops what the four buffers cannot hold and waits 2 ms a byte after,
+ * until the host reads again; input, in order, with a full ring holding
+ * the port's buffers back and the host's end with them, a take that makes
+ * room, and a flush that drops what is held; a console port's RESIZE; a
+ * port removed and added again; the device removed through the transport
+ * and bound again through the driver's probe, with the terminal hung up; a
+ * panic that finds the transmit side held, whose bytes reach the host's
+ * port through the port's panic buffer, and one that finds the queue's
+ * lock held, whose bytes go to `emerg_wr`, which the model gives port 0 as
+ * QEMU does; two devices, both bound, the line on the second; each
+ * allocation failing in turn, and every one from it on; a third port added
+ * and removed through the control queue, with its nodes; a generic port's
+ * vport node read, written and polled with the host's end open and closed;
+ * a second console port's hvc terminal; a console port added late on a
+ * machine without a UART, given the log's ring then; the emergency write
+ * of early output and of a panic on the second device; a device that
+ * announces its port late; one without port 1; a boot with no device; a
+ * removal met by a pending control message's interrupt; the shutdown; a
+ * device that takes its control messages late; a transmit queue of one
+ * descriptor; a device with no interrupt; the input port removed with
+ * input in the ring; a port that comes late on a machine without a UART,
+ * given the log's ring then; a console port found after another took
+ * hvc0; and two ports named, both given the log.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -71,9 +82,10 @@ extern unsigned long strlen(const char *s);
 #include "arch/x86/serial.c"
 #include "mm/kheap.h"
 
-#define ARENA_PAGES 64
+#define ARENA_PAGES 512
 #define DEV_BASE    0x40000000ull
-#define NQ          6
+#define NQ          8 /* ports 0, 1 and 2 with the control queues */
+#define NPORTS      3
 #define OUT_MAX     (256u * 1024u)
 #define IN_MAX      (64u * 1024u)
 #define STEP_CYCLES 1000000000ull /* 200 ms of VCON_CYCLES_PER_MS */
@@ -170,7 +182,7 @@ uint32_t kirq_save(void)
     return 0;
 }
 
-static void irq(void);
+static void irq_only(void);
 
 /** Nothing to put back; when a row asks, the interrupts the model raised
  * are taken at the row's Nth restore, as a pending one is when the
@@ -179,7 +191,7 @@ void kirq_restore(uint32_t flags)
 {
     (void)flags;
     if (restore_irqs > 0 && --restore_irqs == 0) {
-        irq();
+        irq_only();
     }
 }
 
@@ -261,6 +273,263 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
     (void)name;
 }
 
+/* ---- the nodes, the terminals and the queues of the kernel ---- */
+
+#define NODES_MAX 64
+
+static struct devfs_node *nodes[NODES_MAX];
+
+/** Keep `node` as devfs does: -EEXIST for a name taken. */
+int32_t devfs_node_register(struct devfs_node *node)
+{
+    int i, free = -1;
+
+    for (i = 0; i < NODES_MAX; i++) {
+        if (nodes[i] && vcon_same(nodes[i]->name, node->name)) {
+            return -EEXIST;
+        }
+        if (!nodes[i] && free < 0) {
+            free = i;
+        }
+    }
+    check(free >= 0, "the model's devfs has room for the driver's nodes");
+    if (free >= 0) {
+        nodes[free] = node;
+    }
+    return free >= 0 ? 0 : -ENOSPC;
+}
+
+/** Forget `node`, which must be registered. */
+void devfs_node_unregister(struct devfs_node *node)
+{
+    int i;
+
+    for (i = 0; i < NODES_MAX; i++) {
+        if (nodes[i] == node) {
+            nodes[i] = 0;
+            return;
+        }
+    }
+    check(0, "a node unregistered was registered");
+}
+
+/** The node registered as `name`, or NULL. */
+static struct devfs_node *node(const char *name)
+{
+    int i;
+
+    for (i = 0; i < NODES_MAX; i++) {
+        if (nodes[i] && vcon_same(nodes[i]->name, name)) {
+            return nodes[i];
+        }
+    }
+    return 0;
+}
+
+/** Whether `name` is registered and opens the console terminal. */
+static int term_node(const char *name)
+{
+    struct devfs_node *n = node(name);
+
+    return n && n->ops == 0 && n->open == 0;
+}
+
+/** Whether `name` is registered with the vport's operations. */
+static int vport_node(const char *name)
+{
+    struct devfs_node *n = node(name);
+
+    return n && n->ops == &vcon_vport_ops && n->major == VIRTIO_CONSOLE_VPORT_MAJOR;
+}
+
+/* A pair whose master the driver holds: what its slave's discipline took
+ * and the room it has, and the output the slave has for the master. */
+struct model_pty {
+    struct pty p;
+    int made, closed;
+    uint32_t dev;
+    const char *name;
+    unsigned char fed[256];
+    uint32_t nfed, room;
+    unsigned char out[256];
+    uint32_t nout, at;
+    int opens;
+};
+
+static struct model_pty ptys[4];
+static const struct file_ops slave_ops;
+
+/** A pair, in the first free slot. */
+struct pty *pty_kernel_make(uint32_t dev, const char *name)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (!ptys[i].made) {
+            k_memset(&ptys[i], 0, sizeof(ptys[i]));
+            ptys[i].made = 1;
+            ptys[i].dev = dev;
+            ptys[i].name = name;
+            ptys[i].room = sizeof(ptys[i].fed);
+            return &ptys[i].p;
+        }
+    }
+    check(0, "the model has room for the driver's terminals");
+    return 0;
+}
+
+/** The record of `p`. */
+static struct model_pty *mpty(struct pty *p)
+{
+    return (struct model_pty *)(void *)p;
+}
+
+/** Let go of a pair: its slot is free again. */
+void pty_kernel_close(struct pty *p)
+{
+    mpty(p)->closed++;
+    mpty(p)->made = 0;
+}
+
+/** The discipline takes what it has room for. */
+uint32_t pty_kernel_feed(struct pty *p, const unsigned char *bytes, uint32_t n)
+{
+    struct model_pty *t = mpty(p);
+
+    if (n > t->room - t->nfed) {
+        n = t->room - t->nfed;
+    }
+    k_memcpy(t->fed + t->nfed, bytes, n);
+    t->nfed += n;
+    return n;
+}
+
+/** The slave's output, as far as `n` takes it. */
+uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n)
+{
+    struct model_pty *t = mpty(p);
+
+    if (n > t->nout - t->at) {
+        n = t->nout - t->at;
+    }
+    k_memcpy(out, t->out + t->at, n);
+    t->at += n;
+    return n;
+}
+
+/** Count an open of the slave. */
+int32_t pty_kernel_slave_open(struct pty *p, struct fd_entry *e, int flags)
+{
+    (void)e;
+    (void)flags;
+    mpty(p)->opens++;
+    return 0;
+}
+
+/** The slave's operations, which no row calls. */
+const struct file_ops *pty_slave_ops(void)
+{
+    return &slave_ops;
+}
+
+/* The records on the kernel's queues, which a wake of the queue calls. */
+static struct wq_waiter *waiters[8];
+static int wakes, waits;
+
+/** Nothing to set up. */
+void wait_queue_init_key(wait_queue_t *wq, const char *name, const struct lockdep_key *key)
+{
+    (void)wq;
+    (void)name;
+    (void)key;
+}
+
+/** Keep `w` on `wq`. */
+void wq_entry_add(wait_queue_t *wq, struct wq_waiter *w)
+{
+    int i;
+
+    w->wq = wq;
+    for (i = 0; i < 8 && waiters[i]; i++) {
+    }
+    check(i < 8, "the model keeps every record on a queue");
+    if (i < 8) {
+        waiters[i] = w;
+    }
+}
+
+/** Take `w` off its queue. */
+void wq_entry_remove(struct wq_waiter *w)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (waiters[i] == w) {
+            waiters[i] = 0;
+        }
+    }
+    w->wq = 0;
+}
+
+/** Call each record on `wq`. */
+static void wake_records(wait_queue_t *wq, uint32_t kinds)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (waiters[i] && waiters[i]->wq == wq) {
+            (void)waiters[i]->func(waiters[i], kinds, 0, 0);
+        }
+    }
+}
+
+/** Count a wake, and call the records on the queue. */
+void wq_wake(wait_queue_t *wq, uint32_t kinds)
+{
+    wakes++;
+    wake_records(wq, kinds);
+}
+
+/** A wake from inside another. */
+void wq_wake_nested(wait_queue_t *wq, uint32_t kinds, unsigned int nest, uint64_t *cpus)
+{
+    (void)nest;
+    (void)cpus;
+    wq_wake(wq, kinds);
+}
+
+/** One processor that cannot sleep: a wait whose condition is not met is
+ * a signal's, and counted. */
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    if (cond(arg)) {
+        return 0;
+    }
+    waits++;
+    return -EINTR;
+}
+
+/** A copy from the row's memory. */
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    if (!src) {
+        return -EFAULT;
+    }
+    k_memcpy(dst, (const void *)src, n);
+    return 0;
+}
+
+/** A copy to the row's memory. */
+int copy_to_user(void __user *dst, const void *src, size_t n)
+{
+    if (!dst) {
+        return -EFAULT;
+    }
+    k_memcpy((void *)dst, src, n);
+    return 0;
+}
+
 /** The console's service, which here only counts: a reader that is not
  * yet running. */
 static void rx_notify(void)
@@ -300,7 +569,7 @@ struct model_msg {
     uint32_t nextra;
 };
 
-static struct model {
+struct model {
     struct virtio_dev dev;
     int plugged;
     uint8_t status;
@@ -317,7 +586,7 @@ static struct model {
     int dma_fail_from; /* the first of the allocations that all fail; -1 none */
     int puts;
     struct virtio_dev *last_put;
-    struct model_port port[3];
+    struct model_port port[NPORTS];
     struct model_msg pending[32]; /* control messages not yet given */
     int npending;
     struct virtio_console_control got[64]; /* those the driver sent */
@@ -333,7 +602,13 @@ static struct model {
     int shorts;   /* buffers the device found that were not one descriptor */
     int polled;   /* the transport gives no interrupt */
     int ctl_hold; /* the control transmit queue is not served on a kick */
-} m;
+};
+
+/* Two devices, the second plugged in only by the rows that ask, and the
+ * one the rows' `m` and the model's own steps act on. */
+static struct model models[2];
+static struct model *cur = &models[0];
+#define m (*cur)
 
 static uint8_t arena[ARENA_PAGES][4096] __attribute__((aligned(4096)));
 static uint8_t arena_taken[ARENA_PAGES];
@@ -502,6 +777,8 @@ static void announce(int id)
     post((uint32_t)id, VIRTIO_CONSOLE_PORT_ADD, 1, 0, 0);
 }
 
+static void model_rx(void);
+
 /** Take the driver's control messages and answer them as QEMU does. */
 static void model_ctl_take(void)
 {
@@ -526,14 +803,14 @@ static void model_ctl_take(void)
         model_push(3, head, 0);
         if (c.event == VIRTIO_CONSOLE_DEVICE_READY) {
             m.ready = c.value;
-            for (i = 0; i < 3 && c.value && !m.silent; i++) {
+            for (i = 0; i < NPORTS && c.value && !m.silent; i++) {
                 if (m.port[i].exists) {
                     announce(i);
                 }
             }
             continue;
         }
-        if (c.id >= 3u || !m.port[c.id].exists) {
+        if (c.id >= (uint32_t)NPORTS || !m.port[c.id].exists) {
             continue;
         }
         port = &m.port[c.id];
@@ -549,7 +826,11 @@ static void model_ctl_take(void)
                 post(c.id, VIRTIO_CONSOLE_PORT_OPEN, 1, 0, 0);
             }
         } else if (c.event == VIRTIO_CONSOLE_PORT_OPEN) {
+            /* QEMU's chardev offers what waited once the guest's end opens. */
             port->guest_open = c.value;
+            if (c.value) {
+                model_rx();
+            }
         }
     }
     model_ctl_give();
@@ -564,7 +845,7 @@ static void model_tx(void)
     uint32_t len;
     int id;
 
-    for (id = 0; id < 2; id++) {
+    for (id = 0; id < NPORTS; id++) {
         struct model_port *port = &m.port[id];
         int qi = port_rxq(id) + 1;
 
@@ -593,7 +874,7 @@ static void model_rx(void)
     uint32_t len;
     int id;
 
-    for (id = 0; id < 2; id++) {
+    for (id = 0; id < NPORTS; id++) {
         struct model_port *port = &m.port[id];
         int qi = port_rxq(id);
 
@@ -633,25 +914,31 @@ static void host_write(int id, const void *buf, uint32_t n)
     model_rx();
 }
 
-/** The driver's clock: 200 ms a read, with the model's time. */
+/** The driver's clock: 200 ms a read, with each model's time. */
 uint64_t arch_cycles(void)
 {
+    struct model *was = cur;
+    int k;
+
     cycles += STEP_CYCLES;
-    if (m.resume_in > 0 && --m.resume_in == 0) {
-        m.port[0].throttled = m.port[1].throttled = 0;
-        model_tx();
+    for (k = 0; k < 2; k++) {
+        cur = &models[k];
+        if (m.resume_in > 0 && --m.resume_in == 0) {
+            m.port[0].throttled = m.port[1].throttled = m.port[2].throttled = 0;
+            model_tx();
+        }
+        if (m.tx_due > 0 && --m.tx_due == 0) {
+            model_tx();
+        }
     }
-    if (m.tx_due > 0 && --m.tx_due == 0) {
-        model_tx();
-    }
+    cur = was;
     return cycles;
 }
 
-/** The record behind `d`: the one model. */
+/** The record behind `d`. */
 static struct model *mod(struct virtio_dev *d)
 {
-    (void)d;
-    return &m;
+    return (struct model *)d->transport;
 }
 
 /** The status byte. */
@@ -673,7 +960,7 @@ static void m_set_status(struct virtio_dev *d, uint8_t status)
         for (i = 0; i < NQ; i++) {
             k_memset(&x->q[i], 0, sizeof(x->q[i]));
         }
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < NPORTS; i++) {
             x->port[i].ready = x->port[i].guest_open = 0;
         }
     }
@@ -751,21 +1038,22 @@ static int m_queue_enable(struct virtio_dev *d, struct virtqueue *vq)
  * clock later. */
 static void m_notify(struct virtio_dev *d, struct virtqueue *vq)
 {
-    struct model *x = mod(d);
+    struct model *x = mod(d), *was = cur;
 
+    cur = x;
     x->q[vq->index].notified++;
     model_mark(vq->index);
     if (vq->index == 3 && x->ctl_hold) {
-        return;
     } else if (vq->index == 2 || vq->index == 3) {
         model_ctl_take();
-    } else if (vq->index == 0 || vq->index == 4) {
+    } else if (vq->index % 2u == 0) {
         model_rx();
     } else if (x->tx_lag > 0) {
         x->tx_due = x->tx_lag;
     } else {
         model_tx();
     }
+    cur = was;
 }
 
 /** Keep the count of queues the driver asked interrupts for, and give
@@ -845,8 +1133,8 @@ static int m_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64
 /** Count a device given back, and which. */
 static void m_put(struct virtio_dev *d)
 {
-    m.puts++;
-    m.last_put = d;
+    mod(d)->puts++;
+    mod(d)->last_put = d;
 }
 
 static const struct virtio_ops model_ops = {
@@ -859,13 +1147,15 @@ static const struct virtio_ops model_ops = {
 
 /* ---- the transport's and the bus's calls the driver makes ---- */
 
-/** The model, when the row plugged it in and asks for the first console. */
+/** The `nth` model, when the row plugged it in; the first unplugged ends
+ * the list, as a bus has no gaps. */
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
 {
-    if (!m.plugged || id != VIRTIO_ID_CONSOLE || nth != 0) {
+    if (id != VIRTIO_ID_CONSOLE || nth < 0 || nth > 1 || !models[nth].plugged ||
+        (nth == 1 && !models[0].plugged)) {
         return -ENODEV;
     }
-    *out = &m.dev;
+    *out = &models[nth].dev;
     return 0;
 }
 
@@ -880,25 +1170,22 @@ int virtio_driver_register(uint16_t id, virtio_probe_t probe)
 /** Keep the driver's name; the row's result. */
 int virtio_driver_bind(struct virtio_dev *d, const char *driver)
 {
-    (void)d;
-    m.binds++;
-    m.bound_driver = driver;
-    return m.bind_result;
+    mod(d)->binds++;
+    mod(d)->bound_driver = driver;
+    return mod(d)->bind_result;
 }
 
 /** Count the bind's uevent. */
 void virtio_driver_bound(struct virtio_dev *d)
 {
-    (void)d;
-    m.bounds++;
+    mod(d)->bounds++;
 }
 
 /** Count an unbind. */
 void virtio_driver_unbind(struct virtio_dev *d)
 {
-    (void)d;
-    m.unbinds++;
-    m.bound_driver = 0;
+    mod(d)->unbinds++;
+    mod(d)->bound_driver = 0;
 }
 
 /* ---- the rows' tools ---- */
@@ -909,79 +1196,114 @@ void virtio_driver_unbind(struct virtio_dev *d)
 #define UART  8 /* the machine has a UART */
 
 /**
- * Free the queue records of the device the last row left bound, before the
- * model under them is cleared: a machine keeps a bound device for good, so
- * the driver never frees them, while the rings are the model's arena's; a
- * device halted at shutdown keeps them too. A record on any other device
- * that no longer runs is one the driver failed to free.
+ * Free the queue records of the devices the last row left bound, before
+ * the models under them are cleared, and the driver's records of them: a
+ * machine keeps a bound device for good, so the driver never frees them,
+ * while the rings are the model's arena's; a device halted at shutdown
+ * keeps them too. A queue record on any other device that no longer runs
+ * is one the driver failed to free.
  */
 static void drop_bound(void)
 {
+    struct vcon *d;
+    uint32_t i;
+    int k;
+
+    for (k = 0; k < 2; k++) {
+        d = (struct vcon *)models[k].dev.priv;
+        for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
+            if (models[k].dev.queues[i]) {
+                check((models[k].status & VIRTIO_STATUS_DRIVER_OK) != 0 || (d && d->closed),
+                      "a queue is left only on a running device or one halted at shutdown");
+                kfree(models[k].dev.queues[i]);
+                models[k].dev.queues[i] = 0;
+            }
+        }
+    }
+    while (vcon_list) {
+        d = vcon_list;
+        for (i = 0; i < d->nports; i++) {
+            kfree(d->port[i].hold);
+        }
+        vcon_free(d);
+    }
+}
+
+/** Make model `k` a fresh device of `kind`, named `name`. */
+static void model_fresh(int k, const char *name, int kind)
+{
+    struct model *x = &models[k];
     int i;
 
-    for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
-        if (m.dev.queues[i]) {
-            check((m.status & VIRTIO_STATUS_DRIVER_OK) != 0 || vcon.closed,
-                  "a queue is left only on a running device or one halted at shutdown");
-            kfree(m.dev.queues[i]);
-            m.dev.queues[i] = 0;
+    k_memset(x, 0, sizeof(*x));
+    x->dev.ops = &model_ops;
+    x->dev.transport = x;
+    x->dev.name = name;
+    x->dev.id = VIRTIO_ID_CONSOLE;
+    x->dma_fail_at = x->dma_fail_from = -1;
+    x->offered = VIRTIO_BIT(VIRTIO_F_VERSION_1);
+    if (event_idx) {
+        x->offered |= VIRTIO_BIT(VIRTIO_F_EVENT_IDX);
+    }
+    if (kind & MULTI) {
+        x->offered |= VIRTIO_BIT(VIRTIO_CONSOLE_F_MULTIPORT);
+    }
+    if (kind & SIZE) {
+        x->offered |= VIRTIO_BIT(VIRTIO_CONSOLE_F_SIZE);
+    }
+    if (kind & EMERG) {
+        x->offered |= VIRTIO_BIT(VIRTIO_CONSOLE_F_EMERG_WRITE);
+    }
+    /* QEMU's sizes: 128 for a port's queues and 32 for the control's. */
+    for (i = 0; i < NQ; i++) {
+        x->qmax[i] = (uint16_t)((i == 2 || i == 3) ? 32 : 128);
+    }
+    if (!(kind & MULTI)) {
+        for (i = 2; i < NQ; i++) {
+            x->qmax[i] = 0;
         }
+    }
+    x->port[0].exists = 1;
+    x->port[0].console = 1;
+    x->port[0].host_open = 1;
+    if (kind & MULTI) {
+        x->port[1].exists = 1;
+        x->port[1].name = "etude";
+        x->port[1].host_open = 1;
+        x->config[VIRTIO_CONSOLE_CFG_MAX_PORTS] = 2;
     }
 }
 
 /** A machine with a fresh model of `kind` plugged in, the boot line
  * `line`, and the driver, the serial console and the counters as a boot
- * finds them. */
+ * finds them. A second model, of the same kind, waits for a row to plug it
+ * in. */
 static void fresh(const char *line, int kind)
 {
-    int i;
-
     drop_bound();
-    k_memset(&m, 0, sizeof(m));
     k_memset(arena_taken, 0, sizeof(arena_taken));
     k_memset(arena_given, 0, sizeof(arena_given));
-    m.dev.ops = &model_ops;
-    m.dev.transport = &m;
-    m.dev.name = "virtio0";
-    m.dev.id = VIRTIO_ID_CONSOLE;
-    m.plugged = 1;
-    m.dma_fail_at = m.dma_fail_from = -1;
-    m.offered = VIRTIO_BIT(VIRTIO_F_VERSION_1);
-    if (event_idx) {
-        m.offered |= VIRTIO_BIT(VIRTIO_F_EVENT_IDX);
-    }
-    if (kind & MULTI) {
-        m.offered |= VIRTIO_BIT(VIRTIO_CONSOLE_F_MULTIPORT);
-    }
-    if (kind & SIZE) {
-        m.offered |= VIRTIO_BIT(VIRTIO_CONSOLE_F_SIZE);
-    }
-    if (kind & EMERG) {
-        m.offered |= VIRTIO_BIT(VIRTIO_CONSOLE_F_EMERG_WRITE);
-    }
-    /* QEMU's sizes: 128 for a port's queues and 32 for the control's. */
-    for (i = 0; i < NQ; i++) {
-        m.qmax[i] = (uint16_t)((i == 2 || i == 3) ? 32 : 128);
-    }
-    if (!(kind & MULTI)) {
-        m.qmax[2] = m.qmax[3] = m.qmax[4] = m.qmax[5] = 0;
-    }
-    m.port[0].exists = 1;
-    m.port[0].console = 1;
-    m.port[0].host_open = 1;
-    if (kind & MULTI) {
-        m.port[1].exists = 1;
-        m.port[1].name = "etude";
-        m.port[1].host_open = 1;
-        m.config[VIRTIO_CONSOLE_CFG_MAX_PORTS] = 2;
-    }
-    k_memset(&vcon, 0, sizeof(vcon));
+    model_fresh(0, "virtio0", kind);
+    model_fresh(1, "virtio1", kind);
+    models[0].plugged = 1;
+    cur = &models[0];
     vcon_tx_lock.locked = 0;
     vcon_tx_owner = 0;
     vcon_replayed = 0;
     vcon_want_n = 0;
     vcon_want_in[0] = '\0';
     vcon_attaching = 0;
+    vcon_nouts = 0;
+    vcon_in = vcon_only = 0;
+    vcon_early = 0;
+    vcon_work = 0;
+    k_memset(&vcon_n, 0, sizeof(vcon_n));
+    k_memset(vcon_hvc, 0, sizeof(vcon_hvc));
+    k_memset(vcon_minor, 0, sizeof(vcon_minor));
+    k_memset(nodes, 0, sizeof(nodes));
+    k_memset(ptys, 0, sizeof(ptys));
+    k_memset(waiters, 0, sizeof(waiters));
+    wakes = waits = 0;
     _line = 0;
     _line_input = _line_uart = _line_waits = 0;
     _rx_head = _rx_tail = _rx_looked = _rx_scanned = 0;
@@ -1001,24 +1323,78 @@ static void fresh(const char *line, int kind)
     (void)kcmdline_capture(line);
 }
 
-/** Take the interrupts the model raised, as the transport's handler does,
- * until it raises no more. */
-static void irq(void)
+/** Take the interrupts the models raised, as the transport's handler does,
+ * until they raise no more. */
+static void irq_only(void)
 {
     uint32_t seen = 0, now;
-    int i, pass;
+    int i, k, pass;
 
     for (pass = 0; pass < 64; pass++) {
         now = 0;
-        for (i = 0; i < NQ; i++) {
-            now += m.q[i].raised;
+        for (k = 0; k < 2; k++) {
+            for (i = 0; i < NQ; i++) {
+                now += models[k].q[i].raised;
+            }
         }
         if (now == seen) {
             return;
         }
         seen = now;
-        virtio_interrupt_queues(&m.dev);
+        for (k = 0; k < 2; k++) {
+            if (models[k].dev.priv) {
+                virtio_interrupt_queues(&models[k].dev);
+            }
+        }
     }
+}
+
+/** The interrupts, and then khvcd, as it runs once the interrupts woke it,
+ * until neither has more to do. */
+static void irq(void)
+{
+    int pass;
+
+    for (pass = 0; pass < 64; pass++) {
+        irq_only();
+        if (!vcon_work) {
+            return;
+        }
+        vcon_service();
+    }
+}
+
+/** The slave of the terminal that is `/dev/NAME`, or NULL. */
+static struct model_pty *tty_of(const char *name)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (ptys[i].made && vcon_same(ptys[i].name, name)) {
+            return &ptys[i];
+        }
+    }
+    return 0;
+}
+
+/** The slave of `t` writes `text`, and its master's queue is woken. */
+static void tty_says(struct model_pty *t, const char *text)
+{
+    uint32_t n = (uint32_t)strlen(text);
+
+    k_memcpy(t->out + t->nout, text, n);
+    t->nout += n;
+    wake_records(&t->p.m_read_wq, WQ_DATA);
+}
+
+/** Port `k` of the first device as the driver keeps it. */
+static struct vcon_port *P(int k)
+{
+    struct vcon *d;
+
+    for (d = vcon_list; d && d->vdev != &models[0].dev; d = d->next) {
+    }
+    return d ? &d->port[k] : 0;
 }
 
 /** Write `n` bytes through the serial console, as the console's sink and
@@ -1118,8 +1494,8 @@ static void boot_port_line(void)
 {
     struct virtio_console_counters c;
 
-    check(virtio_console_node("vport0p1") && !virtio_console_node("hvc0") &&
-              !virtio_console_node("vport0p0") && !virtio_console_node("console"),
+    check(term_node("vport0p1") && !term_node("hvc0") && !term_node("vport0p0") &&
+              !term_node("console"),
           "the line's node is vport0p1 alone");
     check(strstr(logged, "console: enabled: vport0p1, port 1 of virtio0\n") != 0,
           "the log names the console's line");
@@ -1130,7 +1506,7 @@ static void boot_port_line(void)
           "the console port, told after the boot's wait, is opened too");
     check(strstr(logged, "virtio_console: port: virtio0: port 1 is named etude\n") != 0,
           "the port's name is kept");
-    check(virtio_console_node("vport0p1") && replays == 1, "the line stays as the boot made it");
+    check(term_node("vport0p1") && replays == 1, "the line stays as the boot made it");
     c = counters();
     check(c.control_out == 5 && c.control_in == 6 && c.tx_bytes == 8 && c.tx_buffers == 1 &&
               c.tx_dropped == 0 && c.tx_waits == 0,
@@ -1146,8 +1522,7 @@ static void boot_hvc(void)
     fresh("console=hvc0", MULTI | UART);
     _rx_irq_wanted = 1;
     check(virtio_console_start() == 1, "the boot binds the console");
-    check(virtio_console_node("hvc0") && !virtio_console_node("vport0p1"),
-          "the line's node is hvc0");
+    check(term_node("hvc0") && !term_node("vport0p1"), "the line's node is hvc0");
     check(replays == 0 && flushes == 1, "with a UART the log so far is not replayed");
     check(uart_ier == 0x00, "the UART's receive interrupt is off while the line has the input");
     check(got(1, 0, VIRTIO_CONSOLE_PORT_READY, 1) && got(3, 0, VIRTIO_CONSOLE_PORT_OPEN, 1),
@@ -1176,7 +1551,7 @@ static void one_port(void)
               !m.q[4].enabled,
           "a device of one port has two queues");
     check(m.ngot == 0 && counters().control_out == 0, "and no control messages");
-    check(virtio_console_node("hvc0") && replays == 1 && host_read(0, "REPLAY\r\n"),
+    check(term_node("hvc0") && replays == 1 && host_read(0, "REPLAY\r\n"),
           "port 0 is the console's line and is given the log");
     check(resize_calls == 1 && resized.ws_col == 132 && resized.ws_row == 43,
           "the console terminal takes the size of the configuration");
@@ -1185,6 +1560,7 @@ static void one_port(void)
     v = 30;
     k_memcpy(m.config + VIRTIO_CONSOLE_CFG_ROWS, &v, 2);
     virtio_interrupt_config(&m.dev);
+    irq();
     check(resize_calls == 2 && resized.ws_col == 100 && resized.ws_row == 30,
           "a change of the configuration is a new size");
     host_write(0, "in\n", 3);
@@ -1212,10 +1588,14 @@ static void words(void)
         {"console=vport0p1 console=hvc0", "vport0p1 hvc0", "hvc0", 0},
         {"console=hvc0 console=vport0p1 console=hvc0", "hvc0 vport0p1", "hvc0", 0},
         {"console=vport0p1 console=ttyS0", "vport0p1", "", 1},
-        {"console=vport0p2", "", "", 0},
-        {"console=vport1p1", "", "", 0},
-        {"console=hvc1", "", "", 0},
+        {"console=vport0p2", "vport0p2", "vport0p2", 0},
+        {"console=vport1p1", "vport1p1", "vport1p1", 0},
+        {"console=hvc1", "hvc1", "hvc1", 0},
+        {"console=hvc15 console=ttyS0", "hvc15", "", 1},
+        {"console=hvc16", "", "", 0},
         {"console=hvc", "", "", 0},
+        {"console=vport0", "", "", 0},
+        {"console=vport0p511", "", "", 0},
         {"console=ttyS0", "", "", 1},
     };
     char list[64];
@@ -1244,23 +1624,25 @@ static void words(void)
     check(virtio_console_start() == 1, "the boot binds the console");
     check(strstr(logged, "console: enabled: hvc0, port 0 of virtio0, for output alone\n") != 0,
           "the log says the line carries output alone");
-    check(!virtio_console_node("hvc0"), "a line for output alone has no node");
+    check(!term_node("hvc0") && node("hvc0") && node("hvc0")->ops == &slave_ops && tty_of("hvc0"),
+          "a line for output alone is not the console terminal; hvc0 is its own terminal");
     check(uart_ier != 0x00, "the UART keeps the console's input");
     say("both", 4);
     serial_flush();
     check(host_read(0, "both") && uart_sent("both"), "the log goes to the port and the UART");
-    host_write(0, "lost", 4);
+    host_write(0, "mine", 4);
     irq();
-    check(serial_rx_pending() == 0 && counters().rx_dropped == 4 && counters().rx_bytes == 0,
-          "input on a line for output alone is dropped and counted");
-    host_write(0, "more", 4);
+    check(serial_rx_pending() == 0 && counters().rx_dropped == 0 && counters().rx_bytes == 4 &&
+              tty_of("hvc0")->nfed == 4 && memcmp(tty_of("hvc0")->fed, "mine", 4) == 0,
+          "input on a line for output alone goes to hvc0's terminal, as Linux's hvc tty");
+    tty_says(tty_of("hvc0"), "login: ");
     irq();
-    check(counters().rx_dropped == 8 && m.port[0].in_at == m.port[0].nin,
-          "and its buffers go back to the device");
+    check(host_read(0, "bothlogin: ") && m.port[0].in_at == m.port[0].nin,
+          "and the terminal's output goes to the port beside the log");
 
     /* The UART named first: both carry the log, the port has the input. */
     fresh("console=ttyS0 console=hvc0", MULTI | UART);
-    check(virtio_console_start() == 1 && virtio_console_node("hvc0") && replays == 0,
+    check(virtio_console_start() == 1 && term_node("hvc0") && replays == 0,
           "the port named last is the console's input");
     say("both", 4);
     serial_flush();
@@ -1390,7 +1772,7 @@ static void input(void)
     irq();
     c = counters();
     check(serial_rx_pending() == SERIAL_RX_SIZE, "the ring fills");
-    check(m.port[1].in_at == SERIAL_RX_SIZE + 8u * VCON_BUF && vcon.port[1].rx_n == VCON_RX_BUFS,
+    check(m.port[1].in_at == SERIAL_RX_SIZE + 8u * VCON_BUF && P(1)->rx_n == VCON_RX_BUFS,
           "the port's eight buffers are held back, and the host's end stops");
     check(c.rx_held > 0 && c.rx_dropped == 0 && c.rx_bytes == 6 + SERIAL_RX_SIZE,
           "the counters say the ring held them");
@@ -1403,16 +1785,16 @@ static void input(void)
         irq();
     }
     check(taken == 40000 && bad == 0, "a reader that takes gets every byte, in order");
-    check(vcon.port[1].rx_n == 0 && counters().rx_bytes == 40006 && counters().rx_dropped == 0,
+    check(P(1)->rx_n == 0 && counters().rx_bytes == 40006 && counters().rx_dropped == 0,
           "and every buffer is back with the device");
 
     /* A flush of the input reaches the bytes the buffers hold. */
     fill(0, 40000);
     host_write(1, big, 40000);
     irq();
-    check(vcon.port[1].rx_n == VCON_RX_BUFS, "the buffers are held again");
+    check(P(1)->rx_n == VCON_RX_BUFS, "the buffers are held again");
     serial_rx_flush();
-    check(serial_rx_pending() == 0 && vcon.port[1].rx_n == 0, "a flush drops the ring and them");
+    check(serial_rx_pending() == 0 && P(1)->rx_n == 0, "a flush drops the ring and them");
     irq();
     taken = SERIAL_RX_SIZE + 8u * VCON_BUF;
     bad = 0;
@@ -1427,8 +1809,8 @@ static void input(void)
 
     host_write(0, "x", 1);
     irq();
-    check(m.port[0].in_at == 0 && serial_rx_pending() == 0,
-          "a port that is not the line has no buffers and gives no input");
+    check(serial_rx_pending() == 0 && tty_of("hvc0") && tty_of("hvc0")->nfed == 1,
+          "the console port that is not the line gives its input to its own terminal");
 }
 
 /** A console port's RESIZE, rows and then columns as Linux reads it, and
@@ -1455,9 +1837,9 @@ static void resize(void)
     post(7, VIRTIO_CONSOLE_PORT_OPEN, 1, 0, 0);
     model_ctl_give();
     irq();
-    check(resize_calls == 1 && virtio_console_node("hvc0"),
+    check(resize_calls == 1 && term_node("hvc0"),
           "a short size, an unknown event and a port past the driver's change nothing");
-    check(strstr(logged, "port 2 left: the driver takes ports 0 to 1\n") != 0,
+    check(strstr(logged, "port 2 left: the device has 2\n") != 0,
           "and the log names the port left");
 }
 
@@ -1475,7 +1857,7 @@ static void replug(void)
     post(1, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
     model_ctl_give();
     irq();
-    check(!virtio_console_node("vport0p1") &&
+    check(!term_node("vport0p1") &&
               strstr(logged, "console: disabled: vport0p1: its port has gone\n") != 0,
           "the line's port gone, the console leaves it");
     check(uart_ier == SERIAL_IER_RDA, "the UART's receive interrupt is on again");
@@ -1486,7 +1868,7 @@ static void replug(void)
     announce(1);
     model_ctl_give();
     irq();
-    check(virtio_console_node("vport0p1") && m.port[1].guest_open && replays == 0,
+    check(term_node("vport0p1") && m.port[1].guest_open && replays == 0,
           "the port added again is the line again, with no replay");
     check(m.dma_out == pages, "and keeps the buffers it had");
     say("port", 4);
@@ -1512,7 +1894,7 @@ static void removal(void)
           "the device is reset and every page and interrupt given back");
     check(m.unbinds == 1 && m.puts == 1 && m.last_put == &m.dev && m.dev.removed == 0,
           "the device is shown unbound and given back to the transport");
-    check(!virtio_console_node("vport0p1") &&
+    check(!term_node("vport0p1") &&
               strstr(logged, "console: disabled: vport0p1: its device is removed\n") != 0,
           "the console leaves the port");
     check(hangups == 1, "and its terminal is hung up");
@@ -1521,9 +1903,9 @@ static void removal(void)
     check(uart_sent("uart"), "and goes on at the UART");
 
     check(registered(&m.dev) == 0, "the probe binds the device again");
-    check(!virtio_console_node("vport0p1"), "a bind after the boot waits for no port");
+    check(!term_node("vport0p1"), "a bind after the boot waits for no port");
     irq();
-    check(virtio_console_node("vport0p1") && replays == 0,
+    check(term_node("vport0p1") && replays == 0,
           "the port, announced by interrupt, is the line again, with no replay");
     say("port", 4);
     serial_flush();
@@ -1554,7 +1936,7 @@ static void panic(void)
     serial_flush();
     check(host_read(1, "freePANIC") && m.nemerg == 0 && counters().tx_panic == 5,
           "with the side held, the bytes reach the host's port by the panic's buffer");
-    check(vcon_tx_lock.locked == 1 && vcon.port[1].tx_fill == 1, "and the held side is left alone");
+    check(vcon_tx_lock.locked == 1 && P(1)->tx_fill == 1, "and the held side is left alone");
     vcon_tx_lock.locked = 0;
     panicking = 0;
 
@@ -1597,65 +1979,115 @@ static void panic_queue_held(void)
     irq();
     m.port[0].nout = 0;
     panicking = 1;
-    vcon.port[0].txq->lock.locked = 1;
+    P(0)->txq->lock.locked = 1;
     say("PANIC", 5);
     serial_flush();
     check(m.nemerg == 5 && host_read(0, "PANIC") && counters().emerg == 5,
           "with the queue's lock held, each byte goes to emerg_wr and reaches port 0");
-    check(vcon.port[0].txq->lock.locked == 1 && vcon.port[0].tx_cur < 0,
-          "and the queue is not touched");
-    vcon.port[0].txq->lock.locked = 0;
+    check(P(0)->txq->lock.locked == 1 && P(0)->tx_cur < 0, "and the queue is not touched");
+    P(0)->txq->lock.locked = 0;
     vcon_tx_lock.locked = 1;
-    vcon.port[0].txq->lock.locked = 1;
+    P(0)->txq->lock.locked = 1;
     say("X", 1);
     serial_flush();
-    check(m.nemerg == 6 && vcon.port[0].ptx_fill == 0,
+    check(m.nemerg == 6 && P(0)->ptx_fill == 0,
           "with both held the byte still goes to emerg_wr alone");
-    vcon.port[0].txq->lock.locked = 0;
+    P(0)->txq->lock.locked = 0;
     vcon_tx_lock.locked = 0;
     panicking = 0;
 }
 
-/** A second console, which the driver leaves, and a bind the bus refuses. */
+/** Whether the driver told the device `event` with `value` for port `id`
+ * at any time. */
+static int sent(uint32_t id, uint16_t event, uint16_t value)
+{
+    int i;
+
+    for (i = 0; i < m.ngot; i++) {
+        if (got(i, id, event, value)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Two devices, each bound with its ports and numbered in the order found,
+ * as Linux binds every virtio console: `console=vport1p1` names the
+ * second's port 1, which carries the console, while the first's ports and
+ * console port have their nodes; the first removed, the second goes on;
+ * and a bind the bus refuses.
+ */
 static void second(void)
 {
-    static struct virtio_dev other;
+    fresh("console=vport1p1", MULTI | UART);
+    models[1].plugged = 1;
+    models[1].port[1].name = "other";
+    check(virtio_console_start() == 2, "the boot binds both consoles");
+    irq();
+    check(models[0].bounds == 1 && models[1].bounds == 1 &&
+              (models[0].status & VIRTIO_STATUS_DRIVER_OK) &&
+              (models[1].status & VIRTIO_STATUS_DRIVER_OK),
+          "each is driven and shown bound");
+    check(term_node("vport1p1") && vport_node("vport0p1") && vport_node("vport0p0") &&
+              vport_node("vport1p0") && vport_node("virtio-ports/etude") &&
+              term_node("virtio-ports/other"),
+          "the line is the second's port 1, by its number and its name, and every other port "
+          "is a byte device");
+    check(node("hvc0") && node("hvc0")->ops == &slave_ops && node("hvc1") && tty_of("hvc0") &&
+              tty_of("hvc1") && P(0)->hvc == 0,
+          "each console port is an hvc terminal, numbered in the order the devices were found");
+    check(strstr(logged, "console: enabled: vport1p1, port 1 of virtio1\n") != 0,
+          "the log names the line");
+    say("two", 3);
+    serial_flush();
+    cur = &models[1];
+    check(host_read(1, "two"), "the console's bytes go to the second device's port");
+    cur = &models[0];
+    check(m.port[1].nout == 0, "and not to the first's");
 
-    fresh("console=vport0p1", MULTI | UART);
-    check(virtio_console_start() == 1, "the boot binds the console");
-    other.ops = &model_ops;
-    other.transport = &m;
-    other.name = "virtio1";
-    other.id = VIRTIO_ID_CONSOLE;
-    check(virtio_console_bind(&other) == -EBUSY && m.puts == 1 && m.last_put == &other,
-          "a second console is refused and given back");
-    check(virtio_console_node("vport0p1") && m.status != 0, "and the first is left as it was");
+    m.dev.removed(&m.dev);
+    check(m.status == 0 && !node("vport0p1") && !node("vport0p0") && !node("hvc0") &&
+              !node("virtio-ports/etude"),
+          "the first removed, its nodes and its terminal go");
+    check(term_node("vport1p1") && node("hvc1"), "and the second's stay");
+    say("on", 2);
+    serial_flush();
+    cur = &models[1];
+    check(host_read(1, "twoon"), "the second goes on carrying the console");
+    cur = &models[0];
+    check(registered(&m.dev) == 0, "the probe binds the first again");
+    irq();
+    check(vport_node("vport0p1") && node("hvc0") && P(0)->hvc == 0 && P(0)->dev->index == 0,
+          "with its numbers back");
 
     fresh("console=vport0p1", MULTI | UART);
     m.bind_result = -ENOMEM;
     check(virtio_console_start() == -ENOMEM, "a bind the bus refuses fails the boot's bind");
-    check(m.status == 0 && m.dma_out == 0 && m.puts == 1 && !virtio_console_node("vport0p1"),
+    check(m.status == 0 && m.dma_out == 0 && m.puts == 1 && !node("vport0p1"),
           "with the device reset, nothing kept and the device given back");
     check(strstr(logged, "console: none: console=vport0p1 names no port now") != 0,
           "and the log says the console stays on the UART");
 }
 
 /**
- * The boot short of memory. With one allocation failing, each in turn,
- * the bring-up fails with nothing kept, or the line, refused once, is made
- * at the device's next message. With every allocation from one on
- * failing, the bring-up fails the same way or the boot goes on without the
- * line. Nothing is ever kept by half, and a removal gives every page back.
+ * The boot short of memory. With one allocation failing, each in turn, or
+ * every allocation from one on: the bring-up fails with nothing kept; or a
+ * port whose pages cannot be had is refused with PORT_READY 0, as Linux's
+ * add_port refuses it, and the console stays on the UART when it was the
+ * line; or a port with fewer receive pages than it asks for works with
+ * those. Nothing is kept by half, and a removal gives every page back.
  */
 static void no_memory(void)
 {
-    int k, i, all, calls, pages;
-    int failed[2] = {0, 0}, retried = 0, without = 0;
+    int k, all, calls, setup;
+    int failed[2] = {0, 0}, refused[2] = {0, 0}, lined[2] = {0, 0};
 
     fresh("console=vport0p1", MULTI | UART);
-    check(virtio_console_start() == 1 && virtio_console_node("vport0p1"), "the boot has memory");
+    check(virtio_console_start() == 1 && term_node("vport0p1"), "the boot has memory");
     calls = m.dma_calls;
-    pages = m.dma_out;
+    /* Each port's pages: four to send, the panic's and eight to receive. */
+    setup = calls - 2 * (VCON_TX_BUFS + 1 + VCON_RX_BUFS);
     for (all = 0; all < 2; all++) {
         for (k = 0; k < calls; k++) {
             int32_t rc;
@@ -1671,35 +2103,334 @@ static void no_memory(void)
             if (rc < 0) {
                 failed[all]++;
                 check(rc == -ENOMEM && m.status == 0 && m.dma_out == 0 && m.puts == 1 &&
-                          vcon.vdev == 0,
+                          vcon_list == 0,
                       "a bring-up that fails keeps nothing");
                 continue;
             }
             check(rc == 1 && (m.status & VIRTIO_STATUS_DRIVER_OK), "the device stays driven");
-            check(strstr(logged, "console: refused: vport0p1: no memory for its buffers\n") != 0,
-                  "the log says the line was refused");
-            if (all) {
-                without++;
-                check(!virtio_console_node("vport0p1"), "the boot goes on without the line");
-                for (i = 0; i < VCON_RX_BUFS; i++) {
-                    check(vcon.port[1].rx[i].data == 0, "a line refused keeps no buffer");
-                }
+            if (term_node("vport0p1")) {
+                lined[all]++;
+                say("port", 4);
+                serial_flush();
+                check(host_read(1, "port") && nuart == 0, "the line carries the console");
+            } else {
+                refused[all]++;
+                check(
+                    strstr(logged, "port: virtio0: port 1 refused: no memory for its buffers\n") &&
+                        sent(1, VIRTIO_CONSOLE_PORT_READY, 0) && !m.port[1].ready,
+                    "a port without its pages is refused, and the device told");
                 say("uart", 4);
                 serial_flush();
                 check(uart_sent("uart"), "and the console stays on the UART");
-            } else {
-                retried++;
-                check(virtio_console_node("vport0p1") && m.dma_out == pages,
-                      "the device's next message makes the line, with every page it needs");
-                check(!strstr(logged, "console: waiting"), "within the boot's wait");
             }
             m.dev.removed(&m.dev);
             check(m.dma_out == 0, "the removal gives every page back");
         }
     }
-    check(failed[0] == calls - VCON_RX_BUFS && failed[1] == failed[0] && retried == VCON_RX_BUFS &&
-              without == VCON_RX_BUFS,
-          "every allocation but the line's buffers fails the bring-up");
+    check(failed[0] == setup && failed[1] == setup,
+          "every allocation of the bring-up fails it, and none of a port's");
+    check(refused[0] == VCON_TX_BUFS + 2 && lined[0] == calls - setup - refused[0],
+          "one failure refuses the line's port only at its send pages or its first receive page");
+    check(refused[1] == 2 * (VCON_TX_BUFS + 1 + VCON_RX_BUFS) - (VCON_RX_BUFS - 1) &&
+              lined[1] == VCON_RX_BUFS - 1,
+          "every allocation from one on failing leaves the line only with some receive pages");
+}
+
+/**
+ * A third port, past the two of QEMU's harness: `max_nr_ports` 3 gives it
+ * queues 6 and 7, and the device adds it after the boot, names it and
+ * removes it, as `device_add virtserialport` and `device_del` do. It is
+ * answered with PORT_READY, gets /dev/vport0p2 and
+ * /dev/virtio-ports/NAME, which go when it goes, and comes back with the
+ * pages it had.
+ */
+static void third_port(void)
+{
+    int pages;
+
+    fresh("console=hvc0", MULTI | UART);
+    m.config[VIRTIO_CONSOLE_CFG_MAX_PORTS] = 3;
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    check(m.irq_nqueues == 8 && m.q[6].enabled && m.q[7].enabled,
+          "a device of three ports has its third port's queues set up");
+    check(!node("vport0p2") && P(2) && !P(2)->present, "a port not yet added has no node");
+    pages = m.dma_out;
+    m.port[2].exists = 1;
+    m.port[2].name = "org.rach2.third";
+    announce(2);
+    model_ctl_give();
+    irq();
+    check(m.port[2].ready && P(2)->present && !P(2)->console,
+          "the port added is answered with PORT_READY");
+    check(vport_node("vport0p2") && node("vport0p2")->minor == 2 &&
+              vport_node("virtio-ports/org.rach2.third") &&
+              node("virtio-ports/org.rach2.third")->minor == 2 &&
+              node("virtio-ports/org.rach2.third")->alias,
+          "it is /dev/vport0p2, 245:2, also named by its name");
+    check(strstr(logged, "virtio_console: port: virtio0: port 2 is named org.rach2.third\n") != 0,
+          "the log keeps its name");
+    check(m.dma_out == pages + VCON_TX_BUFS + 1 + VCON_RX_BUFS, "with pages of its own");
+    host_write(2, "nobody", 6);
+    irq();
+    check(m.port[2].in_at == 0, "the device gives a port nobody opened no input");
+
+    post(2, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
+    model_ctl_give();
+    irq();
+    check(!P(2)->present && !node("vport0p2") && !node("virtio-ports/org.rach2.third"),
+          "the port removed loses its nodes");
+    check(term_node("hvc0") && node("vport0p1"), "and the others keep theirs");
+    announce(2);
+    model_ctl_give();
+    irq();
+    check(vport_node("vport0p2") && m.dma_out == pages + VCON_TX_BUFS + 1 + VCON_RX_BUFS,
+          "added again, it is the same node with the pages it had");
+}
+
+/**
+ * A generic port as a byte device, as Linux's port_fops: the open tells
+ * the device PORT_OPEN 1 and a second open is refused; a write reaches the
+ * host's end; a read takes what the host wrote, gives the end of a file
+ * once the host's end has closed, and waits otherwise; poll says which;
+ * a write waits while the host's end is closed; the last close tells the
+ * device PORT_OPEN 0; and a port removed while open fails the descriptor's
+ * calls with ENODEV. A console port's vport node refuses an open.
+ */
+static void vport(void)
+{
+    struct devfs_node *n;
+    struct open_file ofd;
+    struct wait_queue *wq = 0;
+    fd_entry_t e, e2;
+    char buf[16];
+
+    fresh("console=hvc0", MULTI | UART);
+    m.port[1].host_open = 0;
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    n = node("vport0p1");
+    check(vport_node("vport0p1") && n->minor == 1 && n->mode == 0600 &&
+              vport_node("virtio-ports/etude"),
+          "a generic port is a byte device, by its number and by its name");
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    k_memset(&e2, 0, sizeof(e2));
+    e.ofd = e2.ofd = &ofd;
+    check(node("vport0p0")->open(node("vport0p0"), &e2, 0) == -ENXIO,
+          "a console port's vport node refuses an open");
+    check(n->open(n, &e, 0) == 0 && m.port[1].guest_open == 1 &&
+              sent(1, VIRTIO_CONSOLE_PORT_OPEN, 1),
+          "an open tells the device the guest's end opened");
+    check(n->open(n, &e2, 0) == -EBUSY, "a second open is refused while the first is open");
+
+    ofd.status_flags = OFD_NONBLOCK;
+    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == 0,
+          "with the host's end closed and nothing waiting a read is the end of a file");
+    check(vcon_vport_ops.write(&e, "ping", 4) == -EAGAIN,
+          "a write without a wait fails while the host's end is closed");
+    check(vcon_vport_ops.poll(&e, POLLIN | POLLOUT, &wq) == (POLLIN | POLLHUP) && wq == &P(1)->wq,
+          "poll says readable and hung up, and gives the port's queue");
+    ofd.status_flags = 0;
+    check(vcon_vport_ops.write(&e, "ping", 4) == -EINTR && waits == 1,
+          "a write waits for the host's end");
+
+    m.port[1].host_open = 1;
+    post(1, VIRTIO_CONSOLE_PORT_OPEN, 1, 0, 0);
+    model_ctl_give();
+    irq();
+    check(vcon_vport_ops.poll(&e, POLLIN | POLLOUT, &wq) == POLLOUT,
+          "the host's end open, writable");
+    check(vcon_vport_ops.write(&e, "ping", 4) == 4 && host_read(1, "ping"),
+          "a write reaches the host's end");
+    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == -EINTR && waits == 2,
+          "a read with nothing waiting waits");
+    ofd.status_flags = OFD_NONBLOCK;
+    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == -EAGAIN, "or fails without a wait");
+    host_write(1, "pong!", 5);
+    irq();
+    check(vcon_vport_ops.poll(&e, POLLIN | POLLOUT, &wq) == (POLLIN | POLLOUT),
+          "what the host wrote makes it readable");
+    check(vcon_vport_ops.read(&e, buf, 3) == 3 && memcmp(buf, "pon", 3) == 0 &&
+              vcon_vport_ops.read(&e, buf, sizeof(buf)) == 2 && memcmp(buf, "g!", 2) == 0,
+          "a read takes the host's bytes in order, as many as asked");
+    check(counters().rx_bytes == 5 && serial_rx_pending() == 0, "and they are not the console's");
+
+    vcon_vport_ops.close(&e);
+    check(m.port[1].guest_open == 0 && sent(1, VIRTIO_CONSOLE_PORT_OPEN, 0),
+          "the last close tells the device the guest's end closed");
+    host_write(1, "lost", 4);
+    irq();
+    check(m.port[1].in_at == 0, "and the device keeps what the host writes then");
+
+    ofd.status_flags = 0;
+    check(n->open(n, &e, 0) == 0, "the port opens again");
+    irq();
+    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == 4 && memcmp(buf, "lost", 4) == 0,
+          "and takes what waited");
+    post(1, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
+    model_ctl_give();
+    irq();
+    check(!node("vport0p1") && vcon_vport_ops.read(&e, buf, sizeof(buf)) == -ENODEV &&
+              vcon_vport_ops.write(&e, "x", 1) == -ENODEV &&
+              vcon_vport_ops.poll(&e, POLLIN, &wq) == POLLHUP,
+          "a port removed while open fails its descriptor's calls");
+    announce(1);
+    model_ctl_give();
+    irq();
+    check(n->open(n, &e2, 0) == 0,
+          "the port added again opens, with the old descriptor still open");
+    vcon_vport_ops.close(&e);
+    check(m.port[1].guest_open == 1, "whose close leaves the new open alone");
+    vcon_vport_ops.close(&e2);
+    check(m.port[1].guest_open == 0, "and the new close tells the device");
+}
+
+/**
+ * A console port that is not the console's line is an hvc terminal of its
+ * own, as Linux's hvc tty: /dev/hvc1, 229:1, opens the pair's slave; what
+ * the host writes goes to the slave's discipline, held while it is full;
+ * the slave's output goes to the host; RESIZE sizes the slave; and a port
+ * removed hangs its terminal up and gives its number back.
+ */
+static void hvc_tty(void)
+{
+    static const unsigned char size[4] = {24, 0, 80, 0};
+    struct model_pty *t;
+    struct devfs_node *n;
+    fd_entry_t e;
+
+    fresh("console=hvc0", MULTI | UART);
+    m.config[VIRTIO_CONSOLE_CFG_MAX_PORTS] = 3;
+    m.port[2].exists = 1;
+    m.port[2].console = 1;
+    m.port[2].host_open = 1;
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    t = tty_of("hvc1");
+    n = node("hvc1");
+    check(term_node("hvc0") && t && t->dev == ((229u << 8) | 1u) && n && n->major == 229 &&
+              n->minor == 1 && n->ops == &slave_ops,
+          "the second console port is hvc1, a terminal of its own");
+    check(m.port[2].guest_open && sent(2, VIRTIO_CONSOLE_PORT_OPEN, 1),
+          "whose port is opened, as Linux opens a console port");
+    k_memset(&e, 0, sizeof(e));
+    check(n->open(n, &e, 0) == 0 && t->opens == 1, "its node opens the pair's slave");
+
+    host_write(2, "ls\r", 3);
+    irq();
+    check(t->nfed == 3 && memcmp(t->fed, "ls\r", 3) == 0 && serial_rx_pending() == 0,
+          "what the host writes goes to the slave's discipline");
+    tty_says(t, "$ ");
+    irq();
+    check(host_read(2, "$ ") && m.port[0].nout == 0, "and the slave's output to the host");
+
+    t->room = t->nfed + 2u;
+    host_write(2, "abcd", 4);
+    irq();
+    check(t->nfed == 5 && counters().rx_held > 0, "a full discipline holds the rest back");
+    t->room = sizeof(t->fed);
+    wake_records(&t->p.m_read_wq, WQ_ROOM);
+    irq();
+    check(t->nfed == 7 && memcmp(t->fed + 3, "abcd", 4) == 0, "and takes it once it has room");
+
+    post(2, VIRTIO_CONSOLE_RESIZE, 0, size, 4);
+    model_ctl_give();
+    irq();
+    check(resize_calls >= 1 && resized.ws_col == 80 && resized.ws_row == 24 &&
+              t->p.slave.winsize.ws_col == 80,
+          "a size for the port sizes its terminal");
+
+    post(2, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
+    model_ctl_give();
+    irq();
+    check(t->closed == 1 && !node("hvc1") && vcon_hvc[1] == 0 && term_node("hvc0"),
+          "the port removed lets its terminal go, with its node and number");
+    announce(2);
+    model_ctl_give();
+    irq();
+    check(tty_of("hvc1") && node("hvc1"), "and added again it is hvc1 again");
+}
+
+/**
+ * A console port that comes after the boot on a machine without a UART:
+ * the device has only a generic port at the boot, and its third port, a
+ * virtconsole, is added later; it becomes hvc0, the line the boot line
+ * names, and is given the log's ring then, as Linux gives a console
+ * registered late the buffer.
+ */
+static void late_console(void)
+{
+    fresh("console=hvc0", MULTI);
+    m.config[VIRTIO_CONSOLE_CFG_MAX_PORTS] = 3;
+    m.port[0].exists = 0;
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    check(replays == 0 && !node("hvc0") &&
+              strstr(logged, "console: none: console=hvc0 names no port now"),
+          "with no console port the log has no line");
+    m.port[2].exists = 1;
+    m.port[2].console = 1;
+    m.port[2].host_open = 1;
+    announce(2);
+    model_ctl_give();
+    irq();
+    check(term_node("hvc0") && P(2)->hvc == 0 && vcon_in == P(2) && replays == 1 &&
+              host_read(2, "REPLAY\r\n"),
+          "the console port added late is hvc0, the line, and is given the log's ring");
+    check(strstr(logged, "console: enabled: hvc0, port 2 of virtio0\n") != 0, "the log names it");
+    host_write(2, "k", 1);
+    irq();
+    check(serial_rx_pending() == 1 && serial_rx_take() == 'k', "its input is the console's");
+}
+
+/**
+ * The emergency write of the configuration, for any device that offers
+ * it: until the port `console=hvc0` names comes, the console's output goes
+ * to the first such device's `emerg_wr` beside the UART, which QEMU gives
+ * its first console port; it stops once the port carries the log; and a
+ * panic that finds the queue of a port of the second device held writes
+ * that device's `emerg_wr`.
+ */
+static void emergency(void)
+{
+    fresh("console=hvc0", MULTI | EMERG | UART);
+    m.silent = 1;
+    check(virtio_console_start() == 1, "the boot binds a device that announces nothing yet");
+    m.nemerg = 0;
+    m.port[0].nout = 0;
+    say("early", 5);
+    serial_flush();
+    check(m.nemerg == 5 && memcmp(m.emerg, "early", 5) == 0 && host_read(0, "early") &&
+              uart_sent("early") && counters().emerg == 5,
+          "the console's output goes to emerg_wr and the UART until the port comes");
+    m.silent = 0;
+    announce(0);
+    announce(1);
+    model_ctl_give();
+    irq();
+    check(term_node("hvc0"), "the port comes");
+    say("port", 4);
+    serial_flush();
+    check(m.nemerg == 5 && host_read(0, "earlyport"), "and the log goes by its queue alone");
+
+    fresh("console=vport1p1", MULTI | EMERG);
+    models[1].plugged = 1;
+    models[1].port[1].name = "other";
+    check(virtio_console_start() == 2, "the boot binds both consoles");
+    irq();
+    cur = &models[1];
+    m.port[0].nout = 0;
+    panicking = 1;
+    P(0)->dev->next->port[1].txq->lock.locked = 1;
+    say("PANIC", 5);
+    serial_flush();
+    check(m.nemerg == 5 && memcmp(m.emerg, "PANIC", 5) == 0 && host_read(0, "PANIC"),
+          "a panic that finds the second device's port held writes its emerg_wr");
+    P(0)->dev->next->port[1].txq->lock.locked = 0;
+    panicking = 0;
+    cur = &models[0];
+    check(m.nemerg == 0, "and not the first's");
 }
 
 /** A device that announces its ports only after the boot's wait, one
@@ -1716,7 +2447,7 @@ static void late_and_absent(void)
     check(cycles - before >= vcon_cycles(VCON_BOOT_WAIT_MS) &&
               cycles - before <= vcon_cycles(VCON_BOOT_WAIT_MS) + 4u * STEP_CYCLES,
           "after a wait of 2 s for the port");
-    check(strstr(logged, "console: waiting: vport0p1: virtio0 has not announced it in 2000 ms") &&
+    check(strstr(logged, "console: waiting: vport0p1: no device has announced it in 2000 ms") &&
               strstr(logged, "console: none: console=vport0p1 names no port now"),
           "which the log records, with the console left on the UART");
     for (i = 0; i < 2; i++) {
@@ -1724,7 +2455,7 @@ static void late_and_absent(void)
     }
     model_ctl_give();
     irq();
-    check(virtio_console_node("vport0p1") && replays == 0,
+    check(term_node("vport0p1") && replays == 0,
           "the port announced later is the line from then on");
     say("late", 4);
     serial_flush();
@@ -1736,13 +2467,13 @@ static void late_and_absent(void)
     before = cycles;
     check(virtio_console_start() == 1, "the boot binds a device without port 1");
     irq();
-    check(!virtio_console_node("vport0p1") && !virtio_console_node("hvc0") &&
+    check(!term_node("vport0p1") && !term_node("hvc0") &&
               strstr(logged, "console: none: console=vport0p1 names no port now"),
           "whose port 0 is not the port asked for");
     post(1, VIRTIO_CONSOLE_PORT_ADD, 1, 0, 0);
     model_ctl_give();
     irq();
-    check(!virtio_console_node("vport0p1"), "a port without queues is left");
+    check(!term_node("vport0p1"), "a port without queues is left");
 
     fresh("console=hvc0", UART);
     m.plugged = 0;
@@ -1751,10 +2482,10 @@ static void late_and_absent(void)
           "and the log says where the console stays");
     say("uart", 4);
     serial_flush();
-    check(uart_sent("uart") && !virtio_console_node("hvc0"), "which is the UART");
+    check(uart_sent("uart") && !term_node("hvc0"), "which is the UART");
 
     fresh("quiet", MULTI | UART);
-    check(virtio_console_start() == 1 && !virtio_console_node("hvc0") && nlogged > 0 &&
+    check(virtio_console_start() == 1 && !term_node("hvc0") && nlogged > 0 &&
               !strstr(logged, "console: enabled"),
           "with no console= the device is bound and the console untouched");
     irq();
@@ -1779,7 +2510,7 @@ static void unbind_pending(void)
     restore_irqs = 1;
     m.dev.removed(&m.dev);
     restore_irqs = 0;
-    check(_line == 0 && !virtio_console_node("vport0p1"),
+    check(_line == 0 && !term_node("vport0p1"),
           "the pending message does not give the port the console again");
     check(m.status == 0 && m.dma_out == 0 && m.puts == 1,
           "the device is reset and every page given back");
@@ -1802,7 +2533,7 @@ static void shutdown(void)
     check(host_read(1, "last words"), "the shutdown sends what the port was given");
     check(m.status == 0 && strstr(logged, "virtio_console: shutdown: virtio0: reset\n") != 0,
           "and resets the device, which the log says");
-    check(_line == 0 && !virtio_console_node("vport0p1") &&
+    check(_line == 0 && !term_node("vport0p1") &&
               strstr(logged, "console: disabled: vport0p1: the system stops\n") != 0 &&
               hangups == 0,
           "the console leaves the port with no hangup");
@@ -1833,7 +2564,7 @@ static void control_late(void)
     irq();
     check(m.ready && m.port[0].ready && m.port[1].ready && m.port[1].guest_open,
           "the device takes it later and every port is answered and opened");
-    check(virtio_console_node("vport0p1"), "and the port carries the console");
+    check(term_node("vport0p1"), "and the port carries the console");
     host_write(1, "in", 2);
     irq();
     check(serial_rx_pending() == 2, "with its input");
@@ -1864,8 +2595,7 @@ static void polled(void)
     fresh("console=vport0p1", MULTI | UART);
     m.polled = 1;
     check(virtio_console_start() == -EIO, "a device with no interrupt is refused");
-    check(!virtio_console_node("vport0p1") && _line == 0 && m.status == 0 && m.puts == 1 &&
-              m.dma_out == 0,
+    check(!term_node("vport0p1") && _line == 0 && m.status == 0 && m.puts == 1 && m.dma_out == 0,
           "with no line, the device reset and given back");
     check(strstr(logged, "virtio_console: refused: virtio0: no interrupt") != 0,
           "and the log says why");
@@ -1884,7 +2614,7 @@ static void port_hangup(void)
     post(1, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
     model_ctl_give();
     irq();
-    check(hangups == 1 && serial_rx_pending() == 0 && !virtio_console_node("vport0p1"),
+    check(hangups == 1 && serial_rx_pending() == 0 && !term_node("vport0p1"),
           "its removal drops its input and hangs the terminal up");
 }
 
@@ -1901,13 +2631,13 @@ static void late_replay(void)
     announce(1);
     model_ctl_give();
     irq();
-    check(virtio_console_node("vport0p1") && replays == 1 && host_read(1, "REPLAY\r\n"),
+    check(term_node("vport0p1") && replays == 1 && host_read(1, "REPLAY\r\n"),
           "the port that comes late is given the log's ring");
     post(1, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
     announce(1);
     model_ctl_give();
     irq();
-    check(virtio_console_node("vport0p1") && replays == 1, "and not again when it comes back");
+    check(term_node("vport0p1") && replays == 1, "and not again when it comes back");
 }
 
 /** A console port found after another took hvc0: each keeps its number,
@@ -1919,16 +2649,14 @@ static void hvc_numbers(void)
     m.port[1].console = 1;
     check(virtio_console_start() == 1, "the boot binds the console");
     irq();
-    check(virtio_console_node("hvc0") && vcon.in == &vcon.port[1],
-          "the first console port, port 1, is hvc0");
+    check(term_node("hvc0") && vcon_in == P(1), "the first console port, port 1, is hvc0");
     m.port[0].exists = 1;
     announce(0);
     model_ctl_give();
     irq();
-    check(vcon.port[0].console && vcon.port[0].hvc == 1 && vcon.port[1].hvc == 0,
+    check(P(0)->console && P(0)->hvc == 1 && P(1)->hvc == 0,
           "port 0, a console port found later, is hvc1");
-    check(virtio_console_node("hvc0") && !virtio_console_node("hvc1"),
-          "and /dev/hvc0 stays the console's node");
+    check(term_node("hvc0") && !term_node("hvc1"), "and /dev/hvc0 stays the console's node");
     m.port[1].nout = 0;
     say("one", 3);
     serial_flush();
@@ -1943,8 +2671,7 @@ static void two_outputs(void)
     fresh("console=vport0p1 console=hvc0", MULTI);
     check(virtio_console_start() == 1, "the boot binds the console");
     irq();
-    check(virtio_console_node("hvc0") && !virtio_console_node("vport0p1"),
-          "the input is the port named last");
+    check(term_node("hvc0") && !term_node("vport0p1"), "the input is the port named last");
     check(strstr(logged, "console: enabled: vport0p1, port 1 of virtio0, for output alone\n") &&
               strstr(logged, "console: enabled: hvc0, port 0 of virtio0\n"),
           "the log names both");
@@ -1960,7 +2687,7 @@ static void two_outputs(void)
     post(1, VIRTIO_CONSOLE_PORT_REMOVE, 1, 0, 0);
     model_ctl_give();
     irq();
-    check(hangups == 0 && virtio_console_node("hvc0"), "the output port goes without a hangup");
+    check(hangups == 0 && term_node("hvc0"), "the output port goes without a hangup");
     say("one", 3);
     serial_flush();
     check(host_read(0, "REPLAY\r\nbothone"), "and the other carries the log on");
@@ -1986,6 +2713,11 @@ int main(void)
         panic_queue_held();
         second();
         no_memory();
+        third_port();
+        vport();
+        hvc_tty();
+        late_console();
+        emergency();
         late_and_absent();
         unbind_pending();
         shutdown();
