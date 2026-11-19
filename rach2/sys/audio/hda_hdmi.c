@@ -1261,7 +1261,8 @@ static uint32_t hh_fill(uint32_t slot)
         if (need > 0) {
             s->transfer(s, hh_stage, need * hh_sframe);
         }
-        for (i = 0, k = 0; i < chunk; i++) {
+        k = 0;
+        for (i = 0; i < chunk; i++) {
             while (hh_acc >= hh_rate) {
                 hh_prev[0] = hh_cur[0];
                 hh_prev[1] = hh_cur[1];
