@@ -40,8 +40,8 @@ extern char **environ;
 #define WEIGHT_NICE19 15.0
 #define WEIGHT_IDLE   3.0
 
-/* The sleeper of the wake row: 1 ms asleep and 0.1 ms of its own processor
- * time, this many times. */
+/* The sleeper of the wake row: 1 ms asleep and 0.1 ms running (`run_for`),
+ * this many times. */
 #define WAKE_SLEEP_NS 1000000L
 #define WAKE_RUN_NS   100000LL
 #define WAKE_ROUNDS   2000
@@ -225,6 +225,25 @@ static long long thread_ns(void)
 
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
     return (long long)t.tv_sec * NS_PER_SEC + t.tv_nsec;
+}
+
+/**
+ * Spin for `ns` nanoseconds of the monotonic clock. A short run is timed by
+ * the monotonic clock, not the thread's processor clock, which Rach2 counts
+ * in whole ticks of 4 ms, so that a run of 0.1 ms lasts 0.1 ms on every
+ * kernel; on Linux the two agree here, since nothing preempts the thread
+ * within so short a run.
+ */
+static void run_for(long long ns)
+{
+    struct timespec t;
+    long long until;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    until = (long long)t.tv_sec * NS_PER_SEC + t.tv_nsec + ns;
+    do {
+        clock_gettime(CLOCK_MONOTONIC, &t);
+    } while ((long long)t.tv_sec * NS_PER_SEC + t.tv_nsec < until);
 }
 
 /** Parse the value of a /proc/PID/sched line, `ms.ns` for a time (returned
@@ -622,7 +641,6 @@ static void row_wakes(void)
     sleeper = fork();
     if (sleeper == 0) {
         struct timespec t;
-        long long until;
 
         close(done[0]);
         if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent || pin(1u << 1) != 0)
@@ -632,9 +650,7 @@ static void row_wakes(void)
             t.tv_nsec = WAKE_SLEEP_NS;
             /* interval: the sleeper's 1 ms sleep is the workload */
             nanosleep(&t, NULL);
-            until = thread_ns() + WAKE_RUN_NS;
-            while (thread_ns() < until) {
-            }
+            run_for(WAKE_RUN_NS);
         }
         if (write(done[1], "d", 1) != 1)
             _exit(1);
@@ -971,14 +987,11 @@ static void row_suspend(void)
     sleeper = fork();
     if (sleeper == 0) {
         struct timespec t;
-        long long until;
 
         if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent || pin(1u << 2) != 0)
             _exit(1);
         for (;;) {
-            until = thread_ns() + 5 * WAKE_RUN_NS;
-            while (thread_ns() < until) {
-            }
+            run_for(5 * WAKE_RUN_NS);
             t.tv_sec = 0;
             t.tv_nsec = WAKE_SLEEP_NS / 5;
             /* interval: the delayed thread's sleep is the workload */
