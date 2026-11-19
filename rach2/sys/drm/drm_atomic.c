@@ -2929,6 +2929,13 @@ int32_t drm_atomic_set_config_state(struct drm_mode_set *set, struct drm_atomic_
     return rc;
 }
 
+int32_t drm_atomic_commit_config(struct drm_atomic_state *state)
+{
+    int32_t rc = conflicting_encoders(state, 1);
+
+    return rc != 0 ? rc : drm_atomic_commit(state);
+}
+
 int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
 {
     struct drm_atomic_state *state = drm_atomic_state_alloc(set->crtc->dev);
@@ -2939,10 +2946,7 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set)
     }
     rc = drm_atomic_set_config_state(set, state);
     if (rc == 0) {
-        rc = conflicting_encoders(state, 1);
-    }
-    if (rc == 0) {
-        rc = drm_atomic_commit(state);
+        rc = drm_atomic_commit_config(state);
     }
     drm_atomic_state_free(state);
     return rc;
