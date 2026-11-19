@@ -4,7 +4,8 @@
  *
  * host-deps: rach2/sys/proc/fair.c rach2/sys/proc/fair_group.c
  * host-deps: rach2/sys/proc/autogroup.c rach2/sys/proc/pelt.c
- * host-deps: rach2/sys/lib/rbtree.c rach2/sys/lib/kstring.c rach2/sys/tick.c
+ * host-deps: rach2/sys/lib/rbtree.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c rach2/sys/tick.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-cflags: -DRACH2_HOST_CPU
  *
@@ -305,14 +306,15 @@ static void row_two_sessions(int on)
 /**
  * setsid in a thread group of three: the running thread and a queued one
  * move into the new group's queues, with the group's entity current in the
- * root queue; a thread that has begun to end stays in the root group, and
- * a second setsid frees the first group only once that thread's end lets
- * it go.
+ * root queue, and a thread that has begun to end stays in the root group.
+ * A second setsid, after one of the group's threads has begun to end,
+ * moves only the live one, and the first group goes at that thread's exit.
  */
 static void row_setsid_threads(void)
 {
     struct task_group *tg;
     struct autogroup *first;
+    int i;
 
     setup(1);
     thread_new(0, 0, 0, 0);
@@ -324,11 +326,15 @@ static void row_setsid_threads(void)
     thread_start(&threads[2], &threads[0]);
     thread_start(&threads[3], &threads[3]);
     run_cpu(0, 20000000u, 100000u);
-    CHECK(running[0] != NULL, "a thread runs");
+    for (i = 0; i < 100 && running[0] != &threads[0] && running[0] != &threads[1]; i++) {
+        run_cpu(0, 100000u, 100000u);
+    }
+    CHECK(running[0] == &threads[0] || running[0] == &threads[1],
+          "a live thread of the first process runs");
     threads[2].futex_exit_state = 2;
 
     kicks = 0;
-    autogroup_setsid(running[0] == &threads[2] ? &threads[0] : running[0]);
+    autogroup_setsid(running[0] ? running[0] : &threads[0]);
     first = groups[0].autogroup;
     CHECK(first != NULL && first->refs == 1, "setsid gives the thread group a group");
     tg = first ? first->tg : NULL;
@@ -351,15 +357,21 @@ static void row_setsid_threads(void)
     run_cpu(0, 20000000u, 100000u);
 
     stop_cpu(0);
+    threads[1].futex_exit_state = 2;
     autogroup_setsid(&threads[0]);
     CHECK(groups[0].autogroup != first, "a second setsid makes another group");
+    CHECK(threads[0].sched_task_group != tg, "the live thread moves to the new group");
+    CHECK(threads[1].sched_task_group == tg, "a thread that has begun to end keeps its group");
     CHECK(autogroup_count() == 2, "the old group waits for the thread still in it");
     groups[0].live--;
     autogroup_exit(&threads[2]);
     CHECK(autogroup_count() == 2, "an ended thread outside the old group frees nothing");
+    groups[0].live--;
+    autogroup_exit(&threads[1]);
+    CHECK(autogroup_count() == 1, "the old group goes with the last thread in it");
+    CHECK(threads[1].se.cfs_rq == &fair_rqs[0].cfs, "the ended thread is back in the root group");
     run_cpu(0, 20000000u, 100000u);
     stop_cpu(0);
-    CHECK(autogroup_count() == 1, "the old group goes once no thread or queue holds it");
     teardown();
 }
 
