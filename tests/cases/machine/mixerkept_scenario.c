@@ -77,8 +77,9 @@ static int restart(struct boot *b, const char *line, const char *id)
 
 /**
  * Set the volume to 5 and reboot through init; read 5 back and the kept
- * file; set 7, remove the file and reboot past init, which then saves
- * nothing; and read the driver's level of the first boot again.
+ * file; remove the file, which init writes again only when a level
+ * changes, and reboot past init, which then saves nothing; and read the
+ * driver's level of the first boot again.
  */
 static void kept(struct lc *l)
 {
@@ -107,8 +108,7 @@ static void kept(struct lc *l)
         return;
     snprintf(detail, sizeof(detail), "/var/lib/mixer keeps '%s', not 'vol 5:5'", got);
     lc_assert(l, "file", strcmp(got, "vol 5:5") == 0, detail);
-    if (!ask(&b, "mixer vol 7; rm /var/lib/mixer; echo GONE\"\"=$(ls /var/lib)\r", "GONE", got,
-             sizeof(got)))
+    if (!ask(&b, "rm /var/lib/mixer; echo GONE\"\"=$(ls /var/lib)\r", "GONE", got, sizeof(got)))
         return;
     if (!restart(&b, "reboot -f\r", "reset-unsaved"))
         return;
