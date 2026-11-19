@@ -245,7 +245,6 @@ rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one 
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat_node lines 252 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:copy_from_file params 8 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:copy_from_pipe params 7 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:sys_copy_file_range complexity 27 one system call's contract, its checks in the order the manual page lists the errors

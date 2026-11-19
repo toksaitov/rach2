@@ -15,8 +15,8 @@
  * the old place.
  *
  * The first rows count every access a body makes to the image: through the
- * core's backend for a read, a write and a truncate, at `pc_sync_wait` for an
- * fsync, and at each step of the walk for a readdir. At every one of them the
+ * core's backend for a read, a write, a truncate and each header a readdir
+ * reads, and at `pc_sync_wait` for an fsync. At every one of them the
  * caller must hold the mount's lock, and when the operation returns the lock
  * must be free again.
  *
@@ -261,21 +261,6 @@ void k_panic(const char *message)
     exit(2);
 }
 
-/**
- * A step of the readdir walk, which reads the next node's header.
- *
- * The core's own step folds the address through the kernel's 32-bit
- * `uintptr_t`, which on a 64-bit host drops the upper half of the image's
- * address, so this one steps by offset.
- */
-static krffs_node_t *watched_next_node(krffs_file_system_t *fs, krffs_node_t *node)
-{
-    uint64_t next = krffs_offset_of(node) + node->size;
-
-    at_image();
-    return krffs_node_of(next >= fs->size ? next - fs->size : next);
-}
-
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
 
@@ -294,7 +279,6 @@ static int sched_spin_on(const struct process *owner, int cpu)
     return 0;
 }
 
-#define krffs_get_next_node watched_next_node
 #include "kfs_data.inc"
 
 /* The repair in krffs.c indexes names with these; no row here reaches it,
@@ -310,7 +294,6 @@ void kfree(void *p)
 {
     (void)p;
 }
-#undef krffs_get_next_node
 
 /**
  * Lay a fresh file system into the image, mount it as the root, and put
