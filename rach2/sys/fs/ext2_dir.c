@@ -954,30 +954,56 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
     return ext2_write_bytes(em, off, pair, used, WRITE_THROUGH | WRITE_KIND(READ_DATA));
 }
 
+/* How `dir_commit` keeps a change of a directory's entries in order. */
+#define DIR_BACK  0 /* written back, with no order: nothing after it waits */
+#define DIR_ORDER 1 /* the operation's later changes reach the device after it */
+#define DIR_NOW   2 /* on the device before the call returns */
+
 /**
- * Write bytes [off, off + len) of the volume, a directory's entries just
- * changed, to the device now on a mount that writes back, as Linux's
- * `ext2_handle_dirsync` writes a directory's pages after every change of
- * its entries, with no test of `dirsync` (fs/ext2/dir.c:440-447, called at
- * 470, 557, 611 and 650 in Linux 6.12.115). So a removed name is on the
- * device before the inode it named loses its count, is freed and is given
- * to another file, and a new name, a pointed entry or a new `..` before
- * the operation's next step. A strict mount wrote the bytes through
- * already. 0; -EROFS without a write once a write on the device has
- * failed, as a strict mount's next write is, so that an operation in
- * progress stops there; or the write's -errno, with the block still dirty.
- *
- * As in Linux, the disk's cache is not flushed but before an `after`: the
- * blocks the directory block waits for are written before it, their
- * requests answered before its own is sent (`bcache_sync_block_ordered`),
- * and `fsync`, `sync` and an
- * unmount put them on the medium. Linux next writes the
- * directory's inode; here `inode_commit` writes it where a later step
- * depends on it and when a mkdir raised its count, and otherwise it writes
- * back, since a stop that loses what is left, its times or another count,
- * loses no name, and the mount's check sets a count to its names.
+ * Order a block of the volume after its write at the cache: the caller's
+ * operation's later changes of inode tables and directories reach the
+ * device only after block `blk` as it stands now (`bcache_order_after`).
+ * The operation does not wait. When the cache keeps no more orders for the
+ * caller, or has no memory for one, the block is written now, with what it
+ * waits for before it and without the disk's flush
+ * (`bcache_sync_block_ordered`), which gives the same order. 0, or the
+ * write's -errno, with the block still dirty.
  */
-static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
+static int order_after(struct ext2_mount *em, uint64_t blk)
+{
+    int rc = bcache_order_after(em->dev, blk);
+
+    return rc == 0 ? 0 : bcache_sync_block_ordered(em->dev, blk);
+}
+
+/**
+ * Keep in order the change of bytes [off, off + len) of the volume, a
+ * directory's entries, on a mount that writes back, as `how` says. A strict
+ * mount wrote the bytes through already. 0; -EROFS without a write once a
+ * write on the device has failed, as a strict mount's next write is, so
+ * that an operation in progress stops there; or a write's -errno, with the
+ * block still dirty.
+ *
+ * DIR_NOW writes the block to the device, after the blocks it waits for,
+ * their requests answered before its own is sent, without the disk's flush
+ * but before an `after` (`bcache_sync_block_ordered`), as Linux's
+ * `ext2_handle_dirsync` writes a directory's pages after every change of
+ * its entries (fs/ext2/dir.c:440-447, called at 470, 557, 611 and 650 in
+ * Linux 6.12.115). A removed name takes it, so that the name is on the
+ * device before the inode it named loses its count, is freed, gives up its
+ * blocks or is given to another file: those changes are not all of blocks
+ * that carry orders. `fsync`, `sync` and an unmount flush what it leaves in
+ * the disk's cache.
+ *
+ * A name added takes DIR_ORDER when the operation's next step depends on
+ * it, as a rename's removal of the old name does, and DIR_BACK when it is
+ * the last step that matters, as in a create: the entry then waits for the
+ * inode it names (`order_after` in `inode_commit`), and nothing waits for
+ * the entry. So a create returns without a write of the device, as on
+ * Linux's ext4 driver, which Debian's kernel mounts ext2 with; Linux's own
+ * ext2 waits for the directory there.
+ */
+static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len, int how)
 {
     uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
     uint64_t end = (off + len - 1) >> BCACHE_BLOCK_SHIFT;
@@ -989,47 +1015,42 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len)
     if (em->dev->flags & BLOCK_WRITE_FAILED) {
         return -EROFS;
     }
-    for (; rc == 0 && blk <= end; blk++) {
-        rc = bcache_sync_block_ordered(em->dev, blk);
+    for (; rc == 0 && how != DIR_BACK && blk <= end; blk++) {
+        rc = how == DIR_NOW ? bcache_sync_block_ordered(em->dev, blk) : order_after(em, blk);
     }
     return rc;
 }
 
 /**
- * Write the table block that holds inode `n`, which the caller has just
- * stored, to the device now on a mount that writes back, as Linux's
- * `ext2_handle_dirsync` follows a directory's pages with
- * `sync_inode_metadata` (fs/ext2/dir.c:440-447 in Linux 6.12.115), for a
- * step that depends on the inode: a grown directory's new pointer, size and
- * `i_blocks` before a name in the new block lets another go, a cleared
- * index flag before the entries change, a new inode before the entry that
- * names it, so that no stop leaves an entry naming a zeroed inode, and a
- * count raised for a new name, a link's, a rename's or a new directory's
- * parent's, before the name, so that a stop leaves a count above the names
- * and never below, which a later removal of a name would take to 0 while
- * another still names the inode. The cache writes the
- * block after the dirty blocks it may name (`bcache_sync_last`,
- * `table_names`): the shared blocks dirtied before its last mark that are
- * not `after`, such as bitmaps, descriptors and directory and pointer
- * blocks, and the blocks of a regular file beside it in the table block
- * that allocated or freed since its last write. Those are what the write
- * costs past its own request: a directory's own blocks were written as
- * they changed (`dir_commit`). As there, nothing is flushed but before an
- * `after`: each request is answered before one that waits for it is sent
- * (`bcache_sync_block_ordered`), the order a stop of the kernel finds on
- * the disk. A strict mount wrote the
- * inode through already.
+ * Order after the table block that holds inode `n`, which the caller has
+ * just stored, the steps of the operation that depend on it, on a mount
+ * that writes back (`order_after`), as Linux's `ext2_handle_dirsync`
+ * follows a directory's pages with `sync_inode_metadata` (fs/ext2/dir.c:
+ * 440-447 in Linux 6.12.115): a grown directory's new pointer, size and
+ * `i_blocks` before a name in the new block, a cleared index flag before
+ * the entries change, a new inode before the entry that names it, so that
+ * no stop leaves an entry naming a zeroed inode, and a count raised for a
+ * new name, a link's, a rename's or a new directory's parent's, before the
+ * name, so that a stop leaves a count above the names and never below,
+ * which a later removal of a name would take to 0 while another still
+ * names the inode. The cache writes the table block after the dirty blocks
+ * it may name (`bcache_sync_last`, `table_names`): the shared blocks
+ * dirtied before its last mark that are no `after` and no directory's
+ * entries, such as bitmaps, descriptors and pointer blocks, and the blocks
+ * of a regular file beside it in the table block that allocated or freed
+ * since its last write; and those changes wait for it in turn. A strict
+ * mount wrote the inode through already.
  *
  * A file the file-write batch holds was not stored into the table block
  * (`ext2_writeback_keeps`), so the batch is drained first, which encodes the
  * node as memory has it into the block, its raised count among it, and puts
  * the blocks the batch's pointers name in the cache before the block. Else a
- * link of a file with a buffered write and an open description would write
- * the old count here and the new name after it, and a stop between would
- * leave two names and a count of one. The caller holds `n`'s lock, under
- * which alone `n` joins the batch, so it stays out of it until the write.
- * 0; -EROFS without a write once a write on the device has failed; the
- * drain's -errno; or the write's, with the block still dirty.
+ * link of a file with a buffered write and an open description would order
+ * the name after the old count, and a stop between would leave two names
+ * and a count of one. The caller holds `n`'s lock, under which alone `n`
+ * joins the batch, so it stays out of it until the order is kept. 0;
+ * -EROFS without a write once a write on the device has failed; the
+ * drain's -errno; or a write's, with the block still dirty.
  */
 static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
 {
@@ -1047,14 +1068,18 @@ static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
             return rc;
         }
     }
-    return bcache_sync_block_ordered(em->dev, ext2_inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT);
+    return order_after(em, ext2_inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT);
 }
 
 /**
  * Write the new block at byte `off` of the volume, a directory's or a
  * symlink's target's, zeroed, with `head`, its first `len` bytes, over the
- * zeros, and on a mount that writes back to the device before anything
- * names it (`dir_commit`), without the disk's flush. The zeros take no
+ * zeros, and on a mount that writes back keep it before what names it, as
+ * `how` says (`dir_commit`): DIR_ORDER when the inode names it, whose
+ * table block the operation changes next, and DIR_NOW when a pointer block
+ * does, since a pointer block's rules (`bcache_dirty_pointer`) do not wait
+ * for a directory's entries and the block is in place there already. The
+ * zeros take no
  * `after` mark: a block freed and taken again cannot be overwritten on the
  * medium while an old pointer there still names it, since the allocator
  * sets no bit in a bitmap block that holds a free's cleared bits not yet
@@ -1063,7 +1088,8 @@ static int inode_commit(struct ext2_mount *em, const struct ext2_node *n)
  * flush between when one of them was answered without it (bcache.h). 0, or
  * -errno.
  */
-static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *head, uint32_t len)
+static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *head, uint32_t len,
+                            int how)
 {
     int rc = ext2_write_bytes(em, off, 0, em->block_size, 0);
 
@@ -1071,21 +1097,20 @@ static int shared_block_new(struct ext2_mount *em, uint64_t off, const void *hea
         rc = ext2_write_bytes(em, off, head, len, WRITE_THROUGH | WRITE_KIND(READ_DATA));
     }
     if (rc == 0) {
-        rc = dir_commit(em, off, em->block_size);
+        rc = dir_commit(em, off, em->block_size, how);
     }
     return rc;
 }
 
 /**
- * Make the stored inode of directory `d`, whose entries are about to
- * change, true of them before they do: when it is marked indexed, clear
+ * Make the stored inode of directory `d`, whose entries are about to change,
+ * true of them before they do: when it is marked indexed, clear
  * `EXT2_INDEX_FL`, and when it has changed past its last store (its mark,
- * `ext2_node_dirty`), keep the change; then store the inode with
- * WRITE_THROUGH and, on a mount that writes back, write it to the device
- * (`inode_commit`). Every change of a directory's entries comes here
- * first, so a fenced directory (`d->fenced`), whose blocks cannot be
- * trusted, is -EIO here before any entry is written. 0, or -errno, with the
- * entries untouched.
+ * `ext2_node_dirty`), keep the change; then store the inode with WRITE_THROUGH
+ * and, on a mount that writes back, order the entries' change after it
+ * (`inode_commit`). Every change of a directory's entries comes here first, so
+ * a fenced directory (`d->fenced`), whose blocks cannot be trusted, is -EIO
+ * here before any entry is written. 0, or -errno, with the entries untouched.
  *
  * This driver keeps the linear entries only, which an index leaves readable
  * as they are: the index root lies in the slack of `..`, and each index
@@ -1142,14 +1167,16 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
 }
 
 /**
- * Add `name`, of `name_len` bytes, naming `ino` of file type `ftype`, to
- * directory `d` in a new block at its end, for `dir_add`, which found no room:
+ * Add `name` naming `ino` of file type `ftype` to directory `d` in a new
+ * block at its end, for `dir_add`, which found no room:
  * the block allocated and written with one empty entry spanning it
  * (`shared_block_new`), chained with `i_blocks` and covered by the size in one
  * store of the inode, and the entry written last. On a mount that writes back
- * the inode reaches the device before the entry is written (`dir_settle`), so
- * that a name the caller's next step depends on, such as a rename's new one
- * before the old goes, is reachable on the device when it is; a failure there
+ * the entry waits in the cache for the inode (`dir_settle`), and what the
+ * caller's next step orders after the entry waits for both, so that a name
+ * that step depends on, such as a rename's new one before the old goes, is
+ * reachable on the device when it is; `how` keeps the entry as `dir_commit`
+ * says. A failure there
  * leaves an empty block and no name, so that a caller that frees the inode it
  * would have named frees one with no name, and leaves the directory marked
  * (`ext2_node_dirty`), so that the next change of its entries, which may put
@@ -1165,9 +1192,10 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
  * -ENOSPC, decided before any block is taken for the block and the pointer
  * blocks its index can need, or -errno.
  */
-static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t name_len,
-                    uint32_t ino, uint32_t ftype)
+static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t ino,
+                    uint32_t ftype, int how)
 {
+    uint32_t name_len = (uint32_t)k_strlen(name);
     uint32_t index = (uint32_t)(d->size >> em->block_shift);
     uint32_t b;
     uint64_t off, free;
@@ -1191,7 +1219,7 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
     LE16_PUT(head + 4, em->block_size);
     head[6] = 0;
     head[7] = 0;
-    rc = shared_block_new(em, off, head, 8);
+    rc = shared_block_new(em, off, head, 8, index < EXT2_NDIR ? DIR_ORDER : DIR_NOW);
     if (rc != 0) {
         return rc;
     }
@@ -1203,15 +1231,15 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
     }
     d->add_from = index << em->block_shift;
     rc = dirent_write(em, off, ino, em->block_size, name, name_len, ftype);
-    return rc == 0 ? dir_commit(em, off, dirent_len(name_len)) : rc;
+    return rc == 0 ? dir_commit(em, off, dirent_len(name_len), how) : rc;
 }
 
 /**
  * Add `name` naming `ino`, of file type `ftype`, to directory `d`: in the
  * first empty record with room, whole, or the first entry with room behind
  * its name, split; else in a new block (`dir_grow`). The entry itself is
- * the last write, and on a mount that writes back reaches the device before
- * the call returns (`dir_commit`). 0,
+ * the last write, and on a mount that writes back is kept as `how` says
+ * (`dir_commit`). 0,
  * -ENOENT for a removed directory, -ENAMETOOLONG, -EFBIG for a directory
  * that would pass 4 GiB less a block, -ENOSPC, decided before any block is
  * taken for the block and the pointer blocks its index can need, or -errno.
@@ -1222,7 +1250,7 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
  * name before the directory grows.
  */
 static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t ino,
-                   uint32_t ftype)
+                   uint32_t ftype, int how)
 {
     uint32_t name_len = (uint32_t)k_strlen(name);
     uint32_t need = dirent_len(name_len);
@@ -1282,10 +1310,10 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
                                  (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
             rc = dirent_split(em, off, &sc, entry, used);
         }
-        return rc == 0 ? dir_commit(em, off, sc.rec_len) : rc;
+        return rc == 0 ? dir_commit(em, off, sc.rec_len, how) : rc;
     }
     window_close(&w);
-    return dir_grow(em, d, name, name_len, ino, ftype);
+    return dir_grow(em, d, name, ino, ftype, how);
 }
 
 /** Remove the entry `sc` at byte `at` of `d`, whose predecessor in its block
@@ -1309,7 +1337,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
         if (rc == 0) {
             rc = ext2_write_bytes(em, off, zero, 4, WRITE_THROUGH | WRITE_KIND(READ_DATA));
         }
-        return rc == 0 ? dir_commit(em, off, 4) : rc;
+        return rc == 0 ? dir_commit(em, off, 4, DIR_NOW) : rc;
     } else {
         struct ext2_scan ps;
         uint32_t cursor = prev_at;
@@ -1325,7 +1353,7 @@ static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at
         }
         LE16_PUT(raw, ps.rec_len + sc->rec_len);
         rc = ext2_write_bytes(em, off + 4, raw, 2, WRITE_THROUGH | WRITE_KIND(READ_DATA));
-        return rc == 0 ? dir_commit(em, off + 4, 2) : rc;
+        return rc == 0 ? dir_commit(em, off + 4, 2, DIR_NOW) : rc;
     }
 }
 
@@ -1382,7 +1410,7 @@ static int dir_set_dotdot(struct ext2_mount *em, struct ext2_node *d, uint32_t p
             dir_changed(d);
             LE32_PUT(raw, parent);
             rc = ext2_write_bytes(em, off, raw, 4, WRITE_THROUGH | WRITE_KIND(READ_DATA));
-            return rc == 0 ? dir_commit(em, off, 4) : rc;
+            return rc == 0 ? dir_commit(em, off, 4, DIR_ORDER) : rc;
         }
     }
 }
@@ -1669,8 +1697,10 @@ static void dir_lose_parent(struct ext2_mount *em, struct ext2_node *d, int lose
 /**
  * The `create` of `vfs_ops`: a new regular file `name` in `dir`, the root for
  * NULL, with the permission bits of `mode`: the inode allocated and written
- * whole, and to the device on a mount that writes back (`inode_commit`), then
- * the entry that names it, then the directory's times into the cache. A
+ * whole, then the entry that names it, then the directory's times into the
+ * cache. On a mount that writes back the entry's block waits in the cache
+ * for the inode's (`inode_commit`), and the call writes nothing to the
+ * device unless the directory grows through a pointer block (`dir_grow`). A
  * failure to add the entry frees the inode (`inode_abandon`); a failure to
  * store the times is not the call's, since the entry is there, and is not
  * reported again: a
@@ -1715,8 +1745,9 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
     sleep_lock_subclass(0);
     rc = inode_commit(em, n);
     if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, 1);
+        rc = dir_add(em, d, name, n->ino, 1, DIR_BACK);
     }
+    bcache_order_end();
     if (rc != 0) {
         inode_abandon(em, n);
         return rc;
@@ -1731,8 +1762,8 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
 /**
  * The `mknod` of `vfs_ops`: a FIFO, a socket or a device node `name` in
  * `dir`, in the order `create` keeps: the inode's bit, then the inode written
- * whole, to the device on a mount that writes back, then the entry that
- * names it, then the directory's times. A
+ * whole, then the entry that names it, which on a mount that writes back
+ * waits in the cache for the inode, then the directory's times. A
  * device's number is where Linux keeps it: the old encoding, a byte each of
  * major and minor, in the first pointer word when both fit, and the new
  * encoding in the second word otherwise, with the first zero. The caller
@@ -1793,8 +1824,9 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = inode_commit(em, n);
     }
     if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
+        rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode), DIR_BACK);
     }
+    bcache_order_end();
     if (rc != 0) {
         inode_abandon(em, n);
         return rc;
@@ -1857,11 +1889,12 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
  * permission bits of `mode`. Its block is written with `.` and `..`, then the
  * parent's raised count, then its inode with a count of two, and the
  * parent's entry last; a stop before the inode leaves a set bit with nothing
- * behind it. On a mount that writes back the block and the inode reach the
- * device before the parent's entry names them (`shared_block_new`,
- * `inode_commit`), as Linux's `ext2_make_empty` writes both (fs/ext2/dir.c:650
- * in Linux 6.12.115), and the parent's inode with its raised count before the
- * new inode, whose `..` e2fsck counts once the inode is live, named or not;
+ * behind it. On a mount that writes back the same order is kept in the
+ * cache, without a write before the call returns: the new inode waits for
+ * the block, the parent's entry for the inode (`shared_block_new`,
+ * `inode_commit`), where Linux's `ext2_make_empty` writes both
+ * (fs/ext2/dir.c:650 in Linux 6.12.115), and the new inode for the parent's
+ * raised count, since e2fsck counts its `..` once it is live, named or not;
  * Linux writes that count after the entry (`ext2_mkdir` raises it before
  * `ext2_add_link`, whose `ext2_handle_dirsync` ends in
  * `sync_inode_metadata`). So a stop leaves the count above the names rather
@@ -1926,7 +1959,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         head[19] = head[7];
         head[20] = '.';
         head[21] = '.';
-        rc = shared_block_new(em, (uint64_t)b * em->block_size, head, 24);
+        rc = shared_block_new(em, (uint64_t)b * em->block_size, head, 24, DIR_ORDER);
     }
     if (rc == 0) {
         ext2_node_nlink_set(d, d->nlink + 1);
@@ -1943,12 +1976,13 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
             rc = inode_commit(em, n);
         }
         if (rc == 0) {
-            rc = dir_add(em, d, name, n->ino, 2);
+            rc = dir_add(em, d, name, n->ino, 2, DIR_BACK);
         }
         if (rc != 0) {
             ext2_node_nlink_set(d, d->nlink - 1);
         }
     }
+    bcache_order_end();
     if (rc != 0) {
         inode_abandon(em, n);
         return rc;
@@ -2051,7 +2085,8 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
         ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
     }
-    rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode));
+    rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode), DIR_BACK);
+    bcache_order_end();
     if (rc != 0) {
         ext2_node_nlink_set(n, n->nlink - 1);
         return rc;
@@ -2063,9 +2098,9 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
 
 /**
  * The `link` of `vfs_ops`: a new name `name` in `dir` for the file `node`:
- * the count raised first and, on a mount that writes back, written to the
- * device (`inode_commit`), after a drain of the batch when it holds the
- * file, then the name written, so that a stop between
+ * the count raised first, after a drain of the batch when it holds the
+ * file, then the name written, which on a mount that writes back waits in
+ * the cache for the count (`inode_commit`), so that a stop between
  * leaves a count one too high, which is a count repair; then the
  * directory's times. A failure to write the name lowers the count again in
  * memory, which the file's mark has its next store write.
@@ -2105,15 +2140,14 @@ int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
  * The `symlink` of `vfs_ops`: a link `name` in `dir` to `target`. A target
  * shorter than 60 bytes is kept in the inode's pointer words, and a longer one
  * in a block of its own, written first (`shared_block_new`); then the inode,
- * to the device on a mount that writes back (`inode_commit`), then the entry,
- * then the directory's times. A failure to add the entry frees
- * the inode; a failure to store the times is not the call's, since the
- * entry, on the device on a mount that writes back, names the inode, as in
- * `ext2_create`. The batch is drained first. The caller holds the
- * directory's lock, and the link's is held until it is named. 0, -ENOENT for a
- * removed directory, -ENAMETOOLONG for a name past 255 bytes or for a target
- * that is empty or of a block or more, -EEXIST, -EROFS, -ENOSPC, -ENOMEM, or
- * -errno.
+ * then the entry, then the directory's times. On a mount that writes back the
+ * inode waits in the cache for the target's block and the entry for the inode
+ * (`inode_commit`). A failure to add the entry frees the inode; a failure to
+ * store the times is not the call's, since the entry names the inode, as in
+ * `ext2_create`. The batch is drained first. The caller holds the directory's
+ * lock, and the link's is held until it is named. 0, -ENOENT for a removed
+ * directory, -ENAMETOOLONG for a name past 255 bytes or for a target that is
+ * empty or of a block or more, -EEXIST, -EROFS, -ENOSPC, -ENOMEM, or -errno.
  */
 int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
@@ -2167,7 +2201,7 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
 
         rc = ext2_map_alloc(em, n, 0, &b, &fresh);
         if (rc == 0) {
-            rc = shared_block_new(em, (uint64_t)b * em->block_size, target, tlen);
+            rc = shared_block_new(em, (uint64_t)b * em->block_size, target, tlen, DIR_ORDER);
         }
     }
     if (rc == 0) {
@@ -2178,8 +2212,9 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
         rc = inode_commit(em, n);
     }
     if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, 7);
+        rc = dir_add(em, d, name, n->ino, 7, DIR_BACK);
     }
+    bcache_order_end();
     if (rc != 0) {
         inode_abandon(em, n);
         return rc;
@@ -2250,17 +2285,17 @@ struct ext2_rename_names {
  * it is not NULL, for `ext2_rename`, whose caller holds every lock: the victim
  * removed as rmdir removes it, the new parent's count lowered for the victim's
  * `..`, then the new entry, then, when the parents differ, the new parent's
- * count raised and written (`inode_commit`) and `..` rewritten, then the old
- * entry removed and the old parent's count lowered when the parents differ. So
- * a stop leaves no count below its names. Within one parent the count falls by
- * one, for the victim; between two, the new parent's is unchanged with a victim
- * and the old parent's falls by one, as Linux's `ext2_rename` leaves `new_dir`
- * with a target and drops `old_dir` (fs/ext2/namei.c:354-396). A failed store
- * of a count or of times after an entry change is on the device fails nothing:
- * the node keeps its mark, which its next store settles. 0, -ENOENT, -EMLINK
- * when the parents differ, there is no victim and the new parent's count would
- * pass 65000, as Linux tests it only when the new name is no directory
- * (fs/namei.c:5090-5093), or -errno.
+ * count raised and ordered before what follows (`inode_commit`) and `..`
+ * rewritten, then the old entry removed and the old parent's count lowered when
+ * the parents differ. So a stop leaves no count below its names. Within one
+ * parent the count falls by one, for the victim; between two, the new parent's
+ * is unchanged with a victim and the old parent's falls by one, as Linux's
+ * `ext2_rename` leaves `new_dir` with a target and drops `old_dir`
+ * (fs/ext2/namei.c:354-396). A failed store of a count or of times after an
+ * entry change is on the device fails nothing: the node keeps its mark, which
+ * its next store settles. 0, -ENOENT, -EMLINK when the parents differ, there is
+ * no victim and the new parent's count would pass 65000, as Linux tests it only
+ * when the new name is no directory (fs/namei.c:5090-5093), or -errno.
  */
 static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
@@ -2286,7 +2321,7 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         dir_lose_parent(em, nd, 1);
         (void)child_unlinked(em, victim);
     }
-    rc = dir_add(em, nd, r->newname, n->ino, 2);
+    rc = dir_add(em, nd, r->newname, n->ino, 2, DIR_ORDER);
     if (rc != 0) {
         return rc;
     }
@@ -2320,8 +2355,8 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
  * The rename of file `n` from `r->oldname` in `r->od` to `r->newname` in
  * `r->nd`, over the file `victim` whose entry is `nsc` at `nat` when it is
  * not NULL, for `ext2_rename`, whose caller holds every lock: the count
- * raised and written (`inode_commit`, which drains the batch first when it
- * holds `n`), the new entry written or the
+ * raised and ordered before what follows (`inode_commit`, which drains the
+ * batch first when it holds `n`), the new entry written or the
  * victim's entry pointed at `n`, the
  * victim's count lowered as unlink lowers it, the old entry removed and the
  * count lowered again. A failed store of a count or of times after an entry
@@ -2373,14 +2408,14 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
             rc = ext2_write_bytes(em, off, raw, 8, WRITE_THROUGH | WRITE_KIND(READ_DATA));
         }
         if (rc == 0) {
-            rc = dir_commit(em, off, 8);
+            rc = dir_commit(em, off, 8, DIR_NOW);
         }
         if (rc != 0) {
             return rc;
         }
         child_drop_link(em, victim);
     } else {
-        rc = dir_add(em, nd, r->newname, n->ino, ext2_ftype_of(n->mode));
+        rc = dir_add(em, nd, r->newname, n->ino, ext2_ftype_of(n->mode), DIR_ORDER);
         if (rc != 0) {
             ext2_node_nlink_set(n, n->nlink - 1);
             return rc;
