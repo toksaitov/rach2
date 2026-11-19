@@ -449,6 +449,8 @@ static void row_register(void)
     CHECK(listeners == &con_notifier, "the console listens for the master role");
     CHECK(attaches == 0 && dumb_creates == 0 && !crtc_mode(),
           "the console stays on the loader's screen");
+    CHECK(!drm_client_can_blank(),
+          "a device with no CRTC lit, as bochs before its first mode set, cannot blank");
 }
 
 /** A master that sets its own mode and exits without dropping the role. */
@@ -505,6 +507,7 @@ static void row_master_exits(void)
     CHECK(pokes == 1 && poke_before_unhold,
           "the blank's countdown starts again before /fb comes back");
     CHECK(con.on_buffer, "the console is on its buffer");
+    CHECK(drm_client_can_blank(), "the console's lit output can blank");
 }
 
 /** DROP_MASTER leaves the screen to the program while it holds the card,

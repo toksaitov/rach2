@@ -99,7 +99,9 @@ struct con_output {
  * The console's state. `dev` is its device, held; `file` the kernel's own
  * file on it, through which the buffer is made, and which has no handle
  * once the buffer is made; `fb` and `obj` the buffer, held, and `screen`
- * what fbcon was last given of it. `on_buffer` says fbcon draws on that
+ * what fbcon was last given of it. `lit` says a CRTC of the device was
+ * active when the console last looked, at its probe or its placement,
+ * which a blank can turn off. `on_buffer` says fbcon draws on that
  * buffer; `lost` that it did on a buffer that went, with its device or out
  * of reach, so that nothing is drawn until another buffer is set. `gen`
  * changes with every change of the master role and every device that comes
@@ -112,6 +114,7 @@ static struct {
     struct drm_device *dev;
     int firmware;
     int handed;
+    int lit;
     int on_buffer;
     int lost;
     uint32_t gen;
@@ -340,6 +343,20 @@ static void con_extent(const struct con_output *outs, uint32_t n, uint32_t *w, u
     }
 }
 
+/** Whether a CRTC of `dev` is active. Under the commit lock. */
+static int con_any_active(struct drm_device *dev)
+{
+    struct drm_mode_config *mc = &dev->mode_config;
+    uint32_t k;
+
+    for (k = 0; k < mc->num_crtc; k++) {
+        if (mc->crtcs[k]->state && mc->crtcs[k]->state->active) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Commit `fb` on each CRTC of `dev` that `outs` names, and turn off every
  * other CRTC that is on. Under the commit lock; may sleep. 0 or the first
  * commit's error. */
@@ -510,6 +527,7 @@ static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_frame
     if (lit && con.dev == dev) {
         /* Some outputs may be lit again, all of them when no commit
          * failed; a blank that lasts turns them off anew. */
+        con.lit = con_any_active(dev);
         con_blank_done = 0;
         con_blank_crtcs = err == 0 ? 0u : con_blank_crtcs;
         con_blank_retry = 0;
@@ -793,7 +811,7 @@ void drm_client_blank(int blank)
 
 int drm_client_can_blank(void)
 {
-    return con.dev != NULL && !con.firmware && !con.handed;
+    return con.dev != NULL && !con.firmware && !con.handed && con.lit;
 }
 
 #ifndef RACH2_HOSTTEST
@@ -957,7 +975,9 @@ void drm_client_dev_lastclose(struct drm_device *dev)
 /**
  * Probe each connector of `dev` once, as Linux's fbdev client does in its
  * initial configuration, so that sysfs and GETCONNECTOR give the displays'
- * status and modes while the console stays on the boot screen. May sleep.
+ * status and modes while the console stays on the boot screen, and note
+ * whether a CRTC is lit, as a driver that took the firmware's picture
+ * over shows it (`con.lit`). May sleep.
  */
 static void con_probe(struct drm_device *dev)
 {
@@ -968,6 +988,7 @@ static void con_probe(struct drm_device *dev)
     for (i = 0; i < mc->num_connector; i++) {
         drm_helper_probe_single_connector_modes(mc->connectors[i], mc->max_width, mc->max_height);
     }
+    con.lit = con_any_active(dev);
     drm_modeset_unlock(dev);
 }
 
@@ -993,6 +1014,7 @@ void drm_client_dev_register(struct drm_device *dev)
     con.dev = dev;
     con.firmware = drm_aperture_is_firmware(dev);
     con.handed = 0;
+    con.lit = 0;
     con.on_buffer = 0;
     gen = ++con.gen;
     klog(KLOG_INFO, "console", "card%d: %s", dev->index,
