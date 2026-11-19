@@ -614,7 +614,8 @@ static struct {
     void *context;
 } queue[OSL_QUEUE];
 static uint32_t queue_head, queue_tail;
-static int queue_running; /* an item taken off is still running */
+static struct osl_work *works, **works_end = &works; /* osl_queue_work's */
+static int queue_running;                            /* an item taken off is still running */
 static int queue_full_said;
 static struct spinlock queue_lock = SPINLOCK_INIT_NAMED("acpi_queue_lock");
 static wait_queue_t queue_work, queue_idle;
@@ -653,23 +654,47 @@ ACPI_STATUS AcpiOsExecute(ACPI_EXECUTE_TYPE type, ACPI_OSD_EXEC_CALLBACK functio
     return AE_OK;
 }
 
+void osl_queue_work(struct osl_work *work)
+{
+    uint32_t flags = spin_lock_irqsave(&queue_lock);
+
+    if (!work->pending) {
+        work->pending = 1;
+        work->next = NULL;
+        *works_end = work;
+        works_end = &work->next;
+    }
+    spin_unlock_irqrestore(&queue_lock, flags);
+    wq_wake_all(&queue_work);
+}
+
 void osl_drain(void)
 {
-    ACPI_OSD_EXEC_CALLBACK function;
+    void (*function)(void *);
     void *context;
+    struct osl_work *w;
     uint32_t flags;
 
     for (;;) {
         flags = spin_lock_irqsave(&queue_lock);
-        if (queue_head == queue_tail) {
+        if (queue_head != queue_tail) {
+            function = queue[queue_head % OSL_QUEUE].function;
+            context = queue[queue_head % OSL_QUEUE].context;
+            queue_head++;
+        } else if ((w = works) != NULL) {
+            works = w->next;
+            if (works == NULL) {
+                works_end = &works;
+            }
+            w->pending = 0;
+            function = w->function;
+            context = w->context;
+        } else {
             queue_running = 0;
             spin_unlock_irqrestore(&queue_lock, flags);
             wq_wake_all(&queue_idle);
             return;
         }
-        function = queue[queue_head % OSL_QUEUE].function;
-        context = queue[queue_head % OSL_QUEUE].context;
-        queue_head++;
         queue_running = 1;
         spin_unlock_irqrestore(&queue_lock, flags);
         function(context);
@@ -683,14 +708,14 @@ void osl_drain(void)
 static int queue_has_work(void *arg)
 {
     (void)arg;
-    return queue_head != queue_tail;
+    return queue_head != queue_tail || works != NULL;
 }
 
 /** Whether the queue is empty and nothing taken off it still runs. */
 static int queue_is_idle(void *arg)
 {
     (void)arg;
-    return queue_head == queue_tail && !queue_running;
+    return queue_head == queue_tail && works == NULL && !queue_running;
 }
 
 /**
