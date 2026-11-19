@@ -1219,6 +1219,27 @@ void mmio_unmap(uintptr_t va, size_t size)
  *
  * Returns the number of failed checks, at most 255.
  */
+/** FIFOs that do not drain before a reset: warned of, and the reset run,
+ * as Linux's rtl_loop_wait only logs; a reset that then fails refuses. */
+static void check_fifo_waits(void)
+{
+    model_reset();
+    model_stuck_fifo = 1;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_up == 1,
+          "a chip whose FIFOs never drain is warned of and reset");
+
+    model_reset();
+    model_half_fifo = 1;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_up == 1,
+          "a chip with one FIFO still holding data is warned of and reset the same way");
+
+    model_reset();
+    model_stuck_fifo = 1;
+    model_stuck_reset = 1;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && r8168_up == 0,
+          "and refused when the reset after the wait does not complete");
+}
+
 int main(void)
 {
     int a, b, c, d, e;
@@ -1373,15 +1394,7 @@ int main(void)
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_ABSENT,
           "an absent card reports absence, not failure");
 
-    model_reset();
-    model_stuck_fifo = 1;
-    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED,
-          "a chip whose FIFOs never drain is refused");
-
-    model_reset();
-    model_half_fifo = 1;
-    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED,
-          "a chip with one FIFO still holding data is refused, not accepted as drained");
+    check_fifo_waits();
 
     model_reset();
     model_stuck_linklist = 1;
