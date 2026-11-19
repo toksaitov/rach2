@@ -85,7 +85,17 @@ struct virtq_used_elem {
  * memory comes a page at a time gives it in one piece; a device that offers
  * more is given 128, which the transport writes as the queue's size.
  */
-#define VIRTQ_MAX_SIZE 128
+#define VIRTQ_MAX_SIZE     128
+/*
+ * A legacy device (virtio 1.2, 4.1.5, "Legacy Interfaces") has queues of
+ * the size it states, which the driver cannot change, laid out as one run
+ * of memory whose device's ring begins on a boundary of VIRTQ_LEGACY_ALIGN
+ * after the driver's: a queue of 256 takes three pages. The core takes up
+ * to VIRTQ_LEGACY_MAX entries, the most QEMU's devices have
+ * (VIRTQUEUE_MAX_SIZE), and refuses a queue that states more.
+ */
+#define VIRTQ_LEGACY_MAX   1024
+#define VIRTQ_LEGACY_ALIGN 4096u
 
 /*
  * Indirect tables (VIRTIO_F_INDIRECT_DESC): VIRTQ_INDIRECT_TABLES tables of
@@ -132,7 +142,8 @@ struct virtio_sg {
 struct virtqueue {
     struct virtio_dev *dev;
     uint16_t index;  /* the queue's number on its device */
-    uint16_t size;   /* descriptors, a power of two up to VIRTQ_MAX_SIZE */
+    uint16_t size;   /* descriptors, a power of two up to VIRTQ_MAX_SIZE, or up
+                      * to VIRTQ_LEGACY_MAX on a legacy device */
     uint16_t vector; /* the transport's interrupt entry, or VIRTIO_NO_VECTOR */
     uint16_t pad;
     uintptr_t notify; /* where the transport rings this queue; its own */
@@ -157,18 +168,20 @@ struct virtqueue {
     /* The bytes one descriptor may describe, 0 for any; the driver's, set
      * after virtio_queue_setup. */
     uint32_t max_seg;
-    uint16_t free_head;             /* the first free descriptor */
-    uint16_t nfree;                 /* free descriptors */
-    uint16_t avail_idx;             /* the driver's ring index as last published */
-    uint16_t kicked_idx;            /* avail_idx at the last virtqueue_kick */
-    int event;                      /* VIRTIO_F_EVENT_IDX was negotiated */
-    uint16_t last_used;             /* the device's ring index as last reaped */
-    void *token[VIRTQ_MAX_SIZE];    /* by head; NULL for a free head */
-    uint32_t inlen[VIRTQ_MAX_SIZE]; /* bytes the device may write into a head's chain */
-    uint16_t chain[VIRTQ_MAX_SIZE]; /* descriptors a head's chain holds */
-    uint16_t next[VIRTQ_MAX_SIZE];  /* the free list's and chains' links: the
-                                     * device's table is written, never read */
-    int8_t table[VIRTQ_MAX_SIZE];   /* a head's indirect table, or -1 */
+    uint16_t free_head;  /* the first free descriptor */
+    uint16_t nfree;      /* free descriptors */
+    uint16_t avail_idx;  /* the driver's ring index as last published */
+    uint16_t kicked_idx; /* avail_idx at the last virtqueue_kick */
+    int event;           /* VIRTIO_F_EVENT_IDX was negotiated */
+    uint16_t last_used;  /* the device's ring index as last reaped */
+    /* By descriptor, `size` of each, in the record's own allocation after
+     * it: */
+    void **token;    /* by head; NULL for a free head */
+    uint32_t *inlen; /* bytes the device may write into a head's chain */
+    uint16_t *chain; /* descriptors a head's chain holds */
+    uint16_t *next;  /* the free list's and chains' links: the device's
+                      * table is written, never read */
+    int8_t *table;   /* a head's indirect table, or -1 */
     virtqueue_done_t done;
     void *priv; /* the driver's */
     uint32_t added, completed;
@@ -354,6 +367,15 @@ struct virtio_dev {
      * no lock, so a handler, `config_changed` among them, may call
      * virtio_config_read; set by the transport, as virtio-pci sets it. */
     int config_atomic;
+    /* The transport drives the device through its legacy interface, as
+     * virtio-pci drives a function that has no virtio 1.x capability:
+     * VIRTIO_F_VERSION_1 is neither offered nor needed, the features are
+     * 32 bits and settled without FEATURES_OK, and each queue has the size
+     * the device states, laid out as VIRTQ_LEGACY_ALIGN asks. The fields
+     * of the configuration and the headers are in the processor's order,
+     * which is the little-endian order of virtio 1.x on the processors
+     * Rach2 runs on. Set by the transport. */
+    int legacy;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
     /* The device on the virtio bus in /sys (virtio_bus.c), each a handle of
