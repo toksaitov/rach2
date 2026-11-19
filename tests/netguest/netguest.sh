@@ -8,10 +8,10 @@
 #                    [-k|-q] [-- COMMAND...]
 #
 # Run as root on Rach2's GNU root. BDF is the card, as 0000:01:00.0, which
-# one of Rach2's drivers has, and IFACE its interface, found below the
-# card's /sys directory when -n does not name it. IMAGE is a gateway image
-# that prepare.sh made, FreeBSD's or Debian's; the guest boots from a new
-# overlay of it, which is thrown away.
+# one of Rach2's drivers has, and IFACE its interface, the one whose device
+# link in /sys/class/net is the card when -n does not name it. IMAGE is a
+# gateway image that prepare.sh made, FreeBSD's or Debian's; the guest boots
+# from a new overlay of it, which is thrown away.
 #
 # The script takes the interface's address off and sets it down, lets the
 # card go from its driver and gives it to vfio-pci, and boots the guest in
@@ -242,10 +242,15 @@ if [ -z "$nettput" ]; then
 fi
 [ -z "$peer" ] || [ -x "$nettput" ] || fail "no nettput for -p"
 if [ -z "$iface" ]; then
-    # shellcheck disable=SC2012 # one name, the interface's
-    iface=$(ls "$sys/net" 2> /dev/null | head -n 1)
+    # The interface whose device link in /sys/class/net is the card.
+    for n in /sys/class/net/*; do
+        d=$(readlink "$n/device" 2> /dev/null)
+        [ "${d##*/}" = "$bdf" ] || continue
+        iface=${n##*/}
+        break
+    done
 fi
-[ -n "$iface" ] || fail "no interface below $sys/net; name it with -n"
+[ -n "$iface" ] || fail "no interface of $bdf in /sys/class/net; name it with -n"
 ip link show "$iface" > /dev/null 2>&1 || fail "no interface $iface"
 owner=$(driver_now)
 [ -n "$owner" ] && [ "$owner" != vfio-pci ] || fail "$bdf has no driver of Rach2's to come back to"
