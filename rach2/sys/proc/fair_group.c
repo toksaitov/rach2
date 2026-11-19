@@ -18,14 +18,6 @@
 #define FAIR_MIN_SHARES 2ul
 #define FAIR_MAX_SHARES (1ul << 18)
 
-static struct sched_entity *root_se[NR_CPUS];
-static struct cfs_rq *root_cfs_rq[NR_CPUS];
-
-/* The root group, which owns the processors' root queues and has no
- * entities, as Linux's root_task_group with ROOT_TASK_GROUP_LOAD.
- * `list_next` heads the list of every other group. */
-struct task_group root_task_group = {root_se, root_cfs_rq, NICE_0_LOAD, 0, 0, NULL, NULL, NULL};
-
 void (*fair_group_clock)(int cpu);
 
 /**
@@ -90,35 +82,10 @@ static void update_cfs_group(struct sched_entity *se)
     }
 }
 
-/** Give the root group its per-processor arrays and set the group hook;
- * the contract is in autogroup.h. */
+/** Set the group hook; the contract is in autogroup.h. */
 void fair_group_init(void)
 {
-    int c;
-
-    for (c = 0; c < NR_CPUS; c++) {
-        root_cfs_rq[c] = &fair_rqs[c].cfs;
-        root_se[c] = NULL;
-    }
     fair_hooks.group_update = update_cfs_group;
-}
-
-struct task_group *fair_task_group(struct process *p)
-{
-    if (fair_groups_enabled && p->sched_task_group) {
-        return p->sched_task_group;
-    }
-    return &root_task_group;
-}
-
-void fair_set_task_rq(struct process *p, int cpu)
-{
-    struct task_group *tg = fair_task_group(p);
-    struct sched_entity *parent = tg->se[cpu];
-
-    p->se.cfs_rq = tg->cfs_rq[cpu];
-    p->se.parent = parent;
-    p->se.depth = parent ? parent->depth + 1 : 0;
 }
 
 /** Free what `tg_create` allocated for `tg`, which is on no list. */
