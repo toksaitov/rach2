@@ -1472,6 +1472,7 @@ struct intel_crtc {
     uint32_t crc_res;
     uint32_t planes_on;
     uint8_t underrun_off;
+    uint64_t underrun_count; /* GEN7_ERR_INT underrun latches cleared under irq.lock */
     uint8_t inherited;
     uint32_t update_frame;
     struct intel_scanout shown[INTEL_NUM_PLANES];
@@ -2049,6 +2050,9 @@ void i915_irq_unregister(struct drm_i915_private *i915, int bank, uint32_t bits)
  * read, as Linux's gen5_gt_enable_irq; a bit without a handler stays
  * masked. Takes the interrupt mask's lock, with interrupts off. */
 void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits);
+
+/** Unmask the registered sources of `bits` in `bank` under irq.lock. */
+void i915_irq_unmask_locked(struct drm_i915_private *i915, int bank, uint32_t bits);
 
 /** Mask the bits `bits` of `bank` again, with a posting read. */
 void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits);
@@ -3446,6 +3450,13 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
  * drm_dp_dpcd_read: `size`, or the first error of 32 tries. */
 int32_t intel_dp_dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size);
 
+/**
+ * Read an eDP sink's DPCD as intel_dp_dpcd_read does, leaving the panel
+ * power sequencer alone. -ENXIO if neither panel power nor VDD is on.
+ * The caller holds the commit lock and keeps the device awake. May sleep.
+ */
+int32_t intel_dp_dpcd_read_powered(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size);
+
 /** Write `size` bytes, 16 at most, of `buf` at DPCD `addr`: `size`, or the
  * first error of 32 tries. */
 int32_t intel_dp_dpcd_write(struct intel_dp *dp, uint32_t addr, const uint8_t *buf, uint32_t size);
@@ -4810,6 +4821,24 @@ void i915_gem_context_mark_innocent(struct intel_context *ce);
  * device is registered; the files go with its directories at the unplug.
  */
 void i915_debugfs_register(struct drm_i915_private *i915);
+
+enum i915_display_status {
+    I915_STATUS_PSR,
+    I915_STATUS_PPS,
+    I915_STATUS_PWM,
+    I915_STATUS_FBC,
+    I915_STATUS_FIFO
+};
+
+/**
+ * Fill `buf` with a terminated snapshot of `file` for `i915`. Return the
+ * length without its NUL, -ENODEV after unplug, -EINTR on a signal while
+ * taking the commit lock, or -EOVERFLOW if `cap` is too small. Holds the
+ * commit lock and pins runtime power only when the device is awake.
+ * A sleeping or simulated device reports that the registers are unavailable.
+ */
+int32_t i915_display_status_sample(struct drm_i915_private *i915, enum i915_display_status file,
+                                   char *buf, uint32_t cap);
 
 /* ---- i915_handoff.c ---- */
 

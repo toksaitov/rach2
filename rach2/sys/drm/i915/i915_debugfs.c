@@ -8,10 +8,9 @@
  * its "Driver:" line, with DERRMR among the display's registers.
  */
 
-#include <stdarg.h>
-
 #include "i915.h"
 #include "i915_reg.h"
+#include "i915_debugfs_text.h"
 
 #include "../../arch/arch.h"
 #include "../../cmdline.h"
@@ -51,130 +50,6 @@
 /* How long DROP_RESET_ACTIVE waits for the engines to idle before it
  * wedges the GPU, as Linux's gt_drop_caches. */
 #define DROP_IDLE_WAIT_MS 200u
-
-/* ------------------------------------------------------------------------
- * Text
- */
-
-/* Text made into `cap` bytes at `buf`, `len` bytes of it so far, counted
- * past `cap` so that a show returns the length it needs. */
-struct emit {
-    char *buf;
-    uint32_t cap;
-    uint32_t len;
-};
-
-/** Append the byte `c` to `e`, as far as its room goes. */
-static void emit_c(struct emit *e, char c)
-{
-    if (e->len < e->cap) {
-        e->buf[e->len] = c;
-    }
-    e->len++;
-}
-
-/** Append the string `s`. */
-static void emit_s(struct emit *e, const char *s)
-{
-    while (*s) {
-        emit_c(e, *s++);
-    }
-}
-
-/** Append `v` in base `radix`, 10 or 16, in at least `width` columns,
- * padded with zeros when `zero`, with a minus sign when `neg`. */
-static void emit_n(struct emit *e, uint64_t v, uint32_t radix, int neg, uint32_t width, int zero)
-{
-    char digits[24];
-    uint32_t n = 0, rem, k;
-
-    do {
-        v = tick_div(v, radix, &rem);
-        digits[n++] = "0123456789abcdef"[rem];
-    } while (v);
-    k = n + (neg ? 1u : 0u);
-    for (; !zero && k < width; k++) {
-        emit_c(e, ' ');
-    }
-    if (neg) {
-        emit_c(e, '-');
-    }
-    for (; zero && k < width; k++) {
-        emit_c(e, '0');
-    }
-    while (n > 0) {
-        emit_c(e, digits[--n]);
-    }
-}
-
-/**
- * Append `fmt` with its arguments: `%s`, `%c`, `%d`, `%u` and `%x`, each
- * with an optional `0` flag and a width, and an `L` before a number's
- * letter for a 64-bit argument; `%%` for a percent sign.
- */
-static void emitf(struct emit *e, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    for (; *fmt; fmt++) {
-        uint32_t width = 0;
-        int zero = 0, wide = 0;
-        uint64_t v;
-        int64_t sv;
-
-        if (*fmt != '%') {
-            emit_c(e, *fmt);
-            continue;
-        }
-        fmt++;
-        if (*fmt == '0') {
-            zero = 1;
-            fmt++;
-        }
-        while (*fmt >= '0' && *fmt <= '9') {
-            width = width * 10u + (uint32_t)(*fmt++ - '0');
-        }
-        if (*fmt == 'L') {
-            wide = 1;
-            fmt++;
-        }
-        switch (*fmt) {
-        case 's':
-            emit_s(e, va_arg(ap, const char *));
-            break;
-        case 'c':
-            emit_c(e, (char)va_arg(ap, int));
-            break;
-        case 'd':
-            sv = wide ? va_arg(ap, int64_t) : (int64_t)va_arg(ap, int);
-            emit_n(e, sv < 0 ? (uint64_t)-sv : (uint64_t)sv, 10, sv < 0, width, zero);
-            break;
-        case 'u':
-        case 'x':
-            v = wide ? va_arg(ap, uint64_t) : (uint64_t)va_arg(ap, unsigned);
-            emit_n(e, v, *fmt == 'x' ? 16u : 10u, 0, width, zero);
-            break;
-        case '%':
-            emit_c(e, '%');
-            break;
-        default:
-            va_end(ap);
-            return;
-        }
-    }
-    va_end(ap);
-}
-
-/** The length `e` needs, as a show returns it, with the text ended when
- * it fit. */
-static int32_t emit_end(struct emit *e)
-{
-    if (e->len < e->cap) {
-        e->buf[e->len] = '\0';
-    }
-    return (int32_t)e->len;
-}
 
 /** Append each of the `n` strings at `lines` as a line. */
 static void emit_lines(struct emit *e, const char *const *lines, uint32_t n)
@@ -1714,6 +1589,94 @@ static int32_t fifo_underrun_reset_store(void *data, const char __user *buf, uin
 static const struct debugfs_text_ops fifo_underrun_reset_ops = {fifo_underrun_reset_show,
                                                                 fifo_underrun_reset_store};
 
+/** Open one read-only display snapshot, which stays fixed until close. */
+static int32_t display_status_open(fd_entry_t *e, enum i915_display_status file)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)e->priv;
+    struct state_text *t = kzalloc(sizeof(*t));
+    uint32_t cap = 512;
+    int32_t len;
+
+    if (!t) {
+        return -ENOMEM;
+    }
+    t->text = kmalloc(cap);
+    if (!t->text) {
+        kfree(t);
+        return -ENOMEM;
+    }
+    len = i915_display_status_sample(i915, file, t->text, cap);
+    if (len < 0) {
+        kfree(t->text);
+        kfree(t);
+        return len;
+    }
+    t->i915 = i915;
+    t->len = (uint32_t)len;
+    drm_dev_get(&i915->drm);
+    e->priv = t;
+    return 0;
+}
+
+/** Open the source and sink PSR snapshot. */
+static int32_t psr_status_open(fd_entry_t *e, int flags)
+{
+    (void)flags;
+    return display_status_open(e, I915_STATUS_PSR);
+}
+
+/** Open the panel power sequencer snapshot. */
+static int32_t panel_timings_open(fd_entry_t *e, int flags)
+{
+    (void)flags;
+    return display_status_open(e, I915_STATUS_PPS);
+}
+
+/** Open the backlight PWM snapshot. */
+static int32_t backlight_pwm_open(fd_entry_t *e, int flags)
+{
+    (void)flags;
+    return display_status_open(e, I915_STATUS_PWM);
+}
+
+/** Open the FBC snapshot. */
+static int32_t fbc_status_open(fd_entry_t *e, int flags)
+{
+    (void)flags;
+    return display_status_open(e, I915_STATUS_FBC);
+}
+
+/** Open the display FIFO underrun snapshot. */
+static int32_t fifo_underrun_status_open(fd_entry_t *e, int flags)
+{
+    (void)flags;
+    return display_status_open(e, I915_STATUS_FIFO);
+}
+
+static const struct file_ops display_status_ops = {state_read,  NULL, NULL,         NULL,
+                                                   state_close, NULL, state_llseek, 0};
+
+/** Register the read-only display snapshots under the DRM device. */
+static int32_t display_status_register(struct drm_i915_private *i915, char *path, uint32_t cap)
+{
+    static const struct {
+        const char *name;
+        debugfs_open_fn open;
+    } files[] = {{"i915_edp_psr_status", psr_status_open},
+                 {"i915_panel_timings", panel_timings_open},
+                 {"i915_backlight_pwm", backlight_pwm_open},
+                 {"i915_fbc_status", fbc_status_open},
+                 {"i915_fifo_underrun_status", fifo_underrun_status_open}};
+    uint32_t n;
+    int32_t rc = 0;
+
+    for (n = 0; rc == 0 && n < NELEM(files); n++) {
+        drm_debugfs_path(&i915->drm, files[n].name, path, cap);
+        rc = debugfs_create_file(path, 0444u, &display_status_ops, files[n].open, i915);
+    }
+    return rc;
+}
+
 /**
  * Make one file of i915_params for the line `line` of a table above, as
  * Linux's i915_debugfs_params: reset and enable_hangcheck, mode 0600, on
@@ -1997,6 +1960,9 @@ void i915_debugfs_register(struct drm_i915_private *i915)
         if (rc == 0) {
             drm_debugfs_path(&i915->drm, "i915_fifo_underrun_reset", path, sizeof(path));
             rc = debugfs_create_text(path, 0644u, &fifo_underrun_reset_ops, i915);
+        }
+        if (rc == 0) {
+            rc = display_status_register(i915, path, sizeof(path));
         }
     }
     for (i = 0; rc == 0 && i < NELEM(text_files); i++) {

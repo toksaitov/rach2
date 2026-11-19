@@ -217,18 +217,23 @@ static uint32_t i915_irq_owned(const struct i915_irq *irq, int bank, uint32_t bi
     return owned;
 }
 
-void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits)
+void i915_irq_unmask_locked(struct drm_i915_private *i915, int bank, uint32_t bits)
 {
     struct i915_irq *irq = &i915->irq;
-    uint32_t flags;
 
     if (bank < 0 || bank >= I915_IRQ_BANKS) {
         return;
     }
-    flags = spin_lock_irqsave(&irq->lock);
     irq->imr[bank] &= ~i915_irq_owned(irq, bank, bits);
     i915_irq_write_mask(i915, bank);
-    spin_unlock_irqrestore(&irq->lock, flags);
+}
+
+void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits)
+{
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+
+    i915_irq_unmask_locked(i915, bank, bits);
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
 }
 
 void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits)

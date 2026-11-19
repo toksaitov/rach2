@@ -81,7 +81,7 @@ static void aux_unpack(uint32_t v, uint8_t *dst, int n)
  * Send `send_bytes` bytes of `send` on the AUX channel of `dp` and take up
  * to `recv_size` bytes of the reply into `recv`, Linux's
  * intel_dp_aux_xfer: an external port with nothing on its hotplug line
- * refused, an eDP panel's VDD held for the transfer, a channel still busy
+ * refused, an eDP panel's VDD held when `hold_vdd` is set, a channel still busy
  * waited for three times, each send tried five times while it times out or
  * meets a receive error, which costs 400 us.
  *
@@ -91,7 +91,7 @@ static void aux_unpack(uint32_t v, uint8_t *dst, int n)
  *         error and -ETIMEDOUT when no sink answered.
  */
 static int32_t aux_xfer_awake(struct intel_dp *dp, const uint8_t *send, int send_bytes,
-                              uint8_t *recv, int recv_size)
+                              uint8_t *recv, int recv_size, int hold_vdd)
 {
     struct i915_hw *hw = &dp->i915->hw;
     int port = dp->aux_port;
@@ -104,7 +104,7 @@ static int32_t aux_xfer_awake(struct intel_dp *dp, const uint8_t *send, int send
     if (!dp->edp && !intel_dp_connected(dp)) {
         return -ENXIO;
     }
-    vdd = dp->edp ? intel_pps_vdd_on_unlocked(dp->i915) : 0;
+    vdd = dp->edp && hold_vdd ? intel_pps_vdd_on_unlocked(dp->i915) : 0;
     for (try = 0; try < AUX_BUSY_TRIES; try++) {
         status = i915_read(hw, ctl);
         if (!(status & DP_AUX_CH_CTL_SEND_BUSY)) {
@@ -187,17 +187,18 @@ out:
 /** `aux_xfer_awake` with the device held awake, as Linux's
  * intel_dp_aux_xfer holds the AUX power domain's wakeref. */
 static int32_t aux_xfer(struct intel_dp *dp, const uint8_t *send, int send_bytes, uint8_t *recv,
-                        int recv_size)
+                        int recv_size, int hold_vdd)
 {
     int32_t ret;
 
     i915_rpm_get(dp->i915);
-    ret = aux_xfer_awake(dp, send, send_bytes, recv, recv_size);
+    ret = aux_xfer_awake(dp, send, send_bytes, recv, recv_size, hold_vdd);
     i915_rpm_put(dp->i915);
     return ret;
 }
 
-int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
+/** Pack and transfer `msg`; hold panel VDD when `hold_vdd` is set. */
+static int32_t aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg, int hold_vdd)
 {
     uint8_t tx[20], rx[20];
     int txsize, rxsize;
@@ -219,7 +220,7 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
         if (msg->size) {
             k_memcpy(tx + AUX_HEADER_SIZE, msg->buffer, msg->size);
         }
-        ret = aux_xfer(dp, tx, txsize, rx, rxsize);
+        ret = aux_xfer(dp, tx, txsize, rx, rxsize, hold_vdd);
         if (ret > 0) {
             msg->reply = (uint8_t)(rx[0] >> 4);
             ret = ret > 1 ? (rx[1] < msg->size ? rx[1] : (int32_t)msg->size) : (int32_t)msg->size;
@@ -232,7 +233,7 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
         if (rxsize > 20) {
             return -E2BIG;
         }
-        ret = aux_xfer(dp, tx, txsize, rx, rxsize);
+        ret = aux_xfer(dp, tx, txsize, rx, rxsize, hold_vdd);
         if (ret > 0) {
             msg->reply = (uint8_t)(rx[0] >> 4);
             ret--;
@@ -244,6 +245,11 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
     }
 }
 
+int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
+{
+    return aux_transfer(dp, msg, 1);
+}
+
 /**
  * A native transfer of `size` bytes at DPCD `addr`, Linux's
  * drm_dp_dpcd_access: up to 32 tries, 500 us apart but after a timeout,
@@ -252,7 +258,7 @@ int32_t intel_dp_aux_transfer(struct intel_dp *dp, struct intel_dp_aux_msg *msg)
  * DEFER, or the transfer's.
  */
 static int32_t dpcd_access(struct intel_dp *dp, uint8_t request, uint32_t addr, uint8_t *buf,
-                           uint32_t size)
+                           uint32_t size, int hold_vdd)
 {
     struct intel_dp_aux_msg msg;
     int32_t ret = 0, err = 0;
@@ -267,7 +273,7 @@ static int32_t dpcd_access(struct intel_dp *dp, uint8_t request, uint32_t addr, 
         if (ret != 0 && ret != -ETIMEDOUT) {
             i915_delay_us(&dp->i915->hw, AUX_RETRY_US);
         }
-        ret = intel_dp_aux_transfer(dp, &msg);
+        ret = aux_transfer(dp, &msg, hold_vdd);
         if (ret >= 0) {
             if ((msg.reply & DP_AUX_NATIVE_REPLY_MASK) == DP_AUX_NATIVE_REPLY_ACK) {
                 if (ret == (int32_t)size) {
@@ -285,18 +291,33 @@ static int32_t dpcd_access(struct intel_dp *dp, uint8_t request, uint32_t addr, 
     return err;
 }
 
-int32_t intel_dp_dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size)
+/** Read the DPCD after probing DPCD_REV, with VDD held when requested. */
+static int32_t dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size,
+                         int hold_vdd)
 {
     uint8_t rev;
     int32_t ret;
 
     /* Linux reads DPCD_REV first: some sinks corrupt the first access
      * after they leave power saving. */
-    ret = dpcd_access(dp, DP_AUX_NATIVE_READ, DP_DPCD_REV, &rev, 1);
+    ret = dpcd_access(dp, DP_AUX_NATIVE_READ, DP_DPCD_REV, &rev, 1, hold_vdd);
     if (ret < 0) {
         return ret;
     }
-    return dpcd_access(dp, DP_AUX_NATIVE_READ, addr, buf, size);
+    return dpcd_access(dp, DP_AUX_NATIVE_READ, addr, buf, size, hold_vdd);
+}
+
+int32_t intel_dp_dpcd_read(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size)
+{
+    return dpcd_read(dp, addr, buf, size, 1);
+}
+
+int32_t intel_dp_dpcd_read_powered(struct intel_dp *dp, uint32_t addr, uint8_t *buf, uint32_t size)
+{
+    if (!intel_pps_have_power_or_vdd(dp->i915)) {
+        return -ENXIO;
+    }
+    return dpcd_read(dp, addr, buf, size, 0);
 }
 
 int32_t intel_dp_dpcd_write(struct intel_dp *dp, uint32_t addr, const uint8_t *buf, uint32_t size)
@@ -307,7 +328,7 @@ int32_t intel_dp_dpcd_write(struct intel_dp *dp, uint32_t addr, const uint8_t *b
         return -E2BIG;
     }
     k_memcpy(copy, buf, size);
-    return dpcd_access(dp, DP_AUX_NATIVE_WRITE, addr, copy, size);
+    return dpcd_access(dp, DP_AUX_NATIVE_WRITE, addr, copy, size, 1);
 }
 
 int32_t intel_dp_dpcd_writeb(struct intel_dp *dp, uint32_t addr, uint8_t value)
