@@ -94,6 +94,8 @@ static const krffs_backend_t krffs_memory_backend = {krffs_memory_read, krffs_me
 
 /* The root's mount, and the mount every facade function below works on. */
 static krffs_mount_t krffs_root_mount;
+/* Disk write unit for coalescing on the boot root, 0 for a RAM image. */
+static uint32_t krffs_root_merge_grain;
 
 int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
 {
@@ -180,13 +182,14 @@ static int krffs_has_name(krffs_mount_t *mount, uint64_t offset)
  * before and after is written in two pieces that say the same thing in one
  * of them, and that is a write like any other.
  *
- * A mount with no unit, a single byte, which cannot be torn, and a write of
+ * A `grain` of 0, a single byte, which cannot be torn, and a write of
  * more than 16 bytes, a name, which is written without the rule, answer 1;
  * a read of the old bytes that fails answers 0. The unit a byte falls in is
  * counted in 32 bits, since a region is addressed in 32 and this kernel has
  * no 64-bit division.
  */
-static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at, const void *value, uint32_t size)
+static int krffs_write_is_whole(krffs_mount_t *mount, uint32_t grain, uint64_t at,
+                                const void *value, uint32_t size)
 {
     uint8_t old[16];
     const uint8_t *want = value;
@@ -195,10 +198,10 @@ static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at, const void *v
     uint32_t last;
     uint32_t i;
 
-    if (mount->grain == 0 || size <= 1 || size > sizeof(old)) {
+    if (grain == 0 || size <= 1 || size > sizeof(old)) {
         return 1;
     }
-    if (base / mount->grain == (base + size - 1) / mount->grain) {
+    if (base / grain == (base + size - 1) / grain) {
         return 1;
     }
     if (mount->backend->read(mount->ctx, at, old, size) != 0) {
@@ -217,7 +220,7 @@ static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at, const void *v
     if (first == size) {
         return 1;
     }
-    return (base + first) / mount->grain == (base + last) / mount->grain;
+    return (base + first) / grain == (base + last) / grain;
 }
 
 /**
@@ -234,7 +237,7 @@ static int krffs_put(krffs_mount_t *mount, uint64_t offset, uint32_t field, cons
 {
     uint64_t at = offset + field;
 
-    if (!krffs_write_is_whole(mount, at, value, size)) {
+    if (!krffs_write_is_whole(mount, mount->grain, at, value, size)) {
         klog(KLOG_WARN, "krffs", "refused: a field at %d would reach the medium in two pieces",
              (int)at);
         return -1;
@@ -949,6 +952,16 @@ static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from, uin
 }
 
 /**
+ * Store a backward link, which mount recovery can rebuild even if torn.
+ * Returns the backend's answer.
+ */
+static int krffs_write_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+{
+    return mount->backend->write(mount->ctx, offset + KRFFS_FIELD_PREVIOUS, &size,
+                                 (uint32_t)sizeof(size));
+}
+
+/**
  * Repair the backward link of the node following the one at `offset`.
  *
  * The forward chain is the truth and this link is derived from it, so every
@@ -958,7 +971,7 @@ static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from, uin
  */
 static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
-    krffs_put_u64(mount, krffs_wrap_offset(mount, offset + size), KRFFS_FIELD_PREVIOUS, size);
+    krffs_write_backward_link(mount, krffs_wrap_offset(mount, offset + size), size);
 }
 
 /**
@@ -1104,9 +1117,21 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
 }
 
 /**
- * The first node, the root, has no predecessor to merge with, and the last
- * node has no successor, since the next offset wraps to the root.
+ * Publish a merge only if its changed size bytes reach the disk together.
+ * Returns -1 if the nodes must stay separate or the write fails.
  */
+static int krffs_merge_size(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+{
+    uint32_t grain = mount == &krffs_root_mount ? krffs_root_merge_grain : mount->grain;
+    uint64_t at = offset + KRFFS_FIELD_SIZE;
+
+    if (!krffs_write_is_whole(mount, grain, at, &size, (uint32_t)sizeof(size))) {
+        return -1;
+    }
+    return mount->backend->write(mount->ctx, at, &size, (uint32_t)sizeof(size));
+}
+
+/** Free a node and coalesce the free space as described in krffs.h. */
 int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
 {
     krffs_node_t head;
@@ -1133,14 +1158,14 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
 
     if (next != 0 && krffs_head(mount, next, &neighbour) == 0 &&
         neighbour.type == KRFFS_FREE_NODE) {
-        if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size + neighbour.size) == 0) {
+        if (krffs_merge_size(mount, offset, size + neighbour.size) == 0) {
             size += neighbour.size;
             size_changed = 1;
         }
     }
     if (previous != KRFFS_NO_NODE && krffs_head(mount, previous, &neighbour) == 0 &&
         neighbour.type == KRFFS_FREE_NODE) {
-        if (krffs_put_u64(mount, previous, KRFFS_FIELD_SIZE, size + neighbour.size) == 0) {
+        if (krffs_merge_size(mount, previous, size + neighbour.size) == 0) {
             size += neighbour.size;
             offset = previous;
             size_changed = 1;
@@ -1563,8 +1588,10 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     new_id = krffs_calculate_djb_hash(name);
-    if (!krffs_write_is_whole(mount, node + KRFFS_FIELD_ID, &new_id, sizeof(new_id)) ||
-        !krffs_write_is_whole(mount, node + KRFFS_FIELD_PARENT, &parent_id, sizeof(parent_id))) {
+    if (!krffs_write_is_whole(mount, mount->grain, node + KRFFS_FIELD_ID, &new_id,
+                              sizeof(new_id)) ||
+        !krffs_write_is_whole(mount, mount->grain, node + KRFFS_FIELD_PARENT, &parent_id,
+                              sizeof(parent_id))) {
         klog(KLOG_WARN, "krffs",
              "rename: refused: a field of the node at %d would reach the medium in two pieces",
              (int)node);
@@ -1760,10 +1787,9 @@ int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index, cha
 }
 
 /**
- * The pass is one bounded walk. Removing a node coalesces it with whichever
- * of its neighbours are free, so the merged region begins at the previous
- * node when that was free and at this node otherwise; either way it is a
- * free node, which the next iteration steps over by its (now larger) size.
+ * The pass is one bounded walk. After removing a node, step over the
+ * resulting free region from its start, the previous node if it absorbed
+ * this one. Check its new size, since an unsafe merge leaves both nodes.
  * That is what lets this resume in place instead of restarting at the root
  * after each removal, which would be a scan per orphan and, on a disk larger
  * than the page cache, a great many polled reads at boot.
@@ -1788,14 +1814,11 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
             break;
         }
         if (head.type == KRFFS_RESERVED_NODE && !krffs_has_name(mount, node)) {
-            uint64_t merged = node;
-
-            if (krffs_brief(mount, previous, &before) == 0 && before.type == KRFFS_FREE_NODE) {
-                merged = previous;
-            }
             if (krffs_remove_at(mount, node) == 0) {
                 reaped++;
-                node = merged;
+                if (krffs_brief(mount, previous, &before) == 0 && before.size > node - previous) {
+                    node = previous;
+                }
             }
             if (krffs_brief(mount, node, &head) != 0) {
                 break;
@@ -1863,6 +1886,47 @@ int krffs_is_dirty(krffs_mount_t *mount)
 #define KRFFS_REPAIR_NAMES 4096u
 
 /**
+ * Rebuild the backward links of a validated forward chain, including the
+ * root's link to the last node. Returns 0 with the number of links repaired
+ * in `fixed`, or -1 if a read or write fails. The caller syncs the writes.
+ */
+static int krffs_repair_links(krffs_mount_t *mount, uint32_t *fixed)
+{
+    uint64_t offset = 0;
+    uint64_t previous_size = 0;
+    uint64_t steps = 0;
+    uint64_t bound = krffs_max_steps(mount);
+    krffs_node_t head;
+    uint64_t root_link;
+
+    *fixed = 0;
+    if (krffs_head(mount, 0, &head) != 0) {
+        return -1;
+    }
+    root_link = head.previous_node_size;
+    do {
+        if (offset != 0 && head.previous_node_size != previous_size) {
+            if (krffs_write_backward_link(mount, offset, previous_size) != 0) {
+                return -1;
+            }
+            (*fixed)++;
+        }
+        previous_size = head.size;
+        offset = krffs_step(mount, offset, head.size);
+        if (offset != 0 && (++steps >= bound || krffs_head(mount, offset, &head) != 0)) {
+            return -1;
+        }
+    } while (offset != 0);
+    if (root_link != previous_size) {
+        if (krffs_write_backward_link(mount, 0, previous_size) != 0) {
+            return -1;
+        }
+        (*fixed)++;
+    }
+    return 0;
+}
+
+/**
  * The named nodes are counted before anything is written, so a volume with
  * more names than the search for one name on two nodes compares is left
  * whole for the host tool rather than half repaired. The backward links are
@@ -1876,7 +1940,6 @@ int krffs_is_dirty(krffs_mount_t *mount)
 int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, uint32_t *doubles)
 {
     uint64_t offset = 0;
-    uint64_t previous_size = 0;
     uint64_t steps = 0;
     uint64_t bound = krffs_max_steps(mount);
     uint32_t named = 0;
@@ -1896,10 +1959,6 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
     if (named > KRFFS_REPAIR_NAMES) {
         return -1;
     }
-    offset = 0;
-    steps = 0;
-    named = 0;
-
     if (links) {
         *links = 0;
     }
@@ -1910,31 +1969,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
         *doubles = 0;
     }
 
-    do {
-        if (krffs_head(mount, offset, &head) != 0) {
-            return -1;
-        }
-        if (offset != 0 && head.previous_node_size != previous_size) {
-            if (krffs_put_u64(mount, offset, KRFFS_FIELD_PREVIOUS, previous_size) != 0) {
-                return -1;
-            }
-            fixed_links++;
-        }
-        if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
-            named++;
-        }
-        previous_size = head.size;
-        offset = krffs_step(mount, offset, head.size);
-    } while (offset != 0 && ++steps < bound);
-
-    if (krffs_head(mount, 0, &head) == 0 && head.previous_node_size != previous_size) {
-        if (krffs_put_u64(mount, 0, KRFFS_FIELD_PREVIOUS, previous_size) != 0) {
-            return -1;
-        }
-        fixed_links++;
-    }
-
-    if (named > KRFFS_REPAIR_NAMES) {
+    if (krffs_repair_links(mount, &fixed_links) != 0) {
         return -1;
     }
 
@@ -2548,17 +2583,19 @@ uint32_t krffs_free_bytes(void)
     return krffs_free_at(&krffs_root_mount);
 }
 
-int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
+/** Mount a memory or disk image as described in krffs.h. */
+static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain)
 {
     krffs_node_t *root;
+    uint32_t fixed;
 
-    if (!ramdisk_base || ramdisk_size < sizeof(krffs_node_t)) {
+    if (!base || size < sizeof(krffs_node_t)) {
         klog(KLOG_ERR, "krffs", "mount: refused: no image at %x, %d bytes",
-             (unsigned)(uintptr_t)ramdisk_base, ramdisk_size);
+             (unsigned)(uintptr_t)base, size);
         return -1;
     }
 
-    root = (krffs_node_t *)ramdisk_base;
+    root = (krffs_node_t *)base;
 
     if (root->magic != KRFFS_FILE_SYSTEM_MAGIC) {
         klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X", root->magic,
@@ -2571,20 +2608,36 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
     }
 
     krffs_root_mount.backend = &krffs_memory_backend;
-    krffs_root_mount.ctx = ramdisk_base;
-    krffs_root_mount.size = ramdisk_size;
+    krffs_root_mount.ctx = base;
+    krffs_root_mount.size = size;
+    krffs_root_merge_grain = disk_grain;
 
     if (!krffs_chain_is_valid(&krffs_root_mount)) {
-        klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
-        krffs_root_mount.backend = NULL;
-        krffs_root_mount.ctx = NULL;
-        krffs_root_mount.size = 0;
-        return -1;
+        if (disk_grain == 0 || !(root->mode & KRFFS_MODE_DIRTY) ||
+            !krffs_chain_is_walkable(&krffs_root_mount) ||
+            krffs_repair_links(&krffs_root_mount, &fixed) != 0) {
+            klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
+            krffs_root_mount.backend = NULL;
+            krffs_root_mount.ctx = NULL;
+            krffs_root_mount.size = 0;
+            return -1;
+        }
+        klog(KLOG_INFO, "krffs", "check: repaired: %d backward link(s)", (int)fixed);
     }
 
     _krffs_fs_instance.node = root;
-    _krffs_fs_instance.size = ramdisk_size;
+    _krffs_fs_instance.size = size;
     krffs_fs = &_krffs_fs_instance;
 
     return 0;
+}
+
+int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
+{
+    return krffs_mount_root(ramdisk_base, ramdisk_size, 0);
+}
+
+int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes)
+{
+    return krffs_mount_root(base, size, sector_bytes);
 }

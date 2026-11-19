@@ -3106,12 +3106,10 @@ static int init_krffs_disk(void)
  * device there, so a device that completes later cannot back it.
  *
  * The root's dirty bit is read, a set one reported, and then set and written
- * through (`pc_sync`), so that a crash before the clean shutdown clears it
- * leaves the mark on the disk for fsck.krffs. A bit that does not reach the
- * disk fails the mount, since a later crash would leave an image fsck.krffs
- * reads as clean; `init_krffs` has published `krffs_fs` at the window by
- * then, so it is cleared before the backing is dropped, or a later path
- * would read the window with nothing behind it.
+ * through (`pc_sync`) with any backward links repaired by
+ * `init_krffs_disk_root`. A failed writeback aborts the mount: a later
+ * crash could leave an image fsck.krffs reads as clean. `krffs_fs` is
+ * cleared before the backing is dropped.
  *
  * The orphans a previous shutdown left, nodes that only descriptors kept and
  * that nothing freed once those were gone, are reclaimed only after the bit
@@ -3159,7 +3157,7 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
 
     block_partition_init(&_krffs_disk_part, disk, start_lba, sector_count);
     pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
-    if (init_krffs((void *)PCWIN_BASE, part_bytes) != 0) {
+    if (init_krffs_disk_root((void *)PCWIN_BASE, part_bytes, BLOCK_SECTOR_SIZE) != 0) {
         pc_set_backing(0, 0, 0);
         return -1;
     }
@@ -3173,7 +3171,7 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
         }
         root->mode |= KRFFS_MODE_DIRTY;
         if (pc_sync() != 0) {
-            klog(KLOG_WARN, "krffs", "dirty flag did not reach the disk; mount aborted");
+            klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
             krffs_fs = 0;
             pc_set_backing(0, 0, 0);
             return -1;
