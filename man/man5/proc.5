@@ -1395,6 +1395,11 @@ on the boot line sets it, 30 without, and a write of any int sets it;
 on the boot line and 0 without, which a write of any int sets; an
 exception the kernel takes in its own code panics whatever the value, as
 Linux's oops does with it set;
+.Pa kernel/sched_schedstats ,
+0 at boot, whether the scheduler keeps the schedstats that
+.Pa /proc/PID/sched
+shows; a privileged write of 0 or 1 sets it, and any other value fails with
+.Er EINVAL ;
 .Pa kernel/lock_stat ,
 0 at boot, which a write of any int sets: while it is not 0 each hold of
 a sleeping lock is timed for
@@ -2181,8 +2186,15 @@ In
 fields 10, 12, 14 and 15 are the thread's own faults and time, as on Linux.
 Field 19 is the nice value
 .Xr setpriority 2
-keeps, and field 18 the priority Linux reports for it, 20 more than the
-nice value.
+keeps, and field 18 the priority Linux reports: 20 more than the nice
+value for an ordinary thread, \-101 for
+.Dv SCHED_DEADLINE ,
+and \-1 less the effective real-time priority of a thread that has one,
+its own under
+.Dv SCHED_FIFO
+or
+.Dv SCHED_RR
+or one a priority-inheriting futex lends it.
 Field 7 is the device number of the session's controlling terminal, 5:1
 for the console and 136:N for
 .Pa /dev/pts/N ,
@@ -2947,8 +2959,12 @@ or
 .Ql wq_wait_event_idle .
 .It Pa /proc/PID/schedstat
 Three numbers on one line, as Linux prints the thread's scheduler
-statistics: its time on a processor in nanoseconds, counted here in the
-timer's ticks of user and system time; the nanoseconds it waited ready on a
+statistics: its time on a processor in nanoseconds, the run time the
+scheduler charges it, which
+.Ql se.sum_exec_runtime
+in
+.Pa /proc/PID/sched
+shows; the nanoseconds it waited ready on a
 run queue for a processor, to the microsecond; and the times it was
 switched onto a processor.
 The file of a process is its leader's, and the file under
@@ -2956,6 +2972,61 @@ The file of a process is its leader's, and the file under
 a thread's own.
 .Xr kvm 4
 adds the second number's growth to a guest's steal time.
+.It Pa /proc/PID/sched
+The thread's scheduler state, as Linux 6.12 prints it: a header line of
+its name, its id in the reader's PID namespace and its process's thread
+count, a line of dashes, then one line for each value, its name in 45
+places and a colon.
+A count fills the 21 places after the colon; a time is milliseconds with
+six decimals, the whole milliseconds in 14 places, rounded toward zero, so
+that a time above \-1 ms shows no sign.
+The lines are
+.Ql se.exec_start ,
+.Ql se.vruntime ,
+.Ql se.sum_exec_runtime
+and
+.Ql se.nr_migrations ;
+while
+.Pa kernel/sched_schedstats
+is 1, the 28 schedstats of Linux's
+.Vt struct sched_statistics ,
+from
+.Ql sum_sleep_runtime
+to
+.Ql nr_wakeups_idle ,
+then
+.Ql avg_atom ,
+the run time per switch, and
+.Ql avg_per_cpu ,
+the run time per migration, each \-1 for none;
+.Ql nr_switches ,
+.Ql nr_voluntary_switches
+and
+.Ql nr_involuntary_switches ;
+.Ql se.load.weight
+and the seven
+.Ql se.avg.*
+load averages;
+.Ql policy
+and
+.Ql prio ,
+the priority of field 18 of
+.Pa stat
+plus 100;
+.Ql se.slice ,
+in nanoseconds, for an ordinary, batch or idle thread, or
+.Ql dl.runtime
+and
+.Ql dl.deadline
+for
+.Dv SCHED_DEADLINE ;
+and
+.Ql clock-delta ,
+the nanoseconds between two readings of the clock.
+Linux's NUMA balancing lines are left out, since Rach2 balances no NUMA
+memory.
+The file is mode 0644: its owner's write of anything clears the thread's
+schedstats, as on Linux.
 .It Pa /proc/PID/fdinfo
 A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,

@@ -499,6 +499,40 @@ millisecond later, which no reading of the clock may see; it fails with
 for a thread of another process.
 Another text fails with
 .Er EINVAL .
+.It Pa sched/base_slice_ns
+Mode 0644, as on Linux: the base slice in nanoseconds, the time ahead of
+its eligible time at which an ordinary thread without a slice of its own
+.Pq Xr sched_setattr 2
+takes its deadline: at boot 750000 times 1 plus the base-2 logarithm of
+the processors started, eight at most, as Linux scales it, so 2250000 on
+four.
+Reads the value in decimal and a newline.
+A write sets it to a number as Linux's
+.Fn debugfs_create_u32
+reads one: an optional
+.Ql + ,
+then hexadecimal after
+.Ql 0x ,
+octal after another leading 0, or decimal, and at most one newline, whose
+low 32 bits are kept.
+Other text, a minus sign among it, fails with
+.Er EINVAL ,
+and a number past 63 bits with
+.Er ERANGE .
+.It Pa sched/features
+Mode 0644, as on Linux: the scheduler's features, in the order of Linux
+6.12's kernel/sched/features.h, from
+.Ql PLACE_LAG
+to
+.Ql NI_RANDOM ,
+each with
+.Ql NO_
+before it when it is off and a space after it, then a newline.
+A write of a feature's name turns it on, and of
+.Ql NO_
+and the name off; white space around the name is taken off, and text that
+names no feature whole fails with
+.Er EINVAL .
 .It Pa exits
 Mode 0444, on a PC booted with
 .Ql rach2.exits ,
