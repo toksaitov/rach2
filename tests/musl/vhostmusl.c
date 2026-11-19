@@ -8,34 +8,29 @@
  * driver does, with an eventfd for each ring's kick and call, and gives
  * both rings the tap, with no receive buffer offered yet. A datagram sent
  * to 10.9.0.2 makes the stack ask for that address, and the ARP request
- * waits in the tap; once the program offers buffers and kicks, the kernel
- * thread writes it into one after a virtio header with num_buffers 1 and
+ * waits in the tap; once the program offers a buffer and kicks, the kernel
+ * thread writes it into the buffer after a virtio header with num_buffers 1 and
  * signals the receive ring's call. The program answers it on the transmit
  * ring and kicks; the thread gives the answer to the stack, the datagram
  * that waited for it comes into the receive ring, and the transmit ring's
- * call is signalled. A second datagram, sent while the ring has buffers,
- * comes into one: in the sender's context, before its send returns, when
+ * call is signalled. A second datagram, sent while the ring has a buffer,
+ * comes into it: in the sender's context, before its send returns, when
  * the device already holds the buffer's page, and otherwise from the
  * thread once it has brought the page in, either way with its call.
  *
  * Other frames the stack sends on the tap, IPv6's among them, may take
  * receive buffers too, so the program looks for its frames among those the
- * ring used. A wait is a read of a call eventfd, which the kernel signals.
- * The kernel signals the receive ring's call once for each frame, after
- * its used index, so the program counts the calls it reads and, once it
- * has found a frame, reads the call until the calls cover the used index
- * read after them: one missing call would keep them short of it, so a
- * frame passes only with its own call, whichever the program sees first.
- * Calls read that outnumber the used index read after them are a fault of
- * their own, since an extra call for one frame could stand in for a call
- * missing for the next. The device signals a frame's call under the lock
- * that VHOST_SET_VRING_CALL takes, so before the second datagram the
- * program sets the receive call again and reads what it holds without
- * waiting: every call signalled for a frame already on the ring is then
- * counted, and an extra one for the first datagram fails it. Once the
- * rings let the tap go, the calls must equal the used entries. Every wait
- * blocks on an eventfd, with no clock, so a frame or a call that never
- * comes leaves the program waiting.
+ * ring used. It offers one receive buffer at a time, so that the ring holds
+ * at most one frame the program has not counted. A wait is a read of a call
+ * eventfd, which the kernel signals once for each frame, after its used
+ * index, under the lock that VHOST_SET_VRING_CALL takes. After each frame
+ * the program sets the receive call again, so that every call signalled for
+ * that frame is in the eventfd, reads what it holds without waiting, and
+ * requires the calls read to equal the used entries: a missing call or an
+ * extra one fails the frame it belongs to, and none stands in for another's.
+ * Once the rings let the tap go, the calls must still equal the used
+ * entries. Every wait blocks on an eventfd, with no clock, so a frame or a
+ * call that never comes leaves the program waiting.
  *
  * Prints `VHOSTMUSL OK` and exits 0 on success, and prints
  * `VHOSTMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -143,14 +138,15 @@ static const struct {
     {"send", "could not send the first datagram to 10.9.0.2"},
     {"held", "a frame was written with no buffer offered"},
     {"rx-kick", "could not kick the receive ring"},
-    {"arp-frame", "the ARP request for 10.9.0.2 did not come once buffers were offered"},
+    {"arp-frame",
+     "the ARP request for 10.9.0.2 did not come, with one call, once a buffer was offered"},
     {"arp-header", "the receive header is not of no offload with num_buffers 1"},
     {"tx-kick", "could not kick the transmit ring"},
     {"tx-call", "the transmit ring's call did not come"},
     {"tx-used", "the transmit ring did not use the answer's chain"},
     {"datagram", "the first datagram did not come into the receive ring after the answer, or not "
                  "with one call"},
-    {"direct-send", "could not send the second datagram"},
+    {"direct-send", "could not offer a buffer and send the second datagram"},
     {"direct-frame", "the second datagram did not come into the receive ring"},
     {"direct-call", "the receive ring's call was not signalled once for the second datagram"},
     {"detach",
@@ -162,6 +158,8 @@ static unsigned char *mem; /* the guest's memory */
 static int rx_avail_idx;   /* the receive ring's available index, as offered */
 static int rx_seen;        /* used entries of the receive ring looked at */
 static uint64_t rx_calls;  /* the receive ring's calls read, summed */
+/* The descriptors and the eventfds: rx kick, rx call, tx kick, tx call. */
+static int tap = -1, vh = -1, sock = -1, ev[4] = {-1, -1, -1, -1};
 
 /** In the process that began the report, report every check before `check`
  * as held, `check` as failed with its text, those after it as not run, and
@@ -343,6 +341,15 @@ static int arp_match(const unsigned char *f, uint32_t n, const char *text)
     return is_arp_request(f, n);
 }
 
+/** Print the receive calls read and the used entries seen with them, after
+ * a count that a call signalled once for each frame cannot give. */
+static void miscount(uint16_t used)
+{
+    fprintf(stderr, "vhostmusl: receive calls: %llu for %u used entries\n",
+            (unsigned long long)rx_calls, (unsigned)used);
+    errno = EPROTO;
+}
+
 /**
  * Read the receive ring's call `call`, adding the signals it counted to
  * `rx_calls`: 0; -1 when the read fails, or when the calls read outnumber
@@ -352,48 +359,78 @@ static int arp_match(const unsigned char *f, uint32_t n, const char *text)
 static int take_call(int call)
 {
     uint64_t v;
+    uint16_t used;
 
     if (read(call, &v, 8) != 8) {
         return -1;
     }
     rx_calls += v;
     __sync_synchronize();
-    if (rx_calls > get16(RX_USED + 2)) {
-        errno = EPROTO;
+    used = get16(RX_USED + 2);
+    if (rx_calls > used) {
+        miscount(used);
         return -1;
     }
     return 0;
 }
 
 /** Count what the receive ring's call `call` holds now, without waiting:
- * 0, or -1 as `take_call` fails. */
+ * 0, or -1 when poll fails or as `take_call` fails. */
 static int drain_calls(int call)
 {
     struct pollfd p;
+    int r;
 
     p.fd = call;
     p.events = POLLIN;
-    while (poll(&p, 1, 0) > 0) {
+    while ((r = poll(&p, 1, 0)) > 0) {
         if (take_call(call) != 0) {
             return -1;
         }
     }
-    return 0;
+    return r;
 }
 
 /**
- * Wait for the frame `match` accepts with `text` on the receive ring,
- * reading the ring's call `call` while it has not come, and then until the
- * calls read cover the used index read after them. The kernel signals the
- * call once for each frame it puts on the ring, after its used index, so
- * the calls signalled never outnumber the used entries published; a frame
- * whose call is missing keeps them one short of every used index read
- * later, whatever frames follow it. Calls read that reach a used index
- * read after them therefore include the frame's own, and no call of
- * another frame, earlier or later, stands in for it, since `take_call`
- * refuses calls that outnumber the used entries. The buffer's offset; -1
- * after NUM calls without the frame; -2 when a read of the call fails or
- * reads more calls than frames.
+ * Settle the count of the receive ring's calls `call` once the ring holds
+ * no buffer: set the call again, which waits for the device's lock and so
+ * for every call already signalled, read what the eventfd holds, and
+ * require the calls read to equal the used entries. 0, or -1 for a failed
+ * request or read or an unequal count.
+ */
+static int settle_calls(int call)
+{
+    uint16_t used;
+
+    if (ring2(vh, VHOST_SET_VRING_CALL, 0, call) != 0 || drain_calls(call) != 0) {
+        return -1;
+    }
+    __sync_synchronize();
+    used = get16(RX_USED + 2);
+    if (rx_calls != used) {
+        miscount(used);
+        return -1;
+    }
+    return 0;
+}
+
+/** Offer the next receive buffer and kick the receive ring, for a frame
+ * waiting in the tap: 0, or -1 when the kick fails. */
+static int offer_one(void)
+{
+    uint64_t one = 1;
+
+    offer_rx(rx_avail_idx % NUM);
+    return write(ev[0], &one, 8) == 8 ? 0 : -1;
+}
+
+/**
+ * Wait for the frame `match` accepts with `text` on the receive ring, one
+ * frame at a time: offer a buffer when the ring holds none, read the call,
+ * which comes once the frame is on the ring, and settle the count, so that
+ * each frame has its own call before the next buffer is offered. The
+ * buffer's offset; -1 after NUM other frames; -2 when a kick, a read of the
+ * call or the count fails.
  */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
@@ -401,19 +438,14 @@ static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const
     int at, i;
 
     for (i = 0; i <= NUM; i++) {
-        if (find_rx(match, text, &at)) {
-            for (;;) {
-                __sync_synchronize();
-                if (rx_calls >= get16(RX_USED + 2)) {
-                    return at;
-                }
-                if (take_call(call) != 0) {
-                    return -2;
-                }
-            }
-        }
-        if (take_call(call) != 0) {
+        if (rx_avail_idx == get16(RX_USED + 2) && offer_one() != 0) {
             return -2;
+        }
+        if (take_call(call) != 0 || settle_calls(call) != 0) {
+            return -2;
+        }
+        if (find_rx(match, text, &at)) {
+            return at;
         }
     }
     return -1;
@@ -440,9 +472,6 @@ static void put_answer(const unsigned char *req)
     __sync_synchronize();
     put16(TX_AVAIL + 2, 1);
 }
-
-/** The descriptors and the eventfds: rx kick, rx call, tx kick, tx call. */
-static int tap = -1, vh = -1, sock = -1, ev[4] = {-1, -1, -1, -1};
 
 /** Close what the program made, which removes the tap. */
 static void cleanup(void)
@@ -552,7 +581,7 @@ static int setup_vhost(void)
 static int exchange(void)
 {
     uint64_t one = 1, v = 0;
-    int at, i;
+    int at;
 
     sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (sock < 0 || send_to_peer(sock, "vhost1") != 0) {
@@ -561,10 +590,7 @@ static int exchange(void)
     if (get16(RX_USED + 2) != 0) {
         return fail(HELD);
     }
-    for (i = 0; i < NUM - 1; i++) {
-        offer_rx(i);
-    }
-    if (write(ev[0], &one, 8) != 8) {
+    if (offer_one() != 0) {
         return fail(RX_KICK);
     }
     at = wait_rx(ev[1], arp_match, 0);
@@ -587,21 +613,17 @@ static int exchange(void)
     if (wait_rx(ev[1], is_datagram, "vhost1") < 0) {
         return fail(DATAGRAM);
     }
-    if (ring2(vh, VHOST_SET_VRING_CALL, 0, ev[1]) != 0 || drain_calls(ev[1]) != 0) {
-        return fail(DATAGRAM);
-    }
     return 0;
 }
 
-/** A datagram sent while the receive ring has buffers comes into one, at
- * once or from the thread, and its own call is signalled, before or after
- * the probe sees the frame; then the rings let the tap go, and the calls
- * read equal the used entries. */
+/** A datagram sent while the receive ring has a buffer comes into one, at
+ * once or from the thread, with its own call; then the rings let the tap
+ * go, and the calls read equal the used entries. */
 static int direct(void)
 {
     int at;
 
-    if (send_to_peer(sock, "vhost2") != 0) {
+    if (offer_one() != 0 || send_to_peer(sock, "vhost2") != 0) {
         return fail(DIRECT_SEND);
     }
     at = wait_rx(ev[1], is_datagram, "vhost2");
@@ -619,7 +641,7 @@ static int direct(void)
         return fail(DETACH);
     }
     if (rx_calls != get16(RX_USED + 2)) {
-        errno = EPROTO;
+        miscount(get16(RX_USED + 2));
         return fail(DETACH);
     }
     return 0;
