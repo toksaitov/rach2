@@ -24,7 +24,8 @@
 # one value into a set; `state=0` leaves the tracked connections' rule out
 # of the forward chain, so that each forwarded packet walks the rules;
 # `filter=0` leaves the filter out, a forward chain that accepts everything
-# beside the translation, which is the guest's cost of forwarding alone.
+# beside the translation, which is the guest's cost of forwarding alone,
+# with the deny9 counter's rule counting TCP to port 9 without dropping it.
 #
 # With the filter, TCP from the inner network to port 9 of any address is
 # dropped by a rule with the counter deny9, which counts the packets Rach2
@@ -48,9 +49,9 @@
 #
 #   NETGUEST STATS outer_in=N outer_out=N deny9=N states=N
 #
-# the outer interface's packets in and out, the packets the deny rule
-# dropped and the tracked connections, each 0 when it cannot be read but
-# the deny rule's with the filter on, which is then `unknown`.
+# the outer interface's packets in and out, the packets the deny9 counter's
+# rule counted and the tracked connections, each 0 when it cannot be read
+# but the deny9 count, which is then `unknown`.
 
 inner_mac=52:54:00:77:00:01
 inner_addr=10.77.0.1/24
@@ -164,6 +165,7 @@ EOF
         cat << EOF
 	chain forward {
 		type filter hook forward priority filter; policy accept;
+		iifname "$inner" ip saddr $inner_net tcp dport 9 counter name "deny9"
 	}
 }
 EOF
@@ -222,7 +224,6 @@ while :; do
     tx=$(cat "/sys/class/net/$outer/statistics/tx_packets" 2> /dev/null)
     deny=$(nft list counter ip netguest deny9 2> /dev/null |
         awk '{ for (f = 1; f < NF; f++) if ($f == "packets") { print $(f + 1); exit } }')
-    [ -n "$deny" ] || [ "$filter" = 1 ] || deny=0
     states=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2> /dev/null)
     say "STATS outer_in=${rx:-0} outer_out=${tx:-0} deny9=${deny:-unknown} states=${states:-0}"
 done
