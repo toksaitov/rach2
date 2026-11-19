@@ -474,7 +474,9 @@ static void con_buffer_keep(struct drm_device *dev, int32_t err, struct drm_fram
  * nothing, as Linux's client holds the master lock across its commit. 0 or
  * -errno: -EAGAIN for a changed generation, -ENODEV for no output, a buffer
  * the kernel cannot reach or a device unregistered during the commits, or
- * the error of the buffer or a commit.
+ * the error of the buffer or a commit. While the console is blank, the
+ * worker is woken once any commit ran, whether or not one failed after
+ * lighting an output, and turns the lit outputs off again.
  * May sleep.
  */
 static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_framebuffer *screen,
@@ -485,6 +487,7 @@ static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_frame
     struct drm_gem_object *obj = NULL;
     uint32_t n = 0, w, h, vw, vh;
     int32_t err = 0;
+    int lit = 0;
 
     drm_modeset_lock_nointr(dev);
     if (con.dev != dev || con.gen != gen || dev->master) {
@@ -498,24 +501,25 @@ static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_frame
     }
     if (err == 0) {
         err = con_light(dev, outs, n, fb);
+        lit = 1;
     }
     con_buffer_keep(dev, err, fb, obj);
     if (err == 0 && con.dev != dev) {
         err = -ENODEV; /* unregistered while the commits slept */
     }
-    if (err == 0) {
-        /* Every output is lit again; a blank that lasts turns them off
-         * anew. */
+    if (lit && con.dev == dev) {
+        /* Some outputs may be lit again, all of them when no commit
+         * failed; a blank that lasts turns them off anew. */
         con_blank_done = 0;
-        con_blank_crtcs = 0;
+        con_blank_crtcs = err == 0 ? 0u : con_blank_crtcs;
         con_blank_retry = 0;
     }
     drm_modeset_unlock(dev);
+    if (lit && con_blank_asked) {
+        wq_wake_all(&con_wake);
+    }
     if (err != 0) {
         return err;
-    }
-    if (con_blank_asked) {
-        wq_wake_all(&con_wake);
     }
     if (con.firmware) {
         *screen = *fbcon_boot_screen();

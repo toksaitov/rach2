@@ -235,8 +235,11 @@ void console_poke(void)
 /* ---- the fake device ---- */
 
 static struct drm_device dev;
-static struct drm_plane primary;
+static struct drm_plane primary, primary2;
 static struct drm_crtc crtc;
+/* A second CRTC with no output, which only the half-failed placement's row
+ * lights, so that the placement turns it off after lighting the first. */
+static struct drm_crtc crtc2;
 static struct drm_encoder encoder;
 static struct drm_connector connector;
 static struct drm_file fa, fb_, fc;
@@ -361,6 +364,25 @@ static void fake_plane_update(struct drm_plane *plane, struct drm_atomic_state *
 static const struct drm_plane_funcs plane_funcs = {fake_plane_check, fake_plane_update, NULL};
 static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, NULL, NULL, NULL, NULL,
                                                  NULL, NULL, NULL, NULL, NULL, NULL};
+
+/* Whether the second CRTC's next commit fails. */
+static int fail_crtc2;
+
+/** The second CRTC's check: -EBUSY once when `fail_crtc2` is set, as a
+ * commit the hardware refuses. */
+static int32_t crtc2_check(struct drm_crtc *c, struct drm_atomic_state *state)
+{
+    (void)c;
+    (void)state;
+    if (fail_crtc2) {
+        fail_crtc2 = 0;
+        return -EBUSY;
+    }
+    return 0;
+}
+
+static const struct drm_crtc_funcs crtc2_funcs = {crtc2_check, NULL, NULL, NULL, NULL, NULL,
+                                                  NULL,        NULL, NULL, NULL, NULL, NULL};
 static const struct drm_connector_funcs conn_funcs = {detect, get_modes, NULL, NULL};
 static const uint32_t xrgb[] = {DRM_FORMAT_XRGB8888};
 
@@ -379,6 +401,9 @@ static void device_init(void)
     CHECK(drm_universal_plane_init(&dev, &primary, 1, &plane_funcs, xrgb, 1, NULL,
                                    DRM_PLANE_TYPE_PRIMARY) == 0 &&
               drm_crtc_init_with_planes(&dev, &crtc, &primary, NULL, &crtc_funcs) == 0 &&
+              drm_universal_plane_init(&dev, &primary2, 2, &plane_funcs, xrgb, 1, NULL,
+                                       DRM_PLANE_TYPE_PRIMARY) == 0 &&
+              drm_crtc_init_with_planes(&dev, &crtc2, &primary2, NULL, &crtc2_funcs) == 0 &&
               drm_encoder_init(&dev, &encoder, DRM_MODE_ENCODER_VIRTUAL) == 0 &&
               drm_connector_init(&dev, &connector, &conn_funcs, DRM_MODE_CONNECTOR_VIRTUAL) == 0,
           "the display is made");
@@ -630,6 +655,30 @@ static void row_blank_half(void)
     con_blank_service();
     CHECK(con_blank_retry == 0 && !con_flush_ready(NULL) && crtc.state->active,
           "the worker clears the try, so its wait is not armed past its tick again");
+}
+
+/** A placement while the console is blank that lights its output and then
+ * fails to turn off the second CRTC, left enabled and dark as a program
+ * could leave it, still wakes the worker, which turns the lit output off
+ * again; the unblank lights it. */
+static void row_blank_place_fail(void)
+{
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_done, "the blank turns the CRTC off");
+    crtc2.state->enable = 1;
+    fail_crtc2 = 1;
+    drm_client_dev_hotplug(&dev);
+    CHECK(fail_crtc2 == 0 && crtc.state->active && crtc2.state->enable && !con_blank_done &&
+              con_flush_ready(NULL),
+          "a placement that lit the output and then failed wakes the worker");
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_done, "the worker turns the lit output off again");
+    drm_client_blank(0);
+    con_blank_service();
+    CHECK(crtc.state->active, "the unblank lights the output");
+    drm_client_dev_hotplug(&dev);
+    CHECK(crtc.state->active && !crtc2.state->enable, "a placement turns the second CRTC off");
 }
 
 /** A hotplug under a master leaves the screen to it; one after
@@ -917,6 +966,7 @@ int main(void)
     row_blank();
     row_blank_retry();
     row_blank_half();
+    row_blank_place_fail();
     row_drop_hotplug();
     row_unmapped();
     row_shadow();
