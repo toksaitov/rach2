@@ -434,6 +434,7 @@ int32_t i915_gt_init(struct drm_i915_private *i915)
         e->reset_domain = i915_engine_info[i].reset_domain;
         e->fault_reg = i915_engine_info[i].fault_reg;
         wait_queue_init(&e->wq);
+        spin_lock_init(&e->lock, "i915_engine");
     }
     for (i = 0; i < I915_NUM_ENGINES && err == 0; i++) {
         err = i915_engine_alloc(i915, &gt->engine[i]);
