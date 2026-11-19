@@ -13,9 +13,12 @@
  * receive buffers, the event index and the control queue; `intx` takes its
  * vectors away, so the device raises the function's line; `plain` takes
  * away the three features, so each frame fills one buffer, the queues are
- * silenced by their flags and no receive mode is set; and `speed` has a
- * device that gives a speed, a duplex and a largest MTU, which the
- * interface's files must read.
+ * silenced by their flags and no receive mode is set; `legacy` has the
+ * device of the legacy interface alone, without mergeable buffers, so the
+ * transport drives it through its I/O BAR with rings of 256 entries and
+ * each frame has the 10-byte header; and `speed` has a device that gives a
+ * speed, a duplex and a largest MTU, which the interface's files must
+ * read.
  *
  * The `probe` case then pulls the cable out and puts it back through QMP's
  * set_link: the device raises its configuration interrupt at each, the
@@ -76,6 +79,16 @@ static const struct log_row plain_rows[] = {
     {"buffers", BUFFERS, "the driver did not print its buffers"},
 };
 
+static const struct log_row legacy_rows[] = {
+    {"eth0", "net: eth0: virtio_net, station ", "the virtio device did not become eth0"},
+    {"legacy", " net, legacy, io 0x",
+     "the transport did not take the function by its legacy interface"},
+    {"vectors", "virtio: interrupts: virtio0: msi-x, a vector for each of 3 queues",
+     "the device did not get a vector for each queue"},
+    {"features", BUFFERS ", event index, control queue",
+     "the driver did not take the event index and the control queue alone"},
+};
+
 static const struct log_row speed_rows[] = {
     {"eth0", "net: eth0: virtio_net, station ", "the virtio device did not become eth0"},
     {"speed", "virtio_net: link 1000 Mb/s, full duplex",
@@ -91,6 +104,7 @@ static const struct vnet_case cases[] = {
     {"machine.virtionet.probe", ROWS(probe_rows), "exec /vnetprobe", 0, 1},
     {"machine.virtionet.intx", ROWS(intx_rows), "exec /vnetprobe", 0, 0},
     {"machine.virtionet.plain", ROWS(plain_rows), "exec /vnetprobe", 1, 0},
+    {"machine.virtionet.legacy", ROWS(legacy_rows), "exec /vnetprobe", 0, 0},
     {"machine.virtionet.speed", ROWS(speed_rows), "exec /vnetprobe speed=1000 duplex=full mtu=1400",
      0, 0},
     {"machine.virtionet.beside", ROWS(beside_rows), NULL, 0, 0},
