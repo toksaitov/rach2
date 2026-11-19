@@ -5,7 +5,7 @@
  * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
  * process's arguments while the process is reaped, a read of its stat and
  * status while it is reaped as the read waits for its address space's
- * lock, oom_score_adj, the
+ * lock, a write to its autogroup file, oom_score_adj, the
  * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
  * and uevents of a DRM device and of a driver's own attributes, links, PCI
  * identity and resources, a writable attribute's offset and the mode its
@@ -2949,13 +2949,49 @@ static void status_reaped_during_wait(void)
     kfree(text.buf);
 }
 
-/** The rows of a process's files read while the process ends and is
- * reaped. */
-static void reaped_rows(void)
+/* The nice value the last autogroup write set, or 99 for none. */
+static int autogroup_set = 99;
+
+/** Record the session group's nice value `nice` a write of process `p`'s
+ * autogroup file sets. Returns 0. */
+int autogroup_nice(process_t *p, int nice)
+{
+    (void)p;
+    autogroup_set = nice;
+    return 0;
+}
+
+/**
+ * A write to /proc/PID/autogroup parses its first 12 bytes and answers 12
+ * for a longer one, as Linux 6.12 clamps the count before its copy, so that
+ * the writer sees the byte it lost; a shorter write answers its count.
+ */
+static void autogroup_write_rows(void)
+{
+    struct procfs_file file;
+    fd_entry_t entry;
+    const char *text = "000000000005X";
+
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&entry, 0, sizeof(entry));
+    entry.priv = &file;
+    file.origin_pid = 7;
+    check(procfs_autogroup_write(&entry, (const char __user *)text, 13) == 12 && autogroup_set == 5,
+          "an autogroup write of 13 bytes parses 12 and answers 12");
+    text = "-3\n";
+    check(procfs_autogroup_write(&entry, (const char __user *)text, 3) == 3 && autogroup_set == -3,
+          "an autogroup write of 3 bytes answers 3");
+    autogroup_set = 99;
+}
+
+/** The rows of a process's files: those read while the process ends and is
+ * reaped, and the writes of its autogroup file. */
+static void pid_file_rows(void)
 {
     reaped_during_read();
     stat_reaped_during_wait();
     status_reaped_during_wait();
+    autogroup_write_rows();
 }
 
 /**
@@ -5202,7 +5238,7 @@ int main(int argc, char **argv)
     maps_shared_rows();
     maps_names_row();
     maps_anon_identity_rows();
-    reaped_rows();
+    pid_file_rows();
     system_rows();
     oom_values();
     oom_floor();
@@ -5231,10 +5267,10 @@ int main(int argc, char **argv)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments, stat and status, oom_score_adj, the paths of the maps, the "
-               "uptime idle sum, an interface's counts, a DRM device's /sys entries and uevents, "
-               "and a driver's attribute, link and PCI identity, a PCI function's BARs mapped and "
-               "read through its resource files, writes of a PCI function's uevent, an input "
+               "process's arguments, stat and status, autogroup writes, oom_score_adj, the maps' "
+               "paths, the uptime idle sum, an interface's counts, a DRM device's /sys entries and "
+               "uevents, a driver's attribute, link and PCI identity, a PCI function's BARs mapped "
+               "and read through its resource files, writes of a PCI function's uevent, an input "
                "device's /sys entries, capability masks, uevents and /proc/bus/input record, and "
                "the syscall and wchan files of blocked, stopped and running threads\n");
     }
