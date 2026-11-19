@@ -180,6 +180,7 @@ static int pci_present = 1;
    line, for the rows that expect one. The argument list is read with the
    compiler's own header, which names no type the kernel's disagree with. */
 #include <stdarg.h>
+#include <string.h>
 static const char *last_klog;
 static int last_link_mbps;
 static const char *last_link_duplex;
@@ -508,7 +509,8 @@ static unsigned char model_reg[MODEL_REGS];
 static int model_stuck_eri;      /* the ERI completion flag never moves */
 static int model_stuck_ocp;      /* the PHY-OCP completion flag never moves */
 static int model_stuck_linklist; /* the link list never reports ready */
-static int model_stuck_reset;    /* the reset bit never clears */
+static int model_stuck_reset;    /* the reset bit never clears from this reset on, 1 the first */
+static int model_resets;         /* the resets the driver asked for */
 static int model_stuck_fifo;     /* the FIFOs never report empty */
 /* Only the receive FIFO reports empty, the transmit one never does. A chip
    half way through draining is what a wait on "any bit of the mask" would
@@ -581,7 +583,7 @@ static unsigned char m_r8(unsigned off)
 {
     if (off == R8168_CHIPCMD) {
         /* The reset bit clears itself unless the test holds it. */
-        if (!model_stuck_reset) {
+        if (!model_stuck_reset || model_resets < model_stuck_reset) {
             model_reg[off] = (unsigned char)(model_reg[off] & ~R8168_CMD_RESET);
         }
         return model_reg[off];
@@ -670,6 +672,9 @@ static void m_w8(unsigned off, unsigned char v)
         }
         model_tx_drain();
         return;
+    }
+    if (off == R8168_CHIPCMD && (v & R8168_CMD_RESET)) {
+        model_resets++;
     }
     model_reg[off] = v;
 }
@@ -978,6 +983,7 @@ static void model_reset(void)
     model_stuck_ocp = 0;
     model_stuck_linklist = 0;
     model_stuck_reset = 0;
+    model_resets = 0;
     model_stuck_fifo = 0;
     model_half_fifo = 0;
     model_swallow_doorbell = 0;
@@ -1235,9 +1241,10 @@ static void check_fifo_waits(void)
 
     model_reset();
     model_stuck_fifo = 1;
-    model_stuck_reset = 1;
-    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && r8168_up == 0,
-          "and refused when the reset after the wait does not complete");
+    model_stuck_reset = 2;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && r8168_up == 0 && model_resets == 2 &&
+              strcmp(r8168_err, "the chip did not come out of the second reset") == 0,
+          "and refused when the second reset, after the wait, does not complete");
 }
 
 int main(void)
