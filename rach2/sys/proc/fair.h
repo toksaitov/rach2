@@ -57,7 +57,7 @@ struct autogroup;
  * normalized_sysctl_sched_base_slice), the bounds of a custom slice
  * (sched_setattr's sched_runtime), and the tick of HZ=250, the lag limit's
  * least span. */
-#define FAIR_BASE_SLICE_NS 750000u
+#define FAIR_BASE_SLICE_NS 700000u
 #define FAIR_SLICE_MIN_NS  100000u
 #define FAIR_SLICE_MAX_NS  100000000u
 #define FAIR_TICK_NS       4000000u
@@ -342,9 +342,10 @@ struct fair_rq {
 extern struct fair_rq fair_rqs[NR_CPUS];
 extern struct task_group root_task_group;
 
-/* The base slice the scheduler uses, sched_getattr reports and
- * base_slice_ns shows: FAIR_BASE_SLICE_NS times 1 + log2 of the processor
- * count capped at 8, Linux's SCHED_TUNABLESCALING_LOG. */
+/* The base slice, which base_slice_ns shows and an entity without a slice
+ * of its own takes at each placement and deadline: FAIR_BASE_SLICE_NS times
+ * 1 + log2 of the processor count capped at 8, Linux's
+ * SCHED_TUNABLESCALING_LOG. */
 extern uint64_t sysctl_sched_base_slice;
 
 /* Whether the schedstats are kept: kernel.sched_schedstats. */

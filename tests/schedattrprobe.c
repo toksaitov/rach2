@@ -258,7 +258,7 @@ static long getparam(void)
 }
 
 /* The processors started, from sched_getaffinity, and Linux's default
- * slice for them: 0.75 ms times one more than the base-2 logarithm of
+ * slice for them: 0.7 ms times one more than the base-2 logarithm of
  * their number, eight at most. */
 static int cpus;
 static unsigned long long base_slice;
@@ -278,7 +278,7 @@ static void count_cpus(void)
     for (n = cpus < 8 ? cpus : 8; n > 1; n >>= 1) {
         factor++;
     }
-    base_slice = 750000ULL * (unsigned long long)factor;
+    base_slice = 700000ULL * (unsigned long long)factor;
 }
 
 /** The size rules of the structure sched_setattr reads. */
