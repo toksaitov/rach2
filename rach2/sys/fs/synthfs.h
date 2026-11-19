@@ -81,8 +81,12 @@ enum vnode_kind {
     VNODE_DEV_MADE,      /* a directory or link root made under /dev, by `syskey` (devtree.h) */
     VNODE_PROC_IRQ_DIR,  /* /proc/irq, pid = -1, or /proc/irq/N, pid = N */
     VNODE_PROC_IRQ_FILE, /* pid = vector; procfile = requested (0), effective (1) */
-    VNODE_ENOENT,        /* under a synthetic mount, but no such entry */
-    VNODE_ENOTDIR        /* under a synthetic mount, a non-dir used as a directory */
+    /* /proc/asound, pid = -1, or its card0, pid = 0 (audio/hda_hdmi.h) */
+    VNODE_PROC_ASOUND_DIR,
+    /* a file of /proc/asound, pid = hdmi_audio_proc_text's `file` */
+    VNODE_PROC_ASOUND,
+    VNODE_ENOENT, /* under a synthetic mount, but no such entry */
+    VNODE_ENOTDIR /* under a synthetic mount, a non-dir used as a directory */
 };
 
 /** The name of /proc/<pid>/ns's link of the namespace kind `kind`, NULL
@@ -185,6 +189,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_IRQ_AFFINITY  73
 /* /proc/net/softnet_stat, a file of `synth_net_file`'s. */
 #define SYNTH_PROC_NETSOFTNET    74
+/* A file of /proc/asound, which the descriptor's `origin_pid` names. */
+#define SYNTH_PROC_ASOUND        75
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
