@@ -30,8 +30,11 @@
 #
 # Before the run check.sh reads the GPU's state and the panel's pipe CRC,
 # and after it reads them again: the driver i915, the same CRC, Crocus and
-# both readbacks. The desktop's session is started again after each check.
-# The last line is `bed: result: pass` or `fail: why`.
+# both readbacks. check.sh ends the desktop's session; SIGHUP starts it after
+# the first check, since bed-shm.sh's rows draw in it. On every exit the
+# session is left as the script found it: running when it ran, and
+# otherwise ended by SIGUSR2. The last line is `bed: result: pass` or
+# `fail: why`.
 set -eu
 
 here=$(pwd)
@@ -39,7 +42,7 @@ data=/dev/disk0p6
 gpu=0000:00:02.0
 pidfile=/run/rach2-desktop.pid
 socket=/run/user/1001/wayland-0
-mounted=''
+mounted='' found=0
 
 fail()
 {
@@ -51,27 +54,56 @@ fail()
 cleanup()
 {
     [ -z "$mounted" ] || umount "$mounted" 2> /dev/null || umount -l "$mounted" 2> /dev/null || :
-    session_start || :
+    session_restore || echo "bed: session: not left as it was found" >&2
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# session_start: have the desktop's supervisor start the session again, as
+session_up() { [ -S "$socket" ] && pgrep -x weston > /dev/null; }
+
+# session_start: have the desktop's supervisor start the session, as
 # check.sh ends it, and wait for its socket, 600 tries of 0.1 s at most.
 session_start()
 {
-    [ -S "$socket" ] && pgrep -x weston > /dev/null && return 0
+    session_up && return 0
     [ -f "$pidfile" ] || return 1
     kill -HUP "$(cat "$pidfile")"
     tries=0
-    until [ -S "$socket" ] && pgrep -x weston > /dev/null; do
+    until session_up; do
         tries=$((tries + 1))
         [ "$tries" -lt 600 ] || return 1
         sleep 0.1
     done
 }
+
+# session_end: have the supervisor end the session and wait until no Weston
+# runs, 600 tries of 0.1 s at most.
+session_end()
+{
+    pgrep -x weston > /dev/null || return 0
+    [ -f "$pidfile" ] || return 1
+    kill -USR2 "$(cat "$pidfile")"
+    tries=0
+    while pgrep -x weston > /dev/null; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 600 ] || return 1
+        sleep 0.1
+    done
+}
+
+# session_restore: leave the session as the script found it.
+session_restore()
+{
+    if [ "$found" = 1 ]; then
+        session_start
+    else
+        session_end
+    fi
+}
+
+! session_up || found=1
 
 case ${1:-}:$# in
     shm:2) rung=shm sums=$2 ;;
@@ -143,7 +175,6 @@ esac
 
 sh kit/check.sh after > check-after.txt 2>&1 || :
 cat check-after.txt
-session_start || fail "the session did not start after check.sh"
 [ "$status" = 0 ] || fail "the $rung run failed, status $status"
 grep -q '^check: after: result: pass' check-after.txt || fail "check.sh after did not pass"
 grep -q "crcmodes: mode 1366x768 aspect crc ${want:-none}" check-after.txt ||

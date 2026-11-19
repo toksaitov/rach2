@@ -8,7 +8,7 @@
 #
 # Run as root by etude-guest in the case's workspace, which holds crysis.py,
 # wm.py and the empty directory `private` of the private fixture, in a mount
-# namespace of the case's own, on the GNU root whose desktop session runs.
+# namespace of the case's own, on the GNU root whose desktop supervisor runs.
 # The checks:
 #
 #   flyby  Linux's island flyby through ROUTE, umu or direct, its first two
@@ -39,11 +39,12 @@
 #
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
 # every exit the script ends the game's mounts, puts back the session's
-# weston.ini and rach2-session, which crysis.py's `prepare` writes, and
-# starts the session again. `private`, all the case makes on the root
-# besides `out`, is the fixture's: etude-guest removes it once every process
-# of the case has ended, after a pass, a failure or a kill that skips this
-# trap alike.
+# weston.ini and rach2-session, which crysis.py's `prepare` writes, and leaves
+# the session as it found it: started again by SIGHUP, with the files put back,
+# when it ran, and otherwise ended by SIGUSR2. `private`, all the case makes on
+# the root besides `out`, is the fixture's: etude-guest removes it once every
+# process of the case has ended, after a pass, a failure or a kill that skips
+# this trap alike.
 #
 # Prints crysis.py's lines and `crysis-case: result: pass` or `fail: why`, and
 # exits 0 on a pass.
@@ -59,7 +60,8 @@ ini=/etc/xdg/weston/weston.ini
 session=/usr/libexec/rach2-session
 pidfile=/run/rach2-desktop.pid
 uid=1001
-bound=0 mounted=0 kept=0 failed=''
+bound=0 mounted=0 kept=0 failed='' found=0
+! pgrep -x weston > /dev/null || found=1
 
 say() { echo "crysis-case: $*"; }
 
@@ -80,7 +82,11 @@ cleanup()
     if [ "$kept" = 1 ]; then
         cp -p "$here/weston.ini" "$ini" && cp -p "$here/rach2-session" "$session" ||
             failed="$failed session-files"
-        [ ! -f "$pidfile" ] || kill -HUP "$(cat "$pidfile")" 2> /dev/null || :
+        if [ "$found" = 1 ]; then
+            [ ! -f "$pidfile" ] || kill -HUP "$(cat "$pidfile")" 2> /dev/null || :
+        else
+            [ ! -f "$pidfile" ] || kill -USR2 "$(cat "$pidfile")" 2> /dev/null || :
+        fi
     fi
     # A process of the game's that has not yet ended may hold either mount;
     # the namespace's mounts go with the case's last process.
