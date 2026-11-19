@@ -22,6 +22,8 @@
  * before it tells of a change, or `inotify_mount_watched` where it knows the
  * mount, and `inotify_desc` tests the latter itself, so a machine with no
  * watch, or none on the file's file system, pays one comparison for each.
+ * A descriptor call without the big lock asks `inotify_desc_wants` first,
+ * and takes the lock for `inotify_desc` only when a watch may hear it.
  */
 
 struct isr_params;
@@ -82,11 +84,37 @@ void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask);
 void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, uint32_t mask,
                    uint32_t cookie);
 
-/** An event of an open file: to its own watches, and to those of the
- * directory it was opened in, under its name there, when the open recorded
- * them; nothing while there is no watch, or for a description that is not
- * of a file of a mount. */
+/** An event of an open file: to its own watches, and to those of its
+ * directory, under its name there (`inotify_desc_dir`); nothing while there
+ * is no watch, or for a description that is not of a file of a mount.
+ * Under the big lock. */
 void inotify_desc(struct open_file *ofd, uint32_t mask);
+
+/**
+ * Whether an event of `mask` of the open file of `ofd` may reach a watch:
+ * one of the file, or, when the open recorded its directory, of that
+ * directory, or, when the description holds its name record (`name`), of
+ * any directory of its file system, may want it. Without the big lock, as
+ * Linux tests the inode's and the parent's i_fsnotify_mask before an event
+ * (`__fsnotify_parent`, fs/notify/fsnotify.c): 0 means no watch wants it
+ * now, so that the read, open, write or close of a file nobody watches
+ * takes no lock for inotify, though another file of its file system is
+ * watched. A watch added meanwhile may miss the event, as on Linux.
+ */
+int inotify_desc_wants(const struct open_file *ofd, uint32_t mask);
+
+/** Whether a watch of a directory of the file system of `mnt` may want an
+ * event of `mask`; without the big lock, as `inotify_desc_wants`. */
+int inotify_dir_wants(const struct vfs_mount *mnt, uint32_t mask);
+
+/**
+ * The directory of the open file of `ofd` for inotify, its inode number
+ * into `*dir_ino` and the file's name in it into `*leaf`: what the open
+ * recorded (`leaf`, `parent_ino`), else what the description's name record
+ * holds now (`vfs_name_dir`). 0, or -1 when there is neither. Under the big
+ * lock; `*leaf` stays the description's.
+ */
+int inotify_desc_dir(const struct open_file *ofd, uint64_t *dir_ino, const char **leaf);
 
 /** The file `ino` of `mnt` has no name left: IN_DELETE_SELF to its watches,
  * then IN_IGNORED, and the watches go. */

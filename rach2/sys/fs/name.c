@@ -197,6 +197,20 @@ int vfs_name_deleted(const struct vfs_name *name)
     return name->deleted;
 }
 
+int vfs_name_dir(struct vfs_name *name, const struct vfs_mount *base, uint64_t *dir_ino,
+                 const char **leaf)
+{
+    struct vfs_stat st;
+
+    if (vfs_mount_base(name->parent.mnt) != base ||
+        vfs_getattr(name->parent.mnt, name->parent.node, &st) != 0) {
+        return -1;
+    }
+    *dir_ino = st.ino;
+    *leaf = name->leaf;
+    return 0;
+}
+
 /** Whether two held nodes of the same file system are the same inode. */
 static int same_node(struct vfs_mount *mnt, void *a, void *b)
 {

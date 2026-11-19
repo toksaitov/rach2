@@ -258,8 +258,10 @@ struct open_file {
      * OFD_WATCH_* bits an open sets, and, for an open made while a watch
      * existed, the inode number of the directory the file was opened in
      * and its name there, from the heap, so that the directory's watches
-     * hear of its reads, writes and close. The last unref reports the close
-     * and frees the name. */
+     * hear of its reads, writes and close; an open without the big lock
+     * records them only for a directory, and a file's name record (`name`)
+     * gives them instead (`inotify_desc_dir`). The last unref reports the
+     * close and frees the name. */
     uint32_t watch_flags;
     uint64_t parent_ino;
     char *leaf;

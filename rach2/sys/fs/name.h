@@ -39,6 +39,15 @@ void vfs_name_change_end(void);
 struct vfs_name *vfs_name_ref(struct vfs_name *name);
 void vfs_name_put(struct vfs_name *name);
 int vfs_name_deleted(const struct vfs_name *name);
+/* The inode number of the directory the record names its file in, into
+ * `*dir_ino`, and the file's name there, into `*leaf`, which stays the
+ * record's: 0, or -1 when that directory is not on the file system of the
+ * base mount `base` or its attributes cannot be read. Under the big lock,
+ * which keeps both from a rename, as inotify reports an event of an open
+ * file to its directory under its name there now, as Linux's
+ * fsnotify_parent takes the dentry's parent at the event. */
+int vfs_name_dir(struct vfs_name *name, const struct vfs_mount *base, uint64_t *dir_ino,
+                 const char **leaf);
 
 /* Read the selected entry's path under its namespace lock. A deleted entry
  * keeps its own leaf, never another hard link. Return 0 or a negative errno. */

@@ -1351,7 +1351,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     written = file_write_locked(entry, buf, count, at, &state);
     file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
-    if (written > 0 && inotify_watches) {
+    if (written > 0 && inotify_desc_wants(ofd, IN_MODIFY)) {
         if (!state.big) {
             state.big = big_take();
         }
@@ -1638,7 +1638,7 @@ static long ftruncate_fd(int fd, long long length)
         if (!own) {
             filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
         }
-        if (inotify_watches) {
+        if (inotify_desc_wants(entry->ofd, IN_MODIFY)) {
             if (!big) {
                 big = big_take();
             }
@@ -5425,18 +5425,22 @@ static void attr_told(const char *name, struct vfs_mount *mnt, void *node, uint3
 /**
  * `attr_told` for a change made through the description `ofd`: its
  * directory's watches hear of it when its open recorded the directory and
- * name (`open_record_parent`), and with `self` its own watches as well.
+ * name (`open_record_parent`) or its name record holds them
+ * (`inotify_desc_dir`), and with `self` its own watches as well.
  */
 static void attr_told_desc(struct open_file *ofd, uint32_t mask, int self)
 {
+    const char *leaf;
+    uint64_t dir_ino;
+
     if (!inotify_watches || mask == 0 || !ofd || !ofd->vmnt) {
         return;
     }
     if (self) {
         inotify_file(ofd->vmnt, ofd->ino, mask);
     }
-    if (ofd->leaf) {
-        inotify_child(ofd->vmnt, ofd->parent_ino, ofd->leaf,
+    if (inotify_desc_dir(ofd, &dir_ino, &leaf) == 0) {
+        inotify_child(ofd->vmnt, dir_ino, leaf,
                       mask | ((ofd->watch_flags & OFD_WATCH_DIR) ? IN_ISDIR : 0u), 0);
     }
 }
@@ -5485,6 +5489,10 @@ static void open_done(int fd, const char *name, int flags)
     inotify_desc(ofd, IN_OPEN);
 }
 
+/* The events a read-only descriptor of a directory gives its directory's
+ * watches, for which `open_install_unlocked` records that directory. */
+#define OPEN_DIR_EVENTS (IN_OPEN | IN_ACCESS | IN_CLOSE_NOWRITE | IN_ATTRIB)
+
 /* The open flags that send an open to the big lock (`open_unlocked`): any
  * access mode but O_RDONLY, the low two bits, every flag that creates,
  * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE),
@@ -5497,11 +5505,15 @@ static void open_done(int fd, const char *name, int flags)
  * makes one for a read-only open of a mounted type: the description takes
  * the hold, the record and a reference on the mount, and the entry is
  * published last. What `open_done` does for such an open, the description's
- * watch flags and inotify's report of the open, under the big lock while a
- * watch is on the file's file system (`inotify_mount_watched`), is done to
- * the description before the entry is published, as Linux's `vfs_open`
- * reports the open before `fd_install` (fs/open.c): once published, another
- * thread may close the descriptor and open another file in its slot. The
+ * watch flags and inotify's report of the open, is done to the description
+ * before the entry is published, as Linux's `vfs_open` reports the open
+ * before `fd_install` (fs/open.c): once published, another thread may close
+ * the descriptor and open another file in its slot. The report takes the
+ * big lock only when a watch may hear it (`inotify_desc_wants`). A file's
+ * directory is found for later events through its name record `entry`
+ * (`inotify_desc_dir`); a directory, which has none, has its own recorded
+ * under the big lock while a watch of a directory of its file system may
+ * want an event a read-only descriptor gives (`open_record_parent`). The
  * descriptor, or a negative errno with everything given back.
  */
 static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
@@ -5532,9 +5544,13 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
     e->node = NULL;
     e->type = (st->mode & S_IFMT) == S_IFDIR ? FD_TYPE_DIR : FD_TYPE_FILE;
     e->ofd->watch_flags = OFD_WATCH_OPEN | (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
-    if (inotify_mount_watched(ref->mnt)) {
+    if (!entry && inotify_dir_wants(ref->mnt, OPEN_DIR_EVENTS)) {
         bkl_enter();
         open_record_parent(e->ofd, name);
+        inotify_desc(e->ofd, IN_OPEN);
+        bkl_exit();
+    } else if (inotify_desc_wants(e->ofd, IN_OPEN)) {
+        bkl_enter();
         inotify_desc(e->ofd, IN_OPEN);
         bkl_exit();
     }
@@ -7810,7 +7826,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
         ofd->offset += (uint64_t)bytes_read;
     }
     fd_ofd_unlock(ofd);
-    if (bytes_read > 0 && inotify_mount_watched(ofd->vmnt)) {
+    if (bytes_read > 0 && inotify_desc_wants(ofd, IN_ACCESS)) {
         if (!bkl_held()) {
             bkl_enter();
             big = 1;
@@ -15392,7 +15408,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     }
     file_unlock(&state.file, state.own);
     fd_ofd_unlock(ofd);
-    if (rc > 0 && inotify_watches) {
+    if (rc > 0 && inotify_desc_wants(ofd, IN_MODIFY)) {
         if (!state.big) {
             state.big = big_take();
         }
@@ -15472,7 +15488,10 @@ static long iov_file_read_locked(fd_entry_t *entry, const struct kernel_iovec *i
         rc = iov_file_elements_read(ofd, iov, count, pos, &big);
     }
     fd_ofd_unlock(ofd);
-    if (rc > 0 && inotify_watches) {
+    if (rc > 0 && inotify_desc_wants(ofd, IN_ACCESS)) {
+        if (!big) {
+            big = big_take();
+        }
         inotify_desc(ofd, IN_ACCESS);
     }
     if (big) {

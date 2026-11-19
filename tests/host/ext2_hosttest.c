@@ -9119,6 +9119,14 @@ int inotify_mount_watched(const struct vfs_mount *mnt)
     return 0;
 }
 
+/** No watch hears an event of a description: no row watches. */
+int inotify_desc_wants(const struct open_file *ofd, uint32_t mask)
+{
+    (void)ofd;
+    (void)mask;
+    return 0;
+}
+
 /** A mount is its own base here: no row makes a bind mount. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {

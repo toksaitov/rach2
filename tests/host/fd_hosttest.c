@@ -390,6 +390,18 @@ int inotify_mount_watched(const struct vfs_mount *mnt)
     return mnt && vfs_mount_base(mnt)->inotify_watched != 0;
 }
 
+/* Whether a watch on a watched file system wants the event a row's
+ * description gives; the rows that change it set it back. */
+static int watch_wants = 1;
+
+/** Whether a watch may hear an event of `ofd`, as inotify.c answers it: one
+ * on its file system, while `watch_wants` says one wants the event. */
+int inotify_desc_wants(const struct open_file *ofd, uint32_t mask)
+{
+    (void)mask;
+    return watch_wants && ofd && inotify_mount_watched(ofd->vmnt);
+}
+
 /* The times the big lock was taken. */
 static int big_takes;
 
@@ -1466,17 +1478,20 @@ static void description_holders(void)
  * takes the lock for inotify only when a watch is on the description's own
  * file system, as Linux's fsnotify_sb_has_watchers asks of the file's super
  * block (include/linux/fsnotify.h:34-37, 81), and not for a watch on
- * another.
+ * another, and there only when a watch wants its close
+ * (`inotify_desc_wants`), as Linux tests the inode's and the parent's
+ * i_fsnotify_mask.
  */
 static void description_watch(void)
 {
     struct vfs_mount quiet = {0}, watched = {0};
     struct open_file *a = fd_ofd_new();
     struct open_file *b = fd_ofd_new();
+    struct open_file *c = fd_ofd_new();
     int takes;
 
-    check(a && b, "two descriptions");
-    if (!a || !b) {
+    check(a && b && c, "three descriptions");
+    if (!a || !b || !c) {
         return;
     }
     quiet.type = &unlocked_type;
@@ -1492,7 +1507,13 @@ static void description_watch(void)
           "a description ends without the big lock while only another file system is watched");
     fd_ofd_unref(b);
     check(big_takes == takes + 1, "and one on the watched file system takes it");
-    check(allocations == 0, "and both are freed");
+    c->vmnt = &watched;
+    c->watch_flags = OFD_WATCH_OPEN;
+    watch_wants = 0;
+    fd_ofd_unref(c);
+    watch_wants = 1;
+    check(big_takes == takes + 1, "but not when no watch there wants its close");
+    check(allocations == 0, "and all three are freed");
 }
 
 /** The mount a bind shows, or the mount itself, as vfs.c's: the remount

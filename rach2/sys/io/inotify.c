@@ -9,6 +9,7 @@
 #include "../irq.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
+#include "../fs/name.h"
 #include "../fs/vfs.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
@@ -72,6 +73,88 @@ int inotify_watches;
 static struct watch *watches;
 static struct inotify *instances;
 static uint32_t cookies;
+
+/*
+ * The watches that want each event a descriptor call reports, IN_ACCESS to
+ * IN_OPEN by bit number, IN_ATTRIB among them, counted by a hash of their
+ * file (`file_wants`) and, for a watch of a directory, of their file system
+ * alone (`dir_wants`), so that a call without the big lock can tell that no
+ * watch hears its event and take no lock, as Linux tests the inode's and
+ * the parent's i_fsnotify_mask before it takes any (`fsnotify_parent`,
+ * include/linux/fsnotify.h; `__fsnotify_parent` and `fsnotify`,
+ * fs/notify/fsnotify.c). A count covers every watch whose key falls in its
+ * slot, so a count above 0 may be another file's, which costs the caller
+ * the big lock and nothing else. The counts change under the big lock with
+ * the list (`account`) and are read without it.
+ */
+#define WANT_BITS  6
+#define FILE_SLOTS 256
+#define DIR_SLOTS  64
+#define WANT_DESC  (IN_ACCESS | IN_MODIFY | IN_ATTRIB | IN_CLOSE_WRITE | IN_CLOSE_NOWRITE | IN_OPEN)
+
+static uint32_t file_wants[WANT_BITS][FILE_SLOTS];
+static uint32_t dir_wants[WANT_BITS][DIR_SLOTS];
+
+/** The slot of `file_wants` of the file `ino` of the base mount `base`. */
+static uint32_t file_slot(const struct vfs_mount *base, uint64_t ino)
+{
+    uint32_t h = (uint32_t)ino ^ (uint32_t)(ino >> 32) ^ (uint32_t)((uintptr_t)base >> 4);
+
+    return (h * 2654435761u) >> 24;
+}
+
+/** The slot of `dir_wants` of the base mount `base`. */
+static uint32_t dir_slot(const struct vfs_mount *base)
+{
+    return ((uint32_t)((uintptr_t)base >> 4) * 2654435761u) >> 26;
+}
+
+/** Count the watch `w` with the events of `mask` in or out of the tables
+ * by `sign`, 1 or -1, under the big lock: in with its mask when it is made
+ * and out when it goes, and, when its mask changes, in with the new before
+ * out with the old, so that a reader never finds a wanted event uncounted. */
+static void account(const struct watch *w, uint32_t mask, int sign)
+{
+    uint32_t f = file_slot(w->mnt, w->ino), d = dir_slot(w->mnt);
+    int b;
+
+    for (b = 0; b < WANT_BITS; b++) {
+        if (mask & WANT_DESC & (1u << b)) {
+            file_wants[b][f] += (uint32_t)sign;
+            if (w->isdir) {
+                dir_wants[b][d] += (uint32_t)sign;
+            }
+        }
+    }
+}
+
+/** Whether a watch counted in slot `slot` of `file_wants` may want an
+ * event of `mask`. */
+static int file_wanted(uint32_t slot, uint32_t mask)
+{
+    int b;
+
+    for (b = 0; b < WANT_BITS; b++) {
+        if ((mask & (1u << b)) && *(volatile const uint32_t *)&file_wants[b][slot] != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether a watch of a directory counted in slot `slot` of `dir_wants`
+ * may want an event of `mask`. */
+static int dir_wanted(uint32_t slot, uint32_t mask)
+{
+    int b;
+
+    for (b = 0; b < WANT_BITS; b++) {
+        if ((mask & (1u << b)) && *(volatile const uint32_t *)&dir_wants[b][slot] != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /** Put `ev` at the tail of the queue of `in` and wake its readers. */
 static void append(struct inotify *in, struct event *ev)
@@ -162,6 +245,7 @@ static void drop(struct watch *w)
     if (*link) {
         *link = w->next;
     }
+    account(w, w->mask, -1);
     inotify_watches--;
     vfs_mount_watches(w->mnt, -1);
     kfree(w);
@@ -217,14 +301,52 @@ int inotify_mount_watched(const struct vfs_mount *mnt)
     return mnt && *(volatile const int *)&vfs_mount_base(mnt)->inotify_watched != 0;
 }
 
+int inotify_desc_wants(const struct open_file *ofd, uint32_t mask)
+{
+    const struct vfs_mount *base;
+
+    if (!ofd || !inotify_mount_watched(ofd->vmnt)) {
+        return 0;
+    }
+    base = vfs_mount_base(ofd->vmnt);
+    if (file_wanted(file_slot(base, ofd->ino), mask)) {
+        return 1;
+    }
+    if (ofd->leaf) {
+        return file_wanted(file_slot(base, ofd->parent_ino), mask);
+    }
+    return ofd->name && dir_wanted(dir_slot(base), mask);
+}
+
+int inotify_dir_wants(const struct vfs_mount *mnt, uint32_t mask)
+{
+    return inotify_mount_watched(mnt) && dir_wanted(dir_slot(vfs_mount_base(mnt)), mask);
+}
+
+int inotify_desc_dir(const struct open_file *ofd, uint64_t *dir_ino, const char **leaf)
+{
+    if (ofd->leaf) {
+        *dir_ino = ofd->parent_ino;
+        *leaf = ofd->leaf;
+        return 0;
+    }
+    if (ofd->name && ofd->vmnt) {
+        return vfs_name_dir(ofd->name, vfs_mount_base(ofd->vmnt), dir_ino, leaf);
+    }
+    return -1;
+}
+
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {
+    const char *leaf;
+    uint64_t dir_ino;
+
     if (!ofd || !inotify_mount_watched(ofd->vmnt)) {
         return;
     }
     inotify_file(ofd->vmnt, ofd->ino, mask);
-    if (ofd->leaf) {
-        inotify_child(ofd->vmnt, ofd->parent_ino, ofd->leaf,
+    if (inotify_desc_dir(ofd, &dir_ino, &leaf) == 0) {
+        inotify_child(ofd->vmnt, dir_ino, leaf,
                       mask | ((ofd->watch_flags & OFD_WATCH_DIR) ? IN_ISDIR : 0u), 0);
     }
 }
@@ -362,6 +484,7 @@ static void inotify_close(fd_entry_t *e)
 
         if (w->owner == in) {
             *wlink = w->next;
+            account(w, w->mask, -1);
             inotify_watches--;
             vfs_mount_watches(w->mnt, -1);
             kfree(w);
@@ -436,6 +559,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     uint32_t keep = mask & (IN_ALL_EVENTS | IN_ONESHOT | IN_EXCL_UNLINK);
     struct inotify *in;
     struct watch *w;
+    uint32_t old;
 
     if (!e || e->ops != &inotify_ops) {
         return -EINVAL;
@@ -446,7 +570,10 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
             if (mask & IN_MASK_CREATE) {
                 return -EEXIST;
             }
+            old = w->mask;
             w->mask = (mask & IN_MASK_ADD) ? w->mask | keep : keep;
+            account(w, w->mask, 1);
+            account(w, old, -1);
             return w->wd;
         }
     }
@@ -465,6 +592,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
     w->wd = next_wd(in);
     w->next = watches;
     watches = w;
+    account(w, w->mask, 1);
     inotify_watches++;
     vfs_mount_watches(w->mnt, 1);
     return w->wd;
