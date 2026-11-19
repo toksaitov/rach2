@@ -1,6 +1,6 @@
 # Input devices
 
-The input core gives applications Linux's event devices under `/dev/input`, and publishes their identity and capabilities in `/sys/class/input`. `evdev.c` keeps each device's state and each open's event queue. `input.c` receives keyboard events for the console, and `mouse.c` supplies the console's mouse device. [input(4)](../../man/man4/input.4) describes the event records and ioctls.
+The input core gives applications Linux's event devices under `/dev/input`, and publishes their identity and capabilities in `/sys/class/input` and in `/proc/bus/input/devices`, whose records `evdev_sysfs.c` writes from the devices it published, in Linux's text. `evdev.c` keeps each device's state and each open's event queue. `input.c` receives keyboard events for the console, and `mouse.c` supplies the console's mouse device. [input(4)](../../man/man4/input.4) describes the event records and ioctls.
 
 ## Interfaces
 

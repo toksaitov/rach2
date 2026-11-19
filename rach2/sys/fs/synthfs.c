@@ -13,6 +13,7 @@
 #include "../dmi.h"
 #include "../watchdog.h"
 #include "../audio/asound.h"
+#include "../evdev.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -591,6 +592,23 @@ static void synth_put_sys(char *out, int cap, int *pos, int entry)
     synth_put(out, cap, pos, synth_sys_name(entry));
 }
 
+/** The path of a directory of /proc whose entries are fixed, /proc/acpi,
+ * /proc/fs, and /proc/bus or its input, by its `kind` and `pid` as the
+ * classifier gives them; NULL for another. */
+static const char *synth_fixed_proc_dir(int kind, int pid)
+{
+    switch (kind) {
+    case VNODE_PROC_ACPI_DIR:
+        return "/proc/acpi";
+    case VNODE_PROC_FS_DIR:
+        return "/proc/fs";
+    case VNODE_PROC_BUS_DIR:
+        return pid < 0 ? "/proc/bus" : "/proc/bus/input";
+    default:
+        return NULL;
+    }
+}
+
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     int pos = 0;
@@ -619,10 +637,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
             synth_put(out, cap, &pos, "/");
             synth_put_uint(out, cap, &pos, (unsigned int)pid);
         }
-    } else if (kind == VNODE_PROC_ACPI_DIR) {
-        synth_put(out, cap, &pos, "/proc/acpi");
-    } else if (kind == VNODE_PROC_FS_DIR) {
-        synth_put(out, cap, &pos, "/proc/fs");
+    } else if (synth_fixed_proc_dir(kind, pid)) {
+        synth_put(out, cap, &pos, synth_fixed_proc_dir(kind, pid));
     } else if (kind == VNODE_PROC_ASOUND_DIR) {
         synth_put(out, cap, &pos, "/proc/asound");
         if (pid >= 0) {
@@ -2198,6 +2214,25 @@ static int synth_classify_asound(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+/** Classify the components `c` of `n` below /proc/bus: the directory, its
+ * input, and input's `devices` and `handlers` (evdev.h). */
+static int synth_classify_bus(const struct comp *c, int n, struct vpath *vp)
+{
+    vp->procfile = SYNTH_PROC_BUS_INPUT;
+    vp->pid = n == 0 ? -1 : 0;
+    if (n == 0 || (n == 1 && comp_eq(c[0], "input"))) {
+        vp->kind = VNODE_PROC_BUS_DIR;
+    } else if (!comp_eq(c[0], "input")) {
+        vp->kind = VNODE_ENOENT;
+    } else {
+        vp->pid = comp_eq(c[1], "devices")    ? EVDEV_PROC_DEVICES
+                  : comp_eq(c[1], "handlers") ? EVDEV_PROC_HANDLERS
+                                              : -1;
+        vp->kind = vp->pid < 0 ? VNODE_ENOENT : n == 2 ? VNODE_PROC_BUS_INPUT : VNODE_ENOTDIR;
+    }
+    return vp->kind;
+}
+
 const char *synth_sysvipc_name(int origin)
 {
     static const char *const names[] = {"shm", "sem", "msg"};
@@ -2336,6 +2371,9 @@ static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
     }
     if (comp_eq(c[1], "asound")) {
         return synth_classify_asound(c + 2, n - 2, vp);
+    }
+    if (comp_eq(c[1], "bus")) {
+        return synth_classify_bus(c + 2, n - 2, vp);
     }
     if (comp_eq(c[1], "self")) {
         pid = SYNTH_PID_SELF;

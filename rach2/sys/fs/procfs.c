@@ -109,6 +109,7 @@
 #include "../acpicall.h"
 #include "../display/backlight.h"
 #include "../watchdog.h"
+#include "../evdev.h"
 
 /* O_TRUNC and O_CLOEXEC, Linux's values on i386 and x86-64. */
 #define PROCFS_O_TRUNC   01000
@@ -287,6 +288,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_ASOUND) {
         return "/proc/asound";
+    }
+    if (vp->kind == VNODE_PROC_BUS_INPUT) {
+        return "/proc/bus/input";
     }
     if (vp->kind == VNODE_SYS_FILE) {
         return "/sys";
@@ -2926,6 +2930,11 @@ static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
         procfs_asound_path(t, pf->origin_pid);
         return;
     }
+    if (pf->origin_file == SYNTH_PROC_BUS_INPUT) {
+        ap_str(t, pf->origin_pid == EVDEV_PROC_HANDLERS ? "/proc/bus/input/handlers"
+                                                        : "/proc/bus/input/devices");
+        return;
+    }
     if (pf->origin_file == SYNTH_PROC_IRQ_AFFINITY) {
         ap_str(t, "/proc/irq/");
         ap_u32(t, (uint32_t)pf->origin_pid);
@@ -3325,6 +3334,16 @@ uint32_t procfs_ino_asounddir(void)
     return procfs_ino_asound(-1, -1);
 }
 
+uint32_t procfs_ino_bus(int file, int dir)
+{
+    return file >= 0 ? 0x38010u + (uint32_t)file : 0x38000u + (dir >= 0);
+}
+
+uint32_t procfs_ino_busdir(void)
+{
+    return procfs_ino_bus(-1, -1);
+}
+
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     struct procfs_file *pf;
@@ -3355,6 +3374,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_ASOUND) {
         return procfs_ino_asound(pf->origin_pid, 0);
+    }
+    if (pf->origin_file == SYNTH_PROC_BUS_INPUT) {
+        return procfs_ino_bus(pf->origin_pid, 0);
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -10947,20 +10969,49 @@ static int procfs_gen_lockdep(struct procfs_text *t, int classes)
 }
 #endif
 
-/** Whether `kind` is /proc/audio or a file of /proc/asound. */
-static int procfs_is_sound(int kind)
+/**
+ * Render the file of /proc/bus/input that `file` names, EVDEV_PROC_DEVICES
+ * or EVDEV_PROC_HANDLERS: its length, or -1 with `nomem` set when the heap
+ * has no room. A pass that found the text longer than its room, as a
+ * device published while the room was taken can make it, runs again with
+ * the new length.
+ */
+static int procfs_gen_bus_input(struct procfs_text *t, int file)
 {
-    return kind == VNODE_PROC_AUDIO || kind == VNODE_PROC_ASOUND;
+    uint32_t n = evdev_proc_text(file, NULL, 0), m;
+
+    for (;;) {
+        if (procfs_text_room(t, t->len + (int)n) < 0) {
+            return -1;
+        }
+        m = evdev_proc_text(file, t->buf + t->len, n);
+        if (m <= n) {
+            break;
+        }
+        n = m;
+    }
+    t->len += (int)m;
+    return t->len;
 }
 
-/** Render /proc/audio, or the file of /proc/asound `vp` names, whose
- * number `*key` gets for the descriptor's `origin_pid`. */
-static int procfs_gen_sound(struct procfs_text *t, const struct vpath *vp, int *key)
+/** Whether `kind` is /proc/audio, a file of /proc/asound or one of
+ * /proc/bus/input: a file of a device driver's tables. */
+static int procfs_is_device_text(int kind)
+{
+    return kind == VNODE_PROC_AUDIO || kind == VNODE_PROC_ASOUND || kind == VNODE_PROC_BUS_INPUT;
+}
+
+/** Render /proc/audio, or the file of /proc/asound or /proc/bus/input `vp`
+ * names, whose number `*key` gets for the descriptor's `origin_pid`. */
+static int procfs_gen_device_text(struct procfs_text *t, const struct vpath *vp, int *key)
 {
     if (vp->kind == VNODE_PROC_AUDIO) {
         return procfs_gen_audio(t);
     }
     *key = vp->pid;
+    if (vp->kind == VNODE_PROC_BUS_INPUT) {
+        return procfs_gen_bus_input(t, vp->pid);
+    }
     return procfs_gen_asound(t, vp->pid);
 }
 
@@ -10981,7 +11032,7 @@ static int procfs_needs_pid(int kind)
         VNODE_PROC_NET_ARP,       VNODE_PROC_NET_TCP,     VNODE_PROC_NET_FILE,
         VNODE_PROC_IRQ_FILE,      VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC,
         VNODE_PROC_ACPI_CALL,     VNODE_PROC_FS_LOCKWAIT, VNODE_PROC_LOCKDEP,
-        VNODE_PROC_LOCKDEP_STATS, VNODE_PROC_ASOUND};
+        VNODE_PROC_LOCKDEP_STATS, VNODE_PROC_ASOUND,      VNODE_PROC_BUS_INPUT};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -11056,8 +11107,8 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         *key = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         len = procfs_gen_mounts(t);
-    } else if (procfs_is_sound(vp->kind)) {
-        len = procfs_gen_sound(t, vp, key);
+    } else if (procfs_is_device_text(vp->kind)) {
+        len = procfs_gen_device_text(t, vp, key);
     } else if (vp->kind == VNODE_PROC_USB) {
         len = procfs_gen_usb(t);
     } else if (vp->kind == VNODE_PROC_LOOP) {

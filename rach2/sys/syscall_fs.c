@@ -19,6 +19,7 @@
 #include "kbd.h"
 #include "input.h"
 #include "mouse.h"
+#include "evdev.h"
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/tgroup.h"
@@ -3599,6 +3600,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_SYSVIPC:
     case VNODE_PROC_FS_LOCKWAIT:
     case VNODE_PROC_ASOUND:
+    case VNODE_PROC_BUS_INPUT:
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
@@ -3759,7 +3761,8 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     }
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
-    } else if (vp->kind == VNODE_PROC_IRQ_DIR || vp->kind == VNODE_PROC_ASOUND_DIR) {
+    } else if (vp->kind == VNODE_PROC_IRQ_DIR || vp->kind == VNODE_PROC_ASOUND_DIR ||
+               vp->kind == VNODE_PROC_BUS_DIR) {
         sd = synth_dir_alloc(vp->kind, vp->pid, 0);
     } else if (vp->kind == VNODE_DEV_SUBDIR) {
         sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
@@ -8593,7 +8596,7 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
            kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
            kind == VNODE_PROC_IRQ_DIR || kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR ||
-           kind == VNODE_PROC_ASOUND_DIR;
+           kind == VNODE_PROC_ASOUND_DIR || kind == VNODE_PROC_BUS_DIR;
 }
 
 /** The entry root made under /dev (devtree.h) that the descriptor `e` is
@@ -9783,6 +9786,24 @@ static int synth_proc_dir_stat(struct kstat *kst, uint32_t ino)
     return 0;
 }
 
+/** Stat /proc/asound or /proc/bus, a directory of either, or one of their
+ * files, `vp->pid` naming which as the classifier gives it. */
+static int synth_sound_bus_stat(const struct vpath *vp, struct kstat *kst)
+{
+    switch (vp->kind) {
+    case VNODE_PROC_ASOUND_DIR:
+        return synth_proc_dir_stat(kst, procfs_ino_asound(-1, vp->pid));
+    case VNODE_PROC_ASOUND:
+        synth_proc_stat(kst, procfs_ino_asound(vp->pid, 0));
+        kst->st_mode = S_IFREG | (uint32_t)asound_mode(vp->pid);
+        return 0;
+    case VNODE_PROC_BUS_DIR:
+        return synth_proc_dir_stat(kst, procfs_ino_bus(-1, vp->pid));
+    default:
+        return synth_proc_stat(kst, procfs_ino_bus(vp->pid, 0));
+    }
+}
+
 /** Stat an enabled message's directory or affinity file. */
 static int synth_irq_stat(const struct vpath *vp, struct kstat *kst)
 {
@@ -9948,11 +9969,10 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     case VNODE_PROC_FS_DIR:
         return synth_proc_dir_stat(kst, procfs_ino_fsdir());
     case VNODE_PROC_ASOUND_DIR:
-        return synth_proc_dir_stat(kst, procfs_ino_asound(-1, vp->pid));
     case VNODE_PROC_ASOUND:
-        synth_proc_stat(kst, procfs_ino_asound(vp->pid, 0));
-        kst->st_mode = S_IFREG | (uint32_t)asound_mode(vp->pid);
-        return 0;
+    case VNODE_PROC_BUS_DIR:
+    case VNODE_PROC_BUS_INPUT:
+        return synth_sound_bus_stat(vp, kst);
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -20058,6 +20078,7 @@ static const struct {
                           {"acpi", procfs_ino_acpidir, DT_DIR},
                           {"fs", procfs_ino_fsdir, DT_DIR},
                           {"asound", procfs_ino_asounddir, DT_DIR},
+                          {"bus", procfs_ino_busdir, DT_DIR},
                           {"sys", procfs_ino_sysdir, DT_DIR},
                           {"self", procfs_ino_dir, DT_LNK},
                           {"usb", procfs_ino_usb, DT_REG},
@@ -20097,8 +20118,22 @@ static int synth_asound_dirent(int card, int n, char *name, uint64_t *ino, uint8
     return synth_entry(entry, procfs_ino_asound(file, card), DT_REG, name, ino, dtype);
 }
 
+/** List /proc/bus, `dir` -1, which has input, or input, `dir` 0, which has
+ * devices and handlers (evdev.h). */
+static int synth_bus_dirent(int dir, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    if (dir < 0) {
+        return synth_entry(n == 0 ? "input" : NULL, procfs_ino_bus(-1, 0), DT_DIR, name, ino,
+                           dtype);
+    }
+    return synth_entry(n == EVDEV_PROC_DEVICES    ? "devices"
+                       : n == EVDEV_PROC_HANDLERS ? "handlers"
+                                                  : NULL,
+                       procfs_ino_bus(n, 0), DT_REG, name, ino, dtype);
+}
+
 /** List one message directory, the live message numbers, or the fixed
- * files of /proc/acpi, /proc/fs and /proc/asound. */
+ * files of /proc/acpi, /proc/fs, /proc/asound and /proc/bus. */
 static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
                                    uint8_t *dtype)
 {
@@ -20113,6 +20148,9 @@ static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name
     }
     if (sd->kind == VNODE_PROC_ASOUND_DIR) {
         return synth_asound_dirent(sd->pid, n, name, ino, dtype);
+    }
+    if (sd->kind == VNODE_PROC_BUS_DIR) {
+        return synth_bus_dirent(sd->pid, n, name, ino, dtype);
     }
     if (sd->pid >= 0) {
         return synth_entry(n == 0   ? "smp_affinity"
@@ -20194,6 +20232,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     case VNODE_PROC_ACPI_DIR:
     case VNODE_PROC_FS_DIR:
     case VNODE_PROC_ASOUND_DIR:
+    case VNODE_PROC_BUS_DIR:
         return synth_small_proc_dirent(sd, n, name, ino, dtype);
     default:
         break;

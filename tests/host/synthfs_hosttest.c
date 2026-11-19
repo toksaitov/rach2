@@ -21,6 +21,7 @@
 #include "mm/kheap.h"
 #include "rfkill.h"
 #include "dmi.h"
+#include "evdev.h"
 
 static int fails;
 
@@ -537,6 +538,15 @@ static void past_a_file(void)
     CHECK(synth_classify("proc/fs/lockwait/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/acpi/call/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/acpi/wakeup", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/bus", &vp) == VNODE_PROC_BUS_DIR && vp.pid == -1);
+    CHECK(synth_classify("proc/bus/input", &vp) == VNODE_PROC_BUS_DIR && vp.pid == 0);
+    CHECK(synth_classify("proc/bus/input/devices", &vp) == VNODE_PROC_BUS_INPUT &&
+          vp.pid == EVDEV_PROC_DEVICES && vp.procfile == SYNTH_PROC_BUS_INPUT);
+    CHECK(synth_classify("proc/bus/input/handlers", &vp) == VNODE_PROC_BUS_INPUT &&
+          vp.pid == EVDEV_PROC_HANDLERS);
+    CHECK(synth_classify("proc/bus/input/devices/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/bus/input/other", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/bus/pci", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);
     CHECK(synth_classify("proc/5/stat/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);
     CHECK(synth_classify("proc/self/cmdline/x", &vp) == VNODE_ENOTDIR && vp.pid == SYNTH_PID_SELF);

@@ -575,6 +575,21 @@ struct wait_queue *evdev_change_queue(void);
  */
 void evdev_sysfs_sync(void);
 
+/* The files of /proc/bus/input, for `evdev_proc_text`. */
+#define EVDEV_PROC_DEVICES  0
+#define EVDEV_PROC_HANDLERS 1
+
+/**
+ * Write the file of /proc/bus/input that `file` names into `buf` of `cap`
+ * bytes, as far as it fits: `devices`, a record for each device published
+ * in /sys, in the order of their inputN, as Linux's input_devices_seq_show
+ * gives them, or `handlers`, the one handler, evdev. Returns the length of
+ * the whole text, which may pass `cap`; a `cap` of 0 counts alone. Under
+ * the big lock, which keeps `evdev_sysfs_sync` out. Defined in
+ * evdev_sysfs.c.
+ */
+uint32_t evdev_proc_text(int file, char *buf, uint32_t cap);
+
 /* The serio port of a touchpad's pass-through port, serio2, beside the
  * i8042's keyboard port 0 and mouse port 1. */
 #define EVDEV_SERIO_PASS_THROUGH 2

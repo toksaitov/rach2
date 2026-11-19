@@ -85,6 +85,10 @@ enum vnode_kind {
     VNODE_PROC_ASOUND_DIR,
     /* a file of /proc/asound, pid = its ASOUND_FILE number */
     VNODE_PROC_ASOUND,
+    /* /proc/bus, pid = -1, or its input, pid = 0 */
+    VNODE_PROC_BUS_DIR,
+    /* a file of /proc/bus/input, pid = evdev.h's EVDEV_PROC_ */
+    VNODE_PROC_BUS_INPUT,
     VNODE_ENOENT, /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -191,6 +195,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_NETSOFTNET    74
 /* A file of /proc/asound, which the descriptor's `origin_pid` names. */
 #define SYNTH_PROC_ASOUND        75
+/* A file of /proc/bus/input, which the descriptor's `origin_pid` names. */
+#define SYNTH_PROC_BUS_INPUT     76
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

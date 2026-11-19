@@ -1348,6 +1348,80 @@ void evdev_sysfs_sync(void)
     make_wanted_ports();
 }
 
+/**
+ * Append the record of the device `r` to /proc/bus/input/devices: its
+ * IDs, name, place, path in /sys without "/sys", serial, the nodes of its
+ * handlers, each followed by a space, then its properties, its event types
+ * and the codes of each type it has, as `emit_bitmap` prints them, and a
+ * blank line. Its one handler is evdev's eventN; Rach2 has no kbd, sysrq,
+ * mousedev or joydev handler to name beside it.
+ */
+static void emit_proc_device(struct emit *e, const struct input_sys *r)
+{
+    static const char *const id_names[4] = {"I: Bus=", " Vendor=", " Product=", " Version="};
+    char path[256];
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        emit_str(e, id_names[i]);
+        emit_hex(e, r->d.id[i], 4, 0);
+    }
+    emit_str(e, "\nN: Name=\"");
+    emit_str(e, r->d.name);
+    emit_str(e, "\"\nP: Phys=");
+    emit_str(e, r->d.phys);
+    sysfs_node_path(r->input, path, (int)sizeof(path));
+    emit_str(e, "\nS: Sysfs=");
+    emit_str(e, starts(path, "/sys/") ? path + 4 : "");
+    emit_str(e, "\nU: Uniq=");
+    emit_str(e, r->d.uniq);
+    emit_str(e, "\nH: Handlers=event");
+    emit_u32(e, (uint32_t)r->slot);
+    emit_str(e, " \nB: PROP=");
+    emit_bitmap(e, r->d.prop, INPUT_PROP_CNT);
+    emit_str(e, "\n");
+    for (i = 0; i < CAP_TYPES; i++) {
+        if (i == 0 || bit_on(r->d.ev, cap_types[i].type)) {
+            emit_str(e, "B: ");
+            emit_str(e, cap_types[i].var);
+            emit_bitmap(e, desc_bits(&r->d, cap_types[i].type), cap_types[i].count);
+            emit_str(e, "\n");
+        }
+    }
+    emit_str(e, "\n");
+}
+
+uint32_t evdev_proc_text(int file, char *buf, uint32_t cap)
+{
+    struct emit e;
+    int n, next, last = -1;
+
+    emit_init(&e, buf, cap);
+    if (file == EVDEV_PROC_HANDLERS) {
+        emit_str(&e, "N: Number=0 Name=evdev Minor=");
+        emit_u32(&e, EVDEV_MINOR_BASE);
+        emit_str(&e, "\n");
+        return e.len;
+    }
+    /* The records by their inputN, which grows with each publication, as
+     * Linux's list of devices grows at its tail. */
+    for (;;) {
+        next = -1;
+        for (n = 0; n < EVDEV_MAX; n++) {
+            if (records[n].gen && records[n].input > 0 && records[n].number > last &&
+                (next < 0 || records[n].number < records[next].number)) {
+                next = n;
+            }
+        }
+        if (next < 0) {
+            break;
+        }
+        emit_proc_device(&e, &records[next]);
+        last = records[next].number;
+    }
+    return e.len;
+}
+
 #ifndef RACH2_HOSTTEST
 static process_t *thread;
 
