@@ -30,9 +30,13 @@
  * record and no journal left, refused to a contender with no journal written
  * and the owner unchanged, refused while a journal is there, which it keeps,
  * and released with no lock or journal left; and the setup must clear a lock
- * that the collection took when a journal names its owner record.
+ * that the collection took when a journal names its owner record. Where
+ * procfs is, a claim of another boot whose recorded PID runs with the
+ * recorded start must be kept, and a journal's lock kept while a process runs
+ * `etude run native` on the state directory.
  */
 #define _POSIX_C_SOURCE 200809L
+#include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -316,6 +320,80 @@ static int receipt_boot(const char *target, const char *run)
            !strcmp(line + strlen(line) - n, RECEIPT);
 }
 
+/** Write the etude boot token as `text`, of mode 0644 whatever the umask. */
+static void token(const char *text)
+{
+    put(fix_path("shm/etude-guest-boot"), text);
+    if (chmod(fix_path("shm/etude-guest-boot"), 0644)) {
+        fprintf(stderr, "etude-nativedeploy-test: cannot set the token's mode\n");
+        exit(2);
+    }
+}
+
+/** Format this process's start, field 22 of /proc/self/stat, into `out` of
+ * `size` bytes; 1, or 0 where there is no procfs. */
+static int self_start(char *out, size_t size)
+{
+    char line[1024], *at;
+    int field = 2;
+    if (!first("/proc/self/stat", line, sizeof(line)) || (at = strrchr(line, ')')) == NULL)
+        return 0;
+    for (; at && field < 22; field++)
+        at = strchr(at + 1, ' ');
+    return at && sscanf(at + 1, "%31[0-9]", out) == 1 && size > strlen(out);
+}
+
+/** Run the setup where procfs shows a live controller and a live
+ * collection, as on Linux and Rach2. */
+static void live_rows(const char *plain)
+{
+    char out[1024], start[32], identity[256], state[1024];
+    const char *t;
+    pid_t pid;
+    int status, gate[2];
+    char byte;
+
+    if (!self_start(start, sizeof(start)))
+        return;
+    t = tree("liveclaim");
+    fix_format(identity, sizeof(identity), "%ld %s " OTHER_ID "\n", (long)getpid(), start);
+    claim(t, "old", identity);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a live claim of another boot fails the setup");
+    CHECK(claimed(t, "old") && !says(out, "cleared"), "the setup clears a live claim");
+
+    t = tree("running");
+    fix_format(state, sizeof(state), "%s/state", t);
+    lock(t, NULL);
+    journal(t, "release 1 2 " OTHER_ID "\n");
+    fflush(NULL);
+    if (pipe(gate))
+        exit(2);
+    pid = fork();
+    if (pid < 0)
+        exit(2);
+    if (pid == 0) {
+        close(gate[0]);
+        fcntl(gate[1], F_SETFD, FD_CLOEXEC);
+        execl("/bin/sh", "sh", "-c", "sleep 60; exit 0", "run", "native", "--state", state, "x",
+              (char *)NULL);
+        _exit(127);
+    }
+    /* The pipe's end closes at the child's exec, once procfs shows its
+     * arguments. */
+    close(gate[1]);
+    while (read(gate[0], &byte, 1) > 0)
+        ;
+    close(gate[0]);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) != 0, "a journal beside a running collection passes the setup");
+    CHECK(locked(t) && !no_journal(t) && says(out, "a collection runs: pid "),
+          "the setup clears a lock beside a running collection");
+    kill(pid, SIGKILL);
+    while (waitpid(pid, &status, 0) < 0)
+        ;
+}
+
 /** Make the files that stand for the machine, the PATH of each setup and
  * the `rm` that kills a setup. */
 static void machine(const char *plain, const char *killer)
@@ -323,7 +401,7 @@ static void machine(const char *plain, const char *killer)
     char path[1024];
 
     dir(fix_path("shm"));
-    put(fix_path("shm/etude-guest-boot"), TOKEN);
+    token(TOKEN);
     put(fix_path("boot_id"), BOOT_ID "\n");
     put(fix_path("stat"), "1 (sh) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 4321 0 0\n");
     dir(fix_path("bin"));
@@ -368,14 +446,14 @@ static void claim_rows(const char *plain)
           "the setup keeps a claim of another boot's etude token");
 
     /* With the token unreadable, a token of another boot may be this one's. */
-    put(fix_path("shm/etude-guest-boot"), "short");
+    token("short");
     t = tree("notoken");
     claim(t, "old", "4244 79 " OLDTOKEN "\n");
     fix_format(out, sizeof(out), "%s/out", t);
     CHECK(setup(t, plain, out) == 0, "a setup with no token fails");
     CHECK(claimed(t, "old") && !says(out, "cleared"),
           "the setup with no token clears a claim of a token");
-    put(fix_path("shm/etude-guest-boot"), TOKEN);
+    token(TOKEN);
 
     t = tree("otherclaim");
     claim(t, "old", "4245 80 " OTHER_ID "\n");
@@ -529,6 +607,7 @@ int main(void)
     lock_rows(plain, killer);
     journal_rows(plain);
     collection_rows(plain);
+    live_rows(plain);
     if (failures)
         return failures > 255 ? 255 : failures;
     fix_passed();
