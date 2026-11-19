@@ -260,6 +260,9 @@ including root's keys in
 .Pa keys/0.tar .
 The home is the passwd home field, which need not match the account name.
 For a shared UID, only the first passwd entry supplies keys.
+Accounts of different UIDs whose .ssh is one directory share one archive
+of it, made once and copied to each UID's file, so that the files are the
+same byte for byte.
 Numeric file names keep accounts whose names differ only in case
 separate on FAT32, and the tar file keeps the names, symbolic links and
 hard links of the tree, which FAT32 would fold to one case, match to a short
@@ -270,9 +273,9 @@ a regular file elsewhere is replaced by a copy of that file with its owner
 and mode, a later link to the same file, by name or by a hard link, becoming
 a link to that copy, and any other is written as the absolute path it led
 to.
-A link to a file on a path through a directory that the account may not
-search stops the update before the root is written, since the copy would
-let the account read that file.
+A link to a file on a path through a directory that an account whose .ssh
+it is may not search stops the update before the root is written, since
+the copy would let that account read the file.
 A restore reads
 .Pa keys/UID
 as a directory when an archive written by an older version has one.

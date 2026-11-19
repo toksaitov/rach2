@@ -872,12 +872,16 @@ keep_tree() { # keep_tree PATH
 # hold. The tree is copied first to a scratch directory under /dev/shm, or
 # /tmp where there is none, and its links made by pin_key_links to lead where
 # they led in ROOTDIR, so that a key that is a link out of .ssh is archived
-# with its bytes, unless the account may not reach that key in ROOTDIR,
-# which ends the run as key_reach says. The file is named by the id, which has no case to fold, and
-# when accounts share an id the first of them in passwd has it, whether or
-# not that account has keys. A .ssh that leads to ROOTDIR itself is not
-# stored. It runs in a subshell, and its status is 1 when a home could not be
-# read or a tree could not be stored.
+# with its bytes, unless an account whose .ssh it is may not reach that key
+# in ROOTDIR, which ends the run as key_reach says. The file is named by the
+# id, which has no case to fold, and when accounts share an id the first of
+# them in passwd has it, whether or not that account has keys. Accounts of
+# different ids whose .ssh is one directory share one archive of it, made
+# once and copied to each id's file, since restore_archive_keys requires
+# their files to be the same and two archives of one tree differ in the
+# times the copy and pin_key_links give its directories. A .ssh that leads
+# to ROOTDIR itself is not stored. It runs in a subshell, and its status is
+# 1 when a home could not be read or a tree could not be stored.
 archive_account_keys() (
     scratch=/tmp
     [ -d /dev/shm ] && scratch=/dev/shm
@@ -885,6 +889,8 @@ archive_account_keys() (
         die "there is nowhere to stage the account keys"
     trap 'rm -rf "$stage"' EXIT
     seen=" "
+    # Lines of UID:GID:NAME:KEYS, KEYS last since it may hold a colon.
+    trees=""
     while IFS=: read -r name _password uid gid _gecos home _shell; do
         case "$uid" in "" | *[!0-9]*) continue ;; esac
         case "$seen" in *" $uid "*) continue ;; esac
@@ -892,13 +898,34 @@ archive_account_keys() (
         case "$home" in /*) ;; *) continue ;; esac
         keys=$(root_path "$1" "$home/.ssh") || die "$home/.ssh leads through too many links"
         [ "$keys" != "$1" ] && [ -d "$keys" ] || continue
+        trees="$trees$uid:$gid:$name:$keys
+"
+    done < "$1/etc/passwd"
+    while IFS= read -r tree; do
+        [ -n "$tree" ] || continue
+        uid=${tree%%:*}
+        keys=${tree#*:*:*:}
+        # The accounts whose .ssh is KEYS, as key_reach takes them, first
+        # the first of them in passwd.
+        sharing=$(printf '%s' "$trees" | K="$keys" awk '{
+            k = $0
+            for (i = 0; i < 3; i++) k = substr(k, index(k, ":") + 1)
+            if (k == ENVIRON["K"]) print substr($0, 1, length($0) - length(k) - 1) }')
+        first=${sharing%%:*}
+        if [ "$first" != "$uid" ]; then
+            cp "$next_archive/keys/$first.tar" "$next_archive/keys/$uid.tar" ||
+                die "${keys#"$1"} could not be archived"
+            continue
+        fi
         { rm -rf "$stage/keys" && cp -a "$keys" "$stage/keys"; } ||
-            die "$home/.ssh could not be archived"
-        pin_key_links "$1" "$keys" "$stage/keys" "" "$uid:$gid:$name"
+            die "${keys#"$1"} could not be archived"
+        pin_key_links "$1" "$keys" "$stage/keys" "" "$sharing"
         { mkdir -p "$next_archive/keys" &&
             tar -cf "$next_archive/keys/$uid.tar" -C "$stage/keys" .; } ||
-            die "$home/.ssh could not be archived"
-    done < "$1/etc/passwd"
+            die "${keys#"$1"} could not be archived"
+    done <<EOF
+$trees
+EOF
     rm -rf "$stage"
 )
 
