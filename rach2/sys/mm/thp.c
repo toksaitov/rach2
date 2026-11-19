@@ -111,24 +111,25 @@ uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem)
     for (r = vm_lower(&mm->vm, mm->thp_next); r && done < budget; r = vm_next(r)) {
         addr = r->start > mm->thp_next ? r->start : mm->thp_next;
         addr = (addr + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
-        done++;
         if (addr < r->start || addr >= r->end || r->end - addr < HUGE_SPAN ||
             !thp_region_allows(mm, r, addr, THP_SCAN)) {
+            done++;
             mm->thp_next = r->end;
             continue;
         }
-        for (; r->end - addr >= HUGE_SPAN && done < budget; addr += HUGE_SPAN) {
+        while (r->end - addr >= HUGE_SPAN) { /* one range at least, as Linux's */
             mm->thp_next = addr + HUGE_SPAN;
             done += HUGE_SPAN / PAGE_SIZE;
             if (paging_collapse(mm, addr, THP_SCAN) == -ENOMEM) {
                 *nomem = 1;
                 return done;
             }
-            if (addr + HUGE_SPAN < addr) {
+            addr += HUGE_SPAN;
+            if (addr == 0 || done >= budget) {
                 break;
             }
         }
-        if (r->end - addr < HUGE_SPAN) {
+        if (addr == 0 || r->end - addr < HUGE_SPAN) {
             mm->thp_next = r->end;
         }
     }

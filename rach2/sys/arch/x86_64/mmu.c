@@ -21,7 +21,6 @@
 #include "../../panic.h"
 #include "../../mm/heap.h"
 #include "../../mm/paging.h"
-#include "../../mm/thp.h"
 #include "../../lib/kstring.h"
 #include "../../proc/sched.h"
 
@@ -109,6 +108,17 @@ static uintptr_t table_alloc(void)
  */
 #define PDPT_KEEPS 0x200UL
 
+/*
+ * Bit 9 of a user page directory entry whose present bit is clear: the
+ * entry names its leaf table, hidden from the processor while a 2 MiB page
+ * over it is split or made and every processor drops its translations of
+ * the range, so that none holds a 2 MiB and a 4 KiB translation of one
+ * address at once, as Linux's split invalidates the entry before it puts
+ * the table there (__split_huge_pmd_locked). Software walks the table as
+ * if the entry were present (`table_for`, `mmu_user_skip`).
+ */
+#define PDE_HIDDEN 0x200UL
+
 /** Two zeroed consecutive pages for a user page directory and the tables it
  * keeps, by the physical address of the first; 0 when there are none. */
 static uintptr_t pd_alloc(void)
@@ -147,6 +157,10 @@ static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t 
     for (l = 4; l > level; l--) {
         pte_t *e = &table[LEVEL_INDEX(va, l)];
 
+        if (l == 2 && (*e & (PTE_P | PDE_HIDDEN)) == PDE_HIDDEN && va < USER_ADDR_MAX) {
+            table = MMU_VIRT(PTE_ADDR(*e));
+            continue;
+        }
         if (!(*e & PTE_P)) {
             uintptr_t phys = 0;
             pte_t keeps = 0;
@@ -484,8 +498,9 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
     for (l = 4; l > 1; l--) {
         pte_t e = table[LEVEL_INDEX(va, l)];
 
-        if (l == 2 && (e & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS)) {
-            return va; /* a 2 MiB page, which keeps its table */
+        if (l == 2 && ((e & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS) ||
+                       (e & (PTE_P | PDE_HIDDEN)) == PDE_HIDDEN)) {
+            return va; /* a 2 MiB page, which keeps its table, or a hidden table */
         }
         if (!(e & PTE_P) || (e & PTE_PS)) {
             uintptr_t span = (uintptr_t)1 << (3 + 9 * l);
@@ -539,18 +554,20 @@ pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va)
 int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
 {
     pte_t *e = user_pde(dir, va);
+    pte_t v = e ? *e : 0;
 
-    if (!e || (*e & (PTE_P | PTE_PS)) != PTE_P) {
+    if (!e || ((v & (PTE_P | PTE_PS)) != PTE_P && (v & (PTE_P | PDE_HIDDEN)) != PDE_HIDDEN)) {
         return -1;
     }
-    e[MMU_TABLE_ENTRIES] = PTE_ADDR(*e);
+    e[MMU_TABLE_ENTRIES] = PTE_ADDR(v);
     __asm__ __volatile__("" ::: "memory");
     *(volatile pte_t *)e = leaf | PTE_PS;
     return 0;
 }
 
 /** The entry is exchanged at once, so that an accessed or dirty bit the
- * processor sets in the page meanwhile is in what comes back. */
+ * processor sets in the page meanwhile is in what comes back; once it is
+ * hidden the processor sets none, since it finds no entry present. */
 pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pde(dir, va);
@@ -558,9 +575,62 @@ pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
     if (!e || (*e & (PTE_P | PTE_PS)) != (PTE_P | PTE_PS)) {
         return 0;
     }
-    return (pte_t)arch_atomic_xchg_ptr(
-        (volatile uintptr_t *)e,
-        (uintptr_t)(PTE_ADDR(e[MMU_TABLE_ENTRIES]) | PTE_P | PTE_W | PTE_U));
+    return (pte_t)arch_atomic_xchg_ptr((volatile uintptr_t *)e,
+                                       (uintptr_t)(PTE_ADDR(e[MMU_TABLE_ENTRIES]) | PDE_HIDDEN));
+}
+
+/** An exchange, so that an accessed bit the processor sets meanwhile stays;
+ * a write right only added needs no flush, since the processor drops the
+ * translation of an address on its page fault. */
+pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set)
+{
+    pte_t *e = user_pde(dir, va);
+    pte_t old, now;
+
+    do {
+        old = e ? *(volatile pte_t *)e : 0;
+        if ((old & (PTE_P | PTE_PS)) != (PTE_P | PTE_PS)) {
+            return 0;
+        }
+        now = (old & ~clear) | set;
+    } while (arch_atomic_cmpxchg_ptr((volatile uintptr_t *)e, (uintptr_t)old, (uintptr_t)now) !=
+             (uintptr_t)old);
+    return now;
+}
+
+int mmu_user_keeps(page_dir_t *dir, uintptr_t va)
+{
+    pte_t e4, e3;
+
+    if (va >= USER_ADDR_MAX) {
+        return 0;
+    }
+    e4 = dir->entries[LEVEL_INDEX(va, 4)];
+    if (!(e4 & PTE_P)) {
+        return 1;
+    }
+    e3 = ((pte_t *)MMU_VIRT(PTE_ADDR(e4)))[LEVEL_INDEX(va, 3)];
+    return !(e3 & PTE_P) || (e3 & (PTE_PS | PDPT_KEEPS)) == PDPT_KEEPS;
+}
+
+int mmu_user_table_hide(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *e = user_pde(dir, va);
+
+    if (!e || (*e & (PTE_P | PTE_PS)) != PTE_P) {
+        return 0;
+    }
+    arch_atomic_xchg_ptr((volatile uintptr_t *)e, (uintptr_t)(PTE_ADDR(*e) | PDE_HIDDEN));
+    return 1;
+}
+
+void mmu_user_table_show(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *e = user_pde(dir, va);
+
+    if (e && (*e & (PTE_P | PDE_HIDDEN)) == PDE_HIDDEN) {
+        *(volatile pte_t *)e = PTE_ADDR(*e) | PTE_P | PTE_W | PTE_U;
+    }
 }
 
 pte_t *mmu_kernel_table(uintptr_t va)
@@ -659,7 +729,7 @@ static pte_t *entry_table(pte_t e)
  * each PMD entry (mm/memory.c:1740); `dir` is unreachable then (paging.h),
  * so the pointers into it stay valid. A 2 MiB page gives its directory
  * entry back to the table it keeps, whose entries hold the references, and
- * leaves the count of huge pages mapped (`thp_mapped`). The
+ * leaves the count of huge pages mapped (`paging_huge_mapped`). The
  * tables stay, for `free_page_directory`.
  */
 void free_user_pages(page_dir_t *dir)
@@ -691,9 +761,7 @@ void free_user_pages(page_dir_t *dir)
                     continue;
                 }
                 if (pd[i2] & PTE_PS) {
-                    if (!(pd[i2] & PTE_ZEROFILL)) {
-                        thp_mapped_add(-1);
-                    }
+                    paging_huge_mapped(pd[i2], -1);
                     pd[i2] = PTE_ADDR(pd[i2 + MMU_TABLE_ENTRIES]) | PTE_P | PTE_W | PTE_U;
                 }
                 pt = entry_table(pd[i2]);

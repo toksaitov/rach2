@@ -9389,13 +9389,19 @@ static uint32_t madvise_mark_bit(uint32_t advice)
  * Set or clear the mark of the regions of `vm` over [addr, end) that
  * `advice` names: the fork marks of `madvise_mark_bit`, or MADV_HUGEPAGE's
  * and MADV_NOHUGEPAGE's, each of which clears the other and wakes
- * khugepaged for the first. 0, or -1 when a region cannot be split.
+ * khugepaged for the first, and which change nothing where the page
+ * directory maps no huge page (MMU_HUGE 0). A huge page across an edge of
+ * the range is split first, as Linux splits one across a region it splits
+ * (vma_adjust_trans_huge). 0, or -1 when a region cannot be split.
  */
 static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t advice)
 {
     uint32_t set, clear;
 
     if (advice == MADV_HUGEPAGE || advice == MADV_NOHUGEPAGE) {
+        if (!MMU_HUGE) {
+            return 0;
+        }
         set = advice == MADV_HUGEPAGE ? VM_PROT_HUGEPAGE : VM_PROT_NOHUGEPAGE;
         clear = VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE;
     } else {
@@ -9405,6 +9411,7 @@ static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t 
         clear = on ? 0u : madvise_mark_bit(advice);
         mm_note_anon(current_proc->mm, addr, end);
     }
+    paging_huge_split_edges(current_proc->mm, addr, end);
     if (vm_advise(vm, addr, end, set, clear) != 0) {
         vma_exhausted("madvise");
         return -1;
@@ -9415,39 +9422,69 @@ static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t 
     return 0;
 }
 
+#if MMU_HUGE
 /**
- * MADV_COLLAPSE over [start, end), which regions of `mm` cover, as Linux
- * 6.12's madvise_collapse: a region that cannot hold a huge page whatever
- * `enabled` says (`thp_region_allows`, THP_COLLAPSE), or that has no 2 MiB
- * from a boundary inside it, stops the advice with -EINVAL; otherwise each
- * 2 MiB from a boundary inside both the region and the range is collapsed
- * into a huge page (`paging_collapse`). 0 when each is a huge page after,
- * or the errno of the last that is not: -ENOMEM when no huge page could be
- * had, -EAGAIN for a pinned page, -EINVAL for any other refusal. 0 where
- * the page directory maps no huge page, which leaves the pages as they are.
+ * MADV_COLLAPSE over [lo, hi) of the region `r` of `mm`, as Linux 6.12's
+ * madvise_collapse over one region: a region that cannot hold a huge page
+ * whatever `enabled` says (`thp_region_allows`, THP_COLLAPSE), or that has
+ * no 2 MiB from a boundary inside it, is -EINVAL; otherwise each 2 MiB from
+ * a boundary inside [lo, hi) is collapsed into a huge page
+ * (`paging_collapse`), and no huge page to be had stops the walk. 0 when
+ * each is a huge page after, or the errno of the last that is not: -ENOMEM
+ * when no huge page could be had, -EAGAIN for a pinned page, -EINVAL for
+ * any other refusal.
+ */
+static int madvise_collapse_region(struct mm *mm, const vma_t *r, uintptr_t lo, uintptr_t hi)
+{
+    uintptr_t addr = (r->start + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+    uint32_t total = 0, made = 0;
+    int rc, last = 0;
+
+    if (addr < r->start || addr >= r->end || r->end - addr < HUGE_SPAN ||
+        !thp_region_allows(mm, r, addr, THP_COLLAPSE)) {
+        return -EINVAL;
+    }
+    lo = (lo + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+    for (addr = lo; addr >= lo && addr < hi && hi - addr >= HUGE_SPAN; addr += HUGE_SPAN) {
+        total++;
+        rc = paging_collapse(mm, addr, THP_COLLAPSE);
+        if (rc == -ENOMEM) {
+            return rc;
+        }
+        made += rc == 0;
+        last = rc != 0 ? rc : last;
+    }
+    return made == total ? 0 : last;
+}
+#endif
+
+/**
+ * MADV_COLLAPSE over [start, end) of `mm`, region by region, as Linux
+ * 6.12's madvise_walk_vmas walks it (`madvise_collapse_region`): the first
+ * region's error ends the advice, and a part of the range that no region
+ * covers is -ENOMEM once the rest is done. 0 where the page directory maps
+ * no huge page, which leaves the pages as they are.
  */
 static int madvise_collapse(struct mm *mm, uintptr_t start, uintptr_t end)
 {
 #if MMU_HUGE
-    const vma_t *r;
-    uintptr_t lo, hi, addr;
-    int rc, last = 0;
+    const vma_t *r = vm_lower(&mm->vm, start);
+    uintptr_t at = start;
+    int rc, gap = 0;
 
-    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
-        addr = (r->start + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
-        if (addr < r->start || addr >= r->end || r->end - addr < HUGE_SPAN ||
-            !thp_region_allows(mm, r, addr, THP_COLLAPSE)) {
-            return -EINVAL;
+    for (; at < end; r = vm_next(r)) {
+        if (!r || r->start >= end) {
+            return -ENOMEM;
         }
-        lo = r->start > start ? r->start : start;
-        hi = r->end < end ? r->end : end;
-        lo = (lo + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
-        for (addr = lo; addr >= lo && addr < hi && hi - addr >= HUGE_SPAN; addr += HUGE_SPAN) {
-            rc = paging_collapse(mm, addr, THP_COLLAPSE);
-            last = rc != 0 ? rc : last;
+        gap |= r->start > at;
+        rc = madvise_collapse_region(mm, r, r->start > start ? r->start : start,
+                                     r->end < end ? r->end : end);
+        if (rc != 0) {
+            return rc;
         }
+        at = r->end;
     }
-    return last;
+    return gap ? -ENOMEM : 0;
 #else
     (void)mm;
     (void)start;
@@ -9472,6 +9509,9 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
     if (len == 0) {
         return 0;
     }
+    if (advice == MADV_COLLAPSE) { /* past a gap, as Linux's walk goes */
+        return madvise_collapse(current_proc->mm, addr, addr + len);
+    }
     if (vm_covered(vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
@@ -9489,8 +9529,6 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
         }
-    } else if (advice == MADV_COLLAPSE) {
-        return madvise_collapse(current_proc->mm, addr, end);
     } else if (madvise_mark_bit(advice) != 0 || advice == MADV_HUGEPAGE ||
                advice == MADV_NOHUGEPAGE) {
         if (madvise_mark(vm, addr, end, advice) != 0) {
@@ -9603,6 +9641,7 @@ long sys_mseal(isr_params_t *params)
         rc = -ENOMEM;
     } else {
         mm_note_anon(mm, start, start + len);
+        paging_huge_split_edges(mm, start, start + len);
         if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
             vma_exhausted("mseal");
             rc = -ENOMEM;
@@ -10810,6 +10849,7 @@ static int32_t mlock_change(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint3
         }
     }
     mm_note_anon(current_proc->mm, *start, *end);
+    paging_huge_split_edges(current_proc->mm, *start, *end);
     rc = vm_lock(vm, *start, *end, bits);
     if (rc == -2) {
         vma_exhausted("mlock");
@@ -11234,7 +11274,9 @@ static long prctl_bset(unsigned long option, unsigned long cap)
  *
  * PR_SET_THP_DISABLE, with the last three arguments 0, turns transparent
  * huge pages off in the address space when the second argument is not 0
- * and back on when it is, and PR_GET_THP_DISABLE, with every argument 0,
+ * and back on when it is, under the regions' lock held to write, as Linux
+ * sets it, so that no fault or collapse under way maps a huge page after
+ * it returns, and PR_GET_THP_DISABLE, with every argument 0,
  * returns the setting, 0 or 1 (mm.h, `thp_disable`).
  *
  * PR_SET_TIMERSLACK sets the thread's timer slack to the second argument in
@@ -11312,7 +11354,9 @@ long sys_prctl(isr_params_t *params)
         if (rest != 0) {
             return -EINVAL;
         }
+        mmap_write_lock(current_proc->mm); /* no fault maps a huge page across it */
         current_proc->mm->thp_disable = arg2 != 0;
+        mmap_unlock(current_proc->mm);
         return 0;
     case PR_GET_THP_DISABLE:
         if (arg2 != 0 || rest != 0) {
