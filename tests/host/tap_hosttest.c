@@ -65,9 +65,8 @@ static struct {
     void (*during_wait)(void); /* run once inside the next wait, before a signal */
     int register_error;        /* what netdev_register answers, when set */
     void *refused_ring;        /* the ring of the record a refused registration had */
-    void *freed_ring;          /* the last run kfree_pages was given, and its pages */
-    uint32_t freed_pages;
-    struct netdev *iface[4]; /* the interfaces registered */
+    int ring_given_back;       /* kfree_pages had that ring, whole */
+    struct netdev *iface[4];   /* the interfaces registered */
     int registered, unregistered;
     int rx, rx_len; /* frames given to ethernet_rx, and the last one's length */
     int wakes, carrier, set_ups, last_up, locks;
@@ -412,11 +411,12 @@ static void be_gone(struct tap_backend *b)
 
 extern void (*kheap_host_pages_freeing)(void *p, uint32_t count);
 
-/** Note the run `kfree_pages` was given. */
+/** Note whether `kfree_pages` was given the refused ring, whole, before
+ * it is freed. */
 static void note_freed(void *p, uint32_t count)
 {
-    k.freed_ring = p;
-    k.freed_pages = count;
+    k.ring_given_back = p == k.refused_ring && count == TAP_PAGES;
+    k.refused_ring = 0;
 }
 
 /** Before TUNSETIFF: the requests that need no interface, the refusals of
@@ -460,8 +460,7 @@ static void check_before(void)
           "and a template with a second %d or another conversion, as dev_alloc_name");
     k.register_error = -ENOSPC;
     kheap_host_pages_freeing = note_freed;
-    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC && k.refused_ring &&
-              k.freed_ring == k.refused_ring && k.freed_pages == TAP_PAGES,
+    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC && k.ring_given_back,
           "a registration that fails is the call's error, and gives its new ring back");
     kheap_host_pages_freeing = 0;
     k.register_error = 0;
@@ -725,6 +724,12 @@ static void check_race(void)
     CHECK(open_tap(2, 1) == 0 && set_iff(2, "a01", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0 &&
               open_tap(3, 2) == 0 && set_iff(3, "a%d1", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENFILE,
           "a digit after %d is read into the number, as Linux's sscanf, so a01 leaves a%d1 none");
+    k.node->ops->close(&fds[2]);
+    k.node->ops->close(&fds[3]);
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "a00", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0 &&
+              open_tap(3, 2) == 0 && set_iff(3, "a%d0", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
+              same_str(name, "a10") == 0,
+          "but a00 reads back as 0, which it takes, so a%d0 gives a10");
     k.node->ops->close(&fds[2]);
     k.node->ops->close(&fds[3]);
 }

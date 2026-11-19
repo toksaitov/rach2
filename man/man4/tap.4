@@ -45,13 +45,22 @@ A name with a
 .Ql %
 is a template, whose one
 .Ql %d
-takes the first digit no interface has, as Linux's dev_alloc_name fills
-it in.
-As Linux reads the names in use back through the template with
+takes a digit as Linux's dev_alloc_name chooses it: a number is taken
+when the name it gives exists and reads back through the template, with
 .Xr sscanf 3 ,
-a digit just after the
+as that number, and the template takes the first number not taken.
+A digit after the
 .Ql %d
-leaves no number in use, and the template takes 0 or fails.
+is read back with the number, so with
+.Li a01
+present
+.Ql a%d1
+fails, and with
+.Li a00
+present
+.Ql a%d0
+gives
+.Li a10 .
 Another name takes that interface when it is a tap no descriptor holds,
 and makes it when no interface has the name.
 A name may not be
@@ -171,9 +180,10 @@ on a descriptor that has an interface.
 The
 .Vt struct ifreq ,
 or a buffer of a read or write, is not the caller's.
-When only the copy of the name back to the caller faults,
+When only the copy of the name back to the caller faults, the
+descriptor keeps the interface
 .Dv TUNSETIFF
-has made the interface, and the descriptor keeps it, as on Linux.
+made or took, as on Linux.
 .It Er EINVAL
 .Dv TUNSETIFF
 without
@@ -190,11 +200,9 @@ that is not one
 or the name of an interface that is no tap; a write shorter than an
 Ethernet header.
 .It Er ENFILE
-No digit is free for the template's
-.Ql %d ,
-or the name 0 gives it, with a digit after the
-.Ql %d ,
-exists.
+Every digit of the template's
+.Ql %d
+is taken, or the first not taken gives a name that exists.
 .It Er ENOSPC
 Every interface of the kernel's, or both tap records, are taken.
 .It Er ENOTTY
