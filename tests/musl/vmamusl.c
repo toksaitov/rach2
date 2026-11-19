@@ -32,7 +32,16 @@
  * memfd mapped by two calls, which are one region where the file's offsets
  * continue through one open file; then two private pages of a memfd moved
  * together with mremap, which stay two regions when each was written while
- * apart; and it grows the heap with brk three times. Linux 6.18 lists one
+ * apart; then pairs of private pages brought together by other paths, which
+ * merge only where Linux's anon_vma records and page offsets let them
+ * (`check_identity_merges`): memfd pages of two calls given one protection
+ * after both were written, which share one anon_vma and merge; pages of one
+ * call split by a move and written apart, written apart before their file
+ * is truncated and regrown, and anonymous pages guarded apart, which stay
+ * two; memfd pages guarded apart, which merge; anonymous pages of one call
+ * split by a move, which stay two unless only the page that moved first was
+ * written; and pages a fork's child joins, splits or maps beside written
+ * ones; and it grows the heap with brk three times. Linux 6.18 lists one
  * region for the pages at each step but the second and fourth, and one
  * [heap].
  *
@@ -304,6 +313,279 @@ static int check_private_merges(char *detail, size_t size)
     return 0;
 }
 
+/* The cases of `identity_trial`, in the order of `identity_cases`. */
+enum {
+    ID_PROTECT,     /* memfd pages of two calls, written, given one protection */
+    ID_SPLIT,       /* memfd pages of one call split by a move, both written */
+    ID_TRUNCATE,    /* memfd pages written apart, the file cut to 0 and regrown */
+    ID_GUARD,       /* memfd pages guarded apart, never written */
+    ID_ANON_GUARD,  /* anonymous pages guarded apart, never written */
+    ID_ANON_BOTH,   /* anonymous pages of one call split by a move, both written */
+    ID_ANON_FIRST,  /* the same, the first alone written */
+    ID_ANON_SECOND, /* the same, the second alone written */
+    ID_CASES
+};
+
+static const char *const identity_cases[] = {
+    "memfd pages given one protection",   "memfd pages split by a move",
+    "memfd pages kept across truncation", "memfd pages guarded apart",
+    "anonymous pages guarded apart",      "anonymous pages written apart",
+    "anonymous pages, the first written", "anonymous pages, the second written"};
+
+/* Linux 6.18's regions in the 6 pages at `base` after each case. */
+static const int identity_regions[] = {3, 4, 4, 3, 4, 4, 4, 3};
+
+/**
+ * Map pages 0 and 1 of the memfd `fd` privately at pages 1 and 2 of `base`,
+ * the second with PROT_EXEC as well, write 'A' and 'B' to them and give the
+ * second the first's protection, as `identity_trial` asks. Linux shares the
+ * first page's anon_vma with the second, whose flags differ only in access,
+ * when the second is written (mm/rmap.c, find_mergeable_anon_vma). Returns
+ * 0, or -1 when a call failed.
+ */
+static int bring_protected(int fd, char *base, long pg)
+{
+    int rw = PROT_READ | PROT_WRITE;
+    char *a, *b;
+
+    a = mmap(base + pg, (size_t)pg, rw, MAP_PRIVATE | MAP_FIXED, fd, 0);
+    b = mmap(base + 2 * pg, (size_t)pg, rw | PROT_EXEC, MAP_PRIVATE | MAP_FIXED, fd, pg);
+    if (a == MAP_FAILED || b == MAP_FAILED) {
+        return -1;
+    }
+    a[0] = 'A';
+    b[0] = 'B';
+    return mprotect(b, (size_t)pg, rw);
+}
+
+/**
+ * Map two private pages one at a time at pages 1 and 3 of `far`, pages 0
+ * and 1 of `file` or, with `file` -1, anonymous ones; write 'A' and 'B' to
+ * them and truncate the file to 0 and back, when `cut`, or guard each with
+ * MADV_GUARD_INSTALL; and move them to pages 1 and 2 of `base`, as
+ * `identity_trial` asks. Returns 0, or -1 when a call failed.
+ */
+static int bring_apart(int file, int cut, char *base, char *far, long pg)
+{
+    int flags = MAP_PRIVATE | MAP_FIXED | (file < 0 ? MAP_ANONYMOUS : 0);
+    int rw = PROT_READ | PROT_WRITE;
+    char *p, *q;
+
+    p = mmap(far + pg, (size_t)pg, rw, flags, file, 0);
+    q = mmap(far + 3 * pg, (size_t)pg, rw, flags, file, file < 0 ? 0 : pg);
+    if (p == MAP_FAILED || q == MAP_FAILED) {
+        return -1;
+    }
+    if (cut) {
+        p[0] = 'A';
+        q[0] = 'B';
+        if (ftruncate(file, 0) != 0 || ftruncate(file, 2 * pg) != 0 ||
+            pwrite(file, "f", 1, 0) != 1 || pwrite(file, "f", 1, pg) != 1) {
+            return -1;
+        }
+    } else if (madvise(p, (size_t)pg, MADV_GUARD_INSTALL) != 0 ||
+               madvise(q, (size_t)pg, MADV_GUARD_INSTALL) != 0) {
+        return -1;
+    }
+    if (mremap(p, (size_t)pg, (size_t)pg, MREMAP_MAYMOVE | MREMAP_FIXED, base + pg) == MAP_FAILED ||
+        mremap(q, (size_t)pg, (size_t)pg, MREMAP_MAYMOVE | MREMAP_FIXED, base + 2 * pg) ==
+            MAP_FAILED) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Map two private pages with one call at pages 1 and 2 of `far`, pages 0 and
+ * 1 of `file` or, with `file` -1, anonymous ones; move the second to page 2
+ * of `base`; write `wa` to the first and `wb` to the second where not 0; and
+ * move the first to page 1 of `base`, as `identity_trial` asks. Linux gives
+ * anonymous memory moved before it was written the page offset of its new
+ * address (mm/vma.c, copy_vma). Returns 0, or -1 when a call failed.
+ */
+static int bring_split(int file, char wa, char wb, char *base, char *far, long pg)
+{
+    int flags = MAP_PRIVATE | MAP_FIXED | (file < 0 ? MAP_ANONYMOUS : 0);
+    char *p, *b;
+
+    p = mmap(far + pg, 2 * (size_t)pg, PROT_READ | PROT_WRITE, flags, file, 0);
+    if (p == MAP_FAILED) {
+        return -1;
+    }
+    b = mremap(p + pg, (size_t)pg, (size_t)pg, MREMAP_MAYMOVE | MREMAP_FIXED, base + 2 * pg);
+    if (b == MAP_FAILED) {
+        return -1;
+    }
+    if (wa) {
+        p[0] = wa;
+    }
+    if (wb) {
+        b[0] = wb;
+    }
+    return mremap(p, (size_t)pg, (size_t)pg, MREMAP_MAYMOVE | MREMAP_FIXED, base + pg) == MAP_FAILED
+               ? -1
+               : 0;
+}
+
+/**
+ * Bring two private pages, of the memfd `fd`, whose pages 0 and 1 hold 'f',
+ * or anonymous, next to each other at pages 1 and 2 of `base`, by the path
+ * case `kind` names, using pages 1 to 3 of `far`, a PROT_NONE reservation of
+ * 5 pages, as the place apart. Every mapping is made at a fixed address
+ * between PROT_NONE pages, since a neighbour with an anon_vma of its own
+ * could lend it to a page written beside it (mm/rmap.c,
+ * find_mergeable_anon_vma). Returns the regions in the 6 pages at `base`, or
+ * -1 when a call failed or a page lost what it held. Leaves only `base` and
+ * `far` mapped, and the file as it was.
+ */
+static int identity_trial(int fd, int kind, char *base, char *far, long pg)
+{
+    int file = kind >= ID_ANON_GUARD ? -1 : fd;
+    int guard = kind == ID_GUARD || kind == ID_ANON_GUARD;
+    char wa = kind == ID_ANON_SECOND ? 0 : 'A';
+    char wb = kind == ID_ANON_FIRST ? 0 : 'B';
+    int got = -1, rc;
+
+    if (kind == ID_PROTECT) {
+        rc = bring_protected(fd, base, pg);
+    } else if (kind == ID_TRUNCATE || guard) {
+        rc = bring_apart(file, !guard, base, far, pg);
+        wa = wb = file < 0 ? 0 : 'f';
+    } else {
+        rc = bring_split(file, wa, wb, base, far, pg);
+    }
+    if (rc == 0) {
+        got = count_regions((unsigned long)base, (unsigned long)base + 6 * pg, NULL);
+        if ((guard && madvise(base + pg, 2 * (size_t)pg, MADV_GUARD_REMOVE) != 0) ||
+            base[pg] != wa || base[2 * pg] != wb) {
+            got = -1;
+        }
+    }
+    if (mmap(far + pg, 3 * (size_t)pg, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) ==
+        MAP_FAILED) {
+        got = -1;
+    }
+    return got;
+}
+
+/* The cases of `fork_trial`, after those of `identity_trial`. */
+enum { FORK_SPLIT_BEFORE, FORK_SPLIT_AFTER, FORK_BESIDE, FORK_CASES };
+
+static const char *const fork_cases[] = {"pages split before a fork, joined in the child",
+                                         "pages split and joined in a fork's child",
+                                         "a page mapped in a fork's child beside one written"};
+
+/* Linux 6.18's regions in the 6 pages at `base` in the child. */
+static const int fork_regions[] = {4, 3, 4};
+
+/**
+ * Map anonymous pages at page 1 of `base`, two of them or, for
+ * FORK_BESIDE, one, write each, and count the regions in the 6 pages at
+ * `base` in a fork's child after case `kind`. Linux gives each region of
+ * the child an anon_vma of its own, whose chain holds the parent's too, and
+ * merges such a region only with one of the same anon_vma
+ * (mm/vma.c, is_mergeable_anon_vma): pages split before the fork stay apart
+ * when the child joins them, those the child split share one and join, and
+ * a page the child maps beside one written joins nothing. Returns the count,
+ * or -1 when a call failed or a page lost what it held.
+ */
+static int fork_trial(int kind, char *base, long pg)
+{
+    int rw = PROT_READ | PROT_WRITE;
+    int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED;
+    int status, ok;
+    char *a;
+    pid_t child;
+
+    a = mmap(base + pg, (size_t)(kind == FORK_BESIDE ? 1 : 2) * (size_t)pg, rw, flags, -1, 0);
+    if (a == MAP_FAILED) {
+        return -1;
+    }
+    a[0] = 'A';
+    if (kind != FORK_BESIDE) {
+        a[pg] = 'B';
+    }
+    if (kind == FORK_SPLIT_BEFORE && mprotect(a + pg, (size_t)pg, PROT_READ) != 0) {
+        return -1;
+    }
+    fflush(stdout);
+    child = fork();
+    if (child == 0) {
+        switch (kind) {
+        case FORK_SPLIT_BEFORE:
+            ok = mprotect(a + pg, (size_t)pg, rw) == 0;
+            break;
+        case FORK_SPLIT_AFTER:
+            ok = mprotect(a + pg, (size_t)pg, PROT_READ) == 0 &&
+                 mprotect(a + pg, (size_t)pg, rw) == 0;
+            break;
+        default:
+            ok = mmap(a + pg, (size_t)pg, rw, flags, -1, 0) != MAP_FAILED;
+            break;
+        }
+        ok = ok && a[0] == 'A' && (kind == FORK_BESIDE || a[pg] == 'B');
+        _exit(ok ? count_regions((unsigned long)base, (unsigned long)base + 6 * pg, NULL) & 0xff
+                 : 0xff);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) == 0xff) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+}
+
+/**
+ * Check that two private regions brought together merge only where Linux
+ * 6.18's anon_vma records would let them (`identity_trial`, `fork_trial`).
+ * Returns 0, or 1 with what differed in `detail`.
+ */
+static int check_identity_merges(char *detail, size_t size)
+{
+    long pg = sysconf(_SC_PAGESIZE);
+    size_t span = 6 * (size_t)pg;
+    const char *what;
+    char *base, *far;
+    int fd, k, got, want;
+
+    fd = memfd_create("vmamusl-identity", 0);
+    if (fd < 0 || ftruncate(fd, 2 * pg) != 0 || pwrite(fd, "f", 1, 0) != 1 ||
+        pwrite(fd, "f", 1, pg) != 1) {
+        snprintf(detail, size, "the memfd for anonymous identity could not be made");
+        return 1;
+    }
+    far = mmap(0, 5 * (size_t)pg, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    for (k = 0; k < ID_CASES + FORK_CASES; k++) {
+        base = far == MAP_FAILED ? MAP_FAILED
+                                 : mmap(0, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (k < ID_CASES) {
+            what = identity_cases[k];
+            want = identity_regions[k];
+            got = base == MAP_FAILED ? -1 : identity_trial(fd, k, base, far, pg);
+        } else {
+            what = fork_cases[k - ID_CASES];
+            want = fork_regions[k - ID_CASES];
+            got = base == MAP_FAILED ? -1 : fork_trial(k - ID_CASES, base, pg);
+        }
+        if (base != MAP_FAILED) {
+            munmap(base, span);
+        }
+        if (got != want) {
+            if (got == -1) {
+                snprintf(detail, size, "a call failed or a page lost its data for %s", what);
+            } else {
+                snprintf(detail, size, "%d regions for %s, where Linux has %d", got, what, want);
+            }
+            break;
+        }
+    }
+    if (far != MAP_FAILED) {
+        munmap(far, 5 * (size_t)pg);
+    }
+    close(fd);
+
+    return got != want;
+}
+
 /**
  * Run the third half's calls and check the regions after each against
  * Linux's. Returns 0, or 1 with what differed in `detail`.
@@ -381,7 +663,8 @@ static int check_merges(char *detail, size_t size)
         }
     }
     munmap(base, span);
-    if (check_file_merges(detail, size) != 0 || check_private_merges(detail, size) != 0) {
+    if (check_file_merges(detail, size) != 0 || check_private_merges(detail, size) != 0 ||
+        check_identity_merges(detail, size) != 0) {
         return 1;
     }
 
