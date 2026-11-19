@@ -79,6 +79,9 @@ struct block_request;
  */
 struct block_device {
     uint32_t sector_size; /* always BLOCK_SECTOR_SIZE */
+    /* The device's size in sectors. A driver whose disk may change size
+     * while it is in use sets it with `block_set_sectors`, and a reader that
+     * may run beside such a change reads it with `block_sectors`. */
     uint64_t sector_count;
     uint32_t flags;          /* BLOCK_* above */
     uint32_t deadline_ticks; /* sleeping path: the deadline's period in ticks;
@@ -153,7 +156,47 @@ struct block_device {
      * so that neither wraps. */
     uint64_t firsts_unflushed;
     uint64_t firsts_flushed;
+    /* Odd while `block_set_sectors` sets `sector_count`; moved on by each
+     * change. Last, so that the tests' positional initializers stay right. */
+    volatile uint32_t size_seq;
 };
+
+/**
+ * The size of `device` in sectors, read whole. On i686 a 64-bit count is
+ * two loads, and a change of size between them would join halves of two
+ * sizes the device never had, so the read is retried while `size_seq` is
+ * odd or moved past it, as Linux's i_size_read reads a size on 32-bit SMP
+ * (include/linux/fs.h). The accesses are volatile, which keeps them in
+ * program order, and x86 keeps loads in order, so no fence is needed. From
+ * any context.
+ */
+static __inline__ uint64_t block_sectors(const block_device_t *device)
+{
+    const volatile uint64_t *count = &device->sector_count;
+    uint32_t seq;
+    uint64_t n;
+
+    do {
+        seq = device->size_seq;
+        n = *count;
+    } while ((seq & 1u) != 0 || seq != device->size_seq);
+    return n;
+}
+
+/**
+ * Give `device` the size `sectors` for readers of `block_sectors`. Writers
+ * of one device are serialized by its driver's lock, held with interrupts
+ * off so that no reader on the same processor spins on an odd count; x86
+ * keeps stores in order, so no fence is needed.
+ */
+static __inline__ void block_set_sectors(block_device_t *device, uint64_t sectors)
+{
+    volatile uint64_t *count = &device->sector_count;
+
+    device->size_seq++;
+    *count = sectors;
+    device->size_seq++;
+}
 
 /* How long a chain of backing devices may be: a loop device stands on a real
  * device and nothing stands on it. One is what the four buffers a process may

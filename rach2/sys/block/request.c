@@ -145,6 +145,16 @@ static uint32_t req_clock(void)
     return req_ticks + ((uint32_t)kernel_ticks - req_seen);
 }
 
+/** Whether `count` sectors at `lba`, at least one, lie on `device`, whose
+ * size is read whole (`block_sectors`), since a disk may change size while
+ * it is in use. */
+static int in_range(block_device_t *device, uint64_t lba, uint64_t count)
+{
+    uint64_t size = device ? block_sectors(device) : 0;
+
+    return count != 0 && lba < size && count <= size - lba;
+}
+
 /**
  * `req_lock` held. Count toward `disk-wait-ticks` the ticks request `r`,
  * leaving flight now, spent in flight since `block_request_tick` last
@@ -843,8 +853,7 @@ int block_read_frames(block_device_t *device, uint64_t lba, uint32_t count, cons
     uint32_t start = timer_now_us(), most, done = 0, flags;
     int rc = 0;
 
-    if (!device || count == 0 || lba >= device->sector_count ||
-        count > device->sector_count - lba) {
+    if (!in_range(device, lba, count)) {
         return -EIO;
     }
     if (!(block_flags(device) & BLOCK_FRAMES) || !device->submit ||
@@ -965,8 +974,7 @@ int block_read_frames_async(block_device_t *device, uint64_t lba, uint32_t count
     uint32_t most, started = 0;
     int rc = -EIO;
 
-    if (!device || count == 0 || lba >= device->sector_count ||
-        count > device->sector_count - lba) {
+    if (!in_range(device, lba, count)) {
         return -EIO;
     }
     if (!(block_flags(device) & BLOCK_FRAMES) || !device->submit ||
@@ -1095,8 +1103,7 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
     uint8_t *bytes = buffer;
     uint32_t most;
 
-    if (!device || count == 0 || lba >= device->sector_count ||
-        count > device->sector_count - lba) {
+    if (!in_range(device, lba, count)) {
         return -EIO;
     }
     if (block_flags(device) & BLOCK_FAULT_SAFE) {
@@ -1296,7 +1303,7 @@ int block_discard(block_device_t *device, uint64_t lba, uint64_t count, int zero
     if (!device || !dev || count == 0) {
         return count == 0 ? 0 : -EIO;
     }
-    if (lba >= device->sector_count || count > device->sector_count - lba) {
+    if (!in_range(device, lba, count)) {
         return -EIO;
     }
     most = zeroes ? dev->max_zeroes : dev->max_discard;
@@ -1332,8 +1339,8 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
     struct block_request *r;
     uint32_t flags;
 
-    if (!device || !device->submit || count == 0 || count > block_max_sectors(device) ||
-        lba >= device->sector_count || count > device->sector_count - lba) {
+    if (!device || !device->submit || count > block_max_sectors(device) ||
+        !in_range(device, lba, count)) {
         return NULL;
     }
     r = req_take(device, 0, lba, count, NULL, NULL);
