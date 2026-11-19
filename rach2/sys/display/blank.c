@@ -16,9 +16,14 @@
 #include "fb.h"
 #include "textcon.h"
 #include "../cmdline.h"
+#include "../drm/drm_blank.h"
 #include "../kio.h"
 #include "../klog.h"
 #include "../timer.h"
+#ifndef RACH2_HOSTTEST
+#include "../fs/sysfs.h"
+#include "../lib/kerrno.h"
+#endif
 
 /* The ticks of a second, and the longest time kept, about 49 days, which
  * the ticks of an unsigned 32-bit count hold. */
@@ -26,14 +31,16 @@
 #define BLANK_MAX_SECS (0xFFFFFFFFu / BLANK_HZ)
 
 /* The seconds without input before a blank, 0 for never; the tick of the
- * last poke; whether the console is blank, and whether only
- * `console_unblank_now` may unblank it; whether a poke or the escape asked
- * for an unblank, and the cause it gives; and the blanks and unblanks since
- * boot. */
+ * last poke; whether the console is blank, whether only
+ * `console_unblank_now` may unblank it, and whether the blank painted the
+ * screen black, which it does not over a program's picture on /fb; whether
+ * a poke or the escape asked for an unblank, and the cause it gives; and
+ * the blanks and unblanks since boot. */
 static volatile unsigned int blank_secs = 600;
 static volatile uint32_t last_poke;
 static volatile int blanked;
 static volatile int forced;
+static volatile int painted;
 static volatile int unblank_asked;
 static const char *volatile unblank_why = "by a key or a mouse move";
 static unsigned int nblanks;
@@ -49,19 +56,28 @@ void console_poke(void)
 }
 
 /**
- * Blank the console, forced or not, and record it with `why`; nothing when
- * it is blank already or the screen is a program's, through /fb or as a
- * DRM master's, as Linux leaves a console in graphics mode alone. Interrupts
- * may be on or off; the console's lock must not be held by this processor's
- * caller, since the record is written after it is given back.
+ * Blank the console, forced or not, and record it with `why`: the screen
+ * painted black, every backlight off and the console's display off
+ * (`drm_client_blank`), as Linux's fbdev emulation turns its CRTCs off.
+ * Nothing when it is blank already or a DRM master holds the screen, as
+ * Linux leaves a console in graphics mode alone. A program's picture on
+ * /fb blanks too, as Linux's console in text mode blanks under a program
+ * that draws on /dev/fb0, but it is not painted over, since the console
+ * cannot draw it again; the backlights and the display going off darken
+ * it. Interrupts may be on or off; the console's lock must not be held by
+ * this processor's caller, since the record is written after it is given
+ * back.
  */
 static void do_blank(int force, const char *why)
 {
     uint32_t flags = console_lock();
     int did = 0;
 
-    if (!blanked && !gfx_is_active() && !fb_is_held()) {
-        textcon_blank(1);
+    if (!blanked && !fb_is_held()) {
+        painted = !gfx_is_active();
+        if (painted) {
+            textcon_blank(1);
+        }
         blanked = 1;
         did = 1;
     }
@@ -71,6 +87,7 @@ static void do_blank(int force, const char *why)
     console_unlock(flags);
     if (did) {
         backlight_console_blank(1);
+        drm_client_blank(1);
         nblanks++;
         klog(KLOG_INFO, "console", "blanked: %u, %s", nblanks, why);
     }
@@ -85,13 +102,17 @@ static void do_unblank(const char *why)
 
     unblank_asked = 0;
     if (blanked) {
-        textcon_blank(0);
+        if (painted) {
+            textcon_blank(0);
+        }
         blanked = 0;
         forced = 0;
+        painted = 0;
         did = 1;
     }
     console_unlock(flags);
     if (did) {
+        drm_client_blank(0);
         backlight_console_blank(0);
         nunblanks++;
         klog(KLOG_INFO, "console", "unblanked: %u, %s", nunblanks, why);
@@ -162,6 +183,7 @@ void console_panic_unblank(void)
     textcon_blank(0);
     blanked = 0;
     forced = 0;
+    painted = 0;
     unblank_asked = 0;
     backlight_panic_unblank();
 }
@@ -190,3 +212,45 @@ uint32_t blank_idle_ticks(void)
     }
     return wait;
 }
+
+#ifndef RACH2_HOSTTEST
+/** /sys/module/kernel/parameters/consoleblank: the seconds without input
+ * before a blank, 0 for never, as Linux's read-only parameter shows them. */
+static int32_t consoleblank_show(void *obj, int arg, char *buf, uint32_t cap)
+{
+    char digits[12];
+    unsigned int v = blank_secs;
+    int n = 0, i;
+
+    (void)obj;
+    (void)arg;
+    do {
+        digits[n++] = (char)('0' + v % 10u);
+        v /= 10u;
+    } while (v > 0u);
+    for (i = 0; i < n && (uint32_t)i < cap; i++) {
+        buf[i] = digits[n - 1 - i];
+    }
+    if ((uint32_t)n < cap) {
+        buf[n] = '\n';
+    }
+    return n + 1;
+}
+
+void blank_params_start(void)
+{
+    static const struct sysfs_attr attr = {"consoleblank", 0444u, consoleblank_show, NULL};
+    int made, dir = sysfs_module_params("kernel", &made), h = -ENOENT;
+
+    if (dir >= 0) {
+        h = sysfs_add_attr(dir, &attr, NULL, 0);
+        if (h < 0) {
+            sysfs_module_params_undo(made, NULL, 0);
+        }
+    }
+    if (dir < 0 || h < 0) {
+        klog(KLOG_WARN, "console", "consoleblank: /sys/module/kernel/parameters not made: %d",
+             dir < 0 ? dir : h);
+    }
+}
+#endif

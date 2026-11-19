@@ -11,7 +11,10 @@
  * forced blank is asked for and an unblank too, and neither the screen nor
  * a backlight changes and nothing is recorded; once the console has the
  * screen back and the countdown starts again, the blank comes at the time
- * and not before; and a program's /fb keeps the console from blanking.
+ * and not before; and under a program's /fb the console blanks at the
+ * time with the backlights and the display off, the program's picture not
+ * painted over, and the poke's unblank does not draw the console over it.
+ * Each blank and unblank asks the DRM client for the display off and on.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -52,6 +55,7 @@ gfx_info_t gfx_current;
 static int locked, held;
 static const char *cmdline_blank;
 static int screen_blanks, screen_unblanks, light_offs, light_ons, records, held_unlocked;
+static int display_offs, display_ons;
 static const char *last_format;
 
 /** Take the console's lock. */
@@ -101,6 +105,17 @@ void backlight_console_blank(int blank)
     }
 }
 
+/** Record the console's display asked off or on again. */
+void drm_client_blank(int blank)
+{
+    CHECK(!locked, "the display is asked for outside the console's lock");
+    if (blank) {
+        display_offs++;
+    } else {
+        display_ons++;
+    }
+}
+
 /** No backlight to probe. */
 void backlight_init(void)
 {}
@@ -135,6 +150,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 static void reset(void)
 {
     screen_blanks = screen_unblanks = light_offs = light_ons = records = 0;
+    display_offs = display_ons = 0;
     last_format = NULL;
 }
 
@@ -164,13 +180,15 @@ static void row_text_console(void)
     ticks(5 * TICK_HZ - 1);
     CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0, "no blank before the time");
     ticks(1);
-    CHECK(console_is_blank() && screen_blanks == 1 && light_offs == 1 && recorded("blanked"),
-          "the screen and the backlights go dark at the time, with a record");
+    CHECK(console_is_blank() && screen_blanks == 1 && light_offs == 1 && display_offs == 1 &&
+              recorded("blanked"),
+          "the screen, the backlights and the display go dark at the time, with a record");
     reset();
     console_poke();
     ticks(1);
-    CHECK(!console_is_blank() && screen_unblanks == 1 && light_ons == 1 && recorded("unblanked"),
-          "a poke shows the screen and lights the backlights at the next tick");
+    CHECK(!console_is_blank() && screen_unblanks == 1 && light_ons == 1 && display_ons == 1 &&
+              recorded("unblanked"),
+          "a poke shows the screen, the display and the backlights at the next tick");
 }
 
 /** A DRM master's hold leaves the screen and the backlights alone. */
@@ -179,7 +197,8 @@ static void row_drm_master(void)
     reset();
     held = 1;
     ticks(20 * TICK_HZ);
-    CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0 && records == 0,
+    CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0 && display_offs == 0 &&
+              records == 0,
           "no blank past the time while a master holds the screen");
     console_blank_now();
     CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0 && records == 0,
@@ -202,15 +221,36 @@ static void row_drm_master(void)
     ticks(1);
 }
 
-/** A program's /fb keeps the console from blanking. */
+/** Under a program's /fb the console blanks, as Linux's console in text
+ * mode does under a program on /dev/fb0, without painting the program's
+ * picture over: the backlights and the display go off, and come on again
+ * at a poke with nothing drawn over the picture. */
 static void row_fb_owner(void)
 {
     reset();
     gfx_current.mode = GFX_MODE_NATIVE;
-    ticks(20 * TICK_HZ);
-    CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0,
-          "no blank while a program owns /fb");
+    console_poke();
+    ticks(5 * TICK_HZ - 1);
+    CHECK(!console_is_blank() && light_offs == 0, "no blank under /fb before the time");
+    ticks(1);
+    CHECK(console_is_blank() && screen_blanks == 0 && light_offs == 1 && display_offs == 1 &&
+              recorded("blanked"),
+          "under /fb the backlights and the display go off at the time, the picture not painted");
+    reset();
+    console_poke();
+    ticks(1);
+    CHECK(!console_is_blank() && screen_unblanks == 0 && light_ons == 1 && display_ons == 1 &&
+              recorded("unblanked"),
+          "a poke lights the program's picture again without drawing the console over it");
+
+    /* A blank that painted the console, then the program takes /fb, which
+     * unblanks first (fbdev.c): the console's cells come back once. */
     gfx_current.mode = GFX_MODE_NONE;
+    console_blank_now();
+    reset();
+    console_unblank_now();
+    CHECK(!console_is_blank() && screen_unblanks == 1 && light_ons == 1,
+          "the console's own blank is undone by drawing it again");
 }
 
 int main(void)
