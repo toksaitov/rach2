@@ -1452,7 +1452,7 @@
         },
         {
           "assertion_id": "tap",
-          "checks": "tests/host/tap_hosttest.c runs /dev/net/tun against the stack's stand-ins: TUNSETIFF's names and refusals, the other tun requests, a descriptor duplicated before TUNSETIFF and a second call on it while the first's copy sleeps, the ring of 1024 frames and the drop past it, reads whole and short, readv and writev of one frame, writes, the backend and the close with and without TUNSETPERSIST, under ASan and UBSan and exits 0",
+          "checks": "tests/host/tap_hosttest.c runs /dev/net/tun against the stack's stand-ins: TUNSETIFF's names and refusals, the other tun requests, a descriptor duplicated before TUNSETIFF and a second call on it while the first's copy sleeps, the ring of 1024 frames and the drop past it, reads whole and short, a read a signal ends, readv and writev of one frame, writes, the backend and the close with and without TUNSETPERSIST, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

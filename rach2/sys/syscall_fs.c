@@ -1879,7 +1879,7 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
         }
     }
     rc = iov_import(iov, addr, count, -1);
-    if (rc >= 0 && tap_is(entry)) {
+    if (rc > 0 && tap_is(entry)) {
         rc = tap_writev(entry, iov, count, (uint32_t)rc);
     } else if (rc > 0) {
         if (entry->type == FD_TYPE_PTM) {
