@@ -246,6 +246,7 @@ static struct drm_mode_config *mc = &dev.mode_config;
 static uint8_t vram[MAX_GEM][16];
 static int next_gem, dumb_creates, intrude, unmapped, plane_updates;
 static int leave_in_update; /* the device leaves in the next plane update */
+static int fail_checks;     /* the plane checks still to fail, -ENOMEM each */
 
 /* The pages behind every buffer, as the `page` hook gives them: 4 MiB,
  * room for the largest buffer of the rows. */
@@ -331,11 +332,16 @@ static int32_t fake_dumb_create(struct drm_file *file, struct drm_device *d,
     return 0;
 }
 
-/** A check that takes every state. */
+/** A check that takes every state, but fails while `fail_checks` counts,
+ * as a commit that finds no memory does. */
 static int32_t fake_plane_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
     (void)plane;
     (void)state;
+    if (fail_checks > 0) {
+        fail_checks--;
+        return -ENOMEM;
+    }
     return 0;
 }
 
@@ -560,6 +566,40 @@ static void row_blank(void)
     CHECK(crtc.state->active && crtc_mode()->hdisplay == 1280 && primary.state->fb == fb &&
               connector.dpms == DRM_MODE_DPMS_ON && con_blank_crtcs == 0,
           "the unblank turns the CRTC on again on the same buffer");
+}
+
+/** A wake whose commit fails leaves the CRTC off with its mark and the
+ * blank not done, and the worker tries it again CON_BLANK_RETRY_MS later
+ * until it succeeds; a hotplug's placement while the console is blank
+ * lights the outputs and wakes the worker, which turns them off again. */
+static void row_blank_retry(void)
+{
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_crtcs != 0, "the blank turns the CRTC off");
+    fail_checks = 1;
+    drm_client_blank(0);
+    con_blank_service();
+    CHECK(fail_checks == 0 && !crtc.state->active && con_blank_crtcs != 0 && con_blank_done &&
+              con_blank_retry != 0,
+          "a failed wake keeps the CRTC's mark and the blank not done");
+    CHECK(!con_flush_ready(NULL), "the worker waits for the try again");
+    model_now_ns += (int64_t)CON_BLANK_RETRY_MS * 1000000ll;
+    CHECK(con_flush_ready(NULL), "the try again is due a second later");
+    con_blank_service();
+    CHECK(crtc.state->active && con_blank_crtcs == 0 && !con_blank_done && con_blank_retry == 0,
+          "the try again turns the CRTC on");
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(!crtc.state->active, "blank again");
+    drm_client_dev_hotplug(&dev);
+    CHECK(crtc.state->active && con_flush_ready(NULL),
+          "a placement while blank lights the outputs and wakes the worker");
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_done, "the worker turns them off again");
+    drm_client_blank(0);
+    con_blank_service();
+    CHECK(crtc.state->active && con_blank_crtcs == 0, "the unblank turns them on");
 }
 
 /** A hotplug under a master leaves the screen to it; one after
@@ -845,6 +885,7 @@ int main(void)
     row_intruder();
     row_hotplug();
     row_blank();
+    row_blank_retry();
     row_drop_hotplug();
     row_unmapped();
     row_shadow();

@@ -19,4 +19,8 @@
  */
 void drm_client_blank(int blank);
 
+/** Whether `drm_client_blank` can turn a display off: the console is on a
+ * native device that no master holds. Any context; it does not sleep. */
+int drm_client_can_blank(void);
+
 #endif /* _DRM_BLANK_H_ */

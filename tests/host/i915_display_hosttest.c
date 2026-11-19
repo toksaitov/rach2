@@ -1643,7 +1643,8 @@ static int bl_show(int attr)
 
 /** The backlight: taken over from the boot's driver under its name, set
  * through the PCH's PWM, switched by the sequencer's enable, which stays
- * off while the pipe is off. */
+ * off while the pipe is off, and a level 0 written kept dark when the pipe
+ * comes on. */
 static void row_backlight(void)
 {
     CHECK(gpu.display.bl_index == 0 && backlight_count() == 1 &&
@@ -1674,20 +1675,19 @@ static void row_backlight(void)
           "backlight: on with the pipe, the console's plane shown again");
     CHECK((reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508, "backlight: the level kept");
     frame();
-    /* Linux's __intel_backlight_enable: the level 0 root wrote, at the
-     * least, comes on at the most with the pipe, and the class's brightness
-     * reads the most, as Linux's props.brightness does, not the 0. */
-    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "0\n") == 0 && bl_show(BACKLIGHT_BRIGHTNESS) == 0,
-          "backlight: brightness 0 written");
-    CHECK(set_active(0) == 0, "backlight: the pipe off again");
+    /* A level 0 written stays dark through the panel's enable, as after a
+     * blank: not raised to the most, and nothing new for init to save. */
+    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "0") == 0 && !(reg(PP_CONTROL) & EDP_BLC_ENABLE),
+          "backlight: level 0 turns the switch off");
+    CHECK(set_active(0) == 0, "backlight: the pipe off with level 0");
     frame();
-    CHECK(set_active(1) == 0 && (reg(PP_CONTROL) & EDP_BLC_ENABLE) &&
-              (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 937 && bl_show(BACKLIGHT_BRIGHTNESS) == 937 &&
-              bl_show(BACKLIGHT_ACTUAL) == 937,
-          "backlight: a level at the least comes on at the most, which brightness reads");
+    CHECK(set_active(1) == 0 && !(reg(PP_CONTROL) & EDP_BLC_ENABLE) &&
+              bl_show(BACKLIGHT_BRIGHTNESS) == 0 && (reg(BLC_PWM_PCH_CTL2) & 0xffffu) != 937,
+          "backlight: a level 0 written stays dark through the panel's enable, not raised");
     frame();
-    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "500\n") == 0 && (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508,
-          "backlight: 500 again");
+    CHECK(bl_store(BACKLIGHT_BRIGHTNESS, "500\n") == 0 && (reg(PP_CONTROL) & EDP_BLC_ENABLE) &&
+              (reg(BLC_PWM_PCH_CTL2) & 0xffffu) == 508,
+          "backlight: a level written lights it again");
 }
 
 /* ---- 78-9.6: the pipe CRC ---- */

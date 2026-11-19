@@ -130,11 +130,16 @@ static uint64_t con_deadline; /* the tick of the next flush; 0 for none */
 
 /* The console's blank as the worker carries it out (`drm_client_blank`):
  * whether the blank asks for the display off, whether the worker has
- * turned it off, and the CRTCs, one bit each by index, that it turned off
- * and turns on again. */
+ * turned it off, the CRTCs, one bit each by index, that it turned off and
+ * turns on again, and the tick of the next try after a commit failed, 0
+ * for none. */
 static volatile int con_blank_asked;
 static int con_blank_done;
 static uint32_t con_blank_crtcs;
+static uint64_t con_blank_retry;
+
+/* The milliseconds between tries of a blank's commit that failed. */
+#define CON_BLANK_RETRY_MS 1000
 
 static void con_master_changed(struct drm_device *dev, struct drm_file *master);
 
@@ -500,10 +505,14 @@ static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_frame
          * anew. */
         con_blank_done = 0;
         con_blank_crtcs = 0;
+        con_blank_retry = 0;
     }
     drm_modeset_unlock(dev);
     if (err != 0) {
         return err;
+    }
+    if (con_blank_asked) {
+        wq_wake_all(&con_wake);
     }
     if (con.firmware) {
         *screen = *fbcon_boot_screen();
@@ -628,12 +637,14 @@ static void con_flush(void)
     drm_dev_put(dev);
 }
 
-/** The worker's wait: past the flush's tick when one is set, else until a
- * shadow wants flushes. */
+/** The worker's wait: until a blank asks, or its try after a failure is
+ * due; past the flush's tick when one is set, else until a shadow wants
+ * flushes. */
 static int con_flush_ready(void *arg)
 {
     (void)arg;
-    if (con_blank_asked != con_blank_done) {
+    if (con_blank_asked != con_blank_done &&
+        (con_blank_retry == 0 || rtc_ticks_now() >= con_blank_retry)) {
         return 1;
     }
     return con_deadline != 0 ? rtc_ticks_now() >= con_deadline : con_shadowed();
@@ -663,66 +674,105 @@ static int32_t con_crtc_active(struct drm_device *dev, struct drm_crtc *crtc, in
 }
 
 /**
- * Carry out the blank the console asked for last: turn off each lit CRTC
- * of the console's native device, or on again those turned off. On the
- * firmware's framebuffer, with no device, or while a master holds the
- * device, only the record changes, and CRTCs that a master or a later
- * placement set are left to them. Process context, the worker's; may
- * sleep.
+ * Commit each CRTC of `dev` the blank asks for: off, when `off`, each one
+ * lit, and on again each one the blank turned off. A CRTC whose commit
+ * fails keeps its mark and its state, and the first failure of a run is
+ * logged (`*failing`). Stops with no mark kept when the console's device,
+ * its generation `gen` or the device's master changed. Under the commit
+ * lock; may sleep. Returns whether a commit failed.
  */
-static void con_blank_service(void)
+static int con_blank_commits(struct drm_device *dev, int off, uint32_t gen, int *failing)
 {
-    struct drm_mode_config *mc;
-    struct drm_device *dev = con.dev;
-    int off = con_blank_asked;
-    uint32_t k, gen = con.gen;
+    struct drm_mode_config *mc = &dev->mode_config;
+    int failed = 0;
+    uint32_t k;
     int32_t rc;
 
-    if (off == con_blank_done) {
-        return;
-    }
-    if (!dev || con.firmware || con.handed) {
-        con_blank_done = off;
-        con_blank_crtcs = 0;
-        return;
-    }
-    drm_dev_get(dev);
-    drm_modeset_lock_nointr(dev);
-    mc = &dev->mode_config;
     for (k = 0; k < mc->num_crtc && k < 32u; k++) {
         struct drm_crtc *crtc = mc->crtcs[k];
 
         if (con.dev != dev || con.gen != gen || dev->master) {
             con_blank_crtcs = 0;
-            break;
+            return 0;
         }
         if (off && crtc->state && crtc->state->active) {
             rc = con_crtc_active(dev, crtc, 0);
             con_blank_crtcs |= rc == 0 ? 1u << k : 0u;
         } else if (!off && (con_blank_crtcs & 1u << k) && crtc->state && crtc->state->enable) {
             rc = con_crtc_active(dev, crtc, 1);
-            con_blank_crtcs &= ~(1u << k);
+            con_blank_crtcs &= rc == 0 ? ~(1u << k) : ~0u;
         } else {
             continue;
         }
         if (rc != 0) {
-            klog(KLOG_WARN, "console", "card%d: crtc %u not turned %s: error %d", dev->index,
-                 (unsigned)k, off ? "off" : "on", (int)rc);
+            if (!*failing) {
+                klog(KLOG_WARN, "console", "card%d: crtc %u not turned %s: error %d; tried again",
+                     dev->index, (unsigned)k, off ? "off" : "on", (int)rc);
+            }
+            failed = 1;
         }
     }
-    if (!off) {
+    return failed;
+}
+
+/**
+ * Carry out the blank the console asked for last: turn off each lit CRTC
+ * of the console's native device, or on again those turned off
+ * (`con_blank_commits`). A commit that fails leaves the blank not done,
+ * and the worker tries it again every CON_BLANK_RETRY_MS until it
+ * succeeds or the console asks otherwise, so that a wake that failed
+ * once, for memory or a busy device, does not leave the display dark
+ * while the console shows itself unblanked. On the firmware's
+ * framebuffer, with no device, or while a master holds the device, only
+ * the record changes, and CRTCs that a master or a later placement set
+ * are left to them. Process context, the worker's; may sleep.
+ */
+static void con_blank_service(void)
+{
+    static int failing;
+    struct drm_device *dev = con.dev;
+    int off = con_blank_asked, failed;
+    uint32_t gen = con.gen;
+
+    if (off == con_blank_done) {
+        con_blank_retry = 0;
+        return;
+    }
+    if (!dev || con.firmware || con.handed) {
+        con_blank_done = off;
+        con_blank_crtcs = 0;
+        con_blank_retry = 0;
+        return;
+    }
+    drm_dev_get(dev);
+    drm_modeset_lock_nointr(dev);
+    failed = con_blank_commits(dev, off, gen, &failing);
+    if (!off && !failed) {
         con_blank_crtcs = 0;
     }
-    con_blank_done = off;
+    failing = failed;
+    con_blank_retry = failed ? rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS) : 0;
+    if (!failed) {
+        con_blank_done = off;
+    }
     drm_modeset_unlock(dev);
-    klog(KLOG_INFO, "console", "card%d: display %s for the blank", dev->index, off ? "off" : "on");
+    if (!failed) {
+        klog(KLOG_INFO, "console", "card%d: display %s for the blank", dev->index,
+             off ? "off" : "on");
+    }
     drm_dev_put(dev);
 }
 
 void drm_client_blank(int blank)
 {
     con_blank_asked = blank != 0;
+    con_blank_retry = 0;
     wq_wake_all(&con_wake);
+}
+
+int drm_client_can_blank(void)
+{
+    return con.dev != NULL && !con.firmware && !con.handed;
 }
 
 #ifndef RACH2_HOSTTEST
@@ -741,7 +791,10 @@ static void con_thread_main(void)
     for (;;) {
         sched_service_point();
         con_deadline = con_shadowed() ? rtc_ticks_now() + MS_TO_TICKS(CON_FLUSH_MS) : 0;
-        current_proc->wakeup_tick = con_deadline;
+        current_proc->wakeup_tick =
+            con_blank_retry != 0 && (con_deadline == 0 || con_blank_retry < con_deadline)
+                ? con_blank_retry
+                : con_deadline;
         (void)wq_wait_event_idle(&con_wake, con_flush_ready, NULL);
         current_proc->wakeup_tick = 0;
         con_blank_service();
@@ -928,6 +981,7 @@ void drm_client_dev_register(struct drm_device *dev)
     }
     con_blank_done = 0;
     con_blank_crtcs = 0;
+    con_blank_retry = 0;
     if (con_blank_asked) {
         wq_wake_all(&con_wake);
     }

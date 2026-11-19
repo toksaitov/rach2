@@ -71,7 +71,9 @@ int backlight_register(const char *name, int max, const struct backlight_ops *op
  * 0. A driver that reads 0, which has no lit level to read, as i915 after
  * its device's reset or a stand-in, is given the level the class kept,
  * taken to `max`, through its `set` alone, so that a level root set
- * survives the change of driver; its switch is left as it is. bl_power as
+ * survives the change of driver; its switch is left as it is. A kept 0
+ * that root never wrote, the firmware's dark, is not given, so that i915's
+ * enable raises it as Linux's does. bl_power as
  * root set it is kept. Returns the backlight's index, or -1 for no
  * backlight of that name or a `max` that is not positive. Any context; it
  * does not sleep.
@@ -92,6 +94,15 @@ void backlight_driver_level(int i, int level, const char *why);
  * default), "platform" or "firmware", as Linux's. At boot, before any
  * reader. */
 void backlight_set_type(int i, const char *type);
+
+/** Note that backlight `i`'s level 0 still lights the panel, as an ACPI
+ * _BCL whose least level is above 0 does, so that a blank cannot darken
+ * the panel by it. At boot, before any reader. */
+void backlight_set_lit_at_zero(int i);
+
+/** Whether a blank turns some panel's backlight dark: a backlight with a
+ * switch, or one whose level 0 is dark. Any context. */
+int backlight_can_darken(void);
 
 /** Probe the drivers of the panels' backlights, which register what they
  * find: `intelbl_init` on a PC. Once, at boot, after PCI and paging. */

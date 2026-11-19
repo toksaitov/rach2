@@ -1514,7 +1514,8 @@ struct intel_crtc {
  * the panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
  * pipe's enable leaves it, `bl_level` is the PWM's level it shows then,
  * `bl_min` the least the VBT allows, `bl_dark` says the class asked for its
- * level 0, which Linux shows by turning the backlight off, and `bl_alt` says
+ * level 0, which Linux shows by turning the backlight off and the panel's
+ * enable keeps dark, and `bl_alt` says
  * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). The
  * backlight class calls under a spinlock of its own and a commit under the
  * mode lock, so `bl_lock`, taken after the class's, keeps the PWM and the

@@ -99,13 +99,16 @@ of 0 while the pipe is off.
 When it turns the panel on at a level at or below that least, it raises
 the level to the most, as Linux's i915 does, and
 .Pa brightness
-then reads the most.
+then reads the most; a level 0 written to
+.Pa brightness
+stays dark when the panel comes on, as after a blank.
 When the device goes the boot's driver takes the backlight back.
 A driver that takes the backlight over and reads no lit level, as i915
-after the device's reset does, is given the level set before, so that the
-level survives the change.
+after the device's reset does, is given the level set before, when it is
+above 0 or was written, so that the level survives the change.
 .Ss acpi_video0
-On a machine with no backlight of its own driver, an output of the ACPI
+On a machine where no display driver has registered a backlight of its
+own once they have all probed, an output of the ACPI
 video bus whose firmware has the
 .Fn _BCM
 method is
@@ -117,7 +120,11 @@ whose entries are percentages, and a level written is given to
 Its level at boot is the one
 .Fn _BQC
 reads, or the highest.
-It has no switch of its own: off, it is at level 0.
+It has no switch of its own: off, it is at level 0, which is dark only
+when the least entry of
+.Fn _BCL
+is 0; the specification allows one above 0, and the panel then stays lit
+at it while the console is blank.
 .Sh FILES
 .Bl -tag -width /sys/class/backlight/NAME
 .It Pa /sys/class/backlight/NAME

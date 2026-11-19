@@ -322,6 +322,9 @@ mode blanks under a program that draws on
 .Pa /dev/fb0 :
 the backlights and the display go off and come back with the program's
 picture, which the console does not paint over.
+Where neither can go off, with no backlight that goes dark and no display
+of the console's own driver, as on a VGA, the console does not blank over
+such a picture and counts the time again.
 The screen does not blank, and no backlight changes, while a DRM master,
 such as a Wayland compositor, holds the display, as Linux leaves a
 console in graphics mode alone.
