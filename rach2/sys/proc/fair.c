@@ -1232,6 +1232,7 @@ static void reweight_eevdf(struct sched_entity *se, uint64_t avruntime, unsigned
 void fair_reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, unsigned long weight)
 {
     int curr = cfs_rq && cfs_rq->curr == se;
+    unsigned long old_weight = se->load.weight;
     uint64_t avruntime = 0;
 
     if (se->on_rq) {
@@ -1250,7 +1251,7 @@ void fair_reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, unsign
     }
     update_load_set(&se->load, weight);
     if (cfs_rq && fair_hooks.load_reweight) {
-        fair_hooks.load_reweight(cfs_rq, se);
+        fair_hooks.load_reweight(cfs_rq, se, old_weight);
     }
     if (se->on_rq) {
         update_load_add(&cfs_rq->load, se->load.weight);
