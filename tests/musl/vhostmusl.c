@@ -28,8 +28,14 @@
  * frame passes only with its own call, whichever the program sees first.
  * Calls read that outnumber the used index read after them are a fault of
  * their own, since an extra call for one frame could stand in for a call
- * missing for the next. Every wait blocks on an eventfd, with no clock, so
- * a frame or a call that never comes leaves the program waiting.
+ * missing for the next. The device signals a frame's call under the lock
+ * that VHOST_SET_VRING_CALL takes, so before the second datagram the
+ * program sets the receive call again and reads what it holds without
+ * waiting: every call signalled for a frame already on the ring is then
+ * counted, and an extra one for the first datagram fails it. Once the
+ * rings let the tap go, the calls must equal the used entries. Every wait
+ * blocks on an eventfd, with no clock, so a frame or a call that never
+ * comes leaves the program waiting.
  *
  * Prints `VHOSTMUSL OK` and exits 0 on success, and prints
  * `VHOSTMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -45,6 +51,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
@@ -141,11 +148,13 @@ static const struct {
     {"tx-kick", "could not kick the transmit ring"},
     {"tx-call", "the transmit ring's call did not come"},
     {"tx-used", "the transmit ring did not use the answer's chain"},
-    {"datagram", "the first datagram did not come into the receive ring after the answer"},
+    {"datagram", "the first datagram did not come into the receive ring after the answer, or not "
+                 "with one call"},
     {"direct-send", "could not send the second datagram"},
     {"direct-frame", "the second datagram did not come into the receive ring"},
     {"direct-call", "the receive ring's call was not signalled once for the second datagram"},
-    {"detach", "VHOST_NET_SET_BACKEND of -1 failed"},
+    {"detach",
+     "VHOST_NET_SET_BACKEND of -1 failed, or the receive calls then do not equal the used entries"},
 };
 
 static const unsigned char peer[6] = {2, 0, 0, 0, 0, 2};
@@ -349,7 +358,27 @@ static int take_call(int call)
     }
     rx_calls += v;
     __sync_synchronize();
-    return rx_calls > get16(RX_USED + 2) ? -1 : 0;
+    if (rx_calls > get16(RX_USED + 2)) {
+        errno = EPROTO;
+        return -1;
+    }
+    return 0;
+}
+
+/** Count what the receive ring's call `call` holds now, without waiting:
+ * 0, or -1 as `take_call` fails. */
+static int drain_calls(int call)
+{
+    struct pollfd p;
+
+    p.fd = call;
+    p.events = POLLIN;
+    while (poll(&p, 1, 0) > 0) {
+        if (take_call(call) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -558,12 +587,16 @@ static int exchange(void)
     if (wait_rx(ev[1], is_datagram, "vhost1") < 0) {
         return fail(DATAGRAM);
     }
+    if (ring2(vh, VHOST_SET_VRING_CALL, 0, ev[1]) != 0 || drain_calls(ev[1]) != 0) {
+        return fail(DATAGRAM);
+    }
     return 0;
 }
 
 /** A datagram sent while the receive ring has buffers comes into one, at
  * once or from the thread, and its own call is signalled, before or after
- * the probe sees the frame; then the rings let the tap go. */
+ * the probe sees the frame; then the rings let the tap go, and the calls
+ * read equal the used entries. */
 static int direct(void)
 {
     int at;
@@ -580,6 +613,13 @@ static int direct(void)
     }
     if (ring2(vh, VHOST_NET_SET_BACKEND, 0, -1) != 0 ||
         ring2(vh, VHOST_NET_SET_BACKEND, 1, -1) != 0) {
+        return fail(DETACH);
+    }
+    if (drain_calls(ev[1]) != 0) {
+        return fail(DETACH);
+    }
+    if (rx_calls != get16(RX_USED + 2)) {
+        errno = EPROTO;
         return fail(DETACH);
     }
     return 0;
