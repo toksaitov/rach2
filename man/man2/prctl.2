@@ -103,6 +103,15 @@ bit.
 It cannot be cleared.
 .It Dv PR_GET_NO_NEW_PRIVS No (39)
 With every other argument 0, return the no_new_privs bit.
+.It Dv PR_SET_THP_DISABLE No (41)
+With the last three arguments 0, turn transparent huge pages off in the
+caller's address space when the second argument is not 0, and back on
+when it is: no fault, khugepaged or
+.Dv MADV_COLLAPSE
+gives it a huge page meanwhile, and the huge pages already there stay.
+A fork's child and an exec's new image keep the setting.
+.It Dv PR_GET_THP_DISABLE No (42)
+With every other argument 0, return the setting, 0 or 1.
 .It Dv PR_CAP_AMBIENT No (47)
 The ambient set, the capabilities an exec keeps for the new image
 .Pq see Xr capget 2 .
