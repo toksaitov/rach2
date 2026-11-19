@@ -580,6 +580,9 @@ const struct vfs_ops debugfs_vops = {
     0, /* writeback */
     0, /* lock_write */
     0, /* unlock_write */
+    0, /* rename_flags */
+    0, /* tmpfile */
+    0, /* uncache */
 };
 
 /** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */

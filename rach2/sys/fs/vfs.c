@@ -3812,11 +3812,25 @@ static int rename_guarded(struct vfs_mount *mnt, void *olddir, const char *oldna
     return (to & VFS_FL_APPEND) || guard_entry(mnt, newdir, newname);
 }
 
-int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
-               const char *newname)
+/**
+ * The rename of `vfs_rename` and `vfs_rename_flags`: with `flags` 0 the
+ * type's `rename`, and otherwise its `rename_flags`, which a type without
+ * answers with -EINVAL after the read-only mount's -EROFS and the flags'
+ * -EPERM, as Linux makes those checks before the file system sees the
+ * flags. Under
+ * VFS_RENAME_EXCHANGE nothing is replaced: both names keep their entries in
+ * the name cache's eyes and the records of open files swap names
+ * (`vfs_name_exchange`), and inotify is told of two moves, each with its
+ * own cookie, as Linux's `vfs_rename` calls `fsnotify_move` once for each
+ * name (fs/namei.c in 6.12). The whiteout of VFS_RENAME_WHITEOUT is told of
+ * no creation, as Linux's tmpfs makes it without one.
+ */
+static int rename_names(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                        const char *newname, uint32_t flags)
 {
     struct vfs_stat moved, replaced, from, to;
     int watched, had_target = 0, same;
+    int swap = (flags & VFS_RENAME_EXCHANGE) != 0;
     void *victim;
     int rc;
 
@@ -3829,6 +3843,9 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     if (rename_guarded(mnt, olddir, oldname, newdir, newname)) {
         return -EPERM;
     }
+    if (flags && !mnt->type->ops->rename_flags) {
+        return -EINVAL;
+    }
     watched = inotify_watches && watched_entry(mnt, olddir, oldname, &moved) == 0 &&
               watched_node(mnt, olddir, &from) == 0 && watched_node(mnt, newdir, &to) == 0;
     if (watched) {
@@ -3838,13 +3855,26 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     vfs_name_change_begin();
     same = vfs_name_same(mnt, olddir, oldname, newdir, newname);
     dcache_forget(mount_base(mnt), olddir, oldname);
-    victim = dcache_forget_victim(mount_base(mnt), newdir, newname);
-    rc = mnt->type->ops->rename(mount_base(mnt), olddir, oldname, newdir, newname);
+    if (swap) {
+        dcache_forget(mount_base(mnt), newdir, newname);
+        victim = NULL;
+    } else {
+        victim = dcache_forget_victim(mount_base(mnt), newdir, newname);
+    }
+    if (flags) {
+        rc = mnt->type->ops->rename_flags(mount_base(mnt), olddir, oldname, newdir, newname, flags);
+    } else {
+        rc = mnt->type->ops->rename(mount_base(mnt), olddir, oldname, newdir, newname);
+    }
     dcache_forget(mount_base(mnt), olddir, oldname);
     dcache_forget(mount_base(mnt), newdir, newname);
     dcache_forget_dir(mount_base(mnt), victim);
     if (rc == 0 && !same) {
-        vfs_name_rename(mnt, olddir, oldname, newdir, newname);
+        if (swap) {
+            vfs_name_exchange(mnt, olddir, oldname, newdir, newname);
+        } else {
+            vfs_name_rename(mnt, olddir, oldname, newdir, newname);
+        }
     }
     vfs_name_change_end();
     if (rc == 0 && watched) {
@@ -3854,7 +3884,13 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
         inotify_child(mnt, from.ino, oldname, IN_MOVED_FROM | isdir, cookie);
         inotify_child(mnt, to.ino, newname, IN_MOVED_TO | isdir, cookie);
         inotify_file(mnt, moved.ino, IN_MOVE_SELF);
-        if (had_target) {
+        if (had_target && swap) {
+            cookie = inotify_cookie();
+            isdir = watched_isdir(&replaced);
+            inotify_child(mnt, to.ino, newname, IN_MOVED_FROM | isdir, cookie);
+            inotify_child(mnt, from.ino, oldname, IN_MOVED_TO | isdir, cookie);
+            inotify_file(mnt, replaced.ino, IN_MOVE_SELF);
+        } else if (had_target) {
             if (!watched_isdir(&replaced)) {
                 inotify_file(mnt, replaced.ino, IN_ATTRIB);
             }
@@ -3864,6 +3900,18 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
         }
     }
     return rc;
+}
+
+int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+               const char *newname)
+{
+    return rename_names(mnt, olddir, oldname, newdir, newname, 0);
+}
+
+int vfs_rename_flags(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                     const char *newname, uint32_t flags)
+{
+    return rename_names(mnt, olddir, oldname, newdir, newname, flags);
 }
 
 int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
@@ -4451,6 +4499,9 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* writeback */
     0,                           /* lock_write */
     0,                           /* unlock_write */
+    0,                           /* rename_flags */
+    0,                           /* tmpfile */
+    0,                           /* uncache */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -4468,7 +4519,8 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
-const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0, 0, 0, 0, 0, 0};
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops,    1, 0, 0, 0, 0,
+                                        0,       0,         VFS_DIRECT_ANY};
 
 /* The three synthetic types, of /dev, /proc and /sys. */
 
@@ -5125,6 +5177,9 @@ static const struct vfs_ops devfs_vops = {
     0, /* writeback */
     0, /* lock_write */
     0, /* unlock_write */
+    0, /* rename_flags */
+    0, /* tmpfile */
+    0, /* uncache */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -5173,6 +5228,9 @@ static const struct vfs_ops procfs_vops = {
     0, /* writeback */
     0, /* lock_write */
     0, /* unlock_write */
+    0, /* rename_flags */
+    0, /* tmpfile */
+    0, /* uncache */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -5221,6 +5279,9 @@ static const struct vfs_ops sysfs_vops = {
     0, /* writeback */
     0, /* lock_write */
     0, /* unlock_write */
+    0, /* rename_flags */
+    0, /* tmpfile */
+    0, /* uncache */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
@@ -5261,11 +5322,14 @@ static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     return synth_mount_root(mnt, dev, flags, "sys");
 }
 
-const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0, 0, 0, 0, 0};
-const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0, 0, 0, 0, 0};
-const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0, 0, 0, 0, 0};
-const struct vfs_type vfs_debugfs_type = {"debugfs", debugfs_mount, &debugfs_vops, 0, 1, 0, 0, 0, 0,
-                                          0};
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops,    0, 1, 0, 0, 0,
+                                        0,       0,           VFS_DIRECT_NONE};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount,   &procfs_vops, 0, 1, 0, 0, 0, 0,
+                                         0,      VFS_DIRECT_NONE};
+const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops,    0, 1, 0, 0, 0,
+                                        0,       0,           VFS_DIRECT_NONE};
+const struct vfs_type vfs_debugfs_type = {
+    "debugfs", debugfs_mount, &debugfs_vops, 0, 1, 0, 0, 0, 0, 0, VFS_DIRECT_NONE};
 
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {

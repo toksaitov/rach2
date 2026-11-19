@@ -50,6 +50,14 @@ void vfs_name_unlink(struct vfs_mount *mnt, void *dir, const char *leaf);
 int vfs_name_same(struct vfs_mount *mnt, void *from, const char *old, void *to, const char *leaf);
 void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *to,
                      const char *leaf);
+/* After renameat2's RENAME_EXCHANGE: a record of `old` in `from` names
+ * `leaf` in `to`, and one of `leaf` in `to` names `old` in `from`. */
+void vfs_name_exchange(struct vfs_mount *mnt, void *from, const char *old, void *to,
+                       const char *leaf);
+/* A record of an O_TMPFILE file, which has no name: `leaf` in `parent`,
+ * already deleted, as Linux's d_path shows such a file "/dir/#ino
+ * (deleted)". Return 0, or -ENOMEM. */
+int vfs_name_capture_deleted(const struct vfs_ref *parent, const char *leaf, struct vfs_name **out);
 void vfs_name_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
 #endif /* _VFS_NAME_H_ */

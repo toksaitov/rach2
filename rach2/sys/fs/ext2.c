@@ -4352,6 +4352,10 @@ static const struct vfs_ops ext2_ops = {
     ext2_writeback_old,
     ext2_lock_write,
     ext2_unlock_write,
+    0, /* rename_flags */
+    0, /* tmpfile */
+    0, /* uncache */
 };
 
-const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1, 1, 1, 1};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,
+                                       1,      1,          VFS_DIRECT_SECTOR};

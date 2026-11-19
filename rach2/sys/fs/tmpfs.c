@@ -102,6 +102,7 @@ struct tmpfs_node {
     struct secret_user *secret; /* memfd_secret's: its pages' count; or NULL */
     struct tmpfs_xattr *xattrs; /* in the order they were made */
     struct tmpfs_mount *tm;     /* the mount's state, which its space goes back to */
+    int linkable;               /* an O_TMPFILE file a hard link may name, until one does */
 };
 
 /*
@@ -948,28 +949,30 @@ static int is_above(const struct tmpfs_node *a, const struct tmpfs_node *d)
 
 /**
  * Move the name `oldname` in `olddir` to `newname` in `newdir`, replacing a
- * file or an empty directory there; a rename of a name to another name of
- * the same node does nothing. The new name's entry is taken from the heap
- * before either directory changes, so a rename the heap cannot serve
- * answers -ENOSPC with both names as they were. The replaced node is
- * settled only after the moved one has its new name, as Linux frees the
- * target's pages at its last iput (fs/namei.c:5123,5132), after d_move,
- * since its free may give way: no walk then finds the moved node nameless,
- * and a last close of it meanwhile leaves it its name. -ENOENT for a missing
- * name or a removed `newdir`, -ENOTDIR or -EISDIR for a directory and a file
- * in each other's place, -ENOTEMPTY, and -EINVAL for a directory moved below
- * itself.
+ * file or an empty directory there, for `tmpfs_rename` and
+ * `tmpfs_rename_flags`; a rename of a name to another name of the same node
+ * does nothing. The new name's entry is taken from the heap before either
+ * directory changes, so a rename the heap cannot serve answers -ENOSPC with
+ * both names as they were. The replaced node, or NULL, is left in
+ * `*replaced` for the caller to settle once every name it changes is in
+ * place, as Linux frees the target's pages at its last iput
+ * (fs/namei.c:5123,5132), after d_move, since its free may give way: no
+ * walk then finds the moved node nameless, and a last close of it
+ * meanwhile leaves it its name. -ENOENT for a missing name or a removed
+ * `newdir`, -ENOTDIR or -EISDIR for a directory and a file in each other's
+ * place, -ENOTEMPTY, and -EINVAL for a directory moved below itself.
  */
-static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
-                        const char *newname)
+static int move_name(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                     const char *newname, struct tmpfs_node **replaced)
 {
     struct tmpfs_node *od = dir_of(mnt, olddir);
     struct tmpfs_node *nd = dir_of(mnt, newdir);
     struct tmpfs_dirent **from = find(od, oldname);
     struct tmpfs_dirent **to = find(nd, newname);
     struct tmpfs_dirent *e;
-    struct tmpfs_node *n, *replaced;
+    struct tmpfs_node *n;
 
+    *replaced = NULL;
     if (!from || removed(nd)) {
         return -ENOENT;
     }
@@ -999,20 +1002,146 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     }
     remove_entry(od, find(od, oldname));
     to = find(nd, newname);
-    replaced = to ? remove_entry(nd, to) : NULL;
+    *replaced = to ? remove_entry(nd, to) : NULL;
     link_entry(nd, e, n);
-    if (replaced) {
-        name_gone(replaced);
+    if (*replaced) {
+        name_gone(*replaced);
     }
+    return 0;
+}
+
+/** The `rename` of tmpfs: `move_name`, and the replaced node settled. */
+static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                        const char *newname)
+{
+    struct tmpfs_node *replaced;
+    int rc = move_name(mnt, olddir, oldname, newdir, newname, &replaced);
+
+    settle(replaced);
+    return rc;
+}
+
+/** Move the directory `n` from its parent to the directory `d`, which
+ * takes a hold on `d` and lets go of the one on the old parent, as
+ * `link_entry` moves one; the counts of subdirectories follow. The old
+ * parent is held by the caller, so it is not freed here. */
+static void reparent(struct tmpfs_node *n, struct tmpfs_node *d)
+{
+    struct tmpfs_node *was = n->parent;
+
+    if (was == d) {
+        return;
+    }
+    was->subdirs--;
+    was->refs--;
+    d->subdirs++;
+    d->refs++;
+    n->parent = d;
+}
+
+/**
+ * Swap the nodes the names `oldname` in `od` and `newname` in `nd` name,
+ * for renameat2's RENAME_EXCHANGE, as Linux's
+ * `simple_offset_rename_exchange` swaps them for tmpfs (fs/libfs.c in
+ * 6.12): each name keeps its place in its directory, a directory moved
+ * changes its parent, both directories have new modification and change
+ * times and both nodes new change times. -ENOENT when either name is
+ * missing, and -EINVAL for a directory moved below itself.
+ */
+static int exchange(struct tmpfs_node *od, const char *oldname, struct tmpfs_node *nd,
+                    const char *newname)
+{
+    struct tmpfs_dirent **from = find(od, oldname);
+    struct tmpfs_dirent **to = find(nd, newname);
+    struct tmpfs_node *n, *m;
+
+    if (!from || !to) {
+        return -ENOENT;
+    }
+    n = (*from)->node;
+    m = (*to)->node;
+    if (n == m) {
+        return 0;
+    }
+    if ((is_dir(n) && is_above(n, nd)) || (is_dir(m) && is_above(m, od))) {
+        return -EINVAL;
+    }
+    (*from)->node = m;
+    (*to)->node = n;
+    if (is_dir(n)) {
+        reparent(n, nd);
+    }
+    if (is_dir(m)) {
+        reparent(m, od);
+    }
+    stamp(od, STAMP_M | STAMP_C);
+    stamp(nd, STAMP_M | STAMP_C);
+    stamp(n, STAMP_C);
+    stamp(m, STAMP_C);
+    return 0;
+}
+
+/**
+ * The `rename_flags` of tmpfs. RENAME_EXCHANGE swaps the two names
+ * (`exchange`). RENAME_WHITEOUT renames as `tmpfs_rename` does and puts at
+ * the old name a whiteout, a character device of number 0:0 and mode 0
+ * owned as a new node is, before the replaced node is settled, as Linux's
+ * `shmem_whiteout` makes it before the move (mm/shmem.c:3497-3525 in
+ * 6.12), so that no walk finds the old name missing. The whiteout, with an
+ * inode of the mount, and its entry are taken first, so that a rename the
+ * heap or the mount cannot serve is -ENOSPC with nothing changed. A rename of a name to another name
+ * of the same node does nothing and leaves no whiteout. -EINVAL for any
+ * other flag; else the errors of `exchange` or `move_name`.
+ */
+static int tmpfs_rename_flags(struct vfs_mount *mnt, void *olddir, const char *oldname,
+                              void *newdir, const char *newname, uint32_t flags)
+{
+    struct tmpfs_node *od = dir_of(mnt, olddir);
+    struct tmpfs_node *nd = dir_of(mnt, newdir);
+    struct tmpfs_node *w, *replaced;
+    struct tmpfs_dirent **from, **to;
+    struct tmpfs_dirent *e;
+    int rc;
+
+    if (flags & VFS_RENAME_EXCHANGE) {
+        return (flags & ~VFS_RENAME_EXCHANGE) ? -EINVAL : exchange(od, oldname, nd, newname);
+    }
+    if (!(flags & VFS_RENAME_WHITEOUT) || (flags & ~(VFS_RENAME_WHITEOUT | VFS_RENAME_NOREPLACE))) {
+        return -EINVAL;
+    }
+    from = find(od, oldname);
+    to = find(nd, newname);
+    if (from && to && (*from)->node == (*to)->node) {
+        return 0;
+    }
+    w = new_node(mnt, od, T_IFCHR);
+    e = w ? new_entry(oldname) : NULL;
+    if (!e) {
+        if (w) {
+            discard(w);
+        }
+        return -ENOSPC;
+    }
+    rc = move_name(mnt, olddir, oldname, newdir, newname, &replaced);
+    if (rc != 0) {
+        kfree(e->name);
+        kfree(e);
+        discard(w);
+        return rc;
+    }
+    link_entry(od, e, w);
     settle(replaced);
     return 0;
 }
 
 /** The `link` of tmpfs: a new name `name` in `dir` for the file `node`,
- * which has a new change time; -ENOENT for a removed `dir`, -EPERM for a
+ * which has a new change time; -ENOENT for a removed `dir` and for a file
+ * with no name left that is not an O_TMPFILE file still `linkable`, as
+ * Linux's `vfs_link` refuses one (fs/namei.c in 6.12), -EPERM for a
  * directory, -EEXIST, or -ENOSPC. A name past the file's first takes an
  * inode of the mount, as in Linux's shmem_link, since each pins memory
- * until it is removed; the first name of a file that has none does not. */
+ * until it is removed; the first name of a file that has none does not.
+ * The link ends `linkable`. */
 static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
@@ -1025,6 +1154,9 @@ static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *
     if (is_dir(n)) {
         return -EPERM;
     }
+    if (n->links == 0 && !n->linkable) {
+        return -ENOENT;
+    }
     if (find(d, name)) {
         return -EEXIST;
     }
@@ -1033,11 +1165,35 @@ static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *
     }
     rc = add_entry(d, name, n);
     if (rc == 0) {
+        n->linkable = 0;
         stamp(n, STAMP_C);
     } else if (n->links > 0) {
         ispace_give(n->tm, INODE_SPACE);
     }
     return rc;
+}
+
+/** The `tmpfile` of tmpfs: a regular file with the permission bits of
+ * `mode` and no name, owned as `new_node` says, held once, and `linkable`
+ * as asked; -ENOENT for a removed `dir`, or -ENOSPC when the heap has no
+ * room. Its last put frees it (`settle`), as Linux's `shmem_tmpfile`
+ * leaves the inode to its file (mm/shmem.c in 6.12). */
+static int tmpfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node)
+{
+    struct tmpfs_node *d = dir_of(mnt, dir);
+    struct tmpfs_node *n;
+
+    if (removed(d)) {
+        return -ENOENT;
+    }
+    n = new_node(mnt, d, T_IFREG | (mode & 07777u));
+    if (!n) {
+        return -ENOSPC;
+    }
+    n->refs = 1;
+    n->linkable = linkable != 0;
+    *node = n;
+    return 0;
 }
 
 /** The `readlink` of tmpfs: the target into `buf`, cut to `cap` bytes, with
@@ -1834,6 +1990,10 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* writeback */
     0, /* lock_write */
     0, /* unlock_write */
+    tmpfs_rename_flags,
+    tmpfs_tmpfile,
+    0, /* uncache */
 };
 
-const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0, 0, 0, 0};
+const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops,    1, 1, 0, 0, 0,
+                                        0,       0,           VFS_DIRECT_ANY};
