@@ -4719,8 +4719,20 @@ out:
     return rc;
 }
 
-#define MS_REMOUNT 32
-#define MS_BIND    0x00001000u
+#define MS_REMOUNT     32
+#define MS_BIND        0x00001000u
+#define MS_STRICTATIME 0x01000000u
+
+/** The mount flags `flags` as the VFS takes them: MS_STRICTATIME, which
+ *  Linux takes as the absence of MS_RELATIME and MS_NOATIME, taken off with
+ *  both of them. */
+static uint32_t atime_flags(uint32_t flags)
+{
+    if (flags & MS_STRICTATIME) {
+        flags &= ~(MS_STRICTATIME | VFS_MS_RELATIME | VFS_MS_NOATIME);
+    }
+    return flags;
+}
 
 /* The propagation flags, which mount(2) takes alone, with MS_REC. */
 #define MS_REC        0x00004000u
@@ -4817,7 +4829,7 @@ static int32_t remount_call(const isr_params_t *params)
     }
     n = path_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 1), &tpath);
     if (n == 0) {
-        n = remount_at(tpath, SC_ARG(params, 3) & ~(uint32_t)(MS_REMOUNT | MS_BIND),
+        n = remount_at(tpath, atime_flags(SC_ARG(params, 3) & ~(uint32_t)(MS_REMOUNT | MS_BIND)),
                        (SC_ARG(params, 3) & MS_BIND) != 0, data);
         path_buf_put(tpath);
     }
@@ -4917,7 +4929,7 @@ long sys_mount(isr_params_t *params)
         n = strncpy_from_user(data, (const char __user *)SC_ARG(params, 4), sizeof(data));
     }
     if (n >= 0) {
-        n = vfs_do_mount(source, tpath, type, (uint32_t)SC_ARG(params, 3), data);
+        n = vfs_do_mount(source, tpath, type, atime_flags((uint32_t)SC_ARG(params, 3)), data);
     }
     path_buf_put(tpath);
     return n;
