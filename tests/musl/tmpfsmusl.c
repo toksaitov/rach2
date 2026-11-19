@@ -351,7 +351,6 @@ static int attributed(const char *path)
 static int counted(void)
 {
     struct statfs sf;
-    int fd;
 
     mkdir(DIR_PATH, 0755);
     if (mount("none", DIR_PATH, "tmpfs", 0, "nr_inodes=4") != 0) {
@@ -360,8 +359,8 @@ static int counted(void)
     row_held();
     if (statfs(DIR_PATH, &sf) != 0 || sf.f_files != 4 || sf.f_ffree != 3 ||
         !put(DIR_PATH "/a", "a") || !put(DIR_PATH "/b", "b") || !put(DIR_PATH "/c", "c") ||
-        (fd = open(DIR_PATH "/d", O_WRONLY | O_CREAT, 0644)) != -1 || errno != ENOSPC ||
-        statfs(DIR_PATH, &sf) != 0 || sf.f_ffree != 0) {
+        put(DIR_PATH "/d", "d") || errno != ENOSPC || statfs(DIR_PATH, &sf) != 0 ||
+        sf.f_ffree != 0) {
         return fail("the inodes of nr_inodes=4");
     }
     row_held();
