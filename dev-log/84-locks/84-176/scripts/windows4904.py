@@ -37,13 +37,15 @@ def parse(path):
         m = re.match(r"Wait boosts: (\d+)", line)
         if m:
             block["boosts"] = int(m[1])
-    return samples, [b for b in blocks if "parks" in b and "work" in b]
+    return samples, [b for b in blocks if {"parks", "work", "boosts"} <= b.keys()]
 
 
 def window(path):
     """The first and last `time` stamps of a loop file."""
     stamps = [float(l.split()[1]) for l in open(path) if l.startswith("time ")]
-    return stamps[0], stamps[-1]
+    if len(stamps) != 2 or stamps[1] <= stamps[0]:
+        raise SystemExit("windows4904: %s: invalid loop window" % path)
+    return stamps
 
 
 def main():
@@ -55,6 +57,8 @@ def main():
         s = [x for x in samples if a <= x[0] <= b]
         act = [int(x[1]) for x in s if x[1] != "-"]
         cur = [int(x[2]) for x in s if x[2] != "-"]
+        if not act or not cur:
+            raise SystemExit("windows4904: %s: no actual or requested frequency samples" % loop)
         rc6 = [int(x[3]) for x in s if x[3] != "-"]
         before = [x for x in blocks if x["t"] <= a]
         after = [x for x in blocks if x["t"] >= b]
