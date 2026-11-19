@@ -2370,14 +2370,17 @@ static int32_t do_shutdown(int fd, int how)
 
 #define TCP_KEEPCNT 6
 
+#define TCP_QUICKACK 12
+
 #define TCP_USER_TIMEOUT 18
 
 /** Whether `optname` is one of the TCP options a stream socket keeps:
- * TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT and TCP_USER_TIMEOUT. */
+ * TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, TCP_QUICKACK and
+ * TCP_USER_TIMEOUT. */
 static int tcp_option_kept(int optname)
 {
     return optname == TCP_KEEPIDLE || optname == TCP_KEEPINTVL || optname == TCP_KEEPCNT ||
-           optname == TCP_USER_TIMEOUT;
+           optname == TCP_QUICKACK || optname == TCP_USER_TIMEOUT;
 }
 
 /**
@@ -2385,8 +2388,10 @@ static int tcp_option_kept(int optname)
  * on the stream socket `sock`, with Linux's bounds: TCP_KEEPIDLE and
  * TCP_KEEPINTVL 1 to 32767 seconds, TCP_KEEPCNT 1 to 127, and
  * TCP_USER_TIMEOUT any count of milliseconds not negative, 0 for none.
- * Returns 0, or -EINVAL for a value shorter than an int or out of range.
- * The connection reads them at each tick (tcp.h).
+ * TCP_QUICKACK takes any value and acts on the connection at once
+ * (`tcp_quickack_set`). Returns 0, or -EINVAL for a value shorter than an
+ * int or out of range. The connection reads the others at each tick
+ * (tcp.h).
  */
 static int32_t tcp_option_set(struct socket *sock, int optname, int optlen, int val)
 {
@@ -2399,6 +2404,10 @@ static int32_t tcp_option_set(struct socket *sock, int optname, int optlen, int 
     }
     if (optlen < (int)sizeof(int)) {
         return -EINVAL;
+    }
+    if (optname == TCP_QUICKACK) {
+        tcp_quickack_set(sock, val);
+        return 0;
     }
     if (optname == TCP_USER_TIMEOUT) {
         if (val < 0) {
@@ -2422,7 +2431,8 @@ static int32_t tcp_option_set(struct socket *sock, int optname, int optlen, int 
 
 /** The TCP option `optname` (`tcp_option_kept`) of the stream socket
  * `sock` as getsockopt reads it: a keepalive value as the socket set it,
- * else the /proc/sys default it takes, and TCP_USER_TIMEOUT as set. */
+ * else the /proc/sys default it takes, TCP_QUICKACK as the connection's
+ * mode gives it (`tcp_quickack_get`), and TCP_USER_TIMEOUT as set. */
 static int tcp_option_get(const struct socket *sock, int optname)
 {
     if (optname == TCP_KEEPIDLE) {
@@ -2433,6 +2443,9 @@ static int tcp_option_get(const struct socket *sock, int optname)
     }
     if (optname == TCP_KEEPCNT) {
         return sock->keepcnt ? sock->keepcnt : tcp_keepalive_probes;
+    }
+    if (optname == TCP_QUICKACK) {
+        return tcp_quickack_get(sock);
     }
     return (int)sock->user_timeout;
 }
@@ -2806,9 +2819,10 @@ static int socket_flag_get(const struct socket *sock, int optname)
  * name, SO_RCVBUF, which Linux doubles and bounds by SOCK_RCVBUF_MAX and
  * SOCK_RCVBUF_MIN, IP_MTU_DISCOVER, an IP_PMTUDISC_* value, IP_RECVTTL, which
  * has a receive report the TTL (`put_rx_control`), and on a stream socket the
- * keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT and TCP_USER_TIMEOUT
- * (`tcp_option_set`), and accept every other option with no effect, so that the
- * setup of a forking server that sets TCP_NODELAY succeeds; failing them would
+ * keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT, TCP_QUICKACK and
+ * TCP_USER_TIMEOUT (`tcp_option_set`), and accept every other option with no
+ * effect, so that the setup of a forking server that sets TCP_NODELAY
+ * succeeds; failing them would
  * stop programs that set options a small stack has no use for. Returns 0, or
  * -EINVAL for a flag or hop limit shorter than an int, a hop limit,
  * IP_MTU_DISCOVER or TCP option out of range or a SO_BINDTODEVICE value of no

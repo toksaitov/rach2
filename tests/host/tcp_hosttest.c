@@ -2455,7 +2455,8 @@ static void delack_rows(void)
  * peer's sends the held acknowledgement; once this side answers within 40
  * ms it is in ping-pong mode, where such a read waits for the answer to
  * carry the acknowledgement unless two such segments came; a deadline that
- * passes in ping-pong mode ends it.
+ * passes in ping-pong mode ends it; and TCP_QUICKACK sets the mode, its 1
+ * sending a held acknowledgement.
  */
 static void delack_read_rows(void)
 {
@@ -2506,6 +2507,16 @@ static void delack_read_rows(void)
     kernel_ticks += 2u * TCP_DELACK_TICKS;
     CHECK("data sent 40 ms or more after data came is no answer",
           tcp_send(&sock, (const uint8_t *)"b", 1) == 1 && conn->pingpong == 0);
+
+    tcp_quickack_set(&sock, 0);
+    CHECK("TCP_QUICKACK 0 puts the connection in ping-pong mode",
+          conn->pingpong == 1 && tcp_quickack_get(&sock) == 0);
+    rx_data(conn, 122, lport, &peer_seq, F_ACK, 200);
+    n_segs = 0;
+    tcp_quickack_set(&sock, 1);
+    CHECK("and 1 ends it and sends a held acknowledgement at once",
+          conn->pingpong == 0 && tcp_quickack_get(&sock) == 1 && n_segs == 1 &&
+              last_ack() == peer_seq);
     reset_all();
 }
 
