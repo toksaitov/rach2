@@ -58,6 +58,9 @@ struct dirty_list {
     struct bbuf *tail;
 };
 
+static int version_done(const struct bbuf *v);
+static void version_free(struct bbuf *v);
+
 /* The cache's spinlock, as the comment at the top of the file says. */
 static struct spinlock cache_spin = SPINLOCK_INIT_NAMED("bcache");
 
@@ -529,8 +532,26 @@ static void set_dirty(struct bbuf *b)
     dirty_link(b);
 }
 
-/** Mark `b` clean and take it off its dirty list; `cache_spin` is held, and
- * `wb_lock` too unless `b` is clean. */
+/** Let go of the orders `b` waits for (`waits`): each buffer it waited for
+ * loses the count in its waiters that kept it. The array stays with `b`
+ * for its next waits, and goes back to the heap with it. `cache_spin` is
+ * held, and `wb_lock`. */
+static void waits_clear(struct bbuf *b)
+{
+    uint32_t i;
+
+    if (!b->waits) {
+        return;
+    }
+    for (i = 0; i < b->waits->n; i++) {
+        b->waits->w[i].t->waiters--;
+    }
+    b->waits->n = 0;
+}
+
+/** Mark `b` clean and take it off its dirty list, with the orders it waits
+ * for let go; `cache_spin` is held, and `wb_lock` too unless `b` is
+ * clean. */
 static void set_clean(struct bbuf *b)
 {
     if (!b->dirty) {
@@ -541,6 +562,9 @@ static void set_clean(struct bbuf *b)
     b->owner = 0;
     b->level = 0;
     b->dirtied = 0;
+    b->entry = 0;
+    b->need = 0;
+    waits_clear(b);
     ndirty--;
     dirty_unlink(b);
 }
@@ -609,6 +633,7 @@ static void buffers_reap(struct bbuf **reap)
 
         *reap = b->next;
         kfree_pages(b->data, 1);
+        kfree(b->waits);
         kfree(b);
     }
 }
@@ -983,6 +1008,7 @@ static void wait_release(struct buffer_wait *wait, int killable)
 {
     int held = wb_out();
     uint32_t flags;
+    int done;
 
     if (killable) {
         (void)wq_wait_event_killable(&wait->buf->wq, busy_gone_or_killed, wait, "__wait_on_buffer");
@@ -991,7 +1017,11 @@ static void wait_release(struct buffer_wait *wait, int killable)
     }
     flags = cache_lock();
     wait->buf->waiters--;
+    done = version_done(wait->buf);
     cache_unlock(flags);
+    if (done) {
+        version_free(wait->buf);
+    }
     wb_back(held);
 }
 
@@ -1079,11 +1109,65 @@ static int names_blocks(const struct bbuf *b)
     return b->level > 0 || block_last(b);
 }
 
-/** Whether `b` waits for other dirty blocks before its write: an `after`,
- * or a block that names others. */
-static int follows(const struct bbuf *b)
+/** Whether `b` waits for other dirty blocks by the rules of the classes:
+ * an `after`, or a block that names others. */
+static int follows_classes(const struct bbuf *b)
 {
     return b->order == BCACHE_ORDER_AFTER || names_blocks(b);
+}
+
+/** Whether `b` may wait by orders (`bcache_order_after`): an older image of
+ * its block is not yet written, or it keeps waits, met or not. */
+static int ordered(const struct bbuf *b)
+{
+    return b->older != 0 || (b->waits && b->waits->n > 0);
+}
+
+/** Whether `b` may wait for other dirty blocks before its write, by the
+ * classes or by orders. */
+static int follows(const struct bbuf *b)
+{
+    return follows_classes(b) || ordered(b);
+}
+
+/**
+ * The image or dirty buffer to write first for the wait `w`: the oldest
+ * of its block not yet written, when that one went dirty at or before the
+ * mark the wait names, and NULL when the block as it stood then is on the
+ * device. A buffer keyed to another block since was clean when it was
+ * taken, and so written. `wb_lock` is held, which keeps a dirty buffer's
+ * key and the images of a block.
+ */
+static struct bbuf *wait_way(const struct bcache_wait *w)
+{
+    struct bbuf *v = w->t;
+
+    if (v->dev != w->dev || v->blk != w->blk || v->version) {
+        return 0;
+    }
+    while (v->older) {
+        v = v->older;
+    }
+    return v->dirty && v->dirtied <= w->k ? v : 0;
+}
+
+/** What `b` waits for by orders: the next older image of its block, or the
+ * first of its waits not met (`wait_way`), or NULL. `wb_lock` is held. */
+static struct bbuf *order_before(const struct bbuf *b)
+{
+    uint32_t i;
+
+    if (b->older) {
+        return b->older;
+    }
+    for (i = 0; b->waits && i < b->waits->n; i++) {
+        struct bbuf *v = wait_way(&b->waits->w[i]);
+
+        if (v) {
+            return v;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -1104,7 +1188,7 @@ static int follows(const struct bbuf *b)
  */
 static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
 {
-    if (d == b || d->dev != b->dev || d->dirtied > b->touched) {
+    if (d == b || d->dev != b->dev || d->dirtied > b->touched || d->entry) {
         return 0;
     }
     if (b->order == BCACHE_ORDER_AFTER && d->order == BCACHE_ORDER_FIRST) {
@@ -1141,16 +1225,22 @@ static struct bbuf *earliest_before(const struct dirty_list *list, const struct 
     return 0;
 }
 
-/** The earliest dirtied block that must reach the device before the dirty
- * block `b` (`must_precede`), or NULL. An `after` alone waits only for the
- * first class; a block that names others reads the other list too. */
+/** A block that must reach the device before the dirty block `b`, or NULL:
+ * what it waits for by orders (`order_before`), else the earliest dirtied
+ * block of the classes' rules (`must_precede`). An `after` alone waits
+ * only for the first class; a block that names others reads the other list
+ * too. */
 static struct bbuf *first_before(const struct bbuf *b)
 {
     struct bbuf *d, *e;
     int last;
 
-    if (!b->dirty || !follows(b)) {
+    if (!b->dirty) {
         return 0;
+    }
+    d = order_before(b);
+    if (d || !follows_classes(b)) {
+        return d;
     }
     last = block_last(b);
     d = earliest_before(&firsts, b, last);
@@ -1163,9 +1253,14 @@ static struct bbuf *first_before(const struct bbuf *b)
 static struct bbuf *way_to(const struct bbuf *b)
 {
     struct bbuf *d = first_before(b), *e;
+    uint32_t steps = 0;
 
     while (d && (e = first_before(d)) != 0) {
         d = e;
+        if (++steps > ndirty) {
+            klog(KLOG_CRIT, "bcache", "order: blocks wait for each other at block %d", (int)d->blk);
+            return d;
+        }
     }
     return d;
 }
@@ -1175,7 +1270,8 @@ static struct bbuf *way_to(const struct bbuf *b)
  * that names others, which may name the block that failed. */
 static int write_barred(const struct bbuf *b)
 {
-    return b->write_failed || ((b->dev->flags & BLOCK_WRITE_FAILED) && names_blocks(b));
+    return b->write_failed ||
+           ((b->dev->flags & BLOCK_WRITE_FAILED) && (names_blocks(b) || ordered(b)));
 }
 
 /** Whether a write of `scope` leaves `b` for a later one: the reclaim's
@@ -1225,6 +1321,80 @@ static void write_failed_mark(block_device_t *dev, struct bbuf *b)
     cache_unlock(flags);
 }
 
+/*
+ * The images of a block (`version`): its bytes as they stood when a change
+ * that carries orders came to them while an order waited for them
+ * (`bcache_change`). An image is a buffer of its own, from the heap, on the
+ * dirty lists with the marks, class, owner and level the block had then,
+ * but keyed to nothing: a lookup finds the keyed buffer, whose bytes are
+ * the newest, and a block's images, oldest first, are written before it
+ * (`order_before`). A written image is retired, taken off its block's
+ * chain, and goes back to the heap at the end of its last hold or wait,
+ * whichever comes last (`let_go`, `wait_release`).
+ */
+
+/** Take the image `v` off its block's chain and mark it retired, written or
+ * dropped. `cache_spin` and `wb_lock` are held. */
+static void version_retire(struct bbuf *v)
+{
+    if (v->version != 1) {
+        return;
+    }
+    if (v->newer) {
+        v->newer->older = v->older;
+    }
+    if (v->older) {
+        v->older->newer = v->newer;
+    }
+    v->older = 0;
+    v->newer = 0;
+    v->version = 2;
+}
+
+/** Whether the retired image `v` may go back to the heap: nobody holds it
+ * or waits for it. `cache_spin` is held. */
+static int version_done(const struct bbuf *v)
+{
+    return v->version == 2 && v->holder == -1 && v->waiters == 0;
+}
+
+/**
+ * Drop the images of the keyed buffer `b`, unwritten, for a device that has
+ * gone or an unmount that gives up its dirty buffers: each is made clean
+ * and retired, and one nobody holds or waits for goes on `*reap`, through
+ * its `next`, for `buffers_reap`, or is left to its last hold or wait. With
+ * `reap` NULL every image is left so. The count of dirty images dropped.
+ * `cache_spin` and `wb_lock` are held.
+ */
+static int versions_drop(struct bbuf *b, struct bbuf **reap)
+{
+    int dropped = 0;
+
+    while (b->older) {
+        struct bbuf *v = b->older;
+
+        if (v->dirty) {
+            dropped++;
+        }
+        set_clean(v);
+        version_retire(v);
+        if (reap && version_done(v)) {
+            v->next = *reap;
+            *reap = v;
+        }
+    }
+    return dropped;
+}
+
+/** Give the retired image `v` back to the heap when `version_done` says it
+ * may go, as the caller found under `cache_spin` and has let go since:
+ * nobody else reaches it then. */
+static void version_free(struct bbuf *v)
+{
+    v->next = 0;
+    buffers_reap(&v);
+}
+
 /**
  * Mark the `n` buffers of `run`, just written, clean and in no place of
  * the order, and count the write in `write_gen`, in one step under
@@ -1233,16 +1403,25 @@ static void write_failed_mark(block_device_t *dev, struct bbuf *b)
  */
 static void written_clean(struct bbuf **run, int n)
 {
+    struct bbuf *reap = 0;
     uint32_t flags = cache_lock();
     int i;
 
     for (i = 0; i < n; i++) {
+        if (run[i]->version) {
+            version_retire(run[i]);
+        } else if (run[i]->older) {
+            klog(KLOG_CRIT, "bcache", "order: block %d written before its older image",
+                 (int)run[i]->blk);
+            versions_drop(run[i], &reap);
+        }
         set_clean(run[i]);
         run[i]->write_failed = 0;
         run[i]->order = 0;
     }
     write_gen++;
     cache_unlock(flags);
+    buffers_reap(&reap);
 }
 
 /* A write's flag, never a request's: what the block waits for is written
@@ -1259,7 +1438,7 @@ static void written_clean(struct bbuf **run, int n)
  * the flush out before an `after` whose firsts are on the medium already. */
 static int flush_before(const struct bbuf *b, uint32_t flags)
 {
-    return follows(b) && (!(flags & WRITE_ORDER_ONLY) || b->order == BCACHE_ORDER_AFTER);
+    return follows_classes(b) && (!(flags & WRITE_ORDER_ONLY) || b->order == BCACHE_ORDER_AFTER);
 }
 
 /** Count a write of `n` buffers from `run` that `dev` answered with the
@@ -1355,7 +1534,8 @@ static int firsts_only(struct bbuf *const *run, int n)
     int i;
 
     for (i = 0; i < n; i++) {
-        if (names_blocks(run[i]) || (follows(run[i]) && run[i]->order != BCACHE_ORDER_AFTER)) {
+        if (names_blocks(run[i]) ||
+            (follows_classes(run[i]) && run[i]->order != BCACHE_ORDER_AFTER)) {
             return 0;
         }
     }
@@ -1401,10 +1581,15 @@ static void let_go(struct bbuf *b)
 {
     uint64_t cpus = 0;
     uint32_t flags = cache_lock();
+    int done;
 
     unhold_wake(b, &cpus);
+    done = version_done(b);
     cache_unlock(flags);
     sched_kick_cpus(cpus);
+    if (done) {
+        version_free(b);
+    }
 }
 
 static int write_one_met(struct bbuf *b, uint32_t flags, struct buffer_wait *met);
@@ -1771,7 +1956,7 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
     if (clean || write_barred(b) || !victim_may_be_written(b->dev, filling)) {
         return 0;
     }
-    if (names_blocks(b) && way_to(b)) {
+    if ((names_blocks(b) || ordered(b)) && way_to(b)) {
         return 0;
     }
     if (b->order != BCACHE_ORDER_AFTER) {
@@ -2032,8 +2217,8 @@ static int firsts_pending(const block_device_t *dev)
 
     for (b = firsts.head; b; b = b->dirty_next) {
         stat_visits++;
-        if (b->dev == dev &&
-            (b->holder != -1 || write_barred(b) || (names_blocks(b) && way_to(b)))) {
+        if (b->dev == dev && (b->holder != -1 || write_barred(b) ||
+                              ((names_blocks(b) || ordered(b)) && way_to(b)))) {
             return 1;
         }
     }
@@ -2059,7 +2244,8 @@ again:
         int rc;
 
         stat_visits++;
-        if (b->dev != dev || b->holder != -1 || write_barred(b) || (names_blocks(b) && way_to(b))) {
+        if (b->dev != dev || b->holder != -1 || write_barred(b) ||
+            ((names_blocks(b) || ordered(b)) && way_to(b))) {
             continue;
         }
         rc = write_one(b, 0);
@@ -2525,6 +2711,7 @@ static int mark(struct bbuf *b, int tag, uint64_t owner, int level)
     if (tag) {
         b->owner = owner;
         b->level = level;
+        b->entry = 0;
     }
     cache_unlock(flags);
     if (flusher_kick && (first || bcache_dirty_level() > 0)) {
@@ -2570,6 +2757,327 @@ void bcache_dirty_pointer(struct bbuf *b, uint64_t owner, int level)
     if (mark(b, 1, owner, level)) {
         wb_give();
     }
+}
+
+/* The mark is `wb_lock`'s, which `mark` takes, and a holder of
+ * `cache_spin` alone does not read it. */
+void bcache_dirty_entry(struct bbuf *b)
+{
+    if (!mark(b, 0, 0, 0)) {
+        return;
+    }
+    b->entry = 1;
+    wb_give();
+}
+
+/**
+ * Whether the wait on `t`, keyed to block `blk` of `dev`, as it stood at
+ * the mark `k`, is not met (`wait_way`). `wb_lock` is held.
+ */
+static int order_open(struct bbuf *t, block_device_t *dev, uint64_t blk, uint64_t k)
+{
+    struct bcache_wait w;
+
+    w.t = t;
+    w.dev = dev;
+    w.blk = blk;
+    w.k = k;
+    return wait_way(&w) != 0;
+}
+
+/*
+ * The order is kept by the caller's process, with a count in the waiters of
+ * the block's buffer, so that a shrink does not give it back to the heap
+ * while the order names it; a buffer keyed to another block meanwhile was
+ * written, which the waits tell by its key (`wait_way`). A second order on
+ * one block takes the later mark.
+ */
+int bcache_order_after(block_device_t *dev, uint64_t blk)
+{
+    struct process *p = current_proc;
+    struct bcache_token *tk;
+    struct bbuf *t;
+    uint32_t flags, i;
+    int rc = 0;
+
+    if (!p) {
+        return -ENOSPC;
+    }
+    wb_take();
+    flags = cache_lock();
+    t = index_find(dev, blk);
+    if (t && order_open(t, dev, blk, marks)) {
+        for (i = 0; i < p->bcache_ntokens; i++) {
+            tk = &p->bcache_tokens[i];
+            if (tk->t == t && tk->dev == dev && tk->blk == blk) {
+                tk->k = marks;
+                break;
+            }
+        }
+        if (i < p->bcache_ntokens) {
+        } else if (p->bcache_ntokens == BCACHE_TOKENS) {
+            rc = -ENOSPC;
+        } else {
+            tk = &p->bcache_tokens[p->bcache_ntokens++];
+            tk->t = t;
+            tk->dev = dev;
+            tk->blk = blk;
+            tk->k = marks;
+            t->waiters++;
+        }
+    }
+    cache_unlock(flags);
+    wb_give();
+    return rc;
+}
+
+void bcache_order_end(void)
+{
+    struct process *p = current_proc;
+    uint32_t flags, i;
+
+    if (!p || p->bcache_ntokens == 0) {
+        return;
+    }
+    flags = cache_lock();
+    for (i = 0; i < p->bcache_ntokens; i++) {
+        p->bcache_tokens[i].t->waiters--;
+    }
+    p->bcache_ntokens = 0;
+    cache_unlock(flags);
+}
+
+/**
+ * Keep the bytes of the held, dirty `b` in an image (`version`), before a
+ * change, into `v`, a buffer from the heap with its page: the image takes
+ * `b`'s marks, class, owner, level and waits, and goes between `b` and its
+ * older images; `b` keeps its bytes and goes dirty again at a new mark,
+ * with no waits and nothing needed of it. `cache_spin` and `wb_lock` are
+ * held.
+ */
+static void version_keep(struct bbuf *b, struct bbuf *v)
+{
+    k_memcpy(v->data, b->data, b->bytes);
+    v->dev = b->dev;
+    v->blk = b->blk;
+    v->bytes = b->bytes;
+    v->holder = -1;
+    v->version = 1;
+    v->dirty = 1;
+    v->order = b->order;
+    v->owner = b->owner;
+    v->level = b->level;
+    v->entry = b->entry;
+    v->dirtied = b->dirtied;
+    v->touched = b->touched;
+    v->waits = b->waits;
+    v->older = b->older;
+    if (v->older) {
+        v->older->newer = v;
+    }
+    v->newer = b;
+    b->older = v;
+    b->waits = 0;
+    b->need = 0;
+    ndirty++;
+    dirty_link(v);
+    dirty_unlink(b);
+    b->dirtied = b->touched = ++marks;
+    dirty_link(b);
+}
+
+/** Room in `b`'s waits for `more` more, from `spare`, an array of `cap`
+ * entries the caller took from the heap, or NULL: the waits move into it
+ * when it is needed. Returns whether `spare` was taken. `cache_spin` and
+ * `wb_lock` are held. */
+static int waits_room(struct bbuf *b, uint32_t more, struct bcache_waits *spare, uint32_t cap)
+{
+    uint32_t n = b->waits ? b->waits->n : 0;
+
+    if (b->waits && n + more <= b->waits->cap) {
+        return 0;
+    }
+    spare->cap = cap;
+    spare->n = n;
+    if (n) {
+        k_memcpy(spare->w, b->waits->w, n * sizeof(spare->w[0]));
+    }
+    b->waits = spare;
+    return 1;
+}
+
+/** Add the wait on `t`, keyed to block `blk` of `dev`, as it stood at mark
+ * `k`, to `b`, which has room, or take the later mark for one it has, and
+ * mark in `t` the bytes it needs when they are the newest, `t`'s own and
+ * no image's. `cache_spin` and `wb_lock` are held. */
+static void wait_add(struct bbuf *b, struct bbuf *t, block_device_t *dev, uint64_t blk, uint64_t k)
+{
+    struct bcache_wait *w;
+    uint32_t i;
+
+    for (i = 0; i < b->waits->n; i++) {
+        w = &b->waits->w[i];
+        if (w->t == t && w->dev == dev && w->blk == blk) {
+            if (w->k < k) {
+                w->k = k;
+            }
+            break;
+        }
+    }
+    if (i == b->waits->n) {
+        w = &b->waits->w[b->waits->n++];
+        w->t = t;
+        w->dev = dev;
+        w->blk = blk;
+        w->k = k;
+        t->waiters++;
+    }
+    if (t->dirty && t->dirtied <= k && t->need < k) {
+        t->need = k;
+    }
+}
+
+/** Read the caller's orders `p` for a change of `b`: whether one on `b`'s
+ * device is not met, in `*self` the latest mark of those on `b`'s own block
+ * and in `*more` the count of those on others. `wb_lock` is held. */
+static int change_scan(const struct process *p, const struct bbuf *b, uint64_t *self,
+                       uint32_t *more)
+{
+    uint32_t i;
+    int open = 0;
+
+    *self = 0;
+    *more = 0;
+    for (i = 0; i < p->bcache_ntokens; i++) {
+        const struct bcache_token *tk = &p->bcache_tokens[i];
+
+        if (tk->dev != b->dev || !order_open(tk->t, b->dev, tk->blk, tk->k)) {
+            continue;
+        }
+        open = 1;
+        if (tk->blk == b->blk) {
+            *self = tk->k > *self ? tk->k : *self;
+        } else {
+            (*more)++;
+        }
+    }
+    return open;
+}
+
+/** Take from the heap what a change of `b` needs: with `keep`, an image's
+ * buffer and page in `*v`, and when `b`'s waits have no room for `more`
+ * after it, a larger array in `*spare`, of `*cap` entries. 0, or -ENOMEM
+ * with nothing taken. `wb_lock` is held, and nothing else of the cache. */
+static int change_alloc(const struct bbuf *b, int keep, uint32_t more, struct bbuf **v,
+                        struct bcache_waits **spare, uint32_t *cap)
+{
+    *v = 0;
+    *spare = 0;
+    *cap = 0;
+    if (keep) {
+        *v = kzalloc(sizeof(**v));
+        if (*v) {
+            (*v)->data = kalloc_pages_try(1, 0);
+        }
+        if (!*v || !(*v)->data) {
+            kfree(*v);
+            *v = 0;
+            return -ENOMEM;
+        }
+        wait_queue_init(&(*v)->wq);
+    }
+    if (more && (keep || !b->waits || b->waits->n + more > b->waits->cap)) {
+        *cap = (keep || !b->waits ? 0 : b->waits->n) + more;
+        *cap = *cap < 4 ? 4 : *cap * 2;
+        *spare = kmalloc(sizeof(**spare) + (*cap - 1) * sizeof((*spare)->w[0]));
+        if (!*spare) {
+            if (*v) {
+                kfree_pages((*v)->data, 1);
+                kfree(*v);
+                *v = 0;
+            }
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/** Make the change of `b` that `change_scan` and `change_alloc` prepared:
+ * the image `v`, when not NULL, kept (`version_keep`), and the caller's
+ * orders `p` on other blocks not yet met added to `b`'s waits, in `spare`
+ * when they need it. Returns the array the heap takes back: `b`'s old one
+ * when `spare` replaced it, else `spare`, or NULL. `cache_spin` and
+ * `wb_lock` are held. */
+static struct bcache_waits *change_apply(const struct process *p, struct bbuf *b, struct bbuf *v,
+                                         struct bcache_waits *spare, uint32_t cap, uint32_t more)
+{
+    struct bcache_waits *old;
+    uint32_t i;
+
+    if (v) {
+        version_keep(b, v);
+    }
+    if (!more) {
+        return spare;
+    }
+    old = b->waits;
+    if (spare && waits_room(b, more, spare, cap)) {
+        spare = old;
+    }
+    for (i = 0; i < p->bcache_ntokens; i++) {
+        const struct bcache_token *tk = &p->bcache_tokens[i];
+
+        if (tk->dev == b->dev && tk->blk != b->blk && order_open(tk->t, b->dev, tk->blk, tk->k)) {
+            wait_add(b, tk->t, b->dev, tk->blk, tk->k);
+        }
+    }
+    return spare;
+}
+
+/*
+ * The orders the caller keeps on other blocks not yet met become waits of
+ * `b`; one on `b`'s own block is met by the order of its images. The image
+ * is taken when an order waits for the bytes `b` has now, another's
+ * (`need`) or the caller's own, and the change carries an order, so that
+ * the waits the change makes are the newest bytes' alone. What it needs
+ * from the heap is taken first, under `wb_lock` alone, which nothing in
+ * the decision changes without. A buffer marked to be dropped at its
+ * release takes neither: its device is gone or given up, and its images
+ * were dropped with its mark (`versions_drop`).
+ */
+int bcache_change(struct bbuf *b)
+{
+    struct process *p = current_proc;
+    struct bcache_waits *spare;
+    struct bbuf *v;
+    uint64_t self;
+    uint32_t flags, more, cap;
+    int keep, rc;
+
+    if (!b || b->holder != caller_pid()) {
+        k_panic("bcache: hold rule: a change by a process that does not hold the buffer");
+        return -EIO;
+    }
+    if (!p || p->bcache_ntokens == 0) {
+        return 0;
+    }
+    wb_take();
+    if (b->discard || !change_scan(p, b, &self, &more)) {
+        wb_give();
+        return 0;
+    }
+    keep = b->dirty && (b->need > self ? b->need : self) >= b->dirtied;
+    rc = change_alloc(b, keep, more, &v, &spare, &cap);
+    if (rc != 0) {
+        wb_give();
+        return rc;
+    }
+    flags = cache_lock();
+    spare = change_apply(p, b, v, spare, cap, more);
+    cache_unlock(flags);
+    wb_give();
+    kfree(spare);
+    return 0;
 }
 
 /** The two writes through, `bcache_write` and `bcache_write_unflushed`: a
@@ -2809,8 +3317,20 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             uint32_t flags = cache_lock();
             struct bbuf *next = index_find(dev, batch[i]);
             uint64_t last = 0;
-            int rc;
+            int rc, image = 0;
 
+            if (next) {
+                struct bbuf *v = next;
+
+                while (v->older) {
+                    v = v->older;
+                }
+                while (v != next && !sync_wants(v, pass, scope)) {
+                    v = v->newer;
+                }
+                image = v != next;
+                next = v;
+            }
             if (!next || !sync_wants(next, pass, scope) || next->blk < from) {
                 cache_unlock(flags);
                 continue;
@@ -2831,7 +3351,7 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             if (rc > 0 && scope->hold) {
                 break;
             }
-            if (rc > 0) {
+            if (rc > 0 || image) {
                 i--;
                 continue;
             }
@@ -3119,7 +3639,7 @@ int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk)
  * buffer. */
 void bcache_device_gone(block_device_t *dev)
 {
-    struct bbuf *b;
+    struct bbuf *b, *reap = 0;
     uint32_t flags, n = 0;
 
     device_failed(dev, 0, -EIO);
@@ -3131,6 +3651,7 @@ void bcache_device_gone(block_device_t *dev)
         if (b->dev != dev) {
             continue;
         }
+        (void)versions_drop(b, &reap);
         set_clean(b);
         if (b->holder != -1) {
             b->discard = 1;
@@ -3140,6 +3661,7 @@ void bcache_device_gone(block_device_t *dev)
     }
     cache_unlock(flags);
     wb_give();
+    buffers_reap(&reap);
 }
 
 /* The walk lets `cache_spin` go every WALK_BATCH buffers (`bufs_next`),
@@ -3186,7 +3708,7 @@ static struct bbuf *shrink_dirty(uint32_t *flags)
         if (write_barred(b) || !victim_may_be_written(b->dev, 0)) {
             continue;
         }
-        if ((names_blocks(b) && way_to(b)) ||
+        if (((names_blocks(b) || ordered(b)) && way_to(b)) ||
             (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev))) {
             continue;
         }
@@ -3402,7 +3924,7 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
  * clears it. */
 int bcache_drop(block_device_t *dev)
 {
-    struct bbuf *b;
+    struct bbuf *b, *reap = 0;
     uint32_t flags, n = 0;
     int dropped = 0;
 
@@ -3413,6 +3935,7 @@ int bcache_drop(block_device_t *dev)
         if (b->dev != dev) {
             continue;
         }
+        dropped += versions_drop(b, &reap);
         if (b->dirty) {
             dropped++;
             set_clean(b);
@@ -3426,6 +3949,7 @@ int bcache_drop(block_device_t *dev)
     dev->flags &= ~BLOCK_WRITE_FAILED;
     cache_unlock(flags);
     wb_give();
+    buffers_reap(&reap);
     return dropped;
 }
 
