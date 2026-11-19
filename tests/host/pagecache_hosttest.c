@@ -716,10 +716,10 @@ static void halted_field_row(void)
     init_pagecache();
     pc_set_backing(halt_during_fetch, fake_write, sizeof(fake_disk));
     root_stopped = 0;
-    CHECK(krffs_window_write(NULL, PC_PAGE_SIZE - 1, bytes, sizeof(bytes)) < 0 &&
-          root_stopped && !pc_dirty_count());
-    CHECK(pc_copy_out(PC_PAGE_SIZE - 1, after, sizeof(after)) == 0 &&
-          after[0] == before[0] && after[1] == before[1]);
+    CHECK(krffs_window_write(NULL, PC_PAGE_SIZE - 1, bytes, sizeof(bytes)) < 0 && root_stopped &&
+          !pc_dirty_count());
+    CHECK(pc_copy_out(PC_PAGE_SIZE - 1, after, sizeof(after)) == 0 && after[0] == before[0] &&
+          after[1] == before[1]);
     pc_set_backing(NULL, NULL, 0);
 }
 
