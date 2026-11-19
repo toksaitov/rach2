@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd November 19, 2026
 .Dt GETPID 2
 .Os
 .Sh NAME
@@ -78,6 +78,19 @@ process group: a caller that leads a group, or one that has left the
 group it led for another while a member stayed in it.
 The console session and controlling terminal are described in
 .Xr console 4 .
+.Pp
+As on Linux with autogroup support, a successful
+.Fn setsid
+also creates a scheduling group at nice 0 and moves the caller's threads
+to it.
+Children created after the call inherit the group.
+If memory for the new group is unavailable, the session is still created
+and the threads use the root scheduling group.
+See
+.Xr sched 7
+for the effect on processor shares and
+.Xr proc 5
+for the autogroup controls.
 .Pp
 The i386 system call numbers are 20 for
 .Fn getpid ,
@@ -178,4 +191,5 @@ neither the caller nor its child.
 .Xr fork 2 ,
 .Xr kill 2 ,
 .Xr waitpid 2 ,
-.Xr console 4
+.Xr console 4 ,
+.Xr sched 7

@@ -1310,6 +1310,29 @@ reads;
 the release
 .Xr uname 2
 reports;
+.Pa kernel/sched_autogroup_enabled ,
+1 by default, which makes the fair scheduler use session groups, or
+0 to schedule without them;
+.Pa kernel/sched_rr_timeslice_ms ,
+the round-robin slice in milliseconds, 100 by default.
+A positive write reads back as written; the scheduler and
+.Xr sched_rr_get_interval 2
+use it rounded up to a whole tick of 4 ms.
+A write of zero or a negative number restores 100;
+.Pa kernel/sched_rt_period_us
+and
+.Pa kernel/sched_rt_runtime_us ,
+the real-time bandwidth settings, initially 1000000 and 950000
+microseconds.
+The period must be positive and the runtime must be between 0 and
+the period, or -1 for unlimited.
+These settings do not throttle real-time threads, as on a Linux kernel
+built without real-time group scheduling, such as Debian's;
+.Pa kernel/sched_schedstats ,
+0 by default, which a write of 1 enables to collect and show detailed
+statistics in
+.Pa /proc/PID/sched .
+A write of 0 disables them;
 .Pa kernel/pid_max ,
 2000000000 at boot, the bound below which every PID namespace gives out
 process IDs; past it they start again from 300, or from 1 before 300 has
@@ -2181,8 +2204,9 @@ In
 fields 10, 12, 14 and 15 are the thread's own faults and time, as on Linux.
 Field 19 is the nice value
 .Xr setpriority 2
-keeps, and field 18 the priority Linux reports for it, 20 more than the
-nice value.
+keeps.
+Field 18 is 20 plus the nice value for ordinary threads, or -1 minus
+the effective real-time priority for real-time threads, as on Linux.
 Field 7 is the device number of the session's controlling terminal, 5:1
 for the console and 136:N for
 .Pa /dev/pts/N ,
@@ -2945,17 +2969,71 @@ Any other wait reads as Rach2's
 .Ql wq_wait_event_nointr
 or
 .Ql wq_wait_event_idle .
+.It Pa /proc/PID/sched
+One thread's scheduling state in Linux 6.12's format, with its name,
+thread ID in the reader's PID namespace, and thread group size in the
+header.
+The fields include virtual runtime
+.Pq Li se.vruntime ,
+charged run time
+.Pq Li se.sum_exec_runtime ,
+migrations, context switches, weight, load averages, policy, and
+priority.
+The two runtimes print in milliseconds with six fractional digits.
+The ordinary thread's
+.Li se.slice
+prints in nanoseconds.
+Rach2 prints it for
+.Dv SCHED_IDLE
+too and uses the unscaled thread weights on both architectures.
+Linux on x86-64 reports weights scaled by 1024 and omits
+.Li se.slice
+for
+.Dv SCHED_IDLE .
+Linux can also show fields for kernel options such as NUMA balancing
+and utilization clamping.
+.Pp
+With
+.Pa /proc/sys/kernel/sched_schedstats
+enabled, the file also shows wake and migration counters, sleep and
+blocked times, and
+.Li wait_sum
+and
+.Li wait_count ,
+the total ready-queue wait in milliseconds with six fractional digits
+and the number of recorded waits.
+A write clears the detailed statistics for this thread.
+.It Pa /proc/PID/autogroup
+The process's session scheduling group, as on Linux.
+The root group reads as an empty file; other groups read as a line
+such as
+.Dq /autogroup-3 nice 0 .
+The group and its nice value can be read with autogroup scheduling
+disabled.
+A write of a nice value from -20 to 19 changes the group's weight.
+An unprivileged writer needs a sufficient soft
+.Dv RLIMIT_NICE
+for a negative value and gets
+.Er EAGAIN
+while the system-wide rate limit of one update per tenth of a second
+is in effect.
+See
+.Xr sched 7 .
 .It Pa /proc/PID/schedstat
-Three numbers on one line, as Linux prints the thread's scheduler
-statistics: its time on a processor in nanoseconds, counted here in the
-timer's ticks of user and system time; the nanoseconds it waited ready on a
-run queue for a processor, to the microsecond; and the times it was
-switched onto a processor.
-The file of a process is its leader's, and the file under
-.Pa task
-a thread's own.
+Three decimal numbers on one line, as on Linux.
+They are the thread's execution time as of the last scheduler charge
+in nanoseconds, the time spent runnable waiting for a processor in
+nanoseconds, and the number of times it was switched onto a processor.
 .Xr kvm 4
 adds the second number's growth to a guest's steal time.
+.Pp
+.Pa /proc/PID/sched
+and
+.Pa /proc/PID/schedstat
+report the process leader's counters.
+The files of the same names under
+.Pa /proc/PID/task/TID
+report the selected thread's counters.
 .It Pa /proc/PID/fdinfo
 A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,
@@ -3144,11 +3222,44 @@ The calling thread's process.
 lists each process once; the ID of a thread that did not begin its
 process also names a directory, which is not listed.
 .El
+.Ss Scheduler debug files
+The scheduler exposes the following files under
+.Pa /sys/kernel/debug/sched .
+.Bl -tag -width migration_cost_ns
+.It Pa base_slice_ns
+The default slice of the fair class in nanoseconds.
+A write sets the base for threads without a custom slice.
+.Xr sched 7
+gives the boot default.
+.It Pa features
+The scheduler features, with
+.Ql NO_
+before disabled names.
+Write a name to enable it or prefix it with
+.Ql NO_
+to disable it.
+.It Pa migration_cost_ns
+The time after a thread last ran for which the balancer usually treats
+it as cache-hot and avoids moving it, initially 500,000 ns.
+.It Pa nr_migrate
+The number of candidate threads the balancer examines in a pass,
+initially 32.
+.It Pa debug
+The scheduler's diagnostic report.
+.It Pa fair_server/cpuN/runtime , fair_server/cpuN/period
+The fair server's budget and period in nanoseconds for processor
+.Ar N ,
+initially 50,000,000 and 1,000,000,000.
+The runtime must be at most the period, and the period must be from
+100,000 to 4,194,304,000 ns.
+A runtime of zero disables the server on that processor.
+.El
 .Sh SEE ALSO
 .Xr bootlog 4 ,
 .Xr sysfs 5 ,
 .Xr disk 7 ,
 .Xr memory 7 ,
 .Xr rach2 7 ,
+.Xr sched 7 ,
 .Xr tcp 7 ,
 .Xr vdso 7

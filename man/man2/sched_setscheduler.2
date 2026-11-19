@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 19, 2026
 .Dt SCHED_SETSCHEDULER 2
 .Os
 .Sh NAME
@@ -45,38 +45,10 @@
 .Ft int
 .Fn getcpu "unsigned int *cpu" "unsigned int *node"
 .Sh DESCRIPTION
-The scheduler runs real-time threads before ordinary threads, using the
-highest base or inherited priority.
-.Dv SCHED_FIFO
-threads keep the processor against equal-priority peers until a yield or
-block; equal-priority
-.Dv SCHED_RR
-threads rotate at their one-millisecond slice events.
-A PI futex waiter donates its effective priority through its blocked owners
-until unlock, timeout or interruption removes the donation.
-.Dv SCHED_OTHER ,
-.Dv SCHED_BATCH
-and
-.Dv SCHED_IDLE
-have priority 0 and rotate in the ordinary ready order, and so does
-.Dv SCHED_DEADLINE ,
-below.
-Each processor has its own run queue.
-A woken process joins, as Linux places a wake, the waker's processor or
-the one it last ran on, by which is idle and shares a last-level cache
-with the other or else by their counts of threads, or an idle processor
-sharing that one's last-level cache, one of a core whose hyperthreads are
-all idle first; a processor with nothing to run takes a process from the
-busiest queue.
-A woken ordinary thread, or one an affinity change moves to another
-processor's queue, preempts the ordinary thread running there at once,
-unless it is
-.Dv SCHED_BATCH
-or
-.Dv SCHED_IDLE ,
-or that thread is
-.Dv SCHED_IDLE
-and it is too.
+.Xr sched 7
+describes the policies, how the scheduler chooses a thread, and the fair
+server that reserves time for ordinary threads.
+.Pp
 A
 .Fa pid
 of 0 names the caller; any other names a process that has not been
@@ -116,20 +88,22 @@ added when it was set with it, and
 .Fn sched_getparam
 stores its base priority, without a PI donation.
 .Fn sched_setscheduler
-sets any of the three with priority 0, with
+sets an ordinary policy with priority 0, with
 .Dv SCHED_RESET_ON_FORK
 or without, for a caller that may change the thread: one with effective
 user ID 0, or whose effective user ID equals the thread's real or
 effective user ID.
 .Fn sched_setparam
 keeps the policy and changes its base priority.
-Without privilege a caller may not leave
-.Dv SCHED_IDLE ,
-which Linux counts as nice 20 and lets a thread leave only when its
+An unprivileged caller may leave
+.Dv SCHED_IDLE
+only when the thread's
 .Dv RLIMIT_NICE ,
-0 by default, allows its nice value, and may not clear
-.Dv SCHED_RESET_ON_FORK ;
-either fails with
+0 by default, permits its stored nice value.
+Clearing
+.Dv SCHED_RESET_ON_FORK
+also requires privilege.
+Both checks can fail with
 .Er EPERM .
 A fork's child has its parent's policy and parameters without
 .Dv SCHED_RESET_ON_FORK ,
@@ -208,8 +182,10 @@ and
 it sets the nice value, clamped to -20 to 19,
 and a slice of
 .Fa sched_runtime
-nanoseconds, clamped to 0.1 to 100 ms, or the default for 0; lowering the
-nice value past what the thread's
+nanoseconds, clamped to 0.1 to 100 ms, or the default for 0.
+The fair scheduler uses the slice to set the distance to the thread's
+next virtual deadline, scaled by its weight.
+Lowering the nice value past what the thread's
 .Dv RLIMIT_NICE
 allows, 20 less its soft value, needs privilege, and fails with
 .Er EPERM .
@@ -261,9 +237,9 @@ writes the thread's policy, its
 .Dv SCHED_FLAG_RESET_ON_FORK ,
 and the parameters of its policy: a deadline thread's runtime, deadline,
 period and flags, a real-time thread's priority, or an ordinary thread's
-nice value and slice, which is the one it asked for or Linux's default,
-0.75 ms times one more than the base-2 logarithm of the processors
-started, eight at most.
+nice value and slice in nanoseconds.
+For an ordinary thread without a custom slice, Rach2 returns the current
+base slice.
 It writes as many bytes as
 .Fa size
 holds, at most 56, and that count in the structure's
@@ -290,12 +266,25 @@ and 0 to 0 for
 .Dv SCHED_DEADLINE
 and
 .Dv SCHED_EXT .
+.Pp
 .Fn sched_rr_get_interval
-stores the round-robin time slice, one millisecond, and 0 for a
+stores the selected thread's interval in
+.Fa tp .
+For
+.Dv SCHED_RR
+it is the configured full slice, 100 ms by default.
+A positive value written to
+.Pa /proc/sys/kernel/sched_rr_timeslice_ms
+is rounded up to a whole tick of 4 ms for this call and for scheduling.
+For an ordinary thread, the call reads the thread's slice rounded down to
+a whole tick if its processor's root fair queue has load, or zero if the
+queue has no load.
+An ordinary slice shorter than 4 ms therefore reads as zero.
+The interval is zero for
 .Dv SCHED_FIFO
 or
 .Dv SCHED_DEADLINE
-thread, as Linux does.
+as on Linux.
 .Pp
 .Fn sched_getaffinity
 stores the processors the process may run on, of those started, a bit
@@ -320,20 +309,14 @@ and enters the kernel only on a processor without that instruction
 .Pq Xr vdso 7 .
 .Pp
 .Fn sched_yield
-puts the caller behind the other ready processes in the round-robin
-order.
-It returns when the caller's turn comes again, at once when no other
-process is ready.
+puts a real-time caller behind the ready threads of its priority.
+An eligible ordinary caller gives up the rest of its slice by moving its
+virtual runtime to its deadline and taking a new deadline.
+The scheduler then chooses a thread.
+The call can return at once when no other thread is ready.
 .Ss Differences from Linux
-Linux does not let a
-.Dv SCHED_BATCH
-thread that wakes take the processor from the running one, and gives a
-.Dv SCHED_IDLE
-thread a weight far below nice 19's; here both take their turn as
-.Dv SCHED_OTHER
-does.
-The nice value and the slice an ordinary thread asks for are kept and
-reported, and the scheduler does not read them.
+Linux reports the slice stored in the thread's scheduling entity, which
+may reflect an earlier base slice after the base slice changes.
 Linux runs a
 .Dv SCHED_DEADLINE
 thread before every real-time thread, by the earliest deadline, and stops
@@ -384,16 +367,18 @@ rest of a larger set and returns 0.
 The raw
 .Fn sched_setaffinity
 reads at most that many bytes of the mask.
+On i686,
 .Fn sched_rr_get_interval
-writes a 32-bit timespec.
+writes a timespec with two 32-bit fields.
 An i386 program on the x86-64 kernel, which
 .Xr ia32 7
 describes, has the i386 calls: its mask is of 32-bit longs, four bytes
 with 32 processors or fewer, as on i386,
 .Nm sched_rr_get_interval
-writes a 32-bit timespec, and
+writes the same timespec, and
 .Nm sched_rr_get_interval_time64
 (423) a timespec of 64-bit fields.
+Linux also provides call 423 on the native 32-bit kernel.
 .Pp
 musl implements
 .Fn sched_setscheduler ,
@@ -509,4 +494,5 @@ No process has the ID
 .Xr getpriority 2 ,
 .Xr prctl 2 ,
 .Xr proc 5 ,
+.Xr sched 7 ,
 .Xr vdso 7
