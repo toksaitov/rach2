@@ -367,8 +367,8 @@ static void underused_rows(void)
 }
 
 /** A scan of one page, a range a fork left copy-on-write, a locked region,
- * the huge zero page's resident pages, a directory that keeps no table, a
- * stored page whose dirty bit was lost and the edges of a change. */
+ * the huge zero page's resident pages, a directory that keeps no table and
+ * a stored page whose dirty bit was lost. */
 static void edge_rows(void)
 {
     uint32_t allocs, i;
@@ -401,16 +401,6 @@ static void edge_rows(void)
               paging_collapse(&mm_a, A, THP_COLLAPSE) == 0 && is_huge(&dir_a, A) &&
               page_at(&dir_a, A + 402 * P)[1] == 0x6b,
           "a page read, stored into and not marked dirty keeps its bytes at a collapse");
-    drop(&mm_a, A, A + H);
-
-    region(&mm_a, A, A + H, RW);
-    check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a huge page");
-    paging_huge_split_edges(&mm_a, A + P, A + 2 * P);
-    check(is_huge(&dir_a, A), "an edge where no region ends leaves the page whole");
-    check(vm_advise(&mm_a.vm, A + P, A + 2 * P, VM_PROT_NOHUGEPAGE, 0) == 0, "a region split");
-    paging_huge_split_edges(&mm_a, A + P, A + 2 * P);
-    check(!mmu_user_huge(&dir_a, A) && (pte_of(&dir_a, A + 5 * P) & PTE_P),
-          "an edge where a region now ends splits the page");
     drop(&mm_a, A, A + H);
 
     small_pages(3);
@@ -454,6 +444,31 @@ static void edge_rows(void)
     check(paging_collapse(&mm_a, A, THP_COLLAPSE) == -EINVAL, "and collapses nothing");
     drop(&mm_a, A, A + H);
     model_no_keep = 0;
+}
+
+/** A protection change over two huge pages keeps each, and an edge splits a
+ * page only where a region now ends. */
+static void range_rows(void)
+{
+    region(&mm_a, A, A + 2 * H, RW);
+    check(resolve_held(&mm_a, A, 1, LIM) == 1 && resolve_held(&mm_a, A + H, 1, LIM) == 1 &&
+              is_huge(&dir_a, A) && is_huge(&dir_a, A + H),
+          "two huge pages");
+    paging_protect_range(&dir_a, A, A + 2 * H, VM_PROT_READ);
+    check(is_huge(&dir_a, A) && is_huge(&dir_a, A + H) && !(mmu_user_huge(&dir_a, A) & PTE_W) &&
+              !(mmu_user_huge(&dir_a, A + H) & PTE_W) && !(pte_of(&dir_a, A + H + 7 * P) & PTE_W),
+          "a protection change over both keeps each huge, its entries read-only beneath it");
+    drop(&mm_a, A, A + 2 * H);
+
+    region(&mm_a, A, A + H, RW);
+    check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a huge page");
+    paging_huge_split_edges(&mm_a, A + P, A + 2 * P);
+    check(is_huge(&dir_a, A), "an edge where no region ends leaves the page whole");
+    check(vm_advise(&mm_a.vm, A + P, A + 2 * P, VM_PROT_NOHUGEPAGE, 0) == 0, "a region split");
+    paging_huge_split_edges(&mm_a, A + P, A + 2 * P);
+    check(!mmu_user_huge(&dir_a, A) && (pte_of(&dir_a, A + 5 * P) & PTE_P),
+          "an edge where a region now ends splits the page");
+    drop(&mm_a, A, A + H);
 }
 
 /** Once refused, as on AMD's family 0x10, no huge page is made. */
@@ -507,6 +522,7 @@ int main(void)
     collapse_rows();
     underused_rows();
     edge_rows();
+    range_rows();
     refuse_rows();
     return model_end();
 }
