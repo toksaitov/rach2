@@ -34,9 +34,10 @@
 struct gnu_case {
     struct net_case u;
     struct net_boot b;
-    const char *row;  /* the last part of the case's identity */
-    const char *arch; /* the architecture booted, from ARCH */
-    char port[16];    /* the forward to the guest's port 22 */
+    const char *row;    /* the last part of the case's identity */
+    const char *arch;   /* the architecture booted, from ARCH */
+    const char *kernel; /* the kernel's: x86_64 under the ia32 profile */
+    char port[16];      /* the forward to the guest's port 22 */
     char root_password[128];
     char test_password[128];
     char root_key[4096]; /* the path of the private copy of root's key */
@@ -420,10 +421,12 @@ static void row(struct gnu_case *s)
     if (strcmp(s->row, "ntpd") == 0) {
         ntp = etude_port(s->u.c, 1);
         snprintf(command, sizeof(command),
-                 "RACH2_NTP_SERVER=10.0.2.2:%u RACH2_NTP_PORT=%u /bin/bash /tmp/gnu/rows.sh %s %s",
-                 ntp, ntp, s->row, s->arch);
+                 "RACH2_NTP_SERVER=10.0.2.2:%u RACH2_NTP_PORT=%u /bin/bash /tmp/gnu/rows.sh %s %s "
+                 "kernel=%s",
+                 ntp, ntp, s->row, s->arch, s->kernel);
     } else
-        snprintf(command, sizeof(command), "/bin/bash /tmp/gnu/rows.sh %s %s", s->row, s->arch);
+        snprintf(command, sizeof(command), "/bin/bash /tmp/gnu/rows.sh %s %s kernel=%s", s->row,
+                 s->arch, s->kernel);
     if (net_step(&s->u, "row") == ETUDE_OK)
         as_root(s, command, "row", &r);
     if (!net_ok(&s->u)) {
@@ -454,6 +457,10 @@ int etude_scenario(struct etude_case *c)
     s.arch = getenv("ARCH");
     if (s.arch == NULL || (strcmp(s.arch, "i686") != 0 && strcmp(s.arch, "x86_64") != 0))
         net_fail(&s.u, "ARCH names no architecture of the build");
+    s.kernel = s.arch;
+    if (s.arch != NULL && strcmp(s.arch, "i686") == 0 && getenv("RACH2_KERNEL") != NULL &&
+        strcmp(getenv("RACH2_KERNEL"), "ia32") == 0)
+        s.kernel = "x86_64";
     port = etude_port(c, 0);
     snprintf(s.port, sizeof(s.port), "%u", port);
     if (port == 0)
