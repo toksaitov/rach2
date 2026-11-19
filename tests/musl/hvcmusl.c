@@ -16,18 +16,37 @@
  * With `ttyS0` the boot line has `console=ttyS0`, and neither node, no bound
  * device and no record of the port are there.
  *
+ * The machine case guest.hvc.ports runs the other modes from the debug
+ * shell of a machine with a UART, whose boot line names hvc0 before ttyS0,
+ * and whose virtio console has a generic port named org.rach2.boot with no
+ * host's end at the boot; the case adds a console port and a third port,
+ * org.rach2.late, through QMP. Each of `tty`, `late` and `gone` first waits
+ * for the port it checks to come or go. `boot`: /dev/vport0p1 and
+ * /dev/virtio-ports/org.rach2.boot are one character device of major 245,
+ * whose open gives the end of a file, POLLHUP and EAGAIN for a write while
+ * the host's end is closed, and refuses a second open; /dev/hvc0 is absent
+ * and the log says console=hvc0 names no port. `tty`: /dev/hvc0 is the
+ * terminal 229:0, which takes `hvc-tty` and a newline, and /dev/vport0p0,
+ * the console port's vport node, refuses an open with ENXIO. `late`:
+ * /dev/vport0p3 and /dev/virtio-ports/org.rach2.late are one device, which
+ * takes `ping` and a newline and gives `pong` and a newline, the bytes the
+ * host's end has, and polls writable. `gone`: the late port's nodes are
+ * absent and the boot port's stays.
+ *
  * Prints `HVCMUSL OK` and exits 0 on success, and prints `HVCMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
  * case ETUDE_CASE names, has the assertions `named`, `bound`, `node`,
  * `listed`, `terminal` and `log` with `vport0p1`, and `named` and `absent`
  * with `ttyS0`. The first failure fails its assertion and leaves the rest
- * not run.
+ * not run. The other modes report nothing, since their machine case's
+ * scenario judges their exit.
  */
 
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,8 +65,16 @@
 #define PORT_MINOR   1u
 #define VIRTIO_BUS   "/sys/bus/virtio/devices"
 
+#define BOOT_NODE "/dev/vport0p1"
+#define BOOT_LINK "/dev/virtio-ports/org.rach2.boot"
+#define LATE_NODE "/dev/vport0p3"
+#define LATE_LINK "/dev/virtio-ports/org.rach2.late"
+
 /* The kernel's log, read whole: the ring is 128 KiB. */
 static char ring[131072 + 1];
+
+/* Whether the mode reports to etude: the guest cases' modes alone. */
+static int reporting;
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -56,7 +83,9 @@ static int fail(const char *what)
 
     snprintf(why, sizeof(why), "%s: errno %d", what, errno);
     printf("HVCMUSL FAIL (%s)\n", why);
-    report_stop(why);
+    if (reporting) {
+        report_stop(why);
+    }
     return 1;
 }
 
@@ -242,8 +271,191 @@ static int uart_rows(void)
     return 0;
 }
 
-/** Run the rows of the console `argv[1]` names; 0 when each held, 2 for
- * another argument. */
+/** The device number of the character device at `path` whose major is
+ * `major_want`; 0, with errno, when it is none. */
+static dev_t char_dev(const char *path, unsigned major_want)
+{
+    struct stat st;
+
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+    if (!S_ISCHR(st.st_mode) || major(st.st_rdev) != major_want) {
+        errno = 0;
+        return 0;
+    }
+    return st.st_rdev;
+}
+
+/** Whether nothing is at `path`. */
+static int absent(const char *path)
+{
+    struct stat st;
+
+    errno = 0;
+    return lstat(path, &st) != 0 && errno == ENOENT;
+}
+
+/** Wait, asleep, until something is at `path` when `present` is set, or
+ * nothing is when it is clear: the debug shell that starts this program
+ * runs no thread while it waits for a line, so the driver's thread, which
+ * acts on the ports the host adds and removes, runs while a program
+ * sleeps. The case's bound ends a wait that does not end. */
+static void settle(const char *path, int present)
+{
+    while (absent(path) == present) {
+        usleep(100000); /* interval: the node is looked at again every 100 ms */
+    }
+}
+
+/** The rows of `boot`; 0 when each held. */
+static int boot_rows(void)
+{
+    struct pollfd p;
+    dev_t dev = char_dev(BOOT_NODE, PORT_MAJOR);
+    char c;
+    int fd, other;
+
+    if (bound_consoles() != 1) {
+        return fail("the virtio bus has not one device bound to virtio_console");
+    }
+    if (dev == 0 || char_dev(BOOT_LINK, PORT_MAJOR) != dev) {
+        return fail(BOOT_NODE " and " BOOT_LINK " are not one device of major 245");
+    }
+    if (!absent(CONSOLE_NODE)) {
+        return fail(CONSOLE_NODE " is there with no console port");
+    }
+    fd = open(BOOT_LINK, O_RDWR | O_NONBLOCK);
+    if (fd < 0) {
+        return fail("the boot port does not open");
+    }
+    other = open(BOOT_NODE, O_RDWR);
+    if (other >= 0 || errno != EBUSY) {
+        return fail("a second open of the port is not refused with EBUSY");
+    }
+    p.fd = fd;
+    p.events = POLLIN | POLLOUT;
+    p.revents = 0;
+    if (poll(&p, 1, 0) != 1 || !(p.revents & POLLHUP) || (p.revents & POLLOUT)) {
+        errno = 0;
+        return fail("poll does not say hung up and not writable while the host's end is closed");
+    }
+    if (read(fd, &c, 1) != 0) {
+        return fail("a read of the port with the host's end closed is not the end of a file");
+    }
+    if (write(fd, "x", 1) != -1 || errno != EAGAIN) {
+        return fail("a write without a wait does not fail with EAGAIN");
+    }
+    close(fd);
+    errno = 0;
+    if (logged("console: none: console=hvc0 names no port now") != 1) {
+        return fail("the log does not say console=hvc0 names no port");
+    }
+    return 0;
+}
+
+/** The rows of `tty`; 0 when each held. */
+static int tty_rows(void)
+{
+    struct termios modes;
+    int fd;
+
+    settle(CONSOLE_NODE, 1);
+    if (char_dev(CONSOLE_NODE, 229u) != makedev(229u, 0u)) {
+        return fail(CONSOLE_NODE " is not the character device 229:0");
+    }
+    fd = open(CONSOLE_NODE, O_RDWR | O_NOCTTY);
+    if (fd < 0 || !isatty(fd) || tcgetattr(fd, &modes) != 0) {
+        return fail(CONSOLE_NODE " is no terminal");
+    }
+    if (write(fd, "hvc-tty\n", 8) != 8) {
+        return fail("the terminal does not take a line");
+    }
+    close(fd);
+    fd = open("/dev/vport0p0", O_RDWR);
+    if (fd >= 0 || errno != ENXIO) {
+        return fail("the console port's vport node does not refuse an open with ENXIO");
+    }
+    return 0;
+}
+
+/** The rows of `late`; 0 when each held. */
+static int late_rows(void)
+{
+    struct pollfd p;
+    dev_t dev;
+    char in[8];
+    int fd, n, got = 0;
+
+    settle(LATE_LINK, 1);
+    dev = char_dev(LATE_NODE, PORT_MAJOR);
+    if (dev == 0 || char_dev(LATE_LINK, PORT_MAJOR) != dev) {
+        return fail(LATE_NODE " and " LATE_LINK " are not one device of major 245");
+    }
+    fd = open(LATE_LINK, O_RDWR);
+    if (fd < 0) {
+        return fail("the late port does not open");
+    }
+    if (write(fd, "ping\n", 5) != 5) {
+        return fail("the late port does not take a line");
+    }
+    while (got < 5 && (n = (int)read(fd, in + got, (size_t)(5 - got))) > 0) {
+        got += n;
+    }
+    if (got != 5 || memcmp(in, "pong\n", 5) != 0) {
+        errno = 0;
+        return fail("the late port does not give the host's line");
+    }
+    p.fd = fd;
+    p.events = POLLOUT;
+    p.revents = 0;
+    if (poll(&p, 1, 0) != 1 || !(p.revents & POLLOUT)) {
+        errno = 0;
+        return fail("the late port does not poll writable");
+    }
+    close(fd);
+    return 0;
+}
+
+/** The rows of `gone`; 0 when each held. */
+static int gone_rows(void)
+{
+    settle(LATE_LINK, 0);
+    if (!absent(LATE_NODE)) {
+        return fail("a node of the late port is there after its removal");
+    }
+    if (char_dev(BOOT_LINK, PORT_MAJOR) == 0) {
+        return fail("the boot port's node went with the late port");
+    }
+    return 0;
+}
+
+/** Run the rows of the machine case's mode `mode`; 0 when each held, 2
+ * for another mode. */
+static int machine_mode(const char *mode)
+{
+    int r;
+
+    if (strcmp(mode, "boot") == 0) {
+        r = boot_rows();
+    } else if (strcmp(mode, "tty") == 0) {
+        r = tty_rows();
+    } else if (strcmp(mode, "late") == 0) {
+        r = late_rows();
+    } else if (strcmp(mode, "gone") == 0) {
+        r = gone_rows();
+    } else {
+        fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0|boot|tty|late|gone\n");
+        return 2;
+    }
+    if (r == 0) {
+        printf("HVCMUSL OK\n");
+    }
+    return r;
+}
+
+/** Run the rows of the console or the mode `argv[1]` names; 0 when each
+ * held, 2 for another argument. */
 int main(int argc, char **argv)
 {
     static const char *const port_plan[] = {"named", "bound", "node", "listed", "terminal", "log"};
@@ -252,9 +464,13 @@ int main(int argc, char **argv)
     unsigned i;
 
     if (!port && !(argc == 2 && strcmp(argv[1], "ttyS0") == 0)) {
-        fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0\n");
-        return 2;
+        if (argc != 2) {
+            fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0|boot|tty|late|gone\n");
+            return 2;
+        }
+        return machine_mode(argv[1]);
     }
+    reporting = 1;
     report_begin(report_case(environ, port ? "guest.hvc.port" : "guest.hvc.uart"));
     for (i = 0; port && i < sizeof(port_plan) / sizeof(port_plan[0]); i++) {
         report_plan(port_plan[i]);
