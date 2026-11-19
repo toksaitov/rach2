@@ -284,58 +284,12 @@ static int resp(int err)
     return VD_RESP_ERR_UNSPEC;
 }
 
-/**
- * Whether the VM has room for `size` more bytes of a resource's storage:
- * its available memory, as /proc/meminfo counts it, holds them and an
- * eighth of the VM's memory besides, so that a guest that asks for more
- * than the VM has is refused, as a Linux guest's allocation fails when its
- * RAM runs out, before reclaim stalls the VM and every answer with it. 1
- * also when the counts cannot be read.
- */
-static int mem_room(uint64_t size)
-{
-    unsigned long long total = 0, avail = 0, kib;
-    char line[128];
-    FILE *f = fopen("/proc/meminfo", "r");
-
-    if (f == 0) {
-        return 1;
-    }
-    while (fgets(line, sizeof(line), f)) {
-        if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
-            total = kib * 1024u;
-        } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
-            avail = kib * 1024u;
-        }
-    }
-    fclose(f);
-    return total == 0 || avail == 0 || size + total / 8u <= avail;
-}
-
-/** The bytes a resource of `a` holds at most, at four bytes a texel and a
- * third more for its mipmaps; a buffer's width is its bytes. */
-static uint64_t create_bytes(const struct vd_create *a)
-{
-    uint64_t n = (uint64_t)a->width * (a->height ? a->height : 1u) * (a->depth ? a->depth : 1u);
-
-    if (a->target != 0) { /* a texture; PIPE_BUFFER is 0 */
-        n *= 4u * (a->array_size ? a->array_size : 1u) * (a->nr_samples ? a->nr_samples : 1u);
-    }
-    return a->last_level ? n + n / 3u : n;
-}
-
-/** Create a resource without backing; device.c attaches it later. Refused
- * as out of memory when the VM has no room for its storage (`mem_room`). */
+/** Create a resource without backing; device.c attaches it later. */
 static int op_create(void *c, const struct vd_create *a)
 {
     struct virgl_renderer_resource_create_args args;
 
     (void)c;
-    if (!mem_room(create_bytes(a))) {
-        fprintf(stderr, "backend: create: resource %u: refused: %llu bytes: no memory\n",
-                (unsigned)a->id, (unsigned long long)create_bytes(a));
-        return VD_RESP_ERR_OUT_OF_MEMORY;
-    }
     args.handle = a->id;
     args.target = a->target;
     args.format = a->format;
@@ -743,6 +697,37 @@ static int op_pages(void *c, struct vd_pages *q)
         return VD_RESP_ERR_UNSPEC;
     }
     return pin_runs(r, p, q);
+}
+
+/**
+ * Whether the VM has room for a backing of `size` bytes: its available
+ * memory, as /proc/meminfo counts it, holds the backing and an eighth of
+ * the VM's memory besides, so that a guest that asks for more than the VM
+ * has is refused, as a Linux guest's allocation fails when its RAM runs
+ * out, before the pin's reclaim stalls the VM and every answer with it. A
+ * resource's own storage is not judged so: the renderer's process may keep
+ * what it frees, as llvmpipe's textures stay in the C library's heap, and
+ * the counts would refuse the next resource that memory could hold. 1
+ * also when the counts cannot be read.
+ */
+static int mem_room(uint64_t size)
+{
+    unsigned long long total = 0, avail = 0, kib;
+    char line[128];
+    FILE *f = fopen("/proc/meminfo", "r");
+
+    if (f == 0) {
+        return 1;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
+            total = kib * 1024u;
+        } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
+            avail = kib * 1024u;
+        }
+    }
+    fclose(f);
+    return total == 0 || avail == 0 || size + total / 8u <= avail;
 }
 
 /**
