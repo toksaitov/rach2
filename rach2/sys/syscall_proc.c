@@ -2082,6 +2082,12 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->arg_end = s->args.env_start;
     s->mm->env_start = s->args.env_start;
     s->mm->env_end = s->args.env_end;
+    s->mm->start_code = s->img.start_code;
+    s->mm->end_code = s->img.end_code;
+    s->mm->start_data = s->img.start_data;
+    s->mm->end_data = s->img.end_data;
+    s->mm->start_brk = s->mm->vm.heap_start;
+    s->mm->start_stack = s->args.sp;
     k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->mm->auxv));
     if (s->layout.interp[0] != '\0') {
         mm_set_interp(s->mm, s->layout.interp);

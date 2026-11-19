@@ -474,6 +474,12 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->arg_end = from->arg_end;
     to->env_start = from->env_start;
     to->env_end = from->env_end;
+    to->start_code = from->start_code;
+    to->end_code = from->end_code;
+    to->start_data = from->start_data;
+    to->end_data = from->end_data;
+    to->start_brk = from->start_brk;
+    to->start_stack = from->start_stack;
     k_memcpy(to->auxv, from->auxv, sizeof(to->auxv));
     to->dumpable = from->dumpable;
     to->membarrier = from->membarrier;

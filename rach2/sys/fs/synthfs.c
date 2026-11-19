@@ -310,8 +310,10 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * writeback.h); whether the sleeping locks time their holds
  * (fs/sleeplock.h); the loopback backlog's limit (ip.h); the last
  * process ID the reader's PID namespace gave out (proc/ns.h); the
- * budgets of a drain of the loopback backlog (ip.h); and whether the
- * scheduler keeps its statistics (proc/fair.h). An entry
+ * budgets of a drain of the loopback backlog (ip.h); whether the
+ * scheduler keeps its statistics (proc/fair.h); and whether it schedules
+ * sessions as groups, RR's slice and the real-time bandwidth
+ * (proc/autogroup.h, proc/sched.h). An entry
  * whose text is empty is procfs's, which reads its value when the file is
  * opened. A new entry goes at the end, so that the indices SYNTH_SYS_ names
  * stay the same. */
@@ -409,7 +411,11 @@ static const struct {
                {6, "ns_last_pid", ""},
                {85, "netdev_budget", ""},
                {85, "netdev_budget_usecs", ""},
-               {6, "sched_schedstats", ""}};
+               {6, "sched_schedstats", ""},
+               {6, "sched_autogroup_enabled", ""},
+               {6, "sched_rr_timeslice_ms", ""},
+               {6, "sched_rt_period_us", ""},
+               {6, "sched_rt_runtime_us", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -449,7 +455,9 @@ static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,           SYNTH_SYS_
                                         SYNTH_SYS_PANIC_ON_OOPS,      SYNTH_SYS_LOCK_STAT,
                                         SYNTH_SYS_NETDEV_MAX_BACKLOG, SYNTH_SYS_NS_LAST_PID,
                                         SYNTH_SYS_NETDEV_BUDGET,      SYNTH_SYS_NETDEV_BUDGET_USECS,
-                                        SYNTH_SYS_SCHED_SCHEDSTATS,   SYNTH_SYS_PID_MAX};
+                                        SYNTH_SYS_SCHED_SCHEDSTATS,   SYNTH_SYS_PID_MAX,
+                                        SYNTH_SYS_SCHED_AUTOGROUP,    SYNTH_SYS_SCHED_RR_TIMESLICE,
+                                        SYNTH_SYS_SCHED_RT_PERIOD,    SYNTH_SYS_SCHED_RT_RUNTIME};
 
 int synth_sys_writable(int entry)
 {
@@ -707,6 +715,9 @@ static int synth_pid_file(struct comp name, int task)
         if (comp_eq(name, files[i].name)) {
             return files[i].kind;
         }
+    }
+    if (task && comp_eq(name, "autogroup")) {
+        return SYNTH_PROC_AUTOGROUP;
     }
     return !task && comp_eq(name, "children") ? SYNTH_PROC_CHILDREN : 0;
 }

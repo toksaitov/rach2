@@ -428,6 +428,27 @@ static int elf_fill(elf_read_fn readfn, void *ctx, page_dir_t *dir, const elf_se
  * here, so a file that ends before it fails the load as a copy would, and
  * not the first touch of the page.
  */
+/** Widen `out`'s code and data bounds by a PT_LOAD at `vaddr`, before the
+ * bias, with `filesz` bytes of the file and the flags `flags`, as Linux's
+ * load_elf_binary does (fs/binfmt_elf.c:1202-1226). */
+static void elf_note_bounds(elf_image_t *out, uintptr_t vaddr, uintptr_t filesz, uint32_t flags)
+{
+    uintptr_t end = vaddr + filesz;
+
+    if ((flags & PF_X) && vaddr < out->start_code) {
+        out->start_code = vaddr;
+    }
+    if (out->start_data < vaddr) {
+        out->start_data = vaddr;
+    }
+    if ((flags & PF_X) && out->end_code < end) {
+        out->end_code = end;
+    }
+    if (out->end_data < end) {
+        out->end_data = end;
+    }
+}
+
 int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t bias,
                       struct vm_file *file, elf_image_t *out)
 {
@@ -445,6 +466,8 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
 
     out->nsegs = 0;
     out->image_end = 0;
+    out->start_code = ~(uintptr_t)0;
+    out->end_code = out->start_data = out->end_data = 0;
     out->file = file;
 
     rc = elf_read_headers(readfn, ctx, &ehdr, phdrs, &out->cls);
@@ -487,6 +510,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
         seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
         prev_end = seg_end;
         nload++;
+        elf_note_bounds(out, (uintptr_t)ph->p_vaddr, (uintptr_t)ph->p_filesz, ph->p_flags);
 
         if (out->nsegs >= ELF_MAX_SEGS) {
             return -ENOEXEC;
@@ -541,6 +565,10 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uintptr_t 
         return -ENOEXEC;
     }
     out->phdr_vaddr += bias;
+    out->start_code += bias;
+    out->end_code += bias;
+    out->start_data += bias;
+    out->end_data += bias;
     if (ehdr.e_entry + bias < ELF_USER_MIN || ehdr.e_entry + bias >= top) {
         return -ENOEXEC;
     }
