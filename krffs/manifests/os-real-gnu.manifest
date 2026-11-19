@@ -209,6 +209,9 @@ dir 0755 /var
 dir 0755 /var/empty
 dir 0755 /var/log
 dir 0755 /var/run
+# What a program keeps across a reboot, as Debian's /var/tmp, since /tmp
+# is a tmpfs; the GNU rows that test ext2 itself work here.
+dir 1777 /var/tmp
 # The crontabs, which crontab(1) writes as the group `crontab` and cron
 # reads as root. The sticky bit keeps a user from removing another's
 # crontab, and nobody else may list the directory, as on Debian.

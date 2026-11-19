@@ -59,8 +59,8 @@ static int line_has(const char *text, const char *first, const char *then)
 /**
  * Fill the RAM root of the machine of `d` until its file system refuses a
  * write and has no free block: a file of whole blocks, its last fragments,
- * and the name records that are left. The heap and the image the stick
- * boots are not touched.
+ * and the name records that are left, in /fill, since /tmp is a tmpfs. The
+ * heap and the image the stick boots are not touched.
  *
  * @return 1 when the root has 11044 to 11264 KiB and is full, 0 otherwise.
  */
@@ -73,16 +73,16 @@ static int fill_root(struct drive *d)
                    "df -k / > /mnt/grow/root.before && "
                    "awk 'NR == 2 {exit !($2 <= 11264 && $2 >= 11044)}' /mnt/grow/root.before") == 0;
     ok = grow_shell(d, "BLOCKS", NULL, "%s",
-                    "dd if=/dev/zero of=/tmp/occupied bs=4096 2>/mnt/grow/fill.log; "
-                    "test \"$?\" != 0") == 0 &&
+                    "mkdir /fill && { dd if=/dev/zero of=/fill/occupied bs=4096 "
+                    "2>/mnt/grow/fill.log; test \"$?\" != 0; }") == 0 &&
          ok;
     ok = grow_shell(d, "TAIL", NULL, "%s",
-                    "dd if=/dev/zero bs=512 2>/mnt/grow/fill-tail.log >> /tmp/occupied; "
+                    "dd if=/dev/zero bs=512 2>/mnt/grow/fill-tail.log >> /fill/occupied; "
                     "test \"$?\" != 0") == 0 &&
          ok;
     ok = grow_shell(d, "NAMES", NULL, "%s",
                     "i=0; while [ \"$i\" -lt 1024 ] && "
-                    "touch \"/tmp/empty.$i\" 2>/mnt/grow/fill-names.log; do i=$((i+1)); done; "
+                    "touch \"/fill/empty.$i\" 2>/mnt/grow/fill-names.log; do i=$((i+1)); done; "
                     "test \"$i\" -lt 1024") == 0 &&
          ok;
     ok = grow_shell(d, "FULL", NULL, "%s",
