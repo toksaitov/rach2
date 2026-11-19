@@ -73,6 +73,7 @@
 #include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
+#include "audio/hda_hdmi.h"
 #include "network/socket/socket.h"
 #include "network/socket/netlink.h"
 #include "network/socket/packet.h"
@@ -3597,6 +3598,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_NET_FILE:
     case VNODE_PROC_SYSVIPC:
     case VNODE_PROC_FS_LOCKWAIT:
+    case VNODE_PROC_ASOUND:
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
@@ -3757,7 +3759,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     }
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
-    } else if (vp->kind == VNODE_PROC_IRQ_DIR) {
+    } else if (vp->kind == VNODE_PROC_IRQ_DIR || vp->kind == VNODE_PROC_ASOUND_DIR) {
         sd = synth_dir_alloc(vp->kind, vp->pid, 0);
     } else if (vp->kind == VNODE_DEV_SUBDIR) {
         sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
@@ -8590,7 +8592,8 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
            kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
-           kind == VNODE_PROC_IRQ_DIR || kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
+           kind == VNODE_PROC_IRQ_DIR || kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR ||
+           kind == VNODE_PROC_ASOUND_DIR;
 }
 
 /** The entry root made under /dev (devtree.h) that the descriptor `e` is
@@ -9944,6 +9947,10 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return 0;
     case VNODE_PROC_FS_DIR:
         return synth_proc_dir_stat(kst, procfs_ino_fsdir());
+    case VNODE_PROC_ASOUND_DIR:
+        return synth_proc_dir_stat(kst, procfs_ino_asound(-1, vp->pid));
+    case VNODE_PROC_ASOUND:
+        return synth_proc_stat(kst, procfs_ino_asound(vp->pid, 0));
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -20048,6 +20055,7 @@ static const struct {
                           {"irq", procfs_ino_irqdir, DT_DIR},
                           {"acpi", procfs_ino_acpidir, DT_DIR},
                           {"fs", procfs_ino_fsdir, DT_DIR},
+                          {"asound", procfs_ino_asounddir, DT_DIR},
                           {"sys", procfs_ino_sysdir, DT_DIR},
                           {"self", procfs_ino_dir, DT_LNK},
                           {"usb", procfs_ino_usb, DT_REG},
@@ -20057,8 +20065,42 @@ static const struct {
                           {"interrupts", procfs_ino_interrupts, DT_REG},
                           {"filesystems", procfs_ino_filesystems, DT_REG}};
 
+/**
+ * List /proc/asound, `card` -1, whose cards file is there always and card0
+ * while the HDMI codec is, or card0, `card` 0, with its id and its ELD files
+ * (audio/hda_hdmi.h).
+ */
+static int synth_asound_dirent(int card, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    char eld[16];
+    int k = 0, v = hdmi_audio_codec_addr();
+
+    if (card < 0) {
+        return n == 0 ? synth_entry("cards", procfs_ino_asound(0, 0), DT_REG, name, ino, dtype)
+               : n == 1 && hdmi_audio_present()
+                   ? synth_entry("card0", procfs_ino_asound(-1, 0), DT_DIR, name, ino, dtype)
+                   : 0;
+    }
+    if (n == 0) {
+        return synth_entry("id", procfs_ino_asound(1, 0), DT_REG, name, ino, dtype);
+    }
+    if (n > hdmi_audio_eld_count() || n > 9) {
+        return 0;
+    }
+    k_memcpy(eld, "eld#", 4);
+    k = 4;
+    if (v >= 10) {
+        eld[k++] = (char)('0' + v / 10);
+    }
+    eld[k++] = (char)('0' + v % 10);
+    eld[k++] = '.';
+    eld[k++] = (char)('0' + n - 1);
+    eld[k] = '\0';
+    return synth_entry(eld, procfs_ino_asound(n + 1, 0), DT_REG, name, ino, dtype);
+}
+
 /** List one message directory, the live message numbers, or the fixed
- * files of /proc/acpi and /proc/fs. */
+ * files of /proc/acpi, /proc/fs and /proc/asound. */
 static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
                                    uint8_t *dtype)
 {
@@ -20070,6 +20112,9 @@ static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name
     if (sd->kind == VNODE_PROC_FS_DIR) {
         return synth_entry(n == 0 ? "lockwait" : NULL, procfs_ino_lockwait(), DT_REG, name, ino,
                            dtype);
+    }
+    if (sd->kind == VNODE_PROC_ASOUND_DIR) {
+        return synth_asound_dirent(sd->pid, n, name, ino, dtype);
     }
     if (sd->pid >= 0) {
         return synth_entry(n == 0   ? "smp_affinity"
@@ -20150,6 +20195,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     case VNODE_PROC_IRQ_DIR:
     case VNODE_PROC_ACPI_DIR:
     case VNODE_PROC_FS_DIR:
+    case VNODE_PROC_ASOUND_DIR:
         return synth_small_proc_dirent(sd, n, name, ino, dtype);
     default:
         break;

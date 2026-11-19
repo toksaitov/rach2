@@ -263,6 +263,11 @@ uint32_t procfs_ino_acpicall(void);
 /** The inodes of /proc/fs and of /proc/fs/lockwait. */
 uint32_t procfs_ino_fsdir(void);
 uint32_t procfs_ino_lockwait(void);
+/** The inode of /proc/asound's file `file`, as hdmi_audio_proc_text numbers
+ * them, or with `file` negative of /proc/asound, `card` -1, or of its card0,
+ * `card` 0; and that of /proc/asound. */
+uint32_t procfs_ino_asound(int file, int card);
+uint32_t procfs_ino_asounddir(void);
 
 /** Whether `e`, a descriptor of type FD_TYPE_PROC, is open on a file of
  * /sys, which fstat and fstatfs report as sysfs's. */
