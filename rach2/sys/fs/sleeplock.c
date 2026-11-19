@@ -9,6 +9,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
@@ -39,14 +40,16 @@ struct sleep_turn {
 };
 
 /*
- * The table of the places killed takers left (`struct sleep_left`), every
- * lock's, under `left_lock`; `left_count` counts its entries, changed only
+ * The list of the places killed takers left (`struct sleep_left`), every
+ * lock's, under `left_lock`; `left_count` counts its records, changed only
  * by exchanges under that lock, so that a give reads it with no spinlock and
  * takes one only while some place is left. A place is passed before its
- * line empties, so no entry outlives the hold before it and none names a
- * lock that has been freed.
+ * line empties, so no record outlives the hold before it and none names a
+ * lock that has been freed. The list has no bound but the heap, as a
+ * killed waiter of Linux's mutex takes itself off the mutex's list and
+ * counts against no limit (kernel/locking/mutex.c:630-699).
  */
-static struct sleep_left left[SLEEP_LEFT_MAX];
+static struct sleep_left *left;
 static volatile unsigned int left_count;
 static struct spinlock left_lock = SPINLOCK_INIT_NAMED("sleep_lock_left");
 
@@ -82,18 +85,20 @@ static int sleep_turn_or_killed(void *arg)
     return sleep_my_turn(arg) || sleep_killed();
 }
 
-/** Remove the entry of the table of left places that names place `place`
- * of `l`: 1 when there was one, 0 when there was none. */
+/** Remove the record of left places that names place `place` of `l`, and
+ * free it: 1 when there was one, 0 when there was none. */
 static int sleep_left_take(struct sleep_lock *l, uint32_t place)
 {
     uint32_t irq = spin_lock_irqsave(&left_lock);
-    int i;
+    struct sleep_left **link, *rec;
 
-    for (i = 0; i < SLEEP_LEFT_MAX; i++) {
-        if (left[i].lock == l && left[i].place == place) {
-            left[i].lock = 0;
+    for (link = &left; *link; link = &(*link)->next) {
+        rec = *link;
+        if (rec->lock == l && rec->place == place) {
+            *link = rec->next;
             (void)arch_atomic_xchg(&left_count, left_count - 1u);
             spin_unlock_irqrestore(&left_lock, irq);
+            kfree(rec);
             return 1;
         }
     }
@@ -126,33 +131,34 @@ static void sleep_serve(struct sleep_lock *l, uint32_t place)
 
 /**
  * Leave the line of `t`'s lock, for a taker that SIGKILL ends: its place
- * goes in the table of left places, for the give that would serve it to
+ * goes on the list of left places, for the give that would serve it to
  * pass, or, when its turn has come already, the place after it is served
- * at once. 1 once the caller is out of the line; 0, with nothing changed,
- * when the table is full, and the caller stays in line.
+ * at once. The record comes from the heap before the list's lock is taken.
+ * 1 once the caller is out of the line; 0, with nothing changed, when the
+ * heap has no room for the record, and the caller stays in line.
  */
 static int sleep_leave(const struct sleep_turn *t)
 {
     struct sleep_lock *l = t->lock;
-    uint32_t irq = spin_lock_irqsave(&left_lock);
-    int i = 0;
+    struct sleep_left *rec = kzalloc(sizeof(*rec));
+    uint32_t irq;
 
-    while (i < SLEEP_LEFT_MAX && left[i].lock) {
-        i++;
-    }
-    if (i == SLEEP_LEFT_MAX) {
-        spin_unlock_irqrestore(&left_lock, irq);
+    if (!rec) {
         return 0;
     }
+    rec->lock = l;
+    rec->place = t->place;
+    irq = spin_lock_irqsave(&left_lock);
     (void)arch_atomic_xchg(&left_count, left_count + 1u);
     if (l->serving != t->place) {
-        left[i].lock = l;
-        left[i].place = t->place;
+        rec->next = left;
+        left = rec;
         spin_unlock_irqrestore(&left_lock, irq);
         return 1;
     }
     (void)arch_atomic_xchg(&left_count, left_count - 1u);
     spin_unlock_irqrestore(&left_lock, irq);
+    kfree(rec);
     sleep_serve(l, t->place + 1u);
     return 1;
 }
@@ -257,8 +263,8 @@ static int sleep_spin(const struct sleep_turn *t)
  * last give. The wait's test is made with the waiter on the queue, so that
  * a give between the two wakes it. A killable waiter looks for SIGKILL
  * before each spin and sleep, and leaves the line when it finds it
- * (`sleep_leave`); with the table of left places full, it waits on as an
- * unkillable one. 0 with `l` held, or -EINTR without it.
+ * (`sleep_leave`); with no room in the heap for the record of its place,
+ * it waits on as an unkillable one. 0 with `l` held, or -EINTR without it.
  */
 static int sleep_take(struct sleep_lock *l, int killable, uintptr_t caller)
 {
