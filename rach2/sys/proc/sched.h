@@ -283,6 +283,13 @@ uint64_t sched_rr_slice_ns(void);
  * the run queues' lock. */
 uint64_t sched_rr_interval_ns(const process_t *p);
 
+/** The slice sched_getattr reports for the ordinary thread `p`, in
+ * nanoseconds: its entity's, as Linux's get_params reads se.slice, which
+ * the base slice renews at each deadline and placement unless the thread
+ * asked for its own; before the thread has an entity, the slice it asked
+ * for or the base slice. Takes the run queues' lock. */
+uint64_t sched_slice_ns(const process_t *p);
+
 /** /sys/kernel/debug/sched/fair_server/cpuN/runtime and period: processor
  * `c`'s fair server's budget and period in nanoseconds, and a write of
  * both, -EINVAL unless the runtime is at most the period and the period is
