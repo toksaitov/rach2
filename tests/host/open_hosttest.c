@@ -2658,6 +2658,50 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     return 0;
 }
 
+/** No row passes a flag to renameat2: -EINVAL, the answer of a type
+ * without `rename_flags`. */
+int vfs_rename_flags(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                     const char *newname, uint32_t flags)
+{
+    (void)mnt;
+    (void)olddir;
+    (void)oldname;
+    (void)newdir;
+    (void)newname;
+    (void)flags;
+    return -EINVAL;
+}
+
+/** No row opens with O_TMPFILE: -EOPNOTSUPP, the answer of a type without
+ * `tmpfile`. */
+int vfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node)
+{
+    (void)mnt;
+    (void)dir;
+    (void)mode;
+    (void)linkable;
+    *node = NULL;
+    return -EOPNOTSUPP;
+}
+
+/** No row's file takes O_DIRECT, so nothing is dropped. */
+void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len)
+{
+    (void)mnt;
+    (void)handle;
+    (void)offset;
+    (void)len;
+}
+
+/** The name of an O_TMPFILE file, which no row makes: -ENOMEM. */
+int vfs_name_capture_deleted(const struct vfs_ref *parent, const char *leaf, struct vfs_name **out)
+{
+    (void)parent;
+    (void)leaf;
+    *out = NULL;
+    return -ENOMEM;
+}
+
 /** No row stamps a node of the KRFFS root: the attribute rows' file is on
  * a mounted type. */
 void krffs_stamp(krffs_node_t *n, int what)

@@ -1089,9 +1089,10 @@ static int exchange(struct tmpfs_node *od, const char *oldname, struct tmpfs_nod
  * `shmem_whiteout` makes it before the move (mm/shmem.c:3497-3525 in
  * 6.12), so that no walk finds the old name missing. The whiteout, with an
  * inode of the mount, and its entry are taken first, so that a rename the
- * heap or the mount cannot serve is -ENOSPC with nothing changed. A rename of a name to another name
- * of the same node does nothing and leaves no whiteout. -EINVAL for any
- * other flag; else the errors of `exchange` or `move_name`.
+ * heap or the mount cannot serve is -ENOSPC with nothing changed. A rename
+ * of a name to another name of the same node does nothing and leaves no
+ * whiteout. -EINVAL for any other flag; else the errors of `exchange` or
+ * `move_name`.
  */
 static int tmpfs_rename_flags(struct vfs_mount *mnt, void *olddir, const char *oldname,
                               void *newdir, const char *newname, uint32_t flags)
