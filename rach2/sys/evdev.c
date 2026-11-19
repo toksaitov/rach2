@@ -291,7 +291,7 @@ struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint1
     if (dev) {
         flags = spin_lock_irqsave(&evdev_lock);
         copy_text(dev->name, name, sizeof(dev->name));
-        dev->texts = name ? TEXT_NAME : 0;
+        dev->texts = name ? dev->texts | TEXT_NAME : dev->texts & ~TEXT_NAME;
         dev->id[0] = bustype;
         dev->id[1] = vendor;
         dev->id[2] = product;
