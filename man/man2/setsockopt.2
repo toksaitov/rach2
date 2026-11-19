@@ -81,7 +81,10 @@ covers is taken to be on its link, as on Linux.
 An address of the machine's own is still reached through loopback.
 A TCP connection takes its source address and MTU from that route; an
 accepted connection inherits its listener's setting, and setting it on a
-connected socket moves the connection's later segments.
+connected socket moves the connection's later segments, but for a
+connection to an IPv6 peer of another interface's link scope, which fails
+with
+.Er EINVAL .
 A bound TCP socket receives only segments that came by its interface or
 through loopback, and its connect to an IPv6 address whose scope names
 another interface fails with

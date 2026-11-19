@@ -684,33 +684,22 @@ static void tcb_hash_add(struct tcb *tcb)
     tcb->hashed = 1;
 }
 
-/** Take `tcb` out of `tcp_hash`, if it is there. */
-static void tcb_hash_del(struct tcb *tcb);
-
-void tcp_bind_device(struct socket *sock)
+int tcp_bind_device(struct socket *sock, int ifindex)
 {
     struct tcb *tcb = sock->tcb;
-    int hashed;
 
-    if (!tcb) {
-        return;
+    if (tcb && tcb->state != TCP_LISTEN && tcb->remote_ip.family == AF_INET6 &&
+        tcb->remote_ip.scope && ifindex && tcb->remote_ip.scope != (uint32_t)ifindex) {
+        return -EINVAL;
     }
-    tcb->ifindex = sock->bound_device;
-    if (tcb->remote_ip.family != AF_INET6 || !tcb->remote_ip.scope || !tcb->ifindex ||
-        tcb->remote_ip.scope == (uint32_t)tcb->ifindex) {
-        return;
+    sock->bound_device = ifindex;
+    if (tcb) {
+        tcb->ifindex = ifindex;
     }
-    hashed = tcb->hashed;
-    tcb_hash_del(tcb);
-    tcb->remote_ip.scope = (uint32_t)tcb->ifindex;
-    if (tcb->local_ip.scope) {
-        tcb->local_ip.scope = (uint32_t)tcb->ifindex;
-    }
-    if (hashed) {
-        tcb_hash_add(tcb);
-    }
+    return 0;
 }
 
+/** Take `tcb` out of `tcp_hash`, if it is there. */
 static void tcb_hash_del(struct tcb *tcb)
 {
     struct tcb **link;

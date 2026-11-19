@@ -2870,6 +2870,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         char name[IFNAMSIZ];
         struct netdev *nd;
         uint32_t flags;
+        int rc;
         uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
 
         if (take == 0) {
@@ -2891,12 +2892,14 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
             }
         }
         flags = net_lock();
-        entry->sock->bound_device = nd ? nd->index : 0; /* an empty name unbinds */
         if (entry->sock->type == SOCK_STREAM) {
-            tcp_bind_device(entry->sock);
+            rc = tcp_bind_device(entry->sock, nd ? nd->index : 0);
+        } else {
+            entry->sock->bound_device = nd ? nd->index : 0; /* an empty name unbinds */
+            rc = 0;
         }
         net_unlock(flags);
-        return 0;
+        return rc;
     }
 
     if (optlen >= (int)sizeof(int)) {
