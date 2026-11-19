@@ -91,18 +91,19 @@ int nd_stage(struct nd_deploy *d)
  * that a journal seen under the flock below was left by a process stopped
  * midway: the setup then removes the lock when its owner record is absent, the
  * one the journal names or the start of it, as a stopped write leaves, keeps a
- * lock of any other owner, refuses while any `etude run native` runs on the
- * machine, as a collection staged before the flock may without taking it,
- * removes a lock with no owner record by rmdir(1) alone, which fails should an
- * owner appear meanwhile, and removes the journal, with a line that names what
- * it removed. KRFFS, the root of the installed machine, refuses a directory's
- * rename, so the lock cannot move aside before its removal. The look at the
- * claims and the lock, their removal and the making of this run's claim hold
- * flock(1) on STATE/collection.serial, which the collection holds while it
- * takes or releases its lock and the cleanup while it looks at or removes its
- * claim, so that no setup removes a claim or a lock made after its reading. A
- * claim already gone counts as cleared. The etude boot token is still published
- * for the measurement contexts that read it. */
+ * lock of any other owner, refuses while a process whose arguments begin with
+ * etude, run and native runs on the machine, as a collection staged before the
+ * flock may without taking it, removes with a lock that has no owner record
+ * only an empty owner file, so that its rmdir(1) fails should an owner appear
+ * meanwhile, and removes the journal, with a line that names what it removed.
+ * KRFFS, the root of the installed machine, refuses a directory's rename, so
+ * the lock cannot move aside before its removal. The look at the claims and the
+ * lock, their removal and the making of this run's claim hold flock(1) on
+ * STATE/collection.serial, which the collection holds while it takes or
+ * releases its lock and the cleanup while it looks at or removes its claim, so
+ * that no setup removes a claim or a lock made after its reading. A claim
+ * already gone counts as cleared. The etude boot token is still published for
+ * the measurement contexts that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -131,8 +132,8 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "st=$(cat \"/proc/$1/stat\" 2>/dev/null) || return 1; st=${st##*) }; set -- $st; "
         "test \"${20:-}\" = \"$w\"; }; "
         "running() { for p in /proc/[0-9]*; do test -r \"$p/cmdline\" || continue; "
-        "c=$(tr '\\0' ' ' < \"$p/cmdline\" 2>/dev/null) || continue; "
-        "case $c in *etude' run native '*) echo \"${p#/proc/}\"; return 0;; "
+        "c=$(tr '\\0' '\\n' < \"$p/cmdline\" 2>/dev/null | head -n 3 | tr '\\n' ' ') || continue; "
+        "case $c in etude' run native '|*/etude' run native ') echo \"${p#/proc/}\"; return 0;; "
         "esac; done; return 1; }; "
         "refuse() { printf 'native-deploy: refused: %%s: cannot clear it\\n' \"$1\" >&2; "
         "exit 1; }; "
@@ -154,7 +155,8 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "case $jrec in \"$jown\"*) if rpid=$(running); then "
         "printf 'native-deploy: refused: %%s: a collection runs: pid %%s\\n' \"$lock\" \"$rpid\" "
         ">&2; "
-        "exit 1; fi; test -z \"$jown\" || rm -f \"$lock/owner\"; rmdir \"$lock\" || "
+        "exit 1; fi; if test -n \"$jown\" || test ! -s \"$lock/owner\"; then "
+        "rm -f \"$lock/owner\"; fi; rmdir \"$lock\" || "
         "refuse \"$lock\"; "
         "printf 'native-deploy: cleared: %%s: left by a stopped change: %%s %%s\\n' \"$lock\" "
         "\"$jop\" \"$jrec\" >&2;; esac; fi; rm -f \"$journal\"; fi; "
