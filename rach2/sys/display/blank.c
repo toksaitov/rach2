@@ -64,27 +64,37 @@ void console_poke(void)
  * /fb blanks too, as Linux's console in text mode blanks under a program
  * that draws on /dev/fb0, but it is not painted over, since the console
  * cannot draw it again; the backlights and the display going off darken
- * it. Interrupts may be on or off; the console's lock must not be held by
- * this processor's caller, since the record is written after it is given
- * back.
+ * it. Where neither can, with no backlight that goes dark and no native
+ * display to turn off, such a picture stays shown and the console stays
+ * unblanked, and the countdown starts again. Interrupts may be on or off;
+ * the console's lock must not be held by this processor's caller, since
+ * the record is written after it is given back.
  */
 static void do_blank(int force, const char *why)
 {
     uint32_t flags = console_lock();
-    int did = 0;
+    int did = 0, dark = 1;
 
     if (!blanked && !fb_is_held()) {
         painted = !gfx_is_active();
+        dark = painted || backlight_can_darken() || drm_client_can_blank();
         if (painted) {
             textcon_blank(1);
         }
-        blanked = 1;
-        did = 1;
+        if (dark) {
+            blanked = 1;
+            did = 1;
+        } else {
+            last_poke = (uint32_t)kernel_ticks;
+        }
     }
     if (blanked && force) {
         forced = 1;
     }
     console_unlock(flags);
+    if (!dark) {
+        klog(KLOG_DEBUG, "console", "blank: refused: nothing darkens the picture on /fb");
+    }
     if (did) {
         backlight_console_blank(1);
         drm_client_blank(1);

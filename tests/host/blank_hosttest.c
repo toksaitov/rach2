@@ -13,8 +13,11 @@
  * screen back and the countdown starts again, the blank comes at the time
  * and not before; and under a program's /fb the console blanks at the
  * time with the backlights and the display off, the program's picture not
- * painted over, and the poke's unblank does not draw the console over it.
- * Each blank and unblank asks the DRM client for the display off and on.
+ * painted over, and the poke's unblank does not draw the console over it;
+ * where neither a backlight nor a native display can darken that picture,
+ * the console does not blank, forced or at the time, and counts the time
+ * again. Each blank and unblank asks the DRM client for the display off
+ * and on.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -57,6 +60,10 @@ static const char *cmdline_blank;
 static int screen_blanks, screen_unblanks, light_offs, light_ons, records, held_unlocked;
 static int display_offs, display_ons;
 static const char *last_format;
+
+/* Whether a backlight goes dark and whether the DRM client has a native
+ * display to turn off; both until a row says otherwise. */
+static int can_darken = 1, can_blank = 1;
 
 /** Take the console's lock. */
 uint32_t console_lock(void)
@@ -119,6 +126,18 @@ void drm_client_blank(int blank)
 /** No backlight to probe. */
 void backlight_init(void)
 {}
+
+/** Whether a backlight goes dark, as the row says. */
+int backlight_can_darken(void)
+{
+    return can_darken;
+}
+
+/** Whether the DRM client can turn a display off, as the row says. */
+int drm_client_can_blank(void)
+{
+    return can_blank;
+}
 
 /** No panic here. */
 void backlight_panic_unblank(void)
@@ -253,11 +272,40 @@ static void row_fb_owner(void)
           "the console's own blank is undone by drawing it again");
 }
 
+/** Under a program's /fb with neither a backlight that goes dark nor a
+ * native display, as on QEMU's VGA, nothing would darken the picture: the
+ * console does not blank at the time or on request, and counts the time
+ * again, so that it never says blank over a picture that shows. */
+static void row_fb_undarkened(void)
+{
+    reset();
+    can_darken = can_blank = 0;
+    gfx_current.mode = GFX_MODE_NATIVE;
+    console_poke();
+    ticks(5 * TICK_HZ);
+    CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0 && display_offs == 0 &&
+              recorded("blank: refused"),
+          "no blank under /fb that nothing darkens, with a record");
+    CHECK(blank_idle_ticks() == TICK_HZ, "the time counts again from the refusal");
+    console_blank_now();
+    CHECK(!console_is_blank() && screen_blanks == 0 && light_offs == 0,
+          "no forced blank under /fb that nothing darkens");
+    can_darken = 1;
+    reset();
+    console_blank_now();
+    CHECK(console_is_blank() && screen_blanks == 0 && light_offs == 1,
+          "a backlight that goes dark blanks it");
+    console_unblank_now();
+    can_blank = 1;
+    gfx_current.mode = GFX_MODE_NONE;
+}
+
 int main(void)
 {
     row_text_console();
     row_drm_master();
     row_fb_owner();
+    row_fb_undarkened();
     if (failures == 0) {
         printf("blank-test: result: pass\n");
     }
