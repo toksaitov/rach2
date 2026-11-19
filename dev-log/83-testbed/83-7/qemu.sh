@@ -5,9 +5,10 @@
 # profile has, so that every scene draws on llvmpipe, the rung
 # native-rach2; copy bed/measure and the graphics runners in over SSH, run
 # each of the harness's four scenes, or those SCENES names, once as the
-# desktop user, each SECONDS long (5), and power the guest off. OUT
-# receives the serial log, each scene's directory and run.txt, the
-# harness's lines.
+# desktop user, each SECONDS long (5), and power the guest off. APPEND
+# adds words to the boot line, as `rach2.notsc` makes every clock call read
+# the HPET. OUT receives the serial log, each scene's directory and run.txt,
+# the harness's lines.
 set -eu
 
 [ $# -ge 3 ] || { echo 'usage: qemu.sh DISK KERNEL OUT [SECONDS]' >&2; exit 2; }
@@ -31,7 +32,7 @@ qemu-img create -q -f qcow2 -F raw -b "$disk" "$work/disk.qcow2"
 sha256sum "$kernel" | tee "$out/inputs.txt"
 : > "$out/serial.log"
 qemu-system-x86_64 -accel kvm -cpu host -smp 4 -m 8G -machine q35 \
-    -kernel "$kernel" -append rach2.root=ext2 \
+    -kernel "$kernel" -append "rach2.root=ext2${APPEND:+ $APPEND}" \
     -drive "file=$work/disk.qcow2,format=qcow2,if=none,id=d0" -device ahci,id=ahci \
     -device ide-hd,drive=d0,bus=ahci.0 \
     -nic "user,model=e1000,hostfwd=tcp:127.0.0.1:$port-:22" \
