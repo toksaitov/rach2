@@ -1,8 +1,10 @@
 #!/bin/bash
-# Start the desktop's device services and its ordinary user's session, and
-# start the session again on the displays left when its own goes away.
+# Start the desktop's device services; start its ordinary user's session on
+# SIGHUP and end it on SIGUSR2, and start it again on the displays left when
+# its own goes away. No session starts at boot, so that the console's login
+# keeps the screen and the keyboard.
 set -eu
-udev='' seat='' watch='' session='' restart=0 devices=0
+udev='' seat='' watch='' session='' restart=0 devices=0 stop=0
 # The display the session draws on, `BACKEND CARD RENDERER` as display()
 # gives it, the card's device in /sys, whether udev has reported that card
 # removed since the session started, and whether the session lost its card
@@ -13,7 +15,7 @@ shown='' shown_dev='' dropped=0 lost=0
 removed=/run/rach2-desktop.removed seen=0
 cleanup()
 {
-    trap - EXIT HUP INT TERM USR1
+    trap - EXIT HUP INT TERM USR1 USR2
     # A root gone read-only refuses the removal, and under set -e its
     # failure would end the trap with the session and the services running.
     rm -f /run/rach2-desktop.pid "$removed" 2>/dev/null || :
@@ -30,6 +32,7 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM
 trap 'restart=1' HUP
 trap 'devices=1' USR1
+trap 'stop=1' USR2
 mkdir -p /run/udev /run/user
 install -d -m 0700 -o desktop -g desktop /run/user/1001
 # The X servers' socket directories, which Debian's tmpfiles.d/x11.conf makes.
@@ -194,7 +197,7 @@ stop_session()
     session=''
 }
 
-start_session
+echo "rach2-desktop: services: up; SIGHUP starts the session"
 while :; do
     for child in "$udev" "$seat" "$watch"; do
         if ! kill -0 "$child" 2>/dev/null; then
@@ -202,7 +205,14 @@ while :; do
             exit 1
         fi
     done
-    reload=$restart changed=$devices restart=0 devices=0
+    reload=$restart changed=$devices ending=$stop restart=0 devices=0 stop=0
+    if [ "$ending" = 1 ]; then
+        if [ -n "$session" ]; then
+            stop_session
+            echo "rach2-desktop: session: stopped; SIGHUP starts it again"
+        fi
+        shown='' shown_dev='' dropped=0 lost=0
+    fi
     ended=0
     if [ -n "$session" ] && ! kill -0 "$session" 2>/dev/null; then ended=1; fi
     if [ -n "$session" ] && { [ "$reload" = 1 ] || [ "$changed" = 1 ] || [ "$ended" = 1 ]; } && gone; then
