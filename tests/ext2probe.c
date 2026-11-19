@@ -15,6 +15,16 @@
  * `ext2probe xattr` runs all twelve attribute calls on a writable fixture,
  * checks remount and final links, and checks KRFFS and tmpfs defaults.
  *
+ * `ext2probe direct` mounts the fixture for writing and runs the rows of
+ * O_DIRECT, O_TMPFILE and renameat2 on ext2: an O_DIRECT write and read of
+ * whole sectors from a sector-aligned buffer, which leave no block of the
+ * file in the cache by cachestat(2), the EINVAL of a buffer, a length or an
+ * offset off the sector and the 0 of such a read past the end, F_SETFL
+ * clearing and setting O_DIRECT, a directory opened with it; a file with no
+ * name from O_TMPFILE, which takes an inode, linkat with AT_EMPTY_PATH
+ * names, and whose inode a last close frees when it has none; and the
+ * EINVAL of RENAME_EXCHANGE, which Linux's ext2 refuses too.
+ *
  * `ext2probe cost` mounts the same fixture for writing with `MS_SYNCHRONOUS`
  * and counts, through `/proc/disk`, the commands and cache flushes of
  * repeated rewrites and of appends. A mount without `sync` writes back, so
@@ -1484,6 +1494,150 @@ static void xattr_rows(void)
     }
 }
 
+#define O_DIRECT        040000
+#define O_DIRECTORY     0200000
+#define O_TMPFILE       (020000000 | O_DIRECTORY)
+#define AT_EMPTY_PATH   0x1000
+#define F_GETFL         3
+#define F_SETFL         4
+#define RENAME_EXCHANGE 2
+
+#if defined __x86_64__
+#define SYS_PWRITE64_  18
+#define SYS_RENAMEAT2_ 316
+#else
+#define SYS_PWRITE64_  181
+#define SYS_RENAMEAT2_ 353
+#endif
+#define SYS_CACHESTAT_ 451
+
+/* The buffer of the O_DIRECT rows, on a page, so that it and its first
+ * sectors are aligned and the byte after its start is not. */
+static unsigned char direct_buf[2048] __attribute__((aligned(4096)));
+
+/** pread64 or pwrite64, as `n` says, of `count` bytes at `buf` and the
+ * file's offset `off`, which i386 passes in two words: the call's result. */
+static long pio(long n, long fd, void *buf, long count, long off)
+{
+#if defined __x86_64__
+    return syscall4(n, fd, (long)buf, count, off);
+#else
+    return syscall5(n, fd, (long)buf, count, off, 0);
+#endif
+}
+
+/** The pages of the first `len` bytes of `fd`'s file that cachestat(2)
+ * counts in memory, or the call's error. */
+static long cached_pages(long fd, long len)
+{
+    static unsigned long long range[2], cs[5];
+    long rc;
+
+    range[0] = 0;
+    range[1] = (unsigned long long)len;
+    rc = syscall4(SYS_CACHESTAT_, fd, (long)range, (long)cs, 0);
+    return rc != 0 ? rc : (long)cs[0];
+}
+
+/** Fail `what` unless `got` is `want`. */
+static void expect_is(long got, long want, const char *what)
+{
+    if (got != want) {
+        fail_with(what, (int)got);
+    }
+}
+
+/** The O_DIRECT rows on the writable fixture, which leave nothing behind. */
+static void direct_io_rows(void)
+{
+    long fd, flags, i;
+
+    for (i = 0; i < 1024; i++) {
+        direct_buf[i] = (unsigned char)(i * 7 + 1);
+    }
+    fd = syscall3(SYS_OPEN, (long)"/e2/direct", O_CREAT | O_RDWR | O_DIRECT, 0644);
+    if (fd < 0) {
+        fail_with("opening a file with O_DIRECT", (int)fd);
+    }
+    flags = syscall2(SYS_FCNTL, fd, F_GETFL);
+    if (flags < 0 || !(flags & O_DIRECT)) {
+        fail_with("F_GETFL reports O_DIRECT", (int)flags);
+    }
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf, 1024, 0), 1024, "an aligned O_DIRECT write");
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf + 1, 512, 0), -EINVAL,
+              "an O_DIRECT write from a buffer off the sector is EINVAL");
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf, 100, 0), -EINVAL,
+              "an O_DIRECT write of a length off the sector is EINVAL");
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf, 512, 1), -EINVAL,
+              "an O_DIRECT write at an offset off the sector is EINVAL");
+    expect_is(cached_pages(fd, 1024), 0, "an O_DIRECT write leaves no block in the cache");
+    for (i = 1024; i < 2048; i++) {
+        direct_buf[i] = 0;
+    }
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1024, 1024, 0), 1024, "an aligned O_DIRECT read");
+    for (i = 0; i < 1024; i++) {
+        if (direct_buf[i] != direct_buf[1024 + i]) {
+            fail_with("an O_DIRECT read gives back the bytes written, wrong at", (int)i);
+        }
+    }
+    expect_is(cached_pages(fd, 1024), 0, "an O_DIRECT read leaves no block in the cache");
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1024, 100, 4096), 0,
+              "an O_DIRECT read off the sector past the end is 0");
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1024, 100, 0), -EINVAL,
+              "an O_DIRECT read off the sector before the end is EINVAL");
+    expect_is(syscall3(SYS_FCNTL, fd, F_SETFL, flags & ~O_DIRECT), 0, "F_SETFL clears O_DIRECT");
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf + 1, 100, 3), 100,
+              "a write off the sector once O_DIRECT is cleared");
+    expect_is(syscall3(SYS_FCNTL, fd, F_SETFL, flags), 0, "F_SETFL sets O_DIRECT");
+    if (!(syscall2(SYS_FCNTL, fd, F_GETFL) & O_DIRECT)) {
+        fail("F_GETFL reports O_DIRECT set again");
+    }
+    syscall1(SYS_CLOSE, fd);
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/direct"), "removing the O_DIRECT file");
+    fd = syscall3(SYS_OPEN, (long)"/e2", O_RDONLY | O_DIRECTORY | O_DIRECT, 0);
+    if (fd < 0) {
+        fail_with("a directory of ext2 opens with O_DIRECT", (int)fd);
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** The O_TMPFILE and RENAME_EXCHANGE rows on the writable fixture, which
+ * leave nothing behind and give back every inode they take. */
+static void direct_name_rows(void)
+{
+    unsigned before = free_inodes();
+    long fd, rc;
+
+    fd = syscall3(SYS_OPEN, (long)"/e2", O_TMPFILE | O_RDWR, 0600);
+    if (fd < 0) {
+        fail_with("opening a file with O_TMPFILE", (int)fd);
+    }
+    expect_is(syscall3(SYS_WRITE, fd, (long)"tmp\n", 4), 4, "writing the O_TMPFILE file");
+    expect_is(syscall2(SYS_FSTAT, fd, (long)st), 0, "fstat of the O_TMPFILE file");
+    expect_is(st_word(KSTAT_NLINK), 0, "the O_TMPFILE file has no link");
+    expect_is(free_inodes(), before - 1, "the O_TMPFILE file takes an inode");
+    expect_is(syscall5(SYS_LINKAT, fd, (long)"", AT_FDCWD, (long)"/e2/tmpnamed", AT_EMPTY_PATH), 0,
+              "linkat AT_EMPTY_PATH names the O_TMPFILE file");
+    expect_is(stat_nlink("/e2/tmpnamed"), 1, "the named file has one link");
+    syscall1(SYS_CLOSE, fd);
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/tmpnamed"), "removing the named file");
+    fd = syscall3(SYS_OPEN, (long)"/e2", O_TMPFILE | O_RDWR, 0600);
+    if (fd < 0) {
+        fail_with("opening a second file with O_TMPFILE", (int)fd);
+    }
+    syscall1(SYS_CLOSE, fd);
+    expect_is(free_inodes(), before, "the last close frees an O_TMPFILE file's inode");
+    fd = syscall3(SYS_OPEN, (long)"/e2/xa", O_CREAT | O_RDWR, 0644);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)"/e2/xb", O_CREAT | O_RDWR, 0644);
+    syscall1(SYS_CLOSE, fd);
+    rc = syscall5(SYS_RENAMEAT2_, AT_FDCWD, (long)"/e2/xa", AT_FDCWD, (long)"/e2/xb",
+                  RENAME_EXCHANGE);
+    expect_is(rc, -EINVAL, "RENAME_EXCHANGE on ext2 is EINVAL");
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/xa"), "removing the first exchange file");
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/xb"), "removing the second exchange file");
+}
+
 PROBE_SP_ENTRY;
 
 /** The probe's entry, given the initial stack `sp`: the mode from the first
@@ -1497,7 +1651,7 @@ void probe_main(unsigned long *sp)
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1) != 0 ? probe_word(1) : "links";
     writable = streq(mode, "xattr") || streq(mode, "cost") || streq(mode, "names") ||
-               streq(mode, "lookup");
+               streq(mode, "lookup") || streq(mode, "direct");
     take_loop();
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
     if (syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2",
@@ -1513,6 +1667,9 @@ void probe_main(unsigned long *sp)
         links_rows();
     } else if (streq(mode, "cost")) {
         cost_rows();
+    } else if (streq(mode, "direct")) {
+        direct_io_rows();
+        direct_name_rows();
     } else if (streq(mode, "names")) {
         names_rows();
     } else if (streq(mode, "lookup")) {
