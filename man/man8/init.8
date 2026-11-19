@@ -1,4 +1,4 @@
-.Dd November 13, 2026
+.Dd November 19, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -260,6 +260,21 @@ the end of that session starts term again.
 Neither path starts a shell without a login.
 The sealed disk's menu carries the option, and no test image's does, so
 the machine cases keep their login on COM1.
+.Pp
+The metal and recovery builds first mount a tmpfs at
+.Pa /tmp
+with the options of Debian 13's tmp.mount, mode 1777, strictatime, nosuid
+and nodev, holding at most half the machine's memory and 1048576 inodes:
+what programs keep there is made and removed in memory and goes at a
+reboot, and what the root's own
+.Pa /tmp
+holds is hidden while the mount lasts.
+What must last across a reboot belongs in
+.Pa /var/tmp ,
+on the root.
+A failed mount is reported and leaves
+.Pa /tmp
+on the root.
 .Pp
 Every build clears two levels of
 .Pa /var/run
@@ -625,6 +640,8 @@ The cron daemon, which the metal build runs where the image has it.
 The NTP servers, by which the metal build runs
 .Xr ntpd 1
 while the file names one.
+.It Pa /tmp
+A tmpfs that the metal and recovery builds mount at boot.
 .It Pa /var/run
 Entries cleared at boot, with the entries of its directories, which are
 then removed; a directory deeper than that is reported if it is not empty.
