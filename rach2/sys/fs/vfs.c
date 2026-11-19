@@ -6727,13 +6727,22 @@ void vfs_reap_detached(void)
  * (`vfs_mount_index`), as Linux's `mntput_no_expire` drops the count under
  * RCU and decides under `lock_mount_hash` (fs/namespace.c:1405-1430). A
  * record freed and made again at the same address is a live mount, judged
- * on its own fields.
+ * on its own fields. A permanent mount, which is never reaped, is told
+ * apart under the table's lock alone, so that the last close of a /proc or
+ * /sys file takes no big lock.
  */
 static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
 {
-    int big;
+    uint32_t flags;
+    int big, kept;
 
     if (left != 0) {
+        return;
+    }
+    flags = spin_lock_irqsave(&mount_table_lock);
+    kept = mount_permanent(mnt);
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    if (kept) {
         return;
     }
     big = !bkl_held();
