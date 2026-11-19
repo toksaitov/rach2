@@ -1262,9 +1262,9 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
 /**
  * Shrink the file at `offset`, reclaiming a surplus that can hold a header.
  * Flush the shorter length before reusing any old file bytes, then flush
- * the free header before publishing its size. Returns -1 if the length or
- * free header cannot be written or flushed, otherwise 0. A surplus that
- * cannot be published stays inside the file's node.
+ * the free header before publishing its size. Returns -1 if either write
+ * fails or a sync fails, otherwise 0. A surplus that cannot be published
+ * stays inside the file's node.
  */
 static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t length,
                            const krffs_node_t *head, const krffs_node_t *next)
