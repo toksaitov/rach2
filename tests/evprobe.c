@@ -1337,7 +1337,7 @@ static void read_vmmouse(int abs_fd, int rel_fd, int clock, long long from, int 
     static const struct {
         unsigned short type, code;
         int value;
-    } expected[] = {
+    } events[] = {
         {EV_ABS, ABS_X, 20000},  {EV_ABS, ABS_Y, 40000},  {EV_SYN, SYN_REPORT, 0},
         {EV_KEY, BTN_LEFT, 1},   {EV_SYN, SYN_REPORT, 0}, {EV_KEY, BTN_LEFT, 0},
         {EV_SYN, SYN_REPORT, 0}, {EV_REL, REL_WHEEL, 1},  {EV_SYN, SYN_REPORT, 0},
@@ -1347,7 +1347,7 @@ static void read_vmmouse(int abs_fd, int rel_fd, int clock, long long from, int 
     unsigned int i;
     int packets = 0;
 
-    for (i = 0; i < sizeof(expected) / sizeof(expected[0]); i++) {
+    for (i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
         int fd = packets < 3 ? abs_fd : rel_fd;
         long got = syscall3(SYS_READ, fd, (long)&ev, sizeof(ev));
         long long at, to = now_usec(clock);
@@ -1360,8 +1360,7 @@ static void read_vmmouse(int abs_fd, int rel_fd, int clock, long long from, int 
             fail_with("the VMMouse read a record outside the clock_gettime calls", 1,
                       (long)(at - from));
         }
-        if (ev.type != expected[i].type || ev.code != expected[i].code ||
-            ev.value != expected[i].value) {
+        if (ev.type != events[i].type || ev.code != events[i].code || ev.value != events[i].value) {
             fail_with("the VMMouse read another record than Linux gives", 1, i);
         }
         if (ev.type == EV_SYN) {
