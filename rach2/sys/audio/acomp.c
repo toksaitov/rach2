@@ -21,7 +21,7 @@ static const struct acomp_ops *display_ops;
 static void *display_dev;
 static const struct acomp_audio_ops *audio_ops;
 static void *audio_ptr;
-static int bound;
+static int acomp_bound;
 
 /** Make the lock on the first registration, which runs at boot. */
 static void acomp_init(void)
@@ -35,8 +35,8 @@ static void acomp_init(void)
 /** Bind the sides when both are there and not bound yet; under `lock`. */
 static void try_bind(void)
 {
-    if (display_ops && audio_ops && !bound) {
-        bound = 1;
+    if (display_ops && audio_ops && !acomp_bound) {
+        acomp_bound = 1;
         audio_ops->bind(audio_ptr, display_ops, display_dev);
     }
 }
@@ -63,8 +63,8 @@ void acomp_unregister_display(void *dev)
     }
     mutex_lock(&lock);
     if (display_ops && display_dev == dev) {
-        if (bound) {
-            bound = 0;
+        if (acomp_bound) {
+            acomp_bound = 0;
             audio_ops->unbind(audio_ptr);
         }
         display_ops = NULL;
@@ -94,7 +94,7 @@ void acomp_eld_notify(int port, int pipe)
         return;
     }
     mutex_lock(&lock);
-    if (bound) {
+    if (acomp_bound) {
         audio_ops->pin_eld_notify(audio_ptr, port, pipe);
     }
     mutex_unlock(&lock);
