@@ -6,20 +6,24 @@
 .Nm vport
 .Nd virtio console
 .Sh SYNOPSIS
-.Sy console Ns = Ns Cm hvc0
+.Sy console Ns = Ns Cm hvc Ns Ar N
 .Pp
-.Sy console Ns = Ns Cm vport0p Ns Ar N
+.Sy console Ns = Ns Cm vport Ns Ar D Ns Cm p Ns Ar N
 .Pp
 .Pa /dev/hvc Ns Ar N
 .Pp
-.Pa /dev/vport0p Ns Ar N
+.Pa /dev/vport Ns Ar D Ns Cm p Ns Ar N
+.Pp
+.Pa /dev/virtio-ports/ Ns Ar name
 .Sh DESCRIPTION
-The kernel drives a virtio console device, QEMU's
+The kernel drives every virtio console device, QEMU's
 .Ql virtio-serial-pci ,
 as Linux's
 .Ql virtio_console
-does, and carries its own console over one of the device's ports when
-the boot line names it.
+does: each port is a device of its own in
+.Pa /dev ,
+and the kernel carries its own console over a port when the boot line
+names it.
 On such a machine the console needs no serial port: the log, the debug
 shell,
 .Xr init 8
@@ -28,33 +32,40 @@ and every program on
 read and write the port, a page at a time, where a 16550 moves one byte
 at a time.
 .Pp
-The device has ports.
+The devices are numbered from 0 in the order the PCI bus gives them.
+A device has as many ports as its configuration's
+.Ql max_nr_ports ,
+at most 511, and the host adds and removes them while the machine runs,
+which the log records.
 Port 0 of a device without the multiport feature, and each port the
 device marks as a console, QEMU's
 .Ql virtconsole ,
 is a console port, named
-.Ql hvc0
-and
-.Ql hvc1
-in the order the device marks them; a port keeps its name until it
-goes.
+.Ql hvc Ns Ar N
+with the lowest
+.Ar N ,
+of 0 to 15, that no console port has when the device marks it; a port
+keeps its name until it goes.
+Every port, generic or console, is also named
+.Ql vport Ns Ar D Ns Cm p Ns Ar N
+for port
+.Ar N
+of device
+.Ar D .
 Any other port, QEMU's
 .Ql virtserialport ,
-is a generic port, named
-.Ql vport0p Ns Ar N
-for port
-.Ar N .
-The driver takes ports 0 and 1 of the first virtio console on the PCI
-bus.
+is a generic port.
 .Pp
 Each
 .Sy console=
 on the boot line is read in turn, as Linux reads them.
-.Cm hvc0
-asks for the first console port and
-.Cm vport0p Ns Ar N
+.Cm hvc Ns Ar N
+asks for the console port of that name and
+.Cm vport Ns Ar D Ns Cm p Ns Ar N
 for port
-.Ar N ,
+.Ar N
+of device
+.Ar D ,
 whatever its kind, which Linux does not offer;
 .Cm ttyS0
 asks for COM1.
@@ -68,7 +79,59 @@ Without a
 .Sy console=
 that names a port the console stays on COM1, as
 .Xr console 4
-describes it, and the device is bound with no use made of its ports.
+describes it, and the ports are the devices below.
+.Pp
+A generic port is
+.Pa /dev/vport Ns Ar D Ns Cm p Ns Ar N ,
+character device 245 with a minor of its own, and, when the host names
+it, also
+.Pa /dev/virtio-ports/ Ns Ar name .
+It is a stream of bytes to and from the host's end, with no line
+discipline.
+Its
+.Xr open 2
+tells the device the guest's end is open, which QEMU waits for before
+it gives the port anything, and fails with
+.Er EBUSY
+while it is open already and with
+.Er ENXIO
+for a console port.
+A
+.Xr read 2
+gives what the host wrote, waits for it, or with
+.Dv O_NONBLOCK
+fails with
+.Er EAGAIN ;
+it returns 0 when nothing waits and the host's end is closed.
+A
+.Xr write 2
+puts what the port's four pages hold and waits while they are the
+device's or while the host's end is closed.
+.Xr poll 2
+gives
+.Dv POLLIN
+with bytes waiting,
+.Dv POLLOUT
+with a page free and the host's end open, and
+.Dv POLLHUP
+while that end is closed.
+The last close tells the device the guest's end is closed.
+A port removed while open fails its descriptor's calls with
+.Er ENODEV .
+.Pp
+A console port is
+.Pa /dev/hvc Ns Ar N ,
+character device 229:N, a terminal of its own with a line discipline,
+as
+.Xr console 4
+describes for a terminal, whose input is what the host writes and
+whose output goes to the host's end; the port's size is the terminal's
+window size.
+It is also
+.Pa /dev/vport Ns Ar D Ns Cm p Ns Ar N ,
+whose open fails, and a name under
+.Pa /dev/virtio-ports
+when the host gives it one.
 .Pp
 A port named becomes a console line when the device announces it,
 for which the boot waits at most two seconds; a port announced later
@@ -77,15 +140,20 @@ On a machine with no COM1 the port is then given every record the log
 still holds, from the first of the boot, once for the machine's life
 and whenever it comes; on a machine with one, the records so far went
 to COM1 and the port carries the log from there on.
-While the port has the console's input, the port's node is in
-.Pa /dev :
-.Pa /dev/hvc Ns Ar N
-for a console port, character device 229:N, or
-.Pa /dev/vport0p Ns Ar N ,
-character device 245:N, for port N.
-An open of it gives the console terminal, as an open of
+When the boot line names
+.Cm hvc0
+first on a machine with COM1, the first device with the emergency write
+register carries the log through it from its binding until a port takes
+the log; QEMU gives those bytes to its port 0, a console port, while
+that port's host's end is open.
+While the port has the console's input, an open of its node, or of a
+generic port's name under
+.Pa /dev/virtio-ports ,
+gives the console terminal, as an open of
 .Pa /dev/console
 does, so a login may be started on either name.
+A console port that carries the console's output alone keeps its own
+terminal.
 .Pp
 What is written leaves when a page of it has gathered, at the end of
 each record of the log and at the end of each write to the console.
@@ -121,7 +189,8 @@ bound to
 .Ql virtio_console .
 When it is unbound through
 .Pa /sys/bus/pci/drivers/virtio-pci/unbind ,
-or its port is removed, the console goes back to COM1; a port added
+or its port is removed, the port's nodes go, its terminal is hung up
+and the console goes back to COM1; a port added
 again, or the device bound again, takes the console back.
 When the port that had the console's input goes, the console terminal
 is hung up, as
@@ -131,19 +200,24 @@ hangs it up: its session is sent
 its readers are woken, and what the port had sent and nothing had read
 is dropped.
 At shutdown, after the disks, what the ports were given is sent, the
-console goes back to COM1 and the device is reset, so that a restart
-finds it stopped.
+console goes back to COM1, the nodes go and each device is reset, so
+that a restart finds it stopped.
 A device that the transport can give no interrupt is refused.
 .Sh FILES
-.Bl -tag -width "/dev/vport0pN"
+.Bl -tag -width "/dev/virtio-ports/name"
 .It Pa /dev/hvc Ns Ar N
-the console, while console port
+console port's terminal, or the console while the port carries its
+input
+.It Pa /dev/vport Ns Ar D Ns Cm p Ns Ar N
+port
 .Ar N
-carries its input
-.It Pa /dev/vport0p Ns Ar N
-the console, while generic port
-.Ar N
-carries its input
+of device
+.Ar D ,
+or the console while the port carries its input
+.It Pa /dev/virtio-ports/ Ns Ar name
+the same device as the named port's
+.Pa vport
+node
 .El
 .Sh EXAMPLES
 Start QEMU with the console on a generic port, which loses no output
@@ -157,17 +231,30 @@ qemu-system-x86_64 -nodefaults -kernel kernel -initrd test.krffs \e
 .Pp
 Keep the log on COM1 as well, with the port for input:
 .Dl console=ttyS0 console=hvc0
+.Pp
+Add a named port after the boot from QEMU's monitor, and read it:
+.Bd -literal -offset indent
+(qemu) chardev-add socket,id=agent,path=agent.sock,server=on,wait=off
+(qemu) device_add virtserialport,chardev=agent,name=org.example.agent
+$ cat /dev/virtio-ports/org.example.agent
+.Ed
 .Sh DIAGNOSTICS
 .Bl -tag -width Ds
-.It Ql virtio_console: bound: virtio0: ports 0 and 1 with the control queues, emergency write
+.It Ql virtio_console: bound: virtio0: ports with the control queues, at most 4, emergency write
 The driver has the device, with what the device offered.
+.It Ql virtio_console: port: virtio0: port 3 added
+The host added a port;
+.Ql removed
+says it took one away, and
+.Ql is named org.example.agent
+gives its name.
 .It Ql console: enabled: vport0p1, port 1 of virtio0
 The port is the console from here on;
 .Ql , for output alone
 follows when COM1 was named after it.
 .It Ql console: disabled: vport0p1: its port has gone
 The console is back on COM1.
-.It Ql console: waiting: vport0p1: virtio0 has not announced it in 2000 ms
+.It Ql console: waiting: vport0p1: no device has announced it in 2000 ms
 The boot went on without the port, which takes the console when the
 device announces it.
 .It Ql console: none: console=vport0p1 names no port now; the console stays on COM1
@@ -189,18 +276,21 @@ The device is that of the virtio specification, version 1.2, section
 5.3, and the driver follows Linux 6.12's
 .Pa drivers/char/virtio_console.c
 with its hvc console.
-Linux gives
-.Pa /dev/hvc0
-a terminal of its own beside
-.Pa /dev/console
-and each generic port a byte device with no line discipline; here the
-node is the console terminal, and it exists only while the port carries
-the console's input.
+As here, Linux gives each console port a terminal of its own and each
+generic port a byte device; its
+.Cm hvc0
+is the first console port that registers, of any device.
+Linux names no generic port on the boot line, and its
+.Pa /dev/virtio-ports
+names are links that udev makes.
 .Sh BUGS
-One device and its ports 0 and 1 are driven; the console port named
-.Ql hvc1
-cannot be named on the boot line.
-A port that is not the console carries nothing.
+A port has no
+.Dv O_ASYNC ,
+since no file has yet, so its data sends no
+.Dv SIGIO .
+A name longer than 50 bytes has no
+.Pa /dev/virtio-ports
+entry.
 There is no
 .Pa /proc/consoles ,
 and the port has no entry under
