@@ -94,8 +94,8 @@ static const krffs_backend_t krffs_memory_backend = {krffs_memory_read, krffs_me
 
 /* The root's mount, and the mount every facade function below works on. */
 static krffs_mount_t krffs_root_mount;
-/* Disk write unit for coalescing on the boot root, 0 for a RAM image. */
-static uint32_t krffs_root_merge_grain;
+/* Disk sector size on the boot root, 0 for a RAM image. */
+static uint32_t krffs_root_sector_bytes;
 /* Writeback barrier before a disk-root shrink reuses its old data space. */
 static int (*krffs_root_flush)(void);
 
@@ -397,6 +397,19 @@ static int krffs_flush_shrink(krffs_mount_t *mount)
     return 0;
 }
 
+/** The low bytes before a sector boundary in a split 32-bit disk field. */
+static uint32_t krffs_disk_field_split(krffs_mount_t *mount, uint64_t at)
+{
+    uint32_t grain = krffs_root_sector_bytes;
+    uint32_t left;
+
+    if (mount != &krffs_root_mount || grain == 0) {
+        return 0;
+    }
+    left = grain - (uint32_t)at % grain;
+    return left < sizeof(uint32_t) ? left : 0;
+}
+
 uint64_t krffs_calculate_djb_hash(const uint8_t *str)
 {
     uint64_t hash = 5381;
@@ -448,13 +461,42 @@ uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset, const krffs_no
     return krffs_step(mount, offset, head->size);
 }
 
+/** Find the preceding node by a bounded forward walk, or KRFFS_NO_NODE. */
+static uint64_t krffs_find_previous(krffs_mount_t *mount, uint64_t offset)
+{
+    uint64_t at = 0;
+    uint64_t steps;
+    uint64_t bound = krffs_max_steps(mount);
+    krffs_brief_t head;
+
+    for (steps = 0; steps < bound; steps++) {
+        uint64_t next;
+
+        if (krffs_brief(mount, at, &head) != 0) {
+            break;
+        }
+        next = krffs_step(mount, at, head.size);
+        if (next == offset) {
+            return at;
+        }
+        if (next == 0) {
+            break;
+        }
+        at = next;
+    }
+    return KRFFS_NO_NODE;
+}
+
 /**
  * The offset of the node before the one at `offset`, whose header is `head`,
- * by its backward link; before the root, the last node.
+ * by its backward link, or by a forward walk after a failed link write.
  */
 static uint64_t krffs_previous_offset(krffs_mount_t *mount, uint64_t offset,
                                       const krffs_node_t *head)
 {
+    if (mount->stale_links) {
+        return krffs_find_previous(mount, offset);
+    }
     if (head->previous_node_size > offset) {
         return mount->size - (head->previous_node_size - offset);
     }
@@ -977,11 +1019,13 @@ static int krffs_write_backward_link(krffs_mount_t *mount, uint64_t offset, uint
  * The forward chain is the truth and this link is derived from it, so every
  * operation that changes a size fixes it afterwards; a machine that stops
  * before this leaves the one fault the check at the next mount can rebuild.
- * A write that fails is not reported, and leaves the same fault.
+ * A failed write marks the links stale for both removal and unmount.
  */
 static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
-    krffs_put_u64(mount, krffs_wrap_offset(mount, offset + size), KRFFS_FIELD_PREVIOUS, size);
+    if (krffs_write_backward_link(mount, krffs_wrap_offset(mount, offset + size), size) != 0) {
+        mount->stale_links = 1;
+    }
 }
 
 /**
@@ -1134,14 +1178,38 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
  */
 static int krffs_merge_size(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
-    uint32_t grain = krffs_root_merge_grain;
     uint32_t at = (uint32_t)offset + KRFFS_FIELD_SIZE;
+    uint32_t grain = mount->grain;
 
-    if (mount == &krffs_root_mount && grain != 0 &&
-        at / grain != (at + (uint32_t)sizeof(uint32_t) - 1) / grain) {
+    if (krffs_disk_field_split(mount, at) != 0 ||
+        (grain != 0 && at / grain != (at + (uint32_t)sizeof(uint32_t) - 1) / grain)) {
         return -1;
     }
-    return krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size);
+    return krffs_put_u32(mount, offset, KRFFS_FIELD_SIZE, (uint32_t)size);
+}
+
+/**
+ * Store a shorter length. On a disk root with a split length, make the old
+ * value durable, and store and flush the high bytes before the low bytes.
+ * The resulting intermediate length is at most the old length, so its
+ * bytes were already part of the file. Returns 0 or -1 on writeback error.
+ */
+static int krffs_put_shorter_length(krffs_mount_t *mount, uint64_t offset, uint64_t length)
+{
+    uint64_t at = offset + KRFFS_FIELD_DATA_SIZE;
+    uint32_t low = krffs_disk_field_split(mount, at);
+    uint32_t value = (uint32_t)length;
+    const uint8_t *bytes = (const uint8_t *)&value;
+
+    if (low == 0) {
+        return krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, length);
+    }
+    if (krffs_flush_shrink(mount) != 0 ||
+        mount->backend->write(mount->ctx, at + low, bytes + low, sizeof(value) - low) != 0 ||
+        krffs_flush_shrink(mount) != 0) {
+        return -1;
+    }
+    return mount->backend->write(mount->ctx, at, bytes, low);
 }
 
 /** Free a node and coalesce the free space as described in krffs.h. */
@@ -1206,11 +1274,11 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     uint64_t surplus = krffs_wrap_offset(mount, offset + size);
 
     if (length < head->data_size &&
-        (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, length) != 0 ||
-         krffs_sync_point(mount) != 0)) {
+        (krffs_put_shorter_length(mount, offset, length) != 0 || krffs_sync_point(mount) != 0)) {
         return -1;
     }
-    if (free_size < sizeof(krffs_node_t)) {
+    if (free_size < sizeof(krffs_node_t) ||
+        krffs_disk_field_split(mount, offset + KRFFS_FIELD_SIZE) != 0) {
         return 0;
     }
     if (krffs_flush_shrink(mount) != 0) {
@@ -1219,9 +1287,13 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     if (next->type == KRFFS_FREE_NODE) {
         free_size += next->size;
     }
-    if (krffs_write_free_header(mount, surplus, free_size, size) == 0 &&
-        krffs_flush_shrink(mount) == 0 && krffs_sync_point(mount) == 0 &&
-        krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size) == 0) {
+    if (krffs_write_free_header(mount, surplus, free_size, size) != 0) {
+        return 0;
+    }
+    if (krffs_flush_shrink(mount) != 0) {
+        return -1;
+    }
+    if (krffs_sync_point(mount) == 0 && krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size) == 0) {
         krffs_fix_backward_link(mount, surplus, free_size);
     }
     return 0;
@@ -1251,13 +1323,14 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
  * slack a node already has stores no length; the caller writes the bytes and
  * the length after them, as after a grow.
  */
-uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+static uint64_t krffs_resize_err(krffs_mount_t *mount, uint64_t offset, uint64_t size, int *err)
 {
     uint64_t size_with_header = sizeof(krffs_node_t) + size;
     krffs_node_t head;
     krffs_node_t next_head;
     uint64_t next;
 
+    *err = KRFFS_ENOSPACE;
     if (size > mount->size) {
         return KRFFS_NO_NODE;
     }
@@ -1312,7 +1385,19 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
         }
     }
 
-    return krffs_shrink_at(mount, offset, size, &head, &next_head) == 0 ? offset : KRFFS_NO_NODE;
+    if (krffs_shrink_at(mount, offset, size, &head, &next_head) != 0) {
+        *err = KRFFS_EIO;
+        return KRFFS_NO_NODE;
+    }
+    return offset;
+}
+
+/** Resize a node when the caller needs only the new offset. */
+uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+{
+    int err;
+
+    return krffs_resize_err(mount, offset, size, &err);
 }
 
 int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t size, uint32_t at)
@@ -1481,7 +1566,8 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
     old_data_size = head.data_size;
 
     {
-        uint64_t moved = krffs_resize_at(mount, node, new_size);
+        int err;
+        uint64_t moved = krffs_resize_err(mount, node, new_size, &err);
 
         if (node_out) {
             krffs_node_t still;
@@ -1495,7 +1581,7 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
             }
         }
         if (moved == KRFFS_NO_NODE) {
-            return KRFFS_ENOSPACE;
+            return err;
         }
         node = moved;
     }
@@ -1944,6 +2030,7 @@ static int krffs_repair_links(krffs_mount_t *mount, uint32_t *fixed)
         }
         (*fixed)++;
     }
+    mount->stale_links = 0;
     return 0;
 }
 
@@ -2631,7 +2718,8 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
     krffs_root_mount.backend = &krffs_memory_backend;
     krffs_root_mount.ctx = base;
     krffs_root_mount.size = size;
-    krffs_root_merge_grain = disk_grain;
+    krffs_root_mount.stale_links = 0;
+    krffs_root_sector_bytes = disk_grain;
     krffs_root_flush = flush;
 
     if (!krffs_chain_is_valid(&krffs_root_mount)) {

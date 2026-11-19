@@ -229,6 +229,7 @@ static krffs_mount_t mount_over(const krffs_backend_t *backend, void *ctx, uint3
     mount.ctx = ctx;
     mount.size = size;
     mount.grain = 0; /* a memory image has no unit it reaches in pieces */
+    mount.stale_links = 0;
     return mount;
 }
 
@@ -1529,6 +1530,49 @@ static void disk_shrink_row(void)
           "disk shrink flushes its length before the free header and the header before its size");
 }
 
+/** A sector-split shrink length can stop with the high bytes on disk. */
+static void disk_split_length_row(void)
+{
+    static const struct unlink_extent extents[] = {{0, NULL}, {3754, "victim"}, {4879, "kept"}};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static uint8_t before[DISK_IMAGE_SIZE];
+    krffs_node_t *victim;
+    uint64_t at = extents[1].start;
+    int failure;
+    uint64_t result;
+
+    make_unlink_image(extents, sizeof(extents) / sizeof(extents[0]));
+    victim = (krffs_node_t *)(disk_image + at);
+    victim->data_size = 768;
+    k_memset((uint8_t *)victim + sizeof(*victim), 'v', 768);
+    k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+        check(0, "split length fixture mounts");
+        return;
+    }
+    krffs_root_mount.backend = &backend;
+    writes_seen = 0;
+    refused_sync = 0;
+    failure = krffs_truncate_node_at(&krffs_root_mount, at, 257, NULL);
+    refused_sync = -1;
+    check(failure == KRFFS_EIO && victim->data_size == 768, "shrink reports failed disk flush");
+
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    result = krffs_resize_at(&krffs_root_mount, at, 257);
+    recording = 0;
+    check(result == at && victim->data_size == 257 && krffs_chain_is_valid(&krffs_root_mount),
+          "a split length shrinks to the requested size");
+    check(recorded_count == 5 && sync_count == 4 && sync_marks[0] == 0 && sync_marks[1] == 1 &&
+              recorded[0].offset == 4096 && recorded[1].offset == 4095 && recorded[1].size == 1,
+          "shrink flushes the high part of a split length before storing the low part");
+    build(disk_image, before, 1, DISK_IMAGE_SIZE);
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) == 0 &&
+              victim->data_size == 256,
+          "disk root mounts with the safe intermediate length");
+}
+
 /** Check page and sector writeback cuts, and the limits of disk-root repair. */
 static void disk_unlink_rows(void)
 {
@@ -1552,6 +1596,7 @@ static void disk_unlink_rows(void)
                      NULL);
     disk_unlink_case(pending, sizeof(pending) / sizeof(pending[0]), 3769, 1024, "/second");
     disk_shrink_row();
+    disk_split_length_row();
 
     make_image(image, IMAGE_SIZE);
     root = (krffs_node_t *)image;
