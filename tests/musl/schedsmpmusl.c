@@ -890,38 +890,15 @@ static void row_migration(void)
         miss("the spinners migrated %lld times, fewer than the six that must leave", moved);
 }
 
-/** The processor process `pid` last ran on, field 39 of /proc/PID/stat, or
- * -1. */
-static int last_cpu(pid_t pid)
-{
-    char path[32], text[1024], *p;
-    int fd, field;
-    ssize_t n;
-
-    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return -1;
-    n = read(fd, text, sizeof text - 1);
-    close(fd);
-    if (n <= 0)
-        return -1;
-    text[n] = '\0';
-    p = strrchr(text, ')');
-    for (field = 2; p && field < 39; field++)
-        p = strchr(p + 1, ' ');
-    return p ? atoi(p + 1) : -1;
-}
-
 /** With processor 2 idle and its tick stopped, a spinner let run on
  * processors 1 and 2 beside one pinned to processor 1 is pulled to
- * processor 2, and both then run all the time. */
+ * processor 2: it migrates, and both then run at least 90% of the span,
+ * which one processor could not give them both. */
 static void row_nohz(void)
 {
     pid_t p[2];
     long long ns[2];
     struct snap s;
-    int where;
 
     p[0] = spin(1u << 1, SCHED_OTHER, 0, 0);
     p[1] = spin(1u << 1, SCHED_OTHER, 0, 0);
@@ -929,13 +906,10 @@ static void row_nohz(void)
         fatal("widen a spinner's processors");
     measure(p, 2, NS_PER_SEC, SHORT_NS, ns);
     all_ran(ns, 2);
-    where = last_cpu(p[1]);
     if (sched_read(p[1], 0, &s) != 0)
         fatal("read the moved spinner's /proc/PID/sched");
-    printf("schedsmp: figure: nohz-pull: pinned=%lld movable=%lld cpu=%d migrations=%lld\n", ns[0],
-           ns[1], where, s.migrations);
-    if (where != 2)
-        miss("the movable spinner is on processor %d, not 2", where);
+    printf("schedsmp: figure: nohz-pull: pinned=%lld movable=%lld migrations=%lld\n", ns[0], ns[1],
+           s.migrations);
     if (s.migrations < 1)
         miss("the movable spinner never migrated");
     near("pinned spinner's share of the span", (double)ns[0] / (double)SHORT_NS, 1.0, 0.10);
