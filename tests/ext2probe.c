@@ -1430,9 +1430,10 @@ static void take_loop(void)
 #define XA_SET 226
 #endif
 
-/** The attribute calls on KRFFS, at /, and on tmpfs, at /dev/shm, which
- * keep no attributes: getxattr is EOPNOTSUPP and flistxattr lists nothing,
- * as Linux answers for a file system without xattr handlers. */
+/** The attribute calls on a file of KRFFS, at /, which keeps no attributes,
+ * and of tmpfs, at /dev/shm, which keeps user attributes as Linux's does
+ * (CONFIG_TMPFS_XATTR): getxattr of a name never set is EOPNOTSUPP on KRFFS
+ * and ENODATA on tmpfs, and flistxattr lists nothing on either. */
 static void xattr_unsupported(const char *name)
 {
     const char *path;
@@ -1444,20 +1445,20 @@ static void xattr_unsupported(const char *name)
         path = form ? "/dev/shm/xa-unsupported" : "/xa-unsupported";
         fd = syscall3(SYS_OPEN, (long)path, O_CREAT | O_RDWR, 0600);
         if (fd < 0) {
-            fail_with("creating an unsupported attribute file", (int)fd);
+            fail_with("creating an attribute file of KRFFS or tmpfs", (int)fd);
         }
         rc = syscall4(XA_SET + 3, (long)path, (long)name, (long)value, sizeof(value));
-        if (rc != -95)
-            fail_with(form ? "getxattr on tmpfs is not EOPNOTSUPP"
+        if (rc != (form ? -61 : -95))
+            fail_with(form ? "getxattr of a name never set on tmpfs is not ENODATA"
                            : "getxattr on KRFFS is not EOPNOTSUPP",
                       (int)rc);
         rc = syscall3(XA_SET + 8, fd, (long)value, sizeof(value));
         if (rc != 0)
-            fail_with(form ? "flistxattr on tmpfs does not list nothing"
+            fail_with(form ? "flistxattr of a new tmpfs file does not list nothing"
                            : "flistxattr on KRFFS does not list nothing",
                       (int)rc);
         syscall1(SYS_CLOSE, fd);
-        expect_ok(syscall1(SYS_UNLINK, (long)path), "removing an unsupported attribute file");
+        expect_ok(syscall1(SYS_UNLINK, (long)path), "removing an attribute file of KRFFS or tmpfs");
     }
 }
 
