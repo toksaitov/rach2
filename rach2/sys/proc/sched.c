@@ -330,6 +330,15 @@ struct fair_server {
 };
 static struct fair_server fair_servers[NR_CPUS];
 
+/* The real-time sysctls, Linux's: RR's slice in ticks and as written in
+ * milliseconds, and the real-time period and runtime in microseconds,
+ * which throttle nothing, as on a kernel without CONFIG_RT_GROUP_SCHED.
+ * Written under sched_lock. */
+static int rr_timeslice = SCHED_RR_TIMESLICE_MS * TICK_HZ / 1000;
+static int rr_timeslice_ms = SCHED_RR_TIMESLICE_MS;
+static int rt_period_us = 1000000;
+static int rt_runtime_us = 950000;
+
 /** Start a new period of the server at the monotonic time `now`, with its
  * whole budget, as Linux's replenish_dl_new_period. */
 static void fair_server_new_period(struct fair_server *fs, uint64_t now)
@@ -469,6 +478,50 @@ static uint64_t fair_server_event(int c)
     }
 }
 
+/* Linux's BW_SHIFT and BW_UNIT: a bandwidth is a runtime over its period
+ * in units of 2^-20 of a processor. */
+#define SCHED_BW_SHIFT 20
+#define SCHED_BW_UNIT  ((uint64_t)1 << SCHED_BW_SHIFT)
+
+/** Linux's to_ratio (kernel/sched/core.c): `runtime` over `period`, both
+ * in nanoseconds, in units of 2^-20; 0 for a period of 0. The runtime is
+ * below 2^44 ns, so the shift stays within 64 bits. */
+static uint64_t sched_bw_ratio(uint64_t period, uint64_t runtime)
+{
+    return period == 0 ? 0 : tick_div64(runtime << SCHED_BW_SHIFT, period, NULL);
+}
+
+/** The bandwidth the real-time sysctls leave the deadline class, Linux's
+ * dl_b->bw: the runtime over the period, or -1 for an unlimited runtime. */
+static int64_t sched_rt_ratio(int period_us, int runtime_us)
+{
+    if (runtime_us < 0) {
+        return -1;
+    }
+    return (int64_t)sched_bw_ratio((uint64_t)(uint32_t)period_us * 1000u,
+                                   (uint64_t)(uint32_t)runtime_us * 1000u);
+}
+
+/** The fair servers' bandwidth summed over the online processors, and in
+ * `cpus` their count: Linux's total_bw and dl_bw_cpus of the one root
+ * domain, to which each processor's server adds its share at its first
+ * start (dl_server_apply_params, kernel/sched/deadline.c:1895-1920). The
+ * run queues' lock is held. */
+static uint64_t sched_servers_bw(int *cpus)
+{
+    uint64_t total = 0;
+    int c;
+
+    *cpus = 0;
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            ++*cpus;
+            total += sched_bw_ratio(fair_servers[c].period, fair_servers[c].runtime);
+        }
+    }
+    return total;
+}
+
 void sched_fair_server(int c, uint64_t *runtime, uint64_t *period)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
@@ -480,12 +533,18 @@ void sched_fair_server(int c, uint64_t *runtime, uint64_t *period)
 
 /** Linux's sched_fair_server_write (kernel/sched/debug.c:344-402): the
  * runtime at most the period, the period from 100 us to 2^22 us, the
- * processor online; the server stops and starts again with its new
- * parameters, and a runtime of 0 turns it off. */
+ * processor online, and the servers' bandwidth with the new one within
+ * what the real-time sysctls leave the deadline class on the online
+ * processors (__dl_overflow in dl_server_apply_params,
+ * kernel/sched/deadline.c:1895-1915); the server stops and starts again
+ * with its new parameters, and a runtime of 0 turns it off. */
 int sched_set_fair_server(int c, uint64_t runtime, uint64_t period)
 {
-    struct fair_server *fs = &fair_servers[c];
+    struct fair_server *fs;
+    uint64_t total;
+    int64_t bw;
     uint32_t flags;
+    int cpus;
 
     if (runtime > period || period > FAIR_SERVER_PERIOD_MAX || period < FAIR_SERVER_PERIOD_MIN) {
         return -EINVAL;
@@ -493,7 +552,14 @@ int sched_set_fair_server(int c, uint64_t runtime, uint64_t period)
     if (c < 0 || c >= NR_CPUS || !cpu_table[c].online) {
         return -EBUSY;
     }
+    fs = &fair_servers[c];
     flags = spin_lock_irqsave(&sched_lock);
+    bw = sched_rt_ratio(rt_period_us, rt_runtime_us);
+    total = sched_servers_bw(&cpus) - sched_bw_ratio(fs->period, fs->runtime);
+    if (bw >= 0 && (uint64_t)bw * (uint32_t)cpus < total + sched_bw_ratio(period, runtime)) {
+        spin_unlock_irqrestore(&sched_lock, flags);
+        return -EBUSY;
+    }
     fs->runtime = runtime;
     fs->period = period;
     fs->state = SERVER_IDLE;
@@ -2351,15 +2417,6 @@ void sched_preempt(void)
     schedule();
 }
 
-/* The real-time sysctls, Linux's: RR's slice in ticks and as written in
- * milliseconds, and the real-time period and runtime in microseconds,
- * which throttle nothing, as on a kernel without CONFIG_RT_GROUP_SCHED.
- * Written under sched_lock. */
-static int rr_timeslice = SCHED_RR_TIMESLICE_MS * TICK_HZ / 1000;
-static int rr_timeslice_ms = SCHED_RR_TIMESLICE_MS;
-static int rt_period_us = 1000000;
-static int rt_runtime_us = 950000;
-
 int sched_rr_timeslice_ms(void)
 {
     return rr_timeslice_ms;
@@ -2429,19 +2486,29 @@ void sched_rt_bandwidth(int *period_us, int *runtime_us)
     *runtime_us = rt_runtime_us;
 }
 
-/** Linux's sched_rt_handler and sched_rt_global_validate
- * (kernel/sched/rt.c:2906-2964): the period at least 1, the runtime -1 for
- * none or at most the period. Its ceiling on the runtime, 2^44 - 1 ns, is
- * above any int of microseconds, and with no deadline threads its check of
- * their bandwidth passes. */
+/** Linux's sched_rt_handler, sched_rt_global_validate and
+ * sched_dl_global_validate (kernel/sched/rt.c:2906-2964,
+ * kernel/sched/deadline.c:3392-3427): the period at least 1, the runtime
+ * -1 for none or at most the period, and the new bandwidth on the online
+ * processors no less than the fair servers', -EBUSY. Its ceiling on the
+ * runtime, 2^44 - 1 ns, is above any int of microseconds. */
 int sched_set_rt_bandwidth(int period_us, int runtime_us)
 {
+    uint64_t total;
+    int64_t bw;
     uint32_t flags;
+    int cpus;
 
     if (period_us < 1 || runtime_us < -1 || (runtime_us != -1 && runtime_us > period_us)) {
         return -EINVAL;
     }
     flags = spin_lock_irqsave(&sched_lock);
+    bw = sched_rt_ratio(period_us, runtime_us);
+    total = sched_servers_bw(&cpus);
+    if (bw >= 0 && (uint64_t)bw * (uint32_t)cpus < total) {
+        spin_unlock_irqrestore(&sched_lock, flags);
+        return -EBUSY;
+    }
     rt_period_us = period_us;
     rt_runtime_us = runtime_us;
     spin_unlock_irqrestore(&sched_lock, flags);
