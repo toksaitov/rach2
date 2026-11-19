@@ -66,6 +66,31 @@ for the machine's memory, half a power of two near one for each 128 KiB,
 from 256 to 262144; past that a connection skips
 .Dv TIME_WAIT ,
 counted in TCPTimeWaitOverflow.
+.Ss Acknowledgements
+Data received in order is acknowledged as Linux acknowledges it.
+Its acknowledgement waits while no more than the largest segment received,
+at least 536 bytes, is unacknowledged, so that every second full segment
+is acknowledged at once; a held acknowledgement goes with the next segment
+sent, or alone 40 ms later, Linux's
+.Dv TCP_DELACK_MIN .
+A read that empties the receive buffer after a segment that ended a write
+of the peer's, one with PSH that is full or shorter than 536 bytes, or one
+shorter than 88 bytes, sends the held
+acknowledgement at once, unless the connection is answering what it
+receives: data sent within 40 ms of data received puts it in that mode,
+where a read sends one only after two such segments, and an acknowledgement
+held for the whole 40 ms ends the mode.
+Data past a hole, the segment that fills it, data received before, a FIN,
+and data in a closing state are acknowledged at once.
+There is no quick-acknowledgement mode at a connection's start; its first
+segments wait as later ones do.
+.Pp
+A window the reader reopens is announced once it has grown by the smaller
+of a segment and half the buffer, while the peer has no more than half the
+buffer left, and only when the new window is at least twice what the peer
+has, as Linux's
+.Fn tcp_cleanup_rbuf
+announces it.
 .Ss Keepalive
 A connection with
 .Dv SO_KEEPALIVE
@@ -260,6 +285,12 @@ The idle seconds before the first probe, 1 to 32767.
 The seconds between probes, 1 to 32767.
 .It Dv TCP_KEEPCNT
 The probes unanswered before the reset, 1 to 127.
+.It Dv TCP_QUICKACK
+0 puts the connection in the mode in which this side's answers carry its
+acknowledgements; any other value ends that mode and sends an
+acknowledgement held at once, after which an even value puts the mode back.
+It reads 0 in that mode and 1 otherwise, and a socket with no connection
+keeps nothing.
 .It Dv TCP_USER_TIMEOUT
 The milliseconds of unacknowledged data after which the connection is given
 up, 0 for the default.
