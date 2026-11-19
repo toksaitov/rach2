@@ -112,6 +112,8 @@ case $port$deadline in '' | *[!0-9]*) usage ;; esac
 case $accel in kvm | tcg) ;; *) usage ;; esac
 [ -n "$bdf" ] || [ -n "$iface" ] || usage
 case $deny in *[!0-9]*) usage ;; esac
+# The denied port is not PORT, which the guest must let through.
+[ "$deny" != "$port" ] || usage
 for c in "$@"; do
     case $c in
         debian | freebsd) [ -n "$deny" ] || usage ;;
@@ -128,8 +130,9 @@ nettput=$here/nettput
 new_out=0 early=''
 # A detached run started from here keeps OUT once it has written its process
 # ID there or while it lives ($!), since it may hold its recovery record, and
-# has it named.
-trap 'if [ -z "$early" ]; then :; elif [ -s "$early/pid" ] || { [ -n "$!" ] && kill -0 "$!" 2> /dev/null; }; then
+# has it named; the child is asked about first, so that one that writes its
+# ID and ends between the two questions is kept.
+trap 'if [ -z "$early" ]; then :; elif { [ -n "$!" ] && kill -0 "$!" 2> /dev/null; } || [ -s "$early/pid" ]; then
     echo "netguest: started: log $early/log" >&2; else rm -rf "$early"; fi' EXIT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -138,7 +141,9 @@ if [ -z "$out" ]; then
     # Named before it is made, so that no signal comes between the directory
     # and the trap's knowing it, by this process and eight random hex digits,
     # so that the name is no other run's.
-    early=${TMPDIR:-/tmp}/rach2-netguest.$$.$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')
+    salt=$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')
+    [ -n "$salt" ] || exit 1
+    early=${TMPDIR:-/tmp}/rach2-netguest.$$.$salt
     mkdir "$early" || {
         early=''
         exit 1
