@@ -125,8 +125,10 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap 'exit 130' INT
 if [ -z "$out" ]; then
-    out=$(mktemp -d "${TMPDIR:-/tmp}/rach2-netguest.XXXXXX") || exit 1
-    new_out=1 early=$out
+    # Made in the assignment itself, so that no signal comes between the
+    # directory and the trap's knowing it.
+    early=$(mktemp -d "${TMPDIR:-/tmp}/rach2-netguest.XXXXXX") || exit 1
+    new_out=1 out=$early
 fi
 mkdir -p "$out" || exit 1
 if [ "$detach" = 1 ]; then
@@ -141,17 +143,20 @@ if [ "$detach" = 1 ]; then
     [ -z "$bdf" ] || set -- -c "$bdf" "$@"
     [ "$others" = 0 ] || set -- -W "$@"
     [ "$reboot" = 0 ] || set -- -B "$@"
+    # From here OUT is the detached run's, which may have written its
+    # recovery record there, and a signal here leaves it alone.
+    early=''
     setsid nohup sh "$0" "$@" > "$out/log" 2>&1 < /dev/null &
     launched=$!
     until [ -s "$out/pid" ]; do
         if ! kill -0 "$launched" 2> /dev/null && [ ! -s "$out/pid" ]; then
             echo "netguest: the detached run did not start: $(tail -n 1 "$out/log" 2> /dev/null)" >&2
+            [ "$new_out" = 0 ] || rm -rf "$out"
             exit 1
         fi
         sleep 0.2
     done
     echo "netguest: started: process $(cat "$out/pid"), log $out/log, status in $out/status at the end"
-    early=''
     exit 0
 fi
 echo $$ > "$out/pid"
@@ -272,9 +277,38 @@ children_of()
             if (index(p, " " f[2] " ")) print $1 }'
 }
 
-# kill_tree PID: stop PID and every process under it, each before its
-# children are looked for, so that none starts another or is orphaned
-# meanwhile, then kill them all and reap PID.
+# stopped PIDS: wait until each of PIDS has stopped or ended, since SIGSTOP
+# takes effect only when the process next runs; a process that sleeps
+# uninterruptibly is waited for 100 times 0.1 s at most.
+# shellcheck disable=SC2329 # kill_tree calls it
+stopped()
+{
+    for x in $1; do
+        t=0
+        while [ "$t" -lt 100 ]; do
+            case $(state_of "$x") in '' | T | t | Z | X) break ;; esac
+            t=$((t + 1))
+            sleep 0.1
+        done
+    done
+}
+
+# tree_of PID: print PID and every process under it, parents first.
+# shellcheck disable=SC2329 # finish calls it
+tree_of()
+{
+    all='' new=$1
+    while [ -n "$new" ]; do
+        all="$all $new"
+        new=$(children_of "$new" | tr '\n' ' ')
+    done
+    echo "$all"
+}
+
+# kill_tree PID: stop PID and every process under it, each stopped before
+# its children are looked for, so that none starts another meanwhile, then
+# kill them, the deepest first, so that none is orphaned while a process
+# above it still lives, and reap PID.
 # shellcheck disable=SC2329 # finish and in_time call it
 kill_tree()
 {
@@ -283,7 +317,8 @@ kill_tree()
         for x in $new; do
             kill -STOP "$x" 2> /dev/null
         done
-        all="$all $new"
+        stopped "$new"
+        all="$new $all"
         new=$(children_of "$new" | tr '\n' ' ')
     done
     for x in $all; do
@@ -337,13 +372,16 @@ others_off()
         o=${n##*/}
         case $o in "$iface" | lo | tap*) continue ;; esac
         a=$(addrs_of "$o")
-        [ -n "$a" ] || continue
         r=$(routes_of "$o")
+        [ -n "$a" ] || [ -n "$r" ] || continue
         p=$(cat "/var/run/udhcpc.$o.pid" 2> /dev/null)
         case $p in '' | 0 | *[!0-9]*) p='' ;; esac
         case $(state_of "${p:-0}") in '' | Z | X) p='' ;; esac
+        s=''
+        [ -z "$p" ] || s=$(started_at "$p")
+        [ -n "$s" ] || p=''
         c=-
-        [ -z "$p" ] || c=$p:$(started_at "$p")
+        [ -z "$p" ] || c=$p:$s
         rs=$(echo "$r" | tr ' ' ,)
         echo "$o ${rs:--} $c $a" >> "$out/others" && sync || return 1
         if [ -n "$p" ]; then
@@ -381,11 +419,11 @@ others_on()
     back=0
     sed 1d "$out/others" > "$out/others.read" || return 1
     while read -r o rs c a; do
-        put_addrs "$o" "$a" || back=1
+        [ -z "$a" ] || put_addrs "$o" "$a" || back=1
         [ "$rs" = - ] || put_routes "$o" "$(echo "$rs" | tr , ' ')" || back=1
         if [ "$c" != - ]; then
-            p=${c%%:*}
-            if [ "$(started_at "$p")" != "${c#*:}" ]; then
+            p=${c%%:*} s=${c#*:}
+            if [ -z "$s" ] || [ "$(started_at "$p")" != "$s" ]; then
                 note "others: $o: DHCP client $p has ended; nothing to resume"
             else
                 kill -s CONT "$p" 2> /dev/null || back=1
@@ -445,7 +483,10 @@ answers()
 {
     reach 2400 > /dev/null && return 0
     for r in $(routes_of "$iface"); do
-        [ "${r%/*}" = - ] || ping -c 3 -I "$iface" "${r%/*}" > /dev/null 2>&1 && return 0
+        [ "${r%/*}" != - ] || continue
+        if ping -c 3 -I "$iface" "${r%/*}" > /dev/null 2>&1; then
+            return 0
+        fi
     done
     return 1
 }
@@ -458,8 +499,15 @@ finish()
     # A case's child, netguest.sh, puts the card back at SIGTERM; then every
     # process left under this one, a child started just before a signal
     # whose process ID was not kept among them, is killed.
+    kept=''
+    [ -z "$child" ] || kept=$(tree_of "$child")
     [ -z "$child" ] || kill -TERM "$child" 2> /dev/null
     [ -z "$child" ] || wait "$child" 2> /dev/null
+    # What was under the child when it was told to stop, and is orphaned
+    # now if it outlived it.
+    for x in $kept; do
+        kill -KILL "$x" 2> /dev/null
+    done
     for c in $(children_of $$); do
         kill_tree "$c"
     done

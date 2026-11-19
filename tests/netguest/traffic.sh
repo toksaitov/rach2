@@ -69,13 +69,11 @@ report_deny()
         sed -n 's/.*deny9=\([0-9][0-9]*\).*/\1/p'
 }
 
-# syns_sent: the connections Rach2's TCP has opened and the segments it has
-# sent again, summed, as /proc/net/snmp counts them.
-syns_sent()
-{
-    awk '$1 == "Tcp:" { if (!h) { for (i = 2; i <= NF; i++) c[$i] = i; h = 1; next }
-        print $(c["ActiveOpens"]) + $(c["RetransSegs"]); exit }' /proc/net/snmp
-}
+# The SYNs each of drop's attempts sends before Rach2's TCP gives the
+# handshake up with ETIMEDOUT: the first and TCP_SYN_RETRIES (7) more
+# (rach2/sys/network/tcp/tcp.h). A count of the connection's own, not of the
+# machine's, which other traffic would add to.
+syns_each=8
 
 transfers()
 {
@@ -97,9 +95,8 @@ case ${1:-} in
             echo "traffic: the guest's report after the transfers has no deny9 count" >&2
             exit 1
         }
-        sent=$(syns_sent)
         "$nettput" -c "$peer" -p 9 -n 10 drop || exit 1
-        sent=$(($(syns_sent) - sent))
+        sent=$((10 * syns_each))
         report_after "$(reports)"
         after=$(report_deny "$judged")
         [ -n "$after" ] || {
