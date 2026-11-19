@@ -436,6 +436,22 @@ static void ap_str(struct procfs_text *t, const char *s)
     }
 }
 
+/** Append the text `from` and free its buffer; `t` is marked out of memory
+ * when `from` was. */
+static void ap_text(struct procfs_text *t, struct procfs_text *from)
+{
+    int i;
+
+    for (i = 0; i < from->len && !t->nomem; i++) {
+        ap_ch(t, from->buf[i]);
+    }
+    if (from->nomem) {
+        t->nomem = 1;
+    }
+    kfree(from->buf);
+    procfs_text_init(from);
+}
+
 /** Append `v` as unsigned decimal; the counters are 32-bit and wrap. */
 static void ap_u32(struct procfs_text *t, uint32_t v)
 {
@@ -669,19 +685,40 @@ static void ap_sp_int(struct procfs_text *t, int v)
  * for a thread that is not running or ready, of a process of one thread
  * for the process's file. RLIMIT_RSS, which Rach2 does not keep, is
  * RLIM_INFINITY, its value on Linux.
+ *
+ * Every field of `p` is read first, since the wait for the regions' lock of
+ * another process's address space may sleep, and the process may end and be
+ * reaped meanwhile. The address space's own fields are read under that lock,
+ * whose user's count keeps them until `mm_read_end`, which may drop the last
+ * one and free the space, as Linux's `do_task_stat` holds the mm from
+ * `get_task_mm` until every field is written (fs/proc/array.c).
  */
 static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
 {
     uintptr_t vsize = 0, rss = 0, code[2] = {0, 0}, data[7] = {0, 0, 0, 0, 0, 0, 0}, stack = 0;
-    int permitted = procfs_may_read_mem(p), running, sig;
-    uint64_t pending, shared, blocked, ignored = 0, caught = 0;
+    int permitted = procfs_may_read_mem(p), running, sig, wchan, exit_signal, cpu, exit_code;
+    uint64_t pending, shared, blocked, ignored = 0, caught = 0, rt_priority, policy;
     struct mm *mm = p->mm;
 
+    signal_sets_of(p, &pending, &shared, &blocked);
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        if (p->sigacts[sig].handler == KSIG_IGN) {
+            ignored |= KSIG_BIT(sig);
+        } else if (p->sigacts[sig].handler != KSIG_DFL) {
+            caught |= KSIG_BIT(sig);
+        }
+    }
+    running = p->state == PROC_RUNNING || p->state == PROC_READY;
+    wchan = permitted && (!whole || p->tg->live < 2) && !running;
+    exit_signal = p != p->tg->leader ? -1 : p->tg->no_child_signal ? 0 : SIGCHLD;
+    cpu = p->cpu;
+    rt_priority = p->rt_priority;
+    policy = (uint64_t)(uint32_t)p->sched_policy;
+    exit_code = permitted ? (int)p->exit_code : 0;
     if (mm) {
         mm_read_begin(mm);
         vsize = vm_total(&mm->vm);
         rss = mm_resident(mm);
-        mm_read_end(mm);
         code[0] = permitted ? mm->start_code : 1;
         code[1] = permitted ? mm->end_code : 1;
         if (permitted) {
@@ -694,38 +731,30 @@ static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
             data[5] = mm->env_start;
             data[6] = mm->env_end;
         }
+        mm_read_end(mm);
     }
-    signal_sets_of(p, &pending, &shared, &blocked);
-    for (sig = 1; sig <= KSIG_MAX; sig++) {
-        if (p->sigacts[sig].handler == KSIG_IGN) {
-            ignored |= KSIG_BIT(sig);
-        } else if (p->sigacts[sig].handler != KSIG_DFL) {
-            caught |= KSIG_BIT(sig);
-        }
-    }
-    running = p->state == PROC_RUNNING || p->state == PROC_READY;
-    ap_sp_u64(t, (uint64_t)vsize);                                      /* 23 vsize */
-    ap_sp_u64(t, (uint64_t)rss);                                        /* 24 rss */
-    ap_sp_u64(t, (uint64_t)RLIM_INFINITY);                              /* 25 rsslim */
-    ap_sp_u64(t, (uint64_t)code[0]);                                    /* 26 startcode */
-    ap_sp_u64(t, (uint64_t)code[1]);                                    /* 27 endcode */
-    ap_sp_u64(t, (uint64_t)stack);                                      /* 28 startstack */
-    ap_str(t, " 0 0");                                                  /* 29 kstkesp, 30 kstkeip */
-    ap_sp_u64(t, pending & 0x7FFFFFFFu);                                /* 31 signal */
-    ap_sp_u64(t, blocked & 0x7FFFFFFFu);                                /* 32 blocked */
-    ap_sp_u64(t, ignored & 0x7FFFFFFFu);                                /* 33 sigignore */
-    ap_sp_u64(t, caught & 0x7FFFFFFFu);                                 /* 34 sigcatch */
-    ap_sp_int(t, permitted && (!whole || p->tg->live < 2) && !running); /* 35 wchan */
-    ap_str(t, " 0 0");                                                  /* 36 nswap, 37 cnswap */
-    ap_sp_int(t, p != p->tg->leader ? -1 : p->tg->no_child_signal ? 0 : SIGCHLD); /* 38 */
-    ap_sp_int(t, p->cpu);                                                         /* 39 processor */
-    ap_sp_u64(t, p->rt_priority);                      /* 40 rt_priority */
-    ap_sp_u64(t, (uint64_t)(uint32_t)p->sched_policy); /* 41 policy */
-    ap_str(t, " 0 0 0");                               /* 42 blkio delay, 43-44 guest times */
-    for (sig = 0; sig < 7; sig++) {                    /* 45-51 start_data to env_end */
+    ap_sp_u64(t, (uint64_t)vsize);         /* 23 vsize */
+    ap_sp_u64(t, (uint64_t)rss);           /* 24 rss */
+    ap_sp_u64(t, (uint64_t)RLIM_INFINITY); /* 25 rsslim */
+    ap_sp_u64(t, (uint64_t)code[0]);       /* 26 startcode */
+    ap_sp_u64(t, (uint64_t)code[1]);       /* 27 endcode */
+    ap_sp_u64(t, (uint64_t)stack);         /* 28 startstack */
+    ap_str(t, " 0 0");                     /* 29 kstkesp, 30 kstkeip */
+    ap_sp_u64(t, pending & 0x7FFFFFFFu);   /* 31 signal */
+    ap_sp_u64(t, blocked & 0x7FFFFFFFu);   /* 32 blocked */
+    ap_sp_u64(t, ignored & 0x7FFFFFFFu);   /* 33 sigignore */
+    ap_sp_u64(t, caught & 0x7FFFFFFFu);    /* 34 sigcatch */
+    ap_sp_int(t, wchan);                   /* 35 wchan */
+    ap_str(t, " 0 0");                     /* 36 nswap, 37 cnswap */
+    ap_sp_int(t, exit_signal);             /* 38 exit_signal */
+    ap_sp_int(t, cpu);                     /* 39 processor */
+    ap_sp_u64(t, rt_priority);             /* 40 rt_priority */
+    ap_sp_u64(t, policy);                  /* 41 policy */
+    ap_str(t, " 0 0 0");                   /* 42 blkio delay, 43-44 guest times */
+    for (sig = 0; sig < 7; sig++) {        /* 45-51 start_data to env_end */
         ap_sp_u64(t, (uint64_t)data[sig]);
     }
-    ap_sp_int(t, permitted ? (int)p->exit_code : 0); /* 52 exit_code */
+    ap_sp_int(t, exit_code); /* 52 exit_code */
     ap_ch(t, '\n');
 }
 
@@ -2495,11 +2524,15 @@ static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long
  * written since are the anonymous ones, as in smaps. Linux's mapmax=, the
  * most mappings a page has, and active=, the pages on the active list, are
  * not given: the kernel counts no mappings of a page and has no such list.
- * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
+ * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps. The
+ * thread's policy is taken with a reference before the wait for the
+ * regions' lock, since the thread may change it or end meanwhile, as Linux
+ * takes `task_mempolicy` at the file's start (fs/proc/task_mmu.c).
  */
 static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 {
     struct maps_names names;
+    struct vm_policy *own;
     process_t *p;
     int rc;
     struct mm *mm;
@@ -2513,6 +2546,7 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         return rc;
     }
     mm = p->mm;
+    own = vm_policy_get(p->mempolicy);
     mm_read_begin(mm);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         const struct vm_policy *pol = mempolicy_at(r, r->start);
@@ -2522,7 +2556,7 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 
         ap_xlow(t, r->start, 8);
         ap_ch(t, ' ');
-        ap_numa_policy(t, pol ? pol : p->mempolicy);
+        ap_numa_policy(t, pol ? pol : own);
         ap_numa_place(t, mm, r, &names);
         paging_user_frames(mm->dir, r->start, r->end, &counts);
         frames = counts.frames;
@@ -2546,6 +2580,7 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         ap_ch(t, '\n');
     }
     mm_read_end(mm);
+    vm_policy_put(own);
     maps_names_free(&names);
     return t->len;
 }
@@ -2829,6 +2864,43 @@ static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
     ap_kb(t, "VmSwap", 0);
 }
 
+/** Append the lines of `p`'s status record that follow its memory sizes,
+ * from Threads to the timed wakes. */
+static void procfs_status_rest(struct procfs_text *t, const process_t *p)
+{
+    uint64_t caps;
+
+    ap_str(t, "Threads:\t");
+    ap_u32(t, p->tg->live);
+    ap_str(t, "\nSigQ:\t0/");
+    ap_u32(t, KSIG_MAX);
+    ap_ch(t, '\n');
+    ap_signal_sets(t, p);
+    caps = (uint64_t)cap_eff_word(p, 1) << 32 | cap_eff_word(p, 0);
+    ap_set(t, "CapInh", (uint64_t)p->cap_inh[1] << 32 | p->cap_inh[0]);
+    ap_set(t, "CapPrm", caps | (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0));
+    ap_set(t, "CapEff", caps);
+    ap_set(t, "CapBnd", (uint64_t)(CAP_HIGH_WORD & ~p->bset_lost[1]) << 32 | ~p->bset_lost[0]);
+    ap_set(t, "CapAmb", (uint64_t)p->cap_amb[1] << 32 | p->cap_amb[0]);
+    ap_str(t, "NoNewPrivs:\t");
+    ap_u32(t, p->no_new_privs);
+    ap_str(t, "\nSeccomp:\t");
+    ap_u32(t, p->seccomp_mode);
+    ap_str(t, "\nSeccomp_filters:\t");
+    ap_u32(t, seccomp_filter_count(p));
+    ap_str(t, "\nCpus_allowed:\t");
+    ap_cpu_mask(t, p->affinity & cpu_online_bits());
+    ap_str(t, "\nCpus_allowed_list:\t");
+    ap_cpu_set(t, p->affinity & cpu_online_bits());
+    ap_ch(t, '\n');
+    ap_str(t, "voluntary_ctxt_switches:\t");
+    ap_ulong(t, p->nvcsw);
+    ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
+    ap_ulong(t, p->nivcsw);
+    ap_ch(t, '\n');
+    procfs_waketime(t, p);
+}
+
 /**
  * /proc/<pid>/status: the lines of Linux's that programs read, among them
  * the name, the state, the ids, the tracer, the memory in kilobytes, the
@@ -2841,12 +2913,17 @@ static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
  * pagefile figures are read from them.
  * Cpus_allowed and its list are the thread's affinity among the processors
  * started, which sched_getaffinity(2) reports.
+ *
+ * The lines after the memory sizes are made before them, in a text of
+ * their own, since the wait for the regions' lock of another process's
+ * address space may sleep, and the process may end and be reaped meanwhile:
+ * nothing of `p` is read after that wait.
  */
 static int procfs_gen_status(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
+    struct procfs_text rest;
     struct mm *mm;
-    uint64_t caps;
     uint32_t i;
 
     if (!p) {
@@ -2893,40 +2970,14 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nNSsid:\t");
     ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
+    procfs_text_init(&rest);
+    procfs_status_rest(&rest, p);
     if (mm) {
         mm_read_begin(mm);
         procfs_status_memory(t, mm);
         mm_read_end(mm);
     }
-    ap_str(t, "Threads:\t");
-    ap_u32(t, p->tg->live);
-    ap_str(t, "\nSigQ:\t0/");
-    ap_u32(t, KSIG_MAX);
-    ap_ch(t, '\n');
-    ap_signal_sets(t, p);
-    caps = (uint64_t)cap_eff_word(p, 1) << 32 | cap_eff_word(p, 0);
-    ap_set(t, "CapInh", (uint64_t)p->cap_inh[1] << 32 | p->cap_inh[0]);
-    ap_set(t, "CapPrm", caps | (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0));
-    ap_set(t, "CapEff", caps);
-    ap_set(t, "CapBnd", (uint64_t)(CAP_HIGH_WORD & ~p->bset_lost[1]) << 32 | ~p->bset_lost[0]);
-    ap_set(t, "CapAmb", (uint64_t)p->cap_amb[1] << 32 | p->cap_amb[0]);
-    ap_str(t, "NoNewPrivs:\t");
-    ap_u32(t, p->no_new_privs);
-    ap_str(t, "\nSeccomp:\t");
-    ap_u32(t, p->seccomp_mode);
-    ap_str(t, "\nSeccomp_filters:\t");
-    ap_u32(t, seccomp_filter_count(p));
-    ap_str(t, "\nCpus_allowed:\t");
-    ap_cpu_mask(t, p->affinity & cpu_online_bits());
-    ap_str(t, "\nCpus_allowed_list:\t");
-    ap_cpu_set(t, p->affinity & cpu_online_bits());
-    ap_ch(t, '\n');
-    ap_str(t, "voluntary_ctxt_switches:\t");
-    ap_ulong(t, p->nvcsw);
-    ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
-    ap_ulong(t, p->nivcsw);
-    ap_ch(t, '\n');
-    procfs_waketime(t, p);
+    ap_text(t, &rest);
     return t->len;
 }
 

@@ -3,7 +3,9 @@
  * and its allocation, /proc/uptime, the CPU times of a process and of a
  * thread, task ids, the syscall, wchan and schedstat files, descriptor links,
  * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
- * process's arguments while the process is reaped, oom_score_adj, the
+ * process's arguments while the process is reaped, a read of its stat and
+ * status while it is reaped as the read waits for its address space's
+ * lock, oom_score_adj, the
  * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
  * and uevents of a DRM device and of a driver's own attributes, links, PCI
  * identity and resources, a writable attribute's offset and the mode its
@@ -464,7 +466,10 @@ extern void *malloc(unsigned long size);
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
 
-static process_t process, thread, stranger;
+/* The dispositions of the model's threads, none set. */
+static struct k_sigaction actions[KSIG_MAX + 1];
+static process_t process = {.sigacts = actions}, thread = {.sigacts = actions},
+                 stranger = {.sigacts = actions};
 static struct tgroup group, other_group;
 /* The directory the reader runs in, which is not the reaped process's. */
 static page_dir_t reader_dir;
@@ -483,6 +488,10 @@ static int mem_reads;
 static process_t *reading;
 static struct tgroup reading_group;
 static int reaps;
+/* What a walk from outside an address space does before and after its lock
+ * (compat/mmap_lock_host.c). */
+extern void (*host_read_begin)(struct mm *mm);
+extern void (*host_read_end)(struct mm *mm);
 page_dir_t *_kernel_dir;
 
 /** Record a failed invariant. */
@@ -2766,6 +2775,189 @@ static void reaped_during_read(void)
     kfree(text.buf);
 }
 
+/** The status rows' process has no effective capabilities: 0. */
+uint32_t cap_eff_word(const process_t *p, uint32_t i)
+{
+    (void)p;
+    (void)i;
+    return 0;
+}
+
+/** The status rows' process has no seccomp filter: 0. */
+uint32_t seccomp_filter_count(const process_t *p)
+{
+    (void)p;
+    return 0;
+}
+
+/** The status rows' address space has no page present. */
+void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+                       unsigned long *dirty, unsigned long *anon)
+{
+    (void)dir;
+    (void)start;
+    (void)end;
+    *present = *dirty = *anon = 0;
+}
+
+/** The most pages the status rows' address space had resident: none. */
+unsigned long mm_resident_peak(const struct mm *mm)
+{
+    (void)mm;
+    return 0;
+}
+
+/** No file of the status rows is in memory. */
+int filemap_in_memory(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
+}
+
+/** Take the walk's user's count of `mm`, as mm_read_begin does; then, as
+ * while the walk waits for the lock, process 13 ends and is reaped, which
+ * frees its dispositions and its record and puts its user's count. */
+static void reap_at_walk(struct mm *mm)
+{
+    mm_get(mm);
+    if (reading) {
+        struct mm *own = reading->mm;
+
+        free(reading->sigacts);
+        free(reading);
+        reading = NULL;
+        mm_put(own);
+        reaps++;
+    }
+}
+
+/** Drop the walk's user's count of `mm`, as mm_read_end does: the last
+ * user's put frees the address space. */
+static void put_at_walk(struct mm *mm)
+{
+    mm_put(mm);
+}
+
+/**
+ * Make process 13 of process 7's group, so that its reader may see its
+ * bounds, with an address space and dispositions from the heap, which
+ * `reap_at_walk` frees: SIGINT ignored, its code, stack and data at known
+ * addresses, and its last processor 2. 0 when the heap had no room.
+ */
+static int make_reaped(void)
+{
+    struct mm *mm = calloc(1, sizeof(*mm));
+    struct k_sigaction *acts = calloc(KSIG_MAX + 1, sizeof(*acts));
+
+    reading = calloc(1, sizeof(*reading));
+    if (!mm || !acts || !reading) {
+        free(mm);
+        free(acts);
+        free(reading);
+        reading = NULL;
+        return 0;
+    }
+    mm->users = 1;
+    mm->holds = 1;
+    mm->start_code = 0x8048000u;
+    mm->end_code = 0x8049000u;
+    mm->start_data = 0x804a000u;
+    mm->end_data = 0x804b000u;
+    mm->start_brk = 0x804c000u;
+    mm->start_stack = 0xbffff000u;
+    mm->arg_start = 0xbfffe000u;
+    mm->arg_end = 0xbfffe100u;
+    mm->env_start = 0xbfffe100u;
+    mm->env_end = 0xbfffe200u;
+    acts[2].handler = KSIG_IGN;
+    reading->pid = reading->tgid = 13;
+    reading->state = PROC_BLOCKED;
+    reading->tg = &group;
+    reading->mm = mm;
+    reading->sigacts = acts;
+    reading->cpu = 2;
+    return 1;
+}
+
+/**
+ * A read of the stat of a process that ends and is reaped while the read
+ * waits for its address space's lock reads every field of the record before
+ * the wait and the address space's bounds under the lock, and nothing of
+ * either after: the walk's user's count is the last, and its put frees the
+ * address space. AddressSanitizer reports a read of the freed record or of
+ * the freed address space.
+ */
+static void stat_reaped_during_wait(void)
+{
+    struct procfs_text text;
+    long long code, end, stack, ignored, cpu, data, env;
+    int before = reaps, len;
+
+    check(make_reaped(), "allocate the process whose stat is read");
+    if (!reading) {
+        return;
+    }
+    host_read_begin = reap_at_walk;
+    host_read_end = put_at_walk;
+    procfs_text_init(&text);
+    len = procfs_gen_stat(&text, 13, 1);
+    host_read_begin = NULL;
+    host_read_end = NULL;
+    check(len > 0 && reaps == before + 1 && !reading,
+          "a stat read of a process reaped while it waits for the regions' lock ends");
+    check(len > 0 && stat_field(text.buf, 26, &code) && code == 0x8048000 &&
+              stat_field(text.buf, 27, &end) && end == 0x8049000 &&
+              stat_field(text.buf, 28, &stack) && stack == 0xbffff000 &&
+              stat_field(text.buf, 45, &data) && data == 0x804a000 &&
+              stat_field(text.buf, 51, &env) && env == 0xbfffe200,
+          "and gives the bounds its address space had under the lock");
+    check(len > 0 && stat_field(text.buf, 33, &ignored) && ignored == 2 &&
+              stat_field(text.buf, 39, &cpu) && cpu == 2,
+          "and the dispositions and processor its record had before the wait");
+    kfree(text.buf);
+}
+
+/**
+ * A read of the status of a process that ends and is reaped while the read
+ * waits for its address space's lock gives the lines after the memory
+ * sizes from the record as it was before the wait, and reads nothing of it
+ * after.
+ */
+static void status_reaped_during_wait(void)
+{
+    struct procfs_text text;
+    int before = reaps, len;
+
+    check(make_reaped(), "allocate the process whose status is read");
+    if (!reading) {
+        return;
+    }
+    host_read_begin = reap_at_walk;
+    host_read_end = put_at_walk;
+    procfs_text_init(&text);
+    len = procfs_gen_status(&text, 13);
+    host_read_begin = NULL;
+    host_read_end = NULL;
+    check(len > 0 && !text.nomem && reaps == before + 1 && !reading,
+          "a status read of a process reaped while it waits for the regions' lock ends");
+    check(len > 0 && !text.nomem && text.buf[len - 1] == '\n' &&
+              __builtin_strstr(text.buf, "VmSize:") != NULL &&
+              __builtin_strstr(text.buf, "\nThreads:\t1\n") != NULL &&
+              __builtin_strstr(text.buf, "\nSigIgn:\t0000000000000002\n") != NULL &&
+              __builtin_strstr(text.buf, "VmSize:") < __builtin_strstr(text.buf, "Threads:"),
+          "and gives the record's lines after the memory sizes, as it was before the wait");
+    kfree(text.buf);
+}
+
+/** The rows of a process's files read while the process ends and is
+ * reaped. */
+static void reaped_rows(void)
+{
+    reaped_during_read();
+    stat_reaped_during_wait();
+    status_reaped_during_wait();
+}
+
 /**
  * The rows of a stat text, then those of the functions above. A stat text
  * whose allocation fails is empty and marked out of memory, for ENOMEM; one
@@ -5010,7 +5202,7 @@ int main(int argc, char **argv)
     maps_shared_rows();
     maps_names_row();
     maps_anon_identity_rows();
-    reaped_during_read();
+    reaped_rows();
     system_rows();
     oom_values();
     oom_floor();
@@ -5039,12 +5231,12 @@ int main(int argc, char **argv)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
-               "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
-               "driver's attribute, link and PCI identity, a PCI function's BARs mapped and read "
-               "through its resource files, writes of a PCI function's uevent, an input device's "
-               "/sys entries, capability masks, uevents and /proc/bus/input record, and the "
-               "syscall and wchan files of blocked, stopped and running threads\n");
+               "process's arguments, stat and status, oom_score_adj, the paths of the maps, the "
+               "uptime idle sum, an interface's counts, a DRM device's /sys entries and uevents, "
+               "and a driver's attribute, link and PCI identity, a PCI function's BARs mapped and "
+               "read through its resource files, writes of a PCI function's uevent, an input "
+               "device's /sys entries, capability masks, uevents and /proc/bus/input record, and "
+               "the syscall and wchan files of blocked, stopped and running threads\n");
     }
     return failures != 0;
 }
