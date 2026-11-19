@@ -356,6 +356,7 @@ if [ $# -gt 0 ]; then
     job=''
     echo "netguest: the command exited $status"
 fi
+echo "netguest: guest: $(grep -a -c 'NETGUEST STATS' "$out/console") reports"
 grep -a 'NETGUEST STATS' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST STATS/netguest: guest: stats/'
 echo "netguest: counts: measured $(counts)"
 

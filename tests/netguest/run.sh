@@ -335,6 +335,7 @@ guest()
     case $name in
         kill) ;;
         *)
+            [ -n "$why" ] || [ -n "$deny" ] || why="the guest printed no report of its counts"
             tx=$(delta tap_tx_bytes "$log" ready measured)
             rx=$(delta tap_rx_bytes "$log" ready measured)
             [ -n "$why" ] || [ "$tx" -ge "$bytes" ] || why="tap0 sent $tx bytes, fewer than the $bytes sent"
@@ -343,10 +344,10 @@ guest()
     esac
     case $name in
         debian | freebsd)
-            [ -n "$why" ] || [ "${deny:-0}" -gt 0 ] || why="the guest counted no denied packet"
+            [ -n "$why" ] || [ "$deny" -gt 0 ] || why="the guest counted no denied packet"
             ;;
         *-vhost)
-            [ -n "$why" ] || [ "${deny:-0}" = 0 ] || why="the guest denied $deny packets with no filter"
+            [ -n "$why" ] || [ "$deny" = 0 ] || why="the guest denied $deny packets with no filter"
             line=$(grep '^netguest: vhost: ' "$log" | tail -n 1)
             to=$(echo "$line" | sed -n 's/.*to_guest=\([0-9]*\).*/\1/p')
             from=$(echo "$line" | sed -n 's/.*from_guest=\([0-9]*\).*/\1/p')
@@ -354,6 +355,9 @@ guest()
             [ -n "$why" ] || [ "${from:-0}" -ge "$frames" ] || why="vhost-net took ${from:-no} frames from the guest, fewer than $frames"
             ;;
     esac
+    if [ -n "$why" ] && [ -f "$out/$name/console" ]; then
+        tr -d '\r' < "$out/$name/console" | grep -a . | tail -n 30 | sed "s/^/netguest: $name: console: /"
+    fi
     judge "$name" "$why"
 }
 
