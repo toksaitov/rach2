@@ -202,12 +202,18 @@ struct eventfd *eventfd_get(int fd, int32_t *err)
     return 0;
 }
 
-/** A reference to the eventfd of an entry the device looked up. */
+/** A reference to the eventfd of an entry the device looked up, found by
+ * pointer equality, since a range test is undefined for an entry outside
+ * the array. */
 struct eventfd *eventfd_entry_get(const struct fd_entry *e, int32_t *err)
 {
-    if (e >= &evfd[0] && e < &evfd[NEVS]) {
-        k.ev[e - evfd].refs++;
-        return &k.ev[e - evfd];
+    int i;
+
+    for (i = 0; i < NEVS; i++) {
+        if (e == &evfd[i]) {
+            k.ev[i].refs++;
+            return &k.ev[i];
+        }
     }
     *err = e == &plainfd ? -EINVAL : -EBADF;
     return 0;
