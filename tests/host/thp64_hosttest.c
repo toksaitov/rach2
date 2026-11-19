@@ -461,7 +461,11 @@ static void refuse_rows(void)
 {
     thp_policy.enabled = THP_ALWAYS;
     thp_refuse();
-    check(!fault_maps_huge(A, 0), "once refused, no fault maps a huge page");
+    check(thp_policy.enabled == THP_NEVER && thp_policy.defrag == THP_DEFRAG_NEVER &&
+              thp_policy.zero_page == 0,
+          "a refusal sets enabled and defrag to never and the huge zero page off");
+    thp_policy.enabled = THP_ALWAYS;
+    check(!fault_maps_huge(A, 0), "and no fault maps a huge page whatever the policy says");
     small_pages(3);
     check(paging_collapse(&mm_a, A, THP_COLLAPSE) == -EINVAL && !mmu_user_huge(&dir_a, A),
           "and MADV_COLLAPSE collapses nothing");
