@@ -73,6 +73,11 @@ void smpboot_bios_restart(void);
  * (platform.c). */
 uint32_t x86_tick_counts(void);
 
+/** Give processor `cpu` what it needs from the heap before it starts, which
+ * the boot processor does from `platform_cpu_start`: on x86-64 its interrupt
+ * stacks, which a second call keeps. 0, or -1 when the heap has none. */
+int arch_ap_prepare(int cpu);
+
 /** A started processor's descriptor tables and stacks, the architecture's
  * part of its start: its own GDT and TSS, with `stack_top` the stack an
  * entry from user mode lands on, the IDT, and on x86-64 the kernel's page

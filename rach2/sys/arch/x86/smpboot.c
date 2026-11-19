@@ -242,6 +242,7 @@ int platform_cpu_count(int limit)
  * holds it, so that it cannot start late on a mailbox meant for the next.
  * One that does checks its TSC against this one's (`tsc_sync_source`), in a
  * round opened before its INIT, and the log says what the check found.
+ * A processor `arch_ap_prepare` finds no memory for is not started.
  */
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {
@@ -252,6 +253,10 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
     uint64_t behind;
     int waited;
 
+    if (arch_ap_prepare(cpu) != 0) {
+        klog(KLOG_WARN, "smp", "cpu%d: no memory for its interrupt stacks", cpu);
+        return -1;
+    }
     k_memcpy(page, ap_trampoline,
              (size_t)((uintptr_t)ap_trampoline_end - (uintptr_t)ap_trampoline));
     mb = (struct ap_mailbox *)(void *)(page + ((uintptr_t)ap_mailbox - (uintptr_t)ap_trampoline));
