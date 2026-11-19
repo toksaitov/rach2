@@ -475,4 +475,12 @@ void tty_console_hold(void);
  * records. */
 uint32_t tty_console_vhangups(void);
 
+/**
+ * Hang the console up (`tty_vhangup`) soon, in the console's thread, as
+ * Linux's hvc_remove hangs up the terminal of a port that has gone: the
+ * port's readers are woken and its session is sent SIGHUP. Any context,
+ * an interrupt's among them, since a port goes by its device's message.
+ */
+void tty_console_hangup_later(void);
+
 #endif /* _TTY_H_ */

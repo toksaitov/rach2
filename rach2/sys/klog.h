@@ -122,16 +122,20 @@ void klog_flush(void);
 int klog_kept(void);
 
 /**
- * Write every record the ring holds to the serial console, each as it is
- * written there when it is raised: after its level, without its timestamp
- * while `klog_time` is off, each newline as a carriage return and a
- * newline. A line that takes the console over once its device is found
- * (`serial_line_attach`) is given the log this way, as Linux's
+ * Run `attach`, which attaches a line to the serial console
+ * (`serial_line_attach`), and write every record the ring then holds to the
+ * serial console, each as it is written there when it is raised: after its
+ * level, without its timestamp while `klog_time` is off, each newline as a
+ * carriage return and a newline. A line that takes the console over once
+ * its device is found is given the log this way, as Linux's
  * register_console gives a new console the buffer (CON_PRINTBUFFER). The
- * caller has interrupts off and has let every record raised so far go out
- * (`klog_flush`), so that none is written twice.
+ * records raised so far go out first (`klog_flush`); then klog's state and
+ * the console's report lock are held from before `attach` to the replay's
+ * end, which is the ring's end as `attach` left it, so that no record is
+ * written to the line both live and in the replay, and one raised meanwhile
+ * goes out after it. The caller has interrupts off.
  */
-void klog_replay(void);
+void klog_replay(void (*attach)(void));
 
 /**
  * Write out the records kept for later from a processor that may not write

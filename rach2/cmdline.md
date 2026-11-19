@@ -76,6 +76,7 @@ These options exist for the suites, which use them to bring about a fault or a b
 | `rach2.framehigh` | Take frames from 4 GiB up first, so that on an x86-64 machine with memory there the heap's pages lie above 4 GiB. |
 | `rach2.dma32` | Treat the AHCI and xHCI controllers as able to reach only 32-bit addresses. |
 | `rach2.stackoverrun=fork`, `rach2.stackoverrun=boot` | Before the first program, run a kernel stack down until it overflows: one `kstack_alloc` gives, or the boot stack. The kernel panics at the page fault or the double fault that the guard page raises ([the architectures' Readme](sys/arch/Readme.md)). |
+| `rach2.vconpanic` | Once the virtio console carries the console, take its transmit side's lock as a processor that a panic stops would hold it, and panic; the panic's text must still reach the port ([hvc(4)](../man/man4/hvc.4)). |
 | `rach2.strings` | Before the first program, check `k_memcpy`, `k_memset` and `k_memmove` over 68 lengths at four source and four destination offsets, with the bytes around each range required unchanged. |
 | `rach2.hubslow=MS` | Wait `MS` milliseconds between two ports of a hub scan. |
 | `rach2.msidrop=N` | Silence every USB controller's interrupts at the `N`th, so that the timer's pump alone serves them. |

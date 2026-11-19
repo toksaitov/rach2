@@ -674,18 +674,28 @@ static void serial_record(const struct klog_record *r)
     serial_flush();
 }
 
-void klog_replay(void)
+static int klog_enter_wait(void);
+static void klog_leave(void);
+
+void klog_replay(void (*attach)(void))
 {
     char chunk[128];
-    uint32_t at = 0, n, i;
-    int how = report_get(0);
+    uint32_t at = 0, end, n, i;
+    int in, how;
     /* Where a record's byte is: 0 at its start, 1 in its `<level>`, 2
      * after that, 3 in its timestamp, 4 at the space after that, 5 in
      * its body. */
     int state = 0;
 
+    klog_flush();
+    in = klog_enter_wait();
+    how = report_get(0);
+    attach();
+    end = klog_written();
     at = klog_clamp(at);
-    while ((n = klog_read_from(chunk, sizeof(chunk), &at)) > 0) {
+    while (at != end &&
+           (n = klog_read_from(chunk, end - at < sizeof(chunk) ? end - at : sizeof(chunk), &at)) >
+               0) {
         for (i = 0; i < n; i++) {
             char c = chunk[i];
 
@@ -710,6 +720,9 @@ void klog_replay(void)
     serial_line_open = 0;
     serial_flush();
     report_put(how);
+    if (in) {
+        klog_leave();
+    }
 }
 
 /**
