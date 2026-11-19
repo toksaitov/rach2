@@ -102,37 +102,59 @@ static void panel_timings(struct drm_i915_private *i915, struct emit *e)
           div >> PP_REFERENCE_DIVIDER_SHIFT, cycle ? (cycle - 1u) * 100u : 0u);
 }
 
-/** Sample both backlight PWM blocks with the commit lock, a wakeref and
- * bl_lock. Lynx Point's override selects the duty source for its pin. */
-static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
+/** Format the programmed values of CPU PWM block `index`, 0 or 1. */
+static void pwm_block(struct emit *e, unsigned index, uint32_t ctl, uint32_t data)
 {
     static const char *const transcoders[] = {"A", "B", "C", "eDP"};
+    static const char *const ctl_names[] = {"BLC_PWM_CPU_CTL2", "HSW_BLC_PWM2_CTL"};
+    static const char *const data_names[] = {"BLC_PWM_CPU_CTL", "HSW_BLC_PWM2_DATA"};
+
+    emitf(e, "%s 0x%08x period=%u duty=%u\n", data_names[index], data, data >> 16,
+          data & BACKLIGHT_DUTY_CYCLE_MASK);
+    emitf(e, "%s 0x%08x %s transcoder=%s blinking=%u\n", ctl_names[index], ctl,
+          enabled(ctl & BLM_PWM_ENABLE),
+          transcoders[(ctl >> BLM_TRANSCODER_SHIFT) & BLM_TRANSCODER_MASK],
+          (unsigned)!!(ctl & BLM_PWM_BLINK_ENABLE));
+}
+
+/** Sample both Haswell PWM blocks, their pin selection and the PCH PWM.
+ * Holds the commit lock, a wakeref and bl_lock while reading registers. */
+static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
+{
     struct i915_hw *hw = &i915->hw;
+    uint32_t ctl[2], data[2];
     uint32_t flags = spin_lock_irqsave(&i915->display.bl_lock);
-    uint32_t cpu = i915_read(hw, BLC_PWM_CPU_CTL), cpu_ctl = i915_read(hw, BLC_PWM_CPU_CTL2);
+    uint32_t mux = i915_read(hw, HSW_BLC_MISC_CTL), util = i915_read(hw, UTIL_PIN_CTL);
     uint32_t pch_ctl = i915_read(hw, BLC_PWM_PCH_CTL1), pch = i915_read(hw, BLC_PWM_PCH_CTL2);
     uint32_t chicken = i915_read(hw, SOUTH_CHICKEN2);
     uint32_t pch_step = LPT_PWM_STEP(chicken), pch_period = pch >> 16;
     uint32_t pch_clock = LPT_PWM_CLOCK_HZ(i915->id && i915->id->ult);
-    uint32_t cpu_period = cpu >> 16, cpu_clock = i915->display.cdclk * 1000u;
-    uint32_t cpu_step = cpu_ctl & BLM_CPU_PWM_GRANULARITY ? 8u : 128u;
-    uint32_t cpu_clocks = cpu_period * cpu_step, pch_clocks = pch_period * pch_step;
+    unsigned cpu = (mux & HSW_BLC_PWM1_TO_CPU) ? 0u : 1u, south = 1u - cpu;
+    uint32_t cpu_clock = i915->display.cdclk * 1000u, pch_clocks = pch_period * pch_step;
+    uint32_t cpu_clocks, cpu_step, pch_duty = pch & BACKLIGHT_DUTY_CYCLE_MASK;
     int override = (pch_ctl & BLM_PCH_OVERRIDE_ENABLE) != 0;
     int pch_on = (pch_ctl & BLM_PCH_PWM_ENABLE) != 0;
-    int cpu_on = (cpu_ctl & BLM_PWM_ENABLE) != 0;
-    uint32_t cpu_duty = cpu & BACKLIGHT_DUTY_CYCLE_MASK, pch_duty = pch & BACKLIGHT_DUTY_CYCLE_MASK;
+    int util_pwm =
+        (util & (UTIL_PIN_ENABLE | UTIL_PIN_MODE_MASK)) == (UTIL_PIN_ENABLE | UTIL_PIN_MODE_PWM);
 
+    ctl[0] = i915_read(hw, BLC_PWM_CPU_CTL2);
+    ctl[1] = i915_read(hw, HSW_BLC_PWM2_CTL);
+    data[0] = i915_read(hw, BLC_PWM_CPU_CTL);
+    data[1] = i915_read(hw, HSW_BLC_PWM2_DATA);
     spin_unlock_irqrestore(&i915->display.bl_lock, flags);
-    emitf(e, "BLC_PWM_CPU_CTL 0x%08x cpu_pin_period=%u cpu_duty=%u", cpu, cpu_period, cpu_duty);
+    pwm_block(e, 0, ctl[0], data[0]);
+    pwm_block(e, 1, ctl[1], data[1]);
+    emitf(e, "BLC_MISC_CTL 0x%08x cpu_pin=PWM%u pch_input=PWM%u\n", mux, cpu + 1u, south + 1u);
+    emitf(e, "UTIL_PIN_CTL 0x%08x pwm_output=%s", util,
+          enabled(util_pwm && (ctl[cpu] & BLM_PWM_ENABLE)));
+    cpu_step = ctl[cpu] & BLM_CPU_PWM_GRANULARITY ? 8u : 128u;
+    cpu_clocks = (data[cpu] >> 16) * cpu_step;
     if (cpu_clocks != 0 && cpu_clock != 0) {
-        emitf(e, " cpu_pin_frequency=%u Hz", (cpu_clock + cpu_clocks / 2u) / cpu_clocks);
+        emitf(e, " programmed_frequency=%u Hz", (cpu_clock + cpu_clocks / 2u) / cpu_clocks);
     } else {
-        emit_s(e, " cpu_pin_frequency=unavailable");
+        emit_s(e, " programmed_frequency=unavailable");
     }
-    emitf(e, "\nBLC_PWM_CPU_CTL2 0x%08x %s transcoder=%s blinking=%u\n", cpu_ctl, enabled(cpu_on),
-          transcoders[(cpu_ctl >> BLM_TRANSCODER_SHIFT) & BLM_TRANSCODER_MASK],
-          (unsigned)!!(cpu_ctl & BLM_PWM_BLINK_ENABLE));
-    emitf(e, "BLC_PWM_PCH_CTL1 0x%08x %s override=%u polarity=%s\n", pch_ctl, enabled(pch_on),
+    emitf(e, "\nBLC_PWM_PCH_CTL1 0x%08x %s override=%u polarity=%s\n", pch_ctl, enabled(pch_on),
           (unsigned) override, pch_ctl & BLM_PCH_POLARITY ? "active-low" : "active-high");
     emitf(e, "BLC_PWM_PCH_CTL2 0x%08x period=%u pch_duty=%u", pch, pch_period, pch_duty);
     if (pch_clocks != 0) {
@@ -142,11 +164,15 @@ static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
     }
     if (!pch_on) {
         emit_s(e, " output=disabled");
-    } else if (!override && !cpu_on) {
-        emit_s(e, " duty_source=CPU (inactive)");
-    } else if (pch_period != 0) {
-        emitf(e, " duty_source=%s duty=%u/%u", override ? "PCH" : "CPU",
-              override ? pch_duty : cpu_duty, pch_period);
+    } else if (pch_period == 0) {
+        emit_s(e, " duty=unavailable");
+    } else if (override) {
+        emitf(e, " duty_source=PCH duty=%u/%u", pch_duty, pch_period);
+    } else if (!(ctl[south] & BLM_PWM_ENABLE)) {
+        emitf(e, " duty_source=PWM%u (inactive)", south + 1u);
+    } else {
+        emitf(e, " duty_source=PWM%u duty=%u/%u", south + 1u,
+              data[south] & BACKLIGHT_DUTY_CYCLE_MASK, pch_period);
     }
     emitf(e, "\nSOUTH_CHICKEN2 0x%08x pwm_step=%u clocks\n", chicken, pch_step);
 }

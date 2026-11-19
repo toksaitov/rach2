@@ -1598,18 +1598,17 @@ static int32_t display_status_open(fd_entry_t *e, enum i915_display_status file)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)e->priv;
     struct state_text *t = kzalloc(sizeof(*t));
-    uint32_t cap = 512;
     int32_t len;
 
     if (!t) {
         return -ENOMEM;
     }
-    t->text = kmalloc(cap);
+    t->text = kmalloc(I915_DISPLAY_STATUS_SIZE);
     if (!t->text) {
         kfree(t);
         return -ENOMEM;
     }
-    len = i915_display_status_sample(i915, file, t->text, cap);
+    len = i915_display_status_sample(i915, file, t->text, I915_DISPLAY_STATUS_SIZE);
     if (len < 0) {
         kfree(t->text);
         kfree(t);

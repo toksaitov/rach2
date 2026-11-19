@@ -4830,6 +4830,9 @@ enum i915_display_status {
     I915_STATUS_FIFO
 };
 
+/* Room for any of the formatted display snapshots, including its NUL. */
+#define I915_DISPLAY_STATUS_SIZE 1024u
+
 /**
  * Fill `buf` with a terminated snapshot of `file` for `i915`. Return the
  * length without its NUL, -ENODEV after unplug, -EINTR on a signal while

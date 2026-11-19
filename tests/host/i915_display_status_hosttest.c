@@ -22,7 +22,8 @@ static struct drm_i915_private gpu;
 static unsigned failures, reads, aux_reads, holds;
 static int have_power = 1, locked, nack_status;
 static uint32_t aux_data, aux_ctl, pch_ctl = 0xc0000000u, pch_pwm = 0x03aa01d5u;
-static uint32_t cpu_ctl = 0xf8000000u;
+static uint32_t pwm2_ctl = 0x90000000u;
+static uint32_t pwm_mux, util_pin = 0x81000000u;
 static uint32_t granularity;
 
 /** Record one failed assertion. */
@@ -58,9 +59,17 @@ uint32_t i915_read(struct i915_hw *hw, uint32_t reg)
     case PP_DIVISOR:
         return 0x00123406u;
     case BLC_PWM_CPU_CTL:
-        return 0x00fa009cu;
+        return 0x0271009cu;
     case BLC_PWM_CPU_CTL2:
-        return cpu_ctl;
+        return 0xf8000000u;
+    case HSW_BLC_PWM2_CTL:
+        return pwm2_ctl;
+    case HSW_BLC_PWM2_DATA:
+        return 0x0190012cu;
+    case HSW_BLC_MISC_CTL:
+        return pwm_mux;
+    case UTIL_PIN_CTL:
+        return util_pin;
     case BLC_PWM_PCH_CTL1:
         return pch_ctl;
     case BLC_PWM_PCH_CTL2:
@@ -272,7 +281,7 @@ uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
 /** Take a fresh snapshot and check a line or field. */
 static void sample(enum i915_display_status file, const char *expect)
 {
-    char text[512];
+    char text[I915_DISPLAY_STATUS_SIZE];
     int32_t n = i915_display_status_sample(&gpu, file, text, sizeof(text));
 
     check(n > 0 && text[n] == '\0' && strstr(text, expect) != NULL, expect);
@@ -315,13 +324,22 @@ int main(void)
     sample(I915_STATUS_PPS, "PP_OFF_DELAYS 0x01f407d0 power_down=50000 us backlight_off=200000 us");
     sample(I915_STATUS_PPS, "PP_DIVISOR 0x00123406 reference_divider=4660 power_cycle=500 ms");
     sample(I915_STATUS_PWM, "frequency=200 Hz duty_source=PCH duty=469/938");
-    sample(I915_STATUS_PWM, "cpu_pin_period=250 cpu_duty=156 cpu_pin_frequency=225000 Hz");
+    sample(I915_STATUS_PWM, "BLC_PWM_CPU_CTL 0x0271009c period=625 duty=156");
+    sample(I915_STATUS_PWM, "HSW_BLC_PWM2_DATA 0x0190012c period=400 duty=300");
+    sample(I915_STATUS_PWM, "cpu_pin=PWM2 pch_input=PWM1");
+    sample(I915_STATUS_PWM, "pwm_output=enabled programmed_frequency=8789 Hz");
     sample(I915_STATUS_PWM, "transcoder=eDP blinking=1");
     pch_ctl &= ~BLM_PCH_OVERRIDE_ENABLE;
     granularity = LPT_PWM_GRANULARITY;
-    sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=CPU duty=156/938");
-    cpu_ctl &= ~BLM_PWM_ENABLE;
-    sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=CPU (inactive)");
+    sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=PWM1 duty=156/938");
+    pwm_mux = HSW_BLC_PWM1_TO_CPU;
+    sample(I915_STATUS_PWM, "cpu_pin=PWM1 pch_input=PWM2");
+    sample(I915_STATUS_PWM, "pwm_output=enabled programmed_frequency=90000 Hz");
+    sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=PWM2 duty=300/938");
+    util_pin = UTIL_PIN_ENABLE;
+    sample(I915_STATUS_PWM, "pwm_output=disabled programmed_frequency=90000 Hz");
+    pwm2_ctl &= ~BLM_PWM_ENABLE;
+    sample(I915_STATUS_PWM, "frequency=1599 Hz duty_source=PWM2 (inactive)");
     pch_ctl &= ~BLM_PCH_PWM_ENABLE;
     sample(I915_STATUS_PWM, "frequency=1599 Hz output=disabled");
     pch_pwm = 0;
