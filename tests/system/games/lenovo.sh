@@ -99,7 +99,9 @@ stop()
     sample='' volumes=''
 }
 # cleanup: restore the GPU minimum after ending the samplers, and end the
-# desktop's session when this script started it.
+# desktop's session when this script started it, waiting until no Weston
+# runs, 600 tries of 0.1 s at most, so that the next case finds none and
+# starts its own instead of drawing in one about to end.
 cleanup()
 {
     stop
@@ -108,6 +110,12 @@ cleanup()
     fi
     if [ "$started" = 1 ] && [ -f "$pidfile" ]; then
         kill -USR2 "$(cat "$pidfile")" 2>/dev/null || :
+        tries=0
+        while pgrep -x weston > /dev/null && [ "$tries" -lt 600 ]; do
+            tries=$((tries + 1))
+            sleep 0.1
+        done
+        [ "$tries" -lt 600 ] || echo "lenovo-games: session: weston did not end" >&2
     fi
 }
 trap cleanup EXIT
@@ -119,9 +127,17 @@ session_up()
     [ -S "$run/wayland-0" ] && pgrep -x weston > /dev/null
 }
 # The desktop's supervisor starts the session on SIGHUP when none runs, and
-# the exit trap ends one started here with SIGUSR2.
+# the exit trap ends one started here with SIGUSR2. Weston and PulseAudio
+# start apart, so the games wait for PulseAudio's socket too.
 if ! session_up; then
-    [ -f "$pidfile" ] || { echo "lenovo-games: no desktop session and no supervisor" >&2; exit 1; }
+    # The supervisor writes its pid once udev has settled and seatd is up,
+    # which a case run just after the boot may come before.
+    tries=0
+    until [ -s "$pidfile" ]; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 600 ] || { echo "lenovo-games: no desktop session and no supervisor" >&2; exit 1; }
+        sleep 0.1
+    done
     started=1
     kill -HUP "$(cat "$pidfile")"
     tries=0
@@ -131,6 +147,12 @@ if ! session_up; then
         sleep 0.1
     done
 fi
+tries=0
+until [ -S "$run/pulse/native" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 600 ] || { echo "lenovo-games: no sound server: no $run/pulse/native" >&2; exit 1; }
+    sleep 0.1
+done
 judged=1
 [ "$size" = 1366x768 ] && [ -z "$seconds" ] || judged=0
 
