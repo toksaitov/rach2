@@ -14,6 +14,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../proc/wait_queue.h"
 #include "../timer.h"
 #include "../rtc.h"
@@ -1712,6 +1713,13 @@ int64_t kvm_timer_deadline(uint64_t next)
     return mono + (int64_t)span;
 }
 
+/** Whether the thread's signal-work flag is set, which a signal sets and
+ * which ends a halted vCPU's wait. */
+static int signalled(void)
+{
+    return *(volatile uint32_t *)&current_proc->sig_woken != 0;
+}
+
 /** Wait, interruptibly, until the vCPU `v` has an event or its timer's
  * fine deadline or fallback tick comes: 0, or -EINTR when the thread's
  * signal-work flag is set. The
@@ -1720,23 +1728,160 @@ int64_t kvm_timer_deadline(uint64_t next)
  * caller ends KVM_RUN with KVM_EXIT_INTR, as Linux's vcpu_run takes the
  * signal after vcpu_block in kvm_handle_signal_exit
  * (include/linux/kvm_host.h:2405-2409, kernel/entry/kvm.c:11-13), and
- * leaves the signal to the system call's return. */
-static int32_t block(struct kvm_vcpu *v)
+ * leaves the signal to the system call's return. `*waited` is 1 when
+ * nothing ended the wait before it began, as Linux's kvm_vcpu_block
+ * answers whether it scheduled; `blocking` reads 1 throughout. */
+static int32_t block(struct kvm_vcpu *v, int *waited)
 {
     struct lapic *l = apic_of(v);
     uint64_t next, now;
     int32_t r;
 
+    v->stat[KVM_VCPU_STAT_BLOCKING] = 1;
     next = next_ns(l);
     l->wake_tick = 0;
     if (next) {
         now = kvm_host_ns();
         l->wake_tick = tick_count() + (next > now ? (next - now + TICK_NS - 1u) / TICK_NS : 0) + 1u;
     }
+    *waited = !wake_cond(v) && !signalled();
     proc_wait_set(l->wake_tick, kvm_timer_deadline(next), 0, 0);
     r = wq_wait_event_sigflag(&l->wq, wake_cond, v, "kvm_vcpu_block");
     proc_wait_set(0, 0, 0, 0);
     l->wake_tick = 0;
+    v->stat[KVM_VCPU_STAT_BLOCKING] = 0;
+    return r;
+}
+
+/** Count `ns` in the logarithmic histogram of KVM_HALT_POLL_HIST values at
+ * `hist`: bucket 0 for 0, else the bit length of `ns`, the last bucket
+ * taking the rest, as Linux's kvm_stats_log_hist_update. */
+static void log_hist(uint64_t *hist, uint64_t ns)
+{
+    uint32_t i = 0;
+
+    while (ns && i < KVM_HALT_POLL_HIST - 1u) {
+        ns >>= 1;
+        i++;
+    }
+    hist[i]++;
+}
+
+/** The bound on `v`'s poll window: its VM's KVM_CAP_HALT_POLL once set,
+ * else `kvm_halt_poll_ns`, as Linux's kvm_vcpu_max_halt_poll_ns. */
+static uint32_t max_poll_ns(const struct kvm_vcpu *v)
+{
+    if (v->vm->halt_poll_override) {
+        return v->vm->max_halt_poll_ns;
+    }
+    return *(volatile unsigned int *)&kvm_halt_poll_ns;
+}
+
+/** Widen `v`'s poll window by `kvm_halt_poll_ns_grow`, to at least
+ * `kvm_halt_poll_ns_grow_start`, as Linux's grow_halt_poll_ns; a factor of
+ * 0 leaves it. The caller holds it to the bound at the next halt. */
+static void grow_poll(struct kvm_vcpu *v)
+{
+    uint32_t grow = *(volatile unsigned int *)&kvm_halt_poll_ns_grow;
+    uint32_t start = *(volatile unsigned int *)&kvm_halt_poll_ns_grow_start;
+    uint32_t val = v->halt_poll_ns;
+
+    if (grow == 0) {
+        return;
+    }
+    val *= grow; /* wraps in 32 bits, as Linux's unsigned int does */
+    v->halt_poll_ns = val < start ? start : val;
+}
+
+/** Narrow `v`'s poll window by `kvm_halt_poll_ns_shrink`, to 0 when the
+ * divisor is 0 or the result is below `kvm_halt_poll_ns_grow_start`, as
+ * Linux's shrink_halt_poll_ns. */
+static void shrink_poll(struct kvm_vcpu *v)
+{
+    uint32_t shrink = *(volatile unsigned int *)&kvm_halt_poll_ns_shrink;
+    uint32_t start = *(volatile unsigned int *)&kvm_halt_poll_ns_grow_start;
+    uint32_t val = shrink ? v->halt_poll_ns / shrink : 0;
+
+    v->halt_poll_ns = val < start ? 0 : val;
+}
+
+/**
+ * Halt the vCPU `v` until an event, as Linux's kvm_vcpu_halt
+ * (virt/kvm/kvm_main.c:3794-3864): spin up to its poll window for an event
+ * or a signal before it sleeps (`block`), so that a wake that comes soon
+ * costs no sleep and no switch back, ending the spin early once another
+ * thread waits for the processor or this one should switch
+ * (`sched_yield_alone`, Linux's single_task_running and need_resched).
+ * Then judge the window: a halt that took longer than the bound shrinks
+ * it, and a shorter one that the window did not cover grows it. A guest
+ * that cleared bit 0 of MSR_KVM_POLL_CONTROL is not polled, and its window
+ * is left. The poll counts in halt_attempted_poll and either
+ * halt_successful_poll and halt_poll_success_ns, when the vCPU never
+ * slept, or halt_poll_fail_ns, with their histograms; a sleep counts in
+ * halt_wait_ns and its histogram, and halt_wakeup when a wake ended it.
+ * 0, or -EINTR as `block`'s. Called by the vCPU's thread with no lock held.
+ */
+static int32_t halt(struct kvm_vcpu *v)
+{
+    uint32_t max = max_poll_ns(v);
+    int allowed = (v->poll_control & 1u) != 0, polling, waited = 0;
+    uint64_t start, cur, poll_end, stop, halt_ns;
+    int32_t r = 0;
+
+    if (v->halt_poll_ns > max) {
+        v->halt_poll_ns = max;
+    }
+    polling = allowed && v->halt_poll_ns != 0;
+    start = cur = poll_end = kvm_host_ns();
+    if (polling) {
+        stop = start + v->halt_poll_ns;
+        do {
+            if (wake_cond(v)) {
+                goto out;
+            }
+            if (signalled()) {
+                r = -EINTR;
+                goto out;
+            }
+            arch_relax();
+            poll_end = cur = kvm_host_ns();
+        } while (cur < stop && sched_yield_alone());
+    }
+    r = block(v, &waited);
+    cur = kvm_host_ns();
+    if (waited) {
+        v->stat[KVM_VCPU_STAT_HALT_WAIT_NS] += cur - poll_end;
+        log_hist(&v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST], cur - poll_end);
+        if (r == 0) {
+            v->stat[KVM_VCPU_STAT_HALT_WAKEUP]++;
+        }
+    }
+out:
+    halt_ns = cur - start;
+    if (polling) {
+        v->stat[KVM_VCPU_STAT_HALT_ATTEMPTED_POLL]++;
+        if (!waited) {
+            v->stat[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL]++;
+            v->stat[KVM_VCPU_STAT_HALT_POLL_SUCCESS_NS] += poll_end - start;
+            log_hist(&v->stat[KVM_VCPU_STAT_HALT_POLL_SUCCESS_HIST], poll_end - start);
+        } else {
+            v->stat[KVM_VCPU_STAT_HALT_POLL_FAIL_NS] += poll_end - start;
+            log_hist(&v->stat[KVM_VCPU_STAT_HALT_POLL_FAIL_HIST], poll_end - start);
+        }
+    }
+    if (!allowed) {
+        return r;
+    }
+    max = max_poll_ns(v);
+    if (max == 0) {
+        v->halt_poll_ns = 0;
+    } else if (halt_ns > v->halt_poll_ns) {
+        if (v->halt_poll_ns && halt_ns > max) {
+            shrink_poll(v);
+        } else if (v->halt_poll_ns < max && halt_ns < max) {
+            grow_poll(v);
+        }
+    }
     return r;
 }
 
@@ -1744,6 +1889,7 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
     int32_t r;
+    int waited;
 
     for (;;) {
         if (kvm_vcpu_test_clear(v, KVM_REQ_IRQFD)) {
@@ -1784,7 +1930,11 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
             v->run->exit_reason = KVM_EXIT_DIRTY_RING_FULL;
             return 1;
         }
-        r = block(v);
+        if (v->mp_state == KVM_MP_STATE_HALTED) {
+            r = halt(v);
+        } else {
+            r = block(v, &waited);
+        }
         if (r != 0) {
             v->run->exit_reason = KVM_EXIT_INTR;
             v->stat[KVM_VCPU_STAT_SIGNAL_EXITS]++;

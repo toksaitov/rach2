@@ -171,6 +171,15 @@ int kcmdline_param_bool_setup(const char *key, const char *setup, int setval, in
 int kcmdline_param_int(const char *key, int dflt);
 
 /**
+ * The unsigned int module parameter `key`, read as Linux's param_set_uint
+ * reads it (kernel/params.c:238), as `kcmdline_param_int` reads an int but
+ * with kstrtouint: an optional `+`, no `-`, all of it within 32 bits.
+ *
+ * @return the value, or `dflt` when no token gives one.
+ */
+unsigned int kcmdline_param_uint(const char *key, unsigned int dflt);
+
+/**
  * Read the text `text` as Linux's `kstrtobool` reads it, as `kcmdline_bool`
  * reads each value, and set `*out` to 1 or 0.
  *

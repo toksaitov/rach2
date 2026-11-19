@@ -243,6 +243,7 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_X86_MSR_FILTER:
     case KVM_CAP_XSAVE: /* FXSAVE's image without XSAVE, as Linux's x86.c:4216 */
     case KVM_CAP_VM_DISABLE_NX_HUGE_PAGES:
+    case KVM_CAP_HALT_POLL:
         return 1;
     case KVM_CAP_X2APIC_API:
         return (int32_t)KVM_X2APIC_API_VALID_FLAGS;
@@ -574,6 +575,21 @@ static int32_t disable_nx_huge_pages(struct kvm_vm *vm, const struct kvm_enable_
     return 0;
 }
 
+/** KVM_CAP_HALT_POLL, as Linux's kvm_vm_ioctl_enable_cap_generic: the
+ * bound `cap->args[0]` in ns on the halt polling of the VM `vm`'s vCPUs,
+ * in place of `kvm_halt_poll_ns`, at any time. 0, or -EINVAL for a bound
+ * past 32 bits. The bound is written before the flag, as Linux's smp_wmb
+ * orders them, and a vCPU reads the flag first. */
+static int32_t enable_halt_poll(struct kvm_vm *vm, const struct kvm_enable_cap *cap)
+{
+    if (cap->args[0] > 0xFFFFFFFFull) {
+        return -EINVAL;
+    }
+    vm->max_halt_poll_ns = (uint32_t)cap->args[0];
+    vm->halt_poll_override = 1;
+    return 0;
+}
+
 /**
  * KVM_ENABLE_CAP of a VM, as Linux 6.12's kvm_vm_ioctl_enable_cap:
  * KVM_CAP_SPLIT_IRQCHIP, irq.c's; KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
@@ -589,7 +605,9 @@ static int32_t disable_nx_huge_pages(struct kvm_vm *vm, const struct kvm_enable_
  * once set, -EINVAL for an unknown one; and KVM_CAP_X86_APIC_BUS_CYCLES_NS,
  * -EINVAL for 0, a length whose longest timer count overflows 64 bits of
  * ns, or a VM with a vCPU, and -ENXIO without the local APIC in the kernel;
- * and KVM_CAP_VM_DISABLE_NX_HUGE_PAGES (`disable_nx_huge_pages`).
+ * KVM_CAP_VM_DISABLE_NX_HUGE_PAGES (`disable_nx_huge_pages`); and
+ * KVM_CAP_HALT_POLL, the VM's bound on halt polling in ns in place of
+ * `halt_poll_ns`, at any time, -EINVAL for one past 32 bits.
  * -EINVAL for a flag or any other capability, as Linux answers one it does
  * not enable; -EFAULT for a bad pointer.
  */
@@ -673,6 +691,8 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
         return 0;
     case KVM_CAP_VM_DISABLE_NX_HUGE_PAGES:
         return disable_nx_huge_pages(vm, &cap);
+    case KVM_CAP_HALT_POLL:
+        return enable_halt_poll(vm, &cap);
     case KVM_CAP_X86_APIC_BUS_CYCLES_NS:
         /* A count of 2^32 - 1 at TDCR's divisor 128 must fit 64 bits of
          * ns, as Linux guards its tmict_to_ns. */
@@ -920,35 +940,46 @@ int kvm_ignore_msrs;
 int kvm_report_ignored_msrs = 1;
 int kvm_force_emulation_prefix;
 int kvm_eager_page_split = 1;
+unsigned int kvm_halt_poll_ns = 200000u;
+unsigned int kvm_halt_poll_ns_grow = 2u;
+unsigned int kvm_halt_poll_ns_grow_start = 10000u;
+unsigned int kvm_halt_poll_ns_shrink = 2u;
 
 /*
  * The module parameters Linux's KVM selftests read, as Linux's files under
  * /sys/module give them, with what Rach2's KVM does: host-dependent
  * performance counters, the guest-physical tables always (EPT or nested
  * paging, with the unrestricted guest on VMX), which are read-only, and the
- * four Linux lets root write, 0644, with Linux's defaults:
- * `force_emulation_prefix`, 0, `ignore_msrs`, N, and `report_ignored_msrs`
- * and `eager_page_split`, Y, whose effects kvm.h describes. Every selftest
- * reads `force_emulation_prefix` before its main and skips without it.
+ * eight Linux lets root write, 0644, with Linux's defaults:
+ * `force_emulation_prefix`, 0, `ignore_msrs`, N, `report_ignored_msrs`
+ * and `eager_page_split`, Y, and the four of halt polling, whose effects
+ * kvm.h describes. Every selftest reads `force_emulation_prefix` before its
+ * main and skips without it.
  */
 static const char *const kvm_modules[] = {"kvm", "kvm_intel", "kvm_amd"};
 
-/* The kinds of a parameter: a fixed character, a bool or an int that root
- * writes, read as Linux's param_set_bool and param_set_int read them. */
+/* The kinds of a parameter: a fixed character, or a bool, an int or an
+ * unsigned int that root writes, read as Linux's param_set_bool,
+ * param_set_int and param_set_uint read them. */
 #define PARAM_FIXED 0
 #define PARAM_BOOL  1
 #define PARAM_INT   2
+#define PARAM_UINT  3
 
 static const struct kvm_param {
     int module; /* of kvm_modules: kvm, or the backend's kvm_intel or kvm_amd */
     const char *name;
     char value; /* a fixed file's character; zero means the host PMU's Y or N */
     int kind;   /* PARAM_*: a writable one's value is `*var` */
-    int *var;
+    void *var;  /* an int, or an unsigned int for PARAM_UINT */
 } kvm_params[] = {{0, "force_emulation_prefix", 0, PARAM_INT, &kvm_force_emulation_prefix},
                   {0, "enable_pmu", 0, PARAM_FIXED, NULL},
                   {0, "tdp_mmu", 'Y', PARAM_FIXED, NULL},
                   {0, "eager_page_split", 0, PARAM_BOOL, &kvm_eager_page_split},
+                  {0, "halt_poll_ns", 0, PARAM_UINT, &kvm_halt_poll_ns},
+                  {0, "halt_poll_ns_grow", 0, PARAM_UINT, &kvm_halt_poll_ns_grow},
+                  {0, "halt_poll_ns_grow_start", 0, PARAM_UINT, &kvm_halt_poll_ns_grow_start},
+                  {0, "halt_poll_ns_shrink", 0, PARAM_UINT, &kvm_halt_poll_ns_shrink},
                   {0, "ignore_msrs", 0, PARAM_BOOL, &kvm_ignore_msrs},
                   {0, "report_ignored_msrs", 0, PARAM_BOOL, &kvm_report_ignored_msrs},
                   {1, "ept", 'Y', PARAM_FIXED, NULL},
@@ -959,7 +990,8 @@ static const struct kvm_param {
 #define KVM_NR_PARAMS (sizeof(kvm_params) / sizeof(kvm_params[0]))
 
 /** A parameter's file: the value of `kvm_params[arg]` and a newline, an
- * int's in decimal, as Linux's param_get_int writes it. */
+ * int's or an unsigned int's in decimal, as Linux's param_get_int and
+ * param_get_uint write them. */
 static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
 {
     const struct kvm_param *p = &kvm_params[arg];
@@ -968,9 +1000,11 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
 
     (void)obj;
     if (p->kind == PARAM_INT) {
-        n = (uint32_t)k_itoa(*p->var, text, sizeof(text), 'd', false) - 1u;
+        n = (uint32_t)k_itoa(*(int *)p->var, text, sizeof(text), 'd', false) - 1u;
+    } else if (p->kind == PARAM_UINT) {
+        n = (uint32_t)k_itoa((int)*(unsigned int *)p->var, text, sizeof(text), 10, false) - 1u;
     } else {
-        text[n++] = p->kind == PARAM_BOOL ? (*p->var ? 'Y' : 'N')
+        text[n++] = p->kind == PARAM_BOOL ? (*(int *)p->var ? 'Y' : 'N')
                     : p->value            ? p->value
                     : kvm_pmu_enabled()   ? 'Y'
                                           : 'N';
@@ -984,17 +1018,18 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
 
 /**
  * A write of a parameter's file, as Linux's param_attr_store gives it to
- * param_set_bool or param_set_int: a bool by its first two bytes, as
- * kstrtobool reads them, an int as kstrtoint reads it in base 0, with at
- * most one newline, up to a NUL the write holds. `len`, or -EINVAL for a
- * text that is not such a value and -ERANGE for a number past an int, which
- * leave the value as it was.
+ * param_set_bool, param_set_int or param_set_uint: a bool by its first two
+ * bytes, as kstrtobool reads them, an int as kstrtoint and an unsigned int
+ * as kstrtouint read them in base 0, with at most one newline, up to a NUL
+ * the write holds. `len`, or -EINVAL for a text that is not such a value
+ * and -ERANGE for a number past its type, which leave the value as it was.
  */
 static int32_t param_store(void *obj, int arg, const char *buf, uint32_t len)
 {
     const struct kvm_param *p = &kvm_params[arg];
     char text[3];
     long long v;
+    unsigned long u;
     uint32_t n, i;
     int on, r;
 
@@ -1009,7 +1044,18 @@ static int32_t param_store(void *obj, int arg, const char *buf, uint32_t len)
         if (kcmdline_parse_bool(text, &on) != 0) {
             return -EINVAL;
         }
-        *p->var = on;
+        *(int *)p->var = on;
+        return (int32_t)len;
+    }
+    if (p->kind == PARAM_UINT) {
+        r = k_strtoul(buf, n, &u);
+        if (r != 0) {
+            return r;
+        }
+        if (u > 0xFFFFFFFFul) {
+            return -ERANGE;
+        }
+        *(unsigned int *)p->var = (unsigned int)u;
         return (int32_t)len;
     }
     r = k_strtoll(buf, n, &v);
@@ -1019,7 +1065,7 @@ static int32_t param_store(void *obj, int arg, const char *buf, uint32_t len)
     if (v < -0x7FFFFFFFLL - 1 || v > 0x7FFFFFFFLL) {
         return -ERANGE;
     }
-    *p->var = (int)v;
+    *(int *)p->var = (int)v;
     return (int32_t)len;
 }
 
@@ -1065,10 +1111,17 @@ static int params_start(int backend)
 }
 
 /** Take kvm.ignore_msrs, kvm.report_ignored_msrs,
- * kvm.force_emulation_prefix and kvm.eager_page_split from the boot line,
- * as Linux's parse_args gives a built-in module's parameters theirs. */
+ * kvm.force_emulation_prefix, kvm.eager_page_split and the four halt
+ * polling parameters from the boot line, as Linux's parse_args gives a
+ * built-in module's parameters theirs. */
 static void params_boot(void)
 {
+    kvm_halt_poll_ns = kcmdline_param_uint("kvm.halt_poll_ns", kvm_halt_poll_ns);
+    kvm_halt_poll_ns_grow = kcmdline_param_uint("kvm.halt_poll_ns_grow", kvm_halt_poll_ns_grow);
+    kvm_halt_poll_ns_grow_start =
+        kcmdline_param_uint("kvm.halt_poll_ns_grow_start", kvm_halt_poll_ns_grow_start);
+    kvm_halt_poll_ns_shrink =
+        kcmdline_param_uint("kvm.halt_poll_ns_shrink", kvm_halt_poll_ns_shrink);
     kvm_ignore_msrs = kcmdline_param_bool("kvm.ignore_msrs", kvm_ignore_msrs);
     kvm_report_ignored_msrs =
         kcmdline_param_bool("kvm.report_ignored_msrs", kvm_report_ignored_msrs);

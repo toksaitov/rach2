@@ -195,6 +195,7 @@
 #define KVM_CAP_MAX_VCPU_ID                 128
 #define KVM_CAP_GET_MSR_FEATURES            153
 #define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2   168
+#define KVM_CAP_HALT_POLL                   182
 #define KVM_CAP_STEAL_TIME                  187
 #define KVM_CAP_X86_USER_SPACE_MSR          188
 #define KVM_CAP_X86_MSR_FILTER              189

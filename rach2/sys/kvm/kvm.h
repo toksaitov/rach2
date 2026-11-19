@@ -369,6 +369,18 @@ extern int kvm_report_ignored_msrs;
 extern int kvm_force_emulation_prefix;
 extern int kvm_eager_page_split;
 
+/* Halt polling's module parameters, Linux's, with x86's defaults, which
+ * root writes: `halt_poll_ns`, the longest a halted vCPU spins for an event
+ * before it sleeps, 200000 ns, 0 to sleep at once; and the per-vCPU
+ * window's growth, `halt_poll_ns_grow`, 2, from `halt_poll_ns_grow_start`,
+ * 10000 ns, and shrink, `halt_poll_ns_shrink`, 2, a divisor, 0 to drop the
+ * window. A VM's KVM_CAP_HALT_POLL takes the place of `halt_poll_ns` for
+ * its vCPUs. vlapic.c's `halt` reads each at each halt. */
+extern unsigned int kvm_halt_poll_ns;
+extern unsigned int kvm_halt_poll_ns_grow;
+extern unsigned int kvm_halt_poll_ns_grow_start;
+extern unsigned int kvm_halt_poll_ns_shrink;
+
 /*
  * A VM. `refs` counts the VM's descriptors, its vCPUs and the mappings of
  * their run pages; the last `kvm_vm_put` frees it. The vCPUs are in
@@ -447,19 +459,24 @@ struct kvm_vm {
     int x2apic_format;           /* KVM_X2APIC_API_USE_32BIT_IDS */
     int x2apic_no_broadcast;     /* KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK */
     uint64_t apic_bus_ns;        /* KVM_CAP_X86_APIC_BUS_CYCLES_NS: an APIC timer's tick in ns */
-    uint32_t default_tsc_khz;    /* KVM_SET_TSC_KHZ of the VM: the rate a new vCPU's TSC has */
-    int irqchip;                 /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
-    uint32_t boot_cpu_id;        /* KVM_SET_BOOT_CPU_ID */
-    uint32_t dirty_manual;       /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
-    uint32_t dirty_ring_size;    /* bytes per vCPU; fixed before the first vCPU */
-    uint32_t noncoherent;        /* devices assigned that do not snoop (`kvm_tdp_noncoherent`) */
-    void *slots;                 /* slots.c's */
-    void *tdp;                   /* tdp.c's */
-    void *irq;                   /* irq.c's */
-    void *pic;                   /* i8259.c's, with the full irqchip */
-    void *ioapic;                /* ioapic.c's, with the full irqchip */
-    void *pit;                   /* i8254.c's, after KVM_CREATE_PIT or PIT2 */
-    void *iobus;                 /* iobus.c's */
+    /* KVM_CAP_HALT_POLL: the VM's bound on its vCPUs' poll window, in ns,
+     * in place of `kvm_halt_poll_ns` once `halt_poll_override` is set,
+     * which is set after the bound is written. */
+    volatile uint32_t max_halt_poll_ns;
+    volatile int halt_poll_override;
+    uint32_t default_tsc_khz; /* KVM_SET_TSC_KHZ of the VM: the rate a new vCPU's TSC has */
+    int irqchip;              /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
+    uint32_t boot_cpu_id;     /* KVM_SET_BOOT_CPU_ID */
+    uint32_t dirty_manual;    /* KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2's options, dirty.c's */
+    uint32_t dirty_ring_size; /* bytes per vCPU; fixed before the first vCPU */
+    uint32_t noncoherent;     /* devices assigned that do not snoop (`kvm_tdp_noncoherent`) */
+    void *slots;              /* slots.c's */
+    void *tdp;                /* tdp.c's */
+    void *irq;                /* irq.c's */
+    void *pic;                /* i8259.c's, with the full irqchip */
+    void *ioapic;             /* ioapic.c's, with the full irqchip */
+    void *pit;                /* i8254.c's, after KVM_CREATE_PIT or PIT2 */
+    void *iobus;              /* iobus.c's */
     struct kvm_coalesced_mmio_ring *ring; /* the page of coalesced writes, every vCPU's third */
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
@@ -677,7 +694,11 @@ struct kvm_vcpu {
     uint64_t pv_time;      /* MSR_KVM_SYSTEM_TIME(_NEW): the kvmclock's address, KVM_MSR_ENABLED */
     uint32_t pv_features;  /* KVM_CPUID_FEATURES' EAX in the CPUID, KVM_FEATURE_* bits */
     int pv_enforce;        /* KVM_CAP_ENFORCE_PV_FEATURE_CPUID: the guest has those alone */
-    uint64_t poll_control; /* MSR_KVM_POLL_CONTROL */
+    uint64_t poll_control; /* MSR_KVM_POLL_CONTROL: bit 0 clear stops halt polling */
+    /* How long a halt spins before it sleeps, in ns, as Linux's
+     * vcpu->halt_poll_ns: grown after a short halt, shrunk after a long
+     * one, never above the VM's bound (vlapic.c's `halt`). */
+    uint32_t halt_poll_ns;
     /* The steal time (pvclock.c): MSR_KVM_STEAL_TIME, its address with
      * KVM_MSR_ENABLED; the run_delay of the thread when it was last added,
      * Linux's last_steal; the thread's pcount when it was last read, whose
