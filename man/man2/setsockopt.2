@@ -282,8 +282,8 @@ At level
 .Dv IPPROTO_TCP
 on a stream socket, 0 holds acknowledgements for the answers to carry, and
 any other value ends that and sends a held one when the receive buffer is
-empty or more than a full segment is unacknowledged; reads 0 while they are
-held so.
+empty, more than a full segment is unacknowledged, or a read would announce
+the window; reads 0 while they are held so.
 .It Dv TCP_USER_TIMEOUT
 At level
 .Dv IPPROTO_TCP
