@@ -447,21 +447,30 @@ static void edge_rows(void)
 }
 
 /* What `range_check` saw at each shootdown of a protection change over the
- * two huge pages from A: a bit for each shootdown with both pages split,
- * and one for each with their entries read-only. */
-static uint32_t shot_split, shot_ro, shot_n;
+ * two huge pages from A, a bit for each shootdown: whether it covered both
+ * pages of `dir_a` with both split, and whether each of their 1024 entries
+ * was then present and writable, or present and read-only. */
+static uint32_t shot_split, shot_rw, shot_ro, shot_n;
 
-/** At a shootdown of `range_rows`, note whether the pages from A are split
- * and their entries changed yet. */
+/** At a shootdown of `range_rows`, note what it covered and the state of
+ * the pages from A. */
 static void range_check(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
-    (void)dir;
-    (void)start;
-    (void)end;
+    int covers = dir == &dir_a && (start == CPU_TLB_ALL || (start <= A && end >= A + 2 * H));
+    uint32_t rw = 0, ro = 0, i;
+
+    for (i = 0; i < 2 * HUGE_PAGES; i++) {
+        pte_t e = pte_of(&dir_a, A + i * P);
+
+        rw += (e & (PTE_P | PTE_W)) == (PTE_P | PTE_W);
+        ro += (e & (PTE_P | PTE_W)) == PTE_P;
+    }
     if (shot_n < 8) {
-        shot_split |= (uint32_t)(!mmu_user_huge(&dir_a, A) && !mmu_user_huge(&dir_a, A + H))
-                      << shot_n;
-        shot_ro |= (uint32_t)(!(pte_of(&dir_a, A + H + 7 * P) & PTE_W)) << shot_n;
+        shot_split |=
+            (uint32_t)(covers && !mmu_user_huge(&dir_a, A) && !mmu_user_huge(&dir_a, A + H))
+            << shot_n;
+        shot_rw |= (uint32_t)(rw == 2 * HUGE_PAGES) << shot_n;
+        shot_ro |= (uint32_t)(ro == 2 * HUGE_PAGES) << shot_n;
     }
     shot_n++;
 }
@@ -475,11 +484,11 @@ static void range_rows(void)
     check(resolve_held(&mm_a, A, 1, LIM) == 1 && resolve_held(&mm_a, A + H, 1, LIM) == 1 &&
               is_huge(&dir_a, A) && is_huge(&dir_a, A + H),
           "two huge pages");
-    shot_split = shot_ro = shot_n = 0;
+    shot_split = shot_rw = shot_ro = shot_n = 0;
     shot_check = range_check;
     paging_protect_range(&dir_a, A, A + 2 * H, VM_PROT_READ);
     shot_check = NULL;
-    check(shot_n == 2 && shot_split == 3 && shot_ro == 2,
+    check(shot_n == 2 && shot_split == 3 && shot_rw == 1 && shot_ro == 2,
           "two shootdowns: both splits before the entries change, the entries before the pages");
     check(is_huge(&dir_a, A) && is_huge(&dir_a, A + H) && !(mmu_user_huge(&dir_a, A) & PTE_W) &&
               !(mmu_user_huge(&dir_a, A + H) & PTE_W) && !(pte_of(&dir_a, A + H + 7 * P) & PTE_W),
