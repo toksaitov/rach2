@@ -3164,6 +3164,20 @@ int tcp_is_connected(struct socket *sock)
  * announced only while the peer has no more than half the ring left, and
  * only when the new one is at least twice what it has.
  */
+/**
+ * Whether a read makes the acknowledgement `tcb` holds due, as Linux's
+ * tcp_cleanup_rbuf judges it: more than `rcv_mss` is unacknowledged, or
+ * the ring is empty after a segment that ended a write of the peer's, two
+ * in ping-pong mode.
+ */
+static int tcp_read_acks(const struct tcb *tcb)
+{
+    return tcb->delack_due != 0 &&
+           (tcb->rcv_nxt - tcb->rcv_wup > tcb->rcv_mss ||
+            ((tcb->ack_pushed == 2 || (tcb->ack_pushed == 1 && !tcb->pingpong)) &&
+             tcb->recv_tail == tcb->recv_head));
+}
+
 void tcp_window_update(struct socket *sock)
 {
     struct tcb *tcb;
@@ -3181,10 +3195,7 @@ void tcp_window_update(struct socket *sock)
         net_unlock(flags);
         return;
     }
-    if (tcb->delack_due != 0 &&
-        (tcb->rcv_nxt - tcb->rcv_wup > tcb->rcv_mss ||
-         ((tcb->ack_pushed == 2 || (tcb->ack_pushed == 1 && !tcb->pingpong)) &&
-          tcb->recv_tail == tcb->recv_head))) {
+    if (tcp_read_acks(tcb)) {
         tcb->rcv_wnd = tcp_rcv_window(tcb);
         tcp_send_flags(tcb, TCP_ACK);
     } else if (!(sock->shutdown & SOCK_RCV_SHUTDOWN)) {
@@ -3210,6 +3221,48 @@ void tcp_window_update(struct socket *sock)
         }
     }
     net_unlock(flags);
+}
+
+/**
+ * TCP_QUICKACK, as Linux's __tcp_sock_set_quickack: 0 puts the connection
+ * in ping-pong mode; any other value ends it and, in ESTABLISHED or
+ * CLOSE_WAIT, sends a held acknowledgement as a read that empties the ring
+ * would (`tcp_read_acks`), after which an even value puts the mode back. A
+ * socket with no connection keeps nothing.
+ */
+void tcp_quickack_set(struct socket *sock, int val)
+{
+    uint32_t flags = net_lock();
+    struct tcb *tcb = sock->tcb;
+
+    if (tcb && !val) {
+        tcb->pingpong = 1;
+    } else if (tcb) {
+        tcb->pingpong = 0;
+        if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
+            tcb->delack_due != 0) {
+            if (tcb->ack_pushed == 0) {
+                tcb->ack_pushed = 1;
+            }
+            if (tcp_read_acks(tcb)) {
+                tcb->rcv_wnd = tcp_rcv_window(tcb);
+                tcp_send_flags(tcb, TCP_ACK);
+            }
+            if (!(val & 1)) {
+                tcb->pingpong = 1;
+            }
+        }
+    }
+    net_unlock(flags);
+}
+
+int tcp_quickack_get(const struct socket *sock)
+{
+    uint32_t flags = net_lock();
+    int val = !(sock->tcb && sock->tcb->pingpong);
+
+    net_unlock(flags);
+    return val;
 }
 
 /**

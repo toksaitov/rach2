@@ -711,6 +711,15 @@ int tcp_is_connected(struct socket *sock);
  */
 void tcp_window_update(struct socket *sock);
 
+/** Set TCP_QUICKACK on the stream socket `sock`: 0 holds acknowledgements
+ * for this side's answers to carry, any other value sends a held one now.
+ * Takes `net_lock` itself. */
+void tcp_quickack_set(struct socket *sock, int val);
+
+/** Read TCP_QUICKACK: 0 while the connection of `sock` is in ping-pong
+ * mode, else 1. Takes `net_lock` itself. */
+int tcp_quickack_get(const struct socket *sock);
+
 /** Move the connections and listeners of the network namespace `ns`, which
  * has ended, to `to`, a namespace no process is in, as its sockets go
  * (`net_ns_gone`). The caller holds `net_lock`. */
