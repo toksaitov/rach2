@@ -131,6 +131,12 @@ void arch_store_u16(volatile unsigned short *p, unsigned short value)
     *p = value;
 }
 
+/** The host is no guest, so spin locks queue. */
+int arch_spin_virt(void)
+{
+    return 0;
+}
+
 /** Whether the test holds the modelled big lock. */
 int smp_serialized(void)
 {

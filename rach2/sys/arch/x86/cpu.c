@@ -73,6 +73,16 @@ int arch_idle_poll(void)
     return idle_poll;
 }
 
+/** Leaf 1's ECX bit 31 says a hypervisor is beneath. The answer is read
+ * by each call, which the spin lock makes once. */
+int arch_spin_virt(void)
+{
+    uint32_t c = 0;
+
+    kcpu_id(1, 0, 0, &c, 0);
+    return (c & (1u << 31)) != 0 && (kcpu_kvm_hints() & KVM_HINTS_REALTIME) == 0;
+}
+
 /** The processor takes its clock page back from KVM first
  * (`kvmclock_cpu_stop`), as Linux's kvm_guest_cpu_offline does for a
  * processor that goes offline or stops at a shutdown, so that KVM writes
