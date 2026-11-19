@@ -1,6 +1,7 @@
 /* The i915 runtime power management's calls (drm/i915/i915.h) for a host
  * test that links the driver's files without i915_runtime_pm.c: the model
- * never sleeps, so a hold only counts, and a test may read the count. */
+ * sleeps only when a test sets `hw.asleep`, which a get clears, so a hold
+ * otherwise only counts, and a test may read the count. */
 #include "../../../rach2/sys/drm/i915/i915.h"
 
 /* The holds taken and not let go, over every device. */
@@ -24,10 +25,11 @@ void i915_rpm_unplug(struct drm_i915_private *i915)
     (void)i915;
 }
 
-/** Count a hold. */
+/** Count a hold, and wake a device a test marked asleep, as the driver's
+ * get resumes one that sleeps. */
 void i915_rpm_get(struct drm_i915_private *i915)
 {
-    (void)i915;
+    i915->hw.asleep = 0;
     i915_rpm_host_holds++;
 }
 

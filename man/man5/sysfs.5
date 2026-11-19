@@ -245,6 +245,18 @@ goes off, the GPU is reset, its interrupts and bus mastering go off, the
 function is reset, and programs that have the card open get
 .Er ENODEV
 from it, as after an unplug.
+The function's own reset is the one step whose failure leaves the write
+successful: a function with no reset method, one whose reset fails, and
+the
+.Ql rach2.i915fake
+device, which has no state to reset, are released without it.
+The first two are logged and keep the GTT's scratch page, which the GPU
+may still reach.
+A ring's status page whose writes the GPU did not stop is kept too, with
+its place in the GTT, through each later
+.Pa bind
+that does not reset the function.
+The unbind uevent comes last, once the function has no owner.
 The write is
 .Er ENODEV
 for a name the driver has no device of,
@@ -255,7 +267,8 @@ when the GPU does not reset; the device then stays bound.
 A name written to
 .Pa bind
 resets the function, waits out its panel's power cycle and binds it as
-at boot.
+at boot; a function with no reset method is bound as its last owner
+left it.
 It is
 .Er ENODEV
 for a name no function has, a function the driver does not drive, or one

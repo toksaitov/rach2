@@ -52,13 +52,16 @@
  * The rows: the bind as the firmware leaves the chip, with the driver
  * shown in /sys; the refusals of both files; a release refused while a
  * program holds a window of the aperture, which leaves the panel lit; the
- * release, with RC6 and RPS off before the display's commit, the display
- * taken down in Linux's order, no sleep from the commit to the unplug, the
- * GPU reset before the rings' pages go back, each ring's status page
+ * release, with RC6 and RPS off before the display's commit and RPS's
+ * register written under its lock, the display taken down in Linux's
+ * order, the commit lock held from the commit to the unplug against a
+ * master's commit that waits on it, the GPU reset under the GEM lock
+ * before the rings' pages go back, each ring's status page
  * masked before its page goes, every interrupt masked and the message
  * off, bus mastering off, the function without an owner, the console told
  * that its screen has gone before it leaves the device, the backlight on a
- * stand-in, and a record that a program still holds reaching no register;
+ * stand-in before the function's reset, the unbind uevent after the
+ * unclaim, and a record that a program still holds reaching no register;
  * a bring-up refused while vfio-pci has the function or its
  * driver_override names another driver; the function scribbled on as a
  * guest's driver would leave it; a bring-up whose reset fails, one whose
@@ -73,12 +76,17 @@
  * panel that a master holds; a window of the aperture taken during the
  * release's commit, which refuses the release with RC6 and RPS on again;
  * a GPU that will not reset, which refuses the release and leaves the
- * driver bound, RC6 and RPS on again and the GPU wedged until it does; and
- * then a release whose render ring does not keep its status page's mask
- * and whose function's reset fails, which keeps that page and the GTT's
- * scratch page; and, after a third bring-up, a release of a function with
- * no reset method, which keeps the scratch page. The rows that expect no
- * failure also find no wait at its bound.
+ * driver bound, RC6 and RPS on again with RPS's frequency kept and the
+ * GPU wedged until it does; and then a release whose render ring does not
+ * keep its status page's mask and whose function's reset fails, which
+ * keeps that page and the GTT's scratch page; a third bring-up, with no
+ * reset, which keeps that status page's GTT entry and range and takes a
+ * scratch frame of its own; a release of a function with no reset method
+ * whose device the runtime power management put to sleep, which turns RC6
+ * and RPS off on the chip and keeps the scratch page; and a fourth
+ * bring-up, from a reset, and the same release again. Every scratch page
+ * is a frame of its own, and a kept one is never freed. The rows that
+ * expect no failure also find no wait at its bound.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -132,6 +140,7 @@
 volatile uint64_t kernel_ticks;
 
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
+extern int snprintf(char *s, unsigned long n, const char *format, ...);
 extern char *strstr(const char *s, const char *t);
 extern int strncmp(const char *s, const char *t, unsigned long n);
 extern int posix_memalign(void **p, unsigned long align, unsigned long size);
@@ -389,20 +398,36 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
     return 0;
 }
 
-/* The GTT's scratch page, a frame of its own. */
-#define TEST_SCRATCH 0x7f000000u
+/* The GTT's scratch pages: each bind's a frame of its own, from
+ * TEST_SCRATCH up, which all stand for one host page. */
+#define TEST_SCRATCH        0x7f000000u
+#define TEST_SCRATCH_FRAMES 64u
 static uint32_t scratch_page[1024];
+static uint32_t scratch_frames; /* the frames given out */
+
+/** Whether `phys` is one of the scratch frames given out. */
+static int is_scratch(uint64_t phys)
+{
+    return phys >= TEST_SCRATCH && phys < TEST_SCRATCH + scratch_frames * 0x1000u;
+}
 
 /* The release's steps outside the chip's registers, each the count of
  * `pci_steps` at its first since `marks_clear`, 0 for none: bus mastering
- * turned off, the function reset, the kernel's claim given up and the
- * scratch page's frame freed. `reset_owned` is set when the reset ran
- * while the kernel still had the function. */
+ * turned off, the function reset, the kernel's claim given up, the unbind
+ * uevent sent and the watched scratch page's frame freed. `reset_owned` is
+ * set when the reset ran while the kernel still had the function, and
+ * `boot_bl` when a read of the backlight during a reset reached the boot's
+ * driver, whose registers the reset takes away. */
 static uint32_t pci_steps;
 static struct {
-    uint32_t bm_off, fn_reset, unclaimed, scratch_freed;
-    int reset_owned;
+    uint32_t bm_off, fn_reset, unclaimed, unbind_event, scratch_freed;
+    int reset_owned, boot_bl;
 } pci_mark;
+
+/* The scratch frame whose freeing `pci_mark` watches, and one a release
+ * kept, with whether it was freed since. */
+static uintptr_t watched_scratch, kept_scratch;
+static int kept_scratch_freed;
 
 /** Note the step `*at`, the first of its kind since the marks were last
  * cleared. */
@@ -415,13 +440,19 @@ static void pci_note(uint32_t *at)
 
 uintptr_t alloc_frame(void)
 {
-    return TEST_SCRATCH;
+    if (scratch_frames == TEST_SCRATCH_FRAMES) {
+        return 0;
+    }
+    return TEST_SCRATCH + scratch_frames++ * 0x1000u;
 }
 
 void free_frame(uintptr_t phys)
 {
-    if (phys == TEST_SCRATCH) {
+    if (phys && phys == watched_scratch) {
         pci_note(&pci_mark.scratch_freed);
+    }
+    if (phys && phys == kept_scratch) {
+        kept_scratch_freed = 1;
     }
 }
 
@@ -445,7 +476,7 @@ static void *test_dma(struct i915_model *m, uint64_t phys)
     int i;
 
     (void)m;
-    if (phys == TEST_SCRATCH) {
+    if (is_scratch(phys)) {
         return scratch_page;
     }
     for (i = 0; i < npages; i++) {
@@ -647,6 +678,21 @@ static int msi_on(void)
     return model.config[LENOVO_GPU_CAP_MSI + 2] & 1u;
 }
 
+static int boot_gets;
+
+/** A read of the backlight's level while the function resets, as a program
+ * may make one: noted when it reaches the boot's driver. */
+static void backlight_read_in_reset(void)
+{
+    char text[16];
+    int gets = boot_gets;
+
+    (void)backlight_show(0, BACKLIGHT_ACTUAL, text, (int)sizeof(text));
+    if (boot_gets != gets) {
+        pci_mark.boot_bl = 1;
+    }
+}
+
 /** The chip's method: its Advanced Features capability's reset, or none
  * while a row sets `reset_none`. */
 int pci_reset_method(const pci_device_t *dev)
@@ -676,6 +722,7 @@ int pci_reset_function(const pci_device_t *dev, pci_sleep_t msleep)
     }
     pci_note(&pci_mark.fn_reset);
     model_function_reset();
+    backlight_read_in_reset();
     msleep(100);
     return 0;
 }
@@ -898,6 +945,7 @@ int32_t sysfs_pci_uevent(int key, const char *action)
         bind_events++;
     } else if (strcmp(action, "unbind") == 0) {
         unbind_events++;
+        pci_note(&pci_mark.unbind_event);
     }
     return 0;
 }
@@ -1093,18 +1141,41 @@ int32_t drm_dev_register(struct drm_device *dev)
     return 0;
 }
 
-/* Whether an unplug began since a row cleared it. */
-static int unplug_begun;
+/* Whether an unplug began since a row cleared it, and whether the GEM
+ * lock was held when it began. */
+static int unplug_begun, unplug_gem_held;
 
-/** As drm.c's, less the nodes and entries this kernel has not: the console
- * leaves, the vblanks' waiters go, and the driver's unplug runs. */
+/* A master's commit that waits for the commit lock, which a row sets: an
+ * unplug that finds the lock free runs it first, as the waiter would take
+ * the lock before the unplug. */
+static void (*lock_waiter)(void);
+
+static int gem_depth; /* the GEM lock's takes not yet given back */
+
+/** As drm.c's, less the nodes and entries this kernel has not: the flag set
+ * under the commit lock, the console leaves, the vblanks' waiters go, and
+ * the driver's unplug runs. */
 void drm_dev_unplug(struct drm_device *dev)
 {
+    void (*waiter)(void) = lock_waiter;
+    int was;
+
     if (dev->unplugged) {
         return;
     }
-    unplug_begun = 1;
+    if (waiter && !mutex_held(&dev->mode_lock)) {
+        lock_waiter = 0;
+        waiter();
+    }
+    drm_modeset_lock_nointr(dev);
+    was = dev->unplugged;
     dev->unplugged = 1;
+    drm_modeset_unlock(dev);
+    if (was) {
+        return;
+    }
+    unplug_begun = 1;
+    unplug_gem_held = gem_depth > 0;
     if (dev->registered) {
         drm_client_dev_unregister(dev);
     }
@@ -1353,7 +1424,7 @@ void i915_gem_object_flush_range(struct drm_i915_gem_object *obj, uint64_t start
 
 /* ---- the boot's backlight driver ---- */
 
-static int boot_level = 937, boot_gets, boot_sets, boot_has;
+static int boot_level = 937, boot_sets, boot_has;
 
 /** The boot driver's `get`, a read of the PCH's PWM on the machine. */
 static int boot_get(void *ctx)
@@ -1419,15 +1490,17 @@ static int first_access_seen;
  * eDP transcoder disabled, DDI A's buffer disabled, the panel's power
  * taken, the GPU's reset, the message's master enable cleared; RC6 and
  * RPS turned off, RC6 asked for after it went off; and of each ring, its
- * status page's writes masked after the reset, and its status page's
- * entry in the GTT written. `slept` is set at a take of the GEM lock, where
- * the release could sleep, after the display's commit and before the
- * unplug. */
+ * status page's writes masked after the reset, the mask read back after
+ * that, and its status page's entry in the GTT written. `slept` is set at
+ * a take of the GEM lock, where the release could sleep, after the
+ * display's commit and before the unplug while the commit lock was free;
+ * `rp_unlocked` at a write of GEN6_RP_CONTROL without RPS's frequency
+ * lock; `gdrst_unlocked` at the GPU's reset without the GEM lock. */
 static struct {
     uint32_t blc_off, trans_off, ddi_off, panel_off, gdrst, master_off, panel_on;
     uint32_t rc6_off, rps_off, rc6_late;
-    uint32_t hwstam[4], hws_gone[4];
-    int slept;
+    uint32_t hwstam[4], hwstam_read[4], hws_gone[4];
+    int slept, rp_unlocked, gdrst_unlocked;
     uint64_t panel_on_us;
 } mark;
 
@@ -1447,8 +1520,10 @@ static void marks_clear(void)
     k_memset(&pci_mark, 0, sizeof(pci_mark));
 }
 
-/* compat/i915_gem_lock_host.c's hook at each take of the GEM lock. */
+/* compat/i915_gem_lock_host.c's hooks at each take of the GEM lock and at
+ * each giving back. */
 extern void (*i915_gem_lock_host_hook)(void);
+extern void (*i915_gem_unlock_host_hook)(void);
 
 /* The device whose release a row watches. */
 static struct drm_device *released_dev;
@@ -1458,9 +1533,16 @@ static struct drm_device *released_dev;
  * once the unplug began the device may be gone. */
 static void note_gem_take(void)
 {
+    gem_depth++;
     if (!unplug_begun && released_dev && mark.panel_off && !mutex_held(&released_dev->mode_lock)) {
         mark.slept = 1;
     }
+}
+
+/** Note the GEM lock given back. */
+static void note_gem_give(void)
+{
+    gem_depth--;
 }
 
 /** Forget the marks and whether an unplug began, watch the GEM lock's
@@ -1473,11 +1555,17 @@ static void marks_take(struct drm_i915_private *i915)
     marks_clear();
     unplug_begun = 0;
     released_dev = &i915->drm;
+    gem_depth = 0;
+    unplug_gem_held = 0;
+    watched_scratch = i915->ggtt.scratch;
     i915_gem_lock_host_hook = note_gem_take;
+    i915_gem_unlock_host_hook = note_gem_give;
     for (i = 0; i < 4; i++) {
         hws_entry[i] = i915->gt.engine[i].hws_ggtt / I915_GTT_PAGE_SIZE;
     }
 }
+
+static struct drm_i915_private *bound(void);
 
 /** Note the marks of the GT's writes `chip_write` passes on: RC6 and RPS
  * turned off, RC6 asked for after it went off, and of each ring its status
@@ -1495,6 +1583,9 @@ static void note_gt_write(uint32_t reg, uint32_t value)
     }
     if (reg == GEN6_RP_CONTROL && value == 0 && !mark.rps_off) {
         mark.rps_off = accesses;
+    }
+    if (reg == GEN6_RP_CONTROL && bound() && !bound()->rps.lock.locked) {
+        mark.rp_unlocked = 1;
     }
     for (i = 0; i < 4; i++) {
         if (reg == RING_HWSTAM(ring_bases[i]) && value == 0xffffffffu && mark.gdrst &&
@@ -1517,10 +1608,17 @@ static void note_access(void)
     }
 }
 
-/** A read, counted, then passed on to the model. */
+/** A read, counted and noted, then passed on to the model. */
 static uint32_t chip_read(struct i915_hw *hw, uint32_t reg)
 {
+    int i;
+
     note_access();
+    for (i = 0; i < 4; i++) {
+        if (reg == RING_HWSTAM(ring_bases[i]) && mark.hwstam[i] && !mark.hwstam_read[i]) {
+            mark.hwstam_read[i] = accesses;
+        }
+    }
     return model_ops->read32(hw, reg);
 }
 
@@ -1563,6 +1661,7 @@ static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
     } else if (reg == GEN6_GDRST) {
         if ((value & GEN6_GRDOM_FULL) && !mark.gdrst) {
             mark.gdrst = accesses;
+            mark.gdrst_unlocked = gem_depth <= 0;
         }
     } else if (reg == DEIER) {
         if ((old & DE_MASTER_IRQ_CONTROL) && !(value & DE_MASTER_IRQ_CONTROL)) {
@@ -2020,18 +2119,22 @@ static int down_in_order(void)
 
 /** Whether the release since `marks_take` ended the GT's power management
  * and its status pages in Linux's order: RC6 and RPS off before the
- * display's commit, and RC6 not asked for after; no take of the GEM lock,
- * where the release could sleep, from the commit's end to the unplug; then
+ * display's commit, GEN6_RP_CONTROL written only under RPS's lock, and RC6
+ * not asked for after; no take of the GEM lock, where the release could
+ * sleep, from the commit's end to the unplug without the commit lock; the
+ * GPU reset under the GEM lock, held still when the unplug began; then
  * each ring's status page's writes masked, the mask read back, before its
  * entry in the GTT goes. */
 static int gt_down_in_order(void)
 {
     int i, ok = mark.rc6_off && mark.rc6_off < mark.blc_off && mark.rps_off &&
-                mark.rps_off < mark.blc_off && !mark.rc6_late && mark.panel_off && unplug_begun &&
-                !mark.slept;
+                mark.rps_off < mark.blc_off && !mark.rp_unlocked && !mark.rc6_late &&
+                mark.panel_off && unplug_begun && !mark.slept && mark.gdrst &&
+                !mark.gdrst_unlocked && unplug_gem_held;
 
     for (i = 0; i < 4; i++) {
-        ok &= mark.hwstam[i] && mark.hwstam[i] < mark.hws_gone[i] &&
+        ok &= mark.hwstam[i] && mark.hwstam[i] < mark.hwstam_read[i] &&
+              mark.hwstam_read[i] < mark.hws_gone[i] &&
               reg(RING_HWSTAM(ring_bases[i])) == 0xffffffffu;
     }
     return ok;
@@ -2039,13 +2142,14 @@ static int gt_down_in_order(void)
 
 /** Whether the release since `marks_take` reset the function after bus
  * mastering went off and before the kernel gave up its claim, while the
- * scratch page was still the GPU's; `freed` asks also that the scratch
- * page has since been freed, which it is with the record's last
- * reference. */
+ * scratch page was still the GPU's and the backlight on the stand-in, and
+ * sent the unbind uevent last; `freed` asks also that the scratch page has
+ * since been freed, which it is with the record's last reference. */
 static int reset_in_order(int freed)
 {
     return pci_mark.bm_off && pci_mark.bm_off < pci_mark.fn_reset && pci_mark.reset_owned &&
-           pci_mark.fn_reset < pci_mark.unclaimed &&
+           pci_mark.fn_reset < pci_mark.unclaimed && pci_mark.unclaimed < pci_mark.unbind_event &&
+           !pci_mark.boot_bl &&
            (freed ? pci_mark.fn_reset < pci_mark.scratch_freed : !pci_mark.scratch_freed);
 }
 
@@ -2103,9 +2207,10 @@ static void row_release(void)
           "release: the backlight, the transcoder, the DDI and the panel's power off in that "
           "order, then the GPU reset");
     CHECK(gt_down_in_order(),
-          "release: RC6 and RPS off before the display's commit and RC6 not asked for after, no "
-          "sleep from the commit to the unplug, every ring's status page writes masked before its "
-          "page went");
+          "release: RC6 and RPS off before the display's commit, RPS's register under its lock "
+          "and RC6 not asked for after, the commit lock held from the commit to the unplug, the "
+          "GPU reset under the GEM lock, every ring's status page writes masked and read back "
+          "before its page went");
     CHECK(request_unplugs == 1 && gem_unplugs == 1 &&
               i915_model_reset_state(&model)->resets[0] >= 1 && released(),
           "release: the display off, the rings reset before their pages went, interrupts and the "
@@ -2113,8 +2218,9 @@ static void row_release(void)
     CHECK(strcmp(console_calls, "gu") == 0,
           "release: the console told its screen has gone, then that the device left");
     CHECK(resets == before + 1 && reset_in_order(0),
-          "release: the function reset once, after bus mastering went off and before the claim "
-          "was given up, the scratch page still held");
+          "release: the function reset once, after bus mastering went off and the backlight went "
+          "to the stand-in, before the claim was given up and the unbind uevent, the scratch page "
+          "still held");
     CHECK(newest_handoff(RELEASED_RESET) && cycle_ms >= 500,
           "release: logged with the function's reset, the panel's power cycle of half a second "
           "or more remembered");
@@ -2293,6 +2399,9 @@ static void row_bring_up(const char *name)
     CHECK(i915->hw.timeouts == 0 && !timed_out(), "bring-up: no wait at its bound");
 }
 
+static struct drm_mode_modeinfo lit_mode; /* the panel's mode the last mode set set */
+static uint32_t lit_fb;                   /* and its framebuffer */
+
 /**
  * A full mode set of the panel by a master's SETCRTC of its own
  * framebuffer on object `k`: the panel powered no sooner than its power
@@ -2318,6 +2427,8 @@ static void row_mode_set(int k)
     marks_clear();
     count = i915->display.crtc[0].base.vblank.count;
     err = fb ? setcrtc(i915, &i915->display.connector, &mode, fb) : -1;
+    lit_mode = mode;
+    lit_fb = fb;
     if (err != 0) {
         printf("i915-handoff-test: mode set: SETCRTC: error %d\n", (int)err);
     }
@@ -2337,6 +2448,17 @@ static void row_mode_set(int k)
     CHECK(i915->hw.timeouts == 0 && !timed_out(), "mode set: no wait at its bound");
 }
 
+/** The master's SETCRTC of the panel that `row_mode_set` made, as a
+ * master that waited for the commit lock makes it. */
+static void relight(void)
+{
+    struct drm_i915_private *i915 = bound();
+
+    if (i915) {
+        (void)setcrtc(i915, &i915->display.connector, &lit_mode, lit_fb);
+    }
+}
+
 /**
  * The release a second time, from a panel that a master lit and still
  * holds: the same order and the same end, the master's scanout unpinned,
@@ -2349,12 +2471,17 @@ static void row_release_lit(int k)
 
     console_clear();
     marks_take(bound());
+    lock_waiter = relight;
     CHECK(driver_write("unbind", CHIP "\n") == 13, "release, lit: unbind taken");
     CHECK(down_in_order() && request_unplugs == unplugs + 1 && released(),
           "release, lit: the display down in order, the GPU reset, the function let go");
     CHECK(gt_down_in_order(),
-          "release, lit: RC6 and RPS off before the commit, no sleep from the commit to the "
-          "unplug, every status page masked first");
+          "release, lit: RC6 and RPS off before the commit, the commit lock held to the unplug, "
+          "the GPU reset under the GEM lock, every status page masked first");
+    CHECK(lock_waiter == relight && display_off(),
+          "release, lit: a master's commit waiting for the commit lock did not run before the "
+          "unplug, the panel dark");
+    lock_waiter = 0;
     CHECK(resets == before + 1 && reset_in_order(0) && newest_handoff(RELEASED_RESET),
           "release, lit: the function reset between bus mastering off and the claim given up, "
           "logged");
@@ -2401,20 +2528,28 @@ static void row_held_late(void)
 
 /**
  * A GPU that will not reset: the release fails with the reset's error and
- * the driver stays bound, the display off, the GPU wedged and the console
- * told to look again.
+ * the driver stays bound, RPS's frequency to start from kept, the display
+ * off, the GPU wedged and the console told to look again.
  */
 static void row_stuck(void)
 {
     struct drm_i915_private *i915 = bound();
-    int before = resets;
+    int before = resets, cur;
 
+    if (!i915) {
+        return;
+    }
+    cur = i915->rps.min_freq + 1;
+    i915->rps.cur_freq = cur;
+    i915->rps.last_adj = -4;
     console_clear();
     i915_model_reset_state(&model)->stuck = GEN6_GRDOM_FULL;
     CHECK(driver_write("unbind", CHIP "\n") == -ETIMEDOUT, "stuck: unbind: ETIMEDOUT");
     i915_model_reset_state(&model)->stuck = 0;
-    CHECK(i915 && i915->rc6.enabled && i915->rps.enabled,
-          "stuck: RC6 and RPS on again after the failed release");
+    CHECK(i915->rc6.enabled && i915->rps.enabled && i915->rps.cur_freq == cur &&
+              i915->rps.last_adj == -4,
+          "stuck: RC6 and RPS on again after the failed release, RPS's frequency to start from "
+          "and its last step as the park left them");
     CHECK(bound() == i915 && sys_bound() && owner && msi_on() && vectors_live == 1 &&
               (command() & PCI_CMD_BUS_MASTER) && i915 && i915->gt.wedged && display_off() &&
               strcmp(console_calls, "h") == 0 && logged("handoff: " CHIP ": not released: error"),
@@ -2430,11 +2565,14 @@ static void row_stuck(void)
  * line, which leaves the reset out, the scratch page kept, and the
  * master's record cut off and freed when it closes the card.
  */
+static uint32_t kept_hws_ggtt, kept_hws_pte; /* rcs0's kept status page's offset and entry */
+
 static void row_kept(int k)
 {
     struct drm_i915_private *i915 = bound();
     struct drm_device *held = fa_dev;
     int r = releases, before = resets;
+    char line[128];
     uint32_t *kept;
 
     if (!i915) {
@@ -2444,6 +2582,12 @@ static void row_kept(int k)
     console_clear();
     marks_take(i915);
     kept = i915->gt.engine[0].hws;
+    kept_hws_ggtt = i915->gt.engine[0].hws_ggtt;
+    kept_scratch = i915->ggtt.scratch;
+    kept_scratch_freed = 0;
+    snprintf(line, sizeof(line),
+             "handoff: " CHIP ": scratch page kept at 0x%lx: the function was not reset",
+             (unsigned long)kept_scratch);
     hwstam_stuck = 0;
     reset_error = -ETIMEDOUT;
     CHECK(driver_write("unbind", CHIP "\n") == 13 && released() && strcmp(console_calls, "u") == 0,
@@ -2461,8 +2605,10 @@ static void row_kept(int k)
               !mark.hws_gone[0] && mark.hws_gone[1] && mark.hws_gone[2] && mark.hws_gone[3],
           "kept: rcs0's status page, whose mask did not hold, kept with its GTT entry, the "
           "others gone");
-    CHECK(logged("handoff: " CHIP ": scratch page kept at 0x7f000000: the function was not reset"),
-          "kept: the scratch page kept, logged");
+    CHECK(logged(line), "kept: the scratch page kept, logged");
+    kept_hws_pte = reg(I915_GSM_OFFSET + (kept_hws_ggtt / I915_GTT_PAGE_SIZE) * 4u);
+    CHECK(pci_mark.unclaimed < pci_mark.unbind_event,
+          "kept: the unbind uevent after the claim was given up");
     CHECK(bo_vma[k].pin_count == 0 && releases == r && held && cut_off(held),
           "kept: the master's scanout unpinned, its record cut off");
     master_close();
@@ -2475,14 +2621,58 @@ static void row_kept(int k)
 }
 
 /**
- * The release of a function with no reset method: released, the reset's
- * ENOTTY logged before the release's line, which leaves the reset out, and
- * the scratch page kept, never freed with the record.
+ * A bring-up of a function with no reset method after the release that
+ * kept rcs0's status page: bound as the release left it, the kept page's
+ * entry in the GTT and its range kept, rcs0's new status page elsewhere,
+ * and the new binding's scratch page another frame than the kept one.
+ */
+static void row_bring_up_unreset(void)
+{
+    struct drm_i915_private *i915;
+    char line[128];
+    int i, kept = 0;
+
+    log_text[0] = 0;
+    console_clear();
+    reset_none = 1;
+    CHECK(driver_write("bind", CHIP "\n") == 13 && (i915 = bound()) != NULL,
+          "unreset: bind taken with no reset method");
+    reset_none = 0;
+    if (!(i915 = bound())) {
+        return;
+    }
+    for (i = 0; i < i915->ggtt.nkept; i++) {
+        kept |= i915->ggtt.kept[i].start == kept_hws_ggtt &&
+                i915->ggtt.kept[i].end == kept_hws_ggtt + I915_GTT_PAGE_SIZE;
+    }
+    snprintf(line, sizeof(line), "gtt: 0x%lx kept: a status page", (unsigned long)kept_hws_ggtt);
+    CHECK(logged("handoff: " CHIP ": no reset; bound as its last owner left it") && kept &&
+              logged(line) &&
+              reg(I915_GSM_OFFSET + (kept_hws_ggtt / I915_GTT_PAGE_SIZE) * 4u) == kept_hws_pte &&
+              kept_hws_pte != i915->ggtt.scratch_pte,
+          "unreset: the kept status page's GTT entry and range kept, logged");
+    for (i = 0; i < 4; i++) {
+        kept &= i915->gt.engine[i].hws_ggtt != kept_hws_ggtt &&
+                i915->gt.engine[i].ring_ggtt != kept_hws_ggtt;
+    }
+    CHECK(kept && logged("rings: rcs0, bcs0, vcs0 and vecs0 started"),
+          "unreset: the rings started with no page at the kept offset");
+    CHECK(i915->ggtt.scratch != kept_scratch && !kept_scratch_freed,
+          "unreset: a new scratch frame, the kept one never freed");
+}
+
+/**
+ * The release of a function with no reset method, runtime-suspended when
+ * `unbind` is written: woken for the release, so that RC6 and RPS go off
+ * on the chip; released, the reset's ENOTTY logged before the release's
+ * line, which leaves the reset out, and the scratch page kept, never freed
+ * with the record.
  */
 static void row_no_reset(void)
 {
     struct drm_i915_private *i915 = bound();
     int r = releases, before = resets;
+    char line[128];
 
     if (!i915) {
         return;
@@ -2490,21 +2680,27 @@ static void row_no_reset(void)
     log_text[0] = 0;
     console_clear();
     marks_take(i915);
+    snprintf(line, sizeof(line),
+             "handoff: " CHIP ": scratch page kept at 0x%lx: the function was not reset",
+             (unsigned long)watched_scratch);
+    i915_model_poke(&model, GEN6_RC_CONTROL, GEN6_RC_CTL_RC6_ENABLE);
+    i915->hw.asleep = 1;
     reset_none = 1;
     CHECK(driver_write("unbind", CHIP "\n") == 13 && released(),
           "no reset: released with no reset method");
     reset_none = 0;
+    CHECK(mark.rc6_off && mark.rps_off && mark.rps_off < mark.gdrst && reg(GEN6_RC_CONTROL) == 0 &&
+              reg(GEN6_RP_CONTROL) == 0,
+          "no reset: the suspended GPU woken, RC6 and RPS off on the chip before the reset");
     CHECK(resets == before + 1 && !pci_mark.fn_reset && pci_mark.bm_off &&
-              pci_mark.bm_off < pci_mark.unclaimed &&
+              pci_mark.bm_off < pci_mark.unclaimed && pci_mark.unclaimed < pci_mark.unbind_event &&
               logged("handoff: " CHIP ": not reset at the release: error -") &&
               newest_handoff("handoff: " CHIP
                              ": released: the display off, the GPU reset, interrupts and bus "
                              "mastering off"),
           "no reset: the missing reset logged, then the release's line without it");
-    CHECK(
-        logged("handoff: " CHIP ": scratch page kept at 0x7f000000: the function was not reset") &&
-            releases == r + 1 && pages_live == 0 && !pci_mark.scratch_freed,
-        "no reset: the record and every page freed, the scratch page kept, logged");
+    CHECK(logged(line) && releases == r + 1 && pages_live == 0 && !pci_mark.scratch_freed,
+          "no reset: the record and every page freed, the scratch page kept, logged");
 }
 
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
@@ -2549,7 +2745,9 @@ int main(void)
         row_held_late();
         row_stuck();
         row_kept(1);
-        row_bring_up("bring-up, third: bind taken after a kept release");
+        row_bring_up_unreset();
+        row_no_reset();
+        row_bring_up("bring-up, fourth: bind taken after kept releases, from a reset");
         row_no_reset();
     }
     if (failures != 0) {
@@ -2560,6 +2758,7 @@ int main(void)
     }
     CHECK(allocations == base && pages_live == 0 && vectors_live == 0,
           "every allocation, page and vector given back");
+    CHECK(kept_scratch && !kept_scratch_freed, "the scratch frame a release kept never freed");
     i915_model_free(&model);
     if (failures == 0) {
         printf("i915-handoff-test: ok\n");
