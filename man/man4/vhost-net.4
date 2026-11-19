@@ -138,7 +138,12 @@ it does not poll.
 .Sh FILES
 .Bl -tag -width /dev/vhost-net
 .It Pa /dev/vhost-net
-The device, read and written by root.
+The device, mode 0666, as
+.Pa /dev/kvm
+is; a root that runs udev gives both the group and mode its rules name,
+Debian's group
+.Li kvm
+and mode 0660.
 .El
 .Sh EXAMPLES
 Give a QEMU guest the interface
