@@ -46,6 +46,10 @@ duplicateExpression:*sys/lib/krandom.c
 # processors' counts off one cache line; nothing reads the array.
 unusedStructMember:*sys/lib/rcu.c
 
+# tap.c's `struct tap_ifreq_shape` mirrors Linux's `struct ifreq` only for its
+# size, the bytes TUNSETIFF and TUNGETIFF copy; nothing reads its members.
+unusedStructMember:*sys/network/driver/tap.c
+
 # The ABI layout structs in the timestamp probes.
 
 # `struct old_stat` in these two mirrors the kernel's `struct linux_stat` field
