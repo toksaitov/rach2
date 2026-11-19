@@ -25,9 +25,11 @@ extern audio_driver_t hdmi_audio_driver;
  */
 void hdmi_audio_init(void);
 
-/** Whether this driver, not hda.c, drives the PCI function `vendor`:`device`:
- * Haswell's display audio controllers. */
-int hdmi_audio_drives(uint16_t vendor, uint16_t device);
+/* Whether this driver, not hda.c, drives the PCI function `vendor`:`device`:
+ * Haswell's display audio controllers. A macro, so that hda.c and its host
+ * tests need nothing of this driver at the link. */
+#define HDMI_AUDIO_DRIVES(vendor, device) \
+    ((vendor) == 0x8086 && ((device) == 0x0a0c || (device) == 0x0c0c || (device) == 0x0d0c))
 
 /** Serve the running stream from the timer tick: refill the periods the
  * controller has played. No lock held, interrupts off. */

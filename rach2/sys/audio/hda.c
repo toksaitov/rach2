@@ -2641,7 +2641,7 @@ static bool hda_find_controller(void)
 
     if (!found_controller) {
         if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci) ||
-            hdmi_audio_drives(hda_pci.vendor_id, hda_pci.device_id)) {
+            HDMI_AUDIO_DRIVES(hda_pci.vendor_id, hda_pci.device_id)) {
             return false;
         }
     }
@@ -2649,7 +2649,7 @@ static bool hda_find_controller(void)
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &other)) {
         if ((other.bus != hda_pci.bus || other.device != hda_pci.device ||
              other.function != hda_pci.function) &&
-            !hdmi_audio_drives(other.vendor_id, other.device_id)) {
+            !HDMI_AUDIO_DRIVES(other.vendor_id, other.device_id)) {
             klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d", (int)other.vendor_id,
                  (int)other.device_id, (int)other.bus, (int)other.device, (int)other.function);
         }
