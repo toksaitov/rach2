@@ -229,8 +229,10 @@ static const struct drm_display_mode *con_pick_mode(const struct drm_connector *
 /**
  * Probe `dev`'s connectors and choose the console's outputs into `outs`:
  * each connected connector with a mode, or each of unknown status when
- * none is connected, on a CRTC its encoders reach that no other output
- * has. The number chosen. Under the commit lock; may sleep in the probes.
+ * none is connected, through an encoder and on a CRTC that no other
+ * output has, since one commit cannot route two connectors through one
+ * encoder, as DisplayPort and HDMI share a DDI port's. The number chosen.
+ * Under the commit lock; may sleep in the probes.
  */
 static uint32_t con_outputs(struct drm_device *dev, struct con_output *outs)
 {
@@ -238,7 +240,7 @@ static uint32_t con_outputs(struct drm_device *dev, struct con_output *outs)
     const struct drm_display_mode *m;
     struct drm_connector *c;
     struct drm_encoder *e;
-    uint32_t i, j, k, n = 0, used = 0;
+    uint32_t i, j, k, n = 0, used = 0, taken = 0;
     int want, connected = 0;
 
     for (i = 0; i < mc->num_connector; i++) {
@@ -251,12 +253,13 @@ static uint32_t con_outputs(struct drm_device *dev, struct con_output *outs)
         m = c->status == want ? con_pick_mode(c) : NULL;
         for (j = 0; m && j < mc->num_encoder; j++) {
             e = mc->encoders[j];
-            if (!(c->possible_encoders & (1u << j))) {
+            if (!(c->possible_encoders & (1u << j)) || (taken & (1u << j))) {
                 continue;
             }
             for (k = 0; k < mc->num_crtc; k++) {
                 if ((e->possible_crtcs & (1u << k)) && !(used & (1u << k))) {
                     used |= 1u << k;
+                    taken |= 1u << j;
                     outs[n].crtc = mc->crtcs[k];
                     outs[n].connector = c;
                     outs[n].mode = m->info;
