@@ -10,6 +10,7 @@
 
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
+#include "../../proc/mutex.h"
 
 /* The well's request and state bits in each of its four registers. */
 #define I915_PW_REQ   HSW_PWR_WELL_CTL_REQ(HSW_PW_CTL_IDX_GLOBAL)
@@ -103,41 +104,44 @@ static void i915_power_disable(struct drm_i915_private *i915)
 int32_t i915_power_get(struct drm_i915_private *i915)
 {
     struct i915_power *p = &i915->power;
-    int32_t err;
+    int32_t err = 0;
 
+    mutex_lock(&p->lock);
     if (p->count == 0) {
         err = i915_power_enable(i915);
-        if (err < 0) {
-            return err;
+        if (err == 0) {
+            p->on = 1;
+            p->kept = 0;
         }
-        p->on = 1;
-        p->kept = 0;
     }
-    p->count++;
-    return 0;
+    if (err == 0) {
+        p->count++;
+    }
+    mutex_unlock(&p->lock);
+    return err;
 }
 
 void i915_power_put(struct drm_i915_private *i915)
 {
     struct i915_power *p = &i915->power;
 
+    mutex_lock(&p->lock);
     if (p->count == 0) {
         klog(KLOG_ERR, "i915", "power: put with no reference held");
-        return;
+    } else if (--p->count == 0) {
+        if (i915_power_well_in_use(i915)) {
+            p->kept = 1;
+            klog(KLOG_INFO, "i915", "power: display well kept on: a pipe it powers runs");
+        } else {
+            i915_power_disable(i915);
+            p->on = 0;
+        }
     }
-    if (--p->count > 0) {
-        return;
-    }
-    if (i915_power_well_in_use(i915)) {
-        p->kept = 1;
-        klog(KLOG_INFO, "i915", "power: display well kept on: a pipe it powers runs");
-        return;
-    }
-    i915_power_disable(i915);
-    p->on = 0;
+    mutex_unlock(&p->lock);
 }
 
-int32_t i915_power_suspend(struct drm_i915_private *i915)
+/** i915_power_suspend under the well's lock. */
+static int32_t power_suspend_locked(struct drm_i915_private *i915)
 {
     struct i915_power *p = &i915->power;
 
@@ -158,12 +162,23 @@ int32_t i915_power_suspend(struct drm_i915_private *i915)
     return i915_power_well_on(i915) ? -EBUSY : 0;
 }
 
+int32_t i915_power_suspend(struct drm_i915_private *i915)
+{
+    int32_t err;
+
+    mutex_lock(&i915->power.lock);
+    err = power_suspend_locked(i915);
+    mutex_unlock(&i915->power.lock);
+    return err;
+}
+
 int32_t i915_power_init(struct drm_i915_private *i915)
 {
     struct i915_hw *hw = &i915->hw;
     uint32_t bios = i915_read(hw, HSW_PWR_WELL_CTL1), drv;
     int32_t err;
 
+    mutex_init(&i915->power.lock, "i915_power");
     /* hsw_power_well_sync_hw: the BIOS's request becomes the driver's. */
     if (bios & I915_PW_REQ) {
         drv = i915_read(hw, HSW_PWR_WELL_CTL2);
