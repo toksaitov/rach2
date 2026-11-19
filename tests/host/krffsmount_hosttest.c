@@ -1700,8 +1700,8 @@ static void field_failure_rows(void)
         } else {
             buffers[1].bytes = 1;
         }
-        check(volume_write(vol, at, &data, sizeof(data)) != 0 && !cached[at] &&
-                  !cached[at + 1] && !buffers[0].dirty && !buffers[1].dirty,
+        check(volume_write(vol, at, &data, sizeof(data)) != 0 && !cached[at] && !cached[at + 1] &&
+                  !buffers[0].dirty && !buffers[1].dirty,
               "a missing or short second block leaves both field blocks alone");
     }
     buffers[1].bytes = BCACHE_BLOCK_BYTES;
@@ -1725,8 +1725,8 @@ static void refused_repair_row(void)
     sync_error = 1;
     block_writes = 0;
     rc = krffs_volume_mount(&mount, &disk, 0, NULL);
-    check(rc == -EIO && !mount.priv && !buffers[0].dirty && !writes_halted &&
-              !block_writes && __builtin_memcmp(cached, medium, sizeof(cached)) == 0,
+    check(rc == -EIO && !mount.priv && !buffers[0].dirty && !writes_halted && !block_writes &&
+              __builtin_memcmp(cached, medium, sizeof(cached)) == 0,
           "refusing an orphan repair drops its dirty blocks and its device halt");
     sync_error = 0;
     mount.flags = 0;
@@ -1772,8 +1772,8 @@ static void last_close_failure(void)
     setup();
     node = create("open");
     vol = vol_of(&mount);
-    check(kv_open(&mount, node, 0, &handle) == 0 &&
-              kv_unlink(&mount, mount.root, "open") == 0, "unlink while open");
+    check(kv_open(&mount, node, 0, &handle) == 0 && kv_unlink(&mount, mount.root, "open") == 0,
+          "unlink while open");
     refuse_block = 0;
     kv_release(&mount, handle);
     check(vol->fs.halted && vol->fs.check_owed && writes_halted && !vol->opens,
@@ -1822,8 +1822,8 @@ static void reclaim_during_reap(void)
     setup();
     node = create("held");
     h = (krffs_node_t *)(cached + offset_of(&mount, node));
-    check(kv_open(&mount, node, 0, &handle) == 0 &&
-              kv_unlink(&mount, mount.root, "held") == 0, "hold an unlinked node");
+    check(kv_open(&mount, node, 0, &handle) == 0 && kv_unlink(&mount, mount.root, "held") == 0,
+          "hold an unlinked node");
     reclaim_error = 1;
     kv_release(&mount, handle);
     check(!reclaim_error && !recovery_active && vol_of(&mount)->fs.halted &&
@@ -1843,8 +1843,8 @@ static void reclaim_during_store(void)
     vol = vol_of(&mount);
     bcache_recovering(&disk, 1);
     reclaim_error = 2;
-    check(volume_write(vol, at, &data, sizeof(data)) < 0 && !reclaim_error &&
-              !cached[at] && !cached[at + 2] && !buffers[0].dirty && !buffers[1].dirty,
+    check(volume_write(vol, at, &data, sizeof(data)) < 0 && !reclaim_error && !cached[at] &&
+              !cached[at + 2] && !buffers[0].dirty && !buffers[1].dirty,
           "a halt while fetching the second block leaves the entire field alone");
     bcache_recovering(&disk, 0);
     teardown();
