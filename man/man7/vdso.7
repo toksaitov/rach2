@@ -76,7 +76,7 @@ with one of 64-bit seconds,
 .Fn __vdso_clock_getres
 and
 .Fn __vdso_getcpu .
-Each falls back to the i386 system call as the 64-bit one does.
+Where a function falls back, it makes the i386 system call.
 Those of version
 .Dv LINUX_2.5
 are Linux's entry points:
@@ -100,8 +100,8 @@ and
 the return a signal frame's restorer names.
 The library has no names without the prefix, as Linux's has none.
 .Ss The clock from the TSC
-The clock functions answer without the kernel only where it keeps its clock from
-the processor's time-stamp counter, or under KVM from KVM's clock.
+The fine clocks answer without the kernel where the vDSO reads the
+processor's time-stamp counter or KVM's clock.
 At boot it measures the counter against the reference that keeps the
 clock, the HPET or the PM timer, or the 8254 on a machine with neither,
 where
@@ -129,9 +129,11 @@ processor's page by its rate and system time, with no read of the HPET
 or the PM timer, each of which is an exit.
 KVM marks a page stable when its clock is one clock on every processor.
 The library reads KVM's clock only while the boot processor's page is
-marked so, as Linux's does; while it is not, every clock call is a system
-call, which the kernel answers from KVM's clock with no exit, holding
-each reading to the latest one any processor gave.
+marked so, as Linux's does.
+Fine readings that need KVM's page fall back to a system call while its
+stable bit is clear.
+The kernel answers from KVM's clock with no exit, holding each reading
+to the latest one any processor gave.
 A change KVM makes to its clock moves this one with it.
 .Pp
 Where
@@ -158,7 +160,7 @@ which keeps no clock page of KVM's, and
 .Cm no-kvmclock-vsyscall ,
 which keeps the library from KVM's page, read as Linux's do.
 .Pp
-Each reading converts through the boot processor's clock page itself and
+A fine reading from KVM converts through the boot processor's clock page and
 checks its stable bit, as Linux's vDSO does, and enters the kernel the
 moment the bit is clear, without waiting for the tick; the kernel then
 carries the clock on by KVM's clock, moving the page's base to each
@@ -201,8 +203,19 @@ reading through the vDSO and one by the system call agree.
 then gives a count of the counter, rounded up to a nanosecond, for the
 four fine clocks.
 .Pp
-Where the clock does not run from the TSC, each clock function makes the
-system call itself.
+Both libraries always read
+.Dv CLOCK_REALTIME_COARSE ,
+.Dv CLOCK_MONOTONIC_COARSE
+and the seconds for
+.Fn __vdso_time
+from the last tick's data under the sequence count.
+The kernel updates those fields whatever clock source it uses, as Linux
+does.
+When the vDSO has no fine clock source,
+.Fn __vdso_clock_gettime
+for a fine clock and
+.Fn __vdso_gettimeofday
+for the time make the system call.
 .Sh FILES
 .Bl -tag -width "/proc/PID/maps"
 .It Pa /proc/PID/maps
@@ -252,8 +265,8 @@ under KVM
 .Pq Xr sysfs 5 .
 .It Pa /proc/stat
 .Li vdso_tsc ,
-1 where the vDSO reads the TSC or KVM's clock page and 0 where it makes
-the system call, and
+1 where the vDSO reads fine time from the TSC or KVM's clock page and 0
+where fine time takes the system call, and
 .Li clock_calls ,
 the system calls of the clock made since boot:
 .Fn clock_gettime ,

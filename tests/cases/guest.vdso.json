@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "guest.vdso",
-  "summary": "The vDSO answers the clock calls from the TSC without a system call where the kernel keeps its clock from the TSC, and makes the system call where it does not; each case boots the test image on two processors and runs vdsomusl",
+  "summary": "The vDSO reads fine time from the TSC when available and coarse time from the data page in every mode; each case boots the test image on two processors and runs vdsomusl",
   "cases": [
     {
       "case_id": "guest.vdso.tsc",
@@ -24,7 +24,7 @@
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
         {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
         {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux, whose get_user_pages refuses the region", "source": "program"},
-        {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000", "source": "program"}
+        {"assertion_id": "calls", "checks": "40,000 fine readings and 60,000 coarse readings, including direct calls of __vdso_time, each raise /proc/stat's clock_calls by fewer than 1,000 per group", "source": "program"}
       ],
       "branches": [
         {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
@@ -63,7 +63,7 @@
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
         {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
         {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux, whose get_user_pages refuses the region", "source": "program"},
-        {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000", "source": "program"}
+        {"assertion_id": "calls", "checks": "40,000 fine readings and 60,000 coarse readings, including direct calls of __vdso_time, each raise /proc/stat's clock_calls by fewer than 1,000 per group", "source": "program"}
       ],
       "branches": [
         {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
@@ -83,7 +83,7 @@
     },
     {
       "case_id": "guest.vdso.syscall",
-      "behavior": "Under rach2.notsc, on two processors, the x86-64 vDSO is mapped and found as with the TSC, and each of its functions makes the system call, so that every clock call through musl is counted; the i686 kernel maps no vDSO and every clock call is a system call",
+      "behavior": "Under rach2.notsc the x86-64 kernel's vDSOs make system calls for fine clock readings and read time and the coarse clocks from the data page. The i686 kernel maps no vDSO, so every clock reading makes a system call",
       "units": ["musl/vdsomusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -102,7 +102,7 @@
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
         {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
         {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux, whose get_user_pages refuses the region", "source": "program"},
-        {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by at least 100,000", "source": "program"}
+        {"assertion_id": "calls", "checks": "of 40,000 fine and 60,000 coarse readings, clock_calls counts the fine group on the x86-64 kernel and both groups on i686, allowing fewer than 1,000 extra calls per group. The coarse group reads both coarse clocks and calls __vdso_time directly where mapped", "source": "program"}
       ],
       "branches": [
         {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
@@ -118,7 +118,7 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "boot", "reason": "the vDSO makes the system call only when the kernel boots with rach2.notsc"},
+      "native": {"plan": "none", "class": "boot", "reason": "this case needs a boot with rach2.notsc to disable the vDSO's fine clock"},
       "ia32": {"runs": true, "why": "the i686 kernel maps no vDSO, while the x86-64 kernel gives an i386 program the 32-bit vDSO, as Linux's does; vdsomusl reports the group kernel from ETUDE_KERNEL, the kernel's architecture, and checks the 32-bit image's own functions there"}
     }
   ]

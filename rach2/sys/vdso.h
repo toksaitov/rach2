@@ -13,7 +13,7 @@ struct vm_space;
 struct vm_file;
 
 /*
- * What the vDSO's clock functions do: call the kernel; read the TSC; or
+ * What the vDSO's fine clock functions do: call the kernel; read the TSC; or
  * read KVM's clock, the TSC converted through KVM's clock page for the boot
  * processor, mapped below the data page, while that page has
  * PVCLOCK_TSC_STABLE_BIT set, checked inside each reading, and call the
@@ -51,7 +51,9 @@ struct vm_file;
  * tick intervals (kernel/time/timekeeping.c:2164-2193), never at an
  * interrupt between ticks, so that a coarse reading is less than a tick
  * past the tick count; the edge is no later than the base, so no coarse
- * reading is later than a fine one.
+ * reading is later than a fine one while the fine clock runs. The page
+ * keeps the coarse clocks in every mode, and time() reads coarse real
+ * time's seconds.
  *
  * The time zone, which gettimeofday gives, is the kernel's
  * (`vclock_set_tz`), outside the sequence count, as Linux keeps it.
@@ -185,9 +187,9 @@ void vclock_watch_cpu(void);
  * The clock `which` now, VCLOCK_READ_MONO, VCLOCK_READ_REAL or
  * VCLOCK_READ_RAW, from the TSC, or with `coarse` as of the last tick, in
  * `*sec` and `*nsec`, which is below 10^9; the raw clock has no coarse
- * reading. 0 with nothing read when the clock does not run from the TSC,
- * which each pass of the reading checks on the page, so that a reading the
- * clock's stop overtakes reads nothing. In VCLOCK_PVCLOCK, once KVM's page
+ * reading. A coarse reading needs only the data page. A fine reading
+ * returns 0 with nothing read when that clock is stopped, which each pass
+ * checks on the page. In VCLOCK_PVCLOCK, once KVM's page
  * for the boot processor withdraws its stable bit, where the vDSO makes
  * the system call, the clock is carried on from the page's base by KVM's
  * clock read from the running processor's page, never behind a reading
@@ -210,9 +212,9 @@ int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles);
  * Make real time the monotonic clock plus `sec` seconds and `nsec`
  * nanoseconds, from 0 to 10^9 - 1, the offset clock.c gives at the anchor,
  * each setting and each leap second (`rtc_offset`): the page's base moves to
- * the page's count now and real time there is the monotonic clock's plus the
- * offset. The offset is kept for the clock's start when it does not run
- * yet. Interrupts may be on or off; the caller may hold clock.c's lock.
+ * the page's count now when the fine clock runs. Coarse real time takes
+ * the offset in every mode. Interrupts may be on or off; the caller may
+ * hold clock.c's lock.
  */
 void vclock_set_wall(int64_t sec, int32_t nsec);
 
