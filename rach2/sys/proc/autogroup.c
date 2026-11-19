@@ -15,10 +15,6 @@
 #include "../syscall_internal.h"
 #include "../timer.h"
 
-/* /proc/sys/kernel/sched_autogroup_enabled, as Linux's
- * sysctl_sched_autogroup_enabled (fair.h). */
-int fair_groups_enabled = 1;
-
 /* The last group's id, as Linux's autogroup_seq_nr. */
 static unsigned long autogroup_ids;
 
