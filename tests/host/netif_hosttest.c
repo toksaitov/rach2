@@ -419,6 +419,20 @@ int socket_tcp_peek_at(struct socket *s, uint32_t off, uint8_t *buf, int len)
     return 0;
 }
 
+/** Ignore TCP_QUICKACK: no row sets it. */
+void tcp_quickack_set(struct socket *sock, int val)
+{
+    (void)sock;
+    (void)val;
+}
+
+/** Report TCP_QUICKACK as a fresh socket's 1: no row reads it. */
+int tcp_quickack_get(const struct socket *sock)
+{
+    (void)sock;
+    return 1;
+}
+
 /** Report whether a user range lies inside `user`, as `user_buffer_ok`. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
