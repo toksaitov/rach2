@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 19, 2026
 .Dt GETXATTR 2
 .Os
 .Sh NAME
@@ -22,12 +22,23 @@ An extended attribute is a name and a value kept with a file outside its
 data.
 The ext2 file system stores attributes whose names begin with
 .Li user.
-on regular files and directories.
-A value is an arbitrary sequence of bytes, including an empty sequence.
-An attribute name is at most 255 bytes, not counting its terminating NUL.
-All names, values and their format overhead must fit one file-system block.
+on regular files and directories; all names, values and their format
+overhead must fit one file-system block, and other namespaces fail with
+.Er EOPNOTSUPP .
+A tmpfs keeps, in memory, attributes whose names begin with
+.Li user. ,
+.Li trusted.
+or
+.Li security.
+on every kind of node, as Linux's tmpfs does, and lists them in the order
+they were made; on a tmpfs with a limit of inodes each takes 40 bytes and
+its name and value of the space that limit gives, 1024 bytes an inode, and
+one that does not fit fails with
+.Er ENOSPC .
 Other namespaces fail with
 .Er EOPNOTSUPP .
+A value is an arbitrary sequence of bytes, including an empty sequence.
+An attribute name is at most 255 bytes, not counting its terminating NUL.
 Other file systems return an empty list and fail the other operations with
 .Er EOPNOTSUPP .
 .Pp
@@ -61,6 +72,16 @@ removes an existing name, or fails with
 .Pp
 Reading a user attribute requires read permission, and changing one requires
 write permission.
+A trusted attribute is read, changed and listed by a privileged caller
+alone; to another caller a read fails with
+.Er ENODATA ,
+a change with
+.Er EPERM ,
+and a listing leaves it out.
+Anyone may read a security attribute, and only a privileged caller change
+one, which is otherwise
+.Er EPERM ,
+as Linux's capability rules have it.
 Only a sticky directory's owner or a privileged caller may change its
 attributes.
 User attributes on a symbolic link or a special file fail with
@@ -126,8 +147,7 @@ is not a directory.
 .It Bq Er EOPNOTSUPP
 The file system or namespace stores no extended attributes.
 .It Bq Er EINVAL
-Unknown flags, or an empty name after
-.Li user. .
+Unknown flags, or an empty name after a namespace's prefix.
 .It Bq Er ENODATA
 The requested attribute does not exist.
 .It Bq Er EEXIST
@@ -138,11 +158,11 @@ A name exceeds 255 bytes or an output buffer is too small.
 .It Bq Er E2BIG
 A set value exceeds 65536 bytes.
 .It Bq Er ENOSPC
-The attributes do not fit a block, or no free block holds a new or shared-block replacement.
+The attributes do not fit a block, or no free block holds a new or shared-block replacement, on ext2; or a tmpfs has no inode space left for the value.
 .It Bq Er EACCES
 The file's permissions deny the operation.
 .It Bq Er EPERM
-The file's type, sticky bit or inode flags forbid the change.
+The file's type, sticky bit or inode flags forbid the change, or a caller without privilege changes a trusted or security attribute.
 .It Bq Er EROFS
 The mount is read-only.
 .It Bq Er EIO

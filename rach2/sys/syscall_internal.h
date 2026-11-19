@@ -489,13 +489,15 @@ long sys_readahead(isr_params_t *params);
  * here, and the return is then 0, -EFAULT, -EPERM or the type's error;
  * otherwise it is 0.
  *
- * Of the types here only ext2 keeps the flags and the generation, and only for
- * a file or a directory; any other descriptor leaves the request to the rest of
+ * ext2 keeps the flags and the generation, and tmpfs the flags alone, as
+ * Linux's do, and only a file or a directory is asked; any other descriptor,
+ * and FS_IOC_GETVERSION on a tmpfs, leaves the request to the rest of
  * ioctl(2), which answers -ENOTTY, as Linux does for a file system without
- * them. The file's owner, or a privileged caller, sets the flags the file
- * system keeps; the immutable and append-only flags, which the VFS enforces,
- * only a privileged caller changes, as CAP_LINUX_IMMUTABLE does on Linux, and
- * another caller is -EPERM.
+ * them. The file's owner, or a privileged caller, sets the flags; the
+ * immutable and append-only flags, which the VFS enforces, only a privileged
+ * caller changes, as CAP_LINUX_IMMUTABLE does on Linux, and another caller is
+ * -EPERM. The type answers a flag it does not keep: ext2 drops it, and tmpfs
+ * answers -EOPNOTSUPP.
  */
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
 

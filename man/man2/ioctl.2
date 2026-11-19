@@ -1,4 +1,4 @@
-.Dd November 12, 2026
+.Dd November 19, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -467,13 +467,17 @@ reads the start to tell a whole disk from a partition, since a whole
 disk's name here ends in a digit.
 .El
 .Ss File attribute requests
-A file or a directory of an ext2 volume accepts the requests of
+A file or a directory of an ext2 volume or a tmpfs accepts the requests of
 .Xr chattr 8
 and
 .Xr lsattr 8 ;
 a file of another type answers
 .Er ENOTTY ,
 as Linux does for a file system that keeps no flags.
+A tmpfs, as Linux's, keeps no generation, and answers
+.Dv FS_IOC_GETVERSION
+with
+.Er ENOTTY .
 .Bl -tag -width "FS_IOC_GETVERSION"
 .It Dv FS_IOC_GETFLAGS
 Request 0x80046601 writes the inode's flags, the bits of
@@ -481,10 +485,18 @@ Request 0x80046601 writes the inode's flags, the bits of
 that Linux shows, as a 32-bit integer through
 .Fa arg .
 .It Dv FS_IOC_SETFLAGS
-Request 0x40046602 sets the flags ext2 lets a user change from the
-integer at
+Request 0x40046602 sets the flags the file system lets a user change from
+the integer at
 .Fa arg ,
-for the file's owner or a privileged caller; only a privileged caller
+for the file's owner or a privileged caller.
+ext2 keeps those of Linux's ext2 and drops any other; a tmpfs keeps the
+immutable, append-only, no-dump, 0x40, and no-access-time, 0x80, flags,
+fails with
+.Er EOPNOTSUPP
+for any other and changes nothing then, and gives a new node the last two
+of its directory's, as Linux's tmpfs does.
+A file with the no-access-time flag keeps its access time across a read.
+Only a privileged caller
 changes the immutable flag, 0x10, and the append-only flag, 0x20, as
 .Dv CAP_LINUX_IMMUTABLE
 does on Linux.

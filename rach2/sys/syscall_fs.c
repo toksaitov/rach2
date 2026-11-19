@@ -6512,7 +6512,7 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
         return 0;
     }
     rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st);
-    if (rc != 0 || !st.flags_known) {
+    if (rc != 0 || !st.flags_known || (request == FS_IOC_GETVERSION && !st.generation_known)) {
         return 0;
     }
     *handled = 1;
@@ -6670,27 +6670,50 @@ static int xattr_args(isr_params_t *params, struct xattr_args *a)
     return 0;
 }
 
-/** Check Linux's user namespace rules under the inode lock.
- * Only regular files and directories take user values; a sticky directory
- * permits its owner or a privileged caller to change them. */
+/** Whether the attribute name `name` begins with `prefix`. */
+static int xattr_prefix(const char *name, const char *prefix)
+{
+    while (*prefix && *name == *prefix) {
+        name++;
+        prefix++;
+    }
+    return *prefix == '\0';
+}
+
+/**
+ * Check access to an attribute under the inode lock, as Linux's
+ * xattr_permission and the capability module's cap_inode_setxattr and
+ * cap_inode_removexattr do. The security namespace is read by anyone, and
+ * changed only by a privileged caller, CAP_SYS_ADMIN's, as is the trusted
+ * namespace, which is read by such a caller alone and is -ENODATA to any
+ * other; the system namespace is left to the type. Only regular files and
+ * directories take user values, and a sticky directory permits its owner or
+ * a privileged caller to change them; a user value and a name of no
+ * namespace need the file's read or write permission.
+ */
 static int xattr_access(const struct vfs_ref *ref, const struct vfs_xattr *arg)
 {
+    int write = arg->op >= VFS_XATTR_SET;
     struct vfs_stat st;
     int rc;
 
-    if (arg->op == VFS_XATTR_LIST ||
-        !(arg->name[0] == 'u' && arg->name[1] == 's' && arg->name[2] == 'e' &&
-          arg->name[3] == 'r' && arg->name[4] == '.'))
+    if (arg->op == VFS_XATTR_LIST || xattr_prefix(arg->name, "system."))
         return 0;
-    rc = vfs_getattr(ref->mnt, ref->node, &st);
-    if (rc)
-        return rc;
-    if ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)
-        return arg->op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
-    if (arg->op >= VFS_XATTR_SET && (st.mode & 01000u) && (st.mode & 0170000u) == 0040000u &&
-        proc_fsuid(current_proc) != st.uid && !proc_fs_privileged(current_proc))
-        return -EPERM;
-    return cred_access_ref(ref, arg->op >= VFS_XATTR_SET ? CRED_W : CRED_R, 0);
+    if (xattr_prefix(arg->name, "security."))
+        return write && !cred_privileged() ? -EPERM : 0;
+    if (xattr_prefix(arg->name, "trusted."))
+        return cred_privileged() ? 0 : write ? -EPERM : -ENODATA;
+    if (xattr_prefix(arg->name, "user.")) {
+        rc = vfs_getattr(ref->mnt, ref->node, &st);
+        if (rc)
+            return rc;
+        if ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)
+            return write ? -EPERM : -ENODATA;
+        if (write && (st.mode & 01000u) && (st.mode & 0170000u) == 0040000u &&
+            proc_fsuid(current_proc) != st.uid && !proc_fs_privileged(current_proc))
+            return -EPERM;
+    }
+    return cred_access_ref(ref, write ? CRED_W : CRED_R, 0);
 }
 
 /** Dispatch an attribute call with copies outside the inode lock.
