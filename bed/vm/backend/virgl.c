@@ -15,6 +15,8 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
+#include <sys/mman.h>
+#include <sys/uio.h>
 
 #include <virglrenderer.h>
 
@@ -32,13 +34,21 @@
 /* The Venus contexts, whose attached resources the probe imports. */
 #define VENUS_CTXS 16
 
-/* The blobs pinned for page lists at once, one per resource at most. */
+/* The blobs and backings pinned for page lists at once, one per resource
+ * at most. */
 #define PINS VD_OBJS
 
-/* A blob pinned through the module: its resource and the pin's handle. */
+/* virtio-gpu's cache type of the VM's ordinary memory. */
+#define MAP_CACHE_CACHED 1u
+
+/* A blob or a backing pinned through the module: its resource and the
+ * pin's handle. A backing is a memfd of the VM's memory, mapped here and
+ * attached to the resource as its one iovec, which virglrenderer keeps a
+ * pointer to until the detach, so the iovec has storage of its own. */
 struct vr_pin {
     uint32_t id, handle;
-    uint32_t map_info; /* the cache type virglrenderer gave at the pin */
+    uint32_t map_info;  /* the cache type virglrenderer gave at the pin */
+    struct iovec *back; /* a backing's mapping and length, or 0 for a blob */
 };
 
 /* One record for each command the device holds until its fence retires. */
@@ -578,13 +588,21 @@ static struct vr_pin *pin_find(struct vr *r, uint32_t id)
     return 0;
 }
 
-/** Let go of a pin in the module and drop it from the table. */
+/** Let go of a pin in the module and drop it from the table; a backing is
+ * detached from its resource first and its mapping let go of after. */
 static void pin_drop(struct vr *r, struct vr_pin *p)
 {
     uint32_t handle = p->handle;
 
+    if (p->back) {
+        virgl_renderer_resource_detach_iov((int)p->id, 0, 0);
+    }
     if (ioctl(r->module, VGPUSHM_IOC_UNPIN, &handle) != 0) {
         fprintf(stderr, "backend: unpin: resource %u: %s\n", (unsigned)p->id, strerror(errno));
+    }
+    if (p->back) {
+        munmap(p->back->iov_base, p->back->iov_len);
+        free(p->back);
     }
     r->pc.unpinned++;
     *p = r->pins[--r->npins];
@@ -636,6 +654,7 @@ static struct vr_pin *pin_new(struct vr *r, const struct vd_pages *q)
     p->id = q->id;
     p->handle = pin.handle;
     p->map_info = info;
+    p->back = 0;
     r->pc.pinned++;
     if (r->verbose) {
         fprintf(stderr, "backend: pin: resource %u, fd type %u, %s, %llu pages\n", (unsigned)q->id,
@@ -645,17 +664,12 @@ static struct vr_pin *pin_new(struct vr *r, const struct vd_pages *q)
     return p;
 }
 
-/** A mappable blob's page list from q->first: pinned at the first ask,
- * then read from the module. Returns 0 or VD_RESP_ERR_UNSPEC. */
-static int op_pages(void *c, struct vd_pages *q)
+/** The runs of pin p from q->first, read from the module. Returns 0 or
+ * VD_RESP_ERR_UNSPEC. */
+static int pin_runs(struct vr *r, const struct vr_pin *p, struct vd_pages *q)
 {
-    struct vr *r = c;
-    struct vr_pin *p = pin_find(r, q->id);
     struct vgpushm_pages pg;
 
-    if (p == 0 && (p = pin_new(r, q)) == 0) {
-        return VD_RESP_ERR_UNSPEC;
-    }
     memset(&pg, 0, sizeof(pg));
     pg.handle = p->handle;
     pg.max = q->max < VGPUSHM_PAGES_MAX_RUNS ? q->max : VGPUSHM_PAGES_MAX_RUNS;
@@ -670,6 +684,102 @@ static int op_pages(void *c, struct vd_pages *q)
     q->count = pg.count;
     q->map_info = p->map_info;
     return 0;
+}
+
+/** A mappable blob's page list from q->first: pinned at the first ask,
+ * then read from the module. Returns 0 or VD_RESP_ERR_UNSPEC. */
+static int op_pages(void *c, struct vd_pages *q)
+{
+    struct vr *r = c;
+    struct vr_pin *p = pin_find(r, q->id);
+
+    if (p == 0 && (p = pin_new(r, q)) == 0) {
+        return VD_RESP_ERR_UNSPEC;
+    }
+    return pin_runs(r, p, q);
+}
+
+/**
+ * Make resource q->id's backing of q->size bytes of the VM's memory: a
+ * memfd, mapped shared, pinned whole through the module for the driver's
+ * epoch, which brings in its pages zeroed, and attached to the resource as
+ * its one iovec, as QEMU attaches a guest's pages. Returns 0 with the pin
+ * in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has no memory for it, or
+ * VD_RESP_ERR_UNSPEC.
+ */
+static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
+{
+    struct vgpushm_pin pin;
+    struct iovec *iov = calloc(1, sizeof(*iov));
+    int fd = -1, err = iov == 0 ? ENOMEM : 0;
+    void *map = MAP_FAILED;
+
+    if (err == 0 && (r->module < 0 || r->npins == PINS)) {
+        err = ENOSPC;
+    }
+    if (err == 0 && ((fd = memfd_create("vgpu-backing", MFD_CLOEXEC)) < 0 ||
+                     ftruncate(fd, (off_t)q->size) != 0)) {
+        err = errno;
+    }
+    if (err == 0 &&
+        (map = mmap(0, q->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+        err = errno;
+    }
+    memset(&pin, 0, sizeof(pin));
+    pin.fd = fd;
+    pin.epoch = q->epoch;
+    pin.size = q->size;
+    if (err == 0 && ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0) {
+        err = errno;
+    }
+    if (fd >= 0) {
+        close(fd); /* the mapping and the pin hold the file */
+    }
+    if (err == 0) {
+        iov->iov_base = map;
+        iov->iov_len = q->size;
+        /* virglrenderer answers EINVAL, of either sign by version. */
+        err = virgl_renderer_resource_attach_iov((int)q->id, iov, 1);
+        err = err < 0 ? -err : err;
+        if (err != 0) {
+            ioctl(r->module, VGPUSHM_IOC_UNPIN, &pin.handle);
+        }
+    }
+    if (err != 0) {
+        fprintf(stderr, "backend: back: resource %u: refused: %llu bytes: %s\n", (unsigned)q->id,
+                (unsigned long long)q->size, strerror(err));
+        if (map != MAP_FAILED) {
+            munmap(map, q->size);
+        }
+        free(iov);
+        r->pc.refused++;
+        return err == ENOMEM ? VD_RESP_ERR_OUT_OF_MEMORY : VD_RESP_ERR_UNSPEC;
+    }
+    *out = &r->pins[r->npins++];
+    (*out)->id = q->id;
+    (*out)->handle = pin.handle;
+    (*out)->map_info = MAP_CACHE_CACHED;
+    (*out)->back = iov;
+    r->pc.pinned++;
+    r->pc.backed++;
+    return 0;
+}
+
+/** A resource's backing's page list from q->first: made at the first ask,
+ * then read from the module. Returns 0 or a VD_RESP_ERR_*. */
+static int op_back(void *c, struct vd_pages *q)
+{
+    struct vr *r = c;
+    struct vr_pin *p = pin_find(r, q->id);
+    int err;
+
+    if (p == 0 && (err = back_new(r, q, &p)) != 0) {
+        return err;
+    }
+    if (!p->back) {
+        return VD_RESP_ERR_UNSPEC;
+    }
+    return pin_runs(r, p, q);
 }
 
 /** Let go of a blob's pin. */
@@ -724,6 +834,7 @@ const struct vd_ops vr_ops = {
     .reset = op_reset,
     .pages = op_pages,
     .unpin = op_unpin,
+    .back = op_back,
 };
 
 /** Pin blobs for page lists through the module's node fd. */

@@ -329,7 +329,8 @@ static void options(int argc, char **argv, struct opts *o)
 static void make_offer(struct vd_offer *f, const struct src *s, const struct opts *o, struct vr *r,
                        int edid)
 {
-    static const struct vgs_limits lim = {512, 64, 0, 1024, VGS_CHAIN_MAX, 1u << 20, 256, 0};
+    static const struct vgs_limits lim = {VD_OBJS - 64,  64,       0,   1024,
+                                          VGS_CHAIN_MAX, 1u << 20, 256, 0};
 
     memset(f, 0, sizeof(*f));
     f->limits = lim;
@@ -339,10 +340,10 @@ static void make_offer(struct vd_offer *f, const struct src *s, const struct opt
         f->features |= 1ULL << VD_F_EDID;
     }
     f->transport_features = s->efd[0] >= 0 ? VGS_TF_DOORBELL : 0;
-    /* Page lists need the module, which pins blobs, and Rach2 finds the VM
-       by its doorbell. */
+    /* Page lists need the module, which pins blobs and backings, and Rach2
+       finds the VM by its doorbell. */
     if (s->dev >= 0 && s->efd[0] >= 0 && !o->nopages) {
-        f->transport_features |= VGS_TF_PAGES;
+        f->transport_features |= VGS_TF_PAGES | VGS_TF_BACKING;
     }
     f->peer = o->peer >= 0 ? (uint32_t)o->peer : s->peer <= 0xffff ? s->peer : 1;
     f->num_scanouts = 1;
@@ -372,10 +373,11 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
             (unsigned long long)d->n.faults, (unsigned long long)s->wakes[0],
             (unsigned long long)s->wakes[1], (unsigned long long)s->polled);
     fprintf(stderr,
-            "backend: result: maps %llu, unmaps %llu, pinned %llu, refused %llu, "
-            "unpinned %llu\n",
+            "backend: result: maps %llu, unmaps %llu, backings %llu, pinned %llu, "
+            "backed %llu, refused %llu, unpinned %llu\n",
             (unsigned long long)d->n.maps, (unsigned long long)d->n.unmaps,
-            (unsigned long long)pc->pinned, (unsigned long long)pc->refused,
+            (unsigned long long)d->n.backs, (unsigned long long)pc->pinned,
+            (unsigned long long)pc->backed, (unsigned long long)pc->refused,
             (unsigned long long)pc->unpinned);
     if (s->dev >= 0 && ioctl(s->dev, VGPUSHM_IOC_COUNTS, &mc) == 0) {
         fprintf(stderr, "backend: result: module irqs %llu+%llu, signals %llu+%llu, rings %llu\n",
@@ -551,10 +553,11 @@ int main(int argc, char **argv)
     dev.ring = ring;
     dev.ring_cookie = &s;
     dev.verbose = o.verbose;
-    fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s, %u capsets, %s\n",
+    fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s%s, %u capsets, %s\n",
             (unsigned long long)s.size, (unsigned)off.peer,
             off.transport_features ? "doorbells" : "polling",
-            off.transport_features & VGS_TF_PAGES ? ", page lists" : "", (unsigned)off.num_capsets,
+            off.transport_features & VGS_TF_PAGES ? ", page lists" : "",
+            off.transport_features & VGS_TF_BACKING ? ", backings" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
     stall_start(&dev);
     serve(&dev, &s, r, o.once);
