@@ -513,7 +513,7 @@ static void vn_wake(struct vn_vq *q)
 
 /** The kick's hook: the thread looks at the ring. Called with the
  * eventfd's lock held and interrupts off, from the guest's doorbell (a KVM
- * ioeventfd, without the big lock) or a write by QEMU (with it), so it
+ * ioeventfd, perhaps without the big lock) or a write by QEMU, so it
  * only marks the ring and wakes the thread, as Linux's vhost_poll_wakeup
  * queues the work. */
 static int vn_kick(struct eventfd_hook *h)
