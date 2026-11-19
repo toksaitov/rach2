@@ -87,6 +87,7 @@ extern char **environ;
 #define RX_BUF   0x2000 /* NUM receive buffers of BUFLEN */
 #define TX_BUF   0xc000
 #define BUFLEN   2048
+#define STRAYS   (4 * NUM) /* other frames a wait takes before its own */
 
 enum {
     TAP_OPEN,
@@ -375,7 +376,7 @@ static int take_call(int call)
 }
 
 /** Count what the receive ring's call `call` holds now, without waiting:
- * 0, or -1 when poll fails or as `take_call` fails. */
+ * 0, or -1 when poll fails or reports no data, or as `take_call` fails. */
 static int drain_calls(int call)
 {
     struct pollfd p;
@@ -384,6 +385,10 @@ static int drain_calls(int call)
     p.fd = call;
     p.events = POLLIN;
     while ((r = poll(&p, 1, 0)) > 0) {
+        if (!(p.revents & POLLIN)) {
+            errno = EIO;
+            return -1;
+        }
         if (take_call(call) != 0) {
             return -1;
         }
@@ -414,12 +419,17 @@ static int settle_calls(int call)
     return 0;
 }
 
-/** Offer the next receive buffer and kick the receive ring, for a frame
- * waiting in the tap: 0, or -1 when the kick fails. */
+/** Offer the next receive buffer, unless one offered is not yet used and
+ * looked at, and kick the receive ring, for a frame waiting in the tap: 0,
+ * or -1 when the kick fails. So the ring never holds more than one buffer,
+ * and no frame comes but the one of the buffer the program waits on. */
 static int offer_one(void)
 {
     uint64_t one = 1;
 
+    if (rx_avail_idx != rx_seen) {
+        return 0;
+    }
     offer_rx(rx_avail_idx % NUM);
     return write(ev[0], &one, 8) == 8 ? 0 : -1;
 }
@@ -427,18 +437,18 @@ static int offer_one(void)
 /**
  * Wait for the frame `match` accepts with `text` on the receive ring, one
  * frame at a time: offer a buffer when the ring holds none, read the call,
- * which comes once the frame is on the ring, and settle the count, so that
- * each frame has its own call before the next buffer is offered. The
- * buffer's offset; -1 after NUM other frames; -2 when a kick, a read of the
- * call or the count fails.
+ * which comes once the buffer's frame is on the ring, settle the count and
+ * look at the frame, so that each frame has its own call before the next
+ * buffer is offered. The buffer's offset; -1 after STRAYS other frames; -2
+ * when a kick, a read of the call or the count fails.
  */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
 {
     int at, i;
 
-    for (i = 0; i <= NUM; i++) {
-        if (rx_avail_idx == get16(RX_USED + 2) && offer_one() != 0) {
+    for (i = 0; i <= STRAYS; i++) {
+        if (offer_one() != 0) {
             return -2;
         }
         if (take_call(call) != 0 || settle_calls(call) != 0) {
@@ -618,7 +628,9 @@ static int exchange(void)
 
 /** A datagram sent while the receive ring has a buffer comes into one, at
  * once or from the thread, with its own call; then the rings let the tap
- * go, and the calls read equal the used entries. */
+ * go, and the calls read equal the used entries. A frame of the stack's
+ * waiting in the tap may take the buffer first, and the datagram then
+ * comes from the thread into the next. */
 static int direct(void)
 {
     int at;
