@@ -1,4 +1,4 @@
-.Dd November 13, 2026
+.Dd November 19, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -121,6 +121,56 @@ instead.
 .It Dv O_PATH
 Name the file without opening it; see
 .Sx Path descriptors .
+.It Dv O_TMPFILE
+Make a regular file with no name on the file system of the directory
+.Fa path
+names, and open it.
+.Dv O_TMPFILE
+includes
+.Dv O_DIRECTORY ;
+it must be given with
+.Dv O_WRONLY
+or
+.Dv O_RDWR ,
+or the call returns
+.Er EINVAL
+before the path is read, as on Linux.
+With
+.Dv O_PATH
+it is
+.Dv O_DIRECTORY
+alone.
+The directory needs write and search permission, and the file takes
+the permission bits
+.Li "mode & 07777 & ~umask"
+and the ownership a created file takes.
+Without
+.Dv O_EXCL ,
+.Xr linkat 2
+may give the file a name, once, through
+.Pa /proc/self/fd/ Ns Ar N
+with
+.Dv AT_SYMLINK_FOLLOW
+or through the descriptor with
+.Dv AT_EMPTY_PATH ;
+with
+.Dv O_EXCL
+it can never have one.
+A file with no name is freed at its last close.
+Its link in
+.Pa /proc/self/fd
+reads as the directory's path followed by
+.Pa /#INO (deleted) ,
+INO being its inode number, as on Linux.
+ext2 and tmpfs make such files; FAT32, exFAT and KRFFS volumes, and the
+KRFFS boot root, return
+.Er EOPNOTSUPP ,
+as do
+.Pa /dev ,
+.Pa /proc
+and
+.Pa /sys ,
+which are not mounted file systems here.
 .El
 .Pp
 Other flag bits are not checked by the ordinary-file open handler and
@@ -661,6 +711,9 @@ and
 .Dv O_DIRECTORY
 were given together without
 .Dv O_PATH ,
+.Dv O_TMPFILE
+was given with
+.Dv O_RDONLY ,
 a file system rejects the new name, required attributes cannot be
 obtained, truncation selects an ext2 object that is not a regular file,
 or a FIFO was opened with the access mode 3;
@@ -721,6 +774,9 @@ pseudo-terminal has no open master, a socket file was opened, a device
 node names no device present, or a FIFO was opened for writing with
 .Dv O_NONBLOCK
 and no reader.
+.It Bq Er EOPNOTSUPP
+.Dv O_TMPFILE
+named a directory of a file system that makes no file without a name.
 .It Bq Er EOVERFLOW
 The generated
 .Pa /proc/disk

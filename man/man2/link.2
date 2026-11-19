@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 19, 2026
 .Dt LINK 2
 .Os
 .Sh NAME
@@ -104,8 +104,46 @@ in
 .Fa flags
 follows the source's final symbolic link.
 .Dv AT_EMPTY_PATH
-is accepted as a flag but has no effect: an empty path still returns
-.Er ENOENT .
+lets an empty
+.Fa oldpath
+name the file
+.Fa olddirfd
+is open on, of any kind and with or without a name, the file an
+.Dv O_PATH
+descriptor names among them, or the working directory for
+.Dv AT_FDCWD ,
+which as a directory returns
+.Er EPERM .
+It gives a file
+.Xr open 2
+made with
+.Dv O_TMPFILE
+its name.
+As in Linux 6.12, a relative
+.Fa oldpath
+with
+.Dv AT_EMPTY_PATH ,
+the empty one among them, requires that
+.Fa olddirfd
+was opened by the caller, or returns
+.Er ENOENT :
+by the same process, before any
+.Xr execve 2 ,
+with the same file-system user and group IDs, unless the caller has
+.Dv CAP_DAC_READ_SEARCH .
+A descriptor of a pipe, a socket, or a file of
+.Pa /dev
+or
+.Pa /proc
+returns
+.Er EXDEV .
+A file whose last name is gone returns
+.Er ENOENT ,
+unless
+.Dv O_TMPFILE
+without
+.Dv O_EXCL
+made it and it has had no name yet.
 Other flag bits return
 .Er EINVAL .
 These constants are declared in
@@ -274,11 +312,20 @@ A path, directory prefix, component, or symbolic-link expansion is too long.
 The copied path and its directory prefix must fit 4096 bytes, including
 the terminating null byte.
 .It Bq Er ENOENT
-A path is empty, the source or a required path component does not exist,
+A path is empty without
+.Dv AT_EMPTY_PATH ,
+the source or a required path component does not exist,
 a
 .Fn link
-destination with a slash after its last name names nothing, or the
-entry to unlink does not exist on a file system that reports this error.
+destination with a slash after its last name names nothing, the
+entry to unlink does not exist on a file system that reports this error,
+the source has no name left and may not take one, or
+.Dv AT_EMPTY_PATH
+was given with a relative
+.Fa oldpath
+and
+.Fa olddirfd
+was not opened by the caller's credentials.
 .It Bq Er ENOMEM
 The file system could not allocate storage needed to resolve a path.
 .It Bq Er ENOSPC
@@ -319,7 +366,13 @@ The KRFFS boot root refuses hard links before checking read-only state.
 The operation requires a write on a read-only mount or in a synthetic
 namespace, or the file system has no unlink operation.
 .It Bq Er EXDEV
-The hard-link source and destination are on different mounts.
+The hard-link source and destination are on different mounts, or with
+.Dv AT_EMPTY_PATH
+.Fa olddirfd
+is open on a pipe, a socket, or a file of
+.Pa /dev
+or
+.Pa /proc .
 .El
 .Sh SEE ALSO
 .Xr chmod 2 ,

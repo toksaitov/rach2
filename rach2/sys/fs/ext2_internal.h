@@ -262,6 +262,7 @@ struct ext2_node {
      * a free, even when unlinked. No store clears it. */
     int fenced;
     int unlinked;           /* no name left; the inode and its blocks go at the last put */
+    int linkable;           /* nameless from O_TMPFILE, and a link may name it */
     int state;              /* N_LOADING, N_LIVE, N_DYING or N_FAILED */
     int load_error;         /* the -errno of a load that failed */
     struct sleep_lock lock; /* the node lock (`ext2_node_lock`) */
@@ -751,6 +752,7 @@ int ext2_readlink_cached(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
 int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
 uint32_t ext2_ftype_of(uint32_t mode);
 int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node);
+int ext2_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node);
 int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, uint32_t rdev,
                void **node);
 int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name);
