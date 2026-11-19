@@ -2806,6 +2806,9 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
         rc =
             dev->write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
         if (rc != 0) {
+            if (!_krffs_on_disk) {
+                krffs_root_halt();
+            }
             return rc;
         }
         off += chunk * PAGE_SIZE;
@@ -3184,6 +3187,7 @@ static int krffs_root_mark_and_reap(void)
     }
     mode |= KRFFS_MODE_DIRTY;
     if (read != 0 || pc_copy_in(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0 || pc_sync() != 0) {
+        krffs_root_halt();
         klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
         return -1;
     }

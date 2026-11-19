@@ -106,7 +106,7 @@ $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc: rach2/sys/syscall_fs.
 
 $(HOST_FIXTURE_PREFIX)/pagecache-sources/disk_recovery.inc: rach2/kernel.c rach2/sys/fs/bcache.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/kernel.c krffs_disk_write krffs_root_mark_and_reap -f rach2/sys/fs/bcache.c flush_firsts
+	$(HOST_EXTRACT) $@ -f rach2/kernel.c krffs_disk_write krffs_root_mark_and_reap -f rach2/sys/fs/bcache.c flush_firsts write_failed_mark
 
 $(HOST_FIXTURE_PREFIX)/pagecache: tests/host/pagecache_hosttest.c $(HOST_FIXTURE_PREFIX)/pagecache-sources/disk_recovery.inc $(HOST_FIXTURE_PREFIX)/pagecache-sources/syscall_sync.inc $(HOST_EXTRACT) rach2/sys/syscall_fs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/pagecache-sources

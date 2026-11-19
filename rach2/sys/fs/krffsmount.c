@@ -105,8 +105,9 @@ static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
         if (!b) {
             return -1;
         }
-        if (within + take > b->bytes) {
-            bcache_release(b); /* past the device's short last block */
+        if (within + take > b->bytes ||
+            (!vol->fs.halted && (vol->dev->flags & BLOCK_WRITES_HALTED))) {
+            bcache_release(b);
             return -1;
         }
         k_memcpy(out, b->data + within, take);
@@ -169,7 +170,8 @@ static int volume_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
     if (first < size) {
         next = bcache_get(vol->dev, block + 1);
     }
-    if (at + first <= b->bytes && (first == size || (next && size - first <= next->bytes))) {
+    if (!(vol->dev->flags & BLOCK_WRITES_HALTED) && at + first <= b->bytes &&
+        (first == size || (next && size - first <= next->bytes))) {
         volume_store(vol, b, at, buffer, first);
         if (next) {
             volume_store(vol, next, 0, (const uint8_t *)buffer + first, size - first);
@@ -194,7 +196,7 @@ static int volume_sync(void *ctx)
 {
     struct krffs_volume *vol = ctx;
 
-    if (bcache_sync(vol->dev) != 0) {
+    if (bcache_sync_unflushed(vol->dev) != 0) {
         return -1;
     }
     return bcache_flush(vol->dev) == 0 ? 0 : -1;
@@ -215,6 +217,18 @@ static void kv_halted(krffs_mount_t *fs)
 
     bcache_halt_writes(vol->dev);
     vfs_mount_halted(vol->mnt);
+}
+
+/** Reap a last holder's node under the mount lock. A failed writeback
+ * during the reap blocks later requests, including other cache victims. */
+static int kv_reap(struct krffs_volume *vol, uint64_t offset)
+{
+    int rc;
+
+    bcache_recovering(vol->dev, 1);
+    rc = krffs_reap_at(&vol->fs, offset);
+    bcache_recovering(vol->dev, 0);
+    return rc;
 }
 
 /**
@@ -462,7 +476,7 @@ static void open_drop(struct vfs_mount *mnt, struct krffs_open *o)
     kfree(o);
     if (reap && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
         vfs_ns_lock(mnt);
-        (void)krffs_reap_at(&vol->fs, at);
+        (void)kv_reap(vol, at);
         vfs_ns_unlock(mnt);
     }
 }
@@ -993,7 +1007,7 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
             o = open_at(vol, at);
             if (o) {
                 o->nameless = 1;
-            } else if (krffs_reap_at(&vol->fs, at) != 0) {
+            } else if (kv_reap(vol, at) != 0) {
                 return -EIO;
             }
             return 0;
@@ -1167,7 +1181,7 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
 
         if (o) {
             o->nameless = 1;
-        } else if (krffs_reap_at(&vol->fs, orphaned) != 0) {
+        } else if (kv_reap(vol, orphaned) != 0) {
             return -EIO;
         }
     }
@@ -1396,9 +1410,13 @@ static int kv_repair(struct krffs_volume *vol, struct vfs_mount *mnt)
     uint32_t links = 0;
     uint32_t orphans = 0;
     uint32_t doubles = 0;
+    int rc;
 
     klog(KLOG_WARN, "krffs", "check: the volume was not unmounted cleanly");
-    if (krffs_repair_at(&vol->fs, &links, &orphans, &doubles) != 0) {
+    bcache_recovering(vol->dev, 1);
+    rc = krffs_repair_at(&vol->fs, &links, &orphans, &doubles);
+    bcache_recovering(vol->dev, 0);
+    if (rc != 0) {
         klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be repaired here");
         return -1;
     }

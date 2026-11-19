@@ -541,6 +541,11 @@ int bcache_drop(block_device_t *dev);
  */
 void bcache_halt_writes(block_device_t *dev);
 
+/** Enter or leave metadata recovery under the mount lock. A write error
+ * during recovery, including reclaim in a cache miss, halts the device
+ * before another buffer is submitted. Leaving recovery keeps the halt. */
+void bcache_recovering(block_device_t *dev, int active);
+
 /**
  * The device has gone: record it as failed, which takes its mounts
  * read-only, mark it gone, and deal with every buffer that names it.
