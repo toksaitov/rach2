@@ -18,7 +18,7 @@ A node is listed only while its device is there, and a device takes the
 lowest free node when it is found.
 Each device and its node are also listed under
 .Pa /sys/class/input ,
-below the PS/2 port or USB interface the device came from, and a uevent
+below the PS/2 port, USB interface or virtio device it came from, and a uevent
 announces each as it comes and goes, as udev and libinput expect; see
 .Xr sysfs 5 .
 The PS/2 keyboard is

@@ -170,6 +170,7 @@ struct evdev {
     int has_abs;          /* EV_ABS: `absinfo` answers EVIOCGABS */
     int stamped;          /* a packet has begun, at `stamp` */
     uint32_t gen;         /* the registration's number, `evdev_desc`'s */
+    int parent;           /* the supplied sysfs parent handle, or 0 */
     char name[EVDEV_NAME_MAX];
     char phys[EVDEV_TEXT_MAX];
     char uniq[EVDEV_TEXT_MAX];
@@ -339,6 +340,14 @@ void evdev_set_uniq(struct evdev *dev, const char *uniq)
         dev->texts = uniq ? dev->texts | TEXT_UNIQ : dev->texts & ~TEXT_UNIQ;
         spin_unlock_irqrestore(&evdev_lock, irq);
     }
+}
+
+void evdev_set_sysfs_parent(struct evdev *dev, int parent)
+{
+    uint32_t flags = spin_lock_irqsave(&evdev_lock);
+
+    dev->parent = parent;
+    spin_unlock_irqrestore(&evdev_lock, flags);
 }
 
 void evdev_set_version(struct evdev *dev, uint16_t version)
@@ -1909,6 +1918,7 @@ int evdev_snapshot(int n, struct evdev_desc *out)
     present = dev->used && !dev->gone;
     if (present) {
         out->gen = dev->gen;
+        out->parent = dev->parent;
         copy_text(out->name, dev->name, sizeof(out->name));
         copy_text(out->phys, dev->phys, sizeof(out->phys));
         copy_text(out->uniq, dev->uniq, sizeof(out->uniq));

@@ -216,6 +216,10 @@ void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags);
  * EVIOCGUNIQ answers -ENOENT. A NULL `dev` is ignored. */
 void evdev_set_uniq(struct evdev *dev, const char *uniq);
 
+/** Give the reserved `dev` a sysfs directory handle for its input parent.
+ * Zero leaves the parent to the input sysfs worker's usual discovery. */
+void evdev_set_sysfs_parent(struct evdev *dev, int parent);
+
 /** Give `dev` the version EVIOCGID gives, 0 until set. A NULL `dev` is
  * ignored. */
 void evdev_set_version(struct evdev *dev, uint16_t version);
@@ -528,6 +532,7 @@ void evdev_close(fd_entry_t *e);
  * and those EVIOCGPROP gives. */
 struct evdev_desc {
     uint32_t gen; /* the registration's number, new at each `evdev_register` */
+    int parent;   /* the supplied sysfs parent handle, or 0 */
     char name[EVDEV_NAME_MAX];
     char phys[EVDEV_TEXT_MAX]; /* "" for none */
     char uniq[EVDEV_TEXT_MAX]; /* "" for none or an empty serial */

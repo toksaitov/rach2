@@ -172,7 +172,7 @@ The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 
 * Only xHCI controllers are driven.
 * A report descriptor longer than 3072 bytes (`USB_DESC_MAX`) is not read, where Linux reads 4096; such a keyboard or mouse runs in the boot protocol. A descriptor with more than 64 reports (`HID_MAX_REPORTS`), collections nested deeper than 32 (`HID_MAX_COLLECTIONS`) or more than 8 applications (`HID_MAX_INPUTS`) is refused or cut, where Linux has no such bound.
-* The digitizer page is not mapped, so a touchscreen or pen tablet that reports through it makes no event device, and a tablet does not move the `/mouse` queue.
+* The digitizer driver handles touchscreen and touchpad contact reports. Pen tablets and vendor-specific digitizer modes are unsupported. Tablets report through evdev.
 * A Resolution Multiplier in a Feature report with other fields is not set, since its other values would have to be read with `GET_REPORT` first; output reports go over the control endpoint even where the device has an interrupt OUT endpoint, which Linux would use.
 * A USB keyboard's event device has a `SYN_REPORT` after each key, as the PS/2 keyboard's has, where Linux has one after each report.
 * Mass storage is SCSI over Bulk-Only Transport, with 512-byte blocks. A drive that offers only UAS is not driven.
