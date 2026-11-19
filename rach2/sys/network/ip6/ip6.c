@@ -404,6 +404,11 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
     return 0;
 }
 
+void ip6_forget_dev(struct netdev *nd)
+{
+    frag6_forget(nd);
+}
+
 void ip6_tick(void)
 {
     frag6_tick();

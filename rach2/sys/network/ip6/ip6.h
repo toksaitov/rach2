@@ -360,4 +360,9 @@ void ip6_pmtu_lower(const uint8_t *dst, int ifindex, uint32_t mtu);
  * discovery's and MLD's (`nd6_tick`). */
 void ip6_tick(void);
 
+/** Forget what the layer keeps of the interface `nd`, which is being
+ * withdrawn: its reassemblies (`frag6_forget`). Called with interrupts off,
+ * before `netdev_unregister`. */
+void ip6_forget_dev(struct netdev *nd);
+
 #endif /* _IP6_H_ */

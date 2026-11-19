@@ -11,6 +11,7 @@
 #include "../arp/arp.h"
 #include "../ip6/route6.h"
 #include "../ip6/nd6.h"
+#include "../ip6/ip6.h"
 #include "../socket/netlink.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -556,6 +557,7 @@ void wlan_unregister_radio(struct wlan *wlan)
     for (n = 0; n < count; ++n)
         if (neighbors6[n].ifindex == wlan->netdev.index)
             nd6_forget(&wlan->netdev, neighbors6[n].addr);
+    ip6_forget_dev(&wlan->netdev);
     netdev_unregister(&wlan->netdev);
     net_unlock(flags);
     for (i = 0; i < WLAN_MAX_RADIOS; ++i)
