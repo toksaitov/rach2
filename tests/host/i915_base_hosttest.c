@@ -1203,6 +1203,27 @@ int mutex_held(const struct mutex *m)
     return gem_held;
 }
 
+/** The display well's lock (i915_power.c), which this one-threaded test
+ * takes and lets go without contention. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)m;
+    (void)name;
+    (void)key;
+}
+
+/** Take the display well's lock. */
+void mutex_lock(struct mutex *m)
+{
+    (void)m;
+}
+
+/** Let the display well's lock go. */
+void mutex_unlock(struct mutex *m)
+{
+    (void)m;
+}
+
 /** Run every row; 0 when all pass. */
 extern int64_t host_i915_deadline;
 

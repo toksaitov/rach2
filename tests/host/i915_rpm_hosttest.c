@@ -12,6 +12,7 @@
  * host-deps: rach2/sys/drm/i915/i915_rc6.c rach2/sys/drm/i915/i915_rps.c
  * host-deps: rach2/sys/tick.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * i915_runtime_pm.c is included whole, and a row calls its callbacks in
  * the order the runtime PM core calls them: `rpm_prepare`, then
