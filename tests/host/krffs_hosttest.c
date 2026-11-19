@@ -1952,21 +1952,21 @@ static void disk_split_length_rows(void)
         return;
     }
     krffs_root_mount.backend = &backend;
-    writes_seen = 0;
-    refused_sync = 0;
+    refused_sync_after = 3754 + KRFFS_FIELD_CTIME;
     failure = krffs_truncate_node_at(&krffs_root_mount, 3754, 257, NULL);
     refused_sync = -1;
     check(failure == KRFFS_EIO && victim->data_size == 768, "shrink reports failed disk flush");
 
     check(disk_truncate_case(short_node, 3, 768, 257, 3754, 0,
                              "768 to 257 steps through 512 and 513") == 0 &&
-              recorded_count >= 3 && recorded[0].offset == 4096 && recorded[0].bytes[0] == 2 &&
-              recorded[1].offset == 4095 && recorded[1].bytes[0] == 1 &&
-              recorded[2].offset == 4096 && recorded[2].bytes[0] == 1,
+              recorded_count >= 5 && recorded[0].offset == 3754 + KRFFS_FIELD_MTIME &&
+              recorded[1].offset == 3754 + KRFFS_FIELD_CTIME && recorded[2].offset == 4096 &&
+              recorded[2].bytes[0] == 2 && recorded[3].offset == 4095 &&
+              recorded[3].bytes[0] == 1 && recorded[4].offset == 4096 && recorded[4].bytes[0] == 1,
           "the high part steps to one above, then the low part, then the high part");
     check(disk_truncate_case(long_node, 4, 1023, 257, 3754, 0,
                              "1023 to 257 stores the high part first") == 0 &&
-              recorded_count >= 2 && recorded[0].offset == 4096 && recorded[1].offset == 4095,
+              recorded_count >= 4 && recorded[2].offset == 4096 && recorded[3].offset == 4095,
           "high part, then low part");
     check(disk_truncate_case(long_node, 4, 512, 511, KRFFS_NO_NODE, 0,
                              "512 to 511 has no safe steps and moves the file") == 0,
@@ -3652,9 +3652,9 @@ static void failed_move_barrier_row(void)
     watched_type = old + KRFFS_FIELD_TYPE;
     watch_armed = 1;
     syncs_after_free = 0;
-    check(krffs_write_at(&mount, &node, bytes, sizeof(bytes), 0) == KRFFS_EIO && node != old &&
-              syncs_after_free >= 1,
-          "a move whose removal's sync fails follows the copy and puts a barrier first");
+    check(krffs_write_at(&mount, &node, bytes, sizeof(bytes), 0) == (int)sizeof(bytes) &&
+              node != old && syncs_after_free >= 1,
+          "a move whose removal's sync fails counts the live copy and puts a barrier first");
     watched_type = (uint64_t)-1;
 }
 
@@ -3884,7 +3884,7 @@ static void extent_decision_rows(void)
     check(krffs_grow_into(&mount, 695, whole, h, next) == 0 && h->size == whole,
           "whole extent growth compares the size from the node header");
     make_unlink_image(layout, 3);
-    check(krffs_shrink_at(&mount, 695, 2, h, next) == 0 && h->size == sizeof(*h) + 2,
+    check(krffs_shrink_at(&mount, 695, 2, h) == 0 && h->size == sizeof(*h) + 2,
           "shrink compares the size from the node header");
     make_unlink_image(layout, 3);
     h->type = KRFFS_FREE_NODE;
@@ -3958,9 +3958,73 @@ static void withdrawn_sync_row(void)
           "a halted core refuses a sync before calling the backend");
 }
 
+/** Refuse the new timestamp at refused_offset, allowing a copy of old times. */
+static int refuse_stamp(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
+{
+    krffs_node_time_t stamp;
+
+    if (offset == refused_offset && size == sizeof(stamp)) {
+        k_memcpy(&stamp, buffer, size);
+        if (stamp.seconds == fake_seconds && stamp.nanoseconds == fake_nanoseconds) {
+            refused_offset = KRFFS_NO_NODE;
+            return -1;
+        }
+    }
+    return memory_write(ctx, offset, buffer, size);
+}
+
+/** Refuse each timestamp on live files and on unpublished copies. */
+static void stamp_failure_rows(void)
+{
+    static const krffs_backend_t backend = {memory_read, refuse_stamp, memory_sync, 0};
+    static const struct unlink_extent layout[] = {
+        {0, NULL}, {682, "file"}, {1682, "wall"}, {2100, NULL}};
+    static const struct {
+        const char *operation;
+        int write;
+        uint32_t at;     /* write offset or truncate length */
+        uint32_t target; /* node whose timestamps change */
+    } cases[] = {{"overwrite", 1, 0, 682},         {"write past EOF", 1, 310, 682},
+                 {"shrink in place", 0, 280, 682}, {"grow in place", 0, 320, 682},
+                 {"same length", 0, 300, 682},     {"moving write", 1, 999, 2100},
+                 {"moving growth", 0, 1000, 2100}, {"moving shrink", 0, 255, 2100}};
+    static const uint32_t fields[] = {KRFFS_FIELD_MTIME, KRFFS_FIELD_CTIME};
+    unsigned i, j;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (j = 0; j < sizeof(fields) / sizeof(fields[0]); j++) {
+            krffs_mount_t mount = mount_over(&backend, disk_image, DISK_IMAGE_SIZE);
+            uint64_t node = 682;
+            krffs_node_t head;
+            int rc;
+
+            mount.sector = 512;
+            make_unlink_image(layout, 4);
+            fill_fixture_file(682, 300, 'v');
+            refused_offset = cases[i].target + fields[j];
+            rc = cases[i].write ? krffs_write_at(&mount, &node, "w", 1, cases[i].at)
+                                : krffs_truncate_node_at(&mount, node, cases[i].at, &node);
+            check(rc == KRFFS_EIO && refused_offset == KRFFS_NO_NODE && node == 682 &&
+                      krffs_walk(&mount, "/file") == node &&
+                      mount_file_is(&mount, "/file", 300, 'v'),
+                  cases[i].operation);
+            check(krffs_head(&mount, node, &head) == 0 && head.attribute_change_time.seconds == 0 &&
+                      head.modification_time.seconds ==
+                          (cases[i].target == node && fields[j] == KRFFS_FIELD_CTIME ? fake_seconds
+                                                                                     : 0),
+                  "only a completed modification-time store on the live file is visible");
+            check(krffs_head(&mount, 2100, &head) == 0 && head.type == KRFFS_FREE_NODE &&
+                      krffs_chain_is_valid(&mount),
+                  "a failed stamp leaves the copy unpublished and the chain intact");
+            refused_offset = KRFFS_NO_NODE;
+        }
+    }
+}
+
 /** Run the disk failure rows in isolation or as part of the host suite. */
 static void disk_failure_rows(void)
 {
+    stamp_failure_rows();
     repair_io_rows(0);
     repair_io_rows(1);
     last_extent_row();
@@ -4456,6 +4520,14 @@ static int image_rows(void)
 /** Run the full fixture or just the disk failure cases. */
 int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "timestamps") == 0) {
+        stamp_failure_rows();
+        disk_split_length_rows();
+        failed_move_barrier_row();
+        extent_decision_rows();
+        printf("krffs-hosttest: timestamp rows: %d failures\n", fails);
+        return fails != 0;
+    }
     disk_failure_rows();
     if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
         printf("krffs-hosttest: failure rows: %d failures\n", fails);

@@ -444,10 +444,11 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * to whatever the answer. Otherwise the bytes between the old end of the
  * data and `at` are zeroed, since they hold whatever the free space held,
  * and they and the bytes written reach the medium before `data_size` is
- * raised to count them, by `krffs_store_length`. The modification and
- * change times are stamped. A write of 0 bytes changes nothing and answers
- * 0, as POSIX has it for a regular file. After a barrier that failed, no
- * byte is written until one succeeds.
+ * raised to count them, by `krffs_store_length`. Set the modification and
+ * change times before writing in place or publishing a copy. A failed stamp
+ * leaves the file's data and length intact. A write of 0 bytes changes
+ * nothing and answers 0, as POSIX has it for a regular file. After a failed
+ * barrier, no byte is written until one succeeds.
  *
  * The bytes go in pieces the backend stores whole (`unit`), so a write in
  * place that fails part way knows how many went in, and answers as Linux's
@@ -493,7 +494,8 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
 
 /**
  * Set the data of the node at `node` to `new_size` bytes, zeroing any
- * growth, and stamp its modification and change times.
+ * growth. Set its modification and change times before changing data or
+ * length in place, or as part of the unpublished copy if the node moves.
  *
  * It takes the node and not a path, because a file whose name has been
  * taken away is still a file its holder may truncate, and there is no path
@@ -647,7 +649,9 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
  * Stamp the node at `offset` with the current real time: the modification
  * and change times for `what` KRFFS_STAMP_DATA, what a write does, and the
  * change time alone for any other `what`, what a chmod does. KRFFS_NO_NODE
- * is left alone, and a write that fails is not reported.
+ * is left alone. Return 0 on success or for KRFFS_NO_NODE, and a nonzero
+ * result on the first failed store. A completed modification-time store
+ * stands if the change-time store fails.
  *
  * The access time is never stamped. KRFFS is reached through a write-back
  * cache, the page cache under a root in the window and the buffer cache
@@ -656,7 +660,7 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
  * through `utimensat` is kept and reported, and nothing advances it, as on
  * a `noatime` mount; krffs.Readme.md states the rule.
  */
-void krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
+int krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
 
 /**
  * Allocate a reserved node with room for `size` bytes of data, first fit,
