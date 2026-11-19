@@ -91,6 +91,7 @@ C_SRC_SHARED = kernel.c \
     sys/audio/audio_proc.c \
     sys/audio/dsp.c \
     sys/audio/hda.c \
+    sys/audio/hda_hdmi.c \
     sys/audio/mixer.c \
     sys/audio/resample.c \
     sys/audio/vchan.c \

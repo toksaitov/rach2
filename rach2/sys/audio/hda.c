@@ -12,6 +12,7 @@
 #include "../arch/arch.h"
 #include "../klog.h"
 #include "hda.h"
+#include "hda_hdmi.h"
 #include "resample.h"
 #include "../kio.h"
 #include "../serial.h"
@@ -2610,8 +2611,9 @@ static void hda_irq_start(void)
 
 /**
  * Choose the controller to drive into hda_pci: the first PCI audio function
- * that is not an HDMI controller, else the first audio function. Log every
- * other audio function as not driven, since this kernel drives one, and a
+ * that is not an HDMI controller, else the first audio function unless
+ * hda_hdmi.c drives it. Log every other audio function but those as not
+ * driven, since this driver drives one, and a
  * person looking at a machine with two needs to see that the other was
  * found and passed over rather than missed. Return false when the machine
  * has no audio function.
@@ -2638,14 +2640,16 @@ static bool hda_find_controller(void)
     }
 
     if (!found_controller) {
-        if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci)) {
+        if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci) ||
+            hdmi_audio_drives(hda_pci.vendor_id, hda_pci.device_id)) {
             return false;
         }
     }
 
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &other)) {
-        if (other.bus != hda_pci.bus || other.device != hda_pci.device ||
-            other.function != hda_pci.function) {
+        if ((other.bus != hda_pci.bus || other.device != hda_pci.device ||
+             other.function != hda_pci.function) &&
+            !hdmi_audio_drives(other.vendor_id, other.device_id)) {
             klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d", (int)other.vendor_id,
                  (int)other.device_id, (int)other.bus, (int)other.device, (int)other.function);
         }

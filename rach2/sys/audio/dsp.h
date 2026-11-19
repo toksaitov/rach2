@@ -29,6 +29,16 @@ int dspdev_present(void);
  */
 int32_t dspdev_open(fd_entry_t *e, int flags);
 
+struct audio_driver;
+
+/**
+ * Open a device of OSS's for `e` as `dspdev_open` does, on the stream
+ * operations of the driver `drv` itself instead of the mix, as /dev/dsp1
+ * opens the HDMI codec's (hda_hdmi.h): one open at a time, and the errors
+ * of `drv`'s `stream_open`, -ENODEV for a direction it lacks among them.
+ */
+int32_t dspdev_open_driver(fd_entry_t *e, int flags, struct audio_driver *drv);
+
 /**
  * Queue `count` bytes of samples to play, in the format, channels and rate
  * set. It starts the stream once enough is queued to fill the driver's
