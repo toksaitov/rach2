@@ -300,9 +300,29 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
     return false;
 }
 
+/** A memory BAR's size; 0 for an I/O BAR, as the kernel's sizes none. */
 uint64_t pci_bar_size64(const pci_device_t *dev, int i)
 {
-    return fn_at(dev->bus, dev->device, dev->function)->barsz[i];
+    const struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+
+    return (m->cfg[0x10 + 4 * i] & 1) ? 0 : m->barsz[i];
+}
+
+/** BAR `i` as the bus's walk recorded it: its address now and its size. */
+void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
+{
+    const struct fn *m = fn_at(bus, device, function);
+    uint32_t v;
+
+    k_memset(r, 0, sizeof(*r));
+    if (m == NULL || i < 0 || i > 5 || m->barsz[i] == 0) {
+        return;
+    }
+    v = get32(m->cfg + 0x10 + 4 * i);
+    r->start = v & ((v & 1u) ? ~3u : ~0xFu);
+    r->end = r->start + m->barsz[i] - 1u;
+    r->flags = ((v & 1u) ? (v & 3u) | PCI_IORESOURCE_IO : (v & 0xFu) | PCI_IORESOURCE_MEM) |
+               PCI_IORESOURCE_SIZEALIGN;
 }
 
 uint64_t pci_bar_address64(const pci_device_t *dev, int i)
@@ -1616,6 +1636,10 @@ static void config_rows(void)
           "the host bridge's region reads its configuration");
     ports[0x3004] = 0x5A;
     CHECK(pread_at(device, (4ull << 40) + 4, b, 1) == 1 && b[0] == 0x5A, "an I/O BAR reads ports");
+    v = 0x12345678u;
+    CHECK(pwrite_at(device, (4ull << 40) + 0x3C, &v, 4) == 4 && get32(&ports[0x303C]) == v,
+          "and writes them");
+    CHECK(pwrite_at(device, (4ull << 40) + 0x40, &v, 4) == -EINVAL, "up to its end");
 }
 
 static int32_t set_irqs(int fd, uint32_t flags, uint32_t index, uint32_t start, uint32_t count,

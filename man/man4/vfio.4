@@ -177,6 +177,7 @@ A memory BAR of a page or more can be mapped with
 .Xr mmap 2 ,
 uncached; its pages fault in only while the function decodes memory, and
 a reset or turning decoding off takes them from every mapping.
+An I/O BAR is read and written port by port and cannot be mapped.
 The MSI-X table's bytes read as all ones and take no write.
 .Pp
 The configuration space is the function's but for what
