@@ -100,9 +100,33 @@ void pc_on_failure(void (*failed)(int rc));
  * marked dirty for a `write`. Returns 1 when the page is mapped; 0, on which
  * the fault handler panics, with no backing, for an address past the backed
  * size (a wild kernel pointer), when no slot can be had, or when the read
- * fails. The page fault handler calls it with interrupts off.
+ * fails. The page fault handler calls it with interrupts off. A file system
+ * that must survive a failed read copies through `pc_copy_out` and
+ * `pc_copy_in` instead, which bring pages in the same way.
  */
 int pc_fault(uintptr_t fault_address, int write);
+
+/**
+ * Copy `size` bytes at byte `off` of the backing into `buf` through the
+ * cache, reading in each page that is not resident, as a read through the
+ * window would but with the read's failure returned: 0, or -1 with no
+ * backing, for a range past the backed size, or when a page cannot be read
+ * or given a slot, which leaves `buf` filled up to that page. A file system
+ * that must answer a device error, and not panic on it, reads this way. Each
+ * page is brought in and copied with interrupts off and the big lock held,
+ * as a window fault is served; the caller may hold the big lock, and no
+ * spinlock.
+ */
+int pc_copy_out(uint32_t off, void *buf, uint32_t size);
+
+/**
+ * Copy `buf` into `size` bytes at byte `off` of the backing through the
+ * cache, as `pc_copy_out` reads them, marking each page dirty, as a store
+ * through the window would: 0, or -1 as `pc_copy_out` answers, with the
+ * pages before the one that failed written. A page under writeback takes
+ * the bytes and stays dirty for a later write, as a store into it does.
+ */
+int pc_copy_in(uint32_t off, const void *buf, uint32_t size);
 
 #define PC_SYNC_BUSY   1
 #define PC_SYNC_FAILED 2
