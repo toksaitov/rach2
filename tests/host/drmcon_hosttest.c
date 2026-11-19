@@ -602,6 +602,36 @@ static void row_blank_retry(void)
     CHECK(crtc.state->active && con_blank_crtcs == 0, "the unblank turns them on");
 }
 
+/** A blank that turned the CRTC off and failed on another, which the model
+ * has not, so the row sets the worker's record as that failure leaves it:
+ * the CRTC marked, the blank not done and its try again pending. A key
+ * before the try turns the CRTC on again, and a try whose tick has passed
+ * wakes the worker whatever the ask, which then clears it. */
+static void row_blank_half(void)
+{
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(!crtc.state->active && con_blank_crtcs != 0 && con_blank_done,
+          "the blank turns the CRTC off");
+    con_blank_done = 0;
+    con_blank_retry_ask = 1;
+    con_blank_retry = rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS);
+    CHECK(!con_flush_ready(NULL), "the worker waits for the half-failed blank's try again");
+    drm_client_blank(0);
+    CHECK(con_flush_ready(NULL), "a key before the try wakes the worker");
+    con_blank_service();
+    CHECK(crtc.state->active && con_blank_crtcs == 0 && !con_blank_done && con_blank_retry == 0 &&
+              !con_flush_ready(NULL),
+          "the key turns on the CRTC the half-failed blank turned off");
+    con_blank_retry_ask = 1;
+    con_blank_retry = rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS);
+    model_now_ns += (int64_t)CON_BLANK_RETRY_MS * 1000000ll;
+    CHECK(con_flush_ready(NULL), "a try whose tick has passed is due with nothing left to do");
+    con_blank_service();
+    CHECK(con_blank_retry == 0 && !con_flush_ready(NULL) && crtc.state->active,
+          "the worker clears the try, so its wait is not armed past its tick again");
+}
+
 /** A hotplug under a master leaves the screen to it; one after
  * DROP_MASTER, while the program still holds the card, gives it back, as
  * Linux's hotplug handler sets the fbdev mode once no master holds the
@@ -886,6 +916,7 @@ int main(void)
     row_hotplug();
     row_blank();
     row_blank_retry();
+    row_blank_half();
     row_drop_hotplug();
     row_unmapped();
     row_shadow();
