@@ -168,13 +168,6 @@ void socket_tcp_forget_queue(struct socket *listen_sock)
 static struct socket pool[2];
 static unsigned pooled;
 
-/** No other socket has a port bound here. */
-int socket_port_bound(uint16_t port)
-{
-    (void)port;
-    return 0;
-}
-
 /** Return the next socket of `pool`, cleared, of type `type` and with one
  * reference, or NULL when the pool is used up. */
 struct socket *socket_alloc(int type)

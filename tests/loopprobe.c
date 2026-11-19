@@ -591,6 +591,12 @@ static int local_port(int fd)
     return me[2] * 256 + me[3];
 }
 
+/** Whether `port` is one of Linux's ephemeral ports, 32768 to 60999. */
+static int ephemeral(int port)
+{
+    return port >= 32768 && port <= 60999;
+}
+
 /** pipe(2) into `fds`, which the kernel writes and the call's "memory"
  * clobber covers. */
 static int sys_pipe(int *fds)
@@ -2283,8 +2289,8 @@ static void shutdown_rows(int cs, uint8_t *sa)
  * Two sockets may bind one port before either listens, and then only one may
  * listen, since listen makes the check where the listener is published;
  * once a listener is live, a bind to its port is EADDRINUSE too. A listener
- * with no port and a bind to port 0 are each given an ephemeral port, 49152
- * or above, as Linux gives them. A server binds and listens again on
+ * with no port and a bind to port 0 are each given an ephemeral port, from
+ * 32768 to 60999, as Linux gives them. A server binds and listens again on
  * tcp_port[0], whose connection `tcp_loop` closed, since bind and listen refuse
  * a port only for a live listener; bind does not read SO_REUSEADDR, so a
  * server that sets it gains nothing.
@@ -2365,7 +2371,7 @@ static void tcp_ports(void)
     args[1] = 4;
     if (socketcall(SC_LISTEN, args) != 0)
         fail("unbound listener refused");
-    if (local_port(second) < 49152)
+    if (!ephemeral(local_port(second)))
         fail("unbound listener given no ephemeral port");
     sys_close(second);
     args[0] = AF_INET;
@@ -2380,7 +2386,7 @@ static void tcp_ports(void)
     args[2] = 16;
     if (socketcall(SC_BIND, args) != 0)
         fail("bind to port 0");
-    if (local_port(second) < 49152)
+    if (!ephemeral(local_port(second)))
         fail("bind to port 0 given no ephemeral port");
     sys_close(second);
 

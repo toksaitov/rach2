@@ -16,6 +16,7 @@
 #include "../core/byteorder.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
+#include "../../lib/krandom.h"
 #include "../../mm/kheap.h"
 
 /* A destination port and the socket that receives its datagrams: one record
@@ -27,6 +28,19 @@ typedef struct udp_binding {
 } udp_binding_t;
 
 static udp_binding_t *bindings;
+
+/* The bindings of each ephemeral port, counted from NET_PORT_LOW, which
+ * `udp_bind_ephemeral` reads in place of the list. */
+static uint32_t udp_ports[NET_PORTS];
+
+/** Count a binding of `port` made (`delta` 1) or taken away (-1) in
+ * `udp_ports`, when the port is of the ephemeral range. */
+static void udp_port_count(uint16_t port, int delta)
+{
+    if (port >= NET_PORT_LOW && port <= NET_PORT_HIGH) {
+        udp_ports[port - NET_PORT_LOW] += (uint32_t)delta;
+    }
+}
 
 /* The datagram being sent when it fits one frame; a larger one is built in
  * a block of the heap. */
@@ -46,22 +60,6 @@ static uint16_t udp4_checksum(uint32_t src, uint32_t dst, const uint8_t *data, u
         sum = (sum & 0xFFFFu) + (sum >> 16);
     }
     return (uint16_t)(sum ^ 0xFFFFu);
-}
-
-/* Next ephemeral port to try (kept inside the 49152-65535 range). */
-static uint16_t udp_next_ephemeral = 49152;
-
-/** Whether a binding has `port`, at any address. */
-static int udp_port_in_use(uint16_t port)
-{
-    const udp_binding_t *b;
-
-    for (b = bindings; b; b = b->next) {
-        if (b->port == port) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /** Two bindings to different addresses do not meet, as on Linux:
@@ -98,29 +96,34 @@ int udp_bind(uint16_t port, struct socket *sock)
     b->sock = sock;
     b->next = bindings;
     bindings = b;
+    udp_port_count(port, 1);
     net_unlock(flags);
     return 0;
 }
 
 /**
- * The scan goes forward from `udp_next_ephemeral`, wrapping at the top of
- * the range, and stops at the first failure to allocate, since no other port
- * would help. A send from a socket without a port (`dgram_send`), a `bind`
- * to port 0 and a `connect` call this. The port is recorded in
- * `sock->local_port`, so that the socket's later sends do not bind a fresh
- * port each time and its close unbinds it.
+ * The scan starts at a random port of the range, as Linux's
+ * udp_lib_get_port starts, so that a host off the path cannot guess a
+ * resolver's source port (RFC 5452, RFC 6056), goes forward, wrapping at the
+ * top, past every port `udp_ports` counts a binding of, and stops at the
+ * first failure to allocate, since no other port would help. A send from a
+ * socket without a port (`dgram_send`), a `bind` to port 0 and a `connect`
+ * call this, each in system call context, where `krandom_u32` may be
+ * drawn. The port is recorded in `sock->local_port`, so that the socket's
+ * later sends do not bind a fresh port each time and its close unbinds it.
  */
 uint16_t udp_bind_ephemeral(struct socket *sock)
 {
-    int tries;
+    uint32_t start = krandom_u32() % NET_PORTS, i, k;
     uint16_t port;
 
-    for (tries = 0; tries < 16384; tries++) {
-        port = udp_next_ephemeral++;
-        if (udp_next_ephemeral < 49152) { /* wrapped past 65535 */
-            udp_next_ephemeral = 49152;
+    for (i = 0; i < NET_PORTS; i++) {
+        k = start + i;
+        if (k >= NET_PORTS) {
+            k -= NET_PORTS;
         }
-        if (!udp_port_in_use(port)) {
+        port = (uint16_t)(NET_PORT_LOW + k);
+        if (udp_ports[k] == 0) {
             int rc = udp_bind(port, sock);
 
             if (rc == -ENOMEM) {
@@ -152,6 +155,7 @@ void udp_unbind(struct socket *sock)
 
         if (b->sock == sock) {
             *link = b->next;
+            udp_port_count(b->port, -1);
             kfree(b);
         } else {
             link = &b->next;

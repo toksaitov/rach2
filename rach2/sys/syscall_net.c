@@ -835,8 +835,10 @@ static int32_t netlink_bind_user(struct socket *sock, uintptr_t sa_ptr, int addr
  * Bind the TCP or UDP socket `sock` to the address `ip` and port `port`, as
  * `do_bind` describes: the address checked first, then the port's owner, a
  * datagram socket's registration and a stream's listener. Returns 0,
- * -EADDRNOTAVAIL, -EACCES, -EADDRINUSE, or -ENOMEM when there is no memory
- * to register a datagram socket's port.
+ * -EADDRNOTAVAIL, -EACCES, -EINVAL for a stream that has a port already, as
+ * Linux's inet_bind refuses it, -EADDRINUSE, or -ENOMEM when there is no
+ * memory to register a datagram socket's port. A stream's port is counted
+ * in TCP's table of ports in use (`tcp_port_hold`) until its last close.
  *
  * A port below 1024 is a service's, and a service is root's; otherwise any
  * user could take the port a DHCP client or an SSH server answers on and be
@@ -885,7 +887,12 @@ static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
     }
     if (sock->type == SOCK_STREAM) {
         net_addr_t saved = sock->local_ip;
-        uint32_t held = net_lock();
+        uint32_t held;
+
+        if (sock->local_port != 0) {
+            return -EINVAL;
+        }
+        held = net_lock();
         sock->local_ip = ip;
         if (!port)
             port = tcp_bind_ephemeral();
@@ -894,7 +901,11 @@ static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
             net_unlock(held);
             return -EADDRINUSE;
         }
+        tcp_port_hold(port);
+        sock->port_held = port;
+        sock->local_port = port;
         net_unlock(held);
+        return 0;
     }
     sock->local_ip = ip;
     sock->local_port = port;

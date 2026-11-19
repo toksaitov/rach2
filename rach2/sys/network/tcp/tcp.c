@@ -48,12 +48,47 @@
 #include "../../mm/paging.h"
 #include "../../timer.h"
 
-/* The live control blocks, listeners included, each allocated from the heap
- * by `listen`, by an active open, or for an incoming SYN on the interrupt
- * side, and freed when it is done. A block has the 64 KiB send ring in it,
- * over 64 KiB in all; the receive ring, of 64 or 512 KiB, is a heap
- * allocation of its own. */
-static struct tcb *tcbs;
+/*
+ * The control blocks, listeners included, each allocated from the heap by
+ * `listen`, by an active open, or for an incoming SYN on the interrupt side,
+ * and freed when it is done; its rings are allocations of their own. The
+ * list holds the blocks that run timers first, and then, from `tw_first` to
+ * `tcb_last`, the detached blocks in TIME_WAIT, `tw_count` of them, in the
+ * order their TIME_WAIT ends. A burst of short connections leaves thousands
+ * there for TCP_2MSL_TICKS, and the tick, the listener's search and the
+ * pumps stop at `tw_first`, so that they pass over none; `tw_owed` is set
+ * while one of them owes an acknowledgement the card refused.
+ */
+static struct tcb *tcbs, *tcb_last, *tw_first;
+static uint32_t tw_count;
+static int tw_owed;
+
+/* The most blocks the TIME_WAIT run holds, as Linux's tcp_max_tw_buckets:
+ * half the buckets of its table of connections, a power of two near one for
+ * each 128 KiB of memory; 0 until `tcp_tw_max` first computes it. */
+static uint32_t tw_max;
+
+/* The table of connections `tcp_find` reads: every block but a listener,
+ * chained by `hash_next` in the bucket of its local port and remote address
+ * and port (`tcp_hash_index`), as Linux's established hash. */
+#define TCP_HASH_SIZE 4096
+static struct tcb *tcp_hash[TCP_HASH_SIZE];
+
+/* The ephemeral ports in use, each counted from NET_PORT_LOW, as Linux's
+ * table of bound ports: the blocks and bound stream sockets that hold a
+ * port no other connection may share (`port_fixed`), and the connections
+ * whose port `tcp_connect` chose, which one to another peer may share
+ * (`port_auto`). */
+static uint32_t port_fixed[NET_PORTS];
+static uint32_t port_auto[NET_PORTS];
+
+/* Where the next connection to a destination begins its search for a port,
+ * by a keyed hash of the destination, as Linux's table_perturb (RFC 6056,
+ * algorithm 4), and the searches of `tcp_free_port` begun, which key
+ * where each starts. */
+#define TCP_PERTURB_SIZE 256
+static uint32_t port_perturb[TCP_PERTURB_SIZE];
+static uint32_t bind_searches;
 
 int tcp_keepalive_time = TCP_KEEPIDLE_DEFAULT;
 int tcp_keepalive_intvl = TCP_KEEPINTVL_DEFAULT;
@@ -80,9 +115,6 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 #define TCP_OPT_SACK_OK 4
 #define TCP_OPT_SACK    5
 
-/* The next port `ephemeral_port` tries, from 49152 to 65535. */
-static uint16_t next_ephemeral = 49152;
-
 static uint16_t tcp_checksum(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *seg,
                              uint16_t seg_len);
 static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
@@ -96,6 +128,8 @@ static void tcp_giveup(struct tcb *tcb);
 static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port);
 static void tcp_free_half_opens(const struct tcb *listener);
+static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
+                           uint16_t remote_port);
 static void tcp_reset(struct tcb *tcb);
 
 /* The key the initial sequence numbers are hashed under, and whether it has
@@ -183,10 +217,12 @@ static void tcp_isn_key(void)
 }
 
 /**
- * SipHash-2-4 under `isn_key` of the local and remote addresses and ports;
- * IPv6 includes both scopes. Returns the low 32 bits.
+ * SipHash-2-4 under `isn_key` of the local and remote addresses and ports,
+ * `local`'s family deciding the form; IPv6 includes both scopes. Returns the
+ * low 32 bits.
  */
-static uint32_t tcp_isn_hash(const struct tcb *tcb)
+static uint32_t tcp_tuple_hash(const net_addr_t *local, const net_addr_t *remote,
+                               uint16_t local_port, uint16_t remote_port)
 {
     uint64_t k0 = TCP_U64(isn_key[1], isn_key[0]);
     uint64_t k1 = TCP_U64(isn_key[3], isn_key[2]);
@@ -194,16 +230,16 @@ static uint32_t tcp_isn_hash(const struct tcb *tcb)
     uint64_t v1 = k1 ^ TCP_U64(0x646f7261u, 0x6e646f6du);
     uint64_t v2 = k0 ^ TCP_U64(0x6c796765u, 0x6e657261u);
     uint64_t v3 = k1 ^ TCP_U64(0x74656462u, 0x79746573u);
-    uint64_t m = TCP_U64(tcb->remote_ip.v4, tcb->local_ip.v4);
-    uint64_t last = TCP_U64(12u << 24, ((uint32_t)tcb->remote_port << 16) | tcb->local_port);
+    uint64_t m = TCP_U64(remote->v4, local->v4);
+    uint64_t last = TCP_U64(12u << 24, ((uint32_t)remote_port << 16) | local_port);
     int i;
 
-    if (tcb->local_ip.family == AF_INET6) {
+    if (local->family == AF_INET6) {
         uint8_t tuple[40];
-        k_memcpy(tuple, tcb->local_ip.v6, 16);
-        k_memcpy(tuple + 16, tcb->remote_ip.v6, 16);
-        write32be(tuple + 32, tcb->local_ip.scope);
-        write32be(tuple + 36, tcb->remote_ip.scope);
+        k_memcpy(tuple, local->v6, 16);
+        k_memcpy(tuple + 16, remote->v6, 16);
+        write32be(tuple + 32, local->scope);
+        write32be(tuple + 36, remote->scope);
         for (i = 0; i < 40; i += 8) {
             m = TCP_U64(read32be(tuple + i), read32be(tuple + i + 4));
             v3 ^= m;
@@ -211,11 +247,11 @@ static uint32_t tcp_isn_hash(const struct tcb *tcb)
             TCP_SIPROUND(v0, v1, v2, v3);
             v0 ^= m;
         }
-        m = TCP_U64(44u << 24, ((uint32_t)tcb->remote_port << 16) | tcb->local_port);
+        m = TCP_U64(44u << 24, ((uint32_t)remote_port << 16) | local_port);
         last = m;
     }
 
-    if (tcb->local_ip.family != AF_INET6) {
+    if (local->family != AF_INET6) {
         v3 ^= m;
         TCP_SIPROUND(v0, v1, v2, v3);
         TCP_SIPROUND(v0, v1, v2, v3);
@@ -246,12 +282,18 @@ static uint32_t tcp_isn_hash(const struct tcb *tcb)
 static uint32_t tcp_isn(const struct tcb *tcb)
 {
     return (uint32_t)tick_div64((uint64_t)TCP_NOW() * TCP_ISN_HZ, TICK_HZ, NULL) +
-           tcp_isn_hash(tcb);
+           tcp_tuple_hash(&tcb->local_ip, &tcb->remote_ip, tcb->local_port, tcb->remote_port);
 }
 
 void tcp_init(void)
 {
-    tcbs = NULL;
+    tcbs = tcb_last = tw_first = NULL;
+    tw_count = 0;
+    tw_owed = 0;
+    k_memset(tcp_hash, 0, sizeof(tcp_hash));
+    k_memset(port_fixed, 0, sizeof(port_fixed));
+    k_memset(port_auto, 0, sizeof(port_auto));
+    k_memset(port_perturb, 0, sizeof(port_perturb));
     isn_keyed = 0;
 }
 
@@ -299,11 +341,13 @@ static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 }
 
 /**
- * Give a connection its receive ring before its first SYN: TCP_RECV_RING_LARGE
- * when more than TCP_BIG_RING_FRAMES frames are free, TCP_RECV_RING_SMALL
- * otherwise or when the heap has no room for the large one, and the window
- * scale the ring needs, which this side's SYN offers. Returns 0, or -1 when
- * the heap has no room for either.
+ * Give a connection its rings before its first SYN: the send ring, of
+ * TCP_RING_SIZE bytes, and the receive ring, TCP_RECV_RING_LARGE when more
+ * than TCP_BIG_RING_FRAMES frames are free, TCP_RECV_RING_SMALL otherwise or
+ * when the heap has no room for the large one, and the window scale the
+ * receive ring needs, which this side's SYN offers. Returns 0, or -1 when the
+ * heap has no room for the send ring and a receive ring; `tcb_free` gives
+ * back what was had.
  */
 static int tcp_ring_alloc(struct tcb *tcb)
 {
@@ -311,6 +355,10 @@ static int tcp_ring_alloc(struct tcb *tcb)
         frame_free_count() > TCP_BIG_RING_FRAMES ? TCP_RECV_RING_LARGE : TCP_RECV_RING_SMALL;
     uint8_t shift = 0;
 
+    tcb->send_buf = kmalloc(TCP_RING_SIZE);
+    if (!tcb->send_buf) {
+        return -1;
+    }
     tcb->recv_buf = kmalloc(size);
     if (!tcb->recv_buf && size != TCP_RECV_RING_SMALL) {
         size = TCP_RECV_RING_SMALL;
@@ -528,6 +576,122 @@ static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_
     tcb->rcv_wnd = tcp_rcv_window(tcb);
 }
 
+/**
+ * The bucket of `tcp_hash` for a connection with this local port and remote
+ * address and port. The local address is left out, so that
+ * `tcp_pair_in_use`, which asks about every local address at once, reads one
+ * bucket; the key keeps a peer from choosing ports that fill one bucket.
+ */
+static uint32_t tcp_hash_index(uint16_t local_port, const net_addr_t *remote, uint16_t remote_port)
+{
+    uint32_t h = isn_key[0] ^ (((uint32_t)local_port << 16) | remote_port);
+    uint32_t a = remote->v4;
+
+    if (remote->family == AF_INET6) {
+        a = read32be(remote->v6) ^ read32be(remote->v6 + 4) ^ read32be(remote->v6 + 8) ^
+            read32be(remote->v6 + 12) ^ remote->scope;
+    }
+    h ^= a * 0x9E3779B1u;
+    h ^= h >> 15;
+    h *= 0x85EBCA77u;
+    h ^= isn_key[1];
+    h ^= h >> 13;
+    h *= 0xC2B2AE3Du;
+    h ^= h >> 16;
+    return h & (TCP_HASH_SIZE - 1);
+}
+
+/** Put `tcb`, a connection whose ports and addresses are set, in its bucket
+ * of `tcp_hash`. */
+static void tcb_hash_add(struct tcb *tcb)
+{
+    uint32_t i = tcp_hash_index(tcb->local_port, &tcb->remote_ip, tcb->remote_port);
+
+    tcb->hash_next = tcp_hash[i];
+    tcp_hash[i] = tcb;
+    tcb->hashed = 1;
+}
+
+/** Take `tcb` out of `tcp_hash`, if it is there. */
+static void tcb_hash_del(struct tcb *tcb)
+{
+    struct tcb **link;
+
+    if (!tcb->hashed) {
+        return;
+    }
+    link = &tcp_hash[tcp_hash_index(tcb->local_port, &tcb->remote_ip, tcb->remote_port)];
+    while (*link && *link != tcb) {
+        link = &(*link)->hash_next;
+    }
+    if (*link) {
+        *link = tcb->hash_next;
+    }
+    tcb->hash_next = NULL;
+    tcb->hashed = 0;
+}
+
+/** Whether `port` is one of the ephemeral range, which the tables count. */
+static int tcp_port_ephemeral(uint16_t port)
+{
+    return port >= NET_PORT_LOW && port <= NET_PORT_HIGH;
+}
+
+/**
+ * Give `tcb` the local port `port`, counted in the table of ephemeral ports
+ * as `kind`, TCP_PORT_FIXED or TCP_PORT_AUTO, until `tcb_free`.
+ */
+static void tcb_take_port(struct tcb *tcb, uint16_t port, int kind)
+{
+    tcb->local_port = port;
+    if (!tcp_port_ephemeral(port)) {
+        return;
+    }
+    tcb->port_held = (uint8_t)kind;
+    if (kind == TCP_PORT_AUTO) {
+        port_auto[port - NET_PORT_LOW]++;
+    } else {
+        port_fixed[port - NET_PORT_LOW]++;
+    }
+}
+
+void tcp_port_hold(uint16_t port)
+{
+    if (tcp_port_ephemeral(port)) {
+        port_fixed[port - NET_PORT_LOW]++;
+    }
+}
+
+void tcp_port_unhold(uint16_t port)
+{
+    if (tcp_port_ephemeral(port) && port_fixed[port - NET_PORT_LOW] > 0) {
+        port_fixed[port - NET_PORT_LOW]--;
+    }
+}
+
+/** Take `tcb` off the list of control blocks. */
+static void tcb_unlink(struct tcb *tcb)
+{
+    if (tcb == tw_first) {
+        tw_first = tcb->next;
+    }
+    if (tcb->prev) {
+        tcb->prev->next = tcb->next;
+    } else if (tcbs == tcb) {
+        tcbs = tcb->next;
+    }
+    if (tcb->next) {
+        tcb->next->prev = tcb->prev;
+    } else if (tcb_last == tcb) {
+        tcb_last = tcb->prev;
+    }
+    tcb->next = tcb->prev = NULL;
+    if (tcb->tw_listed) {
+        tcb->tw_listed = 0;
+        tw_count--;
+    }
+}
+
 struct tcb *tcb_alloc(void)
 {
     struct tcb *tcb = kzalloc(sizeof(*tcb));
@@ -538,25 +702,33 @@ struct tcb *tcb_alloc(void)
     }
     tcb_init(tcb);
     tcb->next = tcbs;
+    if (tcbs) {
+        tcbs->prev = tcb;
+    } else {
+        tcb_last = tcb;
+    }
     tcbs = tcb;
     return tcb;
 }
 
 void tcb_free(struct tcb *tcb)
 {
-    struct tcb **link = &tcbs;
-
     if (!tcb) {
         return;
     }
-    while (*link && *link != tcb) {
-        link = &(*link)->next;
+    tcb_unlink(tcb);
+    tcb_hash_del(tcb);
+    if (tcb->port_held == TCP_PORT_AUTO) {
+        port_auto[tcb->local_port - NET_PORT_LOW]--;
+    } else if (tcb->port_held == TCP_PORT_FIXED) {
+        port_fixed[tcb->local_port - NET_PORT_LOW]--;
     }
-    if (*link) {
-        *link = tcb->next;
-    }
+    tcb->port_held = 0;
     tcb->in_use = 0;
     tcb->state = TCP_CLOSED;
+    if (tcb->send_buf) {
+        kfree(tcb->send_buf);
+    }
     if (tcb->recv_buf) {
         kfree(tcb->recv_buf);
     }
@@ -942,6 +1114,9 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
 
     if (!(flags & (TCP_SYN | TCP_FIN))) {
         tcb->ack_owed = (rc == -ENOBUFS) ? 1 : 0;
+        if (tcb->ack_owed && tcb->tw_listed) {
+            tw_owed = 1;
+        }
     }
 
     if (flags & (TCP_SYN | TCP_FIN)) {
@@ -1467,44 +1642,90 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     return (int)copy_len;
 }
 
-/** Whether a control block, a listener included, has `port` as its local
- * port. */
-static int tcp_local_port_in_use(uint16_t port)
+/**
+ * A port of the ephemeral range that no block and no bound stream socket
+ * holds, or 0 when none is free: Linux's inet_csk_find_open_port, which
+ * starts at a random place and tries the odd ports first, then the even
+ * ones, leaving the even ones to `tcp_connect_port`. The place is a keyed
+ * hash of a count of the searches, which no host off the machine can
+ * predict. The caller holds `net_lock`.
+ */
+static uint16_t tcp_free_port(void)
 {
-    const struct tcb *t;
+    net_addr_t none = net_addr4(0), count;
+    uint32_t offset, i, k;
 
-    for (t = tcbs; t; t = t->next) {
-        if (t->local_port == port) {
-            return 1;
+    tcp_isn_key();
+    count = net_addr4(bind_searches++);
+    offset = (tcp_tuple_hash(&none, &count, 0, 0) % NET_PORTS) | 1u;
+    for (;;) {
+        for (i = 0; i < NET_PORTS; i += 2) {
+            k = offset + i;
+            if (k >= NET_PORTS) {
+                k -= NET_PORTS;
+            }
+            if (port_fixed[k] == 0 && port_auto[k] == 0) {
+                return (uint16_t)(NET_PORT_LOW + k);
+            }
         }
+        if (!(offset & 1u)) {
+            return 0;
+        }
+        offset--;
     }
-    return 0;
 }
 
 /**
- * The next ephemeral port that no control block, a listener included, and
- * no stream socket has, or 0 when all 16384 of the range are taken. The
- * caller holds `net_lock`.
+ * The port for a connection of the network namespace `ns` from `from` to
+ * `dst`:`dst_port` that a socket with no port opens, or 0 when none is
+ * free, chosen as Linux's __inet_hash_connect chooses it (RFC 6056,
+ * algorithm 4). The search starts where the last one to this destination
+ * ended, a keyed hash of the addresses and the peer's port picking the place
+ * in `port_perturb` that keeps it, tries the even ports first, then the odd
+ * ones, and takes the first port that no listener, passive connection or
+ * bound socket holds and no connection has to this peer already. So a port
+ * comes back to one peer only after the rest of the range, ports are shared
+ * among connections to different peers, and a block in TIME_WAIT keeps its
+ * port from the next connection to its peer. The place moves past the
+ * port, and a little further by the hash of the chosen pair, as Linux moves
+ * it by a random step, so that its next value is not plain to the peer.
+ * The caller holds `net_lock`.
  */
-static uint16_t ephemeral_port(void)
+static uint16_t tcp_connect_port(const struct netns *ns, net_addr_t from, net_addr_t dst,
+                                 uint16_t dst_port)
 {
-    int tries = 0;
+    uint32_t h = tcp_tuple_hash(&from, &dst, 0, dst_port);
+    uint32_t place = h & (TCP_PERTURB_SIZE - 1u);
+    uint32_t offset = ((port_perturb[place] + (h >> 8)) % NET_PORTS) & ~1u;
+    uint32_t i, k, step;
     uint16_t port;
 
-    do {
-        port = next_ephemeral++;
-        if (next_ephemeral < 49152)
-            next_ephemeral = 49152;
-        if (++tries > 16384)
+    for (;;) {
+        for (i = 0; i < NET_PORTS; i += 2) {
+            k = offset + i;
+            if (k >= NET_PORTS) {
+                k -= NET_PORTS;
+            }
+            port = (uint16_t)(NET_PORT_LOW + k);
+            if (port_fixed[k] != 0 ||
+                (port_auto[k] != 0 && tcp_pair_in_use(ns, port, dst, dst_port))) {
+                continue;
+            }
+            step = (tcp_tuple_hash(&from, &dst, port, dst_port) >> 29) * 2u;
+            port_perturb[place] += (i > step ? i : step) + 2u;
+            return port;
+        }
+        if (offset & 1u) {
             return 0;
-    } while (tcp_local_port_in_use(port) || socket_port_bound(port));
-    return port;
+        }
+        offset++;
+    }
 }
 
 uint16_t tcp_bind_ephemeral(void)
 {
     uint32_t flags = net_lock();
-    uint16_t port = ephemeral_port();
+    uint16_t port = tcp_free_port();
 
     net_unlock(flags);
     return port;
@@ -1521,7 +1742,7 @@ static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
 {
     const struct tcb *t;
 
-    for (t = tcbs; t; t = t->next) {
+    for (t = tcbs; t && t != tw_first; t = t->next) {
         if (t->state == TCP_LISTEN && t->local_port == port &&
             (t->sock && socket_bind_conflict(t->sock, sock))) {
             return 1;
@@ -1532,8 +1753,8 @@ static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
 
 /**
  * Whether a block other than a listener of the network namespace `ns` has
- * this local port, remote address and remote port. The caller holds
- * `net_lock`.
+ * this local port, remote address and remote port, one in TIME_WAIT
+ * included. The caller holds `net_lock`.
  *
  * `tcp_find` matches these and the local address, so a pair this refuses
  * from one local address is refused from every other too. A listener or a
@@ -1545,9 +1766,9 @@ static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr
 {
     const struct tcb *t;
 
-    for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port && t->ns == ns &&
-            net_addr_equal(t->remote_ip, remote_ip) && t->remote_port == remote_port) {
+    for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
+        if (t->local_port == local_port && t->ns == ns && net_addr_equal(t->remote_ip, remote_ip) &&
+            t->remote_port == remote_port) {
             return 1;
         }
     }
@@ -1618,7 +1839,7 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
     struct tcb *t;
     struct tcb *any = NULL;
 
-    for (t = tcbs; t; t = t->next) {
+    for (t = tcbs; t && t != tw_first; t = t->next) {
         if (t->state != TCP_LISTEN || t->local_port != local_port || t->ns != ip_ns)
             continue;
         if (net_addr_equal(t->local_ip, local_ip))
@@ -1632,16 +1853,16 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
 /**
  * Find the TCB for an incoming segment in the network namespace `ip_ns`: a
  * block in any state but LISTEN with the same local address and port,
- * remote address and remote port, else the listener for its local address
- * and port.
+ * remote address and remote port, from its bucket of `tcp_hash`, else the
+ * listener for its local address and port.
  */
 static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port)
 {
     struct tcb *t;
 
-    for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port && t->ns == ip_ns &&
+    for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
+        if (t->local_port == local_port && t->ns == ip_ns &&
             net_addr_equal(t->local_ip, local_ip) && net_addr_equal(t->remote_ip, remote_ip) &&
             t->remote_port == remote_port) {
             return t;
@@ -1816,7 +2037,7 @@ static void tcp_tick_pumps(void)
     struct tcb *tcb, *next;
     uint32_t start = tcp_pump_next, eligible = 0, pumped = 0, index = 0;
 
-    for (tcb = tcbs; tcb; tcb = next) {
+    for (tcb = tcbs; tcb && tcb != tw_first; tcb = next) {
         next = tcb->next;
         if (!tcp_pumpable(tcb)) {
             continue;
@@ -1830,7 +2051,8 @@ static void tcp_tick_pumps(void)
         eligible++;
     }
     index = 0;
-    for (tcb = tcbs; tcb && pumped < TCP_TICK_PUMPS && index < start; tcb = next) {
+    for (tcb = tcbs; tcb && tcb != tw_first && pumped < TCP_TICK_PUMPS && index < start;
+         tcb = next) {
         next = tcb->next;
         if (!tcp_pumpable(tcb)) {
             continue;
@@ -2200,6 +2422,31 @@ static void tcp_keepalive(struct tcb *tcb)
 }
 
 /**
+ * The tick's work on the TIME_WAIT run: free the blocks at its head whose
+ * time is up, and, while one owes an acknowledgement the card refused
+ * (`tw_owed`), send each owed one again. The rest of the run is not read.
+ */
+static void tcp_tick_time_wait(void)
+{
+    struct tcb *tcb, *next;
+
+    while (tw_first && (int32_t)(TCP_NOW() - tw_first->timewait_until) >= 0) {
+        tcb_free(tw_first);
+    }
+    if (!tw_owed) {
+        return;
+    }
+    tw_owed = 0;
+    for (tcb = tw_first; tcb; tcb = next) {
+        next = tcb->next;
+        if (tcb->ack_owed) {
+            tcb->ack_owed = 0;
+            tcp_send_flags(tcb, TCP_ACK);
+        }
+    }
+}
+
+/**
  * The FIN_WAIT_2 limit, TCP_FIN_WAIT2_TICKS, frees a detached block whose
  * peer went away with neither a FIN nor a reset, and which would otherwise
  * never be freed (cf. Linux tcp_fin_timeout). Any other detached block that
@@ -2220,15 +2467,16 @@ static void tcp_keepalive(struct tcb *tcb)
  * The retransmission timer runs as `tcp_rto_expire` says. The zero-window
  * probe timer, with nothing in flight, sends a probe while the peer's
  * window stays closed, backs off and gives up as `tcp_zwp_expire` says.
- * Then the keepalive runs (`tcp_keepalive`). Last, `tcp_tick_pumps` sends
- * what refused transmits left in the rings. Each block's successor is read
+ * Then the keepalive runs (`tcp_keepalive`). The blocks of the TIME_WAIT
+ * run are left to `tcp_tick_time_wait`. Last, `tcp_tick_pumps` sends what
+ * refused transmits left in the rings. Each block's successor is read
  * before the block can be freed.
  */
 void tcp_tick(void)
 {
     struct tcb *tcb, *next;
 
-    for (tcb = tcbs; tcb; tcb = next) {
+    for (tcb = tcbs; tcb && tcb != tw_first; tcb = next) {
         next = tcb->next;
 
         if (tcb->state == TCP_TIME_WAIT) {
@@ -2273,6 +2521,7 @@ void tcp_tick(void)
 
         tcp_keepalive(tcb);
     }
+    tcp_tick_time_wait();
     tcp_tick_pumps();
 }
 
@@ -2315,7 +2564,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     tcp_isn_key();
 
     if (port == 0) {
-        port = ephemeral_port();
+        port = tcp_free_port();
     }
     if (port == 0 || tcp_port_has_listener(sock, port) || socket_stream_conflict(sock, port)) {
         net_unlock(flags);
@@ -2331,7 +2580,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     tcb->family = sock->family;
     tcb->ns = sock->ns;
     tcb->local_ip = sock->local_ip;
-    tcb->local_port = port;
+    tcb_take_port(tcb, port, TCP_PORT_FIXED);
     tcb->state = TCP_LISTEN;
     tcb->sock = sock;
     tcb->uid = sock->uid;
@@ -2353,8 +2602,8 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * since two such blocks would have one connection's segments delivered to
  * the other.
  *
- * A socket without a port takes the next ephemeral one that no block uses,
- * listeners included: over loopback, an ephemeral port equal to that of the
+ * A socket without a port takes one `tcp_connect_port` chooses, which no
+ * listener holds: over loopback, an ephemeral port equal to that of the
  * listener being dialed would give the looped SYN the same source and
  * destination port, match the caller's own block, and hang the handshake.
  *
@@ -2387,7 +2636,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
             return -EADDRINUSE;
         }
     } else {
-        local = ephemeral_port();
+        local = tcp_connect_port(sock->ns, from, dst_ip, dst_port);
         if (local == 0) {
             net_unlock(flags);
             return -EADDRNOTAVAIL;
@@ -2407,10 +2656,11 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     tcb->family = sock->family;
     tcb->ns = sock->ns;
     tcb->local_ip = from;
-    tcb->local_port = local;
     tcb->port_auto = sock->local_port == 0;
+    tcb_take_port(tcb, local, tcb->port_auto ? TCP_PORT_AUTO : TCP_PORT_FIXED);
     tcb->remote_ip = dst_ip;
     tcb->remote_port = dst_port;
+    tcb_hash_add(tcb);
     tcb->iss = tcp_isn(tcb);
     tcb->snd_nxt = tcb->iss;
     tcb->snd_una = tcb->iss;
@@ -2602,8 +2852,14 @@ void tcp_forget_queued(struct socket *sock)
  */
 static void tcp_time_wait_trim(struct tcb *tcb)
 {
-    if (tcb->state == TCP_TIME_WAIT && tcb->recv_buf &&
-        (!tcb->sock || tcb->recv_tail == tcb->recv_head)) {
+    if (tcb->state != TCP_TIME_WAIT) {
+        return;
+    }
+    if (tcb->send_buf) {
+        kfree(tcb->send_buf);
+        tcb->send_buf = NULL;
+    }
+    if (tcb->recv_buf && (!tcb->sock || tcb->recv_tail == tcb->recv_head)) {
         kfree(tcb->recv_buf);
         tcb->recv_buf = NULL;
         if (tcb->recv_seg_heap) {
@@ -2615,12 +2871,93 @@ static void tcp_time_wait_trim(struct tcb *tcb)
     }
 }
 
-/** Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS, trimmed. */
+/**
+ * The most blocks the TIME_WAIT run holds, as Linux 6.12 sizes
+ * tcp_max_tw_buckets: half the buckets of its established hash, which has
+ * the largest power of two of buckets at or below one for each 32 frames
+ * of memory, 128 KiB, and from 512 to 524288 of them. Linux on i386 counts
+ * only its low memory; this counts every frame on both architectures.
+ */
+static uint32_t tcp_tw_max(void)
+{
+    if (!tw_max) {
+        size_t want = frame_total_count() >> 5;
+        uint32_t buckets = 512;
+
+        while (buckets < 524288u && (size_t)buckets * 2u <= want) {
+            buckets *= 2u;
+        }
+        tw_max = buckets / 2u;
+    }
+    return tw_max;
+}
+
+/**
+ * Put `tcb`, a detached block in TIME_WAIT, in the TIME_WAIT run at the
+ * list's end, after every block of the run whose TIME_WAIT ends no later:
+ * at the end itself for a block that has just begun or restarted its
+ * TIME_WAIT, which is the common case and costs no search.
+ */
+static void tcp_tw_list(struct tcb *tcb)
+{
+    struct tcb *after;
+
+    tcb_unlink(tcb);
+    after = tcb_last;
+    while (after && after->tw_listed &&
+           (int32_t)(after->timewait_until - tcb->timewait_until) > 0) {
+        after = after->prev;
+    }
+    tcb->prev = after;
+    tcb->next = after ? after->next : tcbs;
+    if (tcb->next) {
+        tcb->next->prev = tcb;
+    } else {
+        tcb_last = tcb;
+    }
+    if (after) {
+        after->next = tcb;
+    } else {
+        tcbs = tcb;
+    }
+    if (!after || !after->tw_listed) {
+        tw_first = tcb;
+    }
+    tcb->tw_listed = 1;
+    tw_count++;
+}
+
+/* Whether the TIME_WAIT run's overflow has been logged; Linux logs each,
+ * rate-limited, and one line says what the counter then counts. */
+static int tw_overflow_logged;
+
+/**
+ * Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS, trimmed, and, when no socket
+ * holds it, to the TIME_WAIT run. With the run full (`tcp_tw_max`) the
+ * TIME_WAIT ends at once, counted in TCPTimeWaitOverflow, as Linux's
+ * tcp_time_wait closes a connection it has no bucket for: the block is
+ * freed at the next tick, or at its socket's close.
+ */
 static void tcp_enter_time_wait(struct tcb *tcb)
 {
     tcb->state = TCP_TIME_WAIT;
     tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
     tcp_time_wait_trim(tcb);
+    if (tw_count >= tcp_tw_max()) {
+        net_mib.tcp_time_wait_overflow++;
+        if (!tw_overflow_logged) {
+            tw_overflow_logged = 1;
+            klog(KLOG_INFO, "tcp",
+                 "time wait: the table of %u is full, and connections skip TIME_WAIT; "
+                 "TCPTimeWaitOverflow counts them",
+                 (unsigned)tcp_tw_max());
+        }
+        tcb->timewait_until = TCP_NOW();
+        return;
+    }
+    if (!tcb->sock) {
+        tcp_tw_list(tcb);
+    }
 }
 
 /**
@@ -2702,7 +3039,12 @@ void tcp_close(struct socket *sock)
         tcb->timewait_until = TCP_NOW() + TCP_ORPHAN_TICKS;
         break;
     case TCP_TIME_WAIT:
+        if ((int32_t)(TCP_NOW() - tcb->timewait_until) >= 0) {
+            tcb_free(tcb);
+            break;
+        }
         tcp_time_wait_trim(tcb);
+        tcp_tw_list(tcb);
         break;
     case TCP_CLOSED:
     case TCP_LISTEN:
@@ -3129,7 +3471,7 @@ static void tcp_free_half_opens(const struct tcb *listener)
     struct tcb *t;
     struct tcb *next;
 
-    for (t = tcbs; t; t = next) {
+    for (t = tcbs; t && t != tw_first; t = next) {
         next = t->next;
         if (t->passive && t->state == TCP_SYN_RCVD && t->listener == listener) {
             tcp_free_half_open(t);
@@ -4040,9 +4382,10 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         conn_tcb->passive = 1;
         conn_tcb->listener = tcb;
         conn_tcb->local_ip = dst_ip;
-        conn_tcb->local_port = tcb->local_port;
+        tcb_take_port(conn_tcb, tcb->local_port, TCP_PORT_FIXED);
         conn_tcb->remote_ip = src_ip;
         conn_tcb->remote_port = src_port;
+        tcb_hash_add(conn_tcb);
         conn_tcb->irs = seq;
         conn_tcb->rcv_nxt = seq + 1;
         tcp_take_wnd(conn_tcb, window);
@@ -4233,8 +4576,13 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
 
     case TCP_TIME_WAIT:
         if (flags & TCP_FIN) {
+            if (tcb->tw_listed || tcb->sock) {
+                tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
+            }
+            if (tcb->tw_listed) {
+                tcp_tw_list(tcb);
+            }
             tcp_send_flags(tcb, TCP_ACK);
-            tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
         }
         break;
 
@@ -4252,7 +4600,8 @@ void tcp_count(struct tcp_counts *c)
     k_memset(c, 0, sizeof(*c));
     flags = net_lock();
     for (t = tcbs; t; t = t->next) {
-        c->bytes += (uint32_t)sizeof(*t) + (t->recv_buf ? t->recv_size : 0) +
+        c->bytes += (uint32_t)sizeof(*t) + (t->send_buf ? TCP_RING_SIZE : 0) +
+                    (t->recv_buf ? t->recv_size : 0) +
                     (t->sent_more ? t->sent_cap * (uint32_t)sizeof(*t->sent_more) : 0);
         if (t->state == TCP_TIME_WAIT) {
             c->tw++;
@@ -4405,13 +4754,20 @@ static uint32_t tcp_idle_keepalive(const struct tcb *tcb, uint32_t now)
     return wait;
 }
 
-/** Return the next service deadline for the stopped idle tick. */
+/** Return the next service deadline for the stopped idle tick: the
+ * earliest of the blocks before the TIME_WAIT run and of the run's head. */
 uint32_t tcp_idle_ticks(void)
 {
     struct tcb *tcb;
     uint32_t wait = TICK_HZ, now = TCP_NOW();
 
-    for (tcb = tcbs; tcb; tcb = tcb->next) {
+    if (tw_owed) {
+        return 1;
+    }
+    if (tw_first) {
+        IDLE_TIMER_MIN(wait, tw_first->timewait_until, now);
+    }
+    for (tcb = tcbs; tcb && tcb != tw_first; tcb = tcb->next) {
         struct socket *s = tcb->sock;
 
         if (tcb->ack_owed || tcb->send_head != tcb->send_tail) {
