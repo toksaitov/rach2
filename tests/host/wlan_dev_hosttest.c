@@ -58,6 +58,9 @@ static unsigned run_work(void);
 static struct netdev *call_nd;
 static int call_up, call_rc, park_in_start, park_in_stop;
 static unsigned work_ran; /* the runs of the parked model worker */
+/* The card of the datagram IP is receiving; the model has no IP. */
+int ip_rx_ifindex;
+
 int park_run(void (*fn)(void));
 int park_resume(void);
 int park_active(void);
