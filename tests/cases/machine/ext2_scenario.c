@@ -1,8 +1,9 @@
 /*
  * ext2_scenario.c: the scenario of machine.ext2, the ext2 driver booted. Cases
  * `probe-NAME` run a probe as init on an ext2 root staged from the test
- * manifest; `links`, `cost`, `names` and `lookup` run ext2probe's rows on the
- * fixture volume the host's mke2fs wrote; `rewrite`, `append`, `setid`,
+ * manifest; `links`, `cost`, `names`, `lookup` and `direct` run
+ * ext2probe's rows on the fixture volume the host's mke2fs wrote;
+ * `rewrite`, `append`, `setid`,
  * `lchown`, `dirent`, `zombie`, `busy`, `lockwait` and `stress` each boot
  * os-real on a fresh copy of its ext2 root; and `repair` takes one copy of
  * that root through a kill, the mount's check, a lost block, a fault,
@@ -632,7 +633,8 @@ static void print_lines(const char *w, const char *key)
 }
 
 /**
- * Run case `links`, `cost`, `names` or `lookup`: ext2probe's rows of `mode`
+ * Run case `links`, `cost`, `names`, `lookup`, `xattr` or `direct`:
+ * ext2probe's rows of `mode`
  * on the fixture volume, mounted from the IDE disk beside the test image.
  * Assertions `exit`, `said-ok` and, for `links`, `mounted`.
  */
@@ -1111,7 +1113,7 @@ int etude_scenario(struct etude_case *c)
         return 1;
     }
     if (strcmp(name, "links") == 0 || strcmp(name, "cost") == 0 || strcmp(name, "names") == 0 ||
-        strcmp(name, "lookup") == 0 || strcmp(name, "xattr") == 0) {
+        strcmp(name, "lookup") == 0 || strcmp(name, "xattr") == 0 || strcmp(name, "direct") == 0) {
         lc_begin(&l, c, strcmp(name, "links") == 0 ? links_ids : cost_ids);
         fixture(&l, name);
         return lc_finish(&l);

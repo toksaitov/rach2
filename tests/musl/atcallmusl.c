@@ -11,7 +11,11 @@
  * and rmdir of a file, and for renameat2 with RENAME_NOREPLACE a new name
  * that exists, which must leave both files as they were. fchdir enters a
  * directory of the root, of /dev and of /proc through descriptors and reads
- * the result back with getcwd.
+ * the result back with getcwd. On the tmpfs of /dev/shm, renameat2 swaps
+ * two names with RENAME_EXCHANGE and leaves a whiteout with
+ * RENAME_WHITEOUT; open makes a file with no name with O_TMPFILE, which
+ * linkat names through AT_EMPTY_PATH and through /proc/self/fd, and takes
+ * O_DIRECT, which /proc and a character device refuse.
  *
  * Prints `ATCALLMUSL OK` and exits 0 on success, and prints
  * `ATCALLMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -66,6 +70,7 @@ enum {
     NOREPLACE_FREE,
     RENAMEAT2_REPLACE,
     RENAMEAT2_EINVAL,
+    EXCHANGE_ENOENT,
     RENAMEAT_EBADF,
     FCHDIR_ROOT_DIR,
     FCHDIR_RELATIVE,
@@ -73,6 +78,19 @@ enum {
     FCHDIR_PROC,
     FCHDIR_ENOTDIR,
     FCHDIR_EBADF,
+    SHM_DIR,
+    EXCHANGE_FILES,
+    EXCHANGE_DIR,
+    WHITEOUT,
+    TMPFILE_OPEN,
+    TMPFILE_NAMELESS,
+    TMPFILE_EMPTY_PATH,
+    TMPFILE_PROC_FD,
+    TMPFILE_EXCL,
+    TMPFILE_EINVAL,
+    TMPFILE_EOPNOTSUPP,
+    DIRECT_TMPFS,
+    DIRECT_EINVAL,
     CHECKS
 };
 
@@ -105,7 +123,9 @@ static const struct {
     {"noreplace-enoent", "renameat2 RENAME_NOREPLACE of a missing name is not ENOENT"},
     {"noreplace-free", "renameat2 RENAME_NOREPLACE onto a free name"},
     {"renameat2-replace", "renameat2 without flags does not replace"},
-    {"renameat2-einval", "renameat2 with a flag other than RENAME_NOREPLACE is not EINVAL"},
+    {"renameat2-einval",
+     "renameat2 RENAME_EXCHANGE, RENAME_WHITEOUT or an unknown flag on the root is not EINVAL"},
+    {"exchange-enoent", "renameat2 RENAME_EXCHANGE onto a missing name is not ENOENT"},
     {"renameat-ebadf", "renameat through a descriptor that is not open is not EBADF"},
     {"fchdir-root-dir", "fchdir to a directory of the root"},
     {"fchdir-relative", "a relative name after fchdir"},
@@ -113,6 +133,20 @@ static const struct {
     {"fchdir-proc", "fchdir to /proc/self"},
     {"fchdir-enotdir", "fchdir to a file is not ENOTDIR"},
     {"fchdir-ebadf", "fchdir through a descriptor that is not open is not EBADF"},
+    {"shm-dir", "a directory of /dev/shm"},
+    {"exchange-files", "renameat2 RENAME_EXCHANGE of two files on tmpfs"},
+    {"exchange-dir", "renameat2 RENAME_EXCHANGE of a file and a directory on tmpfs"},
+    {"whiteout", "renameat2 RENAME_WHITEOUT on tmpfs leaves no whiteout"},
+    {"tmpfile-open", "open O_TMPFILE of a directory of tmpfs"},
+    {"tmpfile-nameless", "the O_TMPFILE file has a link or no deleted /proc/self/fd name"},
+    {"tmpfile-empty-path", "linkat AT_EMPTY_PATH does not name the O_TMPFILE file"},
+    {"tmpfile-proc-fd",
+     "linkat AT_SYMLINK_FOLLOW of /proc/self/fd does not name the O_TMPFILE file"},
+    {"tmpfile-excl", "linkat of an O_TMPFILE file made with O_EXCL is not ENOENT"},
+    {"tmpfile-einval", "open O_TMPFILE with O_RDONLY is not EINVAL"},
+    {"tmpfile-eopnotsupp", "open O_TMPFILE on the root is not EOPNOTSUPP"},
+    {"direct-tmpfs", "open O_DIRECT of a tmpfs file, its F_GETFL, or an unaligned write"},
+    {"direct-einval", "open O_DIRECT of a /proc file or a character device is not EINVAL"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -279,10 +313,12 @@ static int rename_rows(int dirfd)
         rc = fail(NOREPLACE_FREE);
     } else if (syscall(SYS_renameat2, bfd, "z", bfd, "y", 0) != 0 || !has_text(WORK "/b/y", "x")) {
         rc = fail(RENAMEAT2_REPLACE);
-    } else if (!refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", RENAME_EXCHANGE), EINVAL) ||
+    } else if (!refused(syscall(SYS_renameat2, bfd, "y", bfd, "g", RENAME_EXCHANGE), EINVAL) ||
                !refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", RENAME_WHITEOUT), EINVAL) ||
                !refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", 8), EINVAL)) {
         rc = fail(RENAMEAT2_EINVAL);
+    } else if (!refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", RENAME_EXCHANGE), ENOENT)) {
+        rc = fail(EXCHANGE_ENOENT);
     } else if (!refused(renameat(999, "y", bfd, "w"), EBADF)) {
         rc = fail(RENAMEAT_EBADF);
     }
@@ -347,6 +383,173 @@ static int fchdir_rows(int filefd)
     return 0;
 }
 
+#define SHM "/dev/shm/atcall"
+
+/** Whether the /proc/self/fd link of `fd` reads as a file of SHM with no
+ * name: "SHM/#INO (deleted)". */
+static int nameless(int fd)
+{
+    char link[32], target[96];
+    ssize_t n;
+
+    snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+    n = readlink(link, target, sizeof(target) - 1);
+    if (n < 0) {
+        return 0;
+    }
+    target[n] = '\0';
+    return strncmp(target, SHM "/#", sizeof(SHM "/#") - 1) == 0 && n > 10 &&
+           strcmp(target + n - 10, " (deleted)") == 0;
+}
+
+/** Make an O_TMPFILE file in SHM with `extra` among its flags and `text`
+ * in it. The descriptor, or -1. */
+static int tmpfile_with(int extra, const char *text)
+{
+    int fd = open(SHM, O_TMPFILE | O_RDWR | extra, 0600);
+    size_t len = strlen(text);
+
+    if (fd >= 0 && write(fd, text, len) != (ssize_t)len) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/** Check renameat2's RENAME_EXCHANGE of two files and of a file and a
+ * directory, and RENAME_WHITEOUT, on the files p, q and the directory d of
+ * SHM. Returns 0, or 1 once the failure is reported. */
+static int shm_rename_rows(void)
+{
+    struct stat st;
+
+    if (syscall(SYS_renameat2, AT_FDCWD, SHM "/p", AT_FDCWD, SHM "/q", RENAME_EXCHANGE) != 0 ||
+        !has_text(SHM "/p", "q") || !has_text(SHM "/q", "p")) {
+        return fail(EXCHANGE_FILES);
+    }
+    if (syscall(SYS_renameat2, AT_FDCWD, SHM "/p", AT_FDCWD, SHM "/d", RENAME_EXCHANGE) != 0 ||
+        !is_dir(SHM "/p") || !has_text(SHM "/d", "q")) {
+        return fail(EXCHANGE_DIR);
+    }
+    if (syscall(SYS_renameat2, AT_FDCWD, SHM "/q", AT_FDCWD, SHM "/r", RENAME_WHITEOUT) != 0 ||
+        !has_text(SHM "/r", "p") || stat(SHM "/q", &st) != 0 || !S_ISCHR(st.st_mode) ||
+        st.st_rdev != 0 || (st.st_mode & 07777) != 0) {
+        return fail(WHITEOUT);
+    }
+    return 0;
+}
+
+/** Check that an O_TMPFILE file of SHM has no name and no link, and that
+ * linkat names one through AT_EMPTY_PATH as SHM/named and another through
+ * its /proc/self/fd link as SHM/named2. Returns 0, or 1 once the failure is
+ * reported. */
+static int shm_tmpfile_rows(void)
+{
+    char link[32];
+    struct stat st;
+    int fd, fd2 = -1;
+    int rc = 0;
+
+    fd = tmpfile_with(0, "t");
+    if (fd < 0) {
+        return fail(TMPFILE_OPEN);
+    }
+    if (fstat(fd, &st) != 0 || st.st_nlink != 0 || !S_ISREG(st.st_mode) ||
+        (st.st_mode & 0777) != 0600 || !nameless(fd)) {
+        rc = fail(TMPFILE_NAMELESS);
+    } else if (linkat(fd, "", AT_FDCWD, SHM "/named", AT_EMPTY_PATH) != 0 ||
+               !has_text(SHM "/named", "t") || fstat(fd, &st) != 0 || st.st_nlink != 1) {
+        rc = fail(TMPFILE_EMPTY_PATH);
+    } else if ((fd2 = tmpfile_with(0, "u")) < 0 ||
+               snprintf(link, sizeof(link), "/proc/self/fd/%d", fd2) < 0 ||
+               linkat(AT_FDCWD, link, AT_FDCWD, SHM "/named2", AT_SYMLINK_FOLLOW) != 0 ||
+               !has_text(SHM "/named2", "u")) {
+        rc = fail(TMPFILE_PROC_FD);
+    }
+    close(fd);
+    if (fd2 >= 0) {
+        close(fd2);
+    }
+    return rc;
+}
+
+/** Check O_TMPFILE's refusals: ENOENT from linkat for a file made with
+ * O_EXCL, EINVAL without write access, and EOPNOTSUPP on the KRFFS root.
+ * Returns 0, or 1 once the failure is reported. */
+static int shm_tmpfile_refusals(void)
+{
+    int fd = tmpfile_with(O_EXCL, "v");
+    int rc = 0;
+
+    if (fd < 0 || !refused(linkat(fd, "", AT_FDCWD, SHM "/named3", AT_EMPTY_PATH), ENOENT)) {
+        rc = fail(TMPFILE_EXCL);
+    } else if (!refused(open(SHM, O_TMPFILE | O_RDONLY, 0600), EINVAL)) {
+        rc = fail(TMPFILE_EINVAL);
+    } else if (!refused(open(WORK, O_TMPFILE | O_RDWR, 0600), EOPNOTSUPP)) {
+        rc = fail(TMPFILE_EOPNOTSUPP);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return rc;
+}
+
+/** Check that SHM/named takes O_DIRECT, which F_GETFL reports, and an
+ * unaligned write, as tmpfs does on Linux, and that /proc and /dev/null
+ * refuse it with EINVAL. Returns 0, or 1 once the failure is reported. */
+static int shm_direct_rows(void)
+{
+    int fd = open(SHM "/named", O_RDWR | O_DIRECT);
+    int rc = 0;
+
+    if (fd < 0 || !(fcntl(fd, F_GETFL) & O_DIRECT) || pwrite(fd, "xyz", 3, 1) != 3 ||
+        !has_text(SHM "/named", "txyz")) {
+        rc = fail(DIRECT_TMPFS);
+    } else if (!refused(open("/proc/self/status", O_RDONLY | O_DIRECT), EINVAL) ||
+               !refused(open("/dev/null", O_RDONLY | O_DIRECT), EINVAL)) {
+        rc = fail(DIRECT_EINVAL);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return rc;
+}
+
+/**
+ * Check renameat2's RENAME_EXCHANGE and RENAME_WHITEOUT, O_TMPFILE with the
+ * two ways linkat names its file, and O_DIRECT, in a directory of the tmpfs
+ * of /dev/shm, which is removed again. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int tmpfs_rows(void)
+{
+    int rc;
+
+    rmdir(SHM);
+    if (mkdir(SHM, 0755) != 0 || !make_file(AT_FDCWD, SHM "/p", "p") ||
+        !make_file(AT_FDCWD, SHM "/q", "q") || mkdir(SHM "/d", 0755) != 0) {
+        return fail(SHM_DIR);
+    }
+    rc = shm_rename_rows();
+    if (rc == 0) {
+        rc = shm_tmpfile_rows();
+    }
+    if (rc == 0) {
+        rc = shm_tmpfile_refusals();
+    }
+    if (rc == 0) {
+        rc = shm_direct_rows();
+    }
+    unlink(SHM "/named");
+    unlink(SHM "/named2");
+    unlink(SHM "/q");
+    unlink(SHM "/r");
+    unlink(SHM "/d");
+    rmdir(SHM "/p");
+    rmdir(SHM);
+    return rc;
+}
+
 int main(void)
 {
     int dirfd, filefd;
@@ -368,6 +571,9 @@ int main(void)
     }
     if (rc == 0) {
         rc = fchdir_rows(filefd);
+    }
+    if (rc == 0) {
+        rc = tmpfs_rows();
     }
     chdir("/");
     close(dirfd);
