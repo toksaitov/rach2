@@ -2114,6 +2114,9 @@ void ptimer_discard(struct tgroup *tg, uint64_t bits)
  * with the big lock held; publishes its zombie state under `timer_lock`
  * after the discard, so no tick leaves an expiration for the ending thread
  * between the two. Later expirations go to the process (`ptimer_thread`).
+ * The thread that debugfs's cputime_test carries the count of, and its
+ * process, stop being tested, so that a record or group made later at the
+ * same place is not.
  */
 void ptimer_thread_exit(process_t *self)
 {
@@ -2135,6 +2138,11 @@ void ptimer_thread_exit(process_t *self)
         }
     }
     gone_defer(gone_reap(tg));
+    if (test_split_serial != 0 && self->serial == test_split_serial) {
+        test_split_serial = 0; /* cputime_test's thread and group go with it */
+        test_split_tg = NULL;
+        test_split_due = 0;
+    }
     self->state = PROC_ZOMBIE;
     timer_unlock(irq);
 }
