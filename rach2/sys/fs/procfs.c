@@ -4223,15 +4223,18 @@ static void procfs_kvm_counts(struct procfs_text *t)
 #endif
 }
 
-/** Append the frames of the vhost-net attachments that have ended, under
- * the big lock. */
+/** Append the vhost-net attachments that have ended and their frames,
+ * under the big lock. */
 static void procfs_vhost_counts(struct procfs_text *t)
 {
 #ifndef RACH2_HOSTTEST
     uint64_t to, from;
+    uint32_t n;
 
-    vhost_net_detached_frames(&to, &from);
-    ap_str(t, "vhost_net_detached_to_guest ");
+    vhost_net_detached_frames(&n, &to, &from);
+    ap_str(t, "vhost_net_detaches ");
+    ap_u32(t, n);
+    ap_str(t, "\nvhost_net_detached_to_guest ");
     ap_u64(t, to);
     ap_str(t, "\nvhost_net_detached_from_guest ");
     ap_u64(t, from);
@@ -4417,9 +4420,9 @@ static void procfs_vkms_counts(struct procfs_text *t)
  * the frames that got no CRC request while its CRC source was on, and its
  * composer's passes that entered more than one frame's CRC.
  *
- * The `vhost_net_detached_` counts are vhost-net's (vhost_net.h): the
- * frames moved to and from the guests by every attachment of a tap that has
- * ended since boot.
+ * The `vhost_net_` counts are vhost-net's (vhost_net.h): the attachments of
+ * a tap that have ended since boot and the frames they moved to and from the
+ * guests, each attachment's modulo 2^32.
  *
  * The `namecache_` counts are the name cache's (dcache.h): the resolver's
  * lookups it answered and those it passed to the file system, each a read of

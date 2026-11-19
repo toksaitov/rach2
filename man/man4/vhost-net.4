@@ -125,7 +125,9 @@ When the owner's address space ends, both rings stop until a new table.
 When the device lets the tap go it logs the frames it moved since it took
 it, as
 .Ql vhost-net: detached: tap0: 22 frames to the guest, 21 from it ,
-and adds them to the
+counts the attachment in
+.Li vhost_net_detaches
+and adds its frames, modulo 2^32, to the
 .Li vhost_net_detached_to_guest
 and
 .Li vhost_net_detached_from_guest

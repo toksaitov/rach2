@@ -64,9 +64,10 @@
  * without the device. */
 void vhost_net_start(void);
 
-/** The frames moved by every attachment of a tap that has ended since
- * boot, each attachment's added when the device lets its tap go: to the
- * guests in `*to`, from them in `*from`. Under the big lock. */
-void vhost_net_detached_frames(uint64_t *to, uint64_t *from);
+/** The attachments of a tap that have ended since boot in `*n`, and the
+ * frames they moved, each attachment's added when the device lets its tap
+ * go and counted modulo 2^32: to the guests in `*to`, from them in `*from`.
+ * Under the big lock. */
+void vhost_net_detached_frames(uint32_t *n, uint64_t *to, uint64_t *from);
 
 #endif /* _VHOST_NET_H_ */
