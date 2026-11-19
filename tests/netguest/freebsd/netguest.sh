@@ -55,7 +55,8 @@
 #   NETGUEST STATS outer_in=N outer_out=N deny9=N states=N
 #
 # the outer interface's packets in and out, the packets the deny rule
-# blocked and pf's states, each 0 when it cannot be read.
+# blocked and pf's states, each 0 when it cannot be read but the deny
+# rule's with the filter on, which is then `unknown`.
 
 inner_mac=52:54:00:77:00:01
 inner_addr=10.77.0.1/24
@@ -124,19 +125,16 @@ ifconfig "$inner" inet "$inner_addr" up || fail "$inner did not take $inner_addr
 addr=''
 
 # dhclient returns once it has a lease, or gives up on a link that is down
-# or a network that does not answer; a card that still negotiates its link
-# is asked again.
+# or a network that does not answer; it is asked again until there is a
+# lease, and a guest that never gets one is ended by the caller's bound.
 ifconfig "$outer" up
-tries=0
-while [ -z "$addr" ] && [ "$tries" -lt 4 ]; do
+while [ -z "$addr" ]; do
     pid=/var/run/dhclient/dhclient.$outer.pid
     [ ! -f "$pid" ] || kill "$(cat "$pid")" 2> /dev/null
     dhclient "$outer" > /dev/null 2>&1
     addr=$(ifconfig "$outer" inet | awk '$1 == "inet" { print $2; exit }')
-    tries=$((tries + 1))
     [ -n "$addr" ] || sleep 2
 done
-[ -n "$addr" ] || fail "DHCP gave $outer no address"
 
 # The rules of the inner interface keep state or not, as `state` says; the
 # rest always do.
@@ -190,8 +188,8 @@ pfctl -s rules > "$conf.loaded" 2> /dev/null
 say "LOADED fillers=$(grep -c ' from 198\.1[89]\.' "$conf.loaded") total=$(grep -c . "$conf.loaded") tables=$(grep -c '<__automatic' "$conf.loaded") states_max=$(pfctl -s memory 2> /dev/null | awk '$1 == "states" { print $4; exit }') buckets=$(sysctl -n net.pf.states_hashsize 2> /dev/null)"
 say "READY inner=$inner outer=$outer addr=$addr rules=$rules opt=$opt state=$state filter=$filter"
 
-# The counts, each 2 seconds, from a process that outlives this script; a
-# count that cannot be read is 0.
+# The counts, each 2 seconds, from a process that outlives this script,
+# read as the header comment says.
 stats()
 {
     while :; do
@@ -199,8 +197,9 @@ stats()
         # shellcheck disable=SC2046 # two words, or none
         set -- $(netstat -n -I "$outer" 2> /dev/null | awk '$3 ~ /^<Link/ { print $5, $8; exit }')
         deny=$(pfctl -s labels 2> /dev/null | awk '$1 == "deny9" { print $3; exit }')
+        [ -n "$deny" ] || [ "$filter" = 1 ] || deny=0
         states=$(pfctl -s info 2> /dev/null | awk '/current entries/ { print $3; exit }')
-        say "STATS outer_in=${1:-0} outer_out=${2:-0} deny9=${deny:-0} states=${states:-0}"
+        say "STATS outer_in=${1:-0} outer_out=${2:-0} deny9=${deny:-unknown} states=${states:-0}"
     done
 }
 # rc.local's jobs are in rc's process group, which gets SIGHUP when rc ends

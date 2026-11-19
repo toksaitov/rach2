@@ -49,7 +49,8 @@
 #   NETGUEST STATS outer_in=N outer_out=N deny9=N states=N
 #
 # the outer interface's packets in and out, the packets the deny rule
-# dropped and the tracked connections, each 0 when it cannot be read.
+# dropped and the tracked connections, each 0 when it cannot be read but
+# the deny rule's with the filter on, which is then `unknown`.
 
 inner_mac=52:54:00:77:00:01
 inner_addr=10.77.0.1/24
@@ -103,8 +104,8 @@ esac
 
 # The inner interface is the one with the address QEMU was told to give
 # the virtio card; the outer one is the first other Ethernet interface. A
-# card's driver may load after this script starts, so both are waited for.
-waited=0
+# card's driver may load after this script starts, so both are waited for;
+# a guest that never has them is ended by the caller's bound.
 while :; do
     inner='' outer=''
     for d in /sys/class/net/*; do
@@ -118,9 +119,7 @@ while :; do
     if [ -n "$inner" ] && [ -n "$outer" ]; then
         break
     fi
-    [ "$waited" -lt 30 ] || break
     sleep 1
-    waited=$((waited + 1))
 done
 [ -n "$inner" ] || fail "no interface has the address $inner_mac"
 ip link set "$inner" up
@@ -130,13 +129,10 @@ addr=''
 
 # systemd-networkd asks DHCP for the outer interface's address.
 ip link set "$outer" up
-waited=0
-while [ -z "$addr" ] && [ "$waited" -lt 120 ]; do
+while [ -z "$addr" ]; do
     addr=$(ip -4 -o addr show dev "$outer" scope global | awk '{ sub("/.*", "", $4); print $4; exit }')
     [ -n "$addr" ] || sleep 1
-    waited=$((waited + 1))
 done
-[ -n "$addr" ] || fail "DHCP gave $outer no address"
 
 # With state=0 only what comes back from the outer side is accepted by its
 # tracked connection, as pf accepts it by the state of its translation;
@@ -218,14 +214,15 @@ nft list chain ip netguest forward > "$conf.loaded" 2> /dev/null
 say "LOADED fillers=$(grep -c 'ip saddr 198\.1[89]\.[0-9.]* tcp dport 9 drop' "$conf.loaded") total=$(grep -c -E '(accept|drop)$' "$conf.loaded") states_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2> /dev/null) buckets=$(cat /proc/sys/net/netfilter/nf_conntrack_buckets 2> /dev/null)"
 say "READY inner=$inner outer=$outer addr=$addr rules=$rules opt=$opt state=$state filter=$filter"
 
-# The counts, each 2 seconds, for as long as the guest runs; a count that
-# cannot be read is 0.
+# The counts, each 2 seconds, for as long as the guest runs, read as the
+# header comment says.
 while :; do
     sleep 2
     rx=$(cat "/sys/class/net/$outer/statistics/rx_packets" 2> /dev/null)
     tx=$(cat "/sys/class/net/$outer/statistics/tx_packets" 2> /dev/null)
     deny=$(nft list counter ip netguest deny9 2> /dev/null |
         awk '{ for (f = 1; f < NF; f++) if ($f == "packets") { print $(f + 1); exit } }')
+    [ -n "$deny" ] || [ "$filter" = 1 ] || deny=0
     states=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2> /dev/null)
-    say "STATS outer_in=${rx:-0} outer_out=${tx:-0} deny9=${deny:-0} states=${states:-0}"
+    say "STATS outer_in=${rx:-0} outer_out=${tx:-0} deny9=${deny:-unknown} states=${states:-0}"
 done

@@ -14,8 +14,9 @@
 #   run    start the Mac's nettput peer on PORT (5201), require the machine
 #          to reach it, start run.sh detached on the machine with CASES
 #          (`cycle debian debian-vhost freebsd freebsd-vhost kill`), wait
-#          for its status, fetch its directory into OUT, and judge its last
-#          line.
+#          for its status, fetch its directory into OUT, and judge it by the
+#          status, which must be 0, and the log's result line, which must
+#          be a pass.
 #   fetch  read only: fetch the run's directory into OUT again.
 #   clean  remove REMOTE from the machine.
 #
@@ -39,7 +40,9 @@
 # reboots the machine when the network does not answer once the card is
 # back (-B), which returns a trial boot to the installed kernel. While a
 # guest has the card the machine does not answer, and this script asks for
-# the status again every 15 seconds; that wait judges nothing.
+# the status again every 15 seconds; that wait judges nothing, but a run
+# that the machine, when it answers, no longer has, and that wrote no
+# status, fails.
 #
 # macOS charges a program started from a Claude Code session to that
 # session's Local Network permission, and the Mac's nettput is such a
@@ -157,6 +160,7 @@ case $command in
             [ -f "$f" ] || fail "no $f"
             name=${f##*/}
             sum=$(shasum -a 256 "$f" | cut -d ' ' -f 1)
+            [ -n "$sum" ] || fail "no SHA-256 of $f"
             if [ "$(on "sha256sum $remote/$name 2> /dev/null" | cut -d ' ' -f 1)" = "$sum" ]; then
                 echo "lenovo: $name is there"
                 continue
@@ -192,13 +196,23 @@ case $command in
         on "sh $remote/run.sh -D -B -W -n $iface -d $deadline -o $remote/run $peer $port $cases" ||
             fail "run.sh did not start"
         until [ -n "$(on "cat $remote/run/status 2> /dev/null" 2> /dev/null)" ]; do
+            # 1 from kill is a run that has ended; 255 is a machine that
+            # does not answer, while a guest has the card.
+            on "kill -0 \$(cat $remote/run/pid) 2> /dev/null" 2> /dev/null
+            if [ $? = 1 ] && [ -z "$(on "cat $remote/run/status 2> /dev/null")" ]; then
+                fetch_run
+                fail "the run on the machine ended without a status"
+            fi
             sleep 15
         done
         fetch_run
         cat "$out/run/log"
-        tail -n 1 "$out/run/log" | grep -q '^netguest: result: pass:' ||
-            fail "$(tail -n 1 "$out/run/log")"
-        pass
+        result=$(grep '^netguest: result: ' "$out/run/log" | tail -n 1)
+        status=$(cat "$out/run/status")
+        case $status:$result in
+            "0:netguest: result: pass:"*) pass ;;
+            *) fail "status $status: ${result:-no result line}" ;;
+        esac
         ;;
     fetch)
         identify
