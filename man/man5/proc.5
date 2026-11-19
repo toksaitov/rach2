@@ -3002,7 +3002,8 @@ and
 .Li wait_count ,
 the total ready-queue wait in milliseconds with six fractional digits
 and the number of recorded waits.
-A write clears the detailed statistics for this thread.
+The file has mode 0644.
+An owner's write clears the detailed statistics for this thread.
 .It Pa /proc/PID/autogroup
 The process's session scheduling group, as on Linux.
 The root group reads as an empty file; other groups read as a line
@@ -3029,8 +3030,9 @@ They are the thread's execution time as of the last scheduler charge
 in nanoseconds, the time spent runnable waiting for a processor in
 nanoseconds, and the number of times it was switched onto a processor.
 Rach2 keeps these counters with detailed scheduler statistics disabled.
-Linux prints three zeros when neither scheduler statistics nor task
-delay accounting is enabled.
+Linux keeps them whenever it is built with
+.Dv CONFIG_SCHED_INFO
+and prints three zeros otherwise if the file is present.
 .Xr kvm 4
 adds the second number's growth to a guest's steal time.
 .Pp
@@ -3229,40 +3231,9 @@ The calling thread's process.
 lists each process once; the ID of a thread that did not begin its
 process also names a directory, which is not listed.
 .El
-.Ss Scheduler debug files
-The scheduler exposes the following files under
-.Pa /sys/kernel/debug/sched .
-.Bl -tag -width migration_cost_ns
-.It Pa base_slice_ns
-The default slice of the fair class in nanoseconds.
-A write sets the base for threads without a custom slice.
-.Xr sched 7
-gives the boot default.
-.It Pa features
-The scheduler features, with
-.Ql NO_
-before disabled names.
-Write a name to enable it or prefix it with
-.Ql NO_
-to disable it.
-.It Pa migration_cost_ns
-The time after a thread last ran for which the balancer usually treats
-it as cache-hot and avoids moving it, initially 500,000 ns.
-.It Pa nr_migrate
-The number of candidate threads the balancer examines in a pass,
-initially 32.
-.It Pa debug
-The scheduler's diagnostic report.
-.It Pa fair_server/cpuN/runtime , fair_server/cpuN/period
-The fair server's budget and period in nanoseconds for processor
-.Ar N ,
-initially 50,000,000 and 1,000,000,000.
-The runtime must be at most the period, and the period must be from
-100,000 to 4,194,304,000 ns.
-A runtime of zero disables the server on that processor.
-.El
 .Sh SEE ALSO
 .Xr bootlog 4 ,
+.Xr debugfs 5 ,
 .Xr sysfs 5 ,
 .Xr disk 7 ,
 .Xr memory 7 ,
