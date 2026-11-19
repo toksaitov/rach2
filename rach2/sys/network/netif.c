@@ -195,6 +195,7 @@ static void set_word(uint8_t *ifr, uint32_t v)
     ifr[IFREQ_UNION] = (uint8_t)(v & 0xff);
     ifr[IFREQ_UNION + 1] = (uint8_t)((v >> 8) & 0xff);
     ifr[IFREQ_UNION + 2] = (uint8_t)((v >> 16) & 0xff);
+    ifr[IFREQ_UNION + 3] = (uint8_t)((v >> 24) & 0xff);
 }
 
 /** The hardware type of `nd`'s address: Ethernet, or `lo`'s loopback. */
@@ -355,8 +356,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     case 0x8b01: /* cfg80211 exposes no wireless extensions. */
         return -EOPNOTSUPP;
     case SIOCGIFINDEX:
-        k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
-        ifr[IFREQ_UNION] = (uint8_t)nd->index;
+        set_word(ifr, (uint32_t)nd->index);
         break;
     case SIOCGIFHWADDR:
         set_word(ifr, if_type(nd));

@@ -26,7 +26,7 @@ struct packet_last {
     uint8_t last_src[6];
     uint8_t last_pkttype;
     uint16_t last_proto;
-    uint8_t last_ifindex;
+    int last_ifindex;
     int have_last;
 };
 
@@ -262,7 +262,7 @@ static void keep_addr(struct packet_last *q, const struct sock_dgram *d)
     k_memcpy(q->last_src, d->lladdr, 6);
     q->last_pkttype = d->pkttype;
     q->last_proto = d->llproto;
-    q->last_ifindex = (uint8_t)d->info.ifindex;
+    q->last_ifindex = d->info.ifindex;
     q->have_last = 1;
 }
 
@@ -318,7 +318,10 @@ int packet_last_addr(struct socket *sock, uint8_t *sll)
     sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
     sll[2] = (uint8_t)((q->last_proto >> 8) & 0xff); /* network order */
     sll[3] = (uint8_t)(q->last_proto & 0xff);
-    sll[4] = q->last_ifindex;
+    sll[4] = (uint8_t)(q->last_ifindex & 0xff); /* sll_ifindex, an int in host order */
+    sll[5] = (uint8_t)((q->last_ifindex >> 8) & 0xff);
+    sll[6] = (uint8_t)((q->last_ifindex >> 16) & 0xff);
+    sll[7] = (uint8_t)((q->last_ifindex >> 24) & 0xff);
     sll[8] = (uint8_t)PACKET_HATYPE_ETHER;
     sll[10] = q->last_pkttype;
     sll[11] = 6;
