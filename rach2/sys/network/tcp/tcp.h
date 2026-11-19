@@ -454,6 +454,29 @@ struct tcb {
     uint8_t retx_flags; /* 0 = none, else the control flags       */
     uint8_t ack_owed;   /* a bare acknowledgement the driver refused */
     uint32_t retx_seq;  /* sequence number the control occupies   */
+
+    /*
+     * The delayed acknowledgement (`tcp_delack_hold`), which counts what
+     * is unacknowledged from `rcv_wup`. `rcv_mss` is the largest payload
+     * received, Linux's icsk_ack.rcv_mss with the same floor of 536;
+     * `delack_due` the tick at which a held acknowledgement goes out, 0
+     * when none is held. `ack_pushed` counts,
+     * up to 2, the segments since the last acknowledgement that ended a
+     * write of the peer's, Linux's ICSK_ACK_PUSHED and ICSK_ACK_PUSHED2;
+     * `pingpong` is 1 while this side answers what it receives, Linux's
+     * pingpong mode, and `rcv_data_at` the tick of the last data received,
+     * Linux's lrcvtime, valid once `rcv_data_seen`.
+     */
+    uint32_t rcv_mss;
+    uint32_t delack_due;
+    uint32_t rcv_data_at;
+    uint8_t rcv_data_seen;
+    uint8_t ack_pushed;
+    uint8_t pingpong;
+    /* 1 while an acknowledgement waits for the end of a batch of frames
+     * (`tcp_batch_begin`), on the list `batch_next` links. */
+    uint8_t batch_owed;
+    struct tcb *batch_next;
     /*
      * 1 from a simultaneous open's ACK of snd_una until an acknowledgement
      * of the SYN: the SYN, at snd_una, holds the send ring's slot before
@@ -487,6 +510,30 @@ extern int tcp_keepalive_intvl;
 extern int tcp_keepalive_probes;
 extern int tcp_retries2;
 extern int tcp_mtu_probing;
+/* 1 to hold acknowledgements as Linux does (`tcp_delack_hold`) and to
+ * announce a reopened window by Linux's rule (`tcp_window_update`), 0 to
+ * acknowledge every segment at once; 1 to acknowledge a batch of frames
+ * once at its end (`tcp_batch_end`), 0 to acknowledge each as `tcp_delack`
+ * says. Both are 1 in the kernel; the host tests that count every
+ * segment's acknowledgement set them to 0. */
+extern int tcp_delack;
+extern int tcp_ack_batch;
+
+/**
+ * Begin a batch of frames received together, such as what a vhost-net
+ * transmit pass gives the stack, as Linux's GRO hands TCP one segment for
+ * a NAPI poll's worth. Batches nest; until the outermost `tcp_batch_end`,
+ * the acknowledgement of in-order data waits, up to TCP_BATCH_ACK_MAX
+ * bytes a connection. Takes `net_lock` itself.
+ */
+void tcp_batch_begin(void);
+
+/**
+ * End a batch. At the outermost, each connection that held an
+ * acknowledgement for the batch sends it, or keeps holding it as
+ * `tcp_delack` would for the data received. Takes `net_lock` itself.
+ */
+void tcp_batch_end(void);
 
 /** Empty the list of control blocks, and have the next `tcp_listen` or
  * `tcp_connect` draw a new key for the initial sequence numbers. Called
@@ -655,7 +702,8 @@ void tcp_forget_queued(struct socket *sock);
 int tcp_is_connected(struct socket *sock);
 
 /**
- * Announce a receive window that reopened after the reader drained the ring.
+ * After a read that took bytes from the ring, send a held acknowledgement
+ * that the read makes due, or announce a receive window that reopened.
  * Sends at most one bare ACK, and only in ESTABLISHED, FIN_WAIT_1 and
  * FIN_WAIT_2, where the peer may still send. Safe to call after every read: it
  * stays quiet until the window has grown enough to be worth a segment. Takes
