@@ -53,7 +53,9 @@ row_cleanup() {
 }
 
 # muse_session: run the shared script with `muse exec` in a fresh home and a
-# clone of the shared fixture, and archive what the host verifies.
+# clone of the shared fixture, and archive what the host verifies: the
+# repository, the program's digest before and after, the free frames sampled
+# each second, the session's length and the time of each step.
 muse_session() {
     local began
     mkdir -p "$WORK/session/home/.config/muse" "$WORK/session/repo" /tmp/agents/results
@@ -93,17 +95,19 @@ EOF
     sample_memory > "$WORK/session/memory" &
     SAMPLER=$!
     printf '%s\n' exec > "$WORK/session/mode"
+    : > "$WORK/session/steps"
     began=$(date +%s)
     output "muse exec" env -i PATH="$PATH" HOME="$WORK/session/home" TMPDIR="$WORK/session" \
         LANG=C.UTF-8 TERM=dumb META_API_KEY=meta-fakeapi-dummy \
         muse exec --yolo --model muse-spark-1.2 --max-model-steps 8 \
         'Read notes.txt and do what it says. Check the change with check.sh, then commit it.'
     printf '%s\n' "$(($(date +%s) - began))" > "$WORK/session/seconds"
+    printf '%s the session ended\n' "$(($(date +%s) - began))" >> "$WORK/session/steps"
     kill "$SAMPLER"
     wait "$SAMPLER" 2>/dev/null || true
     SAMPLER=
     output "the binary after the session" sha256sum /opt/muse/bin/muse
     printf '%s\n' "$OUT" > "$WORK/session/binary.after"
     output "the repository archive" tar -cf "/tmp/agents/results/$ROW.tar" \
-        -C "$WORK/session" repo binary.before binary.after memory seconds mode
+        -C "$WORK/session" repo binary.before binary.after memory seconds steps mode
 }
