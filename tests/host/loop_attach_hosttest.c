@@ -428,7 +428,7 @@ static void phase_row(void)
     uint32_t phase;
 
     reset();
-    check(init_krffs_disk_root(image, sizeof(image), BLOCK_SECTOR_SIZE, root_flush) == 0,
+    check(init_krffs_disk_root(image, sizeof(image), BLOCK_SECTOR_SIZE, root_flush, NULL) == 0,
           "phase: mount the backing image as a disk root");
     depth = busy = 1;
     waiting = move_file;
