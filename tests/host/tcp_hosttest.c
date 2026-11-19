@@ -2470,7 +2470,7 @@ static void quick_rows(void)
     n_segs = 0;
     rx(119, lport, peer_seq - 3u * TCP_MSS, conn->snd_nxt, F_ACK, 65535, full_seg, TCP_MSS);
     CHECK("a resend that ends before the window is answered and enters quick mode too",
-          n_segs == 1 && conn->ack_quick == TCP_DELACK_QUICK - 1u && conn->pingpong == 0);
+          n_segs == 1 && conn->ack_quick == TCP_DELACK_QUICK && conn->pingpong == 0);
     conn->pingpong = 1;
     n_segs = 0;
     rx_data(conn, 119, lport, &peer_seq, F_ACK, TCP_MSS);
@@ -2493,7 +2493,11 @@ static void quick_rows(void)
     n_segs = 0;
     rx(119, lport, peer_seq - 100u, conn->snd_nxt, F_ACK, 65535, full_seg, 100);
     CHECK("a resend there ends ping-pong mode, which TCP_QUICKACK reads back",
-          conn->state == TCP_FIN_WAIT_2 && n_segs == 1 && tcp_quickack_get(&sock) == 1);
+          conn->state == TCP_FIN_WAIT_2 && n_segs == 1 && tcp_quickack_get(&sock) == 1 &&
+              conn->ack_quick == TCP_DELACK_QUICK - 1u);
+    rx_data(conn, 119, lport, &peer_seq, F_ACK, 100);
+    CHECK("and new data there is acknowledged with one grant spent",
+          n_segs == 2 && last_ack() == peer_seq && conn->ack_quick == TCP_DELACK_QUICK - 2u);
     reset_all();
 }
 
@@ -2724,7 +2728,8 @@ static void rx_unread(struct tcb *conn, uint16_t port, uint16_t lport, uint32_t 
  * at most half the ring left, and only when the window as it stands is at
  * least twice what the peer has, judged with a segment held too, and no
  * window less than a sixteenth of the ring opens a closed one, to a probe
- * either; with `tcp_delack` off the earlier rule, a growth of one segment,
+ * either, which ends ping-pong mode; data sent offers the window as it
+ * stands; with `tcp_delack` off the earlier rule, a growth of one segment,
  * holds alone.
  */
 static void window_update_rows(void)
@@ -2780,12 +2785,19 @@ static void window_update_rows(void)
           conn->recv_tail - conn->recv_head == 65536u && conn->rcv_adv == conn->rcv_nxt);
     n_segs = 0;
     read_bytes(&sock, conn, 2048);
+    tcp_quickack_set(&sock, 0);
     rx(125, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, full_seg, 1);
     CHECK("a read of less than a sixteenth of it leaves the window closed, to a probe too",
           n_segs == 1 && read16be(segs[0].data + 14) == 0 && last_ack() == peer_seq);
+    CHECK("and the probe ends ping-pong mode", tcp_quickack_get(&sock) == 1);
     read_bytes(&sock, conn, 2048);
     CHECK("and the read that frees a sixteenth announces it",
           n_segs == 2 && read16be(segs[1].data + 14) == 4096u);
+    read_bytes(&sock, conn, 3000);
+    CHECK("a read that does not double it is quiet", n_segs == 2);
+    CHECK("but data sent offers the window as it stands",
+          tcp_send(&sock, (const uint8_t *)"x", 1) == 1 && n_segs == 3 &&
+              segs[2].len == TCP_HDR_SIZE + 1 && read16be(segs[2].data + 14) == 7096u);
     reset_all();
 }
 
@@ -2949,6 +2961,36 @@ static void options_mss_rows(void)
     reset_all();
 }
 
+/**
+ * Check that quick acknowledgements end while less than half the ring is
+ * free, as Linux's __tcp_select_window ends them: on a 64 KiB ring with 30
+ * segments unread, data after a quiet time is acknowledged at once, and the
+ * grant ends there, so the next segment's acknowledgement is held.
+ */
+static void quick_space_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 49000;
+    uint16_t lport;
+
+    reset_all();
+    tcp_delack = 1;
+    host_free_frames = TCP_BIG_RING_FRAMES;
+    conn = open_conn(&sock, 130, &peer_seq, &lport);
+    host_free_frames = 1u << 20;
+    rx_unread(conn, 130, lport, &peer_seq, 30);
+    kernel_ticks += conn->rto + 1u;
+    n_segs = 0;
+    rx_unread(conn, 130, lport, &peer_seq, 1);
+    CHECK("quick: below half the ring free, data after a quiet time is acknowledged at once",
+          n_segs == 1 && last_ack() == peer_seq);
+    CHECK("and the grant ends with it", conn->ack_quick == 0);
+    rx_unread(conn, 130, lport, &peer_seq, 1);
+    CHECK("so the next segment's acknowledgement is held", n_segs == 1 && conn->delack_due != 0);
+    reset_all();
+}
+
 /** Run the rows of the acknowledgement rules, `quick_rows` to `batch_rows`. */
 static void ack_rows(void)
 {
@@ -2956,6 +2998,7 @@ static void ack_rows(void)
     delack_rows();
     delack_read_rows();
     options_mss_rows();
+    quick_space_rows();
     window_update_rows();
     batch_rows();
 }
