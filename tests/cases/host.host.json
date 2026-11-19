@@ -1652,7 +1652,7 @@
         },
         {
           "assertion_id": "virtio_blk",
-          "checks": "tests/host/virtio_blk_hosttest.c runs the virtio block driver over the virtio core against a model device: bring-up and the features it refuses, 512- and 4096-byte blocks, polled and queued requests direct and through indirect tables, a command the device fails or never answers, the cache mode as Linux's virtblk_get_cache_mode takes it with a cache it cannot flush set to writethrough, a change of capacity, and the device going away while its disk is open or at the machine's stop, under ASan and UBSan and exits 0",
+          "checks": "tests/host/virtio_blk_hosttest.c runs the virtio block driver over the virtio core against a model device: bring-up and the features it refuses, 512- and 4096-byte blocks, polled and queued requests direct and through indirect tables, a command the device fails or never answers, the cache mode as Linux's virtblk_get_cache_mode takes it with a cache it cannot flush set to writethrough, a change of capacity, read whole between the halves of an i686 store and during the whole-disk window's publication, a polled disk's flush, a write that fails after a part of it reached the cache, and the device going away while its disk is open or at the machine's stop, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
