@@ -18,15 +18,17 @@
 #          status, which must be 0, and the log's result line, which must
 #          be a pass.
 #   fetch  read only: fetch the run's directory into OUT again.
-#   clean  remove REMOTE from the machine.
+#   clean  remove REMOTE from the machine, unless it holds REMOTE/run/others,
+#          the record of the other interfaces that a run could not put
+#          back, which the next run puts back first.
 #
 # The machine's address and its wired interface come from the machines
 # file, tools/flow/machines: the address of `lenovo network` and the
 # interface of `lenovo interface`, the card being the PCI function behind
 # that interface. RACH2_MACHINE_ADDRESS stands in for the address, and when
 # RACH2_MACHINE_MAC is set the interface must report that station address
-# before anything runs; no address, station address or serial of the
-# machine is written in this tree. PEER is the Mac's address on the
+# before anything runs; this suite writes no address, station address or
+# serial of the machine. PEER is the Mac's address on the
 # interface that routes to the machine. The machine is reached as root with
 # the development key, krffs/rach2_demo_ed25519, and must run a kernel with
 # /dev/net/tun, /dev/vhost-net and VFIO, on the GNU root with its QEMU.
@@ -221,6 +223,9 @@ case $command in
         ;;
     clean)
         identify
+        if on "test -e $remote/run/others"; then
+            fail "$remote/run/others records interfaces a run did not put back; run again to put them back"
+        fi
         on "rm -rf $remote" || fail "$remote was not removed"
         pass
         ;;
