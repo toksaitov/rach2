@@ -304,6 +304,14 @@ static struct virtio_gpu_cmd *map_cmd(struct virtio_gpu_device *vg, struct virti
     return cmd;
 }
 
+/** The wait's error `rc` of a page list's ask, with the device's error
+ * answer, which the wait gives as -ENOMEM or -EIO (`answer_error`), as
+ * -EREMOTEIO, so that a refusal is told from the transport's own errors. */
+static int32_t ask_error(int32_t rc)
+{
+    return rc == -ENOMEM || rc == -EIO ? -EREMOTEIO : rc;
+}
+
 /**
  * Ask for the page list of `bo` from its page `first` with one command of
  * `map_cmd`, waited for, and copy the answer to `answer`, which holds
@@ -311,8 +319,9 @@ static struct virtio_gpu_cmd *map_cmd(struct virtio_gpu_device *vg, struct virti
  * answer is written to that many bytes of response pages when that is more
  * than the command's own page holds, or, when it is not, when the
  * transport's memory has not got the pages now or its chain cannot carry
- * them, to the rest of the command's page. 0; -ENOMEM; or the wait's
- * error, after which nothing is in `answer`. May sleep.
+ * them, to the rest of the command's page. 0; -ENOMEM; -EREMOTEIO for an
+ * error answer; or the wait's error, after which nothing is in `answer`.
+ * May sleep.
  */
 static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
                        int backing, uint8_t *answer, uint32_t *got)
@@ -336,9 +345,9 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
         vgpu_cmd_free(cmd); /* the payload's pages, part of them had */
     }
     if (!big) {
-        return vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_INLINE, got);
+        return ask_error(vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_INLINE, got));
     }
-    rc = vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL);
+    rc = ask_error(vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL));
     if (rc == -ETIMEDOUT || rc == -EINTR) {
         return rc; /* the reaper frees the command once the device answers */
     }
