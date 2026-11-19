@@ -847,20 +847,34 @@ under which a guest's access to an MSR KVM does not have raises #GP, and
 which when
 .Ql Y
 makes such a read give 0 and such a write do nothing;
-and
 .Pa report_ignored_msrs ,
 .Ql Y ,
 under which each access that
 .Pa ignore_msrs
-lets succeed is logged, at most ten lines in five seconds.
+lets succeed is logged, at most ten lines in five seconds;
+.Pa halt_poll_ns ,
+.Ql 200000 ,
+the longest a halted vCPU spins for an event before it sleeps, in ns, 0
+to sleep at once;
+.Pa halt_poll_ns_grow ,
+.Ql 2 ,
+the factor a short halt grows a vCPU's window by, 0 to leave it;
+.Pa halt_poll_ns_grow_start ,
+.Ql 10000 ,
+the window's least size in ns;
+and
+.Pa halt_poll_ns_shrink ,
+.Ql 2 ,
+the divisor a long halt shrinks it by, 0 to empty it.
 .Pa force_emulation_prefix ,
 .Pa eager_page_split ,
-.Pa ignore_msrs
-and
+.Pa ignore_msrs ,
 .Pa report_ignored_msrs
+and the four of halt polling
 have mode 0644 and take a write from root: an integer as
 .Xr strtol 3
-reads it with base 0 for the first, and for the others a boolean whose
+reads it with base 0 for the first, an unsigned integer so read, with no
+sign, for halt polling's, and for the others a boolean whose
 first character is
 .Ql y ,
 .Ql t
@@ -880,14 +894,19 @@ in either case, as Linux's
 reads it;
 anything else is
 .Er EINVAL ,
-and an integer outside the range of an int is
+and an integer outside the range of an int, or an unsigned one past 32
+bits, is
 .Er ERANGE .
 The boot options
 .Cm kvm.force_emulation_prefix= ,
 .Cm kvm.eager_page_split= ,
-.Cm kvm.ignore_msrs=
+.Cm kvm.ignore_msrs= ,
+.Cm kvm.report_ignored_msrs= ,
+.Cm kvm.halt_poll_ns= ,
+.Cm kvm.halt_poll_ns_grow= ,
+.Cm kvm.halt_poll_ns_grow_start=
 and
-.Cm kvm.report_ignored_msrs=
+.Cm kvm.halt_poll_ns_shrink=
 set them at boot.
 The others are read-only.
 Beside it,
