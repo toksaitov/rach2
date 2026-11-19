@@ -91,6 +91,7 @@ struct percpu {
     volatile uint64_t irq_cycles; /* cycles spent in its interrupts' handlers */
     uint64_t irq_entry_cycles;    /* cycle count at the outermost interrupt's entry */
     uint32_t irq_depth;           /* interrupts under way, nested ones included */
+    uint32_t sig_depth;           /* regions of `sig_irq_save` open here (syscall_proc.c) */
     int idle_short;               /* last halt ended before a scheduler period without a tick */
     volatile int tick_stopped;    /* idle span projected by sched_cpu_ticks */
     volatile uint32_t tick_stop_period; /* its scheduler period, in ticks, as it stopped */

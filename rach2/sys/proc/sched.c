@@ -1756,6 +1756,20 @@ int sched_wake_blocked(process_t *p)
     return kick;
 }
 
+void sched_wake_stopped(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = -1;
+
+    if (p->state == PROC_STOPPED) {
+        kick = sched_ready_locked(p, FAIR_WF_TTWU);
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
 uint32_t sched_lock_take(void)
 {
     return spin_lock_irqsave(&sched_lock);

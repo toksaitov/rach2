@@ -231,6 +231,18 @@ void kirq_restore(uint32_t flags)
     }
 }
 
+/** The signal state's lock, as the model's interrupt mask alone. */
+uint32_t signal_state_lock(void)
+{
+    return kirq_save();
+}
+
+/** Let the signal state's lock go, as `kirq_restore`. */
+void signal_state_unlock(uint32_t flags)
+{
+    kirq_restore(flags);
+}
+
 /**
  * The copy to the caller. With `tick_in_copy` the next tick comes first, and
  * with `read_in_copy` a second read, as either can while the copy sleeps. A
