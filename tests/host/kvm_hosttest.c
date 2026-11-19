@@ -334,6 +334,12 @@ int kcmdline_param_int(const char *key, int dflt)
     return dflt;
 }
 
+unsigned int kcmdline_param_uint(const char *key, unsigned int dflt)
+{
+    (void)key;
+    return dflt;
+}
+
 int k_strtoll(const char *s, size_t len, long long *out)
 {
     unsigned long long v = 0, base = 10, d;
@@ -369,22 +375,38 @@ int k_strtoll(const char *s, size_t len, long long *out)
     return 0;
 }
 
+/** kstd.c's unsigned read, as k_strtoll's with no `-`. */
+int k_strtoul(const char *s, size_t len, unsigned long *out)
+{
+    long long v;
+    int r;
+
+    if (len > 0 && s[0] == '-') {
+        return -EINVAL;
+    }
+    r = k_strtoll(s, len, &v);
+    if (r == 0) {
+        *out = (unsigned long)v;
+    }
+    return r;
+}
+
 size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
 {
     char digits[12];
-    unsigned int u = input < 0 ? 0u - (unsigned int)input : (unsigned int)input;
+    int neg = radix == 'd' && input < 0;
+    unsigned int u = neg ? 0u - (unsigned int)input : (unsigned int)input;
     size_t n = 0, i = 0;
 
-    (void)radix;
     (void)force_sign;
     do {
         digits[n++] = (char)('0' + u % 10u);
         u /= 10u;
     } while (u);
-    if (n + (input < 0) + 1u > buffer_size) {
+    if (n + (size_t)neg + 1u > buffer_size) {
         return 0;
     }
-    if (input < 0) {
+    if (neg) {
         buffer[i++] = '-';
     }
     while (n) {
@@ -3482,6 +3504,51 @@ static int32_t param_write(const char *name, const char *text)
 }
 
 /**
+ * Halt polling's four parameters, as Linux's param_set_uint takes a write;
+ * a new vCPU's MSR_KVM_POLL_CONTROL and empty window; and KVM_CAP_HALT_POLL,
+ * the VM's bound in place of halt_poll_ns.
+ */
+static void halt_param_rows(void)
+{
+    struct kvm_vcpu *v;
+    uint64_t value = 5;
+    int vm, fd;
+
+    CHECK(param_reads("halt_poll_ns", "200000\n") && param_reads("halt_poll_ns_grow", "2\n") &&
+              param_reads("halt_poll_ns_grow_start", "10000\n") &&
+              param_reads("halt_poll_ns_shrink", "2\n"),
+          "halt polling's parameters read x86's defaults: 200000, 2, 10000 and 2");
+    CHECK(param_write("halt_poll_ns", "0x10\n") == 5 && kvm_halt_poll_ns == 16 &&
+              param_write("halt_poll_ns", "4294967295") == 10 &&
+              param_reads("halt_poll_ns", "4294967295\n"),
+          "halt_poll_ns takes 0x10 in base 0 and the largest unsigned int, read unsigned");
+    CHECK(param_write("halt_poll_ns", "-1") == -EINVAL &&
+              param_write("halt_poll_ns", "4294967296") == -ERANGE &&
+              kvm_halt_poll_ns == 4294967295u,
+          "refusing a sign with EINVAL and a number past 32 bits with ERANGE, as kstrtouint");
+    CHECK(param_write("halt_poll_ns", "200000") == 6 &&
+              param_write("halt_poll_ns_shrink", "0") == 1 && kvm_halt_poll_ns_shrink == 0 &&
+              param_write("halt_poll_ns_shrink", "2") == 1,
+          "and takes its default back, as halt_poll_ns_shrink takes 0 and 2");
+
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    CHECK(get_msr(fd, MSR_KVM_POLL_CONTROL, &value) == 1 && value == 1 && v->halt_poll_ns == 0,
+          "a new vCPU allows halt polling, MSR_KVM_POLL_CONTROL 1 as Linux's postcreate, "
+          "its window empty");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_HALT_POLL) == 1 &&
+              vm_cap(vm, KVM_CAP_HALT_POLL, 1ull << 32) == -EINVAL && !v->vm->halt_poll_override,
+          "KVM_CAP_HALT_POLL is offered, and refuses a bound past 32 bits");
+    CHECK(vm_cap(vm, KVM_CAP_HALT_POLL, 5000) == 0 && v->vm->halt_poll_override &&
+              v->vm->max_halt_poll_ns == 5000 && vm_cap(vm, KVM_CAP_HALT_POLL, 0) == 0 &&
+              v->vm->max_halt_poll_ns == 0,
+          "and sets the VM's bound in place of halt_poll_ns, again after vCPUs, 0 among them");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/**
  * KVM's three writable parameters, as Linux's param_set_bool and
  * param_set_int take a write, and ignore_msrs, under which an MSR KVM does
  * not have reads 0 and takes any write, the guest's and the caller's, as
@@ -3520,7 +3587,6 @@ static void param_rows(void)
           "refusing a number past an int with ERANGE and text with EINVAL, the value kept");
     CHECK(param_write("force_emulation_prefix", "0") == 1 && kvm_force_emulation_prefix == 0,
           "and takes 0 back");
-
     vm = dev(KVM_CREATE_VM, 0);
     fd = fdio(vm, KVM_CREATE_VCPU, 0);
     v = (struct kvm_vcpu *)entries[fd].priv;
@@ -4696,6 +4762,7 @@ static void selftest_rows(void)
     vm_cap_rows();
     feature_msr_rows();
     param_rows();
+    halt_param_rows();
     ignore_feature_rows();
     report_rows();
     svm_debugctl_rows();
