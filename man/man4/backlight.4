@@ -123,8 +123,13 @@ reads, or the highest.
 It has no switch of its own: off, it is at level 0, which is dark only
 when the least entry of
 .Fn _BCL
-is 0; the specification allows one above 0, and the panel then stays lit
-at it while the console is blank.
+is 0.
+The specification allows one above 0; the backlight then keeps its level
+while the console is blank, as Linux's acpi_video does, and the blank does
+not count on it to darken the screen: the text console is painted black,
+and a program's picture on
+.Pa /fb
+is not blanked unless a display driver turns its output off.
 .Sh FILES
 .Bl -tag -width /sys/class/backlight/NAME
 .It Pa /sys/class/backlight/NAME
