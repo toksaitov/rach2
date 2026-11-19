@@ -1185,6 +1185,9 @@ static int halted_root_mount(struct vfs_mount *mnt)
  * the getattr's error among them when the end of an append cannot be read,
  * and -EINVAL for an O_DIRECT write the device cannot take as it is
  * (`direct_misaligned`). The bytes written widen the range in `state`.
+ * A caller without privilege clears the file's set-id bits before a byte
+ * is written, as Linux's file_remove_privs does, and a clear that fails is
+ * the write's error with nothing written (`cred_kill_setid`).
  *
  * On a type that does not set `file_locked` the description's lock orders
  * only the writes through that description, so an append there, and a
@@ -1226,6 +1229,13 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         written = -EINVAL;
         goto out;
     }
+    if (count > 0 && !cred_fs_privileged()) {
+        written =
+            entry->node ? cred_kill_setid(entry->node) : vfs_kill_setid(ofd->vmnt, ofd->vnode);
+        if (written != 0) {
+            goto out;
+        }
+    }
     start = pos;
     written = file_write_pieces(entry, state, buf, count, &pos);
     if (written > 0) {
@@ -1236,17 +1246,8 @@ out:
     if (held) {
         vfs_node_unlock(&state->file);
     }
-    if (written > 0) {
-        if (!cred_fs_privileged()) {
-            if (entry->node) {
-                cred_kill_setid(entry->node);
-            } else {
-                vfs_kill_setid(ofd->vmnt, ofd->vnode);
-            }
-        }
-        if (!at) {
-            ofd->offset = pos;
-        }
+    if (written > 0 && !at) {
+        ofd->offset = pos;
     }
     return written;
 }
@@ -1636,17 +1637,14 @@ static long ftruncate_fd(int fd, long long length)
     }
     ns = size_ns_lock(entry->ofd);
     rc = fsize_growth_refused(entry->ofd, (uint64_t)length);
+    if (rc == 0 && !cred_fs_privileged()) {
+        rc = entry->node ? cred_kill_setid(entry->node)
+                         : vfs_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
+    }
     if (rc == 0) {
         rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
     }
     size_ns_unlock(entry->ofd, ns);
-    if (rc == 0 && !cred_fs_privileged()) {
-        if (entry->node) {
-            cred_kill_setid(entry->node);
-        } else {
-            vfs_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
-        }
-    }
     if (rc == 0 && own && filemap_disk_mapped(entry->ofd->vmnt, entry->ofd->ino)) {
         big = big_take();
         filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
@@ -2222,13 +2220,16 @@ int canonicalize_abs(char *path)
  * every regular-file descriptor: no address a descriptor has is handed out
  * while it has it. A directory is checked the same way, though `rmdir` fails on
  * one a description has: one that fails the check was removed by a route that
- * did not look for its descriptors.
+ * did not look for its descriptors. A read that fails at any step, the
+ * header's, the path's or the walk back, is -EIO, never taken for a file
+ * that went away.
  */
 int fd_node_check(fd_entry_t *entry)
 {
     char path[256];
     krffs_node_t *node = entry->node;
     krffs_node_t head;
+    int rc;
 
     if (node == NULL) {
         return 0;
@@ -2242,11 +2243,12 @@ int fd_node_check(fd_entry_t *entry)
     if (head.name[0] == '\0') {
         return 0;
     }
-    if (krffs_node_path(node, path, sizeof(path)) != 0) {
-        return -EBADF;
+    rc = krffs_node_path(node, path, sizeof(path));
+    if (rc != 0) {
+        return rc == -EIO ? -EIO : -EBADF;
     }
-    if (krffs_resolve(path) != node) {
-        return -EBADF;
+    if (krffs_resolve_err(path, &rc) != node) {
+        return rc == -EIO ? -EIO : -EBADF;
     }
     return 0;
 }
@@ -2990,42 +2992,54 @@ int cred_fs_privileged(void)
  * would report an unclean image as cleanly unmounted, which corrupts the file
  * system, and `chown(path, -1, -1)` is permitted to every caller.
  */
-void cred_kill_setid(krffs_node_t *node)
+int cred_kill_setid(krffs_node_t *node)
 {
     krffs_node_t head;
     uint16_t mode;
 
-    if (!node || node == krffs_fs->node || krffs_node_head(node, &head) != 0 ||
-        KRFFS_IS_DIR(head.mode)) {
-        return;
+    if (!node || node == krffs_fs->node) {
+        return 0;
+    }
+    if (krffs_node_head(node, &head) != 0) {
+        return krffs_root_halted() ? -EROFS : -EIO;
+    }
+    if (KRFFS_IS_DIR(head.mode)) {
+        return 0;
     }
     mode = (uint16_t)(head.mode & ~KRFFS_MODE_SUID);
     if (mode & 0010u) {
         mode &= (uint16_t)~KRFFS_MODE_SGID;
     }
-    if (mode != head.mode) {
-        (void)krffs_node_set_mode(node, mode);
+    if (mode != head.mode && krffs_node_set_mode(node, mode) != 0) {
+        return krffs_root_halted() ? -EROFS : -EIO;
     }
+    return 0;
 }
 
-void vfs_kill_setid(struct vfs_mount *mnt, void *node)
+int vfs_kill_setid(struct vfs_mount *mnt, void *node)
 {
     struct vfs_stat vst;
     int big;
+    int rc;
 
-    if (!mnt || !node || vfs_getattr(mnt, node, &vst) != 0) {
-        return;
+    if (!mnt || !node) {
+        return 0;
+    }
+    rc = vfs_getattr(mnt, node, &vst);
+    if (rc != 0) {
+        return rc;
     }
     if ((vst.mode & 0170000u) == 0040000u || !(vst.mode & 06000u)) {
-        return;
+        return 0;
     }
     vst.mode &= ~04000u;
     if (vst.mode & 0010u) {
         vst.mode &= ~02000u;
     }
     big = big_take();
-    (void)vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
+    rc = vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
     big_give(big);
+    return rc;
 }
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
@@ -4575,15 +4589,13 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
 {
     struct vfs_ref file;
     int own = file_lock(ofd, &file);
-    int rc;
+    int rc = 0;
 
-    rc = vfs_truncate(mnt, ofd->fhandle, 0);
-    if (rc == 0 && !cred_fs_privileged()) {
-        if (mnt_is_root(mnt)) {
-            cred_kill_setid(ofd->vnode);
-        } else {
-            vfs_kill_setid(mnt, ofd->vnode);
-        }
+    if (!cred_fs_privileged()) {
+        rc = mnt_is_root(mnt) ? cred_kill_setid(ofd->vnode) : vfs_kill_setid(mnt, ofd->vnode);
+    }
+    if (rc == 0) {
+        rc = vfs_truncate(mnt, ofd->fhandle, 0);
     }
     if (rc == 0 && own) {
         filemap_file_truncated(mnt, ofd->ino, 0);
@@ -7314,7 +7326,8 @@ static int seek_mem(fd_entry_t *entry, long long off, int whence, uint64_t limit
  * telldir gave, move it, and no such type's `readdir` is given a place it did
  * not give. Any other place is -EINVAL, and one past `limit`, the largest
  * offset the call can return, -EOVERFLOW. A directory removed by a route
- * that did not look for its descriptors is -EBADF (`fd_node_check`).
+ * that did not look for its descriptors is -EBADF, and one whose header
+ * cannot be read -EIO (`fd_node_check`).
  */
 static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t limit,
                         long long *out)
@@ -7329,8 +7342,11 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     if (!entry->ofd || (entry->type == FD_TYPE_DIR && !entry->ofd->vmnt)) {
         return -EBADF;
     }
-    if (entry->type == FD_TYPE_DIR && fd_node_check(entry) != 0) {
-        return -EBADF;
+    if (entry->type == FD_TYPE_DIR) {
+        rc = fd_node_check(entry);
+        if (rc != 0) {
+            return rc;
+        }
     }
     bytes = entry->type == FD_TYPE_DIR && entry->ofd->vmnt->type->dir_seeks_bytes;
     if (bytes) {
@@ -13116,22 +13132,24 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
  * that changes nothing needs no right, so `chown(path, -1, -1)` succeeds on
  * any file that exists.
  *
- * A call that changes either field stamps the node's attribute-change time
- * once, after both, and clears its set-id bits (`cred_kill_setid`) whoever
- * asks, as POSIX has it, which is why cp and install chown before they
- * chmod. Both happen only when a field changes: `chown(path, -1, -1)`
- * succeeds for every caller and leaves the times alone, and a clear that
- * ran on it would let any user clear the set-user-ID bit of /bin/su with
- * one call. A halted root (`krffs_root_halted`) is -EROFS before anything
- * else, for a call that changes nothing too, as a file system turned
- * read-only is on Linux; a header that cannot be read or a store that fails
- * is -EIO.
+ * A call that changes either field clears the node's set-id bits
+ * (`cred_kill_setid`) whoever asks, as POSIX has it, which is why cp and
+ * install chown before they chmod; the clear goes first, so that one that
+ * fails changes nothing. It then stamps the attribute-change time once,
+ * after both fields. Both happen only when a field changes, and a call
+ * that changes nothing, `chown(path, -1, -1)`, succeeds for every caller
+ * and leaves the times alone: a clear that ran on it would let any user
+ * clear the set-user-ID bit of /bin/su with one call. A halted root
+ * (`krffs_root_halted`) is -EROFS before anything else, for a call that
+ * changes nothing too, as a file system turned read-only is on Linux; a
+ * header that cannot be read or a store that fails is -EIO.
  */
 static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 {
     krffs_node_t head;
     int uid_changes;
     int gid_changes;
+    int rc;
 
     if (krffs_root_halted()) {
         return -EROFS;
@@ -13148,16 +13166,19 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
         (proc_fsuid(current_proc) != head.uid || !cred_in_group(gid))) {
         return -EPERM;
     }
-    if ((uid_changes || gid_changes) &&
-        krffs_node_set_owner(node, uid, gid,
+    if (!uid_changes && !gid_changes) {
+        return 0;
+    }
+    rc = cred_kill_setid(node);
+    if (rc != 0) {
+        return rc;
+    }
+    if (krffs_node_set_owner(node, uid, gid,
                              (uid_changes ? KRFFS_SET_UID : 0) |
                                  (gid_changes ? KRFFS_SET_GID : 0)) != 0) {
         return -EIO;
     }
-    if (uid_changes || gid_changes) {
-        krffs_stamp(node, KRFFS_STAMP_ATTR);
-        cred_kill_setid(node);
-    }
+    krffs_stamp(node, KRFFS_STAMP_ATTR);
     return 0;
 }
 
@@ -18768,7 +18789,8 @@ static int rename_same_node(const struct vfs_ref *opar, const char *oleaf,
  * the attack open while a probe that tries only unlink passes. A directory
  * source is -EPERM, since a directory's children reference its id; a
  * directory destination is -EISDIR; a destination a loop device stands on
- * is -EBUSY.
+ * is -EBUSY. A lookup of the destination that fails other than with
+ * -ENOENT, and a header that cannot be read, are the rename's error.
  *
  * A destination the rename replaces loses only its name when a descriptor
  * holds it, so the holder keeps reading the file it opened, and is freed by
@@ -18821,15 +18843,22 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
     if (flags & RENAME_NOREPLACE) {
         return vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
     }
-    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {
+    rc = npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found);
+    if (rc == 0) {
         existing = found;
+    } else if (rc != -ENOENT) {
+        return rc;
     }
     if (existing && existing != node) {
         rc = cred_sticky_ok((krffs_node_t *)npar->node, existing);
         if (rc != 0) {
             return rc;
         }
-        if (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode)) {
+        is_dir = krffs_node_is_dir(existing);
+        if (is_dir < 0) {
+            return -EIO;
+        }
+        if (is_dir) {
             return -EISDIR;
         }
         if (loop_backs(npar->mnt, existing)) {
@@ -19301,7 +19330,8 @@ static uint32_t utimes_events(const struct utime_spec *times)
  *
  * A file or a directory of a file system has its times set by the rules of
  * `utimes_node`, and one of the KRFFS boot root must still be the node it
- * was, or have lost its name to an unlink since. A pipe, a socket, a
+ * was, or have lost its name to an unlink since: -EBADF otherwise, and
+ * -EIO when that cannot be read (`fd_node_check`). A pipe, a socket, a
  * terminal, a device or a synthetic directory has no times stored for it and
  * is -EROFS, as the path to a synthetic one answers; Linux sets the times of
  * such an inode. An O_PATH descriptor names its file for the empty path and
@@ -19332,9 +19362,8 @@ static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
     file.mnt = mnt;
     file.node = entry->ofd->vnode;
     vfs_node_lock(&file);
-    if (entry->node && fd_node_check(entry) != 0) {
-        rc = -EBADF;
-    } else {
+    rc = entry->node ? fd_node_check(entry) : 0;
+    if (rc == 0) {
         rc = utimes_node(mnt, entry->ofd->vnode, times);
     }
     vfs_node_unlock(&file);
@@ -20694,7 +20723,8 @@ static int dir_past_end(struct open_file *ofd)
  * is an O_PATH one, or is on a KRFFS root directory removed since
  * (`fd_node_check`); -ENOTDIR for one that is no directory; -EINVAL when the
  * first record does not fit, as for a size of 0 before the end; -EIO before
- * the root file system is mounted; or, with nothing written, the file
+ * the root file system is mounted, or for a KRFFS root directory whose
+ * header cannot be read; or, with nothing written, the file
  * system's error. A size of 0 checks no buffer, as on Linux.
  *
  * Each record is built in kernel memory and copied out, and the whole buffer
@@ -20763,8 +20793,12 @@ static long getdents(int fd_num, char *buf, uint32_t count, int format)
     if (!vfs_root_mounted()) {
         return -EIO;
     }
-    if (fd_node_check(entry) != 0) {
-        return -EBADF;
+    {
+        int rc = fd_node_check(entry);
+
+        if (rc != 0) {
+            return rc;
+        }
     }
 
     {

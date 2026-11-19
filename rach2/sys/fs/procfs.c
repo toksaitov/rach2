@@ -371,6 +371,7 @@ struct procfs_text {
     int cap;
     int len;
     int nomem;
+    int err; /* 0, or -EIO when a read the text needs failed */
 };
 
 #define PROCFS_TEXT_FIRST 256
@@ -382,6 +383,7 @@ static void procfs_text_init(struct procfs_text *t)
     t->cap = 0;
     t->len = 0;
     t->nomem = 0;
+    t->err = 0;
 }
 
 /** Grow `t`'s buffer to hold `want` bytes and a NUL: 0, or -1 with `nomem`
@@ -984,16 +986,25 @@ static krffs_node_t *exe_root_node(const struct open_file *ofd)
 
 /** The present path of `node`, a file of the KRFFS root that has a name, in
  * a buffer from the heap the caller frees; NULL when no path resolves back
- * to it, or the heap has no room. */
-static char *exe_present_path(krffs_node_t *node)
+ * to it, or the heap has no room, and NULL with `*err` -EIO when a read
+ * that the path or its walk back needs fails. */
+static char *exe_present_path(krffs_node_t *node, int *err)
 {
     char *path = kmalloc(VFS_PATH_MAX);
+    int rc;
 
-    if (path && (krffs_node_path(node, path, VFS_PATH_MAX) != 0 || krffs_resolve(path) != node)) {
-        kfree(path);
-        path = NULL;
+    if (!path) {
+        return NULL;
     }
-    return path;
+    rc = krffs_node_path(node, path, VFS_PATH_MAX);
+    if (rc == 0 && krffs_resolve_err(path, &rc) == node) {
+        return path;
+    }
+    if (rc == -EIO) {
+        *err = -EIO;
+    }
+    kfree(path);
+    return NULL;
 }
 
 /** A path from the mount table becomes relative to the reader's root.
@@ -1041,14 +1052,19 @@ static void exe_relative(char *path)
 
 /** Reconstruct the executable's present path under its mount's lock. The
  * description stays held across a sleeping path read and is released before
- * the reader's root is read, so two mount locks are never held together. */
-static char *exe_file_path(struct open_file *file, int *deleted)
+ * the reader's root is read, so two mount locks are never held together.
+ * NULL with `*err` -EIO when a header or a path of the KRFFS root, or the
+ * path of another type, cannot be read, which the reader answers, never
+ * a recorded name in its place; `*err` is 0 otherwise. */
+static char *exe_file_path(struct open_file *file, int *deleted, int *err)
 {
     krffs_node_t *node;
     struct vfs_stat st;
     char *path = NULL;
+    int rc;
 
     *deleted = 0;
+    *err = 0;
     if (!file || !file->vmnt) {
         return NULL;
     }
@@ -1058,9 +1074,12 @@ static char *exe_file_path(struct open_file *file, int *deleted)
     if (node) {
         krffs_node_t head;
 
-        *deleted = krffs_node_head(node, &head) == 0 && head.name[0] == '\0';
-        if (!*deleted) {
-            path = exe_present_path(node);
+        if (krffs_node_head(node, &head) != 0) {
+            *err = -EIO;
+        } else if (head.name[0] == '\0') {
+            *deleted = 1;
+        } else {
+            path = exe_present_path(node, err);
         }
     } else if (file->name) {
         *deleted = vfs_name_deleted(file->name);
@@ -1074,7 +1093,10 @@ static char *exe_file_path(struct open_file *file, int *deleted)
             *deleted = st.nlink == 0;
         }
         if (!*deleted && (path = kmalloc(VFS_PATH_MAX)) != NULL &&
-            vfs_node_path(file->vmnt, file->vnode, path, VFS_PATH_MAX) != 0) {
+            (rc = vfs_node_path(file->vmnt, file->vnode, path, VFS_PATH_MAX)) != 0) {
+            if (rc == -EIO) {
+                *err = -EIO;
+            }
             kfree(path);
             path = NULL;
         }
@@ -1110,6 +1132,7 @@ static int exe_text(int pid, char *buf, int cap, int mark)
     struct mm *mm;
     char *now = NULL;
     int deleted;
+    int err = 0;
     int n;
 
     if (!p || !p->mm || (!p->mm->exe && !p->mm->exe_file)) {
@@ -1122,7 +1145,11 @@ static int exe_text(int pid, char *buf, int cap, int mark)
     mm_hold(mm);
     deleted = 0;
     if (cap > 0) {
-        now = exe_file_path(mm->exe_file, &deleted);
+        now = exe_file_path(mm->exe_file, &deleted, &err);
+    }
+    if (err != 0) {
+        mm_unhold(mm);
+        return err;
     }
     n = exe_put(buf, cap, 0, now ? now : mm->exe ? mm->exe : "");
     if (deleted && mark) {
@@ -1979,11 +2006,12 @@ static char *maps_exe_name(struct open_file *file, const char *recorded)
     const char *base;
     size_t len;
     int deleted;
+    int err;
 
     if (!file) {
         return NULL;
     }
-    now = exe_file_path(file, &deleted);
+    now = exe_file_path(file, &deleted, &err); /* a read that failed shows the recorded name */
     base = now ? now : recorded;
     if (!base) {
         return NULL;
@@ -3165,7 +3193,8 @@ static int memfd_target(struct procfs_text *t, const fd_entry_t *e)
  * rebuilt, in a heap buffer of VFS_PATH_MAX bytes, only from a node still live
  * and reachable, since the node of a stale descriptor, unlinked or relocated,
  * may be on the free list; a heap with no room for the buffer sets `t`'s
- * `nomem`.
+ * `nomem`. A header or a path that cannot be read sets `t`'s `err` to -EIO,
+ * which the reader answers in place of "/" or a recorded path.
  *
  * The present path of a node of a mounted type is what Linux's `d_path` gives:
  * the entry the file was opened by as renames have moved it, or a directory's
@@ -3181,26 +3210,36 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
     char *now = NULL;
     krffs_node_t head;
 
-    if (e->node && krffs_node_head(e->node, &head) == 0 && head.type == KRFFS_RESERVED_NODE) {
+    int err = 0;
+    int rc;
+
+    if (e->node && krffs_node_head(e->node, &head) != 0) {
+        t->err = -EIO;
+    } else if (e->node && head.type == KRFFS_RESERVED_NODE) {
         char *path = kmalloc(VFS_PATH_MAX);
 
         if (!path) {
             t->nomem = 1;
-        } else if (krffs_node_path(e->node, path, VFS_PATH_MAX) == 0 &&
-                   krffs_resolve(path) == e->node) {
+        } else if ((rc = krffs_node_path(e->node, path, VFS_PATH_MAX)) == 0 &&
+                   krffs_resolve_err(path, &rc) == e->node) {
             ap_str(t, path);
+        } else if (rc == -EIO) {
+            t->err = -EIO;
         } else {
             ap_ch(t, '/');
         }
         kfree(path);
     } else if (memfd_target(t, e)) {
     } else if (file && file->vmnt && (file->name || file->vmnt->type->ops->path) &&
-               ((now = exe_file_path(file, &deleted)) != NULL || (deleted && file->dirpath))) {
+               ((now = exe_file_path(file, &deleted, &err)) != NULL ||
+                (err == 0 && deleted && file->dirpath))) {
         ap_str(t, now ? now : file->dirpath);
         if (deleted) {
             ap_str(t, " (deleted)");
         }
         kfree(now);
+    } else if (err != 0) {
+        t->err = err;
     } else if (file && file->vmnt && file->dirpath) {
         ap_str(t, file->dirpath);
     } else {
@@ -3435,9 +3474,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     }
     fd_peek_drop(&copy);
-    if (t->nomem) {
+    if (t->nomem || t->err) {
         kfree(t->buf);
-        return -ENOMEM;
+        return t->nomem ? -ENOMEM : t->err;
     }
     n = t->len < cap - 1 ? t->len : cap - 1;
     if (n > 0) {

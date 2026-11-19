@@ -1004,6 +1004,17 @@ krffs_node_t *krffs_resolve(const char *path)
     return program_path && __builtin_strcmp(path, program_path) == 0 ? &program : NULL;
 }
 
+/** `krffs_resolve`, with `*err` 0 when found and -ENOENT when not. */
+krffs_node_t *krffs_resolve_err(const char *path, int *err)
+{
+    krffs_node_t *node = krffs_resolve(path);
+
+    if (err) {
+        *err = node ? 0 : -ENOENT;
+    }
+    return node;
+}
+
 const struct vfs_type vfs_tmpfs_type = {0};
 
 /** Whether a node is memfd_secret's, which no row's is: 0. */
