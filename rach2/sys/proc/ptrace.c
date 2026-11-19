@@ -102,7 +102,8 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
         big = 1;
     }
     if (gone) {
-        if (self->tracer == tpid) {
+        /* A detach under the big lock may have come since `tpid` was read. */
+        if (*(volatile uint32_t *)&self->tracer == tpid) {
             flags = signal_state_lock();
             self->ptrace = 0;
             signal_state_unlock(flags);

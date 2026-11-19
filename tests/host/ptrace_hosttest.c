@@ -106,6 +106,12 @@ void bkl_enter(void)
 void bkl_exit(void)
 {}
 
+/** The model's stops run without the big lock, as a traced call's do. */
+int bkl_held(void)
+{
+    return 0;
+}
+
 /** The model runs the tracee only during its own simulated stops. */
 void sched_wait_off_cpu(const process_t *t)
 {
