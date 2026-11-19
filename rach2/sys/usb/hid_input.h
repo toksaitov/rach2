@@ -45,7 +45,9 @@ struct hid_input {
     int mt_left;                   /* contacts still due in a counted frame */
     unsigned int mt_buttons;       /* the buttons described by the touch application */
     unsigned int mt_pressed;       /* button bits read in this packet */
+    unsigned int mt_button_fields; /* button sources present in this packet */
     unsigned int mt_frame_buttons; /* precision buttons from the first packet */
+    unsigned int mt_button_codes;  /* mapped codes handled at frame end */
     uint8_t mt_precision;          /* uses the Microsoft multitouch profile */
     uint8_t mt_drop_unused;        /* the device omits lifted contacts */
 };
@@ -72,6 +74,7 @@ struct hid_dev {
     int mt_set_feature;              /* the report to write after its GET, or -1 */
     int mt_feature;                  /* report of the last request, or -1 */
     int mt_feature_write;            /* the last request was a SET_REPORT */
+    int mt_mode_failed;              /* the required Input Mode could not be set */
     uint8_t mt_precision;            /* the descriptor's Microsoft MT profile */
     uint8_t mt_drop_unused;          /* model whose reports omit lifted contacts */
     struct hid_input inputs[HID_MAX_INPUTS];
