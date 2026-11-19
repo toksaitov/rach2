@@ -53,7 +53,7 @@ The Hardware section of `AGENTS.md` says what may be written and when the owner 
 
 ## Sound and screen
 
-* The owner works beside the Lenovo, so a step there is silent and does not take the screen unless it must. Run `mixer vol 1` after every boot, since HDA starts at 100, and again once a program that sets the volume, such as Doom, has started. Measure sound by the kernel's counters and `/proc/audio` at that level, not by ear.
+* The owner works beside the Lenovo, so a step there is silent and does not take the screen unless it must. Run `mixer vol 1` and set the backlight to 30%, `echo 281 > /sys/class/backlight/intel_backlight/brightness`, after every boot, since HDA and the panel start at 100, and again once a program that sets the volume, such as Doom, has started. Measure sound by the kernel's counters and `/proc/audio` at that level, not by ear.
 * A step that plays sound aloud or shows something on the screen, Doom, `audiotest` or a tone among them, is announced first: comment "Lenovo notice:" and what will play on the task's issue, which the manager passes to the owner, and wait ten minutes before running it. Post the notice when the go arrives, before the build and before the Lenovo's lock is taken, so the ten minutes pass during the build. Everything the notice names is part of the step and waits the ten minutes, its reboots and their boot text among them.
 
 ## Sittings
