@@ -424,6 +424,14 @@ int cred_kill_setid(krffs_node_t *node);
  */
 int vfs_kill_setid(struct vfs_mount *mnt, void *node);
 
+/**
+ * The set-id clear of the file `node` of the mount `mnt`: `cred_kill_setid`
+ * on the KRFFS boot root and on a bind of it, whose nodes are the root's and
+ * whose type has no setattr, and `vfs_kill_setid` on every other mount. 0, or
+ * their error, on which the caller changes nothing.
+ */
+int mnt_kill_setid(struct vfs_mount *mnt, void *node);
+
 /* Access-check `want` bits, matching an octal permission digit. */
 #define CRED_R 4
 

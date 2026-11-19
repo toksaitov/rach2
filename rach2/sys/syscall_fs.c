@@ -1187,7 +1187,7 @@ static int halted_root_mount(struct vfs_mount *mnt)
  * (`direct_misaligned`). The bytes written widen the range in `state`.
  * A caller without privilege clears the file's set-id bits before a byte
  * is written, as Linux's file_remove_privs does, and a clear that fails is
- * the write's error with nothing written (`cred_kill_setid`).
+ * the write's error with nothing written (`mnt_kill_setid`).
  *
  * On a type that does not set `file_locked` the description's lock orders
  * only the writes through that description, so an append there, and a
@@ -1230,8 +1230,7 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         goto out;
     }
     if (count > 0 && !cred_fs_privileged()) {
-        written =
-            entry->node ? cred_kill_setid(entry->node) : vfs_kill_setid(ofd->vmnt, ofd->vnode);
+        written = mnt_kill_setid(ofd->vmnt, ofd->vnode);
         if (written != 0) {
             goto out;
         }
@@ -1638,8 +1637,7 @@ static long ftruncate_fd(int fd, long long length)
     ns = size_ns_lock(entry->ofd);
     rc = fsize_growth_refused(entry->ofd, (uint64_t)length);
     if (rc == 0 && !cred_fs_privileged()) {
-        rc = entry->node ? cred_kill_setid(entry->node)
-                         : vfs_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
+        rc = mnt_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
     }
     if (rc == 0) {
         rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
@@ -3040,6 +3038,14 @@ int vfs_kill_setid(struct vfs_mount *mnt, void *node)
     rc = vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
     big_give(big);
     return rc;
+}
+
+int mnt_kill_setid(struct vfs_mount *mnt, void *node)
+{
+    if (mnt && mnt_is_root(vfs_mount_base(mnt))) {
+        return cred_kill_setid(node);
+    }
+    return vfs_kill_setid(mnt, node);
 }
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
@@ -4592,7 +4598,7 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
     int rc = 0;
 
     if (!cred_fs_privileged()) {
-        rc = mnt_is_root(mnt) ? cred_kill_setid(ofd->vnode) : vfs_kill_setid(mnt, ofd->vnode);
+        rc = mnt_kill_setid(mnt, ofd->vnode);
     }
     if (rc == 0) {
         rc = vfs_truncate(mnt, ofd->fhandle, 0);
@@ -14124,14 +14130,14 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  * its end, `dir` (`resolve_named`), and `truncate_checks` has what is
  * refused. The file is then truncated through an open file description of
  * its own, which no descriptor points at, with the open, the lock and the
- * close of an open for writing and an ftruncate: a KRFFS file that must move
- * to grow repoints the description, so the set-id clear of an unprivileged
- * caller finds the file where it is now, and a loop attachment sees the
- * truncation in progress, as it sees an ftruncate. A length that grows the
- * file past the caller's RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under
- * the file's lock, or on FAT32 and exFAT the namespace lock
- * (`fsize_growth_refused`); a shrink is never refused. A
- * file reserved for execution gives -ETXTBSY, as on Linux.
+ * close of an open for writing and an ftruncate, so that a loop attachment
+ * sees the truncation in progress, as it sees an ftruncate. A caller without
+ * privilege clears the file's set-id bits first, as Linux's do_truncate
+ * does, and a clear that fails is the answer with the file unchanged. A
+ * length that grows the file past the caller's RLIMIT_FSIZE is -EFBIG with
+ * SIGXFSZ, judged under the file's lock, or on FAT32 and exFAT the namespace
+ * lock (`fsize_growth_refused`); a shrink is never refused. A file reserved
+ * for execution gives -ETXTBSY, as on Linux.
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
 {
@@ -14172,17 +14178,13 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     if (!loop_backs(desc->vmnt, desc->vnode)) {
         rc = fsize_growth_refused(desc, (uint64_t)length);
     }
+    if (rc == 0 && !cred_fs_privileged()) {
+        rc = mnt_kill_setid(desc->vmnt, desc->vnode);
+    }
     if (rc == 0) {
         rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
     }
     size_ns_unlock(desc, ns);
-    if (rc == 0 && !cred_fs_privileged()) {
-        if (mnt_is_root(desc->vmnt)) {
-            cred_kill_setid(desc->vnode);
-        } else {
-            vfs_kill_setid(desc->vmnt, desc->vnode);
-        }
-    }
     if (rc == 0) {
         struct vfs_stat st;
 
