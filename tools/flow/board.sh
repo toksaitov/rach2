@@ -81,7 +81,9 @@
 # worker's clone, and the session that reads the issue hands it back with
 # `release` when it cannot go on.
 #
-# `release N` hands N back: it sets it Ready and unassigns this account.
+# `release N` hands N back: it sets it Ready and unassigns this account. It
+# fails and changes nothing while an account other than this one is assigned
+# to N, since that account's worker may be writing it.
 # `release N owner` sets Backlog and adds the label `owner`, which marks a
 # decision that AGENTS.md gives the owner. `release N owner-only` sets Ready
 # and adds the label `owner-only`, for work that is no decision but that only
@@ -638,6 +640,15 @@ release()
         owner-only) label=owner-only ;;
         trial) status=Backlog label=owner-only ;;
     esac
+    others=$(gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login') || {
+        echo "board: #$1: cannot read its assignees, so it is left as it is" >&2
+        exit 1
+    }
+    others=$(printf '%s\n' "$others" | grep -vx -e "$me" -e '' | tr '\n' ' ' | sed 's/ $//')
+    if [ -n "$others" ]; then
+        echo "board: #$1: $others holds it, so it is left as it is" >&2
+        exit 1
+    fi
     if [ -z "$RACH2_WORKER_STATE" ]; then
         hand_back "$1"
         unassign "$1" "$me" && return 0
