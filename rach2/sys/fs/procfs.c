@@ -6741,6 +6741,27 @@ static int thp_shmem_word(char *text, uint32_t count)
     return thp_word(text, thp_shmem_words, 0);
 }
 
+/** Whether the value `v` of the transparent_hugepage attribute `attr` is
+ * one refused huge pages take no more (`thp_refuse`): anything but never
+ * for `enabled` (0) and `defrag` (1), and anything but 0 for
+ * `use_zero_page` (2). */
+static int thp_store_refused(int attr, int v)
+{
+    if (!thp_refused()) {
+        return 0;
+    }
+    switch (attr) {
+    case 0:
+        return v != THP_NEVER;
+    case 1:
+        return v != THP_DEFRAG_NEVER;
+    case 2:
+        return v != 0;
+    default:
+        return 0;
+    }
+}
+
 /**
  * Take root's write of `count` bytes, `text`, NUL-terminated after them,
  * to the attribute `attr` of /sys/kernel/mm/transparent_hugepage, as
@@ -6769,10 +6790,7 @@ static int32_t thp_store(int attr, char *text, uint32_t count)
     if (v < 0) {
         return v;
     }
-    if (thp_refused() && attr <= 2 &&
-        v != (attr == 0   ? THP_NEVER
-              : attr == 1 ? THP_DEFRAG_NEVER
-                          : 0)) {
+    if (thp_store_refused(attr, v)) {
         return -EINVAL;
     }
     *flags[attr] = v;
