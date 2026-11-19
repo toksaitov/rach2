@@ -5,10 +5,12 @@
 # count.
 #
 # Usage: run.sh [-D] [-B] [-W] [-c BDF | -n IFACE] [-a ADDR/PREFIX]
-#               [-d SECONDS] [-o OUT] [-A kvm|tcg] PEER PORT CASE...
+#               [-d SECONDS] [-o OUT] [-A kvm|tcg] [-z DENY] PEER PORT CASE...
 #
 # PEER is the dotted IPv4 address of the machine that runs `nettput -s` on
-# PORT: the host of QEMU's user network under QEMU, the Mac on the Lenovo.
+# PORT and on DENY, the port the guests' filter denies, which debian and
+# freebsd need: the host of QEMU's user network under QEMU, the Mac on the
+# Lenovo.
 # The card is BDF, or the PCI function of IFACE, as /sys/class/net/IFACE/
 # device gives it; ADDR/PREFIX is the address the card's interface takes
 # when it has none. The directory of this script holds netguest.sh, nettput
@@ -30,15 +32,16 @@
 #                  tap's frames: through the guest, nettput sends and
 #                  receives 8388608 bytes and makes 1000 exchanges and 200
 #                  connections, which tap0's byte counts must show each
-#                  way; ten attempts at PEER's port 9, each unanswered and
-#                  unrefused until Rach2's TCP gives it up, which the
-#                  guest's deny rule must count, at least one SYN each.
+#                  way; ten attempts at PEER's port DENY, where PEER
+#                  serves, each unanswered and unrefused until Rach2's TCP
+#                  gives it up, which the guest's deny rule must count, at
+#                  least one SYN each.
 #   debian-vhost, freebsd-vhost
 #                  the same transfers through a boot with translation alone
 #                  and the tap's queues on /dev/vhost-net: the backend must
 #                  count at least 5541 frames each way, the fewest frames of
 #                  at most 1514 bytes that carry 8388608 bytes, and the
-#                  guest's port-9 rule, which then drops nothing, must count
+#                  guest's deny rule, which then drops nothing, must count
 #                  no packet.
 #   kill           a boot of the Debian guest whose QEMU is killed while
 #                  nettput sends through it, once tap0 has carried a
@@ -79,14 +82,14 @@
 # usage error.
 
 here=$(cd "$(dirname "$0")" && pwd)
-detach=0 reboot=0 others=0 bdf='' iface='' own='' deadline=0 out='' accel=kvm
+detach=0 reboot=0 others=0 bdf='' iface='' own='' deadline=0 out='' accel=kvm deny=''
 usage()
 {
     echo "usage: run.sh [-D] [-B] [-W] [-c BDF | -n IFACE] [-a ADDR/PREFIX] [-d SECONDS]" >&2
-    echo "              [-o OUT] [-A kvm|tcg] PEER PORT CASE..." >&2
+    echo "              [-o OUT] [-A kvm|tcg] [-z DENY] PEER PORT CASE..." >&2
     exit 2
 }
-while getopts DBWc:n:a:d:o:A: o; do
+while getopts DBWc:n:a:d:o:A:z: o; do
     case $o in
         D) detach=1 ;;
         B) reboot=1 ;;
@@ -97,6 +100,7 @@ while getopts DBWc:n:a:d:o:A: o; do
         d) deadline=$OPTARG ;;
         o) out=$OPTARG ;;
         A) accel=$OPTARG ;;
+        z) deny=$OPTARG ;;
         *) usage ;;
     esac
 done
@@ -107,9 +111,11 @@ shift 2
 case $port$deadline in '' | *[!0-9]*) usage ;; esac
 case $accel in kvm | tcg) ;; *) usage ;; esac
 [ -n "$bdf" ] || [ -n "$iface" ] || usage
+case $deny in *[!0-9]*) usage ;; esac
 for c in "$@"; do
     case $c in
-        cycle | debian | freebsd | debian-vhost | freebsd-vhost | kill) ;;
+        debian | freebsd) [ -n "$deny" ] || usage ;;
+        cycle | debian-vhost | freebsd-vhost | kill) ;;
         *) usage ;;
     esac
 done
@@ -121,16 +127,18 @@ nettput=$here/nettput
 # Until finish's traps, a signal removes only the scratch made here.
 new_out=0 early=''
 # A detached run started from here keeps OUT once it has written its process
-# ID there, since it may hold its recovery record, and has it named.
-trap 'if [ -z "$early" ]; then :; elif [ -s "$early/pid" ]; then
+# ID there or while it lives ($!), since it may hold its recovery record, and
+# has it named.
+trap 'if [ -z "$early" ]; then :; elif [ -s "$early/pid" ] || { [ -n "$!" ] && kill -0 "$!" 2> /dev/null; }; then
     echo "netguest: started: log $early/log" >&2; else rm -rf "$early"; fi' EXIT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap 'exit 130' INT
 if [ -z "$out" ]; then
     # Named before it is made, so that no signal comes between the directory
-    # and the trap's knowing it.
-    early=${TMPDIR:-/tmp}/rach2-netguest.$$
+    # and the trap's knowing it, by this process and eight random hex digits,
+    # so that the name is no other run's.
+    early=${TMPDIR:-/tmp}/rach2-netguest.$$.$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')
     mkdir "$early" || {
         early=''
         exit 1
@@ -146,6 +154,7 @@ if [ "$detach" = 1 ]; then
     rm -f "$out/status" "$out/pid"
     set -- -o "$out" -d "$deadline" -A "$accel" "$peer" "$port" "$@"
     [ -z "$own" ] || set -- -a "$own" "$@"
+    [ -z "$deny" ] || set -- -z "$deny" "$@"
     [ -z "$iface" ] || set -- -n "$iface" "$@"
     [ -z "$bdf" ] || set -- -c "$bdf" "$@"
     [ "$others" = 0 ] || set -- -W "$@"
@@ -672,20 +681,20 @@ guest()
         *) set -- "$@" -- sh "$here/traffic.sh" transfers ;;
     esac
     run sh "$here/netguest.sh" -c "$bdf" -n "$iface" -i "$here/$system.qcow2" -a "$accel" \
-        -p "$peer" -P "$port" -N "$nettput" -o "$out/$name" -d "$deadline" "$@" > "$log" 2>&1
+        -p "$peer" -P "$port" -Z "${deny:-9}" -N "$nettput" -o "$out/$name" -d "$deadline" "$@" > "$log" 2>&1
     cat "$log"
     why=''
     tail -n 1 "$log" | grep -q '^netguest: result: pass$' ||
         why=$(tail -n 1 "$log" | sed -n 's/^netguest: result: //p')
     [ -n "$why" ] || [ "$(grep -c '^netguest: result: pass$' "$log")" = 1 ] || why="netguest.sh did not pass"
     # The report traffic.sh judged by: the first after the transfers, or
-    # after the attempts at port 9.
-    deny=$(grep -a '^traffic: report: ' "$log" | tail -n 1 | sed -n 's/.*deny9=\([0-9][0-9]*\).*/\1/p')
+    # after the attempts at DENY.
+    denied=$(grep -a '^traffic: report: ' "$log" | tail -n 1 | sed -n 's/.* deny=\([0-9][0-9]*\).*/\1/p')
     case $name in
         kill) ;;
         *)
             [ -n "$why" ] || grep -a -q '^traffic: report: ' "$log" || why="the guest printed no report of its counts"
-            [ -n "$why" ] || [ -n "$deny" ] || why="the guest could not read its deny count"
+            [ -n "$why" ] || [ -n "$denied" ] || why="the guest could not read its deny count"
             tx=$(delta tap_tx_bytes "$log" ready measured)
             rx=$(delta tap_rx_bytes "$log" ready measured)
             [ -n "$why" ] || [ "$tx" -ge "$bytes" ] || why="tap0 sent $tx bytes, fewer than the $bytes sent"
@@ -694,10 +703,10 @@ guest()
     esac
     case $name in
         debian | freebsd)
-            [ -n "$why" ] || [ "$deny" -ge 10 ] || why="the guest counted $deny denied packets, fewer than the 10 attempts"
+            [ -n "$why" ] || [ "$denied" -ge 10 ] || why="the guest counted $denied denied packets, fewer than the 10 attempts"
             ;;
         *-vhost)
-            [ -n "$why" ] || [ "$deny" = 0 ] || why="the guest counted $deny packets to port 9 with no filter"
+            [ -n "$why" ] || [ "$denied" = 0 ] || why="the guest counted $denied packets to port ${deny:-9} with no filter"
             line=$(grep '^netguest: vhost: ' "$log" | tail -n 1)
             to=$(echo "$line" | sed -n 's/.*to_guest=\([0-9]*\).*/\1/p')
             from=$(echo "$line" | sed -n 's/.*from_guest=\([0-9]*\).*/\1/p')
