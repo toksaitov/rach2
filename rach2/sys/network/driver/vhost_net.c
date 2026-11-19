@@ -74,10 +74,11 @@ struct vn_vq {
     uint32_t busyloop; /* VHOST_SET_VRING_BUSYLOOP_TIMEOUT's, kept, unused */
     /* A page the ring met that its region's pin does not hold, which the
      * thread brings in (`vn_refill`): `want` set, the region and the page
-     * of its pin. Under `lock` for the receive ring, the big lock for the
-     * transmit ring. */
+     * of its pin, and the table's `gen` they were read under. Written under
+     * `lock` for the receive ring and the big lock for the transmit ring,
+     * read by the thread under both. */
     int want;
-    uint32_t want_reg, want_page;
+    uint32_t want_reg, want_page, want_gen;
 };
 
 /*
@@ -179,9 +180,10 @@ static int32_t vn_map(struct vn_vq *q, uint64_t a, int va, uint32_t len, uint8_t
     phys = pin_phys(r->pin, page);
     if (phys == 0) {
         if (!q->want) {
-            q->want = 1;
             q->want_reg = (uint32_t)(r - n->reg);
             q->want_page = page;
+            q->want_gen = n->gen;
+            q->want = 1;
         }
         vn_wake(q);
         return -EAGAIN;
@@ -722,30 +724,50 @@ static void vn_rx_quiet(struct vnet *n)
  * Bring in the page of the guest's memory a ring of `n` wants, the first
  * ring's that does, and kick the ring to go on, or break it when the page
  * cannot be had, as Linux's copy through the owner's tables fails with
- * -EFAULT. The refill may sleep, letting the big lock go; `refilling`
- * keeps a change of the table or a reset from letting the pin go
- * meanwhile. 1 when a refill was made, after which `n` may have gone; 0
- * when no ring wants one. Under the big lock.
+ * -EFAULT. The request is read under `lock`, which the receive path holds
+ * while it writes one. A request of a table that has since been replaced,
+ * or a refill during which the table changed, which `gen` tells, is let go
+ * and the ring kicked to look again in the current table, never broken.
+ * The refill may sleep, letting the big lock go; `refilling` keeps a
+ * change of the table or a reset from letting the pin go meanwhile. 1 when
+ * a request was taken, after which `n` may have gone; 0 when no ring
+ * wants a page. Under the big lock.
  */
 static int vn_refill(struct vnet *n)
 {
     struct vn_vq *q;
-    struct pin *pin;
-    uint32_t flags;
+    struct pin *pin = 0;
+    uint32_t flags, reg, page, gen;
     int i, r;
 
+    flags = spin_lock_irqsave(&n->lock);
     for (i = 0; i < 2 && !n->vq[i].want; i++) {
     }
     if (i == 2) {
+        spin_unlock_irqrestore(&n->lock, flags);
         return 0;
     }
     q = &n->vq[i];
-    pin = q->want_reg < n->nreg ? n->reg[q->want_reg].pin : 0;
+    reg = q->want_reg;
+    page = q->want_page;
+    gen = q->want_gen;
+    if (gen != n->gen) {
+        q->want = 0;
+    } else if (reg < n->nreg) {
+        pin = n->reg[reg].pin;
+    }
+    spin_unlock_irqrestore(&n->lock, flags);
+    if (gen != n->gen) {
+        vn_wake(q);
+        return 1;
+    }
     n->refilling++;
-    r = pin ? pin_refill(pin, q->want_page) : -EFAULT;
+    r = pin ? pin_refill(pin, page) : -EFAULT;
     flags = spin_lock_irqsave(&n->lock);
-    q->want = 0;
-    if (r != 0) {
+    if (q->want && q->want_gen == gen) {
+        q->want = 0;
+    }
+    if (r != 0 && n->gen == gen) {
         vn_break(n, q);
     }
     spin_unlock_irqrestore(&n->lock, flags);
