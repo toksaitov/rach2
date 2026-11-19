@@ -9,7 +9,6 @@
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
-#include "../mm/kheap.h"
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
@@ -32,26 +31,20 @@ static struct lockdep_key unrecorded_key;
  * that makes them. */
 #define DEP_CALLER ((uintptr_t)(const char *)__builtin_return_address(0))
 
-/* A waiter's place in the line for `lock`. */
-struct sleep_turn {
-    struct sleep_lock *lock;
-    uint32_t place;
-    int killable; /* SIGKILL ends the wait (`sleep_lock_take_killable`) */
-};
-
 /*
- * The list of the places killed takers left (`struct sleep_left`), every
- * lock's, under `left_lock`; `left_count` counts its records, changed only
- * by exchanges under that lock, so that a give reads it with no spinlock and
- * takes one only while some place is left. A place is passed before its
- * line empties, so no record outlives the hold before it and none names a
- * lock that has been freed. The list has no bound but the heap, as a
- * killed waiter of Linux's mutex takes itself off the mutex's list and
- * counts against no limit (kernel/locking/mutex.c:630-699).
+ * A waiter of `lock`, on its own stack, on the lock's list from the time it
+ * finds the lock held until the lock is handed to it or it leaves. Only the
+ * give that hands it the lock sets `granted`, under the list's lock, and
+ * touches the record no more after that, since the waiter may return at
+ * once.
  */
-static struct sleep_left *left;
-static volatile unsigned int left_count;
-static struct spinlock left_lock = SPINLOCK_INIT_NAMED("sleep_lock_left");
+struct sleep_waiter {
+    struct sleep_waiter *next; /* the waiter after it, or NULL */
+    struct sleep_waiter *prev; /* the waiter before it, or NULL */
+    struct sleep_lock *lock;
+    volatile unsigned int granted; /* 1 once the lock is handed to it */
+    int killable;                  /* SIGKILL ends the wait (`sleep_lock_take_killable`) */
+};
 
 /** The calling thread's ID, 0 before the first process runs. */
 static int sleep_caller(void)
@@ -59,14 +52,13 @@ static int sleep_caller(void)
     return current_proc ? (int)current_proc->pid : 0;
 }
 
-/** The wait condition of `sleep_lock_take`: the place of `arg`, a
- * `struct sleep_turn`, is the one served, which the last give of the hold
- * before it made so after it freed the lock. */
+/** The wait condition of `sleep_lock_take`: the lock is handed to the
+ * waiter `arg`, a `struct sleep_waiter`. */
 static int sleep_my_turn(void *arg)
 {
-    const struct sleep_turn *t = arg;
+    const struct sleep_waiter *w = arg;
 
-    return t->lock->serving == t->place;
+    return w->granted != 0;
 }
 
 /** Whether the calling thread has SIGKILL pending, its own or its
@@ -85,95 +77,113 @@ static int sleep_turn_or_killed(void *arg)
     return sleep_my_turn(arg) || sleep_killed();
 }
 
-/** Remove the record of left places that names place `place` of `l`, and
- * free it: 1 when there was one, 0 when there was none. */
-static int sleep_left_take(struct sleep_lock *l, uint32_t place)
-{
-    uint32_t irq = spin_lock_irqsave(&left_lock);
-    struct sleep_left **link, *rec;
-
-    for (link = &left; *link; link = &(*link)->next) {
-        rec = *link;
-        if (rec->lock == l && rec->place == place) {
-            *link = rec->next;
-            (void)arch_atomic_xchg(&left_count, left_count - 1u);
-            spin_unlock_irqrestore(&left_lock, irq);
-            kfree(rec);
-            return 1;
-        }
-    }
-    spin_unlock_irqrestore(&left_lock, irq);
-    return 0;
-}
-
 /**
- * Serve place `place` of `l`, the turn's owner's step that ends its turn:
- * the holder's last give, or a killed taker's whose turn came as it left.
- * A place a killed taker left is passed at once, and so is each after it
- * that one left, and the sleepers are woken once the place served is one a
- * waiter keeps. The exchange that serves a place is a full barrier before
- * the read of `left_count`, and the leaver's exchange of the count is one
- * before its read of `serving` (`sleep_leave`), so either this read sees
- * the count raised, and the table's lock then orders the two, or the
- * leaver sees its place served and passes it on itself.
+ * Hand `l` to its first waiter, or free it when none is listed, for the
+ * last give of a hold whose state is queued, or for a killed waiter the
+ * lock was handed to as it left. The lock stays queued while another
+ * waiter is listed and becomes held when the list empties, so that the
+ * new holder's give needs no list. The exchange that hands the lock on is a
+ * full barrier before the read of the queue, and the waiter passes one
+ * between its filing on the queue and its test of `granted` (`wq_wait`):
+ * either the waiter's test sees the lock handed or this read sees the
+ * waiter. A waiter that was handed the lock may return at once, so the
+ * record is not touched after the exchange.
  */
-static void sleep_serve(struct sleep_lock *l, uint32_t place)
+static void sleep_pass(struct sleep_lock *l)
 {
-    (void)arch_atomic_xchg(&l->serving, place);
-    while (left_count != 0 && sleep_left_take(l, place)) {
-        place++;
-        (void)arch_atomic_xchg(&l->serving, place);
+    uint32_t irq = spin_lock_irqsave(&l->wait_lock);
+    struct sleep_waiter *w = l->first;
+
+    if (w) {
+        l->first = w->next;
+        if (l->first) {
+            l->first->prev = 0;
+        } else {
+            l->last = 0;
+            (void)arch_atomic_xchg(&l->state, SLEEP_LOCK_HELD);
+        }
+        (void)arch_atomic_xchg(&w->granted, 1u);
+    } else {
+        (void)arch_atomic_xchg(&l->state, SLEEP_LOCK_FREE);
     }
+    spin_unlock_irqrestore(&l->wait_lock, irq);
     if (wq_active(&l->wq)) {
         wq_wake_all(&l->wq);
     }
 }
 
 /**
- * Leave the line of `t`'s lock, for a taker that SIGKILL ends: its place
- * goes on the list of left places, for the give that would serve it to
- * pass, or, when its turn has come already, the place after it is served
- * at once. The record comes from the heap before the list's lock is taken.
- * 1 once the caller is out of the line; 0, with nothing changed, when the
- * heap has no room for the record, and the caller stays in line.
+ * File `w` at the end of its lock's list, for a taker that found the lock
+ * held: 0 once filed, 1 when the lock was freed meanwhile and the caller
+ * took it instead, or -EINTR, with nothing filed, when the take is killable
+ * and SIGKILL is pending. The state becomes queued before the record is
+ * filed, both under the list's lock, so that a give that finds the state
+ * held finds no waiter, and one that finds it queued takes the list's lock
+ * after the filing.
  */
-static int sleep_leave(const struct sleep_turn *t)
+static int sleep_enqueue(struct sleep_waiter *w)
 {
-    struct sleep_lock *l = t->lock;
-    struct sleep_left *rec = kzalloc(sizeof(*rec));
-    uint32_t irq;
+    struct sleep_lock *l = w->lock;
+    uint32_t irq = spin_lock_irqsave(&l->wait_lock);
+    unsigned int s;
 
-    if (!rec) {
-        return 0;
+    for (;;) {
+        s = l->state;
+        if (s == SLEEP_LOCK_FREE) {
+            if (arch_atomic_cmpxchg(&l->state, s, SLEEP_LOCK_HELD) == s) {
+                spin_unlock_irqrestore(&l->wait_lock, irq);
+                return 1;
+            }
+        } else if (w->killable && sleep_killed()) {
+            spin_unlock_irqrestore(&l->wait_lock, irq);
+            return -EINTR;
+        } else if (s == SLEEP_LOCK_QUEUED ||
+                   arch_atomic_cmpxchg(&l->state, s, SLEEP_LOCK_QUEUED) == s) {
+            break;
+        }
     }
-    rec->lock = l;
-    rec->place = t->place;
-    irq = spin_lock_irqsave(&left_lock);
-    (void)arch_atomic_xchg(&left_count, left_count + 1u);
-    if (l->serving != t->place) {
-        rec->next = left;
-        left = rec;
-        spin_unlock_irqrestore(&left_lock, irq);
-        return 1;
+    w->next = 0;
+    w->prev = l->last;
+    if (l->last) {
+        l->last->next = w;
+    } else {
+        l->first = w;
     }
-    (void)arch_atomic_xchg(&left_count, left_count - 1u);
-    spin_unlock_irqrestore(&left_lock, irq);
-    kfree(rec);
-    sleep_serve(l, t->place + 1u);
-    return 1;
+    l->last = w;
+    spin_unlock_irqrestore(&l->wait_lock, irq);
+    return 0;
 }
 
-/** Take the next place in the line of `l` and return it: one
- * compare-and-exchange of `next` when no other taker draws one at the same
- * moment, as Linux's `__mutex_trylock_fast` takes a free mutex by one. */
-static uint32_t sleep_place(struct sleep_lock *l)
+/**
+ * Take `w` off its lock's list, for a taker that SIGKILL ends: the waiters
+ * behind it move up, and the lock, still held, is no longer queued once
+ * the list is empty. A waiter the lock was handed to as it left hands it
+ * on (`sleep_pass`). Nothing is allocated, so the leave cannot fail.
+ */
+static void sleep_leave(struct sleep_waiter *w)
 {
-    uint32_t n;
+    struct sleep_lock *l = w->lock;
+    uint32_t irq = spin_lock_irqsave(&l->wait_lock);
 
-    do {
-        n = l->next;
-    } while (arch_atomic_cmpxchg(&l->next, n, n + 1u) != n);
-    return n;
+    if (w->granted) {
+        spin_unlock_irqrestore(&l->wait_lock, irq);
+        sleep_pass(l);
+        return;
+    }
+    if (w->prev) {
+        w->prev->next = w->next;
+    } else {
+        l->first = w->next;
+    }
+    if (w->next) {
+        w->next->prev = w->prev;
+    } else {
+        l->last = w->prev;
+    }
+    if (!l->first) {
+        (void)arch_atomic_xchg(&l->state, SLEEP_LOCK_HELD);
+    }
+    spin_unlock_irqrestore(&l->wait_lock, irq);
 }
 
 void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
@@ -189,8 +199,10 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
     l->depth = 0;
     l->owner = 0;
     l->owner_cpu = 0;
-    l->next = 0;
-    l->serving = 0;
+    l->state = SLEEP_LOCK_FREE;
+    spin_lock_init(&l->wait_lock, "sleep_lock_wait");
+    l->first = 0;
+    l->last = 0;
     l->taken_at = 0;
     l->taken_by_cycles = 0;
     l->timed = 0;
@@ -215,34 +227,34 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
 }
 
 /**
- * Spin while the holder of `t`'s lock runs (`sched_spin_on`), as Linux's
+ * Spin while the holder of `w`'s lock runs (`sched_spin_on`), as Linux's
  * mutex_optimistic_spin spins on a mutex's owner before it sleeps
  * (kernel/locking/mutex.c:350-385, 613): a hold is often shorter than a
  * sleep and a wake, and the wake of a halted processor costs an
  * interprocessor interrupt, which under a hypervisor is an exit for the
- * sender and an injection for the receiver. A lock given to a waiter
+ * sender and an injection for the receiver. A lock handed to a waiter
  * ahead is waited for the same way while no waiter sleeps, since the one
- * ahead then spins too and takes it at once; with one asleep, the one
- * ahead may be it, and its wake is long. Returns 1 when the caller's turn
- * came, 0 when it should sleep or, in a killable take, has SIGKILL
- * pending. The holder's fields are read as hints,
- * which only the holder writes; the caller tests its turn again.
+ * ahead then spins too and runs at once; with one asleep, the one ahead
+ * may be it, and its wake is long. Returns 1 when the lock was handed to
+ * the caller, 0 when it should sleep or, in a killable take, has SIGKILL
+ * pending. The holder's fields are read as hints, which only the holder
+ * writes; the caller tests `granted` again.
  */
-static int sleep_spin(const struct sleep_turn *t)
+static int sleep_spin(const struct sleep_waiter *w)
 {
-    const volatile struct sleep_lock *l = t->lock;
+    const volatile struct sleep_lock *l = w->lock;
     const struct process *owner;
 
     for (;;) {
-        if (t->killable && sleep_killed()) {
+        if (w->killable && sleep_killed()) {
             return 0;
+        }
+        if (w->granted) {
+            return 1;
         }
         owner = l->owner;
         if (l->holder == -1) {
-            if (l->serving == t->place) {
-                return 1;
-            }
-            if (wq_active(&t->lock->wq) || !sched_spin_on(0, -1)) {
+            if (wq_active(&w->lock->wq) || !sched_spin_on(0, -1)) {
                 return 0;
             }
         } else if (!owner || !sched_spin_on(owner, l->owner_cpu)) {
@@ -253,23 +265,24 @@ static int sleep_spin(const struct sleep_turn *t)
 
 /**
  * Take `l` for `sleep_lock_take` or, `killable`, for
- * `sleep_lock_take_killable`, the checker told of the take at `caller`. The
- * order costs no switch of its own: giving the lock back does not yield,
- * and the waiter whose place is next runs when the scheduler picks it. A
- * take with no one in line draws the place served and has the lock with no
- * wait and no spinlock. Only the holder writes `holder` and `depth`, and
- * `serving` only the owner of the turn, so a thread that reads itself as
- * the holder is the holder, and the holder fields are its own until its
- * last give. The wait's test is made with the waiter on the queue, so that
- * a give between the two wakes it. A killable waiter looks for SIGKILL
- * before each spin and sleep, and leaves the line when it finds it
- * (`sleep_leave`); with no room in the heap for the record of its place,
- * it waits on as an unkillable one. 0 with `l` held, or -EINTR without it.
+ * `sleep_lock_take_killable`, the checker told of the take at `caller`. A
+ * take of a free lock is one compare-and-exchange of `state` and passes no
+ * spinlock. A take of a held one files a record on the lock's list
+ * (`sleep_enqueue`) and waits until a give hands it the lock; the order
+ * costs no switch of its own, since giving the lock back does not yield,
+ * and the waiter runs when the scheduler picks it. Only the holder writes
+ * `holder` and `depth`, so a thread that reads itself as the holder is the
+ * holder, and the holder fields are its own until its last give. The
+ * wait's test is made with the waiter on the queue, so that a give between
+ * the two wakes it. A killable waiter looks for SIGKILL before each spin
+ * and sleep, and takes its record off the list when it finds it
+ * (`sleep_leave`). 0 with `l` held, or -EINTR without it.
  */
 static int sleep_take(struct sleep_lock *l, int killable, uintptr_t caller)
 {
     int me = sleep_caller();
-    struct sleep_turn turn;
+    struct sleep_waiter w;
+    int rc;
 
     (void)caller;
     if (l->holder == me && l->depth > 0) {
@@ -283,28 +296,32 @@ static int sleep_take(struct sleep_lock *l, int killable, uintptr_t caller)
         current_proc->lockdep_subclass = 0;
     }
 #endif
-    turn.lock = l;
-    turn.place = sleep_place(l);
-    turn.killable = killable && current_proc;
-    while (!sleep_my_turn(&turn)) {
-        if (turn.killable && sleep_killed()) {
-            if (sleep_leave(&turn)) {
-#ifdef RACH2_LOCKDEP
-                lockdep_release(&l->dep, caller);
-#endif
-                return -EINTR;
-            }
-            turn.killable = 0;
+    w.lock = l;
+    w.granted = 0;
+    w.killable = killable && current_proc;
+    rc = arch_atomic_cmpxchg(&l->state, SLEEP_LOCK_FREE, SLEEP_LOCK_HELD) == SLEEP_LOCK_FREE
+             ? 1
+             : sleep_enqueue(&w);
+    while (rc == 0 && !sleep_my_turn(&w)) {
+        if (w.killable && sleep_killed()) {
+            sleep_leave(&w);
+            rc = -EINTR;
+            break;
+        }
+        if (sleep_spin(&w)) {
             continue;
         }
-        if (sleep_spin(&turn)) {
-            continue;
-        }
-        if (turn.killable) {
-            (void)wq_wait_event_killable(&l->wq, sleep_turn_or_killed, &turn, "__mutex_lock");
+        if (w.killable) {
+            (void)wq_wait_event_killable(&l->wq, sleep_turn_or_killed, &w, "__mutex_lock");
         } else {
-            (void)wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
+            (void)wq_wait_event_nointr(&l->wq, sleep_my_turn, &w);
         }
+    }
+    if (rc < 0) {
+#ifdef RACH2_LOCKDEP
+        lockdep_release(&l->dep, caller);
+#endif
+        return -EINTR;
     }
     l->holder = me;
     l->owner = current_proc;
@@ -368,16 +385,12 @@ static void sleep_record_hold(const struct sleep_lock *l)
 }
 
 /**
- * The last give frees the holder fields, then serves the next place by an
- * exchange of `serving` (`sleep_serve`), as Linux's `__mutex_unlock_fast`
- * frees a mutex by one atomic operation, and passes the places killed
- * takers left. It wakes the queue only when a waiter is on it, as
- * Linux's __mutex_unlock_slowpath wakes only a waiter it finds on the
- * lock's list (kernel/locking/mutex.c:937-956). The exchange is a full
- * barrier between the release and the read of the queue, and the waiter
- * passes one between its filing on the queue and its test of its turn
- * (`wq_wait`): either the waiter's test sees the release or this read sees
- * the waiter.
+ * The last give frees the holder fields, then makes a held lock free by
+ * one compare-and-exchange of `state`, as Linux's `__mutex_unlock_fast`
+ * frees a mutex by one atomic operation, and otherwise hands the lock to
+ * the first waiter on its list (`sleep_pass`), as Linux's
+ * __mutex_unlock_slowpath wakes the first waiter it finds on the lock's
+ * list (kernel/locking/mutex.c:937-956).
  */
 void sleep_lock_give(struct sleep_lock *l)
 {
@@ -398,7 +411,9 @@ void sleep_lock_give(struct sleep_lock *l)
 #ifdef RACH2_LOCKDEP
     lockdep_release(&l->dep, DEP_CALLER);
 #endif
-    sleep_serve(l, l->serving + 1u);
+    if (arch_atomic_cmpxchg(&l->state, SLEEP_LOCK_HELD, SLEEP_LOCK_FREE) != SLEEP_LOCK_HELD) {
+        sleep_pass(l);
+    }
 }
 
 int sleep_lock_held(const struct sleep_lock *l)
