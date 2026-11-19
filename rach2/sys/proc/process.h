@@ -12,6 +12,7 @@
 #include "../mm/vm.h"
 #include "../fpu.h"
 #include "percpu.h"
+#include "fair.h"
 #include "waketime.h"
 
 /* Policy: the threads one real user may have, each thread of a process
@@ -652,6 +653,11 @@ struct process {
      * default one; sched_getattr reports it, and the scheduler, whose slice
      * is a tick, does not read it. A fork passes it on. */
     uint32_t sched_slice;
+    /* The fair class's entity of an ordinary thread (fair.h), and the group
+     * whose queues it joins, its autogroup's (autogroup.c) or NULL for the
+     * root group. Both change under `sched_lock`. */
+    struct sched_entity se;
+    struct task_group *sched_task_group;
     /* Set once this thread has been through the stop in effect in its
      * process, which a tracer may then have resumed it from; cleared when
      * the process continues. */
