@@ -1554,13 +1554,27 @@ static void mt_failed_mode_rows(void)
 static const uint8_t mixed_pad[] = {0x05, 1,
                                     0x09, 6,
                                     0xa1, 1,
-                                    0x85, 1,
+                                    0x85, 32,
                                     0x05, 7,
                                     0x15, 0,
                                     0x25, 1,
                                     0x75, 8,
                                     0x95, 1,
                                     0x09, 6,
+                                    0x81, 3,
+                                    0xc0, 0x05,
+                                    0x0c, 0x09,
+                                    1,    0xa1,
+                                    1,    0x85,
+                                    33,   0x09,
+                                    0xe9, 0x81,
+                                    2,    0xc0,
+                                    0x05, 1,
+                                    0x09, 6,
+                                    0xa1, 1,
+                                    0x85, 1,
+                                    0x05, 7,
+                                    0x09, 7,
                                     0x81, 3,
                                     0x09, 4,
                                     0x81, 2,
@@ -1599,6 +1613,7 @@ static void mt_mixed_rows(void)
 {
     static const uint8_t first[] = {1, 0, 1, 1, 100, 0, 120, 0, 1, 1, 17, 1};
     static const uint8_t buttons[] = {4, 1, 1};
+    static const uint8_t volume[] = {33, 1};
     struct hid_dev *hid;
     struct evdev_keymap_entry ke;
     int inputs, value = 0, write = 0;
@@ -1623,6 +1638,13 @@ static void mt_mixed_rows(void)
     CHECK("the constant keyboard field retains its keymap index",
           devs[0].km.get && devs[0].km.get(devs[0].km.ctx, &ke) == 0 && ke.scancode == 0x70006 &&
               ke.keycode == KEY_RESERVED);
+    ke.index = 1;
+    CHECK("the early consumer control keeps its index on the keyboard",
+          devs[0].km.get && devs[0].km.get(devs[0].km.ctx, &ke) == 0 && ke.scancode == 0xc00e9 &&
+              ke.keycode == KEY_VOLUMEUP);
+    feed(hid, volume, sizeof(volume));
+    CHECK("the early consumer control reports through the keyboard",
+          bit(devs[0].down, KEY_VOLUMEUP));
     feed(hid, buttons, sizeof(buttons));
     CHECK("the other shared report keeps the button with the pad",
           bit(devs[0].down, KEY_B) && !bit(devs[0].down, BTN_MISC + 2) &&

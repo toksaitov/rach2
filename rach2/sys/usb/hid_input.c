@@ -936,20 +936,21 @@ static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_fi
 {
     struct hid_report *r = &hid->desc.reports[f->report];
     uint32_t bit = 0;
-    unsigned code;
+    unsigned code, flags;
     int i;
 
     if (!r->multitouch || !(hid->mt_surfaces & touch_surface(f->application)) ||
         !(f->flags & HID_MAIN_ITEM_VARIABLE)) {
         return 0;
     }
-    in->mt_flags |= f->application == HID_DG_TOUCHPAD ? INPUT_MT_POINTER : INPUT_MT_DIRECT;
+    flags = f->application == HID_DG_TOUCHPAD ? INPUT_MT_POINTER : INPUT_MT_DIRECT;
     if ((u->hid & HID_USAGE_PAGE) == HID_UP_BUTTON) {
         mt_map_button(in, f, u);
         return 1;
     }
     if (u->hid == HID_DG_CONTACTCOUNT) {
         u->mt_group = HID_MT_COUNT;
+        in->mt_flags |= flags;
         return 1;
     }
     i = (int)(u - usages_of(hid, f));
@@ -965,11 +966,14 @@ static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_fi
         bit = MT_TIP_BIT;
     }
     u->mt_group = mt_group(r, mt_collection(hid, u), bit);
-    if (u->mt_group && code) {
-        in->ev |= 1u << EV_ABS;
-        set_bit(in->abs, code);
-        u->type = EV_ABS;
-        u->code = (uint16_t)code;
+    if (u->mt_group) {
+        in->mt_flags |= flags;
+        if (code) {
+            in->ev |= 1u << EV_ABS;
+            set_bit(in->abs, code);
+            u->type = EV_ABS;
+            u->code = (uint16_t)code;
+        }
     }
     return bit != 0;
 }
@@ -1214,6 +1218,12 @@ static struct hid_input *allocate_input(struct hid_dev *hid, uint32_t applicatio
     return in;
 }
 
+/** Whether an application can share the keyboard's input node. */
+static int joins_keyboard(uint32_t application)
+{
+    return application == HID_GD_SYSCONTROL || application == HID_CP_CONSUMER;
+}
+
 /** The input device of `hid` that a report of `application` joins, Linux's
  * `hidinput_match_application`, or NULL. */
 static struct hid_input *match_application(struct hid_dev *hid, uint32_t application)
@@ -1226,8 +1236,7 @@ static struct hid_input *match_application(struct hid_dev *hid, uint32_t applica
         if (in->application == application) {
             return in;
         }
-        if ((application == HID_GD_SYSCONTROL || application == HID_CP_CONSUMER) &&
-            in->application == HID_GD_KEYBOARD) {
+        if (joins_keyboard(application) && in->application == HID_GD_KEYBOARD) {
             return in;
         }
     }
@@ -1888,8 +1897,9 @@ static uint32_t field_application(const struct hid_dev *hid, const struct hid_fi
     return f->application ? f->application : hid->desc.reports[f->report].application;
 }
 
-/** Map the useful fields on a multitouch interface to their applications. */
-static void configure_mixed_report(struct hid_dev *hid, uint32_t report)
+/** Map fields to applications. `keyboard_seen` includes earlier keyboard
+ * fields that did not allocate a node, so later controls can join it. */
+static void configure_mixed_report(struct hid_dev *hid, uint32_t report, int *keyboard_seen)
 {
     uint32_t i, app;
 
@@ -1898,14 +1908,20 @@ static void configure_mixed_report(struct hid_dev *hid, uint32_t report)
         struct hid_input *in;
         int new_input;
 
-        if (f->report != report || !input_field_enabled(hid, f) || !f->count ||
-            (f->flags & HID_MAIN_ITEM_CONSTANT)) {
+        if (f->report != report || !input_field_enabled(hid, f)) {
             continue;
         }
         app = field_application(hid, f);
+        *keyboard_seen |= app == HID_GD_KEYBOARD;
+        if (!f->count || (f->flags & HID_MAIN_ITEM_CONSTANT)) {
+            continue;
+        }
         in = match_application(hid, app);
         new_input = in == NULL;
         if (new_input) {
+            if (*keyboard_seen && joins_keyboard(app)) {
+                app = HID_GD_KEYBOARD;
+            }
             in = allocate_input(hid, app);
         }
         if (!in) {
@@ -1946,6 +1962,7 @@ static void configure_reports(struct hid_dev *hid)
     uint32_t i, k, f;
     int per_app = hid->desc.maxapplication > 1;
     int split = per_app && hid->mt_surfaces != 0;
+    int keyboard_seen = 0;
 
     for (k = HID_INPUT_REPORT; k <= HID_OUTPUT_REPORT; k++) {
         for (i = 0; i < hid->desc.nreports; i++) {
@@ -1956,7 +1973,7 @@ static void configure_reports(struct hid_dev *hid)
                 continue;
             }
             if (split) {
-                configure_mixed_report(hid, i);
+                configure_mixed_report(hid, i, &keyboard_seen);
                 continue;
             }
             for (f = 0; f < hid->desc.nfields; f++) {
