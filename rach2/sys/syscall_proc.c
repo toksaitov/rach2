@@ -6957,8 +6957,8 @@ int signal_return_work(const isr_params_t *tf)
     if (!p || !FRAME_USER(tf)) {
         return 0;
     }
-    return proc_dead_threads != 0 || p->restart_due || p->ptrace || p->sigmask_saved ||
-           p->sig_woken || p->tick_sigs || p->tg->stop ||
+    return proc_dead_threads != 0 || p->restart_due || (p->ptrace & (PT_START | PT_INTERRUPT)) ||
+           p->sigmask_saved || p->sig_woken || p->tick_sigs || p->tg->stop ||
            (sig_pending_now() & ~p->sig_blocked) != 0;
 }
 

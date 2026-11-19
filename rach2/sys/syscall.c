@@ -250,27 +250,37 @@ void syscall_unlock(int abi, syscall_fn_t handler)
     }
 }
 
-int syscall_entry_locked(const isr_params_t *params)
+/** Whether call number `nr` of the table the call in `params` is numbered
+ * in runs under the big lock: nonzero unless its handler is marked
+ * (`syscall_unlock`). */
+static int syscall_nr_locked(const isr_params_t *params, uint32_t nr)
 {
-    const process_t *p = current_proc;
     const uint32_t *bits = _syscall_unlocked;
-    uint32_t nr = (uint32_t)SC_NR(params), size = SYSCALL_TABLE_SIZE;
+    uint32_t size = SYSCALL_TABLE_SIZE;
 
+    (void)params;
 #if defined(IA32_SYSCALL_TABLE_SIZE)
     if (SC_COMPAT(params)) {
         bits = _ia32_syscall_unlocked;
         size = IA32_SYSCALL_TABLE_SIZE;
     }
 #endif
+    /* A number is marked only where its table has a handler. */
+    return nr >= size || !(bits[nr / 32] & (1u << (nr % 32)));
+}
+
+int syscall_entry_locked(const isr_params_t *params)
+{
+    const process_t *p = current_proc;
+
     if (!p || p->fd_holding || usbdisk_waiting) {
         return 1;
     }
     if ((p->work & WORK_ENTRY) &&
-        ((p->ptrace & (PT_SYSCALL | PT_STEP)) || p->seccomp_mode != SECCOMP_MODE_DISABLED)) {
+        ((p->ptrace & PT_STEP) || p->seccomp_mode != SECCOMP_MODE_DISABLED)) {
         return 1;
     }
-    /* A number is marked only where its table has a handler. */
-    return nr >= size || !(bits[nr / 32] & (1u << (nr % 32)));
+    return syscall_nr_locked(params, (uint32_t)SC_NR(params));
 }
 
 int in_compat_syscall(void)
@@ -3604,6 +3614,23 @@ static void syscall_relock_end(int relock)
     }
 }
 
+/**
+ * Take the big lock for a system call stop of the current thread `p` in a
+ * call that runs without it, when the stop needs it: a single step's exit
+ * stop, whose siginfo names the tracer (`tracer_info`), or a thread outside
+ * the first PID and user namespaces, whose ids the stop's siginfo
+ * translates. Any other stop takes only the locks of what it touches
+ * (`ptrace_stop`). Returns what `syscall_relock` returns, 0 when it takes
+ * nothing.
+ */
+static int syscall_stop_relock(const process_t *p)
+{
+    if ((p->ptrace & PT_STEP) || proc_pidns(p) != &init_pidns || proc_userns(p) != &init_userns) {
+        return syscall_relock();
+    }
+    return 0;
+}
+
 /** Let go of the descriptors the call of thread `p`, the current one, held
  * or kept after a dup2 replaced them (`fd_holds_release`), when there are
  * any; each release takes the big lock when its object needs it
@@ -3784,13 +3811,20 @@ static void syscall_futex_unlock(void)
  * program unchanged, as on Linux.
  *
  * A call that runs without the big lock (`syscall_entry_locked`) takes it
- * for the work of its entry and exit that needs it, which a tracer that
- * attached or a filter another thread installed meanwhile may bring: the
- * tracer's stops, the filters, the descriptors it held. The USB sticks wait
- * for a call that holds the lock. The entry's work, the tracer's stop and
- * the filters, is behind the thread's WORK_ENTRY bits, and the exit's
- * tracer stop behind WORK_TRACE, so that a call with none tests one word
- * at each end.
+ * for the work of its entry and exit that needs it, which a filter another
+ * thread installed meanwhile may bring: the filters, the descriptors it
+ * held, and a tracer's stop only when `syscall_stop_relock` says so. A
+ * traced thread's call is judged by its number as an untraced one is, and
+ * its stops take only the signal state's lock and those of the tracer's
+ * notice, as Linux's ptrace_stop runs under the thread's siglock
+ * (kernel/signal.c:2233-2382). The tracer may change the number at the
+ * entry stop, so the handler runs under the lock when the number it leaves
+ * needs it (`syscall_nr_locked`), as Linux's syscall_trace_enter returns
+ * the number the call then runs (kernel/entry/common.c:28-75). The USB
+ * sticks wait for a call that holds the lock. The entry's work, the
+ * tracer's stop and the filters, is behind the thread's WORK_ENTRY bits,
+ * and the exit's tracer stop behind WORK_TRACE, so that a call with none
+ * tests one word at each end.
  *
  * The rest of the exit's work is the return's (`isr_leave`): a switch an
  * interrupt asked for, and whatever the loopback backlog holds, a lone
@@ -3814,7 +3848,7 @@ static void _syscall_handler(isr_params_t *params)
     syscall_fn_t *table = syscall_table_of(params, &size);
     syscall_fn_t fn = NULL;
     long ret = -ENOSYS;
-    int skip = 0, relock;
+    int skip = 0, relock, relock_call = 0;
 
     if (!p) {
         arch_irq_enable();
@@ -3842,7 +3876,7 @@ static void _syscall_handler(isr_params_t *params)
     }
     if (p->work & WORK_ENTRY) {
         if (p->ptrace & PT_SYSCALL) {
-            relock = syscall_relock();
+            relock = syscall_stop_relock(p);
             ptrace_syscall_stop(params, syscall_num, 0);
             syscall_num = (uint32_t)p->orig_nr;
             skip = p->orig_nr == -1;
@@ -3858,14 +3892,19 @@ static void _syscall_handler(isr_params_t *params)
         }
         p->restart_kind = RESTART_SYS;
         p->restart_due = 0;
+        relock_call = !skip && syscall_nr_locked(params, syscall_num);
     }
     if (skip) {
         ret = (long)SC_RET(params);
-    } else if (syscall_num < size && table[syscall_num]) {
-        fn = table[syscall_num];
-        ret = fn(params);
     } else {
-        syscall_missing(syscall_num, SC_COMPAT(params));
+        relock = relock_call ? syscall_relock() : 0;
+        if (syscall_num < size && table[syscall_num]) {
+            fn = table[syscall_num];
+            ret = fn(params);
+        } else {
+            syscall_missing(syscall_num, SC_COMPAT(params));
+        }
+        syscall_relock_end(relock);
     }
 
     syscall_holds_release(p);
@@ -3873,7 +3912,7 @@ static void _syscall_handler(isr_params_t *params)
         ret = restart_result(params, fn, ret);
     }
     if ((p->work & WORK_TRACE) && (p->ptrace & (PT_SYSCALL | PT_STEP))) {
-        relock = syscall_relock();
+        relock = syscall_stop_relock(p);
         SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
         ret = (long)SC_RET(params);
