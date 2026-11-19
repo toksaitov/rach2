@@ -1,4 +1,4 @@
-.Dd November 15, 2026
+.Dd November 19, 2026
 .Dt VIRTIO-NET 4
 .Os
 .Sh NAME
@@ -16,6 +16,13 @@ PCI bus, QEMU's
 .Ql -device virtio-net-pci ,
 as Linux's virtio_net does, and makes it an Ethernet interface,
 .Li ethN .
+A transitional device without the virtio 1.x capabilities, QEMU's
+.Ql disable-modern=on ,
+is driven through its legacy interface in its I/O BAR, as Linux's
+virtio_pci_legacy does: its queues have the size it states, up to 1024,
+and without
+.Dv VIRTIO_NET_F_MRG_RXBUF
+the header before each frame is 10 bytes, not 12.
 The device has no registers: a frame is a buffer on a queue shared with
 the hypervisor, so a burst of frames costs one notification where an
 emulated card costs an exit for each access to a register.
@@ -73,25 +80,22 @@ A write of the function's name,
 .Ar 0000:BB:DD.F ,
 to
 .Pa /sys/bus/pci/drivers/virtio-pci/unbind
-stops the device and takes the driver off it, so that
+stops the device, takes the driver off it, so that
 .Xr vfio 4
-may have the function.
-The interface stays, without a carrier and without its
-.Pa device
-link.
+may have the function, and removes the interface, as Linux's
+virtnet_remove unregisters it: its addresses, routes and neighbours go,
+and a packet socket bound to it reads
+.Er ENETDOWN .
 A write of the name to
 .Pa bind
-brings the device up again as the same interface, with the device's
-address and largest MTU as they are then: an MTU above a smaller limit
-comes down to it.
+brings the device up on a new interface,
+.Li ethN
+for the lowest
+.Ar N
+free, with a new index, down, as Linux leaves a new interface until it is
+set up.
 .Sh LIMITS
-A device of virtio 1.x only: QEMU's
-.Ql disable-modern=on
-is refused.
 One receive and one transmit queue.
-An interface is made only at boot: a device bound later that had none is
-refused, and an unbound device's interface keeps its addresses, where
-Linux removes the interface.
 .Sh FILES
 .Bl -tag -width /sys/bus/virtio/drivers/virtio_net
 .It Pa /sys/class/net/ethN
