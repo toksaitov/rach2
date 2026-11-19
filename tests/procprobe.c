@@ -2927,7 +2927,7 @@ static char pool_buf[32768];
 static int pool_rows(const char *b, int n)
 {
     static const char head[] = " 00000000", tail[] = "00000000:0000 0A ";
-    char row[32], port[7];
+    char row[40], port[7]; /* row: 9 + 6 + 17 bytes and a NUL */
     int i, k, j, rows = 0;
 
     if (!has_line_starting(b, n, "  sl ")) {
