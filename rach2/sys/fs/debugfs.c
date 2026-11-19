@@ -583,6 +583,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* rename_flags */
     0, /* tmpfile */
     0, /* uncache */
+    0, /* phase */
 };
 
 /** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */

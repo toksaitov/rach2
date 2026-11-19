@@ -4465,6 +4465,7 @@ static const struct vfs_ops exfat_ops = {
     0,                         /* rename_flags */
     0,                         /* tmpfile */
     0,                         /* uncache */
+    0,                         /* phase */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops,       0, 0, 0, 0, 0,

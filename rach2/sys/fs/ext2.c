@@ -4414,6 +4414,7 @@ static const struct vfs_ops ext2_ops = {
     0, /* rename_flags */
     admit_tmpfile,
     admit_uncache,
+    0, /* phase */
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,

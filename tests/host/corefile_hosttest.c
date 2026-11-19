@@ -913,10 +913,17 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 }
 
 /** No row unlinks a node of the KRFFS root; a call fails the row. */
-void krffs_unlink_held(krffs_node_t *node)
+int krffs_unlink_held(krffs_node_t *node)
 {
     (void)node;
     check(0, "unexpected root node unlink");
+    return -1;
+}
+
+/** No row halts the KRFFS root. */
+int krffs_root_halted(void)
+{
+    return 0;
 }
 
 /** Make `wq` empty. */

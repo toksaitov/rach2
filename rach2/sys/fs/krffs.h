@@ -161,9 +161,45 @@ typedef struct krffs_mount {
      * value that was never written; the core fails such a write rather
      * than publish something no reader could make sense of. */
     uint32_t grain;
+    /* How many bytes the device writes whole, 0 for memory: a 512-byte
+     * sector. A block of `grain` bytes reaches the device as several of
+     * these, and a stop can land between them, so a size that publishes a
+     * change to the chain must change bytes of one sector only. */
+    uint32_t sector;
+    /* Offset of byte zero within the medium's first sector, below sector. */
+    uint32_t sector_phase;
     /* A failed backward-link write forces removals to walk forward. */
     int stale_links;
+    /* A check is owed, so the dirty flag stays set at unmount: the repair
+     * left a search to fsck.krffs, or a rename's write failed with the file
+     * perhaps in no directory. */
+    int check_owed;
+    /* A barrier or a size's store failed, so what the cache holds may reach
+     * the medium in any order, a size that gave a node room among it; or a
+     * shrink left its shorter length in the cache, where the old one on the
+     * medium still counts the bytes it gave up. Until a barrier succeeds, no
+     * operation writes into a node's room. */
+    int unsettled;
+    /* A move could not withdraw its copy, so the file's name is on two
+     * nodes: every write and every barrier fails until the next mount's
+     * repair. */
+    int halted;
+    /* That copy's offset, which lookups and listings pass over, or 0, the
+     * root's, which is no copy. */
+    uint64_t withdrawn;
+    /* Nodes without a name this mount made and has not freed or named
+     * since: those it took the name off for a holder (`krffs_orphan_at`),
+     * new nodes before their name, and copies of such nodes. An unmount or
+     * a shutdown keeps the dirty flag while it is not 0, for the next mount
+     * to free them, without reading the ring. */
+    uint32_t orphans;
+    /* Called once when the mount halts, for its owner to turn the mounts
+     * that show it read-only; NULL for none. */
+    void (*on_halt)(struct krffs_mount *mount);
 } krffs_mount_t;
+
+/** The sector phase of the first data byte of the file at `offset`. */
+uint32_t krffs_file_phase(const krffs_mount_t *mount, uint64_t offset);
 
 /* The offset that is no node, since every real one is a byte of the region. */
 #define KRFFS_NO_NODE ((uint64_t)-1)
@@ -315,7 +351,8 @@ uint64_t krffs_walk(krffs_mount_t *mount, const char *path);
 
 /**
  * The offset of the child named `name` of the directory at `dir`, one step
- * of a walk, or KRFFS_NO_NODE when there is none or a read fails.
+ * of a walk, or KRFFS_NO_NODE when there is none, `dir` is no directory,
+ * or a read fails.
  *
  * `dir` 0, or KRFFS_NO_NODE, is the root directory. `name` is one component
  * of at least one byte, since an empty name matches an orphan; `.` and `..`
@@ -324,12 +361,21 @@ uint64_t krffs_walk(krffs_mount_t *mount, const char *path);
 uint64_t krffs_child_at(krffs_mount_t *mount, uint64_t dir, const char *name);
 
 /**
+ * `krffs_child_at` with an error code in `*err`, when not NULL: 0 when the
+ * child is found, -ENOENT when there is none or `dir` is no directory, and
+ * -EIO for a read that failed before it was found.
+ */
+uint64_t krffs_child_at_err(krffs_mount_t *mount, uint64_t dir, const char *name, int *err);
+
+/**
  * Resolve `path` to a node offset, honoring `.` and `..`.
  *
  * Slashes before and between components are skipped, and "/", "" or a NULL
  * `path` is the root, offset 0. A `..` whose directory cannot be found goes
  * to the root. A missing component answers KRFFS_NO_NODE with `*err`
- * -ENOENT, and a component before the last that is not a directory
+ * -ENOENT, a read that fails before its node is found, a name's among
+ * them, KRFFS_NO_NODE with -EIO, since the name it could not read may be
+ * the one sought, and a component before the last that is not a directory
  * KRFFS_NO_NODE with -ENOTDIR; `err` may be NULL, and is 0 on success. The
  * walk checks no search permission; the mount table does (vfs.c).
  */
@@ -342,6 +388,12 @@ uint64_t krffs_walk_err(krffs_mount_t *mount, const char *path, int *err);
  * directory was removed, or a damaged image, gives.
  */
 uint64_t krffs_parent_offset(krffs_mount_t *mount, uint64_t offset);
+
+/**
+ * `krffs_parent_offset` with `*err` -EIO for a read that failed, which
+ * a lookup of `..` must not take for no directory, and 0 otherwise.
+ */
+uint64_t krffs_parent_offset_err(krffs_mount_t *mount, uint64_t offset, int *err);
 
 /**
  * Write the absolute, canonical path of the node at `offset` into `buf` of
@@ -368,20 +420,25 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * `*node`, `at` bytes in, growing the node when the data would pass its
  * room.
  *
- * A grow that moves the node stores the new offset in `*node` before the
- * bytes are written, so the caller repoints the node's holders even when the
- * write then fails. The bytes between the old end of the data and `at` are
- * zeroed, since they hold whatever the free space held. The data is synced
- * before `data_size` is raised to count it, and the modification and change
- * times are stamped. A write of 0 bytes changes nothing and answers 0, as
- * POSIX has it for a regular file.
+ * Whether the node must move is decided before any byte is written: when
+ * no free node after it gives the room, or when the new length crosses a
+ * sector in no order that leaves a length between the old and the new at
+ * every stop, the node is copied with the bytes written into the copy, which
+ * is published with the new length before the old node is freed. `*node` is
+ * where the node is afterwards, which the caller repoints the node's holders
+ * to whatever the answer. Otherwise the bytes between the old end of the
+ * data and `at` are zeroed, since they hold whatever the free space held,
+ * and they and the bytes written reach the medium before `data_size` is
+ * raised to count them, by `krffs_store_length`. The modification and
+ * change times are stamped. A write of 0 bytes changes nothing and answers
+ * 0, as POSIX has it for a regular file. After a barrier that failed, no
+ * byte is written until one succeeds.
  *
  * Returns `size`; KRFFS_EBAD for a null argument or KRFFS_NO_NODE, a header
- * that cannot be read, a node that is not reserved, such as one a failed
- * move freed while its holders kept the offset, or a write or sync that
- * failed, which can leave the bytes written and `data_size` not raised; or
- * KRFFS_ENOSPACE when the node had to grow and `krffs_resize_at` failed,
- * which a write that fails during the resize also gives.
+ * that cannot be read, or a node that is not reserved; KRFFS_ENOSPACE when
+ * the node had to move and no free node held the copy, with no byte of the
+ * file changed; or KRFFS_EIO when a read, a write, a sync or a barrier
+ * failed, which can leave the bytes written and `data_size` not raised.
  */
 int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
                    uint32_t at);
@@ -419,15 +476,16 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
  * It takes the node and not a path, because a file whose name has been
  * taken away is still a file its holder may truncate, and there is no path
  * that names it. `*node_out`, when `node_out` is not NULL, is where the
- * node is afterwards, which a grow with no room after it changes: the new
- * offset; the old one when a resize that failed left the node there; or
- * KRFFS_NO_NODE when a failed move had already freed the old node, so the
- * caller's holders keep what they have.
+ * node is afterwards, whatever the answer: the new offset once a move has
+ * stored the old node's type as free, even when the removal then failed,
+ * and the old one otherwise. A grow decides whether the node moves before
+ * it zeroes anything, as `krffs_write_at` does, and its zeroes reach the
+ * medium before the length that counts them.
  *
- * Returns 0; KRFFS_EBAD for KRFFS_NO_NODE, the root, a directory, a node
- * that is not reserved, or a write that failed; KRFFS_ENOSPACE when the
- * file could not grow; or KRFFS_EIO when a shrink's length, header or
- * writeback failed.
+ * Returns 0; KRFFS_EBAD for KRFFS_NO_NODE, the root, a directory or a node
+ * that is not reserved; KRFFS_ENOSPACE when the file had to move, to grow
+ * or for its length's sake, and no free node held it; or KRFFS_EIO when a
+ * read, a write, a sync or a barrier failed.
  */
 int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
                            uint64_t *node_out);
@@ -453,19 +511,41 @@ int krffs_unlink_at(krffs_mount_t *mount, const char *path);
  *
  * Neither the source nor an existing destination may be a directory, since
  * a directory's id is its parent's mixed with its name and its children
- * refer to it by that id; an existing destination file is removed first,
- * and freed whoever holds it. A rename to the name the file already has
- * does nothing at all, as POSIX requires. The node takes the DJB hash of
- * its new name as its id and the new parent, then a sync, then the name and
- * a sync. The directories left and entered get new modification and change
- * times, and the node a new change time.
+ * refer to it by that id. A rename to the name the file already has does
+ * nothing at all, as POSIX requires. Everything that can refuse is settled
+ * before the first write, the lookups of every name the rename's halfway
+ * states could meet among them, so that a refusal leaves both names as
+ * they were. Then an existing destination is removed, or orphaned
+ * (`krffs_orphan_at`) when `held`, given `arg` and its offset, says its
+ * caller holds it, which `*orphaned` then names; and a barrier puts that,
+ * and any earlier removal of the name, on the medium before the file takes
+ * the name. The node takes the new parent and the new name, with the DJB
+ * hash of the name as its id, each followed by a barrier, in the order
+ * whose halfway states meet no name already there, by way of a spare name
+ * when both orders would. A field whose changed bytes a sector's or a
+ * grain's edge cuts is written in pieces: a name's in the order whose
+ * halfway names the directory does not have, a parent's in the order whose
+ * halfway parents no directory has, the root included, after the new
+ * parent is written into the id field, which nothing else reads of a file,
+ * so that the repair (`krffs_repair_at`) can put the file into the
+ * directory its id names if a stop leaves its parent naming none. The
+ * directories left and entered get new modification and change times, and
+ * the node a new change time.
  *
  * Returns 0, or -1 for a missing source, the root, a directory, a
- * destination path with no last name or whose directory is not found, an id
- * or a parent that would reach the medium in two pieces, which fails the
- * rename before anything is removed, a destination that is a directory or
- * cannot be removed, or a write that failed.
+ * destination path with no last name or whose directory is not found, a
+ * read that failed, a rename with no order whose every halfway state
+ * shows a name the directory does not have, a parent field an edge cuts
+ * while a grain's edge cuts the id field or whose every order of pieces
+ * shows a directory's id, a destination that is a directory or cannot be
+ * removed, or a write that failed, which halts the mount until the next
+ * mount's repair. `held` may be
+ * NULL for a caller with no holders, and `orphaned` NULL when `held` is.
  */
+int krffs_rename_err(krffs_mount_t *mount, const char *old_path, const char *new_path,
+                     int (*held)(void *arg, uint64_t offset), void *arg, uint64_t *orphaned);
+
+/** `krffs_rename_err` with no holders to keep a destination for: 0 or -1. */
 int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_path);
 
 /**
@@ -516,10 +596,15 @@ int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index, cha
  * no path, listing or count. It keeps its type, its data and its
  * parent id, so it is still a live file for whoever has it open and an
  * ordinary reserved node to the allocator. The caller frees it with
- * `krffs_remove_at` when its last holder lets it go. The root and
- * KRFFS_NO_NODE are left alone, and a write that fails is not reported.
+ * `krffs_remove_at` when its last holder lets it go. Returns 0, or -1 with
+ * nothing changed for the root and KRFFS_NO_NODE, and -1 for a write that
+ * fails, after which the name may still be there.
  */
-void krffs_orphan_at(krffs_mount_t *mount, uint64_t offset);
+int krffs_orphan_at(krffs_mount_t *mount, uint64_t offset);
+
+/** Whether the node at `offset` is the copy a halted mount could not
+ * withdraw (`withdrawn`), which lookups and listings pass over. */
+int krffs_hidden(krffs_mount_t *mount, uint64_t offset);
 
 /**
  * Free every orphan on the medium. Only a mount calls it, since no node has
@@ -554,27 +639,31 @@ void krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
  * splitting the free node it takes when the rest can hold a header.
  *
  * With `original` a node, the new node is a copy of it, the move half of a
- * grow: its name, ids, mode, owner, times, data and `data_size`. With
- * KRFFS_NO_NODE it has an empty name and a `data_size` of `size`. The node
- * is published by its type, written last and synced. Returns its offset,
- * or KRFFS_NO_NODE when no free node fits or a read, a write or a sync
- * failed.
+ * resize: its name, ids, mode, owner, times, data and `data_size`, the data
+ * cut to `size`. With KRFFS_NO_NODE it has an empty name and a `data_size`
+ * of `size`. The node is published by its type, written last and synced,
+ * and on the disk root each step is flushed to the disk. Returns its
+ * offset, or KRFFS_NO_NODE when no free node fits or a read, a write or a
+ * sync failed.
  */
 uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t original);
 
 /**
  * Give the reserved node at `offset` room for `size` bytes of data.
  *
- * Growing takes the free node after it when that is large enough, and
- * otherwise moves the node to a new allocation and frees the old one, so
- * the answer may be another offset. Shrinking returns the surplus to the
- * free list, merged with a free node after it. In either direction a
- * surplus too small for a header stays inside the node, where a later
- * shrink or a removal reclaims it. A grow changes the node's room and not
- * its length: `data_size` stays, and the caller stores the new length once
- * the bytes are written. A shrink below `data_size` stores the shorter
+ * Growing takes room from the free node after it when that is large
+ * enough, at least a header's worth, and otherwise moves the node to a new
+ * allocation and frees the old one, so the answer may be another offset.
+ * Shrinking returns the surplus to the free list, merged with a free node
+ * after it. In either direction a surplus too small for a header, or whose
+ * size would change bytes of two sectors, stays inside the node, where a
+ * later shrink or a removal reclaims it. A grow changes the node's room and
+ * not its length: `data_size` stays, and the caller stores the new length
+ * once the bytes are written. A shrink below `data_size` stores the shorter
  * length first, since the surplus's header is written inside bytes the old
- * length counts.
+ * length counts, in an order that leaves a length between the two at every
+ * stop; a length that crosses a sector where no such order exists moves the
+ * node instead.
  *
  * Returns the node's offset, or KRFFS_NO_NODE for a `size` larger than the
  * region, an offset that is no reserved node, a move that found no room, a
@@ -593,8 +682,9 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
  * be walked; the backward link of the node after the merged one is repaired
  * last, and a sync ends the call. Returns the sync's answer, or -1 for an
  * offset that is no reserved node or a store of the type that failed, which
- * leaves the node reserved. A merge that cannot write its size leaves the
- * free nodes side by side.
+ * leaves the node reserved, or for a merge's size whose store failed, which
+ * marks the links stale. A merge whose size would change bytes of two
+ * sectors or two blocks leaves the free nodes side by side.
  */
 int krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
 
@@ -618,22 +708,60 @@ int krffs_set_dirty(krffs_mount_t *mount, int dirty);
 int krffs_is_dirty(krffs_mount_t *mount);
 
 /**
+ * 1 when the boot root owes a check (`check_owed`), so that the shutdown
+ * keeps its dirty flag; 0 otherwise.
+ */
+int krffs_root_check_owed(void);
+
+/**
+ * 1 when the boot root is halted (`halted`): a write that failed left it
+ * in a state only the next mount's repair undoes, so a file's sync answers
+ * EIO; 0 otherwise.
+ */
+int krffs_root_halted(void);
+
+/** Set the boot root's `on_halt`, which its VFS mount gives to turn the
+ * mounts that show it read-only. */
+void krffs_root_on_halt(void (*fn)(krffs_mount_t *mount));
+
+/**
+ * 1 when the boot root has made a node without a name and not freed or
+ * named it since (`orphans`): a file unlinked while open or whose free
+ * failed, or a new node whose name was not stored, which `fsck.krffs
+ * --strict` would count as a repair owed; 0
+ * otherwise. It reads nothing, so a shutdown can ask it of a disk that
+ * no longer reads. The shutdown keeps the dirty flag then, and the next
+ * mount frees the node.
+ */
+int krffs_root_has_orphans(void);
+
+/**
  * Repair what a machine that stopped inside a change can leave.
  *
- * There are three faults, the ones the format's order of writes can
+ * There are four faults, the ones the format's order of writes can
  * produce: a backward link the forward chain contradicts, rebuilt from the
- * walk; one name on two nodes of a directory, an interrupted move or
+ * walk; a file whose parent names no directory, a rename stopped between
+ * the pieces of its parent field, which is put into the directory its id
+ * names; one name on two nodes of a directory, an interrupted move or
  * rename, where the loser's name is cleared; and reserved nodes with no
  * name, freed by `krffs_reap_orphans_at`. Of two nodes with one name, a
  * directory keeps it over a file, since its children name it by its id,
- * and otherwise the larger keeps it, since a move only makes a node larger.
+ * and otherwise the node with more data keeps it, then the larger: the copy
+ * of a grow holds the original's bytes and what was added, and the
+ * original of a shrink holds the bytes its copy left out.
  * The counts go to `links`, `orphans` and `doubles`, any of which may be
  * NULL.
  *
- * The forward chain must already pass `krffs_chain_is_walkable`. Returns
- * the last sync's answer, or -1 for a read or a write that failed or for a
- * volume of more than 4096 named nodes (KRFFS_REPAIR_NAMES in krffs.c),
- * which is left unwritten for `fsck.krffs`.
+ * The forward chain must already pass `krffs_chain_is_walkable`. The
+ * search for one name on two nodes sorts an index of the named nodes, 16
+ * bytes each and at most 262144 of them (KRFFS_REPAIR_NAMES in krffs.c), in
+ * passes when there are more; with more nodes of one name hash than the
+ * index holds, or no memory for it, `fsck.krffs` is left the search and
+ * `check_owed` is set. A file is put back by its parent's pieces, in an
+ * order whose halfway parents name no directory, with a barrier after
+ * each; with no memory for the sorted directory ids, each id is tested by
+ * a walk. Returns the last sync's answer, or -1 for a read or a write
+ * that failed, or a parent no order puts back.
  */
 int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, uint32_t *doubles);
 
@@ -683,7 +811,8 @@ krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *no
 /**
  * The child of `dir` named `name`, one step of a walk, for the VFS lookup.
  * `dir` NULL or the root node is the root directory; `name` is one
- * component of at least one byte. NULL when absent or before the mount.
+ * component of at least one byte. NULL when absent, when `dir` is no
+ * directory, or before the mount.
  */
 krffs_node_t *krffs_child(krffs_node_t *dir, const char *name);
 
@@ -705,9 +834,11 @@ uint32_t krffs_reap_orphans(void);
  * `krffs_orphan_at` on the boot root: take `node` out of the namespace
  * without freeing it, for a file somebody still holds. A null `node`, the
  * root and a pointer outside the image are left alone. The release of the
- * last holder frees it (syscall_fs.c).
+ * last holder frees it (syscall_fs.c). 0, or -1 when the name was not
+ * taken off: before the mount, for a null `node`, on a halted root or a
+ * write that failed.
  */
-void krffs_orphan_node(krffs_node_t *node);
+int krffs_orphan_node(krffs_node_t *node);
 
 /**
  * Take the name off `node`, which somebody still holds, and stamp the
@@ -716,9 +847,9 @@ void krffs_orphan_node(krffs_node_t *node);
  * The stamp is here rather than at the two callers, the `unlink` path of
  * the system call layer and the debug shell's `rm`, so that neither can
  * leave it out: removing a name changes the directory whether or not the
- * file it named goes with it.
+ * file it named goes with it. Returns `krffs_orphan_node`'s answer.
  */
-void krffs_unlink_held(krffs_node_t *node);
+int krffs_unlink_held(krffs_node_t *node);
 
 /** Build the absolute, canonical path of `node` into buf; 0 ok, -1 before
  * the mount, for a null or foreign `node`, or if it does not fit. */
@@ -823,6 +954,22 @@ int krffs_unlink(const char *path);
 /** `krffs_rename_at` on the boot root; -1 before the mount. */
 int krffs_rename(const char *old_path, const char *new_path);
 
+/**
+ * `krffs_rename_err` on the boot root, for a caller with holders: a
+ * destination `held` says is held keeps its node without a name. 0, or -1,
+ * also before the mount.
+ */
+int krffs_rename_node(const char *old_path, const char *new_path,
+                      int (*held)(const krffs_node_t *node));
+
+/**
+ * Where a sector of the medium falls in the boot root's file `node`: how
+ * many bytes into a sector its first data byte lies, the phase a loop
+ * device over the file reports (`krffs_mount_t`'s `phase`). The image
+ * starts on a sector.
+ */
+uint32_t krffs_node_phase(const krffs_node_t *node);
+
 /* Directory operations: create, remove (must be empty), and enumerate
  * children. */
 
@@ -876,10 +1023,13 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size);
  * Mount the disk boot root at `base`, a page-cache window of `size` bytes.
  * As `init_krffs`, but a dirty image with a valid forward chain can have
  * its backward links repaired before publication. The caller writes them
- * back when marking the mount dirty. `sector_bytes` is the disk write unit
- * used to check each coalesced size on removal. `flush` writes the page
- * cache to disk and returns 0 on success. A shrink calls it before
- * writing its free header and before publishing the header.
+ * back when marking the mount dirty. `sector_bytes` is what the disk
+ * writes whole, which no size that publishes a change to the chain may
+ * cross with the bytes it changes. `flush` writes the page cache to disk
+ * and returns 0 on success; it is the root's barrier, which an
+ * allocation, a resize, a shrink and a write that raises a length call
+ * between a write and the size, type or length that publishes it, and
+ * before they write inside free space.
  */
 int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void));
 

@@ -18,11 +18,34 @@
 extern int printf(const char *format, ...);
 extern int memcmp(const void *a, const void *b, unsigned long size);
 
+/* The repair in krffs.c indexes names with these; no row here reaches it,
+   so the index is never had and the search would be left owed. */
+void *kmalloc(size_t size)
+{
+    (void)size;
+    return (void *)0;
+}
+
+/** Nothing to give back, since `kmalloc` gives nothing. */
+void kfree(void *p)
+{
+    (void)p;
+}
+
 #define IMAGE_BYTES 65536u
 static uint8_t image[IMAGE_BYTES];
 static struct vfs_mount mount, other_mount;
 static block_device_t disk;
-const struct vfs_type vfs_krffs_type = {0};
+/** The phase of a file in the fixture's production boot image. */
+static uint32_t root_phase(struct vfs_mount *mnt, void *node, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return krffs_node_phase(node);
+}
+
+static const struct vfs_ops root_ops = {.phase = root_phase};
+const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops};
 /* No processor runs a thread: the rows call no transfer, whose count of
  * loop transfers is the only reader of `current_proc` here. */
 struct percpu cpu_table[NR_CPUS];
@@ -392,6 +415,58 @@ static void relocation_row(void)
           "detach releases the relocated attachment");
 }
 
+/** The disk-root fixture writes directly to its image. */
+static int root_flush(void)
+{
+    return 0;
+}
+
+/** Publish the relocated file's sector phase, then reuse the slot on RAM. */
+static void phase_row(void)
+{
+    block_device_t *loop;
+    uint32_t phase;
+
+    reset();
+    check(init_krffs_disk_root(image, sizeof(image), BLOCK_SECTOR_SIZE, root_flush) == 0,
+          "phase: mount the backing image as a disk root");
+    depth = busy = 1;
+    waiting = move_file;
+    check(loop_attach(0, "/image", 1) == 0, "phase: attach the relocated file");
+    loop = loop_attached_at(0);
+    phase = ((uint32_t)((uint8_t *)relocated - image) + sizeof(*relocated)) % BLOCK_SECTOR_SIZE;
+    check(phase != 0 && loop && loop->sector_phase == phase,
+          "phase: publish the relocated data's offset within the disk sector");
+    check(loop_detach(0) == 0, "phase: detach the disk image");
+    check(init_krffs(image, sizeof(image)) == 0 && loop_attach(0, "/image", 1) == 0,
+          "phase: reuse the slot for a RAM image");
+    loop = loop_attached_at(0);
+    check(loop && loop->sector_phase == 0, "phase: the reused slot is aligned");
+    check(loop_detach(0) == 0, "phase: detach the RAM image");
+}
+
+/**
+ * A loop device over a file of the boot root, which has no device, so the
+ * device has no `backing`, and a second one over a file of a volume on the
+ * first: the second is refused with ELOOP, since the cache blocks of the
+ * volume between them do not begin on sectors of the disk and the second
+ * device's phase could not place their edges.
+ */
+static void nested_row(void)
+{
+    reset();
+    mount.dev = NULL;
+    check(loop_attach(0, "/image", 1) == 0 && loop_attached_at(0) &&
+              loop_attached_at(0)->backing == NULL,
+          "nested: a loop device over the boot root has no backing");
+    mount.dev = loop_attached_at(0);
+    check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
+          "nested: a loop device over a file on a loop device is refused");
+    mount.dev = NULL;
+    check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
+          "nested: the first detaches whole");
+}
+
 /** Model a path that now resolves on another mount. */
 static void change_mount(void)
 {
@@ -465,6 +540,8 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
 int main(void)
 {
     relocation_row();
+    phase_row();
+    nested_row();
     error_rows();
     if (!failures) {
         printf("loop-attach-hosttest: result: pass: relocation, reuse and cleanup\n");
