@@ -191,7 +191,8 @@ case $command in
             kill -0 "$peerpid" 2> /dev/null || fail "the Mac's nettput did not start: $(cat "$out/peer.err")"
             sleep 0.2
         done
-        on "$remote/nettput -c $peer -p $port -n 200 wait" ||
+        # The card is still the machine's own here, and -d bounds the probe.
+        on "timeout -s KILL $deadline $remote/nettput -c $peer -p $port -n 200 wait" ||
             fail "the machine does not reach the Mac's nettput at $peer:$port; see the header on Local Network"
         echo "lenovo: peer $peer:$port answers the machine; starting the cases: $cases"
         # shellcheck disable=SC2086 # the cases are words
@@ -223,10 +224,14 @@ case $command in
         ;;
     clean)
         identify
-        if on "test -e $remote/run/others"; then
-            fail "$remote/run/others records interfaces a run did not put back; run again to put them back"
-        fi
-        on "rm -rf $remote" || fail "$remote was not removed"
+        # One command on the machine, so that the record is looked for and
+        # the directory removed together.
+        on "test ! -e $remote/run/others || exit 3; rm -rf $remote"
+        case $? in
+            0) ;;
+            3) fail "$remote/run/others records interfaces a run did not put back; run again to put them back" ;;
+            *) fail "$remote was not removed" ;;
+        esac
         pass
         ;;
 esac

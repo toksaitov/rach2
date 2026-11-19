@@ -264,9 +264,11 @@ mkdir -p "$(dirname "$out")"
 # that a record newer than the image is its record; the image a link where
 # the file system allows it, since it is a gigabyte or more.
 rm -f "$out.record"
-ln "$cache/$system.qcow2" "$out.part.$$" 2> /dev/null || cp "$cache/$system.qcow2" "$out.part.$$" ||
-    die "the image was not copied to $out"
-mv -f "$out.part.$$" "$out" || die "the image was not kept as $out"
+if [ ! "$out" -ef "$cache/$system.qcow2" ]; then
+    ln "$cache/$system.qcow2" "$out.part.$$" 2> /dev/null || cp "$cache/$system.qcow2" "$out.part.$$" ||
+        die "the image was not copied to $out"
+    mv -f "$out.part.$$" "$out" || die "the image was not kept as $out"
+fi
 cp "$cache/$system.record" "$out.record.part.$$" || die "the record was not copied beside $out"
 mv -f "$out.record.part.$$" "$out.record" || die "the record was not kept beside $out"
 echo "netguest-prepare: result: prepared $out"

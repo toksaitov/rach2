@@ -8,11 +8,15 @@
 # bytes through the guest to NETGUEST_PEER's port NETGUEST_PORT and make
 # 1000 exchanges and 200 connections, each of which must reach its count,
 # then waits for the guest's next report on its console,
-# NETGUEST_OUT/console, so that the case's last report counts the
-# transfers. `deny` does the same, then makes ten attempts at once at the
-# peer's port 9, each of which must go unanswered and unrefused until
-# Rach2's TCP gives its handshake up, and waits for a report whose deny9
-# count is at least 10, one SYN of each attempt. `kill` starts a send that
+# NETGUEST_OUT/console, and prints it as `traffic: report: LINE`, the
+# report the case is judged by. `deny` does the same, then makes ten
+# attempts at once at the peer's port 9, each of which must go unanswered
+# and unrefused until Rach2's TCP gives its handshake up, waits for the
+# guest's next report and prints it the same way; the guest's deny9 count
+# must have grown by at least the SYNs Rach2 sent meanwhile, the
+# connections it opened and the segments it sent again as /proc/net/snmp
+# counts them, so that the guest dropped every SYN of every attempt. `kill`
+# starts a send that
 # does not end, writes its process ID to NETGUEST_OUT/sender, and returns
 # once tap0 has sent a mebibyte more than it had, leaving the send running
 # for netguest.sh to kill QEMU under it. A wait ends early, with status 1,
@@ -36,26 +40,41 @@ alive()
     case $s in '' | Z | X) return 1 ;; esac
 }
 
-# last_deny: the deny9 count of the guest's last report, or nothing.
-last_deny()
-{
-    tr -d '\r' < "$NETGUEST_OUT/console" | grep -a 'NETGUEST STATS' | tail -n 1 |
-        sed -n 's/.*deny9=\([0-9][0-9]*\).*/\1/p'
-}
-
 # reports: the guest's reports on its console so far.
 reports()
 {
     grep -a -c 'NETGUEST STATS' "$NETGUEST_OUT/console"
 }
 
-# report_after N: wait until the console holds more than N reports.
+# report_after N: wait until the console holds more than N reports, and
+# print the first of them as `traffic: report: LINE`; `judged` is its
+# number.
 report_after()
 {
-    while [ "$(reports)" -le "$1" ]; do
+    judged=$(($1 + 1))
+    # A report is whole once its last field, states, has begun.
+    until tr -d '\r' < "$NETGUEST_OUT/console" | grep -a 'NETGUEST STATS' | sed -n "${judged}p" |
+        grep -q 'states='; do
         kill -0 "$NETGUEST_QEMU_PID" 2> /dev/null || exit 1
         sleep 1
     done
+    tr -d '\r' < "$NETGUEST_OUT/console" | grep -a 'NETGUEST STATS' | sed -n "${judged}p" |
+        sed 's/^.*NETGUEST STATS/traffic: report:/'
+}
+
+# report_deny N: the deny9 count of the guest's report N, or nothing.
+report_deny()
+{
+    tr -d '\r' < "$NETGUEST_OUT/console" | grep -a 'NETGUEST STATS' | sed -n "${1}p" |
+        sed -n 's/.*deny9=\([0-9][0-9]*\).*/\1/p'
+}
+
+# syns_sent: the connections Rach2's TCP has opened and the segments it has
+# sent again, summed, as /proc/net/snmp counts them.
+syns_sent()
+{
+    awk '$1 == "Tcp:" { if (!h) { for (i = 2; i <= NF; i++) c[$i] = i; h = 1; next }
+        print $(c["ActiveOpens"]) + $(c["RetransSegs"]); exit }' /proc/net/snmp
 }
 
 transfers()
@@ -73,11 +92,25 @@ case ${1:-} in
         ;;
     deny)
         transfers
+        before=$(report_deny "$judged")
+        [ -n "$before" ] || {
+            echo "traffic: the guest's report after the transfers has no deny9 count" >&2
+            exit 1
+        }
+        sent=$(syns_sent)
         "$nettput" -c "$peer" -p 9 -n 10 drop || exit 1
-        until [ "$(last_deny)" -ge 10 ] 2> /dev/null; do
-            kill -0 "$NETGUEST_QEMU_PID" 2> /dev/null || exit 1
-            sleep 1
-        done
+        sent=$(($(syns_sent) - sent))
+        report_after "$(reports)"
+        after=$(report_deny "$judged")
+        [ -n "$after" ] || {
+            echo "traffic: the guest's report after the attempts has no deny9 count" >&2
+            exit 1
+        }
+        echo "traffic: port 9: $sent SYNs sent, $((after - before)) counted by the guest"
+        [ $((after - before)) -ge "$sent" ] || {
+            echo "traffic: the guest counted $((after - before)) of the $sent SYNs sent to port 9" >&2
+            exit 1
+        }
         ;;
     kill)
         start=$(tap_sent)

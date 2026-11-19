@@ -48,23 +48,28 @@
 # driver, PEER answering on it, the VFIO and KVM counts and the free
 # interrupt vectors as at the start and no IOMMU fault (netguest.sh). No
 # check reads the clock; a case that does not end is ended by its caller's
-# bound, or, with -d, by netguest.sh's deadline of SECONDS a boot.
+# bound, or, with -d, by netguest.sh's deadline of SECONDS a boot and the
+# same deadline on cycle's probes and the last probe of -B.
 #
 # On the Lenovo the card is the machine's only link, and three options are
 # for that: -D starts the run again as a session of its own, with its
 # output in OUT/log, its process ID in OUT/pid and its exit status in
-# OUT/status at the end, and returns once that session has started; -W
-# takes every IPv4 address and default route off every other interface for
-# the run, the wireless card, and stops its DHCP client, so that PEER
-# answers by the card or not at all, and puts them back at the end, the
-# first address the primary again, a failure to do either failing the run;
-# a record OUT/others that an earlier run could not put back is put back
-# first. -B reboots the machine when, the card and the other interfaces
-# back at the end, neither PEER answers 2400 attempts nor the interface's
-# gateway three pings, within -d's SECONDS when -d gives any, which on a
-# trial boot returns the machine to the installed kernel. Every attempt at
-# PEER by the card first requires the kernel's route to PEER to be by the
-# card's interface.
+# OUT/status at the end, and returns once that session has started; it
+# keeps OUT, which its start line names, since OUT/status is the run's
+# result. -W takes every IPv4 address and default route off every other
+# interface for the run, the wireless card, and stops its DHCP client, so
+# that PEER answers by the card or not at all, and puts them back at the
+# end, the first address the primary again and the same DHCP client, by
+# its start, running again, a failure to do either failing the run; a
+# record OUT/others that an earlier run could not put back is put back
+# first, and one of another format is refused. -B reboots the machine
+# when, the card and the other interfaces back at the end, neither PEER
+# answers 2400 attempts nor a gateway of the interface three pings by it,
+# within -d's SECONDS when -d gives any, which on a trial boot returns the
+# machine to the installed kernel. Every attempt at PEER by the card is a
+# connection bound to the card's interface. The card's interface gets the
+# addresses and default routes it had when the run began back at the end,
+# whatever a case left, and every process the run started is killed.
 #
 # Lines: netguest.sh's `netguest:` lines; `netguest: case: CASE: pass` or
 # `netguest: case: CASE: fail: REASON`; and last, once everything is put
@@ -113,10 +118,15 @@ done
 bytes=8388608 frames=5541
 nettput=$here/nettput
 
-new_out=0
+# Until finish's traps, a signal removes only the scratch made here.
+new_out=0 early=''
+trap '[ -z "$early" ] || rm -rf "$early"' EXIT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 130' INT
 if [ -z "$out" ]; then
     out=$(mktemp -d "${TMPDIR:-/tmp}/rach2-netguest.XXXXXX") || exit 1
-    new_out=1
+    new_out=1 early=$out
 fi
 mkdir -p "$out" || exit 1
 if [ "$detach" = 1 ]; then
@@ -136,12 +146,12 @@ if [ "$detach" = 1 ]; then
     until [ -s "$out/pid" ]; do
         if ! kill -0 "$launched" 2> /dev/null && [ ! -s "$out/pid" ]; then
             echo "netguest: the detached run did not start: $(tail -n 1 "$out/log" 2> /dev/null)" >&2
-            [ "$new_out" = 0 ] || rm -rf "$out"
             exit 1
         fi
         sleep 0.2
     done
     echo "netguest: started: process $(cat "$out/pid"), log $out/log, status in $out/status at the end"
+    early=''
     exit 0
 fi
 echo $$ > "$out/pid"
@@ -186,12 +196,24 @@ addrs_of()
     ip -4 -o addr show dev "$1" | awk '{ printf "%s%s", sep, $4; sep = " " } END { print "" }'
 }
 
-# routes_of IF: print IF's default routes as GATEWAY/METRIC words.
+# routes_of IF: print IF's default routes as GATEWAY/METRIC words, GATEWAY
+# - for a route by the interface alone.
 routes_of()
 {
-    ip -4 route show default dev "$1" | awk '{ g = ""; m = 0
+    ip -4 route show default dev "$1" | awk '$1 == "default" { g = "-"; m = 0
         for (i = 1; i < NF; i++) { if ($i == "via") g = $(i + 1); if ($i == "metric") m = $(i + 1) }
-        if (g != "") { printf "%s%s/%s", sep, g, m; sep = " " } } END { print "" }'
+        printf "%s%s/%s", sep, g, m; sep = " " } END { print "" }'
+}
+
+# route_words IF ROUTE: print the words of `ip route` that name the default
+# route ROUTE, a GATEWAY/METRIC word, of IF.
+route_words()
+{
+    if [ "${2%/*}" = - ]; then
+        echo "default dev $1 metric ${2#*/}"
+    else
+        echo "default via ${2%/*} dev $1 metric ${2#*/}"
+    fi
 }
 
 # put_addrs IF ADDRS: give IF the addresses ADDRS, the first its primary,
@@ -219,7 +241,8 @@ put_addrs()
 put_routes()
 {
     for r in $2; do
-        ip route add default via "${r%/*}" dev "$1" metric "${r#*/}" 2> /dev/null
+        # shellcheck disable=SC2046 # the route's words
+        ip route add $(route_words "$1" "$r") 2> /dev/null
     done
     now=$(routes_of "$1")
     for r in $2; do
@@ -234,31 +257,82 @@ state_of()
     sed -n 's/^.*) \([A-Z]\).*/\1/p' "/proc/$1/stat" 2> /dev/null
 }
 
-# stop_tree PID: stop PID and its children at once, so that it starts no
-# other child meanwhile, and reap it.
-# shellcheck disable=SC2329 # finish calls it
-stop_tree()
+# started_at PID: print when PID started, in ticks since boot, as
+# /proc/PID/stat gives it, or nothing.
+started_at()
 {
-    kill -STOP "$1" 2> /dev/null
-    pkill -KILL -P "$1" 2> /dev/null
-    kill -KILL "$1" 2> /dev/null
-    kill -CONT "$1" 2> /dev/null
+    awk '{ s = $0; sub(/^.*\) /, "", s); split(s, f, " "); print f[20] }' "/proc/$1/stat" 2> /dev/null
+}
+
+# children_of PIDS: print the processes whose parent is one of PIDS.
+children_of()
+{
+    cat /proc/[0-9]*/stat 2> /dev/null |
+        awk -v p=" $1 " '{ s = $0; sub(/^.*\) /, "", s); split(s, f, " ")
+            if (index(p, " " f[2] " ")) print $1 }'
+}
+
+# kill_tree PID: stop PID and every process under it, each before its
+# children are looked for, so that none starts another or is orphaned
+# meanwhile, then kill them all and reap PID.
+# shellcheck disable=SC2329 # finish and in_time call it
+kill_tree()
+{
+    all='' new=$1
+    while [ -n "$new" ]; do
+        for x in $new; do
+            kill -STOP "$x" 2> /dev/null
+        done
+        all="$all $new"
+        new=$(children_of "$new" | tr '\n' ' ')
+    done
+    for x in $all; do
+        kill -KILL "$x" 2> /dev/null
+        kill -CONT "$x" 2> /dev/null
+    done
     wait "$1" 2> /dev/null
 }
 
+# in_time COMMAND...: run COMMAND, with every process under it killed once
+# -d's SECONDS have passed when -d gives any; its status, 137 when killed.
+# shellcheck disable=SC2329 # cycle and finish call it
+in_time()
+{
+    "$@" &
+    job=$!
+    dog=''
+    if [ "$deadline" -gt 0 ]; then
+        (
+            sleep "$deadline"
+            kill_tree "$job"
+        ) > /dev/null 2>&1 &
+        dog=$!
+    fi
+    child=$job
+    wait "$job"
+    rc=$?
+    child=''
+    [ -z "$dog" ] || kill_tree "$dog"
+    return "$rc"
+}
+
+# The first line of OUT/others, which names its format.
+others_format='netguest others 2'
+
 # others_off: take every IPv4 address and default route off every other
-# interface that has one, and stop its DHCP client. Each interface is
-# recorded in OUT/others, as `IF ROUTES PID ADDR...`, ROUTES the
-# GATEWAY/METRIC words joined by commas or -, before anything of it
-# changes. A record an earlier run left is put back first. The status is 1,
-# with what was changed recorded, when anything fails.
+# interface that has one, and stop its DHCP client. OUT/others records each
+# interface, after its first line, as `IF ROUTES CLIENT ADDR...`, ROUTES the
+# GATEWAY/METRIC words joined by commas or -, CLIENT the DHCP client's
+# process ID and start, PID:START, or -, before anything of it changes. A
+# record an earlier run left is put back first. The status is 1, with what
+# was changed recorded, when anything fails.
 others_off()
 {
     if [ -s "$out/others" ]; then
         note "others: putting back what an earlier run recorded in $out/others"
         others_on || return 1
     fi
-    : > "$out/others" || return 1
+    echo "$others_format" > "$out/others" || return 1
     for n in /sys/class/net/*; do
         o=${n##*/}
         case $o in "$iface" | lo | tap*) continue ;; esac
@@ -266,9 +340,12 @@ others_off()
         [ -n "$a" ] || continue
         r=$(routes_of "$o")
         p=$(cat "/var/run/udhcpc.$o.pid" 2> /dev/null)
+        case $p in '' | 0 | *[!0-9]*) p='' ;; esac
         case $(state_of "${p:-0}") in '' | Z | X) p='' ;; esac
+        c=-
+        [ -z "$p" ] || c=$p:$(started_at "$p")
         rs=$(echo "$r" | tr ' ' ,)
-        echo "$o ${rs:--} ${p:--} $a" >> "$out/others" && sync || return 1
+        echo "$o ${rs:--} $c $a" >> "$out/others" && sync || return 1
         if [ -n "$p" ]; then
             kill -s STOP "$p" || return 1
             until [ "$(state_of "$p")" = T ]; do
@@ -277,32 +354,50 @@ others_off()
             done
         fi
         for x in $r; do
-            ip route del default via "${x%/*}" dev "$o" metric "${x#*/}" 2> /dev/null
+            # shellcheck disable=SC2046 # the route's words
+            ip route del $(route_words "$o" "$x") 2> /dev/null
         done
         for x in $a; do
             ip addr del "$x" dev "$o" || return 1
         done
-        [ -z "$(addrs_of "$o")" ] || return 1
+        [ -z "$(addrs_of "$o")" ] && [ -z "$(routes_of "$o")" ] || return 1
         note "others: $o: $a off, default routes ${r:-none} off, DHCP client ${p:-none} stopped"
     done
 }
 
 # others_on: put back what others_off took, each address, the first the
-# primary, and route read back and each DHCP client running again; the
-# record is kept, and the status is 1, when anything is not back.
+# primary, and route read back, and each DHCP client that still runs, the
+# same process by its start, running again; the record is kept, and the
+# status is 1, when anything is not back or the record is of another
+# format.
 # shellcheck disable=SC2329 # finish calls it
 others_on()
 {
     [ -s "$out/others" ] || return 0
+    if [ "$(head -n 1 "$out/others")" != "$others_format" ]; then
+        note "others: $out/others is not a record of this script's; put its interfaces back by hand"
+        return 1
+    fi
     back=0
-    while read -r o rs p a; do
+    sed 1d "$out/others" > "$out/others.read" || return 1
+    while read -r o rs c a; do
         put_addrs "$o" "$a" || back=1
         [ "$rs" = - ] || put_routes "$o" "$(echo "$rs" | tr , ' ')" || back=1
-        if [ "$p" != - ]; then
-            kill -s CONT "$p" 2> /dev/null || back=1
+        if [ "$c" != - ]; then
+            p=${c%%:*}
+            if [ "$(started_at "$p")" != "${c#*:}" ]; then
+                note "others: $o: DHCP client $p has ended; nothing to resume"
+            else
+                kill -s CONT "$p" 2> /dev/null || back=1
+                while [ "$(state_of "$p")" = T ]; do
+                    sleep 0.1
+                done
+                case $(state_of "$p") in '' | Z | X) back=1 ;; esac
+            fi
         fi
         note "others: $o: $a back"
-    done < "$out/others"
+    done < "$out/others.read"
+    rm -f "$out/others.read"
     [ "$back" = 0 ] || return 1
     rm -f "$out/others"
 }
@@ -326,19 +421,14 @@ link_restore()
 }
 
 # reach N: ask PEER's nettput until it answers, N attempts at most, each
-# made only while the kernel routes PEER by the card's interface; prints
-# nettput's result line, or why not.
-# shellcheck disable=SC2329 # run and answers call it
+# connection bound to the card's interface; prints nettput's result line.
+# shellcheck disable=SC2329 # cycle and answers call it
 reach()
 {
     k=0
     while [ "$k" -lt "$1" ]; do
         k=$((k + 1))
-        if ! ip route get "$peer" | grep -q " dev $iface "; then
-            echo "nettput: $peer is not routed by $iface at attempt $k"
-            return 1
-        fi
-        if "$nettput" -c "$peer" -p "$port" -n 1 wait > /dev/null 2>&1; then
+        if "$nettput" -c "$peer" -I "$iface" -p "$port" -n 1 wait > /dev/null 2>&1; then
             echo "nettput: result: wait attempts=$k"
             return 0
         fi
@@ -347,39 +437,17 @@ reach()
     return 1
 }
 
-# answers: succeed when PEER's nettput, or the interface's gateway, answers.
+# answers: succeed when PEER's nettput, or a gateway of the interface's
+# default routes, answers by the interface; ping's own wait for replies
+# decides only whether -B reboots.
 # shellcheck disable=SC2329 # finish calls it
 answers()
 {
     reach 2400 > /dev/null && return 0
     for r in $(routes_of "$iface"); do
-        ping -c 3 "${r%/*}" > /dev/null 2>&1 && return 0
+        [ "${r%/*}" = - ] || ping -c 3 -I "$iface" "${r%/*}" > /dev/null 2>&1 && return 0
     done
     return 1
-}
-
-# answers_in_time: answers, stopped once -d's SECONDS have passed when -d
-# gives any.
-# shellcheck disable=SC2329 # finish calls it
-answers_in_time()
-{
-    answers &
-    a=$!
-    w=''
-    if [ "$deadline" -gt 0 ]; then
-        (
-            sleep "$deadline"
-            kill -STOP "$a"
-            pkill -KILL -P "$a"
-            kill -KILL "$a"
-            kill -CONT "$a"
-        ) > /dev/null 2>&1 &
-        w=$!
-    fi
-    wait "$a"
-    rc=$?
-    [ -z "$w" ] || stop_tree "$w"
-    return "$rc"
 }
 
 # shellcheck disable=SC2317,SC2329 # the traps call it
@@ -387,12 +455,14 @@ finish()
 {
     status=$?
     trap - EXIT TERM HUP INT
-    # A case's child, netguest.sh, puts the card back at SIGTERM; a child
-    # started just before a signal, whose process ID was not kept, is
-    # stopped too.
+    # A case's child, netguest.sh, puts the card back at SIGTERM; then every
+    # process left under this one, a child started just before a signal
+    # whose process ID was not kept among them, is killed.
     [ -z "$child" ] || kill -TERM "$child" 2> /dev/null
-    pkill -TERM -P $$ 2> /dev/null
-    wait 2> /dev/null
+    [ -z "$child" ] || wait "$child" 2> /dev/null
+    for c in $(children_of $$); do
+        kill_tree "$c"
+    done
     # The card goes back to its driver whatever stopped the run, from
     # vfio-pci too.
     if [ -n "$driver" ] && [ "$driver" != vfio-pci ]; then
@@ -415,7 +485,7 @@ finish()
     others_on || putback="$putback, another interface is not back, as $out/others records"
     if [ "$reboot" = 1 ] && [ "$touched" = 1 ]; then
         up
-        if ! answers_in_time; then
+        if ! in_time answers; then
             note "neither $peer nor the gateway answers on $iface; rebooting"
             echo 1 > "$out/status"
             sync
@@ -489,8 +559,7 @@ cycle()
     why=''
     if ip link show tap9 > /dev/null 2>&1; then
         why="tap9 is there before the case makes it"
-    elif ip tuntap add dev tap9 mode tap; then
-        tap9=1
+    elif tap9=1 && ip tuntap add dev tap9 mode tap; then
         if ip link set tap9 up && ip addr add 10.99.0.1/24 dev tap9; then
             ip -o addr show dev tap9 | sed 's/^/netguest: tap: /'
         else
@@ -500,12 +569,13 @@ cycle()
         ! ip link show tap9 > /dev/null 2>&1 || why="tap9 is still there"
         [ -n "$why" ] || tap9=0
     else
-        why="the tap interface was not made"
+        ! ip link show tap9 > /dev/null 2>&1 || ip tuntap del dev tap9 mode tap || why="tap9 was not removed"
+        [ -n "$why" ] || why="the tap interface was not made"
+        ! ip link show tap9 > /dev/null 2>&1 || why="$why; tap9 is still there"
+        ip link show tap9 > /dev/null 2>&1 || tap9=0
     fi
-    up
     was=$(awk '$1 == "msi_vectors_free" { print $2 }' /proc/stat)
     case $was in '' | *[!0-9]*) [ -n "$why" ] || why="the kernel gives no count msi_vectors_free" ;; esac
-    link_save
     n=0
     while [ -z "$why" ] && [ "$n" -lt 3 ]; do
         n=$((n + 1))
@@ -518,14 +588,13 @@ cycle()
         echo "$bdf" > "/sys/bus/pci/drivers/$driver/bind" || why="bind $n"
         if ! link_restore; then
             why="cycle $n: $iface did not get its addresses and default routes back"
-        elif run reach 1000000 > "$out/cycle-$n" 2>&1; then
+        elif in_time reach 1000000 > "$out/cycle-$n" 2>&1; then
             note "cycle $n: $(sed -n 's/^nettput: result: //p' "$out/cycle-$n") after the card came back"
         else
             why="cycle $n: $peer does not answer by $iface after the card came back: $(tail -n 1 "$out/cycle-$n")"
         fi
     done
     link_restore || [ -n "$why" ] || why="$iface did not get its addresses and default routes back"
-    link_saved=0
     now=$(awk '$1 == "msi_vectors_free" { print $2 }' /proc/stat)
     [ -n "$why" ] || [ "$was" = "$now" ] || why="msi_vectors_free is $now after the cycles, $was before"
     judge cycle "$why"
@@ -555,11 +624,13 @@ guest()
     tail -n 1 "$log" | grep -q '^netguest: result: pass$' ||
         why=$(tail -n 1 "$log" | sed -n 's/^netguest: result: //p')
     [ -n "$why" ] || [ "$(grep -c '^netguest: result: pass$' "$log")" = 1 ] || why="netguest.sh did not pass"
-    deny=$(grep -a 'netguest: guest: stats' "$log" | tail -n 1 | sed -n 's/.*deny9=\([0-9]*\).*/\1/p')
+    # The report traffic.sh judged by: the first after the transfers, or
+    # after the attempts at port 9.
+    deny=$(grep -a '^traffic: report: ' "$log" | tail -n 1 | sed -n 's/.*deny9=\([0-9][0-9]*\).*/\1/p')
     case $name in
         kill) ;;
         *)
-            [ -n "$why" ] || grep -a -q 'netguest: guest: stats' "$log" || why="the guest printed no report of its counts"
+            [ -n "$why" ] || grep -a -q '^traffic: report: ' "$log" || why="the guest printed no report of its counts"
             [ -n "$why" ] || [ -n "$deny" ] || why="the guest could not read its deny count"
             tx=$(delta tap_tx_bytes "$log" ready measured)
             rx=$(delta tap_rx_bytes "$log" ready measured)
@@ -596,6 +667,10 @@ if [ "$others" = 1 ] && ! others_off; then
     exit 1
 fi
 touched=1
+# The card's interface as the run found it, which finish puts back
+# whatever a case left.
+up
+link_save
 for c in "$@"; do
     case $c in
         cycle) cycle ;;
