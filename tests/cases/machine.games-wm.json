@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.games-wm",
-  "summary": "Fullscreen X and Wine windows in the boot session's Weston on kiosk-shell: placed at the origin unframed, focused and scaled from a lower mode, raw pointer motion under a confining grab, Wine's tone recorded through the audio loopback and DirectInput's keyboard and mouse",
+  "summary": "Fullscreen X and Wine windows in the desktop session's Weston on kiosk-shell: placed at the origin unframed, focused and scaled from a lower mode, raw pointer motion under a confining grab, Wine's tone recorded through the audio loopback and DirectInput's keyboard and mouse",
   "cases": [
     {
       "case_id": "machine.games-wm.place",
@@ -60,7 +60,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, moving the pointer, clicking and pressing Escape through QMP at its ready lines"
+          "does": "run wm.py's row as root in the desktop session, moving the pointer, clicking and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [
@@ -251,7 +251,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
+          "does": "run wm.py's row as root in the desktop session, moving the pointer and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [
@@ -442,7 +442,7 @@
           "step_id": "row",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
+          "does": "run wm.py's row as root in the desktop session, moving the pointer and pressing Escape through QMP at its ready lines"
         }
       ],
       "machines": [

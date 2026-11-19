@@ -16,7 +16,7 @@
 # reads the mode it chose from its log and fails when its name, or its rate
 # to the nearest hertz when MODE gives one, is not MODE's.
 #
-# Ends any Weston that runs, such as Rach2's boot session, whose supervisor
+# Ends any Weston that runs, such as Rach2's desktop session, whose supervisor
 # then waits, and starts a Weston of its own on the DRM card with its GL
 # renderer, kiosk-shell, --debug, which offers the screenshot protocol, and
 # --no-config, so that no guest's weston.ini adds to it, through libseat's

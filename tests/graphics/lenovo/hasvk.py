@@ -1,7 +1,7 @@
 """Present vkcube and Chromium WebGPU on the Lenovo, as USER, keeping evidence in OUT.
 
 Run as root: python3 hasvk.py USER OUT. The trial owns the screen. It ends
-the boot session's Weston, uses seatd for a private DRM Weston with GL and
+the desktop session's Weston, uses seatd for a private DRM Weston with GL and
 kiosk-shell, and leaves the console when done. OUT must not exist. The
 caller owns the trial boot, its notice and its return to the release.
 """
@@ -48,7 +48,7 @@ def run(args, log, env):
 
 
 def end_desktop():
-    """End the boot session's compositor, whose supervisor leaves the console up."""
+    """End the desktop session's compositor, whose supervisor leaves the console up."""
     for proc in Path("/proc").glob("[0-9]*"):
         try:
             if (proc / "comm").read_text().strip() != "weston":
@@ -85,7 +85,7 @@ def machine():
 def private_weston(user, out, env):
     """Start USER's DRM Weston on ENV's runtime directory and socket; return it once it names Crocus.
 
-    The caller has ended the boot session's compositor and stops this one.
+    The caller has ended the desktop session's compositor and stops this one.
     """
     runtime = Path(env["XDG_RUNTIME_DIR"])
     # Weston keeps its own shader cache, which the clients' clearing would
