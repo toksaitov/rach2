@@ -1,10 +1,13 @@
 /*
  * video.c: the ACPI video buses as event devices, as Linux's acpi_video.c
  * finds them and reports their keys: a Notify on an output is a brightness
- * key and one on the bus the video mode's switch. The brightness itself is
- * left to user space and the backlight class; no level is changed here.
+ * key and one on the bus the video mode's switch. On a machine with no
+ * native backlight, an output's _BCL and _BCM are the backlight
+ * acpi_video0, as Linux registers it when no GPU driver has one; a key
+ * changes no level here, which is user space's.
  */
 
+#include "../display/backlight.h"
 #include "../evdev.h"
 #include "../klog.h"
 #include "../lib/kstring.h"
@@ -44,6 +47,25 @@ struct video_bus {
 
 static struct video_bus buses[VIDEO_BUSES];
 static int nbuses;
+
+/* The most brightness levels of a _BCL taken, past its first two. */
+#define VIDEO_LEVELS 101
+
+/*
+ * The backlight acpi_video0: its output, its levels in rising order with
+ * none repeated, the class's level asked last and the one _BCM was last
+ * given, each an index into `levels`, and whether a _BCM waits on
+ * ACPICA's thread. `want` and `queued` change with the class's lock held
+ * and are read on that thread.
+ */
+static struct {
+    ACPI_HANDLE output;
+    int levels[VIDEO_LEVELS];
+    int count;
+    volatile int want;
+    volatile int cur;
+    volatile int queued;
+} light;
 
 /** Report `key`, which the Notify `value` on `what` gave, with a record. */
 static void video_key(struct video_bus *bus, const char *what, UINT32 value, uint16_t key)
@@ -109,11 +131,164 @@ static void video_dos(ACPI_HANDLE handle, const char *path)
     }
 }
 
+/** Evaluate the integer method `name` of `handle` into `*value`; 0, or -1
+ * for a method that is missing, fails or gives no integer. */
+static int video_integer(ACPI_HANDLE handle, const char *name, UINT64 *value)
+{
+    char path[5];
+    ACPI_OBJECT obj;
+    ACPI_BUFFER ret;
+
+    k_memcpy(path, name, 5);
+    ret.Length = sizeof(obj);
+    ret.Pointer = &obj;
+    if (ACPI_FAILURE(AcpiEvaluateObjectTyped(handle, path, NULL, &ret, ACPI_TYPE_INTEGER))) {
+        return -1;
+    }
+    *value = obj.Integer.Value;
+    return 0;
+}
+
+/** Give _BCM of acpi_video0's output the level the class asked last, on
+ * ACPICA's thread, where a method may run. */
+static void video_bcm(void *context)
+{
+    static char bcm[] = "_BCM";
+    ACPI_OBJECT arg;
+    ACPI_OBJECT_LIST args;
+    ACPI_STATUS status;
+    int want;
+
+    (void)context;
+    light.queued = 0;
+    want = light.want;
+    arg.Type = ACPI_TYPE_INTEGER;
+    arg.Integer.Value = (UINT64)light.levels[want];
+    args.Count = 1;
+    args.Pointer = &arg;
+    status = AcpiEvaluateObject(light.output, bcm, &args, NULL);
+    if (ACPI_FAILURE(status)) {
+        klog(KLOG_WARN, "acpi", "video: _BCM %d: %s", light.levels[want],
+             AcpiFormatException(status));
+        return;
+    }
+    light.cur = want;
+}
+
+/** The class's `get`: the level _BCM was last given. */
+static int video_get(void *ctx)
+{
+    (void)ctx;
+    return light.cur;
+}
+
+/** The class's `set`, with its lock held and interrupts off, where no
+ * method may run: keep the level and have ACPICA's thread give it to
+ * _BCM, once for any number of sets before it runs. */
+static void video_set(void *ctx, int level)
+{
+    (void)ctx;
+    light.want = level < 0 ? 0 : level >= light.count ? light.count - 1 : level;
+    if (!light.queued) {
+        light.queued = 1;
+        if (ACPI_FAILURE(AcpiOsExecute(OSL_NOTIFY_HANDLER, video_bcm, NULL))) {
+            light.queued = 0;
+        }
+    }
+}
+
+static const struct backlight_ops video_ops = {video_get, video_set, NULL};
+
+/**
+ * Read the output `output`'s _BCL into `light`'s levels, as Linux's
+ * acpi_video_init_brightness does: the integers after the first two, the
+ * levels for AC and battery, sorted and with none repeated. 0, or -1 for a
+ * _BCL that is missing or has fewer than two levels.
+ */
+static int video_levels(ACPI_HANDLE output)
+{
+    static char bcl[] = "_BCL";
+    ACPI_BUFFER ret;
+    ACPI_OBJECT *pkg;
+    UINT32 i;
+    int n = 0, j, v;
+
+    ret.Length = ACPI_ALLOCATE_BUFFER;
+    ret.Pointer = NULL;
+    if (ACPI_FAILURE(AcpiEvaluateObjectTyped(output, bcl, NULL, &ret, ACPI_TYPE_PACKAGE))) {
+        return -1;
+    }
+    pkg = (ACPI_OBJECT *)ret.Pointer;
+    for (i = 2; i < pkg->Package.Count && n < VIDEO_LEVELS; i++) {
+        if (pkg->Package.Elements[i].Type != ACPI_TYPE_INTEGER ||
+            pkg->Package.Elements[i].Integer.Value > 100) {
+            continue;
+        }
+        v = (int)pkg->Package.Elements[i].Integer.Value;
+        for (j = n; j > 0 && light.levels[j - 1] > v; j--) {
+            light.levels[j] = light.levels[j - 1];
+        }
+        if (j > 0 && light.levels[j - 1] == v) {
+            for (; j < n; j++) {
+                light.levels[j] = light.levels[j + 1];
+            }
+            continue;
+        }
+        light.levels[j] = v;
+        n++;
+    }
+    AcpiOsFree(ret.Pointer);
+    light.count = n;
+    return n >= 2 ? 0 : -1;
+}
+
+/**
+ * Register acpi_video0 on `output` of the bus at `path` when it has _BCL
+ * and _BCM and no backlight is registered, as Linux's acpi_video registers
+ * its backlight only where no native one is: the Lenovo's intel_backlight
+ * comes first, so there it is not made. Its level is _BQC's when that
+ * names one of the levels, else the highest, which _BCM is given, as
+ * Linux sets an unknown level to the most. Returns 1 when registered.
+ */
+static int video_backlight(ACPI_HANDLE output, const char *path)
+{
+    UINT64 now;
+    int i, k;
+
+    if (light.output != NULL || backlight_count() > 0 || !has(output, "_BCM") ||
+        video_levels(output) != 0) {
+        return 0;
+    }
+    light.output = output;
+    light.cur = light.count - 1;
+    if (video_integer(output, "_BQC", &now) == 0) {
+        for (i = 0; i < light.count; i++) {
+            if ((UINT64)light.levels[i] == now) {
+                light.cur = i;
+            }
+        }
+    }
+    light.want = light.cur;
+    k = backlight_register("acpi_video0", light.count - 1, &video_ops, NULL);
+    if (k < 0) {
+        light.output = NULL;
+        return 0;
+    }
+    backlight_set_type(k, "firmware");
+    if (video_integer(output, "_BQC", &now) != 0 || (UINT64)light.levels[light.cur] != now) {
+        video_set(NULL, light.cur);
+    }
+    klog(KLOG_INFO, "acpi", "video: %s: acpi_video0: levels 0 to %d, at %d", path, light.count - 1,
+         light.cur);
+    return 1;
+}
+
 /**
  * A present device that is a video bus, as Linux tells one, by _DOD or
- * _DOS: an event device "Video Bus", _DOS called, and the Notify of the bus
- * and of every output under it taken. The outputs are the bus's children,
- * which need not be present to be notified.
+ * _DOS: an event device "Video Bus", _DOS called, the Notify of the bus
+ * and of every output under it taken, and the first output with a
+ * brightness made acpi_video0 (`video_backlight`). The outputs are the
+ * bus's children, which need not be present to be notified.
  */
 static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
 {
@@ -151,6 +326,7 @@ static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, 
         if (ACPI_SUCCESS(AcpiInstallNotifyHandler(child, ACPI_DEVICE_NOTIFY, output_notify, bus))) {
             outputs++;
         }
+        (void)video_backlight(child, bus->path);
     }
     video_dos(handle, bus->path);
     klog(KLOG_DEBUG, "acpi", "video: bus %s, outputs %d", bus->path, outputs);
