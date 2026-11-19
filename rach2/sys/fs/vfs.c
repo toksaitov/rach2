@@ -1726,13 +1726,12 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
 }
 
 /** Record the name of `ino` in `parent` after arriving without an entry.
- * The directory handle is internal to the walk, so use the type's entry
- * points without counting a VFS open or release. `seq` covers the parent
- * lookup and the scan. Return 0 with the record, or without one if the
- * directory could not be scanned or names changed. Return -ENOMEM if the
- * record could not be allocated. */
-static int walk_parent_entry(const struct vfs_ref *parent, uint64_t ino, uint32_t seq,
-                             struct vfs_name **entry)
+ * The caller holds the namespace lock, or the rename lock on a type that
+ * locks individual nodes. On the latter, lock the parent from the scan
+ * through capture to exclude removal and rename within the directory.
+ * The internal handle adds no VFS open or release count. Return 0 with
+ * the record if found, or -ENOMEM if the record could not be allocated. */
+static int walk_parent_entry(const struct vfs_ref *parent, uint64_t ino, struct vfs_name **entry)
 {
     struct vfs_mount *base = mount_base(parent->mnt);
     const struct vfs_ops *ops = base->type->ops;
@@ -1745,16 +1744,22 @@ static int walk_parent_entry(const struct vfs_ref *parent, uint64_t ino, uint32_
         (ops->open && ops->open(base, parent->node, 0, &handle) != 0)) {
         return 0;
     }
+    if (base->type->file_locked) {
+        vfs_node_lock(parent);
+    }
     while ((rc = vfs_readdir(parent->mnt, handle, &cursor, &ent)) > 0) {
         if (ent.ino == ino && !leaf_dots(ent.name)) {
             break;
         }
     }
-    rc = rc > 0 ? vfs_name_capture_at(parent, ent.name, seq, entry) : 0;
+    rc = rc > 0 ? vfs_name_capture(parent, ent.name, entry) : 0;
+    if (base->type->file_locked) {
+        vfs_node_unlock(parent);
+    }
     if (ops->release) {
         ops->release(base, handle);
     }
-    return rc == -EAGAIN ? 0 : rc;
+    return rc;
 }
 
 /** Whether the walk was asked to record an entry and still needs one for
@@ -1766,26 +1771,39 @@ static int walk_needs_entry(const struct vfs_ref *cur, struct vfs_name **entry)
 
 /** Find and record the resolved directory's entry after a final dot or
  * dot-dot when the walk has no record for it. Read the parent on the same
- * file system without another walk from the process's root. */
+ * file system without another walk from the process's root. Take the
+ * namespace lock, or the rename lock to keep a move between directories
+ * from changing `..` before its entry is found. Changes elsewhere need
+ * not finish for this lookup. */
 static int walk_record_dots(struct walk_record *record, const struct vfs_ref *cur)
 {
     struct vfs_mount *base = mount_base(cur->mnt);
     const struct vfs_ops *ops = cur->mnt->type->ops;
     struct vfs_ref parent;
     struct vfs_stat st;
-    uint32_t seq;
-    int rc;
+    int rc = 0;
 
     if (!record || !walk_needs_entry(cur, record->entry) ||
         (base == mounts[0] && cur->mnt->type == &vfs_krffs_type) || !ops->hold || !ops->put ||
-        !ops->lookup || !ops->readdir || !vfs_name_seq(&seq) ||
-        vfs_getattr(cur->mnt, cur->node, &st) != 0 || (st.mode & 0170000u) != 0040000u ||
-        !st.nlink || ops->lookup(base, cur->node, "..", &parent.node) != 0) {
+        !ops->lookup || !ops->readdir) {
         return 0;
     }
-    parent.mnt = cur->mnt;
-    rc = walk_parent_entry(&parent, st.ino, seq, record->entry);
-    vfs_ref_put(&parent);
+    if (base->type->file_locked) {
+        sleep_lock_take(&base->rename);
+    } else {
+        vfs_ns_lock(cur->mnt);
+    }
+    if (vfs_getattr(cur->mnt, cur->node, &st) == 0 && (st.mode & 0170000u) == 0040000u &&
+        st.nlink && ops->lookup(base, cur->node, "..", &parent.node) == 0) {
+        parent.mnt = cur->mnt;
+        rc = walk_parent_entry(&parent, st.ino, record->entry);
+        vfs_ref_put(&parent);
+    }
+    if (base->type->file_locked) {
+        sleep_lock_give(&base->rename);
+    } else {
+        vfs_ns_unlock(cur->mnt);
+    }
     return rc;
 }
 
