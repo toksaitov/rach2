@@ -373,15 +373,17 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
  *
  * Under `tcp_delack` an acknowledgement after the handshake offers the
  * window selected now (`tcp_rcv_window`), data's and probes' too, as
- * Linux's tcp_transmit_skb selects it for each, and ends quick mode while
- * less than half the largest window is free, as __tcp_select_window does.
+ * Linux's tcp_transmit_skb selects it for each, but in TIME_WAIT, whose
+ * ring is gone, the window last selected, as Linux's tw_rcv_wnd keeps it;
+ * and it ends quick mode while less than half the largest window is free,
+ * as __tcp_select_window does.
  */
 static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 {
     int syn = (flags & TCP_SYN) != 0;
     uint32_t field, edge, most = (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale;
 
-    if (tcp_delack && !syn && (flags & TCP_ACK)) {
+    if (tcp_delack && !syn && (flags & TCP_ACK) && tcb->state != TCP_TIME_WAIT) {
         tcb->rcv_wnd = tcp_rcv_window(tcb);
         if (tcb->recv_size - (tcb->recv_tail - tcb->recv_head) <
             (most > tcb->recv_size ? tcb->recv_size : most) / 2u) {
@@ -4428,6 +4430,22 @@ static void tcp_batch_flush(struct tcb *tcb, uint32_t seq, uint16_t len)
 }
 
 /**
+ * Take the peer's FIN at `fin_seq` on `tcb` in ESTABLISHED or FIN_WAIT_1
+ * when it is the next in order and the first, entering CLOSE_WAIT or
+ * CLOSING and telling the socket.
+ */
+static void tcp_take_peer_fin(struct tcb *tcb, uint32_t fin_seq)
+{
+    if (tcb->fin_received || fin_seq != tcb->rcv_nxt) {
+        return;
+    }
+    tcb->rcv_nxt++;
+    tcb->fin_received = 1;
+    tcb->state = (tcb->state == TCP_FIN_WAIT_1) ? TCP_CLOSING : TCP_CLOSE_WAIT;
+    socket_tcp_fin(tcb->sock);
+}
+
+/**
  * Take the segment `data` of `len` bytes, whose header is `hdr_len` bytes
  * and whose window field gives `window`, on the connection `tcb` in
  * ESTABLISHED, which `tcp_rx_check` let on, or which the segment brought
@@ -4442,7 +4460,7 @@ static void tcp_rx_established(struct tcb *tcb, const uint8_t *data, uint16_t hd
     const uint8_t *payload = data + hdr_len;
     uint16_t payload_len = (uint16_t)(len - hdr_len);
     uint32_t expected = tcb->rcv_nxt;
-    int needs_ack = 0, queued = 1, had_ooo = tcb->ooo_count != 0;
+    int needs_ack, queued = 1, had_ooo = tcb->ooo_count != 0;
 
     if (flags & TCP_ACK) {
         if ((int32_t)(ack_num - tcb->snd_una) > 0 && (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
@@ -4470,18 +4488,15 @@ static void tcp_rx_established(struct tcb *tcb, const uint8_t *data, uint16_t hd
         return;
     }
     tcp_rx_resent(tcb, flags, seq, payload_len);
+    /* a FIN past a hole too, as Linux's tcp_data_queue_ofo acknowledges */
+    needs_ack = payload_len > 0 || (flags & TCP_FIN);
     if (payload_len > 0) {
         tcp_batch_flush(tcb, seq, payload_len);
         queued = tcp_take_data(tcb, seq, payload, payload_len, flags & TCP_FIN);
-        needs_ack = 1;
     }
 
-    if ((flags & TCP_FIN) && queued && !tcb->fin_received && seq + payload_len == tcb->rcv_nxt) {
-        tcb->rcv_nxt++;
-        tcb->fin_received = 1;
-        tcb->state = (tcb->state == TCP_FIN_WAIT_1) ? TCP_CLOSING : TCP_CLOSE_WAIT;
-        socket_tcp_fin(tcb->sock);
-        needs_ack = 1;
+    if ((flags & TCP_FIN) && queued) {
+        tcp_take_peer_fin(tcb, seq + payload_len);
     }
 
     if (needs_ack) {
