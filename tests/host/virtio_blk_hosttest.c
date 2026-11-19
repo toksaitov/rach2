@@ -1931,13 +1931,13 @@ static void publish_race(void)
 }
 
 /** Two devices: the second is disk 1, and the queue count is the lesser of
- * the offer and VIRTIO_MAX_QUEUES. */
+ * the offer and VBLK_MAX_QUEUES. */
 static void two_devices(void)
 {
     model_reset(2);
     put_le(models[1].cfg + VBLK_CFG_NUM_QUEUES, 16, 2);
     check(virtio_blk_init() == 0 && registered >= 2 && disks[1].present, "two disks");
-    check(vblks[1].nqueues == VIRTIO_MAX_QUEUES, "16 queues offered, 8 taken");
+    check(vblks[1].nqueues == VBLK_MAX_QUEUES, "16 queues offered, 8 taken");
     check(same(disks[1].serial, "second") && block0 == disk0(),
           "the second has its own serial, and the first stays block0");
     check(virtio_blk_init() == 0 && models[0].resets == 1, "a second init resets nothing");

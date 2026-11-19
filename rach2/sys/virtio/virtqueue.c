@@ -737,7 +737,7 @@ void virtio_interrupt_queues(struct virtio_dev *d)
 {
     int i;
 
-    for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
+    for (i = 0; i < (int)d->nqueues; i++) {
         virtio_interrupt_queue(d->queues[i]);
     }
 }

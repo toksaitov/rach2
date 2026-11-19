@@ -52,6 +52,10 @@
 
 /* The device's configuration, as offsets of `struct virtio_blk_config`
  * (virtio 1.2, 5.2.4), and the bytes of it this driver reads. */
+/* The most request queues the driver takes, one for each processor up to
+ * this many. */
+#define VBLK_MAX_QUEUES 8
+
 #define VBLK_CFG_CAPACITY    0
 #define VBLK_CFG_SIZE_MAX    8
 #define VBLK_CFG_SEG_MAX     12
@@ -190,7 +194,7 @@ struct vblk {
     block_device_t bdev;
     struct disk *disk;
     char serial[VBLK_ID_BYTES + 1];
-    struct vblk_queue q[VIRTIO_MAX_QUEUES];
+    struct vblk_queue q[VBLK_MAX_QUEUES];
 };
 
 /** One command as the driver issues it. `buf` is the memory the device is
@@ -1268,7 +1272,7 @@ static void vblk_free_pages(struct vblk *vb)
 {
     int i;
 
-    for (i = 0; i < VIRTIO_MAX_QUEUES; i++) {
+    for (i = 0; i < VBLK_MAX_QUEUES; i++) {
         virtio_dma_free(vb->dev, (void *)(uintptr_t)vb->q[i].page, VBLK_PAGE);
         vb->q[i].page = 0;
         vb->q[i].vq = 0;
@@ -1432,7 +1436,7 @@ void virtio_blk_shutdown(void)
  */
 
 /** The queues to ask `d` for: one for each processor up to those the
- * device offers with VIRTIO_BLK_F_MQ, and VIRTIO_MAX_QUEUES at most, as
+ * device offers with VIRTIO_BLK_F_MQ, and VBLK_MAX_QUEUES at most, as
  * Linux's init_vq takes the lesser of `num_queues` and its processors. */
 static uint16_t vblk_queue_count(struct virtio_dev *d)
 {
@@ -1447,8 +1451,8 @@ static uint16_t vblk_queue_count(struct virtio_dev *d)
     if (nq == 0) {
         nq = 1;
     }
-    if (nq > VIRTIO_MAX_QUEUES) {
-        nq = VIRTIO_MAX_QUEUES;
+    if (nq > VBLK_MAX_QUEUES) {
+        nq = VBLK_MAX_QUEUES;
     }
     return nq > NR_CPUS ? (uint16_t)NR_CPUS : nq;
 }

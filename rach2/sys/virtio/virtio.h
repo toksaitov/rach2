@@ -100,8 +100,9 @@ struct virtq_used_elem {
 #define VIRTQ_INDIRECT_LEN    16
 #define VIRTQ_INDIRECT_MAX    256
 
-/* The queues a device may have set up at once. */
-#define VIRTIO_MAX_QUEUES 8
+/* The queues a device may have, QEMU's most (VIRTIO_QUEUE_MAX): a virtio
+ * console of 511 ports has 1024. */
+#define VIRTIO_MAX_QUEUES 1024
 
 struct virtio_dev;
 struct virtqueue;
