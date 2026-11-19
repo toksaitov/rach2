@@ -715,7 +715,7 @@ static int exec_held_read(const struct open_file *ofd, void *dst, uint32_t count
 
     vfs_ns_lock(ofd->vmnt);
     node = ofd->vnode;
-    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+    if (krffs_node_is_dir(node) == 0) {
         got = krffs_read_node(node, (char *)dst, count, off);
     }
     vfs_ns_unlock(ofd->vmnt);
@@ -1388,13 +1388,17 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
  */
 int32_t exec_map_file(const struct vfs_ref *ref, const struct vfs_stat *vst, struct vm_file **map)
 {
-    const krffs_node_t *node = ref->node;
+    krffs_node_t head;
     int root = mnt_is_root(ref->mnt);
-    uint32_t type = root ? krffs_mode_type(node->mode) : vst->mode & 0170000u;
+    uint32_t type;
     struct open_file *ofd;
     fd_entry_t e;
     int32_t rc;
 
+    if (root && krffs_node_head(ref->node, &head) != 0) {
+        return -EIO;
+    }
+    type = root ? krffs_mode_type(head.mode) : vst->mode & 0170000u;
     if (type != 0100000u) {
         return 0;
     }
@@ -1411,7 +1415,7 @@ int32_t exec_map_file(const struct vfs_ref *ref, const struct vfs_stat *vst, str
     ofd->vmnt = ref->mnt;
     vfs_wb_err_sample(ref->mnt, &ofd->wb_seen, &ofd->sb_seen);
     ofd->vnode = ref->node;
-    ofd->ino = root ? krffs_node_ino(node) : vst->ino;
+    ofd->ino = root ? krffs_node_ino(&head) : vst->ino;
     ofd->ino_seen = vfs_ino_err_sample(ref->mnt, ofd->ino);
     vfs_desc_open(ref->mnt);
     k_memset(&e, 0, sizeof(e));
@@ -1474,7 +1478,9 @@ static int exec_is_link(const struct vfs_ref *ref)
         return vp->kind == VNODE_PROC_FD_LINK;
     }
     if (mnt_is_root(ref->mnt)) {
-        return krffs_mode_type(((const krffs_node_t *)ref->node)->mode) == 0120000u;
+        krffs_node_t head;
+
+        return krffs_node_head(ref->node, &head) == 0 && krffs_mode_type(head.mode) == 0120000u;
     }
     return vfs_getattr(ref->mnt, ref->node, &vst) == 0 && (vst.mode & 0170000u) == 0120000u;
 }
@@ -1499,15 +1505,21 @@ static int32_t exec_check(struct exec_file *f, const struct vfs_ref *ref, const 
     }
     if (mnt_is_root(ref->mnt)) {
         const krffs_node_t *node = ref->node;
+        krffs_node_t head;
 
         rc = cred_access_node(node, CRED_X, 0);
         f->readable = cred_access_node(node, CRED_R, 0) == 0;
         if (rc == 0 && keep == NULL && krffs_node_path(ref->node, f->path, sizeof(f->path)) != 0) {
             rc = -ENAMETOOLONG;
         }
-        vst->mode = node->mode;
-        vst->uid = node->uid;
-        vst->gid = node->gid;
+        if (rc == 0 && krffs_node_head(node, &head) != 0) {
+            rc = -EIO;
+        }
+        if (rc == 0) {
+            vst->mode = head.mode;
+            vst->uid = head.uid;
+            vst->gid = head.gid;
+        }
         return rc;
     }
     rc = cred_access_ref(ref, CRED_X, 0);

@@ -382,7 +382,8 @@ int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_fi
 
 /**
  * Check, before an operation on it, that the KRFFS root node the descriptor
- * `entry` has is still a file the descriptor may use: 0, or -EBADF.
+ * `entry` has is still a file the descriptor may use: 0, -EBADF, or -EIO
+ * when its header cannot be read.
  */
 int fd_node_check(fd_entry_t *entry);
 

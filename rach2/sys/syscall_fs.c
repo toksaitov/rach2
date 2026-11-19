@@ -164,7 +164,9 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  *
  * The tables are a few pointer compares per live process, of kernel memory;
  * the scan never touches the page-cache window, and the node's own mode is
- * the one read of it. A descriptor in flight on an AF_UNIX socket, a file
+ * the one read of it (`krffs_node_head`); a mode that cannot be read counts
+ * as one holder more, so that a read the disk fails frees nothing. A
+ * descriptor in flight on an AF_UNIX socket, a file
  * mapping and an address space that runs the file as its program hold the
  * node as a descriptor does; any number of them counts as one holder more,
  * since every caller asks only whether there is a holder. The ends of a FIFO
@@ -175,6 +177,7 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
+    krffs_node_t head;
     const fd_entry_t *gone;
     int held = 0;
     process_t *pr;
@@ -207,7 +210,9 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
     if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node)) {
         held++;
     }
-    if (krffs_mode_type(node->mode) == KRFFS_S_IFIFO) {
+    if (krffs_node_head(node, &head) != 0) {
+        held++; /* a node whose type cannot be read is not freed */
+    } else if (krffs_mode_type(head.mode) == KRFFS_S_IFIFO) {
         held += fd_ofd_holders(vfs_root_mount(), node, except ? except->ofd : NULL);
     }
     return held;
@@ -240,14 +245,15 @@ static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node)
 static void fd_fifo_orphan(const fd_entry_t *e)
 {
     krffs_node_t *fifo;
+    krffs_node_t head;
 
     if (!e->ofd || !e->ofd->vmnt || !krffs_fs || !mnt_is_root(vfs_mount_base(e->ofd->vmnt))) {
         return;
     }
     fifo = e->ofd->vnode;
-    if (fifo && fifo != krffs_fs->node && fifo->type == KRFFS_RESERVED_NODE &&
-        krffs_mode_type(fifo->mode) == KRFFS_S_IFIFO && fifo->name[0] == '\0' &&
-        fd_node_holders(fifo, e) == 0) {
+    if (fifo && fifo != krffs_fs->node && krffs_node_head(fifo, &head) == 0 &&
+        head.type == KRFFS_RESERVED_NODE && krffs_mode_type(head.mode) == KRFFS_S_IFIFO &&
+        head.name[0] == '\0' && fd_node_holders(fifo, e) == 0) {
         fd_free_orphan(e, fifo);
     }
 }
@@ -297,13 +303,15 @@ static void fd_release_orphan(fd_entry_t *e)
 {
     struct vfs_mount *locked = fd_release_lock(e);
     krffs_node_t *node;
+    krffs_node_t head;
 
     if (!locked) {
         return;
     }
     if (e->type == FD_TYPE_FILE) {
         node = fd_root_node(e);
-        if (node->name[0] == '\0' && fd_node_holders(node, e) == 0) {
+        if (krffs_node_head(node, &head) == 0 && head.name[0] == '\0' &&
+            fd_node_holders(node, e) == 0) {
             fd_free_orphan(e, node);
             e->node = NULL;
             if (e->ofd) {
@@ -524,7 +532,7 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
     if (!mnt_is_root(ref->mnt)) {
         ofd->ino = vfs_getattr(ref->mnt, ref->node, &st) == 0 ? st.ino : 0;
     } else {
-        ofd->ino = ref->node == krffs_fs->node ? 1 : krffs_node_ino(ref->node);
+        ofd->ino = krffs_ino_of(ref->node);
     }
     vfs_desc_open(ref->mnt);
     return ofd;
@@ -2220,14 +2228,18 @@ int fd_node_check(fd_entry_t *entry)
 {
     char path[256];
     krffs_node_t *node = entry->node;
+    krffs_node_t head;
 
     if (node == NULL) {
         return 0;
     }
-    if (node->type != KRFFS_RESERVED_NODE) {
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
+    if (head.type != KRFFS_RESERVED_NODE) {
         return -EBADF;
     }
-    if (node->name[0] == '\0') {
+    if (head.name[0] == '\0') {
         return 0;
     }
     if (krffs_node_path(node, path, sizeof(path)) != 0) {
@@ -2376,7 +2388,8 @@ static int cwd_outside(const char *cwd)
  * (`path_in_root`). A directory outside that root keeps its path from the
  * root of the mount table, with `*outside` set, when `outside` is not NULL.
  * Returns 0, -ENOTDIR for a descriptor on anything but a directory, -EBADF
- * for a boot-root directory that no longer resolves to its node, -ENOENT for
+ * for a boot-root directory that no longer resolves to its node, -EIO for
+ * one whose header cannot be read, -ENOENT for
  * one outside the process's root without `outside` or one ext2 or tmpfs
  * removed, or -ENAMETOOLONG.
  */
@@ -2418,7 +2431,12 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
         return 0;
     }
     if (dnode) {
-        if (dnode->type != KRFFS_RESERVED_NODE) {
+        krffs_node_t head;
+
+        if (krffs_node_head(dnode, &head) != 0) {
+            return -EIO;
+        }
+        if (head.type != KRFFS_RESERVED_NODE) {
             return -EBADF;
         }
         if (krffs_node_path(dnode, out, cap) != 0) {
@@ -2974,12 +2992,19 @@ int cred_fs_privileged(void)
  */
 void cred_kill_setid(krffs_node_t *node)
 {
-    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+    krffs_node_t head;
+    uint16_t mode;
+
+    if (!node || node == krffs_fs->node || krffs_node_head(node, &head) != 0 ||
+        KRFFS_IS_DIR(head.mode)) {
         return;
     }
-    node->mode &= (uint16_t)~KRFFS_MODE_SUID;
-    if (node->mode & 0010u) {
-        node->mode &= (uint16_t)~KRFFS_MODE_SGID;
+    mode = (uint16_t)(head.mode & ~KRFFS_MODE_SUID);
+    if (mode & 0010u) {
+        mode &= (uint16_t)~KRFFS_MODE_SGID;
+    }
+    if (mode != head.mode) {
+        (void)krffs_node_set_mode(node, mode);
     }
 }
 
@@ -3118,12 +3143,17 @@ static int ofd_append_only(const struct open_file *ofd)
 
 int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
 {
-    uint32_t mode = (node == krffs_fs->node) ? 0755u : (uint32_t)(node->mode & 0777u);
+    krffs_node_t head;
+    uint32_t mode;
 
-    if ((want & CRED_X) && !KRFFS_IS_DIR(node->mode) && node != krffs_fs->node && !(mode & 0111u)) {
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
+    mode = (node == krffs_fs->node) ? 0755u : (uint32_t)(head.mode & 0777u);
+    if ((want & CRED_X) && !KRFFS_IS_DIR(head.mode) && node != krffs_fs->node && !(mode & 0111u)) {
         return -EACCES;
     }
-    return cred_access_bits(node->uid, node->gid, mode, want, use_real);
+    return cred_access_bits(head.uid, head.gid, mode, want, use_real);
 }
 
 /**
@@ -3144,12 +3174,26 @@ int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
  */
 static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victim)
 {
-    if (!dir || dir == krffs_fs->node || !(dir->mode & KRFFS_MODE_STICKY)) {
+    krffs_node_t d;
+    krffs_node_t v;
+
+    if (!dir || dir == krffs_fs->node) {
         return 0;
     }
-    if (cred_fs_privileged() || proc_fsuid(current_proc) == dir->uid ||
-        (victim && proc_fsuid(current_proc) == victim->uid)) {
+    if (krffs_node_head(dir, &d) != 0) {
+        return -EIO;
+    }
+    if (!(d.mode & KRFFS_MODE_STICKY) || cred_fs_privileged() ||
+        proc_fsuid(current_proc) == d.uid) {
         return 0;
+    }
+    if (victim) {
+        if (krffs_node_head(victim, &v) != 0) {
+            return -EIO;
+        }
+        if (proc_fsuid(current_proc) == v.uid) {
+            return 0;
+        }
     }
     return -EPERM;
 }
@@ -3816,21 +3860,31 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
  * creation rule gives a file to whoever its creator acts as, and the
  * permission bits of `mode` with the file-creation mask applied, the type
  * bits kept. A setgid parent gives its group instead, and its setgid bit to
- * a new directory, as Linux's `inode_init_owner` does.
+ * a new directory, as Linux's `inode_init_owner` does. 0, or -EIO when a
+ * header cannot be read or a store fails.
  */
-static void krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent, uint32_t mode)
+static int krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent, uint32_t mode)
 {
     uint32_t perm = mode & 07777u & ~current_proc->fs->umask;
+    uint32_t gid = proc_fsgid(current_proc);
+    krffs_node_t n;
+    krffs_node_t p;
 
-    node->uid = proc_fsuid(current_proc);
-    node->gid = proc_fsgid(current_proc);
-    if (parent->mode & 02000u) {
-        node->gid = parent->gid;
-        if ((node->mode & 0170000u) == 0040000u) {
+    if (krffs_node_head(node, &n) != 0 || krffs_node_head(parent, &p) != 0) {
+        return -EIO;
+    }
+    if (p.mode & 02000u) {
+        gid = p.gid;
+        if ((n.mode & 0170000u) == 0040000u) {
             perm |= 02000u;
         }
     }
-    node->mode = (uint16_t)((node->mode & ~07777u) | perm);
+    if (krffs_node_set_owner(node, proc_fsuid(current_proc), gid, KRFFS_SET_UID | KRFFS_SET_GID) !=
+            0 ||
+        krffs_node_set_mode(node, (uint16_t)((n.mode & ~07777u) | perm)) != 0) {
+        return -EIO;
+    }
+    return 0;
 }
 
 static int synth_is_link(const struct vpath *vp);
@@ -4048,7 +4102,7 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
         rc = vfs_mknod(parent->mnt, parent->node, leaf, type | perm, rdev, made);
     }
     if (rc == 0 && mnt_is_root(parent->mnt)) {
-        krffs_stamp_new_node((krffs_node_t *)*made, (krffs_node_t *)parent->node, mode);
+        rc = krffs_stamp_new_node((krffs_node_t *)*made, (krffs_node_t *)parent->node, mode);
     }
     return rc;
 }
@@ -4356,10 +4410,12 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
     if (mnt_is_root(vfs_mount_base(mnt))) {
         krffs_node_t *node = ref->node;
 
-        if (node == krffs_fs->node) {
+        krffs_node_t head;
+
+        if (node == krffs_fs->node || krffs_node_head(node, &head) != 0) {
             return 0;
         }
-        type = krffs_mode_type(node->mode);
+        type = krffs_mode_type(head.mode);
         ino = (uint64_t)(uintptr_t)node;
     } else {
         struct vfs_stat st;
@@ -4469,11 +4525,15 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
 static int open_root_node(struct vfs_ref *ref, int flags)
 {
     krffs_node_t *node = ref->node;
-    int is_dir = (node == krffs_fs->node) || KRFFS_IS_DIR(node->mode);
+    int is_dir = krffs_node_is_dir(node);
     unsigned acc = (unsigned)flags & 3u;
     int want;
     int32_t crc;
 
+    if (is_dir < 0) {
+        vfs_ref_release(ref);
+        return -EIO;
+    }
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         vfs_ref_release(ref);
         return -EEXIST;
@@ -4554,6 +4614,43 @@ static int open_direct_refused(struct vfs_mount *mnt, uint32_t mode, int flags)
 }
 
 /**
+ * Give the description `ofd` of the file `ref` names its inode number, and
+ * `*type` whether the file is a directory, for `open_install`; a file of a
+ * mounted file system also has the path `name` recorded. Returns 0, or what
+ * the file system's getattr answers, or -EIO for a header of the KRFFS root
+ * that cannot be read.
+ */
+static int open_install_kind(const struct vfs_ref *ref, struct open_file *ofd, const char *name,
+                             fd_type_t *type)
+{
+    krffs_node_t head;
+
+    if (!mnt_is_root(ref->mnt)) {
+        struct vfs_stat vst;
+        int rc = vfs_getattr(ref->mnt, ref->node, &vst);
+
+        if (rc != 0) {
+            return rc;
+        }
+        *type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
+        ofd->ino = vst.ino;
+        ofd_record_path(ofd, name);
+        return 0;
+    }
+    if (ref->node == krffs_fs->node) {
+        *type = FD_TYPE_DIR;
+        ofd->ino = 1;
+        return 0;
+    }
+    if (krffs_node_head(ref->node, &head) != 0) {
+        return -EIO;
+    }
+    *type = KRFFS_IS_DIR(head.mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
+    ofd->ino = krffs_node_ino(&head);
+    return 0;
+}
+
+/**
  * The descriptor for an opened node, in the slot `fd` the open reserved,
  * with `name`, the path without its leading slash, recorded for a node of a
  * mounted type (`ofd_record_path`): a directory opens as a FD_TYPE_DIR (its
@@ -4595,29 +4692,9 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     fd_type_t type;
     int rc;
 
-    if (!mnt_is_root(ref->mnt)) {
-        struct vfs_stat vst;
-
-        rc = vfs_getattr(ref->mnt, node, &vst);
-        if (rc != 0) {
-            fd_free(current_proc->fds, fd);
-            vfs_ref_release(ref);
-            return rc;
-        }
-        type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
-        entry->ofd->ino = vst.ino;
-        ofd_record_path(entry->ofd, name);
-    } else if (node == krffs_fs->node) {
-        type = FD_TYPE_DIR;
-        entry->ofd->ino = 1;
-    } else {
-        type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
-        entry->ofd->ino = krffs_node_ino(node);
-    }
+    rc = open_install_kind(ref, entry->ofd, name, &type);
     entry->ofd->offset = 0;
-
-    rc = 0;
-    if ((flags & 3) != 0 || (flags & O_TRUNC)) {
+    if (rc == 0 && ((flags & 3) != 0 || (flags & O_TRUNC))) {
         rc = fd_ofd_access(entry->ofd, ref, 1);
     }
     if (rc == 0 && open_direct_refused(ref->mnt, type == FD_TYPE_DIR ? S_IFDIR : S_IFREG, flags)) {
@@ -8940,9 +9017,10 @@ static int32_t do_chdir(char *path)
         vfs_ref_release(&ref);
         return rc;
     }
-    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+    rc = krffs_node_is_dir(node);
+    if (rc <= 0) {
         vfs_ref_release(&ref);
-        return -ENOTDIR;
+        return rc < 0 ? -EIO : -ENOTDIR;
     }
     rc = cred_access_node(node, CRED_X, 0);
     if (rc == 0 && krffs_node_path(node, path, VFS_PATH_MAX) != 0) {
@@ -9083,7 +9161,8 @@ static int32_t root_check(const struct vfs_ref *ref)
     if (vp) {
         rc = synth_vp_is_dir(vp) ? 0 : -ENOTDIR;
     } else if (mnt_is_root(ref->mnt)) {
-        rc = (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? 0 : -ENOTDIR;
+        rc = krffs_node_is_dir(node);
+        rc = rc < 0 ? -EIO : rc == 0 ? -ENOTDIR : 0;
         if (rc == 0) {
             rc = cred_access_node(node, CRED_X, 0);
         }
@@ -9335,20 +9414,21 @@ struct kstat {
 };
 
 /**
- * Report the three times a KRFFS node stores into a kstat. No read
- * advances the access time (`krffs_stamp_at` in fs/krffs.c): the file
- * system is behind a write-back page cache, and stamping an access time at
- * every read would dirty a page at every read. One set by utimensat is
- * reported as it was set.
+ * Report the three times of a KRFFS node, whose header the caller read into
+ * `head` (`krffs_node_head`), into a kstat. No read advances the access
+ * time (`krffs_stamp_at` in fs/krffs.c): the file system is behind a
+ * write-back page cache, and stamping an access time at every read would
+ * dirty a page at every read. One set by utimensat is reported as it was
+ * set.
  */
-static void stat64_node_times(struct kstat *kst, const krffs_node_t *node)
+static void stat64_node_times(struct kstat *kst, const krffs_node_t *head)
 {
-    kst->st_atime = node->access_time.seconds;
-    kst->st_atime_nsec = (uint32_t)node->access_time.nanoseconds;
-    kst->st_mtime = node->modification_time.seconds;
-    kst->st_mtime_nsec = (uint32_t)node->modification_time.nanoseconds;
-    kst->st_ctime = node->attribute_change_time.seconds;
-    kst->st_ctime_nsec = (uint32_t)node->attribute_change_time.nanoseconds;
+    kst->st_atime = head->access_time.seconds;
+    kst->st_atime_nsec = (uint32_t)head->access_time.nanoseconds;
+    kst->st_mtime = head->modification_time.seconds;
+    kst->st_mtime_nsec = (uint32_t)head->modification_time.nanoseconds;
+    kst->st_ctime = head->attribute_change_time.seconds;
+    kst->st_ctime_nsec = (uint32_t)head->attribute_change_time.nanoseconds;
 }
 
 /**
@@ -9513,15 +9593,23 @@ static int32_t stat64_put(struct user_stat __user *st, const struct kstat *kst)
  *
  * The root is a node like any other, and creating an entry in it stamps its
  * times, so it reports them as any directory does; a machine with no file
- * system mounted has nothing to report but the boot time.
+ * system mounted has nothing to report but the boot time. 0, or -EIO, with
+ * the boot time, when the root's header cannot be read.
  */
-static void stat64_root_times(struct kstat *kst)
+static int32_t stat64_root_times(struct kstat *kst)
 {
+    krffs_node_t head;
+
     if (krffs_fs && krffs_fs->node) {
-        stat64_node_times(kst, krffs_fs->node);
+        if (krffs_node_head(krffs_fs->node, &head) != 0) {
+            stat64_boot_times(kst);
+            return -EIO;
+        }
+        stat64_node_times(kst, &head);
     } else {
         stat64_boot_times(kst);
     }
+    return 0;
 }
 
 /**
@@ -9573,24 +9661,31 @@ static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
  * permission bits, owner, group, size and times, the size in 512-byte
  * blocks, and the inode `krffs_node_ino` gives it. The root node is a
  * directory of mode 0755 whatever its stored mode says: no mkdir made it,
- * and a path can reach it through "..".
+ * and a path can reach it through "..". 0, or -EIO when the node's header
+ * cannot be read.
  */
-static void krffs_fill_stat64(struct kstat *kst, krffs_node_t *node)
+static int32_t krffs_fill_stat64(struct kstat *kst, krffs_node_t *node)
 {
+    krffs_node_t head;
+
     k_memset(kst, 0, sizeof(*kst));
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
     if (node == krffs_fs->node) {
         kst->st_mode = S_IFDIR | 0755;
     } else {
-        kst->st_mode = krffs_mode_type(node->mode) | (node->mode & 07777);
+        kst->st_mode = krffs_mode_type(head.mode) | (head.mode & 07777);
     }
     kst->st_nlink = 1; /* KRFFS has no hard links */
-    kst->st_uid = node->uid;
-    kst->st_gid = node->gid;
-    kst->st_size = (long long)node->data_size;
+    kst->st_uid = head.uid;
+    kst->st_gid = head.gid;
+    kst->st_size = (long long)head.data_size;
     kst->st_blksize = 4096;
-    kst->st_blocks = (node->data_size + 511) / 512;
-    kst->st_ino = krffs_node_ino(node);
-    stat64_node_times(kst, node);
+    kst->st_blocks = (head.data_size + 511) / 512;
+    kst->st_ino = krffs_node_ino(&head);
+    stat64_node_times(kst, &head);
+    return 0;
 }
 
 /* The stat of a descriptor, for `synth_fd_stat`; defined with sys_fstat64. */
@@ -10171,9 +10266,9 @@ static int32_t ref_dir_check(const struct vfs_ref *r, int follow)
         return rc != 0 ? rc : ((kst.st_mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR);
     }
     if (mnt_is_root(r->mnt)) {
-        const krffs_node_t *node = r->node;
+        int dir = krffs_node_is_dir(r->node);
 
-        return (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? 0 : -ENOTDIR;
+        return dir < 0 ? -EIO : dir ? 0 : -ENOTDIR;
     }
     rc = vfs_getattr(r->mnt, r->node, &vst);
     return rc != 0 ? rc : ((vst.mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR);
@@ -10494,7 +10589,11 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     int fd;
 
     if (mnt_is_root(ref->mnt)) {
-        is_dir = node == krffs_fs->node || KRFFS_IS_DIR(node->mode);
+        is_dir = krffs_node_is_dir(node);
+        if (is_dir < 0) {
+            vfs_ref_release(ref);
+            return -EIO;
+        }
     } else {
         struct vfs_stat vst;
         int rc = vfs_getattr(ref->mnt, ref->node, &vst);
@@ -11055,9 +11154,9 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
             kst.st_nlink = 1;
             kst.st_ino = 1;
             kst.st_blksize = 4096;
-            stat64_root_times(&kst);
+            rc = stat64_root_times(&kst);
         } else {
-            krffs_fill_stat64(&kst, (krffs_node_t *)ref.node);
+            rc = krffs_fill_stat64(&kst, (krffs_node_t *)ref.node);
         }
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
@@ -11638,10 +11737,15 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         kst->st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        stat64_root_times(kst);
+        return stat64_root_times(kst);
     } else if (entry->node) {
-        if (fd_node_check(entry) == 0) {
-            krffs_fill_stat64(kst, entry->node);
+        int32_t rc = fd_node_check(entry);
+
+        if (rc == -EIO) {
+            return rc;
+        }
+        if (rc == 0) {
+            return krffs_fill_stat64(kst, entry->node);
         }
     } else if (entry->type == FD_TYPE_SOCKET) {
         kst->st_mode = 0140666; /* S_IFSOCK | 0666 */
@@ -11897,9 +12001,8 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
         kst->st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        stat64_root_times(kst);
         kst->st_mnt_id = procfs_mount_id(vfs_root_mount());
-        return 0;
+        return stat64_root_times(kst);
     }
     rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);
     if (rc != 0) {
@@ -11916,7 +12019,7 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
         rc = vfs_fill_stat64(kst, &ref);
         kst->st_mnt_id = procfs_mount_id(ref.mnt);
     } else {
-        krffs_fill_stat64(kst, (krffs_node_t *)ref.node);
+        rc = krffs_fill_stat64(kst, (krffs_node_t *)ref.node);
         kst->st_mnt_id = procfs_mount_id(ref.mnt);
     }
     vfs_walk_unlock(ref.mnt);
@@ -12597,6 +12700,7 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
     int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     struct vfs_ref ref;
     const struct vpath *vp;
+    krffs_node_t head;
     int32_t rc;
     int werr;
 
@@ -12625,7 +12729,7 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
         return rc == 0 && ro ? -EROFS : rc;
     }
     if ((mode & W_OK) && halted_root_mount(ref.mnt) &&
-        !special_file(((krffs_node_t *)ref.node)->mode)) {
+        (krffs_node_head(ref.node, &head) != 0 || !special_file(head.mode))) {
         rc = -EROFS;
     } else if (!mnt_is_root(ref.mnt)) {
         rc = cred_access_ref(&ref, mode, real);
@@ -12974,23 +13078,31 @@ long sys_faccessat2(isr_params_t *params)
  * chooses that bit in the same call. Setuid needs no rule here: only the
  * owner may chmod, and the bit grants that owner's own identity. A halted
  * root (`krffs_root_halted`) is -EROFS before anything else, as a file
- * system turned read-only is on Linux.
+ * system turned read-only is on Linux, and a header that cannot be read or
+ * a store that fails is -EIO.
  */
 static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 {
+    krffs_node_t head;
+
     if (krffs_root_halted()) {
-        return -EROFS; /* the mode is stored in place, past the core */
+        return -EROFS;
     }
-    if (!cred_fs_privileged() && proc_fsuid(current_proc) != node->uid) {
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
+    if (!cred_fs_privileged() && proc_fsuid(current_proc) != head.uid) {
         return -EPERM;
     }
     if (node != krffs_fs->node) {
         uint32_t want = mode & 07777u;
 
-        if (!cred_fs_privileged() && !KRFFS_IS_DIR(node->mode) && !cred_in_group(node->gid)) {
+        if (!cred_fs_privileged() && !KRFFS_IS_DIR(head.mode) && !cred_in_group(head.gid)) {
             want &= ~(uint32_t)KRFFS_MODE_SGID;
         }
-        node->mode = (uint16_t)((node->mode & ~07777u) | want);
+        if (krffs_node_set_mode(node, (uint16_t)((head.mode & ~07777u) | want)) != 0) {
+            return -EIO;
+        }
         krffs_stamp(node, KRFFS_STAMP_ATTR);
     }
     return 0;
@@ -13012,28 +13124,35 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
  * ran on it would let any user clear the set-user-ID bit of /bin/su with
  * one call. A halted root (`krffs_root_halted`) is -EROFS before anything
  * else, for a call that changes nothing too, as a file system turned
- * read-only is on Linux.
+ * read-only is on Linux; a header that cannot be read or a store that fails
+ * is -EIO.
  */
 static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 {
-    int uid_changes = (uid != (uint32_t)-1 && uid != node->uid);
-    int gid_changes = (gid != (uint32_t)-1 && gid != node->gid);
+    krffs_node_t head;
+    int uid_changes;
+    int gid_changes;
 
     if (krffs_root_halted()) {
-        return -EROFS; /* the ids are stored in place, past the core */
+        return -EROFS;
     }
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
+    uid_changes = (uid != (uint32_t)-1 && uid != head.uid);
+    gid_changes = (gid != (uint32_t)-1 && gid != head.gid);
     if (uid_changes && !cred_fs_privileged()) {
         return -EPERM;
     }
     if (gid_changes && !cred_fs_privileged() &&
-        (proc_fsuid(current_proc) != node->uid || !cred_in_group(gid))) {
+        (proc_fsuid(current_proc) != head.uid || !cred_in_group(gid))) {
         return -EPERM;
     }
-    if (uid != (uint32_t)-1) {
-        node->uid = uid;
-    }
-    if (gid != (uint32_t)-1) {
-        node->gid = gid;
+    if ((uid_changes || gid_changes) &&
+        krffs_node_set_owner(node, uid, gid,
+                             (uid_changes ? KRFFS_SET_UID : 0) |
+                                 (gid_changes ? KRFFS_SET_GID : 0)) != 0) {
+        return -EIO;
     }
     if (uid_changes || gid_changes) {
         krffs_stamp(node, KRFFS_STAMP_ATTR);
@@ -13934,7 +14053,12 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
         }
         mode = kst.st_mode;
     } else if (mnt_is_root(ref->mnt)) {
-        mode = node == krffs_fs->node ? S_IFDIR : krffs_mode_type(node->mode);
+        krffs_node_t head;
+
+        if (node != krffs_fs->node && krffs_node_head(node, &head) != 0) {
+            return -EIO;
+        }
+        mode = node == krffs_fs->node ? S_IFDIR : krffs_mode_type(head.mode);
     } else {
         struct vfs_stat vst;
 
@@ -14766,15 +14890,22 @@ static int32_t llseek_framebuffer(fd_entry_t *entry, long long off, int whence,
  *
  * @return 0; -EBADF for a KRFFS root file whose node was unlinked or moved
  * from under the descriptor (`fd_node_check`) and for a descriptor with no
- * file; or the file system's error for its size.
+ * file; -EIO for one whose header cannot be read; or the file system's
+ * error for its size.
  */
 static int file_size_now(fd_entry_t *entry, uint64_t *out)
 {
     if (entry->node) {
-        if (fd_node_check(entry) != 0) {
-            return -EBADF;
+        krffs_node_t head;
+        int rc = fd_node_check(entry);
+
+        if (rc != 0) {
+            return rc == -EIO ? -EIO : -EBADF;
         }
-        *out = entry->node->data_size;
+        if (krffs_node_head(entry->node, &head) != 0) {
+            return -EIO;
+        }
+        *out = head.data_size;
         return 0;
     }
     if (entry->ofd->vmnt) {
@@ -17572,12 +17703,13 @@ static void stat_times_from_stat64(struct linux_stat *kst, const struct kstat *s
     kst->st_ctime_nsec = s64->st_ctime_nsec;
 }
 
-/** The three times of a KRFFS node, into the old stat. */
-static void stat_node_times(struct linux_stat *kst, const krffs_node_t *node)
+/** The three times of a KRFFS node, whose header the caller read into
+ * `head`, into the old stat. */
+static void stat_node_times(struct linux_stat *kst, const krffs_node_t *head)
 {
     struct kstat s64;
 
-    stat64_node_times(&s64, node);
+    stat64_node_times(&s64, head);
     stat_times_from_stat64(kst, &s64);
 }
 
@@ -17596,13 +17728,42 @@ static int32_t old_stat_put(struct linux_stat __user *st, const struct linux_sta
     return copy_to_user(st, &seen, sizeof(seen)) != 0 ? -EFAULT : 0;
 }
 
-/** The root directory's three times, into the old stat. */
-static void stat_root_times(struct linux_stat *kst)
+/** The root directory's three times, into the old stat: 0, or -EIO as
+ * `stat64_root_times` answers. */
+static int32_t stat_root_times(struct linux_stat *kst)
 {
     struct kstat s64;
+    int32_t rc = stat64_root_times(&s64);
 
-    stat64_root_times(&s64);
     stat_times_from_stat64(kst, &s64);
+    return rc;
+}
+
+/**
+ * Fill the old stat `kst` of the node `node` of the KRFFS root, for
+ * `do_old_stat`, whose caller holds the walk's lock. Returns 0, or -EIO for
+ * a header that cannot be read.
+ */
+static int32_t old_stat_root_node(krffs_node_t *node, struct linux_stat *kst)
+{
+    krffs_node_t head;
+
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
+    /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
+    kst->st_mode = node == krffs_fs->node
+                       ? S_IFDIR | 0755
+                       : (unsigned short)(krffs_mode_type(head.mode) | (head.mode & 07777));
+    kst->st_nlink = 1;
+    kst->st_uid = (unsigned short)head.uid;
+    kst->st_gid = (unsigned short)head.gid;
+    kst->st_size = (unsigned long)head.data_size;
+    kst->st_blksize = 4096;
+    kst->st_blocks = (head.data_size + 511) / 512;
+    kst->st_ino = (unsigned long)krffs_node_ino(&head);
+    stat_node_times(kst, &head);
+    return 0;
 }
 
 /**
@@ -17628,7 +17789,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
 {
     struct linux_stat kst;
     char *pathbuf;
-    krffs_node_t *node;
     int dir = 0;
     int len;
 
@@ -17650,7 +17810,9 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         kst.st_nlink = 1;
         kst.st_ino = 1;
         kst.st_blksize = 4096;
-        stat_root_times(&kst);
+        if (stat_root_times(&kst) != 0) {
+            return -EIO;
+        }
         return old_stat_put(st, &kst, dir);
     }
 
@@ -17705,21 +17867,12 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             stat_times_from_stat64(&kst, &s64);
             return old_stat_put(st, &kst, dir);
         }
-        node = ref.node;
-        /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
-        kst.st_mode = node == krffs_fs->node
-                          ? S_IFDIR | 0755
-                          : (unsigned short)(krffs_mode_type(node->mode) | (node->mode & 07777));
-        kst.st_nlink = 1;
-        kst.st_uid = (unsigned short)node->uid;
-        kst.st_gid = (unsigned short)node->gid;
-        kst.st_size = (unsigned long)node->data_size;
-        kst.st_blksize = 4096;
-        kst.st_blocks = (node->data_size + 511) / 512;
-        kst.st_ino = (unsigned long)krffs_node_ino(node);
-        stat_node_times(&kst, node);
+        rc = old_stat_root_node(ref.node, &kst);
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
+        if (rc != 0) {
+            return rc;
+        }
     }
     return old_stat_put(st, &kst, dir);
 }
@@ -17811,8 +17964,9 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
         return rc;
     }
     node = found;
-    if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        return -EISDIR;
+    rc = krffs_node_is_dir(node);
+    if (rc != 0) {
+        return rc < 0 ? -EIO : -EISDIR;
     }
     if (slash) {
         return -ENOTDIR;
@@ -18130,7 +18284,7 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
     rc = vfs_mkdir(parent->mnt, parent->node, leaf, mode);
     vfs_ns_unlock(parent->mnt);
     if (rc == 0 && parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
-        krffs_stamp_new_node(found, (krffs_node_t *)parent->node, mode);
+        rc = krffs_stamp_new_node(found, (krffs_node_t *)parent->node, mode);
     }
     return rc;
 }
@@ -18399,6 +18553,7 @@ static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
 static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
 {
     krffs_node_t *node;
+    krffs_node_t head;
     void *found;
     int32_t rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
 
@@ -18406,7 +18561,10 @@ static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
         return rc;
     }
     node = found;
-    if (!KRFFS_IS_DIR(node->mode)) {
+    if (krffs_node_head(node, &head) != 0) {
+        return -EIO;
+    }
+    if (!KRFFS_IS_DIR(head.mode)) {
         return -ENOTDIR;
     }
     rc = cred_access_node((krffs_node_t *)parent->node, CRED_W, 0);
@@ -18627,6 +18785,7 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
     krffs_node_t *node;
     krffs_node_t *existing = NULL;
     void *found;
+    int is_dir;
     int32_t rc = opar->mnt->type->ops->lookup(opar->mnt, opar->node, oleaf, &found);
 
     if (rc != 0) {
@@ -18642,14 +18801,18 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
     if (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)) {
         return -EINVAL;
     }
-    if (slash && node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+    is_dir = krffs_node_is_dir(node);
+    if (is_dir < 0) {
+        return -EIO;
+    }
+    if (slash && !is_dir) {
         return -ENOTDIR;
     }
     rc = cred_sticky_ok((krffs_node_t *)opar->node, node);
     if (rc != 0) {
         return rc;
     }
-    if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+    if (is_dir) {
         return -EPERM;
     }
     if ((opar->mnt->flags | vfs_mount_base(opar->mnt)->flags) & VFS_MS_RDONLY) {
@@ -19003,6 +19166,51 @@ static int utimes_read_only(struct vfs_mount *mnt, void *node)
 }
 
 /**
+ * Set the times of the node `kn` of the KRFFS root as `utimes_node` does,
+ * with the clock's `now_sec` and `now_nsec` already read and `now_both` set
+ * when both times are to be now. The root's own node keeps no times and
+ * succeeds unchanged; a header that cannot be read or a store that fails is
+ * -EIO. The caller holds the big lock.
+ */
+static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times, int64_t now_sec,
+                                int64_t now_nsec, int now_both)
+{
+    krffs_node_t head;
+
+    if (kn == krffs_fs->node) {
+        return 0;
+    }
+    if (krffs_node_head(kn, &head) != 0) {
+        return -EIO;
+    }
+    if (now_both) {
+        if (!cred_fs_privileged() && proc_fsuid(current_proc) != head.uid &&
+            cred_access_node(kn, CRED_W, 0) != 0) {
+            return -EACCES;
+        }
+    } else if (!cred_fs_privileged() && proc_fsuid(current_proc) != head.uid) {
+        return -EPERM;
+    }
+    if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
+        int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
+
+        if (krffs_node_set_time(kn, KRFFS_FIELD_ATIME, now ? now_sec : times[0].tv_sec,
+                                now ? now_nsec : times[0].tv_nsec) != 0) {
+            return -EIO;
+        }
+    }
+    if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
+        int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
+
+        if (krffs_node_set_time(kn, KRFFS_FIELD_MTIME, now ? now_sec : times[1].tv_sec,
+                                now ? now_nsec : times[1].tv_nsec) != 0) {
+            return -EIO;
+        }
+    }
+    return krffs_node_set_time(kn, KRFFS_FIELD_CTIME, now_sec, now_nsec) == 0 ? 0 : -EIO;
+}
+
+/**
  * Set the access and modification times of the file at (`mnt`, `node`), for
  * utimensat by path and by descriptor. `times` is the pair [atime, mtime];
  * NULL sets both to now, a tv_nsec of UTIME_NOW sets that one to now and
@@ -19013,12 +19221,13 @@ static int utimes_read_only(struct vfs_mount *mnt, void *node)
  * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
  * no stored times and is -EROFS, as is a file of the halted KRFFS root,
  * before any permission check; the KRFFS root's times are not changed and
- * the call succeeds. On another type the read, the check and the store are
- * one step under the file's lock (`vfs_node_lock`), as for chmod and chown.
+ * the call succeeds, and a header of the KRFFS root that cannot be read or
+ * a store that fails is -EIO. On another type the read, the check and the
+ * store are one step under the file's lock (`vfs_node_lock`), as for chmod
+ * and chown.
  */
 static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime_spec *times)
 {
-    krffs_node_t *kn = node;
     int64_t now_sec, now_nsec;
     int now_both =
         times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
@@ -19063,32 +19272,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         vfs_node_unlock(&ref);
         return rc;
     }
-    if (kn == krffs_fs->node) {
-        return 0;
-    }
-    if (now_both) {
-        if (!cred_fs_privileged() && proc_fsuid(current_proc) != kn->uid &&
-            cred_access_node(kn, CRED_W, 0) != 0) {
-            return -EACCES;
-        }
-    } else if (!cred_fs_privileged() && proc_fsuid(current_proc) != kn->uid) {
-        return -EPERM;
-    }
-    if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
-        int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
-
-        kn->access_time.seconds = now ? now_sec : times[0].tv_sec;
-        kn->access_time.nanoseconds = now ? now_nsec : times[0].tv_nsec;
-    }
-    if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
-        int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
-
-        kn->modification_time.seconds = now ? now_sec : times[1].tv_sec;
-        kn->modification_time.nanoseconds = now ? now_nsec : times[1].tv_nsec;
-    }
-    kn->attribute_change_time.seconds = now_sec;
-    kn->attribute_change_time.nanoseconds = now_nsec;
-    return 0;
+    return utimes_root_node(node, times, now_sec, now_nsec, now_both);
 }
 
 /**

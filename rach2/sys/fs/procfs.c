@@ -1056,7 +1056,9 @@ static char *exe_file_path(struct open_file *file, int *deleted)
     vfs_ns_lock(file->vmnt);
     node = exe_root_node(file);
     if (node) {
-        *deleted = node->name[0] == '\0';
+        krffs_node_t head;
+
+        *deleted = krffs_node_head(node, &head) == 0 && head.name[0] == '\0';
         if (!*deleted) {
             path = exe_present_path(node);
         }
@@ -3177,8 +3179,9 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
     struct open_file *file = e->ofd;
     int deleted = 0;
     char *now = NULL;
+    krffs_node_t head;
 
-    if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
+    if (e->node && krffs_node_head(e->node, &head) == 0 && head.type == KRFFS_RESERVED_NODE) {
         char *path = kmalloc(VFS_PATH_MAX);
 
         if (!path) {
