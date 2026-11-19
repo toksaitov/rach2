@@ -2449,8 +2449,10 @@ void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path
  */
 
 /** A device registered: the console takes it if it has none, which is how
- * a native driver's device that replaced the firmware's comes to it. Only a
- * device with mode setting and dumb buffers is taken. */
+ * a native driver's device that replaced the firmware's comes to it, and
+ * otherwise probes its connectors once, as Linux's fbdev client of each
+ * device does. Only a device with mode setting and dumb buffers is taken
+ * or probed. May sleep. */
 void drm_client_dev_register(struct drm_device *dev);
 /** A device is going: the console leaves it, and gets the keyboard and
  * /fb back if a master of it held the screen. Does not sleep. */
