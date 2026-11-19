@@ -15,9 +15,10 @@
  * stream opened, granted, started and served from the tick, with the pin's
  * converter selected, the display's clocks set for the rate, the stereo
  * infoframe and channel slots, IEC958 on and the stream's tag and format;
- * 24 bits granted where the sink takes them; a monitor that comes while a
- * stream plays given the stream; and the close, which gives the display's
- * power back.
+ * a wide format and a narrow one at a rate the sink lacks granted as asked,
+ * the DMA playing 24 bits where the sink takes them and the sink's nearest
+ * rate; a monitor that comes while a stream plays given the stream; and the
+ * close, which gives the display's power back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -450,22 +451,24 @@ static void row_play(void)
           "stream: close gives the converter and the display's power back");
 }
 
-/** A wider format asked for: 24 bits in 32, at 48 kHz, since the sink's
- * LPCM takes 24. */
+/** Formats granted as asked: a wide one played in 24 bits in 32 at 48 kHz,
+ * since the sink's LPCM takes 24, and unsigned 8-bit at 22050 Hz played in
+ * 16 bits at the sink's nearest rate, 32 kHz, the refill converting. */
 static void row_wide(void)
 {
     audio_stream_t s;
 
     stream_init(&s, 48000, AUDIO_S24LE, 16384);
-    check(hh_stream_open(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_S32LE &&
-              s.rate == 48000 && hh_fmt == 0x0031 && s.period_bytes == 16384 &&
-              s.device_periods == 2,
-          "wide: S32LE at 48 kHz, two periods of 16384 bytes");
+    check(hh_stream_open(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_S24LE &&
+              s.rate == 48000 && hh_fmt == 0x0031 && s.period_bytes == 16384 && hh_pb == 16384 &&
+              hh_n == 2 && !hh_copy && s.device_periods == 3,
+          "wide: S24LE granted, the DMA in 24 bits at 48 kHz, two periods of 16384 bytes");
     hh_stream_close(&s);
     stream_init(&s, 22050, AUDIO_U8, 128);
-    check(hh_stream_open(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_S16LE &&
-              s.rate == 32000 && s.period_bytes == 128 && s.device_periods == 40,
-          "wide: 22050 Hz becomes the sink's nearest, 32 kHz, in 16 bits");
+    check(hh_stream_open(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_U8 &&
+              s.rate == 22050 && s.channels == 2 && s.period_bytes == 128 && hh_rate == 32000 &&
+              hh_fmt == 0x0a11 && hh_pb == 384 && hh_n == 14 && s.device_periods == 15,
+          "wide: U8 at 22050 Hz granted, the DMA in 16 bits at the sink's nearest, 32 kHz");
     hh_stream_close(&s);
 }
 
@@ -540,9 +543,12 @@ void arch_dma_flush(const volatile void *p, size_t len)
     (void)len;
 }
 
+/* The clock, in ticks, which a row may move. */
+static uint64_t now_ticks;
+
 uint64_t rtc_ticks_now(void)
 {
-    return 0;
+    return now_ticks;
 }
 
 uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
