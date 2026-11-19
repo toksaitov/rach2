@@ -1235,15 +1235,14 @@ static void balance_unlocked(struct mm *mm)
  * the rights the 4 KiB page would have alone, so that every walk that reads
  * entries reads that table unchanged. A change of an entry splits the page
  * first (`huge_split`), which gives the directory entry back to the table.
- * The table is hidden from the processor (`mmu_user_table_hide`) until
- * every processor has dropped its translation of the 2 MiB page, as Linux's
- * split invalidates the entry first, since some AMD processors fail with a
- * 2 MiB and a 4 KiB translation of one address however they agree; a
- * promotion over a table whose entries a processor may have translated
- * hides it and flushes the same way. Each frame
- * keeps its own reference count, so a split frees nothing, and a partial
- * unmap frees its frames at once where Linux splits the folio later
- * (deferred_split_folio).
+ * The page and the table agree on every address, frame and right, so a
+ * processor may hold a 2 MiB and a 4 KiB translation of one address
+ * meanwhile, which the Intel and AMD manuals allow when the two agree; AMD's
+ * family 0x10 fails with them (Erratum 383), and makes no huge page
+ * (`mmu_huge_usable`, `thp_refuse`). The caller flushes each entry it then
+ * changes, as for any page. Each frame keeps its own reference count, so a
+ * split frees nothing, and a partial unmap frees its frames at once where
+ * Linux splits the folio later (deferred_split_folio).
  *
  * A table with entries becomes a huge page (`huge_promote`) only under the
  * regions' lock held to write, by a change that covers the 2 MiB whole and
@@ -1281,9 +1280,10 @@ static int huge_zero_entry(pte_t e)
 /* For each 2 MiB block of frames from physical 0, the directory entries
  * that map it as one huge page, so that `thp_mapped` counts a page that a
  * fork left in two spaces once, as Linux counts a folio at its first whole
- * mapping (folio_add_anon_rmap_pmd); NULL until `paging_thp_init`, or when
- * it had no memory, and then each entry counts. `huge_maps_lock` covers
- * the counts. */
+ * mapping (folio_add_anon_rmap_pmd); NULL until `paging_thp_init`, which
+ * refuses huge pages when it has no memory for it. `huge_maps_lock` covers
+ * the counts and their change of `thp_mapped`, so that a page mapped and
+ * unmapped at once counts in order. */
 static uint32_t *_huge_maps;
 static size_t _huge_blocks;
 static struct spinlock huge_maps_lock = SPINLOCK_INIT_NAMED("huge_maps_lock");
@@ -1298,17 +1298,17 @@ void paging_huge_mapped(pte_t leaf, int delta)
     if (leaf & PTE_ZEROFILL) {
         return;
     }
+    flags = spin_lock_irqsave(&huge_maps_lock);
     if (!_huge_maps || block >= _huge_blocks) {
         thp_mapped_add(delta);
-        return;
+    } else {
+        was = _huge_maps[block];
+        _huge_maps[block] = was + (uint32_t)delta;
+        if (delta > 0 ? was == 0 : was == 1) {
+            thp_mapped_add(delta);
+        }
     }
-    flags = spin_lock_irqsave(&huge_maps_lock);
-    was = _huge_maps[block];
-    _huge_maps[block] = was + (uint32_t)delta;
     spin_unlock_irqrestore(&huge_maps_lock, flags);
-    if (delta > 0 ? was == 0 : was == 1) {
-        thp_mapped_add(delta);
-    }
 }
 
 /** Drop one reference of each of the HUGE_PAGES frames from `base`. */
@@ -1324,10 +1324,9 @@ static void huge_unref(uintptr_t base)
 /**
  * Split the huge page of `dir` over the user address `va`, when there is
  * one: the directory entry names its kept table again, whose entries take
- * the accessed and dirty bits the processor set in the page, once every
- * processor has dropped its translation of the page. The caller holds the
- * regions' lock to write, or the page-table lock, and flushes the entries it
- * then changes. 1 when a page was split, 0 when there was none.
+ * the accessed and dirty bits the processor set in the page. The caller
+ * holds the regions' lock to write, or the page-table lock, and flushes the
+ * entries it then changes. 1 when a page was split, 0 when there was none.
  */
 static int huge_split(page_dir_t *dir, uintptr_t va)
 {
@@ -1346,8 +1345,6 @@ static int huge_split(page_dir_t *dir, uintptr_t va)
             }
         }
     }
-    paging_flush_dir(dir, va);
-    mmu_user_table_show(dir, va);
     paging_huge_mapped(leaf, -1);
     thp_note(THP_SPLIT_PMD);
     return 1;
@@ -1372,10 +1369,9 @@ static void huge_split_mm(struct mm *mm, uintptr_t va)
  * when the entries of its table each map a present user page of RAM, the
  * HUGE_PAGES frames from a 2 MiB boundary in order, with the same rights
  * and marks; the page takes the accessed and dirty bits any of them has.
- * The table is hidden and the range flushed first, since a processor may
- * hold translations of its entries. The caller holds the regions' lock to
- * write and found a huge page here, or made one. 1 when promoted, 0 when
- * the entries differ or the directory keeps no table (`mmu_user_huge_set`).
+ * The caller holds the regions' lock to write and found a huge page here,
+ * or made one. 1 when promoted, 0 when the entries differ or the directory
+ * keeps no table (`mmu_user_huge_set`).
  */
 static int huge_promote(page_dir_t *dir, uintptr_t start)
 {
@@ -1400,17 +1396,10 @@ static int huge_promote(page_dir_t *dir, uintptr_t start)
             ((e ^ first) & (pte_t)PTE_FLAGS & ~HUGE_AD) != 0) {
             return 0;
         }
-    }
-    if (!mmu_user_table_hide(dir, start)) {
-        return 0;
-    }
-    paging_flush_range(dir, start, start + HUGE_SPAN);
-    for (i = 0; i < HUGE_PAGES; i++) {
-        ad |= table[i] & HUGE_AD;
+        ad |= e & HUGE_AD;
     }
     if (mmu_user_huge_set(dir, start, (pte_t)base | (first & (pte_t)PTE_FLAGS & ~HUGE_AD) | ad) !=
         0) {
-        mmu_user_table_show(dir, start);
         return 0;
     }
     paging_huge_mapped(first, 1);
@@ -1423,48 +1412,41 @@ static int huge_promote(page_dir_t *dir, uintptr_t start)
  * there has no entry, as Linux's __do_huge_pmd_anonymous_page sets the
  * entry only while it is still none: the entries are written first, each a
  * page ready to use, and then the directory entry becomes the huge page.
- * A table that was there before is hidden and flushed first, since a
- * processor may have cached the directory entry that names it and would
- * then translate the new entries beside the page; Linux maps no huge page
- * over a table that is there (pmd_none). 0 once mapped; 1 when an entry
- * was made meanwhile, after which the caller gives its frames back and
- * resolves again; 2 when the directory keeps no table, so that no huge page
- * fits there, and -1 with no memory for a table, marked as out of memory,
- * after either of which the caller gives its frames back and maps one page.
+ * A processor that cached the directory entry naming an empty table there
+ * may translate the new entries beside the page, which agree with it. 0
+ * once mapped; 1 when an entry was made meanwhile, after which the caller
+ * gives its frames back and resolves again; 2 when the directory keeps no
+ * table, so that no huge page fits there, and -1 with no memory for a
+ * table, marked as out of memory, after either of which the caller gives
+ * its frames back and maps one page.
  */
 static int huge_install(struct mm *mm, uintptr_t start, uintptr_t base, pte_t flags)
 {
     uint32_t lock = mm_ptl_lock(mm);
-    int was = mmu_user_table(mm->dir, start, 0) != NULL;
     pte_t *table = mmu_user_table(mm->dir, start, 1);
     uint32_t i;
-    int rc = -1, huge = 0;
+    int rc = -1;
 
     if (table) {
         for (i = 0; i < HUGE_PAGES && table[i] == 0; i++) {
         }
         rc = i < HUGE_PAGES;
-        if (rc == 0 && !mmu_user_table_hide(mm->dir, start)) {
+        if (rc == 0 && !mmu_user_keeps(mm->dir, start)) {
             rc = 2;
         }
         if (rc == 0) {
-            if (was) {
-                paging_flush_dir(mm->dir, start);
-            }
             for (i = 0; i < HUGE_PAGES; i++) {
                 table[i] =
                     PTE_ADDR((pte_t)(base + (uintptr_t)i * PAGE_SIZE)) | (flags & (pte_t)PTE_FLAGS);
             }
             mm_resident_add(mm->dir, (flags & PTE_ZEROFILL) ? 0 : HUGE_PAGES);
-            huge = mmu_user_huge_set(mm->dir, start, (pte_t)base | (flags & (pte_t)PTE_FLAGS)) == 0;
+            mmu_user_huge_set(mm->dir, start, (pte_t)base | (flags & (pte_t)PTE_FLAGS));
+            paging_huge_mapped((pte_t)base | flags, 1);
         }
     }
     mm_ptl_unlock(mm, lock);
     if (!table) {
         table_refused();
-    }
-    if (huge) {
-        paging_huge_mapped((pte_t)base | flags, 1);
     }
     return rc;
 }
@@ -3914,6 +3896,9 @@ void paging_thp_init(void)
         k_memset(maps, 0, blocks * sizeof(*maps));
         _huge_blocks = blocks;
         _huge_maps = maps;
+    } else {
+        klog(KLOG_WARN, "thp", "huge pages off: no memory to count them");
+        thp_refuse();
     }
     mem_shrinker_register(&_huge_shrinker);
 #endif
@@ -3945,11 +3930,18 @@ unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end)
 void paging_huge_split_edges(struct mm *mm, uintptr_t start, uintptr_t end)
 {
 #if MMU_HUGE
-    if (start & (HUGE_SPAN - 1)) {
-        huge_split(mm->dir, start);
-    }
-    if (end & (HUGE_SPAN - 1)) {
-        huge_split(mm->dir, end);
+    uintptr_t edge[2];
+    int i;
+
+    edge[0] = start;
+    edge[1] = end;
+    for (i = 0; i < 2; i++) {
+        uintptr_t va = edge[i];
+
+        if ((va & (HUGE_SPAN - 1)) != 0 && mmu_user_huge(mm->dir, va) &&
+            vm_find(&mm->vm, va) != vm_find(&mm->vm, va - 1)) {
+            huge_split(mm->dir, va);
+        }
     }
 #else
     (void)mm;
@@ -4844,10 +4836,12 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
  * again. */
 static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32_t prot)
 {
-    pte_t pte = *e;
-    pte_t was = pte;
+    pte_t pte, was;
     uintptr_t frame;
 
+again:
+    pte = *(volatile pte_t *)e;
+    was = pte;
     if (!PTE_MAPPED(pte)) {
         return;
     }
@@ -4869,7 +4863,12 @@ static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32
             pte |= PTE_W;
         }
     }
-    *e = pte;
+    /* An exchange, so that a dirty bit the processor sets meanwhile stays,
+     * which tells a page stored into from one of zeros (PTE_IS_ZERO). */
+    if (arch_atomic_cmpxchg_ptr((volatile uintptr_t *)e, (uintptr_t)was, (uintptr_t)pte) !=
+        (uintptr_t)was) {
+        goto again;
+    }
     if (was & PTE_P) {
         batch_add(b, addr);
     }
@@ -5174,8 +5173,7 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
         uintptr_t to = base + (uintptr_t)i * PAGE_SIZE;
 
         frame_make_anon(to);
-        if ((table[i] == 0 || PTE_IS_ZERO(table[i])) ? paging_zero_frame(to)
-                                                     : paging_copy_frame(to, PTE_ADDR(table[i]))) {
+        if (table[i] == 0 ? paging_zero_frame(to) : paging_copy_frame(to, PTE_ADDR(table[i]))) {
             break;
         }
     }
@@ -5190,8 +5188,6 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
         huge_unref(base);
         return -ENOMEM;
     }
-    mmu_user_table_hide(dir, start);
-    paging_flush_dir(dir, start); /* the directory entry a walk may have cached */
     flags = PTE_P | PTE_U | PTE_ACCESSED | PTE_DIRTY | paging_prot_bits(vma->prot) |
             ((vma->prot & VM_PROT_WRITE) ? PTE_W : 0);
     for (i = 0; i < HUGE_PAGES; i++) {
@@ -5202,12 +5198,11 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
             frame_unref(PTE_ADDR(old));
         }
     }
-    rc = mmu_user_huge_set(dir, start, (pte_t)base | (flags & (pte_t)PTE_FLAGS));
-    mm_ptl_unlock(mm, lock);
-    mm_resident_add(dir, (long)HUGE_PAGES - (long)sc.resident);
-    if (rc == 0) {
+    if (mmu_user_huge_set(dir, start, (pte_t)base | (flags & (pte_t)PTE_FLAGS)) == 0) {
         paging_huge_mapped((pte_t)base | flags, 1);
     }
+    mm_ptl_unlock(mm, lock);
+    mm_resident_add(dir, (long)HUGE_PAGES - (long)sc.resident);
     if (how == THP_SCAN) {
         thp_note(THP_PAGES_COLLAPSED);
     }
@@ -5320,11 +5315,13 @@ static uint32_t huge_shrink_underused(uint32_t want)
     for (p = proc_list; p && freed < want; p = p->next) {
         struct mm *mm = p->mm;
 
-        if (!mm || !mm->dir || mm->thp_shrink == pass || mmap_held(mm, 0) ||
-            !mmap_write_trylock(mm)) {
+        if (!mm || !mm->dir || mm->thp_shrink == pass) {
             continue;
         }
-        mm->thp_shrink = pass;
+        mm->thp_shrink = pass; /* a busy space too, so that the walk ends */
+        if (mmap_held(mm, 0) || !mmap_write_trylock(mm)) {
+            continue;
+        }
         for (r = vm_first(&mm->vm); r && freed < want; r = vm_next(r)) {
             if (r->file || r->type == VM_SHARED || (r->prot & VM_PROT_LOCKED)) {
                 continue; /* a locked page stays resident, as Linux leaves it */

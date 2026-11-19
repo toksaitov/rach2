@@ -4058,7 +4058,8 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * `alloc_kernel_frame` takes from, under Linux's names for its low memory: a
  * test watches LowFree for the pool whose end makes a driver's allocation
  * fail. AnonHugePages is the memory transparent huge pages map, 2 MiB for each
- * mapping of one, the huge zero page aside (`thp_mapped`). Slab, last, is the
+ * one however many address spaces map it, the huge zero page aside
+ * (`thp_mapped`). Slab, last, is the
  * heap's pages but the buffer cache's, which the heap holds and Buffers
  * counts, in kilobytes: the kernel's own objects as Linux's slab holds them,
  * which BusyBox's nmeter adds to MemFree, Buffers and Cached, and subtracts
@@ -4118,10 +4119,10 @@ static int procfs_gen_meminfo(struct procfs_text *t)
  * free pages and those of the page caches and the buffer cache; pgpgin and
  * pgpgout the kilobytes read from and written to the disks since boot, counted
  * over the whole disks, as Linux counts them; nr_anon_transparent_hugepages
- * the mappings of transparent huge pages (`thp_mapped`); pswpin and pswpout 0,
- * since nothing is swapped; and last the events of transparent huge pages the
- * kernel counts (thp.h), in Linux's order. A counter Linux has and the kernel
- * does not keep is not listed, and procps reads it as 0.
+ * the transparent huge pages mapped, each once (`thp_mapped`); pswpin and
+ * pswpout 0, since nothing is swapped; and last the events of transparent
+ * huge pages the kernel counts (thp.h), in Linux's order. A counter Linux
+ * has and the kernel does not keep is not listed, and procps reads it as 0.
  */
 static int procfs_gen_vmstat(struct procfs_text *t)
 {

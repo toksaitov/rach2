@@ -112,6 +112,19 @@ int kcpu_vmmcall(void)
            (b == 0x6F677948u && d == 0x6E65476Eu && c == 0x656E6975u);
 }
 
+int kcpu_amd_erratum_383(void)
+{
+    uint32_t b = 0, c = 0, d = 0, sig = 0;
+
+    kcpu_id(0, 0, &b, &c, &d);
+    /* "AuthenticAMD" in EBX, EDX and ECX */
+    if (b != 0x68747541u || d != 0x69746E65u || c != 0x444D4163u) {
+        return 0;
+    }
+    kcpu_id(1, &sig, 0, 0, 0);
+    return ((sig >> 8) & 0xFu) == 0xFu && ((sig >> 20) & 0xFFu) == 0x1u;
+}
+
 int kcpu_x2apic_present(void)
 {
     uint32_t a = 0, c = 0;
