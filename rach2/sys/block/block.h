@@ -8,6 +8,7 @@
 #define _BLOCK_H_
 
 #include "../lib/kint.h"
+#include "../lib/kirq.h"
 
 /** The sector size every block device in Rach2 uses. */
 #define BLOCK_SECTOR_SIZE 512
@@ -184,18 +185,21 @@ static __inline__ uint64_t block_sectors(const block_device_t *device)
 }
 
 /**
- * Give `device` the size `sectors` for readers of `block_sectors`. Writers
- * of one device are serialized by its driver's lock, held with interrupts
- * off so that no reader on the same processor spins on an odd count; x86
- * keeps stores in order, so no fence is needed.
+ * Give `device` the size `sectors` for readers of `block_sectors`, with
+ * interrupts off, so that no reader in an interrupt of this processor
+ * spins on the odd count. Writers of one device are serialized by its
+ * driver's lock, or by the big lock where only processes set it; x86 keeps
+ * stores in order, so no fence is needed.
  */
 static __inline__ void block_set_sectors(block_device_t *device, uint64_t sectors)
 {
     volatile uint64_t *count = &device->sector_count;
+    uint32_t flags = kirq_save();
 
     device->size_seq++;
     *count = sectors;
     device->size_seq++;
+    kirq_restore(flags);
 }
 
 /**
