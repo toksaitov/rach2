@@ -92,6 +92,11 @@ uint32_t ip_source_on(uint32_t dst, int ifindex);
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
 
+/* The index of the card whose frame `ethernet_rx` is passing to IPv4 or
+ * IPv6, 0 for a datagram off the loopback backlog and outside a receive. A
+ * TCP connection bound to a card takes segments that came by it alone. */
+extern int ip_rx_ifindex;
+
 /**
  * Give the accepted, whole datagram of `total_len` bytes at `data` to its
  * protocol: offered whole to the raw sockets of its protocol (`raw_rx`),
