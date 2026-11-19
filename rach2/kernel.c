@@ -3157,7 +3157,8 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
 
     block_partition_init(&_krffs_disk_part, disk, start_lba, sector_count);
     pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
-    if (init_krffs_disk_root((void *)PCWIN_BASE, part_bytes, BLOCK_SECTOR_SIZE) != 0) {
+    if (init_krffs_disk_root((void *)PCWIN_BASE, part_bytes, BLOCK_SECTOR_SIZE, pc_sync_wait) !=
+        0) {
         pc_set_backing(0, 0, 0);
         return -1;
     }

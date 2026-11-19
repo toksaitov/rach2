@@ -874,9 +874,11 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size);
  * As `init_krffs`, but a dirty image with a valid forward chain can have
  * its backward links repaired before publication. The caller writes them
  * back when marking the mount dirty. `sector_bytes` is the disk write unit
- * used to check each coalesced size on removal.
+ * used to check each coalesced size on removal. `flush` writes the page
+ * cache to disk and returns 0 on success. A shrink calls it before
+ * writing its free header and before publishing the header.
  */
-int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes);
+int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void));
 
 /** `krffs_count_at` on the boot root: its named reserved nodes, 0 before the
  * mount. */

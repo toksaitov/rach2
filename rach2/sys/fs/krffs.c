@@ -96,6 +96,8 @@ static const krffs_backend_t krffs_memory_backend = {krffs_memory_read, krffs_me
 static krffs_mount_t krffs_root_mount;
 /* Disk write unit for coalescing on the boot root, 0 for a RAM image. */
 static uint32_t krffs_root_merge_grain;
+/* Writeback barrier before a disk-root shrink reuses its old data space. */
+static int (*krffs_root_flush)(void);
 
 int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
 {
@@ -384,6 +386,15 @@ static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at, u
 static int krffs_sync_point(krffs_mount_t *mount)
 {
     return mount->backend->sync(mount->ctx);
+}
+
+/** Flush a disk-root shrink's length or free header. */
+static int krffs_flush_shrink(krffs_mount_t *mount)
+{
+    if (mount == &krffs_root_mount && krffs_root_flush) {
+        return krffs_root_flush();
+    }
+    return 0;
 }
 
 uint64_t krffs_calculate_djb_hash(const uint8_t *str)
@@ -970,7 +981,7 @@ static int krffs_write_backward_link(krffs_mount_t *mount, uint64_t offset, uint
  */
 static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
-    krffs_write_backward_link(mount, krffs_wrap_offset(mount, offset + size), size);
+    krffs_put_u64(mount, krffs_wrap_offset(mount, offset + size), KRFFS_FIELD_PREVIOUS, size);
 }
 
 /**
@@ -1181,6 +1192,42 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
 }
 
 /**
+ * Shrink the file at `offset`, reclaiming a surplus that can hold a header.
+ * Flush the shorter length before reusing any old file bytes, then flush
+ * the free header before publishing its size. Returns -1 if the length
+ * store or its sync fails, otherwise 0. A surplus that cannot be published
+ * stays inside the file's node.
+ */
+static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t length,
+                           const krffs_node_t *head, const krffs_node_t *next)
+{
+    uint64_t size = sizeof(krffs_node_t) + length;
+    uint64_t free_size = head->size - size;
+    uint64_t surplus = krffs_wrap_offset(mount, offset + size);
+
+    if (length < head->data_size &&
+        (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, length) != 0 ||
+         krffs_sync_point(mount) != 0)) {
+        return -1;
+    }
+    if (free_size < sizeof(krffs_node_t)) {
+        return 0;
+    }
+    if (krffs_flush_shrink(mount) != 0) {
+        return -1;
+    }
+    if (next->type == KRFFS_FREE_NODE) {
+        free_size += next->size;
+    }
+    if (krffs_write_free_header(mount, surplus, free_size, size) == 0 &&
+        krffs_flush_shrink(mount) == 0 && krffs_sync_point(mount) == 0 &&
+        krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size) == 0) {
+        krffs_fix_backward_link(mount, surplus, free_size);
+    }
+    return 0;
+}
+
+/**
  * A grow into the free node after this one takes that node whole with one
  * size, and splits the surplus back off after: its free header, a sync, and
  * the shortened size. Writing the surplus's header while the free node was
@@ -1200,10 +1247,7 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
  * that fails fails the resize, and the caller sets where its holders point
  * afterwards.
  *
- * A shrink stores and syncs the shorter length before the surplus's header,
- * which lands inside the bytes the length still on the medium counts: a stop
- * with the header written and the length not would give the file the
- * allocator's bytes to read. A resize that raises the length inside the
+ * A resize that raises the length inside the
  * slack a node already has stores no length; the caller writes the bytes and
  * the length after them, as after a grow.
  */
@@ -1268,30 +1312,7 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
         }
     }
 
-    {
-        uint64_t difference = head.size - size_with_header;
-
-        if (size < head.data_size &&
-            (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, size) != 0 ||
-             krffs_sync_point(mount) != 0)) {
-            return KRFFS_NO_NODE;
-        }
-
-        if (difference >= sizeof(krffs_node_t)) {
-            uint64_t free_size = difference;
-            uint64_t surplus = krffs_wrap_offset(mount, offset + size_with_header);
-
-            if (next_head.type == KRFFS_FREE_NODE) {
-                free_size += next_head.size;
-            }
-            if (krffs_write_free_header(mount, surplus, free_size, size_with_header) == 0 &&
-                krffs_sync_point(mount) == 0 &&
-                krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size_with_header) == 0) {
-                krffs_fix_backward_link(mount, surplus, free_size);
-            }
-        }
-        return offset;
-    }
+    return krffs_shrink_at(mount, offset, size, &head, &next_head) == 0 ? offset : KRFFS_NO_NODE;
 }
 
 int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t size, uint32_t at)
@@ -2584,7 +2605,7 @@ uint32_t krffs_free_bytes(void)
 }
 
 /** Mount a memory or disk image as described in krffs.h. */
-static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain)
+static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int (*flush)(void))
 {
     krffs_node_t *root;
     uint32_t fixed;
@@ -2611,6 +2632,7 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain)
     krffs_root_mount.ctx = base;
     krffs_root_mount.size = size;
     krffs_root_merge_grain = disk_grain;
+    krffs_root_flush = flush;
 
     if (!krffs_chain_is_valid(&krffs_root_mount)) {
         if (disk_grain == 0 || !(root->mode & KRFFS_MODE_DIRTY) ||
@@ -2634,10 +2656,10 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain)
 
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
 {
-    return krffs_mount_root(ramdisk_base, ramdisk_size, 0);
+    return krffs_mount_root(ramdisk_base, ramdisk_size, 0, NULL);
 }
 
-int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes)
+int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void))
 {
-    return krffs_mount_root(base, size, sector_bytes);
+    return krffs_mount_root(base, size, sector_bytes, flush);
 }
