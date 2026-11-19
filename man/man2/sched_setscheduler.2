@@ -238,8 +238,10 @@ writes the thread's policy, its
 and the parameters of its policy: a deadline thread's runtime, deadline,
 period and flags, a real-time thread's priority, or an ordinary thread's
 nice value and slice in nanoseconds.
-For an ordinary thread without a custom slice, Rach2 returns the current
-base slice.
+An ordinary thread's slice is the one it asked for, or the base slice
+it last took, which
+.Xr sched 7
+describes, as on Linux.
 It writes as many bytes as
 .Fa size
 holds, at most 56, and that count in the structure's
@@ -315,8 +317,6 @@ virtual runtime to its deadline and taking a new deadline.
 The scheduler then chooses a thread.
 The call can return at once when no other thread is ready.
 .Ss Differences from Linux
-Linux reports the slice stored in the thread's scheduling entity, which
-may reflect an earlier base slice after the base slice changes.
 Linux runs a
 .Dv SCHED_DEADLINE
 thread before every real-time thread, by the earliest deadline, and stops
