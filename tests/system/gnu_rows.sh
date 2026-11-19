@@ -17,9 +17,11 @@
 # comparison holds, and otherwise `GNUROW FAIL NAME: ` with the first that
 # did not. The path has /usr/bin first, so each name finds the GNU program,
 # and bash runs no BusyBox applet for a name. ARCH is the architecture the
-# case booted, i686 unless it is given, which `uname -m` must name and which
-# decides what a row expects of glibc's loader, of the class `file` names a
-# program by and of the triple config.guess names.
+# case booted, i686 unless it is given, which decides what a row expects of
+# glibc's loader, of the class `file` names a program by and of the triple
+# config.guess names. `kernel=ARCH` names the kernel's architecture, which
+# `uname -m` must name: ARCH unless given, and x86_64 for the i686 programs on
+# the x86-64 kernel of the ia32 profile, as on Linux.
 #
 # A native run, on a Rach2 that is already up, gives ARGUMENTs of the form
 # NAME=VALUE, as tests/native/Readme.md says: `work=DIR` and `home=DIR`,
@@ -38,6 +40,7 @@ export HOME=/root LC_ALL=C
 
 ROW=${1:-}
 MACHINE=i686
+KERNEL=
 WORK=
 STAGE=/tmp/gnu
 PORTS=
@@ -56,8 +59,10 @@ for arg in "${@:2}"; do
         addr=*) ADDR=${arg#addr=} ;;
         gateway=*) GATEWAY=${arg#gateway=} ;;
         machine=native) NATIVE=1 ;;
+        kernel=*) KERNEL=${arg#kernel=} ;;
     esac
 done
+[ -n "$KERNEL" ] || KERNEL=$MACHINE
 # A row works in /tmp/gnu/NAME, on the tmpfs init mounts at /tmp, but for
 # the rows that test ext2's own flags, allocation and page cache, which work
 # on the root's ext2, in /var/tmp/gnu/NAME.
@@ -1068,10 +1073,10 @@ print(mmap.mmap(f.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)[:5].
 
 # The system's name as uname gives it: Linux, whose interface the kernel
 # follows and whose name config.guess and scripts match, with Rach2 in the
-# release and the version, and the machine the architecture the case booted.
+# release and the version, and the machine the kernel's architecture.
 row_uname() {
     same "the system" "$(uname -s)" "Linux"
-    same "the machine" "$(uname -m)" "$MACHINE"
+    same "the machine" "$(uname -m)" "$KERNEL"
     same "the release" "$(uname -r)" "6.18.0-rach2"
     has "the version" "$(uname -v)" "Rach2 1.0.0"
 }
