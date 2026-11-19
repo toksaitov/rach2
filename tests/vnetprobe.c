@@ -21,12 +21,18 @@
  *   /sys/bus/virtio/devices/virtioN, written to
  *   /sys/bus/pci/drivers/virtio-pci/unbind, takes the device off the bus:
  *   no network device is left there.
- * * `no-carrier`: the interface stays, as the kernel keeps every interface
- *   it made at boot, with `carrier` reading 0 and no `device` link, and a
- *   ping to the gateway fails.
+ * * `no-interface`: the interface went with it, as Linux's virtnet_remove
+ *   unregisters it: /sys/class/net/IF is gone, SIOCGIFINDEX of its name
+ *   fails with ENODEV, and a ping to the gateway fails.
  * * `bind`: the function's name written to /sys/bus/pci/drivers/virtio-pci/
- *   bind brings the device back on the bus with its `driver` link, the
- *   interface's `carrier` reads 1 and its `device` link leads to the device.
+ *   bind brings the device back on the bus with its `driver` link, and a
+ *   new interface of the same name, the lowest free, whose `ifindex` is not
+ *   the old one's, which is down, as Linux leaves a new interface, and whose
+ *   `device` link leads to the device.
+ * * `configure`: the interface set up with SIOCSIFFLAGS, given 10.0.2.15/24
+ *   with SIOCSIFADDR and SIOCSIFNETMASK and a default route through the
+ *   gateway with SIOCADDRT, as a program configures a new card, reads a
+ *   `carrier` of 1.
  * * `ping-again`: a ping to the gateway gets a reply over the device bound
  *   again.
  *
@@ -49,6 +55,42 @@ typedef unsigned int uint32_t;
 #define O_RDONLY    0
 #define O_WRONLY    1
 #define O_DIRECTORY 0200000
+
+#define AF_INET    2
+#define SOCK_DGRAM 2
+#define SC_SOCKET  1
+
+#define SIOCADDRT      0x890b
+#define SIOCGIFFLAGS   0x8913
+#define SIOCSIFFLAGS   0x8914
+#define SIOCSIFADDR    0x8916
+#define SIOCSIFNETMASK 0x891c
+#define SIOCGIFINDEX   0x8933
+#define IFF_UP         0x0001
+#define RTF_UP         0x0001
+#define RTF_GATEWAY    0x0002
+#define ENODEV         19
+
+/* struct ifreq and struct rtentry, by the word size: the ifreq's union at
+ * 16, and the rtentry's destination, gateway, mask and flags. */
+#if defined(__x86_64__)
+#define IFREQ_SIZE 40
+#define RT_SIZE    120
+#define RT_DST     8
+#define RT_GW      24
+#define RT_MASK    40
+#define RT_FLAGS   56
+#else
+#define IFREQ_SIZE 32
+#define RT_SIZE    84
+#define RT_DST     4
+#define RT_GW      20
+#define RT_MASK    36
+#define RT_FLAGS   52
+#endif
+
+#define GUEST_IP  0x0A00020FUL /* 10.0.2.15 */
+#define GUEST_NET 0xFFFFFF00UL
 
 #define GATEWAY_IP 0x0A000202UL /* 10.0.2.2, in host byte order */
 
@@ -284,14 +326,6 @@ static int parented(const char *ifname, const char *name)
     return same(to, want) && same(id, "0x0001");
 }
 
-/** Whether the interface `ifname` has no `device` link. */
-static int orphan(const char *ifname)
-{
-    char path[96], to[160];
-
-    return parent_link(ifname, path, sizeof(path), to, sizeof(to)) < 0;
-}
-
 /** Ping `ip`: the round-trip time in ticks, or a negated errno. */
 static int ping(uint32_t ip)
 {
@@ -341,39 +375,210 @@ static uint32_t address(const char *s, uint32_t fallback)
     return dots == 3 && digits > 0 && part < 256 ? ip << 8 | part : fallback;
 }
 
+/** Put the address `ip`, in host order, as a sockaddr_in at `sa`. */
+static void put_sin(unsigned char *sa, uint32_t ip)
+{
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        sa[i] = 0;
+    }
+    sa[0] = AF_INET;
+    sa[4] = (unsigned char)(ip >> 24);
+    sa[5] = (unsigned char)(ip >> 16);
+    sa[6] = (unsigned char)(ip >> 8);
+    sa[7] = (unsigned char)ip;
+}
+
+/** The ioctl `request` on `ifname` through a datagram socket, with `ifr`
+ * cleared and named first and `fill` called on it when not NULL: the
+ * call's result, a negated errno on failure, and `ifr` as the kernel left
+ * it. */
+static long if_ioctl(const char *ifname, uint32_t request, unsigned char *ifr,
+                     void (*fill)(unsigned char *ifr))
+{
+    unsigned long args[3];
+    long fd, r;
+    int i;
+
+    for (i = 0; i < IFREQ_SIZE; i++) {
+        ifr[i] = 0;
+    }
+    for (i = 0; ifname[i] != '\0' && i < 15; i++) {
+        ifr[i] = (unsigned char)ifname[i];
+    }
+    if (fill) {
+        fill(ifr);
+    }
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    fd = sock_call(SC_SOCKET, args);
+    if (fd < 0) {
+        return fd;
+    }
+    r = syscall3(SYS_IOCTL, fd, (long)request, (long)ifr);
+    syscall1(SYS_CLOSE, fd);
+    return r;
+}
+
+/** Fill an ifreq with IFF_UP. */
+static void fill_up(unsigned char *ifr)
+{
+    ifr[16] = IFF_UP;
+}
+
+/** Fill an ifreq with 10.0.2.15. */
+static void fill_addr(unsigned char *ifr)
+{
+    put_sin(ifr + 16, GUEST_IP);
+}
+
+/** Fill an ifreq with 255.255.255.0. */
+static void fill_mask(unsigned char *ifr)
+{
+    put_sin(ifr + 16, GUEST_NET);
+}
+
+/** The gateway SIOCADDRT is given, set before the call. */
+static uint32_t route_gateway;
+
+/** Add the default route through `route_gateway`, as `route add default
+ * gw` does: 0, or a negated errno. */
+static long add_default(void)
+{
+    unsigned char rt[RT_SIZE];
+    unsigned long args[3];
+    long fd, r;
+    int i;
+
+    for (i = 0; i < RT_SIZE; i++) {
+        rt[i] = 0;
+    }
+    put_sin(rt + RT_DST, 0);
+    put_sin(rt + RT_GW, route_gateway);
+    put_sin(rt + RT_MASK, 0);
+    rt[RT_FLAGS] = RTF_UP | RTF_GATEWAY;
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    fd = sock_call(SC_SOCKET, args);
+    if (fd < 0) {
+        return fd;
+    }
+    r = syscall3(SYS_IOCTL, fd, SIOCADDRT, (long)rt);
+    syscall1(SYS_CLOSE, fd);
+    return r;
+}
+
+/** Whether /sys/class/net/IF is there. */
+static int listed(const char *ifname)
+{
+    char path[96];
+    long fd = syscall3(SYS_OPEN, (long)join(path, sizeof(path), "/sys/class/net/", ifname, ""),
+                       O_RDONLY | O_DIRECTORY, 0);
+
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    return fd >= 0;
+}
+
+/** Whether the interface `ifname` is down: SIOCGIFFLAGS answers without
+ * IFF_UP. */
+static int down(const char *ifname)
+{
+    unsigned char ifr[IFREQ_SIZE];
+
+    return if_ioctl(ifname, SIOCGIFFLAGS, ifr, 0) == 0 && !(ifr[16] & IFF_UP);
+}
+
+/** Set the interface `ifname` up with 10.0.2.15/24 and the default route
+ * through `gateway`: 1 when every call took. */
+static int configure(const char *ifname, uint32_t gateway)
+{
+    unsigned char ifr[IFREQ_SIZE];
+
+    route_gateway = gateway;
+    return if_ioctl(ifname, SIOCSIFFLAGS, ifr, fill_up) == 0 &&
+           if_ioctl(ifname, SIOCSIFADDR, ifr, fill_addr) == 0 &&
+           if_ioctl(ifname, SIOCSIFNETMASK, ifr, fill_mask) == 0 && add_default() == 0;
+}
+
+/** Ping `ip` up to five times, while the first replies may wait for ARP:
+ * whether one was answered. */
+static int ping_retry(uint32_t ip)
+{
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        if (ping(ip) >= 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Report each of the checks of the device bound again as not run, for the
+ * reason `why`. */
+static void notrun_from_bind(const char *why)
+{
+    report_notrun("bind", why);
+    report_notrun("configure", why);
+    report_notrun("ping-again", why);
+}
+
 /**
  * The checks of the device let go of and bound again: `unbind`,
- * `no-carrier`, `bind` and `ping-again`, for the virtio device `name` of
- * the interface `ifname`, pinging `gateway`. A check that cannot run after
- * one that failed is reported as not run.
+ * `no-interface`, `bind`, `configure` and `ping-again`, for the virtio
+ * device `name` of the interface `ifname`, pinging `gateway`. A check that
+ * cannot run after one that failed is reported as not run.
  */
 static void rebind(const char *name, const char *ifname, uint32_t gateway)
 {
-    char function[16], again[32];
+    char function[16], again[32], path[96], before[16], after[16] = "";
+    unsigned char ifr[IFREQ_SIZE];
     int gone;
 
+    read_text(join(path, sizeof(path), "/sys/class/net/", ifname, "/ifindex"), before,
+              sizeof(before));
     gone = function_of(name, function, sizeof(function)) &&
            write_text(DRIVERS "unbind", function) && !find_device(again, sizeof(again));
     check("unbind", gone, "the write of the function's name to unbind left the device on the bus");
     if (!gone) {
-        report_notrun("no-carrier", "the device was not unbound");
-        report_notrun("bind", "the device was not unbound");
-        report_notrun("ping-again", "the device was not unbound");
+        report_notrun("no-interface", "the device was not unbound");
+        notrun_from_bind("the device was not unbound");
         return;
     }
-    check("no-carrier", link_file(ifname, "carrier", "0") && orphan(ifname) && ping(gateway) < 0,
-          "the unbound device's interface kept its carrier or its device link, or a ping got a "
-          "reply");
+    check("no-interface",
+          !listed(ifname) && if_ioctl(ifname, SIOCGIFINDEX, ifr, 0) == -ENODEV && ping(gateway) < 0,
+          "the unbound device's interface stayed in /sys/class/net or for SIOCGIFINDEX, or a "
+          "ping got a reply");
     gone = !(write_text(DRIVERS "bind", function) && find_device(again, sizeof(again)) &&
-             driven(again) && link_file(ifname, "carrier", "1") && parented(ifname, again));
-    check("bind", !gone,
-          "the write of the function's name to bind did not bring back the device, "
-          "its driver, the interface's carrier and its device link");
+             driven(again) && listed(ifname));
+    if (!gone) {
+        read_text(path, after, sizeof(after));
+    }
+    check("bind",
+          !gone && after[0] != '\0' && !same(before, after) && down(ifname) &&
+              parented(ifname, again),
+          "the write of the function's name to bind did not bring back the device with its "
+          "driver and a new interface of the same name, with a new index, down, whose device "
+          "link leads to it");
     if (gone) {
+        report_notrun("configure", "the device was not bound again");
         report_notrun("ping-again", "the device was not bound again");
         return;
     }
-    check("ping-again", ping(gateway) >= 0, "a ping over the device bound again got no reply");
+    gone = !(configure(ifname, gateway) && link_file(ifname, "carrier", "1"));
+    check("configure", !gone,
+          "the new interface could not be set up, given an address and a default route, or "
+          "read no carrier once up");
+    if (gone) {
+        report_notrun("ping-again", "the new interface was not configured");
+        return;
+    }
+    check("ping-again", ping_retry(gateway), "a ping over the device bound again got no reply");
 }
 
 void probe_main(unsigned long *sp);
@@ -408,9 +613,8 @@ void probe_main(unsigned long *sp)
         rebind(name, ifname, gateway);
     } else {
         report_notrun("unbind", "the bus has no network device");
-        report_notrun("no-carrier", "the bus has no network device");
-        report_notrun("bind", "the bus has no network device");
-        report_notrun("ping-again", "the bus has no network device");
+        report_notrun("no-interface", "the bus has no network device");
+        notrun_from_bind("the bus has no network device");
     }
     report_end();
     if (failures == 0) {
