@@ -97,6 +97,10 @@ case ${1:-} in
         }
         "$nettput" -c "$peer" -p 9 -n 10 drop || exit 1
         sent=$((10 * syns_each))
+        # More than nine attempts' SYNs: an attempt the guest let through
+        # gives it none of its own, so every one was dropped, while a SYN a
+        # full queue refused to send leaves the count short of all of them.
+        least=$((9 * syns_each + 1))
         report_after "$(reports)"
         after=$(report_deny "$judged")
         [ -n "$after" ] || {
@@ -104,8 +108,8 @@ case ${1:-} in
             exit 1
         }
         echo "traffic: port 9: $sent SYNs sent, $((after - before)) counted by the guest"
-        [ $((after - before)) -ge "$sent" ] || {
-            echo "traffic: the guest counted $((after - before)) of the $sent SYNs sent to port 9" >&2
+        [ $((after - before)) -ge "$least" ] || {
+            echo "traffic: the guest counted $((after - before)) of the $sent SYNs sent to port 9, fewer than $least" >&2
             exit 1
         }
         ;;
