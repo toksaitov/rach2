@@ -103,7 +103,10 @@ struct dsp_count_info {
  * the open does not have. The program adds at the tail and the driver's
  * service takes from the head (playback), or the driver adds and the
  * program takes (capture), each under the open's lock.
- * While `running` the driver's stream is started.
+ * While `running` the driver's stream is started. `gone` is set, under the
+ * open's lock, when the driver's device went (`dsp_gone`): the direction
+ * then moves no more, and every call on the open fails with ENODEV, as on a
+ * Linux card that snd_card_disconnect took away.
  */
 struct dsp_chan {
     audio_stream_t stream; /* the driver's view of the direction */
@@ -115,6 +118,7 @@ struct dsp_chan {
     int running;
     uint32_t blocks; /* periods ended since GETOPTR or GETIPTR last read them */
     uint32_t bytes;  /* bytes the stream moved before its last start */
+    int gone;
 };
 
 /*
@@ -271,6 +275,27 @@ static void dsp_record(audio_stream_t *s, uint8_t *buf, size_t size)
     spin_unlock_irqrestore(&d->lock, flags);
 }
 
+/** The streams' `gone`, from the driver when its device goes: mark the
+ * direction gone and wake every waiter, the readers, writers, pollers and
+ * a drain, whose waits then end. */
+static void dsp_gone(audio_stream_t *s)
+{
+    struct dsp *d = (struct dsp *)s->owner;
+    struct dsp_chan *c = s->dir == AUDIO_CAPTURE ? &d->rec : &d->play;
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&d->lock);
+    c->gone = 1;
+    spin_unlock_irqrestore(&d->lock, flags);
+    wq_wake(&d->wq, WQ_ALL);
+}
+
+/** Whether a direction of `d` has gone with its device. */
+static int dsp_is_gone(const struct dsp *d)
+{
+    return d->play.gone || d->rec.gone;
+}
+
 /** The streams' `period`, in the driver's service: count the period and
  * wake the readers or writers, the pollers and a drain. */
 static void dsp_period(audio_stream_t *s)
@@ -369,6 +394,9 @@ static int dsp_start(struct dsp *d)
     struct dsp_chan *c = &d->play;
     int rc;
 
+    if (c->gone) {
+        return -ENODEV;
+    }
     if (!c->ring || c->running || !(d->trigger & PCM_ENABLE_OUTPUT) ||
         c->used < frame_bytes(&c->stream)) {
         return 0;
@@ -390,6 +418,9 @@ static int dsp_record_start(struct dsp *d)
     struct dsp_chan *c = &d->rec;
     int rc;
 
+    if (c->gone) {
+        return -ENODEV;
+    }
     if (!c->ring || c->running || !(d->trigger & PCM_ENABLE_INPUT)) {
         return 0;
     }
@@ -403,9 +434,13 @@ static int dsp_record_start(struct dsp *d)
 
 /** Stop direction `c` if it runs. Playback loses what the driver took and
  * has not played, and capture what the driver has not handed over; what the
- * buffer holds stays. */
+ * buffer holds stays. A direction gone with its device asks its driver
+ * nothing. */
 static void dsp_halt(struct dsp *d, struct dsp_chan *c)
 {
+    if (c->gone) {
+        c->running = 0;
+    }
     if (!c->running) {
         return;
     }
@@ -435,30 +470,30 @@ static void dsp_reset(struct dsp *d)
     dsp_flush(d, &d->rec);
 }
 
-/** The wait condition of a write: room in the buffer. */
+/** The wait condition of a write: room in the buffer, or the device gone. */
 static int dsp_writable(void *arg)
 {
     struct dsp *d = (struct dsp *)arg;
 
-    return d->play.used < d->play.size;
+    return d->play.used < d->play.size || d->play.gone;
 }
 
-/** The wait condition of a read: a byte in the buffer. */
+/** The wait condition of a read: a byte in the buffer, or the device gone. */
 static int dsp_readable(void *arg)
 {
     struct dsp *d = (struct dsp *)arg;
 
-    return d->rec.used > 0;
+    return d->rec.used > 0 || d->rec.gone;
 }
 
-/** The wait condition of a drain: playback stopped, or no whole frame
- * queued and the position past the last frame of data. */
+/** The wait condition of a drain: playback stopped or gone, or no whole
+ * frame queued and the position past the last frame of data. */
 static int dsp_drained(void *arg)
 {
     struct dsp *d = (struct dsp *)arg;
     struct dsp_chan *c = &d->play;
 
-    if (!c->running) {
+    if (!c->running || c->gone) {
         return 1;
     }
     if (c->used >= frame_bytes(&c->stream)) {
@@ -471,8 +506,8 @@ static int dsp_drained(void *arg)
  * Play what is queued and wait until it has played, then stop playback and
  * drop a partial frame left over: SNDCTL_DSP_SYNC. With the trigger off, or
  * in an open with no playback, nothing plays and nothing is dropped. 0,
- * -EINTR when a signal ends the wait, which leaves the stream running, or
- * the driver's error.
+ * -EINTR when a signal ends the wait, which leaves the stream running,
+ * -ENODEV when the device has gone, or the driver's error.
  */
 static int32_t dsp_drain(struct dsp *d)
 {
@@ -483,6 +518,10 @@ static int32_t dsp_drain(struct dsp *d)
     }
     if (wq_wait_event(&d->wq, dsp_drained, d) < 0) {
         return -EINTR;
+    }
+    if (d->play.gone) {
+        d->play.running = 0;
+        return -ENODEV;
     }
     if (d->play.running) {
         dsp_flush(d, &d->play);
@@ -540,34 +579,53 @@ static void dsp_chan_init(struct dsp *d, struct dsp_chan *c, audio_dir_t dir, ui
     c->stream.rate = 8000;
     c->stream.transfer = dir == AUDIO_CAPTURE ? dsp_record : dsp_transfer;
     c->stream.period = dsp_period;
+    c->stream.gone = dsp_gone;
     c->stream.owner = d;
 }
 
-/** Take the driver's stream of each direction `d` has and lay it out: 0, or
- * the first error, with none of them taken. */
+/** Take the driver's stream of direction `c` and lay it out: 0, or the
+ * error, with the stream not taken. */
+static int dsp_take_chan(struct dsp *d, struct dsp_chan *c)
+{
+    int rc = c->drv->stream_open(&c->stream);
+
+    if (rc == 0) {
+        rc = dsp_layout(d, c);
+        if (rc != 0) {
+            c->drv->stream_close(&c->stream);
+        }
+    }
+    return rc;
+}
+
+/**
+ * Take the driver's stream of each direction `d` has and lay it out: 0, or
+ * the first error, with none of them taken. An open of both directions
+ * goes on without one the device lacks, whose `stream_open` is -ENODEV,
+ * as Linux's snd_pcm_oss_open_file opens only the directions a PCM has:
+ * its buffer is left out of `d`, which is the caller's to free, and the
+ * open has the other direction alone. It fails when the device lacks both.
+ */
 static int dsp_take(struct dsp *d)
 {
+    int both = d->play.ring && d->rec.ring;
     int rc = 0;
 
     if (d->play.ring) {
-        rc = d->play.drv->stream_open(&d->play.stream);
-        if (rc == 0) {
-            rc = dsp_layout(d, &d->play);
-            if (rc != 0) {
-                d->play.drv->stream_close(&d->play.stream);
-            }
+        rc = dsp_take_chan(d, &d->play);
+        if (rc == -ENODEV && both) {
+            d->play.ring = NULL;
+            rc = 0;
         }
         if (rc != 0) {
             return rc;
         }
     }
     if (d->rec.ring) {
-        rc = d->rec.drv->stream_open(&d->rec.stream);
-        if (rc == 0) {
-            rc = dsp_layout(d, &d->rec);
-            if (rc != 0) {
-                d->rec.drv->stream_close(&d->rec.stream);
-            }
+        rc = dsp_take_chan(d, &d->rec);
+        if (rc == -ENODEV && both && d->play.ring) {
+            d->rec.ring = NULL;
+            rc = 0;
         }
         if (rc != 0 && d->play.ring) {
             d->play.drv->stream_close(&d->play.stream);
@@ -623,6 +681,12 @@ int32_t dspdev_open_driver(fd_entry_t *e, int flags, audio_driver_t *drv)
         kfree(d);
         return rc;
     }
+    if (!d->play.ring) {
+        kfree(out);
+    }
+    if (!d->rec.ring) {
+        kfree(in);
+    }
     e->priv = d;
     return 0;
 }
@@ -640,6 +704,9 @@ int32_t dspdev_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         return -EBADF;
     }
     while (done < count) {
+        if (c->gone) {
+            return done ? (int32_t)done : -ENODEV;
+        }
         if (c->used >= c->size) {
             rc = dsp_start(d);
             if (rc != 0) {
@@ -687,6 +754,9 @@ int32_t dspdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
         return -EBADF;
     }
     while (done < count) {
+        if (c->gone) {
+            return done ? (int32_t)done : -ENODEV;
+        }
         rc = dsp_record_start(d);
         if (rc != 0) {
             return done ? (int32_t)done : rc;
@@ -721,6 +791,9 @@ short dspdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     short ready = 0;
 
     *wq = &d->wq;
+    if (dsp_is_gone(d)) {
+        return POLLERR | POLLNVAL;
+    }
     if ((events & POLLIN) && d->rec.ring) {
         (void)dsp_record_start(d);
         if (d->rec.used >= d->rec.stream.period_bytes) {
@@ -949,6 +1022,9 @@ int32_t dspdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     int value;
     int32_t rc;
 
+    if (dsp_is_gone(d)) {
+        return -ENODEV;
+    }
     switch (request) {
     case DSP_SPEED:
     case DSP_STEREO:

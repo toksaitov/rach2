@@ -102,7 +102,8 @@ static uint32_t got_len;
 
 static fd_entry_t entry;
 static struct open_file description;
-static int signal_after = -1; /* ticks before a signal ends a wait; -1 none */
+static int signal_after = -1;   /* ticks before a signal ends a wait; -1 none */
+static void (*wait_hook)(void); /* called before each tick of a wait, or NULL */
 static unsigned waits, wakes;
 static uint32_t masked; /* interrupts are off, under the open's lock */
 
@@ -366,6 +367,10 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         if (signal_after >= 0 && n >= signal_after) {
             signal_after = -1;
             return -EINTR;
+        }
+        if (wait_hook) {
+            wait_hook();
+            continue;
         }
         if ((!m.running && !cap.running) || n > 100000) {
             check(0, "a wait that nothing ends");
@@ -1075,7 +1080,9 @@ static void row_read_trigger(void)
 }
 
 /** O_RDWR: both streams, set alike, each started by its own direction and
- * stopped by RESET; an open without both directions. */
+ * stopped by RESET; an open refused by a busy direction, and the opens of
+ * one direction where the device lacks the other. dsp_gone_hosttest.c has
+ * O_RDWR on a device of one direction. */
 static void row_duplex(void)
 {
     uint32_t len;
@@ -1106,20 +1113,22 @@ static void row_duplex(void)
     check(m.closes == 1 && cap.closes == 1, "both streams given back");
 
     begin("duplex refused");
-    cap.refuse_open = -ENODEV;
-    check(open_dsp(2) == -ENODEV, "no capture stream is ENODEV");
+    cap.refuse_open = -EBUSY;
+    check(open_dsp(2) == -EBUSY, "a busy capture stream fails the open");
     check(mix.list == NULL && m.s == NULL && m.closes == 1, "playback's stream is given back");
-    check(open_dsp(0) == -ENODEV, "so is an open for reading");
+    cap.refuse_open = -ENODEV;
+    check(open_dsp(0) == -ENODEV, "no capture stream: an open for reading is ENODEV");
     check(open_dsp(1) == 0, "an open for writing succeeds");
     check(call(DSP_SETDUPLEX, &value) == -EINVAL, "SETDUPLEX is EINVAL");
     check(ask(DSP_GETTRIGGER, 0) == PCM_ENABLE_OUTPUT, "the output trigger alone");
     check(dspdev_read(&entry, (char __user *)got, 4) == -EBADF, "a read is EBADF");
     close_dsp();
     cap.refuse_open = 0;
+    m.refuse_open = -EBUSY;
+    check(open_dsp(2) == -EBUSY && cap.s == NULL && cap.closes == 0,
+          "a busy playback stream fails the open, before capture is taken");
     m.refuse_open = -ENODEV;
-    check(open_dsp(2) == -ENODEV && cap.s == NULL && cap.closes == 0,
-          "no playback stream is ENODEV, before capture is taken");
-    check(open_dsp(0) == 0, "an open for reading succeeds");
+    check(open_dsp(0) == 0, "no playback stream: an open for reading succeeds");
     close_dsp();
 }
 

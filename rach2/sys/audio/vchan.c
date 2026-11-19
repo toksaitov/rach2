@@ -814,6 +814,7 @@ static int vchan_capture_open(audio_stream_t *s)
             *m = *s;
             m->transfer = vchan_capture_feed;
             m->period = vchan_clock_period;
+            m->gone = NULL;
             input.hw = audio_hw;
             rc = input.hw->stream_open(m);
         }
@@ -855,6 +856,7 @@ static int vchan_capture_setup(audio_stream_t *s)
         }
         m->transfer = vchan_capture_feed;
         m->period = vchan_clock_period;
+        m->gone = NULL;
         rc = input.hw->stream_setup(m);
         if (rc != 0) {
             *m = old;
