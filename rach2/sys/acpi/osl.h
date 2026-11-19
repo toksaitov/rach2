@@ -21,4 +21,27 @@ void osl_set_root(uint64_t rsdp);
  */
 void osl_drain(void);
 
+/*
+ * A work for ACPICA's thread that is queued once however often it is asked
+ * before it runs, and is never refused, as Linux's work_struct on its
+ * workqueue: its `function` with `context`, which the caller sets, and the
+ * link and mark osl.c keeps. A driver whose request a full queue must not
+ * drop uses one in place of `AcpiOsExecute`.
+ */
+struct osl_work {
+    void (*function)(void *context);
+    void *context;
+    struct osl_work *next;
+    int pending;
+};
+
+/**
+ * Queue `work`, unless it is queued and has not begun to run; it runs after
+ * the `AcpiOsExecute` work queued before it, and its mark is cleared as it
+ * begins, so a request while it runs queues it again. Any context, an
+ * interrupt or a spinlock held with interrupts off among them; it does not
+ * sleep.
+ */
+void osl_queue_work(struct osl_work *work);
+
 #endif /* _ACPI_OSL_H_ */
