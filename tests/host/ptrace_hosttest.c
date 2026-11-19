@@ -472,6 +472,14 @@ void signal_post_info(process_t *p, int sig, const struct k_siginfo *info)
     posted_info = *info;
 }
 
+/** Put `self` in the stop `status`, unreported, as the kernel's does under
+ * the signal state's lock, which one thread does not need. */
+void signal_trap_publish(process_t *self, uint32_t status)
+{
+    self->ptrace_reported = 0;
+    self->ptrace_status = status;
+}
+
 /** Record the receiver and the siginfo of a signal sent to a thread. */
 void signal_post_thread(process_t *p, int sig, const struct k_siginfo *info)
 {
