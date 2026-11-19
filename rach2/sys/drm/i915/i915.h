@@ -1288,8 +1288,10 @@ struct intel_hotplug {
  * 16-235, which the pipe's colour matrix makes), the infoframes enabled in
  * `infoframes` (VIDEO_DIP_ENABLE_*_HSW) and their packed bytes, `avi`,
  * `spd` and `vs` with `vs_len`, and GCP's value, `gcp`; and
- * `pixel_multiplier`, 2 for a DBLCLK mode, 1 otherwise. `well` says the
- * pipe holds a reference to the display power well.
+ * `pixel_multiplier`, 2 for a DBLCLK mode, 1 otherwise. Audio, HDMI's or
+ * DisplayPort's: `has_audio`, and the ELD the HD Audio codec reads,
+ * `eld`, the connector's with the A/V delay of the mode (intel_audio.c).
+ * `well` says the pipe holds a reference to the display power well.
  */
 struct intel_crtc_config {
     uint8_t active;
@@ -1319,7 +1321,33 @@ struct intel_crtc_config {
     uint32_t avi_len, spd_len, vs_len;
     uint32_t gcp;
     uint32_t pixel_multiplier;
+    uint8_t has_audio;
+    uint8_t eld[DRM_ELD_MAX];
     uint8_t well;
+};
+
+/*
+ * The audio of the transcoders (intel_audio.c), Linux's
+ * intel_display.audio: under `mutex`, each transcoder's output that plays
+ * audio, its port, 0 for none, its output type and its ELD, which the
+ * audio component reads; the sample rate each port's codec last asked
+ * for, 0 for none; and the references the component holds on the power.
+ * `registered` says the display is the audio component's. The mutex comes
+ * after the DRM device's mode lock and the audio component's lock, and
+ * nothing is taken under it but the hardware's locks.
+ */
+struct intel_audio_state {
+    int port;
+    int output;
+    uint8_t eld[DRM_ELD_MAX];
+};
+
+struct intel_audio {
+    struct mutex mutex;
+    struct intel_audio_state state[I915_NUM_PIPES];
+    int sample_rate[5];
+    uint32_t power_refcount;
+    uint8_t registered;
 };
 
 /*
@@ -1499,6 +1527,7 @@ struct intel_display {
     struct drm_connector connector;
     struct intel_dp dp;
     struct intel_ddi_port ddi[3];
+    struct intel_audio audio;
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
     struct mutex gmbus_mutex;
     int ddc_links[7]; /* the connectors' `ddc` links in /sys, or 0 */
@@ -3478,6 +3507,11 @@ void intel_i2c_unregister(struct drm_i915_private *i915);
  * a process, spun on the device's clock before there is one. */
 void intel_display_msleep(struct drm_i915_private *i915, uint32_t ms);
 
+/** Wait for pipe `pipe`'s next vblank by its frame counter, 100 ms at
+ * most, as Linux's intel_crtc_wait_for_next_vblank; a pipe whose counter
+ * does not move is logged. (intel_display.c) */
+void intel_crtc_wait_for_next_vblank(struct drm_i915_private *i915, int pipe);
+
 /**
  * Set the sequencer up, Linux's intel_pps_init: the delays chosen from its
  * registers, the VBT and the eDP specification's limits and written back,
@@ -3778,6 +3812,56 @@ void intel_hdmi_dual_mode_tmds(struct intel_ddi_port *p, int enable);
  * all off when `enable` is 0, Linux's hsw_set_infoframes. */
 void intel_hdmi_set_infoframes(struct drm_i915_private *i915, int enable,
                                const struct intel_crtc_config *cfg);
+
+/*
+ * Audio (intel_audio.c), Linux's intel_audio.c for Haswell: the ELD the
+ * HD Audio codec reads through the audio component, and the transcoder's
+ * audio enable and clocks.
+ */
+
+/** Make the audio state's lock, at the display's init. */
+void intel_audio_init(struct drm_i915_private *i915);
+
+/** Make the display the audio component's, once the device is
+ * registered, Linux's intel_audio_register. */
+void intel_audio_register(struct drm_i915_private *i915);
+
+/** Withdraw the display from the audio component, Linux's
+ * intel_audio_deinit, before the display goes. */
+void intel_audio_deinit(struct drm_i915_private *i915);
+
+/** Whether output `output` on DDI `port` may carry audio: HDMI, or
+ * DisplayPort on a port but A, Linux's intel_dp_port_has_audio. */
+int intel_audio_port_has_audio(int output, int port);
+
+/**
+ * Set `cfg->has_audio` and `cfg->eld` for `conn`, which drives `cfg`,
+ * Linux's intel_hdmi_has_audio or intel_dp_has_audio and
+ * intel_audio_compute_config: audio when the port carries it, an HDMI
+ * output sends HDMI, and "audio" is on, or automatic with a sink whose
+ * EDID has basic audio, and the connector has an ELD; the ELD's byte 6
+ * then holds the mode's A/V delay in units of 2 ms.
+ */
+void intel_audio_compute_config(const struct drm_connector_state *conn,
+                                const struct drm_edid_hdmi_info *info,
+                                struct intel_crtc_config *cfg);
+
+/** Turn audio on for pipe `pipe`'s `cfg` once its transcoder and port are
+ * on, Linux's intel_audio_codec_enable and hsw_audio_codec_enable, and
+ * tell the codec; nothing without `cfg->has_audio`. Under the mode lock;
+ * waits a vblank. */
+void intel_audio_codec_enable(struct drm_i915_private *i915, int pipe,
+                              const struct intel_crtc_config *cfg);
+
+/** Turn it off before the transcoder or port goes, Linux's
+ * intel_audio_codec_disable and hsw_audio_codec_disable, and tell the
+ * codec. Under the mode lock; waits two vblanks. */
+void intel_audio_codec_disable(struct drm_i915_private *i915, int pipe,
+                               const struct intel_crtc_config *cfg);
+
+/** Whether transcoder `trans` has audio enabled in the hardware, Linux's
+ * intel_ddi_is_audio_enabled, for the readout. */
+int intel_audio_hw_enabled(struct drm_i915_private *i915, int trans);
 
 /*
  * Hotplug (intel_hotplug.c), Linux's intel_hotplug.c and the PCH's part

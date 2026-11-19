@@ -535,6 +535,17 @@ void intel_display_fini(struct drm_i915_private *i915)
     (void)i915;
 }
 
+/* The audio component, intel_audio.c, which i915_hdmi_hosttest runs. */
+void intel_audio_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void intel_audio_deinit(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 void drm_mode_config_cleanup(struct drm_device *dev)
 {
     (void)dev;
