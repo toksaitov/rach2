@@ -1,7 +1,7 @@
 {
  "schema_version": 1,
  "family_id": "guest.hvc",
- "summary": "The virtio console as a program sees it: with one of its ports as the kernel's console, as on every guest case's machine, and its absence when the boot line names the UART, each case booting the test image and running hvcmusl; and as the kernel stops it: the device reset at a restart, and a panic's record that reaches the port with the transmit lock held",
+ "summary": "The virtio console as a program sees it: with one of its ports as the kernel's console, as on every guest case's machine, and its absence when the boot line names the UART, each case booting the test image and running hvcmusl; and as the kernel stops it: the device reset at a restart, and a panic's record that reaches the port with the transmit lock held; and as QEMU adds and removes ports after the boot: a console port that becomes hvc0, gets the console's record through emerg_wr and is a terminal of its own, and a generic port that is a byte device by its number and its name",
  "cases": [
   {
    "case_id": "guest.hvc.port",
@@ -588,6 +588,199 @@
     "plan": "none",
     "class": "QEMU",
     "reason": "the case panics the kernel on purpose on a virtio console of QEMU's, which the Lenovo does not have"
+   }
+  },
+  {
+   "case_id": "guest.hvc.ports",
+   "behavior": "a virtio console of four ports that a machine with COM1 has from the boot, with a generic port named org.rach2.boot, gives every port its nodes: the generic port is /dev/vport0p1 and /dev/virtio-ports/org.rach2.boot, a byte device that tells the host's end it is open; a console port added through QMP after the boot becomes hvc0, which the boot line names, gets the console's record of it through emerg_wr and is /dev/hvc0, a terminal of its own whose output reaches the host; and a port added at port 3 through QMP is /dev/vport0p3 and /dev/virtio-ports/org.rach2.late, which reads and writes the host's end and goes when QMP removes the port",
+   "units": [
+    "hvc"
+   ],
+   "domain": "machine",
+   "architectures": [
+    "i686",
+    "x86_64"
+   ],
+   "workload": {
+    "arguments": [],
+    "inputs": {},
+    "repetitions": 1,
+    "seed": null
+   },
+   "requirements": {
+    "host_api": "c",
+    "tools": [],
+    "features": {}
+   },
+   "execution": {
+    "program": "hvc_scenario",
+    "stdin": null,
+    "role": "ordinary",
+    "privileges": "an ordinary user",
+    "isolation": [
+     {
+      "fixture": "scratch"
+     }
+    ],
+    "children": "none",
+    "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"
+   },
+   "steps": [
+    {
+     "step_id": "ports",
+     "stage": "execute",
+     "machine": "fixture",
+     "does": "boot to the debug shell, run hvcmusl's boot mode, add a virtconsole with a file as its host's end and run hvcmusl's tty mode, add a virtserialport at port 3 whose host's end is an abstract Unix socket, which the scenario connects to and writes pong to, and run hvcmusl's late mode, remove the port and run hvcmusl's gone mode, and end the machine"
+    }
+   ],
+   "machines": [
+    {
+     "machine_id": "fixture",
+     "qemu": {
+      "kernel": "kernel",
+      "initrd": "test-image",
+      "disks": [],
+      "cpu": "max",
+      "processors": 1,
+      "memory_bytes": 134217728,
+      "firmware": "direct",
+      "devices": [
+       {
+        "model": "virtio-serial-pci",
+        "id": "vs",
+        "properties": {
+         "max_ports": "4"
+        }
+       },
+       {
+        "model": "virtserialport",
+        "bus": "vs.0",
+        "properties": {
+         "name": "org.rach2.boot"
+        }
+       }
+      ],
+      "boot_options": [
+       "rach2.rescue",
+       "console=hvc0",
+       "console=ttyS0"
+      ]
+     },
+     "console": "serial",
+     "qmp": true,
+     "helper": false
+    }
+   ],
+   "assertions": [
+    {
+     "assertion_id": "boot",
+     "checks": "hvcmusl boot exits 0: one device is bound to virtio_console; /dev/vport0p1 and /dev/virtio-ports/org.rach2.boot are one character device of major 245; with no host's end a read gives the end of a file, poll gives POLLHUP and not POLLOUT, a write without a wait fails with EAGAIN and a second open fails with EBUSY; /dev/hvc0 is absent; and the log says console: none: console=hvc0 names no port now",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "emergency",
+     "checks": "the virtconsole's host's end gets the driver's record virtio_console: port: virtio0: port 0 added, which the kernel writes before the port carries the log, so only through emerg_wr, whose bytes QEMU gives its console port 0",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "terminal",
+     "checks": "hvcmusl tty exits 0: /dev/hvc0 comes while hvcmusl sleeps and so lets the driver's thread run, which the debug shell does not; it is the terminal 229:0, which takes a line, and /dev/vport0p0, the console port's vport node, refuses an open with ENXIO",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "tty-out",
+     "checks": "the line written to /dev/hvc0 reaches the virtconsole's host's end as hvc-tty and a carriage return and newline, through the terminal's discipline",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "late",
+     "checks": "hvcmusl late exits 0: /dev/virtio-ports/org.rach2.late comes; /dev/vport0p3 and /dev/virtio-ports/org.rach2.late are one character device of major 245, which takes a line, gives pong and a newline, the bytes of its host's end, and polls writable",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "late-out",
+     "checks": "the line written to the late port reaches its host's end as ping and a newline",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "removed",
+     "checks": "after QMP's device_del, hvcmusl gone exits 0: the late port's nodes go and the boot port's stays",
+     "source": "scenario"
+    }
+   ],
+   "branches": [],
+   "termination": {
+    "end": "exited",
+    "value": 0
+   },
+   "progress": [
+    {
+     "witness_id": "stage",
+     "kind": "step",
+     "means": "a step of the manifest has ended",
+     "limit": 1
+    }
+   ],
+   "bounds": {
+    "case": {
+     "floor_us": 5000000,
+     "initial_us": 300000000,
+     "ceiling_us": 900000000
+    },
+    "gap": {
+     "floor_us": 1000000,
+     "initial_us": 150000000,
+     "ceiling_us": 600000000
+    },
+    "stages": {
+     "prepare": {
+      "floor_us": 100000,
+      "initial_us": 30000000,
+      "ceiling_us": 120000000
+     },
+     "boot": {
+      "floor_us": 1000000,
+      "initial_us": 90000000,
+      "ceiling_us": 300000000
+     },
+     "cleanup": {
+      "floor_us": 100000,
+      "initial_us": 30000000,
+      "ceiling_us": 120000000
+     }
+    }
+   },
+   "resources": {
+    "cpu_millis": 1000,
+    "cpu_ceiling_millis": 1000,
+    "memory_bytes": 268435456,
+    "disk_bytes": 16777216,
+    "locks": [],
+    "ports": 0,
+    "loop_devices": 0
+   },
+   "prepare": [
+    {
+     "name": "kernel",
+     "node": "rach2/kernel",
+     "per_architecture": true
+    },
+    {
+     "name": "test-image",
+     "node": "images/test.krffs",
+     "per_architecture": true
+    },
+    {
+     "name": "hvc_scenario",
+     "node": "tests/cases/machine/hvc_scenario",
+     "per_architecture": false
+    }
+   ],
+   "timing": [],
+   "native": {
+    "plan": "none",
+    "class": "QEMU",
+    "reason": "the ports are QEMU's virtio-serial-pci's, added and removed through QMP, which the Lenovo has neither of"
    }
   }
  ]
