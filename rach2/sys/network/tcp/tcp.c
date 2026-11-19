@@ -361,6 +361,7 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
     }
     return wnd;
 }
+
 /**
  * The window field of a segment of `flags` about to be sent: the window
  * shifted by the connection's scale, except in a SYN, whose field is never
@@ -369,12 +370,25 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
  * carries an ACK, since only those follow the peer's SYN, which `rcv_nxt`
  * is taken from: the SYN of an active open records nothing, as Linux takes
  * rcv_wup from the peer's SYN.
+ *
+ * Under `tcp_delack` an acknowledgement after the handshake offers the
+ * window selected now (`tcp_rcv_window`), data's and probes' too, as
+ * Linux's tcp_transmit_skb selects it for each, and ends quick mode while
+ * less than half the largest window is free, as __tcp_select_window does.
  */
 static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 {
     int syn = (flags & TCP_SYN) != 0;
-    uint32_t field = syn ? tcb->rcv_wnd : tcb->rcv_wnd >> tcb->rcv_wscale;
-    uint32_t edge;
+    uint32_t field, edge, most = (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale;
+
+    if (tcp_delack && !syn && (flags & TCP_ACK)) {
+        tcb->rcv_wnd = tcp_rcv_window(tcb);
+        if (tcb->recv_size - (tcb->recv_tail - tcb->recv_head) <
+            (most > tcb->recv_size ? tcb->recv_size : most) / 2u) {
+            tcb->ack_quick = 0;
+        }
+    }
+    field = syn ? tcb->rcv_wnd : tcb->rcv_wnd >> tcb->rcv_wscale;
 
     if (field > TCP_WINDOW_SIZE) {
         field = TCP_WINDOW_SIZE;
@@ -3640,6 +3654,7 @@ static int tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload, 
         seq = tcb->rcv_nxt;
     }
     if (tcb->rcv_adv_set && (int32_t)(seq - tcb->rcv_adv) >= 0) {
+        tcp_enter_quickack(tcb); /* Linux's out_of_window, a probe's too */
         return 0;
     }
     if (seq != tcb->rcv_nxt) {
@@ -4015,16 +4030,20 @@ static int tcp_ack_ok(struct tcb *tcb, uint32_t ack_num)
  * `tcp_rx_check` let on, when it has data or a FIN and was taken whole
  * before, its end at or before rcv_nxt: the peer sent it again because
  * this side's acknowledgement was lost, and enter quick mode
- * (`tcp_enter_quickack`). Linux's tcp_data_queue counts it,
- * in ESTABLISHED, the FIN_WAIT states, CLOSE_WAIT, and CLOSING and
- * LAST_ACK unless the segment acknowledged this side's FIN, which
- * tcp_rcv_state_process ends the connection at first; the arms of
- * `tcp_rx_addr` call this in the same places.
+ * (`tcp_enter_quickack`). Any segment with data or a FIN schedules an
+ * acknowledgement (`ack_sched`), as Linux's inet_csk_schedule_ack.
+ * Linux's tcp_data_queue counts it, in ESTABLISHED, the FIN_WAIT states,
+ * CLOSE_WAIT, and CLOSING and LAST_ACK unless the segment acknowledged
+ * this side's FIN, which tcp_rcv_state_process ends the connection at
+ * first; the arms of `tcp_rx_addr` call this in the same places.
  */
 static void tcp_rx_resent(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len)
 {
     uint32_t end = seq + len + ((flags & TCP_FIN) != 0);
 
+    if (end != seq) {
+        tcb->ack_sched = 1;
+    }
     if (end != seq && (int32_t)(end - tcb->rcv_nxt) <= 0) {
         net_mib.tcp_delayed_ack_lost++;
         tcp_enter_quickack(tcb);
@@ -4298,7 +4317,6 @@ static void tcp_enter_quickack(struct tcb *tcb)
 {
     tcp_delack_quick(tcb);
     tcb->pingpong = 0;
-    tcb->ack_sched = 1;
 }
 
 /**
