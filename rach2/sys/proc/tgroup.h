@@ -37,6 +37,10 @@ struct tgroup {
     uint32_t refs;
     uint32_t live;          /* threads that have not ended */
     struct process *leader; /* its id is the process id */
+    /* Every published record of the process, oldest first, by
+     * `group_link` (process.c, under the big kernel lock), as Linux's
+     * `thread_head`: the sums of the process's usage walk it. */
+    struct process *threads;
     /* Unique for the boot, from 1: names the lifetime of the process id, so
      * that a process group given that id later is not taken for this
      * process's (`pgrp_serial` in process.h). */
