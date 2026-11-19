@@ -137,16 +137,12 @@ static void intx_unmask(struct vfio_device *d)
     intx_apply(d);
 }
 
-/** The unmask eventfd rose: unmask, taking the count. */
+/** The unmask eventfd rose: unmask, or signal again while the line is
+ * still asserted, as Linux's virqfd runs vfio_pci_intx_unmask_handler and
+ * then vfio_send_intx_eventfd; the count is taken. */
 static int unmask_signal(struct eventfd_hook *h)
 {
-    struct vfio_device *d = ((struct unmask_hook *)h)->d;
-
-    if (d->irq_type == VFIO_PCI_INTX_IRQ_INDEX && d->intx_masked &&
-        !(pci_read_config16(DEV(d), PCI_STATUS) & STATUS_INTX)) {
-        d->intx_masked = 0;
-        intx_apply(d);
-    }
+    intx_unmask(((struct unmask_hook *)h)->d);
     return 1;
 }
 
