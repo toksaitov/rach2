@@ -1746,6 +1746,15 @@ int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
     return 0;
 }
 
+/** The cache drop of an O_DIRECT write, which no row opens. */
+void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len)
+{
+    (void)mnt;
+    (void)handle;
+    (void)offset;
+    (void)len;
+}
+
 /** The disk-backed window's sync, which no row reaches: 0. */
 int pc_sync(void)
 {
