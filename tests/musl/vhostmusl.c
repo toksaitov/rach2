@@ -339,8 +339,8 @@ static int rx_used(uint64_t *n)
 
 /**
  * Look at the receive ring's used entries not yet seen for the frame
- * `match` accepts with `text`: 1 with the buffer's offset in `*at`, else 0
- * once every used entry is seen, or when the used index is not one a
+ * `match` accepts with `text`: 1 with the buffer's offset in `*at`, 0 once
+ * every used entry is seen, or -1 as `rx_used` fails, for a used index no
  * device can give.
  */
 static int find_rx(int (*match)(const unsigned char *, uint32_t, const char *), const char *text,
@@ -349,7 +349,7 @@ static int find_rx(int (*match)(const unsigned char *, uint32_t, const char *), 
     uint64_t end;
 
     if (rx_used(&end) != 0) {
-        return 0;
+        return -1;
     }
     while (rx_seen != end) {
         uint32_t id, len;
@@ -470,22 +470,27 @@ static int offer_one(void)
  * which comes once the buffer's frame is on the ring, settle the count and
  * look at the frame, so that each frame has its own call before the next
  * buffer is offered. Other frames the stack sends are passed over, however
- * many come. The buffer's offset; -1 when a kick fails; when a read of the
- * call or the count fails, -2 if the frame is on the ring, else -1.
+ * many come. The buffer's offset; -1 when a kick fails or the used index is
+ * one no device can give; when a read of the call or the count fails, -2 if
+ * the frame is on the ring, else -1.
  */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
 {
-    int at;
+    int at, r;
 
     for (;;) {
         if (offer_one() != 0) {
             return -1;
         }
         if (take_call(call) != 0 || settle_calls(call) != 0) {
-            return find_rx(match, text, &at) ? -2 : -1;
+            return find_rx(match, text, &at) == 1 ? -2 : -1;
         }
-        if (find_rx(match, text, &at)) {
+        r = find_rx(match, text, &at);
+        if (r < 0) {
+            return -1;
+        }
+        if (r == 1) {
             return at;
         }
     }
