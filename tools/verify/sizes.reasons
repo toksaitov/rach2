@@ -14,8 +14,8 @@ krffs/defrag.krffs.c:main lines 186 one procedure over a file format, in the ord
 krffs/edfs.krffs.c:main complexity 78 one procedure over a file format, in the order the format is read
 krffs/edfs.krffs.c:main lines 289 one procedure over a file format, in the order the format is read
 
-krffs/fsck.krffs.c:main complexity 91 one procedure over a file format, in the order the format is read
-krffs/fsck.krffs.c:main lines 444 one procedure over a file format, in the order the format is read
+krffs/fsck.krffs.c:main complexity 92 one procedure over a file format, in the order the format is read
+krffs/fsck.krffs.c:main lines 453 one procedure over a file format, in the order the format is read
 
 krffs/fsviz.krffs.c:main complexity 87 one procedure over a file format, in the order the format is read
 krffs/fsviz.krffs.c:main lines 412 one procedure over a file format, in the order the format is read
@@ -141,10 +141,6 @@ rach2/sys/fs/fat32name.c:fat32_name_short complexity 26 a parser over an externa
 
 rach2/sys/fs/fatcommon.c:fat_name_units complexity 29 a parser over an external format, one check per field in the format's order
 
-rach2/sys/fs/krffs.c:krffs_allocate_err nesting 5 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_repair_at complexity 42 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/procfs.c:procfs_gen_text complexity 35 a dispatcher, one arm per command, read as a table
 
@@ -433,6 +429,7 @@ tests/host/kheap_hosttest.c:main lines 115 a test's rows, each a case, read as o
 
 tests/host/klog_hosttest.c:main lines 267 a test's rows, each a case, read as one table
 
+tests/host/krffs_hosttest.c:disk_truncate_case params 7 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_file_is_whole nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table

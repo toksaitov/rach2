@@ -874,6 +874,13 @@ static int synth_is_link(const struct vpath *vp)
     return 0;
 }
 
+/** No synthetic block device is opened in these rows. */
+static int synth_is_block(const struct vpath *vp)
+{
+    (void)vp;
+    return 0;
+}
+
 /** Reject an unexpected synthetic open. */
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
