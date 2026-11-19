@@ -1148,6 +1148,9 @@
 #define BLM_CPU_PWM_GRANULARITY   (1u << 27)
 #define BLC_PWM_CPU_CTL           0x48254
 #define HSW_BLC_PWM2_CTL          0x48350
+#define HSW_BLC_PWM2_DATA         0x48354
+#define HSW_BLC_MISC_CTL          0x48360
+#define HSW_BLC_PWM1_TO_CPU       (1u << 0)
 #define UTIL_PIN_CTL              0x48400
 #define UTIL_PIN_ENABLE           (1u << 31)
 #define UTIL_PIN_MODE_MASK        (0xfu << 24)
