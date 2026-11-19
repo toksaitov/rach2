@@ -394,8 +394,16 @@ and at least 1, and that maximum, so that a level saved at 0 does not
 start the machine with its screen dark.
 It saves each backlight's level there within a second of each change, so
 that a reset or a power cut keeps the level set, and again when it stops
-the machine, each time under a temporary name renamed into place and only
-when the level differs from what the file holds.
+the machine, each time only when the level differs from what the file
+holds: written to
+.Ar NAME Ns Pa .new
+and flushed, renamed into place, and the directory flushed.
+A volume whose rename removes the old file before the new one takes its
+name, as KRFFS's, can be stopped between the two, so when
+.Ar NAME
+is missing the level is read from
+.Ar NAME Ns Pa .new ,
+if that ends in a newline.
 It keeps at most four backlights, those present at boot.
 .Pp
 Every build keeps the mixer's levels across a reboot, as alsactl store and
@@ -414,29 +422,34 @@ the file has one line a channel,
 .Ql NAME L:R ,
 NAME being OSS's name of the channel, such as
 .Ql vol .
-A missing file leaves the driver's levels alone, and so does a malformed
-one, after the diagnostic below; a machine with no mixer keeps nothing.
-It puts
+Its last line is
 .Xr mixer 1 Ns 's
-record of a mute back from
-.Pa /var/lib/mixer.mute
-to
+record of a mute,
+.Ql mute L:R
+with the level before the mute, or
+.Ql mute none ,
+which
+.Nm
+puts back in
 .Pa /var/run/mixer.mute ,
 so that a volume muted at the halt is still muted, and can be unmuted,
-after it.
+after it; one file holds both, so no stop leaves the muted level without
+the record that unmutes it.
+A file with no
+.Ql mute
+line, as an older
+.Nm
+wrote, takes the record from
+.Pa /var/lib/mixer.mute ,
+which goes once the file is next saved.
+A missing file leaves the driver's levels alone, and so does a malformed
+one, after the diagnostic below; a machine with no mixer keeps nothing.
 Within a second of each change of a level or of the record, as alsactl's
 daemon mode does, and again when it stops the machine, it saves each
-channel's level and the record there, under temporary names renamed into
-place, or removes the kept record when there is none.
-.Nm
-saves only when it stops the machine and
-.Xr mixer 1
-writes nothing there itself, so a level set and then lost to a power cut,
-or to a
-.Fl f
-that stops the machine without signalling
-.Nm ,
-is not kept, as on Linux without a running daemon.
+channel's level and the record there, as it saves a backlight's, and
+reads
+.Pa /var/lib/mixer.new
+as it reads a backlight's replacement.
 .Pp
 Every build but the recovery system's, on a boot whose line has
 .Ql rach2.slot=candidate
@@ -650,7 +663,7 @@ and written back at boot.
 .It Pa /var/lib/ipv6-stable-secret
 IPv6's stable secret, an address's text, mode 0600, made at the first
 boot.
-.It Pa /var/lib/mixer , Pa /var/lib/mixer.mute
+.It Pa /var/lib/mixer
 The mixer's levels and its record of a mute, saved when they change and
 when the machine stops, and written back at boot.
 .It Pa /etc/rach2/limits
