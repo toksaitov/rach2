@@ -328,6 +328,12 @@ int main(void)
     sample(I915_STATUS_PWM, "HSW_BLC_PWM2_DATA 0x0190012c period=400 duty=300");
     sample(I915_STATUS_PWM, "cpu_pin=PWM2 pch_input=PWM1");
     sample(I915_STATUS_PWM, "pwm_output=enabled programmed_frequency=8789 Hz");
+    util_pin &= ~UTIL_PIN_ENABLE;
+    sample(I915_STATUS_PWM, "pwm_output=disabled programmed_frequency=8789 Hz");
+    util_pin |= UTIL_PIN_ENABLE;
+    pwm2_ctl &= ~BLM_PWM_ENABLE;
+    sample(I915_STATUS_PWM, "pwm_output=disabled programmed_frequency=8789 Hz");
+    pwm2_ctl |= BLM_PWM_ENABLE;
     sample(I915_STATUS_PWM, "transcoder=eDP blinking=1");
     pch_ctl &= ~BLM_PCH_OVERRIDE_ENABLE;
     granularity = LPT_PWM_GRANULARITY;
