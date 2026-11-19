@@ -70,6 +70,35 @@ A request of 512 bytes or more is
 .Er EINVAL ,
 and a write while the kernel runs no ACPI interpreter is
 .Er ENODEV .
+.It Pa /proc/asound
+Linux's ALSA files for the card of the Intel display's HDMI codec, which
+.Pa /dev/dsp1
+plays through.
+.Pa cards
+lists it as Linux does,
+.Ql " 0 [HDMI           ]: HDA-Intel - HDA Intel HDMI"
+and a line with the controller's address and interrupt, or reads
+.Ql --- no soundcards ---
+while the card is not there.
+The directory
+.Pa card0 ,
+there only with the card, has
+.Pa id ,
+.Ql HDMI ,
+and
+.Pa eld# Ns Ar C . Ns Ar N
+for each device entry
+.Ar N
+of each HDMI or DisplayPort pin of the codec at address
+.Ar C ,
+in the form of Linux's
+.Fn snd_hdmi_print_eld_info :
+.Ql monitor_present ,
+.Ql eld_valid ,
+the pin, entry and converter, and for a valid ELD the monitor's name,
+connection type, versions, IDs, latency, speakers and each short audio
+descriptor.
+HDA's analog codec and the Sound Blaster 16 are not listed.
 .It Pa /proc/audio
 The active audio driver and cached HDA enumeration and stream state.
 The file exists when audio is disabled; then
