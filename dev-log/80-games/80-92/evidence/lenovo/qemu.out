@@ -1,0 +1,26 @@
+qemu: booting at host SSH port 57555
+206ec28ed6989c01fa87f7829311e9840e449f67c147389979d5fb8a77851390  kernel
+kernel rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.slot=candidate rach2.disk=ahci rach2.ip=10.0.2.15/24 rach2.gateway=10.0.2.2 rach2.console=term
+/dev/disk0p3 / ext2 rw,relatime 0 0
+br-------- 1 root root 240, 70 Nov 19 12:11 /dev/disk0p6
+Filesystem     1024-blocks     Used Available Capacity Mounted on
+/dev/disk0p3      16513960 14332988   1342112      92% /
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+crysis-case: /dev/disk0p6 read-only on /data/owner
+crysis-case: private game: 2358 links, copies of, 1048576 KiB reserved
+wm: result: mode: ok output Virtual-1 mode 1366x768 by name
+crysis: session: output Virtual-1, renderer virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+crysis: volume: vol 1:1
+CRYSIS PREPARED
+crysis: started: crysis.sh run -devmode +map island +exec benchmark_gpu
+crysis: loaded in 10.69 s
+Resetting rate control (71612 frames)
+crysis: loop 0 finished at frame 2353
+crysis: ended after 114 s, status 0
+crysis: check: loop0: ok 23.48 fps (gate 0) linux 45.17, play 85.18 s, median 38.8 p99 130.9 max 280.7 >50ms 383 >100ms 37
+crysis: check: loops: ok 1 of 1 loops finished
+crysis: check: wined3d: ok WineD3D's OpenGL renderer
+crysis: check: fsync: ok Wine's fsync
+crysis: result: flyby-direct: ok
+crysis-case: result: pass
+Connection to 127.0.0.1 closed by remote host.
