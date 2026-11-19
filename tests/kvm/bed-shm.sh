@@ -35,7 +35,7 @@
 # With -w the draw, the doorbells and the death give way to the desktop
 # session on the VM's GPU: once virtio-gpu has bound over the region,
 # rach2-desktop's session runs Weston on its card with GL through virgl in
-# the VM, SIGHUP starting it there unless the session moved there itself,
+# the VM, SIGHUP choosing the card on the headless QEMU boot,
 # and with -g virgl must name the Intel GPU the VM draws on (`session`).
 # The load draws as the desktop user while Rach2's driver rings the VM
 # (`load`): LOAD is glmark2-wayland on the session, the default, or the
@@ -88,6 +88,7 @@
 # reason, and the last line is `bed-shm: result: pass` or `fail`, after the
 # VM's last 80 lines of console, `bed-shm: vm: LINE`, on a failure. The
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
+# With -w, so are the services log's tails at and just after the VM's death.
 # Any exit, by its end or by SIGTERM, SIGINT or SIGHUP, kills QEMU, has
 # gpu.sh give the function back, and ends the load's and the figure's
 # groups, TERM and then KILL.
@@ -131,7 +132,7 @@ esac
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
-daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0
+daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0 stalled=0
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
 [ -z "$bdf" ] || intel=1
@@ -152,15 +153,31 @@ end_group()
     kill -KILL "-$1" 2>/dev/null
     wait "$1" 2>/dev/null
 }
-# gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
-trap 'end_group "$load"; end_group "$figpid"; kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu $umon 2>/dev/null; wait 2>/dev/null' EXIT
+# gpu.sh, sent SIGTERM, kills its QEMU and gives the function back. A
+# child that stalled in death_children has already been sent KILL.
+cleanup()
+{
+    end_group "$load"
+    end_group "$figpid"
+    # shellcheck disable=SC2086 # the pids of children that were started
+    kill -9 $qemu $waiter $holder $pid 2>/dev/null
+    # shellcheck disable=SC2086 # the pids of children that were started
+    kill $daemon $gpu $umon 2>/dev/null
+    if [ "$stalled" = 0 ]; then
+        wait 2>/dev/null
+    elif [ -n "$gpu" ]; then
+        wait "$gpu" 2>/dev/null
+    fi
+}
+trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 rm -rf "$out"
 mkdir -p "$out"
 # Where the desktop's log stood before anything here ran.
-offset=$(wc -c < /var/log/services 2>/dev/null || echo 0)
+services=/var/log/services
+offset=$(command stat -c %s "$services" 2>/dev/null || echo 0)
 console=$out/console.log qemu_err=$out/qemu.out
 [ -z "$bdf" ] || console=$out/gpu/console qemu_err=$out/gpu/qemu.err
 
@@ -319,20 +336,63 @@ else
     qemu=$(cat "$out/qemu.pid" 2>/dev/null)
 fi
 
-# kill_vm: kill QEMU and wait for its end; with -g, through gpu.sh, which
-# then gives the function back.
-kill_vm()
+# stop_vm: kill QEMU, through gpu.sh when it owns the VM.
+stop_vm()
 {
     if [ -n "$gpu" ]; then
         kill -USR1 "$gpu" 2>/dev/null
+    else
+        kill -9 "$qemu" 2>/dev/null
+    fi
+}
+
+# wait_vm: reap QEMU or gpu.sh, which also gives the function back.
+wait_vm()
+{
+    if [ -n "$gpu" ]; then
         gpu_status=0
         wait "$gpu" 2>/dev/null || gpu_status=$?
         gpu=''
     else
-        kill -9 "$qemu" 2>/dev/null
         wait "$qemu" 2>/dev/null
     fi
     qemu=''
+}
+
+# kill_vm: kill and reap the VM, and wait for any GPU handoff.
+kill_vm()
+{
+    stop_vm
+    wait_vm
+}
+
+# death_children: give the fence probe and ivshmemd 60 tries to exit after
+# QEMU is killed. Reap only children that exited. A task stuck in the kernel
+# may still be there after KILL, so the failure must not wait for its exit.
+death_children()
+{
+    left=60 death_error=''
+    while kill -0 "$waiter" 2>/dev/null || kill -0 "$daemon" 2>/dev/null; do
+        [ "$left" -gt 0 ] || break
+        sleep 1
+        left=$((left - 1))
+    done
+    if kill -0 "$waiter" 2>/dev/null; then
+        kill -KILL "$waiter" 2>/dev/null
+        stalled=1
+        death_error='fence probe still running'
+    else
+        wait "$waiter" 2>/dev/null || death_error="fence probe status $?"
+    fi
+    waiter=''
+    if kill -0 "$daemon" 2>/dev/null; then
+        kill -KILL "$daemon" 2>/dev/null
+        stalled=1
+        death_error="${death_error:+$death_error, }ivshmemd still running"
+    else
+        wait "$daemon" 2>/dev/null || death_error="${death_error:+$death_error, }ivshmemd status $?"
+    fi
+    daemon=''
 }
 
 # handoff: with -g, gpu.sh's verdict on the function's return to the driver.
@@ -638,47 +698,48 @@ virgl_rows()
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
-    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 || true
+    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 "$waiter" || true
     kill_vm
-    wait "$waiter" 2>/dev/null
-    waiter=''
-    wait "$daemon" 2>/dev/null
-    daemon=''
-    if grep -q 'VGSHMPROBE OK' "$out/pending.out" &&
+    death_children
+    if [ -z "$death_error" ] && grep -q 'VGSHMPROBE OK' "$out/pending.out" &&
         grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
         pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1)"
     else
-        fail death "$(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
+        fail death "${death_error:+$death_error: }$(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
     fi
 }
 
 # The desktop session's log and its user's display.
-services=/var/log/services
 desktop_env='XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0'
 
-# since OFFSET: the services' log from byte OFFSET on, which is kept in
-# DIR/services.txt.
+# since OFFSET: the services' log from byte OFFSET on, or from the start
+# if init has shortened it below OFFSET. Keep the copy in DIR/services.txt.
 since()
 {
-    tail -c +"$(($1 + 1))" "$services" 2>/dev/null | tr -d '\r' > "$out/services.txt"
+    log_size=$(command stat -c %s "$services" 2>/dev/null || echo 0)
+    log_from=$1
+    [ "$log_size" -ge "$log_from" ] || log_from=0
+    tail -c +"$((log_from + 1))" "$services" 2>/dev/null | tr -d '\r' > "$out/services.txt"
     cat "$out/services.txt"
 }
 
-# started OFFSET DISPLAY RENDERER SILENCE [FILE PID]: wait until the
+# started OFFSET DISPLAY RENDERER TRIES [PID]: wait until the
 # session's last start since OFFSET is on DISPLAY, `BACKEND CARD RENDERER`
 # as rach2-desktop logs it, its Weston has logged a GL renderer matching
-# RENDERER and the user's socket exists, while quiet FILE SILENCE PID holds,
-# FILE the services' log unless given; set `took` to the seconds waited.
+# RENDERER and the user's socket exists. Give up after TRIES sleeps, or if
+# PID has exited when given. Set `took` to the number of seconds slept.
 # With which=any, any start since OFFSET will do, not only the last.
 which=last
 started()
 {
-    last=-1 still=0 took=0
+    took=0
     until since "$1" | awk -v want="on $2" -v gl="$3" -v which="$which" '
             /rach2-desktop: session: started as / { on = index($0, want) > 0; seen = 0 }
             on && /GL renderer: / && $0 ~ ("GL renderer: " gl) { seen = ever = 1 }
             END { exit !(which == "any" ? ever : on && seen) }' && [ -S /run/user/1001/wayland-0 ]; do
-        quiet "${5:-$services}" "$4" "${6:-}" || return 1
+        [ "$took" -lt "$4" ] || return 1
+        [ -z "${5:-}" ] || kill -0 "$5" 2>/dev/null || return 1
+        sleep 1
         took=$((took + 1))
     done
 }
@@ -721,18 +782,28 @@ desk_rows()
         done
         return
     fi
-    sup=$(cat /run/rach2-desktop.pid 2>/dev/null)
-    # The session's start is in the log by the time of the bind, or never:
-    # rach2-desktop moves it at once to a card that appears after a loss.
-    since "$offset" | grep -q "rach2-desktop: session: started as .* on drm $card gl" ||
-        kill -HUP "$sup" 2>/dev/null
+    # After a GPU handoff the supervisor moves the session itself. On the
+    # headless QEMU boot, ask it to choose a display after its first start.
+    if [ -z "$bdf" ]; then
+        sup=$(cat /run/rach2-desktop.pid 2>/dev/null)
+        if [ -n "$sup" ] && until_line "$services" 'rach2-desktop: session: started as ' 30 "$sup"; then
+            case $(grep 'rach2-desktop: session: started as ' "$services" | tail -n 1) in
+                *' on headless - pixman') kill -HUP "$sup" 2>/dev/null ;;
+            esac
+        fi
+    fi
     # With the GPU, the VM's virgl draws on its i915, which virgl names.
     gl=virgl
     [ -z "$bdf" ] || gl='virgl .*Intel'
-    if started "$offset" "drm $card gl" "$gl" 600 "$console" "$qemu"; then
+    if started "$offset" "drm $card gl" "$gl" 120 "$qemu"; then
         pass session "Weston on $card through virgl after $took s: $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //')"
     else
         fail session "$(grep 'rach2-desktop: \|GL renderer\|fatal\|error' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
+        for c in load death fallback; do
+            fail "$c" 'the session did not start on the VM card'
+        done
+        [ -z "$bdf" ] || fail return 'the session did not start on the VM card'
+        return
     fi
     for scene in ${measure:+$scenes}; do
         rung=shm-virgl zink=''
@@ -790,7 +861,6 @@ desk_rows()
     # the death, for a death after which the session stays on the gone
     # card; udevadm names its kernel source last, once it has subscribed to
     # both.
-    dead=$(command stat -c %s "$services")
     udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
     umon=$!
     until_line "$out/udev-death.txt" '^KERNEL - ' 30 "$umon" || true
@@ -802,27 +872,38 @@ desk_rows()
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
-    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 || true
+    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 "$waiter" || true
     alive=no
     ! grep -q 'VGSHMPROBE PENDING' "$out/pending.out" || ! kill -0 "$load" 2>/dev/null || alive=yes
-    kill_vm
-    wait "$waiter" 2>/dev/null
-    waiter=''
-    wait "$daemon" 2>/dev/null
-    daemon=''
+    dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
+    tail -c 16384 "$services" > "$out/services-death.txt"
+    stop_vm
+    # Take a second copy at QEMU's exit, before gpu.sh finishes the handoff
+    # or the surviving compositor fills the log and init truncates it.
+    left=10
+    while [ "$left" -gt 0 ] && kill -0 "$qemu" 2>/dev/null; do
+        sleep 1
+        left=$((left - 1))
+    done
+    tail -c 16384 "$services" > "$out/services-after-death.txt"
+    death_children
+    wait_vm
     # glmark2 ends with the session that leaves the gone card; one whose
     # submissions the kernel has refused 100000 times since the death, at
     # some 10000 a second, draws on a session still on that card.
-    last=-1 still=0
-    while kill -0 "$load" 2>/dev/null; do
-        quiet "$loadout" 300 "$load" || break
+    left=60
+    while [ "$left" -gt 0 ] && kill -0 "$load" 2>/dev/null; do
         [ "$(refused)" -lt 100000 ] || break
+        sleep 1
+        left=$((left - 1))
     done
     # udevadm ends on SIGTERM with 0, or 143 when the signal comes first.
-    kill "$umon" 2>/dev/null
+    stopped=no
+    ! kill "$umon" 2>/dev/null || stopped=yes
     ustatus=0
     wait "$umon" 2>/dev/null || ustatus=$?
-    [ "$ustatus" = 0 ] || [ "$ustatus" = 143 ] || [ "$monitor" != listening ] ||
+    [ "$monitor" != listening ] ||
+        { [ "$stopped" = yes ] && { [ "$ustatus" = 0 ] || [ "$ustatus" = 143 ]; }; } ||
         monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
     umon=''
     if kill -0 "$load" 2>/dev/null; then
@@ -839,12 +920,12 @@ desk_rows()
     spun=$(refused)
     spinning=''
     [ "$spun" -lt 100000 ] || spinning=", after $spun refused submissions on the gone card"
-    if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ "$ended" != "still running" ] &&
+    if [ -z "$death_error" ] && grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ "$ended" != "still running" ] &&
         [ -z "$spinning" ] && [ "$alive" = yes ] &&
         grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
         pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); $loadscene $ended"
     else
-        fail death "$loadscene $ended$spinning: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
+        fail death "$loadscene $ended$spinning: ${death_error:+$death_error: }$(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
         if [ "$ended" = "still running" ] || [ -n "$spinning" ]; then
             echo "bed-shm: death: udev: $(grep -c ' remove ' "$out/udev-death.txt") removals: $(grep ' remove .*/card[0-9]* (drm)' "$out/udev-death.txt" | tr '\n' ' ')"
             echo "bed-shm: death: session: $(since "$dead" | grep 'rach2-desktop: ' | tr '\n' ' ')"
@@ -864,7 +945,7 @@ desk_rows()
     # session had gone, which is the fallback too.
     fbshown="headless - gl" fbgl=llvmpipe
     [ -z "$bdf" ] || which=any fbshown='' fbgl='(llvmpipe|Mesa Intel)'
-    if started "$dead" "$fbshown" "$fbgl" 300 &&
+    if started "$dead" "$fbshown" "$fbgl" 60 &&
         grep -q "rach2-desktop: session: its display drm $card gl is gone" "$out/services.txt" &&
         { [ -n "$bdf" ] || { drawn "$out/fallback.out" -b build:duration=2 &&
             grep -q 'GL_RENDERER: *llvmpipe' "$out/fallback.out"; }; }; then
@@ -889,7 +970,7 @@ desk_rows()
     done
     # The last start is on the card given back, whether it came there from
     # the headless session (`appeared`) or at once.
-    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 300; then
+    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 60; then
         how="at once"
         ! grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt" ||
             how="from the headless session"
@@ -921,6 +1002,10 @@ handoff
 if [ "$bad" -eq 0 ]; then
     echo "bed-shm: result: pass"
 else
+    for log in services-death services-after-death; do
+        [ -f "$out/$log.txt" ] || continue
+        tail -n 40 "$out/$log.txt" | sed "s/^/bed-shm: $log: /"
+    done
     # The VM's console is lost with the machine; its last lines but the
     # backend's for each pin go with the result.
     tr -d '\r' < "$console" 2>/dev/null |
