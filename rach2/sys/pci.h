@@ -431,6 +431,51 @@ struct pci_resource {
  */
 void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r);
 
+/**
+ * List the functions of the slot `bus`:`device` that the list lacks, as
+ * Linux's pci_scan_slot does when a hot plug controller says a card came:
+ * each is read, sized and put in its place (`pci_nth`). The caller holds
+ * the big lock, which every search of the list holds. Returns how many
+ * functions were added; 0 for an empty slot or a full list.
+ */
+int pci_slot_add(uint8_t bus, uint8_t device);
+
+/**
+ * Take the functions of the slot `bus`:`device` off the list, as Linux's
+ * pci_stop_and_remove_bus_device does before a card is ejected; their
+ * drivers have let go of them. The caller holds the big lock. Returns how
+ * many were taken off.
+ */
+int pci_slot_remove(uint8_t bus, uint8_t device);
+
+/* A range of addresses a host bridge passes to its bus, `start` to `end`
+ * inclusive, of I/O ports when `io` is set and of memory else. */
+struct pci_aperture {
+    uint64_t start;
+    uint64_t end;
+    int io;
+};
+
+/**
+ * Give each BAR of the listed function `bus`:`device`.`function` that has
+ * no address one in the apertures `ap`, `n` of them, as Linux's
+ * pci_assign_unassigned_bridge_resources does for a card hot plugged: the
+ * lowest address aligned to the BAR's size that overlaps no other listed
+ * function's BAR and no bridge's window, a 32-bit BAR below 4 GiB, and an
+ * I/O BAR at or above PCI_IO_FLOOR. Decoding stays off; the driver turns it on.
+ *
+ * @return 0 when every BAR has an address; -ENODEV for a function not
+ *         listed; -ENOSPC when some BAR fits in no aperture, which is then
+ *         left without one.
+ */
+int pci_assign_bars(uint8_t bus, uint8_t device, uint8_t function, const struct pci_aperture *ap,
+                    int n);
+
+/* The lowest I/O port given to a BAR after boot: the PC's firmware puts its
+ * own fixed ports, ACPI's and the hot plug controller's, below it and the
+ * functions' I/O BARs from it up, as SeaBIOS does from 0xC000. */
+#define PCI_IO_FLOOR 0xC000u
+
 /** Recover a BAR's base address by masking off its type bits. */
 uint32_t pci_bar_address(uint32_t bar);
 
