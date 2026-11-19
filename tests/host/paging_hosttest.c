@@ -373,6 +373,15 @@ void mm_reap(void)
     vm_file_reap();
 }
 
+/** The anonymous identity a truncation gives first, which the model's
+ * regions, judged by no merge, need not have. */
+void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    (void)mm;
+    (void)start;
+    (void)end;
+}
+
 /** 0: memory is never short. */
 int mem_short(void)
 {
