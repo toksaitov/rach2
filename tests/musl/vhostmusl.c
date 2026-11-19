@@ -13,10 +13,11 @@
  * signals the receive ring's call. The program answers it on the transmit
  * ring and kicks; the thread gives the answer to the stack, the datagram
  * that waited for it comes into the receive ring, and the transmit ring's
- * call is signalled. A second datagram, sent while the ring has a buffer,
+ * call is signalled. A second datagram, sent once a buffer is offered,
  * comes into it: in the sender's context, before its send returns, when
- * the device already holds the buffer's page, and otherwise from the
- * thread once it has brought the page in, either way with its call.
+ * the device already holds the buffer's page and no frame waiting in the
+ * tap took the buffer first, and otherwise from the thread, either way
+ * with its call.
  *
  * Other frames the stack sends on the tap, IPv6's among them, may take
  * receive buffers too, so the program looks for its frames among those the
@@ -87,7 +88,6 @@ extern char **environ;
 #define RX_BUF   0x2000 /* NUM receive buffers of BUFLEN */
 #define TX_BUF   0xc000
 #define BUFLEN   2048
-#define STRAYS   (4 * NUM) /* other frames a wait takes before its own */
 
 enum {
     TAP_OPEN,
@@ -147,7 +147,7 @@ static const struct {
     {"tx-used", "the transmit ring did not use the answer's chain"},
     {"datagram", "the first datagram did not come into the receive ring after the answer, or not "
                  "with one call"},
-    {"direct-send", "could not offer a buffer and send the second datagram"},
+    {"direct-send", "could not offer a buffer and then send the second datagram"},
     {"direct-frame", "the second datagram did not come into the receive ring"},
     {"direct-call", "the receive ring's call was not signalled once for the second datagram"},
     {"detach",
@@ -439,26 +439,26 @@ static int offer_one(void)
  * frame at a time: offer a buffer when the ring holds none, read the call,
  * which comes once the buffer's frame is on the ring, settle the count and
  * look at the frame, so that each frame has its own call before the next
- * buffer is offered. The buffer's offset; -1 after STRAYS other frames; -2
- * when a kick, a read of the call or the count fails.
+ * buffer is offered. Other frames the stack sends are passed over, however
+ * many come. The buffer's offset; -1 when a kick fails; when a read of the
+ * call or the count fails, -2 if the frame is on the ring, else -1.
  */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
 {
-    int at, i;
+    int at;
 
-    for (i = 0; i <= STRAYS; i++) {
+    for (;;) {
         if (offer_one() != 0) {
-            return -2;
+            return -1;
         }
         if (take_call(call) != 0 || settle_calls(call) != 0) {
-            return -2;
+            return find_rx(match, text, &at) ? -2 : -1;
         }
         if (find_rx(match, text, &at)) {
             return at;
         }
     }
-    return -1;
 }
 
 /** Answer the ARP request at `req`, the frame after a receive header, on
@@ -626,9 +626,9 @@ static int exchange(void)
     return 0;
 }
 
-/** A datagram sent while the receive ring has a buffer comes into one, at
- * once or from the thread, with its own call; then the rings let the tap
- * go, and the calls read equal the used entries. A frame of the stack's
+/** A datagram sent once a receive buffer is offered comes into one, at once
+ * or from the thread, with its own call; then the rings let the tap go,
+ * and the calls read equal the used entries. A frame of the stack's
  * waiting in the tap may take the buffer first, and the datagram then
  * comes from the thread into the next. */
 static int direct(void)
