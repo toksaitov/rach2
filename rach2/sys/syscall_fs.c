@@ -2864,15 +2864,17 @@ static int synth_procfs_kind(int kind);
 /** Keep the mount of a synthetic open for later descriptor-link checks.
  * `ref` remains held by the caller. A followed magic link keeps its
  * object's mount instead; namespace objects have no file-system mount. A
- * file of /proc or /sys that `procfs_open` opened keeps the mount it was
- * given, and its slot is not read again, since a snapshot's descriptor may
- * have been closed without the big lock since it was published. */
-static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags)
+ * file of /proc or /sys that `procfs_open` opened (`opened` nonzero, an
+ * open other than O_PATH) keeps the mount it was given, and its slot is not
+ * read again, since a snapshot's descriptor may have been closed without
+ * the big lock since it was published. An O_PATH descriptor on such a file,
+ * which `synth_open_path` makes, takes the mount here as any other does. */
+static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags, int opened)
 {
     struct open_file *ofd;
     struct vfs_ref root;
 
-    if (fd < 0 || synth_procfs_kind(vp->kind) ||
+    if (fd < 0 || (opened && synth_procfs_kind(vp->kind)) ||
         ((vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_NS_LINK) &&
          !(flags & O_NOFOLLOW))) {
         return;
@@ -4905,7 +4907,7 @@ again:
             fd_free(current_proc->fds, fd);
             fd = -1;
             rc = ro ? -EROFS : open_synth_node(&vpc, flags, ref.mnt);
-            synth_mount_record(rc, &ref, &vpc, flags);
+            synth_mount_record(rc, &ref, &vpc, flags, 1);
             vfs_ref_release(&ref);
             synth_dir_record(rc, permanent, name);
             goto out;
@@ -10839,7 +10841,7 @@ static int32_t open_path(const char *name, int flags)
         vfs_walk_unlock(locked);
         vfs_name_put(entry);
         rc = synth_open_path(&vpc, name, flags);
-        synth_mount_record(rc, &ref, &vpc, flags);
+        synth_mount_record(rc, &ref, &vpc, flags, 0);
         vfs_ref_release(&ref);
         synth_dir_record(rc, permanent, name);
         return rc;
