@@ -139,6 +139,14 @@ typedef struct krffs_file_system {
  * krffs.Readme.md. `sync` makes everything written so far durable, and
  * answers 0 or -1.
  *
+ * `unit` is the size, a power of two, of the aligned pieces, from offset 0
+ * of the region, that `write` stores whole or not at all, or 0 when it
+ * stores every write whole: a write that fails part way may have stored
+ * the pieces before the one that failed. A file's bytes go in such pieces,
+ * so that a write that fails part way answers how many bytes went in, as
+ * Linux's short write does, and never leaves bytes a reader sees that the
+ * writer was told were not written.
+ *
  * The memory backend is one memcpy either way and never fails; the boot
  * root in memory uses it. The boot root on a disk uses the page cache's
  * copies, which answer a read the disk fails (`init_krffs_disk_root`).
@@ -147,6 +155,7 @@ typedef struct krffs_backend {
     int (*read)(void *ctx, uint64_t offset, void *buffer, uint32_t size);
     int (*write)(void *ctx, uint64_t offset, const void *buffer, uint32_t size);
     int (*sync)(void *ctx);
+    uint32_t unit;
 } krffs_backend_t;
 
 /* A mounted region: what reaches it, and how many bytes it has. A region is
@@ -398,10 +407,10 @@ uint64_t krffs_parent_offset_err(krffs_mount_t *mount, uint64_t offset, int *err
 
 /**
  * Write the absolute, canonical path of the node at `offset` into `buf` of
- * `size` bytes, "/" for the root. 0, or -1 for a null `buf`, a `size` of 0
- * or KRFFS_NO_NODE, a path that does not fit, a node deeper than
- * KRFFS_PATH_MAX_DEPTH, a parent link no node answers, or a read that
- * fails.
+ * `size` bytes, "/" for the root. 0; -EIO for a read that fails; or -1
+ * for a null `buf`, a `size` of 0 or KRFFS_NO_NODE, a path that does not
+ * fit, a node deeper than KRFFS_PATH_MAX_DEPTH, or a parent link no node
+ * answers.
  */
 int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf, uint32_t size);
 
@@ -435,11 +444,18 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * 0, as POSIX has it for a regular file. After a barrier that failed, no
  * byte is written until one succeeds.
  *
- * Returns `size`; KRFFS_EBAD for a null argument or KRFFS_NO_NODE, a header
- * that cannot be read, or a node that is not reserved; KRFFS_ENOSPACE when
- * the node had to move and no free node held the copy, with no byte of the
- * file changed; or KRFFS_EIO when a read, a write, a sync or a barrier
- * failed, which can leave the bytes written and `data_size` not raised.
+ * The bytes go in pieces the backend stores whole (`unit`), so a write in
+ * place that fails part way knows how many went in, and answers as Linux's
+ * short write does: the bytes stored, when some were, and the length is
+ * raised to count them; and when a later step fails, the barrier, the
+ * length's store or the sync, the bytes stored inside the old length,
+ * which readers see, when there are any.
+ *
+ * Returns `size`, or fewer as above; KRFFS_EBAD for a null argument or
+ * KRFFS_NO_NODE, a header that cannot be read, or a node that is not
+ * reserved; KRFFS_ENOSPACE when the node had to move and no free node held
+ * the copy, with no byte of the file changed; or KRFFS_EIO when a read, a
+ * write, a sync or a barrier failed and no byte a reader sees changed.
  */
 int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
                    uint32_t at);
@@ -615,10 +631,10 @@ int krffs_hidden(krffs_mount_t *mount, uint64_t offset);
  * between the two leaves one on the medium with nobody left to free it, and
  * since nothing else looks for a node with no name, its space would be lost
  * for good. At a mount there are no descriptors, so every reserved node
- * without a name is garbage. Returns how many it freed; one whose removal
- * fails is left where it is and not counted. A read or a removal that
- * fails halts the mount (`halted`), which owes the check and so keeps the
- * dirty flag, as a write that fails among a rename's does.
+ * without a name is garbage. Returns how many it freed. The first read or
+ * removal that fails, a neighbour's read inside a removal included, ends
+ * the scan and halts the mount (`halted`), which owes the check and so
+ * keeps the dirty flag, as a write that fails among a rename's does.
  */
 uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
 
@@ -684,8 +700,9 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
  * size, so a machine that stops between them leaves a ring that can still
  * be walked; the backward link of the node after the merged one is repaired
  * last, and a sync ends the call. Returns the sync's answer, or -1 for an
- * offset that is no reserved node or a store of the type that failed, which
- * leaves the node reserved, or for a merge's size whose store failed, which
+ * offset that is no reserved node, a read of its header or a neighbour's
+ * that fails, or a store of the type that failed, each of which leaves the
+ * node reserved, or for a merge's size whose store failed, which
  * marks the links stale. A merge whose size would change bytes of two
  * sectors or two blocks leaves the free nodes side by side.
  */
@@ -863,16 +880,26 @@ int krffs_node_set_time(krffs_node_t *node, uint32_t field, int64_t seconds, int
  * The child of `dir` named `name`, one step of a walk, for the VFS lookup.
  * `dir` NULL or the root node is the root directory; `name` is one
  * component of at least one byte. NULL when absent, when `dir` is no
- * directory, or before the mount.
+ * directory, before the mount, or when a read fails, which `*err`, when
+ * not NULL, tells apart: 0 when found, -ENOENT, or -EIO for a read that
+ * failed before the child was found (`krffs_child_at_err`).
  */
+krffs_node_t *krffs_child_err(krffs_node_t *dir, const char *name, int *err);
+
+/** `krffs_child_err` for a caller that needs no error. */
 krffs_node_t *krffs_child(krffs_node_t *dir, const char *name);
 
 /**
  * Resolve `path` to its node, the root node for "/", as `krffs_walk` does.
  * NULL before the mount, or for a missing component or one before the last
- * that is not a directory. Callers read the node's header for its type
+ * that is not a directory, or a read that fails, which `*err`, when not
+ * NULL, tells apart as `krffs_walk_err` does: 0 when found, -ENOENT,
+ * -ENOTDIR or -EIO. Callers read the node's header for its type
  * (`krffs_node_head`).
  */
+krffs_node_t *krffs_resolve_err(const char *path, int *err);
+
+/** `krffs_resolve_err` for a caller that needs no error. */
 krffs_node_t *krffs_resolve(const char *path);
 
 /**
@@ -903,8 +930,9 @@ int krffs_orphan_node(krffs_node_t *node);
  */
 int krffs_unlink_held(krffs_node_t *node);
 
-/** Build the absolute, canonical path of `node` into buf; 0 ok, -1 before
- * the mount, for a null or foreign `node`, or if it does not fit. */
+/** Build the absolute, canonical path of `node` into buf: 0; -EIO for a
+ * read that fails; -1 before the mount, for a null or foreign `node`, or
+ * when it does not fit (`krffs_node_path_at`). */
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 
 /* The errors of the offset interface, negative so that a byte count is
@@ -975,8 +1003,12 @@ void krffs_stamp(krffs_node_t *node, int what);
 /**
  * The directory `node` of the boot root is in, the root node for the root
  * directory. NULL before the mount, for a null `node`, and where
- * `krffs_parent_offset` finds no directory.
+ * `krffs_parent_offset_err` finds no directory, with `*err`, when not NULL,
+ * -EIO for a read that failed and 0 otherwise.
  */
+krffs_node_t *krffs_parent_node_err(krffs_node_t *node, int *err);
+
+/** `krffs_parent_node_err` for a caller that needs no error. */
 krffs_node_t *krffs_parent_node(krffs_node_t *node);
 
 /** `krffs_create_at` on the boot root; -1 before the mount. */

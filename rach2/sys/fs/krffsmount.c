@@ -240,18 +240,19 @@ static int begin_write(struct vfs_mount *mnt)
  *
  * The core's namespace operations take a path, which is what the ring is
  * searched by; the mount table hands out a directory and a name, so they are
- * put back together here, as the root's adapter does. 0, or -ENAMETOOLONG
- * when the path does not fit in `cap` bytes or the directory's path cannot
- * be made.
+ * put back together here, as the root's adapter does. 0, -EIO when the
+ * directory's path cannot be read, or -ENAMETOOLONG when the path does not
+ * fit in `cap` bytes or the directory's path cannot be made.
  */
 static int join(struct vfs_mount *mnt, void *dir, const char *name, char *path, uint32_t cap)
 {
     struct krffs_volume *vol = vol_of(mnt);
     uint32_t dlen;
     uint32_t nlen;
+    int rc = krffs_node_path_at(&vol->fs, offset_of(mnt, dir), path, cap);
 
-    if (krffs_node_path_at(&vol->fs, offset_of(mnt, dir), path, cap) != 0) {
-        return -ENAMETOOLONG;
+    if (rc != 0) {
+        return rc == -EIO ? -EIO : -ENAMETOOLONG;
     }
     dlen = (uint32_t)k_strlen(path);
     nlen = (uint32_t)k_strlen(name);
@@ -268,7 +269,10 @@ static int join(struct vfs_mount *mnt, void *dir, const char *name, char *path, 
     return 0;
 }
 
-static const krffs_backend_t volume_backend = {volume_read, volume_write, volume_sync};
+/* A write inside one block is whole or not at all: the block is read before
+ * a byte is copied (`volume_write`). */
+static const krffs_backend_t volume_backend = {volume_read, volume_write, volume_sync,
+                                               BCACHE_BLOCK_BYTES};
 
 /* The operations. */
 
@@ -1307,13 +1311,15 @@ static void kv_unmount(struct vfs_mount *mnt)
     mnt->priv = 0;
 }
 
-/** The canonical path of the directory `node` within the volume; 0, or
- * -ENAMETOOLONG for any path the core cannot make. */
+/** The canonical path of the directory `node` within the volume; 0, -EIO
+ * for a read that fails, or -ENAMETOOLONG for any other path the core
+ * cannot make. */
 static int kv_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct krffs_volume *vol = vol_of(mnt);
+    int rc = krffs_node_path_at(&vol->fs, offset_of(mnt, node), buf, cap);
 
-    return krffs_node_path_at(&vol->fs, offset_of(mnt, node), buf, cap) == 0 ? 0 : -ENAMETOOLONG;
+    return rc == 0 ? 0 : rc == -EIO ? -EIO : -ENAMETOOLONG;
 }
 
 static const struct vfs_ops krffs_volume_ops = {

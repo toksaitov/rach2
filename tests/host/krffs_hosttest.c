@@ -133,7 +133,7 @@ static int memory_sync(void *ctx)
     return 0;
 }
 
-static const krffs_backend_t memory_backend = {memory_read, memory_write, memory_sync};
+static const krffs_backend_t memory_backend = {memory_read, memory_write, memory_sync, 0};
 
 /* The recorder: the same image, with every write kept in the order it was
    made, so a row can replay any prefix of an operation. */
@@ -216,7 +216,7 @@ static int record_sync(void *ctx)
     return memory_sync(ctx);
 }
 
-static const krffs_backend_t recording_backend = {memory_read, record_write, record_sync};
+static const krffs_backend_t recording_backend = {memory_read, record_write, record_sync, 0};
 
 /** Whether a node's name is exactly `name`. */
 static int k_strcmp_name(const uint8_t *field, const char *name)
@@ -1565,7 +1565,7 @@ static int record_disk_flush(void)
 static void disk_shrink_row(void)
 {
     static const struct unlink_extent extents[] = {{0, NULL}, {1024, "victim"}, {9216, "kept"}};
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     krffs_node_t *victim;
     uint32_t length = 3000;
     uint64_t result;
@@ -1756,7 +1756,7 @@ static int case_writes;
 static int disk_truncate_case(const struct unlink_extent *extents, unsigned count, uint32_t old,
                               uint32_t length, uint64_t at, uint64_t size, const char *what)
 {
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     static uint8_t before[DISK_IMAGE_SIZE];
     static char path[64];
     uint64_t node = KRFFS_NO_NODE;
@@ -1875,7 +1875,7 @@ static void disk_grow_rows(void)
 static void disk_after_unlink_case(const struct unlink_extent *extents, unsigned count,
                                    uint32_t size, int grow, const char *what)
 {
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     static uint8_t before[DISK_IMAGE_SIZE];
     int result;
 
@@ -1934,7 +1934,7 @@ static void disk_split_length_rows(void)
     static const struct unlink_extent long_node[] = {
         {0, NULL}, {3754, "victim"}, {5200, "kept"}, {6000, NULL}};
     static const struct unlink_extent full[] = {{0, NULL}, {3754, "victim"}, {5200, "kept"}};
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     krffs_node_t *victim;
     int failure;
 
@@ -2039,7 +2039,52 @@ static int failing_sync(void *ctx)
     return sync_fails ? -1 : 0;
 }
 
-static const krffs_backend_t sync_fails_backend = {memory_read, record_write, failing_sync};
+static const krffs_backend_t sync_fails_backend = {memory_read, record_write, failing_sync, 0};
+
+/* The recording backend with a unit of 512 bytes, as a block cache's. */
+static const krffs_backend_t unit_backend = {memory_read, record_write, memory_sync, 512};
+
+/**
+ * A write in place goes in the backend's units, so one whose second unit
+ * fails answers the bytes of the first, as Linux's short write does, and
+ * leaves the rest of the file as it was; one whose first unit fails
+ * answers EIO and changes nothing.
+ */
+static void short_write_rows(void)
+{
+    krffs_mount_t mount;
+    uint64_t node;
+    uint64_t start;
+    uint64_t edge;
+    char bytes[2000];
+    char back[2000];
+    int n;
+
+    make_image(image, IMAGE_SIZE);
+    mount = mount_over(&unit_backend, image, IMAGE_SIZE);
+    k_memset(bytes, 'a', sizeof(bytes));
+    check(krffs_create_at(&mount, "/s") == 0, "short write rows: a file");
+    node = krffs_walk(&mount, "/s");
+    check(krffs_write_at(&mount, &node, bytes, sizeof(bytes), 0) == (int)sizeof(bytes),
+          "short write rows: its bytes");
+    start = node + sizeof(krffs_node_t);
+    edge = (start / 512 + 1) * 512;
+    k_memset(bytes, 'b', sizeof(bytes));
+    refused_offset = edge;
+    n = krffs_write_at(&mount, &node, bytes, sizeof(bytes), 0);
+    refused_offset = (uint64_t)-1;
+    check(n == (int)(edge - start), "a write whose second unit fails answers the first's bytes");
+    check(krffs_read_at(&mount, node, back, sizeof(back), 0) == (int)sizeof(back) &&
+              back[0] == 'b' && back[edge - start - 1] == 'b' && back[edge - start] == 'a' &&
+              back[sizeof(back) - 1] == 'a',
+          "and the file holds those bytes and the old ones after them");
+    refused_offset = start;
+    check(krffs_write_at(&mount, &node, "zz", 2, 0) == KRFFS_EIO,
+          "a write whose first unit fails answers EIO");
+    refused_offset = (uint64_t)-1;
+    check(krffs_read_at(&mount, node, back, 2, 0) == 2 && back[0] == 'b' && back[1] == 'b',
+          "and changes nothing");
+}
 
 /**
  * A failed write of the size that publishes a shrink or a merge reports the
@@ -2296,7 +2341,7 @@ static int split_write(void *ctx, uint64_t offset, const void *buffer, uint32_t 
     return memory_write(ctx, offset, buffer, size);
 }
 
-static const krffs_backend_t split_backend = {memory_read, split_write, memory_sync};
+static const krffs_backend_t split_backend = {memory_read, split_write, memory_sync, 0};
 
 /**
  * A shrink whose size store reaches the medium in its first block, which
@@ -2559,7 +2604,7 @@ static int regrow_cut_is_sound(uint8_t *state, uint32_t size)
 static void disk_regrow_row(void)
 {
     static const struct unlink_extent extents[] = {{0, NULL}, {1024, "victim"}, {4531, "kept"}};
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     static uint8_t before[DISK_IMAGE_SIZE];
     static char bytes[50];
     uint64_t node = 1024;
@@ -2726,7 +2771,7 @@ static void disk_rename_case(int with_y, const char *what)
 {
     static const struct unlink_extent extents[] = {
         {0, NULL}, {1024, "x"}, {2048, NULL}, {60000, "kept"}};
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     static uint8_t before[DISK_IMAGE_SIZE];
     uint64_t node;
     int ok;
@@ -2824,7 +2869,7 @@ static int replace_cut_is_sound(uint8_t *state, uint32_t size)
 static int recorded_rename_is_sound(const char *from, const char *to,
                                     int (*judge)(uint8_t *, uint32_t))
 {
-    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync, 0};
     static uint8_t before[DISK_IMAGE_SIZE];
     int ok;
 
@@ -3031,13 +3076,18 @@ static void disk_parent_move_row(void)
     krffs_root_mount.halted = 0;
 }
 
-/* The byte whose read `failing_read` fails, or none. */
+/* The byte whose read `failing_read` fails, or none, and whether only the
+ * first such read fails, as a medium that fails once and then reads. */
 static uint64_t read_fails_at = (uint64_t)-1;
+static int read_fails_once;
 
 /** `memory_read`, failing a read that takes in `read_fails_at`. */
 static int failing_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 {
     if (read_fails_at >= offset && read_fails_at < offset + size) {
+        if (read_fails_once) {
+            read_fails_at = (uint64_t)-1;
+        }
         return -1;
     }
     return memory_read(ctx, offset, buffer, size);
@@ -3045,14 +3095,16 @@ static int failing_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 
 /**
  * A reap that cannot read a node's name, or cannot free it, counts it and
- * halts the mount, so that the dirty flag stays for the next mount; and a
- * parent lookup that cannot read a matching directory's name answers EIO,
- * not the root.
+ * halts the mount, so that the dirty flag stays for the next mount; so does
+ * one whose removal cannot read a neighbour's header, even once, which it
+ * does not take for a neighbour that is not free; and a parent lookup that
+ * cannot read a matching directory's name answers EIO, not the root.
  */
 static void reap_failure_rows(void)
 {
-    static const krffs_backend_t backend = {failing_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {failing_read, record_write, memory_sync, 0};
     krffs_mount_t mount = mount_over(&backend, image, IMAGE_SIZE);
+    krffs_node_t head;
     uint64_t node;
     uint64_t dir;
     uint64_t file;
@@ -3096,6 +3148,23 @@ static void reap_failure_rows(void)
     mount.check_owed = 0;
 
     make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/a") == 0 && krffs_create_at(&mount, "/b") == 0,
+          "reap failure rows: a file and its neighbour");
+    node = krffs_walk(&mount, "/a");
+    check(krffs_orphan_at(&mount, node) == 0, "the first loses its name");
+    mount.orphans = 0;
+    read_fails_at = krffs_walk(&mount, "/b") + KRFFS_FIELD_TYPE;
+    read_fails_once = 1;
+    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1 && mount.halted &&
+              mount.check_owed && krffs_head(&mount, node, &head) == 0 &&
+              head.type == KRFFS_RESERVED_NODE,
+          "a reap whose removal cannot read a neighbour once frees nothing and halts the mount");
+    read_fails_at = (uint64_t)-1;
+    read_fails_once = 0;
+    mount.halted = 0;
+    mount.check_owed = 0;
+
+    make_image(image, IMAGE_SIZE);
     check(krffs_mkdir_at(&mount, "/d", 0755, 0, 0) == 0 && krffs_create_at(&mount, "/d/f") == 0,
           "reap failure rows: a file in a directory");
     dir = krffs_walk(&mount, "/d");
@@ -3111,14 +3180,19 @@ static void reap_failure_rows(void)
  * page cache's copies answer a read the disk fails: a failed orphan free
  * and a header read that stops the scan each leave the orphan counted, so
  * that the shutdown keeps the dirty flag, and halt the root, which refuses
- * writes; the pointer interface answers the failure, and a root node that
- * cannot be read is refused at the mount, where the pointer was read before.
+ * writes; the pointer interface answers the failure, a lookup, a walk, a
+ * path and a lookup of `..` each answer EIO for a read that fails, and a
+ * root node that cannot be read is refused at the mount, where the pointer
+ * was read before.
  */
 static void boot_scan_failure_rows(void)
 {
-    static const krffs_backend_t backend = {failing_read, record_write, memory_sync};
+    static const krffs_backend_t backend = {failing_read, record_write, memory_sync, 0};
     krffs_node_t head;
+    char path[64];
     uint64_t node;
+    uint64_t dir;
+    int err = 0;
     int rows;
 
     for (rows = 0; rows < 2; rows++) {
@@ -3146,6 +3220,32 @@ static void boot_scan_failure_rows(void)
         refused_offset = (uint64_t)-1;
         read_fails_at = (uint64_t)-1;
     }
+
+    make_image(disk_image, DISK_IMAGE_SIZE);
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) != 0 ||
+        krffs_mkdir_at(&krffs_root_mount, "/d", 0755, 0, 0) != 0 ||
+        krffs_create_at(&krffs_root_mount, "/d/f") != 0) {
+        check(0, "boot scan rows: a disk root with a file in a directory");
+        return;
+    }
+    dir = krffs_walk(&krffs_root_mount, "/d");
+    node = krffs_walk(&krffs_root_mount, "/d/f");
+    read_fails_at = node + KRFFS_FIELD_NAME;
+    check(krffs_child_err((krffs_node_t *)(disk_image + dir), "g", &err) == NULL && err == -EIO,
+          "a lookup that cannot read a name in the directory answers EIO, not ENOENT");
+    check(krffs_resolve_err("/d/g", &err) == NULL && err == -EIO, "and so does a walk of the path");
+    check(krffs_node_path((krffs_node_t *)(disk_image + node), path, sizeof(path)) == -EIO,
+          "and the path of the file whose name cannot be read");
+    read_fails_at = dir + KRFFS_FIELD_NAME;
+    check(krffs_parent_node_err((krffs_node_t *)(disk_image + node), &err) == NULL && err == -EIO,
+          "a lookup of `..` that cannot read the directory's name answers EIO, not the root");
+    read_fails_at = (uint64_t)-1;
+    check(krffs_child_err((krffs_node_t *)(disk_image + dir), "g", &err) == NULL &&
+              err == -ENOENT &&
+              krffs_parent_node_err((krffs_node_t *)(disk_image + node), &err) ==
+                  (krffs_node_t *)(disk_image + dir) &&
+              err == 0,
+          "and once the reads succeed, a missing name is ENOENT and `..` the directory");
 
     make_image(disk_image, DISK_IMAGE_SIZE);
     read_fails_at = KRFFS_FIELD_MODE;
@@ -3248,7 +3348,7 @@ static void orphan_count_rows(void)
  */
 static void rename_refusal_rows(void)
 {
-    static const krffs_backend_t backend = {failing_read, memory_write, memory_sync};
+    static const krffs_backend_t backend = {failing_read, memory_write, memory_sync, 0};
     static const struct unlink_extent extents[] = {{0, NULL},    {1524, "ab"}, {2048, "cb"},
                                                    {2560, "ad"}, {3072, "cd"}, {3584, NULL}};
     krffs_mount_t mount = mount_over(&backend, image, IMAGE_SIZE);
@@ -3352,7 +3452,7 @@ static void phase_row(void)
         {0, NULL}, {1024, "img"}, {10240, NULL}, {60000, "kept"}};
     static const struct unlink_extent inner[] = {
         {0, NULL}, {655, "ab"}, {1536, "cb"}, {2048, NULL}};
-    static const krffs_backend_t backend = {memory_read, inner_record_write, record_sync};
+    static const krffs_backend_t backend = {memory_read, inner_record_write, record_sync, 0};
     static uint8_t before[DISK_IMAGE_SIZE];
     krffs_mount_t mount;
     uint64_t node;
@@ -3424,7 +3524,7 @@ static int watch_sync(void *ctx)
  */
 static void failed_move_barrier_row(void)
 {
-    static const krffs_backend_t backend = {memory_read, memory_write, watch_sync};
+    static const krffs_backend_t backend = {memory_read, memory_write, watch_sync, 0};
     static char bytes[2000];
     krffs_mount_t mount;
     uint64_t node;
@@ -3542,6 +3642,7 @@ static void disk_unlink_rows(void)
     disk_after_unlink_rows();
     volume_merge_row();
     writeback_error_rows();
+    short_write_rows();
     disk_moving_write_rows();
     volume_shrink_grow_row();
     failed_grow_barrier_row();

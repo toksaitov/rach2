@@ -122,9 +122,12 @@ int pc_copy_out(uint32_t off, void *buf, uint32_t size);
 /**
  * Copy `buf` into `size` bytes at byte `off` of the backing through the
  * cache, as `pc_copy_out` reads them, marking each page dirty, as a store
- * through the window would: 0, or -1 as `pc_copy_out` answers, with the
- * pages before the one that failed written. A page under writeback takes
- * the bytes and stays dirty for a later write, as a store into it does.
+ * through the window would: 0, or -1 as `pc_copy_out` answers. A range
+ * that touches at most two pages is stored whole or not at all, since
+ * every page it touches is brought in before a byte is copied; a longer
+ * one goes in such pieces, and a failure leaves the pieces before it
+ * written. A page under writeback takes the bytes and stays dirty for a
+ * later write, as a store into it does.
  */
 int pc_copy_in(uint32_t off, const void *buf, uint32_t size);
 

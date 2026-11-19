@@ -174,12 +174,15 @@ static void touch(uint32_t p, int write, uint8_t marker)
  * pages brings both in; a page whose read fails is -1 with nothing of it
  * resident, where a fault in the window would have panicked, and a later
  * read that succeeds brings it in; a copy into the cache marks its page
- * dirty for the sync to write; and a range past the backing is -1.
+ * dirty for the sync to write; a store across two pages whose second
+ * cannot be read changes neither, and stores both once it can; and a range
+ * past the backing is -1.
  */
 static void test_copies(void)
 {
     uint8_t buf[4] = {0, 0, 0, 0};
     const uint8_t mark = 0xABu;
+    const uint8_t two[2] = {0xA1u, 0xA2u};
 
     init_pagecache();
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
@@ -204,6 +207,16 @@ static void test_copies(void)
     CHECK(pc_copy_in(54 * PC_PAGE_SIZE + 3, &mark, 1) == 0);
     CHECK(pc_dirty_count() == 1);
     CHECK(pc_sync() == 0 && fake_disk[54][3] == mark && pc_dirty_count() == 0);
+
+    fake_disk[55][PC_PAGE_SIZE - 1] = 0x55u;
+    fake_read_fail = 56;
+    CHECK(pc_copy_in(56 * PC_PAGE_SIZE - 1, two, 2) == -1);
+    CHECK(pc_dirty_count() == 0);
+    fake_read_fail = FAKE_NO_FAIL;
+    CHECK(pc_copy_out(56 * PC_PAGE_SIZE - 1, buf, 1) == 0 && buf[0] == 0x55u);
+    CHECK(pc_copy_in(56 * PC_PAGE_SIZE - 1, two, 2) == 0 && pc_dirty_count() == 2);
+    CHECK(pc_sync() == 0 && fake_disk[55][PC_PAGE_SIZE - 1] == two[0] &&
+          fake_disk[56][0] == two[1]);
 
     CHECK(pc_copy_out(FAKE_PAGES * PC_PAGE_SIZE - 1, buf, 2) == -1);
     CHECK(pc_copy_in(FAKE_PAGES * PC_PAGE_SIZE, &mark, 1) == -1);

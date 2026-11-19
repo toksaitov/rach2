@@ -128,7 +128,7 @@ static int watched_sync(void *ctx)
     return krffs_memory_sync(ctx);
 }
 
-static const krffs_backend_t watched_backend = {watched_read, watched_write, watched_sync};
+static const krffs_backend_t watched_backend = {watched_read, watched_write, watched_sync, 0};
 
 /** The page cache's flush, where an fsync of the root waits for the disk. */
 int pc_sync_wait(void)
