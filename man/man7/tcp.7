@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 19, 2026
 .Dt TCP 7
 .Os
 .Sh NAME
@@ -38,6 +38,34 @@ A send during the handshake waits for its end, or fails with
 on a nonblocking socket, as
 .Xr send 2
 says.
+.Ss Ports and TIME_WAIT
+A socket that binds no port is given one of the ephemeral range, 32768
+through 60999, Linux's
+.Pa ip_local_port_range .
+A bind to port zero and a listen without a port take a port no connection,
+listener or bound socket has, trying the odd ports first from a place no
+other host can predict.
+A connection takes the first even port, then odd, from where the last
+connection to the same peer address and port left off, chosen by a keyed
+hash of that destination, as Linux does (RFC 6056, algorithm 4): a port
+held by a listener or a bound socket is passed over, and one another
+connection has is taken only for a different peer, so each destination has
+the whole range.
+.Pp
+The side that closes first holds the connection in
+.Dv TIME_WAIT
+for 60 seconds, Linux's length, which keeps its port from the next
+connection to the same peer; a FIN the peer sends again is acknowledged
+and starts the 60 seconds again.
+A connection there keeps no buffers.
+The connections in
+.Dv TIME_WAIT
+are at most Linux's
+.Pa tcp_max_tw_buckets
+for the machine's memory, half a power of two near one for each 128 KiB,
+from 256 to 262144; past that a connection skips
+.Dv TIME_WAIT ,
+counted in TCPTimeWaitOverflow.
 .Ss Keepalive
 A connection with
 .Dv SO_KEEPALIVE
@@ -251,7 +279,9 @@ counts in its
 line the segments of data received again whole, DelayedACKLost; the
 retransmission timeouts, TCPTimeouts; the connections ended by data no
 program will read, TCPAbortOnData, those a close with data unread ended,
-TCPAbortOnClose, and those a timeout ended, TCPAbortOnTimeout; the challenge acknowledgements sent, TCPChallengeACK,
+TCPAbortOnClose, and those a timeout ended, TCPAbortOnTimeout; the connections that skipped
+.Dv TIME_WAIT
+for a full table of them, TCPTimeWaitOverflow; the challenge acknowledgements sent, TCPChallengeACK,
 and the SYNs that drew one, TCPSYNChallenge; the answers of a handshake
 not yet ended held back by the limit, TCPACKSkippedSynRecv, those to a
 segment outside the window, TCPACKSkippedSeq, and the challenges held

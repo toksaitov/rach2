@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 19, 2026
 .Dt CONNECT 2
 .Os
 .Sh NAME
@@ -32,8 +32,13 @@ connection; a missing route fails at once with ENETUNREACH.
 On a
 .Dv SOCK_STREAM
 socket, the call starts the TCP handshake.
-A previously bound local port is retained; otherwise an unused ephemeral
-port from 49152 through 65535 is selected.
+A previously bound local port is retained; otherwise an ephemeral port
+from 32768 through 60999 is selected, as
+.Xr tcp 7
+describes, which no listener or bound socket holds and no connection to
+the same peer address and port has, one in
+.Dv TIME_WAIT
+included.
 A duplicate pairing of local port, peer address, and peer port is refused.
 .Pp
 A blocking socket waits until the handshake completes or fails.

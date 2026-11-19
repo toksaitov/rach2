@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 19, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -1027,7 +1027,8 @@ reads by name: DelayedACKLost, the segments of data received again whole;
 TCPTimeouts, the retransmission timeouts; TCPAbortOnData, the
 connections ended by data no program will read, past the peer's FIN or
 after this side's close; TCPAbortOnClose, those a close with data unread
-ended; TCPAbortOnTimeout, those a timeout ended; TCPChallengeACK and TCPSYNChallenge, the
+ended; TCPAbortOnTimeout, those a timeout ended; TCPTimeWaitOverflow, those
+that skipped TIME_WAIT for a full table of them; TCPChallengeACK and TCPSYNChallenge, the
 challenge acknowledgements sent and the SYNs that drew one;
 TCPACKSkippedSynRecv, TCPACKSkippedSeq and TCPACKSkippedChallenge, the
 answers of a handshake not yet ended, those to segments outside the

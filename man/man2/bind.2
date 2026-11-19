@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 19, 2026
 .Dt BIND 2
 .Os
 .Sh NAME
@@ -34,7 +34,9 @@ Linux.
 A nonzero port below 1024 requires effective user ID 0.
 .Pp
 A UDP bind registers the address and port for receiving datagrams.
-Port zero selects a free port from 49152 through 65535.
+Port zero selects a free port from 32768 through 60999, Linux's
+.Pa ip_local_port_range ,
+starting at a random one.
 Two bindings of a port meet when one is to any address or both are to the
 same one; a socket may take a port at an address that meets another's only
 when all sockets so met have
@@ -48,9 +50,9 @@ It rejects a nonzero port that already has a live listener at an address
 that meets the one asked for, but does not reserve the port against
 another bind before
 .Xr listen 2 .
-Binding TCP port zero selects a free port from 49152 through 65535 that
-no TCP connection or listener uses and no other stream socket has bound, as
-Linux does, and
+Binding TCP port zero selects a free port from 32768 through 60999 that
+no TCP connection or listener uses and no other stream socket has bound,
+odd ones first, as Linux does, and
 .Xr getsockname 2
 reports it.
 .Pp
@@ -89,7 +91,7 @@ A dual-stack wildcard overlaps IPv4 bindings on the same port.
 UDP applies the reuse and owner rules above across both families;
 TCP refuses conflicting cross-family stream bindings.
 IPV6_V6ONLY removes the IPv4 overlap and rejects mapped addresses.
-Both families share each transport's ephemeral port sequence.
+Both families share each transport's ephemeral ports.
 .Ss Packet sockets
 An
 .Dv AF_PACKET
@@ -160,7 +162,9 @@ The socketcall argument array or the required address bytes cannot be read.
 The address length is negative or less than eight bytes, a packet
 address is shorter than 20 bytes, or a packet protocol is neither zero,
 IPv4, ARP, IPv6 nor EAPOL; or the socket is an ICMP datagram socket
-whose echo identifier a bind, send or connect has already fixed.
+whose echo identifier a bind, send or connect has already fixed; or the
+socket is a TCP socket that has a port already, from a bind, a listen or a
+connect, as on Linux.
 .It Er ENOBUFS
 Memory for a packet-socket binding cannot be allocated.
 .It Er ENODEV
