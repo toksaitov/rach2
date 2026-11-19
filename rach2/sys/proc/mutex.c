@@ -43,9 +43,9 @@ static uintptr_t mutex_me_word(void)
  * (kernel/locking/rwsem.c, kernel/locking/mutex.c): a wake of an empty queue
  * costs a pass with interrupts off, which QEMU's emulator makes dear. The
  * release's atomic exchange of the lock's word is a full barrier between
- * its store and this read of the queue, and so is the unlock of the
- * queue a sleeper files itself on before it tests the lock (`wq_wait`):
- * either the sleeper's test sees the release or this read sees the sleeper.
+ * its store and this read of the queue, and a sleeper passes one between
+ * its filing on the queue and its test of the lock (`wq_wait`): either the
+ * sleeper's test sees the release or this read sees the sleeper.
  */
 static void wake_waiters(wait_queue_t *wq)
 {

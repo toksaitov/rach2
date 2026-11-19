@@ -297,9 +297,14 @@ struct wq_wait_stats {
  * `stats` supplies the outputs of `wq_wait_event_sigflag_counted`, or NULL.
  *
  * The process files itself on the queue and is marked BLOCKED, under the
- * queue's lock, whose release is a full barrier, before it tests the
- * condition and the signal, as Linux's `prepare_to_wait` comes before the
- * test (kernel/sched/wait.c:229). A waker on any processor therefore
+ * queue's lock, and passes a full barrier before it tests the condition and
+ * the signal, as Linux's `prepare_to_wait` sets the state with
+ * set_current_state's barrier before the test (kernel/sched/wait.c:229).
+ * The lock's release is one store (`raw_spin_unlock`), which a later load
+ * may pass, so without the barrier the test could read the condition before
+ * the filing reached other processors, and a waker that reads the queue
+ * with no lock (`wq_active`) find it empty: neither would wake the process.
+ * A waker on any processor therefore
  * either changed the condition before the test, which then sees it true,
  * or wakes after it and finds the process on the queue and BLOCKED, and
  * makes it ready, in which case `schedule` keeps it running. Interrupts are
@@ -346,6 +351,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
         current_proc->killable = kind == WQ_KILLABLE;
         wq_wait_state(PROC_BLOCKED, wakeups);
         wq_unlock(wq);
+        sched_mb(); /* the filing before the test, as described above */
         if (cond(arg)) {
             rc = 0;
             break;
@@ -393,6 +399,7 @@ void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
         wq_lock(wq);
         wq_enqueue(wq, w);
         wq_unlock(wq);
+        sched_mb(); /* the filing before the caller's test, as in `wq_wait` */
     }
 }
 
@@ -597,6 +604,7 @@ void wq_entry_add(wait_queue_t *wq, struct wq_waiter *w)
     w->wq = wq;
     wq_enqueue(wq, w);
     wq_unlock(wq);
+    sched_mb(); /* the filing before the caller's test, as in `wq_wait` */
     irq_restore(flags);
 }
 

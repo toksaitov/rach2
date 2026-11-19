@@ -368,8 +368,8 @@ static void sleep_record_hold(const struct sleep_lock *l)
  * takers left. It wakes the queue only when a waiter is on it, as
  * Linux's __mutex_unlock_slowpath wakes only a waiter it finds on the
  * lock's list (kernel/locking/mutex.c:937-956). The exchange is a full
- * barrier between the release and the read of the queue, and so is the
- * unlock of the queue a waiter files itself on before it tests its turn
+ * barrier between the release and the read of the queue, and the waiter
+ * passes one between its filing on the queue and its test of its turn
  * (`wq_wait`): either the waiter's test sees the release or this read sees
  * the waiter.
  */
