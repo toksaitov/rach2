@@ -57,6 +57,34 @@ static enum bootverb parse(char *a1, char *a2, char *a3, const char **arg)
     return bootverb_parse(argc, argv, arg, &arg2_out);
 }
 
+/** Check that every verb the parser takes is one `bootverb_known` knows. */
+static void check_known(void)
+{
+    static const char *const names[] = {"status",   "commit", "cancel",    "kernel",
+                                        "config",   "trial",  "env",       "grub",
+                                        "fallback", "booted", "rootimage", "fsck"};
+    unsigned i;
+
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        CHECK(bootverb_known(names[i]),
+              "every verb the parser takes is also one the diagnostic knows");
+    }
+}
+
+/** Check `fsck`, which takes one operand, the volumes' UUIDs, and returns
+ *  it. */
+static void check_fsck(void)
+{
+    static char list[] = "0e7a3c1d-6f52-4b8e-9d10-2a5c4e6f8b90";
+    const char *arg = 0;
+
+    CHECK(parse((char *)"fsck", list, 0, &arg) == BOOTVERB_FSCK && arg == list,
+          "fsck with a list of volumes is a verb and returns the list");
+    CHECK(parse((char *)"fsck", 0, 0, &arg) == BOOTVERB_NONE, "fsck with no volume is refused");
+    CHECK(parse((char *)"fsck", list, list, &arg) == BOOTVERB_NONE,
+          "fsck with a surplus operand is refused");
+}
+
 /**
  * Check the verbs, their operand counts, the spellings that are not verbs,
  * and `bootverb_known`. `env` is the one verb whose operand count varies: a
@@ -72,6 +100,7 @@ int main(void)
     CHECK(parse((char *)"booted", 0, 0, &arg) == BOOTVERB_BOOTED, "booted is a verb");
     CHECK(parse((char *)"booted", (char *)"extra", 0, &arg) == BOOTVERB_NONE,
           "booted with a surplus argument is refused");
+    check_fsck();
     CHECK(parse((char *)"kernel", (char *)"/tmp/k", 0, &arg) == BOOTVERB_KERNEL,
           "kernel with a path is a verb");
 
@@ -151,18 +180,7 @@ int main(void)
     CHECK(bootverb_known("kernel") && parse((char *)"kernel", 0, 0, &arg) == BOOTVERB_NONE,
           "a known verb can still fail to parse, which is what separates the two diagnostics");
 
-    {
-        static char *const names[] = {(char *)"status", (char *)"commit", (char *)"cancel",
-                                      (char *)"kernel", (char *)"config", (char *)"trial",
-                                      (char *)"env",    (char *)"grub",   (char *)"fallback",
-                                      (char *)"booted"};
-        unsigned i;
-
-        for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-            CHECK(bootverb_known(names[i]),
-                  "every verb the parser takes is also one the diagnostic knows");
-        }
-    }
+    check_known();
 
     return fails > 255 ? 255 : fails;
 }
