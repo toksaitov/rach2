@@ -510,14 +510,16 @@ if [ -n "$peer" ]; then
     ip route add "$peer/32" via "$guest_ip" dev "$tap" || fail "no route to $peer by the guest"
 fi
 
-while ! grep -a -q 'NETGUEST READY' "$out/console"; do
+# The serial console can carry the READY line in pieces, so a line is read
+# only once its last field, filter=0 or filter=1, has come.
+while ! grep -a -q 'NETGUEST READY .* filter=[01]' "$out/console"; do
     if grep -a -q 'NETGUEST FAILED' "$out/console"; then
         fail "the guest reported $(grep -a 'NETGUEST FAILED' "$out/console" | tr -d '\r' | tail -n 1)"
     fi
     kill -0 "$qemu" 2> /dev/null || fail "QEMU ended before the guest was ready"
     sleep 0.5
 done
-ready=$(grep -a 'NETGUEST READY' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST //')
+ready=$(grep -a 'NETGUEST READY .* filter=[01]' "$out/console" | tr -d '\r' | tail -n 1 | sed 's/^.*NETGUEST //')
 echo "netguest: guest: $ready"
 case " $ready " in
     *" deny=$deny filter=$filter "*) ;;
