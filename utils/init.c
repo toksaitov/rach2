@@ -3805,6 +3805,23 @@ static pid_t child_wait(int *status)
 }
 
 /**
+ * Act on the child `child`, which `child_wait` reported stopped: continue it
+ * when it is the console session `shell`, since `^Z` at the console prompt
+ * stops the session and there is no shell above it to type `fg`. Any other
+ * child stays stopped until something sends it SIGCONT, as under Linux's
+ * inits, which do not wait for stopped children: a daemon, such as the DHCP
+ * client `udhcpc -b` leaves in the background, is init's child once its
+ * first parent has gone, and a process that stops it on purpose must find it
+ * stopped.
+ */
+static void stopped_child(pid_t child, pid_t shell)
+{
+    if (child == shell) {
+        (void)kill(child, SIGCONT);
+    }
+}
+
+/**
  * Set the machine up, then reap, respawn and supervise for as long as it runs.
  *
  * The three shutdown handlers go in before the first child, so a request that
@@ -3831,8 +3848,8 @@ static pid_t child_wait(int *status)
  * mixer's levels that changed (`save_changed_levels`). The log is looked at
  * every `SERVICE_LOG_CHECK_TURNS` turns, busy or idle, since a machine whose
  * children keep dying never takes the idle path. `WUNTRACED` reports a
- * stopped child, and init continues it at once: `^Z` at the console prompt
- * stops the session, and there is no shell above it to type `fg`.
+ * stopped child, which `stopped_child` continues only when it is the console
+ * session.
  *
  * A console session or a service that dies within two seconds of its start
  * is taken to have a permanent reason (a missing or crashing binary, no
@@ -3907,7 +3924,7 @@ int main(void)
             continue;
         }
         if (reaped > 0 && WIFSTOPPED(status)) {
-            kill(reaped, SIGCONT);
+            stopped_child(reaped, shell);
             continue;
         }
         if (service_ended(&acpid, reaped)) {
