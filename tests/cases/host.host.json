@@ -1082,7 +1082,7 @@
         },
         {
           "assertion_id": "netdev",
-          "checks": "tests/host/netdev_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "checks": "tests/host/netdev_hosttest.c runs the driver table with model drivers, the walk, the link and the carrier, and a card's hand-over through /sys/bus/pci/drivers to another driver and back, with D0 first and a second bring-up, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1448,6 +1448,11 @@
         {
           "assertion_id": "tables",
           "checks": "tests/host/tables_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tap",
+          "checks": "tests/host/tap_hosttest.c runs /dev/net/tun against the stack's stand-ins: TUNSETIFF's names and refusals, the other tun requests, a descriptor duplicated before TUNSETIFF, the ring of 1024 frames and the drop past it, reads whole and short, writes, the backend and the close with and without TUNSETPERSIST, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

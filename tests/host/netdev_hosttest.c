@@ -16,10 +16,18 @@
  * no card. netdev.c is compiled against them, so what is under test is
  * the walk itself: the order, the skip, the stop, and the binding.
  *
+ * A card's hand-over to another driver and back (`netdev_release`,
+ * `netdev_reclaim` and their files in /sys) is run against stand-ins for
+ * PCI, /sys and the stack that record what was asked of them.
+ *
  * The test exits with the number of failed checks, at most 255.
  */
 
 #include "lib/kint.h"
+#include "lib/kerrno.h"
+#include "fs/sysfs.h"
+#include "fs/synthfs.h"
+#include "pci.h"
 #include "network/driver/netdev.h"
 
 /* Declared, not included: the kernel's kint.h and the host's headers disagree
@@ -57,6 +65,8 @@ struct model {
     int can_say;
     struct netdev_link state;
     const char *reason;
+    int pci_key;   /* the function card 0 is, or -1, as a driver sets it */
+    int fail_next; /* the next inits of card 0 that fail before its verdict */
 };
 
 static struct model m_first, m_second, m_third;
@@ -101,6 +111,13 @@ static int second_init(struct netdev *nd, int nth)
     }
     m_second.inits++;
     note('2');
+    if (nth == 0) {
+        nd->pci_key = m_second.pci_key;
+        if (m_second.fail_next > 0) {
+            m_second.fail_next--;
+            return NETDEV_FAILED;
+        }
+    }
     return nth == 0 ? m_second.verdict : m_second.next_verdict;
 }
 /** Probe the third model's card `nth`: card 0 gets `m_third.verdict`, any
@@ -270,6 +287,8 @@ static void reset(int a, int b, int c)
     m_second.state.up = 0;
     m_second.state.mbps = 0;
     m_second.state.full_duplex = 0;
+    m_first.pci_key = m_second.pci_key = m_third.pci_key = -1;
+    m_first.fail_next = m_second.fail_next = m_third.fail_next = 0;
     m_first.reason = "the first card would not start";
     m_second.reason = "the second card would not start";
     m_third.reason = "the third card would not start";
@@ -324,6 +343,294 @@ void *k_memset(void *ptr, int c, size_t n)
         *q++ = (unsigned char)c;
     }
     return ptr;
+}
+
+/* ------------------------------------------------------------------ */
+/* The kernel around a card's hand-over: PCI, /sys and the stack.      */
+/* ------------------------------------------------------------------ */
+
+/* What the hand-over did to the kernel around the card, which the rows
+   read: the function's owner, which a row sets to stand for vfio-pci, and
+   its power state; the last unclaim, bind, unbind and uevent; the last
+   up or down set on an interface; the microseconds waited; and the
+   brackets of net_lock still open. */
+static struct {
+    const char *owner;
+    int power;
+    int unclaims, unclaim_devfn;
+    const char *unclaim_owner;
+    int binds, bind_key;
+    const char *bind_driver;
+    int unbinds, unbind_key;
+    const char *uevent;
+    int set_ups, last_up;
+    uint32_t waited;
+    int locks;
+    int dirs, attrs;
+    int dir_parent[8];
+    const char *dir_name[8];
+    const struct sysfs_attr *attr[2][2]; /* [driver][bind, unbind] */
+} k;
+
+/** The kernel's k_strlen. */
+size_t k_strlen(const char *str)
+{
+    size_t n = 0;
+
+    while (str[n]) {
+        n++;
+    }
+    return n;
+}
+
+/** Count the wait instead of waiting. */
+void k_udelay(uint32_t usec)
+{
+    k.waited += usec;
+}
+
+/** Open a bracket of the stack's lock, counted. */
+uint32_t net_lock(void)
+{
+    k.locks++;
+    return 0;
+}
+
+/** Close a bracket of the stack's lock, counted. */
+void net_unlock(uint32_t flags)
+{
+    (void)flags;
+    k.locks--;
+}
+
+/** Record an interface set up or down. */
+int netconf_set_up(struct netdev *nd, int up)
+{
+    (void)nd;
+    k.set_ups++;
+    k.last_up = up;
+    return 0;
+}
+
+/** The function's owner, as the row set it. */
+const char *pci_owner(uint8_t bus, uint8_t devfn)
+{
+    (void)bus;
+    (void)devfn;
+    return k.owner;
+}
+
+/** Record the function given up. */
+void pci_unclaim(uint8_t bus, uint8_t devfn, const char *owner)
+{
+    k.unclaims++;
+    k.unclaim_devfn = bus << 8 | devfn;
+    k.unclaim_owner = owner;
+}
+
+/** The function's power state, as the row set it. */
+int pci_power_state(const pci_device_t *dev)
+{
+    (void)dev;
+    return k.power;
+}
+
+/** Move the function to `state`. */
+int pci_set_power_state(const pci_device_t *dev, int state)
+{
+    (void)dev;
+    k.power = state;
+    return 0;
+}
+
+/** Record the function shown bound. */
+int sysfs_pci_bind(int key, const char *driver)
+{
+    k.binds++;
+    k.bind_key = key;
+    k.bind_driver = driver;
+    return 0;
+}
+
+/** Record the function shown unbound. */
+void sysfs_pci_unbind(int key)
+{
+    k.unbinds++;
+    k.unbind_key = key;
+}
+
+/** Record the uevent sent. */
+int32_t sysfs_pci_uevent(int key, const char *action)
+{
+    (void)key;
+    k.uevent = action;
+    return 0;
+}
+
+/** /sys/bus/pci's anchor: handle 1. */
+int sysfs_anchor(int node, int key)
+{
+    (void)key;
+    return node == SYSFS_BUS_PCI ? 1 : -ENOENT;
+}
+
+/** The directory `name` made below `dir`, or 0. */
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    int i;
+
+    (void)len;
+    for (i = 0; i < k.dirs; i++) {
+        if (k.dir_parent[i] == dir && same(k.dir_name[i], name)) {
+            return 10 + i;
+        }
+    }
+    return 0;
+}
+
+/** Make a directory: handles from 10. */
+int sysfs_add_dir(int parent, const char *name)
+{
+    if (parent <= 0 || k.dirs == 8) {
+        return parent <= 0 ? -ENOENT : -ENOSPC;
+    }
+    k.dir_parent[k.dirs] = parent;
+    k.dir_name[k.dirs] = name;
+    return 10 + k.dirs++;
+}
+
+/** Keep each driver's bind and unbind, so that a row writes them. */
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)obj;
+    if (arg >= 0 && arg < 2) {
+        k.attr[arg][same(attr->name, "bind") ? 0 : 1] = attr;
+    }
+    return 100 + k.attrs++;
+}
+
+/** Write `text` to the attribute `which`, 0 bind or 1 unbind, of driver
+ * `drv`, 0 e1000 or 1 r8169, as a write of the file does. */
+static int32_t write_attr(int drv, int which, const char *text)
+{
+    return k.attr[drv][which]->store(0, drv, text, (uint32_t)k_strlen(text));
+}
+
+/* The function of the second model's card, as a write of /sys gives it. */
+static const char name[] = "0000:00:03.0\n";
+
+static void check_takeback(struct netdev *nd, int txs);
+
+/**
+ * Give the second model's card, an e1000 at 00:03.0, to another driver
+ * through /sys and take it back: the interface stays, down, without a
+ * carrier and dropping frames, while the card is away; the function is
+ * given up and shown unbound; a function another driver holds is not
+ * taken; the card is brought to D0 before its bring-up; a card that fails
+ * its first bring-up is tried once more; and one that fails both stays
+ * away.
+ */
+static void check_handover(void)
+{
+    unsigned char frame[64];
+    struct netdev *nd;
+    struct netdev_link link;
+    int index, txs;
+
+    k_memset(&k, 0, sizeof(k));
+    k_memset(frame, 0, sizeof(frame));
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_ABSENT);
+    m_second.pci_key = 3 << 3;
+    m_second.state.up = 1;
+    CHECK(netdev_probe() == 1 && netdev_count() == 2, "two cards come up for the hand-over");
+    nd = netdev_at(1);
+    index = nd->index;
+    CHECK(netdev_release(netdev_at(0)) == -ENODEV, "a card that is no PCI function is not let go");
+
+    netdev_sys_start();
+    CHECK(k.dirs == 3 && k.attrs == 4 && k.attr[0][0] && k.attr[0][1] && k.attr[1][0] &&
+              k.attr[1][1],
+          "drivers/, e1000/ and r8169/ are made, each driver with bind and unbind");
+    CHECK(k.binds == 1 && k.bind_key == (3 << 3) && same(k.bind_driver, "e1000"),
+          "the e1000's card is shown bound to e1000 and the r8169's to nothing");
+
+    CHECK(write_attr(1, 1, name) == -ENODEV, "r8169's unbind does not take the e1000's card");
+    CHECK(write_attr(0, 1, "0000:00:20.0") == -ENODEV && write_attr(0, 1, "00:03.0") == -ENODEV &&
+              write_attr(0, 1, "0000:00:03.8") == -ENODEV,
+          "a name that is no function's is refused");
+    CHECK(m_second.stops == 0, "and nothing is stopped by a refused write");
+
+    txs = m_second.txs;
+    CHECK(write_attr(0, 1, name) == (int32_t)(sizeof(name) - 1), "unbind takes the name");
+    CHECK(m_second.stops == 1, "the driver stops the card");
+    CHECK(k.set_ups == 1 && k.last_up == 0, "the interface is set down");
+    CHECK(k.unclaims == 1 && k.unclaim_devfn == (3 << 3) && same(k.unclaim_owner, "kernel"),
+          "the function is given up");
+    CHECK(k.unbinds == 1 && k.unbind_key == (3 << 3) && same(k.uevent, "unbind"),
+          "and shown unbound, with its uevent");
+    CHECK(netdev_tx(nd, frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED && m_second.txs == txs,
+          "a frame sent while the card is away is dropped and the driver not called");
+    link.up = 42;
+    CHECK(netdev_link(nd, &link) == 1 && link.up == 0, "the interface has no carrier");
+    CHECK(nd == netdev_at(1) && nd->index == index && same(nd->name, "eth1"),
+          "the interface stays, with its name and index");
+    CHECK(write_attr(0, 1, name) == -ENODEV, "a card already let go is not let go again");
+    CHECK(k.locks == 0, "every bracket of the stack's lock is closed");
+    check_takeback(nd, txs);
+}
+
+/**
+ * Take back the card `nd` that check_handover let go, whose driver had
+ * sent `txs` frames: refused while another driver holds the function,
+ * brought to D0 first, tried twice, and left away when both tries fail.
+ */
+static void check_takeback(struct netdev *nd, int txs)
+{
+    unsigned char frame[64];
+
+    k_memset(frame, 0, sizeof(frame));
+    k.owner = "vfio-pci";
+    CHECK(netdev_reclaim(nd, "e1000") == -EBUSY, "a function another driver holds is busy");
+    CHECK(write_attr(0, 0, name) == -ENODEV,
+          "and bind answers ENODEV for it, as Linux's bind_store for a device with a driver");
+    CHECK(m_second.inits == 1, "and the driver does not touch it");
+
+    k.owner = 0;
+    k.power = 3;
+    k.waited = 0;
+    k.binds = 0;
+    CHECK(write_attr(0, 0, name) == (int32_t)(sizeof(name) - 1), "bind takes the name");
+    CHECK(k.power == 0 && k.waited >= PCI_PM_D3HOT_WAIT * 1000u,
+          "a card left in D3hot is brought to D0, with the wait from D3hot, first");
+    CHECK(m_second.inits == 2, "the driver brings the card up again");
+    CHECK(netdev_tx(nd, frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED &&
+              m_second.txs == txs + 1,
+          "a frame sent after is the driver's again");
+    CHECK(k.binds == 1 && same(k.bind_driver, "e1000") && same(k.uevent, "bind"),
+          "the function is shown bound to e1000, with its uevent");
+    CHECK(k.set_ups == 1, "the interface stays down until it is set up");
+    CHECK(write_attr(0, 0, name) == -ENODEV, "a card the driver has is not taken again");
+
+    CHECK(write_attr(0, 1, name) > 0, "the card is let go a second time");
+    m_second.fail_next = 1;
+    k.waited = 0;
+    k.unclaims = 0;
+    CHECK(netdev_reclaim(nd, 0) == 0, "a card whose first bring-up fails is taken back");
+    CHECK(m_second.inits == 4 && m_second.stops == 3 && k.unclaims == 1 && k.waited == 100000u,
+          "after a stop, the function given up and 100 ms, the second bring-up starts it");
+
+    CHECK(write_attr(0, 1, name) > 0, "the card is let go a third time");
+    m_second.fail_next = 2;
+    k.unclaims = 0;
+    CHECK(netdev_reclaim(nd, "e1000") == -EIO, "a card that fails both bring-ups is EIO");
+    CHECK(m_second.inits == 6 && k.unclaims == 2, "each failed bring-up gives the function up");
+    txs = m_second.txs;
+    CHECK(netdev_tx(nd, frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED && m_second.txs == txs,
+          "and the card stays away");
+    CHECK(nd->pci_key == (3 << 3), "keeping its function, so that a later bind finds it");
+    CHECK(write_attr(0, 0, name) > 0, "a later bind takes it back");
+    CHECK(k.locks == 0, "every bracket of the stack's lock is closed at the end");
 }
 
 /**
@@ -421,6 +728,7 @@ int main(void)
     unsigned i;
 
     injected_failure();
+    check_handover();
     for (i = 0; i < sizeof(frame); i++) {
         frame[i] = (unsigned char)i;
     }
