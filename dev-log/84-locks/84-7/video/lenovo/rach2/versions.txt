@@ -1,0 +1,2 @@
+Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+Mozilla Firefox 153.6.0esr

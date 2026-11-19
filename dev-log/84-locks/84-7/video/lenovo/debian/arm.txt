@@ -1,0 +1,14 @@
+boot5426: original boot partition sha256 c01ac5ddf249ddc62017997787c7af8bf8cff6e904505fca4c44b87d6710863b
+boot5426: boot partition sha256 0383b9f56574d44ba0057d13a102411d959bdd7d6aad9222c8bb6900b51b12d6
+bootctl: staged: 959 bytes of menu in a 8192-byte slot
+bootctl: armed: the next boot tries recovery once
+bootctl: candidate: first sector 6163, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: candidate: runs: 6163+4096 24136+28672
+bootctl: fallback: first sector 11848, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: fallback: runs: 11848+8192 52808+24576
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: recovery
+bootctl: booted: candidate
+bootctl: slot size: 16777216 bytes

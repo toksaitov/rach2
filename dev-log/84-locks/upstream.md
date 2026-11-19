@@ -486,3 +486,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the VM's rebuild of virglrenderer in `bed/vm/image/setup.sh.in` adds `gbm &&` to the condition of that branch (#5265), so that without a GBM device a persistent buffer gets no storage and its export gives `VIRGL_RESOURCE_FD_INVALID` (`vrend_renderer.c:7529-7545`), the `-EINVAL` that `machine.bed-shm.nocopy`'s `refuse` row expects. With a GBM device, as on the Lenovo, nothing changes.
 * Status: unreported.
 * Next: propose that `vrend_create_buffer` fail the resource when `gbm` is NULL, or that the flag keep `glBufferStorage` without a GBM device, and send it with the reproduction above.
+
+## Weston moves a null view to a layer
+
+* Project: Weston 14.0.2, Debian package 14.0.2-1. The source archive `weston_14.0.2.orig.tar.xz` has SHA-256 `b47216b3530da76d02a3a1acbf1846a9cd41d24caa86448f9c46f78f20b6e0ac`. [Debian source archive](https://deb.debian.org/debian/pool/main/w/weston/weston_14.0.2.orig.tar.xz)
+* Fails: Weston dies during the second browser play. The preceding boot's journal names Weston and reads a fault at address 0x274 at library offset 0x29045. The instruction at that offset reads a byte at `0x274(%rdi)` in `weston_view_move_to_layer`. Its first argument, the view, is null. `libweston/compositor.c:4212` reads `view->is_mapped`. The caller is unknown.
+* Found: 2026-11-20, on the Lenovo in 84-7.1. Debian booted with `nomodeset` and simpledrm. Weston ran the DRM backend with Pixman, the kiosk shell and `require-input=false`. The fault followed a completed 58 s Firefox H.264 play as Firefox started VP9. Chromium then got a refused connection on the Wayland socket.
+* Reproduction: run the two Firefox clips in order with fresh browser profiles and the same Weston session, using [84-7.1's procedure](84-7.md#84-71-chromiums-video-drops-beside-debian). One such sequence produced the fault. A reproduction still needs the caller's stack.
+* Evidence: [journal and disassembly](84-7/video/lenovo/weston-fault.txt), [playback output](84-7/video/lenovo/debian-second-playback.txt) and [Wayland client errors](84-7/video/lenovo/debian-second-client-errors.txt).
+* Rach2: the comparison keeps completed plays and resumes the remaining ones with a fresh Weston session for each. The kernel and the browser runner need no change for this workaround.
+* Status: unreported, draft.
+* Next: reproduce on a current Weston with symbols and find which caller passes the null view.
