@@ -52,20 +52,22 @@
  * finished frames. The ring's own bits, VIRTIO_F_EVENT_IDX and
  * VIRTIO_F_INDIRECT_DESC, are the core's to take.
  */
-#define VNET_FEATURES                                                      \
-    (VIRTIO_BIT(VIRTIO_NET_F_MAC) | VIRTIO_BIT(VIRTIO_NET_F_STATUS) |      \
-     VIRTIO_BIT(VIRTIO_NET_F_MTU) | VIRTIO_BIT(VIRTIO_NET_F_MRG_RXBUF) |   \
-     VIRTIO_BIT(VIRTIO_NET_F_CTRL_VQ) | VIRTIO_BIT(VIRTIO_NET_F_CTRL_RX) | \
-     VIRTIO_BIT(VIRTIO_NET_F_CTRL_MAC_ADDR) | VIRTIO_BIT(VIRTIO_NET_F_SPEED_DUPLEX))
+#define VNET_FEATURES                                                       \
+    (VIRTIO_BIT(VIRTIO_NET_F_MAC) | VIRTIO_BIT(VIRTIO_NET_F_STATUS) |       \
+     VIRTIO_BIT(VIRTIO_NET_F_MTU) | VIRTIO_BIT(VIRTIO_NET_F_MRG_RXBUF) |    \
+     VIRTIO_BIT(VIRTIO_NET_F_CTRL_VQ) | VIRTIO_BIT(VIRTIO_NET_F_CTRL_RX) |  \
+     VIRTIO_BIT(VIRTIO_NET_F_CTRL_MAC_ADDR) | VIRTIO_BIT(VIRTIO_NET_F_MQ) | \
+     VIRTIO_BIT(VIRTIO_NET_F_SPEED_DUPLEX))
 
 /* The device configuration (virtio 1.2, 5.1.4), by offset: the station
- * address, the status word, the largest MTU, the speed in Mb/s and the
- * duplex, each there only with its feature. */
-#define VNET_CFG_MAC    0
-#define VNET_CFG_STATUS 6
-#define VNET_CFG_MTU    10
-#define VNET_CFG_SPEED  12
-#define VNET_CFG_DUPLEX 16
+ * address, the status word, the most queue pairs, the largest MTU, the
+ * speed in Mb/s and the duplex, each there only with its feature. */
+#define VNET_CFG_MAC       0
+#define VNET_CFG_STATUS    6
+#define VNET_CFG_MAX_PAIRS 8
+#define VNET_CFG_MTU       10
+#define VNET_CFG_SPEED     12
+#define VNET_CFG_DUPLEX    16
 
 #define VIRTIO_NET_S_LINK_UP 1u
 
@@ -103,12 +105,22 @@ struct virtio_net_hdr {
 #define VIRTIO_NET_CTRL_RX_ALLMULTI  1
 #define VIRTIO_NET_CTRL_MAC          1
 #define VIRTIO_NET_CTRL_MAC_ADDR_SET 1
+#define VIRTIO_NET_CTRL_MQ           4
+#define VIRTIO_NET_CTRL_MQ_PAIRS_SET 0
 #define VIRTIO_NET_OK                0
 
-/* The queues, with one pair of receive and transmit queues. */
-#define VNET_Q_RX   0
-#define VNET_Q_TX   1
-#define VNET_Q_CTRL 2
+/* The queue pairs a device with VIRTIO_NET_F_MQ may state (5.1.6.5.5),
+ * VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN and _MAX. */
+#define VNET_PAIRS_MIN 1u
+#define VNET_PAIRS_MAX 0x8000u
+
+/* The queues: pair `i` receives on 2i and transmits on 2i + 1, and the
+ * control queue follows the device's last pair, at 2 *
+ * max_virtqueue_pairs, which is 2 for a device of one pair. */
+#define VNET_Q_RX      0
+#define VNET_Q_TX      1
+#define VNET_Q_CTRL    2
+#define VNET_Q_PAIR(i) (2 * (i))
 
 /*
  * Buffers. Each is half a page of the transport's memory, enough for the
@@ -147,6 +159,15 @@ struct virtio_dev;
  * and no interface left.
  */
 int32_t virtio_net_bind(struct virtio_dev *vdev);
+
+/**
+ * Give each device a queue pair for each processor online, up to the pairs
+ * it has, once the processors past the first have started: the boot's probe
+ * binds the devices before they do, where Linux's virtnet_probe runs with
+ * every processor up and sets curr_queue_pairs to num_online_cpus. Process
+ * context.
+ */
+void virtio_net_cpus_started(void);
 
 /** This driver's entry in the driver table (netdev.c). Its `poll` is NULL:
  * the device interrupts. */
