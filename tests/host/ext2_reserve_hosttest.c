@@ -554,6 +554,40 @@ void bcache_dirty_pointer(struct bbuf *buffer, uint64_t owner, int level)
     bcache_dirty(buffer);
 }
 
+/** Count the write as `bcache_dirty` does; the model keeps no entry mark. */
+void bcache_dirty_entry(struct bbuf *buffer)
+{
+    bcache_dirty(buffer);
+}
+
+/** Keep the order: the model writes nothing to a device, so every order
+ * holds. */
+int bcache_order_after(block_device_t *dev, uint64_t blk)
+{
+    (void)dev;
+    (void)blk;
+    return 0;
+}
+
+/** Nothing to end: the model keeps no orders. */
+void bcache_order_end(void)
+{}
+
+/** Succeed: the model keeps no orders, so a change needs no image. */
+int bcache_change(struct bbuf *b)
+{
+    (void)b;
+    return 0;
+}
+
+/** Succeed: no block of the model waits by an order. */
+int bcache_sync_waiting(block_device_t *dev, uint64_t blk)
+{
+    (void)dev;
+    (void)blk;
+    return 0;
+}
+
 /** Count the write, which succeeds. */
 int bcache_write(struct bbuf *buffer)
 {
