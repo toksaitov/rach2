@@ -299,7 +299,8 @@ old root: one into the same .ssh is written relative to its place, one into
 a kept tree or link as the absolute path it led to, and one to a regular
 file elsewhere is replaced by a copy of that file with its owner and mode, a
 later link to the same file becoming a link to that copy, unless an account
-whose .ssh it is may not search a directory on the way to that file.
+whose .ssh it is may not search a directory below the root on the way to
+that file.
 A link that leads to a directory, a device or nothing that is not kept
 stops the update before the root is written, since the update would lose
 what it leads to or let it lead to the image's file of that name.
