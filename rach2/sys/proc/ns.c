@@ -1463,6 +1463,7 @@ void ns_caps_fill(process_t *p)
     p->cap_inh[0] = p->cap_inh[1] = 0;
     p->cap_amb[0] = p->cap_amb[1] = 0;
     cap_store(p, 0, 0);
+    proc_cred_commit(p);
 }
 
 /* ---- unshare and setns ---- */
@@ -1835,7 +1836,8 @@ static int32_t setns_commit(process_t *self, struct ns_common *const ns[NS_KINDS
  * namespaces of the target, or none of them, as on Linux. A user namespace
  * is joined first, under setns_user's rules, and the other kinds are then
  * judged with the capabilities it gives; when one is refused, the caller's
- * user namespace and capabilities are put back.
+ * user namespace and capabilities, with their identity (`cred_id`), are
+ * put back.
  */
 static long setns_pidfd(process_t *self, const process_t *target, unsigned long flags)
 {
@@ -1843,6 +1845,7 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
     struct userns *old = self->userns;
     uint32_t cap_lost[2], bset_lost[2], inh[2], amb[2];
     uint32_t nocaps = self->nocaps, granted = self->ns_granted, amb_granted = self->amb_granted;
+    uint64_t cred_id = self->cred_id;
     int32_t err = 0;
     int k, joined = 0;
 
@@ -1887,6 +1890,7 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
         self->cap_lost[0] = cap_lost[0];
         self->cap_lost[1] = cap_lost[1];
         self->nocaps = nocaps;
+        self->cred_id = cred_id;
         k_memcpy(self->cap_inh, inh, sizeof(inh));
         k_memcpy(self->cap_amb, amb, sizeof(amb));
     }

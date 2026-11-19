@@ -125,12 +125,18 @@ with
 .Dv AT_EMPTY_PATH ,
 the empty one among them, requires that
 .Fa olddirfd
-was opened by the caller, or returns
-.Er ENOENT :
-by the same process, before any
-.Xr execve 2 ,
-with the same file-system user and group IDs, unless the caller has
+was opened by the caller's credentials, or returns
+.Er ENOENT ,
+unless the caller has
 .Dv CAP_DAC_READ_SEARCH .
+The credentials are the same while no change has replaced them: a
+thread of the opening process shares them until it changes its own; a
+child of
+.Xr fork 2 ,
+an
+.Xr execve 2 ,
+and each successful change of user or group IDs, supplementary groups or
+capabilities replace them, even one that sets the values they had.
 A descriptor of a pipe, a socket, or a file of
 .Pa /dev
 or
