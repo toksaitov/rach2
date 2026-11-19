@@ -27,6 +27,18 @@
  * driver logs the link's state, and the debug shell's ping gets a reply
  * once it is back.
  *
+ * The `hotplug` case boots with no card and starts vnetprobe, told the
+ * card is new, which waits for it; the first program runs ACPICA's thread.
+ * The card is put in slot 6 through QMP's device_add, which the firmware's
+ * GPE method announces with a Notify of the slot: the kernel lists the
+ * function, gives its BARs addresses and binds it, and vnetprobe sets up
+ * its interface before its rows. When the probe asks, QMP's device_del
+ * asks for the card back: the kernel lets go of it and runs the slot's
+ * _EJ0, after which QEMU's query-pci has nothing in the slot; and the card
+ * put in again comes up again, which the probe configures and pings
+ * through. The probe runs throughout, since ACPICA's thread waits while
+ * the debug shell waits at its prompt.
+ *
  * The `beside` case boots an RTL8139 and the virtio device together. The
  * driver table has the virtio driver last, so the RTL8139 is eth0 and the
  * virtio device eth1.
@@ -48,7 +60,8 @@ struct log_row {
 
 /* A case: its identity, the rows of its boot log, the command that runs
  * vnetprobe or NULL, whether no feature may follow the driver's count of
- * its buffers, and whether the cable is pulled. */
+ * its buffers, whether the cable is pulled, and whether the card is hot
+ * plugged. */
 struct vnet_case {
     const char *id;
     const struct log_row *rows;
@@ -56,6 +69,7 @@ struct vnet_case {
     const char *probe;
     int bare;
     int cable;
+    int hotplug;
 };
 
 #define ROWS(r) (r), sizeof(r) / sizeof((r)[0])
@@ -105,20 +119,26 @@ static const struct log_row speed_rows[] = {
      "the driver did not print the device's speed and duplex"},
 };
 
+static const struct log_row hotplug_rows[] = {
+    {"slots", "pci: hotplug: 30 slots on bus 0, ",
+     "the kernel did not take the host bridge's hot plug slots"},
+};
+
 static const struct log_row beside_rows[] = {
     {"rtl8139-eth0", "net: eth0: RTL8139", "the RTL8139 did not become eth0"},
     {"virtio-eth1", "net: eth1: virtio_net, station ", "the virtio device did not become eth1"},
 };
 
 static const struct vnet_case cases[] = {
-    {"machine.virtionet.probe", ROWS(probe_rows), "exec /vnetprobe", 0, 1},
-    {"machine.virtionet.intx", ROWS(intx_rows), "exec /vnetprobe", 0, 0},
-    {"machine.virtionet.mq", ROWS(mq_rows), "exec /vnetprobe", 0, 0},
-    {"machine.virtionet.plain", ROWS(plain_rows), "exec /vnetprobe", 1, 0},
-    {"machine.virtionet.legacy", ROWS(legacy_rows), "exec /vnetprobe", 0, 0},
+    {"machine.virtionet.probe", ROWS(probe_rows), "exec /vnetprobe", 0, 1, 0},
+    {"machine.virtionet.intx", ROWS(intx_rows), "exec /vnetprobe", 0, 0, 0},
+    {"machine.virtionet.mq", ROWS(mq_rows), "exec /vnetprobe", 0, 0, 0},
+    {"machine.virtionet.plain", ROWS(plain_rows), "exec /vnetprobe", 1, 0, 0},
+    {"machine.virtionet.legacy", ROWS(legacy_rows), "exec /vnetprobe", 0, 0, 0},
     {"machine.virtionet.speed", ROWS(speed_rows), "exec /vnetprobe speed=1000 duplex=full mtu=1400",
-     0, 0},
-    {"machine.virtionet.beside", ROWS(beside_rows), NULL, 0, 0},
+     0, 0, 0},
+    {"machine.virtionet.hotplug", ROWS(hotplug_rows), "exec /vnetprobe plugged=1", 0, 0, 1},
+    {"machine.virtionet.beside", ROWS(beside_rows), NULL, 0, 0, 0},
 };
 
 /** Report the rows of case `k` against the console of `b` from the boot's
@@ -185,6 +205,77 @@ static void cable_steps(struct net_boot *b)
     net_assert(b->u, "ping-after", 1, "");
 }
 
+/** Send QMP command `execute` with `args`; a failure ends the case with
+ * QEMU's reply. The reply is given in `*reply` when it is not NULL, for
+ * the caller to free. */
+static void qmp(struct net_boot *b, const char *execute, const char *args, char **reply)
+{
+    char *text = NULL;
+
+    if (!net_ok(b->u))
+        return;
+    if (etude_qmp(b->m, execute, args, &text) != ETUDE_OK)
+        net_fail(b->u, "QMP %s: %s", execute, text != NULL ? text : "no reply");
+    if (reply != NULL)
+        *reply = text;
+    else
+        free(text);
+}
+
+/** Put the card in slot 6 through QMP's device_add and wait for its
+ * driver to bind it, row `row`. */
+static void plug(struct net_boot *b, const char *row)
+{
+    qmp(b, "device_add",
+        "{\"driver\": \"virtio-net-pci\", \"id\": \"hpnic\", \"netdev\": \"hp0\", "
+        "\"bus\": \"pci.0\", \"addr\": \"6\"}",
+        NULL);
+    net_wait(b, "pci: hotplug: added: 00:06.0 1af4:");
+    net_wait(b, "virtio_net: bound: virtio0: eth0");
+    net_assert(b->u, row, 1, "");
+}
+
+/** Take the card out through QMP's device_del once vnetprobe asks: the
+ * driver lets go of it, the slot's _EJ0 runs, and QEMU's query-pci has
+ * nothing in slot 6; then put it in again once the probe asks. */
+static void unplug(struct net_boot *b)
+{
+    char *reply = NULL;
+
+    net_wait(b, "VNETPROBE: take the card out");
+    qmp(b, "device_del", "{\"id\": \"hpnic\"}", NULL);
+    net_wait(b, "virtio_net: removed: virtio0: eth0");
+    net_wait(b, "pci: hotplug: ejected: slot 6");
+    qmp(b, "query-pci", NULL, &reply);
+    net_assert(b->u, "unplug", reply != NULL && strstr(reply, "\"slot\": 6,") == NULL,
+               "QEMU still has a device in slot 6 after the eject");
+    free(reply);
+    net_wait(b, "VNETPROBE: put the card in again");
+    plug(b, "replug");
+}
+
+/** Run `command`, vnetprobe with plugged=1, at the debug shell, put the
+ * card in on a new user network once it asks, take it out and put it in
+ * again as it asks next, and make its report the case's own, as `probe`
+ * does. */
+static void plug_probe(struct net_boot *b, const char *command)
+{
+    uint64_t typed = b->at, at;
+
+    qmp(b, "netdev_add", "{\"type\": \"user\", \"id\": \"hp0\"}", NULL);
+    net_line(b, command);
+    net_wait(b, "VNETPROBE: put the card in");
+    plug(b, "plug");
+    unplug(b);
+    if (!net_ok(b->u))
+        return;
+    if (console_report(b->u->c, b->m, "guest", 1, typed, &at) != ETUDE_OK)
+        net_fail(b->u, "vnetprobe: its report was not read whole");
+    else
+        b->at = at;
+    net_wait(b, NET_SHELL);
+}
+
 /**
  * Boot the machine `guest` of the case the identity names to the debug
  * shell and run the case's steps; refuse an identity that is no case of
@@ -212,7 +303,10 @@ int etude_scenario(struct etude_case *c)
     net_wait(&b, NET_SHELL);
     net_step(&u, "log");
     log_rows(&b, k);
-    if (k->probe != NULL) {
+    if (k->hotplug) {
+        net_step(&u, "vnetprobe");
+        plug_probe(&b, k->probe);
+    } else if (k->probe != NULL) {
         net_step(&u, "vnetprobe");
         probe(&b, k->probe);
     }
