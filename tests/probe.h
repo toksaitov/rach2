@@ -803,6 +803,30 @@ static __inline__ unsigned probe_meminfo(const char *key)
     return probe_procfield("/proc/meminfo", key);
 }
 
+/**
+ * Whether the kernel is x86-64's: 1 when uname(2)'s machine begins
+ * `x86_64`, which an i386 program on the x86-64 kernel reads too, as on
+ * Linux, and 0 for the i686 kernel or a uname that fails. A row whose
+ * answer is the kernel's, such as the size of its page tables or of its
+ * long, asks this and not the probe's own architecture.
+ */
+static __inline__ int probe_kernel_wide(void)
+{
+    static char uts[6 * 65]; /* struct new_utsname, the machine 5th */
+    static const char want[] = "x86_64";
+    int i;
+
+    if (syscall1(SYS_UNAME, (long)uts) != 0) {
+        return 0;
+    }
+    for (i = 0; want[i] != '\0'; i++) {
+        if (uts[4 * 65 + i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* The socket operations of socketcall(2), by its numbers, and Rach2's ICMP
  * echo, SC_PING, SC_PING_DATA and SC_PING6, with its call (pingcall.h). */
 #include "pingcall.h"
