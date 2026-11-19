@@ -10490,18 +10490,6 @@ long sys_sched_setparam(isr_params_t *params)
     return sched_set((int)SC_ARG(params, 0), -1, (const void __user *)SC_ARG(params, 1));
 }
 
-/** The slice an ordinary thread has, in nanoseconds: the one it asked for,
- * or the base slice the scheduler uses, 0.75 ms times one more than the log
- * of the processors online, eight at most (`sysctl_sched_base_slice`), as
- * Linux's get_params reports se.slice. */
-static uint32_t sched_slice_of(const process_t *p)
-{
-    if (p->sched_slice != 0) {
-        return p->sched_slice;
-    }
-    return (uint32_t)sysctl_sched_base_slice;
-}
-
 /** Fill in `k` the parameters of `p`'s present policy, as Linux's
  * get_params: a deadline thread's parameters and flags, a real-time
  * thread's priority, or an ordinary thread's nice value and slice. */
@@ -10517,7 +10505,7 @@ static void sched_get_params(const process_t *p, struct sched_attr *k)
         k->sched_priority = p->rt_priority;
     } else {
         k->sched_nice = p->nice;
-        k->sched_runtime = sched_slice_of(p);
+        k->sched_runtime = sched_slice_ns(p);
     }
 }
 
