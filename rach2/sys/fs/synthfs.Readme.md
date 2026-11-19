@@ -141,6 +141,10 @@ A file of `/proc/sys` is read and written as Linux 6.12.115's handler of it read
 | `kernel/watchdog_thresh` | `proc_watchdog_thresh`, of `proc_dointvec_minmax` | 0 to 60 |
 | `kernel/softlockup_panic`, `hardlockup_panic`, the three `*_all_cpu_backtrace`, `hung_task_panic` | `proc_dointvec_minmax` | 0 to 1 |
 | `kernel/sched_schedstats` | `sysctl_schedstats`, of `proc_dointvec_minmax` | 0 to 1 |
+| `kernel/sched_autogroup_enabled` | `proc_dointvec_minmax` | 0 to 1, moving every thread to the root group or back (`autogroup_set_enabled`) |
+| `kernel/sched_rr_timeslice_ms` | `sched_rr_handler`, of `proc_dointvec` | any int, 0 or less putting back 100 |
+| `kernel/sched_rt_period_us` | `sched_rt_handler`, of `proc_dointvec_minmax` | 1 to INT_MAX, at least the runtime |
+| `kernel/sched_rt_runtime_us` | `sched_rt_handler`, of `proc_dointvec_minmax` | -1 to the period |
 | `kernel/hung_task_check_count` | `proc_dointvec_minmax` | 0 to INT_MAX |
 | `kernel/hung_task_timeout_secs`, `hung_task_check_interval_secs` | `proc_dohung_task_timeout_secs`, of `proc_doulongvec_minmax` | 0 to LONG_MAX / HZ |
 | `kernel/hung_task_warnings` | `proc_dointvec_minmax` | -1 to INT_MAX |
@@ -171,6 +175,8 @@ A process number in a path is one of the caller's PID namespace (`procfs_resolve
 `/proc/PID/schedstat`, mode 0444, and the same file of each thread under `task`, give the thread's scheduler statistics as Linux's `proc_pid_schedstat`: the nanoseconds the fair class has charged it (`se.sum_exec_runtime`), the nanoseconds it waited ready on a run queue (`run_delay`) and its switches onto a processor (`pcount`), which `schedule` counts ([proc](../proc/Readme.md)). The selftest `steal_time` reads the second number of its own thread's file.
 
 `/proc/PID/sched`, mode 0644, and the same file of each thread under `task`, print the thread's scheduler entity as Linux 6.12's `proc_sched_show_task` does (`procfs_gen_sched`, copied under the run queues' lock): the header of its name, id and thread count, its clocks, run time and migrations, the 28 schedstats and two averages while `kernel/sched_schedstats` is 1, its switches, weight, load averages, policy, priority and slice, and `clock-delta`, each line in Linux's `__PS` or `__PSN` format; the NUMA balancing lines are left out. Its owner's write of anything clears the thread's schedstats (`procfs_sched_clear`, Linux's `proc_sched_set_task`), with the owner check of `comm`.
+
+`/proc/PID/autogroup`, mode 0644, in the process's directory alone, as on Linux, shows the group of the process's session as `/autogroup-ID nice N` and a newline, and nothing for a process in the root group (`procfs_gen_autogroup`). Its owner's write of a nice value, at most 12 bytes with white space around it, sets the group's (`procfs_autogroup_write`, Linux's `proc_sched_autogroup_set_nice`): text that is no number fails with `EINVAL`, a number past an int with `ERANGE`, and the rest as `autogroup_nice` checks it ([proc](../proc/Readme.md)).
 
 Each global file of `/proc` has a fixed inode (`PROCFS_INO_*`: 0x100 to 0x11F, the files of `/proc/net` from 0x120, the `/proc/sys` entries from 0x140, `/proc/acpi` and its `call` 0x1F0 and 0x1F1, `/proc/fs` and its `lockwait` 0x1F2 and 0x1F3, `/proc/asound` and its files from 0x30000, and `/proc/bus`, its `input` and that directory's `devices` and `handlers` 0x38000, 0x38001, 0x38010 and 0x38011), so `stat` and `fstat` agree and no two files share one. `procfs_mount_dev` gives the device number that `stat` reports for the files of each mount, which `/proc/PID/mountinfo` prints: 0 for a KRFFS root, the numbers of the `/dev` node a disk or loop mount was made from, a synthetic type's own number, and 16 plus the mount's slot for any other.
 
