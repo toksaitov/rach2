@@ -30,9 +30,11 @@ cleanup()
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
-trap 'restart=1' HUP
+# Of a SIGHUP and a SIGUSR2 that come in the same turn of the loop, the
+# later one wins, so that a stop sent after a start leaves no session.
+trap 'restart=1 stop=0' HUP
 trap 'devices=1' USR1
-trap 'stop=1' USR2
+trap 'stop=1 restart=0' USR2
 mkdir -p /run/udev /run/user
 install -d -m 0700 -o desktop -g desktop /run/user/1001
 # The X servers' socket directories, which Debian's tmpfiles.d/x11.conf makes.

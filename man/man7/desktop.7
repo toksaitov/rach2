@@ -35,8 +35,9 @@ starts the user's session, once the seat socket exists, and
 ends it, waits until none of it is left, logs
 .Dq rach2-desktop: session: stopped; SIGHUP starts it again
 and starts none until SIGHUP.
-A test that starts the session ends it again the same way, so that it
-leaves the console as it found it.
+Of a SIGHUP and a SIGUSR2 sent close together, the later one wins.
+A test that starts the session ends it again the same way and waits until
+no Weston runs, so that it leaves the console as it found it.
 .Pp
 The session has its own D-Bus bus and runtime directory,
 .Pa /run/user/1001 ,
