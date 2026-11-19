@@ -1,0 +1,3 @@
+bootctl: committed: the candidate is the saved default
+bootctl: fallback: 16777216 bytes written from the committed candidate and read back
+bootctl: run `bootctl trial fallback` to boot it once

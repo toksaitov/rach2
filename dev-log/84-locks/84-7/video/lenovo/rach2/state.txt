@@ -1,0 +1,115 @@
+== cmdline
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial3984-video/root-63a0a394929533f3.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 nomodeset intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
+== bootctl
+bootctl: candidate: first sector 6163, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: candidate: runs: 6163+4096 24136+28672
+bootctl: fallback: first sector 11848, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: fallback: runs: 11848+8192 52808+24576
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial3984-video/root-63a0a394929533f3.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+bootctl: slot size: 16777216 bytes
+== root
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+== drm
+/sys/class/drm/card0-Unknown-1 status connected enabled enabled modes 1366x768 
+by-path
+card0
+card1
+renderD129
+== kernel
+[    0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+[    0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+[    0.000000] i915: stolen: reserving [mem 0xaba00000-0xaf9fffff], 0 KiB of it usable memory
+[    0.084000] console: blank: after 600 seconds without input
+[    0.156000] vtd: dmar: host address width 39, flags 0x1
+[    0.156000] vtd: dmar: unit at 0xfed90000, segment 0, flags 0x0
+[    0.156000] vtd: dmar: device 0:2.0
+[    0.156000] vtd: dmar: unit at 0xfed91000, segment 0, flags 0x1
+[    0.156000] vtd: dmar: ioapic id 2 at f0:1f.0
+[    0.156000] vtd: dmar: hpet id 0 at f0:f.0
+[    0.156000] vtd: dmar: reserved region 0xaae11000 to 0xaae30fff
+[    0.156000] vtd: dmar: reserved region 0xab800000 to 0xaf9fffff
+[    0.156000] vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a
+[    0.156000] vtd: dmar0: status 0x0
+[    0.160000] vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da
+[    0.160000] vtd: dmar1: status 0x0
+[    0.164000] vtd: off by intel_iommu=off and nointremap or intremap=off: 2 units read
+[    0.168000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+[    4.260000] netconsole: udp: 6665@192.168.0.106/eth0,6666@192.168.0.100/xx:xx:xx:xx:xx:xx
+[    4.264000] netconsole: started: network logging, targets 1
+[    4.276000] netconsole: broadcast, ethertype 0x88b5, boot id 0x5bc57592, 0 frames, 0 characters dropped
+[    4.284000] netconsole: udp: port 6666 of eth0: 0 datagrams, held, 0 characters dropped
+[    4.304000] drm: start
+[    4.308000] i915: KMS disabled
+[    4.312000] drm: worker: kdrm is pid 2
+[    4.312000] drm: simpledrm: card0
+[    4.312000] console: card0: the firmware's framebuffer
+[    4.316000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 0
+[    4.320000] drm: vgem: card1
+[    4.672000] input: sysfs: worker: kinputd is pid 15
+[    9.312000] netconsole: settled: held records sent after 2000 ms of link
+[  114.684000] console: card0: handed to a master, the keyboard off
+== session
+54
+        54 root     /bin/bash /usr/libexec/rach2-desktop
+        62 root     /usr/lib/systemd/systemd-udevd --resolve-names=early
+       106 root     seatd -g seat
+       109 root     bash -c udevadm monitor --udev --subsystem-match=drm |     while read -r line; do         case $line in             *" remove "*"/card"[0-9]*" (drm)")                 card=${line% (drm)}                 echo "${card##*/}" >> "$1"                 kill -USR1 "$0"                 ;;             *" add "*"/card"[0-9]*" (drm)") kill -USR1 "$0" ;;         esac     done 54 /run/rach2-desktop.removed
+       112 root     bash -c udevadm monitor --udev --subsystem-match=drm |     while read -r line; do         case $line in             *" remove "*"/card"[0-9]*" (drm)")                 card=${line% (drm)}                 echo "${card##*/}" >> "$1"                 kill -USR1 "$0"                 ;;             *" add "*"/card"[0-9]*" (drm)") kill -USR1 "$0" ;;         esac     done 54 /run/rach2-desktop.removed
+       307 root     bash /data/trial3984-video/rach2-play.sh
+       328 desktop  dbus-run-session -- /usr/libexec/rach2-session --bus drm card0 pixman
+       331 desktop  /bin/bash /usr/libexec/rach2-session --bus drm card0 pixman
+       332 desktop  pulseaudio -n --daemonize=no --use-pid-file=no --exit-idle-time=-1 --disallow-exit --file=/etc/pulse/rach2.pa
+       333 desktop  weston --backend=drm --drm-device=card0 --renderer=pixman --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+== services
+00:00:00.000 [INFO] [seatd/seat.c:50] Created seat seat0
+00:00:00.004 [INFO] [seatd/seatd.c:194] seatd started
+rach2-desktop: session: started as 328 on drm card0 pixman
+[20:40:51.670] weston 14.0.2
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+[20:40:51.670] Command line: weston --backend=drm --drm-device=card0 --renderer=pixman --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+[20:40:51.671] Using config file '/etc/xdg/weston/weston.ini'
+[20:40:51.675] Output repaint window is 7 ms maximum.
+[20:40:51.676] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[20:40:51.687] initializing drm backend
+[20:40:51.687] Trying libseat launcher...
+00:01:45.232 [INFO] [seatd/server.c:145] New client connected (pid: 333, uid: 1001, gid: 1001)
+00:01:45.232 [INFO] [seatd/seat.c:239] Added client 0 to seat0
+00:01:45.232 [INFO] [seatd/seat.c:563] Opened client 0 on seat0
+[20:40:51.687] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[20:40:51.687] [libseat/backend/seatd.c:212] Enabling seat
+[20:40:51.687] libseat: session control granted
+[20:40:51.688] DRM: supports atomic modesetting
+[20:40:51.688] DRM: supports GBM modifiers
+[20:40:51.688] DRM: does not support Atomic async page flip
+[20:40:51.688] DRM: supports picture aspect ratio
+[20:40:51.688] Using Pixman renderer
+[20:40:51.797] DRM: head 'Unknown-1' found, connector 36 is connected, EDID make 'unknown', model 'unknown', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[20:40:51.797] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[20:40:51.797] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[20:40:51.797] Output 'Unknown-1' attempts EOTF mode SDR and colorimetry mode default.
+[20:40:51.797] Output 'Unknown-1' using color profile: stock sRGB color profile
+[20:40:51.797] DRM: output Unknown-1 uses shadow framebuffer.
+[20:40:51.797] Output Unknown-1 (crtc 34) video modes:
+               1366x768@60.0, preferred, current, 62.9 MHz
+[20:40:51.797] associating input device event0 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event5 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event6 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event7 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event8 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event1 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event2 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event3 with output Unknown-1 (none by udev)
+[20:40:51.797] associating input device event4 with output Unknown-1 (none by udev)
+[20:40:51.797] Output 'Unknown-1' enabled with head(s) Unknown-1
+[20:40:51.798] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[20:40:51.799] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[20:40:51.834] Registered plugin API 'weston_xwayland_v3' of size 32
+[20:40:51.834] Registered plugin API 'weston_xwayland_surface_v2' of size 24

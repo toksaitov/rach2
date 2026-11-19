@@ -1,0 +1,28 @@
+Nov 19 20:48:42 lenovo-debian kernel: weston[679]: segfault at 274 ip 00007fe947517045 sp 00007fffe1167970 error 4 in libweston-14.so.0.0.2[29045,7fe947506000+39000] likely on CPU 0 (core 0, socket 0)
+
+libweston-14-0:amd64	14.0.2-1
+weston	14.0.2-1
+43b9fa91a93abfa25bff56116c85d312c988cec019c9af56550c67eb9e3cdcf5  /usr/lib/x86_64-linux-gnu/libweston-14.so.0.0.2
+    Build ID: b5e0abb7adf9bef3bd958aa315779cd1c502c6cf
+weston_view_move_to_layer
+??:?
+
+/usr/lib/x86_64-linux-gnu/libweston-14.so.0.0.2:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000029030 <weston_view_move_to_layer@@Base+0x10>:
+   29030:	53                   	push   %rbx
+   29031:	48 89 fb             	mov    %rdi,%rbx
+   29034:	48 83 ec 08          	sub    $0x8,%rsp
+   29038:	48 85 f6             	test   %rsi,%rsi
+   2903b:	0f 84 ff 00 00 00    	je     29140 <weston_view_move_to_layer@@Base+0x120>
+   29041:	48 8b 46 10          	mov    0x10(%rsi),%rax
+   29045:	44 0f b6 b7 74 02 00 	movzbl 0x274(%rdi),%r14d
+   2904c:	00 
+   2904d:	4c 8d 63 68          	lea    0x68(%rbx),%r12
+   29051:	48 8d 78 08          	lea    0x8(%rax),%rdi
+   29055:	e8 26 03 ff ff       	call   19380 <wl_list_empty@plt>
+   2905a:	41 89 c7             	mov    %eax,%r15d
+   2905d:	4c 39 e5             	cmp    %r12,%rbp

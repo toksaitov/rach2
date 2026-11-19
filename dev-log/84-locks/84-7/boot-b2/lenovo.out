@@ -1,0 +1,882 @@
+lenovo-games: supertuxkart-1 calls-before: kind number calls wall_us holds held_us wait_us
+lenovo-games: supertuxkart-1 calls-before: syscall 0 3571 0 2504 3939 41921
+lenovo-games: supertuxkart-1 calls-before: syscall 1 1095 0 1022 27039 25997
+lenovo-games: supertuxkart-1 calls-before: syscall 2 130 0 130 7574 1055
+lenovo-games: supertuxkart-1 calls-before: syscall 3 11013 0 6299 22765 52629
+lenovo-games: supertuxkart-1 calls-before: syscall 4 14 0 14 148 0
+lenovo-games: supertuxkart-1 calls-before: syscall 5 7090 0 4389 5294 27388
+lenovo-games: supertuxkart-1 calls-before: syscall 6 5 0 5 67 0
+lenovo-games: supertuxkart-1 calls-before: syscall 7 266 0 244 240 1452
+lenovo-games: supertuxkart-1 calls-before: syscall 8 527 0 167 96 729
+lenovo-games: supertuxkart-1 calls-before: syscall 9 3557 0 9275 5520 60508
+lenovo-games: supertuxkart-1 calls-before: syscall 10 942 0 942 892 18862
+lenovo-games: supertuxkart-1 calls-before: syscall 11 151 0 183 446 5302
+lenovo-games: supertuxkart-1 calls-before: syscall 12 572 0 595 536 13055
+lenovo-games: supertuxkart-1 calls-before: syscall 13 4076 0 4076 5404 32725
+lenovo-games: supertuxkart-1 calls-before: syscall 14 3090 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 15 133 0 133 323 393
+lenovo-games: supertuxkart-1 calls-before: syscall 16 2882 0 2207 11505 4704
+lenovo-games: supertuxkart-1 calls-before: syscall 18 1 0 1 1408 0
+lenovo-games: supertuxkart-1 calls-before: syscall 19 2 0 2 5 0
+lenovo-games: supertuxkart-1 calls-before: syscall 20 49 0 113 15647 14
+lenovo-games: supertuxkart-1 calls-before: syscall 21 579 0 140 3503 5601
+lenovo-games: supertuxkart-1 calls-before: syscall 22 3 0 3 24 0
+lenovo-games: supertuxkart-1 calls-before: syscall 28 39 0 3 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 32 35 0 35 138 290
+lenovo-games: supertuxkart-1 calls-before: syscall 33 296 0 296 1626 3580
+lenovo-games: supertuxkart-1 calls-before: syscall 38 15 0 15 65 52
+lenovo-games: supertuxkart-1 calls-before: syscall 39 566 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 40 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: syscall 41 166 0 166 931 5871
+lenovo-games: supertuxkart-1 calls-before: syscall 42 57 0 80 525 241
+lenovo-games: supertuxkart-1 calls-before: syscall 43 8 0 7 31 31
+lenovo-games: supertuxkart-1 calls-before: syscall 44 155 0 45 378 2277
+lenovo-games: supertuxkart-1 calls-before: syscall 45 145 0 143 384 4945
+lenovo-games: supertuxkart-1 calls-before: syscall 46 282 0 171 1906 11842
+lenovo-games: supertuxkart-1 calls-before: syscall 47 618 0 313 1487 2779
+lenovo-games: supertuxkart-1 calls-before: syscall 49 77 0 90 656 1022
+lenovo-games: supertuxkart-1 calls-before: syscall 50 10 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: syscall 51 173 0 139 169 3102
+lenovo-games: supertuxkart-1 calls-before: syscall 52 76 0 76 52 802
+lenovo-games: supertuxkart-1 calls-before: syscall 53 24 0 48 125 217
+lenovo-games: supertuxkart-1 calls-before: syscall 54 270 0 266 154 1358
+lenovo-games: supertuxkart-1 calls-before: syscall 55 163 0 90 171 1120
+lenovo-games: supertuxkart-1 calls-before: syscall 56 206 0 206 189043 23388
+lenovo-games: supertuxkart-1 calls-before: syscall 57 20 0 20 2043 13
+lenovo-games: supertuxkart-1 calls-before: syscall 58 6 0 6 147 0
+lenovo-games: supertuxkart-1 calls-before: syscall 59 202 0 367 56893 10027
+lenovo-games: supertuxkart-1 calls-before: syscall 61 308 0 315 1935 3092
+lenovo-games: supertuxkart-1 calls-before: syscall 62 9 0 9 13 6
+lenovo-games: supertuxkart-1 calls-before: syscall 63 33 0 33 59 200
+lenovo-games: supertuxkart-1 calls-before: syscall 72 1004 0 4 3 0
+lenovo-games: supertuxkart-1 calls-before: syscall 73 50 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 77 3 0 1 4 0
+lenovo-games: supertuxkart-1 calls-before: syscall 79 12 0 12 32 90
+lenovo-games: supertuxkart-1 calls-before: syscall 80 48 0 48 1743 391
+lenovo-games: supertuxkart-1 calls-before: syscall 81 2 0 2 5 0
+lenovo-games: supertuxkart-1 calls-before: syscall 82 184 0 2012 49788 36602
+lenovo-games: supertuxkart-1 calls-before: syscall 83 40 0 49 940 362
+lenovo-games: supertuxkart-1 calls-before: syscall 84 15 0 54 780 310
+lenovo-games: supertuxkart-1 calls-before: syscall 85 1 0 3 44 0
+lenovo-games: supertuxkart-1 calls-before: syscall 87 62 0 183 3938 1810
+lenovo-games: supertuxkart-1 calls-before: syscall 89 394 0 329 1840 91
+lenovo-games: supertuxkart-1 calls-before: syscall 90 6 0 6 183 30
+lenovo-games: supertuxkart-1 calls-before: syscall 91 219 0 219 2422 6581
+lenovo-games: supertuxkart-1 calls-before: syscall 92 3 0 3 82 83
+lenovo-games: supertuxkart-1 calls-before: syscall 93 36 0 36 54 364
+lenovo-games: supertuxkart-1 calls-before: syscall 94 1 0 1 14 0
+lenovo-games: supertuxkart-1 calls-before: syscall 95 61 0 61 51 969
+lenovo-games: supertuxkart-1 calls-before: syscall 99 2 0 2 13 0
+lenovo-games: supertuxkart-1 calls-before: syscall 102 421 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 103 2 0 2 127 12
+lenovo-games: supertuxkart-1 calls-before: syscall 104 286 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 105 10 0 10 29 328
+lenovo-games: supertuxkart-1 calls-before: syscall 106 23 0 23 32 307
+lenovo-games: supertuxkart-1 calls-before: syscall 107 351 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 108 289 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 110 102 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 111 27 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 112 22 0 22 507 2723
+lenovo-games: supertuxkart-1 calls-before: syscall 115 42 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 116 88 0 88 251 1702
+lenovo-games: supertuxkart-1 calls-before: syscall 117 85 0 85 116 886
+lenovo-games: supertuxkart-1 calls-before: syscall 118 25 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 119 85 0 85 149 931
+lenovo-games: supertuxkart-1 calls-before: syscall 120 25 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 124 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 125 53 0 53 235 3388
+lenovo-games: supertuxkart-1 calls-before: syscall 126 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: syscall 128 5 0 6 53 140
+lenovo-games: supertuxkart-1 calls-before: syscall 131 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: syscall 135 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 137 21 0 21 391 369
+lenovo-games: supertuxkart-1 calls-before: syscall 138 374 0 374 405 1338
+lenovo-games: supertuxkart-1 calls-before: syscall 141 13 0 13 69 0
+lenovo-games: supertuxkart-1 calls-before: syscall 144 12 0 12 19 1
+lenovo-games: supertuxkart-1 calls-before: syscall 157 297 0 297 524 10973
+lenovo-games: supertuxkart-1 calls-before: syscall 158 194 0 194 250 1622
+lenovo-games: supertuxkart-1 calls-before: syscall 159 2 0 2 39 68
+lenovo-games: supertuxkart-1 calls-before: syscall 161 7 0 7 445 288
+lenovo-games: supertuxkart-1 calls-before: syscall 165 1 0 1 39 0
+lenovo-games: supertuxkart-1 calls-before: syscall 186 338 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 195 7 0 7 44 0
+lenovo-games: supertuxkart-1 calls-before: syscall 202 393 0 1 4 0
+lenovo-games: supertuxkart-1 calls-before: syscall 203 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: syscall 204 5 0 5 9 0
+lenovo-games: supertuxkart-1 calls-before: syscall 213 1 0 1 3 0
+lenovo-games: supertuxkart-1 calls-before: syscall 217 191 0 83 1410 319
+lenovo-games: supertuxkart-1 calls-before: syscall 218 214 0 214 177 1790
+lenovo-games: supertuxkart-1 calls-before: syscall 221 21 0 21 20 53
+lenovo-games: supertuxkart-1 calls-before: syscall 230 51 0 53 544 657
+lenovo-games: supertuxkart-1 calls-before: syscall 231 0 0 269 52015 7472
+lenovo-games: supertuxkart-1 calls-before: syscall 232 284 0 113 499 5837
+lenovo-games: supertuxkart-1 calls-before: syscall 233 388 0 106 390 6284
+lenovo-games: supertuxkart-1 calls-before: syscall 239 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: syscall 247 22 0 22 177 649
+lenovo-games: supertuxkart-1 calls-before: syscall 253 1 0 1 6 46
+lenovo-games: supertuxkart-1 calls-before: syscall 254 13 0 13 321 239
+lenovo-games: supertuxkart-1 calls-before: syscall 257 11004 0 10680 175703 141143
+lenovo-games: supertuxkart-1 calls-before: syscall 258 28 0 32 1581 1480
+lenovo-games: supertuxkart-1 calls-before: syscall 260 16 0 16 53 185
+lenovo-games: supertuxkart-1 calls-before: syscall 262 2594 0 721 20630 12471
+lenovo-games: supertuxkart-1 calls-before: syscall 263 13 0 54 743 2152
+lenovo-games: supertuxkart-1 calls-before: syscall 264 34 0 34 999 888
+lenovo-games: supertuxkart-1 calls-before: syscall 266 34 0 34 799 1042
+lenovo-games: supertuxkart-1 calls-before: syscall 267 546 0 546 8996 4165
+lenovo-games: supertuxkart-1 calls-before: syscall 268 38 0 38 387 627
+lenovo-games: supertuxkart-1 calls-before: syscall 270 5 0 7 85 6
+lenovo-games: supertuxkart-1 calls-before: syscall 271 264 0 1356 23899 30619
+lenovo-games: supertuxkart-1 calls-before: syscall 273 367 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 280 76 0 76 270 448
+lenovo-games: supertuxkart-1 calls-before: syscall 283 17 0 17 70 150
+lenovo-games: supertuxkart-1 calls-before: syscall 285 2 0 2 21 0
+lenovo-games: supertuxkart-1 calls-before: syscall 286 22 0 22 127 237
+lenovo-games: supertuxkart-1 calls-before: syscall 288 19 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: syscall 289 33 0 33 171 733
+lenovo-games: supertuxkart-1 calls-before: syscall 290 5 0 5 11 0
+lenovo-games: supertuxkart-1 calls-before: syscall 291 44 0 44 204 1163
+lenovo-games: supertuxkart-1 calls-before: syscall 293 92 0 92 589 1100
+lenovo-games: supertuxkart-1 calls-before: syscall 294 4 0 4 17 165
+lenovo-games: supertuxkart-1 calls-before: syscall 302 249 0 249 376 2276
+lenovo-games: supertuxkart-1 calls-before: syscall 303 10 0 10 45 53
+lenovo-games: supertuxkart-1 calls-before: syscall 312 2 0 2 8 0
+lenovo-games: supertuxkart-1 calls-before: syscall 318 1380 0 1392 7791 48359
+lenovo-games: supertuxkart-1 calls-before: syscall 319 3 0 3 22 0
+lenovo-games: supertuxkart-1 calls-before: syscall 326 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: syscall 332 1553 0 1553 3769 11150
+lenovo-games: supertuxkart-1 calls-before: syscall 334 161 0 161 371 501
+lenovo-games: supertuxkart-1 calls-before: syscall 434 36 0 36 206 1405
+lenovo-games: supertuxkart-1 calls-before: syscall 435 3 0 3 82 0
+lenovo-games: supertuxkart-1 calls-before: syscall 436 57 0 57 689 3259
+lenovo-games: supertuxkart-1 calls-before: syscall 439 639 0 639 8474 6920
+lenovo-games: supertuxkart-1 calls-before: syscall 441 259 0 160 499 5644
+lenovo-games: supertuxkart-1 calls-before: syscall 452 23 0 23 58 350
+lenovo-games: supertuxkart-1 calls-before: vector 0 0 0 2596 8051 81109
+lenovo-games: supertuxkart-1 calls-before: vector 13 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: vector 14 43052 0 464 1489 6713
+lenovo-games: supertuxkart-1 calls-before: vector 32 17674 0 5317 56694 248
+lenovo-games: supertuxkart-1 calls-before: vector 33 3 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: vector 41 28 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: vector 48 71 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: vector 49 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: vector 50 4831 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: vector 51 464 0 322 4819 11655
+lenovo-games: supertuxkart-1 calls-before: vector 52 308 0 260 10526 22317
+lenovo-games: supertuxkart-1 calls-before: vector 53 12 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: take 0 0 0 5 338524 0
+lenovo-games: supertuxkart-1 calls-before: take 1 0 0 26288 485922 933888
+lenovo-games: supertuxkart-1 calls-before: slept 0 0 0 29 1202 309
+lenovo-games: supertuxkart-1 calls-before: slept 2 0 0 72 1851 307
+lenovo-games: supertuxkart-1 calls-before: slept 3 0 0 261 7196 8644
+lenovo-games: supertuxkart-1 calls-before: slept 21 0 0 1693 27180 57752
+lenovo-games: supertuxkart-1 calls-before: slept 42 0 0 1 16 4
+lenovo-games: supertuxkart-1 calls-before: slept 46 0 0 6 23 28
+lenovo-games: supertuxkart-1 calls-before: slept 49 0 0 18 333 30
+lenovo-games: supertuxkart-1 calls-before: slept 58 0 0 6 10 45
+lenovo-games: supertuxkart-1 calls-before: slept 59 0 0 326 21356 7970
+lenovo-games: supertuxkart-1 calls-before: slept 61 0 0 110 1462 886
+lenovo-games: supertuxkart-1 calls-before: slept 80 0 0 2 85 20
+lenovo-games: supertuxkart-1 calls-before: slept 82 0 0 11733 223030 416077
+lenovo-games: supertuxkart-1 calls-before: slept 83 0 0 1 29 0
+lenovo-games: supertuxkart-1 calls-before: slept 87 0 0 573 9464 20117
+lenovo-games: supertuxkart-1 calls-before: slept 91 0 0 6 112 185
+lenovo-games: supertuxkart-1 calls-before: slept 92 0 0 2 130 110
+lenovo-games: supertuxkart-1 calls-before: slept 128 0 0 5 21 4
+lenovo-games: supertuxkart-1 calls-before: slept 161 0 0 1 56 0
+lenovo-games: supertuxkart-1 calls-before: slept 165 0 0 2 96 2
+lenovo-games: supertuxkart-1 calls-before: slept 230 0 0 51 319 642
+lenovo-games: supertuxkart-1 calls-before: slept 231 0 0 8 676 327
+lenovo-games: supertuxkart-1 calls-before: slept 254 0 0 3 96 444
+lenovo-games: supertuxkart-1 calls-before: slept 257 0 0 15139 260473 541705
+lenovo-games: supertuxkart-1 calls-before: slept 258 0 0 24 746 178
+lenovo-games: supertuxkart-1 calls-before: slept 262 0 0 44 2001 1265
+lenovo-games: supertuxkart-1 calls-before: slept 270 0 0 4 35 261
+lenovo-games: supertuxkart-1 calls-before: kthread 0 0 0 22625 194413 245846 idle
+lenovo-games: supertuxkart-1 calls-before: kthread 13 0 0 4 225 21916 khda
+lenovo-games: supertuxkart-1 calls-before: kthread 2 0 0 5 20 0 kdrm
+lenovo-games: supertuxkart-1 calls-before: kthread 10 0 0 27 1129 6577 kwlan
+lenovo-games: supertuxkart-1 calls-before: kthread 11 0 0 1 6 0 kpsmoused
+lenovo-games: supertuxkart-1 calls-before: kthread 14 0 0 1 2 0 kconsoled
+lenovo-games: supertuxkart-1 calls-before: kthread 16 0 0 1 3 0 kinputd
+lenovo-games: supertuxkart-1 calls-before: kthread 5 0 0 1 0 0 rcu_sched
+lenovo-games: supertuxkart-1 calls-before: kthread 9 0 0 1 13 0 kacpid
+lenovo-games: supertuxkart-1 calls-before: kthread 6 0 0 1 35 133 writeback
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d00 3 0 3 1008 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d00 11 0 11 22 27
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0406400 8 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4b44 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x802c542a 1427 0 1390 219 405
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc00864bf 5 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0106461 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc02064b2 2 0 2 7 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084503 2 0 2 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084520 11 0 11 19 9
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5413 91 0 78 44 33
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4b64 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8913 22 0 22 30 26
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80ff4506 11 0 11 9 29
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0045006 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0206464 11 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc01064b5 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0086457 6 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80045430 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084523 11 0 11 5 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0186474 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8916 2 0 2 11 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5016 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc06864b8 3 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084509 11 0 11 4 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x40086409 2 0 2 7 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184540 3 0 3 2 19
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8933 32 0 32 33 83
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084519 11 0 11 6 154
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d0c 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x890c 2 0 2 4 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d0c 7 0 7 4 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044dff 4 0 4 4 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc010640c 7 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8010500c 153 0 153 95 309
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc06864a1 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8018457a 3 0 3 2 39
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x891c 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc008646d 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x540f 52 0 36 28 168
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8004500f 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184560 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5402 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084502 11 0 11 3 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0045002 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8946 6 0 6 54 2381
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0106446 6 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80106463 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d05 1 0 1 45 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4605 1 0 1 690 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d05 6 0 6 5 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0045005 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc05064a7 8 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084522 11 0 11 6 30
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc00c6466 10 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80ff4508 11 0 11 4 22
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5008 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc04064aa 406 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084532 11 0 11 5 14
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084525 11 0 11 5 19
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184576 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d18 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d18 6 0 6 4 19
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80604518 11 0 11 7 1
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d0b 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x540b 1 0 1 7 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x890b 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044dfe 10 0 10 25 288
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d0b 6 0 6 4 4
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8018455c 3 0 3 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc04064a0 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x400445a0 9 0 9 13 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x40406469 3 0 1 44 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80104535 11 0 11 5 54
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184579 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0106479 6 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8008451b 11 0 11 3 9
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc01064bd 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x540e 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x400c645f 12 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5401 2 0 2 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044501 11 0 11 2 3
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4b45 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x641e 1 0 1 0 1
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8018456f 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc00864c0 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5411 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0106462 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc01064b3 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d04 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4604 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d04 6 0 6 9 56
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0045004 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc01464a6 5 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80604521 11 0 11 5 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5421 1 0 1 5 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x5414 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8914 4 0 4 8821 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc02064b6 18 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0044d07 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044d07 6 0 6 3 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80ff4507 11 0 11 7 15
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4bfa 1 0 1 4 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184558 3 0 3 2 3
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x40045431 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084531 11 0 11 5 3
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80084524 11 0 11 5 134
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184575 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc0186475 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc02064b9 36 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8404450a 12 0 12 9 25
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc004500a 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc010645b 14 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80044dfd 4 0 4 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc01064ac 20 0 0 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x80184541 3 0 3 17 203
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8927 6 0 6 3 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0xc03864bc 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x4010640d 4 0 4 1 0
+lenovo-games: supertuxkart-1 calls-before: ioctl 0x8010500d 111 0 111 37 98
+lenovo-games: supertuxkart-1 calls-before: ioctl_lost 0
+lenovo-games: supertuxkart-1 calls-after: kind number calls wall_us holds held_us wait_us
+lenovo-games: supertuxkart-1 calls-after: syscall 0 111598 0 62037 92133 88315
+lenovo-games: supertuxkart-1 calls-after: syscall 1 49628 0 20182 276376 91777
+lenovo-games: supertuxkart-1 calls-after: syscall 2 482 0 482 21645 1582
+lenovo-games: supertuxkart-1 calls-after: syscall 3 39941 0 28717 86018 67695
+lenovo-games: supertuxkart-1 calls-after: syscall 4 14 0 14 148 0
+lenovo-games: supertuxkart-1 calls-after: syscall 5 39391 0 32046 35642 32918
+lenovo-games: supertuxkart-1 calls-after: syscall 6 5 0 5 67 0
+lenovo-games: supertuxkart-1 calls-after: syscall 7 29645 0 18013 16319 41312
+lenovo-games: supertuxkart-1 calls-after: syscall 8 44547 0 41658 30218 5367
+lenovo-games: supertuxkart-1 calls-after: syscall 9 12104 0 29984 47680 110366
+lenovo-games: supertuxkart-1 calls-after: syscall 10 3539 0 3539 3234 33054
+lenovo-games: supertuxkart-1 calls-after: syscall 11 727 0 1256 2258 7936
+lenovo-games: supertuxkart-1 calls-after: syscall 12 2263 0 2295 1757 28058
+lenovo-games: supertuxkart-1 calls-after: syscall 13 15134 0 15134 47399 234398
+lenovo-games: supertuxkart-1 calls-after: syscall 14 15879 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 15 808 0 808 2869 495
+lenovo-games: supertuxkart-1 calls-after: syscall 16 683951 0 43185 99140 62239
+lenovo-games: supertuxkart-1 calls-after: syscall 18 1 0 1 1408 0
+lenovo-games: supertuxkart-1 calls-after: syscall 19 2 0 2 5 0
+lenovo-games: supertuxkart-1 calls-after: syscall 20 62 0 116 15687 14
+lenovo-games: supertuxkart-1 calls-after: syscall 21 7557 0 2451 45634 8363
+lenovo-games: supertuxkart-1 calls-after: syscall 22 3 0 3 24 0
+lenovo-games: supertuxkart-1 calls-after: syscall 27 3 0 3 5 0
+lenovo-games: supertuxkart-1 calls-after: syscall 28 111 0 45 434 297
+lenovo-games: supertuxkart-1 calls-after: syscall 32 56 0 56 277 303
+lenovo-games: supertuxkart-1 calls-after: syscall 33 1935 0 1935 15375 16720
+lenovo-games: supertuxkart-1 calls-after: syscall 38 29 0 29 133 54
+lenovo-games: supertuxkart-1 calls-after: syscall 39 20710 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 40 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-after: syscall 41 430 0 430 3231 6757
+lenovo-games: supertuxkart-1 calls-after: syscall 42 193 0 331 2138 257
+lenovo-games: supertuxkart-1 calls-after: syscall 43 15 0 14 124 31
+lenovo-games: supertuxkart-1 calls-after: syscall 44 245 0 99 1344 2296
+lenovo-games: supertuxkart-1 calls-after: syscall 45 202 0 156 452 4945
+lenovo-games: supertuxkart-1 calls-after: syscall 46 23081 0 171 1906 11842
+lenovo-games: supertuxkart-1 calls-after: syscall 47 30838 0 348 1696 2842
+lenovo-games: supertuxkart-1 calls-after: syscall 49 102 0 115 733 1031
+lenovo-games: supertuxkart-1 calls-after: syscall 50 10 0 2 2 0
+lenovo-games: supertuxkart-1 calls-after: syscall 51 281 0 243 284 3158
+lenovo-games: supertuxkart-1 calls-after: syscall 52 150 0 146 119 844
+lenovo-games: supertuxkart-1 calls-after: syscall 53 45 0 90 365 288
+lenovo-games: supertuxkart-1 calls-after: syscall 54 362 0 342 225 1360
+lenovo-games: supertuxkart-1 calls-after: syscall 55 243 0 122 211 1121
+lenovo-games: supertuxkart-1 calls-after: syscall 56 1019 0 1019 906953 25490
+lenovo-games: supertuxkart-1 calls-after: syscall 57 20 0 20 2043 13
+lenovo-games: supertuxkart-1 calls-after: syscall 58 6 0 6 147 0
+lenovo-games: supertuxkart-1 calls-after: syscall 59 881 0 1693 382167 33639
+lenovo-games: supertuxkart-1 calls-after: syscall 60 0 0 17 359 244
+lenovo-games: supertuxkart-1 calls-after: syscall 61 2012 0 2020 19959 46609
+lenovo-games: supertuxkart-1 calls-after: syscall 62 487 0 487 1001 2357
+lenovo-games: supertuxkart-1 calls-after: syscall 63 51 0 51 96 200
+lenovo-games: supertuxkart-1 calls-after: syscall 72 20095 0 12 141 0
+lenovo-games: supertuxkart-1 calls-after: syscall 73 32278 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 77 108 0 106 234 0
+lenovo-games: supertuxkart-1 calls-after: syscall 79 157 0 157 242 163
+lenovo-games: supertuxkart-1 calls-after: syscall 80 218 0 218 38083 547
+lenovo-games: supertuxkart-1 calls-after: syscall 81 4 0 4 12 0
+lenovo-games: supertuxkart-1 calls-after: syscall 82 191 0 2019 51367 36602
+lenovo-games: supertuxkart-1 calls-after: syscall 83 144 0 153 2033 362
+lenovo-games: supertuxkart-1 calls-after: syscall 84 15 0 54 780 310
+lenovo-games: supertuxkart-1 calls-after: syscall 85 1 0 3 44 0
+lenovo-games: supertuxkart-1 calls-after: syscall 87 170 0 297 4929 2184
+lenovo-games: supertuxkart-1 calls-after: syscall 89 13812 0 854 9107 506
+lenovo-games: supertuxkart-1 calls-after: syscall 90 6 0 6 183 30
+lenovo-games: supertuxkart-1 calls-after: syscall 91 219 0 219 2422 6581
+lenovo-games: supertuxkart-1 calls-after: syscall 92 3 0 3 82 83
+lenovo-games: supertuxkart-1 calls-after: syscall 93 36 0 36 54 364
+lenovo-games: supertuxkart-1 calls-after: syscall 94 1 0 1 14 0
+lenovo-games: supertuxkart-1 calls-after: syscall 95 97 0 97 87 1013
+lenovo-games: supertuxkart-1 calls-after: syscall 99 5 0 5 24 0
+lenovo-games: supertuxkart-1 calls-after: syscall 102 1715 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 103 2 0 2 127 12
+lenovo-games: supertuxkart-1 calls-after: syscall 104 1484 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 105 18 0 18 38 337
+lenovo-games: supertuxkart-1 calls-after: syscall 106 45 0 45 73 307
+lenovo-games: supertuxkart-1 calls-after: syscall 107 1583 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 108 1490 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 110 145 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 111 52 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 112 36 0 36 1299 2724
+lenovo-games: supertuxkart-1 calls-after: syscall 115 116 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 116 173 0 173 423 1702
+lenovo-games: supertuxkart-1 calls-after: syscall 117 169 0 169 213 908
+lenovo-games: supertuxkart-1 calls-after: syscall 118 35 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 119 169 0 169 229 932
+lenovo-games: supertuxkart-1 calls-after: syscall 120 35 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 124 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 125 53 0 53 235 3388
+lenovo-games: supertuxkart-1 calls-after: syscall 126 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-after: syscall 128 113 0 114 1599 325
+lenovo-games: supertuxkart-1 calls-after: syscall 131 5 0 5 6 0
+lenovo-games: supertuxkart-1 calls-after: syscall 135 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 137 21 0 21 391 369
+lenovo-games: supertuxkart-1 calls-after: syscall 138 574 0 574 592 1348
+lenovo-games: supertuxkart-1 calls-after: syscall 141 17 0 17 113 0
+lenovo-games: supertuxkart-1 calls-after: syscall 144 16 0 16 41 1
+lenovo-games: supertuxkart-1 calls-after: syscall 145 2 0 2 1 0
+lenovo-games: supertuxkart-1 calls-after: syscall 157 325 0 325 562 11007
+lenovo-games: supertuxkart-1 calls-after: syscall 158 874 0 874 1868 3264
+lenovo-games: supertuxkart-1 calls-after: syscall 159 8 0 8 84 68
+lenovo-games: supertuxkart-1 calls-after: syscall 161 14 0 14 1198 288
+lenovo-games: supertuxkart-1 calls-after: syscall 165 1 0 1 39 0
+lenovo-games: supertuxkart-1 calls-after: syscall 186 372 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 195 7 0 7 44 0
+lenovo-games: supertuxkart-1 calls-after: syscall 202 62333 0 41 276 39
+lenovo-games: supertuxkart-1 calls-after: syscall 203 5 0 5 14 10
+lenovo-games: supertuxkart-1 calls-after: syscall 204 12 0 12 21 0
+lenovo-games: supertuxkart-1 calls-after: syscall 213 1 0 1 3 0
+lenovo-games: supertuxkart-1 calls-after: syscall 217 661 0 285 3664 321
+lenovo-games: supertuxkart-1 calls-after: syscall 218 894 0 894 920 2168
+lenovo-games: supertuxkart-1 calls-after: syscall 221 366 0 366 603 1889
+lenovo-games: supertuxkart-1 calls-after: syscall 230 305 0 309 4640 1411
+lenovo-games: supertuxkart-1 calls-after: syscall 231 0 0 1493 462053 45265
+lenovo-games: supertuxkart-1 calls-after: syscall 232 16626 0 8951 24420 31835
+lenovo-games: supertuxkart-1 calls-after: syscall 233 420 0 106 390 6284
+lenovo-games: supertuxkart-1 calls-after: syscall 239 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-after: syscall 247 70 0 70 677 2882
+lenovo-games: supertuxkart-1 calls-after: syscall 253 1 0 1 6 46
+lenovo-games: supertuxkart-1 calls-after: syscall 254 13 0 13 321 239
+lenovo-games: supertuxkart-1 calls-after: syscall 257 35172 0 34703 492885 164874
+lenovo-games: supertuxkart-1 calls-after: syscall 258 28 0 32 1581 1480
+lenovo-games: supertuxkart-1 calls-after: syscall 260 16 0 16 53 185
+lenovo-games: supertuxkart-1 calls-after: syscall 262 11818 0 5525 90176 18490
+lenovo-games: supertuxkart-1 calls-after: syscall 263 335 0 376 10790 2152
+lenovo-games: supertuxkart-1 calls-after: syscall 264 34 0 34 999 888
+lenovo-games: supertuxkart-1 calls-after: syscall 266 34 0 34 799 1042
+lenovo-games: supertuxkart-1 calls-after: syscall 267 798 0 798 14373 4165
+lenovo-games: supertuxkart-1 calls-after: syscall 268 38 0 38 387 627
+lenovo-games: supertuxkart-1 calls-after: syscall 270 84 0 86 1593 21
+lenovo-games: supertuxkart-1 calls-after: syscall 271 19545 0 36571 43900 123235
+lenovo-games: supertuxkart-1 calls-after: syscall 273 1864 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 275 6 0 4 70 0
+lenovo-games: supertuxkart-1 calls-after: syscall 280 76 0 76 270 448
+lenovo-games: supertuxkart-1 calls-after: syscall 283 17 0 17 70 150
+lenovo-games: supertuxkart-1 calls-after: syscall 285 3 0 3 190 0
+lenovo-games: supertuxkart-1 calls-after: syscall 286 8887 0 8887 57812 10624
+lenovo-games: supertuxkart-1 calls-after: syscall 288 23 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: syscall 289 33 0 33 171 733
+lenovo-games: supertuxkart-1 calls-after: syscall 290 11 0 11 24 0
+lenovo-games: supertuxkart-1 calls-after: syscall 291 45 0 45 209 1163
+lenovo-games: supertuxkart-1 calls-after: syscall 293 534 0 534 5957 4203
+lenovo-games: supertuxkart-1 calls-after: syscall 294 4 0 4 17 165
+lenovo-games: supertuxkart-1 calls-after: syscall 302 950 0 950 1681 5591
+lenovo-games: supertuxkart-1 calls-after: syscall 303 10 0 10 45 53
+lenovo-games: supertuxkart-1 calls-after: syscall 312 20 0 20 46 7
+lenovo-games: supertuxkart-1 calls-after: syscall 318 3136 0 3155 17392 53030
+lenovo-games: supertuxkart-1 calls-after: syscall 319 7 0 7 48 0
+lenovo-games: supertuxkart-1 calls-after: syscall 326 6 0 6 37 0
+lenovo-games: supertuxkart-1 calls-after: syscall 332 2112 0 2112 4880 11156
+lenovo-games: supertuxkart-1 calls-after: syscall 334 845 0 845 2705 693
+lenovo-games: supertuxkart-1 calls-after: syscall 434 36 0 36 206 1405
+lenovo-games: supertuxkart-1 calls-after: syscall 435 20 0 20 566 13
+lenovo-games: supertuxkart-1 calls-after: syscall 436 99 0 99 909 3476
+lenovo-games: supertuxkart-1 calls-after: syscall 439 1374 0 920 13407 6926
+lenovo-games: supertuxkart-1 calls-after: syscall 441 287 0 164 540 6407
+lenovo-games: supertuxkart-1 calls-after: syscall 452 23 0 23 58 350
+lenovo-games: supertuxkart-1 calls-after: vector 0 0 0 93420 214034 414234
+lenovo-games: supertuxkart-1 calls-after: vector 13 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: vector 14 280124 0 38169 35076 39029
+lenovo-games: supertuxkart-1 calls-after: vector 32 262284 0 92939 1737911 896
+lenovo-games: supertuxkart-1 calls-after: vector 33 3 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: vector 41 28 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: vector 48 9836 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: vector 49 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: vector 50 8235 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: vector 51 1098 0 939 14523 18080
+lenovo-games: supertuxkart-1 calls-after: vector 52 7202 0 6885 305719 44509
+lenovo-games: supertuxkart-1 calls-after: vector 53 38578 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: take 0 0 0 5 338524 0
+lenovo-games: supertuxkart-1 calls-after: take 1 0 0 29458 542381 972969
+lenovo-games: supertuxkart-1 calls-after: slept 0 0 0 34 1225 309
+lenovo-games: supertuxkart-1 calls-after: slept 1 0 0 13 210 189
+lenovo-games: supertuxkart-1 calls-after: slept 2 0 0 72 1851 307
+lenovo-games: supertuxkart-1 calls-after: slept 3 0 0 261 7196 8644
+lenovo-games: supertuxkart-1 calls-after: slept 16 0 0 3 8 0
+lenovo-games: supertuxkart-1 calls-after: slept 21 0 0 1880 32966 57936
+lenovo-games: supertuxkart-1 calls-after: slept 42 0 0 1 16 4
+lenovo-games: supertuxkart-1 calls-after: slept 46 0 0 6 23 28
+lenovo-games: supertuxkart-1 calls-after: slept 49 0 0 18 333 30
+lenovo-games: supertuxkart-1 calls-after: slept 58 0 0 6 10 45
+lenovo-games: supertuxkart-1 calls-after: slept 59 0 0 456 31797 10613
+lenovo-games: supertuxkart-1 calls-after: slept 60 0 0 4 76 174
+lenovo-games: supertuxkart-1 calls-after: slept 61 0 0 606 15345 9231
+lenovo-games: supertuxkart-1 calls-after: slept 80 0 0 14 1871 36
+lenovo-games: supertuxkart-1 calls-after: slept 82 0 0 11733 223030 416077
+lenovo-games: supertuxkart-1 calls-after: slept 83 0 0 1 29 0
+lenovo-games: supertuxkart-1 calls-after: slept 87 0 0 573 9464 20117
+lenovo-games: supertuxkart-1 calls-after: slept 89 0 0 40 761 507
+lenovo-games: supertuxkart-1 calls-after: slept 91 0 0 6 112 185
+lenovo-games: supertuxkart-1 calls-after: slept 92 0 0 2 130 110
+lenovo-games: supertuxkart-1 calls-after: slept 128 0 0 113 988 2684
+lenovo-games: supertuxkart-1 calls-after: slept 161 0 0 1 56 0
+lenovo-games: supertuxkart-1 calls-after: slept 165 0 0 2 96 2
+lenovo-games: supertuxkart-1 calls-after: slept 202 0 0 11 68 15
+lenovo-games: supertuxkart-1 calls-after: slept 230 0 0 305 2974 828
+lenovo-games: supertuxkart-1 calls-after: slept 231 0 0 37 5728 2793
+lenovo-games: supertuxkart-1 calls-after: slept 254 0 0 3 96 444
+lenovo-games: supertuxkart-1 calls-after: slept 257 0 0 15171 261694 541766
+lenovo-games: supertuxkart-1 calls-after: slept 258 0 0 24 746 178
+lenovo-games: supertuxkart-1 calls-after: slept 262 0 0 128 3639 2119
+lenovo-games: supertuxkart-1 calls-after: slept 270 0 0 102 1771 914
+lenovo-games: supertuxkart-1 calls-after: slept 439 0 0 7 190 19
+lenovo-games: supertuxkart-1 calls-after: kthread 0 0 0 230903 2190166 279871 idle
+lenovo-games: supertuxkart-1 calls-after: kthread 13 0 0 71 1237 25967 khda
+lenovo-games: supertuxkart-1 calls-after: kthread 2 0 0 9 142 2038 kdrm
+lenovo-games: supertuxkart-1 calls-after: kthread 10 0 0 48 1990 12826 kwlan
+lenovo-games: supertuxkart-1 calls-after: kthread 11 0 0 1 6 0 kpsmoused
+lenovo-games: supertuxkart-1 calls-after: kthread 14 0 0 1 2 0 kconsoled
+lenovo-games: supertuxkart-1 calls-after: kthread 16 0 0 1 3 0 kinputd
+lenovo-games: supertuxkart-1 calls-after: kthread 5 0 0 1 0 0 rcu_sched
+lenovo-games: supertuxkart-1 calls-after: kthread 9 0 0 1 13 0 kacpid
+lenovo-games: supertuxkart-1 calls-after: kthread 6 0 0 2 373 133 writeback
+lenovo-games: supertuxkart-1 calls-after: kthread 230 0 0 9393 63988 60780 ki915
+lenovo-games: supertuxkart-1 calls-after: kthread 7 0 0 1 12 0 khugepaged
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d00 5 0 5 1726 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d00 134 0 134 676 188
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0406400 14 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4b44 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x802c542a 1485 0 1406 227 405
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4008646e 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc00864bf 32305 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0106461 1750 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc02064b2 2 0 2 7 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084503 2 0 2 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc018643a 25 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc00c642d 8 0 8 80 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084520 11 0 11 19 9
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5413 229 0 202 159 36
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4b64 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8913 238 0 238 535 1106
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80ff4506 11 0 11 9 29
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0045006 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0206464 1536 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc01064b5 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0086457 173219 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80045430 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084523 11 0 11 5 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0186474 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8916 2 0 2 11 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5016 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc06864b8 12 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084509 11 0 11 4 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x40086409 459 0 466 29874 361
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184540 3 0 3 2 19
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8933 248 0 248 402 518
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084519 11 0 11 6 154
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d0c 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x890c 2 0 2 4 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d0c 116 0 116 87 133
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044dff 16 0 16 25 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc010640c 8 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8010500c 19931 0 19931 17569 14270
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc06864a1 2 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8018457a 3 0 3 2 39
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x891c 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc008646d 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x540f 73 0 43 31 168
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8004500f 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184560 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5402 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084502 11 0 11 3 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0045002 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8946 6 0 6 54 2381
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0106446 12 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80106463 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d05 1 0 1 45 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4605 1 0 1 690 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d05 114 0 114 117 129
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0045005 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc05064a7 8 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084522 11 0 11 6 30
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc00c6466 326060 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80ff4508 11 0 11 4 22
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5008 3 0 3 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc04064aa 406 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084532 11 0 11 5 14
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084525 11 0 11 5 19
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184576 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d18 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d18 114 0 114 88 195
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80604518 11 0 11 7 1
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d0b 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x540b 1 0 1 7 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x890b 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044dfe 9590 0 9590 29622 5999
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d0b 114 0 114 100 136
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8018455c 3 0 3 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc04064a0 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x400445a0 9 0 9 13 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x40406469 32301 0 1 44 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80104535 11 0 11 5 54
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80804535 9 0 9 5 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184579 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0106479 12 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8008451b 11 0 11 3 9
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc010646c 6 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc01064bd 1 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x540e 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x400c645f 1734 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5401 2 0 2 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044501 11 0 11 2 3
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4b45 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x641e 1 0 1 0 1
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8018456f 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc00864c0 32301 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5411 46 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0106462 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc01064b3 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d04 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4604 2 0 2 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d04 114 0 114 260 191
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0045004 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc01464a6 5 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc00c642e 16 0 16 63 5
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80604521 11 0 11 5 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5421 1 0 1 5 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc02864c3 37024 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x5414 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8914 4 0 4 8821 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc02064b6 18 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0044d07 1 0 1 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044d07 114 0 114 115 164
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80ff4507 11 0 11 7 15
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4bfa 1 0 1 4 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184558 3 0 3 2 3
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x40045431 1 0 1 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084531 11 0 11 5 3
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80084524 11 0 11 5 134
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184575 3 0 3 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc0186475 8 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80045017 87 0 87 296 36
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc02064b9 36 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8404450a 12 0 12 9 25
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc004500a 1 0 1 2 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc010645b 1738 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80044dfd 16 0 16 11 1
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc01064ac 20 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x80184541 3 0 3 17 203
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8927 6 0 6 3 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc03864bc 8814 0 8814 6780 33835
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x4010640d 4 0 4 1 0
+lenovo-games: supertuxkart-1 calls-after: ioctl 0x8010500d 959 0 959 375 1171
+lenovo-games: supertuxkart-1 calls-after: ioctl 0xc00464af 4 0 0 0 0
+lenovo-games: supertuxkart-1 calls-after: ioctl_lost 0
+lenovo-games: supertuxkart-1 stat-before: cpu  34 0 930 2979 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-before: cpu0 8 0 582 754 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-before: cpu1 9 0 132 726 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-before: cpu2 10 0 120 735 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-before: cpu3 6 0 95 763 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-before: intr 23401
+lenovo-games: supertuxkart-1 stat-before: ctxt 44686
+lenovo-games: supertuxkart-1 stat-before: btime 1795107674
+lenovo-games: supertuxkart-1 stat-before: processes 255
+lenovo-games: supertuxkart-1 stat-before: sleeps_interrupted 0
+lenovo-games: supertuxkart-1 stat-before: process_pid_steps 14391
+lenovo-games: supertuxkart-1 stat-before: process_uid_steps 268
+lenovo-games: supertuxkart-1 stat-before: process_timer_steps 235877
+lenovo-games: supertuxkart-1 stat-before: process_timer_passes 24488
+lenovo-games: supertuxkart-1 stat-before: timer_passes_late 4
+lenovo-games: supertuxkart-1 stat-before: tlb_shootdowns 0
+lenovo-games: supertuxkart-1 stat-before: tlb_shootdown_ipis 0
+lenovo-games: supertuxkart-1 stat-before: scheduler_picks 58202
+lenovo-games: supertuxkart-1 stat-before: scheduler_steps 119
+lenovo-games: supertuxkart-1 stat-before: vm_gap_steps 61924
+lenovo-games: supertuxkart-1 stat-before: clock_calls 0
+lenovo-games: supertuxkart-1 stat-before: vdso_tsc 1
+lenovo-games: supertuxkart-1 stat-before: bkl_wait_us 2081418
+lenovo-games: supertuxkart-1 stat-before: bkl_wait_max_us 51575
+lenovo-games: supertuxkart-1 stat-before: bkl_wait_max_holds 1
+lenovo-games: supertuxkart-1 stat-before: bkl_wait_max_hold take 0 338523
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_us 338523
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_entry take 0
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_sample_us 4365885
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_sample_pc ffffffff8040524b ffffffff8011771c ffffffff80116e54 ffffffff802b3770 ffffffff80108f8b ffffffff803d6aa8 ffffffff801002d9
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_mark 1 0
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_mark 2 0
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_mark 4 0
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_mark 8 0
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_max_mark 16 0
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry take 1 30853 573531
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry take 0 5 338524
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 56 208 190376
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 257 10685 175782
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry vector 0 20708 116534
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 59 371 57415
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry vector 32 5318 56714
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 231 278 53146
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 82 2012 49788
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 1 1023 27056
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 271 1356 23899
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 3 6307 22788
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 262 721 20630
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 20 113 15647
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry syscall 16 2208 11506
+lenovo-games: supertuxkart-1 stat-before: bkl_hold_entry vector 52 260 10526
+lenovo-games: supertuxkart-1 stat-before: kvm_vms 0
+lenovo-games: supertuxkart-1 stat-before: kvm_vcpus 0
+lenovo-games: supertuxkart-1 stat-before: kvm_slots 0
+lenovo-games: supertuxkart-1 stat-before: kvm_tdp_pages 0
+lenovo-games: supertuxkart-1 stat-before: kvm_run_mappings 0
+lenovo-games: supertuxkart-1 stat-before: kvm_gpa_maps 0
+lenovo-games: supertuxkart-1 stat-before: kvm_gpa_map_pages 0
+lenovo-games: supertuxkart-1 stat-before: kvm_ioeventfd_signals 0
+lenovo-games: supertuxkart-1 stat-before: kvm_irqfd_raises 0
+lenovo-games: supertuxkart-1 stat-before: vfio_groups 0
+lenovo-games: supertuxkart-1 stat-before: vfio_devices 0
+lenovo-games: supertuxkart-1 stat-before: vfio_dma_mappings 0
+lenovo-games: supertuxkart-1 stat-before: vfio_dma_pages 0
+lenovo-games: supertuxkart-1 stat-before: vfio_dma_io_pages 0
+lenovo-games: supertuxkart-1 stat-before: kvm_exits 0
+lenovo-games: supertuxkart-1 stat-before: iommu_dma_faults 0
+lenovo-games: supertuxkart-1 stat-before: iommu_irq_faults 0
+lenovo-games: supertuxkart-1 stat-before: msi_vectors_free 185
+lenovo-games: supertuxkart-1 stat-before: virtio_gpu_copied_bytes 0
+lenovo-games: supertuxkart-1 stat-before: window_free_min 13080
+lenovo-games: supertuxkart-1 stat-before: vkms_vblank_overruns 0
+lenovo-games: supertuxkart-1 stat-before: vkms_vblank_skipped 0
+lenovo-games: supertuxkart-1 stat-before: vkms_crc_missed 0
+lenovo-games: supertuxkart-1 stat-before: vkms_crc_catchups 0
+lenovo-games: supertuxkart-1 stat-before: latency_timer_us 1545552
+lenovo-games: supertuxkart-1 stat-before: latency_disk_us 8312
+lenovo-games: supertuxkart-1 stat-before: latency_diskwait_us 0
+lenovo-games: supertuxkart-1 stat-before: latency_console_us 0
+lenovo-games: supertuxkart-1 stat-before: wlan_refused_tcp 0
+lenovo-games: supertuxkart-1 stat-before: wlan_refused_ack 0
+lenovo-games: supertuxkart-1 stat-before: wlan_refused_other 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rx_held 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rx_wait_most 1
+lenovo-games: supertuxkart-1 stat-before: wlan_tx_status_lost 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rescue_key 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rescue_message4 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rescue_silent 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rescue_saved 0
+lenovo-games: supertuxkart-1 stat-before: wlan_rx_old_far 0
+lenovo-games: supertuxkart-1 stat-before: loopback_dropped 0
+lenovo-games: supertuxkart-1 stat-before: loopback_peak 0
+lenovo-games: supertuxkart-1 stat-before: loopback_delivered_tick 0
+lenovo-games: supertuxkart-1 stat-before: loopback_delivered_idle 0
+lenovo-games: supertuxkart-1 stat-before: loopback_delivered_call 0
+lenovo-games: supertuxkart-1 stat-before: loopback_left_idle 0
+lenovo-games: supertuxkart-1 stat-before: namecache_hits 27027
+lenovo-games: supertuxkart-1 stat-before: namecache_misses 1396
+lenovo-games: supertuxkart-1 stat-before: namecache_entries 821
+lenovo-games: supertuxkart-1 stat-before: namecache_negative 173
+lenovo-games: supertuxkart-1 stat-before: ext2_node_visits 8196
+lenovo-games: supertuxkart-1 stat-before: procs_running 3
+lenovo-games: supertuxkart-1 stat-before: procs_blocked 0
+lenovo-games: supertuxkart-1 stat-after: cpu  6797 0 2933 37526 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-after: cpu0 1524 0 1126 9523 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-after: cpu1 2365 0 738 8591 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-after: cpu2 1591 0 602 9501 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-after: cpu3 1315 0 466 9910 0 0 0 0 0 0
+lenovo-games: supertuxkart-1 stat-after: intr 327268
+lenovo-games: supertuxkart-1 stat-after: ctxt 288866
+lenovo-games: supertuxkart-1 stat-after: btime 1795107674
+lenovo-games: supertuxkart-1 stat-after: processes 1084
+lenovo-games: supertuxkart-1 stat-after: sleeps_interrupted 0
+lenovo-games: supertuxkart-1 stat-after: process_pid_steps 32589
+lenovo-games: supertuxkart-1 stat-after: process_uid_steps 1211
+lenovo-games: supertuxkart-1 stat-after: process_timer_steps 5738055
+lenovo-games: supertuxkart-1 stat-after: process_timer_passes 305245
+lenovo-games: supertuxkart-1 stat-after: timer_passes_late 4
+lenovo-games: supertuxkart-1 stat-after: tlb_shootdowns 282
+lenovo-games: supertuxkart-1 stat-after: tlb_shootdown_ipis 796
+lenovo-games: supertuxkart-1 stat-after: scheduler_picks 512183
+lenovo-games: supertuxkart-1 stat-after: scheduler_steps 10402
+lenovo-games: supertuxkart-1 stat-after: vm_gap_steps 725197
+lenovo-games: supertuxkart-1 stat-after: clock_calls 0
+lenovo-games: supertuxkart-1 stat-after: vdso_tsc 1
+lenovo-games: supertuxkart-1 stat-after: bkl_wait_us 3439860
+lenovo-games: supertuxkart-1 stat-after: bkl_wait_max_us 51575
+lenovo-games: supertuxkart-1 stat-after: bkl_wait_max_holds 1
+lenovo-games: supertuxkart-1 stat-after: bkl_wait_max_hold take 0 338523
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_us 338523
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_entry take 0
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_sample_us 4365885
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_sample_pc ffffffff8040524b ffffffff8011771c ffffffff80116e54 ffffffff802b3770 ffffffff80108f8b ffffffff803d6aa8 ffffffff801002d9
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_mark 1 0
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_mark 2 0
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_mark 4 0
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_mark 8 0
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_max_mark 16 0
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry vector 0 314229 2191009
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry vector 32 92940 1737926
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 56 1020 907467
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry take 1 49084 823361
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 257 34706 492932
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 231 1494 462241
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 59 1694 382430
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry take 0 5 338524
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry vector 52 6885 305719
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 1 20183 276385
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 16 43186 99140
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 0 62040 92973
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 262 5525 90176
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 3 28722 86028
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 286 8887 57812
+lenovo-games: supertuxkart-1 stat-after: bkl_hold_entry syscall 82 2019 51367
+lenovo-games: supertuxkart-1 stat-after: kvm_vms 0
+lenovo-games: supertuxkart-1 stat-after: kvm_vcpus 0
+lenovo-games: supertuxkart-1 stat-after: kvm_slots 0
+lenovo-games: supertuxkart-1 stat-after: kvm_tdp_pages 0
+lenovo-games: supertuxkart-1 stat-after: kvm_run_mappings 0
+lenovo-games: supertuxkart-1 stat-after: kvm_gpa_maps 0
+lenovo-games: supertuxkart-1 stat-after: kvm_gpa_map_pages 0
+lenovo-games: supertuxkart-1 stat-after: kvm_ioeventfd_signals 0
+lenovo-games: supertuxkart-1 stat-after: kvm_irqfd_raises 0
+lenovo-games: supertuxkart-1 stat-after: vfio_groups 0
+lenovo-games: supertuxkart-1 stat-after: vfio_devices 0
+lenovo-games: supertuxkart-1 stat-after: vfio_dma_mappings 0
+lenovo-games: supertuxkart-1 stat-after: vfio_dma_pages 0
+lenovo-games: supertuxkart-1 stat-after: vfio_dma_io_pages 0
+lenovo-games: supertuxkart-1 stat-after: kvm_exits 0
+lenovo-games: supertuxkart-1 stat-after: iommu_dma_faults 0
+lenovo-games: supertuxkart-1 stat-after: iommu_irq_faults 0
+lenovo-games: supertuxkart-1 stat-after: msi_vectors_free 185
+lenovo-games: supertuxkart-1 stat-after: virtio_gpu_copied_bytes 0
+lenovo-games: supertuxkart-1 stat-after: window_free_min 13080
+lenovo-games: supertuxkart-1 stat-after: vkms_vblank_overruns 0
+lenovo-games: supertuxkart-1 stat-after: vkms_vblank_skipped 0
+lenovo-games: supertuxkart-1 stat-after: vkms_crc_missed 0
+lenovo-games: supertuxkart-1 stat-after: vkms_crc_catchups 0
+lenovo-games: supertuxkart-1 stat-after: latency_timer_us 1545552
+lenovo-games: supertuxkart-1 stat-after: latency_disk_us 8312
+lenovo-games: supertuxkart-1 stat-after: latency_diskwait_us 0
+lenovo-games: supertuxkart-1 stat-after: latency_console_us 0
+lenovo-games: supertuxkart-1 stat-after: wlan_refused_tcp 0
+lenovo-games: supertuxkart-1 stat-after: wlan_refused_ack 0
+lenovo-games: supertuxkart-1 stat-after: wlan_refused_other 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rx_held 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rx_wait_most 1
+lenovo-games: supertuxkart-1 stat-after: wlan_tx_status_lost 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rescue_key 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rescue_message4 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rescue_silent 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rescue_saved 0
+lenovo-games: supertuxkart-1 stat-after: wlan_rx_old_far 0
+lenovo-games: supertuxkart-1 stat-after: loopback_dropped 0
+lenovo-games: supertuxkart-1 stat-after: loopback_peak 0
+lenovo-games: supertuxkart-1 stat-after: loopback_delivered_tick 0
+lenovo-games: supertuxkart-1 stat-after: loopback_delivered_idle 0
+lenovo-games: supertuxkart-1 stat-after: loopback_delivered_call 0
+lenovo-games: supertuxkart-1 stat-after: loopback_left_idle 0
+lenovo-games: supertuxkart-1 stat-after: namecache_hits 195614
+lenovo-games: supertuxkart-1 stat-after: namecache_misses 4852
+lenovo-games: supertuxkart-1 stat-after: namecache_entries 4276
+lenovo-games: supertuxkart-1 stat-after: namecache_negative 1604
+lenovo-games: supertuxkart-1 stat-after: ext2_node_visits 15431
+lenovo-games: supertuxkart-1 stat-after: procs_running 3
+lenovo-games: supertuxkart-1 stat-after: procs_blocked 0
+lenovo-games: supertuxkart-1 uptime-before: 13.47 29.80
+lenovo-games: supertuxkart-1 uptime-after: 121.75 375.28
+lenovo-games: result: supertuxkart-1 bkl held 7.143 s / 108.280 s wall = 6.60% (under 15%), waits in entries 1.327 s / 87.660 s busy = 1.51% (under 3%), idle-take waits 0.000 s (under 5 s), system/user 0.296 (under 0.5)
+games: result: supertuxkart frames 7081 seconds 90.004 fps 78.67 median 12.31 p90 15.06 p99 17.22 p99.9 19.46 max 21.92 over50 0 end profile
+lenovo-games: result: supertuxkart-1 median 12.31 p90 15.06 p99 17.22 against Linux's 14.72 16.96 19.14: pass
+lenovo-games: result: pass
+0

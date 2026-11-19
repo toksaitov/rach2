@@ -1129,7 +1129,10 @@ static uint8_t balance_active[NR_CPUS];
 static uint8_t balance_stopped[NR_CPUS];
 
 /** The threads on processor `cpu`'s queues, a running one included and the
- * idle task left out (rq->nr_running). */
+ * idle task left out, and one more while `cpu` pushes its thread away
+ * (rq->nr_running, which counts the stopper thread that runs the push,
+ * kernel/sched/stop_task.c:47): so the push of a processor's sole ordinary
+ * thread finds two, as active_load_balance_cpu_stop does (fair.c:12135). */
 static unsigned int sched_balance_nr(int cpu)
 {
     const process_t *cur = cpu_table[cpu].current;
@@ -1138,7 +1141,7 @@ static unsigned int sched_balance_nr(int cpu)
     if (cur && cur != cpu_table[cpu].idle && !sched_fair_class(cur)) {
         n++;
     }
-    return n;
+    return n + balance_stopped[cpu];
 }
 
 /** The thread running on processor `cpu`, NULL for its idle task or while
@@ -1632,6 +1635,18 @@ static void sched_charge_rt(process_t *p, int c)
     p->se.exec_start = now;
 }
 
+/** Take `p`, processor `c`'s current fair thread, off its fair queue as it
+ * becomes real-time, keeping its lag, with its run charged to the fair
+ * server and its run as a real-time thread counted from now. The run
+ * queues' lock is held. */
+static void sched_fair_leave_running(process_t *p, int c)
+{
+    fair_put_prev(p);
+    (void)sched_dequeue(p, FAIR_DEQ_MOVE);
+    fair_server_spend(c);
+    p->se.exec_start = fair_rqs[c].clock_task;
+}
+
 /** The part of `sched_priority_changed` for `p`, running on processor `c`,
  * whose class is now the fair one when `fair` is set: it leaves or joins
  * the fair class as its current thread, its run time charged by the class
@@ -1644,10 +1659,7 @@ static int sched_class_running(process_t *p, int c, int fair)
     int kick = -1;
 
     if (!fair && fair_rqs[c].curr == p) {
-        fair_put_prev(p);
-        (void)sched_dequeue(p, FAIR_DEQ_MOVE);
-        fair_server_spend(c);
-        p->se.exec_start = fair_rqs[c].clock_task;
+        sched_fair_leave_running(p, c);
     } else if (fair && fair_rqs[c].curr != p) {
         sched_charge_rt(p, c);
         sched_entity_init(p);
@@ -1708,10 +1720,11 @@ static int sched_class_queued(process_t *p, int c, int fair)
  * task once the queue's highest priority is above its own (rt.c:2519-
  * 2520), and when it becomes ordinary, as switched_to_fair does
  * (fair.c:13367-13368). A blocked thread asks nothing.
+ *
+ * Returns the processor to kick, or -1. The run queues' lock is held.
  */
-void sched_priority_changed(process_t *p)
+static int sched_changed_locked(process_t *p)
 {
-    uint32_t flags = spin_lock_irqsave(&sched_lock);
     int c = p->cpu, kick = -1, fair = sched_fair_class(p);
     int running = cpu_table[c].current == p, idle = p == cpu_table[c].idle;
 
@@ -1726,6 +1739,82 @@ void sched_priority_changed(process_t *p)
     } else if (p->se.sched_delayed && !fair) {
         (void)sched_dequeue(p, FAIR_DEQ_FORCED);
     }
+    return kick;
+}
+
+/** Move `p` as `sched_changed_locked` does, under the run queues' lock,
+ * and kick the processor it names once the lock is let go. */
+void sched_priority_changed(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int kick = sched_changed_locked(p);
+
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (kick >= 0) {
+        smp_kick(kick);
+    }
+}
+
+/**
+ * Take `p`, on processor `c`'s fair queue, off it under the policy it has
+ * now, before a change of policy moves it into or out of SCHED_IDLE, so
+ * that the queues' counts of SCHED_IDLE threads (`idle_nr_running`,
+ * `idle_h_nr_running`) lose what its enqueue added to them, as Linux's
+ * __sched_setscheduler dequeues a task before __setscheduler_params
+ * changes its policy and enqueues it after (kernel/sched/syscalls.c:
+ * 715-758). `fair` says whether it stays ordinary. A current thread that
+ * becomes real-time leaves as `sched_class_running` would make it leave; a
+ * delayed one, which is blocked, finishes its dequeue. Returns 2 when `p`
+ * is to come back as the fair queue's current thread, 1 when it is to come
+ * back on the queue of its new class (`sched_enqueue`), and 0 when it
+ * stays off. The run queues' lock is held.
+ */
+static int sched_idle_policy_leave(process_t *p, int c, int fair)
+{
+    int curr = fair_rqs[c].curr == p;
+
+    if (curr && !fair) {
+        sched_fair_leave_running(p, c);
+        return 0;
+    }
+    if (p->se.sched_delayed) {
+        (void)sched_dequeue(p, FAIR_DEQ_FORCED);
+        return 0;
+    }
+    if (curr) {
+        fair_put_prev(p);
+    }
+    (void)sched_dequeue(p, FAIR_DEQ_MOVE);
+    if (curr) {
+        return 2;
+    }
+    return p->state == PROC_READY ? 1 : 0;
+}
+
+void sched_set_priority(process_t *p, int policy, unsigned int rt_priority,
+                        unsigned int pi_priority, int32_t nice)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int c = p->cpu, back = 0, kick;
+    int fair = rt_priority == 0 && pi_priority == 0;
+
+    (void)sched_clock_task(c);
+    if (p->se.on_rq && p != cpu_table[c].idle &&
+        (p->sched_policy == SCHED_IDLE) != (policy == SCHED_IDLE)) {
+        back = sched_idle_policy_leave(p, c, fair);
+    }
+    p->sched_policy = (uint8_t)policy;
+    p->rt_priority = (uint8_t)rt_priority;
+    p->pi_priority = (uint8_t)pi_priority;
+    p->nice = nice;
+    if (back == 1) {
+        sched_enqueue(p, FAIR_ENQ_RESTORE, 0);
+    } else if (back == 2) {
+        fair_enqueue(p, FAIR_ENQ_RESTORE);
+        fair_server_track(c, sched_fair_runnable(c));
+        fair_set_next(p);
+    }
+    kick = sched_changed_locked(p);
     spin_unlock_irqrestore(&sched_lock, flags);
     if (kick >= 0) {
         smp_kick(kick);

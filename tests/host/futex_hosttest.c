@@ -467,6 +467,24 @@ void sched_priority_changed(process_t *p)
     (void)p;
 }
 
+/* The thread whose lowest inherited priority a PI row watches, or NULL. */
+static process_t *prio_watch;
+static unsigned int prio_watch_low;
+
+/** Give `p` its policy, priorities and nice value, which this model keeps
+ * on no queue, and note the lowest inherited priority `prio_watch` gets. */
+void sched_set_priority(process_t *p, int policy, unsigned int rt_priority,
+                        unsigned int pi_priority, int32_t nice)
+{
+    if (p == prio_watch && pi_priority < prio_watch_low) {
+        prio_watch_low = pi_priority;
+    }
+    p->sched_policy = (uint8_t)policy;
+    p->rt_priority = (uint8_t)rt_priority;
+    p->pi_priority = (uint8_t)pi_priority;
+    p->nice = nice;
+}
+
 /** Move the lag rows' clocks on until the monotonic clock reads `ns`. */
 static void model_reach(int64_t ns)
 {
