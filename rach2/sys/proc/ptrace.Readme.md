@@ -46,7 +46,7 @@ A thread's record (`proc/process.h`) keeps its tracing state:
 * `ptrace_exit_seen`, set once the tracer's wait has reported the end of the process;
 * `debugreg[8]`, the debug registers as the tracer set them.
 
-The tracer is a process, not a thread: `tracer` is its thread group's ID, so any of its threads may make the requests and wait. Nothing in the tracer's record lists its tracees; its wait finds them by their `tracer`.
+The tracer is a process, not a thread: `tracer` is its thread group's ID, so any of its threads may make the requests and wait. The records are hashed by `tracer` (`proc_set_tracer`), and the tracer's wait and its end (`ptrace_tracer_gone`) walk the chain of its ID (`proc_tracees`), as Linux's walk its `ptraced` list, and not every record of the system.
 
 `ptrace_attach`, for `PTRACE_ATTACH` and `PTRACE_SEIZE`, and `ptrace_traceme` set the state; [ptrace(2)](../../../man/man2/ptrace.2) gives who may. Since each thread of the tracer may make the requests, a tracer is privileged only when every live thread of it is (`group_privileged`). An unprivileged caller is refused a thread inside `execve` (its `exec_ws` set), because the exec sets the new image's IDs according to the tracer the thread has: it ignores set-ID bits under a tracer that is not privileged (`exec_traced` in `syscall_proc.c`). `PTRACE_ATTACH` sends `SIGSTOP`, and both requests make a thread parked in its process's stop runnable (`ptrace_unpark`), so that it makes that stop a ptrace stop. `PTRACE_SEIZE` and `PTRACE_SETOPTIONS` test every bit of the caller's word, all 64 on x86-64, against `PTRACE_O_MASK`, and refuse an unknown one without changing anything.
 

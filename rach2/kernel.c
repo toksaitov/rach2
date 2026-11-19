@@ -1455,7 +1455,7 @@ static process_t *test_process(page_dir_t *dir, void (*entry)(void))
     p->kernel_stack = base + KERNEL_STACK_SIZE;
     p->space_root = dir ? get_page_dir_phys(dir) : 0;
     p->page_dir = dir;
-    p->parent_pid = current_proc->pid;
+    proc_set_parent(p, current_proc->pid);
     p->affinity = current_proc->affinity;
     setup_process_stack(p, entry);
     p->no_tick_switch = 0;
@@ -1976,7 +1976,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     user_proc->space_root = mm->space_root;
     user_proc->page_dir = mm->dir;
     user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
-    user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
+    proc_set_parent(user_proc, current_proc ? current_proc->tgid : 0);
     proc_set_comm(user_proc, name);
     if (current_proc) {
         current_proc->on_cpu = 0;

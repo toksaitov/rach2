@@ -399,6 +399,18 @@ uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t id)
     return id + (ns == &tracee_ns ? 1000 : 2000);
 }
 
+/** Make `tgid` the tracer of `p`; the model keeps no index. */
+void proc_set_tracer(process_t *p, uint32_t tgid)
+{
+    p->tracer = tgid;
+}
+
+/** The tracee, when `tgid` traces it, as the index by tracer gives it. */
+process_t *proc_tracees(uint32_t tgid)
+{
+    return tgid != 0 && tracee.tracer == tgid ? &tracee : NULL;
+}
+
 /** The process the PID `pid` names, its kernel id in the model. */
 process_t *proc_named(uint32_t pid)
 {

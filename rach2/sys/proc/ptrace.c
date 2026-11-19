@@ -82,7 +82,7 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
 
     if (tracer == NULL || tracer->tg->live == 0) {
         self->ptrace = 0;
-        self->tracer = 0;
+        proc_set_tracer(self, 0);
         return (int)((status >> 8) & 0x7F);
     }
     if (info) {
@@ -353,7 +353,7 @@ int ptrace_fork_attach(process_t *child, uint32_t flags)
         return 0;
     }
     child->ptrace = self->ptrace & (PT_TRACED | PT_SEIZED);
-    child->tracer = self->tracer;
+    proc_set_tracer(child, self->tracer);
     child->ptrace_opts = self->ptrace_opts;
     if (child->ptrace & PT_SEIZED) {
         child->ptrace |= PT_START;
@@ -445,7 +445,7 @@ static void ptrace_detach(process_t *t, int sig)
         arch_ptrace_step(t, 0);
     }
     t->ptrace = 0;
-    t->tracer = 0;
+    proc_set_tracer(t, 0);
     t->ptrace_opts = 0;
     t->stop_seen = 0;
     k_memset(t->debugreg, 0, sizeof(t->debugreg));
@@ -480,12 +480,13 @@ void ptrace_exit_release(process_t *t)
 
 void ptrace_tracer_gone(uint32_t tgid)
 {
-    process_t *t;
+    process_t *t, *next;
     struct k_siginfo info;
 
     k_memset(&info, 0, sizeof(info));
     info.code = SI_KERNEL;
-    for (t = proc_list; t; t = t->next) {
+    for (t = proc_tracees(tgid); t; t = next) {
+        next = t->tracer_link.next;
         if (!(t->ptrace & PT_TRACED) || t->tracer != tgid) {
             continue;
         }
@@ -631,7 +632,7 @@ static int ptrace_attach(process_t *t, int seize, unsigned long opts)
     }
     t->ptrace = PT_TRACED | (seize ? PT_SEIZED : 0);
     proc_work_set(t, WORK_SIGNAL);
-    t->tracer = current_proc->tgid;
+    proc_set_tracer(t, current_proc->tgid);
     t->ptrace_opts = seize ? (uint32_t)opts : 0;
     t->ptrace_exit_seen = 0;
     if (!seize) {
@@ -662,7 +663,7 @@ static int ptrace_traceme(void)
     }
     current_proc->ptrace = PT_TRACED;
     proc_work_set(current_proc, WORK_SIGNAL);
-    current_proc->tracer = parent->tgid;
+    proc_set_tracer(current_proc, parent->tgid);
     current_proc->ptrace_opts = 0;
     current_proc->ptrace_exit_seen = 0;
     return 0;

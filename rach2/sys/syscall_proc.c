@@ -3148,8 +3148,8 @@ static process_t *fork_build(process_t *parent, const struct fork_req *req, int3
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
     /* A thread's or a CLONE_PARENT child's parent is the caller's parent. */
-    child->parent_pid =
-        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
+    proc_set_parent(child, (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid
+                                                                        : parent->tgid);
     fork_ids(child, parent);
     rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
     child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
@@ -3649,16 +3649,18 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
- * the si_code and si_status waitid stores, and the child's usage; and the
- * event the wait holds for the caller while the caller copies these out, the
- * record and what taking it does (`wait_hold`), NULL and WAIT_KEEP for
- * none. */
+ * the si_code and si_status waitid stores, and the child's usage, which is
+ * filled only when the caller sets `want_ru`, since it gives no buffer for
+ * it otherwise; and the event the wait holds for the caller while the
+ * caller copies these out, the record and what taking it does
+ * (`wait_hold`), NULL and WAIT_KEEP for none. */
 struct wait_report {
     uint32_t pid;
     uint32_t uid;
     int32_t status;
     int32_t code;
     int32_t info_status;
+    int want_ru;
     struct kernel_rusage ru;
     process_t *p;
     int take;
@@ -3726,7 +3728,9 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
     r->status = status;
     r->code = code;
     r->info_status = info_status;
-    rusage_of_child(&r->ru, p);
+    if (r->want_ru) {
+        rusage_of_child(&r->ru, p);
+    }
 }
 
 /**
@@ -3973,7 +3977,13 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  * CLD_DUMPED with the signal; a stop's is CLD_STOPPED with the stop signal,
  * and a continue's CLD_CONTINUED with SIGCONT.
  *
- * Every selected child is looked at until one has an event. Without WNOHANG
+ * Every selected child is looked at until one has an event: the leaders
+ * whose parent is the caller's process, in the order they took it, and then
+ * the other threads it traces, in the order it took them, as Linux's
+ * do_wait looks at `children` and then at `ptraced` (kernel/exit.c:
+ * 1488-1530). The indexes by parent and by tracer (`proc_children`,
+ * `proc_tracees`) give them, so the look costs what the caller has and not
+ * what the system has. Without WNOHANG
  * the caller then sleeps on its process's child queue, which an exit, a stop
  * or a continue wakes, until a child has an event or a signal interrupts. As
  * Linux's `do_wait` (kernel/exit.c), the caller joins the queue, with a
@@ -3990,7 +4000,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
 {
     struct wq_waiter self;
     process_t *p;
-    uint32_t flags;
+    uint32_t flags, tgid = current_proc->tgid;
     int32_t rc;
 
     self.proc = current_proc;
@@ -4009,7 +4019,10 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         }
         sig_irq_restore(flags);
         rc = 0;
-        for (p = proc_list; p; p = p->next) {
+        for (p = proc_children(tgid); p && rc == 0; p = p->ppid_link.next) {
+            if (p->parent_pid != tgid) {
+                continue;
+            }
             if (wait_selects_tracee(idtype, id, options, p)) {
                 have_child = 1;
                 if (wait_tracee(p, options, out)) {
@@ -4021,7 +4034,15 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
                 have_child = 1;
                 if (wait_child(p, options, out)) {
                     rc = (int32_t)out->pid;
-                    break;
+                }
+            }
+        }
+        for (p = proc_tracees(tgid); p && rc == 0; p = p->tracer_link.next) {
+            if ((p->pid != p->tgid || p->parent_pid != tgid) &&
+                wait_selects_tracee(idtype, id, options, p)) {
+                have_child = 1;
+                if (wait_tracee(p, options, out)) {
+                    rc = (int32_t)out->pid;
                 }
             }
         }
@@ -4096,6 +4117,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
         id = pid_named(0u - (uint32_t)pid);
     }
     options &= (int)(WNOHANG | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE);
+    r.want_ru = rusage_ptr != 0;
     rc = wait_find(idtype, id, options | WEXITED, &r);
     if (rc <= 0) {
         return rc;
@@ -4232,6 +4254,7 @@ long sys_waitid(isr_params_t *params)
     if (rusage_ptr && !user_buffer_ok(rusage_ptr, rusage_bytes(), 1)) {
         return -EFAULT;
     }
+    r.want_ru = rusage_ptr != 0;
     rc = wait_find(idtype, id, options, &r);
     if (rc < 0) {
         return rc;
