@@ -1054,8 +1054,9 @@ static void exe_relative(char *path)
  * description stays held across a sleeping path read and is released before
  * the reader's root is read, so two mount locks are never held together.
  * NULL with `*err` -EIO when a header or a path of the KRFFS root, or the
- * path of another type, cannot be read, which the reader answers, never
- * a recorded name in its place; `*err` is 0 otherwise. */
+ * path, the held name's path or the attributes of another type, cannot be
+ * read, which the reader answers, never a recorded name in its place;
+ * `*err` is 0 otherwise. */
 static char *exe_file_path(struct open_file *file, int *deleted, int *err)
 {
     krffs_node_t *node;
@@ -1084,15 +1085,22 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
     } else if (file->name) {
         *deleted = vfs_name_deleted(file->name);
         path = kmalloc(VFS_PATH_MAX);
-        if (path && vfs_name_path(file->name, file->vnode, path, VFS_PATH_MAX, deleted) != 0) {
+        if (path &&
+            (rc = vfs_name_path(file->name, file->vnode, path, VFS_PATH_MAX, deleted)) != 0) {
+            if (rc == -EIO) {
+                *err = -EIO;
+            }
             kfree(path);
             path = NULL;
         }
     } else {
-        if (vfs_getattr(file->vmnt, file->vnode, &st) == 0) {
+        rc = vfs_getattr(file->vmnt, file->vnode, &st);
+        if (rc == 0) {
             *deleted = st.nlink == 0;
+        } else if (rc == -EIO) {
+            *err = -EIO;
         }
-        if (!*deleted && (path = kmalloc(VFS_PATH_MAX)) != NULL &&
+        if (!*err && !*deleted && (path = kmalloc(VFS_PATH_MAX)) != NULL &&
             (rc = vfs_node_path(file->vmnt, file->vnode, path, VFS_PATH_MAX)) != 0) {
             if (rc == -EIO) {
                 *err = -EIO;
