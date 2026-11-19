@@ -18,15 +18,13 @@
 #include "../lib/spinlock.h"
 #include "../proc/wait_queue.h"
 
-/* The places in every lock's line that killed takers left and that no give
- * has passed yet (`sleep_lock_take_killable`). */
-#define SLEEP_LEFT_MAX 32
-
 struct sleep_lock;
 
 /* A place in the line of `lock` that a killed taker left, which the give
- * that would serve it passes; an entry of the table with no lock is free. */
+ * that would serve it passes: from the heap, on the list of every lock's
+ * left places, and freed when it is passed. */
 struct sleep_left {
+    struct sleep_left *next;
     struct sleep_lock *lock;
     uint32_t place;
 };
@@ -148,9 +146,10 @@ void sleep_lock_take(struct sleep_lock *l);
  * -EINTR without it. A killed waiter leaves the line, and the give that
  * would serve its place serves the next instead, so the waiters behind it
  * keep their order; one whose turn comes as it leaves passes the turn on
- * and holds nothing. A killed waiter that finds no room in the table of
- * left places (SLEEP_LEFT_MAX, for every lock) waits for its turn as
- * `sleep_lock_take` does and returns 0 with `l` held. A take by the holder,
+ * and holds nothing. Any number of killed waiters leave, as Linux's
+ * waiters leave its mutex's list; only one that the heap has no room for
+ * the record of its place waits for its turn as `sleep_lock_take` does and
+ * returns 0 with `l` held. A take by the holder,
  * or with no process, never ends early. The caller tests SIGKILL itself
  * after a take that needed no wait.
  */

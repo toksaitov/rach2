@@ -84,6 +84,30 @@ void k_panic(const char *s)
     _exit(44);
 }
 
+/* The heap's live blocks, and whether it refuses every allocation, which a
+ * row sets. */
+static int allocations, heap_full;
+
+extern void *calloc(unsigned long count, unsigned long size);
+extern void free(void *ptr);
+
+/** Zeroed host memory, counted in `allocations`, or NULL while
+ * `heap_full` is set. */
+void *kzalloc(size_t size)
+{
+    void *ptr = heap_full ? 0 : calloc(1, size);
+
+    allocations += ptr != 0;
+    return ptr;
+}
+
+/** Free what `kzalloc` gave, and count it. */
+void kfree(void *ptr)
+{
+    allocations -= ptr != 0;
+    free(ptr);
+}
+
 /* The clock, in microseconds, which a row moves, and the reads of it and
  * of the cycle counter. */
 static uint32_t now_us;
@@ -566,10 +590,15 @@ static void row_turn_at_leave(void)
     proc_b.sig_pending = 0;
 }
 
-/** With every entry of the table of left places taken, a killed waiter
- * stays in line and has the lock at its turn; the give before it passes
- * every place left, and the table empties. */
-static void row_table_full(void)
+/* More killed waiters than the 32 places a fixed table of left places
+ * held, which the row below sends out of the line at once. */
+#define MANY_LEFT 40
+
+/** Any number of killed waiters leave the line at once, each with a record
+ * of its place from the heap, and the give passes every place they left
+ * and frees the records. A table of 32 places would keep the 33rd waiter in
+ * line, unkillable until the holder gave the lock. */
+static void row_many_left(void)
 {
     int i, rc = 0;
 
@@ -580,26 +609,51 @@ static void row_table_full(void)
     sleep_lock_take(&lock);
 
     cpu_table[0].current = &proc_b;
-    for (i = 0; i < SLEEP_LEFT_MAX; i++) {
+    for (i = 0; i < MANY_LEFT; i++) {
         rc |= sleep_lock_take_killable(&lock) != -EINTR;
     }
-    check(rc == 0 && waits == 0 && lock.next == 1 + SLEEP_LEFT_MAX,
-          "a killed waiter leaves at once while the table has room");
+    check(rc == 0 && waits == 0 && lock.next == 1 + MANY_LEFT && allocations == MANY_LEFT,
+          "every killed waiter leaves at once, with a record of its place");
 
+    cpu_table[0].current = &proc_a;
+    sleep_lock_give(&lock);
+    check(lock.serving == 1 + MANY_LEFT && lock.holder == -1 && allocations == 0,
+          "the give passes every place left and frees each record");
+    cpu_table[0].current = &proc_c;
+    sleep_lock_take(&lock);
+    check(waits == 0 && sleep_lock_held(&lock), "C then takes the lock with no wait");
+    sleep_lock_give(&lock);
+    proc_b.sig_pending = 0;
+}
+
+/** A killed waiter that the heap has no room for the record of its place
+ * stays in line and has the lock at its turn; once the heap has room, a
+ * killed waiter leaves again. */
+static void row_no_room(void)
+{
+    script_clear();
+    sleep_lock_init(&lock, &rec_one, 0);
+    proc_b.sig_pending = KSIG_BIT(SIGKILL);
+    cpu_table[0].current = &proc_a;
+    sleep_lock_take(&lock);
+
+    heap_full = 1;
     script(a_gives_once);
+    cpu_table[0].current = &proc_b;
     check(sleep_lock_take_killable(&lock) == 0 && waits == 1 && sleep_lock_held(&lock),
-          "with the table full it waits for its turn and has the lock");
-    check(lock.serving == 1 + SLEEP_LEFT_MAX, "the give passed every place left");
+          "with no room for its record a killed waiter waits for its turn and has the lock");
+    heap_full = 0;
     sleep_lock_give(&lock);
 
     cpu_table[0].current = &proc_a;
     sleep_lock_take(&lock);
     cpu_table[0].current = &proc_b;
-    check(sleep_lock_take_killable(&lock) == -EINTR && waits == 1,
-          "the table has room again once the places are passed");
+    check(sleep_lock_take_killable(&lock) == -EINTR && waits == 1 && allocations == 1,
+          "with room again a killed waiter leaves");
     cpu_table[0].current = &proc_a;
     sleep_lock_give(&lock);
-    check(lock.serving == lock.next && lock.holder == -1, "and the line is empty");
+    check(lock.serving == lock.next && lock.holder == -1 && allocations == 0,
+          "and the line is empty");
     proc_b.sig_pending = 0;
 }
 
@@ -671,9 +725,11 @@ int main(void)
     row_spin();
     row_killed();
     row_turn_at_leave();
-    row_table_full();
+    row_many_left();
+    row_no_room();
     check(spin_at_wait == 0 && spin_depth == 0,
           "no row waits, or ends, with a spinlock held, the records' among them");
+    check(allocations == 0, "no record of a left place outlives its rows");
     panic_row(give_free, 0, "does not hold", "a give of a free lock panics");
     panic_row(give_other, 0, "does not hold", "a give by a thread that does not hold it panics");
     panic_row(assert_other, 0, "a change outside the lock",
