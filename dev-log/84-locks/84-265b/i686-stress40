@@ -1,0 +1,226 @@
+run: default: guest.default.smptlbmusl: starting
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 95 of 1077, most overrun 158162 us
+smptlbmusl: untorn: thread 4294967405 ticks of 4294967306 after 530 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 89 of 1043, most overrun 195825 us
+smptlbmusl: untorn: thread 4294967404 ticks of 4294967306 after 503 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 103 of 1080, most overrun 168931 us
+smptlbmusl: untorn: thread 4294967397 ticks of 4294967306 after 478 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 88 of 1002, most overrun 159948 us
+smptlbmusl: untorn: thread 17179869844000000 after 17179869204000000, process 17179870652000000 after 17179869372000000
+@etude 1 assert untorn fail a CPU clock read a torn count
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 110 of 1152, most overrun 116742 us
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 89 of 1128, most overrun 133872 us
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 77 of 1055, most overrun 203574 us
+smptlbmusl: untorn: thread 17179869852000000 after 17179869176000000, process 17179870680000000 after 17179869308000000
+@etude 1 assert untorn fail a CPU clock read a torn count
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 122 of 1272, most overrun 152893 us
+smptlbmusl: untorn: thread 4294967395 ticks of 4294967306 after 465 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+run: default: guest.default.smptlbmusl: evidence: /home/toksaitov-a/rach2/build/tests/failed/tests.i686.20261119T044033Z.1533278.guest.default.smptlbmusl.r0
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 73 of 1098, most overrun 134266 us
+smptlbmusl: untorn: thread 17179869724000000 after 17179869180000000, process 17179870452000000 after 17179869364000000
+@etude 1 assert untorn fail a CPU clock read a torn count
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 89 of 1092, most overrun 189856 us
+smptlbmusl: untorn: thread 4294967400 ticks of 4294967306 after 490 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 80 of 979, most overrun 130304 us
+smptlbmusl: untorn: thread 4294967402 ticks of 4294967306 after 514 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 96 of 1075, most overrun 131820 us
+smptlbmusl: untorn: thread 4294967415 ticks of 4294967306 after 563 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 102 of 1089, most overrun 130388 us
+smptlbmusl: untorn: thread 4294967405 ticks of 4294967306 after 527 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 84 of 973, most overrun 167186 us
+smptlbmusl: untorn: thread 4294967407 ticks of 4294967306 after 529 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 70 of 1146, most overrun 237949 us
+smptlbmusl: untorn: thread 4294967412 ticks of 4294967306 after 554 ms, no read in a carry; cputime_test 0 0 1 0
+@etude 1 assert untorn fail the count did not carry past 2^32 under a read
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 85 of 1029, most overrun 142327 us
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+run: default: FAIL in 31s
+run: result: failed: default
+run: result: failed

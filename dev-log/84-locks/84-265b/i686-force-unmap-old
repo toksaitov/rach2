@@ -1,0 +1,125 @@
+run: default: guest.default.smptlbmusl: starting
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 1 interrupts 1
+@etude 1 assert fault fail the shootdowns or their interrupts differ
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 2 times across unmap
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 27 of 1138, most overrun 14524 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 139 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+run: default: guest.default.smptlbmusl: evidence: /home/toksaitov-a/rach2/build/tests/failed/tests.i686.20261119T053831Z.2403303.guest.default.smptlbmusl.r0
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 1 interrupts 1
+@etude 1 assert fault fail the shootdowns or their interrupts differ
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 2 times across unmap
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 27 of 1178, most overrun 13979 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 133 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 1 interrupts 1
+@etude 1 assert fault fail the shootdowns or their interrupts differ
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 2 times across unmap
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 39 of 1173, most overrun 24105 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 136 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 1 interrupts 1
+@etude 1 assert fault fail the shootdowns or their interrupts differ
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 2 times across unmap
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 28 of 1199, most overrun 22956 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 136 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap fail the shootdowns or their interrupts differ
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 2 times across unmap
+smptlbmusl: unmap: shootdowns 0 interrupts 0
+smptlbmusl: mprotect: shootdowns 1 interrupts 1
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 32 of 1182, most overrun 20324 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 138 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span fail the shootdowns or their interrupts differ
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 2 times across unmap
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 0 interrupts 0
+smptlbmusl: timeouts: late passes 23 of 1273, most overrun 16469 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 137 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 1 times across unmap
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 32 of 1179, most overrun 14216 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 138 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect fail the shootdowns or their interrupts differ
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: force: spinner switched in 1 times across unmap
+smptlbmusl: unmap: shootdowns 1 interrupts 1
+smptlbmusl: mprotect: shootdowns 0 interrupts 0
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1
+smptlbmusl: timeouts: late passes 10 of 1039, most overrun 17834 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 136 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL FAIL: a row failed
+run: default: FAIL in 13s
+run: result: failed: default
+run: result: failed
