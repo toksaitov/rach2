@@ -1865,6 +1865,13 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
  * caller holds the commit lock. 0, -ENOMEM or -EINVAL. */
 int32_t drm_atomic_set_config_state(struct drm_mode_set *set, struct drm_atomic_state *state);
 
+/** Commit the sets `drm_atomic_set_config_state` added to `state` as a
+ * legacy mode set does: an encoder a connector left out of the commit
+ * holds is taken from it, its CRTC turned off when no connector is left
+ * there. The caller holds the commit lock and frees `state`. 0 or the
+ * commit's error. May sleep. */
+int32_t drm_atomic_commit_config(struct drm_atomic_state *state);
+
 /** Flush `rect` of `fb` to the display, the commit DIRTYFB makes, for the
  * console's shadow: each plane that shows `fb` gets it as FB_DAMAGE_CLIPS.
  * Takes the commit lock. 0, -ENOSYS for a device whose framebuffers need

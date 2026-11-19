@@ -390,7 +390,7 @@ static int32_t con_light(struct drm_device *dev, const struct con_output *outs, 
         }
     }
     if (err == 0) {
-        err = drm_atomic_commit(state);
+        err = drm_atomic_commit_config(state);
     }
     if (state) {
         drm_atomic_state_free(state);
