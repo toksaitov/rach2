@@ -4,14 +4,16 @@
  * attempts, never at a time. It speaks IPv4 only and takes dotted addresses.
  *
  *   nettput -s [-b ADDR] [-p PORT]
- *   nettput -c HOST [-p PORT] [-n COUNT] [-l LEN] send|recv|rr|crr
- *   nettput -c HOST [-p PORT] [-n ATTEMPTS] wait|drop
+ *   nettput -c HOST [-I IFACE] [-p PORT] [-n COUNT] [-l LEN] send|recv|rr|crr
+ *   nettput -c HOST [-I IFACE] [-p PORT] [-n ATTEMPTS] wait|drop
  *
  * The server listens on PORT (5201) of ADDR, every address unless -b names
  * one, prints `nettput: serving on PORT` on standard output once it
  * listens, and serves each client in a process of its own until it is
  * killed; a client's process ends when its test does or when the server
- * has ended. The client runs one test:
+ * has ended. With -I, every socket of the client is bound to the interface
+ * IFACE (SO_BINDTODEVICE, where the system has it), so that its connections
+ * leave by IFACE or not at all. The client runs one test:
  *
  *   send  the client writes COUNT bytes, LEN (65536) at a time, and shuts
  *         its side down; the server counts what arrived and answers with
@@ -381,10 +383,35 @@ static int server(struct in_addr bind_addr, unsigned port)
     }
 }
 
+/* The interface -I names, or NULL. */
+static const char *bind_iface;
+
+/** A TCP socket, bound to -I's interface when -I names one: the socket, or
+ * -1 with errno set. */
+static int tcp_socket(void)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (fd < 0 || bind_iface == NULL) {
+        return fd;
+    }
+#ifdef SO_BINDTODEVICE
+    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, bind_iface, (socklen_t)strlen(bind_iface)) ==
+        0) {
+        return fd;
+    }
+#else
+    errno = ENOSYS;
+#endif
+    complain("-I");
+    close(fd);
+    return -1;
+}
+
 /** Open a connection to ADDR: the socket, or -1. */
 static int dial(const struct sockaddr_in *addr)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = tcp_socket();
 
     if (fd < 0) {
         return -1;
@@ -476,7 +503,7 @@ static int drop_test(const struct sockaddr_in *addr, unsigned long attempts)
         return 2;
     }
     for (i = 0; i < attempts; i++) {
-        p[i].fd = socket(AF_INET, SOCK_STREAM, 0);
+        p[i].fd = tcp_socket();
         p[i].events = POLLOUT;
         p[i].revents = 0;
         if (p[i].fd < 0) {
@@ -698,9 +725,9 @@ static int client(const struct sockaddr_in *addr, enum mode mode, unsigned long 
 /** Print the usage and exit with status 2. */
 static void usage(void)
 {
-    fprintf(stderr,
-            "usage: nettput -s [-b ADDR] [-p PORT]\n"
-            "       nettput -c HOST [-p PORT] [-n COUNT] [-l LEN] send|recv|rr|crr|wait|drop\n");
+    fprintf(stderr, "usage: nettput -s [-b ADDR] [-p PORT]\n"
+                    "       nettput -c HOST [-I IFACE] [-p PORT] [-n COUNT] [-l LEN]\n"
+                    "               send|recv|rr|crr|wait|drop\n");
     exit(2);
 }
 
@@ -729,7 +756,7 @@ int main(int argc, char **argv)
     int serving = 0, o;
 
     signal(SIGPIPE, SIG_IGN);
-    while ((o = getopt(argc, argv, "sb:c:p:n:l:")) != -1) {
+    while ((o = getopt(argc, argv, "sb:c:I:p:n:l:")) != -1) {
         switch (o) {
         case 's':
             serving = 1;
@@ -746,6 +773,9 @@ int main(int argc, char **argv)
         case 'n':
             count = number(optarg, COUNT_MAX);
             break;
+        case 'I':
+            bind_iface = optarg;
+            break;
         case 'l':
             len = (unsigned)number(optarg, LEN_MAX);
             break;
@@ -756,7 +786,7 @@ int main(int argc, char **argv)
     memset(&addr, 0, sizeof(addr));
     if (serving) {
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        if (host != NULL || optind != argc ||
+        if (host != NULL || bind_iface != NULL || optind != argc ||
             (bind_text != NULL && inet_pton(AF_INET, bind_text, &addr.sin_addr) != 1)) {
             usage();
         }
