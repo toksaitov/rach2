@@ -92,7 +92,7 @@ K_NOINLINE void isr_leave_work(isr_params_t *params, process_t *p, int locked)
     if (signalled && signal_return_work(params)) {
         keep |= WORK_SIGNAL;
     }
-    if (signalled && (p->ptrace & (PT_SYSCALL | PT_STEP))) {
+    if (p->ptrace & (PT_SYSCALL | PT_STEP)) {
         keep |= WORK_TRACE;
     }
     if (work & WORK_DEBUGREG) {

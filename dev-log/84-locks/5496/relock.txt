@@ -1,0 +1,75 @@
+5496: a traced call's lock judged after the entry stop, tried and taken back.
+QEMU under KVM on the testing PC, four processors, 2 GiB, serial console,
+one machine at a time, 2026-11-19 21:37 to 21:39 UTC+6, boots in the order
+base, fix, linux, base, fix, linux. bench is bench.c with main's rounds
+replaced: round 0 runs getppid, ioctl and pingpong, rounds 1 to 7 pingpong
+alone, then one profiled strace -f -c pingpong with bkl/calls zeroed before
+and printed after (columns: kind, number, calls, wall, holds, held us,
+wait us).
+
+SHA-256:
+  a0cb16f3e363ecdd...  kernel-base
+  2ddd5311349fe5ce...  kernel-fix
+  75d7f9be0da1b6f6...  vmlinuz-linux
+  c21fd9c9a48b3c5d...  strace
+  3a43a6f74614008f...  bench
+  base: x86-64 kernel of 720ff54d9; fix: 6e487f4cc on it; linux: Debian 6.12.107+deb13-cloud-amd64
+
+Microseconds a round trip, eight rounds a boot, min-max (median):
+out-base-1.txt
+  pingpong  plain                              n=8 0.88-2.92 median 1.79
+  pingpong  profiled strace -f -c pingpong     n=1 80.21-80.21 median 80.21
+  pingpong  strace -f --seccomp-bpf -e ioctl   n=8 58.50-60.25 median 59.47
+  pingpong  strace -f -c                       n=8 77.98-81.81 median 80.03
+  pingpong  strace -f -e ioctl                 n=8 76.35-79.99 median 78.89
+out-base-2.txt
+  pingpong  plain                              n=8 0.98-2.13 median 1.94
+  pingpong  profiled strace -f -c pingpong     n=1 81.93-81.93 median 81.93
+  pingpong  strace -f --seccomp-bpf -e ioctl   n=8 59.04-60.60 median 60.34
+  pingpong  strace -f -c                       n=8 79.32-81.49 median 80.22
+  pingpong  strace -f -e ioctl                 n=8 77.25-81.13 median 78.60
+out-fix-1.txt
+  pingpong  plain                              n=8 0.94-2.54 median 2.02
+  pingpong  profiled strace -f -c pingpong     n=1 90.68-90.68 median 90.68
+  pingpong  strace -f --seccomp-bpf -e ioctl   n=8 58.76-60.45 median 59.98
+  pingpong  strace -f -c                       n=8 85.17-89.80 median 87.74
+  pingpong  strace -f -e ioctl                 n=8 83.25-87.36 median 85.78
+out-fix-2.txt
+  pingpong  plain                              n=8 0.85-2.81 median 1.81
+  pingpong  profiled strace -f -c pingpong     n=1 87.71-87.71 median 87.71
+  pingpong  strace -f --seccomp-bpf -e ioctl   n=8 59.18-65.84 median 60.35
+  pingpong  strace -f -c                       n=8 85.60-92.05 median 88.29
+  pingpong  strace -f -e ioctl                 n=8 83.87-94.53 median 86.30
+out-linux-1.txt
+  pingpong  plain                              n=8 13.31-14.06 median 13.66
+  pingpong  profiled strace -f -c pingpong     n=1 70.03-70.03 median 70.03
+  pingpong  strace -f --seccomp-bpf -e ioctl   n=8 59.13-61.98 median 60.10
+  pingpong  strace -f -c                       n=8 68.98-73.86 median 71.11
+  pingpong  strace -f -e ioctl                 n=8 66.87-70.39 median 68.64
+out-linux-2.txt
+  pingpong  plain                              n=8 13.38-14.95 median 14.13
+  pingpong  profiled strace -f -c pingpong     n=1 70.78-70.78 median 70.78
+  pingpong  strace -f --seccomp-bpf -e ioctl   n=8 58.51-72.30 median 61.37
+  pingpong  strace -f -c                       n=8 69.97-93.65 median 73.62
+  pingpong  strace -f -e ioctl                 n=8 65.41-74.54 median 68.82
+
+== out-base-2.txt, profiled run, calls 0 (read), 1 (write), 61 (wait4), 101 (ptrace) ==
+bench: profiled strace -f -c pingpong: whole run 415.1 ms, status 0
+calls pingpong: syscall 0 10001 0 10001 31319 5188
+calls pingpong: syscall 1 10004 0 10003 35812 4450
+calls pingpong: syscall 61 65417 0 65417 26107 15698
+calls pingpong: syscall 101 80162 0 80162 178481 499
+== out-fix-2.txt, profiled run, calls 0 (read), 1 (write), 61 (wait4), 101 (ptrace) ==
+bench: profiled strace -f -c pingpong: whole run 443.9 ms, status 0
+calls pingpong: syscall 0 10001 0 20001 37296 15865
+calls pingpong: syscall 1 10004 0 20005 86846 4437
+calls pingpong: syscall 61 60725 0 60725 24880 3865
+calls pingpong: syscall 101 80162 0 80162 172093 224
+
+One run a boot of getppid 20000 under strace -f -c -w, round 0, microseconds a call:
+  out-base-1.txt: 28.13
+  out-base-2.txt: 27.63
+  out-fix-1.txt: 27.84
+  out-fix-2.txt: 29.63
+  out-linux-1.txt: 28.45
+  out-linux-2.txt: 32.89
