@@ -221,6 +221,8 @@ exFAT could not allocate a node for the containing directory.
 .It Er ENOSPC
 A KRFFS, FAT32, or exFAT file system has insufficient space to extend
 the file.
+A KRFFS volume can also need room for a copy when a timestamp update
+crosses a cache block boundary, even at the current file length.
 .It Er ENOTDIR
 A path component used as a directory is not a directory, or a path that
 ends in a slash or in
