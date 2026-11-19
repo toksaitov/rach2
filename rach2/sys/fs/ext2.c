@@ -3909,10 +3909,17 @@ static int names_begin(struct ext2_mount *em)
 
 /** End an operation `names_begin` admitted, with the final puts it left,
  * and give the caller back the big lock that `names_begin` let go, as
- * `gave` says. */
+ * `gave` says. The operation counts as a block written by the caller for
+ * the balance (`ext2_em_balance`), since the blocks it dirtied, and the
+ * images the cache kept of them (`bcache_change`), wait in the cache as a
+ * file's writes do. */
 static void names_end(struct ext2_mount *em, int gave)
 {
     bcache_order_end();
+    if (current_proc) {
+        current_proc->fs_written += em->block_size;
+    }
+    ext2_em_balance(em);
     if (gave) {
         bkl_enter();
     }
