@@ -264,23 +264,27 @@ static const char *const sysctl_dirs[] = {"/etc/sysctl.d", "/run/sysctl.d",
 
 /*
  * Each backlight's level is kept across a reboot, as systemd-backlight keeps
- * it on Linux: init writes it back from `BACKLIGHT_KEPT`/NAME at boot and
- * saves it there when it stops the machine. The backlights are found at
- * boot, at most `BACKLIGHT_MAX` of them, since the kernel registers its
- * backlights before it starts init.
+ * it on Linux: init writes it back from `BACKLIGHT_KEPT`/NAME at boot, saves
+ * it there within a second of each change (`save_changed_levels`), so that
+ * a reset or a power cut keeps the level set, and saves it again when it
+ * stops the machine. The backlights are found at boot, at most
+ * `BACKLIGHT_MAX` of them, since the kernel registers its backlights before
+ * it starts init.
  */
 #define BACKLIGHT_CLASS "/sys/class/backlight"
 #define BACKLIGHT_KEPT  "/var/lib/backlight"
 #define BACKLIGHT_MAX   4
 
 /* A backlight whose level init keeps: the paths of the level, of the file
- * that keeps it, and of that file's replacement while it is written. They
- * are made at boot, so that the shutdown handler only opens, reads, writes
- * and renames, which a signal handler may. */
+ * that keeps it, and of that file's replacement while it is written, and
+ * the text the file holds, empty when there is none. The paths are made at
+ * boot, so that the shutdown handler only opens, reads, writes and renames,
+ * which a signal handler may. */
 struct backlight {
     char level[128];
     char kept[128];
     char fresh[128];
+    char saved[24];
 };
 
 static struct backlight backlights[BACKLIGHT_MAX];
@@ -289,10 +293,12 @@ static int backlight_count;
 /*
  * The mixer's levels are kept across a reboot, as alsactl store and restore
  * keep them on Linux: init sets each channel of `/dev/mixer`'s device mask
- * from `MIXER_KEPT` at boot and saves them there when it stops the machine,
- * one line `NAME L:R` a channel, NAME being OSS's name of it. mixer(1)'s
- * record of a mute is kept beside them, in `MIXER_KEPT_MUTE`, so that a
- * volume muted at the halt is still muted, and can be unmuted, after it.
+ * from `MIXER_KEPT` at boot, saves them there within a second of each
+ * change, as alsactl's daemon mode does, and again when it stops the
+ * machine, one line `NAME L:R` a channel, NAME being OSS's name of it.
+ * mixer(1)'s record of a mute is kept beside them, in `MIXER_KEPT_MUTE`, so
+ * that a volume muted at the halt is still muted, and can be unmuted, after
+ * it.
  */
 #define MIXER_DEVICE     "/dev/mixer"
 #define MIXER_KEPT       "/var/lib/mixer"
@@ -318,6 +324,11 @@ static const char *const mixer_names[MIXER_CHANNELS] = {
 /* The channels init keeps, read from the device mask at boot: 0 on a
  * machine with no mixer, which then keeps nothing. */
 static int mixer_mask;
+
+/* The texts `MIXER_KEPT` and `MIXER_KEPT_MUTE` hold, empty for a file there
+ * is not, so that a save writes only what changed. */
+static char mixer_saved[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
+static char mute_saved[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
 
 #ifdef INIT_CONSOLE_LOGIN
 /* Whether a session child has already failed to exec the login program in
@@ -509,19 +520,23 @@ static int read_number(const char *path, long *value)
 }
 
 /**
- * Write the level kept for the backlight `b`, named `name`, back to it. The
- * level is kept between a twentieth of the backlight's `max_brightness`, and
- * at least 1, and that maximum, as systemd-backlight keeps it, so that a
- * level saved at 0 does not start the machine with its screen dark. A
- * backlight with no level kept is left as the kernel found it.
+ * Write the level kept for the backlight `b`, named `name`, back to it, and
+ * note the file's text in `b->saved`. The level is kept between a twentieth
+ * of the backlight's `max_brightness`, and at least 1, and that maximum, as
+ * systemd-backlight keeps it, so that a level saved at 0 does not start the
+ * machine with its screen dark. A backlight with no level kept is left as
+ * the kernel found it.
  */
-static void restore_backlight(const struct backlight *b, const char *name)
+static void restore_backlight(struct backlight *b, const char *name)
 {
     char path[sizeof(BACKLIGHT_CLASS) + NAME_MAX + sizeof("/max_brightness")];
     long level, max, least;
     FILE *f;
     int ok = 0;
 
+    if (read_text(b->kept, b->saved, sizeof(b->saved)) < 0) {
+        b->saved[0] = '\0';
+    }
     if (read_number(b->kept, &level) != 0) {
         return;
     }
@@ -577,32 +592,70 @@ static void keep_backlights(void)
 
 /**
  * Write the `n` bytes of `text` to `fresh`, flush it and rename it to `kept`,
- * so that a power loss leaves the old file or the new one. A failure leaves
- * `kept` as it was. Uses only system calls a signal handler may make.
+ * so that a power loss leaves the old file or the new one. Returns 0, or -1
+ * on a failure, which leaves `kept` as it was. Uses only system calls a
+ * signal handler may make.
  */
-static void replace_file(const char *fresh, const char *kept, const char *text, int n)
+static int replace_file(const char *fresh, const char *kept, const char *text, int n)
 {
     int fd = open(fresh, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     int ok;
 
     if (fd < 0) {
-        return;
+        return -1;
     }
     ok = write(fd, text, (size_t)n) == n && fsync(fd) == 0;
     close(fd);
     if (!ok || rename(fresh, kept) != 0) {
         (void)unlink(fresh);
+        return -1;
     }
+    return 0;
+}
+
+/**
+ * Whether the `n` bytes of `text` differ from the string `saved`. Uses no
+ * library call, so the shutdown handler may call it.
+ */
+static int text_differs(const char *text, int n, const char *saved)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (saved[i] != text[i]) {
+            return 1;
+        }
+    }
+    return saved[n] != '\0';
+}
+
+/**
+ * Note the `n` bytes of `text` in `saved`, of `size` bytes, as the text its
+ * file now holds, or an empty text when they do not fit, which a later save
+ * then writes again. Uses no library call.
+ */
+static void note_saved(char *saved, int size, const char *text, int n)
+{
+    int i;
+
+    if (n >= size) {
+        n = 0;
+    }
+    for (i = 0; i < n; i++) {
+        saved[i] = text[i];
+    }
+    saved[n] = '\0';
 }
 
 /**
  * Save each kept backlight's level to its file under `BACKLIGHT_KEPT`
- * through `replace_file`, making the directory when it is missing. Called
- * from the shutdown handler, so it makes only system calls a handler may
+ * through `replace_file`, making the directory when it is missing: every
+ * level when `all`, as the shutdown handler asks, else only a level that
+ * differs from what its file holds. Makes only system calls a handler may
  * make; a backlight whose level cannot be read or saved keeps the file it
  * had.
  */
-static void save_backlights(void)
+static void save_backlights(int all)
 {
     int i;
 
@@ -612,12 +665,14 @@ static void save_backlights(void)
     (void)mkdir("/var/lib", 0755);
     (void)mkdir(BACKLIGHT_KEPT, 0755);
     for (i = 0; i < backlight_count; i++) {
-        const struct backlight *b = &backlights[i];
+        struct backlight *b = &backlights[i];
         char text[24];
         int n = read_text(b->level, text, sizeof(text));
 
-        if (n > 0) {
-            replace_file(b->fresh, b->kept, text, n);
+        if (n > 0 && (all || text_differs(text, n, b->saved))) {
+            if (replace_file(b->fresh, b->kept, text, n) == 0) {
+                note_saved(b->saved, (int)sizeof(b->saved), text, n);
+            }
         }
     }
 }
@@ -702,11 +757,15 @@ static void keep_mixer(void)
         return;
     }
     mixer_mask = mask;
+    if (read_text(MIXER_KEPT_MUTE, mute_saved, sizeof(mute_saved)) < 0) {
+        mute_saved[0] = '\0';
+    }
     n = read_text(MIXER_KEPT, text, sizeof(text));
     if (n < 0) {
         close(fd);
         return;
     }
+    note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
     if (n == (int)sizeof(text) - 1 || parse_mixer(text, levels) != 0) {
         fprintf(stderr, "init: mixer: " MIXER_KEPT ": malformed; levels left alone\n");
         close(fd);
@@ -749,11 +808,12 @@ static char *put_decimal(char *p, int v)
 /**
  * Save the level of each channel in `mixer_mask` to `MIXER_KEPT`, and
  * mixer(1)'s record of a mute to `MIXER_KEPT_MUTE`, or remove that file when
- * there is no record. Called from the shutdown handler, so it makes only
- * system calls a handler may make; a channel whose level cannot be read is
- * left out, and a mixer that cannot be read keeps the file it had.
+ * there is no record: both when `all`, as the shutdown handler asks, else
+ * only what differs from what the files hold. Makes only system calls a
+ * handler may make; a channel whose level cannot be read is left out, and a
+ * mixer that cannot be read keeps the file it had.
  */
-static void save_mixer(void)
+static void save_mixer(int all)
 {
     char text[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
     char *p = text;
@@ -784,13 +844,41 @@ static void save_mixer(void)
     }
     (void)mkdir("/var", 0755);
     (void)mkdir("/var/lib", 0755);
-    replace_file(MIXER_FRESH, MIXER_KEPT, text, (int)(p - text));
+    n = (int)(p - text);
+    if ((all || text_differs(text, n, mixer_saved)) &&
+        replace_file(MIXER_FRESH, MIXER_KEPT, text, n) == 0) {
+        note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
+    }
     n = read_text(MIXER_MUTE, text, sizeof(text));
     if (n > 0) {
-        replace_file(MIXER_FRESH_MUTE, MIXER_KEPT_MUTE, text, n);
-    } else {
+        if ((all || text_differs(text, n, mute_saved)) &&
+            replace_file(MIXER_FRESH_MUTE, MIXER_KEPT_MUTE, text, n) == 0) {
+            note_saved(mute_saved, (int)sizeof(mute_saved), text, n);
+        }
+    } else if (all || mute_saved[0] != '\0') {
         (void)unlink(MIXER_KEPT_MUTE);
+        mute_saved[0] = '\0';
     }
+}
+
+/**
+ * Save the backlights' and the mixer's levels that changed since they were
+ * last saved, at most once a second: init's loop calls this on each turn,
+ * so that a level set survives a reset or a power cut as well as a
+ * shutdown. Linux's systemd-backlight saves only at the shutdown; alsactl's
+ * daemon mode saves the mixer when it changes, as this does for both.
+ */
+static void save_changed_levels(void)
+{
+    static time_t last;
+    time_t now = time(0);
+
+    if (now == last) {
+        return;
+    }
+    last = now;
+    save_backlights(0);
+    save_mixer(0);
 }
 
 /* How long a shutdown waits for the processes to end, in milliseconds:
@@ -869,8 +957,8 @@ static void shutdown_handler(int sig)
     } else if (sig == SIGUSR2) {
         command = RB_POWER_OFF;
     }
-    save_backlights();
-    save_mixer();
+    save_backlights(1);
+    save_mixer(1);
     end_processes();
     reboot(command);
     _exit(1);
@@ -3546,8 +3634,9 @@ static pid_t child_wait(int *status)
  *
  * The wait is `child_wait`, which reaps a child as soon as its SIGCHLD comes
  * and otherwise ends the turn after a second, because init must also bound
- * the service log while its children live. The log is looked at every
- * `SERVICE_LOG_CHECK_TURNS` turns, busy or idle, since a machine whose
+ * the service log while its children live and save the backlights' and the
+ * mixer's levels that changed (`save_changed_levels`). The log is looked at
+ * every `SERVICE_LOG_CHECK_TURNS` turns, busy or idle, since a machine whose
  * children keep dying never takes the idle path. `WUNTRACED` reports a
  * stopped child, and init continues it at once: `^Z` at the console prompt
  * stops the session, and there is no shell above it to type `fg`.
@@ -3612,6 +3701,7 @@ int main(void)
         start_services(&services);
 #endif
 
+        save_changed_levels();
         if (++turns >= SERVICE_LOG_CHECK_TURNS) {
             turns = 0;
             bound_service_log();
