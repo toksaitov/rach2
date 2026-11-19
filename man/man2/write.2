@@ -546,6 +546,9 @@ A file system has insufficient space,
 a raw write starts at or crosses the end of its window, a framebuffer
 write starts at the mode's end, or the descriptor refers to
 .Pa /dev/full .
+.Pp
+A KRFFS volume can need room for a copy even on an overwrite when
+a timestamp update changes bytes in two cache blocks.
 .It Er ENOTDIR
 A component of a loop-control attachment path is not a directory.
 .It Er ENXIO
