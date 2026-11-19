@@ -179,6 +179,20 @@ int vfio_group_viable(const struct vfio_group *g);
 int vfio_bind(struct vfio_device *d);
 int vfio_unbind(struct vfio_device *d);
 struct vfio_device *vfio_device_by_name(const char *name, int len);
+
+/**
+ * Whether the driver_override of the function `key`, bus << 8 | devfn,
+ * lets the driver named `driver` have it, as Linux's driver_match_device
+ * reads it: none, or that driver's name. The stored text is compared, so a
+ * literal "(null)", which the file shows as it shows none, names a driver.
+ * A function VFIO has not grouped has no driver_override and allows any.
+ * The i686 kernel has no VFIO, so there every driver is allowed.
+ */
+#if defined(__x86_64__) || defined(RACH2_HOSTTEST)
+int vfio_override_allows(int key, const char *driver);
+#else
+#define vfio_override_allows(key, driver) ((void)(key), (void)(driver), 1)
+#endif
 void vfio_group_put_device(struct vfio_group *g);
 int vfio_sysfs_start(void);
 int vfio_nodes_start(void);

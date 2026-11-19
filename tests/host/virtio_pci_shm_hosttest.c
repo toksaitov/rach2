@@ -422,8 +422,8 @@ int sysfs_anchor_find(int node, int key)
 }
 
 /* The driver's files the transport made, /sys/bus/pci/drivers/virtio-pci's
- * `bind` and `unbind`, and the driver_override every function shows, ""
- * for none, which `sysfs_node_child` gives as handle 1000. */
+ * `bind` and `unbind`, and the driver_override VFIO keeps for every
+ * function, "" for none. */
 static const struct sysfs_attr *attr_bind, *attr_unbind;
 static const char *override = "";
 static int sys_dirs;
@@ -431,18 +431,16 @@ static int sys_dirs;
 int sysfs_node_child(int dir, const char *name, int len)
 {
     (void)dir;
+    (void)name;
     (void)len;
-    return strcmp(name, "driver_override") == 0 && override[0] ? 1000 : 0;
+    return 0;
 }
 
-int32_t sysfs_node_show(int handle, char *buf, uint32_t cap)
+/** As group.c's: none, or the stored text naming `driver`. */
+int vfio_override_allows(int key, const char *driver)
 {
-    uint32_t n = (uint32_t)k_strlen(override);
-
-    CHECK(handle == 1000 && n + 1 <= cap, "driver_override is read whole");
-    k_memcpy(buf, override, n);
-    buf[n] = '\n';
-    return (int32_t)(n + 1);
+    (void)key;
+    return !override[0] || strcmp(override, driver) == 0;
 }
 
 int sysfs_add_dir(int parent, const char *name)

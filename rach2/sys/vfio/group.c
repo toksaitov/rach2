@@ -411,6 +411,19 @@ struct vfio_device *vfio_device_by_name(const char *name, int len)
     return NULL;
 }
 
+int vfio_override_allows(int key, const char *driver)
+{
+    int i;
+
+    for (i = 0; i < vfio_ndevices; i++) {
+        if (vfio_devices[i].key == key) {
+            return vfio_devices[i].override[0] == '\0' ||
+                   name_eq(vfio_devices[i].override, driver, (int)k_strlen(driver));
+        }
+    }
+    return 1;
+}
+
 /* The handles of the entries of /sys that every function shares. */
 static int sys_groups; /* /sys/kernel/iommu_groups */
 static int sys_driver; /* /sys/bus/pci/drivers/vfio-pci */
