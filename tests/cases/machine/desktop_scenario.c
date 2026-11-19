@@ -158,10 +158,13 @@ static void page_input(struct net_case *u, struct net_boot *b)
 {
     char seen[64];
     unsigned i;
+    int vmmouse = strcmp(etude_case_accel(u->c), "kvm") == 0;
 
     events(u, b,
-           "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 20}}, "
-           "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 20}}]");
+           vmmouse ? "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 16384}}, "
+                     "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 16384}}]"
+                   : "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 20}}, "
+                     "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 20}}]");
     if (net_ok(u) && etude_guest_output_wait(b->m, "desktop: pointer: on the page") != ETUDE_OK)
         net_fail(u, "the page reported no pointer");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
@@ -203,7 +206,8 @@ static void ev_keyboard(struct net_case *u, struct net_boot *b)
     keys(u, b, ev_flood, sizeof(ev_flood) / sizeof(ev_flood[0]));
 }
 
-/** Move the mouse by 10 and 5, click, and turn the wheel up and down, each a
+/** Move the mouse by 10 and 5, or to 10000 and 20000 under KVM, then click
+ * and turn the wheel up and down, each a
  * QMP command of its own so that each is a packet, sent once evprobe has
  * printed that it read the packet of the one before, "EVPROBE: mouse: packet
  * N read", and wait for the last's. QEMU's PS/2 mouse keeps a packet that
@@ -212,9 +216,12 @@ static void ev_keyboard(struct net_case *u, struct net_boot *b)
  * on i686 under KVM. */
 static void ev_mouse(struct net_case *u, struct net_boot *b)
 {
-    static const char *const moves[] = {
-        "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
-        "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
+    int vmmouse = strcmp(etude_case_accel(u->c), "kvm") == 0;
+    const char *const moves[] = {
+        vmmouse ? "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 10000}}, "
+                  "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 20000}}]"
+                : "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 10}}, "
+                  "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]",
         "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]",
         "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]",
         "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"wheel-up\"}}, "
@@ -344,11 +351,12 @@ static int virtio(struct net_case *u)
 static int i686(struct net_case *u)
 {
     static const char *const ps2[] = {EVPROBE, "ps2", NULL};
-    static const char *const pointer[] = {EVPROBE, "mouse", NULL};
+    const char *const pointer[] = {
+        EVPROBE, strcmp(etude_case_accel(u->c), "kvm") == 0 ? "vmmouse" : "mouse", NULL};
     static const struct driven keyboard = {"keyboard", ps2, "EVPROBE: press the keys", "EVPROBE OK",
                                            ev_keyboard};
-    static const struct driven mouse = {"mouse", pointer, "EVPROBE: move the mouse", "EVPROBE OK",
-                                        ev_mouse};
+    const struct driven mouse = {"mouse", pointer, "EVPROBE: move the mouse", "EVPROBE OK",
+                                 ev_mouse};
     const char *modetest[] = {"/bin/bash", "-c",
                               "set -e; python3 " PROBE " kill; m=bochs-drm; "
                               "modetest -M $m -c </dev/null; "

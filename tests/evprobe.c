@@ -41,6 +41,9 @@
  * motion, the button and both turns, REL_WHEEL_HI_RES of 120 with each on
  * USB, every record stamped between the clock_gettime calls before and after
  * on its own clock.
+ * `evprobe vmmouse` checks the two devices of the same name by their
+ * physical paths, and reads absolute motion and clicks from input1 and
+ * each wheel turn from input0, stamped on those same two clocks.
  *
  * `evprobe touchpad`, run by hand on the Lenovo, finds the Synaptics
  * touchpad's event device, prints its block as Linux's
@@ -308,25 +311,28 @@ static const char *event_path(int n)
     return path;
 }
 
-/** Find the event device whose name begins with `name` and give its path;
- * fail the probe when there is none. */
-static const char *find_device(const char *name)
+/** Find an event device by name prefix and, when given, physical path.
+ * Return its event node's path or fail the probe when there is none. */
+static const char *find_device_at(const char *name, const char *phys)
 {
     char text[64];
     int n;
 
     for (n = 0; n < 32; n++) {
         long fd = syscall3(SYS_OPEN, (long)event_path(n), O_RDONLY, 0);
-        long len;
+        long len, place_len;
+        char place[64];
 
         if (fd < 0) {
             continue;
         }
         len = ioctl((int)fd, EVIOCGNAME(sizeof(text) - 1), (long)text);
+        place_len = phys ? ioctl((int)fd, EVIOCGPHYS(sizeof(place) - 1), (long)place) : 0;
         syscall3(SYS_CLOSE, fd, 0, 0);
-        if (len > 0) {
+        if (len > 0 && place_len >= 0) {
             text[len] = 0;
-            if (begins(text, name)) {
+            place[place_len] = 0;
+            if (begins(text, name) && (!phys || (begins(place, phys) && begins(phys, place)))) {
                 puts("EVPROBE: ");
                 puts(event_path(n));
                 puts(" is ");
@@ -338,6 +344,12 @@ static const char *find_device(const char *name)
     }
     fail("no event device has the name");
     return 0;
+}
+
+/** Find the first event node with the given name prefix. */
+static const char *find_device(const char *name)
+{
+    return find_device_at(name, 0);
 }
 
 /** Whether bit `n` of the set `bits` is on. */
@@ -800,28 +812,28 @@ static void write_back(const char *path)
     puts("EVPROBE: mouse: a write read back\n");
 }
 
-/** The run of `evprobe mouse` or `evprobe usbmouse`. */
-static void mouse(int usb)
+/** Select the monotonic clock on a reader, after checking invalid clocks. */
+static void mouse_clock(int fd)
 {
-    const char *path = find_device(usb ? "QEMU QEMU USB Mouse" : "ImExPS/2 Generic Explorer Mouse");
-    long long mono, real;
-    struct input_event ev;
-    int a, b, gone, clock;
+    int clock = 5;
     long rc;
 
-    write_back(path);
-    a = open_or_fail(path, O_RDONLY, "the mouse did not open");
-    b = open_or_fail(path, O_RDONLY, "the mouse did not open twice");
-    gone = open_or_fail(path, O_RDONLY, "the mouse did not open thrice");
-    check_mouse(a, usb);
-    clock = 5;
-    if ((rc = ioctl(a, EVIOCSCLOCKID, (long)&clock)) != -EINVAL) {
+    if ((rc = ioctl(fd, EVIOCSCLOCKID, (long)&clock)) != -EINVAL) {
         fail_with("EVIOCSCLOCKID of an unknown clock is not EINVAL", 1, rc);
     }
     clock = CLOCK_MONOTONIC;
-    if (ioctl(a, EVIOCSCLOCKID, (long)&clock) != 0) {
+    if (ioctl(fd, EVIOCSCLOCKID, (long)&clock) != 0) {
         fail("EVIOCSCLOCKID did not take CLOCK_MONOTONIC");
     }
+}
+
+/** Open and revoke one reader, and check its read and ioctl fail. */
+static void mouse_revoke(const char *path)
+{
+    int gone = open_or_fail(path, O_RDONLY, "the mouse did not open to revoke");
+    struct input_event ev;
+    long rc;
+
     if ((rc = ioctl(gone, EVIOCREVOKE, 1)) != -EINVAL) {
         fail_with("EVIOCREVOKE with an argument is not EINVAL", 1, rc);
     }
@@ -834,6 +846,22 @@ static void mouse(int usb)
     if ((rc = ioctl(gone, EVIOCGRAB, 1)) != -ENODEV) {
         fail_with("a revoked open's ioctl is not ENODEV", 1, rc);
     }
+    syscall3(SYS_CLOSE, gone, 0, 0);
+}
+
+/** The run of `evprobe mouse` or `evprobe usbmouse`. */
+static void mouse(int usb)
+{
+    const char *path = find_device(usb ? "QEMU QEMU USB Mouse" : "ImExPS/2 Generic Explorer Mouse");
+    long long mono, real;
+    int a, b;
+
+    write_back(path);
+    a = open_or_fail(path, O_RDONLY, "the mouse did not open");
+    b = open_or_fail(path, O_RDONLY, "the mouse did not open twice");
+    check_mouse(a, usb);
+    mouse_clock(a);
+    mouse_revoke(path);
     mono = now_usec(CLOCK_MONOTONIC);
     real = now_usec(CLOCK_REALTIME);
     puts("EVPROBE: move the mouse\n");
@@ -842,7 +870,6 @@ static void mouse(int usb)
     puts("EVPROBE: mouse: read by both readers\n");
     syscall3(SYS_CLOSE, a, 0, 0);
     syscall3(SYS_CLOSE, b, 0, 0);
-    syscall3(SYS_CLOSE, gone, 0, 0);
 }
 
 /** Read the mixer's volume through `fd`, failing the probe when it cannot. */
@@ -1266,6 +1293,117 @@ static void touchpad(void)
     }
 }
 
+/** Check the capabilities and ID Linux gives each QEMU VMMouse device. */
+static void check_vmmouse(int fd, int absolute)
+{
+    unsigned short id[4];
+    unsigned char bits[96];
+    int ok;
+
+    clear(id, sizeof(id));
+    if (ioctl(fd, EVIOCGID, (long)id) != 0 || id[0] != BUS_I8042 || id[1] != 2 || id[2] != 19 ||
+        id[3] != 6) {
+        fail("the VMMouse ID is not Linux's");
+    }
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGPROP(8), (long)bits);
+    ok = put_set("PROP", bits, 8, absolute ? "0" : "1");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(0, 8), (long)bits);
+    ok &= put_set("EV", bits, 8, absolute ? "b" : "7");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), (long)bits);
+    ok &= put_set("KEY", bits, sizeof(bits), absolute ? "70000 0 0 0 0" : "30000 0 0 0 0");
+    clear(bits, sizeof(bits));
+    if (absolute) {
+        ioctl(fd, EVIOCGBIT(EV_ABS, 8), (long)bits);
+        ok &= put_set("ABS", bits, 8, "3");
+        ok &= put_abs(fd, ABS_X, 0, 65535);
+        ok &= put_abs(fd, ABS_Y, 0, 65535);
+    } else {
+        ioctl(fd, EVIOCGBIT(EV_REL, 8), (long)bits);
+        ok &= put_set("REL", bits, 8, "103");
+    }
+    if (!ok) {
+        fail("the VMMouse capabilities are not Linux's");
+    }
+}
+
+/** Read the move and two button packets on the absolute device, then two
+ * turns on the relative device. Check timestamps against the open's clock
+ * and announce each packet read when `announce` is set. */
+static void read_vmmouse(int abs_fd, int rel_fd, int clock, long long from, int announce)
+{
+    static const struct {
+        unsigned short type, code;
+        int value;
+    } expected[] = {
+        {EV_ABS, ABS_X, 20000},  {EV_ABS, ABS_Y, 40000},  {EV_SYN, SYN_REPORT, 0},
+        {EV_KEY, BTN_LEFT, 1},   {EV_SYN, SYN_REPORT, 0}, {EV_KEY, BTN_LEFT, 0},
+        {EV_SYN, SYN_REPORT, 0}, {EV_REL, REL_WHEEL, 1},  {EV_SYN, SYN_REPORT, 0},
+        {EV_REL, REL_WHEEL, -1}, {EV_SYN, SYN_REPORT, 0},
+    };
+    struct input_event ev;
+    unsigned int i;
+    int packets = 0;
+
+    for (i = 0; i < sizeof(expected) / sizeof(expected[0]); i++) {
+        int fd = packets < 3 ? abs_fd : rel_fd;
+        long got = syscall3(SYS_READ, fd, (long)&ev, sizeof(ev));
+        long long at, to = now_usec(clock);
+
+        if (got != sizeof(ev)) {
+            fail_with("the VMMouse did not read a whole record", 1, got);
+        }
+        at = (long long)ev.sec * 1000000 + (long long)ev.usec;
+        if (at < from || at > to) {
+            fail_with("the VMMouse read a record outside the clock_gettime calls", 1,
+                      (long)(at - from));
+        }
+        if (ev.type != expected[i].type || ev.code != expected[i].code ||
+            ev.value != expected[i].value) {
+            fail_with("the VMMouse read another record than Linux gives", 1, i);
+        }
+        if (ev.type == EV_SYN) {
+            packets++;
+            if (announce) {
+                packet_read("mouse", packets);
+            }
+        }
+    }
+}
+
+/** Check and read both of Linux's VMMouse devices on each clock. */
+static void vmmouse(void)
+{
+    const char *name = "VirtualPS/2 VMware VMMouse";
+    const char *path = find_device_at(name, "isa0060/serio1/input1");
+    int abs_mono, abs_real, rel_mono, rel_real;
+    long long mono, real;
+
+    abs_mono = open_or_fail(path, O_RDONLY, "the absolute device did not open");
+    abs_real = open_or_fail(path, O_RDONLY, "the absolute device did not open twice");
+    mouse_revoke(path);
+    path = find_device_at(name, "isa0060/serio1/input0");
+    write_back(path);
+    rel_mono = open_or_fail(path, O_RDONLY, "the relative device did not open");
+    rel_real = open_or_fail(path, O_RDONLY, "the relative device did not open twice");
+    check_vmmouse(abs_mono, 1);
+    check_vmmouse(rel_mono, 0);
+    mouse_clock(abs_mono);
+    mouse_clock(rel_mono);
+    mono = now_usec(CLOCK_MONOTONIC);
+    real = now_usec(CLOCK_REALTIME);
+    puts("EVPROBE: move the mouse\n");
+    read_vmmouse(abs_mono, rel_mono, CLOCK_MONOTONIC, mono, 1);
+    read_vmmouse(abs_real, rel_real, CLOCK_REALTIME, real, 0);
+    puts("EVPROBE: mouse: read by both readers\n");
+    syscall3(SYS_CLOSE, abs_mono, 0, 0);
+    syscall3(SYS_CLOSE, abs_real, 0, 0);
+    syscall3(SYS_CLOSE, rel_mono, 0, 0);
+    syscall3(SYS_CLOSE, rel_real, 0, 0);
+}
+
 /* The records `evprobe usbtablet` must read, in order, as evtest prints
  * them for QEMU's tablet on Linux: the move to 10000 and 20000, the left
  * button pressed and released, each with its MSC_SCAN, and the wheel turned
@@ -1486,6 +1624,8 @@ void probe_main(unsigned long *sp)
         keyboard(1);
     } else if (argc >= 2 && begins(argv[1], "mouse")) {
         mouse(0);
+    } else if (argc >= 2 && begins(argv[1], "vmmouse")) {
+        vmmouse();
     } else if (argc >= 3 && begins(argv[1], "mixer")) {
         mixer(argv[2]);
     } else if (argc >= 2 && begins(argv[1], "button")) {
@@ -1495,8 +1635,8 @@ void probe_main(unsigned long *sp)
     } else if (argc >= 2 && begins(argv[1], "touchpad")) {
         touchpad();
     } else {
-        fail("usage: evprobe ps2 | usb | mouse | usbmouse | usbtablet | mixer ID | button | video "
-             "| touchpad");
+        fail("usage: evprobe ps2 | usb | mouse | vmmouse | usbmouse | usbtablet | mixer ID "
+             "| button | video | touchpad");
     }
     puts("EVPROBE OK\n");
     sys_exit(0);
