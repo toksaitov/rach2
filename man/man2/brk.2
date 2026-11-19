@@ -93,8 +93,12 @@ A zero request queries the current break.
 The heap is the range from the heap base to the break rounded up to a
 page boundary.
 Growth adds a read-write VMA above the old top, which merges with a
-read-write VMA below it; shrinkage removes the range above the new
-rounded boundary and releases its pages.
+read-write VMA below it, as on Linux, unless that VMA came from a fork
+and holds pages written before it: a child of
+.Xr fork 2
+that grows the heap it inherited gets a second heap VMA.
+Shrinkage removes the range above the new rounded boundary and releases
+its pages.
 .Fn mprotect
 may divide the heap into VMAs of different protection; growth and
 shrinkage work on the range all the same.
