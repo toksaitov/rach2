@@ -123,6 +123,11 @@ C_SRC_SHARED = kernel.c \
     sys/proc/exit.c \
     sys/proc/child_signal.c \
     sys/proc/sched.c \
+    sys/proc/fair.c \
+    sys/proc/fair_group.c \
+    sys/proc/pelt.c \
+    sys/proc/balance.c \
+    sys/proc/autogroup.c \
     sys/proc/waketime.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \
@@ -260,6 +265,7 @@ C_SRC_SHARED = kernel.c \
     sys/lib/spinlock.c \
     sys/lib/lockdep.c \
     sys/lib/rcu.c \
+    sys/lib/rbtree.c \
     sys/lib/krandom.c \
     sys/lib/ksha256.c \
     sys/lib/crc32.c \
