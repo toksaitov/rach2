@@ -309,9 +309,11 @@ static int fails;
 #define F_RST 0x04
 #define F_ACK 0x10
 
-/** Free every block, forget every segment and callback, and set the clock. */
+/** Free every block, forget every segment and callback, set the clock, and
+ * have every segment acknowledged at once, as the rows expect. */
 static void reset_all(void)
 {
+    tcp_delack = 0;
     while (tcbs) {
         tcb_free(tcbs);
     }
