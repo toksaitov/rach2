@@ -1,0 +1,6 @@
+ lock-classes:                  151 [max: 1024]
+ direct dependencies:           408 [max: 8192]
+ dependency chains:             1161 [max: 12288]
+ reports:                       7
+ reports not made:              0
+ checking:                      on
