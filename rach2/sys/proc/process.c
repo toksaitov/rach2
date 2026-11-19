@@ -589,6 +589,20 @@ static uint32_t last_pid;
 /* The `serial` of the last record made. */
 static uint64_t last_serial;
 
+/* The last credential identity given out (`proc_cred_commit`), and the
+ * lock that serialises the count, since threads commit without the big
+ * lock's help on 32-bit processors, where the 64-bit increment is two. */
+static uint64_t last_cred_id;
+static struct spinlock cred_id_lock = SPINLOCK_INIT_NAMED("cred_id");
+
+void proc_cred_commit(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&cred_id_lock);
+
+    p->cred_id = ++last_cred_id;
+    spin_unlock_irqrestore(&cred_id_lock, flags);
+}
+
 int pid_max = PID_MAX_LIMIT;
 
 uint32_t proc_last_pid(void)
@@ -811,6 +825,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     p->sigacts = p->tg->action;
     p->pid = pid;
     p->serial = ++last_serial;
+    proc_cred_commit(p);
     p->tgid = group ? tgid : p->pid;
     p->state = parent ? PROC_UNUSED : PROC_READY;
     p->sid = p->pid;

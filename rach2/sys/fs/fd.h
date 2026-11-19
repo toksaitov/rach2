@@ -710,12 +710,11 @@ int fd_ofd_unref_unless_last(struct open_file *ofd);
 struct open_file *fd_ofd_new(void);
 
 /**
- * Whether the current process holds the credentials that opened `ofd`, as
- * Linux 6.12's linkat with AT_EMPTY_PATH asks that the file's `f_cred` be
- * the caller's: the same thread group, with no exec since the open, and
- * the same file-system user and group ids. Linux compares the credential
- * record itself, which fork and exec replace and any change of ids makes
- * anew; this compares what those changes leave behind. 1 or 0.
+ * Whether the current thread acts with the credentials that opened `ofd`,
+ * as Linux 6.12's linkat with AT_EMPTY_PATH asks that the file's `f_cred`
+ * be the caller's: the same credential identity (`cred_id`), which a
+ * thread made with CLONE_THREAD shares and which another process, an exec
+ * and every change of ids, groups or capabilities make anew. 1 or 0.
  */
 int fd_ofd_opener_is_current(struct open_file *ofd);
 

@@ -201,6 +201,11 @@ void proc_set_last_pid(uint32_t pid)
     (void)pid;
 }
 
+void proc_cred_commit(process_t *p)
+{
+    p->cred_id++;
+}
+
 /** A mount made by the current process in slot `slot`, active and seen by
  * its namespace alone, as `mount_alloc` makes one. */
 static struct vfs_mount *mount_in(int slot)
