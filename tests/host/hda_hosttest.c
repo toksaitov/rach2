@@ -805,8 +805,8 @@ static void row_verbs(void)
           "an unanswered verb times out");
     check(verbs == n + 1, "the verb was sent once");
     check(clock_reads - clocks <= 3 && delays >= 1, "the wall clock ends the wait at 1 ms");
-    check(delays_irqs_off == 0 && ics_reads_irqs_on == 0,
-          "the waits run with interrupts on, the reads with them off");
+    check(delays_irqs_off == delays && ics_reads_irqs_on == 0,
+          "the waits and the reads run with interrupts off, as the tick takes the lock");
     check(!verb_lock.locked && irqs_on, "a timed-out verb frees the lock");
     check(hda_send_verb(0, 0, HDA_VERB_GET_PARAM) == 0, "the command still under way times out");
     clock_stopped = 1;
