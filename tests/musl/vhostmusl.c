@@ -14,7 +14,9 @@
  * ring and kicks; the thread gives the answer to the stack, the datagram
  * that waited for it comes into the receive ring, and the transmit ring's
  * call is signalled. A second datagram, sent while the ring has buffers,
- * is in a buffer when its send returns, written in the sender's context.
+ * comes into one: in the sender's context, before its send returns, when
+ * the device already holds the buffer's page, and otherwise from the
+ * thread once it has brought the page in, either way with its call.
  *
  * Other frames the stack sends on the tap, IPv6's among them, may take
  * receive buffers too, so the program looks for its frames among those the
@@ -133,7 +135,7 @@ static const struct {
     {"tx-used", "the transmit ring did not use the answer's chain"},
     {"datagram", "the first datagram did not come into the receive ring after the answer"},
     {"direct-send", "could not send the second datagram"},
-    {"direct-frame", "the second datagram was not in the receive ring when its send returned"},
+    {"direct-frame", "the second datagram did not come into the receive ring"},
     {"direct-call", "the receive ring's call was not signalled for the second datagram"},
     {"detach", "VHOST_NET_SET_BACKEND of -1 failed"},
 };
@@ -514,8 +516,9 @@ static int exchange(void)
     return 0;
 }
 
-/** A datagram sent while the receive ring has buffers is in one when its
- * send returns, and its call is signalled; then the rings let the tap go. */
+/** A datagram sent while the receive ring has buffers comes into one, at
+ * once or from the thread, and its call is signalled; then the rings let
+ * the tap go. */
 static int direct(void)
 {
     struct pollfd p;
@@ -531,12 +534,13 @@ static int direct(void)
     if (send_to_peer(sock, "vhost2") != 0) {
         return fail(DIRECT_SEND);
     }
-    if (!find_rx(is_datagram, "vhost2", &at)) {
+    if (find_rx(is_datagram, "vhost2", &at)) {
+        p.revents = 0;
+        if (poll(&p, 1, 0) != 1 || read(ev[1], &v, 8) != 8 || v == 0) {
+            return fail(DIRECT_CALL);
+        }
+    } else if (wait_rx(ev[1], is_datagram, "vhost2") < 0) {
         return fail(DIRECT_FRAME);
-    }
-    p.revents = 0;
-    if (poll(&p, 1, 0) != 1 || read(ev[1], &v, 8) != 8 || v == 0) {
-        return fail(DIRECT_CALL);
     }
     if (ring2(vh, VHOST_NET_SET_BACKEND, 0, -1) != 0 ||
         ring2(vh, VHOST_NET_SET_BACKEND, 1, -1) != 0) {
