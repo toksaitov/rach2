@@ -60,6 +60,18 @@
  * `ids=OLD:NEW,...` (tests/native/Readme.md), so that PRIO_USER reaches no
  * process of the machine's own accounts.
  *
+ * /proc/self/stat has Linux's 52 fields, the processor getcpu names in the
+ * 39th, and 0 for the real-time priority and the policy in the 40th and
+ * 41st. A child that calls setsid has a session group of its own, which
+ * /proc/self/autogroup shows as "/autogroup-N nice 0"; a write of 5 sets its
+ * nice value, one of 20 fails with EINVAL, and a thread's directory has no
+ * autogroup file. kernel/sched_autogroup_enabled reads 1 and refuses 2;
+ * sched_rt_period_us and sched_rt_runtime_us read Linux's 1000000 and 950000
+ * and refuse a period of 0 and a runtime past the period, which changes
+ * neither. /sys/kernel/debug/sched has Linux's tunables, each processor's
+ * fair server of 50 ms in each 1000 ms, and a debug file that begins with
+ * Linux's version line and has a section for processor 0.
+ *
  * It prints "SCHEDMUSL OK" and exits 0 on success, or prints "SCHEDMUSL FAIL
  * (detail)" and exits 1 at the first failure.
  *
@@ -190,7 +202,15 @@ static const char *const assertion_id[] = {"gettid-pid",
                                            "io-einval",
                                            "io-user-idle",
                                            "io-user-realtime-eperm",
-                                           "io-user-root-eperm"};
+                                           "io-user-root-eperm",
+                                           "stat-fields",
+                                           "autogroup-setsid",
+                                           "autogroup-nice",
+                                           "autogroup-nice-einval",
+                                           "autogroup-process-only",
+                                           "autogroup-sysctl",
+                                           "rt-bandwidth-sysctl",
+                                           "debugfs-sched"};
 
 #define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
 
@@ -1111,6 +1131,165 @@ static int io_unprivileged(void)
 }
 
 /**
+ * Read the file `path` into `buf`, of `cap` bytes, NUL-terminated. Returns
+ * the bytes read, or -1 when the file cannot be opened or read.
+ */
+static ssize_t read_text(const char *path, char *buf, size_t cap)
+{
+    int fd = open(path, O_RDONLY);
+    ssize_t n, got = 0;
+
+    if (fd < 0) {
+        return -1;
+    }
+    while ((size_t)got < cap - 1 && (n = read(fd, buf + got, cap - 1 - (size_t)got)) > 0) {
+        got += n;
+    }
+    close(fd);
+    buf[got] = '\0';
+    return n < 0 ? -1 : got;
+}
+
+/**
+ * Write `text` to the file `path`. Returns 0, or the errno of the open or
+ * the write that failed.
+ */
+static int write_text(const char *path, const char *text)
+{
+    int fd = open(path, O_WRONLY), err;
+    ssize_t n;
+
+    if (fd < 0) {
+        return errno;
+    }
+    n = write(fd, text, strlen(text));
+    err = n < 0 ? errno : 0;
+    close(fd);
+    return n == (ssize_t)strlen(text) ? 0 : err ? err : EIO;
+}
+
+/** Whether the file `path` reads exactly `want`. */
+static int reads(const char *path, const char *want)
+{
+    char buf[64];
+
+    return read_text(path, buf, sizeof(buf)) >= 0 && strcmp(buf, want) == 0;
+}
+
+/**
+ * Check /proc/self/stat's fields past the 24th: 52 in all, the processor
+ * getcpu gives in the 39th, and SCHED_OTHER's priority and policy, 0 and 0,
+ * in the 40th and 41st. Returns 0, or 1 after the failure is printed.
+ */
+static int stat_fields(void)
+{
+    char buf[1024], *at;
+    long field[53];
+    int n = 0;
+
+    if (read_text("/proc/self/stat", buf, sizeof(buf)) <= 0 || !(at = strrchr(buf, ')'))) {
+        return fail("/proc/self/stat could not be read");
+    }
+    at += 2;
+    while (*at && n < 50) {
+        field[3 + n++] =
+            strtol(at[0] == '-' || (at[0] >= '0' && at[0] <= '9') ? at : "0", NULL, 10);
+        while (*at && *at != ' ' && *at != '\n') {
+            at++;
+        }
+        while (*at == ' ' || *at == '\n') {
+            at++;
+        }
+    }
+    if (n != 50 || field[39] != sched_getcpu() || field[40] != 0 || field[41] != 0) {
+        return fail("/proc/self/stat did not have 52 fields with the processor in the 39th");
+    }
+    row_held();
+    return 0;
+}
+
+/**
+ * In a child that has made a session of its own: /proc/self/autogroup names
+ * the session's group at nice 0, a write of 5 sets the nice value, one of 20
+ * fails with EINVAL, and the thread's directory has no autogroup file.
+ * Returns 0, or the failed step, from 1.
+ */
+static int autogroup_child(void)
+{
+    char buf[64], path[64];
+    unsigned long id;
+    int nice;
+
+    if (setsid() < 0 || read_text("/proc/self/autogroup", buf, sizeof(buf)) <= 0 ||
+        sscanf(buf, "/autogroup-%lu nice %d", &id, &nice) != 2 || nice != 0 || id == 0) {
+        return 1;
+    }
+    snprintf(path, sizeof(path), "/autogroup-%lu nice 5\n", id);
+    if (write_text("/proc/self/autogroup", "5\n") != 0 || !reads("/proc/self/autogroup", path)) {
+        return 2;
+    }
+    if (write_text("/proc/self/autogroup", "20") != EINVAL) {
+        return 3;
+    }
+    snprintf(path, sizeof(path), "/proc/self/task/%d/autogroup", (int)gettid());
+    if (access(path, F_OK) == 0 || errno != ENOENT) {
+        return 4;
+    }
+    return 0;
+}
+
+/* The scheduler's sysctls under /proc/sys/kernel. */
+#define SYSCTL_KERNEL "/proc/sys/kernel/"
+
+/**
+ * Check the scheduler's files under /proc and /sys/kernel/debug/sched.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int sched_files(void)
+{
+    char buf[1024];
+    int rc;
+
+    if (stat_fields() != 0) {
+        return 1;
+    }
+    rc = in_child(autogroup_child);
+    if (rc != 0) {
+        held_before(rc, 1, 4);
+        return fail(rc == 1   ? "/proc/self/autogroup did not name a new session's group at nice 0"
+                    : rc == 2 ? "a write of 5 to /proc/self/autogroup did not set the nice value"
+                    : rc == 3 ? "a write of 20 to /proc/self/autogroup was not EINVAL"
+                              : "a thread's directory has an autogroup file");
+    }
+    rows_held(4);
+    if (!reads(SYSCTL_KERNEL "sched_autogroup_enabled", "1\n") ||
+        write_text(SYSCTL_KERNEL "sched_autogroup_enabled", "2") != EINVAL) {
+        return fail("sched_autogroup_enabled did not read 1 and refuse 2");
+    }
+    row_held();
+    if (!reads(SYSCTL_KERNEL "sched_rt_period_us", "1000000\n") ||
+        !reads(SYSCTL_KERNEL "sched_rt_runtime_us", "950000\n") ||
+        write_text(SYSCTL_KERNEL "sched_rt_period_us", "0") != EINVAL ||
+        write_text(SYSCTL_KERNEL "sched_rt_runtime_us", "1000001") != EINVAL ||
+        !reads(SYSCTL_KERNEL "sched_rt_period_us", "1000000\n") ||
+        !reads(SYSCTL_KERNEL "sched_rt_runtime_us", "950000\n")) {
+        return fail("sched_rt_period_us and sched_rt_runtime_us did not read 1000000 and 950000 "
+                    "and refuse a period of 0 and a runtime past it");
+    }
+    row_held();
+    if (!reads("/sys/kernel/debug/sched/migration_cost_ns", "500000\n") ||
+        !reads("/sys/kernel/debug/sched/nr_migrate", "32\n") ||
+        !reads("/sys/kernel/debug/sched/fair_server/cpu0/runtime", "50000000\n") ||
+        !reads("/sys/kernel/debug/sched/fair_server/cpu0/period", "1000000000\n") ||
+        read_text("/sys/kernel/debug/sched/debug", buf, sizeof(buf)) <= 0 ||
+        strncmp(buf, "Sched Debug Version: v0.11, ", 28) != 0 || !strstr(buf, "\ncpu#0, ")) {
+        return fail("/sys/kernel/debug/sched did not have Linux's tunables, fair server and debug");
+    }
+    row_held();
+    return 0;
+}
+
+/**
  * Check the I/O priority: its first value, kept, inherited, and the errors.
  * Returns 0, or 1 after the failure is printed.
  */
@@ -1161,7 +1340,8 @@ int main(int argc, char **argv)
         return fail("setpgid of a child in another session was not EPERM");
     }
     row_held();
-    if (priorities() != 0 || scheduling() != 0 || oom_score() != 0 || io_priorities() != 0) {
+    if (priorities() != 0 || scheduling() != 0 || oom_score() != 0 || io_priorities() != 0 ||
+        sched_files() != 0) {
         return 1;
     }
     report_end();
