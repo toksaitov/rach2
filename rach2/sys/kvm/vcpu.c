@@ -2333,13 +2333,13 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
 /**
  * A vCPU's ioctl, called without the big lock as an unlocked file's
  * operation, or with a hold the system call's entry took for its own
- * reasons: tracing, seccomp, a held descriptor or USB work
- * (`syscall_entry_locked`). KVM_RUN lets such a hold go for the whole
- * run and takes it back at the same depth before it returns, so that
- * neither the guest nor the exits the kernel handles keep the big lock, as
- * Linux's KVM_RUN holds only the vCPU's mutex (virt/kvm/kvm_main.c:4489-4515).
- * Every other request runs under the big lock. -EINTR when SIGKILL ends the
- * wait for the vCPU's mutex, with the entry's hold back at its depth.
+ * reasons: a held descriptor or USB work (`syscall_entry_locked`).
+ * KVM_RUN lets such a hold go for the whole run and takes it back at the
+ * same depth before it returns, so that neither the guest nor the exits
+ * the kernel handles keep the big lock, as Linux's KVM_RUN holds only the
+ * vCPU's mutex (virt/kvm/kvm_main.c:4489-4515). Every other request runs
+ * under the big lock. -EINTR when SIGKILL ends the wait for the vCPU's
+ * mutex, with the entry's hold back at its depth.
  */
 int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
 {
