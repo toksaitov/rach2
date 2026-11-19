@@ -470,3 +470,21 @@ int main(void)
     printf("virtio-bus-test: ok\n");
     return 0;
 }
+
+/** No HDMI codec's card on the model: /proc/asound lists none. */
+int hdmi_audio_present(void)
+{
+    return 0;
+}
+
+/** No ELD files without the card. */
+int hdmi_audio_eld_count(void)
+{
+    return 0;
+}
+
+/** The codec address eld#C.N would name. */
+int hdmi_audio_codec_addr(void)
+{
+    return 0;
+}
