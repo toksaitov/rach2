@@ -1,25 +1,38 @@
 /*
  * etude_nativedeploy_hosttest.c: the setup that `native-deploy run` sends
  * before the native collection (tests/native/deploy_remote.c), run by the
- * host's sh on a state directory of the test's own.
+ * host's sh on a state directory of the test's own, and the collection's
+ * lock (tests/native/collection_lock.c) that it clears.
  *
- * host-deps: tests/native/deploy_remote.c tests/host/compat/fixdir_host.c
+ * host-deps: tests/native/deploy_remote.c tests/native/collection_lock.c
+ * host-deps: tests/host/compat/fixdir_host.c
  * host-cflags: -I tests/native -I tools/etude/include -Wall -Wextra -Werror
  *
  * nd_ssh is replaced by one that keeps the command; the test cuts out the
  * machine's identity guard and the collection's exec, and points the kernel's
- * boot_id, the etude boot token and /proc/$$/stat at files of its own. A
- * controller claim or a collection lock that an older deployment recorded
- * with the etude boot token of this boot must be kept, and the lock refused
- * by name; a claim or a lock of another boot must be cleared with a line that
- * names it, leaving no STATE/collection.journal; a setup killed once it has
- * removed a stale lock's owner record must leave its journal, and the next
- * setup must pass and remove the lock and the journal; a journal that a
- * stopped collection left must have its lock removed, even one whose owner
- * names this boot, and with no lock must be removed alone; and a lock with no
- * owner record and no journal must still be refused.
+ * boot_id, the etude boot token and /proc/$$/stat at files of its own.
+ *
+ * A controller claim or a collection lock of this boot, recorded with the
+ * kernel's boot_id or, by an older deployment, with the etude boot token,
+ * must be kept, and the lock refused by name; a claim or a lock of another
+ * boot must be cleared with a line that names it, leaving no
+ * STATE/collection.journal; a claim recorded with a token of hexadecimal
+ * digits other than this boot's must be cleared while the token can be read,
+ * and kept while it cannot; the new claim's receipt must record the boot_id.
+ * A setup killed, as waitpid sees, once it has removed a stale lock's owner
+ * record must leave its journal, and the next setup must pass and remove the
+ * lock and the journal. A journal must have its lock removed when the lock
+ * has no owner record or the one the journal names, even of this boot, and
+ * kept when the lock has another owner; a journal with no lock must be
+ * removed alone; and a lock with no owner record and no journal must still
+ * be refused. The collection's lock must be taken with this process's owner
+ * record and no journal left, refused to a contender with no journal written
+ * and the owner unchanged, refused while a journal is there, which it keeps,
+ * and released with no lock or journal left; and the setup must clear a lock
+ * that the collection took when a journal names its owner record.
  */
 #define _POSIX_C_SOURCE 200809L
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,13 +41,16 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "collection.h"
 #include "deploy.h"
 #include "fixdir_host.h"
 
 #define BOOT_ID  "6c3e0f4a-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
 #define OTHER_ID "11111111-2222-4333-8444-555555555555"
 #define TOKEN    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+#define OLDTOKEN "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 #define ARCHIVE  "a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0"
+#define RECEIPT  " 4321 " BOOT_ID /* how the new receipt ends */
 
 static int failures;
 static char sent[32768]; /* the command nd_ssh was given last */
@@ -96,6 +112,18 @@ static int exists(const char *path)
     return lstat(path, &st) == 0;
 }
 
+/** Read the first line of `path` into `line` of `size` bytes; 1, or 0. */
+static int first(const char *path, char *line, size_t size)
+{
+    FILE *f = fopen(path, "r");
+    int ok = f && fgets(line, (int)size, f) != NULL;
+    if (f)
+        fclose(f);
+    if (ok)
+        line[strcspn(line, "\n")] = '\0';
+    return ok;
+}
+
 /** `text` with every `from` replaced by `to`, in a buffer the caller frees. */
 static char *replaced(const char *text, const char *from, const char *to)
 {
@@ -133,14 +161,12 @@ static const char *tree(const char *row)
     return target;
 }
 
-/** Run the setup of a deployment to `target` with `bin` first on PATH, its
- * diagnostics in `out`; the status as system(3) gives it. */
-static int setup(const char *target, const char *bin, const char *out)
+/** Write the setup of a deployment to `target` as the file `script`. */
+static void script_write(const char *target, const char *script)
 {
     static char *cases[] = {NULL};
     struct nd_deploy d;
-    char guard[4096], command[2048], *end, *a, *b, *c;
-    const char *script;
+    char guard[4096], *end, *a, *b, *c;
     FILE *f;
     memset(&d, 0, sizeof(d));
     d.c.mode = "full";
@@ -167,7 +193,6 @@ static int setup(const char *target, const char *bin, const char *out)
     a = replaced(sent + strlen(guard), "/proc/sys/kernel/random/boot_id", fix_path("boot_id"));
     b = replaced(a, "/dev/shm/", fix_path("shm/"));
     c = replaced(b, "/proc/$$/stat", fix_path("stat"));
-    script = fix_path("setup.sh");
     f = fopen(script, "w");
     if (f == NULL ||
         fprintf(f, "set -eu; %sprintf 'native-deploy-test: setup passed\\n' >&2\n", c) < 0 ||
@@ -176,9 +201,31 @@ static int setup(const char *target, const char *bin, const char *out)
     free(a);
     free(b);
     free(c);
-    fix_format(command, sizeof(command), "exec 2> /dev/null; PATH=%s:%s:$PATH /bin/sh %s > %s 2>&1",
-               bin, fix_path("bin"), script, out);
-    return system(command);
+}
+
+/** Run the setup of a deployment to `target` in /bin/sh, with `bin` first on
+ * PATH and its output in `out`; the status waitpid gives. */
+static int setup(const char *target, const char *bin, const char *out)
+{
+    char path[4096];
+    const char *script = fix_path("setup.sh");
+    pid_t pid;
+    int status;
+    script_write(target, script);
+    fix_format(path, sizeof(path), "%s:%s:%s", bin, fix_path("bin"), getenv("PATH"));
+    fflush(NULL);
+    pid = fork();
+    if (pid < 0)
+        exit(2);
+    if (pid == 0) {
+        if (!freopen(out, "w", stdout) || dup2(fileno(stdout), 2) < 0 || setenv("PATH", path, 1))
+            _exit(127);
+        execl("/bin/sh", "sh", script, (char *)NULL);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0)
+        ;
+    return status;
 }
 
 /** Whether the file `path` holds `text`. */
@@ -201,6 +248,14 @@ static int no_journal(const char *target)
     char path[1024];
     fix_format(path, sizeof(path), "%s/state/collection.journal", target);
     return !exists(path);
+}
+
+/** Write the journal of STATE of `target` as `text`. */
+static void journal(const char *target, const char *text)
+{
+    char path[1024];
+    fix_format(path, sizeof(path), "%s/state/collection.journal", target);
+    put(path, text);
 }
 
 /** Write a claim of run `run` in `target`, its receipt `identity`. */
@@ -228,6 +283,32 @@ static void lock(const char *target, const char *owner)
     }
 }
 
+/** Whether the lock of `target` is there. */
+static int locked(const char *target)
+{
+    char path[1024];
+    fix_format(path, sizeof(path), "%s/state/collection.lock", target);
+    return exists(path);
+}
+
+/** Whether the claim of run `run` in `target` is there. */
+static int claimed(const char *target, const char *run)
+{
+    char path[1024];
+    fix_format(path, sizeof(path), "%s/controller-%s", target, run);
+    return exists(path);
+}
+
+/** Whether the receipt of run `run` in `target` ends with RECEIPT. */
+static int receipt_boot(const char *target, const char *run)
+{
+    char path[1024], line[256];
+    size_t n = strlen(RECEIPT);
+    fix_format(path, sizeof(path), "%s/controller-%s/identity", target, run);
+    return first(path, line, sizeof(line)) && strlen(line) > n &&
+           !strcmp(line + strlen(line) - n, RECEIPT);
+}
+
 /** Make the files that stand for the machine, the PATH of each setup and
  * the `rm` that kills a setup. */
 static void machine(const char *plain, const char *killer)
@@ -247,41 +328,54 @@ static void machine(const char *plain, const char *killer)
     }
     /* Kill the setup once it has removed a lock's owner record. */
     fix_format(path, sizeof(path), "%s/rm", killer);
-    put(path, "#!/bin/sh\ncase \"$*\" in *collection.lock/owner*) /bin/rm \"$@\"; kill -KILL "
-              "$PPID; exit 1;; "
-              "esac\nexec /bin/rm \"$@\"\n");
+    put(path, "#!/bin/sh\ncase \"$*\" in *collection.lock/owner*) /bin/rm \"$@\"; "
+              "kill -KILL $PPID; exit 1;; esac\nexec /bin/rm \"$@\"\n");
     chmod(path, 0755);
 }
 
 /** Run the setup on controller claims. */
 static void claim_rows(const char *plain)
 {
-    char path[1024], out[1024];
+    char out[1024];
     const char *t;
-    int status;
 
-    /* An older controller of this boot keeps its claim. */
+    t = tree("thisboot");
+    claim(t, "old", "4241 76 " BOOT_ID "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a claim of this boot fails the setup");
+    CHECK(claimed(t, "old") && !says(out, "cleared"), "the setup clears a claim of this boot");
+    CHECK(receipt_boot(t, "r1"), "the new receipt does not record the boot_id");
+
     t = tree("older");
     claim(t, "old", "4242 77 " TOKEN "\n");
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status == 0, "a claim of this boot's etude token fails the setup");
-    fix_format(path, sizeof(path), "%s/controller-old/identity", t);
-    CHECK(exists(path), "the setup removes a claim of this boot's etude token");
-    CHECK(!says(out, "cleared"), "the setup clears a claim of this boot's etude token");
-    fix_format(path, sizeof(path), "%s/controller-r1/identity", t);
-    CHECK(exists(path), "the setup makes no claim beside an older one of this boot");
+    CHECK(setup(t, plain, out) == 0, "a claim of this boot's etude token fails the setup");
+    CHECK(claimed(t, "old") && !says(out, "cleared"),
+          "the setup clears a claim of this boot's etude token");
 
-    /* A controller of another boot is cleared by name. */
-    t = tree("otherclaim");
-    claim(t, "old", "4243 78 " OTHER_ID "\n");
+    t = tree("oldtoken");
+    claim(t, "old", "4243 78 " OLDTOKEN "\n");
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status == 0, "a claim of another boot fails the setup");
-    fix_format(path, sizeof(path), "%s/controller-old", t);
-    CHECK(!exists(path), "the setup keeps a claim of another boot");
-    CHECK(says(out, "cleared: ") && says(out, "controller-old: pid 4243 of boot " OTHER_ID),
-          "the setup clears a claim of another boot without naming it");
+    CHECK(setup(t, plain, out) == 0, "a claim of another boot's etude token fails the setup");
+    CHECK(!claimed(t, "old") && says(out, "controller-old: pid 4243 of boot " OLDTOKEN),
+          "the setup keeps a claim of another boot's etude token");
+
+    /* With the token unreadable, a token of another boot may be this one's. */
+    put(fix_path("shm/etude-guest-boot"), "short");
+    t = tree("notoken");
+    claim(t, "old", "4244 79 " OLDTOKEN "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a setup with no token fails");
+    CHECK(claimed(t, "old") && !says(out, "cleared"),
+          "the setup with no token clears a claim of a token");
+    put(fix_path("shm/etude-guest-boot"), TOKEN);
+
+    t = tree("otherclaim");
+    claim(t, "old", "4245 80 " OTHER_ID "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a claim of another boot fails the setup");
+    CHECK(!claimed(t, "old") && says(out, "controller-old: pid 4245 of boot " OTHER_ID),
+          "the setup keeps a claim of another boot or clears it without naming it");
     CHECK(no_journal(t), "the setup leaves a journal after a cleared claim");
 }
 
@@ -289,91 +383,125 @@ static void claim_rows(const char *plain)
  * that is killed. */
 static void lock_rows(const char *plain, const char *killer)
 {
-    char path[1024], out[1024];
+    char out[1024];
     const char *t;
     int status;
 
-    /* An older collection of this boot holds its lock. */
-    t = tree("olderlock");
-    lock(t, "4244 79 " TOKEN "\n");
+    t = tree("thislock");
+    lock(t, "4250 85 " BOOT_ID "\n");
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status != 0, "a lock of this boot's etude token passes the setup");
-    fix_format(path, sizeof(path), "%s/state/collection.lock/owner", t);
-    CHECK(exists(path), "the setup removes a lock of this boot's etude token");
-    CHECK(says(out, "refused: ") && says(out, "held by pid 4244 of boot " TOKEN),
-          "the setup refuses a lock of this boot's etude token without naming it");
+    CHECK(setup(t, plain, out) != 0, "a lock of this boot passes the setup");
+    CHECK(locked(t) && says(out, "refused: ") && says(out, "held by pid 4250 of boot " BOOT_ID),
+          "the setup does not refuse a lock of this boot by name");
 
-    /* A lock of another boot, cleared by a setup killed midway. */
+    t = tree("olderlock");
+    lock(t, "4251 86 " TOKEN "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) != 0, "a lock of this boot's etude token passes the setup");
+    CHECK(locked(t) && says(out, "held by pid 4251 of boot " TOKEN),
+          "the setup does not refuse a lock of this boot's etude token by name");
+
     t = tree("killed");
-    lock(t, "4245 80 " OTHER_ID "\n");
+    lock(t, "4252 87 " OTHER_ID "\n");
     fix_format(out, sizeof(out), "%s/out", t);
     status = setup(t, killer, out);
-    CHECK(status != 0, "the setup outlives its kill");
-    fix_format(path, sizeof(path), "%s/state/collection.lock/owner", t);
-    CHECK(!exists(path), "the killed setup did not stop after it removed the owner record");
-    CHECK(!no_journal(t), "a setup killed while it clears a lock leaves no journal");
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL, "the setup was not killed");
+    CHECK(locked(t) && !no_journal(t), "a setup killed while it clears a lock leaves no journal");
     fix_format(out, sizeof(out), "%s/out2", t);
-    status = setup(t, plain, out);
-    CHECK(status == 0, "a setup after a killed one fails");
-    fix_format(path, sizeof(path), "%s/state/collection.lock", t);
-    CHECK(!exists(path), "a setup after a killed one keeps the lock");
-    CHECK(says(out, "collection.lock: left by a stopped change: clear "),
+    CHECK(setup(t, plain, out) == 0, "a setup after a killed one fails");
+    CHECK(!locked(t) && no_journal(t), "a setup after a killed one keeps the lock or journal");
+    CHECK(says(out, "collection.lock: left by a stopped change: clear 4252 87 " OTHER_ID),
           "a setup after a killed one clears its lock without naming it");
-    CHECK(no_journal(t), "a setup after a killed one keeps its journal");
 
-    /* A lock of another boot is cleared by name. */
     t = tree("otherlock");
-    lock(t, "4246 81 " OTHER_ID "\n");
+    lock(t, "4253 88 " OTHER_ID "\n");
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status == 0, "a lock of another boot fails the setup");
-    fix_format(path, sizeof(path), "%s/state/collection.lock", t);
-    CHECK(!exists(path), "the setup keeps a lock of another boot");
-    CHECK(says(out, "collection.lock: held by pid 4246 of boot " OTHER_ID),
-          "the setup clears a lock of another boot without naming it");
+    CHECK(setup(t, plain, out) == 0, "a lock of another boot fails the setup");
+    CHECK(!locked(t) && says(out, "collection.lock: held by pid 4253 of boot " OTHER_ID),
+          "the setup keeps a lock of another boot or clears it without naming it");
     CHECK(no_journal(t), "the setup leaves a journal after a cleared lock");
 }
 
-/** Run the setup on journals a collection left and on a lock with no owner. */
-static void left_rows(const char *plain)
+/** Run the setup on journals a stopped process left, and on a lock with no
+ * owner record. */
+static void journal_rows(const char *plain)
 {
-    char path[1024], out[1024];
+    char out[1024];
     const char *t;
-    int status;
 
-    /* A collection stopped in its release, its owner record still there. */
     t = tree("release");
-    lock(t, "4247 82 " BOOT_ID "\n");
-    fix_format(path, sizeof(path), "%s/state/collection.journal", t);
-    put(path, "release 4247\n");
+    lock(t, "4260 90 " BOOT_ID "\n");
+    journal(t, "release 4260 90 " BOOT_ID "\n");
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status == 0, "a journal of a stopped release fails the setup");
-    fix_format(path, sizeof(path), "%s/state/collection.lock", t);
-    CHECK(!exists(path), "the setup keeps the lock of a stopped release");
-    CHECK(says(out, "collection.lock: left by a stopped change: release 4247"),
+    CHECK(setup(t, plain, out) == 0, "a journal of a stopped release fails the setup");
+    CHECK(!locked(t) && no_journal(t), "the setup keeps the lock or journal of a stopped release");
+    CHECK(says(out, "collection.lock: left by a stopped change: release 4260 90 " BOOT_ID),
           "the setup clears the lock of a stopped release without naming it");
-    CHECK(no_journal(t), "the setup keeps the journal of a stopped release");
 
-    /* A journal with no lock. */
-    t = tree("journal");
-    fix_format(path, sizeof(path), "%s/state/collection.journal", t);
-    put(path, "make 4248\n");
+    t = tree("made");
+    lock(t, NULL);
+    journal(t, "make 4261 91 " BOOT_ID "\n");
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status == 0, "a journal with no lock fails the setup");
-    CHECK(!says(out, "cleared"), "the setup clears a lock that is not there");
-    CHECK(no_journal(t), "the setup keeps a journal with no lock");
+    CHECK(setup(t, plain, out) == 0, "a journal of a stopped make fails the setup");
+    CHECK(!locked(t) && no_journal(t), "the setup keeps the ownerless lock of a stopped make");
 
-    /* A lock with no owner record is still refused. */
+    t = tree("contender");
+    lock(t, "4262 92 " BOOT_ID "\n");
+    journal(t, "make 4263 93 " BOOT_ID "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) != 0, "a lock of another owner than its journal's passes");
+    CHECK(locked(t) && no_journal(t) && says(out, "held by pid 4262 of boot " BOOT_ID),
+          "the setup removes a lock of another owner than its journal's");
+
+    t = tree("journal");
+    journal(t, "make 4264 94 " BOOT_ID "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a journal with no lock fails the setup");
+    CHECK(!says(out, "cleared") && no_journal(t), "the setup mishandles a journal with no lock");
+
     t = tree("ownerless");
     lock(t, NULL);
     fix_format(out, sizeof(out), "%s/out", t);
-    status = setup(t, plain, out);
-    CHECK(status != 0, "a lock with no owner record passes the setup");
+    CHECK(setup(t, plain, out) != 0, "a lock with no owner record passes the setup");
     CHECK(says(out, "collection.lock: held with no owner record"),
           "the setup refuses a lock with no owner record without naming it");
+}
+
+/** Take and release the collection's lock, and clear one it took. */
+static void collection_rows(const char *plain)
+{
+    char state[1024], lockdir[1024], owner[1024], record[256], again[256], text[1024];
+    char out[1024], pid[32];
+    const char *t = tree("writer");
+
+    fix_format(state, sizeof(state), "%s/state", t);
+    fix_format(lockdir, sizeof(lockdir), "%s/collection.lock", state);
+    fix_format(owner, sizeof(owner), "%s/owner", lockdir);
+    fix_format(pid, sizeof(pid), "%ld ", (long)getpid());
+    CHECK(nc_lock_take(state, lockdir), "the collection cannot take its lock");
+    CHECK(first(owner, record, sizeof(record)) && !strncmp(record, pid, strlen(pid)),
+          "the collection's lock does not record its PID");
+    CHECK(no_journal(t), "the collection leaves a journal after it takes its lock");
+    CHECK(!nc_lock_take(state, lockdir), "a contender takes a held lock");
+    CHECK(no_journal(t), "a contender writes a journal");
+    CHECK(first(owner, again, sizeof(again)) && !strcmp(record, again),
+          "a contender changes the lock's owner record");
+    CHECK(nc_lock_release(state, lockdir) == 0, "the collection cannot release its lock");
+    CHECK(!locked(t) && no_journal(t), "the release leaves its lock or journal");
+
+    journal(t, "release 1 1 -\n");
+    CHECK(!nc_lock_take(state, lockdir), "the collection takes its lock beside a journal");
+    CHECK(!locked(t) && !no_journal(t), "the collection removes a journal it finds");
+    fix_format(text, sizeof(text), "%s/collection.journal", state);
+    unlink(text);
+
+    CHECK(nc_lock_take(state, lockdir), "the collection cannot take its lock again");
+    CHECK(first(owner, record, sizeof(record)), "the collection's lock has no owner record");
+    fix_format(text, sizeof(text), "release %s\n", record);
+    journal(t, text);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a journal of the collection's own lock fails the setup");
+    CHECK(!locked(t) && no_journal(t), "the setup keeps a lock its journal names");
 }
 
 int main(void)
@@ -383,7 +511,8 @@ int main(void)
     machine(plain, killer);
     claim_rows(plain);
     lock_rows(plain, killer);
-    left_rows(plain);
+    journal_rows(plain);
+    collection_rows(plain);
     if (failures)
         return failures > 255 ? 255 : failures;
     fix_passed();
