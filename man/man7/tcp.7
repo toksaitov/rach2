@@ -57,9 +57,9 @@ The side that closes first holds the connection in
 for 60 seconds, Linux's length, which keeps its port from the next
 connection to the same peer; a FIN the peer sends again is acknowledged
 and starts the 60 seconds again.
-A connection there keeps no buffers once nothing is left to read: they go on
-entering it when nothing is unread or no socket holds it, and otherwise when
-the socket is closed.
+A connection there gives back its send buffer on entering it, and its
+receive buffer then if nothing is unread or no socket holds it, and
+otherwise when the socket is closed.
 The connections in
 .Dv TIME_WAIT
 are at most Linux's
@@ -105,8 +105,9 @@ The largest window is the smaller of the receive buffer and what the
 window scale can offer.
 Every segment with ACK and without SYN before TIME_WAIT offers the window
 as it stands when it is sent: while less than half the largest window is
-free, less than a sixteenth of it or than a full segment is offered as
-zero, no window offered is taken back, and the quick acknowledgements end,
+free, less than a sixteenth of it or than a full segment is taken as zero
+and then raised to what the peer was offered already, so that no window
+offered is taken back, and the quick acknowledgements end,
 as Linux's
 .Fn __tcp_select_window
 offers it.
