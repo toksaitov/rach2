@@ -106,7 +106,6 @@ struct turns {
     volatile long count[2];
 };
 static struct turns *turns;
-static int is_rach2;
 static long long ref_wait_ns = -1;
 static int rows_done, failed;
 
@@ -662,8 +661,7 @@ static void row_wakes(void)
     if (s.wait_count < WAKE_ROUNDS)
         miss("wait_count is %lld after %d wakes", s.wait_count, WAKE_ROUNDS);
     if (ref_wait_ns < 0) {
-        if (is_rach2)
-            miss("no reference wait given with -w");
+        miss("no reference wait given with -w");
         return;
     }
     bound = ref_wait_ns + ref_wait_ns / 4;
@@ -857,7 +855,8 @@ static void row_pi(void)
 }
 
 /** Eight spinners started on processor 1 and then let run on all four spread
- * out: each gets within 25% of the mean run time, and six or more moved. */
+ * out: together they get four processors' worth of run time within 10%, each
+ * gets within 25% of their mean, and six or more moved. */
 static void row_migration(void)
 {
     pid_t p[8];
@@ -884,6 +883,7 @@ static void row_migration(void)
     }
     printf("schedsmp: figure: migration: total=%lld least=%lld most=%lld migrations=%lld\n", total,
            lo, hi, moved);
+    near("processors' worth of run time", (double)total / (double)(2 * SHORT_NS), 4.0, 0.10);
     near("least run time over the mean", (double)lo * 8.0 / (double)total, 1.0, 0.25);
     near("most run time over the mean", (double)hi * 8.0 / (double)total, 1.0, 0.25);
     if (moved < 6)
@@ -1024,7 +1024,6 @@ static void row_setup(void)
 
     if (uname(&name) != 0)
         fatal("uname");
-    is_rach2 = !strcmp(name.sysname, "Rach2");
     printf("schedsmp: start: %s %s %s\n", name.sysname, name.release, name.machine);
     if (sched_getaffinity(0, sizeof set, &set) != 0)
         fatal("sched_getaffinity");
