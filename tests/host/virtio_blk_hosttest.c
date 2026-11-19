@@ -5,14 +5,17 @@
  * host-deps: rach2/sys/virtio/virtqueue.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
- * host-cflags: -DRACH2_HOST_CPU
+ * host-deps: tests/host/compat/host_threads.c
+ * host-cflags: -DRACH2_HOST_CPU -pthread
  *
  * QEMU's virtio-blk answers every request, offers what its options give and
  * keeps 512-byte blocks. A boot cannot make on demand a device that refuses
  * a feature, has blocks of 4096 bytes, answers a command with an error,
  * never answers one, keeps a cache it cannot flush, changes its capacity,
- * goes away while its disk is open or is there at the machine's stop. The
- * test includes
+ * goes away while its disk is open or is there at the machine's stop, nor
+ * fail a write after a part of it reached the cache, nor change its
+ * capacity between the two halves of an i686 reader's load or while its
+ * whole-disk window is published. The test includes
  * virtio_blk.c and links the real core, virtqueue.c; the model fills the
  * core's table of operations as a transport does, and walks each chain the
  * core published, direct or through an indirect table, reading the request
@@ -35,8 +38,10 @@ extern char *strstr(const char *haystack, const char *needle);
 extern int vsnprintf(char *out, unsigned long size, const char *fmt, va_list ap);
 extern int posix_memalign(void **out, unsigned long align, unsigned long size);
 extern void free(void *p);
+extern int sched_yield(void);
 
 #include "../../rach2/sys/block/virtio_blk.c"
+#include "compat/host_threads.h"
 
 unsigned int host_cpu;
 
@@ -276,12 +281,43 @@ int disk_scan(struct disk *d, block_device_t *backing)
 
 static int publishes;
 
+/* A configuration interrupt that arrives on another processor while devfs
+ * publishes a window, after it has read the disk's size and before it
+ * marks the window present (`devfs_disk_publish` below); and whether that
+ * interrupt waits for the lock the publication holds. */
+static struct model *publish_resize;
+static int resize_waited;
+
+static void resize_now(struct model *m);
+
 /** Publish the whole-disk window of `d`, `/dev/diskN`, at the disk's
- * size, as devfs does. */
+ * size, as devfs does: under the disk's `size_lock` when it has one. A
+ * row may have a resize arrive between the size's read and `present`,
+ * which waits while the lock is held, as the other processor spins. */
 void devfs_disk_publish(struct disk *d)
 {
-    d->whole.part.device.sector_count = d->dev->sector_count;
+    uint32_t flags = 0;
+
+    if (d->size_lock) {
+        flags = spin_lock_irqsave(d->size_lock);
+    }
+    block_set_sectors(&d->whole.part.device, block_sectors(d->dev));
+    if (publish_resize) {
+        if (d->size_lock && d->size_lock->locked) {
+            resize_waited = 1;
+        } else {
+            resize_now(publish_resize);
+            publish_resize = 0;
+        }
+    }
     d->whole.present = 1;
+    if (d->size_lock) {
+        spin_unlock_irqrestore(d->size_lock, flags);
+    }
+    if (publish_resize) {
+        resize_now(publish_resize);
+        publish_resize = 0;
+    }
     publishes++;
 }
 
@@ -318,6 +354,7 @@ struct model {
     int hold;   /* tell of no chain: leave each unanswered */
     int answer; /* the status byte the next request of `fail_type` gets */
     int fail_type;
+    int partial; /* that request changes its first sector before it fails */
     int resets, puts;
     char serial[VBLK_ID_BYTES + 1];
     uint8_t *disk;
@@ -555,6 +592,9 @@ struct seg {
 
 #define SEGS_MAX 300
 
+/* The chains the model found behind an indirect table. */
+static int indirect_seen;
+
 /** The segments of the chain at `head` of queue `vq`, following an
  * indirect table where the chain has one; their count. */
 static int model_chain(struct virtqueue *vq, uint16_t head, struct seg *s)
@@ -563,6 +603,7 @@ static int model_chain(struct virtqueue *vq, uint16_t head, struct seg *s)
     uint32_t i = head, n = 0, tlen = vq->size;
 
     if (t[i].flags & VIRTQ_DESC_F_INDIRECT) {
+        indirect_seen++;
         tlen = t[i].len / 16u;
         t = (volatile struct virtq_desc *)at(t[i].addr);
         i = 0;
@@ -627,6 +668,14 @@ static int model_request(struct model *m, struct seg *s, int n, uint32_t *wrote)
     }
     if ((int)type == m->fail_type) {
         m->fail_type = -1;
+        if (m->partial && type == VBLK_T_OUT && n >= 3) {
+            k_memcpy(m->disk + sector * 512u, s[1].p, 512);
+            m->dirty++;
+        } else if (m->partial && (type == VBLK_T_WRITE_ZEROES || type == VBLK_T_DISCARD)) {
+            k_memset(m->disk + le(s[1].p, 8) * 512u, type == VBLK_T_DISCARD ? 0xDD : 0, 512);
+            m->dirty++;
+        }
+        m->partial = 0;
         return m->answer;
     }
     switch (type) {
@@ -878,6 +927,46 @@ static void request_init(struct block_request *r, int write, uint64_t lba, uint3
 static block_device_t *disk0(void)
 {
     return &vblks[0].bdev;
+}
+
+/* The capacity a resize gives model 0's device (`resize_now`). */
+static uint64_t resize_to;
+
+/** Give model `m`'s device the capacity `resize_to` and raise its
+ * configuration interrupt. */
+static void resize_now(struct model *m)
+{
+    put_le(m->cfg + VBLK_CFG_CAPACITY, resize_to, 8);
+    virtio_interrupt_config(&m->dev);
+}
+
+/**
+ * `block_flush` of `dev` as the block layer makes it (`request.c`, which
+ * this test does not link): nothing when `block_flush_skips` says so, and
+ * otherwise the device's `flush`, with request `r` as a process's flush
+ * takes one, or with NULL as a caller that cannot sleep. A queued request
+ * is answered by the model's interrupts.
+ */
+static int layer_flush(block_device_t *dev, struct block_request *r)
+{
+    int rc;
+
+    if (block_flush_skips(dev)) {
+        return 0;
+    }
+    if (!r) {
+        return dev->flush(dev, 0);
+    }
+    request_init(r, 0, 0, 0, 0, BLOCK_REQ_FLUSH);
+    rc = dev->flush(dev, r);
+    if (rc != 0) {
+        return rc;
+    }
+    if (r->state == 0) {
+        model_drain(&models[0]);
+    }
+    check(r->state == 1, "the flush request is answered");
+    return r->status;
 }
 
 /*
@@ -1466,7 +1555,9 @@ static void late_bind(void)
  * A device whose `size_max` is 512 bytes: every piece of data is cut to
  * it, and the core joins no two of them back into a longer descriptor,
  * though they follow each other in memory, with indirect tables and
- * without.
+ * without. With them the queue has 8 descriptors, fewer than a chain of
+ * eight or sixteen pieces needs, so the chain goes through a table, which
+ * the core takes only for a chain the ring cannot hold.
  */
 static void size_max(void)
 {
@@ -1478,9 +1569,12 @@ static void size_max(void)
     for (k = 0; k < 2; k++) {
         model_reset(1);
         m->offered |= F(VBLK_F_SIZE_MAX);
-        if (k == 1) {
+        if (k == 0) {
+            m->qsize = 8;
+        } else {
             m->offered &= ~F(VIRTIO_F_INDIRECT_DESC);
         }
+        indirect_seen = 0;
         put_le(m->cfg + VBLK_CFG_SIZE_MAX, 512, 4);
         check(virtio_blk_init() == 0 && vblks[0].seg_bytes == 512 &&
                   disk0()->max_sectors == (126 / 8) * 8,
@@ -1489,7 +1583,7 @@ static void size_max(void)
             page[i] = (uint8_t)(i * 7 + 3);
         }
         check(disk0()->write(disk0(), 16, 8, page) == 0, "a polled write of a page");
-        check(m->longest == 8 && m->widest == 512,
+        check(m->longest == 8 && m->widest == 512 && indirect_seen == (k == 0 ? 1 : 0),
               k == 0 ? "is eight pieces of 512 bytes in an indirect table"
                      : "is eight pieces of 512 bytes in the queue's own descriptors");
         for (i = 0, ok = 1; i < 4096; i++) {
@@ -1501,8 +1595,9 @@ static void size_max(void)
         request_init(&r, 0, 16, 16, page + 4096, 0);
         check(disk0()->submit(disk0(), &r) == 0, "a queued read of two pages");
         model_drain(m);
-        check(r.state == 1 && r.status == 0 && m->longest == 16 && m->widest == 512,
-              "is sixteen pieces of 512 bytes");
+        check(r.state == 1 && r.status == 0 && m->longest == 16 && m->widest == 512 &&
+                  indirect_seen == (k == 0 ? 2 : 0),
+              "is sixteen pieces of 512 bytes, through a table when the queue has them");
         for (i = 0, ok = 1; i < 4096; i++) {
             ok &= page[4096 + i] == (uint8_t)(i * 7 + 3);
         }
@@ -1579,6 +1674,262 @@ static void shutdown(void)
           "and the other disk is reset as well");
 }
 
+/**
+ * A polled disk with a cache, of a transport with no interrupt or under
+ * rach2.vblkpoll, has a flush, so that `block_flush` reaches the device
+ * whether the caller can sleep or not: the old driver gave a flush only at
+ * `virtio_blk_start`, and a polled disk marked unflushed answered a flush
+ * as done with its data still in the cache. A device that caches with no
+ * FLUSH has that flush fail.
+ */
+static void polled_flush(void)
+{
+    static uint8_t buf[512];
+    static struct block_request r;
+    struct model *m = &models[0];
+    int k;
+
+    for (k = 0; k < 2; k++) {
+        model_reset(1);
+        if (k == 0) {
+            m->polled = 1;
+        } else {
+            cmdline_poll = 1;
+        }
+        (void)virtio_blk_init();
+        virtio_blk_start();
+        check(!disk0()->submit && disk0()->flush != 0, "a polled disk with a cache has a flush");
+        m->fail_type = VBLK_T_FLUSH;
+        m->answer = VBLK_S_IOERR;
+        check(disk0()->write(disk0(), 0, 1, buf) == -EIO && disk0()->unflushed && m->dirty == 1,
+              "a polled write whose flush fails leaves the disk marked, its data cached");
+        check(layer_flush(disk0(), 0) == 0 && m->flushes == 1 && m->dirty == 0 &&
+                  !disk0()->unflushed,
+              "a flush that cannot sleep reaches the device and clears the mark");
+        m->fail_type = VBLK_T_FLUSH;
+        (void)disk0()->write(disk0(), 1, 1, buf);
+        check(layer_flush(disk0(), &r) == 0 && m->flushes == 2 && m->dirty == 0 &&
+                  !disk0()->unflushed,
+              "a process's flush, with its request, reaches the device too");
+        m->fail_type = VBLK_T_FLUSH;
+        (void)disk0()->write(disk0(), 2, 1, buf);
+        m->fail_type = VBLK_T_FLUSH;
+        check(layer_flush(disk0(), &r) == -EIO && disk0()->unflushed && m->dirty == 1,
+              "and a flush the device fails answers EIO and keeps the mark");
+    }
+
+    model_reset(1);
+    m->polled = 1;
+    m->offered &= ~F(VBLK_F_FLUSH);
+    m->stuck_cache = 1;
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    check(disk0()->write(disk0(), 0, 1, buf) == -EIO && disk0()->unflushed,
+          "a polled disk that caches with no FLUSH fails a durable write");
+    check(layer_flush(disk0(), &r) == -EIO && m->refused_flushes == 2 && disk0()->unflushed,
+          "and its flush is sent and fails, not skipped");
+    check(layer_flush(disk0(), 0) == -EIO && m->refused_flushes == 3, "by polling as well");
+}
+
+/**
+ * A write, a write of zeroes or a discard that the device fails after a
+ * part of it changed: the part may be in the cache, so the disk is marked
+ * and the next flush is sent, as Linux's block layer flushes after any
+ * write it sent; the old driver marked only what succeeded. Queued and
+ * polled, and at the machine's stop.
+ */
+static void failed_writes(void)
+{
+    static uint8_t buf[4096];
+    static struct block_request r[5];
+    struct model *m = &models[0];
+
+    k_memset(buf, 0xA5, sizeof(buf));
+    model_reset(1);
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    k_memset(m->disk + 40 * 512, 0x55, 8 * 512);
+    m->fail_type = VBLK_T_WRITE_ZEROES;
+    m->answer = VBLK_S_IOERR;
+    m->partial = 1;
+    request_init(&r[0], 1, 40, 8, 0, BLOCK_REQ_ZEROES);
+    (void)disk0()->submit(disk0(), &r[0]);
+    model_drain(m);
+    check(r[0].state == 1 && r[0].status == -EIO && m->disk[40 * 512] == 0 &&
+              m->disk[41 * 512] == 0x55,
+          "a write of zeroes fails after it zeroed a part of its range");
+    check(disk0()->unflushed && m->flushes == 0, "which marks the disk");
+    check(layer_flush(disk0(), &r[1]) == 0 && m->flushes == 1 && m->dirty == 0 &&
+              !disk0()->unflushed,
+          "so the next flush is sent and empties the cache");
+
+    m->fail_type = VBLK_T_OUT;
+    m->partial = 1;
+    request_init(&r[2], 1, 64, 8, buf, 0);
+    (void)disk0()->submit(disk0(), &r[2]);
+    model_drain(m);
+    check(r[2].state == 1 && r[2].status == -EIO && m->disk[64 * 512] == 0xA5 &&
+              disk0()->unflushed && m->flushes == 1,
+          "a durable write that fails after a part of it changed marks the disk");
+    check(layer_flush(disk0(), &r[3]) == 0 && m->flushes == 2 && m->dirty == 0,
+          "and the next flush is sent");
+
+    m->fail_type = VBLK_T_DISCARD;
+    m->partial = 1;
+    request_init(&r[4], 1, 80, 8, 0, BLOCK_REQ_DISCARD);
+    (void)disk0()->submit(disk0(), &r[4]);
+    model_drain(m);
+    check(r[4].state == 1 && r[4].status == -EIO && disk0()->unflushed,
+          "a discard that fails marks the disk too");
+
+    model_reset(1);
+    (void)virtio_blk_init();
+    m->fail_type = VBLK_T_OUT;
+    m->answer = VBLK_S_IOERR;
+    m->partial = 1;
+    check(disk0()->write(disk0(), 8, 8, buf) == -EIO && m->disk[8 * 512] == 0xA5 && m->flushes == 0,
+          "the first command of a polled write fails after a part of it changed");
+    check(disk0()->unflushed, "which marks the disk");
+    check(layer_flush(disk0(), 0) == 0 && m->flushes == 1 && m->dirty == 0 && !disk0()->unflushed,
+          "so the next flush is sent");
+    m->fail_type = VBLK_T_OUT;
+    m->partial = 1;
+    (void)disk0()->write(disk0(), 8, 8, buf);
+    check(disk0()->unflushed && m->dirty == 1, "a second failed write marks it again");
+    virtio_blk_shutdown();
+    check(m->flushes == 2 && m->dirty == 0 && m->status == 0,
+          "and the machine's stop flushes the cache before the reset");
+}
+
+/* A change of disk 0's size between the halves of an i686 store, and a
+ * reader on another processor (`torn`): the reader's request, or its
+ * buffer, whether it reads by polling, that it has begun, and what it was
+ * answered; and the size the change ends at. */
+static struct block_request torn_req;
+static uint8_t torn_buf[512];
+static int torn_polled;
+static volatile int torn_started;
+static int torn_rc;
+static uint64_t torn_final;
+
+/**
+ * One side of `torn`, by `arg`: the reader, which submits `torn_req` to
+ * disk 0 or reads its sector by polling, or the writer, which ends the
+ * change once the reader has begun and it has let the processor go a
+ * thousand times, time enough for a reader to read the torn size.
+ */
+static void *torn_side(void *arg)
+{
+    block_device_t *d = disk0();
+    int i;
+
+    if (arg == 0) {
+        torn_started = 1;
+        torn_rc = torn_polled ? d->read(d, torn_req.lba, 1, torn_buf) : d->submit(d, &torn_req);
+        return 0;
+    }
+    while (!torn_started) {
+        (void)sched_yield();
+    }
+    for (i = 0; i < 1000; i++) {
+        (void)sched_yield();
+    }
+    *(volatile uint64_t *)&d->sector_count = torn_final;
+    d->size_seq++;
+    return 0;
+}
+
+/**
+ * Change disk 0's size to `final` as i686 stores a 64-bit count, in two
+ * halves, with a reader, polled or not, on another processor between them:
+ * the size as it stands then is `torn_size`, the new low half beside the
+ * old high half. The change is begun as `block_set_sectors` begins it, its
+ * count made odd.
+ */
+static void torn(int polled, uint64_t torn_size, uint64_t final)
+{
+    static int writer;
+    void *args[2];
+    block_device_t *d = disk0();
+
+    args[0] = 0;
+    args[1] = &writer;
+    torn_polled = polled;
+    torn_started = 0;
+    torn_rc = 1;
+    torn_final = final;
+    d->size_seq++;
+    *(volatile uint64_t *)&d->sector_count = torn_size;
+    check(host_threads_run(2, torn_side, args) == 0, "the reader and the writer run");
+}
+
+/**
+ * The capacity is read whole. A change of capacity moves each count with
+ * `block_set_sectors`, and a reader that meets a change between the two
+ * halves of an i686 store waits for its end, so that a request past the
+ * new end is refused and never judged by a size the device never had:
+ * here 2^32 sectors shrinking to 0xFFFF0000, read between the halves as
+ * 0x1FFFF0000.
+ */
+static void whole_sizes(void)
+{
+    struct model *m = &models[0];
+    block_device_t *whole = &disks[0].whole.part.device;
+    uint32_t seq, wseq;
+
+    model_reset(1);
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    devfs_disk_publish(&disks[0]);
+    seq = disk0()->size_seq;
+    wseq = whole->size_seq;
+    resize_to = 0x100000000ull;
+    resize_now(m);
+    check(disk0()->sector_count == 0x100000000ull && whole->sector_count == 0x100000000ull,
+          "the disk and its window grow to 2^32 sectors");
+    check(disk0()->size_seq == seq + 2 && whole->size_seq == wseq + 2,
+          "each count is set through its sequence count, which ends even");
+
+    request_init(&torn_req, 0, 0x180000000ull, 1, torn_buf, 0);
+    torn(0, 0x1FFFF0000ull, 0xFFFF0000ull);
+    check(torn_rc == -EIO && torn_req.state == 0,
+          "a submit that meets the change waits for it and refuses a request past the end");
+    torn(1, 0x1FFFF0000ull, 0xFFFF0000ull);
+    check(torn_rc == -EIO && m->reads == 0, "and so does a polled read, before the device");
+    torn_req.lba = 0;
+    torn(1, 0x1FFFF0000ull, 0xFFFF0000ull);
+    check(torn_rc == 0 && m->reads == 1, "a read inside the new end goes");
+}
+
+/**
+ * A resize that arrives while devfs publishes the whole-disk window,
+ * between its read of the disk's size and its `present`, waits for the
+ * disk's `size_lock`, the driver's lock, so that the window ends at the
+ * new capacity; the old driver saw the window absent, moved the disk
+ * alone, and left `/dev/disk0` at the old size for good.
+ */
+static void publish_race(void)
+{
+    struct model *m = &models[0];
+    block_device_t *whole = &disks[0].whole.part.device;
+
+    model_reset(1);
+    (void)virtio_blk_init();
+    virtio_blk_start();
+    check(disks[0].size_lock == &vblks[0].lock, "the disk's size lock is the driver's lock");
+    resize_to = 2 * DISK_SECTORS;
+    resize_waited = 0;
+    publish_resize = m;
+    devfs_disk_publish(&disks[0]);
+    check(resize_waited && !publish_resize, "a resize during the publication waits for it");
+    check(disks[0].whole.present && disk0()->sector_count == 2 * DISK_SECTORS &&
+              whole->sector_count == 2 * DISK_SECTORS,
+          "and the window published has the new size");
+    resize_to = DISK_SECTORS;
+    resize_now(m);
+    check(whole->sector_count == DISK_SECTORS, "a later change moves the window as well");
+}
+
 /** Two devices: the second is disk 1, and the queue count is the lesser of
  * the offer and VIRTIO_MAX_QUEUES. */
 static void two_devices(void)
@@ -1609,6 +1960,10 @@ int main(void)
     late_bind();
     size_max();
     shutdown();
+    polled_flush();
+    failed_writes();
+    whole_sizes();
+    publish_race();
     two_devices();
     model_reset(0);
     if (failures) {
