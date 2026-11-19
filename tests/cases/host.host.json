@@ -2084,6 +2084,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "etude_nativedeploy",
+          "checks": "tests/host/etude_nativedeploy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "etude_nativeprep",
           "checks": "tests/host/etude_nativeprep_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
