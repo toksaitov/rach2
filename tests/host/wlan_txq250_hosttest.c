@@ -17,6 +17,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/lib/crc32.c
  */
 #define main wlan_txq_rows
 #include "wlan_txq_hosttest.c"

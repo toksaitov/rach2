@@ -527,7 +527,8 @@ unsigned wlan_data_priority(const uint8_t *ethernet, unsigned len);
  * user priorities 0 to 7. */
 unsigned wlan_data_ac(unsigned tid);
 
-/** The CRC-32 of 802.3, which is TKIP's ICV. */
+/** The CRC-32 of 802.3, which is TKIP's ICV: the library's crc32_le
+ * inverted at both ends. */
 uint32_t wlan_crc32(const uint8_t *data, unsigned len);
 
 /* rx.c */

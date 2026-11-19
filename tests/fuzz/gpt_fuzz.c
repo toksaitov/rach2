@@ -6,6 +6,7 @@
  * ones behind the checksums.
  *
  * fuzz-deps: rach2/sys/block/gpt.c
+ * fuzz-deps: rach2/sys/lib/crc32.c
  */
 #include "../../rach2/sys/block/gpt.h"
 #include "../fuzz/fuzz.h"

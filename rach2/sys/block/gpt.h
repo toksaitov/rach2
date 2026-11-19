@@ -78,7 +78,8 @@ int gpt_parse_entries(const uint8_t *array, uint32_t count, uint32_t entry_size,
                       uint64_t first_usable, uint64_t last_usable,
                       struct gpt_part parts[GPT_PART_COUNT], int *refused);
 
-/** The CRC32 of GUID tables and zip files, over `length` bytes. */
+/** The CRC-32 of GUID tables and zip files over `length` bytes, the
+ * library's crc32_le inverted at both ends. */
 uint32_t gpt_crc32(const uint8_t *data, uint32_t length);
 
 #endif /* _GPT_H_ */

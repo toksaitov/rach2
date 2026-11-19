@@ -4,6 +4,7 @@
  *
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
  * host-deps: rach2/sys/block/mbr.c
+ * host-deps: rach2/sys/lib/crc32.c
  *
  * A disk is an array of sectors the reader callback serves, so every table
  * the service must read is built here byte by byte: an MBR with an extended

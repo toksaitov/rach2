@@ -4,6 +4,7 @@
  *
  * host-deps: rach2/sys/block/diskinfo.c rach2/sys/block/mbr.c
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
+ * host-deps: rach2/sys/lib/crc32.c
  *
  * `tests/run diskdiag` boots a disk and hashes its sectors. A device in a
  * guest does not answer with a serial number full of control bytes or a
