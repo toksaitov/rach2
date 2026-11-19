@@ -1,0 +1,8 @@
+deqp: result: gles2 1.4.7.1 cases 86 of 17165 every 200 jobs 4 pass 85 fail 0 notsupported 1 warning 0 crash 0 timeout 0 other 0 missing 0 flake 0
+judge: result: pass deqp 86 cases, 0 worse than the reference's, 0 flakes named
+exit 0
+[    8.116000] net: wlan0: IPv6 LINKLOCAL/64 added
+[    8.624000] net: eth0: IPv6 ULA/64 added
+[    8.624000] net: eth0: IPv6 ULA/64 added
+[    9.256000] netconsole: settled: held records sent after 2000 ms of link
+[   11.668000] i915: worker: ki915 is pid 264

@@ -1643,12 +1643,14 @@ void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32
     uint32_t flags = spin_lock_irqsave(&work_lock);
 
     if (work->queued) {
-        if (work->due > due) {
+        int earlier = work->due > due;
+
+        if (earlier) {
             work->due = due;
             dev_works_gen++;
         }
         spin_unlock_irqrestore(&work_lock, flags);
-        if (due == 0) {
+        if (earlier) {
             wq_wake_all(&work_wait);
         }
         return;

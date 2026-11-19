@@ -198,6 +198,8 @@ long compat_sys_ioctl(isr_params_t *params);
  * and enter without the big lock as they do (`init_syscall`). */
 long compat_sys_ptrace(isr_params_t *params);
 long compat_sys_rt_sigprocmask(isr_params_t *params);
+long compat_sys_rt_sigqueueinfo(isr_params_t *params);
+long compat_sys_rt_tgsigqueueinfo(isr_params_t *params);
 /* i386 socketcall uses the same per-family lock dispatch as native calls. */
 long compat_sys_socketcall(isr_params_t *params);
 #endif
@@ -3989,6 +3991,38 @@ static void syscall_socket_unlock(void)
 #endif
 }
 
+/**
+ * Mark the calls that send a signal to one process or thread to run without
+ * the big lock, native and i386, as Linux 6.12's kill_proc_info and
+ * do_send_specific find the target under RCU and post under its siglock:
+ * kill of one process, tkill, tgkill, rt_sigqueueinfo and
+ * rt_tgsigqueueinfo find the target with a reference (`get_process_ref`)
+ * and post under the list lock as a reader and `sig_lock`
+ * (`sig_hold_take`, syscall_proc.c). Each takes the big lock itself for a
+ * caller or a target outside the first PID and user namespaces, whose
+ * numbers it guards (`ids_lock`, `sig_target_get`), for kill of a process
+ * group or of every process, which walks the list (`kill_many`), and for a
+ * stop signal, SIGCONT and a SIGKILL to an init, whose job control reaches
+ * what the big lock covers (`sig_post_needs_bkl`). The i386 queueing calls
+ * call the native ones.
+ */
+static void syscall_signal_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_kill, sys_tkill, sys_tgkill, sys_rt_sigqueueinfo, sys_rt_tgsigqueueinfo,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_rt_sigqueueinfo);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_rt_tgsigqueueinfo);
+#endif
+}
+
 void init_syscall(void)
 {
     uint32_t i;
@@ -4032,6 +4066,7 @@ void init_syscall(void)
     syscall_clock_unlock();
     syscall_futex_unlock();
     syscall_ids_unlock();
+    syscall_signal_unlock();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
     sched_cycle_account = kcmdline_has("rach2.cycleaccount");

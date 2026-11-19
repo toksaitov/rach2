@@ -1,0 +1,8 @@
+piglit: result: gl-1.0 379 results: pass 373 skip 0 fail 6 other 0
+judge: result: pass results 379 in the reference, 379 here, 0 worse than Debian's, 0 flakes named
+exit 0
+[   16.280000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   16.280000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[   16.280000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[   16.316000] console: card0: taken back from a master, the keyboard on
+[   16.316000] console: card0: 1366x768, the font at 2x

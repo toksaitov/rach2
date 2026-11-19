@@ -303,7 +303,7 @@ struct drm_driver {
     /* Runtime power management, NULL for a device without: `pm_get` wakes
      * the device and keeps it awake until the matching `pm_put`, as
      * Linux's pm_runtime_get_sync and put_autosuspend. Process context,
-     * without spinlocks; neither sleeps. The core holds the device awake
+     * without spinlocks. `pm_get` may sleep. The core holds the device awake
      * through the driver's own ioctls, each commit's tail, each probe of
      * a connector and each change of a CRTC's CRC source. */
     void (*pm_get)(struct drm_device *dev);
