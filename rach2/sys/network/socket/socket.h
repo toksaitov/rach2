@@ -168,6 +168,9 @@ typedef struct socket {
      * it. */
     uint16_t family;
     uint16_t local_port;
+    /* The port a stream's bind counted in TCP's table of ports in use
+     * (`tcp_port_hold`), which its last close takes back; 0 for none. */
+    uint16_t port_held;
 
     /* The canonical address bind gave, including an IPv6 link's scope.
      * Unspecified means any address in the binding's family; :: also
@@ -363,13 +366,6 @@ struct netdev *socket_iface6(const struct socket *s, int ifindex);
  * first network namespace; else 127/8 only, while its namespace's `lo` has
  * its address and, with `up`, is up, as a send needs and a bind does not. */
 int socket_ns_reaches(const struct socket *s, net_addr_t a, int up);
-
-/**
- * Whether a live stream socket has `port` as its local port, bound or
- * connected, which an ephemeral port is never chosen over. The caller holds
- * `net_lock`, which the list of sockets is shared under.
- */
-int socket_port_bound(uint16_t port);
 
 /* One datagram or raw socket, copied out for /proc/net/udp, raw and their
  * IPv6 files and for inet_diag. An AF_INET6 socket's addresses may be IPv4,

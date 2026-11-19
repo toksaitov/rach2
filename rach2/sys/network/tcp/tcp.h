@@ -78,10 +78,11 @@
 #define TCP_RTO_INIT             TCP_MS(1000)
 #define TCP_RTO_MIN              TCP_MS(200)
 #define TCP_RTO_MAX              TCP_MS(60000)
-/* Policy: TIME_WAIT lasts 2 s, short for a local network, and a detached
- * block in FIN_WAIT_2, whose peer may go with neither a FIN nor a reset,
- * 10 s (cf. Linux's tcp_fin_timeout). */
-#define TCP_2MSL_TICKS           TCP_MS(2000)
+/* TIME_WAIT lasts 60 s, Linux's TCP_TIMEWAIT_LEN, so that no segment of a
+ * connection is taken for one of the next on the same addresses and ports;
+ * policy: a detached block in FIN_WAIT_2, whose peer may go with neither a
+ * FIN nor a reset, is freed after 10 s (cf. Linux's tcp_fin_timeout). */
+#define TCP_2MSL_TICKS           TCP_MS(60000)
 #define TCP_FIN_WAIT2_TICKS      TCP_MS(10000)
 /* Policy: a detached block that still has data or a FIN to deliver, in
  * ESTABLISHED, CLOSE_WAIT, FIN_WAIT_1, CLOSING or LAST_ACK, is given up when
@@ -195,6 +196,10 @@ typedef enum {
 
 struct socket; /* defined in socket/socket.h */
 
+/* The values of `struct tcb`'s `port_held`. */
+#define TCP_PORT_FIXED 1
+#define TCP_PORT_AUTO  2
+
 struct netns;
 
 /* A run of the send history (`struct tcb`'s `sent_first`): the bytes before
@@ -207,7 +212,21 @@ struct tcp_sent_run {
 
 /* A connection's control block, or a listener's. */
 struct tcb {
-    struct tcb *next; /* the list of live control blocks */
+    /* The list of control blocks, those in the TIME_WAIT run last
+     * (`tw_listed`); `hash_next` chains a connection's bucket of the table
+     * `tcp_find` reads. */
+    struct tcb *next, *prev;
+    struct tcb *hash_next;
+    uint8_t hashed;
+    /* 1 for a detached block in TIME_WAIT, which sits in the run at the
+     * list's end that is in the order its TIME_WAIT ends. */
+    uint8_t tw_listed;
+    /* How the block counts in the table of ephemeral ports in use: 0 not at
+     * all, its port being outside the range, TCP_PORT_FIXED for a listener,
+     * a passive connection or one from a port the socket bound, which no
+     * other connection may share, or TCP_PORT_AUTO for one whose port
+     * `tcp_connect` chose, which a connection to another peer may share. */
+    uint8_t port_held;
     int in_use;
     tcp_state_t state;
 
@@ -282,15 +301,16 @@ struct tcb {
     uint32_t ooo_end[TCP_OOO_RANGES];
 
     /*
-     * The send ring, of TCP_RING_SIZE bytes in the block, and the receive
-     * ring, of `recv_size` bytes from the heap, a power of two; a listener
-     * has no receive ring. Each head and tail counts bytes and wraps at
-     * 2^32, and its index into the ring is the count masked with the ring's
-     * size less one, so the bytes in a ring are its tail less its head in
-     * unsigned arithmetic. `send_ack` is the count of the oldest byte not
-     * yet acknowledged.
+     * The send ring, of TCP_RING_SIZE bytes, and the receive ring, of
+     * `recv_size` bytes, a power of two, each from the heap; a listener has
+     * neither, and a block in TIME_WAIT gives both back once no program can
+     * read from it (`tcp_time_wait_trim`). Each head and tail counts bytes
+     * and wraps at 2^32, and its index into the ring is the count masked
+     * with the ring's size less one, so the bytes in a ring are its tail
+     * less its head in unsigned arithmetic. `send_ack` is the count of the
+     * oldest byte not yet acknowledged.
      */
-    uint8_t send_buf[TCP_RING_SIZE];
+    uint8_t *send_buf;
     uint32_t send_head, send_tail; /* head = next to send, tail = next to fill */
     uint8_t *recv_buf;
     uint32_t recv_size;
@@ -538,10 +558,23 @@ int tcp_port_listening(const struct socket *sock, uint16_t port);
 
 /**
  * A port for a stream socket bound to port 0, which Linux gives at the bind:
- * the next from 49152 to 65535 that no control block and no stream socket
- * has, or 0 when none is free. Takes `net_lock` itself.
+ * one of the ephemeral range, NET_PORT_LOW to NET_PORT_HIGH, that no control
+ * block and no stream socket has, or 0 when none is free. The search starts
+ * at a place no host off the machine can predict and tries the odd ports
+ * first, as Linux's inet_csk_find_open_port does, leaving the even ones to
+ * `connect`. Takes `net_lock` itself; a caller that counts the port with
+ * `tcp_port_hold` holds the lock across both, as `bind` does.
  */
 uint16_t tcp_bind_ephemeral(void);
+
+/**
+ * Count `port` as bound by a stream socket in the table of ephemeral ports
+ * in use, which every later choice of an ephemeral port passes over, or
+ * take the count back. A port outside the range is not counted. The caller
+ * holds `net_lock`.
+ */
+void tcp_port_hold(uint16_t port);
+void tcp_port_unhold(uint16_t port);
 
 /**
  * Make `sock` a listener on `port`, at the address it bound or any, or on

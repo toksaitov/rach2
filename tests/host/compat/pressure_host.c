@@ -36,3 +36,11 @@ size_t frame_free_count(void)
 {
     return host_free_frames;
 }
+
+uint32_t host_total_frames = 1u << 20; /* the machine's frames, 4 GiB of 4 KiB */
+
+/** The frames the machine manages: `host_total_frames`. */
+size_t frame_total_count(void)
+{
+    return host_total_frames;
+}
