@@ -36,12 +36,13 @@ static struct lockdep_key unrecorded_key;
  * finds the lock held until the lock is handed to it or it leaves. Only the
  * give that hands it the lock sets `granted`, under the list's lock, and
  * touches the record no more after that, since the waiter may return at
- * once.
+ * once. It begins with the lock, which a host test's hook on the wait reads
+ * to name the lock waited on (tests/host/ext2_hosttest.c `wait_kind`).
  */
 struct sleep_waiter {
-    struct sleep_waiter *next; /* the waiter after it, or NULL */
-    struct sleep_waiter *prev; /* the waiter before it, or NULL */
     struct sleep_lock *lock;
+    struct sleep_waiter *next;     /* the waiter after it, or NULL */
+    struct sleep_waiter *prev;     /* the waiter before it, or NULL */
     volatile unsigned int granted; /* 1 once the lock is handed to it */
     int killable;                  /* SIGKILL ends the wait (`sleep_lock_take_killable`) */
 };
