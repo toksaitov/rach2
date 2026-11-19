@@ -105,9 +105,10 @@ The largest window is the smaller of the receive buffer and what the
 window scale can offer.
 Every segment with ACK and without SYN before TIME_WAIT offers the window
 as it stands when it is sent: while less than half the largest window is
-free, less than a sixteenth of it or than a full segment is taken as zero
-and then raised to what the peer was offered already, so that no window
-offered is taken back, and the quick acknowledgements end,
+free, less than a sixteenth of it or than a full segment is taken as zero,
+then raised to what the peer may still send below the right edge offered
+before, so that the edge does not move back but by the rounding of a
+scaled window, and the quick acknowledgements end,
 as Linux's
 .Fn __tcp_select_window
 offers it.
