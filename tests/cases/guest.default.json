@@ -3744,11 +3744,11 @@
         {"assertion_id": "tx-kick", "checks": "The answer is put on the transmit ring and the ring kicked.", "source": "program"},
         {"assertion_id": "tx-call", "checks": "The transmit ring's call is signalled.", "source": "program"},
         {"assertion_id": "tx-used", "checks": "The transmit ring used the answer's chain.", "source": "program"},
-        {"assertion_id": "datagram", "checks": "The datagram that waited for the answer comes into the receive ring, to the answer's station address.", "source": "program"},
+        {"assertion_id": "datagram", "checks": "The datagram that waited for the answer comes into the receive ring, to the answer's station address, with one call.", "source": "program"},
         {"assertion_id": "direct-send", "checks": "A second datagram is sent while the receive ring has buffers.", "source": "program"},
         {"assertion_id": "direct-frame", "checks": "It comes into a receive buffer, at once or from the thread.", "source": "program"},
         {"assertion_id": "direct-call", "checks": "The receive ring's call is signalled once for it.", "source": "program"},
-        {"assertion_id": "detach", "checks": "VHOST_NET_SET_BACKEND of -1 takes the tap from both rings.", "source": "program"}
+        {"assertion_id": "detach", "checks": "VHOST_NET_SET_BACKEND of -1 takes the tap from both rings, and the receive calls then equal its used entries.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
