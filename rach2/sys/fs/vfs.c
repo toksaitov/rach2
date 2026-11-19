@@ -6110,9 +6110,9 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         cov.node = m->covered;
         vfs_ref_put(&cov);
         vfs_mount_put(m->parent);
+        mount_refused(dev);
         devfs_release_claim(claim);
         mount_release(m);
-        mount_refused(dev);
         return rc;
     }
     m->state = VFS_ACTIVE;
