@@ -182,14 +182,13 @@ static int krffs_has_name(krffs_mount_t *mount, uint64_t offset)
  * before and after is written in two pieces that say the same thing in one
  * of them, and that is a write like any other.
  *
- * A `grain` of 0, a single byte, which cannot be torn, and a write of
+ * A mount with no unit, a single byte, which cannot be torn, and a write of
  * more than 16 bytes, a name, which is written without the rule, answer 1;
  * a read of the old bytes that fails answers 0. The unit a byte falls in is
  * counted in 32 bits, since a region is addressed in 32 and this kernel has
  * no 64-bit division.
  */
-static int krffs_write_is_whole(krffs_mount_t *mount, uint32_t grain, uint64_t at,
-                                const void *value, uint32_t size)
+static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at, const void *value, uint32_t size)
 {
     uint8_t old[16];
     const uint8_t *want = value;
@@ -198,10 +197,10 @@ static int krffs_write_is_whole(krffs_mount_t *mount, uint32_t grain, uint64_t a
     uint32_t last;
     uint32_t i;
 
-    if (grain == 0 || size <= 1 || size > sizeof(old)) {
+    if (mount->grain == 0 || size <= 1 || size > sizeof(old)) {
         return 1;
     }
-    if (base / grain == (base + size - 1) / grain) {
+    if (base / mount->grain == (base + size - 1) / mount->grain) {
         return 1;
     }
     if (mount->backend->read(mount->ctx, at, old, size) != 0) {
@@ -220,7 +219,7 @@ static int krffs_write_is_whole(krffs_mount_t *mount, uint32_t grain, uint64_t a
     if (first == size) {
         return 1;
     }
-    return (base + first) / grain == (base + last) / grain;
+    return (base + first) / mount->grain == (base + last) / mount->grain;
 }
 
 /**
@@ -237,7 +236,7 @@ static int krffs_put(krffs_mount_t *mount, uint64_t offset, uint32_t field, cons
 {
     uint64_t at = offset + field;
 
-    if (!krffs_write_is_whole(mount, mount->grain, at, value, size)) {
+    if (!krffs_write_is_whole(mount, at, value, size)) {
         klog(KLOG_WARN, "krffs", "refused: a field at %d would reach the medium in two pieces",
              (int)at);
         return -1;
@@ -1117,18 +1116,21 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
 }
 
 /**
- * Publish a merge only if its changed size bytes reach the disk together.
+ * Publish a merge only if its size reaches the disk whole.
+ * A disk root's size fits in 32 bits. All four low bytes must share one
+ * sector, since merges pending together can change different bytes.
  * Returns -1 if the nodes must stay separate or the write fails.
  */
 static int krffs_merge_size(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
-    uint32_t grain = mount == &krffs_root_mount ? krffs_root_merge_grain : mount->grain;
-    uint64_t at = offset + KRFFS_FIELD_SIZE;
+    uint32_t grain = krffs_root_merge_grain;
+    uint32_t at = (uint32_t)offset + KRFFS_FIELD_SIZE;
 
-    if (!krffs_write_is_whole(mount, grain, at, &size, (uint32_t)sizeof(size))) {
+    if (mount == &krffs_root_mount && grain != 0 &&
+        at / grain != (at + (uint32_t)sizeof(uint32_t) - 1) / grain) {
         return -1;
     }
-    return mount->backend->write(mount->ctx, at, &size, (uint32_t)sizeof(size));
+    return krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size);
 }
 
 /** Free a node and coalesce the free space as described in krffs.h. */
@@ -1588,10 +1590,8 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     new_id = krffs_calculate_djb_hash(name);
-    if (!krffs_write_is_whole(mount, mount->grain, node + KRFFS_FIELD_ID, &new_id,
-                              sizeof(new_id)) ||
-        !krffs_write_is_whole(mount, mount->grain, node + KRFFS_FIELD_PARENT, &parent_id,
-                              sizeof(parent_id))) {
+    if (!krffs_write_is_whole(mount, node + KRFFS_FIELD_ID, &new_id, sizeof(new_id)) ||
+        !krffs_write_is_whole(mount, node + KRFFS_FIELD_PARENT, &parent_id, sizeof(parent_id))) {
         klog(KLOG_WARN, "krffs",
              "rename: refused: a field of the node at %d would reach the medium in two pieces",
              (int)node);
