@@ -147,7 +147,7 @@ static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
     emitf(e, "BLC_MISC_CTL 0x%08x cpu_pin=PWM%u pch_input=PWM%u\n", mux, cpu + 1u, south + 1u);
     emitf(e, "UTIL_PIN_CTL 0x%08x pwm_output=%s", util,
           enabled(util_pwm && (ctl[cpu] & BLM_PWM_ENABLE)));
-    cpu_step = ctl[cpu] & BLM_CPU_PWM_GRANULARITY ? 8u : 128u;
+    cpu_step = (ctl[cpu] & BLM_CPU_PWM_GRANULARITY) ? 8u : 128u;
     cpu_clocks = (data[cpu] >> 16) * cpu_step;
     if (cpu_clocks != 0 && cpu_clock != 0) {
         emitf(e, " programmed_frequency=%u Hz", (cpu_clock + cpu_clocks / 2u) / cpu_clocks);
@@ -155,7 +155,7 @@ static void backlight_pwm(struct drm_i915_private *i915, struct emit *e)
         emit_s(e, " programmed_frequency=unavailable");
     }
     emitf(e, "\nBLC_PWM_PCH_CTL1 0x%08x %s override=%u polarity=%s\n", pch_ctl, enabled(pch_on),
-          (unsigned) override, pch_ctl & BLM_PCH_POLARITY ? "active-low" : "active-high");
+          (unsigned) override, (pch_ctl & BLM_PCH_POLARITY) ? "active-low" : "active-high");
     emitf(e, "BLC_PWM_PCH_CTL2 0x%08x period=%u pch_duty=%u", pch, pch_period, pch_duty);
     if (pch_clocks != 0) {
         emitf(e, " frequency=%u Hz", (pch_clock + pch_clocks / 2u) / pch_clocks);
@@ -184,7 +184,7 @@ static void fbc_status(struct drm_i915_private *i915, struct emit *e)
     uint32_t status = i915_read(&i915->hw, ILK_DPFC_STATUS2_A);
 
     emitf(e, "ILK_DPFC_CONTROL 0x%08x %s (%s)\n", ctl, enabled(ctl & DPFC_CTL_EN),
-          ctl & DPFC_CTL_EN ? "hardware enable set" : "Rach2 does not configure FBC");
+          (ctl & DPFC_CTL_EN) ? "hardware enable set" : "Rach2 does not configure FBC");
     emitf(e, "ILK_DPFC_STATUS2 0x%08x compressed_segments=%u\n", status,
           status & DPFC_COMP_SEG_MASK_IVB);
 }
