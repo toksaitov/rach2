@@ -1437,7 +1437,7 @@ static void boot_set(void *ctx, int level)
     boot_sets++;
 }
 
-static const struct backlight_ops boot_ops = {boot_get, boot_set, NULL};
+static const struct backlight_ops boot_ops = {boot_get, boot_set, NULL, NULL};
 
 /** The boot's probe, which backlight.c's init calls and no row does. */
 void intelbl_init(void)
@@ -1560,7 +1560,7 @@ static void marks_take(struct drm_i915_private *i915)
     }
 }
 
-static struct drm_i915_private *bound(void);
+static struct drm_i915_private *bound_i915(void);
 
 /** Note the marks of the GT's writes `chip_write` passes on: RC6 and RPS
  * turned off, RC6 asked for after it went off, and of each ring its status
@@ -1579,7 +1579,7 @@ static void note_gt_write(uint32_t reg, uint32_t value)
     if (reg == GEN6_RP_CONTROL && value == 0 && !mark.rps_off) {
         mark.rps_off = accesses;
     }
-    if (reg == GEN6_RP_CONTROL && bound() && !bound()->rps.lock.locked) {
+    if (reg == GEN6_RP_CONTROL && bound_i915() && !bound_i915()->rps.lock.locked) {
         mark.rp_unlocked = 1;
     }
     for (i = 0; i < 4; i++) {
@@ -1995,7 +1995,7 @@ static int32_t setcrtc(struct drm_i915_private *i915, struct drm_connector *conn
 static struct drm_gem_object *fw_obj; /* the firmware's framebuffer's object */
 
 /** The driver's device of the registered card, or NULL. */
-static struct drm_i915_private *bound(void)
+static struct drm_i915_private *bound_i915(void)
 {
     return card() ? to_i915(card()) : NULL;
 }
@@ -2029,12 +2029,12 @@ static void row_boot(void)
     CHECK(backlight_register("intel_backlight", 937, &boot_ops, NULL) == 0,
           "the boot registers intel_backlight");
     model_wait = sleep_frames;
-    CHECK(i915_driver_bind(&model.pci, &chip_hw) == 0 && (i915 = bound()) != NULL,
+    CHECK(i915_driver_bind(&model.pci, &chip_hw) == 0 && (i915 = bound_i915()) != NULL,
           "boot: the driver binds");
-    if (!bound()) {
+    if (!bound_i915()) {
         return;
     }
-    i915 = bound();
+    i915 = bound_i915();
     CHECK(logged("registered: i915 1.6.0") && logged("rings: rcs0, bcs0, vcs0 and vecs0 started") &&
               logged("display: pipe A adopted: 1366x768 in 1366x768@60") &&
               i915->display.crtc[0].base.state->active && i915->ggtt.nkept == 1,
@@ -2060,7 +2060,7 @@ static void row_boot(void)
  * that are none or no function of the driver's; none reaches the chip. */
 static void row_refusals(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     uint32_t n = accesses;
 
     CHECK(driver_write("bind", CHIP "\n") == -EBUSY, "refusals: bind of a bound function: EBUSY");
@@ -2073,7 +2073,7 @@ static void row_refusals(void)
     CHECK(driver_write("bind", "0000:00:1f.0\n") == -ENODEV &&
               driver_write("bind", "i915\n") == -ENODEV,
           "refusals: bind of a function that is not there or of no name: ENODEV");
-    CHECK(accesses == n && bound() == i915 && sys_bound() && resets == 0,
+    CHECK(accesses == n && bound_i915() == i915 && sys_bound() && resets == 0,
           "refusals: the chip untouched, the driver still bound");
 }
 
@@ -2081,7 +2081,7 @@ static void row_refusals(void)
  * with the display as it was and the console told to look again. */
 static void row_held(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
 
     console_clear();
     marks_clear();
@@ -2089,7 +2089,7 @@ static void row_held(void)
     i915->gem.aperture.win[0].users = 1;
     CHECK(driver_write("unbind", CHIP "\n") == -EBUSY, "held: unbind: EBUSY");
     i915->gem.aperture.win[0].users = 0;
-    CHECK(bound() == i915 && sys_bound() && display_lit() && !mark.blc_off && !mark.gdrst &&
+    CHECK(bound_i915() == i915 && sys_bound() && display_lit() && !mark.blc_off && !mark.gdrst &&
               i915->display.crtc[0].base.state->active && strcmp(console_calls, "h") == 0,
           "held: the driver bound, the panel lit, the GPU not reset, the console told");
     CHECK(!mark.rc6_off && !mark.rps_off && i915->rc6.enabled && i915->rps.enabled,
@@ -2185,7 +2185,7 @@ static int cut_off(struct drm_device *dev)
  */
 static void row_release(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     struct drm_device *held = card();
     uint32_t n;
     int sets, before = resets;
@@ -2303,7 +2303,7 @@ static void row_reset_fails(void)
     CHECK(driver_write("bind", CHIP "\n") == -ETIMEDOUT, "reset fails: bind: the reset's error");
     reset_error = 0;
     CHECK(resets == before + 1 && accesses == n && probe_maps == 0 && owner == NULL &&
-              !sys_bound() && bound() == NULL && (reg(DEIER) & DE_MASTER_IRQ_CONTROL) &&
+              !sys_bound() && bound_i915() == NULL && (reg(DEIER) & DE_MASTER_IRQ_CONTROL) &&
               logged("handoff: " CHIP ": not reset: error"),
           "reset fails: no access, no owner, nothing bound, logged");
 }
@@ -2319,7 +2319,7 @@ static void row_bind_fails(void)
     register_error = -ENOSPC;
     CHECK(driver_write("bind", CHIP "\n") == -ENOSPC, "bind fails: bind: the registration's error");
     CHECK(resets == before + 1 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
-              vectors_live == 0 && interrupts_off() && !sys_bound() && bound() == NULL &&
+              vectors_live == 0 && interrupts_off() && !sys_bound() && bound_i915() == NULL &&
               releases == r + 1 && pages_live == 0 && logged("handoff: " CHIP ": not bound: error"),
           "bind fails: no owner, bus mastering, the message and interrupts off, the record freed");
 }
@@ -2338,7 +2338,7 @@ static void row_link_fails(void)
     CHECK(link_error == 0 && registrations == tried && card() == NULL && bind_events == binds,
           "link fails: no card registered and no bind uevent");
     CHECK(resets == before + 1 && owner == NULL && !(command() & PCI_CMD_BUS_MASTER) && !msi_on() &&
-              vectors_live == 0 && interrupts_off() && !sys_bound() && bound() == NULL &&
+              vectors_live == 0 && interrupts_off() && !sys_bound() && bound_i915() == NULL &&
               releases == r + 1 && pages_live == 0 &&
               logged("handoff: refused: driver link not added: error"),
           "link fails: no owner, bus mastering, the message and interrupts off, the record freed");
@@ -2361,7 +2361,7 @@ static void row_bring_up(const char *name)
     console_clear();
     marks_clear();
     CHECK(driver_write("bind", CHIP "\n") == 13, name);
-    i915 = bound();
+    i915 = bound_i915();
     CHECK(i915 != NULL, "bring-up: a device registered");
     if (!i915) {
         return;
@@ -2405,7 +2405,7 @@ static uint32_t lit_fb;                   /* and its framebuffer */
  */
 static void row_mode_set(int k)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     struct drm_mode_modeinfo mode;
     uint64_t count;
     uint32_t fb;
@@ -2447,7 +2447,7 @@ static void row_mode_set(int k)
  * master that waited for the commit lock makes it. */
 static void relight(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
 
     if (i915) {
         (void)setcrtc(i915, &i915->display.connector, &lit_mode, lit_fb);
@@ -2465,7 +2465,7 @@ static void row_release_lit(int k)
     int r = releases, unplugs = request_unplugs, before = resets;
 
     console_clear();
-    marks_take(bound());
+    marks_take(bound_i915());
     lock_waiter = relight;
     CHECK(driver_write("unbind", CHIP "\n") == 13, "release, lit: unbind taken");
     CHECK(down_in_order() && request_unplugs == unplugs + 1 && released(),
@@ -2498,7 +2498,7 @@ static void row_release_lit(int k)
  */
 static void row_held_late(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     int before = resets;
 
     if (!i915) {
@@ -2514,7 +2514,7 @@ static void row_held_late(void)
               !mark.gdrst && i915->rc6.enabled && i915->rps.enabled,
           "held late: RC6 and RPS off before the commit and on again after the refusal, the GPU "
           "not reset");
-    CHECK(bound() == i915 && sys_bound() && display_off() && strcmp(console_calls, "h") == 0 &&
+    CHECK(bound_i915() == i915 && sys_bound() && display_off() && strcmp(console_calls, "h") == 0 &&
               logged("handoff: " CHIP ": not released: error"),
           "held late: the driver bound, the display off, the console told");
     CHECK(resets == before && !pci_mark.bm_off && owner,
@@ -2528,7 +2528,7 @@ static void row_held_late(void)
  */
 static void row_stuck(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     int before = resets, cur;
 
     if (!i915) {
@@ -2545,7 +2545,7 @@ static void row_stuck(void)
               i915->rps.last_adj == -4,
           "stuck: RC6 and RPS on again after the failed release, RPS's frequency to start from "
           "and its last step as the park left them");
-    CHECK(bound() == i915 && sys_bound() && owner && msi_on() && vectors_live == 1 &&
+    CHECK(bound_i915() == i915 && sys_bound() && owner && msi_on() && vectors_live == 1 &&
               (command() & PCI_CMD_BUS_MASTER) && i915 && i915->gt.wedged && display_off() &&
               strcmp(console_calls, "h") == 0 && logged("handoff: " CHIP ": not released: error"),
           "stuck: the driver bound, the GPU wedged, the display off, the console told");
@@ -2564,7 +2564,7 @@ static uint32_t kept_hws_ggtt, kept_hws_pte; /* rcs0's kept status page's offset
 
 static void row_kept(int k)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     struct drm_device *held = fa_dev;
     int r = releases, before = resets;
     char line[128];
@@ -2630,10 +2630,10 @@ static void row_bring_up_unreset(void)
     log_text[0] = 0;
     console_clear();
     reset_none = 1;
-    CHECK(driver_write("bind", CHIP "\n") == 13 && (i915 = bound()) != NULL,
+    CHECK(driver_write("bind", CHIP "\n") == 13 && (i915 = bound_i915()) != NULL,
           "unreset: bind taken with no reset method");
     reset_none = 0;
-    if (!(i915 = bound())) {
+    if (!(i915 = bound_i915())) {
         return;
     }
     for (i = 0; i < i915->ggtt.nkept; i++) {
@@ -2665,7 +2665,7 @@ static void row_bring_up_unreset(void)
  */
 static void row_no_reset(void)
 {
-    struct drm_i915_private *i915 = bound();
+    struct drm_i915_private *i915 = bound_i915();
     int r = releases, before = resets;
     char line[128];
 
@@ -2721,7 +2721,7 @@ int main(void)
     model_start("i915-handoff-test");
     base = allocations;
     row_boot();
-    if (bound()) {
+    if (bound_i915()) {
         row_refusals();
         row_held();
         row_release();
