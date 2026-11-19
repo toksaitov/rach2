@@ -82,7 +82,8 @@ An address of the machine's own is still reached through loopback.
 A TCP connection takes its source address and MTU from that route; an
 accepted connection inherits its listener's setting, and setting it on a
 connected socket moves the connection to that interface, its segments
-then matched by their addresses without IPv6 scopes, as on Linux.
+then matched by their addresses without IPv6 scopes, and its link-scoped
+addresses reported with that interface's scope, as on Linux.
 A bound TCP socket receives only segments that came by its interface or
 through loopback, and its connect to an IPv6 address whose scope names
 another interface fails with
@@ -408,6 +409,11 @@ was given a socket that is not an AF_INET6 raw one.
 .Dv ICMP6_FILTER
 was given a raw socket of
 .Dv IPPROTO_RAW .
+.It Bq Er EPERM
+An unprivileged caller set
+.Dv SO_BINDTODEVICE
+to another interface, or none, on a socket already bound to one, as on
+Linux.
 .It Bq Er EPROTO
 A join or a leave was given a stream socket.
 .It Bq Er ENOTSOCK
