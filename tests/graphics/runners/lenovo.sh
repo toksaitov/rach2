@@ -45,11 +45,13 @@
 # found it, running when it ran and otherwise ended. LENOVO_USER, LENOVO_RUNTIME
 # and LENOVO_DISPLAY name another, such as Debian's on the same machine;
 # LENOVO_IGT, the IGT stage's directory, LENOVO_CTS, VK-GL-CTS's, and
-# LENOVO_WEBGL, the WebGL suite's sdk/tests, other copies of those. A run's
-# environment is guest-env.sh's, with Mesa's shader cache emptied first. It
-# prints the runner's lines and the judge's, for igt the end of IGT's own output
-# for each subtest worse than the reference, since the case keeps only what it
-# prints, and exits 0 when both pass.
+# LENOVO_WEBGL, the WebGL suite's sdk/tests, other copies of those;
+# LENOVO_THREADS, when not empty, gives probe.sh -t, its threads' snapshots,
+# which the gate's own runs leave out. A run's environment is guest-env.sh's,
+# with Mesa's shader cache emptied first. It prints the runner's lines and
+# the judge's, for igt the end of IGT's own output for each subtest worse
+# than the reference, since the case keeps only what it prints, and exits 0
+# when both pass.
 set -eu
 
 here=$(pwd)
@@ -330,7 +332,7 @@ case $kind in
                 ;;
             probe)
                 mixer_low
-                run user performance probe.sh -b "$which" -o "$work/out" || status=$?
+                run user performance probe.sh -b "$which" ${LENOVO_THREADS:+-t} -o "$work/out" || status=$?
                 mixer_low
                 ;;
             *) usage ;;
