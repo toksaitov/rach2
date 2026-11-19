@@ -100,9 +100,10 @@ static void ptrace_unlink_gone(process_t *self, uint32_t tpid)
  * signal state's lock only while the thread is still traced by that
  * tracer, which a detach clears under the same lock before it looks for a
  * stop to end (`ptrace_detach`), so that a stop either is seen and ended
- * there or is not made. It takes the big lock for a tracer that has gone,
- * whose link it clears, and for ids to translate outside the first PID and
- * user namespaces.
+ * there or is not made. A pending SIGKILL prevents publication, as in
+ * Linux's ptrace_stop (kernel/signal.c:2140-2147). It takes the big lock
+ * for a tracer that has gone, whose link it clears, and for ids to
+ * translate outside the first PID and user namespaces.
  */
 static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
 {
@@ -131,6 +132,12 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
         signal_state_unlock(flags);
         kirq_restore(irq);
         sig = (int)((status >> 8) & 0x7F);
+        goto out;
+    }
+    if (kill_pending(self)) {
+        signal_state_unlock(flags);
+        kirq_restore(irq);
+        sig = 0;
         goto out;
     }
     self->ptrace &= ~PT_LISTEN;
