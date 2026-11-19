@@ -271,29 +271,50 @@ static int deliver(struct watch *w, uint32_t mask, uint32_t cookie, const char *
     return 0;
 }
 
-void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask)
+/**
+ * `inotify_file` for an event of a file whose name its description had,
+ * `unlinked` nonzero once that name is gone: a watch set with
+ * IN_EXCL_UNLINK hears nothing of it then, as Linux's
+ * `fsnotify_handle_inode_event` drops a path event of an unlinked dentry
+ * for such a mark (fs/notify/fsnotify.c).
+ */
+static void file_event(struct vfs_mount *mnt, uint64_t ino, uint32_t mask, int unlinked)
 {
     struct watch *w, *next;
 
     for (w = watches; w; w = next) {
         next = w->next;
-        if (w->mnt == vfs_mount_base(mnt) && w->ino == ino) {
+        if (w->mnt == vfs_mount_base(mnt) && w->ino == ino &&
+            !(unlinked && (w->mask & IN_EXCL_UNLINK))) {
             (void)deliver(w, mask | (w->isdir ? IN_ISDIR : 0u), 0, NULL);
         }
     }
 }
 
-void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, uint32_t mask,
-                   uint32_t cookie)
+/** `inotify_child` with `unlinked` as `file_event` takes it. */
+static void child_event(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, uint32_t mask,
+                        uint32_t cookie, int unlinked)
 {
     struct watch *w, *next;
 
     for (w = watches; w; w = next) {
         next = w->next;
-        if (w->mnt == vfs_mount_base(mnt) && w->ino == dir_ino && w->isdir) {
+        if (w->mnt == vfs_mount_base(mnt) && w->ino == dir_ino && w->isdir &&
+            !(unlinked && (w->mask & IN_EXCL_UNLINK))) {
             (void)deliver(w, mask, cookie, name);
         }
     }
+}
+
+void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask)
+{
+    file_event(mnt, ino, mask, 0);
+}
+
+void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, uint32_t mask,
+                   uint32_t cookie)
+{
+    child_event(mnt, dir_ino, name, mask, cookie, 0);
 }
 
 int inotify_mount_watched(const struct vfs_mount *mnt)
@@ -336,18 +357,35 @@ int inotify_desc_dir(const struct open_file *ofd, uint64_t *dir_ino, const char 
     return -1;
 }
 
+/**
+ * Whether the name the open file of `ofd` was opened by is gone, Linux's
+ * `d_unlinked`: what its name record says, or, without one, whether the
+ * file has no link left.
+ */
+static int desc_unlinked(const struct open_file *ofd)
+{
+    struct vfs_stat st;
+
+    if (ofd->name) {
+        return vfs_name_deleted(ofd->name);
+    }
+    return ofd->vnode && vfs_getattr(ofd->vmnt, ofd->vnode, &st) == 0 && st.nlink == 0;
+}
+
 void inotify_desc(struct open_file *ofd, uint32_t mask)
 {
     const char *leaf;
     uint64_t dir_ino;
+    int unlinked;
 
     if (!ofd || !inotify_mount_watched(ofd->vmnt)) {
         return;
     }
-    inotify_file(ofd->vmnt, ofd->ino, mask);
+    unlinked = desc_unlinked(ofd);
+    file_event(ofd->vmnt, ofd->ino, mask, unlinked);
     if (inotify_desc_dir(ofd, &dir_ino, &leaf) == 0) {
-        inotify_child(ofd->vmnt, dir_ino, leaf,
-                      mask | ((ofd->watch_flags & OFD_WATCH_DIR) ? IN_ISDIR : 0u), 0);
+        child_event(ofd->vmnt, dir_ino, leaf,
+                    mask | ((ofd->watch_flags & OFD_WATCH_DIR) ? IN_ISDIR : 0u), 0, unlinked);
     }
 }
 

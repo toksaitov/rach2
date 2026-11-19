@@ -86,8 +86,9 @@ void inotify_child(struct vfs_mount *mnt, uint64_t dir_ino, const char *name, ui
 
 /** An event of an open file: to its own watches, and to those of its
  * directory, under its name there (`inotify_desc_dir`); nothing while there
- * is no watch, or for a description that is not of a file of a mount.
- * Under the big lock. */
+ * is no watch, or for a description that is not of a file of a mount. Once
+ * the name it was opened by is gone, a watch set with IN_EXCL_UNLINK hears
+ * nothing, as on Linux. Under the big lock. */
 void inotify_desc(struct open_file *ofd, uint32_t mask);
 
 /**

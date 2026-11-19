@@ -54,7 +54,9 @@ A watch with
 .Dv IN_ONESHOT
 goes after its first event.
 .Dv IN_EXCL_UNLINK
-is accepted and changes nothing.
+keeps from the watch the opens, reads, writes and closes
+a descriptor gives of a file once the name it was opened by has been removed;
+a change of attributes through the descriptor is still reported, as on Linux.
 Descriptors count up from 1.
 .Fn inotify_rm_watch ,
 number 293 on i386 and 255 on x86-64, removes the watch
