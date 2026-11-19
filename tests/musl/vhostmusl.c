@@ -23,8 +23,9 @@
  * ring used. A wait is a read of a call eventfd, which the kernel signals.
  * The kernel signals the receive ring's call once for each frame, after
  * its used index, so the program counts the calls it reads and, once it
- * has found a frame, waits until they cover every used entry it has seen:
- * a frame passes only with its own call, whichever the program sees first.
+ * has found a frame, reads the call until the calls cover the used index
+ * read after them: one missing call would keep them short of it, so a
+ * frame passes only with its own call, whichever the program sees first.
  *
  * Prints `VHOSTMUSL OK` and exits 0 on success, and prints
  * `VHOSTMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -344,12 +345,15 @@ static int take_call(int call)
 
 /**
  * Wait for the frame `match` accepts with `text` on the receive ring,
- * reading the ring's call `call` while it has not come, and then for the
- * calls of every used entry seen, since the kernel signals the call once
- * for each frame it puts on the ring, after its used index: so the frame
- * and its own call are both required, in either order, and no call of an
- * earlier frame stands in for it. The buffer's offset; -1 after NUM calls
- * without the frame; -2 when a read of the call fails.
+ * reading the ring's call `call` while it has not come, and then until the
+ * calls read cover the used index read after them. The kernel signals the
+ * call once for each frame it puts on the ring, after its used index, so
+ * the calls signalled never outnumber the used entries published; a frame
+ * whose call is missing keeps them one short of every used index read
+ * later, whatever frames follow it. Calls read that reach a used index
+ * read after them therefore include the frame's own, and no call of
+ * another frame, earlier or later, stands in for it. The buffer's offset;
+ * -1 after NUM calls without the frame; -2 when a read of the call fails.
  */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
@@ -358,12 +362,15 @@ static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const
 
     for (i = 0; i <= NUM; i++) {
         if (find_rx(match, text, &at)) {
-            while (rx_calls < (uint64_t)rx_seen) {
+            for (;;) {
+                __sync_synchronize();
+                if (rx_calls >= get16(RX_USED + 2)) {
+                    return at;
+                }
                 if (take_call(call) != 0) {
                     return -2;
                 }
             }
-            return at;
         }
         if (take_call(call) != 0) {
             return -2;
