@@ -57,6 +57,15 @@ static const char *const names[SOUND_MIXER_NRDEVICES] = {
  * 0666, and stop the volume keys and init's saves. */
 #define MIXER_LOCK "/var/run/mixer.lock"
 
+/* Every command also locks /dev/mixer itself, which every account can, so
+ * that two ordinary users' `vol +5` at once raise the volume twice. A user
+ * waits for the lock; root, which holds MIXER_LOCK, tries it every
+ * DEVICE_TRY_MS for DEVICE_TRIES tries, a second, and then goes on without
+ * it, so that a user who holds it stalls a volume key for a second at
+ * most. */
+#define DEVICE_TRIES  100
+#define DEVICE_TRY_MS 10
+
 /** Pack the channels `left` and `right`, each 0 to 100, as OSS's level. */
 static int pack(int left, int right)
 {
@@ -387,10 +396,33 @@ static int run(int fd, int argc, char **argv, int ch)
     return status;
 }
 
-/** Run the command the arguments name, under `MIXER_LOCK`, shared to read
- *  and exclusive to change; a user, who cannot open the lock, and so cannot
- *  change the record either, runs unlocked. Exits 0, 1 on a failure and 2
- *  on a usage error. */
+/** Take `lock`, LOCK_SH or LOCK_EX, on the device open at `fd`: wait for
+ *  it, or for `root`, try it for a second and go on without it. 0, or -1
+ *  with errno for a failure but root's last busy try. */
+static int lock_device(int fd, int lock, int root)
+{
+    int i;
+
+    if (!root) {
+        return flock(fd, lock);
+    }
+    for (i = 0; i < DEVICE_TRIES; i++) {
+        if (flock(fd, lock | LOCK_NB) == 0) {
+            return 0;
+        }
+        if (errno != EWOULDBLOCK) {
+            return -1;
+        }
+        usleep(DEVICE_TRY_MS * 1000);
+    }
+    return 0;
+}
+
+/** Run the command the arguments name, under `MIXER_LOCK` and a lock on
+ *  /dev/mixer, each shared to read and exclusive to change; a user, who
+ *  cannot open `MIXER_LOCK`, and so cannot change the record either,
+ *  takes only the device's. Exits 0, 1 on a failure and 2 on a usage
+ *  error. */
 int main(int argc, char **argv)
 {
     int fd, lockfd, lock, status, ch = parse(argc, argv);
@@ -409,6 +441,14 @@ int main(int argc, char **argv)
     if (lockfd >= 0 && flock(lockfd, lock) != 0) {
         perror("mixer: " MIXER_LOCK);
         close(lockfd);
+        close(fd);
+        return 1;
+    }
+    if (lock_device(fd, lock, lockfd >= 0) != 0) {
+        perror("mixer: " MIXER_DEVICE);
+        if (lockfd >= 0) {
+            close(lockfd);
+        }
         close(fd);
         return 1;
     }
