@@ -414,10 +414,21 @@ void switch_context(process_t *old, process_t *next)
     }
 }
 
-/** One processor: the run queues' lock is the interrupt flag alone. */
+/* What another processor does with the run queues' lock just before the
+ * next take of it, once, or NULL: a row's model of a processor that took
+ * the lock first. */
+static void (*sched_lock_first)(void);
+
+/** One processor: the run queues' lock is the interrupt flag alone, after
+ * the work of `sched_lock_first`. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
-    (void)lock;
+    void (*first)(void) = lock == &sched_lock ? sched_lock_first : NULL;
+
+    if (first) {
+        sched_lock_first = NULL;
+        first();
+    }
     return kirq_save();
 }
 
@@ -2411,6 +2422,122 @@ static void balance_once(void)
     irq_flags = 0x200;
 }
 
+/** Wake process 2, SCHED_FIFO 99 and pinned to processor 1, and select
+ * there, as processor 1 does when it takes the run queues' lock first. */
+static void wake_on_1(void)
+{
+    unsigned int me = host_cpu;
+
+    host_cpu = 1;
+    sched_make_ready(&procs[2]);
+    schedule();
+    host_cpu = me;
+}
+
+/** Block process 2, running on processor 1, and select there, as that
+ * processor does when it takes the run queues' lock first. */
+static void block_on_1(void)
+{
+    unsigned int me = host_cpu;
+
+    host_cpu = 1;
+    procs[2].state = PROC_BLOCKED;
+    schedule();
+    host_cpu = me;
+}
+
+/** Whether `p` is on exactly the queues of its class, by the scheduler's
+ * own counts: an ordinary thread on its fair queue and off the real-time
+ * lists, a real-time one off the fair queue, and on its list unless it
+ * runs. */
+static int class_queues_agree(const process_t *p)
+{
+    if (sched_priority(p) == 0) {
+        return p->se.on_rq && !p->ready_linked;
+    }
+    return !p->se.on_rq && fair_rqs[p->cpu].curr != p &&
+           (cpu_table[p->cpu].current == p || p->ready_linked);
+}
+
+/**
+ * A change of policy moves the thread between the classes' queues under the
+ * run queues' lock with the change itself (`sched_set_priority`), as
+ * Linux's __sched_setscheduler does (kernel/sched/syscalls.c:715-758):
+ * processor 1 runs an ordinary thread, which processor 0 makes SCHED_FIFO
+ * 50 just as processor 1 switches to a SCHED_FIFO 99 thread woken there,
+ * and the thread is then on the real-time list alone, not on its fair
+ * queue as well; made ordinary again as the 99 blocks, it is on its fair
+ * queue alone. A queued thread that enters or leaves SCHED_IDLE,
+ * running or queued, leaves its fair queue under its old policy and comes
+ * back under its new one, so that the counts of SCHED_IDLE threads stay
+ * right, through a real-time policy and back and down to none once the
+ * threads block, as Linux dequeues the task before its policy changes.
+ */
+static void policy_rows(void)
+{
+    struct cfs_rq *cfs;
+    unsigned int i;
+
+    setup();
+    for (i = 1; i < 7; i++) {
+        block(&procs[i], PROC_BLOCKED);
+    }
+    cpu_table[1].online = 1;
+    host_cpu = 1;
+    sched_adopt(&procs[1]);
+    host_cpu = 0;
+    procs[1].need_resched = 0;
+    CHECK(fair_rqs[1].curr == &procs[1] && procs[1].se.on_rq,
+          "processor 1 runs an ordinary thread as its fair queue's current one");
+    procs[2].cpu = 1;
+    procs[2].affinity = 2;
+    procs[2].sched_policy = SCHED_FIFO;
+    procs[2].rt_priority = 99;
+    sched_lock_first = wake_on_1;
+    sched_set_priority(&procs[1], SCHED_FIFO, 50, 0, 0);
+    CHECK(sched_lock_first == NULL && cpu_table[1].current == &procs[2],
+          "processor 1 switched to the FIFO 99 thread first");
+    CHECK(class_queues_agree(&procs[1]) && fair_rqs[1].cfs.h_nr_queued == 0,
+          "a thread made SCHED_FIFO as its processor switches away is on no fair queue");
+    sched_lock_first = block_on_1;
+    sched_set_priority(&procs[1], SCHED_OTHER, 0, 0, 0);
+    CHECK(sched_lock_first == NULL && procs[2].state == PROC_BLOCKED,
+          "processor 1 switched away from the FIFO 99 thread first");
+    CHECK(class_queues_agree(&procs[1]) && fair_rqs[1].cfs.h_nr_queued == 1,
+          "made ordinary again as its processor selects, it is on its fair queue alone");
+    cpu_table[1].online = 0;
+    init_sched();
+
+    setup();
+    cfs = &fair_rqs[0].cfs;
+    sched_set_priority(&procs[2], SCHED_IDLE, 0, 0, 0);
+    CHECK(cfs->idle_nr_running == 1 && cfs->idle_h_nr_running == 1,
+          "a queued thread made SCHED_IDLE counts as one");
+    sched_set_priority(&procs[0], SCHED_IDLE, 0, 0, 0);
+    CHECK(cfs->idle_nr_running == 2 && cfs->idle_h_nr_running == 2 && fair_rqs[0].curr == &procs[0],
+          "the running thread made SCHED_IDLE counts too and stays current");
+    sched_set_priority(&procs[0], SCHED_OTHER, 0, 0, 0);
+    CHECK(cfs->idle_nr_running == 1 && cfs->idle_h_nr_running == 1 && fair_rqs[0].curr == &procs[0],
+          "made ordinary again, it counts no more");
+    sched_set_priority(&procs[2], SCHED_FIFO, 10, 0, 0);
+    CHECK(cfs->idle_nr_running == 0 && cfs->idle_h_nr_running == 0 && class_queues_agree(&procs[2]),
+          "a SCHED_IDLE thread made SCHED_FIFO leaves the counts");
+    sched_set_priority(&procs[2], SCHED_IDLE, 0, 0, 0);
+    CHECK(cfs->idle_nr_running == 1 && cfs->idle_h_nr_running == 1 && class_queues_agree(&procs[2]),
+          "and comes back as SCHED_IDLE counted once");
+    sched_set_priority(&procs[0], SCHED_IDLE, 0, 0, 0);
+    schedule();
+    sched_set_priority(&procs[0], SCHED_BATCH, 0, 0, 0);
+    for (i = 0; i < 7; i++) {
+        if (&procs[i] != current_proc) {
+            block(&procs[i], PROC_BLOCKED);
+        }
+    }
+    CHECK(cfs->idle_nr_running == 0 && cfs->idle_h_nr_running == 0,
+          "the counts fall to none as the threads block");
+    init_sched();
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -2426,6 +2553,11 @@ int main(int argc, char **argv)
         nohz_dirty_poll();
         nohz_absorbed_service();
         dprintf(1, "sched-hosttest: idle: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    if (argc == 2 && __builtin_strcmp(argv[1], "--policy-only") == 0) {
+        policy_rows();
+        dprintf(1, "sched-hosttest: policy: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
     if (argc == 2 && __builtin_strcmp(argv[1], "--affinity-only") == 0) {
@@ -2467,6 +2599,7 @@ int main(int argc, char **argv)
     nohz_absorbed_service();
     idle_kicked();
     balance_once();
+    policy_rows();
     if (failures) {
         return 1;
     }
@@ -2478,7 +2611,8 @@ int main(int argc, char **argv)
         "load phase, "
         "idle machine, ready lists, wake twice, migration, wake preempt, wake place core, "
         "run delay, tick slice, tick rr, "
-        "tick rt, rt run time, idle cancel drains, idle cancel ready, idle kicked, balance once\n");
+        "tick rt, rt run time, idle cancel drains, idle cancel ready, idle kicked, balance once, "
+        "policy\n");
     return 0;
 }
 
