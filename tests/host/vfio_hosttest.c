@@ -19,9 +19,10 @@
  * offers virtio-pci a function vfio-pci does not match; the group and
  * container ioctls; Type1's checks, mappings and capabilities;
  * the device's regions and their information; the configuration space as
- * the owner sees it; the line, MSI and MSI-X into eventfds; and the reset
- * at the open, at VFIO_DEVICE_RESET and at the release, with every vector
- * and eventfd given back.
+ * the owner sees it, the power state the owner writes among it; the line,
+ * MSI and MSI-X into eventfds; and the reset at the open, at
+ * VFIO_DEVICE_RESET and at the release, which puts the device in D0 first,
+ * with every vector and eventfd given back.
  */
 
 #include "vfio/vfio.h"
@@ -267,7 +268,12 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
 /** Fill `out` from the model's function `m`. */
 static void fill(const struct fn *m, pci_device_t *out)
 {
+    int i;
+
     k_memset(out, 0, sizeof(*out));
+    for (i = 0; i < 6; i++) {
+        out->bar[i] = get32(m->cfg + 0x10 + 4 * i);
+    }
     out->vendor_id = (uint16_t)(m->cfg[0] | m->cfg[1] << 8);
     out->device_id = (uint16_t)(m->cfg[2] | m->cfg[3] << 8);
     out->class_code = m->cfg[0x0B];
@@ -323,6 +329,38 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
     r->end = r->start + m->barsz[i] - 1u;
     r->flags = ((v & 1u) ? (v & 3u) | PCI_IORESOURCE_IO : (v & 0xFu) | PCI_IORESOURCE_MEM) |
                PCI_IORESOURCE_SIZEALIGN;
+}
+
+/** The function's power state, or -1 with no power management. */
+int pci_power_state(const pci_device_t *dev)
+{
+    const struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+    uint8_t pm = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PM);
+
+    return pm != 0 ? m->cfg[pm + 4] & 3 : -1;
+}
+
+/** A change of power state as a function takes it: from D3hot to D0 with
+ * No_Soft_Reset clear, its command word and BARs come back cleared. */
+int pci_set_power_state(const pci_device_t *dev, int state)
+{
+    struct fn *m = fn_at(dev->bus, dev->device, dev->function);
+    uint8_t pm = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_PM);
+    int i, was;
+
+    if (pm == 0) {
+        return -1;
+    }
+    was = m->cfg[pm + 4] & 3;
+    m->cfg[pm + 4] = (uint8_t)((m->cfg[pm + 4] & ~3) | (state & 3));
+    if (was == PCI_D3HOT && state == PCI_D0 && !(m->cfg[pm + 4] & 0x08)) {
+        put16(m->cfg + 4, 0);
+        for (i = 0; i < 6; i++) {
+            m->cfg[0x10 + 4 * i] &= (uint8_t)((m->cfg[0x10 + 4 * i] & 1) ? 3 : 0xF);
+            k_memset(m->cfg + 0x11 + 4 * i, 0, 3);
+        }
+    }
+    return 0;
 }
 
 uint64_t pci_bar_address64(const pci_device_t *dev, int i)
@@ -1698,6 +1736,42 @@ static void map_rows(void)
     CHECK(fds[device].ops->mmap(&fds[device], &vma) == -EINVAL, "nor past a BAR's end");
 }
 
+/** The power state, which the owner writes and VFIO carries out. */
+static void power_rows(void)
+{
+    struct fn *m = &fns[1];
+    struct vfio_device *d = vdev("0000:00:02.0");
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uintptr_t phys = 0;
+    uint16_t w = 0x0003;
+    uint32_t v;
+    unsigned int was = slept;
+    int z = zaps;
+
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 3 && zaps == z + 1 &&
+              slept == was + PCI_PM_D3HOT_WAIT,
+          "a write of D3hot puts the function there after Linux's wait, the BARs taken from "
+          "the mappings");
+    CHECK(pread_at(device, pmcsr, &w, 2) == 2 && (w & 3) == 3, "the owner reads D3hot back");
+    CHECK(mapped_ops->page(d, (2u << 28) + 1, &phys) == -1 && pread_at(device, 0, &v, 4) == -EIO,
+          "a memory BAR is not reached in D3hot");
+    w = 0;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 &&
+              get32(m->cfg + 0x18) == 0xE0000004u && (m->cfg[4] & 0x06) == 0x06,
+          "back in D0, a function without No_Soft_Reset has its state written back");
+    CHECK(mapped_ops->page(d, (2u << 28) + 1, &phys) == 0 && phys == 0xE0001000u &&
+              pread_at(device, 0, &v, 4) == 4,
+          "and its BARs are reached again");
+    m->cfg[0xD4] = 0x0B; /* No_Soft_Reset, in D3hot behind VFIO's back */
+    put32(m->cfg + 0x18, 0x00000004u);
+    d->pm_restore = 0;
+    vfio_device_power(d, PCI_D0);
+    CHECK((m->cfg[0xD4] & 3) == 0 && get32(m->cfg + 0x18) == 0xE0000004u,
+          "D0 with no state kept writes back the BARs the bus's walk found");
+    m->cfg[0xD4] = 0;
+    d->pm_restore = 1;
+}
+
 /* ---- interrupts ---- */
 
 /** VFIO_DEVICE_GET_IRQ_INFO. */
@@ -1889,12 +1963,15 @@ static void release_rows(void)
     struct vfio_iommu_type1_dma_map map = {sizeof(map), 3, 0x10000, 0x100000, 0x4000};
     struct vfio_device *d = vdev("0000:00:02.0");
     int32_t fd = 1106;
+    uint16_t d3 = 0x0003; /* the power state D3hot */
 
     CHECK(set_irqs(device, VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER,
                    VFIO_PCI_REQ_IRQ_INDEX, 0, 1, &fd) == 0 &&
               evs[6].refs == 1,
           "the request eventfd is kept, its descriptor above a byte read whole");
     fns[1].cfg[0x0C] = 0x77;
+    CHECK(pwrite_at(device, (7ull << 40) + 0xD4, &d3, 2) == 2 && (fns[1].cfg[0xD4] & 3) == 3,
+          "the owner leaves the function in D3hot");
     closefd(device);
     CHECK(d->refs == 1 && fns[1].resets == 2, "the mapping holds the device past its close");
     CHECK(ioc(group0, VFIO_GROUP_UNSET_CONTAINER, 0) == -EBUSY,
@@ -1902,6 +1979,8 @@ static void release_rows(void)
     mapped_ops->put(d);
     CHECK(d->refs == 0 && fns[1].resets == 3 && fns[1].cfg[0x0C] == 0 && evs[6].refs == 0,
           "the last reference resets the device and puts its state back");
+    CHECK((fns[1].cfg[0xD4] & 3) == 0 && get32(fns[1].cfg + 0x18) == 0xE0000004u,
+          "in D0 first, as Linux's vfio_pci_core_disable");
     reaps = 0;
     pin_hook = unset_last_group;
     CHECK(ioc(container, VFIO_IOMMU_MAP_DMA, (uintptr_t)&map) == -EINVAL && unset_r == 0 &&
@@ -1930,6 +2009,7 @@ int main(void)
     config_rows();
     pcie_rows();
     map_rows();
+    power_rows();
     info_rows();
     intx_rows();
     msi_rows();

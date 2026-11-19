@@ -3,7 +3,8 @@
  * Linux's vfio_pci_config.c in small: the BARs, the ROM, the line, the
  * cache line and latency, the Interrupt Disable bit and the MSI capability
  * are VFIO's own; the MSI-X enable and mask bits too; the bits that reset
- * the function are taken out of writes; the rest is the device's.
+ * the function are taken out of writes; a write of the power state is
+ * VFIO's to carry out; the rest is the device's.
  */
 
 #include "vfio.h"
@@ -73,7 +74,8 @@ static void mark_cap(struct vfio_device *d, uint8_t id, uint8_t at)
     mark(d, at, len, CFG_RO);
     switch (id) {
     case PCI_CAP_ID_PM:
-        mark(d, at + 4u, 2, CFG_RAW);
+        mark(d, at + 4u, 1, CFG_VIRT);
+        mark(d, at + 5u, 1, CFG_RAW);
         d->pm_cap = at;
         break;
     case PCI_CAP_ID_MSI:
@@ -279,6 +281,10 @@ static void cap_write8(struct vfio_device *d, unsigned int off, uint8_t b)
         pci_write_config8(DEV(d), (uint8_t)off, (uint8_t)(b & 0x7Fu));
     } else if (d->af_cap != 0 && off == d->af_cap + 4u) {
         pci_write_config8(DEV(d), (uint8_t)off, (uint8_t)(b & 0xFEu));
+    } else if (d->pm_cap != 0 && off == d->pm_cap + 4u) {
+        /* The power state is VFIO's to change, as Linux's
+         * vfio_pm_config_write; the byte's other bits are read-only. */
+        vfio_device_power(d, b & 0x3);
     }
 }
 
