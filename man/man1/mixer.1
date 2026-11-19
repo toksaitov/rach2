@@ -114,8 +114,14 @@ lock on
 and one that reads holds a shared one, so that
 .Xr init 8
 can read the volume and the mute record together under a shared lock.
-The file is made mode 0600: an ordinary user, who cannot open it, runs
-unlocked, and no user's lock can stop the volume keys or init's saves.
+The file is made mode 0600, so that no user's lock can stop the volume
+keys or init's saves.
+Every command also takes the same kind of lock on
+.Pa /dev/mixer
+itself, which every account can open, so that two commands that step the
+volume at once each move it: an ordinary user waits for that lock, and
+root tries it for a second and then goes on without it, so that a user who
+holds it delays a volume key by a second at most.
 .Pp
 The levels set are kept across a halt, a power-off, a reboot and a reset:
 .Xr init 8
