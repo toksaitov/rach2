@@ -28,22 +28,28 @@
 #   probe: rounds: BROWSER webglN fill MS... alu MS...
 #   probe: result: BROWSER webgl1 fill F1 alu A1 webgl2 fill F2 alu A2
 #
-# -t has server.py snapshot /proc's schedstat of every thread on the machine
-# before the first and after the last of each draw's six runs. A snapshot
-# falls outside what the page times but adds some tens of milliseconds
-# between the draws, which moves each draw against whatever else the machine
-# runs then, so the gate runs without them. OUT then also gets `threads`,
-# `webglN DRAW TID<TAB>PROCESS<TAB>THREAD<TAB>run MS<TAB>wait MS<TAB>HOW` for
-# every thread that ran or waited for a processor in a draw's window,
-# busiest first; HOW is `nice N` when the thread's nice value is not 0, and
-# `batch`, `idle` or `policy N` when its policy is not SCHED_OTHER, as the
-# last snapshot found them. Before the result it prints for each draw its
-# window's milliseconds, the run and wait of all threads in it and the eight
-# busiest threads, which tell a draw that waited for a processor from one
-# that waited in the kernel or on the GPU:
+# -t has server.py snapshot /proc's schedstat and stat of every thread on
+# the machine, and /proc/stat's time of each processor, before the first and
+# after the last of each draw's six runs. A snapshot falls outside what the
+# page times but adds some tens of milliseconds between the draws, which
+# moves each draw against whatever else the machine runs then, so the gate
+# runs without them. OUT then also gets `threads`, `webglN DRAW
+# TID<TAB>PROCESS<TAB>THREAD<TAB>run MS<TAB>wait MS<TAB>user MS<TAB>system
+# MS<TAB>runs N<TAB>HOW` for every thread that ran or waited for a processor
+# in a draw's window, busiest first: its time on a processor and waiting
+# for one by schedstat, its user and system time by stat, in whole clock
+# ticks, and the times it was put on a processor; HOW is `nice N` when the
+# thread's nice value is not 0, and `batch`, `idle` or `policy N` when its
+# policy is not SCHED_OTHER, as the last snapshot found them. Before the
+# result it prints for each draw its window's milliseconds, the run, wait,
+# user and system time of all threads in it, each processor's busy and idle
+# milliseconds, and the eight busiest threads, which tell a draw that waited
+# for a processor from one that waited in the kernel or on the GPU, and a
+# processor left idle while threads waited from one that was full:
 #
 #   probe: threads: BROWSER webglN DRAW MS ms, all ran MS ms and waited
-#       MS ms; PROCESS/THREAD run MS wait MS [HOW], ...
+#       MS ms, user MS ms and system MS ms; cpu N busy MS idle MS, ...;
+#       PROCESS/THREAD run MS wait MS user MS system MS runs N [HOW], ...
 #
 # The status is 0 when both contexts gave both measures and 1 otherwise.
 set -eu
@@ -122,20 +128,26 @@ if threads:
                     continue
                 wall = 1000 * (b["snap"][0] - a["snap"][1])
                 rows_t = []
-                for tid, (pname, name, run, wait, nice, policy) in b["threads"].items():
-                    run0, wait0 = a["threads"].get(tid, [0, 0, 0, 0])[2:4]
+                for tid, (pname, name, run, wait, nice, policy, user, system, runs) in b["threads"].items():
+                    run0, wait0, _, _, user0, system0, runs0 = a["threads"].get(tid, [0] * 9)[2:9]
                     if (run - run0) or (wait - wait0):
                         how = ("" if not nice else " nice %d" % nice) + \
                             {0: "", 3: " batch", 5: " idle"}.get(policy, " policy %d" % policy)
-                        rows_t.append(((run - run0) / 1e6, (wait - wait0) / 1e6, tid, pname, name, how))
+                        rows_t.append(((run - run0) / 1e6, (wait - wait0) / 1e6, tid, pname, name, how,
+                                       user - user0, system - system0, runs - runs0))
                 rows_t.sort(key=lambda r: -(r[0] + r[1]))
                 for r in rows_t:
-                    tf.write("webgl%d %s %s\t%s\t%s\trun %.1f\twait %.1f\t%s\n"
-                             % (api, draw, r[2], r[3], r[4], r[0], r[1], r[5].strip()))
-                print("probe: threads: %s webgl%d %s %.0f ms, all ran %.0f ms and waited %.0f ms; %s" % (
-                    browser, api, draw, wall, sum(r[0] for r in rows_t), sum(r[1] for r in rows_t),
-                    ", ".join("%s/%s run %.0f wait %.0f%s" % (r[3], r[4], r[0], r[1], r[5])
-                              for r in rows_t[:8])))
+                    tf.write("webgl%d %s %s\t%s\t%s\trun %.1f\twait %.1f\tuser %d\tsystem %d\truns %d\t%s\n"
+                             % (api, draw, r[2], r[3], r[4], r[0], r[1], r[6], r[7], r[8], r[5].strip()))
+                cpus = ", ".join("cpu %s busy %d idle %d" % (n, b["cpus"][n][0] - a["cpus"][n][0],
+                                                            b["cpus"][n][1] - a["cpus"][n][1])
+                                 for n in sorted(b.get("cpus", {}), key=int) if n in a.get("cpus", {}))
+                print("probe: threads: %s webgl%d %s %.0f ms, all ran %.0f ms and waited %.0f ms, "
+                      "user %d ms and system %d ms; %s; %s" % (
+                          browser, api, draw, wall, sum(r[0] for r in rows_t), sum(r[1] for r in rows_t),
+                          sum(r[6] for r in rows_t), sum(r[7] for r in rows_t), cpus,
+                          ", ".join("%s/%s run %.0f wait %.0f user %d system %d runs %d%s"
+                                    % (r[3], r[4], r[0], r[1], r[6], r[7], r[8], r[5]) for r in rows_t[:8])))
 with open(measures, "w", encoding="utf-8") as f:
     f.write("".join(r + "\n" for r in rows))
 print("probe: result: %s %s" % (browser, " ".join(words)))
