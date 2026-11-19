@@ -311,6 +311,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drm_edid_displayid",
+          "checks": "tests/host/drm_edid_displayid_hosttest.c finds the audio and speaker blocks of a DisplayID extension's CTA block for the ELD, skips a section with a bad checksum, and finds no audio without a CTA extension, as Linux does, under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "drm_kms",
           "checks": "tests/host/drm_kms_hosttest.c checks mode objects, properties, blobs, framebuffers, atomic commits and the legacy calls over them against a fake driver under ASan and UBSan",
           "source": "scenario"
