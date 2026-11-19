@@ -80,6 +80,7 @@
 #include "network/ethernet/ethernet.h"
 #include "network/netif.h"
 #include "network/driver/netdev.h"
+#include "network/driver/tap.h"
 #include "network/udp/udp.h"
 #include "network/tcp/tcp.h"
 #include "network/ip/ip.h"
@@ -1869,6 +1870,7 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
 {
     struct kernel_iovec local[8], *iov = local;
     long rc;
+    int i;
 
     if (count > (int)(sizeof(local) / sizeof(local[0]))) {
         iov = kmalloc((size_t)count * sizeof(*iov));
@@ -1882,6 +1884,25 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
             rc = pty_master_writev(entry, iov, count);
         } else if (entry->type == FD_TYPE_UNIX) {
             rc = unix_writev(entry, iov, count, (uint32_t)rc);
+        } else if (tap_is(entry)) {
+            /* One frame, gathered; one too long is counted and not read. */
+            uint32_t total = (uint32_t)rc, at = 0;
+            uint8_t *frame = total <= 2048u ? kmalloc(total) : NULL;
+
+            if (total <= 2048u && !frame) {
+                rc = -ENOMEM;
+            }
+            for (i = 0; frame && rc > 0 && i < count; i++) {
+                if (copy_from_user(frame + at, (const void __user *)iov[i].iov_base,
+                                   iov[i].iov_len) != 0) {
+                    rc = -EFAULT;
+                }
+                at += (uint32_t)iov[i].iov_len;
+            }
+            if (rc > 0) {
+                rc = tap_write_frame(entry, frame, total);
+            }
+            kfree(frame);
         } else {
             rc = pipe_writev(entry, iov, count);
         }
@@ -1928,7 +1949,8 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
         return -EINVAL;
     }
     entry = fd_get(current_proc->fds, fd);
-    if (entry && (entry->type == FD_TYPE_PTM || entry->type == FD_TYPE_UNIX || pipe_is(entry))) {
+    if (entry && (entry->type == FD_TYPE_PTM || entry->type == FD_TYPE_UNIX || pipe_is(entry) ||
+                  tap_is(entry))) {
         return writev_whole(entry, iov_user, iovcnt);
     }
     if (iov_mount_file(entry)) {
