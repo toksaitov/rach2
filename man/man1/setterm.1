@@ -29,6 +29,10 @@ The count starts again, and a blank console is shown.
 Blank the console now, until
 .Fl -blank Cm poke ;
 a key does not end this blank.
+When the console stays shown, as under a program's picture on
+.Pa /fb
+that neither a backlight nor a display driver can darken, it says so and
+exits 1; util-linux's exits 0 there.
 .It Fl -blank Cm poke
 Unblank the console.
 .It Fl -blank
@@ -45,11 +49,19 @@ as util-linux allows.
 and the question are TIOCLINUX requests on the standard input, which must
 be the console, as on Linux.
 .Sh EXIT STATUS
-0 on success; 1 for a usage error, a time outside 0 to 60, or a request
-the console refused.
+0 on success; 1 for a usage error, a time outside 0 to 60, a request
+the console refused, or a
+.Cm force
+that left the console shown.
 .Sh EXAMPLES
 Blank the console after five minutes without input:
 .Dl setterm --blank 5
+.Sh DIAGNOSTICS
+.Bl -diag
+.It setterm: blank: refused: nothing darkens the screen
+.Cm force
+left the console shown.
+.El
 .Sh SEE ALSO
 .Xr term 1 ,
 .Xr console 4
