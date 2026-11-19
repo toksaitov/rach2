@@ -1,4 +1,4 @@
-.Dd October 20, 2026
+.Dd November 20, 2026
 .Dt EXIT 2
 .Os
 .Sh NAME
@@ -84,6 +84,14 @@ With the last thread the kernel gives the process's children to the
 nearest child subreaper above it, or to init when there is none
 .Pq see Xr prctl 2 ,
 marks it as a zombie, and wakes its parent.
+A process group that the end leaves orphaned, with no member whose parent
+is in another group of the same session, is sent
+.Dv SIGHUP
+and then
+.Dv SIGCONT
+when one of its members is stopped, since no shell is left to continue
+it: a child's group, once the child has its new parent, and the ending
+process's own.
 The scheduler then selects another process.
 If none is ready, the kernel waits for interrupts and checks again.
 The parent's wait reclaims the child's process record and kernel stack.
