@@ -10,7 +10,11 @@
  * for it runs the row's `host_wait` first, as that thread would run while
  * this one sleeps. A row may also have another thread run just before the
  * next take of the page-table lock (`host_ptl_hook`), as one on another
- * processor may come between a fault's look and its lock.
+ * processor may come between a fault's look and its lock. A walk from
+ * outside an address space (`mm_read_begin`) may run a row's
+ * `host_read_begin` before it takes the lock and `host_read_end` after it
+ * gives it back, where the row keeps the walk's user's count, as mm.c does,
+ * and runs what another thread does while the walk waits.
  */
 #include "../../../rach2/sys/mm/mm.h"
 
@@ -21,6 +25,10 @@ void (*host_wait)(struct mm *mm);
 /* What another thread does before the next take of a page-table lock, run
  * once, or NULL. */
 void (*host_ptl_hook)(struct mm *mm);
+/* What a walk from outside `mm` does before it takes the lock and after it
+ * gives it back, or NULL. */
+void (*host_read_begin)(struct mm *mm);
+void (*host_read_end)(struct mm *mm);
 
 /* The holds of the one thread: the address space, its depth and whether the
  * first hold was to write. Two at once, as on the machine. */
@@ -164,14 +172,21 @@ void mm_ptl_unlock(struct mm *mm, uint32_t flags)
     mm->ptl.locked = 0;
 }
 
-/** Take `mm`'s regions' lock to read for a walk from outside it. */
+/** Take `mm`'s regions' lock to read for a walk from outside it, after
+ * `host_read_begin`. */
 void mm_read_begin(struct mm *mm)
 {
+    if (host_read_begin) {
+        host_read_begin(mm);
+    }
     mmap_read_lock(mm);
 }
 
-/** End what `mm_read_begin` began. */
+/** End what `mm_read_begin` began, then run `host_read_end`. */
 void mm_read_end(struct mm *mm)
 {
     mmap_unlock(mm);
+    if (host_read_end) {
+        host_read_end(mm);
+    }
 }
