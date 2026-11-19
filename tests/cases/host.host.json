@@ -476,6 +476,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "fair",
+          "checks": "tests/host/fair_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "fat32",
           "checks": "tests/host/fat32_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
