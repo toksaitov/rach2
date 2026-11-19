@@ -1,6 +1,6 @@
 5504: 5496's bench (dev-log/84-locks/5496/bench.c) as /sbin/init of a KRFFS
 root, on the x86-64 lockdep kernel (make ARCH=x86_64 rach2-lockdep) of
-task/5504 at 331cacc91, in QEMU under KVM on the testing PC with four
+a3f41354e, in QEMU under KVM on the testing PC with four
 processors and 2 GiB, by 5496/boot.sh with rach2.cycleaccount on the
 kernel's line, from 2026-11-19 23:03:56 UTC+6 (the host's clock reads an
 hour behind). strace 7.2 is built static from
