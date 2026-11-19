@@ -381,6 +381,8 @@ or on the file
 names when it is set and not empty, from their start to their end, so
 that they run one at a time and each starts from the state the one before
 it left.
+The actions make the lock mode 0600, so that no ordinary process can hold
+it and stop the keys.
 .Pp
 Every build keeps each backlight's level across a reboot, as
 systemd-backlight does on Linux.
@@ -450,9 +452,11 @@ Within a second of each change of a level or of the record, as alsactl's
 daemon mode does, and again when it stops the machine, it saves each
 channel's level and the record there, as it saves a backlight's.
 It reads the levels and record under a shared lock on
-.Pa /dev/mixer .
+.Pa /var/run/mixer.lock ,
+mode 0600, which root's
 .Xr mixer 1
-holds an exclusive lock while it changes them.
+holds exclusively while it changes them; while that lock is held, the save
+waits for the next second.
 A save that fails, before or after its rename, leaves the file's text
 unknown, so the next pass writes it again whatever the level then.
 It reads
@@ -664,7 +668,12 @@ acpid's map and actions, whose presence starts it.
 .It Pa /etc/acpi
 The actions acpid runs.
 .It Pa /var/run/acpi.lock
-The lock the volume and brightness actions hold while they run.
+The lock the volume, brightness and wifi actions hold while they run,
+mode 0600.
+.It Pa /var/run/mixer.lock
+The lock root's
+.Xr mixer 1
+and the mixer's save hold, mode 0600.
 .It Pa /var/lib/backlight
 Each backlight's level, saved when it changes and when the machine stops,
 and written back at boot.
