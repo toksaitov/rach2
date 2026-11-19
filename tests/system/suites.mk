@@ -2304,6 +2304,51 @@ $(ASSIGN_QEMU_STAMP): tests/assign/build_qemu.sh tests/assign/qemu.txt \
 	@cat $(ASSIGN_QEMU_DIR)/version
 $(ASSIGN_QEMU): $(ASSIGN_QEMU_STAMP)
 
+# `tests/run netguest`: the card given through VFIO to a Debian/nftables or
+# FreeBSD/pf gateway guest, the network reached over a tap link with and
+# without vhost-net, and the card taken back.
+
+# The gateway images are made by one boot each on this host
+# (tests/netguest/prepare.sh), kept in build/cache/netguest, and staged with
+# the runner and the guest's nettput on the payload's ext2 disk; the cases
+# boot assign's GNU disk.
+NETGUEST_DIR = build/tests/cases/netguest
+NETGUEST_SCRIPTS = tests/netguest/run.sh tests/netguest/netguest.sh tests/netguest/traffic.sh
+$(NETGUEST_DIR)/freebsd.qcow2: tests/netguest/prepare.sh tests/netguest/freebsd/image \
+                               tests/netguest/freebsd/setup.sh tests/netguest/freebsd/netguest.sh \
+                               tests/netguest/freebsd/meta-data
+	sh tests/netguest/prepare.sh freebsd $@
+$(NETGUEST_DIR)/debian.qcow2: tests/netguest/prepare.sh tests/graphics/debian-ref/image \
+                              tests/netguest/debian/setup.sh tests/netguest/debian/netguest.sh \
+                              tests/netguest/debian/meta-data
+	sh tests/netguest/prepare.sh debian $@
+# nettput for Rach2, a static musl program, and for the host, the peer
+# service of the cases.
+$(NETGUEST_DIR)/nettput: tests/netguest/nettput.c $(LIBC_STAMP)
+	@mkdir -p $(@D) build/tmp
+	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
+	    -static -Wl,-z,noexecstack $< -o $@
+$(NETGUEST_DIR)/nettput-host: tests/netguest/nettput.c
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
+$(NETGUEST_DIR)/netguest.ext2: $(NETGUEST_SCRIPTS) $(NETGUEST_DIR)/nettput \
+                               $(NETGUEST_DIR)/freebsd.qcow2 $(NETGUEST_DIR)/debian.qcow2
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/netguest-disk.XXXXXX); \
+	cp $(NETGUEST_SCRIPTS) $(NETGUEST_DIR)/nettput "$$work/"; \
+	for s in freebsd debian; do \
+	    ln $(NETGUEST_DIR)/$$s.qcow2 "$$work/$$s.qcow2" 2>/dev/null || \
+	        cp $(NETGUEST_DIR)/$$s.qcow2 "$$work/$$s.qcow2"; \
+	    cp $(NETGUEST_DIR)/$$s.qcow2.record "$$work/$$s.record"; \
+	done; \
+	kib=$$(($$(du -sk "$$work" | cut -f 1) * 5 / 4 + 16384)); \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp $${kib}k; \
+	mv $@.tmp $@
+
 # Assignment needs the product's GNU root, without the GNU test inventories
 # or a person's staged logins. Give it a fixed MBR identity so the AHCI
 # payload may be enumerated before the NVMe root.
