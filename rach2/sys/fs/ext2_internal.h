@@ -624,6 +624,7 @@ void ext2_node_lock(struct ext2_node *n);
 void ext2_node_unlock(struct ext2_node *n);
 void ext2_assert_node_locked(const struct ext2_node *n);
 void ext2_batch_lock(struct ext2_mount *em);
+int ext2_batch_lock_killable(struct ext2_mount *em);
 void ext2_batch_unlock(struct ext2_mount *em);
 void ext2_assert_batch_locked(struct ext2_mount *em);
 void ext2_group_lock(struct ext2_mount *em, uint32_t g);
