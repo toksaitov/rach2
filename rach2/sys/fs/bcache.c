@@ -3630,6 +3630,56 @@ int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk)
     return sync_block(dev, blk, WRITE_ORDER_ONLY);
 }
 
+/** Whether `b` keeps a wait, met or not, on block `blk` of its device;
+ * `wb_lock` is held. */
+static int waits_on(const struct bbuf *b, uint64_t blk)
+{
+    uint32_t i;
+
+    for (i = 0; b->waits && i < b->waits->n; i++) {
+        if (b->waits->w[i].blk == blk) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A wait is let go only by its buffer's write (`set_clean`), so a dirty
+ * buffer that keeps one on `blk` is one ordered after it, met or not. An
+ * image's block is written whole, its newer images and the keyed buffer
+ * with it. */
+int bcache_sync_waiting(block_device_t *dev, uint64_t blk)
+{
+    uint64_t found[BCACHE_WAITING];
+    const struct dirty_list *lists[2];
+    const struct bbuf *b;
+    int n = 0, i, l, rc = 0;
+
+    lists[0] = &firsts;
+    lists[1] = &dirties;
+    wb_take();
+    for (l = 0; l < 2; l++) {
+        for (b = lists[l]->head; b && n < BCACHE_WAITING; b = b->dirty_next) {
+            stat_visits++;
+            if (b->dev != dev || !waits_on(b, blk)) {
+                continue;
+            }
+            i = 0;
+            while (i < n && found[i] != b->blk) {
+                i++;
+            }
+            if (i == n) {
+                found[n++] = b->blk;
+            }
+        }
+    }
+    wb_give();
+    for (i = 0; rc == 0 && i < n; i++) {
+        rc = sync_block(dev, found[i], 0);
+    }
+    return rc;
+}
+
 /* The walk lets `cache_spin` go every WALK_BATCH buffers (`bufs_next`), as
  * Linux's invalidate goes a batch at a time (mm/truncate.c:509-541).
  * `wb_lock`, held throughout, keeps every buffer's dirty mark; a buffer a
