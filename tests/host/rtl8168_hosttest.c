@@ -1716,9 +1716,12 @@ int main(void)
         unsigned before = model_log_len;
         int mask_at;
 
+        model_freed_vector = -1;
         rtl8168_stop(model_iface.dev);
         mask_at = find_write_value(before, 16, R8168_INTRMASK, 0);
         CHECK(!model_msi_on && r8168_msi_vector == -1, "the stop turns the messages off");
+        CHECK(model_freed_vector == 48 && model_handler == 0,
+              "and gives the vector back, with its handler");
         CHECK(mask_at >= 0 && (unsigned)mask_at < model_msi_disable_at,
               "after the sources were masked");
     }

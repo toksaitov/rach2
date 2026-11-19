@@ -1646,7 +1646,8 @@ static void rtl8168_print_info(void *dev)
 }
 
 /**
- * The driver table's `stop`: interrupts masked and messages off, the
+ * The driver table's `stop`: interrupts masked, messages off and their
+ * vector given back with its handler, as Linux's pci_free_irq_vectors, the
  * receiver and transmitter off with the receive gate closed, and bus
  * mastering cleared, which ends the chip's DMA.
  *
@@ -1690,6 +1691,7 @@ static void rtl8168_stop(void *dev)
         r8168_irq_mask_and_ack();
         if (r8168_msi_vector >= 0) {
             pci_msi_disable(&r8168_pci);
+            isr_free_vector(r8168_msi_vector);
             r8168_msi_vector = -1;
         }
         if ((r8168_xid & R8168_XID_FAMILY_MASK) == R8168_XID_8168GU) {
