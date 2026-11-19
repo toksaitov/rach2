@@ -39,6 +39,16 @@ void acpi_buttons_start(void);
 void acpi_video_start(void);
 
 /**
+ * Make the first output with _BCL and _BCM that `acpi_video_start` found
+ * the backlight acpi_video0, unless a backlight is registered by then, as
+ * Linux's acpi_video_register_backlight waits for the GPU drivers, so that
+ * a native backlight registered late, as i915's where the firmware left
+ * the PWM off, is the panel's only one. Once, from `arch_drm_probe` after
+ * the native display drivers, in process context.
+ */
+void acpi_video_register_backlight(void);
+
+/**
  * Take the IdeaPad's device VPC2004, when there is one: register its keys
  * as the event device "Ideapad extra buttons" and its Wi-Fi switch as the
  * rfkill switch ideapad_wlan, turn the controller's radio switch on, and

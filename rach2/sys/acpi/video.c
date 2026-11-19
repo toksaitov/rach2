@@ -2,9 +2,10 @@
  * video.c: the ACPI video buses as event devices, as Linux's acpi_video.c
  * finds them and reports their keys: a Notify on an output is a brightness
  * key and one on the bus the video mode's switch. On a machine with no
- * native backlight, an output's _BCL and _BCM are the backlight
- * acpi_video0, as Linux registers it when no GPU driver has one; a key
- * changes no level here, which is user space's.
+ * native backlight once the native display drivers have probed, an
+ * output's _BCL and _BCM are the backlight acpi_video0, as Linux registers
+ * it when no GPU driver has one; a key changes no level here, which is
+ * user space's.
  */
 
 #include "../display/backlight.h"
@@ -15,6 +16,7 @@
 #include "acpi.h"
 
 #include "devices.h"
+#include "osl.h"
 
 /* The most video buses taken. */
 #define VIDEO_BUSES 4
@@ -54,9 +56,10 @@ static int nbuses;
 /*
  * The backlight acpi_video0: its output, its levels in rising order with
  * none repeated, the class's level asked last and the one _BCM was last
- * given, each an index into `levels`, and whether a _BCM waits on
- * ACPICA's thread. `want` and `queued` change with the class's lock held
- * and are read on that thread.
+ * given, each an index into `levels`, and the work that gives _BCM the
+ * level on ACPICA's thread, queued once for any number of sets before it
+ * runs. `want` changes with the class's lock held and is read on that
+ * thread.
  */
 static struct {
     ACPI_HANDLE output;
@@ -64,7 +67,7 @@ static struct {
     int count;
     volatile int want;
     volatile int cur;
-    volatile int queued;
+    struct osl_work bcm;
 } light;
 
 /** Report `key`, which the Notify `value` on `what` gave, with a record. */
@@ -160,7 +163,6 @@ static void video_bcm(void *context)
     int want;
 
     (void)context;
-    light.queued = 0;
     want = light.want;
     arg.Type = ACPI_TYPE_INTEGER;
     arg.Integer.Value = (UINT64)light.levels[want];
@@ -184,17 +186,13 @@ static int video_get(void *ctx)
 
 /** The class's `set`, with its lock held and interrupts off, where no
  * method may run: keep the level and have ACPICA's thread give it to
- * _BCM, once for any number of sets before it runs. */
+ * _BCM, once for any number of sets before it runs, by a work no full
+ * queue refuses, so that a blank's or a wake's level is never dropped. */
 static void video_set(void *ctx, int level)
 {
     (void)ctx;
     light.want = level < 0 ? 0 : level >= light.count ? light.count - 1 : level;
-    if (!light.queued) {
-        light.queued = 1;
-        if (ACPI_FAILURE(AcpiOsExecute(OSL_NOTIFY_HANDLER, video_bcm, NULL))) {
-            light.queued = 0;
-        }
-    }
+    osl_queue_work(&light.bcm);
 }
 
 static const struct backlight_ops video_ops = {video_get, video_set, NULL};
@@ -242,24 +240,32 @@ static int video_levels(ACPI_HANDLE output)
     return n >= 2 ? 0 : -1;
 }
 
+/* The first output found with _BCM and a _BCL of two levels or more, and
+ * its bus's path, which `acpi_video_register_backlight` makes acpi_video0
+ * once the native drivers have probed. */
+static ACPI_HANDLE candidate;
+static char candidate_path[VIDEO_PATH_MAX];
+
 /**
- * Register acpi_video0 on `output` of the bus at `path` when it has _BCL
- * and _BCM and no backlight is registered, as Linux's acpi_video registers
- * its backlight only where no native one is: the Lenovo's intel_backlight
- * comes first, so there it is not made. Its level is _BQC's when that
- * names one of the levels, else the highest, which _BCM is given, as
- * Linux sets an unknown level to the most. Returns 1 when registered.
+ * Register acpi_video0 on `output` of the bus at `path` when no backlight
+ * is registered, as Linux's acpi_video registers its backlight only where
+ * no native one is. Its level is _BQC's when that names one of the
+ * levels, else the highest, which _BCM is given, as Linux sets an unknown
+ * level to the most. A least level above 0, which the ACPI specification
+ * allows, is noted to the class, since a blank cannot darken the panel by
+ * it. Returns 1 when registered.
  */
 static int video_backlight(ACPI_HANDLE output, const char *path)
 {
     UINT64 now;
     int i, k;
 
-    if (light.output != NULL || backlight_count() > 0 || !has(output, "_BCM") ||
-        video_levels(output) != 0) {
+    if (light.output != NULL || backlight_count() > 0 || video_levels(output) != 0) {
         return 0;
     }
     light.output = output;
+    light.bcm.function = video_bcm;
+    light.bcm.context = NULL;
     light.cur = light.count - 1;
     if (video_integer(output, "_BQC", &now) == 0) {
         for (i = 0; i < light.count; i++) {
@@ -275,6 +281,9 @@ static int video_backlight(ACPI_HANDLE output, const char *path)
         return 0;
     }
     backlight_set_type(k, "firmware");
+    if (light.levels[0] != 0) {
+        backlight_set_lit_at_zero(k);
+    }
     if (video_integer(output, "_BQC", &now) != 0 || (UINT64)light.levels[light.cur] != now) {
         video_set(NULL, light.cur);
     }
@@ -287,8 +296,9 @@ static int video_backlight(ACPI_HANDLE output, const char *path)
  * A present device that is a video bus, as Linux tells one, by _DOD or
  * _DOS: an event device "Video Bus", _DOS called, the Notify of the bus
  * and of every output under it taken, and the first output with a
- * brightness made acpi_video0 (`video_backlight`). The outputs are the
- * bus's children, which need not be present to be notified.
+ * brightness kept for acpi_video0 (`acpi_video_register_backlight`). The
+ * outputs are the bus's children, which need not be present to be
+ * notified.
  */
 static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
 {
@@ -326,7 +336,10 @@ static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, 
         if (ACPI_SUCCESS(AcpiInstallNotifyHandler(child, ACPI_DEVICE_NOTIFY, output_notify, bus))) {
             outputs++;
         }
-        (void)video_backlight(child, bus->path);
+        if (candidate == NULL && has(child, "_BCM") && video_levels(child) == 0) {
+            candidate = child;
+            k_memcpy(candidate_path, bus->path, sizeof(candidate_path));
+        }
     }
     video_dos(handle, bus->path);
     klog(KLOG_DEBUG, "acpi", "video: bus %s, outputs %d", bus->path, outputs);
@@ -336,4 +349,11 @@ static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, 
 void acpi_video_start(void)
 {
     (void)AcpiGetDevices(NULL, video_found, NULL, NULL);
+}
+
+void acpi_video_register_backlight(void)
+{
+    if (candidate != NULL) {
+        (void)video_backlight(candidate, candidate_path);
+    }
 }
