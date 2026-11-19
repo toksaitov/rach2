@@ -9,16 +9,19 @@
 /*
  * The console blanks after `consoleblank=` seconds without a key or a mouse
  * move, 600 unless the boot line says, and never for 0; the escape
- * `ESC [ 9 ; N ]` sets the time to N minutes, at most 60, as on Linux.
- * Blanking paints the screen black, keeping what it showed, and turns every
- * backlight off (backlight.h); the next key or mouse move restores both,
- * except after a blank that `console_blank_now` forced, which only
- * `console_unblank_now` undoes. While a program holds /fb, or a DRM master
- * holds the screen (fb.h's `fb_hold`), the console does not blank and no
- * backlight changes; taking /fb or the screen unblanks it, and the console
- * that has the screen back counts the time again (`console_poke`); a panic
- * unblanks it too. Output goes on while it is blank and is shown at the
- * unblank.
+ * `ESC [ 9 ; N ]` sets the time to N minutes, at most 60, as on Linux, and
+ * /sys/module/kernel/parameters/consoleblank shows it in seconds.
+ * Blanking paints the screen black, keeping what it showed, turns every
+ * backlight off (backlight.h) and turns the console's DRM display off
+ * (drm_blank.h); the next key or mouse move restores them, except after a
+ * blank that `console_blank_now` forced, which only `console_unblank_now`
+ * undoes. A program's picture on /fb, such as term's, blanks as well, but
+ * is not painted over: the backlights and the display going off darken it.
+ * While a DRM master holds the screen (fb.h's `fb_hold`) the console does
+ * not blank and no backlight changes; taking /fb or the screen unblanks it,
+ * and the console that has the screen back counts the time again
+ * (`console_poke`); a panic unblanks it too. Output goes on while it is
+ * blank and is shown at the unblank.
  */
 
 /**
@@ -44,8 +47,8 @@ void blank_tick(void);
 void console_set_blank_time(unsigned int seconds);
 
 /** Blank the console now, to stay blank until `console_unblank_now`
- * (TIOCLINUX 14); nothing while a program holds /fb or a DRM master the
- * screen. Not from the tick or with the console's lock held. */
+ * (TIOCLINUX 14); nothing while a DRM master holds the screen. Not from
+ * the tick or with the console's lock held. */
 void console_blank_now(void);
 
 /** Unblank the console now, if it is blank (TIOCLINUX 4), and restart the
@@ -63,5 +66,9 @@ void console_panic_unblank(void);
 
 /** Whether the console is blank (TIOCLINUX 15). */
 int console_is_blank(void);
+
+/** Make /sys/module/kernel/parameters/consoleblank, read-only as Linux's;
+ * once, at boot, once /sys takes entries. A failure is logged. */
+void blank_params_start(void);
 
 #endif /* _BLANK_H_ */

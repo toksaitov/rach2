@@ -24,7 +24,8 @@
  * master's close with another file open, and the last close gives them
  * back on the same buffer; a master that comes while the console's commit
  * runs keeps the screen; `video=` and a hotplug move the console to a
- * buffer of the size named, and a hotplug after DROP_MASTER gives the
+ * buffer of the size named; the console's blank turns its CRTC off and
+ * on again with its mode and buffer kept; a hotplug after DROP_MASTER gives the
  * screen back while one under a master does not; a buffer that cannot be
  * mapped when the master leaves is
  * forgotten until the next place, or, on a device whose framebuffers are
@@ -533,6 +534,34 @@ static void row_hotplug(void)
     video_option = NULL;
 }
 
+/** The console's blank turns its CRTC off with its mode, buffer and
+ * connector kept, as Linux's drm_fb_helper_dpms does, the connector's DPMS
+ * following, and the unblank turns it on again; a second ask of the same
+ * changes nothing. */
+static void row_blank(void)
+{
+    struct drm_framebuffer *fb = con.fb;
+    int p;
+
+    drm_client_blank(1);
+    CHECK(con_flush_ready(NULL), "a blank wakes the worker");
+    con_blank_service();
+    CHECK(crtc.state && !crtc.state->active && crtc.state->enable &&
+              crtc_mode()->hdisplay == 1280 && primary.state->fb == fb &&
+              connector.dpms == DRM_MODE_DPMS_OFF,
+          "the blank turns the console's CRTC off, its mode and buffer kept");
+    CHECK(!con_flush_ready(NULL), "the worker has nothing left to do for the blank");
+    p = plane_updates;
+    drm_client_blank(1);
+    con_blank_service();
+    CHECK(plane_updates == p && !crtc.state->active, "a second blank commits nothing");
+    drm_client_blank(0);
+    con_blank_service();
+    CHECK(crtc.state->active && crtc_mode()->hdisplay == 1280 && primary.state->fb == fb &&
+              connector.dpms == DRM_MODE_DPMS_ON && con_blank_crtcs == 0,
+          "the unblank turns the CRTC on again on the same buffer");
+}
+
 /** A hotplug under a master leaves the screen to it; one after
  * DROP_MASTER, while the program still holds the card, gives it back, as
  * Linux's hotplug handler sets the fbdev mode once no master holds the
@@ -815,6 +844,7 @@ int main(void)
     row_drop_master();
     row_intruder();
     row_hotplug();
+    row_blank();
     row_drop_hotplug();
     row_unmapped();
     row_shadow();

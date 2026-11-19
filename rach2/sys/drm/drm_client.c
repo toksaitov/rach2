@@ -8,6 +8,7 @@
  */
 
 #include "drm.h"
+#include "drm_blank.h"
 
 #include "../arch/arch.h"
 #include "../cmdline.h"
@@ -126,6 +127,14 @@ static struct {
 
 static wait_queue_t con_wake;
 static uint64_t con_deadline; /* the tick of the next flush; 0 for none */
+
+/* The console's blank as the worker carries it out (`drm_client_blank`):
+ * whether the blank asks for the display off, whether the worker has
+ * turned it off, and the CRTCs, one bit each by index, that it turned off
+ * and turns on again. */
+static volatile int con_blank_asked;
+static int con_blank_done;
+static uint32_t con_blank_crtcs;
 
 static void con_master_changed(struct drm_device *dev, struct drm_file *master);
 
@@ -486,6 +495,12 @@ static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_frame
     if (err == 0 && con.dev != dev) {
         err = -ENODEV; /* unregistered while the commits slept */
     }
+    if (err == 0) {
+        /* Every output is lit again; a blank that lasts turns them off
+         * anew. */
+        con_blank_done = 0;
+        con_blank_crtcs = 0;
+    }
     drm_modeset_unlock(dev);
     if (err != 0) {
         return err;
@@ -618,14 +633,104 @@ static void con_flush(void)
 static int con_flush_ready(void *arg)
 {
     (void)arg;
+    if (con_blank_asked != con_blank_done) {
+        return 1;
+    }
     return con_deadline != 0 ? rtc_ticks_now() >= con_deadline : con_shadowed();
+}
+
+/** Commit `crtc` of `dev` with its `active` set to `active` and its mode,
+ * planes and connectors kept, as Linux's drm_fb_helper_dpms does. Under
+ * the commit lock; may sleep. 0 or -errno. */
+static int32_t con_crtc_active(struct drm_device *dev, struct drm_crtc *crtc, int active)
+{
+    struct drm_atomic_state *state = drm_atomic_state_alloc(dev);
+    struct drm_crtc_state *cs = NULL;
+    int32_t rc = state ? drm_atomic_add_affected_connectors(state, crtc) : -ENOMEM;
+
+    if (rc == 0) {
+        cs = drm_atomic_get_crtc_state(state, crtc);
+        rc = cs ? 0 : -ENOMEM;
+    }
+    if (rc == 0) {
+        cs->active = active != 0;
+        rc = drm_atomic_commit(state);
+    }
+    if (state) {
+        drm_atomic_state_free(state);
+    }
+    return rc;
+}
+
+/**
+ * Carry out the blank the console asked for last: turn off each lit CRTC
+ * of the console's native device, or on again those turned off. On the
+ * firmware's framebuffer, with no device, or while a master holds the
+ * device, only the record changes, and CRTCs that a master or a later
+ * placement set are left to them. Process context, the worker's; may
+ * sleep.
+ */
+static void con_blank_service(void)
+{
+    struct drm_mode_config *mc;
+    struct drm_device *dev = con.dev;
+    int off = con_blank_asked;
+    uint32_t k, gen = con.gen;
+    int32_t rc;
+
+    if (off == con_blank_done) {
+        return;
+    }
+    if (!dev || con.firmware || con.handed) {
+        con_blank_done = off;
+        con_blank_crtcs = 0;
+        return;
+    }
+    drm_dev_get(dev);
+    drm_modeset_lock_nointr(dev);
+    mc = &dev->mode_config;
+    for (k = 0; k < mc->num_crtc && k < 32u; k++) {
+        struct drm_crtc *crtc = mc->crtcs[k];
+
+        if (con.dev != dev || con.gen != gen || dev->master) {
+            con_blank_crtcs = 0;
+            break;
+        }
+        if (off && crtc->state && crtc->state->active) {
+            rc = con_crtc_active(dev, crtc, 0);
+            con_blank_crtcs |= rc == 0 ? 1u << k : 0u;
+        } else if (!off && (con_blank_crtcs & 1u << k) && crtc->state && crtc->state->enable) {
+            rc = con_crtc_active(dev, crtc, 1);
+            con_blank_crtcs &= ~(1u << k);
+        } else {
+            continue;
+        }
+        if (rc != 0) {
+            klog(KLOG_WARN, "console", "card%d: crtc %u not turned %s: error %d", dev->index,
+                 (unsigned)k, off ? "off" : "on", (int)rc);
+        }
+    }
+    if (!off) {
+        con_blank_crtcs = 0;
+    }
+    con_blank_done = off;
+    drm_modeset_unlock(dev);
+    klog(KLOG_INFO, "console", "card%d: display %s for the blank", dev->index, off ? "off" : "on");
+    drm_dev_put(dev);
+}
+
+void drm_client_blank(int blank)
+{
+    con_blank_asked = blank != 0;
+    wq_wake_all(&con_wake);
 }
 
 #ifndef RACH2_HOSTTEST
 static process_t *con_thread;
 
-/** The worker, kdrmcon: while a shadow is in use, flush it every CON_FLUSH_MS;
- * otherwise sleep in an idle wait until one is. Like every kernel thread, it is
+/** The worker, kdrmcon: carry out the console's blank, and while a shadow is
+ * in use, flush it every CON_FLUSH_MS; otherwise sleep in an idle wait until
+ * one is or a blank asks. Like every kernel thread, it is
  * not switched by the tick (`no_tick_switch`, which `setup_process_stack`
  * sets), so a flush runs a driver's dirty path as the DIRTYFB call does, with
  * the driver's state holding through it; it gives way where it sleeps and
@@ -639,12 +744,13 @@ static void con_thread_main(void)
         current_proc->wakeup_tick = con_deadline;
         (void)wq_wait_event_idle(&con_wake, con_flush_ready, NULL);
         current_proc->wakeup_tick = 0;
+        con_blank_service();
         con_flush();
     }
 }
 
-/** Start the worker once, on the first shadow. A failure is logged, and
- * the shadow is then never shown. */
+/** Start the worker once, on the first native device or shadow. A failure
+ * is logged, and a shadow is then never shown nor the display blanked. */
 static void con_worker_start(void)
 {
     process_t *p;
@@ -817,6 +923,14 @@ void drm_client_dev_register(struct drm_device *dev)
     gen = ++con.gen;
     klog(KLOG_INFO, "console", "card%d: %s", dev->index,
          con.firmware ? "the firmware's framebuffer" : "a native display");
+    if (!con.firmware) {
+        con_worker_start();
+    }
+    con_blank_done = 0;
+    con_blank_crtcs = 0;
+    if (con_blank_asked) {
+        wq_wake_all(&con_wake);
+    }
     if (!con.lost) {
         con_probe(dev);
         return;

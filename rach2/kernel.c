@@ -14,6 +14,7 @@
 #include "sys/display/fb.h"
 #include "sys/module.h"
 #include "sys/printk.h"
+#include "sys/display/blank.h"
 #include "sys/cmdline.h"
 #include "sys/irq.h"
 #include "sys/mm/heap.h"
@@ -5086,6 +5087,7 @@ void kernel_main(const struct boot_info *boot)
     drm_start();
     pstore_start();
     printk_params_start();
+    blank_params_start();
 #if defined(__x86_64__)
     kvm_start();
     vfio_start();
