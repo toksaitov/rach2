@@ -68,27 +68,35 @@ from 256 to 262144; past that a connection skips
 counted in TCPTimeWaitOverflow.
 .Ss Acknowledgements
 Data received in order is acknowledged as Linux acknowledges it.
-Its acknowledgement waits while no more than the largest segment received,
-at least 536 bytes, is unacknowledged, so that every second full segment
-is acknowledged at once; a held acknowledgement goes with the next segment
-sent, or alone 40 ms later, Linux's
-.Dv TCP_DELACK_MIN .
+The connection's first data, and data after a quiet time longer than its
+retransmission timeout, grant up to 16 quick acknowledgements, one for each
+two full segments the window holds: while any are left, and the connection
+is not answering what it receives, each segment is acknowledged at once.
+Otherwise its acknowledgement waits while no more than a full segment is
+unacknowledged, so that every second full segment is acknowledged at once;
+a held acknowledgement goes with the next segment sent, or alone 40 ms
+after the first segment held.
+Linux's delayed acknowledgement timeout adapts and can be longer; 40 ms,
+Linux's
+.Dv TCP_DELACK_MIN ,
+is the longest one is held here.
+A full segment is the largest received, at least 536 bytes; two shorter
+segments in a row of one length, at least 536 bytes with the header, or 88
+without FIN, SYN, URG or PSH, make that length the full one.
+.Pp
 A read that empties the receive buffer after a segment that ended a write
-of the peer's, one with PSH that is full or shorter than 536 bytes, or one
-shorter than 88 bytes, sends the held
-acknowledgement at once, unless the connection is answering what it
-receives: data sent within 40 ms of data received puts it in that mode,
-where a read sends one only after two such segments, and an acknowledgement
-held for the whole 40 ms ends the mode.
+of the peer's sends the held acknowledgement at once.
+A full segment ends a write when it has PSH, and a shorter one unless it is
+the second of a new full length.
+When the connection is answering what it receives, a read sends one only
+after two such segments: data sent within 40 ms of data received puts it in
+that mode, and an acknowledgement held for the whole 40 ms ends the mode.
 Data past a hole, the segment that fills it, data received before, a FIN,
 and data in a closing state are acknowledged at once.
-There is no quick-acknowledgement mode at a connection's start; its first
-segments wait as later ones do.
 .Pp
-A window the reader reopens is announced once it has grown by the smaller
-of a segment and half the buffer, while the peer has no more than half the
-buffer left, and only when the new window is at least twice what the peer
-has, as Linux's
+A read announces the window it reopened only while the peer has no more
+than half the buffer left, and only when the window as it stands, at least
+a full segment, is at least twice what the peer has, as Linux's
 .Fn tcp_cleanup_rbuf
 announces it.
 .Ss Keepalive
@@ -287,10 +295,14 @@ The seconds between probes, 1 to 32767.
 The probes unanswered before the reset, 1 to 127.
 .It Dv TCP_QUICKACK
 0 puts the connection in the mode in which this side's answers carry its
-acknowledgements; any other value ends that mode and sends an
-acknowledgement held at once, after which an even value puts the mode back.
-It reads 0 in that mode and 1 otherwise, and a socket with no connection
-keeps nothing.
+acknowledgements.
+Any other value ends that mode and does with a held acknowledgement what a
+read does after a segment that ended a write of the peer's: it is sent when
+the receive buffer is empty or more than a full segment is unacknowledged,
+and the window is announced as a read announces it; then an even value puts
+the mode back.
+It reads 0 in that mode and 1 otherwise, and on a socket with no connection
+the mode is kept for the connection it opens.
 .It Dv TCP_USER_TIMEOUT
 The milliseconds of unacknowledged data after which the connection is given
 up, 0 for the default.
