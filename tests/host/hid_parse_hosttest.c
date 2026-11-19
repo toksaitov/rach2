@@ -1556,15 +1556,21 @@ static const uint8_t mixed_pad[] = {0x05, 1,
                                     0xa1, 1,
                                     0x85, 1,
                                     0x05, 7,
-                                    0x09, 4,
                                     0x15, 0,
                                     0x25, 1,
                                     0x75, 8,
                                     0x95, 1,
+                                    0x09, 6,
+                                    0x81, 3,
+                                    0x09, 4,
+                                    0x81, 2,
+                                    0x85, 4,
+                                    0x09, 5,
                                     0x81, 2,
                                     0xc0, 0x05,
                                     0x0d, 0x09,
                                     5,    0xa1,
+                                    1,    0x85,
                                     1,    0x09,
                                     0x22, 0xa1,
                                     2,    TEST_CONTACT,
@@ -1591,7 +1597,8 @@ static const uint8_t mixed_pad[] = {0x05, 1,
 /** A failed mode leaves the shared report's keyboard available. */
 static void mt_mixed_rows(void)
 {
-    static const uint8_t first[] = {1, 1, 1, 100, 0, 120, 0, 1, 1, 17, 1};
+    static const uint8_t first[] = {1, 0, 1, 1, 100, 0, 120, 0, 1, 1, 17, 1};
+    static const uint8_t buttons[] = {4, 1, 1};
     struct hid_dev *hid;
     struct evdev_keymap_entry ke;
     int inputs, value = 0, write = 0;
@@ -1611,6 +1618,15 @@ static void mt_mixed_rows(void)
     feed(hid, first, sizeof(first));
     CHECK("shared report gives the keyboard key and touchpad click",
           bit(devs[0].down, KEY_A) && bit(devs[1].down, BTN_LEFT) && devs[1].id[0] == 0);
+    ke.by_index = 1;
+    ke.index = 0;
+    CHECK("the constant keyboard field retains its keymap index",
+          devs[0].km.get && devs[0].km.get(devs[0].km.ctx, &ke) == 0 && ke.scancode == 0x70006 &&
+              ke.keycode == KEY_RESERVED);
+    feed(hid, buttons, sizeof(buttons));
+    CHECK("the other shared report keeps the button with the pad",
+          bit(devs[0].down, KEY_B) && !bit(devs[0].down, BTN_MISC + 2) &&
+              bit(devs[1].down, BTN_MISC + 2));
     drop(hid);
 
     ndevs = 0;
@@ -1652,7 +1668,7 @@ static void mt_physical_button_rows(void)
     drop(hid);
 }
 
-/** Earlier constant fields cannot take all the input nodes. */
+/** Earlier reports without mapped fields cannot take all the input nodes. */
 static void mt_sparse_apps_rows(void)
 {
     static const uint8_t constant[] = {0x06, 0,    0xff, 0x09, 1, 0xa1, 1, 0x85,
@@ -1666,6 +1682,10 @@ static void mt_sparse_apps_rows(void)
     for (i = 0; i < HID_MAX_INPUTS; i++) {
         k_memcpy(desc + i * sizeof(constant), constant, sizeof(constant));
         desc[i * sizeof(constant) + 4] = (uint8_t)(i + 1);
+        desc[i * sizeof(constant) + 8] = (uint8_t)(i + 5);
+        if (i & 1) {
+            desc[i * sizeof(constant) + 20] = 2;
+        }
     }
     k_memcpy(desc + HID_MAX_INPUTS * sizeof(constant), mixed_pad, sizeof(mixed_pad));
     if (parse(desc, sizeof(desc), &hid) != 0) {
