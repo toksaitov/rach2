@@ -31,9 +31,10 @@ int vfs_name_seq_peek(uint32_t *seq);
  * checks the sequence of the directory it climbs from before it trusts the
  * parent (fs/namei.c:1990-1995). */
 int vfs_name_seq_still(uint32_t seq);
-/* Bracket an unlink or a rename, from the name cache's first forget to the
- * records' update, so that a record captured without the big lock across
- * it is refused (`vfs_name_capture_at`). Under the big lock; may nest. */
+/* Bracket an unlink, an rmdir or a rename, from the name cache's first
+ * forget to the records' update, so that a record captured without the big
+ * lock across it is refused (`vfs_name_capture_at`). Under the big lock;
+ * may nest. */
 void vfs_name_change_begin(void);
 void vfs_name_change_end(void);
 struct vfs_name *vfs_name_ref(struct vfs_name *name);

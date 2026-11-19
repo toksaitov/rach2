@@ -230,7 +230,8 @@ struct open_file {
      * directory's type has no `path` operation, answering ENAMETOOLONG for
      * NULL, and what `/proc/PID/fd` reports. The last unref frees it. */
     char *dirpath;
-    /* The selected regular-file entry, shared by fork and descriptor exec.
+    /* The selected entry of a regular file or a directory, shared by fork
+     * and descriptor exec; inotify reports to its directory through it.
      * Its parent and mount stay held until the description's last unref. */
     struct vfs_name *name;
     /* The epoll registrations made of this description, under epoll.c's
@@ -259,9 +260,9 @@ struct open_file {
      * existed, the inode number of the directory the file was opened in
      * and its name there, from the heap, so that the directory's watches
      * hear of its reads, writes and close; an open without the big lock
-     * records them only for a directory, and a file's name record (`name`)
-     * gives them instead (`inotify_desc_dir`). The last unref reports the
-     * close and frees the name. */
+     * records none, and the name record (`name`) gives them instead
+     * (`inotify_desc_dir`). The last unref reports the close and frees the
+     * name. */
     uint32_t watch_flags;
     uint64_t parent_ino;
     char *leaf;

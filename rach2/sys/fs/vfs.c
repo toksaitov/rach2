@@ -1679,7 +1679,16 @@ static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt,
     return 0;
 }
 
-/** Capture a regular file's final entry before its parent hold is released. */
+/** Whether `leaf` is "." or "..", which name no entry of their own. */
+static int leaf_dots(const char *leaf)
+{
+    return leaf[0] == '.' && (leaf[1] == '\0' || (leaf[1] == '.' && leaf[2] == '\0'));
+}
+
+/** Capture the final entry of a regular file or a directory before its
+ * parent hold is released. A directory's record lets inotify report what is
+ * done through a descriptor of it to its directory's watches, as a file's
+ * does (`inotify_desc_dir`); a path that ends in "." or ".." records none. */
 static int walk_record_entry(struct walk_record *record, const struct vfs_ref *parent, void *found,
                              const char *leaf, const char *rest)
 {
@@ -1692,11 +1701,12 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
     while (*rest == '/') {
         rest++;
     }
-    if (*rest || (mount_base(parent->mnt) == mounts[0] && parent->mnt->type == &vfs_krffs_type)) {
+    if (*rest || leaf_dots(leaf) ||
+        (mount_base(parent->mnt) == mounts[0] && parent->mnt->type == &vfs_krffs_type)) {
         return 0;
     }
     rc = vfs_getattr(parent->mnt, found, &st);
-    if (rc != 0 || (st.mode & 0170000u) != 0100000u) {
+    if (rc != 0 || ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)) {
         return rc;
     }
     return vfs_name_capture(parent, leaf, record->entry);
@@ -1807,16 +1817,21 @@ static void cached_put(struct vfs_mount *mnt, void *node)
 }
 
 /** Record the directory entry `leaf` of `parent` in `*entry` when `found`,
- * the walk's last node, is a regular file, as `walk_record_entry` does for
+ * the walk's last node, is a regular file or a directory, as
+ * `walk_record_entry` does for
  * the full walk; `seq` is the count of changes of names the walk began at.
  * 0, or nonzero with nothing recorded, for the full walk. */
 static int cached_entry(const struct vfs_ref *parent, void *found, const char *leaf, uint32_t seq,
                         struct vfs_name **entry)
 {
     struct vfs_stat st;
-    int rc = parent->mnt->type->ops->getattr(mount_base(parent->mnt), found, &st);
+    int rc;
 
-    if (rc != 0 || (st.mode & 0170000u) != 0100000u) {
+    if (leaf_dots(leaf)) {
+        return 0;
+    }
+    rc = parent->mnt->type->ops->getattr(mount_base(parent->mnt), found, &st);
+    if (rc != 0 || ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)) {
         return rc;
     }
     return vfs_name_capture_at(parent, leaf, seq, entry);
@@ -1835,7 +1850,8 @@ struct cached_record {
 /**
  * The cached walk's checks on `found`, the node of the name `leaf` it just
  * looked up in `cur`, with `rest` the path after it: 0, with a regular
- * file's entry recorded at the last name as `rec` asks (`cached_entry`);
+ * file's or a directory's entry recorded at the last name as `rec` asks
+ * (`cached_entry`);
  * WALK_LINK, with `found` held, for a symbolic link the walk follows,
  * which fs.protected_symlinks allows at the last name (`may_follow_link`),
  * as Linux's pick_link asks (fs/namei.c:1837); or WALK_FULL, with `found`
@@ -3872,10 +3888,15 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
+    vfs_name_change_begin();
     victim = dcache_forget_victim(mount_base(mnt), dir, name);
     rc = mnt->type->ops->rmdir(mount_base(mnt), dir, name);
     dcache_forget(mount_base(mnt), dir, name);
     dcache_forget_dir(mount_base(mnt), victim);
+    if (rc == 0) {
+        vfs_name_unlink(mnt, dir, name);
+    }
+    vfs_name_change_end();
     if (rc == 0 && watched) {
         watch_removed(mnt, parent.ino, name, &was);
     }

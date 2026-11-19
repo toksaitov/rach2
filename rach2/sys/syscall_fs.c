@@ -2869,7 +2869,8 @@ static int synth_procfs_kind(int kind);
  * read again, since a snapshot's descriptor may have been closed without
  * the big lock since it was published. An O_PATH descriptor on such a file,
  * which `synth_open_path` makes, takes the mount here as any other does. */
-static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags, int opened)
+static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags,
+                               int opened)
 {
     struct open_file *ofd;
     struct vfs_ref root;
@@ -5547,7 +5548,8 @@ static void open_done(int fd, const char *name, int flags)
 }
 
 /* The events a read-only descriptor of a directory gives its directory's
- * watches, for which `open_install_unlocked` records that directory. */
+ * watches, for which `open_install_unlocked` records the directory of one
+ * with no name record. */
 #define OPEN_DIR_EVENTS (IN_OPEN | IN_ACCESS | IN_CLOSE_NOWRITE | IN_ATTRIB)
 
 /* The open flags that send an open to the big lock (`open_unlocked`): any
@@ -5566,12 +5568,14 @@ static void open_done(int fd, const char *name, int flags)
  * before the entry is published, as Linux's `vfs_open` reports the open
  * before `fd_install` (fs/open.c): once published, another thread may close
  * the descriptor and open another file in its slot. The report takes the
- * big lock only when a watch may hear it (`inotify_desc_wants`). A file's
- * directory is found for later events through its name record `entry`
- * (`inotify_desc_dir`); a directory, which has none, has its own recorded
- * under the big lock while a watch of a directory of its file system may
- * want an event a read-only descriptor gives (`open_record_parent`). The
- * descriptor, or a negative errno with everything given back.
+ * big lock only when a watch may hear it (`inotify_desc_wants`). The
+ * directory of a file or a directory is found for later events through its
+ * name record `entry` (`inotify_desc_dir`), whatever watches there are at
+ * the open, as Linux's dentry keeps its parent; one with no record, the
+ * root, has its directory looked for under the big lock while a watch of a
+ * directory of its file system may want an event a read-only descriptor
+ * gives (`open_record_parent`). The descriptor, or a negative errno with
+ * everything given back.
  */
 static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry, int fd,
                                      const char *name, int flags, const struct vfs_stat *st)
