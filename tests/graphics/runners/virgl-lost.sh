@@ -5,7 +5,7 @@
 #
 #   virgl-lost.sh [-f FRAMES] [-o OUT]
 #
-# Ends any Weston that runs, such as Rach2's boot session when the runner is
+# Ends any Weston that runs, such as Rach2's desktop session when the runner is
 # started by hand, and starts a Weston of its own on the DRM card with its
 # GL renderer, virgl's, through libseat's noop backend, as vkcube.sh does.
 # weston-simple-egl draws to it, so that Weston's renderer composites, and

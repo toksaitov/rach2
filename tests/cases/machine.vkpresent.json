@@ -41,7 +41,7 @@
         "program": "graphics_scenario",
         "stdin": null,
         "role": "ordinary",
-        "privileges": "the runner runs as root, which opens the card through libseat's noop backend for its Weston and ends the boot session's",
+        "privileges": "the runner runs as root, which opens the card through libseat's noop backend for its Weston and ends the desktop session's",
         "isolation": [
           {
             "fixture": "scratch"
@@ -67,7 +67,7 @@
           "step_id": "run",
           "stage": "execute",
           "machine": "gnu",
-          "does": "run vkcube.sh -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json, Venus's ICD alone, as root with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel: it builds its layer with the root's GCC, ends the boot session's Weston, starts its own on the card, presents 346 frames, and reads back and checksums the 300th and the 345th while vkcube is held after each"
+          "does": "run vkcube.sh -i /usr/share/vulkan/icd.d/venus_icd.x86_64.json, Venus's ICD alone, as root with GRAPHICS_CLASS=performance and GRAPHICS_DONE=1, through the framed guest channel: it builds its layer with the root's GCC, ends the desktop session's Weston, starts its own on the card, presents 346 frames, and reads back and checksums the 300th and the 345th while vkcube is held after each"
         },
         {
           "step_id": "judge",
