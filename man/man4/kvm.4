@@ -177,7 +177,11 @@ with argument 0, before the first vCPU and from a caller with
 .Dv CAP_SYS_BOOT
 in the first user namespace, which changes nothing, since every leaf of
 the guest-physical tables is executable and no large page is split for an
-instruction fetch.
+instruction fetch; and
+.Dv KVM_CAP_HALT_POLL ,
+at any time, the VM's bound in ns on halt polling in place of
+.Pa halt_poll_ns ,
+below.
 .Pp
 .Dv KVM_CAP_DISABLE_QUIRKS2
 names the quirks that
@@ -711,9 +715,20 @@ A vCPU counts
 .Va hypercalls ,
 .Va insn_emulation ,
 .Va insn_emulation_fail ,
-.Va preemption_reported
-and
+.Va preemption_reported ,
 .Va preemption_other ,
+halt polling's
+.Va halt_attempted_poll ,
+.Va halt_successful_poll ,
+.Va halt_wakeup ,
+.Va halt_poll_success_ns ,
+.Va halt_poll_fail_ns ,
+.Va halt_wait_ns ,
+.Va halt_poll_success_hist ,
+.Va halt_poll_fail_hist ,
+.Va halt_wait_hist
+and
+.Va blocking ,
 and a VM
 .Va pages_4k ,
 .Va pages_2m ,
@@ -1044,12 +1059,24 @@ reads Y or N according to the host PMU probe.
 It is read-only.
 .Pa /sys/module/kvm/parameters/force_emulation_prefix ,
 .Pa eager_page_split ,
-.Pa ignore_msrs
-and
+.Pa ignore_msrs ,
 .Pa report_ignored_msrs
-are writable by root, as
+and halt polling's four are writable by root, as
 .Xr sysfs 5
 describes.
+.Pp
+A halted vCPU spins for an event before it sleeps, as Linux's
+.Fn kvm_vcpu_halt
+does, for up to its window, which starts at 0, grows after a halt shorter
+than the bound,
+.Pa halt_poll_ns
+or the VM's
+.Dv KVM_CAP_HALT_POLL ,
+and shrinks after a longer one.
+The spin ends early when another thread waits for the processor.
+A guest that clears bit 0 of
+.Dv MSR_KVM_POLL_CONTROL
+is not polled.
 .Sh FILES
 .Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm
@@ -1301,7 +1328,7 @@ The TSC's rate is scaled only where the processor scales it.
 Of KVM's paravirtual features there are no asynchronous page faults,
 paravirtual EOI or TLB flush, and without a measured TSC rate no kvmclock.
 The APIC, PIT and Hyper-V timers keep nanosecond deadlines.
-A halted vCPU waits on a fine host event.
+A halted vCPU polls, then waits on a fine host event.
 SVM arms the host event timer before entering a running vCPU; VMX bounds
 its entry with the preemption timer.
 The periodic 4 ms scheduler tick is a fallback where fine events are unavailable.
