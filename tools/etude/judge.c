@@ -1771,15 +1771,28 @@ static int panic_record(const char *s, size_t n)
 
 /**
  * Returns 1 when the `n` bytes at `s`, a critical record, are a line of a
- * panic's report. The kernel prints those only after the panic's own
- * record, `panic: stopped:`, which is judged by itself.
+ * panic's call trace or report: `panic: Call Trace:`, a return address of
+ * the trace, `panic:  0x...`, or `panic: report: ...`. The kernel prints
+ * those only after the panic's own record, `panic: stopped:`, which is
+ * judged by itself.
  */
 static int report_record(const char *s, size_t n)
 {
+    static const char *const tails[] = {"report: ", "Call Trace:", " 0x"};
     const char *close = memchr(s, ']', n);
+    size_t i, left, len;
 
-    return close != NULL && (size_t)(s + n - close) >= 17 &&
-           memcmp(close, "] panic: report: ", 17) == 0;
+    if (close == NULL || (size_t)(s + n - close) < 9 || memcmp(close, "] panic: ", 9) != 0) {
+        return 0;
+    }
+    left = (size_t)(s + n - close) - 9;
+    for (i = 0; i < sizeof tails / sizeof tails[0]; i++) {
+        len = strlen(tails[i]);
+        if (left >= len && memcmp(close + 9, tails[i], len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /**
