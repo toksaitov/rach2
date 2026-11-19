@@ -196,6 +196,7 @@ static uint32_t nc_lost;
 struct nc_target {
     struct nc_target *next;
     struct netdev *nd; /* the interface `dev` named, found at setup */
+    int ifindex;       /* its index then; the target holds once it is gone */
     int ipv6;
     int extended; /* `+`: Linux's extended form */
     int release;  /* `r`: the release before it */
@@ -1024,7 +1025,8 @@ static int nc_send_line(struct nc_target *t, uint32_t end)
     uint32_t n, from, pre = 0;
     int r;
 
-    if (!nc_link_ready(t->nd, &t->start, nc_behind(t->tail)) || !nc_source(t, src)) {
+    if (netdev_by_index(t->ifindex) != t->nd ||
+        !nc_link_ready(t->nd, &t->start, nc_behind(t->tail)) || !nc_source(t, src)) {
         t->held = 1;
         return 0;
     }
@@ -1398,6 +1400,7 @@ static int nc_parse_target(char *cur, struct nc_target *t)
              dev.by_mac ? "station address" : dev.name);
         return 0;
     }
+    t->ifindex = t->nd->index;
     return 1;
 }
 
