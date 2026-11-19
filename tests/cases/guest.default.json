@@ -5046,7 +5046,15 @@
         {"assertion_id": "io-einval", "checks": "a level past 7, and class none with a level, fail with EINVAL", "source": "program"},
         {"assertion_id": "io-user-idle", "checks": "a caller of uid 1000 takes the idle class", "source": "program"},
         {"assertion_id": "io-user-realtime-eperm", "checks": "it fails with EPERM to take the real-time class", "source": "program"},
-        {"assertion_id": "io-user-root-eperm", "checks": "it fails with EPERM to change root's process", "source": "program"}
+        {"assertion_id": "io-user-root-eperm", "checks": "it fails with EPERM to change root's process", "source": "program"},
+        {"assertion_id": "stat-fields", "checks": "/proc/self/stat has 52 fields, the processor getcpu names in the 39th and 0 for the real-time priority and the policy in the 40th and 41st", "source": "program"},
+        {"assertion_id": "autogroup-setsid", "checks": "a child that calls setsid reads its session's group at nice 0 from /proc/self/autogroup", "source": "program"},
+        {"assertion_id": "autogroup-nice", "checks": "a write of 5 to /proc/self/autogroup sets the group's nice value", "source": "program"},
+        {"assertion_id": "autogroup-nice-einval", "checks": "a write of 20 to /proc/self/autogroup fails with EINVAL", "source": "program"},
+        {"assertion_id": "autogroup-process-only", "checks": "a thread's directory under task has no autogroup file", "source": "program"},
+        {"assertion_id": "autogroup-sysctl", "checks": "kernel/sched_autogroup_enabled reads 1 and refuses 2 with EINVAL", "source": "program"},
+        {"assertion_id": "rt-bandwidth-sysctl", "checks": "kernel/sched_rt_period_us and sched_rt_runtime_us read 1000000 and 950000, refuse a period of 0 and a runtime past the period with EINVAL, and keep their values", "source": "program"},
+        {"assertion_id": "debugfs-sched", "checks": "/sys/kernel/debug/sched has migration_cost_ns 500000, nr_migrate 32, processor 0's fair server of 50000000 ns in 1000000000 ns, and a debug file with Linux's version line and processor 0's section", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
