@@ -97,14 +97,29 @@ uint32_t thp_mapped(void);
  */
 int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t start, int how);
 
+/**
+ * Scan `mm` from where khugepaged last stopped in it (`thp_next`) for at
+ * most `budget` pages, as Linux's hpage_collapse_scan_mm_slot: each 2 MiB
+ * of a region that allows huge pages to khugepaged counts 512 and is
+ * collapsed where it can be (`paging_collapse`), and each other region
+ * counts one. Once its last region is scanned the space has finished the
+ * pass numbered `pass`, which its `thp_pass` records. The caller holds the
+ * regions' lock to write. The pages counted; `*nomem` is set when no huge
+ * page could be had, after which khugepaged sleeps for
+ * `alloc_sleep_millisecs`. Nothing where the page directory maps no huge
+ * page (MMU_HUGE 0).
+ */
+uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem);
+
 /** Set the policy for the machine's memory at boot, once the frame
  * allocator has counted it. */
 void thp_boot(void);
 
 /**
- * Start khugepaged, the kernel thread that collapses the small pages of
- * eligible ranges into huge pages, once, at boot. Nothing where the page
- * directory maps no huge page.
+ * Register the shrinker of huge pages and start khugepaged, the kernel
+ * thread that collapses the small pages of eligible ranges into huge pages
+ * (khugepaged.c), once, at boot. No thread where the page directory maps
+ * no huge page.
  */
 void thp_init(void);
 

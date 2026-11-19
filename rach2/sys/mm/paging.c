@@ -1500,7 +1500,8 @@ static int huge_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write
     uint32_t i;
     int rc;
 
-    if (PROT_NO_ACCESS(vma->prot) || !thp_region_allows(mm, vma, start, THP_FAULT)) {
+    if (PROT_NO_ACCESS(vma->prot) || !thp_region_allows(mm, vma, start, THP_FAULT) ||
+        vm_guard_in(&mm->vm, start, start + HUGE_SPAN)) {
         return 0;
     }
     for (i = 0; table && i < HUGE_PAGES; i++) {
@@ -4882,3 +4883,152 @@ void paging_leave_kernel(uintptr_t saved)
         arch_space_load(saved);
     }
 }
+
+#if MMU_HUGE
+/* What `collapse_scan` found in the entries of a 2 MiB range. */
+struct collapse_scan {
+    uint32_t mapped;     /* entries that hold a page */
+    uint32_t none;       /* entries with no page, or a page never written */
+    uint32_t shared;     /* pages another mapping holds too */
+    uint32_t referenced; /* pages the processor marked accessed */
+    int writable;        /* whether any entry allows a write */
+};
+
+/**
+ * Read the entries of `table`, the 2 MiB of `mm` from `start`, for a
+ * collapse by `how`, as Linux 6.12's hpage_collapse_scan_pmd reads them,
+ * filling `*sc`: an entry with no page, or a page a read fault left zeroed
+ * (PTE_ZEROFILL), counts as none, and khugepaged takes at most
+ * `max_ptes_none` of those and `max_ptes_shared` pages another mapping
+ * holds; a page of a device, a pinned page or an entry that holds no page
+ * but is not empty (a guard's or one being taken away) refuses the range.
+ * 0, or the negative errno MADV_COLLAPSE returns for the refusal
+ * (madvise_collapse_errno): -EBUSY past `max_ptes_none`, -EAGAIN for a
+ * pinned page, -EINVAL for any other.
+ */
+static int collapse_scan(struct mm *mm, const pte_t *table, uintptr_t start, int how,
+                         struct collapse_scan *sc)
+{
+    uint32_t i, none_max = how == THP_SCAN ? thp_policy.max_ptes_none : HUGE_PAGES;
+    uint32_t shared_max = how == THP_SCAN ? thp_policy.max_ptes_shared : HUGE_PAGES;
+
+    k_memset(sc, 0, sizeof(*sc));
+    if (vm_guard_in(&mm->vm, start, start + HUGE_SPAN)) {
+        return -EINVAL;
+    }
+    for (i = 0; i < HUGE_PAGES; i++) {
+        pte_t e = table[i];
+        uintptr_t phys = PTE_ADDR(e);
+
+        if (e == 0 || (e & PTE_ZEROFILL)) {
+            if (++sc->none > none_max) {
+                return -EBUSY;
+            }
+        }
+        if (e == 0) {
+            continue;
+        }
+        if ((e & (PTE_P | PTE_U)) != (PTE_P | PTE_U) || paging_frame_is_device(phys)) {
+            return -EINVAL;
+        }
+        if (frame_pinned(phys)) {
+            return -EAGAIN;
+        }
+        sc->mapped++;
+        if (!(e & PTE_ZEROFILL) && frame_maps(phys / PAGE_SIZE) > 1 && ++sc->shared > shared_max) {
+            return -EINVAL;
+        }
+        sc->writable |= (e & (PTE_W | PTE_COW)) != 0;
+        sc->referenced += (e & PTE_ACCESSED) != 0;
+    }
+    if (!sc->writable) {
+        return -EINVAL;
+    }
+    if (how == THP_SCAN && sc->referenced == 0) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int paging_collapse(struct mm *mm, uintptr_t start, int how)
+{
+    page_dir_t *dir = mm->dir;
+    const vma_t *vma = vm_find(&mm->vm, start);
+    pte_t flags, *table;
+    struct collapse_scan sc;
+    struct flush_batch b;
+    uintptr_t base, addr;
+    uint32_t i, lock;
+    int rc;
+
+    if (!vma || !thp_region_allows(mm, vma, start, how)) {
+        return -EINVAL;
+    }
+    if (mmu_user_huge(dir, start)) {
+        return 0;
+    }
+    table = mmu_user_table(dir, start, 0);
+    if (!table) {
+        return -EINVAL;
+    }
+    rc = collapse_scan(mm, table, start, how, &sc);
+    if (rc != 0) {
+        return rc;
+    }
+    base = alloc_huge_frames();
+    thp_note(base ? THP_COLLAPSE_ALLOC : THP_COLLAPSE_ALLOC_FAILED);
+    if (!base) {
+        return -ENOMEM;
+    }
+    mmn_notify(mm, MMN_DROP, start, start + HUGE_SPAN);
+    bkl_enter();
+    batch_start(&b, dir);
+    for (i = 0, addr = start; i < HUGE_PAGES; i++, addr += PAGE_SIZE) {
+        if (table[i] & PTE_P) {
+            batch_add(&b, addr);
+            table[i] = (table[i] & ~(pte_t)PTE_P) | PTE_NONE | PTE_U;
+        }
+    }
+    bkl_exit();
+    batch_flush(&b);
+    for (i = 0; i < HUGE_PAGES; i++) {
+        uintptr_t to = base + (uintptr_t)i * PAGE_SIZE;
+
+        frame_make_anon(to);
+        if ((table[i] == 0 || (table[i] & PTE_ZEROFILL))
+                ? paging_zero_frame(to)
+                : paging_copy_frame(to, PTE_ADDR(table[i]))) {
+            break;
+        }
+    }
+    lock = mm_ptl_lock(mm);
+    if (i < HUGE_PAGES) { /* no temporary mapping: the old pages come back */
+        for (i = 0; i < HUGE_PAGES; i++) {
+            if (PTE_GOING(table[i])) {
+                table[i] = (table[i] & ~(pte_t)PTE_NONE) | PTE_P;
+            }
+        }
+        mm_ptl_unlock(mm, lock);
+        huge_unref(base);
+        return -ENOMEM;
+    }
+    flags = PTE_P | PTE_U | PTE_ACCESSED | PTE_DIRTY | paging_prot_bits(vma->prot) |
+            ((vma->prot & VM_PROT_WRITE) ? PTE_W : 0);
+    for (i = 0; i < HUGE_PAGES; i++) {
+        pte_t old = table[i];
+
+        table[i] = PTE_ADDR((pte_t)(base + (uintptr_t)i * PAGE_SIZE)) | (flags & (pte_t)PTE_FLAGS);
+        if (old != 0) {
+            frame_unref(PTE_ADDR(old));
+        }
+    }
+    rc = mmu_user_huge_set(dir, start, (pte_t)base | (flags & (pte_t)PTE_FLAGS));
+    mm_ptl_unlock(mm, lock);
+    mm_resident_add(dir, (long)HUGE_PAGES - (long)sc.mapped);
+    if (rc == 0) {
+        thp_mapped_add(1);
+    }
+    thp_note(THP_PAGES_COLLAPSED);
+    return 0;
+}
+#endif

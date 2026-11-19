@@ -398,6 +398,17 @@ int vm_guarded(const vm_space_t *vm, uintptr_t addr)
     return i < vm->nguards && vm->guards[i].start <= addr;
 }
 
+int vm_guard_in(const vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    uint32_t i;
+
+    if (vm->nguards == 0) {
+        return 0;
+    }
+    i = guard_lower(vm, start);
+    return i < vm->nguards && vm->guards[i].start < end;
+}
+
 /** Make room in `vm` for `n` more runs of guard pages; 0, or -1 with no
  * memory or past VM_GUARDS_MAX, with nothing changed. */
 static int guard_room(vm_space_t *vm, uint32_t n)

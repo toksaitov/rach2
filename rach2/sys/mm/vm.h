@@ -655,6 +655,10 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit);
  * 1 or 0. The caller holds the regions' lock, to read or to write. */
 int vm_guarded(const vm_space_t *vm, uintptr_t addr);
 
+/** Whether any page of [start, end) is a guard page: 1 or 0. The caller
+ * holds the regions' lock, to read or to write. */
+int vm_guard_in(const vm_space_t *vm, uintptr_t start, uintptr_t end);
+
 /**
  * Make each page of [start, end), page-aligned, a guard page when `on`, as
  * MADV_GUARD_INSTALL does, or no longer one, as MADV_GUARD_REMOVE does; a

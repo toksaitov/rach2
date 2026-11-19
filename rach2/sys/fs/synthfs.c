@@ -1025,6 +1025,16 @@ static const char *const *sysfs_system_attrs(int node)
     static const char *const thp[] = {
         "enabled",          "defrag", "use_zero_page", "hpage_pmd_size", "shmem_enabled",
         "shrink_underused", 0};
+    static const char *const khugepaged[] = {"alloc_sleep_millisecs",
+                                             "defrag",
+                                             "full_scans",
+                                             "max_ptes_none",
+                                             "max_ptes_shared",
+                                             "max_ptes_swap",
+                                             "pages_collapsed",
+                                             "pages_to_scan",
+                                             "scan_sleep_millisecs",
+                                             0};
     /* In the order of dmi.h's DMI_ fields, then modalias. */
     static const char *const dmi[] = {
         "bios_vendor",         "bios_version",      "bios_date",     "bios_release",
@@ -1034,13 +1044,14 @@ static const char *const *sysfs_system_attrs(int node)
         "board_asset_tag",     "chassis_vendor",    "chassis_type",  "chassis_version",
         "chassis_serial",      "chassis_asset_tag", "modalias",      0};
 
-    return node == SYSFS_CPU_CACHE_INDEX ? cache
-           : node == SYSFS_NODE          ? node_states
-           : node == SYSFS_NODE0         ? node0
-           : node == SYSFS_CLOCKSOURCE0  ? clocksource
-           : node == SYSFS_THP           ? thp
-           : node == SYSFS_DMI_ID        ? dmi
-                                         : 0;
+    return node == SYSFS_CPU_CACHE_INDEX  ? cache
+           : node == SYSFS_NODE           ? node_states
+           : node == SYSFS_NODE0          ? node0
+           : node == SYSFS_CLOCKSOURCE0   ? clocksource
+           : node == SYSFS_THP            ? thp
+           : node == SYSFS_THP_KHUGEPAGED ? khugepaged
+           : node == SYSFS_DMI_ID         ? dmi
+                                          : 0;
 }
 
 const char *sysfs_attr(int node, int n)
@@ -1170,7 +1181,9 @@ int sysfs_attr_writable(int node, int attr)
            (node == SYSFS_PCI_DEVICE && attr == SYSFS_PCI_CONFIG) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
            (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE)) ||
-           (node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE);
+           (node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE) ||
+           (node == SYSFS_THP_KHUGEPAGED && attr != SYSFS_KHP_FULL_SCANS &&
+            attr != SYSFS_KHP_COLLAPSED);
 }
 
 int sysfs_file_writable(int node, int key, int attr)
@@ -1291,10 +1304,13 @@ static int synth_sys_later_path(int node, int key, char *out, int cap)
             synth_put(out, cap, &pos, "/index");
             synth_put_uint(out, cap, &pos, (unsigned int)(key & 15));
         }
-    } else if (node == SYSFS_KERNEL_MM || node == SYSFS_THP) {
+    } else if (node == SYSFS_KERNEL_MM || node == SYSFS_THP || node == SYSFS_THP_KHUGEPAGED) {
         synth_put(out, cap, &pos, "/sys/kernel/mm");
-        if (node == SYSFS_THP) {
+        if (node != SYSFS_KERNEL_MM) {
             synth_put(out, cap, &pos, "/transparent_hugepage");
+        }
+        if (node == SYSFS_THP_KHUGEPAGED) {
+            synth_put(out, cap, &pos, "/khugepaged");
         }
     } else if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
         synth_put(out, cap, &pos, system[node - SYSFS_NODE]);
@@ -1812,11 +1828,28 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
     return vp->kind;
 }
 
+/** Classify the components `c` of `n` below /sys/kernel/mm: its
+ * `transparent_hugepage` with its attributes, and that directory's
+ * `khugepaged` with its own; any other name is VNODE_ENOENT. */
+static int synth_classify_sys_mm(const struct comp *c, int n, struct vpath *vp)
+{
+    if (n >= 2 && comp_eq(c[0], "transparent_hugepage") && comp_eq(c[1], "khugepaged")) {
+        return synth_classify_sys_attr(c + 2, n - 2, SYSFS_THP_KHUGEPAGED, 0, vp);
+    }
+    if (n >= 1 && comp_eq(c[0], "transparent_hugepage")) {
+        return synth_classify_sys_attr(c + 1, n - 1, SYSFS_THP, 0, vp);
+    }
+    vp->sysent = SYSFS_KERNEL_MM;
+    vp->kind = n == 0 ? VNODE_SYS_DIR : VNODE_ENOENT;
+    return vp->kind;
+}
+
 /**
  * Classify the components `c` of `n`, at least one, below /sys among the
  * fixed directories numbered from SYSFS_KERNEL, which hold drivers'
  * entries: /sys/bus/platform and its `devices`, /sys/kernel with its
- * `debug`, `mm/transparent_hugepage` and its attributes, and
+ * `debug`, `mm/transparent_hugepage` with its attributes and its
+ * `khugepaged` with its own, and
  * /sys/devices/platform. The kind, with any
  * other name below them VNODE_ENOENT, or -1 for a path outside them.
  */
@@ -1832,11 +1865,7 @@ static int synth_classify_sys_later(const struct comp *c, int n, struct vpath *v
         vp->sysent = SYSFS_KERNEL_DEBUG;
         vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
     } else if (n >= 2 && comp_eq(c[0], "kernel") && comp_eq(c[1], "mm")) {
-        if (n >= 3 && comp_eq(c[2], "transparent_hugepage")) {
-            return synth_classify_sys_attr(c + 3, n - 3, SYSFS_THP, 0, vp);
-        }
-        vp->sysent = SYSFS_KERNEL_MM;
-        vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
+        return synth_classify_sys_mm(c + 2, n - 2, vp);
     } else if (comp_eq(c[0], "kernel")) {
         return synth_classify_sys_attr(c + 1, n - 1, SYSFS_KERNEL, 0, vp);
     } else if (n >= 2 && comp_eq(c[0], "devices") && comp_eq(c[1], "platform")) {

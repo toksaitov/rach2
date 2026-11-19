@@ -131,6 +131,10 @@ struct mm {
      * (thp.h): 0 for a new space; a fork's copy and an exec's new image
      * take it, as Linux's MMF_DISABLE_THP is in MMF_INIT_MASK. */
     uint32_t thp_disable;
+    /* khugepaged's place in the space (thp.c): the number of its last
+     * pass that finished the space, and the address it goes on from. */
+    uint32_t thp_pass;
+    uintptr_t thp_next;
     /* The ranges drivers registered to hear of changes to the pages
      * (notify.h), among them those of the pins charged to the address
      * space (pin.h); a fork's copy has none. */
