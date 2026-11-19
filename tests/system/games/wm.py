@@ -444,6 +444,9 @@ def full(width, height):
 
 def row_place():
     """xplace and Wine's window at the output's 1366x768, and xplace's raw motion."""
+    protocol = Path("/sys/bus/serio/devices/serio1/protocol")
+    if protocol.read_text().strip() == "VirtualPS/2":
+        protocol.write_bytes(b"exps")
     session("1366x768")
     seat_pointer()
     offset = SERVICES.stat().st_size
