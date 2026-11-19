@@ -10184,9 +10184,11 @@ static int sched_may_change(const process_t *p)
 /**
  * Give way to the other ready processes (sched_yield).
  *
- * The caller is put behind them in the round-robin order and runs again when
- * its turn comes, at once when no other process is ready, which needs no
- * selection and takes no lock (`sched_yield_alone`). Returns 0.
+ * A real-time caller goes behind its peers of the same priority; an
+ * ordinary one has its virtual runtime moved to its deadline, as Linux's
+ * yield_task_fair (`fair_yield`), and runs again when EEVDF picks it. With
+ * no other thread ready it returns at once, which needs no selection and
+ * takes no lock (`sched_yield_alone`). Returns 0.
  */
 long sys_sched_yield(isr_params_t *params)
 {
