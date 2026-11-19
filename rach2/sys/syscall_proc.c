@@ -3963,7 +3963,7 @@ static void wait_done(struct wait_report *r, int ok)
  * which is taken only under the big lock, when the caller does not hold
  * it; or LOOK_NONE.
  */
-static int wait_tracee(process_t *p, int options, struct wait_report *out)
+static int wait_tracee_locked(process_t *p, int options, struct wait_report *out)
 {
     uint32_t stop = p->ptrace_status;
 
@@ -3991,6 +3991,29 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
         return LOOK_HELD;
     }
     return LOOK_NONE;
+}
+
+/**
+ * Look for a tracee's event with the list lock held. Skip a tracee with
+ * nothing to report before taking the signal lock, as Linux's
+ * wait_task_stopped checks task_stopped_code first (kernel/exit.c:1230).
+ * A later stop or end wakes a blocking caller on its filed queue entry.
+ * The locked look rechecks the event before reserving it.
+ */
+static int wait_tracee(process_t *p, int options, struct wait_report *out)
+{
+    uint32_t flags;
+    int look;
+
+    if ((*(volatile uint32_t *)&p->ptrace_status == 0 ||
+         *(volatile uint32_t *)&p->ptrace_reported != 0) &&
+        (*(volatile proc_state_t *)&p->state != PROC_ZOMBIE || !(options & WEXITED))) {
+        return LOOK_NONE;
+    }
+    flags = signal_state_lock();
+    look = wait_tracee_locked(p, options, out);
+    signal_state_unlock(flags);
+    return look;
 }
 
 /**
@@ -4062,9 +4085,7 @@ static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *o
         }
         if (wait_selects_tracee(idtype, id, options, p)) {
             *have = 1;
-            flags = signal_state_lock();
             look = wait_tracee(p, options, out);
-            signal_state_unlock(flags);
             if (look != LOOK_NONE) {
                 break;
             }
@@ -4084,9 +4105,7 @@ static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *o
         if ((p->pid != p->tgid || p->parent_pid != tgid) &&
             wait_selects_tracee(idtype, id, options, p)) {
             *have = 1;
-            flags = signal_state_lock();
             look = wait_tracee(p, options, out);
-            signal_state_unlock(flags);
             if (look != LOOK_NONE) {
                 break;
             }
@@ -4129,11 +4148,10 @@ static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *o
  * Without WNOHANG the caller then sleeps on its process's child queue, which
  * an exit, a stop or a continue wakes, until a child has an event or a
  * signal interrupts, as Linux's do_wait sleeps on `wait_chldexit`. The
- * caller joins the queue, with a record on its stack, and is marked
- * PROC_BLOCKED before it looks at the children and tests `signal_pending`,
- * so a wake or a signal posted after the look finds it blocked and makes
- * it ready; a child's release that sleeps meanwhile leaves it RUNNING, and
- * it returns what it found.
+ * caller marks itself PROC_BLOCKED before joining the queue so that a
+ * wake which removes the record also makes the caller ready. It then looks
+ * at the children and tests `signal_pending`. WNOHANG needs neither the
+ * queue nor the signal lock around its own thread's sleep state.
  *
  * Returns the pid; 0 with WNOHANG when a selected child has nothing to
  * report; -ECHILD when no child is selected; or -EINTR when a signal the
@@ -4145,6 +4163,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
     struct wq_waiter self;
     uint32_t flags;
     int32_t rc;
+    int blocking = !(options & WNOHANG);
 
     self.proc = current_proc;
     self.next = NULL;
@@ -4157,33 +4176,39 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
     for (;;) {
         int have_child = 0, look;
 
-        flags = sig_irq_save();
-        if (!(options & WNOHANG)) {
-            wq_poll_add(&current_proc->tg->chld, &self);
+        if (blocking) {
+            flags = sig_irq_save();
             current_proc->wchan = "do_wait";
             sched_set_current_state(PROC_BLOCKED);
+            wq_poll_add(&current_proc->tg->chld, &self);
+            sig_irq_restore(flags);
         }
-        sig_irq_restore(flags);
         look = wait_scan(idtype, id, options, out, &have_child);
         rc = look == LOOK_HELD ? (int32_t)out->pid : 0;
-        flags = sig_irq_save();
+        if (blocking) {
+            flags = sig_irq_save();
+        }
         if (look == LOOK_BIG) {
-            wq_poll_remove(&current_proc->tg->chld, &self);
-            current_proc->state = PROC_RUNNING;
-            sig_irq_restore(flags);
+            if (blocking) {
+                wq_poll_remove(&current_proc->tg->chld, &self);
+                current_proc->state = PROC_RUNNING;
+                sig_irq_restore(flags);
+            }
             bkl_enter();
             out->big = 1;
             continue;
         }
         if (rc == 0 && !have_child) {
             rc = -ECHILD;
-        } else if (rc == 0 && !(options & WNOHANG) && signal_pending()) {
+        } else if (rc == 0 && blocking && signal_pending()) {
             rc = -EINTR;
         }
-        if (rc != 0 || (options & WNOHANG)) {
-            wq_poll_remove(&current_proc->tg->chld, &self);
-            current_proc->state = PROC_RUNNING;
-            sig_irq_restore(flags);
+        if (rc != 0 || !blocking) {
+            if (blocking) {
+                wq_poll_remove(&current_proc->tg->chld, &self);
+                current_proc->state = PROC_RUNNING;
+                sig_irq_restore(flags);
+            }
             if (rc <= 0 && out->big) {
                 out->big = 0;
                 bkl_exit();
