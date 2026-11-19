@@ -219,6 +219,17 @@ from 0 to 7 and partition
 .Ar M
 from 1 to 15,
 whose superblock has the ext2 magic.
+With
+.Ql rach2.fsck= Ns Ar UUID Ns Op , Ns Ar UUID ...
+it runs
+.Ql e2fsck -p
+on each of those partitions whose ext2 volume has one of the UUIDs, and
+then restarts the machine once each volume was found and checked to a
+status below 4, so that the next boot takes the saved default; otherwise
+it stays up.
+.Xr bootctl 8 Ns 's
+.Cm fsck
+writes that token on a one-boot entry, as below.
 Its console session is a shell without a login, since the image has no
 accounts of the machine's; see
 .Xr recovery 7 .
@@ -435,6 +446,39 @@ before the first service and waits for it, which clears GRUB's
 on the boot partition, so that the disk's menu goes on booting the saved
 default, as Ubuntu's boot clears it; a failure is reported and the boot
 goes on.
+.Pp
+The same builds, on a boot whose line has
+.Ql rach2.slot=candidate ,
+.Ql rach2.slot=fallback
+or
+.Ql rach2.slot=trialroot ,
+then look for each ext2 volume of a partition
+.Pa /dev/disk Ns Ar N Ns Pa p Ns Ar M
+that
+.Pa /proc/mounts
+lists as
+.Ql ro
+and whose superblock has its valid bit clear or its error bit set: a
+volume the kernel left read-only because its check at the mount stopped
+at a fault or at its own limit, which frees nothing on it until e2fsck
+runs.
+That kernel takes no raw write of a partition, so e2fsck runs in the
+recovery system, as a Linux distribution checks a volume that is not clean
+at boot before it mounts it writable.
+.Nm
+runs
+.Ql bootctl fsck Ar UUID Ns Op , Ns Ar UUID ...
+with those volumes' UUIDs and waits for it, then restarts the machine at
+once.
+The next boot is recovery's check, which restarts the machine again, and
+the boot after it takes the saved default and mounts the repaired volume
+writable.
+.Xr bootctl 8
+does not arm the check again within an hour of the last arming, so a fault
+the check does not mend leaves the volume read-only and the boot goes on;
+so does a failure of
+.Nm bootctl ,
+which is reported.
 .Pp
 Every build applies the image's kernel settings as procps's
 .Ql sysctl --system
@@ -674,6 +718,24 @@ leaves the levels alone, with:
 .Pp
 The recovery file system check reports its status as:
 .Dl init: e2fsck: /dev/diskNpM: status S
+.Pp
+Recovery's check of the volumes
+.Ql rach2.fsck=
+names ends with one of:
+.Bd -literal -offset indent
+init: e2fsck: UUIDS: checked; restarting
+init: e2fsck: UUID: no volume of this UUID checked below status 4
+init: e2fsck: UUIDS: not every volume checked; recovery stays up
+.Ed
+.Pp
+A volume the kernel left read-only for e2fsck, and the restart into
+recovery's check, are reported as:
+.Bd -literal -offset indent
+init: fsck: /dev/diskNpM on POINT: read-only and not clean (UUID UUID)
+init: fsck: /dev/diskNpM on POINT: read-only and with errors (UUID UUID)
+init: fsck: restarting into recovery's e2fsck -p
+init: fsck: bootctl fsck failed (status 0xN); the volume stays read-only
+.Ed
 .Pp
 On a boot with
 .Ql rach2.console=term ,
