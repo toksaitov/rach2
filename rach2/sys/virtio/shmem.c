@@ -588,8 +588,8 @@ static uint64_t vs_get_features(struct virtio_dev *d)
     return vs->dev.features;
 }
 
-/** The features the driver takes, and the doorbells when both sides have
- * them. */
+/** The features the driver takes, and the doorbells, the page lists and
+ * the VM's backing when both sides have them. */
 static void vs_set_features(struct virtio_dev *d, uint64_t features)
 {
     struct vshm *vs = to_vs(d);
@@ -599,7 +599,11 @@ static void vs_set_features(struct virtio_dev *d, uint64_t features)
     if (VSHM_PAGES && vs->bells) {
         vs->me.transport_features |= vs->dev.transport_features & VGS_TF_PAGES;
     }
+    if (vs->me.transport_features & VGS_TF_PAGES) {
+        vs->me.transport_features |= vs->dev.transport_features & VGS_TF_BACKING;
+    }
     vs->vdev.pages = (vs->me.transport_features & VGS_TF_PAGES) != 0;
+    vs->vdev.backing = (vs->me.transport_features & VGS_TF_BACKING) != 0;
 }
 
 /** The configuration never changes within an epoch but for its events,

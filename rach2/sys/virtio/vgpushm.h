@@ -53,7 +53,8 @@
 /* Transport features, negotiated apart from virtio's. */
 #define VGS_TF_DOORBELL 0x1u /* both sides ring doorbells instead of polling */
 #define VGS_TF_PAGES    0x2u /* RESOURCE_MAP_BLOB is answered with the VM's pages */
-#define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES)
+#define VGS_TF_BACKING  0x4u /* a resource's backing is the VM's pages; needs PAGES */
+#define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING)
 
 /*
  * Virtio feature bits the transport knows. Device-specific bits 0 to 23
@@ -190,6 +191,32 @@ struct vgs_run {
 
 /* The bytes before a page list's runs: virtio-gpu's header and the list's. */
 #define VGS_PAGES_OFF (24u + 32u)
+
+/*
+ * With VGS_TF_BACKING accepted, a resource of RESOURCE_CREATE_2D or
+ * RESOURCE_CREATE_3D is backed by the VM's own memory, not by the heap:
+ * the driver sends VGS_CMD_BACKING in place of RESOURCE_ATTACH_BACKING, as
+ * many times as MAP_BLOB's page list takes, `first` 0 first. At the first
+ * ask the device allocates `size` bytes of its memory, zeroed, makes them
+ * the resource's backing and pins them for the epoch; each ask is answered
+ * as MAP_BLOB's is, RESP_OK_MAP_INFO with a `struct vgs_pages` of `size`'s
+ * pages and the runs from `first` on. The driver maps the same pages as
+ * the resource's own, so a program's writes reach the device as the heap's
+ * do. The device lets the backing go at DETACH_BACKING, at UNREF, at an
+ * ask it refuses and at the epoch's end. A refusal, ERR_OUT_OF_MEMORY when
+ * the VM has no memory for it, leaves the resource without backing, and
+ * the driver may attach the heap's instead. The command takes no fence:
+ * its answer comes at once.
+ */
+#define VGS_CMD_BACKING 0x0f00u
+
+/* VGS_CMD_BACKING's request, after virtio-gpu's 24-byte header. */
+struct vgs_backing {
+    uint32_t resource_id;
+    uint32_t reserved;
+    uint64_t size;  /* the backing's bytes, whole pages, the same in each ask */
+    uint64_t first; /* the page the answer's runs start at */
+};
 
 /* The device's block, at VGS_DEVICE_OFF; written only by the device. */
 struct vgs_device {
@@ -347,6 +374,7 @@ VGS_ASSERT(attach_size, sizeof(struct vgs_attach) == 32);
 VGS_ASSERT(info_size, sizeof(struct vgs_info) == 128);
 VGS_ASSERT(pages_size, sizeof(struct vgs_pages) == 32);
 VGS_ASSERT(run_size, sizeof(struct vgs_run) == 16);
+VGS_ASSERT(backing_size, sizeof(struct vgs_backing) == 24);
 
 #ifndef VGS_MB
 #define VGS_MB() __sync_synchronize()
@@ -719,9 +747,10 @@ static int vgs_queues_overlap(const struct vgs_queue *a, const struct vgs_queue 
  * The device's check of the driver's setup against the device's own copy of
  * its offer: the same epoch, the state OK, a peer id other than the
  * device's, features within the offer and the transport's allowed set with
- * VERSION_1 among them, and the control queue set and both queues valid and
- * apart. Returns VGS_OK or the rule broken, which the device reports in its
- * error field with VGS_DEV_FAILED.
+ * VERSION_1 among them and VGS_TF_BACKING only beside VGS_TF_PAGES, and the
+ * control queue set and both queues valid and apart. Returns VGS_OK or the
+ * rule broken, which the device reports in its error field with
+ * VGS_DEV_FAILED.
  */
 int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv,
                      const struct vgs_device *offer)
@@ -741,7 +770,8 @@ int vgs_check_accept(const struct vgs_layout *l, const struct vgs_driver *drv,
         (drv->features & VGS_F_VERSION_1) == 0) {
         return VGS_E_FEATURES;
     }
-    if ((drv->transport_features & ~(offer->transport_features & VGS_TF_ALL)) != 0) {
+    if ((drv->transport_features & ~(offer->transport_features & VGS_TF_ALL)) != 0 ||
+        ((drv->transport_features & VGS_TF_BACKING) && !(drv->transport_features & VGS_TF_PAGES))) {
         return VGS_E_FEATURES;
     }
     if (drv->queue[VGS_QUEUE_CONTROL].size == 0) {
