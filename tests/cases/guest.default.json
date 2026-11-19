@@ -7682,7 +7682,7 @@
         },
         {
           "assertion_id": "untorn",
-          "checks": "a thread's clock of processor time and its process's, read over and over on processor 0 while the thread spins on processor 1 and its count, set by debugfs's cputime_test 25 ticks short of 2^32, carries past it with its upper half written only once a read of a clock of processor time has begun and a millisecond later, never step back nor jump a second, and a read begins while the halves are apart",
+          "checks": "a thread's clock of processor time and its process's, read over and over on processor 0 while the thread spins on processor 1 and its count, set by debugfs's cputime_test 25 ticks short of 2^32, carries past it with its upper half written only once a read of a clock of processor time has begun and a millisecond later, never step back nor jump 2^31 ticks, half what a count read with its halves apart moves by, and a read begins while the halves are apart; a carry no read begins in within five ticks is given up and made again",
           "source": "program"
         }
       ],
