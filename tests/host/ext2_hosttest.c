@@ -5685,6 +5685,9 @@ static void regrow_rows(void)
 #define HELD_WAYS 2
 static const char *const held_ways[HELD_WAYS] = {"linked", "renamed"};
 
+/* The names a held-count row may leave in the root. */
+static const char *const held_names[3] = {"src", "twin", "moved"};
+
 /**
  * Make a fresh volume, mount it so that it writes back, and give it `src`,
  * a file of one block, synced. Returns 0, or the first error, with the
@@ -5751,15 +5754,14 @@ static int held_count_run(int way, int *pending)
     return rc == 0 ? OPS->sync(&mnt) : rc;
 }
 
-/** Whether each of `src`, `twin` and `moved` that the root of `img` still
+/** Whether each of the `count` names `names` that the root of `img` still
  * lists names an inode its bitmap marks in use. */
-static int held_count_names_used(const char *img)
+static int names_marked_used(const char *img, const char *const *names, int count)
 {
-    static const char *const names[3] = {"src", "twin", "moved"};
     char request[32];
     int i;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < count; i++) {
         if (!debugfs_lists(img, "/", names[i])) {
             continue;
         }
@@ -5810,7 +5812,7 @@ static void held_count_judge(int way, int k, int n)
              "a file with a pending write and an open description %s, stopped after write %d of "
              "%d, leaves each name marked in use",
              held_ways[way], k, n);
-    check(held_count_names_used(wimg), what);
+    check(names_marked_used(wimg, held_names, 3), what);
 }
 
 /**
@@ -5858,6 +5860,164 @@ static void held_count_rows(void)
         total += n + 1;
     }
     printf("ext2_hosttest: %d stops of new names of held files walked\n", total);
+}
+
+/* ---- the name of a file O_TMPFILE made ---- */
+
+/* How a tmpfile row treats the file `tmpfile` makes, which takes a block
+   and 10 bytes of data through a description kept open: a link `named`
+   while the write waits in the batch, a link `named` after a sync stored
+   the file with no name, and no name at all, the last put freeing it. */
+enum { TMPFILE_PENDING, TMPFILE_SYNCED, TMPFILE_UNNAMED, TMPFILE_WAYS };
+static const char *const tmpfile_ways[TMPFILE_WAYS] = {"named while its write waits in the batch",
+                                                       "named after a sync", "never named"};
+
+/* The one name a tmpfile row may leave in the root. */
+static const char *const tmpfile_names[1] = {"named"};
+
+/** Make a fresh volume and mount it so that it writes back. 0, or the
+ * error, with the volume unmounted. */
+static int tmpfile_stop_mount(void)
+{
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    rc = mount_flags(0);
+    if (rc != 0) {
+        printf("  rc %d\n", rc);
+        unmount_image();
+    }
+    return rc;
+}
+
+/**
+ * Make a linkable file with no name in the root, as open(2) with O_TMPFILE
+ * makes one, write it a block and 10 bytes through a description, and
+ * treat it in `way` (`tmpfile_ways`); then close the description, put the
+ * file and sync the volume. Whether the write was left pending, no write
+ * made for it, in `*pending`. Returns 0, or the first error.
+ */
+static int tmpfile_stop_run(int way, int *pending)
+{
+    void *t = 0, *h = 0;
+    int32_t got;
+    int rc, before;
+
+    *pending = 0;
+    rc = OPS->tmpfile(&mnt, mnt.root, 0600, 1, &t);
+    if (rc == 0) {
+        rc = OPS->open(&mnt, t, 1, &h);
+    }
+    if (rc == 0) {
+        before = writes_made;
+        got = OPS->write(&mnt, h, pattern, 4106, 0);
+        rc = got == 4106 ? 0 : (got < 0 ? got : -1);
+        *pending = rc == 0 && writes_made == before;
+    }
+    if (rc == 0 && way == TMPFILE_SYNCED) {
+        rc = OPS->sync(&mnt);
+    }
+    if (rc == 0 && way != TMPFILE_UNNAMED) {
+        rc = OPS->link(&mnt, mnt.root, "named", t);
+    }
+    if (h) {
+        OPS->release(&mnt, h);
+    }
+    if (t) {
+        OPS->put(&mnt, t);
+    }
+    return rc == 0 ? OPS->sync(&mnt) : rc;
+}
+
+/**
+ * Drop the mount as a crash would after a file O_TMPFILE made was treated
+ * in `way` and stopped after write `k` of `n`, and judge the volume left:
+ * e2fsck run to its end asking only for the repairs of `removal_findings`,
+ * the inode with no name and a count of 0 that it reclaims as a deleted
+ * inode with no deletion time among them, as Linux's ext2 leaves such a
+ * file, with no count below its names (`counts_kept`), no inode or block in
+ * use whose bit is clear, and the name, when left, marked in use.
+ */
+static void tmpfile_stop_judge(int way, int k, int n)
+{
+    unsigned count = sizeof(removal_findings) / sizeof(removal_findings[0]);
+    char what[240];
+    int ok;
+
+    drop_as_crash();
+    snprintf(what, sizeof what,
+             "a file O_TMPFILE made, %s, stopped after write %d of %d, leaves e2fsck counts, "
+             "bitmaps and unnamed inodes to repair",
+             tmpfile_ways[way], k, n);
+    ok = fsck_judged(wimg) >= 0 && findings_among(removal_findings, count);
+    check(ok, what);
+    if (!ok) {
+        ext2_fixture_head(fix_path("fsck.out"), 30);
+    }
+    snprintf(what, sizeof what,
+             "a file O_TMPFILE made, %s, stopped after write %d of %d, leaves no count below "
+             "its names",
+             tmpfile_ways[way], k, n);
+    check(counts_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "a file O_TMPFILE made, %s, stopped after write %d of %d, leaves no inode or block "
+             "in use whose bit is clear",
+             tmpfile_ways[way], k, n);
+    check(inode_bits_kept(fix_path("fsck.out")) && block_bits_kept(fix_path("fsck.out")), what);
+    snprintf(what, sizeof what,
+             "a file O_TMPFILE made, %s, stopped after write %d of %d, leaves its name, if any, "
+             "marked in use",
+             tmpfile_ways[way], k, n);
+    check(names_marked_used(wimg, tmpfile_names, 1), what);
+}
+
+/**
+ * On a mount that writes back, make a file with no name as O_TMPFILE does,
+ * give it data and name it with a link while its write waits in the batch,
+ * name it after a sync, or never name it (`tmpfile_stop_run`), once whole,
+ * counting the writes, and then once stopped after each of them. The link
+ * stores the raised count in the table block, through a drain of the batch
+ * when it holds the file, before the name is written, as `link_add` orders
+ * a link of a named file: a stop may leave a file with no name, which
+ * e2fsck reclaims or attaches, but never a name over a count of 0, which
+ * the file's last put would free while the name stays.
+ */
+static void tmpfile_stop_rows(void)
+{
+    char what[240];
+    int way, k, n, pending, total = 0;
+
+    fill_pattern();
+    for (way = 0; way < TMPFILE_WAYS; way++) {
+        if (tmpfile_stop_mount() != 0) {
+            check(0, "the volume of the tmpfile stop rows mounts");
+            return;
+        }
+        writes_made = 0;
+        snprintf(what, sizeof what, "on a mount that writes back, a file O_TMPFILE made is %s",
+                 tmpfile_ways[way]);
+        check(tmpfile_stop_run(way, &pending) == 0, what);
+        check(pending, "and its write waited in the batch");
+        n = writes_made;
+        check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume is clean");
+        if (way != TMPFILE_UNNAMED) {
+            check(debugfs_says(wimg, "testi /named", "is marked in use"), "and the name is kept");
+        }
+        for (k = 0; k <= n; k++) {
+            if (tmpfile_stop_mount() != 0) {
+                check(0, "the volume of the tmpfile stop rows mounts");
+                return;
+            }
+            writes_made = 0;
+            stop_after = k;
+            (void)tmpfile_stop_run(way, &pending);
+            tmpfile_stop_judge(way, k, n);
+        }
+        total += n + 1;
+    }
+    printf("ext2_hosttest: %d stops of files O_TMPFILE made walked\n", total);
 }
 
 /**
@@ -10609,6 +10769,7 @@ static const struct {
     {"--removal-remount-only", removal_remount_rows},
     {"--regrowth-only", regrow_rows},
     {"--held-count-only", held_count_rows},
+    {"--tmpfile-stop-only", tmpfile_stop_rows},
     {"--dir-commit-only", dir_commit_rows},
     {"--mark-only", mark_rows},
     {"--stop-only", stop_rows},
@@ -10673,6 +10834,7 @@ int main(int argc, char **argv)
     removal_rows();
     regrow_rows();
     held_count_rows();
+    tmpfile_stop_rows();
     dir_commit_rows();
     mark_rows();
     stop_rows();
