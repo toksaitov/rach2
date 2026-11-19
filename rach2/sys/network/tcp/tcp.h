@@ -457,22 +457,25 @@ struct tcb {
 
     /*
      * The delayed acknowledgement (`tcp_delack_hold`). `rcv_acked` is the
-     * acknowledgement number of the last segment IP took, which counts
-     * what is unacknowledged; `rcv_wup` moves when a segment is built,
-     * whether or not it goes. `rcv_mss` is the payload Linux's
-     * icsk_ack.rcv_mss takes for a full segment, 536 until data comes, and
-     * `rcv_last_seg` its last_seg_size, the length of the last shorter
-     * segment that may become it. `ack_quick` counts the acknowledgements
-     * of new data still to go at once, Linux's icsk_ack.quick.
-     * `delack_due` is the tick at which a held acknowledgement goes out, 0
-     * when none is held. `ack_pushed` counts,
-     * up to 2, the segments since the last acknowledgement that ended a
-     * write of the peer's, Linux's ICSK_ACK_PUSHED and ICSK_ACK_PUSHED2;
-     * `pingpong` is 1 while this side answers what it receives, Linux's
-     * pingpong mode, and `rcv_data_at` the tick of the last data received,
-     * Linux's lrcvtime, valid once `rcv_data_seen`.
+     * acknowledgement number of the last segment IP took, which counts what is
+     * unacknowledged, and `rcv_offered` the window in bytes that segment
+     * offered, which quick acknowledgements are granted from; `rcv_wup` moves
+     * when a segment is built, whether or not it goes. `rcv_mss` is the payload
+     * Linux's icsk_ack.rcv_mss takes for a full segment, 536 until data comes,
+     * and `rcv_last_seg` its last_seg_size, the length of the last shorter
+     * segment that may become it. `ack_quick` counts the acknowledgements still
+     * to go at once, Linux's icsk_ack.quick, and `ack_sched` is 1 from data or
+     * a FIN received until an acknowledgement goes, Linux's ICSK_ACK_SCHED,
+     * which spends one. `delack_due` is the tick at which a held
+     * acknowledgement goes out, 0 when none is held. `ack_pushed` counts, up to
+     * 2, the segments since the last acknowledgement that ended a write of the
+     * peer's, Linux's ICSK_ACK_PUSHED and ICSK_ACK_PUSHED2; `pingpong` is 1
+     * while this side answers what it receives, Linux's pingpong mode, and
+     * `rcv_data_at` the tick of the last data received, Linux's lrcvtime, valid
+     * once `rcv_data_seen`.
      */
     uint32_t rcv_acked;
+    uint32_t rcv_offered;
     uint32_t rcv_mss;
     uint32_t rcv_last_seg;
     uint32_t delack_due;
@@ -480,6 +483,7 @@ struct tcb {
     uint8_t rcv_data_seen;
     uint8_t ack_pushed;
     uint8_t ack_quick;
+    uint8_t ack_sched;
     uint8_t pingpong;
     /* 1 while an acknowledgement waits for the end of a batch of frames
      * (`tcp_batch_begin`), on the list `batch_next` links. */
