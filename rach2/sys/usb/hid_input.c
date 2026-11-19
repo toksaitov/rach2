@@ -925,6 +925,7 @@ static void mt_map_button(struct hid_input *in, const struct hid_field *f, struc
     if (in->mt_precision && source < 32) {
         u->mt_group = HID_MT_BUTTON;
         in->mt_button_codes |= 1u << (code - BTN_LEFT);
+        in->mt_button_target[source] = (uint8_t)(code - BTN_LEFT);
     }
 }
 
@@ -1889,7 +1890,8 @@ static void configure_mixed_report(struct hid_dev *hid, uint32_t report)
         struct hid_field *f = field_at(hid, i);
         struct hid_input *in;
 
-        if (f->report != report || !input_field_enabled(hid, f)) {
+        if (f->report != report || !input_field_enabled(hid, f) || !f->count ||
+            (f->flags & HID_MAIN_ITEM_CONSTANT)) {
             continue;
         }
         app = f->application ? f->application : hid->desc.reports[report].application;
@@ -1913,21 +1915,28 @@ static void configure_reports(struct hid_dev *hid)
     for (k = HID_INPUT_REPORT; k <= HID_OUTPUT_REPORT; k++) {
         for (i = 0; i < hid->desc.nreports; i++) {
             struct hid_report *r = &hid->desc.reports[i];
-            int fields = 0;
+            int fields = 0, split = r->multitouch;
 
             if (r->type != k) {
-                continue;
-            }
-            if (hid->mt_surfaces && per_app) {
-                configure_mixed_report(hid, i);
                 continue;
             }
             for (f = 0; f < hid->desc.nfields; f++) {
                 const struct hid_field *field = field_at(hid, f);
 
-                fields += field->report == i && input_field_enabled(hid, field);
+                if (field->report != i) {
+                    continue;
+                }
+                if (input_field_enabled(hid, field)) {
+                    fields++;
+                } else {
+                    split = 1;
+                }
             }
             if (!fields) {
+                continue;
+            }
+            if (split && per_app) {
+                configure_mixed_report(hid, i);
                 continue;
             }
             if (per_app) {
@@ -2262,10 +2271,12 @@ static void mt_contact(struct hid_input *in, struct hid_mt_contact *c)
 /** Report the frame buttons, combining the left-button sources of a pad. */
 static void mt_report_buttons(struct hid_input *in)
 {
-    unsigned int i, buttons = in->mt_frame_buttons;
+    unsigned int i, buttons = 0;
 
-    if (in->application == HID_DG_TOUCHPAD) {
-        buttons = (buttons >> 1) | (buttons & 1u);
+    for (i = 0; i < 32; i++) {
+        if (in->mt_frame_buttons & (1u << i)) {
+            buttons |= 1u << in->mt_button_target[i];
+        }
     }
     for (i = 0; i < 32; i++) {
         if (in->mt_button_codes & (1u << i)) {

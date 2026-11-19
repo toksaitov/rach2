@@ -1631,6 +1631,53 @@ static void mt_mixed_rows(void)
     drop(hid);
 }
 
+/** A preceding Physical collection does not change the pad button codes. */
+static void mt_physical_button_rows(void)
+{
+    static const uint8_t physical[] = {0x05, 1,    0x09, 2, 0xa1, 0, 0x85, 4, 0x09, 0x30, 0x15, 0,
+                                       0x25, 0x7f, 0x75, 8, 0x95, 1, 0x81, 2, 0xc0};
+    static const uint8_t press[] = {1, 1, 100, 0, 120, 0, 1, 1, 17, 0, 0,
+                                    0, 0, 0,   1, 0,   0, 0, 1, 0,  1};
+    uint8_t desc[sizeof(physical) + sizeof(precision_pad)];
+    struct hid_dev *hid;
+    int inputs;
+
+    ndevs = 0;
+    k_memcpy(desc, physical, sizeof(physical));
+    k_memcpy(desc + sizeof(physical), precision_pad, sizeof(precision_pad));
+    hid = connect(desc, sizeof(desc), "Precision Touchpad with a physical report", &inputs);
+    feed(hid, press, sizeof(press));
+    CHECK("Button 2 still emits BTN_LEFT on the sole input node",
+          inputs == 1 && devs[0].slots > 0 && saw(EV_KEY, BTN_LEFT, 1));
+    drop(hid);
+}
+
+/** Earlier constant fields cannot take all the input nodes. */
+static void mt_sparse_apps_rows(void)
+{
+    static const uint8_t constant[] = {0x06, 0,    0xff, 0x09, 1, 0xa1, 1, 0x85,
+                                       5,    0x09, 0x10, 0x15, 0, 0x25, 1, 0x75,
+                                       8,    0x95, 1,    0x81, 3, 0xc0};
+    uint8_t desc[HID_MAX_INPUTS * sizeof(constant) + sizeof(mixed_pad)];
+    struct hid_dev *hid;
+    int i;
+
+    ndevs = 0;
+    for (i = 0; i < HID_MAX_INPUTS; i++) {
+        k_memcpy(desc + i * sizeof(constant), constant, sizeof(constant));
+        desc[i * sizeof(constant) + 4] = (uint8_t)(i + 1);
+    }
+    k_memcpy(desc + HID_MAX_INPUTS * sizeof(constant), mixed_pad, sizeof(mixed_pad));
+    if (parse(desc, sizeof(desc), &hid) != 0) {
+        CHECK("the descriptor with constants parses", 0);
+        return;
+    }
+    hid->mt_mode_failed = 1;
+    CHECK("the keyboard registers after the unpopulated applications",
+          hidinput_connect(hid) == 1 && ndevs == 1 && devs[0].keyboard);
+    drop(hid);
+}
+
 /** Process repeated records, palm and hover, and first-packet buttons. */
 static void mt_precision_rows(void)
 {
@@ -1722,6 +1769,8 @@ int main(void)
     mt_feature_rows();
     mt_failed_mode_rows();
     mt_mixed_rows();
+    mt_physical_button_rows();
+    mt_sparse_apps_rows();
     mt_precision_rows();
     mt_implicit_lift_rows();
     if (fails) {
