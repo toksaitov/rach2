@@ -72,13 +72,14 @@ void thp_note(int event);
 /** The count of `event` since the boot. */
 uint32_t thp_count(int event);
 
-/** Add `n`, which may be negative, to the 2 MiB pages mapped in every
- * address space. */
+/** Add `n`, which may be negative, to the huge pages mapped
+ * (`paging_huge_mapped`). */
 void thp_mapped_add(int n);
 
-/** The 2 MiB pages mapped in every address space, the huge zero page's
- * mappings aside: AnonHugePages of /proc/meminfo,
- * nr_anon_transparent_hugepages of /proc/vmstat. */
+/** The huge pages that some directory entry maps whole, each counted once
+ * however many address spaces map it, the huge zero page aside:
+ * AnonHugePages of /proc/meminfo, nr_anon_transparent_hugepages of
+ * /proc/vmstat. */
 uint32_t thp_mapped(void);
 
 /* Who asks `thp_region_allows`. */
@@ -103,16 +104,16 @@ int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t star
 int thp_region_eligible(const struct mm *mm, const struct vma *vma);
 
 /**
- * Scan `mm` from where khugepaged last stopped in it (`thp_next`) for at
- * most `budget` pages, as Linux's hpage_collapse_scan_mm_slot: each 2 MiB
- * of a region that allows huge pages to khugepaged counts 512 and is
- * collapsed where it can be (`paging_collapse`), and each other region
- * counts one. Once its last region is scanned the space has finished the
- * pass numbered `pass`, which its `thp_pass` records. The caller holds the
- * regions' lock to write. The pages counted; `*nomem` is set when no huge
- * page could be had, after which khugepaged sleeps for
- * `alloc_sleep_millisecs`. Nothing where the page directory maps no huge
- * page (MMU_HUGE 0).
+ * Scan `mm` from where khugepaged last stopped in it (`thp_next`) for at most
+ * `budget` pages, as Linux's hpage_collapse_scan_mm_slot: each 2 MiB of a
+ * region that allows huge pages to khugepaged counts 512 and is collapsed where
+ * it can be (`paging_collapse`), one at least however small the budget, and
+ * each other region counts one. Once its last region is scanned the space has
+ * finished the pass numbered `pass`, which its `thp_pass` records. The caller
+ * holds the regions' lock to write. The pages counted; `*nomem` is set when no
+ * huge page could be had, after which khugepaged sleeps for
+ * `alloc_sleep_millisecs`. Nothing where the page directory maps no huge page
+ * (MMU_HUGE 0).
  */
 uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem);
 
