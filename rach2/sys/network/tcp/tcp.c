@@ -4407,7 +4407,9 @@ void tcp_batch_end(void)
                 !(t->ack_quick && !t->pingpong)) {
                 continue; /* its deadline was set when the data came */
             }
-            t->rcv_wnd = tcp_rcv_window(t);
+            if (t->state != TCP_TIME_WAIT) {
+                t->rcv_wnd = tcp_rcv_window(t); /* TIME_WAIT keeps its own */
+            }
             tcp_send_flags(t, TCP_ACK);
         }
     }
