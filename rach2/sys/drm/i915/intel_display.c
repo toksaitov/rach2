@@ -392,8 +392,6 @@ static struct intel_crtc *plane_slot(struct drm_i915_private *i915, const struct
     return NULL;
 }
 
-static void wait_next_vblank(struct drm_i915_private *i915, int pipe);
-
 /** Whether the frame count `a` is past `b`, across the counter's wrap. */
 static int frame_past(uint32_t a, uint32_t b)
 {
@@ -425,7 +423,7 @@ static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout 
             return;
         }
         if (!frame_past(from, c->shown_to[slot])) {
-            wait_next_vblank(c->i915, c->pipe);
+            intel_crtc_wait_for_next_vblank(c->i915, c->pipe);
         }
     }
     scanout_put(&c->parked[slot]);
@@ -654,7 +652,7 @@ static void commit_release(struct drm_i915_private *i915, struct drm_plane *cons
         }
         if (c->cfg.active && !(flipped & (1u << pipe)) &&
             !frame_past(intel_get_vblank_counter(&c->base), to[pipe])) {
-            wait_next_vblank(i915, pipe);
+            intel_crtc_wait_for_next_vblank(i915, pipe);
         }
         for (i = 0; i < DRM_MAX_PLANES; i++) {
             if (planes[i] && plane_slot(i915, planes[i], &slot) == c) {
@@ -1173,10 +1171,7 @@ int intel_crtc_needs_well(int pipe, const struct intel_crtc_config *cfg)
            cfg->port != INTEL_PORT_A;
 }
 
-/** Wait for pipe `pipe`'s next vblank by its frame counter, 100 ms at
- * most, as Linux's intel_crtc_wait_for_next_vblank; a pipe whose counter
- * does not move is logged. */
-static void wait_next_vblank(struct drm_i915_private *i915, int pipe)
+void intel_crtc_wait_for_next_vblank(struct drm_i915_private *i915, int pipe)
 {
     uint32_t start = i915_read(&i915->hw, PIPE_FRMCOUNT_G4X(pipe));
     int ms;
@@ -1290,8 +1285,8 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
     }
     wa = workaround_pipe(c, state);
     if (wa >= 0) {
-        wait_next_vblank(i915, wa);
-        wait_next_vblank(i915, wa);
+        intel_crtc_wait_for_next_vblank(i915, wa);
+        intel_crtc_wait_for_next_vblank(i915, wa);
     }
     /* Linux's intel_crtc_enable_pipe_crc: a running source again, its
      * first frame dropped. */
@@ -1299,6 +1294,8 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
         c->crc_skip = 1;
         i915_write(hw, PIPE_CRC_CTL(c->pipe), c->crc_ctl);
     }
+    /* Linux's intel_encoders_audio_enable, from intel_post_plane_update. */
+    intel_audio_codec_enable(i915, c->pipe, cfg);
     if (cfg->output == INTEL_OUTPUT_HDMI) {
         klog(KLOG_INFO, "i915",
              "display: pipe %c set: %ux%u%s@%u on %s %c, %u kHz, %u bpp, TMDS %u kHz from %s%s",
@@ -1334,6 +1331,10 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     uint32_t flags;
     int slot;
 
+    /* Linux's intel_encoders_audio_disable, from intel_pre_plane_update. */
+    if (c->cfg.active) {
+        intel_audio_codec_disable(i915, c->pipe, &c->cfg);
+    }
     for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
         plane_off(c, slot);
     }
@@ -1867,6 +1868,11 @@ static void sanitize_pipe(struct drm_i915_private *i915, struct intel_crtc *c)
     cfg.port = r->port;
     cfg.pfit = r->pf_ctl != 0;
     (void)intel_dpll_readout(i915, c->pipe, rd(i915, PORT_CLK_SEL(r->port)), &cfg);
+    /* The firmware's audio off first, as Linux's readout of has_audio has
+     * the disable turn it off. */
+    if (intel_audio_hw_enabled(i915, t)) {
+        i915_rmw(hw, HSW_AUD_PIN_ELD_CP_VLD, AUDIO_ELD_VALID(t) | AUDIO_OUTPUT_ENABLE(t), 0);
+    }
     for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
         plane_off(c, slot);
     }
@@ -1976,6 +1982,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
 
     d->bl_index = -1;
     spin_lock_init(&d->bl_lock, "intel_backlight_lock");
+    intel_audio_init(i915);
     /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
      * readout: a WRPLL's port clock needs the non-SSC reference. */
     intel_dpll_init(i915);

@@ -252,6 +252,7 @@ static void i915_unplug(struct drm_device *dev)
     struct drm_i915_private *i915 = to_i915(dev);
     int taken;
 
+    intel_audio_deinit(i915);
     i915_rpm_unplug(i915);
     taken = i915_gem_lock(i915);
 
@@ -434,6 +435,7 @@ static void i915_registered(struct drm_i915_private *i915)
     i915_gem_shrinker_register(i915);
     i915_debugfs_register(i915);
     i915_handoff_bound(i915);
+    intel_audio_register(i915);
     i915_rpm_register(i915);
 }
 
