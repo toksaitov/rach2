@@ -1,0 +1,24 @@
+3984: chromium-h264
+[21:00:33.056] Using Pixman renderer
+               1366x768@60.0, preferred, current, 62.9 MHz
+desktop: result: chromium-h264: 1735 frames, 17 dropped, 0 corrupted, 1920x1080, 57.7 s played, error None, samples [(10, 7), (20, 9), (30, 9), (40, 15), (50, 17), (58, 17)]
+desktop: result: chromium-h264 decoder FFmpegVideoDecoder
+
+Session terminated, killing shell... ...killed.
+3984: chromium-h264 Weston exited 143
+3984: chromium-vp9
+[21:01:40.446] Using Pixman renderer
+               1366x768@60.0, preferred, current, 62.9 MHz
+desktop: result: chromium-vp9: 1737 frames, 9 dropped, 0 corrupted, 1920x1080, 57.7 s played, error None, samples [(10, 4), (20, 4), (30, 5), (40, 7), (50, 9), (58, 9)]
+desktop: result: chromium-vp9 decoder VpxVideoDecoder
+
+Session terminated, killing shell... ...killed.
+3984: chromium-vp9 Weston exited 143
+3984: firefox-vp9
+[21:02:46.771] Using Pixman renderer
+               1366x768@60.0, preferred, current, 62.9 MHz
+desktop: result: firefox-vp9: 1720 frames, 55 dropped, None corrupted, 1920x1080, 57.3 s played, error None, samples [(9, 33), (19, 33), (29, 50), (39, 54), (49, 55), (57, 55)]
+desktop: result: firefox-vp9 decoder ffvpx video decoder (RDD remote);
+
+Session terminated, killing shell... ...killed.
+3984: firefox-vp9 Weston exited 143

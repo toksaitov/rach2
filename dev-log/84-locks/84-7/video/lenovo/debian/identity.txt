@@ -1,0 +1,7 @@
+BOOT_IMAGE=(hd0,gpt1)/boot/vmlinuz-3984 root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off nomodeset
+Linux lenovo-debian 6.12.115+deb13.1-amd64-fb3984 #3 SMP PREEMPT_DYNAMIC Fri Nov 20 01:01:01 +05 2026 x86_64 GNU/Linux
+Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+Mozilla Firefox 153.6.0esr
+weston 14.0.2
+card card0 driver /sys/bus/platform/drivers/simple-framebuffer
+1366x768
