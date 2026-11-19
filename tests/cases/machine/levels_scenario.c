@@ -35,8 +35,8 @@ struct boot {
 };
 
 /**
- * Begin step `step` and boot machine `machine` on the copy for the `n`th
- * time, to the shell's prompt.
+ * Begin step `step` and boot machine `machine` on the copy, the `n`th boot
+ * of that machine, which names its console, to the shell's prompt.
  *
  * @return 1 when the prompt came.
  */
@@ -160,7 +160,7 @@ static void levels(struct lc *l)
     if (!restart(&b, "reboot -f\r", "reset-unsaved"))
         return;
 
-    if (!boot(l, &b, "blank", "blanking", 3) || !ask(&b, READ, "LEVELS", got, sizeof(got)))
+    if (!boot(l, &b, "blank", "blanking", 1) || !ask(&b, READ, "LEVELS", got, sizeof(got)))
         return;
     snprintf(detail, sizeof(detail), "after the reset: '%s'", got);
     lc_assert(l, "reset-kept", strncmp(got, "9/", 2) == 0 && strstr(got, "/vol 6:6") != NULL,
