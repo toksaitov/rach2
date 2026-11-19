@@ -81,7 +81,8 @@ until L true 2> /dev/null; do
     [ "$still" -lt 600 ] || { echo 'qemu: the boot stopped' >&2; tail -n 20 "$out/serial.log" >&2; exit 1; }
     sleep 5
 done
-L 'cat /proc/cmdline; uname -a; grep -e " / " -e " /data " /proc/mounts; ls -ln /dev/dri; ls /sys/class/drm; id desktop
+L 'cat /proc/cmdline; uname -a; grep -e " / " -e " /data " /proc/mounts; ls -ln /dev/dri; id desktop
+   for s in /sys/class/drm/card*-*/status; do echo "$s $(cat $s)"; done
    for p in supertuxkart supertuxkart.i386-linux-gnu pyrogenesis 0ad; do command -v $p || ls /usr/games/$p; done
    for f in /sys/class/drm/card*/gt_act_freq_mhz /sys/class/drm/card*/gt_min_freq_mhz; do echo "$f $(cat $f)"; done
    head -n 3 /sys/kernel/debug/bkl/calls; mixer vol' > "$out/boot.txt" 2>&1 || true
