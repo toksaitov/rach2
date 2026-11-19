@@ -57,7 +57,9 @@ The side that closes first holds the connection in
 for 60 seconds, Linux's length, which keeps its port from the next
 connection to the same peer; a FIN the peer sends again is acknowledged
 and starts the 60 seconds again.
-A connection there keeps no buffers.
+A connection there keeps no buffers once nothing is left to read: they go on
+entering it when nothing is unread or no socket holds it, and otherwise when
+the socket is closed.
 The connections in
 .Dv TIME_WAIT
 are at most Linux's
@@ -99,19 +101,24 @@ that mode, and an acknowledgement held for the whole 40 ms ends the mode.
 Data past a hole, the segment that fills it, data received before, a FIN,
 and data in a closing state are acknowledged at once.
 .Pp
+The largest window is the smaller of the receive buffer and what the
+window scale can offer.
 Every segment with ACK and without SYN before TIME_WAIT offers the window
-as it stands when it is sent: while less than half the buffer is free, less than a sixteenth of it
-or than a full segment is offered as zero, no window offered is taken back,
-and the quick acknowledgements end, as Linux's
+as it stands when it is sent: while less than half the largest window is
+free, less than a sixteenth of it or than a full segment is offered as
+zero, no window offered is taken back, and the quick acknowledgements end,
+as Linux's
 .Fn __tcp_select_window
 offers it.
-In TIME_WAIT an acknowledgement offers the window saved on entering it,
-even after a read and when the first acknowledgement of the FIN was not
-sent.
-A read announces the window it reopened only while the peer has no more
-than half the buffer left, and only when the window as it stands, in whole
-units of the window scale and at least a full segment and a sixteenth of
-the largest window, is at least twice what the peer has, as Linux's
+In TIME_WAIT an acknowledgement offers the window saved, selected before
+or on entering it, even after a read and when the first acknowledgement of
+the FIN was not sent.
+In ESTABLISHED, FIN_WAIT_1 and FIN_WAIT_2, while the socket is open for
+receiving, a read announces the window it reopened only while the peer has
+no more than half the largest window left, and only when the window as it
+stands, in whole units of the window scale and at least a full segment and
+a sixteenth of the largest window, is at least twice what the peer has, as
+Linux's
 .Fn tcp_cleanup_rbuf
 announces it.
 .Ss Keepalive
