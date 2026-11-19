@@ -381,18 +381,45 @@ static void *m_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     return 0;
 }
 
-/** Give a page back, which only a device that was reset allows. */
+/** A ring of more than a page, as a legacy queue's, in consecutive pages
+ * of the arena, counted as one allocation; one page from m_dma_alloc. */
+static void *m_ring_alloc(struct virtio_dev *d, uint16_t index, uint32_t bytes, uint64_t *addr)
+{
+    int i, k, n = (int)((bytes + 4095u) / 4096u);
+
+    (void)index;
+    if (n <= 1) {
+        return m_dma_alloc(d, bytes, addr);
+    }
+    for (i = 0; i + n <= ARENA_PAGES; i++) {
+        for (k = 0; k < n && !arena_taken[i + k]; k++) {
+        }
+        if (k == n) {
+            for (k = 0; k < n; k++) {
+                arena_taken[i + k] = 1;
+                k_memset(arena[i + k], 0, 4096);
+            }
+            *addr = DEV_BASE + (uint64_t)i * 4096u;
+            m.dma_out++;
+            return arena[i];
+        }
+    }
+    return 0;
+}
+
+/** Give a page back, or the run m_ring_alloc gave for `bytes`, which only
+ * a device that was reset allows. */
 static void m_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
-    long i = ((uint8_t *)p - &arena[0][0]) / 4096;
+    long i = ((uint8_t *)p - &arena[0][0]) / 4096, k,
+         n = bytes > 4096u ? (bytes + 4095u) / 4096u : 1;
 
     (void)d;
-    (void)bytes;
-    check(i >= 0 && i < ARENA_PAGES && arena_taken[i] && (uint8_t *)p == arena[i],
+    check(i >= 0 && i + n <= ARENA_PAGES && arena_taken[i] && (uint8_t *)p == arena[i],
           "dma_free is given a page dma_alloc gave");
     check(m.status == 0, "a page is freed only once the device was reset");
-    if (i >= 0 && i < ARENA_PAGES) {
-        arena_taken[i] = 0;
+    for (k = i; k >= 0 && k < i + n && k < ARENA_PAGES; k++) {
+        arena_taken[k] = 0;
     }
     m.dma_out--;
 }
@@ -418,7 +445,7 @@ static const struct virtio_ops model_ops = {
     "model",      m_get_status,  m_set_status,   m_get_features, m_set_features,
     m_generation, m_config_read, m_config_write, m_queue_max,    m_queue_enable,
     m_notify,     m_irq_setup,   m_irq_start,    m_irq_release,  m_dma_alloc,
-    m_dma_free,   m_shm_region,  NULL,           NULL,           NULL,
+    m_dma_free,   m_shm_region,  m_ring_alloc,   NULL,           NULL,
     NULL,         m_put,         NULL,           NULL,           NULL,
     NULL};
 
@@ -732,6 +759,10 @@ static void q_push(int qi, uint16_t head, uint32_t len)
     }
 }
 
+/* The header the model's device puts before each frame: VNET_HDR, or
+ * VNET_HDR_LEGACY for a legacy device without mergeable buffers. */
+static uint32_t dev_hdr = VNET_HDR;
+
 /**
  * Receive the frame of `len` bytes at `frame` across `nbufs` receive
  * buffers, the header's `num_buffers` being `stated`: the header and the
@@ -762,12 +793,12 @@ static int dev_rx(const uint8_t *frame, uint32_t len, int nbufs, uint16_t stated
             return 0;
         }
         if (b == 0) {
-            k_memcpy(buf, &hdr, VNET_HDR);
-            buf += VNET_HDR;
+            k_memcpy(buf, &hdr, dev_hdr);
+            buf += dev_hdr;
         }
         k_memcpy(buf, frame + done, take);
         done += take;
-        q_push(VNET_Q_RX, head, take + (b == 0 ? VNET_HDR : 0u));
+        q_push(VNET_Q_RX, head, take + (b == 0 ? dev_hdr : 0u));
     }
     return 1;
 }
@@ -785,14 +816,14 @@ static int dev_tx(uint8_t *out, uint32_t *len)
     if (!q_pop(VNET_Q_TX, &head, seg, &n)) {
         return 0;
     }
-    check(n == 1 && !(seg[0].flags & VIRTQ_DESC_F_WRITE) && seg[0].len > VNET_HDR,
+    check(n == 1 && !(seg[0].flags & VIRTQ_DESC_F_WRITE) && seg[0].len > dev_hdr,
           "a frame sent is one readable segment");
     buf = dev_ptr(seg[0].addr, seg[0].len);
     if (buf) {
-        check(memcmp(buf, zeros, VNET_HDR) == 0, "a frame sent has a header of zeros");
+        check(memcmp(buf, zeros, dev_hdr) == 0, "a frame sent has a header of zeros");
         if (out) {
-            k_memcpy(out, buf + VNET_HDR, seg[0].len - VNET_HDR);
-            *len = seg[0].len - VNET_HDR;
+            k_memcpy(out, buf + dev_hdr, seg[0].len - dev_hdr);
+            *len = seg[0].len - dev_hdr;
         }
     }
     q_push(VNET_Q_TX, head, 0);
@@ -929,6 +960,7 @@ static void fresh(uint64_t offered)
     ngot = rx_errors = carrier_changes = reply_from_rx = 0;
     udelays = 0;
     logged[0] = 0;
+    dev_hdr = VNET_HDR;
     (void)rx_irq();
 }
 
@@ -1085,6 +1117,39 @@ static void row_mergeable(void)
           "a device without mergeable buffers comes up");
     check(dev_rx(frame_of(1514, 2), 1514, 1, 0x7777) && rx_irq() && ngot == 1 && got_is(0, 1514, 2),
           "its frame is delivered whatever num_buffers holds");
+}
+
+/**
+ * A legacy device, without VIRTIO_F_VERSION_1: its header is 10 bytes
+ * without mergeable buffers and 12 with them, as Linux's virtnet_probe
+ * sizes it, both ways.
+ */
+static void row_legacy_header(void)
+{
+    uint64_t legacy = QEMU_OFFER & ~VIRTIO_BIT(VIRTIO_F_VERSION_1);
+    uint8_t out[VNET_FRAME_MAX];
+    uint32_t len = 0;
+
+    fresh(legacy & ~VIRTIO_BIT(VIRTIO_NET_F_MRG_RXBUF));
+    m.dev.legacy = 1;
+    dev_hdr = VNET_HDR_LEGACY;
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && !(m.status & VIRTIO_STATUS_FEATURES_OK),
+          "a legacy device comes up without FEATURES_OK");
+    check(dev_rx(frame_of(60, 1), 60, 1, 0) && rx_irq() && ngot == 1 && got_is(0, 60, 1),
+          "a frame after a header of 10 bytes is delivered whole");
+    check(dev_rx(frame_of(1514, 2), 1514, 1, 0) && rx_irq() && ngot == 2 && got_is(1, 1514, 2),
+          "and so is a full one");
+    check(nd.ops->tx(nd.dev, frame_of(60, 4), 60) == NETDEV_TX_OK && dev_tx(out, &len) &&
+              len == 60 && memcmp(out, frame_of(60, 4), 60) == 0,
+          "a frame sent leaves after a header of 10 zeros");
+    fresh(legacy);
+    m.dev.legacy = 1;
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP, "a legacy device with mergeable buffers");
+    check(dev_rx(frame_of(1514, 7), 1514, 2, 2) && rx_irq() && ngot == 1 && got_is(0, 1514, 7) &&
+              nd.ops->tx(nd.dev, frame_of(61, 4), 61) == NETDEV_TX_OK && dev_tx(out, &len) &&
+              len == 61,
+          "has the header of 12 bytes both ways");
+    check(rx_errors == 0, "no frame was refused");
 }
 
 /**
@@ -1559,6 +1624,7 @@ int main(void)
     row_bring_up();
     row_receive();
     row_mergeable();
+    row_legacy_header();
     row_transmit();
     row_no_event_idx();
     row_link();

@@ -70,6 +70,7 @@ struct vnet {
     int key;          /* the PCI function as bus << 8 | devfn, or -1 */
     int sys_link;     /* the interface's `device` link in /sys, or 0 */
     int mrg;          /* VIRTIO_NET_F_MRG_RXBUF was taken */
+    uint32_t hdr;     /* the header's bytes, VNET_HDR or VNET_HDR_LEGACY */
     int polled;       /* no interrupt: the tick reaps the queues */
     int polls;        /* polls since a polled device's link was read */
     uint8_t mac[6];   /* the station address */
@@ -143,23 +144,24 @@ static void vnet_rx_first(struct vnet *v, const uint8_t *data, uint32_t len)
     struct virtio_net_hdr hdr;
     uint16_t bufs;
 
-    if (len < VNET_HDR) {
+    if (len < v->hdr) {
         v->rx_errors++;
         ethernet_note_rx_error(v->nd);
         return;
     }
-    k_memcpy(&hdr, data, VNET_HDR);
+    k_memset(&hdr, 0, sizeof(hdr));
+    k_memcpy(&hdr, data, v->hdr);
     bufs = v->mrg ? hdr.num_buffers : 1;
     if (bufs <= 1) {
-        vnet_deliver(v, data + VNET_HDR, len - VNET_HDR);
+        vnet_deliver(v, data + v->hdr, len - v->hdr);
         return;
     }
     v->rx_left = (uint16_t)(bufs - 1u);
     v->rx_len = 0;
-    v->rx_over = len - VNET_HDR > VNET_FRAME_MAX;
+    v->rx_over = len - v->hdr > VNET_FRAME_MAX;
     if (!v->rx_over) {
-        v->rx_len = len - VNET_HDR;
-        k_memcpy(v->frame, data + VNET_HDR, v->rx_len);
+        v->rx_len = len - v->hdr;
+        k_memcpy(v->frame, data + v->hdr, v->rx_len);
     }
 }
 
@@ -578,6 +580,8 @@ static int vnet_start(struct vnet *v, struct netdev *nd)
     rc = vnet_negotiate(v);
     if (rc == 0) {
         v->mrg = virtio_has(d, VIRTIO_NET_F_MRG_RXBUF);
+        /* As Linux's virtnet_probe: the 12 bytes with either. */
+        v->hdr = v->mrg || virtio_has(d, VIRTIO_F_VERSION_1) ? VNET_HDR : VNET_HDR_LEGACY;
         v->polled = d->polled;
         vnet_mac_read(v);
         vnet_err = "the virtio network device's queues could not be set up";
@@ -747,10 +751,10 @@ static int vnet_tx(void *dev, const uint8_t *data, uint16_t len)
         net_unlock(flags);
         return NETDEV_TX_DROPPED;
     }
-    k_memset(b->data, 0, VNET_HDR);
-    k_memcpy(b->data + VNET_HDR, data, len);
+    k_memset(b->data, 0, v->hdr);
+    k_memcpy(b->data + v->hdr, data, len);
     sg.addr = b->addr;
-    sg.len = VNET_HDR + len;
+    sg.len = v->hdr + len;
     if (virtqueue_add(v->tx, &sg, 1, 0, b) != 0) {
         v->tx_stalls++;
         net_unlock(flags);

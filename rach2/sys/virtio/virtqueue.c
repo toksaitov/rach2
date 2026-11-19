@@ -38,6 +38,11 @@ static void virtio_status_add(struct virtio_dev *d, uint8_t bits)
     d->ops->set_status(d, (uint8_t)(d->ops->get_status(d) | bits));
 }
 
+/* The feature bits a legacy device has: 32, of which the core takes the
+ * ring's two (virtio 1.2, 6). */
+#define VIRTIO_LEGACY_MASK     0xFFFFFFFFull
+#define VIRTIO_LEGACY_FEATURES (VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) | VIRTIO_BIT(VIRTIO_F_EVENT_IDX))
+
 int virtio_reset(struct virtio_dev *d)
 {
     int i;
@@ -88,14 +93,21 @@ int virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
     if (d->ops->get_status(d) & VIRTIO_STATUS_FAILED) {
         return -ENODEV; /* the transport has no device to offer, and has said why */
     }
-    if (!(offered & VIRTIO_BIT(VIRTIO_F_VERSION_1))) {
+    if (d->legacy) {
+        /* A legacy device settles its features at the write, without
+         * FEATURES_OK, as Linux's virtio_features_ok skips it. */
+        accept = offered & VIRTIO_LEGACY_MASK &
+                 ((wanted & ~VIRTIO_RESERVED_MASK) | VIRTIO_LEGACY_FEATURES);
+        d->ops->set_features(d, accept);
+    } else if (!(offered & VIRTIO_BIT(VIRTIO_F_VERSION_1))) {
         klog(KLOG_WARN, "virtio", "refused: %s: a legacy device, without VERSION_1", d->name);
         return virtio_fail(d, -ENODEV);
+    } else {
+        accept = offered & ((wanted & ~VIRTIO_RESERVED_MASK) | VIRTIO_CORE_FEATURES);
+        d->ops->set_features(d, accept);
+        virtio_status_add(d, VIRTIO_STATUS_FEATURES_OK);
     }
-    accept = offered & ((wanted & ~VIRTIO_RESERVED_MASK) | VIRTIO_CORE_FEATURES);
-    d->ops->set_features(d, accept);
-    virtio_status_add(d, VIRTIO_STATUS_FEATURES_OK);
-    if (!(d->ops->get_status(d) & VIRTIO_STATUS_FEATURES_OK)) {
+    if (!d->legacy && !(d->ops->get_status(d) & VIRTIO_STATUS_FEATURES_OK)) {
         klog(KLOG_WARN, "virtio", "refused: %s: the device did not take features %x:%x", d->name,
              (unsigned)(accept >> 32), (unsigned)accept);
         return virtio_fail(d, -EIO);
@@ -206,17 +218,69 @@ static void virtqueue_free(struct virtio_dev *d, struct virtqueue *vq, int devic
 }
 
 /**
- * Lay out a queue of `vq->size` in its ring memory: the descriptors first,
+ * Lay out a queue of `size` in its ring memory: the descriptors first,
  * aligned to 16; the driver's ring after them, aligned to 2; the device's
- * ring after that, aligned to 4 (virtio 1.2, 2.7). Returns the bytes.
+ * ring after that, aligned to 4 (virtio 1.2, 2.7), or to `align` on a
+ * legacy device (2.7, "Legacy Interfaces"). Returns the bytes.
  */
-static uint32_t virtqueue_layout(uint16_t size, uint32_t *avail_off, uint32_t *used_off)
+static uint32_t virtqueue_layout(uint16_t size, uint32_t align, uint32_t *avail_off,
+                                 uint32_t *used_off)
 {
     uint32_t n = size;
 
     *avail_off = 16u * n;
-    *used_off = (*avail_off + 6u + 2u * n + 3u) & ~3u;
+    *used_off = (*avail_off + 6u + 2u * n + align - 1u) & ~(align - 1u);
     return *used_off + 6u + 8u * n;
+}
+
+/**
+ * The size of queue `index` of `d`, which offers `max`: the largest power
+ * of two up to VIRTQ_MAX_SIZE that `max` allows; on a legacy device `max`
+ * itself, which must be a power of two up to VIRTQ_LEGACY_MAX, as Linux's
+ * vring_create_virtqueue_split asks. 0, with a record, for a legacy queue
+ * that cannot be had.
+ */
+static uint16_t virtqueue_size(struct virtio_dev *d, uint16_t index, uint16_t max)
+{
+    uint16_t size = VIRTQ_MAX_SIZE;
+
+    if (d->legacy) {
+        if (max > VIRTQ_LEGACY_MAX || (max & (max - 1u))) {
+            klog(KLOG_WARN, "virtio", "refused: %s: legacy queue %d of %d entries", d->name, index,
+                 max);
+            return 0;
+        }
+        return max;
+    }
+    while (size > max) {
+        size >>= 1;
+    }
+    return size;
+}
+
+/** A queue's record with its arrays of `size` after it, zeroed: NULL with
+ * no memory. */
+static struct virtqueue *virtqueue_record(uint16_t size)
+{
+    uint32_t n = size;
+    struct virtqueue *vq = (struct virtqueue *)kzalloc(
+        sizeof(*vq) + n * (sizeof(void *) + sizeof(uint32_t) + 2u * sizeof(uint16_t) + 1u));
+    uint8_t *at;
+
+    if (!vq) {
+        return 0;
+    }
+    at = (uint8_t *)(vq + 1);
+    vq->token = (void **)(void *)at;
+    at += n * sizeof(void *);
+    vq->inlen = (uint32_t *)(void *)at;
+    at += n * sizeof(uint32_t);
+    vq->chain = (uint16_t *)(void *)at;
+    at += n * sizeof(uint16_t);
+    vq->next = (uint16_t *)(void *)at;
+    at += n * sizeof(uint16_t);
+    vq->table = (int8_t *)at;
+    return vq;
 }
 
 int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t done, void *priv,
@@ -238,11 +302,11 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     if (max == 0) {
         return -ENOENT;
     }
-    size = VIRTQ_MAX_SIZE;
-    while (size > max) {
-        size >>= 1;
+    size = virtqueue_size(d, index, max);
+    if (size == 0) {
+        return -EINVAL;
     }
-    vq = (struct virtqueue *)kzalloc(sizeof(*vq));
+    vq = virtqueue_record(size);
     if (!vq) {
         return -ENOMEM;
     }
@@ -253,7 +317,8 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     vq->vector = VIRTIO_NO_VECTOR;
     vq->done = done;
     vq->priv = priv;
-    vq->ring_bytes = virtqueue_layout(size, &avail_off, &used_off);
+    vq->ring_bytes =
+        virtqueue_layout(size, d->legacy ? VIRTQ_LEGACY_ALIGN : 4u, &avail_off, &used_off);
     vq->ring_mem = d->ops->ring_alloc ? d->ops->ring_alloc(d, index, vq->ring_bytes, &vq->desc_addr)
                                       : d->ops->dma_alloc(d, vq->ring_bytes, &vq->desc_addr);
     if (!vq->ring_mem) {
