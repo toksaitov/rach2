@@ -1581,14 +1581,26 @@ static struct virtio_gpu_cmd *create_cmd(struct virtio_gpu_device *vg,
 }
 
 /**
+ * Whether a new object may ask the device for a backing of its own pages:
+ * the transport offers it and the caller may wait for the answer without a
+ * bound. A caller that holds the mode lock, as the console's buffers are
+ * made under it, takes the heap's pages instead: a reap that another thread
+ * began may hold the answer while it sleeps on that lock (`vgpu_may_wait`).
+ */
+static int vm_backing(struct virtio_gpu_device *vg)
+{
+    return vg->vdev->backing && vgpu_may_wait(vg) && !mutex_held(&vg->drm.mode_lock);
+}
+
+/**
  * Queue `create`, the RESOURCE_CREATE of `bo`'s resource `id`, and back
- * the resource: with the device's own pages where the transport has them
- * (`vgpu_backing_pages`), waited for, else, or when the device refuses
- * them, with an ATTACH_BACKING of the object's pages, queued without a
- * wait, its fence put in the object's reservation with `fenced`. On an
- * error `create` is freed if it was not sent; once it was, `bo->res_id` is
- * set, so that the object's free sends its UNREF. 0, or the error. May
- * sleep.
+ * the resource: with the device's own pages where the caller may have them
+ * (`vm_backing`, `vgpu_backing_pages`), waited for, else, or when the
+ * device refuses them, with an ATTACH_BACKING of the object's pages, queued
+ * without a wait, its fence put in the object's reservation with `fenced`.
+ * On an error `create` is freed if it was not sent; once it was,
+ * `bo->res_id` is set, so that the object's free sends its UNREF. 0, or
+ * the error. May sleep.
  */
 static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint32_t id,
                         struct virtio_gpu_cmd *create, int fenced)
@@ -1596,7 +1608,7 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     struct virtio_gpu_cmd *attach = NULL;
     int32_t err = 0;
 
-    if (!vg->vdev->backing) {
+    if (!vm_backing(vg)) {
         attach = vgpu_attach_cmd(vg, bo, id, &err);
         if (!attach) {
             vgpu_cmd_free(create);
