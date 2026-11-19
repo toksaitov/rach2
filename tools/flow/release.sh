@@ -242,7 +242,8 @@
 #   this computer; machine_identity.sh must find the new kernel running from
 #   the candidate slot; and tests/graphics/bootscreen.sh, run there, must
 #   find no Weston, the console holding its card with the keyboard, `term -l`
-#   as init's console session and every backlight lit. A line without one of
+#   as init's console session with its login started and every backlight
+#   lit. A line without one of
 #   these words, or a boot that fails that check, fails the step, naming
 #   what is missing, and commits nothing, so the next boot falls back to the
 #   release the machine had.
