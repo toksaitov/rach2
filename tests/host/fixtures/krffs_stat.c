@@ -164,7 +164,7 @@ int main(void)
 {
     const char *paths[] = {"/", "/tmp/.."};
     unsigned i;
-    if (core_main()) {
+    if (core_main(0, NULL)) {
         return 1;
     }
     make_image(image, IMAGE_SIZE);

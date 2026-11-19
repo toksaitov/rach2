@@ -147,6 +147,8 @@ typedef struct krffs_file_system {
  * Linux's short write does, and never leaves bytes a reader sees that the
  * writer was told were not written.
  *
+ * Each backend stores a single header or field whole in its cache, even
+ * across a unit boundary. Power loss follows the on-disk order above.
  * The memory backend is one memcpy either way and never fails; the boot
  * root in memory uses it. The boot root on a disk uses the page cache's
  * copies, which answer a read the disk fails (`init_krffs_disk_root`).
@@ -301,6 +303,10 @@ uint64_t krffs_node_ino(const krffs_node_t *node);
  */
 int krffs_chain_is_valid(krffs_mount_t *mount);
 
+/** Validate the ring, including backward links when requested.
+ * Return 1 for a sound ring, 0 for bad format or -EIO for a failed read. */
+int krffs_chain_walk(krffs_mount_t *mount, int with_links);
+
 /**
  * `krffs_chain_is_valid` without the backward links.
  *
@@ -452,7 +458,7 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * which readers see, when there are any.
  *
  * Returns `size`, or fewer as above; KRFFS_EBAD for a null argument or
- * KRFFS_NO_NODE, a header that cannot be read, or a node that is not
+ * KRFFS_NO_NODE or a node that is not
  * reserved; KRFFS_ENOSPACE when the node had to move and no free node held
  * the copy, with no byte of the file changed; or KRFFS_EIO when a read, a
  * write, a sync or a barrier failed and no byte a reader sees changed.
@@ -708,6 +714,9 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
  */
 int krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
 
+/** Free a last holder's orphan. Return -1 and halt on a failed removal. */
+int krffs_reap_at(krffs_mount_t *mount, uint64_t offset);
+
 /**
  * The named reserved nodes of the region, files and directories. An orphan
  * is not counted, since no path names it. A read that fails ends the count.
@@ -739,6 +748,9 @@ int krffs_root_check_owed(void);
  * EIO; 0 otherwise.
  */
 int krffs_root_halted(void);
+
+/** Halt the disk root and retain the dirty flag for recovery. */
+void krffs_root_halt(void);
 
 /** Set the boot root's `on_halt`, which its VFS mount gives to turn the
  * mounts that show it read-only. */

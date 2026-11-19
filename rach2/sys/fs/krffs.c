@@ -455,7 +455,7 @@ static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at, u
  */
 static int krffs_sync_point(krffs_mount_t *mount)
 {
-    return mount->backend->sync(mount->ctx);
+    return mount->halted ? -1 : mount->backend->sync(mount->ctx);
 }
 
 /**
@@ -526,13 +526,26 @@ static uint32_t krffs_field_split(krffs_mount_t *mount, uint64_t at)
 /**
  * Whether storing `size` in the node at `offset` changes bytes of one unit
  * only, of the sectors and of the grain `krffs_put` checks, so that a stop
- * leaves the old size or the new one. The comparison is with what the
- * backend holds; a caller that must be sure the medium holds the same puts
- * a barrier before the store. A read that fails answers 0.
+ * leaves the old size or the new one. The caller holds the mount lock and
+ * supplies the old size from the header it used to locate this extent.
  */
-static int krffs_size_fits(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+static int krffs_size_fits(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t size)
 {
-    return krffs_write_fits(mount, offset + KRFFS_FIELD_SIZE, &size, (uint32_t)sizeof(size), 1);
+    uint64_t changed = old ^ size;
+    uint32_t at = (uint32_t)offset + KRFFS_FIELD_SIZE;
+    int seen = 0;
+
+    while (changed != 0) {
+        if (seen && krffs_cut_before(mount, at, 1)) {
+            return 0;
+        }
+        if (changed & 0xffu) {
+            seen = 1;
+        }
+        changed >>= 8;
+        at++;
+    }
+    return 1;
 }
 
 /**
@@ -1349,7 +1362,7 @@ static int krffs_take_free(krffs_mount_t *mount, uint64_t offset, uint64_t free_
         krffs_barrier(mount) != 0) {
         return -1;
     }
-    if (!krffs_size_fits(mount, offset, size_with_header)) {
+    if (!krffs_size_fits(mount, offset, free_size, size_with_header)) {
         return 0;
     }
     if (krffs_publish_size(mount, offset, size_with_header) != 0) {
@@ -1406,32 +1419,6 @@ static int krffs_copy_original(krffs_mount_t *mount, uint64_t offset, uint64_t o
 }
 
 /**
- * Withdraw the reserved node at `offset`, a copy its caller was told does
- * not exist, by storing its type as free and nothing else, since a merge
- * could make it the larger of two nodes of one name. Either type may reach
- * the medium; a copy published there beside the file is one name on two
- * nodes, and the repair keeps the node with more data: the original of a
- * shrink, the copy of a grow, which holds the original's bytes too. When
- * the store fails the copy stays published beside the file in the running
- * kernel, so the mount is halted (`krffs_backend_write`), the copy is
- * hidden from lookups and listings (`withdrawn`), and the links are marked
- * stale, which keeps the dirty flag for the next mount's repair.
- */
-static void krffs_withdraw(krffs_mount_t *mount, uint64_t offset)
-{
-    if (krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_FREE_NODE) != 0) {
-        mount->halted = 1;
-        mount->stale_links = 1;
-        mount->withdrawn = offset;
-        if (mount->on_halt) {
-            mount->on_halt(mount);
-        }
-        return;
-    }
-    (void)krffs_barrier(mount);
-}
-
-/**
  * Halt the mount after a write that failed left the volume in a state only
  * the repair undoes: every write fails until the next mount, which the
  * owed check (`check_owed`) has repair the volume, since it keeps the
@@ -1446,6 +1433,29 @@ static void krffs_halt(krffs_mount_t *mount)
             mount->on_halt(mount);
         }
     }
+}
+
+/**
+ * Withdraw the reserved node at `offset`, a copy its caller was told does
+ * not exist, by storing its type as free and nothing else, since a merge
+ * could make it the larger of two nodes of one name. Either type may reach
+ * the medium; a copy published there beside the file is one name on two
+ * nodes, and the repair keeps the node with more data: the original of a
+ * shrink, the copy of a grow, which holds the original's bytes too. When
+ * the store fails the copy stays published beside the file in the running
+ * kernel, so the mount is halted (`krffs_backend_write`), the copy is
+ * hidden from lookups and listings (`withdrawn`), and the links are marked
+ * stale, which keeps the dirty flag for the next mount's repair.
+ */
+static void krffs_withdraw(krffs_mount_t *mount, uint64_t offset)
+{
+    if (krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_FREE_NODE) != 0) {
+        mount->stale_links = 1;
+        mount->withdrawn = offset;
+        krffs_halt(mount);
+        return;
+    }
+    (void)krffs_barrier(mount);
 }
 
 /**
@@ -1739,10 +1749,10 @@ static int krffs_store_length(krffs_mount_t *mount, uint64_t offset, uint64_t ol
  * The reads a removal of the node at `offset`, whose header is `head`, makes
  * before it stores anything: the header of the node before it into `before`,
  * with its offset in `*previous` (KRFFS_NO_NODE for the root's own node),
- * the header after it into `after` unless the root follows, and, when that
- * one is free, the header of the node after both, whose backward link a
- * merge repairs, so that a page the repair writes is brought in before the
- * merge is published. 0, or -1 for a read that failed or a lost link.
+ * the header after it into `after` unless the root follows, and the header
+ * whose backward link a merge repairs, including the root after a merge
+ * at the end of the volume. Read it before the merge is published.
+ * Return 0, or -1 for a read that failed or a lost link.
  */
 static int krffs_remove_reads(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
                               uint64_t *previous, krffs_node_t *before, krffs_node_t *after)
@@ -1758,6 +1768,9 @@ static int krffs_remove_reads(krffs_mount_t *mount, uint64_t offset, const krffs
         }
     }
     if (next == 0) {
+        if (*previous != KRFFS_NO_NODE && before->type == KRFFS_FREE_NODE) {
+            return krffs_head(mount, 0, &beyond);
+        }
         return 0;
     }
     if (krffs_head(mount, next, after) != 0) {
@@ -1826,10 +1839,12 @@ static int krffs_remove_err(krffs_mount_t *mount, uint64_t offset, int *typed)
         }
     }
 
-    if (size_changed && krffs_fix_backward_link(mount, offset, size) != 0) {
-        rc = -1;
+    if (rc < 0 || (size_changed && krffs_fix_backward_link(mount, offset, size) != 0)) {
+        mount->stale_links = 1;
+        mount->unsettled = 1;
+        return -1;
     }
-    if (krffs_sync_point(mount) != 0 || rc < 0) {
+    if (krffs_sync_point(mount) != 0) {
         return -1;
     }
     return 0;
@@ -1841,6 +1856,23 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
     int typed;
 
     return krffs_remove_err(mount, offset, &typed);
+}
+
+/**
+ * Free a nameless node after its last reference goes. A failed removal
+ * leaves the mount dirty and halted until the next check. Return 0 or -1.
+ */
+int krffs_reap_at(krffs_mount_t *mount, uint64_t offset)
+{
+    int typed;
+    uint32_t owed = mount->orphans;
+
+    if (mount->halted || krffs_remove_err(mount, offset, &typed) != 0) {
+        mount->orphans = owed ? owed : 1;
+        krffs_halt(mount);
+        return -1;
+    }
+    return 0;
 }
 
 /**
@@ -1885,7 +1917,7 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     if (krffs_barrier(mount) != 0) {
         return -1;
     }
-    if (!krffs_size_fits(mount, offset, size)) {
+    if (!krffs_size_fits(mount, offset, head->size, size)) {
         return 0;
     }
     if (next->type == KRFFS_FREE_NODE) {
@@ -1931,7 +1963,7 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
         return -1;
     }
     if (whole >= grown && whole - grown >= sizeof(krffs_node_t) &&
-        krffs_size_fits(mount, offset, grown)) {
+        krffs_size_fits(mount, offset, head->size, grown)) {
         uint64_t tail = krffs_wrap_offset(mount, offset + grown);
 
         if (krffs_write_free_header(mount, tail, whole - grown, grown) != 0 ||
@@ -1941,7 +1973,7 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
         (void)krffs_fix_backward_link(mount, tail, whole - grown);
         return krffs_barrier(mount) == 0 ? 0 : -1;
     }
-    if (!krffs_size_fits(mount, offset, whole)) {
+    if (!krffs_size_fits(mount, offset, head->size, whole)) {
         return 1;
     }
     if (krffs_publish_size(mount, offset, whole) != 0) {
@@ -2055,8 +2087,13 @@ static int krffs_resize_err(krffs_mount_t *mount, uint64_t offset, uint64_t size
     int rc;
 
     *live = offset;
-    if (size > mount->size || offset == KRFFS_NO_NODE || krffs_head(mount, offset, &head) != 0 ||
-        head.type != KRFFS_RESERVED_NODE) {
+    if (size > mount->size || offset == KRFFS_NO_NODE) {
+        return KRFFS_ENOSPACE;
+    }
+    if (krffs_head(mount, offset, &head) != 0) {
+        return KRFFS_EIO;
+    }
+    if (head.type != KRFFS_RESERVED_NODE) {
         return KRFFS_ENOSPACE;
     }
     if (head.size == size_with_header) {
@@ -2148,8 +2185,13 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
     int move;
     int rc;
 
-    if (!node || *node == KRFFS_NO_NODE || !buffer || krffs_head(mount, *node, &head) != 0 ||
-        head.type != KRFFS_RESERVED_NODE) {
+    if (!node || *node == KRFFS_NO_NODE || !buffer) {
+        return KRFFS_EBAD;
+    }
+    if (krffs_head(mount, *node, &head) != 0) {
+        return KRFFS_EIO;
+    }
+    if (head.type != KRFFS_RESERVED_NODE) {
         return KRFFS_EBAD;
     }
     offset = *node;
@@ -2328,8 +2370,13 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
     if (node_out) {
         *node_out = node;
     }
-    if (node == KRFFS_NO_NODE || node == 0 || krffs_head(mount, node, &head) != 0 ||
-        head.type != KRFFS_RESERVED_NODE || KRFFS_IS_DIR(head.mode)) {
+    if (node == KRFFS_NO_NODE || node == 0) {
+        return KRFFS_EBAD;
+    }
+    if (krffs_head(mount, node, &head) != 0) {
+        return KRFFS_EIO;
+    }
+    if (head.type != KRFFS_RESERVED_NODE || KRFFS_IS_DIR(head.mode)) {
         return KRFFS_EBAD;
     }
     if (krffs_settled(mount) != 0) {
@@ -3294,6 +3341,9 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
     krffs_brief_t head;
     krffs_brief_t before;
 
+    if (mount->halted) {
+        return 0;
+    }
     if (krffs_brief(mount, previous, &head) != 0) {
         mount->orphans++;
         krffs_halt(mount);
@@ -3314,9 +3364,8 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
             break;
         }
         if (unnamed) {
-            if (krffs_remove_at(mount, node) != 0) {
-                failed = 1;
-                break;
+            if (krffs_reap_at(mount, node) != 0) {
+                return reaped;
             }
             reaped++;
             if (krffs_brief(mount, previous, &before) != 0) {
@@ -3480,8 +3529,13 @@ static int krffs_count_names(krffs_mount_t *mount, uint32_t *named)
         if (krffs_brief(mount, offset, &brief) != 0) {
             return -1;
         }
-        if (brief.type == KRFFS_RESERVED_NODE && krffs_has_name(mount, offset)) {
-            (*named)++;
+        if (brief.type == KRFFS_RESERVED_NODE) {
+            int empty = krffs_name_is(mount, offset, "", 0);
+
+            if (empty < 0) {
+                return -1;
+            }
+            *named += !empty;
         }
         offset = krffs_step(mount, offset, brief.size);
     } while (offset != 0 && ++steps < bound);
@@ -3905,9 +3959,11 @@ static int krffs_repair_parents(krffs_mount_t *mount, uint32_t *adopted)
             break;
         }
         known = 1;
-        if (brief.type == KRFFS_RESERVED_NODE && !KRFFS_IS_DIR(brief.mode) &&
-            krffs_has_name(mount, offset)) {
-            known = krffs_dir_indexed(mount, &index, brief.parent_id);
+        if (brief.type == KRFFS_RESERVED_NODE && !KRFFS_IS_DIR(brief.mode)) {
+            known = krffs_name_is(mount, offset, "", 0);
+            if (known == 0) {
+                known = krffs_dir_indexed(mount, &index, brief.parent_id);
+            }
         }
         if (known == 0) {
             known = krffs_dir_indexed(mount, &index, brief.id);
@@ -4007,6 +4063,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
     if (krffs_repair_links(mount, &fixed_links) != 0 ||
         krffs_repair_parents(mount, &adopted) != 0 ||
         krffs_repair_names(mount, &fixed_doubles) != 0) {
+        krffs_halt(mount);
         return -1;
     }
     if (adopted != 0) {
@@ -4025,7 +4082,11 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
     } else {
         krffs_reap_orphans_at(mount);
     }
-    return krffs_sync_point(mount);
+    if (krffs_sync_point(mount) != 0) {
+        krffs_halt(mount);
+        return -1;
+    }
+    return 0;
 }
 
 /**
@@ -4040,7 +4101,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
  * type, has a size of at least one header that does not run past the end,
  * data that fits inside it, and a backward link consistent with the previous
  * node; the sizes must tile the region exactly and the chain must close back
- * on the root. Returns 1 if sound, 0 if not or if a read fails.
+ * on the root. Returns 1 if sound, 0 if malformed, or -EIO on a read error.
  *
  * The position stays in [0, size], since it starts at 0 and advances only
  * by a size already checked against what is left, so what is left is
@@ -4052,7 +4113,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
  * must end within its field, since every reader would read past one that
  * does not.
  */
-static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
+int krffs_chain_walk(krffs_mount_t *mount, int with_links)
 {
     uint64_t position = 0;
     uint64_t previous_size = 0;
@@ -4063,7 +4124,7 @@ static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
     krffs_node_t root;
 
     if (krffs_head(mount, 0, &root) != 0) {
-        return 0;
+        return -EIO;
     }
 
     for (;;) {
@@ -4074,7 +4135,7 @@ static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
             return 0;
         }
         if (krffs_head(mount, position, &head) != 0) {
-            return 0;
+            return -EIO;
         }
         if (head.magic != KRFFS_FILE_SYSTEM_MAGIC) {
             return 0;
@@ -4122,12 +4183,12 @@ static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
 
 int krffs_chain_is_valid(krffs_mount_t *mount)
 {
-    return krffs_chain_walk(mount, 1);
+    return krffs_chain_walk(mount, 1) == 1;
 }
 
 int krffs_chain_is_walkable(krffs_mount_t *mount)
 {
-    return krffs_chain_walk(mount, 0);
+    return krffs_chain_walk(mount, 0) == 1;
 }
 
 int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode)
@@ -4703,7 +4764,7 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
     if (!fs || fs != krffs_fs || !fs->node || !node) {
         return;
     }
-    krffs_remove_at(&krffs_root_mount, krffs_offset_of(node));
+    (void)krffs_reap_at(&krffs_root_mount, krffs_offset_of(node));
 }
 
 uint32_t krffs_count_files(void)
@@ -4771,6 +4832,7 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
 {
     krffs_node_t root;
     uint32_t fixed;
+    int valid;
 
     if (!base || size < sizeof(krffs_node_t)) {
         klog(KLOG_ERR, "krffs", "mount: refused: no image at %x, %d bytes",
@@ -4810,8 +4872,9 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
         return -1;
     }
 
-    if (!krffs_chain_is_valid(&krffs_root_mount)) {
-        if (disk_grain == 0 || !(root.mode & KRFFS_MODE_DIRTY) ||
+    valid = krffs_chain_walk(&krffs_root_mount, 1);
+    if (valid != 1) {
+        if (valid < 0 || disk_grain == 0 || !(root.mode & KRFFS_MODE_DIRTY) ||
             !krffs_chain_is_walkable(&krffs_root_mount) ||
             krffs_repair_links(&krffs_root_mount, &fixed) != 0) {
             klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
@@ -4854,6 +4917,12 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
 int krffs_root_check_owed(void)
 {
     return krffs_root_mount.check_owed != 0;
+}
+
+/** Halt the disk root after its orphan repair failed to reach the disk. */
+void krffs_root_halt(void)
+{
+    krffs_halt(&krffs_root_mount);
 }
 
 int krffs_root_halted(void)
