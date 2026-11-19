@@ -1498,6 +1498,134 @@ int32_t smp_long_store(void *data, const char __user *buf, uint32_t len)
     return (int32_t)len;
 }
 
+/* The names of the reasons `bkl_open_locked` counts, in BKL_OPEN_* order. */
+static const char *const bkl_open_why[BKL_OPEN_REASONS] = {"flags", "path", "device", "miss",
+                                                           "type",  "attr", "kind"};
+
+/* One open that `open_unlocked` sent to the big lock: its reason, its open
+ * flags, the thread and its name, and the path's last BKL_OPEN_PATH - 1
+ * bytes, NUL-ended. */
+struct bkl_open_record {
+    uint32_t why;
+    uint32_t flags;
+    uint32_t pid;
+    char comm[16];
+    char path[BKL_OPEN_PATH];
+};
+
+/* debugfs's bkl/open: the opens `open_unlocked` sent to the big lock since
+ * the last write, by reason, and a ring of the last BKL_OPEN_SLOTS of them,
+ * `bkl_open_head` the next slot; all under `bkl_open_lock`, which those
+ * opens take with interrupts off. */
+#define BKL_OPEN_SLOTS 256
+static struct spinlock bkl_open_lock = SPINLOCK_INIT_NAMED("bkl_open");
+static uint32_t bkl_open_count[BKL_OPEN_REASONS];
+static uint32_t bkl_open_head;
+static uint32_t bkl_open_used;
+static struct bkl_open_record bkl_open_ring[BKL_OPEN_SLOTS];
+
+void bkl_open_locked(int why, int oflags, const char *path)
+{
+    struct bkl_open_record *r;
+    uint32_t flags, len, from;
+
+    if (why < 0 || why >= BKL_OPEN_REASONS) {
+        return;
+    }
+    len = path ? (uint32_t)k_strlen(path) : 0u;
+    from = len >= BKL_OPEN_PATH ? len - (BKL_OPEN_PATH - 1u) : 0u;
+    flags = spin_lock_irqsave(&bkl_open_lock);
+    bkl_open_count[why]++;
+    r = &bkl_open_ring[bkl_open_head];
+    bkl_open_head = (bkl_open_head + 1u) % BKL_OPEN_SLOTS;
+    if (bkl_open_used < BKL_OPEN_SLOTS) {
+        bkl_open_used++;
+    }
+    r->why = (uint32_t)why;
+    r->flags = (uint32_t)oflags;
+    r->pid = current_proc ? current_proc->pid : 0u;
+    k_memset(r->comm, 0, sizeof(r->comm));
+    if (current_proc) {
+        k_memcpy(r->comm, current_proc->comm, sizeof(r->comm) - 1u);
+    }
+    k_memcpy(r->path, path ? path + from : "", len - from);
+    r->path[len - from] = '\0';
+    spin_unlock_irqrestore(&bkl_open_lock, flags);
+}
+
+/** Render bkl/open: `REASON N` for each reason, then the
+ * ring oldest first, `REASON FLAGS PID COMM PATH` a line. The sizing call
+ * copies the counts and the ring; the output call uses that copy, as
+ * `smp_long_show` does. The caller holds the big lock. */
+int32_t smp_open_show(void *data, char *buf, uint32_t cap)
+{
+    static struct bkl_open_record snap[BKL_OPEN_SLOTS];
+    static uint32_t counts[BKL_OPEN_REASONS];
+    static uint32_t used;
+    struct bkl_text t;
+    uint32_t i, j, first, flags;
+
+    (void)data;
+    if (!buf) {
+        flags = spin_lock_irqsave(&bkl_open_lock);
+        used = bkl_open_used;
+        k_memcpy(counts, bkl_open_count, sizeof(counts));
+        first = (bkl_open_head + BKL_OPEN_SLOTS - used) % BKL_OPEN_SLOTS;
+        for (i = 0; i < used; i++) {
+            snap[i] = bkl_open_ring[(first + i) % BKL_OPEN_SLOTS];
+        }
+        spin_unlock_irqrestore(&bkl_open_lock, flags);
+    }
+    t.buf = buf;
+    t.cap = cap;
+    t.len = 0;
+    for (i = 0; i < BKL_OPEN_REASONS; i++) {
+        text_str(&t, bkl_open_why[i]);
+        text_ch(&t, ' ');
+        text_dec(&t, counts[i]);
+        text_ch(&t, '\n');
+    }
+    for (i = 0; i < used; i++) {
+        const struct bkl_open_record *r = &snap[i];
+
+        text_str(&t, bkl_open_why[r->why]);
+        text_ch(&t, ' ');
+        text_hex(&t, r->flags);
+        text_ch(&t, ' ');
+        text_dec(&t, r->pid);
+        text_ch(&t, ' ');
+        if (!r->comm[0]) {
+            text_ch(&t, '-');
+        }
+        for (j = 0; j < sizeof(r->comm) && r->comm[j]; j++) {
+            unsigned char ch = (unsigned char)r->comm[j];
+
+            text_ch(&t, ch > ' ' && ch <= '~' ? (char)ch : '?');
+        }
+        text_ch(&t, ' ');
+        for (j = 0; r->path[j]; j++) {
+            unsigned char ch = (unsigned char)r->path[j];
+
+            text_ch(&t, ch > ' ' && ch <= '~' ? (char)ch : '?');
+        }
+        text_ch(&t, '\n');
+    }
+    return (int32_t)t.len;
+}
+
+/** Zero bkl/open's counts and ring; `len`. The caller holds the big lock. */
+int32_t smp_open_store(void *data, const char __user *buf, uint32_t len)
+{
+    uint32_t flags = spin_lock_irqsave(&bkl_open_lock);
+
+    (void)data;
+    (void)buf;
+    k_memset(bkl_open_count, 0, sizeof(bkl_open_count));
+    bkl_open_head = bkl_open_used = 0;
+    spin_unlock_irqrestore(&bkl_open_lock, flags);
+    return (int32_t)len;
+}
+
 /**
  * Name the hold `cpu` begins after the entry its thread is in, the mark
  * `bkl_entry_push` left or the call it runs without the lock (`entry_of`),

@@ -307,6 +307,35 @@ int32_t smp_long_show(void *data, char *buf, uint32_t cap);
 /** Zero the long-hold ring; `len`. The caller holds the big lock. */
 int32_t smp_long_store(void *data, const char __user *buf, uint32_t len);
 
+/* Why `open_unlocked` sent an open to the big lock: its flags, a path it
+ * does not resolve alone (through a descriptor, from "..", or a working
+ * directory outside the root), a /proc, /dev or device path, a name the
+ * cache does not finish, a type without unlocked reads, attributes it could
+ * not read, or a file neither regular nor a directory. */
+#define BKL_OPEN_FLAGS    0
+#define BKL_OPEN_PATH_REL 1
+#define BKL_OPEN_DEVICE   2
+#define BKL_OPEN_MISS     3
+#define BKL_OPEN_TYPE     4
+#define BKL_OPEN_ATTR     5
+#define BKL_OPEN_KIND     6
+#define BKL_OPEN_REASONS  7
+/* The bytes bkl/open keeps of a path, its NUL included. */
+#define BKL_OPEN_PATH     96
+
+/** Count an open `open_unlocked` sent to the big lock for reason `why`, a
+ * BKL_OPEN_* value, with its open flags `oflags` and its path, or NULL, of
+ * which bkl/open keeps the end. Any context that may take a spinlock. */
+void bkl_open_locked(int why, int oflags, const char *path);
+
+/** Write debugfs's bkl/open: the opens sent to the big lock by reason,
+ * and the last 256 of them. `buf` and `cap` are as for
+ * smp_calls_show. The caller holds the big lock. */
+int32_t smp_open_show(void *data, char *buf, uint32_t cap);
+
+/** Zero bkl/open; `len`. The caller holds the big lock. */
+int32_t smp_open_store(void *data, const char __user *buf, uint32_t len);
+
 /** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
  * a full table lost, and for each entry, instruction and three callers
  * sampled, its count. No tick samples while the text is written, so that

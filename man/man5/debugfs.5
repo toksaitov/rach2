@@ -332,6 +332,41 @@ Later interrupts during a hold replace its sample.
 A hold that ends without an interrupt can leave no sample.
 A read snapshots the ring once, before rendering it.
 A write empties it; a hold already under way can be sampled again.
+.It Pa bkl/open
+Mode 0644.
+The read-only opens that the open path without the big lock sent to the
+big lock since the last write, a Rach2 file.
+The first seven lines count them by reason, as
+.Ql REASON N :
+.Ql flags
+for an access mode other than read-only or a flag that creates, truncates,
+or asks for O_PATH, O_TMPFILE or O_DIRECT;
+.Ql path
+for a path relative to a descriptor, one that begins with
+.Ql .. ,
+or a working directory outside the root;
+.Ql device
+for a path under /proc or /dev, or the frame buffer's or the mouse's node;
+.Ql miss
+for a name the name cache does not finish, a type it does not keep among
+them;
+.Ql type
+for a type whose reads take the big lock;
+.Ql attr
+for a file whose attributes could not be read; and
+.Ql kind
+for a file neither regular nor a directory.
+The last 256 such opens follow, oldest first, one a line: the reason, the
+open flags in hexadecimal, the thread ID, its command and the last 95
+bytes of the path, with spaces and nonprinting characters replaced by
+question marks:
+.Bd -literal -offset indent
+device 0x80000 151 ThreadPoolSingl proc/151/task/160/status
+.Ed
+.Pp
+A path the open resolved has no leading slash; one copied from the caller
+is as the caller gave it.
+A write zeroes the counts and empties the ring.
 .It Pa bkl/tick
 Mode 0644.
 The parts of the timer tick, a Rach2 file: for each part, the ticks that

@@ -4666,12 +4666,13 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
-/* debugfs's big-lock counts, profile, long holds and the tick's parts, each
- * zeroed by a write (proc/smp.c). */
+/* debugfs's big-lock counts, profile, long holds, the tick's parts and the
+ * opens sent to the lock, each zeroed by a write (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
 static const struct debugfs_text_ops bkl_long_ops = {smp_long_show, smp_long_store};
 static const struct debugfs_text_ops bkl_tick_ops = {smp_tick_show, smp_tick_store};
+static const struct debugfs_text_ops bkl_open_ops = {smp_open_show, smp_open_store};
 /* debugfs's cputime_test, the faults the CPU-time rows of the suites force
  * (io/timerfd.c). */
 static const struct debugfs_text_ops cputime_test_ops = {ptimer_test_show, ptimer_test_store};
@@ -4687,9 +4688,9 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
  * (`virtio_net_cpus_started`), and start the lockup detectors on all of them
  * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
  * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
- * bkl/profile, bkl/long, bkl/tick, cputime_test, the scheduler's files
- * (`sched_debugfs_init`) and, with the checker, lockdep/inject in debugfs;
- * a failure there is logged. */
+ * bkl/profile, bkl/long, bkl/tick, bkl/open, cputime_test, the scheduler's
+ * files (`sched_debugfs_init`) and, with the checker, lockdep/inject in
+ * debugfs; a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4703,7 +4704,8 @@ static void start_processors(void)
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
         debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0 ||
-        debugfs_create_text("bkl/tick", 0644u, &bkl_tick_ops, NULL) != 0) {
+        debugfs_create_text("bkl/tick", 0644u, &bkl_tick_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/open", 0644u, &bkl_open_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
     if (debugfs_create_text("cputime_test", 0600u, &cputime_test_ops, NULL) != 0) {

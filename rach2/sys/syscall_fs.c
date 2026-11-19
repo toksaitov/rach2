@@ -5569,10 +5569,33 @@ static int32_t open_install_unlocked(struct vfs_ref *ref, struct vfs_name *entry
  * an open: ENOTDIR for O_DIRECTORY on a file, and read permission. The
  * descriptor is reserved before the walk, as `do_open` reserves it. The
  * descriptor or a negative errno; or CALL_LOCKED with nothing done, for
- * every other open, which `do_open` makes under the big lock. inotify's
- * report of the open takes the big lock while a watch is on the file's
- * file system (`open_install_unlocked`).
+ * every other open, which `do_open` makes under the big lock, counted by
+ * its reason in debugfs's bkl/open (`open_sent_locked`). inotify's report
+ * of the open takes the big lock while a watch is on the file's file
+ * system (`open_install_unlocked`).
  */
+/**
+ * Count in debugfs's bkl/open an open `open_unlocked` sends to the big lock
+ * for reason `why` (BKL_OPEN_*), with its `flags` and the path `kpath`, or
+ * when that is NULL the user's `upath` copied here. CALL_LOCKED.
+ */
+static int32_t open_sent_locked(int why, int flags, const char *kpath, const char __user *upath)
+{
+    char *buf;
+
+    if (kpath) {
+        bkl_open_locked(why, flags, kpath);
+        return CALL_LOCKED;
+    }
+    buf = path_buf_get();
+    bkl_open_locked(why, flags,
+                    buf && strncpy_from_user(buf, upath, VFS_PATH_MAX) >= 0 ? buf : NULL);
+    if (buf) {
+        path_buf_put(buf);
+    }
+    return CALL_LOCKED;
+}
+
 static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
 {
     struct vfs_name *entry = NULL;
@@ -5584,11 +5607,11 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
     int32_t rc;
 
     if (flags & OPEN_LOCKED_FLAGS) {
-        return CALL_LOCKED;
+        return open_sent_locked(BKL_OPEN_FLAGS, flags, NULL, upath);
     }
     rc = path_from_user_unlocked(dirfd, upath, &path, &end);
     if (rc != 0) {
-        return rc;
+        return rc == CALL_LOCKED ? open_sent_locked(BKL_OPEN_PATH_REL, flags, NULL, upath) : rc;
     }
     if (end) {
         flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;
@@ -5596,6 +5619,7 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
     name = path_name(path);
     if (device_name(name, "fb") || device_name(name, "mouse") || path_starts(name, "proc/") ||
         path_starts(name, "dev/")) {
+        open_sent_locked(BKL_OPEN_DEVICE, flags, name, NULL);
         path_buf_put(path);
         return CALL_LOCKED;
     }
@@ -5607,14 +5631,19 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
     rc = vfs_resolve_cached(path, VFS_WALK_LOCK | ((flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0),
                             &ref, &entry);
     if (rc != 0) {
+        if (rc == VFS_CACHED_MISS) {
+            rc = open_sent_locked(BKL_OPEN_MISS, flags, name, NULL);
+        }
         fd_free(current_proc->fds, fd);
         path_buf_put(path);
-        return rc == VFS_CACHED_MISS ? CALL_LOCKED : rc;
+        return rc;
     }
-    if (!vfs_mount_base(ref.mnt)->type->reads_unlocked ||
-        vfs_getattr(ref.mnt, ref.node, &st) != 0 ||
-        ((st.mode & S_IFMT) != S_IFREG && (st.mode & S_IFMT) != S_IFDIR)) {
-        rc = CALL_LOCKED;
+    if (!vfs_mount_base(ref.mnt)->type->reads_unlocked) {
+        rc = open_sent_locked(BKL_OPEN_TYPE, flags, name, NULL);
+    } else if (vfs_getattr(ref.mnt, ref.node, &st) != 0) {
+        rc = open_sent_locked(BKL_OPEN_ATTR, flags, name, NULL);
+    } else if ((st.mode & S_IFMT) != S_IFREG && (st.mode & S_IFMT) != S_IFDIR) {
+        rc = open_sent_locked(BKL_OPEN_KIND, flags, name, NULL);
     } else if ((st.mode & S_IFMT) != S_IFDIR && (flags & O_DIRECTORY)) {
         rc = -ENOTDIR;
     } else {
