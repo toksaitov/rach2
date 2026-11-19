@@ -113,18 +113,18 @@
     },
     {
       "case_id": "machine.memory.memprobe-64",
-      "behavior": "In 72 MiB, of which the kernel and the 18 MiB test image take some 30, a process maps 16 MiB, patterns it, forks over it, execs and frees it",
+      "behavior": "In 64 MiB, of which the kernel and the 18 MiB test image take some 28.5, a process maps 16 MiB, patterns it, forks over it, execs and frees it",
       "units": ["memory", "memprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"memory_mib": 72, "mapped_mib": 16}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"memory_mib": 64, "mapped_mib": 16}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image in 72 MiB, run memprobe 16 from the debug shell and wait for the shell"}
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image in 64 MiB, run memprobe 16 from the debug shell and wait for the shell"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 75497472, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 67108864, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "exit", "checks": "memprobe 16 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
@@ -143,7 +143,7 @@
         {"name": "memory_scenario", "node": "tests/cases/machine/memory_scenario", "per_architecture": false}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "firmware", "reason": "the probe runs at one end of the range of memory, in a machine of exactly 72 MiB"}
+      "native": {"plan": "none", "class": "firmware", "reason": "the probe runs at one end of the range of memory, in a machine of exactly 64 MiB"}
     },
     {
       "case_id": "machine.memory.memprobe-4096",
