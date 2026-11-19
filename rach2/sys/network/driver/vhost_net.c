@@ -574,38 +574,44 @@ static int vn_has_work(void *arg)
     return vn_work != 0;
 }
 
-/** The kernel thread: wait for a kick, then take each kicked transmit
- * ring and offer each kicked receive ring the frames waiting in the tap.
- * An ordinary thread, as Linux's vhost worker is. It holds the big lock, as
+/** One pass of the thread: take each kicked transmit ring and offer each
+ * kicked receive ring the frames waiting in the tap. Under the big lock. */
+static void vn_pass(void)
+{
+    struct vnet *n;
+
+    vn_work = 0;
+    sched_mb(); /* the flag, then the rings' */
+    for (n = vn_devs; n; n = n->next) {
+        if (n->vq[VN_TX].kicked) {
+            n->vq[VN_TX].kicked = 0;
+            if (vn_tx(n)) {
+                vn_wake(&n->vq[VN_TX]);
+            }
+        }
+        if (n->vq[VN_RX].kicked) {
+            n->vq[VN_RX].kicked = 0;
+            if (n->tap) {
+                vn_rx_quiet(n);
+                tap_backend_drain(n->tap);
+            }
+        }
+    }
+}
+
+/** The kernel thread, `vhost-net`: wait for a kick, then make a pass. An
+ * ordinary thread, as Linux's vhost worker is. It holds the big lock, as
  * every kernel thread does, and the tick does not switch it
  * (`no_tick_switch`), so it gives way where it sleeps and at a service
  * point after each pass, as that worker calls cond_resched between works
  * (drivers/vhost/vhost.c:440). */
 static void vn_main(void)
 {
-    struct vnet *n;
-
     arch_irq_enable();
     for (;;) {
         sched_service_point();
         (void)wq_wait_event_idle(&vn_wq, vn_has_work, NULL);
-        vn_work = 0;
-        sched_mb(); /* the flag, then the rings' */
-        for (n = vn_devs; n; n = n->next) {
-            if (n->vq[VN_TX].kicked) {
-                n->vq[VN_TX].kicked = 0;
-                if (vn_tx(n)) {
-                    vn_wake(&n->vq[VN_TX]);
-                }
-            }
-            if (n->vq[VN_RX].kicked) {
-                n->vq[VN_RX].kicked = 0;
-                if (n->tap) {
-                    vn_rx_quiet(n);
-                    tap_backend_drain(n->tap);
-                }
-            }
-        }
+        vn_pass();
     }
 }
 

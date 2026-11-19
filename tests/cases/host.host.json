@@ -1506,6 +1506,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vhost_net",
+          "checks": "tests/host/vhost_net_hosttest.c runs /dev/vhost-net against stand-ins for the tap, the eventfds and the guest's memory: Linux's vhost requests and their refusals before and after VHOST_SET_OWNER, the memory table's bound, a pin kept by a table that has its region whole, a region left unpinned and a pin refused past RLIMIT_MEMLOCK, the receive ring's frame after the 1.0 header with num_buffers 1, its call and the guest's request for none, a buffer too short left to the guest, the kicks asked for only once the ring is found empty and the tap's frames drained on a kick, the transmit ring's gathered frame without its header and a pass's budget of 128 frames, a bad descriptor that breaks a ring and signals its error eventfd, and the unmap, the tap's close, the kick's last close and the device's close that let every pin and reference go, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "tcp",
           "checks": "tests/host/tcp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
