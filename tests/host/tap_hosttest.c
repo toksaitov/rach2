@@ -1,7 +1,8 @@
 /**
  * Test /dev/net/tun of sys/network/driver/tap.c: TUNSETIFF and the other
  * requests, the ring of frames for the reader, writes, the backend and the
- * close, with the stack around the device stood in for.
+ * close, and TUNSETIFF on a duplicated descriptor while another call's copy
+ * sleeps, with the stack around the device stood in for.
  *
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -56,9 +57,12 @@ static int same_str(const char *a, const char *b)
 
 /* What the device did to the kernel around it, which the rows read. */
 static struct {
-    struct devfs_node *node; /* the node registered */
-    int admin;               /* whether the caller may change interfaces */
-    struct netdev *iface[4]; /* the interfaces registered */
+    struct devfs_node *node;   /* the node registered */
+    int admin;                 /* whether the caller may change interfaces */
+    int other_ns;              /* the caller is in a network namespace not the first */
+    int ip6_forgets;           /* interfaces whose IPv6 state was forgotten */
+    void (*during_copy)(void); /* run once inside the next copy from the user */
+    struct netdev *iface[4];   /* the interfaces registered */
     int registered, unregistered;
     int rx, rx_len; /* frames given to ethernet_rx, and the last one's length */
     int wakes, carrier, set_ups, last_up, locks;
@@ -263,11 +267,37 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return cond(arg) ? 0 : -EINTR;
 }
 
-/** A plain copy: every buffer is the test's. */
+/** A plain copy: every buffer is the test's. A hook a row set runs first,
+ * once, as another thread runs while a copy sleeps on a fault. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
+    void (*hook)(void) = k.during_copy;
+
+    k.during_copy = 0;
+    if (hook) {
+        hook();
+    }
     k_memcpy(dst, (const void *)src, n);
     return 0;
+}
+
+/** Whether the caller is in the first network namespace. */
+int net_ns_seen(void)
+{
+    return !k.other_ns;
+}
+
+/** Every call of the test is native. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
+/** Count an interface whose IPv6 state is forgotten. */
+void ip6_forget_dev(struct netdev *nd)
+{
+    (void)nd;
+    k.ip6_forgets++;
 }
 
 /** A plain copy: every buffer is the test's. */
@@ -308,7 +338,7 @@ static int open_tap(int n, int d)
  * gave is left in `out` when it is not NULL. */
 static int32_t set_iff(int n, const char *name, uint16_t flags, char *out)
 {
-    uint8_t ifr[TAP_IFR_SIZE];
+    uint8_t ifr[TAP_IFR_MAX];
     int32_t r;
 
     k_memset(ifr, 0, sizeof(ifr));
@@ -396,6 +426,15 @@ static void check_before(void)
           "no virtio header");
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI | TAP_IFF_MULTI_QUEUE, 0) == -EINVAL,
           "one queue");
+    CHECK(set_iff(0, "a/b", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL &&
+              set_iff(0, "..", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL &&
+              set_iff(0, "a b", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL &&
+              set_iff(0, "a:%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
+          "a name dev_valid_name refuses is refused");
+    k.other_ns = 1;
+    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EOPNOTSUPP,
+          "a network namespace other than the first has no tap");
+    k.other_ns = 0;
     CHECK(k.registered == 0, "and no interface is made by a refusal");
 }
 
@@ -418,8 +457,19 @@ static void check_setiff(void)
           "it has a carrier while a descriptor holds it");
     CHECK(tap_of(&fds[1]) == t,
           "a descriptor duplicated before TUNSETIFF has the interface, as the open's");
-    CHECK(set_iff(1, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
-          "and a second TUNSETIFF on the open is refused");
+    CHECK(set_iff(1, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EEXIST,
+          "and a second TUNSETIFF on the open is EEXIST, as Linux's");
+    {
+        uint8_t ifr[TAP_IFR_MAX + 4];
+
+        k_memset(ifr, 0x5a, sizeof(ifr));
+        CHECK(k.node->ops->ioctl(&fds[1], TUNGETIFF, (uintptr_t)ifr) == 0 &&
+                  same_str((const char *)ifr, "tap0") == 0 &&
+                  ifr[TAP_IFNAME] == ((TAP_IFF_TAP | TAP_IFF_NO_PI) & 0xff) &&
+                  ifr[TAP_IFNAME + 1] == (TAP_IFF_NO_PI >> 8) && ifr[TAP_IFR_MAX - 1] == 0 &&
+                  ifr[TAP_IFR_MAX] == 0x5a,
+              "TUNGETIFF writes the name and flags in a whole struct ifreq, and no more");
+    }
 
     CHECK(open_tap(2, 1) == 0, "a second open");
     CHECK(set_iff(2, "tap0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EBUSY,
@@ -465,6 +515,22 @@ static void check_ring(void)
              buf[0] == (uint8_t)i && buf[len - 1] == (uint8_t)(i + len - 1);
     }
     CHECK(ok, "each read is one frame, whole and in order");
+    {
+        struct kernel_iovec v[2];
+        uint8_t head[14], rest[20];
+
+        tap_ops.tx(t, frame_of(60, 100), 60);
+        tap_ops.tx(t, frame_of(70, 200), 70);
+        v[0].iov_base = (uintptr_t)head;
+        v[0].iov_len = sizeof(head);
+        v[1].iov_base = (uintptr_t)rest;
+        v[1].iov_len = sizeof(rest);
+        CHECK(tap_readv(&fds[0], v, 2) == 34 && head[0] == 100 && head[13] == 113 &&
+                  rest[0] == 114 && rest[19] == 133,
+              "readv scatters one frame across its vector");
+        CHECK(k.node->ops->read(&fds[0], (char *)buf, sizeof(buf)) == 70 && buf[0] == 200,
+              "and the next read has the next frame whole");
+    }
     CHECK(k.node->ops->read(&fds[0], (char *)buf, sizeof(buf)) == -EAGAIN,
           "an empty ring is EAGAIN without blocking");
     ofd[0].status_flags = 0;
@@ -485,9 +551,24 @@ static void check_write(void)
     CHECK(k.node->ops->write(&fds[0], (const char *)frame_of(2000, 1), 2000) == 2000 && k.rx == 1 &&
               t->nd.rx_dropped == dropped + 1,
           "a write too long for the interface is taken and counted as dropped");
-    CHECK(tap_write_frame(&fds[1], frame_of(1514, 1), 1514) == 1514 && k.rx == 2 &&
-              k.rx_len == 1514,
-          "a gathered frame of 1514 bytes is received");
+    {
+        struct kernel_iovec v[2];
+        uint8_t *f = frame_of(1514, 1);
+
+        v[0].iov_base = (uintptr_t)f;
+        v[0].iov_len = 14;
+        v[1].iov_base = (uintptr_t)(f + 14);
+        v[1].iov_len = 1500;
+        CHECK(tap_writev(&fds[1], v, 2, 1514) == 1514 && k.rx == 2 && k.rx_len == 1514,
+              "writev gathers a frame of 1514 bytes, which is received");
+        v[1].iov_base = 0; /* not read */
+        v[1].iov_len = 1501;
+        CHECK(tap_writev(&fds[1], v, 2, 1515) == 1515 && k.rx == 2 &&
+                  t->nd.rx_dropped == dropped + 2,
+              "writev of 1515 bytes is taken and counted as dropped, unread, as write's");
+        v[0].iov_len = 13;
+        CHECK(tap_writev(&fds[1], v, 1, 13) == -EINVAL, "writev shorter than a header is EINVAL");
+    }
     CHECK(k.locks == 0, "every bracket of the stack's lock is closed");
 }
 
@@ -526,6 +607,10 @@ static void check_close(void)
 
     CHECK(k.node->ops->ioctl(&fds[2], TUNSETPERSIST, 1) == 0, "vm0 is made persistent");
     k.node->ops->close(&fds[2]);
+    CHECK(open_tap(2, 1) == 0 &&
+              set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI | TAP_IFF_TUN_EXCL, 0) == -EBUSY,
+          "IFF_TUN_EXCL refuses an interface that exists");
+    k.node->ops->close(&fds[2]);
     CHECK(netdev_by_name("vm0") == &t->nd && tap_ops.link(t, &link) == 1 && link.up == 0,
           "a persistent interface stays, without a carrier, after its close");
     CHECK(tap_ops.tx(t, frame_of(60, 0), 60) == NETDEV_TX_DROPPED,
@@ -545,7 +630,40 @@ static void check_close(void)
     CHECK(set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 && same_str(name, "tap0") == 0,
           "and its record serves the next TUNSETIFF");
     k.node->ops->close(&fds[3]);
+    CHECK(k.ip6_forgets == k.unregistered, "each interface removed has its IPv6 state forgotten");
     CHECK(k.locks == 0, "every bracket of the stack's lock is closed");
+}
+
+/** A TUNSETIFF on the duplicate of a descriptor, run while the first call's
+ * copy of its request sleeps. */
+static void race_setiff(void)
+{
+    CHECK(set_iff(1, "race%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0, "the second call attaches");
+}
+
+/** Two TUNSETIFF calls on one open, the second run while the first's copy
+ * sleeps: the first finds the open attached and changes nothing, so that
+ * no interface is left without a descriptor. */
+static void check_race(void)
+{
+    char name[TAP_IFNAME];
+    int registered = k.registered;
+
+    CHECK(open_tap(0, 0) == 0, "an open for the race");
+    fds[1] = fds[0];
+    k.during_copy = race_setiff;
+    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EEXIST,
+          "the first call finds the open attached after its copy");
+    CHECK(tap_of(&fds[0]) && same_str(tap_of(&fds[0])->nd.name, "race0") == 0 &&
+              k.registered == registered + 1,
+          "and the open keeps the second call's interface alone");
+    k.node->ops->close(&fds[0]);
+    CHECK(netdev_by_name("race0") == 0, "which the close removes");
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
+              open_tap(3, 2) == 0 && set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0,
+          "and both records serve again");
+    k.node->ops->close(&fds[2]);
+    k.node->ops->close(&fds[3]);
 }
 
 /** Run the rows; return the number of failed checks, at most 255. */
@@ -566,6 +684,7 @@ int main(void)
     check_write();
     check_backend();
     check_close();
+    check_race();
     if (!fails) {
         printf("tap-hosttest: result: pass\n");
     }
