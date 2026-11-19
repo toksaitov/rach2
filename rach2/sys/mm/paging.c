@@ -4873,7 +4873,9 @@ struct huge_chunk {
 /**
  * Split the huge pages of `dir` from `addr` towards `end`, HUGE_CHUNK at
  * most, noting in `c` each whose 2 MiB lies inside the range, and have
- * every processor drop their translations at once. Return where the run
+ * every processor drop their translations at once: by one address for one
+ * page, which drops its 2 MiB translation alone, and by the range for more,
+ * one request where one for each page would wait on each. Return where the run
  * ends, for the caller to change the entries up to there and then call
  * `huge_chunk_promote`. Under the regions' lock held to write.
  */
@@ -4895,7 +4897,9 @@ static uintptr_t huge_chunk_split(struct huge_chunk *c, page_dir_t *dir, uintptr
             }
         }
     }
-    if (split) {
+    if (split == 1) {
+        paging_flush_dir(dir, lo);
+    } else if (split > 1) {
         paging_flush_range(dir, lo, hi);
     }
     return addr;
@@ -5076,9 +5080,11 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
  * take 64 million steps on x86-64. The ranges registered on a writable
  * private region are told first (MMN_PROTECT), since its pages become
  * read-only in the parent. The parent's pages made read-only are flushed
- * once, at the end, as Linux's fork flushes the parent's whole space once:
- * a write another thread makes meanwhile through the old translation lands
- * in the frame both share, as if it came before the fork.
+ * once, at the end, as Linux's fork flushes the parent's whole space once,
+ * and also before a run of huge pages split by the walk is made huge again
+ * (`huge_chunk_promote`): a write another thread makes meanwhile through
+ * the old translation lands in the frame both share, as if it came before
+ * the fork.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 {
@@ -5114,9 +5120,9 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
                 }
             }
 #if MMU_HUGE
-            if (rc == 0) {
-                huge_chunk_promote(&c, &b, parent_dir, child_dir);
-            }
+            /* after a failure the parent's pages split ahead of the walk,
+             * whose entries it left as they were, are made huge again */
+            huge_chunk_promote(&c, &b, parent_dir, rc == 0 ? child_dir : NULL);
 #endif
         }
     }
