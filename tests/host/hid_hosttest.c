@@ -281,6 +281,33 @@ uint32_t hid_report_len(const struct hid_report *r)
     return (r->size + 7) / 8 + (r->id ? 1u : 0u);
 }
 
+/** The stub descriptor has no multitouch features. */
+int hidinput_mt_features(struct hid_dev *hid)
+{
+    (void)hid;
+    return 0;
+}
+
+/** The stub descriptor has no feature request to send. */
+int hidinput_mt_feature_request(struct hid_dev *hid, uint8_t *data, int size, int *value,
+                                int *write)
+{
+    (void)hid;
+    (void)data;
+    (void)size;
+    (void)value;
+    (void)write;
+    return 0;
+}
+
+/** The stub descriptor has no feature reply to handle. */
+void hidinput_mt_feature_answer(struct hid_dev *hid, const uint8_t *data, int length)
+{
+    (void)hid;
+    (void)data;
+    (void)length;
+}
+
 /** Answer `model_inputs`, keeping the name and phys the driver gave. */
 int hidinput_connect(struct hid_dev *hid)
 {

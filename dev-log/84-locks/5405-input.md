@@ -10,4 +10,4 @@ The 17 evtest event codes and values, including the three `SYN_REPORT` records, 
 
 ## Host models
 
-The new rows ran alone. Evdev read 24 tracking IDs, selected slot 23, read a second axis across two copy batches and kept the open valid through unplug. The USB descriptor model assembled a frame from two reports and kept the IDs across a change in report order. The Lenovo Synaptics model brought up the 8042 and drove IRQ 12 from two contacts through both lifts, reading the tracking IDs after each change.
+The new rows ran alone. Evdev read 24 tracking IDs, selected slot 23, read a second axis across two copy batches and returned `ENODEV` to the existing open after unplug. The USB descriptor model assembled a frame from two reports and kept the IDs across a change in report order. The Lenovo Synaptics model brought up the 8042 and drove IRQ 12 from two contacts through both lifts, reading the tracking IDs after each change.

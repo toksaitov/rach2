@@ -44,13 +44,25 @@ struct hid_ids {
  * PRODUCT", or "HID VVVV:PPPP" without strings (`hidinput_connect`), on
  * "usb-DEVICE/inputN", N its bInterfaceNumber. An interface taken already
  * is a state the entry's last device left, and is taken away first, as
- * `hid_gone` takes it. Returns 0; -EINVAL or -E2BIG for a descriptor
+ * `hid_gone` takes it. Returns 0 for a registered interface or 1 when the
+ * core must fetch multitouch features before registration. -EINVAL or
+ * -E2BIG for a descriptor
  * refused, -ENOMEM when its tables cannot be had, and -ENODEV when it makes
  * no input device, each logged; or -ENODEV, not logged, when it names no
  * interface the table has room for. Nothing is kept on an error, and the
  * core may try the boot protocol.
  */
 int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *rdesc, int length);
+
+/** Return the next multitouch feature request's length, or zero when all
+ * have been tried. Set `*value` to wValue and `*write` for SET_REPORT. */
+int hid_setup_request(int device, int iface, uint8_t *data, int size, int *value, int *write);
+
+/** Finish the last feature request with `length` bytes or -1 on refusal. */
+void hid_setup_answer(int device, int iface, const uint8_t *data, int length);
+
+/** Publish the report-protocol input devices, or return -ENODEV. */
+int hid_setup_finish(int device, int iface);
 
 /**
  * Take interface `iface` of `device` in the boot protocol, as Linux's usbkbd

@@ -633,6 +633,45 @@ int hid_attach(int device, int iface, const struct hid_ids *ids, const uint8_t *
     return 0;
 }
 
+/* Optional multitouch setup row: GET followed by SET, and the last reply. */
+static int feature_requests = -1;
+static int feature_bytes, feature_first, feature_registered;
+
+/** Offer two feature requests, when the multitouch row enables them. */
+int hid_setup_request(int device, int iface, uint8_t *data, int size, int *value, int *write)
+{
+    (void)device;
+    (void)iface;
+    if (feature_requests < 0 || feature_requests > 1 || size < 4) {
+        return 0;
+    }
+    *value = 0x305;
+    *write = feature_requests++ != 0;
+    if (*write) {
+        k_memset(data, 0, 4);
+        data[0] = 5;
+    }
+    return 4;
+}
+
+/** Record the feature reply, as it arrived on the control endpoint. */
+void hid_setup_answer(int device, int iface, const uint8_t *data, int length)
+{
+    (void)device;
+    (void)iface;
+    feature_bytes = length;
+    feature_first = length > 0 ? data[0] : -1;
+}
+
+/** Count the publication after feature setup. */
+int hid_setup_finish(int device, int iface)
+{
+    (void)device;
+    (void)iface;
+    feature_registered++;
+    return 0;
+}
+
 /** Take any interface in the boot protocol. */
 int hid_attach_boot(int device, int iface, int kind, const struct hid_ids *ids)
 {
@@ -1280,6 +1319,43 @@ static void control_done(struct usb_device_state *d, int status)
     d->control.status = status;
     d->control.endpoint = 1;
     d->have_control = 1;
+}
+
+/** Fetch and set a HID feature before the interface is made live. */
+static void feature_setup_rows(void)
+{
+    struct usb_device_state *d;
+
+    usb_core_reset();
+    ring_reset();
+    d = hid_at(0, 1, USB_PROTOCOL_MOUSE);
+    d->hid->at[0].features = 1;
+    d->hid->at[0].live = 0;
+    d->hid_if = 0;
+    led_length = sizeof(d->buffer) + 1;
+    feature_requests = feature_registered = 0;
+    hid_advance(d, HS_REPORT);
+    CHECK("a numbered GET_REPORT goes to the interface before registration",
+          ring.control_submits == 1 && ring.setup[0] == TYPE_GET_REPORT &&
+              ring.setup[1] == REQ_GET_REPORT && ring.setup[2] == 5 && ring.setup[3] == 3 &&
+              ring.setup[4] == 2 && ring.length == 4 && ring.direction == USB_DIR_IN &&
+              !feature_registered && !d->hid->at[0].live);
+    if (d->long_output) {
+        d->long_output[0] = 5;
+    }
+    d->short_by = 1;
+    hid_answer(d, 1);
+    CHECK("the driver reads the actual bytes in the heap buffer before SET_REPORT",
+          feature_bytes == 3 && feature_first == 5 && ring.control_submits == 2 &&
+              ring.setup[0] == TYPE_TO_INTERFACE && ring.setup[1] == REQ_SET_REPORT &&
+              ring.direction == USB_DIR_OUT && ring.data == 5 && !feature_registered);
+    d->short_by = 0;
+    hid_answer(d, 1);
+    CHECK("the interface is published after its last feature",
+          feature_registered == 1 && d->hid->at[0].live && d->state == ST_RUNNING);
+    feature_requests = -1;
+    led_length = 1;
+    usb_core_reset();
 }
 
 /** Check the LED report's stall on `d`, whose report 0x05 is out: the
@@ -1968,6 +2044,7 @@ int main(void)
     multi_gone_rows();
     multi_boot_rows();
     multi_full_rows();
+    feature_setup_rows();
 
     /* A configuration as a device sends it. */
     walk(keyboard_config, (int)sizeof(keyboard_config), &info);

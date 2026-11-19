@@ -47,10 +47,12 @@
  * value is the report's type in the high byte, 2 for Output and 3 for
  * Feature, and its ID in the low. */
 #define REQ_SET_REPORT        9
+#define REQ_GET_REPORT        1
 /* The class request that has a human-interface device report only on a
  * change, which Linux sends before it reads the report descriptor. */
 #define REQ_SET_IDLE          10
 #define TYPE_TO_INTERFACE     0x21
+#define TYPE_GET_REPORT       0xa1
 #define TYPE_FROM_INTERFACE   0x81
 #define DESC_DEVICE           1
 #define DESC_CONFIG           2
@@ -151,8 +153,9 @@
 #define HS_SERIAL       4
 #define HS_IDLE         5
 #define HS_REPORT       6
-#define HS_PROTOCOL     7
-#define HS_DONE         8
+#define HS_FEATURE      7
+#define HS_PROTOCOL     8
+#define HS_DONE         9
 
 /* The bytes of a device's manufacturer, product or serial string in UTF-8,
  * with its terminator, as Linux's HID name holds them. */
@@ -170,6 +173,7 @@ struct usb_hid_if {
     int live;      /* the HID driver took it, and it runs */
     int given_up;  /* it refused its setup, or input handles nothing in it */
     int boot;      /* it runs, or is to run, in the boot protocol */
+    int features;  /* multitouch feature setup is under way */
     int reporting; /* a report transfer is outstanding on `ep_dci` */
     int have_report;
     struct usb_completion report_done;
@@ -1137,6 +1141,20 @@ static void readdress_step(struct usb_device_state *d)
     arm(d);
 }
 
+/** Give a HID control transfer a buffer of at least `need` bytes. */
+static uint8_t *hid_control_buffer(struct usb_device_state *d, int need)
+{
+    if (need <= (int)sizeof(d->buffer)) {
+        return d->buffer;
+    }
+    if (need > d->long_output_cap) {
+        kfree(d->long_output);
+        d->long_output = (uint8_t *)kzalloc((size_t)need);
+        d->long_output_cap = d->long_output ? need : 0;
+    }
+    return d->long_output;
+}
+
 /**
  * Offer interface `k` of the running HID device `d` a turn to send the output
  * report its driver has for it (`hid_output_report`), a Feature report or its
@@ -1149,19 +1167,12 @@ static void readdress_step(struct usb_device_state *d)
 static int output_offer(struct usb_device_state *d, int k)
 {
     int length, value, need;
-    uint8_t *out = d->buffer;
+    uint8_t *out;
 
     need = hid_output_size(d->index + 1, k);
-    if (need > (int)sizeof(d->buffer)) {
-        if (need > d->long_output_cap) {
-            kfree(d->long_output);
-            d->long_output = (uint8_t *)kzalloc((size_t)need);
-            d->long_output_cap = d->long_output ? need : 0;
-        }
-        if (!d->long_output) {
-            return -1;
-        }
-        out = d->long_output;
+    out = hid_control_buffer(d, need);
+    if (!out) {
+        return -1;
     }
     length =
         hid_output_report(d->index + 1, k, out,
@@ -1450,6 +1461,40 @@ static void hid_ids_of(const struct usb_device_state *d, int k, struct hid_ids *
     ids->interface = d->hid->info[k].number;
 }
 
+/** Queue the next feature read or write of the interface being set up. */
+static int hid_feature_request(struct usb_device_state *d, int number)
+{
+    int need, size, len, value, write;
+    uint8_t *data;
+
+    if (!d->hid->at[d->hid_if].features) {
+        return 0;
+    }
+    need = hid_output_size(d->index + 1, d->hid_if);
+    data = hid_control_buffer(d, need);
+    if (!data) {
+        return -1;
+    }
+    size = need > (int)sizeof(d->buffer) ? need : (int)sizeof(d->buffer);
+    len = hid_setup_request(d->index + 1, d->hid_if, data, size, &value, &write);
+    if (!len) {
+        return 0;
+    }
+    setup_fill(d->setup, write ? TYPE_TO_INTERFACE : TYPE_GET_REPORT,
+               write ? REQ_SET_REPORT : REQ_GET_REPORT, value, number, len);
+    return control(d, write ? USB_DIR_OUT : USB_DIR_IN, data, len) == 0 ? 1 : -1;
+}
+
+/** Take the reply to the last feature request or give its refusal. */
+static void hid_feature_reply(struct usb_device_state *d, int answer)
+{
+    int length = d->setup[6] | d->setup[7] << 8;
+    int need = hid_output_size(d->index + 1, d->hid_if);
+    uint8_t *data = need > (int)sizeof(d->buffer) ? d->long_output : d->buffer;
+
+    hid_setup_answer(d->index + 1, d->hid_if, data, answer < 0 ? -1 : length - (int)d->short_by);
+}
+
 /**
  * Send the request of HID setup step `step` to `d`, or skip it: the
  * language of its strings, its manufacturer, product and serial strings,
@@ -1499,6 +1544,8 @@ static int hid_request(struct usb_device_state *d, int step)
         setup_fill(d->setup, TYPE_FROM_INTERFACE, REQ_GET_DESCRIPTOR, DESC_REPORT << 8,
                    info->number, info->report_length);
         return control(d, USB_DIR_IN, d->buffer, info->report_length) == 0 ? 1 : -1;
+    case HS_FEATURE:
+        return hid_feature_request(d, info->number);
     case HS_PROTOCOL:
         if (!d->hid->at[d->hid_if].boot) {
             return 0;
@@ -1522,6 +1569,29 @@ static void hid_give_up(struct usb_device_state *d, const char *why)
     }
     klog(KLOG_INFO, "usb", "device: port %s: interface %d: not driven: %s", path_of(d),
          d->hid->info[d->hid_if].number, why ? why : "no input device in it");
+}
+
+/** Leave the report protocol when it supplies no usable input device. */
+static void hid_bad_report(struct usb_device_state *d)
+{
+    if (boot_capable(&d->hid->info[d->hid_if])) {
+        d->hid->at[d->hid_if].boot = 1;
+    } else {
+        hid_give_up(d, 0);
+    }
+}
+
+/** Publish the devices after their last feature reply. */
+static void hid_finish_features(struct usb_device_state *d)
+{
+    struct usb_hid_if *f = &d->hid->at[d->hid_if];
+
+    if (f->features) {
+        f->features = 0;
+        if (hid_setup_finish(d->index + 1, d->hid_if) != 0) {
+            hid_bad_report(d);
+        }
+    }
 }
 
 /**
@@ -1560,10 +1630,10 @@ static void hid_advance(struct usb_device_state *d, int step)
                 arm(d);
                 return;
             }
-            if (step == HS_REPORT && boot_capable(&d->hid->info[d->hid_if])) {
-                f->boot = 1; /* no report descriptor to read */
-            } else if (step == HS_REPORT) {
-                hid_give_up(d, 0);
+            if (step == HS_REPORT) {
+                hid_bad_report(d);
+            } else if (step == HS_FEATURE) {
+                hid_finish_features(d);
             }
         }
         if (!f->given_up && f->boot) {
@@ -1612,7 +1682,11 @@ static void hid_answer(struct usb_device_state *d, int answer)
     struct usb_hid_if *f = &d->hid->at[d->hid_if];
     int got = (int)(info->report_length - (int)d->short_by);
     struct hid_ids ids;
+    int attached;
 
+    if (d->hid_step == HS_FEATURE) {
+        hid_feature_reply(d, answer);
+    }
     if (answer < 0) {
         if (d->hid_step == HS_PROTOCOL) {
             hid_give_up(d, "it refused the boot protocol");
@@ -1647,18 +1721,16 @@ static void hid_answer(struct usb_device_state *d, int answer)
         break;
     case HS_REPORT:
         hid_ids_of(d, d->hid_if, &ids);
-        if (hid_attach(d->index + 1, d->hid_if, &ids, d->buffer, got) != 0) {
-            if (boot_capable(info)) {
-                f->boot = 1;
-            } else {
-                hid_give_up(d, 0);
-            }
+        attached = hid_attach(d->index + 1, d->hid_if, &ids, d->buffer, got);
+        if (attached < 0) {
+            hid_bad_report(d);
         }
+        f->features = attached > 0;
         break;
     default:
         break;
     }
-    hid_advance(d, d->hid_step);
+    hid_advance(d, d->hid_step - (d->hid_step == HS_FEATURE));
 }
 
 /** Start the HID setup of `d`, configured: its strings and each interface's
@@ -1671,6 +1743,7 @@ static void hid_begin(struct usb_device_state *d)
         d->hid->at[k].boot = 0;
         d->hid->at[k].live = 0;
         d->hid->at[k].given_up = 0;
+        d->hid->at[k].features = 0;
     }
     d->hid_if = 0;
     d->hid_why = 0;
@@ -1697,7 +1770,7 @@ static void ep0reset_step(struct usb_device_state *d)
         fail(d, "its control endpoint would not reset after a refused request");
         return;
     }
-    hid_advance(d, d->hid_step);
+    hid_advance(d, d->hid_step - (d->hid_step == HS_FEATURE));
 }
 
 /**
