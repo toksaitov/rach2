@@ -164,8 +164,10 @@ struct i915_stolen {
 #define I915_CACHE_WT     3
 
 #define I915_GTT_PAGE_SIZE 4096u
-/* The firmware's surfaces kept in the global GTT: one a pipe at most. */
-#define I915_GGTT_KEPT_MAX 3
+/* The ranges kept in the global GTT: the firmware's surfaces, one a pipe
+ * at most, and the status pages a release before kept, one for each of
+ * the I915_NUM_ENGINES rings. */
+#define I915_GGTT_KEPT_MAX 7
 
 /* A range of GTT offsets, [start, end). */
 struct i915_gtt_range {
@@ -178,9 +180,11 @@ struct i915_gtt_range {
  * an entry for each page, of which the first `mappable_end` bytes are
  * reached through the aperture, BAR 2. Every entry that maps nothing maps
  * the scratch page, a zeroed frame at `scratch` whose entry is
- * `scratch_pte`. `kept` holds the `nkept` ranges of the firmware's
- * surfaces, which the bind left as it found them and which the GTT's calls
- * refuse to change, since the console draws there through the aperture.
+ * `scratch_pte`. `kept` holds the `nkept` ranges the bind left as it found
+ * them and which the GTT's calls refuse to change: the firmware's
+ * surfaces, since the console draws there through the aperture, and the
+ * status pages an earlier binding kept (`i915_ggtt_carry`), which the GPU
+ * may still write through them.
  * `fw_tiled` is set when one of them is X-tiled, so that the swizzle the
  * firmware chose stands (Linux's preserve_bios_swizzle).
  */
@@ -401,12 +405,13 @@ struct i915_engine {
  * maps each buffer's binding at the binding's offset in the global GTT,
  * and nothing of the GT's own objects. Its directory is the global GTT's
  * entries at `pd_ggtt`, which the GT's space holds, `pd_take` bytes of it
- * with the alignment's pad. `pt[i]` is the table of directory entry i and
- * `pt_phys[i]` its address, made when a binding first reaches its 4 MiB
- * and kept until the PPGTT goes, as Linux keeps them while the directory
- * is bound, since the chip caches directory entries with no way to
- * invalidate them; `tables` counts them. An entry with no table names
- * `scratch_pt`, each of whose entries maps the global GTT's scratch page.
+ * with the alignment's pad and any kept range passed over. `pt[i]` is the
+ * table of directory entry i and `pt_phys[i]` its address, made when a
+ * binding first reaches its 4 MiB and kept until the PPGTT goes, as Linux
+ * keeps them while the directory is bound, since the chip caches directory
+ * entries with no way to invalidate them; `tables` counts them. An entry
+ * with no table names `scratch_pt`, each of whose entries maps the global
+ * GTT's scratch page.
  * `pp_dir` is what each ring's PP_DIR_BASE takes. `ready` is set once the
  * directory is written. Under the lock of the bindings, as the GTT's.
  */
@@ -426,9 +431,11 @@ struct i915_ppgtt {
  * The GT's own objects (i915_ring.c): the status pages and rings, and
  * first light's page, which take the global GTT from its top down, from
  * `ggtt_top` to `ggtt_bottom`, the lowest offset they use. An allocator
- * of the GTT leaves [ggtt_bottom, total) alone. Space comes back only when
- * the last taken is given back, and all of it when the rings stop but for
- * a status page whose writes were not masked, which `i915_gt_fini` keeps.
+ * of the GTT leaves [ggtt_bottom, total) alone, and the space holds a kept
+ * range it passed over. Space comes back only when the last taken is given
+ * back, and all of it when the rings stop but for a status page whose
+ * writes were not masked, which `i915_gt_fini` keeps, and carries to the
+ * next bind of the function (`i915_ggtt_carry`).
  *
  * What the requests need, made with the first (i915_request.c): `scratch`,
  * the GT's scratch page at `scratch_ggtt`, which flushes and the context
@@ -1922,8 +1929,9 @@ uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache);
  * Bring the global GTT up: its size from the GMCH control word, the
  * aperture's from MSAC, its entries made reachable through the hardware
  * boundary, a scratch page, the firmware's surfaces found from the enabled
- * primary planes and kept, and every other entry pointed at the scratch
- * page, as Linux's init_ggtt clears the holes.
+ * primary planes and kept, the ranges an earlier binding of the function
+ * carried kept, and every other entry pointed at the scratch page, as
+ * Linux's init_ggtt clears the holes.
  *
  * @return 0, -ENODEV when the chip has no GTT, -ENOMEM with no frame for
  *         the scratch page, or the boundary's error.
@@ -1932,6 +1940,19 @@ int32_t i915_ggtt_init(struct drm_i915_private *i915);
 
 /** Give the scratch page back; the GTT's entries are left as they are. */
 void i915_ggtt_fini(struct drm_i915_private *i915);
+
+/**
+ * Note that the page at GTT offset `offset` of `i915`'s function stays
+ * mapped after its binding goes, as a status page whose writes were not
+ * masked does, so that each later bind of the function keeps its entry and
+ * its range until a reset of the function (`i915_ggtt_carry_drop`) ends
+ * the GPU's writes. A range that finds no room is logged.
+ */
+void i915_ggtt_carry(struct drm_i915_private *i915, uint64_t offset);
+
+/** Forget the ranges `i915_ggtt_carry` noted for the function `pdev`, which
+ * a reset has stopped. */
+void i915_ggtt_carry_drop(const pci_device_t *pdev);
 
 /** Flush the chip's GTT cache, so that it sees the entries written, as
  * Linux's gen6_ggtt_invalidate. */
@@ -2079,11 +2100,17 @@ void i915_gt_fini(struct drm_i915_private *i915);
 
 /**
  * Take `bytes` from the top of the global GTT's free space for one of the
- * GT's own objects, page-aligned, and store its offset in `*offset`.
+ * GT's own objects, at an offset that is a multiple of `align`, a power of
+ * two of a page or more, and store the offset in `*offset`. A kept range
+ * the space would cover is passed over and stays inside the GT's space,
+ * unused.
  *
- * @return 0, or -ENOSPC when it would reach a kept range, a buffer's
- *         binding or offset 0.
+ * @return 0, or -ENOSPC when it would reach a buffer's binding or offset 0.
  */
+int32_t i915_gt_ggtt_take_aligned(struct drm_i915_private *i915, uint32_t bytes, uint32_t align,
+                                  uint32_t *offset);
+
+/** `i915_gt_ggtt_take_aligned` at a page's alignment. */
 int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_t *offset);
 
 /**
@@ -2296,7 +2323,8 @@ void i915_gt_pm_disable(struct drm_i915_private *i915);
 
 /**
  * Turn RPS and RC6 on again after `i915_gt_pm_disable` on a GT that stays
- * bound, as a release that is refused does: both enabled, then the GT
+ * bound, as a release that is refused does: both enabled, RPS's
+ * frequency to start from and its last step as they were, then the GT
  * unparked when it is awake and parked when it is not, as each would have
  * been. Under the GEM lock.
  */
@@ -2361,8 +2389,15 @@ void i915_rps_init(struct drm_i915_private *i915);
 void i915_rps_enable(struct drm_i915_private *i915);
 
 /** Turn RPS off, its interrupts off and GEN6_RP_CONTROL cleared, as
- * Linux's intel_rps_disable. */
+ * Linux's intel_rps_disable, `active` and `enabled` cleared and the
+ * register written under the frequency lock, so that no holder of it
+ * enables RPS's hardware again after. */
 void i915_rps_disable(struct drm_i915_private *i915);
+
+/** Set the frequency the next unpark starts from, `cur_freq`, and the step
+ * it was reached by, `last_adj`, of an enabled RPS, as they were before a
+ * disable and `i915_rps_enable` reset them. Takes the frequency lock. */
+void i915_rps_restore_freq(struct drm_i915_private *i915, int cur_freq, int last_adj);
 
 /** The GT unparks: RPS active at the frequency asked for, within the
  * softlimits, and its interrupts on, as Linux's intel_rps_unpark. */

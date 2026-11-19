@@ -97,6 +97,67 @@ static void i915_ggtt_find_firmware(struct drm_i915_private *i915)
     }
 }
 
+/*
+ * The pages a binding left mapped, which the next bind of its function
+ * keeps: their function, bus << 8 | devfn, and range, `ncarried` of them.
+ * Linux has none, since its unbind frees a status page only after masking
+ * its writes; here a release that could not mask them keeps the page, and
+ * a bind with no reset of the function between could otherwise point the
+ * range elsewhere while the GPU still writes there.
+ */
+static struct {
+    int fn;
+    struct i915_gtt_range range;
+} carried[I915_NUM_ENGINES];
+static int ncarried;
+
+/** The function `pdev` as `carried` names it. */
+static int carry_fn(const pci_device_t *pdev)
+{
+    return (int)pdev->bus << 8 | pdev->device << 3 | pdev->function;
+}
+
+void i915_ggtt_carry(struct drm_i915_private *i915, uint64_t offset)
+{
+    if (ncarried == I915_NUM_ENGINES) {
+        klog(KLOG_WARN, "i915", "gtt: no room to keep 0x%lx for the next bind",
+             (unsigned long)offset);
+        return;
+    }
+    carried[ncarried].fn = carry_fn(&i915->pci);
+    carried[ncarried].range.start = offset;
+    carried[ncarried].range.end = offset + I915_GTT_PAGE_SIZE;
+    ncarried++;
+}
+
+void i915_ggtt_carry_drop(const pci_device_t *pdev)
+{
+    int i, n = 0, fn = carry_fn(pdev);
+
+    for (i = 0; i < ncarried; i++) {
+        if (carried[i].fn != fn) {
+            carried[n++] = carried[i];
+        }
+    }
+    ncarried = n;
+}
+
+/** Keep the ranges an earlier binding of `i915`'s function carried. */
+static void i915_ggtt_keep_carried(struct drm_i915_private *i915)
+{
+    int i, fn = carry_fn(&i915->pci);
+
+    for (i = 0; i < ncarried; i++) {
+        if (carried[i].fn == fn) {
+            i915_ggtt_keep(&i915->ggtt, carried[i].range.start, carried[i].range.end);
+            klog(KLOG_WARN, "i915",
+                 "gtt: 0x%lx kept: a status page the function's last "
+                 "binding kept, with no reset since",
+                 (unsigned long)carried[i].range.start);
+        }
+    }
+}
+
 /** Whether the GTT offset `offset` lies in a kept range. */
 static int i915_ggtt_is_kept(const struct i915_ggtt *ggtt, uint64_t offset)
 {
@@ -272,6 +333,7 @@ int32_t i915_ggtt_init(struct drm_i915_private *i915)
     ggtt->scratch_pte = i915_ggtt_pte_encode(ggtt->scratch, I915_CACHE_NONE);
 
     i915_ggtt_find_firmware(i915);
+    i915_ggtt_keep_carried(i915);
     for (i = 0; i < entries; i++) {
         if (!i915_ggtt_is_kept(ggtt, (uint64_t)i * I915_GTT_PAGE_SIZE)) {
             i915_gtt_write(&i915->hw, i, ggtt->scratch_pte);

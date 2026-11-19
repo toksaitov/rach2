@@ -408,20 +408,43 @@ void i915_rps_enable(struct drm_i915_private *i915)
     }
 }
 
+void i915_rps_restore_freq(struct drm_i915_private *i915, int cur_freq, int last_adj)
+{
+    struct i915_rps *rps = &i915->rps;
+    uint32_t flags = spin_lock_irqsave(&rps->lock);
+
+    if (rps->enabled) {
+        rps->cur_freq = rps_clamp(cur_freq, rps->min_freq, rps->max_freq);
+        rps->last_adj = last_adj;
+    }
+    spin_unlock_irqrestore(&rps->lock, flags);
+}
+
 void i915_rps_disable(struct drm_i915_private *i915)
 {
     struct i915_rps *rps = &i915->rps;
+    uint32_t flags;
+    int active;
 
     if (!rps->enabled) {
         return;
     }
-    if (rps->active) {
-        rps->active = 0;
+    /* `active` and `enabled` go under the frequency lock, which the work,
+     * a flip's interactive mark and the softlimits hold from their look at
+     * `active` to their write of GEN6_RP_CONTROL, so that none of them
+     * sets GEN6_RP_ENABLE again after the write of 0 here. */
+    flags = spin_lock_irqsave(&rps->lock);
+    active = rps->active;
+    rps->active = 0;
+    spin_unlock_irqrestore(&rps->lock, flags);
+    if (active) {
         rps_disable_interrupts(i915);
     }
+    flags = spin_lock_irqsave(&rps->lock);
     rps->enabled = 0;
     rps->interrupts = 0;
     i915_write(&i915->hw, GEN6_RP_CONTROL, 0);
+    spin_unlock_irqrestore(&rps->lock, flags);
 }
 
 void i915_rps_unpark(struct drm_i915_private *i915)
@@ -429,10 +452,11 @@ void i915_rps_unpark(struct drm_i915_private *i915)
     struct i915_rps *rps = &i915->rps;
     uint32_t flags;
 
+    flags = spin_lock_irqsave(&rps->lock);
     if (!rps->enabled) {
+        spin_unlock_irqrestore(&rps->lock, flags);
         return;
     }
-    flags = spin_lock_irqsave(&rps->lock);
     rps->active = 1;
     rps->unparks++;
     (void)i915_rps_set_locked(
