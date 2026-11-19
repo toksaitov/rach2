@@ -901,9 +901,14 @@ static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
 
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
 {
-    int r;
+    int r = 1;
 
-    r = kvm_lapic_msr(v, index, write, value, 0);
+    if (write) {
+        r = kvm_xen_msr_write(v, index, *value);
+    }
+    if (r == 1) {
+        r = kvm_lapic_msr(v, index, write, value, 0);
+    }
     if (r == 1) {
         r = kvm_hv_msr(v, index, write, value, 0);
     }
@@ -1068,6 +1073,20 @@ static int system_rw(struct kvm_vcpu *v, uint64_t la, void *buf, uint32_t n, int
         n -= chunk;
     }
     return 0;
+}
+
+int kvm_guest_virt_read(struct kvm_vcpu *v, uint64_t la, void *buf, uint32_t n)
+{
+    struct kvm_vcpu_events saved = v->events;
+    uint64_t cr2 = v->sregs.cr2;
+    int r = system_rw(v, la, buf, n, 0);
+
+    if (r == -1) {
+        /* The walk queued a #PF, which this read does not deliver. */
+        v->events = saved;
+        v->sregs.cr2 = cr2;
+    }
+    return r;
 }
 
 /** The segment register `n` of `v`: KVM_SEG_ES to KVM_SEG_GS, or TSS_LDT. */

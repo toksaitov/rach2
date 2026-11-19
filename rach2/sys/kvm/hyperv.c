@@ -1136,16 +1136,27 @@ static int syndbg_msr(struct kvm_vcpu *v, uint32_t msr, int write, uint64_t *val
 }
 
 /** Write the hypercall page at `gpa`: VMCALL, or VMMCALL on SVM, then RET,
- * as the backends' patch_hypercall. 0, or nonzero for a page in no slot. */
+ * as the backends' patch_hypercall, after `orl $0x80000000, %eax` while
+ * Xen's intercept takes the guest's hypercalls, so that bit 31 sends the
+ * call on to Hyper-V (`kvm_xen_hypercall`). 0, or nonzero for a page in no
+ * slot. */
 static int hypercall_page(struct kvm_vcpu *v, uint64_t gpa)
 {
-    uint8_t insn[4];
+    uint8_t insn[9];
+    uint32_t n = 0;
 
-    insn[0] = 0x0F;
-    insn[1] = 0x01;
-    insn[2] = kvm_backend == &kvm_svm ? 0xD9 : 0xC1;
-    insn[3] = 0xC3;
-    return kvm_guest_phys_rw(v, gpa, insn, sizeof(insn), 1);
+    if (kvm_xen_hypercall_enabled(v->vm)) {
+        insn[n++] = 0x0D;
+        insn[n++] = 0x00;
+        insn[n++] = 0x00;
+        insn[n++] = 0x00;
+        insn[n++] = 0x80;
+    }
+    insn[n++] = 0x0F;
+    insn[n++] = 0x01;
+    insn[n++] = kvm_backend == &kvm_svm ? 0xD9 : 0xC1;
+    insn[n++] = 0xC3;
+    return kvm_guest_phys_rw(v, gpa, insn, n, 1);
 }
 
 /** Read a partition-wide MSR, as Linux's kvm_hv_get_msr_pw: 0, or -1. */

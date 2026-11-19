@@ -184,7 +184,8 @@ enum kvm_exit_kind {
     KVM_X_DEBUG,        /* a debug exception under KVM_SET_GUEST_DEBUG */
     KVM_X_SYSTEM_EVENT, /* a reset or shutdown the guest asked for */
     KVM_X_HYPERV,       /* a Hyper-V hypercall the caller answers */
-    KVM_X_MSR           /* an RDMSR or WRMSR the caller answers */
+    KVM_X_MSR,          /* an RDMSR or WRMSR the caller answers */
+    KVM_X_XEN           /* a Xen hypercall the caller answers */
 };
 
 /*
@@ -193,7 +194,8 @@ enum kvm_exit_kind {
  * port I/O page; for KVM_X_MMIO, `mmio`; for KVM_X_INTERNAL, `internal`
  * as Linux's kvm_run.internal; for KVM_X_FAIL_ENTRY, the processor's reason
  * in `hw_reason`; for KVM_X_DEBUG, `debug`; for KVM_X_SYSTEM_EVENT,
- * `system_event`; for KVM_X_HYPERV, `hyperv`; for KVM_X_MSR, `msr`. A
+ * `system_event`; for KVM_X_HYPERV, `hyperv`; for KVM_X_XEN, `xen`; for
+ * KVM_X_MSR, `msr`. A
  * port or MMIO read the caller answers comes back to the backend through
  * `complete` before the next entry; an MSR's answer goes to
  * `kvm_msr_complete`.
@@ -206,6 +208,7 @@ struct kvm_exit {
     struct kvm_run_debug debug;
     struct kvm_run_system_event system_event;
     struct kvm_hyperv_exit hyperv;
+    struct kvm_xen_exit xen;
     struct {
         int write;       /* WRMSR, else RDMSR */
         uint32_t index;  /* ECX */
@@ -480,6 +483,7 @@ struct kvm_vm {
     struct kvm_coalesced_mmio_ring *ring; /* the page of coalesced writes, every vCPU's third */
     void *vfio;                           /* vfio.c's bridge; holds a VM reference */
     void *hv;                             /* hyperv.c's */
+    void *xen;                            /* xen.c's */
     void *pmu_filter;                     /* pmu.c's event filter, read under `srcu_gen` */
     int pmu_disabled;                     /* KVM_CAP_PMU_CAPABILITY, set before vCPUs exist */
     void *backend;                        /* the backend's */
@@ -771,6 +775,7 @@ struct kvm_vcpu {
     struct kvm_emul emul; /* emulate.c's */
     void *lapic;          /* vlapic.c's */
     void *hv;             /* hyperv.c's */
+    void *xen;            /* xen.c's */
     void *backend;        /* the backend's */
 };
 
@@ -919,8 +924,10 @@ void kvm_timer_arm(struct kvm_vcpu *v, uint64_t ns);
 
 /**
  * Look at `v`'s timers once one may be due: when `timer_ns` has passed,
- * which reads the clock only while it is set, or at KVM_REQ_TIMER. With
- * the local APIC in the kernel, deliver the APIC timer's expiry
+ * which reads the clock only while it is set, or at KVM_REQ_TIMER. Fire
+ * Xen's one-shot timer and end a Xen poll whose time is up
+ * (`kvm_xen_timers`). With the local APIC in the kernel, deliver the APIC
+ * timer's expiry
  * (`kvm_lapic_timer_check`), the PIT's (`kvm_pit_check`) and Hyper-V's
  * synthetic timers' (`kvm_hv_stimers`); ask for the kvmclock once its
  * resync is due (`kvm_clock_next`); and find `timer_ns` again. The run
@@ -1206,6 +1213,17 @@ uint64_t kvm_tsc_hz(const struct kvm_vcpu *v);
 
 /** Start the clock of a new VM: its kvmclock reads 0 now. */
 void kvm_clock_vm_init(struct kvm_vm *vm);
+
+/** The real time at which `vm`'s kvmclock read 0, in ns, as Linux's
+ * kvm_get_wall_clock_epoch: with the master clock, the real time and the
+ * kvmclock at one TSC count. */
+uint64_t kvm_wall_epoch(struct kvm_vm *vm);
+
+/** Whether the page of `vm`'s guest-physical `gpa` lies in a slot and in
+ * no region of memfd_secret, so that `kvm_tdp_write_nofault` may write it
+ * while the VM's `mmu_seq`, read before the call, holds. In a thread of
+ * the VM's process; may sleep. */
+int kvm_gpa_vouch(struct kvm_vm *vm, uint64_t gpa);
 
 /** The kvmclock of `vm` now, in ns, as the guests read it: by the master
  * clock's formula from the host's TSC while it runs, else the host's
@@ -2114,6 +2132,126 @@ void kvm_hv_vcpu_free(struct kvm_vcpu *v);
 /** Free hyperv.c's share of `vm`, its connections' eventfds among them. */
 void kvm_hv_vm_free(struct kvm_vm *vm);
 
+/* xen.c: Xen's HVM interface, KVM_CAP_XEN_HVM. Its state is under its own
+ * mutex, taken below a vCPU's mutex and the big lock and above the slots'
+ * readers' lock; every entry point runs in a thread of the VM's process
+ * and may sleep, except `kvm_xen_preempted`, `kvm_xen_upcall`,
+ * `kvm_xen_wake` and `kvm_xen_next`, which take no lock. */
+
+/** The KVM_XEN_HVM_CONFIG_* bits KVM_CAP_XEN_HVM answers. */
+int32_t kvm_xen_caps(void);
+
+/** Whether the caller set a Xen hypercall MSR (KVM_XEN_HVM_CONFIG), which
+ * makes the runstate take the place of KVM's steal time. */
+int kvm_xen_msr_enabled(struct kvm_vm *vm);
+
+/** Whether the guest's VMCALL or VMMCALL goes to `kvm_xen_hypercall`:
+ * KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL is set. */
+int kvm_xen_hypercall_enabled(struct kvm_vm *vm);
+
+/** The guest's hypercall, a VMCALL or VMMCALL of `len` bytes: answered,
+ * with `v->exit` KVM_X_AGAIN, RAX and RIP stepped; or KVM_X_XEN for the
+ * caller to answer, whose result `kvm_xen_complete` takes at the next
+ * KVM_RUN; or with bit 31 of RAX and Hyper-V on, `kvm_hv_hypercall`. 0. */
+int kvm_xen_hypercall(struct kvm_vcpu *v, uint32_t len);
+
+/** At the start of KVM_RUN, take the caller's answer to the last
+ * KVM_EXIT_XEN, unless the caller moved RIP meanwhile. */
+void kvm_xen_complete(struct kvm_vcpu *v);
+
+/** The guest's or the caller's write of `data` to the MSR `index`: 1 when
+ * it is not the Xen hypercall MSR; else 0, the page written, or
+ * KVM_MSR_INVAL. */
+int kvm_xen_msr_write(struct kvm_vcpu *v, uint32_t index, uint64_t data);
+
+/** KVM_XEN_HVM_CONFIG, KVM_XEN_HVM_GET_ATTR, KVM_XEN_HVM_SET_ATTR and
+ * KVM_XEN_HVM_EVTCHN_SEND, under the big lock. */
+int32_t kvm_xen_vm_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
+
+/** KVM_XEN_VCPU_GET_ATTR and KVM_XEN_VCPU_SET_ATTR, under `v`'s mutex and
+ * the big lock. */
+int32_t kvm_xen_vcpu_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg);
+
+/** Whether a KVM_IRQ_ROUTING_XEN_EVTCHN route may name `port` and
+ * `priority`, as Linux's kvm_xen_setup_evtchn: 0, or -EINVAL for a port
+ * past the guest's ABI or a priority other than two-level. */
+int kvm_xen_route_check(struct kvm_vm *vm, uint32_t port, uint32_t priority);
+
+/** Raise `port` of the vCPU whose APIC id is `vcpu`, for a
+ * KVM_IRQ_ROUTING_XEN_EVTCHN route: 1 delivered, 0 already pending,
+ * -ENOTCONN masked, or -EINVAL or -EFAULT. In a thread of the VM's
+ * process, with no spinlock held. */
+int kvm_xen_route_set(struct kvm_vm *vm, uint32_t vcpu, uint32_t port);
+
+/** Whether `v` has a Xen vcpu_info or vcpu_time_info for the clock. */
+int kvm_xen_clock_active(const struct kvm_vcpu *v);
+
+/** Copy the clock `pv` that `kvm_clock_prepare` made into `v`'s Xen
+ * vcpu_info and vcpu_time_info, with PVCLOCK_GUEST_STOPPED for `stopped`.
+ * In `v`'s thread. */
+void kvm_xen_clock_write(struct kvm_vcpu *v, const struct pvclock_vcpu_time_info *pv, int stopped);
+
+/** Give leaf 3 of `v`'s Xen CPUID, where the guest's signature puts it,
+ * the clock's scale and the TSC's kHz, as Linux's kvm_xen_update_tsc_info.
+ * In `v`'s thread. */
+void kvm_xen_tsc_info(struct kvm_vcpu *v, uint32_t mul, int8_t shift, uint32_t khz);
+
+/** Account `v`'s runstate as running from now and write its area, at
+ * KVM_REQ_STEAL_UPDATE while `kvm_xen_msr_enabled`. In `v`'s thread. */
+void kvm_xen_runstate_running(struct kvm_vcpu *v);
+
+/** `v`'s thread is switched away while running the guest: account its
+ * runstate as runnable and write the area without a fault, when it was
+ * vouched for. Under the run queue's lock with interrupts off. */
+void kvm_xen_preempted(struct kvm_vcpu *v);
+
+/** The VM's upcall vector while `v`'s evtchn_upcall_pending is set, which
+ * the APIC takes as an external interrupt, or -1. No lock. */
+int kvm_xen_upcall(struct kvm_vcpu *v);
+
+/** Read `v`'s evtchn_upcall_pending again for `kvm_xen_upcall`. In `v`'s
+ * thread, before an injection. */
+void kvm_xen_refresh(struct kvm_vcpu *v);
+
+/** Before each entry: ask for KVM_REQ_EVENT when the upcall is pending,
+ * an event waits to be copied in or a poll waits. In `v`'s thread. */
+void kvm_xen_entry(struct kvm_vcpu *v);
+
+/** In the run loop's wait: copy in the events that could not reach the
+ * vcpu_info, end a poll that was woken or timed out, and read the upcall
+ * again. In `v`'s thread. */
+void kvm_xen_prepare(struct kvm_vcpu *v);
+
+/** Whether xen.c left `v` work that ends a halted wait. No lock. */
+int kvm_xen_wake(struct kvm_vcpu *v);
+
+/** Fire `v`'s Xen timer and end its poll when due: the host's ns of the
+ * next deadline, or 0. In `v`'s thread, at KVM_REQ_TIMER. */
+uint64_t kvm_xen_timers(struct kvm_vcpu *v);
+
+/** The host's ns of `v`'s next Xen timer or poll deadline, or 0. No lock. */
+uint64_t kvm_xen_next(struct kvm_vcpu *v);
+
+/** KVM_RUN returns to the caller: a poll ends, as Linux's does when its
+ * schedule() returns at a signal. */
+void kvm_xen_run_end(struct kvm_vcpu *v);
+
+/** `v`'s guest enabled its APIC by software: raise a pending upcall on
+ * the vCPU's own vector, as Linux's kvm_xen_sw_enable_lapic. */
+void kvm_xen_sw_enable_lapic(struct kvm_vcpu *v);
+
+/** Make xen.c's share of `vm`: 0 or -ENOMEM. */
+int kvm_xen_vm_init(struct kvm_vm *vm);
+
+/** Free xen.c's share of `vm`, its channels' eventfds among them. */
+void kvm_xen_vm_free(struct kvm_vm *vm);
+
+/** Make xen.c's share of `v`: 0 or -ENOMEM. */
+int kvm_xen_vcpu_init(struct kvm_vcpu *v);
+
+/** Free xen.c's share of `v`. */
+void kvm_xen_vcpu_free(struct kvm_vcpu *v);
+
 /* emulate.c: the guest instructions the backends' exits hand over. Each
  * reads and writes the record's registers, which the backend keeps current
  * at the exit: `regs` always, and `sregs` for an exit that calls these. */
@@ -2177,6 +2315,12 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
  * memory that cannot be touched; or `kvm_dirty_reserve`'s error. In the
  * vCPU's thread; may sleep. */
 int kvm_guest_phys_clear(struct kvm_vcpu *v, uint64_t gpa, uint32_t bits, uint32_t *old);
+
+/** Read `n` bytes at `v`'s linear address `la` through its page tables
+ * with a supervisor's access, as Linux's kvm_read_guest_virt, with no
+ * fault for the guest: 0; -1 for a page not mapped; 1 for memory in no
+ * slot; -EFAULT. */
+int kvm_guest_virt_read(struct kvm_vcpu *v, uint64_t la, void *buf, uint32_t n);
 
 /** Read or write `n` bytes at `seg`:`ea` (KVM_SEG_*) of `v`, through its
  * page tables: 0; -1 with #PF queued; 1 for memory in no slot; -EFAULT. */

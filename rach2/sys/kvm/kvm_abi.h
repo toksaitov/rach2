@@ -69,6 +69,10 @@
 #define KVM_SIGNAL_MSI                KVM_IOW(0xA5u, 32u)
 #define KVM_SET_PMU_EVENT_FILTER      KVM_IOW(0xB2u, 32u)
 #define KVM_HYPERV_EVENTFD            KVM_IOW(0xBDu, 24u)
+#define KVM_XEN_HVM_CONFIG            KVM_IOW(0x7Au, 56u)
+#define KVM_XEN_HVM_GET_ATTR          KVM_IOWR(0xC8u, 72u)
+#define KVM_XEN_HVM_SET_ATTR          KVM_IOW(0xC9u, 72u)
+#define KVM_XEN_HVM_EVTCHN_SEND       KVM_IOW(0xD0u, 12u)
 #define KVM_X86_SET_MSR_FILTER        KVM_IOW(0xC6u, 392u)
 #define KVM_CLEAR_DIRTY_LOG           KVM_IOWR(0xC0u, 24u)
 #define KVM_CREATE_DEVICE             KVM_IOWR(0xE0u, 12u)
@@ -83,42 +87,44 @@
 #define KVM_HAS_DEVICE_ATTR KVM_IOW(0xE3u, 24u)
 
 /* The ioctls of a vCPU. */
-#define KVM_RUN              KVM_IO(0x80u)
-#define KVM_GET_REGS         KVM_IOR(0x81u, 144u)
-#define KVM_SET_REGS         KVM_IOW(0x82u, 144u)
-#define KVM_GET_SREGS        KVM_IOR(0x83u, 312u)
-#define KVM_SET_SREGS        KVM_IOW(0x84u, 312u)
-#define KVM_TRANSLATE        KVM_IOWR(0x85u, 24u)
-#define KVM_INTERRUPT        KVM_IOW(0x86u, 4u)
-#define KVM_GET_MSRS         KVM_IOWR(0x88u, 8u)
-#define KVM_SET_MSRS         KVM_IOW(0x89u, 8u)
-#define KVM_SET_SIGNAL_MASK  KVM_IOW(0x8Bu, 4u)
-#define KVM_GET_FPU          KVM_IOR(0x8Cu, 416u)
-#define KVM_SET_FPU          KVM_IOW(0x8Du, 416u)
-#define KVM_GET_LAPIC        KVM_IOR(0x8Eu, 1024u)
-#define KVM_SET_LAPIC        KVM_IOW(0x8Fu, 1024u)
-#define KVM_SET_CPUID2       KVM_IOW(0x90u, 8u)
-#define KVM_GET_CPUID2       KVM_IOWR(0x91u, 8u)
-#define KVM_SET_VAPIC_ADDR   KVM_IOW(0x93u, 8u)
-#define KVM_GET_MP_STATE     KVM_IOR(0x98u, 4u)
-#define KVM_SET_MP_STATE     KVM_IOW(0x99u, 4u)
-#define KVM_NMI              KVM_IO(0x9Au)
-#define KVM_SET_TSC_KHZ      KVM_IO(0xA2u)
-#define KVM_GET_TSC_KHZ      KVM_IO(0xA3u)
-#define KVM_SET_GUEST_DEBUG  KVM_IOW(0x9Bu, 72u)
-#define KVM_X86_SETUP_MCE    KVM_IOW(0x9Cu, 8u)
-#define KVM_X86_SET_MCE      KVM_IOW(0x9Eu, 64u)
-#define KVM_GET_VCPU_EVENTS  KVM_IOR(0x9Fu, 64u)
-#define KVM_SET_VCPU_EVENTS  KVM_IOW(0xA0u, 64u)
-#define KVM_GET_DEBUGREGS    KVM_IOR(0xA1u, 128u)
-#define KVM_SET_DEBUGREGS    KVM_IOW(0xA2u, 128u)
-#define KVM_GET_XSAVE        KVM_IOR(0xA4u, 4096u)
-#define KVM_SET_XSAVE        KVM_IOW(0xA5u, 4096u)
-#define KVM_GET_XSAVE2       KVM_IOR(0xCFu, 4096u)
-#define KVM_GET_XCRS         KVM_IOR(0xA6u, 392u)
-#define KVM_SET_XCRS         KVM_IOW(0xA7u, 392u)
-#define KVM_KVMCLOCK_CTRL    KVM_IO(0xADu)
-#define KVM_PRE_FAULT_MEMORY KVM_IOWR(0xD5u, 64u)
+#define KVM_RUN               KVM_IO(0x80u)
+#define KVM_GET_REGS          KVM_IOR(0x81u, 144u)
+#define KVM_SET_REGS          KVM_IOW(0x82u, 144u)
+#define KVM_GET_SREGS         KVM_IOR(0x83u, 312u)
+#define KVM_SET_SREGS         KVM_IOW(0x84u, 312u)
+#define KVM_TRANSLATE         KVM_IOWR(0x85u, 24u)
+#define KVM_INTERRUPT         KVM_IOW(0x86u, 4u)
+#define KVM_GET_MSRS          KVM_IOWR(0x88u, 8u)
+#define KVM_SET_MSRS          KVM_IOW(0x89u, 8u)
+#define KVM_SET_SIGNAL_MASK   KVM_IOW(0x8Bu, 4u)
+#define KVM_GET_FPU           KVM_IOR(0x8Cu, 416u)
+#define KVM_SET_FPU           KVM_IOW(0x8Du, 416u)
+#define KVM_GET_LAPIC         KVM_IOR(0x8Eu, 1024u)
+#define KVM_SET_LAPIC         KVM_IOW(0x8Fu, 1024u)
+#define KVM_SET_CPUID2        KVM_IOW(0x90u, 8u)
+#define KVM_GET_CPUID2        KVM_IOWR(0x91u, 8u)
+#define KVM_SET_VAPIC_ADDR    KVM_IOW(0x93u, 8u)
+#define KVM_GET_MP_STATE      KVM_IOR(0x98u, 4u)
+#define KVM_SET_MP_STATE      KVM_IOW(0x99u, 4u)
+#define KVM_NMI               KVM_IO(0x9Au)
+#define KVM_SET_TSC_KHZ       KVM_IO(0xA2u)
+#define KVM_GET_TSC_KHZ       KVM_IO(0xA3u)
+#define KVM_SET_GUEST_DEBUG   KVM_IOW(0x9Bu, 72u)
+#define KVM_X86_SETUP_MCE     KVM_IOW(0x9Cu, 8u)
+#define KVM_X86_SET_MCE       KVM_IOW(0x9Eu, 64u)
+#define KVM_GET_VCPU_EVENTS   KVM_IOR(0x9Fu, 64u)
+#define KVM_SET_VCPU_EVENTS   KVM_IOW(0xA0u, 64u)
+#define KVM_GET_DEBUGREGS     KVM_IOR(0xA1u, 128u)
+#define KVM_SET_DEBUGREGS     KVM_IOW(0xA2u, 128u)
+#define KVM_GET_XSAVE         KVM_IOR(0xA4u, 4096u)
+#define KVM_SET_XSAVE         KVM_IOW(0xA5u, 4096u)
+#define KVM_GET_XSAVE2        KVM_IOR(0xCFu, 4096u)
+#define KVM_GET_XCRS          KVM_IOR(0xA6u, 392u)
+#define KVM_SET_XCRS          KVM_IOW(0xA7u, 392u)
+#define KVM_KVMCLOCK_CTRL     KVM_IO(0xADu)
+#define KVM_PRE_FAULT_MEMORY  KVM_IOWR(0xD5u, 64u)
+#define KVM_XEN_VCPU_GET_ATTR KVM_IOWR(0xCAu, 72u)
+#define KVM_XEN_VCPU_SET_ATTR KVM_IOW(0xCBu, 72u)
 /* KVM_GET_SUPPORTED_HV_CPUID is also an ioctl of a vCPU. */
 
 /* The capabilities KVM_CHECK_EXTENSION names, by Linux's numbers. */
@@ -154,6 +160,7 @@
 #define KVM_CAP_PIT_STATE2                  35
 #define KVM_CAP_IOEVENTFD                   36
 #define KVM_CAP_SET_IDENTITY_MAP_ADDR       37
+#define KVM_CAP_XEN_HVM                     38
 #define KVM_CAP_ADJUST_CLOCK                39
 #define KVM_CAP_INTERNAL_ERROR_DATA         40
 #define KVM_CAP_VCPU_EVENTS                 41
@@ -264,6 +271,7 @@ struct kvm_pmu_event_filter {
 #define KVM_EXIT_X86_RDMSR       29
 #define KVM_EXIT_X86_WRMSR       30
 #define KVM_EXIT_DIRTY_RING_FULL 31
+#define KVM_EXIT_XEN             34
 
 /* The types of KVM_EXIT_SYSTEM_EVENT. */
 #define KVM_SYSTEM_EVENT_SHUTDOWN 1
@@ -787,9 +795,9 @@ struct kvm_irq_level {
     uint32_t level;
 };
 
-/* The routes of KVM_SET_GSI_ROUTING: one entry a GSI for an MSI or a
- * Hyper-V synthetic interrupt, as Linux's struct kvm_irq_routing_entry of
- * 48 bytes. */
+/* The routes of KVM_SET_GSI_ROUTING: one entry a GSI for an MSI, a
+ * Hyper-V synthetic interrupt or a Xen event channel, as Linux's struct
+ * kvm_irq_routing_entry of 48 bytes. */
 #define KVM_IRQ_ROUTING_IRQCHIP    1u
 #define KVM_IRQ_ROUTING_MSI        2u
 #define KVM_IRQ_ROUTING_S390       3u
@@ -821,6 +829,17 @@ struct kvm_irq_routing_hv_sint {
     uint32_t sint;
 };
 
+/* A route to the Xen event channel `port`, raised for the vCPU whose APIC
+ * id is `vcpu`, and the argument of KVM_XEN_HVM_EVTCHN_SEND. `priority` is
+ * KVM_IRQ_ROUTING_XEN_EVTCHN_PRIO_2LEVEL, the only one there is. */
+#define KVM_IRQ_ROUTING_XEN_EVTCHN_PRIO_2LEVEL 0xFFFFFFFFu
+
+struct kvm_irq_routing_xen_evtchn {
+    uint32_t port;
+    uint32_t vcpu;
+    uint32_t priority;
+};
+
 struct kvm_irq_routing_entry {
     uint32_t gsi;
     uint32_t type;
@@ -830,6 +849,7 @@ struct kvm_irq_routing_entry {
         struct kvm_irq_routing_irqchip irqchip;
         struct kvm_irq_routing_msi msi;
         struct kvm_irq_routing_hv_sint hv_sint;
+        struct kvm_irq_routing_xen_evtchn xen_evtchn;
         uint32_t pad[8];
     } u;
 };
@@ -1134,6 +1154,131 @@ struct kvm_hyperv_exit {
     } u;
 };
 
+/* KVM_EXIT_XEN: a Xen hypercall the kernel leaves to the caller, which
+ * writes its `result`; `longmode` and `cpl` are the guest's at the call. */
+#define KVM_EXIT_XEN_HCALL 1
+
+struct kvm_xen_exit {
+    uint32_t type;
+    union {
+        struct {
+            uint32_t longmode;
+            uint32_t cpl;
+            uint64_t input;
+            uint64_t result;
+            uint64_t params[6];
+        } hcall;
+    } u;
+};
+
+/* KVM_CAP_XEN_HVM's bits, KVM_XEN_HVM_CONFIG's struct and the attributes
+ * of KVM_XEN_HVM_GET_ATTR and KVM_XEN_HVM_SET_ATTR, as Linux's
+ * arch/x86/include/uapi/asm/kvm.h has them. */
+#define KVM_XEN_HVM_CONFIG_HYPERCALL_MSR        (1u << 0)
+#define KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL      (1u << 1)
+#define KVM_XEN_HVM_CONFIG_SHARED_INFO          (1u << 2)
+#define KVM_XEN_HVM_CONFIG_RUNSTATE             (1u << 3)
+#define KVM_XEN_HVM_CONFIG_EVTCHN_2LEVEL        (1u << 4)
+#define KVM_XEN_HVM_CONFIG_EVTCHN_SEND          (1u << 5)
+#define KVM_XEN_HVM_CONFIG_RUNSTATE_UPDATE_FLAG (1u << 6)
+#define KVM_XEN_HVM_CONFIG_PVCLOCK_TSC_UNSTABLE (1u << 7)
+#define KVM_XEN_HVM_CONFIG_SHARED_INFO_HVA      (1u << 8)
+
+struct kvm_xen_hvm_config {
+    uint32_t flags;
+    uint32_t msr; /* the MSR whose write fills the hypercall page, 0 for none */
+    uint64_t blob_addr_32;
+    uint64_t blob_addr_64;
+    uint8_t blob_size_32;
+    uint8_t blob_size_64;
+    uint8_t pad2[30];
+};
+
+#define KVM_XEN_INVALID_GFN 0xFFFFFFFFFFFFFFFFull
+#define KVM_XEN_INVALID_GPA 0xFFFFFFFFFFFFFFFFull
+
+#define KVM_XEN_EVTCHN_DEASSIGN (1u << 0)
+#define KVM_XEN_EVTCHN_UPDATE   (1u << 1)
+#define KVM_XEN_EVTCHN_RESET    (1u << 2)
+
+#define KVM_XEN_ATTR_TYPE_LONG_MODE            0x0
+#define KVM_XEN_ATTR_TYPE_SHARED_INFO          0x1
+#define KVM_XEN_ATTR_TYPE_UPCALL_VECTOR        0x2
+#define KVM_XEN_ATTR_TYPE_EVTCHN               0x3
+#define KVM_XEN_ATTR_TYPE_XEN_VERSION          0x4
+#define KVM_XEN_ATTR_TYPE_RUNSTATE_UPDATE_FLAG 0x5
+#define KVM_XEN_ATTR_TYPE_SHARED_INFO_HVA      0x6
+
+struct kvm_xen_hvm_attr {
+    uint16_t type; /* KVM_XEN_ATTR_TYPE_* */
+    uint16_t pad[3];
+    union {
+        uint8_t long_mode;
+        uint8_t vector;
+        uint8_t runstate_update_flag;
+        union {
+            uint64_t gfn;
+            uint64_t hva;
+        } shared_info;
+        struct {
+            uint32_t send_port;
+            uint32_t type; /* EVTCHNSTAT_ipi or EVTCHNSTAT_interdomain */
+            uint32_t flags;
+            union {
+                struct {
+                    uint32_t port;
+                    uint32_t vcpu;
+                    uint32_t priority;
+                } port;
+                struct {
+                    uint32_t port; /* 0 for an eventfd */
+                    int32_t fd;
+                } eventfd;
+                uint32_t padding[4];
+            } deliver;
+        } evtchn;
+        uint32_t xen_version;
+        uint64_t pad[8];
+    } u;
+};
+
+/* The attributes of KVM_XEN_VCPU_GET_ATTR and KVM_XEN_VCPU_SET_ATTR. */
+#define KVM_XEN_VCPU_ATTR_TYPE_VCPU_INFO        0x0
+#define KVM_XEN_VCPU_ATTR_TYPE_VCPU_TIME_INFO   0x1
+#define KVM_XEN_VCPU_ATTR_TYPE_RUNSTATE_ADDR    0x2
+#define KVM_XEN_VCPU_ATTR_TYPE_RUNSTATE_CURRENT 0x3
+#define KVM_XEN_VCPU_ATTR_TYPE_RUNSTATE_DATA    0x4
+#define KVM_XEN_VCPU_ATTR_TYPE_RUNSTATE_ADJUST  0x5
+#define KVM_XEN_VCPU_ATTR_TYPE_VCPU_ID          0x6
+#define KVM_XEN_VCPU_ATTR_TYPE_TIMER            0x7
+#define KVM_XEN_VCPU_ATTR_TYPE_UPCALL_VECTOR    0x8
+#define KVM_XEN_VCPU_ATTR_TYPE_VCPU_INFO_HVA    0x9
+
+struct kvm_xen_vcpu_attr {
+    uint16_t type; /* KVM_XEN_VCPU_ATTR_TYPE_* */
+    uint16_t pad[3];
+    union {
+        uint64_t gpa;
+        uint64_t hva;
+        uint64_t pad[8];
+        struct {
+            uint64_t state;
+            uint64_t state_entry_time;
+            uint64_t time_running;
+            uint64_t time_runnable;
+            uint64_t time_blocked;
+            uint64_t time_offline;
+        } runstate;
+        uint32_t vcpu_id;
+        struct {
+            uint32_t port;
+            uint32_t priority;
+            uint64_t expires_ns;
+        } timer;
+        uint8_t vector;
+    } u;
+};
+
 #define KVM_RUN_EXIT_BYTES 256u
 
 /* struct kvm_run, the first page of a vCPU's mapping. */
@@ -1158,6 +1303,7 @@ struct kvm_run {
         struct kvm_run_eoi eoi;
         struct kvm_hyperv_exit hyperv;
         struct kvm_run_msr msr;
+        struct kvm_xen_exit xen;
         char padding[KVM_RUN_EXIT_BYTES];
     } u;
     uint64_t kvm_valid_regs; /* KVM_SYNC_X86_*: the sets KVM_RUN writes to `s` */

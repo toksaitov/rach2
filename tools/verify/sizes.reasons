@@ -168,6 +168,10 @@ rach2/sys/ipc/unix.c:send_conn params 7 the parameters are the fields of one mes
 rach2/sys/ipc/unix.c:send_core params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 rach2/sys/ipc/unix.c:send_dgram params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 
+rach2/sys/kvm/xen.c:area_rw params 7 the parameters are one access to guest or caller memory: the VM, the vCPU that logs its writes, the place, the buffer, its length and the operation
+rach2/sys/kvm/xen.c:mem_page params 7 the parameters are one access to guest or caller memory: the VM, the vCPU that logs its writes, the place, the buffer, its length and the operation
+rach2/sys/kvm/xen.c:mem_rw params 7 the parameters are one access to guest or caller memory: the VM, the vCPU that logs its writes, the place, the buffer, its length and the operation
+
 rach2/sys/lib/kfmt.c:k_vprintf nesting 5 a parser over an external format, one check per field in the format's order
 rach2/sys/lib/kfmt.c:k_vprintf lines 112 a parser over an external format, one check per field in the format's order
 

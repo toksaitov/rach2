@@ -1085,7 +1085,10 @@ static int msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
 {
     int slot;
 
-    slot = kvm_lapic_msr(v, index, 1, &value, host);
+    slot = kvm_xen_msr_write(v, index, value);
+    if (slot == 1) {
+        slot = kvm_lapic_msr(v, index, 1, &value, host);
+    }
     if (slot == 1) {
         slot = kvm_hv_msr(v, index, 1, &value, host);
     }

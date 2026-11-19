@@ -1050,6 +1050,22 @@ static void pic_reaccepted(struct lapic *l)
     }
 }
 
+/** Write `val` to the spurious-interrupt vector register, as Linux's
+ * apic_set_spiv: clearing the enable bit masks every LVT entry, and
+ * setting it raises a pending Xen upcall on the vCPU's own vector. */
+static void spiv_write(struct lapic *l, uint32_t val)
+{
+    uint32_t mask = 0x3FFu | ((lvr_of(l->v) & APIC_LVR_DIRECTED) ? APIC_SPIV_DIRECTED : 0);
+
+    reg_set(l, APIC_SPIV, val & mask);
+    if (!(val & APIC_SPIV_ENABLED)) {
+        mask_lvts(l);
+        update_lvtt(l);
+    } else {
+        kvm_xen_sw_enable_lapic(l->v);
+    }
+}
+
 /** Write `val` to the register at `off`, as Linux's kvm_lapic_reg_write:
  * 0, or 1 for a register this mode does not let the guest write, which an
  * x2APIC MSR write takes as #GP. */
@@ -1087,12 +1103,7 @@ static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
         dest_changed(l);
         return 0;
     case APIC_SPIV:
-        mask = 0x3FFu | ((lvr_of(l->v) & APIC_LVR_DIRECTED) ? APIC_SPIV_DIRECTED : 0);
-        reg_set(l, APIC_SPIV, val & mask);
-        if (!(val & APIC_SPIV_ENABLED)) {
-            mask_lvts(l);
-            update_lvtt(l);
-        }
+        spiv_write(l, val);
         return 0;
     case APIC_ICR:
         if (x2apic(l)) {
@@ -1480,6 +1491,11 @@ int kvm_lapic_pending(struct kvm_vcpu *v)
     if (!l) {
         return -1;
     }
+    /* Xen's upcall vector comes as an ExtINT, ahead of the PIC's. */
+    irr = kvm_xen_upcall(v);
+    if (irr >= 0) {
+        return irr;
+    }
     if (accept_pic_intr(l)) {
         if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
             irr = kvm_pic_pending(v->vm);
@@ -1508,6 +1524,11 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
 
     if (vector < 0) {
         return -1;
+    }
+    if (vector == kvm_xen_upcall(v)) {
+        /* The guest clears evtchn_upcall_pending itself. */
+        v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
+        return vector;
     }
     if (accept_pic_intr(l)) {
         if (v->vm->irqchip == KVM_IRQCHIP_KERNEL && kvm_pic_pending(v->vm) >= 0) {
@@ -1614,14 +1635,15 @@ static int guest_if(const struct kvm_vcpu *v)
     return (v->dirty & KVM_PART_REGS) ? (v->regs.rflags & RFLAGS_IF) != 0 : v->if_flag != 0;
 }
 
-/** The host's ns at which `l`'s vCPU next has a timer due, the APIC's or a
- * Hyper-V synthetic timer, 0 for none. */
+/** The host's ns at which `l`'s vCPU next has a timer due, the APIC's, a
+ * Hyper-V synthetic timer, the PIT or Xen's timer or poll, 0 for none. */
 static uint64_t next_ns(const struct lapic *l)
 {
     uint64_t a = timer_next_ns(l), b = kvm_hv_stimer_next(l->v);
-    uint64_t pit = kvm_pit_next(l->v->vm);
+    uint64_t pit = kvm_pit_next(l->v->vm), xen = kvm_xen_next(l->v);
 
     a = !a || (b && b < a) ? b : a;
+    a = !a || (xen && xen < a) ? xen : a;
     return !a || (pit && pit < a) ? pit : a;
 }
 
@@ -1660,7 +1682,7 @@ static int wake_cond(void *arg)
     uint64_t next;
 
     if ((v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT | KVM_REQ_TIMER)) ||
-        kvm_irq_pending(v->vm)) {
+        kvm_irq_pending(v->vm) || kvm_xen_wake(v)) {
         return 1;
     }
     if (l->events & EV_INIT) {
@@ -1892,6 +1914,7 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
         if (kvm_vcpu_test_clear(v, KVM_REQ_IRQFD)) {
             kvm_irq_process(v->vm);
         }
+        kvm_xen_prepare(v);
         if (kvm_vcpu_test_clear(v, KVM_REQ_NMI)) {
             take_nmis(l);
         }

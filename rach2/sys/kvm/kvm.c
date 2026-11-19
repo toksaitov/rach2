@@ -150,6 +150,7 @@ void kvm_vm_put(struct kvm_vm *vm)
         kfree_pages(vm->ring, 1);
     }
     kvm_hv_vm_free(vm);
+    kvm_xen_vm_free(vm);
     kvm_msr_free_filter(vm);
     kvm_pmu_vm_free(vm);
     kvm_tdp_free(vm);
@@ -280,6 +281,8 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_TSC_CONTROL:
     case KVM_CAP_VM_TSC_CONTROL:
         return kvm_tsc_control();
+    case KVM_CAP_XEN_HVM:
+        return kvm_xen_caps();
     default:
         break;
     }
@@ -446,6 +449,9 @@ static int32_t create_vm(uintptr_t type)
         k_memset(vm->ring, 0, 4096u);
     }
     r = vm->ring ? kvm_slots_init(vm) : -ENOMEM;
+    if (r == 0) {
+        r = kvm_xen_vm_init(vm);
+    }
     if (r == 0) {
         r = kvm_tdp_init(vm);
     }
@@ -712,6 +718,23 @@ static int32_t vm_enable_cap(struct kvm_vm *vm, uintptr_t arg)
     }
 }
 
+/** KVM_SET_IDENTITY_MAP_ADDR, as Linux's: the guest-physical address,
+ * read from the caller's `arg`, that the VM's identity map takes. 0,
+ * -EFAULT, or -EBUSY once the VM has a vCPU. */
+static int32_t vm_set_ident(struct kvm_vm *vm, uintptr_t arg)
+{
+    uint64_t addr;
+
+    if (copy_from_user(&addr, (const void __user *)arg, sizeof(addr)) != 0) {
+        return -EFAULT;
+    }
+    if (vm->nr_vcpus) {
+        return -EBUSY;
+    }
+    vm->ident_addr = addr;
+    return 0;
+}
+
 /** KVM_SET_TSC_KHZ of a VM, as Linux's: the rate its later vCPUs start
  * at, which is not tried on a vCPU here, and which a VM with vCPUs takes
  * too. 0, or -EINVAL for a rate `kvm_tsc_khz_arg` refuses. */
@@ -748,7 +771,6 @@ static int32_t vm_set_region(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct kvm_vm *vm = (struct kvm_vm *)e->priv;
-    uint64_t addr;
 
     if (!kvm_vm_caller_ok(vm)) {
         return -EIO;
@@ -781,14 +803,7 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         vm->tss_addr = arg;
         return 0;
     case KVM_SET_IDENTITY_MAP_ADDR:
-        if (copy_from_user(&addr, (const void __user *)arg, sizeof(addr)) != 0) {
-            return -EFAULT;
-        }
-        if (vm->nr_vcpus) {
-            return -EBUSY;
-        }
-        vm->ident_addr = addr;
-        return 0;
+        return vm_set_ident(vm, arg);
     case KVM_SET_NR_MMU_PAGES:
         if (arg < KVM_MIN_MMU_PAGES) {
             return -EINVAL;
@@ -841,6 +856,11 @@ static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         return kvm_iobus_ioctl(vm, request, arg);
     case KVM_HYPERV_EVENTFD:
         return kvm_hv_eventfd(vm, arg);
+    case KVM_XEN_HVM_CONFIG:
+    case KVM_XEN_HVM_GET_ATTR:
+    case KVM_XEN_HVM_SET_ATTR:
+    case KVM_XEN_HVM_EVTCHN_SEND:
+        return kvm_xen_vm_ioctl(vm, request, arg);
     case KVM_X86_SET_MSR_FILTER:
         return kvm_msr_set_filter(vm, arg);
     default:

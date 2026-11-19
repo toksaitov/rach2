@@ -2144,15 +2144,18 @@ static int exit_msr(struct kvm_vcpu *v)
     return 0;
 }
 
-/** Dispatch an enabled Hyper-V hypercall, else a KVM hypercall, whose
- * answer goes in RAX. */
+/** Dispatch a Xen hypercall under the caller's intercept, an enabled
+ * Hyper-V hypercall, else a KVM hypercall, whose answer goes in RAX. */
 static int exit_vmmcall(struct kvm_vcpu *v)
 {
     uint64_t ret, rax = v->regs.rax;
     uint32_t len;
 
+    len = sv(v)->ex.next_rip ? (uint32_t)(sv(v)->ex.next_rip - v->regs.rip) : 3u;
+    if (kvm_xen_hypercall_enabled(v->vm)) {
+        return kvm_xen_hypercall(v, len);
+    }
     if (kvm_hv_hypercall_enabled(v)) {
-        len = sv(v)->ex.next_rip ? (uint32_t)(sv(v)->ex.next_rip - v->regs.rip) : 3u;
         return kvm_hv_hypercall(v, len);
     }
     ret = kvm_emul_hypercall(v);
