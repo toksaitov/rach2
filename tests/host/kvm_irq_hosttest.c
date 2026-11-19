@@ -914,6 +914,18 @@ static void delivery_rows(void)
     vcpu[2]->nmi_queued = 0;
     wr(vcpu[0], APIC_ICR, 0x4000 | 0x400);
     CHECK(kvm_lapic_prepare(vcpu[2]) == 0 && vcpu[2]->nmi_queued == 1, "an NMI is queued");
+    /* The sender's KVM_REQ_EVENT taken by an injection that ran after the
+     * loop's look at KVM_REQ_NMI, before the NMI came: the NMI's queueing
+     * asks for the injection again, or it waits for an unrelated event. */
+    vcpu[2]->nmi_queued = 0;
+    vcpu[2]->requests = 0;
+    wr(vcpu[0], APIC_ICR, 0x4000 | 0x400);
+    vcpu[2]->requests &= ~KVM_REQ_EVENT;
+    CHECK(kvm_lapic_prepare(vcpu[2]) == 0 && vcpu[2]->nmi_queued == 1 &&
+              (vcpu[2]->requests & KVM_REQ_EVENT),
+          "a queued NMI asks for its injection");
+    vcpu[2]->nmi_queued = 0;
+    vcpu[2]->requests = 0;
     clear_vectors();
 }
 
