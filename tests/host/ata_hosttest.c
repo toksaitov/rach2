@@ -710,6 +710,16 @@ static volatile uint64_t *ata_hosttest_ticks(void);
 static process_t caller;
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}};
 
+/** The exchange behind `sched_mb`, the barrier the wait and its wakers
+ * pass: one thread here, so a plain swap. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
+
 /** The channel's bounce buffer. */
 static uint8_t *model_bounce(void)
 {
