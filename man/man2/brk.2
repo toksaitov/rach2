@@ -641,6 +641,37 @@ stops with
 .Er EPERM ,
 the mappings below it in the range advised first, as on Linux.
 .Pp
+.Dv MADV_HUGEPAGE
+(14) marks the mappings so that, while
+.Pa /sys/kernel/mm/transparent_hugepage/enabled
+is
+.Ql madvise ,
+their faults and khugepaged give their private anonymous memory 2 MiB
+pages, as they do every such mapping while it is
+.Ql always ;
+.Dv MADV_NOHUGEPAGE
+(15) marks them so that neither does; each clears the other's mark,
+leaves device memory as it is, leaves the huge pages already there, and
+is
+.Er ENOMEM
+when a mapping cannot be split.
+A fault maps a huge page only where an aligned 2 MiB of the mapping has
+no page yet; a change of part of one, an unmap, an
+.Fn mprotect
+or a write after a fork, splits it into 4 KiB pages first.
+.Dv MADV_COLLAPSE
+(25) makes each aligned 2 MiB of private anonymous memory in the range
+one huge page now, copying its pages, whatever the policy says: it is
+.Er EINVAL
+over a mapping that cannot hold one, a range with no page written or
+read, or a page of a device, and for any other refusal;
+.Er EAGAIN
+when a page is pinned; and
+.Er ENOMEM
+when no 2 MiB of free memory could be had.
+On i686, which Linux gives no huge pages, the three are accepted and
+change nothing.
+.Pp
 Any other advice Linux defines from
 .Dv MADV_NORMAL
 (0) to
