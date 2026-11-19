@@ -132,11 +132,14 @@ static uint64_t con_deadline; /* the tick of the next flush; 0 for none */
  * whether the blank asks for the display off, whether the worker has
  * turned it off, the CRTCs, one bit each by index, that it turned off and
  * turns on again, and the tick of the next try after a commit failed, 0
- * for none. */
+ * for none, with the ask that failed. Only the worker and a placement,
+ * under the commit lock, write `con_blank_retry`, which the tick could
+ * not write whole on i686; a new ask is seen by its value. */
 static volatile int con_blank_asked;
 static int con_blank_done;
 static uint32_t con_blank_crtcs;
 static uint64_t con_blank_retry;
+static int con_blank_retry_ask;
 
 /* The milliseconds between tries of a blank's commit that failed. */
 #define CON_BLANK_RETRY_MS 1000
@@ -644,7 +647,8 @@ static int con_flush_ready(void *arg)
 {
     (void)arg;
     if (con_blank_asked != con_blank_done &&
-        (con_blank_retry == 0 || rtc_ticks_now() >= con_blank_retry)) {
+        (con_blank_retry == 0 || con_blank_asked != con_blank_retry_ask ||
+         rtc_ticks_now() >= con_blank_retry)) {
         return 1;
     }
     return con_deadline != 0 ? rtc_ticks_now() >= con_deadline : con_shadowed();
@@ -752,6 +756,7 @@ static void con_blank_service(void)
     }
     failing = failed;
     con_blank_retry = failed ? rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS) : 0;
+    con_blank_retry_ask = off;
     if (!failed) {
         con_blank_done = off;
     }
@@ -766,7 +771,6 @@ static void con_blank_service(void)
 void drm_client_blank(int blank)
 {
     con_blank_asked = blank != 0;
-    con_blank_retry = 0;
     wq_wake_all(&con_wake);
 }
 
