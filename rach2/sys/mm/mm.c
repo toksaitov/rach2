@@ -554,12 +554,13 @@ void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
     vma_t *r;
 
     for (r = vm_lower(&mm->vm, lo); r && r->start < hi; r = vm_next(r)) {
-        if (r->anon || r->type == VM_SHARED || (r->prot & VM_PROT_IO) ||
-            (!r->file && (r->end <= start || r->start >= end))) {
+        if (r->anon || r->type == VM_SHARED || (r->prot & VM_PROT_IO)) {
             continue;
         }
         paging_user_frames(mm->dir, r->start, r->end, &counts);
-        r->anon = (r->file ? counts.anon : counts.frames) > 0;
+        if ((r->file ? counts.anon : counts.frames) > 0) {
+            vm_anon_prepare(&mm->vm, r);
+        }
     }
 }
 

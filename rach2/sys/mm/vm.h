@@ -267,7 +267,11 @@ struct vm_policy {
 
 /* A single virtual memory area: [start, end) page-aligned. A region that
  * maps a file has it in `file`, and `pgoff` is the page of the file at
- * `start`; an anonymous region has neither. */
+ * `start`. An anonymous region has no file, and its `pgoff` is the page
+ * number of the address where its pages were first mapped, modulo 2^32, as
+ * Linux's vm_pgoff: it follows the region's start through a split, a trim
+ * and a stack's growth, and a move keeps it once the region has pages of its
+ * own (`anon`), so two regions merge only where their numbers continue. */
 typedef struct vma {
     uintptr_t start; /* inclusive, page-aligned */
     uintptr_t end;   /* exclusive, page-aligned */
@@ -276,13 +280,20 @@ typedef struct vma {
     struct vm_file *file;
     uint32_t pgoff;
     struct vm_policy *policy; /* mbind's, with a reference; NULL for the default */
-    /* 1 once `mm_note_anon` (mm.c) found a page of it written, or a
-     * private copy of a file's page in it, as Linux gives a region an
-     * anon_vma at its first private page; a split, a move and a fork's copy
-     * keep it, unless VM_PROT_WIPEONFORK, and a merge takes either side's.
-     * VM_PROT_ACCOUNT's drop reads it, and `vm_merge` refuses two private
-     * regions of separate records of a file that both have it. */
-    uint8_t anon;
+    /* The region's anonymous identity, Linux's anon_vma: 0 until
+     * `mm_note_anon` (mm.c) finds a page of it written or a private copy of
+     * a file's page in it, or MADV_GUARD_INSTALL guards anonymous memory,
+     * and then a number of the space's (`vm_anon_prepare`), kept until the
+     * region goes, through truncation of its file too. A split and a move
+     * keep it and a merge takes either side's; two regions merge only while
+     * at most one has an identity, or both the same one (`vm_merge`).
+     * VM_PROT_ACCOUNT's drop reads it. */
+    uint32_t anon;
+    /* 1 when `anon` is a fork's copy's (`vm_copy`), as Linux's
+     * anon_vma_chain of such a region also holds its parent's record: the
+     * region merges only with one of the same identity and lends its
+     * identity to no neighbour. */
+    uint8_t anon_forked;
     struct vma *left, *right, *parent; /* AVL tree links */
     struct vma *prev, *next;           /* address order; next also links spare nodes */
     unsigned int height;               /* subtree height, a leaf's is 1 */
@@ -327,6 +338,9 @@ typedef struct vm_space {
      * split and merged as any other, and its count is the regions' alone. */
     struct vm_guard *guards;
     uint32_t nguards, guard_cap;
+    /* The last anonymous identity `vm_anon_prepare` gave, which a fork's
+     * copy carries on from; identities are compared within one space. */
+    uint32_t anon_last;
     /* Gap search proof: above gap_top, no hole fits gap_len in [gap_lo,gap_hi).
      * A zero gap_len is invalid; removing coverage clears it. */
     uintptr_t gap_top, gap_len, gap_lo, gap_hi;
@@ -361,7 +375,10 @@ void vm_free(vm_space_t *vm);
 /** Make `dst`, which owns no nodes, a copy of `src` without its regions
  * marked VM_PROT_DONTFORK, whose regions take a reference each to the files
  * they map and to their policies and lose their locks, as a fork's child
- * does not inherit them, and whose `def_prot` is 0. The copy keeps the
+ * does not inherit them, and whose `def_prot` is 0. A copy of a region with
+ * an anonymous identity gets a new one, marked `anon_forked`, as Linux's
+ * anon_vma_fork gives each region of the child an anon_vma of its own, and
+ * one marked VM_PROT_WIPEONFORK gets none. The copy keeps the
  * guards of the regions it copies but those marked VM_PROT_WIPEONFORK, as
  * Linux's fork copies the page tables, and their guard markers, of every
  * region but those. 0, or -1 with no memory, with `dst` left empty. */
@@ -389,26 +406,42 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
  * and those of VM_PROT_KEPT the region needs, and the kind
  * `type`. The range must be non-empty, page-aligned at both ends and clear
  * of every region. The region has the default policy and is merged with a
- * neighbour it touches that has the same kind, protection and policy and
- * maps no file, or the same file without a gap, through the same record or
- * one its `same` accepts. Returns 0, or -1, with
+ * neighbour it touches that has the same kind, protection and policy,
+ * continues its page numbers, maps no file or the same file through the
+ * same record or one its `same` accepts, and has an anonymous identity the
+ * region may share (`vm_merge` in vm.c). Returns 0, or -1, with
  * nothing changed, for a range that breaks those rules, at
  * vm_max_map_count, or when no node can be allocated.
  */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type);
 
 /** The same, for a region that maps `file` from its page `pgoff`; the region
- * takes a reference of its own. */
+ * takes a reference of its own. With no file, `pgoff` is not read and the
+ * region takes the page number of `start`. */
 int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff);
 
 /** Add the region [start, end) as `vm_insert_file` does, with the
- * protection, kind, file and policy of `like`, a region or a copy of one
- * whose file and policy the caller holds, mapping the file from its page
- * `pgoff`: a mapping mremap moves or grows keeps its policy, as Linux's
- * copy_vma and vma_merge_extend keep it. 0 or -1. */
+ * protection, kind, file, policy and anonymous identity of `like`, a region
+ * or a copy of one whose file and policy the caller holds, and with `pgoff`,
+ * read for an anonymous region too: a mapping mremap moves or grows keeps
+ * its policy and its anon_vma, as Linux's copy_vma and vma_merge_extend keep
+ * them. The region merges with its lower neighbour first, as Linux's
+ * vma_merge_new_range prefers it when the neighbours on both sides may not
+ * share the region. 0 or -1. */
 int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *like,
                    uint32_t pgoff);
+
+/**
+ * Give the region `r` an anonymous identity (`anon`) if it has none, as
+ * Linux's anon_vma_prepare: that of a neighbour, the one above first, which
+ * borders it, has the same kind, file, policy and protection but for the
+ * access bits, continues its page numbers and has an identity that is not a
+ * fork's copy (mm/rmap.c, find_mergeable_anon_vma), and otherwise a new one.
+ * The caller holds the regions' lock to write, or holds it to read and
+ * changes the space as it stands under the big lock.
+ */
+void vm_anon_prepare(vm_space_t *vm, vma_t *r);
 
 /** Take a reference to `p` and return it; NULL is passed through. */
 struct vm_policy *vm_policy_get(struct vm_policy *p);
