@@ -1,0 +1,153 @@
+.Dd November 19, 2026
+.Dt TAP 4
+.Os
+.Sh NAME
+.Nm tap ,
+.Nm tun
+.Nd Ethernet interface whose other end is a descriptor
+.Sh SYNOPSIS
+.Pa /dev/net/tun
+.Sh DESCRIPTION
+The character device
+.Pa /dev/net/tun ,
+10:200 as on Linux, makes an Ethernet interface whose wire is a file
+descriptor: each frame the stack sends on the interface is one
+.Xr read 2
+of the descriptor, and each
+.Xr write 2
+or
+.Xr writev 2
+of the descriptor is one frame the interface receives.
+QEMU's
+.Ql -netdev tap
+is its main user: it joins a guest's network card to an interface of the
+host, so that the host routes through the guest or the guest through the
+host.
+.Pp
+A program opens the device and gives the descriptor an interface with
+.Dv TUNSETIFF ,
+whose argument is a
+.Vt struct ifreq
+with the name in
+.Va ifr_name
+and the flags in
+.Va ifr_flags .
+The flags must be
+.Dv IFF_TAP | IFF_NO_PI :
+Ethernet frames with no packet information before them.
+An empty name, or one that ends in
+.Ql %d ,
+takes the first free
+.Li tapN ,
+or the stem given and a digit; another name takes that interface when it
+is a tap no descriptor holds, and makes it when no interface has the
+name.
+The call writes the name it gave back to
+.Va ifr_name .
+The interface starts down, with a random locally administered station
+address and an MTU of 1500; it has a carrier while a descriptor holds it.
+.Pp
+A read returns one frame, whole, or its first bytes when the buffer is
+shorter; a descriptor opened with
+.Dv O_NONBLOCK
+returns
+.Er EAGAIN
+when no frame waits.
+Each interface holds up to 1024 frames for its reader, as Linux's tun
+queues 1000; a frame sent while the queue is full is dropped and counted
+in the interface's transmit drops.
+A write is one frame of 14 to 1514 bytes; a longer one is taken and
+counted as dropped, so that the writer goes on.
+.Xr poll 2
+reports the descriptor readable while a frame waits and always
+writable.
+.Pp
+When the last descriptor of the open closes, the interface loses its
+carrier and its queued frames and, unless
+.Dv TUNSETPERSIST
+keeps it, is removed with its addresses, routes and neighbours.
+.Ss Requests
+.Bl -tag -width TUNGETVNETHDRSZ
+.It Dv TUNGETFEATURES
+Writes
+.Dv IFF_TAP | IFF_NO_PI
+to the
+.Vt unsigned int
+at the argument, the flags
+.Dv TUNSETIFF
+takes.
+.It Dv TUNSETIFF
+As above.
+.It Dv TUNGETIFF
+Writes the interface's name and flags,
+.Dv IFF_PERSIST
+among them when set.
+.It Dv TUNSETPERSIST
+A nonzero argument keeps the interface after its descriptor closes.
+.It Dv TUNSETOFFLOAD
+Takes 0, no offload; any other flag is
+.Er EINVAL .
+.It Dv TUNGETSNDBUF
+Writes
+.Dv INT_MAX ,
+Linux's default.
+.It Dv TUNSETSNDBUF , TUNSETOWNER , TUNSETGROUP , TUNSETLINK , TUNSETNOCSUM , TUNSETDEBUG
+Taken and ignored.
+.It Dv TUNSETVNETHDRSZ , TUNGETVNETHDRSZ , TUNSETVNETLE , TUNGETVNETLE , TUNSETVNETBE , TUNGETVNETBE , TUNSETQUEUE
+.Er EINVAL :
+there is no virtio header and one queue.
+.El
+.Sh LIMITS
+Two tap interfaces at once, among the four interfaces the kernel has
+besides
+.Li lo .
+Only the TAP form: no TUN interface of IP packets, no packet information
+header, no virtio header and so no offload, and one queue.
+.Sh FILES
+.Bl -tag -width /dev/net/tun
+.It Pa /dev/net/tun
+The device.
+.El
+.Sh EXAMPLES
+Give a QEMU guest the interface
+.Li tap0
+and route to it:
+.Bd -literal -offset indent
+# qemu-system-x86_64 -netdev tap,id=n0,ifname=tap0,script=no,downscript=no \e
+    -device virtio-net-pci,netdev=n0 ...
+# ifconfig tap0 192.168.100.1 netmask 255.255.255.0 up
+.Ed
+.Sh ERRORS
+.Bl -tag -width Er
+.It Er EBADFD
+A read, write or request that needs the interface came before
+.Dv TUNSETIFF ,
+or the descriptor's interface is gone.
+.It Er EBUSY
+.Dv TUNSETIFF
+named an interface another descriptor holds.
+.It Er EINVAL
+.Dv TUNSETIFF
+on a descriptor that has an interface, with flags other than
+.Dv IFF_TAP | IFF_NO_PI ,
+a name too long, or the name of an interface that is no tap; a write
+shorter than an Ethernet header.
+.It Er ENFILE
+No digit is free for the name's stem.
+.It Er ENOSPC
+Every interface of the kernel's, or both tap records, are taken.
+.It Er ENOTTY
+An unknown request.
+.It Er EPERM
+.Dv TUNSETIFF
+without
+.Dv CAP_NET_ADMIN .
+.El
+.Sh SEE ALSO
+.Xr ifconfig 1 ,
+.Xr ioctl 2 ,
+.Xr kvm 4 ,
+.Xr virtio-net 4
+.Sh HISTORY
+The device follows Linux's drivers/net/tun.c and the numbers of
+linux/if_tun.h.
