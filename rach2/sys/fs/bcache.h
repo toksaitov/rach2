@@ -82,27 +82,55 @@ struct bbuf {
      * release rather than at the removal, because a buffer cannot be reused
      * under the process that holds it. */
     int discard;
-    int holder;             /* pid holding it, or -1 */
-    uint64_t releases;      /* holds ended, under cache_spin; kept across reuse */
-    uint32_t stamp;         /* last release, for least-recently-released */
-    int waiters;            /* processes waiting for the hold to end, woken or not */
-    int write_failed;       /* its last write failed: not a victim until one succeeds */
-    int order;              /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
-    uint64_t owner;         /* the one file this dirty block is written for,
-                             * or 0 for a shared block; clear while clean */
-    int level;              /* its height among its owner's pointer blocks:
-                             * 1 names data, 0 is no pointer block; clear
-                             * while clean (`bcache_dirty_pointer`) */
-    uint64_t dirtied;       /* the count of dirty marks when it last went
-                             * dirty; 0 while clean */
-    uint64_t touched;       /* the count at its last dirty mark */
-    wait_queue_t wq;        /* who waits for the hold to end */
-    struct bbuf *hold_next; /* the next buffer its holder holds */
-    struct bbuf *lru_prev;  /* the keyed buffers in release order, oldest first */
+    int holder;                 /* pid holding it, or -1 */
+    uint64_t releases;          /* holds ended, under cache_spin; kept across reuse */
+    uint32_t stamp;             /* last release, for least-recently-released */
+    int waiters;                /* processes waiting for the hold to end, woken or not */
+    int write_failed;           /* its last write failed: not a victim until one succeeds */
+    int order;                  /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
+    uint64_t owner;             /* the one file this dirty block is written for,
+                                 * or 0 for a shared block; clear while clean */
+    int level;                  /* its height among its owner's pointer blocks:
+                                 * 1 names data, 0 is no pointer block; clear
+                                 * while clean (`bcache_dirty_pointer`) */
+    uint64_t dirtied;           /* the count of dirty marks when it last went
+                                 * dirty; 0 while clean */
+    uint64_t touched;           /* the count at its last dirty mark */
+    int entry;                  /* a directory's entries, which no rule of the
+                                 * classes waits for: only an order does
+                                 * (`bcache_dirty_entry`); clear while clean */
+    int version;                /* an earlier image of its block, kept for the
+                                 * orders that wait for it: keyed to no index,
+                                 * release order or list of all buffers */
+    struct bbuf *older;         /* the next older image of its block not yet
+                                 * written, or NULL */
+    struct bbuf *newer;         /* for an image, the next newer one, or the
+                                 * keyed buffer */
+    uint64_t need;              /* the latest mark an order waits for in this
+                                 * buffer's bytes, or 0 (`bcache_change`) */
+    struct bcache_waits *waits; /* the orders it waits for, or NULL */
+    wait_queue_t wq;            /* who waits for the hold to end */
+    struct bbuf *hold_next;     /* the next buffer its holder holds */
+    struct bbuf *lru_prev;      /* the keyed buffers in release order, oldest first */
     struct bbuf *lru_next;
     struct bbuf *empty_next; /* the next buffer keyed to nothing */
     struct bbuf *dirty_prev; /* its dirty list, by class, latest first */
     struct bbuf *dirty_next;
+};
+
+/* The orders a dirty buffer waits for: each a block, by its buffer, as it
+ * stood at a count of marks (`bcache_order_after`). */
+struct bcache_wait {
+    struct bbuf *t;      /* the block's buffer, kept by a count in its waiters */
+    block_device_t *dev; /* its key then, to tell a buffer used again */
+    uint64_t blk;
+    uint64_t k; /* the count of marks it waits for */
+};
+
+struct bcache_waits {
+    uint32_t n;
+    uint32_t cap;
+    struct bcache_wait w[1]; /* `cap` of them */
 };
 
 /**
@@ -195,6 +223,67 @@ void bcache_dirty_owned(struct bbuf *b, uint64_t owner);
  * when the caller does not hold the buffer.
  */
 void bcache_dirty_pointer(struct bbuf *b, uint64_t owner, int level);
+
+/**
+ * Mark a held buffer for writeback as a block of a directory's entries,
+ * shared, as `bcache_dirty` does. No rule of the classes waits for such a
+ * block (`bcache_dirty_ordered`, `bcache_dirty_pointer`,
+ * `bcache_sync_last`): a block that must follow it says so with an order
+ * (`bcache_order_after`). The mark lasts until the write, or until a
+ * `bcache_dirty_owned` or `bcache_dirty_pointer` makes it a file's block.
+ * Panics when the caller does not hold the buffer.
+ */
+void bcache_dirty_entry(struct bbuf *b);
+
+/**
+ * Orders: the writes of an operation that must reach the device one after
+ * another, kept without a wait.
+ *
+ * An operation of a file system that would write block `blk` of `dev` to
+ * the device before its next step, as ext2 writes a new inode before the
+ * entry that names it, asks instead for an order: every change it makes
+ * after this call to a buffer through `bcache_change`, until
+ * `bcache_order_end`, reaches the device only after `blk` as it stands now,
+ * by any path, a sync, an `fsync`, the flusher, an eviction or a shrink.
+ * The buffer that changes keeps the order as a wait (`waits`), and the
+ * buffer it waits for keeps the mark it needs (`need`). Should a change
+ * that carries orders come to a buffer whose bytes another order waits
+ * for, the cache keeps those bytes first in an image of the block
+ * (`version`), which is written before the buffer and stands for it in the
+ * waits, as soft updates roll a block back to what may reach the disk. So
+ * no change waits for what it is ordered after, and no two blocks wait for
+ * each other: each wait points at bytes that were there before the change
+ * that made it, and a buffer that carries a wait takes no new one in the
+ * same bytes.
+ *
+ * Only the blocks of the two kinds no rule of the classes waits for may
+ * carry orders: a directory's entries (`bcache_dirty_entry`) and the blocks
+ * the device writes last (`bcache_sync_last`), such as inode tables. The
+ * caller holds no buffer, as for `bcache_sync`.
+ *
+ * @return 0 with the order kept, also for a block clean or gone from the
+ *         cache, which is on the device already; -ENOSPC when the caller
+ *         keeps BCACHE_TOKENS orders already, and -ENOMEM, for a caller
+ *         that then writes the block with `bcache_sync_block_ordered`.
+ */
+int bcache_order_after(block_device_t *dev, uint64_t blk);
+
+/** End the orders the caller's operation asked for (`bcache_order_after`):
+ * its later changes wait for none of them. The waits already made stay. */
+void bcache_order_end(void);
+
+/**
+ * Make ready the held buffer `b`, of a block that carries orders, for a
+ * change of its bytes by the caller, before the change: it waits from now
+ * on for each order the caller's operation keeps on another block not yet
+ * on the device, and its bytes as they stand go first into an image of the
+ * block when an order waits for them and the change carries an order of
+ * its own (`bcache_order_after`). A change with no order is not asked.
+ *
+ * @return 0, or -ENOMEM with nothing changed, for the caller to fail the
+ *         write before it changes a byte.
+ */
+int bcache_change(struct bbuf *b);
 
 /**
  * Write a held buffer through to the device now, in the caller's order: no
