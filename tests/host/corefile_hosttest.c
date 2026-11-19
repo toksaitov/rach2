@@ -1198,10 +1198,11 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
 }
 
 /** No row opens a /proc file: -ENOENT. */
-int procfs_open(const struct vpath *vp, int flags)
+int procfs_open(const struct vpath *vp, int flags, struct vfs_mount *mnt)
 {
     (void)vp;
     (void)flags;
+    (void)mnt;
     return -ENOENT;
 }
 
