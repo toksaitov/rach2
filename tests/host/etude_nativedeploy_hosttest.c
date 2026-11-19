@@ -417,13 +417,15 @@ static void held(const char *program, const char *a0, const char *a1, const char
     close(gate[0]);
 }
 
-/** End the process of held, which reads to the end of its pipe, and reap it. */
-static void unheld(pid_t pid, int hold[2])
+/** End the process of held, which reads to the end of its pipe, and reap it;
+ * whether it exited 0, as only a fixture that ran does. */
+static int unheld(pid_t pid, int hold[2])
 {
     int status;
     close(hold[1]);
     while (waitpid(pid, &status, 0) < 0)
         ;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 /** Run the setup where procfs shows a live controller and a live
@@ -474,7 +476,7 @@ static void live_rows(const char *plain)
     CHECK(setup(t, plain, out) != 0, "a journal beside a running collection passes the setup");
     CHECK(locked(t) && !no_journal(t) && says(out, "a collection runs: pid "),
           "the setup clears a lock beside a running collection");
-    unheld(pid, hold);
+    CHECK(unheld(pid, hold), "the collection fixture did not run");
 
     t = tree("named");
     lock(t, NULL);
@@ -483,7 +485,16 @@ static void live_rows(const char *plain)
     fix_format(out, sizeof(out), "%s/out", t);
     CHECK(setup(t, plain, out) == 0, "a shell naming a collection fails the setup");
     CHECK(!locked(t) && no_journal(t), "a shell naming a collection keeps a journal's lock");
-    unheld(pid, hold);
+    CHECK(unheld(pid, hold), "the naming shell did not run");
+
+    t = tree("namedpath");
+    lock(t, NULL);
+    journal(t, "release 1 2 " OTHER_ID "\n");
+    held("/bin/sh", "sh", "-c", "read x; : /tmp/etude run native", &pid, hold);
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a shell naming a collection's path fails the setup");
+    CHECK(!locked(t) && no_journal(t), "a shell naming a collection's path keeps a journal's lock");
+    CHECK(unheld(pid, hold), "the shell naming a path did not run");
 }
 
 /** Make the files that stand for the machine, the PATH of each setup and
@@ -500,7 +511,7 @@ static void machine(const char *plain, const char *killer)
     /* `etude run native`: sh, named etude, reading the script `run`. */
     if (symlink("/bin/sh", fix_path("etude")))
         exit(2);
-    put(fix_path("run"), "read x\n");
+    put(fix_path("run"), "read x; exit 0\n");
     dir(plain);
     dir(killer);
     if (system("command -v flock > /dev/null 2>&1")) {
