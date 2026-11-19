@@ -73,24 +73,52 @@ static int kill_pending(const process_t *t)
  * Linux's do_jobctl_trap passes ptrace_stop no siginfo. A thread
  * whose tracer has gone does not stop: it is no longer traced, and gets the
  * stop's own signal back, as though the tracer had resumed it with that.
+ *
+ * The caller may hold the big lock or not. Without it the stop takes only
+ * the signal state's lock and those the tracer's notice takes, as Linux's
+ * ptrace_stop runs under the thread's siglock (kernel/signal.c:2233-2382):
+ * it holds the tracer by a reference, and publishes the stop under the
+ * signal state's lock only while the thread is still traced by that
+ * tracer, which a detach clears under the same lock before it looks for a
+ * stop to end (`ptrace_detach`), so that a stop either is seen and ended
+ * there or is not made. It takes the big lock for a tracer that has gone,
+ * whose link it clears, and for ids to translate outside the first PID and
+ * user namespaces.
  */
 static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
 {
     process_t *self = current_proc;
-    process_t *tracer = get_process(self->tracer);
+    uint32_t tpid = self->tracer;
+    process_t *tracer = get_process_ref(tpid);
+    int gone = tracer == NULL || tracer->tg->live == 0 || tracer->state == PROC_UNUSED;
     struct k_siginfo chld;
     uint32_t irq, flags;
-    int sig;
+    int sig, big = 0;
 
-    if (tracer == NULL || tracer->tg->live == 0) {
-        flags = signal_state_lock();
-        self->ptrace = 0;
-        signal_state_unlock(flags);
-        proc_set_tracer(self, 0);
-        return (int)((status >> 8) & 0x7F);
+    if (!bkl_held() &&
+        (gone || proc_pidns(tracer) != &init_pidns || proc_userns(tracer) != &init_userns ||
+         proc_pidns(self) != &init_pidns || proc_userns(self) != &init_userns)) {
+        bkl_enter();
+        big = 1;
+    }
+    if (gone) {
+        if (self->tracer == tpid) {
+            flags = signal_state_lock();
+            self->ptrace = 0;
+            signal_state_unlock(flags);
+            proc_set_tracer(self, 0);
+        }
+        sig = (int)((status >> 8) & 0x7F);
+        goto out;
     }
     irq = kirq_save();
     flags = signal_state_lock();
+    if (!(self->ptrace & PT_TRACED) || self->tracer != tpid) {
+        signal_state_unlock(flags);
+        kirq_restore(irq);
+        sig = (int)((status >> 8) & 0x7F);
+        goto out;
+    }
     self->ptrace &= ~PT_LISTEN;
     if (info) {
         self->ptrace_info = *info;
@@ -130,6 +158,13 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
         }
     }
     kirq_restore(irq);
+out:
+    if (big) {
+        bkl_exit();
+    }
+    if (tracer) {
+        proc_ref_put(tracer);
+    }
     return sig;
 }
 

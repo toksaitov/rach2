@@ -909,7 +909,8 @@ typedef struct process process_t;
  * (include/linux/entry-common.h:190-202, 326-328).
  *
  * WORK_SIGNAL: signal work, `sig_woken`, a call to restart, a mask to put
- * back, the tick's signals, a group stop or a tracer (`signal_return_work`).
+ * back, the tick's signals, a group stop or a stop a tracer asked for
+ * (`signal_return_work`).
  * WORK_RESCHED: `need_resched`. WORK_TRACE: a tracer's PT_SYSCALL or
  * PT_STEP, whose stops a call takes. WORK_SECCOMP: a seccomp filter, which
  * judges each call. WORK_RSEQ: `rseq_notify`. WORK_LOOP: datagrams the
@@ -1702,12 +1703,14 @@ void deliver_signals(struct isr_params *tf);
  * Nonzero when a return to user mode through `tf` has work for
  * `deliver_signals`: a signal deliverable or a stop to take, the thread's
  * signal flag set (`sig_woken`), a call to restart, a mask to put back, a
- * tracer, or ended threads to free. `isr_leave` asks it for an entry that ran
- * without the big lock, and takes the lock only for this work, as Linux's
- * exit to user mode acts only on its work flags. Read with interrupts off,
- * without the lock: a signal posted after the read is acted on at the
- * thread's next entry, as one posted while it runs user code is. Defined in
- * syscall_proc.c.
+ * seized thread's first stop or a stop its tracer asked for (PT_START,
+ * PT_INTERRUPT), or ended threads to free. A tracer alone is no work: its
+ * system call stops are the dispatcher's. `isr_leave` asks it for an entry
+ * that ran without the big lock, and takes the lock only for this work, as
+ * Linux's exit to user mode acts only on its work flags. Read with
+ * interrupts off, without the lock: a signal posted after the read is acted
+ * on at the thread's next entry, as one posted while it runs user code is.
+ * Defined in syscall_proc.c.
  */
 int signal_return_work(const struct isr_params *tf);
 
