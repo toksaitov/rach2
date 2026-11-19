@@ -293,14 +293,18 @@ uint64_t sched_slice_ns(const process_t *p);
 /** /sys/kernel/debug/sched/fair_server/cpuN/runtime and period: processor
  * `c`'s fair server's budget and period in nanoseconds, and a write of
  * both, -EINVAL unless the runtime is at most the period and the period is
- * from 100 us to 2^22 us, -EBUSY for a processor not online. */
+ * from 100 us to 2^22 us, -EBUSY for a processor not online or when the
+ * servers would take more than the real-time runtime's share of the online
+ * processors. */
 void sched_fair_server(int c, uint64_t *runtime, uint64_t *period);
 int sched_set_fair_server(int c, uint64_t runtime, uint64_t period);
 
 /** /proc/sys/kernel/sched_rt_period_us and sched_rt_runtime_us: the values
  * read, and a write of both, -EINVAL unless the period is at least 1 and
- * the runtime is -1 or between 0 and the period. Nothing is throttled by
- * them; the fair server keeps ordinary threads their share. */
+ * the runtime is -1 or between 0 and the period, -EBUSY when the runtime's
+ * share of the online processors would be less than the fair servers'.
+ * Nothing is throttled by them; the fair server keeps ordinary threads
+ * their share. */
 void sched_rt_bandwidth(int *period_us, int *runtime_us);
 int sched_set_rt_bandwidth(int period_us, int runtime_us);
 
