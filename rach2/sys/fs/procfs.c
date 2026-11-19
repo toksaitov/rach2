@@ -49,6 +49,7 @@
 #include "../usb/core.h"
 #include "../pci.h"
 #include "../audio/audio_proc.h"
+#include "../audio/hda_hdmi.h"
 #include "../speaker.h"
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
@@ -283,6 +284,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_SYSVIPC) {
         return "/proc/sysvipc";
+    }
+    if (vp->kind == VNODE_PROC_ASOUND) {
+        return "/proc/asound";
     }
     if (vp->kind == VNODE_SYS_FILE) {
         return "/sys";
@@ -2877,6 +2881,22 @@ static void synth_dir_target(struct procfs_text *t, const fd_entry_t *e)
     }
 }
 
+/** Append the path of /proc/asound's file `file`, as hdmi_audio_proc_text
+ * numbers it. */
+static void procfs_asound_path(struct procfs_text *t, int file)
+{
+    if (file == 0) {
+        ap_str(t, "/proc/asound/cards");
+    } else if (file == 1) {
+        ap_str(t, "/proc/asound/card0/id");
+    } else {
+        ap_str(t, "/proc/asound/card0/eld#");
+        ap_u32(t, (uint32_t)hdmi_audio_codec_addr());
+        ap_ch(t, '.');
+        ap_u32(t, (uint32_t)(file - 2));
+    }
+}
+
 /**
  * Append to `t` the /proc link target of the descriptor `e` of a file of
  * /proc or /sys, rebuilt from its origin: a global file's path, a file of
@@ -2899,6 +2919,10 @@ static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
     if (synth_net_name(pf->origin_file)) {
         ap_str(t, "/proc/net/");
         ap_str(t, synth_net_name(pf->origin_file));
+        return;
+    }
+    if (pf->origin_file == SYNTH_PROC_ASOUND) {
+        procfs_asound_path(t, pf->origin_pid);
         return;
     }
     if (pf->origin_file == SYNTH_PROC_IRQ_AFFINITY) {
@@ -3290,6 +3314,16 @@ uint32_t procfs_ino_lockwait(void)
     return PROCFS_INO_LOCKWAIT;
 }
 
+uint32_t procfs_ino_asound(int file, int card)
+{
+    return file >= 0 ? 0x30010u + (uint32_t)file : 0x30000u + (card >= 0);
+}
+
+uint32_t procfs_ino_asounddir(void)
+{
+    return procfs_ino_asound(-1, -1);
+}
+
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     struct procfs_file *pf;
@@ -3317,6 +3351,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
+    }
+    if (pf->origin_file == SYNTH_PROC_ASOUND) {
+        return procfs_ino_asound(pf->origin_pid, 0);
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -8317,6 +8354,32 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
  * published is as long as the pass that wrote it said, and a pass that
  * needed more room than the snapshot's first measure runs again with it.
  */
+/**
+ * Render the file of /proc/asound that hdmi_audio_proc_text numbers `file`:
+ * the cards, card0's id, or one of its ELD files. -ENOENT for a file the
+ * card no longer has.
+ */
+static int procfs_gen_asound(struct procfs_text *t, int file)
+{
+    int n = hdmi_audio_proc_text(file, NULL, 0);
+    int m;
+
+    while (n >= 0) {
+        if (procfs_text_room(t, t->len + n) < 0)
+            return -1;
+        m = hdmi_audio_proc_text(file, t->buf + t->len, n);
+        if (m <= n) {
+            n = m;
+            break;
+        }
+        n = m;
+    }
+    if (n < 0)
+        return n;
+    t->len += n;
+    return t->len;
+}
+
 static int procfs_gen_audio(struct procfs_text *t)
 {
     int n = audio_proc_text(NULL, 0);
@@ -10755,24 +10818,41 @@ static int procfs_gen_lockdep(struct procfs_text *t, int classes)
 }
 #endif
 
+/** Whether `kind` is /proc/audio or a file of /proc/asound. */
+static int procfs_is_sound(int kind)
+{
+    return kind == VNODE_PROC_AUDIO || kind == VNODE_PROC_ASOUND;
+}
+
+/** Render /proc/audio, or the file of /proc/asound `vp` names, whose
+ * number `*key` gets for the descriptor's `origin_pid`. */
+static int procfs_gen_sound(struct procfs_text *t, const struct vpath *vp, int *key)
+{
+    if (vp->kind == VNODE_PROC_AUDIO) {
+        return procfs_gen_audio(t);
+    }
+    *key = vp->pid;
+    return procfs_gen_asound(t, vp->pid);
+}
+
 /** Whether a file of kind `kind` is one of a process, whose process must be
  * there at the open; 0 for the files of /proc outside /proc/<pid> and for
  * those of /sys. */
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
-        VNODE_PROC_CMDLINE,      VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,
-        VNODE_PROC_UPTIME,       VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO,
-        VNODE_PROC_CPUINFO,      VNODE_PROC_LOADAVG,     VNODE_PROC_DISKSTATS,
-        VNODE_PROC_VERSION,      VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
-        VNODE_PROC_SLABINFO,     VNODE_PROC_SWAPS,       VNODE_PROC_LOCKS,
-        VNODE_PROC_SYS_FILE,     VNODE_PROC_MOUNTS,      VNODE_PROC_USB,
-        VNODE_PROC_AUDIO,        VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
-        VNODE_PROC_INTERRUPTS,   VNODE_PROC_CONSOLE,     VNODE_PROC_NET_ROUTE,
-        VNODE_PROC_NET_ARP,      VNODE_PROC_NET_TCP,     VNODE_PROC_NET_FILE,
-        VNODE_PROC_IRQ_FILE,     VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC,
-        VNODE_PROC_ACPI_CALL,    VNODE_PROC_FS_LOCKWAIT, VNODE_PROC_LOCKDEP,
-        VNODE_PROC_LOCKDEP_STATS};
+        VNODE_PROC_CMDLINE,       VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,
+        VNODE_PROC_UPTIME,        VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO,
+        VNODE_PROC_CPUINFO,       VNODE_PROC_LOADAVG,     VNODE_PROC_DISKSTATS,
+        VNODE_PROC_VERSION,       VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
+        VNODE_PROC_SLABINFO,      VNODE_PROC_SWAPS,       VNODE_PROC_LOCKS,
+        VNODE_PROC_SYS_FILE,      VNODE_PROC_MOUNTS,      VNODE_PROC_USB,
+        VNODE_PROC_AUDIO,         VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
+        VNODE_PROC_INTERRUPTS,    VNODE_PROC_CONSOLE,     VNODE_PROC_NET_ROUTE,
+        VNODE_PROC_NET_ARP,       VNODE_PROC_NET_TCP,     VNODE_PROC_NET_FILE,
+        VNODE_PROC_IRQ_FILE,      VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC,
+        VNODE_PROC_ACPI_CALL,     VNODE_PROC_FS_LOCKWAIT, VNODE_PROC_LOCKDEP,
+        VNODE_PROC_LOCKDEP_STATS, VNODE_PROC_ASOUND};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -10847,8 +10927,8 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         *key = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         len = procfs_gen_mounts(t);
-    } else if (vp->kind == VNODE_PROC_AUDIO) {
-        len = procfs_gen_audio(t);
+    } else if (procfs_is_sound(vp->kind)) {
+        len = procfs_gen_sound(t, vp, key);
     } else if (vp->kind == VNODE_PROC_USB) {
         len = procfs_gen_usb(t);
     } else if (vp->kind == VNODE_PROC_LOOP) {

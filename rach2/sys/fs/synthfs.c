@@ -12,6 +12,7 @@
 #include "devtree.h"
 #include "../dmi.h"
 #include "../watchdog.h"
+#include "../audio/hda_hdmi.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -622,6 +623,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/proc/acpi");
     } else if (kind == VNODE_PROC_FS_DIR) {
         synth_put(out, cap, &pos, "/proc/fs");
+    } else if (kind == VNODE_PROC_ASOUND_DIR) {
+        synth_put(out, cap, &pos, pid < 0 ? "/proc/asound" : "/proc/asound/card0");
     } else if (kind == VNODE_PROC_DIR) {
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
@@ -2141,6 +2144,64 @@ static int synth_classify_net(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
+/**
+ * The file of /proc/asound/card0 named `c`, as hdmi_audio_proc_text numbers
+ * it: 1 for id, 2 + N for eld#C.N, with C the codec's address and N one of
+ * the card's ELD files; -1 for none.
+ */
+static int synth_asound_file(struct comp c)
+{
+    char name[16];
+    int i, n = hdmi_audio_eld_count();
+
+    if (comp_eq(c, "id")) {
+        return 1;
+    }
+    for (i = 0; i < n; i++) {
+        int k = 0, v;
+
+        name[k++] = 'e';
+        name[k++] = 'l';
+        name[k++] = 'd';
+        name[k++] = '#';
+        v = hdmi_audio_codec_addr();
+        if (v >= 10) {
+            name[k++] = (char)('0' + v / 10);
+        }
+        name[k++] = (char)('0' + v % 10);
+        name[k++] = '.';
+        name[k++] = (char)('0' + i);
+        name[k] = '\0';
+        if (comp_eq(c, name)) {
+            return 2 + i;
+        }
+    }
+    return -1;
+}
+
+/** Classify the components `c` of `n` below /proc/asound: the directory,
+ * its cards, and card0 with its files while the HDMI codec is there. */
+static int synth_classify_asound(const struct comp *c, int n, struct vpath *vp)
+{
+    vp->procfile = SYNTH_PROC_ASOUND;
+    if (n == 0) {
+        vp->kind = VNODE_PROC_ASOUND_DIR;
+        vp->pid = -1;
+    } else if (comp_eq(c[0], "cards")) {
+        vp->kind = n == 1 ? VNODE_PROC_ASOUND : VNODE_ENOTDIR;
+        vp->pid = 0;
+    } else if (!comp_eq(c[0], "card0") || !hdmi_audio_present()) {
+        vp->kind = VNODE_ENOENT;
+    } else if (n == 1) {
+        vp->kind = VNODE_PROC_ASOUND_DIR;
+        vp->pid = 0;
+    } else {
+        vp->pid = synth_asound_file(c[1]);
+        vp->kind = vp->pid < 0 ? VNODE_ENOENT : n == 2 ? VNODE_PROC_ASOUND : VNODE_ENOTDIR;
+    }
+    return vp->kind;
+}
+
 const char *synth_sysvipc_name(int origin)
 {
     static const char *const names[] = {"shm", "sem", "msg"};
@@ -2276,6 +2337,9 @@ static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
                    : n == 3                     ? VNODE_PROC_FS_LOCKWAIT
                                                 : VNODE_ENOTDIR;
         return vp->kind;
+    }
+    if (comp_eq(c[1], "asound")) {
+        return synth_classify_asound(c + 2, n - 2, vp);
     }
     if (comp_eq(c[1], "self")) {
         pid = SYNTH_PID_SELF;
