@@ -14,25 +14,34 @@ stop=$dir/stop-5426
 dri=/sys/kernel/debug/dri/0
 card=/sys/class/drm/card0
 [ -e "$card/gt_min_freq_mhz" ] || card=/sys/class/drm/card1
-mkdir -p "$dir"
-rm -f "$stop"
+mkdir -p "$dir" && rm -f "$stop" || exit 1
 min0=
 max0=
 pid=
 # shellcheck disable=SC2329 # the exit trap calls it
 finish() {
+    status=$?
     if [ -n "$max0" ]; then
-        echo "$max0" > "$card/gt_max_freq_mhz"
-        echo "$min0" > "$card/gt_min_freq_mhz"
-        echo "lin5426: limits back at $(cat "$card/gt_min_freq_mhz") to $(cat "$card/gt_max_freq_mhz") MHz"
+        if echo "$max0" > "$card/gt_max_freq_mhz" &&
+            echo "$min0" > "$card/gt_min_freq_mhz" &&
+            [ "$(cat "$card/gt_min_freq_mhz")" = "$min0" ] &&
+            [ "$(cat "$card/gt_max_freq_mhz")" = "$max0" ]; then
+            echo "lin5426: limits back at $min0 to $max0 MHz"
+        else
+            echo 'lin5426: could not restore the frequency limits' >&2
+            status=1
+        fi
     fi
     if [ -n "$pid" ]; then
-        touch "$stop"
-        wait "$pid"
-        echo "SAMPLER_STATUS=$? samples $(grep -c '^[0-9]' "$dir/sample.txt") boost $(grep -c '^== ' "$dir/sample.txt")"
+        touch "$stop" || kill "$pid" 2> /dev/null || :
+        sampler=0
+        wait "$pid" || sampler=$?
+        echo "SAMPLER_STATUS=$sampler"
+        [ "$sampler" -eq 0 ] || status=1
     fi
     rm -f "$stop"
     sync
+    exit "$status"
 }
 trap finish EXIT
 trap 'exit 129' HUP
@@ -49,20 +58,26 @@ dump() {
         done
     } > "$dir/$1.txt"
 }
+min=$(cat "$card/gt_min_freq_mhz") && max=$(cat "$card/gt_max_freq_mhz") &&
+    [ "$hold" -ge "$min" ] && [ "$hold" -le "$max" ] ||
+    { echo 'lin5426: held clock outside the original limits' >&2; exit 2; }
 dump before
-python3 "$here/sample4904.py" "$dir/sample.txt" "$stop" > /dev/null 2>&1 < /dev/null &
+python3 "$here/sample4904.py" "$dir/sample.txt" "$stop" < /dev/null &
 pid=$!
 s=0
 sh "$here/trip.sh" -u gfx -p "$proton" -n 3 "$dir/free" || s=$?
 echo "TRIP_FREE_STATUS=$s"
+[ "$s" -eq 0 ] || exit "$s"
 dump between
-min0=$(cat "$card/gt_min_freq_mhz")
-max0=$(cat "$card/gt_max_freq_mhz")
-echo "$hold" > "$card/gt_min_freq_mhz" && echo "$hold" > "$card/gt_max_freq_mhz" ||
-    { echo "lin5426: the clock not held at $hold MHz"; exit 2; }
-echo "lin5426: held at $(cat "$card/gt_min_freq_mhz") to $(cat "$card/gt_max_freq_mhz") MHz, cur $(cat "$card/gt_cur_freq_mhz")"
+min0=$min
+max0=$max
+echo "$hold" > "$card/gt_min_freq_mhz" && echo "$hold" > "$card/gt_max_freq_mhz" &&
+    [ "$(cat "$card/gt_min_freq_mhz")" = "$hold" ] &&
+    [ "$(cat "$card/gt_max_freq_mhz")" = "$hold" ] ||
+    { echo "lin5426: the clock not held at $hold MHz" >&2; exit 2; }
+echo "lin5426: held at $hold to $hold MHz"
 h=0
 sh "$here/trip.sh" -u gfx -p "$proton" -n 2 "$dir/held" || h=$?
 echo "TRIP_HELD_STATUS=$h"
 dump after
-[ "$s" -eq 0 ] && [ "$h" -eq 0 ]
+exit "$h"
