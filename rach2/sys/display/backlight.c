@@ -5,13 +5,14 @@
 
 #include "backlight.h"
 
+#include "../klog.h"
 #include "../lib/kdef.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstd.h"
 #include "../lib/spinlock.h"
 
 /* A registered backlight: its driver, its highest level, the level root set
- * and bl_power as root wrote it. */
+ * and bl_power as root wrote it, and its type, NULL for "raw". */
 struct backlight {
     char name[32];
     const struct backlight_ops *ops;
@@ -19,6 +20,7 @@ struct backlight {
     int max;
     int level;
     int power; /* BACKLIGHT_ON or BACKLIGHT_OFF */
+    const char *type;
 };
 
 static struct backlight lights[BACKLIGHT_MAX];
@@ -77,7 +79,7 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
 {
     struct backlight *b;
     uint32_t flags;
-    int i, len, level;
+    int i, len, level, kept;
 
     for (len = 0; name[len] != '\0'; len++) {
     }
@@ -87,16 +89,31 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
     }
     flags = spin_lock_irqsave(&lock);
     b = &lights[i];
+    /* The kept level taken to the new range, rounded to the closest; a
+     * PWM's levels fit 16 bits, so the product fits 32. */
+    kept = (int)(((uint32_t)b->level * (uint32_t)max + (uint32_t)b->max / 2u) / (uint32_t)b->max);
     b->ops = ops;
     b->ctx = ctx;
     b->max = max;
     level = ops->get(ctx);
-    b->level = level < 0 ? 0 : level > max ? max : level;
+    kept = kept > max ? max : kept;
+    if (level > 0) {
+        b->level = level > max ? max : level;
+    } else {
+        b->level = kept;
+        if (ops->power != NULL) {
+            ops->set(ctx, kept);
+        } else {
+            ops->set(ctx, b->power == BACKLIGHT_ON && !console_blank ? kept : 0);
+        }
+    }
+    level = b->level;
     spin_unlock_irqrestore(&lock, flags);
+    klog(KLOG_DEBUG, "backlight", "%s: rebound: level %d of %d", name, level, max);
     return i;
 }
 
-void backlight_level_changed(int i, int level)
+void backlight_driver_level(int i, int level, const char *why)
 {
     uint32_t flags;
 
@@ -105,7 +122,16 @@ void backlight_level_changed(int i, int level)
     }
     flags = spin_lock_irqsave(&lock);
     lights[i].level = level < 0 ? 0 : level > lights[i].max ? lights[i].max : level;
+    level = lights[i].level;
     spin_unlock_irqrestore(&lock, flags);
+    klog(KLOG_INFO, "backlight", "%s: level %d: %s", lights[i].name, level, why);
+}
+
+void backlight_set_type(int i, const char *type)
+{
+    if (i >= 0 && i < nlights) {
+        lights[i].type = type;
+    }
 }
 
 void backlight_init(void)
@@ -188,10 +214,10 @@ int backlight_show(int i, int attr, char *out, int cap)
     }
     b = &lights[i];
     if (attr == BACKLIGHT_TYPE) {
-        static const char raw[] = "raw";
+        const char *type = b->type != NULL ? b->type : "raw";
 
-        for (v = 0; raw[v] != '\0' && pos < cap - 1; v++) {
-            out[pos++] = raw[v];
+        for (v = 0; type[v] != '\0' && pos < cap - 1; v++) {
+            out[pos++] = type[v];
         }
     } else {
         flags = spin_lock_irqsave(&lock);
@@ -237,5 +263,7 @@ int backlight_store(int i, int attr, const char *text, int len)
     }
     apply(b);
     spin_unlock_irqrestore(&lock, flags);
+    klog(KLOG_DEBUG, "backlight", "%s: %s %d by a write", b->name,
+         attr == BACKLIGHT_BRIGHTNESS ? "level" : "bl_power", v);
     return 0;
 }
