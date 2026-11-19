@@ -432,6 +432,7 @@ static uint32_t ata_lock(struct ata_channel *ch)
 static void ata_unlock(struct ata_channel *ch, uint32_t flags)
 {
     spin_unlock_irqrestore(&ch->lock, flags);
+    sched_mb(); /* the release before the read of the queue (`wq_wait`) */
     if (wq_active(&ch->wq)) {
         wq_wake_all(&ch->wq);
     }

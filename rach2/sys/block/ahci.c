@@ -1497,6 +1497,7 @@ static void ahci_release(struct ahci_disk *d)
     d->polling = 0;
     ahci_start_next(d);
     spin_unlock_irqrestore(&d->lock, flags);
+    sched_mb(); /* the release before the read of the queue (`wq_wait`) */
     if (wq_active(&d->claim_wq)) {
         wq_wake_all(&d->claim_wq);
     }
