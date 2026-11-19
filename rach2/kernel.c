@@ -70,6 +70,7 @@
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
+#include "sys/audio/hda_hdmi.h"
 #include "sys/speaker.h"
 #include "sys/udelay.h"
 #include "sys/network/net.h"
@@ -441,6 +442,7 @@ static int timer_lock_take(int boot)
  * The boot processor's periodic work that takes only locks of its own, from
  * the cycle count `t`, each charged to its row: the HDA tick, which asks
  * khda for a stream whose interrupts do not arrive under the stream lock,
+ * and the HDMI codec's, which refills its stream under its own lock,
  * the lag device's answers under its lock, the block requests' deadlines
  * under the pool's lock, the end of a speaker's tone under the speaker's
  * lock, the i915's release of forcewake under its register lock, and
@@ -453,6 +455,7 @@ static int timer_lock_take(int boot)
 static uint64_t timer_own_work(uint64_t t)
 {
     hda_tick();
+    hdmi_audio_tick();
     t = bkl_tick_charge(BKL_TICK_HDA, t);
     block_lag_tick();
     t = bkl_tick_charge(BKL_TICK_BLOCK_LAG, t);
@@ -594,12 +597,13 @@ static uint32_t timer_service_ticks(void)
 {
     uint32_t wait = TICK_HZ, next;
     static uint32_t (*const queries[])(void) = {
-        netdev_idle_ticks,  ath9k_idle_ticks, netconsole_idle_ticks,    tcp_idle_ticks,
-        ip_frag_idle_ticks, frag6_idle_ticks, nd6_idle_ticks,           netlink_idle_ticks,
-        usb_idle_ticks,     input_idle_ticks, ps2kbd_idle_ticks,        alps_idle_ticks,
-        itco_idle_ticks,    ata_idle_ticks,   block_request_idle_ticks, block_lag_idle_ticks,
-        speaker_idle_ticks, hda_idle_ticks,   blank_idle_ticks,         vkms_idle_ticks,
-        i915_idle_ticks,    tty_idle_ticks,   sched_load_idle_ticks,    timerfd_idle_ticks};
+        netdev_idle_ticks,    ath9k_idle_ticks, netconsole_idle_ticks,    tcp_idle_ticks,
+        ip_frag_idle_ticks,   frag6_idle_ticks, nd6_idle_ticks,           netlink_idle_ticks,
+        usb_idle_ticks,       input_idle_ticks, ps2kbd_idle_ticks,        alps_idle_ticks,
+        itco_idle_ticks,      ata_idle_ticks,   block_request_idle_ticks, block_lag_idle_ticks,
+        speaker_idle_ticks,   hda_idle_ticks,   blank_idle_ticks,         vkms_idle_ticks,
+        i915_idle_ticks,      tty_idle_ticks,   sched_load_idle_ticks,    timerfd_idle_ticks,
+        hdmi_audio_idle_ticks};
     unsigned int i;
 
     if (ip_loop_pending() || klog_kept()) {
@@ -4606,6 +4610,7 @@ static void start_audio(void)
     } else {
         klog(KLOG_DEBUG, "audio", "started");
         init_audio();
+        hdmi_audio_init();
         if (audio) {
             klog(KLOG_INFO, "audio", "ready: %s", audio_get_boot_status());
         } else {
