@@ -70,8 +70,11 @@ counted in TCPTimeWaitOverflow.
 Data received in order is acknowledged as Linux acknowledges it.
 The connection's first data, and data after a quiet time longer than its
 retransmission timeout, grant up to 16 quick acknowledgements, one for each
-two full segments the window holds: while any are left, and the connection
-is not answering what it receives, each segment is acknowledged at once.
+two full segments the window last offered holds, or 2 when it holds fewer
+than two:
+while any are left, and the connection is not answering what it receives,
+each segment is acknowledged at once.
+Data the peer sends again grants them too and ends the answering mode.
 Otherwise its acknowledgement waits while no more than a full segment is
 unacknowledged, so that every second full segment is acknowledged at once;
 a held acknowledgement goes with the next segment sent, or alone 40 ms
@@ -81,8 +84,8 @@ Linux's
 .Dv TCP_DELACK_MIN ,
 is the longest one is held here.
 A full segment is the largest received, at least 536 bytes; two shorter
-segments in a row of one length, at least 536 bytes with the header, or 88
-without FIN, SYN, URG or PSH, make that length the full one.
+segments in a row of one length, at least 536 bytes of data, or 88 without
+FIN, SYN, URG or PSH, make that length the full one.
 .Pp
 A read that empties the receive buffer after a segment that ended a write
 of the peer's sends the held acknowledgement at once.
@@ -95,8 +98,9 @@ Data past a hole, the segment that fills it, data received before, a FIN,
 and data in a closing state are acknowledged at once.
 .Pp
 A read announces the window it reopened only while the peer has no more
-than half the buffer left, and only when the window as it stands, at least
-a full segment, is at least twice what the peer has, as Linux's
+than half the buffer left, and only when the window as it stands, in whole
+units of the window scale and at least a full segment and a sixteenth of
+the largest window, is at least twice what the peer has, as Linux's
 .Fn tcp_cleanup_rbuf
 announces it.
 .Ss Keepalive
@@ -296,11 +300,12 @@ The probes unanswered before the reset, 1 to 127.
 .It Dv TCP_QUICKACK
 0 puts the connection in the mode in which this side's answers carry its
 acknowledgements.
-Any other value ends that mode and does with a held acknowledgement what a
-read does after a segment that ended a write of the peer's: it is sent when
-the receive buffer is empty or more than a full segment is unacknowledged,
-and the window is announced as a read announces it; then an even value puts
-the mode back.
+Any other value ends that mode and, when an acknowledgement is held, does
+what a read does after a segment that ended a write of the peer's: the
+acknowledgement is sent when the receive buffer is empty or more than a
+full segment is unacknowledged, or else the window is announced when a read
+would announce it; then an even value puts the mode back.
+With no acknowledgement held the mode stays ended.
 It reads 0 in that mode and 1 otherwise, and on a socket with no connection
 the mode is kept for the connection it opens.
 .It Dv TCP_USER_TIMEOUT
