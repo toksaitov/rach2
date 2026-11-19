@@ -997,7 +997,7 @@
     },
     {
       "case_id": "machine.ext2.xattr",
-      "behavior": "All twelve extended attribute calls store user values on ext2, preserve them over remount, distinguish a final link, and keep KRFFS and tmpfs answers",
+      "behavior": "All twelve extended attribute calls store user values on ext2, preserve them over remount, distinguish a final link, and give KRFFS's EOPNOTSUPP and tmpfs's ENODATA for a name never set",
       "units": [
         "ext2",
         "rach2/sys/fs/ext2xattr.c",
@@ -1085,7 +1085,7 @@
         },
         {
           "assertion_id": "said-ok",
-          "checks": "ext2probe says EXT2PROBE OK (xattr), after all twelve calls, query and short-buffer checks, create and replace flags, remount, symbolic links and unsupported KRFFS and tmpfs calls",
+          "checks": "ext2probe says EXT2PROBE OK (xattr), after all twelve calls, query and short-buffer checks, create and replace flags, remount, symbolic links, KRFFS's EOPNOTSUPP and tmpfs's ENODATA for a name never set and an empty listing on each",
           "source": "scenario"
         }
       ],
