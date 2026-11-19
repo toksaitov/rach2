@@ -557,6 +557,13 @@ void tgroup_cpu_time(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
     proc_cpu_time(tg == other.tg ? &other : &proc, user, sys);
 }
 
+/** Count one more reference to `tg`, as the kernel's `tgroup_get` does,
+ * for a CPU clock that names it (`clock_cpu_target`). */
+void tgroup_get(struct tgroup *tg)
+{
+    tg->refs++;
+}
+
 /** `tgroup_cpu_time`, which takes no lock here. */
 void tgroup_cpu_time_locked(const struct tgroup *tg, uint64_t *user, uint64_t *sys)
 {
