@@ -65,3 +65,11 @@ calls pingpong: syscall 0 10001 0 20001 37296 15865
 calls pingpong: syscall 1 10004 0 20005 86846 4437
 calls pingpong: syscall 61 60725 0 60725 24880 3865
 calls pingpong: syscall 101 80162 0 80162 172093 224
+
+One run a boot of getppid 20000 under strace -f -c -w, round 0, microseconds a call:
+  out-base-1.txt: 28.13
+  out-base-2.txt: 27.63
+  out-fix-1.txt: 27.84
+  out-fix-2.txt: 29.63
+  out-linux-1.txt: 28.45
+  out-linux-2.txt: 32.89
