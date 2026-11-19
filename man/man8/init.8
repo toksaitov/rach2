@@ -453,6 +453,8 @@ It reads the levels and record under a shared lock on
 .Pa /dev/mixer .
 .Xr mixer 1
 holds an exclusive lock while it changes them.
+A save that fails, before or after its rename, leaves the file's text
+unknown, so the next pass writes it again whatever the level then.
 It reads
 .Pa /var/lib/mixer.new
 as it reads a backlight's replacement.
