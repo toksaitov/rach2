@@ -737,6 +737,57 @@ static void abs_rows(void)
     evdev_unregister(dev);
 }
 
+/** Read independent slot values and the type B stream of a touchscreen. */
+static void multitouch_rows(void)
+{
+    struct evdev *dev = evdev_register("touchscreen", EVDEV_BUS_USB, 1, 1, NULL);
+    struct opened a;
+    int32_t values[10];
+    unsigned long props = 0;
+    uint32_t request = 0x8000450au | (sizeof(values) << 16);
+    int i;
+
+    evdev_set_abs(dev, ABS_MT_POSITION_X, 0, 1000, 0, 0);
+    evdev_set_abs(dev, ABS_MT_TOUCH_MINOR, 0, 100, 0, 0);
+    CHECK("slot initialization can be repeated with the same count or zero",
+          evdev_init_slots(dev, 8, INPUT_MT_DIRECT) == 0 &&
+              evdev_init_slots(dev, 8, INPUT_MT_DIRECT) == 0 && evdev_init_slots(dev, 0, 0) == 0);
+    CHECK("slot count is fixed", evdev_init_slots(dev, 7, 0) == -EINVAL);
+    open_dev(&a, 0);
+    CHECK("direct touchscreen property",
+          evdev_ioctl(&a.e, 0x80004509u | (sizeof(props) << 16), (uintptr_t)&props) >= 0 &&
+              props == (1ul << INPUT_PROP_DIRECT));
+    values[0] = ABS_MT_TRACKING_ID;
+    values[9] = 123;
+    CHECK("read all tracking IDs",
+          evdev_ioctl(&a.e, request, (uintptr_t)values) == 0 && values[9] == 123);
+    for (i = 1; i <= 8; i++) {
+        CHECK("new slot is inactive", values[i] == -1);
+    }
+    evdev_report(dev, EV_ABS, ABS_MT_SLOT, 7);
+    evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, 42);
+    evdev_report(dev, EV_ABS, ABS_MT_SLOT, 8);
+    evdev_report(dev, EV_ABS, ABS_MT_TOUCH_MINOR, 10);
+    evdev_report(dev, EV_SYN, SYN_REPORT, 0);
+    CHECK("slot selection precedes the first changed value and ignores an invalid slot",
+          take(&a) > 0 && n_got == 4 && is(0, EV_ABS, ABS_MT_SLOT, 7) &&
+              is(1, EV_ABS, ABS_MT_TRACKING_ID, 42) && is(2, EV_ABS, ABS_MT_TOUCH_MINOR, 10) &&
+              is(3, EV_SYN, SYN_REPORT, 0));
+    values[0] = ABS_MT_TOUCH_MINOR;
+    CHECK("a slot keeps its own axis values",
+          evdev_ioctl(&a.e, request, (uintptr_t)values) == 0 && values[1] == 0 && values[8] == 10);
+    values[8] = -123;
+    CHECK("a short request leaves slots beyond its length alone",
+          evdev_ioctl(&a.e, 0x8008450au, (uintptr_t)values) == 0 && values[8] == -123);
+    values[0] = ABS_MT_SLOT;
+    CHECK("the slot selector is not a slot value",
+          evdev_ioctl(&a.e, request, (uintptr_t)values) == -EINVAL);
+    evdev_unregister(dev);
+    CHECK("an open of an unplugged device reads no slots",
+          evdev_ioctl(&a.e, request, (uintptr_t)values) == -ENODEV);
+    evdev_close(&a.e);
+}
+
 /** Write the `n` records `ev` to `o` in the native layout; returns what the
  * write returns. */
 static int32_t put(struct opened *o, const struct input_event *ev, int n)
@@ -1190,6 +1241,7 @@ int main(void)
     mask_rows();
     key_state_rows();
     abs_rows();
+    multitouch_rows();
     compat_rows();
     write_rows();
     write_keyboard_rows();
