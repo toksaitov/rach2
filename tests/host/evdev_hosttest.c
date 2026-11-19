@@ -746,9 +746,11 @@ static void multitouch_rows(void)
     unsigned long props = 0;
     uint32_t request = 0x8000450au | (sizeof(values) << 16);
     int i;
+    unsigned long msc = 0;
 
     evdev_set_abs(dev, ABS_MT_POSITION_X, 0, 1000, 0, 0);
     evdev_set_abs(dev, ABS_MT_TOUCH_MINOR, 0, 100, 0, 0);
+    evdev_set_capability(dev, EV_MSC, MSC_TIMESTAMP);
     CHECK("slot initialization can be repeated with the same count or zero",
           evdev_init_slots(dev, 24, INPUT_MT_DIRECT) == 0 &&
               evdev_init_slots(dev, 24, INPUT_MT_DIRECT) == 0 && evdev_init_slots(dev, 0, 0) == 0);
@@ -782,6 +784,14 @@ static void multitouch_rows(void)
     values[0] = ABS_MT_SLOT;
     CHECK("the slot selector is not a slot value",
           evdev_ioctl(&a.e, request, (uintptr_t)values) == -EINVAL);
+    CHECK("only the device's miscellaneous timestamp code is advertised",
+          evdev_ioctl(&a.e, EVIOCGBIT(EV_MSC, sizeof(msc)), (uintptr_t)&msc) > 0 &&
+              msc == (1ul << MSC_TIMESTAMP));
+    evdev_report(dev, EV_MSC, MSC_SCAN, 10);
+    evdev_report(dev, EV_MSC, MSC_TIMESTAMP, 5000);
+    evdev_report(dev, EV_SYN, SYN_REPORT, 0);
+    CHECK("a touchscreen timestamp reaches the reader",
+          take(&a) > 0 && n_got == 2 && is(0, EV_MSC, MSC_TIMESTAMP, 5000));
     evdev_unregister(dev);
     CHECK("an open of an unplugged device reads no slots",
           evdev_ioctl(&a.e, request, (uintptr_t)values) == -ENODEV);

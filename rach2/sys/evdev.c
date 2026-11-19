@@ -166,6 +166,7 @@ struct evdev {
                            * first three as the console has them, the others
                            * as programs wrote them */
     unsigned int ledbits; /* the LEDs it has beyond a keyboard's three */
+    uint8_t msc;          /* a bit for each additional miscellaneous code */
     int rep[2];           /* a keyboard's REP_DELAY and REP_PERIOD, ms */
     int has_abs;          /* EV_ABS: `absinfo` answers EVIOCGABS */
     int stamped;          /* a packet has begun, at `stamp` */
@@ -368,6 +369,8 @@ void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
         set_bit(dev->rel, code);
     } else if (type == EV_LED && code < LED_CNT) {
         dev->ledbits |= 1u << code;
+    } else if (type == EV_MSC && code < MSC_CNT) {
+        dev->msc |= (uint8_t)(1u << code);
     }
 }
 
@@ -992,6 +995,12 @@ static int accept_abs(struct evdev *dev, uint16_t code, int32_t *value)
     return PASS;
 }
 
+/** The miscellaneous codes, including the scan capability of keyboards. */
+static unsigned int msc_bits(const struct evdev *dev)
+{
+    return dev->msc | ((dev->flags & EVDEV_SCAN) ? 1u << MSC_SCAN : 0);
+}
+
 /**
  * The input core's filter, with the evdev lock held: whether the event
  * `type`, `code`, `*value` of `dev` goes to its opens, DROP, PASS or
@@ -1025,7 +1034,7 @@ static int accept_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t
         }
         return accept_abs(dev, code, value);
     case EV_MSC:
-        return code == MSC_SCAN && (dev->flags & EVDEV_SCAN);
+        return code < MSC_CNT && (msc_bits(dev) & (1u << code));
     case EV_SYN:
         return code == SYN_REPORT || code == SYN_CONFIG || code == SYN_MT_REPORT;
     default:
@@ -1720,7 +1729,7 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
     k_memset(out, 0, EVDEV_KEY_BYTES);
     switch (type) {
     case 0:
-        out[0] = (uint8_t)(1u << EV_SYN | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
+        out[0] = (uint8_t)(1u << EV_SYN | (msc_bits(dev) ? 1u << EV_MSC : 0));
         for (i = 0; i < sizeof(dev->keys); i++) {
             if (dev->keys[i]) {
                 out[0] |= 1u << EV_KEY;
@@ -1746,7 +1755,7 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
         k_memcpy(out, dev->keys, EVDEV_KEY_BYTES);
         return EVDEV_KEY_BYTES;
     case EV_MSC:
-        out[0] = (uint8_t)((dev->flags & EVDEV_SCAN) ? 1u << MSC_SCAN : 0);
+        out[0] = (uint8_t)msc_bits(dev);
         return (int)BITS_BYTES(MSC_CNT);
     case EV_REL:
         k_memcpy(out, dev->rel, sizeof(dev->rel));

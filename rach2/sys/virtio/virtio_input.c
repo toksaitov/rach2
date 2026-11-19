@@ -136,7 +136,7 @@ static void vi_remove(struct virtio_dev *d)
 static int vi_identify(struct virtio_dev *d, struct evdev *dev, char *name, uint16_t *ids,
                        uint8_t *keys)
 {
-    uint8_t props[INPUT_PROP_CNT / 8], rel[REL_CNT / 8];
+    uint8_t props[INPUT_PROP_CNT / 8], rel[REL_CNT / 8], msc[MSC_CNT / 8];
     char serial[EVDEV_TEXT_MAX], phys[EVDEV_TEXT_MAX];
     unsigned i;
 
@@ -161,6 +161,12 @@ static int vi_identify(struct virtio_dev *d, struct evdev *dev, char *name, uint
     for (i = 0; i < REL_CNT; i++) {
         if (vi_bit(rel, i)) {
             evdev_set_capability(dev, EV_REL, (uint16_t)i);
+        }
+    }
+    vi_config(d, CFG_EV_BITS, EV_MSC, msc, sizeof(msc));
+    for (i = 0; i < MSC_CNT; i++) {
+        if (vi_bit(msc, i)) {
+            evdev_set_capability(dev, EV_MSC, (uint16_t)i);
         }
     }
     vi_config(d, CFG_PROPS, 0, props, sizeof(props));
