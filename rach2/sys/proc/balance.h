@@ -152,6 +152,13 @@ struct balance_ops {
 extern unsigned int sysctl_sched_migration_cost;
 extern unsigned int sysctl_sched_nr_migrate;
 
+/** Processor `cpu`'s next periodic balance, in ticks, and its average idle
+ * time and its newly idle balance's highest cost, in ns, as
+ * /sys/kernel/debug/sched/debug shows rq->next_balance, avg_idle and
+ * max_idle_balance_cost. Under sched_lock. */
+void balance_rq_debug(int cpu, uint64_t *next_balance, uint64_t *avg_idle,
+                      uint64_t *max_idle_balance_cost);
+
 /** Take the scheduler's operations; until then every entry below does
  * nothing and places a thread where it was. Once, at boot. */
 void balance_init(const struct balance_ops *ops);
