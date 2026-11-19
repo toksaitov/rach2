@@ -3,9 +3,11 @@
  * os-real on an Intel HDA controller with one software Wi-Fi radio, logged
  * in as root: BusyBox's acpid, which init starts with the sbin directories
  * on its path, runs mixer for the volume keys QMP presses on the PS/2
- * keyboard, its airplane action run in its environment blocks and unblocks
- * the radio, and it powers the machine off in order for the ACPI power
- * button that QMP's system_powerdown presses.
+ * keyboard, while the ordinary user test holds an exclusive lock on
+ * /dev/mixer, which neither the keys nor init's save of the levels wait
+ * on; its airplane action run in its environment blocks and unblocks the
+ * radio, and it powers the machine off in order for the ACPI power button
+ * that QMP's system_powerdown presses.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +99,24 @@ static int press(struct guest *g, const char *qcode, const char *before, const c
     return 1;
 }
 
+/* The line that starts the ordinary user test holding an exclusive lock on
+ * /dev/mixer in the background, until the power button ends it, and prints
+ * whether a second exclusive lock of test's is refused, as it is while the
+ * first is held. */
+#define HOLD                                                                      \
+    "setuidgid test flock -x /dev/mixer sleep 3600 </dev/null >/dev/null 2>&1 & " \
+    "until ! setuidgid test flock -n /dev/mixer true; do sleep 1; done; echo HOLD\"\"=held\r"
+
+/* The line that waits until init has saved the muted volume, the level 0
+ * and the record of 50, and then prints the modes of the two locks and
+ * whether test can open either. */
+#define SAVED                                                                                    \
+    "until grep -qx 'vol 0:0' /var/lib/mixer && grep -qx 'mute 50:50' /var/lib/mixer; do sleep " \
+    "1; "                                                                                        \
+    "done; echo SAVED\"\"=$(stat -c %a /var/run/acpi.lock /var/run/mixer.lock | tr '\\n' ' ')"   \
+    "$(setuidgid test flock -n /var/run/acpi.lock true 2>/dev/null || echo no)"                  \
+    "$(setuidgid test flock -n /var/run/mixer.lock true 2>/dev/null || echo no)\r"
+
 /* The path init gives every service, BusyBox init's (utils/init.c). */
 #define SERVICE_PATH "/sbin:/usr/sbin:/bin:/usr/bin"
 
@@ -149,10 +169,11 @@ static int airplane(struct guest *g, const char *want, const char *id)
 }
 
 /**
- * Log in; see acpid running; set the volume to 50 and press the volume keys
- * and the mute key twice; read acpid's path, and run the airplane action
- * twice in acpid's environment; then press the power button and wait for
- * the machine's end.
+ * Log in; see acpid running; set the volume to 50; have test hold
+ * /dev/mixer, and press the volume keys and the mute key twice, reading
+ * init's save of the mute and the locks' modes; read acpid's path, and run
+ * the airplane action twice in acpid's environment; then press the power
+ * button and wait for the machine's end.
  */
 static void real(struct lc *l)
 {
@@ -178,10 +199,19 @@ static void real(struct lc *l)
         return;
     snprintf(detail, sizeof(detail), "mixer vol 50 reads '%s'", got);
     lc_assert(l, "set", strcmp(got, "vol 50:50") == 0, detail);
+    if (!ask(&g, HOLD, "HOLD", got, sizeof(got)))
+        return;
+    lc_assert(l, "held", strcmp(got, "held") == 0, "test does not hold /dev/mixer");
     if (!press(&g, "volumeup", "vol 50:50", "vol 55:55", "up") ||
         !press(&g, "volumedown", "vol 55:55", "vol 50:50", "down") ||
-        !press(&g, "audiomute", "vol 50:50", "vol 0:0 muted", "mute") ||
-        !press(&g, "audiomute", "vol 0:0 muted", "vol 50:50", "unmute") || !lc_step(l, "wifi"))
+        !press(&g, "audiomute", "vol 50:50", "vol 0:0 muted", "mute"))
+        return;
+    if (!ask(&g, SAVED, "SAVED", got, sizeof(got)))
+        return;
+    snprintf(detail, sizeof(detail),
+             "the locks' modes and test's opens are '%s', not '600 600 nono'", got);
+    lc_assert(l, "saved", strcmp(got, "600 600 nono") == 0, detail);
+    if (!press(&g, "audiomute", "vol 0:0 muted", "vol 50:50", "unmute") || !lc_step(l, "wifi"))
         return;
     if (!service_path(&g, "acpid", "acpid-path"))
         return;
@@ -207,9 +237,9 @@ static void real(struct lc *l)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const ids[] = {"running",     "set",        "up",    "down",    "mute",
-                                      "unmute",      "acpid-path", "radio", "blocked", "unblocked",
-                                      "powered-off", "in-order",   NULL};
+    static const char *const ids[] = {"running", "set",       "held",        "up",         "down",
+                                      "mute",    "saved",     "unmute",      "acpid-path", "radio",
+                                      "blocked", "unblocked", "powered-off", "in-order",   NULL};
     struct lc l;
 
     lc_begin(&l, c, ids);

@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.acpid.real",
-      "behavior": "on os-real with an Intel HDA controller and one software Wi-Fi radio, logged in as root, init runs one acpid; with the volume at 50, the volume keys pressed on the PS/2 keyboard step mixer's reading to 55 and back to 50, the mute key mutes and then unmutes it, acpid has init's PATH /sbin:/usr/sbin:/bin:/usr/bin, the airplane action /etc/acpi/wifi run in acpid's environment blocks the radio's rfkill switch and run again unblocks it, and the ACPI power button that QMP's system_powerdown presses powers the machine off through init and the kernel's orderly stop",
+      "behavior": "on os-real with an Intel HDA controller and one software Wi-Fi radio, logged in as root, init runs one acpid; with the volume at 50 and the ordinary user test holding an exclusive flock on /dev/mixer, the volume keys pressed on the PS/2 keyboard step mixer's reading to 55 and back to 50, the mute key mutes and then unmutes it, init saves the muted level and its record to /var/lib/mixer, and the actions' and mixer's locks are mode 0600, which test cannot open, acpid has init's PATH /sbin:/usr/sbin:/bin:/usr/bin, the airplane action /etc/acpi/wifi run in acpid's environment blocks the radio's rfkill switch and run again unblocks it, and the ACPI power button that QMP's system_powerdown presses powers the machine off through init and the kernel's orderly stop",
       "units": ["acpid", "mixer", "init-login", "rfkill", "wsim"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -14,7 +14,7 @@
       "execution": {"program": "acpid_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "real", "does": "boot os-real and log in as root at the console"},
-        {"step_id": "volume", "stage": "execute", "machine": "real", "does": "count acpid's processes, set the volume to 50, and press the volume keys and the mute key twice through QMP, reading mixer after each"},
+        {"step_id": "volume", "stage": "execute", "machine": "real", "does": "count acpid's processes, set the volume to 50, start test holding /dev/mixer exclusively, and press the volume keys and the mute key twice through QMP, reading mixer after each, and after the mute waiting for init's save of it and reading the locks' modes and whether test opens them"},
         {"step_id": "wifi", "stage": "execute", "machine": "real", "does": "read the PATH of acpid from /proc/PID/environ, and run /etc/acpi/wifi twice under env -i with acpid's environment, reading the Wi-Fi switch's soft block after each"},
         {"step_id": "power", "stage": "execute", "machine": "real", "does": "press the power button with QMP's system_powerdown and wait for the machine's end"}
       ],
@@ -24,9 +24,11 @@
       "assertions": [
         {"assertion_id": "running", "checks": "pidof finds one acpid", "source": "scenario"},
         {"assertion_id": "set", "checks": "mixer vol 50 leaves mixer reading vol 50:50", "source": "scenario"},
+        {"assertion_id": "held", "checks": "setuidgid test flock -x /dev/mixer holds the lock, so that a second flock -n of test's is refused", "source": "scenario"},
         {"assertion_id": "up", "checks": "the volume-up key moves mixer's reading to vol 55:55", "source": "scenario"},
         {"assertion_id": "down", "checks": "the volume-down key moves it back to vol 50:50", "source": "scenario"},
         {"assertion_id": "mute", "checks": "the mute key moves it to vol 0:0 muted", "source": "scenario"},
+        {"assertion_id": "saved", "checks": "with test's lock held, /var/lib/mixer comes to hold vol 0:0 and mute 50:50, /var/run/acpi.lock and /var/run/mixer.lock are mode 600, and test's flock -n of either fails", "source": "scenario"},
         {"assertion_id": "unmute", "checks": "the mute key again moves it back to vol 50:50", "source": "scenario"},
         {"assertion_id": "acpid-path", "checks": "the PATH in acpid's /proc/PID/environ is /sbin:/usr/sbin:/bin:/usr/bin", "source": "scenario"},
         {"assertion_id": "radio", "checks": "the one Wi-Fi switch under /sys/class/rfkill starts with soft block 0", "source": "scenario"},

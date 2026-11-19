@@ -308,6 +308,7 @@ static int backlight_count;
 #define MIXER_PENDING  "/var/lib/mixer.tmp"
 #define MIXER_MUTE     "/var/run/mixer.mute"
 #define MIXER_OLD_MUTE "/var/lib/mixer.mute"
+#define MIXER_LOCK     "/var/run/mixer.lock"
 
 /* OSS's requests, with Linux's numbers: channel N's level, the left
  * channel's percentage in the low byte and the right's in the next, and the
@@ -951,30 +952,33 @@ static char *put_decimal(char *p, int v)
 }
 
 /**
- * Save the level of each channel in `mixer_mask`, and mixer(1)'s record of
- * a mute as the `mute` line, to `MIXER_KEPT` in one file: when `all`, as
- * the shutdown handler asks, else only when it differs from what the file
- * holds. Once the file is written, `MIXER_OLD_MUTE` goes. Makes only
- * system calls a handler may make. Hold a shared flock on the mixer while
- * reading its levels and the mute record, which mixer(1) changes under an
- * exclusive flock. A busy device is left to the next pass.
+ * Read the level of each channel in `mixer_mask`, and mixer(1)'s record of
+ * a mute as the `mute` line, into `text`, of `MIXER_TEXT` bytes, as
+ * `MIXER_KEPT` holds them. Hold a shared flock on `MIXER_LOCK` while
+ * reading them, which root's mixer(1) changes under an exclusive one; the
+ * file is mode 0600, so that no ordinary process can hold it, as it can
+ * hold `/dev/mixer`, and stop the saves. With no lock file to open, the
+ * levels are read unlocked. Returns the text's length, or -1 for a lock
+ * held, a device that cannot be read or a record that cannot be. Makes
+ * only system calls a handler may make.
  */
-static void save_mixer(int all)
+static int mixer_snapshot(char *text)
 {
-    char text[MIXER_TEXT];
     char mute[MUTE_RECORD_MAX + 1];
     const char *q = "none\n";
     char *p = text;
-    int dir, fd, i, n, volume = -1;
+    int fd, lock, i, n, volume = -1, ok = 1;
 
     if (mixer_mask == 0 || (fd = open(MIXER_DEVICE, O_RDWR)) < 0) {
-        return;
+        return -1;
     }
-    if (flock(fd, LOCK_SH | LOCK_NB) != 0) {
+    lock = open(MIXER_LOCK, O_RDWR | O_CREAT, 0600);
+    if (lock >= 0 && flock(lock, LOCK_SH | LOCK_NB) != 0) {
+        close(lock);
         close(fd);
-        return;
+        return -1;
     }
-    for (i = 0; i < MIXER_CHANNELS; i++) {
+    for (i = 0; ok && i < MIXER_CHANNELS; i++) {
         const char *name = mixer_names[i];
         int level;
 
@@ -982,8 +986,8 @@ static void save_mixer(int all)
             continue;
         }
         if (ioctl(fd, MIXER_READ(i), &level) != 0) {
-            close(fd);
-            return;
+            ok = 0;
+            break;
         }
         if (i == MIXER_VOLUME) {
             volume = level;
@@ -997,26 +1001,45 @@ static void save_mixer(int all)
         p = put_decimal(p, level >> 8 & 0xFF);
         *p++ = '\n';
     }
-    if (volume == 0) {
+    if (ok && volume == 0) {
         n = read_text(MIXER_MUTE, mute, sizeof(mute));
         if (n < 0 && errno != ENOENT) {
-            close(fd);
-            return;
-        }
-        if (n > 0 && n < (int)sizeof(mute) - 1 && mute_record(mute)) {
+            ok = 0;
+        } else if (n > 0 && n < (int)sizeof(mute) - 1 && mute_record(mute)) {
             q = mute;
         }
     }
+    if (lock >= 0) {
+        close(lock);
+    }
     close(fd);
+    if (!ok) {
+        return -1;
+    }
     for (i = 0; i < 5; i++) {
         *p++ = "mute "[i];
     }
     while (*q != '\0') {
         *p++ = *q++;
     }
-    n = (int)(p - text);
-    if ((!all && !text_differs(text, n, mixer_saved)) || keep_directory("/var", "/") != 0 ||
-        keep_directory("/var/lib", "/var") != 0 ||
+    return (int)(p - text);
+}
+
+/**
+ * Save the mixer's levels and its record of a mute (`mixer_snapshot`) to
+ * `MIXER_KEPT` in one file: when `all`, as the shutdown handler asks, else
+ * only when it differs from what the file holds. Once the file is written,
+ * `MIXER_OLD_MUTE` goes. A save that fails is noted as unsaved, so that the
+ * next pass writes it whatever the levels then. A lock held is left to the
+ * next pass. Makes only system calls a handler may make.
+ */
+static void save_mixer(int all)
+{
+    char text[MIXER_TEXT];
+    int dir, n = mixer_snapshot(text);
+
+    if (n < 0 || (!all && !text_differs(text, n, mixer_saved)) ||
+        keep_directory("/var", "/") != 0 || keep_directory("/var/lib", "/var") != 0 ||
         (dir = open("/var/lib", O_RDONLY | O_DIRECTORY)) < 0) {
         return;
     }

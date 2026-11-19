@@ -107,11 +107,15 @@ removes the record, so that a step up from a mute starts from 0, and a
 later
 .Cm mute
 records the new level.
-Commands that change a setting hold an exclusive lock on
-.Pa /dev/mixer
-so that
+Run by root, a command that changes a setting holds an exclusive
+.Xr flock 2
+lock on
+.Pa /var/run/mixer.lock ,
+and one that reads holds a shared one, so that
 .Xr init 8
 can read the volume and the mute record together under a shared lock.
+The file is made mode 0600: an ordinary user, who cannot open it, runs
+unlocked, and no user's lock can stop the volume keys or init's saves.
 .Pp
 The levels set are kept across a halt, a power-off, a reboot and a reset:
 .Xr init 8
