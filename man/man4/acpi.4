@@ -99,6 +99,13 @@ and 0x89
 .Dv KEY_SWITCHVIDEOMODE .
 The kernel changes no brightness for these keys; user space does, through
 .Xr backlight 4 .
+On a machine with no other backlight, an output with
+.Fn _BCM
+is the backlight
+.Pa acpi_video0 ,
+whose levels are its
+.Fn _BCL
+list's.
 .Pp
 An IdeaPad's device
 .Ql VPC2004 ,

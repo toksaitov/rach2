@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 19, 2026
 .Dt BACKLIGHT 4
 .Os
 .Sh NAME
@@ -40,8 +40,14 @@ and
 .Dv FB_BLANK_POWERDOWN ;
 root writes either.
 .It Pa type
-.Ql raw :
-the levels are the hardware's own, not a scale of perceived brightness.
+.Ql raw
+when the levels are the hardware's own, as
+.Pa intel_backlight Ns 's ,
+or
+.Ql firmware
+when the firmware's methods set them, as
+.Pa acpi_video0 Ns 's ;
+neither is a scale of perceived brightness.
 .El
 .Pp
 The backlight is also off while the console is blank, whatever
@@ -50,7 +56,11 @@ says, and comes back at the level set when the console is shown again;
 see
 .Xr console 4 .
 The level is not kept across a reboot by the kernel; the system's init
-saves it at shutdown and writes it back at boot.
+saves it within a second of a change and at shutdown, and writes it back at
+boot, as systemd-backlight does; see
+.Xr init 8 .
+The kernel logs each write of a level at the debug level, and a driver's
+own change of it, as i915's below, at the info level.
 .Ss intel_backlight
 On a laptop whose Intel graphics and chipset are of the Haswell and
 Broadwell generation, the chipset a Lynx Point or Wildcat Point, the
@@ -86,7 +96,28 @@ period, 18 to 937 on the Lenovo, turns the backlight off at level 0, and
 gives an
 .Pa actual_brightness
 of 0 while the pipe is off.
+When it turns the panel on at a level at or below that least, it raises
+the level to the most, as Linux's i915 does, and
+.Pa brightness
+then reads the most.
 When the device goes the boot's driver takes the backlight back.
+A driver that takes the backlight over and reads no lit level, as i915
+after the device's reset does, is given the level set before, so that the
+level survives the change.
+.Ss acpi_video0
+On a machine with no backlight of its own driver, an output of the ACPI
+video bus whose firmware has the
+.Fn _BCM
+method is
+.Pa acpi_video0 ,
+as Linux's acpi_video driver gives it: its levels index the firmware's list
+.Fn _BCL ,
+whose entries are percentages, and a level written is given to
+.Fn _BCM .
+Its level at boot is the one
+.Fn _BQC
+reads, or the highest.
+It has no switch of its own: off, it is at level 0.
 .Sh FILES
 .Bl -tag -width /sys/class/backlight/NAME
 .It Pa /sys/class/backlight/NAME
@@ -128,6 +159,8 @@ A write of a number that an unsigned long cannot hold.
 A write by a user other than root.
 .El
 .Sh SEE ALSO
+.Xr acpi 4 ,
 .Xr console 4 ,
 .Xr i915 4 ,
-.Xr sysfs 5
+.Xr sysfs 5 ,
+.Xr init 8
