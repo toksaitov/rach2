@@ -978,7 +978,7 @@ static int mixer_snapshot(char *text)
         close(fd);
         return -1;
     }
-    for (i = 0; ok && i < MIXER_CHANNELS; i++) {
+    for (i = 0; i < MIXER_CHANNELS; i++) {
         const char *name = mixer_names[i];
         int level;
 
