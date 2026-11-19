@@ -63,4 +63,4 @@ A regular file's seals are the `TMPFS_SEAL_` bits, which have the values of `fcn
 ## Tests
 
 * `tests/run host` runs `tmpfs_hosttest`, which includes `tmpfs.c` and `../mm/shmem.c` over a pool of host pages and covers file bytes and holes, links, renames, the kinds of node, listings, held and removed nodes, the mount's limits of pages and inodes, the inode flags, extended attributes, `fallocate`, truncation of mapped pages, and memfds and seals.
-* `tests/run default` runs `musl/tmpfsmusl` (a mount of its own, its unmount, remount and binds, and `/dev/shm`), `musl/memfdmusl` (each flag and seal), `musl/memcallmusl` (`memfd_secret` and `cachestat`), `musl/mknodmusl` and `musl/chrootmusl`.
+* `tests/run default` runs `musl/tmpfsmusl` (a mount of its own, its unmount, remount and binds, its inode limit, inode flags and extended attributes, and `/dev/shm`), `musl/memfdmusl` (each flag and seal), `musl/memcallmusl` (`memfd_secret` and `cachestat`), `musl/mknodmusl` and `musl/chrootmusl`.
