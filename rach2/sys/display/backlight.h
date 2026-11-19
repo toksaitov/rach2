@@ -19,8 +19,9 @@
  * off, and gives the driver the level set and whether the backlight is on:
  * off while bl_power is off or the console is blank (blank.h). A driver with
  * a switch turns the backlight off by it and keeps the level; one without
- * is given the level 0. bl_power shows what root wrote, whatever the
- * console does.
+ * is given the level 0, unless its level 0 is lit
+ * (`backlight_set_lit_at_zero`), which keeps its level through a blank.
+ * bl_power shows what root wrote, whatever the console does.
  */
 
 /* The most backlights. */
@@ -96,8 +97,9 @@ void backlight_driver_level(int i, int level, const char *why);
 void backlight_set_type(int i, const char *type);
 
 /** Note that backlight `i`'s level 0 still lights the panel, as an ACPI
- * _BCL whose least level is above 0 does, so that a blank cannot darken
- * the panel by it. At boot, before any reader. */
+ * _BCL whose least level is above 0 does, so that a blank does not count
+ * on it to darken the panel and leaves its level, as Linux's acpi_video
+ * does. At boot, before any reader. */
 void backlight_set_lit_at_zero(int i);
 
 /** Whether a blank turns some panel's backlight dark: a backlight with a

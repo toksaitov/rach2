@@ -33,11 +33,22 @@ static int nlights;
 static int console_blank;
 static struct spinlock lock = SPINLOCK_INIT_NAMED("backlight_lock");
 
+/** Whether backlight `b` is to be on, with `lock` held: while bl_power is
+ * on and the console is not blank. A backlight with no switch whose level
+ * 0 still lights the panel stays at its level through a blank, as Linux's
+ * acpi_video leaves its level at a framebuffer's blank, since 0 would only
+ * dim it to its least lit level. */
+static int lit(const struct backlight *b)
+{
+    return b->power == BACKLIGHT_ON &&
+           (!console_blank || (b->ops->power == NULL && b->lit_at_zero));
+}
+
 /** Give backlight `b` its level and turn it on or off, by its driver's
  * switch or else by the level 0, with `lock` held. */
 static void apply(struct backlight *b)
 {
-    int on = b->power == BACKLIGHT_ON && !console_blank;
+    int on = lit(b);
 
     if (b->ops->power != NULL) {
         b->ops->set(b->ctx, b->level);
@@ -107,7 +118,7 @@ int backlight_rebind(const char *name, int max, const struct backlight_ops *ops,
         if (ops->power != NULL) {
             ops->set(ctx, kept);
         } else {
-            ops->set(ctx, b->power == BACKLIGHT_ON && !console_blank ? kept : 0);
+            ops->set(ctx, lit(b) ? kept : 0);
         }
     }
     level = b->level;
