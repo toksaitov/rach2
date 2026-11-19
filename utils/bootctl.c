@@ -19,6 +19,8 @@
  *                            boot a root image on a partition once
  *     bootctl booted         clear GRUB's recordfail: this boot reached
  *                            user space
+ *     bootctl fsck UUID[,UUID...]
+ *                            run recovery's e2fsck -p on those volumes once
  *
  * `--target PARTITION` before the verb selects a boot partition other than
  * `/dev/bootpart`, for every verb but `grub` and `commit`.
@@ -57,6 +59,12 @@
  * sets its default after it sources the slot, so the block consumes the
  * trial itself and boots it at once; the next boot takes the saved default.
  *
+ * `fsck` is the installed system's way to e2fsck: its kernel takes no raw
+ * write of a partition, so init, finding a volume the kernel left read-only
+ * for e2fsck, has this write a block like the trial root's that boots the
+ * recovery system once with `rach2.fsck=UUID,...`, whose init checks those
+ * volumes with nothing of the disk mounted and restarts the machine.
+ *
  * `booted` is Ubuntu's `grub-editenv unset recordfail`, which init runs once
  * a boot from a kernel slot has reached user space. The menu's candidate
  * entries set `recordfail=1` in the block before they load the kernel, and
@@ -71,6 +79,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "bootslot.h"
@@ -430,19 +439,37 @@ static uint32_t menu_line(uint32_t from, const char *line)
 }
 
 /**
- * Where the trial root's block is in `menu`: `*from` its first byte and `*to`
- * the byte past its end line, or past the menu when a cut write lost that
- * line. Returns 1, or 0 when the menu has no block.
+ * Where the block that opens with a line beginning `begin` and closes with
+ * the line `end` is in `menu`: `*from` its first byte and `*to` the byte past
+ * its end line, or past the menu when a cut write lost that line. Returns 1,
+ * or 0 when the menu has no such block.
  */
-static int trial_block(uint32_t *from, uint32_t *to)
+static int menu_block(const char *begin, const char *end, uint32_t *from, uint32_t *to)
 {
-    *from = menu_line(0, TRIAL_BEGIN);
+    *from = menu_line(0, begin);
     if (*from == menu_len) {
         return 0;
     }
-    *to = menu_line(*from, TRIAL_END);
-    *to = *to == menu_len ? menu_len : *to + (uint32_t)strlen(TRIAL_END);
+    *to = menu_line(*from, end);
+    *to = *to == menu_len ? menu_len : *to + (uint32_t)strlen(end);
     return 1;
+}
+
+/** Where the trial root's block is in `menu`, as `menu_block` says. */
+static int trial_block(uint32_t *from, uint32_t *to)
+{
+    return menu_block(TRIAL_BEGIN, TRIAL_END, from, to);
+}
+
+/* The lines that open and close the block of recovery's check, the first
+ * followed by the time it was armed, in seconds since the epoch. */
+static const char FSCK_BEGIN[] = "# bootctl fsck: armed at ";
+static const char FSCK_END[] = "# bootctl fsck: end\n";
+
+/** Where the block of recovery's check is in `menu`, as `menu_block` says. */
+static int fsck_block(uint32_t *from, uint32_t *to)
+{
+    return menu_block(FSCK_BEGIN, FSCK_END, from, to);
 }
 
 /** Print what `rach2.rootimage=` the trial block in `menu` names, as
@@ -461,6 +488,53 @@ static void print_trial_root(void)
             for (end = at; end < to && menu[end] != ' ' && menu[end] != '\n'; end++) {
             }
             printf("bootctl: trial root: %.*s\n", (int)(end - at), (const char *)menu + at);
+            return;
+        }
+    }
+}
+
+/**
+ * The time the block of recovery's check in `menu` was armed at, in
+ * `*armed`. Returns 1, or 0 when the menu has no block or its first line
+ * has no time.
+ */
+static int fsck_armed_at(unsigned long *armed)
+{
+    uint32_t from, to, at;
+    unsigned long t = 0;
+
+    if (!fsck_block(&from, &to)) {
+        return 0;
+    }
+    at = from + (uint32_t)strlen(FSCK_BEGIN);
+    if (at >= menu_len || menu[at] < '0' || menu[at] > '9') {
+        return 0;
+    }
+    for (; at < menu_len && menu[at] >= '0' && menu[at] <= '9'; at++) {
+        t = t * 10 + (unsigned long)(menu[at] - '0');
+    }
+    *armed = t;
+    return 1;
+}
+
+/** Print the volumes the block of recovery's check in `menu` names and the
+ *  time it was armed, as `bootctl: recovery's check: rach2.fsck=LIST, armed
+ *  at T`; nothing when it has no block. */
+static void print_fsck_check(void)
+{
+    static const char key[] = "rach2.fsck=";
+    uint32_t from, to, at, end;
+    unsigned long armed;
+
+    if (!fsck_block(&from, &to) || !fsck_armed_at(&armed)) {
+        return;
+    }
+    for (at = from; at + sizeof(key) - 1 <= to; at++) {
+        if (memcmp(menu + at, key, sizeof(key) - 1) == 0) {
+            for (end = at; end < to && menu[end] != ' ' && menu[end] != '\n'; end++) {
+            }
+            printf("bootctl: recovery's check: %.*s, armed at %lu\n", (int)(end - at),
+                   (const char *)menu + at, armed);
             return;
         }
     }
@@ -522,6 +596,7 @@ static int cmd_status(void)
     print_env(env, "next_entry", 1);
     if (bs.have_menu && menu_load() == 0) {
         print_trial_root();
+        print_fsck_check();
     }
     print_booted();
     print_slot_size();
@@ -787,15 +862,18 @@ static int cmd_env(const char *key, const char *value)
 }
 
 /**
- * Whether `word` of `len` bytes is one a trial root's line leaves out: one
- * that chooses the root, the slot or the debug shell, which the block sets
- * itself or which would take its place, and a path a loader put first.
+ * Whether `word` of `len` bytes is one a trial root's line, or recovery's
+ * check's, leaves out: one that chooses the root, the slot, the debug shell
+ * or a check, which the block sets itself or which would take its place, and
+ * a path a loader put first.
  */
 static int trial_drops(const char *word, size_t len)
 {
     static const char *const prefixes[] = {
-        "rach2.root=", "rach2.rootfstype=", "rach2.rootimage=", "rach2.slot=", "init="};
-    static const char *const flags[] = {"rach2.fsdisk", "rach2.fswindow", "rach2.rescue"};
+        "rach2.root=", "rach2.rootfstype=", "rach2.rootimage=", "rach2.slot=",
+        "init=",       "rach2.fsck="};
+    static const char *const flags[] = {"rach2.fsdisk", "rach2.fswindow", "rach2.rescue",
+                                        "rach2.fsck"};
     size_t i;
 
     if (word[0] == '/') {
@@ -854,26 +932,96 @@ static int trial_tokens(char tokens[KERNEL_LINE_MAX + 1], size_t *used)
     return 0;
 }
 
+/** Put the FAT serial of the volume whose first sector is `sector` in
+ *  `serial`, as GRUB's `search --fs-uuid` names it, `XXXX-XXXX` in upper
+ *  case. */
+static void fat_serial(const uint8_t *sector, char serial[10])
+{
+    int at = memcmp(sector + 82, "FAT32   ", 8) == 0 ? 67 : 39; /* BS_VolID of FAT32, FAT12/16 */
+    uint32_t id = (uint32_t)sector[at] | (uint32_t)sector[at + 1] << 8 |
+                  (uint32_t)sector[at + 2] << 16 | (uint32_t)sector[at + 3] << 24;
+
+    sprintf(serial, "%04X-%04X", (unsigned)(id >> 16), (unsigned)(id & 0xFFFFu));
+}
+
 /**
- * Put the open boot partition's FAT serial in `serial`, as GRUB's `search
- * --fs-uuid` names it, `XXXX-XXXX` in upper case: the stub's entries find
- * their kernel by it. Returns 0, or -1 having said why: the first sector
- * does not read.
+ * Put the open boot partition's FAT serial in `serial`, as `fat_serial`
+ * gives it: the stub's entries find their kernel by it. Returns 0, or -1
+ * having said why: the first sector does not read.
  */
 static int boot_serial(char serial[10])
 {
     uint8_t sector[BOOTSLOT_SECTOR];
-    uint32_t id;
-    int at;
 
     if (dev_read(0, 0, 1, sector) != 0) {
         fprintf(stderr, "bootctl: the boot partition's first sector does not read\n");
         return -1;
     }
-    at = memcmp(sector + 82, "FAT32   ", 8) == 0 ? 67 : 39; /* BS_VolID of FAT32, or FAT12/16 */
-    id = (uint32_t)sector[at] | (uint32_t)sector[at + 1] << 8 | (uint32_t)sector[at + 2] << 16 |
-         (uint32_t)sector[at + 3] << 24;
-    sprintf(serial, "%04X-%04X", (unsigned)(id >> 16), (unsigned)(id & 0xFFFFu));
+    fat_serial(sector, serial);
+    return 0;
+}
+
+/* The disk numbers the kernel gives, DISK_MAX in rach2/sys/block/disk.h. */
+#define DISK_NODES 8
+
+/** Read the first sector of the node `path` into `sector`; 0, or -1. */
+static int node_sector(const char *path, uint8_t sector[BOOTSLOT_SECTOR])
+{
+    int fd = open(path, O_RDONLY);
+    ssize_t n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, sector, BOOTSLOT_SECTOR);
+    close(fd);
+    return n == BOOTSLOT_SECTOR ? 0 : -1;
+}
+
+/**
+ * Put the FAT serial of the recovery partition, entry 2 of the open boot
+ * partition's disk, in `serial`, as `fat_serial` gives it: the stub's
+ * recovery entry finds its kernel by it. The disk is the one whose
+ * `/dev/diskNp1` has the boot partition's first sector, which holds the
+ * volume's serial; disks that are copies of each other must agree on their
+ * recovery partition's serial, as GRUB, which searches by it, would take
+ * either. Returns 0, or -1 having said why: no disk's entry 2 is a FAT
+ * volume, or two disks name different ones.
+ */
+static int recovery_serial(char serial[10])
+{
+    uint8_t boot[BOOTSLOT_SECTOR], first[BOOTSLOT_SECTOR];
+    char node[24], found[10];
+    int n;
+
+    if (dev_read(0, 0, 1, boot) != 0) {
+        fprintf(stderr, "bootctl: the boot partition's first sector does not read\n");
+        return -1;
+    }
+    serial[0] = '\0';
+    for (n = 0; n < DISK_NODES; n++) {
+        snprintf(node, sizeof(node), "/dev/disk%dp1", n);
+        if (node_sector(node, first) != 0 || memcmp(first, boot, sizeof(boot)) != 0) {
+            continue;
+        }
+        snprintf(node, sizeof(node), "/dev/disk%dp2", n);
+        if (node_sector(node, first) != 0 || first[510] != 0x55 || first[511] != 0xAA ||
+            (memcmp(first + 82, "FAT32   ", 8) != 0 && memcmp(first + 54, "FAT", 3) != 0)) {
+            continue;
+        }
+        fat_serial(first, found);
+        if (serial[0] != '\0' && strcmp(serial, found) != 0) {
+            fprintf(stderr, "bootctl: two disks have this boot partition and different recovery "
+                            "partitions\n");
+            return -1;
+        }
+        memcpy(serial, found, sizeof(found));
+    }
+    if (serial[0] == '\0') {
+        fprintf(stderr, "bootctl: the boot partition's disk has no FAT recovery partition as "
+                        "its entry 2\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -988,6 +1136,142 @@ static int cmd_rootimage(const char *spec)
     printf("bootctl: armed: the next boot starts the candidate's kernel on %s once; the boot "
            "after it takes the saved default\n",
            spec);
+    return 0;
+}
+
+/* How long after recovery's check was armed it is not armed again, in
+ * seconds: a fault the check does not mend, or a check that does not end,
+ * then costs a round of boots an hour, and the machine does not keep
+ * restarting. */
+#define FSCK_AGAIN_SECONDS 3600
+
+/** Whether `list` is one or more ext2 UUIDs, as `blkid` prints them, in
+ *  lower case and separated by commas; says why not. */
+static int fsck_list_ok(const char *list)
+{
+    size_t i, at = 0;
+
+    for (i = 0;; i++, at++) {
+        char c = list[i];
+
+        if (at == 36 && (c == ',' || c == '\0')) {
+            if (c == '\0') {
+                return 1;
+            }
+            at = (size_t)-1;
+            continue;
+        }
+        if (at == 36 || c == '\0' ||
+            ((at == 8 || at == 13 || at == 18 || at == 23)
+                 ? c != '-'
+                 : !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))) {
+            fprintf(stderr, "bootctl: '%s' is not ext2 UUIDs separated by commas\n", list);
+            return 0;
+        }
+    }
+}
+
+/**
+ * Write the menu slot as `menu` with the block of recovery's check, if it
+ * has one, taken out and a new one at its end, armed at `now`, that boots
+ * the recovery kernel of the partition of serial `serial` once with
+ * `rach2.fsck=LIST` and `tokens`. Returns 0, or -1 having said why: it does
+ * not fit the slot, or the slot does not write.
+ */
+static int write_fsck_menu(unsigned long now, const char *serial, const char *list,
+                           const char *tokens)
+{
+    static uint8_t text[MENU_MAX];
+    uint32_t from, to, len = menu_len;
+    int w;
+
+    memcpy(text, menu, len);
+    if (fsck_block(&from, &to)) {
+        memmove(text + from, text + to, len - to);
+        len -= to - from;
+    }
+    if (len > 0 && text[len - 1] != '\n') {
+        text[len++] = '\n';
+    }
+    w = snprintf((char *)text + len, sizeof(text) - len,
+                 "%s%lu\n"
+                 "if [ \"${next_entry}\" = \"fsck\" ]; then\n"
+                 "    set next_entry=\n"
+                 "    save_env next_entry\n"
+                 "    search --no-floppy --fs-uuid --set=root %s\n"
+                 "    multiboot2 /boot/recovery rach2.root=ram rach2.slot=recovery "
+                 "rach2.fsck=%s%s\n"
+                 "    module2 /boot/recovery.krffs\n"
+                 "    if [ \"$grub_platform\" = pc ]; then set gfxpayload=auto; fi\n"
+                 "    boot\n"
+                 "fi\n"
+                 "%s",
+                 FSCK_BEGIN, now, serial, list, tokens, FSCK_END);
+    if (w < 0 || (size_t)w >= sizeof(text) - len || len + (uint32_t)w > bs.menu.size) {
+        fprintf(stderr, "bootctl: the menu with recovery's check does not fit the %u-byte slot\n",
+                (unsigned)bs.menu.size);
+        return -1;
+    }
+    if (bootslot_write_menu(&bs, text, len + (uint32_t)w, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Arm one boot of the recovery system that runs `e2fsck -p` on the ext2
+ * volumes whose UUIDs `list` names, separated by commas, and then restarts
+ * the machine, whose next boot takes the saved default. init runs this on an
+ * installed system whose kernel left a volume read-only for e2fsck, since
+ * that kernel takes no raw write of a partition and recovery's, with nothing
+ * of the disk mounted, does.
+ *
+ * The entry boots the kernel and RAM image of the recovery partition, entry 2
+ * of the boot partition's disk, found by its FAT serial (`recovery_serial`),
+ * with `rach2.root=ram`, `rach2.slot=recovery`, `rach2.fsck=LIST` and the
+ * rest of this boot's line, so that recovery has this machine's network and
+ * console. It goes into the menu slot between FSCK_BEGIN, which carries the
+ * time it was armed, and FSCK_END, in place of an earlier one; the rest of
+ * the menu is kept. The stub does not know `fsck`, and the block consumes
+ * the trial itself as the trial root's does. The check is not armed again
+ * within FSCK_AGAIN_SECONDS of the last arming, or when the clock reads
+ * earlier than it. Returns 0, or 1 having said why not.
+ */
+static int cmd_fsck(const char *list)
+{
+    static char tokens[KERNEL_LINE_MAX + 1];
+    unsigned long armed, now = (unsigned long)time(NULL);
+    char serial[10];
+    size_t used;
+
+    if (!fsck_list_ok(list) || open_slot() != 0 || menu_load() != 0 ||
+        trial_tokens(tokens, &used) != 0) {
+        return 1;
+    }
+    if (fsck_armed_at(&armed) && (now < armed || now - armed < FSCK_AGAIN_SECONDS)) {
+        fprintf(stderr,
+                "bootctl: recovery's check was armed at %lu and the clock reads %lu; it is "
+                "not armed again within %d seconds\n",
+                armed, now, FSCK_AGAIN_SECONDS);
+        return 1;
+    }
+    if (strlen("rach2.root=ram rach2.slot=recovery rach2.fsck=") + strlen(list) + used >
+        KERNEL_LINE_MAX) {
+        fprintf(stderr, "bootctl: the check's line would pass the kernel's %d bytes\n",
+                KERNEL_LINE_MAX);
+        return 1;
+    }
+    if (recovery_serial(serial) != 0 || write_fsck_menu(now, serial, list, tokens) != 0) {
+        return 1;
+    }
+    if (bootslot_env_set(&bs, "next_entry", "fsck", errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: armed: the next boot runs recovery's e2fsck -p on %s once and restarts; "
+           "the boot after it takes the saved default\n",
+           list);
     return 0;
 }
 
@@ -1261,6 +1545,7 @@ static void usage(void)
     fprintf(stderr, "       bootctl env <key> [value]\n");
     fprintf(stderr, "       bootctl rootimage <spec>:<path>\n");
     fprintf(stderr, "       bootctl booted\n");
+    fprintf(stderr, "       bootctl fsck <uuid>[,<uuid>...]\n");
     fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
 
@@ -1323,6 +1608,8 @@ int main(int argc, char **argv)
         return cmd_rootimage(arg);
     case BOOTVERB_BOOTED:
         return cmd_booted();
+    case BOOTVERB_FSCK:
+        return cmd_fsck(arg);
     default:
         break;
     }
