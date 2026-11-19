@@ -448,6 +448,7 @@ static void rule_artifacts(const struct rule *r)
 static void card_of(const struct json *v, struct etude_qemu_device *d)
 {
     const struct json *hub = json_member(v, "hub"), *restricted = json_member(v, "restrict");
+    const struct json *tap = json_member(v, "tap_queues");
     const struct json *forwards = json_member(v, "forwards");
     const struct json *guest_forwards = json_member(v, "guest_forwards");
 
@@ -459,6 +460,7 @@ static void card_of(const struct json *v, struct etude_qemu_device *d)
     d->dns = json_text(v, "dns");
     d->mac = json_text(v, "mac");
     d->hub = hub != NULL && hub->integer != 0;
+    d->tap_queues = tap != NULL && tap->integer > 0 ? (unsigned)tap->integer : 0;
     d->restricted = restricted != NULL && restricted->integer != 0;
     d->forward_count = forwards != NULL ? forwards->count : 0;
     d->guest_forward_count = guest_forwards != NULL ? guest_forwards->count : 0;
@@ -1235,8 +1237,8 @@ static void machine_networks(const struct rule *r, const struct json *m)
 
 /**
  * A machine's forwards are those the launcher takes, and the cards of a guest
- * case's boot have no forwards, no guest forwards and no restriction, which
- * only a scenario's machines are given.
+ * case's boot have no forwards, no guest forwards, no restriction and no
+ * tap, which only a scenario's machines are given.
  */
 static void rule_networks(const struct rule *r)
 {
@@ -1249,9 +1251,10 @@ static void rule_networks(const struct rule *r)
         const struct json *dev = devs->item[i], *restricted = json_member(dev, "restrict");
 
         if (json_member(dev, "forwards") != NULL || json_member(dev, "guest_forwards") != NULL ||
+            json_member(dev, "tap_queues") != NULL ||
             (restricted != NULL && restricted->integer != 0)) {
             finding(r->file, dev->line,
-                    "%s: a guest case's boot has no forwards, no guest forwards and no "
+                    "%s: a guest case's boot has no forwards, no guest forwards, no tap and no "
                     "restricted network, which only a scenario's machines are given",
                     json_text(r->c, "case_id"));
         }
