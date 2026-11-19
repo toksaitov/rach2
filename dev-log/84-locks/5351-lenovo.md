@@ -1,19 +1,20 @@
 # 84-5351: the prepared Lenovo trial of vhost-net
 
-The task is ready for the manager's go, not booted. One trial boot of the task's x86-64 kernel on the 84-58 trial root, whose QEMU 10.0.13 runs the KVM suite's Debian guest with `-netdev tap,vhost=on`. The step is silent and takes no screen; it needs no notice.
+The task is ready for the manager's go once Codex has reviewed the fixes of its first review, not booted. One trial boot of the task's x86-64 kernel on the 84-58 trial root, whose QEMU 10.0.13 runs the KVM suite's Debian guest with `-netdev tap,vhost=on`. The step is silent and takes no screen; it needs no notice.
 
 ## What it proves
 
 * `/dev/vhost-net` exists as 10:238 and `vhostmusl` drives it on the Lenovo as on QEMU: `VHOSTMUSL OK`, 26 checks.
-* QEMU's `vhost=on`, unchanged, runs a Linux guest whose virtio-net frames go through the kernel: the guest loads `virtio_net`, takes 10.9.0.2/24 and pings the tap's 10.9.0.1 ten times with 56-byte and ten times with 1400-byte payloads, then prints `GUESTNET OK`. QEMU refuses to start when `vhost=on` cannot set the device up, so a pass is the kernel's path, kick through KVM's ioeventfd and call through its irqfd, or QEMU's own relay of them where KVM lacks a route.
+* QEMU's `vhost=on`, unchanged, runs a Linux guest whose virtio-net frames go through the kernel: the guest loads `virtio_net`, takes 10.9.0.2/24 and pings the tap's 10.9.0.1 ten times with 56-byte and ten times with 1400-byte payloads, and prints `GUESTNET OK` only when both batches had all ten answered.
+* The kernel moved those frames, not QEMU. QEMU opens `/dev/vhost-net` at its start but falls back to its own relay, with `unable to start vhost net` or `falling back on userspace virtio` on its stderr, when the device refuses the queues. So the step requires both that QEMU's stderr has no such line and that the device's own count, which it logs when QEMU lets the tap go, `vhost-net: detached: tap5351: N frames to the guest, M from it`, has N and M of at least 20 each, the pings' replies and requests.
 
 ## Readiness for the go
 
-vhost-net touches no device register, DMA, interrupt or mapping that gives a program a device. It is software: a character device, one kernel thread at ordinary priority, and the receive path the tap already calls under `tap_lock` with interrupts off. Every loop in it is bounded: a descriptor chain by the ring's size, a transmit pass by 128 frames, the drain of the tap's queue by its 1024 frames. The device's lock, `vnet`, nests inside `tap_lock` and outside eventfd's, as the lock-order table of `rach2/sys/proc/Readme.md` gives in row 11; nothing under it sleeps, and the pins it holds are taken and dropped outside it. A guest's bad ring stops that ring and signals its error eventfd; it cannot reach the host's memory beyond the table's pinned regions. Booting the kernel only starts the thread and registers the node; nothing runs until a program opens the device.
+vhost-net touches no device register, DMA, interrupt or mapping that gives a program a device. It is software: a character device, one kernel thread at ordinary priority, and the receive path the tap already calls under `tap_lock` with interrupts off. Every loop in it is bounded: a descriptor chain by the ring's size, a transmit pass by 128 frames, the drain of the tap's queue by its 1024 frames, a refill by the changes of the page under way. The device's lock, `vnet`, nests inside `tap_lock` and outside eventfd's, as the lock-order table of `rach2/sys/proc/Readme.md` gives in row 11; nothing under it sleeps. The guest's memory is held through pins that follow QEMU's address space (`PIN_FOLLOW`): each holds a page from the thread's refill to the next change of that page, a balloon's discard, a write-back's write-protection, an unmap, and lets it go after taking `vnet` once, so the device never writes a frame QEMU no longer maps. A guest's bad ring stops that ring and signals its error eventfd; it cannot reach the host's memory beyond the table's regions of QEMU's own memory. Booting the kernel only starts the thread and registers the node; nothing runs until a program opens the device.
 
 The host test `tests/host/vhost_net_hosttest.c` runs the requests, the memory table, receive, transmit and teardown under ASan and UBSan, 0 failed. QEMU on WSL ran `vhostmusl` to `VHOSTMUSL OK`, 26 of 26, on the i686 kernel, the x86-64 kernel, and the i686 image under the x86-64 kernel, which passes vhost's requests from an i386 program untranslated. The Debian guest's `guestnet=` check ran to `GUESTNET OK` under QEMU's own user network on WSL, 20 of 20 pings answered.
 
-The task's diff has had no Codex review: the team account that wrote it cannot run Codex. A trial waits for no review; the review is owed before the task merges.
+Codex reviewed the task at b290c9a51 and found seven faults, all fixed on `task/5351` since: torn ring indices, pins left stale by a discard, a shared disk-backed RAM refused, a tap or kick closed by the program stopping a ring, `VHOST_SET_VRING_BUSYLOOP_TIMEOUT` refused, this step's want of proof that the kernel moved the frames, and the guest's ping check passing on one reply in ten. The owner's order of 2026-11-19 is one Codex review of those fixes, then this trial on a clean answer; the fixes have had no test run, as AGENTS.md's Testing section holds a commit under review.
 
 ## Build
 
@@ -62,15 +63,15 @@ After the boot require `/dev/loop0 / ext2 rw`, `booted: trialroot`, `/dev/disk0p
 ```
 L 'cat /proc/version; ls -l /dev/vhost-net /dev/kvm /dev/net/tun; qemu-system-x86_64 --version | head -1; dmesg | grep -e "^kvm" -e vhost' | tee "$R/trial-root.txt"
 L 'cd /data/trial5351/b && ./vhostmusl' 2>&1 | tee "$R/vhostmusl.out"
-L 'cd /data/trial5351/b && sh kvm-boot.sh -t "GUESTNET OK" -l guestnet=10.9.0.2:10.9.0.1 -k vmlinuz -i initrd -o /data/trial5351/vhost-on.log -- -netdev tap,id=n0,ifname=tap5351,script=/data/trial5351/b/ifup,downscript=no,vhost=on -device virtio-net-pci,netdev=n0; echo STATUS=$?; cat /proc/stat | grep -e kvm -e eventfd; dmesg | tail -40' 2>&1 | tee "$R/vhost-on.out"
+L 'cd /data/trial5351/b && sh kvm-boot.sh -t "GUESTNET OK" -l guestnet=10.9.0.2:10.9.0.1 -k vmlinuz -i initrd -o /data/trial5351/vhost-on.log -- -netdev tap,id=n0,ifname=tap5351,script=/data/trial5351/b/ifup,downscript=no,vhost=on -device virtio-net-pci,netdev=n0; echo STATUS=$?; echo "--- qemu stderr"; cat /data/trial5351/vhost-on.log.err; echo "--- end"; dmesg | grep "vhost-net: detached: tap5351"; dmesg | tail -40' 2>&1 | tee "$R/vhost-on.out"
 ```
 
 1. `trial-root.txt`: the trial kernel's build string, `/dev/vhost-net` `crw------- 10, 238`, QEMU 10.0.13 and `kvm: ready: vmx`.
 2. `vhostmusl.out`: `VHOSTMUSL OK`, after its 26 checks.
-3. `vhost-on.out`: `kvm-boot: result: pass: GUESTNET OK` and `STATUS=0`, both of the guest's ping summaries `10 packets transmitted, 10 packets received, 0% packet loss`, and no fault, warning or lockup in the log's tail.
+3. `vhost-on.out`: `kvm-boot: result: pass: GUESTNET OK` and `STATUS=0`; both of the guest's ping summaries `10 packets transmitted, 10 packets received, 0% packet loss`; between `--- qemu stderr` and `--- end` no line with `vhost`; the line `vhost-net: detached: tap5351: N frames to the guest, M from it` with N and M each 20 or more; and no fault, warning or lockup in the log's tail. A pass without the detached line, or with a count under 20, is a fail: QEMU moved the frames itself.
 
 If step 3 fails, run it once more with `vhost=off` in place of `vhost=on` and `vhost-off` in the names: a pass there puts the fault in vhost-net, a failure in the tap or KVM. Save both and stop; the fix is this task's.
 
 ## Restore and record
 
-As `4893-lenovo.md`'s "Restore and record", with `5351` for `4893`: empty the menu before the boot back, put the release in both slots, check them against the release record, remove `/data/trial5351` (the root image too, unless another open task names it), give up the lock and stop the netconsole receiver by its pid. Save the outputs, the netconsole log and the guest's console logs under `5351/lenovo/`, write the result in this file, close subtasks 5353 and 5356, and hand the task back for its Codex review and merge.
+As `4893-lenovo.md`'s "Restore and record", with `5351` for `4893`: empty the menu before the boot back, put the release in both slots, check them against the release record, remove `/data/trial5351` (the root image too, unless another open task names it), give up the lock and stop the netconsole receiver by its pid. Save the outputs, the netconsole log and the guest's console logs under `5351/lenovo/`, write the result in this file, close subtasks 5353 and 5356, and hand the task back for its merge.
