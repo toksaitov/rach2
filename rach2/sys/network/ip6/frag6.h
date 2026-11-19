@@ -98,4 +98,9 @@ int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, con
  */
 void frag6_tick(void);
 
+/** Free every reassembly of fragments received on `nd`, counted as
+ * failures, so that no queue keeps an interface that is being withdrawn.
+ * Called with interrupts off, from `ip6_forget_dev`. */
+void frag6_forget(const struct netdev *nd);
+
 #endif /* _FRAG6_H_ */
