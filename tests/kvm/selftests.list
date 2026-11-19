@@ -109,6 +109,6 @@ x86_64/vmx_tsc_adjust_test excluded skip nested virtualization, excluded by the 
 x86_64/xapic_ipi_test pass pass
 x86_64/xapic_state_test pass pass
 x86_64/xcr0_cpuid_test pass pass
-x86_64/xen_shinfo_test skip skip Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_SHARED_INFO
-x86_64/xen_vmcall_test skip skip Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+x86_64/xen_shinfo_test pass skip Linux: Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_SHARED_INFO, WSL's kernel being built without CONFIG_KVM_XEN
+x86_64/xen_vmcall_test pass skip Linux: Requirement not met: xen_caps & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL, WSL's kernel being built without CONFIG_KVM_XEN
 x86_64/xss_msr_test xsaves?pass:skip pass Requirement not met: kvm_cpu_has(X86_FEATURE_XSAVES), on a processor without XSAVES, as the Lenovo's i3-4030U

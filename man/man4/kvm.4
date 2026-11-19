@@ -1005,6 +1005,89 @@ whose
 the next
 .Dv KVM_RUN
 takes.
+.Ss Xen
+.Dv KVM_CHECK_EXTENSION
+of
+.Dv KVM_CAP_XEN_HVM
+gives Linux's bits:
+.Dv KVM_XEN_HVM_CONFIG_HYPERCALL_MSR ,
+.Dv KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL ,
+.Dv KVM_XEN_HVM_CONFIG_SHARED_INFO ,
+.Dv KVM_XEN_HVM_CONFIG_RUNSTATE ,
+.Dv KVM_XEN_HVM_CONFIG_EVTCHN_2LEVEL ,
+.Dv KVM_XEN_HVM_CONFIG_EVTCHN_SEND ,
+.Dv KVM_XEN_HVM_CONFIG_RUNSTATE_UPDATE_FLAG ,
+.Dv KVM_XEN_HVM_CONFIG_PVCLOCK_TSC_UNSTABLE
+and
+.Dv KVM_XEN_HVM_CONFIG_SHARED_INFO_HVA .
+.Dv KVM_XEN_HVM_CONFIG
+names the MSR whose write fills a page with the guest's hypercall stubs, and
+with
+.Dv KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+makes the guest's VMCALL or VMMCALL a Xen hypercall.
+The Xen MSR is checked before Hyper-V's, and while the intercept is on
+Hyper-V's hypercall page sets bit 31 of the call's input, which sends a
+call with that bit to Hyper-V.
+.Pp
+.Dv KVM_XEN_HVM_SET_ATTR
+and
+.Dv KVM_XEN_HVM_GET_ATTR
+set and read the VM's attributes: the guest's long mode, the shared info
+page by guest frame or by the caller's address, the VM's upcall vector,
+the Xen version the guest is told, the runstate's update flag, and, on
+set alone, an event channel.
+An event channel delivers a port the guest sends on to a port of a vCPU,
+an IPI to its own port, or an interdomain port to an eventfd, and is
+assigned, updated, deassigned or, with
+.Dv KVM_XEN_EVTCHN_RESET ,
+all removed.
+.Dv KVM_XEN_VCPU_SET_ATTR
+and
+.Dv KVM_XEN_VCPU_GET_ATTR
+set and read a vCPU's: its vcpu_info by guest address or by the caller's,
+its time info, its runstate area, current state, times and adjustment, its
+Xen vCPU id, its singleshot timer and its own upcall vector.
+The kernel writes the guest's clock into the shared info, the vcpu_info and
+the time info as kvmclock does, and the runstate as Linux does, with the
+update flag when it is set.
+.Pp
+The kernel raises a port in the shared info's two-level bitmaps, sets the
+vCPU's selector and upcall flag, and interrupts the vCPU with its own
+vector, or the VM's as an external interrupt, whose acknowledgement leaves
+the local APIC as it was.
+.Dv KVM_XEN_HVM_EVTCHN_SEND
+raises a port from the caller, and a route of type
+.Dv KVM_IRQ_ROUTING_XEN_EVTCHN
+raises
+.Va port
+on the vCPU whose Xen id is
+.Va vcpu ,
+from
+.Dv KVM_IRQ_LINE
+or an irqfd.
+The kernel answers a hypercall from the guest's kernel of
+.Fn xen_version
+once the version is set,
+.Dv EVTCHNOP_send
+of a port an event channel delivers,
+.Dv SCHEDOP_poll ,
+which, with the local APIC in the kernel, halts the vCPU until a port it
+names is raised or its timeout passes,
+.Dv SCHEDOP_yield ,
+the singleshot timer's
+.Fn vcpu_op
+and
+.Fn set_timer_op ,
+the last two once the vCPU has a timer port.
+Any other hypercall ends the run in
+.Dv KVM_EXIT_XEN
+of type
+.Dv KVM_EXIT_XEN_HCALL ;
+the caller puts the result in
+.Va xen.u.hcall.result ,
+which the next
+.Dv KVM_RUN
+gives the guest.
 .Ss Performance counters
 The guest PMU follows the host: Intel architectural version 2 or earlier,
 with general and fixed counters; AMD legacy counters, the core-extension
@@ -1223,7 +1306,8 @@ with the split controller while a vector waits;
 a memory slot at guest addresses another has;
 an ioeventfd that some write would match along with another;
 .Dv KVM_HYPERV_EVENTFD
-of a connection that has an eventfd.
+of a connection that has an eventfd;
+a Xen event channel on a port that has one.
 .It Bq Er EBUSY
 .Dv KVM_SET_IDENTITY_MAP_ADDR
 or
@@ -1269,6 +1353,15 @@ without the full controller;
 of no ioeventfd;
 .Dv KVM_HYPERV_EVENTFD_DEASSIGN
 of a connection with no eventfd;
+.Dv KVM_XEN_HVM_GET_ATTR ,
+.Dv KVM_XEN_HVM_SET_ATTR ,
+.Dv KVM_XEN_VCPU_GET_ATTR
+or
+.Dv KVM_XEN_VCPU_SET_ATTR
+of an attribute it does not know;
+.Dv KVM_XEN_VCPU_GET_ATTR
+of the runstate area's address while there is none;
+the update or deassignment of a Xen event channel on a port with none;
 .Dv KVM_GET_DIRTY_LOG
 or
 .Dv KVM_CLEAR_DIRTY_LOG
