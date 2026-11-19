@@ -1,7 +1,8 @@
 /*
  * sleeplock_hosttest.c: the sleeping lock of rach2/sys/fs/sleeplock.c, its
  * order, its depth, the file locks it counts, its record of holds across a
- * disk wait, and the killable take, whose killed waiter leaves the line.
+ * disk wait, and the killable take, whose killed waiter leaves the line
+ * with no memory to spare.
  *
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/atomic_host.c
@@ -15,7 +16,9 @@
  * moves, and a disk wait is a step of `disk_waits`, as the block layer
  * counts one. The spinlocks are counted, so that a row sees that none is
  * held across a wait or after a take or a give. The atomic operations are
- * the host's (`atomic_host.c`). Each panic row runs the
+ * the host's (`atomic_host.c`). The heap refuses every allocation, as an
+ * exhausted one does, so that a lock that needed memory to let a killed
+ * waiter go would keep it. Each panic row runs the
  * violating call in a forked child, whose exit status says whether the
  * panic came and named the rule.
  */
@@ -84,28 +87,21 @@ void k_panic(const char *s)
     _exit(44);
 }
 
-/* The heap's live blocks, and whether it refuses every allocation, which a
- * row sets. */
-static int allocations, heap_full;
+/* The allocations the lock asked for, which the heap refused. */
+static int allocations;
 
-extern void *calloc(unsigned long count, unsigned long size);
-extern void free(void *ptr);
-
-/** Zeroed host memory, counted in `allocations`, or NULL while
- * `heap_full` is set. */
+/** The heap, exhausted: count the request and refuse it. */
 void *kzalloc(size_t size)
 {
-    void *ptr = heap_full ? 0 : calloc(1, size);
-
-    allocations += ptr != 0;
-    return ptr;
+    (void)size;
+    allocations++;
+    return 0;
 }
 
-/** Free what `kzalloc` gave, and count it. */
+/** Nothing to free, since `kzalloc` gives nothing. */
 void kfree(void *ptr)
 {
-    allocations -= ptr != 0;
-    free(ptr);
+    (void)ptr;
 }
 
 /* The clock, in microseconds, which a row moves, and the reads of it and
@@ -259,33 +255,28 @@ static struct sleep_lock_record rec_one = SLEEP_LOCK_RECORD("one");
 static struct sleep_lock_record rec_two = SLEEP_LOCK_RECORD("two");
 static struct sleep_lock lock, file_lock, other;
 
-/* Where `a_barred` returns to: the take that A abandons in `a_gives`. */
-static jmp_buf barred;
-
-/** A step as process A, waiting again for the lock it gave: abandon the
- * take, since B, which has the place before it, cannot run until A's
- * step ends. */
-static void a_barred(void)
+/** A step as the signal's sender: SIGKILL pending for process A. */
+static void kill_a(void)
 {
-    longjmp(barred, 1);
+    proc_a.sig_pending |= KSIG_BIT(SIGKILL);
 }
 
-/** A step as process A: give `lock` back, and ask for it again at once,
- * which must wait, since B asked first. */
+/** A step as process A: give `lock` back, and ask for it again at once
+ * with a killable take, which must wait, since B asked first; A is killed
+ * in that wait and leaves the line. */
 static void a_gives(void)
 {
     cpu_table[0].current = &proc_a;
     check(sleep_lock_held(&lock), "A holds the lock while B waits");
     sleep_lock_give(&lock);
-    check(lock.holder == -1 && lock.serving == 1 && lock.next == 2,
-          "A's give leaves the lock free with B's place the one served");
-    script(a_barred);
-    if (setjmp(barred) == 0) {
-        sleep_lock_take(&lock);
-        check(0, "A, asking again before B has run, waits behind B");
-        sleep_lock_give(&lock);
-    }
-    lock.next--; /* the place of the abandoned take */
+    check(lock.holder == -1 && lock.state == SLEEP_LOCK_HELD && lock.first == 0,
+          "A's give hands the lock to B, the only waiter, and lists no other");
+    script(kill_a);
+    check(sleep_lock_take_killable(&lock) == -EINTR && waits == 2,
+          "A, asking again before B has run, waits behind B");
+    check(lock.state == SLEEP_LOCK_HELD && lock.first == 0 && lock.last == 0,
+          "and, killed, leaves the list empty");
+    proc_a.sig_pending = 0;
 }
 
 /** A step as process B: give `lock` back. */
@@ -315,14 +306,15 @@ static void row_alone(void)
     check(waits == 0 && sleep_lock_held(&lock) && lock.holder == (int)proc_a.pid && lock.depth == 1,
           "a free lock is taken with no wait");
     sleep_lock_take(&lock);
-    check(waits == 0 && lock.depth == 2 && lock.next == 1,
-          "its holder takes it again with no place in line");
+    check(waits == 0 && lock.depth == 2 && lock.state == SLEEP_LOCK_HELD && lock.first == 0,
+          "its holder takes it again with no wait");
     sleep_lock_give(&lock);
     check(sleep_lock_held(&lock) && lock.depth == 1 && wakes == 0,
           "a give of the inner take keeps it held and wakes nobody");
     sleep_lock_give(&lock);
-    check(!sleep_lock_held(&lock) && lock.holder == -1 && lock.serving == 1 && wakes == 0,
-          "the last give frees it, serves the next place and wakes nobody, since none waits");
+    check(!sleep_lock_held(&lock) && lock.holder == -1 && lock.state == SLEEP_LOCK_FREE &&
+              wakes == 0,
+          "the last give frees it and wakes nobody, since none waits");
     check(proc_a.file_locks == 0, "a lock that is not a file lock counts in no file_locks");
 }
 
@@ -346,8 +338,9 @@ static void row_order(void)
     sleep_lock_take(&lock);
     check(next_step == 4 && waits == 4 && sleep_lock_held(&lock),
           "A, asking after B had its place, waits until B gives it back");
-    check(lock.next == 3 && lock.serving == 2, "the line gave three places and served two");
+    check(lock.state == SLEEP_LOCK_HELD && lock.first == 0, "and the list is empty");
     sleep_lock_give(&lock);
+    check(lock.state == SLEEP_LOCK_FREE, "A's give frees the lock");
 }
 
 /** A step as process A: give `lock` back and ask for nothing more. */
@@ -517,13 +510,15 @@ static void kill_b(void)
     proc_b.sig_pending |= KSIG_BIT(SIGKILL);
 }
 
-/** A killed waiter leaves the line with -EINTR and holds nothing; the give
- * that would serve its place serves the waiter behind it, who has the lock
- * after one wait, and a take after that finds the lock free. A killable take
- * of a free lock, or by its holder, has it whatever is pending. */
+/** A killed waiter leaves the line with -EINTR and holds nothing, with
+ * every allocation refused; the next give hands the lock to the waiter
+ * behind it, who has it after one wait, and a take after that finds the
+ * lock free. A killable take of a free lock, or by its holder, has it
+ * whatever is pending. */
 static void row_killed(void)
 {
     script_clear();
+    allocations = 0;
     sleep_lock_init(&lock, &rec_one, SLEEP_LOCK_FILE);
     proc_b.sig_pending = 0;
     cpu_table[0].current = &proc_a;
@@ -531,19 +526,21 @@ static void row_killed(void)
 
     script(kill_b);
     cpu_table[0].current = &proc_b;
-    check(sleep_lock_take_killable(&lock) == -EINTR && waits == 1,
-          "a waiter killed while A holds the lock gives up after its wait");
+    check(
+        sleep_lock_take_killable(&lock) == -EINTR && waits == 1,
+        "a waiter killed while A holds the lock gives up after its wait, with no memory to spare");
     check(!sleep_lock_held(&lock) && lock.holder == (int)proc_a.pid && proc_b.file_locks == 0,
           "and holds nothing, while A holds on");
-    check(lock.next == 2 && lock.serving == 0, "its place stays drawn, not yet served");
+    check(lock.state == SLEEP_LOCK_HELD && lock.first == 0 && lock.last == 0,
+          "its record is off the list, which is empty");
 
     script(a_gives_once);
     cpu_table[0].current = &proc_c;
     sleep_lock_take(&lock);
-    check(waits == 2 && sleep_lock_held(&lock) && lock.serving == 2,
-          "C, behind the place B left, has the lock at A's give");
+    check(waits == 2 && sleep_lock_held(&lock) && lock.state == SLEEP_LOCK_HELD,
+          "C, asking after B left, has the lock at A's give");
     sleep_lock_give(&lock);
-    check(lock.serving == 3 && lock.next == 3, "C's give leaves no one in line");
+    check(lock.state == SLEEP_LOCK_FREE && lock.first == 0, "C's give leaves no one in line");
 
     cpu_table[0].current = &proc_b;
     check(sleep_lock_take_killable(&lock) == 0 && sleep_lock_held(&lock) && waits == 2,
@@ -554,19 +551,66 @@ static void row_killed(void)
     sleep_lock_give(&lock);
     check(proc_b.file_locks == 0 && proc_a.file_locks == 0 && proc_c.file_locks == 0,
           "every count of file locks is back to 0");
+    check(allocations == 0, "no take or leave asked the heap for memory");
     proc_b.sig_pending = 0;
 }
 
-/** A step as process A, at B's take of the table's lock: A gives `lock`
- * back, so that B's turn comes as it leaves. */
+/** A step as the signal's sender: SIGKILL pending for process C. */
+static void kill_c(void)
+{
+    proc_c.sig_pending |= KSIG_BIT(SIGKILL);
+}
+
+/** A step as process C: ask for `lock` with a killable take behind B,
+ * and be killed in its wait. */
+static void c_waits_killed(void)
+{
+    cpu_table[0].current = &proc_c;
+    check(sleep_lock_take_killable(&lock) == -EINTR, "C, behind B, is killed and leaves");
+    check(lock.first != 0 && lock.first == lock.last && lock.state == SLEEP_LOCK_QUEUED,
+          "and B's record stays on the list, alone");
+    proc_c.sig_pending = 0;
+}
+
+/** A waiter behind another that is killed leaves the line, and the one
+ * ahead of it keeps its place and has the lock at the holder's give. */
+static void row_killed_behind(void)
+{
+    script_clear();
+    sleep_lock_init(&lock, &rec_one, 0);
+    cpu_table[0].current = &proc_a;
+    sleep_lock_take(&lock);
+
+    script(c_waits_killed);
+    script(kill_c);
+    script(a_gives_once);
+    cpu_table[0].current = &proc_b;
+    sleep_lock_take(&lock);
+    check(next_step == 3 && sleep_lock_held(&lock) && lock.first == 0 &&
+              lock.state == SLEEP_LOCK_HELD,
+          "B has the lock at A's give, with no one behind it");
+    sleep_lock_give(&lock);
+    check(lock.state == SLEEP_LOCK_FREE, "and B's give frees it");
+}
+
+/** A step as process A, at B's take of the list's lock as it leaves: A
+ * gives `lock` back, which hands it to B. */
 static void a_gives_at_leave(void)
 {
     cpu_table[0].current = &proc_a;
     sleep_lock_give(&lock);
 }
 
-/** A waiter whose turn comes as it leaves passes the turn on: the next
- * place is served, nobody holds the lock, and a take finds it free. */
+/** A step as the signal's sender: SIGKILL pending for process B, which A's
+ * give follows at B's next take of a spinlock, the list's as it leaves. */
+static void kill_b_then_give(void)
+{
+    kill_b();
+    on_spin = a_gives_at_leave;
+}
+
+/** A waiter the lock is handed to as it leaves hands it on: with nobody
+ * behind it the lock is free, and a take finds it so. */
 static void row_turn_at_leave(void)
 {
     script_clear();
@@ -575,13 +619,12 @@ static void row_turn_at_leave(void)
     cpu_table[0].current = &proc_a;
     sleep_lock_take(&lock);
 
-    script(kill_b);
-    on_spin = a_gives_at_leave;
+    script(kill_b_then_give);
     cpu_table[0].current = &proc_b;
     check(sleep_lock_take_killable(&lock) == -EINTR && on_spin == 0,
           "a waiter whose turn comes as it leaves gives up all the same");
-    check(lock.holder == -1 && lock.serving == 2 && lock.next == 2,
-          "and serves the place after its own");
+    check(lock.holder == -1 && lock.state == SLEEP_LOCK_FREE && lock.first == 0,
+          "and frees the lock, since nobody waits behind it");
 
     cpu_table[0].current = &proc_c;
     sleep_lock_take(&lock);
@@ -590,19 +633,18 @@ static void row_turn_at_leave(void)
     proc_b.sig_pending = 0;
 }
 
-/* More killed waiters than the 32 places a fixed table of left places
- * held, which the row below sends out of the line at once. */
+/* More killed takers than the 32 places a fixed table of left places held
+ * at once. */
 #define MANY_LEFT 40
 
-/** Any number of killed waiters leave the line at once, each with a record
- * of its place from the heap, and the give passes every place they left
- * and frees the records. A table of 32 places would keep the 33rd waiter in
- * line, unkillable until the holder gave the lock. */
+/** Any number of takers already killed when they find the lock held give
+ * up at once, with no wait, no record left on the list and no memory. */
 static void row_many_left(void)
 {
     int i, rc = 0;
 
     script_clear();
+    allocations = 0;
     sleep_lock_init(&lock, &rec_one, 0);
     proc_b.sig_pending = KSIG_BIT(SIGKILL);
     cpu_table[0].current = &proc_a;
@@ -612,48 +654,17 @@ static void row_many_left(void)
     for (i = 0; i < MANY_LEFT; i++) {
         rc |= sleep_lock_take_killable(&lock) != -EINTR;
     }
-    check(rc == 0 && waits == 0 && lock.next == 1 + MANY_LEFT && allocations == MANY_LEFT,
-          "every killed waiter leaves at once, with a record of its place");
+    check(rc == 0 && waits == 0 && lock.first == 0 && lock.state == SLEEP_LOCK_HELD &&
+              allocations == 0,
+          "every killed taker gives up at once and leaves nothing on the list");
 
     cpu_table[0].current = &proc_a;
     sleep_lock_give(&lock);
-    check(lock.serving == 1 + MANY_LEFT && lock.holder == -1 && allocations == 0,
-          "the give passes every place left and frees each record");
+    check(lock.state == SLEEP_LOCK_FREE && lock.holder == -1, "the give then frees the lock");
     cpu_table[0].current = &proc_c;
     sleep_lock_take(&lock);
     check(waits == 0 && sleep_lock_held(&lock), "C then takes the lock with no wait");
     sleep_lock_give(&lock);
-    proc_b.sig_pending = 0;
-}
-
-/** A killed waiter that the heap has no room for the record of its place
- * stays in line and has the lock at its turn; once the heap has room, a
- * killed waiter leaves again. */
-static void row_no_room(void)
-{
-    script_clear();
-    sleep_lock_init(&lock, &rec_one, 0);
-    proc_b.sig_pending = KSIG_BIT(SIGKILL);
-    cpu_table[0].current = &proc_a;
-    sleep_lock_take(&lock);
-
-    heap_full = 1;
-    script(a_gives_once);
-    cpu_table[0].current = &proc_b;
-    check(sleep_lock_take_killable(&lock) == 0 && waits == 1 && sleep_lock_held(&lock),
-          "with no room for its record a killed waiter waits for its turn and has the lock");
-    heap_full = 0;
-    sleep_lock_give(&lock);
-
-    cpu_table[0].current = &proc_a;
-    sleep_lock_take(&lock);
-    cpu_table[0].current = &proc_b;
-    check(sleep_lock_take_killable(&lock) == -EINTR && waits == 1 && allocations == 1,
-          "with room again a killed waiter leaves");
-    cpu_table[0].current = &proc_a;
-    sleep_lock_give(&lock);
-    check(lock.serving == lock.next && lock.holder == -1 && allocations == 0,
-          "and the line is empty");
     proc_b.sig_pending = 0;
 }
 
@@ -725,11 +736,11 @@ int main(void)
     row_spin();
     row_killed();
     row_turn_at_leave();
+    row_killed_behind();
     row_many_left();
-    row_no_room();
     check(spin_at_wait == 0 && spin_depth == 0,
           "no row waits, or ends, with a spinlock held, the records' among them");
-    check(allocations == 0, "no record of a left place outlives its rows");
+    check(allocations == 0, "no row asked the heap for memory");
     panic_row(give_free, 0, "does not hold", "a give of a free lock panics");
     panic_row(give_other, 0, "does not hold", "a give by a thread that does not hold it panics");
     panic_row(assert_other, 0, "a change outside the lock",

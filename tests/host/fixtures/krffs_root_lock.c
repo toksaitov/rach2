@@ -264,12 +264,6 @@ void k_panic(const char *message)
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
 
-/* The table of the places killed takers left, which sleeplock.c defines;
- * no row leaves one. */
-static struct sleep_left left[SLEEP_LEFT_MAX];
-static volatile unsigned int left_count;
-static struct spinlock left_lock = SPINLOCK_INIT;
-
 /* A waiter of the sleeping lock always sleeps here: the threads take turns,
  * so a holder never runs beside it (proc/sched.h). */
 static int sched_spin_on(const struct process *owner, int cpu)
