@@ -127,6 +127,21 @@ void packet_unbind(struct socket *sock)
     net_unlock(flags);
 }
 
+void packet_dev_gone(int ifindex)
+{
+    struct packet_binding *b;
+    uint32_t flags = net_lock();
+
+    for (b = packets; b; b = b->next) {
+        if (ifindex > 0 && b->ifindex == ifindex) {
+            b->ifindex = -1;
+            b->sock->so_error = ENETDOWN;
+            wq_wake(&b->sock->waiters, WQ_DATA);
+        }
+    }
+    net_unlock(flags);
+}
+
 int packet_snapshot(struct packet_row **rows)
 {
     const struct packet_binding *b;

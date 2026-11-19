@@ -6,10 +6,6 @@
 #include "../ethernet/ethernet.h"
 #include "../net.h"
 #include "../netconf.h"
-#include "../arp/arp.h"
-#include "../ip6/route6.h"
-#include "../ip6/nd6.h"
-#include "../ip6/ip6.h"
 #include "../../fs/devfs.h"
 #include "../../fs/file.h"
 #include "../../io/poll.h"
@@ -255,47 +251,13 @@ static struct tap *tap_make(const char *name, int32_t *err)
 }
 
 /**
- * Withdraw the interface of `t`: down, its addresses, routes and
- * neighbours and IPv6 reassemblies forgotten, as the radio layer
- * withdraws its interface (wireless/wiphy.c), and the record free for the
- * next TUNSETIFF.
+ * Withdraw the interface of `t` from the stack (`netdev_withdraw`), as the
+ * radio layer withdraws its interface (wireless/wiphy.c), and free the
+ * record for the next TUNSETIFF.
  */
 static void tap_remove(struct tap *t)
 {
-    struct netdev_rt r;
-    struct arp_row neighbors[ARP_CACHE_SIZE];
-    struct nd6_row neighbors6[ND6_CACHE_SIZE];
-    uint32_t flags;
-    int n, count;
-
-    flags = net_lock();
-    netconf_set_up(&t->nd, 0);
-    nd6_if_down(&t->nd);
-    route6_forget(&t->nd, -1);
-    for (n = 0; netdev_route_at(n, &r);) {
-        if (r.ifindex == t->nd.index && r.kind == NETDEV_RT_ADDED) {
-            netdev_route_del(&t->nd, r.dst, r.mask, r.gw);
-        } else {
-            ++n;
-        }
-    }
-    netconf_set_address(&t->nd, 0, 0);
-    arp_forget_dev(&t->nd);
-    count = arp_snapshot(neighbors, ARP_CACHE_SIZE);
-    for (n = 0; n < count; ++n) {
-        if (neighbors[n].iface == t->nd.name) {
-            arp_forget(&t->nd, neighbors[n].ip);
-        }
-    }
-    count = nd6_snapshot(neighbors6, ND6_CACHE_SIZE);
-    for (n = 0; n < count; ++n) {
-        if (neighbors6[n].ifindex == t->nd.index) {
-            nd6_forget(&t->nd, neighbors6[n].addr);
-        }
-    }
-    ip6_forget_dev(&t->nd);
-    netdev_unregister(&t->nd);
-    net_unlock(flags);
+    netdev_withdraw(&t->nd);
     klog(KLOG_INFO, "tap", "%s: removed", t->nd.name);
     t->used = 0;
 }

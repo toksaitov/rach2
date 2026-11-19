@@ -3,7 +3,6 @@
  * rach2/sys/network/driver/virtio_net.c, over the virtio core against a
  * model of the device reached only through the transport's table.
  *
- * host-deps: rach2/sys/network/driver/virtio_net.c
  * host-deps: rach2/sys/virtio/virtqueue.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -19,9 +18,12 @@
  * as the transport does. Its configuration interrupt, which a row may have
  * it raise in the middle of a read of the status word, is delivered at
  * once, or at the end of the `net_lock` bracket it falls in, as a
- * processor with interrupts off takes it. The rows check what the stack
- * was given, what the model saw, the notifications and interrupts counted,
- * and the memory the model still holds.
+ * processor with interrupts off takes it. The stack is a list of the
+ * interfaces listed, the probe's first, with the registration, withdrawal
+ * and naming the driver calls. The rows check what the stack was given,
+ * what the model saw, the notifications and interrupts counted, and the
+ * memory the model still holds. The driver is included whole, so that a row
+ * starts with every record of it free.
  */
 
 #include <stdarg.h>
@@ -32,7 +34,7 @@ extern char *strstr(const char *haystack, const char *needle);
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern int strcmp(const char *a, const char *b);
 
-#include "network/driver/virtio_net.h"
+#include "network/driver/virtio_net.c"
 #include "network/ethernet/ethernet.h"
 #include "network/net.h"
 #include "virtio/virtio.h"
@@ -175,6 +177,8 @@ static uint8_t arena[ARENA_PAGES][4096] __attribute__((aligned(4096)));
 static uint8_t arena_taken[ARENA_PAGES];
 static pci_device_t model_pci;
 static struct netdev nd; /* the interface, defined with the stack below */
+static struct netdev *listed[8];
+static int nlisted;
 static virtio_probe_t registered;
 static uint32_t udelays;
 
@@ -321,9 +325,11 @@ static void m_notify(struct virtio_dev *d, struct virtqueue *vq)
     check((m.status & VIRTIO_STATUS_DRIVER_OK) != 0, "no notification comes before DRIVER_OK");
     m.q[vq->index].notified++;
     if (vq->index == VNET_Q_RX && !m.limit_seen) {
+        const struct netdev *n = nlisted > 0 ? listed[nlisted - 1] : &nd;
+
         m.limit_seen = 1;
-        m.limit = nd.mtu_max;
-        m.mtu = nd.mtu;
+        m.limit = n->mtu_max;
+        m.mtu = n->mtu;
     }
     if (vq->index == VNET_Q_CTRL && !m.ctrl_mute) {
         dev_ctrl();
@@ -513,8 +519,91 @@ void sysfs_remove(int handle)
     }
 }
 
-/* The stack above the driver. */
+/* The stack above the driver: the probe's interface `nd`, and the list of
+ * those listed, which the driver adds to at a bind and takes from at an
+ * unbind. `ifc` is the interface a row expects frames on. A row makes the
+ * next registration fail with `reg_fail`. */
 static struct netdev nd;
+static struct netdev *ifc = &nd;
+static int next_index, registers, unregisters, withdraws, reg_fail;
+static struct netdev *withdrawn;
+
+/** The listed interface named `name`, or NULL. */
+static struct netdev *listed_named(const char *name)
+{
+    int i;
+
+    for (i = 0; i < nlisted; i++) {
+        if (strcmp(listed[i]->name, name) == 0) {
+            return listed[i];
+        }
+    }
+    return 0;
+}
+
+/** Name `n` "ethN" for the lowest N free, as netdev.c does. */
+void netdev_name_eth(struct netdev *n)
+{
+    int i;
+
+    for (i = 0; i < 10; i++) {
+        n->name[0] = 'e';
+        n->name[1] = 't';
+        n->name[2] = 'h';
+        n->name[3] = (char)('0' + i);
+        n->name[4] = 0;
+        if (!listed_named(n->name)) {
+            return;
+        }
+    }
+}
+
+/** List `n` with the next index, or fail as the row asks. */
+int netdev_register(struct netdev *n)
+{
+    check(n->ops && n->ops->tx && n->name[0] && !listed_named(n->name),
+          "an interface registered has a table and a name no other has");
+    if (reg_fail) {
+        int rc = reg_fail;
+
+        reg_fail = 0;
+        return rc;
+    }
+    if (nlisted == 4) {
+        return -ENOSPC;
+    }
+    n->index = next_index++;
+    listed[nlisted++] = n;
+    registers++;
+    return 0;
+}
+
+/** Take `n` off the list. */
+void netdev_unregister(struct netdev *n)
+{
+    int i, j;
+
+    for (i = 0; i < nlisted; i++) {
+        if (listed[i] == n) {
+            for (j = i; j + 1 < nlisted; j++) {
+                listed[j] = listed[j + 1];
+            }
+            nlisted--;
+            unregisters++;
+            return;
+        }
+    }
+    check(0, "only a listed interface is unregistered");
+}
+
+/** Withdraw `n` from the stack, which must be listed. */
+void netdev_withdraw(struct netdev *n)
+{
+    withdraws++;
+    withdrawn = n;
+    netdev_unregister(n);
+}
+
 static uint8_t got[8][VNET_FRAME_MAX];
 static uint16_t got_len[8];
 static int ngot, rx_errors, carrier_changes;
@@ -526,14 +615,14 @@ void ethernet_rx(struct netdev *from, const uint8_t *data, uint16_t len)
 {
     static const uint8_t reply[20] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 2, 0, 0, 0, 0, 1, 8, 6};
 
-    check(from == &nd, "a frame names the interface it came in on");
+    check(from == ifc, "a frame names the interface it came in on");
     if (ngot < 8 && len <= VNET_FRAME_MAX) {
         k_memcpy(got[ngot], data, len);
         got_len[ngot] = len;
     }
     ngot++;
     if (reply_from_rx) {
-        check(nd.ops->tx(nd.dev, reply, sizeof(reply)) == NETDEV_TX_OK,
+        check(ifc->ops->tx(ifc->dev, reply, sizeof(reply)) == NETDEV_TX_OK,
               "a send from inside a delivery is taken");
     }
 }
@@ -824,11 +913,19 @@ static void fresh(uint64_t offered)
     model_pci.bus = 0;
     model_pci.device = 3;
     model_pci.function = 0;
+    k_memset(vnets, 0, sizeof(vnets));
     k_memset(&nd, 0, sizeof(nd));
     nd.ops = &virtio_net_netdev;
     nd.index = 1;
     nd.pci_key = -1;
     nd.mtu = NETDEV_ETH_MTU_MAX;
+    k_memcpy(nd.name, "eth0", 5);
+    ifc = &nd;
+    listed[0] = &nd;
+    nlisted = 1;
+    next_index = 3; /* lo is 2 */
+    registers = unregisters = withdraws = reg_fail = 0;
+    withdrawn = 0;
     ngot = rx_errors = carrier_changes = reply_from_rx = 0;
     udelays = 0;
     logged[0] = 0;
@@ -1231,13 +1328,17 @@ static void row_stop_and_failures(void)
     }
 }
 
+/** The interface the last bind registered, or NULL. */
+static struct netdev *bound_if(void)
+{
+    return nlisted > 0 ? listed[nlisted - 1] : 0;
+}
+
 /**
- * Unbind and bind: the transport's `removed` stops the device, gives it
- * back and leaves the interface without a carrier; the driver's probe
- * brings the same function up on the same interface; a function that had
- * no interface is refused and given back.
+ * An unbind, as Linux's virtnet_remove: the transport's `removed` stops the
+ * device, gives it back and withdraws its interface from the stack.
  */
-static void row_rebind(void)
+static void row_unbind(void)
 {
     struct netdev_link link;
     void *dev;
@@ -1248,31 +1349,92 @@ static void row_rebind(void)
     check(m.status == 0 && m.dma_out == 0 && m.puts == 1 && m.bound == 0 && m.unbinds == 1,
           "removal resets the device, frees its pages, unbinds it and gives it back");
     check(sys_links == 1 && sys_unlinks == 1, "and takes away the interface's device in /sys");
-    check(nd.ops->link(dev, &link) && !link.up && carrier_changes == 1,
-          "the interface is left without a carrier, and told");
+    check(withdraws == 1 && withdrawn == &nd && nlisted == 0,
+          "and withdraws its interface from the stack");
+    check(strstr(logged, "removed: virtio0: eth0") != 0, "the removal names the interface");
+    check(nd.ops->link(dev, &link) && !link.up, "the old record reads no link");
     check(nd.ops->tx(dev, frame_of(60, 1), 60) == NETDEV_TX_DROPPED, "and sends nothing");
-    check(virtio_net_bind(&m.dev) == 0 && nd.dev == dev, "a bind brings it up again");
-    check(nd.ops->link(dev, &link) && link.up && m.bound != 0, "on the same interface");
-    check(sys_links == 2 && sys_link_target == 55, "whose device in /sys is the virtio device");
+}
+
+/**
+ * A bind after the unbind brings the function up on a new interface, the
+ * lowest free `ethN` with a new index, down, with its device in /sys, which
+ * receives and sends, as Linux's virtnet_probe makes it.
+ */
+static void row_rebind(void)
+{
+    struct netdev_link link;
+    struct netdev *n;
+
+    check(up(QEMU_OFFER) == NETDEV_UP, "the device comes up");
+    m.dev.removed(&m.dev);
+    check(virtio_net_bind(&m.dev) == 0 && registers == 1, "a bind registers an interface");
+    n = bound_if();
+    check(n != 0 && n != &nd && strcmp(n->name, "eth0") == 0 && n->index == 3,
+          "a new one, eth0 again since it is free, with a new index");
+    check(n && n->up == 0, "down, as Linux leaves a new interface");
+    check(n && n->dev != 0 && n->ops->link(n->dev, &link) && link.up && m.bound != 0 &&
+              memcmp(n->mac, model_mac, 6) == 0,
+          "whose device is bound with its link up, and it has the device's address");
+    check(sys_links == 2 && sys_link_target == 55 && sys_link_parent == SYS_ANCHOR + 3 &&
+              strstr(logged, "bound: virtio0: eth0") != 0,
+          "its device in /sys is the virtio device, and the bind is logged");
+    ifc = n;
     check(dev_rx(frame_of(60, 1), 60, 1, 1) && rx_irq() && ngot == 1, "which receives");
-    check(nd.ops->tx(dev, frame_of(60, 1), 60) == NETDEV_TX_OK && dev_tx(0, 0), "and sends");
-    nd.ops->stop(dev);
+    check(n && n->ops->tx(n->dev, frame_of(60, 1), 60) == NETDEV_TX_OK && dev_tx(0, 0),
+          "and sends");
+    ifc = &nd;
+}
+
+/**
+ * Binds after the first: a second unbind withdraws the bound interface, and
+ * the next bind has a new index and the lowest free name. A bind with every
+ * record busy, or whose registration fails, leaves no interface and gives
+ * the device back untouched.
+ */
+static void row_rebind_again(void)
+{
+    static struct netdev other;
+    struct netdev *n;
+
+    check(up(QEMU_OFFER) == NETDEV_UP, "the device comes up");
+    m.dev.removed(&m.dev);
+    check(virtio_net_bind(&m.dev) == 0 && (n = bound_if()) != 0, "and is bound again");
+    m.dev.removed(&m.dev);
+    check(withdraws == 2 && withdrawn == n && nlisted == 0, "a second unbind withdraws it");
+    k_memcpy(other.name, "eth0", 5);
+    listed[nlisted++] = &other;
+    check(virtio_net_bind(&m.dev) == 0, "a third bind succeeds");
+    n = bound_if();
+    check(n && strcmp(n->name, "eth1") == 0 && n->index == 4,
+          "with eth0 taken, it is eth1, with a new index again");
+    m.dev.removed(&m.dev);
+    nlisted = 0;
+    vnets[0].nd = vnets[1].nd = vnets[2].nd = vnets[3].nd = &other;
     m.puts = 0;
-    model_pci.device = 4;
-    check(virtio_net_bind(&m.dev) == -ENODEV && m.puts == 1,
-          "a function that had no interface at boot is refused and given back");
+    check(virtio_net_bind(&m.dev) == -ENOSPC && m.puts == 1 && registers == 2,
+          "with every record busy, a bind is refused with no interface and the device given back");
+    vnets[0].nd = vnets[1].nd = vnets[2].nd = vnets[3].nd = 0;
+    reg_fail = -ENOSPC;
+    m.puts = 0;
+    check(virtio_net_bind(&m.dev) == -ENOSPC && m.puts == 1 && m.status == 0 && m.bound == 0 &&
+              nlisted == 0,
+          "a registration that fails leaves the device untouched and given back");
+    ifc = &nd;
 }
 
 /**
  * A bring-up whose `device` in /sys cannot be made fails and is undone, as
  * Linux's device_add fails register_netdev: the device is reset, its pages
  * freed, its binding taken away and the device given back, and no link to
- * the PCI function stands in for the one that failed, at the probe or at a
- * bind. A device with no directory has the PCI function as its parent, and
- * an unbind takes that away too.
+ * the PCI function stands in for the one that failed, at the probe; at a
+ * bind the interface registered for it is taken off the list too. A device
+ * with no directory has the PCI function as its parent, and an unbind takes
+ * that away too.
  */
 static void row_sysfs_failure(void)
 {
+    struct netdev *n;
     int fail;
 
     for (fail = 1; fail <= 2; fail++) {
@@ -1292,8 +1454,8 @@ static void row_sysfs_failure(void)
         check(virtio_net_bind(&m.dev) == -ENOMEM, "a bind whose link in /sys fails fails");
         check(m.status == 0 && m.dma_out == 0 && m.bound == 0 && m.puts == 1,
               "the device is reset, its pages freed, unbound and given back");
-        check(nd.pci_key == -1 && sys_links == 1 && sys_unlinks == 1,
-              "and the interface has no parent in /sys");
+        check(registers == 1 && unregisters == 2 && nlisted == 0,
+              "and the interface registered for it is off the list");
     }
     fresh(QEMU_OFFER);
     m.sys_dir = 0;
@@ -1301,21 +1463,22 @@ static void row_sysfs_failure(void)
           "a device with no directory has the PCI function as its parent");
     m.dev.removed(&m.dev);
     check(nd.pci_key == -1, "which an unbind takes away");
-    check(virtio_net_bind(&m.dev) == 0 && nd.pci_key == (3 << 3), "and a bind puts back");
-    nd.ops->stop(nd.dev);
-    check(nd.pci_key == -1, "as a stop takes it away");
+    check(virtio_net_bind(&m.dev) == 0 && (n = bound_if()) != 0 && n->pci_key == (3 << 3),
+          "and a bind gives the new interface");
+    n->ops->stop(n->dev);
+    check(n->pci_key == -1, "as a stop takes it away");
 }
 
 /**
- * A function bound again as a device with another largest MTU: the
- * interface's limit is the new device's each time, as Linux's
- * virtnet_probe sets max_mtu at every probe, by the time the device is
- * first told of buffers; an MTU above a smaller limit comes down to it,
- * and one a larger limit allows is kept.
+ * A function bound again as a device with another largest MTU: each new
+ * interface has the device's limit, as Linux's virtnet_probe sets max_mtu
+ * at every probe, by the time the device is first told of buffers, and its
+ * MTU is the limit where that is below 1500.
  */
 static void row_rebind_mtu(void)
 {
     uint16_t mtu = 1400;
+    struct netdev *n;
 
     fresh(QEMU_OFFER | VIRTIO_BIT(VIRTIO_NET_F_MTU));
     k_memcpy(m.config + VNET_CFG_MTU, &mtu, 2);
@@ -1325,20 +1488,24 @@ static void row_rebind_mtu(void)
     mtu = 1300;
     k_memcpy(m.config + VNET_CFG_MTU, &mtu, 2);
     m.limit_seen = 0;
-    check(virtio_net_bind(&m.dev) == 0 && nd.mtu_max == 1300 && nd.mtu == 1300,
-          "bound again with 1300, the limit and the MTU come down to it");
+    ifc = 0;
+    check(virtio_net_bind(&m.dev) == 0 && (n = bound_if()) != 0 && n->mtu_max == 1300 &&
+              n->mtu == 1300,
+          "bound again with 1300, the new interface's limit and MTU are 1300");
     check(m.limit_seen && m.limit == 1300 && m.mtu == 1300,
           "before the device is told of a buffer");
-    check(strstr(logged, "mtu: virtio0: 1300") != 0, "and the lowered MTU is logged");
     m.dev.removed(&m.dev);
     mtu = 1450;
     k_memcpy(m.config + VNET_CFG_MTU, &mtu, 2);
-    check(virtio_net_bind(&m.dev) == 0 && nd.mtu_max == 1450 && nd.mtu == 1300,
-          "bound again with 1450, the limit rises and the MTU is kept");
+    check(virtio_net_bind(&m.dev) == 0 && (n = bound_if()) != 0 && n->mtu_max == 1450 &&
+              n->mtu == 1450,
+          "bound again with 1450, they are 1450");
     m.dev.removed(&m.dev);
     m.offered &= ~VIRTIO_BIT(VIRTIO_NET_F_MTU);
-    check(virtio_net_bind(&m.dev) == 0 && nd.mtu_max == 0 && nd.mtu == 1300,
-          "bound again with no largest MTU, the interface has the stack's limit again");
+    check(virtio_net_bind(&m.dev) == 0 && (n = bound_if()) != 0 && n->mtu_max == 0 &&
+              n->mtu == 1500,
+          "bound again with no largest MTU, the interface has the stack's 1500");
+    ifc = &nd;
 }
 
 /**
@@ -1399,7 +1566,9 @@ int main(void)
     row_mtu();
     row_control();
     row_stop_and_failures();
+    row_unbind();
     row_rebind();
+    row_rebind_again();
     row_rebind_mtu();
     row_sysfs_failure();
     row_polled();

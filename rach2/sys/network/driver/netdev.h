@@ -658,12 +658,34 @@ static __inline__ int netdev_slot(const struct netdev *nd)
     return nd ? (nd->slot ? nd->slot : nd->index) : 0;
 }
 
-/** Attach caller-owned Ethernet interface, initially configured by caller.
- * Kernel lock held, no net_lock; 0, -EINVAL or -ENOSPC. Storage remains
- * valid until unregister; index is assigned and never reused. */
+/**
+ * Attach the caller's interface `nd` after the probe, as Linux's
+ * register_netdev, listed after the cards there are: it is given the next
+ * index, which no interface had before and none will have again, and a slot
+ * of the protocols' tables that no listed interface holds. Its record must
+ * stay valid until `netdev_unregister`. 0; -EINVAL for a record without a
+ * `tx` or a name, or with a name an interface has; -ENOSPC with NETDEV_MAX
+ * cards listed. Kernel lock held, no net_lock.
+ */
 int netdev_register(struct netdev *nd);
-/** Remove an attached interface after its owner clears address and route state.
- * Kernel lock held, no net_lock; call after driver and work have stopped. */
+/** Take `nd` off the list after its owner has cleared what the stack keeps
+ * of it (`netdev_withdraw`): an attached interface, or a card of the probe's,
+ * whose record is then never used again. Under net_lock, or the kernel lock
+ * with no net_lock; after its driver and its work have stopped. */
 void netdev_unregister(struct netdev *nd);
+/**
+ * Withdraw the card `nd`, as Linux's unregister_netdevice does once its
+ * driver has stopped it: set it down, which drops what IPv6 learned on it,
+ * remove its IPv6 routes, its added IPv4 routes and its address, forget its
+ * neighbours and its IPv6 reassemblies, unbind the packet sockets bound to
+ * it with ENETDOWN (`packet_dev_gone`), and take it off the list
+ * (`netdev_unregister`). The interface is gone for every lookup by name and
+ * index; netlink's listeners see the link and its addresses go at their
+ * next comparison. Process context, kernel lock held, no net_lock.
+ */
+void netdev_withdraw(struct netdev *nd);
+/** Name `nd` `ethN` for the lowest N no listed interface has, as Linux's
+ * dev_alloc_name gives "eth%d", for a card that comes after the probe. */
+void netdev_name_eth(struct netdev *nd);
 
 #endif /* _NETDEV_H_ */

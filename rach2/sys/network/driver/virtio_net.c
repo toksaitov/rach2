@@ -55,14 +55,19 @@ struct vnet_buf {
     struct vnet_buf *next;
 };
 
-/* A device. `vdev` is NULL once the device was unbound, and `nd` once the
- * probe took the interface back (`vnet_stop`). */
+/* A device. `vdev` is NULL once the device was unbound, and `nd` once its
+ * interface was withdrawn or the probe took it back (`vnet_stop`); a record
+ * with neither is free. The interface of a device the boot's probe found is
+ * the probe's record; one bound later has `own`, which no other record
+ * shares, so that a pointer to an interface withdrawn reaches only another
+ * of this record's interfaces, whose index differs. */
 struct vnet {
     struct virtio_dev *vdev;
     struct netdev *nd;
+    struct netdev own;
     struct virtqueue *rx, *tx, *ctrl;
     int up;           /* DRIVER_OK is set and the queues carry frames */
-    int key;          /* the PCI function a bind finds the record by, or -1 */
+    int key;          /* the PCI function as bus << 8 | devfn, or -1 */
     int sys_link;     /* the interface's `device` link in /sys, or 0 */
     int mrg;          /* VIRTIO_NET_F_MRG_RXBUF was taken */
     int polled;       /* no interrupt: the tick reaps the queues */
@@ -629,11 +634,12 @@ static void vnet_down(struct vnet *v)
 }
 
 /**
- * The device's `removed`: its function is being unbound from virtio-pci,
- * Linux's virtnet_remove. The device is stopped and given back, and its
- * interface, which the probe's table keeps for good, is left without a
- * carrier until the function is bound again (`virtio_net_bind`). Process
- * context, under the big lock.
+ * The device's `removed`: its function is being unbound from virtio-pci or
+ * taken out of the machine, Linux's virtnet_remove. The device is stopped,
+ * its interface withdrawn from the stack as Linux's unregister_netdev
+ * withdraws it (`netdev_withdraw`), and the device given back; the record
+ * is then free for the next bind (`virtio_net_bind`). Process context,
+ * under the big lock.
  */
 static void vnet_removed(struct virtio_dev *d)
 {
@@ -644,11 +650,14 @@ static void vnet_removed(struct virtio_dev *d)
     }
     if (v->up) {
         vnet_down(v);
-        if (v->nd) {
-            netdev_carrier_changed(v->nd);
-        }
     }
-    klog(KLOG_INFO, "virtio_net", "removed: %s", d->name);
+    if (v->nd) {
+        klog(KLOG_INFO, "virtio_net", "removed: %s: %s", d->name, v->nd->name);
+        netdev_withdraw(v->nd);
+        v->nd = 0;
+    } else {
+        klog(KLOG_INFO, "virtio_net", "removed: %s", d->name);
+    }
     d->removed = 0;
     d->priv = 0;
     virtio_driver_unbind(d);
@@ -899,28 +908,46 @@ static int vnet_init(struct netdev *nd, int nth)
 int32_t virtio_net_bind(struct virtio_dev *vdev)
 {
     const pci_device_t *pci = virtio_pci_function(vdev);
-    int key = pci ? pci->bus << 8 | pci->device << 3 | pci->function : -1;
     struct vnet *v = 0;
+    struct netdev *nd;
     int i, rc;
 
     for (i = 0; i < VNET_MAX && !v; i++) {
-        if (!vnets[i].vdev && vnets[i].nd && vnets[i].key == key && key >= 0) {
+        if (!vnets[i].vdev && !vnets[i].nd) {
             v = &vnets[i];
         }
     }
     if (!v) {
-        klog(KLOG_WARN, "virtio_net", "refused: %s: it had no interface at boot", vdev->name);
+        klog(KLOG_WARN, "virtio_net", "refused: %s: %d devices are driven already", vdev->name,
+             VNET_MAX);
         virtio_put(vdev);
-        return -ENODEV;
+        return -ENOSPC;
+    }
+    k_memset(v, 0, sizeof(*v));
+    v->key = pci ? pci->bus << 8 | pci->device << 3 | pci->function : -1;
+    nd = &v->own;
+    nd->ops = &virtio_net_netdev;
+    nd->dev = v;
+    nd->pci_key = -1;
+    nd->mtu = NETDEV_ETH_MTU_MAX;
+    netdev_name_eth(nd);
+    rc = netdev_register(nd);
+    if (rc != 0) {
+        klog(KLOG_WARN, "virtio_net", "refused: %s: no interface: error %d", vdev->name, rc);
+        virtio_put(vdev);
+        return rc;
     }
     v->vdev = vdev;
-    rc = vnet_start(v, v->nd);
+    rc = vnet_start(v, nd);
     if (rc != 0) {
+        klog(KLOG_WARN, "virtio_net", "refused: %s: %s", vdev->name, vnet_err);
+        netdev_unregister(nd);
         v->vdev = 0;
         virtio_put(vdev);
         return rc;
     }
+    v->nd = nd;
     vdev->removed = vnet_removed;
-    netdev_carrier_changed(v->nd);
+    klog(KLOG_INFO, "virtio_net", "bound: %s: %s", vdev->name, nd->name);
     return 0;
 }

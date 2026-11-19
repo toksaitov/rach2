@@ -135,10 +135,13 @@ struct virtio_dev;
 
 /**
  * The probe of a virtio network device the transport takes after boot, as
- * a write of /sys/bus/pci/drivers/virtio-pci/bind: the device is brought
- * up on the interface it had before its unbind. 0; -ENODEV, with the
- * device given back, for one that had no interface, since interfaces are
- * made at boot; or the bring-up's error.
+ * a write of /sys/bus/pci/drivers/virtio-pci/bind or a function put in the
+ * machine does, Linux's virtnet_probe: the device is brought up on a new
+ * interface, `ethN` for the lowest N free and a new index, registered with
+ * the stack (`netdev_register`) and down, as Linux leaves a new interface
+ * until it is set up. 0; -ENOSPC with VNET_MAX devices driven, the
+ * registration's error, or the bring-up's, each with the device given back
+ * and no interface left.
  */
 int32_t virtio_net_bind(struct virtio_dev *vdev);
 
