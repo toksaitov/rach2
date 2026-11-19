@@ -67,6 +67,11 @@ struct qcpu {
 
 static struct qcpu qcpus[NR_CPUS] __attribute__((aligned(64)));
 
+/* Whether waiters take the lock by test-and-set (`arch_spin_virt`): -1
+ * until the first slow path reads it, then 0 or 1. Every processor reads
+ * the same, so two that read it at once store the same. */
+static volatile int q_virt = -1;
+
 /** The tail code of processor `cpu`'s place at level `level`. */
 static unsigned int q_tail(unsigned int cpu, unsigned int level)
 {
@@ -155,6 +160,11 @@ static void q_leave(struct qcpu *me, struct qnode *slot)
  * nests in another, in `smp_service` or in an NMI, and asks for the lock
  * the outer wait is for, stops with a panic: the queue would never reach
  * it, since its own outer place is ahead of it.
+ *
+ * Under a hypervisor that may preempt the guest's processors
+ * (`arch_spin_virt`), a waiter instead tries the free word on each turn,
+ * as Linux's guest without paravirtual spin locks does: a queue there
+ * stalls every waiter behind one whose processor the host preempted.
  */
 static void q_lock_slow(struct spinlock *lock, unsigned int val)
 {
@@ -163,6 +173,18 @@ static void q_lock_slow(struct spinlock *lock, unsigned int val)
     struct qnode *node = NULL, *prev;
     unsigned int level, i, tail, old, next, n;
 
+    if (q_virt < 0) {
+        q_virt = arch_spin_virt();
+    }
+    if (q_virt) {
+        /* Linux's virt_spin_lock (arch/x86/include/asm/qspinlock.h:88-110):
+         * a waiter whose processor the host preempted would hold up every
+         * waiter behind it in the queue. */
+        while (!q_trylock(lock)) {
+            q_turn();
+        }
+        return;
+    }
     level = me->depth++;
     k_barrier();
     if (level < Q_LEVELS) {

@@ -132,6 +132,14 @@ int arch_irq_waiting(void);
  * once, since in a guest `cpuid` is an exit. */
 int arch_idle_poll(void);
 
+/** Whether a spin lock's waiter takes the lock by test-and-set instead of
+ * queueing (`spinlock.c`): under a hypervisor, whose processors the host
+ * may preempt, unless KVM says each has a host processor of its own
+ * (KVM_HINTS_REALTIME), as Linux's virt_spin_lock_key is set in a guest
+ * without paravirtual spin locks (arch/x86/kernel/paravirt.c:56-60,
+ * arch/x86/kernel/kvm.c:1120-1166). */
+int arch_spin_virt(void);
+
 /** Hold interrupts off and stop this processor for good. */
 void arch_stop(void) K_NORETURN;
 

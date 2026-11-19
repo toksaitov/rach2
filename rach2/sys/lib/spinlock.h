@@ -14,7 +14,9 @@
  * locked byte; the others queue, each spinning on a place of its own
  * processor's, and only the queue's head reads the word. A holder that
  * gives the lock back cannot take it again ahead of a waiter, and a
- * trylock fails while any waits.
+ * trylock fails while any waits. Under a hypervisor that may preempt the
+ * guest's processors, waiters instead take the free lock by test-and-set,
+ * in no order, as Linux's guest without paravirtual spin locks does.
  *
  * A subsystem that every processor enters on its ticks, faults and
  * allocations has one of these over its data, taken with interrupts off,
@@ -26,7 +28,8 @@
  * be waiting for its answer. What that answer runs, and an NMI's handler,
  * may wait for another lock, up to four levels deep, but not for the lock
  * the wait it interrupted is for, which would be queued behind its own
- * place: that stops with a panic, and such code takes a lock by a try.
+ * place: where waiters queue, that stops with a panic, and such code takes
+ * a lock by a try.
  */
 struct spinlock {
     volatile unsigned int locked; /* the locked byte, pending byte and tail; 0 when free */
