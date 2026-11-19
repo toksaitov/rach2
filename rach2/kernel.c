@@ -1979,7 +1979,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     proc_set_parent(user_proc, current_proc ? current_proc->tgid : 0);
     proc_set_comm(user_proc, name);
     if (current_proc) {
-        current_proc->on_cpu = 0;
+        sched_disown(current_proc);
     }
     user_proc->on_cpu = 1;
     current_proc = user_proc;
