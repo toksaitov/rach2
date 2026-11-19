@@ -18,6 +18,9 @@
 #include "proc/smp.h"
 #include "block/loop.h"
 #include "panic.h"
+#include "lib/kerrno.h"
+#include "lib/ksignal.h"
+#include "proc/tgroup.h"
 
 extern void exit(int status);
 extern void open_thread_start(void (*fn)(void));
@@ -302,6 +305,18 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /* kernel.lock_stat, off as at boot: the extracted lock times no hold. */
 int sleep_lock_stat;
 
+/** The killable wait of the sleeping lock, which no row takes: a call
+ * fails the run. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    printf("%s: fail: a killable take of a sleeping lock\n", name);
+    exit(2);
+    return 0;
+}
+
 /** Whether a thread sleeps in a lock's wait: the opener, from its wait for
  * the namespace lock until the writer resumes it. */
 int wq_active(const wait_queue_t *wq)
@@ -499,6 +514,12 @@ static uint32_t tree_seq;
 
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
+
+/* The table of the places killed takers left, which sleeplock.c defines;
+ * no row leaves one. */
+static struct sleep_left left[SLEEP_LEFT_MAX];
+static volatile unsigned int left_count;
+static struct spinlock left_lock = SPINLOCK_INIT;
 
 /* The protection of /proc/sys/fs that a final link meets, at its default,
  * and the debugfs type, which no row opens. */

@@ -247,6 +247,12 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     printf("bcache_hosttest: FAIL: a row reached the sleeping wait\n");
     exit(1);
 }
+/** The killable wait, which no row kills: the uninterruptible one. */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event_nointr(wq, cond, arg);
+}
 /** The uninterruptible wait, as `wq_wait_event`. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

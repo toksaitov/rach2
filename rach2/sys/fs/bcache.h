@@ -32,18 +32,19 @@
  *
  * Locks: no call needs the big lock. A get that finds its block cached, or
  * a clean buffer to fill, a release, an invalidation and the questions
- * `bcache_cached`, `bcache_state`, `bcache_copy_cached`, `bcache_busy` and
- * `bcache_wait_unheld` take the cache's spinlock for their bookkeeping. A
- * dirty mark, a write, a sync, a reserve, the writes of a shrink, the
- * removal of a device, the release of a dirty buffer that a removal or an
- * invalidation marked to drop, and a get that searches the cache for a
- * victim, which it may write, take the cache's write lock too, a mutex,
- * which keeps the order the dirty marks give and which each gives up around
- * its requests and waits; a caller may hold buffers and its own sleeping
- * locks when it calls them. A get with interrupts off takes no mutex: it
- * fills a miss only from an empty or a clean buffer. A failed write is
- * recorded against the device's mounts under the big lock, which the cache
- * takes for it when the caller runs without it.
+ * `bcache_cached`, `bcache_state`, `bcache_copy_cached`, `bcache_busy`,
+ * `bcache_wait_unheld` and `bcache_wait_unheld_killable` take the cache's
+ * spinlock for their bookkeeping. A dirty mark, a write, a sync, a
+ * reserve, the writes of a shrink, the removal of a device, the release of
+ * a dirty buffer that a removal or an invalidation marked to drop, and a
+ * get that searches the cache for a victim, which it may write, take the
+ * cache's write lock too, a mutex, which keeps the order the dirty marks
+ * give and which each gives up around its requests and waits; a caller may
+ * hold buffers and its own sleeping locks when it calls them. A get with
+ * interrupts off takes no mutex: it fills a miss only from an empty or a
+ * clean buffer. A failed write is recorded against the device's mounts
+ * under the big lock, which the cache takes for it when the caller runs
+ * without it.
  * Deadlock is kept out by two checked rules: a process holds at most
  * `BCACHE_HOLD_MAX` buffers, and while it holds any it may take only a higher
  * block on the same device. A release or a dirty mark by a process that does
@@ -388,6 +389,12 @@ int bcache_busy(block_device_t *dev, uint64_t blk);
  * buffer, and may find the block held again by the time it looks.
  */
 void bcache_wait_unheld(block_device_t *dev, uint64_t blk);
+
+/** `bcache_wait_unheld` whose wait SIGKILL ends, pending for the calling
+ * thread or its process, as Linux's killable waits end: 0 once nobody holds
+ * the block, or -EINTR, also before any wait, at SIGKILL pending while
+ * another holds it. */
+int bcache_wait_unheld_killable(block_device_t *dev, uint64_t blk);
 
 /** `bcache_sync` without the disk's flush: every write is answered and has
  * reached the device, in the same order, and on a write-through disk the
