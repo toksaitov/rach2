@@ -50,6 +50,12 @@
  * another processor drops the page after the walk's place, adds a page or
  * drops the whole file during a give.
  *
+ * The walk rows check that a range walk waits while another walk of its
+ * file runs, and holds the record though reclaim empties its list; that a
+ * walk that ends while another waits wakes the file's queue; and that a
+ * whole-file drain past eight cursors examines each entry once, counting
+ * the cursors against the batch.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -59,6 +65,7 @@
 #include "mm/filecache.c"
 
 extern int printf(const char *format, ...);
+extern void exit(int status);
 
 static int fails;
 
@@ -290,13 +297,33 @@ uint32_t block_max_sectors(block_device_t *device)
     return BLOCK_REQ_MAX_SECTORS;
 }
 
-/** No row waits for a locked page. */
+/* Run once by the next wait whose condition is false, as the range walk
+   that another processor runs would end while the waiter sleeps; and the
+   waits made since a row cleared the count. */
+static void (*wait_hook)(void);
+static uint32_t waits;
+static uint32_t irq_on; /* defined with the interrupt flag's model below */
+
+/** Count the wait and, while its condition is false, run `wait_hook`, which
+ *  must make it true; a wait with no hook to end it fails the test and
+ *  exits, since the waiter would wait for ever. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    void (*fn)(void) = wait_hook;
+
     (void)wq;
-    (void)cond;
-    (void)arg;
-    check(0, "no row waits for a locked page");
+    check(!fc_lock.locked && irq_on, "a waiter sleeps with the cache lock free");
+    waits++;
+    if (cond(arg)) {
+        return 0;
+    }
+    if (!fn) {
+        check(0, "only a row that ends the other walk waits");
+        exit(1);
+    }
+    wait_hook = 0;
+    fn();
+    check(cond(arg), "the wait's condition holds once the other walk has ended");
     return 0;
 }
 
@@ -868,6 +895,159 @@ static void row_batched_holds(void)
     wide_file.size = WIDE_PAGES * PAGE_SIZE;
 }
 
+/* The wide file's open description for the walk rows. */
+static struct open_file walk_ofd;
+
+/** The wide file's record, or NULL. Under `fc_lock`. */
+static struct fc_inode *wide_record(void)
+{
+    struct fc_file f;
+
+    return fc_file_of(&mount, &wide_file, &f) ? fc_find(f.mnt, f.ino) : NULL;
+}
+
+/** Stand for a range walk of the wide file that has the record and gives
+ *  way, as another processor's would. */
+static struct fc_inode *start_other_walk(void)
+{
+    struct fc_inode *rec;
+    uint32_t flags = spin_lock_irqsave(&fc_lock);
+
+    rec = wide_record();
+    check(rec != NULL, "the wide file has a record");
+    if (rec) {
+        rec->walks++;
+        rec->walking = 1;
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+    return rec;
+}
+
+/* The record the wait hook below expects. */
+static struct fc_inode *other_rec;
+
+/** End the walk `start_other_walk` stood for while the waiter sleeps, then
+ *  have reclaim take every page of the cache, as on other processors. */
+static void end_other_walk(void)
+{
+    uint32_t flags = spin_lock_irqsave(&fc_lock);
+
+    check(wide_record() == other_rec && other_rec->walking && other_rec->walks == 2,
+          "the waiter holds the record beside the walk that runs");
+    other_rec->walking = 0;
+    fc_walk_put(other_rec);
+    spin_unlock_irqrestore(&fc_lock, flags);
+    shrink_all();
+    flags = spin_lock_irqsave(&fc_lock);
+    check(shrunk == WIDE_PAGES && wide_record() == other_rec && !other_rec->pages,
+          "reclaim empties the list and the record stays while the waiter holds it");
+    spin_unlock_irqrestore(&fc_lock, flags);
+}
+
+/** Stand for a range walk of the wide file that finds this one running
+ *  and waits. */
+static void add_waiter(void)
+{
+    uint32_t flags = spin_lock_irqsave(&fc_lock);
+
+    other_rec = wide_record();
+    check(other_rec && other_rec->walking, "the walk that gives way holds the walk's place");
+    if (other_rec) {
+        other_rec->walks++;
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+}
+
+/* The cursors the drain row puts at the head of the wide file's list. */
+#define WALK_CURSORS (2u * FC_DROP_BATCH)
+
+/**
+ * The walk rows. A range walk of a file waits, with `fc_lock` free, while
+ * another walk of it runs, so that walks never pass each other's cursors;
+ * the record lives while a walk waits for it, though reclaim empties its
+ * list, and the waiter's walk frees it. A walk that ends while another
+ * waits wakes the file's queue and leaves the record to the waiter. A
+ * whole-file drain walks the list once, counting the cursors it passes
+ * against the batch, so 14 pages behind 8 cursors take five gives, where a
+ * drain that went back to the head for each page would pass the cursors
+ * again for each.
+ */
+static void row_walks_wait(void)
+{
+    static struct fc_page cursors[WALK_CURSORS];
+    struct fc_inode *rec;
+    uint32_t i, n, flags;
+    struct fc_page *p;
+
+    walk_ofd.vmnt = &mount;
+    walk_ofd.vnode = &wide_file;
+    fill_wide_file();
+    other_rec = start_other_walk();
+    waits = 0;
+    woken_count = 0;
+    wait_hook = end_other_walk;
+    filecache_dontneed(&walk_ofd, 0, WIDE_PAGES * PAGE_SIZE);
+    check(!wait_hook && waits >= 1,
+          "a range walk waits, the cache lock free, while another walk of its file runs");
+    flags = spin_lock_irqsave(&fc_lock);
+    check(!wide_record(), "the waiter's walk frees the record that reclaim emptied");
+    spin_unlock_irqrestore(&fc_lock, flags);
+    check(woken_count == 0 && filecache_pages() == 0 && frame_free_count() == FRAMES,
+          "a walk that leaves no waiter wakes nobody, and every frame comes back");
+
+    fill_wide_file();
+    count_holds();
+    woken_count = 0;
+    give_way_at = 1;
+    give_way_hook = add_waiter;
+    filecache_dontneed(&walk_ofd, 0, WIDE_PAGES * PAGE_SIZE);
+    give_way_at = 0;
+    flags = spin_lock_irqsave(&fc_lock);
+    rec = wide_record();
+    check(!give_way_hook && rec == other_rec && rec && !rec->walking && rec->walks == 1 &&
+              !rec->pages,
+          "a walk that ends while another waits leaves the record, its list empty, to it");
+    check(woken_count == 1 && rec && woken[0] == fc_walk_wq(rec), "and wakes the file's queue");
+    if (rec) {
+        fc_walk_put(rec);
+    }
+    check(!wide_record(), "the waiter's end frees the record");
+    spin_unlock_irqrestore(&fc_lock, flags);
+
+    fill_wide_file();
+    flags = spin_lock_irqsave(&fc_lock);
+    rec = wide_record();
+    check(rec != NULL, "the wide file has a record");
+    if (rec) {
+        rec->walks++;
+        for (i = 0; i < WALK_CURSORS; i++) {
+            __builtin_memset(&cursors[i], 0, sizeof(cursors[i]));
+            fc_cursor_put(&cursors[i], &rec->pages);
+        }
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+    count_holds();
+    filecache_forget(&mount, &wide_file);
+    check(filecache_pages() == 0 && frame_free_count() == FRAMES,
+          "a whole-file drain past cursors drops every page");
+    check(gives == (WIDE_PAGES + WALK_CURSORS) / FC_DROP_BATCH && hold_most <= FC_DROP_BATCH,
+          "and examines each entry once, the cursors counted against the batch");
+    flags = spin_lock_irqsave(&fc_lock);
+    n = 0;
+    for (p = rec ? rec->pages : NULL; p; p = p->sibling) {
+        n += p->file == NULL;
+    }
+    check(rec && rec->drained && n == WALK_CURSORS,
+          "the drained record keeps the cursors and is left to the walk that holds it");
+    if (rec) {
+        for (i = 0; i < WALK_CURSORS; i++) {
+            fc_cursor_take(&cursors[i]);
+        }
+        fc_walk_put(rec);
+    }
+    spin_unlock_irqrestore(&fc_lock, flags);
+}
+
 int main(void)
 {
     mount.type = &vfs_ext2_type;
@@ -910,5 +1090,6 @@ int main(void)
     mount.state = VFS_ACTIVE;
     row_batched_drop();
     row_batched_holds();
+    row_walks_wait();
     return fails != 0;
 }

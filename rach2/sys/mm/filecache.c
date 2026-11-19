@@ -73,8 +73,9 @@
  * few files beside it the pages they were reading. A power of two. */
 #define FC_EPOCHS 256u
 
-/* The pages an invalidation examines in one hold of `fc_lock`, those it
- * keeps included. A host test sets a smaller batch of its own. */
+/* The entries of a file's list an invalidation examines in one hold of
+ * `fc_lock`, the pages it keeps and the cursors it passes included. A host
+ * test sets a smaller batch of its own. */
 #ifndef FC_DROP_BATCH
 #define FC_DROP_BATCH 128u
 #endif
@@ -82,8 +83,8 @@
 /* A file that has pages in the cache, the list of those pages, so that a
  * change to the file drops them without a search of the other files' pages,
  * and what the file was when they were read. The record lives while the
- * file has a page or a range walk's cursor, and a detached record until
- * both its drain and its last cursor are done. */
+ * file has a page or a range walk holds it, and a detached record until
+ * both its drain and its last range walk are done. */
 struct fc_inode {
     struct fc_inode *next, **link;             /* the slot's list; link is NULL once detached */
     struct fc_inode *mount_next, **mount_link; /* the mount's cached inodes */
@@ -92,7 +93,8 @@ struct fc_inode {
     uint64_t size;
     int64_t mtime;
     uint32_t generation;
-    uint32_t cursors; /* range walks whose cursor is on `pages` */
+    uint32_t walks;   /* range walks that hold the record: one walking, the rest waiting */
+    uint32_t walking; /* 1 while a range walk's cursor is on `pages` */
     uint32_t drained; /* 1 once a detached record's drain has ended */
     struct fc_page *pages;
 };
@@ -324,7 +326,8 @@ static void fc_use(struct fc_page *p)
 }
 
 /** Take `p` off every list and free its file's record if still in the inode
- * table and this is its last page. The page and frame are the caller's. */
+ * table, this is its last page and no range walk holds it. The page and
+ * frame are the caller's. */
 static void fc_unlink(struct fc_page *p)
 {
     struct fc_inode *file = p->file;
@@ -340,7 +343,7 @@ static void fc_unlink(struct fc_page *p)
     }
     fc_unlink_use(p);
     pages--;
-    if (!file->pages && file->link) {
+    if (!file->pages && file->link && !file->walks) {
         fc_detach_file(file);
         kfree(file);
     }
@@ -370,38 +373,6 @@ static void fc_drop_step(uint32_t *steps, uint32_t *flags)
     }
 }
 
-/** Drop the remaining pages of the detached `file` and free its record,
- * or leave the record to its last range walk when one has a cursor on it.
- * Reclaim may take pages while the lock is out, so the head is read again
- * with the lock retaken; cursors stay on the list. */
-static void fc_drain_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
-{
-    struct fc_page *p;
-
-    for (;;) {
-        for (p = file->pages; p && !p->file; p = p->sibling) {
-        }
-        if (!p) {
-            break;
-        }
-        fc_drop(p);
-        fc_drop_step(steps, flags);
-    }
-    if (file->cursors) {
-        file->drained = 1;
-    } else {
-        kfree(file);
-    }
-}
-
-/** Invalidate the whole file, then drain its pages in bounded batches.
- * Called and returned with `fc_lock` held. */
-static void fc_drop_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
-{
-    fc_detach_file(file);
-    fc_drain_file(file, steps, flags);
-}
-
 /** Put the cursor `c` on a file's list at `*at`. Under `fc_lock`. */
 static void fc_cursor_put(struct fc_page *c, struct fc_page **at)
 {
@@ -423,40 +394,136 @@ static void fc_cursor_take(struct fc_page *c)
 }
 
 /**
- * Drop the pages of `file` from `first` to `last`, examining at most
- * FC_DROP_BATCH entries of its list in one hold of `fc_lock`, those out of
- * the range included, as Linux's truncate and invalidate loops give way
- * between batches. A cursor on the list behind the last page examined
- * keeps the walk's place while the lock is out, since a drop of any page
- * fixes the link of what follows it, and keeps the record: it lives while
- * its list is not empty, and a drain leaves it to the last cursor. A page
- * added while the lock is out goes to the head, behind the walk, and is
- * kept. Called and returned with `fc_lock` held.
+ * Drop the pages of `file` from `first` to `last`, walking its list once
+ * from the head with the caller's cursor `c` and counting each entry
+ * passed, a page kept or another walk's cursor as much as a page dropped,
+ * against `*steps`, which `fc_drop_step` turns into a give of `fc_lock`
+ * after each batch. The
+ * cursor sits behind the last entry examined while the lock is out, and a
+ * drop of any entry fixes the link of what follows it, so the walk goes on
+ * from its place whatever reclaim or another walk took meanwhile; a page
+ * added meanwhile goes to the head, behind the walk. Called and returned
+ * with `fc_lock` held.
  */
-static void fc_drop_range(struct fc_inode *file, uint64_t first, uint64_t last, uint32_t *flags)
+static void fc_walk(struct fc_inode *file, struct fc_page *c, uint64_t first, uint64_t last,
+                    uint32_t *steps, uint32_t *flags)
 {
-    struct fc_page cursor, *p;
-    uint32_t steps = 0;
+    struct fc_page *p;
 
-    k_memset(&cursor, 0, sizeof(cursor));
-    file->cursors++;
-    fc_cursor_put(&cursor, &file->pages);
-    while ((p = cursor.sibling) != NULL) {
-        fc_cursor_take(&cursor);
-        fc_cursor_put(&cursor, &p->sibling);
+    k_memset(c, 0, sizeof(*c));
+    fc_cursor_put(c, &file->pages);
+    while ((p = c->sibling) != NULL) {
+        fc_cursor_take(c);
+        fc_cursor_put(c, &p->sibling);
         if (p->file && p->pgoff >= first && p->pgoff <= last) {
             fc_drop(p);
         }
-        fc_drop_step(&steps, flags);
+        fc_drop_step(steps, flags);
     }
-    fc_cursor_take(&cursor);
-    if (--file->cursors == 0 && !file->pages) {
+    fc_cursor_take(c);
+}
+
+/** Drop every page of the detached `file` (`fc_walk`) and free its record,
+ * or leave the record to its last range walk when one holds it. No page
+ * joins a detached record, so one pass leaves its list empty but for the
+ * cursor of a walk still on it. */
+static void fc_drain_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
+{
+    struct fc_page cursor;
+
+    fc_walk(file, &cursor, 0, ~(uint64_t)0, steps, flags);
+    if (file->walks) {
+        file->drained = 1;
+    } else {
+        kfree(file);
+    }
+}
+
+/** Invalidate the whole file, then drain its pages in bounded batches.
+ * Called and returned with `fc_lock` held. */
+static void fc_drop_file(struct fc_inode *file, uint32_t *steps, uint32_t *flags)
+{
+    fc_detach_file(file);
+    fc_drain_file(file, steps, flags);
+}
+
+/* The queues a range walk waits on for another walk of its file to end,
+ * hashed by file. A power of two. */
+#define FC_WALK_WAITS 16u
+
+static wait_queue_t walk_wq[FC_WALK_WAITS];
+
+/** The queue the range walks of `file` wait on. */
+static wait_queue_t *fc_walk_wq(const struct fc_inode *file)
+{
+    return &walk_wq[fc_hash(file->mnt, file->ino) & (FC_WALK_WAITS - 1u)];
+}
+
+/** Whether no range walk of the file `arg`, a record the waiter holds,
+ * runs. */
+static int fc_walk_ended(void *arg)
+{
+    const struct fc_inode *file = arg;
+    uint32_t flags = spin_lock_irqsave(&fc_lock);
+    int ended = !file->walking;
+
+    spin_unlock_irqrestore(&fc_lock, flags);
+    return ended;
+}
+
+/** Let go of a range walk's hold on `file`, and free the record when it
+ * was the last hold and the list is empty: a record still in the table is
+ * taken out of it, and a detached one is freed only once its drain has
+ * ended, since until then the drain's cursor is on the list. Under
+ * `fc_lock`. */
+static void fc_walk_put(struct fc_inode *file)
+{
+    if (--file->walks == 0 && !file->pages) {
         if (file->link) {
             fc_detach_file(file);
             kfree(file);
         } else if (file->drained) {
             kfree(file);
         }
+    }
+}
+
+/**
+ * Drop the pages of `file` from `first` to `last` (`fc_walk`), examining at
+ * most FC_DROP_BATCH entries of its list in one hold of `fc_lock`, as
+ * Linux's truncate and invalidate loops give way between batches. One
+ * range walk of a file runs at a time, and the others wait with the lock
+ * let go, as Linux's truncations of a file take its `i_rwsem`: walks that
+ * passed each other's cursors would each count the others against their
+ * batch, and with more than a batch of them on a list that reclaim had
+ * emptied, the walks at the head could pass the others to the tail in turn
+ * and never reach it. A walk, running or waiting, holds the record, which
+ * lives while one does (`fc_walk_put`), and a drain leaves it to the last.
+ * Called and returned with `fc_lock` held; may sleep, so the caller holds
+ * no other spinlock.
+ */
+static void fc_drop_range(struct fc_inode *file, uint64_t first, uint64_t last, uint32_t *flags)
+{
+    struct fc_page cursor;
+    wait_queue_t *wq = fc_walk_wq(file);
+    uint32_t steps = 0;
+    int waiting;
+
+    file->walks++;
+    while (file->walking) {
+        spin_unlock_irqrestore(&fc_lock, *flags);
+        (void)wq_wait_event_nointr(wq, fc_walk_ended, file);
+        *flags = spin_lock_irqsave(&fc_lock);
+    }
+    file->walking = 1;
+    fc_walk(file, &cursor, first, last, &steps, flags);
+    file->walking = 0;
+    waiting = file->walks > 1;
+    fc_walk_put(file);
+    if (waiting) {
+        spin_unlock_irqrestore(&fc_lock, *flags);
+        wq_wake_all(wq);
+        *flags = spin_lock_irqsave(&fc_lock);
     }
 }
 
