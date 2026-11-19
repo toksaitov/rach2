@@ -7,7 +7,8 @@
 #
 # Run as root by etude-guest in the case's workspace, which holds the
 # harness, measure.sh, piglit.txt, latency.c and webgl.html, and the runners
-# it uses, common.sh, games.sh and piglit.sh. The script lays them out as
+# it uses, common.sh, games.sh and piglit.sh, with server.py and events.py
+# for the webgl scene's page and its events. The script lays them out as
 # measure.sh expects, a directory with the harness and its runners apart,
 # and runs `measure.sh -r native-rach2 -u desktop SCENE` under a headless
 # Weston of the harness's own, as Linux's native-linux lines were taken.
@@ -20,7 +21,7 @@
 set -eu
 
 [ $# -eq 2 ] || {
-    echo "usage: testbed.sh glmark2|piglit|game LINUX" >&2
+    echo "usage: testbed.sh glmark2|piglit|game|webgl LINUX" >&2
     exit 2
 }
 scene=$1
@@ -34,6 +35,9 @@ done
 for f in common.sh games.sh piglit.sh; do
     cp "$f" harness/runners/
 done
+if [ "$scene" = webgl ]; then
+    cp server.py events.py harness/runners/
+fi
 chmod -R a+rX harness
 status=0
 MEASURE_RUNNERS=$here/harness/runners sh harness/measure.sh -r native-rach2 -u desktop \
