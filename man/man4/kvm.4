@@ -736,6 +736,10 @@ and a VM
 and
 .Va remote_tlb_flush_requests ;
 the rest read 0.
+.Va halt_wakeup
+counts guest events and deadlines that make a blocked vCPU runnable.
+.Va halt_wait_ns
+and its histogram count a wait only if the vCPU thread slept.
 The descriptor keeps its VM alive.
 .Ss Hypercalls
 A VMCALL, or VMMCALL on AMD, that is not Hyper-V's is one of Linux's KVM

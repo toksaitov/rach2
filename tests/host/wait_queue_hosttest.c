@@ -85,6 +85,7 @@ void schedule(void)
     if (!current_proc || current_proc->state != PROC_BLOCKED) {
         return;
     }
+    current_proc->nvcsw++;
     if (blocks < 4) {
         deadline_at_block[blocks++] = current_proc->wakeup_tick;
         current_proc->wakeup_tick = 0;
@@ -294,7 +295,8 @@ static void filed_first(void)
 {
     static process_t sleeper, waiter;
     volatile int done = 0;
-    int before = blocks;
+    uint64_t wakes = 0;
+    int before = blocks, waited;
 
     wait_queue_init(&filed_wq);
     sleeper.waiter.proc = &sleeper;
@@ -304,8 +306,10 @@ static void filed_first(void)
     CHECK(wq_wait_event(&filed_wq, filed_test, 0) == 0);
     CHECK(filed_seen && filed_calls == 1);
     filed_calls = 0;
-    CHECK(wq_wait_event(&filed_wq, woken_in_test, 0) == 0);
+    CHECK(wq_wait_event_sigflag_counted(&filed_wq, woken_in_test, 0, "filed", &waited, &wakes) ==
+          0);
     CHECK(filed_calls == 2 && blocks == before);
+    CHECK(waited == 0 && wakes == 1 && sleeper.wait_wakeups == NULL);
     CHECK(sleeper.state == PROC_RUNNING && total_queued(&filed_wq) == 0);
     current_proc = 0;
 
@@ -329,7 +333,8 @@ static void sigflag_rows(void)
 {
     static process_t vcpu_thread;
     wait_queue_t wq;
-    int calls = pending_calls;
+    uint64_t wakes = 0;
+    int calls = pending_calls, waited;
 
     blocks = 0;
     wait_queue_init(&wq);
@@ -343,7 +348,9 @@ static void sigflag_rows(void)
     CHECK(wq_wait_event(&wq, true_third, 0) == 0 && blocks == 2);
     vcpu_thread.sig_woken = 0;
     post_sig_woken = 1;
-    CHECK(wq_wait_event_sigflag(&wq, never, 0, "sigflag") == -EINTR && blocks == 3);
+    CHECK(wq_wait_event_sigflag_counted(&wq, never, 0, "sigflag", &waited, &wakes) == -EINTR &&
+          blocks == 3);
+    CHECK(waited == 1 && wakes == 0 && vcpu_thread.wait_wakeups == NULL);
     CHECK(vcpu_thread.sig_woken == 1 && vcpu_thread.state == PROC_RUNNING);
     CHECK(total_queued(&wq) == 0 && wq.lock.locked == 0 && wq_host_held == 0);
     post_sig_woken = 0;

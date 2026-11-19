@@ -350,10 +350,11 @@ static int64_t fine_target;
  * and ends with its PV unhalt, reading `blocking` into `blocking_seen`.
  * Each relax of the poll moves the clock 1 us on, counted in `relaxes`,
  * and from `poll_event_ns` gives the vCPU its PV unhalt; `poll_crowd`
- * stands for another thread waiting for the processor. */
+ * stands for another thread waiting for the processor. `event_before_wait`
+ * gives the vCPU its unhalt just before the wait tests its condition. */
 static struct kvm_vcpu *poll_vcpu;
 static uint64_t wait_wake_ns, poll_event_ns, relaxes, blocking_seen;
-static int poll_crowd;
+static int poll_crowd, event_before_wait;
 
 /** The poll's pause, which moves the model's clock on. */
 void arch_relax(void)
@@ -396,40 +397,58 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
  * A halted vCPU's wait, as wait_queue.c's WQ_SIGFLAG: its condition ends it
  * with 0, and the caller's signal-work flag, read with no lock, with
  * -EINTR, as Linux's kvm_vcpu_check_block (virt/kvm/kvm_main.c:3729-3747).
- * A wait that neither ends would sleep for ever: it is counted in
+ * Report a sleep and its wake at the modeled scheduling point. A wait
+ * with neither event nor signal would sleep for ever: it is counted in
  * `endless` and ends with -EINTR, so that a row sees it.
  */
-int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+int wq_wait_event_sigflag_counted(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name,
+                                  int *waited, uint64_t *wakeups)
 {
     (void)wq;
     (void)name;
     waits++;
+    if (waited) {
+        *waited = 0;
+    }
+    if (event_before_wait && arg == poll_vcpu) {
+        apic_of(poll_vcpu)->pv_unhalted = 1;
+    }
     if (cond(arg)) {
         return 0;
+    }
+    if (*(volatile uint32_t *)&current_proc->sig_woken) {
+        return -EINTR;
+    }
+    if (waited) {
+        *waited = 1;
     }
     if (poll_vcpu && wait_wake_ns && arg == poll_vcpu) {
         blocking_seen = poll_vcpu->stat[KVM_VCPU_STAT_BLOCKING];
         mono_ns += wait_wake_ns;
         apic_of(poll_vcpu)->pv_unhalted = 1;
-        if (cond(arg)) {
-            return 0;
+        if (wakeups) {
+            (*wakeups)++;
         }
+        return 0;
     }
     if (sleep_to_fine && current_proc->wakeup_ns) {
         fine_target = current_proc->wakeup_ns;
         mono_ns = (uint64_t)fine_target;
         if (cond(arg)) {
+            if (wakeups) {
+                (*wakeups)++;
+            }
             return 0;
         }
     }
     if (sleep_to_tick && current_proc->wakeup_tick) {
         mono_ns = current_proc->wakeup_tick * TICK_NS;
         if (cond(arg)) {
+            if (wakeups) {
+                (*wakeups)++;
+            }
             return 0;
         }
-    }
-    if (*(volatile uint32_t *)&current_proc->sig_woken) {
-        return -EINTR;
     }
     endless++;
     return -EINTR;
@@ -1346,6 +1365,28 @@ static void halt_poll_bound_rows(struct kvm_vcpu *v)
     kvm_halt_poll_ns_shrink = 2u;
 }
 
+/** Take an event that arrived after the poll and before the thread slept. */
+static void halt_poll_late_event_row(struct kvm_vcpu *v)
+{
+    uint64_t *s = v->stat;
+    uint64_t successes = s[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL];
+    uint64_t success_ns = s[KVM_VCPU_STAT_HALT_POLL_SUCCESS_NS];
+    uint64_t fail_ns = s[KVM_VCPU_STAT_HALT_POLL_FAIL_NS];
+    uint64_t wait_ns = s[KVM_VCPU_STAT_HALT_WAIT_NS];
+    uint64_t wakeups = s[KVM_VCPU_STAT_HALT_WAKEUP];
+
+    v->halt_poll_ns = 10000u;
+    event_before_wait = 1;
+    CHECK(poll_halt(v) == 0 && relaxes == 10 && waits == 1 && v->mp_state == KVM_MP_STATE_RUNNABLE,
+          "an event after the poll and before the first sleep brings the vCPU back");
+    CHECK(s[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL] == successes + 1 &&
+              s[KVM_VCPU_STAT_HALT_POLL_SUCCESS_NS] == success_ns + 10000u &&
+              s[KVM_VCPU_STAT_HALT_POLL_FAIL_NS] == fail_ns &&
+              s[KVM_VCPU_STAT_HALT_WAIT_NS] == wait_ns && s[KVM_VCPU_STAT_HALT_WAKEUP] == wakeups,
+          "the late event is a poll success without wait time or a scheduler wake");
+    event_before_wait = 0;
+}
+
 /**
  * Halt polling, as Linux's kvm_vcpu_halt: the window grown from
  * halt_poll_ns_grow_start by a short halt, an event within it taken with
@@ -1373,6 +1414,7 @@ static void halt_poll_rows(void)
     halt_poll_spin_rows(v);
     halt_poll_end_rows(v);
     halt_poll_bound_rows(v);
+    halt_poll_late_event_row(v);
     CHECK(endless == 0, "no halt waits for ever");
     wait_wake_ns = 0;
     poll_vcpu = NULL;

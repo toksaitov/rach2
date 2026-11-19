@@ -173,6 +173,14 @@ int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg);
  */
 int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name);
 
+/** `wq_wait_event_sigflag` with optional accounting. Set `*waited` to 1
+ * if the thread switched out blocked or entered the idle wait, else 0.
+ * Add to `*wakeups` each time a queue or deadline wake makes it ready.
+ * A signal can end the wait but does not increment the counter. Keep both
+ * destinations live until the call returns. */
+int wq_wait_event_sigflag_counted(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name,
+                                  int *waited, uint64_t *wakeups);
+
 /**
  * Make every process currently blocked on `wq` runnable, with one preferred
  * selection by the scheduler, empty the queue, and count the wake for each

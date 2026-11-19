@@ -765,8 +765,7 @@ int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, i
     }
     switch (index) {
     case MSR_KVM_POLL_CONTROL:
-        /* Bit 0 alone, whether the host may poll a halted vCPU; this
-         * kernel never polls, so either value holds. */
+        /* Bit 0 alone, whether the host may poll this vCPU when halted. */
         if (*value & ~1ull) {
             return -1;
         }

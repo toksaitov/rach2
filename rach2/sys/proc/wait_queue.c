@@ -86,6 +86,9 @@ static int wq_ready(process_t *p)
     if (p->state != PROC_BLOCKED) {
         return -1;
     }
+    if (p->wait_wakeups) {
+        (*p->wait_wakeups)++;
+    }
     p->woken = 1;
     p->state = PROC_READY;
     return (int)((unsigned int)p->cpu % NR_CPUS);
@@ -255,6 +258,35 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
     }
 }
 
+/** Set the current thread's wait state while its queue is locked. A
+ * counted wait publishes and clears its counter under the run queues'
+ * lock, so queue and timer wakers use it only while the wait is live. */
+static void wq_wait_state(int state, uint64_t *wakeups)
+{
+#ifndef WAIT_QUEUE_HOSTTEST
+    uint32_t flags = wakeups ? sched_lock_take() : 0;
+#endif
+
+    if (wakeups) {
+        current_proc->wait_wakeups = state == PROC_BLOCKED ? wakeups : NULL;
+    }
+    if (state == PROC_RUNNING) {
+        current_proc->woken = 0;
+    }
+    current_proc->state = state;
+#ifndef WAIT_QUEUE_HOSTTEST
+    if (wakeups) {
+        sched_lock_give(flags);
+    }
+#endif
+}
+
+/* The two optional outputs of a counted wait. */
+struct wq_wait_stats {
+    int *waited;
+    uint64_t *wakeups;
+};
+
 /**
  * The wait behind `wq_wait_event`, `wq_wait_event_as`, `wq_wait_event_nointr`,
  * `wq_wait_event_killable`, `wq_wait_event_idle` and `wq_wait_event_sigflag`:
@@ -262,6 +294,7 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
  * of kind WQ_SIGFLAG, a sleeper of kind WQ_NOSIGNAL or WQ_KILLABLE is
  * marked uninterruptible, and one of WQ_KILLABLE killable too. `name` is
  * the wait's name for /proc/PID/wchan, stored before each block.
+ * `stats` supplies the outputs of `wq_wait_event_sigflag_counted`, or NULL.
  *
  * The process files itself on the queue and is marked BLOCKED, under the
  * queue's lock, whose release is a full barrier, before it tests the
@@ -285,12 +318,19 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
  * send the wait back to sleep with no timer to end it. The caller's condition
  * must be true once its deadline has passed.
  */
-static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const char *name)
+static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const char *name,
+                   const struct wq_wait_stats *stats)
 {
+    int *waited = stats ? stats->waited : NULL;
+    uint64_t *wakeups = stats ? stats->wakeups : NULL;
     uint32_t flags;
     uint64_t deadline;
+    unsigned long switches;
     int rc;
 
+    if (waited) {
+        *waited = 0;
+    }
     if (!wq || !cond || !current_proc) {
         return -EINVAL;
     }
@@ -304,7 +344,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
         current_proc->wchan = name;
         current_proc->uninterruptible = kind == WQ_NOSIGNAL || kind == WQ_KILLABLE;
         current_proc->killable = kind == WQ_KILLABLE;
-        current_proc->state = PROC_BLOCKED;
+        wq_wait_state(PROC_BLOCKED, wakeups);
         wq_unlock(wq);
         if (cond(arg)) {
             rc = 0;
@@ -318,13 +358,20 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
             rc = -EINTR;
             break;
         }
+        switches = waited ? current_proc->nvcsw : 0;
         irq_restore(flags);
 
         schedule();
 
         flags = irq_save();
+        if (waited && current_proc->nvcsw != switches) {
+            *waited = 1;
+        }
         if (current_proc->state == PROC_BLOCKED) {
 #ifndef WAIT_QUEUE_HOSTTEST
+            if (waited) {
+                *waited = 1;
+            }
             idle_wait_irq_off();
 #endif
         }
@@ -332,10 +379,9 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
 
     wq_lock(wq);
     wq_dequeue(wq, &current_proc->waiter);
-    current_proc->woken = 0;
     current_proc->uninterruptible = 0;
     current_proc->killable = 0;
-    current_proc->state = PROC_RUNNING;
+    wq_wait_state(PROC_RUNNING, wakeups);
     wq_unlock(wq);
     irq_restore(flags);
     return rc;
@@ -624,11 +670,11 @@ static int wq_wait_signal(wait_queue_t *wq, wq_cond_fn cond, void *arg, const ch
     int rc, pending;
 
     if (!current_proc || bkl_held()) {
-        return wq_wait(wq, cond, arg, WQ_SIGNAL, name);
+        return wq_wait(wq, cond, arg, WQ_SIGNAL, name, NULL);
     }
     deadline = current_proc->wakeup_tick;
     for (;;) {
-        rc = wq_wait(wq, cond, arg, WQ_SIGFLAG, name);
+        rc = wq_wait(wq, cond, arg, WQ_SIGFLAG, name, NULL);
         if (rc != -EINTR) {
             return rc;
         }
@@ -654,20 +700,30 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
 
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, WQ_NOSIGNAL, "wq_wait_event_nointr");
+    return wq_wait(wq, cond, arg, WQ_NOSIGNAL, "wq_wait_event_nointr", NULL);
 }
 
 int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
 {
-    return wq_wait(wq, cond, arg, WQ_KILLABLE, name);
+    return wq_wait(wq, cond, arg, WQ_KILLABLE, name, NULL);
 }
 
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, WQ_IDLE, "wq_wait_event_idle");
+    return wq_wait(wq, cond, arg, WQ_IDLE, "wq_wait_event_idle", NULL);
 }
 
 int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
 {
-    return wq_wait(wq, cond, arg, WQ_SIGFLAG, name);
+    return wq_wait(wq, cond, arg, WQ_SIGFLAG, name, NULL);
+}
+
+int wq_wait_event_sigflag_counted(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name,
+                                  int *waited, uint64_t *wakeups)
+{
+    struct wq_wait_stats stats;
+
+    stats.waited = waited;
+    stats.wakeups = wakeups;
+    return wq_wait(wq, cond, arg, WQ_SIGFLAG, name, &stats);
 }

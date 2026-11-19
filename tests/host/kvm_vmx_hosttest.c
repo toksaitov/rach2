@@ -6,6 +6,8 @@
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
  * host-deps: rach2/sys/kvm/pmu.c
+ * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
@@ -197,27 +199,6 @@ void fpu_area_free(void *area)
     kfree(area);
 }
 
-void *k_memcpy(void *dst, const void *src, size_t n)
-{
-    uint8_t *d = dst;
-    const uint8_t *s = src;
-
-    while (n--) {
-        *d++ = *s++;
-    }
-    return dst;
-}
-
-void *k_memset(void *dst, int c, size_t n)
-{
-    uint8_t *d = dst;
-
-    while (n--) {
-        *d++ = (uint8_t)c;
-    }
-    return dst;
-}
-
 static void slot_access(const void *p);
 
 /** The caller's memory is the host's; address 0 faults. A copy into the
@@ -337,101 +318,6 @@ int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugf
     exitstat_ops = ops;
     exitstat_data = data;
     return 0;
-}
-
-/* kvm.c's parameters read the boot line and take writes through these;
- * the stubs read a write as Linux's kstrtobool and kstrtoll do, for the
- * numbers within a long long that the rows write, and give a boot line
- * with no parameter. */
-int kcmdline_parse_bool(const char *text, int *out)
-{
-    char c = text[0], d = c ? text[1] : 0;
-
-    if (c == 'y' || c == 'Y' || c == 't' || c == 'T' || c == '1') {
-        *out = 1;
-        return 0;
-    }
-    if (c == 'n' || c == 'N' || c == 'f' || c == 'F' || c == '0') {
-        *out = 0;
-        return 0;
-    }
-    if ((c == 'o' || c == 'O') && (d == 'n' || d == 'N' || d == 'f' || d == 'F')) {
-        *out = d == 'n' || d == 'N';
-        return 0;
-    }
-    return -1;
-}
-
-int kcmdline_param_bool(const char *key, int dflt)
-{
-    (void)key;
-    return dflt;
-}
-
-int kcmdline_param_int(const char *key, int dflt)
-{
-    (void)key;
-    return dflt;
-}
-
-int k_strtoll(const char *s, size_t len, long long *out)
-{
-    unsigned long long v = 0, base = 10, d;
-    size_t i = 0, start;
-    int neg = 0;
-
-    if (len > 0 && s[len - 1] == '\n') {
-        len--;
-    }
-    if (i < len && (s[i] == '-' || s[i] == '+')) {
-        neg = s[i++] == '-';
-    }
-    if (i + 1 < len && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
-        base = 16;
-        i += 2;
-    } else if (i < len && s[i] == '0') {
-        base = 8;
-    }
-    for (start = i; i < len; i++) {
-        d = s[i] >= '0' && s[i] <= '9'   ? (unsigned long long)(s[i] - '0')
-            : s[i] >= 'a' && s[i] <= 'f' ? (unsigned long long)(s[i] - 'a' + 10)
-            : s[i] >= 'A' && s[i] <= 'F' ? (unsigned long long)(s[i] - 'A' + 10)
-                                         : 99u;
-        if (d >= base) {
-            return -EINVAL;
-        }
-        v = v * base + d;
-    }
-    if (i == start) {
-        return -EINVAL;
-    }
-    *out = neg ? -(long long)v : (long long)v;
-    return 0;
-}
-
-size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
-{
-    char digits[12];
-    unsigned int u = input < 0 ? 0u - (unsigned int)input : (unsigned int)input;
-    size_t n = 0, i = 0;
-
-    (void)radix;
-    (void)force_sign;
-    do {
-        digits[n++] = (char)('0' + u % 10u);
-        u /= 10u;
-    } while (u);
-    if (n + (input < 0) + 1u > buffer_size) {
-        return 0;
-    }
-    if (input < 0) {
-        buffer[i++] = '-';
-    }
-    while (n) {
-        buffer[i++] = digits[--n];
-    }
-    buffer[i] = '\0';
-    return i + 1u;
 }
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
