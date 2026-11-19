@@ -691,8 +691,10 @@ void free_user_pages(page_dir_t *dir)
                     continue;
                 }
                 if (pd[i2] & PTE_PS) {
+                    if (!(pd[i2] & PTE_ZEROFILL)) {
+                        thp_mapped_add(-1);
+                    }
                     pd[i2] = PTE_ADDR(pd[i2 + MMU_TABLE_ENTRIES]) | PTE_P | PTE_W | PTE_U;
-                    thp_mapped_add(-1);
                 }
                 pt = entry_table(pd[i2]);
                 for (i1 = 0; i1 < MMU_TABLE_ENTRIES; i1++) {

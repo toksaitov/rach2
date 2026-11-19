@@ -1894,7 +1894,9 @@ static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
  * show_smap_vma_flags gives the flags this kernel keeps, in the order of
  * Linux's VM_ bits: access and possible access (`ap_smaps_may`), then gd
  * 0x100, pf 0x400, lo 0x2000, io 0x4000, dc 0x20000, de 0x40000, lf
- * 0x80000, ac 0x100000, nr 0x200000, wf 0x2000000, dd 0x4000000, then sl.
+ * 0x80000, ac 0x100000, nr 0x200000, wf 0x2000000, dd 0x4000000, hg
+ * 0x20000000 and nh 0x40000000 (MADV_HUGEPAGE and MADV_NOHUGEPAGE), then
+ * sl.
  * The vDSO's [vdso] is de,
  * and its [vvar] pf io de dd, as Linux's special mappings are.
  */
@@ -1919,6 +1921,8 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
     ap_str(t, (r->prot & VM_PROT_NORESERVE) ? " nr" : "");
     ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
     ap_str(t, io || (r->prot & VM_PROT_SECRET) ? " dd" : "");
+    ap_str(t, (r->prot & VM_PROT_HUGEPAGE) ? " hg" : "");
+    ap_str(t, (r->prot & VM_PROT_NOHUGEPAGE) ? " nh" : "");
     ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
     ap_ch(t, '\n');
 }
@@ -1933,8 +1937,11 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
  * written since, the ones Linux has copied from the file; gdb's gcore leaves
  * the others out of a core and reads them from the file. The kernel does not
  * count the processes that map a page, so Pss is Rss, a page another process
- * also maps being counted whole to each; there is no swap and no huge page
- * of user memory, so those fields are 0. Locked is Rss for a locked region,
+ * also maps being counted whole to each; there is no swap, so its fields
+ * are 0. AnonHugePages is what transparent huge pages map in the region,
+ * the huge zero page aside (`paging_user_huge`), and THPeligible whether a
+ * fault may map one there (`thp_region_eligible`), after Locked, as in
+ * Linux's order. Locked is Rss for a locked region,
  * flagged `lo`, and `lf` when it is locked on fault; a mapping of
  * memfd_secret is flagged `dd`, left out of a core file, and a sealed region
  * `sl`, last, as Linux's highest bit. Where the protection keys are on, the
@@ -1977,9 +1984,13 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Private_Dirty:", shared ? 0 : dirty);
         ap_smaps_kb(t, "Referenced:", clean + dirty);
         ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : anon);
+        ap_smaps_kb(t, "AnonHugePages:", paging_user_huge(mm->dir, r->start, r->end));
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
         ap_smaps_kb(t, "Locked:", (r->prot & VM_PROT_LOCKED) ? clean + dirty : 0);
+        ap_str(t, "THPeligible:    ");
+        ap_u32_width(t, (uint32_t)thp_region_eligible(mm, r), 8);
+        ap_ch(t, '\n');
         ap_smaps_key(t, r);
         ap_smaps_flags(t, r);
     }
@@ -4034,23 +4045,25 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  *
  * The pool is the whole of what this machine manages, so MemTotal and MemFree
  * are the two counts outright. Buffers and Cached are what the buffer cache
- * and the page caches hold, the disk window's and the file page cache's,
- * and KReclaimable the heap's freed runs it keeps mapped for reuse
+ * and the page caches hold, the disk window's and the file page cache's, and
+ * KReclaimable the heap's freed runs it keeps mapped for reuse
  * (`kheap_reclaimable`), all of which reclaim gives back under pressure, so
  * MemAvailable is the free count and the three together, as Linux's
- * si_mem_available adds its reclaimable kernel memory. SwapCached, which
- * IGT adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
- * swapped. HeapPages and HeapUsed are the kernel heap's pages and the bytes
- * in use inside it, for a test that makes and frees objects and requires
- * the heap back where it started. LowTotal and LowFree are the window's
- * frames, the memory below HARD_MEMORY_LIMIT that a device can be given and
- * `alloc_kernel_frame` takes from, under Linux's names for its low memory:
- * a test watches LowFree for the pool whose end makes a driver's allocation
- * fail. Slab, last, is the heap's pages but the buffer cache's, which the
- * heap holds and Buffers counts, in kilobytes: the kernel's own objects as
- * Linux's slab holds them, which BusyBox's nmeter adds to MemFree, Buffers
- * and Cached, and subtracts from MemTotal, for the memory in use. Every
- * count is taken before the first append, which may take a page for the heap.
+ * si_mem_available adds its reclaimable kernel memory. SwapCached, which IGT
+ * adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
+ * swapped. HeapPages and HeapUsed are the kernel heap's pages and the bytes in
+ * use inside it, for a test that makes and frees objects and requires the heap
+ * back where it started. LowTotal and LowFree are the window's frames, the
+ * memory below HARD_MEMORY_LIMIT that a device can be given and
+ * `alloc_kernel_frame` takes from, under Linux's names for its low memory: a
+ * test watches LowFree for the pool whose end makes a driver's allocation
+ * fail. AnonHugePages is the memory transparent huge pages map, 2 MiB for each
+ * mapping of one, the huge zero page aside (`thp_mapped`). Slab, last, is the
+ * heap's pages but the buffer cache's, which the heap holds and Buffers
+ * counts, in kilobytes: the kernel's own objects as Linux's slab holds them,
+ * which BusyBox's nmeter adds to MemFree, Buffers and Cached, and subtracts
+ * from MemTotal, for the memory in use. Every count is taken before the first
+ * append, which may take a page for the heap.
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
@@ -4061,6 +4074,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     uint32_t buffers = bcache_resident();
     uint32_t cached = pc_resident() + filecache_pages();
     uint32_t kreclaim = kheap_reclaimable();
+    uint32_t anon_huge = thp_mapped();
     uint32_t heap_pages = 0;
     size_t heap_bytes = 0;
 
@@ -4089,6 +4103,8 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, low_free);
     ap_str(t, "SwapTotal:             0 kB\n");
     ap_str(t, "SwapFree:              0 kB\n");
+    ap_str(t, "AnonHugePages:  ");
+    ap_frames_as_kb(t, (size_t)anon_huge * 512u);
     ap_str(t, "KReclaimable:   ");
     ap_frames_as_kb(t, kreclaim);
     ap_str(t, "Slab:           ");
@@ -4097,16 +4113,30 @@ static int procfs_gen_meminfo(struct procfs_text *t)
 }
 
 /**
- * Render /proc/vmstat: the counters of Linux's file that procps's vmstat reads,
- * of those the kernel keeps. nr_free_pages and nr_file_pages are the free pages
- * and those of the page caches and the buffer cache; pgpgin and pgpgout the
- * kilobytes read from and written to the disks since boot, counted over the
- * whole disks, as Linux counts them; and pswpin and pswpout 0, since nothing is
- * swapped. A counter Linux has and the kernel does not keep is not listed, and
- * procps reads it as 0.
+ * Render /proc/vmstat: the counters of Linux's file that procps's vmstat
+ * reads, of those the kernel keeps. nr_free_pages and nr_file_pages are the
+ * free pages and those of the page caches and the buffer cache; pgpgin and
+ * pgpgout the kilobytes read from and written to the disks since boot, counted
+ * over the whole disks, as Linux counts them; nr_anon_transparent_hugepages
+ * the mappings of transparent huge pages (`thp_mapped`); pswpin and pswpout 0,
+ * since nothing is swapped; and last the events of transparent huge pages the
+ * kernel counts (thp.h), in Linux's order. A counter Linux has and the kernel
+ * does not keep is not listed, and procps reads it as 0.
  */
 static int procfs_gen_vmstat(struct procfs_text *t)
 {
+    static const struct {
+        const char *name;
+        int event;
+    } thp_events[] = {{"thp_fault_alloc", THP_FAULT_ALLOC},
+                      {"thp_fault_fallback", THP_FAULT_FALLBACK},
+                      {"thp_collapse_alloc", THP_COLLAPSE_ALLOC},
+                      {"thp_collapse_alloc_failed", THP_COLLAPSE_ALLOC_FAILED},
+                      {"thp_split_page", THP_SPLIT_PAGE},
+                      {"thp_underused_split_page", THP_UNDERUSED_SPLIT_PAGE},
+                      {"thp_split_pmd", THP_SPLIT_PMD},
+                      {"thp_zero_page_alloc", THP_ZERO_PAGE_ALLOC},
+                      {"thp_zero_page_alloc_failed", THP_ZERO_PAGE_ALLOC_FAILED}};
     size_t free_frames = frame_free_count();
     uint32_t file_pages = bcache_resident() + pc_resident() + filecache_pages();
     uint32_t in = 0, out = 0, major, minor;
@@ -4131,7 +4161,15 @@ static int procfs_gen_vmstat(struct procfs_text *t)
     ap_u32(t, in);
     ap_str(t, "\npgpgout ");
     ap_u32(t, out);
+    ap_str(t, "\nnr_anon_transparent_hugepages ");
+    ap_u32(t, thp_mapped());
     ap_str(t, "\npswpin 0\npswpout 0\n");
+    for (i = 0; i < (int)(sizeof(thp_events) / sizeof(thp_events[0])); i++) {
+        ap_str(t, thp_events[i].name);
+        ap_ch(t, ' ');
+        ap_u32(t, thp_count(thp_events[i].event));
+        ap_ch(t, '\n');
+    }
     return t->len;
 }
 

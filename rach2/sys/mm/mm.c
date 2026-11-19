@@ -229,6 +229,11 @@ int mmap_held(const struct mm *mm, int write)
     return h != NULL && (!write || h->write);
 }
 
+int mmap_hold_free(void)
+{
+    return !current_proc || hold_of(NULL) != NULL;
+}
+
 int mmap_may_drop(const struct mm *mm)
 {
     const struct mmap_hold *h = current_proc ? hold_of(mm) : NULL;

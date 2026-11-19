@@ -76,8 +76,9 @@ uint32_t thp_count(int event);
  * address space. */
 void thp_mapped_add(int n);
 
-/** The 2 MiB pages mapped in every address space: AnonHugePages of
- * /proc/meminfo, nr_anon_transparent_hugepages of /proc/vmstat. */
+/** The 2 MiB pages mapped in every address space, the huge zero page's
+ * mappings aside: AnonHugePages of /proc/meminfo,
+ * nr_anon_transparent_hugepages of /proc/vmstat. */
 uint32_t thp_mapped(void);
 
 /* Who asks `thp_region_allows`. */
@@ -96,6 +97,10 @@ uint32_t thp_mapped(void);
  * page directory maps no huge page (MMU_HUGE 0).
  */
 int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t start, int how);
+
+/** Whether some 2 MiB of the region `vma` of `mm` may be a huge page at a
+ * fault (`thp_region_allows`, THP_FAULT): THPeligible of its smaps. */
+int thp_region_eligible(const struct mm *mm, const struct vma *vma);
 
 /**
  * Scan `mm` from where khugepaged last stopped in it (`thp_next`) for at

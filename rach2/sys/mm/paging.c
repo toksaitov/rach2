@@ -1304,7 +1304,9 @@ static int huge_split(page_dir_t *dir, uintptr_t va)
             }
         }
     }
-    thp_mapped_add(-1);
+    if (!(leaf & PTE_ZEROFILL)) {
+        thp_mapped_add(-1);
+    }
     thp_note(THP_SPLIT_PMD);
     return 1;
 }
@@ -1361,7 +1363,9 @@ static int huge_promote(page_dir_t *dir, uintptr_t start)
         0) {
         return 0;
     }
-    thp_mapped_add(1);
+    if (!(first & PTE_ZEROFILL)) {
+        thp_mapped_add(1);
+    }
     return 1;
 }
 
@@ -1400,7 +1404,7 @@ static int huge_install(struct mm *mm, uintptr_t start, uintptr_t base, pte_t fl
     if (!table) {
         table_refused();
     }
-    if (huge) {
+    if (huge && !(flags & PTE_ZEROFILL)) {
         thp_mapped_add(1);
     }
     return rc;
@@ -1466,15 +1470,19 @@ static uint32_t huge_zero_shrink(void)
     return HUGE_PAGES;
 }
 
+static uint32_t huge_shrink_underused(uint32_t want);
+
 /** Give reclaim the frames of transparent huge pages: the huge zero page
- * once no entry maps it, as Linux's huge_zero_page_shrinker frees it. Under
- * the big lock; nothing here sleeps. */
+ * once no entry maps it, as Linux's huge_zero_page_shrinker frees it, and
+ * then the pages of zeros of underused huge pages
+ * (`huge_shrink_underused`). Under the big lock; nothing here sleeps. */
 static uint32_t huge_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
+    uint32_t got = huge_zero_shrink();
+
     (void)s;
-    (void)want;
     (void)may_sleep;
-    return huge_zero_shrink();
+    return got >= want ? got : got + huge_shrink_underused(want - got);
 }
 
 static struct mem_shrinker _huge_shrinker = {huge_shrink, NULL};
@@ -3780,7 +3788,7 @@ unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end)
     uintptr_t va, lo, hi;
 
     for (va = start; va < end && va >= start; va = huge_next(dir, va)) {
-        if (mmu_user_huge(dir, va)) {
+        if (mmu_user_huge(dir, va) && !(mmu_user_huge(dir, va) & PTE_ZEROFILL)) {
             lo = va & ~(HUGE_SPAN - 1);
             hi = lo + HUGE_SPAN;
             lo = lo > start ? lo : start;
@@ -5030,5 +5038,126 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
     }
     thp_note(THP_PAGES_COLLAPSED);
     return 0;
+}
+
+/** Whether the frame at physical `phys` holds only zeros; 0 when it could
+ * not be mapped. */
+static int frame_is_zero(uintptr_t phys)
+{
+    uint32_t *w = kmap_temp(phys), any = 0, i;
+
+    if (!w) {
+        return 0;
+    }
+    for (i = 0; i < PAGE_SIZE / sizeof(*w) && any == 0; i++) {
+        any |= w[i];
+    }
+    kunmap_temp(w);
+    return any == 0;
+}
+
+/**
+ * Split the huge page of `mm` at the 2 MiB boundary `start` when it is
+ * underused, as Linux 6.12's deferred split shrinker splits a folio that
+ * thp_underused finds: more than `max_ptes_none` of its pages hold only
+ * zeros, every frame being this mapping's alone and unpinned. The entries
+ * lose their present bit and every processor drops their translations
+ * first, so that no thread writes meanwhile; then each page of zeros is
+ * unmapped and its frame freed, to read as zeros again at its next fault,
+ * as Linux maps such a page to the zero page (try_to_map_unused_to_zeropage),
+ * and every other page is mapped again as it was. The caller holds the big
+ * lock and the regions' lock to write. The frames freed.
+ */
+static uint32_t huge_underused_split(struct mm *mm, uintptr_t start)
+{
+    page_dir_t *dir = mm->dir;
+    pte_t leaf = mmu_user_huge(dir, start);
+    pte_t *table = mmu_user_table(dir, start, 0);
+    struct flush_batch b;
+    uint32_t i, zeros = 0, freed = 0;
+    uintptr_t addr;
+
+    if (!leaf || (leaf & PTE_ZEROFILL) || !table) {
+        return 0;
+    }
+    for (i = 0; i < HUGE_PAGES; i++) {
+        uintptr_t phys = PTE_ADDR(table[i]);
+
+        if (frame_maps(phys / PAGE_SIZE) != 1 || frame_pinned(phys)) {
+            return 0;
+        }
+        zeros += (uint32_t)frame_is_zero(phys);
+    }
+    if (zeros <= thp_policy.max_ptes_none) {
+        return 0;
+    }
+    mmn_notify(mm, MMN_DROP, start, start + HUGE_SPAN);
+    huge_split(dir, start);
+    batch_start(&b, dir);
+    for (i = 0, addr = start; i < HUGE_PAGES; i++, addr += PAGE_SIZE) {
+        if (table[i] & PTE_P) {
+            batch_add(&b, addr);
+            table[i] = (table[i] & ~(pte_t)PTE_P) | PTE_NONE | PTE_U;
+        }
+    }
+    batch_flush(&b);
+    for (i = 0; i < HUGE_PAGES; i++) {
+        if (!PTE_GOING(table[i])) {
+            continue;
+        }
+        if (frame_is_zero(PTE_ADDR(table[i]))) {
+            frame_unref(PTE_ADDR(table[i]));
+            table[i] = 0;
+            freed++;
+        } else {
+            table[i] = (table[i] & ~(pte_t)PTE_NONE) | PTE_P;
+        }
+    }
+    mm_resident_add(dir, -(long)freed);
+    thp_note(THP_SPLIT_PAGE);
+    thp_note(THP_UNDERUSED_SPLIT_PAGE);
+    return freed;
+}
+
+/**
+ * Free up to `want` frames from underused huge pages of private anonymous
+ * memory (`huge_underused_split`), while `shrink_underused` is set and
+ * `max_ptes_none` is below 511, as Linux 6.12's deferred split shrinker splits
+ * them only then. Each address space is taken only when its regions' lock is
+ * free to take to write without a wait and the current thread holds no hold of
+ * it, since the caller may be inside a change of its own space, and none is
+ * when the thread holds two already. Under the big lock; nothing here sleeps.
+ * The frames freed.
+ */
+static uint32_t huge_shrink_underused(uint32_t want)
+{
+    uint32_t freed = 0;
+    process_t *p;
+    const vma_t *r;
+    uintptr_t va;
+
+    if (!thp_policy.shrink_underused || thp_policy.max_ptes_none >= HUGE_PAGES - 1u ||
+        !mmap_hold_free()) {
+        return 0;
+    }
+    for (p = proc_list; p && freed < want; p = p->next) {
+        struct mm *mm = p->mm;
+
+        if (!mm || !mm->dir || mmap_held(mm, 0) || !mmap_write_trylock(mm)) {
+            continue;
+        }
+        for (r = vm_first(&mm->vm); r && freed < want; r = vm_next(r)) {
+            if (r->file || r->type == VM_SHARED) {
+                continue;
+            }
+            va = (r->start + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+            for (; va >= r->start && va < r->end && r->end - va >= HUGE_SPAN && freed < want;
+                 va += HUGE_SPAN) {
+                freed += huge_underused_split(mm, va);
+            }
+        }
+        mmap_unlock(mm);
+    }
+    return freed;
 }
 #endif
