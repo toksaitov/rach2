@@ -72,15 +72,21 @@ struct r8168_io {
 static uintptr_t r8168_mmio;
 
 /* The window a bring-up mapped and the address it maps, kept so that a
- * second bring-up of the card at the same address maps nothing new. */
+ * second bring-up of the card at the same address maps nothing new; one
+ * at an address the BAR left is unmapped. */
 static uintptr_t r8168_window;
 static uint64_t r8168_window_at;
 
 /** The 256 bytes of the card's window at `addr`, mapped now or by an
- * earlier bring-up at the same address; 0 when it would not map. */
+ * earlier bring-up at the same address; 0 when it would not map. Called
+ * with the card stopped, so that nothing reads the window it replaces. */
 static uintptr_t r8168_window_map(uint64_t addr)
 {
-    if (r8168_window == 0 || r8168_window_at != addr) {
+    if (r8168_window != 0 && r8168_window_at != addr) {
+        mmio_unmap(r8168_window, 256);
+        r8168_window = 0;
+    }
+    if (r8168_window == 0) {
         uintptr_t mapped = map_mmio((uintptr_t)addr, 256);
 
         if (mapped == 0) {
@@ -1023,6 +1029,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
         return NETDEV_ABSENT;
     }
     rtl8168_iface = nd;
+    r8168_mmio = 0; /* a failure before the new window is mapped writes none */
 
     r8168_up = 0;
     if (!pci_find_device_by_id(0x10EC, 0x8168, &r8168_pci)) {
@@ -1101,8 +1108,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
     r8168_irq_mask_and_ack();
     io->w32(R8168_RXCONFIG, io->r32(R8168_RXCONFIG) & ~(uint32_t)0x3f); /* rtl_rx_close */
     if (!r8168_enable_rxdvgate()) {
-        r8168_err = "the FIFOs did not drain before the start";
-        return NETDEV_FAILED;
+        klog(KLOG_WARN, "rtl8168", "init: the FIFOs did not drain before the second reset");
     }
     io->udelay(2000);
     if (!r8168_hw_reset()) {
@@ -1706,11 +1712,20 @@ static void rtl8168_stop(void *dev)
 
     if (r8168_mmio != 0) {
         for (i = 0; i < R8168_DRAIN_STEPS; i++) {
+            /* The handler and the tick reclaim too; the stack's lock keeps
+             * them out of this one. */
+            uint32_t flags = net_lock();
+            int drained;
+
             r8168_tx_reclaim();
-            if (r8168_tx_tail == r8168_tx_head) {
+            drained = r8168_tx_tail == r8168_tx_head;
+            if (!drained) {
+                io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
+            }
+            net_unlock(flags);
+            if (drained) {
                 break;
             }
-            io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
             io->udelay(R8168_DRAIN_USEC);
         }
         r8168_irq_mask_and_ack();
