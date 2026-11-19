@@ -123,7 +123,9 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
  * follow /dev/log's, 4, below devfs's nodes from 16; those of /dev/cpu are
  * from 0xF00, above devfs's last and below the slaves of /dev/pts, from
  * 0x1000. One row for each of the NR_CPUS processors. /dev/net, which holds
- * the tap device, is last, so that the rows before it keep their numbers. */
+ * the tap device, and /dev/virtio-ports, which holds the names of a virtio
+ * console's ports, follow, so that the rows before them keep their
+ * numbers. */
 static const struct synth_dev_dir synth_dev_dirs[] = {
     {"input", 5u, 1, -1},
     {"dri", 6u, 0, -1},
@@ -139,7 +141,8 @@ static const struct synth_dev_dir synth_dev_dirs[] = {
                                 CPU_ROW(47) CPU_ROW(48) CPU_ROW(49) CPU_ROW(50) CPU_ROW(51)
                                     CPU_ROW(52) CPU_ROW(53) CPU_ROW(54) CPU_ROW(55) CPU_ROW(56)
                                         CPU_ROW(57) CPU_ROW(58) CPU_ROW(59) CPU_ROW(60) CPU_ROW(61)
-                                            CPU_ROW(62) CPU_ROW(63){"net", 8u, 0, -1}};
+                                            CPU_ROW(62) CPU_ROW(63){"net", 8u, 0, -1},
+    {"virtio-ports", 9u, 0, -1}};
 
 #define SYNTH_DEV_DIRS ((int)(sizeof(synth_dev_dirs) / sizeof(synth_dev_dirs[0])))
 

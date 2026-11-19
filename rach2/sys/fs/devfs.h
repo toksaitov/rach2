@@ -308,12 +308,15 @@ int devfs_subdir_present(int row);
  * operations and its `priv`, and fstat gives its name and numbers until
  * its slot is taken again, first by a node of the same name.
  */
-/* The most nodes at once: 64 for the drivers and one msr for each of the
- * 64 processors (proc/percpu.h's NR_CPUS). */
-#define DEVFS_NODES_MAX     128
+/* The most nodes at once: one msr for each of the 64 processors
+ * (proc/percpu.h's NR_CPUS) and the rest for the drivers, a virtio
+ * console's ports among them. */
+#define DEVFS_NODES_MAX     512
 /* The devices that may have an owner, group or mode of their own at once. */
 #define DEVFS_OWNED_MAX     256
-#define DEVFS_NODE_NAME_MAX 32
+/* A node's path below /dev, with its NUL, as a lookup carries it
+ * (synthfs.h's `struct vpath`). */
+#define DEVFS_NODE_NAME_MAX 64
 struct devfs_node {
     const char *name;
     uint16_t major, minor;
@@ -321,12 +324,16 @@ struct devfs_node {
     const struct file_ops *ops;
     int32_t (*open)(struct devfs_node *node, struct fd_entry *e, int flags);
     void *priv; /* the registrant's */
+    /* A second name of a device another node has, as udev's link of
+     * /dev/virtio-ports: its numbers may be a present device's, and
+     * `devfs_name_of` never gives it. */
+    int alias;
 };
 
 /** Register `node`: 0, -EINVAL for a name no directory of /dev takes or
  * one too long, -EEXIST for a name the table, a disk
- * or a registered node has, or the numbers of a character device present,
- * or -ENOSPC when every slot is held. */
+ * or a registered node has, or, unless `alias`, the numbers of a character
+ * device present, or -ENOSPC when every slot is held. */
 int32_t devfs_node_register(struct devfs_node *node);
 
 /** Withdraw `node` from /dev; nothing for a node not registered. */

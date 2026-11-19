@@ -185,7 +185,7 @@ static int32_t udma_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 
 static const struct file_ops udma_file_ops = {NULL, NULL, NULL, udma_ioctl, NULL, NULL, NULL, 0};
 /* Linux 6.12.115: udmabuf.c:503-507, devtmpfs.c:122-130. */
-static struct devfs_node udma_node = {"udmabuf", 10, 126, 0600, &udma_file_ops, NULL, NULL};
+static struct devfs_node udma_node = {"udmabuf", 10, 126, 0600, &udma_file_ops, NULL, NULL, 0};
 
 /** Read the device number, or with arg 1 the variables of its uevent. */
 static int32_t udma_show(void *obj, int arg, char *buf, uint32_t cap)

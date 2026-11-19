@@ -934,7 +934,7 @@ static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl,
 
 /* /dev/kvm, the misc device 10:232, read and written by everyone, as
  * udev's rule for the kvm group gives it on a machine with one user. */
-static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL};
+static struct devfs_node kvm_node = {"kvm", 10, 232, 0666, &dev_ops, NULL, NULL, 0};
 
 int kvm_ignore_msrs;
 int kvm_report_ignored_msrs = 1;
