@@ -133,6 +133,22 @@
 #define HH_DMA_MAX    (3u * HH_PERIOD_MAX)
 #define HH_BUFFER_MS  40u
 
+/* The stream's rates, as OSS's /dev/dsp takes them (dsp.c's DSP_RATE_MIN
+ * and DSP_RATE_MAX); the most bytes of the stream the caller's buffer keeps
+ * for the driver's, dsp.c's DSP_BUFFER_MAX; and the stream's frames a
+ * conversion takes into hh_stage at once, for at most HH_STAGE_FRAMES of
+ * the DMA's: six for each at the largest ratio, 192 kHz to the 32 kHz
+ * every sink plays, and two more for the interpolation. */
+#define HH_RATE_MIN     1000u
+#define HH_RATE_MAX     192000u
+#define HH_STREAM_MAX   65536u
+#define HH_STAGE_FRAMES 256u
+#define HH_STAGE_BYTES  ((HH_STAGE_FRAMES * 6u + 2u) * 8u)
+
+/* The longest gap between two refills whose whole laps of the ring are
+ * counted; a longer one counts as this. */
+#define HH_LAP_TICKS (5u * (uint32_t)TICK_HZ)
+
 /** One short audio descriptor of an ELD, Linux's struct cea_sad. */
 struct hh_sad {
     int format; /* the CEA coding type, with the extended types after 15 */
@@ -216,25 +232,56 @@ static volatile uint64_t hh_rirb[256] __attribute__((aligned(128)));
 static volatile hda_bdl_entry_t hh_bdl[HH_BDL_MAX] __attribute__((aligned(128)));
 static uint8_t hh_dma[HH_DMA_MAX] __attribute__((aligned(128)));
 
-/* The stream: its owner from open to close, the pin entry it plays on (-1
- * for none), the converter, the parameters `stream_setup` granted, and the
- * converter's rates and widths that the sink allows. */
+/* The stream: its owner from open to close, whether it holds the display's
+ * power, which the display's going ends, the pin entry it plays on (-1 for
+ * none), the converter, and the converter's rates and widths that the sink
+ * allows. */
 static audio_stream_t *hh_stream;
+static int hh_held;
 static int hh_bound;
 static int hh_cvt_idx;
 static uint32_t hh_rates; /* bits of the PCM parameter's rates */
 static int hh_wide;       /* the sink and converter take 24 bits */
+
+/* What `stream_setup` granted: the DMA's format word and rate, its period
+ * and frame in bytes and its periods, the bytes of a frame of the stream,
+ * and whether the stream's frames are the DMA's, which then copies them. */
 static uint16_t hh_fmt;
 static uint32_t hh_rate;
-static uint32_t hh_pb;    /* bytes of a period */
-static uint32_t hh_n;     /* periods in the DMA buffer */
-static uint32_t hh_frame; /* bytes of a frame */
+static uint32_t hh_pb;
+static uint32_t hh_n;
+static uint32_t hh_frame; /* 4, two 16-bit samples, or 8, two 24 in 32 */
+static uint32_t hh_sframe;
+static int hh_copy;
 
-/* Under hh_slock: whether the DMA runs, the period the refill reaches
- * next, and the periods played since the start. */
+/*
+ * The conversion of the stream's frames to the DMA's, as Linux's OSS
+ * layer converts with its plugins (sound/core/oss/): each sample widened to
+ * 24 bits, a mono one to both channels, and the rate changed by linear
+ * interpolation, as its rate plugin does. The next DMA frame lies `hh_acc`
+ * / hh_rate of a stream frame past `hh_prev`, between it and `hh_cur`;
+ * at hh_rate or more, the next stream frame is owed first.
+ */
+static uint32_t hh_acc;
+static int32_t hh_prev[2], hh_cur[2];
+static uint8_t hh_stage[HH_STAGE_BYTES];
+
+/*
+ * Under hh_slock: whether the DMA runs; the period the refill reaches
+ * next; the stream's frames taken to fill each period, those taken since
+ * the start, and those of the periods played; the position last given,
+ * which never goes back, and the one the last `period` call marked; and
+ * the tick and the DMA's place in bytes at the last refill.
+ */
 static volatile int hh_running;
 static uint32_t hh_next;
-static uint32_t hh_done;
+static uint32_t hh_in[HH_BDL_MAX];
+static uint32_t hh_taken;
+static uint32_t hh_played;
+static uint32_t hh_pos;
+static uint32_t hh_mark;
+static uint64_t hh_last_tick;
+static uint32_t hh_last_lpib;
 
 /* The rates of the PCM parameter's bits 0 to 11, with their stream format
  * words, as hda.c's hda_rates. */
@@ -1015,64 +1062,225 @@ static int hh_stream_open(audio_stream_t *s)
         return -ENODEV;
     }
     hh_stream = s;
+    hh_held = 1;
     mutex_unlock(&hh_mutex);
     return 0;
 }
 
+/** The stream's frames the DMA's next `n` frames, at least 1, take. */
+static uint32_t hh_need(const audio_stream_t *s, uint32_t n)
+{
+    return hh_copy ? n : (hh_acc + (n - 1u) * s->rate) / hh_rate;
+}
+
+/** The stream bytes the DMA's `n` periods take, in whole periods of `s`,
+ * with a conversion's two frames of lookahead. The DMA's frames are at
+ * most HH_DMA_MAX / 4, so their product with a rate fits in 32 bits. */
+static uint32_t hh_lead(const audio_stream_t *s, uint32_t n)
+{
+    uint32_t spf = s->period_bytes / hh_sframe;
+    uint32_t frames = n * (hh_pb / hh_frame) * s->rate / hh_rate + (hh_copy ? 0u : 2u);
+
+    return (frames + spf - 1u) / spf * s->period_bytes;
+}
+
+/** The index in hh_rate_hz of the rate the sink allows nearest `rate`,
+ * the higher on a tie, or -1 when it allows none; under hh_mutex. */
+static int hh_nearest_rate(uint32_t rate)
+{
+    uint32_t d, bd = 0;
+    int i, bi = -1;
+
+    /* Up to 192 kHz, HDMI's highest, the 12th bit's 384 kHz left out. */
+    for (i = 0; i < 11; i++) {
+        if (!(hh_rates & (1u << i))) {
+            continue;
+        }
+        d = hh_rate_hz[i] > rate ? hh_rate_hz[i] - rate : rate - hh_rate_hz[i];
+        if (bi < 0 || d < bd || (d == bd && hh_rate_hz[i] > hh_rate_hz[bi])) {
+            bi = i;
+            bd = d;
+        }
+    }
+    return bi;
+}
+
 /**
- * Grant `s` two channels, 16 bits or, for a wider format where the
- * converter and sink take them, 24 bits in 32, at the rate the converter
- * and sink allow nearest the one asked for, the higher on a tie. The
- * period is the one asked for, made a multiple of 128 bytes and at most
- * HH_PERIOD_MAX; the DMA buffer holds enough of them for HH_BUFFER_MS.
+ * Grant `s` what it asks for, as Linux's OSS layer does through its
+ * plugins: its format, one or two channels, and its rate, held between
+ * HH_RATE_MIN and HH_RATE_MAX. The DMA plays two channels at the rate the
+ * converter and sink allow nearest the stream's, the higher on a tie, in
+ * 16 bits, or in 24 bits in 32 for a stream of more than 16 where the
+ * converter and sink take them; the refill converts (hh_fill). The
+ * stream's period is the one asked for, in whole frames; the DMA's covers
+ * the same time, a multiple of 128 bytes up to HH_PERIOD_MAX, and the DMA
+ * buffer holds enough of them for HH_BUFFER_MS, fewer when the stream
+ * bytes they take would pass HH_STREAM_MAX, but two at least.
  */
 static int hh_stream_setup(audio_stream_t *s)
 {
-    uint32_t best = 0, d, bd = 0, pb, need, n;
-    int i, bi = -1, wide;
+    uint32_t best, pb, need, n, frames;
+    int bi, wide;
 
     mutex_lock(&hh_mutex);
     if (s != hh_stream || s->period_bytes < 128) {
         mutex_unlock(&hh_mutex);
         return -EINVAL;
     }
-    for (i = 0; i < 12; i++) {
-        if (!(hh_rates & (1u << i))) {
-            continue;
-        }
-        d = hh_rate_hz[i] > s->rate ? hh_rate_hz[i] - s->rate : s->rate - hh_rate_hz[i];
-        if (bi < 0 || d < bd || (d == bd && hh_rate_hz[i] > best)) {
-            bi = i;
-            bd = d;
-            best = hh_rate_hz[i];
-        }
+    s->rate = s->rate < HH_RATE_MIN ? HH_RATE_MIN : s->rate > HH_RATE_MAX ? HH_RATE_MAX : s->rate;
+    s->channels = s->channels < 2 ? 1 : 2;
+    if (s->period_bytes > HH_PERIOD_MAX) {
+        s->period_bytes = HH_PERIOD_MAX;
     }
-    wide = hh_wide && s->format != AUDIO_U8 && s->format != AUDIO_S16LE;
-    s->rate = best;
-    s->format = wide ? AUDIO_S32LE : AUDIO_S16LE;
-    s->channels = 2;
+    bi = hh_nearest_rate(s->rate);
+    if (bi < 0) {
+        mutex_unlock(&hh_mutex);
+        return -EINVAL;
+    }
+    best = hh_rate_hz[bi];
+    wide = hh_wide && AUDIO_SAMPLE_BYTES(s->format) > 2u;
+    hh_rate = best;
     hh_frame = wide ? 8u : 4u;
-    pb = s->period_bytes > HH_PERIOD_MAX ? HH_PERIOD_MAX : s->period_bytes;
-    pb -= pb % 128u;
+    hh_sframe = (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
+    hh_copy =
+        s->rate == best && s->channels == 2 && s->format == (wide ? AUDIO_S32LE : AUDIO_S16LE);
+    s->period_bytes -= s->period_bytes % hh_sframe;
+    /* At most 16384 frames times 192 kHz: 32 bits hold it. */
+    frames = s->period_bytes / hh_sframe * best / s->rate;
+    pb = (frames * hh_frame + 64u) / 128u * 128u;
+    pb = pb < 128u ? 128u : pb > HH_PERIOD_MAX ? HH_PERIOD_MAX : pb;
     need = best / 1000u * hh_frame * HH_BUFFER_MS;
     n = (need + pb - 1) / pb;
-    if (n < 2) {
-        n = 2;
-    }
     if (n > HH_BDL_MAX) {
         n = HH_BDL_MAX;
     }
     if (n > HH_DMA_MAX / pb) {
         n = HH_DMA_MAX / pb;
     }
-    s->period_bytes = pb;
-    s->device_periods = n;
-    hh_rate = best;
     hh_pb = pb;
+    while (n > 2 && hh_lead(s, n) > HH_STREAM_MAX) {
+        n--;
+    }
+    if (n < 2) {
+        n = 2;
+    }
+    s->device_periods = hh_lead(s, n) / s->period_bytes;
     hh_n = n;
     hh_fmt = (uint16_t)(hh_rate_fmt[bi] | (wide ? HDA_FMT_BITS_24 : HDA_FMT_BITS_16) | 1u);
     mutex_unlock(&hh_mutex);
     return 0;
+}
+
+/** Sample `p` of the stream's format as 24 bits: unsigned 8-bit moved to
+ * signed, and a wider one's top 24 bits. */
+static int32_t hh_sample(const audio_stream_t *s, const uint8_t *p)
+{
+    uint32_t u;
+
+    switch (s->format) {
+    case AUDIO_U8:
+        return ((int32_t)p[0] - 128) * 65536;
+    case AUDIO_S16LE:
+        return (int32_t)(int16_t)((uint16_t)p[0] | (uint16_t)p[1] << 8) * 256;
+    case AUDIO_S24LE:
+    case AUDIO_S24_3LE:
+        u = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16;
+        break;
+    case AUDIO_S32LE:
+    default:
+        u = (uint32_t)p[1] | (uint32_t)p[2] << 8 | (uint32_t)p[3] << 16;
+        break;
+    }
+    return (int32_t)(u & 0x800000u ? u | 0xff000000u : u);
+}
+
+/** Read the stream's frame at `p` into `v` as two 24-bit samples; a mono
+ * sample goes to both. */
+static void hh_frame_in(const audio_stream_t *s, const uint8_t *p, int32_t *v)
+{
+    v[0] = hh_sample(s, p);
+    v[1] = s->channels == 2 ? hh_sample(s, p + AUDIO_SAMPLE_BYTES(s->format)) : v[0];
+}
+
+/** `a` plus `w` / 8192 of the way to `b`, rounded down, both of 24 bits, in
+ * 32-bit arithmetic: the difference's magnitude is split at bit 13. */
+static int32_t hh_lerp(int32_t a, int32_t b, uint32_t w)
+{
+    uint32_t m = (uint32_t)(b > a ? b - a : a - b);
+    uint32_t q = (m >> 13) * w + ((m & 8191u) * w >> 13);
+
+    return b > a ? a + (int32_t)q : a - (int32_t)q;
+}
+
+/** Store the 24-bit sample `v` at `p` as the DMA plays it: in the top 24
+ * bits of 32, or rounded to the nearest of 16, a half up, and held there.
+ * The offset keeps the division's dividend positive, where C89 defines its
+ * rounding. */
+static void hh_store(uint8_t *p, int32_t v)
+{
+    uint32_t u;
+
+    if (hh_frame == 8u) {
+        u = (uint32_t)v << 8;
+        p[2] = (uint8_t)(u >> 16);
+        p[3] = (uint8_t)(u >> 24);
+    } else {
+        v = (v + 8388608 + 128) / 256 - 32768;
+        u = (uint32_t)(v > 32767 ? 32767 : v);
+    }
+    p[0] = (uint8_t)u;
+    p[1] = (uint8_t)(u >> 8);
+}
+
+/**
+ * Fill period `slot` of the DMA buffer from the stream and write it back to
+ * memory for the controller; the stream's frames taken for it. A stream in
+ * the DMA's frames is copied; another is converted in chunks of at most
+ * HH_STAGE_FRAMES of the DMA's, each `transfer` taking the frames the chunk
+ * needs into hh_stage, as Linux's plugins pull them. Under hh_slock, or
+ * before the DMA runs.
+ */
+static uint32_t hh_fill(uint32_t slot)
+{
+    audio_stream_t *s = hh_stream;
+    uint8_t *dst = hh_dma + slot * hh_pb;
+    uint32_t frames = hh_pb / hh_frame, taken = 0, chunk, need, i, k, w;
+    int32_t v[2];
+
+    if (hh_copy) {
+        s->transfer(s, dst, hh_pb);
+        taken = frames;
+    }
+    while (!hh_copy && frames > 0) {
+        chunk = frames < HH_STAGE_FRAMES ? frames : HH_STAGE_FRAMES;
+        need = hh_need(s, chunk);
+        while (chunk > 1 && need * hh_sframe > sizeof(hh_stage)) {
+            chunk /= 2;
+            need = hh_need(s, chunk);
+        }
+        if (need > 0) {
+            s->transfer(s, hh_stage, need * hh_sframe);
+        }
+        for (i = 0, k = 0; i < chunk; i++) {
+            while (hh_acc >= hh_rate) {
+                hh_prev[0] = hh_cur[0];
+                hh_prev[1] = hh_cur[1];
+                hh_frame_in(s, hh_stage + k++ * hh_sframe, hh_cur);
+                hh_acc -= hh_rate;
+            }
+            w = (hh_acc << 13) / hh_rate;
+            v[0] = hh_lerp(hh_prev[0], hh_cur[0], w);
+            v[1] = hh_lerp(hh_prev[1], hh_cur[1], w);
+            hh_store(dst + i * hh_frame, v[0]);
+            hh_store(dst + i * hh_frame + hh_frame / 2u, v[1]);
+            hh_acc += s->rate;
+        }
+        taken += need;
+        frames -= chunk;
+        dst += chunk * hh_frame;
+    }
+    arch_dma_flush(hh_dma + slot * hh_pb, hh_pb);
+    return taken;
 }
 
 /** Reset the output stream descriptor through its SRST handshake. */
@@ -1097,7 +1305,8 @@ static void hh_sd_reset(void)
 /**
  * Lay the descriptor list over the DMA buffer, fill every period from the
  * stream, program the descriptor, prepare the codec as Linux's prepare
- * does, and run the DMA.
+ * does, and run the DMA. -EIO for a stream not set up, or one whose
+ * display has gone since its open.
  */
 static int hh_stream_start(audio_stream_t *s)
 {
@@ -1106,20 +1315,25 @@ static int hh_stream_start(audio_stream_t *s)
     uint32_t i, flags;
 
     mutex_lock(&hh_mutex);
-    if (s != hh_stream || !hh_present || !hh_pb) {
+    if (s != hh_stream || !hh_present || !hh_held || !hh_pb) {
         mutex_unlock(&hh_mutex);
         return -EIO;
     }
     hh_sd_reset();
+    /* The first DMA frame takes two of the stream's: the first, exactly,
+     * and the next, to interpolate towards. */
+    hh_acc = 2u * hh_rate;
+    k_memset(hh_cur, 0, sizeof(hh_cur));
+    hh_taken = 0;
     for (i = 0; i < hh_n; i++) {
         hh_bdl[i].addr_low = (uint32_t)(addr + i * hh_pb);
         hh_bdl[i].addr_high = hh_hi(addr + i * hh_pb);
         hh_bdl[i].length = hh_pb;
         hh_bdl[i].ioc = 0;
-        s->transfer(s, hh_dma + i * hh_pb, hh_pb);
+        hh_in[i] = hh_fill(i);
+        hh_taken += hh_in[i];
     }
     arch_dma_flush(hh_bdl, hh_n * sizeof(hh_bdl[0]));
-    arch_dma_flush(hh_dma, hh_n * hh_pb);
     hh_write(hh_sd(HDA_SD_BDPL), (uint32_t)bdl, 32);
     hh_write(hh_sd(HDA_SD_BDPU), hh_hi(bdl), 32);
     hh_write(hh_sd(HDA_SD_CBL), hh_n * hh_pb, 32);
@@ -1134,7 +1348,11 @@ static int hh_stream_start(audio_stream_t *s)
     hh_cvt_setup();
     flags = spin_lock_irqsave(&hh_slock);
     hh_next = 0;
-    hh_done = 0;
+    hh_played = 0;
+    hh_pos = 0;
+    hh_mark = 0;
+    hh_last_tick = rtc_ticks_now();
+    hh_last_lpib = 0;
     hh_running = 1;
     hh_write(hh_sd(HDA_SD_CTL), ((uint32_t)HH_TAG << 20) | HDA_SD_CTL_RUN, 32);
     spin_unlock_irqrestore(&hh_slock, flags);
@@ -1168,20 +1386,24 @@ static void hh_halt(void)
 static void hh_stream_stop(audio_stream_t *s)
 {
     mutex_lock(&hh_mutex);
-    if (s == hh_stream) {
+    if (s == hh_stream && hh_present) {
         hh_halt();
     }
     mutex_unlock(&hh_mutex);
 }
 
-/** Give the device back, and the display's power with it. */
+/** Give the device back, and the display's power with it unless the
+ * display's going took it. */
 static void hh_stream_close(audio_stream_t *s)
 {
     mutex_lock(&hh_mutex);
     if (s == hh_stream) {
         if (hh_present) {
             hh_halt();
+        }
+        if (hh_held) {
             hh_power_put();
+            hh_held = 0;
         }
         if (hh_bound >= 0) {
             hh_pins[hh_bound].cvt = 0;
@@ -1194,39 +1416,88 @@ static void hh_stream_close(audio_stream_t *s)
     mutex_unlock(&hh_mutex);
 }
 
-/** The frames played since the start, read from the link position. */
+/**
+ * The DMA periods played since the last refill, at the DMA's place `lpib`
+ * in bytes and the tick `now`: those the place moved over, and a whole
+ * ring for each lap the place cannot show. LPIB gives the place only within
+ * the ring, so a refill late by a lap or more would find the period it
+ * left and count none; as Linux's snd_pcm_update_hw_ptr0 counts the jiffies
+ * since its last update, the laps are the frames the elapsed ticks played
+ * at the DMA's rate less those the place moved over, in whole rings,
+ * rounded to the nearest. Under hh_slock.
+ */
+static uint32_t hh_passed(uint32_t lpib, uint64_t now)
+{
+    uint32_t cbl = hh_n * hh_pb, ring = cbl / hh_frame, laps = 0, moved, played, ticks;
+
+    ticks = now - hh_last_tick > HH_LAP_TICKS ? HH_LAP_TICKS : (uint32_t)(now - hh_last_tick);
+    /* At most 5 s at 192 kHz: 32 bits hold it. */
+    played = ticks * hh_rate / (uint32_t)TICK_HZ;
+    moved = (lpib + cbl - hh_last_lpib) % cbl / hh_frame;
+    if (played > moved) {
+        laps = (played - moved + ring / 2u) / ring;
+    }
+    return (lpib / hh_pb + hh_n - hh_next) % hh_n + laps * hh_n;
+}
+
+/** The stream's frames played at `lpib` with `passed` periods played since
+ * the last refill: those of the periods played, the share of the one
+ * playing that `lpib` has passed, and never less than the last given.
+ * Under hh_slock. */
+static uint32_t hh_played_at(uint32_t lpib, uint32_t passed)
+{
+    uint32_t pos = hh_played, slot = hh_next, off = lpib % hh_pb;
+
+    while (passed-- > 0) {
+        pos += hh_in[slot];
+        slot = (slot + 1u) % hh_n;
+    }
+    pos += hh_in[slot] * off / hh_pb;
+    return (int32_t)(pos - hh_pos) > 0 ? pos : hh_pos;
+}
+
+/** The DMA's place in the ring, in bytes. */
+static uint32_t hh_lpib(void)
+{
+    return hh_read(hh_sd(HDA_SD_LPIB), 32) % (hh_n * hh_pb);
+}
+
+/** The frames played since the start, from the link position and the
+ * clock; it refills nothing, since a wait's condition may read it. */
 static uint32_t hh_stream_position(audio_stream_t *s)
 {
-    uint32_t flags, pos = 0, cbl, lpib;
+    uint32_t flags, pos = 0, lpib;
 
     flags = spin_lock_irqsave(&hh_slock);
     if (s == hh_stream && hh_running) {
-        cbl = hh_n * hh_pb;
-        lpib = hh_read(hh_sd(HDA_SD_LPIB), 32) % cbl;
-        pos = hh_done * (hh_pb / hh_frame) + (lpib + cbl - hh_next * hh_pb) % cbl / hh_frame;
+        lpib = hh_lpib();
+        pos = hh_played_at(lpib, hh_passed(lpib, rtc_ticks_now()));
     }
     spin_unlock_irqrestore(&hh_slock, flags);
     return pos;
 }
 
-/** The frames the DMA buffer holds that have not played: all its periods
- * less what of them has played. */
+/** The frames the stream has given that have not played: those taken less
+ * those played. */
 static uint32_t hh_stream_delay(audio_stream_t *s)
 {
-    uint32_t given, pos;
+    uint32_t pos, taken, flags;
 
     if (!s || s != hh_stream || !hh_running) {
         return 0;
     }
     pos = hh_stream_position(s);
-    given = (hh_done + hh_n) * (hh_pb / hh_frame);
-    return given - pos <= hh_n * (hh_pb / hh_frame) ? given - pos : 0;
+    flags = spin_lock_irqsave(&hh_slock);
+    taken = hh_taken;
+    spin_unlock_irqrestore(&hh_slock, flags);
+    return (int32_t)(taken - pos) > 0 ? taken - pos : 0;
 }
 
 void hdmi_audio_tick(void)
 {
     audio_stream_t *s;
-    uint32_t flags, cur;
+    uint32_t flags, lpib, passed, spf;
+    uint64_t now;
 
     if (!hh_running) {
         return;
@@ -1234,12 +1505,21 @@ void hdmi_audio_tick(void)
     flags = spin_lock_irqsave(&hh_slock);
     s = hh_stream;
     if (hh_running && s) {
-        cur = hh_read(hh_sd(HDA_SD_LPIB), 32) % (hh_n * hh_pb) / hh_pb;
-        while (hh_next != cur) {
-            s->transfer(s, hh_dma + hh_next * hh_pb, hh_pb);
-            arch_dma_flush(hh_dma + hh_next * hh_pb, hh_pb);
+        now = rtc_ticks_now();
+        lpib = hh_lpib();
+        passed = hh_passed(lpib, now);
+        hh_pos = hh_played_at(lpib, passed);
+        hh_last_tick = now;
+        hh_last_lpib = lpib;
+        while (passed-- > 0) {
+            hh_played += hh_in[hh_next];
+            hh_in[hh_next] = hh_fill(hh_next);
+            hh_taken += hh_in[hh_next];
             hh_next = (hh_next + 1) % hh_n;
-            hh_done++;
+        }
+        spf = s->period_bytes / hh_sframe;
+        while (hh_pos - hh_mark >= spf) {
+            hh_mark += spf;
             s->period(s);
         }
     }
@@ -1329,8 +1609,13 @@ static void hh_bind(void *ptr, const struct acomp_ops *ops, void *dev)
     }
 }
 
-/** The display goes: stop the stream, let its power go, and withdraw the
- * card; an open of /dev/dsp1 keeps failing until it closes. */
+/**
+ * The display goes: stop the stream, let its power go, tell its owner, so
+ * that a writer, a drain or a close waiting on it wakes and fails, as
+ * Linux's snd_card_disconnect does, and withdraw the card. The stream
+ * stays the owner's until it closes, and an open of /dev/dsp1 keeps
+ * failing until then.
+ */
 static void hh_unbind(void *ptr)
 {
     (void)ptr;
@@ -1341,7 +1626,13 @@ static void hh_unbind(void *ptr)
     mutex_lock(&hh_mutex);
     if (hh_stream && hh_present) {
         hh_halt();
+    }
+    if (hh_held) {
         hh_power_put();
+        hh_held = 0;
+    }
+    if (hh_stream && hh_stream->gone) {
+        hh_stream->gone(hh_stream);
     }
     hh_present = 0;
     hh_parsed = 0;
