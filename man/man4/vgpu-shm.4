@@ -15,7 +15,8 @@ The kernel then binds
 over the region, whose layout and rules
 .Pa rach2/sys/virtio/vgpushm.h
 defines: a control page, the rings of two virtqueues and a heap from which
-the driver takes its commands and every resource's backing.
+the driver takes its commands and, unless the device backs them with its
+own memory, every resource's backing.
 The device's DMA addresses are offsets in the region, and the kernel
 checks everything the device writes there before using it.
 The device has mode 0600, and every call needs a privileged caller.
@@ -75,8 +76,9 @@ last states of the driver and the device and the device's error, whether
 both sides use the doorbells, the times virtio-gpu was bound, the
 doorbells rung each way by vector, the passes that found the device's work
 before its doorbell, the heap's pages, those in use and the
-allocations it refused, and the blobs mapped from the VM's pages since the
-attach, the pages the live maps hold, the live maps, and those taken back.
+allocations it refused, and the blobs and backings mapped from the VM's
+pages since the attach, the pages the live maps hold, the live maps, and
+those taken back.
 .El
 .Pp
 On x86-64, with the doorbells, the driver accepts page lists: a mappable
@@ -93,6 +95,13 @@ blob is removed, and the next access raises
 as an access to a revoked mapping does on Linux.
 The kernel keeps its references to the frames until the driver frees the
 map, at the blob's free or the device's reset or removal.
+.Pp
+When the device also offers backings, a 2D or 3D resource's backing is the
+device machine's memory, which its backend allocates and pins for it and
+names by the same page list; the buffer's pages are those frames, so a
+buffer is bounded by the machine's memory, not by the heap.
+When they are taken back while the device lives, the driver unplugs the
+display; a backing the device refuses comes from the heap.
 .Pp
 With a KVM guest's ivshmem-doorbell, the device's doorbells reach the
 kernel through KVM ioeventfds and the driver's raise the guest's MSI-X
