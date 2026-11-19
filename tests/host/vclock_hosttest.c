@@ -70,9 +70,11 @@
  * first kick and its answer, ends no turn, and one after four unanswered
  * passes ends it but stops no clock; a stretch of 43.4 s with no tick,
  * which the tick's clock reads a wrap of the HPET short and the TSC whole,
- * begins the span again and stops no clock; a TSC at three times its rate
- * stops the clock at its first span, and one at 99 times, half a wrap of
- * the HPET in a span, at its fourth; a boot's rate 2% high is measured
+ * begins the span again and stops no clock, and so do four such stretches
+ * in a row, each before the span's end, as Linux skips each interval longer
+ * than a second by either clock; a TSC at three times its rate stops the
+ * clock at its first span, and one at 99 times, whose span the TSC ends
+ * within three ticks, there too; a boot's rate 2% high is measured
  * again and set, and the clock runs, where one 6% high stops it; and while
  * the second processor never answers, a drift of the boot processor, the
  * one of two left, is caught, since the turn it takes back keeps until it
@@ -1632,7 +1634,7 @@ static int watch_until_span(void)
         if (!watch_tick()) {
             return 0;
         }
-        if (watch_based && watch_raw == now_ns) {
+        if (watch_based && watch_raw == now_ns - tick_lag_ns) {
             return 1;
         }
     }
@@ -1640,11 +1642,50 @@ static int watch_until_span(void)
 }
 
 /**
- * A TSC that runs at three times its rate once its rate is set, which the
- * TSC alone finds past twice each span's length, stops the clock at the
- * first span it runs fast through; one at 99 times, which runs half a wrap
- * of the HPET in a span, has its span begun again three times, as a
- * stretch with no tick would, and stops the clock at the fourth.
+ * Four stretches in a row of 43.45 s with no tick, one before each end of
+ * the span begun at the last: the tick's clock reads each span 500 ms, a
+ * wrap of the HPET short, and the TSC the whole stretch. Linux skips each,
+ * since the longer of its two intervals passes WATCHDOG_INTERVAL_MAX_NS,
+ * and keeps the TSC; so does the watch, which begins the span again at
+ * each and still catches a drift after.
+ */
+static void watch_pauses_rows(void)
+{
+    uint32_t ran;
+    int i, kept = 1;
+
+    watch_boot(1);
+    ran = watch_ticks(2u * TICK_HZ);
+    CHECK(ran == 2u * TICK_HZ && vclock_running() && watch_refined, "the rate is set");
+    CHECK(watch_until_span(), "a span begins");
+    for (i = 0; i < 4; i++) {
+        tick_index += (uint32_t)((HPET_WRAP_NS + WATCH_SPAN_NS) / TICK_NS) - 1u;
+        tick_lag_ns += HPET_WRAP_NS;
+        ran = watch_ticks(1);
+        if (ran != 1 || !vclock_running() || watch_parted || !watch_based ||
+            watch_raw != now_ns - tick_lag_ns) {
+            kept = 0;
+        }
+    }
+    CHECK(kept, "four stretches of 43.45 s in a row, each a span of 500 ms by the tick's clock, "
+                "begin the span again each time and keep the clock");
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(ran == 3u * TICK_HZ && vclock_running() && !watch_parted, "and the clock runs on");
+    drift_ppm[0] = 1000;
+    drift_from_ns = now_ns;
+    ran = watch_ticks(3u * TICK_HZ);
+    CHECK(!vclock_running() && watch_parted && ran <= TICK_HZ + 1u,
+          "and a TSC that drifts 1000 parts in a million after them stops the clock within "
+          "a second");
+    tick_lag_ns = 0;
+    drift_ppm[0] = 0;
+}
+
+/**
+ * A TSC that runs at three times its rate once its rate is set ends its
+ * span by its own count, as Linux's watchdog timer expires by the watched
+ * clock's time, and stops the clock there; one at 99 times ends it within
+ * three ticks, before the TSC has run a second, and stops it there too.
  */
 static void watch_fast_rows(void)
 {
@@ -1667,9 +1708,8 @@ static void watch_fast_rows(void)
     drift_ppm[0] = 98000000;
     drift_from_ns = now_ns;
     ran = watch_ticks(4u * TICK_HZ);
-    CHECK(!vclock_running() && watch_parted && ran > 3u * TICK_HZ / 2u && ran <= 2u * TICK_HZ + 1u,
-          "a TSC at 99 times its rate, past half a wrap of the HPET in a span, stops the "
-          "clock at its fourth span");
+    CHECK(!vclock_running() && watch_parted && ran <= 3u,
+          "a TSC at 99 times its rate stops the clock at its first span, within three ticks");
     drift_ppm[0] = 0;
 }
 
@@ -1845,6 +1885,7 @@ static void watch_rows(void)
     watch_turn_rows();
     watch_pause_rows();
     watch_stretch_rows();
+    watch_pauses_rows();
     watch_fast_rows();
     watch_misrate_rows();
     watch_silent_rows();
