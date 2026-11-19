@@ -41,12 +41,13 @@ static enum etude_status as_root(struct netguest_case *s, const char *command, c
     return net_guest(&s->u, s->b.m, argv, NULL, NULL, output, r);
 }
 
-/** Start the peer on the case's port, boot the machine, log in as root at
- * the console and open the channel. */
+/** Start the peer on the case's port of the host's loopback address, which
+ * QEMU's user network gives the machine as PEER, boot the machine, log in as
+ * root at the console and open the channel. */
 static void up(struct netguest_case *s)
 {
     struct etude_termination end;
-    char *args[] = {"-s", "-p", s->port, NULL};
+    char *args[] = {"-s", "-b", "127.0.0.1", "-p", s->port, NULL};
 
     if (net_step(&s->u, "boot") != ETUDE_OK)
         return;
