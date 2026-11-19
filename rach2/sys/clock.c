@@ -652,14 +652,20 @@ int64_t rtc_boot_epoch(void)
  * offset. The last reading is kept as a floor too, since a reading can fall
  * back: without a reference counter a stretch with interrupts off longer
  * than a period loses periods the tick does not count, and a faulty latch
- * of the counter reads zero.
+ * of the counter reads zero. The monotonic clock is read before real
+ * time's lock is taken, as `rtc_monotonic` reads it, so that a read of the
+ * reference, under a hypervisor an exit of some microseconds, holds no
+ * other reader of real time, as Linux's readers share a sequence count; a
+ * reading that a step, a leap second or a change of the vDSO's clock
+ * overtakes between the two is held to the floor that change leaves.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+    uint32_t flags = kirq_save();
     int64_t msec, mnsec;
 
     rtc_mono_held(&msec, &mnsec);
+    spin_lock(&rtc_realtime_lock);
     rtc_real_of_mono(msec, mnsec, seconds, nanoseconds);
     if (*seconds < rtc_last_seconds ||
         (*seconds == rtc_last_seconds && *nanoseconds < rtc_last_nanoseconds)) {
@@ -668,7 +674,8 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     }
     rtc_last_seconds = *seconds;
     rtc_last_nanoseconds = *nanoseconds;
-    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+    spin_unlock(&rtc_realtime_lock);
+    kirq_restore(flags);
 }
 
 /** The floor is `rtc_realtime`'s, for the same reasons, kept apart from it
@@ -711,9 +718,10 @@ static uint64_t rtc_floor_ns(int64_t sec, int64_t nsec)
 
 /**
  * Real time's lock and the floors' are held across `change`, so that no
- * reading of real time is under way, and none that could hold a floor below
- * what `change` gives; neither lock's holder waits for the vDSO's page, as
- * real time's does in `rtc_realtime` when it is not the holder here. The
+ * reading of real time or of the clocks since boot holds a floor below what
+ * `change` gives: one that read its clock before it is held to that floor
+ * afterwards. Neither lock's holder waits for the vDSO's page, which the
+ * readers read before they take either lock. The
  * coarse clocks' floor is raised to the monotonic time too, which moves
  * the coarse base on to the moment of the change as Linux's
  * change_clocksource does by timekeeping_forward_now (kernel/time/
