@@ -459,14 +459,50 @@ static void row_nice(void)
     teardown();
 }
 
-/** Run every row. */
-int main(void)
+/**
+ * A clone that fails after another thread's setsid leaves the new group no
+ * member to wait for: the thread it was building, PROC_UNUSED, stays out
+ * of the group, as Linux's setsid moves only the threads on the thread
+ * group's list, which a clone joins after its last failure, so the group
+ * goes with the session's last thread.
+ */
+static void row_clone_fails(void)
 {
+    struct autogroup *ag;
+
+    setup(1);
+    thread_new(0, 0, 0, 0);
+    thread_start(&threads[0], &threads[0]);
+    thread_new(1, 0, 0, 0);
+    threads[1].state = PROC_UNUSED;
+    groups[0].live--;
+    autogroup_setsid(&threads[0]);
+    ag = groups[0].autogroup;
+    CHECK(ag && ag->members == 1 && threads[1].sched_task_group == NULL,
+          "setsid leaves out a thread a clone still builds");
+    /* the clone fails, and its record goes with no exit */
+    proc_list = threads[1].next;
+    threads[0].futex_exit_state = 2;
+    groups[0].live = 0;
+    autogroup_exit(&threads[0]);
+    CHECK(autogroup_count() == 0, "the group goes with the session's last thread");
+    teardown();
+}
+
+/** Run every row, or with `--clone-only` the failed clone's row alone. */
+int main(int argc, char **argv)
+{
+    if (argc == 2 && __builtin_strcmp(argv[1], "--clone-only") == 0) {
+        row_clone_fails();
+        dprintf(1, "autogroup-hosttest: clone: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     row_two_sessions(1);
     row_two_sessions(0);
     row_setsid_threads();
     row_free_after_queues();
     row_nice();
+    row_clone_fails();
     if (!failures) {
         dprintf(1, "autogroup-hosttest: pass\n");
     }

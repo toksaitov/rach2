@@ -11,10 +11,8 @@
 # long-after-profile keep bkl/long's holds read after the game and after
 # the profile's read. -k takes the profile in its whole-kernel mode, every
 # tick in kernel mode with or without the lock, in place of the lock's holds
-# (debugfs(5)). lenovo.sh is on task/2664
-# (80-7b) until that task merges: copy it beside this script by running,
-# in this script's directory:
-#   git show origin/task/2664:tests/system/games/lenovo.sh > lenovo.sh
+# (debugfs(5)). lenovo.sh and its runners, tests/graphics/runners, are
+# copied beside this script, as the trial's payload lays them out.
 # The clock's minimum goes back from an exit trap, an
 # interrupted run's too.
 set -u
@@ -31,7 +29,7 @@ d=/sys/kernel/debug/bkl
 gpu=/sys/class/drm/card0
 here=$(dirname "$0")
 [ -w "$d/calls" ] || { echo "bkl: no $d/calls" >&2; exit 1; }
-[ -f "$here/lenovo.sh" ] || { echo "bkl: no $here/lenovo.sh; it is on task/2664" >&2; exit 1; }
+[ -f "$here/lenovo.sh" ] || { echo "bkl: no $here/lenovo.sh" >&2; exit 1; }
 min=$(cat "$gpu/gt_min_freq_mhz")
 khda=''
 for p in /proc/[0-9]*/comm; do

@@ -1,0 +1,10 @@
+BOOT_IMAGE=(hd0,gpt1)/boot/vmlinuz-3984 root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off nomodeset console=ttyS0 loglevel=6
+6.12.115+deb13.1-amd64-fb3984
+total 0
+drwxr-xr-x 2 root root      60 Nov 19 20:03 by-path
+crw-rw---- 1 root video 226, 0 Nov 19 20:03 card0
+/sys/bus/platform/drivers/simple-framebuffer
+1280x800
+uid=1000(gfx) gid=1000(gfx) groups=1000(gfx),44(video),995(input),992(kvm),991(render)
+[    8.209411] [drm] Initialized simpledrm 1.0.0 for simple-framebuffer.0 on minor 0
+[    8.437163] simple-framebuffer simple-framebuffer.0: [drm] fb0: simpledrmdrmfb frame buffer device
