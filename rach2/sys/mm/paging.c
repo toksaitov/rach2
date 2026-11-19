@@ -5080,11 +5080,11 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
  * take 64 million steps on x86-64. The ranges registered on a writable
  * private region are told first (MMN_PROTECT), since its pages become
  * read-only in the parent. The parent's pages made read-only are flushed
- * once, at the end, as Linux's fork flushes the parent's whole space once,
- * and also before a run of huge pages split by the walk is made huge again
- * (`huge_chunk_promote`): a write another thread makes meanwhile through
- * the old translation lands in the frame both share, as if it came before
- * the fork.
+ * before a run of huge pages split by the walk is made huge again
+ * (`huge_chunk_promote`), and those still pending at the end, as Linux's
+ * fork flushes the parent's whole space once: a write another thread makes
+ * meanwhile through the old translation lands in the frame both share, as
+ * if it came before the fork.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 {
