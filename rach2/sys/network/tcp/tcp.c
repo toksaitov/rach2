@@ -161,8 +161,8 @@ static void tcp_giveup(struct tcb *tcb);
 static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port);
 static void tcp_free_half_opens(const struct tcb *listener);
-static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
-                           uint16_t remote_port, int ifindex);
+static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t local_port,
+                           net_addr_t remote_ip, uint16_t remote_port, int ifindex);
 static void tcp_reset(struct tcb *tcb);
 
 /* The key the initial sequence numbers are hashed under, and whether it has
@@ -650,9 +650,9 @@ static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_
 
 /**
  * The bucket of `tcp_hash` for a connection with this local port and remote
- * address and port. The local address is left out, so that
- * `tcp_pair_in_use`, which asks about every local address at once, reads one
- * bucket; the key keeps a peer from choosing ports that fill one bucket.
+ * address and port. The local address is left out, so that a port's
+ * connections to one peer share a bucket whatever address each is from; the
+ * key keeps a peer from choosing ports that fill one bucket.
  * An IPv6 address's scope is left out too, since a connection bound to a
  * card is matched by its addresses without their scopes (`tcp_addr_is`).
  */
@@ -1799,12 +1799,13 @@ static uint16_t tcp_free_port(void)
  * ended, a keyed hash of the addresses and the peer's port picking the place
  * in `port_perturb` that keeps it, tries the even ports first, then the odd
  * ones, and takes the first port that no listener, passive connection or
- * bound socket holds and no connection has to this peer already. So a port
- * comes back to one peer only after the rest of the range, ports are shared
- * among connections to different peers, and a block in TIME_WAIT keeps its
- * port from the next connection to its peer. The place moves past the
- * port, and a little further by the hash of the chosen pair, as Linux moves
- * it by a random step, so that its next value is not plain to the peer.
+ * bound socket holds and no connection from `from` has to this peer
+ * already. So a port comes back to one peer only after the rest of the
+ * range, ports are shared among connections to different peers, and a
+ * block in TIME_WAIT keeps its port from the next connection to its peer.
+ * The place moves past the port, and a little further by the hash of the
+ * chosen pair, as Linux moves it by a random step, so that its next value
+ * is not plain to the peer.
  * `ifindex` is the card the connection is bound to (`tcp_pair_in_use`).
  * The caller holds `net_lock`.
  */
@@ -1825,7 +1826,7 @@ static uint16_t tcp_connect_port(const struct netns *ns, net_addr_t from, net_ad
             }
             port = (uint16_t)(NET_PORT_LOW + k);
             if (port_fixed[k] != 0 ||
-                (port_auto[k] != 0 && tcp_pair_in_use(ns, port, dst, dst_port, ifindex))) {
+                (port_auto[k] != 0 && tcp_pair_in_use(ns, from, port, dst, dst_port, ifindex))) {
                 continue;
             }
             step = (tcp_tuple_hash(&from, &dst, port, dst_port) >> 29) * 2u;
@@ -1880,29 +1881,31 @@ static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
 
 /**
  * Whether a block other than a listener of the network namespace `ns` has
- * this local port, remote address and remote port, one in TIME_WAIT
- * included. The caller holds `net_lock`.
+ * this local address and port and remote address and port, one in
+ * TIME_WAIT included, the four that `tcp_find` matches. The caller holds
+ * `net_lock`.
  *
- * `tcp_find` matches these and the local address, so a pair this refuses
- * from one local address is refused from every other too. A listener or a
- * connection to another peer may share the local port: `tcp_find` takes the
- * connection that matches and falls back to a listener only when none does.
- * A block and the new connection, bound to `ifindex` or 0, are on one card
- * unless both name a card, by a binding or else an IPv6 peer's scope, and
- * the cards differ, as Linux compares bindings; their addresses are then
- * compared without scopes (`tcp_addr_is`). A peer that is this machine is on
- * no card, since its segments come off the loopback backlog, which every
- * binding takes (`tcp_rx_card_ok`).
+ * A listener, or a connection from another local address or to another
+ * peer, may share the local port: `tcp_find` takes the connection that
+ * matches and falls back to a listener only when none does. A block and the
+ * new connection, bound to `ifindex` or 0, are on one card unless both name
+ * a card, by a binding or else an IPv6 peer's scope, and the cards differ,
+ * as Linux compares bindings; their addresses are then compared without
+ * scopes (`tcp_addr_is`). A peer whose address a card of this machine owns,
+ * whatever scope it names, is on no card, since IPv6 routing finds such an
+ * address before it reads the scope and its segments come off the loopback
+ * backlog, which every binding takes (`tcp_rx_card_ok`).
  */
-static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
-                           uint16_t remote_port, int ifindex)
+static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t local_port,
+                           net_addr_t remote_ip, uint16_t remote_port, int ifindex)
 {
     const struct tcb *t;
     uint32_t mine = ifindex ? (uint32_t)ifindex : remote_ip.scope, its;
+    net_addr_t bare = remote_ip;
 
-    if (net_addr_local(remote_ip) ||
-        (remote_ip.family == AF_INET6 ? ip6_is_loopback(remote_ip.v6)
-                                      : IP_IS_LOOPBACK(remote_ip.v4))) {
+    bare.scope = 0;
+    if (net_addr_local(bare) || (remote_ip.family == AF_INET6 ? ip6_is_loopback(remote_ip.v6)
+                                                              : IP_IS_LOOPBACK(remote_ip.v4))) {
         mine = 0;
     }
     for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
@@ -1910,7 +1913,8 @@ static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr
             continue;
         }
         its = t->ifindex ? (uint32_t)t->ifindex : t->remote_ip.scope;
-        if ((!mine || !its || mine == its) && tcp_addr_is(t->remote_ip, remote_ip, 1)) {
+        if ((!mine || !its || mine == its) && tcp_addr_is(t->remote_ip, remote_ip, 1) &&
+            tcp_addr_is(t->local_ip, local_ip, 1)) {
             return 1;
         }
     }
@@ -2777,8 +2781,9 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * `net_lock` region, and the port is settled before the block exists, so
  * that no search finds the caller's own half-built block.
  *
- * A socket that bound a port keeps it. What is refused is a local port
- * already paired with this same peer address and port (`tcp_pair_in_use`),
+ * A socket that bound a port keeps it. What is refused is a local address
+ * and port already paired with this same peer address and port
+ * (`tcp_pair_in_use`),
  * since two such blocks would have one connection's segments delivered to
  * the other.
  *
@@ -2818,7 +2823,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
 
     if (sock->local_port != 0) {
         local = sock->local_port;
-        if (tcp_pair_in_use(sock->ns, local, dst_ip, dst_port, sock->bound_device)) {
+        if (tcp_pair_in_use(sock->ns, from, local, dst_ip, dst_port, sock->bound_device)) {
             net_unlock(flags);
             return -EADDRINUSE;
         }
