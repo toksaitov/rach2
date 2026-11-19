@@ -129,8 +129,13 @@ int arch_irq_waiting(void);
  * that says its processors are the guest's alone, as KVM's
  * KVM_HINTS_REALTIME says, or with `cpuidle_haltpoll.force`, as Linux
  * loads cpuidle-haltpoll (drivers/cpuidle/cpuidle-haltpoll.c:96-111). Read
- * once, since in a guest `cpuid` is an exit. */
+ * once, since in a guest `cpuid` is an exit. Also, on a machine of its own,
+ * while `arch_idle_poll_force` is 1. */
 int arch_idle_poll(void);
+
+/* 1 to poll before a halt on any machine, as Linux's cpuidle-haltpoll does
+ * only in a guest; set through debugfs sched/idle_poll. */
+extern int arch_idle_poll_force;
 
 /** Hold interrupts off and stop this processor for good. */
 void arch_stop(void) K_NORETURN;

@@ -604,6 +604,32 @@ int netdev_link(const struct netdev *nd, struct netdev_link *out);
  */
 int netdev_running(const struct netdev *nd);
 
+/**
+ * Let go of the card of `nd`, an interface of the probe's, so that another
+ * driver, vfio-pci above all, can take the function: the interface is set
+ * down and stays, with its name, index and addresses, without a carrier and
+ * dropping what is sent on it; the driver stops the card, and the function
+ * has no owner. 0, or -ENODEV for an interface that is no card, a card that
+ * is away already or a driver that cannot stop. Called under the big kernel
+ * lock with interrupts on; it waits while the card drains.
+ */
+int netdev_release(struct netdev *nd);
+
+/**
+ * Take back the card `netdev_release` let go: the driver starts it again
+ * from whatever state its last owner left, and the interface, still down,
+ * is the card's once more. `driver` is the name /sys shows the function
+ * bound to, or NULL for none. 0; -ENODEV for a card that is not away; -EBUSY
+ * while another driver has the function; -EIO, with the card left away,
+ * when it does not start. Called as `netdev_release`.
+ */
+int netdev_reclaim(struct netdev *nd, const char *driver);
+
+/** Make /sys/bus/pci/drivers/e1000 and r8169, each with `bind` and
+ * `unbind`, and show each of their cards bound. Called once at boot, after
+ * the probe and with /sys ready; a failure is logged. */
+void netdev_sys_start(void);
+
 /** Forget the carrier `nd`'s last reading kept, so that the next
  * `netdev_running` asks the card: a driver calls it at a link change's
  * interrupt. Nothing for NULL. */

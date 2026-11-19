@@ -77,6 +77,8 @@
 #include "sys/block/disk.h"
 #include "sys/block/recovery.h"
 #include "sys/network/driver/netdev.h"
+#include "sys/network/driver/tap.h"
+#include "sys/network/driver/vhost_net.h"
 #include "sys/network/netconsole.h"
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
@@ -4605,7 +4607,8 @@ static void start_audio(void)
 /**
  * Start the network unless `rach2.nonet` is given: the wired card, the
  * network console's targets with `netconsole=` and its frames with
- * `rach2.netconsole`, then the simulated radios and the ath9k card, which
+ * `rach2.netconsole`, the tap device and the cards' drivers in /sys, then
+ * the simulated radios and the ath9k card, which
  * needs the wireless registry, logging what each start found. Of several
  * `netconsole=`, the last is read, as Linux's `option_setup` keeps the last
  * one it is called with (drivers/net/netconsole.c).
@@ -4633,6 +4636,9 @@ static void start_network(void)
     } else {
         klog(KLOG_WARN, "net", "absent: %s", net_error());
     }
+    tap_start();
+    vhost_net_start();
+    netdev_sys_start();
     radios = wlan_init();
     if (radios > 0) {
         klog(KLOG_INFO, "wsim", "ready: %d radios", radios);

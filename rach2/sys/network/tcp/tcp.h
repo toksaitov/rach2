@@ -44,14 +44,18 @@
  * of 64 KiB does not offer 0. */
 #define TCP_WINDOW_SIZE     65535
 #define TCP_RING_SIZE       65536
-/* Policy: a connection's receive ring, a heap allocation apart from the
- * control block, is 64 KiB, as the send ring is, or 512 KiB when the
- * machine has more than TCP_BIG_RING_FRAMES frames free as the connection
- * opens, offered through the window scale option (RFC 7323): a window is
+/* Policy: a connection's rings, heap allocations apart from the control
+ * block, are 64 KiB each, or 512 KiB when the machine has more than
+ * TCP_BIG_RING_FRAMES frames free as the connection opens, the receive
+ * ring's offered through the window scale option (RFC 7323): a window is
  * what a round trip carries, and a round trip of 67 ms moves 7.8 MB/s in
- * 512 KiB and 978 KB/s in 64 KiB. */
+ * 512 KiB and 978 KB/s in 64 KiB. The send ring bounds what is in flight
+ * as the receive ring bounds the window, so a path whose loaded round trip
+ * is 1 ms carries at most 524 Mbit/s from a 64 KiB send ring. */
 #define TCP_RECV_RING_SMALL 65536u
 #define TCP_RECV_RING_LARGE 524288u
+#define TCP_SEND_RING_SMALL 65536u
+#define TCP_SEND_RING_LARGE 524288u
 #define TCP_BIG_RING_FRAMES 32768u
 /* How many connections with queued bytes the tick pumps, in rotation, so
  * that a full card does not hold the tick for every blocked connection's
@@ -282,15 +286,17 @@ struct tcb {
     uint32_t ooo_end[TCP_OOO_RANGES];
 
     /*
-     * The send ring, of TCP_RING_SIZE bytes in the block, and the receive
-     * ring, of `recv_size` bytes from the heap, a power of two; a listener
-     * has no receive ring. Each head and tail counts bytes and wraps at
-     * 2^32, and its index into the ring is the count masked with the ring's
-     * size less one, so the bytes in a ring are its tail less its head in
-     * unsigned arithmetic. `send_ack` is the count of the oldest byte not
-     * yet acknowledged.
+     * The send ring, of `send_size` bytes, and the receive ring, of
+     * `recv_size` bytes, each from the heap and a power of two; a listener
+     * has neither, and a block in TIME_WAIT gives its rings back once they
+     * are empty (`tcp_time_wait_trim`). Each head and tail counts bytes
+     * and wraps at 2^32, and its index into the ring is the count masked
+     * with the ring's size less one, so the bytes in a ring are its tail
+     * less its head in unsigned arithmetic. `send_ack` is the count of the
+     * oldest byte not yet acknowledged.
      */
-    uint8_t send_buf[TCP_RING_SIZE];
+    uint8_t *send_buf;
+    uint32_t send_size;
     uint32_t send_head, send_tail; /* head = next to send, tail = next to fill */
     uint8_t *recv_buf;
     uint32_t recv_size;
@@ -433,7 +439,19 @@ struct tcb {
     /* Outstanding control segment to retransmit (SYN/SYN-ACK/FIN). */
     uint8_t retx_flags; /* 0 = none, else the control flags       */
     uint8_t ack_owed;   /* a bare acknowledgement the driver refused */
-    uint32_t retx_seq;  /* sequence number the control occupies   */
+    /* Delayed acknowledgement, under `tcp_delack`: the sequence number the
+     * last segment sent acknowledged, the largest payload received, and
+     * the tick at which a held acknowledgement goes out, 0 when none is
+     * held. */
+    uint32_t rcv_acked;
+    uint32_t rcv_seg_max;
+    uint32_t delack_due;
+    /* Under `tcp_ack_batch`, inside a batch (`tcp_batch_begin`): 1 when an
+     * acknowledgement waits for the batch's end, on the list `batch_next`
+     * links. */
+    uint8_t batch_owed;
+    struct tcb *batch_next;
+    uint32_t retx_seq; /* sequence number the control occupies   */
     /*
      * 1 from a simultaneous open's ACK of snd_una until an acknowledgement
      * of the SYN: the SYN, at snd_una, holds the send ring's slot before
@@ -467,6 +485,36 @@ extern int tcp_keepalive_intvl;
 extern int tcp_keepalive_probes;
 extern int tcp_retries2;
 extern int tcp_mtu_probing;
+/* 1 to acknowledge as Linux does: an in-order segment's acknowledgement is
+ * held until more than one segment's worth is unacknowledged or 40 ms pass,
+ * and a window the reader reopened is announced only once it is at least
+ * twice what the peer still has (`tcp_window_update`); 0 acknowledges each
+ * segment at once. Set through debugfs net/tcp_delack. */
+extern int tcp_delack;
+/* 1 to acknowledge the in-order data of a batch of frames once, at the
+ * batch's end (`tcp_batch_end`), as Linux's GRO hands TCP one segment for a
+ * NAPI poll's worth; 0 acknowledges each as `tcp_delack` says. Set through
+ * debugfs net/tcp_ack_batch. */
+extern int tcp_ack_batch;
+/* 1 to give a connection a send ring of TCP_SEND_RING_LARGE when memory
+ * allows (`tcp_ring_alloc`), 0 for TCP_SEND_RING_SMALL always. Set through
+ * debugfs net/tcp_send_big. */
+extern int tcp_send_big;
+
+/** Begin a batch of received frames, which may nest: until the outermost
+ * `tcp_batch_end`, under `tcp_ack_batch`, an in-order segment's
+ * acknowledgement waits. Under the big lock. */
+void tcp_batch_begin(void);
+
+/** End a batch: at the outermost, send each acknowledgement the batch held,
+ * or hold it as `tcp_delack` would hold one for the data received. Under the
+ * big lock. */
+void tcp_batch_end(void);
+
+struct debugfs_text_ops;
+/* The file operations of a 0-or-1 switch in debugfs, whose data is an int;
+ * the TCP switches use them, and other network switches may. */
+extern const struct debugfs_text_ops tcp_switch_ops;
 
 /** Empty the list of control blocks, and have the next `tcp_listen` or
  * `tcp_connect` draw a new key for the initial sequence numbers. Called
@@ -538,7 +586,7 @@ int tcp_port_listening(const struct socket *sock, uint16_t port);
 
 /**
  * A port for a stream socket bound to port 0, which Linux gives at the bind:
- * the next from 49152 to 65535 that no control block and no stream socket
+ * the next from 32768 to 60999 that no control block and no stream socket
  * has, or 0 when none is free. Takes `net_lock` itself.
  */
 uint16_t tcp_bind_ephemeral(void);

@@ -59,6 +59,7 @@ void arch_idle_masked(void)
 /* arch_idle_poll's answer: -1 until read, then 0 or 1. Every processor
  * reads the same, so two that read it at once store the same. */
 static volatile int idle_poll = -1;
+int arch_idle_poll_force;
 
 /** Without the hint KVM's processors share the host's, and the host's own
  * poll before it sleeps a halted processor (halt_poll_ns) answers a quick
@@ -70,7 +71,7 @@ int arch_idle_poll(void)
         idle_poll = (kcpu_kvm_hints() & KVM_HINTS_REALTIME) != 0 ||
                     kcmdline_param_bool("cpuidle_haltpoll.force", 0);
     }
-    return idle_poll;
+    return idle_poll || arch_idle_poll_force;
 }
 
 /** The processor takes its clock page back from KVM first

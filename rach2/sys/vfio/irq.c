@@ -16,6 +16,7 @@
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../network/driver/vhost_net.h"
 
 #define CMD_MEMORY  0x0002u
 #define STATUS_INTX 0x0008u /* the line is asserted */
@@ -86,6 +87,7 @@ static void msi_isr(isr_params_t *params)
 {
     struct vfio_irq *q = vector_irq[params->vector & 0xFFu];
 
+    vhost_net_note_msi();
     if (q != NULL && q->trigger != NULL) {
         eventfd_signal(q->trigger);
     }
@@ -137,15 +139,26 @@ static void intx_unmask(struct vfio_device *d)
     intx_apply(d);
 }
 
-/** The unmask eventfd rose: unmask, taking the count. */
+/** The unmask eventfd rose: unmask, taking the count; a line the device
+ * still asserts stays masked and its eventfd is signalled again, as
+ * `intx_unmask` does and as Linux's virqfd does after
+ * vfio_pci_intx_unmask_handler, since a cause that rose between the
+ * owner's service and its end of interrupt would otherwise never be
+ * delivered. The eventfd signalled is the trigger's, another counter than
+ * the one whose lock is held. */
 static int unmask_signal(struct eventfd_hook *h)
 {
     struct vfio_device *d = ((struct unmask_hook *)h)->d;
 
-    if (d->irq_type == VFIO_PCI_INTX_IRQ_INDEX && d->intx_masked &&
-        !(pci_read_config16(DEV(d), PCI_STATUS) & STATUS_INTX)) {
-        d->intx_masked = 0;
-        intx_apply(d);
+    if (d->irq_type == VFIO_PCI_INTX_IRQ_INDEX && d->intx_masked) {
+        if (pci_read_config16(DEV(d), PCI_STATUS) & STATUS_INTX) {
+            if (d->intx.trigger != NULL) {
+                eventfd_signal(d->intx.trigger);
+            }
+        } else {
+            d->intx_masked = 0;
+            intx_apply(d);
+        }
     }
     return 1;
 }
@@ -460,7 +473,7 @@ static int32_t intx_mask_unmask(struct vfio_device *d, const struct vfio_irq_set
     }
     on = (h->flags & VFIO_IRQ_SET_DATA_NONE) || ((h->flags & VFIO_IRQ_SET_DATA_BOOL) && data[0]);
     if (h->flags & VFIO_IRQ_SET_DATA_EVENTFD) {
-        return unmask ? unmask_set(d, *data) : -ENOTTY;
+        return unmask ? unmask_set(d, fd_at(data, 0)) : -ENOTTY;
     }
     if (on && unmask) {
         intx_unmask(d);
@@ -506,7 +519,7 @@ static int32_t single_trigger(struct eventfd **slot, const struct vfio_irq_set *
                               const uint8_t *data)
 {
     if (h->flags & VFIO_IRQ_SET_DATA_EVENTFD) {
-        return h->count == 1 ? trigger_set(slot, *data) : -EINVAL;
+        return h->count == 1 ? trigger_set(slot, fd_at(data, 0)) : -EINVAL;
     }
     if (h->count == 0 && (h->flags & VFIO_IRQ_SET_DATA_NONE)) {
         return trigger_set(slot, -1);

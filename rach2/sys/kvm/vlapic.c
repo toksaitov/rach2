@@ -1712,6 +1712,42 @@ int64_t kvm_timer_deadline(uint64_t next)
     return mono + (int64_t)span;
 }
 
+/** Spin for up to `kvm_halt_poll_ns` waiting for the halted vCPU `v` to
+ * have an event, as Linux's kvm_vcpu_halt polls before it sleeps
+ * (virt/kvm/kvm_main.c:3822-3858): a wake that comes within the window
+ * costs no sleep and no switch back. The spin ends early when the thread
+ * has work, a signal or a switch the scheduler asked for, so that a thread
+ * that needs the processor gets it. 1 when an event came in the window,
+ * counted in halt_successful_poll and halt_poll_success_ns; 0 when the
+ * window passed or was cut short, counted in halt_poll_fail_ns. Called
+ * with no lock held; does not sleep. */
+static int poll(struct kvm_vcpu *v)
+{
+    uint64_t start, now;
+    int32_t window = kvm_halt_poll_ns;
+
+    if (window <= 0 || !current_proc) {
+        return 0;
+    }
+    v->stat[KVM_VCPU_STAT_HALT_ATTEMPTED_POLL]++;
+    start = kvm_host_ns();
+    now = start;
+    while (now - start < (uint64_t)window) {
+        if (wake_cond(v) || (v->requests & KVM_REQ_IRQFD)) {
+            v->stat[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL]++;
+            v->stat[KVM_VCPU_STAT_HALT_POLL_SUCCESS_NS] += kvm_host_ns() - start;
+            return 1;
+        }
+        if (current_proc->work || current_proc->need_resched) {
+            break;
+        }
+        arch_relax();
+        now = kvm_host_ns();
+    }
+    v->stat[KVM_VCPU_STAT_HALT_POLL_FAIL_NS] += kvm_host_ns() - start;
+    return 0;
+}
+
 /** Wait, interruptibly, until the vCPU `v` has an event or its timer's
  * fine deadline or fallback tick comes: 0, or -EINTR when the thread's
  * signal-work flag is set. The
@@ -1727,6 +1763,9 @@ static int32_t block(struct kvm_vcpu *v)
     uint64_t next, now;
     int32_t r;
 
+    if (poll(v)) {
+        return 0;
+    }
     next = next_ns(l);
     l->wake_tick = 0;
     if (next) {

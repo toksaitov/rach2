@@ -26,6 +26,8 @@
  */
 
 #include "../../idle_timer.h"
+#include "../../fs/debugfs.h"
+#include "../../mm/usercopy.h"
 #include "../../klog.h"
 #include "../../lib/lockdep.h"
 #include "../../lib/kerrno.h"
@@ -60,6 +62,22 @@ int tcp_keepalive_intvl = TCP_KEEPINTVL_DEFAULT;
 int tcp_keepalive_probes = TCP_KEEPCNT_DEFAULT;
 int tcp_retries2 = TCP_RETRIES2_DEFAULT;
 int tcp_mtu_probing = TCP_MTU_PROBING_DEFAULT;
+int tcp_delack;
+int tcp_send_big = 1;
+int tcp_ack_batch;
+/* The batches open (`tcp_batch_begin`), and the blocks that owe an
+ * acknowledgement at the outermost one's end. */
+static int tcp_batch_depth;
+static struct tcb *tcp_batch_list;
+
+/* Linux's TCP_DELACK_MIN, HZ / 25: the longest an acknowledgement is held. */
+#define TCP_DELACK_TICKS  (TICK_HZ / 25u)
+/* The payload below which a held acknowledgement waits for more, RFC 1122's
+ * default MSS, while no larger segment has come. */
+#define TCP_DELACK_SEG    536u
+/* The most data one batched acknowledgement covers, as Linux's GRO merges
+ * at most 64 KiB into the one segment TCP acknowledges. */
+#define TCP_BATCH_ACK_MAX 65536u
 
 /* The segment being sent: a header with one word of options and TCP_MSS
  * bytes of data, or a header alone with more options. */
@@ -80,8 +98,11 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 #define TCP_OPT_SACK_OK 4
 #define TCP_OPT_SACK    5
 
-/* The next port `ephemeral_port` tries, from 49152 to 65535. */
-static uint16_t next_ephemeral = 49152;
+/* Linux's ip_local_port_range, 32768 to 60999: the ports `ephemeral_port`
+ * gives, and the next it tries. */
+#define TCP_EPHEMERAL_LOW  32768u
+#define TCP_EPHEMERAL_HIGH 60999u
+static uint16_t next_ephemeral = TCP_EPHEMERAL_LOW;
 
 static uint16_t tcp_checksum(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *seg,
                              uint16_t seg_len);
@@ -249,10 +270,48 @@ static uint32_t tcp_isn(const struct tcb *tcb)
            tcp_isn_hash(tcb);
 }
 
+/** A switch's debugfs file: the int at `data`, 0 or 1, and a newline. */
+static int32_t knob_show(void *data, char *buf, uint32_t cap)
+{
+    if (cap >= 2u) {
+        buf[0] = *(int *)data ? '1' : '0';
+        buf[1] = '\n';
+    }
+    return 2;
+}
+
+/** A write of "0" or "1", with a newline or not, sets the int at `data`;
+ * anything else is EINVAL. A connection already open keeps what it was
+ * given; a held acknowledgement still goes out at its tick. */
+static int32_t knob_store(void *data, const char __user *buf, uint32_t len)
+{
+    char c[2];
+
+    if (len == 0 || len > 2) {
+        return -EINVAL;
+    }
+    if (copy_from_user(c, buf, len) != 0) {
+        return -EFAULT;
+    }
+    if ((c[0] != '0' && c[0] != '1') || (len == 2 && c[1] != '\n')) {
+        return -EINVAL;
+    }
+    *(int *)data = c[0] == '1';
+    return (int32_t)len;
+}
+
+const struct debugfs_text_ops tcp_switch_ops = {knob_show, knob_store};
+
 void tcp_init(void)
 {
     tcbs = NULL;
     isn_keyed = 0;
+    if (debugfs_create_text("net/tcp_delack", 0644u, &tcp_switch_ops, &tcp_delack) != 0 ||
+        debugfs_create_text("net/tcp_send_big", 0644u, &tcp_switch_ops, &tcp_send_big) != 0 ||
+        debugfs_create_text("net/tcp_ack_batch", 0644u, &tcp_switch_ops, &tcp_ack_batch) != 0) {
+        klog(KLOG_WARN, "tcp",
+             "failed: a switch of net/tcp_delack, tcp_send_big or tcp_ack_batch not registered");
+    }
 }
 
 /**
@@ -299,18 +358,29 @@ static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 }
 
 /**
- * Give a connection its receive ring before its first SYN: TCP_RECV_RING_LARGE
- * when more than TCP_BIG_RING_FRAMES frames are free, TCP_RECV_RING_SMALL
- * otherwise or when the heap has no room for the large one, and the window
- * scale the ring needs, which this side's SYN offers. Returns 0, or -1 when
- * the heap has no room for either.
+ * Give a connection its rings before its first SYN: the large ones when
+ * more than TCP_BIG_RING_FRAMES frames are free, the small ones otherwise
+ * or when the heap has no room for a large one, and the window scale the
+ * receive ring needs, which this side's SYN offers. Returns 0, or -1 when
+ * the heap has no room for a small one; `tcb_free` takes back what was
+ * given.
  */
 static int tcp_ring_alloc(struct tcb *tcb)
 {
-    uint32_t size =
-        frame_free_count() > TCP_BIG_RING_FRAMES ? TCP_RECV_RING_LARGE : TCP_RECV_RING_SMALL;
+    int big = frame_free_count() > TCP_BIG_RING_FRAMES;
+    uint32_t size = big ? TCP_RECV_RING_LARGE : TCP_RECV_RING_SMALL;
+    uint32_t send = big && tcp_send_big ? TCP_SEND_RING_LARGE : TCP_SEND_RING_SMALL;
     uint8_t shift = 0;
 
+    tcb->send_buf = kmalloc(send);
+    if (!tcb->send_buf && send != TCP_SEND_RING_SMALL) {
+        send = TCP_SEND_RING_SMALL;
+        tcb->send_buf = kmalloc(send);
+    }
+    if (!tcb->send_buf) {
+        return -1;
+    }
+    tcb->send_size = send;
     tcb->recv_buf = kmalloc(size);
     if (!tcb->recv_buf && size != TCP_RECV_RING_SMALL) {
         size = TCP_RECV_RING_SMALL;
@@ -555,8 +625,19 @@ void tcb_free(struct tcb *tcb)
     if (*link) {
         *link = tcb->next;
     }
+    if (tcb->batch_owed) {
+        for (link = &tcp_batch_list; *link && *link != tcb; link = &(*link)->batch_next) {
+        }
+        if (*link) {
+            *link = tcb->batch_next;
+        }
+        tcb->batch_owed = 0;
+    }
     tcb->in_use = 0;
     tcb->state = TCP_CLOSED;
+    if (tcb->send_buf) {
+        kfree(tcb->send_buf);
+    }
     if (tcb->recv_buf) {
         kfree(tcb->recv_buf);
     }
@@ -707,6 +788,10 @@ static int tcp_tcb_tx(struct tcb *tcb, uint16_t seg_len)
 
     if (rc == -ENETUNREACH || rc == -EHOSTUNREACH) {
         tcb->soft_error = (uint32_t)-rc;
+    }
+    if (rc == 0 && (tcp_tx_buf[13] & TCP_ACK)) {
+        tcb->rcv_acked = read32be(tcp_tx_buf + 8);
+        tcb->delack_due = 0;
     }
     return rc;
 }
@@ -1136,7 +1221,8 @@ static int tcp_output(struct tcb *tcb)
         write16be(tcp_tx_buf + 16, 0);
         write16be(tcp_tx_buf + 18, 0);
 
-        ring_get(tcp_tx_buf + TCP_HDR_SIZE, tcb->send_buf, TCP_RING_SIZE, tcb->send_head, send_len);
+        ring_get(tcp_tx_buf + TCP_HDR_SIZE, tcb->send_buf, tcb->send_size, tcb->send_head,
+                 send_len);
 
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
@@ -1228,7 +1314,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
         write16be(tcp_tx_buf + 18, 0);
 
         for (i = 0; i < send_len; i++) {
-            tcp_tx_buf[TCP_HDR_SIZE + i] = tcb->send_buf[(from + i) & (TCP_RING_SIZE - 1)];
+            tcp_tx_buf[TCP_HDR_SIZE + i] = tcb->send_buf[(from + i) & (tcb->send_size - 1)];
         }
 
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
@@ -1452,13 +1538,13 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
         return rc;
     }
 
-    free_space = TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack);
+    free_space = tcb->send_size - (tcb->send_tail - tcb->send_ack);
     copy_len = (uint32_t)len;
     if (copy_len > free_space)
         copy_len = free_space;
 
     if (copy_len > 0) {
-        ring_put(tcb->send_buf, TCP_RING_SIZE, tcb->send_tail, buf, copy_len);
+        ring_put(tcb->send_buf, tcb->send_size, tcb->send_tail, buf, copy_len);
         tcb->send_tail += copy_len;
         tcp_output(tcb);
     }
@@ -1483,19 +1569,19 @@ static int tcp_local_port_in_use(uint16_t port)
 
 /**
  * The next ephemeral port that no control block, a listener included, and
- * no stream socket has, or 0 when all 16384 of the range are taken. The
- * caller holds `net_lock`.
+ * no stream socket has, or 0 when all of the range are taken. The caller
+ * holds `net_lock`.
  */
 static uint16_t ephemeral_port(void)
 {
-    int tries = 0;
+    uint32_t tries = 0;
     uint16_t port;
 
     do {
         port = next_ephemeral++;
-        if (next_ephemeral < 49152)
-            next_ephemeral = 49152;
-        if (++tries > 16384)
+        if (next_ephemeral < TCP_EPHEMERAL_LOW || next_ephemeral > TCP_EPHEMERAL_HIGH)
+            next_ephemeral = TCP_EPHEMERAL_LOW;
+        if (++tries > TCP_EPHEMERAL_HIGH - TCP_EPHEMERAL_LOW + 1u)
             return 0;
     } while (tcp_local_port_in_use(port) || socket_port_bound(port));
     return port;
@@ -1668,7 +1754,7 @@ static int tcp_send_byte(struct tcb *tcb, uint32_t seq, uint32_t at)
     write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, TCP_ACK));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
-    tcp_tx_buf[TCP_HDR_SIZE] = tcb->send_buf[at & (TCP_RING_SIZE - 1)];
+    tcp_tx_buf[TCP_HDR_SIZE] = tcb->send_buf[at & (tcb->send_size - 1)];
 
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
     return tcp_tcb_tx(tcb, seg_len);
@@ -2248,6 +2334,13 @@ void tcp_tick(void)
             tcb->ack_owed = 0;
             tcp_send_flags(tcb, TCP_ACK);
         }
+        if (tcb->delack_due != 0 && tcp_expired(tcb->delack_due)) {
+            tcb->delack_due = 0;
+            if (tcb->state != TCP_CLOSED && tcb->state != TCP_LISTEN &&
+                tcb->state != TCP_SYN_SENT) {
+                tcp_send_flags(tcb, TCP_ACK);
+            }
+        }
 
         if (tcb->state == TCP_FIN_WAIT_2) {
             if ((int32_t)(TCP_NOW() - tcb->timewait_until) >= 0 && !tcb->sock) {
@@ -2602,6 +2695,12 @@ void tcp_forget_queued(struct socket *sock)
  */
 static void tcp_time_wait_trim(struct tcb *tcb)
 {
+    if (tcb->state == TCP_TIME_WAIT && tcb->send_buf && tcb->send_tail == tcb->send_ack &&
+        tcb->send_head == tcb->send_ack) {
+        kfree(tcb->send_buf);
+        tcb->send_buf = NULL;
+        tcb->send_size = 0;
+    }
     if (tcb->state == TCP_TIME_WAIT && tcb->recv_buf &&
         (!tcb->sock || tcb->recv_tail == tcb->recv_head)) {
         kfree(tcb->recv_buf);
@@ -2768,6 +2867,23 @@ void tcp_window_update(struct socket *sock)
          tcb->state == TCP_FIN_WAIT_2)) {
         wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head, tcb->recv_size,
                             (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale, TCP_MSS);
+        if (wnd != 0u && tcp_delack && tcb->rcv_adv_set) {
+            /* Linux's tcp_cleanup_rbuf: announce only a window that at
+             * least doubles what the peer has left, and only once that
+             * is at most half the ring (net/ipv4/tcp.c:1476-1494). */
+            uint32_t left = tcb->rcv_adv - tcb->rcv_nxt;
+            uint32_t clamp = (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale;
+
+            if (clamp > tcb->recv_size) {
+                clamp = tcb->recv_size;
+            }
+            if ((int32_t)left < 0) {
+                left = 0;
+            }
+            if (2u * left > clamp || wnd < 2u * left) {
+                wnd = 0;
+            }
+        }
         if (wnd != 0u) {
             tcb->rcv_wnd = wnd;
             tcp_send_flags(tcb, TCP_ACK);
@@ -3646,6 +3762,104 @@ static void tcp_handshake_done(struct tcb *tcb, uint32_t ack_num, uint32_t windo
 }
 
 /**
+ * Whether the acknowledgement of a segment, as `tcp_delack_hold` takes its
+ * arguments, waits for the end of the batch under way: under
+ * `tcp_ack_batch`, inside a batch, for a segment that carried data in
+ * order, with no FIN and nothing held past a hole, while less than
+ * TCP_BATCH_ACK_MAX is unacknowledged. The block joins the batch's list
+ * once.
+ */
+static int tcp_batch_defer(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t expected,
+                           uint16_t payload_len)
+{
+    if (!tcp_ack_batch || tcp_batch_depth == 0 || payload_len == 0 || (flags & TCP_FIN) ||
+        seq != expected || tcb->rcv_nxt != expected + payload_len || tcb->ooo_count != 0 ||
+        tcb->rcv_nxt - tcb->rcv_acked >= TCP_BATCH_ACK_MAX) {
+        return 0;
+    }
+    if (payload_len > tcb->rcv_seg_max) {
+        tcb->rcv_seg_max = payload_len;
+    }
+    if (!tcb->batch_owed) {
+        tcb->batch_owed = 1;
+        tcb->batch_next = tcp_batch_list;
+        tcp_batch_list = tcb;
+    }
+    return 1;
+}
+
+/**
+ * Whether the acknowledgement of a segment of `flags` and `payload_len`
+ * bytes at `seq`, which found `rcv_nxt` at `expected`, may wait, as
+ * Linux's __tcp_ack_snd_check lets it (net/ipv4/tcp_input.c:5770-5800):
+ * under `tcp_delack`, a segment that carried data in order, with no FIN
+ * and no data held past a hole, waits while no more than one segment's
+ * worth is unacknowledged. A held acknowledgement gets its deadline here,
+ * TCP_DELACK_TICKS on, and goes out with the next segment sent or at the
+ * deadline (`tcp_tick`). Inside a batch under `tcp_ack_batch`, such a
+ * segment waits for the batch's end instead (`tcp_batch_defer`).
+ */
+static int tcp_delack_hold(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t expected,
+                           uint16_t payload_len)
+{
+    uint32_t seg;
+
+    if (tcp_batch_defer(tcb, flags, seq, expected, payload_len)) {
+        return 1;
+    }
+    if (payload_len > tcb->rcv_seg_max) {
+        tcb->rcv_seg_max = payload_len;
+    }
+    if (!tcp_delack || payload_len == 0 || (flags & TCP_FIN) || seq != expected ||
+        tcb->rcv_nxt != expected + payload_len || tcb->ooo_count != 0) {
+        return 0;
+    }
+    seg = tcb->rcv_seg_max > TCP_DELACK_SEG ? tcb->rcv_seg_max : TCP_DELACK_SEG;
+    if (tcb->rcv_nxt - tcb->rcv_acked > seg) {
+        return 0;
+    }
+    if (tcb->delack_due == 0) {
+        tcb->delack_due = tcp_due(TCP_DELACK_TICKS);
+    }
+    return 1;
+}
+
+void tcp_batch_begin(void)
+{
+    uint32_t flags = net_lock();
+
+    tcp_batch_depth++;
+    net_unlock(flags);
+}
+
+void tcp_batch_end(void)
+{
+    uint32_t flags = net_lock();
+    struct tcb *t;
+    uint32_t seg;
+
+    if (tcp_batch_depth > 0 && --tcp_batch_depth == 0) {
+        while ((t = tcp_batch_list) != NULL) {
+            tcp_batch_list = t->batch_next;
+            t->batch_next = NULL;
+            t->batch_owed = 0;
+            if (!t->in_use || t->rcv_nxt == t->rcv_acked) {
+                continue;
+            }
+            seg = t->rcv_seg_max > TCP_DELACK_SEG ? t->rcv_seg_max : TCP_DELACK_SEG;
+            if (tcp_delack && t->rcv_nxt - t->rcv_acked <= seg) {
+                if (t->delack_due == 0) {
+                    t->delack_due = tcp_due(TCP_DELACK_TICKS);
+                }
+                continue;
+            }
+            tcp_send_flags(t, TCP_ACK);
+        }
+    }
+    net_unlock(flags);
+}
+
+/**
  * Take the segment `data` of `len` bytes, whose header is `hdr_len` bytes
  * and whose window field gives `window`, on the connection `tcb` in
  * ESTABLISHED, which `tcp_rx_check` let on, or which the segment brought
@@ -3659,6 +3873,7 @@ static void tcp_rx_established(struct tcb *tcb, const uint8_t *data, uint16_t hd
     uint32_t seq = read32be(data + 4), ack_num = read32be(data + 8);
     const uint8_t *payload = data + hdr_len;
     uint16_t payload_len = (uint16_t)(len - hdr_len);
+    uint32_t expected = tcb->rcv_nxt;
     int needs_ack = 0, queued = 1;
 
     if (flags & TCP_ACK) {
@@ -3702,6 +3917,9 @@ static void tcp_rx_established(struct tcb *tcb, const uint8_t *data, uint16_t hd
 
     if (needs_ack) {
         tcb->rcv_wnd = tcp_rcv_window(tcb);
+        if (tcp_delack_hold(tcb, flags, seq, expected, payload_len)) {
+            return;
+        }
         tcp_send_flags(tcb, TCP_ACK);
     }
 }
@@ -4430,6 +4648,9 @@ uint32_t tcp_idle_ticks(void)
         }
         if (tcb->zwp_due != 0) {
             IDLE_TIMER_MIN(wait, tcb->zwp_due, now);
+        }
+        if (tcb->delack_due != 0) {
+            IDLE_TIMER_MIN(wait, tcb->delack_due, now);
         }
         {
             uint32_t ka = tcp_idle_keepalive(tcb, now);

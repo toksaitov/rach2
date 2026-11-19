@@ -82,6 +82,40 @@ void vfio_device_zap(struct vfio_device *d)
     paging_zap_device(d, 0, 6u << VFIO_PCI_PGOFF_SHIFT);
 }
 
+/**
+ * The size of I/O BAR `i`, whose word reads `v`, in ports; 0 for one the
+ * firmware gave no ports, which nothing can reach.
+ *
+ * It is found as a memory BAR's is: every bit written, the bits that hold
+ * read back and the address put back, with the ports' decoding off
+ * meanwhile. A BAR may implement only its low 16 bits. `pci_bar_size64`
+ * sizes memory BARs alone, and a BAR of size 0 is not shown to the owner,
+ * so that a guest driver that needs the ports, as FreeBSD's em needs them
+ * for an 82540, would find no card.
+ */
+static uint64_t io_bar_size(struct vfio_device *d, int i, uint32_t v)
+{
+    uint8_t off = (uint8_t)(0x10 + 4 * i);
+    uint16_t cmd = pci_read_config16(DEV(d), PCI_COMMAND);
+    uint32_t mask;
+
+    if ((v & ~3u) == 0) {
+        return 0;
+    }
+    pci_write_config16(DEV(d), PCI_COMMAND, (uint16_t)(cmd & ~CMD_IO));
+    pci_write_config32(DEV(d), off, 0xFFFFFFFFu);
+    mask = pci_read_config32(DEV(d), off) & ~3u;
+    pci_write_config32(DEV(d), off, v);
+    pci_write_config16(DEV(d), PCI_COMMAND, cmd);
+    if (mask == 0) {
+        return 0;
+    }
+    if ((mask & 0xFFFF0000u) == 0) {
+        mask |= 0xFFFF0000u;
+    }
+    return (uint64_t)(~mask + 1u);
+}
+
 /** Read the BARs: their addresses, sizes and kinds. */
 static void bars_init(struct vfio_device *d)
 {
@@ -91,7 +125,7 @@ static void bars_init(struct vfio_device *d)
         uint32_t v = pci_read_config32(DEV(d), (uint8_t)(0x10 + 4 * i));
 
         d->bar_io[i] = (v & 1u) != 0;
-        d->bar_size[i] = pci_bar_size64(&d->pci, i);
+        d->bar_size[i] = d->bar_io[i] ? io_bar_size(d, i, v) : pci_bar_size64(&d->pci, i);
         d->bar_phys[i] = d->bar_io[i] ? (v & ~3u) : pci_bar_address64(&d->pci, i);
         if (!d->bar_io[i] && (v & 0x6u) == 0x4u && i < 5) {
             i++;

@@ -368,6 +368,9 @@ extern int kvm_ignore_msrs;
 extern int kvm_report_ignored_msrs;
 extern int kvm_force_emulation_prefix;
 extern int kvm_eager_page_split;
+/* Linux's halt_poll_ns: how long a halted vCPU spins for an event before it
+ * sleeps, in nanoseconds; 0 or less sleeps at once (`block`). */
+extern int kvm_halt_poll_ns;
 
 /*
  * A VM. `refs` counts the VM's descriptors, its vCPUs and the mappings of

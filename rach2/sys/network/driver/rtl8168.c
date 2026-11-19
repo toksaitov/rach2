@@ -71,6 +71,27 @@ struct r8168_io {
  * and write through it. */
 static uintptr_t r8168_mmio;
 
+/* The window a bring-up mapped and the address it maps, kept so that a
+ * second bring-up of the card at the same address maps nothing new. */
+static uintptr_t r8168_window;
+static uint64_t r8168_window_at;
+
+/** The 256 bytes of the card's window at `addr`, mapped now or by an
+ * earlier bring-up at the same address; 0 when it would not map. */
+static uintptr_t r8168_window_map(uint64_t addr)
+{
+    if (r8168_window == 0 || r8168_window_at != addr) {
+        uintptr_t mapped = map_mmio((uintptr_t)addr, 256);
+
+        if (mapped == 0) {
+            return 0;
+        }
+        r8168_window = mapped;
+        r8168_window_at = addr;
+    }
+    return r8168_window;
+}
+
 /** Read the byte register at `off` of the window. */
 static uint8_t mmio_r8(uint32_t off)
 {
@@ -490,12 +511,16 @@ static int r8168_hw_reset(void)
  * before this one, can leave the MAC serving its management engine, and a
  * chip in that state ignores an ordinary bring-up. This sequence takes it
  * back.
+ *
+ * FIFOs that do not drain are logged and the sequence goes on, as the
+ * reference's does: a card taken back from a guest that died in the middle
+ * of a transfer has frames it cannot move with bus mastering off, and the
+ * reset that follows this sequence empties them.
  */
 static int r8168_hw_init_8168g(void)
 {
     if (!r8168_enable_rxdvgate()) {
-        r8168_err = "the FIFOs did not drain before reset";
-        return 0;
+        klog(KLOG_WARN, "rtl8168", "init: the FIFOs did not drain before the reset");
     }
 
     io->w8(R8168_CHIPCMD,
@@ -1026,7 +1051,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
         r8168_err = "the RTL8168 window is above the addresses this kernel maps";
         return NETDEV_FAILED;
     }
-    mapped = map_mmio((uintptr_t)addr, 256);
+    mapped = r8168_window_map(addr);
     if (mapped == 0) {
         r8168_err = "the RTL8168 window would not map";
         return NETDEV_FAILED;
@@ -1690,7 +1715,10 @@ static void rtl8168_stop(void *dev)
         r8168_irq_mask_and_ack();
         if (r8168_msi_vector >= 0) {
             pci_msi_disable(&r8168_pci);
+            isr_free_vector(r8168_msi_vector);
             r8168_msi_vector = -1;
+            /* A handler that ran beside the first masking opened them again. */
+            r8168_irq_mask_and_ack();
         }
         if ((r8168_xid & R8168_XID_FAMILY_MASK) == R8168_XID_8168GU) {
             io->w8(R8168_CHIPCMD, 0);

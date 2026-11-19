@@ -78,6 +78,8 @@
 #include "../syscall.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
+#include "../network/driver/tap.h"
+#include "../network/driver/vhost_net.h"
 #include "../network/wireless/wiphy.h"
 #include "../rfkill.h"
 #include "../network/arp/arp.h"
@@ -3734,7 +3736,54 @@ static void procfs_assignment_counts(struct procfs_text *t)
     static const char *const names[5] = {"vfio_groups ", "vfio_devices ", "vfio_dma_mappings ",
                                          "vfio_dma_pages ", "vfio_dma_io_pages "};
     uint32_t counts[5];
+    static const char *const vn_names[] = {"vhost_rx ",
+                                           "vhost_rx_full ",
+                                           "vhost_calls ",
+                                           "vhost_kicks ",
+                                           "vhost_tx ",
+                                           "vhost_wakes ",
+                                           "vhost_wake_cycles ",
+                                           "vhost_wake_same ",
+                                           "vhost_wake_sibling ",
+                                           "vhost_bkl_cycles ",
+                                           "vhost_kick_cpu0 ",
+                                           "vhost_kick_cpu1 ",
+                                           "vhost_kick_cpu2 ",
+                                           "vhost_kick_cpu3 ",
+                                           "vhost_run_cpu0 ",
+                                           "vhost_run_cpu1 ",
+                                           "vhost_run_cpu2 ",
+                                           "vhost_run_cpu3 ",
+                                           "vhost_tr_reqs ",
+                                           "vhost_tr_acks ",
+                                           "vhost_tr_ack_cycles ",
+                                           "vhost_tr_replies ",
+                                           "vhost_tr_reply_cycles ",
+                                           "vhost_tr_turns ",
+                                           "vhost_tr_turn_cycles ",
+                                           "vhost_req_cpu0 ",
+                                           "vhost_req_cpu1 ",
+                                           "vhost_req_cpu2 ",
+                                           "vhost_req_cpu3 ",
+                                           "vhost_req_on_guest ",
+                                           "vhost_a_msis ",
+                                           "vhost_a_msi_cycles ",
+                                           "vhost_a_fwd_cycles ",
+                                           "vhost_b_msis ",
+                                           "vhost_b_msi_cycles ",
+                                           "vhost_b_fwd_cycles ",
+                                           "vhost_msis_in_exchange ",
+                                           "vhost_msi_cpu0 ",
+                                           "vhost_msi_cpu1 ",
+                                           "vhost_msi_cpu2 ",
+                                           "vhost_msi_cpu3 ",
+                                           "vhost_c_msis ",
+                                           "vhost_c_msi_cycles "};
+    uint64_t tap[4], vn[VHOST_NET_COUNTS];
     int i;
+
+    /* A count without a name would print from a null pointer. */
+    (void)sizeof(char[sizeof(vn_names) / sizeof(vn_names[0]) == VHOST_NET_COUNTS ? 1 : -1]);
 
     vfio_resource_counts(counts);
     for (i = 0; i < 5; i++) {
@@ -3751,6 +3800,22 @@ static void procfs_assignment_counts(struct procfs_text *t)
     ap_str(t, "\nmsi_vectors_free ");
     ap_u32(t, (uint32_t)isr_free_vector_count());
     ap_ch(t, '\n');
+    tap_counts(&tap[0], &tap[1], &tap[2], &tap[3]);
+    ap_str(t, "tap_read ");
+    ap_u64(t, tap[0]);
+    ap_str(t, "\ntap_written ");
+    ap_u64(t, tap[1]);
+    ap_str(t, "\ntap_dropped ");
+    ap_u64(t, tap[2]);
+    ap_str(t, "\ntap_thinned ");
+    ap_u64(t, tap[3]);
+    ap_ch(t, '\n');
+    vhost_net_counts(vn);
+    for (i = 0; i < VHOST_NET_COUNTS; i++) {
+        ap_str(t, vn_names[i]);
+        ap_u64(t, vn[i]);
+        ap_ch(t, '\n');
+    }
 #else
     (void)t;
 #endif

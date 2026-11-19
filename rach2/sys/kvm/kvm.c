@@ -920,6 +920,7 @@ int kvm_ignore_msrs;
 int kvm_report_ignored_msrs = 1;
 int kvm_force_emulation_prefix;
 int kvm_eager_page_split = 1;
+int kvm_halt_poll_ns;
 
 /*
  * The module parameters Linux's KVM selftests read, as Linux's files under
@@ -949,6 +950,7 @@ static const struct kvm_param {
                   {0, "enable_pmu", 0, PARAM_FIXED, NULL},
                   {0, "tdp_mmu", 'Y', PARAM_FIXED, NULL},
                   {0, "eager_page_split", 0, PARAM_BOOL, &kvm_eager_page_split},
+                  {0, "halt_poll_ns", 0, PARAM_INT, &kvm_halt_poll_ns},
                   {0, "ignore_msrs", 0, PARAM_BOOL, &kvm_ignore_msrs},
                   {0, "report_ignored_msrs", 0, PARAM_BOOL, &kvm_report_ignored_msrs},
                   {1, "ept", 'Y', PARAM_FIXED, NULL},

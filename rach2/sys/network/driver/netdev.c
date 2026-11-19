@@ -20,11 +20,16 @@
 #include "rtl8168.h"
 #include "virtio_net.h"
 #include "../net.h"
+#include "../netconf.h"
 #include "../../cmdline.h"
+#include "../../fs/synthfs.h"
+#include "../../fs/sysfs.h"
 #include "../../klog.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
+#include "../../pci.h"
 #include "../../timer.h"
+#include "../../udelay.h"
 
 /* The interfaces: the `niface` cards the probe brought up, in the order it
  * found them, and `lo` after them. */
@@ -36,6 +41,15 @@ static int next_index;
 
 /* Whether `lo` stands after the cards, in ifaces[niface]. */
 static int lo_ready;
+
+/* What the probe keeps of each card, so that its driver can let the card go
+ * and take it back (`netdev_release`, `netdev_reclaim`): the driver, the
+ * card's number among the driver's, whether the card is away, and the table
+ * that stands in for the driver's while it is. */
+static const struct netdev_ops *card_ops[NETDEV_MAX];
+static int card_nth[NETDEV_MAX];
+static int card_away[NETDEV_MAX];
+static struct netdev_ops away_ops[NETDEV_MAX];
 
 /* The reason the last probe's last failed card gave (`netdev_error`). A
  * driver that answers absent leaves it as it is, so that one card's absence
@@ -418,6 +432,9 @@ int netdev_probe(void)
                 continue;
             }
             nd->up = 1;
+            card_ops[niface] = drivers[i];
+            card_nth[niface] = nth;
+            card_away[niface] = 0;
             if (niface == 0) {
                 int b;
 
@@ -604,4 +621,255 @@ uint32_t netdev_idle_ticks(void)
         }
     }
     return TICK_HZ;
+}
+
+/** The `tx` of a card that is away: every frame is dropped. */
+static int away_tx(void *dev, const uint8_t *data, uint16_t len)
+{
+    (void)dev;
+    (void)data;
+    (void)len;
+    return NETDEV_TX_DROPPED;
+}
+
+/** The `link` of a card that is away: no carrier. */
+static int away_link(void *dev, struct netdev_link *out)
+{
+    (void)dev;
+    out->up = 0;
+    out->mbps = 0;
+    out->full_duplex = 0;
+    return 1;
+}
+
+/** The number of the probe's card `nd` in `ifaces`, or -1 for an interface
+ * that is no card of the probe's. */
+static int card_of(const struct netdev *nd)
+{
+    int i;
+
+    for (i = 0; i < niface; i++) {
+        if (&ifaces[i] == nd) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int netdev_release(struct netdev *nd)
+{
+    int i = card_of(nd);
+    uint32_t flags;
+    uint8_t bus, devfn;
+
+    if (i < 0 || card_away[i] || nd->pci_key < 0 || !card_ops[i]->stop) {
+        return -ENODEV;
+    }
+    bus = (uint8_t)(nd->pci_key >> 8);
+    devfn = (uint8_t)nd->pci_key;
+    (void)netconf_set_up(nd, 0);
+    flags = net_lock();
+    away_ops[i].name = card_ops[i]->name;
+    away_ops[i].tx = away_tx;
+    away_ops[i].link = away_link;
+    nd->ops = &away_ops[i];
+    card_away[i] = 1;
+    netdev_carrier_changed(nd);
+    net_unlock(flags);
+    card_ops[i]->stop(nd->dev);
+    pci_unclaim(bus, devfn, PCI_OWNER_KERNEL);
+    sysfs_pci_unbind(nd->pci_key);
+    (void)sysfs_pci_uevent(nd->pci_key, "unbind");
+    klog(KLOG_INFO, "net", "%s: released: the card is free for another driver", nd->name);
+    return 0;
+}
+
+/**
+ * Bring the function at `bus`, `devfn` to D0 before its driver touches it.
+ *
+ * A guest's driver may leave the card in D3hot, as Linux's r8169 does when
+ * its system powers off. Nothing else brings it back: VFIO's saved state has
+ * no power word, and a card with no function-level reset and No_Soft_Reset
+ * set is reset by nobody. In D3hot the card's window reads all ones, which
+ * the bring-up takes for no card. The wait is the one a change from D3hot
+ * needs.
+ */
+static void card_wake(uint8_t bus, uint8_t devfn)
+{
+    pci_device_t dev;
+
+    k_memset(&dev, 0, sizeof(dev));
+    dev.bus = bus;
+    dev.device = (uint8_t)(devfn >> 3);
+    dev.function = (uint8_t)(devfn & 7u);
+    if (pci_power_state(&dev) > PCI_D0) {
+        (void)pci_set_power_state(&dev, PCI_D0);
+        k_udelay(PCI_PM_D3HOT_WAIT * 1000u);
+        klog(KLOG_INFO, "net", "pci %x:%x.%u: brought back to D0", (unsigned)bus,
+             (unsigned)dev.device, (unsigned)dev.function);
+    }
+}
+
+int netdev_reclaim(struct netdev *nd, const char *driver)
+{
+    int i = card_of(nd);
+    uint32_t flags;
+    uint8_t bus, devfn;
+    int key;
+    int tries;
+
+    if (i < 0 || !card_away[i]) {
+        return -ENODEV;
+    }
+    key = nd->pci_key;
+    bus = (uint8_t)(key >> 8);
+    devfn = (uint8_t)key;
+    if (pci_owner(bus, devfn) != NULL) {
+        return -EBUSY;
+    }
+    card_wake(bus, devfn);
+    /* A card a guest died on may need the first bring-up's reset to start. */
+    for (tries = 0;; tries++) {
+        if (card_ops[i]->init(nd, card_nth[i]) == NETDEV_UP && nd->pci_key == key) {
+            break;
+        }
+        klog(KLOG_WARN, "net", "%s: not taken back: %s", nd->name,
+             card_ops[i]->error ? card_ops[i]->error() : "the card did not start");
+        card_ops[i]->stop(nd->dev);
+        nd->pci_key = key;
+        pci_unclaim(bus, devfn, PCI_OWNER_KERNEL);
+        if (tries == 1) {
+            return -EIO;
+        }
+        k_udelay(100000u);
+    }
+    flags = net_lock();
+    nd->ops = card_ops[i];
+    card_away[i] = 0;
+    netdev_carrier_changed(nd);
+    net_unlock(flags);
+    if (driver && sysfs_pci_bind(nd->pci_key, driver) == 0) {
+        (void)sysfs_pci_uevent(nd->pci_key, "bind");
+    }
+    klog(KLOG_INFO, "net", "%s: taken back by its driver", nd->name);
+    return 0;
+}
+
+/* The drivers that let a card go, under the names Linux's drivers of the
+ * same cards have in /sys/bus/pci/drivers. */
+static const struct {
+    const struct netdev_ops *ops;
+    const char *name;
+} sys_drivers[] = {{&e1000_netdev, "e1000"}, {&rtl8168_netdev, "r8169"}};
+
+#define SYS_DRIVERS ((int)(sizeof(sys_drivers) / sizeof(sys_drivers[0])))
+
+/** The value of the hexadecimal digit `c`, or -1. */
+static int hex_digit(char c)
+{
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
+}
+
+/**
+ * The card of driver `n` of `sys_drivers` that the text at `buf` names,
+ * `0000:BB:DD.F` with perhaps a newline after it, as a write of `bind` or
+ * `unbind` gives it; NULL for other text, or a function that is no card of
+ * that driver.
+ */
+static struct netdev *card_named(int n, const char *buf, uint32_t len)
+{
+    int b1, b0, d1, d0, f, i, key;
+
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == ' ')) {
+        len--;
+    }
+    if (len != 12 || buf[0] != '0' || buf[1] != '0' || buf[2] != '0' || buf[3] != '0' ||
+        buf[4] != ':' || buf[7] != ':' || buf[10] != '.') {
+        return 0;
+    }
+    b1 = hex_digit(buf[5]);
+    b0 = hex_digit(buf[6]);
+    d1 = hex_digit(buf[8]);
+    d0 = hex_digit(buf[9]);
+    f = hex_digit(buf[11]);
+    if (b1 < 0 || b0 < 0 || d1 < 0 || d0 < 0 || f < 0 || d1 > 1 || f > 7) {
+        return 0;
+    }
+    key = (b1 << 4 | b0) << 8 | (d1 << 4 | d0) << 3 | f;
+    for (i = 0; i < niface; i++) {
+        if (ifaces[i].pci_key == key && card_ops[i] == sys_drivers[n].ops) {
+            return &ifaces[i];
+        }
+    }
+    return 0;
+}
+
+/** /sys/bus/pci/drivers/DRIVER/unbind: let go of the card named
+ * (`netdev_release`); -ENODEV for a function the driver does not have. */
+static int32_t store_unbind(void *obj, int arg, const char *buf, uint32_t len)
+{
+    struct netdev *nd = card_named(arg, buf, len);
+    int r;
+
+    (void)obj;
+    if (!nd) {
+        return -ENODEV;
+    }
+    r = netdev_release(nd);
+    return r != 0 ? r : (int32_t)len;
+}
+
+/** /sys/bus/pci/drivers/DRIVER/bind: take back the card named
+ * (`netdev_reclaim`); -ENODEV for a function that was never the driver's. */
+static int32_t store_bind(void *obj, int arg, const char *buf, uint32_t len)
+{
+    struct netdev *nd = card_named(arg, buf, len);
+    int r;
+
+    (void)obj;
+    if (!nd) {
+        return -ENODEV;
+    }
+    r = netdev_reclaim(nd, sys_drivers[arg].name);
+    return r != 0 ? r : (int32_t)len;
+}
+
+static const struct sysfs_attr attr_bind = {"bind", 0200u, NULL, store_bind};
+static const struct sysfs_attr attr_unbind = {"unbind", 0200u, NULL, store_unbind};
+
+/** The directory `name` below `parent`, made when it is not there yet: its
+ * handle, or -errno. */
+static int dir_at(int parent, const char *name)
+{
+    int h;
+
+    if (parent <= 0) {
+        return parent < 0 ? parent : -ENOENT;
+    }
+    h = sysfs_node_child(parent, name, (int)k_strlen(name));
+    return h > 0 ? h : sysfs_add_dir(parent, name);
+}
+
+void netdev_sys_start(void)
+{
+    int n, i;
+
+    for (n = 0; n < SYS_DRIVERS; n++) {
+        int dir = dir_at(dir_at(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers"), sys_drivers[n].name);
+
+        if (dir < 0 || sysfs_add_attr(dir, &attr_bind, NULL, n) < 0 ||
+            sysfs_add_attr(dir, &attr_unbind, NULL, n) < 0) {
+            klog(KLOG_WARN, "net", "/sys/bus/pci/drivers/%s not made: error %d",
+                 sys_drivers[n].name, dir < 0 ? dir : -ENOMEM);
+            continue;
+        }
+        for (i = 0; i < niface; i++) {
+            if (card_ops[i] == sys_drivers[n].ops && ifaces[i].pci_key >= 0) {
+                (void)sysfs_pci_bind(ifaces[i].pci_key, sys_drivers[n].name);
+            }
+        }
+    }
 }

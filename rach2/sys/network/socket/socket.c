@@ -698,7 +698,7 @@ static int send_space_ready(void *arg)
         (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT)) {
         return 1;
     }
-    return (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0;
+    return (tcb->send_size - (tcb->send_tail - tcb->send_ack)) > 0;
 }
 
 /** The wait predicate of a send on a connection still in its handshake:
@@ -1325,7 +1325,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
                 revents |= (short)(events & POLLOUT);
             }
         } else if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
-                   (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0) {
+                   (tcb->send_size - (tcb->send_tail - tcb->send_ack)) > 0) {
             revents |= (short)(events & POLLOUT);
         }
         if (tcb->so_error != 0) {

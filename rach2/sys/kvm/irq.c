@@ -6,6 +6,7 @@
 
 #include "../arch/x86/kcpu.h"
 #include "../io/eventfd.h"
+#include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../lib/spinlock.h"
@@ -374,6 +375,8 @@ static int32_t irqfd(struct kvm_vm *vm, uintptr_t arg)
     if (a.flags & ~(KVM_IRQFD_FLAG_DEASSIGN | KVM_IRQFD_FLAG_RESAMPLE)) {
         return -EINVAL;
     }
+    klog(KLOG_INFO, "kvm", "irqfd: %s gsi %u fd %u flags %u",
+         (a.flags & KVM_IRQFD_FLAG_DEASSIGN) ? "drop" : "add", a.gsi, a.fd, a.flags);
     if (a.flags & KVM_IRQFD_FLAG_DEASSIGN) {
         ev = eventfd_get((int)a.fd, &err);
         if (!ev) {
