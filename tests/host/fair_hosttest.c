@@ -3,7 +3,8 @@
  * against Linux 6.12's formulas, on a model processor whose clock the test
  * moves.
  *
- * host-deps: rach2/sys/lib/rbtree.c rach2/sys/tick.c
+ * host-deps: rach2/sys/lib/rbtree.c rach2/sys/tick.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * The rows drive the class's hooks as the scheduler would: a pick, then the
  * put of the current thread and the set of the pick when they differ, a tick
@@ -218,13 +219,12 @@ static void blocked_hook(struct process *p)
 /** A fresh class on one processor, the clock at 1 s. */
 static void reset(void)
 {
-    static const struct process empty;
     int i;
 
     fair_init(1);
     fair_hooks.blocked = blocked_hook;
     for (i = 0; i < NPROC; i++) {
-        procs[i] = empty;
+        k_memset(&procs[i], 0, sizeof(procs[i]));
         procs[i].cpu = 0;
     }
     cur = NULL;
@@ -678,8 +678,6 @@ static struct cfs_rq group_rq;
 /** Make the group, its entity on the root queue and its queue. */
 static void group_setup(void)
 {
-    static const struct sched_entity empty;
-
     group.se = group_se_slot;
     group.cfs_rq = group_rq_slot;
     group.shares = NICE_0_LOAD;
@@ -687,7 +685,7 @@ static void group_setup(void)
     group_se_slot[0] = &group_se;
     group_rq_slot[0] = &group_rq;
     fair_cfs_rq_init(&group_rq, &group, 0);
-    group_se = empty;
+    k_memset(&group_se, 0, sizeof(group_se));
     RB_CLEAR_NODE(&group_se.run_node);
     group_se.load.weight = NICE_0_LOAD;
     group_se.my_q = &group_rq;

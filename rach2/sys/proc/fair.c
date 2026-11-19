@@ -7,6 +7,7 @@
 #include "fair.h"
 #include "process.h"
 #include "sched.h"
+#include "../lib/kstring.h"
 #include "../timer.h"
 
 /*
@@ -1459,9 +1460,7 @@ static struct sched_entity *pick_next_entity(struct cfs_rq *cfs_rq)
 
 void fair_cfs_rq_init(struct cfs_rq *cfs_rq, struct task_group *tg, int cpu)
 {
-    static const struct cfs_rq empty;
-
-    *cfs_rq = empty;
+    k_memset(cfs_rq, 0, sizeof(*cfs_rq));
     cfs_rq->zero_vruntime = (uint64_t)0 - ((uint64_t)1 << 20);
     cfs_rq->tg = tg;
     cfs_rq->cpu = cpu;
@@ -1793,11 +1792,10 @@ void fair_set_slice(struct process *p, uint64_t ns)
 
 void fair_fork(struct process *child, struct process *parent)
 {
-    static const struct sched_entity empty;
     struct sched_entity *se = &child->se;
 
     (void)parent;
-    *se = empty;
+    k_memset(se, 0, sizeof(*se));
     RB_CLEAR_NODE(&se->run_node);
     task_load_weight(child, &se->load);
     fair_set_slice(child, child->sched_slice);
