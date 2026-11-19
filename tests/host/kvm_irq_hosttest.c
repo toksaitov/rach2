@@ -346,6 +346,31 @@ static int waits, sleep_to_tick, wakes_done, endless;
 static int sleep_to_fine;
 static int64_t fine_target;
 
+/* Halt polling's model. A halted wait of `poll_vcpu` sleeps `wait_wake_ns`
+ * and ends with its PV unhalt, reading `blocking` into `blocking_seen`.
+ * Each relax of the poll moves the clock 1 us on, counted in `relaxes`,
+ * and from `poll_event_ns` gives the vCPU its PV unhalt; `poll_crowd`
+ * stands for another thread waiting for the processor. */
+static struct kvm_vcpu *poll_vcpu;
+static uint64_t wait_wake_ns, poll_event_ns, relaxes, blocking_seen;
+static int poll_crowd;
+
+/** The poll's pause, which moves the model's clock on. */
+void arch_relax(void)
+{
+    relaxes++;
+    mono_ns += 1000u;
+    if (poll_vcpu && poll_event_ns && mono_ns >= poll_event_ns) {
+        apic_of(poll_vcpu)->pv_unhalted = 1;
+    }
+}
+
+/** Whether the thread is alone on its processor, as sched.c answers. */
+int sched_yield_alone(void)
+{
+    return !poll_crowd;
+}
+
 /** Set the thread's timed wait as the kernel does, under no lock, since the
  * model has one processor and no timer pass runs beside the thread, and
  * return the expiry record. */
@@ -381,6 +406,14 @@ int wq_wait_event_sigflag(wait_queue_t *wq, wq_cond_fn cond, void *arg, const ch
     waits++;
     if (cond(arg)) {
         return 0;
+    }
+    if (poll_vcpu && wait_wake_ns && arg == poll_vcpu) {
+        blocking_seen = poll_vcpu->stat[KVM_VCPU_STAT_BLOCKING];
+        mono_ns += wait_wake_ns;
+        apic_of(poll_vcpu)->pv_unhalted = 1;
+        if (cond(arg)) {
+            return 0;
+        }
     }
     if (sleep_to_fine && current_proc->wakeup_ns) {
         fine_target = current_proc->wakeup_ns;
@@ -537,6 +570,12 @@ static void fake_complete(struct kvm_vcpu *v)
 
 static struct kvm_backend fake;
 const struct kvm_backend *kvm_backend;
+
+/* kvm.c's halt polling parameters, at Linux's x86 defaults. */
+unsigned int kvm_halt_poll_ns = 200000u;
+unsigned int kvm_halt_poll_ns_grow = 2u;
+unsigned int kvm_halt_poll_ns_grow_start = 10000u;
+unsigned int kvm_halt_poll_ns_shrink = 2u;
 
 /* The VM and its vCPUs. */
 #define NVCPU 4
@@ -1171,6 +1210,174 @@ static void halt_rows(void)
     CHECK(has(v, APIC_IRR, 0xE8), "with the timer's vector");
     CHECK(caller.wakeup_tick == 0, "the wait's tick is cleared");
     sleep_to_tick = 0;
+    clear_vectors();
+}
+
+/** Halt `v` and run kvm_lapic_prepare: its answer, with `relaxes` and
+ * `waits` counted from 0. */
+static int32_t poll_halt(struct kvm_vcpu *v)
+{
+    int32_t r;
+
+    kvm_lapic_halt(v);
+    relaxes = 0;
+    waits = 0;
+    blocking_seen = 0;
+    r = kvm_lapic_prepare(v);
+    v->requests = 0;
+    return r;
+}
+
+/** An empty window: the vCPU sleeps at once, and the short halt grows
+ * the window to halt_poll_ns_grow_start. */
+static void halt_poll_sleep_rows(struct kvm_vcpu *v)
+{
+    uint64_t *s = v->stat;
+
+    wait_wake_ns = 5000u;
+    CHECK(poll_halt(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE && waits == 1 && relaxes == 0 &&
+              blocking_seen == 1 && s[KVM_VCPU_STAT_BLOCKING] == 0,
+          "with an empty window the halted vCPU sleeps at once, blocking 1 while it sleeps");
+    CHECK(s[KVM_VCPU_STAT_HALT_ATTEMPTED_POLL] == 0 && s[KVM_VCPU_STAT_HALT_WAIT_NS] == 5000u &&
+              s[KVM_VCPU_STAT_HALT_WAIT_HIST + 13] == 1 && s[KVM_VCPU_STAT_HALT_WAKEUP] == 1,
+          "the 5 us sleep in halt_wait_ns, its bucket 13 and halt_wakeup, with no poll");
+    CHECK(v->halt_poll_ns == 10000u, "a 5 us halt grows the window to halt_poll_ns_grow_start");
+}
+
+/** An event within the window, taken without a sleep. */
+static void halt_poll_event_rows(struct kvm_vcpu *v)
+{
+    uint64_t *s = v->stat;
+
+    wait_wake_ns = 0;
+    poll_event_ns = mono_ns + 3000u;
+    CHECK(poll_halt(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE && waits == 0 && relaxes == 3 &&
+              endless == 0,
+          "an event 3 us into the 10 us window wakes the vCPU without a sleep");
+    CHECK(s[KVM_VCPU_STAT_HALT_ATTEMPTED_POLL] == 1 && s[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL] == 1 &&
+              s[KVM_VCPU_STAT_HALT_POLL_SUCCESS_NS] == 3000u &&
+              s[KVM_VCPU_STAT_HALT_POLL_SUCCESS_HIST + 12] == 1 &&
+              s[KVM_VCPU_STAT_HALT_POLL_FAIL_NS] == 0 && s[KVM_VCPU_STAT_HALT_WAKEUP] == 1,
+          "counted a successful poll of 3 us, in bucket 12");
+    CHECK(v->halt_poll_ns == 10000u, "a halt the window covered leaves it");
+    poll_event_ns = 0;
+}
+
+/** A window that runs out before the sleep, and long halts that shrink
+ * it to 0. */
+static void halt_poll_spin_rows(struct kvm_vcpu *v)
+{
+    uint64_t *s = v->stat;
+
+    wait_wake_ns = 50000u;
+    CHECK(poll_halt(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE && relaxes == 10 && waits == 1,
+          "with no event the poll spins out its 10 us and the vCPU sleeps");
+    CHECK(s[KVM_VCPU_STAT_HALT_ATTEMPTED_POLL] == 2 && s[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL] == 1 &&
+              s[KVM_VCPU_STAT_HALT_POLL_FAIL_NS] == 10000u &&
+              s[KVM_VCPU_STAT_HALT_POLL_FAIL_HIST + 14] == 1 &&
+              s[KVM_VCPU_STAT_HALT_WAIT_NS] == 55000u &&
+              s[KVM_VCPU_STAT_HALT_WAIT_HIST + 16] == 1 && s[KVM_VCPU_STAT_HALT_WAKEUP] == 2,
+          "counted a failed poll of 10 us in bucket 14 and a sleep of 50 us in bucket 16");
+    CHECK(v->halt_poll_ns == 20000u, "a 60 us halt, under halt_poll_ns, doubles the window");
+
+    wait_wake_ns = 1000000u;
+    CHECK(poll_halt(v) == 0 && relaxes == 20 && v->halt_poll_ns == 10000u,
+          "a halt past halt_poll_ns halves the window");
+    CHECK(poll_halt(v) == 0 && relaxes == 10 && v->halt_poll_ns == 0,
+          "and below halt_poll_ns_grow_start drops it to 0");
+}
+
+/** The poll cut short by another thread or a signal, and
+ * MSR_KVM_POLL_CONTROL's opt-out. */
+static void halt_poll_end_rows(struct kvm_vcpu *v)
+{
+    uint64_t *s = v->stat;
+
+    wait_wake_ns = 5000u;
+    v->halt_poll_ns = 10000u;
+    poll_crowd = 1;
+    CHECK(poll_halt(v) == 0 && relaxes == 1 && waits == 1 &&
+              s[KVM_VCPU_STAT_HALT_POLL_FAIL_HIST + 10] == 1 && v->halt_poll_ns == 10000u,
+          "another thread waiting for the processor ends the poll after one pause, a failed 1 us");
+    poll_crowd = 0;
+    caller.sig_woken = 1;
+    CHECK(poll_halt(v) == -EINTR && v->mp_state == KVM_MP_STATE_HALTED && relaxes == 0 &&
+              waits == 0 && v->run->exit_reason == KVM_EXIT_INTR &&
+              s[KVM_VCPU_STAT_HALT_SUCCESSFUL_POLL] == 2 &&
+              s[KVM_VCPU_STAT_HALT_POLL_SUCCESS_HIST] == 1,
+          "a signal ends the poll with EINTR before a sleep, a successful poll of 0 ns");
+    caller.sig_woken = 0;
+    apic_of(v)->pv_unhalted = 1;
+    CHECK(poll_halt(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE, "the vCPU runs again");
+
+    v->poll_control = 0;
+    CHECK(poll_halt(v) == 0 && relaxes == 0 && waits == 1 &&
+              s[KVM_VCPU_STAT_HALT_ATTEMPTED_POLL] == 6 && v->halt_poll_ns == 10000u,
+          "with MSR_KVM_POLL_CONTROL's bit 0 clear the vCPU sleeps at once, its window left");
+    v->poll_control = 1;
+}
+
+/** The VM's KVM_CAP_HALT_POLL bound and the module parameters at 0. */
+static void halt_poll_bound_rows(struct kvm_vcpu *v)
+{
+    vm.max_halt_poll_ns = 4000u;
+    vm.halt_poll_override = 1;
+    CHECK(poll_halt(v) == 0 && relaxes == 4 && v->halt_poll_ns == 0,
+          "KVM_CAP_HALT_POLL's 4 us bounds the window, and a 9 us halt past it shrinks it to 0");
+    vm.max_halt_poll_ns = 0;
+    v->halt_poll_ns = 10000u;
+    CHECK(poll_halt(v) == 0 && relaxes == 0 && v->halt_poll_ns == 0,
+          "a bound of 0 stops the poll and empties the window");
+    vm.halt_poll_override = 0;
+
+    kvm_halt_poll_ns = 0;
+    v->halt_poll_ns = 10000u;
+    CHECK(poll_halt(v) == 0 && relaxes == 0 && v->halt_poll_ns == 0,
+          "halt_poll_ns 0 stops the poll and empties the window");
+    kvm_halt_poll_ns = 200000u;
+    kvm_halt_poll_ns_grow = 0;
+    CHECK(poll_halt(v) == 0 && v->halt_poll_ns == 0, "halt_poll_ns_grow 0 leaves the window empty");
+    kvm_halt_poll_ns_grow = 2u;
+    kvm_halt_poll_ns_shrink = 0;
+    v->halt_poll_ns = 20000u;
+    wait_wake_ns = 1000000u;
+    CHECK(poll_halt(v) == 0 && v->halt_poll_ns == 0,
+          "halt_poll_ns_shrink 0 empties the window after a long halt");
+    kvm_halt_poll_ns_shrink = 2u;
+}
+
+/**
+ * Halt polling, as Linux's kvm_vcpu_halt: the window grown from
+ * halt_poll_ns_grow_start by a short halt, an event within it taken with
+ * no sleep, a window that runs out followed by the sleep, a long halt
+ * shrinking it to 0, the poll cut short by another thread or a signal,
+ * MSR_KVM_POLL_CONTROL's opt-out, the VM's KVM_CAP_HALT_POLL bound, and
+ * the module parameters at 0; with every counter and histogram bucket.
+ * The rows run in order on vCPU 3, each from the window the last left.
+ */
+static void halt_poll_rows(void)
+{
+    struct kvm_vcpu *v = vcpu[3];
+
+    clear_vectors();
+    k_memset(v->stat, 0, sizeof(v->stat));
+    v->requests = 0;
+    v->if_flag = 1;
+    v->poll_control = 1;
+    v->halt_poll_ns = 0;
+    poll_vcpu = v;
+    sleep_to_tick = 0;
+    endless = 0;
+    halt_poll_sleep_rows(v);
+    halt_poll_event_rows(v);
+    halt_poll_spin_rows(v);
+    halt_poll_end_rows(v);
+    halt_poll_bound_rows(v);
+    CHECK(endless == 0, "no halt waits for ever");
+    wait_wake_ns = 0;
+    poll_vcpu = NULL;
+    v->poll_control = 0;
+    v->halt_poll_ns = 0;
     clear_vectors();
 }
 
@@ -2262,6 +2469,7 @@ int main(int argc, char **argv)
         x2apic_api_rows();
         extint_rows();
         halt_rows();
+        halt_poll_rows();
         routing_rows();
         irqfd_rows();
         ioeventfd_rows();
