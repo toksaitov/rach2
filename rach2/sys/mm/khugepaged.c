@@ -89,7 +89,9 @@ static int khugepaged_wake(void)
         bkl_enter();
         mm = khugepaged_next();
         if (!mm) {
-            _pass = _pass + 1 ? _pass + 1 : 1;
+            if (++_pass == 0) { /* 0 is no pass */
+                _pass = 1;
+            }
             bkl_exit();
             thp_note(THP_FULL_SCANS);
             break;
