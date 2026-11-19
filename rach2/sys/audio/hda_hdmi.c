@@ -748,6 +748,7 @@ static int hh_sync_eld(struct hh_pin *p)
     struct hh_eld_info info;
     int enabled = 0, was = p->eld_valid, size, valid;
 
+    k_memset(&info, 0, sizeof(info));
     size = hh_ops->get_eld(hh_dev, p->nid - 4, p->dev, &enabled, buf, (int)sizeof(buf));
     if (size > (int)sizeof(buf)) {
         size = (int)sizeof(buf);

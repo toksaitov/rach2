@@ -1383,3 +1383,15 @@ int main(void)
     printf("i915-fake-test: ok\n");
     return 0;
 }
+
+/** The fake chip has no display, so no audio component registers. */
+void intel_audio_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+/** Nothing registered, nothing to undo. */
+void intel_audio_deinit(struct drm_i915_private *i915)
+{
+    (void)i915;
+}

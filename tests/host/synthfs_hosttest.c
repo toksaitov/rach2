@@ -1077,3 +1077,21 @@ int main(int argc, char **argv)
     vfio_paths();
     return fails > 255 ? 255 : fails;
 }
+
+/** No HDMI codec's card on the model: /proc/asound lists none. */
+int hdmi_audio_present(void)
+{
+    return 0;
+}
+
+/** No ELD files without the card. */
+int hdmi_audio_eld_count(void)
+{
+    return 0;
+}
+
+/** The codec address eld#C.N would name. */
+int hdmi_audio_codec_addr(void)
+{
+    return 0;
+}

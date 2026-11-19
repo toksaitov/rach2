@@ -4729,3 +4729,9 @@ int main(int argc, char **argv)
     }
     return failures != 0;
 }
+
+/** The codec address eld#C.N would name; no card is on the model. */
+int hdmi_audio_codec_addr(void)
+{
+    return 0;
+}
