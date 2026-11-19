@@ -2236,6 +2236,10 @@ build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py
 	@mkdir -p $(@D)
 	cp $< $@
 
+build/tests/graphics/bootscreen.sh: tests/graphics/bootscreen.sh
+	@mkdir -p $(@D)
+	cp $< $@
+
 # `tests/run gpucompat`: i386 GPU driver calls on i915's fault backend and
 # virgl, with syncobj, udmabuf, dma-buf and sync-file requests, run on the
 # x86-64 kernel by RACH2_KERNEL=ia32; tests/cases/guest.gpucompat.json.
