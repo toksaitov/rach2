@@ -1,4 +1,4 @@
-.Dd November 13, 2026
+.Dd November 19, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -247,14 +247,37 @@ is no limit, and without the option the limit is half the machine's
 memory, as on Linux.
 .Xr statfs 2
 gives the limit as the blocks.
-A value that is no number fails the mount with
+It has at most the inodes the option
+.Ql nr_inodes=
+gives, the root's among them: a count, with
+.Ql k ,
+.Ql m ,
+.Ql g ,
+.Ql t ,
+.Ql p
+or
+.Ql e
+after it for a power of 1024; each node takes one, and so does each name
+of a file past its first, and an extended attribute 40 bytes and its name
+and value of the 1024 bytes each inode stands for, as on Linux.
+A node, name or attribute past the limit fails with
+.Er ENOSPC ,
+.Ql nr_inodes=0
+is no limit, and without the option the limit is half the machine's
+pages.
+.Xr statfs 2
+gives it as the inodes.
+A value of either option that is no number fails the mount with
 .Er EINVAL .
 The other options Linux's tmpfs takes are accepted and change nothing.
 A remount takes a new
-.Ql size= ,
-and one smaller than the pages the files hold fails with
-.Er EINVAL ,
-as on Linux.
+.Ql size=
+and
+.Ql nr_inodes= ,
+and changes neither and fails with
+.Er EINVAL
+when either is smaller than what the files hold, or sets a limit on a
+mount that has none, as on Linux; 0 lifts its limit for good.
 A file in memory reaches 16 TiB less a page on both architectures, as on
 Linux on i386; Linux on x86-64 allows more.
 .Pp
