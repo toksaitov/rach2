@@ -15,6 +15,9 @@
 #include "../vfio/vfio.h"
 #include "../iommu.h"
 #endif
+#ifndef RACH2_HOSTTEST
+#include "../network/driver/vhost_net.h"
+#endif
 
 #include "../fpu.h"
 #include "../klog.h"
@@ -4220,6 +4223,24 @@ static void procfs_kvm_counts(struct procfs_text *t)
 #endif
 }
 
+/** Append the frames of the vhost-net attachments that have ended, under
+ * the big lock. */
+static void procfs_vhost_counts(struct procfs_text *t)
+{
+#ifndef RACH2_HOSTTEST
+    uint64_t to, from;
+
+    vhost_net_detached_frames(&to, &from);
+    ap_str(t, "vhost_net_detached_to_guest ");
+    ap_u64(t, to);
+    ap_str(t, "\nvhost_net_detached_from_guest ");
+    ap_u64(t, from);
+    ap_ch(t, '\n');
+#else
+    (void)t;
+#endif
+}
+
 /** Append VT-d faults and live VFIO resources on x86-64, under the big lock. */
 static void procfs_assignment_counts(struct procfs_text *t)
 {
@@ -4396,6 +4417,10 @@ static void procfs_vkms_counts(struct procfs_text *t)
  * the frames that got no CRC request while its CRC source was on, and its
  * composer's passes that entered more than one frame's CRC.
  *
+ * The `vhost_net_detached_` counts are vhost-net's (vhost_net.h): the
+ * frames moved to and from the guests by every attachment of a tap that has
+ * ended since boot.
+ *
  * The `namecache_` counts are the name cache's (dcache.h): the resolver's
  * lookups it answered and those it passed to the file system, each a read of
  * a directory, since boot, and the entries it has now, and of those the
@@ -4458,6 +4483,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
     procfs_work_counts(t);
     procfs_kvm_counts(t);
     procfs_assignment_counts(t);
+    procfs_vhost_counts(t);
 #ifndef RACH2_HOSTTEST
     ap_str(t, "virtio_gpu_copied_bytes ");
     ap_u64(t, virtio_gpu_copied_bytes());
