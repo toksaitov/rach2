@@ -657,13 +657,15 @@ kick:
 /**
  * The device has answered slot `s` with `status`. A polled command is
  * marked done for its caller, who frees the slot. A request is answered.
- * On a disk with a cache, a write of data or of zeroes whose request has
- * `BLOCK_REQ_NOFLUSH` marks the disk, and so does a discard; any other
- * write that succeeded has its flush offered in its slot first, and is
- * answered with that flush. A flush that succeeded clears the mark
- * (`vblk_flushed`); one that fails or cannot be offered, a write's or a
- * flush request's, answers EIO and marks the disk, since what the cache
- * holds is on no medium. `q`'s lock is held.
+ * On a disk with a cache, a write of data or of zeroes or a discard that
+ * failed marks the disk, since a part of it may have reached the cache
+ * before the error, as Linux's block layer flushes at the next fsync after
+ * any write it sent; so do a write whose request has `BLOCK_REQ_NOFLUSH`
+ * and a discard that succeeded. Any other write that succeeded has its
+ * flush offered in its slot first, and is answered with that flush. A flush
+ * that succeeded clears the mark (`vblk_flushed`); one that fails or cannot
+ * be offered, a write's or a flush request's, answers EIO and marks the
+ * disk, since what the cache holds is on no medium. `q`'s lock is held.
  */
 static void vblk_answer(struct vblk_queue *q, struct vblk_slot *s, int status)
 {
@@ -681,8 +683,8 @@ static void vblk_answer(struct vblk_queue *q, struct vblk_slot *s, int status)
         s->done = 1;
         return;
     }
-    if (rc == 0 && vb->cache &&
-        (s->type == VBLK_T_DISCARD || (wrote && (r->flags & BLOCK_REQ_NOFLUSH)))) {
+    if (vb->cache && (wrote || s->type == VBLK_T_DISCARD) &&
+        (rc != 0 || s->type == VBLK_T_DISCARD || (r->flags & BLOCK_REQ_NOFLUSH))) {
         vblk_unflushed(vb);
     } else if (rc == 0 && wrote && vb->cache) {
         if (vblk_flush_half(q, s) >= 0) {
@@ -907,23 +909,26 @@ static void vblk_config_work(struct vblk *vb);
  * into `dst` for a read, in commands of at most the disk's `max_sectors`,
  * halved down to a sector when a buffer's pages need more pieces than a
  * chain carries. A write on a disk with a cache is followed by a flush, so
- * it is on the medium when it returns; when the flush fails, or the write
- * fails after a part of it reached the cache, the write fails with EIO and
- * the disk is marked unflushed. A device whose transport gives it no
- * interrupt has its capacity read first (`config_poll`).
+ * it is on the medium when it returns. When the flush fails, or a command
+ * of the write the device was given fails, the first among them, since a
+ * part of it may be in the cache, the write fails with EIO and the disk is
+ * marked unflushed. A device whose transport gives it no interrupt has its
+ * capacity read first (`config_poll`).
  */
 static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const void *src, void *dst)
 {
     struct vblk *vb = (struct vblk *)device->drvdata;
     const uint8_t *at = dst ? (const uint8_t *)dst : (const uint8_t *)src;
     uint32_t most = device->max_sectors;
+    uint64_t size;
     struct vblk_cmd c;
-    int rc, cached = 0;
+    int rc;
 
     if (vb->config_poll) {
         vblk_config_work(vb);
     }
-    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
+    size = block_sectors(device);
+    if (count == 0 || lba > size || count > size - lba) {
         return -EIO;
     }
     if (src && vb->ro) {
@@ -941,17 +946,16 @@ static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
             continue;
         }
         if (rc != 0) {
-            if (cached) {
-                vblk_unflushed(vb);
+            if (src && vb->cache && rc != -EPERM && rc != -E2BIG) {
+                vblk_unflushed(vb); /* given to the device: a part may be cached */
             }
             return rc == -EOPNOTSUPP ? rc : -EIO;
         }
-        cached = src && vb->cache;
         lba += c.count;
         at += c.count * BLOCK_SECTOR_SIZE;
         count -= c.count;
     }
-    if (cached && vblk_flush_polled(vb, 0) != 0) {
+    if (src && vb->cache && vblk_flush_polled(vb, 0) != 0) {
         vblk_unflushed(vb);
         return -EIO;
     }
@@ -982,26 +986,27 @@ static int vblk_write(block_device_t *device, uint64_t lba, uint32_t count, cons
  * set_capacity_and_notify (drivers/block/virtio_blk.c). The partition views
  * keep their ranges, as Linux's partitions do until their table is read
  * again. A disk that grows gets its count before its window and one that
- * shrinks after it, so that the window never passes the disk. Returns the
- * capacity it had. `vb`'s lock is held.
+ * shrinks after it, so that the window never passes the disk, and each
+ * count is set whole for readers on i686 (`block_set_sectors`). Returns the
+ * capacity it had. `vb`'s lock, the disk's `size_lock`, is held, so a
+ * window being published is either moved here or cut at the new capacity.
  */
 static uint64_t vblk_capacity_set(struct vblk *vb, uint64_t sectors)
 {
     uint64_t was = vb->bdev.sector_count;
     struct disk *d = vb->disk;
-
     int window = d && d->whole.present;
 
     if (sectors > was) {
-        vb->bdev.sector_count = sectors;
+        block_set_sectors(&vb->bdev, sectors);
         if (window) {
-            d->whole.part.device.sector_count = sectors;
+            block_set_sectors(&d->whole.part.device, sectors);
         }
     } else if (sectors < was) {
         if (window) {
-            d->whole.part.device.sector_count = sectors;
+            block_set_sectors(&d->whole.part.device, sectors);
         }
-        vb->bdev.sector_count = sectors;
+        block_set_sectors(&vb->bdev, sectors);
     }
     return was;
 }
@@ -1085,9 +1090,10 @@ static int vblk_submit(block_device_t *device, struct block_request *r)
     struct vblk *vb = (struct vblk *)device->drvdata;
     struct vblk_queue *q;
     uint32_t flags;
+    uint64_t size = block_sectors(device);
 
-    if (!(r->flags & BLOCK_REQ_FLUSH) && (r->count == 0 || r->lba > device->sector_count ||
-                                          r->count > device->sector_count - r->lba)) {
+    if (!(r->flags & BLOCK_REQ_FLUSH) &&
+        (r->count == 0 || r->lba > size || r->count > size - r->lba)) {
         return -EIO;
     }
     if (vb->dead || vb->closed ||
@@ -1112,12 +1118,24 @@ static int vblk_submit(block_device_t *device, struct block_request *r)
     return 0;
 }
 
-/** The device's `flush`: `r` queued as a flush request, or, with `r` NULL,
- * a flush by polling for a caller that cannot sleep. */
+/**
+ * The device's `flush`, which every disk with a cache has, polled or on its
+ * interrupts: with `r` NULL, a flush by polling for a caller that cannot
+ * sleep; with `r`, on a disk on its interrupts, `r` queued as a flush
+ * request, and on a polled disk, which has no queue, a flush by polling
+ * whose result answers `r` before the call returns. 0, or -EIO when `r` was
+ * not taken.
+ */
 static int vblk_flush_submit(block_device_t *device, struct block_request *r)
 {
+    struct vblk *vb = (struct vblk *)device->drvdata;
+
     if (!r) {
-        return vblk_flush_polled((struct vblk *)device->drvdata, 0);
+        return vblk_flush_polled(vb, 0);
+    }
+    if (!vb->started) {
+        block_request_complete(r, r->generation, vblk_flush_polled(vb, 0));
+        return 0;
     }
     r->flags |= BLOCK_REQ_FLUSH;
     return vblk_submit(device, r);
@@ -1548,8 +1566,9 @@ static int vblk_queues(struct vblk *vb)
 /**
  * Make `vb`'s block device, polled, of the capacity in `cfg`: a request
  * of as many whole pages as a chain's pieces describe, at most the block
- * layer's 1 MiB, write-through when the cache is on, read-only when the
- * device is.
+ * layer's 1 MiB, write-through and with a flush when the cache is on, so
+ * that `block_flush` reaches the device whether it polls or not, and
+ * read-only when the device is.
  */
 static void vblk_disk_init(struct vblk *vb, const uint8_t *cfg)
 {
@@ -1571,6 +1590,7 @@ static void vblk_disk_init(struct vblk *vb, const uint8_t *cfg)
                      (vb->ro ? BLOCK_READ_ONLY : 0u);
     vb->bdev.read = vblk_read;
     vb->bdev.write = vblk_write;
+    vb->bdev.flush = vb->cache ? vblk_flush_submit : 0;
     vb->bdev.drvdata = vb;
     vb->wseq = 0;
 }
@@ -1653,7 +1673,9 @@ fail:
  * serial laid out as IDENTIFY words 10 to 19, first character in the high
  * byte, the firmware and the model words blank, as Linux's virtio_blk gives
  * a disk no model; the first as `block0` when no other driver has published
- * one.
+ * one. The disk's `size_lock` is `vb`'s lock, under which a change of
+ * capacity moves the whole window, so that its publication cannot fall
+ * between the change's look at the window and its move.
  */
 static void vblk_publish(struct vblk *vb)
 {
@@ -1674,6 +1696,8 @@ static void vblk_publish(struct vblk *vb)
     vb->disk = disk_register(&vb->bdev, "virtio", vb->number, words);
     if (!vb->disk) {
         klog(KLOG_WARN, "virtio-blk", "%s: the registry is full", vb->name);
+    } else {
+        vb->disk->size_lock = &vb->lock; /* `vblk_capacity_set` moves the window */
     }
 }
 
@@ -1710,7 +1734,6 @@ static void vblk_start_one(struct vblk *vb)
     vb->bdev.flags &= ~BLOCK_FAULT_SAFE;
     vb->bdev.flags |= BLOCK_FRAMES;
     vb->bdev.submit = vblk_submit;
-    vb->bdev.flush = vb->cache ? vblk_flush_submit : 0;
     if (virtio_has(vb->dev, VBLK_F_DISCARD)) {
         uint8_t v[4];
 

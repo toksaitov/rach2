@@ -26,8 +26,9 @@ block_device_t *block0 = 0;
 static int block_partition_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
     block_partition_t *partition = (block_partition_t *)device;
+    uint64_t size = block_sectors(device);
 
-    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
+    if (count == 0 || lba > size || count > size - lba) {
         return -EIO;
     }
 
@@ -42,8 +43,9 @@ static int block_partition_write(block_device_t *device, uint64_t lba, uint32_t 
                                  const void *buffer)
 {
     block_partition_t *partition = (block_partition_t *)device;
+    uint64_t size = block_sectors(device);
 
-    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
+    if (count == 0 || lba > size || count > size - lba) {
         return -EIO;
     }
 
@@ -56,9 +58,10 @@ static int block_partition_write(block_device_t *device, uint64_t lba, uint32_t 
 static int block_partition_submit(block_device_t *device, struct block_request *request)
 {
     block_partition_t *partition = (block_partition_t *)device;
+    uint64_t size = block_sectors(device);
 
-    if (!partition->backing->submit || request->count == 0 || request->lba > device->sector_count ||
-        request->count > device->sector_count - request->lba) {
+    if (!partition->backing->submit || request->count == 0 || request->lba > size ||
+        request->count > size - request->lba) {
         return -EIO;
     }
     request->lba += partition->start_lba;
@@ -96,11 +99,13 @@ static int block_partition_flush(block_device_t *device, struct block_request *r
 void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
                           uint64_t sector_count)
 {
-    if (start_lba > backing->sector_count) {
-        start_lba = backing->sector_count;
+    uint64_t size = block_sectors(backing);
+
+    if (start_lba > size) {
+        start_lba = size;
         sector_count = 0;
-    } else if (sector_count > backing->sector_count - start_lba) {
-        sector_count = backing->sector_count - start_lba;
+    } else if (sector_count > size - start_lba) {
+        sector_count = size - start_lba;
     }
 
     partition->backing = backing;
@@ -112,7 +117,7 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
     partition->start_lba = start_lba;
 
     partition->device.sector_size = backing->sector_size;
-    partition->device.sector_count = sector_count;
+    block_set_sectors(&partition->device, sector_count);
     partition->device.read = block_partition_read;
     partition->device.write = block_partition_write;
     partition->device.drvdata = partition;

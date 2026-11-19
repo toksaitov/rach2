@@ -375,7 +375,7 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
 {
     block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
-    uint64_t total = part->sector_count;
+    uint64_t total = block_sectors(part);
     uint64_t lba;
     uint32_t want, done;
     uint8_t *batch;
@@ -465,7 +465,7 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
 {
     block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
-    uint64_t total = part->sector_count;
+    uint64_t total = block_sectors(part);
     uint64_t lba;
     uint32_t want, done;
     uint8_t *batch;
@@ -750,7 +750,7 @@ static int32_t dev_disk_discard(fd_entry_t *e, uint32_t request, uintptr_t arg)
         if (copy_from_user(range, (const void __user *)arg, sizeof(range)) != 0) {
             return -EFAULT;
         }
-        total = w->part.device.sector_count * BLOCK_SECTOR_SIZE;
+        total = block_sectors(&w->part.device) * BLOCK_SECTOR_SIZE;
         if (range[1] == 0 || ((range[0] | range[1]) & (BLOCK_SECTOR_SIZE - 1u)) != 0 ||
             range[0] > total || range[1] > total - range[0]) {
             return -EINVAL;
@@ -811,7 +811,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
 {
     block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
-    uint64_t total = part->sector_count * BLOCK_SECTOR_SIZE;
+    uint64_t total = block_sectors(part) * BLOCK_SECTOR_SIZE;
     uint32_t done = 0;
     uint8_t *batch;
     uint32_t batch_sectors;
@@ -979,7 +979,7 @@ static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __u
     int write = in == 0;
     int32_t err;
     block_device_t *dev = loop_node_device(devfs_loop_index(e->dev), write, &err);
-    uint64_t off = e->ofd->raw_offset, lba;
+    uint64_t off = e->ofd->raw_offset, lba, size;
     uint32_t want, done = 0, chunk, sectors;
     uint8_t *batch;
     int rc = 0;
@@ -994,12 +994,13 @@ static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __u
         return -EINVAL;
     }
     lba = off / BLOCK_SECTOR_SIZE;
-    if (lba >= dev->sector_count) {
+    size = block_sectors(dev);
+    if (lba >= size) {
         return write ? -ENOSPC : 0;
     }
     want = count / BLOCK_SECTOR_SIZE;
-    if ((uint64_t)want > dev->sector_count - lba) {
-        want = (uint32_t)(dev->sector_count - lba);
+    if ((uint64_t)want > size - lba) {
+        want = (uint32_t)(size - lba);
     }
     batch = raw_batch_take(&sectors, want, dev);
     while (done < want && rc == 0) {
@@ -2228,7 +2229,7 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
         row->whole = i;
         row->partno = 0;
         row->start = 0;
-        row->sectors = dev->sector_count;
+        row->sectors = block_sectors(dev);
         row->removable = 0;
         row->model = "";
         row->serial = "";
@@ -2245,7 +2246,7 @@ int devfs_disk_row(int i, struct devfs_disk_row *row)
         row->partno = *p >= '0' && *p <= '9' ? row->partno * 10 + (*p - '0') : 0;
     }
     row->start = node->part != 0 ? node->disk->views[node->part - 1].part.start_lba : 0;
-    row->sectors = dev ? dev->sector_count : 0;
+    row->sectors = dev ? block_sectors(dev) : 0;
     row->removable = node->disk->removable;
     row->model = node->disk->model;
     row->serial = node->disk->serial;
@@ -2484,7 +2485,7 @@ static int window_range(const struct devfs_entry *dev, block_device_t **backing,
     }
     *backing = block_physical(w->part.backing);
     *first = w->part.start_lba;
-    *last = w->part.start_lba + w->part.device.sector_count - 1;
+    *last = w->part.start_lba + block_sectors(&w->part.device) - 1;
     return 0;
 }
 
@@ -2518,7 +2519,7 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
         *view = loop;
         *backing = 0;
         *first = 0;
-        *count = loop->sector_count;
+        *count = block_sectors(loop);
         return 0;
     }
     node = disk_node_of(dev);
@@ -2536,7 +2537,7 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
     *view = &w->part.device;
     *backing = block_physical(w->part.backing);
     *first = w->part.start_lba;
-    *count = w->part.device.sector_count;
+    *count = block_sectors(&w->part.device);
     return 0;
 }
 
@@ -3156,16 +3157,27 @@ void devfs_disk_withdraw(void)
  * no table at all is a volume in its own right and is mounted through that
  * node; one with a table is read through it as well, which is how a partition
  * table is inspected without mounting anything. The partition windows are
- * published apart from it (`disk_set_table`).
+ * published apart from it (`disk_set_table`). On a disk whose size may
+ * change, the window is cut and marked present under the driver's
+ * `size_lock`, which a change of size holds while it reads `present` and
+ * moves the window, so that no change falls between the two.
  */
 void devfs_disk_publish(struct disk *d)
 {
-    if (!d || d->dev->sector_count == 0) {
+    uint32_t flags = 0;
+
+    if (!d || block_sectors(d->dev) == 0) {
         klog(KLOG_DEBUG, "devfs", "no whole-disk window to publish");
         return;
     }
-    block_partition_init(&d->whole.part, d->dev, 0, d->dev->sector_count);
+    if (d->size_lock) {
+        flags = spin_lock_irqsave(d->size_lock);
+    }
+    block_partition_init(&d->whole.part, d->dev, 0, block_sectors(d->dev));
     d->whole.present = 1;
+    if (d->size_lock) {
+        spin_unlock_irqrestore(d->size_lock, flags);
+    }
 }
 
 /**
@@ -3250,7 +3262,7 @@ void devfs_grubcore_withdraw(void)
  */
 void devfs_grubcore_publish(struct block_device *backing)
 {
-    if (!backing || backing->sector_count < (uint64_t)MBR_GAP_END_LBA) {
+    if (!backing || block_sectors(backing) < (uint64_t)MBR_GAP_END_LBA) {
         klog(KLOG_WARN, "devfs", "no room for the boot loader gap; /dev/grubcore absent");
         return;
     }
@@ -3268,7 +3280,7 @@ void devfs_grubcore_publish(struct block_device *backing)
  */
 void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_table *t)
 {
-    uint64_t first, count;
+    uint64_t first, count, size;
     int number;
 
     if (!backing || part_bios_boot(t, &first, &count, &number) != 0) {
@@ -3276,7 +3288,8 @@ void devfs_grubcore_publish_gpt(struct block_device *backing, const struct part_
              "no one BIOS boot partition clear of the GUID table; /dev/grubcore absent");
         return;
     }
-    if (count > backing->sector_count || first > backing->sector_count - count) {
+    size = block_sectors(backing);
+    if (count > size || first > size - count) {
         klog(KLOG_WARN, "devfs", "the BIOS boot partition is past the disk; /dev/grubcore absent");
         return;
     }
@@ -3309,7 +3322,7 @@ static int32_t dev_getgeo(fd_entry_t *e, uintptr_t arg)
     if (!w || !w->present) {
         return -ENOTTY;
     }
-    sectors = w->part.device.sector_count;
+    sectors = block_sectors(&w->part.device);
     /* The padding after `cylinders`, 4 bytes on x86-64, is copied out too. */
     k_memset(&geo, 0, sizeof(geo));
     geo.heads = 255;
@@ -3391,7 +3404,7 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
         const block_device_t *loop = loop_attached_at(devfs_loop_index(dev));
 
         if (loop && size) {
-            *size = loop->sector_count * BLOCK_SECTOR_SIZE;
+            *size = block_sectors(loop) * BLOCK_SECTOR_SIZE;
         }
         return loop != 0;
     }
@@ -3400,7 +3413,7 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
         return 0;
     }
     if (size) {
-        *size = w->part.device.sector_count * BLOCK_SECTOR_SIZE;
+        *size = block_sectors(&w->part.device) * BLOCK_SECTOR_SIZE;
     }
     return 1;
 }

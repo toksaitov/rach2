@@ -41,6 +41,8 @@ struct disk_window {
     block_partition_t part;
 };
 
+struct spinlock;
+
 /** A registered disk, its partition table and the raw windows over it. */
 struct disk {
     int present;
@@ -67,6 +69,11 @@ struct disk {
     /* The range the raw writer holds on this disk, while `writer_held`. */
     int writer_held;
     uint64_t writer_first, writer_last;
+    /* The lock, taken with interrupts off, under which the driver changes
+     * the size of a disk in use and moves the whole window with it; NULL
+     * for a disk whose size does not change. `devfs_disk_publish` holds it
+     * while it cuts the window. Cleared by `disk_register`. */
+    struct spinlock *size_lock;
 };
 
 /**
