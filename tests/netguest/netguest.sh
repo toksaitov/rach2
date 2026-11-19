@@ -209,6 +209,7 @@ cleanup()
         qemu=''
     fi
     take_back || echo "netguest: result: fail: $bdf or $iface is not back"
+    exec 3>&- 4>&-
     [ -z "$made" ] || rm -f "$out/run.qcow2" "$out/param.img" "$out/mon.in" "$out/mon.out"
 }
 trap cleanup EXIT
@@ -282,7 +283,9 @@ dd if=/dev/zero of="$out/param.img" bs=512 seek=1 count=127 conv=notrunc 2> /dev
 qemu-img create -q -f qcow2 -F qcow2 -b "$image" "$out/run.qcow2" || fail "no overlay of $image"
 monitor=none
 rm -f "$out/mon.in" "$out/mon.out"
-if mkfifo "$out/mon.in" "$out/mon.out" 2> /dev/null; then
+# This script holds both pipes open, so that a write to the monitor never
+# waits for a QEMU that has already exited.
+if mkfifo "$out/mon.in" "$out/mon.out" 2> /dev/null && exec 3<> "$out/mon.in" 4<> "$out/mon.out"; then
     monitor=pipe:$out/mon
 fi
 
@@ -369,7 +372,7 @@ elif [ "$quit" = 1 ] || [ "$monitor" = none ]; then
     kill -TERM "$qemu"
 else
     echo "netguest: end: the guest's power button is pressed"
-    echo system_powerdown > "$out/mon.in"
+    echo system_powerdown >&3
 fi
 wait "$qemu" 2> /dev/null
 qemu=''
