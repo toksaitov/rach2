@@ -270,7 +270,8 @@ struct vfs_ops {
     /* The canonical path of a directory node within the mount, for a
      * directory descriptor's `*at` calls after a rename and for
      * `vfs_node_path`; NULL for a type whose directories do not move. 0,
-     * -ENAMETOOLONG, or -ENOENT for a directory that has no name. */
+     * -ENAMETOOLONG, -EIO for a read that fails, or -ENOENT for a
+     * directory that has no name. */
     int (*path)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
     /* A symbolic link `name` in `dir` to `target`; NULL on a type without
      * them, which the common layer answers with EPERM. */
@@ -1634,10 +1635,11 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name);
  * another type, the path of the directory the mount covers followed by the
  * node's path inside the mount, which the type rebuilds from the
  * volume and so gives after a rename too. On a bind, the path below the
- * bind's place. Returns 0, -ENAMETOOLONG, the type's error, or -ENOENT on a
- * type without a `path` operation, the synthetic types and mqueue, on the
- * tmpfs of memfd_create, which no path reaches, and through a bind for a
- * node outside the tree the bind shows.
+ * bind's place. Returns 0, -ENAMETOOLONG, -EIO when the KRFFS root cannot
+ * read a header, the type's error, or -ENOENT on a type without a `path`
+ * operation, the synthetic types and mqueue, on the tmpfs of memfd_create,
+ * which no path reaches, and through a bind for a node outside the tree
+ * the bind shows.
  */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap);
 
