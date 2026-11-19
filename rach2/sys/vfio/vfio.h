@@ -94,10 +94,14 @@ struct vfio_device {
     uint32_t vbar[6];     /* the BARs as the owner wrote them */
     uint8_t bar_flags[6]; /* the low bits of each BAR, its kind */
     uint32_t vrom;
-    uint64_t rom_phys;    /* the ROM's address: its BAR's, or the shadow's */
-    uint32_t rom_size;    /* 0 for none */
-    int rom_shadow;       /* the ROM is the firmware's copy at 0xC0000 */
-    int reset_works;      /* a reset succeeded at the open, as Linux's */
+    uint64_t rom_phys; /* the ROM's address: its BAR's, or the shadow's */
+    uint32_t rom_size; /* 0 for none */
+    int rom_shadow;    /* the ROM is the firmware's copy at 0xC0000 */
+    int reset_works;   /* a reset succeeded at the open, as Linux's */
+    int pm_restore;    /* it loses its state in D3hot: No_Soft_Reset clear */
+    int power_low;     /* VFIO put it in D3hot; its BARs are not reached */
+    int pm_saved_ok;   /* `pm_saved` holds the state kept on the way to D3hot */
+    struct pci_saved_state pm_saved;
     uint8_t cfg_map[256]; /* how each byte of the header is reached: CFG_* */
     uint16_t vcmd_intx;   /* the owner's Interrupt Disable bit */
     uint8_t vcache, vlatency, vline;
@@ -192,6 +196,7 @@ int32_t vfio_device_open_fd(struct vfio_device *d);
 int vfio_device_enable(struct vfio_device *d);
 void vfio_device_release(struct vfio_device *d);
 void vfio_device_zap(struct vfio_device *d);
+void vfio_device_power(struct vfio_device *d, int state);
 
 /* config.c: the configuration space as the owner sees it. A byte of the
  * header is read and written through (CFG_RAW), read through and its

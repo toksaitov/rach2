@@ -22,6 +22,9 @@
 #define CMD_MASTER   0x0004u
 #define CMD_INTX_OFF 0x0400u
 
+#define PM_CTRL          4       /* the power management capability's control word */
+#define PM_NO_SOFT_RESET 0x0008u /* its bit: the state survives D3hot */
+
 #define PAGE           0x1000u
 #define REGION_OFFSET  ((1ull << VFIO_PCI_OFFSET_SHIFT) - 1)
 #define REGION_PGOFF   ((1u << VFIO_PCI_PGOFF_SHIFT) - 1)
@@ -80,6 +83,66 @@ static void device_put(struct vfio_device *d)
 void vfio_device_zap(struct vfio_device *d)
 {
     paging_zap_device(d, 0, 6u << VFIO_PCI_PGOFF_SHIFT);
+}
+
+/**
+ * Put `d` in the power state `state`, PCI_D0 to PCI_D3HOT, as Linux's
+ * vfio_pci_set_power_state with vfio_lock_and_set_power_state. On the way
+ * to D3hot the BARs' pages are taken from every mapping and refused until
+ * D0, and a function that loses its state there (`pm_restore`) has it
+ * kept; back in D0 that state is written back, or else the BARs the bus's
+ * walk gave the function, as Linux's pci_restore_bars after D3hot. The
+ * change waits PCI_PM_D3HOT_WAIT to or from D3hot, giving up the big lock.
+ * Nothing for a function without a power management capability.
+ */
+void vfio_device_power(struct vfio_device *d, int state)
+{
+    int now = pci_power_state(&d->pci), i;
+
+    if (now < 0) {
+        return;
+    }
+    if (now == state) {
+        if (state != PCI_D3HOT) {
+            d->power_low = 0; /* a reset brought it back without VFIO */
+        }
+        return;
+    }
+    if (state == PCI_D3HOT) {
+        vfio_device_zap(d);
+        d->power_low = 1;
+        if (d->pm_restore) {
+            pci_save_state(&d->pci, &d->pm_saved);
+            d->pm_saved_ok = 1;
+        }
+    }
+    (void)pci_set_power_state(&d->pci, state);
+    if (now == PCI_D3HOT || state == PCI_D3HOT) {
+        vfio_hw_msleep(PCI_PM_D3HOT_WAIT);
+    }
+    if (now == PCI_D3HOT && state == PCI_D0) {
+        if (d->pm_saved_ok) {
+            pci_restore_state(&d->pci, &d->pm_saved);
+            d->pm_saved_ok = 0;
+        } else {
+            for (i = 0; i < 6; i++) {
+                pci_write_config32(DEV(d), (uint8_t)(0x10 + 4 * i), d->pci.bar[i]);
+            }
+        }
+    }
+    if (state != PCI_D3HOT) {
+        d->power_low = 0;
+    }
+}
+
+/** Whether `d` loses its state in D3hot: a power management capability
+ * whose No_Soft_Reset is clear, as Linux's vfio_pci_probe_power_state. */
+static int pm_loses_state(const struct vfio_device *d)
+{
+    uint8_t pm = pci_find_capability(DEV(d), PCI_CAP_ID_PM);
+
+    return pm != 0 && pm <= 0xF8u &&
+           !(pci_read_config16(DEV(d), (uint8_t)(pm + PM_CTRL)) & PM_NO_SOFT_RESET);
 }
 
 /** Read the BARs: their addresses, sizes and kinds. An I/O BAR's size is
@@ -150,7 +213,8 @@ static int intx_mask_supported(const struct vfio_device *d)
 
 /**
  * Make `d` ready for its first descriptor, as Linux's vfio_pci_core_enable:
- * reset it when it can be, keep its state for the release, read its BARs,
+ * put it in D0, reset it when it can be, keep its state for the release,
+ * read its BARs,
  * ROM, capabilities and MSI-X table, and for an Intel display its
  * OpRegion; then decoding on and the line off until the owner takes it.
  * 0, or the OpRegion's error.
@@ -161,6 +225,10 @@ int vfio_device_enable(struct vfio_device *d)
     uint32_t off, entries;
     int r;
 
+    d->pm_restore = pm_loses_state(d);
+    d->pm_saved_ok = 0;
+    d->power_low = 0;
+    vfio_device_power(d, PCI_D0);
     d->reset_method = pci_reset_method(&d->pci);
     d->reset_works =
         d->reset_method != PCI_RESET_NONE && pci_reset_function(&d->pci, vfio_hw_msleep) == 0;
@@ -196,9 +264,10 @@ int vfio_device_enable(struct vfio_device *d)
 
 /**
  * Release `d` once nothing holds it, as Linux's vfio_pci_core_disable:
- * every interrupt off, bus mastering off, a reset when one worked at the
- * open, and the state kept then written back; then the identity and the
- * header read back to see the device came back as it was.
+ * D0 first, as the owner may have left it in D3hot; every interrupt off,
+ * bus mastering off, a reset when one worked at the open, and the state
+ * kept then written back; then the identity and the header read back to
+ * see the device came back as it was.
  */
 void vfio_device_release(struct vfio_device *d)
 {
@@ -206,6 +275,7 @@ void vfio_device_release(struct vfio_device *d)
     int r = 0, i, bad = 0;
 
     vfio_container_audit(vfio_groups[d->group].container, d->name);
+    vfio_device_power(d, PCI_D0);
     vfio_irq_disable(d);
     pci_write_config16(
         DEV(d), PCI_COMMAND,
@@ -376,7 +446,8 @@ static void port_rw(uint16_t port, uint8_t *buf, uint32_t len, int write)
 }
 
 /** Read or write `len` bytes of BAR `i` at `at`, at most BOUNCE: the
- * bytes moved, -EINVAL past the BAR, -EIO with memory decoding off. */
+ * bytes moved, -EINVAL past the BAR, -EIO for a memory BAR with memory
+ * decoding off or in D3hot. */
 static int32_t bar_rw(struct vfio_device *d, int i, uint64_t at, uint8_t *buf, uint32_t len,
                       int write)
 {
@@ -395,7 +466,7 @@ static int32_t bar_rw(struct vfio_device *d, int i, uint64_t at, uint8_t *buf, u
         port_rw((uint16_t)(d->bar_phys[i] + at), buf, len, write);
         return (int32_t)len;
     }
-    if (!(pci_read_config16(DEV(d), PCI_COMMAND) & CMD_MEMORY)) {
+    if (d->power_low || !(pci_read_config16(DEV(d), PCI_COMMAND) & CMD_MEMORY)) {
         return -EIO;
     }
     k_memset(&w, 0, sizeof(w));
@@ -515,8 +586,8 @@ static int32_t device_write(fd_entry_t *e, const char __user *buf, uint32_t coun
 }
 
 /** The physical page `pgoff` of a mapping of a BAR, or -1 while the BAR
- * cannot be reached: memory decoding off, a reset under way, or past the
- * BAR's end. */
+ * cannot be reached: memory decoding off, D3hot, a reset under way, or
+ * past the BAR's end. */
 static int bar_page(void *obj, uint32_t pgoff, uintptr_t *phys)
 {
     struct vfio_device *d = (struct vfio_device *)obj;
@@ -524,7 +595,7 @@ static int bar_page(void *obj, uint32_t pgoff, uintptr_t *phys)
     uint64_t at = (uint64_t)(pgoff & REGION_PGOFF) * PAGE;
 
     if (i > 5 || d->bar_size[i] == 0 || d->bar_io[i] || at >= d->bar_size[i] || d->resetting ||
-        !(pci_read_config16(DEV(d), PCI_COMMAND) & CMD_MEMORY)) {
+        d->power_low || !(pci_read_config16(DEV(d), PCI_COMMAND) & CMD_MEMORY)) {
         return -1;
     }
     *phys = (uintptr_t)(d->bar_phys[i] + at);
@@ -686,8 +757,9 @@ static int32_t get_irq_info(struct vfio_device *d, uintptr_t arg)
     return copy_to_user((void __user *)arg, &ii, sizeof(ii)) != 0 ? -EFAULT : 0;
 }
 
-/** VFIO_DEVICE_RESET: the mappings' pages taken, the function reset with
- * its state put back, and its interrupts programmed again. */
+/** VFIO_DEVICE_RESET: the mappings' pages taken, the function put in D0
+ * and reset with its state put back, and its interrupts programmed again,
+ * as Linux's vfio_pci_core_ioctl_reset. */
 static int32_t device_reset(struct vfio_device *d)
 {
     int r;
@@ -697,6 +769,7 @@ static int32_t device_reset(struct vfio_device *d)
     }
     vfio_device_zap(d);
     d->resetting = 1;
+    vfio_device_power(d, PCI_D0);
     r = pci_reset_function(&d->pci, vfio_hw_msleep);
     d->resetting = 0;
     vfio_irq_restore(d);
