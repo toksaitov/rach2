@@ -16,7 +16,9 @@
  * disturbs the tick nor needs interrupts, which matters because most callers
  * run during boot with interrupts off. The latch and its reads are one
  * operation on a chip all processors share, so every reader of channel 0
- * goes through `pit_latch`, which serializes them.
+ * goes through `pit_latch`, which serializes them. A latch that stays held,
+ * as when its holder was stopped inside it, or a counter that stops, hands
+ * the rest of the wait to the HPET or the PM timer, which can be read alone.
  *
  * The mode matters to the arithmetic. `init_pit` writes control byte 0x36,
  * which selects mode 3, the square wave generator, and in mode 3 the counter
@@ -33,6 +35,7 @@
 #include "../../kio.h"
 #include "../../lib/kirq.h"
 #include "pit.h"
+#include "refclock.h"
 
 /*
  * The longest single wait this measures in one pass. The bound comes from
@@ -171,9 +174,16 @@ static uint32_t udelay_window(uint32_t usec)
 
 /**
  * Wait `usec` microseconds on channel 0, a run of windows and a last
- * shorter one. A window whose counter stops ends the wait, and the windows
- * waited before it are what the wait returns; the part of that window is
- * not counted, so the return never exceeds the time waited.
+ * shorter one. A window that ends early, on a latch that stays held or a
+ * counter that stops, leaves the rest of the wait to the HPET or the PM
+ * timer (`refclock_wait_us`), whose reads need no latch, so that a holder
+ * stopped inside `pit_latch` by an NMI does not shorten the delays after it
+ * while either counter runs; the part of that window is not counted, so the
+ * return never exceeds the time waited.
+ *
+ * @return the microseconds waited: `usec` while channel 0 or the other
+ * counter runs, else the windows before the one that ended early and what
+ * the other counter measured after it.
  */
 uint32_t pit_wait_us(uint32_t usec)
 {
@@ -182,7 +192,7 @@ uint32_t pit_wait_us(uint32_t usec)
     while (done < usec) {
         step = usec - done > PIT_WINDOW_USEC ? PIT_WINDOW_USEC : usec - done;
         if (udelay_window(step) == 0) {
-            break;
+            return done + refclock_wait_us(usec - done);
         }
         done += step;
     }
