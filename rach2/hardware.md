@@ -65,6 +65,7 @@ There are no isochronous transfers, so no USB audio or video, and no class drive
 
 * The PS/2 keyboard on the 8042, read as scancode set 1.
 * The PS/2 mouse on the 8042's auxiliary port: three buttons, or a wheel and up to five buttons with the IntelliMouse protocols.
+* VMware VMMouse on the same port under VMware or QEMU with KVM: absolute and relative event devices.
 * A Synaptics touchpad on that port, in the absolute mode Linux sets, with two slots on a pad with an image sensor, an ALPS touchpad of protocol version 1 to 8 with its pointing stick, as Linux's alps driver sets it, or an Elantech touchpad of hardware version 1 to 4, in its absolute mode with two slots on versions 2 and 3, five on version 4, and a pointing stick of its own on versions 3 and 4; another touchpad works as the PS/2 mouse it also is.
 * USB boot keyboards and mice, as under USB.
 

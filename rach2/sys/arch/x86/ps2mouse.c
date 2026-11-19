@@ -13,8 +13,9 @@
  * NetMouse also sends four bytes. The event device has Linux's name,
  * numbers and capabilities for each protocol.
  *
- * The bring-up asks first for a Kensington ThinkingMouse, then for a
- * Synaptics touchpad. A Synaptics pad that comes up speaks its absolute
+ * Under VMware or KVM, bring-up checks the VMware port first. Then it
+ * asks for a Kensington ThinkingMouse and a Synaptics touchpad. A
+ * Synaptics pad that comes up speaks its absolute
  * protocol; one whose setup fails goes back to relative mode and skips
  * the other pads' probes. Otherwise ALPS is tried, then Elantech when no
  * ALPS pad answered. Each pad's driver takes its absolute packets, and a
@@ -44,6 +45,8 @@
  */
 #include "i8042.h"
 #include "portio.h"
+#include "kcpu.h"
+#include "exits.h"
 #include "elantech.h"
 #include "ps2kbd.h"
 #include "ps2mouse.h"
@@ -113,10 +116,31 @@
 #define PROTO_CORTRON    12
 #define PROTO_ELANTECH   14
 #define PROTO_SYNREL     16
+#define PROTO_VMMOUSE    19
 #define PROTO_UNDRIVEN   24 /* a known name whose detect is not implemented */
 #define PROTO_AUTO       23
 #define ID_IMPS          3
 #define ID_IMEX          4
+
+/* The VMware low-bandwidth backdoor and its absolute pointer commands. */
+#define VMMOUSE_PORT        0x5658u
+#define VMMOUSE_MAGIC       0x564D5868u
+#define VMMOUSE_GET_VERSION 10u
+#define VMMOUSE_DATA        39u
+#define VMMOUSE_STATUS      40u
+#define VMMOUSE_COMMAND     41u
+#define VMMOUSE_RESTRICT    86u
+#define VMMOUSE_ENABLE      0x45414552u
+#define VMMOUSE_DISABLE     0x000000F5u
+#define VMMOUSE_ABSOLUTE    0x53424152u
+#define VMMOUSE_ERROR       0xFFFF0000u
+#define VMMOUSE_VERSION_ID  0x3442554Au
+#define VMMOUSE_NO_VERSION  0xFFFFFFFFu
+#define VMMOUSE_RELATIVE    0x00010000u
+#define VMMOUSE_LEFT        0x20u
+#define VMMOUSE_RIGHT       0x10u
+#define VMMOUSE_MIDDLE      0x08u
+#define VMMOUSE_MAX_AXIS    0xFFFFu
 
 /* The port's states, Linux's `enum psmouse_state` as far as the handler
  * tells them apart: it reports, it leaves the bytes to a run of commands,
@@ -184,7 +208,7 @@ static const struct {
                  {PROTO_UNDRIVEN, "FSPPS/2", "fsp"},
                  {PROTO_CORTRON, "CortronPS/2", "cortps"},
                  {PROTO_UNDRIVEN, "FocalTechPS/2", "focaltech"},
-                 {PROTO_UNDRIVEN, "VirtualPS/2", "vmmouse"},
+                 {PROTO_VMMOUSE, "VirtualPS/2", "vmmouse"},
                  {PROTO_UNDRIVEN, "BYDPS/2", "byd"},
                  {PROTO_AUTO, "auto", "any"}};
 
@@ -202,6 +226,13 @@ static int packet_size = 3;
  * speaks a mouse's protocol; a touchpad's drivers keep their own. */
 static int protocol = PROTO_PS2;
 static struct evdev *mouse_dev;
+
+/* VMMouse's second event device, the slot reserved for it before a
+ * switch, the host's version and the last position for /dev/mouse. */
+static struct evdev *vmmouse_abs;
+static struct evdev *vmmouse_slot;
+static uint32_t vmmouse_version;
+static int vmmouse_x, vmmouse_y, vmmouse_position;
 
 /* serio1 has no driver: its reconnect failed while its `bind_mode` was
  * manual, and Linux's serio core then finds it none. Its bytes are dropped,
@@ -615,6 +646,7 @@ static int deactivate(const struct ps2io *io)
  * directory. */
 static int aux_files(int dir);
 static int guest_files(int dir);
+static struct evdev *disconnect_protocol(void);
 
 /**
  * Reset the mouse and read the two bytes it sends after its ACK, 0xAA for a
@@ -632,6 +664,90 @@ static int mouse_reset(void)
     if (ps2mouse_receive() >= 0) {
         (void)ps2mouse_receive();
     }
+    return 0;
+}
+
+/** Send a low-bandwidth VMware command once the hypervisor is known.
+ * Returns EAX and, when `reply` is given, stores EBX, ECX and EDX there.
+ * Only the owner of the auxiliary port calls this. */
+static uint32_t vmmouse_call(uint32_t command, uint32_t arg, uint32_t *reply)
+{
+#ifndef RACH2_HOSTTEST
+    uint32_t result = VMMOUSE_MAGIC, port = VMMOUSE_PORT, si = 0, di = 0;
+
+    exits_count(EXIT_IN, VMMOUSE_PORT);
+    __asm__ __volatile__("inl %%dx, %%eax"
+                         : "+a"(result), "+b"(arg), "+c"(command), "+d"(port), "+S"(si), "+D"(di)
+                         :
+                         : "cc", "memory");
+    if (reply) {
+        reply[0] = arg;
+        reply[1] = command;
+        reply[2] = port;
+    }
+    return result;
+#else
+    (void)command;
+    (void)arg;
+    (void)reply;
+    return VMMOUSE_NO_VERSION;
+#endif
+}
+
+/** Return the VMware backdoor's version, or VMMOUSE_NO_VERSION when the
+ * hypervisor or the port does not answer Linux's vmmouse detect. */
+static uint32_t vmmouse_detect(void)
+{
+#ifndef RACH2_HOSTTEST
+    uint32_t version, reply[3];
+
+    if (kcpu_vmware_mouse_host()) {
+        version = vmmouse_call(VMMOUSE_GET_VERSION, 0, reply);
+        if (reply[0] == VMMOUSE_MAGIC) {
+            return version;
+        }
+    }
+#endif
+    return VMMOUSE_NO_VERSION;
+}
+
+/** Stop absolute reports before giving the PS/2 port to another protocol. */
+static void vmmouse_disable(void)
+{
+    (void)vmmouse_call(VMMOUSE_COMMAND, VMMOUSE_DISABLE, NULL);
+    vmmouse_position = 0;
+}
+
+/** Enable the VMware queue, verify its version and select absolute mode.
+ * Return 0 on success or -1 with the queue disabled on a bad reply. */
+static int vmmouse_enable(void)
+{
+    uint32_t status;
+
+    (void)vmmouse_call(VMMOUSE_COMMAND, VMMOUSE_ENABLE, NULL);
+    status = vmmouse_call(VMMOUSE_STATUS, 0, NULL);
+    if ((status & VMMOUSE_ERROR) == VMMOUSE_ERROR || (status & 0xFFFFu) == 0 ||
+        vmmouse_call(VMMOUSE_DATA, 1, NULL) != VMMOUSE_VERSION_ID) {
+        vmmouse_disable();
+        return -1;
+    }
+    (void)vmmouse_call(VMMOUSE_RESTRICT, 1, NULL); /* CPL0, where the host supports it */
+    (void)vmmouse_call(VMMOUSE_COMMAND, VMMOUSE_ABSOLUTE, NULL);
+    return 0;
+}
+
+/** Start VMMouse with both input slots reserved. Returns -1 when another
+ * protocol must be used, leaving the reservations for the caller. */
+static int vmmouse_setup(uint32_t version)
+{
+    if (version == VMMOUSE_NO_VERSION || !replacement || !vmmouse_slot) {
+        return -1;
+    }
+    if (vmmouse_enable() < 0) {
+        return -1;
+    }
+    vmmouse_version = version;
+    aux_who = "VMware VMMouse";
     return 0;
 }
 
@@ -968,17 +1084,23 @@ static void detect_protocol(void)
 /**
  * Find the device's protocol whole, as Linux's `psmouse_extensions` does
  * for the protocol "auto": a Kensington ThinkingMouse first, which
- * Synaptics' probe upsets; a Synaptics touchpad (`synaptics_init`), which
+ * Synaptics' probe upsets, after the VMware port; a Synaptics touchpad
+ * (`synaptics_init`), which
  * speaks its own protocol once it is set up, and one whose set-up failed
  * keeps the probes that follow from a pad's protocols; then
  * `detect_protocol`.
  */
-static void probe_protocol(void)
+static void probe_protocol(uint32_t version)
 {
     touchpad = 0;
     alps = 0;
     protocol = PROTO_PS2;
     packet_size = 3;
+    if (vmmouse_setup(version) == 0) {
+        protocol = PROTO_VMMOUSE;
+        ps2mouse_initialize(NULL);
+        return;
+    }
     if (thinking_detect(&ps2mouse_aux, &aux_who) == 0) {
         protocol = PROTO_THINKPS;
         ps2mouse_initialize(NULL);
@@ -1002,7 +1124,7 @@ static void probe_protocol(void)
  * detect alone, and for a touchpad its set-up after, which registers the
  * pad's event devices. Returns 0 when the device speaks it, -1 when not.
  */
-static int try_protocol(int type)
+static int try_protocol(int type, uint32_t version)
 {
     static const uint8_t imps[3] = {200, 100, 80};
     static const uint8_t imex[3] = {200, 200, 80};
@@ -1037,6 +1159,8 @@ static int try_protocol(int type)
         }
         aux_who = trackpoint_who(aux_who_text);
         return 0;
+    case PROTO_VMMOUSE:
+        return vmmouse_setup(version);
     case PROTO_CORTRON:
         aux_who = "Cortron PS/2 Trackball";
         return 0;
@@ -1110,7 +1234,7 @@ static int port_poll(uint8_t *buf)
  * their rate and resolution themselves, and `probe_protocol` a mouse's;
  * here a mouse's protocol written to `protocol` gets the port's.
  */
-static void set_up_protocol(int type)
+static void set_up_protocol(int type, uint32_t version)
 {
     uint8_t buf[8];
 
@@ -1120,9 +1244,9 @@ static void set_up_protocol(int type)
     packet_size = 3;
     extra_buttons = 0;
     if (type == PROTO_AUTO) {
-        probe_protocol();
+        probe_protocol(version);
     } else {
-        if (try_protocol(type) == 0) {
+        if (try_protocol(type, version) == 0) {
             protocol = type;
         } else {
             (void)mouse_reset();
@@ -1150,6 +1274,8 @@ static unsigned int mouse_caps(int type)
     switch (type) {
     case PROTO_IMPS:
         return MOUSE_POINTER | MOUSE_WHEEL;
+    case PROTO_VMMOUSE:
+        return MOUSE_POINTER | MOUSE_WHEEL | MOUSE_NO_MIDDLE;
     case PROTO_IMEX:
         return MOUSE_POINTER | MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE;
     case PROTO_GENPS:
@@ -1200,10 +1326,44 @@ static struct evdev *register_device(char *name, const char *phys, int type, con
  * vendor's knock and was not set up. */
 static void register_mouse(void)
 {
+    uint8_t keys[EVDEV_KEY_BYTES];
+
     if (touchpad > 0 || alps > 0) {
         return;
     }
+    if (protocol == PROTO_VMMOUSE) {
+        struct evdev *absolute_slot = replacement;
+
+        replacement = vmmouse_slot;
+        vmmouse_slot = NULL;
+        k_memset(keys, 0, sizeof(keys));
+        vmmouse_abs = evdev_register_reserved(absolute_slot, "VirtualPS/2 VMware VMMouse",
+                                              EVDEV_BUS_I8042, 2, PROTO_VMMOUSE, keys);
+        evdev_describe(vmmouse_abs, "isa0060/serio1/input1", 0);
+        evdev_set_version(vmmouse_abs, (uint16_t)vmmouse_version);
+        evdev_set_capability(vmmouse_abs, EV_KEY, BTN_LEFT);
+        evdev_set_capability(vmmouse_abs, EV_KEY, BTN_RIGHT);
+        evdev_set_capability(vmmouse_abs, EV_KEY, BTN_MIDDLE);
+        evdev_set_abs(vmmouse_abs, ABS_X, 0, VMMOUSE_MAX_AXIS, 0, 0);
+        evdev_set_abs(vmmouse_abs, ABS_Y, 0, VMMOUSE_MAX_AXIS, 0, 0);
+    }
     mouse_dev = register_device(aux_devname, "isa0060/serio1/input0", protocol, aux_who);
+    if (protocol == PROTO_VMMOUSE) {
+        evdev_set_version(mouse_dev, (uint16_t)vmmouse_version);
+    }
+}
+
+/** Release any slots that the chosen protocol did not use. */
+static void release_replacements(void)
+{
+    if (replacement) {
+        evdev_unregister(replacement);
+        replacement = NULL;
+    }
+    if (vmmouse_slot) {
+        evdev_unregister(vmmouse_slot);
+        vmmouse_slot = NULL;
+    }
 }
 
 /** Give serio1 the files of its protocol: a TrackPoint's settings, an
@@ -1286,6 +1446,79 @@ static void report(struct evdev *dev, int type, const uint8_t *p, unsigned int o
 static void report_packet(void)
 {
     report(mouse_dev, protocol, packet_bytes, 0, &extra_buttons);
+}
+
+/** Send one VMware packet to Linux's two input devices. A held button
+ * stays on the device that saw its press until its release. */
+static void vmmouse_report(uint32_t status, const uint32_t *data)
+{
+    static const uint16_t codes[3] = {BTN_LEFT, BTN_RIGHT, BTN_MIDDLE};
+    static const uint32_t bits[3] = {VMMOUSE_LEFT, VMMOUSE_RIGHT, VMMOUSE_MIDDLE};
+    struct evdev *motion;
+    unsigned int buttons = 0;
+    int dx, dy, screen_x, screen_y, i;
+
+    if (status & VMMOUSE_RELATIVE) {
+        motion = mouse_dev;
+        dx = (int32_t)data[0];
+        dy = (int32_t)data[1];
+        evdev_report(motion, EV_REL, REL_X, dx);
+        evdev_report(motion, EV_REL, REL_Y, (int32_t)(0u - data[1]));
+        vmmouse_position = 0;
+    } else {
+        motion = vmmouse_abs;
+        evdev_report(motion, EV_ABS, ABS_X, (int32_t)data[0]);
+        evdev_report(motion, EV_ABS, ABS_Y, (int32_t)data[1]);
+        /* The default mousedev screen is 1024 by 768. */
+        screen_x = (int)((data[0] & VMMOUSE_MAX_AXIS) * 1024u / VMMOUSE_MAX_AXIS);
+        screen_y = (int)((data[1] & VMMOUSE_MAX_AXIS) * 768u / VMMOUSE_MAX_AXIS);
+        dx = vmmouse_position ? screen_x - vmmouse_x : 0;
+        dy = vmmouse_position ? vmmouse_y - screen_y : 0;
+        vmmouse_x = screen_x;
+        vmmouse_y = screen_y;
+        vmmouse_position = 1;
+    }
+    evdev_report(mouse_dev, EV_REL, REL_WHEEL, -(int8_t)data[2]);
+    for (i = 0; i < 3; i++) {
+        struct evdev *dev = motion;
+        int down = (status & bits[i]) != 0;
+
+        if (evdev_key_down(vmmouse_abs, codes[i])) {
+            dev = vmmouse_abs;
+        } else if (evdev_key_down(mouse_dev, codes[i])) {
+            dev = mouse_dev;
+        }
+        evdev_report(dev, EV_KEY, codes[i], down);
+        buttons |= (unsigned int)down << i;
+    }
+    evdev_report(vmmouse_abs, EV_SYN, SYN_REPORT, 0);
+    evdev_report(mouse_dev, EV_SYN, SYN_REPORT, 0);
+    if (!evdev_grabbed(motion)) {
+        mouse_push_packet((uint8_t)buttons, dx, dy);
+    }
+}
+
+/** Drain the VMware queue after a complete PS/2 notification packet.
+ * The status counts 32-bit words. A bad status or a partial packet goes
+ * through psmouse's bad-packet count. Returns PS_BAD or PS_FULL. */
+static int vmmouse_drain(void)
+{
+    uint32_t status, words, data[3];
+    unsigned int i;
+
+    for (i = 0; i < 255; i++) {
+        status = vmmouse_call(VMMOUSE_STATUS, 0, NULL);
+        words = status & 0xFFFFu;
+        if ((status & VMMOUSE_ERROR) == VMMOUSE_ERROR || (words & 3u) != 0) {
+            return PS_BAD;
+        }
+        if (words == 0) {
+            break;
+        }
+        status = vmmouse_call(VMMOUSE_DATA, 4, data);
+        vmmouse_report(status, data);
+    }
+    return PS_FULL;
 }
 
 /**
@@ -1659,6 +1892,10 @@ static int handle_byte(uint8_t data)
     if (packet_index < packet_size) {
         return PS_GOOD;
     }
+    if (protocol == PROTO_VMMOUSE) {
+        packet_index = 0;
+        return vmmouse_drain();
+    }
     report_packet();
     packet_index = 0;
     return PS_FULL;
@@ -1795,6 +2032,8 @@ static void connect_pass_through(void)
  */
 static void connect_device(void)
 {
+    uint32_t version;
+
     aux = defaults;
     aux_who = NULL;
     num_resyncs = 0;
@@ -1805,8 +2044,16 @@ static void connect_device(void)
     if (mouse_send_command(MOUSE_CMD_SET_DEFAULTS) < 0) {
         klog(KLOG_WARN, "mouse", "the device refused the default settings");
     }
-    set_up_protocol(PROTO_AUTO);
+    version = vmmouse_detect();
+    if (version != VMMOUSE_NO_VERSION) {
+        replacement = evdev_reserve();
+        if (replacement) {
+            vmmouse_slot = evdev_reserve();
+        }
+    }
+    set_up_protocol(PROTO_AUTO, version);
     register_mouse();
+    release_replacements();
     bind_files();
     connect_pass_through();
 }
@@ -1894,6 +2141,9 @@ int init_mouse(void)
     response = mouse_send_command(MOUSE_CMD_ENABLE);
     if (response < 0) {
         klog(KLOG_WARN, "mouse", "the device did not enable reporting");
+        if (protocol == PROTO_VMMOUSE) {
+            evdev_unregister(disconnect_protocol());
+        }
         arch_irq_enable();
         return -1;
     }
@@ -2137,6 +2387,15 @@ static int mouse_reconnect(void)
 {
     int old = protocol;
 
+    if (protocol == PROTO_VMMOUSE) {
+        (void)mouse_reset();
+        vmmouse_disable();
+        if (vmmouse_enable() < 0) {
+            return -1;
+        }
+        ps2mouse_initialize(NULL);
+        return 0;
+    }
     if (protocol == PROTO_TRACKPOINT) {
         if (trackpoint_reconnect(&ps2mouse_aux) < 0) {
             return -1;
@@ -2169,6 +2428,11 @@ static struct evdev *disconnect_protocol(void)
 {
     struct evdev *old = mouse_dev;
 
+    if (protocol == PROTO_VMMOUSE) {
+        vmmouse_disable();
+        evdev_unregister(vmmouse_abs);
+        vmmouse_abs = NULL;
+    }
     guest_forget();
     evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
     aux_gen++;
@@ -2389,8 +2653,9 @@ void ps2mouse_resync(void)
  */
 static int aux_set_protocol(const char *buf, uint32_t len)
 {
-    int type = proto_lookup(buf, len);
+    int type = proto_lookup(buf, len), was_vmmouse = protocol == PROTO_VMMOUSE;
     struct evdev *old;
+    uint32_t version = VMMOUSE_NO_VERSION;
 
     if (type < 0) {
         return type;
@@ -2402,11 +2667,23 @@ static int aux_set_protocol(const char *buf, uint32_t len)
     if (!replacement) {
         return -ENOMEM;
     }
+    if (type == PROTO_VMMOUSE || type == PROTO_AUTO) {
+        version = vmmouse_detect();
+        if (version != VMMOUSE_NO_VERSION) {
+            vmmouse_slot = evdev_reserve();
+            if (!vmmouse_slot) {
+                release_replacements();
+                return -ENOMEM;
+            }
+        }
+    }
     old = disconnect_protocol();
-    set_up_protocol(type);
+    if (was_vmmouse || version != VMMOUSE_NO_VERSION) {
+        (void)mouse_reset();
+    }
+    set_up_protocol(type, version);
     register_mouse();
-    evdev_unregister(replacement);
-    replacement = NULL;
+    release_replacements();
     bind_files();
     if (old) {
         evdev_unregister(old);

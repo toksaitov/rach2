@@ -41,6 +41,10 @@ uint32_t kcpu_x2apic_id(void);
  * Xen, as Linux's `x86_init.hyper.x2apic_available` answers. */
 int kcpu_x2apic_unremapped(void);
 
+/** Whether CPUID identifies VMware or KVM, the hypervisors on which
+ * Linux's vmmouse probes the VMware I/O port. */
+int kcpu_vmware_mouse_host(void);
+
 /** KVM's paravirtual features, leaf 0x40000001's EAX at the base where KVM's
  * signature is, or 0 when the kernel runs under no KVM: Linux's
  * kvm_arch_para_features (arch/x86/include/asm/kvm_para.h). */

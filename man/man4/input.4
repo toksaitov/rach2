@@ -105,6 +105,35 @@ Every mouse with relative axes also feeds
 .Pa /dev/mouse ,
 whose three-byte packets carry no wheel; a tablet does not.
 .Pp
+Under VMware or KVM the driver checks the VMware I/O port before the PS/2
+vendor probes.
+A mouse that answers there registers two devices named
+.Dq VirtualPS/2 VMware VMMouse ,
+both on the PS/2 controller's bus with vendor 2, product 19 and the version
+returned by the port.
+At
+.Dq isa0060/serio1/input1
+are
+.Dv ABS_X
+and
+.Dv ABS_Y
+from 0 to 65535 and the left, right and middle buttons.
+The device at
+.Dq isa0060/serio1/input0
+has
+.Dv INPUT_PROP_POINTER ,
+.Dv REL_X ,
+.Dv REL_Y ,
+.Dv REL_WHEEL
+and the left and right buttons.
+Each PS/2 packet signals that the driver can read the VMware queue.
+Motion and buttons go to the device for the
+packet's mode, a held button stays on the device that reported its press,
+and all wheel turns go to the relative device.
+Absolute motion also feeds
+.Pa /dev/mouse
+as changes in position scaled to 1024 by 768.
+.Pp
 A Synaptics touchpad on the PS/2 port, which answers the Synaptics knock
 before the mouse's, is set up as Linux's psmouse sets it: absolute mode, 80
 packets a second, W mode, and the advanced gesture mode where it has one.
@@ -457,6 +486,9 @@ and
 .Ql auto
 .Pq Ql any ,
 which probes the port whole.
+.Ql VirtualPS/2
+.Pq Ql vmmouse
+selects the VMware protocol on serio1 when the VMware port answers.
 The touchpad names are
 .Ql SynPS/2
 .Pq Ql synaptics ,
@@ -494,7 +526,7 @@ in that mode.
 Both ports also accept the other names and aliases in Linux's table:
 PS2++ (logitech), CyPS/2 (cypress), SynSMBus (synaptics-smbus), LBPS/2
 (lifebook), touchkitPS/2 (touchkit), ETSMBus (elantech-smbus), FSPPS/2
-(fsp), FocalTechPS/2 (focaltech), VirtualPS/2 (vmmouse) and BYDPS/2
+(fsp), FocalTechPS/2 (focaltech) and BYDPS/2
 (byd), and on i686 OLPC HGPK (hgpk), which Linux has only in a 32-bit
 kernel built for the OLPC XO.
 Their detects are not implemented, so they reset the device and fall back
@@ -542,8 +574,9 @@ reset, must give the identity, model and capabilities it gave before, and
 is set up again, then the device behind its port; an Elantech pad is
 reset, must answer Elantech's knock again, and is put back in absolute
 mode; an ALPS pad is reset, must again be one Linux drives, and is set up
-again; a mouse is reset and must answer with the protocol it spoke before;
-and their nodes stay.
+again; a mouse is reset and must answer with the protocol it spoke before.
+VMMouse must also re-enable its queue in absolute mode.
+A successful reconnect keeps the event nodes.
 A pad or a mouse that does not answer, or is another one, is probed anew,
 its nodes removed and registered again; so is a device behind the port
 that no longer answers as it did.

@@ -170,6 +170,24 @@ static uint32_t hypervisor_base(const char *sig, uint32_t leaves)
     return 0;
 }
 
+int kcpu_vmware_mouse_host(void)
+{
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+
+    kcpu_id(0, &a, 0, 0, 0);
+    if (a < 1) {
+        return 0;
+    }
+    kcpu_id(1, 0, 0, &c, 0);
+    if ((c & (1u << 31)) == 0) {
+        return 0;
+    }
+    kcpu_id(0x40000000u, 0, &b, &c, &d);
+    /* "VMwareVMware" or "KVMKVMKVM" in EBX, ECX and EDX. */
+    return (b == 0x61774D56u && c == 0x4D566572u && d == 0x65726177u) ||
+           (b == 0x4B4D564Bu && c == 0x564B4D56u && d == 0x0000004Du);
+}
+
 /**
  * Linux 6.12.115 asks each hypervisor it found through
  * `x86_init.hyper.x2apic_available`: KVM's is kvm_para_available
