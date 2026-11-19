@@ -31,7 +31,8 @@ extern void *memcpy(void *d, const void *s, unsigned long n);
 /* ---- the functions outside hid_parse.c and hid_input.c that they call ---- */
 
 /* The absolute axes, Linux's ABS_CNT, which hid_input.c names later. */
-#define AXES 64
+#define AXES      64
+#define SLOT_AXES (ABS_MT_LAST - ABS_MT_FIRST + 1)
 
 /* One event device as it was registered and described. */
 struct evdev {
@@ -54,6 +55,8 @@ struct evdev {
     int32_t absval[AXES];
     unsigned int props;
     int slots, slot, trkid;
+    int emitted_slot;
+    int32_t slot_value[EVDEV_MT_SLOTS][SLOT_AXES];
     int key[EVDEV_MT_SLOTS];
     int id[EVDEV_MT_SLOTS];
     uint8_t used[EVDEV_MT_SLOTS];
@@ -223,6 +226,7 @@ int evdev_init_slots(struct evdev *dev, int slots, unsigned int flags)
     }
     for (i = 0; i < slots; i++) {
         dev->id[i] = -1;
+        dev->slot_value[i][ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
     }
     return 0;
 }
@@ -251,7 +255,6 @@ int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active)
 {
     int *id = &dev->id[dev->slot];
 
-    (void)tool;
     dev->used[dev->slot] = 1;
     if (active && *id < 0) {
         *id = dev->trkid++;
@@ -259,6 +262,9 @@ int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active)
     } else if (!active && *id >= 0) {
         *id = -1;
         evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, *id);
+    }
+    if (active) {
+        evdev_report(dev, EV_ABS, ABS_MT_TOOL_TYPE, tool);
     }
     return active;
 }
@@ -309,6 +315,47 @@ int evdev_grabbed(struct evdev *dev)
     return 0;
 }
 
+/** Record a single event and count it toward the current packet. */
+static void seen_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+{
+    dev->pending++;
+    if (nseen < MAX_SEEN) {
+        seen[nseen].dev = dev;
+        seen[nseen].type = type;
+        seen[nseen].code = code;
+        seen[nseen].value = value;
+        nseen++;
+    }
+}
+
+/** Accept an absolute event, keeping separate state for each MT slot. */
+static int model_abs(struct evdev *dev, uint16_t code, int32_t value)
+{
+    int32_t *old = &dev->absval[code];
+
+    if (!bit(dev->abs, code)) {
+        return 0;
+    }
+    if (code == ABS_MT_SLOT) {
+        if (value >= 0 && value < dev->slots) {
+            dev->slot = value;
+        }
+        return 0;
+    }
+    if (dev->slots && code >= ABS_MT_FIRST && code <= ABS_MT_LAST) {
+        old = &dev->slot_value[dev->slot][code - ABS_MT_FIRST];
+        if (*old != value && dev->slot != dev->emitted_slot) {
+            dev->emitted_slot = dev->slot;
+            seen_event(dev, EV_ABS, ABS_MT_SLOT, dev->slot);
+        }
+    }
+    if (*old == value) {
+        return 0;
+    }
+    *old = value;
+    return 1;
+}
+
 /** Record the event a reader of `dev` would see, after the input core's
  * filters. */
 void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
@@ -329,13 +376,9 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
         }
         break;
     case EV_ABS:
-        if (code == ABS_MT_SLOT) {
-            dev->slot = value;
-        }
-        if (!bit(dev->abs, code) || dev->absval[code] == value) {
+        if (!model_abs(dev, code, value)) {
             return;
         }
-        dev->absval[code] = value;
         break;
     case EV_MSC:
         if (!(dev->flags & EVDEV_SCAN)) {
@@ -351,14 +394,7 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     default:
         break;
     }
-    dev->pending++;
-    if (nseen < MAX_SEEN) {
-        seen[nseen].dev = dev;
-        seen[nseen].type = type;
-        seen[nseen].code = code;
-        seen[nseen].value = value;
-        nseen++;
-    }
+    seen_event(dev, type, code, value);
 }
 
 /** Attach a keyboard as the input layer does. */
@@ -594,8 +630,12 @@ static int parse(const uint8_t *rdesc, int length, struct hid_dev **out)
         if (r->type == HID_INPUT_REPORT && hid_report_len(r) > hid->insize) {
             hid->insize = hid_report_len(r);
         }
+        if (r->type == HID_FEATURE_REPORT && hid_report_len(r) > hid->outsize) {
+            hid->outsize = hid_report_len(r);
+        }
     }
     hid->inbuf = calloc(hid->insize + 1, 1);
+    hid->outbuf = calloc(hid->outsize + 1, 1);
     *out = hid;
     return 0;
 }
@@ -626,6 +666,7 @@ static void drop(struct hid_dev *hid)
     free(hid->desc.usages);
     free(hid->desc.collections);
     free(hid->inbuf);
+    free(hid->outbuf);
     free(hid);
 }
 
@@ -1285,7 +1326,9 @@ static void rows_multitouch(void)
     static const uint8_t second[] = {1, 42, 180, 0, 220, 0, 0};
     static const uint8_t moved_second[] = {1, 42, 200, 0, 220, 0, 2};
     static const uint8_t moved_first[] = {1, 17, 110, 0, 120, 0, 0};
-    static const uint8_t empty[] = {0, 0, 0, 0, 0, 0, 0};
+    static const uint8_t updated[] = {1, 42, 210, 0, 220, 0, 1};
+    static const uint8_t lift_second[] = {0, 42, 0, 0, 0, 0, 1};
+    static const uint8_t lift_first[] = {0, 17, 0, 0, 0, 0, 1};
     struct hid_dev *hid;
     struct evdev *d;
     int inputs;
@@ -1307,9 +1350,148 @@ static void rows_multitouch(void)
     feed(hid, moved_first, sizeof(moved_first));
     CHECK("both tracking IDs survive the move",
           d->slot == 0 && d->id[0] == 0 && d->id[1] == 1 && saw(EV_SYN, SYN_REPORT, 0));
-    feed(hid, empty, sizeof(empty));
-    CHECK("an empty frame lifts both contacts",
-          d->id[0] == -1 && d->id[1] == -1 && saw(EV_KEY, BTN_TOUCH, 0));
+    feed(hid, updated, sizeof(updated));
+    CHECK("a counted update for only one contact keeps the other active",
+          d->id[0] == 0 && d->id[1] == 1 && saw(EV_ABS, ABS_MT_POSITION_X, 210));
+    feed(hid, lift_second, sizeof(lift_second));
+    CHECK("the second contact is explicitly lifted",
+          d->id[0] == 0 && d->id[1] == -1 && saw(EV_ABS, ABS_MT_TRACKING_ID, -1));
+    feed(hid, lift_first, sizeof(lift_first));
+    CHECK("the last explicit lift clears BTN_TOUCH", d->id[0] == -1 && saw(EV_KEY, BTN_TOUCH, 0));
+    drop(hid);
+}
+
+/* One complete contact record without opening or closing a collection. */
+#define TEST_CONTACT                                                                               \
+    0x05, 0x0d, 0x09, 0x42, 0x15, 0, 0x25, 1, 0x75, 8, 0x95, 1, 0x81, 2, 0x09, 0x51, 0x26, 0xff,   \
+        0, 0x81, 2, 0x05, 1, 0x09, 0x30, 0x09, 0x31, 0x26, 0xff, 0x7f, 0x75, 16, 0x95, 2, 0x81, 2, \
+        0x05, 0x0d, 0x09, 0x47, 0x09, 0x32, 0x25, 1, 0x75, 8, 0x95, 2, 0x81, 2
+
+/* A precision touchpad with two contact records in one Finger collection. */
+static const uint8_t precision_pad[] = {
+    0x05,
+    0x0d,
+    0x09,
+    5,
+    0xa1,
+    1,
+    0x09,
+    0x22,
+    0xa1,
+    2,
+    TEST_CONTACT,
+    TEST_CONTACT,
+    0xc0,
+    0x05,
+    9,
+    0x09,
+    1,
+    0x09,
+    2,
+    0x09,
+    3,
+    0x95,
+    3,
+    0x81,
+    2, /* buttons */
+    0x05,
+    0x0d,
+    0x09,
+    0x54,
+    0x25,
+    16,
+    0x95,
+    1,
+    0x81,
+    2, /* Contact Count */
+    0x09,
+    0x55,
+    0x27,
+    0xff,
+    0xff,
+    0,
+    0,
+    0x75,
+    16,
+    0xb1,
+    2, /* Contact Count Maximum */
+    0x09,
+    0x52,
+    0x25,
+    3,
+    0x75,
+    8,
+    0xb1,
+    2, /* Input Mode */
+    0x06,
+    0,
+    0xff,
+    0x09,
+    0xc5,
+    0x26,
+    0xff,
+    0,
+    0xb1,
+    2,
+    0xc0 /* Microsoft profile */
+};
+
+/** Read the feature before publishing slots and preserve its other bytes. */
+static void mt_feature_rows(void)
+{
+    static const uint8_t feature[] = {16, 0, 0, 0x83};
+    struct hid_dev *hid;
+    struct evdev *d = &devs[0];
+    int value = 0, write = 0;
+    uint8_t data[4];
+
+    ndevs = 0;
+    if (parse(precision_pad, sizeof(precision_pad), &hid) != 0) {
+        CHECK("the precision touchpad descriptor parses", 0);
+        return;
+    }
+    CHECK("the interface is ready for GET_REPORT before registration",
+          hidinput_mt_features(hid) == 1 &&
+              hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == 4 &&
+              value == 0x300 && !write && ndevs == 0);
+    hidinput_mt_feature_answer(hid, feature, sizeof(feature));
+    CHECK("SET_REPORT changes only Input Mode to the touchpad value",
+          hidinput_mt_feature_request(hid, data, sizeof(data), &value, &write) == 4 &&
+              value == 0x300 && write && data[0] == 16 && data[1] == 0 && data[2] == 3 &&
+              data[3] == 0x83);
+    hidinput_mt_feature_answer(hid, NULL, 0);
+    CHECK("finish with the reported slot count", hidinput_connect(hid) == 1 && d->slots == 16);
+    drop(hid);
+}
+
+/** Process repeated records, palm and hover, and first-packet buttons. */
+static void mt_precision_rows(void)
+{
+    static const uint8_t first[] = {1,   17, 100, 0, 120, 0, 0, 1, 0, 42,
+                                    180, 0,  220, 0, 1,   1, 0, 1, 0, 3};
+    static const uint8_t next[] = {1, 51, 75, 0, 90, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    static const uint8_t lifts[] = {0, 42, 0, 0, 0, 0, 1, 0, 0, 17, 0, 0, 0, 0, 1, 0, 0, 0, 1, 2};
+    struct hid_dev *hid;
+    struct evdev *d = &devs[0];
+    int inputs;
+
+    ndevs = 0;
+    hid = connect(precision_pad, sizeof(precision_pad), "Precision Touchpad", &inputs);
+    CHECK("the precision touchpad has the mapped buttons", inputs == 1 && bit(d->keys, BTN_LEFT) &&
+                                                               bit(d->keys, BTN_RIGHT) &&
+                                                               !bit(d->keys, BTN_MIDDLE));
+    feed(hid, first, sizeof(first));
+    CHECK("both records are read before the continuation",
+          d->id[0] == 0 && d->id[1] == 1 && !saw(EV_SYN, SYN_REPORT, 0) &&
+              saw(EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_PALM) && saw(EV_ABS, ABS_MT_DISTANCE, 1));
+    feed(hid, next, sizeof(next));
+    CHECK("the continuation completes the frame and keeps the first packet's left button",
+          d->id[2] == 2 && saw(EV_SYN, SYN_REPORT, 0) && saw(EV_KEY, BTN_LEFT, 1));
+    feed(hid, lifts, sizeof(lifts));
+    CHECK("the two lift records carry their separate slot selectors",
+          is(0, EV_ABS, ABS_MT_SLOT, 1) && is(1, EV_ABS, ABS_MT_TRACKING_ID, -1) &&
+              is(2, EV_ABS, ABS_MT_SLOT, 0) && is(3, EV_ABS, ABS_MT_TRACKING_ID, -1) &&
+              saw(EV_KEY, BTN_RIGHT, 1) && d->id[2] == 2);
     drop(hid);
 }
 
@@ -1329,6 +1511,8 @@ int main(void)
     rows_multiplier();
     rows_gamepad();
     rows_multitouch();
+    mt_feature_rows();
+    mt_precision_rows();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;
