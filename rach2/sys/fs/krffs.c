@@ -1275,13 +1275,16 @@ static int krffs_write_backward_link(krffs_mount_t *mount, uint64_t offset, uint
  * The forward chain is the truth and this link is derived from it, so every
  * operation that changes a size fixes it afterwards; a machine that stops
  * before this leaves the one fault the check at the next mount can rebuild.
- * A failed write marks the links stale for both removal and unmount.
+ * A failed write marks the links stale for both removal and unmount, and
+ * answers -1 for a caller that must know the medium failed; 0 otherwise.
  */
-static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+static int krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
     if (krffs_write_backward_link(mount, krffs_wrap_offset(mount, offset + size), size) != 0) {
         mount->stale_links = 1;
+        return -1;
     }
+    return 0;
 }
 
 /* The `keep` of an allocation that copies as many bytes as the original's
@@ -1352,7 +1355,7 @@ static int krffs_take_free(krffs_mount_t *mount, uint64_t offset, uint64_t free_
     if (krffs_publish_size(mount, offset, size_with_header) != 0) {
         return -1;
     }
-    krffs_fix_backward_link(mount, tail, rest);
+    (void)krffs_fix_backward_link(mount, tail, rest);
     return 0;
 }
 
@@ -1648,10 +1651,13 @@ static int krffs_length_steps(krffs_mount_t *mount, uint64_t offset, uint64_t ol
  *
  * Returns 0 with the length stored, and on the medium when it crosses a
  * sector; 1 with nothing written when no order exists; or -1 when a write or
- * a barrier failed.
+ * a barrier failed. `*shown` is the length the field holds afterwards, which
+ * readers see: `length` on success, and on a failure `old` or the step a
+ * piece stored before a later piece or its barrier failed. Each piece lies
+ * in one sector, which a write stores whole or not at all.
  */
 static int krffs_store_length_in(krffs_mount_t *mount, uint64_t offset, uint64_t old,
-                                 uint64_t length)
+                                 uint64_t length, uint64_t *shown)
 {
     uint64_t at = offset + KRFFS_FIELD_DATA_SIZE;
     uint32_t low = krffs_field_split(mount, at);
@@ -1660,8 +1666,13 @@ static int krffs_store_length_in(krffs_mount_t *mount, uint64_t offset, uint64_t
     uint32_t was = (uint32_t)old;
     uint32_t mid;
 
+    *shown = old;
     if (low == 0 || was == want) {
-        return krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, length) == 0 ? 0 : -1;
+        if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, length) != 0) {
+            return -1;
+        }
+        *shown = length;
+        return 0;
     }
     if (krffs_length_steps(mount, offset, old, length, &mid) != 0) {
         return 1;
@@ -1671,20 +1682,33 @@ static int krffs_store_length_in(krffs_mount_t *mount, uint64_t offset, uint64_t
         return -1;
     }
     if ((mid & ~mask) != (was & ~mask)) {
-        if (krffs_put_bytes(mount, at, mid, low, sizeof(mid)) != 0 || krffs_barrier(mount) != 0) {
+        if (krffs_put_bytes(mount, at, mid, low, sizeof(mid)) != 0) {
+            return -1;
+        }
+        *shown = (mid & ~mask) | (was & mask);
+        if (krffs_barrier(mount) != 0) {
             return -1;
         }
     }
     if ((mid & mask) != (want & mask)) {
-        if (krffs_put_bytes(mount, at, want, 0, low) != 0 || krffs_barrier(mount) != 0) {
+        if (krffs_put_bytes(mount, at, want, 0, low) != 0) {
+            return -1;
+        }
+        *shown = (mid & ~mask) | (want & mask);
+        if (krffs_barrier(mount) != 0) {
             return -1;
         }
     }
     if ((mid & ~mask) != (want & ~mask)) {
-        if (krffs_put_bytes(mount, at, want, low, sizeof(want)) != 0 || krffs_barrier(mount) != 0) {
+        if (krffs_put_bytes(mount, at, want, low, sizeof(want)) != 0) {
+            return -1;
+        }
+        *shown = length;
+        if (krffs_barrier(mount) != 0) {
             return -1;
         }
     }
+    *shown = length;
     return 0;
 }
 
@@ -1692,11 +1716,18 @@ static int krffs_store_length_in(krffs_mount_t *mount, uint64_t offset, uint64_t
  * `krffs_store_length_in`, which leaves the mount unsettled when it fails:
  * a store that failed in its second block may have put the new length in
  * the cache, so a later write could put bytes back where only the old
- * length on the medium still counts them.
+ * length on the medium still counts them. `shown`, when not NULL, gets the
+ * length readers see afterwards.
  */
-static int krffs_store_length(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t length)
+static int krffs_store_length(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t length,
+                              uint64_t *shown)
 {
-    int rc = krffs_store_length_in(mount, offset, old, length);
+    uint64_t seen;
+    int rc = krffs_store_length_in(mount, offset, old, length, &seen);
+
+    if (shown) {
+        *shown = seen;
+    }
 
     if (rc < 0) {
         mount->unsettled = 1;
@@ -1705,21 +1736,58 @@ static int krffs_store_length(krffs_mount_t *mount, uint64_t offset, uint64_t ol
 }
 
 /**
+ * The reads a removal of the node at `offset`, whose header is `head`, makes
+ * before it stores anything: the header of the node before it into `before`,
+ * with its offset in `*previous` (KRFFS_NO_NODE for the root's own node),
+ * the header after it into `after` unless the root follows, and, when that
+ * one is free, the header of the node after both, whose backward link a
+ * merge repairs, so that a page the repair writes is brought in before the
+ * merge is published. 0, or -1 for a read that failed or a lost link.
+ */
+static int krffs_remove_reads(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head,
+                              uint64_t *previous, krffs_node_t *before, krffs_node_t *after)
+{
+    krffs_node_t beyond;
+    uint64_t next = krffs_next_offset(mount, offset, head);
+
+    *previous = KRFFS_NO_NODE;
+    if (offset != 0) {
+        *previous = krffs_previous_offset(mount, offset, head);
+        if (*previous == KRFFS_NO_NODE || krffs_head(mount, *previous, before) != 0) {
+            return -1;
+        }
+    }
+    if (next == 0) {
+        return 0;
+    }
+    if (krffs_head(mount, next, after) != 0) {
+        return -1;
+    }
+    if (after->type == KRFFS_FREE_NODE &&
+        krffs_head(mount, krffs_step(mount, next, after->size), &beyond) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
  * `krffs_remove_at`, with `*typed` set once the node's type is stored as
  * free, after which the node is no longer the file whatever else fails.
  *
- * Both neighbours' headers are read before anything is stored, so that a
- * read that fails is -1 with nothing written, and not a merge passed over
- * as if the neighbour were reserved: a medium that fails one read may pass
- * the next, and a caller that took the removal for a success would not
- * know the medium failed.
+ * Both neighbours' headers, and the header of the node after a free one
+ * that the merge takes in, whose backward link the merge repairs, are read
+ * before anything is stored, so that a read that fails is -1 with nothing
+ * written, and not a merge passed over as if the neighbour were reserved: a
+ * medium that fails one read may pass the next, and a caller that took the
+ * removal for a success would not know the medium failed. A repair of that
+ * link that still fails is -1 too.
  */
 static int krffs_remove_err(krffs_mount_t *mount, uint64_t offset, int *typed)
 {
     krffs_node_t head;
     krffs_node_t after;
     krffs_node_t before;
-    uint64_t previous = KRFFS_NO_NODE;
+    uint64_t previous;
     uint64_t next;
     uint64_t size;
     int size_changed = 0;
@@ -1727,20 +1795,11 @@ static int krffs_remove_err(krffs_mount_t *mount, uint64_t offset, int *typed)
 
     *typed = 0;
     if (offset == KRFFS_NO_NODE || krffs_head(mount, offset, &head) != 0 ||
-        head.type != KRFFS_RESERVED_NODE) {
+        head.type != KRFFS_RESERVED_NODE ||
+        krffs_remove_reads(mount, offset, &head, &previous, &before, &after) != 0) {
         return -1;
-    }
-
-    if (offset != 0) {
-        previous = krffs_previous_offset(mount, offset, &head);
-        if (previous == KRFFS_NO_NODE || krffs_head(mount, previous, &before) != 0) {
-            return -1;
-        }
     }
     next = krffs_next_offset(mount, offset, &head);
-    if (next != 0 && krffs_head(mount, next, &after) != 0) {
-        return -1;
-    }
     size = head.size;
 
     if (krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_FREE_NODE) != 0) {
@@ -1767,8 +1826,8 @@ static int krffs_remove_err(krffs_mount_t *mount, uint64_t offset, int *typed)
         }
     }
 
-    if (size_changed) {
-        krffs_fix_backward_link(mount, offset, size);
+    if (size_changed && krffs_fix_backward_link(mount, offset, size) != 0) {
+        rc = -1;
     }
     if (krffs_sync_point(mount) != 0 || rc < 0) {
         return -1;
@@ -1812,7 +1871,7 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     int rc;
 
     if (length < head->data_size) {
-        rc = krffs_store_length(mount, offset, head->data_size, length);
+        rc = krffs_store_length(mount, offset, head->data_size, length, NULL);
         if (rc != 0) {
             return rc;
         }
@@ -1836,7 +1895,7 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
         krffs_barrier(mount) != 0 || krffs_publish_size(mount, offset, size) != 0) {
         return -1;
     }
-    krffs_fix_backward_link(mount, surplus, free_size);
+    (void)krffs_fix_backward_link(mount, surplus, free_size);
     return 0;
 }
 
@@ -1879,7 +1938,7 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
             krffs_barrier(mount) != 0 || krffs_publish_size(mount, offset, grown) != 0) {
             return -1;
         }
-        krffs_fix_backward_link(mount, tail, whole - grown);
+        (void)krffs_fix_backward_link(mount, tail, whole - grown);
         return krffs_barrier(mount) == 0 ? 0 : -1;
     }
     if (!krffs_size_fits(mount, offset, whole)) {
@@ -1888,7 +1947,7 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
     if (krffs_publish_size(mount, offset, whole) != 0) {
         return -1;
     }
-    krffs_fix_backward_link(mount, offset, whole);
+    (void)krffs_fix_backward_link(mount, offset, whole);
     return krffs_barrier(mount) == 0 ? 0 : -1;
 }
 
@@ -2067,6 +2126,12 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * that changed bytes the file has and then failed to move would change the
  * file and answer an error. A moving write puts its bytes in the copy,
  * which nobody reads until its type is written.
+ *
+ * A failure after a byte became visible is a short write, as Linux's
+ * buffered write counts what it committed: the bytes below the length
+ * readers see, which a failed length store reports (`krffs_store_length`),
+ * or all of them once a moving write's copy is live. KRFFS_EIO only when no
+ * byte written can be read.
  */
 int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
                    uint32_t at)
@@ -2076,7 +2141,8 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
     uint64_t old_data_size;
     uint64_t new_size;
     uint64_t live;
-    uint64_t shown; /* bytes written inside the old length, which readers see */
+    uint64_t length; /* the length readers see after a failed store */
+    uint64_t shown;  /* bytes written below `length` */
     uint32_t mid;
     uint32_t done;
     int move;
@@ -2114,9 +2180,11 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
         fill.size = size;
         rc = krffs_move(mount, offset, new_size, KRFFS_KEEP_LENGTH, &fill, &live);
         *node = live;
-        if (rc != 0) {
+        if (rc != 0 && live == offset) {
             return rc;
         }
+        /* The copy holds every byte, and once it is live readers see them
+         * whatever failed after. */
         krffs_stamp_at(mount, live, KRFFS_STAMP_DATA);
         return (int)size;
     }
@@ -2132,21 +2200,22 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
         size = done; /* a short write of the bytes that went in */
         new_size = (uint64_t)at + size;
     }
-    shown = (uint64_t)at >= old_data_size ? 0 : old_data_size - at;
-    if (shown > size) {
-        shown = size;
-    }
+    length = old_data_size;
     if (new_size > old_data_size) {
         rc = krffs_barrier(mount) != 0 ||
-             krffs_store_length(mount, offset, old_data_size, new_size) != 0;
+             krffs_store_length(mount, offset, old_data_size, new_size, &length) != 0;
     } else {
         rc = krffs_sync_point(mount) != 0;
     }
     if (rc) {
+        /* The bytes the length readers see now counts. */
+        shown = length > (uint64_t)at ? length - at : 0;
         if (shown == 0) {
             return KRFFS_EIO;
         }
-        size = (uint32_t)shown; /* the bytes the old length shows */
+        if (shown < size) {
+            size = (uint32_t)shown;
+        }
     }
     krffs_stamp_at(mount, offset, KRFFS_STAMP_DATA);
     return (int)size;
@@ -2300,7 +2369,7 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
         } else if (krffs_data_fill(mount, node, old_data_size, 0,
                                    (uint64_t)new_size - old_data_size) != 0 ||
                    krffs_barrier(mount) != 0 ||
-                   krffs_store_length(mount, node, old_data_size, new_size) != 0) {
+                   krffs_store_length(mount, node, old_data_size, new_size, NULL) != 0) {
             return KRFFS_EIO;
         }
     } else {
