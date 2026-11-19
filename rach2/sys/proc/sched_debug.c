@@ -537,11 +537,11 @@ static void put_task(struct out *o, process_t *p, int current)
     put_str(o, " ");
     {
         char comm[sizeof(p->comm) + 1];
-        int n, i;
+        int i;
 
         k_memcpy(comm, p->comm, sizeof(p->comm));
         comm[sizeof(p->comm)] = '\0';
-        for (n = (int)k_strlen(comm), i = n; i < 15; i++) {
+        for (i = (int)k_strlen(comm); i < 15; i++) {
             put_str(o, " ");
         }
         put_str(o, comm);
