@@ -18,7 +18,8 @@ static const char prompt[] = "# ";
 /* The backlight's directory, and the line that reads its level, its
  * actual level and the volume, each named with an empty pair of quotes
  * inside it so that the line's echo is not taken for it. */
-#define BL "/sys/class/backlight/acpi_video0"
+#define BL      "/sys/class/backlight/acpi_video0"
+#define BL_KEPT "/var/lib/backlight/acpi_video0"
 #define READ \
     "echo LEVELS\"\"=$(cat " BL "/brightness)/$(cat " BL "/actual_brightness)/$(mixer vol)\r"
 
@@ -152,8 +153,9 @@ static void levels(struct lc *l)
               detail);
     if (!ask(&b,
              "echo 9 > " BL "/brightness; mixer vol 6; "
-             "until grep -qx 9 /var/lib/backlight/acpi_video0 && "
-             "grep -qx 'vol 6:6' /var/lib/mixer; do sleep 1; done; echo SAVED\"\"=yes\r",
+             "until grep -qx 9 " BL_KEPT " && grep -qx 'vol 6:6' /var/lib/mixer && "
+             "[ ! -e " BL_KEPT ".new ] && [ ! -e /var/lib/mixer.new ]; "
+             "do sleep 1; done; echo SAVED\"\"=yes\r",
              "SAVED", got, sizeof(got)))
         return;
     lc_assert(l, "saved", strcmp(got, "yes") == 0, "init did not keep 9 and vol 6:6");
@@ -162,9 +164,17 @@ static void levels(struct lc *l)
 
     if (!boot(l, &b, "blank", "blanking", 1) || !ask(&b, READ, "LEVELS", got, sizeof(got)))
         return;
-    snprintf(detail, sizeof(detail), "after the reset: '%s'", got);
-    lc_assert(l, "reset-kept", strncmp(got, "9/", 2) == 0 && strstr(got, "/vol 6:6") != NULL,
-              detail);
+    if (strncmp(got, "9/", 2) != 0 || strstr(got, "/vol 6:6") == NULL) {
+        snprintf(detail, sizeof(detail), "after the stop: '%s'", got);
+        lc_assert(l, "reset-kept", 0, detail);
+    } else {
+        if (!ask(&b,
+                 "grep -qx 9 " BL_KEPT " && grep -qx 'vol 6:6' /var/lib/mixer; "
+                 "echo FILES\"\"=$?\r",
+                 "FILES", got, sizeof(got)))
+            return;
+        lc_assert(l, "reset-kept", strcmp(got, "0") == 0, "a saved file is missing or stale");
+    }
     from = 0;
     if (!lc_wait(l, b.m, "console: blanked: 1,", &from, NULL))
         return;

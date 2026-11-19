@@ -152,11 +152,27 @@ static int policy_dup2(int from, int to)
     return dup2(from, to);
 }
 
-/** init's unlink, which changes nothing on the host: 0. */
+static const char *Settings_fresh, *Settings_pending;
+static int Flush_fail, Flush_calls;
+
+/** init's unlink: change only the two scratch paths of the settings row. */
 static int policy_unlink(const char *path)
 {
-    (void)path;
+    if (Settings_fresh &&
+        (strcmp(path, Settings_fresh) == 0 || strcmp(path, Settings_pending) == 0)) {
+        return unlink(path);
+    }
     return 0;
+}
+
+/** Fail the selected fsync in a replacement, passing every other one. */
+static int policy_fsync(int fd)
+{
+    if (Flush_fail && ++Flush_calls == Flush_fail) {
+        errno = EIO;
+        return -1;
+    }
+    return fsync(fd);
 }
 
 /**
@@ -254,6 +270,7 @@ static unsigned int policy_if_nametoindex(const char *name)
 #define fopen          policy_fopen
 #define dup2           policy_dup2
 #define unlink         policy_unlink
+#define fsync          policy_fsync
 #define execv          policy_execv
 #define execve         policy_execve
 #define fork           policy_fork
@@ -268,6 +285,7 @@ static unsigned int policy_if_nametoindex(const char *name)
 #undef fopen
 #undef dup2
 #undef unlink
+#undef fsync
 #undef execv
 #undef fork
 #undef waitpid
@@ -664,10 +682,32 @@ static void mute_rows(void)
           "kept: a record of a mute is L:R and a newline alone");
 }
 
-/**
- * Read the fallback a stopped KRFFS rename can leave. Obstruct the next
- * save and check that the fallback survives until a replacement succeeds.
- */
+/** Try each flush of a save with only a fallback on disk, then retry. */
+static void kept_failures(int dir_fd, const char *kept, const char *fresh, const char *pending)
+{
+    char text[24];
+    int from_fresh, rc, step;
+
+    Settings_fresh = fresh;
+    Settings_pending = pending;
+    for (step = 1; step <= 3; step++) {
+        Flush_calls = 0;
+        Flush_fail = step;
+        rc = replace_file(dir_fd, kept, fresh, pending, "42\n", 3);
+        Flush_fail = 0;
+        check(rc < 0 && Flush_calls == step, "kept: a failed flush fails the save");
+        check(read_text(fresh, text, sizeof(text)) == 3 && strcmp(text, "37\n") == 0,
+              "kept: a failed flush preserves the only durable copy");
+    }
+    check(replace_file(dir_fd, kept, fresh, pending, "42\n", 3) == 0 &&
+              read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && !from_fresh &&
+              strcmp(text, "42\n") == 0 && read_text(fresh, text, sizeof(text)) < 0 &&
+              errno == ENOENT,
+          "kept: a durable replacement gives up the fallback");
+    Settings_fresh = Settings_pending = NULL;
+}
+
+/** Read the fallback a stopped KRFFS rename can leave, then try a save. */
 static void kept_rows(void)
 {
     const char *tmp = getenv("TMPDIR");
@@ -696,17 +736,10 @@ static void kept_rows(void)
               strcmp(text, "40\n") == 0,
           "kept: the file read while it is there, its replacement not");
     put_file(fresh, "37\n", 3);
-    check(unlink(kept) == 0 && mkdir(pending, 0755) == 0, "kept: obstruct a replacement");
+    check(unlink(kept) == 0, "kept: leave only the fallback");
     dir_fd = open(dir, O_RDONLY | O_DIRECTORY);
     if (dir_fd >= 0) {
-        check(replace_file(dir_fd, kept, fresh, pending, "42\n", 3) < 0 &&
-                  read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && from_fresh &&
-                  strcmp(text, "37\n") == 0,
-              "kept: a failure while saving preserves the recovered level");
-        check(rmdir(pending) == 0 && replace_file(dir_fd, kept, fresh, pending, "42\n", 3) == 0 &&
-                  read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && !from_fresh &&
-                  strcmp(text, "42\n") == 0,
-              "kept: a retry publishes the replacement");
+        kept_failures(dir_fd, kept, fresh, pending);
         close(dir_fd);
     } else {
         check(0, "kept: the row's directory opened");
@@ -714,7 +747,6 @@ static void kept_rows(void)
     (void)unlink(kept);
     (void)unlink(fresh);
     (void)unlink(pending);
-    (void)rmdir(pending);
     check(rmdir(dir) == 0, "kept: the row's files removed");
 }
 
