@@ -135,13 +135,26 @@ gone()
             [ "$(device "$card")" != "$shown_dev" ]; }
 }
 
+# lost_display: remember the loss across a headless start.
+lost_display()
+{
+    lost=1
+    echo "rach2-desktop: session: its display $shown is gone; starting again"
+}
+
 # The session leads a process group of its own, which a restart ends whole.
-# A start on a card ends the wait for one; the removals read before the
-# start were of the cards drawn on before it.
+# Check the old card again after selecting the display: the old card may
+# have gone while the previous session was stopping for SIGHUP. A start
+# on a card ends the wait for one.
 start_session()
 {
-    taken
-    shown=$(display)
+    local next
+    next=$(display)
+    if gone && [ "$lost" = 0 ]; then
+        lost_display
+        next=$(display)
+    fi
+    shown=$next
     shown_dev=$(device "$(echo "$shown" | cut -d' ' -f2)")
     dropped=0
     [ "$(echo "$shown" | cut -d' ' -f1)" != drm ] || lost=0
@@ -183,57 +196,34 @@ stop_session()
 
 start_session
 while :; do
-    ended=''
-    [ "$restart" = 1 ] || [ "$devices" = 1 ] ||
-        wait -n -p ended "$udev" "$seat" "$watch" ${session:+"$session"} || :
-    # wait leaves the name unset when a signal ends it.
-    ended=${ended:-}
-    if [ "$restart" = 1 ]; then
-        restart=0 devices=0
-        if [ "$ended" = "$session" ]; then session=''; fi
+    for child in "$udev" "$seat" "$watch"; do
+        if ! kill -0 "$child" 2>/dev/null; then
+            echo "rach2-desktop: device service $child ended" >&2
+            exit 1
+        fi
+    done
+    reload=$restart changed=$devices restart=0 devices=0
+    ended=0
+    if [ -n "$session" ] && ! kill -0 "$session" 2>/dev/null; then ended=1; fi
+    if [ -n "$session" ] && { [ "$reload" = 1 ] || [ "$changed" = 1 ] || [ "$ended" = 1 ]; } && gone; then
+        lost_display
+        reload=1
+    fi
+    if [ "$reload" = 1 ]; then
         stop_session
         start_session
-        continue
-    fi
-    if [ "$devices" = 1 ]; then
-        devices=0
-        # The session's card went away: it starts again on what is left,
-        # and goes on to the next card that appears, which is how it comes
-        # back to a GPU that Rach2's driver has again.
-        if [ -n "$session" ] && gone; then
-            lost=1
-            echo "rach2-desktop: session: its display $shown is gone; starting again"
-            stop_session
-            start_session
-        elif [ "$lost" = 1 ] && [ -n "$session" ] && [ "$(display)" != "$shown" ] &&
-            [ "$(display | cut -d' ' -f1)" = drm ]; then
-            echo "rach2-desktop: session: display $(display) appeared; starting again"
+    elif [ "$ended" = 1 ]; then
+        stop_session
+        shown='' shown_dev=''
+        echo "rach2-desktop: session: ended; SIGHUP starts it again"
+    elif [ "$changed" = 1 ] && [ "$lost" = 1 ] && [ -n "$session" ]; then
+        next=$(display)
+        if [[ $next = 'drm '* ]]; then
+            echo "rach2-desktop: session: display $next appeared; starting again"
             stop_session
             start_session
         fi
-        continue
     fi
-    case $ended in
-    '')
-        ;;
-    "$session")
-        session=''
-        if gone; then
-            # Weston ended with its card: as when the card went first.
-            lost=1
-            echo "rach2-desktop: session: its display $shown is gone; starting again"
-            start_session
-        else
-            # Weston's end, by quitting or a signal, leaves the screen to
-            # the console until SIGHUP starts the session again.
-            echo "rach2-desktop: session: ended; SIGHUP starts it again"
-        fi
-        ;;
-    *)
-        # A device service ending restarts the whole service under init.
-        if [ "$ended" = "$udev" ]; then udev=''; elif [ "$ended" = "$watch" ]; then watch=''; else seat=''; fi
-        echo "rach2-desktop: device service $ended ended" >&2
-        exit 1
-        ;;
-    esac
+    # A trap between the flag check and this sleep waits at most one turn.
+    sleep 1
 done
