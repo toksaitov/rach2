@@ -17,6 +17,7 @@
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/netdev_handover_none.c
  */
 #include "network/wireless/wiphy.h"
 #include "network/wireless/data.h"
@@ -171,6 +172,16 @@ int arp_forget(struct netdev *nd, uint32_t ip)
     (void)nd;
     (void)ip;
     return -ENOENT;
+}
+
+/* The interfaces whose IPv6 reassemblies were forgotten. */
+static int ip6_forgets;
+
+/** The radio's teardown forgets its interface's reassemblies first. */
+void ip6_forget_dev(struct netdev *nd)
+{
+    CHECK(netdev_by_index(nd->index) == nd);
+    ip6_forgets++;
 }
 
 /** IPv6 is represented by the control-port assertions. */
@@ -1195,7 +1206,9 @@ static void check_default_gateway(void)
 int main(void)
 {
     check_default_gateway();
+    ip6_forgets = 0;
     station();
+    CHECK(ip6_forgets == 2); /* each radio's teardown forgot its reassemblies */
     blocking();
     closing();
     removal();
