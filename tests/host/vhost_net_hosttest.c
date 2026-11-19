@@ -2,8 +2,9 @@
  * Test /dev/vhost-net of sys/network/driver/vhost_net.c: Linux's vhost
  * ioctls and their refusals, the memory table and its pins, the receive
  * ring filled in the sender's context and the transmit ring taken by the
- * thread's pass, with the tap, the eventfds and the guest's memory stood in
- * for.
+ * thread's pass, a page the pin does not hold brought in by the thread
+ * while the frame waits, and the descriptors the device holds, with the
+ * tap, the eventfds, the pins and the guest's memory stood in for.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -12,7 +13,9 @@
  * The guest's memory is a buffer of the test's, whose host address is the
  * address QEMU would give for it and whose guest-physical address starts at
  * GPA. A pin's physical address of a page is the page's host address, and
- * the kernel's mapping of it is the address itself. A ring is laid out in
+ * the kernel's mapping of it is the address itself; a pin holds the pages
+ * whose bits `held` has, every page when it is made, and a row clears a
+ * bit to stand for a page a change took. A ring is laid out in
  * that buffer as a guest driver lays it out, and the rows read the used
  * ring, the frames and the eventfds' counts back.
  *
@@ -61,10 +64,11 @@ struct eventfd {
     struct eventfd_hook *hooks;
 };
 
-/* A pin of the test's: the range it holds and whether it still does. */
+/* A pin of the test's: the range it covers, whether it is live, and the
+ * pages it holds, a bit each. */
 struct pin {
     uintptr_t base;
-    uint32_t pages;
+    uint32_t pages, held;
     int live;
     const struct pin_holder *holder;
 };
@@ -81,16 +85,20 @@ static struct {
     struct tap tap[2];
     struct pin *pins[16];
     int pins_made, pins_freed, pin_error, wakes, threads;
-    int injected, inject_len; /* frames given to the stack, the last's length */
-    uint8_t inject[2048];     /* the last frame given to the stack */
-    uint8_t queue[4][64];     /* frames waiting in the tap, 60 bytes each */
+    int refills, refill_error; /* pin_refill's calls, and its answer */
+    int batches, batch_depth;  /* TCP's batches begun, and the depth now */
+    int released;              /* descriptors the device let go */
+    int injected, inject_len;  /* frames given to the stack, the last's length */
+    uint8_t inject[2048];      /* the last frame given to the stack */
+    uint8_t queue[4][64];      /* frames waiting in the tap, 60 bytes each */
     int queued;
 } k;
 
 struct percpu cpu_table[NR_CPUS];
 static process_t self;
 static int mm_a, mm_b;
-static fd_entry_t tapfd[2], plainfd;
+static fd_entry_t tapfd[2], plainfd, evfd[NEVS];
+static struct open_file tapofd[2], evofd[NEVS];
 
 /** Keep the node, so that a row opens it. */
 int32_t devfs_node_register(struct devfs_node *node)
@@ -106,7 +114,43 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     if (fd == TAPFD || fd == TAPFD2) {
         return &tapfd[fd - TAPFD];
     }
+    if (fd >= EV0 && fd < EV0 + NEVS) {
+        return &evfd[fd - EV0];
+    }
     return fd == PLAINFD ? &plainfd : 0;
+}
+
+/** A reference to a description, which the device takes to hold one. */
+void fd_ofd_ref(struct open_file *ofd)
+{
+    ofd->refcount++;
+}
+
+/** Let go of a held copy of a descriptor: its description's reference. */
+void fd_release_backing(fd_entry_t *e)
+{
+    e->ofd->refcount--;
+    k.released++;
+}
+
+/** The name of a tap. */
+const char *tap_name(const struct tap *t)
+{
+    (void)t;
+    return "tap0";
+}
+
+/** Count a batch begun. */
+void tcp_batch_begin(void)
+{
+    k.batches++;
+    k.batch_depth++;
+}
+
+/** End a batch. */
+void tcp_batch_end(void)
+{
+    k.batch_depth--;
 }
 
 /** The tap of a tap's entry. */
@@ -205,29 +249,19 @@ int eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cn
     return 0;
 }
 
-/** The last close of eventfd `i`: each hook leaves and is told. */
-static void ev_close(int i)
-{
-    struct eventfd *ev = &k.ev[i];
-    struct eventfd_hook *h;
-
-    ev->closed = 1;
-    while ((h = ev->hooks) != 0) {
-        ev->hooks = h->next;
-        h->hangup(h);
-    }
-}
-
-/** Pin [addr, addr + len): its pages are the test's own memory. */
+/** Pin [addr, addr + len), a follower holding every page: its pages are
+ * the test's own memory. */
 int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
              const struct pin_holder *holder, struct pin **out)
 {
     struct pin *p;
 
     (void)mm;
-    (void)flags;
     if (k.pin_error) {
         return k.pin_error;
+    }
+    if (flags != (PIN_WRITE | PIN_FOLLOW) || !holder->forget) {
+        return -EINVAL;
     }
     if (addr < (uintptr_t)mem || addr + len > (uintptr_t)mem + MEMSIZE) {
         return -EFAULT;
@@ -235,6 +269,7 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     p = (struct pin *)kzalloc(sizeof(*p));
     p->base = addr;
     p->pages = (uint32_t)((len + 4095u) / 4096u);
+    p->held = 0xFFFFFFFFu;
     p->live = 1;
     p->holder = holder;
     k.pins[k.pins_made++ % 16] = p;
@@ -242,10 +277,17 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     return 0;
 }
 
-/** Free a pin. */
+/** Free a pin, and forget it. */
 void unpin(struct pin *pin)
 {
+    int i;
+
     if (pin) {
+        for (i = 0; i < 16; i++) {
+            if (k.pins[i] == pin) {
+                k.pins[i] = 0;
+            }
+        }
         k.pins_freed++;
         kfree(pin);
     }
@@ -257,10 +299,41 @@ int pin_live(const struct pin *pin)
     return pin->live;
 }
 
-/** The host address of page `i`, or 0 past the end or once taken back. */
+/** The host address of page `i`, or 0 past the end, once taken back, or
+ * for a page not held. */
 uintptr_t pin_phys(const struct pin *pin, uint32_t i)
 {
-    return pin->live && i < pin->pages ? pin->base + 4096u * i : 0;
+    return pin->live && i < pin->pages && (pin->held >> i & 1u) ? pin->base + 4096u * i : 0;
+}
+
+/** Hold page `i` again, or answer `refill_error`. */
+int pin_refill(struct pin *pin, uint32_t i)
+{
+    k.refills++;
+    if (k.refill_error) {
+        return k.refill_error;
+    }
+    if (!pin->live || i >= pin->pages) {
+        return -EFAULT;
+    }
+    pin->held |= 1u << i;
+    return 0;
+}
+
+/** Take page `off` of the guest's memory from every live pin, as a change
+ * of the page would, after the holder's forget. */
+static void drop_page(uint32_t off)
+{
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        struct pin *p = k.pins[i];
+
+        if (p && p->live && p->base == (uintptr_t)mem) {
+            p->held &= ~(1u << (off / 4096u));
+            p->holder->forget(p, p->holder->owner);
+        }
+    }
 }
 
 /** The kernel's mapping of a page is its host address. */
@@ -311,6 +384,12 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     (void)wq;
     (void)kinds;
     k.wakes++;
+}
+
+/** No one waits for a refill: the rows make none that sleeps. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
 }
 
 /** Not reached: the rows run the thread's passes themselves. */
@@ -595,13 +674,20 @@ static void test_requests(void)
     CHECK(ring2(&e, VHOST_NET_SET_BACKEND, 0, PLAINFD) == -ENOTSOCK, "a backend of no tap");
     CHECK(ring2(&e, VHOST_NET_SET_BACKEND, 0, TAPFD) == -EFAULT,
           "a backend for a ring with no memory");
+    CHECK(ring2(&e, VHOST_SET_VRING_BUSYLOOP_TIMEOUT, 1, 50) == 0, "a busy-poll timeout");
+    st[0] = 1;
+    st[1] = 0;
+    CHECK(ioc(&e, VHOST_GET_VRING_BUSYLOOP_TIMEOUT, st) == 0 && st[0] == 1 && st[1] == 50,
+          "the busy-poll timeout given back");
+    CHECK(ring2(&e, VHOST_SET_VRING_BUSYLOOP_TIMEOUT, 2, 50) == -ENOBUFS,
+          "a third ring's busy-poll timeout");
     CHECK(ioc(&e, 0xaf99u, 0) == -ENOTTY, "an unknown request");
     vn_ops.close(&e);
     CHECK(vn_devs == 0, "the close takes the device off the list");
 }
 
 /** The memory table: its bound, a region's pin kept by a table that has it
- * whole, a region that cannot be pinned, a pin past RLIMIT_MEMLOCK, and
+ * whole, a region the pin refuses, an empty one, a pin without memory, and
  * the reset that lets every pin go. */
 static void test_memory(void)
 {
@@ -618,15 +704,18 @@ static void test_memory(void)
     CHECK(mem_table(&e, 1, 0) == 0 && k.pins_made == made + 1, "one region pinned");
     CHECK(mem_table(&e, 1, 0) == 0 && k.pins_made == made + 1 && k.pins_freed == freed,
           "the same region keeps its pin");
-    CHECK(mem_table(&e, 2, 1) == 0 && k.pins_made == made + 1 && k.pins_freed == freed,
-          "a region past the memory is left unpinned");
-    CHECK(((struct vnet *)e.priv)->reg[1].pin == 0, "the unpinned region has no pin");
+    CHECK(mem_table(&e, 2, 1) == -EFAULT && k.pins_made == made + 1 && k.pins_freed == freed &&
+              ((struct vnet *)e.priv)->nreg == 1,
+          "a region the pin refuses fails the table, which keeps the old one");
+    CHECK(mem_table(&e, 2, 0) == 0 && k.pins_made == made + 2 && ((struct vnet *)e.priv)->nreg == 2,
+          "a second region of the same memory");
     k.pin_error = -ENOMEM;
-    CHECK(mem_table(&e, 3, 0) == -ENOMEM, "a pin past RLIMIT_MEMLOCK");
-    CHECK(((struct vnet *)e.priv)->nreg == 2, "the refused table leaves the old one");
+    CHECK(mem_table(&e, 3, 0) == -ENOMEM, "a pin without memory");
+    CHECK(((struct vnet *)e.priv)->nreg == 2 && k.pins_made == made + 2,
+          "the refused table leaves the old one");
     k.pin_error = 0;
-    CHECK(ioc(&e, VHOST_RESET_OWNER, 0) == 0 && k.pins_freed == freed + 1,
-          "the reset lets the pin go");
+    CHECK(ioc(&e, VHOST_RESET_OWNER, 0) == 0 && k.pins_freed == freed + 2,
+          "the reset lets the pins go");
     CHECK(ioc(&e, VHOST_SET_OWNER, 0) == 0, "an owner again after the reset");
     vn_ops.close(&e);
 }
@@ -754,8 +843,10 @@ static void test_transmit(void)
     CHECK(ring2(&e, VHOST_NET_SET_BACKEND, 1, TAPFD2) == -EBUSY, "a second tap");
     CHECK(ring2(&e, VHOST_NET_SET_BACKEND, 1, -1) == 0 && k.tap[0].b == &n->tb,
           "one ring let go keeps the tap");
+    CHECK(tapofd[0].refcount == 1, "the device holds the tap's descriptor");
     CHECK(ring2(&e, VHOST_NET_SET_BACKEND, 0, -1) == 0 && k.tap[0].b == 0 && n->tap == 0,
           "both let go free it");
+    CHECK(tapofd[0].refcount == 0, "and its descriptor");
     vn_ops.close(&e);
 }
 
@@ -780,22 +871,107 @@ static void test_teardown(void)
           "no frame once the memory is unmapped");
     CHECK(mem_table(&e, 1, 0) == 0 && !n->dead, "a new table pins it again");
     CHECK(n->tb.rx(&n->tb, f, 60) == 1 && get16(RX_USED + 2) == 1, "frames again");
-    ev_close(3);
-    CHECK(n->vq[VN_TX].kick == 0 && k.ev[3].refs == 0, "the kick's last close");
+    CHECK(evofd[3].refcount == 1 && tapofd[0].refcount == 1,
+          "the device holds the kick's descriptor and the tap's");
+    CHECK(ring2(&e, VHOST_SET_VRING_KICK, 1, 99) == -EBADF && n->vq[VN_TX].kick == &k.ev[3] &&
+              k.ev[3].hooks == &n->vq[VN_TX].hook && evofd[3].refcount == 1,
+          "a kick of no descriptor keeps the old one");
+    CHECK(ring2(&e, VHOST_SET_VRING_KICK, 1, EV0 + 6) == 0 && k.ev[3].refs == 0 &&
+              k.ev[3].hooks == 0 && evofd[3].refcount == 0 && evofd[6].refcount == 1,
+          "a new kick lets the old one and its descriptor go");
+    n->vq[VN_TX].kicked = 0;
+    eventfd_signal(&k.ev[6]);
+    CHECK(n->vq[VN_TX].kicked, "the new kick marks the ring");
     n->tb.gone(&n->tb);
     k.tap[0].b = 0;
     CHECK(n->tap == 0 && n->tb.rx(&n->tb, f, 60) == 0, "the tap's close");
     vn_ops.close(&e);
     for (i = 0; i < NEVS; i++) {
-        CHECK(k.ev[i].refs == 0, "every eventfd let go");
+        CHECK(k.ev[i].refs == 0 && evofd[i].refcount == 0, "every eventfd let go");
     }
+    CHECK(tapofd[0].refcount == 0, "the tap's descriptor let go");
     CHECK(k.pins_made == k.pins_freed, "every pin let go");
-    k.ev[3].closed = 0;
+}
+
+/** A page of the guest's memory that a change took from its pin: a frame
+ * for a buffer there waits in the tap while the thread brings the page in,
+ * and goes after; a ring's own page does the same; a transmit chain there
+ * stays the ring's until the page is in; a page that cannot be had breaks
+ * the ring; and a transmit pass is one batch of TCP's. */
+static void test_refill(void)
+{
+    fd_entry_t e;
+    struct vnet *n;
+    uint8_t f[60];
+    int refills, calls, batches;
+
+    printf("refill\n");
+    ready(&e);
+    n = (struct vnet *)e.priv;
+    desc(RX_DESC, 0, BUFS, 1600, DESC_WRITE, 0);
+    offer(RX_AVAIL, RXNUM, 0);
+    frame(f, 5);
+    drop_page(BUFS);
+    refills = k.refills;
+    CHECK(n->tb.rx(&n->tb, f, 60) == 0 && get16(RX_USED + 2) == 0 && n->vq[VN_RX].last_avail == 0 &&
+              n->vq[VN_RX].want && !n->vq[VN_RX].broken,
+          "a buffer's page not held leaves the frame in the tap and the ring as it was");
+    CHECK(n->vq[VN_RX].kicked && vn_work, "and wakes the thread");
+    frame(k.queue[0], 5);
+    k.queued = 1;
+    vn_pass();
+    CHECK(k.refills == refills + 1 && !n->vq[VN_RX].want && k.queued == 1,
+          "the thread brings the page in");
+    vn_pass();
+    CHECK(k.queued == 0 && get16(RX_USED + 2) == 1 && same(mem + BUFS + 12, f, 60) &&
+              n->to_guest == 1,
+          "and the frame goes on the next pass");
+    desc(RX_DESC, 1, BUFS, 1600, DESC_WRITE, 0);
+    offer(RX_AVAIL, RXNUM, 1);
+    drop_page(RX_USED);
+    CHECK(n->tb.rx(&n->tb, f, 60) == 0 && n->vq[VN_RX].want && !n->vq[VN_RX].broken,
+          "a ring's own page not held leaves the frame too");
+    vn_pass();
+    CHECK(n->tb.rx(&n->tb, f, 60) == 1 && get16(RX_USED + 2) == 2,
+          "and it goes once the page is in");
+    frame(mem + BUFS + 0x100 + 12, 44);
+    desc(TX_DESC, 0, BUFS + 0x100, 72, 0, 0);
+    offer(TX_AVAIL, TXNUM, 0);
+    drop_page(BUFS);
+    k.injected = 0;
+    batches = k.batches;
+    eventfd_signal(&k.ev[3]);
+    vn_pass();
+    CHECK(k.injected == 0 && get16(TX_USED + 2) == 0 && n->vq[VN_TX].last_avail == 0 &&
+              !n->vq[VN_TX].broken,
+          "a transmit chain whose page is not held stays the ring's");
+    CHECK(k.batches == batches + 1 && k.batch_depth == 0, "a transmit pass is one batch");
+    vn_pass();
+    CHECK(k.injected == 1 && k.inject[0] == 44 && get16(TX_USED + 2) == 1 && n->from_guest == 1,
+          "and goes once the page is in");
+    desc(RX_DESC, 2, BUFS, 1600, DESC_WRITE, 0);
+    offer(RX_AVAIL, RXNUM, 2);
+    drop_page(BUFS);
+    k.refill_error = -EFAULT;
+    calls = k.ev[2].signals;
+    CHECK(n->tb.rx(&n->tb, f, 60) == 0, "a page not held again");
+    vn_pass();
+    CHECK(n->vq[VN_RX].broken && k.ev[2].signals == calls + 1 && !n->vq[VN_RX].want,
+          "a page that cannot be had breaks the ring");
+    k.refill_error = 0;
+    vn_ops.close(&e);
 }
 
 /** Start the device and run the rows. */
 int main(void)
 {
+    int i;
+
+    for (i = 0; i < NEVS; i++) {
+        evfd[i].ofd = &evofd[i];
+    }
+    tapfd[0].ofd = &tapofd[0];
+    tapfd[1].ofd = &tapofd[1];
     cpu_table[0].current = &self;
     self.mm = (struct mm *)&mm_a;
     vhost_net_start();
@@ -805,6 +981,7 @@ int main(void)
     test_receive();
     test_transmit();
     test_teardown();
+    test_refill();
     printf("%d failed\n", fails);
     return fails > 255 ? 255 : fails;
 }

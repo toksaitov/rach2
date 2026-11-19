@@ -112,6 +112,9 @@ struct tap_backend {
  * /dev/net/tun or has no interface yet. */
 struct tap *tap_of(const struct fd_entry *e);
 
+/** The name of the interface `t`, such as `tap0`. */
+const char *tap_name(const struct tap *t);
+
 /** Give the interface `t` the backend `b`, or take it back with NULL: 0, or
  * -EBUSY when another backend has it. */
 int tap_backend_set(struct tap *t, struct tap_backend *b);

@@ -30,7 +30,20 @@ raise the ring's interrupt, the call, which QEMU makes a KVM irqfd, and an
 eventfd signalled when the guest gives a bad descriptor; and last the tap
 descriptor, with
 .Dv VHOST_NET_SET_BACKEND .
-The device pins the regions' pages, which count against the owner's
+The device holds the tap's descriptor and each kick's while it uses them,
+as Linux holds their files, so the owner may close its own.
+.Pp
+The device reaches a page of the guest's memory through a pin of the
+frame the owner maps there, taken by the kernel thread at the page's first
+use and kept until the page changes: a discard by
+.Xr madvise 2 ,
+as QEMU's balloon makes, a write-back's taking of write access from a
+shared mapping of a file, a copy-on-write, a truncation or an unmap.
+The change lets the pin go, and the thread takes the page again at its
+next use, so the device always writes the frame the owner maps, as Linux's
+device copies through the owner's mappings.
+Any memory the owner maps may be the guest's, a shared mapping of a disk
+file among it; nothing is charged to
 .Dv RLIMIT_MEMLOCK .
 .Pp
 A frame the stack sends on the tap goes into the next buffer the guest
@@ -39,6 +52,8 @@ virtio header of no offload with num_buffers 1; a frame that does not fit
 the buffer is dropped and the buffer stays the guest's, and a frame that
 finds no buffer waits in the tap, which holds 1024, until the guest's next
 kick.
+A frame whose ring or buffer is on a page the device does not hold waits
+in the tap too, while the thread takes the page, and goes after it.
 A frame the guest puts on its transmit ring is taken by the kernel thread
 .Li vhost-net ,
 which the kick wakes, and given to the stack as a
@@ -83,10 +98,10 @@ None are offered, and only 0 is taken.
 .It Dv VHOST_SET_MEM_TABLE
 Takes a
 .Vt struct vhost_memory
-of up to 64 regions and pins each, keeping the pin of a region the old
+of up to 64 regions, keeping what the device holds of a region the old
 table has whole.
-A region that cannot be pinned, such as device memory, is kept without a
-pin, and a ring or buffer in it stops its ring.
+A ring or buffer at an address the owner does not map, or maps without
+write access, stops its ring when the device first uses it.
 .It Dv VHOST_SET_VRING_NUM
 The ring's size, a power of two up to 32768.
 .It Dv VHOST_SET_VRING_BASE , VHOST_GET_VRING_BASE
@@ -97,14 +112,19 @@ Takes a
 the descriptor table on 16 bytes, the used ring on 4 and the available
 ring on 2, at the owner's addresses.
 .It Dv VHOST_SET_VRING_KICK , VHOST_SET_VRING_CALL , VHOST_SET_VRING_ERR
-The ring's eventfds.
+The ring's eventfds; a refused one leaves the ring the one it had.
+.It Dv VHOST_SET_VRING_BUSYLOOP_TIMEOUT , VHOST_GET_VRING_BUSYLOOP_TIMEOUT
+The time in microseconds Linux's device polls a ring before it sleeps,
+kept and given back; the thread here never polls.
 .It Dv VHOST_NET_SET_BACKEND
 Gives the ring the interface of the tap descriptor, or takes it away
 with \-1; the tap is let go once neither ring has it.
 .El
 .Pp
-When the guest's memory is unmapped, both rings stop until a new table.
-When the tap's last descriptor closes, the rings lose it.
+When the owner's address space ends, both rings stop until a new table.
+When the device lets the tap go it logs the frames it moved since it took
+it, as
+.Ql vhost-net: detached: tap0: 22 frames to the guest, 21 from it .
 The last close of the device's descriptor stops it and lets everything go.
 .Sh LIMITS
 The split ring alone: no indirect descriptors, no event index
@@ -113,10 +133,8 @@ no mergeable receive buffers
 .Pq Dv VIRTIO_NET_F_MRG_RXBUF ,
 no offload, no dirty log for migration, no IOTLB and one queue pair.
 Both rings take the same tap, where Linux lets each have its own.
-One kernel thread serves every device, where Linux has one for each.
-A region of the table is pinned, where Linux reaches it through the
-owner's mappings, so the guest's memory counts against
-.Dv RLIMIT_MEMLOCK .
+One kernel thread serves every device, where Linux has one for each, and
+it does not poll.
 .Sh FILES
 .Bl -tag -width /dev/vhost-net
 .It Pa /dev/vhost-net
@@ -144,17 +162,16 @@ A second
 a ring's size or base changed while it has the tap; a tap another device
 has, or one other than the other ring's.
 .It Er EFAULT
-An argument is not the caller's; a ring given the tap has no size or
-address, or lies outside the pinned memory.
+An argument is not the caller's; a region of the table that is empty,
+wraps or leaves user space; a ring given the tap has no size or address,
+or lies outside the table's regions.
 .It Er EINVAL
 A ring size that is no power of two up to 32768, a base past 65535, a
 ring not aligned, or a ring's file that is no eventfd.
 .It Er ENOBUFS
 A ring index past 1.
 .It Er ENOMEM
-No memory, or a pin past
-.Dv RLIMIT_MEMLOCK ;
-the old table stays.
+No memory; the old table stays.
 .It Er ENOTSOCK
 .Dv VHOST_NET_SET_BACKEND
 of a descriptor that is no tap with an interface.
@@ -171,6 +188,7 @@ or from a process whose address space is not the owner's.
 .Sh SEE ALSO
 .Xr eventfd 2 ,
 .Xr ioctl 2 ,
+.Xr madvise 2 ,
 .Xr kvm 4 ,
 .Xr tap 4 ,
 .Xr virtio-net 4
