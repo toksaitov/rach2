@@ -1694,11 +1694,19 @@ uint32_t procfs_ino_lockwait(void)
     return 0;
 }
 
-/** The inode numbers of /proc/asound's files, which no row reads: 0. */
+/** The inode numbers of /proc/asound's and /proc/bus's files, which no
+ * row reads: 0. */
 uint32_t procfs_ino_asound(int file, int card)
 {
     (void)file;
     (void)card;
+    return 0;
+}
+
+uint32_t procfs_ino_bus(int file, int dir)
+{
+    (void)file;
+    (void)dir;
     return 0;
 }
 

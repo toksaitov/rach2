@@ -9,7 +9,8 @@
  * identity and resources, a writable attribute's offset and the mode its
  * open is judged by, the directions an attribute's open refuses before the
  * capability overrides, a PCI function's resourceN files, and those of a PS/2
- * keyboard and a USB mouse (evdev_sysfs.c).
+ * keyboard and a USB mouse and their records in /proc/bus/input
+ * (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
@@ -4172,6 +4173,69 @@ static void input_link_rows(void)
           "each device links its parent and its subsystem, and the buses link their devices");
 }
 
+/** Whether the file of /proc/bus/input `file` reads `want`. */
+static int bus_input_reads(int file, const char *want)
+{
+    struct procfs_text text;
+    int len, ok;
+
+    procfs_text_init(&text);
+    len = procfs_gen_bus_input(&text, file);
+    ok = len == (int)__builtin_strlen(want) && text.buf &&
+         __builtin_memcmp(text.buf, want, (unsigned long)len) == 0;
+    if (!ok) {
+        printf("procfs-hosttest: /proc/bus/input read '%.*s'\n", len > 0 ? len : 0,
+               text.buf ? text.buf : "");
+    }
+    kfree(text.buf);
+    return ok;
+}
+
+/**
+ * /proc/bus/input/devices gives a record of each published device in the
+ * order of its inputN, as Linux's input_devices_seq_show writes it: IDs,
+ * name, place, path below /sys, serial, the event node of its one
+ * handler, then its properties, event types and the codes of each type it
+ * has, ended by a blank line; to an i386 program the masks are in 32-bit
+ * words. `handlers` names evdev and its first minor.
+ */
+static void bus_input_rows(void)
+{
+    static const char kbd[] = "I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\n"
+                              "N: Name=\"AT Translated Set 2 keyboard\"\n"
+                              "P: Phys=isa0060/serio0/input0\n"
+                              "S: Sysfs=/devices/platform/i8042/serio0/input/input0\n"
+                              "U: Uniq=\n"
+                              "H: Handlers=event0 \n"
+                              "B: PROP=0\n"
+                              "B: EV=120013\n";
+    static const char mouse[] = "I: Bus=0003 Vendor=0627 Product=0001 Version=0000\n"
+                                "N: Name=\"USB HIDBP Mouse 0627:0001\"\n"
+                                "P: Phys=usb-1/input0\n"
+                                "S: Sysfs=/devices/usb/1-1/1-1:1.0/input/input1\n"
+                                "U: Uniq=\n"
+                                "H: Handlers=event1 \n"
+                                "B: PROP=1\n"
+                                "B: EV=7\n";
+    char want[2048];
+
+    __builtin_snprintf(want, sizeof(want),
+                       "%sB: KEY=402000000 3803078f800d001 feffffdfffefffff fffffffffffffffe\n"
+                       "B: MSC=10\nB: LED=7\n\n%sB: KEY=1f0000 0 0 0 0\nB: REL=1943\n\n",
+                       kbd, mouse);
+    check(bus_input_reads(EVDEV_PROC_DEVICES, want),
+          "/proc/bus/input/devices gives each device's record as Linux's input core does");
+    __builtin_snprintf(want, sizeof(want),
+                       "%sB: KEY=4 2000000 3803078 f800d001 feffffdf ffefffff ffffffff fffffffe\n"
+                       "B: MSC=10\nB: LED=7\n\n%sB: KEY=1f0000 0 0 0 0 0 0 0 0\nB: REL=1943\n\n",
+                       kbd, mouse);
+    compat_caller = 1;
+    check(bus_input_reads(EVDEV_PROC_DEVICES, want), "and its masks in 32-bit words to i386");
+    compat_caller = 0;
+    check(bus_input_reads(EVDEV_PROC_HANDLERS, "N: Number=0 Name=evdev Minor=64\n"),
+          "/proc/bus/input/handlers names evdev");
+}
+
 /**
  * The files of inputN render the IDs, the texts and the capability masks
  * as Linux prints them: the kernel's longs in hexadecimal from the highest
@@ -4236,6 +4300,7 @@ static void input_file_rows(void)
                  "INTERFACE=3/1/2\nMODALIAS=usb:v0627p0001d0000dc00dsc00dp00ic03isc01ip02in00\n") &&
               reg_is(child(in_iface, "bInterfaceProtocol"), "02\n"),
           "the USB interface gives its class, protocol and modalias");
+    bus_input_rows();
 }
 
 /**
@@ -4723,9 +4788,9 @@ int main(int argc, char **argv)
                "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
                "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
                "driver's attribute, link and PCI identity, a PCI function's BARs mapped and read "
-               "through its resource files, writes of a PCI function's uevent, and an input "
-               "device's /sys entries, capability masks and uevents, and the syscall and wchan "
-               "files of blocked, stopped and running threads\n");
+               "through its resource files, writes of a PCI function's uevent, an input device's "
+               "/sys entries, capability masks, uevents and /proc/bus/input record, and the "
+               "syscall and wchan files of blocked, stopped and running threads\n");
     }
     return failures != 0;
 }
