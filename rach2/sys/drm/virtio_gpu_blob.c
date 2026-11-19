@@ -438,8 +438,12 @@ static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_ob
  * The commit worker's turn after the transport took back the frames behind
  * an object's backing while the device lived, as when the VM's memory under
  * them changed: the device no longer reads what the object holds, so it is
- * unplugged, which resets it. A device already dead or unplugged, as at the
- * VM's end, which takes every map back, is left alone. The work holds a
+ * stopped, every pending fence failing (`vgpu_kill`), and unplugged, as the
+ * transport's word that the device has gone does it (`vgpu_removed`). The
+ * VM's end takes the maps back before that word comes, and an unplug before
+ * the fences fail would wait under the mode lock for a commit's fence that
+ * a dead VM never answers, and every close of the card for that lock. A
+ * device already dead or unplugged is left alone. The work holds a
  * reference to the object while it runs, as `revoked_zap` does.
  */
 static void backing_lost(struct drm_work *work)
@@ -455,6 +459,7 @@ static void backing_lost(struct drm_work *work)
     if (!dev->unplugged && !vgpu_device(dev)->dead) {
         klog(KLOG_WARN, "virtio_gpu",
              "resource %u: the VM's pages behind its backing changed; reset", (unsigned)bo->res_id);
+        vgpu_kill(vgpu_device(dev));
         drm_dev_unplug(dev);
     }
     drm_gem_object_put(&bo->shmem.base);
