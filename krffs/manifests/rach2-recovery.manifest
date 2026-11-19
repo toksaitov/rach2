@@ -61,8 +61,9 @@ file 0755 /bin/rach2-recover utils/rach2-recover
 
 dir 0755 /sbin
 # The ext2 checker, for a root that was not unmounted: when the boot line has
-# rach2.fsck, init runs it on each ext2 partition before anything else, and
-# it can be run by hand over SSH. The resizer beside it is what `growroot`
+# rach2.fsck, init runs it on each ext2 partition before anything else, with
+# rach2.fsck=UUID,... on those volumes, which the installed system arms with
+# `bootctl fsck`, and it can be run by hand over SSH. The resizer beside it is what `growroot`
 # runs after it has enlarged the root's partition entry, and that shrinks the
 # root when `rach2-install --data` makes room for the data partition, whose
 # file system mke2fs makes, there and on a new install. They are the only

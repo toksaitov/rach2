@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 19, 2026
 .Dt BOOTCTL 8
 .Os
 .Sh NAME
@@ -27,6 +27,8 @@
 .Cm rootimage Ar SPEC : Ns Ar /PATH
 .Nm
 .Cm booted
+.Nm
+.Cm fsck Ar UUID Ns Op , Ns Ar UUID ...
 .Nm
 .Fl -target Ar PARTITION COMMAND
 .Ar ...
@@ -126,6 +128,10 @@ is reported as
 When the menu slot has a trial root's entry, a line gives the image it
 boots:
 .Dl bootctl: trial root: SPEC:/PATH
+When it has the block of recovery's check that
+.Cm fsck
+writes, a line gives the volumes and the time it was armed:
+.Dl bootctl: recovery's check: rach2.fsck=UUID[,UUID...], armed at SECONDS
 .Pp
 The
 .Ql bootctl: booted:
@@ -361,6 +367,41 @@ Nothing is written when the block has no
 .Ql recordfail .
 Success is reported as:
 .Dl bootctl: booted: recordfail cleared; the next boot takes the saved default
+.It Cm fsck Ar UUID Ns Op , Ns Ar UUID ...
+Boot the recovery system once to run
+.Ql e2fsck -p
+on the ext2 volumes of those UUIDs, written as
+.Xr blkid 1
+prints them, in lower case and separated by commas, after which it
+restarts the machine and the boot after it takes the saved default.
+.Xr init 8
+runs this command when the kernel left a volume read-only for e2fsck,
+since that kernel takes no raw write of a partition and the recovery
+kernel, with nothing of the disk mounted, does.
+The entry boots
+.Pa /boot/recovery
+and
+.Pa /boot/recovery.krffs
+of the recovery partition, entry 2 of the disk whose entry 1 is the boot
+partition, which GRUB finds by its FAT serial, with the line
+.Ql rach2.root=ram rach2.slot=recovery rach2.fsck=UUID[,UUID...]
+followed by this boot's words, less those that choose the root, the slot,
+the first program or a check; a line longer than the kernel's 510 bytes is
+refused.
+The command writes the entry at the end of the menu slot, between the
+lines
+.Ql # bootctl fsck: armed at SECONDS ,
+the time in seconds since the epoch, and
+.Ql # bootctl fsck: end ,
+in place of an earlier such entry, keeps the rest of the slot, and sets
+.Ql next_entry=fsck ,
+which the slot consumes as it consumes
+.Ql trialroot .
+It refuses while the slot's earlier entry was armed less than an hour
+ago, or at a time the clock has not reached, so that a fault the check
+does not mend cannot keep the machine restarting.
+Success is reported as:
+.Dl bootctl: armed: the next boot runs recovery's e2fsck -p on UUIDS once and restarts; the boot after it takes the saved default
 .El
 .Sh EXAMPLES
 Install a kernel from the running system, reboot to try it, then inspect

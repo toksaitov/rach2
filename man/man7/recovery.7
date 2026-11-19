@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 19, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -87,7 +87,16 @@ from 1 to 15,
 whose superblock has the ext2 magic, and reports
 .Dl init: e2fsck: /dev/diskNpM: status S
 Status 0 means clean, 1 repaired, 4 faults left and 8 an error.
-Without the token a recovery boot repairs nothing.
+With
+.Ql rach2.fsck= Ns Ar UUID Ns Op , Ns Ar UUID ...
+in its place, init checks only the partitions whose ext2 volume has one of
+those UUIDs, and restarts the machine once each was found and checked to a
+status below 4; otherwise recovery stays up for a person.
+The installed system arms that boot with
+.Ql bootctl fsck
+when its kernel leaves a volume read-only for e2fsck; see
+.Xr init 8 .
+Without either token a recovery boot repairs nothing.
 The network is configured by the kernel from the
 .Ql rach2.ip=
 boot setting, or by DHCP when that setting is
