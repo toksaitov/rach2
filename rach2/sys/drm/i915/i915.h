@@ -129,8 +129,14 @@ struct i915_uncore {
  * (i915_power.c). `count` counts the references to it. `on` is whether the
  * driver's request is set and the well reported on. `kept` is set while
  * the count is 0 and the well stays on because a pipe that needs it runs.
+ * `lock` is held across each get, put and suspend, the register writes and
+ * waits among them, as Linux's power_domains->lock is: the display's
+ * commits, the audio component's calls and a runtime suspend each change
+ * the count, and a last put must not clear the request after another
+ * caller's get has counted on the well.
  */
 struct i915_power {
+    struct mutex lock;
     uint32_t count;
     uint8_t on;
     uint8_t kept;
@@ -1904,17 +1910,20 @@ void i915_uncore_write(struct drm_i915_private *i915, uint32_t reg, uint32_t val
 int32_t i915_power_init(struct drm_i915_private *i915);
 
 /** Take a reference to the display well, turning it on with the first:
- * 0, or -ETIMEDOUT, holding none, when it did not come on in 1 ms. */
+ * 0, or -ETIMEDOUT, holding none, when it did not come on in 1 ms. Takes
+ * the well's lock; process context. */
 int32_t i915_power_get(struct drm_i915_private *i915);
 
 /** Drop a reference to the display well. With the last the well is turned
  * off, unless a pipe that needs it runs, as the firmware's may: then it
- * stays on, `kept`, and is logged. */
+ * stays on, `kept`, and is logged. Takes the well's lock; process
+ * context. */
 void i915_power_put(struct drm_i915_private *i915);
 
 /** Turn a well no reference holds off before a runtime suspend, one kept
  * on for a pipe that has since gone off among them: 0 with the well off,
- * or -EBUSY while a reference holds it or a pipe in it runs. */
+ * or -EBUSY while a reference holds it or a pipe in it runs. Takes the
+ * well's lock. */
 int32_t i915_power_suspend(struct drm_i915_private *i915);
 
 /** Whether the display well reports on. */
