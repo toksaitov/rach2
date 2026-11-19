@@ -10,6 +10,7 @@
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/kvm_xen_none.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
