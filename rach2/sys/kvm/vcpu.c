@@ -404,6 +404,7 @@ void kvm_vcpu_free(struct kvm_vcpu *v)
     }
     kvm_lapic_free(v);
     kvm_hv_vcpu_free(v);
+    kvm_xen_vcpu_free(v);
     if (v->run) {
         kfree_pages(v->run, KVM_RUN_PAGES);
     }
@@ -464,7 +465,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     r = -ENOMEM;
     v->run = kalloc_pages(KVM_RUN_PAGES, NULL);
     v->xsave_mem = kmalloc(KVM_XSAVE_SIZE + 64u);
-    if (!v->run || !v->xsave_mem) {
+    if (!v->run || !v->xsave_mem || kvm_xen_vcpu_init(v) != 0) {
         goto fail;
     }
     k_memset(v->run, 0, KVM_RUN_PAGES * 4096u);
@@ -563,7 +564,7 @@ static uint64_t earlier(uint64_t a, uint64_t b)
 
 void kvm_vcpu_timers(struct kvm_vcpu *v)
 {
-    uint64_t next = 0, clock;
+    uint64_t next = 0, clock, xen;
 
     if (v->timer_ns && kvm_host_ns() >= v->timer_ns) {
         req_set(v, KVM_REQ_TIMER);
@@ -571,6 +572,7 @@ void kvm_vcpu_timers(struct kvm_vcpu *v)
     if (!kvm_vcpu_test_clear(v, KVM_REQ_TIMER)) {
         return;
     }
+    xen = kvm_xen_timers(v);
     if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         kvm_lapic_timer_check(v);
         kvm_pit_check(v->vm);
@@ -583,7 +585,7 @@ void kvm_vcpu_timers(struct kvm_vcpu *v)
         req_set(v, KVM_REQ_CLOCK_UPDATE);
         clock = 0;
     }
-    v->timer_ns = earlier(next, clock);
+    v->timer_ns = earlier(earlier(next, clock), xen);
 }
 
 /** Queue the exception `nr` for `v`, as Linux replaces a benign exception
@@ -652,6 +654,38 @@ static void run_msr(struct kvm_vcpu *v)
     v->msr_pending = 1;
 }
 
+/** Give the caller the port I/O of the KVM_X_IO exit in `v->exit`, unless
+ * a device in the kernel takes it: 1 with the run page and the data page
+ * filled, or 0 when the kernel took it. */
+static int32_t run_io(struct kvm_vcpu *v)
+{
+    struct kvm_run *run = v->run;
+    struct kvm_exit *ex = &v->exit;
+    uint32_t n;
+    int out = ex->io.direction == KVM_EXIT_IO_OUT;
+
+    v->stat[KVM_VCPU_STAT_IO_EXITS]++;
+    if (kvm_irq_io(v) || (out && kvm_iobus_write(v))) {
+        /* A device in the kernel took the OUT: it is done. */
+        if (out && kvm_backend->complete) {
+            kvm_backend->complete(v);
+        }
+        return 0;
+    }
+    run->exit_reason = KVM_EXIT_IO;
+    run->u.io = ex->io;
+    run->u.io.data_offset = KVM_PIO_PAGE_OFFSET * 4096u;
+    n = ex->io.count * ex->io.size;
+    if (n > 4096u) {
+        n = 4096u;
+    }
+    if (out) {
+        k_memcpy(v->pio, ex->data, n);
+    }
+    v->pending = 1;
+    return 1;
+}
+
 /**
  * Give the caller the exit in `v->exit`: 1 when it goes to the caller,
  * with the run page filled, 0 when the kernel took it and the guest enters
@@ -661,34 +695,13 @@ static int32_t run_exit(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
     struct kvm_exit *ex = &v->exit;
-    uint32_t n;
-    int r, out;
+    int r;
 
     switch (ex->kind) {
     case KVM_X_AGAIN:
         return 0;
     case KVM_X_IO:
-        v->stat[KVM_VCPU_STAT_IO_EXITS]++;
-        out = ex->io.direction == KVM_EXIT_IO_OUT;
-        if (kvm_irq_io(v) || (out && kvm_iobus_write(v))) {
-            /* A device in the kernel took the OUT: it is done. */
-            if (out && kvm_backend->complete) {
-                kvm_backend->complete(v);
-            }
-            return 0;
-        }
-        run->exit_reason = KVM_EXIT_IO;
-        run->u.io = ex->io;
-        run->u.io.data_offset = KVM_PIO_PAGE_OFFSET * 4096u;
-        n = ex->io.count * ex->io.size;
-        if (n > 4096u) {
-            n = 4096u;
-        }
-        if (out) {
-            k_memcpy(v->pio, ex->data, n);
-        }
-        v->pending = 1;
-        return 1;
+        return run_io(v);
     case KVM_X_MMIO:
         if (kvm_lapic_mmio(v) || kvm_irq_io(v) || (ex->mmio.is_write && kvm_iobus_write(v))) {
             return 0;
@@ -746,6 +759,10 @@ static int32_t run_exit(struct kvm_vcpu *v)
     case KVM_X_HYPERV:
         run->exit_reason = KVM_EXIT_HYPERV;
         run->u.hyperv = ex->hyperv;
+        return 1;
+    case KVM_X_XEN:
+        run->exit_reason = KVM_EXIT_XEN;
+        run->u.xen = ex->xen;
         return 1;
     case KVM_X_MSR:
         run_msr(v);
@@ -929,6 +946,7 @@ static int32_t run_begin(struct kvm_vcpu *v)
         run_complete(v);
     }
     kvm_hv_complete(v);
+    kvm_xen_complete(v);
     kvm_msr_complete(v);
     kvm_emul_stepped(v);
     r = run_resume(v);
@@ -941,18 +959,21 @@ static int32_t run_begin(struct kvm_vcpu *v)
 /** The `sched_out` of a vCPU's thread across KVM_RUN, as Linux's
  * kvm_sched_out (virt/kvm/kvm_main.c): `arg` is the vCPU, which a switch
  * away while its thread can still run, `preempted`, marks preempted
- * (`kvm_steal_preempted`), and whose backend gives the host back the
- * processor's state at every switch (`put`), as kvm_arch_vcpu_put. Every
- * switch asks for the steal time once the thread runs again
- * (KVM_REQ_STEAL_UPDATE), as Linux's kvm_arch_vcpu_load does at
- * kvm_sched_in. Under the run queues' lock with interrupts off; does not
- * sleep. */
+ * (`kvm_steal_preempted`), or runnable in Xen's runstate
+ * (`kvm_xen_preempted`) while the caller set a Xen MSR, and whose
+ * backend gives the host back the processor's state at every switch
+ * (`put`), as kvm_arch_vcpu_put. Every switch asks for the steal time
+ * once the thread runs again (KVM_REQ_STEAL_UPDATE), as Linux's
+ * kvm_arch_vcpu_load does at kvm_sched_in. Under the run queues' lock
+ * with interrupts off; does not sleep. */
 static void vcpu_sched_out(void *arg, int preempted)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)arg;
 
     req_set(v, KVM_REQ_STEAL_UPDATE);
-    if (preempted) {
+    if (preempted && kvm_xen_msr_enabled(v->vm)) {
+        kvm_xen_preempted(v);
+    } else if (preempted) {
         kvm_steal_preempted(v);
     }
     if (kvm_backend && kvm_backend->put) {
@@ -1003,6 +1024,7 @@ static int32_t run_prepare(struct kvm_vcpu *v)
     int32_t r;
 
     kvm_vcpu_timers(v);
+    kvm_xen_entry(v);
     if (!prepare_due(v)) {
         return 1;
     }
@@ -1036,6 +1058,7 @@ static int32_t run_prepare(struct kvm_vcpu *v)
         kvm_backend->msr_filter_changed(v);
     }
     if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
+        kvm_xen_refresh(v);
         if (kvm_backend->inject) {
             kvm_backend->inject(v);
         }
@@ -1183,6 +1206,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out_arg = v;
             current_proc->sched_out = vcpu_sched_out;
             r = run_loop(v);
+            kvm_xen_run_end(v);
             vcpu_put(v, 1);
             current_proc->sched_out = NULL;
         }
@@ -2288,6 +2312,9 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
         return vcpu_enable_cap(v, arg);
     case KVM_GET_SUPPORTED_HV_CPUID:
         return kvm_hv_get_cpuid(v, arg);
+    case KVM_XEN_VCPU_GET_ATTR:
+    case KVM_XEN_VCPU_SET_ATTR:
+        return kvm_xen_vcpu_ioctl(v, request, arg);
     case KVM_SET_TSC_KHZ:
         return set_tsc_khz(v, arg);
     case KVM_GET_TSC_KHZ:
