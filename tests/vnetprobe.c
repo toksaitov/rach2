@@ -5,6 +5,15 @@
  *
  * The probe checks, in order:
  *
+ * * `plugged`, with `plugged=1`, for a card hot plugged after boot: the
+ *   probe prints "VNETPROBE: put the card in" and waits, without a bound
+ *   of its own, until /sys/class/net/IF is there; the interface, which
+ *   nothing configured, is down, as Linux leaves a new one, and is set up,
+ *   given 10.0.2.15/24 and a default route as `configure` below does, after
+ *   which it reads a `carrier` of 1. The card is put in while the probe
+ *   runs, since ACPICA's thread, which runs the GPE method that announces
+ *   it, starts with the first program and waits while the debug shell
+ *   waits at its prompt.
  * * `link-files`: /sys/class/net/IF's `carrier` reads 1, and `speed`,
  *   `duplex` and `mtu` read what the arguments give, -1, "unknown" and 1500
  *   unless `speed=`, `duplex=` and `mtu=` name others: a virtio device says
@@ -35,6 +44,13 @@
  *   `carrier` of 1.
  * * `ping-again`: a ping to the gateway gets a reply over the device bound
  *   again.
+ *
+ * * `gone`, with `plugged=1`, after the rows above: the probe prints
+ *   "VNETPROBE: take the card out" and waits until /sys/class/net/IF is
+ *   gone, after which SIOCGIFINDEX of its name fails with ENODEV.
+ * * `back`, with `plugged=1`: the probe prints "VNETPROBE: put the card in
+ *   again" and waits for the interface, which is down, is set up as
+ *   `configure` does, and gets a reply to a ping to the gateway.
  *
  * The interface is `eth0` unless `if=` names another, and the gateway
  * 10.0.2.2 unless `gateway=` does.
@@ -505,6 +521,14 @@ static int configure(const char *ifname, uint32_t gateway)
            if_ioctl(ifname, SIOCSIFNETMASK, ifr, fill_mask) == 0 && add_default() == 0;
 }
 
+/** Sleep for 10 ms. */
+static void nap(void)
+{
+    long ts[2] = {0, 10000000};
+
+    syscall2(SYS_NANOSLEEP, (long)ts, 0); /* interval: poll the interface's directory every 10 ms */
+}
+
 /** Ping `ip` up to five times, while the first replies may wait for ARP:
  * whether one was answered. */
 static int ping_retry(uint32_t ip)
@@ -581,6 +605,31 @@ static void rebind(const char *name, const char *ifname, uint32_t gateway)
     check("ping-again", ping_retry(gateway), "a ping over the device bound again got no reply");
 }
 
+/** Wait for the interface `ifname` to be there, `there`, or gone. */
+static void wait_listed(const char *ifname, int there)
+{
+    while (!listed(ifname) != !there) {
+        nap();
+    }
+}
+
+/** Have the card taken out and put in again, the `gone` and `back`
+ * checks. */
+static void replug(const char *ifname, uint32_t gateway)
+{
+    unsigned char ifr[IFREQ_SIZE];
+
+    say("VNETPROBE: take the card out");
+    wait_listed(ifname, 0);
+    check("gone", if_ioctl(ifname, SIOCGIFINDEX, ifr, 0) == -ENODEV,
+          "SIOCGIFINDEX of the interface of the card taken out did not fail with ENODEV");
+    say("VNETPROBE: put the card in again");
+    wait_listed(ifname, 1);
+    check("back", down(ifname) && configure(ifname, gateway) && ping_retry(gateway),
+          "the interface of the card put in again was not down, could not be set up, or got no "
+          "reply to a ping");
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -598,6 +647,14 @@ void probe_main(unsigned long *sp)
     gateway = address(probe_arg("gateway", 0), GATEWAY_IP);
     report_begin(report_case((char **)(sp + 2 + sp[0]), "machine.virtionet.probe"));
 
+    if (same(probe_arg("plugged", "0"), "1")) {
+        say("VNETPROBE: put the card in");
+        wait_listed(ifname, 1);
+        check("plugged",
+              down(ifname) && configure(ifname, gateway) && link_file(ifname, "carrier", "1"),
+              "the hot plugged card's interface was not down, or could not be set up, given an "
+              "address and a default route");
+    }
     check("link-files",
           link_file(ifname, "carrier", "1") &&
               link_file(ifname, "speed", probe_arg("speed", "-1")) &&
@@ -615,6 +672,9 @@ void probe_main(unsigned long *sp)
         report_notrun("unbind", "the bus has no network device");
         report_notrun("no-interface", "the bus has no network device");
         notrun_from_bind("the bus has no network device");
+    }
+    if (same(probe_arg("plugged", "0"), "1")) {
+        replug(ifname, gateway);
     }
     report_end();
     if (failures == 0) {

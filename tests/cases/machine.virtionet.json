@@ -651,6 +651,230 @@
       }
     },
     {
+      "case_id": "machine.virtionet.hotplug",
+      "behavior": "a virtio network card put in slot 6 of a machine booted without one, through QMP's device_add, is announced by the firmware's GPE method with a Notify of the slot, as Linux's acpiphp takes it: the kernel lists the function, gives its BARs addresses in the host bridge's windows and binds it as eth0; vnetprobe sets up the new interface and passes its rows; QMP's device_del has the kernel let go of the card and run the slot's _EJ0, after which QEMU has nothing in the slot, and the card put in again comes up again",
+      "units": [
+        "virtionet",
+        "vnetprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "gateway": "10.0.2.2"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "virtionet_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the test image, with no network card, to the debug shell"
+        },
+        {
+          "step_id": "log",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "read the boot log for the hot plug slots"
+        },
+        {
+          "step_id": "vnetprobe",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "add a user network with QMP's netdev_add, run vnetprobe plugged=1 at the debug shell, put a virtio-net-pci card on that network in slot 6 with QMP's device_add once it asks and wait for the kernel to list and bind it, take the card out with QMP's device_del once it asks, wait for the kernel to eject it and read QEMU's query-pci, put the card in again once it asks, and take the probe's report from the console"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "slots",
+          "checks": "the boot log has the host bridge's 30 hot plug slots on bus 0 taken, every slot but the host bridge's and the PIIX's, `pci: hotplug: 30 slots on bus 0`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "plug",
+          "checks": "after QMP's device_add of a virtio-net-pci card in slot 6 the kernel logs the function added, `pci: hotplug: added: 00:06.0 1af4:`, and the driver binds it as eth0, `virtio_net: bound: virtio0: eth0`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "plugged",
+          "checks": "the hot plugged card's interface is down, as Linux leaves a new interface, and is set up, given 10.0.2.15/24 and a default route through the gateway, after which its carrier reads 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "link-files",
+          "checks": "the interface's carrier reads 1, and its speed, duplex and mtu read what the device says: -1, unknown and 1500 for a device that gives none, as Linux's files read",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bus",
+          "checks": "the network device of /sys/bus/virtio/devices has a driver link whose last name is virtio_net, and the interface's device link leads to that device below its PCI function, as Linux's does",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ping",
+          "checks": "a ping to the gateway gets a reply",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unbind",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/unbind takes the device off the virtio bus",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-interface",
+          "checks": "the interface goes with the device, as Linux's virtnet_remove unregisters it: /sys/class/net has it no more, SIOCGIFINDEX of its name fails with ENODEV, and a ping to the gateway fails",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bind",
+          "checks": "the function's name written to /sys/bus/pci/drivers/virtio-pci/bind brings the device back with its driver link and a new interface of the same name, the lowest free, with an ifindex that is not the old one's, down, as Linux leaves a new interface, whose device link leads to the device",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configure",
+          "checks": "the new interface set up, given 10.0.2.15/24 and a default route through the gateway with SIOCSIFFLAGS, SIOCSIFADDR, SIOCSIFNETMASK and SIOCADDRT reads a carrier of 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ping-again",
+          "checks": "a ping to the gateway gets a reply over the device bound again",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gone",
+          "checks": "after the card is taken out, the interface is gone from /sys/class/net and SIOCGIFINDEX of its name fails with ENODEV",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "back",
+          "checks": "the interface of the card put in again is down, is set up, and gets a reply to a ping to the gateway",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unplug",
+          "checks": "after QMP's device_del the driver logs the interface removed, `virtio_net: removed: virtio0: eth0`, the kernel logs the slot ejected after its _EJ0, `pci: hotplug: ejected: slot 6`, and QEMU's query-pci then has no device in slot 6",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "replug",
+          "checks": "the card put in slot 6 again with QMP's device_add is listed and bound as eth0 again",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 360000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 360000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "virtionet_scenario",
+          "node": "tests/cases/machine/virtionet_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "it tests the driver of QEMU's virtio network device, which the Lenovo does not have; the Lenovo's own card is checked by the release's metal_accept.sh"
+      }
+    },
+    {
       "case_id": "machine.virtionet.plain",
       "behavior": "a virtio network device without mergeable receive buffers, the event index and the control queue becomes eth0 with none of them taken and passes vnetprobe's rows",
       "units": [
