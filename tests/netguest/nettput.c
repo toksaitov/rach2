@@ -3,30 +3,34 @@
  * Rach2, Linux and macOS, whose tests end at a count of bytes, exchanges or
  * attempts, never at a time. It speaks IPv4 only and takes dotted addresses.
  *
- *   nettput -s [-p PORT]
+ *   nettput -s [-b ADDR] [-p PORT]
  *   nettput -c HOST [-p PORT] [-n COUNT] [-l LEN] send|recv|rr|crr
  *   nettput -c HOST [-p PORT] [-n ATTEMPTS] wait
  *
- * The server listens on PORT (5201) of every address, prints `nettput:
- * serving on PORT` on standard output once it listens, and serves one
- * client at a time until it is killed. The client runs one test:
+ * The server listens on PORT (5201) of ADDR, every address unless -b names
+ * one, prints `nettput: serving on PORT` on standard output once it
+ * listens, and serves each client in a process of its own until it is
+ * killed; a client's process ends when its test does or when the server
+ * has ended. The client runs one test:
  *
  *   send  the client writes COUNT bytes, LEN (65536) at a time, and shuts
  *         its side down; the server counts what arrived and answers with
  *         the count, which must be COUNT.
  *   recv  the server writes COUNT bytes, LEN at a time, and closes; the
- *         client counts what arrived, which must be COUNT.
- *   rr    COUNT exchanges of a 1-byte request and a 1-byte answer on one
- *         connection with TCP_NODELAY.
+ *         client counts what arrived up to the end of the stream, which
+ *         must be COUNT.
+ *   rr    COUNT exchanges of a 1-byte request and its echo on one
+ *         connection with TCP_NODELAY, each request the exchange's number
+ *         modulo 256.
  *   crr   COUNT transactions, each a connection of its own: connect, a
- *         1-byte request, a 1-byte answer and the server's close, so that
- *         the client's ports do not wait in TIME_WAIT.
+ *         1-byte request, its echo and the server's close, so that the
+ *         client's ports do not wait in TIME_WAIT.
  *   wait  how many attempts the path to the server takes to answer: an
- *         attempt is a connect that does not block, bounded at 200 ms, and
- *         on a connection one crr transaction, bounded at a second; a
- *         refused, unreachable or silent attempt is counted and the next
- *         starts 50 ms after it began, up to ATTEMPTS (2400). The bounds
- *         pace the attempts and judge nothing.
+ *         attempt is a connect that does not block, given 200 ms to
+ *         complete, and on a connection one crr transaction; a refused,
+ *         unreachable or unanswered connect is counted and the next starts
+ *         50 ms after it began, up to ATTEMPTS (2400). The 200 ms paces the
+ *         attempts and judges nothing.
  *
  * COUNT is 8388608 for send and recv and 1000 for rr and crr. A connection
  * begins with HEADER bytes from the client, `nettput 2 MODE COUNT LEN`
@@ -41,10 +45,11 @@
  *
  * the first for send and recv, the second for rr and crr. `seconds` is the
  * client's monotonic clock over the test, for the record alone. The status
- * is 0 when the test reached its count, 1 when it did not, with the reason
- * on standard error as `nettput: detail`, and 2 for a usage error. Either
- * side gives up on a peer that makes no progress for STALL_MS, so that a
- * path that dies in a test ends it.
+ * is 0 when the test reached its count with every answer as sent and the
+ * stream's end where the test puts it, 1 when it did not, with the reason on
+ * standard error as `nettput: detail`, and 2 for a usage error. No side
+ * waits for its peer against a clock: a path that dies in a test leaves the
+ * client waiting until its caller ends it.
  *
  * Building: `cc -O2 -o nettput nettput.c`, with `-static` for Rach2.
  */
@@ -61,6 +66,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -68,10 +74,8 @@
 #define PORT            5201       /* the default port */
 #define LEN_MAX         (1u << 20) /* the longest write a test asks for */
 #define COUNT_MAX       4294967295ul
-#define STALL_MS        15000 /* a peer silent this long is given up */
-#define WAIT_EVERY_MS   50    /* `wait`: from one attempt's start to the next's */
-#define WAIT_CONNECT_MS 200   /* `wait`: the bound of an attempt's connect */
-#define WAIT_ANSWER_MS  1000  /* `wait`: the bound of its answer */
+#define WAIT_EVERY_MS   50  /* `wait`: from one attempt's start to the next's */
+#define WAIT_CONNECT_MS 200 /* `wait`: the bound of an attempt's connect */
 
 enum mode { MODE_SEND, MODE_RECV, MODE_RR, MODE_CRR, MODE_WAIT, MODE_NONE };
 
@@ -105,32 +109,44 @@ static enum mode mode_of(const char *name)
     return MODE_NONE;
 }
 
-/** Wait until FD is ready for EVENTS for at most MS milliseconds: 1, or 0
- * with errno set, ETIMEDOUT when the time passed. */
+/* In a server's process for one client, the read end of a pipe whose write
+ * end only the server holds, so that it reads as ended once the server has;
+ * -1 elsewhere. */
+static int server_alive = -1;
+
+/** Wait until FD is ready for EVENTS, for at most MS milliseconds, or with
+ * no bound when MS is -1: 1, or 0 with errno set, ETIMEDOUT when the time
+ * passed. A server's process for one client exits once the server has. */
 static int ready_in(int fd, short events, int ms)
 {
-    struct pollfd p;
+    struct pollfd p[2];
     int r;
 
-    p.fd = fd;
-    p.events = events;
-    p.revents = 0;
+    p[0].fd = fd;
+    p[0].events = events;
+    p[0].revents = 0;
+    p[1].fd = server_alive;
+    p[1].events = POLLIN;
+    p[1].revents = 0;
     do {
-        r = poll(&p, 1, ms);
+        r = poll(p, server_alive >= 0 ? 2 : 1, ms);
     } while (r < 0 && errno == EINTR);
+    if (r > 0 && server_alive >= 0 && p[1].revents != 0) {
+        _exit(0);
+    }
     if (r == 0) {
         errno = ETIMEDOUT;
     }
     return r > 0;
 }
 
-/** Read up to LEN bytes from FD once it is readable within STALL_MS: the
- * count, 0 at the end of the stream, or -1 with errno set. */
+/** Read up to LEN bytes from FD once it is readable: the count, 0 at the
+ * end of the stream, or -1 with errno set. */
 static ssize_t take(int fd, void *buf, size_t len)
 {
     ssize_t n;
 
-    if (!ready_in(fd, POLLIN, STALL_MS)) {
+    if (!ready_in(fd, POLLIN, -1)) {
         return -1;
     }
     do {
@@ -159,20 +175,21 @@ static int take_all(int fd, void *buf, size_t len)
     return 0;
 }
 
-/** Write LEN bytes, each part once FD is writable within STALL_MS: 0, or -1
- * with errno set. */
+/** Write LEN bytes, each part once FD is writable: 0, or -1 with errno set.
+ * A blocking FD sends no more than what one poll found room for at a time,
+ * which MSG_DONTWAIT asks of the kernel. */
 static int give_all(int fd, const void *buf, size_t len)
 {
     const char *p = buf;
     ssize_t n;
 
     while (len > 0) {
-        if (!ready_in(fd, POLLOUT, STALL_MS)) {
+        if (!ready_in(fd, POLLOUT, -1)) {
             return -1;
         }
-        n = send(fd, p, len, 0);
+        n = send(fd, p, len, MSG_DONTWAIT);
         if (n < 0) {
-            if (errno == EINTR || errno == EAGAIN) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue;
             }
             return -1;
@@ -279,29 +296,47 @@ static void serve(int fd, const char *peer, const struct test *t, char *buf)
     }
 }
 
-/** Listen on PORT and serve one client at a time, for ever: 1 when the
- * socket cannot be made. */
-static int server(unsigned port)
+/** Serve the client on the accepted connection FD from FROM, in the
+ * process of its own that `server` made, and exit. */
+static void serve_client(int fd, const struct sockaddr_in *from)
+{
+    char header[HEADER + 1], peer[INET_ADDRSTRLEN];
+    struct test t;
+    char *buf = malloc(LEN_MAX);
+
+    inet_ntop(AF_INET, &from->sin_addr, peer, sizeof(peer));
+    memset(header, 0, sizeof(header));
+    if (buf == NULL) {
+        complain("serve");
+    } else if (take_all(fd, header, HEADER) < 0 || header_of(header, &t) < 0) {
+        fprintf(stderr, "nettput: %s sent no test\n", peer);
+    } else {
+        serve(fd, peer, &t, buf);
+    }
+    close(fd);
+    _exit(0);
+}
+
+/** Listen on PORT of BIND and serve each client in a process of its own,
+ * for ever: 1 when the socket cannot be made. */
+static int server(struct in_addr bind_addr, unsigned port)
 {
     struct sockaddr_in addr, from;
     socklen_t fromlen;
-    char header[HEADER + 1], peer[INET_ADDRSTRLEN];
-    unsigned long crr = 0;
-    struct test t;
-    char *buf;
-    int s, fd, one = 1;
+    int s, fd, life[2], one = 1;
+    pid_t pid;
 
-    buf = malloc(LEN_MAX);
     s = socket(AF_INET, SOCK_STREAM, 0);
-    if (buf == NULL || s < 0) {
+    if (s < 0 || pipe(life) < 0) {
         complain("socket");
         return 1;
     }
+    signal(SIGCHLD, SIG_IGN); /* the clients' processes are reaped unasked */
     (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr = bind_addr;
     if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(s, 64) < 0) {
         complain("bind");
         return 1;
@@ -317,15 +352,15 @@ static int server(unsigned port)
             }
             continue;
         }
-        inet_ntop(AF_INET, &from.sin_addr, peer, sizeof(peer));
-        memset(header, 0, sizeof(header));
-        if (take_all(fd, header, HEADER) < 0 || header_of(header, &t) < 0) {
-            fprintf(stderr, "nettput: %s sent no test\n", peer);
-        } else {
-            serve(fd, peer, &t, buf);
-            if (t.mode == MODE_CRR && ++crr % 100 == 0) {
-                fprintf(stderr, "nettput: served: crr with %s count=%lu\n", peer, crr);
-            }
+        pid = fork();
+        if (pid == 0) {
+            close(s);
+            close(life[1]);
+            server_alive = life[0];
+            serve_client(fd, &from);
+        }
+        if (pid < 0) {
+            complain("fork");
         }
         close(fd);
     }
@@ -346,7 +381,8 @@ static int dial(const struct sockaddr_in *addr)
     return fd;
 }
 
-/** One crr transaction on the connected FD after HEADER: 0, or -1. */
+/** One crr transaction on the connected FD after HEADER: the request, its
+ * echo and the end of the stream; 0, or -1. */
 static int transact(int fd, const char *header)
 {
     char c = 'q';
@@ -355,15 +391,18 @@ static int transact(int fd, const char *header)
     if (give_all(fd, header, HEADER) < 0 || give_all(fd, &c, 1) < 0 || take_all(fd, &c, 1) < 0) {
         return -1;
     }
+    if (c != 'q') {
+        errno = EPROTO;
+        return -1;
+    }
     return take(fd, &c, 1) == 0 ? 0 : -1;
 }
 
-/** One `wait` attempt at ADDR, bounded as the header comment says: 0 when
+/** One `wait` attempt at ADDR, paced as the header comment says: 0 when
  * the server answered, -1 otherwise. */
 static int attempt(const struct sockaddr_in *addr, const char *header)
 {
     socklen_t len = sizeof(int);
-    char c = 'q';
     int fd, err = 0, ok = -1;
 
     fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -377,11 +416,7 @@ static int attempt(const struct sockaddr_in *addr, const char *header)
     }
     if (ready_in(fd, POLLOUT, WAIT_CONNECT_MS) &&
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0) {
-        nodelay(fd);
-        if (send(fd, header, HEADER, 0) == HEADER && send(fd, &c, 1, 0) == 1 &&
-            ready_in(fd, POLLIN, WAIT_ANSWER_MS) && recv(fd, &c, 1, 0) == 1) {
-            ok = 0;
-        }
+        ok = transact(fd, header);
     }
     close(fd);
     return ok;
@@ -431,17 +466,111 @@ static void result(enum mode mode, unsigned long long value, uint64_t start)
            mode == MODE_SEND || mode == MODE_RECV ? "bytes" : "count", value, seconds);
 }
 
+/** The client's `send` on the connected FD: COUNT bytes from BUF, LEN at a
+ * time, then the server's count into *TOTAL; 1 when the count was read as a
+ * number, 0 otherwise. */
+static int send_test(int fd, char *buf, unsigned long count, unsigned len,
+                     unsigned long long *total)
+{
+    char answer[HEADER + 1], *end;
+    unsigned long long left;
+    size_t part;
+
+    memset(buf, 's', len);
+    for (left = count; left > 0; left -= part) {
+        part = left < len ? (size_t)left : len;
+        if (give_all(fd, buf, part) < 0) {
+            complain("send");
+            return 0;
+        }
+    }
+    shutdown(fd, SHUT_WR);
+    memset(answer, 0, sizeof(answer));
+    if (take_all(fd, answer, HEADER) < 0) {
+        complain("send: the server's count");
+        return 0;
+    }
+    errno = 0;
+    *total = strtoull(answer, &end, 10);
+    if (errno != 0 || end == answer || *end != '\0') {
+        fprintf(stderr, "nettput: send: the server's count is no number\n");
+        return 0;
+    }
+    return 1;
+}
+
+/** The client's `recv` on the connected FD into BUF, LEN at a time, the
+ * bytes up to the stream's end counted in *TOTAL: 1 when the stream ended,
+ * 0 at an error. */
+static int recv_test(int fd, char *buf, unsigned len, unsigned long long *total)
+{
+    ssize_t got;
+
+    while ((got = take(fd, buf, len)) > 0) {
+        *total += (unsigned long long)got;
+    }
+    if (got < 0) {
+        complain("recv");
+        return 0;
+    }
+    return 1;
+}
+
+/** The client's `rr` on the connected FD: up to COUNT exchanges, each
+ * request the exchange's number modulo 256 and its echo; the exchanges
+ * answered as sent. */
+static unsigned long long rr_test(int fd, unsigned long count)
+{
+    unsigned long n;
+    char c;
+
+    nodelay(fd);
+    for (n = 0; n < count; n++) {
+        c = (char)(n & 0xFFu);
+        if (give_all(fd, &c, 1) < 0 || take_all(fd, &c, 1) < 0) {
+            complain("rr");
+            break;
+        }
+        if (c != (char)(n & 0xFFu)) {
+            fprintf(stderr, "nettput: rr: exchange %lu was answered with another byte\n", n);
+            break;
+        }
+    }
+    return n;
+}
+
+/** The client's `crr` against ADDR with HEADER: COUNT transactions, each on
+ * a connection of its own, begun at START; the exit status. */
+static int crr_test(const struct sockaddr_in *addr, const char *header, unsigned long count,
+                    uint64_t start)
+{
+    unsigned long n;
+    int fd;
+
+    for (n = 0; n < count; n++) {
+        fd = dial(addr);
+        if (fd < 0 || transact(fd, header) < 0) {
+            complain("crr");
+            if (fd >= 0) {
+                close(fd);
+            }
+            result(MODE_CRR, n, start);
+            return 1;
+        }
+        close(fd);
+    }
+    result(MODE_CRR, n, start);
+    return 0;
+}
+
 /** Run the client's test of MODE against ADDR: the exit status. */
 static int client(const struct sockaddr_in *addr, enum mode mode, unsigned long count, unsigned len)
 {
-    unsigned long long total = 0, left;
-    char header[HEADER], answer[HEADER + 1];
-    unsigned long n;
+    unsigned long long total = 0;
+    char header[HEADER];
     uint64_t start;
-    ssize_t got;
-    size_t part;
-    char *buf, c = 'q';
-    int fd;
+    char *buf;
+    int fd, ok = 1;
 
     if (mode == MODE_WAIT) {
         return wait_for(addr, count);
@@ -450,20 +579,7 @@ static int client(const struct sockaddr_in *addr, enum mode mode, unsigned long 
     snprintf(header, sizeof(header), "nettput 2 %s %lu %u", mode_names[mode], count, len);
     start = now_us();
     if (mode == MODE_CRR) {
-        for (n = 0; n < count; n++) {
-            fd = dial(addr);
-            if (fd < 0 || transact(fd, header) < 0) {
-                complain("crr");
-                if (fd >= 0) {
-                    close(fd);
-                }
-                result(mode, n, start);
-                return 1;
-            }
-            close(fd);
-        }
-        result(mode, n, start);
-        return 0;
+        return crr_test(addr, header, count, start);
     }
     buf = malloc(len);
     fd = dial(addr);
@@ -471,44 +587,12 @@ static int client(const struct sockaddr_in *addr, enum mode mode, unsigned long 
         complain("connect");
         return 1;
     }
-    switch (mode) {
-    case MODE_SEND:
-        memset(buf, 's', len);
-        for (left = count; left > 0; left -= part) {
-            part = left < len ? (size_t)left : len;
-            if (give_all(fd, buf, part) < 0) {
-                complain("send");
-                return 1;
-            }
-        }
-        shutdown(fd, SHUT_WR);
-        memset(answer, 0, sizeof(answer));
-        if (take_all(fd, answer, HEADER) < 0) {
-            complain("send: the server's count");
-            return 1;
-        }
-        total = strtoull(answer, NULL, 10);
-        break;
-    case MODE_RECV:
-        while ((got = take(fd, buf, len)) > 0) {
-            total += (unsigned long long)got;
-        }
-        if (got < 0) {
-            complain("recv");
-        }
-        break;
-    case MODE_RR:
-        nodelay(fd);
-        for (n = 0; n < count; n++) {
-            if (give_all(fd, &c, 1) < 0 || take_all(fd, &c, 1) < 0) {
-                complain("rr");
-                break;
-            }
-        }
-        total = n;
-        break;
-    default:
-        break;
+    if (mode == MODE_SEND) {
+        ok = send_test(fd, buf, count, len, &total);
+    } else if (mode == MODE_RECV) {
+        ok = recv_test(fd, buf, len, &total);
+    } else {
+        total = rr_test(fd, count);
     }
     close(fd);
     result(mode, total, start);
@@ -516,13 +600,13 @@ static int client(const struct sockaddr_in *addr, enum mode mode, unsigned long 
         fprintf(stderr, "nettput: %s: %llu of %lu\n", mode_names[mode], total, count);
         return 1;
     }
-    return 0;
+    return ok ? 0 : 1;
 }
 
 /** Print the usage and exit with status 2. */
 static void usage(void)
 {
-    fprintf(stderr, "usage: nettput -s [-p PORT]\n"
+    fprintf(stderr, "usage: nettput -s [-b ADDR] [-p PORT]\n"
                     "       nettput -c HOST [-p PORT] [-n COUNT] [-l LEN] send|recv|rr|crr|wait\n");
     exit(2);
 }
@@ -545,17 +629,20 @@ int main(int argc, char **argv)
 {
     static const unsigned long counts[] = {8388608ul, 8388608ul, 1000ul, 1000ul, 2400ul};
     struct sockaddr_in addr;
-    const char *host = NULL;
+    const char *host = NULL, *bind_text = NULL;
     unsigned long count = 0;
     unsigned port = PORT, len = 65536;
     enum mode mode;
     int serving = 0, o;
 
     signal(SIGPIPE, SIG_IGN);
-    while ((o = getopt(argc, argv, "sc:p:n:l:")) != -1) {
+    while ((o = getopt(argc, argv, "sb:c:p:n:l:")) != -1) {
         switch (o) {
         case 's':
             serving = 1;
+            break;
+        case 'b':
+            bind_text = optarg;
             break;
         case 'c':
             host = optarg;
@@ -573,20 +660,22 @@ int main(int argc, char **argv)
             usage();
         }
     }
+    memset(&addr, 0, sizeof(addr));
     if (serving) {
-        if (host != NULL || optind != argc) {
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (host != NULL || optind != argc ||
+            (bind_text != NULL && inet_pton(AF_INET, bind_text, &addr.sin_addr) != 1)) {
             usage();
         }
-        return server(port);
+        return server(addr.sin_addr, port);
     }
-    if (host == NULL || optind != argc - 1) {
+    if (host == NULL || bind_text != NULL || optind != argc - 1) {
         usage();
     }
     mode = mode_of(argv[optind]);
     if (mode == MODE_NONE) {
         usage();
     }
-    memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
