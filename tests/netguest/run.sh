@@ -112,8 +112,11 @@ case $port$deadline in '' | *[!0-9]*) usage ;; esac
 case $accel in kvm | tcg) ;; *) usage ;; esac
 [ -n "$bdf" ] || [ -n "$iface" ] || usage
 case $deny in *[!0-9]*) usage ;; esac
-# The denied port is not PORT, which the guest must let through.
-[ "$deny" != "$port" ] || usage
+# The denied port is not PORT, which the guest must let through, compared as
+# numbers; without -z the guests deny 9, or 10 when PORT is 9.
+[ -z "$deny" ] || [ "$deny" -ne "$port" ] || usage
+guest_deny=${deny:-9}
+[ "$guest_deny" -ne "$port" ] || guest_deny=10
 for c in "$@"; do
     case $c in
         debian | freebsd) [ -n "$deny" ] || usage ;;
@@ -686,7 +689,7 @@ guest()
         *) set -- "$@" -- sh "$here/traffic.sh" transfers ;;
     esac
     run sh "$here/netguest.sh" -c "$bdf" -n "$iface" -i "$here/$system.qcow2" -a "$accel" \
-        -p "$peer" -P "$port" -Z "${deny:-9}" -N "$nettput" -o "$out/$name" -d "$deadline" "$@" > "$log" 2>&1
+        -p "$peer" -P "$port" -Z "$guest_deny" -N "$nettput" -o "$out/$name" -d "$deadline" "$@" > "$log" 2>&1
     cat "$log"
     why=''
     tail -n 1 "$log" | grep -q '^netguest: result: pass$' ||
@@ -711,7 +714,7 @@ guest()
             [ -n "$why" ] || [ "$denied" -ge 10 ] || why="the guest counted $denied denied packets, fewer than the 10 attempts"
             ;;
         *-vhost)
-            [ -n "$why" ] || [ "$denied" = 0 ] || why="the guest counted $denied packets to port ${deny:-9} with no filter"
+            [ -n "$why" ] || [ "$denied" = 0 ] || why="the guest counted $denied packets to port $guest_deny with no filter"
             line=$(grep '^netguest: vhost: ' "$log" | tail -n 1)
             to=$(echo "$line" | sed -n 's/.*to_guest=\([0-9]*\).*/\1/p')
             from=$(echo "$line" | sed -n 's/.*from_guest=\([0-9]*\).*/\1/p')

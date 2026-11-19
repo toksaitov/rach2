@@ -124,7 +124,7 @@ case $accel in
 esac
 case $filter in 0 | 1) ;; *) usage ;; esac
 # The denied port is not PORT, which the guest must let through.
-[ -z "$peer" ] || [ "$deny" != "$port" ] || usage
+[ -z "$peer" ] || [ "$deny" -ne "$port" ] || usage
 netdev=,vnet_hdr=off,vhost=off
 [ "$vhost" = 0 ] || netdev=,vnet_hdr=off,vhost=on
 
