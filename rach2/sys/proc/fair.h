@@ -130,7 +130,8 @@ struct sched_avg {
 
 /* The schedstats of an entity, Linux's struct sched_statistics: kept while
  * `fair_schedstats` is set, and read by /proc/PID/sched. A `*_start` is the
- * task clock at which the state began, 0 when not in it. */
+ * monotonic clock at which the state began, 0 when not in it; a migrating
+ * thread's `wait_start` holds the wait so far until its enqueue. */
 struct sched_statistics {
     uint64_t wait_start;
     uint64_t wait_max;
@@ -185,7 +186,8 @@ struct sched_statistics {
  * `depth` counts the levels above it. `cfs_rq` is the queue it is on or
  * goes on; `my_q` the queue a group entity owns, NULL for a thread.
  * `runnable_weight` is a group entity's count of runnable threads below,
- * cached for PELT.
+ * cached for PELT. `tasks_prev` and `tasks_next` link a queued thread on
+ * its processor's `cfs_tasks`.
  */
 struct sched_entity {
     struct load_weight load;
@@ -209,6 +211,7 @@ struct sched_entity {
     struct cfs_rq *cfs_rq;
     struct cfs_rq *my_q;
     unsigned long runnable_weight;
+    struct sched_entity *tasks_prev, *tasks_next;
     struct sched_avg avg;
     struct sched_statistics stats;
 };
@@ -305,6 +308,8 @@ struct task_group {
  * time) at the caller's last `fair_clock`, which the hooks charge and place
  * by. `curr` is the fair thread `fair_set_next` made current here, NULL
  * when none is. `leaf_head` is the first queue on the processor's leaf list.
+ * `cfs_tasks` lists the threads queued here, the most recently picked
+ * first, which the load balancer walks (Linux's rq->cfs_tasks).
  * `resched` is set when the class asks the processor to select again, and
  * read and cleared by `fair_resched`. `charged_ns` is the task-clock time
  * charged to fair threads here, for the fair server.
@@ -315,6 +320,7 @@ struct fair_rq {
     uint64_t clock_task;
     struct process *curr;
     struct cfs_rq *leaf_head;
+    struct sched_entity *cfs_tasks;
     uint64_t charged_ns;
     int resched;
     int cpu;
@@ -360,8 +366,10 @@ extern const uint32_t sched_prio_to_wmult[40];
  * suspend's hold. MOVE: it leaves for another queue, another class or a
  * change of group, and comes back with FAIR_ENQ_RESTORE or
  * FAIR_ENQ_MIGRATED, keeping its lag and its deadline relative to its
- * virtual runtime. A FORCED or MOVE dequeue of a delayed thread first
- * finishes the delayed dequeue, so the thread leaves the queue whole.
+ * virtual runtime; its load average leaves the queue's sums and joins the
+ * next queue's at that enqueue. A FORCED or MOVE dequeue of a delayed
+ * thread finishes the delayed dequeue instead, so the thread leaves the
+ * queue whole.
  */
 #define FAIR_DEQ_SLEEP  1
 #define FAIR_DEQ_FORCED 2
@@ -398,8 +406,8 @@ extern const uint32_t sched_prio_to_wmult[40];
  * (update_cfs_group), which calls `fair_reweight_entity`.
  *
  * `blocked`: a delayed thread's dequeue finished outside `fair_dequeue`,
- * in `fair_pick` or `fair_migrate`, so the thread is off every fair queue;
- * the scheduler stops counting it as queued.
+ * in `fair_pick`, `fair_migrate` or `fair_finish_delayed`, so the thread
+ * is off every fair queue; the scheduler stops counting it as queued.
  */
 struct fair_hooks {
     void (*load_update)(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags);
@@ -439,9 +447,11 @@ void fair_enqueue(struct process *p, int why);
 int fair_dequeue(struct process *p, int why);
 
 /** The thread EEVDF picks on processor `cpu`, down the hierarchy, or NULL
- * for an empty queue. A delayed thread it meets has its dequeue finished
- * and `fair_hooks.blocked` called, and the pick retries. Changes nothing
- * else: the caller follows with `fair_put_prev` and `fair_set_next`. */
+ * for an empty queue. It charges the current entities first. A delayed
+ * thread it meets has its dequeue finished and `fair_hooks.blocked`
+ * called, and the pick retries. The caller follows with `fair_put_prev` of
+ * the current fair thread and `fair_set_next` of the pick, and calls
+ * neither when the pick is the current thread, which keeps its slice. */
 struct process *fair_pick(int cpu);
 
 /** Make `p`, picked on its processor, the current entity at every level,
