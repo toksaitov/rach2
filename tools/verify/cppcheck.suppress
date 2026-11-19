@@ -46,6 +46,10 @@ duplicateExpression:*sys/lib/krandom.c
 # processors' counts off one cache line; nothing reads the array.
 unusedStructMember:*sys/lib/rcu.c
 
+# spinlock.c's `struct qcpu` pads each processor's places and depth to lines
+# of their own, and `union qslot` a place to 16 bytes; nothing reads the pads.
+unusedStructMember:*sys/lib/spinlock.c
+
 # tap.c's `struct tap_ifreq_shape` mirrors Linux's `struct ifreq` only for its
 # size, the bytes TUNSETIFF and TUNGETIFF copy; nothing reads its members.
 unusedStructMember:*sys/network/driver/tap.c
