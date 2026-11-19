@@ -13,6 +13,10 @@
  * the guest's receive ring, in the sender's context, and a frame the guest
  * puts on its transmit ring is taken by the kernel thread `vhost-net`, woken
  * by the kick, and given to the stack as a write of the tap would give it.
+ * The guest's memory is reached through pins that follow QEMU's address
+ * space (mm/pin.h's PIN_FOLLOW): a page the device does not hold, at its
+ * first use or after a change of it, makes the frame wait while the thread
+ * brings the page in.
  *
  * The ioctls are Linux's (linux/vhost.h), with the split ring alone, no
  * indirect descriptors, no event index, no dirty log and no IOTLB. The tap
@@ -21,21 +25,23 @@
  */
 
 /* The ioctls, Linux's numbers (linux/vhost.h). */
-#define VHOST_GET_FEATURES         0x8008af00u
-#define VHOST_SET_FEATURES         0x4008af00u
-#define VHOST_SET_OWNER            0x0000af01u
-#define VHOST_RESET_OWNER          0x0000af02u
-#define VHOST_SET_MEM_TABLE        0x4008af03u
-#define VHOST_SET_VRING_NUM        0x4008af10u
-#define VHOST_SET_VRING_ADDR       0x4028af11u
-#define VHOST_SET_VRING_BASE       0x4008af12u
-#define VHOST_GET_VRING_BASE       0xc008af12u
-#define VHOST_SET_VRING_KICK       0x4008af20u
-#define VHOST_SET_VRING_CALL       0x4008af21u
-#define VHOST_SET_VRING_ERR        0x4008af22u
-#define VHOST_SET_BACKEND_FEATURES 0x4008af25u
-#define VHOST_GET_BACKEND_FEATURES 0x8008af26u
-#define VHOST_NET_SET_BACKEND      0x4008af30u
+#define VHOST_GET_FEATURES               0x8008af00u
+#define VHOST_SET_FEATURES               0x4008af00u
+#define VHOST_SET_OWNER                  0x0000af01u
+#define VHOST_RESET_OWNER                0x0000af02u
+#define VHOST_SET_MEM_TABLE              0x4008af03u
+#define VHOST_SET_VRING_NUM              0x4008af10u
+#define VHOST_SET_VRING_ADDR             0x4028af11u
+#define VHOST_SET_VRING_BASE             0x4008af12u
+#define VHOST_GET_VRING_BASE             0xc008af12u
+#define VHOST_SET_VRING_KICK             0x4008af20u
+#define VHOST_SET_VRING_CALL             0x4008af21u
+#define VHOST_SET_VRING_ERR              0x4008af22u
+#define VHOST_SET_VRING_BUSYLOOP_TIMEOUT 0x4008af23u
+#define VHOST_GET_VRING_BUSYLOOP_TIMEOUT 0x4008af24u /* _IOW, as Linux has it */
+#define VHOST_SET_BACKEND_FEATURES       0x4008af25u
+#define VHOST_GET_BACKEND_FEATURES       0x8008af26u
+#define VHOST_NET_SET_BACKEND            0x4008af30u
 
 /* The features offered: the backend adds and strips the virtio header (bit
  * 27, VHOST_NET_F_VIRTIO_NET_HDR, which the guest sees as

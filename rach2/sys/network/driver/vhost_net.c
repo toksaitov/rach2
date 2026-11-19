@@ -4,9 +4,11 @@
 #include "vhost_net.h"
 #include "tap.h"
 #include "../ethernet/ethernet.h"
+#include "../tcp/tcp.h"
 #include "../../fs/devfs.h"
 #include "../../fs/fd.h"
 #include "../../fs/file.h"
+#include "../../fs/krffs.h"
 #include "../../io/eventfd.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
@@ -21,6 +23,7 @@
 #include "../../proc/sched.h"
 #include "../../proc/smp.h"
 #include "../../proc/wait_queue.h"
+#include "../../syscall_internal.h"
 
 /* The split ring's flags (virtio 1.0 2.6.5, 2.6.6, 2.6.8). */
 #define DESC_NEXT      1u
@@ -40,8 +43,8 @@
 #define VN_UNBIND  (-1) /* VHOST_FILE_UNBIND */
 
 /* One region of the guest's memory, as VHOST_SET_MEM_TABLE gives it, with
- * the pin of its pages; `pin` is NULL for a region that could not be
- * pinned, device memory, which no ring or buffer is in. */
+ * the pin that follows its pages (PIN_FOLLOW), which holds each page the
+ * device has touched until the page changes. */
 struct vn_region {
     uint64_t gpa, size, uaddr;
     struct pin *pin;
@@ -64,6 +67,17 @@ struct vn_vq {
     int broken;          /* the guest gave a bad descriptor */
     volatile int kicked; /* the kick came; the thread looks */
     struct eventfd *kick, *call, *err;
+    /* The kick's descriptor, held as Linux's vhost holds the kick's file, so
+     * that its last close by the program leaves the ring its kick. */
+    fd_entry_t kickfile;
+    int has_kickfile;
+    uint32_t busyloop; /* VHOST_SET_VRING_BUSYLOOP_TIMEOUT's, kept, unused */
+    /* A page the ring met that its region's pin does not hold, which the
+     * thread brings in (`vn_refill`): `want` set, the region and the page
+     * of its pin. Under `lock` for the receive ring, the big lock for the
+     * transmit ring. */
+    int want;
+    uint32_t want_reg, want_page;
 };
 
 /*
@@ -72,7 +86,9 @@ struct vn_vq {
  * big lock, so `lock` is over everything it reads: the regions, `dead`,
  * `hdr`, `features`, `tap` and the receive ring. A change of those is made
  * under the big lock and `lock`; the transmit ring and the thread, under
- * the big lock alone, read them without `lock`.
+ * the big lock alone, read them without `lock`. A pin's change of a page
+ * runs under the big lock and takes `lock` (`vn_forget`), so it waits for
+ * both.
  */
 struct vnet {
     struct tap_backend tb; /* first: the tap's */
@@ -85,10 +101,17 @@ struct vnet {
     uint32_t nreg;
     volatile uint32_t last; /* the region the last lookup found */
     struct pin_holder holder;
-    int dead;     /* an unmap took a pin back: no more access */
-    uint32_t gen; /* changes with each table and reset */
+    int dead;           /* an unmap took a pin back: no more access */
+    uint32_t gen;       /* changes with each table and reset */
+    uint32_t refilling; /* the thread's `pin_refill` of a region sleeps */
     struct vn_vq vq[2];
     struct tap *tap;
+    /* The tap's descriptor while `tap` is set, held as Linux's vhost holds
+     * the tap's file, so that its last close by the program leaves the
+     * rings their tap. */
+    fd_entry_t tapfile;
+    int has_tapfile;
+    uint32_t to_guest, from_guest; /* frames moved since the tap came */
     uint8_t txbuf[VN_TXBUF];
 };
 
@@ -97,6 +120,7 @@ static struct vnet *vn_devs;
 static wait_queue_t vn_wq;        /* the thread sleeps here */
 static volatile uint32_t vn_work; /* a kick came since the thread looked */
 static process_t *vn_thread;
+static wait_queue_t vn_idle_wq; /* a table's change waits for a refill */
 
 /** The region that holds `a`, a guest-physical address, or QEMU's with
  * `va`; NULL for none. */
@@ -121,44 +145,82 @@ static struct vn_region *vn_find(struct vnet *n, uint64_t a, int va)
     return 0;
 }
 
+/** Note a kick of `q` for the thread and wake it. */
+static void vn_wake(struct vn_vq *q)
+{
+    q->kicked = 1;
+    vn_work = 1;
+    wq_wake(&vn_wq, 0);
+}
+
+/**
+ * The kernel's map of the page of the guest's memory that holds `a`, by
+ * guest address or QEMU's with `va`, in `*m` with kmap_cpu's flags in
+ * `*fl`, and the bytes of the page from `a` on, at most `len` and no more
+ * than its region has: that count, or -EFAULT for an address in no region
+ * or after the memory went, or -EAGAIN for a page the region's pin does not
+ * hold now, which is noted on `q` for the thread, woken to bring it in.
+ * Any context; does not sleep. The caller unmaps `*m` with kunmap_cpu.
+ */
+static int32_t vn_map(struct vn_vq *q, uint64_t a, int va, uint32_t len, uint8_t **m, uint32_t *fl)
+{
+    struct vnet *n = q->n;
+    struct vn_region *r = vn_find(n, a, va);
+    uint64_t off, ua;
+    uintptr_t phys;
+    uint32_t chunk, page;
+
+    if (!r || !r->pin || n->dead || !pin_live(r->pin)) {
+        return -EFAULT;
+    }
+    off = a - (va ? r->uaddr : r->gpa);
+    ua = r->uaddr + off;
+    page = (uint32_t)((ua >> 12) - (r->uaddr >> 12));
+    phys = pin_phys(r->pin, page);
+    if (phys == 0) {
+        if (!q->want) {
+            q->want = 1;
+            q->want_reg = (uint32_t)(r - n->reg);
+            q->want_page = page;
+        }
+        vn_wake(q);
+        return -EAGAIN;
+    }
+    chunk = 4096u - (uint32_t)(ua & 4095u);
+    if (chunk > len) {
+        chunk = len;
+    }
+    if ((uint64_t)chunk > r->size - off) {
+        chunk = (uint32_t)(r->size - off);
+    }
+    *m = (uint8_t *)kmap_cpu(phys, fl) + (uint32_t)(ua & 4095u);
+    return (int32_t)chunk;
+}
+
 /** Copy `len` bytes between the guest's memory at `a`, by guest address or
  * QEMU's with `va`, and `out`, or from `in` into the guest when `in` is not
- * NULL: 0, or -EFAULT when a byte is in no pinned region. Any context; does
- * not sleep. */
-static int vn_mem(struct vnet *n, uint64_t a, int va, const void *in, void *out, uint32_t len)
+ * NULL, for the ring `q`: 0, or vn_map's -EFAULT or -EAGAIN. Any context;
+ * does not sleep. */
+static int vn_mem(struct vn_vq *q, uint64_t a, int va, const void *in, void *out, uint32_t len)
 {
     const uint8_t *src = (const uint8_t *)in;
     uint8_t *dst = (uint8_t *)out;
 
     while (len != 0) {
-        struct vn_region *r = vn_find(n, a, va);
-        uint64_t off, ua;
-        uintptr_t phys;
         uint32_t chunk, fl;
+        int32_t got;
         uint8_t *m;
 
-        if (!r || !r->pin || n->dead) {
-            return -EFAULT;
+        got = vn_map(q, a, va, len, &m, &fl);
+        if (got < 0) {
+            return got;
         }
-        off = a - (va ? r->uaddr : r->gpa);
-        ua = r->uaddr + off;
-        phys = pin_phys(r->pin, (uint32_t)((ua >> 12) - (r->uaddr >> 12)));
-        if (phys == 0) {
-            return -EFAULT;
-        }
-        chunk = 4096u - (uint32_t)(ua & 4095u);
-        if (chunk > len) {
-            chunk = len;
-        }
-        if ((uint64_t)chunk > r->size - off) {
-            chunk = (uint32_t)(r->size - off);
-        }
-        m = (uint8_t *)kmap_cpu(phys, &fl);
+        chunk = (uint32_t)got;
         if (src) {
-            k_memcpy(m + (uint32_t)(ua & 4095u), src, chunk);
+            k_memcpy(m, src, chunk);
             src += chunk;
         } else {
-            k_memcpy(dst, m + (uint32_t)(ua & 4095u), chunk);
+            k_memcpy(dst, m, chunk);
             dst += chunk;
         }
         kunmap_cpu(m, fl);
@@ -168,16 +230,48 @@ static int vn_mem(struct vnet *n, uint64_t a, int va, const void *in, void *out,
     return 0;
 }
 
-/** Read the 16-bit word at QEMU's address `va`: 0, or -EFAULT. */
-static int vn_get16(struct vnet *n, uint64_t va, uint16_t *v)
+/**
+ * Read (`out`) or write the 16-bit word of a ring at QEMU's address `va`,
+ * which the rings' alignment keeps even, with one aligned access, so that
+ * a guest that reads or writes an index at once on another processor sees
+ * the old word or the new, never half of each: 0, or vn_map's -EFAULT or
+ * -EAGAIN.
+ */
+static int vn_word(struct vn_vq *q, uint64_t va, uint16_t *out, uint16_t v)
 {
-    return vn_mem(n, va, 1, NULL, v, 2);
+    uint32_t fl;
+    int32_t got;
+    uint8_t *m;
+
+    got = vn_map(q, va, 1, 2, &m, &fl);
+    if (got < 0) {
+        return got;
+    }
+    if (got < 2) {
+        kunmap_cpu(m, fl);
+        return -EFAULT; /* odd, or the region's last byte */
+    }
+    if (out) {
+        *out = *(volatile uint16_t *)(void *)m;
+    } else {
+        *(volatile uint16_t *)(void *)m = v;
+    }
+    kunmap_cpu(m, fl);
+    return 0;
 }
 
-/** Write the 16-bit word at QEMU's address `va`: 0, or -EFAULT. */
-static int vn_put16(struct vnet *n, uint64_t va, uint16_t v)
+/** Read the ring's 16-bit word at QEMU's address `va`: 0, or -EFAULT or
+ * -EAGAIN. */
+static int vn_get16(struct vn_vq *q, uint64_t va, uint16_t *v)
 {
-    return vn_mem(n, va, 1, &v, NULL, 2);
+    return vn_word(q, va, v, 0);
+}
+
+/** Write the ring's 16-bit word at QEMU's address `va`: 0, or -EFAULT or
+ * -EAGAIN. */
+static int vn_put16(struct vn_vq *q, uint64_t va, uint16_t v)
+{
+    return vn_word(q, va, NULL, v);
 }
 
 /** Whether the ring `q` moves frames now. */
@@ -200,79 +294,107 @@ static void vn_break(struct vnet *n, struct vn_vq *q)
     q->broken = 1;
 }
 
-/** Read the used ring's index once after a base was set: 0, or -EFAULT. */
-static int vn_used_init(struct vnet *n, struct vn_vq *q)
+/** Read the used ring's index once after a base was set: 0, or -EFAULT or
+ * -EAGAIN. */
+static int vn_used_init(struct vn_vq *q)
 {
+    int r;
+
     if (q->used_known) {
         return 0;
     }
-    if (vn_get16(n, q->used + 2, &q->used_idx) != 0) {
-        return -EFAULT;
+    r = vn_get16(q, q->used + 2, &q->used_idx);
+    if (r != 0) {
+        return r;
     }
     q->used_known = 1;
     return 0;
 }
 
-/** Ask the guest for no kicks on `q` with `on`, or for kicks again. */
-static void vn_quiet(struct vnet *n, struct vn_vq *q, int on)
+/** Ask the guest for no kicks on `q` with `on`, or for kicks again: 0, or
+ * -EFAULT or -EAGAIN, with the flag as it was. */
+static int vn_quiet(struct vn_vq *q, int on)
 {
+    int r = 0;
+
     if (q->no_notify != on) {
-        (void)vn_put16(n, q->used, on ? (uint16_t)USED_NO_NOTIFY : 0);
-        q->no_notify = on;
+        r = vn_put16(q, q->used, on ? (uint16_t)USED_NO_NOTIFY : 0);
+        if (r == 0) {
+            q->no_notify = on;
+        }
     }
+    return r;
 }
 
 /** Put the chain `head`, of which `len` bytes were written, on the used
- * ring: 0, or -EFAULT. */
-static int vn_used(struct vnet *n, struct vn_vq *q, uint16_t head, uint32_t len)
+ * ring: 0, or -EFAULT or -EAGAIN, with the index as it was. */
+static int vn_used(struct vn_vq *q, uint16_t head, uint32_t len)
 {
     uint32_t elem[2];
+    int r;
 
     elem[0] = head;
     elem[1] = len;
-    if (vn_mem(n, q->used + 4u + 8u * (uint32_t)(q->used_idx % q->num), 1, elem, NULL, 8) != 0) {
-        return -EFAULT;
+    r = vn_mem(q, q->used + 4u + 8u * (uint32_t)(q->used_idx % q->num), 1, elem, NULL, 8);
+    if (r != 0) {
+        return r;
     }
     sched_mb(); /* the entry before the index */
-    q->used_idx++;
-    return vn_put16(n, q->used + 2, q->used_idx);
+    r = vn_put16(q, q->used + 2, (uint16_t)(q->used_idx + 1u));
+    if (r == 0) {
+        q->used_idx++;
+    }
+    return r;
 }
 
 /** Raise the ring's interrupt unless the guest asked for none, or, with
  * VIRTIO_F_NOTIFY_ON_EMPTY, whatever it asked once the available ring is
- * empty, as Linux's vhost_notify without the event index. */
+ * empty, as Linux's vhost_notify without the event index. A flag that
+ * cannot be read now raises it, which costs the guest a look. */
 static void vn_notify(struct vnet *n, struct vn_vq *q)
 {
     uint16_t flags = 0, idx = 0;
+    int r;
 
     sched_mb(); /* the used index, then the guest's flags */
-    if (!q->call || vn_get16(n, q->avail, &flags) != 0) {
+    if (!q->call) {
         return;
     }
-    if ((n->features & VHOST_F_NOTIFY_ON_EMPTY) && vn_get16(n, q->avail + 2, &idx) == 0 &&
+    r = vn_get16(q, q->avail, &flags);
+    if (r == -EFAULT) {
+        return;
+    }
+    if ((n->features & VHOST_F_NOTIFY_ON_EMPTY) && vn_get16(q, q->avail + 2, &idx) == 0 &&
         idx == q->last_avail) {
         flags = 0;
     }
-    if (!(flags & AVAIL_NO_INTR)) {
+    if (r != 0 || !(flags & AVAIL_NO_INTR)) {
         eventfd_signal(q->call);
     }
 }
 
 /** The next chain the guest offers on `q`: 1 with its head in `*head`, 0
  * when the ring is empty, after asking for a kick and looking again, as
- * the guest may have added one in between; -EFAULT. */
-static int vn_next(struct vnet *n, struct vn_vq *q, uint16_t *head)
+ * the guest may have added one in between; -EFAULT, or -EAGAIN with
+ * nothing taken. */
+static int vn_next(struct vn_vq *q, uint16_t *head)
 {
     uint16_t idx;
+    int r;
 
-    if (vn_get16(n, q->avail + 2, &idx) != 0) {
-        return -EFAULT;
+    r = vn_get16(q, q->avail + 2, &idx);
+    if (r != 0) {
+        return r;
     }
     if (idx == q->last_avail) {
-        vn_quiet(n, q, 0);
+        r = vn_quiet(q, 0);
+        if (r != 0) {
+            return r;
+        }
         sched_mb(); /* the flag, then the index */
-        if (vn_get16(n, q->avail + 2, &idx) != 0) {
-            return -EFAULT;
+        r = vn_get16(q, q->avail + 2, &idx);
+        if (r != 0) {
+            return r;
         }
         if (idx == q->last_avail) {
             return 0;
@@ -282,15 +404,16 @@ static int vn_next(struct vnet *n, struct vn_vq *q, uint16_t *head)
         return -EFAULT; /* more offered than the ring holds */
     }
     sched_mb(); /* the index, then the entry */
-    if (vn_get16(n, q->avail + 4u + 2u * (uint32_t)(q->last_avail % q->num), head) != 0) {
-        return -EFAULT;
+    r = vn_get16(q, q->avail + 4u + 2u * (uint32_t)(q->last_avail % q->num), head);
+    if (r != 0) {
+        return r;
     }
     if (*head >= q->num) {
         return -EFAULT;
     }
     q->last_avail++;
     if ((uint16_t)(idx - q->last_avail) != 0) {
-        vn_quiet(n, q, 1);
+        (void)vn_quiet(q, 1);
     }
     return 1;
 }
@@ -302,27 +425,42 @@ struct vn_desc {
     uint16_t flags, next;
 };
 
-/** Read descriptor `i` of `q`: 0, or -EFAULT for one past the table, an
- * indirect one, which the features do not offer, or one not in memory. */
-static int vn_desc(struct vnet *n, struct vn_vq *q, uint32_t i, struct vn_desc *d)
+/** Read descriptor `i` of `q`: 0; -EFAULT for one past the table, an
+ * indirect one, which the features do not offer, or one not in memory;
+ * -EAGAIN. */
+static int vn_desc(struct vn_vq *q, uint32_t i, struct vn_desc *d)
 {
-    if (i >= q->num || vn_mem(n, q->desc + 16u * i, 1, NULL, d, 16) != 0 ||
-        (d->flags & DESC_INDIRECT)) {
+    int r;
+
+    if (i >= q->num) {
         return -EFAULT;
     }
-    return 0;
+    r = vn_mem(q, q->desc + 16u * i, 1, NULL, d, 16);
+    if (r != 0) {
+        return r;
+    }
+    return (d->flags & DESC_INDIRECT) ? -EFAULT : 0;
 }
 
 /** The bytes the guest may write in the chain from `head` of `q`, the
- * receive ring's: 0 with the sum in `*room`, or -EFAULT for a chain that
- * loops, holds a descriptor the device may only read or a bad one. */
-static int vn_room(struct vnet *n, struct vn_vq *q, uint16_t head, uint32_t *room)
+ * receive ring's: 0 with the sum in `*room`; -EFAULT for a chain that
+ * loops, holds a descriptor the device may only read or a bad one;
+ * -EAGAIN. */
+static int vn_room(struct vn_vq *q, uint16_t head, uint32_t *room)
 {
     struct vn_desc d;
     uint32_t i = head, steps = 0, sum = 0;
+    int r;
 
     for (;;) {
-        if (++steps > q->num || vn_desc(n, q, i, &d) != 0 || !(d.flags & DESC_WRITE)) {
+        if (++steps > q->num) {
+            return -EFAULT;
+        }
+        r = vn_desc(q, i, &d);
+        if (r != 0) {
+            return r;
+        }
+        if (!(d.flags & DESC_WRITE)) {
             return -EFAULT;
         }
         sum = d.len >= 0x10000u - sum ? 0x10000u : sum + d.len; /* frames are shorter */
@@ -338,8 +476,9 @@ static int vn_room(struct vnet *n, struct vn_vq *q, uint16_t head, uint32_t *roo
 /**
  * Write the frame of `len` bytes, after the virtio header, into the chain
  * `head` of the receive ring `q`, which `vn_room` found long enough, and
- * put it on the used ring: 0, or -EFAULT, also for a chain the guest
- * changed meanwhile into one too short or bad.
+ * put it on the used ring: 0; -EFAULT, also for a chain the guest changed
+ * meanwhile into one too short or bad; -EAGAIN with nothing on the used
+ * ring.
  */
 static int vn_fill(struct vnet *n, struct vn_vq *q, uint16_t head, const uint8_t *frame,
                    uint32_t len)
@@ -349,11 +488,19 @@ static int vn_fill(struct vnet *n, struct vn_vq *q, uint16_t head, const uint8_t
     static const uint8_t vhdr[VN_HDR_MAX] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0};
     uint32_t total = n->hdr + len, off = 0, i = head, steps = 0;
     struct vn_desc d;
+    int r;
 
     while (off < total) {
         uint32_t doff = 0;
 
-        if (++steps > q->num || vn_desc(n, q, i, &d) != 0 || !(d.flags & DESC_WRITE)) {
+        if (++steps > q->num) {
+            return -EFAULT;
+        }
+        r = vn_desc(q, i, &d);
+        if (r != 0) {
+            return r;
+        }
+        if (!(d.flags & DESC_WRITE)) {
             return -EFAULT;
         }
         while (doff < d.len && off < total) {
@@ -371,8 +518,9 @@ static int vn_fill(struct vnet *n, struct vn_vq *q, uint16_t head, const uint8_t
             } else {
                 src = frame + (off - n->hdr);
             }
-            if (vn_mem(n, d.addr + doff, 0, src, NULL, take) != 0) {
-                return -EFAULT;
+            r = vn_mem(q, d.addr + doff, 0, src, NULL, take);
+            if (r != 0) {
+                return r;
             }
             doff += take;
             off += take;
@@ -382,7 +530,7 @@ static int vn_fill(struct vnet *n, struct vn_vq *q, uint16_t head, const uint8_t
         }
         i = d.next;
     }
-    return vn_used(n, q, head, total);
+    return vn_used(q, head, total);
 }
 
 /**
@@ -392,43 +540,51 @@ static int vn_fill(struct vnet *n, struct vn_vq *q, uint16_t head, const uint8_t
  * for a buffer too short, which stays the guest's, as Linux's handle_rx
  * discards such a frame and gives the buffer back (vhost_discard_vq_desc);
  * 0 when the ring has no buffer or does not move frames, and the frame
- * waits in the tap. Called with the tap's lock held and interrupts off, in
- * the sender's context; takes `lock`.
+ * waits in the tap. A page of the guest's memory that its pin does not hold
+ * now also leaves the frame in the tap, the ring as it was, while the
+ * thread brings the page in and offers the tap's frames again. Called with
+ * the tap's lock held and interrupts off, in the sender's context; takes
+ * `lock`.
  */
 static int vn_rx(struct tap_backend *b, const uint8_t *frame, uint16_t len)
 {
     struct vnet *n = (struct vnet *)b;
     struct vn_vq *q = &n->vq[VN_RX];
     uint32_t flags = spin_lock_irqsave(&n->lock), room = 0;
-    uint16_t head;
+    uint16_t head, last;
     int r = 0;
 
-    if (!vn_ready(n, q) || vn_used_init(n, q) != 0) {
+    if (!vn_ready(n, q) || q->want || vn_used_init(q) != 0) {
         goto out;
     }
-    r = vn_next(n, q, &head);
+    last = q->last_avail;
+    r = vn_next(q, &head);
     if (r <= 0) {
-        if (r < 0) {
+        if (r == -EFAULT) {
             vn_break(n, q);
         }
+        q->last_avail = last;
         r = 0;
         goto out;
     }
-    if (vn_room(n, q, head, &room) != 0) {
-        vn_break(n, q);
-        r = 0;
-        goto out;
-    }
-    if (room < n->hdr + len) {
+    r = vn_room(q, head, &room);
+    if (r == 0 && room < n->hdr + len) {
         q->last_avail--;
         r = 1;
         goto out;
     }
-    if (vn_fill(n, q, head, frame, len) != 0) {
-        vn_break(n, q);
+    if (r == 0) {
+        r = vn_fill(n, q, head, frame, len);
+    }
+    if (r != 0) {
+        if (r == -EFAULT) {
+            vn_break(n, q);
+        }
+        q->last_avail = last;
         r = 0;
         goto out;
     }
+    n->to_guest++;
     vn_notify(n, q);
     r = 1;
 out:
@@ -438,55 +594,71 @@ out:
 
 /**
  * Take what the guest put on its transmit ring, at most VN_BUDGET frames,
- * and give each frame to the tap as a write would; then raise the ring's
- * interrupt. A frame shorter than the header and an Ethernet header, or
- * longer than the interface carries, is dropped. The kernel thread calls it,
- * under the big lock. 1 when the budget ran out with frames left.
+ * and give each frame to the tap as a write would, after its chain is on
+ * the used ring; then raise the ring's interrupt. A frame shorter than the
+ * header and an Ethernet header, or longer than the interface carries, is
+ * dropped. A page its pin does not hold now ends the pass with the chain
+ * still the ring's, for the thread to bring the page in. The kernel thread
+ * calls it, under the big lock. 1 when the budget ran out with frames left.
  */
 static int vn_tx(struct vnet *n)
 {
     struct vn_vq *q = &n->vq[VN_TX];
     uint32_t budget = VN_BUDGET, done = 0;
     struct vn_desc d;
-    uint16_t head;
+    uint16_t head, last;
     int r;
 
-    if (!vn_ready(n, q) || vn_used_init(n, q) != 0) {
+    if (!vn_ready(n, q) || q->want) {
         return 0;
     }
-    vn_quiet(n, q, 1);
-    while (budget != 0) {
+    r = vn_used_init(q);
+    if (r == 0) {
+        r = vn_quiet(q, 1);
+    }
+    while (r == 0 && budget != 0) {
         uint32_t len = 0, steps = 0, i;
         int over = 0;
 
-        r = vn_next(n, q, &head);
+        last = q->last_avail;
+        r = vn_next(q, &head);
         if (r <= 0) {
-            if (r < 0) {
-                goto broken;
-            }
             break;
         }
-        for (i = head;;) {
-            if (++steps > q->num || vn_desc(n, q, i, &d) != 0 || (d.flags & DESC_WRITE)) {
-                goto broken;
+        r = 0;
+        for (i = head; r == 0;) {
+            if (++steps > q->num) {
+                r = -EFAULT;
+                break;
+            }
+            r = vn_desc(q, i, &d);
+            if (r == 0 && (d.flags & DESC_WRITE)) {
+                r = -EFAULT;
+            }
+            if (r != 0) {
+                break;
             }
             if (d.len > VN_TXBUF - len) {
                 over = 1;
-            } else if (vn_mem(n, d.addr, 0, NULL, n->txbuf + len, d.len) != 0) {
-                goto broken;
             } else {
+                r = vn_mem(q, d.addr, 0, NULL, n->txbuf + len, d.len);
                 len += d.len;
             }
-            if (!(d.flags & DESC_NEXT)) {
+            if (r != 0 || !(d.flags & DESC_NEXT)) {
                 break;
             }
             i = d.next;
         }
-        if (!over && len >= n->hdr + ETH_HDR_SIZE) {
-            (void)tap_inject(n->tap, n->txbuf + n->hdr, len - n->hdr);
+        if (r == 0) {
+            r = vn_used(q, head, 0);
         }
-        if (vn_used(n, q, head, 0) != 0) {
-            goto broken;
+        if (r != 0) {
+            q->last_avail = last;
+            break;
+        }
+        if (!over && len >= n->hdr + ETH_HDR_SIZE) {
+            n->from_guest++;
+            (void)tap_inject(n->tap, n->txbuf + n->hdr, len - n->hdr);
         }
         done++;
         budget--;
@@ -494,21 +666,10 @@ static int vn_tx(struct vnet *n)
     if (done) {
         vn_notify(n, q);
     }
-    return budget == 0;
-broken:
-    if (done) {
-        vn_notify(n, q);
+    if (r == -EFAULT) {
+        vn_break(n, q);
     }
-    vn_break(n, q);
-    return 0;
-}
-
-/** Note a kick of `q` for the thread and wake it. */
-static void vn_wake(struct vn_vq *q)
-{
-    q->kicked = 1;
-    vn_work = 1;
-    wq_wake(&vn_wq, 0);
+    return budget == 0;
 }
 
 /** The kick's hook: the thread looks at the ring. Called with the
@@ -522,8 +683,9 @@ static int vn_kick(struct eventfd_hook *h)
     return 1;
 }
 
-/** The kick's eventfd closed for the last time: the ring has none. Under
- * the big lock. */
+/** The kick's eventfd closed for the last time: the ring has none. The
+ * ring holds the kick's descriptor, so only a close of that, after the
+ * hook has gone, could come here. Under the big lock. */
 static void vn_kick_hangup(struct eventfd_hook *h)
 {
     struct vn_vq *q = (struct vn_vq *)h;
@@ -532,16 +694,6 @@ static void vn_kick_hangup(struct eventfd_hook *h)
         eventfd_put(q->kick);
         q->kick = 0;
     }
-}
-
-/** Take the ring's kick away, its hook and its reference. Under the big
- * lock, which orders it with the hangup. */
-static void vn_kick_drop(struct vn_vq *q)
-{
-    if (q->kick && eventfd_hook_remove(q->kick, &q->hook, NULL)) {
-        eventfd_put(q->kick);
-    }
-    q->kick = 0;
 }
 
 /**
@@ -557,14 +709,50 @@ static void vn_rx_quiet(struct vnet *n)
     uint32_t flags = spin_lock_irqsave(&n->lock);
     uint16_t idx;
 
-    if (vn_ready(n, q) && vn_used_init(n, q) == 0) {
-        vn_quiet(n, q, 1);
+    if (vn_ready(n, q) && !q->want && vn_used_init(q) == 0 && vn_quiet(q, 1) == 0) {
         sched_mb(); /* the flag, then the index */
-        if (vn_get16(n, q->avail + 2, &idx) != 0 || idx == q->last_avail) {
-            vn_quiet(n, q, 0);
+        if (vn_get16(q, q->avail + 2, &idx) != 0 || idx == q->last_avail) {
+            (void)vn_quiet(q, 0);
         }
     }
     spin_unlock_irqrestore(&n->lock, flags);
+}
+
+/**
+ * Bring in the page of the guest's memory a ring of `n` wants, the first
+ * ring's that does, and kick the ring to go on, or break it when the page
+ * cannot be had, as Linux's copy through the owner's tables fails with
+ * -EFAULT. The refill may sleep, letting the big lock go; `refilling`
+ * keeps a change of the table or a reset from letting the pin go
+ * meanwhile. 1 when a refill was made, after which `n` may have gone; 0
+ * when no ring wants one. Under the big lock.
+ */
+static int vn_refill(struct vnet *n)
+{
+    struct vn_vq *q;
+    struct pin *pin;
+    uint32_t flags;
+    int i, r;
+
+    for (i = 0; i < 2 && !n->vq[i].want; i++) {
+    }
+    if (i == 2) {
+        return 0;
+    }
+    q = &n->vq[i];
+    pin = q->want_reg < n->nreg ? n->reg[q->want_reg].pin : 0;
+    n->refilling++;
+    r = pin ? pin_refill(pin, q->want_page) : -EFAULT;
+    flags = spin_lock_irqsave(&n->lock);
+    q->want = 0;
+    if (r != 0) {
+        vn_break(n, q);
+    }
+    spin_unlock_irqrestore(&n->lock, flags);
+    vn_wake(q);
+    n->refilling--;
+    wq_wake_all(&vn_idle_wq);
+    return 1;
 }
 
 /** The thread's wait condition: a kick came. */
@@ -574,18 +762,27 @@ static int vn_has_work(void *arg)
     return vn_work != 0;
 }
 
-/** One pass of the thread: take each kicked transmit ring and offer each
- * kicked receive ring the frames waiting in the tap. Under the big lock. */
+/**
+ * One pass of the thread: take each kicked transmit ring, its frames given
+ * to the stack as one batch of TCP's acknowledgements (`tcp_batch_begin`),
+ * offer each kicked receive ring the frames waiting in the tap, and then
+ * bring in one page a ring wants, whose kick brings the thread round
+ * again. Under the big lock.
+ */
 static void vn_pass(void)
 {
     struct vnet *n;
+    int more;
 
     vn_work = 0;
     sched_mb(); /* the flag, then the rings' */
     for (n = vn_devs; n; n = n->next) {
         if (n->vq[VN_TX].kicked) {
             n->vq[VN_TX].kicked = 0;
-            if (vn_tx(n)) {
+            tcp_batch_begin();
+            more = vn_tx(n);
+            tcp_batch_end();
+            if (more) {
                 vn_wake(&n->vq[VN_TX]);
             }
         }
@@ -596,6 +793,8 @@ static void vn_pass(void)
                 tap_backend_drain(n->tap);
             }
         }
+    }
+    for (n = vn_devs; n && !vn_refill(n); n = n->next) {
     }
 }
 
@@ -615,8 +814,10 @@ static void vn_main(void)
     }
 }
 
-/** The tap's `gone`: its descriptor closed and the tap let the backend go,
- * so the rings have no tap. Under the big lock. */
+/** The tap's `gone`: its descriptor's last close let the backend go, so
+ * the rings have no tap. The device holds the descriptor while it has the
+ * tap (`tapfile`), so this comes only if the tap is let go some other way.
+ * Under the big lock. */
 static void vn_gone(struct tap_backend *b)
 {
     struct vnet *n = (struct vnet *)b;
@@ -628,9 +829,10 @@ static void vn_gone(struct tap_backend *b)
     spin_unlock_irqrestore(&n->lock, flags);
 }
 
-/** A pin's holder: an unmap took the guest's pages back; no ring touches
- * them again, and a receive under way has ended once `lock` is taken.
- * Under the big lock, which keeps the thread off the rings. */
+/** A pin's holder: the owner's address space ended and took the guest's
+ * pages back; no ring touches them again, and a receive under way has
+ * ended once `lock` is taken. Under the big lock, which keeps the thread
+ * off the rings. */
 static void vn_release(struct pin *pin, void *owner)
 {
     struct vnet *n = (struct vnet *)owner;
@@ -638,11 +840,40 @@ static void vn_release(struct pin *pin, void *owner)
 
     (void)pin;
     if (!n->dead) {
-        klog(KLOG_WARN, "vhost-net", "stopped: the guest's memory was unmapped");
+        klog(KLOG_WARN, "vhost-net", "stopped: the owner's address space ended");
     }
     flags = spin_lock_irqsave(&n->lock);
     n->dead = 1;
     spin_unlock_irqrestore(&n->lock, flags);
+}
+
+/** A pin's holder's `forget`: a change of the guest's pages took some from
+ * a region's pin; a receive that may use one has ended once `lock` is
+ * taken, and the transmit thread, which holds the big lock while it copies,
+ * is not in the middle of one. */
+static void vn_forget(struct pin *pin, void *owner)
+{
+    struct vnet *n = (struct vnet *)owner;
+    uint32_t flags;
+
+    (void)pin;
+    flags = spin_lock_irqsave(&n->lock);
+    spin_unlock_irqrestore(&n->lock, flags);
+}
+
+/** The thread's refill condition: no refill of `arg`'s regions sleeps. */
+static int vn_not_refilling(void *arg)
+{
+    return ((struct vnet *)arg)->refilling == 0;
+}
+
+/** Wait until the thread is not refilling a region of `n`, so that a pin
+ * may go. Under the big lock; may sleep. */
+static void vn_quiesce(struct vnet *n)
+{
+    while (n->refilling != 0) {
+        (void)wq_wait_event_idle(&vn_idle_wq, vn_not_refilling, n);
+    }
 }
 
 /** Unpin the regions of the first `count` of `reg` that `which` marks,
@@ -705,12 +936,13 @@ static uint64_t vn_pins_but(const struct vn_region *reg, uint32_t count,
 }
 
 /**
- * Fill `reg` from the `count` regions of the table at `arg`: each pinned,
- * or given the pin of a region the device's table has whole, which the bit
- * of `*fresh` for it leaves out. 0; -EFAULT for an unreadable table;
- * -ENOMEM from a pin, past RLIMIT_MEMLOCK, after unpinning what it pinned.
- * A region that cannot be pinned for another reason, device memory, is
- * left without a pin. May sleep, letting the big lock go.
+ * Fill `reg` from the `count` regions of the table at `arg`: each given a
+ * pin that follows its pages (PIN_FOLLOW), which holds none yet, or the
+ * pin of a region the device's table has whole, which the bit of `*fresh`
+ * for it leaves out. 0; -EFAULT for an unreadable table or a region that is
+ * empty, wraps or leaves user space, as Linux's vhost_set_memory refuses
+ * one; -ENOMEM; on an error nothing new is kept. May sleep, letting the big
+ * lock go.
  */
 static int32_t vn_pin_table(struct vnet *n, uintptr_t arg, uint32_t count, struct vn_region *reg,
                             uint64_t *fresh)
@@ -736,20 +968,22 @@ static int32_t vn_pin_table(struct vnet *n, uintptr_t arg, uint32_t count, struc
                 break;
             }
         }
-        if (reg[i].pin || r4[1] == 0 || (r4[2] & 4095u) || r4[2] + r4[1] < r4[2] ||
-            (uint64_t)(uintptr_t)(r4[2] + r4[1] - 1u) != r4[2] + r4[1] - 1u) {
+        if (reg[i].pin) {
             continue;
         }
-        r = pin_user(current_proc->mm, (uintptr_t)r4[2], (uintptr_t)r4[1], PIN_WRITE | PIN_LONGTERM,
-                     &n->holder, &reg[i].pin);
-        if (r == 0) {
-            *fresh |= (uint64_t)1 << i;
-        } else if (r == -ENOMEM) {
-            reg[i].pin = 0;
+        if (r4[1] == 0 || r4[2] + r4[1] < r4[2] ||
+            (uint64_t)(uintptr_t)(r4[2] + r4[1] - 1u) != r4[2] + r4[1] - 1u) {
+            r = -EFAULT;
             goto fail;
-        } else {
-            reg[i].pin = 0;
         }
+        r = pin_user(current_proc->mm, (uintptr_t)r4[2], (uintptr_t)r4[1], PIN_WRITE | PIN_FOLLOW,
+                     &n->holder, &reg[i].pin);
+        if (r != 0) {
+            reg[i].pin = 0;
+            r = r == -ENOMEM ? -ENOMEM : -EFAULT;
+            goto fail;
+        }
+        *fresh |= (uint64_t)1 << i;
     }
     return 0;
 fail:
@@ -758,15 +992,17 @@ fail:
 }
 
 /**
- * VHOST_SET_MEM_TABLE: pin each region of the table at `arg`, keeping the
- * pin of a region the old table has whole, then let the old table go, as
- * Linux's vhost_set_memory replaces its table. 0; -E2BIG for more than
- * VHOST_NET_REGIONS; -EFAULT for an unreadable table; -ENOMEM, also from a
- * pin past RLIMIT_MEMLOCK, which leaves the old table; -EPERM when a reset
- * took the owner meanwhile. A region that cannot be pinned for another
- * reason, device memory, is kept unpinned, and a ring or buffer in it
- * breaks the ring. A pin may sleep, letting the big lock go, so a table
- * that changed meanwhile, which `gen` tells, sends the call round again.
+ * VHOST_SET_MEM_TABLE: give each region of the table at `arg` a pin that
+ * follows its pages, keeping the pin of a region the old table has whole,
+ * then let the old table go, as Linux's vhost_set_memory replaces its
+ * table. Any memory the process maps is taken, a writable shared mapping of
+ * a disk file among it, since the pins hold a page only until it changes
+ * and a write-back's taking of write access is such a change. 0; -E2BIG for
+ * more than VHOST_NET_REGIONS; -EFAULT for an unreadable table or a bad
+ * region; -ENOMEM; each of which leaves the old table; -EPERM when a reset
+ * took the owner meanwhile. A pin may sleep, letting the big lock go, so a
+ * table that changed meanwhile, which `gen` tells, sends the call round
+ * again; the old pins go once no refill of the thread's uses them.
  * Under the big lock.
  */
 static int32_t vn_set_mem(struct vnet *n, uintptr_t arg)
@@ -812,6 +1048,7 @@ static int32_t vn_set_mem(struct vnet *n, uintptr_t arg)
     n->gen++;
     spin_unlock_irqrestore(&n->lock, flags);
     if (old) {
+        vn_quiesce(n);
         vn_unpin(old, nold, gone);
         kfree(old);
     }
@@ -836,19 +1073,34 @@ static int vn_rings_ok(struct vnet *n, struct vn_vq *q)
            vn_in_memory(n, q->used, 6u + 8u * (uint64_t)q->num);
 }
 
-/** Let go of the tap when neither ring has it. The tap's lock, which
- * `tap_backend_set` takes, waits for a receive under way. Under the big
- * lock. */
+/**
+ * Let go of the tap when neither ring has it, logging the frames moved, and
+ * then of its descriptor, whose release is the tap's last close when the
+ * program has closed its own. The tap's lock, which `tap_backend_set`
+ * takes, waits for a receive under way. Under the big lock; the release
+ * may sleep.
+ */
 static void vn_detach(struct vnet *n)
 {
     struct tap *t = n->tap;
+    fd_entry_t file;
     uint32_t flags;
 
-    if (t && !n->vq[VN_RX].backend && !n->vq[VN_TX].backend) {
+    if (n->vq[VN_RX].backend || n->vq[VN_TX].backend) {
+        return;
+    }
+    if (t) {
         (void)tap_backend_set(t, 0);
         flags = spin_lock_irqsave(&n->lock);
         n->tap = 0;
         spin_unlock_irqrestore(&n->lock, flags);
+        klog(KLOG_INFO, "vhost-net", "detached: %s: %u frames to the guest, %u from it",
+             tap_name(t), n->to_guest, n->from_guest);
+    }
+    if (n->has_tapfile) {
+        file = n->tapfile;
+        n->has_tapfile = 0;
+        fd_release_backing(&file);
     }
 }
 
@@ -860,6 +1112,7 @@ static void vn_detach(struct vnet *n)
 static int32_t vn_set_backend(struct vnet *n, uint32_t index, int32_t fd)
 {
     struct vn_vq *q = &n->vq[index];
+    fd_entry_t *e;
     struct tap *t;
     uint32_t flags;
     int32_t r;
@@ -871,7 +1124,8 @@ static int32_t vn_set_backend(struct vnet *n, uint32_t index, int32_t fd)
         vn_detach(n);
         return 0;
     }
-    t = tap_of(fd >= 0 ? fd_get(current_proc->fds, fd) : 0);
+    e = fd >= 0 ? fd_get(current_proc->fds, fd) : 0;
+    t = tap_of(e);
     if (!t) {
         return -ENOTSOCK;
     }
@@ -884,6 +1138,13 @@ static int32_t vn_set_backend(struct vnet *n, uint32_t index, int32_t fd)
     r = tap_backend_set(t, &n->tb);
     if (r != 0) {
         return r;
+    }
+    if (!n->has_tapfile) {
+        n->tapfile = *e;
+        fd_ofd_ref(e->ofd);
+        n->has_tapfile = 1;
+        n->to_guest = 0;
+        n->from_guest = 0;
     }
     flags = spin_lock_irqsave(&n->lock);
     n->tap = t;
@@ -921,33 +1182,60 @@ static int32_t vn_set_fd(struct vnet *n, struct eventfd **slot, int32_t fd)
     return 0;
 }
 
-/** VHOST_SET_VRING_KICK: hook the eventfd of `fd`, or none with -1. 0, or
- * eventfd_get's -EBADF or -EINVAL. Under the big lock. */
+/**
+ * VHOST_SET_VRING_KICK: hook the eventfd of `fd`, holding its descriptor,
+ * or none with -1, and then let the old kick go. 0, or eventfd_get's
+ * -EBADF or -EINVAL with the old kick kept. Under the big lock; the
+ * release of the old descriptor may sleep.
+ */
 static int32_t vn_set_kick(struct vn_vq *q, int32_t fd)
 {
-    struct eventfd *ev;
+    struct eventfd *ev = 0, *old = q->kick;
+    fd_entry_t file, oldfile;
     int32_t err = 0;
+    int had = q->has_kickfile;
 
-    vn_kick_drop(q);
-    if (fd == VN_UNBIND) {
-        return 0;
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&oldfile, 0, sizeof(oldfile));
+    if (fd != VN_UNBIND) {
+        ev = eventfd_get(fd, &err);
+        if (!ev) {
+            return err;
+        }
+        file = *fd_get(current_proc->fds, fd);
+        fd_ofd_ref(file.ofd);
     }
-    ev = eventfd_get(fd, &err);
-    if (!ev) {
-        return err;
+    if (old && !eventfd_hook_remove(old, &q->hook, NULL)) {
+        old = 0; /* the hangup let it go */
     }
-    q->kick = ev;
-    q->hook.signal = vn_kick;
-    q->hook.hangup = vn_kick_hangup;
-    q->hook.next = 0;
-    if (eventfd_hook_add(ev, &q->hook) == 1) {
-        vn_wake(q);
+    if (had) {
+        oldfile = q->kickfile;
+    }
+    q->kick = 0;
+    q->has_kickfile = 0;
+    if (ev) {
+        q->kick = ev;
+        q->kickfile = file;
+        q->has_kickfile = 1;
+        q->hook.signal = vn_kick;
+        q->hook.hangup = vn_kick_hangup;
+        q->hook.next = 0;
+        if (eventfd_hook_add(ev, &q->hook) == 1) {
+            vn_wake(q);
+        }
+    }
+    if (old) {
+        eventfd_put(old);
+    }
+    if (had) {
+        fd_release_backing(&oldfile);
     }
     return 0;
 }
 
-/** Stop every ring and let go of the tap, the eventfds and the pins, as
- * Linux's vhost_dev_reset_owner. Under the big lock. */
+/** Stop every ring and let go of the tap, the eventfds, the descriptors
+ * held and the pins, as Linux's vhost_dev_reset_owner. Under the big lock;
+ * may sleep. */
 static void vn_reset(struct vnet *n)
 {
     struct vn_region *old;
@@ -962,7 +1250,7 @@ static void vn_reset(struct vnet *n)
     for (i = 0; i < 2; i++) {
         struct vn_vq *q = &n->vq[i];
 
-        vn_kick_drop(q);
+        (void)vn_set_kick(q, VN_UNBIND);
         (void)vn_set_fd(n, &q->call, VN_UNBIND);
         (void)vn_set_fd(n, &q->err, VN_UNBIND);
         k_memset(q, 0, sizeof(*q));
@@ -976,6 +1264,7 @@ static void vn_reset(struct vnet *n)
     n->gen++;
     spin_unlock_irqrestore(&n->lock, flags);
     if (old) {
+        vn_quiesce(n);
         vn_unpin(old, nold, vn_pins_but(old, nold, 0, 0));
         kfree(old);
     }
@@ -986,10 +1275,12 @@ static void vn_reset(struct vnet *n)
     n->dead = 0;
 }
 
-/** VHOST_SET_VRING_NUM, VHOST_SET_VRING_BASE and VHOST_GET_VRING_BASE, on
- * the ring state at `arg`, as Linux's vhost_vring_ioctl: -ENOBUFS for a
- * ring past the two, -EBUSY to change a ring that has the tap, -EINVAL for
- * a size that is no power of two up to 32768 or a base past 0xffff. */
+/** VHOST_SET_VRING_NUM, VHOST_SET_VRING_BASE, VHOST_GET_VRING_BASE and the
+ * busy-poll timeout's two requests, on the ring state at `arg`, as Linux's
+ * vhost_vring_ioctl: -ENOBUFS for a ring past the two, -EBUSY to change the
+ * size or base of a ring that has the tap, -EINVAL for a size that is no
+ * power of two up to 32768 or a base past 0xffff. The timeout is kept and
+ * given back, and the thread never polls. */
 static int32_t vn_ring_state(struct vnet *n, uint32_t req, uintptr_t arg)
 {
     struct vn_vq *q;
@@ -1002,6 +1293,14 @@ static int32_t vn_ring_state(struct vnet *n, uint32_t req, uintptr_t arg)
         return -ENOBUFS;
     }
     q = &n->vq[st[0]];
+    if (req == VHOST_SET_VRING_BUSYLOOP_TIMEOUT) {
+        q->busyloop = st[1];
+        return 0;
+    }
+    if (req == VHOST_GET_VRING_BUSYLOOP_TIMEOUT) {
+        st[1] = q->busyloop;
+        return copy_to_user((void __user *)arg, st, sizeof(st)) != 0 ? -EFAULT : 0;
+    }
     if (req == VHOST_GET_VRING_BASE) {
         flags = spin_lock_irqsave(&n->lock);
         st[1] = q->last_avail;
@@ -1171,6 +1470,8 @@ static int32_t vn_ioctl(fd_entry_t *e, uint32_t req, uintptr_t arg)
     case VHOST_SET_VRING_NUM:
     case VHOST_SET_VRING_BASE:
     case VHOST_GET_VRING_BASE:
+    case VHOST_SET_VRING_BUSYLOOP_TIMEOUT:
+    case VHOST_GET_VRING_BUSYLOOP_TIMEOUT:
         return vn_ring_state(n, req, arg);
     case VHOST_SET_VRING_ADDR:
         return vn_ring_addr(n, arg);
@@ -1201,6 +1502,7 @@ static int32_t vn_open(struct devfs_node *node, struct fd_entry *e, int flags)
     n->holder.release = vn_release;
     n->holder.owner = n;
     n->holder.flags = 0;
+    n->holder.forget = vn_forget;
     n->vq[VN_RX].n = n;
     n->vq[VN_TX].n = n;
     n->next = vn_devs;
@@ -1231,7 +1533,7 @@ static void vn_close(fd_entry_t *e)
 static const struct file_ops vn_ops = {NULL, NULL, NULL, vn_ioctl, vn_close, NULL, NULL, 0};
 
 /* Linux's numbers for the device, 10:238, read and written by root. */
-static struct devfs_node vn_node = {"vhost-net", 10, 238, 0600, &vn_ops, vn_open, NULL};
+static struct devfs_node vn_node = {"vhost-net", 10, 238, 0600, &vn_ops, vn_open, NULL, 0};
 
 void vhost_net_start(void)
 {
