@@ -40,6 +40,10 @@ A port's removal, the device's unbinding through virtio-pci (`dev->removed`) and
 
 The driver logs under `virtio_console`: `bound:` with the ports and features, `ports:` for ports past the most it takes, `port:` with a port added, named, removed or refused, a port it leaves and a node not made, `removed:`, `refused:`, `control:` for a control message not taken or not sent, `shutdown:`; and under `console`: `enabled:`, `disabled:`, `waiting:`, `refused:` and `none:`, which [hvc(4)](../../../man/man4/hvc.4) lists.
 
+### Input
+
+The input driver reads a tablet or touchscreen's identity, axis limits and capabilities from its device configuration. It publishes an event device with the advertised pointer properties and initializes type B slots when the device advertises `ABS_MT_SLOT`. The event queue carries Linux input event codes and values, which the driver gives to evdev. The status queue stays empty on tablets and touchscreens. [input(4)](../../../man/man4/input.4) describes the interface.
+
 ## Design
 
 | File | What it does |

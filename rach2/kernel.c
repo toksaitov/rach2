@@ -98,6 +98,7 @@
 #include "sys/drm/drm.h"
 #include "sys/virtio/virtio.h"
 #include "sys/virtio/virtio_console.h"
+#include "sys/virtio/virtio_input.h"
 #if defined(__x86_64__)
 #include "sys/kvm/kvm.h"
 #include "sys/vfio/vfio.h"
@@ -4709,6 +4710,15 @@ static void start_processors(void)
 #endif
 }
 
+/** Publish the virtio devices and start the console and tablet drivers.
+ * The console replays the log if the boot line names its port. */
+static void start_virtio(void)
+{
+    virtio_pci_probe();
+    (void)virtio_console_start();
+    virtio_input_start();
+}
+
 /**
  * The order of the boot is the hardware's and the allocator's.
  *
@@ -5071,14 +5081,7 @@ void kernel_main(const struct boot_info *boot)
         }
     }
 
-    /* virtio-pci takes every virtio function before a driver looks for
-     * its own, the network's and the display's, as Linux's PCI core probes
-     * it, so that each has its virtioN whether a driver of its type exists
-     * or not. */
-    virtio_pci_probe();
-    /* The console's line moves to a virtio console's port here, when the
-     * boot line names one (`console=hvc0`), with the log so far. */
-    (void)virtio_console_start();
+    start_virtio();
     start_network();
     drm_start();
     pstore_start();
