@@ -1496,7 +1496,7 @@ static void mount_unlink_cuts(const uint8_t *before, uint32_t grain, int first_u
                 k_memcpy(state + at, version + at, grain);
                 choices /= version_count;
             }
-            if (init_krffs_disk_root(state, DISK_IMAGE_SIZE, 512, NULL) != 0 ||
+            if (init_krffs_disk_root(state, DISK_IMAGE_SIZE, 512, NULL, NULL) != 0 ||
                 !krffs_chain_is_valid(&krffs_root_mount)) {
                 printf("krffs_hosttest: unlink cut after %d writes, unit %u, variant %u\n", prefix,
                        grain, variant);
@@ -1522,7 +1522,7 @@ static void disk_unlink_case(const struct unlink_extent *extents, unsigned count
 
     make_unlink_image(extents, count);
     k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
-    result = init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL);
+    result = init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL);
     check(result == 0, "disk unlink fixture mounts");
     if (result != 0) {
         return;
@@ -1574,7 +1574,7 @@ static void disk_shrink_row(void)
     victim = (krffs_node_t *)(disk_image + extents[1].start);
     victim->data_size = victim->size - sizeof(*victim);
     k_memset((uint8_t *)victim + sizeof(*victim), 'v', (uint32_t)victim->data_size);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         check(0, "disk shrink fixture mounts");
         return;
     }
@@ -1634,7 +1634,7 @@ static int disk_cut_is_sound(uint8_t *state, uint32_t size)
     uint64_t kept;
     char byte;
 
-    if (init_krffs_disk_root(state, size, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
         !krffs_chain_is_valid(&krffs_root_mount)) {
         return 0;
     }
@@ -1768,7 +1768,7 @@ static int disk_truncate_case(const struct unlink_extent *extents, unsigned coun
     fill_fixture_file(extents[1].start, old, 'v');
     stain_slack(extents, count);
     k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         check(0, what);
         return KRFFS_EBAD;
     }
@@ -1881,7 +1881,7 @@ static void disk_after_unlink_case(const struct unlink_extent *extents, unsigned
 
     make_unlink_image(extents, count);
     k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         check(0, what);
         return;
     }
@@ -1942,7 +1942,7 @@ static void disk_split_length_rows(void)
     make_unlink_image(short_node, 3);
     fill_fixture_file(3754, 768, 'v');
     victim = (krffs_node_t *)(disk_image + 3754);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         check(0, "split length fixture mounts");
         return;
     }
@@ -1988,7 +1988,7 @@ static void disk_split_length_rows(void)
     make_unlink_image(full, 3);
     fill_fixture_file(3754, 512, 'v');
     victim = (krffs_node_t *)(disk_image + 3754);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) != 0) {
         check(0, "full fixture mounts");
         return;
     }
@@ -2130,7 +2130,7 @@ static void disk_moving_write_rows(void)
 
     make_unlink_image(full, 3);
     fill_fixture_file(3754, 255, 'v');
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) != 0) {
         check(0, "moving write fixture mounts");
         return;
     }
@@ -2141,7 +2141,7 @@ static void disk_moving_write_rows(void)
 
     make_unlink_image(room, 4);
     fill_fixture_file(3754, 255, 'v');
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) != 0) {
         check(0, "moving write fixture with room mounts");
         return;
     }
@@ -2247,7 +2247,7 @@ static void failed_grow_barrier_row(void)
     make_unlink_image(split, 4);
     fill_fixture_file(1024, 667, 'v');
     k_memcpy(held, disk_image, DISK_IMAGE_SIZE);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, budget_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, budget_flush, NULL) != 0) {
         check(0, "failed grow fixture mounts");
         return;
     }
@@ -2257,7 +2257,7 @@ static void failed_grow_barrier_row(void)
     flushes = flushes_seen;
 
     k_memcpy(disk_image, held, DISK_IMAGE_SIZE);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, budget_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, budget_flush, NULL) != 0) {
         check(0, "failed grow fixture mounts again");
         return;
     }
@@ -2529,7 +2529,7 @@ static int regrow_cut_is_sound(uint8_t *state, uint32_t size)
     uint64_t at;
     uint8_t byte;
 
-    if (init_krffs_disk_root(state, size, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
         !krffs_chain_is_valid(&krffs_root_mount)) {
         return 0;
     }
@@ -2570,7 +2570,7 @@ static void disk_regrow_row(void)
     fill_fixture_file(1024, 3100, 'v');
     stain_slack(extents, 3);
     k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         check(0, "regrow fixture mounts");
         return;
     }
@@ -2633,7 +2633,7 @@ static void disk_double_name_row(void)
     make_unlink_image(extents, 4);
     fill_fixture_file(3000, 10, 'a');
     fill_fixture_file(1024, 20, 'b');
-    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) == 0,
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) == 0,
           "a dirty disk root with one name on two nodes mounts");
     check(krffs_walk(&krffs_root_mount, "/twin") == 1024 &&
               krffs_head(&krffs_root_mount, 3000, &head) == 0 && head.name[0] == '\0',
@@ -2641,7 +2641,7 @@ static void disk_double_name_row(void)
     make_unlink_image(extents, 4);
     fill_fixture_file(1024, 10, 'a');
     fill_fixture_file(3000, 20, 'b');
-    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) == 0 &&
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) == 0 &&
               krffs_walk(&krffs_root_mount, "/twin") == 3000 &&
               krffs_head(&krffs_root_mount, 1024, &head) == 0 && head.name[0] == '\0',
           "whichever comes first in the ring");
@@ -2706,7 +2706,7 @@ static int rename_case_y;
  * bytes, and the renamed file is under exactly one name. */
 static int rename_cut_is_sound(uint8_t *state, uint32_t size)
 {
-    if (init_krffs_disk_root(state, size, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
         !krffs_chain_is_valid(&krffs_root_mount) || !root_file_is("/d/x", 1, 'o') ||
         (rename_case_y && !root_file_is("/y", 1, 'y'))) {
         return 0;
@@ -2733,7 +2733,7 @@ static void disk_rename_case(int with_y, const char *what)
 
     make_unlink_image(extents, 4);
     fill_fixture_file(1024, 10, 'm');
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         check(0, what);
         return;
     }
@@ -2795,7 +2795,7 @@ static int torn_case_ad;
  * byte, and the renamed file is under exactly one name. */
 static int torn_cut_is_sound(uint8_t *state, uint32_t size)
 {
-    if (init_krffs_disk_root(state, size, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
         !krffs_chain_is_valid(&krffs_root_mount) || !root_file_is("/cb", 1, 'c') ||
         (torn_case_ad && !root_file_is("/ad", 1, 'a'))) {
         return 0;
@@ -2808,7 +2808,7 @@ static int torn_cut_is_sound(uint8_t *state, uint32_t size)
  * with /y's twenty bytes. */
 static int replace_cut_is_sound(uint8_t *state, uint32_t size)
 {
-    if (init_krffs_disk_root(state, size, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
         !krffs_chain_is_valid(&krffs_root_mount)) {
         return 0;
     }
@@ -2828,7 +2828,7 @@ static int recorded_rename_is_sound(const char *from, const char *to,
     static uint8_t before[DISK_IMAGE_SIZE];
     int ok;
 
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush, NULL) != 0) {
         return 0;
     }
     k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
@@ -2891,7 +2891,7 @@ static void disk_replace_row(void)
  * byte, and the file is under exactly one of its two names. */
 static int parent_cut_is_sound(uint8_t *state, uint32_t size)
 {
-    if (init_krffs_disk_root(state, size, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
         !krffs_chain_is_valid(&krffs_root_mount) || !root_file_is("/x", 1, 'r')) {
         return 0;
     }
@@ -2916,7 +2916,7 @@ static int parent_fixture(krffs_node_t *e, krffs_node_t *d)
     fill_fixture_file(1183, 10, 'm');
     at = 1183 + KRFFS_FIELD_PARENT;
     check(at / 512 != (at + 7) / 512, "the parent field crosses a sector");
-    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) != 0 ||
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) != 0 ||
         krffs_mkdir_at(&krffs_root_mount, "/e", 0755, 0, 0) != 0 ||
         krffs_mkdir_at(&krffs_root_mount, "/d", 0755, 0, 0) != 0 ||
         krffs_rename_at(&krffs_root_mount, "/x", "/e/x") != 0 ||
@@ -3044,9 +3044,10 @@ static int failing_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 }
 
 /**
- * A reap that cannot read a node's name, or cannot free it, counts it, so
- * that the dirty flag stays for the next mount; and a parent lookup that
- * cannot read a matching directory's name answers EIO, not the root.
+ * A reap that cannot read a node's name, or cannot free it, counts it and
+ * halts the mount, so that the dirty flag stays for the next mount; and a
+ * parent lookup that cannot read a matching directory's name answers EIO,
+ * not the root.
  */
 static void reap_failure_rows(void)
 {
@@ -3063,11 +3064,15 @@ static void reap_failure_rows(void)
     check(krffs_orphan_at(&mount, node) == 0, "which loses its name");
     mount.orphans = 0; /* as the next mount finds it */
     read_fails_at = node + KRFFS_FIELD_NAME;
-    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1,
-          "a reap that cannot read the name counts the node");
+    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1 && mount.halted &&
+              mount.check_owed,
+          "a reap that cannot read the name counts the node, halts the mount and owes the check");
     read_fails_at = (uint64_t)-1;
     mount.orphans = 0;
-    check(krffs_reap_orphans_at(&mount) == 1 && mount.orphans == 0, "and a reap that can frees it");
+    mount.halted = 0; /* as the next mount finds it */
+    mount.check_owed = 0;
+    check(krffs_reap_orphans_at(&mount) == 1 && mount.orphans == 0 && !mount.halted,
+          "and a reap that can frees it");
 
     make_image(image, IMAGE_SIZE);
     check(krffs_create_at(&mount, "/a") == 0, "reap failure rows: another file");
@@ -3075,14 +3080,20 @@ static void reap_failure_rows(void)
     check(krffs_orphan_at(&mount, node) == 0, "which loses its name too");
     mount.orphans = 0;
     refused_offset = node + KRFFS_FIELD_TYPE;
-    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1,
-          "a reap whose free fails counts the node");
+    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1 && mount.halted &&
+              mount.check_owed,
+          "a reap whose free fails counts the node, halts the mount and owes the check");
     refused_offset = (uint64_t)-1;
     mount.orphans = 0;
+    mount.halted = 0;
+    mount.check_owed = 0;
     read_fails_at = node + KRFFS_FIELD_TYPE;
-    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1,
+    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1 && mount.halted &&
+              mount.check_owed,
           "and so does one a header read stops");
     read_fails_at = (uint64_t)-1;
+    mount.halted = 0;
+    mount.check_owed = 0;
 
     make_image(image, IMAGE_SIZE);
     check(krffs_mkdir_at(&mount, "/d", 0755, 0, 0) == 0 && krffs_create_at(&mount, "/d/f") == 0,
@@ -3092,6 +3103,54 @@ static void reap_failure_rows(void)
     read_fails_at = dir + KRFFS_FIELD_NAME;
     check(krffs_parent_offset_err(&mount, file, &err) == KRFFS_NO_NODE && err == -EIO,
           "a parent lookup that cannot read the directory's name answers EIO");
+    read_fails_at = (uint64_t)-1;
+}
+
+/**
+ * The disk root's boot scan over a backend whose reads can fail, as the
+ * page cache's copies answer a read the disk fails: a failed orphan free
+ * and a header read that stops the scan each leave the orphan counted, so
+ * that the shutdown keeps the dirty flag, and halt the root, which refuses
+ * writes; the pointer interface answers the failure, and a root node that
+ * cannot be read is refused at the mount, where the pointer was read before.
+ */
+static void boot_scan_failure_rows(void)
+{
+    static const krffs_backend_t backend = {failing_read, record_write, memory_sync};
+    krffs_node_t head;
+    uint64_t node;
+    int rows;
+
+    for (rows = 0; rows < 2; rows++) {
+        make_image(disk_image, DISK_IMAGE_SIZE);
+        if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) != 0 ||
+            krffs_create("/a") != 0) {
+            check(0, "boot scan rows: a disk root over a backend that can fail, and a file");
+            return;
+        }
+        node = krffs_walk(&krffs_root_mount, "/a");
+        check(krffs_orphan_at(&krffs_root_mount, node) == 0,
+              "boot scan rows: the file loses its name");
+        krffs_root_mount.orphans = 0; /* as the next boot finds it */
+        if (rows == 0) {
+            refused_offset = node + KRFFS_FIELD_TYPE;
+        } else {
+            read_fails_at = node + KRFFS_FIELD_TYPE;
+        }
+        check(krffs_reap_orphans() == 0 && krffs_root_has_orphans() && krffs_root_halted() &&
+                  krffs_root_check_owed() && krffs_create("/b") != 0,
+              rows == 0 ? "a boot scan whose orphan free fails counts it and halts the root"
+                        : "a boot scan a header read stops counts the orphan and halts the root");
+        check(rows == 0 || krffs_node_head((krffs_node_t *)(disk_image + node), &head) != 0,
+              "a header the pointer interface cannot read answers the failure");
+        refused_offset = (uint64_t)-1;
+        read_fails_at = (uint64_t)-1;
+    }
+
+    make_image(disk_image, DISK_IMAGE_SIZE);
+    read_fails_at = KRFFS_FIELD_MODE;
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) != 0,
+          "a disk root whose root node cannot be read is refused");
     read_fails_at = (uint64_t)-1;
 }
 
@@ -3223,7 +3282,7 @@ static void rename_refusal_rows(void)
           "and keeps its node without a name");
 
     make_unlink_image(extents, 6);
-    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL) == 0,
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, NULL) == 0,
           "refusal rows: a root with both halfway names taken");
     for (i = 0; i < 16; i++) {
         k_memcpy(path, "/.rename-000005f4", 17);
@@ -3334,6 +3393,7 @@ static void rename_unit_rows(void)
     rename_refusal_rows();
     orphan_count_rows();
     reap_failure_rows();
+    boot_scan_failure_rows();
     phase_row();
 }
 
@@ -3502,13 +3562,13 @@ static void disk_unlink_rows(void)
     root = (krffs_node_t *)image;
     free_node = (krffs_node_t *)(image + sizeof(*root));
     free_node->previous_node_size = 0;
-    check(init_krffs_disk_root(image, IMAGE_SIZE, 512, NULL) != 0,
+    check(init_krffs_disk_root(image, IMAGE_SIZE, 512, NULL, NULL) != 0,
           "a clean disk root with a bad link is refused");
     root->mode |= KRFFS_MODE_DIRTY;
     check(init_krffs(image, IMAGE_SIZE) != 0, "a RAM root with a bad link is refused");
     root->previous_node_size = 0;
     free_node->size--;
-    check(init_krffs_disk_root(image, IMAGE_SIZE, 512, NULL) != 0 &&
+    check(init_krffs_disk_root(image, IMAGE_SIZE, 512, NULL, NULL) != 0 &&
               free_node->previous_node_size == 0 && root->previous_node_size == 0,
           "a dirty disk root with a broken forward chain is refused before repair");
 }

@@ -3178,8 +3178,10 @@ int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index, cha
  * after each removal, which would be a scan per orphan and, on a disk larger
  * than the page cache, a great many polled reads at boot. A walk that a
  * read stops, a name it cannot read or a removal that fails may leave a
- * node without a name, which is counted in `orphans`, so that the dirty
- * flag stays for the next mount.
+ * node without a name, which is counted in `orphans`, and halts the mount
+ * (`krffs_halt`), which owes the check: a medium that fails a read or a
+ * write takes no more writes, as Linux's ext4 turns read-only after an
+ * error, and the dirty flag stays for the next mount.
  */
 uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
 {
@@ -3189,11 +3191,13 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
     uint64_t bound = krffs_max_steps(mount);
     uint32_t reaped = 0;
     uint32_t left = 0; /* added at the end, past the decrements of the removals */
+    int failed = 0;    /* a read or a free failed: the medium is failing */
     krffs_brief_t head;
     krffs_brief_t before;
 
     if (krffs_brief(mount, previous, &head) != 0) {
         mount->orphans++;
+        krffs_halt(mount);
         return 0;
     }
     node = krffs_step(mount, previous, head.size);
@@ -3203,11 +3207,13 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
         steps++;
         if (krffs_brief(mount, node, &head) != 0) {
             left++;
+            failed = 1;
             break;
         }
         unnamed = head.type == KRFFS_RESERVED_NODE ? krffs_name_is(mount, node, "", 0) : 0;
         if (unnamed < 0) {
             left++;
+            failed = 1;
         } else if (unnamed) {
             if (krffs_remove_at(mount, node) == 0) {
                 reaped++;
@@ -3216,9 +3222,11 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
                 }
             } else {
                 left++;
+                failed = 1;
             }
             if (krffs_brief(mount, node, &head) != 0) {
                 left++;
+                failed = 1;
                 break;
             }
         }
@@ -3226,6 +3234,9 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
         node = krffs_step(mount, node, head.size);
     }
     mount->orphans += left;
+    if (failed) {
+        krffs_halt(mount);
+    }
     return reaped;
 }
 
@@ -4177,6 +4188,107 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
     return krffs_wrap_node_position(fs, (krffs_node_t *)(((char *)node) + node->size));
 }
 
+int krffs_node_head(const krffs_node_t *node, krffs_node_t *out)
+{
+    uint64_t offset = krffs_offset_of(node);
+
+    if (offset == KRFFS_NO_NODE || !out) {
+        return -1;
+    }
+    return krffs_head(&krffs_root_mount, offset, out);
+}
+
+uint64_t krffs_ino_of(const krffs_node_t *node)
+{
+    krffs_node_t head;
+
+    if (krffs_fs && node == krffs_fs->node) {
+        return 1;
+    }
+    return krffs_node_head(node, &head) == 0 ? krffs_node_ino(&head) : 0;
+}
+
+krffs_node_t *krffs_next_node(const krffs_node_t *node, const krffs_node_t *head)
+{
+    uint64_t offset = krffs_offset_of(node);
+
+    if (offset == KRFFS_NO_NODE || !head) {
+        return krffs_fs ? krffs_fs->node : NULL;
+    }
+    return krffs_node_of(krffs_next_offset(&krffs_root_mount, offset, head));
+}
+
+/** Store `size` bytes of `value` at `field` of `node`, a node of the boot
+ * root, through the backend: 0, or -1 for a pointer outside the image, on a
+ * halted root, or when the store fails. */
+static int krffs_node_store(krffs_node_t *node, uint32_t field, const void *value, uint32_t size)
+{
+    uint64_t offset = krffs_offset_of(node);
+
+    if (offset == KRFFS_NO_NODE) {
+        return -1;
+    }
+    return krffs_backend_write(&krffs_root_mount, offset + field, value, size);
+}
+
+int krffs_node_set_mode(krffs_node_t *node, uint16_t mode)
+{
+    if (!krffs_fs || node == krffs_fs->node) {
+        return -1;
+    }
+    return krffs_node_store(node, KRFFS_FIELD_MODE, &mode, (uint32_t)sizeof(mode));
+}
+
+int krffs_node_set_owner(krffs_node_t *node, uint32_t uid, uint32_t gid, int which)
+{
+    int rc = 0;
+
+    if (which & KRFFS_SET_UID) {
+        rc |= krffs_node_store(node, KRFFS_FIELD_UID, &uid, (uint32_t)sizeof(uid));
+    }
+    if (which & KRFFS_SET_GID) {
+        rc |= krffs_node_store(node, KRFFS_FIELD_GID, &gid, (uint32_t)sizeof(gid));
+    }
+    return rc;
+}
+
+int krffs_node_set_time(krffs_node_t *node, uint32_t field, int64_t seconds, int64_t nanoseconds)
+{
+    krffs_node_time_t when;
+
+    if (field != KRFFS_FIELD_ATIME && field != KRFFS_FIELD_MTIME && field != KRFFS_FIELD_CTIME) {
+        return -1;
+    }
+    when.seconds = seconds;
+    when.nanoseconds = nanoseconds;
+    return krffs_node_store(node, field, &when, (uint32_t)sizeof(when));
+}
+
+int krffs_node_is_dir(const krffs_node_t *node)
+{
+    krffs_node_t head;
+
+    if (krffs_fs && node == krffs_fs->node) {
+        return 1;
+    }
+    if (krffs_node_head(node, &head) != 0) {
+        return -1;
+    }
+    return KRFFS_IS_DIR(head.mode) ? 1 : 0;
+}
+
+/** Whether `node` is a node of the boot root that holds a file's bytes: not
+ * the root, not a directory, and with a header that can be read. */
+static int krffs_is_file_node(const krffs_node_t *node)
+{
+    krffs_node_t head;
+
+    if (!node || node == krffs_fs->node || krffs_node_head(node, &head) != 0) {
+        return 0;
+    }
+    return !KRFFS_IS_DIR(head.mode);
+}
+
 krffs_node_t *krffs_child(krffs_node_t *dir, const char *name)
 {
     uint64_t id;
@@ -4188,10 +4300,16 @@ krffs_node_t *krffs_child(krffs_node_t *dir, const char *name)
     while (name[len] != '\0') {
         len++;
     }
-    if (dir && dir != krffs_fs->node && !KRFFS_IS_DIR(dir->mode)) {
-        return NULL;
+    if (!dir || dir == krffs_fs->node) {
+        id = (uint64_t)KRFFS_ROOT_ID;
+    } else {
+        krffs_node_t head;
+
+        if (krffs_node_head(dir, &head) != 0 || !KRFFS_IS_DIR(head.mode)) {
+            return NULL;
+        }
+        id = head.id;
     }
-    id = (!dir || dir == krffs_fs->node) ? (uint64_t)KRFFS_ROOT_ID : dir->id;
     return krffs_node_of(krffs_find_child(&krffs_root_mount, id, name, len));
 }
 
@@ -4219,10 +4337,7 @@ int krffs_open(const char *path)
         return -1;
     }
     node = krffs_resolve(path);
-    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        return -1;
-    }
-    return 0;
+    return krffs_is_file_node(node) ? 0 : -1;
 }
 
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size, uint32_t offset)
@@ -4241,7 +4356,7 @@ int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset)
         return -1;
     }
     node = krffs_resolve(path);
-    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+    if (!krffs_is_file_node(node)) {
         klog(KLOG_DEBUG, "krffs", "read: no such file: %s", path);
         return -1;
     }
@@ -4284,7 +4399,7 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
         return -1;
     }
     node = krffs_resolve(path);
-    if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+    if (!krffs_is_file_node(node)) {
         klog(KLOG_DEBUG, "krffs", "write: no such file: %s", path);
         return -1;
     }
@@ -4294,15 +4409,16 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
 uint32_t krffs_get_file_size(const char *path)
 {
     krffs_node_t *node;
+    krffs_node_t head;
 
     if (!krffs_fs) {
         return 0;
     }
     node = krffs_resolve(path);
-    if (!node || node == krffs_fs->node) {
+    if (!node || node == krffs_fs->node || krffs_node_head(node, &head) != 0) {
         return 0;
     }
-    return (uint32_t)node->data_size;
+    return (uint32_t)head.data_size;
 }
 
 int krffs_truncate(const char *path, uint32_t new_size)
@@ -4508,10 +4624,20 @@ uint32_t krffs_free_bytes(void)
     return krffs_free_at(&krffs_root_mount);
 }
 
-/** Mount a memory or disk image as described in krffs.h. */
-static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int (*flush)(void))
+/** Forget the boot root's mount after a mount that is refused. */
+static void krffs_unmount_root(void)
 {
-    krffs_node_t *root;
+    krffs_root_mount.backend = NULL;
+    krffs_root_mount.ctx = NULL;
+    krffs_root_mount.size = 0;
+}
+
+/** Mount a memory or disk image as described in krffs.h, through `backend`,
+ * or the memory backend when it is NULL. */
+static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int (*flush)(void),
+                            const krffs_backend_t *backend)
+{
+    krffs_node_t root;
     uint32_t fixed;
 
     if (!base || size < sizeof(krffs_node_t)) {
@@ -4520,19 +4646,7 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
         return -1;
     }
 
-    root = (krffs_node_t *)base;
-
-    if (root->magic != KRFFS_FILE_SYSTEM_MAGIC) {
-        klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X", root->magic,
-             KRFFS_FILE_SYSTEM_MAGIC);
-        return -1;
-    }
-    if (root->type != KRFFS_ROOT_NODE) {
-        klog(KLOG_ERR, "krffs", "mount: refused: first node is type %d, not the root", root->type);
-        return -1;
-    }
-
-    krffs_root_mount.backend = &krffs_memory_backend;
+    krffs_root_mount.backend = backend ? backend : &krffs_memory_backend;
     krffs_root_mount.ctx = base;
     krffs_root_mount.size = size;
     krffs_root_mount.grain = 0;
@@ -4547,28 +4661,41 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
     krffs_root_mount.on_halt = NULL; /* the VFS mount sets it (`krffs_root_on_halt`) */
     krffs_root_flush = flush;
 
+    if (krffs_head(&krffs_root_mount, 0, &root) != 0) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the root node cannot be read");
+        krffs_unmount_root();
+        return -1;
+    }
+    if (root.magic != KRFFS_FILE_SYSTEM_MAGIC) {
+        klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X", root.magic,
+             KRFFS_FILE_SYSTEM_MAGIC);
+        krffs_unmount_root();
+        return -1;
+    }
+    if (root.type != KRFFS_ROOT_NODE) {
+        klog(KLOG_ERR, "krffs", "mount: refused: first node is type %d, not the root", root.type);
+        krffs_unmount_root();
+        return -1;
+    }
+
     if (!krffs_chain_is_valid(&krffs_root_mount)) {
-        if (disk_grain == 0 || !(root->mode & KRFFS_MODE_DIRTY) ||
+        if (disk_grain == 0 || !(root.mode & KRFFS_MODE_DIRTY) ||
             !krffs_chain_is_walkable(&krffs_root_mount) ||
             krffs_repair_links(&krffs_root_mount, &fixed) != 0) {
             klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
-            krffs_root_mount.backend = NULL;
-            krffs_root_mount.ctx = NULL;
-            krffs_root_mount.size = 0;
+            krffs_unmount_root();
             return -1;
         }
         klog(KLOG_INFO, "krffs", "check: repaired: %d backward link(s)", (int)fixed);
     }
-    if (disk_grain != 0 && (root->mode & KRFFS_MODE_DIRTY)) {
+    if (disk_grain != 0 && (root.mode & KRFFS_MODE_DIRTY)) {
         uint32_t doubles = 0;
         uint32_t adopted = 0;
 
         if (krffs_repair_parents(&krffs_root_mount, &adopted) != 0 ||
             krffs_repair_names(&krffs_root_mount, &doubles) != 0) {
             klog(KLOG_ERR, "krffs", "mount: refused: the names cannot be checked");
-            krffs_root_mount.backend = NULL;
-            krffs_root_mount.ctx = NULL;
-            krffs_root_mount.size = 0;
+            krffs_unmount_root();
             return -1;
         }
         if (adopted != 0) {
@@ -4585,7 +4712,7 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
         }
     }
 
-    _krffs_fs_instance.node = root;
+    _krffs_fs_instance.node = (krffs_node_t *)base;
     _krffs_fs_instance.size = size;
     krffs_fs = &_krffs_fs_instance;
 
@@ -4614,10 +4741,11 @@ int krffs_root_has_orphans(void)
 
 int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
 {
-    return krffs_mount_root(ramdisk_base, ramdisk_size, 0, NULL);
+    return krffs_mount_root(ramdisk_base, ramdisk_size, 0, NULL, NULL);
 }
 
-int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void))
+int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void),
+                         const krffs_backend_t *backend)
 {
-    return krffs_mount_root(base, size, sector_bytes, flush);
+    return krffs_mount_root(base, size, sector_bytes, flush, backend);
 }

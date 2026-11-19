@@ -139,8 +139,9 @@ typedef struct krffs_file_system {
  * krffs.Readme.md. `sync` makes everything written so far durable, and
  * answers 0 or -1.
  *
- * The memory backend is one memcpy either way and never fails. It is the
- * only backend for the boot root, which is a mapped image.
+ * The memory backend is one memcpy either way and never fails; the boot
+ * root in memory uses it. The boot root on a disk uses the page cache's
+ * copies, which answer a read the disk fails (`init_krffs_disk_root`).
  */
 typedef struct krffs_backend {
     int (*read)(void *ctx, uint64_t offset, void *buffer, uint32_t size);
@@ -615,7 +616,9 @@ int krffs_hidden(krffs_mount_t *mount, uint64_t offset);
  * since nothing else looks for a node with no name, its space would be lost
  * for good. At a mount there are no descriptors, so every reserved node
  * without a name is garbage. Returns how many it freed; one whose removal
- * fails is left where it is and not counted.
+ * fails is left where it is and not counted. A read or a removal that
+ * fails halts the mount (`halted`), which owes the check and so keeps the
+ * dirty flag, as a write that fails among a rename's does.
  */
 uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
 
@@ -778,8 +781,11 @@ uint32_t krffs_free_at(krffs_mount_t *mount);
  * The descriptor table, the system call layer and the boot code keep
  * `krffs_node_t` pointers into the root's mapped image, so these take and
  * answer with pointers and call the offset interface above on the root's
- * mount. A pointer outside the image is no node. None of them takes a lock
- * of its own.
+ * mount. A pointer outside the image is no node. A pointer is a name for a
+ * node and is never read through: its fields are read with
+ * `krffs_node_head` and stored with the setters, so that a read the disk
+ * fails is an error and not a fault in the window. None of them takes a
+ * lock of its own.
  */
 
 /* The boot root, or NULL before `init_krffs` succeeds. */
@@ -794,7 +800,9 @@ extern void (*krffs_throttle)(void);
 #define KRFFS_THROTTLE_BYTES (128u * 1024u)
 
 /**
- * The node after `node` in the ring of `fs`, the root after the last.
+ * The node after `node` in the ring of `fs`, the root after the last, read
+ * through the pointer: for an image wholly in memory, as the host tools
+ * keep one, and never for the boot root, whose walks use `krffs_next_node`.
  *
  * A node smaller than its own header, which fails the mount's check,
  * answers the root, so a walk that stops at `fs->node` ends instead of
@@ -809,6 +817,49 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node);
 krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *node);
 
 /**
+ * Copy the header of `node`, a node of the boot root, into `out`: 0, or -1
+ * before the mount, for a pointer outside the image, or for a read that
+ * fails, which a system call answers with EIO. On a disk root the header's
+ * page may have to be read from the disk, and the pointer itself is read
+ * only through here: a fault in the window whose read fails would panic.
+ */
+int krffs_node_head(const krffs_node_t *node, krffs_node_t *out);
+
+/** Whether `node` of the boot root is a directory: 1 for the root, whose
+ * stored mode has no type bits, and for a directory, 0 for any other node,
+ * and -1 when its header cannot be read. */
+int krffs_node_is_dir(const krffs_node_t *node);
+
+/** `krffs_node_ino` of `node`, a node of the boot root, whose header is read
+ * with `krffs_node_head`: 1 for the root, and 0, which no node has, when the
+ * header cannot be read. */
+uint64_t krffs_ino_of(const krffs_node_t *node);
+
+/**
+ * The node after `node`, whose header is `head`, in the boot root's ring:
+ * the root after the last, and for a size smaller than a header, so a walk
+ * that stops at the root ends. The root for a pointer outside the image,
+ * NULL before the mount.
+ */
+krffs_node_t *krffs_next_node(const krffs_node_t *node, const krffs_node_t *head);
+
+/**
+ * Store a field of `node`, a node of the boot root, through its backend, as
+ * the system call layer changes a file's attributes: the whole `mode`, type
+ * bits included, which the caller keeps; `uid`, `gid` or both, as the
+ * KRFFS_SET_UID and KRFFS_SET_GID bits of `which` select; or the time at
+ * `field`, KRFFS_FIELD_ATIME, KRFFS_FIELD_MTIME or KRFFS_FIELD_CTIME. Each
+ * is one store, as the root's attribute changes are, and is not held to the
+ * rule of a field that publishes a change (`krffs_put`). 0, or -1 before the
+ * mount, for a pointer outside the image, for the root's mode, which holds
+ * the dirty flag, on a halted root, or when the store fails, a page that
+ * cannot be read in included.
+ */
+int krffs_node_set_mode(krffs_node_t *node, uint16_t mode);
+int krffs_node_set_owner(krffs_node_t *node, uint32_t uid, uint32_t gid, int which);
+int krffs_node_set_time(krffs_node_t *node, uint32_t field, int64_t seconds, int64_t nanoseconds);
+
+/**
  * The child of `dir` named `name`, one step of a walk, for the VFS lookup.
  * `dir` NULL or the root node is the root directory; `name` is one
  * component of at least one byte. NULL when absent, when `dir` is no
@@ -819,7 +870,8 @@ krffs_node_t *krffs_child(krffs_node_t *dir, const char *name);
 /**
  * Resolve `path` to its node, the root node for "/", as `krffs_walk` does.
  * NULL before the mount, or for a missing component or one before the last
- * that is not a directory. Callers read the node's mode for its type.
+ * that is not a directory. Callers read the node's header for its type
+ * (`krffs_node_head`).
  */
 krffs_node_t *krffs_resolve(const char *path);
 
@@ -1029,9 +1081,13 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size);
  * and returns 0 on success; it is the root's barrier, which an
  * allocation, a resize, a shrink and a write that raises a length call
  * between a write and the size, type or length that publishes it, and
- * before they write inside free space.
+ * before they write inside free space. `backend` reaches the image at
+ * `base`, the page cache's copies on the disk root (`krffs_window_backend`
+ * in kernel.c), so that a read the disk fails is an error the walks answer,
+ * and not the panic of a fault in the window; NULL is the memory backend.
  */
-int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void));
+int init_krffs_disk_root(void *base, uint32_t size, uint32_t sector_bytes, int (*flush)(void),
+                         const krffs_backend_t *backend);
 
 /** `krffs_count_at` on the boot root: its named reserved nodes, 0 before the
  * mount. */
