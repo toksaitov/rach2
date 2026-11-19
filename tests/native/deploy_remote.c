@@ -79,24 +79,26 @@ int nd_stage(struct nd_deploy *d)
  * boot is this boot's when it is the boot_id or that token. A controller claim
  * or a collection lock of another boot belongs to a process that no longer
  * exists, and is cleared with a line that names it; a collection lock of this
- * boot, or one with no owner record, is refused by name. When the etude boot
- * token cannot be read whole, a recorded boot of hexadecimal digits alone, as
- * the token is, may be this boot's and is kept. Every change of the collection
- * lock, the setup's clearing of a stale one and the collection's making and
- * release of its own, writes STATE/collection.journal first, with the owner
- * record of the lock it changes, and removes it once the change is whole, so
- * that a journal seen under the flock below was left by a process stopped
- * midway: the setup then removes the lock when it has no owner record or the
- * one the journal names, keeps a lock of any other owner, and removes the
- * journal, with a line that names what it removed. KRFFS, the root of the
- * installed machine, refuses a directory's rename, so the lock cannot move
- * aside before its removal. The look at the claims and the lock, their removal
- * and the making of this run's claim hold flock(1) on STATE/collection.serial,
- * which the collection holds while it takes or releases its lock and the
- * cleanup while it looks at or removes its claim, so that no setup removes a
- * claim or a lock made after its reading. A claim already gone counts as
- * cleared. The etude boot token is still published for the measurement contexts
- * that read it. */
+ * boot, or one with no owner record, is refused by name. The etude boot token
+ * is read only from a regular file of the caller's, 64 bytes long and writable
+ * by no one else, as tools/etude/boot_identity.c reads it; when it cannot be, a
+ * recorded boot of hexadecimal digits alone, as the token is, may be this
+ * boot's and is kept. Every change of the collection lock, the setup's clearing
+ * of a stale one and the collection's making and release of its own, writes
+ * STATE/collection.journal first, with the owner record of the lock it changes,
+ * and removes it once the change is whole, so that a journal seen under the
+ * flock below was left by a process stopped midway: the setup then removes the
+ * lock when its owner record is absent, the one the journal names or the start
+ * of it, as a stopped write leaves, keeps a lock of any other owner, and
+ * removes the journal, with a line that names what it removed. KRFFS, the root
+ * of the installed machine, refuses a directory's rename, so the lock cannot
+ * move aside before its removal. The look at the claims and the lock, their
+ * removal and the making of this run's claim hold flock(1) on
+ * STATE/collection.serial, which the collection holds while it takes or
+ * releases its lock and the cleanup while it looks at or removes its claim, so
+ * that no setup removes a claim or a lock made after its reading. A claim
+ * already gone counts as cleared. The etude boot token is still published for
+ * the measurement contexts that read it. */
 static int run_setup(struct nd_deploy *d, char *setup, size_t size)
 {
     const struct nd_config *c = &d->c;
@@ -113,7 +115,9 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "boot=$(cat /proc/sys/kernel/random/boot_id); "
         "case $boot in *[!0-9a-f-]*|'') exit 1;; esac; "
         "token=; if test -f \"$bootfile\" && test ! -L \"$bootfile\"; then "
-        "token=$(head -c 65 \"$bootfile\") || token=; fi; "
+        "me=$(id -u); case $(stat -c '%%u:%%a:%%s' \"$bootfile\" 2>/dev/null) in "
+        "\"$me\":644:64|\"$me\":600:64|\"$me\":444:64|\"$me\":400:64) "
+        "token=$(head -c 64 \"$bootfile\") || token=;; esac; fi; "
         "case $token in *[!0-9a-f]*) token=;; esac; test ${#token} -eq 64 || token=; "
         "thisboot() { test \"$1\" = \"$boot\" && return 0; "
         "if test -n \"$token\"; then test \"$1\" = \"$token\"; return; fi; "
@@ -134,10 +138,10 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
         "if test -f \"$journal\"; then jop=; jrec=; read jop jrec < \"$journal\" || true; "
         "if test -d \"$lock\"; then jown=; "
         "test ! -f \"$lock/owner\" || read jown < \"$lock/owner\" || true; "
-        "if test -z \"$jown\" || test \"$jown\" = \"$jrec\"; then rm -rf \"$lock\" || true; "
+        "case $jrec in \"$jown\"*) rm -rf \"$lock\" || true; "
         "test ! -e \"$lock\" || refuse \"$lock\"; "
         "printf 'native-deploy: cleared: %%s: left by a stopped change: %%s %%s\\n' \"$lock\" "
-        "\"$jop\" \"$jrec\" >&2; fi; fi; rm -f \"$journal\"; fi; "
+        "\"$jop\" \"$jrec\" >&2;; esac; fi; rm -f \"$journal\"; fi; "
         "held='held with no owner record'; "
         "if test -d \"$lock\" && test -f \"$lock/owner\"; then "
         "lpid=; lboot=; read lpid lborn lboot < \"$lock/owner\" || true; "
