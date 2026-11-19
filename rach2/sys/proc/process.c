@@ -1727,7 +1727,12 @@ static process_t *proc_subreaper(uint32_t dead_pid)
  * parent, so that parent is sent SIGCHLD now and its wait woken. When the
  * system's init itself is ending, no other init is left to adopt the
  * children. The parent-death signals are posted after the adoption, so that
- * a handler that asks for its parent finds the new one, as on Linux.
+ * a handler that asks for its parent finds the new one, as on Linux. A
+ * process group that the end leaves orphaned with a member stopped, a
+ * child's or the ending process's own, is sent SIGHUP and SIGCONT
+ * (`pgrp_orphan_signal`), as Linux 6.12.115's exit_notify sends them, for
+ * each child from reparent_leader and then for its own group
+ * (kernel/exit.c:687, 747).
  */
 void reparent_children(uint32_t dead_pid)
 {
@@ -1768,6 +1773,12 @@ void reparent_children(uint32_t dead_pid)
         if (p->pdeath_signal != 0 && p->state != PROC_ZOMBIE) {
             signal_post(p, (int)p->pdeath_signal);
         }
+        if (init != NULL && p->pid == p->tgid) {
+            pgrp_orphan_signal(p, dead, NULL);
+        }
+    }
+    if (dead != NULL) {
+        pgrp_orphan_signal(dead, get_process(dead->parent_pid), dead);
     }
 }
 
