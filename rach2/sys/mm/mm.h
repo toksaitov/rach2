@@ -350,22 +350,24 @@ void mm_reap(void);
 struct process;
 
 /**
- * Set `anon` (vm.h) on each region of anonymous memory that meets [start,
- * end) and has a page written anywhere in it, and on each private mapping
- * of a file that meets the range or borders it and has a private copy of a
- * page (a frame `frame_make_anon` marked), before a call splits or merges a
- * region, drops pages of the range or takes write from it, so that
- * `vm_merge` can refuse two private mappings of one file that each have
- * pages of their own. A call that adds a region passes the range the region
- * will take, so that its neighbours are marked. Linux
- * gives a region its anon_vma at its first private page and keeps it after
- * the page goes, and a split gives both parts the one it has; the store
- * that writes a page here sets its entry's dirty bit with no fault, so the
- * mark is taken while the pages that show it are still mapped and before a
- * split copies it. A page a read brought in zeroed and nothing stored into
- * does not count, as Linux's base-page anonymous fault maps its zero page
- * there. Rach2 has no transparent huge pages; Linux's huge zero page
- * prepares anon_vma on a read too, so its ac can differ for such a region.
+ * Give an anonymous identity (`anon` in vm.h, `vm_anon_prepare`) to each
+ * private region that meets [start, end) or borders it and has pages of its
+ * own: of anonymous memory, a page written anywhere in it; of a file, a
+ * private copy of a page (a frame `frame_make_anon` marked). A call that
+ * splits, merges, moves or copies a region, drops pages of the range or
+ * takes write from it calls it first, so that `vm_merge` can refuse two
+ * regions with pages of their own, and so does the truncation of a file
+ * before it unmaps the private copies (`paging_zap_where`). A call that adds
+ * a region passes the range the region will take, so that its neighbours
+ * are marked. Linux gives a region its anon_vma at its first private page
+ * and keeps it after the page goes, and a split gives both parts the one it
+ * has; the store that writes a page here sets its entry's dirty bit with no
+ * fault, so the mark is taken while the pages that show it are still mapped
+ * and before a split copies it. A page a read brought in zeroed and nothing
+ * stored into does not count, as Linux's base-page anonymous fault maps its
+ * zero page there. Rach2 has no transparent huge pages; Linux's huge zero
+ * page prepares anon_vma on a read too, so its ac can differ for such a
+ * region. The caller holds the regions' lock as `vm_anon_prepare` asks.
  */
 void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end);
 

@@ -605,6 +605,7 @@ static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t p
     r->pgoff = pgoff;
     r->policy = NULL;
     r->anon = 0;
+    r->anon_forked = 0;
     r->parent = parent;
     r->left = r->right = NULL;
     r->height = 1;
@@ -680,21 +681,20 @@ static void vm_delete(vm_space_t *vm, vma_t *r, int hold)
 }
 
 /** Split r at an interior address, using a reserved node for the upper
- * part, which takes a reference to r's policy. */
+ * part, which takes a reference to r's policy and shares its anonymous
+ * identity, as Linux's __split_vma clones the anon_vma chain. */
 static vma_t *vm_split(vm_space_t *vm, vma_t *r, uintptr_t at)
 {
     uintptr_t end = r->end;
-    uint32_t pgoff = r->pgoff;
+    uint32_t pgoff = r->pgoff + (uint32_t)((at - r->start) >> VM_PAGE_SHIFT);
     vma_t *upper;
 
-    if (r->file) {
-        pgoff += (uint32_t)((at - r->start) >> VM_PAGE_SHIFT);
-    }
     r->end = at;
     vm->total -= end - at;
     upper = vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
     upper->policy = vm_policy_get(r->policy);
     upper->anon = r->anon;
+    upper->anon_forked = r->anon_forked;
     return upper;
 }
 
@@ -705,12 +705,39 @@ static int vm_file_same(const struct vm_file *a, const struct vm_file *b)
     return a == b || (a && b && a->same && a->same == b->same && a->same(a, b));
 }
 
+/** A new anonymous identity of `vm`: never 0, and the same as an earlier
+ * one only after 2^32 of them. */
+static uint32_t vm_anon_new(vm_space_t *vm)
+{
+    if (++vm->anon_last == 0) {
+        vm->anon_last = 1;
+    }
+    return vm->anon_last;
+}
+
+/** Whether the page numbers of `b` continue those of `a`, which ends where
+ * `b` starts: the file's, or for anonymous memory the addresses' (`vma_t`). */
+static int vm_pgoff_continues(const vma_t *a, const vma_t *b)
+{
+    return a->pgoff + (uint32_t)((a->end - a->start) >> VM_PAGE_SHIFT) == b->pgoff;
+}
+
+/** Whether the bordering regions `r` and `s` may merge by their anonymous
+ * identities, as Linux's is_mergeable_anon_vma: both have the same one, or
+ * one has none and the other's is not a fork's copy, whose anon_vma_chain
+ * holds its parent's record too. */
+static int vm_anon_mergeable(const vma_t *r, const vma_t *s)
+{
+    if (r->anon && s->anon) {
+        return r->anon == s->anon;
+    }
+    return !r->anon_forked && !s->anon_forked;
+}
+
 /** Merge a compatible right neighbour into r; return 1 if one was removed.
  * When the two map one open file through two records, r keeps its own and
  * the neighbour's is put, which `vm_file_reap` releases after the change.
- * Two private regions of separate records merge only while at most one of
- * them has pages of its own (`anon`), as Linux's is_mergeable_anon_vma
- * refuses two regions with different anon_vma records. */
+ * The merged region has whichever anonymous identity either had. */
 static int vm_merge(vm_space_t *vm, vma_t *r)
 {
     vma_t *s = r->next;
@@ -718,16 +745,47 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
 
     if (!s || r->end != s->start || r->prot != s->prot || r->type != s->type ||
         !vm_file_same(r->file, s->file) || !vm_policy_equal(r->policy, s->policy) ||
-        (r->file && r->pgoff + ((r->end - r->start) >> VM_PAGE_SHIFT) != s->pgoff) ||
-        (r->file != s->file && r->type != VM_SHARED && r->anon && s->anon)) {
+        !vm_pgoff_continues(r, s) || !vm_anon_mergeable(r, s)) {
         return 0;
     }
     end = s->end;
-    r->anon |= s->anon;
+    if (!r->anon) {
+        r->anon = s->anon;
+        r->anon_forked = s->anon_forked;
+    }
     vm_delete(vm, s, 0); /* r holds its file still */
     vm->total += end - r->end;
     r->end = end;
     return 1;
+}
+
+/** Whether the region `a`, and `b` above it, may share an anonymous
+ * identity, as Linux's anon_vma_compatible: they border, have the same
+ * kind, file and policy, the same protection but for the access bits, and
+ * continuous page numbers. */
+static int vm_anon_compatible(const vma_t *a, const vma_t *b)
+{
+    uint32_t access = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC | VM_PROT_NOREAD;
+
+    return a->end == b->start && a->type == b->type && vm_file_same(a->file, b->file) &&
+           vm_policy_equal(a->policy, b->policy) && !((a->prot ^ b->prot) & ~access) &&
+           vm_pgoff_continues(a, b);
+}
+
+void vm_anon_prepare(vm_space_t *vm, vma_t *r)
+{
+    const vma_t *next = r->next, *prev = r->prev;
+
+    if (r->anon) {
+        return;
+    }
+    if (next && next->anon && !next->anon_forked && vm_anon_compatible(r, next)) {
+        r->anon = next->anon;
+    } else if (prev && prev->anon && !prev->anon_forked && vm_anon_compatible(prev, r)) {
+        r->anon = prev->anon;
+    } else {
+        r->anon = vm_anon_new(vm);
+    }
 }
 
 void vm_release_detached(vm_space_t *vm)
@@ -847,7 +905,10 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
             copy = vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
                            r->file, r->pgoff);
             copy->policy = vm_policy_get(r->policy);
-            copy->anon = (r->prot & VM_PROT_WIPEONFORK) ? 0 : r->anon;
+            if (r->anon && !(r->prot & VM_PROT_WIPEONFORK)) {
+                copy->anon = vm_anon_new(dst);
+                copy->anon_forked = 1;
+            }
         }
     }
     if (guard_fork(dst, src) != 0) {
@@ -886,13 +947,14 @@ int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
     like.file = file;
     like.policy = NULL;
     like.anon = 0;
-    return vm_insert_like(vm, start, end, &like, pgoff);
+    like.anon_forked = 0;
+    return vm_insert_like(vm, start, end, &like, file ? pgoff : (uint32_t)(start >> VM_PAGE_SHIFT));
 }
 
 int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *like,
                    uint32_t pgoff)
 {
-    vma_t *r;
+    vma_t *r, *prev;
 
     if (start >= end || ((start | end) & VM_PAGE_MASK) || vm_overlaps(vm, start, end) ||
         vm_reserve(vm, 1) != 0) {
@@ -901,16 +963,18 @@ int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *
     r = vm_link(vm, start, end, like->prot, like->type, like->file, pgoff);
     r->policy = vm_policy_get(like->policy);
     r->anon = like->anon;
-    (void)vm_merge(vm, r);
-    if (r->prev) {
-        (void)vm_merge(vm, r->prev);
+    r->anon_forked = like->anon_forked;
+    prev = r->prev;
+    if (prev && vm_merge(vm, prev)) {
+        r = prev;
     }
+    (void)vm_merge(vm, r);
     return 0;
 }
 
 int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_policy *pol)
 {
-    vma_t *r = vm_find(vm, start);
+    vma_t *r = vm_find(vm, start), *prev;
 
     if (!r || start >= end || end > r->end) {
         return 0;
@@ -927,10 +991,11 @@ int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_poli
     (void)vm_policy_get(pol);
     vm_policy_put(r->policy);
     r->policy = pol;
-    (void)vm_merge(vm, r);
-    if (r->prev) {
-        (void)vm_merge(vm, r->prev);
+    prev = r->prev;
+    if (prev && vm_merge(vm, prev)) {
+        r = prev;
     }
+    (void)vm_merge(vm, r);
     return 0;
 }
 
@@ -963,9 +1028,7 @@ int vm_detach(vm_space_t *vm, uintptr_t start, uintptr_t end)
             vm_delete(vm, r, 1);
         } else if (start <= r->start) {
             vm->total -= end - r->start;
-            if (r->file) {
-                r->pgoff += (uint32_t)((end - r->start) >> VM_PAGE_SHIFT);
-            }
+            r->pgoff += (uint32_t)((end - r->start) >> VM_PAGE_SHIFT);
             r->start = end;
             break;
         } else {
@@ -1325,5 +1388,6 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     }
     vm->total += growth;
     r->start = page;
+    r->pgoff -= (uint32_t)(growth >> VM_PAGE_SHIFT);
     return 1;
 }

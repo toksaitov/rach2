@@ -2737,6 +2737,7 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
         return copy;
     }
     mmap_write_lock(mm);
+    mm_note_anon(mm, 0, ~(uintptr_t)0);
     failed = paging_fork_copy(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0;
     if (!failed) {
         mm_copy_info(copy, mm);
@@ -7918,6 +7919,7 @@ static long brk_change(vm_space_t *vm, uintptr_t req, uintptr_t *old_top_out,
             !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
             return (long)vm->brk;
         }
+        mm_note_anon(current_proc->mm, old_top, new_top);
         if (vm_insert(vm, old_top, new_top,
                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
                       VM_HEAP) != 0) {
@@ -8526,7 +8528,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, uint32_t
             vma_exhausted("mmap");
         }
     }
-    if (rc == 0 && src->file && src->type != VM_SHARED) {
+    if (rc == 0 && src->type != VM_SHARED) {
         mm_note_anon(mm, base, base + len);
     }
     if (rc == 0 &&
@@ -9042,18 +9044,22 @@ long sys_mprotect(isr_params_t *params)
  * of `new_len` bytes, moving the resident pages and the guard pages there
  * (`vm_guard_copy`). Returns `to`, or -ENOMEM with no room for the regions,
  * the guards or a page table. The file the region
- * maps and its policy, which the new region keeps as Linux's copy_vma keeps
- * it, are held across the move, which removes the old region's holds before
- * the new region takes its own. */
+ * maps, its policy and its anonymous identity, which the new region keeps as
+ * Linux's copy_vma keeps them, are held across the move, which removes the
+ * old region's holds before the new region takes its own. Anonymous memory
+ * with no identity takes the page number of `to`, as copy_vma gives it to
+ * an anonymous region not yet faulted. */
 static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
                        uintptr_t new_len)
 {
     vma_t like;
-    uint32_t pgoff = r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE);
+    uint32_t pgoff;
     uintptr_t moved = len < new_len ? len : new_len;
     int rc;
 
     mm_note_anon(current_proc->mm, addr, addr + len);
+    pgoff = r->file || r->anon ? r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE)
+                               : (uint32_t)(to / PAGE_SIZE);
     like = *r;
     if (vm_reserve(vm, 3) != 0) {
         vma_exhausted("mremap");
@@ -9379,6 +9385,21 @@ static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t en
     return end;
 }
 
+/** Give each region of anonymous memory that meets [start, end) an
+ * anonymous identity for its guard pages, as Linux 6.18 prepares an anon_vma
+ * there: two anonymous pages guarded apart and moved together stay two
+ * regions on it, and two private pages of a file merge. */
+static void madvise_guard_identity(vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    vma_t *r;
+
+    for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
+        if (!r->file) {
+            vm_anon_prepare(vm, r);
+        }
+    }
+}
+
 /** The mark of a region (vm.h) that `advice` sets or clears: VM_PROT_DONTFORK
  * for MADV_DONTFORK and MADV_DOFORK, VM_PROT_WIPEONFORK for MADV_WIPEONFORK
  * and MADV_KEEPONFORK, or 0. */
@@ -9538,6 +9559,7 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
             return -ENOMEM;
         }
         if (advice == MADV_GUARD_INSTALL) {
+            madvise_guard_identity(vm, addr, end);
             paging_zap_note(current_proc->mm);
             mmn_notify(current_proc->mm, MMN_DROP, addr, end);
             unmap_user_range(_curr_dir, addr, end);
