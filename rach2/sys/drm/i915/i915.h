@@ -1742,8 +1742,8 @@ void i915_rpm_unplug(struct drm_i915_private *i915);
  * Hold the device awake, waking it if it sleeps, as Linux's
  * intel_runtime_pm_get: before any access to its registers, its GTT or its
  * aperture from a path no other hold covers. Process context, with no
- * spinlock of the driver's held; it spins while a sleep or a wake runs on
- * another processor, and never sleeps. Pair with `i915_rpm_put`.
+ * spinlock held. May sleep during a wake or while another process runs
+ * a transition. Pair with `i915_rpm_put`.
  */
 void i915_rpm_get(struct drm_i915_private *i915);
 

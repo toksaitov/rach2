@@ -13,6 +13,11 @@
 #include "../../fs/synthfs.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
+#include "../../lib/kirq.h"
+#include "../../proc/percpu.h"
+#include "../../proc/sched.h"
+#include "../../proc/smp.h"
+#include "../../rtc.h"
 
 /* Linux's bounds: the switch of the CD clock's source, 1 us; LCPLL's lock
  * and unlock, 5 ms and 1 ms; D_COMP's compensation, 1 ms; the sideband's
@@ -36,6 +41,63 @@ static struct drm_i915_private *rpm_i915(void *owner)
  * The sideband to the PCH's clocks and CLKOUT_DP
  */
 
+#ifndef RACH2_HOSTTEST
+static wait_queue_t sbi_waiters;
+
+/** Whether the timer has reached the SBI poll's next tick. */
+static int sbi_poll_due(void *arg)
+{
+    return rtc_ticks_now() >= *(const uint64_t *)arg;
+}
+
+/** Sleep until the next tick. Process context, with interrupts enabled. */
+static void sbi_poll_sleep(void)
+{
+    uint64_t due = rtc_ticks_now() + 1u;
+    uint64_t saved = current_proc->wakeup_tick;
+
+    current_proc->wakeup_tick = due;
+    (void)wq_wait_event_nointr(&sbi_waiters, sbi_poll_due, &due);
+    current_proc->wakeup_tick = saved;
+}
+#endif
+
+/** Wait for the sideband to go idle, or log its last state and return
+ * -ETIMEDOUT. Like Linux's intel_wait_for_register_fw, the slow poll
+ * sleeps against a monotonic deadline. The runtime PM transition owns
+ * the sideband throughout, even while the caller sleeps. */
+static int32_t sbi_wait(struct i915_hw *hw, const char *what)
+{
+#ifndef RACH2_HOSTTEST
+    if (current_proc && sched_is_enabled() && kirq_enabled()) {
+        int64_t start = rtc_monotonic_ns(), elapsed;
+        uint32_t value = i915_read(hw, SBI_CTL_STAT);
+
+        if (!(value & SBI_BUSY)) {
+            return 0;
+        }
+        i915_delay_us(hw, 10);
+        for (;;) {
+            value = i915_read(hw, SBI_CTL_STAT);
+            if (!(value & SBI_BUSY)) {
+                return 0;
+            }
+            elapsed = rtc_monotonic_ns() - start;
+            if (elapsed >= SBI_US * 1000u) {
+                hw->timeouts++;
+                hw->last_timeout = what;
+                klog(KLOG_ERR, "i915", "%s: timeout after %u us: register 0x%x reads 0x%x", what,
+                     (unsigned)drm_div64((uint64_t)elapsed, 1000u), (unsigned)SBI_CTL_STAT,
+                     (unsigned)value);
+                return -ETIMEDOUT;
+            }
+            sbi_poll_sleep();
+        }
+    }
+#endif
+    return i915_wait_for(hw, what, SBI_CTL_STAT, SBI_BUSY, 0, SBI_US);
+}
+
 /**
  * One transfer of the sideband to the clock unit's register `reg`, as
  * Linux's intel_sbi_rw: `*val` written, or read into it. 0; -EBUSY when a
@@ -47,13 +109,13 @@ static int32_t sbi_rw(struct drm_i915_private *i915, uint32_t reg, uint32_t *val
     struct i915_hw *hw = &i915->hw;
     uint32_t cmd = SBI_CTL_DEST_ICLK | SBI_CTL_OP_CRRD | (write ? SBI_CTL_OP_WRITE : 0u);
 
-    if (i915_wait_for(hw, "sbi ready", SBI_CTL_STAT, SBI_BUSY, 0, SBI_US) < 0) {
+    if (sbi_wait(hw, "sbi ready") < 0) {
         return -EBUSY;
     }
     i915_write(hw, SBI_ADDR, reg << 16);
     i915_write(hw, SBI_DATA, write ? *val : 0u);
     i915_write(hw, SBI_CTL_STAT, cmd | SBI_BUSY);
-    if (i915_wait_for(hw, "sbi transfer", SBI_CTL_STAT, SBI_BUSY, 0, SBI_US) < 0) {
+    if (sbi_wait(hw, "sbi transfer") < 0) {
         return -ETIMEDOUT;
     }
     if (i915_read(hw, SBI_CTL_STAT) & SBI_RESPONSE_FAIL) {
@@ -333,6 +395,33 @@ static int32_t sleep_ready(struct drm_i915_private *i915)
     return why ? refuse(i915, why) : 0;
 }
 
+/** Drop the inherited big-lock depth before a hardware wait. */
+static int rpm_big_drop(void)
+{
+#ifndef RACH2_HOSTTEST
+    uint32_t flags = kirq_save();
+    int depth = bkl_drop();
+
+    kirq_restore(flags);
+    return depth;
+#else
+    return 0;
+#endif
+}
+
+/** Restore the big-lock depth after a hardware wait. */
+static void rpm_big_take(int depth)
+{
+#ifndef RACH2_HOSTTEST
+    uint32_t flags = kirq_save();
+
+    bkl_take(depth);
+    kirq_restore(flags);
+#else
+    (void)depth;
+#endif
+}
+
 /**
  * Before a sleep, the checks of `sleep_ready`, then Linux's
  * i915_gem_runtime_suspend: every program's GTT map revoked, so that its
@@ -373,12 +462,15 @@ static int32_t rpm_prepare(void *owner)
  * the checks of `sleep_ready` again; then forcewake let go, the
  * interrupts off and a handler on another processor finished, as Linux's
  * intel_runtime_pm_disable_interrupts, package C8 allowed, D3hot, every
- * access refused (`hw.asleep`), and the connectors polled.
+ * access refused (`hw.asleep`), and the connectors polled. The runtime PM
+ * state holds off synchronous getters while the hardware changes without
+ * the big lock.
  */
 static int32_t rpm_suspend(void *owner)
 {
     struct drm_i915_private *i915 = rpm_i915(owner);
     int32_t err;
+    int depth;
 
     if (i915->rpm.faults != i915->rpm.faults_seen) {
         return -EAGAIN;
@@ -393,11 +485,13 @@ static int32_t rpm_suspend(void *owner)
     i915->rpm.refused = NULL;
     i915_irq_suspend(i915);
     i915_irq_sync(i915);
+    depth = rpm_big_drop();
     pc8_enable(i915);
     d3_enter(i915);
     i915->hw.asleep_logged = 0;
     i915->hw.asleep = 1;
     intel_hotplug_suspend(i915);
+    rpm_big_take(depth);
     return 0;
 }
 
@@ -405,19 +499,22 @@ static int32_t rpm_suspend(void *owner)
  * Wake the device, Linux's intel_runtime_resume after the PCI core's: D0
  * and the configuration again, package C8 left, the interrupts back, the
  * fence registers and swizzle written again, and the hotplug detection
- * back with every connector probed. Spins and never sleeps. 0.
+ * back with every connector probed. The clock restore may sleep. 0.
  */
 static int32_t rpm_resume(void *owner)
 {
     struct drm_i915_private *i915 = rpm_i915(owner);
+    int depth;
 
     i915->hw.asleep = 0;
     if (i915->hw.asleep_accesses != 0 && i915->hw.asleep_logged) {
         klog(KLOG_ERR, "i915", "runtime pm: %u accesses while suspended, the last of 0x%x",
              (unsigned)i915->hw.asleep_accesses, (unsigned)i915->hw.asleep_reg);
     }
+    depth = rpm_big_drop();
     d3_leave(i915);
     pc8_disable(i915);
+    rpm_big_take(depth);
     i915_irq_resume(i915);
     i915_gem_restore_fences(i915);
     intel_hotplug_resume(i915);
@@ -435,8 +532,8 @@ static void rpm_schedule(void *owner, uint32_t ms)
 static const struct pm_runtime_ops i915_rpm_ops = {rpm_prepare, rpm_suspend, rpm_resume,
                                                    rpm_schedule};
 
-/** The worker's run of the sleep, under the big lock, with the device
- * held by the worker. */
+/** Start the suspend under the big lock, with the device held by the
+ * worker. The hardware waits run after dropping the lock. */
 static void rpm_work(struct drm_work *work)
 {
     pm_runtime_idle(&to_i915(work->dev)->rpm.core);
