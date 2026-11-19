@@ -76,6 +76,6 @@ x86_64/vmx_pmu_caps_test skip skip Linux: Requirement not met: kvm_cpu_has(X86_F
 x86_64/xapic_ipi_test pass pass
 x86_64/xapic_state_test pass pass
 x86_64/xcr0_cpuid_test pass pass
-x86_64/xen_shinfo_test pass pass #4671: Rach2 skips, xen_caps & KVM_XEN_HVM_CONFIG_SHARED_INFO, having no Xen HVM emulation (rach2/sys/kvm/kvm.c, kvm_check_extension)
-x86_64/xen_vmcall_test pass pass #4671: Rach2 skips, xen_caps & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL, having no Xen HVM emulation
+x86_64/xen_shinfo_test pass pass
+x86_64/xen_vmcall_test pass pass
 x86_64/xss_msr_test pass pass
