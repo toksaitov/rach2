@@ -82,16 +82,23 @@ void vfio_device_zap(struct vfio_device *d)
     paging_zap_device(d, 0, 6u << VFIO_PCI_PGOFF_SHIFT);
 }
 
-/** Read the BARs: their addresses, sizes and kinds. */
+/** Read the BARs: their addresses, sizes and kinds. An I/O BAR's size is
+ * the one the bus's walk found, as Linux's pci_resource_len gives it. */
 static void bars_init(struct vfio_device *d)
 {
+    struct pci_resource r;
     int i;
 
     for (i = 0; i < 6; i++) {
         uint32_t v = pci_read_config32(DEV(d), (uint8_t)(0x10 + 4 * i));
 
         d->bar_io[i] = (v & 1u) != 0;
-        d->bar_size[i] = pci_bar_size64(&d->pci, i);
+        if (d->bar_io[i]) {
+            pci_resource(DEV(d), i, &r);
+            d->bar_size[i] = (r.flags & PCI_IORESOURCE_IO) ? r.end - r.start + 1u : 0;
+        } else {
+            d->bar_size[i] = pci_bar_size64(&d->pci, i);
+        }
         d->bar_phys[i] = d->bar_io[i] ? (v & ~3u) : pci_bar_address64(&d->pci, i);
         if (!d->bar_io[i] && (v & 0x6u) == 0x4u && i < 5) {
             i++;
