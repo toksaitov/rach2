@@ -640,15 +640,26 @@ static void con_flush(void)
     drm_dev_put(dev);
 }
 
+/** Whether the blank `off`, the console's ask, has work left: a change of
+ * the ask, or, with the display asked on, a CRTC the blank turned off and
+ * has not turned on again, as after a blank that turned one CRTC off and
+ * failed on the next, and a key before its try again. */
+static int con_blank_pending(int off)
+{
+    return off != con_blank_done || (!off && con_blank_crtcs != 0);
+}
+
 /** The worker's wait: until a blank asks, or its try after a failure is
- * due; past the flush's tick when one is set, else until a shadow wants
- * flushes. */
+ * due, which is then due whatever the ask, since the wait's deadline is
+ * that tick; past the flush's tick when one is set, else until a shadow
+ * wants flushes. */
 static int con_flush_ready(void *arg)
 {
+    int off = con_blank_asked;
+
     (void)arg;
-    if (con_blank_asked != con_blank_done &&
-        (con_blank_retry == 0 || con_blank_asked != con_blank_retry_ask ||
-         rtc_ticks_now() >= con_blank_retry)) {
+    if (con_blank_retry != 0 ? off != con_blank_retry_ask || rtc_ticks_now() >= con_blank_retry
+                             : con_blank_pending(off)) {
         return 1;
     }
     return con_deadline != 0 ? rtc_ticks_now() >= con_deadline : con_shadowed();
@@ -726,7 +737,9 @@ static int con_blank_commits(struct drm_device *dev, int off, uint32_t gen, int 
  * and the worker tries it again every CON_BLANK_RETRY_MS until it
  * succeeds or the console asks otherwise, so that a wake that failed
  * once, for memory or a busy device, does not leave the display dark
- * while the console shows itself unblanked. On the firmware's
+ * while the console shows itself unblanked. A wake turns on every CRTC
+ * the blank turned off, also after a blank that failed on another CRTC
+ * and was never done (`con_blank_pending`). On the firmware's
  * framebuffer, with no device, or while a master holds the device, only
  * the record changes, and CRTCs that a master or a later placement set
  * are left to them. Process context, the worker's; may sleep.
@@ -738,7 +751,7 @@ static void con_blank_service(void)
     int off = con_blank_asked, failed;
     uint32_t gen = con.gen;
 
-    if (off == con_blank_done) {
+    if (!con_blank_pending(off)) {
         con_blank_retry = 0;
         return;
     }
