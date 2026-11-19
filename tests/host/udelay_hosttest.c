@@ -25,8 +25,12 @@
  * as it delays too. The model runs one whenever a latch is pending at a read
  * and `pit_latch`'s lock is free, as it would be with no lock, with the same
  * torn reads; with the lock it waits until the wait's reads are done. A
- * latch whose holder was stopped inside it ends the wait at once, with 0
- * measured and the chip untouched, where spinning on it would never end.
+ * latch whose holder was stopped inside it, from the start of the wait or
+ * from its middle, leaves the rest of the wait to the HPET or the PM timer,
+ * modelled as a counter that runs or does not, after PIT_LATCH_TRIES tries;
+ * the wait lasts and returns all it was asked while that counter runs, and
+ * ends at once, with what it measured and the chip untouched since, where it
+ * does not, where spinning on the latch would never end.
  */
 
 #include "../../rach2/sys/arch/x86/udelay.c"
@@ -62,6 +66,12 @@ static int rival_armed;
 static unsigned long spins;
 /* The port accesses made. */
 static unsigned long accesses;
+/* The access after which another processor takes the latch and stops
+ * inside it, 0 for never. */
+static unsigned long holder_stops_at;
+/* Whether the HPET or the PM timer runs, and the microseconds asked of it. */
+static int ref_runs;
+static uint32_t ref_asked;
 
 /** Move the counter down `counts` counts, reloading it at zero; every port
  * access costs three. */
@@ -76,10 +86,16 @@ static void counter_runs(uint32_t counts)
     }
 }
 
-/** Turn the model's interrupts off; 0x200, IF, when they were on. */
+/** Turn the model's interrupts off; 0x200, IF, when they were on. Each
+ * latch starts here, so this is where another processor takes the latch
+ * and stops inside it, once `holder_stops_at` accesses are made. */
 uint32_t kirq_save(void)
 {
     uint32_t was = irq_off ? 0 : 0x200u;
+
+    if (holder_stops_at != 0 && accesses >= holder_stops_at) {
+        latch_held = 1;
+    }
 
     irq_off = 1;
     return was;
@@ -156,8 +172,35 @@ void arch_relax(void)
     spins++;
 }
 
-/** Reset the model with the counter at `start`, interrupts on and no
- * handler or other processor armed. */
+/** The counts a wait of `usec` must let pass, as the wait computes them: a
+ * window at a time, since a product past PIT_WINDOW_USEC overflows. */
+static uint32_t counts_for(uint32_t usec)
+{
+    uint32_t counts = 0, step;
+
+    while (usec > 0) {
+        step = usec > PIT_WINDOW_USEC ? PIT_WINDOW_USEC : usec;
+        counts += (step * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
+        usec -= step;
+    }
+    return counts;
+}
+
+/** The HPET or the PM timer's wait, as refclock.c's: while it runs, `usec`
+ * passes, which the 8254 counts too, and it returns `usec`; else it returns
+ * 0 at once. */
+uint32_t refclock_wait_us(uint32_t usec)
+{
+    ref_asked += usec;
+    if (!ref_runs) {
+        return 0;
+    }
+    counter_runs(counts_for(usec));
+    return usec;
+}
+
+/** Reset the model with the counter at `start`, interrupts on, no handler
+ * or other processor armed, the latch free and no other counter. */
 static void model_reset(uint32_t start)
 {
     live = start;
@@ -171,12 +214,10 @@ static void model_reset(uint32_t start)
     rival_armed = 0;
     spins = 0;
     accesses = 0;
-}
-
-/** The counts a wait of `usec` must let pass, as the wait computes them. */
-static uint32_t counts_for(uint32_t usec)
-{
-    return (usec * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
+    holder_stops_at = 0;
+    latch_held = 0;
+    ref_runs = 0;
+    ref_asked = 0;
 }
 
 /**
@@ -187,11 +228,16 @@ static uint32_t counts_for(uint32_t usec)
  * With the handler armed no sample is torn and the wait takes its full time,
  * and so does a wait longer than one pass of the counter. With another
  * processor latching the counter beside the wait, with interrupts off, no
- * sample is torn either; and a latch held by a processor stopped inside it
- * ends the wait with 0 after PIT_LATCH_TRIES tries, touching no port.
+ * sample is torn either. A latch held by a processor stopped inside it,
+ * after PIT_LATCH_TRIES tries and with no port touched after, leaves the
+ * rest of the wait to the other counter: with it running the wait lasts and
+ * returns its whole time, whether the holder stopped before the wait or in
+ * its middle, and with none the wait ends with what it measured.
  */
 int main(void)
 {
+    uint32_t got;
+
     /* A quiet counter. */
     model_reset(9000u);
     k_udelay(500u);
@@ -225,14 +271,41 @@ int main(void)
     CHECK("another processor's latch cannot tear a sample", tears == 0);
     CHECK("and the wait beside it takes its full time", descended >= counts_for(2000u));
 
-    /* A latch whose holder was stopped inside it. */
+    /* A latch whose holder was stopped inside it, and no other counter. */
     model_reset(9000u);
     latch_held = 1;
-    CHECK("a latch held by a stopped processor ends the wait with 0 measured",
+    CHECK("a latch held by a stopped processor, with no other counter, ends the wait with 0 "
+          "measured",
           k_udelay_measured(1000u) == 0u);
     CHECK("after PIT_LATCH_TRIES tries, with no port touched",
           spins == PIT_LATCH_TRIES - 1u && accesses == 0);
-    latch_held = 0;
+
+    /* The same with the HPET or the PM timer running. */
+    model_reset(9000u);
+    latch_held = 1;
+    ref_runs = 1;
+    CHECK("a latch held by a stopped processor leaves the wait to the other counter, which "
+          "returns its whole time",
+          k_udelay_measured(2500u) == 2500u && ref_asked == 2500u);
+    CHECK("and the wait lasts its whole time, after PIT_LATCH_TRIES tries and no port touched",
+          descended >= counts_for(2500u) && spins == PIT_LATCH_TRIES - 1u && accesses == 0);
+
+    /* A holder that stops in the middle of the wait, the other counter
+     * running and not. */
+    model_reset(9000u);
+    holder_stops_at = 1200u;
+    ref_runs = 1;
+    CHECK("a holder that stops in the middle of a wait leaves the rest to the other counter",
+          k_udelay_measured(3000u) == 3000u && ref_asked > 0u && ref_asked < 3000u &&
+              ref_asked % PIT_WINDOW_USEC == 0u);
+    CHECK("and the wait lasts its whole time", descended >= counts_for(3000u));
+    model_reset(9000u);
+    holder_stops_at = 1200u;
+    got = k_udelay_measured(3000u);
+    CHECK("with no other counter it returns the windows it measured, at most the time that "
+          "passed",
+          got < 3000u && got % PIT_WINDOW_USEC == 0u && descended >= counts_for(got));
+    model_reset(9000u);
 
     if (fails == 0) {
         printf("udelay_hosttest: ok\n");
