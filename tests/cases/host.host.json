@@ -586,6 +586,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "autogroup",
+          "checks": "tests/host/autogroup_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "gpt",
           "checks": "tests/host/gpt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
