@@ -44,7 +44,8 @@
  * that all of them show. Each connector's mode is the size `video=` names,
  * or else the size of the loader's screen, so that the console looks as it
  * did at boot, or else the connector's preferred mode. A CRTC with no
- * connector of the console's is turned off.
+ * connector of the console's is turned off. All of it is one atomic
+ * commit, so that a failure changes no output.
  *
  * The loader's framebuffer may go while the console is still on it: the
  * native driver that shows it through its aperture gives its device to
@@ -132,17 +133,20 @@ static wait_queue_t con_wake;
 static uint64_t con_deadline; /* the tick of the next flush; 0 for none */
 
 /* The console's blank as the worker carries it out (`drm_client_blank`):
- * whether the blank asks for the display off, whether the worker has
- * turned it off, the CRTCs, one bit each by index, that it turned off and
- * turns on again, and the tick of the next try after a commit failed, 0
- * for none, with the ask that failed. Only the worker and a placement,
- * under the commit lock, write `con_blank_retry`, which the tick could
- * not write whole on i686; a new ask is seen by its value. */
+ * whether the blank asks for the display off; what the worker has done,
+ * 1 for off, 0 for on, or -1 after a run whose commit failed, which left
+ * some CRTCs as asked and others not, so that either ask has work; the
+ * CRTCs, one bit each by index, that it turned off and turns on again;
+ * the ask whose commit failed, which the worker tries again, or -1 for
+ * none; and the tick of that try. Only the worker writes `con_blank_retry`,
+ * which another processor could not read whole on i686, and reads it only
+ * while `con_blank_retry_ask` is set; a placement, which lights the
+ * outputs anew, ends the try by setting that to -1. */
 static volatile int con_blank_asked;
 static int con_blank_done;
 static uint32_t con_blank_crtcs;
+static volatile int con_blank_retry_ask = -1;
 static uint64_t con_blank_retry;
-static int con_blank_retry_ask;
 
 /* The milliseconds between tries of a blank's commit that failed. */
 #define CON_BLANK_RETRY_MS 1000
@@ -308,10 +312,11 @@ static int32_t con_buffer_make(struct drm_device *dev, uint32_t w, uint32_t h,
     return 0;
 }
 
-/** Commit `crtc` showing `fb` in `mode` on `connector`, or turned off for
- * NULL `mode`. Under the commit lock; may sleep. 0 or -errno. */
-static int32_t con_set(struct drm_crtc *crtc, struct drm_framebuffer *fb,
-                       const struct drm_mode_modeinfo *mode, struct drm_connector *connector)
+/** Add to `state` `crtc` showing `fb` in `mode` on `connector`, or turned
+ * off for NULL `mode`. Under the commit lock. 0 or -errno. */
+static int32_t con_set(struct drm_atomic_state *state, struct drm_crtc *crtc,
+                       struct drm_framebuffer *fb, const struct drm_mode_modeinfo *mode,
+                       struct drm_connector *connector)
 {
     struct drm_connector *list[1];
     struct drm_mode_set set;
@@ -323,7 +328,7 @@ static int32_t con_set(struct drm_crtc *crtc, struct drm_framebuffer *fb,
     set.mode = mode;
     set.connectors = mode ? list : NULL;
     set.num_connectors = mode ? 1u : 0u;
-    return drm_atomic_helper_set_config(&set);
+    return drm_atomic_set_config_state(&set, state);
 }
 
 /** The size of a buffer that every output of `outs` shows, `*w` by `*h`,
@@ -358,16 +363,19 @@ static int con_any_active(struct drm_device *dev)
 }
 
 /** Commit `fb` on each CRTC of `dev` that `outs` names, and turn off every
- * other CRTC that is on. Under the commit lock; may sleep. 0 or the first
- * commit's error. */
+ * other CRTC that is on, in one atomic commit, as Linux's
+ * drm_client_modeset_commit_atomic, so that a failure changes no output
+ * and leaves none scanning out a buffer the console does not draw on.
+ * Under the commit lock; may sleep. 0 or the commit's error. */
 static int32_t con_light(struct drm_device *dev, const struct con_output *outs, uint32_t n,
                          struct drm_framebuffer *fb)
 {
     struct drm_mode_config *mc = &dev->mode_config;
+    struct drm_atomic_state *state = drm_atomic_state_alloc(dev);
     const struct con_output *out;
     struct drm_crtc *crtc;
     uint32_t i, k;
-    int32_t err = 0;
+    int32_t err = state ? 0 : -ENOMEM;
 
     for (k = 0; err == 0 && k < mc->num_crtc; k++) {
         crtc = mc->crtcs[k];
@@ -378,8 +386,14 @@ static int32_t con_light(struct drm_device *dev, const struct con_output *outs, 
             }
         }
         if (out || (crtc->state && crtc->state->enable)) {
-            err = con_set(crtc, fb, out ? &out->mode : NULL, out ? out->connector : NULL);
+            err = con_set(state, crtc, fb, out ? &out->mode : NULL, out ? out->connector : NULL);
         }
+    }
+    if (err == 0) {
+        err = drm_atomic_commit(state);
+    }
+    if (state) {
+        drm_atomic_state_free(state);
     }
     return err;
 }
@@ -491,10 +505,10 @@ static void con_buffer_keep(struct drm_device *dev, int32_t err, struct drm_fram
  * nothing, as Linux's client holds the master lock across its commit. 0 or
  * -errno: -EAGAIN for a changed generation, -ENODEV for no output, a buffer
  * the kernel cannot reach or a device unregistered during the commits, or
- * the error of the buffer or a commit. While the console is blank, the
- * worker is woken once any commit ran, whether or not one failed after
- * lighting an output, and turns the lit outputs off again.
- * May sleep.
+ * the error of the buffer or the commit. A commit that succeeded lit the
+ * console's outputs and turned the rest off; while the console is blank,
+ * the worker is then woken and turns them off again. A commit that failed
+ * changed no output. May sleep.
  */
 static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_framebuffer *screen,
                          volatile uint8_t **base)
@@ -518,19 +532,19 @@ static int32_t con_place(struct drm_device *dev, uint32_t gen, struct boot_frame
     }
     if (err == 0) {
         err = con_light(dev, outs, n, fb);
-        lit = 1;
+        lit = err == 0;
     }
     con_buffer_keep(dev, err, fb, obj);
     if (err == 0 && con.dev != dev) {
-        err = -ENODEV; /* unregistered while the commits slept */
+        err = -ENODEV; /* unregistered while the commit slept */
     }
     if (lit && con.dev == dev) {
-        /* Some outputs may be lit again, all of them when no commit
-         * failed; a blank that lasts turns them off anew. */
+        /* The console's outputs are lit and every other CRTC is off; a
+         * blank that lasts turns them off anew, at once. */
         con.lit = con_any_active(dev);
         con_blank_done = 0;
-        con_blank_crtcs = err == 0 ? 0u : con_blank_crtcs;
-        con_blank_retry = 0;
+        con_blank_crtcs = 0;
+        con_blank_retry_ask = -1;
     }
     drm_modeset_unlock(dev);
     if (lit && con_blank_asked) {
@@ -662,26 +676,29 @@ static void con_flush(void)
     drm_dev_put(dev);
 }
 
-/** Whether the blank `off`, the console's ask, has work left: a change of
- * the ask, or, with the display asked on, a CRTC the blank turned off and
- * has not turned on again, as after a blank that turned one CRTC off and
- * failed on the next, and a key before its try again. */
+/** Whether the blank `off`, the console's ask, has work left: an ask
+ * other than what the worker did, which after a failed run is either
+ * (`con_blank_done` -1), or, with the display asked on, a CRTC the blank
+ * turned off that a placement left off. */
 static int con_blank_pending(int off)
 {
     return off != con_blank_done || (!off && con_blank_crtcs != 0);
 }
 
-/** The worker's wait: until a blank asks, or its try after a failure is
- * due, which is then due whatever the ask, since the wait's deadline is
- * that tick; past the flush's tick when one is set, else until a shadow
- * wants flushes. */
+/** The worker's wait, whose deadline `*arg` the worker armed, 0 for none:
+ * until that deadline has passed, which the wait needs once it is armed,
+ * whatever changed meanwhile; until a blank has work, at once for an ask
+ * other than the one that failed and else at the try's tick; until the
+ * flush's tick when one is set, else until a shadow wants flushes. */
 static int con_flush_ready(void *arg)
 {
-    int off = con_blank_asked;
+    uint64_t due = arg ? *(const uint64_t *)arg : 0;
+    int off = con_blank_asked, retry = con_blank_retry_ask;
 
-    (void)arg;
-    if (con_blank_retry != 0 ? off != con_blank_retry_ask || rtc_ticks_now() >= con_blank_retry
-                             : con_blank_pending(off)) {
+    if (due != 0 && rtc_ticks_now() >= due) {
+        return 1;
+    }
+    if (retry >= 0 ? off != retry : con_blank_pending(off)) {
         return 1;
     }
     return con_deadline != 0 ? rtc_ticks_now() >= con_deadline : con_shadowed();
@@ -755,13 +772,13 @@ static int con_blank_commits(struct drm_device *dev, int off, uint32_t gen, int 
 /**
  * Carry out the blank the console asked for last: turn off each lit CRTC
  * of the console's native device, or on again those turned off
- * (`con_blank_commits`). A commit that fails leaves the blank not done,
+ * (`con_blank_commits`). A commit that fails leaves the blank half done,
  * and the worker tries it again every CON_BLANK_RETRY_MS until it
  * succeeds or the console asks otherwise, so that a wake that failed
  * once, for memory or a busy device, does not leave the display dark
- * while the console shows itself unblanked. A wake turns on every CRTC
- * the blank turned off, also after a blank that failed on another CRTC
- * and was never done (`con_blank_pending`). On the firmware's
+ * while the console shows itself unblanked. A run that failed leaves
+ * work for either ask: a wake turns on every CRTC the blank turned off,
+ * and a blank turns off every CRTC a half-failed wake lit. On the firmware's
  * framebuffer, with no device, or while a master holds the device, only
  * the record changes, and CRTCs that a master or a later placement set
  * are left to them. Process context, the worker's; may sleep.
@@ -774,13 +791,13 @@ static void con_blank_service(void)
     uint32_t gen = con.gen;
 
     if (!con_blank_pending(off)) {
-        con_blank_retry = 0;
+        con_blank_retry_ask = -1;
         return;
     }
     if (!dev || con.firmware || con.handed) {
         con_blank_done = off;
         con_blank_crtcs = 0;
-        con_blank_retry = 0;
+        con_blank_retry_ask = -1;
         return;
     }
     drm_dev_get(dev);
@@ -790,17 +807,24 @@ static void con_blank_service(void)
         con_blank_crtcs = 0;
     }
     failing = failed;
-    con_blank_retry = failed ? rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS) : 0;
-    con_blank_retry_ask = off;
-    if (!failed) {
-        con_blank_done = off;
-    }
+    con_blank_done = failed ? -1 : off;
+    con_blank_retry = rtc_ticks_now() + MS_TO_TICKS(CON_BLANK_RETRY_MS);
+    con_blank_retry_ask = failed ? off : -1;
     drm_modeset_unlock(dev);
     if (!failed) {
         klog(KLOG_INFO, "console", "card%d: display %s for the blank", dev->index,
              off ? "off" : "on");
     }
     drm_dev_put(dev);
+}
+
+/** The tick at which the worker's wait ends, 0 for none: the try again of
+ * a failed blank or the flush's tick, the sooner. The worker's. */
+static uint64_t con_wait_due(void)
+{
+    return con_blank_retry_ask >= 0 && (con_deadline == 0 || con_blank_retry < con_deadline)
+               ? con_blank_retry
+               : con_deadline;
 }
 
 void drm_client_blank(int blank)
@@ -826,15 +850,15 @@ static process_t *con_thread;
  * between flushes. */
 static void con_thread_main(void)
 {
+    uint64_t due;
+
     arch_irq_enable();
     for (;;) {
         sched_service_point();
         con_deadline = con_shadowed() ? rtc_ticks_now() + MS_TO_TICKS(CON_FLUSH_MS) : 0;
-        current_proc->wakeup_tick =
-            con_blank_retry != 0 && (con_deadline == 0 || con_blank_retry < con_deadline)
-                ? con_blank_retry
-                : con_deadline;
-        (void)wq_wait_event_idle(&con_wake, con_flush_ready, NULL);
+        due = con_wait_due();
+        current_proc->wakeup_tick = due;
+        (void)wq_wait_event_idle(&con_wake, con_flush_ready, &due);
         current_proc->wakeup_tick = 0;
         con_blank_service();
         con_flush();
@@ -1024,7 +1048,7 @@ void drm_client_dev_register(struct drm_device *dev)
     }
     con_blank_done = 0;
     con_blank_crtcs = 0;
-    con_blank_retry = 0;
+    con_blank_retry_ask = -1;
     if (con_blank_asked) {
         wq_wake_all(&con_wake);
     }

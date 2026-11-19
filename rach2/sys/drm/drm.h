@@ -1857,6 +1857,14 @@ struct drm_mode_set {
  * 0 or the commit's error. May sleep. */
 int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
 
+/** Add `set` to `state` as Linux's __drm_atomic_helper_set_config: the
+ * CRTC's mode and activity, its primary plane on `set->fb`, and the
+ * connectors routed to it and away from it, each other CRTC of `state`
+ * left with no connector turned off. Several sets in one state make one
+ * commit of them all, as Linux's drm_client_modeset_commit_atomic. The
+ * caller holds the commit lock. 0, -ENOMEM or -EINVAL. */
+int32_t drm_atomic_set_config_state(struct drm_mode_set *set, struct drm_atomic_state *state);
+
 /** Flush `rect` of `fb` to the display, the commit DIRTYFB makes, for the
  * console's shadow: each plane that shows `fb` gets it as FB_DAMAGE_CLIPS.
  * Takes the commit lock. 0, -ENOSYS for a device whose framebuffers need
