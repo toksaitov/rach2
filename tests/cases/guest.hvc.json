@@ -1,7 +1,7 @@
 {
  "schema_version": 1,
  "family_id": "guest.hvc",
- "summary": "The virtio console as a program sees it: with one of its ports as the kernel's console, as on every guest case's machine, and its absence when the boot line names the UART; each case boots the test image and runs hvcmusl",
+ "summary": "The virtio console as a program sees it: with one of its ports as the kernel's console, as on every guest case's machine, and its absence when the boot line names the UART, each case booting the test image and running hvcmusl; and as the kernel stops it: the device reset at a restart, and a panic's record that reaches the port with the transmit lock held",
  "cases": [
   {
    "case_id": "guest.hvc.port",
@@ -265,6 +265,329 @@
     "plan": "none",
     "class": "QEMU",
     "reason": "the case is the other half of guest.hvc.port, a machine of QEMU's without the virtio console; the Lenovo's UART is the console of every native run"
+   }
+  },
+  {
+   "case_id": "guest.hvc.restart",
+   "behavior": "a restart from the debug shell of a machine whose log goes to a virtio console's port beside COM1 has the driver give the console back to COM1 and reset the device before the kernel restarts the machine",
+   "units": [
+    "hvc"
+   ],
+   "domain": "machine",
+   "architectures": [
+    "i686",
+    "x86_64"
+   ],
+   "workload": {
+    "arguments": [],
+    "inputs": {},
+    "repetitions": 1,
+    "seed": null
+   },
+   "requirements": {
+    "host_api": "c",
+    "tools": [],
+    "features": {}
+   },
+   "execution": {
+    "program": "hvc_scenario",
+    "stdin": null,
+    "role": "ordinary",
+    "privileges": "an ordinary user",
+    "isolation": [
+     {
+      "fixture": "scratch"
+     }
+    ],
+    "children": "none",
+    "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"
+   },
+   "steps": [
+    {
+     "step_id": "restart",
+     "stage": "execute",
+     "machine": "fixture",
+     "does": "boot to the debug shell with the log on the virtio console's port 0 and COM1, run reboot and wait for the machine to end"
+    }
+   ],
+   "machines": [
+    {
+     "machine_id": "fixture",
+     "qemu": {
+      "kernel": "kernel",
+      "initrd": "test-image",
+      "disks": [],
+      "cpu": "max",
+      "processors": 1,
+      "memory_bytes": 134217728,
+      "firmware": "direct",
+      "devices": [
+       {
+        "model": "virtio-serial-pci"
+       },
+       {
+        "model": "virtconsole"
+       }
+      ],
+      "boot_options": [
+       "rach2.rescue",
+       "console=hvc0",
+       "console=ttyS0"
+      ]
+     },
+     "console": "serial",
+     "qmp": true,
+     "helper": false
+    }
+   ],
+   "assertions": [
+    {
+     "assertion_id": "enabled",
+     "checks": "the boot gives the log to the virtconsole, console: enabled: hvc0, port 0 of virtio0, for output alone, since COM1 is named after it",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "halted",
+     "checks": "after reboot is typed the console leaves the port, console: disabled: hvc0: the system stops, and then the driver says virtio_console: shutdown: virtio0: reset, which it says only when virtio_halt's reset of the device ended",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "then-restart",
+     "checks": "the kernel says reboot: restarting after that record, so the device is reset before the processors stop",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "reset",
+     "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset",
+     "source": "scenario"
+    }
+   ],
+   "branches": [],
+   "termination": {
+    "end": "exited",
+    "value": 0
+   },
+   "progress": [
+    {
+     "witness_id": "stage",
+     "kind": "step",
+     "means": "a step of the manifest has ended",
+     "limit": 1
+    }
+   ],
+   "bounds": {
+    "case": {
+     "floor_us": 5000000,
+     "initial_us": 300000000,
+     "ceiling_us": 900000000
+    },
+    "gap": {
+     "floor_us": 1000000,
+     "initial_us": 150000000,
+     "ceiling_us": 600000000
+    },
+    "stages": {
+     "prepare": {
+      "floor_us": 100000,
+      "initial_us": 30000000,
+      "ceiling_us": 120000000
+     },
+     "boot": {
+      "floor_us": 1000000,
+      "initial_us": 90000000,
+      "ceiling_us": 300000000
+     },
+     "cleanup": {
+      "floor_us": 100000,
+      "initial_us": 30000000,
+      "ceiling_us": 120000000
+     }
+    }
+   },
+   "resources": {
+    "cpu_millis": 1000,
+    "cpu_ceiling_millis": 1000,
+    "memory_bytes": 268435456,
+    "disk_bytes": 16777216,
+    "locks": [],
+    "ports": 0,
+    "loop_devices": 0
+   },
+   "prepare": [
+    {
+     "name": "kernel",
+     "node": "rach2/kernel",
+     "per_architecture": true
+    },
+    {
+     "name": "test-image",
+     "node": "images/test.krffs",
+     "per_architecture": true
+    },
+    {
+     "name": "hvc_scenario",
+     "node": "tests/cases/machine/hvc_scenario",
+     "per_architecture": false
+    }
+   ],
+   "timing": [],
+   "native": {
+    "plan": "none",
+    "class": "QEMU",
+    "reason": "the console's device is QEMU's virtio-serial-pci, which the Lenovo does not have, and the machine ends by a reset"
+   }
+  },
+  {
+   "case_id": "guest.hvc.panic",
+   "behavior": "a panic with the virtio console's transmit lock held, as a processor the panic stops would hold it, on a machine whose only console is the device's virtserialport, still gives the host the panic's record through that port",
+   "units": [
+    "hvc"
+   ],
+   "domain": "machine",
+   "architectures": [
+    "i686",
+    "x86_64"
+   ],
+   "workload": {
+    "arguments": [],
+    "inputs": {},
+    "repetitions": 1,
+    "seed": null
+   },
+   "requirements": {
+    "host_api": "c",
+    "tools": [],
+    "features": {}
+   },
+   "execution": {
+    "program": "hvc_scenario",
+    "stdin": null,
+    "role": "ordinary",
+    "privileges": "an ordinary user",
+    "isolation": [
+     {
+      "fixture": "scratch"
+     }
+    ],
+    "children": "none",
+    "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"
+   },
+   "steps": [
+    {
+     "step_id": "boot",
+     "stage": "execute",
+     "machine": "fixture",
+     "does": "boot the test image with rach2.vconpanic on a machine whose console is the virtio port, read the panic's record from the port, and end the machine"
+    }
+   ],
+   "machines": [
+    {
+     "machine_id": "fixture",
+     "qemu": {
+      "kernel": "kernel",
+      "initrd": "test-image",
+      "disks": [],
+      "cpu": "max",
+      "processors": 1,
+      "memory_bytes": 134217728,
+      "firmware": "direct",
+      "devices": [],
+      "boot_options": [
+       "rach2.rescue",
+       "rach2.vconpanic"
+      ]
+     },
+     "console": "virtio",
+     "qmp": true,
+     "helper": false,
+     "critical": "] panic: "
+    }
+   ],
+   "assertions": [
+    {
+     "assertion_id": "enabled",
+     "checks": "the port carries the console, console: enabled: vport0p1, port 1 of the device",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "panicked",
+     "checks": "the panic's record, panic: stopped: virtio_console: panic test: the transmit side is held, reaches the host through the port, which is a virtserialport and so not reached by emerg_wr",
+     "source": "scenario"
+    }
+   ],
+   "branches": [],
+   "termination": {
+    "end": "exited",
+    "value": 0
+   },
+   "progress": [
+    {
+     "witness_id": "stage",
+     "kind": "step",
+     "means": "a step of the manifest has ended",
+     "limit": 1
+    }
+   ],
+   "bounds": {
+    "case": {
+     "floor_us": 5000000,
+     "initial_us": 300000000,
+     "ceiling_us": 900000000
+    },
+    "gap": {
+     "floor_us": 1000000,
+     "initial_us": 150000000,
+     "ceiling_us": 600000000
+    },
+    "stages": {
+     "prepare": {
+      "floor_us": 100000,
+      "initial_us": 30000000,
+      "ceiling_us": 120000000
+     },
+     "boot": {
+      "floor_us": 1000000,
+      "initial_us": 90000000,
+      "ceiling_us": 300000000
+     },
+     "cleanup": {
+      "floor_us": 100000,
+      "initial_us": 30000000,
+      "ceiling_us": 120000000
+     }
+    }
+   },
+   "resources": {
+    "cpu_millis": 1000,
+    "cpu_ceiling_millis": 1000,
+    "memory_bytes": 268435456,
+    "disk_bytes": 16777216,
+    "locks": [],
+    "ports": 0,
+    "loop_devices": 0
+   },
+   "prepare": [
+    {
+     "name": "kernel",
+     "node": "rach2/kernel",
+     "per_architecture": true
+    },
+    {
+     "name": "test-image",
+     "node": "images/test.krffs",
+     "per_architecture": true
+    },
+    {
+     "name": "hvc_scenario",
+     "node": "tests/cases/machine/hvc_scenario",
+     "per_architecture": false
+    }
+   ],
+   "timing": [],
+   "native": {
+    "plan": "none",
+    "class": "QEMU",
+    "reason": "the case panics the kernel on purpose on a virtio console of QEMU's, which the Lenovo does not have"
    }
   }
  ]
