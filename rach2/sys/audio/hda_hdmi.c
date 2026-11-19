@@ -1392,6 +1392,29 @@ static void hh_notify(void *ptr, int port, int pipe)
 
 static const struct acomp_audio_ops hh_acomp_ops = {hh_bind, hh_unbind, hh_notify};
 
+/**
+ * Bring the controller to D0, as Linux's pci_enable_device does before its
+ * driver touches it, since firmware may leave it in D3hot, where its
+ * registers do not answer. Leaving D3hot may reset the configuration
+ * header of a function without No_Soft_Reset, so the header is saved
+ * before and written back after the 10 ms the change takes
+ * (PCI_PM_D3HOT_WAIT), as Linux's pci_restore_bars does.
+ */
+static void hh_pci_d0(void)
+{
+    struct pci_saved_state st;
+    int state = pci_power_state(&hh_pci);
+
+    if (state <= PCI_D0) {
+        return;
+    }
+    pci_save_state(&hh_pci, &st);
+    (void)pci_set_power_state(&hh_pci, PCI_D0);
+    hh_msleep(PCI_PM_D3HOT_WAIT);
+    pci_restore_state(&hh_pci, &st);
+    klog(KLOG_INFO, "hdmi-audio", "power: D%d to D0", state);
+}
+
 void hdmi_audio_init(void)
 {
     pci_device_t d, seen, *from = NULL;
@@ -1411,6 +1434,7 @@ void hdmi_audio_init(void)
     if (!hh_found) {
         return;
     }
+    hh_pci_d0();
     bar = pci_bar_address64(&hh_pci, 0);
     if (bar == 0 || (uint64_t)(uintptr_t)bar != bar) {
         hh_found = 0;
