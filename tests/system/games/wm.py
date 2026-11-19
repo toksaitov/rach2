@@ -101,6 +101,22 @@ def westons():
     return False
 
 
+def supervisor():
+    """
+    Wait for the desktop supervisor's pid file, whole, and give its pid; the
+    supervisor writes it once udev has settled and seatd is up, which a row
+    run just after the boot may come before.
+    """
+    while True:
+        try:
+            text = SUPERVISOR.read_text()
+        except FileNotFoundError:
+            text = ""
+        if text.endswith("\n"):
+            return int(text)
+        time.sleep(0.1)
+
+
 def session(mode):
     """
     Have the desktop's supervisor start its session by SIGHUP unless a
@@ -110,7 +126,7 @@ def session(mode):
     the output's name.
     """
     if not westons():
-        os.kill(int(SUPERVISOR.read_text()), signal.SIGHUP)
+        os.kill(supervisor(), signal.SIGHUP)
     while True:
         text = log_from(0)
         output = re.findall(r"Output (\S+) \(crtc \d+\) video modes:\n", text)
@@ -133,7 +149,7 @@ def session(mode):
     core = INI.read_text().split("\n[output]")[0].rstrip("\n")
     INI.write_text(core + "\n[output]\nname=%s\nmode=%s\n" % (output[-1], wanted))
     offset = SERVICES.stat().st_size
-    os.kill(int(SUPERVISOR.read_text()), signal.SIGHUP)
+    os.kill(supervisor(), signal.SIGHUP)
     while True:
         text = log_from(offset)
         current = re.search(r"Output (\S+) \(crtc \d+\) video modes:\n((?:\s+\S+.*\n)+)", text)

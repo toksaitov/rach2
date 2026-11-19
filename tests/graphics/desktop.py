@@ -128,6 +128,9 @@ def session():
     props = command("udevadm", "info", "--query=property", "--name=/dev/input/event0")
     assert "ID_INPUT=1" in props and "ID_INPUT_KEYBOARD=1" in props, props
     command(*desktop("python3 -c " + shlex.quote(SEAT_CLIENT)))
+    # PulseAudio starts beside Weston, not after it.
+    while not (runtime / "pulse/native").is_socket():
+        time.sleep(0.1)
     command(*desktop("pactl info"))
     print("desktop: result: session", flush=True)
 
