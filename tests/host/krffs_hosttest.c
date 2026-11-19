@@ -3785,7 +3785,182 @@ static void disk_unlink_rows(void)
           "a dirty disk root with a broken forward chain is refused before repair");
 }
 
-int main(void)
+/* An ordinal in the successful repair's sequence of reads, stores and
+ * barriers. Fail that one operation and count subsequent mutations. */
+static int io_at, io_fail, io_broken, io_late;
+
+/** Refuse the selected operation once and count writes or syncs after it. */
+static int refuse_io(int mutation)
+{
+    if (io_broken && mutation) {
+        io_late++;
+    }
+    if (++io_at == io_fail) {
+        io_broken = 1;
+        return 1;
+    }
+    return 0;
+}
+
+/** The image read with a single injected error. */
+static int repair_read(void *ctx, uint64_t at, void *buf, uint32_t n)
+{
+    return refuse_io(0) ? -1 : memory_read(ctx, at, buf, n);
+}
+
+/** The image store with a single injected error. */
+static int repair_store(void *ctx, uint64_t at, const void *buf, uint32_t n)
+{
+    return refuse_io(1) ? -1 : memory_write(ctx, at, buf, n);
+}
+
+/** The image barrier with a single injected error. */
+static int repair_sync(void *ctx)
+{
+    return refuse_io(1) ? -1 : memory_sync(ctx);
+}
+
+/**
+ * Fail each I/O of a dirty-volume repair once. The fixture needs a link
+ * repair, a parent repair, duplicate resolution, and a reap with free
+ * space on both sides. A later I/O would succeed.
+ */
+static void repair_io_rows(void)
+{
+    static const krffs_backend_t backend = {repair_read, repair_store, repair_sync, 0};
+    static const struct unlink_extent layout[] = {
+        {0, NULL}, {600, "same"}, {1200, NULL}, {1800, "same"}, {2400, NULL}, {3000, "keep"}};
+    int i, n = 0;
+
+    for (i = 0; i <= n; i++) {
+        krffs_mount_t mount = mount_over(&backend, disk_image, DISK_IMAGE_SIZE);
+        int rc;
+
+        make_unlink_image(layout, 6);
+        ((krffs_node_t *)disk_image)->previous_node_size = 0;
+        ((krffs_node_t *)(disk_image + 3000))->parent_id = 77;
+        io_at = io_late = io_broken = 0;
+        io_fail = i;
+        rc = krffs_repair_at(&mount, NULL, NULL, NULL);
+        if (i == 0) {
+            check(rc == 0 && !mount.halted, "the complete repair succeeds before injection");
+            n = io_at;
+        } else if (!(io_broken && rc != 0 && mount.halted && mount.check_owed && !io_late)) {
+            printf("krffs-hosttest: repair I/O %d: return %d, halt %d, late writes or syncs %d\n",
+                   i, rc, mount.halted, io_late);
+            check(0, "the first repair error halts before any more stores or barriers");
+        }
+    }
+    io_fail = 0;
+}
+
+/** Fail only a separate read of the old size across a sector edge. */
+static int refuse_size_read(void *ctx, uint64_t at, void *buf, uint32_t n)
+{
+    if (at == 1020 && n == sizeof(uint64_t)) {
+        return -1;
+    }
+    return memory_read(ctx, at, buf, n);
+}
+
+/** Use the old header for each split decision even at a sector edge. */
+static void extent_decision_rows(void)
+{
+    static const krffs_backend_t backend = {refuse_size_read, memory_write, memory_sync, 0};
+    static const struct unlink_extent layout[] = {{0, NULL}, {695, "edge"}, {2000, NULL}};
+    krffs_mount_t mount = mount_over(&backend, disk_image, DISK_IMAGE_SIZE);
+    krffs_node_t *h = (krffs_node_t *)(disk_image + 695);
+    krffs_node_t *next = (krffs_node_t *)(disk_image + 2000);
+    uint64_t whole = DISK_IMAGE_SIZE - 695;
+
+    mount.sector = 512;
+    make_unlink_image(layout, 3);
+    check(krffs_grow_into(&mount, 695, 2000, h, next) == 0 && h->size == 2000,
+          "split growth compares the size from the node header");
+    make_unlink_image(layout, 3);
+    check(krffs_grow_into(&mount, 695, whole, h, next) == 0 && h->size == whole,
+          "whole extent growth compares the size from the node header");
+    make_unlink_image(layout, 3);
+    check(krffs_shrink_at(&mount, 695, 2, h, next) == 0 && h->size == sizeof(*h) + 2,
+          "shrink compares the size from the node header");
+    make_unlink_image(layout, 3);
+    h->type = KRFFS_FREE_NODE;
+    check(krffs_take_free(&mount, 695, h->size, 600) == 0 && h->size == 600,
+          "allocation compares the size from the free header");
+}
+
+/** Preserve I/O errors from write, truncate, validation and last close. */
+static void header_failure_rows(void)
+{
+    static const krffs_backend_t backend = {failing_read, record_write, memory_sync, 0};
+    static const struct unlink_extent layout[] = {{0, NULL}, {600, "edge"}, {2000, NULL}};
+    krffs_mount_t mount = mount_over(&backend, disk_image, DISK_IMAGE_SIZE);
+    uint64_t node = 600, live;
+
+    make_unlink_image(layout, 3);
+    read_fails_at = node + KRFFS_FIELD_TYPE;
+    check(krffs_write_at(&mount, &node, "x", 1, 0) == KRFFS_EIO,
+          "write preserves a header I/O error");
+    check(krffs_truncate_node_at(&mount, node, 0, NULL) == KRFFS_EIO,
+          "truncate preserves a header I/O error");
+    check(krffs_resize_err(&mount, node, 0, &live) == KRFFS_EIO,
+          "a failed resize header read is an I/O error");
+    read_fails_once = 1;
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) != 0,
+          "a transient read failure in the strict walk refuses the dirty root");
+    read_fails_at = (uint64_t)-1;
+    read_fails_once = 0;
+    check(init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL, &backend) == 0 &&
+              krffs_orphan_at(&krffs_root_mount, node) == 0, "mount root and orphan its file");
+    read_fails_at = node + KRFFS_FIELD_TYPE;
+    krffs_remove_reserved_node(krffs_fs, krffs_node_of(node));
+    check(krffs_root_halted() && krffs_root_check_owed() && krffs_root_has_orphans(),
+          "the last holder's failed reap leaves a halted dirty root");
+    read_fails_at = (uint64_t)-1;
+}
+
+/** Read the root link before publishing a merge at the end of the ring. */
+static void last_extent_row(void)
+{
+    static const krffs_backend_t backend = {failing_read, record_write, memory_sync, 0};
+    static const struct unlink_extent layout[] = {{0, NULL}, {600, NULL}, {1200, "last"}};
+    krffs_mount_t mount = mount_over(&backend, disk_image, DISK_IMAGE_SIZE);
+    int before = writes_seen;
+
+    make_unlink_image(layout, 3);
+    read_fails_at = 0;
+    check(krffs_remove_at(&mount, 1200) < 0 && writes_seen == before,
+          "an unreadable root link stops the last extent's merge before its first store");
+    read_fails_at = (uint64_t)-1;
+}
+
+/** A failed withdrawal records recovery debt and blocks backend sync. */
+static void withdrawn_sync_row(void)
+{
+    krffs_mount_t mount = mount_over(&recording_backend, disk_image, DISK_IMAGE_SIZE);
+    int before;
+
+    refused_offset = 600 + KRFFS_FIELD_TYPE;
+    krffs_withdraw(&mount, 600);
+    check(mount.halted && mount.check_owed && mount.withdrawn == 600,
+          "a failed withdrawal records the hidden copy and recovery debt");
+    before = writes_seen;
+    check(krffs_sync_point(&mount) != 0 && writes_seen == before,
+          "a halted core refuses a sync before calling the backend");
+}
+
+/** Run the disk failure rows in isolation or as part of the host suite. */
+static void disk_failure_rows(void)
+{
+    repair_io_rows();
+    last_extent_row();
+    withdrawn_sync_row();
+    extent_decision_rows();
+    header_failure_rows();
+}
+
+/** Run the image and namespace cases. */
+static int image_rows(void)
 {
     static uint8_t before[IMAGE_SIZE];
     krffs_mount_t mount;
@@ -4266,4 +4441,15 @@ int main(void)
         printf("krffs_hosttest: OK\n");
     }
     return fails > 255 ? 255 : fails;
+}
+
+/** Run the full fixture or just the disk failure cases. */
+int main(int argc, char **argv)
+{
+    disk_failure_rows();
+    if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
+        printf("krffs-hosttest: failure rows: %d failures\n", fails);
+        return fails != 0;
+    }
+    return image_rows();
 }
