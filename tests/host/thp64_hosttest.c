@@ -446,15 +446,41 @@ static void edge_rows(void)
     model_no_keep = 0;
 }
 
-/** A protection change over two huge pages keeps each, and an edge splits a
- * page only where a region now ends. */
+/* What `range_check` saw at each shootdown of a protection change over the
+ * two huge pages from A: a bit for each shootdown with both pages split,
+ * and one for each with their entries read-only. */
+static uint32_t shot_split, shot_ro, shot_n;
+
+/** At a shootdown of `range_rows`, note whether the pages from A are split
+ * and their entries changed yet. */
+static void range_check(const struct page_dir *dir, uintptr_t start, uintptr_t end)
+{
+    (void)dir;
+    (void)start;
+    (void)end;
+    if (shot_n < 8) {
+        shot_split |= (uint32_t)(!mmu_user_huge(&dir_a, A) && !mmu_user_huge(&dir_a, A + H))
+                      << shot_n;
+        shot_ro |= (uint32_t)(!(pte_of(&dir_a, A + H + 7 * P) & PTE_W)) << shot_n;
+    }
+    shot_n++;
+}
+
+/** A protection change over two huge pages keeps each, with one flush of
+ * both splits before the entries change and one of the entries before the
+ * pages are made again; an edge splits a page only where a region ends. */
 static void range_rows(void)
 {
     region(&mm_a, A, A + 2 * H, RW);
     check(resolve_held(&mm_a, A, 1, LIM) == 1 && resolve_held(&mm_a, A + H, 1, LIM) == 1 &&
               is_huge(&dir_a, A) && is_huge(&dir_a, A + H),
           "two huge pages");
+    shot_split = shot_ro = shot_n = 0;
+    shot_check = range_check;
     paging_protect_range(&dir_a, A, A + 2 * H, VM_PROT_READ);
+    shot_check = NULL;
+    check(shot_n == 2 && shot_split == 3 && shot_ro == 2,
+          "two shootdowns: both splits before the entries change, the entries before the pages");
     check(is_huge(&dir_a, A) && is_huge(&dir_a, A + H) && !(mmu_user_huge(&dir_a, A) & PTE_W) &&
               !(mmu_user_huge(&dir_a, A + H) & PTE_W) && !(pte_of(&dir_a, A + H + 7 * P) & PTE_W),
           "a protection change over both keeps each huge, its entries read-only beneath it");
