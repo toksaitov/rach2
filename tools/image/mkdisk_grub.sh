@@ -356,10 +356,7 @@ menuentry "Start Rach2 in text mode" --id text {
 # `rach2.fsck`, so booting it checks and repairs nothing. `e2fsck` is there,
 # and a person who came to repair a root runs it. `bootctl trial recovery`
 # arms recovery for one boot, which is how a machine that still starts is sent
-# to the image that can rewrite its root. `bootctl fsck` writes a recovery
-# entry of its own, with `rach2.fsck=` and the volumes' UUIDs, into the
-# rewritable half for the installed system's init, whose kernel left a volume
-# read-only for e2fsck.
+# to the image that can rewrite its root.
 
 # The rewritable half. `configfile` would open a new environment context, show
 # its own menu on the spot and never come back here; `source` merges into this
