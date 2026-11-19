@@ -1,0 +1,5 @@
+940 weston
+dbus-1
+pulse
+wayland-0
+wayland-0.lock

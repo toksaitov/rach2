@@ -1,0 +1,16 @@
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2663/root-48c0882d318edd99.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915 rach2.vgem netconsole=6665@ADDR/,6667@ADDR/STATION
+bootctl: candidate: first sector 6163, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: candidate: runs: 6163+4096 24136+28672
+bootctl: fallback: first sector 11848, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: fallback: runs: 11848+8192 52808+24576
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2663/root-48c0882d318edd99.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+bootctl: slot size: 16777216 bytes
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+cat: /run/rach2-desktop.pid: No such file or directory
+kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]

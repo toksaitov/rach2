@@ -1,0 +1,8 @@
+webgl: result: chromium 2.0.1 chunk 0 of 12 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 omitted 0 rerun 1 subtests passed 26576 failed 2
+judge: result: pass webgl 250 pages, 0 worse than Debian's
+exit 0
+[  101.312000] i915: gmbus dpc: NAK on first message, retry
+[  101.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  101.312000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  101.312000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  101.312000] i915: gmbus dpc: disabling bit-banging, force_bit 0

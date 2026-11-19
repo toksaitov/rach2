@@ -1,0 +1,9 @@
+glmark2: result: 33 scenes: Success 27 Failure 0 Unknown 6
+judge: result: pass glmark2 33 scenes, 27 validated here, 0 worse than Debian's
+lenovo: session: started
+exit 0
+[  101.312000] i915: gmbus dpc: NAK on first message, retry
+[  101.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  101.312000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  101.312000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  101.312000] i915: gmbus dpc: disabling bit-banging, force_bit 0

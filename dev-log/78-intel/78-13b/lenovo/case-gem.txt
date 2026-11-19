@@ -1,0 +1,8 @@
+igt: result: 1 tests, 4 results: pass 3 skip 1 fail 0 other 0
+judge: result: pass results 4 in the reference, 4 here, 0 worse than Debian's
+exit 0
+[   52.032000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   52.032000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[   52.032000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[   52.060000] console: card0: taken back from a master, the keyboard on
+[   52.060000] console: card0: 1366x768, the font at 2x
