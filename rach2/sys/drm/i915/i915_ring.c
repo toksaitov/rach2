@@ -50,12 +50,14 @@ static const struct {
 #define I915_START_US      5000u
 #define I915_RING_SPACE_US 10000u
 
-int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_t *offset)
+int32_t i915_gt_ggtt_take_aligned(struct drm_i915_private *i915, uint32_t bytes, uint32_t align,
+                                  uint32_t *offset)
 {
     struct i915_gt *gt = &i915->gt;
     const struct i915_ggtt *ggtt = &i915->ggtt;
     uint64_t size =
         ((uint64_t)bytes + I915_GTT_PAGE_SIZE - 1) & ~(uint64_t)(I915_GTT_PAGE_SIZE - 1);
+    uint64_t mask = ~(uint64_t)(align - 1u);
     const struct i915_vma *vma;
     uint64_t start;
     int i;
@@ -63,10 +65,14 @@ int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_
     if (size == 0 || size >= gt->ggtt_bottom) {
         return -ENOSPC;
     }
-    start = gt->ggtt_bottom - size;
+    start = (gt->ggtt_bottom - size) & mask;
     for (i = 0; i < ggtt->nkept; i++) {
-        if (start < ggtt->kept[i].end && gt->ggtt_bottom > ggtt->kept[i].start) {
-            return -ENOSPC;
+        if (start < ggtt->kept[i].end && start + size > ggtt->kept[i].start) {
+            if (ggtt->kept[i].start < size) {
+                return -ENOSPC;
+            }
+            start = (ggtt->kept[i].start - size) & mask;
+            i = -1;
         }
     }
     /* Nor the space a buffer's binding holds. */
@@ -78,6 +84,11 @@ int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_
     gt->ggtt_bottom = start;
     *offset = (uint32_t)start;
     return 0;
+}
+
+int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_t *offset)
+{
+    return i915_gt_ggtt_take_aligned(i915, bytes, I915_GTT_PAGE_SIZE, offset);
 }
 
 void *i915_gt_pages_map(struct drm_i915_private *i915, uint32_t npages, int cache, uint32_t *ggtt)
@@ -500,6 +511,7 @@ void i915_gt_fini(struct drm_i915_private *i915)
                 klog(KLOG_WARN, "i915",
                      "rings: %s: status page kept at 0x%x: its writes not masked", e->name,
                      (unsigned)e->hws_ggtt);
+                i915_ggtt_carry(i915, e->hws_ggtt);
                 if (e->hws_ggtt < kept) {
                     kept = e->hws_ggtt;
                 }

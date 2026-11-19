@@ -65,7 +65,7 @@ int32_t i915_ppgtt_init(struct drm_i915_private *i915)
 {
     struct i915_ppgtt *pp = &i915->gt.ppgtt;
     uint64_t bottom = i915->gt.ggtt_bottom;
-    uint32_t pad, offset;
+    uint32_t offset;
     int32_t err;
 
     k_memset(pp, 0, sizeof(*pp));
@@ -82,15 +82,14 @@ int32_t i915_ppgtt_init(struct drm_i915_private *i915)
         i915_ppgtt_fini(i915);
         return -ENOSPC;
     }
-    pad = (uint32_t)((bottom - I915_PPGTT_PD_BYTES) & (I915_PPGTT_PD_ALIGN - 1u));
-    err = i915_gt_ggtt_take(i915, I915_PPGTT_PD_BYTES + pad, &offset);
+    err = i915_gt_ggtt_take_aligned(i915, I915_PPGTT_PD_BYTES, I915_PPGTT_PD_ALIGN, &offset);
     if (err < 0) {
         klog(KLOG_ERR, "i915", "ppgtt: no room in the GTT for the directory");
         i915_ppgtt_fini(i915);
         return err;
     }
     pp->pd_ggtt = offset;
-    pp->pd_take = I915_PPGTT_PD_BYTES + pad;
+    pp->pd_take = (uint32_t)(bottom - offset);
     pp->pp_dir = (offset / I915_GTT_PAGE_SIZE * 4u) << 10;
     ppgtt_flush_pd(i915, 0, I915_PPGTT_PDES);
     pp->ready = 1;

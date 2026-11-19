@@ -4,8 +4,10 @@
 #include "../../../rach2/sys/drm/i915/i915.h"
 
 /* Called at each take of the lock, a place where the kernel's caller may
- * sleep, when a row that asks whether a path sleeps sets it. */
+ * sleep, when a row that asks whether a path sleeps sets it; and at each
+ * giving back, when a row that counts the takes held sets it. */
 void (*i915_gem_lock_host_hook)(void);
+void (*i915_gem_unlock_host_hook)(void);
 
 /** Take the GEM lock: nothing to wait for, and nothing to give back. */
 int i915_gem_lock(struct drm_i915_private *i915)
@@ -30,6 +32,9 @@ void i915_gem_unlock(struct drm_i915_private *i915, int taken)
 {
     (void)i915;
     (void)taken;
+    if (i915_gem_unlock_host_hook) {
+        i915_gem_unlock_host_hook();
+    }
 }
 
 /** Let the GEM lock go for a wait: nothing held. */
@@ -51,4 +56,7 @@ void i915_gem_unlock_atomic(struct drm_i915_private *i915, int taken)
 {
     (void)i915;
     (void)taken;
+    if (i915_gem_unlock_host_hook) {
+        i915_gem_unlock_host_hook();
+    }
 }

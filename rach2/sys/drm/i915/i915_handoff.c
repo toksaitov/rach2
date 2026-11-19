@@ -30,30 +30,37 @@
  * binds, so a kernel booted without `rach2.i915` has none.
  *
  * The release leaves nothing of the driver on the device, in the order of
- * Linux's i915_driver_remove: RPS and RC6 off, as intel_gt_suspend_late
- * turns them off before its reset, so that no park after the reset sends
- * the GT into RC6; the display off by one commit
- * (drm_atomic_helper_shutdown), which takes the planes, pipes, ports,
- * clocks and the panel down as a mode set does; every ring stopped and the
- * GPU reset, as intel_engines_release does before the rings' pages go
- * back, so that the chip reads none of them again; then the device
- * unplugged from the DRM core, which fails what was queued, masks every
- * interrupt, gives the message and its vector back and frees the rings.
- * Bus mastering goes off and the function is reset, as the bring-up resets
- * it, since the GPU goes on reaching memory until a reset stops it, and
- * its pages, the GTT's scratch page among them, go back with the last
- * reference. Last, the kernel's claim on the function is given up, which
- * is what vfio-pci's bind waits for. Programs that still hold the card
- * keep a record that reaches no hardware: its registers read all ones and
- * take no write (`i915_pci_unmap`).
+ * Linux's i915_driver_remove, with the device held awake throughout as
+ * Linux holds a wakeref: RPS and RC6 off, as intel_gt_suspend_late turns
+ * them off before its reset, so that no park after the reset sends the GT
+ * into RC6; the display off by one commit (drm_atomic_helper_shutdown),
+ * which takes the planes, pipes, ports, clocks and the panel down as a
+ * mode set does; every ring stopped and the GPU reset under the GEM lock,
+ * as intel_engines_release does before the rings' pages go back, so that
+ * the chip reads none of them again; then the device unplugged from the
+ * DRM core, which fails what was queued, masks every interrupt, gives the
+ * message and its vector back and frees the rings. The commit lock is
+ * held from the commit to the unplug and the GEM lock from the reset to
+ * it, so that no master lights a pipe and no hangcheck starts a ring
+ * again between them; Linux unplugs first, which keeps them out the same
+ * way. Bus mastering goes off and the function is reset, as the bring-up
+ * resets it, since the GPU goes on reaching memory until a reset stops
+ * it, and its pages, the GTT's scratch page among them, go back with the
+ * last reference. Then the kernel's claim on the function is given up,
+ * which is what vfio-pci's bind waits for, and last the unbind uevent is
+ * sent, as Linux's driver core sends it once the driver has let go.
+ * Programs that still hold the card keep a record that reaches no
+ * hardware: its registers read all ones and take no write
+ * (`i915_pci_unmap`).
  *
  * Two things outside the driver drew through the device and stop with it.
  * The console may still be on the loader's framebuffer, which the Lenovo's
  * firmware put in the aperture; it is told that the screen has gone. The
  * boot's backlight driver writes the PCH's registers through a mapping of
  * its own, and takes the backlight back when the driver's display goes;
- * the class is given a stand-in that writes nothing until the driver
- * binds again.
+ * right after the unplug, before the function's reset takes the registers
+ * away, the class is given a stand-in that writes nothing until the
+ * driver binds again.
  *
  * The bring-up starts from a reset, whatever the last owner left: the
  * function's own reset (pci_reset_function), then the panel's power cycle,
@@ -83,9 +90,11 @@ static struct handoff_slot {
     int announced;                 /* its "bind" uevent sent */
 } slots[HANDOFF_DEVICES];
 
-static int sys_dir;        /* /sys/bus/pci/drivers/i915, or 0 */
-static int busy;           /* a release or a bring-up sleeps */
-static int stand_in_level; /* the level the stand-in backlight was last given */
+static int sys_dir;       /* /sys/bus/pci/drivers/i915, or 0 */
+static int busy;          /* a release or a bring-up sleeps */
+static int release_event; /* the unplug of `releasing` left its unbind uevent to the release */
+static struct drm_i915_private *releasing; /* the device a release unplugs, or NULL */
+static int stand_in_level;                 /* the level the stand-in backlight was last given */
 
 /* The panel's power cycle, the longest a released device had. */
 static uint32_t power_cycle_ms = HANDOFF_POWER_CYCLE_MS;
@@ -346,12 +355,43 @@ static void handoff_scratch_keep(struct drm_i915_private *i915, const char *name
 }
 
 /**
+ * Give back what the release took when it is refused: the GEM lock and
+ * the commit lock when `gem` and `locked` say it holds them, RPS and RC6
+ * when `pm_off` says it turned them off, and the device's wakeref; the
+ * refusal logged and the console told to look again. Returns `err`.
+ */
+static int32_t handoff_refused(struct drm_i915_private *i915, const char *name, int32_t err,
+                               int gem, int locked, int pm_off)
+{
+    struct drm_device *dev = &i915->drm;
+
+    if (gem >= 0) {
+        i915_gem_unlock(i915, gem);
+    }
+    if (locked) {
+        drm_modeset_unlock(dev);
+    }
+    if (pm_off) {
+        handoff_pm_restore(i915);
+    }
+    klog(KLOG_ERR, "i915", "handoff: %s: not released: error %d", name, (int)err);
+    if (!dev->unplugged) {
+        drm_client_dev_hotplug(dev);
+    }
+    i915_rpm_put(i915);
+    drm_dev_put(dev);
+    return err;
+}
+
+/**
  * Release the device `i915` so that another driver may have its function,
- * as the comment at the top says. May sleep, for the GEM lock under which
- * RPS and RC6 go off, in the display's commit and in the function's reset
- * after the unplug; from the commit's end to the unplug it does not, so
- * that no master's commit comes between the last look at the device and
- * its unplug.
+ * as the comment at the top says. The device is held awake throughout, as
+ * Linux's i915_driver_remove holds a wakeref, so that no write of the
+ * release is lost to a runtime suspend. The commit lock is held from the
+ * display's commit to the unplug, so that no master's commit lights a
+ * pipe between them, and the GEM lock from the GPU's reset to the unplug,
+ * so that no hangcheck resets the GPU or starts a ring again after it.
+ * May sleep.
  *
  * @return 0; the commit's error; -EBUSY while a program sleeps with a
  *         window of the aperture; -EIO or -ETIMEDOUT when the GPU did not
@@ -364,23 +404,25 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     pci_device_t pdev = i915->pci;
     char name[HANDOFF_NAME];
     int32_t err;
-    int taken, pm_off = 0, reset;
+    int taken, pm_off = 0, locked = 0, gem = -1, reset;
 
     bdf_name(pdev.bus, devfn_of(&pdev), name);
     drm_dev_get(dev);
+    i915_rpm_get(i915);
     err = aperture_held(i915) ? -EBUSY : 0;
     if (err == 0) {
         /* Linux's intel_gt_suspend_late: RPS and RC6 off before the last
          * reset. Once they are off a park or an unpark writes nothing, so
          * none after the reset sends the GT into RC6. Under the GEM lock,
-         * as every park, and before the commit, after which the release
-         * must not sleep. */
+         * as every park, and before the commit lock, which comes first. */
         taken = i915_gem_lock(i915);
         if (!dev->unplugged) {
             i915_gt_pm_disable(i915);
             pm_off = 1;
         }
         i915_gem_unlock(i915, taken);
+        drm_modeset_lock_nointr(dev);
+        locked = 1;
         err = drm_atomic_helper_shutdown(dev);
     }
     if (err == 0 && dev->unplugged) {
@@ -390,18 +432,11 @@ static int32_t handoff_release(struct drm_i915_private *i915)
         err = -EBUSY;
     }
     if (err == 0) {
+        gem = i915_gem_lock(i915);
         err = i915_gt_quiesce(i915);
     }
     if (err != 0) {
-        if (pm_off) {
-            handoff_pm_restore(i915);
-        }
-        klog(KLOG_ERR, "i915", "handoff: %s: not released: error %d", name, (int)err);
-        if (!dev->unplugged) {
-            drm_client_dev_hotplug(dev);
-        }
-        drm_dev_put(dev);
-        return err;
+        return handoff_refused(i915, name, err, gem, locked, pm_off);
     }
     if (i915->display.dp.pps.ready && i915->display.dp.pps.power_cycle_ms > power_cycle_ms) {
         power_cycle_ms = i915->display.dp.pps.power_cycle_ms;
@@ -411,7 +446,16 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     }
     intel_dp_aux_dev_unregister(i915);
     intel_i2c_unregister(i915);
+    releasing = i915;
     drm_dev_unplug(dev);
+    i915_gem_unlock(i915, gem);
+    drm_modeset_unlock(dev);
+    /* The unplug gave the backlight back to the boot's driver, whose
+     * registers the function's reset takes away. */
+    if (pdev.vendor_id == PCI_VENDOR_INTEL && pdev.bus == 0 && pdev.device == 2 &&
+        pdev.function == 0) {
+        backlight_stand_in();
+    }
     i915_aperture_fini(&i915->gem.aperture);
     i915->gem.aperture.size = 0;
     i915_pci_unmap(&i915->hw);
@@ -419,16 +463,22 @@ static int32_t handoff_release(struct drm_i915_private *i915)
     reset = handoff_release_reset(&pdev, name);
     if (reset < 0) {
         handoff_scratch_keep(i915, name);
+    } else if (reset > 0) {
+        i915_ggtt_carry_drop(&pdev);
     }
     pci_unclaim(pdev.bus, devfn_of(&pdev), PCI_OWNER_KERNEL);
-    if (pdev.vendor_id == PCI_VENDOR_INTEL && pdev.bus == 0 && pdev.device == 2 &&
-        pdev.function == 0) {
-        backlight_stand_in();
+    releasing = 0;
+    /* Linux's driver core sends KOBJ_UNBIND last, once the function is
+     * free for the next driver's probe. */
+    if (release_event) {
+        release_event = 0;
+        sysfs_pci_uevent((int)pdev.bus << 8 | devfn_of(&pdev), "unbind");
     }
     klog(KLOG_INFO, "i915",
          "handoff: %s: released: the display off, the GPU reset, interrupts and bus mastering "
          "off%s",
          name, reset > 0 ? ", the function reset" : "");
+    i915_rpm_put(i915);
     drm_dev_put(dev);
     return 0;
 }
@@ -517,6 +567,7 @@ static int32_t handoff_bring_up(const pci_device_t *pdev)
             klog(KLOG_ERR, "i915", "handoff: %s: not reset: error %d", name, (int)err);
             return err;
         }
+        i915_ggtt_carry_drop(pdev);
         handoff_msleep(power_cycle_ms);
     }
     err = i915_pci_probe(pdev);
@@ -662,7 +713,9 @@ void i915_handoff_unbound(struct drm_i915_private *i915)
             if (slots[i].linked) {
                 sysfs_pci_unbind(key);
             }
-            if (slots[i].announced) {
+            if (slots[i].announced && releasing == i915) {
+                release_event = 1;
+            } else if (slots[i].announced) {
                 sysfs_pci_uevent(key, "unbind");
             }
             slots[i].i915 = 0;

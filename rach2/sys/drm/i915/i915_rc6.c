@@ -169,7 +169,12 @@ void i915_gt_pm_disable(struct drm_i915_private *i915)
 
 void i915_gt_pm_restore(struct drm_i915_private *i915)
 {
+    int cur = i915->rps.cur_freq, adj = i915->rps.last_adj;
+
+    /* The enable starts RPS from RPn; the GT that stays bound starts from
+     * where its last park left it. */
     i915_rps_enable(i915);
+    i915_rps_restore_freq(i915, cur, adj);
     i915_rc6_enable(i915);
     if (i915->gt.awake) {
         i915_gt_unpark(i915);
