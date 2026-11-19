@@ -5495,3 +5495,11 @@ uint32_t procfs_ino_asound(int file, int card)
     check(0, "unexpected stat of a /proc/asound file");
     return 0;
 }
+
+/** Fail the row: no row stats a file of /proc/asound. */
+int asound_mode(int file)
+{
+    (void)file;
+    check(0, "unexpected mode of a /proc/asound file");
+    return 0444;
+}

@@ -1803,6 +1803,24 @@ static void put_hexv(struct hh_text *t, const char *name, uint32_t v)
     put_s(t, "]");
 }
 
+/** Append `v` in base 10 with its sign, as Linux's %d prints it. */
+static void put_d(struct hh_text *t, int v)
+{
+    if (v < 0) {
+        put_s(t, "-");
+        put_n(t, 0u - (uint32_t)v, 10, 1);
+    } else {
+        put_n(t, (uint32_t)v, 10, 1);
+    }
+}
+
+/** The name `names[i]` of a table of `n`, or "reserved" for an index past
+ * it, which a written ELD may give where Linux reads past its table. */
+static const char *hh_name(const char *const *names, int n, int i)
+{
+    return i >= 0 && i < n ? names[i] : "reserved";
+}
+
 /** Append one short audio descriptor, Linux's hdmi_print_sad_info. */
 static void put_sad(struct hh_text *t, int i, const struct hh_sad *a)
 {
@@ -1831,11 +1849,11 @@ static void put_sad(struct hh_text *t, int i, const struct hh_sad *a)
     put_n(t, (uint32_t)i, 10, 1);
     put_hexv(t, "_coding_type\t", (uint32_t)a->format);
     put_s(t, " ");
-    put_s(t, names[a->format]);
+    put_s(t, hh_name(names, 18, a->format));
     put_s(t, "\nsad");
     put_n(t, (uint32_t)i, 10, 1);
     put_s(t, "_channels\t\t");
-    put_n(t, (uint32_t)a->channels, 10, 1);
+    put_d(t, a->channels);
     put_s(t, "\nsad");
     put_n(t, (uint32_t)i, 10, 1);
     put_hexv(t, "_rates\t\t", (uint32_t)a->rates);
@@ -1893,9 +1911,9 @@ static void put_eld(struct hh_text *t, const struct hh_pin *p)
     int i;
 
     put_s(t, "monitor_present\t\t");
-    put_n(t, (uint32_t)p->monitor_present, 10, 1);
+    put_d(t, p->monitor_present);
     put_s(t, "\neld_valid\t\t");
-    put_n(t, (uint32_t)p->eld_valid, 10, 1);
+    put_d(t, p->eld_valid);
     put_s(t, "\ncodec_pin_nid\t\t0x");
     put_n(t, p->nid, 16, 1);
     put_s(t, "\ncodec_dev_id\t\t0x");
@@ -1909,12 +1927,12 @@ static void put_eld(struct hh_text *t, const struct hh_pin *p)
     put_s(t, "monitor_name\t\t");
     put_s(t, e->monitor_name);
     put_s(t, "\nconnection_type\t\t");
-    put_s(t, conn[e->conn_type]);
+    put_s(t, hh_name(conn, 4, e->conn_type));
     put_hexv(t, "\neld_version\t\t", (uint32_t)e->eld_ver);
     put_s(t, e->eld_ver == 2 ? " CEA-861D or below" : e->eld_ver == 31 ? " partial" : " reserved");
     put_hexv(t, "\nedid_version\t\t", (uint32_t)e->cea_edid_ver);
     put_s(t, " ");
-    put_s(t, edid[e->cea_edid_ver]);
+    put_s(t, hh_name(edid, 8, e->cea_edid_ver));
     put_s(t, "\nmanufacture_id\t\t0x");
     put_n(t, (uint32_t)e->manufacture_id, 16, 1);
     put_s(t, "\nproduct_id\t\t0x");
@@ -1922,11 +1940,11 @@ static void put_eld(struct hh_text *t, const struct hh_pin *p)
     put_s(t, "\nport_id\t\t\t0x");
     put_n(t, e->port_id, 16, 1);
     put_s(t, "\nsupport_hdcp\t\t");
-    put_n(t, (uint32_t)e->support_hdcp, 10, 1);
+    put_d(t, e->support_hdcp);
     put_s(t, "\nsupport_ai\t\t");
-    put_n(t, (uint32_t)e->support_ai, 10, 1);
+    put_d(t, e->support_ai);
     put_s(t, "\naudio_sync_delay\t");
-    put_n(t, (uint32_t)e->aud_synch_delay, 10, 1);
+    put_d(t, e->aud_synch_delay);
     put_hexv(t, "\nspeakers\t\t", (uint32_t)e->spk_alloc);
     for (i = 0; i < 11; i++) {
         if (e->spk_alloc & (1 << i)) {
@@ -1935,9 +1953,9 @@ static void put_eld(struct hh_text *t, const struct hh_pin *p)
         }
     }
     put_s(t, "\nsad_count\t\t");
-    put_n(t, (uint32_t)e->sad_count, 10, 1);
+    put_d(t, e->sad_count);
     put_s(t, "\n");
-    for (i = 0; i < e->sad_count; i++) {
+    for (i = 0; i < e->sad_count && i < ELD_MAX_SAD; i++) {
         put_sad(t, i, &e->sad[i]);
     }
 }
@@ -1957,7 +1975,7 @@ int hdmi_audio_codec_addr(void)
     return hh_caddr;
 }
 
-int hdmi_audio_proc_text(int file, char *buf, int cap)
+int hdmi_audio_proc_text(int file, int index, char *buf, int cap)
 {
     struct hh_text t;
 
@@ -1965,21 +1983,19 @@ int hdmi_audio_proc_text(int file, char *buf, int cap)
     t.cap = cap;
     t.len = 0;
     mutex_lock(&hh_mutex);
-    if (file == 0) {
-        if (!hh_present) {
-            put_s(&t, "--- no soundcards ---\n");
-        } else {
-            /* snd_card_info_read: "%2i [%-15s]: %s - %s" and the long
-             * name, azx_probe_continue's "%s at 0x%lx irq %i". */
-            put_s(&t, " 0 [HDMI           ]: HDA-Intel - HDA Intel HDMI\n");
-            put_s(&t, "                      HDA Intel HDMI at 0x");
-            put_n(&t, pci_bar_address64(&hh_pci, 0), 16, 1);
-            put_s(&t, " irq ");
-            put_n(&t, hh_pci.irq, 10, 1);
-            put_s(&t, "\n");
-        }
-    } else if (!hh_present || file - 2 >= hh_npins || file < 1) {
+    if (!hh_present || file < 0 || file - 2 >= hh_npins) {
         t.len = -ENOENT;
+    } else if (file == 0) {
+        /* snd_card_info_read: "%2i [%-15s]: %s - %s" and the long
+         * name, azx_probe_continue's "%s at 0x%lx irq %i". */
+        put_s(&t, index < 10 ? " " : "");
+        put_d(&t, index);
+        put_s(&t, " [HDMI           ]: HDA-Intel - HDA Intel HDMI\n");
+        put_s(&t, "                      HDA Intel HDMI at 0x");
+        put_n(&t, pci_bar_address64(&hh_pci, 0), 16, 1);
+        put_s(&t, " irq ");
+        put_n(&t, hh_pci.irq, 10, 1);
+        put_s(&t, "\n");
     } else if (file == 1) {
         put_s(&t, "HDMI\n");
     } else {
@@ -1987,4 +2003,158 @@ int hdmi_audio_proc_text(int file, char *buf, int cap)
     }
     mutex_unlock(&hh_mutex);
     return t.len;
+}
+
+/** Whether the strings `a` and `b` are equal. */
+static int hh_streq(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** Whether `c` is a space as the kernel's isspace has it. */
+static int hh_space(char c)
+{
+    return c == ' ' || (c >= '\t' && c <= '\r');
+}
+
+/** The value of the hex digit `c`, or -1. */
+static int hh_xdigit(char c)
+{
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
+}
+
+/**
+ * Parse the line `l` as Linux's sscanf(line, "%s %llx", name, &val): a
+ * word into `name`, of at most 63 bytes as the line's 64 allow, then a hex
+ * number with an optional 0x, its low 64 bits kept. Returns 1 for both,
+ * 0 otherwise.
+ */
+static int hh_eld_line(const char *l, char *name, uint64_t *val)
+{
+    int k = 0, d;
+
+    while (hh_space(*l)) {
+        l++;
+    }
+    while (*l && !hh_space(*l)) {
+        name[k++] = *l++;
+    }
+    name[k] = '\0';
+    if (k == 0) {
+        return 0;
+    }
+    while (hh_space(*l)) {
+        l++;
+    }
+    if (l[0] == '0' && (l[1] == 'x' || l[1] == 'X') && hh_xdigit(l[2]) >= 0) {
+        l += 2;
+    }
+    if (hh_xdigit(*l) < 0) {
+        return 0;
+    }
+    *val = 0;
+    while ((d = hh_xdigit(*l)) >= 0) {
+        *val = *val << 4 | (uint32_t)d;
+        l++;
+    }
+    return 1;
+}
+
+/** Set the field `name` of SAD `n` of `e` to `v`, as Linux's write does,
+ * which counts the SAD in sad_count whether or not the field is one. */
+static void hh_eld_sad(struct hh_eld_info *e, int n, const char *name, int v)
+{
+    if (hh_streq(name, "_coding_type")) {
+        e->sad[n].format = v;
+    } else if (hh_streq(name, "_channels")) {
+        e->sad[n].channels = v;
+    } else if (hh_streq(name, "_rates")) {
+        e->sad[n].rates = v;
+    } else if (hh_streq(name, "_bits")) {
+        e->sad[n].bits = v;
+    } else if (hh_streq(name, "_byte2")) {
+        e->sad[n].max_bitrate = v;
+    } else if (hh_streq(name, "_profile")) {
+        e->sad[n].profile = v;
+    }
+    if (n >= e->sad_count) {
+        e->sad_count = n + 1;
+    }
+}
+
+/** Set the field a line names in entry `p`, as Linux's
+ * snd_hdmi_write_eld_info does; the monitor's name, IDs and versions are
+ * not set, and a line of any other name is passed over. */
+static void hh_eld_field(struct hh_pin *p, const char *name, uint64_t val)
+{
+    struct hh_eld_info *e = &p->info;
+    int v = (int)(uint32_t)val, n;
+
+    if (hh_streq(name, "monitor_present")) {
+        p->monitor_present = v;
+    } else if (hh_streq(name, "eld_valid")) {
+        p->eld_valid = v;
+    } else if (hh_streq(name, "connection_type")) {
+        e->conn_type = v;
+    } else if (hh_streq(name, "port_id")) {
+        e->port_id = val;
+    } else if (hh_streq(name, "support_hdcp")) {
+        e->support_hdcp = v;
+    } else if (hh_streq(name, "support_ai")) {
+        e->support_ai = v;
+    } else if (hh_streq(name, "audio_sync_delay")) {
+        e->aud_synch_delay = v;
+    } else if (hh_streq(name, "speakers")) {
+        e->spk_alloc = v;
+    } else if (hh_streq(name, "sad_count")) {
+        e->sad_count = v;
+    } else if (name[0] == 's' && name[1] == 'a' && name[2] == 'd') {
+        n = name[3] - '0';
+        name += 4;
+        if (name[-1] != '\0' && name[0] >= '0' && name[0] <= '9') {
+            n = 10 * n + name[0] - '0';
+            name++;
+        }
+        if (n >= 0 && n < ELD_MAX_SAD) {
+            hh_eld_sad(e, n, name, v);
+        }
+    }
+}
+
+int hdmi_audio_eld_write(int n, const char *text, int len)
+{
+    char line[64], name[64];
+    uint64_t val;
+    int i = 0, k;
+
+    mutex_lock(&hh_mutex);
+    if (!hh_present || n < 0 || n >= hh_npins) {
+        mutex_unlock(&hh_mutex);
+        return -ENOENT;
+    }
+    while (i < len) {
+        /* snd_info_get_line: a line of at most 63 bytes, the rest of a
+         * longer one passed over. */
+        k = 0;
+        while (i < len && text[i] != '\n') {
+            if (k < (int)sizeof(line) - 1) {
+                line[k++] = text[i];
+            }
+            i++;
+        }
+        i++;
+        line[k] = '\0';
+        if (hh_eld_line(line, name, &val)) {
+            hh_eld_field(&hh_pins[n], name, val);
+        }
+    }
+    mutex_unlock(&hh_mutex);
+    return 0;
 }

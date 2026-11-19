@@ -25,6 +25,7 @@
 
 #include "audio/hda_hdmi.c"
 #include "audio/acomp.c"
+#include "audio/asound.c"
 
 extern int printf(const char *format, ...);
 extern int memcmp(const void *a, const void *b, unsigned long n);
@@ -310,7 +311,7 @@ static void stream_init(audio_stream_t *s, uint32_t rate, audio_format_t fmt, ui
 static const char *proc(int file)
 {
     static char buf[2048];
-    int n = hdmi_audio_proc_text(file, buf, (int)sizeof(buf) - 1);
+    int n = asound_text(file, buf, (int)sizeof(buf) - 1);
 
     buf[n < 0 ? 0 : n] = '\0';
     return buf;
@@ -380,8 +381,7 @@ static void row_proc(void)
     check(memcmp(proc(1), "HDMI\n", 6) == 0, "proc: the card's id");
     check(memcmp(proc(2), eld0, sizeof(eld0)) == 0, "proc: eld#0.0, IGT's monitor, as Linux's");
     check(memcmp(proc(6), eld4, sizeof(eld4)) == 0, "proc: eld#0.4, pin 6's entry 1, empty");
-    check(hdmi_audio_proc_text(11, NULL, 0) == -ENOENT &&
-              hdmi_audio_proc_text(2, NULL, 0) == (int)sizeof(eld0) - 1,
+    check(asound_text(11, NULL, 0) == -ENOENT && asound_text(2, NULL, 0) == (int)sizeof(eld0) - 1,
           "proc: no eld#0.9; a length measured without a buffer");
 }
 
@@ -503,7 +503,7 @@ static void row_unbind(void)
 {
     acomp_unregister_display(&disp_dev);
     check(!hdmi_audio_present() && hdmi_audio_eld_count() == 0 &&
-              hdmi_audio_proc_text(1, NULL, 0) == -ENOENT &&
+              asound_text(1, NULL, 0) == -ENOENT && asound_card_count() == 0 &&
               strstr(proc(0), "no soundcards") != NULL,
           "unbind: the card goes with the display");
 }
@@ -607,11 +607,23 @@ bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *sk
     return true;
 }
 
+/* The analog card hda.c drives, NULL for none, as most rows have it. */
+static const pci_device_t *analog_card;
+
+/** The analog card, as hda.c gives it to /proc/asound. */
+int hda_card(pci_device_t *out)
+{
+    if (analog_card && out) {
+        *out = *analog_card;
+    }
+    return analog_card != NULL;
+}
+
+/** BAR0 of the display's controller, 00:03.0, or of the PCH's, 00:1b.0. */
 uint64_t pci_bar_address64(const pci_device_t *dev, int i)
 {
-    (void)dev;
     (void)i;
-    return 0xf7e34000u;
+    return dev->device == 0x1b ? 0xf7e30000u : 0xf7e34000u;
 }
 
 /* The function's power state, D0 unless a row sets the firmware's D3hot;

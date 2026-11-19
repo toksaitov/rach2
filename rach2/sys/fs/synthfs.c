@@ -12,7 +12,7 @@
 #include "devtree.h"
 #include "../dmi.h"
 #include "../watchdog.h"
-#include "../audio/hda_hdmi.h"
+#include "../audio/asound.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -624,7 +624,11 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     } else if (kind == VNODE_PROC_FS_DIR) {
         synth_put(out, cap, &pos, "/proc/fs");
     } else if (kind == VNODE_PROC_ASOUND_DIR) {
-        synth_put(out, cap, &pos, pid < 0 ? "/proc/asound" : "/proc/asound/card0");
+        synth_put(out, cap, &pos, "/proc/asound");
+        if (pid >= 0) {
+            synth_put(out, cap, &pos, "/card");
+            synth_put_uint(out, cap, &pos, (unsigned int)pid);
+        }
     } else if (kind == VNODE_PROC_DIR) {
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
@@ -2144,59 +2148,51 @@ static int synth_classify_net(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
-/**
- * The file of /proc/asound/card0 named `c`, as hdmi_audio_proc_text numbers
- * it: 1 for id, 2 + N for eld#C.N, with C the codec's address and N one of
- * the card's ELD files; -1 for none.
- */
-static int synth_asound_file(struct comp c)
+/** The number K of the component `c`, "cardK", as Linux's card%i names
+ * it, or -1 for another name. */
+static int synth_asound_card(struct comp c)
 {
-    char name[16];
-    int i, n = hdmi_audio_eld_count();
+    int i, k = 0;
 
-    if (comp_eq(c, "id")) {
-        return 1;
+    if (c.len < 5 || c.len > 6 || c.s[0] != 'c' || c.s[1] != 'a' || c.s[2] != 'r' ||
+        c.s[3] != 'd' || (c.len == 6 && c.s[4] == '0')) {
+        return -1;
     }
-    for (i = 0; i < n; i++) {
-        int k = 0, v;
-
-        name[k++] = 'e';
-        name[k++] = 'l';
-        name[k++] = 'd';
-        name[k++] = '#';
-        v = hdmi_audio_codec_addr();
-        if (v >= 10) {
-            name[k++] = (char)('0' + v / 10);
+    for (i = 4; i < c.len; i++) {
+        if (c.s[i] < '0' || c.s[i] > '9') {
+            return -1;
         }
-        name[k++] = (char)('0' + v % 10);
-        name[k++] = '.';
-        name[k++] = (char)('0' + i);
-        name[k] = '\0';
-        if (comp_eq(c, name)) {
-            return 2 + i;
-        }
+        k = k * 10 + c.s[i] - '0';
     }
-    return -1;
+    return k;
 }
 
 /** Classify the components `c` of `n` below /proc/asound: the directory,
- * its cards, and card0 with its files while the HDMI codec is there. */
+ * its cards, and each card's directory, pid K, with its files, pid the
+ * file's number (audio/asound.h). */
 static int synth_classify_asound(const struct comp *c, int n, struct vpath *vp)
 {
+    int card;
+
     vp->procfile = SYNTH_PROC_ASOUND;
     if (n == 0) {
         vp->kind = VNODE_PROC_ASOUND_DIR;
         vp->pid = -1;
-    } else if (comp_eq(c[0], "cards")) {
+        return vp->kind;
+    }
+    if (comp_eq(c[0], "cards")) {
         vp->kind = n == 1 ? VNODE_PROC_ASOUND : VNODE_ENOTDIR;
-        vp->pid = 0;
-    } else if (!comp_eq(c[0], "card0") || !hdmi_audio_present()) {
+        vp->pid = ASOUND_CARDS;
+        return vp->kind;
+    }
+    card = synth_asound_card(c[0]);
+    if (card < 0 || card >= asound_card_count()) {
         vp->kind = VNODE_ENOENT;
     } else if (n == 1) {
         vp->kind = VNODE_PROC_ASOUND_DIR;
-        vp->pid = 0;
+        vp->pid = card;
     } else {
-        vp->pid = synth_asound_file(c[1]);
+        vp->pid = asound_lookup(card, c[1].s, c[1].len);
         vp->kind = vp->pid < 0 ? VNODE_ENOENT : n == 2 ? VNODE_PROC_ASOUND : VNODE_ENOTDIR;
     }
     return vp->kind;
