@@ -85,6 +85,12 @@ repairs.
 and
 .Dv MS_SILENT
 are recorded in the mount table.
+.Dv MS_STRICTATIME
+takes
+.Dv MS_NOATIME
+and
+.Dv MS_RELATIME
+off the flags given, as on Linux, and is not recorded.
 .Dv MS_REMOUNT
 gives the mount whose root
 .Fa target
