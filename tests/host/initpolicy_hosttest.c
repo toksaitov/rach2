@@ -635,20 +635,13 @@ static void put_file(const char *path, const char *text, size_t n)
 }
 
 /**
- * The kept levels' files: the mixer's channel lines with mixer(1)'s record
- * of a mute as its `mute` line, `mute none`, an older init's file with no
- * such line, and mute lines cut short or out of range; and a settings file
- * read from its replacement when it is missing, as a stop inside KRFFS's
- * rename leaves it, but not from a replacement cut short, nor while the
- * file itself is there. The files are made in a directory of TMPDIR's and
- * removed at the row's end.
+ * Check the mixer's channel lines and its optional mute record. Both the
+ * largest valid record and a record with too many digits are tried.
  */
-static void kept_rows(void)
+static void mute_rows(void)
 {
-    const char *tmp = getenv("TMPDIR");
-    char dir[PATH_MAX], kept[PATH_MAX + 8], fresh[PATH_MAX + 8], text[24];
     char mute[MUTE_RECORD_MAX];
-    int levels[MIXER_CHANNELS], has, from_fresh;
+    int levels[MIXER_CHANNELS], has;
 
     check(parse_mixer("vol 5:6\npcm 100:0\nmute 40:41\n", levels, mute, &has) == 0 &&
               levels[0] == (5 | 6 << 8) && levels[4] == 100 && levels[1] == -1 && has &&
@@ -662,9 +655,24 @@ static void kept_rows(void)
     check(parse_mixer("vol 1:1\nmute 40\n", levels, mute, &has) != 0 &&
               parse_mixer("vol 1:1\nmute 101:0\n", levels, mute, &has) != 0,
           "kept: a mute line cut short or out of range is malformed");
+    check(parse_mixer("vol 0:0\nmute 100:100\n", levels, mute, &has) == 0 &&
+              strcmp(mute, "100:100\n") == 0 &&
+              parse_mixer("vol 0:0\nmute 0000000001:0\n", levels, mute, &has) != 0,
+          "kept: a mute record must fit including its terminator");
     check(mute_record("40:41\n") && !mute_record("40:41") && !mute_record("101:0\n") &&
               !mute_record("4:4\nx"),
           "kept: a record of a mute is L:R and a newline alone");
+}
+
+/**
+ * Read the fallback a stopped KRFFS rename can leave. Obstruct the next
+ * save and check that the fallback survives until a replacement succeeds.
+ */
+static void kept_rows(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    char dir[PATH_MAX], kept[PATH_MAX + 8], fresh[PATH_MAX + 8], pending[PATH_MAX + 8], text[24];
+    int from_fresh, dir_fd;
 
     snprintf(dir, sizeof(dir), "%s/initkept.XXXXXX", tmp != NULL && *tmp != '\0' ? tmp : "/tmp");
     if (mkdtemp(dir) == NULL) {
@@ -673,6 +681,7 @@ static void kept_rows(void)
     }
     snprintf(kept, sizeof(kept), "%s/b", dir);
     snprintf(fresh, sizeof(fresh), "%s/b.new", dir);
+    snprintf(pending, sizeof(pending), "%s/b.tmp", dir);
     check(read_kept(kept, fresh, text, sizeof(text), &from_fresh) < 0,
           "kept: neither file is no level");
     put_file(fresh, "37\n", 3);
@@ -686,8 +695,27 @@ static void kept_rows(void)
     check(read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && !from_fresh &&
               strcmp(text, "40\n") == 0,
           "kept: the file read while it is there, its replacement not");
-    check(unlink(kept) == 0 && unlink(fresh) == 0 && rmdir(dir) == 0,
-          "kept: the row's files removed");
+    put_file(fresh, "37\n", 3);
+    check(unlink(kept) == 0 && mkdir(pending, 0755) == 0, "kept: obstruct a replacement");
+    dir_fd = open(dir, O_RDONLY | O_DIRECTORY);
+    if (dir_fd >= 0) {
+        check(replace_file(dir_fd, kept, fresh, pending, "42\n", 3) < 0 &&
+                  read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && from_fresh &&
+                  strcmp(text, "37\n") == 0,
+              "kept: a failure while saving preserves the recovered level");
+        check(rmdir(pending) == 0 && replace_file(dir_fd, kept, fresh, pending, "42\n", 3) == 0 &&
+                  read_kept(kept, fresh, text, sizeof(text), &from_fresh) == 3 && !from_fresh &&
+                  strcmp(text, "42\n") == 0,
+              "kept: a retry publishes the replacement");
+        close(dir_fd);
+    } else {
+        check(0, "kept: the row's directory opened");
+    }
+    (void)unlink(kept);
+    (void)unlink(fresh);
+    (void)unlink(pending);
+    (void)rmdir(pending);
+    check(rmdir(dir) == 0, "kept: the row's files removed");
 }
 
 int main(void)
@@ -758,6 +786,7 @@ int main(void)
               "the recovery system runs its wpa_supplicant");
     wifi_case("krffs/manifests/os-real-gnu.manifest", "vendor/gnu/ports/wpa_supplicant.sh",
               "the GNU root runs its wpa_supplicant");
+    mute_rows();
     kept_rows();
     fclose(log);
     close(nullfd);

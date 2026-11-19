@@ -107,6 +107,11 @@ removes the record, so that a step up from a mute starts from 0, and a
 later
 .Cm mute
 records the new level.
+Commands that change a setting hold an exclusive lock on
+.Pa /dev/mixer
+so that
+.Xr init 8
+can read the volume and the mute record together under a shared lock.
 .Pp
 The levels set are kept across a halt, a power-off, a reboot and a reset:
 .Xr init 8

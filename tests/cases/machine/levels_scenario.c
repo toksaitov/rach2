@@ -117,9 +117,9 @@ static void press(struct boot *b)
  * Boot 1: read the levels the firmware and the driver give, set the
  * backlight to 7 and the volume to 5, and reboot through init. Boot 2:
  * read both back and in the kept files, set 9 and 6, wait until init has
- * kept them, and reset past init. Boot 3, whose console blanks after four
- * seconds: read 9 and 6, then the blank with the backlight at 0 and the
- * level kept, and a key's unblank with the backlight at 9 again.
+ * kept them, and quit QEMU while the guest is still running. Boot 3, whose
+ * console blanks after four seconds: read 9 and 6, then the backlight at 0
+ * with its level kept, then back at 9 after a key.
  */
 static void levels(struct lc *l)
 {
@@ -157,7 +157,7 @@ static void levels(struct lc *l)
              "SAVED", got, sizeof(got)))
         return;
     lc_assert(l, "saved", strcmp(got, "yes") == 0, "init did not keep 9 and vol 6:6");
-    if (!restart(&b, "reboot -f\r", "reset-unsaved"))
+    if (!lc_quit(l, b.m, "power-cut"))
         return;
 
     if (!boot(l, &b, "blank", "blanking", 1) || !ask(&b, READ, "LEVELS", got, sizeof(got)))
@@ -186,9 +186,9 @@ static void levels(struct lc *l)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const ids[] = {
-        "default",       "set",        "reset-saved", "restored",   "file", "saved",
-        "reset-unsaved", "reset-kept", "blank-off",   "unblank-on", NULL};
+    static const char *const ids[] = {"default",   "set",        "reset-saved", "restored",
+                                      "file",      "saved",      "power-cut",   "reset-kept",
+                                      "blank-off", "unblank-on", NULL};
     struct lc l;
 
     lc_begin(&l, c, ids);
