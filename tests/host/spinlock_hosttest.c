@@ -2,7 +2,7 @@
  * spinlock_hosttest.c: the kernel's spin lock of rach2/sys/lib/spinlock.c:
  * the order in which it hands the lock to its waiters, a try against its
  * waiters, a waiter that answers other processors' requests while it waits,
- * and waits nested in a wait.
+ * waits nested in a wait, and the test-and-set waiters under a hypervisor.
  *
  * host-deps: tests/host/compat/fiber_host.c
  * host-cflags: -DRACH2_HOST_CPU
@@ -16,7 +16,9 @@
  * try returns, and what each waiter answered. Every row fails on the
  * test-and-set lock the kernel had before: its releaser takes the lock
  * again ahead of its waiters, a try takes it from them, the waiter resumed
- * first takes it, and a nested wait for the same lock spins.
+ * first takes it, and a nested wait for the same lock spins. The row of
+ * the hypervisor's waiters fails on the queue, whose waiter that does not
+ * run holds up the one that does.
  */
 
 #include "lib/spinlock.c"
@@ -106,6 +108,13 @@ void smp_service(void)
         call_fn[host_cpu] = NULL;
         fn();
     }
+}
+
+/** The host is no guest: waiters queue, except in `row_virt`, which sets
+ * `q_virt` itself. */
+int arch_spin_virt(void)
+{
+    return 0;
 }
 
 uint32_t kirq_save(void)
@@ -375,13 +384,44 @@ static void row_same(void)
     lock_a.locked = 0;
 }
 
+/**
+ * Under a hypervisor waiters take the lock by test-and-set. Processors 1
+ * and 2 wait for the lock processor 0 holds, coming in that order;
+ * processor 1's turn never comes, as when the host preempted it, so
+ * processor 2 takes the lock once processor 0 gives it back, then
+ * processor 1 once 2 has. Each answers a TLB request while it waits.
+ */
+static void row_virt(void)
+{
+    static const int one[1] = {1};
+
+    row_begin();
+    q_virt = 1;
+    spin_lock(&lock_a);
+    start(1, take_a);
+    start(2, take_a);
+    tlb_request[1] = tlb_request[2] = 1;
+    check(turn(2) == 0 && turn(1) == 0 && answered[1] == 1 && answered[2] == 1,
+          "virt: a waiter did not answer while it waited");
+    spin_unlock(&lock_a);
+    check(turn(2) == 0 && taken_a == 1 && order_a[0] == 2,
+          "virt: a waiter that runs did not take the lock ahead of one that does not");
+    check(turn(2) == 1, "virt: the waiter did not give the lock back");
+    run(one, 1);
+    check(taken_a == 2 && order_a[1] == 1 && lock_a.locked == 0,
+          "virt: the other waiter did not take the lock after it");
+    q_virt = 0;
+}
+
 int main(void)
 {
+    q_virt = 0;
     row_order();
     row_trylock();
     row_tlb();
     row_nested();
     row_same();
+    row_virt();
     if (fails) {
         printf("spinlock_hosttest: %d failed\n", fails);
         return fails > 255 ? 255 : fails;
