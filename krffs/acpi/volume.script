@@ -12,11 +12,15 @@
 # the action ends by, keeps it until it exits. acpid starts an action for
 # each key without waiting for the one before, and two steps that read the
 # same level would write the same step from it. An empty ACPI_LOCK takes
-# no lock.
+# no lock. The lock is made mode 0600, so that only root opens it and no
+# ordinary process can hold it and stop the keys.
 
 lock=${ACPI_LOCK-/var/run/acpi.lock}
 if [ -n "$lock" ]; then
+    mask=$(umask)
+    umask 077
     exec 9>>"$lock" && flock 9 || exit 1
+    umask "$mask"
 fi
 
 case ${1:-${0##*/}} in

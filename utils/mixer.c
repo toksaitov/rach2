@@ -51,6 +51,12 @@ static const char *const names[SOUND_MIXER_NRDEVICES] = {
  * reboot in the same file as the level (init(8)). */
 #define MUTE_RECORD "/var/run/mixer.mute"
 
+/* The lock root's mixer holds while it reads or changes the volume and the
+ * record, and init while it saves them: mode 0600, so that no ordinary
+ * process can hold it, as it could hold a lock on /dev/mixer, which is
+ * 0666, and stop the volume keys and init's saves. */
+#define MIXER_LOCK "/var/run/mixer.lock"
+
 /** Pack the channels `left` and `right`, each 0 to 100, as OSS's level. */
 static int pack(int left, int right)
 {
@@ -381,11 +387,13 @@ static int run(int fd, int argc, char **argv, int ch)
     return status;
 }
 
-/** Run the command the arguments name. Exits 0, 1 on a failure and 2 on a
- *  usage error. */
+/** Run the command the arguments name, under `MIXER_LOCK`, shared to read
+ *  and exclusive to change; a user, who cannot open the lock, and so cannot
+ *  change the record either, runs unlocked. Exits 0, 1 on a failure and 2
+ *  on a usage error. */
 int main(int argc, char **argv)
 {
-    int fd, lock, status, ch = parse(argc, argv);
+    int fd, lockfd, lock, status, ch = parse(argc, argv);
 
     if (ch == -2) {
         fputs("usage: mixer [NAME [N | L:R | +N | -N] | =rec NAME | mute | unmute]\n", stderr);
@@ -397,12 +405,17 @@ int main(int argc, char **argv)
         return 1;
     }
     lock = argc == 1 || (argc == 2 && ch >= 0) ? LOCK_SH : LOCK_EX;
-    if (flock(fd, lock) != 0) {
-        perror("mixer: " MIXER_DEVICE ": lock");
+    lockfd = open(MIXER_LOCK, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (lockfd >= 0 && flock(lockfd, lock) != 0) {
+        perror("mixer: " MIXER_LOCK);
+        close(lockfd);
         close(fd);
         return 1;
     }
     status = run(fd, argc, argv, ch);
+    if (lockfd >= 0) {
+        close(lockfd);
+    }
     close(fd);
     return status;
 }
