@@ -38,14 +38,14 @@ static struct vfs_mount *name_base(struct vfs_mount *mnt)
 }
 
 /**
- * A record of `leaf` in `parent`, held once, on the list: 0 with it in
- * `*out`; -ENOMEM; or, with `checked`, -EAGAIN when a change of names began
- * since `seq` was read (`vfs_name_seq`), with nothing kept. The check and
- * the insert are one step under the lock, so a change that begins later
- * finds the record.
+ * A record of `leaf` in `parent`, held once, on the list, and `deleted`
+ * from the start when that is set: 0 with it in `*out`; -ENOMEM; or, with
+ * `checked`, -EAGAIN when a change of names began since `seq` was read
+ * (`vfs_name_seq`), with nothing kept. The check and the insert are one
+ * step under the lock, so a change that begins later finds the record.
  */
 static int name_new(const struct vfs_ref *parent, const char *leaf, int checked, uint32_t seq,
-                    struct vfs_name **out)
+                    int deleted, struct vfs_name **out)
 {
     struct vfs_name *name = kzalloc(sizeof(*name));
     uint32_t flags;
@@ -59,6 +59,7 @@ static int name_new(const struct vfs_ref *parent, const char *leaf, int checked,
     vfs_ref_hold(parent);
     vfs_desc_open(parent->mnt);
     name->refs = 1;
+    name->deleted = deleted;
     k_strncpy(name->leaf, leaf, sizeof(name->leaf));
     name->leaf[sizeof(name->leaf) - 1] = '\0';
     flags = spin_lock_irqsave(&names_lock);
@@ -83,7 +84,7 @@ int vfs_name_capture(const struct vfs_ref *parent, const char *leaf, struct vfs_
     if (!parent->mnt->type->ops->hold || !parent->mnt->type->ops->put) {
         return 0;
     }
-    return name_new(parent, leaf, 0, 0, out);
+    return name_new(parent, leaf, 0, 0, 0, out);
 }
 
 int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
@@ -93,7 +94,16 @@ int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t
     if (!parent->mnt->type->ops->hold || !parent->mnt->type->ops->put) {
         return 0;
     }
-    return name_new(parent, leaf, 1, seq, out);
+    return name_new(parent, leaf, 1, seq, 0, out);
+}
+
+int vfs_name_capture_deleted(const struct vfs_ref *parent, const char *leaf, struct vfs_name **out)
+{
+    *out = NULL;
+    if (!parent->mnt->type->ops->hold || !parent->mnt->type->ops->put) {
+        return 0;
+    }
+    return name_new(parent, leaf, 0, 0, 1, out);
 }
 
 int vfs_name_seq(uint32_t *seq)
@@ -328,6 +338,39 @@ void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *t
             name->leaf[sizeof(name->leaf) - 1] = '\0';
         } else if (names_entry(name, mnt, to, leaf)) {
             name->deleted = 1;
+        }
+        next = name_next(name);
+        vfs_name_put(name);
+        name = next;
+    }
+}
+
+/** Give the record `name` the name `leaf` in the directory `to`, which it
+ * holds in place of its old one. */
+static void name_move(struct vfs_name *name, void *to, const char *leaf)
+{
+    struct vfs_ref parent = name->parent;
+
+    name->parent.node = to;
+    vfs_ref_hold(&name->parent);
+    vfs_ref_put(&parent);
+    k_strncpy(name->leaf, leaf, sizeof(name->leaf));
+    name->leaf[sizeof(name->leaf) - 1] = '\0';
+}
+
+void vfs_name_exchange(struct vfs_mount *mnt, void *from, const char *old, void *to,
+                       const char *leaf)
+{
+    struct vfs_name *name = name_next(NULL), *next;
+    char was[VFS_NAME_MAX + 1];
+
+    k_strncpy(was, old, sizeof(was));
+    was[sizeof(was) - 1] = '\0';
+    while (name) {
+        if (names_entry(name, mnt, from, was)) {
+            name_move(name, to, leaf);
+        } else if (names_entry(name, mnt, to, leaf)) {
+            name_move(name, from, was);
         }
         next = name_next(name);
         vfs_name_put(name);
