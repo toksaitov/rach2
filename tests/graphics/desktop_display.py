@@ -256,6 +256,11 @@ def cmd_egl():
     print("desktop: result: egl: %d frames" % sum(frames), flush=True)
 
 
+# The page reports ready once it has the focus and two of its frames have
+# begun. Weston 14 gives the seat its pointer only at a mouse's first event
+# (ensure_pointer_capability), so the scenario's first move reaches Chromium
+# as wl_pointer.enter alone; sent at the first focus, in a session started a
+# few seconds after boot, that move never reached the page.
 PAGE = b'''<!doctype html><title>Desktop input</title>
 <style>html, body { margin: 0; width: 100%; height: 100%; background: #204060; }</style>
 <body><script>
@@ -266,7 +271,9 @@ for (const kind of ["mouseover", "mousemove", "pointerover", "pointermove"])
  document.addEventListener(kind, e => { if (!moved) { moved = true; say("/move?e=" + kind); } });
 document.addEventListener("mousedown", e => say("/click?b=" + e.button));
 (function ready() {
- if (document.hasFocus()) say("/ready"); else setTimeout(ready, 100);
+ if (document.hasFocus())
+  requestAnimationFrame(() => requestAnimationFrame(() => say("/ready")));
+ else setTimeout(ready, 100);
 })();
 </script></body>'''
 
