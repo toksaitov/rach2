@@ -31,7 +31,9 @@
  * masks the pin and polls it until it is turned on again 2 minutes later;
  * EDID overrides on HDMI and external DP with and without a DDC reply;
  * IGT's kms_hdmi_inject, a connector with no monitor forced on with a 4K
- * EDID override and set at 3840x2160@30 (78-10c.5); and IGT's kms_3d, the
+ * EDID override and set at 3840x2160@30 (78-10c.5), and its inject-audio's
+ * i915 half, audio on the transcoder and the component's ELD (78-48); and
+ * IGT's kms_3d, the
  * same connector forced on with IGT's 3D EDID, its 13 stereo modes in
  * Linux's order and each set, a frame-packed one in a frame of both eyes
  * at twice the clock.
@@ -70,6 +72,7 @@
 #include "i915_model_pipe.h"
 #include "i915_model_ring.h"
 #include "i915_lenovo.h"
+#include "igt_audio_edid.h"
 
 extern int vsnprintf(char *s, unsigned long n, const char *format, va_list ap);
 extern char *strstr(const char *s, const char *t);
@@ -1323,6 +1326,101 @@ static void row_inject(void)
     frame();
 }
 
+/* The audio side the audio component binds to the display in
+ * row_inject_audio, as snd_hda_intel's: the operations it was given and
+ * each notification. */
+static const struct acomp_ops *side_ops;
+static void *side_dev;
+static int audio_notes, audio_note_port, audio_note_pipe;
+
+/** The audio side's bind: keep the display's operations. */
+static void audio_bind(void *ptr, const struct acomp_ops *ops, void *dev)
+{
+    (void)ptr;
+    side_ops = ops;
+    side_dev = dev;
+}
+
+/** The audio side's unbind. */
+static void audio_unbind(void *ptr)
+{
+    (void)ptr;
+    side_ops = NULL;
+}
+
+/** The audio side's pin_eld_notify: count it and keep its port. */
+static void audio_notify(void *ptr, int port, int pipe)
+{
+    (void)ptr;
+    audio_notes++;
+    audio_note_port = port;
+    audio_note_pipe = pipe;
+}
+
+static const struct acomp_audio_ops audio_side = {audio_bind, audio_unbind, audio_notify};
+
+/**
+ * IGT's kms_hdmi_inject inject-audio, the i915 half: HDMI-A-2 forced on
+ * with IGT's audio EDID and set at 1080p on pipe C has the "audio"
+ * property at auto, audio on in the transcoder's presence detect with the
+ * ELD not marked valid, the pixel clock's index of 148.5 MHz, and the
+ * codec told of port C; the component's get_eld gives the connector's ELD
+ * with the monitor's name IGT, sync_audio_rate keeps the rate, and with the
+ * pipe off presence detect goes, the codec is told again and get_eld finds
+ * no port. Linux's intel_audio.c, Linux 6.12.115.
+ */
+static void row_inject_audio(void)
+{
+    struct drm_connector *hdmi = &disp->ddi[1].hdmi_connector;
+    struct drm_mode_modeinfo m;
+    uint8_t eld[DRM_ELD_MAX];
+    uint32_t vld;
+    int enabled = 0, size;
+
+    intel_audio_register(&gpu);
+    CHECK(acomp_register_audio(&audio_side, NULL) == 0 && side_ops && side_dev == &gpu,
+          "inject-audio: the component binds the audio side to the display");
+    CHECK(drm_edid_override_set(hdmi, igt_audio_edid, sizeof(igt_audio_edid)) == 0,
+          "inject-audio: IGT's audio EDID set as the override");
+    hdmi->force = DRM_FORCE_ON;
+    (void)drm_helper_probe_single_connector_modes(hdmi, 8192, 8192);
+    CHECK(hdmi->audio_property && hdmi->state->force_audio == DRM_FORCE_AUDIO_AUTO &&
+              disp->ddi[1].hdmi.info.has_audio && hdmi->eld[0] != 0,
+          "inject-audio: the audio property at auto, a sink with audio and an ELD");
+    CHECK(find_mode(hdmi, 1920, 1080, 60, &m), "inject-audio: the 1080p mode");
+    audio_notes = 0;
+    CHECK(setcrtc(2, hdmi, &m, fb_c) == 0 && disp->crtc[2].cfg.has_audio,
+          "inject-audio: SETCRTC of 1080p on pipe C with audio");
+    vld = reg(HSW_AUD_PIN_ELD_CP_VLD);
+    CHECK((vld & AUDIO_OUTPUT_ENABLE(2)) && !(vld & AUDIO_ELD_VALID(2)) &&
+              (reg(HSW_AUD_CFG(2)) & AUD_CONFIG_PIXEL_CLOCK_HDMI_MASK) ==
+                  AUD_CONFIG_PIXEL_CLOCK_HDMI(9),
+          "inject-audio: presence detect on, the ELD not marked valid, 148.5 MHz's index");
+    CHECK(audio_notes == 1 && audio_note_port == INTEL_PORT_C && audio_note_pipe == -1,
+          "inject-audio: the codec told of port C");
+    size = side_ops->get_eld(side_dev, INTEL_PORT_C, -1, &enabled, eld, (int)sizeof(eld));
+    CHECK(enabled && size == (int)drm_eld_size(hdmi->eld) && (eld[4] & 0x1f) == 3 &&
+              memcmp(eld + 20, "IGT", 3) == 0 && (eld[5] >> 4) == 1,
+          "inject-audio: get_eld gives the ELD of the monitor IGT with one SAD");
+    CHECK(side_ops->sync_audio_rate(side_dev, INTEL_PORT_C, -1, 48000) == 0 &&
+              disp->audio.sample_rate[INTEL_PORT_C] == 48000 &&
+              !(reg(HSW_AUD_CFG(2)) & AUD_CONFIG_N_PROG_ENABLE) &&
+              side_ops->get_power(side_dev) == 0,
+          "inject-audio: sync_audio_rate keeps 48 kHz, the hardware's N at 148.5 MHz");
+    side_ops->put_power(side_dev);
+    CHECK(setcrtc(2, NULL, NULL, 0) == 0 &&
+              !(reg(HSW_AUD_PIN_ELD_CP_VLD) & AUDIO_OUTPUT_ENABLE(2)) && audio_notes == 2 &&
+              side_ops->get_eld(side_dev, INTEL_PORT_C, -1, &enabled, eld, (int)sizeof(eld)) ==
+                  -EINVAL,
+          "inject-audio: pipe C off takes presence detect away and tells the codec");
+    intel_audio_deinit(&gpu);
+    CHECK(!side_ops, "inject-audio: the display's going unbinds the audio side");
+    drm_edid_override_reset(hdmi);
+    hdmi->force = DRM_FORCE_UNSPECIFIED;
+    (void)drm_helper_probe_single_connector_modes(hdmi, 8192, 8192);
+    frame();
+}
+
 /* A stereo mode of Linux's list: its timings, clock and flags. */
 struct stereo_want {
     uint16_t h[4], v[4];
@@ -1563,6 +1661,7 @@ int main(void)
     row_dp_override_depth();
     row_dp_downstream_mode();
     row_inject();
+    row_inject_audio();
     row_3d();
     row_fini();
     if (failures != 0) {
