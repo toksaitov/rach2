@@ -1005,25 +1005,16 @@ static int sys_bound(void)
            sys[b - 1].kind == SYSFS_NODE_LINK && sys[b - 1].target == pci;
 }
 
-/* The function's driver_override, as VFIO adds it: "" for none. */
+/* The function's driver_override, as VFIO keeps it: "" for none. */
 static const char *override = "";
 
-/** driver_override: the driver named, or "(null)" for none. */
-static int32_t show_override(void *obj, int arg, char *buf, uint32_t cap)
+/** As group.c's: none, or the stored text naming `driver`; only the GPU
+ * is asked about. */
+int vfio_override_allows(int key, const char *driver)
 {
-    const char *s = override[0] ? override : "(null)";
-    uint32_t n = (uint32_t)strlen(s);
-
-    (void)obj;
-    (void)arg;
-    if (n + 1 <= cap) {
-        k_memcpy(buf, s, n);
-        buf[n] = '\n';
-    }
-    return (int32_t)(n + 1);
+    CHECK(key == LENOVO_GPU_DEVICE << 3, "driver_override is read for the GPU");
+    return !override[0] || strcmp(override, driver) == 0;
 }
-
-static const struct sysfs_attr attr_override = {"driver_override", 0644u, show_override, 0};
 
 /* ---- the console's client and the loader's framebuffer ---- */
 
@@ -2033,9 +2024,6 @@ static void row_boot(void)
     boot_screen.type = BOOT_FB_RGB;
     CHECK(backlight_register("intel_backlight", 937, &boot_ops, NULL) == 0,
           "the boot registers intel_backlight");
-    CHECK(sysfs_add_attr(sysfs_anchor(SYSFS_PCI_DEVICE, LENOVO_GPU_DEVICE << 3), &attr_override,
-                         NULL, 0) > 0,
-          "VFIO's driver_override is on the function");
     model_wait = sleep_frames;
     CHECK(i915_driver_bind(&model.pci, &chip_hw) == 0 && (i915 = bound()) != NULL,
           "boot: the driver binds");
