@@ -215,6 +215,13 @@ void pidfd_exit(process_t *t)
     CHECK(t->state == PROC_ZOMBIE, "a thread's pidfds are woken once it is a zombie");
 }
 
+/** Nothing: the modelled threads are in no autogroup (autogroup_hosttest
+ * checks the move out at exit). */
+void autogroup_exit(process_t *p)
+{
+    (void)p;
+}
+
 /** Check that the POSIX timers deleted are the child's process's. */
 void ptimer_delete_all(struct tgroup *tg)
 {
