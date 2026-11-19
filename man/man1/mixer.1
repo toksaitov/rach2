@@ -121,7 +121,15 @@ Every command also takes the same kind of lock on
 itself, which every account can open, so that two commands that step the
 volume at once each move it: an ordinary user waits for that lock, and
 root tries it for a second and then goes on without it, so that a user who
-holds it delays a volume key by a second at most.
+holds it delays a volume key by a second at most, and the mute key, whose
+action runs
+.Nm
+twice, by two.
+A user's command stopped for longer than that between its read and its
+write, as by SIGSTOP, still writes the level it computed when it goes on,
+as that user could write any level then; Linux's
+.Xr amixer 1
+steps the level with no lock at all.
 .Pp
 The levels set are kept across a halt, a power-off, a reboot and a reset:
 .Xr init 8
