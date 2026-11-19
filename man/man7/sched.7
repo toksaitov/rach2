@@ -52,9 +52,11 @@ and
 .Dv SCHED_IDLE
 do not preempt the running fair thread.
 .Pp
-The default base slice at boot is 750,000 ns multiplied by one plus the
-integer base-2 logarithm of the online processor count capped at eight.
-Linux 6.12 starts from 700,000 ns with the same default scaling.
+The base slice at boot is 700,000 ns multiplied by one plus the
+integer base-2 logarithm of the online processor count capped at eight,
+2.1 ms with four processors, as in Linux 6.12.
+A thread without a slice of its own takes the base slice at each
+placement and each new deadline.
 .Xr debugfs 5
 describes the file that reads and sets the base slice.
 .Pp
