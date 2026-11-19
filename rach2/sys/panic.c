@@ -9,6 +9,7 @@
 #include "display/blank.h"
 #include "klog.h"
 #include "lib/kstd.h"
+#include "lib/lockdep.h"
 #include "lib/kstring.h"
 #include "network/netconsole.h"
 #include "platform.h"
@@ -223,7 +224,11 @@ void k_panic_note_address(uintptr_t address)
  * its steps: the nested panic finds itself the owner, and stops the others
  * if the first has not yet.
  *
- * The watchdog's counter is stopped first, on the owner as on any other
+ * The lock checker of the debug kernel stops first, as Linux's
+ * `debug_locks_off`, since a hook that the report's trylocks reach would
+ * wait for the checker's lock, which a stopped processor may hold.
+ *
+ * The watchdog's counter is stopped next, on the owner as on any other
  * that panics, as Linux's `native_stop_other_cpus` masks the caller's
  * counter entry (arch/x86/kernel/smp.c:232-235): the panicked processor
  * takes no ticks, and the counter's next NMI would report it as a hard
@@ -236,6 +241,7 @@ void k_panic_begin(void)
     unsigned int owner;
 
     arch_irq_disable();
+    lockdep_off_for_panic();
     platform_pmu_disable();
     if (k_panic_hook) {
         k_panic_hook();
