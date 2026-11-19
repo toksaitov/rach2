@@ -1,0 +1,175 @@
+5496 (subtask 5508): WineD3D's 1,000 GL round trips in QEMU on the testing
+PC at the head of milestone/76-display, 90468670dd, after the waits (a3f41354eb),
+the ptrace requests (777d69bbd2) and signal posting (824775ac34) left the big
+lock. 2026-11-20, 02:03-02:05 UTC+6, the same setup as wine-qemu.txt: QEMU
+10.2.1, KVM with -cpu host,invtsc=on, q35, std VGA, no display, 4 CPUs,
+8192 MiB, beside one other guest of another task.
+
+Inputs (SHA-256):
+  Rach2 kernel built at 546da6e83b (kernel tree at 90468670dd)
+    c848bb7631f3b59f25b37978e50c8bc13aee4229ee75ef805cfd50b9787fe508
+  3984's GNU trial root, as in wine-qemu.txt
+    5ed936d79361e924b634c3b528f586aa9044ed609b2064b8c8e59f1c1b685e96
+  Games probe bundle, as in wine-qemu.txt
+    b1b25a19ecf132b77cae19e567b45e06b18d9e46a3247850f1e0d36b9b045ee6
+
+These are the time and scheduler lines of each run, with the ten largest
+big-lock holds of each traced row. Linux's rows are in wine-qemu.txt.
+
+5508: booting kernel
+2026-11-19T20:03:22Z
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trip5496/root-5ed936d79361e924.img rach2.slot=trialroot rach2.cycleaccount rach2.console=term
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+strace -- version 7.2
+1793687165 GE-Proton11-12
+5508: trip.sh run 1
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 92.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: window 94.9 ms
+games: trip-gl-0: ctxt 21711
+games: trip-gl-0: bkl_wait_us 6449
+games: trip-gl-0: thread 508 wined3d_cs: ran 43.2 ms, waited ready 21.7 ms
+games: trip-gl-1: tripprobe: 1000 round trips in 88.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: window 91.8 ms
+games: trip-gl-1: ctxt 22751
+games: trip-gl-1: bkl_wait_us 7356
+games: trip-gl-1: thread 645 wined3d_cs: ran 40.4 ms, waited ready 20.7 ms
+games: trip-gl-2: tripprobe: 1000 round trips in 89.4 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: window 90.6 ms
+games: trip-gl-2: ctxt 21651
+games: trip-gl-2: bkl_wait_us 6156
+games: trip-gl-2: thread 782 wined3d_cs: ran 37.9 ms, waited ready 25.5 ms
+games: trip-gl-strace: tripprobe: 1000 round trips in 1696.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1705.5 ms
+games: trip-gl-strace: ctxt 451438
+games: trip-gl-strace: bkl_wait_us 1122560
+games: trip-gl-strace: hold take 1: 152331 holds, 524097 us, 3.4 us each
+games: trip-gl-strace: hold slept 202: 111246 holds, 449392 us, 4.0 us each
+games: trip-gl-strace: hold slept 98: 40132 holds, 113239 us, 2.8 us each
+games: trip-gl-strace: hold syscall 202: 47065 holds, 101974 us, 2.2 us each
+games: trip-gl-strace: hold slept 24: 21620 holds, 57298 us, 2.7 us each
+games: trip-gl-strace: hold slept 0: 13815 holds, 46603 us, 3.4 us each
+games: trip-gl-strace: hold syscall 98: 20067 holds, 42079 us, 2.1 us each
+games: trip-gl-strace: hold vector 0: 47411 holds, 40487 us, 0.9 us each
+games: trip-gl-strace: hold slept 14: 11878 holds, 38845 us, 3.3 us each
+games: trip-gl-strace: hold slept 1: 6260 holds, 37331 us, 6.0 us each
+games: trip-gl-strace: thread 932 wined3d_cs: ran 465.4 ms, waited ready 270.0 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1588.5 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1593.0 ms
+games: trip-gl-ioctl: ctxt 440885
+games: trip-gl-ioctl: bkl_wait_us 1077995
+games: trip-gl-ioctl: hold take 1: 152161 holds, 503279 us, 3.3 us each
+games: trip-gl-ioctl: hold slept 202: 110051 holds, 421843 us, 3.8 us each
+games: trip-gl-ioctl: hold slept 98: 39164 holds, 108614 us, 2.8 us each
+games: trip-gl-ioctl: hold syscall 202: 46523 holds, 98643 us, 2.1 us each
+games: trip-gl-ioctl: hold slept 24: 21160 holds, 55074 us, 2.6 us each
+games: trip-gl-ioctl: hold slept 0: 13535 holds, 46914 us, 3.5 us each
+games: trip-gl-ioctl: hold syscall 98: 19582 holds, 41192 us, 2.1 us each
+games: trip-gl-ioctl: hold vector 0: 48114 holds, 39908 us, 0.8 us each
+games: trip-gl-ioctl: hold slept 14: 11598 holds, 38566 us, 3.3 us each
+games: trip-gl-ioctl: hold slept 1: 6047 holds, 35714 us, 5.9 us each
+games: trip-gl-ioctl: thread 1085 wined3d_cs: ran 449.5 ms, waited ready 263.3 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-1/trip
+5508: trip.sh run 2
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 108.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: window 107.1 ms
+games: trip-gl-0: ctxt 22273
+games: trip-gl-0: bkl_wait_us 6748
+games: trip-gl-0: thread 1530 wined3d_cs: ran 44.9 ms, waited ready 31.0 ms
+games: trip-gl-1: tripprobe: 1000 round trips in 98.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: window 102.4 ms
+games: trip-gl-1: ctxt 21709
+games: trip-gl-1: bkl_wait_us 8667
+games: trip-gl-1: thread 1667 wined3d_cs: ran 42.1 ms, waited ready 25.5 ms
+games: trip-gl-2: tripprobe: 1000 round trips in 92.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: window 92.8 ms
+games: trip-gl-2: ctxt 22014
+games: trip-gl-2: bkl_wait_us 5600
+games: trip-gl-2: thread 1803 wined3d_cs: ran 40.8 ms, waited ready 23.5 ms
+games: trip-gl-strace: tripprobe: 1000 round trips in 1677.7 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1685.8 ms
+games: trip-gl-strace: ctxt 451835
+games: trip-gl-strace: bkl_wait_us 1115916
+games: trip-gl-strace: hold take 1: 153088 holds, 525298 us, 3.4 us each
+games: trip-gl-strace: hold slept 202: 111011 holds, 446592 us, 4.0 us each
+games: trip-gl-strace: hold slept 98: 40096 holds, 112057 us, 2.8 us each
+games: trip-gl-strace: hold syscall 202: 46938 holds, 102025 us, 2.2 us each
+games: trip-gl-strace: hold slept 24: 21580 holds, 56282 us, 2.6 us each
+games: trip-gl-strace: hold slept 0: 14076 holds, 47815 us, 3.4 us each
+games: trip-gl-strace: hold syscall 98: 20048 holds, 42579 us, 2.1 us each
+games: trip-gl-strace: hold vector 0: 48286 holds, 38828 us, 0.8 us each
+games: trip-gl-strace: hold slept 14: 11855 holds, 37724 us, 3.2 us each
+games: trip-gl-strace: hold slept 1: 6287 holds, 37467 us, 6.0 us each
+games: trip-gl-strace: thread 1954 wined3d_cs: ran 464.0 ms, waited ready 273.6 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1663.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1674.9 ms
+games: trip-gl-ioctl: ctxt 447436
+games: trip-gl-ioctl: bkl_wait_us 1146908
+games: trip-gl-ioctl: hold take 1: 154619 holds, 528159 us, 3.4 us each
+games: trip-gl-ioctl: hold slept 202: 110546 holds, 438858 us, 4.0 us each
+games: trip-gl-ioctl: hold slept 98: 39528 holds, 114963 us, 2.9 us each
+games: trip-gl-ioctl: hold syscall 202: 46716 holds, 104104 us, 2.2 us each
+games: trip-gl-ioctl: hold slept 24: 21422 holds, 57292 us, 2.7 us each
+games: trip-gl-ioctl: hold slept 0: 13844 holds, 49905 us, 3.6 us each
+games: trip-gl-ioctl: hold syscall 98: 19764 holds, 43984 us, 2.2 us each
+games: trip-gl-ioctl: hold vector 0: 49335 holds, 41978 us, 0.9 us each
+games: trip-gl-ioctl: hold slept 14: 11794 holds, 39821 us, 3.4 us each
+games: trip-gl-ioctl: hold slept 1: 6306 holds, 38195 us, 6.1 us each
+games: trip-gl-ioctl: thread 2107 wined3d_cs: ran 469.9 ms, waited ready 282.5 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-2/trip
+5508: trip.sh run 3
+games: weston: renderer llvmpipe (LLVM 19.1.7, 256 bits) display :0
+games: trip-gl-0: tripprobe: 1000 round trips in 99.2 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: window 98.9 ms
+games: trip-gl-0: ctxt 22541
+games: trip-gl-0: bkl_wait_us 6910
+games: trip-gl-0: thread 2552 wined3d_cs: ran 41.2 ms, waited ready 27.9 ms
+games: trip-gl-1: tripprobe: 1000 round trips in 104.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: window 105.4 ms
+games: trip-gl-1: ctxt 23484
+games: trip-gl-1: bkl_wait_us 7199
+games: trip-gl-1: thread 2687 wined3d_cs: ran 40.2 ms, waited ready 26.1 ms
+games: trip-gl-2: tripprobe: 1000 round trips in 110.0 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-2: window 111.4 ms
+games: trip-gl-2: ctxt 23221
+games: trip-gl-2: bkl_wait_us 7477
+games: trip-gl-2: thread 2823 wined3d_cs: ran 44.6 ms, waited ready 24.8 ms
+games: trip-gl-strace: tripprobe: 1000 round trips in 1821.1 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: window 1829.7 ms
+games: trip-gl-strace: ctxt 454317
+games: trip-gl-strace: bkl_wait_us 1209102
+games: trip-gl-strace: hold take 1: 153304 holds, 563545 us, 3.7 us each
+games: trip-gl-strace: hold slept 202: 110754 holds, 468190 us, 4.2 us each
+games: trip-gl-strace: hold slept 98: 40328 holds, 117657 us, 2.9 us each
+games: trip-gl-strace: hold syscall 202: 46807 holds, 108601 us, 2.3 us each
+games: trip-gl-strace: hold slept 24: 21735 holds, 62107 us, 2.9 us each
+games: trip-gl-strace: hold slept 0: 13839 holds, 51279 us, 3.7 us each
+games: trip-gl-strace: hold syscall 98: 20164 holds, 46067 us, 2.3 us each
+games: trip-gl-strace: hold vector 0: 49173 holds, 43677 us, 0.9 us each
+games: trip-gl-strace: hold slept 1: 6262 holds, 40296 us, 6.4 us each
+games: trip-gl-strace: hold slept 14: 11858 holds, 40165 us, 3.4 us each
+games: trip-gl-strace: thread 2974 wined3d_cs: ran 501.6 ms, waited ready 289.0 ms
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 1627.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: window 1637.6 ms
+games: trip-gl-ioctl: ctxt 448857
+games: trip-gl-ioctl: bkl_wait_us 1105814
+games: trip-gl-ioctl: hold take 1: 155048 holds, 518013 us, 3.3 us each
+games: trip-gl-ioctl: hold slept 202: 111491 holds, 430320 us, 3.9 us each
+games: trip-gl-ioctl: hold slept 98: 39811 holds, 112437 us, 2.8 us each
+games: trip-gl-ioctl: hold syscall 202: 47158 holds, 100206 us, 2.1 us each
+games: trip-gl-ioctl: hold slept 24: 21592 holds, 56383 us, 2.6 us each
+games: trip-gl-ioctl: hold slept 0: 13943 holds, 47692 us, 3.4 us each
+games: trip-gl-ioctl: hold syscall 98: 19906 holds, 41598 us, 2.1 us each
+games: trip-gl-ioctl: hold vector 0: 48494 holds, 41193 us, 0.8 us each
+games: trip-gl-ioctl: hold slept 14: 11824 holds, 39560 us, 3.3 us each
+games: trip-gl-ioctl: hold slept 1: 6316 holds, 37970 us, 6.0 us each
+games: trip-gl-ioctl: thread 3126 wined3d_cs: ran 461.3 ms, waited ready 274.9 ms
+TRIPS OK
+trip: result: status 0, results in /data/trip5496/result-3/trip
+2026-11-19T20:05:42Z
+5508: head exit 0
