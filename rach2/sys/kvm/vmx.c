@@ -2759,12 +2759,16 @@ static int exit_msr(struct kvm_vcpu *v, int write)
     return 0;
 }
 
-/** VMCALL (exit 18): a Hyper-V hypercall when the guest has Hyper-V
- * (hyperv.c), else a KVM hypercall, whose answer goes in RAX. */
+/** VMCALL (exit 18): a Xen hypercall under the caller's intercept
+ * (xen.c), a Hyper-V hypercall when the guest has Hyper-V (hyperv.c), else
+ * a KVM hypercall, whose answer goes in RAX. */
 static int exit_vmcall(struct kvm_vcpu *v)
 {
     uint64_t ret;
 
+    if (kvm_xen_hypercall_enabled(v->vm)) {
+        return kvm_xen_hypercall(v, vx(v)->ex.insn_len);
+    }
     if (kvm_hv_hypercall_enabled(v)) {
         return kvm_hv_hypercall(v, vx(v)->ex.insn_len);
     }

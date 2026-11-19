@@ -27,17 +27,25 @@
 #define CPUID_DEADLINE (1u << 24)
 
 /* One route of a GSI, while `valid`: an MSI, or for `sint` a synthetic
- * interrupt of a SynIC. */
+ * interrupt of a SynIC, or for `xen` a Xen event channel, which xen.c
+ * raises under a mutex and so never under `chip` or from an irqfd's
+ * hook. */
 struct route {
     uint32_t valid;
     uint32_t chips;  /* the IRQCHIP destinations, one bit per chip */
     uint32_t pin[3]; /* the pin of each destination in `chips` */
     uint32_t sint;   /* KVM_IRQ_ROUTING_HV_SINT */
+    uint32_t xen;    /* KVM_IRQ_ROUTING_XEN_EVTCHN */
     uint32_t address_lo;
     uint32_t address_hi;
     uint32_t data;
-    uint32_t hv_vcpu, hv_sint; /* the SINT's VP index and number */
+    uint32_t hv_vcpu, hv_sint;   /* the SINT's VP index and number */
+    uint32_t xen_vcpu, xen_port; /* the channel's vCPU, by APIC id, and port */
 };
+
+/* The most deferred Xen irqfds one pass of `kvm_irq_process` raises; the
+ * rest wait for the next pass, which it asks for. */
+#define XEN_BATCH 16u
 
 /*
  * An irqfd: the eventfd `ev`, whose rise raises `gsi`. `route` is the
@@ -141,16 +149,34 @@ static int set_msi(struct kvm_vm *vm, const struct route *r, uint32_t level)
     return kvm_lapic_deliver(vm, NULL, &irq);
 }
 
+/** Raise the Xen route `r` at `level`, as Linux's evtchn_set_fn: 1
+ * delivered, 0 already pending, or -1 for a level of 0, a masked port or
+ * a failure. With no spinlock held. */
+static int set_xen(struct kvm_vm *vm, const struct route *r, uint32_t level)
+{
+    int n;
+
+    if (!level) {
+        return -1;
+    }
+    n = kvm_xen_route_set(vm, r->xen_vcpu, r->xen_port);
+    return n < 0 ? -1 : n;
+}
+
 /** Raise all controller destinations of a route, or its one MSI/SINT:
  * the APICs or pins that took it, or -1 when none did, as Linux's
  * kvm_set_irq skips each negative result, so that an MSI `msi_invalid`
- * refuses is -1 here and -EINVAL only for KVM_SIGNAL_MSI. */
+ * refuses is -1 here and -EINVAL only for KVM_SIGNAL_MSI. A Xen route is
+ * -1 here, under `chip`; its callers raise it after (`set_xen`). */
 static int set_route(struct kvm_vm *vm, const struct route *r, uint32_t source, uint32_t level,
                      int status)
 {
     uint32_t chip;
     int n, result = -1;
 
+    if (r->xen) {
+        return -1;
+    }
     if (!r->chips) {
         n = set_msi(vm, r, level);
         return n < 0 ? -1 : n;
@@ -216,7 +242,7 @@ static int irqfd_signal(struct eventfd_hook *h)
 
     spin_lock(&iv->lock);
     r = f->route;
-    deferred = r.chips != 0 || f->resample != NULL;
+    deferred = r.chips != 0 || r.xen || f->resample != NULL;
     if (deferred) {
         f->pending = iv->pending = 1;
     }
@@ -255,8 +281,9 @@ void kvm_irq_process(struct kvm_vm *vm)
 {
     struct irq_vm *iv = irq_of(vm);
     struct irqfd *f;
-    uint32_t flags, chip;
-    int pending;
+    struct route xen[XEN_BATCH];
+    uint32_t flags, chip, nxen = 0, i;
+    int pending, more = 0;
 
     if (!iv || !iv->pending) {
         return;
@@ -268,7 +295,18 @@ void kvm_irq_process(struct kvm_vm *vm)
     for (f = iv->irqfds; f; f = f->next) {
         flags = spin_lock_irqsave(&iv->lock);
         pending = f->pending;
-        f->pending = 0;
+        if (pending && f->route.xen) {
+            /* Raised below, once `chip` is let go. */
+            if (nxen < XEN_BATCH) {
+                xen[nxen++] = f->route;
+                f->pending = 0;
+            } else {
+                iv->pending = more = 1;
+            }
+            pending = 0;
+        } else {
+            f->pending = 0;
+        }
         spin_unlock_irqrestore(&iv->lock, flags);
         if (pending) {
             kvm_irq_set(vm, f->gsi, f->resample ? KVM_IRQ_SRC_RESAMPLE : KVM_IRQ_SRC_USER, 1, 0);
@@ -278,6 +316,15 @@ void kvm_irq_process(struct kvm_vm *vm)
         }
     }
     spin_unlock_irqrestore(&iv->chip, chip);
+    for (i = 0; i < nxen; i++) {
+        (void)set_xen(vm, &xen[i], 1);
+        kvm_event_add(KVM_EVENT_IRQFD);
+    }
+    if (more) {
+        for (i = 0; i < vm->nr_vcpus; i++) {
+            kvm_lapic_wake(vm->vcpus[i], KVM_REQ_IRQFD);
+        }
+    }
 }
 
 /** Take `f` off its VM's list. */
@@ -427,7 +474,9 @@ static int32_t irqfd(struct kvm_vm *vm, uintptr_t arg)
     iv->irqfds = f;
     spin_unlock_irqrestore(&iv->chip, flags);
     r = eventfd_hook_add(ev, &f->hook);
-    if (r == 1) {
+    if (r == 1 && f->route.xen) {
+        (void)set_xen(vm, &f->route, 1);
+    } else if (r == 1) {
         flags = spin_lock_irqsave(&iv->chip);
         kvm_irq_set(vm, f->gsi, f->resample ? KVM_IRQ_SRC_RESAMPLE : KVM_IRQ_SRC_USER, 1, 0);
         if (!f->resample) {
@@ -572,6 +621,13 @@ static int route_add(struct kvm_vm *vm, struct route *t, struct kvm_irq_routing_
         t->sint = 1;
         t->hv_vcpu = e.u.hv_sint.vcpu;
         t->hv_sint = e.u.hv_sint.sint;
+    } else if (!t->valid && e.type == KVM_IRQ_ROUTING_XEN_EVTCHN && !e.flags) {
+        if (kvm_xen_route_check(vm, e.u.xen_evtchn.port, e.u.xen_evtchn.priority) != 0) {
+            return -EINVAL;
+        }
+        t->xen = 1;
+        t->xen_vcpu = e.u.xen_evtchn.vcpu;
+        t->xen_port = e.u.xen_evtchn.port;
     } else {
         return -EINVAL;
     }
@@ -593,7 +649,8 @@ void kvm_irq_scan_eoi_exits(struct kvm_vcpu *v, uint32_t map[8])
     flags = spin_lock_irqsave(&iv->chip);
     n = iv->ioapic_pins < iv->nr_routes ? iv->ioapic_pins : iv->nr_routes;
     for (i = 0; i < n; i++) {
-        if (!iv->routes[i].valid || iv->routes[i].sint || iv->routes[i].chips) {
+        if (!iv->routes[i].valid || iv->routes[i].sint || iv->routes[i].xen ||
+            iv->routes[i].chips) {
             continue; /* Linux's entry->type != KVM_IRQ_ROUTING_MSI */
         }
         msi_irq(vm, &iv->routes[i], &irq);
@@ -607,7 +664,8 @@ void kvm_irq_scan_eoi_exits(struct kvm_vcpu *v, uint32_t map[8])
 
 /**
  * Replace the routing table and refresh each irqfd's route. A GSI has
- * one MSI or SINT, or at most one pin per in-kernel controller. Returns
+ * one MSI, SINT or Xen event channel, or at most one pin per in-kernel
+ * controller. Returns
  * 0; -EINVAL without a controller, for an unknown type or flag, a pin or
  * GSI out of range, or conflicting routes; -ENOMEM; -EFAULT.
  */
@@ -816,18 +874,30 @@ int kvm_irq_io(struct kvm_vcpu *v)
  * -EFAULT. */
 static int32_t irq_line(struct kvm_vm *vm, uintptr_t arg, int status)
 {
+    struct irq_vm *iv = irq_of(vm);
     struct kvm_irq_level l;
-    uint32_t flags;
+    struct route r;
+    uint32_t flags, gsi;
+    int xen;
 
     if (copy_from_user(&l, (const void __user *)arg, sizeof(l)) != 0) {
         return -EFAULT;
     }
-    if (!irq_of(vm)) {
+    if (!iv) {
         return -ENXIO;
     }
+    gsi = (uint32_t)l.irq;
     flags = kvm_chip_lock(vm);
-    l.irq = kvm_irq_set(vm, (uint32_t)l.irq, KVM_IRQ_SRC_USER, l.level, status);
+    xen = gsi < iv->nr_routes && iv->routes[gsi].valid && iv->routes[gsi].xen;
+    if (xen) {
+        r = iv->routes[gsi];
+    } else {
+        l.irq = kvm_irq_set(vm, gsi, KVM_IRQ_SRC_USER, l.level, status);
+    }
     kvm_chip_unlock(vm, flags);
+    if (xen) {
+        l.irq = set_xen(vm, &r, l.level);
+    }
     if (status && copy_to_user((void __user *)arg, &l, sizeof(l)) != 0) {
         return -EFAULT;
     }

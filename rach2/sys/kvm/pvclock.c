@@ -531,10 +531,7 @@ void kvm_tsc_moved(struct kvm_vcpu *v)
     tsc_changed(v);
 }
 
-/** The real time at which `vm`'s kvmclock read 0, in ns, as Linux's
- * kvm_get_wall_clock_epoch: with the master clock, the real time and the
- * kvmclock at one TSC count. */
-static uint64_t wall_epoch(struct kvm_vm *vm)
+uint64_t kvm_wall_epoch(struct kvm_vm *vm)
 {
     struct master m;
     uint64_t real, tsc;
@@ -571,7 +568,7 @@ static void wall_clock_write(struct kvm_vcpu *v, uint64_t gpa)
     if (kvm_guest_phys_rw(v, gpa, &version, 4, 1) != 0) {
         return;
     }
-    wall = wall_epoch(v->vm);
+    wall = kvm_wall_epoch(v->vm);
     wc.version = version;
     wc.sec = (uint32_t)(wall / NSEC_PER_SEC); /* modulo 2^32, as Linux's */
     wc.nsec = (uint32_t)(wall % NSEC_PER_SEC);
@@ -582,6 +579,13 @@ static void wall_clock_write(struct kvm_vcpu *v, uint64_t gpa)
     (void)kvm_guest_phys_rw(v, gpa, &version, 4, 1);
 }
 
+/** Whether `v` has a clock in guest memory to keep: the kvmclock, or Xen's
+ * copies in vcpu_info and vcpu_time_info. */
+static int clock_wanted(const struct kvm_vcpu *v)
+{
+    return (v->pv_time & KVM_MSR_ENABLED) || kvm_xen_clock_active(v);
+}
+
 /**
  * Write `v`'s kvmclock into guest memory, as Linux's kvm_guest_time_update
  * and kvm_setup_guest_pvclock: the host's TSC and clock at the master
@@ -589,7 +593,9 @@ static void wall_clock_write(struct kvm_vcpu *v, uint64_t gpa)
  * the TSC's rate, and PVCLOCK_TSC_STABLE_BIT with the master clock; the
  * version odd while the rest is written and even after, and the guest's
  * PVCLOCK_GUEST_STOPPED kept. A clock that crosses a page, or misses guest
- * memory, is not written, as Linux's cache of the page refuses it.
+ * memory, is not written, as Linux's cache of the page refuses it. The
+ * same clock goes to Xen's copies (`kvm_xen_clock_write`), and its scale to
+ * Xen's CPUID (`kvm_xen_tsc_info`).
  */
 static void pvclock_write(struct kvm_vcpu *v)
 {
@@ -598,8 +604,9 @@ static void pvclock_write(struct kvm_vcpu *v)
     uint64_t gpa = v->pv_time & ~(uint64_t)KVM_MSR_ENABLED, khz = kvm_tsc_khz();
     uint64_t host_tsc, ns;
     uint32_t version;
+    int stopped = v->pv_stopped;
 
-    if (khz == 0 || (gpa & 0xFFFu) + sizeof(pv) > 4096u) {
+    if (khz == 0) {
         return;
     }
     master_copy(v->vm, &m);
@@ -610,18 +617,26 @@ static void pvclock_write(struct kvm_vcpu *v)
         host_tsc = arch_cycles();
         ns = kvm_host_ns();
     }
-    if (kvm_guest_phys_rw(v, gpa, &guest, sizeof(guest), 0) != 0) {
-        return;
-    }
     k_memset(&pv, 0, sizeof(pv));
     pv.tsc_timestamp = kvm_tsc_scale(v, host_tsc) + (uint64_t)v->tsc_offset;
     pv.system_time = ns + (uint64_t)m.offset;
     time_scale(NSEC_PER_SEC, kvm_tsc_hz(v), &pv.tsc_shift, &pv.tsc_to_system_mul);
     pv.flags = m.on ? PVCLOCK_TSC_STABLE_BIT : 0u;
+    v->pv_stopped = 0;
+    kvm_xen_tsc_info(v, pv.tsc_to_system_mul, pv.tsc_shift, (uint32_t)(kvm_tsc_hz(v) / 1000u));
+    kvm_xen_clock_write(v, &pv, stopped);
+    v->clock_cpu = (int32_t)arch_cpu_id();
+    v->clock_ns = kvm_host_ns();
+    kvm_timer_arm(v, kvm_clock_next(v));
+    if (!(v->pv_time & KVM_MSR_ENABLED) || (gpa & 0xFFFu) + sizeof(pv) > 4096u) {
+        return;
+    }
+    if (kvm_guest_phys_rw(v, gpa, &guest, sizeof(guest), 0) != 0) {
+        return;
+    }
     pv.flags |= (uint8_t)(guest.flags & PVCLOCK_GUEST_STOPPED);
-    if (v->pv_stopped) {
+    if (stopped) {
         pv.flags |= PVCLOCK_GUEST_STOPPED;
-        v->pv_stopped = 0;
     }
     version = (guest.version + 1u) | 1u;
     if (kvm_guest_phys_rw(v, gpa, &version, 4, 1) != 0) {
@@ -633,9 +648,6 @@ static void pvclock_write(struct kvm_vcpu *v)
     }
     version++;
     (void)kvm_guest_phys_rw(v, gpa, &version, 4, 1);
-    v->clock_cpu = (int32_t)arch_cpu_id();
-    v->clock_ns = kvm_host_ns();
-    kvm_timer_arm(v, kvm_clock_next(v));
 }
 
 /** Move `v`'s TSC up to where its rate would have it since its last match
@@ -656,7 +668,7 @@ static int tsc_catch_up(struct kvm_vcpu *v)
 
 uint64_t kvm_clock_next(const struct kvm_vcpu *v)
 {
-    if (!(v->pv_time & KVM_MSR_ENABLED) || v->vm->master_clock || v->clock_cpu < 0) {
+    if (!clock_wanted(v) || v->vm->master_clock || v->clock_cpu < 0) {
         return 0;
     }
     return v->clock_ns + KVMCLOCK_SYNC_NS;
@@ -664,14 +676,14 @@ uint64_t kvm_clock_next(const struct kvm_vcpu *v)
 
 void kvm_clock_moved_cpu(struct kvm_vcpu *v)
 {
-    if ((v->pv_time & KVM_MSR_ENABLED) && !v->vm->master_clock) {
+    if (clock_wanted(v) && !v->vm->master_clock) {
         kvm_vcpu_kick(v, KVM_REQ_CLOCK_UPDATE);
     }
 }
 
 void kvm_clock_prepare(struct kvm_vcpu *v)
 {
-    int update, pv = (v->pv_time & KVM_MSR_ENABLED) != 0;
+    int update, pv = clock_wanted(v);
 
     (void)kvm_vcpu_test_clear(v, KVM_REQ_MASTERCLOCK_UPDATE);
     master_recheck(v->vm);
@@ -848,35 +860,54 @@ static int steal_write(struct kvm_vcpu *v)
     return kvm_guest_phys_rw(v, gpa + ST_VERSION, &version, 4, 1) != 0 ? -1 : 0;
 }
 
+int kvm_gpa_vouch(struct kvm_vm *vm, uint64_t gpa)
+{
+    struct mm *mm = kvm_vm_mm(vm);
+    struct kvm_slot_view s;
+    const vma_t *r;
+    int ok;
+
+    if (!mm || !kvm_slot_find(vm, gpa >> 12, &s)) {
+        return 0;
+    }
+    mmap_read_lock(mm);
+    r = vm_find(&mm->vm, (uintptr_t)s.hva);
+    ok = r && !(r->prot & VM_PROT_SECRET);
+    mmap_unlock(mm);
+    return ok;
+}
+
 /** Find whether `v`'s steal time record at `gpa` lies in no region of
  * memfd_secret, with `mmu_seq` read first, so that `kvm_steal_preempted`
  * may write it while no zap has come since and the MSR names `gpa` still
  * (`st_ok`, `st_seq`, `st_gpa`). In `v`'s thread; may sleep. */
 static void steal_vouch(struct kvm_vcpu *v, uint64_t gpa)
 {
-    struct kvm_vm *vm = v->vm;
-    struct mm *mm = kvm_vm_mm(vm);
-    struct kvm_slot_view s;
-    const vma_t *r;
-    uint32_t seq = vm->mmu_seq;
+    uint32_t seq = v->vm->mmu_seq;
 
     k_barrier();
     v->st_ok = 0;
-    if (!mm || !kvm_slot_find(vm, gpa >> 12, &s)) {
+    if (!kvm_gpa_vouch(v->vm, gpa)) {
         return;
     }
-    mmap_read_lock(mm);
-    r = vm_find(&mm->vm, (uintptr_t)s.hva);
     v->st_gpa = gpa;
     v->st_seq = seq;
-    v->st_ok = r && !(r->prot & VM_PROT_SECRET);
-    mmap_unlock(mm);
+    v->st_ok = 1;
 }
 
 void kvm_steal_prepare(struct kvm_vcpu *v)
 {
     int update = kvm_vcpu_test_clear(v, KVM_REQ_STEAL_UPDATE);
     uint64_t gpa;
+
+    if (kvm_xen_msr_enabled(v->vm)) {
+        /* Xen's runstate stands in for the steal time, as Linux's
+         * record_steal_time has it. */
+        if (update) {
+            kvm_xen_runstate_running(v);
+        }
+        return;
+    }
 
     if (current_proc->pcount != v->st_pcount) {
         v->st_pcount = current_proc->pcount;
