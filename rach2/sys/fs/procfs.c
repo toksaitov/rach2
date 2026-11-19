@@ -608,6 +608,26 @@ static void ap_tty(struct procfs_text *t, const process_t *p)
 }
 
 /**
+ * The priority Linux's `task_struct.prio` holds for thread `p`, which
+ * /proc/<pid>/sched shows and /proc/<pid>/stat shows less 100: 99 less the
+ * effective real-time priority, a priority-inheriting futex's donation
+ * included, for a thread that has one; -1 for SCHED_DEADLINE; and 120 plus
+ * the nice value for an ordinary thread.
+ */
+static int procfs_task_prio(const process_t *p)
+{
+    unsigned int rt = sched_priority(p);
+
+    if (rt > 0) {
+        return 99 - (int)rt;
+    }
+    if (p->sched_policy == SCHED_DEADLINE) {
+        return -1;
+    }
+    return 120 + (int)p->nice;
+}
+
+/**
  * Format /proc/<pid>/stat into `t`: its length, or -ENOENT for no such
  * process.
  *
@@ -685,9 +705,9 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_u64(t, TICKS_TO_CLOCK(p->tg->cutime));
     ap_ch(t, ' ');
     ap_u64(t, TICKS_TO_CLOCK(p->tg->cstime));
-    /* 18 priority, Linux's nice + 20 without real-time policy; 19 nice */
+    /* 18 priority, Linux's prio less 100; 19 nice */
     ap_ch(t, ' ');
-    ap_int(t, 20 + (int)p->nice);
+    ap_int(t, procfs_task_prio(p) - 100);
     ap_ch(t, ' ');
     ap_int(t, (int)p->nice);
     ap_ch(t, ' ');
@@ -1491,27 +1511,261 @@ static int procfs_gen_wchan(struct procfs_text *t, int pid)
 
 /**
  * /proc/<pid>/schedstat, as Linux's `proc_pid_schedstat` prints the
- * thread's sched_info: its time on a processor in nanoseconds, here its
- * ticks of user and system time, then the nanoseconds it waited ready on a
- * run queue and the times it was switched onto a processor, which
- * `schedule` counts (process.h's `run_delay` and `pcount`).
+ * thread's sched_info: its run time in nanoseconds, `se.sum_exec_runtime`
+ * as the scheduler last charged it, the nanoseconds it waited ready on a
+ * run queue and the times it was switched onto a processor (process.h's
+ * `run_delay` and `pcount`), read together under the run queues' lock so
+ * that i686 reads no 64-bit value half written.
  */
 static int procfs_gen_schedstat(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
-    uint64_t user, sys;
+    uint64_t runtime, delay;
+    unsigned long count;
+    uint32_t flags;
 
     if (!p) {
         return -ENOENT;
     }
-    thread_cpu_time(p, &user, &sys);
-    ap_u64(t, (user + sys) * TICK_NS);
+    flags = sched_lock_take();
+    runtime = p->se.sum_exec_runtime;
+    delay = p->run_delay;
+    count = p->pcount;
+    sched_lock_give(flags);
+    ap_u64(t, runtime);
     ap_ch(t, ' ');
-    ap_u64(t, p->run_delay);
+    ap_u64(t, delay);
     ap_ch(t, ' ');
-    ap_u64(t, (uint64_t)p->pcount);
+    ap_ulong(t, count);
     ap_ch(t, '\n');
     return t->len;
+}
+
+/** Append `v` as signed decimal, right-aligned in `width` places: printf's
+ * "%Nlld". */
+static void ap_s64_width(struct procfs_text *t, int64_t v, int width)
+{
+    char tmp[24];
+    uint64_t mag = v < 0 ? 0u - (uint64_t)v : (uint64_t)v;
+    int n = diskinfo_u64_dec(tmp, (int)sizeof(tmp), mag) + (v < 0);
+
+    while (n++ < width) {
+        ap_ch(t, ' ');
+    }
+    if (v < 0) {
+        ap_ch(t, '-');
+    }
+    ap_str(t, tmp);
+}
+
+/** Append a line of Linux's /proc/<pid>/sched for a count: `name` in 45
+ * places, a colon and `v` in 21 (debug.c's `__PS`). */
+static void ap_sched_num(struct procfs_text *t, const char *name, int64_t v)
+{
+    int n = (int)k_strlen(name);
+
+    ap_str(t, name);
+    while (n++ < 45) {
+        ap_ch(t, ' ');
+    }
+    ap_ch(t, ':');
+    ap_s64_width(t, v, 21);
+    ap_ch(t, '\n');
+}
+
+/** Append a line of Linux's /proc/<pid>/sched for a time of `ns`
+ * nanoseconds, as milliseconds with six decimals (debug.c's `__PSN` and
+ * `SPLIT_NS`): the whole milliseconds in 14 places, rounded toward zero and
+ * signed, so that a time above -1 ms shows no sign, then the remainder. */
+static void ap_sched_ns(struct procfs_text *t, const char *name, int64_t ns)
+{
+    uint64_t mag = ns < 0 ? 0u - (uint64_t)ns : (uint64_t)ns, rem, ms;
+    char low[8];
+    int n = (int)k_strlen(name), i;
+
+    ms = tick_div64(mag, 1000000u, &rem);
+    ap_str(t, name);
+    while (n++ < 45) {
+        ap_ch(t, ' ');
+    }
+    ap_ch(t, ':');
+    ap_s64_width(t, ns < 0 ? -(int64_t)ms : (int64_t)ms, 14);
+    ap_ch(t, '.');
+    for (i = 5; i >= 0; i--) {
+        low[i] = (char)('0' + (int)(rem % 10u));
+        rem /= 10u;
+    }
+    low[6] = '\0';
+    ap_str(t, low);
+    ap_ch(t, '\n');
+}
+
+/* The schedstats /proc/<pid>/sched shows while kernel.sched_schedstats is
+ * 1, in debug.c's order, each a member of struct sched_statistics and 1 for
+ * a time, which `ap_sched_ns` prints. */
+static const struct {
+    const char *name;
+    size_t off;
+    int ns;
+} sched_stat_rows[] = {
+#define SCHED_STAT(f, ns) {#f, offsetof(struct sched_statistics, f), ns}
+    SCHED_STAT(sum_sleep_runtime, 1),
+    SCHED_STAT(sum_block_runtime, 1),
+    SCHED_STAT(wait_start, 1),
+    SCHED_STAT(sleep_start, 1),
+    SCHED_STAT(block_start, 1),
+    SCHED_STAT(sleep_max, 1),
+    SCHED_STAT(block_max, 1),
+    SCHED_STAT(exec_max, 1),
+    SCHED_STAT(slice_max, 1),
+    SCHED_STAT(wait_max, 1),
+    SCHED_STAT(wait_sum, 1),
+    SCHED_STAT(wait_count, 0),
+    SCHED_STAT(iowait_sum, 1),
+    SCHED_STAT(iowait_count, 0),
+    SCHED_STAT(nr_migrations_cold, 0),
+    SCHED_STAT(nr_failed_migrations_affine, 0),
+    SCHED_STAT(nr_failed_migrations_running, 0),
+    SCHED_STAT(nr_failed_migrations_hot, 0),
+    SCHED_STAT(nr_forced_migrations, 0),
+    SCHED_STAT(nr_wakeups, 0),
+    SCHED_STAT(nr_wakeups_sync, 0),
+    SCHED_STAT(nr_wakeups_migrate, 0),
+    SCHED_STAT(nr_wakeups_local, 0),
+    SCHED_STAT(nr_wakeups_remote, 0),
+    SCHED_STAT(nr_wakeups_affine, 0),
+    SCHED_STAT(nr_wakeups_affine_attempts, 0),
+    SCHED_STAT(nr_wakeups_passive, 0),
+    SCHED_STAT(nr_wakeups_idle, 0)
+#undef SCHED_STAT
+};
+
+/* What /proc/<pid>/sched shows of one thread, copied under the run queues'
+ * lock so that every 64-bit value is whole and all are of one moment. */
+struct sched_snap {
+    struct sched_entity se;
+    unsigned long nvcsw;
+    unsigned long nivcsw;
+    int policy;
+    int prio;
+    int stats; /* kernel.sched_schedstats at the copy */
+};
+
+/**
+ * /proc/<pid>/sched and /proc/<pid>/task/<tid>/sched, as Linux 6.12's
+ * `proc_sched_show_task` prints them (kernel/sched/debug.c:1168) for
+ * Debian's configuration: the thread's name, id in the reader's PID
+ * namespace and its process's thread count, then its entity's start of
+ * charging, virtual runtime, run time and migrations; the schedstats while
+ * they are kept; its switches; its weight and load averages; its policy,
+ * priority and, for an ordinary thread, its slice; and the nanoseconds
+ * between two readings of the clock. Rach2 balances no NUMA memory, so the
+ * NUMA lines of a kernel with CONFIG_NUMA_BALANCING are left out. The
+ * averages and ratios are Linux's: `avg_atom` is the run time per switch
+ * and `avg_per_cpu` per migration, -1 for none, in nanoseconds.
+ */
+static int procfs_gen_sched(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    struct sched_snap *s;
+    uint64_t switches, rem;
+    int64_t t0, t1;
+    uint32_t flags;
+    unsigned int i;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    s = kmalloc(sizeof(*s));
+    if (!s) {
+        t->nomem = 1;
+        return -1;
+    }
+    flags = sched_lock_take();
+    s->se = p->se;
+    s->nvcsw = p->nvcsw;
+    s->nivcsw = p->nivcsw;
+    s->policy = p->sched_policy;
+    s->prio = procfs_task_prio(p);
+    s->stats = fair_schedstats;
+    sched_lock_give(flags);
+    for (i = 0; i < sizeof(p->comm) && p->comm[i]; i++) {
+        ap_ch(t, p->comm[i]);
+    }
+    ap_str(t, " (");
+    ap_int(t, (int)pid_seen((uint32_t)pid));
+    ap_str(t, ", #threads: ");
+    ap_u32(t, p->tg->live);
+    ap_str(t, ")\n");
+    ap_str(t, "-------------------------------------------------------------------\n");
+    ap_sched_ns(t, "se.exec_start", (int64_t)s->se.exec_start);
+    ap_sched_ns(t, "se.vruntime", (int64_t)s->se.vruntime);
+    ap_sched_ns(t, "se.sum_exec_runtime", (int64_t)s->se.sum_exec_runtime);
+    ap_sched_num(t, "se.nr_migrations", (int64_t)s->se.nr_migrations);
+    switches = (uint64_t)s->nvcsw + (uint64_t)s->nivcsw;
+    if (s->stats) {
+        for (i = 0; i < sizeof(sched_stat_rows) / sizeof(sched_stat_rows[0]); i++) {
+            int64_t v;
+
+            k_memcpy(&v, (const char *)&s->se.stats + sched_stat_rows[i].off, sizeof(v));
+            if (sched_stat_rows[i].ns) {
+                ap_sched_ns(t, sched_stat_rows[i].name, v);
+            } else {
+                ap_sched_num(t, sched_stat_rows[i].name, v);
+            }
+        }
+        ap_sched_ns(t, "avg_atom",
+                    switches ? (int64_t)tick_div64(s->se.sum_exec_runtime, switches, &rem) : -1);
+        ap_sched_ns(t, "avg_per_cpu",
+                    s->se.nr_migrations
+                        ? (int64_t)tick_div64(s->se.sum_exec_runtime, s->se.nr_migrations, &rem)
+                        : -1);
+    }
+    ap_sched_num(t, "nr_switches", (int64_t)switches);
+    ap_sched_num(t, "nr_voluntary_switches", (int64_t)s->nvcsw);
+    ap_sched_num(t, "nr_involuntary_switches", (int64_t)s->nivcsw);
+    ap_sched_num(t, "se.load.weight", (int64_t)s->se.load.weight);
+    ap_sched_num(t, "se.avg.load_sum", (int64_t)s->se.avg.load_sum);
+    ap_sched_num(t, "se.avg.runnable_sum", (int64_t)s->se.avg.runnable_sum);
+    ap_sched_num(t, "se.avg.util_sum", (int64_t)s->se.avg.util_sum);
+    ap_sched_num(t, "se.avg.load_avg", (int64_t)s->se.avg.load_avg);
+    ap_sched_num(t, "se.avg.runnable_avg", (int64_t)s->se.avg.runnable_avg);
+    ap_sched_num(t, "se.avg.util_avg", (int64_t)s->se.avg.util_avg);
+    ap_sched_num(t, "se.avg.last_update_time", (int64_t)s->se.avg.last_update_time);
+    /* util_est without its top bit, UTIL_AVG_UNCHANGED (sched.h:4774) */
+    ap_sched_num(t, "se.avg.util_est", (int64_t)(s->se.avg.util_est & 0x7FFFFFFFu));
+    ap_sched_num(t, "policy", s->policy);
+    ap_sched_num(t, "prio", s->prio);
+    if (s->policy == SCHED_DEADLINE) {
+        ap_sched_num(t, "dl.runtime", 0);
+        ap_sched_num(t, "dl.deadline", 0);
+    } else if (s->policy == SCHED_OTHER || s->policy == SCHED_BATCH || s->policy == SCHED_IDLE) {
+        ap_sched_num(t, "se.slice", (int64_t)s->se.slice);
+    }
+    kfree(s);
+    t0 = rtc_monotonic_ns();
+    t1 = rtc_monotonic_ns();
+    ap_sched_num(t, "clock-delta", t1 - t0);
+    return t->nomem ? -1 : t->len;
+}
+
+/**
+ * Clear thread `pid`'s schedstats, as a write of anything to
+ * /proc/<pid>/sched does (Linux's `proc_sched_set_task`). 0, or -ESRCH for
+ * a thread that has gone.
+ */
+static int procfs_sched_clear(int pid)
+{
+    process_t *p = procfs_proc(pid);
+    uint32_t flags;
+
+    if (!p) {
+        return -ESRCH;
+    }
+    flags = sched_lock_take();
+    k_memset(&p->se.stats, 0, sizeof(p->se.stats));
+    sched_lock_give(flags);
+    return 0;
 }
 
 /** One mapped file's name for one reading of maps, smaps or numa_maps. */
@@ -2682,6 +2936,8 @@ static const char *procfs_pid_file_name(int kind)
         return "wchan";
     case SYNTH_PROC_SCHEDSTAT:
         return "schedstat";
+    case SYNTH_PROC_SCHED:
+        return "sched";
     default:
         return "stat";
     }
@@ -8589,7 +8845,7 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     *uid = f->own.uid;
     *gid = f->own.gid;
     return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
-           procfs_is_idmap(f->origin_file);
+           f->origin_file == SYNTH_PROC_SCHED || procfs_is_idmap(f->origin_file);
 }
 
 int procfs_fd_writable(struct fd_entry *e)
@@ -8813,9 +9069,9 @@ static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
     return t->len;
 }
 
-/** Read a user namespace's file or a `comm` opened for writing as well:
- * its text at this read, from the description's offset; -ESRCH once the
- * process has been reaped. */
+/** Read a user namespace's file, a `comm` or a `sched` opened for writing
+ * as well: its text at this read, from the description's offset; -ESRCH
+ * once the process has been reaped. */
 static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -8825,8 +9081,9 @@ static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count
     int rc;
 
     procfs_text_init(&t);
-    rc = f->origin_file == SYNTH_PROC_COMM ? procfs_gen_comm(&t, f->origin_pid)
-                                           : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
+    rc = f->origin_file == SYNTH_PROC_COMM    ? procfs_gen_comm(&t, f->origin_pid)
+         : f->origin_file == SYNTH_PROC_SCHED ? procfs_gen_sched(&t, f->origin_pid)
+                                              : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
     if (rc < 0 || t.nomem) {
         kfree(t.buf);
         return t.nomem ? -ENOMEM : -ESRCH;
@@ -8911,13 +9168,30 @@ static int32_t procfs_comm_write(fd_entry_t *e, const char __user *buf, uint32_t
 static const struct file_ops procfs_comm_ops = {
     procfs_idmap_read, procfs_comm_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
+/** Write /proc/<pid>/sched or /proc/<pid>/task/<tid>/sched as Linux's
+ * `sched_write` does: whatever `buf` holds, the thread's schedstats are
+ * cleared (`procfs_sched_clear`). `count`, or -ESRCH once the thread has
+ * been reaped. */
+static int32_t procfs_sched_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    int rc = procfs_sched_clear(f->origin_pid);
+
+    (void)buf;
+    return rc != 0 ? rc : (int32_t)count;
+}
+
+static const struct file_ops procfs_sched_ops = {
+    procfs_idmap_read, procfs_sched_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
+
 /**
- * Open /proc/<pid>/uid_map, gid_map, setgroups or comm, `file` of the path
- * `vp`, for writing, or for reading and writing. Who may write a map is the
- * namespace's rule (`ns_map_write`), checked at the write, which must be at
- * the start; a `comm`, whose mode is 0644, takes a writer that owns it
- * (`procfs_oom_owner`) or a privileged one, checked here. -EACCES for an
- * access mode of 3 or a writer who may not, and -ENOENT for no such process.
+ * Open /proc/<pid>/uid_map, gid_map, setgroups, comm or sched, `file` of
+ * the path `vp`, for writing, or for reading and writing. Who may write a
+ * map is the namespace's rule (`ns_map_write`), checked at the write, which
+ * must be at the start; a `comm` or a `sched`, whose mode is 0644, takes a
+ * writer that owns it (`procfs_oom_owner`) or a privileged one, checked
+ * here. -EACCES for an access mode of 3 or a writer who may not, and
+ * -ENOENT for no such process.
  */
 static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flags)
 {
@@ -8933,8 +9207,8 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (file == SYNTH_PROC_COMM && !proc_fs_privileged(current_proc) &&
-        proc_fsuid(current_proc) != uid) {
+    if ((file == SYNTH_PROC_COMM || file == SYNTH_PROC_SCHED) &&
+        !proc_fs_privileged(current_proc) && proc_fsuid(current_proc) != uid) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -8952,7 +9226,9 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
-    e->ops = file == SYNTH_PROC_COMM ? &procfs_comm_ops : &procfs_idmap_ops;
+    e->ops = file == SYNTH_PROC_COMM    ? &procfs_comm_ops
+             : file == SYNTH_PROC_SCHED ? &procfs_sched_ops
+                                        : &procfs_idmap_ops;
     e->priv = f;
     procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
@@ -9121,7 +9397,8 @@ static int sysctl_get_long(const char *s, uint32_t len, uint32_t *at, unsigned l
  * none (kernel/sysctl.c, fs/file_table.c, fs/namei.c, mm/page-writeback.c,
  * kernel/watchdog.c, kernel/hung_task.c, kernel/panic.c,
  * kernel/locking/lockdep.c, fs/notify/inotify/inotify_user.c,
- * net/ipv4/sysctl_net_ipv4.c, net/core/sysctl_net_core.c). The procfs
+ * net/ipv4/sysctl_net_ipv4.c, net/core/sysctl_net_core.c,
+ * kernel/sched/core.c). The procfs
  * Readme has the table of every numeric file and its handler.
  */
 static const struct {
@@ -9174,7 +9451,8 @@ static const struct {
     {SYNTH_SYS_NETDEV_MAX_BACKLOG, &netdev_max_backlog, SYSCTL_INT, -0x7FFFFFFF - 1, 0x7FFFFFFF},
     {SYNTH_SYS_NETDEV_BUDGET, &netdev_budget, SYSCTL_INT, -0x7FFFFFFF - 1, 0x7FFFFFFF},
     {SYNTH_SYS_NETDEV_BUDGET_USECS, &netdev_budget_usecs, SYSCTL_INT, 2 * 1000000 / TICK_HZ,
-     0x7FFFFFFF}};
+     0x7FFFFFFF},
+    {SYNTH_SYS_SCHED_SCHEDSTATS, &fair_schedstats, SYSCTL_INT, 0, 1}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -10923,6 +11201,8 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_wchan(t, pid);
     case SYNTH_PROC_SCHEDSTAT:
         return procfs_gen_schedstat(t, pid);
+    case SYNTH_PROC_SCHED:
+        return procfs_gen_sched(t, pid);
     default:
         return procfs_is_idmap(vp->procfile) ? procfs_gen_idmap(t, pid, vp->procfile)
                                              : procfs_gen_cmdline(t, pid);
@@ -11177,7 +11457,9 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
     } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
         *fd = procfs_open_oom(vp, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE &&
-               (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && acc != 0) {
+               (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM ||
+                vp->procfile == SYNTH_PROC_SCHED) &&
+               acc != 0) {
         *fd = procfs_open_idmap(vp, vp->procfile, pid, flags);
     } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
         *fd = procfs_open_mem(vp, pid, flags);

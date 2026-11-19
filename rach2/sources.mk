@@ -128,6 +128,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/pelt.c \
     sys/proc/balance.c \
     sys/proc/autogroup.c \
+    sys/proc/sched_debug.c \
     sys/proc/waketime.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \
