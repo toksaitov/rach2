@@ -21,6 +21,10 @@
  * Other frames the stack sends on the tap, IPv6's among them, may take
  * receive buffers too, so the program looks for its frames among those the
  * ring used. A wait is a read of a call eventfd, which the kernel signals.
+ * The kernel signals the receive ring's call once for each frame, after
+ * its used index, so the program counts the calls it reads and, once it
+ * has found a frame, waits until they cover every used entry it has seen:
+ * a frame passes only with its own call, whichever the program sees first.
  *
  * Prints `VHOSTMUSL OK` and exits 0 on success, and prints
  * `VHOSTMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -39,7 +43,6 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
-#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -144,6 +147,7 @@ static const unsigned char peer[6] = {2, 0, 0, 0, 0, 2};
 static unsigned char *mem; /* the guest's memory */
 static int rx_avail_idx;   /* the receive ring's available index, as offered */
 static int rx_seen;        /* used entries of the receive ring looked at */
+static uint64_t rx_calls;  /* the receive ring's calls read, summed */
 
 /** In the process that began the report, report every check before `check`
  * as held, `check` as failed with its text, those after it as not run, and
@@ -325,21 +329,44 @@ static int arp_match(const unsigned char *f, uint32_t n, const char *text)
     return is_arp_request(f, n);
 }
 
-/** Wait for the frame `match` accepts with `text` on the receive ring,
- * reading the ring's call `call` while it has not come: its buffer's
- * offset, or -1 after NUM calls without it. */
+/** Read the receive ring's call `call`, adding the signals it counted to
+ * `rx_calls`: 0, or -1 when the read fails. */
+static int take_call(int call)
+{
+    uint64_t v;
+
+    if (read(call, &v, 8) != 8) {
+        return -1;
+    }
+    rx_calls += v;
+    return 0;
+}
+
+/**
+ * Wait for the frame `match` accepts with `text` on the receive ring,
+ * reading the ring's call `call` while it has not come, and then for the
+ * calls of every used entry seen, since the kernel signals the call once
+ * for each frame it puts on the ring, after its used index: so the frame
+ * and its own call are both required, in either order, and no call of an
+ * earlier frame stands in for it. The buffer's offset; -1 after NUM calls
+ * without the frame; -2 when a read of the call fails.
+ */
 static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
                    const char *text)
 {
-    uint64_t v;
     int at, i;
 
     for (i = 0; i <= NUM; i++) {
         if (find_rx(match, text, &at)) {
+            while (rx_calls < (uint64_t)rx_seen) {
+                if (take_call(call) != 0) {
+                    return -2;
+                }
+            }
             return at;
         }
-        if (read(call, &v, 8) != 8) {
-            return -1;
+        if (take_call(call) != 0) {
+            return -2;
         }
     }
     return -1;
@@ -517,29 +544,20 @@ static int exchange(void)
 }
 
 /** A datagram sent while the receive ring has buffers comes into one, at
- * once or from the thread, and its call is signalled; then the rings let
- * the tap go. */
+ * once or from the thread, and its own call is signalled, before or after
+ * the probe sees the frame; then the rings let the tap go. */
 static int direct(void)
 {
-    struct pollfd p;
-    uint64_t v;
     int at;
 
-    p.fd = ev[1];
-    p.events = POLLIN;
-    p.revents = 0;
-    if (poll(&p, 1, 0) == 1) {
-        (void)read(ev[1], &v, 8);
-    }
     if (send_to_peer(sock, "vhost2") != 0) {
         return fail(DIRECT_SEND);
     }
-    if (find_rx(is_datagram, "vhost2", &at)) {
-        p.revents = 0;
-        if (poll(&p, 1, 0) != 1 || read(ev[1], &v, 8) != 8 || v == 0) {
-            return fail(DIRECT_CALL);
-        }
-    } else if (wait_rx(ev[1], is_datagram, "vhost2") < 0) {
+    at = wait_rx(ev[1], is_datagram, "vhost2");
+    if (at == -2) {
+        return fail(DIRECT_CALL);
+    }
+    if (at < 0) {
         return fail(DIRECT_FRAME);
     }
     if (ring2(vh, VHOST_NET_SET_BACKEND, 0, -1) != 0 ||
