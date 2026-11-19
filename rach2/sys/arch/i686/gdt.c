@@ -68,6 +68,14 @@ void init_gdt(void)
     init_gdt_cpu(0);
 }
 
+/** The i686 takes nothing from the heap for a processor: its double fault's
+ * stack is in `tss.c` and its other exceptions use the stack in use. */
+int arch_ap_prepare(int cpu)
+{
+    (void)cpu;
+    return 0;
+}
+
 /**
  * The i686's part of a started processor's start: its GDT, which also gives
  * %fs its own segment, before anything reads `this_cpu()`, its TSS with the
