@@ -4,6 +4,24 @@
  * display driver's HDMI and DisplayPort outputs, as Linux 6.12.115's
  * snd_hda_intel (sound/pci/hda/hda_intel.c) and patch_hdmi.c, bound to i915
  * through the audio component (acomp.h).
+ *
+ * The Linux 6.12.115 functions it follows, by file and line: the controller,
+ * azx_init_pci (hda_intel.c:380) and snd_hdac_i915_set_bclk
+ * (sound/hda/hdac_i915.c:34); the codec's parse, hdmi_parse_codec,
+ * hdmi_add_pin and hdmi_add_cvt (patch_hdmi.c:2017, 1884, 1963), with
+ * intel_hsw_common_init (3111) and intel_haswell_enable_all_pins (2760);
+ * the pins, hdmi_init_pin (474) and snd_hda_set_dev_select (hda_codec.c:391);
+ * the ELD, sync_eld_via_acomp (patch_hdmi.c:1827), update_eld (1509),
+ * intel_pin_eld_notify (2878) and snd_hdmi_parse_eld (hda_eld.c:224); the
+ * stream, hdmi_pcm_open (patch_hdmi.c:1249), hdmi_pcm_setup_pin (1438),
+ * i915_pin_cvt_fixup (2974), intel_not_share_assigned_cvt (1097),
+ * haswell_verify_D0 (892), generic_hdmi_playback_pcm_prepare (2096),
+ * hdmi_setup_stream (956), hdmi_setup_audio_infoframe (747),
+ * hdmi_infoframe_uptodate (661), hdmi_std_setup_channel_mapping and
+ * hdmi_set_channel_count (sound/hda/hdmi_chmap.c:339, 204); and
+ * /proc/asound, snd_card_info_read (sound/core/init.c:935), snd_card_id_read
+ * (sound/core/info.c:467), the eld#C.N entry (patch_hdmi.c:530) and
+ * snd_hdmi_print_eld_info (hda_eld.c:442).
  */
 
 #include "hda_hdmi.h"
