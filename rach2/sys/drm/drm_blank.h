@@ -20,7 +20,10 @@
 void drm_client_blank(int blank);
 
 /** Whether `drm_client_blank` can turn a display off: the console is on a
- * native device that no master holds. Any context; it does not sleep. */
+ * native device that no master holds, and a CRTC of it was active when the
+ * console last looked, so that a device not yet lit, as bochs before its
+ * first mode set under the VGA's picture, does not count. Any context; it
+ * does not sleep. */
 int drm_client_can_blank(void);
 
 #endif /* _DRM_BLANK_H_ */
