@@ -354,20 +354,18 @@ void arch_regs_get(const struct process *t, unsigned long *regs);
 /** Turn single-stepping of the stopped thread `t` on or off. */
 void arch_ptrace_step(struct process *t, int on);
 
-/** The ptrace(2) requests of this architecture for `t`, the thread `pid`,
- * stopped for the caller: the register sets, the floating-point state, the
+/** The ptrace(2) requests of this architecture for `t`, whose stop the
+ * caller holds across copies: the register sets, the floating-point state, the
  * words of `struct user` and the thread pointer (i686's
  * PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA, x86-64's
  * PTRACE_ARCH_PRCTL). Returns 0 or a negative errno: -EIO for a request it
  * does not have or a word it refuses, -EFAULT for the caller's memory,
- * -ESRCH when the thread left its stop while the caller's data was copied
- * in (`pid` is how it is looked up again), -EINVAL for a floating-point
+ * -EINVAL for a floating-point
  * image the processor would fault on or a thread pointer request refused,
  * and on x86-64 -EPERM for a base at or above USER_ADDR_MAX. A
  * PTRACE_SETREGS stops at the first register refused, with those before it
  * set. */
-long arch_ptrace(struct process *t, uint32_t pid, long request, unsigned long addr,
-                 unsigned long data);
+long arch_ptrace(struct process *t, long request, unsigned long addr, unsigned long data);
 
 /*
  * The register sets of PTRACE_GETREGSET and PTRACE_SETREGSET, named by the

@@ -3692,13 +3692,7 @@ static void sig_irq_restore(uint32_t flags);
 
 static void sig_idle_wait(void);
 
-/* The signal state's lock for a wait's look at a child (defined below with
- * the signal code), and the big lock for the ids a namespace maps (defined
- * with the identity calls). */
-static uint32_t wait_lock(void);
-
-static void wait_unlock(uint32_t flags);
-
+/* The big lock for the IDs a namespace maps, defined with the ID calls. */
 static int ids_lock(int lookup);
 
 static void ids_unlock(int taken);
@@ -3830,12 +3824,12 @@ static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t st
  * report taken, as `take` says. `wait_done` then finishes the event or gives
  * it back. WNOWAIT holds nothing, since it leaves every event where it is.
  *
- * The caller holds the list lock and `wait_lock`, under which every wait
- * looks, so no other wait takes the event meanwhile; a reap, a free and a
+ * The caller holds the list and signal locks, under which every wait looks,
+ * so no other wait takes the event meanwhile; a reap, a free and a
  * tracer's view of an end are held under the big lock too (`wait_tracee`,
  * `wait_child`). A stop or a continue is taken by an exchange that finds
- * the report the look read, since a stop and the end of a process write
- * `jc_status` under the big lock alone (`sig_group_stop`, `sig_group_end`):
+ * the report the look read, since a process's end writes `jc_status` under
+ * the big lock alone (`sig_group_end`):
  * a report that changed meanwhile is left, and its writer wakes the wait to
  * look again. A held stop, continue or end seen keeps a reference to `p`
  * (`proc_ref_get`), which `wait_done` drops, so that a give-back finds the
@@ -3923,7 +3917,7 @@ static void wait_done(struct wait_report *r, int ok)
         wait_take(r);
     } else if (p != NULL) {
         list = tasklist_read_lock();
-        flags = wait_lock();
+        flags = signal_state_lock();
         there = get_process(r->pid) == p;
         if (r->take == WAIT_REAP || r->take == WAIT_FREE) {
             p->state = PROC_ZOMBIE;
@@ -3934,7 +3928,7 @@ static void wait_done(struct wait_report *r, int ok)
         } else if (r->take == WAIT_TRAP && there && p->ptrace_status == (uint32_t)r->status) {
             p->ptrace_reported = 0;
         }
-        wait_unlock(flags);
+        signal_state_unlock(flags);
         tasklist_read_unlock(list);
         wq_wake_all(&current_proc->tg->chld);
     }
@@ -3957,16 +3951,15 @@ static void wait_done(struct wait_report *r, int ok)
  * above it, as Linux's `wait_task_stopped` gives it, so waitid tells an
  * event stop from a plain SIGTRAP.
  *
- * The caller holds the list lock and `wait_lock`, under which the tracee
- * publishes its stop (`signal_trap_publish`); a resume clears the status
- * under the big lock alone, so the status is read once. Returns LOOK_HELD
+ * The caller holds the list and signal locks. Publishing, taking and
+ * clearing a stop all use the signal lock. Returns LOOK_HELD
  * with `out` filled and the event held (`wait_hold`); LOOK_BIG for an end,
  * which is taken only under the big lock, when the caller does not hold
  * it; or LOOK_NONE.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
-    uint32_t stop = *(volatile uint32_t *)&p->ptrace_status;
+    uint32_t stop = p->ptrace_status;
 
     if (stop != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
         wait_fill(out, p, (int32_t)stop, CLD_TRAPPED, (int32_t)(stop >> 8));
@@ -4003,7 +3996,7 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
  * has reported its end and let it go (`wait_tracee`), as Linux has it, so
  * that the tracer learns of the end first.
  *
- * The caller holds the list lock and `wait_lock`; the stop or continue
+ * The caller holds the list lock and `signal_state_lock`; the stop or continue
  * report is read once, since a stop writes it under the big lock alone.
  * Returns LOOK_HELD with `out` filled and the event held (`wait_hold`);
  * LOOK_BIG for an end, which is taken only under the big lock, when the
@@ -4044,12 +4037,12 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  *
  * The walk is under the list lock as a reader, as Linux's do_wait holds
  * `tasklist_lock`, and each child's events are read and held under
- * `wait_lock` too, as Linux's wait_task_stopped takes the child's
+ * `signal_state_lock` too, as Linux's wait_task_stopped takes the child's
  * `siglock`; the list lock is one spinlock, so the looks of two waits do
  * not overlap. The usage of the child whose event is held is summed after
- * `wait_lock` is let go, since the sum takes `timer_lock`, which comes
- * before `sig_lock`. Sets `*have` when a child is selected, and returns the
- * first result that is not LOOK_NONE (`wait_tracee`, `wait_child`).
+ * dropping the signal lock, since the sum takes `timer_lock`. Sets `*have`
+ * when a child is selected, and returns the first result that is not
+ * LOOK_NONE (`wait_tracee`, `wait_child`).
  */
 static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *out, int *have)
 {
@@ -4063,18 +4056,18 @@ static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *o
         }
         if (wait_selects_tracee(idtype, id, options, p)) {
             *have = 1;
-            flags = wait_lock();
+            flags = signal_state_lock();
             look = wait_tracee(p, options, out);
-            wait_unlock(flags);
+            signal_state_unlock(flags);
             if (look != LOOK_NONE) {
                 break;
             }
         }
         if (wait_selects(idtype, id, options, p)) {
             *have = 1;
-            flags = wait_lock();
+            flags = signal_state_lock();
             look = wait_child(p, options, out);
-            wait_unlock(flags);
+            signal_state_unlock(flags);
             if (look != LOOK_NONE) {
                 break;
             }
@@ -4085,9 +4078,9 @@ static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *o
         if ((p->pid != p->tgid || p->parent_pid != tgid) &&
             wait_selects_tracee(idtype, id, options, p)) {
             *have = 1;
-            flags = wait_lock();
+            flags = signal_state_lock();
             look = wait_tracee(p, options, out);
-            wait_unlock(flags);
+            signal_state_unlock(flags);
             if (look != LOOK_NONE) {
                 break;
             }
@@ -4688,13 +4681,11 @@ static uint64_t sigact_mask(const struct k_sigaction *sa)
 /* The lock of the signal state, as Linux 6.12.115's sighand->siglock
  * (kernel/signal.c): the signal sets, the masks and the signal-work flags of
  * every thread. The holder of the big lock takes it for each region of
- * `sig_irq_save`, and rt_sigprocmask takes it alone, without the big lock
- * (`signal_change_blocked_unlocked`). Every other holder holds the big lock,
- * which orders them, and the one holder without it takes nothing under it,
- * so no order through this lock can close a cycle: the holders of the big
- * lock take it without the checker (`raw_spin_lock`), which would otherwise
- * see it both above and below `timer_lock`, whose holder posts a timer's
- * signal (io/timerfd.c). */
+ * `sig_irq_save` without the checker (`raw_spin_lock`), since the big lock
+ * orders the paths that take it both above and below `timer_lock`
+ * (io/timerfd.c). Outside the big lock, rt_sigprocmask takes it alone.
+ * Wait and ptrace take it below the list lock, and ptrace can wake a
+ * thread under it, taking the run queues' lock. */
 static struct spinlock sig_lock = SPINLOCK_INIT_NAMED("sig_lock");
 
 /* The depth of the big lock's holder in the regions of `sig_irq_save`, which
@@ -4727,6 +4718,20 @@ static void sig_irq_restore(uint32_t flags)
         raw_spin_unlock(&sig_lock);
     }
     kirq_restore(flags);
+}
+
+uint32_t signal_state_lock(void)
+{
+    return bkl_held() ? sig_irq_save() : spin_lock_irqsave(&sig_lock);
+}
+
+void signal_state_unlock(uint32_t flags)
+{
+    if (bkl_held()) {
+        sig_irq_restore(flags);
+    } else {
+        spin_unlock_irqrestore(&sig_lock, flags);
+    }
 }
 
 /** Let `sig_lock` go for a switch or an idle wait made inside a region of
@@ -4866,7 +4871,7 @@ static void sig_job_control(process_t *target, int signo)
                     continue;
                 }
                 t->stop_seen = 0;
-                if (t->state == PROC_STOPPED && t->ptrace_status == 0) {
+                if (t->state == PROC_STOPPED && t->ptrace_status == 0 && !(t->ptrace & PT_FROZEN)) {
                     sched_make_ready(t);
                 }
             }
@@ -4884,7 +4889,7 @@ static void sig_job_control(process_t *target, int signo)
         ptrace_group_change(tg);
     } else if (signo == SIGKILL) {
         for (t = proc_list; t; t = t->next) {
-            if (t->tg == tg && t->state == PROC_STOPPED) {
+            if (t->tg == tg && t->state == PROC_STOPPED && !(t->ptrace & PT_FROZEN)) {
                 sched_make_ready(t);
             }
         }
@@ -5019,35 +5024,6 @@ void signal_sets_of(const process_t *t, uint64_t *pending, uint64_t *shared, uin
     }
 }
 
-/** Take the signal state's lock for a wait's look at a child, as Linux's
- * wait_task_stopped takes the child's `siglock`: in a region of
- * `sig_irq_save` for a holder of the big lock, else directly. Interrupts
- * are off until `wait_unlock`. The caller holds the list lock, which comes
- * first, and takes nothing under this one. */
-static uint32_t wait_lock(void)
-{
-    return bkl_held() ? sig_irq_save() : spin_lock_irqsave(&sig_lock);
-}
-
-/** Let go what `wait_lock` took, with its flags. */
-static void wait_unlock(uint32_t flags)
-{
-    if (bkl_held()) {
-        sig_irq_restore(flags);
-    } else {
-        spin_unlock_irqrestore(&sig_lock, flags);
-    }
-}
-
-void signal_trap_publish(process_t *self, uint32_t status)
-{
-    uint32_t flags = wait_lock();
-
-    self->ptrace_reported = 0;
-    self->ptrace_status = status;
-    wait_unlock(flags);
-}
-
 void signal_exit_begin(void)
 {
     process_t *self = current_proc;
@@ -5156,7 +5132,7 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
         t->sig_info[signo] = *info;
     }
     t->sig_pending |= KSIG_BIT(signo);
-    if (signo == SIGKILL && t->state == PROC_STOPPED) {
+    if (signo == SIGKILL && t->state == PROC_STOPPED && !(t->ptrace & PT_FROZEN)) {
         sched_make_ready(t);
     }
     sig_wake(t, KSIG_BIT(signo));
@@ -6521,11 +6497,14 @@ static void sig_group_stop(int signo)
     struct tgroup *tg = current_proc->tg;
     process_t *parent;
     process_t *t;
+    uint32_t flags;
 
     if (current_proc->tgid == init_pid && !debug_shell_is_home) {
         return;
     }
+    flags = sig_irq_save();
     if (tg->stop) {
+        sig_irq_restore(flags);
         return;
     }
     tg->stop = (uint32_t)signo;
@@ -6539,6 +6518,7 @@ static void sig_group_stop(int signo)
     }
     tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
     ptrace_group_change(tg);
+    sig_irq_restore(flags);
     parent = get_process(tg->leader->parent_pid);
     if (parent) {
         struct k_siginfo child;
