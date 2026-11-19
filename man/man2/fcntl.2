@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 19, 2026
 .Dt FCNTL 2
 .Os
 .Sh NAME
@@ -59,9 +59,10 @@ or
 combined with the stored
 .Dv O_APPEND ,
 .Dv O_NONBLOCK ,
-.Dv O_SYNC
-and
+.Dv O_SYNC ,
 .Dv O_DSYNC
+and
+.Dv O_DIRECT
 flags, and with
 .Dv O_EXCL
 for a pidfd of one thread, which is its
@@ -77,9 +78,10 @@ and
 .Dv O_PATH .
 .It Dv F_SETFL
 Replace the open file description's
-.Dv O_APPEND
-and
+.Dv O_APPEND ,
 .Dv O_NONBLOCK
+and
+.Dv O_DIRECT
 flags with those bits from the integer argument.
 Ignore other bits, including the access mode,
 .Dv O_CLOEXEC ,
@@ -90,7 +92,13 @@ as Linux does.
 A change of
 .Dv O_APPEND
 on an append-only file fails with
-.Er EPERM .
+.Er EPERM ,
+and then a change of
+.Dv O_DIRECT
+on a file that
+.Xr open 2
+refuses it for with
+.Er EINVAL .
 .It Dv F_SETLK , F_SETLK64
 Set or remove the record lock the pointed-to
 .Vt struct flock
@@ -443,9 +451,12 @@ asked about
 .Dv F_UNLCK ;
 an open file description lock command has a nonzero
 .Va l_pid ;
-or
 .Dv F_SETPIPE_SZ
-asked for more than 2^31 bytes.
+asked for more than 2^31 bytes; or
+.Dv F_SETFL
+would change
+.Dv O_DIRECT
+of a file that cannot have it.
 .It Bq Er EIO
 A lock command's
 .Va l_whence

@@ -1844,6 +1844,39 @@ int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t 
     return rc;
 }
 
+/**
+ * The `uncache` of `vfs_ops` for the node: drop from the buffer cache the
+ * clean blocks of bytes [`offset`, `offset` + `len`) of regular file `n`,
+ * after an O_DIRECT read or write, so that the file's data stays in memory
+ * no longer than the call, as Linux's direct I/O goes around the page
+ * cache. A block that is dirty, held or in the write batch stays, and so
+ * does a block of the map: only a data block is dropped. Holds the node's
+ * lock, under which the map does not change (`ext2_block_at`), which may
+ * read a pointer block; a failed read leaves the rest of the range cached.
+ */
+void ext2_uncache(struct vfs_mount *mnt, void *node, uint64_t offset, uint64_t len)
+{
+    struct ext2_mount *em = ext2_em_of(mnt);
+    struct ext2_node *n = node;
+    uint64_t at, end;
+    uint32_t b;
+
+    if ((n->mode & S_IFMT_) != S_IFREG_ || len == 0) {
+        return;
+    }
+    ext2_node_lock(n);
+    end = len > n->size || offset > n->size - len ? n->size : offset + len;
+    for (at = offset & ~(uint64_t)(em->block_size - 1u); at < end; at += em->block_size) {
+        if (ext2_block_at(em, n, (uint32_t)(at >> em->block_shift), &b) != 0) {
+            break;
+        }
+        if (b != 0 && ext2_data_block_ok(em, b)) {
+            bcache_forget(em->dev, ((uint64_t)b << em->block_shift) >> BCACHE_BLOCK_SHIFT);
+        }
+    }
+    ext2_node_unlock(n);
+}
+
 /* The cached-only map walk, in logical block order. A page counts once,
  * after its last allocated block; holes alone count no page. */
 struct ext2_cache_walk {

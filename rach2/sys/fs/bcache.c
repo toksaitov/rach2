@@ -2267,6 +2267,17 @@ int bcache_cached(block_device_t *dev, uint64_t blk)
     return cached;
 }
 
+void bcache_forget(block_device_t *dev, uint64_t blk)
+{
+    uint32_t flags = cache_lock();
+    struct bbuf *b = index_find(dev, blk);
+
+    if (b && b->holder == -1 && !b->dirty) {
+        make_empty(b);
+    }
+    cache_unlock(flags);
+}
+
 int bcache_state(block_device_t *dev, uint64_t blk)
 {
     uint32_t flags = cache_lock();
