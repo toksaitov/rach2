@@ -1170,7 +1170,7 @@ static int flush_device(block_device_t *device)
     uint32_t flags;
     int status;
 
-    if ((device->flags & BLOCK_WRITE_THROUGH) && !device->unflushed) {
+    if (block_flush_skips(device)) {
         return 0; /* every write it answered was flushed before the answer */
     }
     if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
@@ -1215,8 +1215,8 @@ static int flush_device(block_device_t *device)
 int block_flush(block_device_t *device)
 {
     device = block_submitter(device);
-    if (!device || !device->flush) {
-        return 0; /* nothing of its own to flush: what was written is on it */
+    if (!device || block_flush_skips(device)) {
+        return 0; /* nothing of its own to flush, or nothing unflushed */
     }
     return flush_device(device);
 }
