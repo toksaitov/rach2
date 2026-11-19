@@ -1,7 +1,7 @@
 /*
  * desktop_scenario.c: the scenarios of tests/cases/machine.desktop.json, the
- * desktop session at boot, headless or on a display, each case a boot of its
- * own.
+ * desktop session, headless or on a display, which SIGHUP starts after a
+ * boot that leaves the screen to the console, each case a boot of its own.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,8 +9,10 @@
 
 #include "netcase.h"
 
-/* The guest paths of the display probe and the programs it runs. */
+/* The guest paths of the display probe, the boot's screen check and the
+ * programs the probe runs. */
 #define PROBE      "/tmp/desktop_display.py"
+#define BOOTSCREEN "/tmp/bootscreen.sh"
 #define DRMCAPTURE "/tmp/drmcapture"
 #define EVPROBE    "/tmp/evprobe"
 
@@ -230,17 +232,23 @@ static void ev_mouse(struct net_case *u, struct net_boot *b)
     }
 }
 
-/** Check Weston on DRM with `renderer` and the device nodes udev gave the
- * desktop's groups, as steps `drm` and `nodes`. */
+/** Check that the boot left the screen to the console, with no Weston,
+ * then start the session and check Weston on DRM with `renderer` and the
+ * device nodes udev gave the desktop's groups, as steps `screen`, `drm` and
+ * `nodes`. */
 static void display(struct net_case *u, struct net_boot *b, const char *renderer)
 {
     const char *nodes[] = {"/bin/bash", "-c",
                            "shopt -s nullglob; stat -c '%U:%G %a %n' /dev/dri/card* "
                            "/dev/dri/renderD* /dev/input/event*",
                            NULL};
+    const char *screen[] = {"/bin/sh", BOOTSCREEN, NULL};
     char token[64];
     struct net_run r;
 
+    put(u, b, "bootscreen", BOOTSCREEN, "0755");
+    if (net_step(u, "screen") == ETUDE_OK)
+        check(u, b, "screen", screen, "screen", "bootscreen: result: pass");
     put(u, b, "desktop-display", PROBE, "0755");
     snprintf(token, sizeof(token), "desktop: result: drm: %s renderer, output ", renderer);
     if (net_step(u, "drm") == ETUDE_OK)
@@ -296,7 +304,7 @@ static void console(struct net_case *u, struct net_boot *b)
     driven(u, b, &word);
 }
 
-/** Weston at boot on bochs with Pixman, both browsers taking input from
+/** Weston on bochs with Pixman, both browsers taking input from
  * QMP, and the console after Weston's SIGKILL. */
 static int bochs(struct net_case *u)
 {
@@ -312,7 +320,7 @@ static int bochs(struct net_case *u)
     return net_end(u);
 }
 
-/** Weston at boot on virtio-gpu with GL, an EGL client, and two modes set
+/** Weston on virtio-gpu with GL, an EGL client, and two modes set
  * by weston.ini and a restart. */
 static int virtio(struct net_case *u)
 {
