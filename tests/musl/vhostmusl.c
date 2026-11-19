@@ -1,0 +1,570 @@
+/**
+ * vhostmusl: check /dev/vhost-net as QEMU's `vhost=on` drives it, with the
+ * program in the guest's place.
+ *
+ * The program makes the tap `vh0` at 10.9.0.1/24, gives /dev/vhost-net a
+ * buffer of its own as the guest's memory, at a guest-physical address of
+ * its choosing, lays a receive and a transmit ring out in it as a virtio
+ * driver does, with an eventfd for each ring's kick and call, and gives
+ * both rings the tap, with no receive buffer offered yet. A datagram sent
+ * to 10.9.0.2 makes the stack ask for that address, and the ARP request
+ * waits in the tap; once the program offers buffers and kicks, the kernel
+ * thread writes it into one after a virtio header with num_buffers 1 and
+ * signals the receive ring's call. The program answers it on the transmit
+ * ring and kicks; the thread gives the answer to the stack, the datagram
+ * that waited for it comes into the receive ring, and the transmit ring's
+ * call is signalled. A second datagram, sent while the ring has buffers,
+ * is in a buffer when its send returns, written in the sender's context.
+ *
+ * Other frames the stack sends on the tap, IPv6's among them, may take
+ * receive buffers too, so the program looks for its frames among those the
+ * ring used. A wait is a read of a call eventfd, which the kernel signals.
+ *
+ * Prints `VHOSTMUSL OK` and exits 0 on success, and prints
+ * `VHOSTMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists; a failure leaves the checks after it not run.
+ * Needs root, for the tap and the device.
+ */
+
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/eventfd.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+
+#include "../probe_report.h"
+
+extern char **environ;
+
+#define TUNSETIFF             0x400454caU
+#define VHOST_GET_FEATURES    0x8008af00U
+#define VHOST_SET_FEATURES    0x4008af00U
+#define VHOST_SET_OWNER       0x0000af01U
+#define VHOST_SET_MEM_TABLE   0x4008af03U
+#define VHOST_SET_VRING_NUM   0x4008af10U
+#define VHOST_SET_VRING_ADDR  0x4028af11U
+#define VHOST_SET_VRING_BASE  0x4008af12U
+#define VHOST_SET_VRING_KICK  0x4008af20U
+#define VHOST_SET_VRING_CALL  0x4008af21U
+#define VHOST_NET_SET_BACKEND 0x4008af30U
+
+#define F_NET_HDR   (1ULL << 27)
+#define F_VERSION_1 (1ULL << 32)
+#define HDR         12 /* the 1.0 header, with num_buffers */
+
+#define GPA      0x40000000ULL /* the guest-physical address of the memory */
+#define MEMSIZE  (64 * 1024)
+#define NUM      16 /* entries of each ring */
+#define RX_DESC  0x0000
+#define RX_AVAIL 0x0400
+#define RX_USED  0x0800
+#define TX_DESC  0x1000
+#define TX_AVAIL 0x1400
+#define TX_USED  0x1800
+#define RX_BUF   0x2000 /* NUM receive buffers of BUFLEN */
+#define TX_BUF   0xc000
+#define BUFLEN   2048
+
+enum {
+    TAP_OPEN,
+    TAP_IFF,
+    TAP_ADDRESS,
+    MEMORY,
+    VHOST_OPEN,
+    OWNER,
+    FEATURES,
+    SET_FEATURES,
+    MEM_TABLE,
+    EVENTFDS,
+    RINGS,
+    RING_FILES,
+    BACKEND,
+    SEND,
+    HELD,
+    RX_KICK,
+    ARP_FRAME,
+    ARP_HEADER,
+    TX_KICK,
+    TX_CALL,
+    TX_USED_ENTRY,
+    DATAGRAM,
+    DIRECT_SEND,
+    DIRECT_FRAME,
+    DIRECT_CALL,
+    DETACH,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"tap-open", "could not open /dev/net/tun"},
+    {"tap-iff", "TUNSETIFF did not make vh0"},
+    {"tap-address", "could not give vh0 10.9.0.1/24 and set it up"},
+    {"memory", "could not map the guest's memory"},
+    {"vhost-open", "could not open /dev/vhost-net"},
+    {"owner", "VHOST_SET_OWNER failed"},
+    {"features", "VHOST_GET_FEATURES lacks the header or the 1.0 layout"},
+    {"set-features", "VHOST_SET_FEATURES of the header and the 1.0 layout failed"},
+    {"mem-table", "VHOST_SET_MEM_TABLE failed"},
+    {"eventfds", "could not make the four eventfds"},
+    {"rings", "a ring's size, base or address was refused"},
+    {"ring-files", "a ring's kick or call was refused"},
+    {"backend", "VHOST_NET_SET_BACKEND of the tap failed"},
+    {"send", "could not send the first datagram to 10.9.0.2"},
+    {"held", "a frame was written with no buffer offered"},
+    {"rx-kick", "could not kick the receive ring"},
+    {"arp-frame", "the ARP request for 10.9.0.2 did not come once buffers were offered"},
+    {"arp-header", "the receive header is not of no offload with num_buffers 1"},
+    {"tx-kick", "could not kick the transmit ring"},
+    {"tx-call", "the transmit ring's call did not come"},
+    {"tx-used", "the transmit ring did not use the answer's chain"},
+    {"datagram", "the first datagram did not come into the receive ring after the answer"},
+    {"direct-send", "could not send the second datagram"},
+    {"direct-frame", "the second datagram was not in the receive ring when its send returned"},
+    {"direct-call", "the receive ring's call was not signalled for the second datagram"},
+    {"detach", "VHOST_NET_SET_BACKEND of -1 failed"},
+};
+
+static const unsigned char peer[6] = {2, 0, 0, 0, 0, 2};
+static unsigned char *mem; /* the guest's memory */
+static int rx_avail_idx;   /* the receive ring's available index, as offered */
+static int rx_seen;        /* used entries of the receive ring looked at */
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("VHOSTMUSL FAIL (%s: %s)\n", checks[check].text, strerror(errno));
+    report_at(check);
+    return 1;
+}
+
+/** The 16-bit word at offset `off` of the guest's memory. */
+static uint16_t get16(int off)
+{
+    uint16_t v;
+
+    memcpy(&v, mem + off, 2);
+    return v;
+}
+
+/** Store the 16-bit word `v` at offset `off`. */
+static void put16(int off, uint16_t v)
+{
+    memcpy(mem + off, &v, 2);
+}
+
+/** Write descriptor `i` of the table at `table`: `len` bytes at the guest
+ * address of offset `off`, with `flags`. */
+static void desc(int table, int i, int off, uint32_t len, uint16_t flags)
+{
+    uint64_t addr = GPA + (uint64_t)off;
+    uint16_t next = 0;
+
+    memcpy(mem + table + 16 * i, &addr, 8);
+    memcpy(mem + table + 16 * i + 8, &len, 4);
+    memcpy(mem + table + 16 * i + 12, &flags, 2);
+    memcpy(mem + table + 16 * i + 14, &next, 2);
+}
+
+/** Offer receive buffer `i`, of BUFLEN bytes, on the receive ring. */
+static void offer_rx(int i)
+{
+    desc(RX_DESC, i, RX_BUF + BUFLEN * i, BUFLEN, 2 /* VRING_DESC_F_WRITE */);
+    put16(RX_AVAIL + 4 + 2 * (rx_avail_idx % NUM), (uint16_t)i);
+    __sync_synchronize();
+    rx_avail_idx++;
+    put16(RX_AVAIL + 2, (uint16_t)rx_avail_idx);
+}
+
+/** A ring request's argument, a ring's index and a number. */
+static int ring2(int fd, unsigned long req, unsigned int index, int num)
+{
+    unsigned int st[2];
+
+    st[0] = index;
+    st[1] = (unsigned int)num;
+    return ioctl(fd, req, st);
+}
+
+/** VHOST_SET_VRING_ADDR of ring `index` at the offsets given. */
+static int ring_addr(int fd, unsigned int index, int d, int u, int a)
+{
+    uint64_t addr[5];
+
+    memset(addr, 0, sizeof(addr));
+    memcpy(&addr[0], &index, 4);
+    addr[1] = (uintptr_t)mem + d;
+    addr[2] = (uintptr_t)mem + u;
+    addr[3] = (uintptr_t)mem + a;
+    return ioctl(fd, VHOST_SET_VRING_ADDR, addr);
+}
+
+/** Give vh0 the address 10.9.0.1/24 and set it up: 0, or -1. */
+static int address_tap(void)
+{
+    struct ifreq ifr;
+    struct sockaddr_in *sin = (struct sockaddr_in *)&ifr.ifr_addr;
+    int s = socket(AF_INET, SOCK_DGRAM, 0), r = -1;
+
+    if (s < 0) {
+        return -1;
+    }
+    memset(&ifr, 0, sizeof(ifr));
+    strcpy(ifr.ifr_name, "vh0");
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = inet_addr("10.9.0.1");
+    if (ioctl(s, SIOCSIFADDR, &ifr) == 0) {
+        sin->sin_addr.s_addr = inet_addr("255.255.255.0");
+        if (ioctl(s, SIOCSIFNETMASK, &ifr) == 0 && ioctl(s, SIOCGIFFLAGS, &ifr) == 0) {
+            ifr.ifr_flags |= IFF_UP;
+            r = ioctl(s, SIOCSIFFLAGS, &ifr);
+        }
+    }
+    close(s);
+    return r;
+}
+
+/** Send the datagram `text` to 10.9.0.2 port 9 on `s`: 0, or -1. */
+static int send_to_peer(int s, const char *text)
+{
+    struct sockaddr_in to;
+
+    memset(&to, 0, sizeof(to));
+    to.sin_family = AF_INET;
+    to.sin_port = htons(9);
+    to.sin_addr.s_addr = inet_addr("10.9.0.2");
+    return sendto(s, text, strlen(text), 0, (struct sockaddr *)&to, sizeof(to)) ==
+                   (ssize_t)strlen(text)
+               ? 0
+               : -1;
+}
+
+/** Whether the frame `f` of `n` bytes is an ARP request for 10.9.0.2. */
+static int is_arp_request(const unsigned char *f, uint32_t n)
+{
+    return n >= 42 && f[12] == 8 && f[13] == 6 && f[21] == 1 && f[38] == 10 && f[39] == 9 &&
+           f[40] == 0 && f[41] == 2;
+}
+
+/** Whether the frame `f` of `n` bytes is the UDP datagram `text` to the
+ * peer's station address. */
+static int is_datagram(const unsigned char *f, uint32_t n, const char *text)
+{
+    size_t len = strlen(text);
+
+    return n >= 42 + len && f[12] == 8 && f[13] == 0 && f[23] == 17 && memcmp(f, peer, 6) == 0 &&
+           memcmp(f + 42, text, len) == 0;
+}
+
+/**
+ * Look at the receive ring's used entries not yet seen for the frame
+ * `match` accepts with `text`: 1 with the buffer's offset in `*at`, else 0
+ * once every used entry is seen.
+ */
+static int find_rx(int (*match)(const unsigned char *, uint32_t, const char *), const char *text,
+                   int *at)
+{
+    __sync_synchronize();
+    while (rx_seen != get16(RX_USED + 2)) {
+        uint32_t id, len;
+        int e = RX_USED + 4 + 8 * (rx_seen % NUM);
+
+        memcpy(&id, mem + e, 4);
+        memcpy(&len, mem + e + 4, 4);
+        rx_seen++;
+        if (id < NUM && len >= HDR && match(mem + RX_BUF + BUFLEN * id + HDR, len - HDR, text)) {
+            *at = RX_BUF + BUFLEN * (int)id;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** `is_arp_request` in `find_rx`'s form. */
+static int arp_match(const unsigned char *f, uint32_t n, const char *text)
+{
+    (void)text;
+    return is_arp_request(f, n);
+}
+
+/** Wait for the frame `match` accepts with `text` on the receive ring,
+ * reading the ring's call `call` while it has not come: its buffer's
+ * offset, or -1 after NUM calls without it. */
+static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const char *),
+                   const char *text)
+{
+    uint64_t v;
+    int at, i;
+
+    for (i = 0; i <= NUM; i++) {
+        if (find_rx(match, text, &at)) {
+            return at;
+        }
+        if (read(call, &v, 8) != 8) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
+/** Answer the ARP request at `req`, the frame after a receive header, on
+ * the transmit ring's entry 0, with the answer's own zero header. */
+static void put_answer(const unsigned char *req)
+{
+    unsigned char *f = mem + TX_BUF + HDR;
+
+    memset(mem + TX_BUF, 0, HDR);
+    memcpy(f, req + 6, 6);
+    memcpy(f + 6, peer, 6);
+    f[12] = 8;
+    f[13] = 6;
+    memcpy(f + 14, req + 14, 8);
+    f[21] = 2;
+    memcpy(f + 22, peer, 6);
+    memcpy(f + 28, req + 38, 4);
+    memcpy(f + 32, req + 22, 10);
+    desc(TX_DESC, 0, TX_BUF, HDR + 42, 0);
+    put16(TX_AVAIL + 4, 0);
+    __sync_synchronize();
+    put16(TX_AVAIL + 2, 1);
+}
+
+/** The descriptors and the eventfds: rx kick, rx call, tx kick, tx call. */
+static int tap = -1, vh = -1, sock = -1, ev[4] = {-1, -1, -1, -1};
+
+/** Close what the program made, which removes the tap. */
+static void cleanup(void)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (ev[i] >= 0) {
+            close(ev[i]);
+        }
+    }
+    if (sock >= 0) {
+        close(sock);
+    }
+    if (vh >= 0) {
+        close(vh);
+    }
+    if (tap >= 0) {
+        close(tap);
+    }
+}
+
+/** Make the tap vh0 at 10.9.0.1/24 and map the guest's memory. */
+static int setup_tap(void)
+{
+    struct ifreq ifr;
+
+    tap = open("/dev/net/tun", O_RDWR);
+    if (tap < 0) {
+        return fail(TAP_OPEN);
+    }
+    memset(&ifr, 0, sizeof(ifr));
+    strcpy(ifr.ifr_name, "vh0");
+    ifr.ifr_flags = 0x1002; /* IFF_TAP | IFF_NO_PI */
+    if (ioctl(tap, TUNSETIFF, &ifr) != 0 || strcmp(ifr.ifr_name, "vh0") != 0) {
+        return fail(TAP_IFF);
+    }
+    if (address_tap() != 0) {
+        return fail(TAP_ADDRESS);
+    }
+    mem = mmap(0, MEMSIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mem == MAP_FAILED) {
+        return fail(MEMORY);
+    }
+    memset(mem, 0, MEMSIZE);
+    return 0;
+}
+
+/** Give /dev/vhost-net the guest's memory and both rings, as QEMU does, up
+ * to the tap given to both. */
+static int setup_vhost(void)
+{
+    uint64_t f = 0, table[5];
+    int i;
+
+    vh = open("/dev/vhost-net", O_RDWR);
+    if (vh < 0) {
+        return fail(VHOST_OPEN);
+    }
+    if (ioctl(vh, VHOST_SET_OWNER, 0) != 0) {
+        return fail(OWNER);
+    }
+    if (ioctl(vh, VHOST_GET_FEATURES, &f) != 0 ||
+        (f & (F_NET_HDR | F_VERSION_1)) != (F_NET_HDR | F_VERSION_1)) {
+        return fail(FEATURES);
+    }
+    f = F_NET_HDR | F_VERSION_1;
+    if (ioctl(vh, VHOST_SET_FEATURES, &f) != 0) {
+        return fail(SET_FEATURES);
+    }
+    table[0] = 1;
+    table[1] = GPA;
+    table[2] = MEMSIZE;
+    table[3] = (uintptr_t)mem;
+    table[4] = 0;
+    if (ioctl(vh, VHOST_SET_MEM_TABLE, table) != 0) {
+        return fail(MEM_TABLE);
+    }
+    for (i = 0; i < 4; i++) {
+        ev[i] = eventfd(0, EFD_CLOEXEC);
+        if (ev[i] < 0) {
+            return fail(EVENTFDS);
+        }
+    }
+    if (ring2(vh, VHOST_SET_VRING_NUM, 0, NUM) != 0 ||
+        ring2(vh, VHOST_SET_VRING_NUM, 1, NUM) != 0 || ring2(vh, VHOST_SET_VRING_BASE, 0, 0) != 0 ||
+        ring2(vh, VHOST_SET_VRING_BASE, 1, 0) != 0 ||
+        ring_addr(vh, 0, RX_DESC, RX_USED, RX_AVAIL) != 0 ||
+        ring_addr(vh, 1, TX_DESC, TX_USED, TX_AVAIL) != 0) {
+        return fail(RINGS);
+    }
+    if (ring2(vh, VHOST_SET_VRING_KICK, 0, ev[0]) != 0 ||
+        ring2(vh, VHOST_SET_VRING_CALL, 0, ev[1]) != 0 ||
+        ring2(vh, VHOST_SET_VRING_KICK, 1, ev[2]) != 0 ||
+        ring2(vh, VHOST_SET_VRING_CALL, 1, ev[3]) != 0) {
+        return fail(RING_FILES);
+    }
+    if (ring2(vh, VHOST_NET_SET_BACKEND, 0, tap) != 0 ||
+        ring2(vh, VHOST_NET_SET_BACKEND, 1, tap) != 0) {
+        return fail(BACKEND);
+    }
+    return 0;
+}
+
+/** The ARP request held in the tap until buffers are offered, the answer on
+ * the transmit ring, and the datagram that waited for it. */
+static int exchange(void)
+{
+    uint64_t one = 1, v = 0;
+    int at, i;
+
+    sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (sock < 0 || send_to_peer(sock, "vhost1") != 0) {
+        return fail(SEND);
+    }
+    if (get16(RX_USED + 2) != 0) {
+        return fail(HELD);
+    }
+    for (i = 0; i < NUM - 1; i++) {
+        offer_rx(i);
+    }
+    if (write(ev[0], &one, 8) != 8) {
+        return fail(RX_KICK);
+    }
+    at = wait_rx(ev[1], arp_match, 0);
+    if (at < 0) {
+        return fail(ARP_FRAME);
+    }
+    if (mem[at] != 0 || mem[at + 1] != 0 || get16(at + 10) != 1) {
+        return fail(ARP_HEADER);
+    }
+    put_answer(mem + at + HDR);
+    if (write(ev[2], &one, 8) != 8) {
+        return fail(TX_KICK);
+    }
+    if (read(ev[3], &v, 8) != 8) {
+        return fail(TX_CALL);
+    }
+    if (get16(TX_USED + 2) != 1 || get16(TX_USED + 4) != 0) {
+        return fail(TX_USED_ENTRY);
+    }
+    if (wait_rx(ev[1], is_datagram, "vhost1") < 0) {
+        return fail(DATAGRAM);
+    }
+    return 0;
+}
+
+/** A datagram sent while the receive ring has buffers is in one when its
+ * send returns, and its call is signalled; then the rings let the tap go. */
+static int direct(void)
+{
+    struct pollfd p;
+    uint64_t v;
+    int at;
+
+    p.fd = ev[1];
+    p.events = POLLIN;
+    p.revents = 0;
+    if (poll(&p, 1, 0) == 1) {
+        (void)read(ev[1], &v, 8);
+    }
+    if (send_to_peer(sock, "vhost2") != 0) {
+        return fail(DIRECT_SEND);
+    }
+    if (!find_rx(is_datagram, "vhost2", &at)) {
+        return fail(DIRECT_FRAME);
+    }
+    p.revents = 0;
+    if (poll(&p, 1, 0) != 1 || read(ev[1], &v, 8) != 8 || v == 0) {
+        return fail(DIRECT_CALL);
+    }
+    if (ring2(vh, VHOST_NET_SET_BACKEND, 0, -1) != 0 ||
+        ring2(vh, VHOST_NET_SET_BACKEND, 1, -1) != 0) {
+        return fail(DETACH);
+    }
+    return 0;
+}
+
+/** Run the checks in order, report them and clean up. */
+int main(void)
+{
+    int rc;
+
+    report_begin(report_case(environ, "guest.default.vhostmusl"));
+    rc = setup_tap();
+    if (rc == 0) {
+        rc = setup_vhost();
+    }
+    if (rc == 0) {
+        rc = exchange();
+    }
+    if (rc == 0) {
+        rc = direct();
+    }
+    cleanup();
+    if (rc == 0) {
+        report_at(CHECKS);
+        printf("VHOSTMUSL OK\n");
+    }
+    return rc;
+}
