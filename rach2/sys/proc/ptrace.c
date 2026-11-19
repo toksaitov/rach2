@@ -94,8 +94,7 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
         self->ptrace |= PT_NOINFO;
     }
     self->ptrace_signo = 0;
-    self->ptrace_reported = 0;
-    self->ptrace_status = status;
+    signal_trap_publish(self, status);
     k_memset(&chld, 0, sizeof(chld));
     chld.code = CLD_TRAPPED;
     chld.pid = pid_seen_by(tracer, self->pid);
