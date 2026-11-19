@@ -155,6 +155,7 @@
         "mac": {"type": "string"},
         "restrict": {"type": "boolean"},
         "hub": {"type": "boolean"},
+        "tap_queues": {"type": "integer", "minimum": 1, "maximum": 16},
         "forwards": {"type": "array", "items": {"$ref": "#/$defs/forward"}},
         "guest_forwards": {"type": "array", "items": {"$ref": "#/$defs/guest_forward"}}
       }

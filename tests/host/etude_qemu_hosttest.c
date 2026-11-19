@@ -2486,6 +2486,68 @@ static void test_hubs(void)
     CHECK(etude_qemu_guest_address(d, "10.0.2.100"), "that address on the user network");
 }
 
+/**
+ * Check a card on a tap of several queues: on Linux QEMU runs in a user and
+ * network namespace of its own made by unshare(1), whose shell makes the
+ * tap and execs QEMU with its arguments, and the card's `-netdev` is the tap
+ * of its queues. A tap card with an option of a user network or a hub, a
+ * second one, a count past ETUDE_TAP_QUEUES_MAX and a tap on a device that
+ * is no network card are refused; elsewhere the launcher refuses the tap.
+ */
+static void test_tap(void)
+{
+    static const char *const want_net = "etude-tap /q/x86_64 -accel tcg -nodefaults";
+    static const char *const want_tap =
+        "-netdev tap,id=net0,ifname=etude-tap0,queues=4,script=no,downscript=no,vhost=off "
+        "-device virtio-net-pci,netdev=net0,mq=on";
+    static const char *const mq[] = {"mq", "on", NULL};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_device devices[] = {
+        {.model = "virtio-net-pci", .properties = mq, .tap_queues = 4}, {0}, {0}};
+    struct etude_qemu_device *d = &devices[0];
+    struct etude_qemu_profile p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "x86_64";
+    p.kernel = "/k/kernel";
+    p.cpu = "max";
+    p.processors = 4;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = devices;
+#ifdef __linux__
+    has(&p, &site, want_tap, "a card on a tap of four queues");
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], ETUDE_TAP_UNSHARE) == 0 &&
+              strcmp(argv[4], ETUDE_TAP_SHELL) == 0 &&
+              strstr(argv[6], "tuntap add dev etude-tap0 mode tap multi_queue") != NULL &&
+              strstr(argv[6], "exec \"$@\"") != NULL && strcmp(argv[7], "etude-tap") == 0 &&
+              strcmp(argv[8], "/q/x86_64") == 0,
+          "QEMU runs in a namespace whose shell makes the tap");
+    has(&p, &site, want_net, "QEMU's own arguments follow the namespace's");
+#else
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == ENOTSUP, "a tap off Linux");
+#endif
+#define TAP_REFUSED(change, undo, row)                                 \
+    do {                                                               \
+        change;                                                        \
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
+        undo;                                                          \
+    } while (0)
+    TAP_REFUSED(d->net = "10.0.4.0/24", d->net = NULL, "a tap card with a network");
+    TAP_REFUSED(d->dhcpstart = "10.0.2.20", d->dhcpstart = NULL, "a tap card with a DHCP address");
+    TAP_REFUSED(d->restricted = 1, d->restricted = 0, "a tap card with the restriction");
+    TAP_REFUSED(d->hub = 1, d->hub = 0, "a tap card on a hub");
+    TAP_REFUSED(d->tap_queues = ETUDE_TAP_QUEUES_MAX + 1, d->tap_queues = 4,
+                "a tap of more queues than a tap takes");
+    TAP_REFUSED(devices[1] = devices[0], memset(&devices[1], 0, sizeof(devices[1])),
+                "a second tap card");
+    TAP_REFUSED((d->model = "virtio-rng-pci", d->properties = NULL),
+                (d->model = "virtio-net-pci", d->properties = mq),
+                "a tap on a device that is no network card");
+#undef TAP_REFUSED
+}
+
 /** Give the command line of `argv` as one line, its arguments separated by
  * spaces, in the `size` bytes of `line`. */
 static const char *joined(char *const *argv, char *line, size_t size)
@@ -2859,6 +2921,7 @@ int main(int argc, char **argv)
         test_network_argv();
         test_network_refused();
         test_hubs();
+        test_tap();
         test_forwards();
         test_guest_addresses();
         test_guest_forwards();

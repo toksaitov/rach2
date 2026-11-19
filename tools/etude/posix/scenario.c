@@ -1770,6 +1770,7 @@ static int devices_of(const struct eh_json *v, struct etude_qemu_device *out, si
         out[n].dns = jtext(i, "dns");
         out[n].mac = jtext(i, "mac");
         out[n].hub = i->type == 'o' && jbool(i, "hub") == 1;
+        out[n].tap_queues = i->type == 'o' ? (unsigned)jnum(i, "tap_queues") : 0;
         n++;
     }
     memset(&out[n], 0, sizeof(out[n]));
