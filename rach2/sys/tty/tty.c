@@ -1338,8 +1338,12 @@ static void console_pump_irq(struct tty *t)
     }
 }
 
-/* The console's echo thread waits here for echo held (`console_echo_kick`). */
+/* The console's echo thread waits here for echo held (`console_echo_kick`)
+ * and for a hangup asked for (`tty_console_hangup_later`). */
 static wait_queue_t echo_wq;
+
+/* A hangup of the console that the echo thread is to make. */
+static volatile int console_hangup_due;
 
 /** The console's `echo_kick`: wake its echo thread. Interrupts off, from an
  * interrupt as well. */
@@ -1349,12 +1353,18 @@ static void console_echo_kick(struct tty *t)
     wq_wake_all(&echo_wq);
 }
 
-/** The echo thread's wait predicate: echo is held and output runs.
- * Interrupts off. */
+/** The echo thread's wait predicate: a hangup is asked for, or echo is
+ * held and output runs. Interrupts off. */
 static int console_echo_due(void *arg)
 {
     (void)arg;
-    return tty_echo_due(&console_tty);
+    return console_hangup_due || tty_echo_due(&console_tty);
+}
+
+void tty_console_hangup_later(void)
+{
+    console_hangup_due = 1;
+    wq_wake_all(&echo_wq);
 }
 
 /** One pass of the echo thread: give one batch of the echo held to the
@@ -1368,16 +1378,21 @@ static void console_echo_work(void)
 #ifndef RACH2_HOSTTEST
 static process_t *echo_thread;
 
-/** The echo thread, kconsoled: sleep until echo is held and output runs,
- * then write a batch of it, holding the big lock as kernel code does, with
- * a service point after each batch, as Linux's worker calls cond_resched
- * between works; the wait's predicate tests output's flow and the echo
- * held, which a hangup discards, again after each. */
+/** The echo thread, kconsoled: sleep until a hangup is asked for, which it
+ * makes, or echo is held and output runs, then write a batch of it,
+ * holding the big lock as kernel code does, with a service point after
+ * each batch, as Linux's worker calls cond_resched between works; the
+ * wait's predicate tests output's flow and the echo held, which a hangup
+ * discards, again after each. */
 static void kconsoled(void)
 {
     arch_irq_enable();
     for (;;) {
         (void)wq_wait_event_idle(&echo_wq, console_echo_due, NULL);
+        if (console_hangup_due) {
+            console_hangup_due = 0;
+            tty_vhangup(&console_tty);
+        }
         console_echo_work();
     }
 }
