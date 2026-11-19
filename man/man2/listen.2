@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd November 19, 2026
 .Dt LISTEN 2
 .Os
 .Sh NAME
@@ -22,7 +22,7 @@ The operation is subcall 4 of i386
 system call 102.
 .Pp
 A socket with no local port, or one bound to port zero, listens on a free
-port from 49152 through 65535, as on Linux, and
+port from 32768 through 60999, as on Linux, and
 .Xr getsockname 2
 reports it.
 Listeners may share a port at disjoint addresses.
