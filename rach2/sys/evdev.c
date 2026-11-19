@@ -58,6 +58,7 @@ struct input_event32 {
 
 /* The values a slot keeps, one for each multitouch axis. */
 #define MT_VALUES (ABS_MT_LAST - ABS_MT_FIRST + 1)
+#define MT_INLINE 5 /* the slots kept by PS/2 devices without an allocation */
 
 /* The ioctl numbers are Linux's: _IOC(dir, 'E', nr, size), with the
  * direction in the top two bits, the size in the next fourteen, then the
@@ -184,7 +185,8 @@ struct evdev {
     unsigned int mt_flags; /* INPUT_MT_* */
     unsigned int frame;    /* the slots' frame, ended by `evdev_mt_drop_unused` */
     unsigned int trkid;    /* the next tracking number, before the cut to TRKID_MAX */
-    struct evdev_slot slots[EVDEV_MT_SLOTS];
+    struct evdev_slot *slots;
+    struct evdev_slot small_slots[MT_INLINE];
     evdev_handler_t handler;
     struct evdev_keymap keymap; /* EVIOCGKEYCODE's; `get` NULL for none */
     int64_t stamp_sec[CLKS];    /* the packet's time on each clock */
@@ -281,6 +283,7 @@ struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint1
                                       uint16_t vendor, uint16_t product, const uint8_t *keys)
 {
     uint32_t flags;
+    unsigned int i;
 
     if (!dev) {
         dev = evdev_reserve();
@@ -292,7 +295,11 @@ struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint1
         dev->id[0] = bustype;
         dev->id[1] = vendor;
         dev->id[2] = product;
-        k_memcpy(dev->keys, keys, EVDEV_KEY_BYTES);
+        if (keys) {
+            for (i = 0; i < EVDEV_KEY_BYTES; i++) {
+                dev->keys[i] |= keys[i];
+            }
+        }
         dev->gen = ++registered_count;
         dev->gone = 0;
         change_count++;
@@ -409,15 +416,30 @@ static void copy_abs(struct evdev *dev, uint16_t dst, uint16_t src)
 
 int evdev_init_slots(struct evdev *dev, int num_slots, unsigned int flags)
 {
+    struct evdev_slot *slots;
+    size_t bytes;
     int i;
 
-    if (!dev || num_slots < 1 || num_slots > EVDEV_MT_SLOTS) {
+    if (!dev || num_slots < 0 || num_slots > EVDEV_MT_SLOTS) {
         return -EINVAL;
+    }
+    if (!num_slots) {
+        return 0;
     }
     if (dev->num_slots) {
         return dev->num_slots != num_slots ? -EINVAL : 0;
     }
-    dev->num_slots = num_slots;
+    slots = dev->small_slots;
+    if (num_slots > MT_INLINE) {
+        bytes = num_slots * sizeof(*slots);
+        if (flags & INPUT_MT_TRACK) {
+            bytes += num_slots * num_slots * sizeof(int);
+        }
+        slots = (struct evdev_slot *)kzalloc(bytes);
+        if (!slots) {
+            return -ENOMEM;
+        }
+    }
     dev->mt_flags = flags;
     evdev_set_abs(dev, ABS_MT_SLOT, 0, num_slots - 1, 0, 0);
     evdev_set_abs(dev, ABS_MT_TRACKING_ID, 0, TRKID_MAX, 0, 0);
@@ -448,9 +470,11 @@ int evdev_init_slots(struct evdev *dev, int num_slots, unsigned int flags)
         set_bit(dev->props, INPUT_PROP_SEMI_MT);
     }
     for (i = 0; i < num_slots; i++) {
-        dev->slots[i].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
+        slots[i].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
     }
     dev->frame = 1; /* no slot is used in the first frame */
+    dev->slots = slots;
+    dev->num_slots = num_slots;
     return 0;
 }
 
@@ -547,25 +571,28 @@ void evdev_mt_report_pointer_emulation(struct evdev *dev, int use_count)
 
 void evdev_mt_drop_unused(struct evdev *dev)
 {
-    int lift[EVDEV_MT_SLOTS];
+    uint8_t lift[EVDEV_MT_SLOTS / 8];
     uint32_t flags;
-    int i, n = 0;
+    int i;
 
     if (!dev || !dev->num_slots) {
         return;
     }
+    k_memset(lift, 0, (dev->num_slots + 7) / 8);
     flags = spin_lock_irqsave(&evdev_lock);
     for (i = 0; i < dev->num_slots; i++) {
         if (dev->slots[i].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0 &&
             dev->slots[i].frame != dev->frame) {
-            lift[n++] = i;
+            set_bit(lift, i);
         }
     }
     dev->frame++;
     spin_unlock_irqrestore(&evdev_lock, flags);
-    for (i = 0; i < n; i++) {
-        evdev_report(dev, EV_ABS, ABS_MT_SLOT, lift[i]);
-        evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, -1);
+    for (i = 0; i < dev->num_slots; i++) {
+        if (bit_on(lift, i)) {
+            evdev_report(dev, EV_ABS, ABS_MT_SLOT, i);
+            evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, -1);
+        }
     }
 }
 
@@ -631,8 +658,9 @@ static void find_reduced_matrix(int *w, int nr, int nc, int nrc, int mu)
 int evdev_mt_assign_slots(struct evdev *dev, int *slots, const struct evdev_mt_pos *pos,
                           int num_pos, int dmax)
 {
-    int w[EVDEV_MT_SLOTS * EVDEV_MT_SLOTS];
-    int active[EVDEV_MT_SLOTS];
+    int small_costs[MT_INLINE * MT_INLINE];
+    int *w = small_costs;
+    uint8_t active[EVDEV_MT_SLOTS / 8];
     int mu = 2 * dmax * dmax;
     uint32_t flags;
     int i, j, nrc = 0, *row;
@@ -646,14 +674,18 @@ int evdev_mt_assign_slots(struct evdev *dev, int *slots, const struct evdev_mt_p
     if (num_pos < 1) {
         return 0;
     }
+    if (dev->num_slots > MT_INLINE) {
+        w = (int *)(dev->slots + dev->num_slots);
+    }
+    k_memset(active, 0, (dev->num_slots + 7) / 8);
     flags = spin_lock_irqsave(&evdev_lock);
     for (i = 0; i < dev->num_slots; i++) {
         const int32_t *v = dev->slots[i].abs;
 
-        active[i] = v[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0;
-        if (!active[i]) {
+        if (v[ABS_MT_TRACKING_ID - ABS_MT_FIRST] < 0) {
             continue;
         }
+        set_bit(active, i);
         for (j = 0; j < num_pos; j++) {
             int dx = v[ABS_MT_POSITION_X - ABS_MT_FIRST] - pos[j].x;
             int dy = v[ABS_MT_POSITION_Y - ABS_MT_FIRST] - pos[j].y;
@@ -669,7 +701,7 @@ int evdev_mt_assign_slots(struct evdev *dev, int *slots, const struct evdev_mt_p
     }
     row = w;
     for (i = 0; i < dev->num_slots; i++) {
-        if (!active[i]) {
+        if (!bit_on(active, i)) {
             continue;
         }
         for (j = 0; j < num_pos; j++) {
@@ -681,7 +713,7 @@ int evdev_mt_assign_slots(struct evdev *dev, int *slots, const struct evdev_mt_p
         row += num_pos;
     }
     for (i = 0; i < dev->num_slots; i++) {
-        if (active[i]) {
+        if (bit_on(active, i)) {
             continue;
         }
         for (j = 0; j < num_pos; j++) {
@@ -714,8 +746,20 @@ void evdev_set_handler(struct evdev *dev, evdev_handler_t fn)
     }
 }
 
+/** Release the record under the evdev lock and return its heap slots. */
+static struct evdev_slot *release_device(struct evdev *dev)
+{
+    struct evdev_slot *slots = dev->slots;
+
+    dev->slots = NULL;
+    dev->num_slots = 0;
+    dev->used = 0;
+    return slots == dev->small_slots ? NULL : slots;
+}
+
 void evdev_unregister(struct evdev *dev)
 {
+    struct evdev_slot *slots = NULL;
     uint32_t flags;
 
     if (!dev) {
@@ -725,12 +769,13 @@ void evdev_unregister(struct evdev *dev)
     dev->gone = 1;
     dev->grab = NULL;
     if (!dev->clients) {
-        dev->used = 0;
+        slots = release_device(dev);
     }
     change_count++;
     spin_unlock_irqrestore(&evdev_lock, flags);
     wq_wake_all(&dev->wq);
     wq_wake_all(&change_wq);
+    kfree(slots);
 }
 
 /**
@@ -1496,7 +1541,7 @@ static int32_t revoke(struct evdev_client *c, uintptr_t arg)
  * libinput asks for, or CLOCK_BOOTTIME. A change of clock empties a queue
  * that holds records, which a SYN_DROPPED stamped now replaces, to be read
  * once the next packet ends, as Linux's does. -EINVAL for another clock,
- * -EFAULT.
+ * -EFAULT for a user copy or -ENOMEM for a large snapshot.
  */
 static int32_t set_clock(struct evdev_client *c, uintptr_t arg)
 {
@@ -1906,9 +1951,10 @@ static void flush_type(struct evdev_client *c, uint16_t type)
  */
 static int32_t mt_slots(struct evdev *dev, uintptr_t arg, uint32_t len)
 {
-    int32_t values[EVDEV_MT_SLOTS];
+    int32_t small_values[MT_INLINE];
+    int32_t *values = small_values;
     uint32_t code, flags;
-    int i, n;
+    int i, n, ret = 0;
 
     if (copy_from_user(&code, (const void __user *)arg, sizeof(code)) != 0) {
         return -EFAULT;
@@ -1920,6 +1966,12 @@ static int32_t mt_slots(struct evdev *dev, uintptr_t arg, uint32_t len)
     if (n > dev->num_slots) {
         n = dev->num_slots;
     }
+    if (n > MT_INLINE) {
+        values = (int32_t *)kmalloc(n * sizeof(*values));
+        if (!values) {
+            return -ENOMEM;
+        }
+    }
     flags = spin_lock_irqsave(&evdev_lock);
     for (i = 0; i < n; i++) {
         values[i] = dev->slots[i].abs[code - ABS_MT_FIRST];
@@ -1927,9 +1979,12 @@ static int32_t mt_slots(struct evdev *dev, uintptr_t arg, uint32_t len)
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (n > 0 && copy_to_user((char __user *)arg + sizeof(code), values,
                               (uint32_t)n * sizeof(int32_t)) != 0) {
-        return -EFAULT;
+        ret = -EFAULT;
     }
-    return 0;
+    if (values != small_values) {
+        kfree(values);
+    }
+    return ret;
 }
 
 /**
@@ -2294,6 +2349,7 @@ void evdev_close(fd_entry_t *e)
     struct evdev_client *c = (struct evdev_client *)e->priv;
     struct evdev_client **p;
     struct evdev *dev;
+    struct evdev_slot *slots = NULL;
     uint32_t flags;
 
     if (!c) {
@@ -2311,10 +2367,11 @@ void evdev_close(fd_entry_t *e)
         dev->grab = NULL;
     }
     if (dev->gone && !dev->clients) {
-        dev->used = 0;
+        slots = release_device(dev);
     }
     spin_unlock_irqrestore(&evdev_lock, flags);
     e->priv = NULL;
+    kfree(slots);
     kfree(c->queue);
     kfree(c);
 }

@@ -84,12 +84,20 @@ struct evdev;
 #define ABS_MT_SLOT        0x2f
 #define ABS_MT_FIRST       0x30
 #define ABS_MT_TOUCH_MAJOR 0x30 /* the contact's length, in the axes' units */
+#define ABS_MT_TOUCH_MINOR 0x31
+#define ABS_MT_WIDTH_MAJOR 0x32
+#define ABS_MT_WIDTH_MINOR 0x33
+#define ABS_MT_ORIENTATION 0x34
 #define ABS_MT_POSITION_X  0x35
 #define ABS_MT_POSITION_Y  0x36
 #define ABS_MT_TOOL_TYPE   0x37
+#define ABS_MT_BLOB_ID     0x38
 #define ABS_MT_TRACKING_ID 0x39 /* the contact's number, -1 for none */
 #define ABS_MT_PRESSURE    0x3a
-#define ABS_MT_LAST        0x3d
+#define ABS_MT_DISTANCE    0x3b
+#define ABS_MT_TOOL_X      0x3c
+#define ABS_MT_TOOL_Y      0x3d
+#define ABS_MT_LAST        ABS_MT_TOOL_Y
 #define ABS_CNT            0x40
 
 /* ABS_MT_TOOL_TYPE's value for a finger. */
@@ -170,7 +178,7 @@ struct input_absinfo {
  * and cut to EVDEV_NAME_MAX bytes, so that the caller may free it;
  * `bustype`, `vendor` and `product` are what EVIOCGID gives;
  * `keys`, of EVDEV_KEY_BYTES bytes, has a bit set for each key code the
- * device can report, and is copied. Any context: the devices are a static
+ * device can report, or NULL for no keys. Any context: the devices are a static
  * table, under a spinlock taken with interrupts off. Returns the device, or
  * NULL when all EVDEV_MAX nodes are taken.
  */
@@ -188,7 +196,8 @@ struct evdev *evdev_reserve(void);
 /**
  * Register the unused reservation `dev` with `evdev_register`'s arguments.
  * A reserved device cannot fail; NULL asks to reserve a slot now and can
- * return NULL. Any context. The caller must not use a live device here.
+ * return NULL. The supplied keys are added to any configured on `dev`.
+ * Any context. The caller must not use a live device here.
  */
 struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
                                       uint16_t vendor, uint16_t product, const uint8_t *keys);
@@ -240,7 +249,7 @@ void evdev_set_prop(struct evdev *dev, unsigned int prop);
 
 /* The most slots a device keeps, and the flags of `evdev_init_slots`,
  * Linux's INPUT_MT_* values. */
-#define EVDEV_MT_SLOTS   5
+#define EVDEV_MT_SLOTS   1024
 #define INPUT_MT_POINTER 0x0001 /* a touchpad: the finger counts and pointer */
 #define INPUT_MT_DIRECT  0x0002 /* a touchscreen */
 #define INPUT_MT_TRACK   0x0008 /* `evdev_mt_assign_slots` matches contacts */
@@ -253,14 +262,16 @@ struct evdev_mt_pos {
 };
 
 /**
- * Give `dev` `num_slots` slots, from 1 to EVDEV_MT_SLOTS, as Linux's
+ * Give `dev` `num_slots` slots, up to EVDEV_MT_SLOTS, as Linux's
  * `input_mt_init_slots` does: the axes ABS_MT_SLOT and ABS_MT_TRACKING_ID,
  * every slot without a contact, and with INPUT_MT_POINTER or
  * INPUT_MT_DIRECT, BTN_TOUCH and ABS_X, ABS_Y and ABS_PRESSURE as copies of
  * the multitouch axes set before, without their fuzz; INPUT_MT_POINTER
  * adds the finger counts the slots can hold and INPUT_PROP_POINTER. Called
- * after the multitouch axes are set, before the device reports. Returns 0,
- * or -EINVAL for a count out of range or a second call with another.
+ * after the multitouch axes are set, before the device reports. A count of
+ * zero has no effect. Returns 0, -EINVAL for a count out of range or a
+ * second call with another nonzero count, or -ENOMEM for larger devices
+ * whose slots could not be allocated.
  */
 int evdev_init_slots(struct evdev *dev, int num_slots, unsigned int flags);
 
