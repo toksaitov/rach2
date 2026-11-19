@@ -1482,7 +1482,7 @@ static void disk_unlink_rows(void)
     static const struct unlink_extent split_next[] = {
         {0, NULL}, {1024, "kept"}, {3770, "victim"}, {4795, NULL}, {6074, "last"}};
     static const struct unlink_extent split_previous[] = {
-        {0, NULL}, {1024, "kept"}, {3770, NULL}, {4795, "victim"}, {6074, "last"}};
+        {0, NULL}, {1024, "kept"}, {3770, NULL}, {4794, "victim"}, {6074, "last"}};
     krffs_node_t *root;
     krffs_node_t *free_node;
 
@@ -1490,7 +1490,7 @@ static void disk_unlink_rows(void)
     disk_unlink_case(tail, sizeof(tail) / sizeof(tail[0]), 5125, IMAGE_SIZE - 5125);
     disk_unlink_case(split_next, sizeof(split_next) / sizeof(split_next[0]), 3770, 1025);
     disk_unlink_case(split_previous, sizeof(split_previous) / sizeof(split_previous[0]), 3770,
-                     1025);
+                     1024);
 
     make_image(image, IMAGE_SIZE);
     root = (krffs_node_t *)image;
