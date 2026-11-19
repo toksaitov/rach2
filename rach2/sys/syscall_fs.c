@@ -1863,14 +1863,14 @@ static uint32_t iov_prefix(struct kernel_iovec *iov, int count, int into);
 
 /** Import the vector once and write it whole to a pty master, under the
  * pair's lock (`pty_master_writev`), or to a pipe end as one write
- * (`pipe_writev`), or a Unix socket as one send (`unix_writev`).
+ * (`pipe_writev`), a Unix socket as one send (`unix_writev`), or a tap as
+ * one frame (`tap_writev`).
  * `entry` is held and open for writing, and `count` is in
  * range. Return the bytes written or an import, allocation or write error. */
 static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
 {
     struct kernel_iovec local[8], *iov = local;
     long rc;
-    int i;
 
     if (count > (int)(sizeof(local) / sizeof(local[0]))) {
         iov = kmalloc((size_t)count * sizeof(*iov));
@@ -1879,30 +1879,13 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
         }
     }
     rc = iov_import(iov, addr, count, -1);
-    if (rc > 0) {
+    if (rc >= 0 && tap_is(entry)) {
+        rc = tap_writev(entry, iov, count, (uint32_t)rc);
+    } else if (rc > 0) {
         if (entry->type == FD_TYPE_PTM) {
             rc = pty_master_writev(entry, iov, count);
         } else if (entry->type == FD_TYPE_UNIX) {
             rc = unix_writev(entry, iov, count, (uint32_t)rc);
-        } else if (tap_is(entry)) {
-            /* One frame, gathered; one too long is counted and not read. */
-            uint32_t total = (uint32_t)rc, at = 0;
-            uint8_t *frame = total <= 2048u ? kmalloc(total) : NULL;
-
-            if (total <= 2048u && !frame) {
-                rc = -ENOMEM;
-            }
-            for (i = 0; frame && rc > 0 && i < count; i++) {
-                if (copy_from_user(frame + at, (const void __user *)iov[i].iov_base,
-                                   iov[i].iov_len) != 0) {
-                    rc = -EFAULT;
-                }
-                at += (uint32_t)iov[i].iov_len;
-            }
-            if (rc > 0) {
-                rc = tap_write_frame(entry, frame, total);
-            }
-            kfree(frame);
         } else {
             rc = pipe_writev(entry, iov, count);
         }
@@ -8326,6 +8309,8 @@ static uint32_t readv_room(const struct kernel_iovec *iov, uint32_t left)
  * and a pipe (`pipe_readv`) read the vector as one read, as Linux's
  * tcp_recvmsg and pipe_read take an iov_iter: the wait, the end of input
  * and -EAGAIN come first, and a copy that faults leaves its bytes queued.
+ * A tap is one frame scattered across the vector (`tap_readv`), as Linux's
+ * tun_chr_read_iter.
  *
  * Anything else, a device or a /proc file among them, is read for the first
  * buffer by the ordinary read, which waits if it must, and for each later
@@ -8358,6 +8343,9 @@ static long readv_elements(fd_entry_t *entry, int fd, const struct kernel_iovec 
     }
     if (pipe_is(entry)) {
         return pipe_readv(entry, iov, count);
+    }
+    if (tap_is(entry)) {
+        return tap_readv(entry, iov, count);
     }
     walk = !entry->ops && entry->type == FD_TYPE_FILE;
 
