@@ -476,22 +476,27 @@ int virtio_bus_dir(const struct virtio_dev *d)
 }
 
 /* /sys as the driver uses it: the anchor of an interface's directory, and
- * the one link the driver adds below it and removes. */
+ * the one link the driver adds below it and removes. A row makes the anchor
+ * (`sys_fail` 1) or the link (2) fail with -ENOMEM, as a full heap does. */
 #define SYS_ANCHOR 500
 #define SYS_LINK   700
-static int sys_link_parent, sys_link_target, sys_links, sys_unlinks;
+static int sys_link_parent, sys_link_target, sys_links, sys_unlinks, sys_fail;
 static char sys_link_name[16];
 
 /** The anchor of /sys/class/net/IF, which names the interface's index. */
 int sysfs_anchor(int node, int key)
 {
     check(node == SYSFS_NET_IF, "the driver anchors only an interface's directory");
-    return SYS_ANCHOR + key;
+    return sys_fail == 1 ? -ENOMEM : SYS_ANCHOR + key;
 }
 
 /** Keep the link added. */
 int sysfs_add_link(int parent, const char *name, int target)
 {
+    check(parent > 0, "a link is added only below an anchor that was made");
+    if (sys_fail == 2) {
+        return -ENOMEM;
+    }
     sys_link_parent = parent;
     sys_link_target = target;
     k_strncpy(sys_link_name, name, sizeof(sys_link_name) - 1u);
@@ -813,7 +818,7 @@ static void fresh(uint64_t offered)
     m.qmax[2] = 64;
     m.dma_left = -1;
     m.sys_dir = 55;
-    sys_links = sys_unlinks = sys_link_parent = sys_link_target = 0;
+    sys_links = sys_unlinks = sys_link_parent = sys_link_target = sys_fail = 0;
     k_memcpy(m.config + VNET_CFG_MAC, model_mac, 6);
     k_memcpy(m.config + VNET_CFG_STATUS, &up, 2);
     model_pci.bus = 0;
@@ -1259,6 +1264,49 @@ static void row_rebind(void)
 }
 
 /**
+ * A bring-up whose `device` in /sys cannot be made fails and is undone, as
+ * Linux's device_add fails register_netdev: the device is reset, its pages
+ * freed, its binding taken away and the device given back, and no link to
+ * the PCI function stands in for the one that failed, at the probe or at a
+ * bind. A device with no directory has the PCI function as its parent, and
+ * an unbind takes that away too.
+ */
+static void row_sysfs_failure(void)
+{
+    int fail;
+
+    for (fail = 1; fail <= 2; fail++) {
+        fresh(QEMU_OFFER);
+        sys_fail = fail;
+        check(virtio_net_netdev.init(&nd, 0) == NETDEV_FAILED,
+              "a bring-up whose link in /sys fails fails");
+        check(m.status == 0 && m.dma_out == 0 && m.bound == 0 && m.puts == 1 && nd.dev == 0,
+              "the device is reset, its pages freed, unbound and given back");
+        check(nd.pci_key == -1 && sys_links == 0, "and the interface has no parent in /sys");
+        check(strstr(virtio_net_netdev.error(), "/sys") != 0, "the reason names /sys");
+
+        check(up(QEMU_OFFER) == NETDEV_UP, "the device comes up");
+        m.dev.removed(&m.dev);
+        sys_fail = fail;
+        m.puts = 0;
+        check(virtio_net_bind(&m.dev) == -ENOMEM, "a bind whose link in /sys fails fails");
+        check(m.status == 0 && m.dma_out == 0 && m.bound == 0 && m.puts == 1,
+              "the device is reset, its pages freed, unbound and given back");
+        check(nd.pci_key == -1 && sys_links == 1 && sys_unlinks == 1,
+              "and the interface has no parent in /sys");
+    }
+    fresh(QEMU_OFFER);
+    m.sys_dir = 0;
+    check(virtio_net_netdev.init(&nd, 0) == NETDEV_UP && nd.pci_key == (3 << 3),
+          "a device with no directory has the PCI function as its parent");
+    m.dev.removed(&m.dev);
+    check(nd.pci_key == -1, "which an unbind takes away");
+    check(virtio_net_bind(&m.dev) == 0 && nd.pci_key == (3 << 3), "and a bind puts back");
+    nd.ops->stop(nd.dev);
+    check(nd.pci_key == -1, "as a stop takes it away");
+}
+
+/**
  * A function bound again as a device with another largest MTU: the
  * interface's limit is the new device's each time, as Linux's
  * virtnet_probe sets max_mtu at every probe, by the time the device is
@@ -1353,6 +1401,7 @@ int main(void)
     row_stop_and_failures();
     row_rebind();
     row_rebind_mtu();
+    row_sysfs_failure();
     row_polled();
     check(net_locks > 0, "the sends ran under net_lock");
     drop_bound();
