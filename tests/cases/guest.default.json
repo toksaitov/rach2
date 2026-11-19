@@ -3715,7 +3715,7 @@
     },
     {
       "case_id": "guest.default.vhostmusl",
-      "behavior": "/dev/vhost-net moves the frames of a virtio ring pair, which the program lays out in memory of its own as a guest driver would, to and from the tap vh0 at 10.9.0.1: an ARP request held in the tap until the guest offers buffers and kicks, its answer taken from the transmit ring by the kernel thread, the datagram that waited for the answer, and a datagram written into a buffer in the sender's context, each with the ring's call. It makes and removes its tap, so it needs no argument.",
+      "behavior": "/dev/vhost-net moves the frames of a virtio ring pair, which the program lays out in memory of its own as a guest driver would, to and from the tap vh0 at 10.9.0.1: an ARP request held in the tap until the guest offers buffers and kicks, its answer taken from the transmit ring by the kernel thread, the datagram that waited for the answer, and a second datagram, written into a buffer in the sender's context when the device holds the buffer's page and by the thread once it has brought the page in otherwise, each with the ring's call. It makes and removes its tap, so it needs no argument.",
       "units": ["default", "musl/vhostmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -3746,7 +3746,7 @@
         {"assertion_id": "tx-used", "checks": "The transmit ring used the answer's chain.", "source": "program"},
         {"assertion_id": "datagram", "checks": "The datagram that waited for the answer comes into the receive ring, to the answer's station address.", "source": "program"},
         {"assertion_id": "direct-send", "checks": "A second datagram is sent while the receive ring has buffers.", "source": "program"},
-        {"assertion_id": "direct-frame", "checks": "It is in a receive buffer when its send returns.", "source": "program"},
+        {"assertion_id": "direct-frame", "checks": "It comes into a receive buffer, at once or from the thread.", "source": "program"},
         {"assertion_id": "direct-call", "checks": "The receive ring's call is signalled for it.", "source": "program"},
         {"assertion_id": "detach", "checks": "VHOST_NET_SET_BACKEND of -1 takes the tap from both rings.", "source": "program"}
       ],
