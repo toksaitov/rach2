@@ -29,6 +29,8 @@
  * that frame is in the eventfd, reads what it holds without waiting, and
  * requires the calls read to equal the used entries: a missing call or an
  * extra one fails the frame it belongs to, and none stands in for another's.
+ * The program counts the used entries from the start, past the 16-bit used
+ * index's wrap, so the count holds however many frames come.
  * Once the rings let the tap go, the calls must still equal the used
  * entries. Every wait blocks on an eventfd, with no clock, so a frame or a
  * call that never comes leaves the program waiting.
@@ -156,9 +158,10 @@ static const struct {
 
 static const unsigned char peer[6] = {2, 0, 0, 0, 0, 2};
 static unsigned char *mem; /* the guest's memory */
-static int rx_avail_idx;   /* the receive ring's available index, as offered */
-static int rx_seen;        /* used entries of the receive ring looked at */
-static uint64_t rx_calls;  /* the receive ring's calls read, summed */
+/* Receive buffers offered, and the receive ring's used entries looked at,
+ * since the start: the ring's 16-bit indices are these, modulo 65536. */
+static uint64_t rx_avail_idx, rx_seen;
+static uint64_t rx_calls; /* the receive ring's calls read, summed */
 /* The descriptors and the eventfds: rx kick, rx call, tx kick, tx call. */
 static int tap = -1, vh = -1, sock = -1, ev[4] = {-1, -1, -1, -1};
 
@@ -225,7 +228,7 @@ static void desc(int table, int i, int off, uint32_t len, uint16_t flags)
 static void offer_rx(int i)
 {
     desc(RX_DESC, i, RX_BUF + BUFLEN * i, BUFLEN, 2 /* VRING_DESC_F_WRITE */);
-    put16(RX_AVAIL + 4 + 2 * (rx_avail_idx % NUM), (uint16_t)i);
+    put16(RX_AVAIL + 4 + 2 * (int)(rx_avail_idx % NUM), (uint16_t)i);
     __sync_synchronize();
     rx_avail_idx++;
     put16(RX_AVAIL + 2, (uint16_t)rx_avail_idx);
@@ -312,17 +315,45 @@ static int is_datagram(const unsigned char *f, uint32_t n, const char *text)
 }
 
 /**
+ * Read the receive ring's used index into `*n` as a count of used entries
+ * since the start: the entries seen, and the index's distance past them,
+ * modulo 65536. 0; -1 with errno EPROTO when that distance passes the
+ * buffers offered and not yet seen, which a device cannot use.
+ */
+static int rx_used(uint64_t *n)
+{
+    uint16_t used, d;
+
+    __sync_synchronize();
+    used = get16(RX_USED + 2);
+    d = (uint16_t)(used - (uint16_t)rx_seen);
+    if (d > rx_avail_idx - rx_seen) {
+        fprintf(stderr, "vhostmusl: receive used index %u past the %llu buffers offered\n",
+                (unsigned)used, (unsigned long long)rx_avail_idx);
+        errno = EPROTO;
+        return -1;
+    }
+    *n = rx_seen + d;
+    return 0;
+}
+
+/**
  * Look at the receive ring's used entries not yet seen for the frame
  * `match` accepts with `text`: 1 with the buffer's offset in `*at`, else 0
- * once every used entry is seen.
+ * once every used entry is seen, or when the used index is not one a
+ * device can give.
  */
 static int find_rx(int (*match)(const unsigned char *, uint32_t, const char *), const char *text,
                    int *at)
 {
-    __sync_synchronize();
-    while (rx_seen != get16(RX_USED + 2)) {
+    uint64_t end;
+
+    if (rx_used(&end) != 0) {
+        return 0;
+    }
+    while (rx_seen != end) {
         uint32_t id, len;
-        int e = RX_USED + 4 + 8 * (rx_seen % NUM);
+        int e = RX_USED + 4 + 8 * (int)(rx_seen % NUM);
 
         memcpy(&id, mem + e, 4);
         memcpy(&len, mem + e + 4, 4);
@@ -344,30 +375,30 @@ static int arp_match(const unsigned char *f, uint32_t n, const char *text)
 
 /** Print the receive calls read and the used entries seen with them, after
  * a count that a call signalled once for each frame cannot give. */
-static void miscount(uint16_t used)
+static void miscount(uint64_t used)
 {
-    fprintf(stderr, "vhostmusl: receive calls: %llu for %u used entries\n",
-            (unsigned long long)rx_calls, (unsigned)used);
+    fprintf(stderr, "vhostmusl: receive calls: %llu for %llu used entries\n",
+            (unsigned long long)rx_calls, (unsigned long long)used);
     errno = EPROTO;
 }
 
 /**
  * Read the receive ring's call `call`, adding the signals it counted to
- * `rx_calls`: 0; -1 when the read fails, or when the calls read outnumber
- * the used index read after them, which a call signalled once for each
- * frame after its used index cannot do.
+ * `rx_calls`: 0; -1 when the read fails, as `rx_used` fails, or when the
+ * calls read outnumber the used entries read after them, which a call
+ * signalled once for each frame after its used index cannot do.
  */
 static int take_call(int call)
 {
-    uint64_t v;
-    uint16_t used;
+    uint64_t v, used;
 
     if (read(call, &v, 8) != 8) {
         return -1;
     }
     rx_calls += v;
-    __sync_synchronize();
-    used = get16(RX_USED + 2);
+    if (rx_used(&used) != 0) {
+        return -1;
+    }
     if (rx_calls > used) {
         miscount(used);
         return -1;
@@ -401,17 +432,16 @@ static int drain_calls(int call)
  * no buffer: set the call again, which waits for the device's lock and so
  * for every call already signalled, read what the eventfd holds, and
  * require the calls read to equal the used entries. 0, or -1 for a failed
- * request or read or an unequal count.
+ * request or read, a used index no device can give, or an unequal count.
  */
 static int settle_calls(int call)
 {
-    uint16_t used;
+    uint64_t used;
 
-    if (ring2(vh, VHOST_SET_VRING_CALL, 0, call) != 0 || drain_calls(call) != 0) {
+    if (ring2(vh, VHOST_SET_VRING_CALL, 0, call) != 0 || drain_calls(call) != 0 ||
+        rx_used(&used) != 0) {
         return -1;
     }
-    __sync_synchronize();
-    used = get16(RX_USED + 2);
     if (rx_calls != used) {
         miscount(used);
         return -1;
@@ -430,7 +460,7 @@ static int offer_one(void)
     if (rx_avail_idx != rx_seen) {
         return 0;
     }
-    offer_rx(rx_avail_idx % NUM);
+    offer_rx((int)(rx_avail_idx % NUM));
     return write(ev[0], &one, 8) == 8 ? 0 : -1;
 }
 
@@ -633,6 +663,7 @@ static int exchange(void)
  * comes from the thread into the next. */
 static int direct(void)
 {
+    uint64_t used;
     int at;
 
     if (offer_one() != 0 || send_to_peer(sock, "vhost2") != 0) {
@@ -649,11 +680,11 @@ static int direct(void)
         ring2(vh, VHOST_NET_SET_BACKEND, 1, -1) != 0) {
         return fail(DETACH);
     }
-    if (drain_calls(ev[1]) != 0) {
+    if (drain_calls(ev[1]) != 0 || rx_used(&used) != 0) {
         return fail(DETACH);
     }
-    if (rx_calls != get16(RX_USED + 2)) {
-        miscount(get16(RX_USED + 2));
+    if (rx_calls != used) {
+        miscount(used);
         return fail(DETACH);
     }
     return 0;
