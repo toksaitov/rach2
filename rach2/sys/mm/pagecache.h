@@ -131,6 +131,10 @@ int pc_copy_out(uint32_t off, void *buf, uint32_t size);
  */
 int pc_copy_in(uint32_t off, const void *buf, uint32_t size);
 
+/** As pc_copy_in, with a non-sleeping halt test after each fetch group.
+ * Return -1 before storing the group if the backing halted during I/O. */
+int pc_copy_in_checked(uint32_t off, const void *buf, uint32_t size, int (*halted)(void));
+
 #define PC_SYNC_BUSY   1
 #define PC_SYNC_FAILED 2
 

@@ -2501,7 +2501,7 @@ static int krffs_disk_mark_clean(void)
         return -1;
     }
     mode = (uint16_t)(mode & ~KRFFS_MODE_DIRTY);
-    if (pc_copy_in(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0) {
+    if (pc_copy_in_checked(KRFFS_FIELD_MODE, &mode, sizeof(mode), krffs_root_halted) != 0) {
         klog(KLOG_WARN, "krffs", "the root's page cannot be written; image stays dirty");
         return -1;
     }
@@ -2745,15 +2745,14 @@ static int krffs_window_read(void *ctx, uint64_t offset, void *buffer, uint32_t 
 }
 
 /** Copy `size` bytes of `buffer` to `offset` of the disk root through the
- * page cache (`pc_copy_in`), whose pages reach the disk as it writes them
- * back; -1 when a page cannot be read in. */
+ * page cache. Return -1 if a fetch fails or the root halts during it. */
 static int krffs_window_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
     (void)ctx;
     if (offset > 0xFFFFFFFFu) {
         return -1;
     }
-    return pc_copy_in((uint32_t)offset, buffer, size) == 0 ? 0 : -1;
+    return pc_copy_in_checked((uint32_t)offset, buffer, size, krffs_root_halted);
 }
 
 /** Nothing: the root's barrier is its flush (`pc_sync_wait`), which the
@@ -3186,7 +3185,9 @@ static int krffs_root_mark_and_reap(void)
         klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
     }
     mode |= KRFFS_MODE_DIRTY;
-    if (read != 0 || pc_copy_in(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0 || pc_sync() != 0) {
+    if (read != 0 ||
+        pc_copy_in_checked(KRFFS_FIELD_MODE, &mode, sizeof(mode), krffs_root_halted) != 0 ||
+        pc_sync() != 0) {
         krffs_root_halt();
         klog(KLOG_WARN, "krffs", "mount: refused: dirty flag or repair writeback failed");
         return -1;
