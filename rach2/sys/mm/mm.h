@@ -318,6 +318,10 @@ void mm_read_end(struct mm *mm);
  * `write`, or of either kind. */
 int mmap_held(const struct mm *mm, int write);
 
+/** Whether the calling thread may take one more address space's regions'
+ * lock: it holds fewer than two. 1 with no current thread. */
+int mmap_hold_free(void);
+
 /** Whether the calling thread holds `mm`'s regions' lock to read and once,
  * so that it may let it go around a sleep and take it again. */
 int mmap_may_drop(const struct mm *mm);

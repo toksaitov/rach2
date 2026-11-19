@@ -431,7 +431,8 @@ void free_user_pages(page_dir_t *dir);
 void paging_thp_init(void);
 
 /** The 4 KiB pages of [start, end), page-aligned, of `dir` that huge pages
- * map: AnonHugePages of a region's smaps. 0 where no entry maps one. */
+ * map, the huge zero page aside: AnonHugePages of a region's smaps. 0
+ * where no entry maps one. */
 unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
 #if MMU_HUGE
