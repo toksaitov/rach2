@@ -41,9 +41,12 @@ static void pc_platform_unmap(uintptr_t va)
     (void)va;
 }
 
-/** Wake nothing: the host test's `pc_wait_release` sleeps on no queue. */
+#ifndef PAGECACHE_HOST_WAIT
+/** Wake nothing: a host test without PAGECACHE_HOST_WAIT has no queue for
+ * `pc_wait_release` to sleep on. */
 static void pc_platform_released(void)
 {}
+#endif
 
 /* Linux's defaults for the background threshold and the dirty limit, which
  * the kernel keeps in the buffer cache (bcache.c). */
@@ -60,7 +63,6 @@ static unsigned long vm_dirty_bytes;
 #include "../klog.h"
 #include "../panic.h"
 #include "../pci.h"
-#include "../proc/wait_queue.h"
 
 #define PC_PAGE_SIZE  PAGE_SIZE
 
@@ -83,6 +85,13 @@ static void pc_platform_unmap(uintptr_t va)
     unmap_kernel_frame(va);
 }
 
+#endif
+
+/* The kernel sleeps on the release of a pin, and so does a host test built
+ * with PAGECACHE_HOST_WAIT over proc/wait_queue.c and a model scheduler. */
+#if !defined(PAGECACHE_HOSTTEST) || defined(PAGECACHE_HOST_WAIT)
+#include "../proc/wait_queue.h"
+
 /* The syncs that sleep until a pin they passed is let go (`pc_wait_release`).
  * A zeroed queue needs no init. */
 static wait_queue_t pc_release_wq;
@@ -92,7 +101,6 @@ static void pc_platform_released(void)
 {
     wq_wake_all(&pc_release_wq);
 }
-
 #endif
 
 /* The hash maps a page number to its slot for O(1) lookup; it is twice the
@@ -724,7 +732,7 @@ uint32_t pc_releases(void)
     return pc_waited_releases;
 }
 
-#ifndef PAGECACHE_HOSTTEST
+#if !defined(PAGECACHE_HOSTTEST) || defined(PAGECACHE_HOST_WAIT)
 /** The condition of `pc_wait_release`: a release has been counted since the
  * count `*arg` was read. */
 static int pc_released_since(void *arg)

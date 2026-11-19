@@ -17,11 +17,17 @@
  * Compiled with PAGECACHE_SYNC_HOSTTEST as well, as mk/host-fixtures.mk
  * compiles it, the test also runs `pc_sync_wait` and `sys_sync`, which that
  * file's rule extracts from rach2/sys/syscall_fs.c into syscall_sync.inc,
- * with the sleep on a pin's release replaced, for the rows of the wait and
- * its failures.
+ * for the rows of the wait and its failures. The sleep on a pin's release
+ * is the kernel's: pagecache.c's `pc_wait_release` and its queue, built
+ * with PAGECACHE_HOST_WAIT, over proc/wait_queue.c, included whole with
+ * WAIT_QUEUE_HOSTTEST, and a model `schedule` that lets the pin go only once
+ * the caller is blocked on the queue.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
+#ifdef PAGECACHE_SYNC_HOSTTEST
+#define PAGECACHE_HOST_WAIT
+#endif
 
 /* The hash rebuild panics when its table has no empty entry, which the
    sizes make impossible; the stub below traps, which fails the test. */
@@ -312,11 +318,15 @@ static void test_sleeping_writeback(void)
 }
 
 #ifdef PAGECACHE_SYNC_HOSTTEST
+#define WAIT_QUEUE_HOSTTEST
+#include "proc/wait_queue.c"
 #include "isr.h"
 
+struct percpu cpu_table[NR_CPUS];
+static process_t sync_caller; /* the process that calls the sync */
 static uint32_t sync_mounts;
 static uint32_t sync_blocks; /* waits that slept until the pin was let go */
-static uint32_t sync_quick;  /* waits a release during the pass ended */
+static uint32_t sync_passes; /* the row's passes of `pc_sync` */
 static int sync_heal;        /* a blocked wait also lets page 2's writes pass */
 
 /** No file is mapped shared here, so the mapped pages have nothing to give
@@ -330,22 +340,42 @@ static void vfs_sync_all(void)
     ++sync_mounts;
 }
 
+/** No signal is pending; the wait on a pin's release asks none. */
+int signal_pending(void)
+{
+    return 0;
+}
+
+/** The big lock is held: the sync's caller holds it, and the wait on a pin's
+ * release neither takes nor tests it. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Take nothing: see `bkl_held`. */
+void bkl_enter(void)
+{}
+
+/** Give nothing back: see `bkl_held`. */
+void bkl_exit(void)
+{}
+
 /**
- * The kernel's wait for the release of a pin a sync passed. When the count
- * has moved since `seen` it returns at once, as the kernel's condition is
- * then true before the sleep. Otherwise it stands for the sleep: only then
+ * The scheduler, entered when the caller of the kernel's `pc_wait_release`
+ * gives up the processor. The caller must be blocked, uninterruptibly, on
+ * the queue of releases, with the release count still unmoved; only then
  * does the competing write of page 0 end, redirtying the page and letting
  * its pin go, as on one processor a flusher runs only once the caller
- * blocks. A release that the count does not see would leave the kernel's
- * caller asleep for ever, so it stops the test.
+ * blocks. The release must make the caller ready, or the kernel's caller
+ * would sleep for ever, so a caller still blocked stops the test.
  */
-void pc_wait_release(uint32_t seen)
+void schedule(void)
 {
-    if (pc_releases() != seen) {
-        ++sync_quick;
-        return;
-    }
     ++sync_blocks;
+    CHECK(current_proc == &sync_caller);
+    CHECK(sync_caller.state == PROC_BLOCKED && sync_caller.uninterruptible);
+    CHECK(pc_release_wq.head == &sync_caller.waiter);
     CHECK(pc_slots[0].pinned && pc_slots[0].waited);
     touch(0, 1, 0xE2u);
     pc_unpin(&pc_slots[0]);
@@ -353,8 +383,8 @@ void pc_wait_release(uint32_t seen)
     if (sync_heal) {
         fake_write_fail = FAKE_NO_FAIL;
     }
-    if (pc_releases() == seen) {
-        failed_check("pc_releases() != seen");
+    if (sync_caller.state != PROC_READY) {
+        failed_check("sync_caller.state == PROC_READY");
         __builtin_trap();
     }
 }
@@ -370,7 +400,25 @@ static void release_during_pass(uint32_t disk_off, const void *page)
     pc_unpin(&pc_slots[0]);
 }
 
+/**
+ * `pc_sync` for the extracted `pc_sync_wait`, counting its passes. A wait
+ * that returned without blocking would pass page 0's pin again and again
+ * while the competing write cannot run; a third pass of a row with the pin
+ * still held fails the row and lets the pin go, so the loop ends.
+ */
+static int counted_sync(void)
+{
+    if (++sync_passes > 2u && pc_slots[0].pinned) {
+        failed_check("a wait returned with page 0 still pinned");
+        fails++;
+        pc_unpin(&pc_slots[0]);
+    }
+    return pc_sync();
+}
+
+#define pc_sync counted_sync
 #include "syscall_sync.inc"
+#undef pc_sync
 
 /**
  * Run the kernel's `pc_sync_wait` and `sys_sync` with a page pinned by a
@@ -385,8 +433,9 @@ static void release_during_pass(uint32_t disk_off, const void *page)
  * in the first pass and succeeds in the second: the failure is kept across
  * the passes. Row 4, a pin let go while the pass sleeps in a later write:
  * the wait ends at once, with no sleep, since the release came after the
- * count was read. `sys_sync` answers 0 whatever failed, and a later sync
- * writes a page whose writes failed.
+ * count was read. Each wait leaves the caller running and off the queue.
+ * `sys_sync` answers 0 whatever failed, and a later sync writes a page
+ * whose writes failed.
  */
 static void test_sync_wait(void)
 {
@@ -402,8 +451,12 @@ static void test_sync_wait(void)
         fake_disk[2][0] = 2;
         fake_attempts[0] = fake_attempts[2] = 0;
         fake_writes[0] = fake_writes[2] = 0;
-        sync_blocks = sync_quick = sync_mounts = 0;
+        sync_blocks = sync_passes = sync_mounts = 0;
         sync_heal = row == 3;
+        sync_caller.waiter.proc = &sync_caller;
+        sync_caller.state = PROC_RUNNING;
+        sync_caller.wchan = 0;
+        current_proc = &sync_caller;
         touch(0, 0, 0);
         pc_slots[0].pinned = (uint8_t)busy;
         if (failed || row == 4) {
@@ -418,7 +471,9 @@ static void test_sync_wait(void)
         CHECK(pc_sync_wait() == (failed ? PC_SYNC_FAILED : 0));
         CHECK(!pc_slots[0].pinned && !pc_slots[0].waited);
         CHECK(sync_blocks == (row == 0 || row == 2 || row == 3 ? 1u : 0u));
-        CHECK(sync_quick == (row == 4 ? 1u : 0u));
+        CHECK((sync_caller.wchan != 0) == busy); /* the wait was entered */
+        CHECK(sync_caller.state == PROC_RUNNING && !sync_caller.uninterruptible);
+        CHECK(pc_release_wq.head == 0);
         if (busy) {
             CHECK(fake_disk[0][0] == 0xE2u);
             CHECK(fake_writes[0] == 1);
