@@ -1885,16 +1885,17 @@ static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
  * TIME_WAIT included, the four that `tcp_find` matches. The caller holds
  * `net_lock`.
  *
- * A listener, or a connection from another local address or to another
- * peer, may share the local port: `tcp_find` takes the connection that
- * matches and falls back to a listener only when none does. A block and the
- * new connection, bound to `ifindex` or 0, are on one card unless both name
- * a card, by a binding or else an IPv6 peer's scope, and the cards differ,
- * as Linux compares bindings; their addresses are then compared without
- * scopes (`tcp_addr_is`). A peer whose address a card of this machine owns,
- * whatever scope it names, is on no card, since IPv6 routing finds such an
- * address before it reads the scope and its segments come off the loopback
- * backlog, which every binding takes (`tcp_rx_card_ok`).
+ * A listener, or a connection from another local address or to another peer,
+ * may share the local port: `tcp_find` takes the connection that matches and
+ * falls back to a listener only when none does. A block and the new connection,
+ * bound to `ifindex` or 0, are on one card unless both name a card, by a
+ * binding or else an IPv6 peer's scope, and the cards differ, as Linux compares
+ * bindings. Their addresses are compared as `tcp_find` compares them: without
+ * scopes when either block is bound to a card, and with them when neither is
+ * (`tcp_addr_is`). A peer whose address a card of this machine owns, whatever
+ * scope it names, is on no card, since IPv6 routing finds such an address
+ * before it reads the scope and its segments come off the loopback backlog,
+ * which every binding takes (`tcp_rx_card_ok`).
  */
 static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t local_port,
                            net_addr_t remote_ip, uint16_t remote_port, int ifindex)
@@ -1902,6 +1903,7 @@ static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t
     const struct tcb *t;
     uint32_t mine = ifindex ? (uint32_t)ifindex : remote_ip.scope, its;
     net_addr_t bare = remote_ip;
+    int bound;
 
     bare.scope = 0;
     if (net_addr_local(bare) || (remote_ip.family == AF_INET6 ? ip6_is_loopback(remote_ip.v6)
@@ -1913,8 +1915,9 @@ static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t
             continue;
         }
         its = t->ifindex ? (uint32_t)t->ifindex : t->remote_ip.scope;
-        if ((!mine || !its || mine == its) && tcp_addr_is(t->remote_ip, remote_ip, 1) &&
-            tcp_addr_is(t->local_ip, local_ip, 1)) {
+        bound = ifindex || t->ifindex;
+        if ((!mine || !its || mine == its) && tcp_addr_is(t->remote_ip, remote_ip, bound) &&
+            tcp_addr_is(t->local_ip, local_ip, bound)) {
             return 1;
         }
     }
