@@ -367,6 +367,8 @@ static struct {
     uint32_t waited;
     int locks;
     int dirs, attrs;
+    const char *override; /* the function's driver_override, or NULL for no file */
+    int bind_error;       /* what the next sysfs_pci_bind answers */
     int dir_parent[8];
     const char *dir_name[8];
     const struct sysfs_attr *attr[2][2]; /* [driver][bind, unbind] */
@@ -443,9 +445,15 @@ int pci_set_power_state(const pci_device_t *dev, int state)
     return 0;
 }
 
-/** Record the function shown bound. */
+/** Record the function shown bound, or answer the error a row set. */
 int sysfs_pci_bind(int key, const char *driver)
 {
+    if (k.bind_error) {
+        int r = k.bind_error;
+
+        k.bind_error = 0;
+        return r;
+    }
     k.binds++;
     k.bind_key = key;
     k.bind_driver = driver;
@@ -474,12 +482,39 @@ int sysfs_anchor(int node, int key)
     return node == SYSFS_BUS_PCI ? 1 : -ENOENT;
 }
 
+/** The function's directory: handle 50, which holds driver_override when
+ * a row set one. */
+int sysfs_anchor_find(int node, int key)
+{
+    (void)key;
+    return node == SYSFS_PCI_DEVICE ? 50 : 0;
+}
+
+/** driver_override's text, with its newline. */
+int32_t sysfs_node_show(int handle, char *buf, uint32_t cap)
+{
+    uint32_t n = 0;
+
+    if (handle != 51 || !k.override) {
+        return -ENOENT;
+    }
+    while (k.override[n] && n + 1 < cap) {
+        buf[n] = k.override[n];
+        n++;
+    }
+    buf[n++] = '\n';
+    return (int32_t)n;
+}
+
 /** The directory `name` made below `dir`, or 0. */
 int sysfs_node_child(int dir, const char *name, int len)
 {
     int i;
 
     (void)len;
+    if (dir == 50) {
+        return k.override && same(name, "driver_override") ? 51 : 0;
+    }
     for (i = 0; i < k.dirs; i++) {
         if (k.dir_parent[i] == dir && same(k.dir_name[i], name)) {
             return 10 + i;
@@ -576,6 +611,9 @@ static void check_handover(void)
     CHECK(nd == netdev_at(1) && nd->index == index && same(nd->name, "eth1"),
           "the interface stays, with its name and index");
     CHECK(write_attr(0, 1, name) == -ENODEV, "a card already let go is not let go again");
+    CHECK(nd->ops->set_up && nd->ops->set_up(nd->dev, 1) == -ENODEV &&
+              nd->ops->set_up(nd->dev, 0) == 0,
+          "the interface may not be set up while its card is away, and may go down");
     CHECK(k.locks == 0, "every bracket of the stack's lock is closed");
     check_takeback(nd, txs);
 }
@@ -597,13 +635,25 @@ static void check_takeback(struct netdev *nd, int txs)
     CHECK(m_second.inits == 1, "and the driver does not touch it");
 
     k.owner = 0;
+    k.override = "vfio-pci";
+    CHECK(write_attr(0, 0, name) == -ENODEV && m_second.inits == 1,
+          "bind is ENODEV while driver_override names another driver");
+    k.override = "(null)";
+    k.bind_error = -ENOSPC;
+    k.unclaims = 0;
+    CHECK(write_attr(0, 0, name) == -ENOSPC && m_second.inits == 2 && m_second.stops == 2 &&
+              k.unclaims == 1,
+          "a bind /sys cannot show stops the card again and gives the function up");
+    CHECK(netdev_tx(nd, frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED && m_second.txs == txs,
+          "and leaves it away");
+    k.override = "e1000";
     k.power = 3;
     k.waited = 0;
     k.binds = 0;
     CHECK(write_attr(0, 0, name) == (int32_t)(sizeof(name) - 1), "bind takes the name");
     CHECK(k.power == 0 && k.waited >= PCI_PM_D3HOT_WAIT * 1000u,
           "a card left in D3hot is brought to D0, with the wait from D3hot, first");
-    CHECK(m_second.inits == 2, "the driver brings the card up again");
+    CHECK(m_second.inits == 3, "the driver brings the card up again");
     CHECK(netdev_tx(nd, frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED &&
               m_second.txs == txs + 1,
           "a frame sent after is the driver's again");
@@ -617,14 +667,14 @@ static void check_takeback(struct netdev *nd, int txs)
     k.waited = 0;
     k.unclaims = 0;
     CHECK(netdev_reclaim(nd, 0) == 0, "a card whose first bring-up fails is taken back");
-    CHECK(m_second.inits == 4 && m_second.stops == 3 && k.unclaims == 1 && k.waited == 100000u,
+    CHECK(m_second.inits == 5 && m_second.stops == 4 && k.unclaims == 1 && k.waited == 100000u,
           "after a stop, the function given up and 100 ms, the second bring-up starts it");
 
     CHECK(write_attr(0, 1, name) > 0, "the card is let go a third time");
     m_second.fail_next = 2;
     k.unclaims = 0;
     CHECK(netdev_reclaim(nd, "e1000") == -EIO, "a card that fails both bring-ups is EIO");
-    CHECK(m_second.inits == 6 && k.unclaims == 2, "each failed bring-up gives the function up");
+    CHECK(m_second.inits == 7 && k.unclaims == 2, "each failed bring-up gives the function up");
     txs = m_second.txs;
     CHECK(netdev_tx(nd, frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED && m_second.txs == txs,
           "and the card stays away");

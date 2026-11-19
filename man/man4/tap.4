@@ -32,9 +32,13 @@ with the name in
 .Va ifr_name
 and the flags in
 .Va ifr_flags .
-The flags must be
+The flags must hold
 .Dv IFF_TAP | IFF_NO_PI :
-Ethernet frames with no packet information before them.
+Ethernet frames with no packet information before them;
+.Dv IFF_TUN_EXCL
+refuses a name an interface already has, and
+.Dv IFF_ONE_QUEUE
+is ignored, as on Linux.
 An empty name, or one that ends in
 .Ql %d ,
 takes the first free
@@ -42,13 +46,27 @@ takes the first free
 or the stem given and a digit; another name takes that interface when it
 is a tap no descriptor holds, and makes it when no interface has the
 name.
+A name may not be
+.Ql \&.
+or
+.Ql \&.. ,
+or hold
+.Ql / ,
+.Ql \&:
+or white space, as Linux's dev_valid_name judges.
 The call writes the name it gave back to
-.Va ifr_name .
+.Va ifr_name ,
+with the flags as the caller gave them.
+It reads and writes the caller's whole
+.Vt struct ifreq ,
+32 bytes for an i386 program and 40 for an x86-64 one.
 The interface starts down, with a random locally administered station
 address and an MTU of 1500; it has a carrier while a descriptor holds it.
 .Pp
 A read returns one frame, whole, or its first bytes when the buffer is
-shorter; a descriptor opened with
+shorter, and
+.Xr readv 2
+scatters one frame across its vector; a descriptor opened with
 .Dv O_NONBLOCK
 returns
 .Er EAGAIN
@@ -56,8 +74,11 @@ when no frame waits.
 Each interface holds up to 1024 frames for its reader, as Linux's tun
 queues 1000; a frame sent while the queue is full is dropped and counted
 in the interface's transmit drops.
-A write is one frame of 14 to 1514 bytes; a longer one is taken and
-counted as dropped, so that the writer goes on.
+A write, or a
+.Xr writev 2
+whose vector is gathered into one, is one frame of 14 to 1514 bytes; a
+longer one is taken unread and counted as dropped, so that the writer goes
+on.
 .Xr poll 2
 reports the descriptor readable while a frame waits and always
 writable.
@@ -103,6 +124,8 @@ besides
 .Li lo .
 Only the TAP form: no TUN interface of IP packets, no packet information
 header, no virtio header and so no offload, and one queue.
+Taps are made only in the first network namespace.
+A frame written is at most 1514 bytes, where Linux takes up to 64 KiB.
 .Sh FILES
 .Bl -tag -width /dev/net/tun
 .It Pa /dev/net/tun
@@ -125,19 +148,35 @@ A read, write or request that needs the interface came before
 or the descriptor's interface is gone.
 .It Er EBUSY
 .Dv TUNSETIFF
-named an interface another descriptor holds.
+named an interface another descriptor holds, or one that exists under
+.Dv IFF_TUN_EXCL .
+.It Er EEXIST
+.Dv TUNSETIFF
+on a descriptor that has an interface.
+.It Er EFAULT
+The
+.Vt struct ifreq ,
+or a buffer of a read or write, is not the caller's.
 .It Er EINVAL
 .Dv TUNSETIFF
-on a descriptor that has an interface, with flags other than
+without
 .Dv IFF_TAP | IFF_NO_PI ,
-a name too long, or the name of an interface that is no tap; a write
-shorter than an Ethernet header.
+with
+.Dv IFF_TUN ,
+.Dv IFF_VNET_HDR
+or
+.Dv IFF_MULTI_QUEUE ,
+with a name too long or one a name may not be, or the name of an
+interface that is no tap; a write shorter than an Ethernet header.
 .It Er ENFILE
 No digit is free for the name's stem.
 .It Er ENOSPC
 Every interface of the kernel's, or both tap records, are taken.
 .It Er ENOTTY
 An unknown request.
+.It Er EOPNOTSUPP
+.Dv TUNSETIFF
+in a network namespace other than the first.
 .It Er EPERM
 .Dv TUNSETIFF
 without

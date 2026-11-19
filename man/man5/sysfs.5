@@ -347,8 +347,10 @@ A function's name written to
 lets go of a card the driver has, so that another driver, vfio-pci above
 all, may take it: the interface goes down, the card is stopped, its
 interrupts and bus mastering off, and the function has no owner.
-The interface stays, with its name, index and addresses, without a
-carrier, and drops what is sent on it.
+The interface stays, with its name and index, its IPv4 addresses and the
+IPv6 addresses it was given, without a carrier; it drops what is sent on
+it and may not be set up.
+The IPv6 addresses it learned from routers go, as at any down.
 A name written to
 .Pa bind
 brings the card back to D0, starts it again from whatever state its last
@@ -360,11 +362,15 @@ for a name the driver never had a card of, an
 .Pa unbind
 of a card already let go, or a
 .Pa bind
-of a card the driver has or another driver holds;
+of a card the driver has, one another driver holds, or one whose
+.Pa driver_override
+names another driver;
 .Pa bind
 is
 .Er EIO
-when the card does not start, which leaves it without a driver.
+when the card does not start, and the error of the function's own
+entries when they cannot be made, either of which leaves the card
+stopped and without a driver.
 The directory has a link, named as the function, to each function bound.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/virtioN
 The virtio device of a virtio function the kernel has taken, bound to
