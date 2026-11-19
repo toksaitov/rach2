@@ -903,8 +903,40 @@ static void vfio_paths(void)
           synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group", &vp) == VNODE_ENOENT);
 }
 
+/** Classify the khugepaged directory below the THP one, its files, which
+ * of them root may write, and its path. */
+static void khugepaged_rows(void)
+{
+    static const char *const names[] = {
+        "alloc_sleep_millisecs", "defrag",          "full_scans",
+        "max_ptes_none",         "max_ptes_shared", "max_ptes_swap",
+        "pages_collapsed",       "pages_to_scan",   "scan_sleep_millisecs"};
+    static const char prefix[] = "sys/kernel/mm/transparent_hugepage/khugepaged/";
+    struct vpath vp;
+    char path[128];
+    unsigned int i;
+
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/khugepaged", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_THP_KHUGEPAGED);
+    synth_sys_path(SYSFS_THP_KHUGEPAGED, 0, path, sizeof(path));
+    CHECK(eq(path, "/sys/kernel/mm/transparent_hugepage/khugepaged"));
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        k_memcpy(path, prefix, sizeof(prefix) - 1);
+        k_memcpy(path + sizeof(prefix) - 1, names[i], k_strlen(names[i]) + 1);
+        CHECK(synth_classify(path, &vp) == VNODE_SYS_FILE && vp.sysent == SYSFS_THP_KHUGEPAGED &&
+              vp.procfile == (int)i && eq(sysfs_attr(SYSFS_THP_KHUGEPAGED, (int)i), names[i]));
+        CHECK(sysfs_attr_writable(vp.sysent, vp.procfile) ==
+              (i != SYSFS_KHP_FULL_SCANS && i != SYSFS_KHP_COLLAPSED));
+    }
+    CHECK(sysfs_attr(SYSFS_THP_KHUGEPAGED, 9) == 0);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/khugepaged/defrag/x", &vp) ==
+          VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/khugepaged/missing", &vp) ==
+          VNODE_ENOENT);
+}
+
 /** Classify the THP directory, its files, which of them root may write,
- * and paths past a file. */
+ * and paths past a file, and then its khugepaged directory. */
 static void thp_rows(void)
 {
     static const char *const names[] = {"enabled",        "defrag",        "use_zero_page",
@@ -930,6 +962,7 @@ static void thp_rows(void)
     CHECK(sysfs_attr(SYSFS_THP, 6) == 0);
     CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/missing", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/enabled/more", &vp) == VNODE_ENOTDIR);
+    khugepaged_rows();
 }
 
 /** Ordinary paths stay in the root file system. */
