@@ -934,6 +934,25 @@
 #define FUSE_STRAP3        0x42020
 #define HSW_REF_CLK_SELECT (1u << 1)
 
+/* Audio (display/intel_audio_regs.h): each of transcoders A to C has its
+ * configuration and M/CTS registers 0x100 apart; the pin register has four
+ * bits for each. */
+#define HSW_AUD_CFG(t)                   (0x65000 + (t) * 0x100)
+#define AUD_CONFIG_N_VALUE_INDEX         (1u << 29)
+#define AUD_CONFIG_N_PROG_ENABLE         (1u << 28)
+#define AUD_CONFIG_UPPER_N_MASK          (0xffu << 20)
+#define AUD_CONFIG_LOWER_N_MASK          (0xfffu << 4)
+#define AUD_CONFIG_N_MASK                (AUD_CONFIG_UPPER_N_MASK | AUD_CONFIG_LOWER_N_MASK)
+#define AUD_CONFIG_N(n)                  ((((n) >> 12) & 0xffu) << 20 | ((n) & 0xfffu) << 4)
+#define AUD_CONFIG_PIXEL_CLOCK_HDMI_MASK (0xfu << 16)
+#define AUD_CONFIG_PIXEL_CLOCK_HDMI(v)   ((uint32_t)(v) << 16)
+#define HSW_AUD_M_CTS_ENABLE(t)          (0x65028 + (t) * 0x100)
+#define AUD_M_CTS_M_VALUE_INDEX          (1u << 21)
+#define AUD_M_CTS_M_PROG_ENABLE          (1u << 20)
+#define HSW_AUD_PIN_ELD_CP_VLD           0x650c0
+#define AUDIO_OUTPUT_ENABLE(t)           ((1u << 2) << ((t) * 4))
+#define AUDIO_ELD_VALID(t)               ((1u << 0) << ((t) * 4))
+
 /* ------------------------------------------------------------------------
  * DDI, its clocks and PLLs (i915_reg.h): ports A to E are 0 to 4.
  */

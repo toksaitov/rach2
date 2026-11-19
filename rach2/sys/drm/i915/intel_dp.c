@@ -539,6 +539,8 @@ int32_t intel_dp_compute_config(struct intel_dp *dp, int pipe,
     /* Pipe A drives the eDP transcoder through the fitter's power well
      * while the fitter or a CRC of it runs (Linux's force_thru). */
     cfg->force_thru = dp->edp && pipe == I915_PIPE_A && (cfg->pfit || crc_wa);
+    /* Linux's intel_dp_audio_compute_config. */
+    intel_audio_compute_config(conn, &dp->info, cfg);
     return 0;
 }
 
@@ -1085,7 +1087,8 @@ int32_t intel_dp_ext_connector_init(struct drm_i915_private *i915, struct intel_
     connector->interlace_allowed = 1;
     connector->doublescan_allowed = 0;
     if ((err = drm_connector_attach_encoder(connector, &p->encoder)) != 0 ||
-        (err = drm_connector_attach_max_bpc_property(connector, 6, 12)) != 0) {
+        (err = drm_connector_attach_max_bpc_property(connector, 6, 12)) != 0 ||
+        (err = drm_connector_attach_audio_property(connector)) != 0) {
         return err;
     }
     dp->present = 1;

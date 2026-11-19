@@ -532,6 +532,10 @@ static int32_t connector_set_property(struct drm_atomic_state *state, struct drm
         cs->max_requested_bpc = (uint32_t)val;
         return 0;
     }
+    if (prop == cs->connector->audio_property) {
+        cs->force_audio = (int32_t)(int64_t)val;
+        return 0;
+    }
     /* DPMS is the legacy call's alone; the rest are not settable. */
     return -EINVAL;
 }
@@ -659,6 +663,8 @@ int32_t drm_atomic_get_property(struct drm_mode_object *obj, struct drm_property
             *value = connector->state->scaling_mode;
         } else if (prop == connector->max_bpc_property) {
             *value = connector->state->max_requested_bpc;
+        } else if (prop == connector->audio_property) {
+            *value = (uint64_t)(int64_t)connector->state->force_audio;
         } else {
             return -EINVAL;
         }
@@ -922,6 +928,12 @@ static int32_t check_modeset(struct drm_device *dev, struct drm_atomic_state *st
         if (crtc && (state->connectors_old[i]->link_status != conn->link_status ||
                      state->connectors_old[i]->max_requested_bpc != conn->max_requested_bpc)) {
             state->crtcs_new[crtc->index]->connectors_changed = 1;
+        }
+        /* i915's intel_digital_connector_atomic_check: a new "audio" is a
+         * modeset of the CRTC the connector is on. */
+        if (conn->crtc && state->crtcs_new[conn->crtc->index] &&
+            state->connectors_old[i]->force_audio != conn->force_audio) {
+            state->crtcs_new[conn->crtc->index]->mode_changed = 1;
         }
     }
     for (i = 0; i < (int)dev->mode_config.num_crtc; i++) {

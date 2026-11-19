@@ -387,7 +387,9 @@ static int32_t intel_hdmi_mode_valid(struct drm_connector *connector,
                                      const struct drm_mode_modeinfo *mode)
 {
     struct intel_ddi_port *p = hdmi_port(connector);
-    int has_hdmi_sink = p->hdmi.info.is_hdmi, bpc;
+    int has_hdmi_sink =
+            p->hdmi.info.is_hdmi && connector->state->force_audio != DRM_FORCE_AUDIO_OFF_DVI,
+        bpc;
     uint32_t clock = mode->clock;
 
     if (intel_cpu_transcoder_mode_valid(mode) != 0) {
@@ -445,6 +447,7 @@ int32_t intel_hdmi_connector_init(struct drm_i915_private *i915, struct intel_dd
     connector->doublescan_allowed = 0;
     connector->stereo_allowed = 1;
     if ((err = drm_connector_attach_encoder(connector, &p->encoder)) != 0 ||
+        (err = drm_connector_attach_audio_property(connector)) != 0 ||
         (err = drm_connector_attach_max_bpc_property(connector, 8, 12)) != 0) {
         return err;
     }
@@ -555,7 +558,9 @@ int32_t intel_hdmi_compute_config(struct intel_ddi_port *p, int pipe,
     cfg->output = INTEL_OUTPUT_HDMI;
     cfg->port = p->port;
     cfg->trans = pipe;
-    cfg->has_hdmi_sink = hdmi->info.is_hdmi != 0;
+    /* Linux's intel_has_hdmi_sink: "audio" at force-dvi sends DVI. */
+    cfg->has_hdmi_sink = hdmi->info.is_hdmi != 0 && conn->force_audio != DRM_FORCE_AUDIO_OFF_DVI;
+    intel_audio_compute_config(conn, &hdmi->info, cfg);
     cfg->pixel_multiplier = (m->flags & DRM_MODE_FLAG_DBLCLK) ? 2u : 1u;
     /* The sink's limits first; then on the chance the user knows
      * better. */

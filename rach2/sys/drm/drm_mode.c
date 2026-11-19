@@ -1217,6 +1217,31 @@ int32_t drm_connector_attach_max_bpc_property(struct drm_connector *connector, u
     return 0;
 }
 
+/* i915's force_audio_names (intel_connector.c:215 of Linux 6.12.115). */
+static const struct drm_prop_enum_list force_audio_names[] = {
+    {DRM_FORCE_AUDIO_OFF_DVI, "force-dvi"},
+    {DRM_FORCE_AUDIO_OFF, "off"},
+    {DRM_FORCE_AUDIO_AUTO, "auto"},
+    {DRM_FORCE_AUDIO_ON, "on"},
+};
+
+int32_t drm_connector_attach_audio_property(struct drm_connector *connector)
+{
+    struct drm_mode_config *mc = &connector->dev->mode_config;
+
+    if (!mc->audio_property) {
+        mc->audio_property =
+            drm_property_create_enum(connector->dev, 0, "audio", force_audio_names, 4);
+        if (!mc->audio_property) {
+            return -ENOMEM;
+        }
+    }
+    drm_object_attach_property(&connector->base, mc->audio_property, 0);
+    connector->audio_property = mc->audio_property;
+    connector->state->force_audio = DRM_FORCE_AUDIO_AUTO;
+    return 0;
+}
+
 void drm_connector_attach_edid_property(struct drm_connector *connector)
 {
     drm_object_attach_property(&connector->base, connector->dev->mode_config.edid_property,

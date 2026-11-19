@@ -67,6 +67,8 @@
 #include "drm/i915/intel_gmbus.c"
 #include "drm/i915/intel_dpll.c"
 #include "drm/i915/intel_hdmi.c"
+#include "drm/i915/intel_audio.c"
+#include "audio/acomp.c"
 #include "drm/i915/intel_hotplug.c"
 #include "drm/i915/intel_ddi.c"
 #include "drm/i915/intel_dp_link_training.c"

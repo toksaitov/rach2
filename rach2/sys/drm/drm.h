@@ -1068,7 +1068,8 @@ struct drm_crtc_state {
 /* A connector's state: the CRTC it is routed to and the encoder that drives
  * it there, which the check chooses, and the values of the properties a
  * driver may attach: "scaling mode" in `scaling_mode`, DRM_MODE_SCALE_*,
- * and "max bpc" in `max_requested_bpc`. */
+ * "max bpc" in `max_requested_bpc`, and "audio" in `force_audio`,
+ * DRM_FORCE_AUDIO_*. */
 struct drm_connector_state {
     struct drm_connector *connector;
     struct drm_crtc *crtc;
@@ -1077,7 +1078,16 @@ struct drm_connector_state {
     uint32_t content_protection;
     uint32_t scaling_mode;
     uint32_t max_requested_bpc;
+    int32_t force_audio;
 };
+
+/* The values of i915's "audio" property, Linux's enum hdmi_force_audio:
+ * DVI with no HDMI signalling at all, audio off, the sink's EDID's say,
+ * and audio on whatever the EDID says. */
+#define DRM_FORCE_AUDIO_OFF_DVI (-2)
+#define DRM_FORCE_AUDIO_OFF     (-1)
+#define DRM_FORCE_AUDIO_AUTO    0
+#define DRM_FORCE_AUDIO_ON      1
 
 /*
  * A plane's hooks. `atomic_check` refuses a state the hardware cannot show
@@ -1337,6 +1347,7 @@ struct drm_connector {
     const struct drm_connector_funcs *funcs;
     struct drm_connector_state *state;
     struct drm_property *scaling_mode_property, *max_bpc_property; /* NULL until attached */
+    struct drm_property *audio_property;                           /* the same */
 };
 
 /*
@@ -1417,6 +1428,8 @@ struct drm_mode_config {
     struct drm_property *degamma_lut_property, *degamma_lut_size_property, *ctm_property;
     struct drm_property *gamma_lut_property, *gamma_lut_size_property;
     struct drm_property *modifiers_property, *size_hints_property;
+    /* "audio", made by the first drm_connector_attach_audio_property. */
+    struct drm_property *audio_property;
     int32_t (*atomic_check)(struct drm_device *dev, struct drm_atomic_state *state);
     int32_t (*atomic_commit)(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
     int32_t (*fb_create)(struct drm_device *dev, struct drm_framebuffer *fb);
@@ -1494,6 +1507,11 @@ int32_t drm_connector_attach_scaling_mode_property(struct drm_connector *connect
  * or -ENOMEM. */
 int32_t drm_connector_attach_max_bpc_property(struct drm_connector *connector, uint32_t min,
                                               uint32_t max);
+/** Attach "audio", DRM_FORCE_AUDIO_* by the names "force-dvi", "off",
+ * "auto" and "on", to `connector`, its state's value auto, as i915's
+ * intel_attach_force_audio_property; one property serves every connector
+ * of the device. 0, or -ENOMEM. */
+int32_t drm_connector_attach_audio_property(struct drm_connector *connector);
 /** Attach FB_DAMAGE_CLIPS to `plane`, for a driver that copies only damage. */
 void drm_plane_enable_fb_damage_clips(struct drm_plane *plane);
 /** Attach "rotation", the bitmask of `supported` DRM_MODE_ROTATE_* and

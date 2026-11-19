@@ -49,6 +49,7 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/intel_i2c_dev.c \
     sys/drm/i915/intel_dpll.c \
     sys/drm/i915/intel_hdmi.c \
+    sys/drm/i915/intel_audio.c \
     sys/drm/i915/intel_hotplug.c \
     sys/drm/i915/intel_ddi.c \
     sys/drm/i915/intel_dp_link_training.c \
