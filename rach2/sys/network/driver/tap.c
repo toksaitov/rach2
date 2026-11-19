@@ -9,6 +9,7 @@
 #include "../arp/arp.h"
 #include "../ip6/route6.h"
 #include "../ip6/nd6.h"
+#include "../ip6/ip6.h"
 #include "../../fs/devfs.h"
 #include "../../fs/file.h"
 #include "../../io/poll.h"
@@ -20,6 +21,9 @@
 #include "../../mm/kheap.h"
 #include "../../mm/usercopy.h"
 #include "../../proc/wait_queue.h"
+#include "../../fs/krffs.h"
+#include "../../syscall.h"
+#include "../../syscall_internal.h"
 
 /* The longest frame an interface carries, without the frame check
  * sequence, and the room each ring slot takes. */
@@ -27,10 +31,37 @@
 #define TAP_STRIDE 1536u
 #define TAP_PAGES  ((TAP_RING * TAP_STRIDE + 4095u) / 4096u)
 
-/* The bytes of Linux's `struct ifreq` this file reads and writes: the
- * name, and the flags, a short, right after it. */
-#define TAP_IFNAME   16
-#define TAP_IFR_SIZE (TAP_IFNAME + 2)
+/* Linux's `struct ifreq`: the name, then a union whose widest member, a
+ * `struct ifmap` of two longs, makes it 32 bytes on i686 and 40 on x86-64;
+ * an i386 caller's on x86-64 is 32, Linux's compat_ifreq. The flags are a
+ * short at the union's start. */
+struct tap_ifreq_shape {
+    char name[16];
+    union {
+        uint8_t addr[16];
+        struct {
+            unsigned long mem_start, mem_end;
+            unsigned short base_addr;
+            unsigned char irq, dma, port;
+        } map;
+        uintptr_t data;
+    } u;
+};
+#define TAP_IFNAME     16
+#define TAP_IFR_MAX    ((uint32_t)sizeof(struct tap_ifreq_shape))
+#define TAP_IFR_COMPAT 32u
+
+/** The bytes of the caller's `struct ifreq`, as Linux's tun copies them
+ * (`ifreq_len` in __tun_chr_ioctl). */
+static uint32_t tap_ifr_size(void)
+{
+    uint32_t n = TAP_IFR_MAX;
+
+    if (in_compat_syscall()) {
+        n = TAP_IFR_COMPAT; /* equal to the native size on i686 */
+    }
+    return n;
+}
 
 /**
  * One interface. The record is in the kernel's image and is never freed,
@@ -167,7 +198,8 @@ static struct tap *tap_named(const char *name)
 /**
  * Make the interface `name` in a free record and register it: the record,
  * or NULL with `*err` set to -ENOSPC when every record is used, -ENOMEM
- * without room for the ring, or `netdev_register`'s error. The interface
+ * for a record whose ring `tap_rings_ready` could not take, or
+ * `netdev_register`'s error. It does not sleep. The interface
  * starts down, with a random station address that has the locally
  * administered bit, as Linux gives a tap.
  */
@@ -186,11 +218,8 @@ static struct tap *tap_make(const char *name, int32_t *err)
         return 0;
     }
     if (!t->frames) {
-        t->frames = (uint8_t *)kalloc_pages(TAP_PAGES, 0);
-        if (!t->frames) {
-            *err = -ENOMEM;
-            return 0;
-        }
+        *err = -ENOMEM;
+        return 0;
     }
     k_memset(&t->nd, 0, sizeof(t->nd));
     t->nd.ops = &tap_ops;
@@ -213,10 +242,29 @@ static struct tap *tap_make(const char *name, int32_t *err)
     return t;
 }
 
+/** Give each free record its ring, which it keeps: 0, or -ENOMEM. It may
+ * sleep, so TUNSETIFF calls it before the checks it must make in one hold
+ * of the big lock. */
+static int32_t tap_rings_ready(void)
+{
+    int i;
+
+    for (i = 0; i < TAP_MAX; i++) {
+        if (!taps[i].used && !taps[i].frames) {
+            taps[i].frames = (uint8_t *)kalloc_pages(TAP_PAGES, 0);
+            if (!taps[i].frames) {
+                return -ENOMEM;
+            }
+        }
+    }
+    return 0;
+}
+
 /**
  * Withdraw the interface of `t`: down, its addresses, routes and
- * neighbours forgotten, as the radio layer withdraws its interface
- * (wireless/wiphy.c), and the record free for the next TUNSETIFF.
+ * neighbours and IPv6 reassemblies forgotten, as the radio layer
+ * withdraws its interface (wireless/wiphy.c), and the record free for the
+ * next TUNSETIFF.
  */
 static void tap_remove(struct tap *t)
 {
@@ -251,6 +299,7 @@ static void tap_remove(struct tap *t)
             nd6_forget(&t->nd, neighbors6[n].addr);
         }
     }
+    ip6_forget_dev(&t->nd);
     netdev_unregister(&t->nd);
     net_unlock(flags);
     klog(KLOG_INFO, "tap", "%s: removed", t->nd.name);
@@ -265,75 +314,118 @@ static int tap_flags_ok(uint16_t flags)
            !(flags & (TAP_IFF_TUN | TAP_IFF_VNET_HDR | TAP_IFF_MULTI_QUEUE));
 }
 
+/** Whether `name` may name an interface, as Linux's dev_valid_name judges:
+ * not "." or "..", and no '/', ':' or white space. */
+static int tap_name_ok(const char *name)
+{
+    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
+        return 0;
+    }
+    for (; *name; name++) {
+        if (*name == '/' || *name == ':' || *name == ' ' || (*name >= '\t' && *name <= '\r')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * The name TUNSETIFF's `name` asks for, in `out`: an empty name, or one
+ * that ends in `%d`, takes the first free `tapN` or stem and digit. 0;
+ * -EINVAL for a name the kernel's interfaces cannot hold; -ENFILE when no
+ * digit is free. `*fresh` is 1 for a name made from a stem.
+ */
+static int32_t tap_pick_name(const char *name, char *out, int *fresh)
+{
+    char stem[TAP_IFNAME];
+    int i, len = (int)k_strlen(name);
+
+    *fresh = len == 0 || (len >= 2 && name[len - 2] == '%' && name[len - 1] == 'd');
+    if (!*fresh) {
+        if (len > (int)sizeof(taps[0].nd.name) - 1 || !tap_name_ok(name)) {
+            return -EINVAL;
+        }
+        k_strncpy(out, name, TAP_IFNAME - 1);
+        out[TAP_IFNAME - 1] = '\0';
+        return 0;
+    }
+    k_strncpy(stem, len == 0 ? "tap" : name, sizeof(stem) - 1);
+    stem[sizeof(stem) - 1] = '\0';
+    if (len != 0) {
+        stem[len - 2] = '\0';
+    }
+    len = (int)k_strlen(stem);
+    if (len == 0 || len > (int)sizeof(taps[0].nd.name) - 2 || !tap_name_ok(stem)) {
+        return -EINVAL;
+    }
+    for (i = 0; i < 10; i++) {
+        k_memcpy(out, stem, (size_t)len);
+        out[len] = (char)('0' + i);
+        out[len + 1] = '\0';
+        if (!netdev_by_name(out)) {
+            return 0;
+        }
+    }
+    return -ENFILE;
+}
+
 /**
  * TUNSETIFF: give the descriptor `e` the interface the `ifreq` at `arg`
- * names, made when it is not there. An empty name, or one with `%d`, takes
- * the first free `tapN`. -EINVAL for a descriptor that has an interface,
- * a request that is not IFF_TAP alone with IFF_NO_PI, a name the kernel's
+ * names, made when it is not there (`tap_pick_name`), and write its name
+ * back, with the flags as the caller gave them, as Linux's tun_set_iff.
+ * -EEXIST for an open that has an interface, as Linux's; -EINVAL for a
+ * request that is not IFF_TAP with IFF_NO_PI, or a name the kernel's
  * interfaces cannot hold or that another kind of interface has; -EPERM
- * without the privilege to change the interfaces; -EBUSY for an interface
- * another descriptor holds; else `tap_make`'s error.
+ * without the privilege to change the interfaces; -EOPNOTSUPP in a network
+ * namespace other than the first, which has no tap; -EBUSY for an
+ * interface another descriptor holds, or any that exists under
+ * IFF_TUN_EXCL; else `tap_make`'s error.
+ *
+ * The request is copied in and the rings made first, since either may
+ * sleep and let another call on a descriptor of the same open run; from
+ * the checks to the record's interface nothing sleeps.
  */
 static int32_t tap_set_iff(fd_entry_t *e, uintptr_t arg)
 {
-    uint8_t ifr[TAP_IFR_SIZE];
+    uint8_t ifr[TAP_IFR_MAX];
     char name[TAP_IFNAME];
     struct tap *t;
     uint16_t flags;
-    uint32_t irq;
+    uint32_t irq, size = tap_ifr_size();
     int32_t err = 0;
-    int i, len;
+    int fresh;
 
+    k_memset(ifr, 0, sizeof(ifr));
+    if (copy_from_user(ifr, (const void __user *)arg, size) != 0) {
+        return -EFAULT;
+    }
+    k_memcpy(&flags, ifr + TAP_IFNAME, 2);
+    ifr[TAP_IFNAME - 1] = 0;
+    err = tap_rings_ready();
+    if (err != 0) {
+        return err;
+    }
     if (tap_file_of(e)) {
-        return -EINVAL;
+        return -EEXIST;
+    }
+    if (!net_ns_seen()) {
+        return -EOPNOTSUPP;
     }
     if (!net_admin()) {
         return -EPERM;
     }
-    if (copy_from_user(ifr, (const void __user *)arg, sizeof(ifr)) != 0) {
-        return -EFAULT;
-    }
-    k_memcpy(&flags, ifr + TAP_IFNAME, 2);
     if (!tap_flags_ok(flags)) {
         return -EINVAL;
     }
-    k_memcpy(name, ifr, TAP_IFNAME);
-    name[TAP_IFNAME - 1] = '\0';
-    len = (int)k_strlen(name);
-    if (len == 0 || (len >= 2 && name[len - 2] == '%' && name[len - 1] == 'd')) {
-        char stem[TAP_IFNAME];
-
-        k_strncpy(stem, len == 0 ? "tap" : name, sizeof(stem) - 1);
-        stem[sizeof(stem) - 1] = '\0';
-        if (len != 0) {
-            stem[len - 2] = '\0';
-        }
-        len = (int)k_strlen(stem);
-        if (len == 0 || len > (int)sizeof(taps[0].nd.name) - 2) {
-            return -EINVAL;
-        }
-        for (i = 0; i < 10; i++) {
-            k_memcpy(name, stem, (size_t)len);
-            name[len] = (char)('0' + i);
-            name[len + 1] = '\0';
-            if (!netdev_by_name(name)) {
-                break;
-            }
-        }
-        if (i == 10) {
-            return -ENFILE;
-        }
-        t = 0;
-    } else {
-        if (len > (int)sizeof(taps[0].nd.name) - 1) {
-            return -EINVAL;
-        }
-        t = tap_named(name);
-        if (!t && netdev_by_name(name)) {
-            return -EINVAL;
-        }
+    err = tap_pick_name((const char *)ifr, name, &fresh);
+    if (err != 0) {
+        return err;
     }
-    if (t && t->attached) {
+    t = fresh ? 0 : tap_named(name);
+    if (!t && netdev_by_name(name)) {
+        return -EINVAL;
+    }
+    if (t && (t->attached || (flags & TAP_IFF_TUN_EXCL))) {
         return -EBUSY;
     }
     if (!t) {
@@ -349,12 +441,10 @@ static int32_t tap_set_iff(fd_entry_t *e, uintptr_t arg)
     spin_unlock_irqrestore(&tap_lock, irq);
     netdev_carrier_changed(&t->nd);
     ((struct tap_file *)e->priv)->t = t;
+    klog(KLOG_INFO, "tap", "%s: attached", t->nd.name);
     k_memset(ifr, 0, TAP_IFNAME);
     k_strncpy((char *)ifr, t->nd.name, TAP_IFNAME - 1);
-    flags = (uint16_t)(TAP_IFF_TAP | TAP_IFF_NO_PI);
-    k_memcpy(ifr + TAP_IFNAME, &flags, 2);
-    klog(KLOG_INFO, "tap", "%s: attached", t->nd.name);
-    return copy_to_user((void __user *)arg, ifr, sizeof(ifr)) != 0 ? -EFAULT : 0;
+    return copy_to_user((void __user *)arg, ifr, size) != 0 ? -EFAULT : 0;
 }
 
 /** The wait condition of a read: a frame is queued, or the interface left
@@ -367,17 +457,18 @@ static int tap_readable(void *arg)
 }
 
 /**
- * Read one frame, whole, or its first `count` bytes when the buffer is
- * shorter, as Linux's tun does. -EBADFD before TUNSETIFF; -EAGAIN on a
- * descriptor that does not block with no frame queued; -EINTR when a
- * signal ends the wait.
+ * Take the next frame of the descriptor `e`'s interface into a buffer of
+ * `buf_take`'s, waiting for one unless the descriptor does not block: 0
+ * with `*tp`, `*bp` and `*np` set, the caller to give the buffer back with
+ * `buf_give`; -EBADFD before TUNSETIFF or once the interface left the
+ * descriptor; -EAGAIN with no frame on a descriptor that does not block;
+ * -EINTR when a signal ends the wait; -ENOMEM.
  */
-static int32_t tap_read(fd_entry_t *e, char __user *buf, uint32_t count)
+static int32_t tap_take(fd_entry_t *e, struct tap **tp, uint8_t **bp, uint32_t *np)
 {
     struct tap *t = tap_file_of(e);
     uint8_t *b;
-    uint32_t flags, n = 0;
-    int got = 0;
+    uint32_t flags;
 
     if (!t) {
         return -EBADFD;
@@ -386,13 +477,13 @@ static int32_t tap_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!b) {
         return -ENOMEM;
     }
-    while (!got) {
-        int gone;
+    for (;;) {
+        int got = 0, gone;
 
         flags = spin_lock_irqsave(&tap_lock);
         if (t->count) {
-            n = t->len[t->head];
-            k_memcpy(b, t->frames + t->head * TAP_STRIDE, n);
+            *np = t->len[t->head];
+            k_memcpy(b, t->frames + t->head * TAP_STRIDE, *np);
             t->head = (t->head + 1) % TAP_RING;
             t->count--;
             got = 1;
@@ -400,30 +491,94 @@ static int32_t tap_read(fd_entry_t *e, char __user *buf, uint32_t count)
         gone = !t->attached;
         spin_unlock_irqrestore(&tap_lock, flags);
         if (got) {
-            break;
+            *tp = t;
+            *bp = b;
+            return 0;
         }
-        if (gone) {
+        if (gone || (e->ofd->status_flags & OFD_NONBLOCK) ||
+            wq_wait_event(&t->wq, tap_readable, t) < 0) {
             buf_give(t, b);
-            return -EBADFD;
+            return gone ? -EBADFD : (e->ofd->status_flags & OFD_NONBLOCK) ? -EAGAIN : -EINTR;
         }
-        if (e->ofd->status_flags & OFD_NONBLOCK) {
-            buf_give(t, b);
-            return -EAGAIN;
-        }
-        if (wq_wait_event(&t->wq, tap_readable, t) < 0) {
-            buf_give(t, b);
-            return -EINTR;
-        }
+    }
+}
+
+/**
+ * Read one frame, whole, or its first `count` bytes when the buffer is
+ * shorter, as Linux's tun does; errors as `tap_take`, or -EFAULT, which
+ * loses the frame, as Linux's does.
+ */
+static int32_t tap_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct tap *t;
+    uint8_t *b;
+    uint32_t n;
+    int32_t r = tap_take(e, &t, &b, &n);
+
+    if (r != 0) {
+        return r;
     }
     if (n > count) {
         n = count;
     }
-    if (copy_to_user(buf, b, n) != 0) {
-        buf_give(t, b);
-        return -EFAULT;
+    r = copy_to_user(buf, b, n) != 0 ? -EFAULT : (int32_t)n;
+    buf_give(t, b);
+    return r;
+}
+
+int32_t tap_readv(struct fd_entry *e, const struct kernel_iovec *iov, int count)
+{
+    struct tap *t;
+    uint8_t *b;
+    uint32_t n, at = 0;
+    int32_t r = tap_take(e, &t, &b, &n);
+    int i;
+
+    if (r != 0) {
+        return r;
+    }
+    for (i = 0; i < count && at < n; i++) {
+        uint32_t len = iov[i].iov_len < n - at ? (uint32_t)iov[i].iov_len : n - at;
+
+        if (len != 0 && copy_to_user((void __user *)iov[i].iov_base, b + at, len) != 0) {
+            r = -EFAULT;
+            break;
+        }
+        at += len;
     }
     buf_give(t, b);
-    return (int32_t)n;
+    return r != 0 ? r : (int32_t)at;
+}
+
+int32_t tap_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count, uint32_t total)
+{
+    struct tap *t = tap_file_of(e);
+    uint8_t *b;
+    uint32_t at = 0;
+    int32_t r;
+    int i;
+
+    if (!t) {
+        return -EBADFD;
+    }
+    if (total < ETH_HDR_SIZE || total > TAP_FRAME) {
+        return tap_inject(t, 0, total);
+    }
+    b = buf_take(t);
+    if (!b) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < count; i++) {
+        if (iov[i].iov_len != 0 &&
+            copy_from_user(b + at, (const void __user *)iov[i].iov_base, iov[i].iov_len) != 0) {
+            buf_give(t, b);
+            return -EFAULT;
+        }
+        at += (uint32_t)iov[i].iov_len;
+    }
+    r = tap_inject(t, b, total);
+    buf_give(t, b);
+    return r;
 }
 
 struct tap *tap_of(const struct fd_entry *e)
@@ -457,7 +612,9 @@ void tap_backend_drain(struct tap *t)
     spin_unlock_irqrestore(&tap_lock, flags);
 }
 
-int32_t tap_write_frame(struct fd_entry *e, const uint8_t *frame, uint32_t len)
+/** Give the interface of the descriptor `e` the frame of `len` bytes at
+ * `frame` (`tap_inject`); -EBADFD before TUNSETIFF. */
+static int32_t tap_write_frame(fd_entry_t *e, const uint8_t *frame, uint32_t len)
 {
     struct tap *t = tap_file_of(e);
 
@@ -539,7 +696,7 @@ static short tap_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 static int32_t tap_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct tap *t = tap_file_of(e);
-    uint8_t ifr[TAP_IFR_SIZE];
+    uint8_t ifr[TAP_IFR_MAX];
     uint32_t word;
     uint16_t flags;
 
@@ -575,7 +732,7 @@ static int32_t tap_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         k_strncpy((char *)ifr, t->nd.name, TAP_IFNAME - 1);
         flags = (uint16_t)(TAP_IFF_TAP | TAP_IFF_NO_PI | (t->persist ? TAP_IFF_PERSIST : 0));
         k_memcpy(ifr + TAP_IFNAME, &flags, 2);
-        return copy_to_user((void __user *)arg, ifr, sizeof(ifr)) != 0 ? -EFAULT : 0;
+        return copy_to_user((void __user *)arg, ifr, tap_ifr_size()) != 0 ? -EFAULT : 0;
     case TUNSETPERSIST:
         t->persist = arg != 0;
         return 0;

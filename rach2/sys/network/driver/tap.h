@@ -71,16 +71,27 @@ struct fd_entry;
 /** Whether the descriptor `e` is an open of /dev/net/tun. */
 int tap_is(const struct fd_entry *e);
 
+struct kernel_iovec;
+
 /**
- * Give the interface of the descriptor `e` the frame of `len` bytes at
- * `frame`, in kernel memory, as one write of the descriptor does; writev
- * gathers its vector and calls this, since a frame is one write however
- * many elements carry it. `len`, with the frame received, or counted as
- * dropped when it is longer than an interface carries, in which case
- * `frame` is not read; -EBADFD before TUNSETIFF; -EINVAL for less than an
- * Ethernet header. Called under the big kernel lock.
+ * writev(2) of the descriptor `e`: the `count` elements of `iov`, an
+ * imported vector of `total` bytes, are one frame, gathered, which the
+ * interface receives, since a frame is one write however many elements
+ * carry it. `total`, with the frame received, or counted as dropped and
+ * not read when it is longer than an interface carries, 1514 bytes, as a
+ * write of it is; -EBADFD before TUNSETIFF; -EINVAL for less than an
+ * Ethernet header; -EFAULT; -ENOMEM. Called under the big kernel lock.
  */
-int32_t tap_write_frame(struct fd_entry *e, const uint8_t *frame, uint32_t len);
+int32_t tap_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count, uint32_t total);
+
+/**
+ * readv(2) of the descriptor `e`: one frame, scattered across the `count`
+ * elements of `iov` in order, as Linux's tun_chr_read_iter gives it; the
+ * bytes past the vector are lost, as a short read loses them. The bytes
+ * read; -EBADFD, -EAGAIN, -EINTR or -EFAULT as read(2) of the descriptor.
+ * Called under the big kernel lock; it may sleep.
+ */
+int32_t tap_readv(struct fd_entry *e, const struct kernel_iovec *iov, int count);
 
 struct tap;
 
@@ -109,8 +120,10 @@ int tap_backend_set(struct tap *t, struct tap_backend *b);
  * until it takes no more. */
 void tap_backend_drain(struct tap *t);
 
-/** Give the interface `t` the frame of `len` bytes, as a write of its
- * descriptor does (`tap_write_frame`). */
+/** Give the interface `t` the frame of `len` bytes at `frame`, in kernel
+ * memory, as a write of its descriptor does: `len`, with one longer than
+ * 1514 bytes counted as dropped and `frame` not read; -EINVAL for less
+ * than an Ethernet header. */
 int32_t tap_inject(struct tap *t, const uint8_t *frame, uint32_t len);
 
 #endif /* _TAP_H_ */
