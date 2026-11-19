@@ -2493,53 +2493,75 @@ windows_forget()
     rm -f "$state/windows.run"
 }
 
-# screen_free: stop the trial boot's console session, `term`, which holds the
-# framebuffer, and set `login` to `PID COMM BOOT`, the process of the kernel
-# console's login that init starts in its place, its name as its stat gives
-# it, and the boot's /proc/sys/kernel/random/boot_id; leave `login` empty when
-# no `term` runs. The look and the TERM to `term` are one script on the
-# machine. Rach2 gives no process number twice within a boot before two
-# thousand million processes, its pid_next only counting up
-# (rach2/sys/proc/Readme.md), so a number with the boot's ID names one
-# process.
-screen_free()
+# screen_session free | back BOOT: on the Lenovo, make init replace term
+# with the kernel console's login, or put term back in BOOT. Identify the
+# current session by its controlling terminal, since the login seen before
+# the run may have exited. A process number is not reused within a boot
+# before pid_next wraps (rach2/sys/proc/Readme.md). Print the boot ID on a
+# successful free, and a diagnostic on failure.
+screen_session()
 {
-    # shellcheck disable=SC2016 # the script expands on the Lenovo
-    login=$(lenovo 'kids() { for p in /proc/[0-9]*; do
-            read -r pid comm s ppid r < $p/stat 2> /dev/null && [ "$ppid" = 1 ] && echo "$pid $comm"; done; }
-        t=$(kids | sed -n "s/ (term)\$//p")
-        [ -n "$t" ] || exit 0
-        read -r b < /proc/sys/kernel/random/boot_id || exit 1
-        before=" $(kids | cut -d " " -f 1 | tr "\n" " ")"
-        kill $t || exit 1
-        n=0
-        while [ $n -lt 20 ]; do
-            sleep 1
-            n=$((n + 1))
-            [ ! -d /proc/$t ] || continue
-            new=$(kids | while read -r k c; do
-                case $before in *" $k "*) ;; *) echo "$k $c"; break ;; esac
-            done)
-            [ -z "$new" ] || { echo "$new $b"; exit 0; }
-        done
-        exit 1') || fail lenovo "the console's term would not give up the screen"
-    [ -z "$login" ] || say "lenovo: stopped the console's term for the run; login ${login%% *} stands in"
+    lenovo "sh -s -- $*" <<'SCREEN'
+console_session()
+{
+    for file in /proc/[0-9]*/stat; do
+        IFS= read -r line 2> /dev/null < "$file" || continue
+        pid=${line%% *}
+        comm=${line%\)*}
+        # Split the fields after comm: state, ppid, pgrp, sid, tty_nr.
+        # shellcheck disable=SC2086 # /proc's fields are separate words
+        set -- ${line##*\) }
+        [ "$#" -ge 5 ] && [ "$1" != Z ] && [ "$2" = 1 ] &&
+            [ "$4" = "$pid" ] && [ "$5" = "$tty" ] || continue
+        printf '%s %s\n' "$pid" "${comm#*\(}"
+        return
+    done
 }
 
-# screen_back: end the kernel console's login that screen_free left, so that
-# init starts `term` again: HUP, in one script on the machine, only while the
-# boot's ID is the one screen_free read and the process with that number is
-# init's child with the name screen_free read.
+read -r boot < /proc/sys/kernel/random/boot_id || exit 1
+if [ "$1" = back ] && [ "$boot" != "$2" ]; then
+    echo 'the machine booted again'
+    exit 1
+fi
+# /dev/console is device 5:1 in Rach2's /proc/<pid>/stat.
+tty=$(( (5 << 8) | 1 ))
+n=0 sent=no
+while [ "$n" -lt 20 ]; do
+    current=$(console_session)
+    if [ -n "$current" ]; then
+        case $1:${current#* } in
+            free:term) signal=TERM ;;
+            free:*) printf '%s\n' "$boot"; exit 0 ;;
+            back:term) exit 0 ;;
+            back:*) signal=HUP ;;
+        esac
+        if [ "$sent" = no ] && kill -s "$signal" "${current%% *}" 2> /dev/null; then
+            sent=yes
+        fi
+    fi
+    sleep 1
+    n=$((n + 1))
+done
+echo 'init did not change the console session in 20 tries'
+exit 1
+SCREEN
+}
+
+# screen_free: take term off the framebuffer for the native cases.
+screen_free()
+{
+    screen_boot=$(screen_session free) ||
+        fail lenovo "the console's term would not give up the screen${screen_boot:+: $screen_boot}"
+    say "lenovo: the kernel console's login stands in for term during the run"
+}
+
+# screen_back: put term back on the boot where it gave up the framebuffer.
 screen_back()
 {
-    [ -n "$login" ] || return 0
-    # shellcheck disable=SC2086 # the login is three words
-    set -- $login
-    lenovo "read -r b < /proc/sys/kernel/random/boot_id && [ \"\$b\" = '$3' ] &&
-        read -r pid comm s ppid r < /proc/$1/stat 2> /dev/null && [ \"\$ppid\" = 1 ] &&
-        [ \"\$comm\" = '$2' ] && kill -HUP $1" > /dev/null 2>&1 ||
-        say "lenovo: the console's login $1 was gone, or the machine had booted again"
-    login=''
+    [ -n "$screen_boot" ] || return 0
+    screen_result=$(screen_session back "$screen_boot") ||
+        say "lenovo: could not restore the console's term${screen_result:+: $screen_result}"
+    screen_boot=''
 }
 
 # route_address HOST: print this computer's address on the interface that
