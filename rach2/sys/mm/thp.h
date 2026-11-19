@@ -108,7 +108,9 @@ int thp_region_eligible(const struct mm *mm, const struct vma *vma);
  * `budget` pages, as Linux's hpage_collapse_scan_mm_slot: each 2 MiB of a
  * region that allows huge pages to khugepaged counts 512 and is collapsed where
  * it can be (`paging_collapse`), one at least however small the budget, and
- * each other region counts one. Once its last region is scanned the space has
+ * each other region counts one; the budget is judged after each 2 MiB alone,
+ * so regions that allow none are passed over however many there are. Once
+ * its last region is scanned the space has
  * finished the pass numbered `pass`, which its `thp_pass` records. The caller
  * holds the regions' lock to write. The pages counted; `*nomem` is set when no
  * huge page could be had, after which khugepaged sleeps for
@@ -117,9 +119,16 @@ int thp_region_eligible(const struct mm *mm, const struct vma *vma);
  */
 uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem);
 
-/** Set the policy for the machine's memory at boot, once the frame
- * allocator has counted it. */
+/** Set the policy for the machine's memory and processor at boot, once the
+ * frame allocator has counted it. */
 void thp_boot(void);
+
+/**
+ * Refuse every huge page from now on, for a processor that fails with them
+ * or a kernel with no memory to count them: `thp_region_allows` answers 0
+ * whoever asks.
+ */
+void thp_refuse(void);
 
 /**
  * Register the shrinker of huge pages and start khugepaged, the kernel

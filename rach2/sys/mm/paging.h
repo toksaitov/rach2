@@ -95,10 +95,9 @@ pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va);
 int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf);
 
 /**
- * Replace the huge page of `dir` over `va` with the leaf table it replaced,
- * hidden (`mmu_user_table_hide`), and return the page's entry as it was at
- * the exchange, with the accessed and dirty bits the processor set in it; 0
- * when there was no huge page.
+ * Put back the leaf table the huge page of `dir` over `va` replaced, and
+ * return the page's entry as it was at the exchange, with the accessed and
+ * dirty bits the processor set in it; 0 when there was no huge page.
  */
 pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va);
 
@@ -110,25 +109,17 @@ pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va);
  */
 pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set);
 
+/** Whether the processor may hold a 2 MiB and a 4 KiB translation of one
+ * address that agree, as a split leaves them until the range is flushed:
+ * 0 on AMD's family 0x10 (Erratum 383). */
+int mmu_huge_usable(void);
+
 /**
  * Whether the directory of `dir` over `va` keeps its tables, so that a
  * huge page may be made there, or is not made yet and will keep them when
  * two consecutive frames are free for it then.
  */
 int mmu_user_keeps(page_dir_t *dir, uintptr_t va);
-
-/**
- * Hide the leaf table that the directory entry of `dir` over `va` names
- * from the processor, which then faults on the range, while software walks
- * it still; `mmu_user_huge_set` takes a hidden table as it takes one
- * present. 1 when hidden, 0 when the entry names no table or its directory
- * keeps none. Under the regions' lock to write or the page-table lock.
- */
-int mmu_user_table_hide(page_dir_t *dir, uintptr_t va);
-
-/** Show the processor the hidden leaf table of `dir` over `va` again; the
- * caller has flushed the range since it hid it. */
-void mmu_user_table_show(page_dir_t *dir, uintptr_t va);
 
 /**
  * Count the huge page that the directory entry `leaf` maps as mapped by one
@@ -462,8 +453,10 @@ int mem_lock_room(unsigned long have, unsigned long pages);
  */
 void free_user_pages(page_dir_t *dir);
 
-/** Register the shrinker that gives reclaim the frames of transparent huge
- * pages, once, at boot (thp.c). Nothing where no entry maps a huge page. */
+/** Make the count of the entries that map each 2 MiB block whole, refusing
+ * huge pages (`thp_refuse`) with no memory for it, and register the shrinker
+ * that gives reclaim the frames of transparent huge pages, once, at boot
+ * (thp.c). Nothing where no entry maps a huge page. */
 void paging_thp_init(void);
 
 /** The 4 KiB pages of [start, end), page-aligned, of `dir` that huge pages
@@ -473,9 +466,11 @@ unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
 /**
  * Split each huge page of `mm` across an edge of [start, end), page-aligned,
- * before a change splits the region there, as Linux's vma_adjust_trans_huge
- * splits one, so that no huge page spans two regions. Under the regions'
- * lock held to write. Nothing where no entry maps a huge page.
+ * where a region now ends, after a change that may have split a region
+ * there, as Linux's vma_adjust_trans_huge splits one, so that no huge page
+ * spans two regions; a change that failed or split nothing leaves the page.
+ * Under the regions' lock held to write. Nothing where no entry maps a huge
+ * page.
  */
 void paging_huge_split_edges(struct mm *mm, uintptr_t start, uintptr_t end);
 

@@ -59,6 +59,11 @@ uint32_t kcpu_kvm_hints(void);
  * X86_FEATURE_VMMCALL for those two vendors alone. */
 int kcpu_vmmcall(void);
 
+/** Whether the processor is AMD's family 0x10, which may fail when its TLB
+ * holds a 2 MiB and a 4 KiB translation of one address, even where the two
+ * agree (Erratum 383), as Linux's X86_BUG_AMD_TLB_MMATCH marks it. */
+int kcpu_amd_erratum_383(void);
+
 /**
  * Call KVM's hypercall `nr` with the arguments `a0` to `a3`, in RBX, RCX,
  * RDX and RSI, by VMMCALL when `vmmcall` is set and VMCALL otherwise, as
