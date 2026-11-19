@@ -617,7 +617,7 @@
         },
         {
           "assertion_id": "hdmi_audio_linux",
-          "checks": "tests/host/hdmi_audio_linux_hosttest.c brings the controller to D0 before the bind, counts a refill's missed laps, converts OSS's default format to the sink's, and tells a stream's owner when the display goes, as Linux does, under ASan and UBSan",
+          "checks": "tests/host/hdmi_audio_linux_hosttest.c brings the controller to D0 before the bind, counts a refill's missed laps, converts OSS's default format to the sink's, tells a stream's owner when the display goes, numbers /proc/asound's analog card 0 and HDMI card 1, and takes root's ELD writes, as Linux does, under ASan and UBSan",
           "source": "scenario"
         },
         {

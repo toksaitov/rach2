@@ -81,9 +81,9 @@ enum vnode_kind {
     VNODE_DEV_MADE,      /* a directory or link root made under /dev, by `syskey` (devtree.h) */
     VNODE_PROC_IRQ_DIR,  /* /proc/irq, pid = -1, or /proc/irq/N, pid = N */
     VNODE_PROC_IRQ_FILE, /* pid = vector; procfile = requested (0), effective (1) */
-    /* /proc/asound, pid = -1, or its card0, pid = 0 (audio/hda_hdmi.h) */
+    /* /proc/asound, pid = -1, or its cardK, pid = K (audio/asound.h) */
     VNODE_PROC_ASOUND_DIR,
-    /* a file of /proc/asound, pid = hdmi_audio_proc_text's `file` */
+    /* a file of /proc/asound, pid = its ASOUND_FILE number */
     VNODE_PROC_ASOUND,
     VNODE_ENOENT, /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR /* under a synthetic mount, a non-dir used as a directory */

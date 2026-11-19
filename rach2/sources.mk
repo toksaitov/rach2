@@ -86,6 +86,7 @@ C_SRC_SHARED = kernel.c \
     sys/block/nvme.c \
     sys/block/virtio_blk.c \
     sys/audio/acomp.c \
+    sys/audio/asound.c \
     sys/audio/audio.c \
     sys/audio/audio_debug.c \
     sys/audio/audio_proc.c \
