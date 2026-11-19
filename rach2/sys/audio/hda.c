@@ -4230,6 +4230,17 @@ void hda_copy_report(hda_report_t *out, int *mode)
     mutex_unlock(&stream_mutex);
 }
 
+int hda_card(pci_device_t *out)
+{
+    if (!hda_base || !hda_report.ready) {
+        return 0;
+    }
+    if (out) {
+        *out = hda_pci;
+    }
+    return 1;
+}
+
 /**
  * Whether a stream whose interrupt last came at tick `since`, and whose
  * period plays for `period_us` microseconds, has gone more than one period

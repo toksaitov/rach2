@@ -388,6 +388,12 @@ void hda_read_queue(void);
  */
 void hda_copy_report(hda_report_t *out, int *mode);
 
+/** Whether the analog card is there, for /proc/asound: 1, with its
+ * controller's PCI function in `*out` unless `out` is NULL, once the
+ * controller and its codec are up; 0 otherwise. Set once at boot, so it
+ * takes no lock. */
+int hda_card(pci_device_t *out);
+
 /**
  * The frames a sample written now waits behind, at the rate the stream was
  * started with: the write ring's and the DMA buffer's ahead of the position,

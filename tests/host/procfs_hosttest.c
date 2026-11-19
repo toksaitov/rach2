@@ -4730,8 +4730,11 @@ int main(int argc, char **argv)
     return failures != 0;
 }
 
-/** The codec address eld#C.N would name; no card is on the model. */
-int hdmi_audio_codec_addr(void)
+/** No sound card on the model: /proc/asound's files have no names. */
+int asound_name(int file, char *name, int cap)
 {
-    return 0;
+    (void)file;
+    (void)name;
+    (void)cap;
+    return -1;
 }

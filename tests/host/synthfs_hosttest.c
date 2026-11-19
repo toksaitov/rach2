@@ -1078,20 +1078,17 @@ int main(int argc, char **argv)
     return fails > 255 ? 255 : fails;
 }
 
-/** No HDMI codec's card on the model: /proc/asound lists none. */
-int hdmi_audio_present(void)
+/** No sound card on the model: /proc/asound lists none. */
+int asound_card_count(void)
 {
     return 0;
 }
 
-/** No ELD files without the card. */
-int hdmi_audio_eld_count(void)
+/** No file in a card's directory without the card. */
+int asound_lookup(int card, const char *name, int len)
 {
-    return 0;
-}
-
-/** The codec address eld#C.N would name. */
-int hdmi_audio_codec_addr(void)
-{
-    return 0;
+    (void)card;
+    (void)name;
+    (void)len;
+    return -1;
 }

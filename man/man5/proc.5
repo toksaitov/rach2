@@ -71,21 +71,35 @@ A request of 512 bytes or more is
 and a write while the kernel runs no ACPI interpreter is
 .Er ENODEV .
 .It Pa /proc/asound
-Linux's ALSA files for the card of the Intel display's HDMI codec, which
+Linux's ALSA files for the sound cards: card 0 the analog HD Audio
+controller's, while its driver runs, and the next the card of the Intel
+display's HDMI codec, which
 .Pa /dev/dsp1
-plays through.
+plays through, card 0 when there is no analog card; with both, card 1 is
+the one
+.Pa /dev/dsp1
+plays, as Linux's OSS emulation ties them.
 .Pa cards
-lists it as Linux does,
-.Ql " 0 [HDMI           ]: HDA-Intel - HDA Intel HDMI"
-and a line with the controller's address and interrupt, or reads
+lists each as Linux does, such as
+.Ql " 0 [PCH            ]: HDA-Intel - HDA Intel PCH" ,
+with the name Linux gives the controller,
+.Ql "HDA Intel PCH" ,
+.Ql "HDA Intel" ,
+.Ql "HDA NVidia"
+or
+.Ql "HD-Audio Generic" ,
+and a line with its address and interrupt, or reads
 .Ql --- no soundcards ---
-while the card is not there.
+while there is none.
 The directory
-.Pa card0 ,
-there only with the card, has
+.Pa card Ns Ar K
+of each card has
 .Pa id ,
-.Ql HDMI ,
-and
+the last word of that name, such as
+.Ql PCH
+or
+.Ql HDMI ;
+the HDMI card's also has
 .Pa eld# Ns Ar C . Ns Ar N
 for each device entry
 .Ar N
@@ -98,7 +112,32 @@ in the form of Linux's
 the pin, entry and converter, and for a valid ELD the monitor's name,
 connection type, versions, IDs, latency, speakers and each short audio
 descriptor.
-HDA's analog codec and the Sound Blaster 16 are not listed.
+An ELD file is mode 0644, and root may write it, as on Linux: at the last
+close, each line of a field's name and a hex value sets that field, from
+.Ql monitor_present ,
+.Ql eld_valid ,
+.Ql connection_type ,
+.Ql port_id ,
+.Ql support_hdcp ,
+.Ql support_ai ,
+.Ql audio_sync_delay ,
+.Ql speakers ,
+.Ql sad_count
+and
+.Ql sad Ns Ar N Ns _coding_type ,
+.Ql _channels ,
+.Ql _rates ,
+.Ql _bits ,
+.Ql _byte2
+and
+.Ql _profile ;
+the monitor's name, IDs and versions are kept.
+What was written changes what the file reads and what the next open of
+.Pa /dev/dsp1
+allows, until the display sends the monitor's ELD again.
+A write past 16 KiB is
+.Er EIO .
+The Sound Blaster 16 is not listed.
 .It Pa /proc/audio
 The active audio driver and cached HDA enumeration and stream state.
 The file exists when audio is disabled; then

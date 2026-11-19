@@ -16,10 +16,15 @@
  * Linux's OSS plugins do; and the display's going stops the stream, gives
  * the display's power back, tells the stream's owner, and leaves a stream
  * that cannot start again once the display is back, whose close gives
- * nothing more back.
+ * nothing more back. /proc/asound numbers the PCH's analog card 0 and the
+ * HDMI card 1, with Linux's names and ids, and root's write to an ELD file
+ * sets the fields Linux's snd_hdmi_write_eld_info sets, its reads bounded
+ * where Linux's index past their tables.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
+
+#include <string.h>
 
 #define main hdmi_audio_rows
 #include "hdmi_audio_hosttest.c"
@@ -147,12 +152,107 @@ static void row_gone(void)
     check(display_power == 0, "gone: and gives it back");
 }
 
+/** The PCH's analog controller of a Haswell laptop, 8086:9C20 at 00:1b.0. */
+static const pci_device_t pch = {0x8086, 0x9c20, 4, 3, 0, 4, 0, 0x1b, 0, 10, {0}};
+
+/** The analog card numbered 0 and the HDMI card 1, with Linux's names. */
+static void row_cards(void)
+{
+    static const char cards[] = " 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n"
+                                "                      HDA Intel PCH at 0xf7e30000 irq 10\n"
+                                " 1 [HDMI           ]: HDA-Intel - HDA Intel HDMI\n"
+                                "                      HDA Intel HDMI at 0xf7e34000 irq 11\n";
+    pci_device_t other = pch;
+    char name[24];
+    int eld = ASOUND_FILE(1, ASOUND_ELD);
+
+    analog_card = &pch;
+    check(asound_card_count() == 2 && strcmp(proc(ASOUND_CARDS), cards) == 0,
+          "cards: PCH 0 and HDMI 1, in Linux's lines");
+    check(strcmp(proc(ASOUND_FILE(0, ASOUND_ID)), "PCH\n") == 0 &&
+              strcmp(proc(ASOUND_FILE(1, ASOUND_ID)), "HDMI\n") == 0,
+          "cards: card0/id PCH, card1/id HDMI");
+    check(asound_lookup(1, "eld#0.0", 7) == eld && asound_lookup(0, "eld#0.0", 7) == -1 &&
+              asound_lookup(1, "eld#0.", 6) == -1 && asound_lookup(2, "id", 2) == -1,
+          "cards: the ELD files are card1's");
+    check(asound_name(eld, name, (int)sizeof(name)) == 0 && strcmp(name, "eld#0.0") == 0 &&
+              asound_entry(1, 1) == eld && asound_entry(0, 1) == -1,
+          "cards: card1 lists eld#0.0 after its id");
+    check(asound_mode(eld) == 0644 && asound_mode(ASOUND_FILE(1, ASOUND_ID)) == 0444 &&
+              asound_mode(ASOUND_CARDS) == 0444,
+          "cards: an ELD file is 0644, the others 0444");
+    check(strstr(proc(eld), "monitor_name\t\tIGT\n") != NULL, "cards: card1's eld#0.0 is IGT's");
+    other.device_id = 0x293e;
+    analog_card = &other;
+    check(strncmp(proc(ASOUND_CARDS), " 0 [Intel          ]: HDA-Intel - HDA Intel\n", 44) == 0,
+          "cards: ICH9's function is HDA Intel, id Intel");
+    other.vendor_id = 0x1022;
+    check(strncmp(proc(ASOUND_CARDS), " 0 [Generic        ]: HDA-Intel - HD-Audio Generic\n", 51) ==
+              0,
+          "cards: another vendor's is HD-Audio Generic");
+    analog_card = &pch;
+}
+
+/** Root's write to an ELD file, as Linux's snd_hdmi_write_eld_info takes it. */
+static void row_eld_write(void)
+{
+    static const char text[] = "monitor_name Foo\n"
+                               "monitor_present 0\n"
+                               "manufacture_id 0x1234\n"
+                               "connection_type 7\n"
+                               "port_id 0x123456789a\n"
+                               "speakers 0x1\n"
+                               "sad1_channels 0x5\n"
+                               "sad20_rates 0x1\n"
+                               "no value here\n"
+                               "audio_sync_delay 0xffffffff";
+    const struct hh_pin *p = &hh_pins[0];
+    int eld = ASOUND_FILE(1, ASOUND_ELD);
+
+    check(asound_write(eld, text, (int)sizeof(text) - 1) == 0, "eld write: taken");
+    check(p->monitor_present == 0 && p->eld_valid == 1 && strcmp(p->info.monitor_name, "IGT") == 0,
+          "eld write: monitor_present set, the name kept");
+    check(p->info.conn_type == 7 && p->info.port_id == 0x123456789aull && p->info.spk_alloc == 1 &&
+              p->info.sad[1].channels == 5 && p->info.sad_count == 2 &&
+              p->info.aud_synch_delay == -1,
+          "eld write: the fields set, SAD 1 counted, SAD 20 passed over");
+    check(strstr(proc(eld), "connection_type\t\treserved\n") != NULL &&
+              strstr(proc(eld), "audio_sync_delay\t-1\n") != NULL &&
+              strstr(proc(eld), "port_id\t\t\t0x123456789a\n") != NULL &&
+              strstr(proc(eld), "manufacture_id\t\t0x1234") == NULL,
+          "eld write: read back, a type past the table named reserved");
+    check(asound_write(eld, "sad_count 0x30\nsad:_channels 3\n", 31) == 0 &&
+              p->info.sad_count == 0x30 && p->info.sad[10].channels == 3 &&
+              strstr(proc(eld), "sad15_coding_type") != NULL && strstr(proc(eld), "sad16_") == NULL,
+          "eld write: a count past the table prints the 16 SADs there");
+    check(asound_write(ASOUND_FILE(1, ASOUND_ID), "x 1\n", 4) == -EACCES &&
+              asound_write(ASOUND_FILE(0, ASOUND_ELD), "x 1\n", 4) == -ENOENT,
+          "eld write: only an ELD file of the HDMI card");
+}
+
+/** The analog card alone once the display goes. */
+static void row_analog_alone(void)
+{
+    acomp_unregister_display(&disp_dev);
+    check(asound_card_count() == 1 &&
+              strcmp(proc(ASOUND_CARDS), " 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n"
+                                         "                      HDA Intel PCH at 0xf7e30000 irq "
+                                         "10\n") == 0 &&
+              asound_text(ASOUND_FILE(1, ASOUND_ID), NULL, 0) == -ENOENT,
+          "analog alone: card 0 is listed, card1 gone");
+    analog_card = NULL;
+    check(strcmp(proc(ASOUND_CARDS), "--- no soundcards ---\n") == 0, "no card: none listed");
+}
+
 int main(void)
 {
     row_d0();
     row_laps();
     row_convert();
     row_gone();
+    row_cards();
+    row_eld_write();
+    row_analog_alone();
     if (failures == 0) {
         printf("hdmi-audio-linux-test: ok\n");
     }

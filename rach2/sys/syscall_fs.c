@@ -73,7 +73,7 @@
 #include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
-#include "audio/hda_hdmi.h"
+#include "audio/asound.h"
 #include "network/socket/socket.h"
 #include "network/socket/netlink.h"
 #include "network/socket/packet.h"
@@ -9950,7 +9950,9 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     case VNODE_PROC_ASOUND_DIR:
         return synth_proc_dir_stat(kst, procfs_ino_asound(-1, vp->pid));
     case VNODE_PROC_ASOUND:
-        return synth_proc_stat(kst, procfs_ino_asound(vp->pid, 0));
+        synth_proc_stat(kst, procfs_ino_asound(vp->pid, 0));
+        kst->st_mode = S_IFREG | (uint32_t)asound_mode(vp->pid);
+        return 0;
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -20066,37 +20068,33 @@ static const struct {
                           {"filesystems", procfs_ino_filesystems, DT_REG}};
 
 /**
- * List /proc/asound, `card` -1, whose cards file is there always and card0
- * while the HDMI codec is, or card0, `card` 0, with its id and its ELD files
- * (audio/hda_hdmi.h).
+ * List /proc/asound, `card` -1, whose cards file is there always and a
+ * cardK directory for each card there, or cardK, `card` K, with its id and
+ * the HDMI card's ELD files (audio/asound.h).
  */
 static int synth_asound_dirent(int card, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
-    char eld[16];
-    int k = 0, v = hdmi_audio_codec_addr();
+    char entry[24];
+    int file;
 
     if (card < 0) {
-        return n == 0 ? synth_entry("cards", procfs_ino_asound(0, 0), DT_REG, name, ino, dtype)
-               : n == 1 && hdmi_audio_present()
-                   ? synth_entry("card0", procfs_ino_asound(-1, 0), DT_DIR, name, ino, dtype)
-                   : 0;
+        if (n == 0) {
+            return synth_entry("cards", procfs_ino_asound(ASOUND_CARDS, -1), DT_REG, name, ino,
+                               dtype);
+        }
+        if (n - 1 >= asound_card_count()) {
+            return 0;
+        }
+        k_memcpy(entry, "card", 4);
+        entry[4] = (char)('0' + (n - 1) % 10);
+        entry[5] = '\0';
+        return synth_entry(entry, procfs_ino_asound(-1, n - 1), DT_DIR, name, ino, dtype);
     }
-    if (n == 0) {
-        return synth_entry("id", procfs_ino_asound(1, 0), DT_REG, name, ino, dtype);
-    }
-    if (n > hdmi_audio_eld_count() || n > 9) {
+    file = asound_entry(card, n);
+    if (file < 0 || asound_name(file, entry, (int)sizeof(entry)) != 0) {
         return 0;
     }
-    k_memcpy(eld, "eld#", 4);
-    k = 4;
-    if (v >= 10) {
-        eld[k++] = (char)('0' + v / 10);
-    }
-    eld[k++] = (char)('0' + v % 10);
-    eld[k++] = '.';
-    eld[k++] = (char)('0' + n - 1);
-    eld[k] = '\0';
-    return synth_entry(eld, procfs_ino_asound(n + 1, 0), DT_REG, name, ino, dtype);
+    return synth_entry(entry, procfs_ino_asound(file, card), DT_REG, name, ino, dtype);
 }
 
 /** List one message directory, the live message numbers, or the fixed

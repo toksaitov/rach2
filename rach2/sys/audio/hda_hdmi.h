@@ -52,11 +52,22 @@ int hdmi_audio_eld_count(void);
 int hdmi_audio_codec_addr(void);
 
 /**
- * Write /proc/asound's text into `buf`, at most `cap` bytes, and return its
- * length; with `buf` NULL only measure it. `file` 0 is /proc/asound/cards,
- * 1 the card's `id`, and 2 + N its eld#C.N, in Linux's
- * snd_hdmi_print_eld_info's form. -ENOENT for a file the card lacks.
+ * Write the HDMI card's text of /proc/asound into `buf`, at most `cap`
+ * bytes, and return its length; with `buf` NULL only measure it. `file` 0
+ * is the card's two lines of /proc/asound/cards, numbered `index`; 1 its
+ * `id`; and 2 + N its eld#C.N, in Linux's snd_hdmi_print_eld_info's form.
+ * -ENOENT while the card is not there, or for a file it lacks.
  */
-int hdmi_audio_proc_text(int file, char *buf, int cap);
+int hdmi_audio_proc_text(int file, int index, char *buf, int cap);
+
+/**
+ * Apply `len` bytes written to eld#C.N, N being `n`, as Linux's
+ * snd_hdmi_write_eld_info does at the file's close: each line of a field's
+ * name and a hex value sets that field of the entry's ELD, which the next
+ * read and the next open of /dev/dsp1 see; the monitor's name, IDs and
+ * versions are not set. 0, or -ENOENT while the card or the entry is not
+ * there. Process context; takes the driver's mutex.
+ */
+int hdmi_audio_eld_write(int n, const char *text, int len);
 
 #endif /* _HDA_HDMI_H_ */

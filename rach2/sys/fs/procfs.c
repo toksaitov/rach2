@@ -49,7 +49,7 @@
 #include "../usb/core.h"
 #include "../pci.h"
 #include "../audio/audio_proc.h"
-#include "../audio/hda_hdmi.h"
+#include "../audio/asound.h"
 #include "../speaker.h"
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
@@ -2881,19 +2881,20 @@ static void synth_dir_target(struct procfs_text *t, const fd_entry_t *e)
     }
 }
 
-/** Append the path of /proc/asound's file `file`, as hdmi_audio_proc_text
- * numbers it. */
+/** Append the path of /proc/asound's file `file` (audio/asound.h), its
+ * card's directory and the name the file has now. */
 static void procfs_asound_path(struct procfs_text *t, int file)
 {
-    if (file == 0) {
-        ap_str(t, "/proc/asound/cards");
-    } else if (file == 1) {
-        ap_str(t, "/proc/asound/card0/id");
-    } else {
-        ap_str(t, "/proc/asound/card0/eld#");
-        ap_u32(t, (uint32_t)hdmi_audio_codec_addr());
-        ap_ch(t, '.');
-        ap_u32(t, (uint32_t)(file - 2));
+    char name[24];
+
+    ap_str(t, "/proc/asound/");
+    if (file != ASOUND_CARDS) {
+        ap_str(t, "card");
+        ap_u32(t, (uint32_t)(file / ASOUND_PER_CARD));
+        ap_ch(t, '/');
+    }
+    if (asound_name(file, name, (int)sizeof(name)) == 0) {
+        ap_str(t, name);
     }
 }
 
@@ -3316,7 +3317,7 @@ uint32_t procfs_ino_lockwait(void)
 
 uint32_t procfs_ino_asound(int file, int card)
 {
-    return file >= 0 ? 0x30010u + (uint32_t)file : 0x30000u + (card >= 0);
+    return file >= 0 ? 0x30010u + (uint32_t)file : 0x30000u + (uint32_t)(card + 1);
 }
 
 uint32_t procfs_ino_asounddir(void)
@@ -8355,19 +8356,19 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
  * needed more room than the snapshot's first measure runs again with it.
  */
 /**
- * Render the file of /proc/asound that hdmi_audio_proc_text numbers `file`:
- * the cards, card0's id, or one of its ELD files. -ENOENT for a file the
- * card no longer has.
+ * Render the file of /proc/asound numbered `file` (audio/asound.h): the
+ * cards, a card's id, or one of the HDMI card's ELD files. -ENOENT for a
+ * file the cards no longer have.
  */
 static int procfs_gen_asound(struct procfs_text *t, int file)
 {
-    int n = hdmi_audio_proc_text(file, NULL, 0);
+    int n = asound_text(file, NULL, 0);
     int m;
 
     while (n >= 0) {
         if (procfs_text_room(t, t->len + n) < 0)
             return -1;
-        m = hdmi_audio_proc_text(file, t->buf + t->len, n);
+        m = asound_text(file, t->buf + t->len, n);
         if (m <= n) {
             n = m;
             break;
@@ -8588,6 +8589,9 @@ int procfs_fd_writable(struct fd_entry *e)
     }
     if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
         return 0600;
+    }
+    if (f->origin_file == SYNTH_PROC_ASOUND && asound_mode(f->origin_pid) == 0644) {
+        return 0644;
     }
     if (f->origin_file == SYNTH_PROC_SYSCTL) {
         return (int)synth_sys_mode(f->origin_pid);
@@ -10376,6 +10380,131 @@ static const struct file_ops procfs_acpicall_ops = {procfs_acpicall_read,
                                                     NULL,
                                                     0};
 
+/* The bytes a write open of an ELD file takes, as Linux's
+ * snd_info_text_entry_write takes at most 16 KiB. */
+#define ASOUND_WRITE_MAX (16u * 1024u)
+
+/** Read an ELD file open for reading and writing, its text made afresh at
+ * each read. */
+static int32_t procfs_asound_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    struct procfs_text t;
+    uint64_t off = e->ofd->offset;
+    uint32_t n = 0;
+    int rc;
+
+    procfs_text_init(&t);
+    rc = procfs_gen_asound(&t, f->origin_pid);
+    if (rc >= 0 && !t.nomem && off < (uint32_t)t.len) {
+        n = count < (uint32_t)t.len - (uint32_t)off ? count : (uint32_t)t.len - (uint32_t)off;
+        if (copy_to_user(buf, t.buf + (uint32_t)off, n)) {
+            rc = -EFAULT;
+        }
+    }
+    kfree(t.buf);
+    if (rc < 0 || t.nomem) {
+        return t.nomem ? -ENOMEM : rc;
+    }
+    e->ofd->offset += n;
+    return (int32_t)n;
+}
+
+/**
+ * Keep the bytes written to an ELD file at the description's offset, as
+ * Linux's snd_info_text_entry_write keeps them for the release: the count,
+ * -EIO past ASOUND_WRITE_MAX, -ENOMEM or -EFAULT.
+ */
+static int32_t procfs_asound_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    uint64_t off = e->ofd->offset;
+
+    if (off > ASOUND_WRITE_MAX || count > ASOUND_WRITE_MAX - (uint32_t)off) {
+        return -EIO;
+    }
+    if (!f->data) {
+        f->data = (char *)kzalloc(ASOUND_WRITE_MAX);
+        if (!f->data) {
+            return -ENOMEM;
+        }
+    }
+    if (copy_from_user(f->data + (uint32_t)off, buf, count) != 0) {
+        return -EFAULT;
+    }
+    if ((uint32_t)off + count > (uint32_t)f->len) {
+        f->len = (int)((uint32_t)off + count);
+    }
+    e->ofd->offset = off + count;
+    return (int32_t)count;
+}
+
+/** Apply what was written to the ELD file, as Linux's
+ * snd_info_text_entry_release calls the entry's write, then free the
+ * descriptor's record; at the description's last close. */
+static void procfs_asound_close(fd_entry_t *e)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+
+    if (f && f->data && f->len > 0) {
+        (void)asound_write(f->origin_pid, f->data, f->len);
+    }
+    procfs_close(e);
+}
+
+static const struct file_ops procfs_asound_ops = {procfs_asound_read,
+                                                  procfs_asound_write,
+                                                  procfs_poll,
+                                                  procfs_ioctl,
+                                                  procfs_asound_close,
+                                                  NULL,
+                                                  NULL,
+                                                  0};
+
+/**
+ * Open the file of /proc/asound numbered `file` for writing, alone or with
+ * reading: an ELD file, mode 0644 and owned by root, and a privileged
+ * caller, or -EACCES. O_CREAT and O_TRUNC are taken as they are for a file
+ * that exists, which a shell's redirection asks for. The ELD takes what was
+ * written at the last close.
+ */
+static int procfs_open_asound(int file, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (acc == 3 || asound_mode(file) != 0644 || !proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_PROC_ASOUND;
+    f->origin_pid = file;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = fd_slot(current_proc->fds, fd);
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_asound_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
+    fd_install(current_proc->fds, fd);
+    return fd;
+}
+
 /**
  * Open /proc/acpi/call, which needs a privileged caller, as its mode, 0600
  * and owned by root, says. O_CREAT and O_TRUNC are taken as they are for a
@@ -10983,8 +11112,9 @@ static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid,
 /**
  * Open the file `vp` names, of process `pid` when it is one of a process,
  * through the open of its own when it has one: oom_score_adj, a write of an
- * ID map or comm, mem, a /proc/sys file, the ACPI call file, a
- * PCI function's config and BAR files, and a write of a /sys attribute.
+ * ID map or comm, mem, a /proc/sys file, the ACPI call file, a write of
+ * an ELD file of /proc/asound, a PCI function's config and BAR files, and a
+ * write of a /sys attribute.
  * Returns 1 with the open's answer in `*fd`, or 0 for a file with none.
  */
 static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
@@ -11004,6 +11134,8 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
         *fd = procfs_open_sysctl(vp->sysent, flags);
     } else if (vp->kind == VNODE_PROC_ACPI_CALL) {
         *fd = procfs_open_acpicall(flags);
+    } else if (vp->kind == VNODE_PROC_ASOUND && acc != 0) {
+        *fd = procfs_open_asound(vp->pid, flags);
     } else if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
                (vp->procfile == SYSFS_PCI_CONFIG || vp->procfile >= SYSFS_PCI_RESOURCE0)) {
         *fd = vp->procfile == SYSFS_PCI_CONFIG ? procfs_open_pciconfig(vp, flags)
