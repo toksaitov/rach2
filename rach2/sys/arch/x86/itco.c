@@ -501,7 +501,7 @@ static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 
 static const struct file_ops itco_ops = {NULL,       itco_write, NULL, itco_ioctl,
                                          itco_close, NULL,       NULL, 0};
-static struct devfs_node itco_node = {"watchdog", 10, 130, 0600, &itco_ops, itco_open, NULL};
+static struct devfs_node itco_node = {"watchdog", 10, 130, 0600, &itco_ops, itco_open, NULL, 0};
 
 /**
  * The number option `key`: `dflt` when the line lacks it, else the last of

@@ -936,8 +936,8 @@ static struct devfs_node group_nodes[VFIO_GROUPS_MAX];
 
 /* /dev/vfio/vfio, the misc device 10:196, 0666 as Linux has it. */
 static int32_t container_node_open(struct devfs_node *node, struct fd_entry *e, int flags);
-static struct devfs_node container_node = {"vfio/vfio",         10,  196, 0666, &vfio_container_ops,
-                                           container_node_open, NULL};
+static struct devfs_node container_node = {
+    "vfio/vfio", 10, 196, 0666, &vfio_container_ops, container_node_open, NULL, 0};
 
 /** An open of /dev/vfio/vfio makes a container. */
 static int32_t container_node_open(struct devfs_node *node, struct fd_entry *e, int flags)
