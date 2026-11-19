@@ -110,6 +110,25 @@ as
 .Xr ideapad 4
 describes.
 .Pp
+The slots of bus 0's host bridge, its children with
+.Ql _ADR
+and
+.Ql _EJ0 ,
+take PCI hot plug, as Linux's acpiphp does.
+A Notify 1 on a slot, which QEMU's GPE method sends after
+.Ql device_add ,
+lists the card's functions, gives their BARs addresses in the host
+bridge's windows from its
+.Ql _CRS ,
+and gives a virtio function to its driver, as
+.Xr virtio-net 4
+describes; a Notify 3, after
+.Ql device_del ,
+has the driver let go of the card, takes it off the bus and runs the
+slot's
+.Ql _EJ0 ,
+after which the card may go.
+.Pp
 .Pa /proc/acpi/call
 evaluates a method by its path for root, as
 .Xr proc 5
@@ -303,6 +322,20 @@ is a Notify 0x80 on a power button device, and
 the same of a sleep button.
 .It Ql acpi: event: video bus: output notify 0xV: key K
 A video bus's Notify reported as key K.
+.It Ql pci: hotplug: N slots on bus 0, M windows
+The host bridge's hot plug slots and the windows its BARs are given from.
+.It Ql pci: hotplug: added: 00:DD.F VVVV:DDDD
+A function of a card put in is listed;
+.Ql , without addresses
+follows when a BAR fit no window, and no driver is given the function.
+.It Ql pci: hotplug: removed: 00:DD.F
+A function of a card to eject is off the bus.
+.It Ql pci: hotplug: ejected: slot D
+The slot's
+.Ql _EJ0
+ran.
+.It Ql pci: hotplug: kept: 00:DD.F: DRIVER cannot let go of it
+A card that DRIVER has is not ejected.
 .It Ql acpi: call: PATH: RESULT
 A write of
 .Pa /proc/acpi/call
@@ -329,6 +362,13 @@ The restart writes the FADT's reset register.
 .Xr proc 5 ,
 .Xr halt 8
 .Sh CAVEATS
+A Notify, and every GPE's method, runs on the kernel thread
+.Ql kacpid ,
+which starts with the first program and does not run while the debug
+shell waits at its prompt.
+PCI hot plug covers bus 0 alone, gives a card to virtio-pci alone, and
+does not eject a card another driver has.
+.Pp
 The kernel does not ask ACPICA for a PCI device's interrupt routing,
 .Ql _PRT .
 A device without MSI is served on the ISA line its interrupt line

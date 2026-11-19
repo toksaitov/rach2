@@ -103,6 +103,20 @@ for the lowest
 .Ar N
 free, with a new index, down, as Linux leaves a new interface until it is
 set up.
+.Pp
+A card put in a slot of the machine's bus 0 after boot, QEMU's
+.Ql device_add ,
+is announced by the firmware's ACPI hot plug, given addresses and brought
+up on a new interface as a write of
+.Pa bind
+brings it up; one the firmware asks to eject,
+.Ql device_del ,
+is let go of as a write of
+.Pa unbind
+lets go of it before the slot's
+.Ql _EJ0
+runs
+.Pq Xr acpi 4 .
 .Sh LIMITS
 The pairs in use change only as processors start; there is no
 .Ql ethtool -L .
@@ -126,6 +140,7 @@ Boot os-real in QEMU with the device, from rach2/:
 $ NIC=virtio-net-pci ./run.sh os-real
 .Ed
 .Sh SEE ALSO
+.Xr acpi 4 ,
 .Xr vfio 4 ,
 .Xr virtio-gpu 4 ,
 .Xr sysfs 5 ,

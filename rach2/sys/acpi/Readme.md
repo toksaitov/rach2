@@ -44,6 +44,7 @@ ACPICA's core is vendored under [`vendor/acpica/`](../../../vendor/acpica/Readme
 * `boot.c` brings ACPICA up and starts the devices among its steps.
 * `ecio.c` is the embedded controller's command protocol over its two ports, and `ec.c` the controller on ACPICA: its address space and its queries.
 * `button.c` is the power and sleep buttons, `video.c` the video buses, and `ideapad.c` the IdeaPad's `VPC2004`.
+* `pcihp.c` is PCI hot plug through the slots of bus 0's host bridge, as Linux's acpiphp.
 * `pnp.c` finds the 8042's keyboard and PS/2 mouse among the present devices with `_CRS`, as Linux's pnpacpi and i8042 PNP drivers do, and gives their `_HID` and `_CID`s to `i8042_pnp_device`, whose firmware ID chooses the touchpad's quirks ([`sys/arch/x86/`](../arch/x86/Readme.md)).
 * `call.c` is `/proc/acpi/call`.
 * `sleep.c` is the power off.
@@ -88,6 +89,14 @@ The bring-up takes about 30 ms on QEMU's machines. It runs after the scheduler i
 
 The protocol and the events are apart from ACPICA's types in `ideapad.c`, behind `struct ideapad_ops`, and its ACPICA glue is left out under `RACH2_HOSTTEST`, so that a host test drives the driver over a model of the methods.
 
+### PCI hot plug
+
+`pcihp.c` takes the hot plug slots of the first host bridge, `PNP0A03` or a bridge whose `_CID` names it, of bus 0, as Linux's acpiphp does: each child device with `_ADR` and `_EJ0` is a slot, device `_ADR >> 16` of bus 0, with a system notify handler. QEMU's `pc` machine has 30, every slot but the host bridge's and the PIIX's, and its GPE 1 method, `_E01`, sends Notify 1, Device Check, to a slot QMP's `device_add` filled and Notify 3, Eject Request, to one `device_del` empties. The bridge's `_CRS` gives its windows, each range of ports and of memory at or above 1 MiB, as Linux's acpi_pci_root_create reads them; the boot logs `pci: hotplug: N slots on bus 0, M windows`.
+
+* A Bus or Device Check lists the slot's functions the PCI list lacks (`pci_slot_add`), gives each BAR without an address the lowest free one in the windows (`pci_assign_bars`, [the kernel's PCI](../pci.h)), sends the function's `add` uevent and gives it to virtio-pci (`virtio_pci_bind`), the driver that takes a function after boot, as Linux's bus probes its drivers; it logs `pci: hotplug: added: 00:DD.F VVVV:DDDD`, with `, without addresses` for a function whose BARs fit nowhere, which no driver is given.
+* An Eject Request has virtio-pci let go of each function of the slot it has (`virtio_pci_unbind`), as Linux's acpiphp removes the drivers; turns each function's decoding off, sends its `remove` uevent and takes the slot off the list (`pci_slot_remove`); then runs the slot's `_EJ0 (1)`, after which QEMU takes the card away and sends `DEVICE_DELETED`. It logs `pci: hotplug: removed: 00:DD.F` for each function and `pci: hotplug: ejected: slot D`.
+* Both run on `kacpid`, under the big lock that every search of the PCI list holds.
+
 ### /proc/acpi/call
 
 `acpi_call_write` copies the request, splits it into its path and up to seven integer or string arguments, and evaluates the path with `AcpiEvaluateObject` in the writer's process, where a method may sleep. The result is kept as text, under a spinlock, for the next read by anyone: an integer, a string, a buffer, a package of them up to four deep, nothing as `0x0`, or the error, as Linux's `acpi_call` spells them. Each call is logged as `acpi: call: PATH: RESULT`. A Notify the method gives runs after it, on `kacpid`.
@@ -109,13 +118,15 @@ The source checks, `check_sources.sh`, `fmtcheck.sh` and `srclists.sh`, read the
 * The lid, `PNP0C0D`, has no driver; its Notify is dropped. Of the IdeaPad's `VPC2004`, the novo button, the touchpad's switch, the camera's and Bluetooth's switches, the keyboard's Fn lock and the backlight are not driven, and only the first device is taken.
 * `/proc/acpi/call` takes no buffer or package arguments, and a result longer than 511 bytes is cut.
 * The kernel asks ACPICA for no `_PRT`, and no device is routed by it.
-* Work an SCI queues before the first program starts, as under the debug shell, waits for `kacpid`.
+* Work an SCI queues waits for `kacpid`, which starts with the first program and does not run while the debug shell waits at its prompt, since the shell runs in a process's place and lets no thread run: a GPE's method, a PCI hot plug among them, runs once a program does.
+* PCI hot plug covers the slots of bus 0's host bridge, not those behind a bridge. A card put in is given to virtio-pci alone: a function of another kind is listed without a driver. A card another driver has, vfio-pci or a driver bound at boot that cannot let go of its card, is not ejected, with the record `pci: hotplug: kept: 00:DD.F: DRIVER cannot let go of it`. An I/O BAR is given ports from 0xC000, where the PC's firmware puts the functions' own, since the fixed ports below, ACPI's and the hot plug controller's, are not read from the namespace as Linux reads them.
 * 256 windows of memory; a table or region past them is not mapped.
 * ACPICA's debugger and disassembler are not compiled.
 
 ## Tests
 
 * `tests/run acpi` boots the test image on QEMU's `pc` and `q35` machines, on each architecture, and requires the records `acpi: acpica: N objects, 0 errors` and `acpi: sci: line N`, and after QMP's `system_powerdown` `acpi: event: power button` and `KEY_POWER` on "Power Button", which `tests/evprobe.c` reads. Its video case gives QEMU the SSDT `tests/cases/machine/acpi_video.asl`, a video bus of one output, compiled by the pinned release's `iasl` into the `.aml` beside it; evprobe calls its methods through `/proc/acpi/call`, with arguments, and must read `KEY_BRIGHTNESSDOWN` and `KEY_BRIGHTNESSUP` from its `\RTST`. A boot with `rach2.noacpica` requires the record that ACPICA was skipped and a power off through `\_S5`. QEMU has no embedded controller, which only the Lenovo shows.
+* `tests/run virtionet`'s `machine.virtionet.hotplug` boots the test image with no card and puts a virtio-net card in slot 6 and takes it out through QMP while vnetprobe runs, on each architecture ([network](../network/Readme.md)).
 * `tests/host/acpi_ec_hosttest.c` runs `ecio.c` against a model of a controller's ports, its timeouts among them.
 * `tests/host/acpi_mapcache_hosttest.c` runs `mapcache.c` over a model map.
 * `tests/host/ideapad_hosttest.c` runs `ideapad.c` over a model of `VPCR` and `VPCW` as the G50-70 answers them, and `tests/host/airplane_hosttest.c` the airplane key's action over a switch class of its own.
