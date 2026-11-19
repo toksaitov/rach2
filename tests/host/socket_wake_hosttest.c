@@ -219,6 +219,13 @@ void tcp_close(struct socket *sock)
     (void)sock;
 }
 
+/** Give back a stream's bound port in TCP's table: a no-op, since no row
+ * binds one. */
+void tcp_port_unhold(uint16_t port)
+{
+    (void)port;
+}
+
 /** Announce a TCP receive window: a no-op. */
 void tcp_window_update(struct socket *sock)
 {
