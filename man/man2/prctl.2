@@ -238,6 +238,10 @@ keeps them.
 .It Bq Er EFAULT
 The name, the signal or the child subreaper mark cannot be read or
 written at the second argument.
+.It Bq Er EINTR
+.Dv PR_SET_THP_DISABLE
+waited for another thread's change of the address space and SIGKILL came
+first; the setting is as it was.
 .It Bq Er EINVAL
 .Fa option
 is none of those above, the signal is past 64, the dumpable value is
