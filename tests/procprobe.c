@@ -875,49 +875,6 @@ static int last_row_has_fields(const char *text, int n)
     return 1;
 }
 
-/**
- * The inode on the last row of /proc/net/tcp.
- *
- * Read backwards from the fixed columns every row ends with rather than by
- * counting fields forwards: the row has colons inside two of its fields, so
- * counting depends on a rule about separators that the reader does not share.
- * What both agree on is that the inode is the last number before that tail.
- */
-static int last_row_inode(const char *b, int n)
-{
-    const char *tail = " 1 0000000000000000 100 0 0 10 0 wnd=";
-    int taillen = (int)strlen(tail);
-    int i, end, start, v = 0;
-
-    for (i = n - taillen; i >= 0; i--) {
-        int j;
-
-        for (j = 0; j < taillen && b[i + j] == tail[j]; j++) {
-        }
-        if (j == taillen) {
-            break;
-        }
-    }
-    if (i < 0) {
-        return -1;
-    }
-    end = i; /* one past the inode's last digit */
-    while (end > 0 && b[end - 1] == ' ') {
-        end--;
-    }
-    start = end;
-    while (start > 0 && b[start - 1] >= '0' && b[start - 1] <= '9') {
-        start--;
-    }
-    if (start == end) {
-        return -1;
-    }
-    for (i = start; i < end; i++) {
-        v = v * 10 + (b[i] - '0');
-    }
-    return v;
-}
-
 /** Count rows whose uid field is `want`, and rows whose uid is 0. */
 static void count_row_owners(const char *b, int n, int want, int *matching, int *root)
 {
@@ -2960,6 +2917,40 @@ static void memory_file_rows(void)
           "/proc/swaps has Linux's header and no swap area");
 }
 
+/* The pool's read of /proc/net/tcp, with room for the TIME_WAIT rows that
+ * other programs' connections may have left beside the pool's. */
+static char pool_buf[32768];
+
+/** How many of the pool's listeners, each at 0.0.0.0 on its port in state
+ * 0A (LISTEN), the table `b` of `n` bytes has a row for, and 0 when the
+ * header is missing. */
+static int pool_rows(const char *b, int n)
+{
+    static const char head[] = " 00000000", tail[] = "00000000:0000 0A ";
+    char row[32], port[7];
+    int i, k, j, rows = 0;
+
+    if (!has_line_starting(b, n, "  sl ")) {
+        return 0;
+    }
+    for (i = 0; i < MAX_TCP_ROWS; i++) {
+        port_text(port, i < FILL_CHILD ? 9000 + i : 9100 + i - FILL_CHILD);
+        k = 0;
+        for (j = 0; head[j] != '\0'; j++) {
+            row[k++] = head[j];
+        }
+        for (j = 0; port[j] != '\0'; j++) {
+            row[k++] = port[j];
+        }
+        for (j = 0; tail[j] != '\0'; j++) {
+            row[k++] = tail[j];
+        }
+        row[k] = '\0';
+        rows += contains(b, n, row);
+    }
+    return rows;
+}
+
 /**
  * Many rows. MAX_TCP_ROWS listening sockets, FILL_CHILD of them in a child
  * and the rest here, give /proc/net/tcp a header and a row for each, and the
@@ -2998,14 +2989,14 @@ static void pool_full_rows(void)
               "a listening socket for the parent's half of the pool");
     }
 
-    n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
+    n = slurp("/proc/net/tcp", pool_buf, (int)sizeof(pool_buf));
     check("pool-tcp-reads", n > 0, "/proc/net/tcp reads with the pool full");
-    check_machine("pool-one-read", n < (int)sizeof(buf) - 1,
+    check_machine("pool-one-read", n < (int)sizeof(pool_buf) - 1,
                   "and the whole file fit in one read, so nothing was cut");
-    check_machine("pool-row-count", lines_in(buf, n) == MAX_TCP_ROWS + 1,
+    check_machine("pool-row-count", pool_rows(pool_buf, n) == MAX_TCP_ROWS,
                   "a full pool prints a header and one row for every block");
     check_machine("pool-last-row-whole",
-                  ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+                  ends_with(pool_buf, n, "\n") && contains(pool_buf, n, " 100 0 0 10 0 wnd="),
                   "and the last of them is a whole row");
 
     for (i = 0; i < FILL_HERE; i++) {
@@ -3578,15 +3569,16 @@ static int tcp_table_rows(void)
     for (k = 0; k < 7; k++) {
         any[10 + k] = port[k];
     }
-    /* The listener's row, local port 1F90, is the last; a native run,
-     * which shares the table, finds it by its port. */
-    if (probe_native()) {
+    /* The listener's row is found by its local address, 0.0.0.0 and the
+     * port, since the table may also hold rows of other programs: a native
+     * run's, and in a boot that runs the probes one after another, the
+     * TIME_WAIT rows an earlier probe's connections left, as Linux lists
+     * them. */
+    {
         char inode[16];
         int len = line_field(buf, n, any, 9, inode, (int)sizeof(inode));
 
         row_inode = len > 0 ? first_uint(inode, len) : -1;
-    } else {
-        row_inode = last_row_inode(buf, n);
     }
     check("tcp-row-inode", row_inode > 1,
           "/proc/net/tcp names an inode past the first, so a constant cannot match");
