@@ -162,7 +162,7 @@ static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t
                             uint16_t remote_port);
 static void tcp_free_half_opens(const struct tcb *listener);
 static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
-                           uint16_t remote_port);
+                           uint16_t remote_port, int ifindex);
 static void tcp_reset(struct tcb *tcb);
 
 /* The key the initial sequence numbers are hashed under, and whether it has
@@ -1805,10 +1805,11 @@ static uint16_t tcp_free_port(void)
  * port from the next connection to its peer. The place moves past the
  * port, and a little further by the hash of the chosen pair, as Linux moves
  * it by a random step, so that its next value is not plain to the peer.
+ * `ifindex` is the card the connection is bound to (`tcp_pair_in_use`).
  * The caller holds `net_lock`.
  */
 static uint16_t tcp_connect_port(const struct netns *ns, net_addr_t from, net_addr_t dst,
-                                 uint16_t dst_port)
+                                 uint16_t dst_port, int ifindex)
 {
     uint32_t h = tcp_tuple_hash(&from, &dst, 0, dst_port);
     uint32_t place = h & (TCP_PERTURB_SIZE - 1u);
@@ -1824,7 +1825,7 @@ static uint16_t tcp_connect_port(const struct netns *ns, net_addr_t from, net_ad
             }
             port = (uint16_t)(NET_PORT_LOW + k);
             if (port_fixed[k] != 0 ||
-                (port_auto[k] != 0 && tcp_pair_in_use(ns, port, dst, dst_port))) {
+                (port_auto[k] != 0 && tcp_pair_in_use(ns, port, dst, dst_port, ifindex))) {
                 continue;
             }
             step = (tcp_tuple_hash(&from, &dst, port, dst_port) >> 29) * 2u;
@@ -1867,6 +1868,16 @@ static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
     return 0;
 }
 
+/** Whether `a` and `b` are one address, their IPv6 scopes compared unless
+ * `bound`: a connection bound to a card is on that card's link whatever
+ * scope it connected with, as Linux compares the binding, not a scope. */
+static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
+{
+    if (bound && a.family == AF_INET6 && b.family == AF_INET6)
+        return ip6_equal(a.v6, b.v6);
+    return net_addr_equal(a, b);
+}
+
 /**
  * Whether a block other than a listener of the network namespace `ns` has
  * this local port, remote address and remote port, one in TIME_WAIT
@@ -1876,15 +1887,23 @@ static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
  * from one local address is refused from every other too. A listener or a
  * connection to another peer may share the local port: `tcp_find` takes the
  * connection that matches and falls back to a listener only when none does.
+ * A block and the new connection, bound to `ifindex` or 0, are on one card
+ * unless both name a card, by a binding or else an IPv6 peer's scope, and
+ * the cards differ, as Linux compares bindings; their addresses are then
+ * compared without scopes (`tcp_addr_is`).
  */
 static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
-                           uint16_t remote_port)
+                           uint16_t remote_port, int ifindex)
 {
     const struct tcb *t;
+    uint32_t mine = ifindex ? (uint32_t)ifindex : remote_ip.scope, its;
 
     for (t = tcp_hash[tcp_hash_index(local_port, &remote_ip, remote_port)]; t; t = t->hash_next) {
-        if (t->local_port == local_port && t->ns == ns && net_addr_equal(t->remote_ip, remote_ip) &&
-            t->remote_port == remote_port) {
+        if (t->local_port != local_port || t->ns != ns || t->remote_port != remote_port) {
+            continue;
+        }
+        its = t->ifindex ? (uint32_t)t->ifindex : t->remote_ip.scope;
+        if ((!mine || !its || mine == its) && tcp_addr_is(t->remote_ip, remote_ip, 1)) {
             return 1;
         }
     }
@@ -1975,16 +1994,6 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
             any = t;
     }
     return any;
-}
-
-/** Whether `a` and `b` are one address, their IPv6 scopes compared unless
- * `bound`: a connection bound to a card is on that card's link whatever
- * scope it connected with, as Linux compares the binding, not a scope. */
-static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
-{
-    if (bound && a.family == AF_INET6 && b.family == AF_INET6)
-        return ip6_equal(a.v6, b.v6);
-    return net_addr_equal(a, b);
 }
 
 /**
@@ -2802,12 +2811,12 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
 
     if (sock->local_port != 0) {
         local = sock->local_port;
-        if (tcp_pair_in_use(sock->ns, local, dst_ip, dst_port)) {
+        if (tcp_pair_in_use(sock->ns, local, dst_ip, dst_port, sock->bound_device)) {
             net_unlock(flags);
             return -EADDRINUSE;
         }
     } else {
-        local = tcp_connect_port(sock->ns, from, dst_ip, dst_port);
+        local = tcp_connect_port(sock->ns, from, dst_ip, dst_port, sock->bound_device);
         if (local == 0) {
             net_unlock(flags);
             return -EADDRNOTAVAIL;
