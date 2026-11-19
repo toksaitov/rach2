@@ -349,8 +349,8 @@ static int32_t server_show(void *data, char *buf, uint32_t cap)
  * decimal number by kstrtoull_from_user, with at most one newline after
  * it, which `sched_set_fair_server` checks against the other value and
  * applies. `len`; -EINVAL for text that is no such number or a value
- * refused, -ERANGE for one past 64 bits, -EBUSY for a processor offline,
- * or -EFAULT.
+ * refused, -ERANGE for one past 64 bits, -EBUSY for a processor offline or
+ * a bandwidth past the real-time share, or -EFAULT.
  */
 static int32_t server_store(void *data, const char __user *buf, uint32_t len)
 {

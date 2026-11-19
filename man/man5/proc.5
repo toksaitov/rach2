@@ -1423,7 +1423,13 @@ and
 1000000 and 950000, which a privileged write sets as Linux checks them:
 the period from 1 to 2147483647 and the runtime from \-1, for none, to the
 period, a write that would leave the runtime above the period failing with
-.Er EINVAL .
+.Er EINVAL ,
+and one whose share of each processor, runtime over period, would fall
+below the fair servers' with
+.Er EBUSY ,
+as Linux's
+.Fn sched_dl_global_validate
+refuses it.
 As on a Linux built without real-time group scheduling, they throttle
 nothing; the fair server keeps ordinary threads their share, as
 .Xr sched 7
