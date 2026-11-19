@@ -69,15 +69,17 @@ def snapshot(card, into):
 
 def profile_start():
     """Zero Rach2's big lock counts and start its profile of the whole kernel."""
-    for name in ("calls", "long", "tick"):
-        (BKL / name).write_text("0\n")
+    for name in ("calls", "long", "tick", "open"):
+        if (BKL / name).exists():
+            (BKL / name).write_text("0\n")
     (BKL / "profile").write_text("kernel\n")
 
 
 def profile_keep(into):
     """Copy Rach2's profile and big lock counts into INTO."""
-    for name in ("profile", "calls", "long", "tick"):
-        (into / ("bkl_" + name)).write_bytes((BKL / name).read_bytes())
+    for name in ("profile", "calls", "long", "tick", "open"):
+        if (BKL / name).exists():
+            (into / ("bkl_" + name)).write_bytes((BKL / name).read_bytes())
 
 
 def gpu_process():
