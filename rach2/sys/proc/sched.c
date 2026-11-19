@@ -1129,7 +1129,10 @@ static uint8_t balance_active[NR_CPUS];
 static uint8_t balance_stopped[NR_CPUS];
 
 /** The threads on processor `cpu`'s queues, a running one included and the
- * idle task left out (rq->nr_running). */
+ * idle task left out, and one more while `cpu` pushes its thread away
+ * (rq->nr_running, which counts the stopper thread that runs the push,
+ * kernel/sched/stop_task.c:47): so the push of a processor's sole ordinary
+ * thread finds two, as active_load_balance_cpu_stop does (fair.c:12135). */
 static unsigned int sched_balance_nr(int cpu)
 {
     const process_t *cur = cpu_table[cpu].current;
@@ -1138,7 +1141,7 @@ static unsigned int sched_balance_nr(int cpu)
     if (cur && cur != cpu_table[cpu].idle && !sched_fair_class(cur)) {
         n++;
     }
-    return n;
+    return n + balance_stopped[cpu];
 }
 
 /** The thread running on processor `cpu`, NULL for its idle task or while
