@@ -293,7 +293,9 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach
 # screen's answers to its queries, and Alt with x pressed on the machine's
 # keyboard.
 # `tests/run screen`: the console blanked and shown again, by TIOCLINUX, by
-# the escape that sets the blank time and by consoleblank=. They are the cases
+# the escape that sets the blank time and by consoleblank=, and the backlight's
+# and the volume's levels kept across a reboot and a reset, with the backlight
+# off while the console is blank. They are the cases
 # of tests/cases/machine.screen.json, which etude runs, each in a boot of its
 # own, and have no target here: each is judged by the kernel's records of its
 # blanks and unblanks and by QMP's screen dumps, black while the console is
