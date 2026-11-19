@@ -22,6 +22,8 @@ file 04755:0:0 /bin/su build/utils/sbin/su
 # Sets and reads the volume for machine.audio.kept, which sees init keep
 # the level across a reboot.
 file 0755 /bin/mixer build/utils/mixer
+# Sets the console's blank time, or blanks and unblanks it (setterm(1)).
+file 0755 /bin/setterm build/utils/setterm
 
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-shell

@@ -56,6 +56,8 @@ file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 # (utils/Readme.md); it writes /dev/loop-control, which is root's.
 file 0755 /bin/loopctl build/utils/loopctl
 file 0755 /bin/mixer build/utils/mixer
+# Sets the console's blank time, or blanks and unblanks it (setterm(1)).
+file 0755 /bin/setterm build/utils/setterm
 # wifi, which scans for Wi-Fi networks and joins, lists and forgets them
 # through wpa_supplicant (wifi(1)).
 file 0755 /bin/wifi build/utils/wifi

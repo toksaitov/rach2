@@ -1,0 +1,67 @@
+.Dd November 19, 2026
+.Dt SETTERM 1
+.Os
+.Sh NAME
+.Nm setterm
+.Nd set the console's blank time, or blank, unblank or ask it
+.Sh SYNOPSIS
+.Nm
+.Fl -blank
+.Op Ar minutes | Cm force | Cm poke
+.Sh DESCRIPTION
+.Nm
+sets how long the console waits without a key or a mouse move before it
+blanks, as util-linux's
+.Nm
+does with the same option; see
+.Xr console 4 .
+A blank darkens the screen, turns every backlight off and turns the
+console's display off, and the next key or mouse move undoes it.
+.Bl -tag -width Ds
+.It Fl -blank Ar minutes
+Write the escape
+.Li ESC [ 9 ; Ar minutes Li \&]
+to the standard output: the console blanks after
+.Ar minutes
+without input, 0 to 60, and never for 0.
+The count starts again, and a blank console is shown.
+.It Fl -blank Cm force
+Blank the console now, until
+.Fl -blank Cm poke ;
+a key does not end this blank.
+.It Fl -blank Cm poke
+Unblank the console.
+.It Fl -blank
+Print 1 while the console is blank and 0 otherwise.
+.El
+.Pp
+The option may be written
+.Fl blank
+or
+.Fl -blank Ns = Ns Ar arg ,
+as util-linux allows.
+.Cm force ,
+.Cm poke
+and the question are TIOCLINUX requests on the standard input, which must
+be the console, as on Linux.
+.Sh EXIT STATUS
+0 on success; 1 for a usage error, a time outside 0 to 60, or a request
+the console refused.
+.Sh EXAMPLES
+Blank the console after five minutes without input:
+.Dl setterm --blank 5
+.Sh SEE ALSO
+.Xr term 1 ,
+.Xr console 4
+.Sh STANDARDS
+util-linux's
+.Nm
+has many more options; this one has
+.Fl -blank
+alone, which BusyBox lacks.
+Inside
+.Xr term 1
+the escape reaches term and not the console, and the TIOCLINUX requests
+are refused, as on a Linux terminal emulator; the boot line's
+.Li consoleblank=
+sets the time there.

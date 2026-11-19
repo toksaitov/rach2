@@ -19,6 +19,8 @@ file 0755 /bin/sh build/vendor/busybox/busybox
 # Reads and sets the volume through /dev/mixer (mixer(1)); acpid's volume
 # action runs it for the volume keys.
 file 0755 /bin/mixer build/utils/mixer
+# Sets the console's blank time, or blanks and unblanks it (setterm(1)).
+file 0755 /bin/setterm build/utils/setterm
 # wifi, which scans for Wi-Fi networks and joins, lists and forgets them
 # through wpa_supplicant (wifi(1)).
 file 0755 /bin/wifi build/utils/wifi
