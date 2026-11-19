@@ -66,6 +66,42 @@ pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create);
  */
 uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va);
 
+/* Whether a user directory entry may map a huge page, 2 MiB of anonymous
+ * memory (cpu.h); 0 where the architecture does not say. */
+#ifndef MMU_HUGE
+#define MMU_HUGE 0
+#endif
+
+#if MMU_HUGE
+/* The bytes a huge page maps: one leaf table's span. */
+#define HUGE_SPAN MMU_TABLE_SPAN
+
+/**
+ * The huge page of `dir` over the user address `va`, a directory entry with
+ * PTE_PS and the bits of a leaf entry, or 0 when the entry there names a
+ * leaf table or nothing. Beneath a huge page the leaf table it replaced is
+ * kept, and `mmu_user_table` and `mmu_user_skip` give that table, whose
+ * entries the shared code keeps in step with the page (paging.c). x86-64's
+ * mmu.c defines it and the two below.
+ */
+pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va);
+
+/**
+ * Replace the directory entry of `dir` over `va`, which names a leaf table,
+ * with the huge page `leaf`, whose address is 2 MiB-aligned; the table is
+ * kept. 0, or -1 when the entry names no table or its directory has no room
+ * to keep one, as one made without two consecutive frames has none.
+ */
+int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf);
+
+/**
+ * Put back the leaf table the huge page of `dir` over `va` replaced, and
+ * return the page's entry as it was at the exchange, with the accessed and
+ * dirty bits the processor set in it; 0 when there was no huge page.
+ */
+pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va);
+#endif
+
 /** The kernel directory's leaf table that covers the kernel address `va`,
  * which every directory shares, or NULL where there is none. */
 pte_t *mmu_kernel_table(uintptr_t va);
@@ -389,6 +425,14 @@ int mem_lock_room(unsigned long have, unsigned long pages);
  * processor names it. Each architecture's mmu.c defines it.
  */
 void free_user_pages(page_dir_t *dir);
+
+/** Register the shrinker that gives reclaim the frames of transparent huge
+ * pages, once, at boot (thp.c). Nothing where no entry maps a huge page. */
+void paging_thp_init(void);
+
+/** The 4 KiB pages of [start, end), page-aligned, of `dir` that huge pages
+ * map: AnonHugePages of a region's smaps. 0 where no entry maps one. */
+unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
 /**
  * Unmap the present user pages of [start, end) in `dir`, page-aligned: each

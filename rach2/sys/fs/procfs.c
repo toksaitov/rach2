@@ -32,6 +32,7 @@
 #include "../mm/filecache.h"
 #include "../mm/filemap.h"
 #include "../mm/kheap.h"
+#include "../mm/thp.h"
 #include "../mm/mempolicy.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
@@ -6543,23 +6544,6 @@ static const char *const thp_shmem_words[] = {"always", "never", "within_size", 
 /* The order shmem_enabled_show lists its words in, as indexes above. */
 static const int thp_shmem_order[] = {0, 2, 3, 1, 4, 5};
 
-/* The policy as Linux 6.12 boots with CONFIG_TRANSPARENT_HUGEPAGE_NEVER:
- * indexes into the words above for the first three, and flags for the
- * huge zero page and the splitting of underused huge pages, which
- * `procfs_thp_boot` sets for a small machine. Root's writes change them; no
- * page is ever huge, which every policy permits. The big lock covers them. */
-static int thp_enabled = 2, thp_defrag = 3, thp_shmem = 1;
-static int thp_zero_page = 1, thp_shrink_underused = 1;
-
-void procfs_thp_boot(void)
-{
-    if (frame_total_count() < (512u << 20) / PAGE_SIZE) {
-        thp_enabled = 2;
-        thp_defrag = 4;
-        thp_zero_page = 0;
-    }
-}
-
 /** Append the word `words[i]` of each `order[k]`, the chosen one in
  * brackets, separated by spaces and ended by a newline. */
 static void ap_choice(struct procfs_text *t, const char *const *words, const int *order, int n,
@@ -6594,9 +6578,9 @@ static void ap_choice(struct procfs_text *t, const char *const *words, const int
 static int procfs_gen_thp(struct procfs_text *t, int attr)
 {
     if (attr == 0) {
-        ap_choice(t, thp_enabled_words, 0, 3, thp_enabled);
+        ap_choice(t, thp_enabled_words, 0, 3, thp_policy.enabled);
     } else if (attr == 1) {
-        ap_choice(t, thp_defrag_words, 0, 5, thp_defrag);
+        ap_choice(t, thp_defrag_words, 0, 5, thp_policy.defrag);
     } else if (attr == 3) {
         /* PMD_SIZE: 2 MiB with 4-level paging, 4 MiB with i686's 2-level. */
 #if ELF_CLASS == 2
@@ -6606,9 +6590,9 @@ static int procfs_gen_thp(struct procfs_text *t, int attr)
 #endif
         ap_ch(t, '\n');
     } else if (attr == 4) {
-        ap_choice(t, thp_shmem_words, thp_shmem_order, 6, thp_shmem);
+        ap_choice(t, thp_shmem_words, thp_shmem_order, 6, thp_policy.shmem);
     } else {
-        ap_ch(t, (attr == 2 ? thp_zero_page : thp_shrink_underused) ? '1' : '0');
+        ap_ch(t, (attr == 2 ? thp_policy.zero_page : thp_policy.shrink_underused) ? '1' : '0');
         ap_ch(t, '\n');
     }
     return t->len;
@@ -6729,8 +6713,9 @@ static int thp_shmem_word(char *text, uint32_t count)
  */
 static int32_t thp_store(int attr, char *text, uint32_t count)
 {
-    int *const flags[] = {&thp_enabled, &thp_defrag,          &thp_zero_page, 0,
-                          &thp_shmem,   &thp_shrink_underused};
+    int *const flags[] = {&thp_policy.enabled,   &thp_policy.defrag,
+                          &thp_policy.zero_page, 0,
+                          &thp_policy.shmem,     &thp_policy.shrink_underused};
     int v;
 
     if (attr < 0 || attr > 5 || !flags[attr]) {
@@ -6745,6 +6730,7 @@ static int32_t thp_store(int attr, char *text, uint32_t count)
         return v;
     }
     *flags[attr] = v;
+    thp_policy_changed();
     return (int32_t)count;
 }
 

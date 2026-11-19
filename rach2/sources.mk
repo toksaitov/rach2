@@ -114,6 +114,7 @@ C_SRC_SHARED = kernel.c \
     sys/mm/pagecache.c \
     sys/mm/modlayout.c \
     sys/mm/mempolicy.c \
+    sys/mm/thp.c \
     sys/proc/process.c \
     sys/proc/exit.c \
     sys/proc/child_signal.c \

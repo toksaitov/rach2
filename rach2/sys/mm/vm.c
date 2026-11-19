@@ -1105,9 +1105,12 @@ int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
 {
-    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_SEALED | VM_PROT_WIPEONFORK);
+    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_SEALED | VM_PROT_WIPEONFORK |
+                                     VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE);
+    uint32_t skip =
+        (mask & (VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE)) ? VM_PROT_IO | VM_PROT_VVAR : 0;
 
-    return vm_change(vm, start, end, mask, set & mask, 0);
+    return vm_change(vm, start, end, mask, set & mask, skip);
 }
 
 uintptr_t vm_protect_stop(const vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot,

@@ -29,6 +29,7 @@
 #include "sys/mm/filecache.h"
 #include "sys/mm/filemap.h"
 #include "sys/mm/modlayout.h"
+#include "sys/mm/thp.h"
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
 #include "sys/fs/debugfs.h"
@@ -4672,10 +4673,10 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 
 /** Start the processors past the first (`smp_start`) and register their
  * devices (`platform_cpus_started`), the lockup detectors on all of them
- * (`watchdog_init`), the grace-period thread (`rcu_init`) and the flusher
- * (`writeback_init`), then register bkl/calls, bkl/profile, bkl/long,
- * bkl/tick, cputime_test and, with the checker, lockdep/inject in
- * debugfs; a failure there is logged. */
+ * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
+ * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
+ * bkl/profile, bkl/long, bkl/tick, cputime_test and, with the checker,
+ * lockdep/inject in debugfs; a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4684,6 +4685,7 @@ static void start_processors(void)
     watchdog_init();
     rcu_init();
     writeback_init();
+    thp_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
         debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0 ||
@@ -4886,7 +4888,7 @@ void kernel_main(const struct boot_info *boot)
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
     init_filecache();
-    procfs_thp_boot();
+    thp_boot();
 
     platform_firmware_init(boot);
 
