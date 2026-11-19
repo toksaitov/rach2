@@ -82,7 +82,6 @@ static int resolve_held(struct mm *mm, uintptr_t addr, int write, uintptr_t as_l
 struct page_dir {
     pte_t *tables[WIN_TABLES];
     pte_t huge[WIN_TABLES]; /* the 2 MiB page over each table, 0 for none */
-    int hidden[WIN_TABLES]; /* whether the processor would find the table */
     long resident;          /* the pages `mm_resident_add` counted */
 };
 
@@ -139,11 +138,10 @@ int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
         return -1;
     }
     dir->huge[i] = leaf | PTE_PS;
-    dir->hidden[i] = 0;
     return 0;
 }
 
-/** The page as it was, its table back and hidden. */
+/** The page as it was, its table back. */
 pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
 {
     int i = model_span(va);
@@ -154,7 +152,6 @@ pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
     }
     was = dir->huge[i];
     dir->huge[i] = 0;
-    dir->hidden[i] = was != 0;
     return was;
 }
 
@@ -170,12 +167,10 @@ pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set
     return dir->huge[i];
 }
 
-/** Store `value` at `*p` if `*p` is `old`, and return what was there, as
- * the kernel's exchange of a word as wide as a pointer does. */
-uintptr_t arch_atomic_cmpxchg_ptr(volatile uintptr_t *p, uintptr_t old, uintptr_t value)
+/** 1: the host is no AMD family 0x10 part. */
+int mmu_huge_usable(void)
 {
-    __atomic_compare_exchange_n(p, &old, value, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-    return old;
+    return 1;
 }
 
 /** Whether the window keeps its tables, as x86-64's directories do. */
@@ -185,27 +180,6 @@ int mmu_user_keeps(page_dir_t *dir, uintptr_t va)
     return model_span(va) >= 0 && !model_no_keep;
 }
 
-/** As x86-64's mmu.c: the entry must name a table. */
-int mmu_user_table_hide(page_dir_t *dir, uintptr_t va)
-{
-    int i = model_span(va);
-
-    if (i < 0 || model_no_keep || !dir->tables[i] || dir->huge[i]) {
-        return 0;
-    }
-    dir->hidden[i] = 1;
-    return 1;
-}
-
-/** The table shown again. */
-void mmu_user_table_show(page_dir_t *dir, uintptr_t va)
-{
-    int i = model_span(va);
-
-    if (i >= 0) {
-        dir->hidden[i] = 0;
-    }
-}
 #endif
 
 /** 0: no row loads a directory. */
