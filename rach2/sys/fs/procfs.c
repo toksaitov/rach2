@@ -9441,8 +9441,9 @@ static const struct file_ops procfs_sched_ops = {
  * write to /proc/<pid>/autogroup does on Linux 6.12 (`sched_autogroup_write`,
  * fs/proc/base.c:1550-1579): the first 12 bytes, with the white space
  * around them taken off, are an int by kstrtoint with base 0, which
- * `autogroup_nice` checks and stores. `count`, whatever the offset, which
- * stays; -EINVAL or -ERANGE for text that is no such int, -ESRCH once the
+ * `autogroup_nice` checks and stores. The bytes taken, `count` clamped to
+ * 12 as Linux clamps it before the copy, whatever the offset, which stays;
+ * -EINVAL or -ERANGE for text that is no such int, -ESRCH once the
  * process has been reaped, -EFAULT, or `autogroup_nice`'s error.
  */
 static int32_t procfs_autogroup_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -9478,7 +9479,7 @@ static int32_t procfs_autogroup_write(fd_entry_t *e, const char __user *buf, uin
         return -ESRCH;
     }
     rc = autogroup_nice(p, (int)v);
-    return rc != 0 ? rc : (int32_t)count;
+    return rc != 0 ? rc : (int32_t)n;
 }
 
 static const struct file_ops procfs_autogroup_ops = {procfs_idmap_read,
