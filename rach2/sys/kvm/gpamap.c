@@ -9,6 +9,7 @@
 
 #include "kvm.h"
 
+#include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../mm/kheap.h"
 #include "../mm/mm.h"
@@ -136,6 +137,8 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
         left = runs[i].pages;
         while (left > 0) {
             if (!kvm_slot_find(vm, gfn, &v) || (v.flags & KVM_MEM_READONLY)) {
+                klog(KLOG_WARN, "kvm", "gpamap: gfn 0x%lx: refused: in no writable slot",
+                     (unsigned long)gfn);
                 return -EFAULT;
             }
             take = v.base_gfn + v.npages - gfn;
@@ -152,6 +155,18 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
     return 0;
 }
 
+/** Log why the caller's page at `hva`, the guest's frame `gfn`, gives no
+ * frame to a map (`paging_user_ram_frames`): its entry and its region. */
+static void page_refused(struct mm *mm, uint64_t gfn, uintptr_t hva)
+{
+    const pte_t *table = mmu_user_table(mm->dir, hva, 0);
+    const vma_t *r = vm_find(&mm->vm, hva);
+
+    klog(KLOG_WARN, "kvm", "gpamap: gfn 0x%lx: refused: entry 0x%lx, region prot 0x%x type %d",
+         (unsigned long)gfn, (unsigned long)(table ? table[MMU_INDEX(hva)] : 0),
+         r ? (unsigned)r->prot : 0u, r ? (int)r->type : -1);
+}
+
 /** Fill `m`'s parts and frames from the runs `count_parts` passed, taking
  * nothing yet, each part's frames read in one walk of the caller's tables
  * (`paging_user_ram_frames`): 0, or -EFAULT for a page that is not
@@ -161,7 +176,7 @@ static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_
 {
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view v;
-    uint64_t gfn, left, take, page = 0;
+    uint64_t gfn, left, take, got, page = 0;
     uint32_t i, k = 0;
 
     for (i = 0; i < n; i++) {
@@ -175,7 +190,9 @@ static int fill_parts(struct kvm_gpamap *m, struct kvm_vm *vm, const struct kvm_
             m->runs[k].pages = take;
             m->runs[k].hva = v.hva;
             k++;
-            if (paging_user_ram_frames(mm, (uintptr_t)v.hva, take, &m->frames[page]) != take) {
+            got = paging_user_ram_frames(mm, (uintptr_t)v.hva, take, &m->frames[page]);
+            if (got != take) {
+                page_refused(mm, gfn + got, (uintptr_t)v.hva + (uintptr_t)got * 4096u);
                 return -EFAULT;
             }
             page += take;
