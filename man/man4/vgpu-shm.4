@@ -100,8 +100,9 @@ When the device also offers backings, a 2D or 3D resource's backing is the
 device machine's memory, which its backend allocates and pins for it and
 names by the same page list; the buffer's pages are those frames, so a
 buffer is bounded by the machine's memory, not by the heap.
-When they are taken back while the device lives, the driver unplugs the
-display; a backing the device refuses comes from the heap.
+When they are taken back while the device lives, the driver stops the
+device, failing every pending fence, and unplugs the display; a backing
+the device refuses comes from the heap.
 .Pp
 With a KVM guest's ivshmem-doorbell, the device's doorbells reach the
 kernel through KVM ioeventfds and the driver's raise the guest's MSI-X
