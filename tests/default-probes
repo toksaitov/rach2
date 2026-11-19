@@ -121,6 +121,7 @@ musl/vmamusl
 musl/pathmaxmusl
 musl/fdcallmusl
 musl/atcallmusl
+musl/tmpfilemusl
 musl/preadmusl
 musl/truncmusl
 musl/opathmusl
