@@ -233,6 +233,19 @@ fences_pending()
     done
 }
 
+# probe_ready PID: wait until `vgshmprobe pending`, process PID, has said
+# its render target is made and has stopped itself, as quiet pending.out 30
+# PID allows; the target's backing is the VM's, which a stopped VM cannot
+# give.
+probe_ready()
+{
+    until_line "$out/pending.out" 'VGSHMPROBE READY\|VGSHMPROBE FAIL' 30 "$1" || return 0
+    last=-1 still=0
+    until [ "$(sed -n 's/^State:[[:space:]]*\(.\).*/\1/p' "/proc/$1/status" 2>/dev/null)" = T ]; do
+        quiet "$out/pending.out" 30 "$1" || return 0
+    done
+}
+
 # refused: how many of the load's submissions Mesa's virgl has said the
 # kernel refused since the death, "got error from kernel" in the load's
 # output from byte `at` on, read up to the output's size at the call, which
@@ -715,10 +728,12 @@ virgl_rows()
         [ "$unplug" = 1 ] || readback
     fi
 
-    # The VM's death with fences pending.
-    kill -STOP "$qemu" 2>/dev/null
+    # The VM's death with fences pending, the probe's target made first.
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
+    probe_ready "$waiter"
+    kill -STOP "$qemu" 2>/dev/null
+    kill -CONT "$waiter" 2>/dev/null
     pending=yes
     fences_pending || pending=no
     kill_vm
@@ -889,10 +904,12 @@ desk_rows()
     { grep -q '^UDEV - ' "$out/udev-death.txt" && grep -q '^KERNEL - ' "$out/udev-death.txt" &&
         kill -0 "$umon" 2>/dev/null; } ||
         monitor="not listening: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
-    at=$(command stat -c %s "$loadout")
-    kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
+    probe_ready "$waiter"
+    at=$(command stat -c %s "$loadout")
+    kill -STOP "$qemu" 2>/dev/null
+    kill -CONT "$waiter" 2>/dev/null
     pending=yes
     fences_pending || pending=no
     alive=no

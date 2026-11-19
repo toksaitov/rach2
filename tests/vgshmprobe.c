@@ -300,12 +300,17 @@ static void draw(const char *want)
     probe_line("VGSHMPROBE OK", 0, 0);
 }
 
+/* SIGSTOP, the same on x86-64 and i686. */
+#define PROBE_SIGSTOP 19
+
 /**
- * Leave `count` fenced submissions pending, say so, and wait for the
- * buffer and for each fence: each fence must end with an error, which the
- * VM's death gives it, and the buffer's wait must return, with 0 once its
- * fences have ended, as Linux's VIRTGPU_WAIT does; a wait after the death
- * must fail.
+ * Make a render target, say so and stop until SIGCONT, so that the caller
+ * can stop the VM once the target's backing, which the device gives, is
+ * made; then leave `count` fenced submissions pending, say so, and wait for
+ * the buffer and for each fence: each fence must end with an error, which
+ * the VM's death gives it, and the buffer's wait must return, with 0 once
+ * its fences have ended, as Linux's VIRTGPU_WAIT does; a wait after the
+ * death must fail.
  */
 static void pending(long count)
 {
@@ -325,6 +330,8 @@ static void pending(long count)
     }
     find_gpu();
     bo = target(64, 64, &res);
+    probe_line("VGSHMPROBE READY", 0, 0);
+    syscall2(SYS_KILL, syscall0(SYS_GETPID), PROBE_SIGSTOP);
     for (i = 0; i < count; i++) {
         p[i].fd = submit(&res, 0, bo, 1);
         p[i].events = 1; /* POLLIN */
