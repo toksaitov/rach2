@@ -451,10 +451,11 @@ static void row_drivers(void)
               virtio_driver_for(VIRTIO_ID_BLOCK) == NULL,
           "each type has its own driver, and a type none registered has none");
     CHECK(virtio_driver_register(VIRTIO_ID_BLOCK, probe_b) == 0 &&
+              virtio_driver_register(VIRTIO_ID_CONSOLE, probe_b) == 0 &&
               virtio_driver_register(VIRTIO_ID_INPUT, probe_b) == 0 &&
               virtio_driver_register(VIRTIO_ID_SOUND, probe_b) == -ENOSPC &&
               virtio_driver_for(VIRTIO_ID_SOUND) == NULL,
-          "a full table refuses a fifth driver");
+          "a full table refuses a sixth driver");
 }
 
 int main(void)

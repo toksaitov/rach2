@@ -294,7 +294,7 @@ void virtio_driver_unbind(struct virtio_dev *d)
 
 /* The drivers of the device types, as virtio_driver_register records them;
  * a NULL probe ends the table. */
-#define VB_DRIVERS 4
+#define VB_DRIVERS 5
 
 static struct {
     uint16_t id;
