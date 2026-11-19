@@ -271,7 +271,7 @@ static void stand_in_set(void *ctx, int level)
     stand_in_level = level;
 }
 
-static const struct backlight_ops stand_in_ops = {stand_in_get, stand_in_set, 0};
+static const struct backlight_ops stand_in_ops = {stand_in_get, stand_in_set, NULL, NULL};
 
 /**
  * Put "intel_backlight" on a stand-in that writes no register, with the

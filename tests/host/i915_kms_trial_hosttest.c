@@ -342,7 +342,7 @@ static void boot_set(void *ctx, int level)
     boot_sets++;
 }
 
-static const struct backlight_ops boot_ops = {boot_get, boot_set, NULL};
+static const struct backlight_ops boot_ops = {boot_get, boot_set, NULL, NULL};
 
 /**
  * The model with the straps reporting DDI B and C, the device record over
