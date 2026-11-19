@@ -1086,6 +1086,134 @@ static void give_way_per_leaf(void)
     CHECK(tmpfs_unlink(&mnt, NULL, "dst") == 0);
 }
 
+/** Put `n` when it is not NULL, and say whether it was `want`. */
+static int put_is(void *n, void *want)
+{
+    if (n) {
+        tmpfs_put(&mnt, n);
+    }
+    return n == want;
+}
+
+/**
+ * renameat2's RENAME_EXCHANGE. A file "f" in "ex1" and a directory "s" in
+ * "ex2" swap: each name keeps its place in its listing, the directory's
+ * parent and both directories' links follow it, and its path is the new
+ * one. A swap that would put "ex1" below itself is EINVAL, one with a name
+ * missing is ENOENT, and one of two names of one file changes nothing.
+ */
+static void rename_exchange(void)
+{
+    struct vfs_dirent ent;
+    struct vfs_stat st;
+    char path[32];
+    uint32_t cursor = 2;
+    void *d1, *d2, *f, *sub;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "ex1", 0755) == 0);
+    CHECK(tmpfs_mkdir(&mnt, NULL, "ex2", 0755) == 0);
+    d1 = look(NULL, "ex1");
+    d2 = look(NULL, "ex2");
+    f = make(d1, "f", 0644);
+    CHECK(tmpfs_mkdir(&mnt, d1, "g", 0755) == 0);
+    CHECK(tmpfs_mkdir(&mnt, d2, "s", 0755) == 0);
+    sub = look(d2, "s");
+    CHECK(tmpfs_rename_flags(&mnt, d1, "f", d2, "s", VFS_RENAME_EXCHANGE) == 0);
+    CHECK(put_is(look(d1, "f"), sub) && put_is(look(d2, "s"), f));
+    CHECK(tmpfs_getattr(&mnt, d1, &st) == 0 && st.nlink == 4);
+    CHECK(tmpfs_getattr(&mnt, d2, &st) == 0 && st.nlink == 2);
+    CHECK(tmpfs_path(&mnt, sub, path, sizeof(path)) == 0 && same(path, "/ex1/f"));
+    CHECK(tmpfs_readdir(&mnt, d1, &cursor, &ent) == 1 && same(ent.name, "f") && ent.is_dir);
+    CHECK(tmpfs_readdir(&mnt, d1, &cursor, &ent) == 1 && same(ent.name, "g"));
+    CHECK(tmpfs_rename_flags(&mnt, NULL, "ex1", d1, "f", VFS_RENAME_EXCHANGE) == -EINVAL);
+    CHECK(tmpfs_rename_flags(&mnt, d1, "f", NULL, "ex1", VFS_RENAME_EXCHANGE) == -EINVAL);
+    CHECK(tmpfs_rename_flags(&mnt, d1, "none", d2, "s", VFS_RENAME_EXCHANGE) == -ENOENT);
+    CHECK(tmpfs_rename_flags(&mnt, d1, "f", d2, "none", VFS_RENAME_EXCHANGE) == -ENOENT);
+    CHECK(tmpfs_link(&mnt, d2, "h", f) == 0);
+    CHECK(tmpfs_rename_flags(&mnt, d2, "s", d2, "h", VFS_RENAME_EXCHANGE) == 0);
+    CHECK(put_is(look(d2, "s"), f) && put_is(look(d2, "h"), f));
+    CHECK(tmpfs_rename_flags(&mnt, d1, "f", d2, "s", VFS_RENAME_EXCHANGE | VFS_RENAME_NOREPLACE) ==
+          -EINVAL);
+    tmpfs_put(&mnt, sub);
+    tmpfs_put(&mnt, f);
+    tmpfs_put(&mnt, d2);
+    tmpfs_put(&mnt, d1);
+}
+
+/**
+ * renameat2's RENAME_WHITEOUT. "wf" moves to "wg", and "wf" is then a
+ * character device 0:0 of mode 0 with one link. A rename the heap cannot
+ * serve, at each of its allocations, is ENOSPC with both names as they
+ * were. A rename of a file over a directory is EISDIR, and of a directory
+ * over one that is not empty ENOTEMPTY, each with no whiteout made.
+ */
+static void rename_whiteout(void)
+{
+    struct vfs_stat st;
+    void *d, *w, *white, *full;
+    int n;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "wo", 0755) == 0);
+    d = look(NULL, "wo");
+    w = make(d, "wf", 0640);
+    CHECK(tmpfs_rename_flags(&mnt, d, "wf", d, "wg", VFS_RENAME_WHITEOUT) == 0);
+    CHECK(put_is(look(d, "wg"), w));
+    white = look(d, "wf");
+    CHECK(white != NULL && tmpfs_getattr(&mnt, white, &st) == 0 && st.mode == T_IFCHR &&
+          st.rdev == 0 && st.nlink == 1);
+    for (n = 1; n <= 5; n++) {
+        heap_fails_in = n;
+        CHECK(tmpfs_rename_flags(&mnt, d, "wg", d, "wh", VFS_RENAME_WHITEOUT) == -ENOSPC);
+        heap_fails_in = 0;
+        CHECK(put_is(look(d, "wg"), w) && put_is(look(d, "wh"), NULL));
+    }
+    CHECK(tmpfs_mkdir(&mnt, d, "full", 0755) == 0);
+    full = look(d, "full");
+    CHECK(tmpfs_mkdir(&mnt, full, "in", 0755) == 0);
+    CHECK(tmpfs_rename_flags(&mnt, d, "wg", d, "full",
+                             VFS_RENAME_WHITEOUT | VFS_RENAME_NOREPLACE) == -EISDIR);
+    CHECK(tmpfs_mkdir(&mnt, d, "other", 0755) == 0);
+    CHECK(tmpfs_rename_flags(&mnt, d, "other", d, "full", VFS_RENAME_WHITEOUT) == -ENOTEMPTY);
+    CHECK(put_is(look(d, "wg"), w) && put_is(look(d, "wf"), white));
+    tmpfs_put(&mnt, full);
+    tmpfs_put(&mnt, white);
+    tmpfs_put(&mnt, w);
+    tmpfs_put(&mnt, d);
+}
+
+/**
+ * Hard links to files with no name. A file whose last name went takes no
+ * new one, ENOENT, as on Linux. An O_TMPFILE file has no name and no link
+ * from the start; one made linkable takes one link, and after that link is
+ * removed it takes no other; one made without is ENOENT at once. A
+ * tmpfile in a removed directory is ENOENT.
+ */
+static void unnamed_links(void)
+{
+    struct vfs_stat st;
+    void *d, *q, *t = NULL;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "tf", 0755) == 0);
+    d = look(NULL, "tf");
+    q = make(d, "q", 0644);
+    CHECK(tmpfs_unlink(&mnt, d, "q") == 0);
+    CHECK(tmpfs_link(&mnt, d, "q2", q) == -ENOENT);
+    tmpfs_put(&mnt, q);
+    CHECK(tmpfs_tmpfile(&mnt, d, 0600, 1, &t) == 0);
+    CHECK(tmpfs_getattr(&mnt, t, &st) == 0 && st.mode == (T_IFREG | 0600u) && st.nlink == 0);
+    CHECK(tmpfs_link(&mnt, d, "t", t) == 0);
+    CHECK(tmpfs_getattr(&mnt, t, &st) == 0 && st.nlink == 1);
+    CHECK(tmpfs_unlink(&mnt, d, "t") == 0);
+    CHECK(tmpfs_link(&mnt, d, "t2", t) == -ENOENT);
+    tmpfs_put(&mnt, t);
+    CHECK(tmpfs_tmpfile(&mnt, d, 0600, 0, &t) == 0);
+    CHECK(tmpfs_link(&mnt, d, "t3", t) == -ENOENT);
+    tmpfs_put(&mnt, t);
+    CHECK(tmpfs_rmdir(&mnt, NULL, "tf") == 0);
+    CHECK(tmpfs_tmpfile(&mnt, d, 0600, 1, &t) == -ENOENT);
+    tmpfs_put(&mnt, d);
+}
+
 /**
  * Mount with mode= and size= and check the root's mode and links, mount
  * again with no options, whose root is 01777, and run the rows on that
@@ -1120,6 +1248,9 @@ int main(void)
     limit_options();
     allocation();
     give_way_per_leaf();
+    rename_exchange();
+    rename_whiteout();
+    unnamed_links();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

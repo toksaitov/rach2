@@ -8493,10 +8493,16 @@ static int32_t synth_dev_slash(const struct vfs_ref *parent, const char *leaf)
     return !id ? -EROFS : devtree_is_dir(id) == 1 ? -EISDIR : -ENOTDIR;
 }
 
-/* The one renameat2 flag this kernel takes: do not replace the new name. */
-#define RENAME_NOREPLACE 1
+/* renameat2's flags: do not replace the new name, swap the two names, and
+ * leave a whiteout at the old name. */
+#define RENAME_NOREPLACE VFS_RENAME_NOREPLACE
+#define RENAME_EXCHANGE  VFS_RENAME_EXCHANGE
+#define RENAME_WHITEOUT  VFS_RENAME_WHITEOUT
 /* Not a renameat2 flag: a slash after either name, for `synth_dev_rename`. */
 #define RENAME_SLASH     0x80000000u
+/* Which names of a rename had a slash after them (`do_rename`'s `slash`). */
+#define SLASH_OLD        1
+#define SLASH_NEW        2
 
 static int32_t synth_name_exists(const char *path);
 
@@ -8508,7 +8514,9 @@ static int32_t synth_name_exists(const char *path);
  * RENAME_SLASH, a slash after either name, asks for a directory. The caller
  * has checked the write permission of both. 0; -EROFS for a name that is no
  * such entry, a device among them, or a new name that another kind of entry
- * of /dev has; -ENOTDIR for a link under RENAME_SLASH; or `devtree_rename`'s.
+ * of /dev has; -EINVAL for RENAME_EXCHANGE and RENAME_WHITEOUT, which the
+ * tree of /dev does not take; -ENOTDIR for a link under RENAME_SLASH; or
+ * `devtree_rename`'s.
  */
 static int32_t synth_dev_rename(const struct vfs_ref *opar, const char *oleaf,
                                 const struct vfs_ref *npar, const char *nleaf, const char *new_path,
@@ -8521,6 +8529,9 @@ static int32_t synth_dev_rename(const struct vfs_ref *opar, const char *oleaf,
         (!devtree_child(to, nleaf, (uint32_t)k_strlen(nleaf)) &&
          synth_name_exists(new_path) == -EEXIST)) {
         return -EROFS;
+    }
+    if (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)) {
+        return -EINVAL;
     }
     if ((flags & RENAME_SLASH) && devtree_is_dir(id) != 1) {
         return -ENOTDIR;
@@ -17927,15 +17938,18 @@ long sys_unlinkat(isr_params_t *params)
 }
 
 /**
- * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
- * not there, as the rename would answer, then -EEXIST for a new name that is,
- * a mount point being there for either, before the EBUSY a mount point is
- * otherwise, as on Linux. The caller holds the rename's locks from this
- * check through the rename (`vfs_rename_lock`), and every change of a name
- * takes its directory's, so no name can appear between the two.
+ * The refusals RENAME_NOREPLACE and RENAME_EXCHANGE in `flags` add to a
+ * rename: -ENOENT for a source that is not there, as the rename would
+ * answer, then under RENAME_NOREPLACE -EEXIST for a new name that is, and
+ * under RENAME_EXCHANGE -ENOENT for a new name that is not, a mount point
+ * being there for either, before the EBUSY a mount point is otherwise, as
+ * Linux's `do_renameat2` orders them (fs/namei.c in 6.12). The caller holds
+ * the rename's locks from this check through the rename
+ * (`vfs_rename_lock`), and every change of a name takes its directory's, so
+ * no name can appear or go between the two.
  */
-static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
-                                const struct vfs_ref *npar, const char *nleaf)
+static int32_t rename_presence(const struct vfs_ref *opar, const char *oleaf,
+                               const struct vfs_ref *npar, const char *nleaf, int flags)
 {
     int rc = vfs_leaf_mount(opar->mnt, opar->node, oleaf)
                  ? 1
@@ -17944,11 +17958,42 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
     if (rc <= 0) {
         return rc == 0 ? -ENOENT : rc;
     }
-    if (vfs_leaf_mount(npar->mnt, npar->node, nleaf)) {
-        return -EEXIST;
+    rc = vfs_leaf_mount(npar->mnt, npar->node, nleaf) ? 1
+                                                      : name_present(npar->mnt, npar->node, nleaf);
+    if (rc < 0) {
+        return rc;
     }
-    rc = name_present(npar->mnt, npar->node, nleaf);
-    return rc == 1 ? -EEXIST : rc;
+    if (flags & RENAME_EXCHANGE) {
+        return rc == 0 ? -ENOENT : 0;
+    }
+    return rc == 1 && (flags & RENAME_NOREPLACE) ? -EEXIST : 0;
+}
+
+/**
+ * Whether `oleaf` in `opar` and `nleaf` in `npar`, on one mount, are names of
+ * one node: 1, or 0 when they are not or either is missing, as Linux's
+ * `vfs_rename` does nothing for a source that is its own target.
+ */
+static int rename_same_node(const struct vfs_ref *opar, const char *oleaf,
+                            const struct vfs_ref *npar, const char *nleaf)
+{
+    const struct vfs_ops *ops = opar->mnt->type->ops;
+    void *a, *b;
+    int same = 0;
+
+    if (ops->lookup(opar->mnt, opar->node, oleaf, &a) != 0) {
+        return 0;
+    }
+    if (ops->lookup(npar->mnt, npar->node, nleaf, &b) == 0) {
+        same = a == b;
+        if (ops->put) {
+            ops->put(npar->mnt, b);
+        }
+    }
+    if (ops->put) {
+        ops->put(opar->mnt, a);
+    }
+    return same;
 }
 
 /**
@@ -17956,7 +18001,9 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
  * root's half of `do_rename`, run under the root's namespace lock, which the
  * caller takes after both walks and keeps until this returns.
  * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST,
- * once a missing source has given -ENOENT, as `rename_mounted_names` does.
+ * once a missing source has given -ENOENT, as `rename_mounted_names` does;
+ * RENAME_EXCHANGE, once both names are found, and RENAME_WHITEOUT are
+ * -EINVAL, since the root's files cannot be swapped or whited out.
  *
  * Then a source that is not a directory is -ENOTDIR when either name had a
  * slash after it, `slash`, the order Linux keeps. The sticky rule applies to
@@ -17987,9 +18034,14 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
         return rc;
     }
     node = found;
-    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;
+    rc = (flags & (RENAME_NOREPLACE | RENAME_EXCHANGE))
+             ? rename_presence(opar, oleaf, npar, nleaf, flags)
+             : 0;
     if (rc != 0) {
         return rc;
+    }
+    if (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)) {
+        return -EINVAL;
     }
     if (slash && node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
         return -ENOTDIR;
@@ -18036,10 +18088,15 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
  * lock, both directories' and the nodes of both names, under which the
  * write permission on both directories and the mounts on both names are
  * checked again (`dir_recheck`), since the walks held nothing.
- * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST;
- * a source that is not a directory is -ENOTDIR when either name had a slash
- * after it, `slash`; then the removal rules of `cred_remove_ref` for both
- * names, and the type's own answers.
+ * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST,
+ * and RENAME_EXCHANGE one that does not with -ENOENT (`rename_presence`).
+ * A source that is not a directory is -ENOTDIR when either name had a slash
+ * after it, `slash`; under RENAME_EXCHANGE each name is judged by its own
+ * slash, the new one first, as Linux's `do_renameat2` judges them. Two
+ * names of one node then change nothing under RENAME_EXCHANGE and
+ * RENAME_WHITEOUT, as Linux's `vfs_rename` returns before it looks further;
+ * then come the removal rules of `cred_remove_ref` for both names, and the
+ * type's own answers (`vfs_rename_flags` for either flag).
  */
 static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *oleaf,
                                     const struct vfs_ref *npar, const char *nleaf, int flags,
@@ -18056,11 +18113,23 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
     if (rc == 0) {
         rc = dir_recheck(npar, nleaf, RECHECK_WRITE | RECHECK_MOUNT);
     }
-    if (rc == 0 && (flags & RENAME_NOREPLACE)) {
-        rc = rename_noreplace(opar, oleaf, npar, nleaf);
+    if (rc == 0 && (flags & (RENAME_NOREPLACE | RENAME_EXCHANGE))) {
+        rc = rename_presence(opar, oleaf, npar, nleaf, flags);
     }
-    if (rc == 0 && slash) {
+    if (rc == 0 && (flags & RENAME_EXCHANGE)) {
+        if (slash & SLASH_NEW) {
+            rc = leaf_dir_check(npar, nleaf);
+        }
+        if (rc == 0 && (slash & SLASH_OLD)) {
+            rc = leaf_dir_check(opar, oleaf);
+        }
+    } else if (rc == 0 && slash) {
         rc = leaf_dir_check(opar, oleaf);
+    }
+    if (rc == 0 && (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)) &&
+        rename_same_node(opar, oleaf, npar, nleaf)) {
+        vfs_rename_unlock(&h);
+        return 0;
     }
     if (rc == 0) {
         rc = cred_remove_ref(opar, oleaf);
@@ -18068,24 +18137,27 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
     if (rc == 0) {
         rc = cred_remove_ref(npar, nleaf);
     }
-    if (rc == 0) {
+    if (rc == 0 && (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT))) {
+        rc = vfs_rename_flags(opar->mnt, opar->node, oleaf, npar->node, nleaf, (uint32_t)flags);
+    } else if (rc == 0) {
         rc = vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
     }
     vfs_rename_unlock(&h);
     return rc;
 }
 
-/** RENAME_NOREPLACE when a name of the rename is a mount point: -EEXIST when
- * the new name is there, -EBUSY otherwise, or the locks' error. */
+/** RENAME_NOREPLACE or RENAME_EXCHANGE when a name of the rename is a mount
+ * point: `rename_presence`'s -ENOENT or -EEXIST, -EBUSY otherwise, or the
+ * locks' error. */
 static int32_t rename_on_mount(const struct vfs_ref *opar, const char *oleaf,
-                               const struct vfs_ref *npar, const char *nleaf)
+                               const struct vfs_ref *npar, const char *nleaf, int flags)
 {
     struct vfs_rename_hold h;
     int32_t rc;
 
     rc = vfs_rename_lock(opar, oleaf, npar, nleaf, &h);
     if (rc == 0) {
-        rc = rename_noreplace(opar, oleaf, npar, nleaf);
+        rc = rename_presence(opar, oleaf, npar, nleaf, flags);
         vfs_rename_unlock(&h);
     }
     return rc == 0 ? -EBUSY : rc;
@@ -18095,8 +18167,10 @@ static int32_t rename_on_mount(const struct vfs_ref *opar, const char *oleaf,
  * Rename `old_buf` to `new_buf`, both absolute canonical paths: the core of
  * rename(2), renameat(2) and renameat2(2), whose RENAME_NOREPLACE in `flags`
  * refuses a new name that exists with -EEXIST, decided with the rename under
- * one namespace lock. `slash` says that either path had a slash after its
- * last name. Returns 0 or -errno.
+ * one namespace lock; RENAME_EXCHANGE swaps the two names and
+ * RENAME_WHITEOUT leaves a whiteout at the old one, on a type that takes
+ * them (`rename_mounted_names`). `slash` has SLASH_OLD and SLASH_NEW for
+ * the paths that had a slash after their last name. Returns 0 or -errno.
  *
  * Either path naming the root is -EBUSY, or -EEXIST for the new path under
  * RENAME_NOREPLACE, before either path is walked, where Linux walks both
@@ -18114,7 +18188,8 @@ static int32_t rename_on_mount(const struct vfs_ref *opar, const char *oleaf,
  * other, so both write bits are checked before either name is looked up, as
  * unlink orders it: a caller without them sees -EACCES where Linux would
  * report the lookups' -ENOENT or -EEXIST. A mount point at either name is
- * -EBUSY, after the -ENOENT and -EEXIST of RENAME_NOREPLACE.
+ * -EBUSY, after the -ENOENT and -EEXIST of RENAME_NOREPLACE and the -ENOENT
+ * of RENAME_EXCHANGE.
  *
  * On the KRFFS root every other refusal is made here and in
  * `rename_root_names`, since `krffs_rename` answers each with -1, which
@@ -18195,7 +18270,9 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         goto out;
     }
     if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
-        rc = (flags & RENAME_NOREPLACE) ? rename_on_mount(&opar, oleaf, &npar, nleaf) : -EBUSY;
+        rc = (flags & (RENAME_NOREPLACE | RENAME_EXCHANGE))
+                 ? rename_on_mount(&opar, oleaf, &npar, nleaf, flags)
+                 : -EBUSY;
         goto out;
     }
     vfs_tree_changed();
@@ -18234,7 +18311,8 @@ static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdi
     }
     if (rc == 0) {
         rc = do_rename(oldpath, newpath, flags,
-                       oldend == PATH_END_SLASH || newend == PATH_END_SLASH);
+                       (oldend == PATH_END_SLASH ? SLASH_OLD : 0) |
+                           (newend == PATH_END_SLASH ? SLASH_NEW : 0));
     }
     path_buf_put(newpath);
     path_buf_put(oldpath);
@@ -18272,9 +18350,12 @@ long sys_renameat(isr_params_t *params)
 
 /**
  * renameat2(2): renameat's arguments and the flags. RENAME_NOREPLACE
- * refuses a new name that exists with -EEXIST; RENAME_EXCHANGE,
- * RENAME_WHITEOUT and any other flag are -EINVAL before a path is read, as a
- * Linux file system without them answers them later.
+ * refuses a new name that exists with -EEXIST, RENAME_EXCHANGE swaps two
+ * names that exist, and RENAME_WHITEOUT leaves a whiteout at the old name,
+ * on a type that takes them, which tmpfs alone does, as Linux's ext2 takes
+ * neither (`do_rename`). Any other flag, and RENAME_EXCHANGE with either of
+ * the others, is -EINVAL before a path is read, as Linux's `do_renameat2`
+ * answers it.
  */
 long sys_renameat2(isr_params_t *params)
 {
@@ -18282,7 +18363,8 @@ long sys_renameat2(isr_params_t *params)
     const char __user *new_path = (const char __user *)SC_ARG(params, 3);
     int flags = (int)SC_ARG(params, 4);
 
-    if (flags & ~RENAME_NOREPLACE) {
+    if ((flags & ~(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) ||
+        ((flags & RENAME_EXCHANGE) && (flags & (RENAME_NOREPLACE | RENAME_WHITEOUT)))) {
         return -EINVAL;
     }
     if (!current_proc || !old_path || !new_path) {

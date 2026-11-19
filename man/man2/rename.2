@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 19, 2026
 .Dt RENAME 2
 .Os
 .Sh NAME
@@ -64,20 +64,50 @@ With
 .Fa flags
 0 it is
 .Fn renameat .
-.Dv RENAME_EXCHANGE ,
+.Pp
+.Dv RENAME_EXCHANGE
+swaps the two names in one step: both must exist, or
+.Er ENOENT
+is returned, and they may be of different kinds, a directory and a
+file among them.
+A slash after a name requires that name's own file to be a directory.
+Two names of one file change nothing and return 0, as on Linux.
+A directory cannot be swapped to below itself, which returns
+.Er EINVAL .
+Each name keeps its place in its directory's listing.
+inotify reports two moves, each with its own cookie.
+.Pp
 .Dv RENAME_WHITEOUT
-and any other flag return
+renames as
+.Fn renameat
+does and leaves at the old name a whiteout: a character device of
+number 0:0 and mode 0, owned by the caller's file-system user and group,
+or the group of a set-group-ID directory, as a new file is.
+No privilege is needed, as on Linux since 5.8.
+It may be given with
+.Dv RENAME_NOREPLACE .
+.Pp
+tmpfs takes both flags, as Linux's does.
+ext2 refuses both with
 .Er EINVAL
-before either path is read; a Linux file system without them returns
+once both names are found and checked, as Linux's ext2 does; so do
+KRFFS, FAT32, exFAT and the directories of
+.Pa /dev .
+.Dv RENAME_EXCHANGE
+with either other flag, and any flag Linux does not have, return
 .Er EINVAL
-after the paths are resolved.
+before either path is read, as on Linux.
 musl declares no
 .Fn renameat2 ;
 a program calls it through
 .Fn syscall ,
 with
 .Dv RENAME_NOREPLACE
-being 1.
+being 1,
+.Dv RENAME_EXCHANGE
+2 and
+.Dv RENAME_WHITEOUT
+4.
 .Pp
 An existing regular-file destination may be replaced.
 An open descriptor continues to refer to the file it opened, including
@@ -206,6 +236,9 @@ opening the name again reads the replacement.
 renames through two directory descriptors, and checks that
 .Dv RENAME_NOREPLACE
 refuses an existing name and leaves both files as they were.
+.Pa tests/host/tmpfs_hosttest.c
+swaps a file and a directory between two directories and leaves a
+whiteout behind a rename.
 .Sh ERRORS
 .Bl -tag -width ENAMETOOLONG
 .It Er EACCES
@@ -242,8 +275,15 @@ A destination has no leaf component, a
 directory would move into itself or below itself, a file system
 rejects the name or cannot supply required attributes, or
 .Fn renameat2
-was given a flag other than
-.Dv RENAME_NOREPLACE .
+was given a flag Linux does not have,
+.Dv RENAME_EXCHANGE
+with another flag, or
+.Dv RENAME_EXCHANGE
+or
+.Dv RENAME_WHITEOUT
+on a file system that does not take it, or
+.Dv RENAME_EXCHANGE
+would move a directory below itself.
 .It Er EIO
 File system data or metadata could not be read or written, or the
 device was removed.
@@ -263,8 +303,10 @@ make a set of more than 256 entries.
 The copied path, including any current-directory prefix and its
 terminating null byte, must fit 4096 bytes.
 .It Er ENOENT
-A path is empty, a parent component is missing, or the source does not
-exist on a file system that reports this error.
+A path is empty, a parent component is missing, the source does not
+exist on a file system that reports this error, or under
+.Dv RENAME_EXCHANGE
+the destination does not exist.
 .It Er ENOMEM
 A file system could not allocate memory needed for path resolution
 or the rename.

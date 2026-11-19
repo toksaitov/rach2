@@ -400,7 +400,47 @@ struct vfs_ops {
      * order its writes. */
     void (*lock_write)(struct vfs_mount *mnt, void *node);
     void (*unlock_write)(struct vfs_mount *mnt, void *node);
+    /* renameat2(2) with VFS_RENAME_EXCHANGE, which swaps the names
+     * `oldname` in `olddir` and `newname` in `newdir`, both there, whatever
+     * their kinds, or with VFS_RENAME_WHITEOUT, which renames as `rename`
+     * does and leaves at the old name a whiteout, a character device of
+     * number 0:0 and mode 0, owned as a new node is. The common layer has
+     * made Linux's checks of both names, and the two names are of two
+     * different nodes. 0, or the type's error. NULL for a type that takes
+     * neither, which the common layer answers with -EINVAL, as Linux's ext2
+     * does (fs/ext2/namei.c in 6.12). */
+    int (*rename_flags)(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                        const char *newname, uint32_t flags);
+    /* open(2) with O_TMPFILE: a new regular file of `mode` in the
+     * directory `dir`, the root for NULL, with no name, which a hard link
+     * may give it only when `linkable` is set, as Linux's I_LINKABLE allows;
+     * that link, `link`, clears it. Owned as `create` owns a new file. 0
+     * with the node held, its link count 0, so that its last put frees it;
+     * -ENOENT for a removed directory, or the type's error. NULL for a type
+     * without, which open(2) answers with -EOPNOTSUPP. */
+    int (*tmpfile)(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node);
+    /* Let the cache go of the clean blocks of the bytes [offset, offset +
+     * len) of the regular file open as `handle`, which an O_DIRECT read or
+     * write has just moved, so that no copy of them stays in memory, as
+     * Linux's direct I/O leaves no page of the range in the file's cache; a
+     * dirty block stays for its write. NULL for a type that keeps no copy
+     * of a file's data apart from the file. */
+    void (*uncache)(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len);
 };
+
+/* renameat2(2)'s flags, Linux's values. */
+#define VFS_RENAME_NOREPLACE 1u
+#define VFS_RENAME_EXCHANGE  2u
+#define VFS_RENAME_WHITEOUT  4u
+
+/* What a type's regular files take of O_DIRECT (`direct_io`): nothing,
+ * which open(2) and fcntl(2) refuse with -EINVAL, as Linux refuses a file
+ * without FMODE_CAN_ODIRECT; any offset, length and buffer, as Linux's
+ * tmpfs takes them; or each a multiple of the device's sector, as Linux's
+ * ext2 asks (fs/iomap/direct-io.c: `iomap_dio_bio_iter`). */
+#define VFS_DIRECT_NONE   0
+#define VFS_DIRECT_ANY    1
+#define VFS_DIRECT_SECTOR 2
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
  * widths of Linux's struct cachestat. A page that was in memory and went is
@@ -471,6 +511,8 @@ struct vfs_type {
      * `generic_file_llseek` does on an ext2 directory. Any other type's
      * `readdir` is given only a place it gave. */
     int dir_seeks_bytes;
+    /* What the type's regular files take of O_DIRECT: a VFS_DIRECT_ value. */
+    int direct_io;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
@@ -1510,6 +1552,16 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name);
  */
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                const char *newname);
+/**
+ * renameat2(2)'s VFS_RENAME_EXCHANGE or VFS_RENAME_WHITEOUT in `flags`, with
+ * VFS_RENAME_NOREPLACE beside the second, through the type's
+ * `rename_flags`: `vfs_rename`'s answers, and -EINVAL for a type without
+ * `rename_flags`. An exchange swaps the names in the records of open files
+ * too, and tells inotify of two moves. The caller holds the rename's locks
+ * and has found the two names of two nodes for an exchange.
+ */
+int vfs_rename_flags(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                     const char *newname, uint32_t flags);
 /** The type's link of `node` as `name` in `dir`: 0, -EPERM for a type
  * without `link`, for an immutable or append-only file or for an immutable
  * directory, or the type's error. */
