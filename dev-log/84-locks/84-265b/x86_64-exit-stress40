@@ -1,0 +1,115 @@
+run: default: guest.default.smptlbmusl: starting
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 108 of 1527, most overrun 98313 us
+smptlbmusl: untorn: thread 4294967351 ticks of 4294967306 after 295 ms; cputime_test 0 0 1 1 7
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 129 of 1584, most overrun 103810 us
+smptlbmusl: untorn: thread 4294967308 ticks of 4294967306 after 160 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 138 of 1580, most overrun 79410 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 139 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 143 of 1686, most overrun 134471 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 118 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 138 of 1613, most overrun 128011 us
+smptlbmusl: untorn: thread 4294967312 ticks of 4294967306 after 144 ms; cputime_test 0 0 1 1 1
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 139 of 1579, most overrun 107400 us
+smptlbmusl: untorn: thread 4294967306 ticks of 4294967306 after 129 ms; cputime_test 0 0 1 1 0
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 172 of 1611, most overrun 106261 us
+smptlbmusl: untorn: thread 4294967328 ticks of 4294967306 after 226 ms; cputime_test 0 0 1 1 4
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+@etude 1 assert counters pass
+smptlbmusl: fault: shootdowns 0 interrupts 0, tries 1
+@etude 1 assert fault pass
+@etude 1 assert unmap pass
+@etude 1 assert mprotect pass
+@etude 1 assert unmap-span pass
+@etude 1 assert timeouts pass
+smptlbmusl: unmap: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: mprotect: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: unmap-span: shootdowns 1 interrupts 1, tries 1
+smptlbmusl: timeouts: late passes 151 of 1716, most overrun 118135 us
+smptlbmusl: untorn: thread 4294967339 ticks of 4294967306 after 265 ms; cputime_test 0 0 1 1 5
+@etude 1 assert untorn pass
+SMPTLBMUSL OK
+run: default: PASS in 17s
+run: result: all 1 suites passed
