@@ -64,6 +64,14 @@
  *   stat     threads on every processor make newfstatat, fstatat64 on
  *            i386, and openat of 16 warmed files and read them, each seeing
  *            the inode, size and data it had;
+ *   proc     threads on every processor open, read and close /proc/self/stat,
+ *            their own /proc/self/task/TID/stat and /proc/stat, and read one
+ *            shared /proc/self/stat with pread64 at offset 0, which makes its
+ *            text again, while one thread makes and joins short threads
+ *            whose task files the others open, and another dups the shared
+ *            descriptor and closes the copies; each text names the process
+ *            or thread it was opened for and ends with a newline, and a
+ *            short thread's file is that thread's or ENOENT once it is gone;
  *   drm      on vgem, a submitter attaches and signals write fences while
  *            two threads attach read fences, which are EBUSY while a write
  *            fence is pending, and a write fence while any is
@@ -176,12 +184,13 @@ enum {
     M_REAP,
     M_REQUEUE,
     M_STAT,
+    M_PROC,
     M_DRM,
     NMODES
 };
 
-static const char *const mode_names[NMODES] = {"switch", "poll", "close",   "unmap", "fault",
-                                               "share",  "reap", "requeue", "stat",  "drm"};
+static const char *const mode_names[NMODES] = {
+    "switch", "poll", "close", "unmap", "fault", "share", "reap", "requeue", "stat", "proc", "drm"};
 
 /* Each mode's first failure, its reason for not running, and whether it ran
  * whole at least once; `mode` is the mode under way. */
@@ -1980,6 +1989,195 @@ static void mode_stat(void)
 }
 
 /* ------------------------------------------------------------------------
+ * proc: opens, reads and closes of /proc's snapshots against threads that
+ * come and go.
+ */
+
+#define PROC_SHORT 16
+
+static int pr_shared = -1;
+static volatile int pr_done;
+static volatile pid_t pr_short[PROC_SHORT];
+static long pr_rounds, pr_opens, pr_gone, pr_shorts;
+static pthread_mutex_t pr_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/** Whether `text`, `n` bytes of a stat file, begins with the id `id` and a
+ * space and parenthesis and ends with a newline, as Linux's do. */
+static int pr_text_ok(const char *text, long n, long id)
+{
+    char head[24];
+    int h = snprintf(head, sizeof(head), "%ld (", id);
+
+    return n > h && memcmp(text, head, (size_t)h) == 0 && text[n - 1] == '\n';
+}
+
+/** Open `path` and read it whole into `buf`, of `cap` bytes, in reads of
+ * at most 64 bytes, so that a text is read across several calls; the
+ * length read, or -1 with errno set by the open or a read. */
+static long pr_slurp(const char *path, char *buf, long cap)
+{
+    long n = 0, r = 0;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0) {
+        return -1;
+    }
+    while (n < cap && (r = read(fd, buf + n, cap - n < 64 ? cap - n : 64)) > 0) {
+        n += r;
+    }
+    if (r < 0 && n < cap) {
+        n = -1;
+    }
+    close(fd);
+    return n;
+}
+
+/** A short thread: say its id, then end. */
+static void *pr_short_thread(void *arg)
+{
+    pr_short[(intptr_t)arg % PROC_SHORT] = (pid_t)syscall(SYS_gettid);
+    return NULL;
+}
+
+/** The maker: start and join short threads until the readers are done. */
+static void *pr_maker(void *arg)
+{
+    pthread_t t;
+    long k = 0;
+
+    (void)arg;
+    pin(0);
+    while (!pr_done) {
+        if (pthread_create(&t, NULL, pr_short_thread, (void *)(intptr_t)k) != 0) {
+            fail("pthread_create: a short thread");
+            break;
+        }
+        pthread_join(t, NULL);
+        k++;
+    }
+    pthread_mutex_lock(&pr_lock);
+    pr_shorts += k;
+    pthread_mutex_unlock(&pr_lock);
+    return NULL;
+}
+
+/** The duplicator: dup the shared descriptor and close the copies until
+ * the readers are done, so that closes of a description's descriptors race
+ * its reads on other processors. */
+static void *pr_dupper(void *arg)
+{
+    int fd;
+
+    (void)arg;
+    pin(1);
+    while (!pr_done) {
+        fd = dup(pr_shared);
+        if (fd < 0) {
+            fail("dup of /proc/self/stat: %s", strerror(errno));
+            break;
+        }
+        close(fd);
+    }
+    return NULL;
+}
+
+/** Reader `i`: its round of opens and reads, each text checked. */
+static void *pr_reader(void *arg)
+{
+    int i = (int)(intptr_t)arg;
+    long tid = (long)syscall(SYS_gettid), pid = (long)getpid(), r, n, opens = 0, gone = 0;
+    char path[64], buf[2048];
+    pid_t other;
+
+    pin(i);
+    for (r = 0; r < pr_rounds; r++) {
+        n = pr_slurp("/proc/self/stat", buf, sizeof(buf));
+        if (n < 0 || !pr_text_ok(buf, n, pid)) {
+            fail("thread %d: /proc/self/stat: %s", i,
+                 n < 0 ? strerror(errno) : "not this process's");
+            return NULL;
+        }
+        snprintf(path, sizeof(path), "/proc/self/task/%ld/stat", tid);
+        n = pr_slurp(path, buf, sizeof(buf));
+        if (n < 0 || !pr_text_ok(buf, n, tid)) {
+            fail("thread %d: %s: %s", i, path, n < 0 ? strerror(errno) : "not this thread's");
+            return NULL;
+        }
+        n = pr_slurp("/proc/stat", buf, sizeof(buf) - 1);
+        if (n < 4 || memcmp(buf, "cpu ", 4) != 0) {
+            fail("thread %d: /proc/stat: %s", i, n < 0 ? strerror(errno) : "no cpu line first");
+            return NULL;
+        }
+        n = pread(pr_shared, buf, sizeof(buf), 0);
+        if (n < 0 || !pr_text_ok(buf, n, pid)) {
+            fail("thread %d: pread of the shared /proc/self/stat: %s", i,
+                 n < 0 ? strerror(errno) : "not this process's");
+            return NULL;
+        }
+        other = pr_short[r % PROC_SHORT];
+        if (other > 0) {
+            snprintf(path, sizeof(path), "/proc/%ld/task/%ld/stat", pid, (long)other);
+            n = pr_slurp(path, buf, sizeof(buf));
+            if (n < 0 && errno != ENOENT && errno != ESRCH) {
+                fail("thread %d: %s: %s", i, path, strerror(errno));
+                return NULL;
+            }
+            if (n >= 0 && !pr_text_ok(buf, n, (long)other)) {
+                fail("thread %d: %s: not that thread's", i, path);
+                return NULL;
+            }
+            gone += n < 0;
+        }
+        opens += 4;
+    }
+    pthread_mutex_lock(&pr_lock);
+    pr_opens += opens;
+    pr_gone += gone;
+    pthread_mutex_unlock(&pr_lock);
+    return NULL;
+}
+
+/** The proc mode: the shared descriptor, the maker and the duplicator,
+ * then the readers' rounds. */
+static void mode_proc(void)
+{
+    pthread_t t[MAX_THREADS], maker, dupper;
+    int n = ncpu < 2 ? 2 : ncpu > MAX_THREADS ? MAX_THREADS : ncpu;
+
+    pr_rounds = 300 * scale;
+    pr_opens = pr_gone = pr_shorts = 0;
+    pr_done = 0;
+    memset((void *)pr_short, 0, sizeof(pr_short));
+    pr_shared = open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+    if (pr_shared < 0) {
+        fail("/proc/self/stat: %s", strerror(errno));
+        return;
+    }
+    if (pthread_create(&maker, NULL, pr_maker, NULL) != 0) {
+        fail("pthread_create: the maker");
+        close(pr_shared);
+        return;
+    }
+    if (pthread_create(&dupper, NULL, pr_dupper, NULL) != 0) {
+        fail("pthread_create: the duplicator");
+        pr_done = 1;
+        pthread_join(maker, NULL);
+        close(pr_shared);
+        return;
+    }
+    if (start_threads(t, n, pr_reader) == 0) {
+        join_threads(t, n);
+    }
+    pr_done = 1;
+    pthread_join(maker, NULL);
+    pthread_join(dupper, NULL);
+    close(pr_shared);
+    printf("lockstressmusl: proc: %d threads, %ld opens, %ld of short threads gone, %ld short "
+           "threads\n",
+           n, pr_opens, pr_gone, pr_shorts);
+}
+
+/* ------------------------------------------------------------------------
  * drm: DRM BUSY against submission on vgem.
  */
 
@@ -2377,7 +2575,7 @@ static int calls_judge(void)
 
 static void (*const mode_fn[NMODES])(void) = {mode_switch, mode_poll,  mode_close, mode_unmap,
                                               mode_fault,  mode_share, mode_reap,  mode_requeue,
-                                              mode_stat,   mode_drm};
+                                              mode_stat,   mode_proc,  mode_drm};
 
 /** Set the modes -m names, a list separated by commas; 0 or -1. */
 static int select_modes(char *list)

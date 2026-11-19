@@ -121,7 +121,7 @@
     },
     {
       "case_id": "guest.ia32.lockstressmusl",
-      "behavior": "The paths taken off the big lock, switches and wakes, poll and epoll, close and dup2 under a blocked call, concurrent unmaps, page faults against mapping changes, shared file mappings under truncation, exit and reap, futex requeues, warmed lookups and vgem's fences, each raced across four processors, give Linux's answers; with -u, bkl/calls counts no hold of the big lock for the calls named",
+      "behavior": "The paths taken off the big lock, switches and wakes, poll and epoll, close and dup2 under a blocked call, concurrent unmaps, page faults against mapping changes, shared file mappings under truncation, exit and reap, futex requeues, warmed lookups, /proc's snapshots against threads that come and go, and vgem's fences, each raced across four processors, give Linux's answers; with -u, bkl/calls counts no hold of the big lock for the calls named",
       "units": ["ia32", "musl/lockstressmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -138,6 +138,7 @@
         {"assertion_id": "reap", "checks": "64 children in batches of 8 exit while a thread of the parent wakes the futex word their own thread sleeps on, and wait4 reaps each once with its own exit code; 200 threads are joined as they end, each giving back its value", "source": "program"},
         {"assertion_id": "requeue", "checks": "two threads requeue 4000 times the waiters of two futex words onto each other with FUTEX_CMP_REQUEUE while four waiters wait on them with timeouts of 1 to 3 ms; every requeue returns a count or EAGAIN, every wait 0, ETIMEDOUT, EAGAIN or EINTR, and every waiter returns", "source": "program"},
         {"assertion_id": "stat", "checks": "a thread on each processor, at least two, makes newfstatat (fstatat64 for i386) and openat of 16 files 200 times, by a directory's descriptor and by path in turn, after a first stat warmed them, and sees each file's inode, size and three bytes as made", "source": "program"},
+        {"assertion_id": "proc", "checks": "a thread on each processor, at least two, opens and reads whole, in reads of at most 64 bytes, /proc/self/stat, its own /proc/self/task/TID/stat and /proc/stat 300 times and preads at offset 0 a descriptor of /proc/self/stat that another thread dups and closes meanwhile, while a third makes and joins short threads whose task stat files the readers open too: each stat text begins with its process's or thread's id and ends with a newline, /proc/stat begins with its cpu line, and a thread gone fails the open with ENOENT or ESRCH alone", "source": "program"},
         {"assertion_id": "drm", "checks": "on vgem's primary node a dumb buffer's dma-buf polls readable and writable with no fence and neither with a write fence, a read fence beside it is EBUSY, and while one thread attaches and signals 2000 write fences two attach and signal read fences, EBUSY alone refusing them, and poll the dma-buf; afterwards a write fence attaches and the buffer is idle", "source": "program"},
         {"assertion_id": "calls", "checks": "over the modes run, debugfs's bkl/calls counts at least one call of each call -u names and no hold of the big lock that an entry of it began", "source": "program"}
       ],
