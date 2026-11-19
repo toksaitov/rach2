@@ -2538,6 +2538,58 @@ static void policy_rows(void)
     init_sched();
 }
 
+/**
+ * An active balance moves a processor's sole ordinary thread, as Linux's
+ * does by counting the stopper thread that pushes it
+ * (active_load_balance_cpu_stop, kernel/sched/fair.c:12135): interrupts
+ * take half of processor 0, which runs one ordinary thread, processor 1
+ * idles, and its balance asks processor 0 to push the thread, which at its
+ * next selection goes to processor 1, leaving processor 0 to its idle
+ * task.
+ */
+static void active_push(void)
+{
+    unsigned int i;
+    uint64_t t;
+
+    clock_ns = 1000000000u;
+    setup();
+    for (i = 2; i < 7; i++) {
+        block(&procs[i], PROC_BLOCKED);
+    }
+    become_idle();
+    procs[0].need_resched = 1;
+    schedule();
+    CHECK(current_proc == &procs[1] && sched_fair_runnable(0) == 1,
+          "processor 0 runs its sole ordinary thread");
+    cpu_table[1].online = 1;
+    cpu_table[1].current = cpu_table[1].idle = &procs[6];
+    procs[6].state = PROC_RUNNING;
+    procs[6].cpu = 1;
+    balance_build_domains(3);
+    for (t = 0; t < 200; t++) {
+        clock_ns += 1000000u;
+        (void)pelt_update_irq(0, clock_ns, 500000u);
+    }
+    irq_flags = 0;
+    kernel_ticks += TICK_HZ;
+    sched_tick();
+    kernel_ticks += TICK_HZ;
+    host_cpu = 1;
+    sched_tick();
+    host_cpu = 0;
+    CHECK(balance_active[0] && procs[1].need_resched,
+          "processor 1's balance asks processor 0 to push its sole thread");
+    sched_take_preempt();
+    CHECK(procs[1].cpu == 1 && sched_fair_runnable(1) == 1 && current_proc == &procs[0],
+          "the push moves the sole ordinary thread to the idle processor");
+    cpu_table[1].online = 0;
+    init_sched();
+    balance_build_domains(1);
+    irq_flags = 0x200;
+    clock_ns = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -2557,6 +2609,7 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && __builtin_strcmp(argv[1], "--policy-only") == 0) {
         policy_rows();
+        active_push();
         dprintf(1, "sched-hosttest: policy: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
@@ -2600,6 +2653,7 @@ int main(int argc, char **argv)
     idle_kicked();
     balance_once();
     policy_rows();
+    active_push();
     if (failures) {
         return 1;
     }
@@ -2612,7 +2666,7 @@ int main(int argc, char **argv)
         "idle machine, ready lists, wake twice, migration, wake preempt, wake place core, "
         "run delay, tick slice, tick rr, "
         "tick rt, rt run time, idle cancel drains, idle cancel ready, idle kicked, balance once, "
-        "policy\n");
+        "policy, active push\n");
     return 0;
 }
 
