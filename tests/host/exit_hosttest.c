@@ -30,6 +30,16 @@ static process_t parent;
 static struct tgroup child_group;
 static struct tgroup parent_group;
 struct percpu cpu_table[NR_CPUS];
+
+/** The exchange behind `sched_mb`, the barrier the wait and its wakers
+ * pass: one thread here, so a plain swap. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
 uint32_t proc_dead_threads;
 page_dir_t *_kernel_dir;
 static page_dir_t kernel_dir;
