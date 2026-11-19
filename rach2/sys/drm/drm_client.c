@@ -227,20 +227,53 @@ static const struct drm_display_mode *con_pick_mode(const struct drm_connector *
 }
 
 /**
+ * Find connector `i` a CRTC in its mask `reach[i]`, by an augmenting path
+ * through the CRTCs not yet in `*seen`: a free CRTC, or one whose
+ * connector `crtc_of` holds can move to another. 1 when found, with
+ * `crtc_of` updated; 0 otherwise. Recurses once for each CRTC at most.
+ */
+static int con_route(const uint32_t *reach, int *crtc_of, uint32_t num_crtc, uint32_t i,
+                     uint32_t *seen)
+{
+    uint32_t k;
+
+    for (k = 0; k < num_crtc; k++) {
+        if (!(reach[i] & (1u << k)) || (*seen & (1u << k))) {
+            continue;
+        }
+        *seen |= 1u << k;
+        if (crtc_of[k] < 0 || con_route(reach, crtc_of, num_crtc, (uint32_t)crtc_of[k], seen)) {
+            crtc_of[k] = (int)i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Probe `dev`'s connectors and choose the console's outputs into `outs`:
  * each connected connector with a mode, or each of unknown status when
- * none is connected, through an encoder and on a CRTC that no other
- * output has, since one commit cannot route two connectors through one
- * encoder, as DisplayPort and HDMI share a DDI port's. The number chosen.
- * Under the commit lock; may sleep in the probes.
+ * none is connected, as many as can be lit at once. A connector goes
+ * through its first encoder, the one the commit routes it through
+ * (`single_encoder` in drm_atomic.c), so of two that share it, as
+ * DisplayPort and HDMI share a DDI port's, the first is chosen; and each
+ * on a CRTC that encoder reaches, found by augmenting paths, so that a
+ * connector whose encoder reaches one CRTC is not left dark by an earlier
+ * one that could take another, as Linux's drm_client_pick_crtcs searches;
+ * an encoder that names no CRTC drives any, as the commit's routing allows.
+ * A connector, once lit, stays lit as later ones are added. The number
+ * chosen, in the connectors' order. Under the commit lock; may sleep in
+ * the probes.
  */
 static uint32_t con_outputs(struct drm_device *dev, struct con_output *outs)
 {
     struct drm_mode_config *mc = &dev->mode_config;
-    const struct drm_display_mode *m;
-    struct drm_connector *c;
+    const struct drm_display_mode *m[DRM_MAX_CONNECTORS];
+    uint32_t reach[DRM_MAX_CONNECTORS];
+    int crtc_of[DRM_MAX_CRTCS];
     struct drm_encoder *e;
-    uint32_t i, j, k, n = 0, used = 0, taken = 0;
+    struct drm_connector *c;
+    uint32_t i, j, k, n = 0, taken = 0, seen;
     int want, connected = 0;
 
     for (i = 0; i < mc->num_connector; i++) {
@@ -248,25 +281,34 @@ static uint32_t con_outputs(struct drm_device *dev, struct con_output *outs)
         connected |= mc->connectors[i]->status == DRM_CONNECTOR_CONNECTED;
     }
     want = connected ? DRM_CONNECTOR_CONNECTED : DRM_CONNECTOR_UNKNOWN;
-    for (i = 0; i < mc->num_connector && n < DRM_MAX_CRTCS; i++) {
+    for (k = 0; k < DRM_MAX_CRTCS; k++) {
+        crtc_of[k] = -1;
+    }
+    for (i = 0; i < mc->num_connector; i++) {
         c = mc->connectors[i];
-        m = c->status == want ? con_pick_mode(c) : NULL;
-        for (j = 0; m && j < mc->num_encoder; j++) {
-            e = mc->encoders[j];
-            if (!(c->possible_encoders & (1u << j)) || (taken & (1u << j))) {
-                continue;
-            }
-            for (k = 0; k < mc->num_crtc; k++) {
-                if ((e->possible_crtcs & (1u << k)) && !(used & (1u << k))) {
-                    used |= 1u << k;
-                    taken |= 1u << j;
-                    outs[n].crtc = mc->crtcs[k];
-                    outs[n].connector = c;
-                    outs[n].mode = m->info;
-                    n++;
-                    m = NULL;
-                    break;
-                }
+        m[i] = c->status == want ? con_pick_mode(c) : NULL;
+        reach[i] = 0;
+        j = 0;
+        while (j < mc->num_encoder && !(c->possible_encoders & (1u << j))) {
+            j++;
+        }
+        if (!m[i] || j == mc->num_encoder || (taken & (1u << j))) {
+            continue;
+        }
+        taken |= 1u << j;
+        e = mc->encoders[j];
+        reach[i] = (e->possible_crtcs ? e->possible_crtcs : ~0u) & ((1u << mc->num_crtc) - 1u);
+        seen = 0;
+        (void)con_route(reach, crtc_of, mc->num_crtc, i, &seen);
+    }
+    for (i = 0; i < mc->num_connector; i++) {
+        for (k = 0; k < mc->num_crtc; k++) {
+            if (crtc_of[k] == (int)i) {
+                outs[n].crtc = mc->crtcs[k];
+                outs[n].connector = mc->connectors[i];
+                outs[n].mode = m[i]->info;
+                n++;
+                break;
             }
         }
     }

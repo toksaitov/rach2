@@ -45,8 +45,9 @@
  * the console waits for the commit lock keeps the screen; a device that
  * leaves while the console's commit sleeps leaves it no buffer; a second
  * connector through the first's encoder is left out of the console's
- * placement, which lights the first; and every allocation and reference is
- * given back.
+ * placement, which lights the first, and a third whose encoder reaches
+ * only the first CRTC moves the first to the second, so that both are lit;
+ * and every allocation and reference is given back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1013,10 +1014,13 @@ static void row_leave_in_commit(void)
 /** A second connector, connected, through the first's encoder, which now
  * reaches both CRTCs, as DisplayPort and HDMI share a DDI port's: the
  * console places the first alone, since one commit cannot route two
- * connectors through one encoder, and its placement lights it. */
+ * connectors through one encoder, and its placement lights it. A third,
+ * through an encoder of its own that reaches only the first CRTC, moves
+ * the first connector to the second CRTC, so that both are lit. */
 static void row_shared_encoder(void)
 {
-    static struct drm_connector second;
+    static struct drm_connector second, third;
+    static struct drm_encoder encoder3;
 
     CHECK(drm_connector_init(&dev, &second, &conn_funcs, DRM_MODE_CONNECTOR_VIRTUAL) == 0,
           "a second connector is made");
@@ -1028,6 +1032,17 @@ static void row_shared_encoder(void)
               !(crtc2.state && crtc2.state->enable),
           "the console lights the first connector and leaves the second, which shares its "
           "encoder");
+    drm_client_dev_unregister(&dev);
+    CHECK(drm_encoder_init(&dev, &encoder3, DRM_MODE_ENCODER_VIRTUAL) == 0 &&
+              drm_connector_init(&dev, &third, &conn_funcs, DRM_MODE_CONNECTOR_VIRTUAL) == 0,
+          "a third connector and its encoder are made");
+    encoder3.possible_crtcs = 1;
+    drm_connector_attach_encoder(&third, &encoder3);
+    drm_client_dev_register(&dev);
+    CHECK(con.fb && crtc.state->active && crtc2.state && crtc2.state->active &&
+              connector.state->crtc == &crtc2 && third.state->crtc == &crtc &&
+              !second.state->crtc && primary.state->fb == con.fb && primary2.state->fb == con.fb,
+          "the first connector moves to the second CRTC, so that the third lights the first");
     drm_client_dev_unregister(&dev);
     CHECK(dev.refs == 0, "the device is let go");
     encoder.possible_crtcs = 1;
