@@ -4,8 +4,9 @@
 # with the Lenovo's GUID table identity, as its data partition holds them,
 # boot KERNEL under KVM with the root image as the Lenovo's trial boot names
 # it, record the boot, run gpu.sh on llvmpipe over SSH and power the guest off.
-# OUT receives the serial log, the boot's mounts and command line, and gpu.sh's
-# results. The caller checks boot.txt before accepting the rehearsal.
+# ROOT_MODE=ext2 boots ROOT directly from entry 1 and mounts entry 6 at
+# /data after boot. OUT receives the serial log, the boot's mounts and
+# command line, and gpu.sh's results.
 set -eu
 
 [ $# -eq 4 ] || { echo 'usage: qemu.sh ROOT BUNDLE KERNEL OUT' >&2; exit 2; }
@@ -15,6 +16,11 @@ tree=$(cd "$here/../../.." && pwd)
 key=$tree/krffs/rach2_demo_ed25519
 guid=1acef00d-0f1e-4d2c-8b3a-c0ffee000001
 port=${PORT:-26540}
+mode=${ROOT_MODE:-loop}
+case $mode in
+    loop | ext2) ;;
+    *) echo 'qemu: root mode must be loop or ext2' >&2; exit 2 ;;
+esac
 work= qemu=
 trap '[ -z "$qemu" ] || { kill "$qemu" 2> /dev/null || true; wait "$qemu" 2> /dev/null || true; }
       [ -z "$work" ] || rm -rf "$work"' EXIT
@@ -28,24 +34,41 @@ hash=$(sha256sum "$root" | cut -d' ' -f1)
 image=root-$(echo "$hash" | cut -c1-16).img
 echo "qemu: root $root sha256 $hash" | tee "$out/inputs.txt"
 sha256sum "$bundle" "$kernel" | tee -a "$out/inputs.txt"
-mkdir -p "$work/data/trial2654/probes"
-ln "$root" "$work/data/trial2654/$image" 2> /dev/null || cp --sparse=always "$root" "$work/data/trial2654/$image"
+mkdir -m 0755 -p "$work/data/trial2654/probes"
+chmod 0755 "$work/data" "$work/data/trial2654"
 tar -xf "$bundle" -C "$work/data/trial2654/probes"
-# Entry 6 from 1 MiB, 32 GiB, made with Rach2's mke2fs defaults as the
-# Lenovo's was (dev-log/76-display/lenovo-storage.md). The table is written
-# after the file system, since mke2fs wipes the signatures it finds.
-truncate -s 33G "$work/disk.img"
-MKE2FS_CONFIG=$tree/vendor/e2fsprogs/mke2fs.conf mke2fs -q -t ext2 -b 4096 -F -E offset=1048576 \
-    -L Rach2_data -d "$work/data" "$work/disk.img" 8388608
-sgdisk -o -U "$guid" -n 6:2048:+32G -t 6:8300 -c 6:'Rach2 data' "$work/disk.img"
+if [ "$mode" = loop ]; then
+    ln "$root" "$work/data/trial2654/$image" 2> /dev/null ||
+        cp --sparse=always "$root" "$work/data/trial2654/$image"
+    data_at=1 data_mib=32768
+    line="rach2.rootimage=GPTID=$guid,6:/trial2654/$image rach2.slot=trialroot"
+else
+    root_bytes=$(stat -c %s "$root")
+    data_at=$((1 + (root_bytes + 1048575) / 1048576))
+    data_mib=4096
+    line=rach2.root=ext2
+fi
+# Make entry 6 with Rach2's defaults as on the Lenovo. fakeroot makes the
+# staged directories root's in the image, which trip.py checks.
+disk=$work/disk.img
+truncate -s "$((data_at + data_mib + 1))M" "$disk"
+MKE2FS_CONFIG=$tree/vendor/e2fsprogs/mke2fs.conf fakeroot -- \
+    mke2fs -q -t ext2 -b 4096 -F -E "offset=$((data_at * 1048576))" \
+    -L Rach2_data -d "$work/data" "$disk" "$((data_mib * 256))"
+set -- -n "6:$((data_at * 2048)):+${data_mib}M" -t 6:8300 -c 6:'Rach2 data'
+if [ "$mode" = ext2 ]; then
+    dd if="$root" of="$disk" bs=1M seek=1 conv=notrunc,sparse status=none
+    set -- -n "1:2048:$((data_at * 2048 - 1))" -t 1:8300 "$@"
+fi
+# mke2fs wipes the partition table signatures, so write the table last.
+sgdisk -o -U "$guid" "$@" "$disk"
 sgdisk -p "$work/disk.img" | tee -a "$out/inputs.txt"
 rm -rf "$work/data"
 echo "qemu: data partition made"
 
 : > "$out/serial.log"
-line="rach2.rootimage=GPTID=$guid,6:/trial2654/$image rach2.slot=trialroot rach2.trace=enosys"
 qemu-system-x86_64 -accel kvm -cpu host,invtsc=on -smp 4 -m 8G -machine q35 \
-    -kernel "$kernel" -append "$line" \
+    -kernel "$kernel" -append "$line rach2.trace=enosys" \
     -drive "file=$work/disk.img,format=raw,if=none,id=d0" -device ide-hd,drive=d0,bus=ide.0 \
     -nic "user,model=rtl8139,hostfwd=tcp:127.0.0.1:$port-:22" \
     -audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
@@ -62,6 +85,9 @@ until L true 2> /dev/null; do
     [ "$still" -lt 300 ] || { echo 'qemu: the boot stopped' >&2; tail -n 20 "$out/serial.log" >&2; exit 1; }
     sleep 5
 done
+if [ "$mode" = ext2 ]; then
+    L 'mkdir -p /data && mount -t ext2 /dev/disk0p6 /data'
+fi
 L "cat /proc/cmdline; grep -e ' / ' -e ' /data ' /proc/mounts; ls -l /data/trial2654" \
     | tee "$out/boot.txt"
 status=0
