@@ -10,9 +10,10 @@
 # the boot processor, one page below that, and find them from their own
 # address, since 32-bit code has no addressing relative to the instruction
 # pointer. Where the page says the clock does not run from the TSC, where
-# KVM's page has withdrawn its stable bit, or for a clock or an argument
-# they do not serve, they make the system call they stand for through
-# __kernel_vsyscall and return what the kernel returned, -errno for an
+# KVM's page has withdrawn its stable bit, fine time takes the system call.
+# Coarse time and time() read the data page in every mode. For a clock or
+# an argument it does not serve, the vDSO makes the system call through
+# __kernel_vsyscall and returns what the kernel returned, -errno for an
 # error, as Linux's vDSO does.
 
 # From the code's first byte back to the data page: the image's bytes
@@ -56,7 +57,6 @@
 # makes.
 .set VCLOCK_NONE,          0
 .set VCLOCK_PVCLOCK,       2
-.set NR_time,              13
 .set NR_gettimeofday,      78
 .set NR_sigreturn,         119
 .set NR_rt_sigreturn,      173
@@ -296,9 +296,7 @@ vdso32_fine:
 
 # A coarse clock, the seconds at the offset in EAX and the nanoseconds 8
 # bytes after them, the time at the tick's last edge, without the TSC:
-# EDX:EAX and ECX and the carry as `vdso32_fine` gives them, the mode checked in each pass as
-# there; Linux's do_coarse needs no check, since its page is kept while the
-# clock is stopped, and this one is not.
+# EDX:EAX and ECX as `vdso32_fine` gives them, with the carry clear.
 vdso32_coarse:
     pushl %ebx
     pushl %esi
@@ -307,8 +305,6 @@ vdso32_coarse:
     movl D_SEQ(%ecx), %edi
     testl $1, %edi
     jnz 2f
-    cmpl $VCLOCK_NONE, D_MODE(%ecx)
-    je 3f
     movl (%ecx,%eax), %ebx
     movl 4(%ecx,%eax), %esi
     movl 8(%ecx,%eax), %edx
@@ -325,25 +321,15 @@ vdso32_coarse:
 2:
     pause
     jmp 1b
-3:
-    popl %edi
-    popl %esi
-    popl %ebx
-    stc
-    ret
 
 # The clock whose id is in EAX, read into EDX:EAX and ECX as `vdso32_fine`
 # gives it, with the carry flag clear: CLOCK_REALTIME and its coarse form,
 # CLOCK_MONOTONIC, whose reading CLOCK_BOOTTIME shares, as in the kernel's
 # clock_read, and its coarse form, and CLOCK_MONOTONIC_RAW.
-# The carry flag is set, with nothing read, for any other clock and while
-# the clock does not run from the TSC, which each reading checks again
-# inside its sequence-count loop; the readings are tail calls, so that their
-# carry is this routine's.
+# The carry flag is set, with nothing read, for any other clock or when
+# a fine reading finds no vDSO clock.
 vdso32_clock:
     call vdso32_page
-    cmpl $VCLOCK_NONE, D_MODE(%ecx)
-    je 9f
     testl %eax, %eax
     je 1f
     cmpl $1, %eax
@@ -356,7 +342,6 @@ vdso32_clock:
     je 3f
     cmpl $6, %eax
     je 4f
-9:
     stc
     ret
 5:
@@ -468,22 +453,19 @@ vdso32_gettimeofday_end:
 
 # old_time32_t time(old_time32_t *t)
 #
-# Real time's seconds, cut to 32 bits, as the kernel's time reads them,
-# also stored at t when it is not null.
+# Real time's seconds at the last tick, cut to 32 bits, also stored at t
+# when it is not null.
 .globl vdso32_time
 vdso32_time:
-    xorl %eax, %eax
-    call vdso32_clock
-    jc 9f
+    call vdso32_page
+    movl $D_COARSE_REAL_SEC, %eax
+    call vdso32_coarse
     movl 4(%esp), %edx
     testl %edx, %edx
     je 1f
     movl %eax, (%edx)
 1:
     ret
-9:
-    movl $NR_time, %eax
-    jmp vdso32_fallback2
 .globl vdso32_time_end
 vdso32_time_end:
 

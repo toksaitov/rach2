@@ -5,7 +5,7 @@
  * Given `clock=tsc`, the machine must keep its clock from the TSC, as an
  * x86-64 kernel does under `rach2.tscreliable` on QEMU's emulator; given
  * `clock=syscall`, from its other reference, as under `rach2.notsc`, where
- * the vDSO's functions make the system call themselves; given `clock=kvm`,
+ * the vDSO's fine clocks make the system call themselves; given `clock=kvm`,
  * it requires what KVM's clock, kvm-clock, calls for on the machine its
  * runner booted, whose accelerator ETUDE_ACCEL in the environment names.
  *
@@ -58,10 +58,12 @@
  * On the i686 kernel, which has no vDSO, `absent`: there is no
  * AT_SYSINFO_EHDR, and maps names neither region; then `source`.
  *
- * On both, `calls`: 100,000 calls of clock_gettime, gettimeofday and time
- * through musl raise /proc/stat's `clock_calls`, the kernel's count of the
- * clock's system calls, by fewer than 1,000 under `clock=tsc`, the other
- * processes' share, and by at least 100,000 under `clock=syscall`.
+ * On both, `calls` counts 40,000 fine readings and 60,000 coarse readings
+ * separately in /proc/stat's `clock_calls`. The coarse readings include
+ * the vDSO's time, called directly since musl's time reads a fine clock.
+ * Each reading has a system call if the kernel maps no vDSO. With a vDSO
+ * only the fine group needs the calls when its fine clock is stopped.
+ * Up to 999 extra calls per group are allowed for other processes.
  *
  * Under `clock=kvm` the runner's word decides what is required, and not
  * the kernel's: ETUDE_ACCEL is `kvm` where QEMU runs under KVM, which
@@ -69,7 +71,7 @@
  * only where the host keeps time by the TSC, which ETUDE_KVM_STABLE in
  * the environment reports from the host's own clock source, 1 where it
  * is the TSC and 0 where it is another; without the bit a guest's vDSO
- * makes the clock system calls, as Linux's does. The group `kvmclock`
+ * makes the fine clock system calls, as Linux's does. The group `kvmclock`
  * has the branch `vdso` under KVM on the x86-64 kernel where
  * ETUDE_KVM_STABLE is 1, `syscall` under KVM where it is 0 and on the
  * i686 kernel, which has no vDSO, and `absent` under any other
@@ -83,12 +85,10 @@
  * listed, which shows the kernel gave KVM its clock pages, and the one in
  * use is kvm-clock, or tsc while the vDSO's clock runs, as Linux picks a
  * TSC it rates above kvm-clock; under another accelerator no kvm-clock is
- * listed. Then the same 100,000 calls, under the id of the branch:
- * `exitfree`, branch `vdso`, fewer than 1,000 system calls, since the vDSO
- * reads KVM's page or the TSC; `counted`, branch `syscall`, at least
- * 100,000; and `unlisted`, branch `absent`, either count as `vdso_tsc`
- * says. Without ETUDE_ACCEL the row fails, since nothing but the kernel
- * would say what to expect.
+ * listed. The same count follows under the id of the branch: `exitfree`
+ * when the vDSO's fine clock runs, `counted` under KVM when it does not,
+ * and `unlisted` under another accelerator. Without ETUDE_ACCEL the row
+ * fails, since nothing but the kernel would say what to expect.
  *
  * It prints "VDSOMUSL OK" and exits 0 on success, or prints "VDSOMUSL FAIL
  * (detail)" and exits 1 at the first failure. etude's report
@@ -121,10 +121,10 @@
 #include "../probe_args.h"
 #include "../probe_report.h"
 
-/* The calls the `calls` row makes, and the most the other processes may add
- * meanwhile where the vDSO answers them. */
-#define CALLS  100000L
-#define OTHERS 1000L
+/* Loops of two fine readings or three coarse readings, and the excluded
+ * upper bound on the other processes' calls during each group. */
+#define CALL_LOOPS 20000L
+#define OTHERS     1000L
 
 /* The readings of the `ordered` row on one processor, and on each in turn. */
 #define READINGS 1000000L
@@ -235,45 +235,6 @@ static int processors(void)
     long n = sysconf(_SC_NPROCESSORS_ONLN);
 
     return n < 1 ? 1 : (int)n;
-}
-
-/**
- * Make 100,000 calls of the clock through musl, a quarter each of
- * clock_gettime of real time and of the monotonic clock, gettimeofday and
- * time, and check the kernel's count of the clock's system calls over them.
- */
-static int calls(void)
-{
-    unsigned long before;
-    unsigned long after;
-    unsigned long delta;
-    struct timespec ts;
-    struct timeval tv;
-    long i;
-
-    if (stat_field("clock_calls", &before) != 0) {
-        return fail("/proc/stat has no clock_calls line");
-    }
-    for (i = 0; i < CALLS / 4; i++) {
-        clock_gettime(CLOCK_REALTIME, &ts);
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        gettimeofday(&tv, NULL);
-        (void)time(NULL);
-    }
-    if (stat_field("clock_calls", &after) != 0) {
-        return fail("/proc/stat has no clock_calls line");
-    }
-    delta = (unsigned long)(uint32_t)(after - before);
-    printf("vdsomusl: calls: %ld through musl, %lu system calls\n", CALLS, delta);
-    if (want_tsc && delta >= (unsigned long)OTHERS) {
-        return fail(want_kvm ? "the clock calls made system calls where the vDSO's clock must run"
-                             : "the clock calls made system calls where the vDSO reads the TSC");
-    }
-    if (!want_tsc && delta < (unsigned long)CALLS) {
-        return fail("fewer system calls of the clock than calls where the vDSO has no TSC");
-    }
-    report_held();
-    return 0;
 }
 
 /** Read the first line of the file `path` into `line` of `size` bytes,
@@ -477,6 +438,62 @@ static time_fn vdso_time;
 static getcpu_fn vdso_getcpu;
 static getres_fn vdso_clock_getres;
 
+/** Count the fine or coarse clock group's system calls, allowing other
+ * processes fewer than OTHERS calls during the group. */
+static int count_calls(int coarse)
+{
+    unsigned long before, after, delta;
+    unsigned long readings = CALL_LOOPS * (coarse ? 3 : 2);
+    unsigned long expected = !kernel_x86_64 || (!coarse && !want_tsc) ? readings : 0;
+    struct timespec ts;
+    struct timeval tv;
+    vdso_timeval vdso_tv;
+    long i;
+
+    if (stat_field("clock_calls", &before) != 0) {
+        return fail("/proc/stat has no clock_calls line");
+    }
+    for (i = 0; i < CALL_LOOPS; i++) {
+        if (coarse) {
+            clock_gettime(CLOCK_REALTIME_COARSE, &ts);
+            clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+            if (kernel_x86_64) {
+                vdso_time(NULL);
+            } else {
+                time(NULL);
+            }
+        } else {
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            if (kernel_x86_64) {
+                vdso_gettimeofday(&vdso_tv, NULL);
+            } else {
+                gettimeofday(&tv, NULL);
+            }
+        }
+    }
+    if (stat_field("clock_calls", &after) != 0) {
+        return fail("/proc/stat has no clock_calls line");
+    }
+    delta = (unsigned long)(uint32_t)(after - before);
+    printf("vdsomusl: calls: %lu %s readings, %lu system calls, expected %lu\n", readings,
+           coarse ? "coarse" : "fine", delta, expected);
+    if (delta < expected || delta >= expected + OTHERS) {
+        return fail(coarse ? "wrong system call count for coarse time"
+                           : "wrong system call count for fine time");
+    }
+    return 0;
+}
+
+/** Check both groups before reporting the calls assertion. */
+static int calls(void)
+{
+    if (count_calls(0) != 0 || count_calls(1) != 0) {
+        return 1;
+    }
+    report_held();
+    return 0;
+}
+
 /* The vDSO's tables, as `symbols` finds them through its dynamic section. */
 static const unsigned char *image;
 static const Elf32_Word *hashtab;
@@ -672,6 +689,7 @@ static int agree(void)
     long long after;
     long long x;
     long t;
+    long stored;
     unsigned i;
 
     for (i = 0; i < sizeof(clocks) / sizeof(clocks[0]); i++) {
@@ -696,11 +714,11 @@ static int agree(void)
     if (x < before || x > after || tv.tv_usec < 0 || tv.tv_usec >= 1000000L) {
         return fail("the vDSO's gettimeofday is not between two system calls' real time");
     }
-    before = sys_ns(CLOCK_REALTIME) / 1000000000LL;
-    t = vdso_time(NULL);
-    after = sys_ns(CLOCK_REALTIME) / 1000000000LL;
-    if (t < before || t > after) {
-        return fail("the vDSO's time is not between two system calls' real time");
+    before = syscall(SYS_time, NULL);
+    t = vdso_time(&stored);
+    after = syscall(SYS_time, NULL);
+    if (t < before || t > after || stored != t) {
+        return fail("the vDSO's time result or store disagrees with the system call");
     }
     report_held();
     return 0;

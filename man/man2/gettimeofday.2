@@ -63,7 +63,7 @@ too.
 If the clock could not be read, the result is time since boot.
 The hardware clock is read once.
 .Fn time
-returns the seconds of the same real time, and stores them at
+returns the seconds of real time at the last tick, and stores them at
 .Fa tloc
 as well when it is not null.
 .Pp
@@ -192,17 +192,18 @@ with the 8254; and the 4 ms tick for every other clock, the coarse and CPU
 clocks.
 Each clock advances in steps of its resolution.
 .Pp
-On x86-64, musl and glibc call
-.Fn clock_gettime ,
-.Fn gettimeofday ,
+The x86-64 kernel's two vDSOs serve coarse clocks and
+.Fn __vdso_time
+from the data page whatever clock source the kernel uses.
+Fine readings there need the TSC or a stable KVM clock page and fall
+back to the system call without one.
+Musl implements its
 .Fn time
-and
-.Fn clock_getres
-through the vDSO, which answers the six clocks above that are not CPU
-clocks without entering the kernel where it keeps the clock from the TSC
-or, under KVM, from a clock page KVM marks stable, and makes the system
-call otherwise
-.Pq Xr vdso 7 .
+through a fine
+.Fn clock_gettime
+reading.
+See
+.Xr vdso 7 .
 The line
 .Li clock_calls
 of

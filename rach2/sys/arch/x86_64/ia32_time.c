@@ -81,16 +81,13 @@ static int put_times32(uintptr_t u, const long *t, int n)
     return copy_to_user((void __user *)u, w, (size_t)n * 8u) != 0 ? -EFAULT : 0;
 }
 
-/** time (13): real time's seconds, also stored as 32 bits at the address in
- * argument 0 when it is not 0. */
+/** time (13): the native call's seconds, cut to 32 bits and also stored
+ * at the address in argument 0 when it is not 0. */
 long compat_sys_time32(isr_params_t *params)
 {
-    int64_t sec, nsec;
-    int32_t t;
     uintptr_t u = UPTR(SC_ARG(params, 0));
+    int32_t t = (int32_t)ia32_native(params, sys_time, NULL, 0, 0, 0, 0, 0, 0, 0);
 
-    get_current_time(&sec, &nsec);
-    t = (int32_t)sec;
     if (u && copy_to_user((void __user *)u, &t, sizeof(t)) != 0) {
         return -EFAULT;
     }

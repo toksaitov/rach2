@@ -473,9 +473,8 @@ long sys_gettimeofday(isr_params_t *params)
 }
 
 /**
- * time(2): real time's seconds, as gettimeofday reads them, also stored at
- * tloc when it is not null. glibc on x86-64 calls it for time(), where a
- * vDSO would otherwise answer.
+ * time(2): real time's seconds at the last tick, as Linux's
+ * ktime_get_real_seconds reads them, also stored at tloc when it is not null.
  */
 long sys_time(isr_params_t *params)
 {
@@ -485,7 +484,7 @@ long sys_time(isr_params_t *params)
     long t;
 
     clock_call_count++;
-    get_current_time(&seconds, &nanoseconds);
+    rtc_coarse_realtime(&seconds, &nanoseconds);
     t = (long)seconds;
     if (tloc && copy_to_user(tloc, &t, sizeof(t)) != 0) {
         return -EFAULT;
