@@ -710,10 +710,13 @@ can_search() { # can_search DIR UID GROUPS
 # TARGET, which pin_key_links is to copy into that account's .ssh. The copy
 # keeps the file's owner and mode, so a file such as one of root's with mode
 # 644 in a directory of mode 700 would become readable to the account; the
-# update refuses instead.
+# update refuses instead. The top of ROOT is not judged: the copy in the .ssh
+# lies below it too, so it can hide nothing the copy would show, and an
+# update's ROOT is its private copy `keep`, whose top is root's, mode 700,
+# whatever the root's own is.
 key_reach() { # key_reach ROOT LINK TARGET ACCOUNTS
     kr_dirs=$(root_path "$1" "$2" "" dirs) || die "$2 leads through too many links"
-    kr_dirs=$(printf '%s\n' "$kr_dirs" | sed '$d' | sort -u)
+    kr_dirs=$(printf '%s\n' "$kr_dirs" | sed '$d' | sed '\|^/$|d' | sort -u)
     while IFS=: read -r kr_uid kr_gid kr_name; do
         [ -n "$kr_uid" ] || continue
         kr_groups=$(account_groups "$1" "$kr_name" "$kr_gid") ||
