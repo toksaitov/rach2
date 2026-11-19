@@ -554,6 +554,8 @@ struct edid_parse {
     uint8_t vics[256];
     uint32_t nvics;
     struct drm_edid_hdmi_info *hdmi;
+    struct drm_connector *eld; /* the connector an ELD walk fills */
+    int eld_mnl, eld_sads;     /* its name's length and the SADs so far */
 };
 
 /** The base block's revision, EDID 1.x's x. */
@@ -1841,9 +1843,144 @@ static int add_probed(const struct drm_mode_modeinfo *mode, void *arg)
     return drm_mode_probed_add((struct drm_connector *)arg, mode) == 0 ? 0 : -1;
 }
 
-/** Set `connector`'s EDID property and what it says from `edid` of `len`
- * bytes, cleaned; the cleaned copy into `*out` with its blocks when `out`
- * is not NULL, which the caller frees. */
+/* ---- The ELD ---- */
+
+/** Keep in `closure` the text of a monitor name descriptor, the last one,
+ * as Linux's monitor_name callback does. */
+static void monitor_name(struct edid_parse *p, const uint8_t *d, void *closure)
+{
+    (void)p;
+    if (is_display(d, 0xfc)) {
+        *(const uint8_t **)closure = d + 5;
+    }
+}
+
+/** One CTA data block's part of the ELD, Linux's drm_edid_to_eld loop:
+ * the short audio descriptors, up to 15 in all, the speaker allocation, and
+ * from HDMI's vendor block the AI bit and the latencies
+ * (drm_parse_hdmi_vsdb_audio). */
+static void eld_db(struct edid_parse *p, const uint8_t *db, uint32_t len)
+{
+    struct drm_connector *c = p->eld;
+    uint8_t *eld = c->eld;
+    int tag = db[0] >> 5, n;
+
+    if (tag == 1) {
+        n = (int)len / 3;
+        if (n > 15 - p->eld_sads) {
+            n = 15 - p->eld_sads;
+        }
+        if (n >= 1) {
+            k_memcpy(&eld[DRM_ELD_CEA_SAD(p->eld_mnl, p->eld_sads)], db + 1, (uint32_t)n * 3u);
+            p->eld_sads += n;
+        }
+    } else if (tag == 4 && len >= 1) {
+        eld[DRM_ELD_SPEAKER] = db[1];
+    } else if (tag == 3 && len >= 5 && db[1] == 0x03 && db[2] == 0x0c && db[3] == 0x00) {
+        if (len >= 6 && (db[6] & (1 << 7))) {
+            eld[DRM_ELD_SAD_COUNT_CONN_TYPE] |= DRM_ELD_SUPPORTS_AI;
+        }
+        if (len >= 10 && (db[8] & (1 << 7))) {
+            c->latency_present[0] = 1;
+            c->video_latency[0] = db[9];
+            c->audio_latency[0] = db[10];
+        }
+        if (len >= 12 && (db[8] & (1 << 7)) && (db[8] & (1 << 6))) {
+            c->latency_present[1] = 1;
+            c->video_latency[1] = db[11];
+            c->audio_latency[1] = db[12];
+        }
+    }
+}
+
+/**
+ * Build `connector`'s ELD from the cleaned EDID `clean` of `blocks`
+ * blocks, or clear it when `clean` is NULL, Linux's clear_eld and
+ * drm_edid_to_eld (drm_edid.c:5606-5725 of 6.12.115): the monitor's name,
+ * the first CTA extension's revision for a digital EDID 1.3 or later
+ * (drm_parse_cea_ext), the manufacturer and product, the data blocks of
+ * `eld_db`, the connection type and the baseline block's length. The port
+ * ID and the audio's delay are the display driver's to fill.
+ */
+static void edid_to_eld(struct drm_connector *connector, const uint8_t *clean, uint32_t blocks)
+{
+    uint8_t *eld = connector->eld;
+    const uint8_t *name = NULL;
+    struct edid_parse p;
+    uint32_t b, rev = 0, baseline;
+    int mnl;
+
+    k_memset(eld, 0, DRM_ELD_MAX);
+    connector->latency_present[0] = connector->latency_present[1] = 0;
+    connector->video_latency[0] = connector->video_latency[1] = 0;
+    connector->audio_latency[0] = connector->audio_latency[1] = 0;
+    if (!clean) {
+        return;
+    }
+    k_memset(&p, 0, sizeof(p));
+    p.edid = clean;
+    p.blocks = blocks;
+    for_each_detailed(&p, monitor_name, (void *)&name);
+    for (mnl = 0; name && mnl < 13 && name[mnl] != 0x0a; mnl++) {
+        eld[DRM_ELD_MONITOR_NAME_STRING + mnl] = name[mnl];
+    }
+    if (clean[0x13] >= 3 && (clean[0x14] & 0x80)) {
+        for (b = 1; b < blocks && rev == 0; b++) {
+            if (clean[b * EDID_LENGTH] == CEA_EXT) {
+                rev = clean[b * EDID_LENGTH + 1];
+            }
+        }
+    }
+    eld[DRM_ELD_CEA_EDID_VER_MNL] = (uint8_t)(rev << DRM_ELD_CEA_EDID_VER_SHIFT | (uint32_t)mnl);
+    eld[DRM_ELD_VER] = DRM_ELD_VER_CEA861D;
+    k_memcpy(&eld[DRM_ELD_MANUFACTURER_NAME0], clean + 8, 4);
+    p.eld = connector;
+    p.eld_mnl = mnl;
+    for_each_cta_db(&p, eld_db);
+    eld[DRM_ELD_SAD_COUNT_CONN_TYPE] |= (uint8_t)(p.eld_sads << DRM_ELD_SAD_COUNT_SHIFT);
+    eld[DRM_ELD_SAD_COUNT_CONN_TYPE] |=
+        connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort ||
+                connector->connector_type == DRM_MODE_CONNECTOR_eDP
+            ? DRM_ELD_CONN_TYPE_DP
+            : DRM_ELD_CONN_TYPE_HDMI;
+    baseline = DRM_ELD_MONITOR_NAME_STRING - 4u + (uint32_t)mnl + (uint32_t)p.eld_sads * 3u;
+    eld[DRM_ELD_BASELINE_ELD_LEN] = (uint8_t)((baseline + 3u) / 4u);
+}
+
+uint32_t drm_eld_size(const uint8_t *eld)
+{
+    return 4u + eld[DRM_ELD_BASELINE_ELD_LEN] * 4u;
+}
+
+uint32_t drm_av_sync_delay(const struct drm_connector *connector,
+                           const struct drm_mode_modeinfo *mode)
+{
+    int i = (mode->flags & DRM_MODE_FLAG_INTERLACE) != 0, a, v;
+
+    if (!connector->latency_present[0]) {
+        return 0;
+    }
+    if (!connector->latency_present[1]) {
+        i = 0;
+    }
+    a = connector->audio_latency[i];
+    v = connector->video_latency[i];
+    if (a == 255 || v == 255) {
+        return 0;
+    }
+    /* The raw values in ms, an unknown one as 0. */
+    if (a) {
+        a = 2 * (a - 1) < 500 ? 2 * (a - 1) : 500;
+    }
+    if (v) {
+        v = 2 * (v - 1) < 500 ? 2 * (v - 1) : 500;
+    }
+    return v > a ? (uint32_t)(v - a) : 0u;
+}
+
+/** Set `connector`'s EDID property and what it says, its ELD among them,
+ * from `edid` of `len` bytes, cleaned; the cleaned copy into `*out` with its
+ * blocks when `out` is not NULL, which the caller frees. */
 static void update_property(struct drm_connector *connector, const uint8_t *edid, uint32_t len,
                             uint8_t **out, uint32_t *out_blocks)
 {
@@ -1870,6 +2007,7 @@ static void update_property(struct drm_connector *connector, const uint8_t *edid
     connector->bpc = info.bpc;
     connector->min_vfreq = info.min_vfreq;
     connector->max_vfreq = info.max_vfreq;
+    edid_to_eld(connector, clean, blocks);
     if (out) {
         *out = clean;
         *out_blocks = blocks;
