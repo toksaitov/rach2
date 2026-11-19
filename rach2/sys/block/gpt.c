@@ -13,6 +13,7 @@
 #include "gpt.h"
 
 #include "block.h"
+#include "../lib/crc32.h"
 
 #define GPT_SIGNATURE_0 0x20494645u /* "EFI " */
 #define GPT_SIGNATURE_1 0x54524150u /* "PART" */
@@ -35,27 +36,10 @@ static uint64_t read64(const uint8_t *p)
     return (uint64_t)read32(p) | ((uint64_t)read32(p + 4) << 32);
 }
 
-/**
- * The reflected polynomial 0xEDB88320, starting at all ones and inverted at
- * the end. Computed a bit at a time, because an array is at most sixteen
- * kilobytes and a table of remainders would be a kilobyte of data.
- */
+/** The CRC-32 of GUID tables, as gpt.h says. */
 uint32_t gpt_crc32(const uint8_t *data, uint32_t length)
 {
-    uint32_t crc = 0xFFFFFFFFu;
-    uint32_t i;
-
-    for (i = 0; i < length; i++) {
-        int bit;
-
-        crc ^= (uint32_t)data[i];
-        for (bit = 0; bit < 8; bit++) {
-            uint32_t mask = (uint32_t)0u - (crc & 1u);
-
-            crc = (crc >> 1) ^ (0xEDB88320u & mask);
-        }
-    }
-    return ~crc;
+    return ~crc32_le(~0u, data, length);
 }
 
 int gpt_protective(const uint8_t *sector)

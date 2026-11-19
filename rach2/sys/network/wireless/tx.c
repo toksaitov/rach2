@@ -2,6 +2,7 @@
  * TID, the PN and encryption in software or by the radio, after Linux's
  * net/mac80211/tx.c and wpa.c. */
 #include "data.h"
+#include "../../lib/crc32.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../timer.h"
@@ -79,15 +80,7 @@ unsigned wlan_data_hdrlen(const uint8_t *frame, unsigned len)
 
 uint32_t wlan_crc32(const uint8_t *data, unsigned len)
 {
-    uint32_t crc = 0xffffffffu;
-    unsigned i, b;
-
-    for (i = 0; i < len; ++i) {
-        crc ^= data[i];
-        for (b = 0; b < 8; ++b)
-            crc = crc >> 1 ^ (0xedb88320u & (0u - (crc & 1)));
-    }
-    return ~crc;
+    return ~crc32_le(~0u, data, len);
 }
 
 unsigned wlan_data_ac(unsigned tid)

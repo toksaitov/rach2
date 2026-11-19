@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/block/disk.c rach2/sys/block/partition.c
  * host-deps: rach2/sys/block/gpt.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/crc32.c
  *
  * The class driver, the block request layer, devfs and the caches are
  * stubs: a medium in memory answers the requests the scan starts, one per

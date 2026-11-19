@@ -27,6 +27,7 @@
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/tick.c
+ * host-deps: rach2/sys/lib/crc32.c
  */
 #define main wlan_join_rows
 #include "wlan_join_hosttest.c"

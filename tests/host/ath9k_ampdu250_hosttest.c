@@ -20,6 +20,7 @@
  * host-deps: rach2/sys/network/wireless/crypto/tkip.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/lib/crc32.c
  */
 #define main ath9k_ampdu_rows
 #include "ath9k_ampdu_hosttest.c"
