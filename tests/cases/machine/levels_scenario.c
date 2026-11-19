@@ -1,9 +1,10 @@
 /*
  * levels_scenario.c: the scenario of machine.screen.levels, in which init
- * keeps the backlight's and the mixer's levels across a reboot and a reset,
- * and the console blanks with the backlight off: three boots of one copy
- * of the shutdown disk, on an HDA machine whose SSDT gives the backlight
- * acpi_video0, the last with a blank time of a few seconds.
+ * keeps the backlight's and the mixer's levels across a reboot and a power
+ * cut, QMP's quit of QEMU while the guest runs, and the console blanks with
+ * the backlight off: three boots of one copy of the shutdown disk, on an HDA
+ * machine whose SSDT gives the backlight acpi_video0, the last with a blank
+ * time of a few seconds.
  */
 #include <stdint.h>
 #include <stdio.h>

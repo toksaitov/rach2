@@ -753,8 +753,9 @@ static void note_saved(char *saved, int size, const char *text, int n)
  * through `replace_file`, making the directory when it is missing: every
  * level when `all`, as the shutdown handler asks, else only a level that
  * differs from what its file holds. Makes only system calls a handler may
- * make; a backlight whose level cannot be read or saved keeps the file it
- * had.
+ * make; a backlight whose level cannot be read keeps the file it had, and
+ * one whose save fails is noted as unsaved, so that the next pass writes it
+ * whatever its level then.
  */
 static void save_backlights(int all)
 {
@@ -771,9 +772,10 @@ static void save_backlights(int all)
                             (dir = open(BACKLIGHT_KEPT, O_RDONLY | O_DIRECTORY)) < 0)) {
                 return;
             }
-            if (replace_file(dir, b->kept, b->fresh, b->pending, text, n) == 0) {
-                note_saved(b->saved, (int)sizeof(b->saved), text, n);
-            }
+            /* A failure may follow the rename, which leaves the file's
+             * text unknown: none is noted, so the next pass writes again. */
+            note_saved(b->saved, (int)sizeof(b->saved), text,
+                       replace_file(dir, b->kept, b->fresh, b->pending, text, n) == 0 ? n : 0);
         }
     }
     if (dir >= 0) {
@@ -1018,7 +1020,10 @@ static void save_mixer(int all)
         (dir = open("/var/lib", O_RDONLY | O_DIRECTORY)) < 0) {
         return;
     }
-    if (replace_file(dir, MIXER_KEPT, MIXER_FRESH, MIXER_PENDING, text, n) == 0) {
+    if (replace_file(dir, MIXER_KEPT, MIXER_FRESH, MIXER_PENDING, text, n) != 0) {
+        /* The file's text is unknown after a failure past the rename. */
+        mixer_saved[0] = '\0';
+    } else {
         note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
         if (mixer_old_mute) {
             (void)unlink(MIXER_OLD_MUTE);

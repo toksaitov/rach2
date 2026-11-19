@@ -12,10 +12,11 @@
  * mixer's and the backlights' kept files.
  *
  * `utils/init.c` is included whole, as the metal build with the console
- * login, with fopen, dup2, unlink, the execs, fork, waitpid, reboot, access
- * and if_nametoindex replaced by the functions below, so that a row can fail
- * a call, send a signal at a chosen point, see what a child did by its exit
- * status, and give init an image's files and a `wlan0`.
+ * login, with fopen, dup2, unlink, fsync, open, mkdir, stat, rename, the
+ * execs, fork, waitpid, reboot, access and if_nametoindex replaced by the
+ * functions below, so that a row can fail a call, send a signal at a chosen
+ * point, see what a child did by its exit status, give init an image's
+ * files and a `wlan0`, and save the levels under a scratch /var.
  */
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -32,6 +33,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <net/if.h>
 
@@ -154,15 +156,69 @@ static int policy_dup2(int from, int to)
 
 static const char *Settings_fresh, *Settings_pending;
 static int Flush_fail, Flush_calls;
+/* The directory that stands for /var in the save row, NULL outside it. */
+static const char *Var_root;
+
+/** `path`, or, in the save row, the same path under `Var_root` when it is
+ * /var or below it, made in `buf` of PATH_MAX bytes. */
+static const char *mapped(const char *path, char *buf)
+{
+    if (Var_root == NULL || strncmp(path, "/var", 4) != 0 || (path[4] != '/' && path[4] != '\0')) {
+        return path;
+    }
+    snprintf(buf, PATH_MAX, "%s%s", Var_root, path);
+    return buf;
+}
 
 /** init's unlink: change only the two scratch paths of the settings row. */
 static int policy_unlink(const char *path)
 {
+    char buf[PATH_MAX];
+
     if (Settings_fresh &&
         (strcmp(path, Settings_fresh) == 0 || strcmp(path, Settings_pending) == 0)) {
-        return unlink(path);
+        return unlink(mapped(path, buf));
     }
     return 0;
+}
+
+/** init's open, mkdir, stat and rename, which reach `Var_root` for /var. */
+static int policy_open(const char *path, int flags, ...)
+{
+    char buf[PATH_MAX];
+    mode_t mode = 0;
+    va_list ap;
+
+    if (flags & O_CREAT) {
+        va_start(ap, flags);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    return open(mapped(path, buf), flags, mode);
+}
+
+/** See policy_open. */
+static int policy_mkdir(const char *path, mode_t mode)
+{
+    char buf[PATH_MAX];
+
+    return mkdir(mapped(path, buf), mode);
+}
+
+/** See policy_open. */
+static int policy_stat(const char *path, struct stat *st)
+{
+    char buf[PATH_MAX];
+
+    return stat(mapped(path, buf), st);
+}
+
+/** See policy_open. */
+static int policy_rename(const char *from, const char *to)
+{
+    char a[PATH_MAX], b[PATH_MAX];
+
+    return rename(mapped(from, a), mapped(to, b));
 }
 
 /** Fail the selected fsync in a replacement, passing every other one. */
@@ -277,9 +333,17 @@ static unsigned int policy_if_nametoindex(const char *name)
 #define waitpid        policy_waitpid
 #define reboot         policy_reboot
 #define sigtimedwait   policy_sigtimedwait
+#define open(...)      policy_open(__VA_ARGS__)
+#define mkdir(p, m)    policy_mkdir(p, m)
+#define stat(p, s)     policy_stat(p, s)
+#define rename(a, b)   policy_rename(a, b)
 #define main           init_main
 #include "init.c"
 #undef main
+#undef open
+#undef mkdir
+#undef stat
+#undef rename
 #undef access
 #undef if_nametoindex
 #undef fopen
@@ -750,6 +814,86 @@ static void kept_rows(void)
     check(rmdir(dir) == 0, "kept: the row's files removed");
 }
 
+/** Write `text` as the level of the save row's backlight, at `level`. */
+static void set_level(const char *level, const char *text)
+{
+    put_file(level, text, strlen(text));
+}
+
+/** Whether the save row's kept file, under `var`, holds `want`. */
+static int kept_holds(const char *var, const char *want)
+{
+    char path[PATH_MAX + 32], text[24];
+
+    snprintf(path, sizeof(path), "%s/var/lib/backlight/b", var);
+    return read_text(path, text, sizeof(text)) >= 0 && strcmp(text, want) == 0;
+}
+
+/**
+ * Save a backlight's level under a scratch /var: a save whose final
+ * directory flush fails, after its rename put the new level in the file,
+ * leaves the level unsaved, so that a level set back to the one saved
+ * before is written again, not skipped as unchanged.
+ */
+static void save_rows(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    char dir[PATH_MAX], var[PATH_MAX + 8], path[PATH_MAX + 64];
+    struct backlight *b = &backlights[0];
+    int total;
+
+    snprintf(dir, sizeof(dir), "%s/initsave.XXXXXX", tmp != NULL && *tmp != '\0' ? tmp : "/tmp");
+    if (mkdtemp(dir) == NULL) {
+        check(0, "save: a directory for the row made");
+        return;
+    }
+    snprintf(var, sizeof(var), "%s/var", dir);
+    check(mkdir(var, 0755) == 0, "save: the scratch /var made");
+    Var_root = dir;
+    Settings_fresh = BACKLIGHT_KEPT "/b.new";
+    Settings_pending = BACKLIGHT_KEPT "/b.tmp";
+    snprintf(b->level, sizeof(b->level), "%s/level", dir);
+    snprintf(b->kept, sizeof(b->kept), BACKLIGHT_KEPT "/b");
+    snprintf(b->fresh, sizeof(b->fresh), "%s", Settings_fresh);
+    snprintf(b->pending, sizeof(b->pending), "%s", Settings_pending);
+    b->saved[0] = '\0';
+    backlight_count = 1;
+    set_level(b->level, "40\n");
+    save_backlights(0);
+    check(kept_holds(dir, "40\n") && strcmp(b->saved, "40\n") == 0, "save: a level saved");
+    /* Count a whole save's flushes, to fail the last of the next one. */
+    set_level(b->level, "42\n");
+    Flush_fail = 1000;
+    Flush_calls = 0;
+    save_backlights(0);
+    total = Flush_calls;
+    check(kept_holds(dir, "42\n") && strcmp(b->saved, "42\n") == 0 && total > 0,
+          "save: a level changed saved");
+    set_level(b->level, "43\n");
+    Flush_fail = total;
+    Flush_calls = 0;
+    save_backlights(0);
+    Flush_fail = 0;
+    check(Flush_calls == total && kept_holds(dir, "43\n") && b->saved[0] == '\0',
+          "save: a failed final flush, after the rename, leaves the level unsaved");
+    set_level(b->level, "42\n");
+    save_backlights(0);
+    check(kept_holds(dir, "42\n") && strcmp(b->saved, "42\n") == 0,
+          "save: the level saved before is written again after the failed save");
+    backlight_count = 0;
+    Var_root = NULL;
+    Settings_fresh = Settings_pending = NULL;
+    snprintf(path, sizeof(path), "%s/var/lib/backlight/b", dir);
+    (void)unlink(path);
+    snprintf(path, sizeof(path), "%s/var/lib/backlight", dir);
+    (void)rmdir(path);
+    snprintf(path, sizeof(path), "%s/var/lib", dir);
+    (void)rmdir(path);
+    (void)rmdir(var);
+    (void)unlink(b->level);
+    check(rmdir(dir) == 0, "save: the row's files removed");
+}
+
 int main(void)
 {
     static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
@@ -820,6 +964,7 @@ int main(void)
               "the GNU root runs its wpa_supplicant");
     mute_rows();
     kept_rows();
+    save_rows();
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");
