@@ -5,6 +5,7 @@
  * --irqchip-only runs the full-controller rows alone.
  *
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/kvm_xen_none.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vlapic.c, irq.c, iobus.c and io/eventfd.c are the kernel's, included
