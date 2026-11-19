@@ -1451,7 +1451,8 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
  * placed in host-visible memory, then RESOURCE_UNREF, which also detaches
  * the backing, and the frames and the piece freed once the host has
  * answered, since until then it may use them, as Linux's
- * virtio_gpu_free_object and virtio_gpu_vram_free do. A caller that may
+ * virtio_gpu_free_object and virtio_gpu_vram_free do; frames that are the
+ * VM's own are let go before, since the VM keeps them. A caller that may
  * sleep first waits for room (`vgpu_room`), since an exit frees every
  * buffer of the program at once, and waits for the UNREF's memory while
  * earlier commands hold it. Without memory for the commands even so, they
@@ -1465,9 +1466,15 @@ void vgpu_obj_free(struct drm_gem_object *obj)
 
     (void)vgpu_room(vg, 0);
     vgpu_resource_detach(vg, bo);
-    /* The device's pages go before the UNMAP_BLOB that lets it unpin them;
-     * no mapping is left to take away, since each held a reference. */
+    /* The device's pages go before the UNMAP_BLOB or UNREF that lets it
+     * unpin them, since the VM may give a page it unpinned to the next
+     * backing or page list at once, and a frame this kernel still holds a
+     * reference on is not the VM's alone (`paging_user_ram_frames`); no
+     * mapping is left to take away, since each held a reference. */
     vgpu_blob_pages_drop(vg, bo, 0);
+    if (bo->vm_pages) {
+        vgpu_obj_pages_free(vg, bo);
+    }
     if (bo->res_id && !vg->dead) {
         cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
                                 sizeof(struct virtio_gpu_resource_unref));

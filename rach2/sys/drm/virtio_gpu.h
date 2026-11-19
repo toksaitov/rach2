@@ -723,6 +723,7 @@ struct virtio_gpu_object {
     uint32_t blob_flags;
     int host_visible; /* has its piece of the region */
     int map_ok;       /* MAP_BLOB answered with its cache type */
+    int vm_pages;     /* its pages are the VM's backing (`vgpu_backing_pages`) */
     uint32_t map_info;
     uint64_t hv_offset;
     struct virtio_gpu_object *hv_next;

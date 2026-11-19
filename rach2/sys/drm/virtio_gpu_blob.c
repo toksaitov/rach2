@@ -518,6 +518,7 @@ int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_objec
     if (rc == 0) {
         rc = backing_adopt(vg, bo);
     }
+    bo->vm_pages = rc == 0;
     if (rc != 0) {
         vgpu_blob_pages_drop(vg, bo, 0);
         if (rc != -EINTR) {
