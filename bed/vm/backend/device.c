@@ -403,6 +403,7 @@ static int cmd_unref(struct vd *d, const uint8_t *body)
     if (r->iov != 0 && !r->blob) {
         d->ops->detach(d->cookie, c.resource_id);
     }
+    /* A backing of the VM's memory is a pin, which its unpin detaches. */
     if (r->pinned) {
         d->ops->unpin(d->cookie, c.resource_id);
     }
@@ -425,7 +426,7 @@ static int cmd_attach(struct vd *d, const uint8_t *body, uint32_t blen)
     if ((r = find_res(d, c.resource_id, &o)) == 0) {
         return VD_RESP_ERR_RESOURCE_ID;
     }
-    if (r->iov != 0 || r->blob) {
+    if (r->iov != 0 || r->blob || r->backed) {
         return VD_RESP_ERR_UNSPEC;
     }
     if (c.nr_entries > (blen - sizeof(c)) / sizeof(struct c_mem_entry)) {
@@ -444,7 +445,7 @@ static int cmd_attach(struct vd *d, const uint8_t *body, uint32_t blen)
     return 0;
 }
 
-/** RESOURCE_DETACH_BACKING. */
+/** RESOURCE_DETACH_BACKING: the region's entries, or the VM's memory. */
 static int cmd_detach(struct vd *d, const uint8_t *body)
 {
     struct c_resource c;
@@ -454,6 +455,13 @@ static int cmd_detach(struct vd *d, const uint8_t *body)
     memcpy(&c, body, sizeof(c));
     if ((r = find_res(d, c.resource_id, &o)) == 0) {
         return VD_RESP_ERR_RESOURCE_ID;
+    }
+    if (r->backed) {
+        d->ops->unpin(d->cookie, c.resource_id);
+        r->backed = 0;
+        r->pinned = 0;
+        r->size = 0;
+        return 0;
     }
     if (r->iov == 0 || r->blob) {
         return VD_RESP_ERR_UNSPEC;
@@ -770,70 +778,134 @@ static int runs_fit(const struct vd_pages *q, uint64_t left)
     return 0;
 }
 
+/** The bytes of a refused page list's answer, its bare header, with the
+ * refusal in *type. */
+static uint32_t refuse(uint32_t *type, uint32_t err)
+{
+    *type = err;
+    return sizeof(struct vd_hdr);
+}
+
 /**
- * RESOURCE_MAP_BLOB under VGS_TF_PAGES: the page list of a mappable HOST3D
- * blob from the page `offset` names, as many runs as the chain's writable
- * bytes hold after the header and the `struct vgs_pages`, written to resp.
- * The renderer pins the blob at its first answer. Returns the answer's
- * length; *type is RESP_OK_MAP_INFO or the error.
+ * Answer a page list of resource `id` from p->first of p->total pages,
+ * through the renderer's `op`, `pages` or `back`, which pins the memory at
+ * the first ask: as many runs as the chain's writable bytes hold after the
+ * header and the `struct vgs_pages`, written to d->resp. A refusal lets go of
+ * the pin, which the renderer may have made before the list failed, since
+ * the driver sends no UNMAP_BLOB for a map it was refused, and a backing
+ * refused is no backing. Returns the answer's length; *type is
+ * RESP_OK_MAP_INFO or the error.
  */
-static uint32_t cmd_map_blob(struct vd *d, const uint8_t *body, uint8_t *resp, uint32_t *type)
+static uint32_t page_answer(struct vd *d, struct vd_res *r, uint32_t id, struct vgs_pages *p,
+                            int (*op)(void *c, struct vd_pages *q), uint32_t *type)
 {
     uint32_t room = d->room < VD_RESP_MAX ? d->room : VD_RESP_MAX;
-    struct vgs_pages p;
-    struct c_map_blob c;
     struct vd_pages q;
-    struct vd_res *r;
     int err;
 
-    memcpy(&c, body, sizeof(c));
-    *type = VD_RESP_ERR_PARAMETER;
-    if ((d->drv.transport_features & VGS_TF_PAGES) == 0 || d->ops->pages == 0) {
-        *type = VD_RESP_ERR_UNSPEC;
-        return sizeof(struct vd_hdr);
-    }
-    if ((r = find_res(d, c.resource_id, 0)) == 0) {
-        *type = VD_RESP_ERR_RESOURCE_ID;
-        return sizeof(struct vd_hdr);
-    }
-    memset(&p, 0, sizeof(p));
-    p.total = (r->size + VGS_PAGE - 1) / VGS_PAGE;
-    p.first = c.offset;
-    if (!r->blob || r->mem != BLOB_MEM_HOST3D || (r->flags & BLOB_FLAG_USE_MAPPABLE) == 0 ||
-        p.first >= p.total || room < VGS_PAGES_OFF + sizeof(struct vgs_run)) {
-        return sizeof(struct vd_hdr);
+    if (p->first >= p->total || room < VGS_PAGES_OFF + sizeof(struct vgs_run)) {
+        return refuse(type, VD_RESP_ERR_PARAMETER);
     }
     memset(&q, 0, sizeof(q));
-    q.id = c.resource_id;
+    q.id = id;
     q.epoch = d->drv.epoch;
     q.size = r->size;
-    q.first = p.first;
+    q.first = p->first;
     q.max = (room - VGS_PAGES_OFF) / sizeof(struct vgs_run);
     if ((q.runs = calloc(q.max, sizeof(*q.runs))) == 0) {
-        *type = VD_RESP_ERR_OUT_OF_MEMORY;
-        return sizeof(struct vd_hdr);
+        return refuse(type, VD_RESP_ERR_OUT_OF_MEMORY);
     }
-    err = d->ops->pages(d->cookie, &q);
+    err = op(d->cookie, &q);
     if (err == 0) {
         r->pinned = 1;
-        err = runs_fit(&q, p.total - p.first);
-    } else if (d->ops->unpin != 0) {
-        /* The renderer may have pinned the blob before its list failed, and
-         * the driver sends no UNMAP_BLOB for a map it was refused. */
-        d->ops->unpin(d->cookie, c.resource_id);
+        err = runs_fit(&q, p->total - p->first);
+    }
+    if (err != 0 && d->ops->unpin != 0) {
+        d->ops->unpin(d->cookie, id);
         r->pinned = 0;
     }
     if (err == 0) {
-        p.map_info = q.map_info;
-        p.count = q.count;
-        memcpy(resp + sizeof(struct vd_hdr), &p, sizeof(p));
-        memcpy(resp + VGS_PAGES_OFF, q.runs, (size_t)q.count * sizeof(*q.runs));
-        d->n.maps++;
+        p->map_info = q.map_info;
+        p->count = q.count;
+        memcpy(d->resp + sizeof(struct vd_hdr), p, sizeof(*p));
+        memcpy(d->resp + VGS_PAGES_OFF, q.runs, (size_t)q.count * sizeof(*q.runs));
     }
     free(q.runs);
     *type = err == 0 ? VD_RESP_OK_MAP_INFO : (uint32_t)err;
     return err == 0 ? VGS_PAGES_OFF + q.count * (uint32_t)sizeof(struct vgs_run)
                     : (uint32_t)sizeof(struct vd_hdr);
+}
+
+/**
+ * RESOURCE_MAP_BLOB under VGS_TF_PAGES: the page list of a mappable HOST3D
+ * blob from the page `offset` names (`page_answer`). Returns the answer's
+ * length; *type is RESP_OK_MAP_INFO or the error.
+ */
+static uint32_t cmd_map_blob(struct vd *d, const uint8_t *body, uint32_t *type)
+{
+    struct vgs_pages p;
+    struct c_map_blob c;
+    struct vd_res *r;
+    uint32_t len;
+
+    memcpy(&c, body, sizeof(c));
+    if ((d->drv.transport_features & VGS_TF_PAGES) == 0 || d->ops->pages == 0) {
+        return refuse(type, VD_RESP_ERR_UNSPEC);
+    }
+    if ((r = find_res(d, c.resource_id, 0)) == 0) {
+        return refuse(type, VD_RESP_ERR_RESOURCE_ID);
+    }
+    if (!r->blob || r->mem != BLOB_MEM_HOST3D || (r->flags & BLOB_FLAG_USE_MAPPABLE) == 0) {
+        return refuse(type, VD_RESP_ERR_PARAMETER);
+    }
+    memset(&p, 0, sizeof(p));
+    p.total = (r->size + VGS_PAGE - 1) / VGS_PAGE;
+    p.first = c.offset;
+    len = page_answer(d, r, c.resource_id, &p, d->ops->pages, type);
+    d->n.maps += *type == VD_RESP_OK_MAP_INFO;
+    return len;
+}
+
+/**
+ * VGS_CMD_BACKING under VGS_TF_BACKING: back a resource of CREATE_2D or
+ * CREATE_3D that has no backing with `size` bytes of the VM's memory at the
+ * first ask, `first` 0, and answer the backing's page list from `first`
+ * (`page_answer`). A later ask names the same size. The backing goes at
+ * DETACH_BACKING, UNREF, a refused ask or the epoch's end. Returns the
+ * answer's length; *type is RESP_OK_MAP_INFO or the error.
+ */
+static uint32_t cmd_backing(struct vd *d, const uint8_t *body, uint32_t *type)
+{
+    struct vgs_backing c;
+    struct vgs_pages p;
+    struct vd_res *r;
+    uint32_t len;
+
+    memcpy(&c, body, sizeof(c));
+    if ((d->drv.transport_features & VGS_TF_BACKING) == 0 || d->ops->back == 0) {
+        return refuse(type, VD_RESP_ERR_UNSPEC);
+    }
+    if ((r = find_res(d, c.resource_id, 0)) == 0) {
+        return refuse(type, VD_RESP_ERR_RESOURCE_ID);
+    }
+    if (r->blob || r->iov != 0) {
+        return refuse(type, VD_RESP_ERR_UNSPEC);
+    }
+    if (c.size == 0 || c.size % VGS_PAGE != 0 || c.size > VD_BACKING_MAX ||
+        (r->backed ? c.size != r->size : c.first != 0)) {
+        return refuse(type, VD_RESP_ERR_PARAMETER);
+    }
+    memset(&p, 0, sizeof(p));
+    p.total = c.size / VGS_PAGE;
+    p.first = c.first;
+    r->size = c.size;
+    len = page_answer(d, r, c.resource_id, &p, d->ops->back, type);
+    r->backed = *type == VD_RESP_OK_MAP_INFO;
+    if (!r->backed) {
+        r->size = 0;
+    }
+    d->n.backs += r->backed;
+    return len;
 }
 
 /** RESOURCE_UNMAP_BLOB under VGS_TF_PAGES: let go of the blob's pin. */
@@ -902,6 +974,8 @@ static long body_size(uint32_t type)
         return sizeof(struct c_blob);
     case CMD_RESOURCE_MAP_BLOB:
         return sizeof(struct c_map_blob);
+    case VGS_CMD_BACKING:
+        return sizeof(struct vgs_backing);
     default:
         return -1;
     }
@@ -1004,7 +1078,9 @@ static uint32_t execute(struct vd *d, uint32_t rlen, uint32_t *type)
         *type = VD_RESP_OK_EDID;
         break;
     case CMD_RESOURCE_MAP_BLOB:
-        return cmd_map_blob(d, body, d->resp, type);
+        return cmd_map_blob(d, body, type);
+    case VGS_CMD_BACKING:
+        return cmd_backing(d, body, type);
     default:
         *type = run_nodata(d, &h, body, blen);
         return sizeof(struct vd_hdr);

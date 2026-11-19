@@ -37,16 +37,19 @@
 #define VD_RESP_ERR_CONTEXT_ID    0x1204u
 #define VD_RESP_ERR_PARAMETER     0x1205u
 
-#define VD_SCANOUTS 16
-#define VD_EDID_MAX 1024
+#define VD_SCANOUTS    16
+#define VD_EDID_MAX    1024
 /* Objects of one epoch; a device's limits stay below. */
-#define VD_OBJS     1024
+#define VD_OBJS        8192
 /* Bytes of the largest response: a page list of up to 4092 runs, what 64 KiB
  * holds after VGS_PAGES_OFF and below the 4096 VGPUSHM_IOC_PAGES gives at
  * once, or a capset, after its 24-byte header. */
-#define VD_RESP_MAX 65536
+#define VD_RESP_MAX    65536
+/* The largest backing of the VM's memory one resource takes, the module's
+ * largest pin (VGPUSHM_PIN_MAX_SIZE). */
+#define VD_BACKING_MAX (1ull << 30)
 /* Fenced commands awaiting their fence at once. */
-#define VD_PENDING  256
+#define VD_PENDING     256
 
 /* virtio-gpu's command header. */
 struct vd_hdr {
@@ -87,14 +90,15 @@ struct vd_blob {
 };
 
 /*
- * A page list asked of a mappable blob under VGS_TF_PAGES (vgpushm.h): the
- * runs of the VM-physical pages behind blob `id` from page `first` on, at
- * most `max` into `runs`, its memory pinned for the driver's `epoch` at the
- * first ask and held until the device lets it go (`unpin`).
+ * A page list asked of a mappable blob under VGS_TF_PAGES (vgpushm.h), or
+ * of a resource's backing under VGS_TF_BACKING: the runs of the VM-physical
+ * pages behind resource `id` from page `first` on, at most `max` into
+ * `runs`, its memory pinned for the driver's `epoch` at the first ask and
+ * held until the device lets it go (`unpin`).
  */
 struct vd_pages {
     uint32_t id, epoch;
-    uint64_t size;  /* the blob's bytes, as created */
+    uint64_t size;  /* the blob's bytes, as created, or the backing's */
     uint64_t first; /* below the blob's pages */
     struct vgs_run *runs;
     uint32_t max;      /* at least 1 */
@@ -139,8 +143,13 @@ struct vd_ops {
     void (*reset)(void *c);
     /* Pin a mappable blob, at its first ask, and give its pages' runs. */
     int (*pages)(void *c, struct vd_pages *q);
-    /* Let go of a blob's pin, if it has one. */
+    /* Let go of a blob's pin, if it has one, or of a resource's backing
+     * from the VM's memory, which it detaches first. */
     void (*unpin)(void *c, uint32_t id);
+    /* Back a resource with q->size bytes of the VM's memory, zeroed, made,
+     * attached and pinned at its first ask, and give its pages' runs, as
+     * `pages` does; under VGS_TF_BACKING. */
+    int (*back)(void *c, struct vd_pages *q);
 };
 
 /* What the backend offers, fixed before the first epoch. */
@@ -157,6 +166,7 @@ struct vd_offer {
 struct vd_counts {
     uint64_t epochs, commands, errors, fenced, completed, notified, faults;
     uint64_t maps, unmaps; /* page lists answered, pins let go of at UNMAP_BLOB */
+    uint64_t backs;        /* page lists of backings answered */
 };
 
 /* A device resource beside its table entry. */
@@ -167,7 +177,8 @@ struct vd_res {
     uint32_t mem;    /* a blob's BLOB_MEM_* */
     uint32_t flags;  /* a blob's BLOB_FLAG_* */
     uint32_t pinned; /* 1 once a page list pinned it, until it is let go */
-    uint64_t size;   /* a blob's bytes */
+    uint32_t backed; /* 1 while the VM's memory backs it (VGS_CMD_BACKING) */
+    uint64_t size;   /* a blob's bytes, or a backing's */
 };
 
 /* A fenced command whose completion waits on its fence. */

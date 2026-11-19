@@ -28,6 +28,7 @@ struct kms;
 /* The pins of page lists (VGS_TF_PAGES): made, refused and let go of. */
 struct vr_pin_counts {
     uint64_t pinned, refused, unpinned;
+    uint64_t backed; /* of the pins made, backings of the VM's memory */
 };
 
 /* The renderer, after vr_init; ops and cookie go to vd_init. */

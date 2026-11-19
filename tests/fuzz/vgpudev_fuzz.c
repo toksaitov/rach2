@@ -210,9 +210,9 @@ static void op_reset(void *c)
     nfences = 0;
 }
 
-/** Stub of a page list: one run from a page the request picks, whose
- * length the input steers past the pages asked for at times, which the
- * device must refuse. */
+/** Stub of a page list, a blob's or a backing's: one run from a page the
+ * request picks, whose length the input steers past the pages asked for at
+ * times, which the device must refuse. */
 static int op_pages(void *c, struct vd_pages *q)
 {
     (void)c;
@@ -227,7 +227,7 @@ static int op_pages(void *c, struct vd_pages *q)
 static const struct vd_ops ops = {
     op_create,      op_id,           op_attach, op_id,    op_transfer,    op_blob,   op_ctx_create,
     op_ctx_destroy, op_ctx_resource, op_submit, op_fence, op_capset_info, op_capset, op_display,
-    op_edid,        op_rect,         op_rect,   op_reset, op_pages,       op_id,
+    op_edid,        op_rect,         op_rect,   op_reset, op_pages,       op_id,     op_pages,
 };
 
 /** Stub of the doorbell. */
@@ -284,7 +284,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     off.limits.max_queue = 256;
     off.features = (1ULL << VD_F_VIRGL) | (1ULL << VD_F_EDID) | (1ULL << VD_F_BLOB) |
                    (1ULL << VD_F_CONTEXT_INIT);
-    off.transport_features = VGS_TF_DOORBELL | VGS_TF_PAGES;
+    off.transport_features = VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING;
     off.peer = 1;
     off.num_scanouts = 1;
     off.num_capsets = 2;
