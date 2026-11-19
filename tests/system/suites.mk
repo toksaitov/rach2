@@ -2324,3 +2324,11 @@ $(ASSIGN_DISK): $(ASSIGN_ROOT) $(MKMBR)
 
 # `tests/run wakelat`: measure six timed waits under idle, user, system-call
 # and mixed load on four CPUs, with the timer, queue and lock counts.
+# `tests/run sched4`: the fair scheduler on four processors as Linux 6.12
+# schedules, by the run times, waits, switches and migrations the kernel
+# counts: shares by nice value, SCHED_IDLE and session with autogroup on and
+# off, the wait of a thread that sleeps often against Debian's, RR's 100 ms
+# turns, the fair server's 5%, a priority-inheriting futex owner, balance
+# under load, a pull by an idle processor and a suspend to idle with threads
+# queued and delayed, by schedsmpmusl. It is the case of
+# tests/cases/guest.sched4.json, which etude runs, and has no target here.

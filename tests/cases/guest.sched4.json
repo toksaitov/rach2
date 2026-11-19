@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.sched4",
+  "summary": "The fair scheduler's figures on four processors, against Linux 6.12's: shares, wakes, the real-time class, the fair server, priority inheritance, balance and suspend",
+  "cases": [
+    {
+      "case_id": "guest.sched4.fair",
+      "behavior": "The fair scheduler on four processors as Linux 6.12 schedules: shares by nice value, SCHED_IDLE and session with autogroup on and off, the wait of a thread that sleeps often, RR's 100 ms turns, the fair server's 5%, a priority-inheriting futex owner, balance under load, a pull by an idle processor and a suspend to idle with threads queued and delayed",
+      "units": [
+        "sched4",
+        "musl/schedsmpmusl",
+        "proc/fair.c",
+        "proc/sched.c"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "-w",
+          "126777"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 4,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "machine": "q35",
+          "display": "std-vga",
+          "devices": [
+            "virtio-net-pci"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "schedsmpmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "kill every spinner, reap each child and session leader, and put back kernel.sched_autogroup_enabled and kernel.sched_schedstats on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "setup",
+          "checks": "Processors 0 to 3 are allowed, the program runs as root and /proc/self/sched shows se.sum_exec_runtime",
+          "source": "program"
+        },
+        {
+          "assertion_id": "nice-shares",
+          "checks": "A nice-0 and a nice-5 spinner pinned to processor 1 in one session share it 1024:335 within 5%, by se.sum_exec_runtime over 10 s after 2 s of warm-up",
+          "source": "program"
+        },
+        {
+          "assertion_id": "idle-shares",
+          "checks": "A nice-19 and a SCHED_IDLE spinner pinned to processor 2 share it 15:3 within 5%, by se.sum_exec_runtime over 10 s after 2 s of warm-up",
+          "source": "program"
+        },
+        {
+          "assertion_id": "autogroup-on",
+          "checks": "With kernel.sched_autogroup_enabled at 1, a session of one spinner and a session of four, all pinned to processor 3, share it half and half within 5%",
+          "source": "program"
+        },
+        {
+          "assertion_id": "autogroup-off",
+          "checks": "With kernel.sched_autogroup_enabled at 0, the same two sessions share processor 3 in the ratio 1:4 within 5%",
+          "source": "program"
+        },
+        {
+          "assertion_id": "wakes",
+          "checks": "With kernel.sched_schedstats at 1, a process pinned to processor 1 that sleeps 1 ms and runs 0.1 ms 2000 times, beside a nice-0 spinner on each processor, has a wait_count of at least 2000 and a wait_sum over wait_count at most 25% or 0.5 ms above Debian's, whichever is larger: -w gives Debian's 126,777 ns, the median of three runs of the same program on Debian 13's 6.12.115 in this profile under KVM, in the root cgroup, on 2026-11-19",
+          "source": "program"
+        },
+        {
+          "assertion_id": "rr-turns",
+          "checks": "sched_rr_timeslice_ms reads 100 and sched_rr_get_interval gives 100 ms for a SCHED_RR process, and two equal SCHED_RR spinners pinned to processor 3 run in turns of 100 ms within 10%, by se.sum_exec_runtime over nr_involuntary_switches, and share it half and half within 5%",
+          "source": "program"
+        },
+        {
+          "assertion_id": "fair-server",
+          "checks": "A SCHED_FIFO spinner pinned to processor 2 leaves a nice-0 spinner beside it 5% of the processor within one percentage point, the fair server's 50 ms of each 1000 ms",
+          "source": "program"
+        },
+        {
+          "assertion_id": "pi-owner",
+          "checks": "An ordinary thread holding a priority-inheriting mutex on processor 1, held off by a SCHED_FIFO spinner there, reads prio 79 in its /proc sched file with policy 0 while a SCHED_FIFO waiter of priority 20 waits, and lets the mutex go to the waiter",
+          "source": "program"
+        },
+        {
+          "assertion_id": "migration",
+          "checks": "Eight spinners started on processor 1 and then allowed all four each run within 25% of their mean over 6 s after 2 s, and migrate six times or more in all",
+          "source": "program"
+        },
+        {
+          "assertion_id": "nohz-pull",
+          "checks": "With processor 2 idle, a spinner allowed processors 1 and 2 beside one pinned to processor 1 is pulled to processor 2 and migrates at least once, and both run at least 90% of 3 s after 1 s",
+          "source": "program"
+        },
+        {
+          "assertion_id": "suspend",
+          "checks": "A write of freeze to /sys/power/state, with the clock's alarm 3 s ahead, while two spinners share processor 1 and a process that runs 0.5 ms between sleeps of 0.2 ms shares processor 2 with a spinner, lets none of them run more than 200 ms until the alarm; afterwards each runs again and the two on processor 1 share it half and half within 10%",
+          "source": "program"
+        },
+        {
+          "assertion_id": "cleanup",
+          "checks": "Every process the test made is killed and reaped, and the sysctls it changed are put back",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "rows",
+          "kind": "counter",
+          "means": "rows of the test completed",
+          "limit": 13
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "cpu_class": "bound",
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "schedsmpmusl",
+          "node": "tests/musl/schedsmpmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "count",
+        "reason": "each row judges how processors 1 to 3 are shared, which the installed system's services move, and the wake row compares with Debian's figure in the same four-processor QEMU profile"
+      }
+    }
+  ]
+}
