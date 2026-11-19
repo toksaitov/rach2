@@ -5,7 +5,7 @@
 #
 # Weston draws as rach2-desktop chose: BACKEND drm or headless, CARD the DRM
 # card or `-`, RENDERER gl or pixman. Without them the session chooses as
-# the supervisor does at boot.
+# the supervisor does.
 set -eu
 export HOME=/home/desktop USER=desktop LOGNAME=desktop
 export XDG_RUNTIME_DIR=/run/user/1001
