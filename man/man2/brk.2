@@ -658,7 +658,8 @@ when a mapping cannot be split.
 A fault maps a huge page only where an aligned 2 MiB of the mapping has
 no page yet; a change of part of one, an unmap, an
 .Fn mprotect
-or a write after a fork, splits it into 4 KiB pages first.
+or a write after a fork, splits it into 4 KiB pages first, except a write
+to one the process alone holds, which makes it writable whole.
 .Dv MADV_COLLAPSE
 (25) makes each aligned 2 MiB of private anonymous memory in the range
 one huge page now, copying its pages, whatever the policy says: it is
@@ -668,8 +669,13 @@ read, or a page of a device, and for any other refusal;
 .Er EAGAIN
 when a page is pinned; and
 .Er ENOMEM
-when no 2 MiB of free memory could be had.
-On i686, which Linux gives no huge pages, the three are accepted and
+when no 2 MiB of free memory could be had, which stops it.
+It goes mapping by mapping, ends at the first mapping's error, and,
+unlike the other advice, goes past a part of the range that no mapping
+covers, which it reports as
+.Er ENOMEM
+once the rest is done.
+On i686, where Rach2 maps no huge page, the three are accepted and
 change nothing.
 .Pp
 Any other advice Linux defines from
