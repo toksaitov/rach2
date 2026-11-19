@@ -990,6 +990,13 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     return 0;
 }
 
+/** The header of `node`, a node in this file's memory: a copy, 0. */
+int krffs_node_head(const krffs_node_t *node, krffs_node_t *out)
+{
+    *out = *node;
+    return 0;
+}
+
 /** The node at `path`: the program at `program_path`, and NULL for any
  *  other path. */
 krffs_node_t *krffs_resolve(const char *path)
