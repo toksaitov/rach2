@@ -1964,7 +1964,7 @@ struct maps_names {
     struct maps_name *v;
     uint32_t n;
     uint32_t next;
-    struct mm *mm; /* held until `maps_names_free`; NULL for none */
+    struct mm *mm; /* a user's count until `maps_names_free`; NULL for none */
     char *exe;     /* the program's present path, or NULL with none */
     char *interp;  /* the dynamic linker's present path, or NULL */
 };
@@ -2091,6 +2091,11 @@ static char *maps_exe_name(struct open_file *file, const char *recorded)
  * reading, with " (deleted)" from d_path once the file is unlinked
  * (fs/proc/task_mmu.c:258-268, fs/d_path.c:286-287). The caller looks the
  * process up again afterwards and frees `mn` with `maps_names_free`.
+ * A user's count of the address space, taken while it has a user, is held
+ * in `mn` from before the first path is built, which may sleep, to
+ * `maps_names_free`, so that the regions and the program's files stay while
+ * the target ends meanwhile, as Linux's m_start takes mm_users only while it
+ * is not 0 (fs/proc/task_mmu.c); `mn` is empty for one with no user left.
  */
 static void procfs_maps_names(int pid, struct maps_names *mn)
 {
@@ -2104,7 +2109,9 @@ static void procfs_maps_names(int pid, struct maps_names *mn)
         return;
     }
     mm = p->mm;
-    mm_hold(mm);
+    if (!mm_get_live(mm)) {
+        return;
+    }
     mn->mm = mm;
     mn->exe = maps_exe_name(mm->exe_file, mm->exe);
     mn->interp = maps_exe_name(mm->interp_file, mm->interp);
@@ -2146,8 +2153,8 @@ static void procfs_maps_names(int pid, struct maps_names *mn)
     }
 }
 
-/** Free the names of `mn` and drop its references to the files and the
- * address space. */
+/** Free the names of `mn` and drop its references to the files and its
+ * user's count of the address space, which may be the last. */
 static void maps_names_free(struct maps_names *mn)
 {
     uint32_t i;
@@ -2159,7 +2166,9 @@ static void maps_names_free(struct maps_names *mn)
     kfree(mn->v);
     kfree(mn->exe);
     kfree(mn->interp);
-    mm_unhold(mn->mm);
+    if (mn->mm) {
+        procfs_mm_put(mn->mm);
+    }
     k_memset(mn, 0, sizeof(*mn));
 }
 
@@ -2525,9 +2534,11 @@ static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long
  * most mappings a page has, and active=, the pages on the active list, are
  * not given: the kernel counts no mappings of a page and has no such list.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps. The
- * thread's policy is taken with a reference before the wait for the
- * regions' lock, since the thread may change it or end meanwhile, as Linux
- * takes `task_mempolicy` at the file's start (fs/proc/task_mmu.c).
+ * thread is held by a reference across the wait for the regions' lock, and
+ * its policy is taken with a reference of its own once the lock is held, as
+ * Linux's m_start takes `task_mempolicy` after mmap_read_lock
+ * (fs/proc/task_mmu.c): a thread that ended meanwhile has no policy and
+ * shows the default.
  */
 static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 {
@@ -2546,8 +2557,10 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         return rc;
     }
     mm = p->mm;
-    own = vm_policy_get(p->mempolicy);
+    proc_ref_get(p);
     mm_read_begin(mm);
+    own = p->state != PROC_UNUSED ? vm_policy_get(p->mempolicy) : NULL;
+    proc_ref_put(p);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         const struct vm_policy *pol = mempolicy_at(r, r->start);
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
