@@ -1392,11 +1392,6 @@ static void hh_notify(void *ptr, int port, int pipe)
 
 static const struct acomp_audio_ops hh_acomp_ops = {hh_bind, hh_unbind, hh_notify};
 
-int hdmi_audio_drives(uint16_t vendor, uint16_t device)
-{
-    return vendor == 0x8086 && (device == 0x0a0c || device == 0x0c0c || device == 0x0d0c);
-}
-
 void hdmi_audio_init(void)
 {
     pci_device_t d, seen, *from = NULL;
@@ -1405,7 +1400,7 @@ void hdmi_audio_init(void)
     mutex_init(&hh_mutex, "hdmi_audio");
     hh_bound = -1;
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &d)) {
-        if (hdmi_audio_drives(d.vendor_id, d.device_id)) {
+        if (HDMI_AUDIO_DRIVES(d.vendor_id, d.device_id)) {
             hh_pci = d;
             hh_found = 1;
             break;
