@@ -1,0 +1,10 @@
+[20:47:32.855] Using Pixman renderer
+               1366x768@60.0, preferred, current, 62.9 MHz
+desktop: result: firefox-h264: 1721 frames, 62 dropped, None corrupted, 1920x1080, 57.3 s played, error None, samples [(9, 37), (19, 37), (29, 55), (39, 59), (49, 62), (57, 62)]
+desktop: result: firefox-h264 decoder ffmpeg video decoder (RDD remote);
+desktop: result: firefox-vp9: no result after 3 s
+desktop: result: firefox-vp9 decoder unknown
+desktop: result: chromium-h264: no result after 1 s
+desktop: result: chromium-h264 decoder unknown
+desktop: result: chromium-vp9: no result after 1 s
+desktop: result: chromium-vp9 decoder unknown

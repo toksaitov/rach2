@@ -1,0 +1,8 @@
+desktop: result: firefox-h264: 1720 frames, 153 dropped, None corrupted, 1920x1080, 57.3 s played, error None, samples [(9, 101), (19, 101), (29, 117), (39, 122), (49, 124), (57, 153)]
+desktop: result: firefox-h264 decoder ffmpeg video decoder (RDD remote);
+desktop: result: firefox-vp9: 1715 frames, 122 dropped, None corrupted, 1920x1080, 57.0 s played, error None, samples [(9, 81), (19, 81), (29, 97), (39, 102), (49, 103), (57, 122)]
+desktop: result: firefox-vp9 decoder ffvpx video decoder (RDD remote);
+desktop: result: chromium-h264: 1727 frames, 23 dropped, 0 corrupted, 1920x1080, 57.5 s played, error None, samples [(9, 5), (19, 11), (29, 13), (39, 15), (49, 19), (57, 23)]
+desktop: result: chromium-h264 decoder FFmpegVideoDecoder
+desktop: result: chromium-vp9: 1734 frames, 20 dropped, 0 corrupted, 1920x1080, 57.6 s played, error None, samples [(10, 9), (20, 9), (30, 11), (40, 13), (50, 16), (58, 20)]
+desktop: result: chromium-vp9 decoder VpxVideoDecoder

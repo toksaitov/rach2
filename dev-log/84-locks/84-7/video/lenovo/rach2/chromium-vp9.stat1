@@ -1,0 +1,31 @@
+cpu  35529 0 11488 102082 0 0 0 0 0 0
+bkl_wait_us 38663465
+bkl_wait_max_us 139667
+bkl_wait_max_holds 2
+bkl_wait_max_hold 128 257 139580
+bkl_wait_max_hold 0 -1 98
+bkl_hold_max_us 337425
+bkl_hold_max_entry take 0
+bkl_hold_sample_us 4321353
+bkl_hold_sample_pc ffffffff804032f4 ffffffff80117094 ffffffff802b6470 ffffffff80109209 ffffffff803d4b68 ffffffff801002d9
+bkl_hold_max_mark 1 0
+bkl_hold_max_mark 2 0
+bkl_hold_max_mark 4 0
+bkl_hold_max_mark 8 0
+bkl_hold_max_mark 16 0
+bkl_hold_entry syscall 16 49146 14426288
+bkl_hold_entry syscall 257 69056 7657836
+bkl_hold_entry vector 0 1301951 5254648
+bkl_hold_entry syscall 202 605101 4314948
+bkl_hold_entry vector 32 293048 3963513
+bkl_hold_entry take 1 404755 3959378
+bkl_hold_entry syscall 87 57199 1195675
+bkl_hold_entry syscall 262 15552 928507
+bkl_hold_entry vector 52 22248 886991
+bkl_hold_entry syscall 82 7590 744686
+bkl_hold_entry syscall 56 1438 617919
+bkl_hold_entry syscall 0 55344 562886
+bkl_hold_entry vector 51 30506 554172
+bkl_hold_entry syscall 1 134101 469986
+bkl_hold_entry syscall 21 6027 451827
+bkl_hold_entry syscall 232 88522 434204

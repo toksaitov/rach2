@@ -1,0 +1,10 @@
+ExceptionHandler::GenerateDump attempting to generate:/srv/ref80/t3984-video/output/profile-firefox-vp9/minidumps/0edaf78a-4591-3874-f69d-704ed028e81d.dmp
+ExceptionHandler::GenerateDump cloned child 1345
+ExceptionHandler::SendContinueSignalToChild sent continue signal to child
+ExceptionHandler::WaitForContinueSignal waiting for continue signal...
+ExceptionHandler::GenerateDump minidump generation succeeded
+(crashreporter:1346): Gtk-WARNING **: 20:48:42.786: cannot open display: 
+chromium-vp9.log:[1479:1479:1119/204850.514871:ERROR:ui/ozone/platform/wayland/host/wayland_connection.cc:210] Failed to connect to Wayland display: Connection refused (111)
+chromium-vp9.log:[1479:1479:1119/204850.514953:ERROR:ui/ozone/platform/wayland/ozone_platform_wayland.cc:288] Failed to initialize Wayland platform
+chromium-h264.log:[1421:1421:1119/204846.541135:ERROR:ui/ozone/platform/wayland/host/wayland_connection.cc:210] Failed to connect to Wayland display: Connection refused (111)
+chromium-h264.log:[1421:1421:1119/204846.541661:ERROR:ui/ozone/platform/wayland/ozone_platform_wayland.cc:288] Failed to initialize Wayland platform
