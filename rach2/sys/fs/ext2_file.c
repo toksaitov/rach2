@@ -954,13 +954,15 @@ static int map_point(struct ext2_mount *em, uint32_t owner, uint64_t slot_at, ui
  * Write block `b`, just allocated in `owner`'s tree for a pointer block at
  * `level` or, at 0, a data block, zeroed before anything points at it. On a
  * strict mount the zeros are written through. On a mount that writes back
- * they are marked to go after the device's `first` blocks, the pointers and
- * inodes a free cleared (`ext2_punch`), so that a block freed and taken
- * again is not overwritten on the device while an old pointer there still
- * names it, and are written to the device now, since a block that names
- * others does not wait for an `after` one (bcache.h). The mark comes with
- * the block's first dirty mark since it was taken, so that no write of it
- * can reach the device ahead of those firsts. 0; -EROFS without a write
+ * they are written to the device now, without the disk's flush, so that
+ * they are there before the pointer to the block whatever the order of
+ * writing back. They take no `after` mark: a block freed and taken again
+ * cannot be overwritten on the medium while an old pointer there still
+ * names it, since the allocator sets no bit in a bitmap block that holds a
+ * free's cleared bits not yet on the device, and writes that block first
+ * (`bit_turn`), behind the pointers and inodes the free cleared
+ * (`ext2_punch`), which are `first`, with the disk's flush between when one
+ * of them was answered without it (bcache.h). 0; -EROFS without a write
  * once a write on the device has failed; or -errno.
  */
 static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level)
@@ -976,7 +978,7 @@ static int map_zero(struct ext2_mount *em, uint32_t owner, uint32_t b, int level
     if (em->dev->flags & BLOCK_WRITE_FAILED) {
         return -EROFS;
     }
-    rc = ext2_write_owned(em, owner, off, 0, em->block_size, WRITE_AFTER);
+    rc = ext2_write_owned(em, owner, off, 0, em->block_size, 0);
     for (blk = off >> BCACHE_BLOCK_SHIFT;
          rc == 0 && blk <= (off + em->block_size - 1) >> BCACHE_BLOCK_SHIFT; blk++) {
         rc = bcache_sync_block(em->dev, blk);

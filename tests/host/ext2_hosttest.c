@@ -9389,8 +9389,10 @@ static int reuse_mount(uint64_t *ino, int64_t *table, uint64_t *freed, int *nfre
  * directory's thirteenth, while another process reclaims the whole cache,
  * writing what is dirty, at each read the rename makes. In the order of
  * the device's writes, the first write of /big's table block after the
- * truncate must come before any write of a block it freed (`map_zero`,
- * `shared_block_new`).
+ * truncate must come before any write of a block it freed: the allocator
+ * writes the bitmap that holds the truncate's cleared bits, behind the
+ * table block, before it takes a block from it (`bit_turn`), and the new
+ * blocks' zeros (`map_zero`, `shared_block_new`) carry no mark of their own.
  */
 static void reuse_row(void)
 {
