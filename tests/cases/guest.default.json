@@ -2668,6 +2668,7 @@
       "units": ["default", "procprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
+      "ia32": {"runs": true, "why": "kernel/hung_task_timeout_secs and hung_task_check_interval_secs take values up to the kernel's LONG_MAX / HZ, which the x86-64 kernel's long makes wide for an i386 program too; procprobe's sysctl-hung-range takes the kernel's architecture from uname's machine"},
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
       "execution": {"program": "procprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
