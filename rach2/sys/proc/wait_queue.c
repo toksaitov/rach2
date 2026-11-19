@@ -225,9 +225,9 @@ void wait_queue_init_key(wait_queue_t *wq, const char *name, const struct lockde
 /**
  * Put `w` at the tail of the queue unless it is on it; the queue's lock is
  * held.
- * A wake makes the sleepers ready in queue order and the ready list runs
- * them in that order, so the tail keeps a lock's oldest waiter first: at the
- * head, the newest waiter would take each release and starve the oldest.
+ * A wake makes the sleepers ready in queue order, so the tail wakes a lock's
+ * oldest waiter first: at the head, the newest waiter would be woken first
+ * at each release and could starve the oldest.
  */
 static void wq_enqueue(wait_queue_t *wq, struct wq_waiter *w)
 {
