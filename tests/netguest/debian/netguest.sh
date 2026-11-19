@@ -16,20 +16,21 @@
 # Its parameters are one line of text in the first 512 bytes of the second
 # virtio disk, /dev/vdb, padded with NULs:
 #
-#   rules=N opt=none|basic state=1|0 fwd=PORT filter=1|0
+#   rules=N opt=none|basic state=1|0 fwd=PORT deny=PORT filter=1|0
 #
 # and without the disk, or with an empty one, rules=0 opt=none state=1
-# fwd=22 filter=1. `rules` is the number of filler rules, at most 131072;
+# fwd=22 deny=9 filter=1. `rules` is the number of filler rules, at most 131072;
 # opt=basic loads the rules with `nft -o`, which folds rules that differ in
 # one value into a set; `state=0` leaves the tracked connections' rule out
 # of the forward chain, so that each forwarded packet walks the rules;
 # `filter=0` leaves the filter out, a forward chain that accepts everything
 # beside the translation, which is the guest's cost of forwarding alone,
-# with the deny9 counter's rule counting TCP to port 9 without dropping it.
+# with the deny counter's rule counting TCP to port `deny` without
+# dropping it.
 #
-# With the filter, TCP from the inner network to port 9 of any address is
-# dropped by a rule with the counter deny9, which counts the packets Rach2
-# sends at it on purpose.
+# With the filter, TCP from the inner network to port `deny` of any
+# address is dropped by a rule with the counter deny, which counts the
+# packets Rach2 sends at it on purpose.
 #
 # The rules mean what the FreeBSD guest's pf rules mean. A packet of a
 # tracked connection is accepted first, as pf looks up its states first;
@@ -40,18 +41,19 @@
 #
 # The last line the script writes to the serial port is one of
 #
-#   NETGUEST READY inner=IF outer=IF addr=A.B.C.D rules=N opt=O state=S filter=F
+#   NETGUEST READY inner=IF outer=IF addr=A.B.C.D rules=N opt=O state=S
+#       deny=P filter=F
 #   NETGUEST FAILED reason
 #
 # and before READY it writes `NETGUEST LOADED fillers=F total=T`, the
 # filler rules and all the rules the forward chain holds once nft has
 # loaded them. After READY, each 2 seconds, it writes
 #
-#   NETGUEST STATS outer_in=N outer_out=N deny9=N states=N
+#   NETGUEST STATS outer_in=N outer_out=N deny=N states=N
 #
-# the outer interface's packets in and out, the packets the deny9 counter's
+# the outer interface's packets in and out, the packets the deny counter's
 # rule counted and the tracked connections, each 0 when it cannot be read
-# but the deny9 count, which is then `unknown`.
+# but the deny count, which is then `unknown`.
 
 inner_mac=52:54:00:77:00:01
 inner_addr=10.77.0.1/24
@@ -71,7 +73,7 @@ fail()
     exit 1
 }
 
-rules=0 opt=none state=1 fwd=22 filter=1
+rules=0 opt=none state=1 fwd=22 deny_port=9 filter=1
 if [ -b "$param" ]; then
     for word in $(dd if="$param" bs=512 count=1 2> /dev/null | tr '\n' ' ' | tr -cd 'a-z0-9= '); do
         case $word in
@@ -79,6 +81,7 @@ if [ -b "$param" ]; then
             opt=*) opt=${word#opt=} ;;
             state=*) state=${word#state=} ;;
             fwd=*) fwd=${word#fwd=} ;;
+            deny=*) deny_port=${word#deny=} ;;
             filter=*) filter=${word#filter=} ;;
         esac
     done
@@ -97,6 +100,9 @@ case $state in
 esac
 case $fwd in
     '' | *[!0-9]*) fail "fwd=$fwd is no port" ;;
+esac
+case $deny_port in
+    '' | *[!0-9]*) fail "deny=$deny_port is no port" ;;
 esac
 case $filter in
     0 | 1) ;;
@@ -149,7 +155,7 @@ fi
     cat << EOF
 flush ruleset
 table ip netguest {
-	counter deny9 {
+	counter deny {
 		packets 0 bytes 0
 	}
 	chain prerouting {
@@ -165,7 +171,7 @@ EOF
         cat << EOF
 	chain forward {
 		type filter hook forward priority filter; policy accept;
-		iifname "$inner" ip saddr $inner_net tcp dport 9 counter name "deny9"
+		iifname "$inner" ip saddr $inner_net tcp dport $deny_port counter name "deny"
 	}
 }
 EOF
@@ -175,7 +181,7 @@ EOF
 		type filter hook input priority filter; policy drop;
 		ct state established,related accept
 		iifname "lo" accept
-		iifname "$inner" ip saddr $inner_net tcp dport 9 counter name "deny9" drop
+		iifname "$inner" ip saddr $inner_net tcp dport $deny_port counter name "deny" drop
 		iifname "$inner" ip saddr $inner_net accept
 		ip protocol icmp accept
 	}
@@ -189,7 +195,7 @@ EOF
                     i, 18 + int(k / 65536), int(k / 256) % 256, k % 256
         }'
         cat << EOF
-		iifname "$inner" ip saddr $inner_net tcp dport 9 counter name "deny9" drop
+		iifname "$inner" ip saddr $inner_net tcp dport $deny_port counter name "deny" drop
 		iifname "$inner" ip saddr $inner_net accept
 		$back
 		iifname "$outer" oifname "$inner" ip daddr $host tcp dport 22 accept
@@ -214,7 +220,7 @@ sysctl -q -w net.ipv4.ip_forward=1 || fail "forwarding was not turned on"
 
 nft list chain ip netguest forward > "$conf.loaded" 2> /dev/null
 say "LOADED fillers=$(grep -c 'ip saddr 198\.1[89]\.[0-9.]* tcp dport 9 drop' "$conf.loaded") total=$(grep -c -E '(accept|drop)$' "$conf.loaded") states_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2> /dev/null) buckets=$(cat /proc/sys/net/netfilter/nf_conntrack_buckets 2> /dev/null)"
-say "READY inner=$inner outer=$outer addr=$addr rules=$rules opt=$opt state=$state filter=$filter"
+say "READY inner=$inner outer=$outer addr=$addr rules=$rules opt=$opt state=$state deny=$deny_port filter=$filter"
 
 # The counts, each 2 seconds, for as long as the guest runs, read as the
 # header comment says.
@@ -222,8 +228,8 @@ while :; do
     sleep 2
     rx=$(cat "/sys/class/net/$outer/statistics/rx_packets" 2> /dev/null)
     tx=$(cat "/sys/class/net/$outer/statistics/tx_packets" 2> /dev/null)
-    deny=$(nft list counter ip netguest deny9 2> /dev/null |
+    deny=$(nft list counter ip netguest deny 2> /dev/null |
         awk '{ for (f = 1; f < NF; f++) if ($f == "packets") { print $(f + 1); exit } }')
     states=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2> /dev/null)
-    say "STATS outer_in=${rx:-0} outer_out=${tx:-0} deny9=${deny:-unknown} states=${states:-0}"
+    say "STATS outer_in=${rx:-0} outer_out=${tx:-0} deny=${deny:-unknown} states=${states:-0}"
 done

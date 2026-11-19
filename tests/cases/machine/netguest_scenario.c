@@ -26,8 +26,10 @@ struct netguest_case {
     struct net_case u;
     struct net_boot b;
     struct etude_case_service *peer;
+    struct etude_case_service *deny;
     char name[32];
     char port[12];
+    char deny_port[12];
     char password[128];
 };
 
@@ -41,19 +43,30 @@ static enum etude_status as_root(struct netguest_case *s, const char *command, c
     return net_guest(&s->u, s->b.m, argv, NULL, NULL, output, r);
 }
 
-/** Start the peer on the case's port of the host's loopback address, which
- * QEMU's user network gives the machine as PEER, boot the machine, log in as
- * root at the console and open the channel. */
+/** Start the peer on the case's two ports of the host's loopback address,
+ * which QEMU's user network gives the machine as PEER, the second the port
+ * the guests deny, so that a SYN a guest lets through is answered; boot the
+ * machine, log in as root at the console and open the channel. */
 static void up(struct netguest_case *s)
 {
     struct etude_termination end;
     char *args[] = {"-s", "-b", "127.0.0.1", "-p", s->port, NULL};
+    char *deny_args[] = {"-s", "-b", "127.0.0.1", "-p", s->deny_port, NULL};
 
     if (net_step(&s->u, "boot") != ETUDE_OK)
         return;
     snprintf(s->port, sizeof(s->port), "%u", etude_port(s->u.c, 0));
+    snprintf(s->deny_port, sizeof(s->deny_port), "%u", etude_port(s->u.c, 1));
+    if (etude_port(s->u.c, 1) == 0) {
+        net_fail(&s->u, "the case declares no second port for the denied peer");
+        return;
+    }
     if (etude_service(s->u.c, "peer", args, &s->peer, &end) != ETUDE_OK) {
         net_fail(&s->u, "the nettput peer did not become ready on port %s", s->port);
+        return;
+    }
+    if (etude_service(s->u.c, "deny", deny_args, &s->deny, &end) != ETUDE_OK) {
+        net_fail(&s->u, "the nettput peer did not become ready on port %s", s->deny_port);
         return;
     }
     net_boot(&s->b, &s->u, "gnu", 1, NULL);
@@ -96,8 +109,9 @@ static void run(struct netguest_case *s)
     struct net_run r;
 
     snprintf(command, sizeof(command),
-             "TMPDIR=" SCRATCH " sh " PAYLOAD "/run.sh -c " CARD " -a " CARD_OWN " " PEER " %s %s",
-             s->port, s->name);
+             "TMPDIR=" SCRATCH " sh " PAYLOAD "/run.sh -c " CARD " -a " CARD_OWN " -z %s " PEER
+             " %s %s",
+             s->deny_port, s->port, s->name);
     if (net_step(&s->u, "run") != ETUDE_OK || as_root(s, command, "runner", &r) != ETUDE_OK)
         return;
     if (r.out != NULL)
@@ -128,6 +142,8 @@ int etude_scenario(struct etude_case *c)
     up(&s);
     stage(&s);
     run(&s);
+    if (s.deny != NULL)
+        (void)etude_service_stop(s.deny, &end);
     if (s.peer != NULL)
         (void)etude_service_stop(s.peer, &end);
     return net_end(&s.u);

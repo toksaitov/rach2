@@ -14,19 +14,19 @@
 # Its parameters are one line of text in the first 512 bytes of the second
 # virtio disk, /dev/vtbd1, padded with NULs:
 #
-#   rules=N opt=none|basic state=1|0 fwd=PORT filter=1|0
+#   rules=N opt=none|basic state=1|0 fwd=PORT deny=PORT filter=1|0
 #
 # and without the disk, or with an empty one, rules=0 opt=none state=1
-# fwd=22 filter=1. `rules` is the number of filler rules, at most 131072;
+# fwd=22 deny=9 filter=1. `rules` is the number of filler rules, at most 131072;
 # `opt` is pf's `set ruleset-optimization`; `state=0` passes the inner
 # interface's packets with `no state`, so that each of them walks the
 # rules; `filter=0` leaves the filter out, `pass all` after the
 # translation, which is the guest's cost of forwarding alone, with a pass
-# rule labelled deny9 counting TCP to port 9 without blocking it.
+# rule labelled deny counting TCP to port `deny` without blocking it.
 #
-# With the filter, TCP from the inner network to port 9 of any address is
-# blocked by a rule with the label deny9, which counts the packets Rach2
-# sends at it on purpose.
+# With the filter, TCP from the inner network to port `deny` of any
+# address is blocked by a rule with the label deny, which counts the
+# packets Rach2 sends at it on purpose.
 #
 # pf looks a packet up in its states first, and only a packet of no state
 # walks the rules. It evaluates every rule, the last match deciding, but
@@ -46,18 +46,19 @@
 # The last line the script prints on the console, which is the serial port,
 # is one of
 #
-#   NETGUEST READY inner=IF outer=IF addr=A.B.C.D rules=N opt=O state=S filter=F
+#   NETGUEST READY inner=IF outer=IF addr=A.B.C.D rules=N opt=O state=S
+#       deny=P filter=F
 #   NETGUEST FAILED reason
 #
 # and before READY it prints `NETGUEST LOADED fillers=F total=T`, the
 # filler rules and all the rules pf holds once pfctl has loaded them. After
 # READY, each 2 seconds, a process left behind prints
 #
-#   NETGUEST STATS outer_in=N outer_out=N deny9=N states=N
+#   NETGUEST STATS outer_in=N outer_out=N deny=N states=N
 #
 # the outer interface's packets in and out, the packets the rule labelled
-# deny9 counted and pf's states, each 0 when it cannot be read but the
-# deny9 count, which is then `unknown`.
+# deny counted and pf's states, each 0 when it cannot be read but the
+# deny count, which is then `unknown`.
 
 inner_mac=52:54:00:77:00:01
 inner_addr=10.77.0.1/24
@@ -77,7 +78,7 @@ fail()
     exit 1
 }
 
-rules=0 opt=none state=1 fwd=22 filter=1
+rules=0 opt=none state=1 fwd=22 deny_port=9 filter=1
 if [ -c "$param" ]; then
     for word in $(dd if="$param" bs=512 count=1 2> /dev/null | tr '\n' ' ' | tr -cd 'a-z0-9= '); do
         case $word in
@@ -85,6 +86,7 @@ if [ -c "$param" ]; then
             opt=*) opt=${word#opt=} ;;
             state=*) state=${word#state=} ;;
             fwd=*) fwd=${word#fwd=} ;;
+            deny=*) deny_port=${word#deny=} ;;
             filter=*) filter=${word#filter=} ;;
         esac
     done
@@ -103,6 +105,9 @@ case $state in
 esac
 case $fwd in
     '' | *[!0-9]*) fail "fwd=$fwd is no port" ;;
+esac
+case $deny_port in
+    '' | *[!0-9]*) fail "deny=$deny_port is no port" ;;
 esac
 case $filter in
     0 | 1) ;;
@@ -157,7 +162,7 @@ nat on \$ext_if inet from $inner_net to any -> (\$ext_if) port 1024:65535
 rdr on \$ext_if inet proto tcp from any to (\$ext_if) port $fwd -> $host port 22
 EOF
     if [ "$filter" = 0 ]; then
-        echo "pass in quick on \$int_if inet proto tcp from $inner_net to any port 9 label \"deny9\"$how"
+        echo "pass in quick on \$int_if inet proto tcp from $inner_net to any port $deny_port label \"deny\"$how"
         echo "pass all$how"
     else
         echo 'block all'
@@ -167,7 +172,7 @@ EOF
                     i, 18 + int(k / 65536), int(k / 256) % 256, k % 256
         }'
         cat << EOF
-block in quick on \$int_if inet proto tcp from $inner_net to any port 9 label "deny9"
+block in quick on \$int_if inet proto tcp from $inner_net to any port $deny_port label "deny"
 pass in on \$int_if inet from $inner_net to any$how
 $back
 pass out on \$ext_if inet all
@@ -188,7 +193,7 @@ sysctl net.inet.ip.forwarding=1 > /dev/null || fail "forwarding was not turned o
 
 pfctl -s rules > "$conf.loaded" 2> /dev/null
 say "LOADED fillers=$(grep -c ' from 198\.1[89]\.' "$conf.loaded") total=$(grep -c . "$conf.loaded") tables=$(grep -c '<__automatic' "$conf.loaded") states_max=$(pfctl -s memory 2> /dev/null | awk '$1 == "states" { print $4; exit }') buckets=$(sysctl -n net.pf.states_hashsize 2> /dev/null)"
-say "READY inner=$inner outer=$outer addr=$addr rules=$rules opt=$opt state=$state filter=$filter"
+say "READY inner=$inner outer=$outer addr=$addr rules=$rules opt=$opt state=$state deny=$deny_port filter=$filter"
 
 # The counts, each 2 seconds, from a process that outlives this script,
 # read as the header comment says.
@@ -198,9 +203,9 @@ stats()
         sleep 2
         # shellcheck disable=SC2046 # two words, or none
         set -- $(netstat -n -I "$outer" 2> /dev/null | awk '$3 ~ /^<Link/ { print $5, $8; exit }')
-        deny=$(pfctl -s labels 2> /dev/null | awk '$1 == "deny9" { print $3; exit }')
+        deny=$(pfctl -s labels 2> /dev/null | awk '$1 == "deny" { print $3; exit }')
         states=$(pfctl -s info 2> /dev/null | awk '/current entries/ { print $3; exit }')
-        say "STATS outer_in=${1:-0} outer_out=${2:-0} deny9=${deny:-unknown} states=${states:-0}"
+        say "STATS outer_in=${1:-0} outer_out=${2:-0} deny=${deny:-unknown} states=${states:-0}"
     done
 }
 # rc.local's jobs are in rc's process group, which gets SIGHUP when rc ends
