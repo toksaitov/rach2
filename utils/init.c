@@ -296,16 +296,17 @@ static int backlight_count;
  * from `MIXER_KEPT` at boot, saves them there within a second of each
  * change, as alsactl's daemon mode does, and again when it stops the
  * machine, one line `NAME L:R` a channel, NAME being OSS's name of it.
- * mixer(1)'s record of a mute is kept beside them, in `MIXER_KEPT_MUTE`, so
- * that a volume muted at the halt is still muted, and can be unmuted, after
- * it.
+ * mixer(1)'s record of a mute is the file's last line, `mute L:R` with the
+ * level before the mute or `mute none`, so that one rename keeps a muted
+ * volume together with the level that unmutes it. `MIXER_OLD_MUTE` is
+ * where an older init kept the record: read when the file has no `mute`
+ * line, and removed once the file has one.
  */
-#define MIXER_DEVICE     "/dev/mixer"
-#define MIXER_KEPT       "/var/lib/mixer"
-#define MIXER_FRESH      "/var/lib/mixer.new"
-#define MIXER_MUTE       "/var/run/mixer.mute"
-#define MIXER_KEPT_MUTE  "/var/lib/mixer.mute"
-#define MIXER_FRESH_MUTE "/var/lib/mixer.mute.new"
+#define MIXER_DEVICE   "/dev/mixer"
+#define MIXER_KEPT     "/var/lib/mixer"
+#define MIXER_FRESH    "/var/lib/mixer.new"
+#define MIXER_MUTE     "/var/run/mixer.mute"
+#define MIXER_OLD_MUTE "/var/lib/mixer.mute"
 
 /* OSS's requests, with Linux's numbers: channel N's level, the left
  * channel's percentage in the low byte and the right's in the next, and the
@@ -325,10 +326,16 @@ static const char *const mixer_names[MIXER_CHANNELS] = {
  * machine with no mixer, which then keeps nothing. */
 static int mixer_mask;
 
-/* The texts `MIXER_KEPT` and `MIXER_KEPT_MUTE` hold, empty for a file there
- * is not, so that a save writes only what changed. */
-static char mixer_saved[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
-static char mute_saved[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
+/* The most bytes of `MIXER_KEPT`, a line for each channel and the mute's,
+ * and of a record of a mute. */
+#define MIXER_TEXT      (MIXER_CHANNELS * sizeof("monitor 100:100\n") + sizeof("mute 100:100\n"))
+#define MUTE_RECORD_MAX sizeof("100:100\n")
+
+/* The text `MIXER_KEPT` holds, empty for a file there is not, so that a
+ * save writes only what changed; and whether `MIXER_OLD_MUTE` is still to
+ * be removed. */
+static char mixer_saved[MIXER_TEXT];
+static int mixer_old_mute;
 
 #ifdef INIT_CONSOLE_LOGIN
 /* Whether a session child has already failed to exec the login program in
@@ -500,17 +507,39 @@ static int read_text(const char *path, char *text, int size)
 }
 
 /**
- * Read the decimal number in the file `path` into `*value`. Returns 0, or -1
- * when the file cannot be read or does not hold a number and a newline.
+ * Read the settings file `kept` into `text`, as `read_text` does, or, when
+ * there is none, its replacement `fresh`, when that ends in a newline:
+ * KRFFS's rename removes the old file before the new one takes its name,
+ * so a stop between leaves only `fresh`, which `replace_file` flushed
+ * whole before the rename. Returns the count, or -1 for neither; sets
+ * `*from_fresh` when the text is `fresh`'s.
  */
-static int read_number(const char *path, long *value)
+static int read_kept(const char *kept, const char *fresh, char *text, int size, int *from_fresh)
 {
-    char text[24];
-    char *end;
+    int n = read_text(kept, text, size);
 
-    if (read_text(path, text, sizeof(text)) <= 0) {
+    *from_fresh = 0;
+    if (n >= 0 || errno != ENOENT) {
+        return n;
+    }
+    n = read_text(fresh, text, size);
+    if (n <= 0 || text[n - 1] != '\n') {
+        text[0] = '\0';
         return -1;
     }
+    *from_fresh = 1;
+    return n;
+}
+
+/**
+ * Read the decimal number at the start of `text` into `*value`. Returns 0,
+ * or -1 when `text` does not hold a number, not negative, and a newline or
+ * its end.
+ */
+static int parse_number(const char *text, long *value)
+{
+    char *end;
+
     errno = 0;
     *value = strtol(text, &end, 10);
     if (end == text || (*end != '\0' && *end != '\n') || errno == ERANGE || *value < 0) {
@@ -520,26 +549,47 @@ static int read_number(const char *path, long *value)
 }
 
 /**
+ * Read the decimal number in the file `path` into `*value`. Returns 0, or -1
+ * when the file cannot be read or does not hold a number and a newline.
+ */
+static int read_number(const char *path, long *value)
+{
+    char text[24];
+
+    if (read_text(path, text, sizeof(text)) <= 0) {
+        return -1;
+    }
+    return parse_number(text, value);
+}
+
+/**
  * Write the level kept for the backlight `b`, named `name`, back to it, and
  * note the file's text in `b->saved`. The level is kept between a twentieth
  * of the backlight's `max_brightness`, and at least 1, and that maximum, as
  * systemd-backlight keeps it, so that a level saved at 0 does not start the
  * machine with its screen dark. A backlight with no level kept is left as
- * the kernel found it.
+ * the kernel found it. A level read from the replacement (`read_kept`) is
+ * noted as no text, so that the next save writes the file again.
  */
 static void restore_backlight(struct backlight *b, const char *name)
 {
     char path[sizeof(BACKLIGHT_CLASS) + NAME_MAX + sizeof("/max_brightness")];
     long level, max, least;
     FILE *f;
-    int ok = 0;
+    int ok = 0, from_fresh;
 
-    if (read_text(b->kept, b->saved, sizeof(b->saved)) < 0) {
+    if (read_kept(b->kept, b->fresh, b->saved, sizeof(b->saved), &from_fresh) < 0) {
         b->saved[0] = '\0';
-    }
-    if (read_number(b->kept, &level) != 0) {
         return;
     }
+    ok = parse_number(b->saved, &level) == 0;
+    if (from_fresh) {
+        b->saved[0] = '\0';
+    }
+    if (!ok) {
+        return;
+    }
+    ok = 0;
     snprintf(path, sizeof(path), BACKLIGHT_CLASS "/%s/max_brightness", name);
     if (read_number(path, &max) != 0 || max <= 0) {
         return;
@@ -591,12 +641,15 @@ static void keep_backlights(void)
 }
 
 /**
- * Write the `n` bytes of `text` to `fresh`, flush it and rename it to `kept`,
- * so that a power loss leaves the old file or the new one. Returns 0, or -1
- * on a failure, which leaves `kept` as it was. Uses only system calls a
- * signal handler may make.
+ * Write the `n` bytes of `text` to `fresh`, flush it, rename it to `kept`
+ * and flush their directory `dir`, so that a power loss leaves the old file
+ * or the new one, or on KRFFS only `fresh` (`read_kept`), and the new one
+ * once this returns, as ext2 writes the rename's directory block only at
+ * the directory's fsync. Returns 0, or -1 on a failure, which leaves `kept`
+ * as it was. Uses only system calls a signal handler may make.
  */
-static int replace_file(const char *fresh, const char *kept, const char *text, int n)
+static int replace_file(const char *fresh, const char *kept, const char *dir, const char *text,
+                        int n)
 {
     int fd = open(fresh, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     int ok;
@@ -609,6 +662,11 @@ static int replace_file(const char *fresh, const char *kept, const char *text, i
     if (!ok || rename(fresh, kept) != 0) {
         (void)unlink(fresh);
         return -1;
+    }
+    fd = open(dir, O_RDONLY | O_DIRECTORY);
+    if (fd >= 0) {
+        (void)fsync(fd);
+        close(fd);
     }
     return 0;
 }
@@ -670,7 +728,7 @@ static void save_backlights(int all)
         int n = read_text(b->level, text, sizeof(text));
 
         if (n > 0 && (all || text_differs(text, n, b->saved))) {
-            if (replace_file(b->fresh, b->kept, text, n) == 0) {
+            if (replace_file(b->fresh, b->kept, BACKLIGHT_KEPT, text, n) == 0) {
                 note_saved(b->saved, (int)sizeof(b->saved), text, n);
             }
         }
@@ -700,11 +758,24 @@ static int mixer_percentage(const char **p)
 }
 
 /**
- * Parse the levels kept in `text`, lines of `NAME L:R`, into `levels`, a
- * level in OSS's form for each channel named, -1 for the rest. Returns 0, or
- * -1 when a line is not one of a channel of OSS's.
+ * Whether `p` is a record of a mute as mixer(1) writes it, `L:R` and a
+ * newline and nothing after. Uses no library call, so the shutdown handler
+ * may call it.
  */
-static int parse_mixer(const char *text, int levels[MIXER_CHANNELS])
+static int mute_record(const char *p)
+{
+    return mixer_percentage(&p) >= 0 && *p++ == ':' && mixer_percentage(&p) >= 0 && *p++ == '\n' &&
+           *p == '\0';
+}
+
+/**
+ * Parse the levels kept in `text`, lines of `NAME L:R` and `mute L:R` or
+ * `mute none`, into `levels`, a level in OSS's form for each channel
+ * named, -1 for the rest, and the record of a mute into `mute`, of
+ * `MUTE_RECORD_MAX` bytes, empty for none; `*has_mute` says whether a
+ * `mute` line was there. Returns 0, or -1 when a line is neither.
+ */
+static int parse_mixer(const char *text, int levels[MIXER_CHANNELS], char *mute, int *has_mute)
 {
     const char *p = text;
     int i;
@@ -712,10 +783,30 @@ static int parse_mixer(const char *text, int levels[MIXER_CHANNELS])
     for (i = 0; i < MIXER_CHANNELS; i++) {
         levels[i] = -1;
     }
+    mute[0] = '\0';
+    *has_mute = 0;
     while (*p != '\0') {
         size_t len = strcspn(p, " ");
+        const char *start;
         int left, right;
 
+        if (len == 4 && strncmp(p, "mute ", 5) == 0) {
+            p += 5;
+            *has_mute = 1;
+            if (strncmp(p, "none\n", 5) == 0) {
+                mute[0] = '\0';
+                p += 5;
+                continue;
+            }
+            start = p;
+            if (mixer_percentage(&p) < 0 || *p++ != ':' || mixer_percentage(&p) < 0 ||
+                *p++ != '\n') {
+                return -1;
+            }
+            memcpy(mute, start, (size_t)(p - start));
+            mute[p - start] = '\0';
+            continue;
+        }
         for (i = 0; i < MIXER_CHANNELS; i++) {
             if (strlen(mixer_names[i]) == len && strncmp(p, mixer_names[i], len) == 0) {
                 break;
@@ -736,18 +827,21 @@ static int parse_mixer(const char *text, int levels[MIXER_CHANNELS])
 
 /**
  * Find the channels of `MIXER_DEVICE` in its device mask, keep them in
- * `mixer_mask`, and set each one kept in `MIXER_KEPT` to its kept level; then
- * put mixer(1)'s record of a mute back from `MIXER_KEPT_MUTE`. A machine with
- * no mixer, or a missing file, leaves the driver's levels alone; so does a
- * malformed file, after a diagnostic. Called after `/var/run` is emptied,
- * which removes the record a boot would otherwise inherit.
+ * `mixer_mask`, and set each one kept in `MIXER_KEPT`, or its replacement
+ * (`read_kept`), to its kept level; then put mixer(1)'s record of a mute
+ * back from the file's `mute` line, or from `MIXER_OLD_MUTE` when it has
+ * none. A machine with no mixer, or a missing file, leaves the driver's
+ * levels alone; so does a malformed file, after a diagnostic. Called after
+ * `/var/run` is emptied, which removes the record a boot would otherwise
+ * inherit.
  */
 static void keep_mixer(void)
 {
-    char text[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
+    char text[MIXER_TEXT];
+    char mute[MUTE_RECORD_MAX];
     int levels[MIXER_CHANNELS];
     int fd = open(MIXER_DEVICE, O_RDWR | O_CLOEXEC);
-    int mask, i, n;
+    int mask, i, n, has_mute, from_fresh;
 
     if (fd < 0) {
         return;
@@ -757,16 +851,16 @@ static void keep_mixer(void)
         return;
     }
     mixer_mask = mask;
-    if (read_text(MIXER_KEPT_MUTE, mute_saved, sizeof(mute_saved)) < 0) {
-        mute_saved[0] = '\0';
-    }
-    n = read_text(MIXER_KEPT, text, sizeof(text));
+    mixer_old_mute = access(MIXER_OLD_MUTE, F_OK) == 0;
+    n = read_kept(MIXER_KEPT, MIXER_FRESH, text, sizeof(text), &from_fresh);
     if (n < 0) {
         close(fd);
         return;
     }
-    note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
-    if (n == (int)sizeof(text) - 1 || parse_mixer(text, levels) != 0) {
+    if (!from_fresh) {
+        note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
+    }
+    if (n == (int)sizeof(text) - 1 || parse_mixer(text, levels, mute, &has_mute) != 0) {
         fprintf(stderr, "init: mixer: " MIXER_KEPT ": malformed; levels left alone\n");
         close(fd);
         return;
@@ -780,9 +874,12 @@ static void keep_mixer(void)
         }
     }
     close(fd);
-    n = read_text(MIXER_KEPT_MUTE, text, sizeof(text));
+    if (!has_mute && (read_text(MIXER_OLD_MUTE, mute, sizeof(mute)) <= 0 || !mute_record(mute))) {
+        mute[0] = '\0';
+    }
+    n = (int)strlen(mute);
     if (n > 0 && (fd = open(MIXER_MUTE, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)) >= 0) {
-        if (write(fd, text, (size_t)n) != n) {
+        if (write(fd, mute, (size_t)n) != n) {
             fprintf(stderr, "init: mixer: " MIXER_MUTE ": cannot restore: %s\n", strerror(errno));
         }
         close(fd);
@@ -806,16 +903,18 @@ static char *put_decimal(char *p, int v)
 }
 
 /**
- * Save the level of each channel in `mixer_mask` to `MIXER_KEPT`, and
- * mixer(1)'s record of a mute to `MIXER_KEPT_MUTE`, or remove that file when
- * there is no record: both when `all`, as the shutdown handler asks, else
- * only what differs from what the files hold. Makes only system calls a
- * handler may make; a channel whose level cannot be read is left out, and a
- * mixer that cannot be read keeps the file it had.
+ * Save the level of each channel in `mixer_mask`, and mixer(1)'s record of
+ * a mute as the `mute` line, to `MIXER_KEPT` in one file: when `all`, as
+ * the shutdown handler asks, else only when it differs from what the file
+ * holds. Once the file is written, `MIXER_OLD_MUTE` goes. Makes only
+ * system calls a handler may make; a channel whose level cannot be read is
+ * left out, and a mixer that cannot be read keeps the file it had.
  */
 static void save_mixer(int all)
 {
-    char text[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
+    char text[MIXER_TEXT];
+    char mute[MUTE_RECORD_MAX + 1];
+    const char *q;
     char *p = text;
     int fd, i, n;
 
@@ -842,22 +941,23 @@ static void save_mixer(int all)
     if (p == text) {
         return;
     }
+    q = read_text(MIXER_MUTE, mute, sizeof(mute)) > 0 && mute_record(mute) ? mute : "none\n";
+    for (i = 0; i < 5; i++) {
+        *p++ = "mute "[i];
+    }
+    while (*q != '\0') {
+        *p++ = *q++;
+    }
     (void)mkdir("/var", 0755);
     (void)mkdir("/var/lib", 0755);
     n = (int)(p - text);
     if ((all || text_differs(text, n, mixer_saved)) &&
-        replace_file(MIXER_FRESH, MIXER_KEPT, text, n) == 0) {
+        replace_file(MIXER_FRESH, MIXER_KEPT, "/var/lib", text, n) == 0) {
         note_saved(mixer_saved, (int)sizeof(mixer_saved), text, n);
-    }
-    n = read_text(MIXER_MUTE, text, sizeof(text));
-    if (n > 0) {
-        if ((all || text_differs(text, n, mute_saved)) &&
-            replace_file(MIXER_FRESH_MUTE, MIXER_KEPT_MUTE, text, n) == 0) {
-            note_saved(mute_saved, (int)sizeof(mute_saved), text, n);
+        if (mixer_old_mute) {
+            (void)unlink(MIXER_OLD_MUTE);
+            mixer_old_mute = 0;
         }
-    } else if (all || mute_saved[0] != '\0') {
-        (void)unlink(MIXER_KEPT_MUTE);
-        mute_saved[0] = '\0';
     }
 }
 
