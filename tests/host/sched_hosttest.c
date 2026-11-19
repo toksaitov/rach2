@@ -1465,7 +1465,7 @@ static void run_delay(void)
 
 /**
  * The tick switches an ordinary thread for another of its processor's
- * queue only once it has run its slice, 0.75 ms, as Linux's update_deadline
+ * queue only once it has run its slice, 0.7 ms, as Linux's update_deadline
  * asks for a switch only when the virtual runtime reaches the deadline
  * (kernel/sched/fair.c:1022-1045, 1245-1273). So a thread that a yield runs
  * for 200 us, as KVM's steal_time selftest runs one, ends before the yielder

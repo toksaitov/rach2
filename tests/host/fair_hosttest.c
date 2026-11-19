@@ -625,9 +625,9 @@ static void fork_rows(void)
     CHECK(child->se.custom_slice && child->se.slice == 300000u,
           "a fork keeps the custom slice sched_setattr gave");
     fair_init(4);
-    CHECK(sysctl_sched_base_slice == 2250000u, "four processors scale the base slice to 2.25 ms");
+    CHECK(sysctl_sched_base_slice == 2100000u, "four processors scale the base slice to 2.1 ms");
     fair_init(64);
-    CHECK(sysctl_sched_base_slice == 3000000u, "the scaling stops at eight processors");
+    CHECK(sysctl_sched_base_slice == 2800000u, "the scaling stops at eight processors");
 }
 
 /** RUN_TO_PARITY's protection, and PREEMPT_SHORT's cancel of it. */
