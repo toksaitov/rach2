@@ -1184,25 +1184,27 @@ static int32_t vn_set_fd(struct vnet *n, struct eventfd **slot, int32_t fd)
 
 /**
  * VHOST_SET_VRING_KICK: hook the eventfd of `fd`, holding its descriptor,
- * or none with -1, and then let the old kick go. 0, or eventfd_get's
+ * both taken from one lookup, or none with -1, and then let the old kick
+ * go. 0, or eventfd_get's
  * -EBADF or -EINVAL with the old kick kept. Under the big lock; the
  * release of the old descriptor may sleep.
  */
 static int32_t vn_set_kick(struct vn_vq *q, int32_t fd)
 {
     struct eventfd *ev = 0, *old = q->kick;
-    fd_entry_t file, oldfile;
+    fd_entry_t file, oldfile, *e;
     int32_t err = 0;
     int had = q->has_kickfile;
 
     k_memset(&file, 0, sizeof(file));
     k_memset(&oldfile, 0, sizeof(oldfile));
     if (fd != VN_UNBIND) {
-        ev = eventfd_get(fd, &err);
+        e = fd >= 0 ? fd_get(current_proc->fds, fd) : 0;
+        ev = eventfd_entry_get(e, &err);
         if (!ev) {
             return err;
         }
-        file = *fd_get(current_proc->fds, fd);
+        file = *e;
         fd_ofd_ref(file.ofd);
     }
     if (old && !eventfd_hook_remove(old, &q->hook, NULL)) {

@@ -16,6 +16,7 @@
 
 struct isr_params;
 struct eventfd;
+struct fd_entry;
 
 /*
  * The kernel's side, for irqfd and ioeventfd (rach2/sys/kvm/), VFIO's
@@ -48,6 +49,11 @@ struct eventfd_hook {
  * NULL with `*err` -EBADF for no such descriptor or -EINVAL for one that is
  * not an eventfd, as Linux's eventfd_ctx_fdget. */
 struct eventfd *eventfd_get(int fd, int32_t *err);
+
+/** `eventfd_get` of an entry the caller has looked up, NULL for none, so
+ * that a caller that also keeps the entry's description takes both from
+ * the one lookup, which a close between two lookups cannot split. */
+struct eventfd *eventfd_entry_get(const struct fd_entry *e, int32_t *err);
 
 /** Drop a reference `eventfd_get` took; the last one, after the last
  * close, frees the counter. */

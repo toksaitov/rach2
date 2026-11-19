@@ -202,6 +202,17 @@ struct eventfd *eventfd_get(int fd, int32_t *err)
     return 0;
 }
 
+/** A reference to the eventfd of an entry the device looked up. */
+struct eventfd *eventfd_entry_get(const struct fd_entry *e, int32_t *err)
+{
+    if (e >= &evfd[0] && e < &evfd[NEVS]) {
+        k.ev[e - evfd].refs++;
+        return &k.ev[e - evfd];
+    }
+    *err = e == &plainfd ? -EINVAL : -EBADF;
+    return 0;
+}
+
 /** Drop a reference. */
 void eventfd_put(struct eventfd *ev)
 {

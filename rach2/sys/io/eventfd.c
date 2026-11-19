@@ -353,7 +353,11 @@ long sys_eventfd(struct isr_params *params)
 
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {
-    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    return eventfd_entry_get(current_proc ? fd_get(current_proc->fds, fd) : NULL, err);
+}
+
+struct eventfd *eventfd_entry_get(const struct fd_entry *e, int32_t *err)
+{
     struct eventfd *ev;
     uint32_t flags;
 
