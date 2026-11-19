@@ -46,6 +46,7 @@ static void (*waiting)(void);
 static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
 static int fail_after_move, syncs_after_free, fail_flush_at;
+static int refuse_block = -1;
 /* Blocks copied from the cache to the device cache, by any of the syncs. */
 static int block_writes;
 static void (*flush_hook)(void);
@@ -186,6 +187,10 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     check(dev == &disk && blk < IMAGE_BLOCKS, "cache block in volume");
+    if (refuse_block >= 0 && blk == (uint64_t)refuse_block) {
+        refuse_block = -1;
+        return NULL;
+    }
     return blk < IMAGE_BLOCKS ? &buffers[blk] : NULL;
 }
 
@@ -331,6 +336,7 @@ static void setup(void)
     waiting = NULL;
     flush_hook = NULL;
     fail_flush_at = 0;
+    refuse_block = -1;
     fail_after_move = syncs_after_free = block_writes = 0;
     root->magic = space->magic = KRFFS_FILE_SYSTEM_MAGIC;
     root->type = KRFFS_ROOT_NODE;
@@ -1047,6 +1053,51 @@ static void shrink_link(int reopen)
     teardown();
 }
 
+/** After the free header reaches disk, refuse the link's second block. */
+static void refuse_link_block(void)
+{
+    if (flush_calls == 2) {
+        refuse_block = 1;
+    }
+}
+
+/** A torn link makes removals walk forward and keeps the volume dirty. */
+static void failed_link(void)
+{
+    krffs_mount_t *fs;
+    krffs_node_t head;
+    uint64_t a, b;
+    int fd;
+    void *handle;
+
+    setup();
+    fd = open_node(create("a"));
+    handle = fd_slot(&table, fd)->ofd->fhandle;
+    k_memset(payload, 'a', sizeof(payload));
+    check(kv_write(&mount, handle, payload, 3048, 0) == 3048, "split link: seed a");
+    a = follow_moves(handle);
+    b = offset_of(&mount, create("b"));
+    check(b + KRFFS_FIELD_PREVIOUS == BCACHE_BLOCK_BYTES - 1, "split link: b crosses a block");
+    fs = &vol_of(&mount)->fs;
+    flush_calls = 0;
+    flush_hook = refuse_link_block;
+    check(kv_truncate(&mount, handle, 100) == 0 && fs->stale_links, "split link: write failed");
+    flush_hook = NULL;
+    check(krffs_head(fs, b, &head) == 0 &&
+              krffs_previous_offset(fs, b, &head) == a + sizeof(head) + 100,
+          "split link: use the forward chain to find the new free node");
+    check(kv_prepare_unmount(&mount) == 0 && (((krffs_node_t *)medium)->mode & KRFFS_MODE_DIRTY),
+          "split link: unmount leaves the repair owed on disk");
+    teardown();
+
+    k_memcpy(cached, medium, IMAGE_BYTES);
+    check(krffs_volume_mount(&mount, &disk, 0, NULL) == 0, "split link: dirty volume remounts");
+    if (mount.priv) {
+        check(krffs_chain_is_valid(&vol_of(&mount)->fs), "split link: remount rebuilt the link");
+        kv_unmount(&mount);
+    }
+}
+
 /**
  * A mount a failed write made read-only syncs the whole device at an fsync
  * of one file, since the failed sync point may have left any file's blocks
@@ -1123,6 +1174,7 @@ int main(void)
     owned_across_move();
     shrink_link(0);
     shrink_link(1);
+    failed_link();
     owned_after_failure();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
