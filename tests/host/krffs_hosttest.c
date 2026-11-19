@@ -157,6 +157,11 @@ static int refused_write = -1;
 static int writes_seen;
 /* The offset of the one write that fails, whatever its place, or -1. */
 static uint64_t refused_offset = (uint64_t)-1;
+/* The sync that fails, counted with the writes so that a row can fail
+   either; -1 for none. */
+static int refused_sync = -1;
+/* The offset of a write after which the next sync fails, or -1. */
+static uint64_t refused_sync_after = (uint64_t)-1;
 /* The offset whose second write fails, or -1, and the writes seen there. */
 static uint64_t refused_again_offset = (uint64_t)-1;
 static int refused_again_seen;
@@ -174,6 +179,10 @@ static int record_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
     if (offset == refused_offset) {
         refused_offset = (uint64_t)-1;
         return -1;
+    }
+    if (offset == refused_sync_after) {
+        refused_sync_after = (uint64_t)-1;
+        refused_sync = writes_seen; /* the next event, the barrier after it */
     }
     if (offset == refused_again_offset && refused_again_seen++ == 1) {
         refused_again_offset = (uint64_t)-1;
@@ -196,10 +205,6 @@ static int record_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
    still be holding. */
 static int sync_marks[WRITES_MAX];
 static int sync_count;
-
-/* The sync that fails, counted with the writes so that a row can fail
-   either; -1 for none. */
-static int refused_sync = -1;
 
 /**
  * Mark where the sync fell among the recorded writes while `recording` is
@@ -2507,6 +2512,57 @@ static void withdrawn_shrink_row(void)
 }
 
 /**
+ * A write whose bytes readers can see once its call fails answers them: an
+ * append whose length's high part is stored before its barrier fails
+ * answers the bytes that length counts, and a moving write whose copy is
+ * live before a barrier fails answers every byte; neither answers EIO.
+ */
+static void visible_write_rows(void)
+{
+    static const struct unlink_extent extents[] = {
+        {0, NULL}, {682, "victim"}, {1682, "kept"}, {2100, NULL}};
+    krffs_mount_t mount;
+    uint64_t node = 682;
+    char bytes[1000];
+    char back[1000];
+    int n;
+
+    check(682 + KRFFS_FIELD_DATA_SIZE == 1023, "the victim's length crosses a sector");
+    make_unlink_image(extents, 4);
+    fill_fixture_file(682, 256, 'v');
+    mount = mount_over(&recording_backend, disk_image, DISK_IMAGE_SIZE);
+    mount.sector = 512;
+    k_memset(bytes, 'n', sizeof(bytes));
+    writes_seen = 0;
+    refused_sync_after = 1024; /* the length's high part, in the next sector */
+    n = krffs_write_at(&mount, &node, bytes, 256, 256);
+    refused_sync = -1;
+    refused_sync_after = (uint64_t)-1;
+    check(n == 256 && node == 682 && mount.unsettled,
+          "an append whose length's barrier fails answers the bytes the length counts");
+    check(krffs_read_at(&mount, node, back, 512, 0) == 512 && back[255] == 'v' &&
+              back[256] == 'n' && back[511] == 'n',
+          "and readers see them");
+
+    make_unlink_image(extents, 4);
+    fill_fixture_file(682, 256, 'v');
+    mount = mount_over(&recording_backend, disk_image, DISK_IMAGE_SIZE);
+    mount.sector = 512;
+    k_memset(bytes, 'm', sizeof(bytes));
+    node = 682;
+    writes_seen = 0;
+    refused_sync_after = 682 + KRFFS_FIELD_TYPE; /* the old node freed */
+    n = krffs_write_at(&mount, &node, bytes, sizeof(bytes), 0);
+    refused_sync = -1;
+    refused_sync_after = (uint64_t)-1;
+    check(n == (int)sizeof(bytes) && node != 682,
+          "a moving write whose barrier fails once its copy is live answers every byte");
+    check(krffs_read_at(&mount, node, back, sizeof(back), 0) == (int)sizeof(back) &&
+              back[0] == 'm' && back[sizeof(back) - 1] == 'm',
+          "and readers see them in the copy");
+}
+
+/**
  * A shrink that must move takes a whole free node larger than its own
  * node. When the old node refuses its type and the copy refuses the type
  * that withdraws it, the copy stays published beside the original, and the
@@ -3176,6 +3232,59 @@ static void reap_failure_rows(void)
 }
 
 /**
+ * A reap whose removal merges with a free node after it, and cannot repair
+ * the backward link of the node after both, counts the orphan and halts the
+ * mount; so does one that cannot read that node, even once, which it reads
+ * before it frees anything.
+ */
+static void reap_link_failure_rows(void)
+{
+    static const krffs_backend_t backend = {failing_read, record_write, memory_sync, 0};
+    krffs_mount_t mount = mount_over(&backend, image, IMAGE_SIZE);
+    krffs_node_t head;
+    uint64_t node;
+    uint64_t file;
+
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/a") == 0 && krffs_create_at(&mount, "/b") == 0 &&
+              krffs_create_at(&mount, "/c") == 0,
+          "reap failure rows: an orphan, a free node and a file after them");
+    node = krffs_walk(&mount, "/a");
+    file = krffs_walk(&mount, "/c");
+    check(krffs_unlink_at(&mount, "/b") == 0 && krffs_orphan_at(&mount, node) == 0,
+          "the first loses its name and the second is freed");
+    mount.orphans = 0;
+    mount.stale_links = 0;
+    refused_offset = file + KRFFS_FIELD_PREVIOUS;
+    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1 && mount.halted &&
+              mount.check_owed && mount.stale_links,
+          "a reap whose merge cannot repair the backward link after it halts the mount");
+    refused_offset = (uint64_t)-1;
+    mount.halted = 0;
+    mount.check_owed = 0;
+    mount.stale_links = 0;
+
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/a") == 0 && krffs_create_at(&mount, "/b") == 0 &&
+              krffs_create_at(&mount, "/c") == 0,
+          "reap failure rows: the same three again");
+    node = krffs_walk(&mount, "/a");
+    file = krffs_walk(&mount, "/c");
+    check(krffs_unlink_at(&mount, "/b") == 0 && krffs_orphan_at(&mount, node) == 0,
+          "the first loses its name and the second is freed again");
+    mount.orphans = 0;
+    read_fails_at = file + KRFFS_FIELD_TYPE;
+    read_fails_once = 1;
+    check(krffs_reap_orphans_at(&mount) == 0 && mount.orphans == 1 && mount.halted &&
+              krffs_head(&mount, node, &head) == 0 && head.type == KRFFS_RESERVED_NODE,
+          "and one that cannot read the node the merge repairs, even once, frees nothing");
+    read_fails_at = (uint64_t)-1;
+    read_fails_once = 0;
+    mount.halted = 0;
+    mount.check_owed = 0;
+}
+
+/**
  * The disk root's boot scan over a backend whose reads can fail, as the
  * page cache's copies answer a read the disk fails: a failed orphan free
  * and a header read that stops the scan each leave the orphan counted, so
@@ -3493,6 +3602,7 @@ static void rename_unit_rows(void)
     rename_refusal_rows();
     orphan_count_rows();
     reap_failure_rows();
+    reap_link_failure_rows();
     boot_scan_failure_rows();
     phase_row();
 }
@@ -3643,6 +3753,7 @@ static void disk_unlink_rows(void)
     volume_merge_row();
     writeback_error_rows();
     short_write_rows();
+    visible_write_rows();
     disk_moving_write_rows();
     volume_shrink_grow_row();
     failed_grow_barrier_row();

@@ -196,13 +196,16 @@ static int volume_sync(void *ctx)
  * The core halted the volume (`krffs_withdraw`): every mount that shows it
  * turns read-only (`vfs_mount_halted`), so that an open for writing, a
  * creation or a link is refused with -EROFS before it reaches the core.
- * The cache still writes back whole for a sync and for the unmount, which
- * keeps the dirty flag.
+ * The cache writes none of the volume's blocks after this
+ * (`bcache_halt_writes`), for a sync, an eviction or the flusher, so the
+ * medium keeps what the last sync point wrote, the dirty flag the mount set
+ * among it, and the unmount drops what is left dirty.
  */
 static void kv_halted(krffs_mount_t *fs)
 {
     struct krffs_volume *vol = fs->ctx;
 
+    bcache_halt_writes(vol->dev);
     vfs_mount_halted(vol->mnt);
 }
 
@@ -1221,7 +1224,7 @@ static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 }
 
 /** Write every dirty buffer of the volume under the mount lock, even after a
- * write failure. */
+ * write failure, but none once the core halted it (`kv_halted`): -EIO. */
 static int kv_sync(struct vfs_mount *mnt)
 {
     return kv_fsync(mnt, NULL);

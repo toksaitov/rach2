@@ -272,9 +272,20 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
     return 0;
 }
 
+/* Set by `bcache_halt_writes`: the cache writes none of the device's blocks. */
+static int writes_halted;
+
+/** The core halted the volume: no sync writes a block after this. */
+void bcache_halt_writes(block_device_t *dev)
+{
+    (void)dev;
+    writes_halted = 1;
+}
+
 /**
  * Copy the dirty blocks to the device cache. Fails with -EIO, keeping the
- * blocks dirty, under `sync_error` or at the fault `fail_after_move` sets.
+ * blocks dirty, after a halt (`writes_halted`), under `sync_error` or at the
+ * fault `fail_after_move` sets.
  * With `check_clean_order`, a write of block 0 with the dirty flag clear
  * requires the earlier data on the medium, and is counted in
  * `clean_writes`.
@@ -285,6 +296,9 @@ int bcache_sync(block_device_t *dev)
 
     (void)dev;
     sync_calls++;
+    if (writes_halted) {
+        return -EIO;
+    }
     if (fail_after_move &&
         ((krffs_node_t *)(cached + offset_of(&mount, original)))->type == KRFFS_FREE_NODE &&
         ++syncs_after_free == 1) {
@@ -350,6 +364,7 @@ static void setup_on_phase(uint32_t phase)
     k_memset(&disk, 0, sizeof(disk));
     k_memset(buffers, 0, sizeof(buffers));
     depth = sync_error = flush_error = check_clean_order = clean_writes = 0;
+    writes_halted = 0;
     waiting = NULL;
     flush_hook = NULL;
     fail_flush_at = 0;
@@ -947,7 +962,8 @@ static void refused_rename_keeps_destination(void)
  * A mount the core halted, whose moved file's copy could not be withdrawn,
  * takes no change through the adapter until the next mount: an unlink of an
  * open file and a rename answer EROFS, and an fsync EIO, since the copy may
- * still be on the medium beside the file.
+ * still be on the medium beside the file; and the halt stops the cache's
+ * writes of the volume, so that a sync answers EIO.
  */
 static void halted_refusals(void)
 {
@@ -965,18 +981,18 @@ static void halted_refusals(void)
     vfs_ns_unlock(&mount);
     check(rename_name("file", "other") == -EROFS, "and a rename");
     check(kv_fsync(&mount, handle) == -EIO, "and answers EIO to an fsync");
-    check(kv_sync(&mount) == 0, "but writes the volume back for its unmount");
     vfs_ns_lock(&mount);
     check(kv_mknod(&mount, mount.root, "dev", 0020644, 0, &found) == -EROFS,
           "and answers EROFS to a device node before EPERM");
     vfs_ns_unlock(&mount);
     halts = 0;
     vol_of(&mount)->fs.on_halt(&vol_of(&mount)->fs);
-    check(halts == 1 && (mount.flags & VFS_MS_RDONLY),
-          "a halt turns the mounts that show the volume read-only");
-    check(kv_sync(&mount) == 0, "and the volume still writes back");
+    check(halts == 1 && (mount.flags & VFS_MS_RDONLY) && writes_halted,
+          "a halt turns the mounts that show the volume read-only and halts its writes");
+    check(kv_sync(&mount) == -EIO, "and the volume writes nothing back");
     mount.flags &= ~(uint32_t)VFS_MS_RDONLY;
     vol_of(&mount)->fs.halted = 0;
+    writes_halted = 0;
     kv_release(&mount, handle);
     teardown();
 }
