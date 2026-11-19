@@ -12,7 +12,8 @@
  * host is caught by the fallback, which boots the same root on the previous
  * kernel, and is repaired from there; the root made missing, faulty and
  * dirty under an armed trial lands each time in the recovery system, which
- * repairs it; a menu is staged and then torn; the boot loader is replaced in
+ * repairs it, the faulty one through the check that the installed system
+ * arms; a menu is staged and then torn; the boot loader is replaced in
  * the BIOS boot partition through /dev/grubcore; and the root, destroyed
  * with the machine stopped, is rewritten from recovery through an ssh pipe.
  *
@@ -44,6 +45,12 @@
  * kernel sent to the machine prints in its place. */
 #define BANNER "Rach2 Booting"
 #define MARK   "Rach2 SEALED!"
+
+/* What init prints on the installed system once it has armed recovery's
+ * check of a root the kernel left read-only, and what recovery's init prints
+ * once that check is done. */
+#define FSCK_ARMED   "init: fsck: restarting into recovery's e2fsck -p"
+#define FSCK_CHECKED ": checked; restarting"
 
 /* The staged menu's entry, and the header of GRUB's environment block. */
 #define MENU_ENTRY "menuentry sealedone --id sealedone"
@@ -712,8 +719,10 @@ static void missing(struct sealed *s)
 
 /** The root made faulty under an armed trial: a reached inode's bit in the
  * bitmap cleared and the valid bit clear, so the check runs, finds the
- * fault and leaves the root read-only with the error bit set; nothing
- * commits it. */
+ * fault and leaves the root read-only with the error bit set. init then arms
+ * recovery's e2fsck -p with bootctl fsck and restarts; recovery repairs the
+ * root and restarts in turn, and nothing commits the trial. Each restart
+ * ends a boot, QEMU running with -no-reboot. */
 static void faulty(struct sealed *s)
 {
     char *text;
@@ -725,13 +734,20 @@ static void faulty(struct sealed *s)
     power_on(s);
     net_wait(&s->b, ": read-only with errors, run e2fsck");
     net_assert(&s->u, "faulty-errors", 1, "");
-    cut(s);
+    net_wait(&s->b, FSCK_ARMED);
+    net_assert(&s->u, "faulty-armed", 1, "");
+    ended(s, "init's restart into recovery's check");
     text = console(s);
     net_assert(&s->u, "faulty-named",
                net_find(text, "ext2: check: inode #: a reached inode the bitmap calls free") !=
                    NULL,
                "the faulty root's fault was not named");
     free(text);
+    power_on(s);
+    net_wait(&s->b, FSCK_CHECKED);
+    ended(s, "recovery's restart after its check");
+    net_assert(&s->u, "faulty-checked", console_has(s, "init: e2fsck: /dev/disk0p3: status 1"),
+               "recovery's check did not repair the faulty root");
     landed(s, "faulty-recovery", "faulty-spent", "faulty");
 }
 

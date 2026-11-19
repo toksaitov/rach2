@@ -5,11 +5,11 @@
   "cases": [
     {
       "case_id": "machine.sealed.fault",
-      "behavior": "with nothing typed at the console, the sealed disk comes up on its ext2 root and answers a key login; a kernel sent over SSH is installed, tried once and committed; a destroyed candidate is caught by the fallback and repaired from it; a missing, a faulty and a dirty root under an armed trial each land in recovery, which repairs the root; a staged menu is shown and a torn one leaves the machine booting; the boot loader replaced through /dev/grubcore boots with the old core zeroed; and a root destroyed with the machine stopped is rewritten from recovery through an ssh pipe and boots",
+      "behavior": "with nothing typed at the console, the sealed disk comes up on its ext2 root and answers a key login; a kernel sent over SSH is installed, tried once and committed; a destroyed candidate is caught by the fallback and repaired from it; a missing, a faulty and a dirty root under an armed trial each land in recovery, which repairs the root, the faulty one through the check of it that the installed system arms; a staged menu is shown and a torn one leaves the machine booting; the boot loader replaced through /dev/grubcore boots with the old core zeroed; and a root destroyed with the machine stopped is rewritten from recovery through an ssh pipe and boots",
       "units": ["sealed"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"boots": 25}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"boots": 27}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "sealed_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["sealed"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "reaped", "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key and the marked kernel after a pass"},
       "steps": [
@@ -24,7 +24,7 @@
         {"step_id": "missing", "stage": "execute", "machine": "sealed",
          "does": "arm the candidate over a recovery default, zero the root's superblock, boot until the kernel says the root is missing, cut the power, boot into recovery and put the superblock back"},
         {"step_id": "faulty", "stage": "execute", "machine": "sealed",
-         "does": "arm the candidate, free a reached inode and clear the valid bit with debugfs, boot until the root mounts with errors, cut the power and boot into recovery"},
+         "does": "arm the candidate, free a reached inode and clear the valid bit with debugfs, boot until the root mounts read-only with errors and init restarts into recovery's check, boot that check until it restarts, and boot into recovery"},
         {"step_id": "dirty", "stage": "execute", "machine": "sealed",
          "does": "arm the candidate, repair the root with e2fsck -fp on the host and clear the valid bit, boot to the login, cut the power and boot into recovery"},
         {"step_id": "repair", "stage": "execute", "machine": "sealed",
@@ -85,7 +85,9 @@
         {"assertion_id": "missing-spent", "checks": "and next_entry: absent or empty, the trial spent", "source": "scenario"},
         {"assertion_id": "arm-faulty", "checks": "the candidate trial is armed over a recovery default before the root is made faulty", "source": "scenario"},
         {"assertion_id": "faulty-errors", "checks": "with /etc/hostname's inode freed in the bitmap and the valid bit clear, the armed boot's kernel says ext2: ROOT: read-only with errors, run e2fsck, ROOT being the root's partition", "source": "scenario"},
+        {"assertion_id": "faulty-armed", "checks": "that boot's init says init: fsck: restarting into recovery's e2fsck -p, having armed the check with bootctl fsck", "source": "scenario"},
         {"assertion_id": "faulty-named", "checks": "that boot's console has ext2: check: inode N: a reached inode the bitmap calls free", "source": "scenario"},
+        {"assertion_id": "faulty-checked", "checks": "the boot after it is recovery's check, whose init says init: e2fsck: /dev/disk0p3: status 1 and restarts", "source": "scenario"},
         {"assertion_id": "faulty-recovery", "checks": "bootctl status at the boot after it says booted: recovery", "source": "scenario"},
         {"assertion_id": "faulty-spent", "checks": "and next_entry: absent or empty", "source": "scenario"},
         {"assertion_id": "arm-dirty", "checks": "the candidate trial is armed over a recovery default before the root is made dirty", "source": "scenario"},
