@@ -10,9 +10,7 @@
  * to. The tables and rules below are Linux 6.12's, so that a device gives
  * the same event device, and the same events, as it does on Linux.
  *
- * Digitizer usages, pens and touchscreens, are hid-multitouch's and
- * hid-input's digitizer code's, which this driver does not have: they map
- * to nothing.
+ * Reports with digitizer contact IDs are grouped into type B slot frames.
  */
 
 #include "hid_input.h"
@@ -20,6 +18,7 @@
 #include "usb.h"
 
 #include "../evdev.h"
+#include "../mm/kheap.h"
 #include "../input.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -87,6 +86,31 @@
 #define HID_DG_TOUCHPAD               0x000D0005u
 #define HID_DG_WHITEBOARD             0x000D0006u
 #define HID_DG_STYLUS                 0x000D0020u
+#define HID_DG_FINGER                 0x000D0022u
+#define HID_DG_TIPPRESSURE            0x000D0030u
+#define HID_DG_AZIMUTH                0x000D003fu
+#define HID_DG_TIPSWITCH              0x000D0042u
+#define HID_DG_WIDTH                  0x000D0048u
+#define HID_DG_HEIGHT                 0x000D0049u
+#define HID_DG_CONTACTID              0x000D0051u
+#define HID_DG_CONTACTCOUNT           0x000D0054u
+#define HID_DG_CONTACTMAX             0x000D0055u
+
+#define HID_MT_COUNT   0xffffu /* marks the frame's Contact Count usage */
+#define HID_MT_DEFAULT 10
+#define HID_MT_AXES    (ABS_MT_LAST - ABS_MT_FIRST + 1)
+
+/* One contact in a HID packet. `next` and the input's head are one-based
+ * descriptor collection numbers, 0 at the end. */
+struct hid_mt_contact {
+    uint16_t next;
+    uint16_t axes; /* values present in the packet, from ABS_MT_FIRST */
+    uint8_t seen;
+    uint8_t identified;
+    uint8_t tip;
+    int32_t id;
+    int32_t value[HID_MT_AXES];
+};
 
 /* The event codes this file names beyond evdev.h's, Linux's values. */
 #define KEY_ESC            1
@@ -774,6 +798,94 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
     }
 }
 
+/** Whether `application` describes a touch surface. */
+static int touch_surface(uint32_t application)
+{
+    return application == HID_DG_TOUCHSCREEN || application == HID_DG_TOUCHPAD;
+}
+
+/** The one-based Finger collection of `u`, or its application for a
+ * serial report whose usages are directly in the top-level collection. */
+static uint16_t mt_collection(const struct hid_dev *hid, const struct hid_usage *u)
+{
+    int i = u->collection;
+
+    while (i >= 0 && (uint32_t)i < hid->desc.ncollections) {
+        const struct hid_collection *c = &hid->desc.collections[i];
+
+        if (c->usage == HID_DG_FINGER || c->type == HID_COLLECTION_APPLICATION) {
+            return (uint16_t)(i + 1);
+        }
+        i = c->parent;
+    }
+    return 0;
+}
+
+/** The per-contact event axis for `u`, or zero for a control field. */
+static unsigned mt_axis(const struct hid_usage *u, int duplicate)
+{
+    switch (u->hid) {
+    case HID_GD_X:
+        return duplicate ? ABS_MT_TOOL_X : ABS_MT_POSITION_X;
+    case HID_GD_Y:
+        return duplicate ? ABS_MT_TOOL_Y : ABS_MT_POSITION_Y;
+    case HID_DG_TIPPRESSURE:
+        return ABS_MT_PRESSURE;
+    case HID_DG_WIDTH:
+        return ABS_MT_TOUCH_MAJOR;
+    case HID_DG_HEIGHT:
+        return ABS_MT_TOUCH_MINOR;
+    case HID_DG_AZIMUTH:
+        return ABS_MT_ORIENTATION;
+    default:
+        return 0;
+    }
+}
+
+/** Map a usage of a multitouch report, with duplicate axes shared by
+ * every contact. Return whether the generic mapper should skip it. */
+static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_field *f,
+                        struct hid_usage *u)
+{
+    unsigned code;
+    int i;
+
+    if (!hid->desc.reports[f->report].multitouch || !touch_surface(f->application) ||
+        !(f->flags & HID_MAIN_ITEM_VARIABLE)) {
+        return 0;
+    }
+    in->mt_flags |= f->application == HID_DG_TOUCHPAD ? INPUT_MT_POINTER : INPUT_MT_DIRECT;
+    if ((u->hid & HID_USAGE_PAGE) == HID_UP_BUTTON) {
+        code = BTN_LEFT + ((u->hid - 1) & HID_USAGE);
+        if (code < KEY_CNT) {
+            in->mt_buttons++;
+            in->mt_flags |= INPUT_MT_POINTER;
+            in->ev |= 1u << EV_KEY;
+            set_bit(in->keys, code);
+            u->type = EV_KEY;
+            u->code = (uint16_t)code;
+        }
+        return 1;
+    }
+    if (u->hid == HID_DG_CONTACTCOUNT) {
+        u->mt_group = HID_MT_COUNT;
+        return 1;
+    }
+    i = (int)(u - usages_of(hid, f));
+    code = mt_axis(u, i > 0 && u[-1].hid == u->hid && u[-1].collection == u->collection);
+    if (code || u->hid == HID_DG_CONTACTID || u->hid == HID_DG_TIPSWITCH) {
+        u->mt_group = mt_collection(hid, u);
+        if (u->mt_group && code) {
+            in->ev |= 1u << EV_ABS;
+            set_bit(in->abs, code);
+            u->type = EV_ABS;
+            u->code = (uint16_t)code;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /**
  * Map usage `u`, the `index`th of field `f`, to an event of input device
  * `in`, as Linux's `hidinput_configure_usage`: a constant field, an empty
@@ -792,6 +904,7 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
 
     u->type = 0;
     u->code = 0;
+    u->mt_group = 0;
     if (f->flags & HID_MAIN_ITEM_CONSTANT) {
         return;
     }
@@ -799,6 +912,9 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
         return;
     }
     if (r->type == HID_OUTPUT_REPORT && (u->hid & HID_USAGE_PAGE) != HID_UP_LED) {
+        return;
+    }
+    if (configure_mt(hid, in, f, u)) {
         return;
     }
     how = map_usage(hid, in, f, u, &type, &code);
@@ -1255,24 +1371,96 @@ static int keymap_maps(void *ctx, uint16_t code)
     return 0;
 }
 
-/** Register input device `in` of `hid` with its capabilities, as Linux's
- * `input_register_device` takes what hid-input set. */
-static void register_input(struct hid_dev *hid, struct hid_input *in)
+/** Set up the slots using the descriptor's Contact Count Maximum bound,
+ * or the ten slots Linux uses when it has no maximum. */
+static int setup_mt_slots(struct hid_dev *hid, struct hid_input *in, struct evdev *dev)
+{
+    int slots = HID_MT_DEFAULT;
+    uint32_t i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        const struct hid_field *f = field_at(hid, i);
+        const struct hid_usage *u = usages_of(hid, f);
+
+        if (hid->desc.reports[f->report].type != HID_FEATURE_REPORT ||
+            (f->application != in->application && touch_surface(f->application))) {
+            continue;
+        }
+        for (j = 0; j < f->maxusage; j++) {
+            if (u[j].hid == HID_DG_CONTACTMAX && f->logical_maximum > 0 &&
+                f->logical_maximum <= EVDEV_MT_SLOTS) {
+                slots = f->logical_maximum;
+            }
+        }
+    }
+    if ((in->mt_flags & INPUT_MT_POINTER) && in->mt_buttons == 1) {
+        evdev_set_prop(dev, INPUT_PROP_BUTTONPAD);
+    }
+    if (test_bit(in->abs, ABS_MT_TOUCH_MINOR) && !test_bit(in->abs, ABS_MT_ORIENTATION)) {
+        evdev_set_abs(dev, ABS_MT_ORIENTATION, 0, 1, 0, 0);
+    }
+    return evdev_init_slots(dev, slots, in->mt_flags);
+}
+
+/** Set the absolute axes in descriptor order. */
+static void register_axes(struct hid_dev *hid, struct hid_input *in, struct evdev *dev)
+{
+    uint32_t i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+
+        if (f->input != input_index(hid, in)) {
+            continue;
+        }
+        for (j = 0; j < f->maxusage; j++) {
+            struct hid_usage *u = &usages_of(hid, f)[j];
+            int32_t a = f->logical_minimum;
+            int32_t b = f->logical_maximum;
+
+            if (u->type != EV_ABS) {
+                continue;
+            }
+            if (u->mt_group && u->code == ABS_MT_ORIENTATION) {
+                evdev_set_abs(dev, u->code, -(b / 4), b / 4, 0, 0);
+            } else if (f->application == HID_GD_GAMEPAD || f->application == HID_GD_JOYSTICK) {
+                evdev_set_abs(dev, u->code, a, b, wrap_sub(b, a) >> 8, wrap_sub(b, a) >> 4);
+            } else {
+                evdev_set_abs(dev, u->code, a, b, 0, 0);
+            }
+            evdev_set_abs_res(dev, u->code, abs_resolution(f, u->code));
+            if (u->hat || u->hat_dir) {
+                evdev_set_abs(dev, u->code, -1, 1, 0, 0);
+                if (u->code + 1 <= ABS_MAX) {
+                    evdev_set_abs(dev, (uint16_t)(u->code + 1), -1, 1, 0, 0);
+                }
+            }
+        }
+    }
+}
+
+/** Register input device `in` of `hid` with its capabilities. Return 1
+ * on success or 0 if evdev could not take it. */
+static int register_input(struct hid_dev *hid, struct hid_input *in)
 {
     struct evdev_keymap km;
     struct evdev *dev;
-    uint32_t i, j;
     unsigned code;
 
+    dev = in->mt_flags
+              ? evdev_reserve()
+              : evdev_register(in->name, EVDEV_BUS_USB, hid->vendor, hid->product, in->keys);
+    if (!dev) {
+        return 0;
+    }
     if (in->ev & (1u << EV_REP)) {
-        dev = evdev_register(in->name, EVDEV_BUS_USB, hid->vendor, hid->product, in->keys);
         evdev_describe(dev, hid->phys, EVDEV_SCAN | EVDEV_KEYBOARD);
-        input_keyboard_attach_dev(&in->kb, dev);
+        if (!in->mt_flags) {
+            input_keyboard_attach_dev(&in->kb, dev);
+        }
     } else {
-        dev = evdev_register(in->name, EVDEV_BUS_USB, hid->vendor, hid->product, in->keys);
         evdev_describe(dev, hid->phys, test_bit(in->msc, MSC_SCAN) ? EVDEV_SCAN : 0);
     }
-    in->dev = dev;
     km.get = keymap_get;
     km.set = keymap_set;
     km.maps = keymap_maps;
@@ -1290,40 +1478,56 @@ static void register_input(struct hid_dev *hid, struct hid_input *in)
             evdev_set_capability(dev, EV_LED, (uint16_t)code);
         }
     }
-    /* The axes, in the order hid-input set their limits. */
-    for (i = 0; i < hid->desc.nfields; i++) {
-        struct hid_field *f = field_at(hid, i);
-
-        if (f->input != input_index(hid, in)) {
-            continue;
+    register_axes(hid, in, dev);
+    if (in->mt_flags) {
+        if (setup_mt_slots(hid, in, dev) != 0) {
+            evdev_unregister(dev);
+            return 0;
         }
-        for (j = 0; j < f->maxusage; j++) {
-            struct hid_usage *u = &usages_of(hid, f)[j];
-            int32_t a = f->logical_minimum;
-            int32_t b = f->logical_maximum;
-
-            if (u->type != EV_ABS) {
-                continue;
-            }
-            if (f->application == HID_GD_GAMEPAD || f->application == HID_GD_JOYSTICK) {
-                evdev_set_abs(dev, u->code, a, b, wrap_sub(b, a) >> 8, wrap_sub(b, a) >> 4);
-            } else {
-                evdev_set_abs(dev, u->code, a, b, 0, 0);
-            }
-            evdev_set_abs_res(dev, u->code, abs_resolution(f, u->code));
-            if (u->hat || u->hat_dir) {
-                evdev_set_abs(dev, u->code, -1, 1, 0, 0);
-                if (u->code + 1 <= ABS_MAX) {
-                    evdev_set_abs(dev, (uint16_t)(u->code + 1), -1, 1, 0, 0);
-                }
-            }
+        evdev_register_reserved(dev, in->name, EVDEV_BUS_USB, hid->vendor, hid->product, in->keys);
+        if (in->ev & (1u << EV_REP)) {
+            input_keyboard_attach_dev(&in->kb, dev);
         }
     }
+    in->dev = dev;
     in->mouse = !(in->ev & (1u << EV_REP)) && test_bit(in->rel, REL_X) && test_bit(in->rel, REL_Y);
     if (in->mouse) {
         /* An open of `mouse` fails until a mouse of any kind is found. */
         input_mouse_found();
     }
+    return 1;
+}
+
+/** Mark input reports carrying Contact Identifier and allocate their
+ * packet workspace. Return 0 or -ENOMEM. */
+static int prepare_mt_reports(struct hid_dev *hid)
+{
+    uint32_t i, j;
+    int any = 0;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        const struct hid_field *f = field_at(hid, i);
+        struct hid_report *r = &hid->desc.reports[f->report];
+        const struct hid_usage *u = usages_of(hid, f);
+
+        if (r->type != HID_INPUT_REPORT || !touch_surface(f->application) ||
+            (f->flags & HID_MAIN_ITEM_CONSTANT) || !(f->flags & HID_MAIN_ITEM_VARIABLE)) {
+            continue;
+        }
+        for (j = 0; j < f->count; j++) {
+            if (u[j].hid == HID_DG_CONTACTID) {
+                r->multitouch = 1;
+                any = 1;
+            }
+        }
+    }
+    if (any) {
+        hid->contacts = kzalloc(hid->desc.ncollections * sizeof(*hid->contacts));
+        if (!hid->contacts) {
+            return -ENOMEM;
+        }
+    }
+    return 0;
 }
 
 int hidinput_connect(struct hid_dev *hid)
@@ -1342,7 +1546,7 @@ int hidinput_connect(struct hid_dev *hid)
             break;
         }
     }
-    if (i == hid->desc.ncollections) {
+    if (i == hid->desc.ncollections || prepare_mt_reports(hid) != 0) {
         return -1;
     }
     setup_multipliers(hid, 0);
@@ -1387,19 +1591,23 @@ int hidinput_connect(struct hid_dev *hid)
     for (i = 0; i < hid->ninputs; i++) {
         struct hid_input *it = &hid->inputs[i];
 
-        if (!populated(it)) {
+        if (populated(it) && register_input(hid, it)) {
+            registered++;
+        } else {
             /* Its fields belong to no input device. */
             for (f = 0; f < hid->desc.nfields; f++) {
                 if (field_at(hid, f)->input == i) {
                     field_at(hid, f)->input = HID_NO_INPUT;
                 }
             }
-            continue;
         }
-        register_input(hid, it);
-        registered++;
     }
-    return registered ? (int)registered : -1;
+    if (!registered) {
+        kfree(hid->contacts);
+        hid->contacts = NULL;
+        return -1;
+    }
+    return (int)registered;
 }
 
 void hidinput_disconnect(struct hid_dev *hid)
@@ -1417,6 +1625,8 @@ void hidinput_disconnect(struct hid_dev *hid)
         in->dev = 0;
     }
     hid->ninputs = 0;
+    kfree(hid->contacts);
+    hid->contacts = NULL;
 }
 
 /** Report event `type`, `code`, `value` of input device `in`; a keyboard's
@@ -1567,6 +1777,121 @@ static int special_event(struct hid_input *in, const struct hid_field *f, struct
     return 0;
 }
 
+/** Collect a contact field or the frame's count from a HID report. */
+static void mt_collect(struct hid_dev *hid, struct hid_input *in, const struct hid_field *f,
+                       const struct hid_usage *u, int32_t value)
+{
+    struct hid_mt_contact *c;
+    unsigned int axis;
+    int32_t full;
+
+    if (u->mt_group == HID_MT_COUNT) {
+        in->mt_count = value >= 0 && value <= EVDEV_MT_SLOTS ? value : -1;
+        return;
+    }
+    c = &hid->contacts[u->mt_group - 1];
+    if (!c->seen) {
+        c->seen = 1;
+        if (in->mt_last) {
+            hid->contacts[in->mt_last - 1].next = u->mt_group;
+        } else {
+            in->mt_first = u->mt_group;
+        }
+        in->mt_last = u->mt_group;
+    }
+    if (u->hid == HID_DG_CONTACTID) {
+        c->id = value;
+        c->identified = 1;
+    } else if (u->hid == HID_DG_TIPSWITCH) {
+        c->tip = value != 0;
+    } else {
+        if (u->hid == HID_DG_AZIMUTH) {
+            full = (f->logical_maximum / 4) * 4;
+            if (value >= 0 && value <= f->logical_maximum) {
+                value = value > full / 2 ? full - value : -value;
+            } else {
+                value = 0;
+            }
+        }
+        axis = u->code - ABS_MT_FIRST;
+        c->value[axis] = value;
+        c->axes |= (uint16_t)(1u << axis);
+    }
+}
+
+/** Give one packet's contact to the slot keyed by its HID identifier. */
+static void mt_contact(struct hid_input *in, struct hid_mt_contact *c)
+{
+    static const uint16_t axes[] = {ABS_MT_POSITION_X,  ABS_MT_POSITION_Y,  ABS_MT_TOOL_X,
+                                    ABS_MT_TOOL_Y,      ABS_MT_ORIENTATION, ABS_MT_PRESSURE,
+                                    ABS_MT_TOUCH_MAJOR, ABS_MT_TOUCH_MINOR};
+    struct evdev *dev = in->dev;
+    int slot = evdev_mt_get_slot_by_key(dev, c->id);
+    unsigned int i, axis;
+    int32_t width, height;
+
+    if (slot < 0) {
+        return;
+    }
+    evdev_report(dev, EV_ABS, ABS_MT_SLOT, slot);
+    if (!evdev_mt_report_slot_state(dev, MT_TOOL_FINGER, c->tip)) {
+        return;
+    }
+    if (c->axes & (1u << (ABS_MT_TOUCH_MINOR - ABS_MT_FIRST))) {
+        width = c->value[ABS_MT_TOUCH_MAJOR - ABS_MT_FIRST];
+        height = c->value[ABS_MT_TOUCH_MINOR - ABS_MT_FIRST];
+        c->value[ABS_MT_TOUCH_MAJOR - ABS_MT_FIRST] = width > height ? width : height;
+        c->value[ABS_MT_TOUCH_MINOR - ABS_MT_FIRST] = width < height ? width : height;
+        c->axes |= 1u << (ABS_MT_TOUCH_MAJOR - ABS_MT_FIRST);
+        if (!(c->axes & (1u << (ABS_MT_ORIENTATION - ABS_MT_FIRST)))) {
+            c->value[ABS_MT_ORIENTATION - ABS_MT_FIRST] = width > height;
+            c->axes |= 1u << (ABS_MT_ORIENTATION - ABS_MT_FIRST);
+        }
+    }
+    for (i = 0; i < COUNT(axes); i++) {
+        axis = axes[i] - ABS_MT_FIRST;
+        if (c->axes & (1u << axis)) {
+            evdev_report(dev, EV_ABS, axes[i], c->value[axis]);
+        }
+    }
+}
+
+/** Report the packet and return whether its frame is complete. A positive
+ * Contact Count starts a frame, and zero continues one still under way. */
+static int mt_packet(struct hid_dev *hid, struct hid_input *in)
+{
+    struct hid_mt_contact *c;
+    unsigned int i = in->mt_first;
+
+    if (in->mt_count > 0) {
+        if (in->mt_left > 0) {
+            evdev_mt_drop_unused(in->dev);
+        }
+        in->mt_left = in->mt_count;
+    }
+    while (i) {
+        c = &hid->contacts[i - 1];
+        if (c->identified && (in->mt_count < 0 || in->mt_left > 0)) {
+            mt_contact(in, c);
+            if (in->mt_left > 0) {
+                in->mt_left--;
+            }
+        }
+        i = c->next;
+        k_memset(c, 0, sizeof(*c));
+    }
+    if (in->mt_left > 0) {
+        return 0;
+    }
+    if (in->mt_count >= 0) {
+        evdev_mt_drop_unused(in->dev);
+    } else {
+        evdev_mt_end_frame(in->dev);
+    }
+    evdev_mt_report_pointer_emulation(in->dev, (in->mt_flags & INPUT_MT_POINTER) != 0);
+    return 1;
+}
+
 /**
  * The event of usage `u` of field `f` with value `value`, as Linux's
  * `hidinput_hid_event` gives it for the pages this driver maps.
@@ -1575,10 +1900,17 @@ static void hid_event(struct hid_dev *hid, struct hid_field *f, struct hid_usage
 {
     struct hid_input *in;
 
-    if (!u->type || u->type == EV_PWR || f->input == HID_NO_INPUT) {
+    if (f->input == HID_NO_INPUT) {
         return;
     }
     in = &hid->inputs[f->input];
+    if (u->mt_group) {
+        mt_collect(hid, in, f, u, value);
+        return;
+    }
+    if (!u->type || u->type == EV_PWR) {
+        return;
+    }
     in->touched = 1;
     if (u->hat || u->hat_dir) {
         hat_event(in, f, u, value);
@@ -1671,6 +2003,34 @@ static void array_field(struct hid_dev *hid, struct hid_field *f)
     }
 }
 
+/** End complete packets and give the console mouse its relative motion. */
+static void sync_inputs(struct hid_dev *hid)
+{
+    uint32_t i;
+
+    for (i = 0; i < hid->ninputs; i++) {
+        struct hid_input *in = &hid->inputs[i];
+
+        if (!in->dev) {
+            continue;
+        }
+        if ((in->mt_first || in->mt_count >= 0) && !mt_packet(hid, in)) {
+            continue;
+        }
+        if (in->mt_left > 0) {
+            continue;
+        }
+        evdev_report(in->dev, EV_SYN, SYN_REPORT, 0);
+        if (in->mouse && in->touched) {
+            if (!evdev_grabbed(in->dev)) {
+                mouse_push_packet((uint8_t)(in->buttons & 0x07u), in->dx, -in->dy);
+            }
+            in->dx = 0;
+            in->dy = 0;
+        }
+    }
+}
+
 void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
 {
     struct hid_report *r;
@@ -1701,6 +2061,9 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
 
     for (i = 0; i < hid->ninputs; i++) {
         hid->inputs[i].touched = 0;
+        hid->inputs[i].mt_first = 0;
+        hid->inputs[i].mt_last = 0;
+        hid->inputs[i].mt_count = -1;
     }
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
@@ -1733,21 +2096,7 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
         }
     }
 
-    for (i = 0; i < hid->ninputs; i++) {
-        struct hid_input *in = &hid->inputs[i];
-
-        if (!in->dev) {
-            continue;
-        }
-        evdev_report(in->dev, EV_SYN, SYN_REPORT, 0);
-        if (in->mouse && in->touched) {
-            if (!evdev_grabbed(in->dev)) {
-                mouse_push_packet((uint8_t)(in->buttons & 0x07u), in->dx, -in->dy);
-            }
-            in->dx = 0;
-            in->dy = 0;
-        }
-    }
+    sync_inputs(hid);
 }
 
 /** Write the elements of `f` into `data` from `value`, as Linux's

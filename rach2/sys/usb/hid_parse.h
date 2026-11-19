@@ -61,6 +61,7 @@ struct hid_usage {
     uint8_t size;        /* the size of its Usage item, during the parse */
     int8_t hat_dir;      /* a D-pad direction, 1 to 8, or 0 */
     uint8_t hat;         /* a hat switch, whose value is a direction */
+    uint16_t mt_group;   /* one-based contact collection, set by hid-input */
     int16_t multiplier;  /* a wheel's Resolution Multiplier, 1 without one */
     int32_t value;       /* element's value in the last report */
     int32_t new_value;   /* element's value in the report being read */
@@ -95,6 +96,7 @@ struct hid_field {
 struct hid_report {
     uint8_t type;         /* HID_*_REPORT */
     uint8_t id;           /* its ID, 0 on a device that numbers none */
+    uint8_t multitouch;   /* an input report with a Contact Identifier */
     uint32_t size;        /* its bits, without the ID byte */
     uint32_t application; /* the application its first field is in */
 };

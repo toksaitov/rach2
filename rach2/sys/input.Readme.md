@@ -8,4 +8,6 @@ Drivers set the per-contact absolute axes before calling `evdev_init_slots`, the
 
 ## Design
 
-The [PS/2 drivers](arch/x86/Readme.md) for Synaptics, ALPS and Elantech make type B reports on pads that provide contact positions. On a semi-multitouch pad, its two positions bound the contacts instead of identifying separate fingers. The Lenovo's Synaptics image sensor gives two positions and counts up to five fingers. Its controller commands and its six-byte packets use the same driver in both cases.
+The [PS/2 drivers](arch/x86/Readme.md) for Synaptics, ALPS and Elantech make type B reports on pads that provide contact positions. On a semi-multitouch pad, its two positions give the bounds of the contacts. The Lenovo's Synaptics image sensor gives two positions and counts up to five fingers.
+
+The [USB HID driver](usb/Readme.md) uses a contact identifier to find the same slot in successive reports. The [virtio input driver](virtio/Readme.md#input) receives the slot numbers and tracking IDs directly from the device.

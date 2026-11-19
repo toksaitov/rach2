@@ -155,6 +155,7 @@ struct evdev_client {
 struct evdev_slot {
     int32_t abs[MT_VALUES];
     unsigned int frame;
+    int32_t key; /* the driver's contact key, while the slot is active */
 };
 
 struct evdev {
@@ -502,6 +503,38 @@ int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active)
     evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, id);
     evdev_report(dev, EV_ABS, ABS_MT_TOOL_TYPE, tool);
     return 1;
+}
+
+int evdev_mt_get_slot_by_key(struct evdev *dev, int32_t key)
+{
+    uint32_t flags = spin_lock_irqsave(&evdev_lock);
+    int i, free_slot = -1;
+
+    for (i = 0; i < dev->num_slots; i++) {
+        struct evdev_slot *slot = &dev->slots[i];
+
+        if (slot->abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0) {
+            if (slot->key == key) {
+                spin_unlock_irqrestore(&evdev_lock, flags);
+                return i;
+            }
+        } else if (free_slot < 0 && slot->frame != dev->frame) {
+            free_slot = i;
+        }
+    }
+    if (free_slot >= 0) {
+        dev->slots[free_slot].key = key;
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return free_slot;
+}
+
+void evdev_mt_end_frame(struct evdev *dev)
+{
+    uint32_t flags = spin_lock_irqsave(&evdev_lock);
+
+    dev->frame++;
+    spin_unlock_irqrestore(&evdev_lock, flags);
 }
 
 void evdev_mt_report_finger_count(struct evdev *dev, int count)
@@ -1541,7 +1574,7 @@ static int32_t revoke(struct evdev_client *c, uintptr_t arg)
  * libinput asks for, or CLOCK_BOOTTIME. A change of clock empties a queue
  * that holds records, which a SYN_DROPPED stamped now replaces, to be read
  * once the next packet ends, as Linux's does. -EINVAL for another clock,
- * -EFAULT for a user copy or -ENOMEM for a large snapshot.
+ * -EFAULT.
  */
 static int32_t set_clock(struct evdev_client *c, uintptr_t arg)
 {
@@ -1951,10 +1984,9 @@ static void flush_type(struct evdev_client *c, uint16_t type)
  */
 static int32_t mt_slots(struct evdev *dev, uintptr_t arg, uint32_t len)
 {
-    int32_t small_values[MT_INLINE];
-    int32_t *values = small_values;
+    int32_t values[16];
     uint32_t code, flags;
-    int i, n, ret = 0;
+    int first, i, n, batch;
 
     if (copy_from_user(&code, (const void __user *)arg, sizeof(code)) != 0) {
         return -EFAULT;
@@ -1966,25 +1998,22 @@ static int32_t mt_slots(struct evdev *dev, uintptr_t arg, uint32_t len)
     if (n > dev->num_slots) {
         n = dev->num_slots;
     }
-    if (n > MT_INLINE) {
-        values = (int32_t *)kmalloc(n * sizeof(*values));
-        if (!values) {
-            return -ENOMEM;
+    for (first = 0; first < n; first += batch) {
+        batch = n - first;
+        if (batch > (int)(sizeof(values) / sizeof(values[0]))) {
+            batch = (int)(sizeof(values) / sizeof(values[0]));
+        }
+        flags = spin_lock_irqsave(&evdev_lock);
+        for (i = 0; i < batch; i++) {
+            values[i] = dev->slots[first + i].abs[code - ABS_MT_FIRST];
+        }
+        spin_unlock_irqrestore(&evdev_lock, flags);
+        if (copy_to_user((int32_t __user *)arg + 1 + first, values,
+                         (uint32_t)batch * sizeof(*values)) != 0) {
+            return -EFAULT;
         }
     }
-    flags = spin_lock_irqsave(&evdev_lock);
-    for (i = 0; i < n; i++) {
-        values[i] = dev->slots[i].abs[code - ABS_MT_FIRST];
-    }
-    spin_unlock_irqrestore(&evdev_lock, flags);
-    if (n > 0 && copy_to_user((char __user *)arg + sizeof(code), values,
-                              (uint32_t)n * sizeof(int32_t)) != 0) {
-        ret = -EFAULT;
-    }
-    if (values != small_values) {
-        kfree(values);
-    }
-    return ret;
+    return 0;
 }
 
 /**

@@ -52,6 +52,11 @@ struct evdev {
     int32_t flat[AXES];
     int32_t res[AXES];
     int32_t absval[AXES];
+    unsigned int props;
+    int slots, slot, trkid;
+    int key[EVDEV_MT_SLOTS];
+    int id[EVDEV_MT_SLOTS];
+    uint8_t used[EVDEV_MT_SLOTS];
     uint8_t down[EVDEV_KEY_BYTES];
     int pending;  /* events since the last SYN_REPORT */
     int keyboard; /* attached to the input layer as a keyboard */
@@ -93,9 +98,8 @@ static void put(uint8_t *bits, unsigned n)
     bits[n >> 3] |= (uint8_t)(1u << (n & 7));
 }
 
-/** Register a model event device with key set `keys`. */
-struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
-                             const uint8_t *keys)
+/** Reserve a model event device. */
+struct evdev *evdev_reserve(void)
 {
     struct evdev *d;
 
@@ -104,12 +108,36 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
     }
     d = &devs[ndevs++];
     memset(d, 0, sizeof(*d));
+    return d;
+}
+
+/** Publish a model event device and add its key set. */
+struct evdev *evdev_register_reserved(struct evdev *d, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys)
+{
+    unsigned int i;
+
+    if (!d) {
+        d = evdev_reserve();
+    }
+    if (!d) {
+        return NULL;
+    }
     snprintf(d->name, sizeof(d->name), "%s", name);
     d->bus = bustype;
     d->vendor = vendor;
     d->product = product;
-    memcpy(d->keys, keys, EVDEV_KEY_BYTES);
+    for (i = 0; i < EVDEV_KEY_BYTES; i++) {
+        d->keys[i] |= keys[i];
+    }
     return d;
+}
+
+/** Register a model event device with key set `keys`. */
+struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
+                             const uint8_t *keys)
+{
+    return evdev_register_reserved(NULL, name, bustype, vendor, product, keys);
 }
 
 /** Keep the phys and flags of `dev`. */
@@ -172,6 +200,100 @@ void evdev_set_abs_res(struct evdev *dev, uint16_t code, int32_t resolution)
     dev->res[code] = resolution;
 }
 
+/** Record a property of the model event device. */
+void evdev_set_prop(struct evdev *dev, unsigned int prop)
+{
+    dev->props |= 1u << prop;
+}
+
+/** Set up slots on the model device. */
+int evdev_init_slots(struct evdev *dev, int slots, unsigned int flags)
+{
+    int i;
+
+    dev->slots = slots;
+    evdev_set_abs(dev, ABS_MT_SLOT, 0, slots - 1, 0, 0);
+    evdev_set_abs(dev, ABS_MT_TRACKING_ID, 0, 65535, 0, 0);
+    put(dev->keys, BTN_TOUCH);
+    if (flags & INPUT_MT_POINTER) {
+        evdev_set_prop(dev, INPUT_PROP_POINTER);
+    }
+    if (flags & INPUT_MT_DIRECT) {
+        evdev_set_prop(dev, INPUT_PROP_DIRECT);
+    }
+    for (i = 0; i < slots; i++) {
+        dev->id[i] = -1;
+    }
+    return 0;
+}
+
+/** Find an active contact, or reserve the first unused inactive slot. */
+int evdev_mt_get_slot_by_key(struct evdev *dev, int32_t key)
+{
+    int i, unused = -1;
+
+    for (i = 0; i < dev->slots; i++) {
+        if (dev->id[i] >= 0 && dev->key[i] == key) {
+            return i;
+        }
+        if (unused < 0 && dev->id[i] < 0 && !dev->used[i]) {
+            unused = i;
+        }
+    }
+    if (unused >= 0) {
+        dev->key[unused] = key;
+    }
+    return unused;
+}
+
+/** Record a slot's tracking ID. */
+int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active)
+{
+    int *id = &dev->id[dev->slot];
+
+    (void)tool;
+    dev->used[dev->slot] = 1;
+    if (active && *id < 0) {
+        *id = dev->trkid++;
+        evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, *id);
+    } else if (!active && *id >= 0) {
+        *id = -1;
+        evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, *id);
+    }
+    return active;
+}
+
+/** Clear the marks of slots used in the finished frame. */
+void evdev_mt_end_frame(struct evdev *dev)
+{
+    memset(dev->used, 0, sizeof(dev->used));
+}
+
+/** Lift slots absent from the finished frame. */
+void evdev_mt_drop_unused(struct evdev *dev)
+{
+    int i;
+
+    for (i = 0; i < dev->slots; i++) {
+        if (dev->id[i] >= 0 && !dev->used[i]) {
+            evdev_report(dev, EV_ABS, ABS_MT_SLOT, i);
+            evdev_mt_report_slot_state(dev, MT_TOOL_FINGER, 0);
+        }
+    }
+    evdev_mt_end_frame(dev);
+}
+
+/** Report whether the model device still has a contact. */
+void evdev_mt_report_pointer_emulation(struct evdev *dev, int use_count)
+{
+    int i;
+
+    (void)use_count;
+    for (i = 0; i < dev->slots && dev->id[i] < 0; i++) {
+    }
+    evdev_report(dev, EV_KEY, BTN_TOUCH, i < dev->slots);
+}
+
 /** Mark `dev` taken away. */
 void evdev_unregister(struct evdev *dev)
 {
@@ -207,6 +329,9 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
         }
         break;
     case EV_ABS:
+        if (code == ABS_MT_SLOT) {
+            dev->slot = value;
+        }
         if (!bit(dev->abs, code) || dev->absval[code] == value) {
             return;
         }
@@ -296,6 +421,18 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy)
 /** Do nothing: the latency record is not checked. */
 void usb_stamp_wake(void)
 {}
+
+/** Allocate zero-filled packet workspace for the driver. */
+void *kzalloc(size_t size)
+{
+    return calloc(1, size);
+}
+
+/** Release the packet workspace. */
+void kfree(void *p)
+{
+    free(p);
+}
 
 #include "../../rach2/sys/usb/hid_parse.c"
 #include "../../rach2/sys/usb/hid_input.c"
@@ -1131,6 +1268,51 @@ static void rows_gamepad(void)
     drop(hid);
 }
 
+/** Read two packets per frame and follow contacts by HID identifier. */
+static void rows_multitouch(void)
+{
+    static const uint8_t touchscreen[] = {
+        0x05, 0x0d, 0x09, 0x04, 0xa1, 0x01, /* Digitizer, Touch Screen, Application */
+        0x09, 0x22, 0xa1, 0x02,             /* Finger, Logical Collection */
+        0x09, 0x42, 0x15, 0,    0x25, 1,    0x75, 8,    0x95, 1,    0x81, 2, /* Tip Switch */
+        0x09, 0x51, 0x26, 0xff, 0,    0x81, 2, /* Contact Identifier */
+        0x05, 1,    0x09, 0x30, 0x09, 0x31, 0x26, 0xff, 0x7f, 0x75, 16,   0x95,
+        2,    0x81, 2,    0xc0,                                              /* X, Y */
+        0x05, 0x0d, 0x09, 0x54, 0x25, 8,    0x75, 8,    0x95, 1,    0x81, 2, /* Contact Count */
+        0x09, 0x55, 0xb1, 2,    0xc0 /* Contact Count Maximum */
+    };
+    static const uint8_t first[] = {1, 17, 100, 0, 120, 0, 2};
+    static const uint8_t second[] = {1, 42, 180, 0, 220, 0, 0};
+    static const uint8_t moved_second[] = {1, 42, 200, 0, 220, 0, 2};
+    static const uint8_t moved_first[] = {1, 17, 110, 0, 120, 0, 0};
+    static const uint8_t empty[] = {0, 0, 0, 0, 0, 0, 0};
+    struct hid_dev *hid;
+    struct evdev *d;
+    int inputs;
+
+    ndevs = 0;
+    hid = connect(touchscreen, sizeof(touchscreen), "HID touch screen", &inputs);
+    d = &devs[0];
+    CHECK("descriptor makes a direct device with eight slots and per-contact axes",
+          inputs == 1 && d->props == (1u << INPUT_PROP_DIRECT) && d->slots == 8 &&
+              bit(d->abs, ABS_MT_POSITION_X) && bit(d->abs, ABS_MT_POSITION_Y));
+    feed(hid, first, sizeof(first));
+    CHECK("a first contact waits for the rest of its frame",
+          d->id[0] == 0 && !saw(EV_SYN, SYN_REPORT, 0));
+    feed(hid, second, sizeof(second));
+    CHECK("the second report completes the frame",
+          d->id[1] == 1 && saw(EV_ABS, ABS_MT_POSITION_X, 180) && saw(EV_SYN, SYN_REPORT, 0));
+    feed(hid, moved_second, sizeof(moved_second));
+    CHECK("a reordered contact keeps its slot", d->slot == 1 && d->id[1] == 1);
+    feed(hid, moved_first, sizeof(moved_first));
+    CHECK("both tracking IDs survive the move",
+          d->slot == 0 && d->id[0] == 0 && d->id[1] == 1 && saw(EV_SYN, SYN_REPORT, 0));
+    feed(hid, empty, sizeof(empty));
+    CHECK("an empty frame lifts both contacts",
+          d->id[0] == -1 && d->id[1] == -1 && saw(EV_KEY, BTN_TOUCH, 0));
+    drop(hid);
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -1146,6 +1328,7 @@ int main(void)
     rows_map_apps();
     rows_multiplier();
     rows_gamepad();
+    rows_multitouch();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;
