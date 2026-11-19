@@ -18,6 +18,8 @@ Codex reviewed the task at b290c9a51 and found seven faults, all fixed on `task/
 
 Codex's review of those fixes at a5a9c6a54 closed all seven and found four new faults, fixed on `task/5351` since and waiting for one Codex review: `VHOST_SET_VRING_KICK` took the eventfd and its descriptor from two lookups, between which a close could leave the second NULL; the thread read a ring's refill request without the lock the receive path writes it under; a refill request of a replaced memory table was resolved against the new one, and a refill the table outran broke the ring; and `vhostmusl` could fail on a call signalled just after the used index, or pass the second datagram on an earlier frame's call. The thread now reads each request under `vnet` with the table's generation it was made under, lets a request of an older table go and kicks the ring to look again, and breaks a ring only for a refill that failed against the table still in force; the probe counts the receive ring's calls and passes a frame only once they cover every used entry it has seen, since the device signals once a frame. These change no path to a device, so the readiness above holds.
 
+Codex's review of `a5a9c6a54..9e22f50d1` settled three of the four and the node's mode, and found three points, fixed on `task/5351` since: `vhostmusl` stopped at the matching datagram and took calls only up to the used entries it had seen, so a later frame's call could stand in for the datagram's own, and now reads the call until the calls read cover the used index read after them, which a missing call never lets them reach; this step expected the node's mode 0600; and the host test's eventfd stand-in found an entry by a range test of pointers, undefined for an entry outside its array, and now compares each by equality. None touches the kernel.
+
 ## Build
 
 On the owner's Mac, before taking the lock. `HEAD5351` is the head of `task/5351` the go names; the trial builds it rebased onto `milestone/76-display` as it stands.
@@ -68,7 +70,7 @@ L 'cd /data/trial5351/b && ./vhostmusl' 2>&1 | tee "$R/vhostmusl.out"
 L 'cd /data/trial5351/b && sh kvm-boot.sh -t "GUESTNET OK" -l guestnet=10.9.0.2:10.9.0.1 -k vmlinuz -i initrd -o /data/trial5351/vhost-on.log -- -netdev tap,id=n0,ifname=tap5351,script=/data/trial5351/b/ifup,downscript=no,vhost=on -device virtio-net-pci,netdev=n0; echo STATUS=$?; echo "--- qemu stderr"; cat /data/trial5351/vhost-on.log.err; echo "--- end"; dmesg | grep "vhost-net: detached: tap5351"; dmesg | tail -40' 2>&1 | tee "$R/vhost-on.out"
 ```
 
-1. `trial-root.txt`: the trial kernel's build string, `/dev/vhost-net` `crw------- 10, 238`, QEMU 10.0.13 and `kvm: ready: vmx`.
+1. `trial-root.txt`: the trial kernel's build string, `/dev/vhost-net` `crw-rw---- root kvm 10, 238`, the group and mode the GNU root's udev gives it as it gives `/dev/kvm`, where the kernel alone makes it `crw-rw-rw-`, QEMU 10.0.13 and `kvm: ready: vmx`.
 2. `vhostmusl.out`: `VHOSTMUSL OK`, after its 26 checks.
 3. `vhost-on.out`: `kvm-boot: result: pass: GUESTNET OK` and `STATUS=0`; both of the guest's ping summaries `10 packets transmitted, 10 packets received, 0% packet loss`; between `--- qemu stderr` and `--- end` no line with `vhost`; the line `vhost-net: detached: tap5351: N frames to the guest, M from it` with N and M each 20 or more; and no fault, warning or lockup in the log's tail. A pass without the detached line, or with a count under 20, is a fail: QEMU moved the frames itself.
 
