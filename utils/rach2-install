@@ -1961,7 +1961,8 @@ slots_owned() { # slots_owned DISK
 # /boot/fallback, that is smaller than the slots of this version's disks,
 # whose size `bootctl status` prints: `bootctl kernel` refuses a smaller one,
 # and bootctl rewrites a slot in place and never grows it. A slot is copied
-# beside itself as kernel.new or fallback.new, padded with zeros and compared
+# beside itself as kernel.new or fallback.new, padded with zeros to the
+# exact size, a slot that ends part way through a sector too, and compared
 # with the slot and its padding; only then is the slot removed and the copy
 # renamed to its name, which in one directory with the name free rewrites
 # the copy's entries in place. One slot is moved at a time, so the other is
@@ -1984,11 +1985,11 @@ grow_slots() { # grow_slots BOOT
         slot_file="$BOOT_MNT/boot/$slot"
         slot_size=$(wc -c < "$slot_file") || die "$slot_file could not be read"
         [ "$slot_size" -lt "$slot_want" ] || continue
-        slot_pad=$(((slot_want - slot_size) / 512))
+        slot_pad=$((slot_want - slot_size))
         if ! { cp "$slot_file" "$slot_file.new" &&
-            dd if=/dev/zero bs=512 count="$slot_pad" 2>/dev/null >> "$slot_file.new" &&
+            head -c "$slot_pad" /dev/zero >> "$slot_file.new" &&
             [ "$(wc -c < "$slot_file.new")" -eq "$slot_want" ] && sync &&
-            { cat "$slot_file" && dd if=/dev/zero bs=512 count="$slot_pad" 2>/dev/null; } |
+            { cat "$slot_file" && head -c "$slot_pad" /dev/zero; } |
             cmp -s - "$slot_file.new"; }; then
             rm -f "$slot_file.new"
             sync
