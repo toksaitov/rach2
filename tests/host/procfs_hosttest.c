@@ -3,9 +3,10 @@
  * and its allocation, /proc/uptime, the CPU times of a process and of a
  * thread, task ids, the syscall, wchan and schedstat files, descriptor links,
  * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
- * process's arguments while the process is reaped, a read of its stat and
- * status while it is reaped as the read waits for its address space's
- * lock, a write to its autogroup file, oom_score_adj, the
+ * process's arguments while the process is reaped, a read of its stat,
+ * status and numa_maps while it is reaped as the read waits for its address
+ * space's lock, a read of its maps while it is reaped as the program's path
+ * is built, a write to its autogroup file, oom_score_adj, the
  * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
  * and uevents of a DRM device and of a driver's own attributes, links, PCI
  * identity and resources, a writable attribute's offset and the mode its
@@ -902,10 +903,21 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     }
     return 0;
 }
+/* What another thread does at the next hold of a description, run once,
+ * as the target may end while a reading of maps sleeps for the program's
+ * path, or NULL. */
+static void (*ofd_ref_hook)(void);
+
 void fd_ofd_ref(struct open_file *file)
 {
+    void (*hook)(void) = ofd_ref_hook;
+
     (void)file;
     file_holds++;
+    if (hook) {
+        ofd_ref_hook = NULL;
+        hook();
+    }
 }
 void fd_ofd_unref(struct open_file *file)
 {
@@ -2522,6 +2534,7 @@ static void maps_names_row(void)
     k_strncpy((char *)program.name, "b", sizeof(program.name));
     program_path = "/tmp/b";
     space.exe_file = &exe_ofd;
+    space.users = 1;
     space.holds = 1;
     k_memset(&code, 0, sizeof(code));
     k_memset(&file, 0, sizeof(file));
@@ -2561,7 +2574,8 @@ static void maps_names_row(void)
     check(text_has(t.buf, t.len, "40001000-40002000 rw-s 00000000 00:00 0 \n"),
           "shared memory with no entry has no name");
     check(named_file.path == NULL && image_file.path == NULL, "and no file keeps the name");
-    check(file_refs == 0 && space.holds == 1 && file_holds == 0 && mount_locks == 0,
+    check(file_refs == 0 && space.users == 1 && space.holds == 1 && file_holds == 0 &&
+              mount_locks == 0,
           "and every reference taken goes back");
     kfree(t.buf);
     program.name[0] = '\0';
@@ -2570,7 +2584,7 @@ static void maps_names_row(void)
     check(procfs_gen_maps(&t, 7) > 0 && !t.nomem &&
               text_has(t.buf, t.len, " /tmp/a (deleted)\n40000000"),
           "a program whose name is gone is named by its exec's path, deleted");
-    check(space.holds == 1 && file_holds == 0 && mount_locks == 0,
+    check(space.users == 1 && space.holds == 1 && file_holds == 0 && mount_locks == 0,
           "and the second reading gives back what it took");
     kfree(t.buf);
     exe_ofd = saved_ofd;
@@ -2831,6 +2845,92 @@ static void reap_at_walk(struct mm *mm)
     }
 }
 
+/** Take the walk's user's count of `mm`, as mm_read_begin does. */
+static void get_at_walk(struct mm *mm)
+{
+    mm_get(mm);
+}
+
+/** Take one more reference to the record `p`. */
+void proc_ref_get(process_t *p)
+{
+    p->refs++;
+}
+
+/** Drop a reference to the record `p`; the last frees it and its
+ * dispositions, which are from the heap. */
+void proc_ref_put(process_t *p)
+{
+    if (--p->refs == 0) {
+        free(p->sigacts);
+        free(p);
+    }
+}
+
+/**
+ * End process 13 and reap it, as exit.c and the reap do: its policy and its
+ * user's count of its address space go at the exit, which `mm_drop` gives
+ * back, and the list's reference to its record at the reap, which frees the
+ * record unless a reader holds one.
+ */
+static void end_reading(void)
+{
+    struct mm *own;
+
+    if (!reading) {
+        return;
+    }
+    own = reading->mm;
+    reading->mempolicy = NULL;
+    reading->mm = NULL;
+    mm_put(own);
+    reading->state = PROC_UNUSED;
+    proc_ref_put(reading);
+    reading = NULL;
+    reaps++;
+}
+
+/* The walk from outside an address space, counted from 1, during whose
+ * wait `end_at_walk` ends process 13; 0 for none. */
+static int end_walk;
+
+/** Take the walk's user's count of `mm` and end process 13 while the walk
+ * `end_walk` counts down to waits for the lock. */
+static void end_at_walk(struct mm *mm)
+{
+    mm_get(mm);
+    if (end_walk > 0 && --end_walk == 0) {
+        end_reading();
+    }
+}
+
+/** Take a reference to the policy `p`. */
+struct vm_policy *vm_policy_get(struct vm_policy *p)
+{
+    if (p) {
+        p->refs++;
+    }
+    return p;
+}
+
+/** No region of the numa_maps row has a policy of its own. */
+const struct vm_policy *mempolicy_at(const vma_t *vma, uintptr_t addr)
+{
+    (void)vma;
+    (void)addr;
+    return NULL;
+}
+
+/** No page of the numa_maps row is present. */
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts)
+{
+    (void)dir;
+    (void)start;
+    (void)end;
+    k_memset(counts, 0, sizeof(*counts));
+}
+
 /** Drop the walk's user's count of `mm`, as mm_read_end does: the last
  * user's put frees the address space. */
 static void put_at_walk(struct mm *mm)
@@ -2949,6 +3049,91 @@ static void status_reaped_during_wait(void)
     kfree(text.buf);
 }
 
+/**
+ * A reading of the maps of a process that ends and is reaped while the
+ * program's path is built, which may sleep, keeps a user's count of the
+ * address space from before that path to its end: the walk after takes no
+ * count from 0, and the reading's own put is the last, which frees the
+ * address space once. AddressSanitizer reports a put of a freed record.
+ */
+static void maps_reaped_during_names(void)
+{
+    static struct open_file gone_ofd;
+    struct procfs_text text;
+    int before = reaps, len;
+
+    check(make_reaped(), "allocate the process whose maps are read");
+    if (!reading) {
+        return;
+    }
+    reading->refs = 1;
+    k_memset(&gone_ofd, 0, sizeof(gone_ofd));
+    gone_ofd.vmnt = &other_mount;
+    gone_ofd.vnode = &program;
+    reading->mm->exe_file = &gone_ofd;
+    ofd_ref_hook = end_reading;
+    host_read_begin = get_at_walk;
+    host_read_end = put_at_walk;
+    procfs_text_init(&text);
+    len = procfs_gen_maps(&text, 13);
+    host_read_begin = NULL;
+    host_read_end = NULL;
+    ofd_ref_hook = NULL;
+    check(len == -ENOENT && reaps == before + 1 && !reading && file_holds == 0,
+          "a maps read of a process reaped while its program's path is built ends with ENOENT");
+    kfree(text.buf);
+}
+
+/**
+ * A reading of the numa_maps of a process with a bind policy that ends and
+ * is reaped while the reading waits for its address space's lock holds the
+ * record across the wait and takes the policy under the lock, as Linux's
+ * m_start does, so that it shows the default an ended thread has.
+ */
+static void numa_maps_policy_after_wait(void)
+{
+    static struct vm_policy bind = {1, 2, 0, -1, 1, {0}};
+    static vma_t region;
+    struct procfs_text text;
+    int before = reaps, len;
+
+    check(make_reaped(), "allocate the process whose numa_maps is read");
+    if (!reading) {
+        return;
+    }
+    reading->refs = 1;
+    reading->mempolicy = &bind;
+    k_memset(&region, 0, sizeof(region));
+    region.start = 0x40000000u;
+    region.end = 0x40001000u;
+    region.type = VM_ANON;
+    region.prot = VM_PROT_READ | VM_PROT_WRITE;
+    reading->mm->vm.first = &region;
+    host_read_begin = get_at_walk;
+    host_read_end = put_at_walk;
+    procfs_text_init(&text);
+    len = procfs_gen_numa_maps(&text, 13);
+    host_read_begin = NULL;
+    host_read_end = NULL;
+    check(len > 0 && reaps == before && reading, "a numa_maps read of a live process is read");
+    check(len == 16 && !text.nomem && text_has(text.buf, len, "40000000 bind:0\n"),
+          "and shows its bind policy");
+    kfree(text.buf);
+    end_walk = 2; /* the names' count of the regions is the first walk */
+    host_read_begin = end_at_walk;
+    host_read_end = put_at_walk;
+    procfs_text_init(&text);
+    len = procfs_gen_numa_maps(&text, 13);
+    host_read_begin = NULL;
+    host_read_end = NULL;
+    end_walk = 0;
+    check(len > 0 && reaps == before + 1 && !reading,
+          "a numa_maps read of a process reaped while it waits for the regions' lock ends");
+    check(len == 17 && !text.nomem && text_has(text.buf, len, "40000000 default\n"),
+          "and shows the default policy of an ended thread");
+    kfree(text.buf);
+}
+
 /* The nice value the last autogroup write set, or 99 for none. */
 static int autogroup_set = 99;
 
@@ -2985,12 +3170,15 @@ static void autogroup_write_rows(void)
 }
 
 /** The rows of a process's files: those read while the process ends and is
- * reaped, and the writes of its autogroup file. */
+ * reaped, among them maps and numa_maps, and the writes of its autogroup
+ * file. */
 static void pid_file_rows(void)
 {
     reaped_during_read();
     stat_reaped_during_wait();
     status_reaped_during_wait();
+    maps_reaped_during_names();
+    numa_maps_policy_after_wait();
     autogroup_write_rows();
 }
 
