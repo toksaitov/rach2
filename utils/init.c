@@ -1259,82 +1259,184 @@ static void start_acpid(struct service *s)
     }
 }
 
+/**
+ * Read the first 512 bytes of the superblock of the partition node `node`,
+ * which starts at byte 1024, into `sb`. Returns 1 when the node opens and the
+ * superblock has ext2's magic at its byte 56, and 0 otherwise.
+ */
+static int ext2_superblock(const char *node, unsigned char sb[512])
+{
+    int fd = open(node, O_RDONLY);
+    int ext2;
+
+    if (fd < 0) {
+        return 0;
+    }
+    ext2 = pread(fd, sb, 512, 1024) == 512 && sb[56] == 0x53 && sb[57] == 0xEF;
+    close(fd);
+    return ext2;
+}
+
+/**
+ * Put in `uuid` the UUID of the ext2 volume whose superblock, from its byte
+ * 0, is `sb`, as `blkid` prints it: 36 bytes of lower-case hexadecimal and
+ * dashes, and a NUL.
+ */
+static void ext2_uuid(const unsigned char *sb, char uuid[37])
+{
+    const unsigned char *u = sb + 104; /* s_uuid */
+
+    snprintf(uuid, 37, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", u[0],
+             u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13],
+             u[14], u[15]);
+}
+
 #ifdef INIT_METAL
 /* The kernel's own limits on disks and on a disk's partition numbers, DISK_MAX
  * in rach2/sys/block/disk.h and PART_MAX in rach2/sys/block/partition.h. */
 #define DISK_NODES 8
 #define PART_NODES 15
 
+/** The place of `uuid` among the comma-separated UUIDs of `list`, counted
+ *  from 0, or -1 when it is not there. */
+static int uuid_place(const char *list, const char *uuid)
+{
+    int place = 0;
+
+    while (*list != '\0') {
+        if (strncmp(list, uuid, 36) == 0 && (list[36] == ',' || list[36] == '\0')) {
+            return place;
+        }
+        list = strchr(list, ',');
+        if (!list) {
+            break;
+        }
+        list++;
+        place++;
+    }
+    return -1;
+}
+
 /**
- * Check each ext2 partition of every disk with `e2fsck -p` before
- * anything runs from the disk.
+ * Run `e2fsck -p` on the partition node `node`, wait for it and say its
+ * status on the console. Returns the status, 8 for a check that was not
+ * waited for or did not exit, or -1 when no fork succeeded: a fork that fails
+ * is retried up to five times a second apart, because a check skipped is a
+ * repair not made.
+ */
+static int run_e2fsck(char *node)
+{
+    pid_t pid;
+    int status = 0, tries;
+
+    for (tries = 0; (pid = fork()) < 0 && tries < 5; tries++) {
+        sleep(1);
+    }
+    if (pid == 0) {
+        char *argv[4];
+
+        argv[0] = (char *)"e2fsck";
+        argv[1] = (char *)"-p";
+        argv[2] = node;
+        argv[3] = 0;
+        execve("/sbin/e2fsck", argv, environ);
+        _exit(127);
+    }
+    if (pid < 0) {
+        fprintf(stderr, "init: e2fsck: %s: fork failed\n", node);
+        return -1;
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            status = 8 << 8; /* not waited for: reported as e2fsck's own error */
+            break;
+        }
+    }
+    status = WIFEXITED(status) ? WEXITSTATUS(status) : 8;
+    fprintf(stderr, "init: e2fsck: %s: status %d\n", node, status);
+    return status;
+}
+
+/**
+ * Say on the console each of the first 32 comma-separated UUIDs of `list`
+ * whose bit in `seen` is clear. Returns 0 when there is none, and -1
+ * otherwise.
+ */
+static int report_unseen(const char *list, unsigned long seen)
+{
+    const char *p;
+    int i, rc = 0;
+
+    for (p = list, i = 0; p != NULL && i < 32; p = strchr(p, ','), i++) {
+        p += *p == ',';
+        if (!(seen & 1ul << i)) {
+            fprintf(stderr, "init: e2fsck: %.36s: no volume of this UUID checked below status 4\n",
+                    p);
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+/**
+ * Check ext2 partitions with `e2fsck -p` before anything runs from the disk:
+ * every one of every disk when `only` is NULL, and otherwise those whose
+ * volume's UUID is among the comma-separated UUIDs of `only`, at most 32.
  *
  * An image without `/sbin/e2fsck` skips this, which leaves the recovery
  * system, whose root needs nothing from the disk, as the one that runs it.
- * `main` calls it only when the boot line has `rach2.fsck`, since a person who
- * booted recovery to look, or an installer that booted it to write, did not
- * ask for a repair. The partitions are the nodes `/dev/diskNpM` for every disk
- * number and partition number the kernel can give, disk by disk, and a
- * partition is an ext2 one when byte 56 of its superblock, which starts at
- * byte 1024 of the partition, has the magic. A fork that fails is retried up
- * to five times a second apart, because a check skipped is a repair not made.
+ * `set_up` calls it only when the boot line has `rach2.fsck` or
+ * `rach2.fsck=`, since a person who booted recovery to look, or an installer
+ * that booted it to write, did not ask for a repair. The partitions are the
+ * nodes `/dev/diskNpM` for every disk number and partition number the kernel
+ * can give, disk by disk, and a partition is an ext2 one when its superblock
+ * has the magic (`ext2_superblock`).
  *
  * `e2fsck -p` repairs what needs no question and leaves the rest for a
  * person; its status is the record, on the console and so in the boot log: 0
  * clean, 1 repaired, 2 repaired and a reboot wanted, 4 left with faults, 8 an
- * error.
+ * error (`run_e2fsck`). Returns 0 when every volume `only` names was found
+ * and each check ended with a status below 4, and -1 otherwise, having said
+ * which volume was not checked so.
  */
-static void check_ext2_partitions(void)
+static int check_ext2_partitions(const char *only)
 {
-    int i;
+    unsigned long seen = 0;
+    int i, status, ok = 1;
 
     if (access("/sbin/e2fsck", X_OK) != 0) {
-        return;
+        if (only) {
+            fprintf(stderr, "init: e2fsck: this image has no /sbin/e2fsck\n");
+        }
+        return -1;
     }
     for (i = 0; i < DISK_NODES * PART_NODES; i++) {
         unsigned char sector[512]; /* a raw window reads whole sectors */
-        char node[24];
-        pid_t pid;
-        int fd, status = 0, tries;
+        char node[24], uuid[37];
+        int place = -1;
 
         snprintf(node, sizeof(node), "/dev/disk%dp%d", i / PART_NODES, i % PART_NODES + 1);
-        fd = open(node, O_RDONLY);
-        if (fd < 0) {
+        if (!ext2_superblock(node, sector)) {
             continue;
         }
-        if (lseek(fd, 1024, SEEK_SET) != 1024 ||
-            read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector) || sector[56] != 0x53 ||
-            sector[57] != 0xEF) {
-            close(fd);
-            continue;
-        }
-        close(fd);
-        for (tries = 0; (pid = fork()) < 0 && tries < 5; tries++) {
-            sleep(1);
-        }
-        if (pid == 0) {
-            char *argv[4];
-
-            argv[0] = (char *)"e2fsck";
-            argv[1] = (char *)"-p";
-            argv[2] = node;
-            argv[3] = 0;
-            execve("/sbin/e2fsck", argv, environ);
-            _exit(127);
-        }
-        if (pid < 0) {
-            fprintf(stderr, "init: e2fsck: %s: fork failed\n", node);
-            continue;
-        }
-        while (waitpid(pid, &status, 0) < 0) {
-            if (errno != EINTR) {
-                status = 8 << 8; /* not waited for: reported as e2fsck's own error */
-                break;
+        if (only) {
+            ext2_uuid(sector, uuid);
+            place = uuid_place(only, uuid);
+            if (place < 0) {
+                continue;
             }
         }
-        fprintf(stderr, "init: e2fsck: %s: status %d\n", node,
-                WIFEXITED(status) ? WEXITSTATUS(status) : 8);
+        status = run_e2fsck(node);
+        if (status < 0 || status >= 4) {
+            ok = 0;
+        } else if (place >= 0 && place < 32) {
+            seen |= 1ul << place;
+        }
     }
+    if (only && report_unseen(only, seen) != 0) {
+        ok = 0;
+    }
+    return ok ? 0 : -1;
 }
 #endif /* INIT_METAL */
 
@@ -1374,6 +1476,71 @@ static int boot_line_has(const char *want)
     }
     return 0;
 }
+
+#ifdef INIT_RECOVERY
+/**
+ * Put in `value`, of `size` bytes, the value of the first `name=VALUE` token
+ * of the boot line. Returns 1, or 0 when the line has none or its value does
+ * not fit. The first 511 bytes of `/proc/cmdline` are read.
+ */
+static int boot_line_value(const char *name, char *value, size_t size)
+{
+    char line[512];
+    int fd = open("/proc/cmdline", O_RDONLY);
+    ssize_t n;
+    size_t nlen = strlen(name), i, len;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    for (i = 0; i + nlen < (size_t)n; i++) {
+        if ((i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t' || line[i - 1] == '\n') &&
+            strncmp(&line[i], name, nlen) == 0 && line[i + nlen] == '=') {
+            i += nlen + 1;
+            len = strcspn(&line[i], " \t\n");
+            if (len >= size) {
+                return 0;
+            }
+            memcpy(value, &line[i], len);
+            value[len] = '\0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check the volumes the boot line names with `rach2.fsck=UUID,...` and
+ * restart the machine once each has been checked to a status below 4, so
+ * that its next boot takes the saved default.
+ *
+ * `bootctl fsck` writes that line on a one-boot entry for the installed
+ * system's init (`check_unclean_volumes`), whose kernel left the volumes
+ * read-only for e2fsck. The restart is that system's way back. A volume not
+ * found, or one e2fsck left with faults, keeps recovery up instead, with the
+ * console saying so, since a person must look at it.
+ */
+static void check_named_volumes(void)
+{
+    char list[512];
+
+    if (!boot_line_value("rach2.fsck", list, sizeof(list))) {
+        return;
+    }
+    if (check_ext2_partitions(list) != 0) {
+        fprintf(stderr, "init: e2fsck: %s: not every volume checked; recovery stays up\n", list);
+        return;
+    }
+    fprintf(stderr, "init: e2fsck: %s: checked; restarting\n", list);
+    shutdown_handler(SIGTERM);
+}
+#endif
 
 #ifdef INIT_CONSOLE_LOGIN
 /**
@@ -3157,6 +3324,123 @@ static void clear_recordfail(void)
 }
 #endif
 
+#ifndef INIT_RECOVERY
+/**
+ * Whether the ext2 volume on the partition node `node`, mounted read-only on
+ * `point`, needs e2fsck: its superblock's valid bit is clear or its error
+ * bit set. Puts its UUID in `uuid` and says so on the console when it does.
+ *
+ * A read-only mount writes nothing, the superblock's state among it, so the
+ * state on the disk is the one the kernel found at the mount, whose check
+ * ran and stopped, or which another reason kept read-only.
+ */
+static int ext2_needs_check(const char *node, const char *point, char uuid[37])
+{
+    unsigned char sb[512]; /* a raw window reads whole sectors */
+    unsigned state;
+
+    if (!ext2_superblock(node, sb)) {
+        return 0;
+    }
+    state = (unsigned)sb[58] | (unsigned)sb[59] << 8; /* s_state */
+    if ((state & 1) != 0 && (state & 2) == 0) {
+        return 0;
+    }
+    ext2_uuid(sb, uuid);
+    fprintf(stderr, "init: fsck: %s on %s: read-only and %s (UUID %s)\n", node, point,
+            (state & 2) ? "with errors" : "not clean", uuid);
+    return 1;
+}
+
+/**
+ * Send the machine to recovery's `e2fsck -p` when the kernel left an ext2
+ * volume of a disk read-only for e2fsck, as a Linux distribution checks a
+ * volume that is not clean at boot before it mounts it writable.
+ *
+ * The kernel checks a volume not cleanly unmounted when it mounts it, and
+ * when its check stops at a fault or at its own limit, it mounts the volume
+ * read-only and frees nothing on it, so that a damaged volume would lose
+ * space until e2fsck ran. This kernel takes no raw write of a partition, so
+ * e2fsck runs in the recovery system: each ext2 mount of a `/dev/diskNpM`
+ * that /proc/mounts lists as `ro` and whose superblock says it needs e2fsck
+ * (`ext2_needs_check`) is named by its UUID to `bootctl fsck`, which arms
+ * one boot of recovery's check, and init restarts the machine at once, before
+ * anything has run from the volume. Recovery restarts it again when the
+ * check is done, and the boot after it takes the saved default and mounts
+ * the volume writable. `bootctl` refuses a second arming within the hour of
+ * the first, so that a fault the check does not mend leaves the volume
+ * read-only instead of restarting the machine for ever; init then says so
+ * and goes on.
+ *
+ * Only a boot from a slot of a disk's menu, whose line has `rach2.slot=` of
+ * the candidate, the fallback or a trial root, does this, since the menu
+ * slot is where the check is armed. init waits for `bootctl`.
+ */
+static void check_unclean_volumes(void)
+{
+    char line[512], list[160];
+    size_t used = 0;
+    char *argv[4];
+    int status;
+    pid_t pid;
+    FILE *f;
+
+    if (!boot_line_has("rach2.slot=candidate") && !boot_line_has("rach2.slot=fallback") &&
+        !boot_line_has("rach2.slot=trialroot")) {
+        return;
+    }
+    f = fopen("/proc/mounts", "r");
+    if (!f) {
+        return;
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        char source[64], point[256], type[16], options[128], uuid[37];
+
+        if (sscanf(line, "%63s %255s %15s %127s", source, point, type, options) != 4 ||
+            strcmp(type, "ext2") != 0 || strncmp(source, "/dev/disk", 9) != 0 ||
+            strncmp(options, "ro", 2) != 0 || (options[2] != '\0' && options[2] != ',') ||
+            !ext2_needs_check(source, point, uuid) || used + 1 + 36 >= sizeof(list)) {
+            continue;
+        }
+        if (used > 0) {
+            list[used++] = ',';
+        }
+        memcpy(list + used, uuid, 37);
+        used += 36;
+    }
+    fclose(f);
+    if (used == 0) {
+        return;
+    }
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "init: fsck: cannot fork; the volume stays read-only\n");
+        return;
+    }
+    if (pid == 0) {
+        argv[0] = (char *)"bootctl";
+        argv[1] = (char *)"fsck";
+        argv[2] = list;
+        argv[3] = 0;
+        execve(BOOTCTL_PROGRAM, argv, environ);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr,
+                "init: fsck: bootctl fsck failed (status 0x%x); the volume stays read-only\n",
+                (unsigned)status);
+        return;
+    }
+    fprintf(stderr, "init: fsck: restarting into recovery's e2fsck -p\n");
+    shutdown_handler(SIGTERM);
+}
+#endif
+
 /**
  * Set the machine up before the first child: empty `/var/run` and give it a
  * `utmp` with only this boot's record, set the limits, open the service log
@@ -3172,8 +3456,12 @@ static void clear_recordfail(void)
  * its image and whether the partition's turned SSH on, since the two kinds of
  * image look identical from outside, and names each disk whose GUID table was
  * read from its backup. A metal boot whose line has `rach2.fsck` then checks
- * its ext2 partitions. Every other boot from a slot of a disk's menu then
- * clears GRUB's `recordfail` (`clear_recordfail`).
+ * its ext2 partitions, and recovery checks those `rach2.fsck=` names and
+ * restarts (`check_named_volumes`). Every other boot from a slot of a disk's
+ * menu then clears GRUB's `recordfail` (`clear_recordfail`), and sends the
+ * machine to recovery's check when the kernel left a volume read-only for
+ * e2fsck (`check_unclean_volumes`); the order lets the restart take the saved
+ * default and not the fallback.
  */
 static void set_up(void)
 {
@@ -3194,11 +3482,14 @@ static void set_up(void)
 #endif
 #ifdef INIT_METAL
     if (boot_line_has("rach2.fsck")) {
-        check_ext2_partitions();
+        (void)check_ext2_partitions(NULL);
     }
 #endif
-#ifndef INIT_RECOVERY
+#ifdef INIT_RECOVERY
+    check_named_volumes();
+#else
     clear_recordfail();
+    check_unclean_volumes();
 #endif
 }
 
