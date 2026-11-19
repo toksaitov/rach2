@@ -2140,12 +2140,14 @@ void sched_slice_rearm(void)
     (void)sched_clock_task(me);
     now = sched_clock_ns();
     if (sched_fair_running(me, p)) {
+        /* The computation charges `p` first, which may end its slice. */
         at = fair_next_event_ns(p);
-        if (at != 0 && at <= now) {
+        due = fair_resched(me);
+        if (!due && at != 0 && at <= now) {
             due = fair_tick(p);
-            fair_server_spend(me);
             at = due ? 0 : fair_next_event_ns(p);
         }
+        fair_server_spend(me);
         rt = sched_find_rt(me);
         if (!due && rt) {
             if (fair_server_takes(me, rt)) {
