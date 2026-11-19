@@ -350,6 +350,21 @@ void timer_wake_hold(void)
 void timer_wake_release(void)
 {}
 
+/** Start the stopwatch `w` at 0. */
+void timer_watch_start(struct timer_watch *w)
+{
+    k_memset(w, 0, sizeof *w);
+}
+
+/** The microseconds on `w`, 10 more on each reading, the delay that
+ * cputime_test's waits make between readings, so that a wait in the model
+ * ends at its bound. */
+uint32_t timer_watch_us(struct timer_watch *w)
+{
+    w->us += 10u;
+    return w->us;
+}
+
 /** Real time less the monotonic clock in the model: what the settings of the
  * clock added (`real_step_ns`), with nanoseconds from 0 to 10^9 - 1. */
 void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
