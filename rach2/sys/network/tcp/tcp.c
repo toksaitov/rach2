@@ -1893,9 +1893,9 @@ static int tcp_addr_is(net_addr_t a, net_addr_t b, int bound)
  * bindings. Their addresses are compared as `tcp_find` compares them: without
  * scopes when either block is bound to a card, and with them when neither is
  * (`tcp_addr_is`). A peer whose address a card of this machine owns, whatever
- * scope it names, is on no card, since IPv6 routing finds such an address
- * before it reads the scope and its segments come off the loopback backlog,
- * which every binding takes (`tcp_rx_card_ok`).
+ * scope it names, is on no card: a connection to it by `lo` gets its segments
+ * with no card, which every binding takes (`tcp_rx_card_ok`), and a block bound
+ * to another card, its peer on the wire, matches them without scopes.
  */
 static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t local_port,
                            net_addr_t remote_ip, uint16_t remote_port, int ifindex)
