@@ -732,6 +732,11 @@ struct process {
      * the replacing thread under the table's lock and taken off only by
      * the thread itself. NULL when there are none. */
     struct fd_gone_hold *fd_gone;
+    /* Set under its table's lock by a dup2 of another sharer that found
+     * the descriptor it replaces held by this thread's call when it counted
+     * the holds, and cleared there when it moves them (`gone_make`,
+     * fs/fd.c), so that it moves only the holds it counted. */
+    int fd_dup_counted;
     /* Set by a wake of a queue a `poll_wait` of the thread has a record
      * on, and cleared by the wait before each scan, as Linux's
      * `poll_wqueues.triggered` (fs/select.c:208-258): a wait whose scan
