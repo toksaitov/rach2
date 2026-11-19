@@ -260,7 +260,13 @@ typedef struct {
     uint32_t phent;       /* AT_PHENT: size in bytes of one program header */
     uint32_t phnum;       /* AT_PHNUM: number of program headers */
     uintptr_t image_end;  /* page-aligned end of all loaded segments (heap base) */
-    int nsegs;            /* number of recorded PT_LOAD segments */
+    /* The bounds Linux's load_elf_binary keeps in the mm and /proc/PID/stat
+     * shows, from the PT_LOAD headers with the bias added: the least
+     * p_vaddr and greatest p_vaddr + p_filesz of an executable segment,
+     * and the greatest p_vaddr and p_vaddr + p_filesz of any segment;
+     * `start_code` is the bias less one with no executable segment. */
+    uintptr_t start_code, end_code, start_data, end_data;
+    int nsegs; /* number of recorded PT_LOAD segments */
     elf_seg_t segs[ELF_MAX_SEGS];
     struct vm_file *file; /* the file the segments map, or NULL */
 } elf_image_t;
