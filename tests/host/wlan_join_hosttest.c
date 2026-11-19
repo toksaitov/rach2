@@ -257,6 +257,12 @@ void netdev_unregister(struct netdev *nd)
     iface = 0;
 }
 
+/** The interface's IPv6 reassemblies, which no row makes. */
+void ip6_forget_dev(struct netdev *nd)
+{
+    CHECK(nd == iface);
+}
+
 int netdev_route_at(int n, struct netdev_rt *out)
 {
     (void)n;
