@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.screen",
-  "summary": "The console blanked and shown again, by TIOCLINUX, by the escape ESC [ 9 ; N ] and by consoleblank=, each in a boot of its own, judged by the kernel's records of its blanks and by QMP's screen dumps; the scenario is machine/screen_scenario.c and the probe tests/blankprobe.c",
+  "summary": "The console blanked and shown again, by TIOCLINUX, by the escape ESC [ 9 ; N ] and by consoleblank=, each in a boot of its own, judged by the kernel's records of its blanks and by QMP's screen dumps, and the backlight's and the mixer's levels kept across a reboot and a reset with the blank turning the backlight off; the scenarios are machine/screen_scenario.c, with the probe tests/blankprobe.c, and machine/levels_scenario.c",
   "cases": [
     {
       "case_id": "machine.screen.tioclinux",
@@ -585,6 +585,258 @@
         "plan": "none",
         "class": "input",
         "reason": "the case reads the machine's screen through QMP and presses a key on its keyboard, which a native run cannot"
+      }
+    },
+    {
+      "case_id": "machine.screen.levels",
+      "behavior": "init keeps the backlight's and the mixer's levels across a reboot and a reset, as systemd-backlight and alsactl keep them, and the console blanks with the backlight off: acpi_video0 at 7 and vol 5 read 7 and vol 5:5 after a reboot, 9 and vol 6 kept by init within a second read 9 and vol 6:6 after reboot -f, and under consoleblank=4 the blank gives the backlight 0 and a key gives it 9 again",
+      "units": [
+        "backlight",
+        "audio",
+        "console"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "card": "hda",
+          "backlight": "acpi_video0 of acpi_video.aml",
+          "levels": "7 and vol 5:5, then 9 and vol 6:6",
+          "kept": "/var/lib/backlight/acpi_video0 and /var/lib/mixer",
+          "blank": "consoleblank=4"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "levels_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "shutdown-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "set",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the copy, read the backlight and mixer, set the backlight to 7 and run mixer vol 5, and reboot, and wait for the reset"
+        },
+        {
+          "step_id": "restored",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the same copy, read the levels, the kept files and _BQC, set the backlight to 9 and run mixer vol 6, wait until init has kept both, and reboot -f, past init, and wait for the reset"
+        },
+        {
+          "step_id": "blank",
+          "stage": "execute",
+          "machine": "blanking",
+          "does": "boot the same copy with consoleblank=4, read the levels, wait for the blank and read the backlight at 0, press Shift through QMP, read the backlight at its level again, and end the machine with QMP's quit"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ],
+            "audio": "hda",
+            "audio_backend": "none",
+            "acpi_table": "acpi-video"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "blanking",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk",
+              "consoleblank=4"
+            ],
+            "audio": "hda",
+            "audio_backend": "none",
+            "acpi_table": "acpi-video"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "default",
+          "checks": "the first boot reads acpi_video0 at 20 of 20, _BQC's 100, and a volume that is not vol 5:5",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "set",
+          "checks": "after the writes the backlight reads 7, its actual level 7, and mixer vol 5:5",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reset-saved",
+          "checks": "reboot ends the machine by QEMU's reset",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "restored",
+          "checks": "after the reboot the backlight reads 7, its actual level 7, and mixer vol 5:5",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "file",
+          "checks": "/var/lib/backlight/acpi_video0 holds 7, /var/lib/mixer the line vol 5:5, and _BQC gives 0x23, the level 35 of _BCL's eighth",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "saved",
+          "checks": "init writes 9 and vol 6:6 to the kept files while the machine runs",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reset-unsaved",
+          "checks": "reboot -f ends the machine by QEMU's reset",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reset-kept",
+          "checks": "after the reset the backlight reads 9 and mixer vol 6:6",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "blank-off",
+          "checks": "once the kernel records console: blanked: 1, the backlight reads 9, its actual level 0, and mixer vol 6:6",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unblank-on",
+          "checks": "after Shift and the record console: unblanked: 1 the backlight's actual level is 9 again",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 150000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "shutdown-disk",
+          "node": "images/shutdown-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "acpi-video",
+          "node": "tests/cases/machine/acpi_video.aml",
+          "per_architecture": false
+        },
+        {
+          "name": "levels_scenario",
+          "node": "tests/cases/machine/levels_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case reboots a QEMU machine on a disk copy and reads the levels after each boot"
       }
     }
   ]
