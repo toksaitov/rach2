@@ -203,4 +203,9 @@ stats()
         say "STATS outer_in=${1:-0} outer_out=${2:-0} deny9=${deny:-0} states=${states:-0}"
     done
 }
-stats > /dev/null 2>&1 &
+# rc.local's jobs are in rc's process group, which gets SIGHUP when rc ends
+# and the console's session with it; the reports must outlive that.
+(
+    trap '' HUP
+    stats
+) > /dev/null 2>&1 &
