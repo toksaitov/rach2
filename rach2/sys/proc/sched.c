@@ -51,6 +51,11 @@ static struct ready_queue run_queues[NR_CPUS];
  * (`sched_yield_alone`). */
 static unsigned int rt_queued;
 static uint32_t pick_count, pick_steps; /* selection attempts and entries examined, modulo 2^32 */
+/* Each processor's run-queue schedstats (`sched_rq_debug`), counted while
+ * `fair_schedstats` is set, each by its own processor with interrupts off. */
+static struct {
+    unsigned int yld_count, sched_count, sched_goidle, ttwu_count, ttwu_local;
+} rq_stats[NR_CPUS];
 
 /* The ordinary threads a suspend to idle holds off their fair queues,
  * linked by `held_next` (`sched_hold`). */
@@ -1438,6 +1443,38 @@ static int sched_rt_place(const process_t *p, int target)
     return target;
 }
 
+/* The wake reason's bit for a wake that moved the thread to another
+ * processor, Linux's WF_MIGRATED, beside fair.h's FAIR_WF_ bits. */
+#define SCHED_WF_MIGRATED 0x20
+
+/** Count the wake of `p` onto processor `cpu`, made on this processor with
+ * the reason `wf`, in the thread's and this processor's schedstats, as
+ * Linux's ttwu_stat (kernel/sched/core.c:3633-3669) does for every wake but
+ * a new thread's first. With sched_lock held, while `fair_schedstats` is
+ * set. */
+static void sched_ttwu_stat(process_t *p, int cpu, int wf)
+{
+    int me = (int)arch_cpu_id();
+
+    if (!fair_schedstats || (wf & FAIR_WF_FORK)) {
+        return;
+    }
+    if (cpu == me) {
+        rq_stats[me].ttwu_local++;
+        p->se.stats.nr_wakeups_local++;
+    } else {
+        p->se.stats.nr_wakeups_remote++;
+    }
+    if (wf & SCHED_WF_MIGRATED) {
+        p->se.stats.nr_wakeups_migrate++;
+    }
+    rq_stats[me].ttwu_count++;
+    p->se.stats.nr_wakeups++;
+    if (wf & FAIR_WF_SYNC) {
+        p->se.stats.nr_wakeups_sync++;
+    }
+}
+
 /**
  * Make `p` ready and return the processor to interrupt so that it selects
  * now, as `sched_wake_preempt` gives it, or the one where `p` is halted in
@@ -1477,6 +1514,7 @@ static int sched_ready_locked(process_t *p, int wf)
     p->state = PROC_READY;
     proc_timer_update(p);
     if (cpu_table[p->cpu].current == p) {
+        sched_ttwu_stat(p, p->cpu, wf);
         waketime_state(p, 2, p->cpu);
         return cpu_table[p->cpu].idle && _sched_enabled ? -1 : p->cpu;
     }
@@ -1485,6 +1523,7 @@ static int sched_ready_locked(process_t *p, int wf)
         if (sched_fair_class(p) && sched_allowed(p, p->cpu) &&
             !(waits_held && !suspend_lets_run(p))) {
             sched_enqueue(p, FAIR_ENQ_WAKE, 0);
+            sched_ttwu_stat(p, p->cpu, wf);
             return sched_wake_preempt(p, p->cpu, wf);
         }
         (void)sched_dequeue(p, FAIR_DEQ_FORCED);
@@ -1515,6 +1554,7 @@ static int sched_ready_locked(process_t *p, int wf)
     (void)sched_clock_task(target);
     sched_enqueue(p, why, 0);
     fair_balance_woken(target);
+    sched_ttwu_stat(p, target, (why & FAIR_ENQ_MIGRATED) ? wf | SCHED_WF_MIGRATED : wf);
     return sched_wake_preempt(p, target, wf);
 }
 
@@ -2149,6 +2189,9 @@ void schedule(void)
     cpu = &cpu_table[me];
     old = cpu->current;
     pick_count++;
+    if (fair_schedstats) {
+        rq_stats[me].sched_count++;
+    }
     watchdog_sched();
     (void)sched_clock_task(me);
     kick = sched_prepare_old(old, cpu, me);
@@ -2165,6 +2208,9 @@ void schedule(void)
             return;
         }
         next = cpu->idle;
+    }
+    if (fair_schedstats && next == cpu->idle) {
+        rq_stats[me].sched_goidle++;
     }
     if (kick >= 0) {
         smp_kick(kick);
@@ -2726,6 +2772,45 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle, uint
             return;
         }
     }
+}
+
+/** Only this processor writes its `rq_stats`, so interrupts off keep the
+ * count on it with no lock, which the yield that takes none needs. */
+void sched_note_yield(void)
+{
+    uint32_t flags;
+
+    if (fair_schedstats) {
+        flags = kirq_save();
+        rq_stats[arch_cpu_id()].yld_count++;
+        kirq_restore(flags);
+    }
+}
+
+void sched_rq_debug(int c, struct sched_rq_debug *out)
+{
+    const process_t *cur = cpu_table[c].current, *t;
+
+    out->nr_running = sched_balance_nr(c);
+    out->nr_switches = cpu_table[c].switches;
+    out->nr_uninterruptible = 0;
+    for (t = proc_list; t; t = t->next) {
+        if (t->cpu == c && t->state == PROC_BLOCKED && t->uninterruptible) {
+            out->nr_uninterruptible++;
+        }
+    }
+    out->curr_pid = cur && cur != cpu_table[c].idle ? (int)cur->pid : 0;
+    out->clock = fair_rqs[c].clock;
+    out->clock_task = fair_rqs[c].clock_task;
+    out->rt_nr_running = run_queues[c].rt_count;
+    if (cur && cur != cpu_table[c].idle && !sched_fair_class(cur)) {
+        out->rt_nr_running++;
+    }
+    out->yld_count = rq_stats[c].yld_count;
+    out->sched_count = rq_stats[c].sched_count;
+    out->sched_goidle = rq_stats[c].sched_goidle;
+    out->ttwu_count = rq_stats[c].ttwu_count;
+    out->ttwu_local = rq_stats[c].ttwu_local;
 }
 
 uint64_t sched_switches(void)

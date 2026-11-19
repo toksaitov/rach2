@@ -290,6 +290,36 @@ uint64_t sched_rr_interval_ns(const process_t *p);
  * for or the base slice. Takes the run queues' lock. */
 uint64_t sched_slice_ns(const process_t *p);
 
+/*
+ * What /sys/kernel/debug/sched/debug shows of processor `c`'s run queue, the
+ * members of Linux's struct rq it prints (kernel/sched/debug.c:950-990):
+ * the threads queued or running there, the idle task left out; the
+ * switches; the threads in an uninterruptible sleep that last ran there;
+ * the running thread's pid, 0 for the idle task; the monotonic and task
+ * clocks at its last update, in ns; the real-time threads queued or
+ * running there; and the counts Linux keeps while kernel.sched_schedstats
+ * is 1: sched_yield calls, selections, selections of the idle task, and
+ * wakes made on the processor, `ttwu_local` those that placed the thread
+ * on it.
+ */
+struct sched_rq_debug {
+    unsigned int nr_running;
+    uint64_t nr_switches;
+    unsigned int nr_uninterruptible;
+    int curr_pid;
+    uint64_t clock, clock_task;
+    unsigned int rt_nr_running;
+    unsigned int yld_count, sched_count, sched_goidle, ttwu_count, ttwu_local;
+};
+
+/** Fill `out` for processor `c` under the run queues' lock, which the
+ * caller holds (`sched_lock_take`). */
+void sched_rq_debug(int c, struct sched_rq_debug *out);
+
+/** Count a sched_yield call in the caller's processor's `yld_count`, as
+ * Linux's do_sched_yield does, while kernel.sched_schedstats is 1. */
+void sched_note_yield(void);
+
 /** /sys/kernel/debug/sched/fair_server/cpuN/runtime and period: processor
  * `c`'s fair server's budget and period in nanoseconds, and a write of
  * both, -EINVAL unless the runtime is at most the period and the period is
