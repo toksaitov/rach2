@@ -401,6 +401,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "dsp_gone",
+          "checks": "tests/host/dsp_gone_hosttest.c opens one direction for O_RDWR on a device of one, wakes a blocked write and a drain when the device goes, and fails every later call with ENODEV, as Linux does, under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "e1000",
           "checks": "tests/host/e1000_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -608,6 +613,11 @@
         {
           "assertion_id": "hdmi_audio",
           "checks": "tests/host/hdmi_audio_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "hdmi_audio_linux",
+          "checks": "tests/host/hdmi_audio_linux_hosttest.c brings the controller to D0 before the bind, counts a refill's missed laps, converts OSS's default format to the sink's, and tells a stream's owner when the display goes, as Linux does, under ASan and UBSan",
           "source": "scenario"
         },
         {
