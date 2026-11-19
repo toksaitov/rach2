@@ -414,6 +414,99 @@ int netconf_set_up(struct netdev *nd, int up)
     return 0;
 }
 
+/* The withdrawal's calls into the stack (`netdev_withdraw`), which no row
+ * makes: no route, address or neighbour to forget. */
+
+/** No route to give. */
+int netdev_route_at(int n, struct netdev_rt *out)
+{
+    (void)n;
+    (void)out;
+    return 0;
+}
+
+/** No route to delete. */
+int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
+{
+    (void)nd;
+    (void)dst;
+    (void)mask;
+    (void)gw;
+    return -ESRCH;
+}
+
+/** No address to clear. */
+int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
+{
+    (void)nd;
+    (void)ip;
+    (void)mask;
+    return 0;
+}
+
+/** No neighbour to forget. */
+void arp_forget_dev(struct netdev *nd)
+{
+    (void)nd;
+}
+
+/** No neighbour to list. */
+int arp_snapshot(struct arp_row *out, int max)
+{
+    (void)out;
+    (void)max;
+    return 0;
+}
+
+/** No neighbour to forget. */
+int arp_forget(struct netdev *nd, uint32_t ip)
+{
+    (void)nd;
+    (void)ip;
+    return -ENOENT;
+}
+
+/** No IPv6 state to take down. */
+void nd6_if_down(struct netdev *nd)
+{
+    (void)nd;
+}
+
+/** No IPv6 neighbour to list. */
+int nd6_snapshot(struct nd6_row *out, int max)
+{
+    (void)out;
+    (void)max;
+    return 0;
+}
+
+/** No IPv6 neighbour to forget. */
+int nd6_forget(struct netdev *nd, const uint8_t *addr)
+{
+    (void)nd;
+    (void)addr;
+    return -ENOENT;
+}
+
+/** No IPv6 route to forget. */
+void route6_forget(struct netdev *nd, int proto)
+{
+    (void)nd;
+    (void)proto;
+}
+
+/** No IPv6 address to forget. */
+void ip6_forget_dev(struct netdev *nd)
+{
+    (void)nd;
+}
+
+/** No packet socket bound. */
+void packet_dev_gone(int ifindex)
+{
+    (void)ifindex;
+}
+
 /** The function's owner, as the row set it. */
 const char *pci_owner(uint8_t bus, uint8_t devfn)
 {
