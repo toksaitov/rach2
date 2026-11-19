@@ -207,8 +207,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     check(dev == &disk && blk < IMAGE_BLOCKS, "cache block in volume");
-    if (reclaim_error) {
-        reclaim_error = 0;
+    if (reclaim_error && --reclaim_error == 0) {
         dev->flags |= BLOCK_WRITE_FAILED;
         if (recovery_active) {
             dev->flags |= BLOCK_WRITES_HALTED;
@@ -1833,6 +1832,24 @@ static void reclaim_during_reap(void)
     teardown();
 }
 
+/** Halt while acquiring the second block of a field that spans two. */
+static void reclaim_during_store(void)
+{
+    uint32_t data = 0x11223344;
+    uint32_t at = BCACHE_BLOCK_BYTES - 2;
+    struct krffs_volume *vol;
+
+    setup();
+    vol = vol_of(&mount);
+    bcache_recovering(&disk, 1);
+    reclaim_error = 2;
+    check(volume_write(vol, at, &data, sizeof(data)) < 0 && !reclaim_error &&
+              !cached[at] && !cached[at + 2] && !buffers[0].dirty && !buffers[1].dirty,
+          "a halt while fetching the second block leaves the entire field alone");
+    bcache_recovering(&disk, 0);
+    teardown();
+}
+
 /** Run the independent volume failure rows. */
 static void volume_failure_rows(void)
 {
@@ -1845,6 +1862,7 @@ static void volume_failure_rows(void)
     close_during_unlink_row(1);
     repair_flush_row();
     reclaim_during_reap();
+    reclaim_during_store();
 }
 
 /**
