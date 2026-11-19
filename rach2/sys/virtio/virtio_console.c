@@ -637,7 +637,8 @@ static void vcon_emerg_lost(const int *lost, char c)
         if (!lost[i]) {
             continue;
         }
-        for (seen = 0, k = 0; k < i; k++) {
+        seen = 0;
+        for (k = 0; k < i; k++) {
             seen |= lost[k] && vcon_outs[k]->dev == vcon_outs[i]->dev;
         }
         if (!seen) {
@@ -691,7 +692,7 @@ static void vcon_ptx_flush(struct vcon_port *p)
  */
 static void vcon_panic_out(char c)
 {
-    int lost[VCON_WANT_MAX];
+    int lost[VCON_WANT_MAX] = {0};
     int i, sent = 0;
 
     for (i = 0; i < vcon_nouts; i++) {
@@ -2283,7 +2284,8 @@ static int vcon_index(void)
     int n = 0, used;
 
     for (;; n++) {
-        for (used = 0, d = vcon_list; d; d = d->next) {
+        used = 0;
+        for (d = vcon_list; d; d = d->next) {
             used |= d->vdev && d->index == n;
         }
         if (!used) {
