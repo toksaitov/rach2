@@ -458,6 +458,11 @@ void signal_set_blocked(uint64_t mask)
     current_proc->sig_blocked = mask;
 }
 
+void signal_set_real_blocked(uint64_t mask)
+{
+    current_proc->sig_real_blocked = mask;
+}
+
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
