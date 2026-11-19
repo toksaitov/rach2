@@ -2125,7 +2125,7 @@ include tests/graphics/d3d/rules.mk
 # on virgl: a new prefix with WineD3D's video memory set, GL and Direct3D 9
 # pixels, 64-bit and 32-bit, against the Debian guest's in the same QEMU, and
 # the preloader's reserved ranges against Linux's maps.
-# `tests/run games-wm`: in the boot session's Weston on kiosk-shell, xplace's
+# `tests/run games-wm`: in the desktop session's Weston on kiosk-shell, xplace's
 # and Wine's fullscreen windows placed, focused, scaled and dumped through
 # QMP, raw motion under a confining grab, Wine's tone through the loopback
 # and DirectInput's devices; the same payload, with wm.py.
@@ -2165,12 +2165,13 @@ $(GAMES_DIR)/save-volume.ext2: vendor/e2fsprogs/mke2fs.conf
 	    -F $@.tmp 1572864
 	mv $@.tmp $@
 
-# `tests/run desktop`: an ordinary headless Weston session at boot, input
+# `tests/run desktop`: a boot that leaves the console its screen and keyboard
+# with no Weston; an ordinary headless Weston session started by SIGHUP, input
 # discovery, and browser and ALSA tones measured through OSS loopback; Weston
-# at boot on bochs with Pixman and on virtio-gpu with GL, the browsers taking
-# keys and a click through QMP, a resolution change, and the console's frame
-# and keyboard back after Weston's SIGKILL; on i686, Weston on bochs, evdev,
-# an llvmpipe render checked pixel by pixel and modetest.
+# on bochs with Pixman and on virtio-gpu with GL, the browsers taking keys and
+# a click through QMP, a resolution change, and the console's frame and
+# keyboard back after Weston's SIGKILL; on i686, Weston on bochs, evdev, an
+# llvmpipe render checked pixel by pixel and modetest.
 DESKTOP_TEST_DISK = $(IMAGES_DIR)/desktop-test.disk
 $(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	@mkdir -p $(@D)

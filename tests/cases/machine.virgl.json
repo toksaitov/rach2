@@ -14611,7 +14611,7 @@
         "program": "graphics_scenario",
         "stdin": null,
         "role": "ordinary",
-        "privileges": "the runner runs as root, which opens the card through libseat's noop backend for its Weston, ends the boot session's and writes the driver's debugfs file",
+        "privileges": "the runner runs as root, which opens the card through libseat's noop backend for its Weston, ends the desktop session's and writes the driver's debugfs file",
         "isolation": [
           {
             "fixture": "scratch"

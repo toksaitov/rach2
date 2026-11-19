@@ -1,7 +1,7 @@
 """Time the hasvk WebGPU picture's first frames on the Lenovo, with each thread's waits.
 
 Run as root: python3 stall.py USER OUT RUNS, on Rach2 or on the Lenovo's
-Debian alike. Like hasvk.py it owns the screen: it ends the boot session's
+Debian alike. Like hasvk.py it owns the screen: it ends the desktop session's
 Weston, starts a private DRM Weston through seatd, presents vkcube's 300
 frames once, as hasvk.py does before its picture, and then runs Chromium's
 WebGPU picture RUNS times as USER, in turn alone, beside threadwatch, and
