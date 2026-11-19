@@ -5,7 +5,9 @@
  * `setterm --blank N` writes `ESC [ 9 ; N ]` to the standard output, which
  * the console takes as N minutes without input before it blanks, 0 to 60, 0
  * for never. `--blank force` blanks the console until `--blank poke`
- * unblanks it, and `--blank` alone prints 1 while it is blank and 0
+ * unblanks it, and fails when the console stays shown, as it does under a
+ * picture on /fb that nothing darkens, where TIOCLINUX's blank returns 0
+ * as Linux's does; `--blank` alone prints 1 while it is blank and 0
  * otherwise; these three are TIOCLINUX requests on the standard input,
  * which must be the console. The option may be spelled `-blank`, as
  * util-linux allows. setterm's other options are not here: BusyBox has no
@@ -66,7 +68,14 @@ static int blank(const char *word)
         return 0;
     }
     if (strcmp(word, "force") == 0) {
-        return tioclinux(TIOCL_BLANKSCREEN) < 0;
+        if (tioclinux(TIOCL_BLANKSCREEN) < 0 || (rc = tioclinux(TIOCL_BLANKEDSCREEN)) < 0) {
+            return 1;
+        }
+        if (rc == 0) {
+            fputs("setterm: blank: refused: nothing darkens the screen\n", stderr);
+            return 1;
+        }
+        return 0;
     }
     if (strcmp(word, "poke") == 0) {
         return tioclinux(TIOCL_UNBLANKSCREEN) < 0;
