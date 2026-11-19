@@ -27,7 +27,7 @@ The platform defines what these shared headers declare. Each header states its c
 | `sys/lib/kirq.h` | the interrupt flag saved around a section | `kirq.c` |
 | `sys/arch/arch.h` | the processor primitives and the hardware breakpoints | `cpu.c`, `debugreg.c` |
 
-The walk of the PCI buses above configuration space is shared code, `sys/pci.c`. The drivers of the other devices only a PC has are kept by their subsystems and listed in this directory's `sources.mk`, and they alone include one of its headers, `portio.h`: the ATA channels ([block storage](../../block/Readme.md)), the Sound Blaster 16 and its ISA DMA ([audio](../../audio/Readme.md)), and the VGA text console, mode 13h and the framebuffer console ([display](../../display/Readme.md)).
+The walk of the PCI buses above configuration space is shared code, `sys/pci.c`, which also lists a hot plugged card's functions and gives their BARs addresses for ACPI's hot plug ([ACPI](../../acpi/Readme.md)). The drivers of the other devices only a PC has are kept by their subsystems and listed in this directory's `sources.mk`, and they alone include one of its headers, `portio.h`: the ATA channels ([block storage](../../block/Readme.md)), the Sound Blaster 16 and its ISA DMA ([audio](../../audio/Readme.md)), and the VGA text console, mode 13h and the framebuffer console ([display](../../display/Readme.md)).
 
 The manual describes what a user sees: [acpi(4)](../../../../man/man4/acpi.4) the controllers, the tick, the processors and the stops with the log lines they print, [proc(5)](../../../../man/man5/proc.5) `/proc/interrupts` and `/proc/cpuinfo`, [rtc(4)](../../../../man/man4/rtc.4) `/dev/rtc0`, and [reboot(2)](../../../../man/man2/reboot.2) and [halt(8)](../../../../man/man8/halt.8) the stops.
 
