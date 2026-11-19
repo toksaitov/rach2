@@ -1,0 +1,12 @@
+RPS enabled? yes
+RPS active? yes
+GPU busy? yes
+Boosts outstanding? 0
+Interactive? 0
+Frequency requested 1000, actual 1000
+  min hard:200, soft:1000; max soft:1000, hard:1000
+  idle:200, efficient:500, boost:1000
+Wait boosts: 5147
+Work runs: 0, up 0, down 0, timeout 0
+Parks: 56, unparks 57
+RPNSWREQ: 1000MHz, CAGF: 1000MHz
