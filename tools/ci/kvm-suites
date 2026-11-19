@@ -25,6 +25,8 @@
 # llvmpipe, and judge counts that the accelerator does not change.
 # The kvmclock suite judges the clock a KVM guest keeps, kvm-clock, which
 # an emulator does not give (tests/cases/guest.kvmclock.json).
+# The sched4 suite compares a sleeper's wait with Debian's in the same
+# four-processor profile, taken under KVM (tests/cases/guest.sched4.json).
 browser
 video
 webgl
@@ -51,3 +53,4 @@ igt
 modetest
 piglit
 kvmclock
+sched4

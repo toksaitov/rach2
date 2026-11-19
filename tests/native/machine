@@ -54,3 +54,4 @@ gpucompatprobe an i386 program's GPU requests on the x86-64 kernel, under QEMU v
 i915execprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has
 i915resetprobe QEMU's edu device standing in for the HD 4400 by rach2.i915fake, which no installed machine has
 musl/hvcmusl a virtio console, which QEMU gives the machine and the Lenovo lacks, and a boot line that names its port or the UART
+musl/schedsmpmusl the shares of processors 1 to 3, which the installed system's services move, and a sleeper's wait judged against Debian's in the same four-processor QEMU profile
