@@ -103,9 +103,14 @@ static struct vfs_mount *cache_table[C_MOUNTS] = {&croot,  &cother,  &cunseen, &
                                                   &cnamed, &cdcover, &cdbind,  &crcover};
 /* The model's count of changes of names, which reading `renaming` moves. */
 static uint32_t names_changed;
-/* The record the cached walk captures for a regular file's last name, and
- * the counts of those captured and dropped. */
+/* A change on another mount either stays open through a walk or finishes
+ * during its parent scan. */
+static int names_changing, change_during_scan;
+/* The model's captured name and parent, and the counts of records
+ * captured and dropped. */
 static int name_record, names_taken, names_put;
+static void *name_parent;
+static char name_leaf[VFS_NAME_MAX + 1];
 
 /** Name node `i` in `parent`, of `mode`, a link to `target` when given. */
 static void cnode_set(int i, int parent, const char *name, uint32_t mode, const char *target,
@@ -148,12 +153,15 @@ static int cache_put_unless_last(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
-/** A node's attributes: its mode and root's ownership. */
+/** A node's attributes: its mode, inode number and root's ownership. */
 static int cache_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
+    struct cnode *n = node;
+
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
-    st->mode = ((struct cnode *)node)->mode;
+    st->mode = n->mode;
+    st->ino = (uint64_t)(n - cn) + 1;
     st->nlink = 1;
     return 0;
 }
@@ -226,8 +234,34 @@ static int cache_hit(void *dir, const char *name, void **node)
  * the two walks take: the model's names, held. 0, or -ENOENT. */
 static int cache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
-    (void)mnt;
+    struct cnode *n = dir;
+
+    if (cache_same(name, "..")) {
+        *node = n->parent ? n->parent : n;
+        cache_hold(mnt, *node);
+        return 0;
+    }
     return cache_hit(dir, name, node) == 0 ? 0 : -ENOENT;
+}
+
+/** Read the next child of `dir`, with `cursor` the next model node. */
+static int cache_readdir(struct vfs_mount *mnt, void *dir, uint32_t *cursor, struct vfs_dirent *ent)
+{
+    check(sleep_lock_held(&mnt->ns), "the parent scan holds the namespace lock");
+    if (change_during_scan) {
+        names_changed++;
+        change_during_scan = 0;
+    }
+    while (*cursor < C_NODES) {
+        uint32_t i = (*cursor)++;
+
+        if (cn[i].parent == dir && cn[i].name) {
+            ent->ino = i + 1;
+            k_strncpy(ent->name, cn[i].name, sizeof(ent->name));
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static const struct vfs_ops cache_ops = {
@@ -235,6 +269,7 @@ static const struct vfs_ops cache_ops = {
     .hold = cache_hold,
     .put = cache_put,
     .getattr = cache_getattr,
+    .readdir = cache_readdir,
     .readlink = cache_readlink,
     .put_unless_last = cache_put_unless_last,
     .readlink_cached = cache_readlink_cached,
@@ -534,11 +569,11 @@ static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
     (void)left;
 }
 
-/** The count of changes of names, of which none is ever under way. */
+/** The count of changes of names, and whether none is under way. */
 int vfs_name_seq(uint32_t *seq)
 {
     *seq = names_changed;
-    return 1;
+    return !names_changing;
 }
 
 /** The same count, read as the cached walk reads it at its start. */
@@ -550,7 +585,7 @@ int vfs_name_seq_peek(uint32_t *seq)
 /** Whether the count is still `seq`. */
 int vfs_name_seq_still(uint32_t seq)
 {
-    return names_changed == seq;
+    return !names_changing && names_changed == seq;
 }
 
 /** Start a description's cursor into its file's write-back error sequence at
@@ -562,17 +597,29 @@ uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
     return 0;
 }
 
-/** Capture a regular file's last name for the cached walk: the model's one
- * record, counted. */
+/** Capture a name of the model and count the record. */
+static int fixture_name_capture(const struct vfs_ref *parent, const char *leaf,
+                                struct vfs_name **out)
+{
+    *out = NULL;
+    if (parent->mnt->type == &cache_type) {
+        name_parent = parent->node;
+        k_strncpy(name_leaf, leaf, sizeof(name_leaf));
+        names_taken++;
+        *out = (struct vfs_name *)&name_record;
+    }
+    return 0;
+}
+
+/** Capture a name for the cached walk only if the sequence still holds. */
 int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
                         struct vfs_name **out)
 {
-    (void)parent;
-    (void)leaf;
-    (void)seq;
-    names_taken++;
-    *out = (struct vfs_name *)&name_record;
-    return 0;
+    if (!vfs_name_seq_still(seq)) {
+        *out = NULL;
+        return -EAGAIN;
+    }
+    return fixture_name_capture(parent, leaf, out);
 }
 
 /** Drop the record the cached walk captured, counted; the resolver's code
@@ -595,9 +642,11 @@ static int sched_spin_on(const struct process *owner, int cpu)
     return 0;
 }
 
-#define vfs_name_put fixture_name_put
+#define vfs_name_capture fixture_name_capture
+#define vfs_name_put     fixture_name_put
 #include "vfs_open.inc"
 #undef vfs_name_put
+#undef vfs_name_capture
 
 static struct loop_device loop_table[LOOP_DEVICES];
 
@@ -891,10 +940,11 @@ static int synth_is_block(const struct vpath *vp)
 }
 
 /** Reject an unexpected synthetic open. */
-static int32_t synth_open(const struct vpath *vp, int flags)
+static int32_t synth_open(const struct vpath *vp, int flags, struct vfs_mount *mnt)
 {
     (void)vp;
     (void)flags;
+    (void)mnt;
     check(0, "unexpected synthetic open");
     return -EIO;
 }
@@ -971,12 +1021,14 @@ static int mount_permanent_at(const struct vfs_mount *mnt)
 }
 
 /** Reject recording a synthetic mount; every row uses mounted KRFFS. */
-static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags)
+static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags,
+                               int opened)
 {
     (void)fd;
     (void)ref;
     (void)vp;
     (void)flags;
+    (void)opened;
     check(0, "unexpected synthetic mount record");
 }
 
@@ -1323,6 +1375,24 @@ static int full_at(const char *path, struct vfs_mount *mnt, int node)
     return rc;
 }
 
+/** A final `..` keeps its directory's name through an unrelated change
+ * already under way, or one that moves the sequence during the scan. */
+static void dotdot_entry(const char *message)
+{
+    struct vfs_name *entry;
+    struct vfs_ref out;
+    int rc = vfs_resolve_entry("/data/pfx/drive_c/..", VFS_WALK_LOCK, &out, NULL, &entry, NULL);
+
+    check(rc == 0 && out.mnt == &cnamed && out.node == &cn[C_PFX] && entry &&
+              name_parent == &cn[C_DROOT] && cache_same(name_leaf, "pfx"),
+          message);
+    if (rc == 0) {
+        fixture_name_put(entry);
+        vfs_walk_unlock(out.mnt);
+        vfs_ref_release(&out);
+    }
+}
+
 /** Whether every hold the cached walk took and every mount it entered was
  * given back. */
 static int cache_quiet(void)
@@ -1441,6 +1511,12 @@ static void cached_walks(void)
               full_at("/data/../secret", &crcover, C_VSECRET) == 0,
           "and crosses a mount over that root in both walks, as Linux's handle_dots does");
     crcover.state = VFS_FREE;
+    names_changing = 1;
+    dotdot_entry("a dot-dot walk records its directory while another mount changes names");
+    names_changing = 0;
+    change_during_scan = 1;
+    dotdot_entry("a dot-dot walk records its directory across a change during the parent scan");
+    check(!change_during_scan, "the name sequence changed during the scan");
     check(cache_quiet(), "the cached walks give back every hold and mount");
     mounts = was;
     mount_slots = was_slots;
