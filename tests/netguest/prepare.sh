@@ -8,8 +8,9 @@
 # It runs on a Linux host with QEMU, qemu-img, xorriso, curl, xz and flock,
 # and sha512sum for Debian, under KVM where /dev/kvm opens; ACCEL=tcg or
 # ACCEL=kvm chooses. OUT is the prepared image, a compressed qcow2 with no
-# backing file, written after OUT.record, the guest's `NETGUEST RECORD`
-# lines and the host's, so that an OUT that exists has its record.
+# backing file, and OUT.record the guest's `NETGUEST RECORD` lines and the
+# host's, written after OUT, so that an OUT.record newer than OUT is the
+# record of that OUT.
 #
 # The system's image is FreeBSD 15.1's BASIC-CLOUDINIT image, which
 # freebsd/image pins by URL and SHA-256 and which is fetched into the cache
@@ -211,7 +212,7 @@ boot()
     wait "$qemu" || die "$system: QEMU exited with an error"
     qemu=''
 
-    rm -f "$cache/$system.qcow2" "$cache/$system.key"
+    rm -f "$cache/$system.key" "$cache/$system.qcow2" "$cache/$system.record"
     part=$cache/$system.qcow2.part.$$
     qemu-img convert -c -O qcow2 "$work/disk.qcow2" "$part" ||
         die "$system: the prepared image was not written"
@@ -227,8 +228,8 @@ boot()
         echo "qemu $(qemu-system-x86_64 --version | head -n 1)"
         echo "bytes $(wc -c < "$part")"
     } > "$cache/$system.record.part.$$" || die "$system: the record was not written"
-    mv "$cache/$system.record.part.$$" "$cache/$system.record"
     mv "$part" "$cache/$system.qcow2"
+    mv "$cache/$system.record.part.$$" "$cache/$system.record"
     echo "$key" > "$cache/$system.key"
 }
 
@@ -259,12 +260,13 @@ if [ ! -f "$cache/$system.qcow2" ] || [ ! -f "$cache/$system.record" ] ||
     boot
 fi
 mkdir -p "$(dirname "$out")"
-# The record first, then the image, each whole before it takes its name; a
-# link where the file system allows it, since the image is a gigabyte or
-# more.
-cp "$cache/$system.record" "$out.record.part.$$" || die "the record was not copied beside $out"
-mv -f "$out.record.part.$$" "$out.record" || die "the record was not kept beside $out"
+# The image first, then its record, each whole before it takes its name, so
+# that a record newer than the image is its record; the image a link where
+# the file system allows it, since it is a gigabyte or more.
+rm -f "$out.record"
 ln "$cache/$system.qcow2" "$out.part.$$" 2> /dev/null || cp "$cache/$system.qcow2" "$out.part.$$" ||
     die "the image was not copied to $out"
-mv -f "$out.part.$$" "$out"
+mv -f "$out.part.$$" "$out" || die "the image was not kept as $out"
+cp "$cache/$system.record" "$out.record.part.$$" || die "the record was not copied beside $out"
+mv -f "$out.record.part.$$" "$out.record" || die "the record was not kept beside $out"
 echo "netguest-prepare: result: prepared $out"

@@ -74,18 +74,28 @@ seedkey()
         awk '{ print $1 }' | { cat; echo "$venus"; } | sha256sum | awk '{ print $1 }'
 }
 
+# checks FILE: succeed when FILE has the pinned size and SHA-512.
+checks()
+{
+    [ "$(wc -c < "$1")" -eq "$(pin size)" ] && echo "$(pin sha512)  $1" | sha512sum -c --quiet -
+}
+
 fetch()
 {
     mkdir -p "$cache"
+    if [ -f "$base" ] && ! checks "$base" 2> /dev/null; then
+        echo "debian-ref: $base is not the pinned image; fetching it again"
+        rm -f "$base"
+    fi
     if [ ! -f "$base" ]; then
         echo "debian-ref: fetching $url"
-        # Several suites fetch at once: each into its own file, and the rename
-        # makes the image appear whole.
+        # Several suites fetch at once: each into its own file, checked before
+        # the rename makes it appear whole.
         curl -sSfL -o "$base.part.$$" "$url" || { rm -f "$base.part.$$"; die "cannot fetch $url"; }
+        checks "$base.part.$$" || { rm -f "$base.part.$$"; die "$url: not the pinned size and SHA-512"; }
         mv -f "$base.part.$$" "$base"
     fi
-    [ "$(wc -c < "$base")" -eq "$(pin size)" ] || die "$base: not $(pin size) bytes"
-    echo "$(pin sha512)  $base" | sha512sum -c --quiet - || die "$base: SHA-512 differs"
+    checks "$base" || die "$base: not the pinned size and SHA-512"
     echo "debian-ref: result: $base checks"
 }
 

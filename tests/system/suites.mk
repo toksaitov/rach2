@@ -2322,6 +2322,10 @@ $(NETGUEST_DIR)/debian.qcow2: tests/netguest/prepare.sh tests/graphics/debian-re
                               tests/graphics/debian-ref/debian-ref.sh tests/netguest/debian/setup.sh tests/netguest/debian/netguest.sh \
                               tests/netguest/debian/meta-data
 	sh tests/netguest/prepare.sh debian $@
+# A record older than its image, or none, is one a preparation did not end
+# with; prepare.sh publishes the cached image and its record again.
+$(NETGUEST_DIR)/%.qcow2.record: $(NETGUEST_DIR)/%.qcow2
+	sh tests/netguest/prepare.sh $* $<
 # nettput for Rach2, a static musl program of x86-64, the suite's only
 # architecture, and for the host, the peer service of the cases.
 ifeq ($(ARCH),x86_64)
@@ -2337,7 +2341,8 @@ $(NETGUEST_DIR)/nettput-host: tests/netguest/nettput.c
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
 $(NETGUEST_DIR)/netguest.ext2: $(NETGUEST_SCRIPTS) $(NETGUEST_DIR)/nettput \
-                               $(NETGUEST_DIR)/freebsd.qcow2 $(NETGUEST_DIR)/debian.qcow2
+                               $(NETGUEST_DIR)/freebsd.qcow2 $(NETGUEST_DIR)/debian.qcow2 \
+                               $(NETGUEST_DIR)/freebsd.qcow2.record $(NETGUEST_DIR)/debian.qcow2.record
 	@set -e; work=; tmp=; \
 	trap '[ -z "$$work" ] || rm -rf "$$work"; [ -z "$$tmp" ] || rm -f "$$tmp"' EXIT; \
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
