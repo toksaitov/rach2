@@ -747,14 +747,15 @@ int pc_fault(uintptr_t fault_address, int write)
 #define PC_COPY_HOLD 2u
 
 /**
- * Copy `size` bytes at byte `off` of the backing, in pieces of at most
- * PC_COPY_HOLD pages, through the slots that hold them (`pc_bring`): into
- * `to` for a read, or out of `from` into the slots' frames, marked dirty,
- * for a write; the other is NULL. Each piece is brought in and copied with
- * interrupts off and the big lock held, as a window fault is served. A
- * write brings in every page of its piece, held so that no slot search
- * takes one for the next, before it copies a byte, so that a page that
- * cannot be read or given a slot leaves the piece as it was. Returns 0,
+ * Copy `size` bytes at byte `off` of the backing, in pieces, through the
+ * slots that hold them (`pc_bring`): into `to` for a read, or out of `from`
+ * into the slots' frames, marked dirty, for a write; the other is NULL. Each
+ * piece is brought in and copied with interrupts off and the big lock held,
+ * as a window fault is served. A read goes a page at a time, so that it
+ * needs one slot, as a fault does. A write's piece is at most PC_COPY_HOLD
+ * pages, every one brought in, held so that no slot search takes one for
+ * the next, before it copies a byte, so that a page that cannot be read or
+ * given a slot leaves the piece as it was. Returns 0,
  * or -1 with no backing, for a range past the backed size, or when a page
  * cannot be read or given a slot; the pieces before it are copied.
  */
@@ -765,7 +766,7 @@ static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size
     }
     while (size != 0) {
         uint32_t first = off & ~(PC_PAGE_SIZE - 1u);
-        uint32_t span = PC_COPY_HOLD * PC_PAGE_SIZE - (off - first);
+        uint32_t span = (from ? PC_COPY_HOLD : 1u) * PC_PAGE_SIZE - (off - first);
         uint32_t n = span < size ? span : size;
         uint32_t pages = (off - first + n + PC_PAGE_SIZE - 1u) / PC_PAGE_SIZE;
         int32_t slots[PC_COPY_HOLD];

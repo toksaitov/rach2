@@ -175,8 +175,9 @@ static void touch(uint32_t p, int write, uint8_t marker)
  * resident, where a fault in the window would have panicked, and a later
  * read that succeeds brings it in; a copy into the cache marks its page
  * dirty for the sync to write; a store across two pages whose second
- * cannot be read changes neither, and stores both once it can; and a range
- * past the backing is -1.
+ * cannot be read changes neither, and stores both once it can; a range
+ * past the backing is -1; and a read across two pages needs one free slot,
+ * as a fault does, since it goes a page at a time.
  */
 static void test_copies(void)
 {
@@ -220,6 +221,14 @@ static void test_copies(void)
 
     CHECK(pc_copy_out(FAKE_PAGES * PC_PAGE_SIZE - 1, buf, 2) == -1);
     CHECK(pc_copy_in(FAKE_PAGES * PC_PAGE_SIZE, &mark, 1) == -1);
+
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_slots[1].pinned = pc_slots[2].pinned = pc_slots[3].pinned = 1;
+    fake_disk[60][PC_PAGE_SIZE - 1] = 0x66u;
+    fake_disk[61][0] = 0x77u;
+    CHECK(pc_copy_out(61 * PC_PAGE_SIZE - 1, buf, 2) == 0 && buf[0] == 0x66u && buf[1] == 0x77u);
+    pc_slots[1].pinned = pc_slots[2].pinned = pc_slots[3].pinned = 0;
 }
 
 /* What the failure hook was told: its calls and the last answer. */
