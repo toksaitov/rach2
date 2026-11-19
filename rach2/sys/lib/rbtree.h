@@ -44,8 +44,11 @@ struct rb_augment_callbacks {
     void (*rotate)(struct rb_node *old, struct rb_node *new_);
 };
 
-/* The structure of type `type` whose member `member` is the node `ptr`. */
-#define rb_entry(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
+/* The structure of type `type` whose member `member` is the node `ptr`; the
+ * casts through integers and `void *` keep the node's alignment and drop a
+ * `const` the caller's node may carry. */
+#define rb_entry(ptr, type, member) \
+    ((type *)(void *)((char *)(uintptr_t)(ptr) - offsetof(type, member)))
 
 /* The parent of a node, NULL at the root. */
 #define rb_parent(r) ((struct rb_node *)((r)->rb_parent_color & ~(uintptr_t)3))
