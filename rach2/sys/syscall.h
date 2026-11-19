@@ -37,12 +37,11 @@ void syscall_unlock(int abi, syscall_fn_t handler);
 /**
  * Whether the system call in `params` takes the big lock at its entry:
  * nonzero unless its handler is marked (`syscall_unlock`) and the thread
- * has nothing at the entry that needs the lock, descriptor holds left from
- * before, or USB sticks to publish (`usbdisk_pending`). A tracer's entry
- * stop and a seccomp filter take the lock for themselves, and the
- * dispatcher judges the call again on the number they leave, so that a
- * traced call runs its handler as an untraced one does, as on Linux.
- * Interrupts are off.
+ * has nothing at the entry that needs the lock, a tracer's stop, a seccomp
+ * filter, descriptor holds left from before, or USB sticks to publish
+ * (`usbdisk_pending`). A thread with none of these runs the call the
+ * number names, so the judgment is that of the handler the call runs after
+ * the tracer's entry stop. Interrupts are off.
  */
 int syscall_entry_locked(const isr_params_t *params);
 
