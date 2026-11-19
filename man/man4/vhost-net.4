@@ -124,7 +124,14 @@ with \-1; the tap is let go once neither ring has it.
 When the owner's address space ends, both rings stop until a new table.
 When the device lets the tap go it logs the frames it moved since it took
 it, as
-.Ql vhost-net: detached: tap0: 22 frames to the guest, 21 from it .
+.Ql vhost-net: detached: tap0: 22 frames to the guest, 21 from it ,
+and adds them to the
+.Li vhost_net_detached_to_guest
+and
+.Li vhost_net_detached_from_guest
+counts of
+.Pa /proc/stat
+.Pq Xr proc 5 .
 The last close of the device's descriptor stops it and lets everything go.
 .Sh LIMITS
 The split ring alone: no indirect descriptors, no event index
@@ -196,7 +203,8 @@ or from a process whose address space is not the owner's.
 .Xr madvise 2 ,
 .Xr kvm 4 ,
 .Xr tap 4 ,
-.Xr virtio-net 4
+.Xr virtio-net 4 ,
+.Xr proc 5
 .Sh HISTORY
 The device follows Linux's drivers/vhost/net.c and drivers/vhost/vhost.c
 and the numbers of linux/vhost.h.
