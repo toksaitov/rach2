@@ -2552,6 +2552,13 @@ static void delack_rows(void)
     CHECK("and so is the segment that fills the hole", n_segs == 2 && last_ack() == peer_seq);
 
     n_segs = 0;
+    rx(120, lport, peer_seq + 100u, conn->snd_nxt, (uint8_t)(F_ACK | F_FIN), 65535, (const char *)0,
+       0);
+    CHECK("a bare FIN past a hole is acknowledged at once, at the hole",
+          n_segs == 1 && last_ack() == peer_seq && conn->state == TCP_ESTABLISHED &&
+              conn->ack_sched == 0);
+
+    n_segs = 0;
     rx_data(conn, 120, lport, &peer_seq, (uint8_t)(F_ACK | F_FIN), 10);
     CHECK("a FIN is acknowledged at once",
           n_segs == 1 && last_ack() == peer_seq + 1u && conn->state == TCP_CLOSE_WAIT);
