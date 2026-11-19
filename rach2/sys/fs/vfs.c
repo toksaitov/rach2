@@ -1721,19 +1721,24 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
     return vfs_name_capture(parent, leaf, record->entry);
 }
 
-/** Record the name of `ino` in the directory `parent` when a walk arrived
- * at the inode without going through that name. The name sequence read
- * before finding `parent` covers the scan and capture. A directory moved
- * or removed in the meantime may have no name to record. */
+/** Record the name of `ino` in `parent` after arriving without an entry.
+ * The directory handle is internal to the walk, so use the type's entry
+ * points without counting a VFS open or release. `seq` covers the parent
+ * lookup and the scan. Return 0 with the record, or without one if the
+ * directory could not be scanned or names changed. Return -ENOMEM if the
+ * record could not be allocated. */
 static int walk_parent_entry(const struct vfs_ref *parent, uint64_t ino, uint32_t seq,
                              struct vfs_name **entry)
 {
+    struct vfs_mount *base = mount_base(parent->mnt);
+    const struct vfs_ops *ops = base->type->ops;
     struct vfs_dirent ent;
     uint32_t cursor = 0;
-    void *handle;
+    void *handle = parent->node;
     int rc;
 
-    if (vfs_open_node(parent->mnt, parent->node, 0, &handle) != 0) {
+    if (vfs_mount_gone(parent->mnt) ||
+        (ops->open && ops->open(base, parent->node, 0, &handle) != 0)) {
         return 0;
     }
     while ((rc = vfs_readdir(parent->mnt, handle, &cursor, &ent)) > 0) {
@@ -1742,7 +1747,9 @@ static int walk_parent_entry(const struct vfs_ref *parent, uint64_t ino, uint32_
         }
     }
     rc = rc > 0 ? vfs_name_capture_at(parent, ent.name, seq, entry) : 0;
-    vfs_release(parent->mnt, handle);
+    if (ops->release) {
+        ops->release(base, handle);
+    }
     return rc == -EAGAIN ? 0 : rc;
 }
 
@@ -1769,7 +1776,7 @@ static int walk_record_dots(struct walk_record *record, const struct vfs_ref *cu
         (base == mounts[0] && cur->mnt->type == &vfs_krffs_type) || !ops->hold || !ops->put ||
         !ops->lookup || !ops->readdir || !vfs_name_seq(&seq) ||
         vfs_getattr(cur->mnt, cur->node, &st) != 0 || (st.mode & 0170000u) != 0040000u ||
-        ops->lookup(base, cur->node, "..", &parent.node) != 0) {
+        !st.nlink || ops->lookup(base, cur->node, "..", &parent.node) != 0) {
         return 0;
     }
     parent.mnt = cur->mnt;
