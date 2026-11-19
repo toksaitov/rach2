@@ -2795,13 +2795,13 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
     uint32_t chunk;
     int rc;
 
-    if (krffs_root_halted()) {
-        return -EIO;
-    }
     if (most == 0) {
         most = 1;
     }
     while (count > 0) {
+        if (krffs_root_halted()) {
+            return -EIO;
+        }
         chunk = count < most ? count : most;
         rc =
             dev->write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
@@ -3172,7 +3172,12 @@ static int krffs_root_mark_and_reap(void)
 {
     uint32_t reaped;
     uint16_t mode = 0;
-    int read = pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode));
+    int read;
+
+    if (krffs_root_halted()) {
+        return 0;
+    }
+    read = pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode));
 
     if (read == 0 && (mode & KRFFS_MODE_DIRTY)) {
         klog(KLOG_WARN, "krffs", "not cleanly unmounted last time; run fsck.krffs");
@@ -3191,6 +3196,7 @@ static int krffs_root_mark_and_reap(void)
         klog(KLOG_WARN, "krffs",
              "orphan scan: a read or a free failed; writes refused until the next mount");
     } else if (reaped != 0 && pc_sync() != 0) {
+        krffs_root_halt();
         klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
     }
     return 0;

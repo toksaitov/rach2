@@ -1523,6 +1523,10 @@ static int flush_firsts(block_device_t *dev)
     uint64_t seen = dev->firsts_unflushed;
     int rc;
 
+    if (dev->flags & BLOCK_WRITES_HALTED) {
+        cache_unlock(lf);
+        return -EIO;
+    }
     cache_unlock(lf);
     rc = block_flush(dev);
     if (rc == 0) {

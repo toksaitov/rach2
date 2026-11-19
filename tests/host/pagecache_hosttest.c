@@ -22,7 +22,8 @@
  * is the kernel's: pagecache.c's `pc_wait_release` and its queue, built
  * with PAGECACHE_HOST_WAIT, over proc/wait_queue.c, included whole with
  * WAIT_QUEUE_HOSTTEST, and a model `schedule` that lets the pin go only once
- * the caller is blocked on the queue.
+ * the caller is blocked on the queue. The same fixture extracts the root
+ * write and boot scan from kernel.c and the device flush from bcache.c.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
@@ -569,6 +570,109 @@ static void test_sync_wait(void)
         }
     }
 }
+
+#include "block/block.h"
+#include "fs/krffs.h"
+#include "lib/kerrno.h"
+
+static block_partition_t _krffs_disk_part;
+static int root_stopped, device_calls, reap_calls;
+
+#ifndef KLOG_WARN
+#define KLOG_WARN 4
+#define KLOG_INFO 6
+#endif
+
+/** The mount's writeback gate, which a sleeping device request can close. */
+int krffs_root_halted(void)
+{
+    return root_stopped;
+}
+
+/** Record a failed recovery writeback. */
+void krffs_root_halt(void)
+{
+    root_stopped = 1;
+}
+
+/** The reaper left one dirty page and completed one removal. */
+uint32_t krffs_reap_orphans(void)
+{
+    reap_calls++;
+    touch(1, 1, 77);
+    return 1;
+}
+
+/** The device accepts one page per request. */
+uint32_t block_max_sectors(block_device_t *dev)
+{
+    (void)dev;
+    return PC_PAGE_SIZE / BLOCK_SECTOR_SIZE;
+}
+
+/** Halt while the first device write sleeps and let that request finish. */
+static int halt_during_write(block_device_t *dev, uint64_t lba, uint32_t count, const void *data)
+{
+    (void)dev;
+    (void)lba;
+    (void)count;
+    (void)data;
+    device_calls++;
+    root_stopped = 1;
+    return 0;
+}
+
+/** This single-threaded block-cache fixture has no competing lock holder. */
+static uint32_t cache_lock(void)
+{
+    return 0;
+}
+
+/** Release the model cache lock. */
+static void cache_unlock(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** Count each flush that reaches the device. */
+int block_flush(block_device_t *dev)
+{
+    (void)dev;
+    device_calls++;
+    return 0;
+}
+
+#include "disk_recovery.inc"
+
+/** Check device submissions, the boot dirty mark and final repair sync. */
+static void disk_recovery_rows(void)
+{
+    static uint8_t pages[2 * PC_PAGE_SIZE];
+    block_device_t *dev = &_krffs_disk_part.device;
+
+    dev->write = halt_during_write;
+    root_stopped = device_calls = 0;
+    CHECK(krffs_disk_write(0, pages, 2) == -EIO && device_calls == 1);
+    dev->flags |= BLOCK_WRITES_HALTED;
+    device_calls = 0;
+    CHECK(flush_firsts(dev) == -EIO && device_calls == 0);
+    dev->flags &= ~BLOCK_WRITES_HALTED;
+    device_calls = 0;
+    CHECK(flush_firsts(dev) == 0 && device_calls == 1);
+
+    init_pagecache();
+    pc_set_backing(fake_read, fake_write, sizeof(fake_disk));
+    device_calls = reap_calls = 0;
+    root_stopped = 1;
+    CHECK(krffs_root_mark_and_reap() == 0 && !reap_calls && !pc_stat_reads());
+    root_stopped = 0;
+    fake_write_fail = 1;
+    CHECK(krffs_root_mark_and_reap() == 0 && root_stopped && pc_dirty_count() == 1);
+    fake_write_fail = FAKE_NO_FAIL;
+    root_stopped = 0;
+    pc_set_backing(NULL, NULL, 0);
+}
+
 #endif
 
 /**
@@ -597,7 +701,7 @@ static void test_sync_wait(void)
  * - `test_sleeping_writeback`, `test_failure_hook`, and with
  *   PAGECACHE_SYNC_HOSTTEST `test_sync_wait`.
  */
-int main(void)
+static int page_rows(void)
 {
     uint32_t p;
     uint32_t i;
@@ -695,6 +799,7 @@ int main(void)
     test_copies();
 #ifdef PAGECACHE_SYNC_HOSTTEST
     test_sync_wait();
+    disk_recovery_rows();
 #endif
 #ifdef _WIN32
     printf("pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
@@ -702,4 +807,19 @@ int main(void)
     dprintf(1, "pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
 #endif
     return fails ? 1 : 0;
+}
+
+/** Select the isolated disk failures or all page-cache cases. */
+int main(int argc, char **argv)
+{
+#ifdef PAGECACHE_SYNC_HOSTTEST
+    if (argc == 2 && __builtin_strcmp(argv[1], "failures") == 0) {
+        disk_recovery_rows();
+        return fails != 0;
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
+    return page_rows();
 }
