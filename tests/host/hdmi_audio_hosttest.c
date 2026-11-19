@@ -608,14 +608,49 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
     return 0xf7e34000u;
 }
 
+/* The function's power state, D0 unless a row sets the firmware's D3hot;
+ * whether its header was saved before a change of state and written back
+ * after; and the decodes enabled while it was not in D0. */
+static int pci_d_state;
+static int pci_saved, pci_restored, pci_enabled_asleep;
+
+int pci_power_state(const pci_device_t *dev)
+{
+    (void)dev;
+    return pci_d_state;
+}
+
+int pci_set_power_state(const pci_device_t *dev, int state)
+{
+    (void)dev;
+    pci_d_state = state;
+    return 0;
+}
+
+void pci_save_state(const pci_device_t *dev, struct pci_saved_state *st)
+{
+    (void)dev;
+    (void)st;
+    pci_saved = pci_d_state != PCI_D0;
+}
+
+void pci_restore_state(const pci_device_t *dev, const struct pci_saved_state *st)
+{
+    (void)dev;
+    (void)st;
+    pci_restored = pci_saved && pci_d_state == PCI_D0;
+}
+
 void pci_enable_memory_space(pci_device_t *dev)
 {
     (void)dev;
+    pci_enabled_asleep += pci_d_state != PCI_D0;
 }
 
 void pci_enable_bus_master(pci_device_t *dev)
 {
     (void)dev;
+    pci_enabled_asleep += pci_d_state != PCI_D0;
 }
 
 int32_t devfs_node_register(struct devfs_node *node)
