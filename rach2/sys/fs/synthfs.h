@@ -579,6 +579,11 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_KERNEL_MM       58 /* /sys/kernel/mm */
 #define SYSFS_THP             59 /* /sys/kernel/mm/transparent_hugepage */
 #define SYSFS_THP_PMD_SIZE    3  /* its hpage_pmd_size, the one read-only file */
+/* /sys/kernel/mm/transparent_hugepage/khugepaged, whose two counts are
+ * read-only. */
+#define SYSFS_THP_KHUGEPAGED  60
+#define SYSFS_KHP_FULL_SCANS  2 /* full_scans */
+#define SYSFS_KHP_COLLAPSED   6 /* pages_collapsed */
 
 /* The `procfile` of each file of a PCI function's directory, by Linux's
  * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number

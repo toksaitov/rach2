@@ -1,6 +1,7 @@
 /*
- * thp.c: the policy, the counters and khugepaged of transparent huge pages,
- * as thp.h describes. The pages themselves are paging.c's.
+ * thp.c: the policy, the counters and khugepaged's scan of transparent huge
+ * pages, as thp.h describes. The pages are paging.c's and khugepaged's
+ * thread khugepaged.c's.
  */
 
 #include "thp.h"
@@ -8,6 +9,7 @@
 #include "paging.h"
 #include "vm.h"
 
+#include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
 
 struct thp_policy thp_policy = {
@@ -86,10 +88,47 @@ int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t star
 #endif
 }
 
-void thp_init(void)
+uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem)
 {
-    paging_thp_init();
-}
+#if MMU_HUGE
+    const vma_t *r;
+    uintptr_t addr;
+    uint32_t done = 0;
 
-void thp_policy_changed(void)
-{}
+    for (r = vm_lower(&mm->vm, mm->thp_next); r && done < budget; r = vm_next(r)) {
+        addr = r->start > mm->thp_next ? r->start : mm->thp_next;
+        addr = (addr + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
+        done++;
+        if (addr < r->start || addr >= r->end || r->end - addr < HUGE_SPAN ||
+            !thp_region_allows(mm, r, addr, THP_SCAN)) {
+            mm->thp_next = r->end;
+            continue;
+        }
+        for (; r->end - addr >= HUGE_SPAN && done < budget; addr += HUGE_SPAN) {
+            mm->thp_next = addr + HUGE_SPAN;
+            done += HUGE_SPAN / PAGE_SIZE;
+            if (paging_collapse(mm, addr, THP_SCAN) == -ENOMEM) {
+                *nomem = 1;
+                return done;
+            }
+            if (addr + HUGE_SPAN < addr) {
+                break;
+            }
+        }
+        if (r->end - addr < HUGE_SPAN) {
+            mm->thp_next = r->end;
+        }
+    }
+    if (!r && done < budget) {
+        mm->thp_pass = pass;
+        mm->thp_next = 0;
+    }
+    return done;
+#else
+    (void)mm;
+    (void)budget;
+    (void)pass;
+    (void)nomem;
+    return 0;
+#endif
+}

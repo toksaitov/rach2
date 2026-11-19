@@ -434,6 +434,29 @@ void paging_thp_init(void);
  * map: AnonHugePages of a region's smaps. 0 where no entry maps one. */
 unsigned long paging_user_huge(page_dir_t *dir, uintptr_t start, uintptr_t end);
 
+#if MMU_HUGE
+/**
+ * Collapse the 2 MiB of `mm` from the 2 MiB boundary `start` into one huge
+ * page, for khugepaged (`how` THP_SCAN) or MADV_COLLAPSE (THP_COLLAPSE), as
+ * Linux 6.12's collapse_huge_page: when the region allows it
+ * (`thp_region_allows`) and the entries pass `collapse_scan`, a new huge
+ * page is taken, the ranges registered on the space hear that the old
+ * pages go (MMN_DROP), the entries lose their present bit under the big
+ * lock and every processor drops their translations, as Linux's
+ * pmdp_collapse_flush, so that no thread writes a page while it is copied;
+ * then each page is copied into its place in the new one, and each entry
+ * with no page, or with a page a read left zeroed, is zeroed; and the
+ * entries name the new frames, writable as the region is, and the
+ * directory entry becomes the huge page. The old frames' references go
+ * last. The caller holds the regions' lock to write, so no fault or pin
+ * of this space runs meanwhile. 0 when the range is a huge page now, or
+ * already was; otherwise the negative errno of `collapse_scan`, -ENOMEM
+ * when no huge page could be had, or -EINVAL when the region does not
+ * allow one.
+ */
+int paging_collapse(struct mm *mm, uintptr_t start, int how);
+#endif
+
 /**
  * Unmap the present user pages of [start, end) in `dir`, page-aligned: each
  * has its entry cleared and its translation dropped wherever a processor
