@@ -759,7 +759,8 @@ int pc_fault(uintptr_t fault_address, int write)
  * or -1 with no backing, for a range past the backed size, or when a page
  * cannot be read or given a slot; the pieces before it are copied.
  */
-static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size)
+static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size,
+                   int (*halted)(void))
 {
     if (!pc_read || off > pc_fs_size || size > pc_fs_size - off) {
         return -1;
@@ -785,7 +786,7 @@ static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size
         for (i = 0; i < k; ++i) {
             pc_slots[slots[i]].held = 0;
         }
-        if (failed) {
+        if (failed || (halted && halted())) {
             pc_leave(flags, bkl);
             return -1;
         }
@@ -822,12 +823,18 @@ static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size
 
 int pc_copy_out(uint32_t off, void *buf, uint32_t size)
 {
-    return pc_copy(off, (uint8_t *)buf, 0, size);
+    return pc_copy(off, (uint8_t *)buf, 0, size, 0);
 }
 
 int pc_copy_in(uint32_t off, const void *buf, uint32_t size)
 {
-    return pc_copy(off, 0, (const uint8_t *)buf, size);
+    return pc_copy(off, 0, (const uint8_t *)buf, size, 0);
+}
+
+/** Check the backing's halt after fetching the pages and before copying. */
+int pc_copy_in_checked(uint32_t off, const void *buf, uint32_t size, int (*halted)(void))
+{
+    return pc_copy(off, 0, (const uint8_t *)buf, size, halted);
 }
 
 uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written)
