@@ -5,10 +5,11 @@
 #
 #   prepare.sh freebsd|debian OUT
 #
-# It runs on a Linux host with QEMU, qemu-img, xorriso, curl and xz, under
-# KVM where /dev/kvm opens; ACCEL=tcg or ACCEL=kvm chooses. OUT is the
-# prepared image, a compressed qcow2 with no backing file, which is written
-# beside OUT.record, the guest's `NETGUEST RECORD` lines and the host's.
+# It runs on a Linux host with QEMU, qemu-img, xorriso, curl, xz and flock,
+# and sha512sum for Debian, under KVM where /dev/kvm opens; ACCEL=tcg or
+# ACCEL=kvm chooses. OUT is the prepared image, a compressed qcow2 with no
+# backing file, written after OUT.record, the guest's `NETGUEST RECORD`
+# lines and the host's, so that an OUT that exists has its record.
 #
 # The system's image is FreeBSD 15.1's BASIC-CLOUDINIT image, which
 # freebsd/image pins by URL and SHA-256 and which is fetched into the cache
@@ -36,9 +37,12 @@
 # SYSTEM.qcow2 with SYSTEM.key, the digest of what it was made from, and
 # SYSTEM.console.log, the console of the last preparation, kept after a
 # failure too; a cached image whose key is the inputs' digest is linked or
-# copied to OUT without a boot. The last line is `netguest-prepare: result:
-# prepared OUT` or `netguest-prepare: result: fail: REASON`, with status 0
-# or 1; a usage error is status 2.
+# copied to OUT without a boot. The key covers this script, the system's
+# files, its image's pins and, for Debian, debian-ref.sh, and is taken once,
+# before the boot. A download enters the cache only once its digest checks.
+# One preparation runs on a cache at a time, under flock. The last line is
+# `netguest-prepare: result: prepared OUT` or `netguest-prepare: result:
+# fail: REASON`, with status 0 or 1; a usage error is status 2.
 #
 # A prepared guest takes its parameters and reports as its netguest.sh
 # says: one line in the first sector of its second virtio disk,
@@ -73,14 +77,16 @@ pin()
 }
 
 # inputs_key: print the digest of what the system's prepared image is made
-# from: its recipe, its image's pins and the words of its boot.
+# from: this script, its recipe, its image's pins, the script that fetches
+# Debian's image, and the words of its boot.
 inputs_key()
 {
     {
-        cat "$here/$system/setup.sh" "$here/$system/netguest.sh" "$here/$system/meta-data"
+        cat "$here/prepare.sh" "$here/$system/setup.sh" "$here/$system/netguest.sh" \
+            "$here/$system/meta-data"
         case $system in
             freebsd) cat "$here/freebsd/image" ;;
-            debian) cat "$debian_ref/image" ;;
+            debian) cat "$debian_ref/image" "$debian_ref/debian-ref.sh" ;;
         esac
         echo "cpus $cpus mib $mib"
     } | sha256sum | cut -d ' ' -f 1
@@ -97,7 +103,8 @@ cleanup()
         [ ! -f "$work/console.log" ] || cp "$work/console.log" "$cache/$system.console.log"
         rm -rf "$work"
     fi
-    rm -f "$out.part"
+    rm -f "$out.part.$$" "$out.record.part.$$" "$cache/$system.qcow2.part.$$" \
+        "$cache/$system.record.part.$$"
 }
 
 # base_image: set `base` to the system's image, a qcow2, and `named` to
@@ -109,15 +116,22 @@ base_image()
             url=$(pin "$here/freebsd/image" url)
             sum=$(pin "$here/freebsd/image" sha256)
             packed=$cache/$(basename "$url")
+            if [ -f "$packed" ] && ! echo "$sum  $packed" | sha256sum -c --quiet - 2> /dev/null; then
+                echo "netguest-prepare: $packed has another SHA-256; fetching it again"
+                rm -f "$packed"
+            fi
             if [ ! -f "$packed" ]; then
                 echo "netguest-prepare: fetching $url"
                 curl -sSfL -o "$packed.part.$$" "$url" || {
                     rm -f "$packed.part.$$"
                     die "cannot fetch $url"
                 }
+                echo "$sum  $packed.part.$$" | sha256sum -c --quiet - || {
+                    rm -f "$packed.part.$$"
+                    die "$url: SHA-256 differs"
+                }
                 mv "$packed.part.$$" "$packed"
             fi
-            echo "$sum  $packed" | sha256sum -c --quiet - || die "$packed: SHA-256 differs"
             base=$work/base.qcow2
             xz -dc "$packed" > "$base" || die "cannot unpack $packed"
             named="image $(basename "$url") sha256 $sum"
@@ -135,8 +149,7 @@ base_image()
 # the result in the cache as SYSTEM.qcow2 with its key and record.
 boot()
 {
-    work=$cache/prepare-$system
-    rm -rf "$work"
+    work=$(mktemp -d "$cache/prepare-$system.XXXXXX") || die "no scratch directory in $cache"
     mkdir -p "$work/seed"
     base_image
 
@@ -198,22 +211,25 @@ boot()
     wait "$qemu" || die "$system: QEMU exited with an error"
     qemu=''
 
-    rm -f "$cache/$system.qcow2" "$cache/$system.key" "$cache/$system.qcow2.part"
-    qemu-img convert -c -O qcow2 "$work/disk.qcow2" "$cache/$system.qcow2.part" ||
+    rm -f "$cache/$system.qcow2" "$cache/$system.key"
+    part=$cache/$system.qcow2.part.$$
+    qemu-img convert -c -O qcow2 "$work/disk.qcow2" "$part" ||
         die "$system: the prepared image was not written"
-    if qemu-img info "$cache/$system.qcow2.part" | grep -q '^backing file'; then
+    info=$(qemu-img info "$part") || die "$system: qemu-img cannot read the prepared image"
+    if echo "$info" | grep -q '^backing file'; then
         die "$system: the prepared image has a backing file"
     fi
-    chmod a-w "$cache/$system.qcow2.part"
-    mv "$cache/$system.qcow2.part" "$cache/$system.qcow2"
+    chmod a-w "$part"
     {
         grep -a 'NETGUEST RECORD ' "$console" | tr -d '\r' | sed 's/^.*NETGUEST RECORD //'
         echo "$named"
         echo "accelerator $accel"
         echo "qemu $(qemu-system-x86_64 --version | head -n 1)"
-        echo "bytes $(wc -c < "$cache/$system.qcow2")"
-    } > "$cache/$system.record"
-    inputs_key > "$cache/$system.key"
+        echo "bytes $(wc -c < "$part")"
+    } > "$cache/$system.record.part.$$" || die "$system: the record was not written"
+    mv "$cache/$system.record.part.$$" "$cache/$system.record"
+    mv "$part" "$cache/$system.qcow2"
+    echo "$key" > "$cache/$system.key"
 }
 
 [ $# -eq 2 ] || usage
@@ -222,7 +238,9 @@ case $system in
     freebsd | debian) ;;
     *) usage ;;
 esac
-for tool in qemu-system-x86_64 qemu-img xorriso sha256sum curl xz; do
+tools='qemu-system-x86_64 qemu-img xorriso sha256sum curl xz flock'
+[ "$system" = freebsd ] || tools="$tools sha512sum"
+for tool in $tools; do
     command -v "$tool" > /dev/null || die "no $tool on this host"
 done
 ! grep -q -x NETGUEST_EOF "$here/$system/netguest.sh" ||
@@ -233,18 +251,20 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 # One preparation of a cache at a time.
-if command -v flock > /dev/null; then
-    exec 9>> "$cache/prepare.lock"
-    flock 9 || die "cannot lock $cache/prepare.lock"
-fi
-if [ ! -f "$cache/$system.qcow2" ] || [ "$(cat "$cache/$system.key" 2> /dev/null)" != "$(inputs_key)" ]; then
+exec 9>> "$cache/prepare.lock"
+flock 9 || die "cannot lock $cache/prepare.lock"
+key=$(inputs_key)
+if [ ! -f "$cache/$system.qcow2" ] || [ ! -f "$cache/$system.record" ] ||
+    [ "$(cat "$cache/$system.key" 2> /dev/null)" != "$key" ]; then
     boot
 fi
 mkdir -p "$(dirname "$out")"
-# A link where the file system allows it: the image is a gigabyte or more.
-rm -f "$out.part"
-ln "$cache/$system.qcow2" "$out.part" 2> /dev/null || cp "$cache/$system.qcow2" "$out.part" ||
+# The record first, then the image, each whole before it takes its name; a
+# link where the file system allows it, since the image is a gigabyte or
+# more.
+cp "$cache/$system.record" "$out.record.part.$$" || die "the record was not copied beside $out"
+mv -f "$out.record.part.$$" "$out.record" || die "the record was not kept beside $out"
+ln "$cache/$system.qcow2" "$out.part.$$" 2> /dev/null || cp "$cache/$system.qcow2" "$out.part.$$" ||
     die "the image was not copied to $out"
-mv -f "$out.part" "$out"
-cp "$cache/$system.record" "$out.record" || die "the record was not copied beside $out"
+mv -f "$out.part.$$" "$out"
 echo "netguest-prepare: result: prepared $out"
