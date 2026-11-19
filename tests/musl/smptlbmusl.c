@@ -28,11 +28,18 @@
  * and has its tick at the carry wait half a tick, so that processor 0's
  * tick at the same edge is done, write the count's lower half, wait for a
  * read of that thread's clock or its process's to begin, and write the
- * upper half a millisecond later, and the child's main thread on processor
- * 0 reads the thread's clock and the process's over and over until the
- * count is past 2^32: each reading is no less than the one before and no
- * more than a second past it, as a count read whole gives, and one of
- * those reads, not another process's, began while the halves were apart.
+ * upper half a millisecond later; such a read that begins while the carry
+ * is due waits for the halves to come apart. The child's main thread on
+ * processor 0 reads the thread's clock and the process's over and over
+ * until the count is past 2^32 and a carry had a read under way: each
+ * reading is no less than the one before and less than 2^31 ticks past it,
+ * as a count read whole gives, where one read with its halves apart is 2^32
+ * ticks off, and one of those reads, not another process's, began while the
+ * halves were apart. A carry that no read begins in within five ticks,
+ * since a processor of the virtual machine did not run, is given up and
+ * made again by the next tick, and a reading may move by many ticks at once
+ * after a processor ran with interrupts off; the run prints the carries
+ * made and given up, which are the machine's and not judged.
  *
  * Prints "SMPTLBMUSL OK" and exits 0, or "SMPTLBMUSL FAIL: " and the reason
  * and exits 1.
@@ -288,11 +295,13 @@ static long long clock_ns(clockid_t clock)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-/** Whether the reading `now` of a clock of processor time follows `before`
- * as a count read whole does: no less, and no more than a second past. */
-static int follows(long long before, long long now)
+/** Whether the reading `now` of a clock of processor time of `tick`
+ * nanoseconds a tick follows `before` as a count read whole does: no less,
+ * and less than 2^31 ticks past, half what a count read with its halves
+ * apart is off by. */
+static int follows(long long before, long long now, long long tick)
 {
-    return now >= before && now - before < 1000000000LL;
+    return now >= before && now - before < ((long long)1 << 31) * tick;
 }
 
 /** Read the carries of debugfs's cputime_test that a read of the carried
@@ -315,11 +324,11 @@ static long contested(void)
     return sscanf(line, "%ld %ld %ld %ld", &v[0], &v[1], &v[2], &v[3]) == 4 ? v[3] : -1;
 }
 
-/** Print why `untorn_child` exits 3: the carried thread's last reading in
- * ticks against the `need` it had to pass, the milliseconds the reads took,
- * and debugfs's cputime_test line, whose third and fourth numbers are the
- * carries and the carries a read of the thread's clock or its process's
- * was under way in. */
+/** Print the record of `untorn_child`: the carried thread's last reading
+ * in ticks against the `need` it had to pass, the milliseconds the reads
+ * took, and debugfs's cputime_test line, whose third, fourth and fifth
+ * numbers are the carries, the carries a read of the thread's clock or its
+ * process's was under way in, and the carries given up for want of one. */
 static void untorn_counts(long long ticks, long long need, long long ms)
 {
     char line[96];
@@ -330,9 +339,8 @@ static void untorn_counts(long long ticks, long long need, long long ms)
         close(fd);
     }
     line[n > 0 ? n : 0] = 0;
-    printf("smptlbmusl: untorn: thread %lld ticks of %lld after %lld ms, %s; cputime_test %s",
-           ticks, need, ms, ticks < need ? "count short" : "no read in a carry",
-           n > 0 ? line : "unread\n");
+    printf("smptlbmusl: untorn: thread %lld ticks of %lld after %lld ms; cputime_test %s", ticks,
+           need, ms, n > 0 ? line : "unread\n");
     fflush(stdout);
 }
 
@@ -342,9 +350,11 @@ static void untorn_counts(long long ticks, long long need, long long ms)
  * meanwhile. Exits 0 when every reading followed the one before and a read
  * was under way while the carry's halves were apart, one that began then or
  * began before and waited for the carry's lock, 2 for a reading that did not
- * follow, 3 when the count was not seen past 2^32 within a minute of
- * monotonic time or no read was under way in the carry, and 4 when the
- * thread or cputime_test failed.
+ * follow, 3 when within a minute of monotonic time the count was not seen
+ * past 2^32 with a read under way in a carry, and 4 when the thread or
+ * cputime_test failed. The thread's clock counts its system time as well as
+ * the user time that carries, so it can pass 2^32 ticks before the carry;
+ * the reads go on until cputime_test has counted a carry with a read.
  */
 static void untorn_child(void)
 {
@@ -375,8 +385,8 @@ static void untorn_child(void)
     do {
         thread_now = clock_ns(clock);
         process_now = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
-        if ((thread_before != 0 && !follows(thread_before, thread_now)) ||
-            (process_before != 0 && !follows(process_before, process_now))) {
+        if ((thread_before != 0 && !follows(thread_before, thread_now, tick)) ||
+            (process_before != 0 && !follows(process_before, process_now, tick))) {
             printf("smptlbmusl: untorn: thread %lld after %lld, process %lld after %lld\n",
                    thread_now, thread_before, process_now, process_before);
             torn = 1;
@@ -385,15 +395,14 @@ static void untorn_child(void)
         thread_before = thread_now;
         process_before = process_now;
         clock_gettime(CLOCK_MONOTONIC, &at);
-    } while (thread_now < end && ns_between(&start, &at) < 60000000000LL);
+    } while ((thread_now < end || contested() < 1) && ns_between(&start, &at) < 60000000000LL);
     carry_stop = 1;
     pthread_join(carry, NULL);
+    untorn_counts(thread_now / tick, end / tick, ns_between(&start, &at) / 1000000);
     if (torn) {
-        fflush(stdout);
         _exit(2);
     }
     if (thread_now < end || contested() < 1) {
-        untorn_counts(thread_now / tick, end / tick, ns_between(&start, &at) / 1000000);
         _exit(3);
     }
     _exit(0);
