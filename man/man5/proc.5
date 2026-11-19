@@ -399,8 +399,8 @@ lists.
 Linux's names and values of the counters the kernel keeps: nr_free_pages,
 nr_file_pages, the pages of the page and buffer caches, pgpgin and pgpgout,
 the kibibytes read from and written to the whole disks since boot,
-nr_anon_transparent_hugepages, the transparent huge pages mapped, the huge
-zero page's mappings aside, and pswpin and pswpout, 0, since nothing is
+nr_anon_transparent_hugepages, the transparent huge pages mapped, each
+once however many processes map it, the huge zero page aside, and pswpin and pswpout, 0, since nothing is
 swapped; then the events of transparent huge pages the kernel counts:
 thp_fault_alloc, thp_fault_fallback, thp_collapse_alloc,
 thp_collapse_alloc_failed, thp_split_page, thp_underused_split_page,
@@ -694,8 +694,8 @@ and
 are both
 .Ql 0 kB .
 .Li AnonHugePages
-is the memory transparent huge pages map, 2 MiB for each mapping of one,
-the huge zero page's aside.
+is the memory transparent huge pages map, 2 MiB for each, however many
+processes map it, the huge zero page aside.
 .Li KReclaimable
 is the kernel heap's freed runs, kept mapped for reuse, which reclaim gives
 back.

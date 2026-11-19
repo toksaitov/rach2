@@ -1578,7 +1578,7 @@ is 1, and khugepaged collapses small pages into huge ones; see
 .Xr madvise 2 .
 .Pa defrag
 reads back and changes nothing, since there is no compaction.
-On i686, which Linux gives no huge pages, every policy reads back and
+On i686, where Rach2 maps no huge page, every policy reads back and
 memory is mapped in 4 KiB pages.
 .Pp
 The files under
@@ -1603,9 +1603,7 @@ and the read-only
 .Pa full_scans ,
 its passes over every process, and
 .Pa pages_collapsed ,
-the huge pages it and
-.Dv MADV_COLLAPSE
-made.
+the huge pages it made.
 Root's write of a number as Linux's
 .Fn kstrtouint
 reads it sets the first six, each waking khugepaged:
