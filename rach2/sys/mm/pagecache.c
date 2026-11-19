@@ -41,6 +41,20 @@ static void pc_platform_unmap(uintptr_t va)
     (void)va;
 }
 
+/** Nothing to exclude: a host test has one thread. */
+static uint32_t pc_enter(int *bkl)
+{
+    *bkl = 0;
+    return 0;
+}
+
+/** Undo nothing. */
+static void pc_leave(uint32_t flags, int bkl)
+{
+    (void)flags;
+    (void)bkl;
+}
+
 #ifndef PAGECACHE_HOST_WAIT
 /** Wake nothing: a host test without PAGECACHE_HOST_WAIT has no queue for
  * `pc_wait_release` to sleep on. */
@@ -61,8 +75,10 @@ static unsigned long vm_dirty_bytes;
 #include "pressure.h"
 #include "../fs/bcache.h"
 #include "../klog.h"
+#include "../lib/kirq.h"
 #include "../panic.h"
 #include "../pci.h"
+#include "../proc/smp.h"
 
 #define PC_PAGE_SIZE  PAGE_SIZE
 
@@ -83,6 +99,29 @@ static void pc_platform_map(uintptr_t va, uintptr_t phys, int writable)
 static void pc_platform_unmap(uintptr_t va)
 {
     unmap_kernel_frame(va);
+}
+
+/** Exclude every other caller as a window fault does: interrupts off, then
+ * the big lock unless the thread holds it, which `*bkl` says. The interrupt
+ * flags before, for `pc_leave`. */
+static uint32_t pc_enter(int *bkl)
+{
+    uint32_t flags = kirq_save();
+
+    *bkl = !bkl_held();
+    if (*bkl) {
+        bkl_enter();
+    }
+    return flags;
+}
+
+/** Give back what `pc_enter` took. */
+static void pc_leave(uint32_t flags, int bkl)
+{
+    if (bkl) {
+        bkl_exit();
+    }
+    kirq_restore(flags);
 }
 
 #endif
@@ -638,22 +677,20 @@ static int32_t pc_get_slot(void)
     return -1;
 }
 
-/** A hit is a write to a page mapped read-only, the only fault a resident
- * page of the window takes: the page is made writable and marked dirty. */
-int pc_fault(uintptr_t fault_address, int write)
+/**
+ * Bring the page at `disk_off`, page-aligned and inside the backed size, into
+ * a slot: the slot's index, or -1 when no slot can be had or the read fails,
+ * which leaves nothing resident. The page is mapped read-only for a read, or
+ * writable and marked dirty for a `write`; a hit that is a `write` marks it
+ * dirty and maps it writable, a fault's only work on a resident page, since
+ * a resident page is mapped read-only until written. Interrupts are off and
+ * the caller holds the big lock, so no other caller enters until it returns.
+ */
+static int32_t pc_bring(uint32_t disk_off, int write)
 {
-    uintptr_t page_va = fault_address & ~(uintptr_t)(PC_PAGE_SIZE - 1u);
-    uint32_t disk_off;
+    uintptr_t page_va = PCWIN_BASE + disk_off;
     int32_t slot;
     struct pc_entry *e;
-
-    if (!pc_read || page_va < PCWIN_BASE) {
-        return 0;
-    }
-    if (page_va - PCWIN_BASE >= pc_fs_size) {
-        return 0;
-    }
-    disk_off = (uint32_t)(page_va - PCWIN_BASE);
 
     slot = pc_hash_find(disk_off);
     if (slot >= 0) {
@@ -663,19 +700,19 @@ int pc_fault(uintptr_t fault_address, int write)
             pc_mark_dirty(e);
             pc_platform_map(page_va, e->phys, 1);
         }
-        return 1;
+        return slot;
     }
 
     slot = pc_get_slot();
     if (slot < 0) {
-        return 0;
+        return -1;
     }
     e = &pc_slots[slot];
     e->pinned = 1;
     e->disk_off = disk_off;
     if (pc_read(disk_off, e->page) != 0) {
         pc_unpin(e);
-        return 0;
+        return -1;
     }
     e->valid = 1;
     e->dirty = 0;
@@ -689,7 +726,79 @@ int pc_fault(uintptr_t fault_address, int write)
     pc_unpin(e);
     ++pc_reads;
 
-    return 1;
+    return slot;
+}
+
+int pc_fault(uintptr_t fault_address, int write)
+{
+    uintptr_t page_va = fault_address & ~(uintptr_t)(PC_PAGE_SIZE - 1u);
+
+    if (!pc_read || page_va < PCWIN_BASE) {
+        return 0;
+    }
+    if (page_va - PCWIN_BASE >= pc_fs_size) {
+        return 0;
+    }
+    return pc_bring((uint32_t)(page_va - PCWIN_BASE), write) >= 0;
+}
+
+/**
+ * Copy `size` bytes at byte `off` of the backing, a page at a time through the
+ * slot that holds it (`pc_bring`): into `to` for a read, or out of `from`
+ * into the slot's frame, marked dirty, for a write; the other is NULL. Each
+ * page is brought in and copied with interrupts off and the big lock held,
+ * as a window fault is served, so that no eviction comes between the two.
+ * Returns 0, or -1 with no backing, for a range past the backed size, or
+ * when a page cannot be read or given a slot; the pages before it are
+ * copied.
+ */
+static int pc_copy(uint32_t off, uint8_t *to, const uint8_t *from, uint32_t size)
+{
+    if (!pc_read || off > pc_fs_size || size > pc_fs_size - off) {
+        return -1;
+    }
+    while (size != 0) {
+        uint32_t page = off & ~(PC_PAGE_SIZE - 1u);
+        uint32_t in = off - page;
+        uint32_t n = PC_PAGE_SIZE - in < size ? PC_PAGE_SIZE - in : size;
+        int bkl;
+        uint32_t flags = pc_enter(&bkl);
+        int32_t slot = pc_bring(page, from != 0);
+        uint8_t *frame;
+        uint32_t i;
+
+        if (slot < 0) {
+            pc_leave(flags, bkl);
+            return -1;
+        }
+        frame = (uint8_t *)pc_slots[slot].page + in;
+        for (i = 0; i < n; ++i) {
+            if (from) {
+                frame[i] = from[i];
+            } else {
+                to[i] = frame[i];
+            }
+        }
+        pc_leave(flags, bkl);
+        if (from) {
+            from += n;
+        } else {
+            to += n;
+        }
+        off += n;
+        size -= n;
+    }
+    return 0;
+}
+
+int pc_copy_out(uint32_t off, void *buf, uint32_t size)
+{
+    return pc_copy(off, (uint8_t *)buf, 0, size);
+}
+
+int pc_copy_in(uint32_t off, const void *buf, uint32_t size)
+{
+    return pc_copy(off, 0, (const uint8_t *)buf, size);
 }
 
 uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written)
