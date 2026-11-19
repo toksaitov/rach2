@@ -74,7 +74,8 @@ two full segments the window last offered holds, or 2 when it holds fewer
 than two:
 while any are left, and the connection is not answering what it receives,
 each segment is acknowledged at once.
-Data the peer sends again grants them too and ends the answering mode.
+Data the peer sends again, and data past the window, a probe of a closed
+one among it, grant them too and end the answering mode.
 Otherwise its acknowledgement waits while no more than a full segment is
 unacknowledged, so that every second full segment is acknowledged at once;
 a held acknowledgement goes with the next segment sent, or alone 40 ms
@@ -98,9 +99,10 @@ that mode, and an acknowledgement held for the whole 40 ms ends the mode.
 Data past a hole, the segment that fills it, data received before, a FIN,
 and data in a closing state are acknowledged at once.
 .Pp
-While less than half the buffer is free, less than a sixteenth of it or
-than a full segment is offered as zero, and no window offered is taken
-back, as Linux's
+Every segment offers the window as it stands when it is sent: while less
+than half the buffer is free, less than a sixteenth of it or than a full
+segment is offered as zero, no window offered is taken back, and the quick
+acknowledgements end, as Linux's
 .Fn __tcp_select_window
 offers it.
 A read announces the window it reopened only while the peer has no more
