@@ -277,13 +277,18 @@ Until set they read as the defaults of
 .Pa tcp_keepalive_intvl
 and
 .Pa tcp_keepalive_probes .
+.It Dv TCP_QUICKACK
+At level
+.Dv IPPROTO_TCP
+on a stream socket, 0 holds acknowledgements for the answers to carry, and
+any other value sends a held one at once; reads 0 while they are held so.
 .It Dv TCP_USER_TIMEOUT
 At level
 .Dv IPPROTO_TCP
 on a stream socket, set or get the milliseconds of unacknowledged data
 after which the connection is given up, 0 for the default.
 .Xr tcp 7
-describes the four.
+describes the five.
 On a socket of another type they are accepted without effect and read as
 integer zero.
 .It Dv PACKET_AUXDATA
