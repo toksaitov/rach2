@@ -367,7 +367,8 @@ static void underused_rows(void)
 }
 
 /** A scan of one page, a range a fork left copy-on-write, a locked region,
- * the huge zero page's resident pages and a directory that keeps no table. */
+ * the huge zero page's resident pages, a directory that keeps no table, a
+ * stored page whose dirty bit was lost and the edges of a change. */
 static void edge_rows(void)
 {
     uint32_t allocs, i;
@@ -381,6 +382,35 @@ static void edge_rows(void)
     mm_a.thp_pass = 0;
     check(thp_scan_mm(&mm_a, 1, 8, &nomem) == HUGE_PAGES && is_huge(&dir_a, A),
           "a scan of one page collapses one range, as Linux's scans one at least");
+    drop(&mm_a, A, A + H);
+
+    region(&mm_a, A - 2 * P, A - P, RW);
+    small_pages(3);
+    mmu_user_table(&dir_a, A, 0)[1] |= PTE_ACCESSED;
+    mm_a.thp_next = 0;
+    mm_a.thp_pass = 0;
+    check(thp_scan_mm(&mm_a, 1, 9, &nomem) == HUGE_PAGES + 1 && is_huge(&dir_a, A),
+          "a scan of one page passes over a region that allows none and collapses the next");
+    drop(&mm_a, A, A + H);
+    vm_remove(&mm_a.vm, A - 2 * P, A - P);
+
+    small_pages(3);
+    check(resolve_held(&mm_a, A + 402 * P, 0, LIM) == 1, "a page read");
+    page_at(&dir_a, A + 402 * P)[1] = 0x6b;
+    check(!(pte_of(&dir_a, A + 402 * P) & PTE_DIRTY) &&
+              paging_collapse(&mm_a, A, THP_COLLAPSE) == 0 && is_huge(&dir_a, A) &&
+              page_at(&dir_a, A + 402 * P)[1] == 0x6b,
+          "a page read, stored into and not marked dirty keeps its bytes at a collapse");
+    drop(&mm_a, A, A + H);
+
+    region(&mm_a, A, A + H, RW);
+    check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a huge page");
+    paging_huge_split_edges(&mm_a, A + P, A + 2 * P);
+    check(is_huge(&dir_a, A), "an edge where no region ends leaves the page whole");
+    check(vm_advise(&mm_a.vm, A + P, A + 2 * P, VM_PROT_NOHUGEPAGE, 0) == 0, "a region split");
+    paging_huge_split_edges(&mm_a, A + P, A + 2 * P);
+    check(!mmu_user_huge(&dir_a, A) && (pte_of(&dir_a, A + 5 * P) & PTE_P),
+          "an edge where a region now ends splits the page");
     drop(&mm_a, A, A + H);
 
     small_pages(3);
@@ -410,8 +440,8 @@ static void edge_rows(void)
               dir_a.resident == before,
           "a read of the huge zero page adds no resident page");
     check(resolve_held(&mm_a, A + 3 * P, 1, LIM) == 1 && dir_a.resident == before + 1 &&
-              !dir_a.hidden[0],
-          "a write adds the one page it copies, and the split shows the table again");
+              (pte_of(&dir_a, A + 4 * P) & PTE_P),
+          "a write adds the one page it copies, and the split leaves the others mapped");
     drop(&mm_a, A, A + H);
     check(dir_a.resident == before, "the unmap takes that page away alone");
 
@@ -424,6 +454,18 @@ static void edge_rows(void)
     check(paging_collapse(&mm_a, A, THP_COLLAPSE) == -EINVAL, "and collapses nothing");
     drop(&mm_a, A, A + H);
     model_no_keep = 0;
+}
+
+/** Once refused, as on AMD's family 0x10, no huge page is made. */
+static void refuse_rows(void)
+{
+    thp_policy.enabled = THP_ALWAYS;
+    thp_refuse();
+    check(!fault_maps_huge(A, 0), "once refused, no fault maps a huge page");
+    small_pages(3);
+    check(paging_collapse(&mm_a, A, THP_COLLAPSE) == -EINVAL && !mmu_user_huge(&dir_a, A),
+          "and MADV_COLLAPSE collapses nothing");
+    drop(&mm_a, A, A + H);
 }
 
 /** The protection keys are off in the host test, as on a processor without
@@ -461,5 +503,6 @@ int main(void)
     collapse_rows();
     underused_rows();
     edge_rows();
+    refuse_rows();
     return model_end();
 }

@@ -101,6 +101,72 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
     return (va & ~(SPAN - 1)) + SPAN;
 }
 
+#if MMU_HUGE
+#include "mm/thp.c"
+
+/** 0: the window has no huge page. */
+pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va)
+{
+    (void)dir;
+    (void)va;
+    return 0;
+}
+
+/** -1: the window keeps no table, as a directory of x86-64 made without two
+ * consecutive frames. */
+int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
+{
+    (void)dir;
+    (void)va;
+    (void)leaf;
+    return -1;
+}
+
+/** 0: there is no huge page to clear. */
+pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
+{
+    (void)dir;
+    (void)va;
+    return 0;
+}
+
+/** 0: there is no huge page to change. */
+pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set)
+{
+    (void)dir;
+    (void)va;
+    (void)clear;
+    (void)set;
+    return 0;
+}
+
+/** 0: the window keeps no table. */
+int mmu_user_keeps(page_dir_t *dir, uintptr_t va)
+{
+    (void)dir;
+    (void)va;
+    return 0;
+}
+
+/** 1: the host is no AMD family 0x10 part. */
+int mmu_huge_usable(void)
+{
+    return 1;
+}
+
+/** 0: nothing is kept back. */
+size_t mem_reserve_frames(void)
+{
+    return 0;
+}
+
+/** Nothing: no shrinker is asked. */
+void mem_shrinker_register(struct mem_shrinker *s)
+{
+    (void)s;
+}
+#endif
+
 /** 0: no row loads a directory. */
 uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
