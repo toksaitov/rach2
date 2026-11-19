@@ -2653,8 +2653,9 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     return 0;
 }
 
-/** Rename in the root directory, freeing a destination that still has its
- * name, as the root does. */
+/** Rename in the root directory, as the root does: a destination a holder
+ * keeps loses only its name (`krffs_rename_err` asks `fs_node_is_held`),
+ * and one that still has its name otherwise is freed. */
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                const char *newname)
 {
@@ -2666,7 +2667,10 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
               __builtin_strcmp(oldname, "src") == 0 && __builtin_strcmp(newname, "kept") == 0,
           "the rename moves the names it was given");
     changed_in_lookup_hold();
-    if (victim.name[0] != '\0') {
+    if (fs_node_is_held(&victim)) {
+        victim.name[0] = '\0';
+        keeps++;
+    } else if (victim.name[0] != '\0') {
         removals++;
     }
     return 0;
@@ -2725,20 +2729,28 @@ void krffs_stamp(krffs_node_t *n, int what)
     check(0, "unexpected root node stamp");
 }
 
+/** No row halts the KRFFS root. */
+int krffs_root_halted(void)
+{
+    return 0;
+}
+
 /** Take the name off a node a descriptor holds, keeping the node. */
-void krffs_unlink_held(krffs_node_t *n)
+int krffs_unlink_held(krffs_node_t *n)
 {
     changed_in_lookup_hold();
     n->name[0] = '\0';
     keeps++;
+    return 0;
 }
 
 /** Take the name off a node a holder keeps, keeping the node. */
-void krffs_orphan_node(krffs_node_t *n)
+int krffs_orphan_node(krffs_node_t *n)
 {
     changed_in_lookup_hold();
     n->name[0] = '\0';
     keeps++;
+    return 0;
 }
 
 /** Check successful installation and both failure paths. */

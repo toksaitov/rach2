@@ -288,7 +288,8 @@ would move a directory below itself.
 File system data or metadata could not be read or written, or the
 device was removed.
 KRFFS also reports a rename its core fails after every other check with
-this error.
+this error, and one whose every order of writes would show, after a power
+cut, a name another file already has.
 .It Er EISDIR
 A nondirectory would replace a directory on KRFFS, ext2, FAT32, or
 exFAT.

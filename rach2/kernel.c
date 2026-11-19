@@ -2457,28 +2457,53 @@ static int _krffs_on_disk;
  * flush leaves the cleared byte in a dirty frame and the disk still marked,
  * which errs the same way.
  *
- * The root's mode is read before either flush so that the store which
- * clears the bit needs no disk I/O. The store goes through the demand-paged
- * window, where a fill that cannot be served is a panic and not an error
- * return, and the read first makes it a write fault on a resident frame,
- * which is a remap. `pc_sync` protects frames again but evicts none, so the
- * frame is still resident when the store arrives.
+ * A check owed or a node this mount left without a name keeps the flag
+ * set; both are asked of memory before anything reads the root, so that a
+ * disk that no longer reads cannot panic the shutdown there, and the cache
+ * is flushed for what it can still write.
  *
- * The read itself can still panic. Bringing a page in needs a free frame,
- * taking a frame needs an eviction, and an eviction needs a write; on a disk
- * that can no longer be written, with the root evicted and every slot dirty,
- * the fill fails and the machine panics here instead of returning. That
- * machine has already lost its disk, and the panic leaves the flag set,
- * which is what this function protects. Keeping the root's frame resident
- * for the whole mount would remove the case, and is a change to the page
- * cache.
+ * A change still under way on the root, whose writer holds the root's
+ * namespace lock (`vfs_krffs_root_busy`) and sleeps with scheduling now
+ * off, keeps the flag set too: its writes stop where a power cut would
+ * stop them, and only the next mount's repair finishes them.
+ *
+ * The root's page is brought in by `pc_fault` before either flush, so that
+ * a page that cannot be read or given a frame is an error that keeps the
+ * flag set, and not the panic a fault in the demand-paged window would
+ * be. The store which clears the bit then needs no disk I/O: it is a write
+ * fault on a resident frame, which is a remap, and `pc_sync` protects
+ * frames again but evicts none, so the frame is still resident when the
+ * store arrives.
  */
 static int krffs_disk_mark_clean(void)
 {
     krffs_node_t *root;
     uint16_t mode;
+    int bkl;
+    int resident;
 
     if (!_krffs_on_disk) {
+        return -1;
+    }
+    if (krffs_root_check_owed() || krffs_root_has_orphans() || vfs_krffs_root_busy()) {
+        klog(KLOG_WARN, "krffs", "%s; image stays dirty",
+             krffs_root_check_owed()    ? "check owed"
+             : krffs_root_has_orphans() ? "nodes without a name"
+                                        : "a change is under way");
+        (void)pc_sync();
+        return -1;
+    }
+    bkl = !bkl_held();
+    if (bkl) {
+        bkl_enter();
+    }
+    resident = pc_fault(PCWIN_BASE, 0);
+    if (bkl) {
+        bkl_exit();
+    }
+    if (!resident) {
+        klog(KLOG_WARN, "krffs", "the root's page cannot be read; image stays dirty");
+        (void)pc_sync();
         return -1;
     }
     root = (krffs_node_t *)PCWIN_BASE;
@@ -4343,9 +4368,16 @@ static void process_command(const char *cmd)
         } else {
             krffs_node_t *victim = krffs_resolve(filename);
 
-            if (victim && fs_node_is_held(victim)) {
-                krffs_unlink_held(victim);
-                console_printf("Deleted file (still open elsewhere): %s\n", filename);
+            if (victim && vfs_root_mounted() && loop_backs(vfs_root_mount(), victim)) {
+                console_printf("File backs a loop device: %s\n", filename);
+            } else if (victim && fs_node_is_held(victim)) {
+                if (krffs_unlink_held(victim) == 0) {
+                    console_printf("Deleted file (still open elsewhere): %s\n", filename);
+                } else if (krffs_root_halted()) {
+                    console_printf("Failed to delete file: read-only file system: %s\n", filename);
+                } else {
+                    console_printf("Failed to delete file: I/O error: %s\n", filename);
+                }
             } else if (krffs_unlink(filename) == 0) {
                 console_printf("Deleted file: %s\n", filename);
             } else {
@@ -4361,14 +4393,16 @@ static void process_command(const char *cmd)
         } else if (old_buf[0] == '\0' || !new_name || new_name[0] == '\0') {
             console_puts("Usage: mv <oldname> <newname>");
         } else {
-            krffs_node_t *source = krffs_resolve(old_buf);
             krffs_node_t *victim = krffs_resolve(new_name);
+            int rc;
 
-            if (source && source != krffs_fs->node && !KRFFS_IS_DIR(source->mode) && victim &&
-                victim != source && fs_node_is_held(victim)) {
-                krffs_orphan_node(victim);
+            if (victim && victim != krffs_resolve(old_buf) && vfs_root_mounted() &&
+                loop_backs(vfs_root_mount(), victim)) {
+                console_printf("File backs a loop device: %s\n", new_name);
+                return;
             }
-            if (source && krffs_rename(old_buf, new_name) == 0) {
+            rc = krffs_rename_node(old_buf, new_name, fs_node_is_held);
+            if (rc == 0) {
                 console_printf("Renamed '%s' to '%s'\n", old_buf, new_name);
             } else {
                 console_printf("Failed to rename file\n");
@@ -4383,6 +4417,12 @@ static void process_command(const char *cmd)
         } else if (file_buf[0] == '\0' || !data) {
             console_puts("Usage: write <filename> <data>");
         } else {
+            krffs_node_t *node = krffs_resolve(file_buf);
+
+            if (node && vfs_root_mounted() && loop_backs(vfs_root_mount(), node)) {
+                console_printf("File backs a loop device: %s\n", file_buf);
+                return;
+            }
             if (krffs_open(file_buf) != 0) {
                 krffs_create(file_buf);
             }
@@ -4454,6 +4494,29 @@ static void process_command(const char *cmd)
 }
 
 /**
+ * Run the shell command `cmd`. One that changes the KRFFS root, `touch`,
+ * `rm`, `mv` or `write`, runs under the root's namespace lock, which the
+ * system calls hold for the same changes, so that no process changes a name
+ * between the command's checks and its change while the core sleeps in a
+ * barrier.
+ */
+static void shell_run(const char *cmd)
+{
+    struct vfs_mount *root = 0;
+
+    if (vfs_root_mounted() && vfs_root_mount()->type == &vfs_krffs_type &&
+        (str_starts_with(cmd, "touch ") || str_starts_with(cmd, "rm ") ||
+         str_starts_with(cmd, "mv ") || str_starts_with(cmd, "write "))) {
+        root = vfs_root_mount();
+        vfs_ns_lock(root);
+    }
+    process_command(cmd);
+    if (root) {
+        vfs_ns_unlock(root);
+    }
+}
+
+/**
  * Reset the kernel shell's command-line and stdin-wait state to a fresh prompt.
  *
  * Called on every transition back to the debug shell. An exec'd program never
@@ -4500,7 +4563,7 @@ void shell_loop(void)
     while (1) {
         if (cmd_ready) {
             cmd_ready = false;
-            process_command(cmd_buffer);
+            shell_run(cmd_buffer);
             cmd_pos = 0;
             console_printf("> ");
         }

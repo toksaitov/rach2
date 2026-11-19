@@ -17,6 +17,7 @@
 #include "../proc/process.h"
 #include "../proc/ns.h"
 #include "../proc/smp.h"
+#include "../syscall.h"
 #include "../lib/spinlock.h"
 #include "../tty/pty.h"
 #include "bcache.h"
@@ -3481,6 +3482,19 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     }
 }
 
+void vfs_mount_halted(struct vfs_mount *base)
+{
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        if (!mounts[i] || mounts[i]->state == VFS_FREE || mount_base(mounts[i]) != base) {
+            continue;
+        }
+        mounts[i]->flags |= VFS_MS_RDONLY;
+        klog(KLOG_WARN, "vfs", "read-only: %s: the file system halted", mounts[i]->covered_path);
+    }
+}
+
 int vfs_device_holds(block_device_t *dev)
 {
     int i;
@@ -4193,7 +4207,8 @@ static int32_t kfs_read_locked(struct vfs_mount *mnt, void *handle, void *buf, u
 /** Write `count` bytes at `offset` of the file whose node is `handle`, with
  * the mount's lock held: the bytes written, -EFBIG past 4 GiB, -ENOSPC, or
  * -EIO. A grow can relocate the node; every holder, this writer's
- * description included, is repointed before the byte count returns. */
+ * description included, is repointed before the answer returns, a failure
+ * included. */
 static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void *buf,
                                 uint32_t count, uint64_t offset)
 {
@@ -4204,14 +4219,14 @@ static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void 
         return -EFBIG;
     }
     written = krffs_write_node(&n, buf, count, (uint32_t)offset);
+    if (n && n != (krffs_node_t *)handle) {
+        vfs_repoint(mnt, handle, n);
+    }
     if (written == KRFFS_ENOSPACE) {
         return -ENOSPC;
     }
     if (written < 0) {
         return -EIO;
-    }
-    if (n != (krffs_node_t *)handle) {
-        vfs_repoint(mnt, handle, n);
     }
     return written;
 }
@@ -4240,11 +4255,15 @@ static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t siz
 /** The `fsync` of the KRFFS root, with the mount's lock held: the page cache
  * has no write of one file, so every dirty page is written, and the writes
  * the flusher or reclaim has in flight are waited for, as `kfs_sync` does,
- * since a page another writer holds pinned is not a failure; 0, or -EIO. */
+ * since a page another writer holds pinned is not a failure; 0, or -EIO,
+ * which a file's sync on a halted root always answers, as on a volume
+ * (`krffs_root_halted`), since its file may be in no directory. */
 static int kfs_fsync_locked(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
-    (void)handle;
+    if (handle && krffs_root_halted()) {
+        return -EIO;
+    }
     return pc_sync_wait() == 0 ? 0 : -EIO;
 }
 
@@ -4289,6 +4308,17 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
     return 0;
 }
 
+/** The errno of a creation the core refused with `rc`: -ENOSPC when no free
+ * node held the node, -EINVAL for a directory identifier another directory
+ * has, and -EIO when a read, a write or a sync failed. */
+static int kfs_made_errno(int rc)
+{
+    if (rc == KRFFS_ETAKEN) {
+        return -EINVAL;
+    }
+    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;
+}
+
 /** Join `name` to the path of the directory `dir`, NULL for the root
  * directory, in `path` of `cap` bytes: the namespace operations call the
  * core by path. 0, or -ENAMETOOLONG. */
@@ -4331,10 +4361,11 @@ static int kfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 
 /**
  * The `mkdir` of the KRFFS root, of `name` in `dir`. The parent is resolved
- * and held, so the core fails for one of two reasons: a name whose
- * directory identifier another directory has (`KRFFS_ETAKEN`), which is
- * EINVAL, the answer for a name the file system cannot hold, and a root
- * with no room, ENOSPC. `mode` is not used: the system call layer sets the
+ * and held, so the core fails for one of three reasons (`kfs_made_errno`):
+ * a name whose directory identifier another directory has (`KRFFS_ETAKEN`),
+ * which is EINVAL, the answer for a name the file system cannot hold; a
+ * root with no room, ENOSPC; and a write or a flush that failed, EIO.
+ * `mode` is not used: the system call layer sets the
  * new node's mode and owner afterwards (`krffs_stamp_new_node`).
  */
 static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
@@ -4348,10 +4379,7 @@ static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
         return rc;
     }
     rc = krffs_mkdir(path);
-    if (rc == KRFFS_ETAKEN) {
-        return -EINVAL;
-    }
-    return rc == 0 ? 0 : -ENOSPC;
+    return rc == 0 ? 0 : kfs_made_errno(rc);
 }
 
 /** The `rmdir` of the KRFFS root, of `name` in `dir`: 0, -ENAMETOOLONG, or
@@ -4369,8 +4397,11 @@ static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_rmdir(path) == 0 ? 0 : -ENOTEMPTY;
 }
 
-/** The `rename` of the KRFFS root, by the two paths: 0, -ENAMETOOLONG, or
- * -EIO when the core fails. */
+/**
+ * The `rename` of the KRFFS root, by the two paths: 0, -ENAMETOOLONG, or
+ * -EIO when the core fails. A destination somebody has open keeps its node
+ * without a name (`krffs_rename_node`, asking `fs_node_is_held`).
+ */
 static int kfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                       const char *newname)
 {
@@ -4386,12 +4417,14 @@ static int kfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     if (rc != 0) {
         return rc;
     }
-    return krffs_rename(oldp + (oldp[0] == '/'), newp + (newp[0] == '/')) == 0 ? 0 : -EIO;
+    rc = krffs_rename_node(oldp + (oldp[0] == '/'), newp + (newp[0] == '/'), fs_node_is_held);
+    return rc == 0 ? 0 : -EIO;
 }
 
 /** The `create` of the KRFFS root: the regular file `name` in `dir`, made by
- * its path, and its node in `*node`. 0, -ENAMETOOLONG, -ENOSPC when the core
- * cannot make it, or -EIO when the name is not found after. `mode` is not
+ * its path, and its node in `*node`. 0, -ENAMETOOLONG, `kfs_made_errno`'s
+ * answer when the core cannot make it, or -EIO when the name is not found
+ * after. `mode` is not
  * used: the system call layer sets the new node's mode and owner afterwards
  * (`krffs_stamp_new_node`). */
 static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
@@ -4407,8 +4440,9 @@ static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
-    if (krffs_create(path + (path[0] == '/')) != 0) {
-        return -ENOSPC;
+    rc = krffs_create(path + (path[0] == '/'));
+    if (rc != 0) {
+        return kfs_made_errno(rc);
     }
     n = krffs_child(dir ? dir : krffs_fs->node, name);
     if (!n) {
@@ -4445,8 +4479,9 @@ static int kfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (rc != 0) {
         return rc;
     }
-    if (krffs_create_node(path + (path[0] == '/'), (uint16_t)(type | (mode & 07777u))) != 0) {
-        return -ENOSPC;
+    rc = krffs_create_node(path + (path[0] == '/'), (uint16_t)(type | (mode & 07777u)));
+    if (rc != 0) {
+        return kfs_made_errno(rc);
     }
     n = krffs_child(dir ? dir : krffs_fs->node, name);
     if (!n) {
@@ -4542,6 +4577,15 @@ static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return rc;
 }
 
+/** The phase of the boot root's file `node` (`krffs_node_phase`); the
+ * handle is the node. */
+static uint32_t kfs_phase(struct vfs_mount *mnt, void *node, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return krffs_node_phase((const krffs_node_t *)node);
+}
+
 static const struct vfs_ops krffs_ops = {
     kfs_lookup,  0, /* lookup_rest */
     0,              /* hold */
@@ -4579,7 +4623,32 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* rename_flags */
     0,                           /* tmpfile */
     0,                           /* uncache */
+    kfs_phase,
 };
+
+/* The mount of the KRFFS root, which `kfs_halted` turns read-only. */
+static struct vfs_mount *kfs_root_mnt;
+
+/** The `on_halt` of the KRFFS root: its mount and every bind of it turn
+ * read-only (`vfs_mount_halted`), as a halted volume's do. */
+static void kfs_halted(krffs_mount_t *fs)
+{
+    (void)fs;
+    if (kfs_root_mnt) {
+        vfs_mount_halted(kfs_root_mnt);
+    }
+}
+
+int vfs_krffs_root_busy(void)
+{
+    const struct process *owner;
+
+    if (!kfs_root_mnt) {
+        return 0;
+    }
+    owner = mount_base(kfs_root_mnt)->ns.owner;
+    return owner != NULL && owner != current_proc;
+}
 
 /** The constructor of the root's entry: the mount's root is the image's root
  * directory; -ENOENT when no image is up. */
@@ -4593,6 +4662,11 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
         return -ENOENT;
     }
     mnt->root = krffs_fs->node;
+    kfs_root_mnt = mnt;
+    krffs_root_on_halt(kfs_halted);
+    if (krffs_root_halted()) {
+        mnt->flags |= VFS_MS_RDONLY;
+    }
     return 0;
 }
 
@@ -5260,6 +5334,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* rename_flags */
     0, /* tmpfile */
     0, /* uncache */
+    0, /* phase */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -5311,6 +5386,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* rename_flags */
     0, /* tmpfile */
     0, /* uncache */
+    0, /* phase */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -5362,6 +5438,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* rename_flags */
     0, /* tmpfile */
     0, /* uncache */
+    0, /* phase */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

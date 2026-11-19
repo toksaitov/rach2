@@ -22,6 +22,9 @@
  * `KRFFS_OPEN_TEST` defined, which leaves out the lock, close and wait
  * functions that macro guards.
  */
+/* A bound on the repair's index that the many-names row passes with a
+   volume that fits the fixture, which the repair then searches in passes. */
+#define KRFFS_REPAIR_NAMES 8u
 #include "fs/krffs.c"
 #include "fs/krffsmount.c"
 
@@ -41,7 +44,7 @@ static struct open_file *descs[3];
 static void (*waiting)(void);
 /* The faults a row sets: `sync_error` and `flush_error` fail every sync or
    flush, `fail_flush_at` the flush of that count, and `fail_after_move` the
-   second sync after the moved file's old node is free, counted in
+   first sync after the moved file's old node is free, counted in
    `syncs_after_free`. `flush_hook` runs at every flush. */
 static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
@@ -71,10 +74,14 @@ void *kzalloc(size_t size)
     return calloc(1, size);
 }
 
-/** Allocate host storage, zeroed as `kzalloc` does. */
+/* Set to have `kmalloc` refuse, as a kernel short of memory does. */
+static int kmalloc_refuses;
+
+/** Allocate host storage, zeroed as `kzalloc` does, or NULL while
+ * `kmalloc_refuses`. */
 void *kmalloc(size_t size)
 {
-    return kzalloc(size);
+    return kmalloc_refuses ? NULL : kzalloc(size);
 }
 
 /** Free a host allocation. */
@@ -136,6 +143,16 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     check(depth > 0 || mnt->ns.depth > 0, "relocation holds mount lock");
     fd_ofd_repoint(mnt, from, to);
+}
+
+/* How many times the volume reported a halt. */
+static int halts;
+
+/** Turn the halted mount read-only, as vfs.c turns it and its binds. */
+void vfs_mount_halted(struct vfs_mount *base)
+{
+    halts++;
+    base->flags |= VFS_MS_RDONLY;
 }
 
 #ifndef KRFFS_OPEN_TEST
@@ -270,7 +287,7 @@ int bcache_sync(block_device_t *dev)
     sync_calls++;
     if (fail_after_move &&
         ((krffs_node_t *)(cached + offset_of(&mount, original)))->type == KRFFS_FREE_NODE &&
-        ++syncs_after_free == 2) {
+        ++syncs_after_free == 1) {
         fail_after_move = 0;
         return -EIO;
     }
@@ -322,7 +339,7 @@ int bcache_flush(block_device_t *dev)
  * block backend of krffsmount.c, make a descriptor table, and clear the
  * faults and the counts.
  */
-static void setup(void)
+static void setup_on_phase(uint32_t phase)
 {
     krffs_node_t *root = (krffs_node_t *)cached;
     krffs_node_t *space = (krffs_node_t *)(cached + sizeof(*root));
@@ -353,11 +370,18 @@ static void setup(void)
     k_memcpy(device, cached, sizeof(device));
     k_memcpy(medium, cached, sizeof(medium));
     disk.sector_size = BLOCK_SECTOR_SIZE;
+    disk.sector_phase = phase;
     disk.sector_count = IMAGE_BYTES / BLOCK_SECTOR_SIZE;
     mount.type = &vfs_krffs_volume_type;
     check(krffs_volume_mount(&mount, &disk, 0, NULL) == 0, "mount fixture");
     check(fd_table_init(&table) == 0, "descriptor table");
     sync_calls = flush_calls = 0;
+}
+
+/** Set up an unshifted disk fixture. */
+static void setup(void)
+{
+    setup_on_phase(0);
 }
 
 /** Close every description and release the mount. */
@@ -535,10 +559,10 @@ static void pinned(void)
 }
 
 /**
- * Fail the second sync after a grow has moved the target and freed its old
- * node: the operation must return `EIO`, and the file must stay at its new
- * place with every description repointed there. With `truncate`, the grow
- * is a truncate.
+ * Fail the first sync after a grow has moved the target and stored its old
+ * node's type as free, the removal's own: the operation must return `EIO`,
+ * and the file must stay at its new place, which holds the bytes, with every
+ * description repointed there. With `truncate`, the grow is a truncate.
  */
 static void failed_relocation(int truncate)
 {
@@ -556,9 +580,16 @@ static void failed_relocation(int truncate)
     k_memset(payload, 'F', sizeof(payload));
     rc = truncate ? kv_truncate(&mount, descs[0]->fhandle, sizeof(payload))
                   : kv_write(&mount, descs[0]->fhandle, payload, sizeof(payload), 0);
-    check(rc == -EIO && syncs_after_free == 2, "data sync fails after relocation");
+    check(rc == -EIO && syncs_after_free == 1, "the removal's sync fails after relocation");
     check(kv_lookup(&mount, mount.root, "target", &current) == 0 && current != original,
           "failed operation retains relocated node");
+    {
+        char byte = 0;
+
+        check(kv_read(&mount, descs[1]->fhandle, &byte, 1, sizeof(payload) - 1) == 1 &&
+                  byte == (truncate ? 0 : 'F'),
+              "the relocated node holds what the operation wrote");
+    }
     for (i = 0; i < 3; i++) {
         check(descs[i]->vnode == current && handle_of(follow_moves(descs[i]->fhandle)) == current,
               "failed relocation repoints every description");
@@ -886,6 +917,93 @@ static void refusals(void)
     teardown();
 }
 
+/**
+ * A rename over an open file that the core will refuse, here on an
+ * unsettled mount whose barrier fails, answers EIO with the destination
+ * still named, since the core's checks run before its name is taken off.
+ */
+static void refused_rename_keeps_destination(void)
+{
+    void *found;
+    void *handle;
+
+    setup();
+    create("src");
+    check(kv_open(&mount, create("dst"), 2, &handle) == 0, "refused rename: open the destination");
+    vol_of(&mount)->fs.unsettled = 1;
+    sync_error = 1;
+    check(rename_name("src", "dst") == -EIO, "a rename the core refuses answers EIO");
+    sync_error = 0;
+    vfs_ns_lock(&mount);
+    check(kv_lookup(&mount, mount.root, "dst", &found) == 0 &&
+              kv_lookup(&mount, mount.root, "src", &found) == 0,
+          "and both names are still there");
+    vfs_ns_unlock(&mount);
+    kv_release(&mount, handle);
+    teardown();
+}
+
+/**
+ * A mount the core halted, whose moved file's copy could not be withdrawn,
+ * takes no change through the adapter until the next mount: an unlink of an
+ * open file and a rename answer EROFS, and an fsync EIO, since the copy may
+ * still be on the medium beside the file.
+ */
+static void halted_refusals(void)
+{
+    void *file;
+    void *handle;
+    void *found;
+
+    setup();
+    file = create("file");
+    check(kv_open(&mount, file, 2, &handle) == 0, "halted: open the file");
+    vol_of(&mount)->fs.halted = 1;
+    vfs_ns_lock(&mount);
+    check(kv_unlink(&mount, mount.root, "file") == -EROFS,
+          "a halted mount refuses an unlink of an open file");
+    vfs_ns_unlock(&mount);
+    check(rename_name("file", "other") == -EROFS, "and a rename");
+    check(kv_fsync(&mount, handle) == -EIO, "and answers EIO to an fsync");
+    check(kv_sync(&mount) == 0, "but writes the volume back for its unmount");
+    vfs_ns_lock(&mount);
+    check(kv_mknod(&mount, mount.root, "dev", 0020644, 0, &found) == -EROFS,
+          "and answers EROFS to a device node before EPERM");
+    vfs_ns_unlock(&mount);
+    halts = 0;
+    vol_of(&mount)->fs.on_halt(&vol_of(&mount)->fs);
+    check(halts == 1 && (mount.flags & VFS_MS_RDONLY),
+          "a halt turns the mounts that show the volume read-only");
+    check(kv_sync(&mount) == 0, "and the volume still writes back");
+    mount.flags &= ~(uint32_t)VFS_MS_RDONLY;
+    vol_of(&mount)->fs.halted = 0;
+    kv_release(&mount, handle);
+    teardown();
+}
+
+/**
+ * The volume takes its device's phase for its sector edges, and gives a
+ * loop device over one of its files the phase of the file's first data
+ * byte: the device's, plus the node's offset and its header.
+ */
+static void phase_reported(void)
+{
+    void *file;
+    void *handle;
+    uint64_t at;
+
+    setup_on_phase(100);
+    file = create("file");
+    check(kv_open(&mount, file, 2, &handle) == 0, "phase: open the file");
+    at = ((struct krffs_open *)handle)->offset;
+    check(vol_of(&mount)->fs.sector_phase == 100, "the volume takes its device's phase");
+    check(krffs_volume_ops.phase(&mount, file, handle) ==
+              (uint32_t)((100 + at + sizeof(krffs_node_t)) % 512),
+          "and a file's phase adds the node's offset and its header");
+    kv_release(&mount, handle);
+    teardown();
+}
+
 /** The cache block that holds byte `at` of the volume. */
 static unsigned block_of(uint64_t at)
 {
@@ -1124,6 +1242,293 @@ static void failed_shrink_flush(void)
     teardown();
 }
 
+/** Write a node's header into the fixture's cache: `type`, `size` bytes,
+ * the link `previous`, and `name`, or none for NULL. */
+static void place(uint32_t at, uint8_t type, uint32_t size, uint32_t previous, const char *name)
+{
+    krffs_node_t *head = (krffs_node_t *)(cached + at);
+
+    head->magic = KRFFS_FILE_SYSTEM_MAGIC;
+    head->type = type;
+    head->size = size;
+    head->previous_node_size = previous;
+    head->mode = type == KRFFS_ROOT_NODE ? (uint16_t)(0755 | KRFFS_MODE_DIRTY) : 0644;
+    if (name) {
+        k_memcpy(head->name, name, k_strlen(name) + 1);
+    }
+}
+
+/** Put the image built in the fixture's cache on the device and medium,
+ * then mount it with the given sector phase. 0 or the mount's -errno. */
+static int mount_cached(uint32_t phase)
+{
+    static unsigned char built[IMAGE_BYTES];
+
+    k_memcpy(built, cached, sizeof(built));
+    setup();
+    teardown();
+    k_memcpy(cached, built, sizeof(cached));
+    k_memcpy(device, built, sizeof(device));
+    k_memcpy(medium, built, sizeof(medium));
+    disk.sector_phase = phase;
+    return krffs_volume_mount(&mount, &disk, 0, NULL);
+}
+
+/**
+ * Through the adapter, a volume takes its sector from the device, and a
+ * merge whose size's low byte ends one sector and whose next byte starts
+ * another, inside one block, keeps the free nodes apart.
+ */
+static void sector_merge(void)
+{
+    krffs_node_t head;
+    int rc;
+
+    k_memset(cached, 0, sizeof(cached));
+    place(0, KRFFS_ROOT_NODE, 698, IMAGE_BYTES - 3000, NULL);
+    place(698, KRFFS_RESERVED_NODE, 1025, 698, "victim");
+    place(1723, KRFFS_FREE_NODE, 511, 1025, NULL);
+    place(2234, KRFFS_RESERVED_NODE, 766, 511, "kept");
+    place(3000, KRFFS_FREE_NODE, IMAGE_BYTES - 3000, 766, NULL);
+    ((krffs_node_t *)cached)->mode = 0755;
+    check(mount_cached(0) == 0 && vol_of(&mount)->fs.sector == BLOCK_SECTOR_SIZE,
+          "sector merge: the volume takes the device's sector");
+    if (!mount.priv) {
+        return;
+    }
+    vfs_ns_lock(&mount);
+    rc = kv_unlink(&mount, mount.root, "victim");
+    vfs_ns_unlock(&mount);
+    check(rc == 0 && krffs_head(&vol_of(&mount)->fs, 698, &head) == 0 &&
+              head.type == KRFFS_FREE_NODE && head.size == 0x401 &&
+              krffs_chain_is_valid(&vol_of(&mount)->fs),
+          "sector merge: a merge whose size crosses a sector inside a block is not made");
+    kv_unmount(&mount);
+}
+
+#define LOOP_FILE_DATA (2u * sizeof(krffs_node_t))
+#define LOOP_CREATE    600u
+#define LOOP_VICTIM    1008u
+#define LOOP_RENAME    3869u
+
+static uint8_t backing_image[IMAGE_BYTES + 2 * BLOCK_SECTOR_SIZE];
+static uint8_t phase_created_name[KRFFS_FILE_NAME_BUFFER_SIZE];
+static uint32_t phase_name_writes;
+
+/**
+ * Replay a loop flush on the physical sectors of the image file. Each
+ * prefix must leave the inner ring walkable and any new name complete.
+ * Count the physical sectors of the renamed file's name each flush changes.
+ */
+static void flush_physical_sectors(void)
+{
+    krffs_mount_t fs = {0};
+    uint32_t end = LOOP_FILE_DATA + IMAGE_BYTES;
+    uint32_t name = LOOP_FILE_DATA + LOOP_RENAME + KRFFS_FIELD_NAME;
+    const uint8_t *created = backing_image + LOOP_FILE_DATA + LOOP_CREATE + KRFFS_FIELD_NAME;
+    uint32_t sector;
+    uint32_t changed = 0;
+
+    fs.backend = &krffs_memory_backend;
+    fs.ctx = backing_image + LOOP_FILE_DATA;
+    fs.size = IMAGE_BYTES;
+    for (sector = LOOP_FILE_DATA / BLOCK_SECTOR_SIZE * BLOCK_SECTOR_SIZE; sector < end;
+         sector += BLOCK_SECTOR_SIZE) {
+        uint32_t first = sector < LOOP_FILE_DATA ? LOOP_FILE_DATA : sector;
+        uint32_t last = sector + BLOCK_SECTOR_SIZE;
+        uint32_t i;
+        int changed_name = 0;
+
+        if (last > end) {
+            last = end;
+        }
+        for (i = first; i < last; i++) {
+            if (i >= name && i < name + KRFFS_FILE_NAME_BUFFER_SIZE &&
+                backing_image[i] != device[i - LOOP_FILE_DATA]) {
+                changed_name = 1;
+            }
+            backing_image[i] = device[i - LOOP_FILE_DATA];
+        }
+        changed += changed_name;
+        check(krffs_chain_is_walkable(&fs), "loop phase: every physical sector prefix walks");
+        check(created[0] == 0 || krffs_names_match(created, phase_created_name),
+              "loop phase: every physical sector prefix leaves the new name empty or complete");
+    }
+    check(changed <= 1, "loop phase: each rename flush changes one sector of the name");
+    phase_name_writes += changed;
+}
+
+/** Mount an image in an unaligned KRFFS extent and check both boundaries. */
+static void loop_sector_phase(void)
+{
+    krffs_mount_t backing = {0};
+    krffs_mount_t *fs;
+    krffs_node_t *root = (krffs_node_t *)backing_image;
+    krffs_node_t *image = (krffs_node_t *)(backing_image + sizeof(*root));
+    krffs_node_t head;
+    char old[231], new[231];
+    void *created = NULL;
+    uint32_t phase;
+    uint32_t mid;
+    int rc;
+
+    k_memset(backing_image, 0, sizeof(backing_image));
+    root->magic = image->magic = KRFFS_FILE_SYSTEM_MAGIC;
+    root->type = KRFFS_ROOT_NODE;
+    root->size = image->previous_node_size = sizeof(*root);
+    root->previous_node_size = image->size = sizeof(backing_image) - sizeof(*root);
+    image->type = KRFFS_RESERVED_NODE;
+    image->data_size = IMAGE_BYTES;
+    k_memcpy(image->name, "image", sizeof("image"));
+    backing.backend = &krffs_memory_backend;
+    backing.ctx = backing_image;
+    backing.size = sizeof(backing_image);
+    backing.sector = BLOCK_SECTOR_SIZE;
+    check(krffs_chain_is_valid(&backing) && krffs_walk(&backing, "/image") == sizeof(*root),
+          "loop phase: the outer KRFFS image contains the backing file");
+    phase = krffs_file_phase(&backing, sizeof(*root));
+    check(phase == LOOP_FILE_DATA % BLOCK_SECTOR_SIZE && phase != 0,
+          "loop phase: sector zero starts inside a physical sector");
+
+    k_memset(old, 'a', sizeof(old) - 1);
+    k_memset(new, 'b', sizeof(new) - 1);
+    old[sizeof(old) - 1] = new[sizeof(new) - 1] = '\0';
+    k_memset(phase_created_name, 0, sizeof(phase_created_name));
+    k_memset(phase_created_name, 'c', sizeof(old) - 1);
+    k_memset(cached, 0, sizeof(cached));
+    place(0, KRFFS_ROOT_NODE, LOOP_CREATE, IMAGE_BYTES - 4980, NULL);
+    place(LOOP_CREATE, KRFFS_FREE_NODE, LOOP_VICTIM - LOOP_CREATE, LOOP_CREATE, NULL);
+    place(LOOP_VICTIM, KRFFS_RESERVED_NODE, 1025, LOOP_VICTIM - LOOP_CREATE, "victim");
+    place(2033, KRFFS_FREE_NODE, 511, 1025, NULL);
+    place(2544, KRFFS_RESERVED_NODE, 1325, 511, "dest");
+    ((krffs_node_t *)(cached + 2544))->mode = KRFFS_S_IFDIR | 0755;
+    ((krffs_node_t *)(cached + 2544))->id = 0x1122334455667788ull;
+    place(LOOP_RENAME, KRFFS_RESERVED_NODE, 1111, 1325, old);
+    place(4980, KRFFS_FREE_NODE, IMAGE_BYTES - 4980, 1111, NULL);
+    ((krffs_node_t *)cached)->mode = 0755;
+    check(mount_cached(phase) == 0, "loop phase: mount fixture");
+    if (!mount.priv) {
+        return;
+    }
+    fs = &vol_of(&mount)->fs;
+    check(fs->sector_phase == phase, "loop phase: the inner mount takes the device phase");
+    check(krffs_length_steps(fs, 992, 0x401, 0x600, &mid) == 0 && mid == 0x501,
+          "loop phase: a length straddling the physical boundary takes a safe middle step");
+    k_memcpy(backing_image + LOOP_FILE_DATA, medium, sizeof(medium));
+    phase_name_writes = 0;
+    flush_hook = flush_physical_sectors;
+
+    vfs_ns_lock(&mount);
+    rc = kv_create(&mount, mount.root, (const char *)phase_created_name, 0644, &created);
+    check(rc == 0 && created == handle_of(LOOP_CREATE),
+          "loop phase: create the name across a physical sector boundary");
+    rc = kv_unlink(&mount, mount.root, "victim");
+    check(rc == 0 && krffs_head(fs, LOOP_VICTIM, &head) == 0 && head.type == KRFFS_FREE_NODE &&
+              head.size == 1025,
+          "loop phase: a merge may not change bytes at backing offsets 2047 and 2048");
+    rc = kv_rename(&mount, mount.root, old, mount.root, new);
+    check(rc == 0 && phase_name_writes == 3,
+          "loop phase: rename writes three pieces across sector and cache boundaries");
+    vfs_ns_unlock(&mount);
+    flush_hook = NULL;
+    check(krffs_chain_is_valid(fs), "loop phase: the live ring is valid");
+    kv_unmount(&mount);
+}
+
+/**
+ * A dirty volume of more names than the repair's index holds, with a torn
+ * backward link and one name on two nodes, mounts writable with the link
+ * rebuilt and the name on one node, found in passes over ranges of name
+ * hashes, and clears its dirty flag at unmount. With no memory for the
+ * index, it mounts with the link rebuilt, owes the check of names, and
+ * keeps its dirty flag at unmount, so that fsck.krffs is still owed.
+ */
+static void owed_check(void)
+{
+    enum { NAMES = 10 };
+    uint32_t node = sizeof(krffs_node_t) + 1;
+    uint32_t end = sizeof(krffs_node_t) + NAMES * node;
+    char name[3];
+    int pass;
+    int i;
+
+    for (pass = 0; pass < 2; pass++) {
+        k_memset(cached, 0, sizeof(cached));
+        place(0, KRFFS_ROOT_NODE, sizeof(krffs_node_t), IMAGE_BYTES - end, NULL);
+        for (i = 0; i < NAMES; i++) {
+            name[0] = 'n';
+            name[1] = (char)('0' + (i == NAMES - 1 ? 0 : i));
+            name[2] = '\0';
+            place(sizeof(krffs_node_t) + i * node, KRFFS_RESERVED_NODE, node,
+                  i == 5   ? 0
+                  : i == 0 ? sizeof(krffs_node_t)
+                           : node,
+                  name);
+        }
+        place(end, KRFFS_FREE_NODE, IMAGE_BYTES - end, node, NULL);
+        kmalloc_refuses = pass;
+        check(mount_cached(0) == 0, "owed check: a dirty volume of many names mounts");
+        kmalloc_refuses = 0;
+        if (!mount.priv) {
+            return;
+        }
+        if (pass == 0) {
+            check(vol_of(&mount)->writable && !vol_of(&mount)->fs.check_owed &&
+                      krffs_chain_is_valid(&vol_of(&mount)->fs) &&
+                      ((krffs_node_t *)(medium + sizeof(krffs_node_t) + (NAMES - 1) * node))
+                              ->name[0] == '\0',
+                  "many names: its links are rebuilt and its repeated name found in passes");
+            check(kv_prepare_unmount(&mount) == 0 &&
+                      !(((krffs_node_t *)medium)->mode & KRFFS_MODE_DIRTY),
+                  "and its dirty flag is cleared at unmount");
+        } else {
+            check(!vol_of(&mount)->writable && (mount.flags & VFS_MS_RDONLY) &&
+                      vol_of(&mount)->fs.check_owed && krffs_chain_is_valid(&vol_of(&mount)->fs),
+                  "owed check: its links are rebuilt, the check of names is owed and the mount "
+                  "is read-only");
+            check(kv_prepare_unmount(&mount) == 0 &&
+                      (((krffs_node_t *)medium)->mode & KRFFS_MODE_DIRTY),
+                  "an owed check of names keeps the dirty flag at unmount");
+        }
+        kv_unmount(&mount);
+    }
+}
+
+/**
+ * A pass of the search for repeated names whose index fills exactly with
+ * the nodes of its smallest hash, eight files named "a" of which two share
+ * the root, with a larger hash left out, resolves them: every node of a
+ * hash below the smallest left out is in the index.
+ */
+static void full_group(void)
+{
+    uint32_t node = sizeof(krffs_node_t) + 1;
+    uint32_t end = sizeof(krffs_node_t) + 9 * node;
+    krffs_node_t *first;
+    krffs_node_t *second;
+    int i;
+
+    k_memset(cached, 0, sizeof(cached));
+    place(0, KRFFS_ROOT_NODE, sizeof(krffs_node_t), IMAGE_BYTES - end, NULL);
+    for (i = 0; i < 9; i++) {
+        uint32_t at = sizeof(krffs_node_t) + i * node;
+
+        place(at, KRFFS_RESERVED_NODE, node, i == 0 ? sizeof(krffs_node_t) : node,
+              i == 8 ? "b" : "a");
+        ((krffs_node_t *)(cached + at))->parent_id = i < 2 ? 0 : (uint64_t)i;
+    }
+    place(end, KRFFS_FREE_NODE, IMAGE_BYTES - end, node, NULL);
+    check(mount_cached(0) == 0, "full group: a dirty volume of nine names mounts");
+    if (!mount.priv) {
+        return;
+    }
+    first = (krffs_node_t *)(medium + sizeof(krffs_node_t));
+    second = (krffs_node_t *)(medium + sizeof(krffs_node_t) + node);
+    check(!vol_of(&mount)->fs.check_owed && (first->name[0] == '\0') != (second->name[0] == '\0'),
+          "full group: the repeated name that fills the index is resolved, and no check is owed");
+    kv_unmount(&mount);
+}
+
 /**
  * A mount a failed write made read-only syncs the whole device at an fsync
  * of one file, since the failed sync point may have left any file's blocks
@@ -1185,7 +1590,8 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * block, a taken identifier, a working directory, the refusals of unlink,
  * rename and rmdir, the group of a node made in a set-group-ID
  * directory, and an fsync that writes one file, across a move, with the
- * link a shrink leaves after its tag is lost, and after a failed write.
+ * link a shrink leaves after its tag is lost, and after a failed write, and
+ * the dirty flag an owed check of names keeps.
  * Returns 1 when a row failed, else 0.
  */
 int main(void)
@@ -1203,6 +1609,9 @@ int main(void)
     taken_identifier();
     working_directory();
     refusals();
+    halted_refusals();
+    phase_reported();
+    refused_rename_keeps_destination();
     setgid_group();
     owned_fsync();
     owned_across_move();
@@ -1210,6 +1619,10 @@ int main(void)
     shrink_link(1);
     failed_link();
     failed_shrink_flush();
+    owed_check();
+    full_group();
+    sector_merge();
+    loop_sector_phase();
     owned_after_failure();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");

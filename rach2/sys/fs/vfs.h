@@ -426,6 +426,11 @@ struct vfs_ops {
      * dirty block stays for its write. NULL for a type that keeps no copy
      * of a file's data apart from the file. */
     void (*uncache)(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len);
+    /* How many bytes into a 512-byte sector of the medium the first byte of
+     * the regular file `node`, open as `handle`, lies: the phase a loop
+     * device over the file records at attachment, under the file's lock.
+     * NULL for a type that keeps a file's bytes in whole blocks. */
+    uint32_t (*phase)(struct vfs_mount *mnt, void *node, void *handle);
 };
 
 /* renameat2(2)'s flags, Linux's values. */
@@ -915,6 +920,14 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m);
 int vfs_root_mounted(void);
 
 /**
+ * 1 when another thread holds the namespace lock of the KRFFS root's mount,
+ * under which every change to the root runs, so that a shutdown with
+ * scheduling off can tell a change cut short; 0 otherwise, or before the
+ * root is mounted. It reads nothing from the disk.
+ */
+int vfs_krffs_root_busy(void);
+
+/**
  * Install a root of another type at entry zero before any process runs,
  * with the other permanent mounts over it as `vfs_init` places them: the
  * ext2 root, from a partition window the kernel found itself. `claim` is
@@ -1302,6 +1315,15 @@ int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options);
  * flush (`bcache_flush`) and for a device that has gone. Under the big lock.
  */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
+
+/**
+ * The file system `base` shows halted after an error its own check must
+ * repair: `base` and every bind of it go read-only for the rest of their
+ * lives, with a record in the kernel log, as Linux's ext4 does after an
+ * error (errors=remount-ro). Nothing is recorded for the syncs to report,
+ * since no write of the device failed. Under the big lock.
+ */
+void vfs_mount_halted(struct vfs_mount *base);
 
 /**
  * Record the write-back error `rc`, a negative errno, in the file system
