@@ -403,7 +403,7 @@ int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, con
         write16be(buf + IP6_HDR_SIZE + 2, (uint16_t)(off | (last ? 0u : IP6_FRAG_MORE)));
         write32be(buf + IP6_HDR_SIZE + 4, id);
         k_memcpy(buf + IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE, payload + off, n);
-        r = ip6_emit(out, via, buf, IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE + n);
+        r = ip6_emit(out, via, buf, IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE + n, 0);
         if (r != 0) {
             net_mib6.ip6_frag_fails++;
             break;

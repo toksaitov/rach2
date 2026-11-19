@@ -218,8 +218,10 @@ void ip_pmtu_lower(uint32_t dst, uint32_t mtu);
 /**
  * Send the datagrams held for the next hop `hop` on `nd`, whose station
  * address `mac` ARP has just learned, and free their slots; one that has
- * waited longer than three seconds is dropped. Called with interrupts off,
- * when ARP stores a mapping.
+ * waited longer than three seconds is dropped. One past `nd`'s MTU as it
+ * is now leaves in fragments of it, or is dropped, counted in FragFails,
+ * when its sender forbade fragments (IP_PMTUDISC_DO or PROBE). Called with
+ * interrupts off, when ARP stores a mapping.
  */
 void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac);
 

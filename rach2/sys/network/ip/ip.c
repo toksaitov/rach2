@@ -187,11 +187,15 @@ static uint8_t ip_hold_frag_buf[ETH_MTU];
  * request, a connect's SYN. A datagram past the MTU is held whole, before
  * fragmentation, and cut into fragments of `mtu` bytes when it leaves, so
  * that the 119 fragments of the largest at 576 bytes take one slot and no
- * fragment of it can put out another. A slot is free when its length is 0,
- * or once its datagram has waited longer than any reply takes,
- * IP_HOLD_TICKS, three seconds; `since` is the tick the datagram was put in.
- * A held datagram is a copy on the heap, its header included, freed when it
- * leaves or is dropped. */
+ * fragment of it can put out another. The card's MTU may fall while a
+ * datagram waits, as when its device is bound again with a smaller limit;
+ * the datagram then leaves in fragments of the card's MTU, as Linux's
+ * ip_finish_output cuts what the route's MTU no longer passes, unless its
+ * sender forbade fragments, when it is dropped and counted in FragFails. A
+ * slot is free when its length is 0, or once its datagram has waited longer
+ * than any reply takes, IP_HOLD_TICKS, three seconds; `since` is the tick
+ * the datagram was put in. A held datagram is a copy on the heap, its
+ * header included, freed when it leaves or is dropped. */
 #define IP_HOLD_SLOTS 64
 #define IP_HOLD_TICKS MS_TO_TICKS(3000)
 static struct ip_hold {
@@ -199,7 +203,7 @@ static struct ip_hold {
     uint32_t hop;
     uint32_t since;
     uint16_t len;
-    uint32_t mtu; /* the MTU its fragments are cut to, 0 to leave whole */
+    uint32_t mtu; /* the most its fragments may be, 0 when it may not be cut */
     uint8_t *datagram;
 } ip_hold[IP_HOLD_SLOTS];
 
@@ -217,8 +221,8 @@ static void ip_hold_free(struct ip_hold *h)
 /**
  * Keep the datagram of the IP header `hdr` and `plen` bytes at `payload`
  * for `hop` on `out`, in a free slot, or in place of the one held longest
- * when none is free; `mtu` is the MTU its fragments are cut to when it
- * leaves, or 0 for one that leaves whole. A datagram put out of its slot
+ * when none is free; `mtu` is the most its fragments may be when it leaves,
+ * or 0 for one whose sender forbade fragments. A datagram put out of its slot
  * counts in `arp_stats`: as `res_failed` when it was past its wait, as
  * `unres_discards` when it was not. A datagram no memory holds is dropped,
  * as a send promises no delivery.
@@ -269,15 +273,18 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
 
     for (i = 0; i < IP_HOLD_SLOTS; i++) {
         struct ip_hold *h = &ip_hold[i];
+        uint32_t cut = h->mtu && h->mtu < nd->mtu ? h->mtu : nd->mtu;
 
         if (h->len != 0 && h->out == nd && h->hop == hop) {
             if (((uint32_t)kernel_ticks - h->since) > IP_HOLD_TICKS) {
                 /* past its wait: dropped */
+            } else if (h->len <= cut) {
+                ethernet_tx(nd, mac, ETH_TYPE_IP, h->datagram, h->len);
             } else if (h->mtu) {
                 ip_fragment_to(nd, mac, h->datagram, h->datagram + IP_HDR_SIZE,
-                               (uint16_t)(h->len - IP_HDR_SIZE), h->mtu, ip_hold_frag_buf);
+                               (uint16_t)(h->len - IP_HDR_SIZE), cut, ip_hold_frag_buf);
             } else {
-                ethernet_tx(nd, mac, ETH_TYPE_IP, h->datagram, h->len);
+                net_mib.ip_frag_fails++;
             }
             ip_hold_free(h);
         }
@@ -526,10 +533,13 @@ static void ip_header(uint8_t *buf, uint16_t total_len, uint16_t id, uint16_t fr
  * Hand the datagram of `len` bytes in `ip_tx_buf` to `out`, toward
  * `route_ip`: to the all-ones station address for a broadcast to `dst_ip`,
  * else to the next hop's from ARP. On a miss the datagram is held and an
- * ARP request goes out. Returns 0, -EMSGSIZE or -ENOBUFS, as `ip_tx_opts`
- * says.
+ * ARP request goes out; `mtu` is the most its fragments may be should the
+ * card's MTU fall below it while it waits, or 0 when its sender forbade
+ * fragments (`ip_hold_put`). Returns 0, -EMSGSIZE or -ENOBUFS, as
+ * `ip_tx_opts` says.
  */
-static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint16_t len)
+static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint16_t len,
+                   uint32_t mtu)
 {
     static const uint8_t all_ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     uint8_t dst_mac[6];
@@ -540,7 +550,7 @@ static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint1
         to = all_ones;
     } else if (!arp_lookup(out, route_ip, dst_mac)) {
         ip_hold_put(out, route_ip, ip_tx_buf, ip_tx_buf + IP_HDR_SIZE,
-                    (uint16_t)(len - IP_HDR_SIZE), 0);
+                    (uint16_t)(len - IP_HDR_SIZE), mtu);
         arp_request(out, route_ip);
         return 0;
     }
@@ -619,6 +629,14 @@ static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint
         return 0;
     }
     return ip_fragment_to(out, mac, hdr, payload, plen, mtu, ip_tx_buf);
+}
+
+/** Whether a sender's IP_PMTUDISC_* value `pmtudisc` lets its datagram be
+ * cut into fragments: all but DO and PROBE do, as Linux's ip_sk_ignore_df
+ * says. */
+static int ip_may_cut(int pmtudisc)
+{
+    return pmtudisc != IP_PMTUDISC_DO && pmtudisc != IP_PMTUDISC_PROBE;
 }
 
 /**
@@ -719,7 +737,7 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         mtu = ip_path_mtu(out, dst_ip);
     }
     if (total_len > mtu) {
-        if (pmtudisc == IP_PMTUDISC_DO || pmtudisc == IP_PMTUDISC_PROBE) {
+        if (!ip_may_cut(pmtudisc)) {
             net_mib.ip_frag_fails++;
             return -EMSGSIZE;
         }
@@ -735,7 +753,7 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         return loop_put(ip_tx_buf, payload, plen);
     }
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
-    return ip_emit(out, route_ip, dst_ip, (uint16_t)total_len);
+    return ip_emit(out, route_ip, dst_ip, (uint16_t)total_len, ip_may_cut(pmtudisc) ? mtu : 0);
 }
 
 uint32_t ip_loop_dropped(void)

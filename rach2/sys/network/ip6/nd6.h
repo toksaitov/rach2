@@ -161,10 +161,15 @@ void nd6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t h
  * the next hop `hop`, a unicast address on its link: at once when the
  * hop's station address is cached, else after a solicitation is answered,
  * the datagram held meanwhile. A neighbour that failed is asked again.
- * Returns 0, or -ENOBUFS when the card refused the frame. Called from
- * `ip6_tx` with interrupts off.
+ * `mtu` is the most the datagram's fragments may be, or 0 when it may not
+ * be cut: a fragment, MLD's or a raw one with its own header. Should the
+ * link's MTU fall below the datagram while it is held, it leaves in
+ * fragments of the link's MTU, or is dropped, counted in FragFails, when it
+ * may not be cut. Returns 0, or -ENOBUFS when the card refused the frame.
+ * Called from `ip6_tx` with interrupts off.
  */
-int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len);
+int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len,
+               uint32_t mtu);
 
 /**
  * Hold whole the datagram of fixed header `hdr` and `plen` bytes of payload
