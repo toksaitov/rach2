@@ -1328,11 +1328,18 @@ static void group_rows(void)
     CHECK(snodes[child(gpu, "iommu_group")].target == g0, "iommu_group links to the group");
     CHECK(strcmp(show(child(gpu, "driver_override"), buf, sizeof(buf)), "(null)\n") == 0,
           "driver_override shows (null) unset");
+    CHECK(vfio_override_allows(0x0010, "i915") && vfio_override_allows(0x7f00, "e1000"),
+          "an unset override, or a function no group has, lets any driver bind");
+    CHECK(store(child(gpu, "driver_override"), "(null)") == 6 &&
+              !vfio_override_allows(0x0010, "i915") && vfio_override_allows(0x0010, "(null)"),
+          "the text (null) names a driver, though it shows as an unset override does");
     kernel = child(child(child(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers"), "vfio-pci"), "bind");
     CHECK(store(kernel, "0000:00:02.0\n") == -ENODEV, "bind refuses a device that does not match");
     CHECK(store(child(gpu, "driver_override"), "vfio-pci\n") == 9, "driver_override takes a name");
     CHECK(strcmp(show(child(gpu, "driver_override"), buf, sizeof(buf)), "vfio-pci\n") == 0,
           "driver_override shows the name");
+    CHECK(vfio_override_allows(0x0010, "vfio-pci") && !vfio_override_allows(0x0010, "i915"),
+          "and lets that driver bind, and no other");
     CHECK(store(kernel, "0000:00:02.0\n") == 13 && vdev("0000:00:02.0")->bound,
           "bind gives the device to vfio-pci");
     CHECK(strcmp(pci_owner(0, 0x10), "vfio-pci") == 0, "the device's owner is vfio-pci");

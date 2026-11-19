@@ -11,6 +11,7 @@
 #include "../../display/fbcon.h"
 #include "../../fs/synthfs.h"
 #include "../../fs/sysfs.h"
+#include "../../vfio/vfio.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -498,32 +499,6 @@ static int function_find(uint8_t bus, uint8_t devfn, pci_device_t *out)
     return 0;
 }
 
-/**
- * Whether the function's driver_override lets this driver have it, as
- * Linux's match does: none, which the file shows as "(null)", or the
- * driver's own name. A function with no such file has none; VFIO adds the
- * file, to the functions the IOMMU has in groups.
- */
-static int override_allows(uint8_t bus, uint8_t devfn)
-{
-    char text[SYSFS_NAME_MAX + 8];
-    int pci = sysfs_anchor_find(SYSFS_PCI_DEVICE, (int)bus << 8 | devfn);
-    int file = pci > 0 ? sysfs_node_child(pci, "driver_override", 15) : 0;
-    int32_t n;
-
-    if (file <= 0) {
-        return 1;
-    }
-    n = sysfs_node_show(file, text, (uint32_t)sizeof(text));
-    if (n <= 0 || n > (int32_t)sizeof(text)) {
-        return n <= 0;
-    }
-    if (text[n - 1] == '\n') {
-        n--;
-    }
-    return text_is(text, (uint32_t)n, "(null)") || text_is(text, (uint32_t)n, "i915");
-}
-
 /** After a bind that failed: bus mastering off and the kernel's claim on
  * the function, which the bind's first step took, given up, so that the
  * function can be bound again, by this driver or another. */
@@ -623,7 +598,7 @@ static int32_t store_bind(void *obj, int arg, const char *buf, uint32_t len)
     (void)obj;
     (void)arg;
     if (bdf_parse(buf, len, &bus, &devfn) != 0 || !function_find(bus, devfn, &pdev) ||
-        !override_allows(bus, devfn)) {
+        !vfio_override_allows((int)bus << 8 | devfn, "i915")) {
         return -ENODEV;
     }
     if (busy || slot_of(bus, devfn) || pci_owner(bus, devfn) != 0) {

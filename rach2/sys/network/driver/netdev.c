@@ -30,6 +30,7 @@
 #include "../../pci.h"
 #include "../../timer.h"
 #include "../../udelay.h"
+#include "../../vfio/vfio.h"
 
 /* The interfaces: the `niface` cards the probe brought up, in the order it
  * found them, and `lo` after them. */
@@ -826,45 +827,6 @@ static struct netdev *card_named(int n, const char *buf, uint32_t len)
     return 0;
 }
 
-/** Whether the `n` bytes at `text` are the string `word`. */
-static int text_is(const char *text, uint32_t n, const char *word)
-{
-    uint32_t i;
-
-    for (i = 0; i < n; i++) {
-        if (word[i] == '\0' || text[i] != word[i]) {
-            return 0;
-        }
-    }
-    return word[n] == '\0';
-}
-
-/**
- * Whether the driver_override of the function `key` lets the driver
- * `name` have it, as Linux's driver_match_device reads it: none, which the
- * file shows as "(null)", or `name`. A function without the file, which
- * VFIO adds to the functions the IOMMU has in groups, has none.
- */
-static int override_allows(int key, const char *name)
-{
-    char text[SYSFS_NAME_MAX + 8];
-    int pci = sysfs_anchor_find(SYSFS_PCI_DEVICE, key);
-    int file = pci > 0 ? sysfs_node_child(pci, "driver_override", 15) : 0;
-    int32_t n;
-
-    if (file <= 0) {
-        return 1;
-    }
-    n = sysfs_node_show(file, text, (uint32_t)sizeof(text));
-    if (n <= 0 || n > (int32_t)sizeof(text)) {
-        return n <= 0;
-    }
-    if (text[n - 1] == '\n') {
-        n--;
-    }
-    return text_is(text, (uint32_t)n, "(null)") || text_is(text, (uint32_t)n, name);
-}
-
 /** /sys/bus/pci/drivers/DRIVER/unbind: let go of the card named
  * (`netdev_release`); -ENODEV for a function the driver does not have. */
 static int32_t store_unbind(void *obj, int arg, const char *buf, uint32_t len)
@@ -891,7 +853,7 @@ static int32_t store_bind(void *obj, int arg, const char *buf, uint32_t len)
     int r;
 
     (void)obj;
-    if (!nd || !override_allows(nd->pci_key, sys_drivers[arg].name)) {
+    if (!nd || !vfio_override_allows(nd->pci_key, sys_drivers[arg].name)) {
         return -ENODEV;
     }
     r = netdev_reclaim(nd, sys_drivers[arg].name);

@@ -8,6 +8,7 @@
 
 #include "../fs/synthfs.h"
 #include "../fs/sysfs.h"
+#include "../vfio/vfio.h"
 #include "../irq.h"
 #include "../klog.h"
 #include "../pci.h"
@@ -1297,32 +1298,6 @@ static int vp_name_function(const char *buf, uint32_t len, pci_device_t *out)
     return -ENODEV;
 }
 
-/**
- * Whether the driver_override of the function `key` lets virtio-pci have
- * it, as Linux's driver_match_device reads it: none, which the file shows
- * as "(null)", or "virtio-pci". A function without the file, which VFIO
- * adds to the functions the IOMMU has in groups, has none.
- */
-static int vp_override_allows(int key)
-{
-    char text[SYSFS_NAME_MAX + 8];
-    int pci = sysfs_anchor_find(SYSFS_PCI_DEVICE, key);
-    int file = pci > 0 ? sysfs_node_child(pci, "driver_override", 15) : 0;
-    int32_t n;
-
-    if (file <= 0) {
-        return 1;
-    }
-    n = sysfs_node_show(file, text, (uint32_t)sizeof(text));
-    if (n <= 0 || n > (int32_t)sizeof(text)) {
-        return n <= 0;
-    }
-    if (text[n - 1] == '\n') {
-        n--;
-    }
-    return vp_text_is(text, n, "(null)") || vp_text_is(text, n, "virtio-pci");
-}
-
 /* Whether a write of the driver's files is under way; the unbind may sleep
  * in the child's removal, and a second write waits for none. */
 static int vp_busy;
@@ -1341,7 +1316,7 @@ static int vp_bind(const pci_device_t *p)
     virtio_probe_t probe;
     int k;
 
-    if (!vp_is_virtio(p) || !vp_override_allows(vp_key(p))) {
+    if (!vp_is_virtio(p) || !vfio_override_allows(vp_key(p), "virtio-pci")) {
         return -ENODEV;
     }
     if (vp_record(p) || pci_owner(p->bus, (uint8_t)(p->device << 3 | p->function)) != NULL) {

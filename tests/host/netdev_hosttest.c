@@ -367,7 +367,7 @@ static struct {
     uint32_t waited;
     int locks;
     int dirs, attrs;
-    const char *override; /* the function's driver_override, or NULL for no file */
+    const char *override; /* the function's driver_override, "" for none, NULL ungrouped */
     int bind_error;       /* what the next sysfs_pci_bind answers */
     int dir_parent[8];
     const char *dir_name[8];
@@ -482,28 +482,12 @@ int sysfs_anchor(int node, int key)
     return node == SYSFS_BUS_PCI ? 1 : -ENOENT;
 }
 
-/** The function's directory: handle 50, which holds driver_override when
- * a row set one. */
-int sysfs_anchor_find(int node, int key)
+/** VFIO's driver_override of the function, as group.c compares it: the
+ * stored text, so that "(null)" names a driver. */
+int vfio_override_allows(int key, const char *driver)
 {
     (void)key;
-    return node == SYSFS_PCI_DEVICE ? 50 : 0;
-}
-
-/** driver_override's text, with its newline. */
-int32_t sysfs_node_show(int handle, char *buf, uint32_t cap)
-{
-    uint32_t n = 0;
-
-    if (handle != 51 || !k.override) {
-        return -ENOENT;
-    }
-    while (k.override[n] && n + 1 < cap) {
-        buf[n] = k.override[n];
-        n++;
-    }
-    buf[n++] = '\n';
-    return (int32_t)n;
+    return !k.override || !k.override[0] || same(k.override, driver);
 }
 
 /** The directory `name` made below `dir`, or 0. */
@@ -512,9 +496,6 @@ int sysfs_node_child(int dir, const char *name, int len)
     int i;
 
     (void)len;
-    if (dir == 50) {
-        return k.override && same(name, "driver_override") ? 51 : 0;
-    }
     for (i = 0; i < k.dirs; i++) {
         if (k.dir_parent[i] == dir && same(k.dir_name[i], name)) {
             return 10 + i;
@@ -639,6 +620,9 @@ static void check_takeback(struct netdev *nd, int txs)
     CHECK(write_attr(0, 0, name) == -ENODEV && m_second.inits == 1,
           "bind is ENODEV while driver_override names another driver");
     k.override = "(null)";
+    CHECK(write_attr(0, 0, name) == -ENODEV && m_second.inits == 1,
+          "and while it holds the text (null), which is not the override's absence");
+    k.override = "";
     k.bind_error = -ENOSPC;
     k.unclaims = 0;
     CHECK(write_attr(0, 0, name) == -ENOSPC && m_second.inits == 2 && m_second.stops == 2 &&
