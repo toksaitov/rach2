@@ -1294,7 +1294,8 @@ static void crtc_enable(struct intel_crtc *c, struct drm_atomic_state *state)
         c->crc_skip = 1;
         i915_write(hw, PIPE_CRC_CTL(c->pipe), c->crc_ctl);
     }
-    /* Linux's intel_encoders_audio_enable, from intel_post_plane_update. */
+    /* Linux's intel_encoders_audio_enable, which Linux's
+     * intel_post_plane_update calls after the planes; here before them. */
     intel_audio_codec_enable(i915, c->pipe, cfg);
     if (cfg->output == INTEL_OUTPUT_HDMI) {
         klog(KLOG_INFO, "i915",
