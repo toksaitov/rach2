@@ -718,6 +718,19 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
 int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry);
 
 /**
+ * The mount of proc that the name "proc" enters from the caller's root, as
+ * the walk of "/proc" reaches it, for an open of a file of /proc without the
+ * big lock: 0 with the mount entered in `*out`, for `vfs_leave`; or
+ * VFS_CACHED_MISS with nothing taken, for the full walk under the big lock.
+ * It answers only for a caller whose root is the root of a mount of a type
+ * the cached walk stands on and may be searched, a mount of proc that is no
+ * bind and that the caller's namespace sees, and no mount inside it, so
+ * that the rest of the path is classified by its text alone, as
+ * `synth_rest` classifies it.
+ */
+int vfs_proc_cached(struct vfs_mount **out);
+
+/**
  * Resolve `path` from the caller's root, as `vfs_resolve` does with no
  * `start`, and put in `real`, of VFS_PATH_MAX bytes, the path the walk took
  * to the node it holds: from the caller's root, with each symbolic link the

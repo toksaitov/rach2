@@ -2826,6 +2826,59 @@ int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct 
     return rc == WALK_FULL ? VFS_CACHED_MISS : rc;
 }
 
+/**
+ * Whether the mount table holds an active mount whose parent is `m`: a
+ * nameless mount entered from its root or a mount over a place inside it.
+ * The caller holds `mount_table_lock`.
+ */
+static int mount_has_child(const struct vfs_mount *m)
+{
+    int i;
+
+    for (i = 1; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state == VFS_ACTIVE && mounts[i]->parent == m) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int vfs_proc_cached(struct vfs_mount **out)
+{
+    struct cached_root seen;
+    struct vfs_mount *found = NULL;
+    struct vfs_ref root;
+    uint32_t flags;
+    int i, rc = VFS_CACHED_MISS;
+
+    k_memset(&seen, 0, sizeof(seen));
+    if (!vfs_root_mounted() || (current_proc && current_proc->walk_replay) ||
+        cached_start(NULL, "/", &root, &seen) != 0) {
+        return VFS_CACHED_MISS;
+    }
+    if (root.node == root.mnt->root && !vfs_mount_gone(root.mnt) &&
+        may_search(root.mnt, root.node, 0) == 0) {
+        flags = spin_lock_irqsave(&mount_table_lock);
+        for (i = 1; i < mount_slots && !found; i++) {
+            struct vfs_mount *m = mounts[i];
+
+            if (m && m->state == VFS_ACTIVE && m->parent == root.mnt && !m->covered &&
+                streq(mount_entry_name(m), "proc")) {
+                found = m;
+            }
+        }
+        if (found && found->type == &vfs_procfs_type && !found->bind_of &&
+            vfs_mount_seen_word(found) == 1 && !mount_has_child(found) && vfs_enter(found) == 0) {
+            *out = found;
+            rc = 0;
+        }
+        spin_unlock_irqrestore(&mount_table_lock, flags);
+    }
+    cached_put(root.mnt, root.node);
+    vfs_leave(root.mnt);
+    return rc;
+}
+
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
 {
@@ -4558,7 +4611,7 @@ const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops,    1, 0,
  */
 struct synth_node {
     struct vpath vp;
-    int refs; /* the holds; the last put frees the record */
+    int refs; /* the holds, changed atomically; the last put frees it */
 };
 
 /** A new node of the classification `vp`, with one hold, in `*node`: 0, or
@@ -4577,21 +4630,23 @@ static int synth_take(const struct vpath *vp, void **node)
     return 0;
 }
 
-/** The `hold` of the synthetic types: one more reference to `node`. */
+/** The `hold` of the synthetic types: one more reference to `node`, in one
+ * atomic step, since the end of a description of a /proc file drops its
+ * hold on the mount's root without the big lock (`fd_ofd_unref`). */
 static void synth_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
-    ((struct synth_node *)node)->refs++;
+    mount_count_add((uint32_t *)&((struct synth_node *)node)->refs, 1);
 }
 
-/** The `put` of the synthetic types: one reference fewer, and the record
- * freed with the last. */
+/** The `put` of the synthetic types: one reference fewer, in one atomic
+ * step, and the record freed with the last. */
 static void synth_put(struct vfs_mount *mnt, void *node)
 {
     struct synth_node *n = node;
 
     (void)mnt;
-    if (n->refs > 0 && --n->refs == 0) {
+    if (n->refs > 0 && mount_count_add((uint32_t *)&n->refs, -1) == 0) {
         kfree(n);
     }
 }

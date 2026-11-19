@@ -333,6 +333,11 @@ struct procfs_file {
     int fresh;
     int stale;
     uint32_t gen;
+    /* Guards `data`, `len`, `gen`, `fresh` and `stale` of a snapshot
+     * (`procfs_file_ops`), whose reads run without the big lock and may
+     * run in two threads at once, one of them by pread64, which holds no
+     * description lock. A leaf: nothing is taken under it. */
+    struct spinlock text_lock;
     /* The owner the last lookup of a file of /proc/<pid> or of a
      * descriptor's fdinfo file gave it (`procfs_lookup_owner`). */
     struct synth_owner own;
@@ -344,6 +349,10 @@ struct procfs_file {
  * again (base.c:776-778, fd.c:103-106, fd.c:350-366, fd.c:411-415,
  * base.c:3945-3958). */
 static struct synth_owner *procfs_owned;
+/* Guards `procfs_owned`, its links and its records' `uid` and `gid`, since
+ * the last close of a snapshot takes its record off the list without the
+ * big lock (`procfs_close`). A leaf: nothing is taken under it. */
+static struct spinlock procfs_owned_lock = SPINLOCK_INIT_NAMED("procfs_owned");
 
 static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id);
 
@@ -7996,22 +8005,38 @@ static int procfs_needs_pid(int kind);
 /**
  * Make the snapshot of `f` again, from the path and the process its open
  * resolved: 0, or the generator's error, -ESRCH for a process that is gone
- * as Linux answers a read of its file, with the old text kept. Nothing that
- * sleeps comes between taking the old text and putting the new.
+ * as Linux answers a read of its file, with the old text kept. The text is
+ * made under the big lock, which the generators need and which this takes
+ * when the caller does not hold it, and put in place under the record's
+ * lock, so that a read in another thread copies from the old text or the
+ * new and never from one being freed.
  */
 static int procfs_regen(struct procfs_file *f)
 {
     struct procfs_text text;
     int key = f->gen_pid;
-    int len = procfs_render(&text, &f->vp, f->gen_pid, &key);
+    int big = !bkl_held();
+    char *old;
+    uint32_t flags;
+    int len;
 
+    if (big) {
+        bkl_enter();
+    }
+    len = procfs_render(&text, &f->vp, f->gen_pid, &key);
+    if (big) {
+        bkl_exit();
+    }
     if (len < 0) {
         return len == -ENOENT && procfs_needs_pid(f->vp.kind) ? -ESRCH : len;
     }
-    kfree(f->data);
+    flags = spin_lock_irqsave(&f->text_lock);
+    old = f->data;
     f->data = text.buf;
     f->len = len;
     f->gen++;
+    spin_unlock_irqrestore(&f->text_lock, flags);
+    kfree(old);
     return 0;
 }
 
@@ -8030,17 +8055,20 @@ static int sysctl_numeric(int entry);
  * (`sysctl_numeric`), so that a reader taking a byte at a time gets only
  * the first.
  *
- * The text goes out through a buffer on the stack, a piece at a time, since
- * the copy to the caller may sleep in a fault and pread64 holds no lock: a
- * sharer may make the snapshot again meanwhile, which frees the old text.
- * The read then ends short, before a piece of the new.
+ * The text goes out through a buffer on the stack, a piece at a time, each
+ * copied from the text under the record's lock (`text_lock`), since the
+ * copy to the caller may sleep in a fault and neither pread64 nor a read
+ * without the big lock keeps a sharer from making the snapshot again
+ * meanwhile, which frees the old text. The read then ends short, before a
+ * piece of the new. Only the making of the text takes the big lock
+ * (`procfs_regen`), so a read of a text an open or a read made takes none.
  */
 static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     char piece[256];
-    uint32_t off, n, done = 0, gen;
-    int rc;
+    uint32_t off, n, done = 0, gen, flags;
+    int rc, remake;
 
     if (!f) {
         return 0;
@@ -8049,24 +8077,40 @@ static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
         sysctl_numeric(f->origin_pid)) {
         return 0;
     }
-    if (f->stale || (e->ofd->offset == 0 && !f->fresh)) {
+    flags = spin_lock_irqsave(&f->text_lock);
+    remake = f->stale || (e->ofd->offset == 0 && !f->fresh);
+    spin_unlock_irqrestore(&f->text_lock, flags);
+    if (remake) {
         rc = procfs_regen(f);
         if (rc != 0) {
             return rc;
         }
     }
+again:
+    flags = spin_lock_irqsave(&f->text_lock);
     f->fresh = 0;
     f->stale = 0;
-    if (e->ofd->offset >= (uint64_t)f->len) {
+    gen = f->gen;
+    n = (uint32_t)f->len;
+    spin_unlock_irqrestore(&f->text_lock, flags);
+    if (e->ofd->offset >= (uint64_t)n) {
         return 0;
     }
     off = (uint32_t)e->ofd->offset;
-    n = (uint32_t)f->len - off < count ? (uint32_t)f->len - off : count;
-    gen = f->gen;
-    while (done < n && f->gen == gen) {
+    n = n - off < count ? n - off : count;
+    while (done < n) {
         uint32_t k = n - done < sizeof(piece) ? n - done : (uint32_t)sizeof(piece);
 
+        flags = spin_lock_irqsave(&f->text_lock);
+        if (f->gen != gen) {
+            spin_unlock_irqrestore(&f->text_lock, flags);
+            if (done == 0) {
+                goto again; /* made again before the first piece: read the new */
+            }
+            break;
+        }
         k_memcpy(piece, f->data + off + done, k);
+        spin_unlock_irqrestore(&f->text_lock, flags);
         if (copy_to_user(buf + done, piece, k) != 0) {
             break;
         }
@@ -8128,6 +8172,11 @@ static void procfs_close(fd_entry_t *e)
 
 static const struct file_ops procfs_file_ops = {
     procfs_read, procfs_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
+
+int procfs_fd_unlocked(const struct fd_entry *e)
+{
+    return e && e->type == FD_TYPE_PROC && e->ops == &procfs_file_ops && e->priv;
+}
 
 /** Read the PCI config file afresh at every offset, including pread. */
 static int32_t procfs_pciconfig_read(fd_entry_t *e, char __user *buf, uint32_t count)
@@ -8872,7 +8921,7 @@ static void procfs_set_owner(const int node[4])
 {
     struct synth_owner *o;
     uint32_t mode = 0100644u;
-    uint32_t uid = 0, gid = 0;
+    uint32_t uid = 0, gid = 0, flags;
 
     if (node[0] == VNODE_PROC_FD_DIR) {
         mode = 0040500u;
@@ -8886,6 +8935,7 @@ static void procfs_set_owner(const int node[4])
     if (procfs_pid_owner(node[2], mode, &uid, &gid) != 0) {
         return;
     }
+    flags = spin_lock_irqsave(&procfs_owned_lock);
     for (o = procfs_owned; o; o = o->next) {
         if (o->node[0] == node[0] && o->node[1] == node[1] && o->node[2] == node[2] &&
             o->node[3] == node[3]) {
@@ -8893,6 +8943,7 @@ static void procfs_set_owner(const int node[4])
             o->gid = gid;
         }
     }
+    spin_unlock_irqrestore(&procfs_owned_lock, flags);
 }
 
 /**
@@ -8902,12 +8953,16 @@ static void procfs_set_owner(const int node[4])
  */
 static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id)
 {
+    uint32_t flags;
+
     if (o->kept || !procfs_node_of(vp, id, o->node)) {
         return;
     }
+    flags = spin_lock_irqsave(&procfs_owned_lock);
     o->kept = 1;
     o->next = procfs_owned;
     procfs_owned = o;
+    spin_unlock_irqrestore(&procfs_owned_lock, flags);
     procfs_set_owner(o->node);
 }
 
@@ -8923,10 +8978,12 @@ void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
 void procfs_owner_drop(struct synth_owner *o)
 {
     struct synth_owner **pp = &procfs_owned;
+    uint32_t flags;
 
     if (!o->kept) {
         return;
     }
+    flags = spin_lock_irqsave(&procfs_owned_lock);
     while (*pp && *pp != o) {
         pp = &(*pp)->next;
     }
@@ -8934,6 +8991,7 @@ void procfs_owner_drop(struct synth_owner *o)
         *pp = o->next;
     }
     o->kept = 0;
+    spin_unlock_irqrestore(&procfs_owned_lock, flags);
 }
 
 void procfs_lookup_owner(const struct vpath *vp)
@@ -8949,16 +9007,21 @@ void procfs_lookup_owner(const struct vpath *vp)
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
     const struct procfs_file *f;
+    uint32_t flags;
+    int kept;
 
     if (!e || e->type != FD_TYPE_PROC || !e->priv) {
         return -1;
     }
     f = (const struct procfs_file *)e->priv;
-    if (!f->own.kept) {
-        return -1;
-    }
+    flags = spin_lock_irqsave(&procfs_owned_lock);
+    kept = f->own.kept;
     *uid = f->own.uid;
     *gid = f->own.gid;
+    spin_unlock_irqrestore(&procfs_owned_lock, flags);
+    if (!kept) {
+        return -1;
+    }
     return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
            f->origin_file == SYNTH_PROC_SCHED || f->origin_file == SYNTH_PROC_AUTOGROUP ||
            procfs_is_idmap(f->origin_file);
@@ -11721,6 +11784,27 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
 }
 
 /**
+ * Give the description of `e`, a descriptor of a file reached through
+ * `mnt`, a hold on that mount's root and a reference on the mount, which
+ * its end gives back (`fd_ofd_unref`), as the description of any synthetic
+ * node keeps the mount it was opened through (`synth_mnt`). Nothing for a
+ * NULL `e` or `mnt`, or a description that keeps a mount already.
+ */
+static void procfs_mount_record(fd_entry_t *e, struct vfs_mount *mnt)
+{
+    struct vfs_ref root;
+
+    if (!e || !mnt || !e->ofd || e->ofd->vmnt || e->ofd->synth_mnt) {
+        return;
+    }
+    root.mnt = mnt;
+    root.node = mnt->root;
+    vfs_ref_hold(&root);
+    vfs_desc_open(mnt);
+    e->ofd->synth_mnt = mnt;
+}
+
+/**
  * Whether a read open of the file `vp`, with the flags `flags`, is refused
  * for being a /sys file whose mode the caller may not read, or with
  * O_TRUNC may not also write, as `sysfs_file_may` judges it: a fixed
@@ -11752,8 +11836,13 @@ static int sysfs_read_refused(const struct vpath *vp, int flags)
  * `/proc/disk` is rendered from the record taken at boot, so opening it
  * issues no command to the device. `diskinfo_format` truncates to the size
  * it is given, so a text that reached it is refused with -EOVERFLOW.
+ *
+ * The description keeps `mnt` (`procfs_mount_record`): a snapshot's takes
+ * it before the descriptor is published, since its last close may run in
+ * another thread without the big lock as soon as it is
+ * (`procfs_fd_unlocked`), and one of a file with an open of its own after.
  */
-int procfs_open(const struct vpath *vp, int flags)
+int procfs_open(const struct vpath *vp, int flags, struct vfs_mount *mnt)
 {
     int pid = 0;
     struct procfs_file *f = NULL;
@@ -11778,6 +11867,8 @@ int procfs_open(const struct vpath *vp, int flags)
         return -EACCES;
     }
     if (procfs_open_own(vp, pid, flags, &fd)) {
+        /* Its close takes the big lock, which the caller holds. */
+        procfs_mount_record(fd >= 0 ? fd_slot(current_proc->fds, fd) : NULL, mnt);
         return fd;
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
@@ -11806,6 +11897,7 @@ int procfs_open(const struct vpath *vp, int flags)
     f->data = text.buf;
     f->len = len;
     f->fresh = 1;
+    spin_lock_init(&f->text_lock, "procfs_text");
     f->vp = *vp;
     f->gen_pid = pid;
     f->origin_pid = key;
@@ -11841,6 +11933,7 @@ int procfs_open(const struct vpath *vp, int flags)
         e->flags |= FD_FLAG_CLOEXEC;
     }
     e->ofd->status_flags |= OFD_OPEN_STATUS(flags);
+    procfs_mount_record(e, mnt);
     fd_install(current_proc->fds, fd);
     return fd;
 }

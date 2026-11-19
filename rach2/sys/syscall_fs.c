@@ -2848,16 +2848,22 @@ static int mount_permanent_at(const struct vfs_mount *m)
     return 0;
 }
 
+static int synth_procfs_kind(int kind);
+
 /** Keep the mount of a synthetic open for later descriptor-link checks.
  * `ref` remains held by the caller. A followed magic link keeps its
- * object's mount instead; namespace objects have no file-system mount. */
+ * object's mount instead; namespace objects have no file-system mount. A
+ * file of /proc or /sys that `procfs_open` opened keeps the mount it was
+ * given, and its slot is not read again, since a snapshot's descriptor may
+ * have been closed without the big lock since it was published. */
 static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags)
 {
     struct open_file *ofd;
     struct vfs_ref root;
 
-    if (fd < 0 || ((vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_NS_LINK) &&
-                   !(flags & O_NOFOLLOW))) {
+    if (fd < 0 || synth_procfs_kind(vp->kind) ||
+        ((vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_NS_LINK) &&
+         !(flags & O_NOFOLLOW))) {
         return;
     }
     ofd = fd_slot(current_proc->fds, fd)->ofd;
@@ -3504,71 +3510,24 @@ static int open_want(int flags)
     }
 }
 
-/** Open the file of /proc at `vp` that is root's alone, checked for the
- * access `want` as a file of `mode` that root owns: /proc/disk for reading
- * as 0400, whatever `flags` ask, and /proc/acpi/call as 0600. */
-static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode, int want)
+/** Open the file of /proc at `vp`, reached through `mnt`, that is root's
+ * alone, checked for the access `want` as a file of `mode` that root owns:
+ * /proc/disk for reading as 0400, whatever `flags` ask, and /proc/acpi/call
+ * as 0600. */
+static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode, int want,
+                               struct vfs_mount *mnt)
 {
     int32_t rc = cred_access_bits(0, 0, mode, want, 0);
 
-    return rc != 0 ? rc : procfs_open(vp, flags);
+    return rc != 0 ? rc : procfs_open(vp, flags, mnt);
 }
 
-/**
- * Open with `flags` the node of /dev, /proc or /sys that a path classified
- * as `vp`, and return the descriptor or a negative errno. Nothing is created
- * there, and no name falls through to KRFFS: a name the class does not know
- * is -ENOENT.
- *
- * A device of /dev binds its file operations (`devfs_open`) after the
- * nine-bit check against the mode its entry reports, every entry owned by
- * root: the 0666 devices open for anyone, and the raw boot-partition window,
- * 0600, for root alone. /dev/pts/N is the slave end of pty N, checked
- * against the pty's owner, group and mode, so that one user cannot open
- * another's terminal; `pty_open_slave` takes the descriptor itself and fails
- * on a pair not allocated or locked.
- *
- * A file of /proc or /sys snapshots its text at the open (`procfs_open`),
- * but for oom_score_adj and mem, which reach the process at each read.
- * /proc/disk opens for root alone: it has the drive's serial number, and an
- * image that has the file also has an unprivileged account. A directory gets
- * a synthetic directory descriptor (`synth_open_dir`), /proc/PID/fd/N
- * follows its link (`proc_fd_open`), /proc/PID/fdinfo/N opens for a caller
- * that may read the process, and a namespace link opens its namespace
- * (`procfs_open_ns`).
- */
-static int32_t synth_open(const struct vpath *vp, int flags)
+/** Whether a file of `kind` opens as `procfs_open` opens it, with nothing
+ * checked before: the files of /proc and /sys whose text, or an open of
+ * their own, procfs makes. */
+static int synth_text_kind(int kind)
 {
-    if (synth_kind_is_dir(vp->kind)) {
-        return synth_open_dir(vp, flags);
-    }
-    switch (vp->kind) {
-    case VNODE_DEV: {
-        uint32_t dmode, uid, gid;
-        int32_t rc;
-
-        if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0 ||
-            devfs_owner(vp->name, &uid, &gid) != 0) {
-            return -ENOENT;
-        }
-        rc = cred_access_bits(uid, gid, dmode & 0777u, open_want(flags), 0);
-        return rc != 0 ? rc : devfs_open(vp->name, flags);
-    }
-    case VNODE_PTS:
-        if (flags & O_DIRECTORY) {
-            return -ENOTDIR;
-        }
-        {
-            struct pty *pt = pty_get(vp->pts_index);
-            if (pt) {
-                int32_t rc = cred_access_bits(pt->uid, pt->gid, (uint32_t)(pt->mode & 0777u),
-                                              open_want(flags), 0);
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-        }
-        return pty_open_slave(vp->pts_index, flags);
+    switch (kind) {
     case VNODE_PROC_FILE:
     case VNODE_PROC_CMDLINE:
     case VNODE_PROC_NET_DEV:
@@ -3602,11 +3561,96 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_ASOUND:
     case VNODE_PROC_BUS_INPUT:
     case VNODE_SYS_FILE:
-        return procfs_open(vp, flags);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/** Whether `synth_open` opens a file of `kind` through `procfs_open` alone,
+ * whose description then keeps the mount it was given. */
+static int synth_procfs_kind(int kind)
+{
+    switch (kind) {
     case VNODE_PROC_DISK:
-        return synth_open_root(vp, flags, 0400u, CRED_R);
     case VNODE_PROC_ACPI_CALL:
-        return synth_open_root(vp, flags, 0600u, open_want(flags));
+    case VNODE_PROC_FDINFO:
+        return 1;
+    case VNODE_DEV:
+    case VNODE_PTS:
+    case VNODE_DEV_MADE:
+    case VNODE_ENOTDIR:
+    case VNODE_PROC_FD_LINK:
+    case VNODE_PROC_NS_LINK:
+        return 0;
+    default:
+        return !synth_kind_is_dir(kind) && (synth_text_kind(kind) || procfs_ino_global(kind) != 0);
+    }
+}
+
+/**
+ * Open with `flags` the node of /dev, /proc or /sys that a path classified
+ * as `vp`, and return the descriptor or a negative errno. Nothing is created
+ * there, and no name falls through to KRFFS: a name the class does not know
+ * is -ENOENT.
+ *
+ * A device of /dev binds its file operations (`devfs_open`) after the
+ * nine-bit check against the mode its entry reports, every entry owned by
+ * root: the 0666 devices open for anyone, and the raw boot-partition window,
+ * 0600, for root alone. /dev/pts/N is the slave end of pty N, checked
+ * against the pty's owner, group and mode, so that one user cannot open
+ * another's terminal; `pty_open_slave` takes the descriptor itself and fails
+ * on a pair not allocated or locked.
+ *
+ * A file of /proc or /sys snapshots its text at the open (`procfs_open`),
+ * but for oom_score_adj and mem, which reach the process at each read.
+ * /proc/disk opens for root alone: it has the drive's serial number, and an
+ * image that has the file also has an unprivileged account. A directory gets
+ * a synthetic directory descriptor (`synth_open_dir`), /proc/PID/fd/N
+ * follows its link (`proc_fd_open`), /proc/PID/fdinfo/N opens for a caller
+ * that may read the process, and a namespace link opens its namespace
+ * (`procfs_open_ns`). `mnt`, the mount the walk reached `vp` through, is
+ * the one a description of a /proc or /sys file holds (`procfs_open`).
+ */
+static int32_t synth_open(const struct vpath *vp, int flags, struct vfs_mount *mnt)
+{
+    if (synth_kind_is_dir(vp->kind)) {
+        return synth_open_dir(vp, flags);
+    }
+    if (synth_text_kind(vp->kind)) {
+        return procfs_open(vp, flags, mnt);
+    }
+    switch (vp->kind) {
+    case VNODE_DEV: {
+        uint32_t dmode, uid, gid;
+        int32_t rc;
+
+        if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0 ||
+            devfs_owner(vp->name, &uid, &gid) != 0) {
+            return -ENOENT;
+        }
+        rc = cred_access_bits(uid, gid, dmode & 0777u, open_want(flags), 0);
+        return rc != 0 ? rc : devfs_open(vp->name, flags);
+    }
+    case VNODE_PTS:
+        if (flags & O_DIRECTORY) {
+            return -ENOTDIR;
+        }
+        {
+            struct pty *pt = pty_get(vp->pts_index);
+            if (pt) {
+                int32_t rc = cred_access_bits(pt->uid, pt->gid, (uint32_t)(pt->mode & 0777u),
+                                              open_want(flags), 0);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+        }
+        return pty_open_slave(vp->pts_index, flags);
+    case VNODE_PROC_DISK:
+        return synth_open_root(vp, flags, 0400u, CRED_R, mnt);
+    case VNODE_PROC_ACPI_CALL:
+        return synth_open_root(vp, flags, 0600u, open_want(flags), mnt);
     case VNODE_DEV_MADE:
         return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags) : -ENOENT;
     case VNODE_ENOTDIR:
@@ -3617,7 +3661,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
-        return procfs_may_read(procfs_resolve_pid(vp->pid)) ? procfs_open(vp, flags) : -EACCES;
+        return procfs_may_read(procfs_resolve_pid(vp->pid)) ? procfs_open(vp, flags, mnt) : -EACCES;
     case VNODE_PROC_NS_LINK:
         if (current_proc->walk_replay_mnt) {
             return -EXDEV;
@@ -3625,7 +3669,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return procfs_resolve_id(vp) < 0 ? -ENOENT
                                          : procfs_open_ns(procfs_resolve_id(vp), vp->procfd, flags);
     default:
-        return procfs_ino_global(vp->kind) ? procfs_open(vp, flags) : -ENOENT;
+        return procfs_ino_global(vp->kind) ? procfs_open(vp, flags, mnt) : -ENOENT;
     }
 }
 
@@ -4674,9 +4718,9 @@ static int synth_is_block(const struct vpath *vp);
  * EEXIST under O_CREAT|O_EXCL. O_DIRECT is -EINVAL for anything but a block
  * device, as Linux refuses it for a file without FMODE_CAN_ODIRECT; a disk
  * takes it and reads and writes as without it. Anything else opens as its
- * kind opens.
+ * kind opens (`synth_open`), through `mnt`, the mount the walk reached it by.
  */
-static int32_t open_synth_node(const struct vpath *vp, int flags)
+static int32_t open_synth_node(const struct vpath *vp, int flags, struct vfs_mount *mnt)
 {
     if (synth_is_link(vp) && (flags & O_NOFOLLOW)) {
         return -ELOOP;
@@ -4687,7 +4731,7 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
     if ((flags & (O_DIRECT | O_PATH)) == O_DIRECT && !synth_is_link(vp) && !synth_is_block(vp)) {
         return -EINVAL;
     }
-    return synth_open(vp, flags);
+    return synth_open(vp, flags, mnt);
 }
 
 /**
@@ -4849,7 +4893,7 @@ again:
             vfs_walk_unlock(ref.mnt);
             fd_free(current_proc->fds, fd);
             fd = -1;
-            rc = ro ? -EROFS : open_synth_node(&vpc, flags);
+            rc = ro ? -EROFS : open_synth_node(&vpc, flags, ref.mnt);
             synth_mount_record(rc, &ref, &vpc, flags);
             vfs_ref_release(&ref);
             synth_dir_record(rc, permanent, name);
@@ -5596,6 +5640,99 @@ static int32_t open_sent_locked(int why, int flags, const char *kpath, const cha
     return CALL_LOCKED;
 }
 
+/**
+ * Classify `name`, a canonical path below the caller's root with no leading
+ * '/' that begins "proc/", into `vp` as `synth_rest` classifies it through
+ * the mount of /proc, by its text alone: 1 when every part of it that more
+ * of the path follows is a directory of /proc, which the walk searches and
+ * no link of which it follows but /proc/self, whose text names the
+ * caller's own directory as its classification does, and the whole is a
+ * file `procfs_open` opens (`synth_text_kind`); 0 for any other path, which
+ * the full walk takes.
+ */
+static int proc_text_path(const char *name, struct vpath *vp)
+{
+    char full[256];
+    uint32_t len = (uint32_t)k_strlen(name), i;
+
+    if (len >= sizeof(full)) {
+        return 0;
+    }
+    k_memcpy(full, name, len + 1);
+    for (i = 5; i < len; i++) {
+        if (full[i] != '/') {
+            continue;
+        }
+        full[i] = '\0';
+        synth_classify(full, vp);
+        full[i] = '/';
+        if (!synth_kind_is_dir(vp->kind)) {
+            return 0;
+        }
+    }
+    for (i = 0; i < len; i++) {
+        if (full[i] == '.' && (i == 0 || full[i - 1] == '/') &&
+            (full[i + 1] == '/' || full[i + 1] == '\0' ||
+             (full[i + 1] == '.' && (full[i + 2] == '/' || full[i + 2] == '\0')))) {
+            return 0;
+        }
+    }
+    synth_classify(full, vp);
+    return synth_text_kind(vp->kind);
+}
+
+/**
+ * Give each node of /proc that the walk of `name`, as `proc_text_path`
+ * admitted it, passes or ends on the owner its lookup gives it
+ * (`procfs_lookup_owner`), as `synth_rest` and `synth_link_part` do for
+ * each part that more of the path follows and for the whole. The caller
+ * holds the big lock.
+ */
+static void proc_walk_owners(const char *name)
+{
+    char full[256];
+    struct vpath vp;
+    uint32_t len = (uint32_t)k_strlen(name), i;
+
+    k_memcpy(full, name, len + 1);
+    for (i = 5; i < len; i++) {
+        if (full[i] == '/') {
+            full[i] = '\0';
+            synth_classify(full, &vp);
+            procfs_lookup_owner(&vp);
+            full[i] = '/';
+        }
+    }
+    synth_classify(full, &vp);
+    procfs_lookup_owner(&vp);
+}
+
+/**
+ * `open_unlocked` for a read-only open of a file of /proc, `name` without
+ * its leading '/': as `do_open` opens it after its walk, with the walk made
+ * without the big lock (`vfs_proc_cached`, `proc_text_path`) and the lock
+ * taken only for what reads the processes, the owners the walk's lookups
+ * give (`proc_walk_owners`) and the open, which makes the snapshot
+ * (`procfs_open`). The descriptor, a negative errno, or CALL_LOCKED with
+ * nothing done for a path the full walk takes.
+ */
+static int32_t proc_open_unlocked(const char *name, int flags)
+{
+    struct vfs_mount *mnt;
+    struct vpath vp;
+    int32_t rc;
+
+    if (!proc_text_path(name, &vp) || vfs_proc_cached(&mnt) != 0) {
+        return CALL_LOCKED;
+    }
+    bkl_enter();
+    proc_walk_owners(name);
+    rc = procfs_open(&vp, flags, mnt);
+    bkl_exit();
+    vfs_leave(mnt);
+    return rc;
+}
+
 static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
 {
     struct vfs_name *entry = NULL;
@@ -5617,6 +5754,13 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
         flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;
     }
     name = path_name(path);
+    if (path_starts(name, "proc/")) {
+        rc = proc_open_unlocked(name, flags);
+        if (rc != CALL_LOCKED) {
+            path_buf_put(path);
+            return rc;
+        }
+    }
     if (device_name(name, "fb") || device_name(name, "mouse") || path_starts(name, "proc/") ||
         path_starts(name, "dev/")) {
         open_sent_locked(BKL_OPEN_DEVICE, flags, name, NULL);
@@ -6242,10 +6386,16 @@ static int file_read_lock(const fd_entry_t *e)
  * take none (drivers/char/mem.c). It implies `file_ops_unlocked`'s answer
  * but for those mounts, which `open_device_node` may add after the
  * descriptor is published, so that FD_MODE_READ_FREE and
- * FD_MODE_WRITE_FREE (`fd_mode_of`) do not depend on them.
+ * FD_MODE_WRITE_FREE (`fd_mode_of`) do not depend on them. A snapshot of
+ * /proc or /sys is read without the lock as well (`procfs_fd_unlocked`),
+ * under its description's lock, which keeps its offset, and its own; its
+ * write is refused.
  */
 static int file_rw_unlocked(const fd_entry_t *e)
 {
+    if (procfs_fd_unlocked(e)) {
+        return 1;
+    }
     if (!e || !e->ops || !(e->ops->flags & FILE_OPS_UNLOCKED) || e->type == FD_TYPE_SOCKET ||
         ops_offset_moves(e)) {
         return 0;
@@ -6331,11 +6481,12 @@ static int fd_change_lock(int fd)
  * it, its last descriptor closing it as Linux's last `fput` releases a
  * file (`fd_release_objects`), and so is a file or directory that
  * `file_vfs_unlocked` admits, whose description's end takes the big lock
- * where it needs it (`fd_ofd_unref`).
+ * where it needs it (`fd_ofd_unref`), and a snapshot of /proc or /sys
+ * (`procfs_fd_unlocked`).
  */
 static void fd_teardown(fd_table_t *table, int fd, fd_entry_t *e)
 {
-    int big = !file_ops_unlocked(e) && !file_vfs_unlocked(e);
+    int big = !file_ops_unlocked(e) && !file_vfs_unlocked(e) && !procfs_fd_unlocked(e);
 
     if (big) {
         bkl_enter();

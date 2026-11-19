@@ -548,7 +548,10 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
  * `release` and `put` and the name record (`vfs_name_put`) take the big
  * lock where they need it, as Linux's last `fput` of a file takes no lock
  * but its own (`__fput`, fs/file_table.c:442). The description's own record
- * locks go under their list's lock (`lock_ofd_gone`).
+ * locks go under their list's lock (`lock_ofd_gone`). A description of a
+ * synthetic node that names no file keeps only a hold on its mount's root,
+ * which `vfs_desc_close` gives back in atomic steps, taking the big lock
+ * itself to reap a mount that was detached.
  */
 static int ofd_end_big(const struct open_file *ofd)
 {
@@ -561,8 +564,7 @@ static int ofd_end_big(const struct open_file *ofd)
         return ofd->dev_mnt || ofd->synth_mnt || ofd->pin || ofd->access ||
                !vfs_mount_base(ofd->vmnt)->type->reads_unlocked;
     }
-    return ofd->dev_mnt || ofd->synth_mnt || ofd->name || ofd->pin || ofd->access || ofd->dirpath ||
-           ofd->leaf;
+    return ofd->dev_mnt || ofd->name || ofd->pin || ofd->access || ofd->dirpath || ofd->leaf;
 }
 
 /**

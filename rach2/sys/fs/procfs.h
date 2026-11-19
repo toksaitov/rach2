@@ -16,6 +16,7 @@ struct vpath;
 struct fd_entry;
 struct synth_owner;
 struct vfs_ref;
+struct vfs_mount;
 
 /* st_dev for /proc nodes, distinct from KRFFS (0) and devfs (DEVFS_FSID). */
 #define PROCFS_FSID 6u
@@ -80,8 +81,22 @@ int procfs_fd_count(int pid);
  * reach the value as it is then: /proc/<pid>/oom_score_adj and
  * /proc/<pid>/mem, and, opened for writing, a writable /proc/sys or /sys
  * file and /proc/<pid>/uid_map, gid_map and setgroups.
+ *
+ * `mnt`, or NULL, is the mount the walk reached the file through, on which
+ * a snapshot's description takes a hold before its descriptor is published
+ * (`synth_mnt`, fd.h). The caller holds the big lock.
  */
-int procfs_open(const struct vpath *vp, int flags);
+int procfs_open(const struct vpath *vp, int flags, struct vfs_mount *mnt);
+
+/**
+ * Whether `e` is a descriptor of a snapshot that `procfs_open` made, whose
+ * read and last close run without the big lock: a read copies the text
+ * under the record's own lock and takes the big lock only to make the text
+ * again, and the close takes the record off the list of kept owners under
+ * that list's lock and frees it. A descriptor whose file has an open of its
+ * own answers 0.
+ */
+int procfs_fd_unlocked(const struct fd_entry *e);
 
 /** The inode of /proc/irq for vector -1, its vector's directory at attr 0,
  * or its requested and effective mask files at attrs 1 and 2. */
@@ -229,7 +244,7 @@ uint32_t procfs_ino_nettcp(void);
  * `synth_net_name`: those `synth_net_file` gives and the two files of
  * /proc/net/stat. */
 uint32_t procfs_ino_net(int origin);
-struct vfs_mount;
+
 /** The device stat gives the files of the mount `m`, entry `i` of the
  * table (`vfs_fill_stat64`): 0 on the KRFFS root; the node of /dev it was
  * mounted from, in Linux's encoding, as a disk's or a loop device's mount
