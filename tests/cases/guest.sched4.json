@@ -105,7 +105,7 @@
         },
         {
           "assertion_id": "migration",
-          "checks": "Eight spinners started on processor 1 and then allowed all four each run within 25% of their mean over 6 s after 2 s, and migrate six times or more in all",
+          "checks": "Eight spinners started on processor 1 and then allowed all four get four processors' worth of run time within 10% over 6 s after 2 s, each within 25% of their mean, and migrate six times or more in all",
           "source": "program"
         },
         {
