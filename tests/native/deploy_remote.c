@@ -171,9 +171,10 @@ int nd_run(struct nd_deploy *d)
  * runs outside the lock, since the collection takes it to release its own;
  * the second look checks the collection lock and the claim again and removes
  * the claim. A claim absent at the second look counts as removed, and one with
- * no owner record, which only a dead writer leaves, is removed with a line
- * that says so. A claim whose recorded process still runs in this boot fails
- * the cleanup, and so does a claim of another deployment. */
+ * no owner record, which only a dead writer leaves, is removed, with a line
+ * that says so once its rmdir has succeeded. A claim whose recorded process
+ * still runs in this boot fails the cleanup, and so does a claim of another
+ * deployment. */
 int nd_remote_cleanup(struct nd_deploy *d)
 {
     struct nd_process *process = NULL;
@@ -196,12 +197,13 @@ int nd_remote_cleanup(struct nd_deploy *d)
                    "if test -n \"$waiting\"; then "
                    "while alive; do kill -TERM \"$pid\" || break; sleep 1; done; fi; "
                    "serial; test ! -d \"$state/collection.lock\"; "
-                   "if test -d \"$claim\"; then "
+                   "if test -d \"$claim\"; then orphan=; "
                    "if test -f \"$claim/owner\"; then test \"$(cat \"$claim/owner\")\" = '%s'; "
                    "if read pid born boot 2>/dev/null < \"$receipt\"; then valid; "
-                   "if alive; then exit 1; fi; fi; else "
-                   "printf 'native-deploy: cleared: %%s: no owner record\\n' \"$claim\" >&2; fi; "
+                   "if alive; then exit 1; fi; fi; else orphan=yes; fi; "
                    "rm -f \"$receipt\" \"$claim/owner\"; rmdir \"$claim\"; "
+                   "if test -n \"$orphan\"; then "
+                   "printf 'native-deploy: cleared: %%s: no owner record\\n' \"$claim\" >&2; fi; "
                    "fi; exec 9>&-; "
                    "printf 'native-deploy: remote controller ended\\n'",
                    guard, d->c.target, d->c.run, d->c.target, d->c.nonce, d->c.nonce))
