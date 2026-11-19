@@ -117,7 +117,7 @@ int tcp_ack_batch = 1;
 static int tcp_batch_depth;
 static struct tcb *tcp_batch_list;
 
-static void tcp_delack_quick(struct tcb *tcb, uint32_t wnd);
+static void tcp_delack_quick(struct tcb *tcb);
 static void tcp_enter_quickack(struct tcb *tcb);
 
 /** Drop the acknowledgement work of `tcb`, which a reset or a give-up
@@ -335,15 +335,32 @@ void tcp_init(void)
  * what the 16-bit field carries at the connection's scale. An unscaled
  * ring of 64 KiB is one larger than the field, so a cast alone would offer
  * zero for an empty ring.
+ *
+ * Under `tcp_delack` it is Linux's __tcp_select_window and tcp_select_window
+ * besides: while less than half the largest window is free, less than a
+ * sixteenth of it or than `rcv_mss` is offered as zero, and never less than
+ * what the peer was offered already (`rcv_adv`), which the ring always has
+ * room for, since data that came in has taken only space offered before.
  */
 static uint32_t tcp_rcv_window(const struct tcb *tcb)
 {
     uint32_t free_space = tcb->recv_size - (tcb->recv_tail - tcb->recv_head);
     uint32_t most = (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale;
+    uint32_t wnd = free_space > most ? most : free_space;
+    uint32_t clamp = most > tcb->recv_size ? tcb->recv_size : most, left;
 
-    return free_space > most ? most : free_space;
+    if (!tcp_delack || !tcb->rcv_adv_set) {
+        return wnd;
+    }
+    if (wnd < clamp / 2u && (wnd < clamp / 16u || wnd < tcb->rcv_mss)) {
+        wnd = 0;
+    }
+    left = tcb->rcv_adv - tcb->rcv_nxt;
+    if ((int32_t)left > 0 && wnd < left) {
+        wnd = left;
+    }
+    return wnd;
 }
-
 /**
  * The window field of a segment of `flags` about to be sent: the window
  * shifted by the connection's scale, except in a SYN, whose field is never
@@ -917,11 +934,12 @@ static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t rem
  * Send the segment of `seg_len` bytes in `tcp_tx_buf` on `tcb`'s addresses
  * (`tcp_ip_tx`), and keep a refusal for want of a route as the soft error
  * the connection's give-up reports. A segment IP took that acknowledges
- * moves `rcv_acked`, ends a held acknowledgement and, when it acknowledges
- * new data, uses one of the quick ones, as Linux's tcp_event_ack_sent
- * does; one that carries data within TCP_DELACK_TICKS of data received is
- * an answer, and puts the connection in ping-pong mode, as Linux's
- * tcp_event_data_sent does. Returns what `tcp_ip_tx` returned.
+ * moves `rcv_acked` and `rcv_offered`, ends a held acknowledgement and,
+ * when data or a FIN came since the last, uses one of the quick ones, as
+ * Linux's tcp_event_ack_sent does; one that carries data within
+ * TCP_DELACK_TICKS of data received is an answer, and puts the connection
+ * in ping-pong mode, as Linux's tcp_event_data_sent does. Returns what
+ * `tcp_ip_tx` returned.
  */
 static int tcp_tcb_tx(struct tcb *tcb, uint16_t seg_len)
 {
@@ -931,12 +949,14 @@ static int tcp_tcb_tx(struct tcb *tcb, uint16_t seg_len)
         tcb->soft_error = (uint32_t)-rc;
     }
     if (rc == 0 && (tcp_tx_buf[13] & TCP_ACK) && !(tcp_tx_buf[13] & TCP_RST)) {
-        uint32_t ack = read32be(tcp_tx_buf + 8);
+        uint32_t field = read16be(tcp_tx_buf + 14);
 
-        if (ack != tcb->rcv_acked && tcb->ack_quick) {
+        if (tcb->ack_sched && tcb->ack_quick) {
             tcb->ack_quick--;
         }
-        tcb->rcv_acked = ack;
+        tcb->ack_sched = 0;
+        tcb->rcv_acked = read32be(tcp_tx_buf + 8);
+        tcb->rcv_offered = (tcp_tx_buf[13] & TCP_SYN) ? field : field << tcb->rcv_wscale;
         tcb->delack_due = 0;
         tcb->ack_pushed = 0;
         if (seg_len > (uint16_t)((tcp_tx_buf[12] >> 4) * 4u) && tcb->rcv_data_seen &&
@@ -3994,7 +4014,8 @@ static int tcp_ack_ok(struct tcb *tcb, uint32_t ack_num)
  * `len` bytes of data on the synchronized connection `tcb`, which
  * `tcp_rx_check` let on, when it has data or a FIN and was taken whole
  * before, its end at or before rcv_nxt: the peer sent it again because
- * this side's acknowledgement was lost. Linux's tcp_data_queue counts it,
+ * this side's acknowledgement was lost, and enter quick mode
+ * (`tcp_enter_quickack`). Linux's tcp_data_queue counts it,
  * in ESTABLISHED, the FIN_WAIT states, CLOSE_WAIT, and CLOSING and
  * LAST_ACK unless the segment acknowledged this side's FIN, which
  * tcp_rcv_state_process ends the connection at first; the arms of
@@ -4006,6 +4027,7 @@ static void tcp_rx_resent(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t
 
     if (end != seq && (int32_t)(end - tcb->rcv_nxt) <= 0) {
         net_mib.tcp_delayed_ack_lost++;
+        tcp_enter_quickack(tcb);
     }
 }
 
@@ -4196,24 +4218,25 @@ static void tcp_handshake_done(struct tcb *tcb, uint32_t ack_num, uint32_t windo
 }
 
 /**
- * Note a data segment of `payload_len` bytes and `flags` that moved
- * `rcv_nxt`, as Linux's tcp_measure_rcv_mss and tcp_event_data_recv do,
- * with `wnd` the window last offered.
+ * Note a data segment of `payload_len` bytes, `hdr_len` bytes of header and
+ * `flags` that moved `rcv_nxt`, as Linux's tcp_measure_rcv_mss and
+ * tcp_event_data_recv do.
  *
  * A segment at least `rcv_mss` long sets `rcv_mss` to its length, no more
  * than TCP_MSS, and ends a write of the peer's when it has PSH. A shorter
- * one that is at least TCP_MSS_DEFAULT long, or at least TCP_DELACK_TINY
- * long with none of FIN, SYN, URG and PSH, is a full segment of a smaller
- * size: the second in a row of one length becomes `rcv_mss`. Any other
- * shorter one ends a write, and a second such counts twice (`ack_pushed`).
- * Linux counts these lengths with its fixed header, 20 bytes here, since
- * this side offers no option that every segment carries.
+ * one that is at least TCP_MSS_DEFAULT long with 20 bytes of header, its
+ * header counted, or at least TCP_DELACK_TINY so with none of FIN, SYN, URG
+ * and PSH, is a full segment of a smaller size, its length less 20, Linux's
+ * fixed header with no option every segment carries: the second in a row
+ * of one length becomes `rcv_mss`, which options that vary, such as SACK
+ * blocks, do not upset. Any other shorter one ends a write, and a second
+ * such counts twice (`ack_pushed`).
  *
  * The first data, and data after a quiet time longer than the
  * retransmission timeout, grant quick acknowledgements (`tcp_delack_quick`),
  * since the peer is starting its window again.
  */
-static void tcp_delack_note(struct tcb *tcb, uint8_t flags, uint16_t payload_len, uint32_t wnd)
+static void tcp_delack_note(struct tcb *tcb, uint8_t flags, uint8_t hdr_len, uint16_t payload_len)
 {
     uint32_t lss = tcb->rcv_last_seg, len = payload_len;
     uint32_t now = TCP_NOW();
@@ -4224,34 +4247,36 @@ static void tcp_delack_note(struct tcb *tcb, uint8_t flags, uint16_t payload_len
         if ((flags & TCP_PSH) && tcb->ack_pushed == 0) {
             tcb->ack_pushed = 1;
         }
-    } else if ((len >= TCP_MSS_DEFAULT ||
-                (len >= TCP_DELACK_TINY && !(flags & (TCP_FIN | TCP_SYN | TCP_URG | TCP_PSH)))) &&
-               len == lss) {
-        tcb->rcv_last_seg = len;
-        tcb->rcv_mss = len;
     } else {
-        if (len >= TCP_MSS_DEFAULT ||
-            (len >= TCP_DELACK_TINY && !(flags & (TCP_FIN | TCP_SYN | TCP_URG | TCP_PSH)))) {
+        len += hdr_len;
+        if (len >= TCP_MSS_DEFAULT + 20u ||
+            (len >= TCP_DELACK_TINY + 20u && !(flags & (TCP_FIN | TCP_SYN | TCP_URG | TCP_PSH)))) {
+            len -= 20u;
             tcb->rcv_last_seg = len;
+            if (len == lss) {
+                tcb->rcv_mss = len;
+                goto seen;
+            }
         }
         tcb->ack_pushed = tcb->ack_pushed ? 2 : 1;
     }
+seen:
     if (!tcb->rcv_data_seen || now - tcb->rcv_data_at > tcb->rto) {
-        tcp_delack_quick(tcb, wnd);
+        tcp_delack_quick(tcb);
     }
     tcb->rcv_data_at = now;
     tcb->rcv_data_seen = 1;
 }
 
 /**
- * Grant `tcb` quick acknowledgements for the window `wnd` it last offered,
- * as Linux's tcp_incr_quickack: one for each two full segments the window
- * holds, at most 16, or 2 when it holds fewer than two, when that is more
- * than it has left.
+ * Grant `tcb` quick acknowledgements for the window it last offered
+ * (`rcv_offered`), as Linux's tcp_incr_quickack: one for each two full
+ * segments the window holds, at most 16, or 2 when it holds fewer than
+ * two, when that is more than it has left.
  */
-static void tcp_delack_quick(struct tcb *tcb, uint32_t wnd)
+static void tcp_delack_quick(struct tcb *tcb)
 {
-    uint32_t n = wnd / (2u * tcb->rcv_mss);
+    uint32_t n = tcb->rcv_offered / (2u * tcb->rcv_mss);
 
     if (n == 0u) {
         n = 2u;
@@ -4271,8 +4296,9 @@ static void tcp_delack_quick(struct tcb *tcb, uint32_t wnd)
  */
 static void tcp_enter_quickack(struct tcb *tcb)
 {
-    tcp_delack_quick(tcb, tcb->rcv_wnd);
+    tcp_delack_quick(tcb);
     tcb->pingpong = 0;
+    tcb->ack_sched = 1;
 }
 
 /**
@@ -4282,8 +4308,8 @@ static void tcp_enter_quickack(struct tcb *tcb)
  * the window the acknowledgement offers (`rcv_wnd`) first.
  *
  * Only data taken in order waits, with no FIN and with nothing past a hole
- * before or after. A segment wholly old enters quick mode, as Linux's
- * tcp_data_queue does for a retransmission (`tcp_enter_quickack`).
+ * before or after. A segment wholly old entered quick mode already
+ * (`tcp_rx_resent`).
  *
  * Inside a batch (`tcp_batch_begin`) it waits for the batch's end, and the
  * block joins the batch's list once; `tcp_batch_flush` keeps what one
@@ -4300,19 +4326,14 @@ static int tcp_delack_hold(struct tcb *tcb, const uint8_t *data, uint32_t expect
                            uint16_t payload_len)
 {
     uint8_t flags = data[13];
-    uint32_t seq = read32be(data + 4), owed, wnd = tcb->rcv_wnd;
+    uint32_t seq = read32be(data + 4), owed;
 
     tcb->rcv_wnd = tcp_rcv_window(tcb);
-    if (payload_len == 0) {
+    tcb->ack_sched = 1;
+    if (payload_len == 0 || tcb->rcv_nxt == expected) {
         return 0;
     }
-    if (tcb->rcv_nxt == expected) {
-        if ((int32_t)(seq + payload_len - expected) <= 0) {
-            tcp_enter_quickack(tcb);
-        }
-        return 0;
-    }
-    tcp_delack_note(tcb, flags, payload_len, wnd);
+    tcp_delack_note(tcb, flags, (uint8_t)((data[12] >> 4) * 4u), payload_len);
     if ((flags & TCP_FIN) || seq != expected || tcb->rcv_nxt != expected + payload_len || had_ooo ||
         tcb->ooo_count != 0) {
         return 0;
@@ -4371,14 +4392,18 @@ void tcp_batch_end(void)
 
 /**
  * Inside a batch, acknowledge what `tcb` holds before it takes the segment
- * of `len` bytes at `seq` when the segment would carry the unacknowledged
- * data past TCP_BATCH_ACK_MAX, as Linux's GRO sends up what it merged
+ * of `len` bytes at `seq` when the segment's bytes past `rcv_nxt`, which
+ * may follow some it repeats, would carry the unacknowledged data past
+ * TCP_BATCH_ACK_MAX, as Linux's GRO sends up what it merged
  * before a segment that would make it too long.
  */
 static void tcp_batch_flush(struct tcb *tcb, uint32_t seq, uint16_t len)
 {
-    if (tcp_ack_batch && tcp_batch_depth > 0 && tcb->batch_owed && seq == tcb->rcv_nxt &&
-        tcb->rcv_nxt != tcb->rcv_acked && tcb->rcv_nxt - tcb->rcv_acked + len > TCP_BATCH_ACK_MAX) {
+    uint32_t fresh = seq + len - tcb->rcv_nxt;
+
+    if (tcp_ack_batch && tcp_batch_depth > 0 && tcb->batch_owed &&
+        (int32_t)(seq - tcb->rcv_nxt) <= 0 && (int32_t)fresh > 0 &&
+        tcb->rcv_nxt - tcb->rcv_acked + fresh > TCP_BATCH_ACK_MAX) {
         tcb->rcv_wnd = tcp_rcv_window(tcb);
         tcp_send_flags(tcb, TCP_ACK);
     }
