@@ -240,8 +240,11 @@
 #   `--console term` puts in the menu, rach2.i915 when the install was given
 #   `--i915`, the words of `lenovo boot` and a netconsole word to PORT on
 #   this computer; machine_identity.sh must find the new kernel running from
-#   the candidate slot. A line without one of these words fails the step,
-#   naming the line, and commits nothing, so the next boot falls back to the
+#   the candidate slot; and tests/graphics/bootscreen.sh, run there, must
+#   find no Weston, the console holding its card with the keyboard, `term -l`
+#   as init's console session and every backlight lit. A line without one of
+#   these words, or a boot that fails that check, fails the step, naming
+#   what is missing, and commits nothing, so the next boot falls back to the
 #   release the machine had.
 # * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
 #   boot, before the native cases, since it reads the boot's records out of
@@ -3501,7 +3504,12 @@ main()
             -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o UserKnownHostsFile=/dev/null \
             -o StrictHostKeyChecking=no "root@$address" > /dev/null 2>&1 ||
             fail trial "the machine does not run the new kernel from the candidate slot: $(tail -n 3 "$state/identity" | tr '\n' ' ')"
-        mark trial "the new kernel runs from the candidate slot with term as its console"
+        # The boot must leave the panel to term's login, lit and with the
+        # keyboard, and start no desktop session.
+        lenovo 'sh -s' < tests/graphics/bootscreen.sh > "$state/bootscreen.log" 2>&1 || :
+        grep -qx 'bootscreen: result: pass' "$state/bootscreen.log" ||
+            fail trial "the trial boot's screen is not term's lit login: $(grep '^bootscreen: ' "$state/bootscreen.log" | awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')"
+        mark trial "the new kernel runs from the candidate slot with term's lit login as its console"
     fi
 
     # Acceptance reads the boot's own records out of /dev/bootlog, a ring
