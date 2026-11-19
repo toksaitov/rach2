@@ -175,8 +175,9 @@ its OpRegion, 9, and the configuration spaces of the host bridge, 10, and
 the LPC bridge, 11.
 A memory BAR of a page or more can be mapped with
 .Xr mmap 2 ,
-uncached; its pages fault in only while the function decodes memory, and
-a reset or turning decoding off takes them from every mapping.
+uncached; its pages fault in only while the function decodes memory and
+is not in D3hot, and a reset, turning decoding off or D3hot takes them
+from every mapping.
 An I/O BAR is read and written port by port and cannot be mapped.
 The MSI-X table's bytes read as all ones and take no write.
 .Pp
@@ -187,6 +188,10 @@ bit, the interrupt line, the MSI capability and the MSI-X enable and mask
 bits.
 A write cannot start a function level reset, and the OpRegion's address
 takes no write.
+A write of the power state is carried out by
+.Nm ,
+which keeps the state of a function that loses it in D3hot and writes it
+back at D0.
 The extended space reads as the function answers it and takes no write.
 .Ss Interrupts
 .Dv VFIO_DEVICE_SET_IRQS
@@ -203,8 +208,8 @@ The line is offered only to a function that masks it that way.
 MSI-X entries can be set and cleared while MSI-X is on.
 .Ss Release
 When the last descriptor and mapping of a device close, or their owner
-dies, every interrupt goes off, bus mastering goes off, the function is
-reset and its state at the open written back.
+dies, the function is put in D0, every interrupt goes off, bus mastering
+goes off, the function is reset and its state at the open written back.
 It stays bound to vfio-pci.
 .Sh LIMITS
 MSI of more than one message is answered with one, as Linux answers when
