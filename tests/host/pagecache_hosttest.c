@@ -685,6 +685,33 @@ static void recovery_write_rows(void)
     dev->flags = 0;
 }
 
+/** The second page becomes available after the mount has halted. */
+static int halt_during_fetch(uint32_t off, void *page)
+{
+    if (off == PC_PAGE_SIZE) {
+        root_stopped = 1;
+    }
+    return fake_read(off, page);
+}
+
+/** A halt during the second fetch must leave both halves of a field clean. */
+static void halted_field_row(void)
+{
+    const uint8_t bytes[2] = {57, 89};
+    uint8_t before[2], after[2];
+
+    before[0] = fake_disk[0][PC_PAGE_SIZE - 1];
+    before[1] = fake_disk[1][0];
+    init_pagecache();
+    pc_set_backing(halt_during_fetch, fake_write, sizeof(fake_disk));
+    root_stopped = 0;
+    CHECK(krffs_window_write(NULL, PC_PAGE_SIZE - 1, bytes, sizeof(bytes)) < 0 &&
+          root_stopped && !pc_dirty_count());
+    CHECK(pc_copy_out(PC_PAGE_SIZE - 1, after, sizeof(after)) == 0 &&
+          after[0] == before[0] && after[1] == before[1]);
+    pc_set_backing(NULL, NULL, 0);
+}
+
 /** Check device submissions, the boot dirty mark and final repair sync. */
 static void disk_recovery_rows(void)
 {
@@ -692,6 +719,7 @@ static void disk_recovery_rows(void)
     block_device_t *dev = &_krffs_disk_part.device;
 
     recovery_write_rows();
+    halted_field_row();
     dev->write = halt_during_write;
     root_stopped = device_calls = 0;
     CHECK(krffs_disk_write(0, pages, 2) == -EIO && device_calls == 1);
