@@ -1359,6 +1359,10 @@ static void freed_write_rows(void)
 }
 
 /* A disk-root fixture, in forward order, with NULL for a free node. */
+#define DISK_IMAGE_SIZE (2 * IMAGE_SIZE)
+
+static uint8_t disk_image[DISK_IMAGE_SIZE];
+
 struct unlink_extent {
     uint32_t start;
     const char *name;
@@ -1367,14 +1371,14 @@ struct unlink_extent {
 /** Write a dirty image with these extents and one byte in each file. */
 static void make_unlink_image(const struct unlink_extent *extents, unsigned count)
 {
-    uint32_t previous_size = IMAGE_SIZE - extents[count - 1].start;
+    uint32_t previous_size = DISK_IMAGE_SIZE - extents[count - 1].start;
     unsigned i;
 
-    k_memset(image, 0, IMAGE_SIZE);
+    k_memset(disk_image, 0, DISK_IMAGE_SIZE);
     for (i = 0; i < count; i++) {
         uint32_t start = extents[i].start;
-        uint32_t end = i + 1 < count ? extents[i + 1].start : IMAGE_SIZE;
-        krffs_node_t *head = (krffs_node_t *)(image + start);
+        uint32_t end = i + 1 < count ? extents[i + 1].start : DISK_IMAGE_SIZE;
+        krffs_node_t *head = (krffs_node_t *)(disk_image + start);
         const char *name = extents[i].name;
 
         head->magic = KRFFS_FILE_SYSTEM_MAGIC;
@@ -1388,7 +1392,7 @@ static void make_unlink_image(const struct unlink_extent *extents, unsigned coun
             head->mode = 0644;
             head->data_size = 1;
             k_memcpy(head->name, name, k_strlen(name) + 1);
-            image[start + sizeof(*head)] = (uint8_t)name[0];
+            disk_image[start + sizeof(*head)] = (uint8_t)name[0];
         } else {
             head->type = KRFFS_FREE_NODE;
         }
@@ -1396,40 +1400,49 @@ static void make_unlink_image(const struct unlink_extent *extents, unsigned coun
     }
 }
 
-/** Mount each cut of the recorded unlink and read the file it must keep. */
-static void mount_unlink_cuts(const uint8_t *before, uint32_t grain)
+/** Mount each cut, including sectors of the first unlink when two ran. */
+static void mount_unlink_cuts(const uint8_t *before, uint32_t grain, int first_unlink)
 {
-    static uint8_t after[IMAGE_SIZE];
-    static uint8_t state[IMAGE_SIZE];
+    static uint8_t after[DISK_IMAGE_SIZE];
+    static uint8_t middle[DISK_IMAGE_SIZE];
+    static uint8_t state[DISK_IMAGE_SIZE];
     int prefix;
 
+    build(middle, before, first_unlink, DISK_IMAGE_SIZE);
     for (prefix = 0; prefix <= recorded_count; prefix++) {
         uint64_t units[8];
         int count = touched_blocks(0, prefix, grain, units, 8);
-        unsigned mask;
+        const uint8_t *versions[] = {before, after, middle};
+        unsigned version_count = first_unlink > 0 && prefix > first_unlink ? 3u : 2u;
+        unsigned variants = 1;
+        unsigned variant;
+        int i;
 
         if (count == 8) {
             check(0, "unlink recorder touched too many units");
             return;
         }
-        build(after, before, prefix, IMAGE_SIZE);
-        for (mask = 0; mask < (1u << count); mask++) {
-            unsigned i;
+        for (i = 0; i < count; i++) {
+            variants *= version_count;
+        }
+        build(after, before, prefix, DISK_IMAGE_SIZE);
+        for (variant = 0; variant < variants; variant++) {
+            unsigned choices = variant;
             char byte;
             uint64_t kept;
 
-            k_memcpy(state, before, IMAGE_SIZE);
-            for (i = 0; i < (unsigned)count; i++) {
-                if (mask & (1u << i)) {
-                    uint32_t at = (uint32_t)units[i] * grain;
+            k_memcpy(state, before, DISK_IMAGE_SIZE);
+            for (i = 0; i < count; i++) {
+                uint32_t at = (uint32_t)units[i] * grain;
+                const uint8_t *version = versions[choices % version_count];
 
-                    k_memcpy(state + at, after + at, grain);
-                }
+                k_memcpy(state + at, version + at, grain);
+                choices /= version_count;
             }
-            if (init_krffs_disk_root(state, IMAGE_SIZE, 512) != 0 ||
+            if (init_krffs_disk_root(state, DISK_IMAGE_SIZE, 512, NULL) != 0 ||
                 !krffs_chain_is_valid(&krffs_root_mount)) {
-                printf("krffs_hosttest: unlink cut after %d writes, unit %u, mask %u\n", prefix,
-                       grain, mask);
+                printf("krffs_hosttest: unlink cut after %d writes, unit %u, variant %u\n", prefix,
+                       grain, variant);
                 check(0, "disk root mounts and repairs its links after an unlink cut");
                 return;
             }
@@ -1443,15 +1456,16 @@ static void mount_unlink_cuts(const uint8_t *before, uint32_t grain)
 
 /** Record a disk-root unlink and check the completed merge and its cuts. */
 static void disk_unlink_case(const struct unlink_extent *extents, unsigned count, uint32_t free_at,
-                             uint32_t free_size)
+                             uint32_t free_size, const char *second)
 {
-    static uint8_t before[IMAGE_SIZE];
+    static uint8_t before[DISK_IMAGE_SIZE];
     krffs_node_t head;
+    int first_unlink = 0;
     int result;
 
     make_unlink_image(extents, count);
-    k_memcpy(before, image, IMAGE_SIZE);
-    result = init_krffs_disk_root(image, IMAGE_SIZE, 512);
+    k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
+    result = init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, NULL);
     check(result == 0, "disk unlink fixture mounts");
     if (result != 0) {
         return;
@@ -1461,15 +1475,58 @@ static void disk_unlink_case(const struct unlink_extent *extents, unsigned count
     sync_count = 0;
     recording = 1;
     result = krffs_unlink_at(&krffs_root_mount, "/victim");
+    if (second && result == 0) {
+        first_unlink = recorded_count;
+        result = krffs_unlink_at(&krffs_root_mount, second);
+    }
     recording = 0;
     check(result == 0 && krffs_walk(&krffs_root_mount, "/victim") == KRFFS_NO_NODE &&
+              (!second || krffs_walk(&krffs_root_mount, second) == KRFFS_NO_NODE) &&
               krffs_chain_is_valid(&krffs_root_mount),
           "completed disk-root unlink leaves a valid ring without the victim");
     check(krffs_head(&krffs_root_mount, free_at, &head) == 0 && head.type == KRFFS_FREE_NODE &&
               head.size == free_size,
           "unlink coalesces free space only where its size cannot tear");
-    mount_unlink_cuts(before, CACHE_BLOCK);
-    mount_unlink_cuts(before, 512);
+    mount_unlink_cuts(before, CACHE_BLOCK, first_unlink);
+    mount_unlink_cuts(before, 512, first_unlink);
+}
+
+/** Record a disk writeback barrier in the order of recorded writes. */
+static int record_disk_flush(void)
+{
+    return record_sync(NULL);
+}
+
+/** A shrink puts the shorter length on disk before it reuses any data. */
+static void disk_shrink_row(void)
+{
+    static const struct unlink_extent extents[] = {{0, NULL}, {1024, "victim"}, {9216, "kept"}};
+    static const krffs_backend_t backend = {memory_read, record_write, memory_sync};
+    krffs_node_t *victim;
+    uint32_t length = 3000;
+    uint64_t result;
+
+    make_unlink_image(extents, sizeof(extents) / sizeof(extents[0]));
+    victim = (krffs_node_t *)(disk_image + extents[1].start);
+    victim->data_size = victim->size - sizeof(*victim);
+    k_memset((uint8_t *)victim + sizeof(*victim), 'v', (uint32_t)victim->data_size);
+    if (init_krffs_disk_root(disk_image, DISK_IMAGE_SIZE, 512, record_disk_flush) != 0) {
+        check(0, "disk shrink fixture mounts");
+        return;
+    }
+    krffs_root_mount.backend = &backend;
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    result = krffs_resize_at(&krffs_root_mount, extents[1].start, length);
+    recording = 0;
+    check(result == extents[1].start && krffs_chain_is_valid(&krffs_root_mount),
+          "disk shrink leaves a valid ring");
+    check(recorded_count == 4 && sync_count == 2 && sync_marks[0] == 1 && sync_marks[1] == 2 &&
+              recorded[0].offset == extents[1].start + KRFFS_FIELD_DATA_SIZE &&
+              recorded[1].offset == extents[1].start + sizeof(*victim) + length &&
+              recorded[2].offset == extents[1].start + KRFFS_FIELD_SIZE,
+          "disk shrink flushes its length before the free header and the header before its size");
 }
 
 /** Check page and sector writeback cuts, and the limits of disk-root repair. */
@@ -1483,27 +1540,31 @@ static void disk_unlink_rows(void)
         {0, NULL}, {1024, "kept"}, {3770, "victim"}, {4795, NULL}, {6074, "last"}};
     static const struct unlink_extent split_previous[] = {
         {0, NULL}, {1024, "kept"}, {3770, NULL}, {4794, "victim"}, {6074, "last"}};
+    static const struct unlink_extent pending[] = {
+        {0, NULL}, {3769, NULL}, {4793, "victim"}, {70329, "second"}, {70841, "kept"}};
     krffs_node_t *root;
     krffs_node_t *free_node;
 
-    disk_unlink_case(both, sizeof(both) / sizeof(both[0]), 1024, 16050 - 1024);
-    disk_unlink_case(tail, sizeof(tail) / sizeof(tail[0]), 5125, IMAGE_SIZE - 5125);
-    disk_unlink_case(split_next, sizeof(split_next) / sizeof(split_next[0]), 3770, 1025);
-    disk_unlink_case(split_previous, sizeof(split_previous) / sizeof(split_previous[0]), 3770,
-                     1024);
+    disk_unlink_case(both, sizeof(both) / sizeof(both[0]), 1024, 16050 - 1024, NULL);
+    disk_unlink_case(tail, sizeof(tail) / sizeof(tail[0]), 5125, DISK_IMAGE_SIZE - 5125, NULL);
+    disk_unlink_case(split_next, sizeof(split_next) / sizeof(split_next[0]), 3770, 1025, NULL);
+    disk_unlink_case(split_previous, sizeof(split_previous) / sizeof(split_previous[0]), 3770, 1024,
+                     NULL);
+    disk_unlink_case(pending, sizeof(pending) / sizeof(pending[0]), 3769, 1024, "/second");
+    disk_shrink_row();
 
     make_image(image, IMAGE_SIZE);
     root = (krffs_node_t *)image;
     free_node = (krffs_node_t *)(image + sizeof(*root));
     free_node->previous_node_size = 0;
-    check(init_krffs_disk_root(image, IMAGE_SIZE, 512) != 0,
+    check(init_krffs_disk_root(image, IMAGE_SIZE, 512, NULL) != 0,
           "a clean disk root with a bad link is refused");
     root->mode |= KRFFS_MODE_DIRTY;
     check(init_krffs(image, IMAGE_SIZE) != 0, "a RAM root with a bad link is refused");
     root->previous_node_size = 0;
     free_node->size--;
-    check(init_krffs_disk_root(image, IMAGE_SIZE, 512) != 0 && free_node->previous_node_size == 0 &&
-              root->previous_node_size == 0,
+    check(init_krffs_disk_root(image, IMAGE_SIZE, 512, NULL) != 0 &&
+              free_node->previous_node_size == 0 && root->previous_node_size == 0,
           "a dirty disk root with a broken forward chain is refused before repair");
 }
 
