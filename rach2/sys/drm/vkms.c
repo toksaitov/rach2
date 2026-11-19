@@ -88,9 +88,17 @@ struct vkms_scene {
  * the CRCs are entered in frame order, as Linux's ordered composer workqueue
  * runs one work at a time; a commit waits for it to fall (`flush_wait`), and
  * the composer thread for it to fall with a request pending
- * (`composer_wait`). The tick
- * changes the timer and the request with interrupts off; everyone else
- * changes them with interrupts off too.
+ * (`composer_wait`).
+ *
+ * The tick runs without the big lock, as Linux's hrtimer callback runs in
+ * an interrupt, so two spinlocks guard what it shares. `timer_lock` guards
+ * the timer, `timer_on`, `period_ns`, `next_ns`, `overruns` and `skipped`,
+ * as an hrtimer's base lock does, and is taken last, since the core calls
+ * `enable_vblank`, `disable_vblank` and `get_vblank_timestamp` under its
+ * `vbl_lock`. `lock`, Linux's vkms_output.lock, guards `scene`,
+ * `composer_enabled`, the request, `crc_next`, `crc_missed`, `catchups`
+ * and `composing`. Neither is held across the core's vblank handling,
+ * which may turn the timer off.
  */
 struct vkms_device {
     struct drm_device drm;
@@ -99,6 +107,7 @@ struct vkms_device {
     struct drm_crtc crtc;
     struct drm_encoder encoder;
     struct drm_connector connector;
+    struct spinlock timer_lock, lock;
     int timer_on;
     int64_t period_ns, next_ns;
     uint32_t overruns, skipped, crc_missed, catchups;
@@ -627,9 +636,9 @@ static void compose_enter(struct vkms_device *v, const struct vkms_scene *s, uin
         }
     }
     if (entered > 1) {
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&v->lock);
         v->catchups++;
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&v->lock, flags);
     }
 }
 
@@ -638,7 +647,7 @@ static void compose_enter(struct vkms_device *v, const struct vkms_scene *s, uin
  * no frame is asked for or a commit composes. */
 static void vkms_composer_take(struct vkms_device *v, struct vkms_job *j)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&v->lock);
 
     j->pending = v->crc_pending && !v->composing;
     if (j->pending) {
@@ -649,7 +658,7 @@ static void vkms_composer_take(struct vkms_device *v, struct vkms_job *j)
         j->scene = v->scene;
         scene_get(&j->scene);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&v->lock, flags);
 }
 
 /** Compose what `j` took, end the device's `composing` for a commit that
@@ -662,9 +671,9 @@ static void vkms_composer_finish(struct vkms_device *v, struct vkms_job *j)
         return;
     }
     compose_enter(v, &j->scene, j->start, j->end);
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&v->lock);
     v->composing = 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&v->lock, flags);
     wq_wake_all(&v->flush_wait);
     scene_put(&j->scene);
 }
@@ -765,56 +774,71 @@ static int32_t composer_start(struct vkms_device *v)
 /**
  * One vblank, Linux's vkms_vblank_simulate: counted by the core, then,
  * while the CRC source is on and the CRTC shows a scene, a frame asked of
- * the composer: from this one, or from the first the composer has yet to
- * take, to this one. Frames the count passed since the last one asked, as
- * a late pass of the timer leaves, get no CRC unless a request was still
- * pending to cover them, as on Linux; `crc_missed` counts them. With
- * interrupts off.
+ * the composer under `lock`: from this one, or from the first the composer
+ * has yet to take, to this one. Frames the count passed since the last one
+ * asked, as a late pass of the timer leaves, get no CRC unless a request
+ * was still pending to cover them, as on Linux; `crc_missed` counts them.
+ * Neither of the device's locks is held.
  */
 static void vkms_vblank(struct vkms_device *v)
 {
     uint64_t frame;
+    uint32_t flags;
+    int asked = 0;
 
     (void)drm_crtc_handle_vblank(&v->crtc);
+    flags = spin_lock_irqsave(&v->lock);
     if (!v->composer_enabled || !v->scene.active) {
         v->crc_next = 0;
-        return;
-    }
-    frame = drm_crtc_vblank_count_and_time(&v->crtc, NULL);
-    if (!v->crc_pending) {
-        if (v->crc_next != 0 && frame > v->crc_next) {
-            v->crc_missed += (uint32_t)(frame - v->crc_next);
+    } else {
+        frame = drm_crtc_vblank_count_and_time(&v->crtc, NULL);
+        if (!v->crc_pending) {
+            if (v->crc_next != 0 && frame > v->crc_next) {
+                v->crc_missed += (uint32_t)(frame - v->crc_next);
+            }
+            v->frame_start = frame;
         }
-        v->frame_start = frame;
+        v->frame_end = frame;
+        v->crc_next = frame + 1u;
+        v->crc_pending = 1;
+        asked = 1;
     }
-    v->frame_end = frame;
-    v->crc_next = frame + 1u;
-    v->crc_pending = 1;
-    wq_wake_all(&v->composer_wait);
+    spin_unlock_irqrestore(&v->lock, flags);
+    if (asked) {
+        wq_wake_all(&v->composer_wait);
+    }
 }
 
 void vkms_tick(void)
 {
     struct vkms_device *v = vkms_dev;
-    int64_t now;
+    int64_t now, next;
     uint64_t n;
+    uint32_t flags;
+    int due = 0;
 
-    if (!v || !v->timer_on) {
+    if (!v) {
         return;
     }
     now = vkms_now();
-    if (now >= v->next_ns) {
+    flags = spin_lock_irqsave(&v->timer_lock);
+    if (v->timer_on && now >= v->next_ns) {
         n = drm_div64((uint64_t)(now - v->next_ns), (uint64_t)v->period_ns) + 1u;
         if (n != 1u) {
             v->overruns++;
             v->skipped += (uint32_t)(n - 1u);
         }
         v->next_ns += (int64_t)n * v->period_ns;
+        due = 1;
+    }
+    spin_unlock_irqrestore(&v->timer_lock, flags);
+    if (due) {
         vkms_vblank(v);
     }
-    if (v->timer_on) {
-        timer_service_wake_at(v->next_ns);
-    }
+    flags = spin_lock_irqsave(&v->timer_lock);
+    next = v->timer_on ? v->next_ns : 0;
+    spin_unlock_irqrestore(&v->timer_lock, flags);
+    timer_service_wake_at(next);
 }
 
 /**
@@ -829,13 +853,13 @@ void vkms_tick(void)
 static int vkms_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int in_vblank_irq)
 {
     struct vkms_device *v = to_vkms(crtc->dev);
+    uint32_t flags = spin_lock_irqsave(&v->timer_lock);
+    int on = crtc->vblank.enabled && v->timer_on;
+    int64_t t = v->next_ns - v->period_ns;
 
+    spin_unlock_irqrestore(&v->timer_lock, flags);
     (void)in_vblank_irq;
-    if (!crtc->vblank.enabled || !v->timer_on) {
-        *time_ns = vkms_now();
-        return 1;
-    }
-    *time_ns = v->next_ns - v->period_ns;
+    *time_ns = on ? t : vkms_now();
     return 1;
 }
 
@@ -846,14 +870,15 @@ static int32_t vkms_enable_vblank(struct drm_crtc *crtc)
 {
     struct vkms_device *v = to_vkms(crtc->dev);
     int64_t period = crtc->vblank.framedur_ns ? crtc->vblank.framedur_ns : 16666667;
+    int64_t next = vkms_now() + period;
     uint32_t flags;
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&v->timer_lock);
     v->period_ns = period;
-    v->next_ns = vkms_now() + period;
+    v->next_ns = next;
     v->timer_on = 1;
-    kirq_restore(flags);
-    timer_service_wake_at(v->next_ns);
+    spin_unlock_irqrestore(&v->timer_lock, flags);
+    timer_service_wake_at(next);
     return 0;
 }
 
@@ -863,9 +888,9 @@ static void vkms_disable_vblank(struct drm_crtc *crtc)
     struct vkms_device *v = to_vkms(crtc->dev);
     uint32_t flags;
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&v->timer_lock);
     v->timer_on = 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&v->timer_lock, flags);
 }
 
 /* The CRC sources, Linux's pipe_crc_sources. */
@@ -920,13 +945,13 @@ static int32_t vkms_set_crc_source(struct drm_crtc *crtc, const char *name)
     if (enabled && !v->composer_hold && drm_crtc_vblank_get(crtc) == 0) {
         v->composer_hold = 1;
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&v->lock);
     v->composer_enabled = enabled;
     if (!enabled) {
         v->crc_pending = 0;
     }
     v->crc_next = enabled && v->scene.active ? drm_crtc_vblank_count_and_time(crtc, NULL) + 1u : 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&v->lock, flags);
     if (!enabled && v->composer_hold) {
         v->composer_hold = 0;
         drm_crtc_vblank_put(crtc);
@@ -972,7 +997,7 @@ static int composer_idle(void *arg)
 /**
  * The CRTC's flush, Linux's vkms_crtc_atomic_flush: the new states become
  * the scene the composer composes, each visible plane of the CRTC with its
- * framebuffer held, bottom first, with interrupts off. As Linux's
+ * framebuffer held, bottom first, under the device's `lock`. As Linux's
  * vkms_atomic_commit_tail flushes the replaced state's composer work, the
  * commit waits out a composition the composer thread began, then marks the
  * device `composing` while it swaps the scene and composes the frames asked
@@ -1011,11 +1036,11 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     scene_get(&s);
     for (;;) {
         (void)wq_wait_event_nointr(&v->flush_wait, composer_idle, v);
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&v->lock);
         if (!v->composing) {
             break;
         }
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&v->lock, flags);
     }
     v->composing = 1;
     old = v->scene;
@@ -1027,13 +1052,13 @@ static void vkms_crtc_flush(struct drm_crtc *crtc, struct drm_atomic_state *stat
     start = v->frame_start;
     end = v->frame_end;
     v->crc_pending = 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&v->lock, flags);
     if (pending) {
         compose_enter(v, &old, start, end);
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&v->lock);
     v->composing = 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&v->lock, flags);
     wq_wake_all(&v->composer_wait);
     scene_put(&old);
 }
@@ -1222,6 +1247,8 @@ int32_t vkms_probe(void)
     }
     drm_dev_init(&v->drm, &vkms_driver);
     v->drm.driver_priv = v;
+    spin_lock_init(&v->timer_lock, "vkms_timer_lock");
+    spin_lock_init(&v->lock, "vkms_lock");
     wait_queue_init(&v->composer_wait);
     wait_queue_init(&v->flush_wait);
     err = vkms_kms_init(v, cursor, overlay);
@@ -1242,25 +1269,41 @@ int32_t vkms_probe(void)
 void vkms_stats(uint32_t *overruns, uint32_t *skipped, uint32_t *missed, uint32_t *catchups)
 {
     struct vkms_device *v = vkms_dev;
-    uint32_t flags = kirq_save();
+    uint32_t flags;
 
-    *overruns = v ? v->overruns : 0;
-    *skipped = v ? v->skipped : 0;
-    *missed = v ? v->crc_missed : 0;
-    *catchups = v ? v->catchups : 0;
-    kirq_restore(flags);
+    *overruns = *skipped = *missed = *catchups = 0;
+    if (!v) {
+        return;
+    }
+    flags = spin_lock_irqsave(&v->timer_lock);
+    *overruns = v->overruns;
+    *skipped = v->skipped;
+    spin_unlock_irqrestore(&v->timer_lock, flags);
+    flags = spin_lock_irqsave(&v->lock);
+    *missed = v->crc_missed;
+    *catchups = v->catchups;
+    spin_unlock_irqrestore(&v->lock, flags);
 }
 
 /** Return the next service deadline for the stopped idle tick. */
 uint32_t vkms_idle_ticks(void)
 {
     struct vkms_device *v = vkms_dev;
-    int64_t gap;
+    int64_t gap, next;
+    uint32_t flags;
+    int on;
 
-    if (!v || !v->timer_on) {
+    if (!v) {
         return TICK_HZ;
     }
-    gap = v->next_ns - vkms_now();
+    flags = spin_lock_irqsave(&v->timer_lock);
+    on = v->timer_on;
+    next = v->next_ns;
+    spin_unlock_irqrestore(&v->timer_lock, flags);
+    if (!on) {
+        return TICK_HZ;
+    }
+    gap = next - vkms_now();
     return gap <= 0 ? 1u
            : gap >= (int64_t)1000000000
                ? TICK_HZ

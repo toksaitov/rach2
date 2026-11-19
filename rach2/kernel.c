@@ -439,10 +439,12 @@ static int timer_lock_take(int boot)
  * khda for a stream whose interrupts do not arrive under the stream lock,
  * the lag device's answers under its lock, the block requests' deadlines
  * under the pool's lock, the end of a speaker's tone under the speaker's
- * lock, and the i915's release of forcewake under its register lock, as
- * Linux runs a driver's timer under the driver's own lock (`timer_list`
- * and hrtimer callbacks, kernel/time/timer.c, kernel/time/hrtimer.c). No
- * lock is held and interrupts are off. Returns the cycle count at its end.
+ * lock, the i915's release of forcewake under its register lock, and
+ * vkms's vblank timer under the device's locks and the core's vblank
+ * locks, as Linux runs a driver's timer under the driver's own lock
+ * (`timer_list` and hrtimer callbacks, kernel/time/timer.c,
+ * kernel/time/hrtimer.c). No lock is held and interrupts are off. Returns
+ * the cycle count at its end.
  */
 static uint64_t timer_own_work(uint64_t t)
 {
@@ -455,7 +457,9 @@ static uint64_t timer_own_work(uint64_t t)
     speaker_tick();
     t = bkl_tick_charge(BKL_TICK_SPEAKER, t);
     i915_tick();
-    return bkl_tick_charge(BKL_TICK_I915, t);
+    t = bkl_tick_charge(BKL_TICK_I915, t);
+    vkms_tick();
+    return bkl_tick_charge(BKL_TICK_VKMS, t);
 }
 
 static void timer_service_rearm(void);
@@ -495,8 +499,6 @@ static void timer_locked_work(uint64_t t)
     t = bkl_tick_charge(BKL_TICK_INPUT, t);
     platform_tick();
     t = bkl_tick_charge(BKL_TICK_PLATFORM, t);
-    vkms_tick();
-    t = bkl_tick_charge(BKL_TICK_VKMS, t);
     tty_console_poll();
     t = bkl_tick_charge(BKL_TICK_CONSOLE, t);
     klog_flush();
@@ -809,7 +811,7 @@ void timer_idle_work(void)
  * polled, the TCP timers, IPv6 neighbour discovery's and MLD's timers, the
  * loopback delivery, the USB controller's event ring, the keyboards'
  * repeat, after the USB reports that may press or release a key, the
- * platform's devices, vkms's vblank timer and the console's serial port;
+ * platform's devices and the console's serial port;
  * last it writes out the log records kept for a holder of the big lock
  * (`klog_flush`). A tick that
  * does not get the lock leaves this part to a later one, and a thread's own
