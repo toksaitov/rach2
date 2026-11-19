@@ -9,6 +9,7 @@
 #include "../x86/kcpu.h"
 #include "../x86/smpboot.h"
 
+#include "../../mm/kheap.h"
 #include "../../mm/paging.h"
 
 #include "../../lib/kstring.h"
@@ -33,14 +34,23 @@ typedef char cpu_offsets_fit[(__builtin_offsetof(struct cpu, self) == 0 &&
  * stack was in use (idt.c). The double fault's is the largest, since the
  * record and the panic its handler writes take the most; the NMI and the
  * machine check print and panic, and the debug entry copies a user frame to
- * the thread's stack or defers a kernel exception.
+ * the thread's stack or defers a kernel exception. The boot processor's are
+ * static, since it takes exceptions before the heap exists; another
+ * processor's come from the heap before it starts (`arch_ap_prepare`), so
+ * that the kernel keeps the stacks of the processors a machine has and not
+ * of all NR_CPUS, which would take 1.25 MiB of the 64 MiB window.
  */
 #define DOUBLE_FAULT_STACK_SIZE 0x2000
 #define IST_STACK_SIZE          0x1000
-static uint8_t double_fault_stacks[NR_CPUS][DOUBLE_FAULT_STACK_SIZE] __attribute__((aligned(16)));
-static uint8_t nmi_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
-static uint8_t machine_check_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
-static uint8_t debug_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
+struct ist_stacks {
+    uint8_t double_fault[DOUBLE_FAULT_STACK_SIZE];
+    uint8_t nmi[IST_STACK_SIZE];
+    uint8_t machine_check[IST_STACK_SIZE];
+    uint8_t debug[IST_STACK_SIZE];
+};
+#define IST_PAGES (sizeof(struct ist_stacks) / PAGE_SIZE)
+static struct ist_stacks boot_ist_stacks __attribute__((aligned(16)));
+static struct ist_stacks *ist_stacks[NR_CPUS] = {&boot_ist_stacks};
 
 /*
  * The stack `sysenter` loads, IA32_SYSENTER_ESP's, on each processor. The
@@ -102,12 +112,14 @@ void msr_write(uint32_t msr, uint64_t value)
 /**
  * Fill processor `id`'s record: the GDT with the TSS's descriptor, which is
  * 16 bytes in long mode, its base split over both words, and the TSS with
- * the interrupt stacks and the closed I/O map. `rsp0` and `kernel_rsp` stay
+ * the interrupt stacks, which `arch_ap_prepare` has given a processor but
+ * the boot one, and the closed I/O map. `rsp0` and `kernel_rsp` stay
  * 0 until `init_tss`.
  */
 static void cpu_fill(uint32_t id)
 {
     struct cpu *c = &cpus[id];
+    struct ist_stacks *ist = ist_stacks[id];
     uint64_t base = (uint64_t)(uintptr_t)&c->tss;
     uint64_t limit = sizeof(struct tss64) - 1;
 
@@ -126,11 +138,10 @@ static void cpu_fill(uint32_t id)
     c->gdt[(GDT_TSS >> 3) + 1] = base >> 32;
 
     c->tss.ist[IST_DOUBLE_FAULT - 1] =
-        (uint64_t)(uintptr_t)&double_fault_stacks[id][DOUBLE_FAULT_STACK_SIZE];
-    c->tss.ist[IST_NMI - 1] = (uint64_t)(uintptr_t)&nmi_stacks[id][IST_STACK_SIZE];
-    c->tss.ist[IST_MACHINE_CHECK - 1] =
-        (uint64_t)(uintptr_t)&machine_check_stacks[id][IST_STACK_SIZE];
-    c->tss.ist[IST_DEBUG - 1] = (uint64_t)(uintptr_t)&debug_stacks[id][IST_STACK_SIZE];
+        (uint64_t)(uintptr_t)&ist->double_fault[DOUBLE_FAULT_STACK_SIZE];
+    c->tss.ist[IST_NMI - 1] = (uint64_t)(uintptr_t)&ist->nmi[IST_STACK_SIZE];
+    c->tss.ist[IST_MACHINE_CHECK - 1] = (uint64_t)(uintptr_t)&ist->machine_check[IST_STACK_SIZE];
+    c->tss.ist[IST_DEBUG - 1] = (uint64_t)(uintptr_t)&ist->debug[IST_STACK_SIZE];
     c->tss.iomap_base = sizeof(struct tss64);
 }
 
@@ -234,6 +245,14 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     return 0;
 }
 #endif
+
+int arch_ap_prepare(int cpu)
+{
+    if (ist_stacks[cpu] == NULL) {
+        ist_stacks[cpu] = (struct ist_stacks *)kalloc_pages((uint32_t)IST_PAGES, NULL);
+    }
+    return ist_stacks[cpu] != NULL ? 0 : -1;
+}
 
 /**
  * The kernel's PML4 takes the place of the trampoline's first, and GS's
