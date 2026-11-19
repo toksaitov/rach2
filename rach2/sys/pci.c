@@ -164,8 +164,9 @@ static void pci_read_device_info(uint8_t bus, uint8_t device, uint8_t function, 
  * BARs' addresses, the interrupt line, a bridge's bus numbers) is read
  * again when a search returns it. The first search is
  * the page cache's window probe, early in the boot and before a second
- * processor runs, so the walk needs no lock. No function is added or
- * removed after it: the kernel has no PCI hot plug.
+ * processor runs, so the walk needs no lock. After it a function is added
+ * or removed only for a hot plug (`pci_slot_add`, `pci_slot_remove`),
+ * under the big lock, which every later search holds.
  *
  * A single-function device may answer for all eight function numbers as
  * function 0, so functions 1 to 7 are read only when function 0's header
@@ -569,6 +570,208 @@ bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_dev
         }
     }
     return false;
+}
+
+/** The list's index of `bus`:`device`.`function`, or -1. */
+static int pci_list_find(uint8_t bus, uint8_t device, uint8_t function)
+{
+    int i, n = pci_list_count();
+
+    for (i = 0; i < n; i++) {
+        if (pci_list[i].bus == bus && pci_list[i].device == device &&
+            pci_list[i].function == function) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int pci_slot_add(uint8_t bus, uint8_t device)
+{
+    uint8_t function, functions, header;
+    uint32_t id;
+    int added = 0;
+
+    (void)pci_list_count();
+    if (pci_id_absent(pci_read_config32(bus, device, 0, PCI_VENDOR_ID))) {
+        return 0;
+    }
+    functions = (pci_read_config8(bus, device, 0, PCI_HEADER_TYPE) & 0x80) ? 8 : 1;
+    for (function = 0; function < functions; function++) {
+        id = pci_read_config32(bus, device, function, PCI_VENDOR_ID);
+        if (pci_id_absent(id) || pci_list_find(bus, device, function) >= 0) {
+            continue;
+        }
+        header = pci_read_config8(bus, device, function, PCI_HEADER_TYPE);
+        if (!pci_list_add(bus, device, function, id, header)) {
+            break;
+        }
+        added++;
+    }
+    if (added > 0) {
+        pci_list_sort();
+    }
+    return added;
+}
+
+int pci_slot_remove(uint8_t bus, uint8_t device)
+{
+    int i, kept = 0, n = pci_list_count();
+
+    for (i = 0; i < n; i++) {
+        if (pci_list[i].bus != bus || pci_list[i].device != device) {
+            pci_list[kept++] = pci_list[i];
+        }
+    }
+    pci_list_len = kept;
+    return n - kept;
+}
+
+/**
+ * Window `w` of the PCI-to-PCI bridge `p`, as its base and limit registers
+ * give it: 0 its I/O, 1 its memory, 2 its prefetchable memory, into
+ * `*start` and `*end`. 0 for a window the bridge leaves closed, whose base
+ * is above its limit.
+ */
+static int pci_bridge_window(const struct pci_place *p, int w, uint64_t *start, uint64_t *end)
+{
+    uint32_t lo;
+
+    if (w == 0) {
+        lo = pci_read_config32(p->bus, p->device, p->function, 0x1C);
+        *start = (uint64_t)(lo & 0xF0u) << 8;
+        *end = (uint64_t)(lo & 0xF000u) | 0xFFFu;
+        if ((lo & 0x0Fu) == 0x01u) {
+            lo = pci_read_config32(p->bus, p->device, p->function, 0x30);
+            *start |= (uint64_t)(lo & 0xFFFFu) << 16;
+            *end |= (uint64_t)(lo >> 16) << 16;
+        }
+    } else {
+        lo = pci_read_config32(p->bus, p->device, p->function, w == 1 ? 0x20 : 0x24);
+        *start = (uint64_t)(lo & 0xFFF0u) << 16;
+        *end = (uint64_t)(lo & 0xFFF00000u) | 0xFFFFFu;
+        if (w == 2 && (lo & 0x0Fu) == 0x01u) {
+            *start |= (uint64_t)pci_read_config32(p->bus, p->device, p->function, 0x28) << 32;
+            *end |= (uint64_t)pci_read_config32(p->bus, p->device, p->function, 0x2C) << 32;
+        }
+    }
+    return *start <= *end;
+}
+
+/** Whether `start` to `end`, of I/O ports when `io` is set, overlaps a
+ * window of a listed bridge; `*next` is then the address after it. */
+static int pci_window_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
+{
+    uint64_t ws, we;
+    int k, w, n = pci_list_count();
+
+    for (k = 0; k < n; k++) {
+        for (w = io ? 0 : 1; pci_list[k].header == 1 && w < (io ? 1 : 3); w++) {
+            if (pci_bridge_window(&pci_list[k], w, &ws, &we) && we >= start && ws <= end) {
+                *next = we + 1;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Whether `start` to `end`, of I/O ports when `io` is set, overlaps a BAR
+ * with an address of a listed function or a bridge's window; `*next` is
+ * then the address after what it overlaps. */
+static int pci_range_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
+{
+    struct pci_resource r;
+    int i, k, n = pci_list_count();
+
+    if (pci_window_taken(start, end, io, next)) {
+        return 1;
+    }
+    for (k = 0; k < n; k++) {
+        for (i = 0; i < PCI_RESOURCES; i++) {
+            pci_resource(pci_list[k].bus, pci_list[k].device, pci_list[k].function, i, &r);
+            if (r.start == 0 || !(r.flags & (io ? PCI_IORESOURCE_IO : PCI_IORESOURCE_MEM)) ||
+                r.end < start || r.start > end) {
+                continue;
+            }
+            *next = r.end + 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The lowest address in the apertures `ap` for `size` bytes aligned to
+ * `size`, of I/O when `io` is set, below `limit`, that no listed function
+ * decodes; 0 for none.
+ */
+static uint64_t pci_place_bar(const struct pci_aperture *ap, int n, uint64_t size, int io,
+                              uint64_t limit)
+{
+    uint64_t at, next;
+    int a;
+
+    for (a = 0; a < n; a++) {
+        if (!ap[a].io != !io) {
+            continue;
+        }
+        at = ap[a].start;
+        if (io && at < PCI_IO_FLOOR) {
+            at = PCI_IO_FLOOR;
+        }
+        for (;;) {
+            at = (at + size - 1) & ~(size - 1);
+            if (at == 0 || at + size - 1 > ap[a].end || at + size - 1 > limit) {
+                break;
+            }
+            if (!pci_range_taken(at, at + size - 1, io, &next)) {
+                return at;
+            }
+            at = next;
+        }
+    }
+    return 0;
+}
+
+int pci_assign_bars(uint8_t bus, uint8_t device, uint8_t function, const struct pci_aperture *ap,
+                    int n)
+{
+    int k = pci_list_find(bus, device, function), i, rc = 0;
+    struct pci_resource r;
+    uint64_t size, at;
+    uint8_t off;
+    uint32_t v;
+
+    if (k < 0) {
+        return -ENODEV;
+    }
+    for (i = 0; i < PCI_ROM_RESOURCE; i++) {
+        size = pci_list[k].size[i];
+        pci_resource(bus, device, function, i, &r);
+        if (size == 0 || r.start != 0) {
+            continue;
+        }
+        off = (uint8_t)(PCI_BAR0 + 4 * i);
+        v = pci_read_config32(bus, device, function, off);
+        at = pci_place_bar(ap, n, size, (int)(v & 0x01u),
+                           (v & 0x01u)           ? 0xFFFFu
+                           : pci_bar_is_64bit(v) ? ~(uint64_t)0
+                                                 : 0xFFFFFFFFu);
+        if (at == 0) {
+            klog(KLOG_WARN, "pci", "assign: %02x:%02x.%d: BAR %d of %u bytes fits nowhere", bus,
+                 device, function, i, (unsigned)size);
+            rc = -ENOSPC;
+            continue;
+        }
+        pci_write_config32(bus, device, function, off,
+                           (uint32_t)at | (v & ((v & 0x01u) ? 0x03u : 0x0Fu)));
+        if (!(v & 0x01u) && pci_bar_is_64bit(v)) {
+            pci_write_config32(bus, device, function, (uint8_t)(off + 4), (uint32_t)(at >> 32));
+            i++;
+        }
+    }
+    return rc;
 }
 
 void pci_enable_bus_master(pci_device_t *dev)
