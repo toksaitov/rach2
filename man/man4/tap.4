@@ -39,13 +39,15 @@ Ethernet frames with no packet information before them;
 refuses a name an interface already has, and
 .Dv IFF_ONE_QUEUE
 is ignored, as on Linux.
-An empty name, or one that ends in
-.Ql %d ,
-takes the first free
-.Li tapN ,
-or the stem given and a digit; another name takes that interface when it
-is a tap no descriptor holds, and makes it when no interface has the
-name.
+An empty name is
+.Ql tap%d .
+A name with a
+.Ql %
+is a template, whose one
+.Ql %d
+takes the first digit no interface has, as Linux's dev_alloc_name fills
+it in; another name takes that interface when it is a tap no descriptor
+holds, and makes it when no interface has the name.
 A name may not be
 .Ql \&.
 or
@@ -129,6 +131,9 @@ Only the TAP form: no TUN interface of IP packets, no packet information
 header, no virtio header and so no offload, and one queue.
 Taps are made only in the first network namespace.
 A frame written is at most 1514 bytes, where Linux takes up to 64 KiB.
+A name is at most 7 bytes, where Linux takes 15, and a template's
+.Ql %d
+takes the digits 0 to 9 alone.
 .Sh FILES
 .Bl -tag -width /dev/net/tun
 .It Pa /dev/net/tun
@@ -169,10 +174,15 @@ with
 .Dv IFF_VNET_HDR
 or
 .Dv IFF_MULTI_QUEUE ,
-with a name too long or one a name may not be, or the name of an
-interface that is no tap; a write shorter than an Ethernet header.
+with a name too long or one a name may not be, a template with a
+.Ql %
+that is not one
+.Ql %d ,
+or the name of an interface that is no tap; a write shorter than an
+Ethernet header.
 .It Er ENFILE
-No digit is free for the name's stem.
+No digit is free for the template's
+.Ql %d .
 .It Er ENOSPC
 Every interface of the kernel's, or both tap records, are taken.
 .It Er ENOTTY

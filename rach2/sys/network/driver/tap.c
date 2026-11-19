@@ -73,9 +73,11 @@ struct tap {
     int used;     /* the interface is registered */
     int attached; /* a descriptor holds it, so it has a carrier */
     int persist;  /* TUNSETPERSIST: it outlives its descriptor */
-    /* The ring: TAP_RING slots of TAP_STRIDE bytes, taken at the first use
-     * and kept; `count` frames from slot `head`, each of `len` bytes. */
+    /* The ring: TAP_RING slots of TAP_STRIDE bytes, taken when the record
+     * makes an interface; `count` frames from slot `head`, each of `len`
+     * bytes. */
     uint8_t *frames;
+    int ring_kept; /* an interface was registered with the ring, which stays */
     uint16_t len[TAP_RING];
     uint32_t head, count;
     wait_queue_t wq; /* the reader and the pollers wait here */
@@ -199,10 +201,11 @@ static struct tap *tap_named(const char *name)
  * Make the interface `name` in a free record and register it: the record,
  * or NULL with `*err` set to -ENOSPC when every record is used, -ENOMEM
  * for a ring the heap cannot give, or `netdev_register`'s error. A record
- * keeps its ring once made. It does not sleep, since the heap takes a
- * spinlock and waits for nothing. The interface
- * starts down, with a random station address that has the locally
- * administered bit, as Linux gives a tap.
+ * keeps its ring once an interface is registered with it, and gives back
+ * one it made for a registration that failed. It does not sleep, since the
+ * heap takes a spinlock and waits for nothing. The interface starts down,
+ * with a random station address that has the locally administered bit, as
+ * Linux gives a tap.
  */
 static struct tap *tap_make(const char *name, int32_t *err)
 {
@@ -239,10 +242,15 @@ static struct tap *tap_make(const char *name, int32_t *err)
     t->persist = 0;
     rc = netdev_register(&t->nd);
     if (rc < 0) {
+        if (!t->ring_kept) {
+            kfree_pages(t->frames, TAP_PAGES);
+            t->frames = 0;
+        }
         *err = rc;
         return 0;
     }
     t->used = 1;
+    t->ring_kept = 1;
     return t;
 }
 
@@ -315,41 +323,52 @@ static int tap_name_ok(const char *name)
     return 1;
 }
 
+/** The first '%' of `s`, or NULL. */
+static const char *tap_percent(const char *s)
+{
+    for (; *s; s++) {
+        if (*s == '%') {
+            return s;
+        }
+    }
+    return 0;
+}
+
 /**
- * The name TUNSETIFF's `name` asks for, in `out`: an empty name, or one
- * that ends in `%d`, takes the first free `tapN` or stem and digit. 0;
- * -EINVAL for a name the kernel's interfaces cannot hold, or a template
- * that dev_valid_name refuses, as Linux judges the template before it
- * fills it in; -ENFILE when no digit is free. `*fresh` is 1 for a name made
- * from a stem.
+ * The name TUNSETIFF's `name` asks for, in `out`. An empty name is
+ * "tap%d", as Linux's; a name with a '%' is a template, whose one `%d`
+ * takes the first digit no interface has, as Linux's dev_alloc_name fills
+ * it in. 0; -EINVAL for a name longer than the kernel's interfaces hold, one
+ * dev_valid_name refuses, or a '%' that is not one `%d`; -ENFILE when no
+ * digit is free. `*fresh` is 1 for a name made from a template.
  */
 static int32_t tap_pick_name(const char *name, char *out, int *fresh)
 {
-    char stem[TAP_IFNAME];
-    int i, len = (int)k_strlen(name);
+    const char *pct, *tail;
+    int i, head;
 
-    *fresh = len == 0 || (len >= 2 && name[len - 2] == '%' && name[len - 1] == 'd');
-    if (!*fresh) {
-        if (len > (int)sizeof(taps[0].nd.name) - 1 || !tap_name_ok(name)) {
-            return -EINVAL;
-        }
+    if (name[0] == '\0') {
+        name = "tap%d";
+    }
+    if (k_strlen(name) > sizeof(taps[0].nd.name) - 1 || !tap_name_ok(name)) {
+        return -EINVAL;
+    }
+    pct = tap_percent(name);
+    *fresh = pct != 0;
+    if (!pct) {
         k_strncpy(out, name, TAP_IFNAME - 1);
         out[TAP_IFNAME - 1] = '\0';
         return 0;
     }
-    k_strncpy(stem, len == 0 ? "tap" : name, sizeof(stem) - 1);
-    stem[sizeof(stem) - 1] = '\0';
-    if (len != 0) {
-        stem[len - 2] = '\0';
-    }
-    len = (int)k_strlen(stem);
-    if (len > (int)sizeof(taps[0].nd.name) - 2 || !tap_name_ok(name)) {
+    tail = pct + 2;
+    if (pct[1] != 'd' || tap_percent(tail)) {
         return -EINVAL;
     }
+    head = (int)(pct - name);
     for (i = 0; i < 10; i++) {
-        k_memcpy(out, stem, (size_t)len);
-        out[len] = (char)('0' + i);
-        out[len + 1] = '\0';
+        k_memcpy(out, name, (size_t)head);
+        out[head] = (char)('0' + i);
+        k_memcpy(out + head + 1, tail, k_strlen(tail) + 1);
         if (!netdev_by_name(out)) {
             return 0;
         }

@@ -63,6 +63,7 @@ static struct {
     int ip6_forgets;           /* interfaces whose IPv6 state was forgotten */
     void (*during_copy)(void); /* run once inside the next copy from the user */
     void (*during_wait)(void); /* run once inside the next wait, before a signal */
+    int register_error;        /* what netdev_register answers, when set */
     struct netdev *iface[4];   /* the interfaces registered */
     int registered, unregistered;
     int rx, rx_len; /* frames given to ethernet_rx, and the last one's length */
@@ -100,6 +101,9 @@ int netdev_register(struct netdev *nd)
 {
     int i;
 
+    if (k.register_error) {
+        return k.register_error;
+    }
     for (i = 0; i < 4; i++) {
         if (!k.iface[i]) {
             k.iface[i] = nd;
@@ -438,6 +442,13 @@ static void check_before(void)
               set_iff(0, "a b", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL &&
               set_iff(0, "a:%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
           "a name dev_valid_name refuses is refused");
+    CHECK(set_iff(0, "a%d%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL &&
+              set_iff(0, "a%x", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
+          "and a template with a second %d or another conversion, as dev_alloc_name");
+    k.register_error = -ENOSPC;
+    CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
+          "a registration that fails is the call's error");
+    k.register_error = 0;
     k.other_ns = 1;
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EOPNOTSUPP,
           "a network namespace other than the first has no tap");
@@ -686,6 +697,10 @@ static void check_race(void)
               open_tap(3, 2) == 0 && set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0,
           "and both records serve again");
     k.node->ops->close(&fds[2]);
+    k.node->ops->close(&fds[3]);
+    CHECK(open_tap(3, 2) == 0 && set_iff(3, "a%db", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
+              same_str(name, "a0b") == 0,
+          "a template's %d may have text after it, as dev_alloc_name fills it in");
     k.node->ops->close(&fds[3]);
 }
 
