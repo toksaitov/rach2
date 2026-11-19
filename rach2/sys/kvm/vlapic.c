@@ -1583,7 +1583,11 @@ int kvm_lapic_halt(struct kvm_vcpu *v)
 /** Queue the NMIs other processors delivered on the vCPU, as Linux's
  * process_nmi keeps them: at most two waiting, or one while the guest has
  * NMIs blocked or one is being injected, since that one stands for the
- * NMI the processor would hold pending. */
+ * NMI the processor would hold pending. A queued NMI asks for the
+ * injection (KVM_REQ_EVENT), as process_nmi does: the sender's
+ * KVM_REQ_EVENT may already have been taken by an injection that ran
+ * between the loop's look at KVM_REQ_NMI and the NMI's arrival, and found
+ * nothing queued. */
 static void take_nmis(struct lapic *l)
 {
     struct kvm_vcpu *v = l->v;
@@ -1596,6 +1600,9 @@ static void take_nmis(struct lapic *l)
     n += v->nmi_queued;
     v->nmi_queued = n > limit ? limit : n;
     v->dirty |= KVM_PART_EVENTS;
+    if (v->nmi_queued) {
+        kvm_vcpu_kick(v, KVM_REQ_EVENT);
+    }
 }
 
 /** Take a waiting INIT or SIPI, as Linux's kvm_apic_accept_events: an INIT
