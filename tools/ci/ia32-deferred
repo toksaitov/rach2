@@ -1,10 +1,7 @@
 # ia32-deferred: the suites the release's full run leaves out of the ia32
 # profile, one per line, whose failures on the x86-64 kernel are milestone
 # 85's (run.sh). A suite leaves this list once it passes there.
-default
 ext2
 gnu
-memory
 selfbuild
 selfbuild-ext2
-watchdog
