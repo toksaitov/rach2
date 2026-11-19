@@ -1617,17 +1617,18 @@
     },
     {
       "case_id": "machine.gnu.uname",
-      "behavior": "uname -s Linux, -m the booted architecture, -r 6.18.0-rach2, -v contains Rach2 1.0.0.",
+      "behavior": "uname -s Linux, -m the kernel's architecture, -r 6.18.0-rach2, -v contains Rach2 1.0.0.",
       "units": ["gnu_rows.sh row_uname"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
+      "ia32": {"runs": true, "why": "uname names the x86-64 kernel x86_64 to an i386 program, as Linux's does without setarch's PER_LINUX32; gnu_scenario passes the row the kernel's architecture from RACH2_KERNEL"},
       "workload": {"arguments": [], "inputs": {"row": "uname"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on virtio-blk with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},
         {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/gnu on the machine and transfer the rows' script through its framed channel"},
-        {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh uname ARCH through the framed guest channel as root"}
+        {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "run /bin/bash /tmp/gnu/rows.sh uname ARCH kernel=KERNEL through the framed guest channel as root"}
       ],
       "machines": [
         {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "virtio-net-pci", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
