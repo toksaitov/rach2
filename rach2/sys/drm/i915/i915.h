@@ -3955,9 +3955,10 @@ void intel_crtc_crc_frame(struct intel_crtc *crtc, uint32_t crc);
 /**
  * Take the eDP panel's backlight over from the boot's driver, Linux's
  * lpt_setup_backlight: attach the PCH's PWM through the device's
- * registers, its period from the VBT's frequency when the firmware left it
- * none, and drive "intel_backlight" through it, registering it when the
- * boot did not. From the display's init.
+ * registers, its period and granularity those of the driver's last bind
+ * when the PWM has none, as after a handoff's reset, else from the VBT's
+ * frequency, and drive "intel_backlight" through it, registering it when
+ * the boot did not. From the display's init.
  */
 void intel_backlight_setup(struct drm_i915_private *i915);
 
@@ -3976,7 +3977,8 @@ void intel_backlight_disable(struct drm_i915_private *i915);
  * with the pipe when the class has no switch. */
 void intel_backlight_pipe(struct drm_i915_private *i915, int on);
 
-/** Give the backlight back to the boot's driver, from the unplug. */
+/** Give the backlight back to the boot's driver, from the unplug, keeping
+ * the PWM's period and granularity for the next bind. */
 void intel_backlight_fini(struct drm_i915_private *i915);
 
 /**

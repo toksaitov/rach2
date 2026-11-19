@@ -45,9 +45,11 @@
  * power cycle lost, the GPU reset, and the GTT's entries left as they
  * were, since they are memory. The reference run on the Lenovo
  * (dev-log/76-graphics/research/run2/step11.md) gives what is known of the
- * chip after its reset: the panel dark, ASLS kept, and a backlight of 938
- * levels where the firmware's had 937, which is the PWM without its period
- * and with its granularity: 24 MHz over 200 Hz's 128 steps.
+ * chip after its reset: the panel dark, ASLS kept, and, under Linux, a
+ * backlight of 938 levels where the firmware's had 937, which is the PWM
+ * without its period and with its granularity: 24 MHz over 200 Hz's 128
+ * steps. Rach2's driver gives the bind after the reset the period and
+ * granularity of the bind before it, the firmware's 937 levels.
  *
  * The rows: the bind as the firmware leaves the chip, with the driver
  * shown in /sys; the refusals of both files; a release refused while a
@@ -2256,8 +2258,9 @@ static void row_other_owner(void)
 /**
  * The function as a guest's driver leaves it when QEMU is killed: a
  * picture on pipe A from the guest's memory, the panel and the backlight
- * on with a period of the guest's, interrupts enabled, the message and bus
- * mastering on, and the GTT full of the guest's pages.
+ * on with a period of the guest's in the PCH's fine steps, which the
+ * reset keeps, interrupts enabled, the message and bus mastering on, and
+ * the GTT full of the guest's pages.
  */
 static void row_guest(void)
 {
@@ -2273,6 +2276,7 @@ static void row_guest(void)
     i915_model_poke(&model, PP_CONTROL, PANEL_POWER_ON | EDP_BLC_ENABLE);
     i915_model_poke(&model, BLC_PWM_PCH_CTL1, BLM_PCH_PWM_ENABLE);
     i915_model_poke(&model, BLC_PWM_PCH_CTL2, 0x12340234u);
+    i915_model_poke(&model, SOUTH_CHICKEN2, reg(SOUTH_CHICKEN2) & ~LPT_PWM_GRANULARITY);
     i915_model_poke(&model, DEIMR, 0);
     i915_model_poke(&model, DEIER, DE_MASTER_IRQ_CONTROL | 0xffu);
     i915_model_poke(&model, GTIMR, 0);
@@ -2343,7 +2347,7 @@ static void row_link_fails(void)
  * the first access the reset's 100 ms and the panel's power cycle later;
  * the driver bound with nothing adopted and none of the guest's entries in
  * the GTT; and the kernel, /sys, the console and the backlight as after
- * the boot's bind, with the PWM's period from the VBT.
+ * the boot's bind, with the PWM's period of the bind before the release.
  */
 static void row_bring_up(const char *name)
 {
@@ -2382,8 +2386,9 @@ static void row_bring_up(const char *name)
           "bring-up: the kernel owns the function, its message and interrupts on");
     CHECK(sys_bound() && card()->index == 0 && strcmp(console_calls, "r") == 0,
           "bring-up: /sys shows the driver on the function, card0 again, the console told");
-    CHECK(bl_show(BACKLIGHT_LEVELS) == 938,
-          "bring-up: i915 drives intel_backlight with the VBT's period, 938 levels");
+    CHECK(bl_show(BACKLIGHT_LEVELS) == 937 && i915->display.bl_alt,
+          "bring-up: i915 drives intel_backlight with the period and granularity of the bind "
+          "before the release, 937 levels");
     CHECK(i915->hw.timeouts == 0 && !timed_out(), "bring-up: no wait at its bound");
 }
 

@@ -12,6 +12,16 @@
 #include "../../display/backlight.h"
 #include "../../klog.h"
 
+/* The PWM's period and granularity (`bl_alt`) the driver last ran the panel
+ * with, which intel_backlight_fini keeps when the driver lets the device go
+ * and the next setup takes when it finds no period, as after the function's
+ * reset of a handoff, so that the levels and the frequency stay the
+ * firmware's. The VBT gives only the frequency, which in the PCH's step of
+ * the moment may be another range: 7500 levels on the Lenovo after the
+ * GPU's return from vfio-pci, where the firmware's were 937. 0 for none. */
+static int kept_max;
+static int kept_alt;
+
 /** A register read for the PWM code, through the device at `io`. */
 static uint32_t bl_rd(void *io, uint32_t reg)
 {
@@ -119,14 +129,19 @@ static uint32_t lpt_hz_to_pwm(struct drm_i915_private *i915, uint32_t hz)
 }
 
 /** Set the PWM up when the firmware left it off, as Linux's
- * lpt_setup_backlight does: the period the firmware wrote, else the VBT's
- * frequency's, else 200 Hz's. 0, or -1 with the reason in `*why`. */
+ * lpt_setup_backlight does: the period the firmware wrote; else the period
+ * and granularity an earlier bind ran with (`kept_max`), which Linux does
+ * not keep; else the VBT's frequency's, else 200 Hz's. 0, or -1 with the
+ * reason in `*why`. */
 static int pwm_off_setup(struct drm_i915_private *i915, const char **why)
 {
     struct intel_display *d = &i915->display;
     uint32_t ctl1 = bl_rd(i915, BLC_PWM_PCH_CTL1), max = bl_rd(i915, BLC_PWM_PCH_CTL2) >> 16;
 
-    if (max == 0) {
+    if (max == 0 && kept_max > 0) {
+        max = (uint32_t)kept_max;
+        d->bl_alt = kept_alt;
+    } else if (max == 0) {
         max = lpt_hz_to_pwm(i915, d->dp.vbt.bl_pwm_freq_hz ? d->dp.vbt.bl_pwm_freq_hz : 200u);
     }
     if (max == 0 || max > BACKLIGHT_DUTY_CYCLE_MASK) {
@@ -265,6 +280,8 @@ void intel_backlight_fini(struct drm_i915_private *i915)
     if (d->bl_index < 0) {
         return;
     }
+    kept_max = d->bl.max;
+    kept_alt = d->bl_alt;
     if (intelbl_take_back() != 0) {
         (void)backlight_rebind("intel_backlight", d->bl.max, &gone_ops, NULL);
     }
