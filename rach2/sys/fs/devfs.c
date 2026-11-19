@@ -2005,9 +2005,10 @@ static struct disk *window_disk(const struct devfs_entry *dev)
  *
  * An entry with NULL operations is a terminal, which `devfs_open` opens
  * itself: console and tty give an FD_TYPE_CONSOLE descriptor, tty a pty's
- * when the caller's session is on one, and ptmx a new pty pair. hvc0, at
- * Linux's 229:0, and vport0p1 are a virtio console's ports, present while
- * the port is the console's input (virtio/Readme.md); each gives the
+ * when the caller's session is on one, and ptmx a new pty pair. hvc0 and
+ * hvc1, at Linux's 229:N, and vport0p0 and vport0p1, at 245:N, are a
+ * virtio console's ports, present while the port is the console's input
+ * (virtio/Readme.md); each gives the
  * console terminal, as console does, since the port then carries it, and
  * is root's with write access for its group, as udev makes a terminal.
  */
@@ -2036,6 +2037,8 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"dsp", 14, 3, 0, 0666, &dsp_ops},
                                                {"rfkill", 10, 242, 0, 0644, &rfkill_ops},
                                                {"hvc0", 229, 0, 0, 0620, NULL},
+                                               {"hvc1", 229, 1, 0, 0620, NULL},
+                                               {"vport0p0", 245, 0, 0, 0620, NULL},
                                                {"vport0p1", 245, 1, 0, 0620, NULL},
                                                {"input/event0", 13, 64, 0, 0600, &evdev_ops},
                                                {"input/event1", 13, 65, 0, 0600, &evdev_ops},
@@ -2085,7 +2088,7 @@ static int devfs_loop_index(const struct devfs_entry *dev)
  * present now: a slot while its node is registered; bootpart and grubcore
  * only while published; the mixer, dsp and an event device only while
  * `mixer_present`, `dspdev_present` and `evdev_present` say; a virtio
- * console's port, hvc0 or vport0p1, only while it is the console's input
+ * console's port, hvcN or vport0pN, only while it is the console's input
  * (`virtio_console_node`); and every other entry always. */
 static int devfs_entry_present(const struct devfs_entry *dev)
 {

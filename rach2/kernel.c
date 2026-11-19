@@ -2642,7 +2642,10 @@ static int shutdown_never(void *arg)
  * systems unmounted and nothing left to write: `virtio_blk_shutdown`
  * finishes what each device still has and resets it, as Linux's virtio bus
  * resets its devices at shutdown, so that a warm restart finds no device
- * still reading the rings of the kernel that stopped.
+ * still reading the rings of the kernel that stopped. The virtio console
+ * goes after them, so that their records leave through its ports first
+ * (`virtio_console_shutdown`); the records after it reach COM1 and the
+ * ring only.
  */
 void kernel_shutdown(int how)
 {
@@ -2696,6 +2699,7 @@ void kernel_shutdown(int how)
         }
     }
     virtio_blk_shutdown();
+    virtio_console_shutdown();
     power_stop(how);
 }
 

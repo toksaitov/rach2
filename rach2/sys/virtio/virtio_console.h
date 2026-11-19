@@ -54,6 +54,7 @@ struct virtio_console_counters {
     uint32_t tx_buffers;  /* buffers they went in */
     uint32_t tx_dropped;  /* bytes dropped: no line, or a device that stopped taking */
     uint32_t tx_waits;    /* waits for the device that reached their bound */
+    uint32_t tx_panic;    /* bytes a panic gave through a port's own buffer */
     uint32_t emerg;       /* bytes written to `emerg_wr` during a panic */
     uint32_t control_in;  /* control messages received */
     uint32_t control_out; /* control messages sent */
@@ -64,12 +65,14 @@ struct virtio_console_counters {
  * (`virtio_console_bind`) and register the driver for one bound later
  * through /sys. Called once at boot, after `virtio_pci_probe`.
  *
- * The boot line's `console=` words choose the console's line, each in
+ * The boot line's `console=` words choose the console's lines, each in
  * turn, as Linux's do: `hvc0` is the device's first console port,
  * `vport0pN` its port N whatever its kind, and `ttyS0` the UART. The log
  * goes to every line named and the console's input comes from the last.
  * With no `console=` that names a port the console stays on the UART and
- * the device is bound with no line.
+ * the device is bound with no line. A device with no interrupt is refused.
+ * With `rach2.vconpanic` on the boot line it then runs
+ * `virtio_console_panic_test`.
  *
  * @return 1 when a device was bound, 0 when there is none, or -errno.
  */
@@ -89,8 +92,31 @@ int32_t virtio_console_start(void);
 int32_t virtio_console_bind(struct virtio_dev *vdev);
 
 /**
+ * Stop the device at shutdown, as Linux's virtio bus resets its devices
+ * there: what the ports were given is sent and waited for, the device is
+ * closed to further output, control messages and attachments, the console
+ * goes back to the UART, and the device is reset (`virtio_halt`), or its
+ * memory access turned off when the reset does not end, so that a warm
+ * restart finds no device still writing into the memory of the kernel
+ * that stopped. The result is logged as `virtio_console: shutdown: NAME:`
+ * `reset` or `the reset did not end`. Called once by `kernel_shutdown`,
+ * after the disks are stopped; nothing without a device.
+ */
+void virtio_console_shutdown(void);
+
+/**
+ * The test of a panic that finds the transmit side held, by
+ * `rach2.vconpanic`: take the transmit side's lock as a processor that the
+ * panic stops would hold it, and panic. The panic's text must still reach
+ * each port that carries the console, through the port's own panic
+ * buffer. Nothing, with a record, when no port carries the console.
+ */
+void virtio_console_panic_test(void);
+
+/**
  * Whether /dev/NAME is the node of the port that is the console's input
- * now: `hvc0` for a console port, `vport0pN` for port N of another kind.
+ * now: `hvcN` for a console port, N the number it was given when it became
+ * one, `vport0pN` for port N of another kind.
  * devfs shows the node while this holds, and an open of it gives the
  * console terminal, as /dev/console does.
  */
