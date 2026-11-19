@@ -390,6 +390,14 @@ void ext2_batch_lock(struct ext2_mount *em)
     sleep_lock_take(&em->batch);
 }
 
+/** `ext2_batch_lock` whose wait in the lock's line SIGKILL ends
+ * (`sleep_lock_take_killable`): 0 with `em->batch` held, or -EINTR without
+ * it. */
+int ext2_batch_lock_killable(struct ext2_mount *em)
+{
+    return sleep_lock_take_killable(&em->batch);
+}
+
 /** Give back one take of `em->batch`, as `ext2_batch_lock` took it. */
 void ext2_batch_unlock(struct ext2_mount *em)
 {
