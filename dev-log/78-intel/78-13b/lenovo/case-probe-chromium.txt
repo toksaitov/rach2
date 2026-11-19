@@ -1,0 +1,8 @@
+probe: result: chromium webgl1 fill 1891.0 alu 103.50 webgl2 fill 1931.1 alu 103.30
+judge: result: pass gate 4 measures, 0 losing more than 10% of Linux's
+exit 0
+[  101.312000] i915: gmbus dpc: NAK on first message, retry
+[  101.312000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  101.312000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  101.312000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  101.312000] i915: gmbus dpc: disabling bit-banging, force_bit 0
