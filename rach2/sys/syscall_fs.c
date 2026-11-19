@@ -1908,6 +1908,14 @@ long sys_writev(isr_params_t *params)
 
 #define O_PATH 010000000 /* a descriptor that names a file and opens nothing */
 
+#define O_ACCMODE 3 /* the access mode's two bits */
+
+#define O_DIRECT 040000 /* reads and writes go around the file's cache */
+
+/* Linux's __O_TMPFILE, which O_TMPFILE pairs with O_DIRECTORY: a file with
+ * no name in the directory the path names. */
+#define O_TMPFILE_BIT 020000000
+
 /* Special dir fd for the openat family: resolve relative to the current dir. */
 #define AT_FDCWD (-100)
 
@@ -5273,6 +5281,13 @@ static void attr_told_desc(struct open_file *ofd, uint32_t mask, int self)
     }
 }
 
+/** Whether the open flags `flags` ask for a file with no name (O_TMPFILE),
+ * which O_PATH drops. */
+static int open_is_tmpfile(int flags)
+{
+    return (flags & (O_TMPFILE_BIT | O_PATH)) == O_TMPFILE_BIT;
+}
+
 /**
  * What the open that made the descriptor `fd` from `name`, leading '/'
  * stripped, tells the shared mappings of the file, which lose the pages an
@@ -5313,7 +5328,7 @@ static void open_done(int fd, const char *name, int flags)
 /* The open flags that send an open to the big lock (`open_unlocked`): any
  * access mode but O_RDONLY, the low two bits, and every flag that creates,
  * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE). */
-#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | 020000000)
+#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | O_TMPFILE_BIT)
 
 /**
  * The descriptor of an open that `open_unlocked` checked and holds `ref`
@@ -5448,7 +5463,10 @@ static int32_t open_unlocked(int dirfd, const char __user *upath, int flags)
  * O_CREAT with O_DIRECTORY asks for a file and for a directory at once, and
  * is -EINVAL before the path is read, as Linux answers it since 6.4; an
  * older Linux made a regular file. O_PATH, which drops O_CREAT, takes the
- * pair, as Linux's open and openat do.
+ * pair, as Linux's open and openat do. O_TMPFILE without O_DIRECTORY, or
+ * with the access mode O_RDONLY, which could never write the file, is
+ * -EINVAL there too, as Linux's `build_open_flags` answers it; O_PATH drops
+ * it. An O_TMPFILE open tells inotify of itself (`open_tmpfile`).
  *
  * A caller without the big lock tries `open_unlocked` first and takes the
  * big lock for what that leaves.
@@ -5460,6 +5478,10 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     int32_t rc;
 
     if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {
+        return -EINVAL;
+    }
+    if ((flags & (O_TMPFILE_BIT | O_PATH)) == O_TMPFILE_BIT &&
+        (!(flags & O_DIRECTORY) || (flags & O_ACCMODE) == 0)) {
         return -EINVAL;
     }
     if (!upath) {
@@ -5476,7 +5498,7 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
     rc = path_from_user_dir(dirfd, upath, &path, &end);
     if (rc == 0) {
         rc = open_named(path_name(path), flags, mode, end);
-        if (rc >= 0) {
+        if (rc >= 0 && !open_is_tmpfile(flags)) {
             open_done(rc, path_name(path), flags);
         }
         path_buf_put(path);
@@ -5523,9 +5545,7 @@ struct open_how {
 };
 
 #define OPEN_HOW_SIZE_VER0   24u
-#define O_ACCMODE            3
 #define O_LARGEFILE          0100000
-#define O_TMPFILE_BIT        020000000 /* Linux's __O_TMPFILE, which O_TMPFILE pairs with O_DIRECTORY */
 /* Every flag open(2) has, O_ACCMODE's two bits through __O_TMPFILE, and
  * Linux 6.12's FMODE_NONOTIFY, which openat2 drops unseen. */
 #define OPENAT2_FLAGS        037777703ull
@@ -5883,7 +5903,7 @@ static long openat2_named(int dirfd, const char *name, const struct open_how *ho
             break;
         }
     }
-    if (rc >= 0) {
+    if (rc >= 0 && !open_is_tmpfile(flags)) {
         open_done((int)rc, path_name(real), flags);
     }
     return rc;
@@ -10025,16 +10045,140 @@ static int32_t open_create_dir_end(const char *name, int flags, int end)
     return (flags & O_EXCL) ? -EEXIST : -EISDIR;
 }
 
+/** Write `v` in decimal after "#" into `buf` of 24 bytes, as Linux's
+ * `d_tmpfile` names a file with no name by its inode number. */
+static void tmpfile_leaf(char *buf, uint64_t v)
+{
+    char digits[21];
+    int n = 0, i = 0;
+
+    do {
+        digits[n++] = (char)('0' + (int)(v % 10u));
+        v /= 10u;
+    } while (v != 0 && n < 20);
+    buf[i++] = '#';
+    while (n > 0) {
+        buf[i++] = digits[--n];
+    }
+    buf[i] = '\0';
+}
+
+/**
+ * The open with O_TMPFILE of the directory `name`, leading '/' stripped: a
+ * new regular file with no name there, opened with `flags`, as Linux's
+ * `do_tmpfile` and `vfs_tmpfile` make one (fs/namei.c in 6.12). The walk
+ * follows a final link unless O_NOFOLLOW. Then come -ENOTDIR for anything
+ * but a directory, -EOPNOTSUPP for /dev, /proc and /sys, -EROFS on a
+ * read-only mount, the write and search permission on the directory,
+ * -EOPNOTSUPP on the KRFFS root and on a type without `tmpfile`, and the
+ * type's error, made under the directory's lock (`vfs_node_lock`). The file's
+ * permission bits are those of `mode` less the umask, and it is owned as a
+ * file `create` makes. Without O_EXCL the file is linkable: linkat(2) may
+ * give it a name once, through /proc/self/fd/N or AT_EMPTY_PATH. The
+ * description's record names "#INO" in the directory, deleted from the
+ * start, so that /proc/PID/fd shows "/dir/#INO (deleted)", as Linux's
+ * d_path shows such a file; inotify hears of the open by that name. O_TRUNC
+ * has nothing to cut. The descriptor, reserved before the walk as
+ * `do_open` reserves it, or -errno with everything given back.
+ */
+static int32_t open_tmpfile(const char *name, int flags, uint32_t mode)
+{
+    struct vfs_name *entry = NULL;
+    struct vfs_ref dir, file;
+    struct vfs_stat st;
+    char leaf[24];
+    char *path;
+    void *node = NULL;
+    uint32_t len;
+    int32_t rc;
+    int fd;
+
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        return fd;
+    }
+    rc = resolve_named(name, (flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, 0, &dir);
+    if (rc != 0) {
+        fd_free(current_proc->fds, fd);
+        return rc;
+    }
+    rc = ref_dir_check(&dir, 0);
+    if (rc == 0 && vfs_synth_vpath(dir.mnt, dir.node)) {
+        rc = -EOPNOTSUPP;
+    } else if (rc == 0 && ((dir.mnt->flags | vfs_mount_base(dir.mnt)->flags) & VFS_MS_RDONLY)) {
+        rc = -EROFS;
+    } else if (rc == 0) {
+        rc = cred_access_ref(&dir, CRED_W | CRED_X, 0);
+    }
+    if (rc == 0 && mnt_is_root(dir.mnt)) {
+        rc = -EOPNOTSUPP;
+    }
+    if (rc == 0) {
+        vfs_node_lock(&dir);
+        rc = vfs_tmpfile(dir.mnt, dir.node, mode & 07777u & ~current_proc->fs->umask,
+                         !(flags & O_EXCL), &node);
+        vfs_node_unlock(&dir);
+    }
+    if (rc == 0) {
+        file = dir;
+        file.node = node;
+        rc = vfs_getattr(file.mnt, node, &st);
+        if (rc == 0) {
+            tmpfile_leaf(leaf, st.ino);
+            rc = vfs_name_capture_deleted(&dir, leaf, &entry);
+        }
+        if (rc != 0) {
+            vfs_ref_put(&file);
+        }
+    }
+    path = rc == 0 ? path_buf_get() : NULL;
+    if (rc == 0 && !path) {
+        vfs_name_put(entry);
+        vfs_ref_put(&file);
+        rc = -ENOMEM;
+    }
+    if (rc != 0) {
+        vfs_ref_release(&dir);
+        fd_free(current_proc->fds, fd);
+        return rc;
+    }
+    vfs_ref_put(&dir);
+    len = (uint32_t)k_strlen(name);
+    while (len > 0 && name[len - 1] == '/') {
+        len--;
+    }
+    if (len + 1 + k_strlen(leaf) + 1 > VFS_PATH_MAX) {
+        len = 0;
+    }
+    k_memcpy(path, name, len);
+    if (len > 0) {
+        path[len++] = '/';
+    }
+    k_memcpy(path + len, leaf, k_strlen(leaf) + 1);
+    fd_slot(current_proc->fds, fd)->ofd->name = entry;
+    fd_slot(current_proc->fds, fd)->ofd->watch_flags = OFD_WATCH_MADE;
+    rc = open_install(&file, fd, path, flags & ~O_TRUNC);
+    if (rc >= 0) {
+        open_done(rc, path, flags & ~O_TRUNC);
+    }
+    path_buf_put(path);
+    return rc;
+}
+
 /**
  * open(2), openat(2) and creat(2) of the path `name`, leading '/' stripped,
  * which named a directory by its end when `end` is not 0
  * (`path_names_dir`): such a path must reach a directory, so the open acts
  * as with O_DIRECTORY and follows a final symbolic link whatever O_NOFOLLOW
  * says, as Linux's does, and with O_CREAT, which asks for a file, it is
- * `open_create_dir_end`'s. Any other path is `do_open`'s.
+ * `open_create_dir_end`'s. An O_TMPFILE open is `open_tmpfile`'s. Any other
+ * path is `do_open`'s.
  */
 static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
 {
+    if (open_is_tmpfile(flags)) {
+        return open_tmpfile(name, flags, mode);
+    }
     if (end && (flags & (O_CREAT | O_PATH)) == O_CREAT) {
         return open_create_dir_end(name, flags, end);
     }
@@ -13829,37 +13973,31 @@ static int32_t may_linkat(const struct vfs_ref *src, const struct vfs_stat *st)
 }
 
 /**
- * Make the hard link `newname` to `oldname`, both canonical paths: the core
- * of link(2) and linkat(2). Returns 0 or a negative errno.
+ * Make the hard link `newname`, a canonical path, to the file `src`, which
+ * the caller resolved and which this releases: the core of link(2) and
+ * linkat(2). Returns 0 or a negative errno.
  *
- * The source is resolved as itself unless `follow`; one that named a
- * directory by its end, `olddir`, follows a final link and must reach a
- * directory (`resolve_named`), which is EPERM later. The refusals after the
- * walks come in this order: the root as the new name, EEXIST
- * (`new_name_parent`); a new name that named a directory by its end,
- * `newend`, as `make_dir_end` answers it; a new name that exists, EEXIST
- * (`new_name_taken`); another mount, EXDEV; a source in /dev, /proc or /sys
- * or on the KRFFS root, whose types have no links, and a directory, EPERM;
- * a read-only mount, EROFS; fs.protected_hardlinks, EPERM (`may_linkat`);
- * and the parent's write permission. The type
- * makes the link under the parent's lock (`vfs_node_lock`), and under the
- * source's after it on a type that sets `file_locked`, and one without links
- * answers EPERM.
+ * The refusals after the walks come in this order: the root as the new
+ * name, EEXIST (`new_name_parent`); a new name that named a directory by
+ * its end, `newend`, as `make_dir_end` answers it; a new name that exists,
+ * EEXIST (`new_name_taken`); another mount, EXDEV; a source in /dev, /proc
+ * or /sys or on the KRFFS root, whose types have no links, and a
+ * directory, EPERM; a read-only mount, EROFS; fs.protected_hardlinks,
+ * EPERM (`may_linkat`); and the parent's write permission. The type makes
+ * the link under the parent's lock (`vfs_node_lock`), and under the
+ * source's after it on a type that sets `file_locked`, and one without
+ * links answers EPERM.
  */
-static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
+static int32_t link_ref(struct vfs_ref *src, const char *newname, int newend)
 {
-    struct vfs_ref src, parent;
+    struct vfs_ref parent;
     struct vfs_stat st;
     char leaf[VFS_NAME_MAX + 1];
     int32_t rc;
 
-    rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, olddir, &src);
-    if (rc != 0) {
-        return rc;
-    }
     rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
-        vfs_ref_release(&src);
+        vfs_ref_release(src);
         return rc;
     }
     rc = make_dir_end(&parent, leaf, newend, newname);
@@ -13869,19 +14007,19 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
     if (rc != 0) {
         goto out;
     }
-    if (parent.mnt != src.mnt) {
+    if (parent.mnt != src->mnt) {
         rc = -EXDEV;
-    } else if (vfs_synth_vpath(src.mnt, src.node) || mnt_is_root(src.mnt)) {
+    } else if (vfs_synth_vpath(src->mnt, src->node) || mnt_is_root(src->mnt)) {
         rc = -EPERM;
     } else {
-        rc = vfs_getattr(src.mnt, src.node, &st);
+        rc = vfs_getattr(src->mnt, src->node, &st);
     }
     if (rc == 0 && (st.mode & 0170000u) == 0040000u) {
         rc = -EPERM;
     } else if (rc == 0 && (parent.mnt->flags & VFS_MS_RDONLY)) {
         rc = -EROFS;
     } else if (rc == 0) {
-        rc = may_linkat(&src, &st);
+        rc = may_linkat(src, &st);
     }
     if (rc == 0) {
         rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
@@ -13892,21 +14030,102 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
         rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
         if (own) {
             sleep_lock_subclass(2);
-            vfs_node_lock(&src);
+            vfs_node_lock(src);
             sleep_lock_subclass(0);
         }
         if (rc == 0) {
-            rc = vfs_link(parent.mnt, parent.node, leaf, src.node);
+            rc = vfs_link(parent.mnt, parent.node, leaf, src->node);
         }
         if (own) {
-            vfs_node_unlock(&src);
+            vfs_node_unlock(src);
         }
         vfs_node_unlock(&parent);
     }
 out:
     vfs_ref_release(&parent);
-    vfs_ref_release(&src);
+    vfs_ref_release(src);
     return rc;
+}
+
+/**
+ * Make the hard link `newname` to `oldname`, both canonical paths, by
+ * `link_ref`. The source is resolved as itself unless `follow`; one that
+ * named a directory by its end, `olddir`, follows a final link and must
+ * reach a directory (`resolve_named`), which is EPERM later. Returns 0 or a
+ * negative errno.
+ */
+static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
+{
+    struct vfs_ref src;
+    int32_t rc;
+
+    rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, olddir, &src);
+    return rc != 0 ? rc : link_ref(&src, newname, newend);
+}
+
+/**
+ * The file the caller's descriptor `fd` is open on, for linkat's
+ * AT_EMPTY_PATH with an empty path, into `src` as a walk leaves it, entered
+ * and held: what /proc/self/fd/N reaches, without the walk to it, an O_PATH
+ * descriptor's file and a file with no name among them, as on Linux. 0,
+ * -EBADF for a descriptor that is not open, -EXDEV for one of a pipe, a
+ * socket or a node of /dev or /proc, which have no mount to link on, or
+ * -ENOENT for a mount being unmounted.
+ */
+static int32_t link_fd_file(int fd, struct vfs_ref *src)
+{
+    struct open_file *held;
+    struct vpath vp;
+    int32_t rc;
+
+    if (fd_get(current_proc->fds, fd) == NULL) {
+        return -EBADF;
+    }
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_PROC_FD_LINK;
+    vp.pid = SYNTH_PID_SELF;
+    vp.procfd = fd;
+    rc = proc_fd_file(&vp, src, &held);
+    if (rc != 0) {
+        return rc == -EACCES ? -EXDEV : rc;
+    }
+    if (src->mnt->type->ns_serialised) {
+        vfs_ns_unlock(src->mnt);
+    }
+    fd_ofd_unref(held);
+    return 0;
+}
+
+/**
+ * linkat's AT_EMPTY_PATH before either path is copied, as Linux 6.12's
+ * path_init has it: a relative old path, the empty one among them, read
+ * from the descriptor `dirfd` needs that descriptor open, else -EBADF, and
+ * opened by the caller's credentials (`fd_ofd_opener_is_current`) or a
+ * caller with CAP_DAC_READ_SEARCH, else -ENOENT, so that a process cannot
+ * name a file it was only handed. `*empty` says whether the path is empty.
+ * 0, or -EFAULT for a path outside the caller's memory.
+ */
+static int32_t link_empty_check(int dirfd, const char __user *upath, int *empty)
+{
+    fd_entry_t *entry;
+    char c;
+
+    if (copy_from_user(&c, upath, 1) != 0) {
+        return -EFAULT;
+    }
+    *empty = c == '\0';
+    if (c == '/' || dirfd == AT_FDCWD) {
+        return 0;
+    }
+    entry = fd_get(current_proc->fds, dirfd);
+    if (!entry) {
+        return -EBADF;
+    }
+    if (!entry->ofd ||
+        (!fd_ofd_opener_is_current(entry->ofd) && !cap_holds(current_proc, CAP_DAC_READ_SEARCH))) {
+        return -ENOENT;
+    }
+    return 0;
 }
 
 /**
@@ -14034,24 +14253,47 @@ long sys_symlinkat(isr_params_t *params)
  * link(2) and linkat(2) after their arguments: both paths are copied, which
  * reports a bad pointer as -EFAULT and a bad directory descriptor as -EBADF,
  * before the source is looked up, so a missing source is -ENOENT and not the
- * -EPERM of a file system without links. `follow` has a final link of the
- * source followed. Returns 0 or a negative errno, `do_link`'s after the
- * copies.
+ * -EPERM of a file system without links. AT_SYMLINK_FOLLOW in `flags` has a
+ * final link of the source followed. With AT_EMPTY_PATH the old directory
+ * descriptor is checked first (`link_empty_check`), and an empty old path
+ * names what that descriptor is open on (`link_fd_file`), or the working
+ * directory for AT_FDCWD, which as a directory is -EPERM. Returns 0 or a
+ * negative errno, `link_ref`'s after the copies.
  */
 static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirfd,
-                              const char __user *unew, int follow)
+                              const char __user *unew, int flags)
 {
+    struct vfs_ref src;
     char *oldpath = NULL;
     char *newpath = NULL;
     int olddir = 0;
     int newend = 0;
-    int32_t rc = path_from_user_dir(olddirfd, uold, &oldpath, &olddir);
+    int empty = 0;
+    int32_t rc = 0;
 
+    if (flags & AT_EMPTY_PATH) {
+        rc = link_empty_check(olddirfd, uold, &empty);
+    }
+    if (rc == 0 && empty && olddirfd == AT_FDCWD) {
+        oldpath = path_buf_get();
+        if (!oldpath) {
+            return -ENOMEM;
+        }
+        k_strncpy(oldpath, proc_cwd(current_proc), VFS_PATH_MAX);
+    } else if (rc == 0 && !empty) {
+        rc = path_from_user_dir(olddirfd, uold, &oldpath, &olddir);
+    }
     if (rc == 0) {
         rc = path_from_user_dir(newdirfd, unew, &newpath, &newend);
     }
-    if (rc == 0) {
-        rc = do_link(path_name(oldpath), path_name(newpath), follow, olddir, newend);
+    if (rc == 0 && !oldpath) {
+        rc = link_fd_file(olddirfd, &src);
+        if (rc == 0) {
+            rc = link_ref(&src, path_name(newpath), newend);
+        }
+    } else if (rc == 0) {
+        rc = do_link(path_name(oldpath), path_name(newpath), (flags & AT_SYMLINK_FOLLOW) != 0,
+                     olddir, newend);
     }
     path_buf_put(newpath);
     path_buf_put(oldpath);
@@ -14076,10 +14318,10 @@ long sys_link(isr_params_t *params)
 
 /**
  * linkat(2): the old directory descriptor and path, the new ones, and the
- * flags. AT_SYMLINK_FOLLOW has a final link of the old path followed;
- * AT_EMPTY_PATH is taken and changes nothing, so an empty old path is
- * -ENOENT; any other flag is -EINVAL. -EFAULT for a NULL pointer, or
- * `link_from_user`'s answer.
+ * flags. AT_SYMLINK_FOLLOW has a final link of the old path followed, and
+ * AT_EMPTY_PATH lets an empty old path name the file the old descriptor is
+ * open on, which gives a file O_TMPFILE made its name; any other flag is
+ * -EINVAL. -EFAULT for a NULL pointer, or `link_from_user`'s answer.
  */
 long sys_linkat(isr_params_t *params)
 {
@@ -14095,7 +14337,7 @@ long sys_linkat(isr_params_t *params)
     if (flags & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
     }
-    return link_from_user(olddirfd, uold, newdirfd, unew, (flags & AT_SYMLINK_FOLLOW) != 0);
+    return link_from_user(olddirfd, uold, newdirfd, unew, flags);
 }
 
 /** The 64-bit displacement `_llseek` takes as two words, high and low. */

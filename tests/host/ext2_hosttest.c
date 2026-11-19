@@ -906,6 +906,18 @@ static int held_link(struct vfs_mount *m, void *dir, const char *name, void *nod
     return rc;
 }
 
+/** The `tmpfile` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_tmpfile(struct vfs_mount *m, void *dir, uint32_t mode, int linkable, void **node)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->tmpfile(m, dir, mode, linkable, node);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
 /** The `symlink` of `held_ops`: the driver's, under `dir`'s lock. */
 static int held_symlink(struct vfs_mount *m, void *dir, const char *name, const char *target)
 {
@@ -944,6 +956,7 @@ static void held_ops_init(void)
     held_ops.link = held_link;
     held_ops.symlink = held_symlink;
     held_ops.mknod = held_mknod;
+    held_ops.tmpfile = held_tmpfile;
 }
 
 /* The kind of the mount's rename lock, as nodelock.c names it. */
@@ -10572,6 +10585,7 @@ static const struct {
     const char *option;
     void (*rows)(void);
 } only_rows[] = {
+    {"--locks-only", lock_rows},
     {"--hardlinks-only", hardlink_check_rows},
     {"--node-only", node_rows},
     {"--fsync-only", fsync_rows},

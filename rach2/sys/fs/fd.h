@@ -681,6 +681,16 @@ int fd_ofd_unref_unless_last(struct open_file *ofd);
  */
 struct open_file *fd_ofd_new(void);
 
+/**
+ * Whether the current process holds the credentials that opened `ofd`, as
+ * Linux 6.12's linkat with AT_EMPTY_PATH asks that the file's `f_cred` be
+ * the caller's: the same thread group, with no exec since the open, and
+ * the same file-system user and group ids. Linux compares the credential
+ * record itself, which fork and exec replace and any change of ids makes
+ * anew; this compares what those changes leave behind. 1 or 0.
+ */
+int fd_ofd_opener_is_current(struct open_file *ofd);
+
 struct vfs_ref;
 /** Reserve `ref` for writing (1) or execution (2) in `ofd`, in place of
  * any reservation `ofd` held: 0, -EROFS for writing through a mount that

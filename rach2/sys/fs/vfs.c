@@ -3714,6 +3714,23 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     return rc;
 }
 
+int vfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, void **node)
+{
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
+    if (mount_rdonly(mnt)) {
+        return -EROFS;
+    }
+    if (guard_node(mnt, dir) & VFS_FL_IMMUTABLE) {
+        return -EPERM; /* inode_permission's rule for MAY_WRITE */
+    }
+    if (!mnt->type->ops->tmpfile) {
+        return -EOPNOTSUPP;
+    }
+    return mnt->type->ops->tmpfile(mount_base(mnt), dir, mode, linkable, node);
+}
+
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct vfs_stat was, parent;
