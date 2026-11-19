@@ -99,12 +99,16 @@ struct nd6_entry {
 
 /* A datagram that waits for its next hop's station address, a copy on the
  * heap; free when `len` is 0. One past the path MTU is held whole, before
- * fragmentation, so that no fragment of it can put out another. */
+ * fragmentation, so that no fragment of it can put out another. One the
+ * link's MTU no longer passes when it leaves, since the MTU fell while it
+ * waited, leaves in fragments of the link's MTU, as Linux's
+ * ip6_finish_output cuts to the route's MTU, or is dropped when it may not
+ * be cut. */
 struct nd6_hold {
     struct netdev *out;
     uint8_t hop[IP6_ADDR_LEN];
     uint32_t len; /* bytes at `data`, the fixed header included */
-    uint32_t mtu; /* the MTU its fragments are cut to, 0 to leave whole */
+    uint32_t mtu; /* the most its fragments may be, 0 when it may not be cut */
     uint8_t *data;
 };
 
@@ -620,13 +624,19 @@ static void release(struct nd6_entry *e)
 
         if (h->len && h->out == e->nd && ip6_equal(h->hop, e->addr)) {
             const uint8_t *d = h->data;
+            uint32_t cut = nd6_link_mtu(h->out);
 
-            if (h->mtu) {
+            if (h->mtu && h->mtu < cut) {
+                cut = h->mtu;
+            }
+            if (h->len <= cut) {
+                xmit(h->out, e->mac, d, (uint16_t)h->len);
+            } else if (h->mtu) {
                 frag6_output(h->out, h->hop, d + 8, d + 24, d[6], d + IP6_HDR_SIZE,
                              (uint16_t)(h->len - IP6_HDR_SIZE), d[7],
-                             (uint8_t)(((d[0] & 0x0f) << 4) | (d[1] >> 4)), h->mtu);
+                             (uint8_t)(((d[0] & 0x0f) << 4) | (d[1] >> 4)), cut);
             } else {
-                xmit(h->out, e->mac, d, (uint16_t)h->len);
+                net_mib6.ip6_frag_fails++;
             }
             hold_free(h);
         }
@@ -656,8 +666,8 @@ static void fail(struct nd6_entry *e)
 /**
  * Keep the datagram of `len` bytes at `data`, a block of the heap the queue
  * now owns, for `hop` on `out`, in a free slot, or in place of the one put
- * in longest ago when none is. `mtu` is the MTU its fragments are cut to
- * when it leaves, or 0 for one that leaves whole.
+ * in longest ago when none is. `mtu` is the most its fragments may be
+ * when it leaves, or 0 for one that may not be cut.
  */
 static void hold(struct netdev *out, const uint8_t *hop, uint8_t *data, uint32_t len, uint32_t mtu)
 {
@@ -734,7 +744,8 @@ static int miss(struct netdev *out, const uint8_t *hop, struct nd6_entry *e, uin
     return 0;
 }
 
-int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len)
+int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len,
+               uint32_t mtu)
 {
     struct nd6_entry *e = find(out, hop);
     uint8_t *copy;
@@ -753,7 +764,7 @@ int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uin
         return -ENOBUFS;
     }
     k_memcpy(copy, dgram, len);
-    return miss(out, hop, e, copy, len, 0);
+    return miss(out, hop, e, copy, len, mtu);
 }
 
 int nd6_output_whole(struct netdev *out, const uint8_t *hop, const uint8_t *hdr,

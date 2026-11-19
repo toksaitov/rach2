@@ -376,7 +376,7 @@ void ip6_set_class(uint8_t *buf, uint8_t tclass)
     buf[1] = (uint8_t)(((tclass & 0x0f) << 4) | (buf[1] & 0x0f));
 }
 
-int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len)
+int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len, uint32_t mtu)
 {
     uint8_t mac[6];
     int sent;
@@ -389,7 +389,7 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
         return 0;
     }
     if (!ip6_is_multicast(via)) {
-        return nd6_output(out, via, buf, (uint16_t)len);
+        return nd6_output(out, via, buf, (uint16_t)len, mtu);
     }
     net_mib6.ip6_out_mcast_pkts++;
     ip6_mcast_mac(via, mac);
@@ -526,7 +526,7 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
             net_mib6.ip6_out_discards++;
         }
     }
-    return ip6_emit(out, via, ip6_tx_buf, total);
+    return ip6_emit(out, via, ip6_tx_buf, total, ext ? 0 : mtu);
 }
 
 /** No source is chosen and nothing in the header is checked against this
@@ -552,5 +552,5 @@ int ip6_tx_whole(const uint8_t *dg, uint32_t len, const uint8_t *dst, int ifinde
     if (len > ip6_path_mtu(out, dst)) {
         return -EMSGSIZE;
     }
-    return ip6_emit(out, via, dg, len);
+    return ip6_emit(out, via, dg, len, 0);
 }

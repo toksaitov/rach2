@@ -13,9 +13,11 @@
  * of a queue of four, and the datagram would never be put back together at
  * the far end, while the sender was told it was sent. A guest cannot show
  * this: QEMU's user network answers a solicitation before a second fragment
- * is sent. So nd6.c is compiled whole with the layers around it replaced by
- * recorders, the hop's answer is given by hand, and the frames the card is
- * handed are put back together here.
+ * is sent. Nor can it lower a card's MTU while a datagram is held, as a
+ * virtio device bound again with a smaller limit does. So nd6.c is
+ * compiled whole with the layers around it replaced by recorders, the hop's
+ * answer is given by hand, and the frames the card is handed are put back
+ * together here.
  */
 #include "network/ip6/nd6.c"
 #include "network/ip6/frag6.h"
@@ -39,11 +41,12 @@ static int failures;
 /* The one card, of MTU 1500 and index 1. */
 static struct netdev card;
 
-/* The frames the card was handed and the solicitations sent; the payload
- * of the datagram the fragments make up, put back together by offset, the
- * bytes they carried, whether every fragment had the first's identification
- * and whether one came without M; and the address-unreachable errors. */
-static unsigned frames, solicits, unreachables;
+/* The frames the card was handed, the longest of them and the
+ * solicitations sent; the payload of the datagram the fragments make up,
+ * put back together by offset, the bytes they carried, whether every
+ * fragment had the first's identification and whether one came without M;
+ * and the address-unreachable errors. */
+static unsigned frames, longest, solicits, unreachables;
 static uint8_t whole[65536];
 static uint32_t whole_bytes, whole_id;
 static int ids_agree, saw_last;
@@ -84,6 +87,9 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
     (void)out;
     (void)dst_mac;
     frames++;
+    if (plen > longest) {
+        longest = plen;
+    }
     if (ethertype == ETH_TYPE_IPV6 && plen > IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE &&
         payload[6] == IP6_NH_FRAGMENT) {
         const uint8_t *fh = payload + IP6_HDR_SIZE;
@@ -105,9 +111,9 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
 }
 
 /** Give a unicast datagram to the neighbour cache, as ip6.c does. */
-int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len)
+int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len, uint32_t mtu)
 {
-    return nd6_output(out, via, buf, (uint16_t)len);
+    return nd6_output(out, via, buf, (uint16_t)len, mtu);
 }
 
 /** Write the fixed header, as ip6.c does. */
@@ -358,7 +364,7 @@ uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
 /** Forget what the last row recorded. */
 static void reset_record(void)
 {
-    frames = solicits = unreachables = 0;
+    frames = longest = solicits = unreachables = 0;
     k_memset(whole, 0, sizeof(whole));
     whole_bytes = whole_id = 0;
     ids_agree = saw_last = 0;
@@ -424,6 +430,72 @@ static void failed_row(void)
           "a neighbour that never answers gets the held datagram one address unreachable");
 }
 
+/**
+ * Hold datagrams for cold neighbours while the card's MTU falls from 1500
+ * to 1300, as a virtio device bound again with a smaller limit lowers it:
+ * one of 1400 bytes that `ip6_tx` would send whole, and one of 6000 bytes
+ * held whole to be cut at 1500, each leave in fragments of 1300 bytes at
+ * most when the answer comes, as Linux's ip6_finish_output cuts to the MTU
+ * as it is then, and carry the whole payload; one that may not be cut, as a
+ * raw datagram with its own header may not, is dropped and counted in
+ * FragFails, and no frame past the MTU reaches the card.
+ */
+static void mtu_falls_row(void)
+{
+    static const uint8_t src[16] = {0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0f};
+    static const uint8_t mac[6] = {0x52, 0x55, 0x0a, 0x00, 0x02, 0x04};
+    static uint8_t payload[6000], dgram[1400];
+    uint8_t hop[16];
+    uint32_t i, fails;
+
+    for (i = 0; i < sizeof(payload); i++) {
+        payload[i] = (uint8_t)(i * 11u + i / 241u);
+    }
+    k_memcpy(hop, src, sizeof(hop));
+    ip6_header(dgram, src, hop, IP6_NH_UDP, (uint16_t)(sizeof(dgram) - IP6_HDR_SIZE), 64);
+    k_memcpy(dgram + IP6_HDR_SIZE, payload, sizeof(dgram) - IP6_HDR_SIZE);
+
+    hop[15] = 0x04;
+    k_memcpy(dgram + 24, hop, sizeof(hop));
+    reset_record();
+    CHECK(ip6_emit(&card, hop, dgram, sizeof(dgram), 1500) == 0 && frames == 0 && solicits == 1,
+          "a datagram of 1400 bytes to a cold neighbour is held");
+    card.mtu = 1300;
+    learn(&card, hop, mac, -1);
+    CHECK(frames == 2 && longest <= 1300, "after the MTU falls to 1300 it leaves in two fragments");
+    CHECK(whole_bytes == sizeof(dgram) - IP6_HDR_SIZE && ids_agree && saw_last &&
+              memcmp(whole, payload, sizeof(dgram) - IP6_HDR_SIZE) == 0,
+          "which carry the whole payload under one identification, the last without M");
+
+    card.mtu = 1500;
+    hop[15] = 0x05;
+    reset_record();
+    CHECK(frag6_output(&card, hop, src, hop, IP6_NH_UDP, payload, (uint16_t)sizeof(payload), 64, 0,
+                       card.mtu) == 0 &&
+              frames == 0,
+          "a datagram of 6000 bytes to a cold neighbour is held whole");
+    card.mtu = 1300;
+    learn(&card, hop, mac, -1);
+    CHECK(frames == 5 && longest <= 1300,
+          "after the MTU falls to 1300 it leaves in five fragments of 1300 bytes at most");
+    CHECK(whole_bytes == sizeof(payload) && ids_agree && saw_last &&
+              memcmp(whole, payload, sizeof(payload)) == 0,
+          "which carry the whole payload");
+
+    card.mtu = 1500;
+    hop[15] = 0x06;
+    k_memcpy(dgram + 24, hop, sizeof(hop));
+    reset_record();
+    fails = net_mib6.ip6_frag_fails;
+    CHECK(ip6_emit(&card, hop, dgram, sizeof(dgram), 0) == 0 && frames == 0,
+          "a datagram of 1400 bytes that may not be cut is held");
+    card.mtu = 1300;
+    learn(&card, hop, mac, -1);
+    CHECK(frames == 0 && net_mib6.ip6_frag_fails == fails + 1,
+          "after the MTU falls to 1300 it is dropped and counted in FragFails");
+    card.mtu = 1500;
+}
+
 int main(void)
 {
     card.index = 1;
@@ -432,6 +504,7 @@ int main(void)
     kernel_ticks = 1000;
     cold_send_row();
     failed_row();
+    mtu_falls_row();
     if (failures == 0) {
         printf("nd6hold_hosttest: PASS\n");
     }
