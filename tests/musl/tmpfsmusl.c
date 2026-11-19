@@ -16,6 +16,15 @@
  * a tmpfs with a file of two pages takes a size= that they fit in, which
  * statfs gives, and fails with EINVAL for a smaller one.
  *
+ * A tmpfs mounted with nr_inodes=4 gives four inodes and three free, its
+ * root's taken, in statfs, and a fourth file there fails with ENOSPC. A file
+ * made immutable with FS_IOC_SETFLAGS reads the flag back with
+ * FS_IOC_GETFLAGS and refuses an open for writing with EPERM; a flag tmpfs
+ * does not keep is EOPNOTSUPP, and FS_IOC_GETVERSION is ENOTTY, as on
+ * Linux. A user and a trusted attribute are set, read and listed, an
+ * attribute is ENOSPC once the mount has no inode space left, the system
+ * namespace is EOPNOTSUPP, and a removed attribute is ENODATA.
+ *
  * A bind of a directory of a tmpfs shows it at another directory: a file made
  * through the bind is in the source with the same device and inode, an
  * exclusive flock through one path blocks one through the other, ".." at the
@@ -53,9 +62,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
@@ -68,51 +79,32 @@
 #define BIND_DEV    "/tmp/tmpfsmusl-dev"
 #define TMPFS_MAGIC 0x01021994
 
+/* The inode-flag requests of chattr(1), whose size is a long's, and the
+ * immutable flag, as Linux's linux/fs.h has them. */
+#define FS_IOC_GETFLAGS   _IOR('f', 1, long)
+#define FS_IOC_SETFLAGS   _IOW('f', 2, long)
+#define FS_IOC_GETVERSION _IOR('v', 1, long)
+#define FS_IMMUTABLE_FL   0x10
+
 extern char **environ;
 
 /* The assertions, a check each, in the order the program makes them. */
-static const char *const assertion_id[] = {"mount",
-                                           "root-mode-magic",
-                                           "file",
-                                           "dir-links",
-                                           "rename-linked",
-                                           "proc-files",
-                                           "umount-busy",
-                                           "umount",
-                                           "second-mount",
-                                           "remount-mount",
-                                           "two-pages",
-                                           "remount-size",
-                                           "remount-umount",
-                                           "deep-mount",
-                                           "deep-levels",
-                                           "deep-umount",
-                                           "shm-kind",
-                                           "shm-mounts",
-                                           "shm-create",
-                                           "shm-file",
-                                           "shm-cwd",
-                                           "shm-pts-dotdot",
-                                           "shm-busy",
-                                           "bind-source",
-                                           "bind",
-                                           "bind-same-file",
-                                           "bind-flock",
-                                           "bind-dotdot",
-                                           "bind-readonly",
-                                           "bind-mountinfo",
-                                           "bind-source-busy",
-                                           "rbind-devices",
-                                           "rbind-dotdot",
-                                           "rbind-umount",
-                                           "kbind",
-                                           "kbind-grown",
-                                           "kbind-fstat",
-                                           "kbind-busy",
-                                           "kbind-umount",
-                                           "krbind",
-                                           "krbind-stat",
-                                           "krbind-umount"};
+static const char *const assertion_id[] = {"mount",          "root-mode-magic", "file",
+                                           "dir-links",      "rename-linked",   "proc-files",
+                                           "umount-busy",    "umount",          "second-mount",
+                                           "remount-mount",  "two-pages",       "remount-size",
+                                           "remount-umount", "inodes-mount",    "inodes-limit",
+                                           "flags",          "xattrs",          "inodes-umount",
+                                           "deep-mount",     "deep-levels",     "deep-umount",
+                                           "shm-kind",       "shm-mounts",      "shm-create",
+                                           "shm-file",       "shm-cwd",         "shm-pts-dotdot",
+                                           "shm-busy",       "bind-source",     "bind",
+                                           "bind-same-file", "bind-flock",      "bind-dotdot",
+                                           "bind-readonly",  "bind-mountinfo",  "bind-source-busy",
+                                           "rbind-devices",  "rbind-dotdot",    "rbind-umount",
+                                           "kbind",          "kbind-grown",     "kbind-fstat",
+                                           "kbind-busy",     "kbind-umount",    "krbind",
+                                           "krbind-stat",    "krbind-umount"};
 
 #define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
 
@@ -297,6 +289,94 @@ static int placed(void)
     }
     row_held();
     rmdir(DIR_PATH);
+    return 0;
+}
+
+/**
+ * Check the inode flags of the file `path` of a tmpfs: it is made immutable
+ * and reads the flag back, refuses an open for writing with EPERM, takes no
+ * flag tmpfs does not keep, has no generation, and is made writable again.
+ * Returns 1, or 0 on failure.
+ */
+static int flagged(const char *path)
+{
+    int fd = open(path, O_RDONLY);
+    int flags = FS_IMMUTABLE_FL, got = 0, ok;
+
+    ok = fd >= 0 && ioctl(fd, FS_IOC_SETFLAGS, &flags) == 0 &&
+         ioctl(fd, FS_IOC_GETFLAGS, &got) == 0 && got == FS_IMMUTABLE_FL &&
+         open(path, O_WRONLY) == -1 && errno == EPERM;
+    flags = 0x1;
+    ok = ok && ioctl(fd, FS_IOC_SETFLAGS, &flags) == -1 && errno == EOPNOTSUPP;
+    ok = ok && ioctl(fd, FS_IOC_GETVERSION, &got) == -1 && errno == ENOTTY;
+    flags = 0;
+    ok = ok && ioctl(fd, FS_IOC_SETFLAGS, &flags) == 0;
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok;
+}
+
+/**
+ * Check the extended attributes of the file `path` of a tmpfs that has no
+ * inode space left: a user and a trusted attribute that fit in the 1024
+ * bytes a removed file gives back are set, read and listed, one of 1000
+ * bytes more, which does not fit beside them, is ENOSPC, the
+ * system namespace is EOPNOTSUPP, and a removed one is ENODATA. Returns 1,
+ * or 0 on failure.
+ */
+static int attributed(const char *path)
+{
+    static const char names[] = "user.t\0trusted.t";
+    static char big[1000];
+    char buf[64];
+
+    if (unlink(DIR_PATH "/c") != 0 || setxattr(path, "user.t", "uv", 2, XATTR_CREATE) != 0 ||
+        setxattr(path, "trusted.t", "tv", 2, 0) != 0 || getxattr(path, "user.t", buf, 2) != 2 ||
+        memcmp(buf, "uv", 2) != 0 || listxattr(path, buf, sizeof(buf)) != (ssize_t)sizeof(names) ||
+        memcmp(buf, names, sizeof(names)) != 0) {
+        return 0;
+    }
+    return setxattr(path, "user.big", big, sizeof(big), 0) == -1 && errno == ENOSPC &&
+           setxattr(path, "system.t", "v", 1, 0) == -1 && errno == EOPNOTSUPP &&
+           removexattr(path, "user.t") == 0 && getxattr(path, "user.t", buf, 2) == -1 &&
+           errno == ENODATA;
+}
+
+/**
+ * Check a tmpfs mounted with nr_inodes=4: statfs's inodes, ENOSPC for a
+ * fourth file, the inode flags (`flagged`) and the extended attributes
+ * (`attributed`). Returns 0, or 1 once the failure is reported.
+ */
+static int counted(void)
+{
+    struct statfs sf;
+    int fd;
+
+    mkdir(DIR_PATH, 0755);
+    if (mount("none", DIR_PATH, "tmpfs", 0, "nr_inodes=4") != 0) {
+        return fail("a tmpfs with nr_inodes=4");
+    }
+    row_held();
+    if (statfs(DIR_PATH, &sf) != 0 || sf.f_files != 4 || sf.f_ffree != 3 ||
+        !put(DIR_PATH "/a", "a") || !put(DIR_PATH "/b", "b") || !put(DIR_PATH "/c", "c") ||
+        (fd = open(DIR_PATH "/d", O_WRONLY | O_CREAT, 0644)) != -1 || errno != ENOSPC ||
+        statfs(DIR_PATH, &sf) != 0 || sf.f_ffree != 0) {
+        return fail("the inodes of nr_inodes=4");
+    }
+    row_held();
+    if (!flagged(DIR_PATH "/a")) {
+        return fail("the inode flags");
+    }
+    row_held();
+    if (!attributed(DIR_PATH "/a")) {
+        return fail("the extended attributes");
+    }
+    row_held();
+    if (unlink(DIR_PATH "/a") != 0 || unlink(DIR_PATH "/b") != 0 || umount2(DIR_PATH, 0) != 0) {
+        return fail("the tmpfs with nr_inodes=4 unmounts");
+    }
+    row_held();
     return 0;
 }
 
@@ -617,8 +697,8 @@ int main(int argc, char **argv)
     probe_args(argc, argv);
     report_begin(report_case(environ, "guest.default.tmpfsmusl"));
     private_root = probe_arg("root", "")[0] != '\0';
-    if (placed() || resized() || deep() || shm() || bound() || bound_mount() || rbound() ||
-        kbound() || krbound()) {
+    if (placed() || resized() || counted() || deep() || shm() || bound() || bound_mount() ||
+        rbound() || kbound() || krbound()) {
         return 1;
     }
     report_end();
