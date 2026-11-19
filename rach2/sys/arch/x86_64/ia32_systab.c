@@ -145,6 +145,16 @@ static void ia32_unlock_id_calls(void)
     }
 }
 
+/** Mark the i386 clock calls with their own timespec, timeval or time_t
+ * to run without the big lock, as the shared handlers they call do
+ * (`syscall_clock_unlock` in syscall.c); the table is filled. */
+static void ia32_unlock_clock_calls(void)
+{
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_clock_gettime32);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_gettimeofday);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_time32);
+}
+
 /** Mark the i386 forms that run without the big lock; the table is
  * filled. */
 static void ia32_unlock_calls(void)
@@ -152,6 +162,7 @@ static void ia32_unlock_calls(void)
     ia32_unlock_file_calls();
     ia32_unlock_mm_calls();
     ia32_unlock_id_calls();
+    ia32_unlock_clock_calls();
 }
 
 /** The rows, one for each i386 number Linux has; `init_syscall` cleared
