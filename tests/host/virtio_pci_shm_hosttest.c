@@ -51,6 +51,15 @@
  * The interrupt rows give every MSI-X entry a remapped message, release
  * them before vectors, and force vector and remapper allocation failures.
  *
+ * The legacy row adds a transitional virtio-net function, 1af4:1000, with
+ * no capabilities and its registers in an I/O BAR, as QEMU's
+ * disable-modern=on makes it: taken by its legacy interface, owned, reset
+ * and acknowledged through its ports; its 32 feature bits; its
+ * configuration after the registers, past the MSI-X vectors while MSI-X is
+ * on; its queues' fixed size, their vectors, their rings by page number,
+ * refused off a page or above 2^44, and their notification port; and its
+ * ports out of reach once unbound.
+ *
  * Returns 0 when every row passes, 1 otherwise.
  */
 
@@ -69,6 +78,7 @@ extern int printf(const char *format, ...);
 extern int vsnprintf(char *out, unsigned long size, const char *fmt, va_list ap);
 extern char *strstr(const char *haystack, const char *needle);
 extern int strcmp(const char *a, const char *b);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 
 static int failures;
 
@@ -82,7 +92,7 @@ static int failures;
 
 /* ---- the model: two functions on bus 0 ---- */
 
-#define FUNCTIONS 6
+#define FUNCTIONS 7
 #define TIB       ((uint64_t)1 << 40)
 #define GIB       ((uint64_t)1 << 30)
 
@@ -211,6 +221,151 @@ void pci_unclaim(uint8_t bus, uint8_t devfn, const char *who)
     }
 }
 
+/* The legacy function's ports, from LEG_IO: its registers, 0x14 more while
+ * MSI-X is on, then its configuration, `leg_cfg`. */
+#define LEG_IO    0xC040u
+#define LEG_PORTS 0x40u
+static uint8_t leg_cfg[16], leg_status;
+static uint32_t leg_host, leg_guest, leg_pfn[4];
+static uint16_t leg_sel, leg_cfgvec = 0xFFFF, leg_qvec[4], leg_notified;
+static int leg_strays; /* accesses outside the ports or of a width they lack */
+
+/** Read `width` bytes at port `port` of the legacy function. */
+static uint32_t leg_read(uint16_t port, int width)
+{
+    uint32_t off = (uint32_t)port - LEG_IO, base = msix_enabled ? 0x18u : 0x14u, v = 0;
+    int i;
+
+    if (port < LEG_IO || off + (uint32_t)width > LEG_PORTS) {
+        leg_strays++;
+        return 0;
+    }
+    if (off >= base) {
+        for (i = 0; i < width; i++) {
+            v |=
+                (uint32_t)(off - base + (uint32_t)i < sizeof(leg_cfg) ? leg_cfg[off - base + i] : 0)
+                << (8 * i);
+        }
+        return v;
+    }
+    switch (off) {
+    case 0x00:
+        return leg_host;
+    case 0x04:
+        return leg_guest;
+    case 0x08:
+        return leg_pfn[leg_sel & 3];
+    case 0x0C:
+        return leg_sel < 3 ? 256u : 0u;
+    case 0x0E:
+        return leg_sel;
+    case 0x12:
+        return leg_status;
+    case 0x14:
+        return leg_cfgvec;
+    case 0x16:
+        return leg_qvec[leg_sel & 3];
+    default:
+        leg_strays++;
+        return 0;
+    }
+}
+
+/** Write `v`, `width` bytes, at port `port` of the legacy function; a status
+ * of 0 resets the device, its queues and its vectors. */
+static void leg_write(uint16_t port, int width, uint32_t v)
+{
+    uint32_t off = (uint32_t)port - LEG_IO, base = msix_enabled ? 0x18u : 0x14u;
+
+    (void)width;
+    if (port < LEG_IO || off + (uint32_t)width > LEG_PORTS) {
+        leg_strays++;
+        return;
+    }
+    if (off >= base) {
+        if (off - base < sizeof(leg_cfg)) {
+            leg_cfg[off - base] = (uint8_t)v;
+        }
+        return;
+    }
+    switch (off) {
+    case 0x04:
+        leg_guest = v;
+        break;
+    case 0x08:
+        leg_pfn[leg_sel & 3] = v;
+        break;
+    case 0x0E:
+        leg_sel = (uint16_t)v;
+        break;
+    case 0x10:
+        leg_notified = (uint16_t)(leg_notified * 16u + v + 1u);
+        break;
+    case 0x12:
+        leg_status = (uint8_t)v;
+        if (v == 0) {
+            k_memset(leg_pfn, 0, sizeof(leg_pfn));
+            k_memset(leg_qvec, 0xFF, sizeof(leg_qvec));
+            leg_cfgvec = 0xFFFF;
+        }
+        break;
+    case 0x14:
+        leg_cfgvec = (uint16_t)v;
+        break;
+    case 0x16:
+        leg_qvec[leg_sel & 3] = (uint16_t)v;
+        break;
+    default:
+        leg_strays++;
+    }
+}
+
+uint8_t pci_io_read8(uint16_t port)
+{
+    return (uint8_t)leg_read(port, 1);
+}
+
+uint16_t pci_io_read16(uint16_t port)
+{
+    return (uint16_t)leg_read(port, 2);
+}
+
+uint32_t pci_io_read32(uint16_t port)
+{
+    return leg_read(port, 4);
+}
+
+void pci_io_write8(uint16_t port, uint8_t value)
+{
+    leg_write(port, 1, value);
+}
+
+void pci_io_write16(uint16_t port, uint16_t value)
+{
+    leg_write(port, 2, value);
+}
+
+void pci_io_write32(uint16_t port, uint32_t value)
+{
+    leg_write(port, 4, value);
+}
+
+/** BAR0 of a function whose BAR0 is ports, LEG_PORTS of them; nothing
+ * else is asked for. */
+void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
+{
+    const pci_device_t *p = &fns[fn_of(bus, device)];
+
+    (void)function;
+    r->start = r->end = 0;
+    r->flags = 0;
+    if (i == 0 && (p->bar[0] & 1u)) {
+        r->start = p->bar[0] & ~3u;
+        r->end = r->start + LEG_PORTS - 1u;
+        r->flags = PCI_IORESOURCE_IO | 1u;
+    }
+}
+
 /** Expose three entries in the notification BAR's unused final page. */
 int pci_msix_table(const pci_device_t *dev, uint8_t *bar, uint32_t *offset, uint32_t *entries)
 {
@@ -236,7 +391,7 @@ int pci_msix_entry_set(const pci_device_t *dev, uintptr_t table, unsigned int in
 {
     uint32_t *entry = (uint32_t *)table + index * 4;
 
-    CHECK(dev->device == 0 && table == (uintptr_t)&windows[0][0x3000],
+    CHECK(dev->device < FUNCTIONS && table == (uintptr_t)&windows[dev->device][0x3000],
           "MSI-X belongs to the device's table");
     CHECK(msix_held && msix_enabled && index < 3, "program under the function mask");
     CHECK(live_vectors & (1u << (vector - 64)), "a message has a live vector");
@@ -320,6 +475,19 @@ void *alloc_dma64_frame(void)
 void free_dma64_frame(void *frame)
 {
     (void)frame;
+}
+
+void *kalloc_contig(uint32_t count, uintptr_t *phys)
+{
+    (void)count;
+    (void)phys;
+    return 0;
+}
+
+void kfree_pages(void *p, uint32_t count)
+{
+    (void)p;
+    (void)count;
 }
 
 /** Allocate from a small vector pool to force shared-vector fallback. */
@@ -973,6 +1141,107 @@ static void unbind_held(void)
     held->ops->put(held);
 }
 
+/** Make function `f` QEMU's virtio-net-pci with disable-modern=on: 1af4:1000
+ * of revision 0, subsystem 1, its registers in BAR0's LEG_PORTS ports at
+ * LEG_IO, its MSI-X table in BAR 2, and no capabilities. */
+static void make_legacy(int f)
+{
+    static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x57};
+
+    k_memset(space[f], 0, sizeof(space[f]));
+    k_memset(&fns[f], 0, sizeof(fns[f]));
+    fns[f].vendor_id = 0x1AF4;
+    fns[f].device_id = 0x1000;
+    fns[f].device = (uint8_t)f;
+    fns[f].class_code = 0x02;
+    fns[f].bar[0] = LEG_IO | 1u;
+    fns[f].bar[2] = 0xF8000000u | 0xC;
+    bar_size[f][2] = 0x4000;
+    space[f][0] = 0xF4;
+    space[f][1] = 0x1A;
+    space[f][2] = 0x00;
+    space[f][3] = 0x10;
+    space[f][0x2C] = 0xF4;
+    space[f][0x2D] = 0x1A;
+    space[f][0x2E] = VIRTIO_ID_NET;
+    leg_host = 0xB1FF7FE3u; /* QEMU's legacy offer: no VERSION_1 */
+    leg_status = 0x0F;      /* as a previous owner left it */
+    k_memcpy(leg_cfg, mac, 6);
+}
+
+/** The legacy function of `make_legacy`, taken and driven through its
+ * ports by the second table. */
+static void legacy_function(void)
+{
+    struct virtio_dev *d = 0, *each;
+    struct virtqueue vq;
+    uint8_t mac[6];
+    int i, maps;
+
+    make_legacy(6);
+    log_text[0] = 0;
+    CHECK(virtio_pci_bind(0, 6 << 3) == 0, "legacy: the function without capabilities is taken");
+    for (i = 0; virtio_pci_find(VIRTIO_ID_NET, i, &each) == 0; i++) {
+        if (virtio_pci_function(each)->device == 6) {
+            d = each;
+        }
+    }
+    CHECK(d != 0 && d->legacy, "legacy: its device is found, on the legacy interface");
+    if (!d) {
+        return;
+    }
+    CHECK(strstr(log_text, " 00:06.0 net, legacy, io 0xc040, 64 ports") != 0,
+          "legacy: the function is logged by its ports");
+    CHECK(leg_status == VIRTIO_STATUS_ACKNOWLEDGE && owner[6] &&
+              (space[6][PCI_COMMAND] & (PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE)) ==
+                  (PCI_CMD_IO_SPACE | PCI_CMD_MEMORY_SPACE),
+          "legacy: reset and acknowledged through its ports, owned, its ports decoded");
+    CHECK(d->ops->get_features(d) == 0xB1FF7FE3u, "legacy: its 32 feature bits are read");
+    d->ops->set_features(d, ((uint64_t)1 << 40) | 0x20u);
+    CHECK(leg_guest == 0x20u, "legacy: the driver's bits are written, 32 of them");
+    d->ops->config_read(d, 0, mac, 6);
+    CHECK(memcmp(mac, leg_cfg, 6) == 0, "legacy: the configuration follows the registers");
+    CHECK(d->ops->queue_max(d, 0) == 256 && d->ops->queue_max(d, 2) == 256 &&
+              d->ops->queue_max(d, 3) == 0,
+          "legacy: each queue has the size the device states, 0 past the last");
+    msix_ready = 1;
+    CHECK(d->ops->irq_setup(d, 2) == 0 && leg_cfgvec == 0,
+          "legacy: the configuration's vector is written once MSI-X is on");
+    k_memset(mac, 0, sizeof(mac));
+    d->ops->config_read(d, 0, mac, 6);
+    CHECK(memcmp(mac, leg_cfg, 6) == 0, "legacy: the configuration moves past the vectors");
+    k_memset(&vq, 0, sizeof(vq));
+    vq.index = 1;
+    vq.size = 256;
+    vq.desc_addr = 0x12345000u;
+    CHECK(d->ops->queue_enable(d, &vq) == 0 && leg_pfn[1] == 0x12345u && leg_qvec[1] == 2 &&
+              vq.vector == 2,
+          "legacy: a queue is given its vector and its rings by page number");
+    d->ops->notify(d, &vq);
+    CHECK(leg_notified == 2, "legacy: a notification writes the queue's number to its port");
+    vq.index = 0;
+    vq.desc_addr = 0x12345800u;
+    CHECK(d->ops->queue_enable(d, &vq) == -EIO && leg_pfn[0] == 0,
+          "legacy: rings off a page are refused");
+    vq.desc_addr = (uint64_t)1 << 44;
+    CHECK(d->ops->queue_enable(d, &vq) == -EIO && leg_pfn[0] == 0,
+          "legacy: rings at 2^44 are refused, as their page number takes 32 bits");
+    d->ops->irq_release(d);
+    msix_ready = 0;
+    k_memset(mac, 0, sizeof(mac));
+    d->ops->config_read(d, 0, mac, 6);
+    CHECK(memcmp(mac, leg_cfg, 6) == 0 && !live_vectors,
+          "legacy: with MSI-X off the configuration is back after the registers");
+    maps = live_maps;
+    CHECK(driver_write(attr_unbind, "0000:00:06.0") == 12 && owner[6] == 0 &&
+              space[6][PCI_COMMAND] == 0 && live_maps <= maps,
+          "legacy: unbound, its claim, decoding and table given back");
+    leg_status = 0x5A;
+    CHECK(d->ops->get_status(d) == 0 && leg_strays == 0,
+          "legacy: the held record reaches no port, and no access strayed");
+    d->ops->put(d);
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -984,6 +1253,7 @@ int main(void)
     probe_reset_fails();
     driver_files();
     unbind_held();
+    legacy_function();
     printf("virtio-pci-shm-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }

@@ -76,7 +76,9 @@
 
 /*
  * The header before each frame, both ways (virtio 1.2, 5.1.6), 12 bytes
- * with VIRTIO_F_VERSION_1 whatever else was taken. A frame sent has it all
+ * with VIRTIO_F_VERSION_1 whatever else was taken; a legacy device's is 10,
+ * without `num_buffers`, unless VIRTIO_NET_F_MRG_RXBUF was taken (5.1.6.1,
+ * "Legacy Interface"). A frame sent has it all
  * zeros: no checksum left to the device, no segmentation. A frame received
  * has `num_buffers`, the receive buffers it spans, 1 without
  * VIRTIO_NET_F_MRG_RXBUF.
@@ -91,7 +93,8 @@ struct virtio_net_hdr {
     uint16_t num_buffers;
 };
 
-#define VNET_HDR 12u
+#define VNET_HDR        12u
+#define VNET_HDR_LEGACY 10u
 
 /* The control queue (virtio 1.2, 5.1.6.5): a command is a class and a
  * command byte, the command's data, and a byte the device answers in. */

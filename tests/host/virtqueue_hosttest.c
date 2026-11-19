@@ -297,20 +297,46 @@ static void *m_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     return 0;
 }
 
-/** Give a page back. */
+/** Give a page back, or the run of pages m_ring_alloc gave for `bytes`. */
 static void m_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
-    long i = ((uint8_t *)p - &arena[0][0]) / 4096;
+    long i = ((uint8_t *)p - &arena[0][0]) / 4096, k,
+         n = bytes > 4096u ? (bytes + 4095u) / 4096u : 1;
 
-    (void)bytes;
-    check(i >= 0 && i < ARENA_PAGES && arena_taken[i] && (uint8_t *)p == arena[i],
+    check(i >= 0 && i + n <= ARENA_PAGES && arena_taken[i] && (uint8_t *)p == arena[i],
           "dma_free is given a page dma_alloc gave");
-    if (i >= 0 && i < ARENA_PAGES) {
-        arena_taken[i] = 0;
+    for (k = i; k >= 0 && k < i + n && k < ARENA_PAGES; k++) {
+        arena_taken[k] = 0;
     }
     mod(d)->dma_out--;
     check(!(mod(d)->master && mod(d)->resetting),
           "nothing is freed while a device that did not reset may reach memory");
+}
+
+/** A ring of more than a page as consecutive pages of the arena, as
+ * virtio-pci gives a legacy queue's; one page as m_dma_alloc gives it. */
+static void *m_ring_alloc(struct virtio_dev *d, uint16_t index, uint32_t bytes, uint64_t *addr)
+{
+    int i, k, n = (int)((bytes + 4095u) / 4096u);
+
+    (void)index;
+    if (n <= 1) {
+        return m_dma_alloc(d, bytes, addr);
+    }
+    for (i = 0; i + n <= ARENA_PAGES; i++) {
+        for (k = 0; k < n && !arena_taken[i + k]; k++) {
+        }
+        if (k == n) {
+            for (k = 0; k < n; k++) {
+                arena_taken[i + k] = 1;
+                k_memset(arena[i + k], 0, 4096);
+            }
+            *addr = DEV_BASE + (uint64_t)i * 4096u;
+            mod(d)->dma_out++;
+            return arena[i];
+        }
+    }
+    return 0;
 }
 
 /** Let the device reach memory or not. */
@@ -346,6 +372,14 @@ static const struct virtio_ops bare_ops = {
     m_dma_free,   m_shm_region,  NULL,           NULL,           NULL,
     NULL,         NULL,          NULL,           NULL,           NULL,
     NULL};
+
+/* The model with ring_alloc, as virtio-pci has it. */
+static const struct virtio_ops legacy_ops = {
+    "legacy",      m_get_status,   m_set_status, m_get_features, m_set_features, m_generation,
+    m_config_read, m_config_write, m_queue_max,  m_queue_enable, m_notify,       m_irq_setup,
+    m_irq_start,   m_irq_release,  m_dma_alloc,  m_dma_free,     m_shm_region,   m_ring_alloc,
+    NULL,          NULL,           NULL,         NULL,           NULL,           NULL,
+    NULL,          m_dma_enable};
 
 /** A fresh model that may reach memory, offering VERSION_1, INDIRECT_DESC,
  * RING_PACKED and device bits 0, 1 and 5, with two queues of 256; a row adds
@@ -673,6 +707,60 @@ static void stuck_reset(void)
           "init lets the device reach memory again once a reset ends");
     virtio_teardown(d);
     check(m.dma_out == 0 && m.master == 1, "a teardown whose reset ends leaves the access be");
+}
+
+/**
+ * A device on the legacy interface: 32 feature bits settled without
+ * FEATURES_OK, and queues of the size the device states, up to
+ * VIRTQ_LEGACY_MAX, whose device's ring begins on a page.
+ */
+static void legacy(void)
+{
+    struct virtio_dev *d = model_reset();
+    struct virtqueue *vq = 0, *spare = 0;
+    struct virtio_sg sg;
+    int i, ok = 1;
+
+    m.dev.ops = &legacy_ops;
+    d->legacy = 1;
+    m.offered = VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) | VIRTIO_BIT(VIRTIO_F_EVENT_IDX) |
+                VIRTIO_BIT(40) | 0x23u;
+    m.qmax[1] = 100;
+    m.qmax[2] = 2048;
+    m.qmax[3] = 1024;
+    check(virtio_init(d, 0x21u | VIRTIO_BIT(40), 4) == 0,
+          "a legacy device without VERSION_1 is taken");
+    check(m.nstatus == 3 && m.status_log[2] == (VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER),
+          "a legacy device's status goes reset, ACKNOWLEDGE, DRIVER, without FEATURES_OK");
+    check(m.driver == (VIRTIO_BIT(VIRTIO_F_INDIRECT_DESC) | VIRTIO_BIT(VIRTIO_F_EVENT_IDX) | 0x21u),
+          "a legacy device's features are the low 32 bits wanted and the ring's two");
+    check(virtio_queue_setup(d, 0, done, 0, &vq) == 0 && vq->size == 256,
+          "a legacy queue has the size the device states, 256");
+    check(vq->avail_addr == vq->desc_addr + 4096u && vq->used_addr == vq->desc_addr + 8192u &&
+              vq->ring_bytes == 8192u + 6u + 8u * 256u && m.q[0].size == 256,
+          "its device's ring begins on the page after the driver's, as the legacy layout asks");
+    check(virtio_queue_setup(d, 1, done, 0, &spare) == -EINVAL &&
+              virtio_queue_setup(d, 2, done, 0, &spare) == -EINVAL && !d->queues[1] &&
+              !d->queues[2],
+          "a legacy queue of 100 or of 2048 is refused, as its size cannot be changed");
+    check(virtio_queue_setup(d, 3, done, 0, &spare) == 0 && spare->size == 1024 &&
+              spare->used_addr == spare->desc_addr + 20480u,
+          "a legacy queue of 1024 is taken, in eight pages");
+    data = (uint8_t *)virtio_dma_alloc(d, 4096, &data_addr);
+    virtio_ready(d);
+    ndone = 0;
+    for (i = 0; i < 256; i++) {
+        sg = piece(i % 64, 16);
+        ok &= virtqueue_add(vq, &sg, 1, 0, (void *)(uintptr_t)(0x1000 + i)) == 0;
+    }
+    virtqueue_kick(vq);
+    check(ok && model_run(0, 512, 0) == 256 && virtqueue_reap(vq) == 256 && ndone == 256 &&
+              done_token[255] == (void *)(uintptr_t)(0x1000 + 255) &&
+              virtqueue_free_count(vq) == 256,
+          "256 buffers fill a legacy queue of 256 and all come back");
+    virtio_dma_free(d, data, 4096);
+    virtio_teardown(d);
+    check(m.dma_out == 0, "teardown gives back the legacy rings' runs of pages");
 }
 
 /** Fill a queue, drain it, and wrap its 16-bit indices. */
@@ -1055,6 +1143,7 @@ int main(void)
     refusals();
     queue_setup();
     stuck_reset();
+    legacy();
     fill_wrap_drain();
     indirect();
     event_index();
@@ -1062,7 +1151,8 @@ int main(void)
     device_faults();
     config_and_interrupts();
     if (!failures) {
-        printf("virtqueue-hosttest: result: pass: negotiation, refusals, queue setup, fill, "
+        printf("virtqueue-hosttest: result: pass: negotiation, refusals, queue setup, a legacy "
+               "device, fill, "
                "wrap and drain, a stuck reset, indirect tables, event index, quiet queues and "
                "batches, device faults, configuration and interrupts\n");
     }

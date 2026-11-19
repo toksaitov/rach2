@@ -1,7 +1,9 @@
 /*
- * virtio_pci.c: the virtio 1.x PCI transport: a function's vendor
- * capabilities and the windows they name, its common configuration, its
- * queues' notifications, and its interrupts by MSI-X or by its INTx line.
+ * virtio_pci.c: the virtio PCI transport: a function's vendor capabilities
+ * and the windows they name, its common configuration, its queues'
+ * notifications, and its interrupts by MSI-X or by its INTx line; or, for
+ * a function without the capabilities, the legacy interface in its I/O
+ * BAR.
  */
 
 #include "virtio.h"
@@ -70,6 +72,26 @@
 #define VP_QUEUE_DEVICE          0x30
 #define VP_COMMON_MIN            0x38
 
+/* The legacy interface (virtio 1.2, 4.1.4.10), in BAR0's ports: the
+ * device's 32 feature bits and the driver's, the selected queue's ring as
+ * a page number, its size, which the device sets, the selector, the
+ * notification, the status and the ISR status; then, while MSI-X is on,
+ * the configuration's and the selected queue's entries; then the device
+ * configuration, at 0x18 with MSI-X on and 0x14 without. */
+#define VPL_HOST_FEATURES  0x00
+#define VPL_GUEST_FEATURES 0x04
+#define VPL_QUEUE_PFN      0x08
+#define VPL_QUEUE_NUM      0x0C
+#define VPL_QUEUE_SEL      0x0E
+#define VPL_QUEUE_NOTIFY   0x10
+#define VPL_STATUS         0x12
+#define VPL_ISR            0x13
+#define VPL_CONFIG_VECTOR  0x14
+#define VPL_QUEUE_VECTOR   0x16
+#define VPL_CONFIG_MSIX    0x18
+#define VPL_CONFIG         0x14
+#define VPL_PFN_SHIFT      12
+
 /* The ISR status byte, read only on the INTx line, which its read clears. */
 #define VP_ISR_QUEUE  0x1u
 #define VP_ISR_CONFIG 0x2u
@@ -131,6 +153,8 @@ struct virtio_pci {
     int slot[VIRTIO_MAX_QUEUES + 1];   /* by MSI-X entry, -1 when none */
     int nentries;                      /* entries in use */
     int line;                          /* the INTx line, while on it */
+    uint16_t io;                       /* a legacy function's first port, BAR0 */
+    uint16_t io_len;                   /* its ports */
 };
 
 /* An interrupt slot: which device and target its vector serves, and how
@@ -208,6 +232,83 @@ static void vp_w64(struct virtio_pci *vp, uint32_t off, uint64_t v)
 {
     vp_w32(vp, off, (uint32_t)v);
     vp_w32(vp, off + 4u, (uint32_t)(v >> 32));
+}
+
+/*
+ * The legacy interface's registers, in BAR0's ports, which a legacy
+ * function decodes once vp_attach has turned I/O decoding on. Once the
+ * function is unbound, a read gives 0 and a write is dropped, as for the
+ * common configuration.
+ */
+
+/** Read the 8-bit legacy register at `off`. */
+static uint8_t vpl_r8(struct virtio_pci *vp, uint32_t off)
+{
+    return vp->gone ? 0 : pci_io_read8((uint16_t)(vp->io + off));
+}
+
+/** Read the 16-bit legacy register at `off`. */
+static uint16_t vpl_r16(struct virtio_pci *vp, uint32_t off)
+{
+    return vp->gone ? 0 : pci_io_read16((uint16_t)(vp->io + off));
+}
+
+/** Read the 32-bit legacy register at `off`. */
+static uint32_t vpl_r32(struct virtio_pci *vp, uint32_t off)
+{
+    return vp->gone ? 0 : pci_io_read32((uint16_t)(vp->io + off));
+}
+
+/** Write the 8-bit legacy register at `off`. */
+static void vpl_w8(struct virtio_pci *vp, uint32_t off, uint8_t v)
+{
+    if (!vp->gone) {
+        pci_io_write8((uint16_t)(vp->io + off), v);
+    }
+}
+
+/** Write the 16-bit legacy register at `off`. */
+static void vpl_w16(struct virtio_pci *vp, uint32_t off, uint16_t v)
+{
+    if (!vp->gone) {
+        pci_io_write16((uint16_t)(vp->io + off), v);
+    }
+}
+
+/** Write the 32-bit legacy register at `off`. */
+static void vpl_w32(struct virtio_pci *vp, uint32_t off, uint32_t v)
+{
+    if (!vp->gone) {
+        pci_io_write32((uint16_t)(vp->io + off), v);
+    }
+}
+
+/**
+ * Give the configuration MSI-X entry `entry` and read back what the device
+ * took. A legacy function has the register only while MSI-X is on, which
+ * it is while `vp` holds entries (vp_msix_take); without them the port is
+ * the device configuration's, and nothing is written.
+ */
+static uint16_t vp_config_vector(struct virtio_pci *vp, uint16_t entry)
+{
+    if (!vp->dev.legacy) {
+        vp_w16(vp, VP_CONFIG_MSIX_VECTOR, entry);
+        return vp_r16(vp, VP_CONFIG_MSIX_VECTOR);
+    }
+    if (vp->nentries == 0) {
+        return VIRTIO_NO_VECTOR;
+    }
+    vpl_w16(vp, VPL_CONFIG_VECTOR, entry);
+    return vpl_r16(vp, VPL_CONFIG_VECTOR);
+}
+
+/** The ISR status byte, which its read clears. */
+static uint8_t vp_isr_status(struct virtio_pci *vp)
+{
+    if (vp->gone) {
+        return 0;
+    }
+    return vp->dev.legacy ? pci_io_read8((uint16_t)(vp->io + VPL_ISR)) : mmio_read8(vp->isr.base);
 }
 
 /** The device status byte; `get_status` of virtio.h. */
@@ -473,7 +574,7 @@ static void vp_intx(isr_params_t *p)
         if (vp->mode != VP_IRQ_INTX) {
             continue;
         }
-        isr = mmio_read8(vp->isr.base);
+        isr = vp_isr_status(vp);
         if (isr & VP_ISR_QUEUE) {
             virtio_interrupt_queues(&vp->dev);
         }
@@ -603,8 +704,7 @@ static int vp_msix_take(struct virtio_pci *vp, int n)
             return -1;
         }
     }
-    vp_w16(vp, VP_CONFIG_MSIX_VECTOR, 0);
-    if (vp_r16(vp, VP_CONFIG_MSIX_VECTOR) != 0) {
+    if (vp_config_vector(vp, 0) != 0) {
         vp_msix_free(vp);
         return -1;
     }
@@ -655,7 +755,7 @@ static int vp_irq_setup(struct virtio_dev *d, uint16_t nqueues)
         }
     }
     vp_msix_free(vp);
-    vp_w16(vp, VP_CONFIG_MSIX_VECTOR, VIRTIO_NO_VECTOR);
+    (void)vp_config_vector(vp, VIRTIO_NO_VECTOR);
     if (vp->pci.irq == 0 || vp->pci.irq >= 16) {
         vp->mode = VP_IRQ_POLLED;
         d->polled = 1;
@@ -721,12 +821,41 @@ static void *vp_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     return frame;
 }
 
-/** Give back a page `vp_dma_alloc` gave. */
+/** Give back a page `vp_dma_alloc` gave, or the run `vp_ring_alloc` gave
+ * for a ring of more than a page. */
 static void vp_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     (void)d;
-    (void)bytes;
-    free_dma64_frame(p);
+    if (bytes > PAGE_SIZE) {
+        kfree_pages(p, (bytes + PAGE_SIZE - 1u) / PAGE_SIZE);
+    } else {
+        free_dma64_frame(p);
+    }
+}
+
+/**
+ * The memory of a queue's rings: a page from `vp_dma_alloc`, or, for the
+ * larger queue a legacy device states, a run of consecutive frames
+ * (`kalloc_contig`), zeroed, since the device reads the rings as one piece
+ * by the address of their first frame; `ring_alloc` of virtio.h.
+ */
+static void *vp_ring_alloc(struct virtio_dev *d, uint16_t index, uint32_t bytes, uint64_t *addr)
+{
+    uint32_t pages = (bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
+    uintptr_t phys;
+    void *run;
+
+    (void)index;
+    if (bytes <= PAGE_SIZE) {
+        return vp_dma_alloc(d, bytes, addr);
+    }
+    run = kalloc_contig(pages, &phys);
+    if (!run) {
+        return 0;
+    }
+    k_memset(run, 0, pages * PAGE_SIZE);
+    *addr = (uint64_t)phys;
+    return run;
 }
 
 /** Shared memory region `id` from the capabilities read at attach; 0, or
@@ -789,7 +918,7 @@ static const struct virtio_ops vp_ops = {"virtio-pci",
                                          vp_dma_alloc,
                                          vp_dma_free,
                                          vp_shm_region,
-                                         NULL,
+                                         vp_ring_alloc,
                                          NULL,
                                          NULL,
                                          NULL,
@@ -798,6 +927,195 @@ static const struct virtio_ops vp_ops = {"virtio-pci",
                                          NULL,
                                          NULL,
                                          vp_dma_enable};
+
+/*
+ * The legacy interface's operations, as Linux's virtio_pci_legacy.c drives
+ * a function without the capabilities: the rest are the modern table's.
+ */
+
+/** The device status byte of a legacy function. */
+static uint8_t vpl_get_status(struct virtio_dev *d)
+{
+    return vpl_r8(vp_of(d), VPL_STATUS);
+}
+
+/** Write the device status byte of a legacy function. */
+static void vpl_set_status(struct virtio_dev *d, uint8_t status)
+{
+    vpl_w8(vp_of(d), VPL_STATUS, status);
+}
+
+/** A legacy device's 32 feature bits. */
+static uint64_t vpl_get_features(struct virtio_dev *d)
+{
+    return vpl_r32(vp_of(d), VPL_HOST_FEATURES);
+}
+
+/** Write the driver's feature bits, of which a legacy device has 32. */
+static void vpl_set_features(struct virtio_dev *d, uint64_t features)
+{
+    vpl_w32(vp_of(d), VPL_GUEST_FEATURES, (uint32_t)features);
+}
+
+/** A legacy device has no configuration generation: 0, always. */
+static uint32_t vpl_config_generation(struct virtio_dev *d)
+{
+    (void)d;
+    return 0;
+}
+
+/**
+ * The port of byte `offset` of a legacy device's configuration, which
+ * starts after the MSI-X registers while MSI-X is on, into `*port`: 0, or
+ * -1 when `len` bytes from there pass BAR0 or the function is unbound.
+ */
+static int vpl_config_port(struct virtio_pci *vp, uint32_t offset, uint32_t len, uint16_t *port)
+{
+    uint32_t base = vp->nentries > 0 ? VPL_CONFIG_MSIX : VPL_CONFIG;
+
+    if (vp->gone || base > vp->io_len || offset > vp->io_len - base ||
+        len > vp->io_len - base - offset) {
+        return -1;
+    }
+    *port = (uint16_t)(vp->io + base + offset);
+    return 0;
+}
+
+/** Read a legacy device's configuration as `vp_config_read` reads it. */
+static void vpl_config_read(struct virtio_dev *d, uint32_t offset, void *buf, uint32_t len)
+{
+    uint8_t *out = (uint8_t *)buf;
+    uint16_t port;
+    uint32_t i;
+
+    if (vpl_config_port(vp_of(d), offset, len, &port) != 0) {
+        k_memset(buf, 0, len);
+        return;
+    }
+    if (len == 2 && !(offset & 1u)) {
+        uint16_t v = pci_io_read16(port);
+
+        k_memcpy(out, &v, 2);
+    } else if (len == 4 && !(offset & 3u)) {
+        uint32_t v = pci_io_read32(port);
+
+        k_memcpy(out, &v, 4);
+    } else {
+        for (i = 0; i < len; i++) {
+            out[i] = pci_io_read8((uint16_t)(port + i));
+        }
+    }
+}
+
+/** Write a legacy device's configuration as `vp_config_write` writes it. */
+static void vpl_config_write(struct virtio_dev *d, uint32_t offset, const void *buf, uint32_t len)
+{
+    const uint8_t *in = (const uint8_t *)buf;
+    uint16_t port;
+    uint32_t i;
+
+    if (vpl_config_port(vp_of(d), offset, len, &port) != 0) {
+        return;
+    }
+    if (len == 2 && !(offset & 1u)) {
+        uint16_t v;
+
+        k_memcpy(&v, in, 2);
+        pci_io_write16(port, v);
+    } else if (len == 4 && !(offset & 3u)) {
+        uint32_t v;
+
+        k_memcpy(&v, in, 4);
+        pci_io_write32(port, v);
+    } else {
+        for (i = 0; i < len; i++) {
+            pci_io_write8((uint16_t)(port + i), in[i]);
+        }
+    }
+}
+
+/** The size legacy queue `index` has, which the device fixes; 0 for a
+ * queue it lacks. */
+static uint16_t vpl_queue_max(struct virtio_dev *d, uint16_t index)
+{
+    struct virtio_pci *vp = vp_of(d);
+
+    vpl_w16(vp, VPL_QUEUE_SEL, index);
+    return vpl_r16(vp, VPL_QUEUE_NUM);
+}
+
+/**
+ * Select legacy queue `vq->index`, give it its MSI-X entry while MSI-X is
+ * on, and activate it by its ring's page number (virtio 1.2, 4.1.5.1.3.1),
+ * which takes 32 bits: the rings must begin on a page below 2^44. 0; -EIO
+ * when the device refuses the entry or the rings lie where it cannot take
+ * them; -ENODEV once the function is unbound.
+ */
+static int vpl_queue_enable(struct virtio_dev *d, struct virtqueue *vq)
+{
+    struct virtio_pci *vp = vp_of(d);
+    uint16_t entry = vp_queue_entry(vp, vq->index);
+    uint64_t pfn = vq->desc_addr >> VPL_PFN_SHIFT;
+
+    if (vp->gone) {
+        return -ENODEV;
+    }
+    if ((vq->desc_addr & (VIRTQ_LEGACY_ALIGN - 1u)) != 0 || pfn > 0xFFFFFFFFu) {
+        klog(KLOG_ERR, "virtio",
+             "queue: %s: %d: rings at 0x%x%08x, which a legacy device cannot take", vp->dev.name,
+             vq->index, (unsigned)(vq->desc_addr >> 32), (unsigned)vq->desc_addr);
+        return -EIO;
+    }
+    vpl_w16(vp, VPL_QUEUE_SEL, vq->index);
+    if (vp->nentries > 0) {
+        vpl_w16(vp, VPL_QUEUE_VECTOR, entry);
+        if (vpl_r16(vp, VPL_QUEUE_VECTOR) != entry) {
+            klog(KLOG_ERR, "virtio", "queue: %s: %d: the device refused msi-x entry %d",
+                 vp->dev.name, vq->index, entry);
+            return -EIO;
+        }
+    }
+    vq->notify = (uintptr_t)(vp->io + VPL_QUEUE_NOTIFY);
+    vq->vector = entry;
+    vpl_w32(vp, VPL_QUEUE_PFN, (uint32_t)pfn);
+    return 0;
+}
+
+/** Write the queue's number to the legacy notification port; nothing once
+ * the function is unbound. */
+static void vpl_notify(struct virtio_dev *d, struct virtqueue *vq)
+{
+    if (!vp_of(d)->gone) {
+        pci_io_write16((uint16_t)vq->notify, vq->index);
+    }
+}
+
+static const struct virtio_ops vp_legacy_ops = {"virtio-pci",
+                                                vpl_get_status,
+                                                vpl_set_status,
+                                                vpl_get_features,
+                                                vpl_set_features,
+                                                vpl_config_generation,
+                                                vpl_config_read,
+                                                vpl_config_write,
+                                                vpl_queue_max,
+                                                vpl_queue_enable,
+                                                vpl_notify,
+                                                vp_irq_setup,
+                                                vp_irq_start,
+                                                vp_irq_release,
+                                                vp_dma_alloc,
+                                                vp_dma_free,
+                                                vp_shm_region,
+                                                vp_ring_alloc,
+                                                NULL,
+                                                NULL,
+                                                NULL,
+                                                vp_put,
+                                                NULL,
+                                                NULL,
+                                                NULL,
+                                                vp_dma_enable};
 
 /** The device type of virtio-pci function `p`, or 0 when it is none. */
 static uint16_t vp_type(const pci_device_t *p)
@@ -1013,12 +1331,50 @@ static void vp_detach(struct virtio_pci *vp)
     }
 }
 
+/**
+ * Take the function `vp->pci`, which has no virtio 1.x capabilities, by its
+ * legacy interface, as Linux's virtio_pci_legacy_probe does after the
+ * modern probe finds none: a transitional device id of revision 0 whose
+ * BAR0 is ports, enough of them for the registers. Turns on its I/O
+ * decoding, and its memory decoding for its MSI-X table, which makes the
+ * kernel its owner when it had none, as vp_attach does.
+ * 0, or -ENODEV, with nothing changed, for a function without it.
+ */
+static int vp_attach_legacy(struct virtio_pci *vp)
+{
+    const pci_device_t *p = &vp->pci;
+    struct pci_resource r;
+    uint16_t cmd;
+
+    if (p->device_id < VP_TRANSITION_FIRST || p->device_id > VP_TRANSITION_LAST ||
+        pci_read_config8(p->bus, p->device, p->function, PCI_REVISION_ID) != 0) {
+        return -ENODEV;
+    }
+    pci_resource(p->bus, p->device, p->function, 0, &r);
+    if (!(r.flags & PCI_IORESOURCE_IO) || r.start == 0 || r.end > 0xFFFFu ||
+        r.end - r.start + 1u < VPL_CONFIG_MSIX) {
+        return -ENODEV;
+    }
+    vp->io = (uint16_t)r.start;
+    vp->io_len = (uint16_t)(r.end - r.start + 1u);
+    vp->dev.legacy = 1;
+    vp->dev.ops = &vp_legacy_ops;
+    vp->claimed = pci_owner(p->bus, (uint8_t)(p->device << 3 | p->function)) == NULL;
+    pci_enable_memory_space(&vp->pci);
+    cmd = pci_read_config16(p->bus, p->device, p->function, PCI_COMMAND);
+    pci_write_config16(p->bus, p->device, p->function, PCI_COMMAND,
+                       (uint16_t)(cmd | PCI_CMD_IO_SPACE));
+    vp_intx_disable(vp, 1);
+    return 0;
+}
+
 /** Read, check and map the capabilities of the function `vp->pci`, and turn
  * on its memory decoding, which makes the kernel the function's owner when
  * it had none (`claimed`); bus mastering, which the command word kept for
  * `vp_detach` leaves out, waits for a reset that finished
- * (`vp_acknowledge`). Returns 0, or -EIO with
- * the reason in the log and every window it mapped given back
+ * (`vp_acknowledge`). A function without the capabilities is taken by its
+ * legacy interface when it has one (`vp_attach_legacy`). Returns 0, or -EIO
+ * with the reason in the log and every window it mapped given back
  * (`vp_detach`). */
 static int vp_attach(struct virtio_pci *vp)
 {
@@ -1026,6 +1382,9 @@ static int vp_attach(struct virtio_pci *vp)
     vp->command &= (uint16_t)~PCI_CMD_BUS_MASTER;
     vp_read_caps(vp);
     if (vp->common.len < VP_COMMON_MIN || vp->notify.len == 0 || vp->isr.len == 0) {
+        if (vp_attach_legacy(vp) == 0) {
+            return 0;
+        }
         klog(KLOG_WARN, "virtio", "refused: %02x:%02x.%d: no %s capability in a memory BAR",
              vp->pci.bus, vp->pci.device, vp->pci.function,
              vp->common.len < VP_COMMON_MIN ? "common"
@@ -1052,6 +1411,12 @@ static void vp_log_found(struct virtio_pci *vp)
 {
     int i;
 
+    if (vp->dev.legacy) {
+        klog(KLOG_INFO, "virtio", "found: %s: %02x:%02x.%d %s, legacy, io 0x%x, %d ports",
+             vp->dev.name, vp->pci.bus, vp->pci.device, vp->pci.function, vp_type_name(vp->dev.id),
+             vp->io, vp->io_len);
+        return;
+    }
     klog(KLOG_INFO, "virtio",
          "found: %s: %02x:%02x.%d %s, common bar %d+0x%x, notify bar %d+0x%x x%d, isr bar "
          "%d+0x%x, device %s%d+0x%x, %d queues",
@@ -1112,7 +1477,7 @@ static int vp_acknowledge(struct virtio_pci *vp)
         return k;
     }
     pci_enable_bus_master(&vp->pci);
-    vp_set_status(&vp->dev, VIRTIO_STATUS_ACKNOWLEDGE);
+    vp->dev.ops->set_status(&vp->dev, VIRTIO_STATUS_ACKNOWLEDGE);
     return 0;
 }
 
@@ -1472,5 +1837,7 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
 
 const pci_device_t *virtio_pci_function(const struct virtio_dev *d)
 {
-    return d && d->ops == &vp_ops ? &((const struct virtio_pci *)d->transport)->pci : NULL;
+    return d && (d->ops == &vp_ops || d->ops == &vp_legacy_ops)
+               ? &((const struct virtio_pci *)d->transport)->pci
+               : NULL;
 }
