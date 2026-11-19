@@ -1,7 +1,8 @@
 /*
  * devices.h: the ACPI devices of the kernel's own on ACPICA, the embedded
- * controller, the buttons, the video bus and the IdeaPad's VPC2004, and the
- * PNP IDs of the 8042's devices, as boot.c starts them.
+ * controller, the buttons, the video bus, the IdeaPad's VPC2004 and the PCI
+ * hot plug slots, and the PNP IDs of the 8042's devices, as boot.c starts
+ * them.
  */
 #ifndef _ACPI_DEVICES_H_
 #define _ACPI_DEVICES_H_
@@ -54,6 +55,15 @@ void acpi_ideapad_start(void);
  * objects are initialized and the EC runs, since a _STA may read it.
  */
 void acpi_pnp_i8042(void);
+
+/**
+ * Take the hot plug slots of the host bridge of bus 0, its children with
+ * _ADR and _EJ0, and their Notify, as Linux's acpiphp does, with the
+ * bridge's windows from its _CRS for the BARs of a card put in. Called
+ * once ACPICA's objects are initialized and before AcpiUpdateAllGpes,
+ * whose GPE method gives the Notify.
+ */
+void acpi_pcihp_start(void);
 
 /** Report `code` pressed and then released on `dev`, each in a packet of
  * its own, as Linux's ACPI drivers report a button, and poke the console's
