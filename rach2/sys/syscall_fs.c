@@ -900,6 +900,74 @@ static void size_ns_unlock(const struct open_file *ofd, int held)
 }
 
 /* The file lock and per-operation append choice of one write or vector. */
+/**
+ * Whether O_DIRECT through `ofd` goes to the device: the description has
+ * it and its file is on a type whose O_DIRECT reads and writes the medium
+ * (VFS_DIRECT_SECTOR), so that a read goes around the file page cache, a
+ * write ends with the file's data on the medium, and neither leaves a copy
+ * in the buffer cache (`vfs_uncache`). On tmpfs O_DIRECT changes nothing, as
+ * on Linux, whose tmpfs keeps its files in the page cache whatever the
+ * flag says.
+ */
+static int direct_to_device(const struct open_file *ofd)
+{
+    return ofd->vmnt && (ofd->status_flags & OFD_DIRECT) &&
+           vfs_mount_base(ofd->vmnt)->type->direct_io == VFS_DIRECT_SECTOR;
+}
+
+/**
+ * Whether an O_DIRECT read or write through `ofd` of `count` bytes at `pos`
+ * of its file, from or into the caller's address `addr`, breaks the
+ * alignment the device asks (`direct_to_device`): each of the three a
+ * multiple of the sector, as Linux's `iomap_dio_bio_iter` answers -EINVAL
+ * for an offset or a length off the logical block and a buffer off the
+ * device's DMA alignment, a sector on most devices. A count of 0 is never
+ * misaligned. 1 or 0.
+ */
+static int direct_misaligned(const struct open_file *ofd, uintptr_t addr, uint32_t count,
+                             uint64_t pos)
+{
+    if (count == 0 || !direct_to_device(ofd)) {
+        return 0;
+    }
+    return ((addr | (uintptr_t)count) & (BLOCK_SECTOR_SIZE - 1u)) != 0 ||
+           (pos & (BLOCK_SECTOR_SIZE - 1u)) != 0;
+}
+
+/**
+ * The answer of an O_DIRECT read at `pos` through `ofd` that the device
+ * cannot take as it is (`direct_misaligned`): 0 at or past the end of the
+ * file, as Linux's `iomap_dio_rw` returns there before it looks at the
+ * alignment, -EINVAL before it, or getattr's error.
+ */
+static int32_t direct_read_refused(const struct open_file *ofd, uint64_t pos)
+{
+    struct vfs_stat st;
+    int32_t rc = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
+
+    return rc != 0 ? rc : pos >= st.size ? 0 : -EINVAL;
+}
+
+/**
+ * Whether a vector of `count` elements `iov` for an O_DIRECT read or write
+ * through `ofd` has an element whose address or length breaks the device's
+ * alignment (`direct_misaligned`), which Linux's `iov_iter_alignment`
+ * finds before any element moves; an empty element counts for nothing, as
+ * there. The offset is checked at each element. 1 or 0.
+ */
+static int direct_iov_misaligned(const struct open_file *ofd, const struct kernel_iovec *iov,
+                                 int count)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (direct_misaligned(ofd, iov[i].iov_base, (uint32_t)iov[i].iov_len, 0)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 struct file_write_state {
     struct vfs_ref file;
     int own;    /* nonzero when the type's file lock is held */
@@ -907,6 +975,9 @@ struct file_write_state {
     /* nonzero once this call has taken the big lock for a file mappings
      * hold pages of (`file_write_mapped`), which its caller gives back */
     int big;
+    /* The bytes [lo, hi) of the file the call wrote, for the uncache of an
+     * O_DIRECT write (`write_synced`); lo above hi before the first. */
+    uint64_t lo, hi;
 };
 
 /* The most bytes one piece of a write to a file whose pages mappings hold
@@ -1089,7 +1160,9 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
  * has faulted in the buffer; a later fault lets the file's node lock go and
  * takes it again, with its write lock held, through file_write_pieces.
  * Return bytes or a negative errno,
- * the getattr's error among them when the end of an append cannot be read.
+ * the getattr's error among them when the end of an append cannot be read,
+ * and -EINVAL for an O_DIRECT write the device cannot take as it is
+ * (`direct_misaligned`). The bytes written widen the range in `state`.
  *
  * On a type that does not set `file_locked` the description's lock orders
  * only the writes through that description, so an append there, and a
@@ -1105,7 +1178,7 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
     int append = state->append;
     int mapped = file_write_mapped(ofd, state);
     int held = !state->own && (append || mapped);
-    uint64_t pos;
+    uint64_t pos, start;
     int32_t written;
 
     if (held) {
@@ -1127,7 +1200,16 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         goto out;
     }
     count = fsize_fit(pos, count);
+    if (direct_misaligned(ofd, (__force uintptr_t)buf, count, pos)) {
+        written = -EINVAL;
+        goto out;
+    }
+    start = pos;
     written = file_write_pieces(entry, state, buf, count, &pos);
+    if (written > 0) {
+        state->lo = start < state->lo ? start : state->lo;
+        state->hi = start + (uint64_t)written > state->hi ? start + (uint64_t)written : state->hi;
+    }
 out:
     if (held) {
         vfs_node_unlock(&state->file);
@@ -1155,18 +1237,26 @@ static long sync_entry(fd_entry_t *e,
  * on a description opened with O_SYNC the file synced as fsync syncs it,
  * and with O_DSYNC as fdatasync does, as Linux's `generic_write_sync`
  * (include/linux/fs.h), which syncs the range written where this syncs the
- * file. The caller holds no lock of the write's. Returns `written`, or the
- * sync's -errno.
+ * file. An O_DIRECT write to the device (`direct_to_device`) is synced as
+ * O_DSYNC asks, so that its data is on the medium when the call returns,
+ * as Linux's direct write puts it there, and the cache then lets go of the
+ * range `state` recorded (`vfs_uncache`). The caller holds no lock of the
+ * write's. Returns `written`, or the sync's -errno.
  */
-static long write_synced(fd_entry_t *entry, long written)
+static long write_synced(fd_entry_t *entry, long written, const struct file_write_state *state)
 {
-    uint32_t st = entry->ofd ? entry->ofd->status_flags : 0u;
+    struct open_file *ofd = entry->ofd;
+    uint32_t st = ofd ? ofd->status_flags : 0u;
+    int direct = ofd && direct_to_device(ofd);
     long rc;
 
-    if (written <= 0 || !(st & OFD_DSYNC)) {
+    if (written <= 0 || (!(st & OFD_DSYNC) && !direct)) {
         return written;
     }
     rc = sync_entry(entry, (st & OFD_SYNC) == OFD_SYNC ? vfs_fsync : vfs_fdatasync);
+    if (rc >= 0 && direct && state->lo < state->hi) {
+        vfs_uncache(ofd->vmnt, ofd->fhandle, state->lo, state->hi - state->lo);
+    }
     return rc < 0 ? rc : written;
 }
 
@@ -1248,6 +1338,8 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     state.own = file_lock(ofd, &state.file);
     state.append = (ofd->status_flags & OFD_APPEND) != 0;
     state.big = 0;
+    state.lo = ~(uint64_t)0;
+    state.hi = 0;
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
@@ -1263,7 +1355,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         inotify_desc(ofd, IN_MODIFY);
     }
     big_give(state.big);
-    return (int32_t)write_synced(entry, written);
+    return (int32_t)write_synced(entry, written, &state);
 }
 
 /**
@@ -4173,6 +4265,41 @@ static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t
 }
 
 /**
+ * The refusals of `open_special` for the node at `ref`, of the file type
+ * `type` (S_IFIFO, S_IFSOCK, S_IFCHR or S_IFBLK), opened with `flags`, in
+ * open's order: -EEXIST for O_CREAT|O_EXCL, -ENOTDIR for O_DIRECTORY, the
+ * permission the access mode asks for, -EACCES for a device node on a mount
+ * with MS_NODEV, then -EINVAL for O_DIRECT on a FIFO or a character device,
+ * which Linux's do_dentry_open refuses for a file without direct I/O.
+ * Returns 0 when none applies. The caller holds the walk's lock.
+ */
+static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flags)
+{
+    unsigned acc = (unsigned)flags & 3u;
+    int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
+    int32_t rc;
+
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        return -EEXIST;
+    }
+    if (flags & O_DIRECTORY) {
+        return -ENOTDIR;
+    }
+    if (mnt_is_root(ref->mnt)) {
+        rc = cred_access_node((krffs_node_t *)ref->node, want, 0);
+    } else {
+        rc = cred_access_ref(ref, want, 0);
+    }
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && (ref->mnt->flags & VFS_MS_NODEV)) {
+        rc = -EACCES;
+    }
+    if (rc == 0 && (flags & O_DIRECT) && (type == S_IFIFO || type == S_IFCHR)) {
+        rc = -EINVAL;
+    }
+    return rc;
+}
+
+/**
  * Open the FIFO, the socket file or the device node at `ref`, which name no
  * bytes of their own: 1 with the descriptor or the errno in `*result`, `ref`
  * and the walk's lock released, and the descriptor `fd` the open reserved
@@ -4201,8 +4328,6 @@ static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t
 static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
 {
     struct vfs_mount *mnt = ref->mnt;
-    unsigned acc = (unsigned)flags & 3u;
-    int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
     uint32_t type, rdev = 0;
     uint64_t ino;
     int32_t rc;
@@ -4228,18 +4353,7 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
     if (type != S_IFIFO && type != S_IFSOCK && type != S_IFCHR && type != S_IFBLK) {
         return 0;
     }
-    if ((flags & O_CREAT) && (flags & O_EXCL)) {
-        rc = -EEXIST;
-    } else if (flags & O_DIRECTORY) {
-        rc = -ENOTDIR;
-    } else if (mnt_is_root(mnt)) {
-        rc = cred_access_node((krffs_node_t *)ref->node, want, 0);
-    } else {
-        rc = cred_access_ref(ref, want, 0);
-    }
-    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && (mnt->flags & VFS_MS_NODEV)) {
-        rc = -EACCES;
-    }
+    rc = open_special_refused(ref, type, flags);
     if (rc == 0 && type == S_IFIFO) {
         *result = open_fifo(ref, fd, ino, flags);
         return 1;
@@ -4398,6 +4512,27 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
 }
 
 /**
+ * Whether an open with `flags` of a file of the type bits `mode` on the
+ * mount `mnt` is refused for its O_DIRECT, as Linux refuses a file without
+ * FMODE_CAN_ODIRECT with -EINVAL: on a type that takes none, and on any
+ * type for a file that is not regular, but for a directory of a type whose
+ * O_DIRECT goes to the device, whose directories Linux opens with it, as
+ * ext2's address space has `direct_IO`. O_PATH drops O_DIRECT. 1 or 0.
+ */
+static int open_direct_refused(struct vfs_mount *mnt, uint32_t mode, int flags)
+{
+    int how = vfs_mount_base(mnt)->type->direct_io;
+
+    if ((flags & (O_DIRECT | O_PATH)) != O_DIRECT) {
+        return 0;
+    }
+    if ((mode & S_IFMT) == S_IFREG) {
+        return how == VFS_DIRECT_NONE;
+    }
+    return !((mode & S_IFMT) == S_IFDIR && how == VFS_DIRECT_SECTOR);
+}
+
+/**
  * The descriptor for an opened node, in the slot `fd` the open reserved,
  * with `name`, the path without its leading slash, recorded for a node of a
  * mounted type (`ofd_record_path`): a directory opens as a FD_TYPE_DIR (its
@@ -4416,7 +4551,11 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
  * truncation frees the description and its open handle, and one that
  * succeeds clears the set-id bits for a caller without privilege. The
  * access mode is the low two bits of `flags`, read apart from the bits above
- * them. O_APPEND, O_NONBLOCK, O_SYNC and O_DSYNC are status flags of the
+ * them. O_DIRECT on a file its type cannot take it for is -EINVAL
+ * (`open_direct_refused`), after the write access a running program
+ * refuses and before the file system's open, as Linux refuses it after
+ * `get_write_access` in `do_dentry_open`. O_APPEND, O_NONBLOCK, O_SYNC,
+ * O_DSYNC and O_DIRECT are status flags of the
  * description, which dup and fork share, and O_CLOEXEC, which opendir and
  * fopen's "e" mode rely on, marks the descriptor. A file of debugfs gets
  * the operations its registrant gave it (`debugfs_bind`), which read, write
@@ -4460,6 +4599,9 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     if ((flags & 3) != 0 || (flags & O_TRUNC)) {
         rc = fd_ofd_access(entry->ofd, ref, 1);
     }
+    if (rc == 0 && open_direct_refused(ref->mnt, type == FD_TYPE_DIR ? S_IFDIR : S_IFREG, flags)) {
+        rc = -EINVAL;
+    }
     if (rc == 0) {
         rc = vfs_open_node(ref->mnt, node, flags, &entry->ofd->fhandle);
     }
@@ -4493,7 +4635,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         entry->flags = FD_FLAG_READ;
     }
     if (entry->ofd) {
-        entry->ofd->status_flags |= OFD_OPEN_STATUS(flags);
+        entry->ofd->status_flags |= OFD_OPEN_STATUS(flags) | ((uint32_t)flags & OFD_DIRECT);
     }
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC;
@@ -4513,11 +4655,16 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     return fd;
 }
 
+static int synth_is_block(const struct vpath *vp);
+
 /**
  * The open of the synthetic node `vp` a resolution arrived at, for
  * `do_open`. The /proc links, /proc/self and the descriptor links, are links
  * too, and give a mounted type's two answers: ELOOP under O_NOFOLLOW and
- * EEXIST under O_CREAT|O_EXCL. Anything else opens as its kind opens.
+ * EEXIST under O_CREAT|O_EXCL. O_DIRECT is -EINVAL for anything but a block
+ * device, as Linux refuses it for a file without FMODE_CAN_ODIRECT; a disk
+ * takes it and reads and writes as without it. Anything else opens as its
+ * kind opens.
  */
 static int32_t open_synth_node(const struct vpath *vp, int flags)
 {
@@ -4526,6 +4673,9 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
     }
     if (synth_is_link(vp) && (flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
+    }
+    if ((flags & (O_DIRECT | O_PATH)) == O_DIRECT && !synth_is_link(vp) && !synth_is_block(vp)) {
+        return -EINVAL;
     }
     return synth_open(vp, flags);
 }
@@ -5326,9 +5476,10 @@ static void open_done(int fd, const char *name, int flags)
 }
 
 /* The open flags that send an open to the big lock (`open_unlocked`): any
- * access mode but O_RDONLY, the low two bits, and every flag that creates,
- * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE). */
-#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | O_TMPFILE_BIT)
+ * access mode but O_RDONLY, the low two bits, every flag that creates,
+ * truncates, opens nothing or opens a nameless file (Linux's __O_TMPFILE),
+ * and O_DIRECT, which `open_install` checks. */
+#define OPEN_LOCKED_FLAGS (3 | O_CREAT | O_TRUNC | O_PATH | O_TMPFILE_BIT | O_DIRECT)
 
 /**
  * The descriptor of an open that `open_unlocked` checked and holds `ref`
@@ -7437,7 +7588,9 @@ static int file_read_cut(const struct open_file *ofd)
  * Read up to `count` bytes of the file of `ofd` at `pos` into the user's
  * `buf` through the file page cache (`filecache_file_read`) or the file
  * system, which a caller without the big lock reaches with it, since the
- * type then writes the user's buffer itself. Before each page after the
+ * type then writes the user's buffer itself. An O_DIRECT read of a type
+ * whose O_DIRECT goes to the device (`direct_to_device`) goes around the
+ * file page cache to the file system. Before each page after the
  * first the read stops when `file_read_cut` says the page must come from a
  * mapping's page in memory; the file system's read of an ext2 file, the one
  * type a shared mapping keeps pages in memory of, goes a page at a time for
@@ -7450,7 +7603,7 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
     int32_t r = 0;
     int big, paged;
 
-    if (filecache_file_read(ofd, buf, count, pos, &r, file_read_cut)) {
+    if (!direct_to_device(ofd) && filecache_file_read(ofd, buf, count, pos, &r, file_read_cut)) {
         return r;
     }
     big = !bkl_held();
@@ -7495,7 +7648,10 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * stores, those an earlier buffer of the same readv made among them, and
  * any other from `file_read_plain`, whose bytes are the page's when it was
  * chosen, since a mapping that brings the page in while that read sleeps
- * can hold only stores made after it. The bytes read, which stop at the
+ * can hold only stores made after it. An O_DIRECT read the device cannot
+ * take as it is (`direct_misaligned`) is `direct_read_refused`'s answer;
+ * one it can take leaves no copy of the bytes read in the cache
+ * (`vfs_uncache`). The bytes read, which stop at the
  * first page that fails after some were read, 0 at the end, or the type's
  * error.
  */
@@ -7509,6 +7665,9 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
 
     if (count == 0) {
         return file_read_plain(ofd, buf, count, pos);
+    }
+    if (direct_misaligned(ofd, (__force uintptr_t)buf, count, pos)) {
+        return direct_read_refused(ofd, pos);
     }
     while (done < count) {
         if (!paged && file_read_cut(ofd)) {
@@ -7544,6 +7703,9 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
         if ((uint32_t)r < piece && (paged || !file_read_cut(ofd))) {
             break;
         }
+    }
+    if (done > 0 && direct_to_device(ofd)) {
+        vfs_uncache(ofd->vmnt, ofd->fhandle, pos, done);
     }
     return done > 0 ? (int32_t)done : r;
 }
@@ -9923,6 +10085,15 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         procfs_lookup_owner(vp);
     }
     return rc;
+}
+
+/** Whether the synthetic node `vp` is a block device, a disk or a loop
+ * device of /dev, as its stat reports it. */
+static int synth_is_block(const struct vpath *vp)
+{
+    struct kstat kst;
+
+    return synth_stat(vp, &kst, 0) == 0 && (kst.st_mode & S_IFMT) == S_IFBLK;
 }
 
 /**
@@ -14048,44 +14219,17 @@ out:
 }
 
 /**
- * Make the hard link `newname` to `oldname`, both canonical paths, by
- * `link_ref`. The source is resolved as itself unless `follow`; one that
- * named a directory by its end, `olddir`, follows a final link and must
- * reach a directory (`resolve_named`), which is EPERM later. Returns 0 or a
- * negative errno.
+ * The file the /proc/PID/fd/N link `vp` reaches, into `src` as a walk
+ * leaves it, entered and held, for linkat: an O_PATH descriptor's file and
+ * a file with no name among them, as on Linux. 0, -EXDEV for a descriptor
+ * of a pipe, a socket or a node of /dev or /proc, which have no mount to
+ * link on, or `proc_fd_file`'s -ENOENT.
  */
-static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
-{
-    struct vfs_ref src;
-    int32_t rc;
-
-    rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, olddir, &src);
-    return rc != 0 ? rc : link_ref(&src, newname, newend);
-}
-
-/**
- * The file the caller's descriptor `fd` is open on, for linkat's
- * AT_EMPTY_PATH with an empty path, into `src` as a walk leaves it, entered
- * and held: what /proc/self/fd/N reaches, without the walk to it, an O_PATH
- * descriptor's file and a file with no name among them, as on Linux. 0,
- * -EBADF for a descriptor that is not open, -EXDEV for one of a pipe, a
- * socket or a node of /dev or /proc, which have no mount to link on, or
- * -ENOENT for a mount being unmounted.
- */
-static int32_t link_fd_file(int fd, struct vfs_ref *src)
+static int32_t link_fd_vpath(const struct vpath *vp, struct vfs_ref *src)
 {
     struct open_file *held;
-    struct vpath vp;
-    int32_t rc;
+    int32_t rc = proc_fd_file(vp, src, &held);
 
-    if (fd_get(current_proc->fds, fd) == NULL) {
-        return -EBADF;
-    }
-    k_memset(&vp, 0, sizeof(vp));
-    vp.kind = VNODE_PROC_FD_LINK;
-    vp.pid = SYNTH_PID_SELF;
-    vp.procfd = fd;
-    rc = proc_fd_file(&vp, src, &held);
     if (rc != 0) {
         return rc == -EACCES ? -EXDEV : rc;
     }
@@ -14094,6 +14238,59 @@ static int32_t link_fd_file(int fd, struct vfs_ref *src)
     }
     fd_ofd_unref(held);
     return 0;
+}
+
+/**
+ * The file the caller's descriptor `fd` is open on, for linkat's
+ * AT_EMPTY_PATH with an empty path, into `src` as `link_fd_vpath` leaves
+ * it: what /proc/self/fd/N reaches, without the walk to it. 0, -EBADF for a
+ * descriptor that is not open, or `link_fd_vpath`'s error.
+ */
+static int32_t link_fd_file(int fd, struct vfs_ref *src)
+{
+    struct vpath vp;
+
+    if (fd_get(current_proc->fds, fd) == NULL) {
+        return -EBADF;
+    }
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_PROC_FD_LINK;
+    vp.pid = SYNTH_PID_SELF;
+    vp.procfd = fd;
+    return link_fd_vpath(&vp, src);
+}
+
+/**
+ * Make the hard link `newname` to `oldname`, both canonical paths, by
+ * `link_ref`. The source is resolved as itself unless `follow`; one that
+ * named a directory by its end, `olddir`, follows a final link and must
+ * reach a directory (`resolve_named`), which is EPERM later. A followed
+ * /proc/PID/fd/N, where the walk stops, is followed here to its file
+ * (`link_fd_vpath`), as Linux's walk follows the magic link, so that a file
+ * with no name that O_TMPFILE made can be named through it. Returns 0 or a
+ * negative errno.
+ */
+static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
+{
+    const struct vpath *vp;
+    struct vfs_ref src;
+    struct vpath fdlink;
+    int32_t rc;
+
+    rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, olddir, &src);
+    if (rc != 0) {
+        return rc;
+    }
+    vp = follow ? vfs_synth_vpath(src.mnt, src.node) : NULL;
+    if (vp && vp->kind == VNODE_PROC_FD_LINK) {
+        fdlink = *vp;
+        vfs_ref_release(&src);
+        rc = link_fd_vpath(&fdlink, &src);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return link_ref(&src, newname, newend);
 }
 
 /**
@@ -15064,15 +15261,20 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
  * The refusals of `iov_file_write` under the description's lock of `entry`:
  * -EINVAL when, at the shared offset (`pos` -1), the end of `wanted` bytes
  * passes 2^63-1 (`rw_offset_end`), which a sharer's seek may have moved
- * since the caller's check, then -EBUSY for a file that backs a loop
- * device, or 0.
+ * since the caller's check, -EBUSY for a file that backs a loop device,
+ * then -EINVAL for an O_DIRECT write whose vector of `count` elements at
+ * `iov` breaks the alignment rules (`direct_iov_misaligned`), or 0.
  */
-static long iov_file_refused(fd_entry_t *entry, long long pos, uint32_t wanted)
+static long iov_file_refused(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
+                             long long pos, uint32_t wanted)
 {
     if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
         return -EINVAL;
     }
-    return loop_backs(entry->ofd->vmnt, entry->ofd->vnode) ? -EBUSY : 0;
+    if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+        return -EBUSY;
+    }
+    return direct_iov_misaligned(entry->ofd, iov, count) ? -EINVAL : 0;
 }
 
 /**
@@ -15134,7 +15336,9 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     }
     state.append = append;
     state.big = 0;
-    rc = iov_file_refused(entry, pos, wanted);
+    state.lo = ~(uint64_t)0;
+    state.hi = 0;
+    rc = iov_file_refused(entry, iov, count, pos, wanted);
     if (rc == 0) {
         rc = iov_seal_grow(ofd, pos == -1 ? ofd->offset : (uint64_t)pos, wanted, append, &room);
     }
@@ -15156,7 +15360,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
         inotify_desc(ofd, IN_MODIFY);
     }
     big_give(state.big);
-    rc = write_synced(entry, rc);
+    rc = write_synced(entry, rc, &state);
 out:
     kfree(iov);
     return rc;
@@ -15201,6 +15405,44 @@ static long iov_file_elements_read(struct open_file *ofd, const struct kernel_io
 }
 
 /**
+ * The part of `iov_file_read` under the description's lock of `entry`,
+ * which it takes and drops, for the imported vector `iov` of `count`
+ * elements and `wanted` bytes, whose first `room` bytes the caller can
+ * write: -EINVAL when, at the shared offset (`pos` -1), the end passes
+ * 2^63-1 (`rw_offset_end`); for an O_DIRECT read that breaks the alignment
+ * rules, `direct_read_refused`'s answer; for no writable byte,
+ * `file_read_unwritable`'s; otherwise the elements' read
+ * (`iov_file_elements_read`). A read of a byte or more reports IN_ACCESS to
+ * inotify. The big lock the read took is given back before the return.
+ */
+static long iov_file_read_locked(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
+                                 long long pos, uint32_t wanted, uint32_t room)
+{
+    struct open_file *ofd = entry->ofd;
+    int big = 0;
+    long rc;
+
+    fd_ofd_lock(ofd);
+    if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
+        rc = -EINVAL;
+    } else if (direct_iov_misaligned(ofd, iov, count)) {
+        rc = direct_read_refused(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
+    } else if (room == 0) {
+        rc = file_read_unwritable(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
+    } else {
+        rc = iov_file_elements_read(ofd, iov, count, pos, &big);
+    }
+    fd_ofd_unlock(ofd);
+    if (rc > 0 && inotify_watches) {
+        inotify_desc(ofd, IN_ACCESS);
+    }
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
+/**
  * Read the vector of `count` elements at `addr` from the file of a mount
  * that the descriptor `entry`, held by the caller, is open on, as Linux's
  * vfs_iter_read reads an iov_iter whole: at the description's offset for
@@ -15231,7 +15473,6 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
     struct kernel_iovec local[8], *iov = local;
     struct open_file *ofd = entry->ofd;
     uint32_t wanted = 0, room = 0;
-    int big = 0;
     long rc;
 
     if (count < 0 || count > IOV_MAX_LOCAL) {
@@ -15255,21 +15496,7 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
                (uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
         rc = -EINVAL;
     } else if (rc == 0 && wanted > 0) {
-        fd_ofd_lock(ofd);
-        if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
-            rc = -EINVAL;
-        } else if (room == 0) {
-            rc = file_read_unwritable(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
-        } else {
-            rc = iov_file_elements_read(ofd, iov, count, pos, &big);
-        }
-        fd_ofd_unlock(ofd);
-        if (rc > 0 && inotify_watches) {
-            inotify_desc(ofd, IN_ACCESS);
-        }
-        if (big) {
-            bkl_exit();
-        }
+        rc = iov_file_read_locked(entry, iov, count, pos, wanted, room);
     }
     if (iov != local) {
         kfree(iov);
@@ -17005,19 +17232,53 @@ long sys_flock(isr_params_t *params)
     return rc;
 }
 
-/** F_SETFL on the held descriptor `entry`: set the O_APPEND and O_NONBLOCK
- * bits of `arg` on its description, in one atomic step
- * (`fd_ofd_status_set`). 0, or -EPERM for a change of O_APPEND on an
- * append-only file, which Linux's setfl refuses either way. */
+/** Whether the description of the held descriptor `entry` may have
+ * O_DIRECT, as open(2) gives it: a file or a directory of a mount whose
+ * type takes it (`open_direct_refused`), or a block device. The stat of a
+ * device takes the big lock. */
+static int fcntl_direct_ok(fd_entry_t *entry)
+{
+    struct kstat kst;
+    int big, ok;
+
+    if (entry->ofd->vmnt && (entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR)) {
+        return !open_direct_refused(entry->ofd->vmnt,
+                                    entry->type == FD_TYPE_DIR ? S_IFDIR : S_IFREG, O_DIRECT);
+    }
+    if (entry->type != FD_TYPE_DEVICE) {
+        return 0;
+    }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    ok = fstat_getattr(entry, &kst) == 0 && (kst.st_mode & S_IFMT) == S_IFBLK;
+    if (big) {
+        bkl_exit();
+    }
+    return ok;
+}
+
+/** F_SETFL on the held descriptor `entry`: set the O_APPEND, O_NONBLOCK and
+ * O_DIRECT bits of `arg` on its description, in one atomic step
+ * (`fd_ofd_status_set`). 0, -EPERM for a change of O_APPEND on an
+ * append-only file, which Linux's setfl refuses either way, or -EINVAL for
+ * a change of O_DIRECT on a file that cannot have it (`fcntl_direct_ok`),
+ * as Linux's setfl answers after that. */
 static long fcntl_setfl(fd_entry_t *entry, uintptr_t arg)
 {
+    const uint32_t bits = OFD_APPEND | OFD_NONBLOCK | OFD_DIRECT;
+
     if (!entry->ofd) {
         return 0;
     }
     if (((arg ^ entry->ofd->status_flags) & OFD_APPEND) && ofd_append_only(entry->ofd)) {
         return -EPERM;
     }
-    fd_ofd_status_set(entry->ofd, OFD_APPEND | OFD_NONBLOCK, arg & (OFD_APPEND | OFD_NONBLOCK));
+    if (((arg ^ entry->ofd->status_flags) & OFD_DIRECT) && !fcntl_direct_ok(entry)) {
+        return -EINVAL;
+    }
+    fd_ofd_status_set(entry->ofd, bits, (uint32_t)arg & bits);
     return 0;
 }
 
@@ -17076,12 +17337,13 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg);
  * F_GETFD and F_SETFD read and set the close-on-exec bit, which belongs to the
  * descriptor. F_GETFL reports the access mode, 0, 1 or 2 for O_RDONLY, O_WRONLY
  * and O_RDWR, with O_APPEND, O_NONBLOCK, O_SYNC and O_DSYNC, O_PATH for an
- * O_PATH descriptor and O_EXCL for a pidfd of a thread. F_SETFL sets O_APPEND
- * and O_NONBLOCK, which belong to the open file description a dup or a fork
- * shares, and ignores the other bits, the access mode, O_CLOEXEC and the sync
- * flags among them, as POSIX allows and Linux's setfl does; it is -EPERM when
- * it would change O_APPEND of an append-only file, as Linux's setfl refuses
- * either way.
+ * O_PATH descriptor, O_DIRECT and O_EXCL for a pidfd of a thread. F_SETFL
+ * sets O_APPEND, O_NONBLOCK and O_DIRECT, which belong to the open file
+ * description a dup or a fork shares, and ignores the other bits, the
+ * access mode, O_CLOEXEC and the sync flags among them, as POSIX allows and
+ * Linux's setfl does; it is -EPERM when it would change O_APPEND of an
+ * append-only file, as Linux's setfl refuses either way, and -EINVAL when
+ * it would change O_DIRECT of a file that cannot have it.
  *
  * F_DUPFD and F_DUPFD_CLOEXEC duplicate onto the lowest free descriptor at
  * or above `arg`, as POSIX requires. The description the allocation gave
@@ -17155,8 +17417,8 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg)
             fl = 0;
         }
         if (entry->ofd) {
-            fl |=
-                (int)(entry->ofd->status_flags & (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC));
+            fl |= (int)(entry->ofd->status_flags &
+                        (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC | OFD_DIRECT));
         }
         if (entry->flags & FD_FLAG_PATH) {
             fl |= O_PATH;

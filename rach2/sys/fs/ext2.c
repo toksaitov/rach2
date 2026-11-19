@@ -4090,6 +4090,17 @@ static int admit_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
     return rc;
 }
 
+/** The `uncache` of `vfs_ops`: `ext2_uncache` of the handle's node,
+ * admitted. */
+static void admit_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len)
+{
+    struct ext2_handle *h = handle;
+
+    em_enter_node(ext2_em_of(mnt), h->node);
+    ext2_uncache(mnt, h->node, offset, len);
+    em_finish_node(ext2_em_of(mnt), h->node);
+}
+
 /** Read a node's external attribute block into a private checked copy, as
  * a block of kind READ_ATTR: one out of range is refused and reported, and a
  * failed read returned unreported, as Linux's `ext2_xattr_get` returns it.
@@ -4366,7 +4377,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_unlock_write,
     0, /* rename_flags */
     admit_tmpfile,
-    0, /* uncache */
+    admit_uncache,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,

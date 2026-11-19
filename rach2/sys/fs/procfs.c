@@ -10485,7 +10485,8 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
     flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
     if (e->ofd) {
-        flags |= e->ofd->status_flags & (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC);
+        flags |=
+            e->ofd->status_flags & (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC | OFD_DIRECT);
     }
     if (e->flags & FD_FLAG_PATH) {
         flags |= 010000000u;

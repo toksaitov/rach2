@@ -456,6 +456,10 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n);
 /** Whether `dev`'s block `blk` is in the cache, so that a `bcache_get` of it
  * reads nothing unless it is taken for another block first. */
 int bcache_cached(block_device_t *dev, uint64_t blk);
+/** Drop `dev`'s buffer of block `blk` when it is clean and nobody holds
+ * it, as an O_DIRECT read or write leaves no copy of a file's data in
+ * memory (`vfs_ops.uncache`); a dirty or held one stays. */
+void bcache_forget(block_device_t *dev, uint64_t blk);
 
 /** Whether `dev`'s block `blk` is in the cache: 0 when it is not, 1 when it
  * is, and 2 when it is and is dirty, for cachestat(2). */
