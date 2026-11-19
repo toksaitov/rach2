@@ -406,13 +406,25 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
     return 0;
 }
 
-/* The clock calls made, `clock_calls`; a count that wraps, kept without
- * a lock, since a test reads it while nothing else reads the clock. */
-static volatile uint32_t clock_call_count;
+/* The clock calls made, `clock_calls`; a count that wraps, which calls on
+ * several processors at once raise without the big lock
+ * (`syscall_clock_unlock`). */
+static volatile unsigned int clock_call_count;
 
 uint32_t clock_calls(void)
 {
     return clock_call_count;
+}
+
+/** Count one clock call, with a compare-and-exchange, so that calls on
+ * other processors at the same moment lose none. */
+static void clock_call_counted(void)
+{
+    unsigned int old;
+
+    do {
+        old = clock_call_count;
+    } while (arch_atomic_cmpxchg(&clock_call_count, old, old + 1u) != old);
 }
 
 /*
@@ -453,7 +465,7 @@ long sys_gettimeofday(isr_params_t *params)
     int64_t seconds;
     int64_t nanoseconds;
 
-    clock_call_count++;
+    clock_call_counted();
     if (tv) {
         get_current_time(&seconds, &nanoseconds);
         ktv.tv_sec = (long)seconds;
@@ -483,7 +495,7 @@ long sys_time(isr_params_t *params)
     int64_t nanoseconds;
     long t;
 
-    clock_call_count++;
+    clock_call_counted();
     rtc_coarse_realtime(&seconds, &nanoseconds);
     t = (long)seconds;
     if (tloc && copy_to_user(tloc, &t, sizeof(t)) != 0) {
@@ -731,16 +743,41 @@ int32_t clock_cpu_sample(const struct tgroup *tg, uint32_t id, uint64_t serial, 
     return 0;
 }
 
-int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
+static int syscall_relock(void);
+static void syscall_relock_end(int relock);
+
+/**
+ * Read clock `clk` into `*out` from a call that may run without the big
+ * lock: real time and the clocks since boot have locks of their own
+ * (clock.c), while a CPU clock finds its process and sums its threads,
+ * which the big lock guards, so it is resolved and read under that lock.
+ * @return 0, or `clock_resolve`'s error.
+ */
+static int32_t clock_get(int32_t clk, struct kernel_timespec64 *out)
 {
     struct kclock c;
+    int relock = 0;
+    int32_t rc;
+
+    if (clk < 0 || clk == CLOCK_PROCESS_CPUTIME_ID || clk == CLOCK_THREAD_CPUTIME_ID) {
+        relock = syscall_relock();
+    }
+    rc = clock_resolve(clk, &c);
+    if (rc == 0) {
+        clock_read(&c, out);
+    }
+    syscall_relock_end(relock);
+    return rc;
+}
+
+int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
+{
     struct kernel_timespec64 ts;
-    int32_t rc = clock_resolve(clk, &c);
+    int32_t rc = clock_get(clk, &ts);
 
     if (rc != 0) {
         return rc;
     }
-    clock_read(&c, &ts);
     *sec = ts.tv_sec;
     *nsec = (int32_t)ts.tv_nsec;
     return 0;
@@ -759,14 +796,12 @@ long sys_clock_gettime(isr_params_t *params)
     struct kernel_timespec __user *ts = (struct kernel_timespec __user *)SC_ARG(params, 1);
     struct kernel_timespec kts;
     struct kernel_timespec64 now;
-    struct kclock c;
-    int32_t rc = clock_resolve((int32_t)SC_ARG(params, 0), &c);
+    int32_t rc = clock_get((int32_t)SC_ARG(params, 0), &now);
 
-    clock_call_count++;
+    clock_call_counted();
     if (rc != 0) {
         return rc;
     }
-    clock_read(&c, &now);
     kts.tv_sec = (long)now.tv_sec;
     kts.tv_nsec = (long)now.tv_nsec;
     if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
@@ -787,7 +822,7 @@ long sys_clock_gettime64(isr_params_t *params)
     int32_t nsec;
     int32_t rc = clock_now((int32_t)SC_ARG(params, 0), &sec, &nsec);
 
-    clock_call_count++;
+    clock_call_counted();
     if (rc != 0) {
         return rc;
     }
@@ -3592,6 +3627,34 @@ void syscall_loop_drain(void)
 }
 
 /**
+ * Mark the calls that read real time or a clock since boot to run without
+ * the big lock, native and i386, as Linux reads its timekeeper under a
+ * sequence count alone: clock_gettime and clock_gettime64, gettimeofday
+ * and time read clock.c's clocks, each under that clock's own lock or
+ * sequence count, and take the big lock only for a CPU clock
+ * (`clock_get`); gettimeofday reads the time zone without a lock, as
+ * Linux's does. A reading that falls back from the vDSO to the HPET is an
+ * exit to the hypervisor of some microseconds, which no other processor's
+ * call then waits for. The i386 forms with their own timespec and timeval
+ * are marked as their table is filled (`ia32_syscall_init`).
+ */
+static void syscall_clock_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_clock_gettime,
+        sys_clock_gettime64,
+        sys_gettimeofday,
+        sys_time,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
+/**
  * Mark the mmap family to run without the big lock, native and i386, as
  * Linux's take mmap_lock alone: each holds its address space's regions'
  * lock to write across its change (`regions_begin`, mm/regions.h) and
@@ -3952,6 +4015,7 @@ void init_syscall(void)
     syscall_epoll_unlock();
     syscall_socket_unlock();
     syscall_mm_unlock();
+    syscall_clock_unlock();
     syscall_futex_unlock();
     syscall_ids_unlock();
 
