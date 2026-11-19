@@ -10204,6 +10204,7 @@ static int sched_may_change(const process_t *p)
 long sys_sched_yield(isr_params_t *params)
 {
     (void)params;
+    sched_note_yield();
     if (sched_yield_alone()) {
         return 0;
     }
