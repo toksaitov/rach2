@@ -192,9 +192,8 @@ typedef struct krffs_mount {
      * medium still counts the bytes it gave up. Until a barrier succeeds, no
      * operation writes into a node's room. */
     int unsettled;
-    /* A move could not withdraw its copy, so the file's name is on two
-     * nodes: every write and every barrier fails until the next mount's
-     * repair. */
+    /* A failed repair or publication stopped the mount. Every write and
+     * barrier fails until the next mount. */
     int halted;
     /* That copy's offset, which lookups and listings pass over, or 0, the
      * root's, which is no copy. */
@@ -458,8 +457,8 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
  * which readers see, when there are any.
  *
  * Returns `size`, or fewer as above; KRFFS_EBAD for a null argument or
- * KRFFS_NO_NODE or a node that is not
- * reserved; KRFFS_ENOSPACE when the node had to move and no free node held
+ * KRFFS_NO_NODE or a node that is not reserved; KRFFS_ENOSPACE when the
+ * node had to move and no free node held
  * the copy, with no byte of the file changed; or KRFFS_EIO when a read, a
  * write, a sync or a barrier failed and no byte a reader sees changed.
  */

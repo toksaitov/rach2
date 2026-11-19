@@ -549,12 +549,10 @@ static int krffs_size_fits(krffs_mount_t *mount, uint64_t offset, uint64_t old, 
 }
 
 /**
- * Store a size that publishes a change to the chain. A store that fails may
- * have reached the cache in part, so the forward chain may have changed with
- * the link after it unrepaired: the links are marked stale, which keeps the
- * dirty flag and has the next mount rebuild them, and the mount unsettled,
- * since a size that gave a node room may be in the cache and not on the
- * medium. 0, or -1.
+ * Store a size that publishes a change to the chain. On error keep the
+ * dirty flag and require a barrier before reuse. An earlier size change
+ * in this operation may still need its backward link or its writeback.
+ * Return 0 or -1.
  */
 static int krffs_publish_size(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
@@ -1723,11 +1721,9 @@ static int krffs_store_length_in(krffs_mount_t *mount, uint64_t offset, uint64_t
 }
 
 /**
- * `krffs_store_length_in`, which leaves the mount unsettled when it fails:
- * a store that failed in its second block may have put the new length in
- * the cache, so a later write could put bytes back where only the old
- * length on the medium still counts them. `shown`, when not NULL, gets the
- * length readers see afterwards.
+ * Store the length and return the visible EOF in `shown` when supplied.
+ * A failed piece or barrier can leave an earlier piece visible in cache.
+ * Settle it before another operation reuses bytes beyond the shorter EOF.
  */
 static int krffs_store_length(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t length,
                               uint64_t *shown)
@@ -4820,6 +4816,11 @@ uint32_t krffs_free_bytes(void)
 /** Forget the boot root's mount after a mount that is refused. */
 static void krffs_unmount_root(void)
 {
+    if (krffs_root_mount.sector) {
+        krffs_halt(&krffs_root_mount);
+    }
+    krffs_fs = NULL;
+    krffs_root_flush = NULL;
     krffs_root_mount.backend = NULL;
     krffs_root_mount.ctx = NULL;
     krffs_root_mount.size = 0;
