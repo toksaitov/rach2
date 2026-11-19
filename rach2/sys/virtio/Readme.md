@@ -42,7 +42,7 @@ The driver logs under `virtio_console`: `bound:` with the ports and features, `p
 
 ### Input
 
-The input driver reads a tablet or touchscreen's identity, axis limits and capabilities from its device configuration. It publishes an event device with the advertised pointer properties and initializes type B slots when the device advertises `ABS_MT_SLOT`. The event queue carries Linux input event codes and values, which the driver gives to evdev. The status queue stays empty on tablets and touchscreens. [input(4)](../../../man/man4/input.4) describes the interface.
+The input driver reads a tablet or touchscreen's identity, axis limits and capabilities from its device configuration. It publishes an event device with the advertised pointer properties, miscellaneous codes such as `MSC_TIMESTAMP`, and type B slots when the device advertises `ABS_MT_SLOT`. The event queue carries Linux input event codes and values, which the driver gives to evdev. The status queue stays empty on tablets and touchscreens. [input(4)](../../../man/man4/input.4) describes the interface.
 
 ## Design
 

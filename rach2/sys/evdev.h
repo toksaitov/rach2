@@ -53,6 +53,7 @@ struct evdev;
 #define SYN_MT_REPORT 2
 #define SYN_DROPPED   3
 #define MSC_SCAN      4
+#define MSC_TIMESTAMP 5
 #define MSC_CNT       0x08
 #define SW_CNT        0x11
 #define LED_CNT       0x10
@@ -100,8 +101,9 @@ struct evdev;
 #define ABS_MT_LAST        ABS_MT_TOOL_Y
 #define ABS_CNT            0x40
 
-/* ABS_MT_TOOL_TYPE's value for a finger. */
+/* ABS_MT_TOOL_TYPE values for fingers and palms. */
 #define MT_TOOL_FINGER 0
+#define MT_TOOL_PALM   2
 
 /* The properties of EVIOCGPROP. */
 #define INPUT_PROP_POINTER        0x00 /* moves a pointer on a screen */
@@ -226,10 +228,9 @@ void evdev_set_version(struct evdev *dev, uint16_t version);
 
 /**
  * Give `dev` the event `code` of `type`, EV_KEY, EV_REL or EV_LED, to
- * report, as Linux's `input_set_capability` does: a button, a relative
- * axis, or an LED, which EVIOCGBIT lists beside a keyboard's three. Called
- * after `evdev_register`, before the device reports. A NULL `dev` is
- * ignored.
+ * report, as Linux's `input_set_capability` does: a key, a relative axis,
+ * a miscellaneous code or an LED. Called before the device reports, on a
+ * reserved or registered device. A NULL `dev` is ignored.
  */
 void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code);
 
