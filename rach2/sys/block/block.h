@@ -198,6 +198,17 @@ static __inline__ void block_set_sectors(block_device_t *device, uint64_t sector
     device->size_seq++;
 }
 
+/**
+ * Whether `block_flush` of `device`, the submitter, has nothing to send: a
+ * device with no `flush` has nothing of its own to flush, and a
+ * `BLOCK_WRITE_THROUGH` disk not marked `unflushed` flushed every write
+ * before it answered it.
+ */
+static __inline__ int block_flush_skips(const block_device_t *device)
+{
+    return !device->flush || ((device->flags & BLOCK_WRITE_THROUGH) && !device->unflushed);
+}
+
 /* How long a chain of backing devices may be: a loop device stands on a real
  * device and nothing stands on it. One is what the four buffers a process may
  * hold can serve: a file system on a loop device holds a buffer of it while
