@@ -1033,7 +1033,10 @@ static void cred_undump(process_t *p)
 }
 
 /**
- * What a move of the effective ids undoes, as Linux's `commit_creds` undoes
+ * The end of every call that sets user or group ids, past its early return
+ * for one that changes nothing: a new credential identity
+ * (`proc_cred_commit`), as Linux's `commit_creds` installs, and what a move
+ * of the effective ids undoes, as `commit_creds` undoes
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
  * what `cred_undump` takes away. A new effective uid also ends the
  * capabilities it was granted in its user namespace (`ns_granted`), where
@@ -1043,6 +1046,7 @@ static void cred_undump(process_t *p)
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
+    proc_cred_commit(p);
     if (p->euid != old_euid || p->egid != old_egid) {
         cred_undump(p);
     }
@@ -2267,6 +2271,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
     current_proc->fs_own = 0;
+    proc_cred_commit(current_proc);
     cap_store(current_proc, s->cap_lost[0], s->cap_lost[1]);
     current_proc->persona = s->persona;
     ns_exec(current_proc);
@@ -2845,6 +2850,9 @@ static void fork_ids(process_t *child, const process_t *parent)
     k_memcpy(child->cap_amb, parent->cap_amb, sizeof(child->cap_amb));
     child->amb_granted = parent->amb_granted;
     cap_store(child, parent->cap_lost[0], parent->cap_lost[1]);
+    if (child->tg == parent->tg) {
+        child->cred_id = parent->cred_id; /* CLONE_THREAD shares the creds */
+    }
     seccomp_inherit(child, parent);
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->euid = parent->euid;
@@ -7403,6 +7411,7 @@ static long fsuid_set(uint32_t uid)
         p->fsuid = uid;
         p->fs_own |= PROC_FSUID_OWN;
         cred_undump(p);
+        proc_cred_commit(p);
     }
     return (long)uid_seen(old);
 }
@@ -7421,6 +7430,7 @@ static long fsgid_set(uint32_t gid)
         p->fsgid = gid;
         p->fs_own |= PROC_FSGID_OWN;
         cred_undump(p);
+        proc_cred_commit(p);
     }
     return (long)gid_seen(old);
 }
@@ -7525,6 +7535,7 @@ long sys_setgroups(isr_params_t *params)
         p->groups[i] = tmp[i];
     }
     p->ngroups = size;
+    proc_cred_commit(p);
     return 0;
 }
 
@@ -11191,6 +11202,7 @@ static long prctl_ambient(unsigned long op, unsigned long cap, unsigned long res
             return -EINVAL;
         }
         p->cap_amb[0] = p->cap_amb[1] = 0;
+        proc_cred_commit(p);
         return 0;
     }
     if (cap > CAP_LAST_CAP || rest != 0) {
@@ -11204,9 +11216,11 @@ static long prctl_ambient(unsigned long op, unsigned long cap, unsigned long res
             return -EPERM;
         }
         p->cap_amb[cap >> 5] |= 1u << (cap & 31u);
+        proc_cred_commit(p);
         return 0;
     case PR_CAP_AMBIENT_LOWER:
         p->cap_amb[cap >> 5] &= ~(1u << (cap & 31u));
+        proc_cred_commit(p);
         return 0;
     default:
         return -EINVAL;
@@ -11261,6 +11275,7 @@ static long prctl_bset(unsigned long option, unsigned long cap)
         return -EPERM;
     }
     current_proc->bset_lost[cap >> 5] |= 1u << (cap & 31u);
+    proc_cred_commit(current_proc);
     return 0;
 }
 
@@ -11577,5 +11592,6 @@ long sys_capset(isr_params_t *params)
         p->cap_inh[i] = d[i].inheritable;
         p->cap_amb[i] &= d[i].permitted & d[i].inheritable;
     }
+    proc_cred_commit(p);
     return 0;
 }

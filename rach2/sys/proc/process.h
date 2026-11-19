@@ -293,6 +293,15 @@ struct process {
     uint32_t fsuid;
     uint32_t fsgid;
     uint32_t fs_own; /* PROC_FSUID_OWN, PROC_FSGID_OWN */
+    /* The identity of the credentials this thread acts with, which stands
+     * for Linux's struct cred pointer: never 0, and new at each commit
+     * (`proc_cred_commit`). A thread made with CLONE_THREAD shares its
+     * creator's; any other new process, an exec and each call that
+     * changes a credential take a new one, as Linux's copy_creds,
+     * prepare_exec_creds and commit_creds do. linkat's AT_EMPTY_PATH
+     * compares it with a description's opener's
+     * (`fd_ofd_opener_is_current`). */
+    uint64_t cred_id;
     /* While an openat2 opens the path its checked walk found, the walks of
      * the open replay that walk (`vfs_replay`): VFS_REPLAY_* bits, 0 at every
      * other time, and the tree's sequence the replay must still see. */
@@ -1046,6 +1055,11 @@ int proc_is_kthread(const process_t *p);
  * same PID namespace at exec, with the lifetime `serial` of each, under
  * the big kernel lock. */
 void proc_exchange_pids(process_t *a, process_t *b);
+
+/** Give `p` a new credential identity, `cred_id`, after a change of its
+ * credentials or at its start, as Linux's commit_creds installs a new
+ * struct cred. Any context. */
+void proc_cred_commit(process_t *p);
 
 /** Change the real uid and its record count, under the big kernel lock.
  * Return 0, or -1 without a change if a new user's count cannot be allocated.

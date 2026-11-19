@@ -48,13 +48,10 @@ struct ofd_rec {
     struct access_count *spare;
     /* The allocating thread group's initial-namespace pid, or 0 at boot. */
     uint32_t creator;
-    /* The opener's credentials as linkat's AT_EMPTY_PATH compares them
-     * (`fd_ofd_opener_is_current`): its thread group's serial and exec
-     * generation, and its file-system user and group ids; all 0 at boot. */
-    uint64_t opener_tg;
-    uint32_t opener_exec;
-    uint32_t opener_fsuid;
-    uint32_t opener_fsgid;
+    /* The identity of the opener's credentials (`cred_id` in process.h),
+     * which linkat's AT_EMPTY_PATH compares (`fd_ofd_opener_is_current`);
+     * 0, which no process has, at boot. */
+    uint64_t opener_cred;
     /* Nonzero for a reader's place on the list (`fd_files_creators`), which
      * is no description: its `ofd` is zero, so the scans pass it over. */
     int cursor;
@@ -237,12 +234,7 @@ static struct open_file *ofd_alloc(void)
     rec->ofd.refcount = 1;
     rec->ofd.ra.prev_pos = ~(uint64_t)0;
     rec->creator = current_proc ? current_proc->tgid : 0;
-    if (current_proc && current_proc->tg) {
-        rec->opener_tg = current_proc->tg->serial;
-        rec->opener_exec = current_proc->tg->exec_generation;
-        rec->opener_fsuid = proc_fsuid(current_proc);
-        rec->opener_fsgid = proc_fsgid(current_proc);
-    }
+    rec->opener_cred = current_proc ? current_proc->cred_id : 0;
     wait_queue_init(&rec->wq);
     flags = spin_lock_irqsave(&ofd_lock);
     ofd_link(rec);
@@ -260,10 +252,7 @@ int fd_ofd_opener_is_current(struct open_file *ofd)
 {
     const struct ofd_rec *rec = ofd_rec_of(ofd);
 
-    return current_proc && current_proc->tg && rec->opener_tg == current_proc->tg->serial &&
-           rec->opener_exec == current_proc->tg->exec_generation &&
-           rec->opener_fsuid == proc_fsuid(current_proc) &&
-           rec->opener_fsgid == proc_fsgid(current_proc);
+    return current_proc && rec->opener_cred == current_proc->cred_id;
 }
 
 /* The buckets of `access_counts`, a power of two. */
