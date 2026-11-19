@@ -1535,6 +1535,7 @@ static long cached_pages(long fd, long len)
 
     range[0] = 0;
     range[1] = (unsigned long long)len;
+    cs[0] = 0;
     rc = syscall4(SYS_CACHESTAT_, fd, (long)range, (long)cs, 0);
     return rc != 0 ? rc : (long)cs[0];
 }

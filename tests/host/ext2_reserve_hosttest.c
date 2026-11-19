@@ -427,6 +427,13 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t block)
     }
 }
 
+/** The drop of an O_DIRECT range's buffers, which the model has none of. */
+void bcache_forget(block_device_t *dev, uint64_t blk)
+{
+    (void)dev;
+    (void)blk;
+}
+
 /** `bcache_wait_unheld`, which no row kills. */
 int bcache_wait_unheld_killable(block_device_t *dev, uint64_t block)
 {
