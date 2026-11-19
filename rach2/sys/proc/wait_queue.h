@@ -259,8 +259,10 @@ void wq_wake_nested(wait_queue_t *wq, uint32_t kinds, unsigned int nest, uint64_
 /**
  * Put the record `w`, whose `func` is set, at the tail of `wq` and record
  * the queue in `w->wq`, as Linux's `add_wait_queue`; a record with
- * WQ_EXCLUSIVE goes there too (`add_wait_queue_exclusive`). Interrupts may
- * be on.
+ * WQ_EXCLUSIVE goes there too (`add_wait_queue_exclusive`). A full barrier
+ * follows the filing, so that the caller's next test of what the record
+ * waits for comes after it, for a waker that reads the queue with
+ * `wq_active`. Interrupts may be on.
  */
 void wq_entry_add(wait_queue_t *wq, struct wq_waiter *w);
 
@@ -292,7 +294,8 @@ uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds);
  * wake, and one with a function stays. Both are idempotent, ignore a NULL
  * `wq` or `w`, and must be called with interrupts off. They do not block or
  * change the process's state; the poll core makes the BLOCKED, schedule()
- * and RUNNING steps itself, so that no wake is lost.
+ * and RUNNING steps itself, so that no wake is lost. A full barrier follows
+ * wq_poll_add's filing, as `wq_entry_add`'s.
  */
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w);
 void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w);

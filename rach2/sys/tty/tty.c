@@ -1545,6 +1545,7 @@ static void console_deliver(void)
     if (console_tty.sid != 0) {
         console_pump_irq(&console_tty);
     }
+    sched_mb(); /* the bytes before the read of the queue (`wq_wait`) */
     if (serial_data_available() && wq_active(&console_tty.input_wq)) {
         wq_wake_all(&console_tty.input_wq);
     }

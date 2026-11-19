@@ -450,7 +450,7 @@ static int fd_is_nonblock(fd_entry_t *e)
  * `pipe_read` the writers only of one that was full (fs/pipe.c in 6.12): a
  * wake of an empty queue costs a pass with interrupts off. The barrier
  * orders the change before the reads of `polled` and the queue, as the
- * unlock of the queue a sleeper files itself on (`wq_wait`) and the barrier
+ * barrier after a sleeper files itself on the queue (`wq_wait`) and the one
  * after `pipe_poll` sets `polled` order theirs before they read the pipe:
  * either they see the change or this sees them.
  */
