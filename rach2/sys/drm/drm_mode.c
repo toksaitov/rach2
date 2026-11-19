@@ -2196,6 +2196,11 @@ static int probe_modes(struct drm_connector *connector, uint32_t max_width, uint
                                       0);
         connector->mm_width = connector->mm_height = 0;
         connector->bpc = connector->min_vfreq = connector->max_vfreq = 0;
+        /* Linux's drm_edid_connector_update(NULL) clears the ELD with it. */
+        k_memset(connector->eld, 0, sizeof(connector->eld));
+        connector->latency_present[0] = connector->latency_present[1] = 0;
+        connector->video_latency[0] = connector->video_latency[1] = 0;
+        connector->audio_latency[0] = connector->audio_latency[1] = 0;
         modes_free(&connector->modes);
         return 0;
     }
