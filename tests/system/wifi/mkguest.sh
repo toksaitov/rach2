@@ -124,8 +124,8 @@ grep -v '^#' "$DIR/packages.txt" | while read -r repo name version digest; do
 done
 
 # The kernel, and the modules: each named one after those modules.dep says
-# it needs, which are listed so that the last loads first. Package 6.18.60-r0
-# installs its modules under 6.18.60-0-lts.
+# it needs, which are listed so that the last loads first. Package 6.18.64-r0
+# installs its modules under 6.18.64-0-lts.
 read -r linux version < "$work/linux"
 kver="${version%-r*}-${version##*-r}-lts"
 mods="$work/kernel/lib/modules/$kver"
