@@ -534,6 +534,19 @@ void kunmap_temp(void *va)
     (void)va;
 }
 
+/** The same for a processor's own mapping slot, with no interrupts to save. */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    *flags = 0;
+    return (void *)phys;
+}
+
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    (void)flags;
+}
+
 /** No eventfd: the program makes none. */
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {
