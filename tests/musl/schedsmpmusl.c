@@ -66,8 +66,10 @@ extern char **environ;
 #define RTC_RD_TIME   0x80247009u
 #define RTC_WKALM_SET 0x4028700Fu
 
+/* struct rtc_wkalrm: the bytes enabled and pending and two of padding, then
+ * a struct rtc_time of nine ints. Only `enabled` is set. */
 struct wkalrm {
-    unsigned char enabled, pending, pad[2];
+    unsigned char flags[4];
     int tm[9];
 };
 
@@ -479,7 +481,7 @@ static pid_t spin(unsigned mask, int policy, int prio, int nice)
  */
 static void session(int n, unsigned mask, pid_t *pids)
 {
-    int out[2], i, err = 0;
+    int out[2], i, err;
     pid_t parent = getpid(), leader;
 
     if (pipe(out) != 0)
@@ -960,7 +962,7 @@ static int wake_in(int fd, int ahead)
         return -1;
     at = rtc_seconds(w.tm) + ahead;
     gmtime_r(&at, &t);
-    w.enabled = 1;
+    w.flags[0] = 1;
     w.tm[0] = t.tm_sec;
     w.tm[1] = t.tm_min;
     w.tm[2] = t.tm_hour;
