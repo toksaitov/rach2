@@ -22,7 +22,8 @@
  * A setup killed, as waitpid sees, once it has removed a stale lock's owner
  * record must leave its journal, and the next setup must pass and remove the
  * lock and the journal. A journal must have its lock removed when the lock
- * has no owner record or the one the journal names, even of this boot, and
+ * has no owner record, the one the journal names, even of this boot, or the
+ * start of it, and
  * kept when the lock has another owner; a journal with no lock must be
  * removed alone; and a lock with no owner record and no journal must still
  * be refused. The collection's lock must be taken with this process's owner
@@ -166,7 +167,7 @@ static void script_write(const char *target, const char *script)
 {
     static char *cases[] = {NULL};
     struct nd_deploy d;
-    char guard[4096], *end, *a, *b, *c;
+    char guard[4096], *end, *a, *b, *c, *a2;
     FILE *f;
     memset(&d, 0, sizeof(d));
     d.c.mode = "full";
@@ -193,6 +194,12 @@ static void script_write(const char *target, const char *script)
     a = replaced(sent + strlen(guard), "/proc/sys/kernel/random/boot_id", fix_path("boot_id"));
     b = replaced(a, "/dev/shm/", fix_path("shm/"));
     c = replaced(b, "/proc/$$/stat", fix_path("stat"));
+    if (system("stat -c %u / > /dev/null 2>&1")) {
+        /* BSD stat, as macOS has, names the same fields otherwise. */
+        a2 = replaced(c, "stat -c '%u:%a:%s'", "stat -f '%u:%Lp:%z'");
+        free(c);
+        c = a2;
+    }
     f = fopen(script, "w");
     if (f == NULL ||
         fprintf(f, "set -eu; %sprintf 'native-deploy-test: setup passed\\n' >&2\n", c) < 0 ||
@@ -328,7 +335,7 @@ static void machine(const char *plain, const char *killer)
     }
     /* Kill the setup once it has removed a lock's owner record. */
     fix_format(path, sizeof(path), "%s/rm", killer);
-    put(path, "#!/bin/sh\ncase \"$*\" in *collection.lock/owner*) /bin/rm \"$@\"; "
+    put(path, "#!/bin/sh\ncase \"$*\" in *collection.lock/owner*) /bin/rm \"$@\" && "
               "kill -KILL $PPID; exit 1;; esac\nexec /bin/rm \"$@\"\n");
     chmod(path, 0755);
 }
@@ -383,7 +390,7 @@ static void claim_rows(const char *plain)
  * that is killed. */
 static void lock_rows(const char *plain, const char *killer)
 {
-    char out[1024];
+    char out[1024], path[1024];
     const char *t;
     int status;
 
@@ -407,6 +414,8 @@ static void lock_rows(const char *plain, const char *killer)
     status = setup(t, killer, out);
     CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL, "the setup was not killed");
     CHECK(locked(t) && !no_journal(t), "a setup killed while it clears a lock leaves no journal");
+    fix_format(path, sizeof(path), "%s/state/collection.lock/owner", t);
+    CHECK(!exists(path), "the setup was killed before it removed the lock's owner record");
     fix_format(out, sizeof(out), "%s/out2", t);
     CHECK(setup(t, plain, out) == 0, "a setup after a killed one fails");
     CHECK(!locked(t) && no_journal(t), "a setup after a killed one keeps the lock or journal");
@@ -444,6 +453,13 @@ static void journal_rows(const char *plain)
     fix_format(out, sizeof(out), "%s/out", t);
     CHECK(setup(t, plain, out) == 0, "a journal of a stopped make fails the setup");
     CHECK(!locked(t) && no_journal(t), "the setup keeps the ownerless lock of a stopped make");
+
+    t = tree("partial");
+    lock(t, "4265 95");
+    journal(t, "make 4265 95 " BOOT_ID "\n");
+    fix_format(out, sizeof(out), "%s/out", t);
+    CHECK(setup(t, plain, out) == 0, "a journal of a stopped owner write fails the setup");
+    CHECK(!locked(t) && no_journal(t), "the setup keeps a lock its journal's owner began");
 
     t = tree("contender");
     lock(t, "4262 92 " BOOT_ID "\n");
