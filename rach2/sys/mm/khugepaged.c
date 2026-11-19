@@ -101,7 +101,7 @@ static int khugepaged_wake(void)
         } else { /* busy: passed over until the next pass, as Linux's trylock */
             mm->thp_pass = _pass;
             mm->thp_next = 0;
-            done = 1;
+            done = 0;
         }
         bkl_enter();
         mm_put(mm);

@@ -9391,8 +9391,9 @@ static uint32_t madvise_mark_bit(uint32_t advice)
  * and MADV_NOHUGEPAGE's, each of which clears the other and wakes
  * khugepaged for the first, and which change nothing where the page
  * directory maps no huge page (MMU_HUGE 0). A huge page across an edge of
- * the range is split first, as Linux splits one across a region it splits
- * (vma_adjust_trans_huge). 0, or -1 when a region cannot be split.
+ * the range where the change made one region two is split, as Linux splits
+ * one across a region it splits (vma_adjust_trans_huge). 0, or -1 when a
+ * region cannot be split.
  */
 static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t advice)
 {
@@ -9411,11 +9412,12 @@ static int madvise_mark(vm_space_t *vm, uintptr_t addr, uintptr_t end, uint32_t 
         clear = on ? 0u : madvise_mark_bit(advice);
         mm_note_anon(current_proc->mm, addr, end);
     }
-    paging_huge_split_edges(current_proc->mm, addr, end);
     if (vm_advise(vm, addr, end, set, clear) != 0) {
+        paging_huge_split_edges(current_proc->mm, addr, end);
         vma_exhausted("madvise");
         return -1;
     }
+    paging_huge_split_edges(current_proc->mm, addr, end);
     if (advice == MADV_HUGEPAGE) {
         thp_policy_changed();
     }
@@ -9509,7 +9511,7 @@ static long madvise_locked(isr_params_t *params, vm_space_t *vm)
     if (len == 0) {
         return 0;
     }
-    if (advice == MADV_COLLAPSE) { /* past a gap, as Linux's walk goes */
+    if (MMU_HUGE && advice == MADV_COLLAPSE) { /* past a gap, as Linux's walk goes */
         return madvise_collapse(current_proc->mm, addr, addr + len);
     }
     if (vm_covered(vm, addr, addr + len) != len) {
@@ -9641,11 +9643,11 @@ long sys_mseal(isr_params_t *params)
         rc = -ENOMEM;
     } else {
         mm_note_anon(mm, start, start + len);
-        paging_huge_split_edges(mm, start, start + len);
         if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
             vma_exhausted("mseal");
             rc = -ENOMEM;
         }
+        paging_huge_split_edges(mm, start, start + len);
     }
     regions_end(mm);
     return rc;
@@ -10849,8 +10851,8 @@ static int32_t mlock_change(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint3
         }
     }
     mm_note_anon(current_proc->mm, *start, *end);
-    paging_huge_split_edges(current_proc->mm, *start, *end);
     rc = vm_lock(vm, *start, *end, bits);
+    paging_huge_split_edges(current_proc->mm, *start, *end);
     if (rc == -2) {
         vma_exhausted("mlock");
     }
@@ -11354,10 +11356,13 @@ long sys_prctl(isr_params_t *params)
         if (rest != 0) {
             return -EINVAL;
         }
-        mmap_write_lock(current_proc->mm); /* no fault maps a huge page across it */
-        current_proc->mm->thp_disable = arg2 != 0;
-        mmap_unlock(current_proc->mm);
-        return 0;
+        {
+            struct mm *mm = regions_begin(); /* no fault maps a huge page across it */
+
+            mm->thp_disable = arg2 != 0;
+            regions_end(mm);
+            return 0;
+        }
     case PR_GET_THP_DISABLE:
         if (arg2 != 0 || rest != 0) {
             return -EINVAL;

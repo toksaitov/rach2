@@ -108,17 +108,6 @@ static uintptr_t table_alloc(void)
  */
 #define PDPT_KEEPS 0x200UL
 
-/*
- * Bit 9 of a user page directory entry whose present bit is clear: the
- * entry names its leaf table, hidden from the processor while a 2 MiB page
- * over it is split or made and every processor drops its translations of
- * the range, so that none holds a 2 MiB and a 4 KiB translation of one
- * address at once, as Linux's split invalidates the entry before it puts
- * the table there (__split_huge_pmd_locked). Software walks the table as
- * if the entry were present (`table_for`, `mmu_user_skip`).
- */
-#define PDE_HIDDEN 0x200UL
-
 /** Two zeroed consecutive pages for a user page directory and the tables it
  * keeps, by the physical address of the first; 0 when there are none. */
 static uintptr_t pd_alloc(void)
@@ -157,10 +146,6 @@ static pte_t *table_for(pte_t *pml4, uintptr_t va, int level, int create, pte_t 
     for (l = 4; l > level; l--) {
         pte_t *e = &table[LEVEL_INDEX(va, l)];
 
-        if (l == 2 && (*e & (PTE_P | PDE_HIDDEN)) == PDE_HIDDEN && va < USER_ADDR_MAX) {
-            table = MMU_VIRT(PTE_ADDR(*e));
-            continue;
-        }
         if (!(*e & PTE_P)) {
             uintptr_t phys = 0;
             pte_t keeps = 0;
@@ -498,9 +483,8 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va)
     for (l = 4; l > 1; l--) {
         pte_t e = table[LEVEL_INDEX(va, l)];
 
-        if (l == 2 && ((e & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS) ||
-                       (e & (PTE_P | PDE_HIDDEN)) == PDE_HIDDEN)) {
-            return va; /* a 2 MiB page, which keeps its table, or a hidden table */
+        if (l == 2 && (e & (PTE_P | PTE_PS)) == (PTE_P | PTE_PS)) {
+            return va; /* a 2 MiB page, which keeps its table */
         }
         if (!(e & PTE_P) || (e & PTE_PS)) {
             uintptr_t span = (uintptr_t)1 << (3 + 9 * l);
@@ -554,20 +538,18 @@ pte_t mmu_user_huge(page_dir_t *dir, uintptr_t va)
 int mmu_user_huge_set(page_dir_t *dir, uintptr_t va, pte_t leaf)
 {
     pte_t *e = user_pde(dir, va);
-    pte_t v = e ? *e : 0;
 
-    if (!e || ((v & (PTE_P | PTE_PS)) != PTE_P && (v & (PTE_P | PDE_HIDDEN)) != PDE_HIDDEN)) {
+    if (!e || (*e & (PTE_P | PTE_PS)) != PTE_P) {
         return -1;
     }
-    e[MMU_TABLE_ENTRIES] = PTE_ADDR(v);
+    e[MMU_TABLE_ENTRIES] = PTE_ADDR(*e);
     __asm__ __volatile__("" ::: "memory");
     *(volatile pte_t *)e = leaf | PTE_PS;
     return 0;
 }
 
 /** The entry is exchanged at once, so that an accessed or dirty bit the
- * processor sets in the page meanwhile is in what comes back; once it is
- * hidden the processor sets none, since it finds no entry present. */
+ * processor sets in the page meanwhile is in what comes back. */
 pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pde(dir, va);
@@ -575,8 +557,9 @@ pte_t mmu_user_huge_clear(page_dir_t *dir, uintptr_t va)
     if (!e || (*e & (PTE_P | PTE_PS)) != (PTE_P | PTE_PS)) {
         return 0;
     }
-    return (pte_t)arch_atomic_xchg_ptr((volatile uintptr_t *)e,
-                                       (uintptr_t)(PTE_ADDR(e[MMU_TABLE_ENTRIES]) | PDE_HIDDEN));
+    return (pte_t)arch_atomic_xchg_ptr(
+        (volatile uintptr_t *)e,
+        (uintptr_t)(PTE_ADDR(e[MMU_TABLE_ENTRIES]) | PTE_P | PTE_W | PTE_U));
 }
 
 /** An exchange, so that an accessed bit the processor sets meanwhile stays;
@@ -598,6 +581,11 @@ pte_t mmu_user_huge_change(page_dir_t *dir, uintptr_t va, pte_t clear, pte_t set
     return now;
 }
 
+int mmu_huge_usable(void)
+{
+    return !kcpu_amd_erratum_383();
+}
+
 int mmu_user_keeps(page_dir_t *dir, uintptr_t va)
 {
     pte_t e4, e3;
@@ -611,26 +599,6 @@ int mmu_user_keeps(page_dir_t *dir, uintptr_t va)
     }
     e3 = ((pte_t *)MMU_VIRT(PTE_ADDR(e4)))[LEVEL_INDEX(va, 3)];
     return !(e3 & PTE_P) || (e3 & (PTE_PS | PDPT_KEEPS)) == PDPT_KEEPS;
-}
-
-int mmu_user_table_hide(page_dir_t *dir, uintptr_t va)
-{
-    pte_t *e = user_pde(dir, va);
-
-    if (!e || (*e & (PTE_P | PTE_PS)) != PTE_P) {
-        return 0;
-    }
-    arch_atomic_xchg_ptr((volatile uintptr_t *)e, (uintptr_t)(PTE_ADDR(*e) | PDE_HIDDEN));
-    return 1;
-}
-
-void mmu_user_table_show(page_dir_t *dir, uintptr_t va)
-{
-    pte_t *e = user_pde(dir, va);
-
-    if (e && (*e & (PTE_P | PDE_HIDDEN)) == PDE_HIDDEN) {
-        *(volatile pte_t *)e = PTE_ADDR(*e) | PTE_P | PTE_W | PTE_U;
-    }
 }
 
 pte_t *mmu_kernel_table(uintptr_t va)

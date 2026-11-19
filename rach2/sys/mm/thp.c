@@ -9,11 +9,15 @@
 #include "paging.h"
 #include "vm.h"
 
+#include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
 
 struct thp_policy thp_policy = {
     THP_MADVISE, THP_DEFRAG_MADVISE, 1, 1, 1, 1, 4096u, 10000u, 60000u, 511u, 64u, 256u};
+
+/* Set once by `thp_refuse`, after which no huge page is made. */
+static int _refused;
 
 /* The counts of thp_note's events and of the huge pages mapped, under
  * `thp_count_lock`, which nothing is taken under. */
@@ -54,7 +58,9 @@ uint32_t thp_mapped(void)
 /**
  * Linux's hugepage_init turns every flag off on a machine of less than
  * 512 MiB, where a huge page is too large a share of memory: `enabled` and
- * `defrag` read never and the huge zero page is off.
+ * `defrag` read never and the huge zero page is off. AMD's family 0x10 takes
+ * no huge page, since a split leaves the 2 MiB translation beside the 4 KiB
+ * ones until the range is flushed (paging.c).
  */
 void thp_boot(void)
 {
@@ -63,12 +69,23 @@ void thp_boot(void)
         thp_policy.defrag = THP_DEFRAG_NEVER;
         thp_policy.zero_page = 0;
     }
+#if MMU_HUGE
+    if (!mmu_huge_usable()) {
+        klog(KLOG_INFO, "thp", "huge pages off: AMD erratum 383");
+        thp_refuse();
+    }
+#endif
+}
+
+void thp_refuse(void)
+{
+    _refused = 1;
 }
 
 int thp_region_allows(const struct mm *mm, const struct vma *vma, uintptr_t start, int how)
 {
 #if MMU_HUGE
-    if (!mm || !vma || vma->file || vma->type == VM_SHARED || mm->thp_disable ||
+    if (_refused || !mm || !vma || vma->file || vma->type == VM_SHARED || mm->thp_disable ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
         (vma->prot & (VM_PROT_IO | VM_PROT_VVAR | VM_PROT_SECRET | VM_PROT_NOHUGEPAGE)) ||
         (start & (HUGE_SPAN - 1)) != 0 || start < vma->start || vma->end - start < HUGE_SPAN) {
@@ -108,7 +125,7 @@ uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem)
     uintptr_t addr;
     uint32_t done = 0;
 
-    for (r = vm_lower(&mm->vm, mm->thp_next); r && done < budget; r = vm_next(r)) {
+    for (r = vm_lower(&mm->vm, mm->thp_next); r; r = vm_next(r)) {
         addr = r->start > mm->thp_next ? r->start : mm->thp_next;
         addr = (addr + HUGE_SPAN - 1) & ~(uintptr_t)(HUGE_SPAN - 1);
         if (addr < r->start || addr >= r->end || r->end - addr < HUGE_SPAN ||
@@ -132,8 +149,11 @@ uint32_t thp_scan_mm(struct mm *mm, uint32_t budget, uint32_t pass, int *nomem)
         if (addr == 0 || r->end - addr < HUGE_SPAN) {
             mm->thp_next = r->end;
         }
+        if (done >= budget) {
+            break;
+        }
     }
-    if (!r && done < budget) {
+    if (!r) {
         mm->thp_pass = pass;
         mm->thp_next = 0;
     }
