@@ -556,8 +556,9 @@ static int station(const char *s, uint64_t *value)
 /** Say whether device `d` gives an option that only a network card can have. */
 static int card_options(const struct etude_qemu_device *d)
 {
-    return d->hub || d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
-           d->mac != NULL || d->forward_count != 0 || d->restricted || d->guest_forward_count != 0;
+    return d->hub || d->tap_queues != 0 || d->net != NULL || d->host != NULL ||
+           d->dhcpstart != NULL || d->dns != NULL || d->mac != NULL || d->forward_count != 0 ||
+           d->restricted || d->guest_forward_count != 0;
 }
 
 /** Say whether card `d` gives an option that only a user network takes. */
@@ -565,6 +566,28 @@ static int user_options(const struct etude_qemu_device *d)
 {
     return d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
            d->forward_count != 0 || d->guest_forward_count != 0 || d->restricted;
+}
+
+/**
+ * Check the backend of card `i` of `devices`: a card on a hub or a tap has
+ * no option of a user network, a tap is on no hub and has at most
+ * ETUDE_TAP_QUEUES_MAX queues, and no card before it has a tap. 0 or EINVAL.
+ */
+static int backend_check(const struct etude_qemu_device *devices, size_t i)
+{
+    const struct etude_qemu_device *d = &devices[i];
+    size_t j;
+
+    if ((d->hub || d->tap_queues != 0) && user_options(d))
+        return EINVAL;
+    if (d->tap_queues == 0)
+        return 0;
+    if (d->hub || d->tap_queues > ETUDE_TAP_QUEUES_MAX)
+        return EINVAL;
+    for (j = 0; j < i; j++)
+        if (devices[j].tap_queues != 0)
+            return EINVAL;
+    return 0;
 }
 
 int etude_qemu_devices_check(const struct etude_qemu_device *devices)
@@ -585,9 +608,7 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
                 return EINVAL;
             continue;
         }
-        if (d->hub && user_options(d))
-            return EINVAL;
-        if (network_check(d) != 0)
+        if (backend_check(devices, i) != 0 || network_check(d) != 0)
             return EINVAL;
         if (d->mac == NULL) {
             for (last = 0x56; last < 0xff && default_used[last]; last++)
@@ -960,6 +981,12 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
             snprintf(hub, sizeof(hub), "%u", *nics);
             add(l, 0, "-netdev");
             add(l, 0, "hubport,id=%s,hubid=%s", id, hub);
+        } else if (d->tap_queues != 0) {
+            snprintf(hub, sizeof(hub), "%u", d->tap_queues);
+            add(l, 0, "-netdev");
+            add(l, 0,
+                "tap,id=%s,ifname=" ETUDE_TAP_NAME ",queues=%s,script=no,downscript=no,vhost=off",
+                id, hub);
         } else {
             add_network(l, p, d, id);
         }
@@ -1501,6 +1528,40 @@ static void add_firmware(struct line *l, const struct etude_qemu_profile *p, con
     }
 }
 
+/**
+ * Start QEMU in a user and network namespace of its own when a card of `p`
+ * has a tap, as unshare(1) makes them: a shell there makes the tap, with
+ * the queues the card asks for, gives its end ETUDE_TAP_HOST, brings it up,
+ * and becomes QEMU, whose words follow. The namespace's root is the user's
+ * own identity, so no privilege is needed, and the namespace ends with
+ * QEMU. Returns 0, or ENOTSUP on a host other than Linux.
+ */
+static int add_tap_namespace(struct line *l, const struct etude_qemu_profile *p)
+{
+    size_t i;
+
+    for (i = 0; i < device_count(p->devices) && p->devices[i].tap_queues == 0; i++)
+        ;
+    if (i == device_count(p->devices))
+        return 0;
+#ifdef __linux__
+    add(l, 0, "%s", ETUDE_TAP_UNSHARE);
+    add(l, 0, "--user");
+    add(l, 0, "--map-root-user");
+    add(l, 0, "--net");
+    add(l, 0, "%s", ETUDE_TAP_SHELL);
+    add(l, 0, "-c");
+    add(l, 0,
+        ETUDE_TAP_IP " tuntap add dev " ETUDE_TAP_NAME " mode tap multi_queue && " ETUDE_TAP_IP
+                     " addr add " ETUDE_TAP_HOST " dev " ETUDE_TAP_NAME " && " ETUDE_TAP_IP
+                     " link set " ETUDE_TAP_NAME " up && exec \"$@\"");
+    add(l, 0, "etude-tap");
+    return 0;
+#else
+    return ENOTSUP;
+#endif
+}
+
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out)
@@ -1517,6 +1578,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     if ((e = argv_check(p, s, audio, out, cpu, sizeof cpu)) != 0)
         return e;
     out->argv[0] = NULL;
+    if ((e = add_tap_namespace(&l, p)) != 0)
+        return e;
     add(&l, 0, "%s", program);
     add(&l, 0, "-accel");
     add(&l, 0, "%s", accel_option(s->accel));

@@ -89,9 +89,23 @@ struct etude_qemu_device {
     /* `guest_forward_count` guest forwards */
     const struct etude_qemu_guest_forward *guest_forwards;
     size_t guest_forward_count;
-    int hub; /* a hub port of its own in place of the user network, with no
-                network options, restriction or forwards */
+    int hub;             /* a hub port of its own in place of the user network, with no
+                            network options, restriction or forwards */
+    unsigned tap_queues; /* a tap of that many queues in place of the user
+                            network, in a network namespace of QEMU's own
+                            whose end of it is ETUDE_TAP_HOST; 0 for none */
 };
+
+/* The tap of a card with `tap_queues`: its name in QEMU's network namespace,
+ * the address and prefix of the namespace's end, which answers the guest
+ * as the user network's gateway does, and the most queues it takes. Linux
+ * alone has it, through unshare(1) and ip(8) at these paths. */
+#define ETUDE_TAP_NAME       "etude-tap0"
+#define ETUDE_TAP_HOST       "10.0.2.2/24"
+#define ETUDE_TAP_QUEUES_MAX 16
+#define ETUDE_TAP_UNSHARE    "/usr/bin/unshare"
+#define ETUDE_TAP_SHELL      "/bin/sh"
+#define ETUDE_TAP_IP         "/usr/sbin/ip"
 
 /**
  * Check device models and network options, including IPv4 subnet membership,
@@ -99,7 +113,9 @@ struct etude_qemu_device {
  * Network options, the restriction, forwards, guest forwards and `hub` are
  * valid only for rtl8139, e1000 and virtio-net-pci, and a card with `hub`
  * has no network
- * option but its station address, no restriction and no forwards.
+ * option but its station address, no restriction and no forwards. So has a
+ * card with `tap_queues`, 1 to ETUDE_TAP_QUEUES_MAX, of which a machine has
+ * at most one, and which is not on a hub.
  *
  * @return 0, or EINVAL for an invalid device list; NULL is an empty list.
  */
