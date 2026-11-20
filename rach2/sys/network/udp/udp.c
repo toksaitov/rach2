@@ -63,7 +63,9 @@ static uint16_t udp4_checksum(uint32_t src, uint32_t dst, const uint8_t *data, u
 }
 
 /** Two bindings to different addresses do not meet, as on Linux:
- * 127.0.0.1 and an interface's address may each have a server on port 53. */
+ * 127.0.0.1 and an interface's address may each have a server on port 53.
+ * The list is searched only for a port `udp_ports` counts a binding of, so
+ * that an ephemeral bind reads no other socket's binding. */
 int udp_bind(uint16_t port, struct socket *sock)
 {
     udp_binding_t *b;
@@ -72,7 +74,7 @@ int udp_bind(uint16_t port, struct socket *sock)
 
     flags = net_lock();
 
-    for (b = bindings; b; b = b->next) {
+    for (b = udp_ports[port] ? bindings : NULL; b; b = b->next) {
         if (b->port == port && (!b->sock || socket_bind_conflict(b->sock, sock))) {
             met = 1;
             if (!b->sock || !b->sock->reuseaddr) {

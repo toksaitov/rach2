@@ -43,11 +43,16 @@ int socket_bind_conflict(const struct socket *a, const struct socket *b)
            net_addr_equal(a->local_ip, b->local_ip);
 }
 
-/** The model has no cross-family bindings. */
+/* The searches of the sockets for a conflicting binding, which a row
+ * counts. */
+static unsigned stream_conflict_calls;
+
+/** The model has no cross-family bindings; the search is counted. */
 int socket_stream_conflict(const struct socket *s, uint16_t port)
 {
     (void)s;
     (void)port;
+    stream_conflict_calls++;
     return 0;
 }
 
