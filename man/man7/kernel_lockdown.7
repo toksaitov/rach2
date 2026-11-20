@@ -43,8 +43,8 @@ mode 0644, shows the three levels with the one in force in brackets:
 .Ed
 .Pp
 Writing the name of a level, with or without a newline, raises the level
-to it, for a writer with
-.Dv CAP_SYS_ADMIN .
+to it; the file's mode decides who may write, root alone at 0644, and no
+capability is asked, as on Linux.
 Nothing lowers the level until the next boot.
 Each operation refused logs a line:
 .Bd -literal -offset indent
@@ -54,9 +54,7 @@ A write fails with
 .Er EINVAL
 for text that names no level, and with
 .Er EPERM
-for a writer without
-.Dv CAP_SYS_ADMIN
-or a level not above the one in force.
+for a level not above the one in force.
 .Sh SEE ALSO
 .Xr mem 4 ,
 .Xr msr 4 ,

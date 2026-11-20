@@ -320,16 +320,19 @@ static int closed_to_user(void)
 }
 
 /** The check an ordinary user's child makes once the lockdown file is
- * 0666: it opens for writing. 0 when it does. */
+ * 0666: it opens for writing, and a word that names no level is EINVAL,
+ * with no capability asked of the writer, as on Linux. 0 when both hold. */
 static int open_to_user(void)
 {
     int fd = open(LOCKDOWN, O_WRONLY);
+    int ok;
 
     if (fd < 0) {
         return 1;
     }
+    ok = refused(write(fd, "bogus\n", 6), EINVAL);
     close(fd);
-    return 0;
+    return ok ? 0 : 1;
 }
 
 /** Run `check` in a child with the ids 1000 and 1001, which have no
@@ -353,8 +356,9 @@ static int as_user(int (*check)(void))
  * access of others, as the mode Linux keeps on its proc_dir_entry or
  * kernfs inode does: with /proc/version 0400 an ordinary user can neither
  * open nor access it, with /sys/kernel 0700 not search it, and with the
- * lockdown file 0666 open that for writing, which its 0644 refuses. Every
- * mode is set back. Returns 0, or 1 once the failure is reported.
+ * lockdown file 0666 open that for writing, which its 0644 refuses, and
+ * write it, a word that names no level being EINVAL. Every mode is set
+ * back. Returns 0, or 1 once the failure is reported.
  */
 static int synthetic_access_rows(void)
 {

@@ -10,7 +10,6 @@
 #include "klog.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
-#include "proc/process.h"
 
 /* The level in force, a LOCKDOWN_* level, or -1 before the boot's is read. */
 static int level = -1;
@@ -93,9 +92,10 @@ static int text_is(const char *buf, uint32_t n, const char *name)
 
 /**
  * Take a level written to the file, with or without a newline, as Linux's
- * `lockdown_write`: `len`, or -EPERM for a writer without CAP_SYS_ADMIN or a
- * level not above the one in force, which no write lowers, and -EINVAL for
- * text that names no level.
+ * `lockdown_write`: `len`, or -EPERM for a level not above the one in
+ * force, which no write lowers, and -EINVAL for text that names no level.
+ * The writer is whoever the file's mode lets open it for writing, root
+ * alone at its 0644, with no capability asked, as on Linux.
  */
 static int32_t lockdown_store(void *obj, int arg, const char *buf, uint32_t len)
 {
@@ -103,9 +103,6 @@ static int32_t lockdown_store(void *obj, int arg, const char *buf, uint32_t len)
 
     (void)obj;
     (void)arg;
-    if (!proc_privileged(current_proc)) {
-        return -EPERM;
-    }
     if (n > 0 && buf[n - 1] == '\n') {
         n--;
     }

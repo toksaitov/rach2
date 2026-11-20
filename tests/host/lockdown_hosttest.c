@@ -7,8 +7,6 @@
 
 int printf(const char *format, ...);
 
-struct percpu cpu_table[NR_CPUS];
-static process_t self;
 static int failures;
 /* The model's command line, a word `kcmdline_has` finds, or "". */
 static const char *cmdline = "";
@@ -79,7 +77,6 @@ int main(void)
 {
     char buf[64];
 
-    current_proc = &self;
     cmdline = "lockdown=integrity";
     CHECK(lockdown_refuses(LOCKDOWN_DEBUGFS) == -EPERM &&
               lockdown_refuses(LOCKDOWN_DEV_MEM) == -EPERM,
@@ -97,9 +94,6 @@ int main(void)
     shown(buf);
     CHECK(text_is(buf, (uint32_t)k_strlen(buf), "[none] integrity confidentiality\n"),
           "the file shows none in force");
-    self.euid = 1000;
-    CHECK(written("integrity\n") == -EPERM, "a writer without CAP_SYS_ADMIN is refused");
-    self.euid = 0;
     CHECK(written("integrit") == -EINVAL && written("none \n") == -EINVAL,
           "text that names no level is EINVAL");
     CHECK(written("none") == -EPERM, "none is not above none");
