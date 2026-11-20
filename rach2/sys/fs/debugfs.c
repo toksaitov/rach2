@@ -13,6 +13,7 @@
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lockdown.h"
 #include "../syscall_internal.h"
 
 #define DFS_IFDIR 0040000u
@@ -326,10 +327,30 @@ void debugfs_remove(const char *path)
 
 static int32_t text_bind(const struct debugfs_node *n, fd_entry_t *e);
 
+/**
+ * Whether lockdown refuses the open of `n` with the open flags `flags`, as
+ * Linux's `debugfs_locked_down`: a read-only open of a file whose mode
+ * gives no more than reading, 0444 or less, and whose operations have no
+ * ioctl and no mmap, passes at every level; any other open is
+ * LOCKDOWN_DEBUGFS's. -EPERM, or 0.
+ */
+static int32_t dfs_locked_down(const struct debugfs_node *n, int flags)
+{
+    if ((n->mode & 07777u & ~0444u) == 0 && (flags & 3) == 0 &&
+        (n->text || !n->ops || (!n->ops->ioctl && !n->ops->mmap))) {
+        return 0;
+    }
+    return lockdown_refuses(LOCKDOWN_DEBUGFS);
+}
+
 int32_t debugfs_bind(void *node, fd_entry_t *e, int flags)
 {
     struct debugfs_node *n = node;
+    int32_t rc = dfs_locked_down(n, flags);
 
+    if (rc != 0) {
+        return rc;
+    }
     if (n->text) {
         return text_bind(n, e);
     }
@@ -441,13 +462,19 @@ static void stamp(struct debugfs_node *n, int data)
  * and the change time set to now for every call, a VFS_SET_CTIME call with
  * nothing else among them. The caller has judged the permission. A size on
  * a directory is -EISDIR, and VFS_SET_FLAGS -EOPNOTSUPP, since debugfs
- * keeps no inode flags; both change nothing. 0 otherwise.
+ * keeps no inode flags; both change nothing. A change of the mode, the
+ * owner or the group is -EPERM under lockdown (LOCKDOWN_DEBUGFS). 0
+ * otherwise.
  */
 static int dfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct debugfs_node *n = node_of(node);
 
     (void)mnt;
+    if ((what & (VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID)) &&
+        lockdown_refuses(LOCKDOWN_DEBUGFS) != 0) {
+        return -EPERM;
+    }
     if (what & VFS_SET_FLAGS) {
         return -EOPNOTSUPP;
     }

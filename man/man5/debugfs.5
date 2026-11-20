@@ -24,6 +24,15 @@ or a listing of anything below it by any other user fails with
 .Er EACCES .
 A directory is root's with mode 0755, a file root's with the mode its
 subsystem gives it, and a symbolic link root's with mode 0777.
+Under lockdown
+.Pq see Xr kernel_lockdown 7 ,
+an open of a file is
+.Er EPERM
+unless it is to read a file of mode 0444 or less with no
+.Xr ioctl 2
+and no
+.Xr mmap 2 ,
+and so is a change of a node's mode, owner or group.
 A file's size is 0, whatever it reads, until a truncation, which
 .Xr open 2
 with
@@ -1220,5 +1229,6 @@ bochs-drm dev=0000:00:02.0 unique=0000:00:02.0
 .Xr sysfs 5 ,
 .Xr dma-buf 7 ,
 .Xr drm-kms 7 ,
+.Xr kernel_lockdown 7 ,
 .Xr lockup 7 ,
 .Xr mount 8

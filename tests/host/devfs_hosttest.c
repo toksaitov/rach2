@@ -14,6 +14,13 @@
  */
 #include "fs/devfs.c"
 
+/** No lockdown in this model. */
+int lockdown_refuses(int what)
+{
+    (void)what;
+    return 0;
+}
+
 extern int printf(const char *format, ...);
 extern int snprintf(char *str, size_t size, const char *format, ...);
 static int failures, master_calls, descriptor_calls;

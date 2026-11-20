@@ -55,6 +55,13 @@
 #include "fs/debugfs.c"
 #include "drm/drm_debugfs.c"
 
+/** No lockdown in this model. */
+int lockdown_refuses(int what)
+{
+    (void)what;
+    return 0;
+}
+
 extern int memcmp(const void *a, const void *b, unsigned long n);
 
 /* One frame at 60 Hz, in nanoseconds. */

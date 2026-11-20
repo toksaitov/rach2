@@ -82,10 +82,12 @@ asking write of a mapping made through one.
 A private mapping.
 .It Er EPERM
 The caller is not privileged, or the range has a frame of RAM past the
-first megabyte.
+first megabyte, or, at the open, the kernel is locked down
+.Pq see Xr kernel_lockdown 7 .
 .El
 .Sh SEE ALSO
 .Xr busybox-miscutils 1 ,
 .Xr madvise 2 ,
 .Xr mmap 2 ,
-.Xr null 4
+.Xr null 4 ,
+.Xr kernel_lockdown 7

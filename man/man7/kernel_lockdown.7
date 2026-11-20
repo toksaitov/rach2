@@ -1,0 +1,75 @@
+.Dd November 20, 2026
+.Dt KERNEL_LOCKDOWN 7
+.Os
+.Sh NAME
+.Nm kernel_lockdown
+.Nd the kernel lockdown level
+.Sh DESCRIPTION
+Lockdown keeps root, as any other caller, from changing the running kernel
+or reading its memory, as Linux's lockdown does.
+It has three levels:
+.Bl -tag -width "confidentiality"
+.It none
+Nothing is refused, the default.
+.It integrity
+The operations that could change the kernel are refused with
+.Er EPERM :
+an open of
+.Pa /dev/mem
+.Pq see Xr mem 4 ,
+a write of a model-specific register through
+.Pa /dev/cpu/N/msr
+.Pq see Xr msr 4 ,
+and in
+.Xr debugfs 5
+an open of a file other than one of mode 0444 or less, opened to read,
+whose operations have no
+.Xr ioctl 2
+and no
+.Xr mmap 2 ,
+and a change of a file's mode, owner or group.
+.It confidentiality
+What integrity refuses.
+.El
+.Pp
+The kernel command line sets the level at boot with
+.Cm lockdown=integrity
+or
+.Cm lockdown=confidentiality .
+.Pa /sys/kernel/security/lockdown ,
+mode 0644, shows the three levels with the one in force in brackets:
+.Bd -literal -offset indent
+[none] integrity confidentiality
+.Ed
+.Pp
+Writing the name of a level, with or without a newline, raises the level
+to it, for a writer with
+.Dv CAP_SYS_ADMIN .
+Nothing lowers the level until the next boot.
+Each operation refused logs a line:
+.Bd -literal -offset indent
+lockdown: refused: debugfs access is restricted; see man kernel_lockdown.7
+.Ed
+A write fails with
+.Er EINVAL
+for text that names no level, and with
+.Er EPERM
+for a writer without
+.Dv CAP_SYS_ADMIN
+or a level not above the one in force.
+.Sh SEE ALSO
+.Xr mem 4 ,
+.Xr msr 4 ,
+.Xr debugfs 5 ,
+.Xr sysfs 5
+.Sh STANDARDS
+The levels, the file and its messages are Linux 6.12's.
+Linux's confidentiality level also refuses reads of kernel memory through
+facilities this kernel does not have, such as
+.Pa /proc/kcore ,
+kprobes and BPF.
+The file is in a
+.Pa /sys
+directory here, where Linux mounts securityfs at
+.Pa /sys/kernel/security .
+Secure Boot does not raise the level.

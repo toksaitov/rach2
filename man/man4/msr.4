@@ -84,7 +84,9 @@ The caller lacks
 or a write was made while
 .Pa allow_writes
 is
-.Cm off .
+.Cm off
+or the kernel is locked down
+.Pq see Xr kernel_lockdown 7 .
 .It Bq Er ENXIO
 The processor is not online.
 .It Bq Er EIO
@@ -105,4 +107,5 @@ The request is unknown.
 .Sh SEE ALSO
 .Xr ioctl 2 ,
 .Xr pread 2 ,
-.Xr pwrite 2
+.Xr pwrite 2 ,
+.Xr kernel_lockdown 7

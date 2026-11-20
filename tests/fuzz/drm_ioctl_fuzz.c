@@ -80,6 +80,13 @@
 #include "timer.h"
 #include "../fuzz/fuzz.h"
 
+/** No lockdown in this model. */
+int lockdown_refuses(int what)
+{
+    (void)what;
+    return 0;
+}
+
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *p);
 extern void *memcpy(void *dst, const void *src, unsigned long n);

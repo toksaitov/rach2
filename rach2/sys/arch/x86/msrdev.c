@@ -17,6 +17,7 @@
 #include "../../lib/kirq.h"
 #include "../../lib/kstd.h"
 #include "../../lib/kstring.h"
+#include "../../lockdown.h"
 #include "../../mm/usercopy.h"
 #include "../../proc/ns.h"
 #include "../../proc/percpu.h"
@@ -189,8 +190,9 @@ static int msr_filter_write(uint32_t index)
 /**
  * Write the register at the description's offset, cut to 32 bits, from
  * each eight bytes given, Linux's msr_write: the offset does not move.
- * `msr_filter_write`'s -EPERM, -EINVAL for a count not a multiple of 8;
- * else the bytes written, or the first error when none were.
+ * -EPERM under lockdown (LOCKDOWN_MSR), `msr_filter_write`'s -EPERM,
+ * -EINVAL for a count not a multiple of 8; else the bytes written, or the
+ * first error when none were.
  */
 static int32_t msr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -201,7 +203,7 @@ static int32_t msr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     k_memset(&c, 0, sizeof(c));
     c.write = 1;
     c.index = (uint32_t)e->ofd->offset;
-    if ((err = msr_filter_write(c.index)) != 0) {
+    if ((err = lockdown_refuses(LOCKDOWN_MSR)) != 0 || (err = msr_filter_write(c.index)) != 0) {
         return err;
     }
     if (count % 8) {
@@ -224,8 +226,8 @@ static int32_t msr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * X86_IOC_RDMSR_REGS and X86_IOC_WRMSR_REGS, Linux's msr_ioctl: the access
  * with the eight registers at `arg`, given back there. -EBADF for a
  * descriptor not open to read, or to write for a write, -EFAULT, the
- * write's `msr_filter_write` error, -EIO for a #GP, -ENOTTY for any other
- * request.
+ * write's -EPERM under lockdown or `msr_filter_write` error, -EIO for a
+ * #GP, -ENOTTY for any other request.
  */
 static int32_t msr_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -245,7 +247,8 @@ static int32_t msr_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     if (copy_from_user(regs, uregs, sizeof(regs)) != 0) {
         return -EFAULT;
     }
-    if (c.write && (err = msr_filter_write(regs[1])) != 0) {
+    if (c.write &&
+        ((err = lockdown_refuses(LOCKDOWN_MSR)) != 0 || (err = msr_filter_write(regs[1])) != 0)) {
         return err;
     }
     c.regs = regs;

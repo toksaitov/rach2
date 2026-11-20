@@ -15,6 +15,7 @@
 #include "fd.h"
 #include "file.h"
 #include "../proc/process.h"
+#include "../lockdown.h"
 #include "../proc/tgroup.h"
 #include "../mm/usercopy.h"
 #include "../lib/kstring.h"
@@ -2605,10 +2606,14 @@ static void devfs_note_open(const struct devfs_entry *dev, fd_entry_t *e)
  * Give the descriptor e of the device dev the state of its own open: the
  * sound device's, an event device's, the radio simulator's, the radio
  * switches' or a registered node's (`devfs_node.open`). Returns 0, at once
- * for a device with no such state, or the open's negative errno.
+ * for a device with no such state, or the open's negative errno. Lockdown
+ * refuses /dev/mem's open (LOCKDOWN_DEV_MEM), as Linux's `open_port`.
  */
 static int32_t devfs_open_state(const struct devfs_entry *dev, fd_entry_t *e, int flags)
 {
+    if (dev->ops == &mem_ops) {
+        return lockdown_refuses(LOCKDOWN_DEV_MEM);
+    }
     if (dev->ops == &dsp_ops) {
         return dspdev_open(e, flags);
     }

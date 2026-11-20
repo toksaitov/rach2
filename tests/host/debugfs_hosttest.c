@@ -1,5 +1,6 @@
-/* debugfs's tree, its VFS operations, its setattr and truncation, and a
- * software fence made, signalled and read through sync/sw_sync and sync/info.
+/* debugfs's tree, its VFS operations, its setattr and truncation, its opens
+ * and setattr under lockdown, and a software fence made, signalled and read
+ * through sync/sw_sync and sync/info.
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -26,6 +27,15 @@ void kirq_restore(uint32_t flags)
 }
 
 int printf(const char *format, ...);
+
+/* The lockdown level the model's `lockdown_refuses` judges by. */
+static int lockdown_level = LOCKDOWN_NONE;
+
+/** Linux's `security_locked_down` at `lockdown_level`. */
+int lockdown_refuses(int what)
+{
+    return lockdown_level >= what ? -EPERM : 0;
+}
 
 struct percpu cpu_table[NR_CPUS];
 static process_t self;
@@ -314,6 +324,52 @@ static void setattr_cases(struct vfs_mount *m)
     dfs_put(m, sync);
 }
 
+/**
+ * Under lockdown at integrity, as Linux's `debugfs_locked_down` and
+ * `debugfs_setattr`: a read-only open of the 0444 text file sync/info
+ * passes, a read-only open of the 0644 sync/sw_sync and a change of its
+ * mode or owner are EPERM, and a change of its change time alone passes;
+ * with the level back at none the open passes again.
+ */
+static void lockdown_cases(struct vfs_mount *m)
+{
+    struct debugfs_node *sync = look(m, NULL, "sync"), *sw, *info;
+    struct vfs_stat in;
+    int fd;
+
+    CHECK(sync != NULL, "sync for the lockdown rows");
+    if (!sync)
+        return;
+    sw = look(m, sync, "sw_sync");
+    info = look(m, sync, "info");
+    CHECK(sw && info, "sw_sync and info for the lockdown rows");
+    if (sw && info) {
+        k_memset(&in, 0, sizeof(in));
+        in.mode = 0600u;
+        lockdown_level = LOCKDOWN_INTEGRITY_MAX;
+        fd = open_node(info, 0);
+        CHECK(fd >= 0, "lockdown lets a 0444 text file open to read");
+        if (fd >= 0)
+            fd_free(&table, fd);
+        CHECK(open_node(info, 1) == -EPERM, "but not to write");
+        CHECK(open_node(sw, 0) == -EPERM, "and refuses a 0644 file even to read");
+        CHECK(dfs_setattr(m, sw, VFS_SET_MODE, &in) == -EPERM &&
+                  dfs_setattr(m, sw, VFS_SET_UID, &in) == -EPERM,
+              "and a change of the mode or the owner");
+        CHECK(dfs_setattr(m, sw, VFS_SET_CTIME, &in) == 0, "but not of the change time");
+        lockdown_level = LOCKDOWN_NONE;
+        fd = open_node(sw, 0);
+        CHECK(fd >= 0, "with no lockdown the 0644 file opens");
+        if (fd >= 0)
+            fd_free(&table, fd);
+    }
+    if (sw)
+        dfs_put(m, sw);
+    if (info)
+        dfs_put(m, info);
+    dfs_put(m, sync);
+}
+
 static const struct file_ops none_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 static int binds;
 
@@ -460,6 +516,7 @@ int main(void)
     k_memset(&m, 0, sizeof(m));
     tree_cases(&m);
     setattr_cases(&m);
+    lockdown_cases(&m);
     register_cases(&m);
     sync_cases(&m);
     remount_cases(&m);

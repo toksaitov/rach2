@@ -50,6 +50,7 @@
 #include "sys/proc/smp.h"
 #include "sys/power.h"
 #include "sys/evdev.h"
+#include "sys/lockdown.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
 #include "sys/lib/kirq.h"
@@ -1995,6 +1996,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
         tty_console_thread_start();
         virtio_console_thread_start();
         evdev_sysfs_start();
+        lockdown_sysfs_start();
     }
 
     if (!init_is_starting) {
