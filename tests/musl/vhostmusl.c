@@ -2,8 +2,9 @@
  * vhostmusl: check /dev/vhost-net as QEMU's `vhost=on` drives it, with the
  * program in the guest's place.
  *
- * The program makes the tap `vh0` at 10.9.0.1/24, gives /dev/vhost-net a
- * buffer of its own as the guest's memory, at a guest-physical address of
+ * The program makes the tap `vh0` at 10.9.0.1/24 with packet information,
+ * gives /dev/vhost-net a buffer of its own as the guest's memory, at a
+ * guest-physical address of
  * its choosing, lays a receive and a transmit ring out in it as a virtio
  * driver does, with an eventfd for each ring's kick and call, and gives
  * both rings the tap, with no receive buffer offered yet. A datagram sent
@@ -11,9 +12,10 @@
  * waits in the tap; once the program offers a buffer and kicks, the kernel
  * thread writes it into the buffer after a virtio header with num_buffers 1 and
  * signals the receive ring's call. The program answers it on the transmit
- * ring and kicks; the thread gives the answer to the stack, the datagram
- * that waited for it comes into the receive ring, and the transmit ring's
- * call is signalled. A second datagram, sent once a buffer is offered,
+ * ring and kicks. The answer fills a 1514-byte frame, and a packet
+ * socket checks that the thread gives the whole answer to the stack. The
+ * datagram that waited for it comes into the receive ring, and the transmit
+ * ring's call is signalled. A second datagram, sent once a buffer is offered,
  * comes into it: in the sender's context, before its send returns, when
  * the device already holds the buffer's page and no frame waiting in the
  * tap took the buffer first, and otherwise from the thread, either way
@@ -55,6 +57,7 @@
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netpacket/packet.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 
@@ -77,6 +80,10 @@ extern char **environ;
 #define F_NET_HDR   (1ULL << 27)
 #define F_VERSION_1 (1ULL << 32)
 #define HDR         12 /* the 1.0 header, with num_buffers */
+#define PI_LEN      4  /* struct tun_pi */
+#define ETH_HDR     14
+#define ETH_ARP     0x0806
+#define MTU         1500
 
 #define GPA      0x40000000ULL /* the guest-physical address of the memory */
 #define MEMSIZE  (64 * 1024)
@@ -113,6 +120,7 @@ enum {
     TX_KICK,
     TX_CALL,
     TX_USED_ENTRY,
+    TX_FULL_FRAME,
     DATAGRAM,
     DIRECT_SEND,
     DIRECT_FRAME,
@@ -147,6 +155,7 @@ static const struct {
     {"tx-kick", "could not kick the transmit ring"},
     {"tx-call", "the transmit ring's call did not come"},
     {"tx-used", "the transmit ring did not use the answer's chain"},
+    {"tx-full-frame", "the TAP did not deliver the whole Ethernet frame"},
     {"datagram", "the first datagram did not come into the receive ring after the answer, or not "
                  "with one call"},
     {"direct-send", "could not offer a buffer and then send the second datagram"},
@@ -163,7 +172,7 @@ static unsigned char *mem; /* the guest's memory */
 static uint64_t rx_avail_idx, rx_seen;
 static uint64_t rx_calls; /* the receive ring's calls read, summed */
 /* The descriptors and the eventfds: rx kick, rx call, tx kick, tx call. */
-static int tap = -1, vh = -1, sock = -1, ev[4] = {-1, -1, -1, -1};
+static int tap = -1, vh = -1, sock = -1, arp_sock = -1, ev[4] = {-1, -1, -1, -1};
 
 /** In the process that began the report, report every check before `check`
  * as held, `check` as failed with its text, those after it as not run, and
@@ -358,7 +367,8 @@ static int find_rx(int (*match)(const unsigned char *, uint32_t, const char *), 
         memcpy(&id, mem + e, 4);
         memcpy(&len, mem + e + 4, 4);
         rx_seen++;
-        if (id < NUM && len >= HDR && match(mem + RX_BUF + BUFLEN * id + HDR, len - HDR, text)) {
+        if (id < NUM && len >= HDR + PI_LEN && len <= BUFLEN &&
+            match(mem + RX_BUF + BUFLEN * id + HDR + PI_LEN, len - HDR - PI_LEN, text)) {
             *at = RX_BUF + BUFLEN * (int)id;
             return 1;
         }
@@ -497,12 +507,16 @@ static int wait_rx(int call, int (*match)(const unsigned char *, uint32_t, const
 }
 
 /** Answer the ARP request at `req`, the frame after a receive header, on
- * the transmit ring's entry 0, with the answer's own zero header. */
+ * the transmit ring's entry 0, with a zero virtio header, packet
+ * information and padding to the full frame size. */
 static void put_answer(const unsigned char *req)
 {
-    unsigned char *f = mem + TX_BUF + HDR;
+    unsigned char *pi = mem + TX_BUF + HDR;
+    unsigned char *f = pi + PI_LEN;
 
-    memset(mem + TX_BUF, 0, HDR);
+    memset(mem + TX_BUF, 0, HDR + PI_LEN + ETH_HDR + MTU);
+    pi[2] = 8;
+    pi[3] = 6;
     memcpy(f, req + 6, 6);
     memcpy(f + 6, peer, 6);
     f[12] = 8;
@@ -512,10 +526,38 @@ static void put_answer(const unsigned char *req)
     memcpy(f + 22, peer, 6);
     memcpy(f + 28, req + 38, 4);
     memcpy(f + 32, req + 22, 10);
-    desc(TX_DESC, 0, TX_BUF, HDR + 42, 0);
+    f[ETH_HDR + MTU - 1] = 0x5a;
+    desc(TX_DESC, 0, TX_BUF, HDR + PI_LEN + ETH_HDR + MTU, 0);
     put16(TX_AVAIL + 4, 0);
     __sync_synchronize();
     put16(TX_AVAIL + 2, 1);
+}
+
+/** Listen for ARP on vh0 before the answer is injected. Returns bind's
+ * result, or -1 when the socket cannot be made. */
+static int listen_arp(void)
+{
+    struct sockaddr_ll sa;
+
+    arp_sock = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_ARP));
+    if (arp_sock < 0) {
+        return -1;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sll_family = AF_PACKET;
+    sa.sll_protocol = htons(ETH_ARP);
+    sa.sll_ifindex = (int)if_nametoindex("vh0");
+    return bind(arp_sock, (struct sockaddr *)&sa, sizeof(sa));
+}
+
+/** Check the frame injected before the transmit call was signalled. */
+static int full_frame_received(void)
+{
+    unsigned char payload[MTU];
+    const unsigned char *sent = mem + TX_BUF + HDR + PI_LEN + ETH_HDR;
+
+    return recv(arp_sock, payload, sizeof(payload), MSG_DONTWAIT) == sizeof(payload) &&
+           memcmp(payload, sent, sizeof(payload)) == 0;
 }
 
 /** Close what the program made, which removes the tap. */
@@ -530,6 +572,9 @@ static void cleanup(void)
     }
     if (sock >= 0) {
         close(sock);
+    }
+    if (arp_sock >= 0) {
+        close(arp_sock);
     }
     if (vh >= 0) {
         close(vh);
@@ -550,7 +595,7 @@ static int setup_tap(void)
     }
     memset(&ifr, 0, sizeof(ifr));
     strcpy(ifr.ifr_name, "vh0");
-    ifr.ifr_flags = 0x1002; /* IFF_TAP | IFF_NO_PI */
+    ifr.ifr_flags = 0x0002; /* IFF_TAP */
     if (ioctl(tap, TUNSETIFF, &ifr) != 0 || strcmp(ifr.ifr_name, "vh0") != 0) {
         return fail(TAP_IFF);
     }
@@ -642,10 +687,14 @@ static int exchange(void)
     if (at < 0) {
         return fail(ARP_FRAME);
     }
-    if (mem[at] != 0 || mem[at + 1] != 0 || get16(at + 10) != 1) {
+    if (mem[at] != 0 || mem[at + 1] != 0 || get16(at + 10) != 1 || mem[at + HDR + 2] != 8 ||
+        mem[at + HDR + 3] != 6) {
         return fail(ARP_HEADER);
     }
-    put_answer(mem + at + HDR);
+    if (listen_arp() != 0) {
+        return fail(TX_KICK);
+    }
+    put_answer(mem + at + HDR + PI_LEN);
     if (write(ev[2], &one, 8) != 8) {
         return fail(TX_KICK);
     }
@@ -654,6 +703,9 @@ static int exchange(void)
     }
     if (get16(TX_USED + 2) != 1 || get16(TX_USED + 4) != 0) {
         return fail(TX_USED_ENTRY);
+    }
+    if (!full_frame_received()) {
+        return fail(TX_FULL_FRAME);
     }
     if (wait_rx(ev[1], is_datagram, "vhost1") < 0) {
         return fail(DATAGRAM);
