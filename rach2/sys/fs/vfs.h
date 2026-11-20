@@ -555,6 +555,25 @@ struct vfs_pts_options {
     uint32_t max;       /* a new pair's index is below it */
 };
 
+/* What a proc mount hides of the processes its reader may not trace,
+ * Linux's enum proc_hidepid: nothing; their directories' contents, EPERM;
+ * the directories themselves, ENOENT; or, at lookup too, every process the
+ * reader may not trace, whatever its group. */
+#define VFS_HIDEPID_OFF        0
+#define VFS_HIDEPID_NOACCESS   1
+#define VFS_HIDEPID_INVISIBLE  2
+#define VFS_HIDEPID_PTRACEABLE 4
+
+/* The options of a proc mount, Linux's proc_fs_info, which
+ * `procfs_parse_options` reads and `procfs_pid_visible` applies. Zero is
+ * the default. */
+struct vfs_proc_options {
+    int hidepid;  /* a VFS_HIDEPID_ value */
+    uint32_t gid; /* kernel gid whose members hidepid spares; 0 for root */
+    int gid_bad;  /* gid= named a group the mounter's namespace lacks */
+    int pidonly;  /* subset=pid: the root shows processes alone */
+};
+
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
@@ -583,6 +602,8 @@ struct vfs_mount {
      * (`vfs_devpts_options`). */
     int pts;
     struct vfs_pts_options pts_opts;
+    /* On the base mount of proc, its options (`vfs_proc_options`). */
+    struct vfs_proc_options proc_opts;
     int state;
     struct vfs_mount *parent;
     void *covered;
@@ -1345,6 +1366,10 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
  * of /dev/ptmx makes its pair in. 1 when one is there; 0, `*out` untouched,
  * when /dev/pts is the kernel's own or does not resolve. */
 int vfs_devpts_options(struct vfs_pts_options *out);
+
+/** The options of the proc file system `m` shows, a bind's its base's, or
+ * NULL when `m` is NULL or of another type. */
+const struct vfs_proc_options *vfs_proc_options(const struct vfs_mount *m);
 
 /**
  * mount(2) with MS_REMOUNT: apply the file-system flags to the base and

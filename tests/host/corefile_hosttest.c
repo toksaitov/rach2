@@ -1529,6 +1529,22 @@ int procfs_same_group(int pid)
     return 0;
 }
 
+/** No model mount takes proc's options: hidepid hides nothing. */
+const struct vfs_proc_options *vfs_proc_options(const struct vfs_mount *m)
+{
+    (void)m;
+    return NULL;
+}
+
+/** No model mount hides a process directory. */
+int procfs_pid_permission(const struct vfs_proc_options *o, int id, int use_real)
+{
+    (void)o;
+    (void)id;
+    (void)use_real;
+    return 0;
+}
+
 /** Return the model inode's retained kernel PID. */
 int procfs_held_pid(const struct synth_owner *own)
 {

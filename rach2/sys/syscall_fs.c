@@ -2895,7 +2895,8 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
     path_buf_put(full);
 }
 
-static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct synth_owner *own);
+static int32_t synth_open_dir(const struct vfs_mount *mnt, const struct vpath *vp, int flags,
+                              const struct synth_owner *own);
 static int synth_kind_is_dir(int kind);
 static uint32_t synth_pid_dir_mode(const struct vpath *vp);
 
@@ -3173,7 +3174,8 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
     if (r->mnt->type == &vfs_procfs_type) {
         const struct synth_owner *own = vfs_proc_dir_owner(r);
         if (own)
-            return proc_held_dir_permission(vfs_synth_vpath(r->mnt, r->node), own, want, use_real);
+            return proc_held_dir_permission(r->mnt, vfs_synth_vpath(r->mnt, r->node), own, want,
+                                            use_real);
     }
     return cred_access_bits(st.uid, st.gid, st.mode, want, use_real);
 }
@@ -3622,7 +3624,7 @@ static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_
         own = vfs_proc_dir_owner(&ref);
         if (own) {
             const struct vpath *dir = vfs_synth_vpath(ref.mnt, ref.node);
-            rc = synth_open_dir(dir, flags, own);
+            rc = synth_open_dir(ref.mnt, dir, flags, own);
             synth_mount_record(rc, &ref, dir, flags);
             return rc;
         }
@@ -3721,10 +3723,10 @@ static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode,
  * that may read the process, and a namespace link opens its namespace
  * (`procfs_open_ns`).
  */
-static int32_t synth_open(const struct vpath *vp, int flags)
+static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, int flags)
 {
     if (synth_kind_is_dir(vp->kind)) {
-        return synth_open_dir(vp, flags, NULL);
+        return synth_open_dir(mnt, vp, flags, NULL);
     }
     switch (vp->kind) {
     case VNODE_DEV: {
@@ -3792,7 +3794,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_ACPI_CALL:
         return synth_open_root(vp, flags, 0600u, open_want(flags));
     case VNODE_DEV_MADE:
-        return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags, NULL) : -ENOENT;
+        return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(mnt, vp, flags, NULL) : -ENOENT;
     case VNODE_ENOTDIR:
         return -ENOTDIR;
     case VNODE_PROC_FD_LINK:
@@ -3869,14 +3871,19 @@ static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synt
     return cred_access_bits(own->uid, own->gid, S_IFDIR | 0500, want, use_real);
 }
 
-int proc_held_dir_permission(const struct vpath *vp, const struct synth_owner *own, int want,
-                             int real)
+int proc_held_dir_permission(const struct vfs_mount *mnt, const struct vpath *vp,
+                             const struct synth_owner *own, int want, int real)
 {
     int pid = procfs_held_pid(own);
 
     if ((vp->kind == VNODE_PROC_PID && !vp->tid) || vp->kind == VNODE_PROC_TASK_DIR) {
+        int rc;
+
         if (pid < 0)
             return -ESRCH;
+        rc = procfs_pid_permission(vfs_proc_options(mnt), pid, real);
+        if (rc)
+            return rc;
     }
     if (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR)
         return proc_fd_dir_access(vp->kind, pid, want, own, real);
@@ -3938,13 +3945,16 @@ static struct synth_dir *synth_directory_record(const struct vpath *vp,
  * mode and owner, and /proc/PID/fdinfo by those who may trace the process
  * (`proc_fd_dir_access`), -EACCES for any other caller. /proc/PID/ns, a
  * thread's among them, is read by its mode and owner (`proc_ns_dir_read`).
+ * /proc/PID and /proc/PID/task are refused as the hidepid= of `mnt`, the
+ * mount the walk reached them by, has it (`procfs_pid_permission`).
  * O_PATH in `flags`, which reads nothing, skips these checks, as Linux's
  * `do_o_path` opens with no permission check. A process, or a device of
  * /sys, that is gone is -ENOENT, as is a directory of /dev that is absent
  * (`devfs_subdir_present`), and a record the heap has no room for is
  * -ENFILE. A directory made under /dev is one the caller found there.
  */
-static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct synth_owner *own)
+static int32_t synth_open_dir(const struct vfs_mount *mnt, const struct vpath *vp, int flags,
+                              const struct synth_owner *own)
 {
     fd_entry_t *e;
     int fd;
@@ -3965,8 +3975,10 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct sy
         return -EISDIR;
     }
     fd = (flags & O_PATH) ? 0
-         : own            ? proc_held_dir_permission(vp, own, CRED_R, 0)
-                          : proc_fd_dir_access(vp->kind, id, CRED_R, NULL, 0);
+         : own            ? proc_held_dir_permission(mnt, vp, own, CRED_R, 0)
+         : (vp->kind == VNODE_PROC_PID && !vp->tid) || vp->kind == VNODE_PROC_TASK_DIR
+             ? procfs_pid_permission(vfs_proc_options(mnt), pid, 0)
+             : proc_fd_dir_access(vp->kind, id, CRED_R, NULL, 0);
     if (fd != 0) {
         return fd;
     }
@@ -4929,8 +4941,8 @@ static int32_t open_synth_node(const struct vfs_ref *ref, const struct vpath *vp
         return -EINVAL;
     }
     if (vfs_proc_dir_owner(ref))
-        return synth_open_dir(vp, flags, vfs_proc_dir_owner(ref));
-    return synth_open(vp, flags);
+        return synth_open_dir(ref->mnt, vp, flags, vfs_proc_dir_owner(ref));
+    return synth_open(ref->mnt, vp, flags);
 }
 
 static int32_t access_synth_ref(const struct vfs_ref *ref, const struct vpath *vp,
@@ -9169,7 +9181,7 @@ static int chdir_synth(const struct vfs_ref *ref, const struct vpath *vp, char *
     int outside = 0, rc;
 
     if (own) {
-        rc = proc_held_dir_permission(vp, own, CRED_X, 0);
+        rc = proc_held_dir_permission(ref->mnt, vp, own, CRED_X, 0);
         synth_dir_path(vp->kind, vp->pid, vp->tid, path, VFS_PATH_MAX);
     } else {
         rc = synth_chdir_path(vp, path);
@@ -9346,7 +9358,8 @@ long sys_fchdir(isr_params_t *params)
         if (sd && sd->own.kept) {
             struct vpath vp;
             synth_dir_vpath(sd, &vp);
-            rc = proc_held_dir_permission(&vp, &sd->own, CRED_X, 0);
+            rc = proc_held_dir_permission(entry->ofd ? entry->ofd->synth_mnt : NULL, &vp, &sd->own,
+                                          CRED_X, 0);
         }
         if (rc == 0) {
             int pid, tid;
@@ -9424,7 +9437,7 @@ static int32_t root_check(const struct vfs_ref *ref)
         }
     }
     if (rc == 0 && vp && vfs_proc_dir_owner(ref))
-        rc = proc_held_dir_permission(vp, vfs_proc_dir_owner(ref), CRED_X, 0);
+        rc = proc_held_dir_permission(ref->mnt, vp, vfs_proc_dir_owner(ref), CRED_X, 0);
     else if (rc == 0 && vp && vp->kind == VNODE_PROC_FDINFO_DIR &&
              (procfs_resolve_id(vp) < 0 ||
               !procfs_may_read(procfs_resolve_pid(vp->pid, vp->pidns_ino)))) {
@@ -10585,13 +10598,36 @@ static int32_t stat_held_proc_dir(const struct vpath *vp, const struct synth_own
     return rc;
 }
 
+/** Linux's pid_getattr refusal: -ENOENT when the hidepid= of `mnt` hides
+ * from the caller's stat the process or thread directory `vp`, whose task
+ * is `id`, as at hidepid=invisible; 0 otherwise, also for a task that is
+ * gone, which the stat itself answers. */
+static int32_t proc_pid_getattr_hidden(const struct vfs_mount *mnt, const struct vpath *vp, int id)
+{
+    if (vp->kind != VNODE_PROC_PID || id < 0) {
+        return 0;
+    }
+    return procfs_pid_visible(vfs_proc_options(mnt), id, VFS_HIDEPID_INVISIBLE, 0) ? 0 : -ENOENT;
+}
+
 /** Read the attributes of the inode reached by a synthetic walk. */
 static int32_t synth_stat_ref(const struct vfs_ref *ref, const struct vpath *vp, struct kstat *kst,
                               int follow)
 {
     const struct synth_owner *own = vfs_proc_dir_owner(ref);
+    int32_t rc;
 
-    return own ? stat_held_proc_dir(vp, own, kst) : synth_stat(vp, kst, follow);
+    if (own) {
+        rc = proc_pid_getattr_hidden(ref->mnt, vp, procfs_held_pid(own));
+        return rc != 0 ? rc : stat_held_proc_dir(vp, own, kst);
+    }
+    if (follow || vp->pid != SYNTH_PID_SELF || vp->tid != 0) {
+        rc = proc_pid_getattr_hidden(ref->mnt, vp, procfs_resolve_id(vp));
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return synth_stat(vp, kst, follow);
 }
 
 /** Whether the synthetic node `vp` is a block device, a disk or a loop
@@ -10933,7 +10969,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
         return -ENOENT;
     }
     if ((kst.st_mode & S_IFMT) == S_IFDIR) {
-        return synth_open_dir(vp, (flags & O_CLOEXEC) | O_PATH, NULL);
+        return synth_open_dir(NULL, vp, (flags & O_CLOEXEC) | O_PATH, NULL);
     }
     if (flags & O_DIRECTORY) {
         return -ENOTDIR;
@@ -11136,8 +11172,9 @@ static int32_t open_path(const char *name, int flags)
 
         vfs_walk_unlock(locked);
         vfs_name_put(entry);
-        rc = vfs_proc_dir_owner(&ref) ? synth_open_dir(&vpc, flags, vfs_proc_dir_owner(&ref))
-                                      : synth_open_path(&vpc, name, flags);
+        rc = vfs_proc_dir_owner(&ref)
+                 ? synth_open_dir(ref.mnt, &vpc, flags, vfs_proc_dir_owner(&ref))
+                 : synth_open_path(&vpc, name, flags);
         synth_mount_record(rc, &ref, &vpc, flags);
         vfs_ref_release(&ref);
         synth_dir_record(rc, permanent, name);
@@ -12275,8 +12312,10 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
  * `fstat_fill` does; but -ENOENT for a descriptor on a process's fd
  * directory once the process is gone, as Linux's `proc_fd_getattr` fails
  * when `proc_readfd_count` finds no task (fs/proc/fd.c:291-292, 362-364).
- * Access checks, sync_file_range and cachestat read the inode without its
- * getattr on Linux, and call `fstat_fill` directly.
+ * A process's or thread's directory its mount's hidepid= hides from the
+ * caller is -ENOENT, as Linux's `pid_getattr` answers. Access checks,
+ * sync_file_range and cachestat read the inode without its getattr on
+ * Linux, and call `fstat_fill` directly.
  */
 static int32_t fstat_getattr(fd_entry_t *entry, struct kstat *kst)
 {
@@ -12294,7 +12333,12 @@ static int32_t fstat_getattr(fd_entry_t *entry, struct kstat *kst)
             own = &sp->own;
         }
         if (own->kept && synth_dir_of_proc(vp.kind)) {
-            int32_t rc = stat_held_proc_dir(&vp, own, kst);
+            int32_t rc = proc_pid_getattr_hidden(fd_mount(entry), &vp, procfs_held_pid(own));
+
+            if (rc != 0) {
+                return rc;
+            }
+            rc = stat_held_proc_dir(&vp, own, kst);
             kst->st_mnt_id = procfs_synth_mount_id(PROCFS_FSID, fd_mount(entry));
             return rc;
         }
@@ -13168,7 +13212,7 @@ static int32_t access_synth_ref(const struct vfs_ref *ref, const struct vpath *v
         st.mode = synth_pid_dir_mode(vp);
         if (inode_read_only(ref->mnt, st.mode, mode))
             return -EROFS;
-        rc = proc_held_dir_permission(vp, own, mode, real);
+        rc = proc_held_dir_permission(ref->mnt, vp, own, mode, real);
         if (!rc && (mode & W_OK) && ref->mnt && vfs_mount_rdonly(ref->mnt))
             return -EROFS;
         return rc;
@@ -13434,7 +13478,7 @@ long sys_inotify_add_watch(isr_params_t *params)
     }
     if (vp && vfs_proc_dir_owner(&ref)) {
         const struct synth_owner *own = vfs_proc_dir_owner(&ref);
-        rc = proc_held_dir_permission(vp, own, CRED_R, 0);
+        rc = proc_held_dir_permission(ref.mnt, vp, own, CRED_R, 0);
         ino = own->ino;
         isdir = 1;
     } else if (vp) {
@@ -21249,6 +21293,34 @@ static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name
 }
 
 /**
+ * The entry at position `n` of /proc on a mount with subset=pid, whose root
+ * lists self and then the processes `o` lets the caller see, without `.`
+ * and `..`, as Linux's proc_root_readdir lists it when proc_readdir gives
+ * nothing (fs/proc/generic.c, fs/proc/root.c). 1 with the entry filled, or
+ * 0 past the end.
+ */
+static int synth_proc_pidonly_dirent(const struct synth_dir *sd, const struct vfs_proc_options *o,
+                                     int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    int p;
+
+    if (n == 0) {
+        k_memcpy(name, "self", 5);
+        *ino = procfs_ino_dir();
+        *dtype = DT_LNK;
+        return 1;
+    }
+    p = procfs_nth_pid(n - 1, sd->pidns_ino, o);
+    if (p < 0) {
+        return 0;
+    }
+    synth_u32_str(name, (uint32_t)p);
+    *ino = procfs_ino_pid(procfs_resolve_pid(p, sd->pidns_ino));
+    *dtype = DT_DIR;
+    return 1;
+}
+
+/**
  * The entry at position `*pos` of a synthetic directory, from the directory
  * descriptor's record `sd`, its kind, pid and tid: fills name/ino/dtype and
  * returns 1, or 0 past the end. "." and ".." are at 0 and 1 of every
@@ -21271,15 +21343,20 @@ static int synth_small_proc_dirent(const struct synth_dir *sd, int n, char *name
  * /dev/pts has an entry for each allocated pseudoterminal, named by its
  * index; /proc/acpi has `call`; a directory
  * of /proc/sys has the entries of the table under it; and /proc has its
- * files, then a directory for each process. The other directories have
- * functions of their own.
+ * files, then a directory for each process the options `o` of its mount,
+ * NULL for none, let the caller see (`procfs_nth_pid`), or under subset=pid
+ * self and those directories alone (`synth_proc_pidonly_dirent`). The other
+ * directories have functions of their own.
  */
-static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uint64_t *ino,
-                           uint8_t *dtype)
+static int synth_dirent_at(const struct synth_dir *sd, const struct vfs_proc_options *o, int *pos,
+                           char *name, uint64_t *ino, uint8_t *dtype)
 {
     int kind = sd->kind;
     int n = *pos;
 
+    if (kind == VNODE_PROC_DIR && o && o->pidonly) {
+        return synth_proc_pidonly_dirent(sd, o, n, name, ino, dtype);
+    }
     if (n == 0) {
         name[0] = '.';
         name[1] = '\0';
@@ -21372,7 +21449,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
             return 1;
         }
         {
-            int p = procfs_nth_pid(n - count, sd->pidns_ino);
+            int p = procfs_nth_pid(n - count, sd->pidns_ino, o);
             if (p < 0) {
                 return 0;
             }
@@ -21473,7 +21550,8 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int form
     struct vfs_dirent de;
     uint8_t dtype;
 
-    while (synth_dirent_at(sd, &idx, de.name, &de.ino, &dtype)) {
+    while (
+        synth_dirent_at(sd, vfs_proc_options(e->ofd->synth_mnt), &idx, de.name, &de.ino, &dtype)) {
         long n;
 
         de.type = dtype;

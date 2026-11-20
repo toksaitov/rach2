@@ -464,7 +464,7 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
         ref.node = node;
         own = vfs_proc_dir_owner(&ref);
         if (own)
-            return proc_held_dir_permission(vp, own, 1, use_real);
+            return proc_held_dir_permission(mnt, vp, own, 1, use_real);
     }
     if (vp && (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR)) {
         return procfs_fd_dir_access(vp->kind, procfs_resolve_id(vp), 1, use_real);
@@ -4978,9 +4978,44 @@ struct synth_tail {
     void *dir;         /* held directory in which this lookup starts */
 };
 
+/**
+ * Whether the mount options of `mnt` hide the name `full`, a canonical
+ * path of the proc tree classified as `vp`, from a lookup in the root of
+ * proc, as Linux's proc_root_lookup answers: under subset=pid every name
+ * but a process's and self (proc_lookup), and under hidepid=ptraceable a
+ * process the caller may not trace (proc_pid_lookup), by its real ids with
+ * `use_real`. A name below the root is never hidden here.
+ */
+static int proc_root_hidden(const struct vfs_mount *mnt, const char *full, const struct vpath *vp,
+                            int use_real)
+{
+    const struct vfs_proc_options *o = vfs_proc_options(mnt);
+    int pid = vp->kind == VNODE_PROC_PID && !vp->tid && !synth_self_link(vp), id;
+    const char *s;
+
+    if (!o || !path_under(full, "proc", 4)) {
+        return 0;
+    }
+    for (s = full + 5; *s != '\0'; s++) {
+        if (*s == '/') {
+            return 0;
+        }
+    }
+    if (o->pidonly && !pid && !synth_self_link(vp)) {
+        return 1;
+    }
+    if (!pid || o->hidepid != VFS_HIDEPID_PTRACEABLE) {
+        return 0;
+    }
+    id = procfs_resolve_id(vp);
+    return id >= 0 && !procfs_pid_visible(o, id, VFS_HIDEPID_NOACCESS, use_real);
+}
+
 /** Enter a process directory by name, retaining the parent for dot-dot.
- * Return VFS_STEP with the new inode, zero for another kind, or an error. */
-static int proc_child(struct vfs_mount *mnt, void *parent, const char *full, int more, void **node)
+ * Return VFS_STEP with the new inode, zero for another kind, or an error:
+ * -ENOENT for a name the mount's options hide (`proc_root_hidden`). */
+static int proc_child(struct vfs_mount *mnt, void *parent, const char *full, int more, void **node,
+                      int use_real)
 {
     struct vpath vp;
     int rc;
@@ -4989,6 +5024,8 @@ static int proc_child(struct vfs_mount *mnt, void *parent, const char *full, int
         return 0;
     synth_classify(full, &vp);
     vp.pidns_ino = ((struct synth_node *)parent)->vp.pidns_ino;
+    if (proc_root_hidden(mnt, full, &vp, use_real))
+        return -ENOENT;
     if (synth_self_link(&vp))
         return 0;
     if (!synth_dir_of_proc(vp.kind)) {
@@ -5133,7 +5170,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const struct sy
             goto done;
         }
         full[out] = '\0';
-        kind = proc_child(mnt, tail->dir, full, synth_more(p, end), node);
+        kind = proc_child(mnt, tail->dir, full, synth_more(p, end), node, tail->use_real);
         if (!kind)
             kind = synth_link_part(pidns_ino, full, out, plen, synth_more(p, end), node);
         if (kind != 0) {
@@ -5295,7 +5332,7 @@ static int proc_walk_rest(const struct vfs_ref *cur, const char *p, uint32_t len
     own = vfs_proc_dir_owner(cur);
     if (own) {
         const struct vpath *vp = vfs_synth_vpath(cur->mnt, cur->node);
-        int rc = proc_held_dir_permission(vp, own, 1, real);
+        int rc = proc_held_dir_permission(cur->mnt, vp, own, 1, real);
         if (rc)
             return rc;
         if (procfs_held_pid(own) < 0)
@@ -5705,6 +5742,35 @@ static void pts_show_options(const struct vfs_mount *m, vfs_option_emit emit, vo
     }
 }
 
+/** Emit the options of the proc mount `m`, as Linux's proc_show_options
+ * writes them: gid= unless it is root's, hidepid= by name when it is set,
+ * and subset=pid. */
+static void proc_show_options(const struct vfs_mount *m, vfs_option_emit emit, void *out)
+{
+    static const char *const words[] = {"hidepid=off", "hidepid=noaccess", "hidepid=invisible", "",
+                                        "hidepid=ptraceable"};
+    const struct vfs_proc_options *o = &m->proc_opts;
+
+    if (o->gid != 0) {
+        emit(out, "gid", o->gid_bad ? 65534u : o->gid, VFS_OPT_DEC); /* from_kgid_munged */
+    }
+    if (o->hidepid != VFS_HIDEPID_OFF) {
+        emit(out, words[o->hidepid], 0, VFS_OPT_WORD);
+    }
+    if (o->pidonly) {
+        emit(out, "subset=pid", 0, VFS_OPT_WORD);
+    }
+}
+
+const struct vfs_proc_options *vfs_proc_options(const struct vfs_mount *m)
+{
+    if (!m) {
+        return NULL;
+    }
+    m = vfs_mount_base(m);
+    return m->type == &vfs_procfs_type ? &m->proc_opts : NULL;
+}
+
 /** The constructor of a synthetic mount: its root is a node of the
  * namespace's own directory, whose name `options` has, held for the life of
  * the mount. 0, or -ENOMEM. */
@@ -5739,6 +5805,7 @@ static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
 
         root->pidns = pidns_get(proc_pidns(current_proc));
         root->vp.pidns_ino = root->pidns->c.inum;
+        mnt->show_options = proc_show_options;
     }
     return rc;
 }
@@ -6101,8 +6168,10 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     uint32_t changed = (flags ^ m->flags) & VFS_MS_SUPER;
     int rc, closing = (changed & flags & VFS_MS_RDONLY) != 0;
     struct vfs_pts_options popts = {0};
+    struct vfs_proc_options procopts = m->proc_opts;
 
-    if ((flags & ~VFS_MS_KNOWN) || (m->pts && pty_parse_options(options, &popts) != 0)) {
+    if ((flags & ~VFS_MS_KNOWN) || (m->pts && pty_parse_options(options, &popts) != 0) ||
+        (m->type == &vfs_procfs_type && procfs_parse_options(options, &procopts) != 0)) {
         return -EINVAL;
     }
     if (named->state != VFS_ACTIVE || m->state != VFS_ACTIVE) {
@@ -6142,6 +6211,7 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     if (m->pts) {
         m->pts_opts = popts; /* Linux's devpts_remount, from the defaults */
     }
+    m->proc_opts = procopts; /* Linux's proc_reconfigure, from those in force */
     set_mount_attrs(named, flags);
     if (closing) {
         fd_mount_readonly_end(m);
@@ -6361,6 +6431,19 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     return m;
 }
 
+/** Read the options of a new mount of `t`, a mount of devpts when `pts`,
+ * that the VFS keeps for the type: devpts's into `*popts`
+ * (`pty_parse_options`) and proc's into `*procopts`
+ * (`procfs_parse_options`), each from the defaults. 0, or -EINVAL. */
+static int mount_options(const struct vfs_type *t, int pts, const char *options,
+                         struct vfs_pts_options *popts, struct vfs_proc_options *procopts)
+{
+    if (pts && pty_parse_options(options, popts) != 0) {
+        return -EINVAL;
+    }
+    return t == &vfs_procfs_type ? procfs_parse_options(options, procopts) : 0;
+}
+
 /**
  * The covered check and the reservation of the slot are made under the
  * covered directory's lock (`vfs_node_lock`), so that no namespace change
@@ -6392,6 +6475,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
 {
     int pts = streq(type, "devpts");
     struct vfs_pts_options popts = {0};
+    struct vfs_proc_options procopts = {0};
     const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type
                                : pts               ? &vfs_devfs_type
                                                    : type_named(type);
@@ -6405,7 +6489,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (!t) {
         return -ENODEV;
     }
-    if ((flags & ~VFS_MS_KNOWN) || (pts && pty_parse_options(options, &popts) != 0)) {
+    if ((flags & ~VFS_MS_KNOWN) || mount_options(t, pts, options, &popts, &procopts) != 0) {
         return -EINVAL;
     }
     rc = vfs_resolve(0, target, 0, &tref, 0, 0);
@@ -6450,6 +6534,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         m->pts_opts = popts;
         m->show_options = pts_show_options;
     }
+    m->proc_opts = procopts;
     vfs_node_unlock(&tref);
     vfs_leave(tref.mnt);
 

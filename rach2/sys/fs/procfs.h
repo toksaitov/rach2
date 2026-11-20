@@ -19,10 +19,39 @@ struct vfs_ref;
 struct synth_dir;
 struct vfs_mount;
 
-/** Judge a retained proc directory by its inode mode and permission hook.
- * A gone process base, task listing or fdinfo directory gives ESRCH. */
-int proc_held_dir_permission(const struct vpath *vp, const struct synth_owner *own, int want,
-                             int real);
+/** Judge a retained proc directory of the mount `mnt` by its inode mode and
+ * permission hook. A gone process base, task listing or fdinfo directory
+ * gives ESRCH; a process base or task listing the mount's hidepid= hides
+ * gives EPERM, or ENOENT under hidepid=invisible (`procfs_pid_permission`). */
+int proc_held_dir_permission(const struct vfs_mount *mnt, const struct vpath *vp,
+                             const struct synth_owner *own, int want, int real);
+
+struct vfs_proc_options;
+
+/**
+ * Apply the proc mount options in the string `options`, NULL for none, to
+ * `*o`, which holds the defaults for a mount and the options in force for
+ * a remount, so that an option a remount does not give stays as it is, as
+ * Linux's proc_apply_options keeps it. 0, or -EINVAL, `*o` untouched, for
+ * an option proc does not take or a bad value.
+ */
+int procfs_parse_options(const char *options, struct vfs_proc_options *o);
+
+/**
+ * Whether the caller may see the process or thread `id` through a proc
+ * mount of options `o`, as Linux's has_pid_permissions judges it: always
+ * when `o` is NULL, hidepid is off or below `min`, or the caller is in the
+ * mount's gid= group; else, and always under hidepid=ptraceable, when it
+ * may trace the process (`procfs_may_trace`), by its real ids with
+ * `use_real`. 1 for an id that is gone, which the caller answers itself.
+ */
+int procfs_pid_visible(const struct vfs_proc_options *o, int id, int min, int use_real);
+
+/** Linux's proc_pid_permission before its mode check, for /proc/PID and
+ * /proc/PID/task of the process `id` on a mount of options `o`: 0, -EPERM
+ * for a process `procfs_pid_visible` hides at hidepid=noaccess, or -ENOENT
+ * for one under hidepid=invisible. */
+int procfs_pid_permission(const struct vfs_proc_options *o, int id, int use_real);
 
 /* st_dev for /proc nodes, distinct from KRFFS (0) and devfs (DEVFS_FSID). */
 #define PROCFS_FSID 6u
@@ -216,8 +245,9 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
 
 /** PID-directory enumeration: the pid in the caller's PID namespace of the
  * `n`th process it sees, counting from 0, one for each thread group, or -1
- * past the end. */
-int procfs_nth_pid(int n, uint32_t pidns_ino);
+ * past the end; a process a mount of options `o` hides from the caller's
+ * listing (`procfs_pid_visible` at hidepid=invisible) is skipped. */
+int procfs_nth_pid(int n, uint32_t pidns_ino, const struct vfs_proc_options *o);
 
 /*
  * The inode numbers stat gives /proc and its files outside /proc/<pid>, one

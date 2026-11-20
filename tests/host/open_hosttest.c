@@ -2690,6 +2690,32 @@ int procfs_dir_coords(const struct synth_dir *sd, int *pid, int *tid)
     return 0;
 }
 
+/** No model mount takes proc's options: hidepid hides nothing. */
+const struct vfs_proc_options *vfs_proc_options(const struct vfs_mount *m)
+{
+    (void)m;
+    return NULL;
+}
+
+/** No model mount hides a process directory. */
+int procfs_pid_permission(const struct vfs_proc_options *o, int id, int use_real)
+{
+    (void)o;
+    (void)id;
+    (void)use_real;
+    return 0;
+}
+
+/** No model mount hides a process from stat. */
+int procfs_pid_visible(const struct vfs_proc_options *o, int id, int min, int use_real)
+{
+    (void)o;
+    (void)id;
+    (void)min;
+    (void)use_real;
+    return 1;
+}
+
 /** Return the model inode's retained kernel PID. */
 int procfs_held_pid(const struct synth_owner *own)
 {
@@ -6003,7 +6029,7 @@ static void departed_proc_open(void)
     proc_root.pidns_ino = 1;
     cwd_owner.ino = 31;
     k_memcpy(cwd_proc.covered_path, "/proc", 6);
-    fd = synth_open_dir(&proc_root, O_PATH | O_DIRECTORY, &cwd_owner);
+    fd = synth_open_dir(NULL, &proc_root, O_PATH | O_DIRECTORY, &cwd_owner);
     check(fd >= 0, "O_PATH opens the original directory after reap");
     synth_mount_record(fd, &ref, &proc_root, O_PATH);
     entry = fd_get(proc.fds, fd);

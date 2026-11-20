@@ -975,6 +975,192 @@ static int procfs_may_trace(const process_t *p, int use_real)
            !(cap_word(p, 0) & ~cap0) && !(cap_word(p, 1) & ~fs_access_caps(c, 1, use_real));
 }
 
+/* Proc mount options. */
+
+/** Whether the text from `s` to `end` is exactly `word`. */
+static int procfs_text_is(const char *s, const char *end, const char *word)
+{
+    while (s < end && *word && *s == *word) {
+        s++;
+        word++;
+    }
+    return s == end && *word == '\0';
+}
+
+/**
+ * Read the number from `v` to `end` as Linux's kstrtouint reads it with
+ * base 0: an optional `+`, then digits in the base a leading `0x` or `0`
+ * names, and at most one newline after them; the value must fit 32 bits.
+ * 0 with `*out` set, or -EINVAL.
+ */
+static int procfs_uint(const char *v, const char *end, uint32_t *out)
+{
+    uint32_t value = 0, base = 10;
+
+    if (end > v && end[-1] == '\n') {
+        end--;
+    }
+    if (v < end && *v == '+') {
+        v++;
+    }
+    if (end - v > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
+        base = 16;
+        v += 2;
+    } else if (end - v > 1 && v[0] == '0') {
+        base = 8;
+    }
+    if (v == end) {
+        return -EINVAL;
+    }
+    for (; v < end; v++) {
+        uint32_t d = *v >= 'a' && *v <= 'f'   ? (uint32_t)(*v - 'a' + 10)
+                     : *v >= 'A' && *v <= 'F' ? (uint32_t)(*v - 'A' + 10)
+                     : *v >= '0' && *v <= '9' ? (uint32_t)(*v - '0')
+                                              : 16u;
+
+        if (d >= base || value > (0xFFFFFFFFu - d) / base) {
+            return -EINVAL;
+        }
+        value = value * base + d;
+    }
+    *out = value;
+    return 0;
+}
+
+/**
+ * Apply the proc option named from `key` to `keyend`, whose value runs from
+ * `v` to `end`, NULL when it has none, to `*o`, as Linux's proc_parse_param
+ * and proc_apply_options do (fs/proc/root.c): `gid=` a number, mapped
+ * through the caller's user namespace; `hidepid=` 0, 1, 2 or 4, or off,
+ * noaccess, invisible or ptraceable; `subset=pid`. Each needs a value that
+ * is not empty. 0, or -EINVAL.
+ */
+static int procfs_option(const char *key, const char *keyend, const char *v, const char *end,
+                         struct vfs_proc_options *o)
+{
+    uint32_t n;
+
+    if (!v || v == end) {
+        return -EINVAL;
+    }
+    if (procfs_text_is(key, keyend, "gid")) {
+        int64_t k;
+
+        if (procfs_uint(v, end, &n) != 0) {
+            return -EINVAL;
+        }
+        k = current_proc ? ns_gid_to_kernel(proc_userns(current_proc), n) : (int64_t)n;
+        o->gid = k < 0 ? 0xFFFFFFFFu : (uint32_t)k;
+        o->gid_bad = k < 0;
+        return 0;
+    }
+    if (procfs_text_is(key, keyend, "hidepid")) {
+        if (procfs_uint(v, end, &n) == 0) {
+            if (n != VFS_HIDEPID_OFF && n != VFS_HIDEPID_NOACCESS && n != VFS_HIDEPID_INVISIBLE &&
+                n != VFS_HIDEPID_PTRACEABLE) {
+                return -EINVAL;
+            }
+            o->hidepid = (int)n;
+        } else if (procfs_text_is(v, end, "off")) {
+            o->hidepid = VFS_HIDEPID_OFF;
+        } else if (procfs_text_is(v, end, "noaccess")) {
+            o->hidepid = VFS_HIDEPID_NOACCESS;
+        } else if (procfs_text_is(v, end, "invisible")) {
+            o->hidepid = VFS_HIDEPID_INVISIBLE;
+        } else if (procfs_text_is(v, end, "ptraceable")) {
+            o->hidepid = VFS_HIDEPID_PTRACEABLE;
+        } else {
+            return -EINVAL;
+        }
+        return 0;
+    }
+    if (procfs_text_is(key, keyend, "subset") && procfs_text_is(v, end, "pid")) {
+        o->pidonly = 1;
+        return 0;
+    }
+    return -EINVAL;
+}
+
+int procfs_parse_options(const char *options, struct vfs_proc_options *o)
+{
+    struct vfs_proc_options next = *o;
+    const char *p = options ? options : "";
+
+    while (*p) {
+        const char *key = p, *keyend, *v = NULL, *end;
+
+        while (*p && *p != ',' && *p != '=') {
+            p++;
+        }
+        keyend = p;
+        if (*p == '=') {
+            v = ++p;
+            while (*p && *p != ',') {
+                p++;
+            }
+        }
+        end = p;
+        if (*p == ',') {
+            p++;
+        }
+        if (key == keyend && !v) {
+            continue; /* strsep's empty item */
+        }
+        if (procfs_option(key, keyend, v, end, &next) != 0) {
+            return -EINVAL;
+        }
+    }
+    *o = next;
+    return 0;
+}
+
+/** Whether the kernel gid `gid` is the caller's file-system group, or with
+ * `use_real` its real group, or one of its supplementary groups, as Linux's
+ * in_group_p answers under the credentials of the call. */
+static int procfs_in_group(uint32_t gid, int use_real)
+{
+    const process_t *c = current_proc;
+    uint32_t i;
+
+    if ((use_real ? c->rgid : proc_fsgid(c)) == gid) {
+        return 1;
+    }
+    for (i = 0; i < c->ngroups; i++) {
+        if (c->groups[i] == gid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int procfs_pid_visible(const struct vfs_proc_options *o, int id, int min, int use_real)
+{
+    const process_t *p;
+
+    if (!o || o->hidepid == VFS_HIDEPID_OFF || !current_proc) {
+        return 1;
+    }
+    p = procfs_proc(id);
+    if (!p) {
+        return 1;
+    }
+    if (o->hidepid == VFS_HIDEPID_PTRACEABLE) {
+        return procfs_may_trace(p, use_real);
+    }
+    if (o->hidepid < min || (!o->gid_bad && procfs_in_group(o->gid, use_real))) {
+        return 1;
+    }
+    return procfs_may_trace(p, use_real);
+}
+
+int procfs_pid_permission(const struct vfs_proc_options *o, int id, int use_real)
+{
+    if (procfs_pid_visible(o, id, VFS_HIDEPID_NOACCESS, use_real)) {
+        return 0;
+    }
+    return o->hidepid == VFS_HIDEPID_INVISIBLE ? -ENOENT : -EPERM;
+}
+
 uint32_t procfs_owner_mode(int procfile)
 {
     if (procfile == SYNTH_PROC_ENVIRON || procfile == SYNTH_PROC_AUXV ||
@@ -3818,9 +4004,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
  * listed once, by its leader; the ids of its other threads are not listed,
  * as on Linux, though /proc/<tid> still opens. The idle process, pid 0, is
  * not listed, as Linux lists no pid 0, nor is a process outside the
- * mount's PID namespace.
+ * mount's PID namespace, nor one the mount's hidepid= hides from the
+ * caller, as Linux's proc_pid_readdir skips it.
  */
-int procfs_nth_pid(int n, uint32_t pidns_ino)
+int procfs_nth_pid(int n, uint32_t pidns_ino, const struct vfs_proc_options *o)
 {
     const process_t *p;
     int seen = 0;
@@ -3829,7 +4016,8 @@ int procfs_nth_pid(int n, uint32_t pidns_ino)
         return -1;
     }
     for (p = proc_list; p; p = p->next) {
-        if (p->pid != p->tgid || p == proc_idle || procfs_pid_number(p->pid, pidns_ino) == 0) {
+        if (p->pid != p->tgid || p == proc_idle || procfs_pid_number(p->pid, pidns_ino) == 0 ||
+            !procfs_pid_visible(o, (int)p->pid, VFS_HIDEPID_INVISIBLE, 0)) {
             continue;
         }
         if (seen == n) {

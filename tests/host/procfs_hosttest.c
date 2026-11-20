@@ -42,6 +42,9 @@ struct fd_entry;
 struct vfs_ref;
 struct vfs_name;
 struct vfs_mount;
+struct vfs_proc_options;
+static int procfs_parse_options(const char *options, struct vfs_proc_options *o);
+static int procfs_pid_permission(const struct vfs_proc_options *o, int id, int use_real);
 static struct vfs_name *procfs_exe_entry(int pid, int use_real);
 struct synth_owner;
 static int procfs_lookup_owner(const struct vpath *vp);
@@ -62,7 +65,7 @@ static int procfs_readlink_exe(int pid, char *buf, int cap);
 static int procfs_exe_name(int pid, char *buf, int cap);
 static int procfs_readlink_dir(int pid, int root, char *buf, int cap);
 static int procfs_exe_file(int pid, struct vfs_ref *out, int use_real);
-static int procfs_nth_pid(int n, uint32_t pidns_ino);
+static int procfs_nth_pid(int n, uint32_t pidns_ino, const struct vfs_proc_options *o);
 static uint32_t procfs_ino_dir(void);
 static uint32_t procfs_ino_cmdline(void);
 static uint32_t procfs_ino_netdir(void);
@@ -5557,6 +5560,93 @@ static void irq_rows(void)
           "a removed interrupt gives no stale mask");
 }
 
+/**
+ * A proc mount's options, as Linux's proc_parse_param and proc_apply_options
+ * take them: hidepid= by number or name, gid= in any base, subset=pid, and a
+ * refusal that leaves the options in force as they were; and what each
+ * hides from a caller of another group, as has_pid_permissions judges it.
+ */
+static void proc_option_rows(void)
+{
+    process_t *saved = current_proc;
+    uint32_t saved_uid = process.euid, saved_gid = process.egid;
+    uint32_t saved_ruid = process.ruid, saved_rgid = process.rgid;
+    uint32_t saved_suid = process.suid, saved_sgid = process.sgid;
+    struct mm *saved_mm = process.mm;
+    uint32_t saved_dumpable = space.dumpable;
+    struct vfs_proc_options o = {0};
+    process_t caller = {0};
+
+    check(procfs_parse_options("", &o) == 0 && o.hidepid == 0 && o.gid == 0 && !o.pidonly,
+          "an empty option string keeps proc's defaults");
+    check(procfs_parse_options("hidepid=2,gid=0x1b", &o) == 0 && o.hidepid == 2 && o.gid == 27,
+          "hidepid= takes a number and gid= a number in any base");
+    check(procfs_parse_options("gid=5", &o) == 0 && o.hidepid == 2 && o.gid == 5,
+          "a remount changes only the options it gives");
+    check(procfs_parse_options("hidepid=ptraceable,subset=pid", &o) == 0 && o.hidepid == 4 &&
+              o.pidonly,
+          "hidepid= takes a name and subset= takes pid");
+    check(procfs_parse_options("hidepid=noaccess", &o) == 0 && o.hidepid == 1 &&
+              procfs_parse_options("hidepid=off", &o) == 0 && o.hidepid == 0,
+          "hidepid= takes noaccess and off");
+    o.hidepid = 2;
+    check(procfs_parse_options("hidepid=3", &o) == -EINVAL &&
+              procfs_parse_options("hidepid=", &o) == -EINVAL &&
+              procfs_parse_options("hidepid", &o) == -EINVAL &&
+              procfs_parse_options("subset=sys", &o) == -EINVAL &&
+              procfs_parse_options("gid=-1", &o) == -EINVAL &&
+              procfs_parse_options("gid=5,size=1", &o) == -EINVAL && o.hidepid == 2 && o.gid == 5,
+          "a bad value or another option is EINVAL and changes nothing");
+
+    process.euid = process.ruid = process.suid = 1001;
+    process.egid = process.rgid = process.sgid = 1001;
+    process.mm = &space;
+    space.dumpable = 1;
+    caller.euid = caller.ruid = caller.egid = caller.rgid = 1000;
+    caller.tg = &other_group;
+    current_proc = &caller;
+    o.gid = 27;
+    o.hidepid = VFS_HIDEPID_OFF;
+    check(procfs_pid_permission(&o, 7, 0) == 0 &&
+              procfs_pid_visible(&o, 7, VFS_HIDEPID_INVISIBLE, 0),
+          "hidepid=off hides nothing");
+    o.hidepid = VFS_HIDEPID_NOACCESS;
+    check(procfs_pid_permission(&o, 7, 0) == -EPERM &&
+              procfs_pid_visible(&o, 7, VFS_HIDEPID_INVISIBLE, 0),
+          "hidepid=noaccess refuses another user's directory and still lists it");
+    o.hidepid = VFS_HIDEPID_INVISIBLE;
+    check(procfs_pid_permission(&o, 7, 0) == -ENOENT &&
+              !procfs_pid_visible(&o, 7, VFS_HIDEPID_INVISIBLE, 0),
+          "hidepid=invisible hides another user's directory");
+    caller.groups[0] = 27;
+    caller.ngroups = 1;
+    check(procfs_pid_permission(&o, 7, 0) == 0, "a member of gid= sees every process");
+    o.hidepid = VFS_HIDEPID_PTRACEABLE;
+    check(procfs_pid_permission(&o, 7, 0) == -EPERM &&
+              !procfs_pid_visible(&o, 7, VFS_HIDEPID_NOACCESS, 0),
+          "hidepid=ptraceable spares no group");
+    caller.ngroups = 0;
+    caller.euid = caller.egid = 1001;
+    check(procfs_pid_permission(&o, 7, 0) == 0 && procfs_pid_permission(&o, 7, 1) == -EPERM,
+          "a caller that may trace the process sees it, by access's real ids too");
+    current_proc = saved;
+    process.mm = saved_mm;
+    space.dumpable = saved_dumpable;
+    process.euid = saved_uid;
+    process.egid = saved_gid;
+    process.ruid = saved_ruid;
+    process.rgid = saved_rgid;
+    process.suid = saved_suid;
+    process.sgid = saved_sgid;
+}
+
+/** The model has one user namespace, the first: a gid is the kernel's. */
+int64_t ns_gid_to_kernel(const struct userns *ns, uint32_t id)
+{
+    (void)ns;
+    return id;
+}
+
 /** Run a named group of rows. Return -1 for an unknown option. */
 static int selected_rows(const char *arg)
 {
@@ -5574,6 +5664,11 @@ static int selected_rows(const char *arg)
     if (__builtin_strcmp(arg, "--pci-config-only") == 0) {
         pci_config_rows();
         printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    if (__builtin_strcmp(arg, "--proc-options-only") == 0) {
+        proc_option_rows();
+        printf("procfs-hosttest: proc mount options: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
     if (__builtin_strcmp(arg, "--irq-only") == 0) {
@@ -5667,6 +5762,7 @@ int main(int argc, char **argv)
     input_change_rows();
     input_guest_rows();
     input_protocol_rows();
+    proc_option_rows();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
@@ -5675,7 +5771,8 @@ int main(int argc, char **argv)
                "uevents, a driver's attribute, link and PCI identity, a PCI function's BARs mapped "
                "and read through its resource files, writes of a PCI function's uevent, an input "
                "device's /sys entries, capability masks, uevents and /proc/bus/input record, and "
-               "the syscall and wchan files of blocked, stopped and running threads\n");
+               "the syscall and wchan files of blocked, stopped and running threads, and a proc "
+               "mount's hidepid=, gid= and subset=\n");
     }
     return failures != 0;
 }

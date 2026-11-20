@@ -111,7 +111,7 @@ to the file system, of whose options tmpfs takes
 .Ql size=
 and
 .Ql nr_inodes= ,
-and ext2 the options it takes at a mount, below.
+and ext2, devpts and proc the options they take at a mount, below.
 On ext2 it makes the mount read-only, synced and marked clean as an
 unmount leaves it, or writable, checked as a writable mount is; tmpfs
 changes between the two at once; every other type refuses a change
@@ -336,6 +336,45 @@ Another option or a bad number is
 .Er EINVAL .
 .Pp
 For
+.Ql proc ,
+the source is any string, recorded as given, and nothing is claimed.
+It takes Linux's options:
+.Ql hidepid= ,
+0 or
+.Ql off ,
+1 or
+.Ql noaccess ,
+under which a process the caller may not trace, as
+.Xr ptrace 2
+judges a read with the file-system ids, has a directory the caller may not
+search or open,
+.Er EPERM ,
+2 or
+.Ql invisible ,
+under which that directory is not listed and its search, open and
+.Xr stat 2
+are
+.Er ENOENT ,
+and 4 or
+.Ql ptraceable ,
+under which it cannot be looked up either;
+.Ql gid= ,
+a group the caller's user namespace maps, whose members the first two
+spare, 0 by default;
+and
+.Ql subset=pid ,
+under which the root shows
+.Pa self
+and the processes alone, without
+.Pa \&.
+and
+.Pa \&..
+in its listing, as on Linux.
+A remount changes the options it gives and keeps the others.
+Another option, an empty value or a bad one is
+.Er EINVAL .
+.Pp
+For
 .Ql mqueue ,
 the source is any string, recorded as given, nothing is claimed, and the
 options are ignored.
@@ -356,9 +395,10 @@ set its root directory's mode, in octal, and owner; see
 .Pp
 For
 .Ql pstore ,
-the source is any string, recorded as given, nothing is claimed, and the
-options are ignored; every mount shows the records the last boot left, as
-on Linux; see
+the source is any string, recorded as given, nothing is claimed, and of
+the options it takes
+.Ql kmsg_bytes= ;
+every mount shows the records the last boot left, as on Linux; see
 .Xr pstore 5 .
 .Pp
 For every other type, the source must name a published block device
@@ -540,10 +580,10 @@ and
 .Ql relatime
 are set, as
 .Xr proc 5
-describes; the silent flag and the file system's own options are not
-shown.
-KRFFS, mqueue and pstore ignore the option string; FAT32, exFAT,
-tmpfs and debugfs parse it.
+describes, and after them the file system's own options, as its type
+shows them on Linux; the silent flag is not shown.
+KRFFS and mqueue ignore the option string; ext2, FAT32, exFAT, tmpfs,
+devpts, proc, pstore and debugfs parse it.
 .Pp
 vfat and exfat take Linux's options.
 Both take

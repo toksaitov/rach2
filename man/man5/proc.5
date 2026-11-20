@@ -870,7 +870,10 @@ and
 .Ql relatime ;
 and last the file system's other options, such as
 .Ql window
-for a KRFFS root read through the page-cache window.
+for a KRFFS root read through the page-cache window, or
+.Ql hidepid=invisible
+for a proc mount that hides the processes its reader may not trace; see
+.Xr mount 2 .
 The root,
 .Pa /dev
 and
