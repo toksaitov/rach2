@@ -493,15 +493,20 @@ void pci_host_reserve(uint64_t start, uint64_t end, int io);
  * from its _CRS, as Linux keeps each root bus's resources: a BAR the host
  * reaches through root bus `bus` lies whole in one of that root's windows
  * of its kind, and with none of a kind, no BAR of the kind is held to them.
- * Every window is kept; 0, or -ENOMEM when the heap refuses, after which
- * the root's BARs outside the windows kept are refused. Called while the
- * kernel starts.
+ * A window that overlaps one of its kind already kept is joined to it, and
+ * so is any other that the joined window then overlaps, as Linux's
+ * acpi_pci_root_validate_resources expands one window over another, so
+ * that a BAR across the overlap lies in one; windows that only adjoin stay
+ * apart. Every window is kept; 0, or -ENOMEM when the heap refuses, after
+ * which the root's BARs outside the windows kept are refused. Called while
+ * the kernel starts.
  */
 int pci_root_window_add(uint8_t bus, const struct pci_aperture *w);
 
 /**
  * The windows of root bus `bus` that `pci_root_window_add` kept, in the
- * order given, into `*ap`; returns how many. The array stays valid until
+ * order given, a joined one where the first of its parts was, into `*ap`;
+ * returns how many. The array stays valid until
  * the next window of that bus is added.
  */
 int pci_root_windows(uint8_t bus, const struct pci_aperture **ap);

@@ -1074,6 +1074,48 @@ static void claim_route_rows(void)
     list_forget();
 }
 
+/**
+ * A root's windows that overlap are joined, as Linux's
+ * acpi_pci_root_validate_resources expands one over another: a 512 MiB BAR
+ * across two windows of root bus 0x80 that overlap is claimed, a window
+ * that overlaps two kept apart joins all three, and windows that only
+ * adjoin, or are of another kind, stay apart.
+ */
+static void root_join_rows(void)
+{
+    struct pci_aperture two[2] = {{0xC0000000u, 0xD7FFFFFFu, 0}, {0xC8000000u, 0xDFFFFFFFu, 0}};
+    struct pci_aperture three[3] = {{0xC0000000u, 0xC7FFFFFFu, 0},
+                                    {0xD0000000u, 0xD7FFFFFFu, 0},
+                                    {0xC4000000u, 0xD3FFFFFFu, 0}};
+    struct pci_aperture apart[3] = {
+        {0xE0000000u, 0xE7FFFFFFu, 0}, {0xE8000000u, 0xEFFFFFFFu, 0}, {0x1000u, 0xE7FFFFFFu, 1}};
+    const struct pci_aperture *ap;
+    struct func *f;
+    int n;
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    f = model_add(0x80, 0, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0xC0000000u, 0xE0000000u);
+    list_forget();
+    (void)pci_list_count();
+    host_forget();
+
+    check(root_windows(0x80, two, 2) == 0 && pci_resource_claimable(0x80, 0, 0, 0) == 0,
+          "root: a BAR across two windows that overlap is claimed");
+    n = pci_root_windows(0x80, &ap);
+    check(n == 1 && ap[0].start == 0xC0000000u && ap[0].end == 0xDFFFFFFFu && !ap[0].io,
+          "root: the two windows that overlap are one");
+    check(root_windows(0x81, three, 3) == 0 && pci_root_windows(0x81, &ap) == 1 &&
+              ap[0].start == 0xC0000000u && ap[0].end == 0xD7FFFFFFu,
+          "root: a window over two kept apart joins all three");
+    check(root_windows(0x82, apart, 3) == 0 && pci_root_windows(0x82, &ap) == 3 &&
+              ap[0].end == 0xE7FFFFFFu && ap[1].start == 0xE8000000u && ap[2].io,
+          "root: windows that adjoin, and one of ports over memory, stay apart");
+    host_forget();
+    list_forget();
+}
+
 /** Run the rows. */
 /** 0: no row maps a window of a BAR (pci_bar_map). */
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
@@ -1102,6 +1144,7 @@ int main(void)
     hotplug_rows();
     claim_rows();
     claim_route_rows();
+    root_join_rows();
     if (fails) {
         printf("pciwalk_hosttest: %d failed\n", fails);
         return 1;
