@@ -10674,7 +10674,7 @@ static int32_t synth_stat_ref(const struct vfs_ref *ref, const struct vpath *vp,
         rc = proc_pid_getattr_hidden(ref->mnt, vp, procfs_held_pid(own));
         return rc != 0 ? rc : stat_held_proc_dir(vp, own, kst);
     }
-    if (follow || vp->pid != SYNTH_PID_SELF || vp->tid != 0) {
+    if (vp->kind == VNODE_PROC_PID && (follow || vp->pid != SYNTH_PID_SELF || vp->tid != 0)) {
         rc = proc_pid_getattr_hidden(ref->mnt, vp, procfs_resolve_id(vp));
         if (rc != 0) {
             return rc;
