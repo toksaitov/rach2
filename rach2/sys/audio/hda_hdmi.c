@@ -44,6 +44,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../proc/mutex.h"
 #include "../proc/percpu.h"
@@ -309,7 +310,13 @@ struct hh_pcm {
 static struct hh_pcm hh_pcms[HH_MAX_PCMS];
 static int hh_npcms;
 static volatile hda_bdl_entry_t hh_bdl[HH_MAX_PCMS][HH_BDL_MAX] __attribute__((aligned(128)));
-static uint8_t hh_dma[HH_MAX_PCMS][HH_DMA_MAX] __attribute__((aligned(128)));
+/* Each PCM's DMA buffer, HH_DMA_MAX bytes of consecutive frames, and its
+ * physical address, made when the display binds and the PCM is made, as
+ * Linux preallocates a PCM's buffer in snd_pcm_set_managed_buffer_all, so
+ * that a machine without the codec keeps none of the megabyte; kept
+ * across unbinds. */
+static uint8_t *hh_dma[HH_MAX_PCMS];
+static uintptr_t hh_dma_phys[HH_MAX_PCMS];
 static uint8_t hh_stage[HH_MAX_PCMS][HH_STAGE_BYTES];
 
 /* The rates of the PCM parameter's bits 0 to 11, with their stream format
@@ -402,6 +409,31 @@ static void hh_msleep(uint32_t ms)
     (void)wq_wait_event_nointr(&sleepers, hh_deadline, &due);
     current_proc->wakeup_tick = saved;
 #endif
+}
+
+/**
+ * Make PCM `k`'s DMA buffer unless it has one: 0, or -ENOMEM. A buffer
+ * above 4 GiB is given back when GCAP lacks 64OK, since the controller then
+ * drives only 32 address bits, as azx_first_init limits its DMA mask.
+ */
+static int hh_dma_make(int k)
+{
+#ifdef RACH2_HOSTTEST
+    static uint8_t host_dma[HH_MAX_PCMS][HH_DMA_MAX] __attribute__((aligned(128)));
+
+    hh_dma[k] = host_dma[k];
+    hh_dma_phys[k] = (uintptr_t)virt_to_phys(host_dma[k]);
+#else
+    if (!hh_dma[k]) {
+        hh_dma[k] = (uint8_t *)kalloc_contig(HH_DMA_MAX / PAGE_SIZE, &hh_dma_phys[k]);
+    }
+    if (hh_dma[k] && hh_hi((uint64_t)hh_dma_phys[k] + HH_DMA_MAX - 1) != 0 &&
+        !(hh_read(HDA_GCAP, 16) & HDA_GCAP_64OK)) {
+        kfree_pages(hh_dma[k], HH_DMA_MAX / PAGE_SIZE);
+        hh_dma[k] = NULL;
+    }
+#endif
+    return hh_dma[k] ? 0 : -ENOMEM;
 }
 
 /* ---- the link ---- */
@@ -1708,7 +1740,7 @@ static int hh_stream_start(audio_stream_t *s)
         return -EIO;
     }
     bdl = hh_bdl[m - hh_pcms];
-    addr = (uint64_t)virt_to_phys(hh_dma[m - hh_pcms]);
+    addr = (uint64_t)hh_dma_phys[m - hh_pcms];
     list = (uint64_t)virt_to_phys(bdl);
     hh_sd_reset(m);
     /* The first DMA frame takes two of the stream's: the first, exactly,
@@ -2048,8 +2080,8 @@ static int32_t hh_dsp_open(struct devfs_node *node, struct fd_entry *e, int flag
  * offer each PCM's device, as azx_probe_continue, patch_i915_hsw_hdmi and
  * generic_hdmi_build_pcms do: one PCM for each converter, no more than
  * there are pin entries, as Linux makes them, nor than the controller has
- * output streams, one of which each PCM plays on. Under the component's
- * lock.
+ * output streams, one of which each PCM plays on, nor than have a DMA
+ * buffer. Under the component's lock.
  */
 static void hh_bind(void *ptr, const struct acomp_ops *ops, void *dev)
 {
@@ -2063,6 +2095,9 @@ static void hh_bind(void *ptr, const struct acomp_ops *ops, void *dev)
         outs = (int)((hh_read(HDA_GCAP, 16) >> 12) & 0xf);
         hh_npcms = hh_ncvts < hh_npins ? hh_ncvts : hh_npins;
         hh_npcms = outs < hh_npcms ? outs : hh_npcms;
+        for (k = 0; k < hh_npcms && hh_dma_make(k) == 0; k++) {
+        }
+        hh_npcms = k;
         for (k = 0; k < hh_npcms; k++) {
             hh_pcms[k].pin = -1;
             hh_pcms[k].sd = hh_out_sd + k;
