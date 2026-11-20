@@ -67,6 +67,7 @@
 #include "../mm/paging.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
+#include "../lockdown.h"
 #include "../block/diskinfo.h"
 #include "../timer.h"
 #include "../vdso.h"
@@ -9049,7 +9050,8 @@ static void pciconfig_store(int key, uint32_t off, const uint8_t *data, uint32_t
     }
 }
 
-/** Write raw PCI config, cut at the function's end as Linux does. The
+/** Write raw PCI config, cut at the function's end as Linux does, -EPERM
+ * under lockdown (LOCKDOWN_PCI_ACCESS), as Linux's pci_write_config. The
  * open checked privilege. Copy the range before touching any register. */
 static int32_t procfs_pciconfig_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -9059,7 +9061,11 @@ static int32_t procfs_pciconfig_write(fd_entry_t *e, const char __user *buf, uin
     uint32_t size = 256, n;
     uint64_t off = e->ofd->offset;
     uint8_t *data;
+    int rc = lockdown_refuses(LOCKDOWN_PCI_ACCESS);
 
+    if (rc != 0) {
+        return rc;
+    }
     if (!sysfs_pci_real(key)) {
         return -ENODEV;
     }
@@ -9332,10 +9338,12 @@ static int32_t procfs_pcibar_read(fd_entry_t *e, char __user *buf, uint32_t coun
 
 /**
  * write of a resourceN file, its bytes little-endian: the count, clipped
- * to the file, `pcibar_span`'s result, or -EFAULT. As Linux's kernfs, the
- * first `count` bytes, up to a page, are copied before anything else is
- * judged, so that a source not readable to that length is -EFAULT with no
- * port written, though the access the file clips it to would read less.
+ * to the file, `pcibar_span`'s result, -EFAULT, or -EPERM under lockdown
+ * (LOCKDOWN_PCI_ACCESS), as Linux's pci_write_resource_io. As Linux's
+ * kernfs, the first `count` bytes, up to a page, are copied before anything
+ * else is judged, so that a source not readable to that length is -EFAULT
+ * with no port written, though the access the file clips it to would read
+ * less.
  */
 static int32_t procfs_pcibar_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -9355,7 +9363,10 @@ static int32_t procfs_pcibar_write(fd_entry_t *e, const char __user *buf, uint32
             k_memcpy(bytes, chunk, piece < sizeof(bytes) ? piece : sizeof(bytes));
         }
     }
-    n = pcibar_span(e, len, 1, &r);
+    n = lockdown_refuses(LOCKDOWN_PCI_ACCESS);
+    if (n == 0) {
+        n = pcibar_span(e, len, 1, &r);
+    }
     if (n <= 0) {
         return n;
     }
@@ -9400,7 +9411,8 @@ static const struct vm_device_ops pcibar_vm_ops = {pcibar_page, pcibar_put, NULL
  * mmap of a resourceN or resourceN_wc file, as Linux's pci_mmap_resource:
  * a shared mapping of the memory BAR's pages from the page offset,
  * uncached for resourceN and write-combining for resourceN_wc, mapped as
- * they are touched. -ENODEV for an I/O BAR, which x86 does not map, or a
+ * they are touched. -EPERM under lockdown (LOCKDOWN_PCI_ACCESS), first,
+ * as Linux's; -ENODEV for an I/O BAR, which x86 does not map, or a
  * function that is gone; -EINVAL for a range past the BAR's end, as
  * pci_mmap_fits refuses it, or a private mapping; -ENOMEM.
  */
@@ -9409,8 +9421,12 @@ static int32_t procfs_pcibar_mmap(fd_entry_t *e, struct vma *vma)
     struct procfs_file *f = (struct procfs_file *)e->priv;
     uint64_t pages = (vma->end - vma->start) / PAGE_SIZE, size;
     struct pci_resource r;
-    int key, bar = pcibar_of(e, &r, &key);
+    int key, bar, rc = lockdown_refuses(LOCKDOWN_PCI_ACCESS);
 
+    if (rc != 0) {
+        return rc;
+    }
+    bar = pcibar_of(e, &r, &key);
     if (bar < 0 || !(r.flags & PCI_IORESOURCE_MEM)) {
         return -ENODEV;
     }
@@ -11975,14 +11991,18 @@ static int32_t procfs_acpicall_read(fd_entry_t *e, char __user *buf, uint32_t co
 }
 
 /** Evaluate the method a write names (`acpi_call_write`), the whole count
- * taken: the count, -EINVAL for a request of ACPI_CALL_MAX bytes or more,
- * -EFAULT, or the call's error. */
+ * taken: the count, -EPERM under lockdown (LOCKDOWN_ACPI_CALL), since a
+ * method can program any device, -EINVAL for a request of ACPI_CALL_MAX
+ * bytes or more, -EFAULT, or the call's error. */
 static int32_t procfs_acpicall_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     char text[ACPI_CALL_MAX];
-    int rc;
+    int rc = lockdown_refuses(LOCKDOWN_ACPI_CALL);
 
     (void)e;
+    if (rc != 0) {
+        return rc;
+    }
     if (count >= sizeof(text)) {
         return -EINVAL;
     }

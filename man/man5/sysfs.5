@@ -151,6 +151,13 @@ fails with
 .Er ENODEV .
 libpciaccess maps a BAR through its file, as IGT maps the GPU's
 registers.
+Under lockdown
+.Pq Xr kernel_lockdown 7
+a mapping and a write fail with
+.Er EPERM ,
+and a read of an I/O BAR goes on, as Linux's
+.Dv LOCKDOWN_PCI_ACCESS
+has them.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource0_wc No to Pa resource5_wc
 One for each prefetchable memory BAR when the page attribute table
 provides write-combining, as on x86 Linux with PAT enabled.
@@ -171,7 +178,10 @@ with
 .Dv CAP_DAC_OVERRIDE .
 Writes stop at the end of the function's configuration space and use
 accesses of their own width, so a byte or word write does not rewrite
-adjacent status bits.
+adjacent status bits; under lockdown
+.Pq Xr kernel_lockdown 7
+a write fails with
+.Er EPERM .
 Every read reaches the current registers, including a
 .Xr pread 2
 at a nonzero offset.

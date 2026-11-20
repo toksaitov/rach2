@@ -11,10 +11,12 @@
  * above its number. */
 #define LOCKDOWN_NONE                0
 #define LOCKDOWN_DEV_MEM             1 /* /dev/mem, /dev/kmem and /dev/port */
-#define LOCKDOWN_MSR                 2 /* a write of a model-specific register */
-#define LOCKDOWN_DEBUGFS             3 /* debugfs beyond reading 0444 files */
-#define LOCKDOWN_INTEGRITY_MAX       4
-#define LOCKDOWN_CONFIDENTIALITY_MAX 5
+#define LOCKDOWN_PCI_ACCESS          2 /* a PCI function's config and BARs */
+#define LOCKDOWN_MSR                 3 /* a write of a model-specific register */
+#define LOCKDOWN_ACPI_CALL           4 /* /proc/acpi/call, an unsigned module */
+#define LOCKDOWN_DEBUGFS             5 /* debugfs beyond reading 0444 files */
+#define LOCKDOWN_INTEGRITY_MAX       6
+#define LOCKDOWN_CONFIDENTIALITY_MAX 7
 
 /**
  * 0 when the level lets the operation `what`, a LOCKDOWN_* below
@@ -26,7 +28,7 @@
 int lockdown_refuses(int what);
 
 /** Add /sys/kernel/security/lockdown, which shows the levels with the one in
- * force bracketed and takes a higher one from a writer with CAP_SYS_ADMIN, as
+ * force bracketed and takes a higher one from a writer its mode allows, as
  * Linux's securityfs file. */
 void lockdown_sysfs_start(void);
 

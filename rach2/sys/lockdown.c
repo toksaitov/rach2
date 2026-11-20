@@ -22,9 +22,13 @@ static const struct {
               {"integrity", LOCKDOWN_INTEGRITY_MAX},
               {"confidentiality", LOCKDOWN_CONFIDENTIALITY_MAX}};
 
-/* What the log names an operation refused for, by its number. */
-static const char *const reasons[] = {"none",           "/dev/mem,kmem,port", "raw MSR access",
-                                      "debugfs access", "integrity",          "confidentiality"};
+/* What the log names an operation refused for, by its number: Linux's
+ * words, and for /proc/acpi/call, which Linux has only from the unsigned
+ * acpi_call module that lockdown keeps from loading, the module's. */
+static const char *const reasons[] = {
+    "none",           "/dev/mem,kmem,port",      "direct PCI access",
+    "raw MSR access", "unsigned module loading", "debugfs access",
+    "integrity",      "confidentiality"};
 
 /** The level in force, read from the command line on the first call. */
 static int level_now(void)

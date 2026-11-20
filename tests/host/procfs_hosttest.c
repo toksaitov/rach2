@@ -922,6 +922,17 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     k_memcpy(out, path, n + 1);
     return 0;
 }
+/* Whether the model's kernel is locked down, which refuses every
+ * operation lockdown guards. */
+static int host_lockdown;
+
+/** -EPERM for every operation while `host_lockdown` is set, else 0. */
+int lockdown_refuses(int what)
+{
+    (void)what;
+    return host_lockdown ? -EPERM : 0;
+}
+
 /** A root the fixture's mount tables hold is held by nothing. */
 void vfs_place_hold(struct vfs_mount *mnt, void *node)
 {
@@ -4208,6 +4219,18 @@ static void drm_ident_rows(void)
     kfree(t.buf);
 }
 
+/** Under lockdown the config file `e`, open at 0x40, takes no write of
+ * `data`, as Linux's LOCKDOWN_PCI_ACCESS refuses it, and reads into `got`. */
+static void pci_config_lockdown_row(fd_entry_t *e, const char *data, char *got)
+{
+    host_lockdown = 1;
+    check(procfs_pciconfig_write(e, data, 4) == -EPERM && !pci_writes && e->ofd->offset == 0x40 &&
+              procfs_pciconfig_read(e, got, 4) == 4,
+          "under lockdown config takes no write, as LOCKDOWN_PCI_ACCESS refuses it, and reads");
+    host_lockdown = 0;
+    e->ofd->offset = 0x40;
+}
+
 /** The binary config file writes exact widths and reads current registers. */
 static void pci_config_rows(void)
 {
@@ -4260,6 +4283,7 @@ static void pci_config_rows(void)
     check(procfs_pciconfig_write(e, data, 4) == -ENOMEM && !pci_writes,
           "an allocation failure writes no register");
     refuse = 0;
+    pci_config_lockdown_row(e, data, got);
     pci_extended = 1;
     e->ofd->offset = 0x101;
     check(procfs_pciconfig_write(e, data, 7) == 7 && pci_writes == 3 && pci_write_at[0] == 0x101 &&
@@ -4392,6 +4416,10 @@ static void pci_bar_mem_rows(void)
           "root opens resource0 for reading and writing, close-on-exec");
     check(procfs_pcibar_read(e, got, 4) == -EIO && procfs_pcibar_write(e, put, 2) == -EIO,
           "a memory BAR has no read or write");
+    host_lockdown = 1;
+    check(bar_file_map(0, 1) == -EPERM && mapped_ops == NULL,
+          "under lockdown a BAR does not map, as LOCKDOWN_PCI_ACCESS refuses it");
+    host_lockdown = 0;
     check(bar_file_map(0, 512) == 0 && mapped_ops == &pcibar_vm_ops && mapped_cache == VM_PROT_UC,
           "2 MiB of BAR 0 map shared and uncached, as IGT maps the registers");
     check(mapped_ops && mapped_ops->page(mapped_obj, 1, &phys) == 0 && phys == 0xFE001000u &&
@@ -4478,6 +4506,11 @@ static void pci_bar_io_rows(void)
     check(procfs_pcibar_write(e, put, 2) == 2 && port_at == 0xC004u && port_width == 2 &&
               port_value == 0x1234u && e->ofd->offset == 0x6,
           "a write of 2 bytes is one word to its port");
+    host_lockdown = 1;
+    port_value = 0;
+    check(procfs_pcibar_write(e, put, 2) == -EPERM && port_value == 0 && e->ofd->offset == 0x6,
+          "under lockdown an I/O BAR takes no write, as LOCKDOWN_PCI_ACCESS refuses it");
+    host_lockdown = 0;
     e->ofd->offset = 0x10;
     check(procfs_pcibar_read(e, got, 3) == -EINVAL && procfs_pcibar_read(e, got, 8) == -EINVAL &&
               e->ofd->offset == 0x10,

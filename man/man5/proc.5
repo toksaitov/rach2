@@ -66,6 +66,11 @@ for a method that is not there, and
 before the first call.
 A write that names a method takes the whole request, whatever the method
 gave, as Linux's module does, and the result says how it went.
+Under lockdown
+.Pq Xr kernel_lockdown 7
+a write fails with
+.Er EPERM ,
+since Linux keeps the unsigned module from loading then.
 A request of 512 bytes or more is
 .Er EINVAL ,
 and a write while the kernel runs no ACPI interpreter is

@@ -20,6 +20,25 @@ an open of
 a write of a model-specific register through
 .Pa /dev/cpu/N/msr
 .Pq see Xr msr 4 ,
+a write of a PCI function's
+.Pa config ,
+a write of an I/O BAR's
+.Pa resourceN
+and a mapping of a memory BAR's
+.Pa resourceN
+or
+.Pa resourceN_wc
+.Pq see Xr sysfs 5 ,
+as Linux's
+.Dv LOCKDOWN_PCI_ACCESS
+refuses them, which log
+.Ql direct PCI access ,
+a write of
+.Pa /proc/acpi/call
+.Pq see Xr proc 5 ,
+whose method can program any device, and which Linux has only from the
+unsigned acpi_call module lockdown keeps from loading, logged as
+.Ql unsigned module loading ,
 and in
 .Xr debugfs 5
 an open of a file other than one of mode 0444 or less, opened to read,
