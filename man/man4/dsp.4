@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt DSP 4
 .Os
 .Sh NAME
@@ -9,6 +9,7 @@
 .Pp
 .Pa /dev/dsp
 .Pa /dev/dsp1
+.Pa /dev/adsp1
 .Sh DESCRIPTION
 The device plays the samples a program writes to it and records the samples
 a program reads from it, through OSS's interface with Linux's numbers: major
@@ -143,8 +144,13 @@ The five formats
 .Dv SNDCTL_DSP_SETFMT
 takes.
 .It Dv SNDCTL_DSP_CHANNELS
-Set one channel, or two for any larger count, and give back the count in use;
-0 asks for it.
+Set the count asked for, held at two on
+.Pa /dev/dsp
+and at eight on
+.Pa /dev/dsp1
+and
+.Pa /dev/adsp1 ,
+and give back the count in use; 0 asks for it.
 .It Dv SNDCTL_DSP_STEREO
 Set stereo for a nonzero value and mono for 0, and give back 1 or 0.
 .It Dv SNDCTL_DSP_SPEED
@@ -241,24 +247,42 @@ A silent playback channel supplies the clock while a reader runs, including
 on a Sound Blaster 16 without a hardware input.
 .Ss HDMI
 .Pa /dev/dsp1 ,
-minor 19, plays on the monitor of an HDMI or DisplayPort output of
+minor 19, and
+.Pa /dev/adsp1 ,
+minor 28, play on the monitors of the HDMI and DisplayPort outputs of
 Haswell's Intel display, through the display's HDMI codec, as Linux's
 second card's
 .Pa dsp
-does.
-It is there while the codec is bound to the display driver,
-.Xr i915 4 ,
-and plays on the first monitor whose ELD is valid; one that comes while
-the device plays is given the stream.
-It takes the requests and formats of
+and
+.Pa adsp
+do, each on its own PCM of the codec.
+They are there while the codec is bound to the display driver,
+.Xr i915 4 .
+Each monitor whose ELD turns valid is given a PCM, the one it had last if
+no other has taken it since, else the first free, as Linux gives them:
+the first monitor plays on
+.Pa /dev/dsp1
+and a second on
+.Pa /dev/adsp1 ,
+both at once.
+A device whose PCM has no monitor plays to none, and a monitor given its
+PCM while it plays is given the stream.
+Each takes the requests and formats of
 .Pa /dev/dsp ,
-but plays the device's one stream without the mix: one descriptor plays at
-a time, and nothing records.
-It grants each format, one or two channels and any rate from 1000 to
-192000 Hz, and converts them to what the monitor's ELD allows: stereo at
-the nearest of its rates from 32000 to 192000 Hz, in 16 bits, or 24 when
-the monitor takes them and the format is wider than 16, its rate changed
-by linear interpolation, as Linux's OSS plugins change it.
+but plays its PCM's one stream without the mix: one descriptor plays at a
+time on each, and nothing records.
+It grants each format, one to eight channels and any rate from 1000 to
+192000 Hz, and converts them to what the converter and the monitor's ELD
+allow: the nearest of its rates from 32000 to 192000 Hz, in 16 bits, or
+24 when the monitor takes them and the format is wider than 16, and the
+even count of channels from two to the most a descriptor of the ELD has
+nearest the count asked for, the higher on a tie.
+A mono stream plays on every channel, and another's channels play in
+order, those the device lacks dropped and those the stream lacks silent;
+the rate is changed by linear interpolation, as Linux's OSS plugins change
+it.
+More than two channels are sent with the CEA-861 channel allocation the
+monitor's speakers allow, in Linux's order of preference.
 An open for both directions plays alone.
 When the display driver lets the codec go, a write or read in progress
 returns what it moved,
@@ -277,19 +301,23 @@ says.
 another kernel caller has taken the hardware stream directly.
 The console's audio calls share the mix and do not prevent an open.
 On
-.Pa /dev/dsp1 ,
-another descriptor plays.
+.Pa /dev/dsp1
+or
+.Pa /dev/adsp1 ,
+another descriptor plays the device, or every converter of the codec is
+taken.
 .It Bq Er ENODEV
 .Xr open 2 :
 the driver has no streams, or none for the direction an open for reading or
 writing asks for, or neither direction for an open for both: the Sound
-Blaster 16's driver and
+Blaster 16's driver,
 .Pa /dev/dsp1
+and
+.Pa /dev/adsp1
 record nothing.
 Any call but
 .Xr close 2 :
-the device has gone, as when the display driver lets
-.Pa /dev/dsp1 Ns 's
+the device has gone, as when the display driver lets the HDMI devices'
 codec go;
 .Xr poll 2
 reports
