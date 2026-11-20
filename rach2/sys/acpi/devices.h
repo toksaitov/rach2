@@ -67,6 +67,16 @@ void acpi_ideapad_start(void);
 void acpi_pnp_i8042(void);
 
 /**
+ * Hold for the host, so that no PCI BAR over them is claimed
+ * (`pci_host_reserve`), the FADT's fixed register blocks, as Linux's
+ * acpi_reserve_resources, and the ports from 0x100 up and the memory of
+ * each present system device's _CRS, PNP0C01 or PNP0C02, as Linux's
+ * pnp/system.c. Called once ACPICA's objects are initialized and the EC
+ * runs, since a _STA may read it.
+ */
+void acpi_pnp_reserve(void);
+
+/**
  * Take the hot plug slots of the host bridge of bus 0, its children with
  * _ADR and _EJ0, and their Notify, as Linux's acpiphp does, with the
  * bridge's windows from its _CRS for the BARs of a card put in. Called

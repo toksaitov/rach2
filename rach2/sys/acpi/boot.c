@@ -126,6 +126,7 @@ void acpica_boot(uint64_t rsdp)
     acpi_video_start();
     acpi_ideapad_start();
     acpi_pnp_i8042();
+    acpi_pnp_reserve();
     acpi_pcihp_start();
     status = AcpiUpdateAllGpes();
     if (ACPI_FAILURE(status)) {

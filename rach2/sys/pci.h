@@ -435,11 +435,15 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
  * Whether BAR `i` (0 to 5) of the listed function bus:device.function may
  * be claimed by its driver, as Linux's pci_claim_resource and request_region
  * find: it has an address (`pci_resource`), an I/O one within the 64 KiB of
- * ports and on none of the PC's fixed ports; behind a bridge that decodes
- * positively it lies whole in a window of its kind; and it overlaps no other
- * BAR of its kind of a listed function. A BAR that is not claimed is
- * neither exposed nor decoded. 0; -EINVAL for a BAR the function lacks, one
- * without an address and one out of range; -EBUSY for an overlap. The
+ * ports; the host reaches it, each bridge on its way to the root that
+ * decodes positively holding it whole in a window of its kind, and bus 0's
+ * host bridge in one of its windows (`pci_root_windows`); and it overlaps
+ * none of the host's own ranges (the PC's fixed ports and the ports of the
+ * devices the kernel drives at fixed addresses, and what `pci_host_reserve`
+ * holds), no window of another bridge on its bus and no other BAR of its
+ * kind of a listed function. A BAR that is not claimed is neither exposed
+ * nor decoded. 0; -EINVAL for a BAR the function lacks, one without an
+ * address and one the host does not reach; -EBUSY for an overlap. The
  * caller holds the big lock, as for every search of the list.
  */
 int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i);
@@ -468,6 +472,25 @@ struct pci_aperture {
     uint64_t end;
     int io;
 };
+
+/**
+ * Hold `start` to `end`, inclusive, of I/O ports when `io` is set and of
+ * memory else, for the host, so that no BAR over it is claimed
+ * (`pci_resource_claimable`) or placed (`pci_assign_bars`), as Linux's
+ * resource tree holds the firmware's memory map (e820__reserve_resources),
+ * ACPI's fixed registers and system devices and what drivers request. A
+ * full table of ranges joins its two closest of a kind, which holds more,
+ * never less. Called while the kernel starts, before any driver claims.
+ */
+void pci_host_reserve(uint64_t start, uint64_t end, int io);
+
+/**
+ * Keep the windows `ap`, `n` of them, that the host bridge of bus 0 passes
+ * to its bus, from its _CRS, as Linux's root bus resources: a BAR the host
+ * reaches through bus 0 lies whole in one of its kind. With none of a
+ * kind, no BAR of the kind is held to them. Called while the kernel starts.
+ */
+void pci_root_windows(const struct pci_aperture *ap, int n);
 
 /**
  * Give each BAR of the listed function `bus`:`device`.`function` that has

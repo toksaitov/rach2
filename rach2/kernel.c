@@ -5012,6 +5012,10 @@ void kernel_main(const struct boot_info *boot)
 
             memory_map_line(line, sizeof(line), addr, len, type);
             klog(KLOG_DEBUG, "memory", "map: %s", line);
+            /* Linux's e820__reserve_resources: all but reserved above 1 MiB. */
+            if (len != 0 && (type != 2 || addr < 0x100000u)) {
+                pci_host_reserve(addr, addr + len - 1u, 0);
+            }
         }
         if (frame_map_build(&map, mmap, mmap_len, boot->mem_upper_kb, mmu_phys_reach()) != 0) {
             k_panic("memory: the firmware's map has more ranges than the kernel keeps");
