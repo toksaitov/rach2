@@ -690,8 +690,9 @@ static int pci_ranges_touch(uint64_t a, uint64_t b, uint64_t c, uint64_t d)
 }
 
 /** Make room in a full table: the two ranges of one kind with the least
- * between them become one, which holds what lay between them too. */
-static void pci_host_squeeze(void)
+ * between them become one, which holds what lay between them too. A full
+ * table of two kinds always has two of one; 0 when it has not. */
+static int pci_host_squeeze(void)
 {
     struct pci_aperture *a, *b;
     uint64_t gap, best = 0;
@@ -713,11 +714,15 @@ static void pci_host_squeeze(void)
             }
         }
     }
+    if (bi < 0 || bj < 0) {
+        return 0;
+    }
     a = &pci_host_ranges[bi];
     b = &pci_host_ranges[bj];
     a->start = a->start < b->start ? a->start : b->start;
     a->end = a->end > b->end ? a->end : b->end;
     *b = pci_host_ranges[--pci_host_nranges];
+    return 1;
 }
 
 void pci_host_reserve(uint64_t start, uint64_t end, int io)
@@ -739,8 +744,8 @@ void pci_host_reserve(uint64_t start, uint64_t end, int io)
         *h = pci_host_ranges[--pci_host_nranges];
         k = 0;
     }
-    if (pci_host_nranges == PCI_HOST_RANGES) {
-        pci_host_squeeze();
+    if (pci_host_nranges == PCI_HOST_RANGES && !pci_host_squeeze()) {
+        return;
     }
     h = &pci_host_ranges[pci_host_nranges++];
     h->start = start;
