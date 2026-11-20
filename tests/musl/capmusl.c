@@ -38,7 +38,10 @@
  * raise it again within that; under PR_SET_KEEPCAPS, setresuid to user 1000
  * keeps every capability permitted and none effective, and capset then
  * makes CAP_CHOWN effective, with which fchown gives user 1000 a file of
- * root's.
+ * root's. setfsuid to user 1000 takes CAP_DAC_OVERRIDE out of root's
+ * effective set, so that a file only root may read is refused, and capset
+ * makes it effective again, which capget reports and the open then passes
+ * by; under SECBIT_NO_SETUID_FIXUP setfsuid leaves it effective.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
@@ -64,6 +67,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/fsuid.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
@@ -81,6 +85,7 @@
 #define VERSION_3 0x20080522u
 #define HIGH_WORD 0x1FFu /* capabilities 32 to 40 */
 #define SECRET    "/tmp/capmusl.secret"
+#define ROOT_ONLY "/tmp/capmusl.fs"
 
 /* The capabilities the inheritable and ambient rows name, as bits of the
  * sets' first word. */
@@ -162,6 +167,8 @@ enum {
     OWN_EXE,
     EFFECTIVE_APART,
     KEEP_CAPS,
+    FSUID_CAPSET,
+    FSUID_NO_FIXUP,
     CHECKS
 };
 
@@ -210,6 +217,9 @@ static const struct {
     {"own-exe", "a thread without capabilities could not read its own process's exe link"},
     {"effective-apart", "capset did not keep the effective set apart from the permitted one"},
     {"keep-caps", "PR_SET_KEEPCAPS did not keep the permitted set through setresuid to user 1000"},
+    {"fsuid-capset",
+     "capset could not make CAP_DAC_OVERRIDE effective again after setfsuid took it from root"},
+    {"fsuid-no-fixup", "setfsuid under SECBIT_NO_SETUID_FIXUP moved the effective set"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -1188,6 +1198,97 @@ static int keeps_caps(int fd)
            fchown(fd, user, (gid_t)-1) == 0;
 }
 
+/** Whether the caller may open ROOT_ONLY, mode 0600 and root's, to read. */
+static int reads_root_only(void)
+{
+    int fd = open(ROOT_ONLY, O_RDONLY);
+
+    if (fd < 0) {
+        return 0;
+    }
+    close(fd);
+    return 1;
+}
+
+/**
+ * In a child of root: setfsuid to user 1000 leaves CAP_DAC_OVERRIDE
+ * permitted but not effective, and CAP_SYS_ADMIN effective, so that
+ * ROOT_ONLY is refused with EACCES; capset of the permitted set as the
+ * effective one makes CAP_DAC_OVERRIDE effective again though the
+ * file-system user id stays 1000, as on Linux, and capget reports it and
+ * the open passes. Returns 1 when all of it holds, else 0.
+ */
+static int fsuid_capset(void)
+{
+    struct cap_data d[2];
+    uid_t user = (uid_t)probe_id(1000);
+
+    setfsuid(user);
+    if ((uid_t)setfsuid((uid_t)-1) != user || get_caps(d) != 0 || (d[0].effective & DAC) ||
+        !(d[0].permitted & DAC) || !(d[0].effective & ADMIN)) {
+        return 0;
+    }
+    if (reads_root_only() || errno != EACCES) {
+        return 0;
+    }
+    d[0].effective = d[0].permitted;
+    d[1].effective = d[1].permitted;
+    return set_caps(d) == 0 && get_caps(d) == 0 && (d[0].effective & DAC) && reads_root_only();
+}
+
+/**
+ * In a child of root: under SECBIT_NO_SETUID_FIXUP, which root may set,
+ * setfsuid to user 1000 leaves the effective set whole, and ROOT_ONLY opens.
+ * Returns 1 when all of it holds, else 0.
+ */
+static int fsuid_no_fixup(void)
+{
+    struct cap_data d[2];
+    uid_t user = (uid_t)probe_id(1000);
+
+    if (prctl(PR_SET_SECUREBITS, 0x04, 0, 0, 0) != 0) {
+        return 0;
+    }
+    setfsuid(user);
+    return (uid_t)setfsuid((uid_t)-1) == user && get_caps(d) == 0 && all_of(d) && reads_root_only();
+}
+
+/** Run `row` in a forked child. Returns 1 when it held there, else 0. */
+static int in_child(int (*row)(void))
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        _exit(row() ? 0 : 1);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/**
+ * Run `fsuid_capset` and `fsuid_no_fixup` each in a forked child, with
+ * ROOT_ONLY made for them and removed after. Returns 0, or 1 after the
+ * failure is printed.
+ */
+static int fsuid_rows(void)
+{
+    int fd = open(ROOT_ONLY, O_RDWR | O_CREAT | O_TRUNC, 0600), check = CHECKS;
+
+    if (fd < 0 || fchmod(fd, 0600) != 0) {
+        check = FSUID_CAPSET;
+    } else if (!in_child(fsuid_capset)) {
+        check = FSUID_CAPSET;
+    } else if (!in_child(fsuid_no_fixup)) {
+        check = FSUID_NO_FIXUP;
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    unlink(ROOT_ONLY);
+    return check == CHECKS ? 0 : fail(check);
+}
+
 /**
  * Run `effective_apart` and `keeps_caps` each in a forked child. Returns 0,
  * or 1 after the failure is printed.
@@ -1245,7 +1346,7 @@ int main(int argc, char **argv)
     if (later_rows() != 0) {
         return 1;
     }
-    if (sets_rows() != 0) {
+    if (sets_rows() != 0 || fsuid_rows() != 0) {
         return 1;
     }
 

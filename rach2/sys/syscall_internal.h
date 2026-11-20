@@ -390,10 +390,11 @@ int fd_node_check(fd_entry_t *entry);
 /** Non-zero when the caller has appropriate privilege (`proc_privileged`). */
 int cred_privileged(void);
 
-/** Non-zero when the caller has privilege over files, which goes by its
- * file-system user id (`proc_fs_privileged`): what lets it pass a file's
- * permission bits, act as a file's owner, keep set-id bits across a write,
- * make a device node and change the immutable and append-only flags. */
+/** Non-zero when the caller has privilege over files, which goes by
+ * CAP_DAC_OVERRIDE in its effective set (`proc_fs_privileged`): what lets
+ * it pass a file's permission bits, act as a file's owner, keep set-id bits
+ * across a write, make a device node and change the immutable and
+ * append-only flags. */
 int cred_fs_privileged(void);
 
 /**

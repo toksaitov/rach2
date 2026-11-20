@@ -448,18 +448,10 @@ uint32_t cap_word(const process_t *p, uint32_t i);
 #define CAP_FS_WORD1 0x1u
 
 /**
- * Word `i` of `p`'s effective set. Set by capset (`eff_own`), it is
- * `cap_eff` within the permitted set, less CAP_FS_SET while the
- * file-system user id is not root and the effective one is. Otherwise it
- * is the permitted set while `cap_ids` or `amb_granted` holds, and empty
- * else, with the capabilities of
- * CAP_FS_SET by the file-system user id in place of the effective one, as
- * Linux's `cap_task_fix_setuid` moves them for setfsuid: those `p` has not
- * lost while that id is root in its user namespace, and none once
- * setfsuid has taken it from root while the effective id stayed there, nor
- * while PROC_FSCAPS_OFF holds them out after a call that set user ids
- * brought the file-system id back to root. A thread neither of whose ids
- * is root keeps what `cap_word` gives.
+ * Word `i` of `p`'s effective set. Once stored (`eff_own`), by capset, a
+ * call that set ids or setfsuid, it is `cap_eff` within the permitted set,
+ * whatever the ids are now, as Linux keeps it in the credentials; else it
+ * is the permitted set while `cap_ids` or `amb_granted` holds, and empty.
  */
 uint32_t cap_eff_word(const process_t *p, uint32_t i);
 

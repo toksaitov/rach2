@@ -28,11 +28,16 @@ The kernel keeps the effective, permitted, inheritable and ambient sets
 apart, as Linux does.
 The eight capabilities of file access, which
 .Xr setfsuid 2
-lists, are in the effective set by the file-system user ID instead: a
-thread has those it has not given up while that ID is 0, and none of
-them once
+lists, leave the effective set when
 .Xr setfsuid 2
-has taken it from 0, as on Linux.
+takes the file-system user ID from 0 and come back when it returns the
+ID to 0, as on Linux;
+.Fn capset
+may raise them again within the permitted set whatever that ID is, and
+.Dv SECBIT_NO_SETUID_FIXUP
+keeps
+.Xr setfsuid 2
+from moving them.
 The ambient set, which
 .Dv PR_CAP_AMBIENT
 of

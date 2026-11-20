@@ -4219,6 +4219,17 @@ static void drm_ident_rows(void)
     kfree(t.buf);
 }
 
+/** Store in `process` the effective set setfsuid leaves: with `fs`, as
+ * setfsuid(0) leaves a thread of user 1000 whose real id is root, the
+ * capabilities of CAP_FS_SET alone; else, as setfsuid(1000) leaves root,
+ * every capability but them. */
+static void host_fs_caps(int fs)
+{
+    process.eff_own = 1;
+    process.cap_eff[0] = fs ? CAP_FS_WORD0 : ~CAP_FS_WORD0;
+    process.cap_eff[1] = fs ? CAP_FS_WORD1 : CAP_HIGH_WORD & ~CAP_FS_WORD1;
+}
+
 /** Under lockdown the config file `e`, open at 0x40, takes no write of
  * `data`, as Linux's LOCKDOWN_PCI_ACCESS refuses it, and reads into `got`. */
 static void pci_config_lockdown_row(fd_entry_t *e, const char *data, char *got)
@@ -4376,10 +4387,12 @@ static void pci_bar_file_rows(void)
           "an unprivileged caller opens no resource file, even to read");
     process.euid = 0;
     process.fsuid = 1000;
-    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    process.fs_own = PROC_FSUID_OWN;
+    host_fs_caps(0);
     check(bar_file_open(SYSFS_PCI_RESOURCE0, 0) == -EACCES,
           "nor root once setfsuid(1000) takes its file-system id and with it CAP_DAC_OVERRIDE");
     process.fs_own = 0;
+    process.eff_own = 0;
     process.cap_lost[0] = 0xFFFFFFFFu;
     process.cap_lost[1] = CAP_HIGH_WORD;
     check(bar_file_open(SYSFS_PCI_RESOURCE0, 2) == 0,
@@ -4389,12 +4402,14 @@ static void pci_bar_file_rows(void)
     process.euid = 1000;
     process.fsuid = 0;
     process.fs_own = PROC_FSUID_OWN;
+    host_fs_caps(1);
     check(bar_file_open(SYSFS_PCI_RESOURCE0, 1) == 0,
           "and so does a user whose file-system id is root's");
     procfs_close(&entries[0]);
     process.euid = 0;
     process.fsuid = 0;
     process.fs_own = 0;
+    process.eff_own = 0;
     check(bar_file_open(SYSFS_PCI_RESOURCE0 + 1, 2) == -ENOENT, "nor anyone a BAR without one");
 }
 
@@ -4835,11 +4850,13 @@ static void sysattr_trunc_rows(void)
     process.cap_lost[0] = process.cap_lost[1] = 0;
     process.nocaps = 0;
     process.fsuid = 1000;
-    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    process.fs_own = PROC_FSUID_OWN;
+    host_fs_caps(0);
     check(dmi_open_refused(DMI_PRODUCT_SERIAL, 0),
           "effective root after setfsuid(1000) may not read the 0400 serial");
     process.fsuid = 0;
     process.fs_own = 0;
+    process.eff_own = 0;
     sysfs_remove(dir);
 }
 
@@ -4930,11 +4947,13 @@ static void sysattr_file_rows(void)
 
     process.euid = 0;
     process.fsuid = 1000;
-    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    process.fs_own = PROC_FSUID_OWN;
+    host_fs_caps(0);
     check(reg_file_open(h, 1) == -EACCES,
           "effective root is refused once setfsuid(1000) takes its file-system id");
     process.fsuid = 0;
     process.fs_own = 0;
+    process.eff_own = 0;
     process.cap_lost[0] = 1u << CAP_SYS_ADMIN;
     process.nocaps = 1;
     check(reg_file_open(h, 2) == 0, "uid 0 without CAP_SYS_ADMIN opens it as its owner, by mode");
@@ -4948,10 +4967,12 @@ static void sysattr_file_rows(void)
     process.euid = 1000;
     process.fsuid = 0;
     process.fs_own = PROC_FSUID_OWN;
+    host_fs_caps(1);
     check(reg_file_open(h, 1) == 0, "and a user whose file-system id is root's");
     procfs_close(e);
     process.fsuid = 1000;
     process.fs_own = 0;
+    process.eff_own = 0;
     check(reg_file_open(h, 1) == -EACCES, "while another user is refused");
     process.euid = 0;
     process.fsuid = 0;

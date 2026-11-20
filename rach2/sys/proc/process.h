@@ -1337,13 +1337,9 @@ isr_params_t *proc_user_frame(const process_t *t);
 #define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps && !(p)->userns)
 
 /* The bits of `fs_own`: the file-system user or group id was set apart from
- * the effective one; and the capabilities of CAP_FS_SET are out of the
- * effective set, as Linux's `cap_task_fix_setuid` leaves them once setfsuid
- * takes the file-system user id from root, until setfsuid gives it back,
- * the effective user id comes to root from another or an exec. */
-#define PROC_FSUID_OWN  1u
-#define PROC_FSGID_OWN  2u
-#define PROC_FSCAPS_OFF 4u
+ * the effective one. */
+#define PROC_FSUID_OWN 1u
+#define PROC_FSGID_OWN 2u
 
 /* The file-system user and group ids of thread `p`: the effective ones
  * unless setfsuid or setfsgid set one apart. */
@@ -1351,13 +1347,11 @@ isr_params_t *proc_user_frame(const process_t *t);
 #define proc_fsgid(p) (((p)->fs_own & PROC_FSGID_OWN) ? (p)->fsgid : (p)->egid)
 
 /* Whether thread `p` has privilege over files: `proc_privileged` judged by
- * the file-system user id, since the capabilities Linux checks for file
- * access (CAP_FS_SET: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH,
- * CAP_FOWNER, CAP_FSETID, CAP_LINUX_IMMUTABLE, CAP_MKNOD and
- * CAP_MAC_OVERRIDE) leave the effective set when that id leaves 0 and come
- * back as PROC_FSCAPS_OFF says. */
-#define proc_fs_privileged(p) \
-    (proc_fsuid(p) == 0 && !((p)->fs_own & PROC_FSCAPS_OFF) && !(p)->nocaps && !(p)->userns)
+ * CAP_DAC_OVERRIDE in its effective set, one of the capabilities Linux
+ * checks for file access (CAP_FS_SET), which leave that set when setfsuid
+ * takes the file-system user id from 0 (`cap_holds` in ns.h, which the
+ * users include). */
+#define proc_fs_privileged(p) (!(p)->nocaps && !(p)->userns && cap_holds((p), CAP_DAC_OVERRIDE))
 
 /* Whether [addr, addr + len) lies in the kernel buffer the thread `p` has
  * opened to the user-copy checks (`user_window_open`). A macro, so that

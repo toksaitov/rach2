@@ -1044,9 +1044,7 @@ static void cred_undump(process_t *p)
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
  * what `cred_undump` takes away. A new effective uid also ends the
  * capabilities it was granted in its user namespace (`ns_granted`), where
- * its privilege is then its uid's; one that comes to root from another
- * gives back the capabilities of CAP_FS_SET (PROC_FSCAPS_OFF), as Linux's
- * `cap_emulate_setxuid` makes the effective set the permitted one.
+ * its privilege is then its uid's.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
@@ -1057,9 +1055,31 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
     if (p->euid != old_euid) {
         p->ns_granted = 0;
     }
-    if (uid_seen(old_euid) != 0 && uid_seen(p->euid) == 0) {
-        p->fs_own &= ~PROC_FSCAPS_OFF;
+}
+
+/**
+ * Store the effective set of `p`, whose file-system user id setfsuid moves
+ * from root (`was_root`) or not to root (`is_root`) or not, as Linux's
+ * `cap_task_fix_setuid` leaves it: a move from root takes the capabilities
+ * of CAP_FS_SET out, and one to root raises those of them the permitted set
+ * holds. The set stays as stored after that, through capset and through a
+ * call that sets user ids and so brings the file-system id back to root.
+ * SECBIT_NO_SETUID_FIXUP leaves it as it was.
+ */
+static void fs_caps_moved(process_t *p, int was_root, int is_root)
+{
+    uint32_t eff[2], i;
+
+    if (was_root == is_root || (p->securebits & SECBIT_NO_SETUID_FIXUP)) {
+        return;
     }
+    for (i = 0; i < 2; i++) {
+        uint32_t fs = i == 0 ? CAP_FS_WORD0 : CAP_FS_WORD1;
+
+        eff[i] = cap_eff_word(p, i);
+        eff[i] = is_root ? eff[i] | (cap_word(p, i) & fs) : eff[i] & ~fs;
+    }
+    cap_store_eff(p, eff[0], eff[1]);
 }
 
 /**
@@ -7849,11 +7869,8 @@ long sys_setresgid(isr_params_t *params)
  * back either way, as the namespace sees it, which is how a program reads
  * it. The ID is the calling thread's alone and stays apart from the
  * effective one until the next call that sets user IDs or an exec
- * (`fsuid_follow`); a change undoes what `cred_undump` takes away. A change
- * from root takes the capabilities of CAP_FS_SET out of the effective set
- * and one to root gives them back (PROC_FSCAPS_OFF), as Linux's
- * `cap_task_fix_setuid` does; a call that sets user IDs and so brings the
- * file-system ID back to root leaves them out.
+ * (`fsuid_follow`); a change undoes what `cred_undump` takes away, and moves
+ * the capabilities of CAP_FS_SET (`fs_caps_moved`).
  */
 static long fsuid_set(uint32_t uid)
 {
@@ -7864,11 +7881,7 @@ static long fsuid_set(uint32_t uid)
     uid = (uint32_t)k;
     if (k >= 0 && uid != old &&
         (uid == p->ruid || uid == p->euid || uid == p->suid || id_privileged())) {
-        if (uid_seen(old) == 0 && uid_seen(uid) != 0) {
-            p->fs_own |= PROC_FSCAPS_OFF;
-        } else if (uid_seen(old) != 0 && uid_seen(uid) == 0) {
-            p->fs_own &= ~PROC_FSCAPS_OFF;
-        }
+        fs_caps_moved(p, uid_seen(old) == 0, uid_seen(uid) == 0);
         p->fsuid = uid;
         p->fs_own |= PROC_FSUID_OWN;
         cred_undump(p);

@@ -72,7 +72,16 @@ go by the file-system user ID: a thread whose file-system user ID leaves
 loses them from its effective set, though its effective user ID stays
 0, and one that
 .Fn setfsuid
-returns to 0 has again those it has not given up.
+returns to 0 has again those its permitted set holds.
+.Xr capset 2
+may raise them again while the ID is not 0, and checks of access then
+pass by them, as on Linux.
+Under the secure bit
+.Dv SECBIT_NO_SETUID_FIXUP
+of
+.Xr prctl 2 ,
+.Fn setfsuid
+leaves the effective set as it was.
 A call of
 .Xr setuid 2
 and its kin that makes the file-system user ID the effective one, 0,

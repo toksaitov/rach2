@@ -14,25 +14,16 @@ uint32_t cap_word(const process_t *p, uint32_t i)
     return i < 2 && (p->euid == 0 || p->amb_granted) ? full & ~p->cap_lost[i] : 0u;
 }
 
-/** A word of the effective capabilities, as `cap_eff_word` gives it
- * in the first user namespace: the capabilities of CAP_FS_SET by the
- * file-system user id, the rest by the effective one. */
+/** A word of the effective capabilities, as `cap_eff_word` gives it in
+ * the first user namespace: once stored (`eff_own`), `cap_eff` less what
+ * `p` has lost, since a row that stores one stands for a thread whose real
+ * or saved user id gives it the permitted set; else the permitted set. */
 uint32_t cap_eff_word(const process_t *p, uint32_t i)
 {
-    uint32_t fs = i == 0 ? CAP_FS_WORD0 : CAP_FS_WORD1, held;
-
     if (i > 1) {
         return 0;
     }
-    held = cap_word(p, i);
-    if (p->fs_own & PROC_FSCAPS_OFF) {
-        held &= ~fs;
-    } else if (proc_fsuid(p) == 0) {
-        held |= fs & ~p->cap_lost[i];
-    } else if (p->euid == 0) {
-        held &= ~fs;
-    }
-    return held;
+    return p->eff_own ? p->cap_eff[i] & ~p->cap_lost[i] : cap_word(p, i);
 }
 
 /** Test one effective capability in the initial namespace. */

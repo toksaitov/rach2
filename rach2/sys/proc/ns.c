@@ -1478,30 +1478,15 @@ uint32_t cap_word(const process_t *p, uint32_t i)
 
 uint32_t cap_eff_word(const process_t *p, uint32_t i)
 {
-    uint32_t fs = i == 0 ? CAP_FS_WORD0 : CAP_FS_WORD1;
     uint32_t held = cap_word(p, i);
 
     if (i > 1) {
         return 0;
     }
     if (p->eff_own) {
-        held &= p->cap_eff[i];
-        if ((p->fs_own & PROC_FSCAPS_OFF) ||
-            (!uid_root_in(p, proc_fsuid(p)) && uid_root_in(p, p->euid))) {
-            held &= ~fs;
-        }
-        return held;
+        return held & p->cap_eff[i];
     }
-    if (!p->amb_granted && !cap_ids(p)) {
-        held = 0;
-    }
-    if (p->fs_own & PROC_FSCAPS_OFF) {
-        return held & ~fs;
-    }
-    if (uid_root_in(p, proc_fsuid(p))) {
-        return held | (fs & ~p->cap_lost[i]);
-    }
-    return uid_root_in(p, p->euid) ? held & ~fs : held;
+    return p->amb_granted || cap_ids(p) ? held : 0u;
 }
 
 int cap_holds(const process_t *p, uint32_t cap)
