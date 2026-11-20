@@ -52,7 +52,9 @@ connection to the same peer address and port left off, chosen by a keyed
 hash of that destination, as Linux does (RFC 6056, algorithm 4): a port
 held by a listener or a bound socket is passed over, and one another
 connection has is taken only for a different peer, so each destination has
-the whole range.
+its own search.
+Both searches may reach the last port of a range with an odd number of
+ports, depending on where the search started.
 .Pp
 The side that closes first holds the connection in
 .Dv TIME_WAIT
@@ -68,6 +70,8 @@ does without timestamps; a reset at the next sequence number expected ends
 it too.
 Another SYN, or an older one, is acknowledged at most once in 500 ms,
 the rest counted in TCPACKSkippedTimeWait.
+That limit starts fresh on entry to
+.Dv TIME_WAIT .
 A connection there gives back its send buffer on entering it, and its
 receive buffer then if nothing is unread or no socket holds it, and
 otherwise when the socket is closed.

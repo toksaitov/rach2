@@ -989,7 +989,8 @@ static void hold_ports(uint32_t first, uint32_t last, unsigned parity, int hold)
 static void aim_connect(net_addr_t from, uint16_t dport, uint16_t port)
 {
     net_addr_t to = net_addr4(PEER);
-    uint32_t h = tcp_tuple_hash(&from, &to, 0, dport), low, span = tcp_port_span(&low);
+    uint32_t h = tcp_tuple_hash(&from, &to, 0, dport);
+    uint32_t range = net_port_range, low = NET_PORT_LOW(range), span = tcp_port_span(range);
 
     port_perturb[h & (TCP_PERTURB_SIZE - 1u)] = ((port - low) + span - (h >> 8) % span) % span;
 }
@@ -1089,12 +1090,13 @@ static void ephemeral_rows(void)
  * from the low end and a connection's an even one; a port bound before the
  * range moved over it passed over; a range of one port, given to a bind
  * once; a listen on a port nothing holds, which searches no socket for a
- * conflict, as Linux's bind table answers without one; and a range of an
- * odd count, whose top port no search reaches.
+ * conflict, as Linux's bind table answers without one; and an odd-sized
+ * range whose last port both searches can reach before wrapping.
  */
 static void range_rows(void)
 {
     struct socket sock;
+    net_addr_t none = net_addr4(0), from = net_addr4(net_ip_addr);
     uint16_t port;
     unsigned i, ok = 1;
 
@@ -1141,11 +1143,22 @@ static void range_rows(void)
 
     net_port_range = (40004UL << 16) | 40000UL;
     hold_ports(40000, 40003, 2, 1);
-    CHECK("in the range 40000 to 40004 no search reaches 40004, as on Linux",
-          tcp_bind_ephemeral() == 0);
+    for (i = 0; i < 32; i++) {
+        net_addr_t count = net_addr4(bind_searches);
+
+        if ((tcp_tuple_hash(&none, &count, 0, 0) % 4u) >= 2u) {
+            break; /* start the bind at 40003 and its second pass at 40002 */
+        }
+        bind_searches++;
+    }
+    CHECK("a bind starting at 40003 can reach the only free port, 40004",
+          i < 32 && tcp_bind_ephemeral() == 40004u);
+    aim_connect(from, 80, 40002);
     k_memset(&sock, 0, sizeof(sock));
-    CHECK("a connection there is EADDRNOTAVAIL",
-          tcp_connect(&sock, net_addr4(PEER), 80) == -EADDRNOTAVAIL);
+    CHECK("a connection starting at 40002 can also take 40004",
+          tcp_connect(&sock, net_addr4(PEER), 80) == 0 && sock.tcb &&
+              sock.tcb->local_port == 40004u);
+    tcp_close(&sock);
     hold_ports(40000, 40003, 2, 0);
     reset_all();
 }
@@ -1251,8 +1264,7 @@ static void time_wait_more_rows(void)
  * the next counted in TCPACKSkippedTimeWait, and one past it with no
  * listener acknowledged; a reset at `rcv_nxt` ends the TIME_WAIT and one
  * elsewhere does not; a bare acknowledgement at `rcv_nxt` restarts the
- * 60 s; and a block a socket still holds, ended by a reset, leaves the
- * table of connections as CLOSED for the socket's close to free.
+ * 60 s.
  */
 static void time_wait_reuse_rows(void)
 {
@@ -1305,15 +1317,38 @@ static void time_wait_reuse_rows(void)
     CHECK("a reset past rcv_nxt leaves the TIME_WAIT", tw_count == 1 && tw_first == tw);
     rx(88, lport, peer_seq, 0, F_RST, 65535, (const char *)0, 0);
     CHECK("and one at rcv_nxt ends it", tw_count == 0 && tcbs == 0);
+}
+
+/**
+ * Check a TIME_WAIT block that its socket still holds. The first reply
+ * can follow a challenge ACK in the same tick. A reset leaves the block
+ * CLOSED and unhashes it, for the socket's close to free.
+ */
+static void time_wait_attached_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 44000, skipped, challenges;
+    uint16_t lport;
 
     reset_all();
     conn = open_conn(&sock, 89, &peer_seq, &lport);
+    n_segs = 0;
+    challenges = net_mib.tcp_challenge_ack;
+    rx(89, lport, peer_seq, conn->snd_nxt, F_SYN, 65535, (const char *)0, 0);
+    CHECK("a SYN before the close draws a challenge ACK",
+          n_segs == 1 && last_flags() == F_ACK && net_mib.tcp_challenge_ack == challenges + 1u);
     (void)tcp_shutdown(&sock, 0, 1);
     rx(89, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
     rx(89, lport, peer_seq, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK), 65535, (const char *)0, 0);
     peer_seq++;
     CHECK("a socket that shut its sending half holds its block in TIME_WAIT",
           conn->state == TCP_TIME_WAIT && conn->sock == &sock && !conn->tw_listed);
+    n_segs = 0;
+    skipped = net_mib.tcp_ack_skipped_time_wait;
+    rx(89, lport, peer_seq - 10u, 0, F_SYN, 65535, (const char *)0, 0);
+    CHECK("TIME_WAIT answers the first old SYN even at the challenge ACK's tick",
+          n_segs == 1 && last_flags() == F_ACK && net_mib.tcp_ack_skipped_time_wait == skipped);
     rx(89, lport, peer_seq, 0, F_RST, 65535, (const char *)0, 0);
     CHECK("a reset at rcv_nxt leaves it CLOSED, out of the table, with no error",
           tcbs == conn && conn->state == TCP_CLOSED && conn->sock == &sock && !conn->hashed &&
@@ -3398,6 +3433,7 @@ int main(void)
     range_rows();
     time_wait_rows();
     time_wait_reuse_rows();
+    time_wait_attached_rows();
     time_wait_more_rows();
     path_mtu_row();
     keepalive_rows();
