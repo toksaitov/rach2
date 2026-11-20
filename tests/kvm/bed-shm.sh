@@ -229,7 +229,7 @@ fences_pending()
         [ "$pending_left" -gt 0 ] && kill -0 "$waiter" 2>/dev/null &&
             ! grep -q '^VGSHMPROBE FAIL' "$out/pending.out" || return 1
         sleep 1
-        pending_left=$((left - 1))
+        pending_left=$((pending_left - 1))
     done
 }
 
