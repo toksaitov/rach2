@@ -39,21 +39,25 @@ struct hid_input {
     uint8_t abs[8];
     uint8_t led[2];
     uint8_t msc[1];
-    unsigned int buttons;          /* the mouse queue's packet under way: its buttons, */
-    int dx;                        /* its motion to the right, */
-    int dy;                        /* and toward the user */
-    unsigned int mt_flags;         /* INPUT_MT_* for a multitouch application */
-    uint16_t mt_first, mt_last;    /* the contact groups in this packet */
-    int mt_count;                  /* frame size in the packet, or -1 if absent */
-    int mt_left;                   /* contacts still due in a counted frame */
-    unsigned int mt_buttons;       /* the buttons described by the touch application */
-    unsigned int mt_pressed;       /* button bits read in this packet */
-    unsigned int mt_button_fields; /* button sources present in this packet */
-    unsigned int mt_frame_buttons; /* precision buttons from the first packet */
-    unsigned int mt_button_codes;  /* mapped codes handled at frame end */
-    uint8_t mt_button_target[32];  /* per-source code, relative to BTN_LEFT */
-    uint8_t mt_precision;          /* uses the Microsoft multitouch profile */
-    uint8_t mt_drop_unused;        /* the device omits lifted contacts */
+    unsigned int buttons;                /* the mouse queue's packet under way: its buttons, */
+    int dx;                              /* its motion to the right, */
+    int dy;                              /* and toward the user */
+    unsigned int mt_flags;               /* INPUT_MT_* for a multitouch application */
+    uint16_t mt_first, mt_last;          /* the contact groups in this packet */
+    int mt_count;                        /* frame size in the packet, or -1 if absent */
+    int mt_left;                         /* contacts still due in a counted frame */
+    int mt_expected;                     /* the last positive Contact Count */
+    unsigned int mt_buttons;             /* the buttons described by the touch application */
+    unsigned int mt_pressed;             /* button bits read in this packet */
+    unsigned int mt_button_fields;       /* button sources present in this packet */
+    unsigned int mt_frame_buttons;       /* precision buttons from the first packet */
+    unsigned int mt_button_codes;        /* mapped codes handled at frame end */
+    uint8_t mt_button_target[32];        /* per-source code, relative to BTN_LEFT */
+    uint8_t mt_precision;                /* uses the Microsoft multitouch profile */
+    uint8_t mt_drop_unused;              /* the device omits lifted contacts */
+    uint8_t mt_serial;                   /* one contact record, its count not trusted */
+    uint16_t mt_palms;                   /* slots set in `mt_palm` */
+    uint8_t mt_palm[EVDEV_MT_SLOTS / 8]; /* palms to lift after their frame */
 };
 
 struct hid_mt_contact;

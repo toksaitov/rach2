@@ -541,6 +541,20 @@ int evdev_mt_get_slot_by_key(struct evdev *dev, int32_t key)
     return free_slot;
 }
 
+int evdev_mt_slot_active(struct evdev *dev, int slot)
+{
+    uint32_t flags;
+    int active;
+
+    if (!dev || slot < 0 || slot >= dev->num_slots) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    active = dev->slots[slot].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return active;
+}
+
 void evdev_mt_end_frame(struct evdev *dev)
 {
     uint32_t flags = spin_lock_irqsave(&evdev_lock);

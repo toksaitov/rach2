@@ -295,6 +295,10 @@ int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active);
  * The reporter selects that slot and reports its state before the next call. */
 int evdev_mt_get_slot_by_key(struct evdev *dev, int32_t key);
 
+/** Return whether slot `slot` of `dev` has a contact, as Linux's
+ * `input_mt_is_active`; 0 for a slot out of range. Any context. */
+int evdev_mt_slot_active(struct evdev *dev, int slot);
+
 /** End the slots' frame, keeping contacts that had no update in it. */
 void evdev_mt_end_frame(struct evdev *dev);
 
