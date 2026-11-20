@@ -630,25 +630,37 @@ static void fork_rows(void)
     CHECK(sysctl_sched_base_slice == 2800000u, "the scaling stops at eight processors");
 }
 
-/** RUN_TO_PARITY's protection, and PREEMPT_SHORT's cancel of it. */
+/**
+ * RUN_TO_PARITY's protection, and PREEMPT_SHORT's cancel of it.
+ *
+ * The protection holds only while the current thread is eligible, so the
+ * rows wake beside a current thread with positive lag L. Three threads
+ * give one at each round of picks, whatever the slice; two equal ones, at
+ * a slice of whole ticks, switch at equal virtual runtimes, lag 0. A
+ * wakee of lag L among n queued threads lowers V by L / (n + 1), which
+ * leaves the current eligible and puts the wakee's deadline first.
+ */
 static void parity_rows(void)
 {
     struct cfs_rq *rq = &fair_rqs[0].cfs;
-    struct process *a = &procs[0], *b = &procs[1], *w = &procs[2];
+    struct process *a = &procs[0], *b = &procs[1], *c = &procs[3], *w = &procs[2];
+    int64_t lag;
 
     reset();
     spawn(a, 0, SCHED_OTHER);
     spawn(b, 0, SCHED_OTHER);
+    spawn(c, 0, SCHED_OTHER);
     schedule_model();
     run_for(30000000u);
     /* just after a pick, the current thread is protected */
-    while (cur->se.sum_exec_runtime != cur->se.prev_sum_exec_runtime) {
+    while (cur->se.sum_exec_runtime != cur->se.prev_sum_exec_runtime || lag_of(rq, &cur->se) <= 0) {
         run_for(100000u);
     }
+    lag = lag_of(rq, &cur->se);
     CHECK(protect_slice(&cur->se), "a picked thread starts protected");
     w->nice = 0;
     fair_fork(w, cur);
-    w->se.vlag = (int64_t)calc_delta_fair(sysctl_sched_base_slice, &w->se);
+    w->se.vlag = lag;
     fair_enqueue(w, FAIR_ENQ_WAKE);
     CHECK(fair_entity_eligible(rq, &w->se) && entity_before(&w->se, &cur->se),
           "the wakee is eligible and earlier");
@@ -718,11 +730,9 @@ static void group_rows(void)
               d->se.sum_exec_runtime > 15000000u,
           "the group and the lone thread share the processor half and half");
 
-    /* same group: the wake is judged inside the group's queue */
-    while (cur != a && cur != b) {
-        run_for(100000u);
-    }
-    while (cur->se.sum_exec_runtime != cur->se.prev_sum_exec_runtime) {
+    /* same group: the wake is judged inside the group's queue, just after
+     * a pick of a member, which is then eligible there */
+    while ((cur != a && cur != b) || cur->se.sum_exec_runtime != cur->se.prev_sum_exec_runtime) {
         run_for(100000u);
     }
     /* placed at V, the wakee leaves V and the current's eligibility as
@@ -735,8 +745,11 @@ static void group_rows(void)
     CHECK(!fair_wake_preempt(cur, c, FAIR_WF_TTWU),
           "an equal-slice wakee in the same group waits for the protected current");
     fair_dequeue(c, FAIR_DEQ_FORCED);
+    /* the current may resume a slice it began before its group lost the
+     * root, so its deadline may be near; a wakee owed a slice is placed
+     * before it */
     fair_set_slice(c, 100000u);
-    c->se.vlag = 0;
+    c->se.vlag = (int64_t)calc_delta_fair(sysctl_sched_base_slice, &c->se);
     fair_enqueue(c, FAIR_ENQ_WAKE);
     CHECK(fair_wake_preempt(cur, c, FAIR_WF_TTWU),
           "a short-slice wakee in the same group preempts its sibling");
@@ -747,10 +760,7 @@ static void group_rows(void)
 
     /* across groups: the wake is judged between the group entity and the
      * wakee at the root */
-    while (cur != a && cur != b) {
-        run_for(100000u);
-    }
-    while (cur->se.sum_exec_runtime != cur->se.prev_sum_exec_runtime) {
+    while ((cur != a && cur != b) || cur->se.sum_exec_runtime != cur->se.prev_sum_exec_runtime) {
         run_for(100000u);
     }
     fair_dequeue(d, FAIR_DEQ_FORCED);
