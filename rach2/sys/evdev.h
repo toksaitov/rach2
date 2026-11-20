@@ -349,6 +349,23 @@ typedef void (*evdev_handler_t)(struct evdev *dev, uint16_t type, uint16_t code,
  */
 void evdev_set_handler(struct evdev *dev, evdev_handler_t fn);
 
+/* A driver's hook for the events that go to its device, as Linux's
+ * `input_dev.event`: `ctx` is the driver's, given to `evdev_set_output`. */
+typedef void (*evdev_output_t)(void *ctx, uint16_t type, uint16_t code, int32_t value);
+
+/**
+ * Give `dev` the output hook `fn`, called with `ctx` for each of its LEDs
+ * that is lit or put out, whether by the console's locks
+ * (`evdev_report_leds`) or by a program's EV_LED (`evdev_write`), and
+ * whether or not an open holds the grab, as Linux's input core passes
+ * EV_LED to the device's `event`. It is called with the evdev lock held and
+ * interrupts off, so it may take only spinlocks taken with interrupts off
+ * and must not report; once `evdev_set_output` with a NULL `fn`, or
+ * `evdev_unregister`, returns, no call is under way. A NULL `dev` is
+ * ignored.
+ */
+void evdev_set_output(struct evdev *dev, evdev_output_t fn, void *ctx);
+
 /* One entry of a device's keymap, as Linux's struct input_keymap_entry
  * names it: the entry's place in the map, its scan code, its key code, and
  * whether the entry is asked for by its place rather than its scan code. */

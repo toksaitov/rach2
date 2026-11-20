@@ -329,6 +329,11 @@ void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keyc
     key_event(kb, scan, keycode, down, 1);
 }
 
+void input_keyboard_key(struct input_keyboard *kb, unsigned int keycode, int down)
+{
+    key_event(kb, 0, keycode, down, 0);
+}
+
 int input_keyboard_release(struct evdev *dev, unsigned int keycode)
 {
     struct input_keyboard *kb;

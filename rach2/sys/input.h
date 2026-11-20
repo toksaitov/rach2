@@ -115,6 +115,13 @@ int input_keyboard_release(struct evdev *dev, unsigned int keycode);
 void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keycode, int down);
 
 /**
+ * Take one key of `kb` as `input_key_event` does, without MSC_SCAN: for a
+ * keyboard whose device reports its own miscellaneous events, or none, as
+ * a virtio keyboard gives Linux's codes alone. A `keycode` of 0 is dropped.
+ */
+void input_keyboard_key(struct input_keyboard *kb, unsigned int keycode, int down);
+
+/**
  * Give the PS/2 keyboard `kb` one set-1 code, in interrupt context: a prefix
  * is kept for the code after it, and a key's code goes to `input_key_event`
  * with the key code its keymap gives, or `set1_keycode` without one, and

@@ -1711,6 +1711,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "virtio_input",
+          "checks": "tests/host/virtio_input_hosttest.c runs the virtio input driver against a model of the configuration of QEMU's virtio keyboard, mouse and tablet: a keyboard and a mouse with no absolute axis bound, the keyboard's keys given to the input layer and its lock LEDs told the device on the status queue, the mouse's packets given to the mouse queue but under a grab, the tablet's axes, a device of no capability bound, and each removal leaving nothing allocated, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_net",
           "checks": "tests/host/virtio_net_hosttest.c runs the virtio network driver over the virtio core against a model device: the features taken without an offload, the receive queue kept full and told of in batches, frames across mergeable buffers, sends without an interrupt, the link, the MTU, the control queue, stop, a failed bring-up at each allocation, unbind and bind, and a polled device, under ASan and UBSan and exits 0",
           "source": "scenario"
