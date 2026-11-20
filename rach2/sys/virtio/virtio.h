@@ -90,11 +90,11 @@ struct virtq_used_elem {
  * A legacy device (virtio 1.2, 4.1.5, "Legacy Interfaces") has queues of
  * the size it states, which the driver cannot change, laid out as one run
  * of memory whose device's ring begins on a boundary of VIRTQ_LEGACY_ALIGN
- * after the driver's: a queue of 256 takes three pages. The core takes up
- * to VIRTQ_LEGACY_MAX entries, the most QEMU's devices have
- * (VIRTQUEUE_MAX_SIZE), and refuses a queue that states more.
+ * after the driver's: a queue of 256 takes three pages. The core takes any
+ * power of two the 16-bit size register states, up to 32768, whose rings
+ * fill 210 pages, as Linux's vring_alloc_queue_split does, and refuses
+ * another size.
  */
-#define VIRTQ_LEGACY_MAX   1024
 #define VIRTQ_LEGACY_ALIGN 4096u
 
 /*
@@ -144,7 +144,7 @@ struct virtqueue {
     struct virtio_dev *dev;
     uint16_t index;  /* the queue's number on its device */
     uint16_t size;   /* descriptors, a power of two up to VIRTQ_MAX_SIZE, or up
-                      * to VIRTQ_LEGACY_MAX on a legacy device */
+                      * to 32768 on a legacy device */
     uint16_t vector; /* the transport's interrupt entry, or VIRTIO_NO_VECTOR */
     uint16_t pad;
     uintptr_t notify; /* where the transport rings this queue; its own */

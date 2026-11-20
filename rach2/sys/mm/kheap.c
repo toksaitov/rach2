@@ -741,7 +741,7 @@ void *kalloc_contig(uint32_t count, uintptr_t *phys)
     uint32_t page;
     void *va;
 
-    if (count == 0 || count >= KHEAP_RUN_LEAST) {
+    if (count == 0 || count > KHEAP_RUN_PAGES) {
         spin_unlock_irqrestore(&heap_lock, flags);
         klog(KLOG_ERR, "kheap", "%d consecutive frames: not a size it gives", (int)count);
         return NULL;

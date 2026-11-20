@@ -236,16 +236,15 @@ static uint32_t virtqueue_layout(uint16_t size, uint32_t align, uint32_t *avail_
 /**
  * The size of queue `index` of `d`, which offers `max`: the largest power
  * of two up to VIRTQ_MAX_SIZE that `max` allows; on a legacy device `max`
- * itself, which must be a power of two up to VIRTQ_LEGACY_MAX, as Linux's
- * vring_create_virtqueue_split asks. 0, with a record, for a legacy queue
- * that cannot be had.
+ * itself, which must be a power of two, as Linux's vring_alloc_queue_split
+ * asks. 0, with a record, for a legacy queue that cannot be had.
  */
 static uint16_t virtqueue_size(struct virtio_dev *d, uint16_t index, uint16_t max)
 {
     uint16_t size = VIRTQ_MAX_SIZE;
 
     if (d->legacy) {
-        if (max > VIRTQ_LEGACY_MAX || (max & (max - 1u))) {
+        if (max & (max - 1u)) {
             klog(KLOG_WARN, "virtio", "refused: %s: legacy queue %d of %d entries", d->name, index,
                  max);
             return 0;
