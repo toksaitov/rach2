@@ -57,7 +57,8 @@
  * allocation failing in turn, and every one from it on; a third port added
  * and removed through the control queue, with its nodes; a generic port's
  * vport node read, written and polled with the host's end open and closed,
- * and opened again after its pages came back with no interrupt;
+ * and opened again after its pages came back with no interrupt; two
+ * readers of one description whose first's copy sleeps, losing no input;
  * a second console port's hvc terminal; a console port added late on a
  * machine without a UART, given the log's ring then; the emergency write
  * of early output and of a panic on the second device; a device that
@@ -525,14 +526,55 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
-/** A copy to the row's memory. */
+/* What a row runs inside the next copy to its memory, once: another
+ * thread that runs while the copy's fault sleeps. */
+static void (*copy_sleeps)(void);
+
+/** A copy to the row's memory, after `copy_sleeps` when a row set it. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
+    void (*during)(void) = copy_sleeps;
+
     if (!dst) {
         return -EFAULT;
     }
+    copy_sleeps = 0;
+    if (during) {
+        during();
+    }
     k_memcpy((void *)dst, src, n);
     return 0;
+}
+
+/* The mutexes taken and the takes that found one held. */
+static int mutex_takes, mutex_waits;
+
+/** A free mutex. */
+void mutex_init_key(struct mutex *mx, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    mx->owner = 0;
+}
+
+/** Take `mx`; one held is a wait, which ends as this model's waits end, as
+ * a signal ends it, and is counted. */
+int mutex_lock_interruptible(struct mutex *mx)
+{
+    if (mx->owner) {
+        mutex_waits++;
+        return -EINTR;
+    }
+    mx->owner = (uintptr_t)mx;
+    mutex_takes++;
+    return 0;
+}
+
+/** Give `mx` back; one not held fails the row. */
+void mutex_unlock(struct mutex *mx)
+{
+    check(mx->owner != 0, "a mutex given back is held");
+    mx->owner = 0;
 }
 
 /** The console's service, which here only counts: a reader that is not
@@ -2386,6 +2428,60 @@ static void vport_reopen(void)
     vcon_vport_ops.close(&e);
 }
 
+/* The second reader of `vport_shared`, its buffer and what it returned. */
+static fd_entry_t *shared_e;
+static char shared_buf[16];
+static int32_t shared_got;
+
+/** A second thread's read of the shared description, while the first's
+ * copy sleeps. */
+static void shared_read(void)
+{
+    shared_got = vcon_vport_ops.read(shared_e, shared_buf, sizeof(shared_buf));
+}
+
+/**
+ * Two threads read one vport description, the first's copy to its memory
+ * sleeping on a fault while the second reads, with two buffers from the
+ * host waiting: the second waits for the first, which returns the first
+ * buffer, and a read after returns the second, so that no byte is taken
+ * twice or lost, as the port's read mutex makes it.
+ */
+static void vport_shared(void)
+{
+    struct devfs_node *n;
+    struct open_file ofd;
+    fd_entry_t e;
+    char buf[16];
+
+    fresh("console=hvc0", MULTI | UART);
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    n = node("vport0p1");
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    e.ofd = &ofd;
+    check(n && n->open(n, &e, 0) == 0, "the generic port opens");
+    irq();
+    host_write(1, "first", 5);
+    host_write(1, "secnd", 5);
+    irq();
+    check(P(1)->rx_n == 2, "the host's two writes wait in two buffers");
+    shared_e = &e;
+    shared_got = 0;
+    mutex_takes = mutex_waits = 0;
+    copy_sleeps = shared_read;
+    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == 5 && memcmp(buf, "first", 5) == 0,
+          "the first reader gets the first buffer");
+    check(shared_got == -EINTR && mutex_waits == 1, "the second waits for the first's read to end");
+    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == 5 && memcmp(buf, "secnd", 5) == 0 &&
+              P(1)->rx_n == 0,
+          "and a read after gets the second, which no reader lost");
+    check(P(1)->rd.owner == 0 && mutex_takes == 2, "each read gives the mutex back");
+    copy_sleeps = 0;
+    vcon_vport_ops.close(&e);
+}
+
 /**
  * A console port that is not the console's line is an hvc terminal of its
  * own, as Linux's hvc tty: /dev/hvc1, 229:1, opens the pair's slave; what
@@ -2817,6 +2913,7 @@ int main(void)
         third_port();
         vport();
         vport_reopen();
+        vport_shared();
         hvc_tty();
         late_console();
         emergency();
