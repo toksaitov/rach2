@@ -213,6 +213,12 @@ void timer_wake_at(int64_t ns)
     (void)ns;
 }
 
+/** This model has no event between periodic ticks. */
+int timer_wakes_between(void)
+{
+    return 0;
+}
+
 /** The recorder has no deferred timer hardware change. */
 int timer_idle_pending(void)
 {
@@ -306,6 +312,16 @@ void bkl_take(int depth)
 {
     (void)depth;
 }
+
+/** No other processor holds the model's big lock. */
+int bkl_try_enter(void)
+{
+    return 1;
+}
+
+/** The model keeps no big-lock state. */
+void bkl_exit(void)
+{}
 
 /** Nothing: there is no big lock. */
 void bkl_yield(void)
@@ -545,6 +561,14 @@ void bkl_note_switch(const struct process *old, const struct process *next, int 
     (void)old;
     (void)next;
     (void)yielded;
+}
+
+/** The scheduler trace is off in this fixture. */
+void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
+{
+    (void)kind;
+    (void)tid;
+    (void)prev;
 }
 
 /** Set `*done` and wake `wq`'s sleepers, as the kernel's does under the

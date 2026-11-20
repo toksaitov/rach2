@@ -369,6 +369,40 @@ device 0x80000 151 ThreadPoolSingl proc/151/task/160/status
 A path the open resolved has no leading slash; one copied from the caller
 is as the caller gave it.
 A write zeroes the counts and empties the ring.
+.It Pa bkl/trace
+Mode 0600.
+The scheduler's wakes, selections and resumptions, and the big lock's
+completed outer holds and their waits, on the guest's time-stamp counter.
+A write of
+.Ql start
+allocates and empties a buffer of 524288 records and starts recording.
+A write of
+.Ql stop
+stops recording for a read, and
+.Ql clear
+stops recording, discards the records and frees the buffer.
+A read or another start while recording fails with
+.Er EBUSY .
+.Pp
+The binary header is four little-endian 32-bit words: version (1), record
+count, count of events lost to a full buffer and a reserved zero.
+Next come two anchors, one at start and one at stop.
+Each is three little-endian 64-bit words: the cycle count before the
+monotonic clock reading, the count after it, and the monotonic nanoseconds.
+.Pp
+Each 40-byte record has three 64-bit words for the event timestamp, the
+hold's start and its wait in cycles; three 32-bit words for the guest thread
+ID, the signed system call number and a kind-specific argument; a 16-bit
+interrupt vector and one byte each for processor and record kind.
+Kind 1 is a wake, kind 2 a selection (its argument is the outgoing thread
+ID), kind 3 a resumption, and kind 4 a lock hold (its argument is the ioctl
+request if known, or zero).
+For a hold, the thread ID is that of the thread at acquisition and the
+event timestamp is the end; the wait spans the cycles preceding its start.
+The vector and system call are the entry the hold is charged to, as in
+.Pa bkl/long .
+The buffer stops accepting records when full.
+Cross-processor records may appear out of timestamp order.
 .It Pa bkl/tick
 Mode 0644.
 The parts of the timer tick, a Rach2 file: for each part, the ticks that

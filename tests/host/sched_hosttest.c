@@ -1879,6 +1879,14 @@ void bkl_note_switch(const struct process *old, const struct process *next, int 
     (void)yielded;
 }
 
+/** The scheduler trace is off in this fixture. */
+void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
+{
+    (void)kind;
+    (void)tid;
+    (void)prev;
+}
+
 /** Check idle projection, steal subtraction, catch-up and the first
  * busy tick. The counts are kernel ticks of TICK_NS, 4 ms at 250 Hz, and
  * each wake comes more than half a tick past its edge, where rounding to

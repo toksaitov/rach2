@@ -12,6 +12,7 @@
 #include "../klog.h"
 #include "../panic.h"
 #include "../platform.h"
+#include "../rtc.h"
 #include "../irq.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
@@ -40,6 +41,37 @@ static volatile unsigned int bkl_claim;
  * and the lender's again. */
 static volatile unsigned int bkl_lent;
 #define BKL_LENT_TAKEN 0x80000000u
+
+#define BKL_TRACE_SLOTS (1u << 19)
+#define BKL_TRACE_HOLD  4
+
+struct bkl_trace_stamp {
+    uint64_t before, after; /* TSC enclosing the monotonic reading */
+    uint64_t ns;
+};
+
+struct bkl_trace_header {
+    uint32_t version, count, lost, reserved;
+    struct bkl_trace_stamp first, last;
+};
+
+struct bkl_trace_row {
+    uint64_t at;     /* wake, select, run or hold end, in TSC cycles */
+    uint64_t since;  /* hold start */
+    uint64_t waited; /* cycles before the hold */
+    uint32_t tid;
+    int32_t nr;   /* syscall (or BKL_NR_*), -1 for none */
+    uint32_t arg; /* outgoing thread on select, ioctl request on hold */
+    uint16_t vector;
+    uint8_t cpu, kind;
+};
+
+/* The leaf spinlock serializes appends from scheduler and big-lock paths.
+ * The big lock serializes control and reads. A stopped buffer is immutable. */
+static struct spinlock bkl_trace_lock = SPINLOCK_INIT_NAMED("bkl_trace");
+static volatile int bkl_tracing;
+static struct bkl_trace_header bkl_trace;
+static struct bkl_trace_row *bkl_trace_rows;
 
 /* Updated with the big lock held; the waits are accumulated as TSC cycles
  * so that rounding at each acquisition loses no short waits. */
@@ -506,6 +538,63 @@ static void bkl_hold_count(const struct percpu *cpu, int key, int ioctl, uint64_
     }
 }
 
+/** Reserve a trace row, or count an event lost to a full buffer. The
+ * trace lock is held and the trace is running. */
+static struct bkl_trace_row *trace_append(void)
+{
+    if (bkl_trace.count == BKL_TRACE_SLOTS) {
+        bkl_trace.lost++;
+        return NULL;
+    }
+    return &bkl_trace_rows[bkl_trace.count++];
+}
+
+void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev)
+{
+    struct bkl_trace_row *row;
+
+    if (!bkl_tracing) {
+        return;
+    }
+    spin_lock(&bkl_trace_lock);
+    if (bkl_tracing && (row = trace_append()) != NULL) {
+        row->at = arch_cycles();
+        row->since = 0;
+        row->waited = 0;
+        row->tid = tid;
+        row->nr = -1;
+        row->arg = prev;
+        row->vector = 0;
+        row->cpu = (uint8_t)arch_cpu_id();
+        row->kind = (uint8_t)kind;
+    }
+    spin_unlock(&bkl_trace_lock);
+}
+
+/** Record the completed outer hold and its wait. The big lock is held
+ * with interrupts off. Ignore holds already in progress at trace start. */
+static void trace_hold(const struct percpu *cpu, int c, uint64_t now, uint64_t waited, int ioctl)
+{
+    struct bkl_trace_row *row;
+
+    if (!bkl_tracing) {
+        return;
+    }
+    spin_lock(&bkl_trace_lock);
+    if (bkl_tracing && cpu->bkl_since >= bkl_trace.first.after && (row = trace_append()) != NULL) {
+        row->at = now;
+        row->since = cpu->bkl_since;
+        row->waited = waited;
+        row->tid = cpu->bkl_trace_tid;
+        row->nr = cpu->bkl_nr;
+        row->arg = ioctl > 0 ? bkl_ioctls[ioctl - 1].cmd : 0;
+        row->vector = (uint16_t)cpu->bkl_vector;
+        row->cpu = (uint8_t)c;
+        row->kind = BKL_TRACE_HOLD;
+    }
+    spin_unlock(&bkl_trace_lock);
+}
+
 /** Count the hold that ends now on `cpu`, which still holds the lock, under
  * its entry and against the longest. The first hold to end, the boot
  * processor's start-up, which nobody waits on, is left out. A take after an
@@ -523,6 +612,7 @@ static void bkl_hold_end(struct percpu *cpu)
     bkl_releases++;
     waited = cpu->bkl_waited;
     ioctl = cpu->bkl_ioctl;
+    trace_hold(cpu, c, now, waited, ioctl);
     cpu->bkl_waited = 0;
     cpu->bkl_ioctl = 0;
     if (!bkl_booted) {
@@ -1626,6 +1716,102 @@ int32_t smp_open_store(void *data, const char __user *buf, uint32_t len)
     return (int32_t)len;
 }
 
+/** Pair the guest's monotonic clock with its TSC, retaining the bracket
+ * so that a reader can see the uncertainty of the pairing. IRQs are off. */
+static void trace_stamp(struct bkl_trace_stamp *stamp)
+{
+    stamp->before = arch_cycles();
+    stamp->ns = (uint64_t)rtc_monotonic_ns();
+    stamp->after = arch_cycles();
+}
+
+int32_t smp_trace_show(void *data, char *buf, uint32_t cap)
+{
+    uint32_t bytes, len;
+
+    (void)data;
+    if (bkl_tracing) {
+        return -EBUSY;
+    }
+    bytes = bkl_trace.count * sizeof(*bkl_trace_rows);
+    len = sizeof(bkl_trace) + bytes;
+    if (buf && cap >= len) {
+        k_memcpy(buf, &bkl_trace, sizeof(bkl_trace));
+        if (bytes) {
+            k_memcpy(buf + sizeof(bkl_trace), bkl_trace_rows, bytes);
+        }
+    }
+    return (int32_t)len;
+}
+
+/** Compare a write of `len` bytes with one complete command. */
+static int trace_command(const char *word, uint32_t len, const char *cmd)
+{
+    uint32_t i = 0;
+
+    while (i < len && cmd[i] && word[i] == cmd[i]) {
+        i++;
+    }
+    return i == len && cmd[i] == 0;
+}
+
+int32_t smp_trace_store(void *data, const char __user *buf, uint32_t len)
+{
+    struct bkl_trace_row *rows = NULL;
+    char word[7];
+    uint32_t n = len, flags;
+    int start, stop;
+
+    (void)data;
+    if (n == 0 || n >= sizeof(word)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(word, buf, n) != 0) {
+        return -EFAULT;
+    }
+    if (word[n - 1] == '\n') {
+        n--;
+    }
+    start = trace_command(word, n, "start");
+    stop = trace_command(word, n, "stop");
+    if (!start && !stop && !trace_command(word, n, "clear")) {
+        return -EINVAL;
+    }
+    if (start && bkl_tracing) {
+        return -EBUSY;
+    }
+    if (start && !bkl_trace_rows) {
+        bkl_trace_rows = kmalloc(BKL_TRACE_SLOTS * sizeof(*bkl_trace_rows));
+        if (!bkl_trace_rows) {
+            return -ENOMEM;
+        }
+    }
+
+    flags = spin_lock_irqsave(&bkl_trace_lock);
+    if (stop) {
+        if (bkl_tracing) {
+            trace_stamp(&bkl_trace.last);
+            bkl_tracing = 0;
+        }
+    } else {
+        bkl_tracing = 0;
+        k_memset(&bkl_trace, 0, sizeof(bkl_trace));
+        bkl_trace.version = 1;
+        if (start) {
+            trace_stamp(&bkl_trace.first);
+            bkl_tracing = 1;
+        } else {
+            rows = bkl_trace_rows;
+            bkl_trace_rows = NULL;
+        }
+    }
+    spin_unlock_irqrestore(&bkl_trace_lock, flags);
+    if (rows) {
+        kfree(rows);
+    }
+    return (int32_t)len;
+}
+
 /**
  * Name the hold `cpu` begins after the entry its thread is in, the mark
  * `bkl_entry_push` left or the call it runs without the lock (`entry_of`),
@@ -1644,6 +1830,9 @@ static void bkl_mark_hold(struct percpu *cpu)
     cpu->bkl_nr = -1;
     cpu->bkl_ioctl = 0;
     cpu->bkl_unfiltered = !filter_wants(p);
+    if (bkl_tracing) {
+        cpu->bkl_trace_tid = p ? p->pid : 0;
+    }
     if (key == BKL_PROFILE_IOCTL) {
         cpu->bkl_vector = BKL_CALL_VECTOR;
         cpu->bkl_nr = p->orig_nr;

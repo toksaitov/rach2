@@ -336,6 +336,23 @@ int32_t smp_open_show(void *data, char *buf, uint32_t cap);
 /** Zero bkl/open; `len`. The caller holds the big lock. */
 int32_t smp_open_store(void *data, const char __user *buf, uint32_t len);
 
+/* The scheduler's events in bkl/trace. */
+#define BKL_TRACE_WAKE   1
+#define BKL_TRACE_SELECT 2
+#define BKL_TRACE_RUN    3
+
+/** Record a scheduler event for `tid` with interrupts off. On selection,
+ * `prev` names the outgoing thread. */
+void bkl_trace_sched(unsigned int kind, uint32_t tid, uint32_t prev);
+
+/** Copy the stopped binary trace, or return -EBUSY while recording.
+ * `buf` and `cap` are as for smp_calls_show. The big lock is held. */
+int32_t smp_trace_show(void *data, char *buf, uint32_t cap);
+
+/** Start, stop or clear the trace as debugfs(5) describes. Return `len`
+ * or -errno. The big lock is held. */
+int32_t smp_trace_store(void *data, const char __user *buf, uint32_t len);
+
 /** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
  * a full table lost, and for each entry, instruction and three callers
  * sampled, its count. No tick samples while the text is written, so that
