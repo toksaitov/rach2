@@ -1466,11 +1466,11 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # from the window's top for the block requests, the page cache and the drivers'
 # buffers; the kernel stacks and the heap come from above the window first.
 # Booted by QEMU, the kernel ends at 9.7 MiB on i686 and 10.1 MiB on x86-64,
-# the module follows it to 49.7 MiB and 52.1 MiB, the boot's tables take 0.8 MiB
-# and 0.2 MiB with 128 MiB of memory, and 13.5 MiB and 11.7 MiB are left for
+# the module follows it to 50.7 MiB and 53.1 MiB, the boot's tables take 0.8 MiB
+# and 0.2 MiB with 128 MiB of memory, and 12.5 MiB and 10.7 MiB are left for
 # those frames. On i686 the frame table, 4 bytes for each 4 KiB frame below the
 # top of usable memory, is among the boot's tables, so a machine with 4 GiB
-# takes 3 MiB more of the window and leaves 10.5 MiB; the module is kept well
+# takes 3 MiB more of the window and leaves 9.5 MiB; the module is kept well
 # below the window for that reason. The manual's aliases are a table and not
 # files, since the RAM root and a KRFFS disk walk every node on a lookup and
 # hundreds of alias files would make the self-build suite five times slower.
@@ -1478,9 +1478,9 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # account passwords and /etc/shadow, each when absent; the check targets require
 # each vendored binary it stages.
 ifeq ($(ARCH),x86_64)
-OS_REAL_MIB = 42
+OS_REAL_MIB = 43
 else
-OS_REAL_MIB = 40
+OS_REAL_MIB = 41
 endif
 OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
