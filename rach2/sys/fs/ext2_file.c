@@ -1500,11 +1500,13 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
  * pointer to its block, as a strict mount orders them; a bitmap a free
  * dirtied `after` waits for the `first` pointers and inodes marked before
  * it, and a table block for the blocks it names (`bcache_sync_block`).
- * The directory blocks that wait for the table block go after it
- * (`bcache_sync_waiting`), so that a file made, linked or renamed since
- * its last write keeps its new name after the call, as Linux's ext4
- * commits the names pending with the inode, and a neighbour made there
- * has its name too.
+ * The directory blocks that took a name for the file since its last
+ * `fsync` are on its list (`name_commit`), each written after the table
+ * block it waits for, so that a file made, linked or renamed keeps its new
+ * name after the call, as Linux's ext2 writes a name before its call
+ * returns; a list that overflowed writes the whole device instead. The
+ * directory blocks that still wait for the table block go after it
+ * (`bcache_sync_waiting`), so that a neighbour made there has its name too.
  *
  * Another call's write of `n`'s list is waited for first, so that this one
  * returns with those blocks on the device (`node_write_ready`). The table
