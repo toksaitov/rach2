@@ -83,8 +83,11 @@ describes it, and the ports are the devices below.
 .Pp
 A generic port is
 .Pa /dev/vport Ns Ar D Ns Cm p Ns Ar N ,
-character device 245 with a minor of its own, and, when the host names
-it, also
+the character device whose major is device
+.Ar D Ns 's
+own, 245 for the first, and whose minor is
+.Ar N ,
+as Linux numbers it, and, when the host names it, also
 .Pa /dev/virtio-ports/ Ns Ar name .
 It is a stream of bytes to and from the host's end, with no line
 discipline.
@@ -288,9 +291,6 @@ A port has no
 .Dv O_ASYNC ,
 since no file has yet, so its data sends no
 .Dv SIGIO .
-A name longer than 50 bytes has no
-.Pa /dev/virtio-ports
-entry.
 There is no
 .Pa /proc/consoles ,
 and the port has no entry under
