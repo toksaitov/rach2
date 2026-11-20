@@ -1281,6 +1281,118 @@ static void row_dp_downstream_mode(void)
     (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
 }
 
+/** Put a DisplayPort branch on C whose first port is a non-EDID one
+ * naming `code` (DP_DS_NON_EDID_*), with no DDC reply. */
+static void plug_dp_branch(uint8_t code)
+{
+    struct i915_model_dp_sink *sink = &ddi->sink[INTEL_PORT_C - 1];
+
+    plug_dp_sink();
+    sink->dpcd[DP_DOWNSTREAMPORT_PRESENT] = DP_DWN_STRM_PORT_PRESENT;
+    sink->dpcd[DP_DOWN_STREAM_PORT_COUNT] = 1;
+    sink->dpcd[DP_DOWNSTREAM_PORT_0] = DP_DS_PORT_TYPE_NON_EDID | code;
+    sink->edid_len = 0;
+}
+
+/**
+ * A 10-bit DisplayPort monitor on C replaced by an 8-bit one: the long
+ * pulse's detection publishes the new EDID and 8 bits a colour, and 1080p
+ * set at once, with no GETCONNECTOR between, runs at 24 bits a pixel, as
+ * Linux's intel_dp_set_edid updates display_info at detection.
+ */
+static void row_dp_replace_depth(void)
+{
+    struct drm_connector *dp = &disp->ddi[1].dp_connector;
+    struct i915_model_dp_sink *sink = &ddi->sink[INTEL_PORT_C - 1];
+    struct drm_mode_modeinfo m;
+
+    plug_dp_sink();
+    sink->edid[0x14] = 0xb5;
+    sum_block(sink->edid);
+    CHECK(find_mode(dp, 1920, 1080, 60, &m) && dp->bpc == 10,
+          "dp replace: the 10-bit monitor probed at 10 bits a colour");
+    plug_dp_sink();
+    pass_us(1100000u);
+    pulse(HPD_PORT_C, 1, 1);
+    CHECK(drm_atomic_commit_work() >= 1 && dp->status == DRM_CONNECTOR_CONNECTED && dp->bpc == 8 &&
+              blob_is(dp, sink->edid, sink->edid_len),
+          "dp replace: the pulse's detection publishes the 8-bit monitor's EDID and depth");
+    log_text[0] = 0;
+    CHECK(setcrtc(2, dp, &m, fb_c) == 0 && logged("1920x1080@60, 148500 kHz, 24 bpp, "),
+          "dp replace: 1080p set with no probe between at 24 bits a pixel");
+    frame();
+    CHECK(setcrtc(2, NULL, NULL, 0) == 0 && !(reg(TRANSCONF(2)) & TRANSCONF_ENABLE),
+          "dp replace: pipe C off");
+    frame();
+    pass_us(1100000u);
+    (void)drm_atomic_commit_work();
+}
+
+/**
+ * A DisplayPort branch on C with no DDC reply whose non-EDID port names
+ * 720x480i at 60 Hz, then at 50: CEA VIC 6 or 21 refused for its double
+ * clock, and 640x480@60 tried in its place, as Linux's probe helper does
+ * when validation leaves a DisplayPort connector no mode.
+ */
+static void row_dp_downstream_480i(void)
+{
+    struct drm_connector *dp = &disp->ddi[1].dp_connector;
+    struct drm_mode_modeinfo modes[32];
+    uint32_t n;
+
+    plug_dp_branch(DP_DS_NON_EDID_720x480i_60);
+    n = probe_list(dp, modes);
+    CHECK(dp->status == DRM_CONNECTOR_UNKNOWN && n == 1 && in_list(modes, n, 640, 480, 60) &&
+              modes[0].clock == 25175,
+          "dp downstream: 720x480i at 60 Hz refused, 640x480@60 the one mode");
+    plug_dp_branch(DP_DS_NON_EDID_720x480i_50);
+    n = probe_list(dp, modes);
+    CHECK(dp->status == DRM_CONNECTOR_UNKNOWN && n == 1 && in_list(modes, n, 640, 480, 60) &&
+              modes[0].clock == 25175,
+          "dp downstream: 720x480i at 50 Hz refused, 640x480@60 the one mode");
+    plug_dp_sink();
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+}
+
+/**
+ * The non-EDID branch of 1280x720@60 forced on with a valid override that
+ * gives no timing: the override is the EDID detection found, so the
+ * branch's mode is not added and the core's modes up to 1024x768 stand
+ * in, 640x480 preferred, as Linux's intel_dp_get_modes checks detect_edid.
+ */
+static void row_dp_override_no_timings(void)
+{
+    struct drm_connector *dp = &disp->ddi[1].dp_connector;
+    struct drm_mode_modeinfo modes[32];
+    const struct drm_mode_modeinfo *m;
+    uint8_t edid[256];
+    uint32_t n, len = make_edid(edid, &dtd_1080p, 1, NULL, 0);
+    int i;
+
+    for (i = 38; i < 54; i++) {
+        edid[i] = 1;
+    }
+    k_memset(edid + 54, 0, 18);
+    edid[57] = 0x10;
+    k_memset(edid + 90, 0, 18);
+    edid[93] = 0x10;
+    sum_block(edid);
+    plug_dp_branch(DP_DS_NON_EDID_1280x720_60);
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+    CHECK(drm_edid_override_set(dp, edid, len) == 0, "dp no timings: override installed");
+    dp->force = DRM_FORCE_ON;
+    n = probe_list(dp, modes);
+    m = in_list(modes, n, 640, 480, 60);
+    CHECK(dp->status == DRM_CONNECTOR_CONNECTED && blob_is(dp, edid, len) &&
+              !in_list(modes, n, 1280, 720, 60) && in_list(modes, n, 1024, 768, 60) && m &&
+              (m->type & DRM_MODE_TYPE_PREFERRED),
+          "dp no timings: forced on, the core's modes and no branch mode");
+    dp->force = DRM_FORCE_UNSPECIFIED;
+    drm_edid_override_reset(dp);
+    plug_dp_sink();
+    (void)drm_helper_probe_single_connector_modes(dp, 8192, 8192);
+}
+
 /**
  * IGT's kms_hdmi_inject: HDMI-A-2, with no monitor, forced on with a 4K
  * EDID override; its modes those of the override, and 3840x2160@30 set on
@@ -1660,6 +1772,9 @@ int main(void)
     row_dp_override_detect();
     row_dp_override_depth();
     row_dp_downstream_mode();
+    row_dp_replace_depth();
+    row_dp_downstream_480i();
+    row_dp_override_no_timings();
     row_inject();
     row_inject_audio();
     row_3d();
