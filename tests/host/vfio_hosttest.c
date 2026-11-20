@@ -342,8 +342,12 @@ int pci_power_state(const pci_device_t *dev)
     return pm != 0 ? m->cfg[pm + 4] & 3 : -1;
 }
 
+/* Nonzero while the function refuses every change of its power state. */
+static int power_refused;
+
 /** A change of power state as a function takes it: from D3hot to D0 with
- * No_Soft_Reset clear, its command word and BARs come back cleared. */
+ * No_Soft_Reset clear, its command word and BARs come back cleared. While
+ * `power_refused` is set it keeps the state it is in. */
 int pci_set_power_state(const pci_device_t *dev, int state)
 {
     struct fn *m = fn_at(dev->bus, dev->device, dev->function);
@@ -352,6 +356,9 @@ int pci_set_power_state(const pci_device_t *dev, int state)
 
     if (pm == 0) {
         return -1;
+    }
+    if (power_refused) {
+        return 0;
     }
     was = m->cfg[pm + 4] & 3;
     m->cfg[pm + 4] = (uint8_t)((m->cfg[pm + 4] & ~3) | (state & 3));
@@ -1171,6 +1178,13 @@ static int pause_power_wait;
 #define ASLS 0xDAF00000u
 static uint8_t opregion[0x2000];
 
+static unsigned int udelayed; /* microseconds VFIO spun */
+
+void vfio_hw_udelay(unsigned int us)
+{
+    udelayed += us;
+}
+
 void vfio_hw_msleep(unsigned int ms)
 {
     slept += ms;
@@ -1869,6 +1883,67 @@ static void power_rows(void)
     d->pm_restore = 1;
 }
 
+/** Power states checked: D1 and D2 only when the function offers them and
+ * only deeper, D2 with Linux's wait both ways. Ends in D3hot. */
+static void power_check_rows(void)
+{
+    struct fn *m = &fns[1];
+    struct vfio_device *d = vdev("0000:00:02.0");
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uintptr_t phys = 0;
+    uint16_t w = PCI_D2;
+    uint32_t v;
+    unsigned int us = udelayed;
+
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 && udelayed == us,
+          "D2 is refused by a function that does not offer it");
+    put16(m->cfg + 0xD2, 0x0600); /* D1 and D2 offered */
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 2 &&
+              udelayed == us + PCI_PM_D2_DELAY && !d->power_low && pread_at(device, 0, &v, 4) == 4,
+          "D2 is entered after Linux's 200 us, its BARs still reached");
+    w = PCI_D1;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 2,
+          "D1 is refused from the deeper D2");
+    w = PCI_D0;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 &&
+              udelayed == us + 2 * PCI_PM_D2_DELAY,
+          "D0 from D2 waits the same 200 us");
+    w = PCI_D3HOT;
+    (void)pwrite_at(device, pmcsr, &w, 2);
+    w = PCI_D1;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 3 && d->power_low &&
+              mapped_ops->page(d, (2u << 28) + 1, &phys) == -1 &&
+              pread_at(device, 0, &v, 4) == -EIO,
+          "D1 is refused from D3hot, whose BARs stay out of reach");
+    put16(m->cfg + 0xD2, 0);
+}
+
+/** A function that refuses a power change, in D3hot at the start: the state
+ * read back decides the BARs' access and the state kept. */
+static void power_refused_rows(void)
+{
+    struct fn *m = &fns[1];
+    struct vfio_device *d = vdev("0000:00:02.0");
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uint16_t w = PCI_D0;
+    uint32_t v;
+
+    power_refused = 1;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 3 && d->power_low &&
+              d->pm_saved_ok && pread_at(device, 0, &v, 4) == -EIO,
+          "a function that refuses D0 keeps its BARs out of reach and its state owed");
+    power_refused = 0;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 && !d->power_low &&
+              !d->pm_saved_ok && get32(m->cfg + 0x18) == 0xE0000004u,
+          "and has it written back once it takes D0");
+    power_refused = 1;
+    w = PCI_D3HOT;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 && !d->power_low &&
+              !d->pm_saved_ok && pread_at(device, 0, &v, 4) == 4,
+          "a function that refuses D3hot keeps its BARs in reach and owes no state");
+    power_refused = 0;
+}
+
 static int power_fd[2];
 static int32_t power_result[2];
 
@@ -2236,6 +2311,8 @@ int main(void)
     pcie_rows();
     map_rows();
     power_rows();
+    power_check_rows();
+    power_refused_rows();
     power_wait_rows();
     info_rows();
     intx_rows();
