@@ -3247,7 +3247,7 @@ static void status_reaped_during_wait(void)
     host_read_begin = reap_at_walk;
     host_read_end = put_at_walk;
     procfs_text_init(&text);
-    len = procfs_gen_status(&text, 13);
+    len = procfs_gen_status(&text, 13, 0);
     host_read_begin = NULL;
     host_read_end = NULL;
     check(len > 0 && !text.nomem && reaps == before + 1 && !reading,
@@ -3259,6 +3259,40 @@ static void status_reaped_during_wait(void)
               __builtin_strstr(text.buf, "VmSize:") < __builtin_strstr(text.buf, "Threads:"),
           "and gives the record's lines after the memory sizes, as it was before the wait");
     kfree(text.buf);
+}
+
+/**
+ * The status of process 7, which is 1 in a PID namespace below the first,
+ * read through a proc mount of that namespace gives its ids there, as
+ * Linux's `proc_pid_status` takes the mount's namespace, and through one of
+ * the reader's namespace, the first, gives its kernel ids.
+ */
+static void status_namespace_rows(void)
+{
+    struct pidns view = {0};
+    struct pidns *old = process.pidns;
+    struct procfs_text text;
+    int len;
+
+    view.c.inum = 71;
+    view.level = 1;
+    view.parent = &init_pidns;
+    process.pidns = &view;
+    process.nspid[1] = 1;
+    procfs_text_init(&text);
+    len = procfs_gen_status(&text, 7, view.c.inum);
+    check(len > 0 && __builtin_strstr(text.buf, "\nTgid:\t1\n") != NULL &&
+              __builtin_strstr(text.buf, "\nPid:\t1\n") != NULL &&
+              __builtin_strstr(text.buf, "\nNSpid:\t1\n") != NULL,
+          "status through a proc mount of the process's namespace gives its ids there");
+    kfree(text.buf);
+    procfs_text_init(&text);
+    len = procfs_gen_status(&text, 7, 0);
+    check(len > 0 && __builtin_strstr(text.buf, "\nPid:\t7\n") != NULL,
+          "and through one of the reader's namespace its ids in the reader's");
+    kfree(text.buf);
+    process.pidns = old;
+    process.nspid[1] = 0;
 }
 
 /**
@@ -3389,6 +3423,7 @@ static void pid_file_rows(void)
     reaped_during_read();
     stat_reaped_during_wait();
     status_reaped_during_wait();
+    status_namespace_rows();
     maps_reaped_during_names();
     numa_maps_policy_after_wait();
     autogroup_write_rows();
