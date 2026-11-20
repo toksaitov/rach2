@@ -3,7 +3,7 @@
  * mapping of its buffer, and give its pixels' CRC-32, the same on Rach2 and
  * on Linux for the same frame.
  *
- *   drmcapture [-p] [-o FILE] [CARD]
+ *   drmcapture [-p] [-o FILE] [-v COUNT [-c]] [CARD]
  *
  * CARD is /dev/dri/card0 by default. The frame is that of the first CRTC
  * that scans out a framebuffer; with -p the program first draws a fixed
@@ -18,6 +18,20 @@
  * alpha or padding byte and the row's padding, so that two drivers that lay
  * the same picture out in different 32-bit formats or pitches give the same
  * sum. It reads linear 32-bit RGB formats alone (XR24, AR24, XB24, AB24).
+ *
+ * With -v it reads no frame: it asks for COUNT vblank events of the CRTC,
+ * four ahead, and prints how late each reached it by CLOCK_MONOTONIC after
+ * the vblank's own stamp, and with -c it has the CRTC's CRC source, "auto",
+ * compose each frame meanwhile. On vkms, Linux's and Rach2's, the stamp is
+ * the vblank timer's due time, so the lateness is the timer's and the
+ * reader's wake together, and a stamp more than a period and a half after
+ * the last counts the frames the timer skipped. It prints one line,
+ * "drmcapture: vblanks: N at WxH, period P us: ...", with the events 1 and
+ * 5 ms or more late, the median, 99th percentile and worst lateness, the
+ * frames skipped and the CRC lines read, and a second, "drmcapture: cpus:",
+ * with each processor's busy and steal time over the same span by
+ * /proc/stat, the steal being the time its hypervisor ran something else.
+ *
  * Exits 0, or 1 with "drmcapture: what: why" on standard error.
  *
  * It uses the C library and the kernel's ioctls alone, with Linux's
@@ -28,12 +42,16 @@
 #define _FILE_OFFSET_BITS 64
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Linux's ioctl numbers: the direction in the top two bits, the size of the
@@ -104,7 +122,34 @@ struct gem_close {
     uint32_t handle, pad;
 };
 
+/* drm.h's union drm_wait_vblank, whose `signal` is an unsigned long, and
+ * struct drm_event_vblank. */
+union wait_vblank {
+    struct {
+        uint32_t type, sequence;
+        unsigned long signal;
+    } request;
+    struct {
+        uint32_t type, sequence;
+        long tval_sec, tval_usec;
+    } reply;
+};
+
+struct event_vblank {
+    uint32_t type, length;
+    uint64_t user_data;
+    uint32_t tv_sec, tv_usec, sequence, crtc_id;
+};
+
+#define VBLANK_ABSOLUTE   0x0
+#define VBLANK_RELATIVE   0x1
+#define VBLANK_EVENT      0x4000000
+#define VBLANK_CRTC_SHIFT 1
+#define VBLANK_CRTC_MASK  0x3e
+#define EVENT_VBLANK      0x01
+
 #define IOCTL_GEM_CLOSE         DRM_IOW(0x09, struct gem_close)
+#define IOCTL_WAIT_VBLANK       DRM_IOWR(0x3A, union wait_vblank)
 #define IOCTL_MODE_GETRESOURCES DRM_IOWR(0xA0, struct mode_card_res)
 #define IOCTL_MODE_GETCRTC      DRM_IOWR(0xA1, struct mode_crtc)
 #define IOCTL_MODE_SETCRTC      DRM_IOWR(0xA2, struct mode_crtc)
@@ -455,20 +500,288 @@ static int capture(struct card *c, uint32_t crtc, const char *ppm)
     return rc;
 }
 
+/* The events -v keeps asked for ahead of the one it waits for, and the
+ * most whose lateness it keeps for its percentiles. */
+#define VBLANK_AHEAD 4
+#define VBLANK_MAX   100000
+
+/* The processors /proc/stat lists that -v reports. */
+#define STAT_CPUS 64
+
+/* A processor's times by /proc/stat, in clock ticks. */
+struct cpu_times {
+    unsigned long long busy, steal;
+};
+
+/**
+ * Read each processor's busy time, its user, nice, system, irq and softirq
+ * times, and its steal time from /proc/stat into `t`.
+ *
+ * @return the processors read, or 0 when /proc/stat cannot be read.
+ */
+static int cpu_stat(struct cpu_times t[STAT_CPUS])
+{
+    unsigned long long v[8];
+    char line[512];
+    FILE *f = fopen("/proc/stat", "r");
+    int n = 0, cpu;
+
+    if (f == NULL)
+        return 0;
+    while (fgets(line, sizeof(line), f) != NULL && n < STAT_CPUS) {
+        memset(v, 0, sizeof(v));
+        /* "cpu " sums the processors; sscanf's %d would read it as cpu0 */
+        if (strncmp(line, "cpu", 3) != 0 || line[3] < '0' || line[3] > '9' ||
+            sscanf(line, "cpu%d %llu %llu %llu %llu %llu %llu %llu %llu", &cpu, &v[0], &v[1], &v[2],
+                   &v[3], &v[4], &v[5], &v[6], &v[7]) < 5 ||
+            cpu != n)
+            continue;
+        t[n].busy = v[0] + v[1] + v[2] + v[5] + v[6];
+        t[n].steal = v[7];
+        n++;
+    }
+    fclose(f);
+    return n;
+}
+
+/** Print each processor's busy and steal time between `a` and `b`. */
+static void cpu_report(const struct cpu_times *a, const struct cpu_times *b, int n)
+{
+    long hz = sysconf(_SC_CLK_TCK);
+    int i;
+
+    if (n == 0 || hz <= 0)
+        return;
+    printf("drmcapture: cpus:");
+    for (i = 0; i < n; i++)
+        printf("%s cpu%d busy %llu ms steal %llu ms", i ? "," : "", i,
+               (b[i].busy - a[i].busy) * 1000 / (unsigned long long)hz,
+               (b[i].steal - a[i].steal) * 1000 / (unsigned long long)hz);
+    printf("\n");
+}
+
+/** The order of two latenesses, for qsort. */
+static int by_lateness(const void *a, const void *b)
+{
+    long x = *(const long *)a, y = *(const long *)b;
+
+    return x < y ? -1 : x > y;
+}
+
+/** CLOCK_MONOTONIC in microseconds, the clock of DRM's vblank stamps. */
+static long long now_us(void)
+{
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (long long)t.tv_sec * 1000000 + t.tv_nsec / 1000;
+}
+
+/**
+ * Ask for the event of vblank `*seq` of the CRTC at `index` of the card's
+ * list, or with `event` 0 give the CRTC's count now in `*seq`; 0 or -1.
+ */
+static int wait_vblank(struct card *c, uint32_t index, uint32_t *seq, int event)
+{
+    union wait_vblank w;
+
+    memset(&w, 0, sizeof(w));
+    w.request.type = (index << VBLANK_CRTC_SHIFT & VBLANK_CRTC_MASK) |
+                     (event ? VBLANK_ABSOLUTE | VBLANK_EVENT : VBLANK_RELATIVE);
+    w.request.sequence = event ? *seq : 0;
+    w.request.signal = event ? *seq : 0;
+    if (drm(c->fd, IOCTL_WAIT_VBLANK, &w) != 0)
+        return -1;
+    if (!event)
+        *seq = w.reply.sequence;
+    return 0;
+}
+
+/**
+ * Open CRTC `index`'s crc/data on card `path` after setting its source to
+ * "auto", so that the driver composes each frame while it is open.
+ *
+ * @return the descriptor, nonblocking, or -1 after a failure, reported.
+ */
+static int crc_open(const char *path, uint32_t index)
+{
+    char name[96];
+    struct stat st;
+    int fd;
+
+    if (stat(path, &st) != 0) {
+        fail(path);
+        return -1;
+    }
+    snprintf(name, sizeof(name), "/sys/kernel/debug/dri/%u/crtc-%u/crc/control",
+             (unsigned)minor(st.st_rdev), (unsigned)index);
+    if ((fd = open(name, O_WRONLY | O_CLOEXEC)) < 0 || write(fd, "auto", 4) != 4) {
+        fail(name);
+        if (fd >= 0)
+            close(fd);
+        return -1;
+    }
+    close(fd);
+    snprintf(name, sizeof(name), "/sys/kernel/debug/dri/%u/crtc-%u/crc/data",
+             (unsigned)minor(st.st_rdev), (unsigned)index);
+    if ((fd = open(name, O_RDONLY | O_NONBLOCK | O_CLOEXEC)) < 0)
+        fail(name);
+    return fd;
+}
+
+/* What -v counts: the CRTC at `index` of the card's list, its period in
+ * us, the next vblank to ask for, and the events taken so far. */
+struct vblank_run {
+    uint32_t index, next;
+    long period, n, late1, late5, worst, skipped, crcs;
+    long long prev; /* the last event's stamp in us, 0 before the first */
+    long late[VBLANK_MAX];
+};
+
+/**
+ * Count the events in `buf`, `got` bytes that a read of the card gave, in
+ * `r`, each late by the time now after its stamp, and ask for one more
+ * vblank for each.
+ *
+ * @return 0, or 1 after a failure, reported.
+ */
+static int vblank_take(struct card *c, struct vblank_run *r, const char *buf, ssize_t got)
+{
+    ssize_t at;
+
+    for (at = 0; at + (ssize_t)sizeof(struct event_vblank) <= got;) {
+        struct event_vblank e;
+        long long stamp, now = now_us();
+        long l;
+
+        memcpy(&e, buf + at, sizeof(e));
+        at += e.length ? (ssize_t)e.length : got;
+        if (e.type != EVENT_VBLANK)
+            continue;
+        stamp = (long long)e.tv_sec * 1000000 + e.tv_usec;
+        l = (long)(now - stamp);
+        if (r->prev != 0 && stamp - r->prev > r->period + r->period / 2)
+            r->skipped += (long)((stamp - r->prev + r->period / 2) / r->period) - 1;
+        r->prev = stamp;
+        r->late1 += l >= 1000;
+        r->late5 += l >= 5000;
+        r->worst = l > r->worst ? l : r->worst;
+        if (r->n < VBLANK_MAX)
+            r->late[r->n] = l;
+        r->n++;
+        if (wait_vblank(c, r->index, &r->next, 1) != 0)
+            return fail("WAIT_VBLANK");
+        r->next++;
+    }
+    return 0;
+}
+
+/**
+ * Wait for and take `count` vblank events into `r`, VBLANK_AHEAD asked for
+ * ahead, reading and counting the CRC lines of `crcfd` meanwhile unless it
+ * is -1.
+ *
+ * @return 0, or 1 after a failure, reported.
+ */
+static int vblank_loop(struct card *c, struct vblank_run *r, int crcfd, long count)
+{
+    struct pollfd fds[2];
+    char buf[4096];
+    uint32_t seq = 0;
+    ssize_t got, at;
+
+    if (wait_vblank(c, r->index, &seq, 0) != 0)
+        return fail("WAIT_VBLANK");
+    for (r->next = seq + 1; r->next != seq + 1 + VBLANK_AHEAD; r->next++)
+        if (wait_vblank(c, r->index, &r->next, 1) != 0)
+            return fail("WAIT_VBLANK");
+    fds[0].fd = c->fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = crcfd;
+    fds[1].events = POLLIN;
+    while (r->n < count) {
+        if (poll(fds, crcfd >= 0 ? 2 : 1, 5000) <= 0) {
+            errno = errno ? errno : ETIMEDOUT;
+            return fail("poll for a vblank");
+        }
+        while (crcfd >= 0 && (got = read(crcfd, buf, sizeof(buf))) > 0)
+            for (at = 0; at < got; at++)
+                r->crcs += buf[at] == '\n';
+        if (!(fds[0].revents & POLLIN))
+            continue;
+        if ((got = read(c->fd, buf, sizeof(buf))) <= 0)
+            return fail("read of a vblank event");
+        if (vblank_take(c, r, buf, got) != 0)
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * Take `count` vblank events of CRTC `crtc` of card `path`, open as `c`,
+ * with its CRCs on when `crc`, and print how late they came and the steal
+ * meanwhile, as the comment at the top of this file says.
+ *
+ * @return 0, or 1 after a failure, reported.
+ */
+static int vblanks(struct card *c, const char *path, uint32_t crtc, long count, int crc)
+{
+    static struct vblank_run r;
+    struct cpu_times before[STAT_CPUS], after[STAT_CPUS];
+    struct mode_crtc g;
+    long k;
+    int rc, ncpus, crcfd;
+
+    for (r.index = 0; r.index < c->ncrtcs && c->crtcs[r.index] != crtc; r.index++)
+        ;
+    memset(&g, 0, sizeof(g));
+    g.crtc_id = crtc;
+    if (r.index == c->ncrtcs || drm(c->fd, IOCTL_MODE_GETCRTC, &g) != 0 || !g.mode_valid ||
+        g.mode.clock == 0)
+        return fail("GETCRTC");
+    r.period = (long)((long long)g.mode.htotal * g.mode.vtotal * 1000 / g.mode.clock);
+    crcfd = crc ? crc_open(path, r.index) : -1;
+    if (crc && crcfd < 0)
+        return 1;
+    ncpus = cpu_stat(before);
+    rc = vblank_loop(c, &r, crcfd, count);
+    if (crcfd >= 0)
+        close(crcfd);
+    if (rc != 0)
+        return rc;
+    if (cpu_stat(after) != ncpus)
+        ncpus = 0;
+    k = r.n < VBLANK_MAX ? r.n : VBLANK_MAX;
+    qsort(r.late, (size_t)k, sizeof(r.late[0]), by_lateness);
+    printf("drmcapture: vblanks: %ld at %ux%u, period %ld us: %ld late by 1 ms or more, "
+           "%ld by 5 ms or more; median %ld us, 99th percentile %ld us, worst %ld us; "
+           "%ld frames skipped; %ld CRCs\n",
+           r.n, g.mode.hdisplay, g.mode.vdisplay, r.period, r.late1, r.late5, r.late[k / 2],
+           r.late[k * 99 / 100], r.worst, r.skipped, r.crcs);
+    cpu_report(before, after, ncpus);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *card = "/dev/dri/card0", *ppm = NULL;
     struct card c;
     struct pattern p;
-    int opt, draw_pattern = 0, rc;
+    struct mode_crtc g;
+    long count = 0;
+    int opt, draw_pattern = 0, crc = 0, rc;
 
-    while ((opt = getopt(argc, argv, "po:")) != -1) {
+    while ((opt = getopt(argc, argv, "po:v:c")) != -1) {
         if (opt == 'p')
             draw_pattern = 1;
         else if (opt == 'o')
             ppm = optarg;
+        else if (opt == 'v' && (count = strtol(optarg, NULL, 10)) > 0)
+            continue;
+        else if (opt == 'c')
+            crc = 1;
         else {
-            fprintf(stderr, "usage: drmcapture [-p] [-o FILE] [CARD]\n");
+            fprintf(stderr, "usage: drmcapture [-p] [-o FILE] [-v COUNT [-c]] [CARD]\n");
             return 2;
         }
     }
@@ -483,7 +796,10 @@ int main(int argc, char **argv)
         rc = fail("GETRESOURCES");
     } else {
         rc = draw_pattern ? draw(&c, &p) : 0;
-        if (rc == 0)
+        if (rc == 0 && count > 0)
+            rc = scanout(&c, draw_pattern ? p.crtc : 0, &g) ||
+                 vblanks(&c, card, g.crtc_id, count, crc);
+        else if (rc == 0)
             rc = capture(&c, draw_pattern ? p.crtc : 0, ppm);
     }
     undraw(&c, &p);
