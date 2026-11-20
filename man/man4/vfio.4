@@ -190,8 +190,9 @@ A write cannot start a function level reset, and the OpRegion's address
 takes no write.
 A write of the power state is carried out by
 .Nm ,
-which keeps the state of a function that loses it in D3hot and writes it
-back at D0.
+which keeps the state of a function that loses it in D3hot and restores
+it and its active interrupts at D0.
+Another power-state write waits until the transition and restore finish.
 The extended space reads as the function answers it and takes no write.
 .Ss Interrupts
 .Dv VFIO_DEVICE_SET_IRQS
@@ -204,6 +205,7 @@ an unmask, by ioctl or by an eventfd given to
 .Dv VFIO_IRQ_SET_ACTION_UNMASK ,
 lifts the mask, or while the function still asserts the line keeps it and
 signals the eventfd again.
+An eventfd unmask is served by a kernel worker.
 The line is offered only to a function that masks it that way.
 MSI-X entries can be set and cleared while MSI-X is on.
 .Ss Release

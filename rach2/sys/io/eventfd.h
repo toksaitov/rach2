@@ -64,6 +64,10 @@ void eventfd_put(struct eventfd *ev);
  * handler. */
 void eventfd_signal(struct eventfd *ev);
 
+/** As `eventfd_signal`, passing over `skip` if it is on this counter.
+ * A driver uses this when its input hook and notification share a counter. */
+void eventfd_signal_except(struct eventfd *ev, const struct eventfd_hook *skip);
+
 /** Put `h` on the counter's list: 1 when the counter is above 0 already,
  * which the caller acts on as on a signal, else 0. After the last close,
  * `h` is not added and its hangup runs at once: -1. */

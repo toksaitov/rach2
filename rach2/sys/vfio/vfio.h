@@ -12,6 +12,7 @@
 #include "../lib/kint.h"
 #include "../mm/pin.h"
 #include "../pci.h"
+#include "../proc/mutex.h"
 #include "vfio_abi.h"
 
 struct eventfd;
@@ -84,6 +85,7 @@ struct vfio_device {
     int sys_driver;    /* BDF/driver while bound, or 0 */
     int sys_drvlink;   /* drivers/vfio-pci/BDF while bound, or 0 */
     int sys_override;
+    struct mutex state_lock; /* open, release, region accesses, power, reset and IRQ changes */
     /* While open: */
     int resetting;
     int reset_method;
@@ -118,7 +120,8 @@ struct vfio_device {
     int intx_masked;
     struct eventfd *intx_unmask; /* the unmask eventfd, or NULL */
     struct eventfd_hook *unmask_hook;
-    struct vfio_irq *msi; /* the messages or MSI-X entries, `nmsi` */
+    volatile unsigned int unmask_pending; /* set by the eventfd hook, taken by the worker */
+    struct vfio_irq *msi;                 /* the messages or MSI-X entries, `nmsi` */
     unsigned int nmsi;
     struct eventfd *err_trigger; /* the error and request eventfds */
     struct eventfd *req_trigger;
@@ -207,8 +210,6 @@ void vfio_container_audit(const struct vfio_container *c, const char *name);
 
 /* pci.c */
 int32_t vfio_device_open_fd(struct vfio_device *d);
-int vfio_device_enable(struct vfio_device *d);
-void vfio_device_release(struct vfio_device *d);
 void vfio_device_zap(struct vfio_device *d);
 void vfio_device_power(struct vfio_device *d, int state);
 
@@ -228,6 +229,10 @@ uint32_t vfio_irq_count(const struct vfio_device *d, uint32_t index);
 int32_t vfio_irq_set(struct vfio_device *d, uintptr_t arg);
 void vfio_irq_disable(struct vfio_device *d);
 void vfio_irq_restore(struct vfio_device *d);
+/** Whether any unmask request is queued. */
+int vfio_irq_pending(void *arg);
+/** Serve one pass of queued unmask requests, with the big lock held. */
+void vfio_irq_work(void);
 
 /* igd.c */
 int vfio_igd_init(struct vfio_device *d);
@@ -244,6 +249,12 @@ int32_t vfio_igd_read(struct vfio_device *d, uint32_t index, uint32_t pos, uint8
 
 /** Wait `ms` milliseconds at least: a process sleeps, the boot spins. */
 void vfio_hw_msleep(unsigned int ms);
+
+/** Start the shared IRQ worker, with the big lock held. 0 or -ENOMEM. */
+int vfio_hw_irq_start(void);
+
+/** Wake the IRQ worker. Safe in a hook with interrupts off. */
+void vfio_hw_irq_wake(void);
 
 /** The calling process's address space, or NULL. */
 struct mm *vfio_hw_mm(void);
