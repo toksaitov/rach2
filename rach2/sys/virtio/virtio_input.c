@@ -326,7 +326,7 @@ static int vi_identify(struct virtio_dev *d, struct vi_input *input, char *name,
 static int32_t vi_probe(struct virtio_dev *d)
 {
     struct vi_input *input;
-    struct virtqueue *events, *status;
+    struct virtqueue *events = 0, *status = 0;
     char name[EVDEV_NAME_MAX];
     uint8_t keys[EVDEV_KEY_BYTES];
     uint16_t ids[4];
