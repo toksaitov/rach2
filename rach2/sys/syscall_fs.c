@@ -19683,6 +19683,17 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
     return 1;
 }
 
+/* The room for the name of a synthetic directory's entry, the NUL with it. */
+#define SYNTH_DIRENT_NAME 256
+
+/** Put `what` in `name`, a listing's entry of SYNTH_DIRENT_NAME bytes, whole:
+ * a name of a component, of at most NAME_MAX bytes, always fits. */
+static void synth_name_put(char *name, const char *what)
+{
+    k_strncpy(name, what, SYNTH_DIRENT_NAME - 1);
+    name[SYNTH_DIRENT_NAME - 1] = '\0';
+}
+
 /**
  * The `n`th entry of /sys/class/net or of an interface's directory under it,
  * `node`, whose interface is `key`: an interface's directory each in the
@@ -19835,24 +19846,21 @@ static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t
         *dtype = DT_LNK;
         return 1;
     }
-    k_strncpy(name, row.name, 31);
-    name[31] = '\0';
+    synth_name_put(name, row.name);
     *ino = sysfs_ino(row.partno ? SYSFS_BLOCK_PART : SYSFS_BLOCK_DISK, i, 0);
     *dtype = DT_DIR;
     return 1;
 }
 
 /** Give a listing the entry `what` with the inode `inode` and the type
- * `type`, its name cut at 31 bytes, and 1; or 0 when `what` is NULL, past
- * the directory's last. */
+ * `type`, and 1; or 0 when `what` is NULL, past the directory's last. */
 static int synth_entry(const char *what, uint32_t inode, uint8_t type, char *name, uint64_t *ino,
                        uint8_t *dtype)
 {
     if (what == NULL) {
         return 0;
     }
-    k_strncpy(name, what, 31);
-    name[31] = '\0';
+    synth_name_put(name, what);
     *ino = inode;
     *dtype = type;
     return 1;
@@ -20239,10 +20247,7 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
         named++;
     }
     if (n < named && vfs_named_mount(vfs_mount_at(1), n, &dn, &mino)) {
-        for (i = 0; i < 30 && dn[i]; i++) {
-            name[i] = dn[i];
-        }
-        name[i] = '\0';
+        synth_name_put(name, dn);
         *ino = mino;
         *dtype = DT_DIR;
         return 1;
@@ -20275,7 +20280,7 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
     n -= 4;
     for (i = 0; i < synth_dev_dir_count(); i++) {
         if (synth_dev_dir_at(i)->parent < 0 && devfs_subdir_present(i) && n-- == 0) {
-            k_strncpy(name, synth_dev_dir_at(i)->name, 31);
+            synth_name_put(name, synth_dev_dir_at(i)->name);
             *ino = synth_dev_dir_at(i)->ino;
             *dtype = DT_DIR;
             return 1;
@@ -20284,18 +20289,12 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
     if (!devfs_dirent(n, &dn, &dino) || !dn) {
         return 0;
     }
-    for (i = 0; i < 30 && dn[i]; i++) {
-        name[i] = dn[i];
-    }
-    name[i] = '\0';
+    synth_name_put(name, dn);
     *ino = dino;
     (void)devfs_stat(dn, &dmode, NULL, NULL);
     *dtype = (uint8_t)VFS_DT_OF(dmode);
     return 1;
 }
-
-/* The room for the name of a synthetic directory's entry, the NUL with it. */
-#define SYNTH_DIRENT_NAME 256
 
 /**
  * The `n`th entry of /dev past "." and "..", or of the directory of its
@@ -20323,8 +20322,7 @@ static int synth_dev_any_dirent(int row, int made, int n, char *name, uint64_t *
     if (!devtree_dirent(parent, n - table, &mn, &mino, dtype)) {
         return 0;
     }
-    k_strncpy(name, mn, SYNTH_DIRENT_NAME - 1);
-    name[SYNTH_DIRENT_NAME - 1] = '\0';
+    synth_name_put(name, mn);
     *ino = mino;
     return 1;
 }
