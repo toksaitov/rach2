@@ -29,6 +29,7 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 #include "../../rach2/sys/network/net.h"
 #include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/network/ip6/nd6.h"
+#include "../../rach2/sys/network/ip6/route6.h"
 #include "../../rach2/sys/cmdline.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/lib/kstring.h"
@@ -126,7 +127,7 @@ static struct netdev other_iface;
 /** Report whether `ip` is the address of either interface. */
 int netdev_owns(uint32_t ip)
 {
-    return ip != 0 && (ip == the_iface.ip || ip == other_iface.ip);
+    return netdev_holds(&the_iface, ip) || netdev_holds(&other_iface, ip);
 }
 
 /** Report whether `ip` is one of `nd`'s addresses, its first or another; 0
@@ -211,6 +212,13 @@ volatile uint64_t kernel_ticks;
 uint64_t tick_count(void)
 {
     return kernel_ticks;
+}
+
+/** The IPv4 fixture has no IPv6 prefixes to retain. */
+void route6_address_removed(struct netdev *nd, int slot)
+{
+    (void)nd;
+    (void)slot;
 }
 
 /** No row gives an IPv6 address. */
@@ -594,6 +602,59 @@ static void route_lifetime(int l3)
     nd->l3 = 0;
 }
 
+/** Count a generated or explicit local-table row with its preferred source. */
+static int local_row(uint32_t dst, int kind, uint32_t src)
+{
+    struct netdev_rt r;
+    int i;
+    for (i = 0; netdev_local_route_at(i, &r); i++)
+        if (r.dst == dst && r.kind == kind && r.prefsrc == src)
+            return 1;
+    return 0;
+}
+
+/** Check local, broadcast and preferred-source routes on a shared prefix. */
+static void local_lifetime(void)
+{
+    struct netdev *nd = &other_iface;
+    struct netdev_rt r = {0};
+    uint32_t ip = 0xc0000201u, mask = 0xffffff00u, other = 0xc6336401u;
+    conf_reset();
+    CHECK(netconf_add_address(nd, ip, mask, 0) == 0 &&
+              netconf_add_address(nd, ip + 1, mask, 0) == 0 &&
+              netconf_add_address(nd, other, mask, 0) == 0,
+          "install a primary, alias and other subnet");
+    CHECK(local_row(ip + 1, NETDEV_RT_LOCAL, ip), "an alias uses the primary's preferred source");
+    nd->addr4[0].noprefix = 1;
+    CHECK(!netdev_has_link_route(nd, ip & mask, mask) &&
+              local_row(ip | ~mask, NETDEV_RT_BROADCAST, ip),
+          "noprefix preserves the subnet broadcast");
+    CHECK(netconf_set_broadcast(nd, other + 2) == 0 &&
+              local_row(other + 2, NETDEV_RT_BROADCAST, ip) && nd->naddr2 == 1,
+          "a custom broadcast is installed");
+    CHECK(netconf_set_netmask(nd, 0xffff0000u) == 0 && netdev_addr_brd(nd, -1) == other + 2,
+          "a mask change preserves a custom broadcast");
+    r.dst = 0xac100001u;
+    r.mask = ~0u;
+    r.prefsrc = ip;
+    r.scope = 253;
+    r.proto = 99;
+    CHECK(netdev_route_change(&the_iface, &r, 0, 0) == 0, "another card uses this source");
+    CHECK(netconf_del_address(nd, ip, 0, 0) == 0 &&
+              netdev_route_change(&the_iface, &r, 1, 0) == -ESRCH && nd->ip == other,
+          "losing the source flushes its dependent route and keeps the other primary");
+    r.prefsrc = 0;
+    r.kind = NETDEV_RT_LOCAL;
+    r.scope = 254;
+    CHECK(netdev_local_route_change(nd, &r, 0, 0) == 0 && netdev_added_local(r.dst, r.kind) == nd,
+          "an explicit host-scope local route");
+    CHECK(netconf_set_up(nd, 0) == 0 && netdev_added_local(r.dst, r.kind) == nd &&
+              local_row(other, NETDEV_RT_LOCAL, other),
+          "local routes survive administrative down");
+    CHECK(netconf_del_address(nd, other, 0, 0) == 0 && !netdev_added_local(r.dst, r.kind),
+          "last-address deletion flushes the explicit local route");
+}
+
 /**
  * Run the rows of configure_by_mac, secondary_address_change and
  * narrow_subnets, then:
@@ -650,6 +711,7 @@ int main(void)
     secondary_address_change();
     route_lifetime(0);
     route_lifetime(1);
+    local_lifetime();
     narrow_subnets();
     ip = 0;
     mask = 0;

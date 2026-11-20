@@ -209,11 +209,13 @@ struct netdev *netdev_owner6(const uint8_t *addr)
     int i;
 
     for (i = 0; i < netdev_listed(); i++) {
-        if (netdev_holds6(netdev_at(i), addr)) {
-            return netdev_at(i);
-        }
+        struct netdev *nd = netdev_at(i);
+        struct netdev_addr6 *a = netdev_addr6_of(nd, addr);
+        if (nd->up && a && !(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) &&
+            !(a->deleted_routes & NETDEV_A6_LOCAL_ROUTE))
+            return nd;
     }
-    return 0;
+    return route6_added_local(addr);
 }
 
 /** The slot of `group` among `nd`'s groups, or -1. */
@@ -353,14 +355,16 @@ uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
 
 int netdev_owns(uint32_t ip)
 {
-    int i;
-
+    int i, a;
+    if (!ip)
+        return 0;
     for (i = 0; i < netdev_count(); i++) {
-        if (netdev_holds(netdev_at(i), ip)) {
-            return 1;
-        }
+        struct netdev *nd = netdev_at(i);
+        for (a = -1; a < nd->naddr2; a++)
+            if (netdev_addr_local(nd, a, ADDR4_LOCAL) == ip)
+                return 1;
     }
-    return 0;
+    return netdev_added_local(ip, NETDEV_RT_LOCAL) != 0;
 }
 
 int netdev_is_broadcast(uint32_t ip)
@@ -379,7 +383,7 @@ int netdev_is_broadcast(uint32_t ip)
                 return 1;
         }
     }
-    return 0;
+    return ip && netdev_added_local(ip, NETDEV_RT_BROADCAST) != 0;
 }
 
 /** Name `nd`, the interface of card `n` from 0, `ethN`, for N up to 99. */

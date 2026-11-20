@@ -98,6 +98,23 @@ static int local_seen(const struct netdev *nd, int a, int bit, uint32_t dst)
     return 0;
 }
 
+/** Find an explicit route by its position within the selected table. */
+static int added_at(int n, int local, struct netdev_rt *out)
+{
+    int i;
+    for (i = 0; i < NETDEV_ROUTES; i++) {
+        const struct added_rt *entry = &added[i];
+        if (entry->nd && (entry->row.kind >= NETDEV_RT_LOCAL) == local && n-- == 0) {
+            *out = entry->row;
+            out->src = out->prefsrc ? out->prefsrc
+                                    : netdev_source(entry->nd, out->gw ? out->gw : out->dst);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Enumerate routes created by addresses, then explicit local-table routes. */
 int netdev_local_route_at(int n, struct netdev_rt *out)
 {
     int i, a, bit;
@@ -111,7 +128,10 @@ int netdev_local_route_at(int n, struct netdev_rt *out)
                 out->dst = dst;
                 out->mask = 0xffffffffu;
                 out->gw = out->metric = 0;
-                out->src = out->prefsrc = a < 0 ? nd->ip : nd->ip2[a];
+                {
+                    int primary = netdev_primary_slot(nd, a);
+                    out->src = out->prefsrc = primary < 0 ? nd->ip : nd->ip2[primary];
+                }
                 out->kind = bit == ADDR4_LOCAL ? NETDEV_RT_LOCAL : NETDEV_RT_BROADCAST;
                 out->scope = bit == ADDR4_LOCAL ? 254 : 253;
                 out->proto = 2;
@@ -120,7 +140,7 @@ int netdev_local_route_at(int n, struct netdev_rt *out)
             }
         }
     }
-    return 0;
+    return added_at(n, 1, out);
 }
 
 int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask)
@@ -150,15 +170,7 @@ int netdev_route_at(int n, struct netdev_rt *out)
         }
         n += got;
     }
-    for (i = 0; i < NETDEV_ROUTES; i++) {
-        if (added[i].nd && n-- == 0) {
-            *out = added[i].row;
-            out->src = out->prefsrc ? out->prefsrc
-                                    : netdev_source(added[i].nd, out->gw ? out->gw : out->dst);
-            return 1;
-        }
-    }
-    return 0;
+    return added_at(n, 0, out);
 }
 
 /** The card of index `index`, or NULL. */
@@ -242,7 +254,8 @@ int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw)
     }
     for (i = 0; i < NETDEV_ROUTES; i++) {
         r = added[i].row;
-        if (added[i].nd == nd && !r.gw && r.scope >= 253 && (gw & r.mask) == r.dst)
+        if (added[i].nd == nd && r.kind == NETDEV_RT_ADDED && !r.gw && r.scope >= 253 &&
+            (gw & r.mask) == r.dst)
             return 1;
     }
     return 0;
@@ -257,24 +270,31 @@ static int route_matches(const struct netdev_rt *old, const struct netdev_rt *r)
            (!r->prefsrc || r->prefsrc == old->prefsrc);
 }
 
-int netdev_local_route_del(const struct netdev *only, const struct netdev_rt *r)
+/** Suppress every address reference to the generated local-table route. */
+static void remove_local(struct netdev *nd, const struct netdev_rt *old)
 {
-    struct netdev_rt old;
-    int n, a, bit;
-    for (n = 0; netdev_local_route_at(n, &old); n++) {
-        struct netdev *nd = dev_of(old.ifindex);
-        if ((only && nd != only) || (r->kind && r->kind != old.kind) || !route_matches(&old, r))
-            continue;
-        for (a = -1; a < nd->naddr2; a++) {
-            for (bit = ADDR4_LOCAL; bit <= ADDR4_SUBNET_BROADCAST; bit *= 2) {
-                if ((bit == ADDR4_LOCAL) == (old.kind == NETDEV_RT_LOCAL) &&
-                    netdev_addr_local(nd, a, bit) == old.dst)
-                    nd->addr4[a + 1].deleted |= bit;
-            }
+    int a, bit;
+    for (a = -1; a < nd->naddr2; a++) {
+        for (bit = ADDR4_LOCAL; bit <= ADDR4_SUBNET_BROADCAST; bit *= 2) {
+            if ((bit == ADDR4_LOCAL) == (old->kind == NETDEV_RT_LOCAL) &&
+                netdev_addr_local(nd, a, bit) == old->dst)
+                nd->addr4[a + 1].deleted |= bit;
         }
-        return 0;
     }
-    return -ESRCH;
+}
+
+struct netdev *netdev_added_local(uint32_t dst, int kind)
+{
+    const struct added_rt *best = 0;
+    int i;
+    for (i = 0; i < NETDEV_ROUTES; i++) {
+        const struct added_rt *e = &added[i];
+        if (e->nd && e->row.kind == kind && (dst & e->row.mask) == e->row.dst &&
+            (!best || e->row.mask > best->row.mask ||
+             (e->row.mask == best->row.mask && e->row.metric < best->row.metric)))
+            best = e;
+    }
+    return best ? best->nd : 0;
 }
 
 /** Remove the generated route named by a successful table lookup. */
@@ -326,6 +346,66 @@ static int route_valid(struct netdev *nd, const struct netdev_rt *r)
     return 0;
 }
 
+/** Find an explicit slot to replace or delete, or the first free slot. */
+static int local_slot(const struct netdev *nd, const struct netdev_rt *r, int del)
+{
+    int i, slot = -1;
+    for (i = 0; i < NETDEV_ROUTES; i++) {
+        const struct added_rt *e = &added[i];
+        if (!e->nd) {
+            if (!del && slot < 0)
+                slot = i;
+        } else if (e->row.kind >= NETDEV_RT_LOCAL && (!r->kind || r->kind == e->row.kind) &&
+                   (del ? ((!nd || nd == e->nd) && route_matches(&e->row, r))
+                        : (r->dst == e->row.dst && r->mask == e->row.mask &&
+                           r->metric == e->row.metric)))
+            return i;
+    }
+    return slot;
+}
+
+int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
+{
+    struct netdev_rt row;
+    int n, slot = local_slot(nd, r, del);
+    if (!del) {
+        int rc = route_valid(nd, r);
+        if (rc)
+            return rc;
+        if (r->kind < NETDEV_RT_LOCAL || r->gw)
+            return -EINVAL;
+        if (slot < 0)
+            return -ENOSPC;
+    }
+    if (slot >= 0 && added[slot].nd) {
+        if (del) {
+            added[slot].nd = 0;
+            return 0;
+        }
+        if (!replace)
+            return -EEXIST;
+    } else {
+        for (n = 0; netdev_local_route_at(n, &row); n++) {
+            if ((!nd || nd->index == row.ifindex) && (!r->kind || r->kind == row.kind) &&
+                (del ? route_matches(&row, r)
+                     : (r->dst == row.dst && r->mask == row.mask && r->metric == row.metric))) {
+                if (!del && !replace)
+                    return -EEXIST;
+                remove_local(dev_of(row.ifindex), &row);
+                if (del)
+                    return 0;
+                break;
+            }
+        }
+        if (del)
+            return -ESRCH;
+    }
+    added[slot].nd = nd;
+    added[slot].row = *r;
+    added[slot].row.ifindex = nd->index;
+    return 0;
+}
+
 int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
 {
     struct netdev_rt old;
@@ -346,6 +426,8 @@ int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, i
         if (!added[i].nd) {
             if (slot < 0)
                 slot = i;
+        } else if (row->kind >= NETDEV_RT_LOCAL) {
+            continue;
         } else if (del) {
             if ((!nd || nd == added[i].nd) && route_matches(row, r)) {
                 added[i].nd = 0;

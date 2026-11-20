@@ -378,19 +378,16 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
 
         int a;
 
-        if (!nd || nd->l3) {
-            continue;
-        }
-        if (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && dst == (nd->ip | ~nd->mask)) {
-            return nd;
-        }
-        for (a = 0; a < nd->naddr2; a++) {
-            if (NETDEV_MASK_HAS_BROADCAST(nd->mask2[a]) && dst == (nd->ip2[a] | ~nd->mask2[a])) {
+        for (a = -1; a < nd->naddr2; a++) {
+            if (dst && (netdev_addr_local(nd, a, ADDR4_BROADCAST) == dst ||
+                        netdev_addr_local(nd, a, ADDR4_SUBNET_BROADCAST) == dst))
                 return nd;
-            }
         }
     }
-    return netdev_first();
+    {
+        struct netdev *nd = netdev_added_local(dst, NETDEV_RT_BROADCAST);
+        return nd ? nd : netdev_first();
+    }
 }
 
 int ip_loop_put(const uint8_t *dgram, uint32_t total_len)
@@ -493,14 +490,12 @@ uint32_t ip_source(uint32_t dst)
 
 uint32_t ip_source_on(uint32_t dst, int ifindex)
 {
-    uint32_t via;
-    struct netdev *out;
-
-    if (IP_IS_LOOPBACK(dst)) {
+    struct netdev_rt row;
+    if (IP_IS_LOOPBACK(dst))
         return IP_LOOPBACK_ADDR;
-    }
-    out = netdev_route_on(dst, netdev_owns(dst) ? 0 : ifindex, &via);
-    return out ? netdev_source(out, via) : net_ip_addr;
+    if (netdev_owns(dst))
+        return dst;
+    return netdev_route_lookup(dst, ifindex, &row) ? row.src : net_ip_addr;
 }
 
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
@@ -653,31 +648,36 @@ static int ip_may_cut(int pmtudisc)
  * source in 127/8 and a destination that is not this machine's, or
  * -ENETUNREACH with no route, counted in OutNoRoutes.
  */
-static int ip_tx_route(uint32_t src, uint32_t dst, int ifindex, struct netdev **out, uint32_t *hop)
+static int ip_tx_route(uint32_t *src, uint32_t dst, int ifindex, struct netdev **out, uint32_t *hop)
 {
-    if (IP_IS_LOOPBACK(dst)) {
+    struct netdev_rt row;
+    uint32_t selected;
+    if (ip_is_local(dst)) {
         *out = 0;
         *hop = dst;
-        return 0;
-    }
-    if (IP_IS_LOOPBACK(src) && !netdev_owns(dst)) {
-        return -EINVAL;
-    }
-    if (netdev_is_broadcast(dst)) {
-        *out = ifindex ? netdev_route_on(dst, ifindex, hop) : ip_broadcast_iface(dst);
-        *hop = dst;
-        if (!ifindex || *out) {
-            return 0;
-        }
+        selected = IP_IS_LOOPBACK(dst) ? IP_LOOPBACK_ADDR : dst;
     } else {
-        *out = netdev_route_on(dst, netdev_owns(dst) ? 0 : ifindex, hop);
-        if (*out) {
-            return 0;
+        if (IP_IS_LOOPBACK(*src))
+            return -EINVAL;
+        if (netdev_is_broadcast(dst)) {
+            *out = ifindex ? netdev_route_on(dst, ifindex, hop) : ip_broadcast_iface(dst);
+            *hop = dst;
+            selected = *out ? netdev_source(*out, dst) : net_ip_addr;
+        } else {
+            *out = netdev_route_lookup(dst, ifindex, &row);
+            if (*out) {
+                *hop = row.gw ? row.gw : dst;
+                selected = row.src;
+            }
         }
-        klog(KLOG_WARN, "ip", "tx: no route: refused a datagram no interface reaches");
+        if (!*out) {
+            net_mib.ip_out_no_routes++;
+            return -ENETUNREACH;
+        }
     }
-    net_mib.ip_out_no_routes++;
-    return -ENETUNREACH;
+    if (!*src || !ip_is_local(*src))
+        *src = selected;
+    return 0;
 }
 
 /**
@@ -720,14 +720,9 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         return -ENETUNREACH;
     }
 
-    r = ip_tx_route(src, dst_ip, ifindex, &out, &route_ip);
+    r = ip_tx_route(&src, dst_ip, ifindex, &out, &route_ip);
     if (r < 0) {
         return r;
-    }
-    if (src == 0 || !ip_is_local(src)) {
-        src = IP_IS_LOOPBACK(dst_ip) ? IP_LOOPBACK_ADDR
-              : out                  ? netdev_source(out, route_ip)
-                                     : net_ip_addr;
     }
     local = IP_IS_LOOPBACK(dst_ip) || netdev_owns(dst_ip);
     if (!local && netconf_is_broadcast(dst_ip) && proto != IP_PROTO_UDP) {

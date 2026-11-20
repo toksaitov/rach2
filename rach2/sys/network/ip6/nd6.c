@@ -1494,7 +1494,6 @@ static void forget_if(struct netdev *nd, int stop)
         net_unlock(lock);
         return;
     }
-    route6_forget(nd, -1);
     if (ni) {
         ni->started = 0;
         ni->rs_left = 0;
@@ -1503,6 +1502,7 @@ static void forget_if(struct netdev *nd, int stop)
     for (i = nd->naddr6 - 1; i >= 0; i--) {
         netconf_del_address6(nd, nd->addr6[i].addr);
     }
+    route6_forget(nd, -1);
     net_unlock(lock);
 }
 

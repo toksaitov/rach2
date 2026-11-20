@@ -1707,7 +1707,8 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
 
     nd = netdev_route_lookup(dst, 0, &selected);
     for (i = 0; netdev_local_route_at(i, &r); i++) {
-        if (dst == r.dst) {
+        if ((dst & r.mask) == r.dst &&
+            (!broadcast || r.kind == NETDEV_RT_LOCAL || r.mask > selected.mask)) {
             nd = watch_dev(r.ifindex);
             local = r.kind == NETDEV_RT_LOCAL;
             broadcast = !local;
@@ -2296,7 +2297,7 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
         r.kind = req[NLMSG_HDRLEN + 7] == RTN_LOCAL       ? NETDEV_RT_LOCAL
                  : req[NLMSG_HDRLEN + 7] == RTN_BROADCAST ? NETDEV_RT_BROADCAST
                                                           : 0;
-        rc = type == RTM_DELROUTE ? netdev_local_route_del(nd, &r) : -EOPNOTSUPP;
+        rc = netdev_local_route_change(nd, &r, type == RTM_DELROUTE, (flags & NLM_F_REPLACE) != 0);
     } else {
         rc = netdev_route_change(nd, &r, type == RTM_DELROUTE, (flags & NLM_F_REPLACE) != 0);
     }

@@ -19,7 +19,7 @@ struct route6 {
     struct netdev *nd;
     uint8_t dst[IP6_ADDR_LEN];
     uint8_t plen;
-    uint8_t proto;
+    uint8_t proto, local;
     uint8_t gw[IP6_ADDR_LEN];
     uint32_t metric;
     uint64_t expires;
@@ -40,7 +40,7 @@ static void mask_prefix(uint8_t *a, int plen)
     }
 }
 
-enum addr6_route_kind { PREFIX6 = 1, PEER6 = 2, LOCAL6 = 4, PEER_PREFIX6 = 8 };
+enum addr6_route_kind { PREFIX6 = 1, PEER6 = 2, LOCAL6 = NETDEV_A6_LOCAL_ROUTE, PEER_PREFIX6 = 8 };
 
 /** Describe one route installed by an address, when it is in force. */
 static int address_route(const struct netdev *nd, int a, int kind, struct route6_row *r)
@@ -125,7 +125,7 @@ int route6_at(int n, struct route6_row *out)
         k_memcpy(out->gw, r->gw, IP6_ADDR_LEN);
         out->metric = r->metric;
         out->proto = r->proto;
-        out->local = 0;
+        out->local = r->local;
         out->expires = 0;
         if (r->expires != 0 && r->expires > tick_count()) {
             out->expires = (uint32_t)tick_div(r->expires - tick_count() + TICK_HZ - 1, TICK_HZ, 0);
@@ -202,8 +202,8 @@ static int find(const struct netdev *nd, const uint8_t *dst, int plen, const uin
     for (i = 0; i < ROUTE6_MAX; i++) {
         struct route6 *r = &table6[i];
 
-        if (r->nd && (!nd || r->nd == nd) && r->plen == plen && ip6_equal(r->dst, dst) &&
-            (!gw || ip6_equal(r->gw, gw)) && r->metric == metric) {
+        if (r->nd && !r->local && (!nd || r->nd == nd) && r->plen == plen &&
+            ip6_equal(r->dst, dst) && (!gw || ip6_equal(r->gw, gw)) && r->metric == metric) {
             return i;
         }
     }
@@ -263,7 +263,7 @@ static int table_match(const struct netdev *nd, const struct route6_row *want)
     int i;
     for (i = 0; i < ROUTE6_MAX; i++) {
         struct route6 *r = &table6[i];
-        if (!want->local && r->nd && (!nd || nd == r->nd) && r->plen == want->plen &&
+        if (want->local == r->local && r->nd && (!nd || nd == r->nd) && r->plen == want->plen &&
             ip6_equal(want->dst, r->dst) && (!want->proto || want->proto == r->proto) &&
             (!want->metric || want->metric == r->metric) &&
             (ip6_is_unspecified(want->gw) || ip6_equal(want->gw, r->gw)))
@@ -273,7 +273,7 @@ static int table_match(const struct netdev *nd, const struct route6_row *want)
 }
 
 /** Check the new route before consuming or replacing a table entry. */
-static int valid_gateway(struct netdev *nd, const uint8_t *gw)
+static int valid_gateway(const struct netdev *nd, const uint8_t *gw)
 {
     uint8_t via[IP6_ADDR_LEN];
     if (ip6_is_unspecified(gw))
@@ -283,6 +283,16 @@ static int valid_gateway(struct netdev *nd, const uint8_t *gw)
     if (!ip6_link_scoped(gw) && (route6_lookup(gw, nd->index, via) != nd || !ip6_equal(via, gw)))
         return -EHOSTUNREACH;
     return 0;
+}
+
+/** Validate a proposed row before changing an existing route. */
+static int route6_valid(const struct netdev *nd, const struct route6_row *r)
+{
+    if (!nd->up)
+        return -ENETDOWN;
+    if (r->local && !ip6_is_unspecified(r->gw))
+        return -EINVAL;
+    return valid_gateway(nd, r->gw);
 }
 
 int route6_change_row(struct netdev *nd, const struct route6_row *input, int del, int replace)
@@ -307,10 +317,10 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
         net_unlock(lock);
         return i >= 0 ? 0 : -ESRCH;
     }
-    rc = nd->up ? valid_gateway(nd, r.gw) : -ENETDOWN;
-    if (rc || r.local) {
+    rc = route6_valid(nd, &r);
+    if (rc) {
         net_unlock(lock);
-        return rc ? rc : -EOPNOTSUPP;
+        return rc;
     }
     if (!r.metric)
         r.metric = 1024;
@@ -319,7 +329,7 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
     if (replace)
         k_memset(selector.gw, 0, sizeof(selector.gw));
     generated = generated6(nd, &selector, 0);
-    i = replace ? table_match(nd, &selector) : find(nd, r.dst, r.plen, r.gw, r.metric);
+    i = replace || r.local ? table_match(nd, &selector) : find(nd, r.dst, r.plen, r.gw, r.metric);
     if ((generated || i >= 0) && !replace) {
         net_unlock(lock);
         return -EEXIST;
@@ -333,6 +343,7 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
     if (generated)
         generated6(nd, &selector, 1);
     table6[i].nd = nd;
+    table6[i].local = r.local;
     k_memcpy(table6[i].dst, r.dst, IP6_ADDR_LEN);
     table6[i].plen = r.plen;
     k_memcpy(table6[i].gw, r.gw, IP6_ADDR_LEN);
@@ -341,6 +352,73 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
     table6[i].expires = 0;
     net_unlock(lock);
     return 0;
+}
+
+/** Keep a prefix in the routing table after its address record is removed.
+ * expires is an absolute tick count or zero for a permanent route. */
+static void retain_prefix(struct netdev *nd, const struct route6_row *r, uint64_t expires)
+{
+    int i = find(nd, r->dst, r->plen, r->gw, r->metric);
+    if (i < 0) {
+        i = free_slot();
+        if (i < 0)
+            return;
+        k_memset(&table6[i], 0, sizeof(table6[i]));
+        table6[i].nd = nd;
+        table6[i].plen = r->plen;
+        table6[i].proto = ROUTE6_PROTO_KERNEL;
+        table6[i].metric = r->metric;
+        k_memcpy(table6[i].dst, r->dst, IP6_ADDR_LEN);
+        table6[i].expires = expires;
+    }
+}
+
+/** Whether another address supplies this generated prefix on the same card. */
+static int other_prefix(struct netdev *nd, int slot, const struct route6_row *r)
+{
+    struct route6_row other;
+    int i;
+    for (i = 0; i < nd->naddr6; i++)
+        if (i != slot && address_route(nd, i, PREFIX6, &other) && same_prefix(r, &other))
+            return 1;
+    return 0;
+}
+
+void route6_address_removed(struct netdev *nd, int slot)
+{
+    struct netdev_addr6 *a = &nd->addr6[slot];
+    struct route6_row r;
+    uint64_t expires;
+    int i;
+    if (!address_route(nd, slot, PREFIX6, &r))
+        return;
+    if (!(a->flags & NETDEV_A6_PERMANENT)) {
+        expires = a->since + (uint64_t)a->valid * TICK_HZ;
+        if (expires > tick_count() && !other_prefix(nd, slot, &r))
+            retain_prefix(nd, &r, expires);
+        return;
+    }
+    for (i = 0; i < nd->naddr6; i++) {
+        struct netdev_addr6 *other = &nd->addr6[i];
+        if (other->noprefix && other->prefix == r.plen &&
+            ip6_prefix_match(other->addr, r.dst, r.plen)) {
+            retain_prefix(nd, &r, 0);
+            return;
+        }
+    }
+}
+
+struct netdev *route6_added_local(const uint8_t *dst)
+{
+    const struct route6 *best = 0;
+    int i;
+    for (i = 0; i < ROUTE6_MAX; i++) {
+        const struct route6 *r = &table6[i];
+        if (r->nd && r->local && ip6_prefix_match(dst, r->dst, r->plen) &&
+            (!best || r->plen > best->plen || (r->plen == best->plen && r->metric < best->metric)))
+            best = r;
+    }
+    return best ? best->nd : 0;
 }
 
 /** A full table refuses the route; the advertisement that would refresh it
@@ -373,6 +451,7 @@ void route6_learn(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t
             return;
         }
         table6[i].nd = nd;
+        table6[i].local = 0;
         k_memcpy(table6[i].dst, d, IP6_ADDR_LEN);
         table6[i].plen = (uint8_t)plen;
         k_memcpy(table6[i].gw, g, IP6_ADDR_LEN);

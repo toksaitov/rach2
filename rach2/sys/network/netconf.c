@@ -16,6 +16,7 @@
 #include "arp/arp.h"
 #include "ip6/ip6.h"
 #include "ip6/nd6.h"
+#include "ip6/route6.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -836,6 +837,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
         netdev_leave6(nd, group);
     }
     ip6_format(addr, text);
+    route6_address_removed(nd, (int)(a - nd->addr6));
     for (i = (int)(a - nd->addr6); i + 1 < nd->naddr6; i++) {
         nd->addr6[i] = nd->addr6[i + 1];
     }

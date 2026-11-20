@@ -414,6 +414,14 @@ int netconf_set_up(struct netdev *nd, int up)
     return 0;
 }
 
+/** The driver fixture has no explicit local-table routes. */
+struct netdev *netdev_added_local(uint32_t dst, int kind)
+{
+    (void)dst;
+    (void)kind;
+    return 0;
+}
+
 /** Model a complete IPv4 device flush, including routes without an address. */
 void netdev_route_flush(struct netdev *nd, int all)
 {
@@ -471,6 +479,13 @@ int nd6_forget(struct netdev *nd, const uint8_t *addr)
     (void)nd;
     (void)addr;
     return -ENOENT;
+}
+
+/** No explicit IPv6 local route in the driver model. */
+struct netdev *route6_added_local(const uint8_t *dst)
+{
+    (void)dst;
+    return 0;
 }
 
 /** No IPv6 route to forget. */

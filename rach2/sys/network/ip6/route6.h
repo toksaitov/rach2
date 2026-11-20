@@ -60,6 +60,13 @@ int route6_at(int n, struct route6_row *out);
  */
 struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via);
 
+/** Preserve a prefix with an independent lifetime before removing slot.
+ * The caller holds net_lock and slot is still present. */
+void route6_address_removed(struct netdev *nd, int slot);
+
+/** The device of an explicit local route covering dst, or NULL. */
+struct netdev *route6_added_local(const uint8_t *dst);
+
 /** Apply a netlink or ioctl route under net_lock. A zero metric or
  * protocol in a deletion omits that selector. Replacement validates
  * the new route before removing the old one. */
