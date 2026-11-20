@@ -69,7 +69,9 @@
  * many as DSP_BUFFER_MAX holds. Without SETFRAGMENT a period is the power of
  * two nearest a 43rd of a second, about 23 ms, and there are DSP_PERIODS.
  * A playback buffer may take one period more, DSP_RING_MAX in all, so that
- * it holds a period beyond the start (dsp_layout).
+ * it holds a period beyond the start (dsp_layout), and more than that where
+ * the driver's buffer holds more of the stream, up to AUDIO_DEVICE_MAX and
+ * a period.
  */
 #define DSP_BUFFER_MAX   65536u
 #define DSP_PERIOD_MIN   128u
@@ -98,7 +100,8 @@ struct dsp_count_info {
 };
 
 /*
- * One direction of an open. `ring` holds DSP_RING_MAX bytes for playback and
+ * One direction of an open. `ring` holds `cap` bytes, DSP_RING_MAX for
+ * playback from the open, or more once a layout needs them, and
  * DSP_BUFFER_MAX for capture, of which the first `size` are the buffer in
  * use, a circle of `used` bytes from `head` on; it is NULL in a direction
  * the open does not have. The program adds at the tail and the driver's
@@ -113,6 +116,7 @@ struct dsp_chan {
     audio_stream_t stream; /* the driver's view of the direction */
     audio_driver_t *drv;   /* the driver of the stream */
     uint8_t *ring;
+    uint32_t cap;
     uint32_t size;
     uint32_t head;
     uint32_t used;
@@ -319,16 +323,22 @@ static void dsp_period(audio_stream_t *s)
  * more, since a program may keep a period free and still wait for the start,
  * as cmus does, which writes only as much as GETOSPACE's free periods less
  * one; a capture buffer needs only two. A period holds one frame at least,
- * the smallest power of two that does where SETFRAGMENT asks for less. 0;
- * or the driver's error, or -EIO for a grant outside the contract of
- * `stream_setup`, with the stream as it was.
+ * the smallest power of two that does where SETFRAGMENT asks for less.
+ * Where the driver's periods and one more pass the playback buffer's room,
+ * as for a stream of many channels at a high rate that the driver converts,
+ * the buffer grows to hold them, as Linux's OSS layer sizes its buffer from
+ * the hardware's in the program's frames (snd_pcm_oss_period_size). 0; or
+ * the driver's error, -EIO for a grant outside the contract of
+ * `stream_setup`, or -ENOMEM when the larger buffer cannot be had, with the
+ * stream and the buffer as they were.
  */
 static int dsp_layout(struct dsp *d, struct dsp_chan *c)
 {
     audio_stream_t *s = &c->stream;
     audio_stream_t old = c->stream;
     int play = c == &d->play;
-    uint32_t bytes, count, frame;
+    uint32_t bytes, count, frame, size, flags;
+    uint8_t *ring = NULL, *was = NULL;
     int rc;
 
     if (d->fragment) {
@@ -350,18 +360,33 @@ static int dsp_layout(struct dsp *d, struct dsp_chan *c)
     frame = frame_bytes(s);
     if (rc == 0 && (s->period_bytes == 0 || s->period_bytes > bytes ||
                     s->period_bytes % frame != 0 || s->device_periods == 0 ||
-                    (play && s->device_periods > DSP_BUFFER_MAX / s->period_bytes))) {
+                    (play && s->device_periods > AUDIO_DEVICE_MAX / s->period_bytes))) {
         rc = -EIO;
+    }
+    if (rc == 0) {
+        s->periods = clamp(s->periods, 2, DSP_BUFFER_MAX / s->period_bytes);
+        if (play && s->periods <= s->device_periods) {
+            s->periods = s->device_periods + 1;
+        }
+        size = s->periods * s->period_bytes;
+        if (size > c->cap) {
+            ring = (uint8_t *)kmalloc(size);
+            rc = ring ? 0 : -ENOMEM;
+        }
     }
     if (rc != 0) {
         c->stream = old;
         return rc;
     }
-    s->periods = clamp(s->periods, 2, DSP_BUFFER_MAX / s->period_bytes);
-    if (play && s->periods <= s->device_periods) {
-        s->periods = s->device_periods + 1;
+    flags = spin_lock_irqsave(&d->lock);
+    if (ring) {
+        was = c->ring;
+        c->ring = ring;
+        c->cap = size;
     }
-    c->size = s->periods * s->period_bytes;
+    c->size = size;
+    spin_unlock_irqrestore(&d->lock, flags);
+    kfree(was);
     if (play) {
         d->start = s->device_periods * s->period_bytes;
     }
@@ -573,12 +598,13 @@ static int dsp_configure(struct dsp *d, audio_format_t format, int channels, uin
 }
 
 /** Set direction `c` of the new open `d` up as `dir`, at OSS's defaults,
- * over the buffer `ring`, on the stream operations of `drv`. */
+ * over the buffer `ring` of `cap` bytes, on the stream operations of `drv`. */
 static void dsp_chan_init(struct dsp *d, struct dsp_chan *c, audio_dir_t dir, uint8_t *ring,
-                          audio_driver_t *drv)
+                          uint32_t cap, audio_driver_t *drv)
 {
     c->drv = drv;
     c->ring = ring;
+    c->cap = cap;
     c->stream.dir = dir;
     c->stream.format = AUDIO_U8;
     c->stream.channels = 1;
@@ -675,15 +701,16 @@ int32_t dspdev_open_driver(fd_entry_t *e, int flags, audio_driver_t *drv)
     spin_lock_init(&d->lock, "dsp");
     d->trigger = PCM_ENABLE_INPUT | PCM_ENABLE_OUTPUT;
     if (out) {
-        dsp_chan_init(d, &d->play, AUDIO_PLAYBACK, out, drv);
+        dsp_chan_init(d, &d->play, AUDIO_PLAYBACK, out, DSP_RING_MAX, drv);
     }
     if (in) {
-        dsp_chan_init(d, &d->rec, AUDIO_CAPTURE, in, drv);
+        dsp_chan_init(d, &d->rec, AUDIO_CAPTURE, in, DSP_BUFFER_MAX, drv);
     }
     rc = dsp_take(d);
     if (rc != 0) {
-        kfree(out);
-        kfree(in);
+        /* A layout may have put a larger buffer in place of `out`. */
+        kfree(d->play.ring ? d->play.ring : out);
+        kfree(d->rec.ring ? d->rec.ring : in);
         kfree(d);
         return rc;
     }
