@@ -53,6 +53,11 @@ typedef void (*audio_callback_t)(void *buffer, size_t size);
 /* The direction of a stream. */
 typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
 
+/* The most bytes of a stream that a driver's `device_periods` cover: 40 ms
+ * of 128 channels of 32 bits at 192 kHz, the most `/dev/dsp` takes, which
+ * the HDMI driver's DMA buffer holds, is some 3.9 MiB. */
+#define AUDIO_DEVICE_MAX (8u << 20)
+
 /*
  * A stream: one direction of the device, owned by one caller, such as an open
  * of /dev/dsp, between `stream_open` and `stream_close`.
@@ -62,9 +67,12 @@ typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
  * hardware plays or records before it tells the caller, a whole number of
  * frames; the driver may make it smaller, never larger. `periods` is the
  * length of the caller's buffer, which the driver may raise. The driver
- * sets `device_periods`, the periods its DMA buffer holds, which
- * `stream_start` fills: a caller that starts the stream with fewer queued
- * plays silence after them.
+ * sets `device_periods`, the periods of the stream its DMA buffer holds,
+ * which `stream_start` fills: a caller that starts the stream with fewer
+ * queued plays silence after them. They cover at most AUDIO_DEVICE_MAX
+ * bytes of the stream, more than 64 KiB where the driver converts a stream
+ * of many channels at a high rate to its DMA's, and a playback caller's
+ * buffer holds them and a period more.
  *
  * The buffers are two. The caller's, `periods` times `period_bytes` in the
  * stream's format, belongs to the caller; the DMA buffer the device reads or

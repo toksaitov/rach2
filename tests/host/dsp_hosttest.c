@@ -7,10 +7,12 @@
  * sox_ng's and FFmpeg's OSS inputs, and several opens playing at once: their
  * mix, its clipping, the conversion of each open's format and rate, and one
  * player closing while another plays; and an open of a driver of its own, as
- * /dev/dsp1's, that takes up to 128 channels. The mix is of 24 bits: a model
- * that plays 24 bits in 32 is given the 24-bit formats exactly and a sum
- * clipped at 24 bits, and one of 16 bits each sample rounded to 16; a reader in
- * a wide format has the 16 bits recorded on top of zeros.
+ * /dev/dsp1's, that takes up to 128 channels, and of one whose buffer holds
+ * more of the stream than 64 KiB, for which the open's buffer grows. The
+ * mix is of 24 bits: a model that plays 24 bits in 32 is given the 24-bit
+ * formats exactly and a sum clipped at 24 bits, and one of 16 bits each
+ * sample rounded to 16; a reader in a wide format has the 16 bits recorded
+ * on top of zeros.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/audio/resample.c
@@ -68,13 +70,15 @@ static struct {
     uint32_t next;     /* the DMA period played next */
     uint32_t rate_min; /* the rates it grants */
     uint32_t rate_max;
-    uint32_t period_max; /* the largest capture period it grants */
-    uint32_t play_max;   /* the largest playback period it grants, in bytes
-                            of 16 bits; twice that of 32 */
-    int wide;            /* it plays 24 bits in 32, AUDIO_S32LE, not 16 */
-    int channels_max;    /* the channels it grants, as the driver's own */
-    int refuse_open;     /* stream_open's error, or 0 */
-    int refuse_start;    /* stream_start's error, or 0 */
+    uint32_t period_max;  /* the largest capture period it grants */
+    uint32_t play_max;    /* the largest playback period it grants, in bytes
+                             of 16 bits; twice that of 32 */
+    int wide;             /* it plays 24 bits in 32, AUDIO_S32LE, not 16 */
+    int channels_max;     /* the channels it grants, as the driver's own */
+    uint32_t dev_periods; /* the playback periods it says its buffer holds,
+                             when not 0, as a converting driver's may */
+    int refuse_open;      /* stream_open's error, or 0 */
+    int refuse_start;     /* stream_start's error, or 0 */
     int starts, stops, closes;
     unsigned ticks;
     uint8_t out[MODEL_OUT];
@@ -238,7 +242,7 @@ static int model_setup(audio_stream_t *s)
     if (s->period_bytes > max) {
         s->period_bytes = max;
     }
-    s->device_periods = in ? 8 : m.periods;
+    s->device_periods = in ? 8 : m.dev_periods ? m.dev_periods : m.periods;
     return 0;
 }
 
@@ -2090,6 +2094,47 @@ static void row_many_channels(void)
     model.channels_max = 0;
 }
 
+/** A driver whose buffer holds 241 periods of 16 KiB of the stream, as the
+ * HDMI driver's does for 128 channels at 192 kHz: the playback buffer
+ * grows to hold them and a period more, a write past 64 KiB queues without
+ * a start, and a grant past AUDIO_DEVICE_MAX, or a buffer the heap cannot
+ * give, is refused with the buffer kept. */
+static void row_large_device(void)
+{
+    struct dsp_buf_info info;
+
+    begin("large device buffer");
+    m.channels_max = 128;
+    model.channels_max = 128;
+    m.play_max = MODEL_PERIOD_MAX;
+    k_memset(&entry, 0, sizeof(entry));
+    k_memset(&description, 0, sizeof(description));
+    entry.ofd = &description;
+    description.refcount = 1;
+    check(dspdev_open_driver(&entry, 1, &model) == 0, "open on the driver itself");
+    check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE && ask(DSP_CHANNELS, 128) == 128,
+          "128 channels of 16 bits granted");
+    m.dev_periods = 241;
+    check(call(DSP_SETFRAGMENT, &(int){0x0004000e}) == 0, "four periods of 16 KiB asked for");
+    info = ospace();
+    check(info.fragstotal == 242 && info.fragsize == 16384 && info.bytes == 242 * 16384,
+          "the buffer grows to the driver's 241 periods and one more");
+    check(put(0, PATTERN) == (int32_t)PATTERN && m.starts == 0,
+          "a write of 256 KiB queues without a start");
+    check(ask(DSP_RESET, 0) == 0, "RESET");
+    m.dev_periods = AUDIO_DEVICE_MAX / 16384u + 1u;
+    check(call(DSP_SETFRAGMENT, &(int){0x0004000e}) == -EIO && ospace().fragstotal == 242,
+          "a grant past AUDIO_DEVICE_MAX is EIO, the buffer kept");
+    m.dev_periods = 300;
+    kheap_host_largest = 1u << 22;
+    check(call(DSP_SETFRAGMENT, &(int){0x0004000e}) == -ENOMEM && ospace().bytes == 242 * 16384,
+          "a buffer the heap cannot give is ENOMEM, the buffer kept");
+    kheap_host_largest = 0;
+    m.dev_periods = 0;
+    close_dsp();
+    model.channels_max = 0;
+}
+
 int main(void)
 {
     uint32_t i;
@@ -2133,6 +2178,7 @@ int main(void)
     row_loopback();
     row_service_context();
     row_many_channels();
+    row_large_device();
     if (failures) {
         printf("dsp-hosttest: %d failures\n", failures);
         return 1;
