@@ -309,12 +309,48 @@ static void fat_option_immutable_rows(void)
     unmount_image();
 }
 
+/**
+ * A mask that leaves the mode no write bit makes no read-only attribute:
+ * under fmask=0222, FAT_IOCTL_SET_ATTRIBUTES of the archive bit alone
+ * stores it alone and FAT_IOCTL_GET_ATTRIBUTES reads it so, and a mount
+ * without the mask finds the file writable, as Linux's fat_save_attrs and
+ * fat_make_attrs keep the bit apart from a mode that cannot hold it.
+ */
+static void fat_option_mask_attr_rows(void)
+{
+    struct vfs_stat st;
+    int err;
+    void *n;
+
+    load("");
+    check(mount_rw("fmask=0222") == 0 && fat_touch("MASKED.TXT") == 0, "a mount with fmask=0222");
+    n = walk("/MASKED.TXT", &err);
+    if (n) {
+        check(fat_attr_get(&mnt, n) == 0x20, "the mask makes no read-only bit for GET");
+        check(fat_attr_set(&mnt, n, 0x20, FAT_ATTR_MAY_CHANGE) == 0 &&
+                  fat_attr_get(&mnt, n) == 0x20,
+              "SET of the archive bit alone stores it alone under the mask");
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+    check(mount_rw("") == 0, "a mount without the mask");
+    n = walk("/MASKED.TXT", &err);
+    if (n) {
+        check(fat_attr_get(&mnt, n) == 0x20 && OPS->getattr(&mnt, n, &st) == 0 &&
+                  (st.mode & 0222) != 0,
+              "the file is writable without the mask");
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+}
+
 /** Run the option rows. */
 static void fat_option_rows(void)
 {
     fat_option_word_rows();
     fat_option_mount_rows();
     fat_option_immutable_rows();
+    fat_option_mask_attr_rows();
 }
 
 #endif

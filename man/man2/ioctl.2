@@ -537,8 +537,12 @@ uses them.
 .Bl -tag -width "FAT_IOCTL_SET_ATTRIBUTES"
 .It Dv FAT_IOCTL_GET_ATTRIBUTES
 Request 0x80047210 writes the attributes: read-only 0x01, hidden 0x02,
-system 0x04, volume 0x08, directory 0x10 and archive 0x20, with the
-read-only bit for a node whose mode has no write bit.
+system 0x04, volume 0x08, directory 0x10 and archive 0x20, as the entry
+holds them; a
+.Ql fmask
+or
+.Ql dmask
+that leaves the mode no write bit adds no read-only bit.
 .It Dv FAT_IOCTL_SET_ATTRIBUTES
 Request 0x40047211 stores the low byte of the integer as the attributes,
 keeping the volume and directory bits as they were, for the file's owner or
@@ -553,7 +557,8 @@ on a read-only mount, and with
 for the root directory given any attribute but the directory bit.
 The read-only bit takes the write bits from the mode, as a
 .Xr chmod 2
-does.
+does, and is stored as given, so that a mount without the mask that
+took the write bits finds the file as it was set.
 On a mount with
 .Ql sys_immutable
 a change to a file that has the system bit, before or after, needs

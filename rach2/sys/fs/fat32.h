@@ -48,8 +48,10 @@ extern const struct vfs_type vfs_vfat_type;
 /**
  * The attribute byte of `node` on the vfat mount `mnt` as Linux's
  * FAT_IOCTL_GET_ATTRIBUTES gives it (`fat_make_attrs`): the entry's
- * attributes, with the directory bit of a directory, the root's included,
- * and the read-only bit for a node whose mode has no write bit.
+ * attributes, with the directory bit of a directory, the root's included.
+ * The read-only bit is the entry's, never made from a mode that a mount's
+ * `fmask` or `dmask` leaves without write bits, as Linux sets it from the
+ * mode only where the mode can hold it (`fat_mode_can_hold_ro`).
  */
 uint32_t fat_attr_get(struct vfs_mount *mnt, void *node);
 
@@ -63,8 +65,10 @@ uint32_t fat_attr_get(struct vfs_mount *mnt, void *node);
  * Store `attr` as the attributes of `node` on the vfat mount `mnt`, as
  * Linux's FAT_IOCTL_SET_ATTRIBUTES does (`fat_ioctl_set_attributes`): the
  * volume and directory bits stay as they are, and the rest of the low byte
- * is written to the entry, the read-only bit with it, which the mode then
- * shows. `rights` is an OR of FAT_ATTR_MAY_*. Returns 0, -EROFS for a
+ * is written to the entry as given, the read-only bit with it, which the
+ * mode then shows; a mask that leaves the mode no write bit adds none to
+ * the entry, as Linux's fat_save_attrs keeps the bit given where the mode
+ * cannot hold it. `rights` is an OR of FAT_ATTR_MAY_*. Returns 0, -EROFS for a
  * mount that does not write, -EINVAL for the root given any attribute but
  * the directory bit, -EPERM under sys_immutable for a change that has the
  * system bit before or after without FAT_ATTR_MAY_SYS, or for a caller

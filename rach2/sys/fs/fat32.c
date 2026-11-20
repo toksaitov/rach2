@@ -2166,13 +2166,10 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
 
 uint32_t fat_attr_get(struct vfs_mount *mnt, void *node)
 {
-    struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = node;
-    uint32_t attr = n->attr & (uint32_t)~(ATTR_READ_ONLY | ATTR_DIRECTORY);
+    uint32_t attr = n->attr & (uint32_t)~ATTR_DIRECTORY;
 
-    if ((n->attr & ATTR_READ_ONLY) || !(fat_mode(fm, n) & 0222u)) {
-        attr |= ATTR_READ_ONLY;
-    }
+    (void)mnt;
     return n->is_dir ? attr | ATTR_DIRECTORY : attr;
 }
 
@@ -2180,14 +2177,10 @@ int fat_attr_set(struct vfs_mount *mnt, void *node, uint32_t attr, int rights)
 {
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = node;
-    uint32_t mask = n->is_dir ? fm->opts.dmask : fm->opts.fmask;
     int rc;
 
     attr &= 0xffu & (uint32_t)~(ATTR_VOLUME | ATTR_DIRECTORY);
     attr |= (n->attr & ATTR_VOLUME) | (n->is_dir ? ATTR_DIRECTORY : 0u);
-    if (!(~mask & 0222u)) {
-        attr |= ATTR_READ_ONLY; /* a mode with no write bit is stored read-only */
-    }
     rc = begin_write(mnt, fm);
     if (rc != 0) {
         return rc;
