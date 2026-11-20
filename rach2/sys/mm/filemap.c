@@ -31,6 +31,13 @@
 #include "../network/socket/socket.h"
 #include "../syscall_internal.h"
 
+int filemap_noexec(const fd_entry_t *e)
+{
+    struct vfs_mount *mnt = e->ofd ? e->ofd->vmnt : NULL;
+
+    return mnt && ((vfs_mount_flags(mnt) & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec);
+}
+
 int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot)
 {
     struct vfs_mount *mnt = e->ofd ? e->ofd->vmnt : NULL;
@@ -40,8 +47,7 @@ int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot)
     if (!(e->flags & FD_FLAG_READ) ||
         (shared && (prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE)))
         return -EACCES;
-    if (mnt && (prot & VM_PROT_EXEC) &&
-        ((vfs_mount_flags(mnt) & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec))
+    if ((prot & VM_PROT_EXEC) && filemap_noexec(e))
         return -EPERM;
     if (e->ops)
         return e->ops->mmap ? 0 : -ENODEV;

@@ -1048,8 +1048,12 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
     return rc;
 }
 
+/* The bits of a region that may never be made executable, Linux's regions
+ * without VM_MAYEXEC. */
+#define VM_PROT_NEVER_EXEC (VM_PROT_NOEXEC | VM_PROT_SECRET | VM_PROT_VVAR)
+
 /* Options of `vm_change`, above every protection bit: a region with
- * VM_PROT_NOWRITE, or with VM_PROT_SECRET, stops the change; a private
+ * VM_PROT_NOWRITE, or with VM_PROT_NEVER_EXEC, stops the change; a private
  * region made writable is charged; and, with the key k in bits 24 to 27, a
  * region left with key k, the execute-only key, takes key 0. */
 #define VM_CHANGE_NOWRITE   0x80000000u
@@ -1096,7 +1100,7 @@ static uint32_t vm_change_prot(const vma_t *r, uint32_t mask, uint32_t bits, uin
  * at its ends and merging the pieces with neighbours that then match. `opts`
  * holds protection bits, a region with any of which keeps its protection, and
  * VM_CHANGE_NOWRITE and VM_CHANGE_NOEXEC, with which a region with
- * VM_PROT_NOWRITE, or VM_PROT_SECRET or VM_PROT_VVAR, stops the change
+ * VM_PROT_NOWRITE, or a bit of VM_PROT_NEVER_EXEC, stops the change
  * with -3, as Linux's
  * mprotect answers EACCES without VM_MAYWRITE or VM_MAYEXEC, and
  * VM_CHANGE_ACCOUNT and VM_CHANGE_XO_KEY (`vm_change_prot`). An empty range
@@ -1122,7 +1126,7 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
             break;
         }
         if (((opts & VM_CHANGE_NOWRITE) && (r->prot & VM_PROT_NOWRITE)) ||
-            ((opts & VM_CHANGE_NOEXEC) && (r->prot & (VM_PROT_SECRET | VM_PROT_VVAR)))) {
+            ((opts & VM_CHANGE_NOEXEC) && (r->prot & VM_PROT_NEVER_EXEC))) {
             return -3;
         }
         at = r->end;
@@ -1199,7 +1203,7 @@ uintptr_t vm_protect_stop(const vm_space_t *vm, uintptr_t start, uintptr_t end, 
             break;
         }
         if (((prot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) ||
-            ((prot & VM_PROT_EXEC) && (r->prot & (VM_PROT_SECRET | VM_PROT_VVAR)))) {
+            ((prot & VM_PROT_EXEC) && (r->prot & VM_PROT_NEVER_EXEC))) {
             *why = -3;
             return at;
         }

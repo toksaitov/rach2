@@ -491,7 +491,12 @@ refuses write over a range that reaches one with
 .Er EACCES ,
 as Linux does.
 So is execute over a mapping of
-.Xr memfd_secret 2 .
+.Xr memfd_secret 2
+or of a file on a
+.Cm noexec
+mount, which
+.Fn mmap
+gave no right to execute.
 .Pp
 The call fails with
 .Er ENOMEM ,
@@ -987,7 +992,10 @@ writing;
 .Fn mprotect
 asking write of a shared mapping of a file that may never be written, or
 execute of a mapping of
-.Xr memfd_secret 2 .
+.Xr memfd_secret 2
+or of a file on a
+.Cm noexec
+mount.
 .It Er EBUSY
 A shared mapping, through a descriptor open for writing, of a file a loop
 device stands on.
@@ -1055,8 +1063,10 @@ refuses a caller without privilege and a frame of RAM; the range meets
 a sealed mapping, as above; or an
 .Fn mmap
 of a file of
-.Xr memfd_secret 2
-asks for execute.
+.Xr memfd_secret 2 ,
+or of a file on a
+.Cm noexec
+mount, asks for execute.
 .It Er ESRCH
 The kernel has no current process.
 .El
