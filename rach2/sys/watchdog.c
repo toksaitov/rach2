@@ -676,6 +676,16 @@ static void watchdog_enable(struct wd_cpu *w, unsigned int e)
  * one ran more than 2 x `watchdog_thresh` seconds ago, unless the host
  * stopped the guest meanwhile (`arch_guest_paused`), which looks the same.
  *
+ * Queueing the function asks the processor's current thread to switch
+ * (`sched_resched_local`), unless it is the idle task, as Linux's
+ * stop_one_cpu_nowait wakes the stopper thread, whose wake preempts the
+ * current task (kernel/stop_machine.c). The scheduler asks no switch of a
+ * thread alone on its processor at its slice's end, so without the request
+ * such a thread, as a vCPU's `run_loop` that schedules only on one, would
+ * never pass through `schedule` and would be reported; with it the function
+ * runs at the thread's next return to user mode, call's exit or service
+ * point.
+ *
  * The switches and the threshold are read first, and the timer returns
  * when a write has moved `wd_gen` since its tick checked it: a write moves
  * it before it stores a new value (procfs.c's `sysctl_int_write`), so a
@@ -706,6 +716,7 @@ static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
     watchdog_enable(w, e);
     watchdog_hardlockup_kick(w, e);
     w->kicked = 1;
+    sched_resched_local();
 
     now = get_timestamp();
     period_ts = w->report_ts;
