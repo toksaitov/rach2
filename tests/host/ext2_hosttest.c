@@ -609,6 +609,13 @@ uint32_t block_flags(block_device_t *device)
     return device->flags;
 }
 
+/** The device that takes the requests: a host device has no partition view
+ * over it. */
+block_device_t *block_submitter(block_device_t *dev)
+{
+    return dev;
+}
+
 /**
  * Do a request with flags. The device keeps no cache of its own; one marked
  * `BLOCK_WRITE_THROUGH` records a captured write asked for without

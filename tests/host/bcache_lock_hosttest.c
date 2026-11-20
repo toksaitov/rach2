@@ -51,6 +51,7 @@ static __thread process_t *thread_proc;
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
+extern void *malloc(unsigned long n);
 extern void free(void *ptr);
 extern char *getenv(const char *name);
 extern void abort(void);
@@ -487,6 +488,13 @@ int block_flush(block_device_t *device)
 uint32_t block_flags(block_device_t *device)
 {
     return device->flags;
+}
+
+/** The device that takes the requests: a host device has no partition view
+ * over it. */
+block_device_t *block_submitter(block_device_t *dev)
+{
+    return dev;
 }
 
 /** The most sectors a request moves. */

@@ -3,8 +3,9 @@
  *
  * It also defines the calls the FAT drivers make into the block layer,
  * which `blockmax_host.c` defines for the tests that need no model: the
- * most sectors a request moves, the device's flags, a request with flags,
- * and the device's flush, which is the model's barrier here.
+ * most sectors a request moves, the device's flags, the device that takes
+ * its requests, a request with flags, and the device's flush, which is the
+ * model's barrier here.
  */
 
 #include "devmodel.h"
@@ -181,6 +182,13 @@ int block_flush(block_device_t *device)
 uint32_t block_flags(block_device_t *device)
 {
     return device->flags;
+}
+
+/** The device that takes the requests: a host device has no partition view
+ * over it. */
+block_device_t *block_submitter(block_device_t *dev)
+{
+    return dev;
 }
 
 /** A request with flags on the host: a fake device keeps no cache of its

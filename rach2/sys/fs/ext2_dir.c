@@ -962,18 +962,24 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
 /**
  * Order a block of the volume after its write at the cache: the caller's
  * operation's later changes of inode tables and directories reach the
- * device only after block `blk` as it stands now (`bcache_order_after`).
- * The operation does not wait. When the cache keeps no more orders for the
- * caller, or has no memory for one, the block is written now, with what it
- * waits for before it and without the disk's flush
- * (`bcache_sync_block_ordered`), which gives the same order. 0, or the
- * write's -errno, with the block still dirty.
+ * device only after block `blk` as it stands now (`bcache_order_after`),
+ * and on a disk with a volatile cache the medium too. The operation does
+ * not wait. When the cache keeps no more orders for the caller, or has no
+ * memory for one, the block is written now, with what it waits for before
+ * it (`bcache_sync_block_ordered`), and the disk's cache flushed, since the
+ * later changes then keep no wait that would flush before them; that gives
+ * the same order. 0, or the write's -errno, with the block still dirty, or
+ * the flush's.
  */
 static int order_after(struct ext2_mount *em, uint64_t blk)
 {
     int rc = bcache_order_after(em->dev, blk);
 
-    return rc == 0 ? 0 : bcache_sync_block_ordered(em->dev, blk);
+    if (rc == 0) {
+        return 0;
+    }
+    rc = bcache_sync_block_ordered(em->dev, blk);
+    return rc != 0 ? rc : bcache_flush(em->dev);
 }
 
 /**
