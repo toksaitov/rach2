@@ -219,6 +219,24 @@ int ns_uid_mapped(const struct userns *ns, uint32_t uid);
  * group id `gid`, as an exec needs before it applies a file's set-id bits. */
 int ns_ids_mapped(const struct userns *ns, uint32_t uid, uint32_t gid);
 
+/**
+ * The user namespace that owns the address space an exec of `p` builds,
+ * with a reference the caller keeps, NULL for the first: `p`'s own, or,
+ * for an image `p` may not read (`unreadable`), the nearest namespace at
+ * or above it whose maps cover `uid` and `gid`, the image's owner and
+ * group, as Linux's `would_dump` moves mm->user_ns, so that no process
+ * privileged only below that namespace may trace the image or read its
+ * memory.
+ */
+struct userns *ns_exec_owner(const process_t *p, int unreadable, uint32_t uid, uint32_t gid);
+
+/** Take a reference to the user namespace `ns` and return it; NULL, the
+ * first, takes none. */
+struct userns *ns_userns_get(struct userns *ns);
+
+/** Let go of a reference to the user namespace `ns`; NULL is the first. */
+void ns_userns_put(struct userns *ns);
+
 /* The files of /proc/PID that show a user namespace's maps. */
 #define NS_MAP_UID       0
 #define NS_MAP_GID       1

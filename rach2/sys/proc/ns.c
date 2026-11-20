@@ -658,6 +658,31 @@ int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t le
     return rc != 0 ? rc : (int32_t)len;
 }
 
+struct userns *ns_exec_owner(const process_t *p, int unreadable, uint32_t uid, uint32_t gid)
+{
+    struct userns *ns = proc_userns(p);
+
+    while (unreadable && ns != &init_userns && !ns_ids_mapped(ns, uid, gid)) {
+        ns = ns->parent;
+    }
+    return ns_userns_get(ns == &init_userns ? NULL : ns);
+}
+
+struct userns *ns_userns_get(struct userns *ns)
+{
+    if (ns) {
+        ns_get(&ns->c);
+    }
+    return ns;
+}
+
+void ns_userns_put(struct userns *ns)
+{
+    if (ns) {
+        ns_put(&ns->c);
+    }
+}
+
 int ns_setgroups_denied(const process_t *p)
 {
     return userns_denies_setgroups(proc_userns(p));

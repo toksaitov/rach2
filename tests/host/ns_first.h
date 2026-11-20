@@ -66,11 +66,16 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c)
     return proc_privileged(p);
 }
 
-/** The target namespace is the caller's own in this fixture. */
+/* The namespace the last `ns_capable_with` was asked about, for a row
+ * that checks which one a caller judges privilege in. */
+const struct userns *ns_capable_asked;
+
+/** The target namespace is the caller's own in this fixture; `ns` is kept
+ * in `ns_capable_asked`. */
 int ns_capable_with(const process_t *p, const struct userns *ns, int held)
 {
     (void)p;
-    (void)ns;
+    ns_capable_asked = ns;
     return held;
 }
 

@@ -319,6 +319,18 @@ void fd_ofd_ref(struct open_file *ofd)
     ofd->refcount++;
 }
 
+/** The address spaces here have no user namespace but the first. */
+struct userns *ns_userns_get(struct userns *ns)
+{
+    return ns;
+}
+
+/** Nothing to let go of: see `ns_userns_get`. */
+void ns_userns_put(struct userns *ns)
+{
+    (void)ns;
+}
+
 /** A /proc/PID/mem descriptor's hold keeps the record and none of the
  * memory: the last user's put frees the pages, the directory and the
  * regions at once, the holder then takes no user's count, and its unhold

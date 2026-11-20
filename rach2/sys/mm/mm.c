@@ -12,6 +12,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../panic.h"
+#include "../proc/ns.h"
 #include "../proc/process.h"
 #include "../proc/smp.h"
 #include "../proc/tgroup.h"
@@ -349,6 +350,7 @@ void mm_unhold(struct mm *mm)
     if (!mm || --mm->holds != 0) {
         return;
     }
+    ns_userns_put(mm->userns);
     kfree(mm->exe);
     kfree(mm->interp);
     kfree(mm);
@@ -456,6 +458,7 @@ int mm_exe_holds(const struct vfs_mount *mnt, const void *node)
 
 void mm_copy_info(struct mm *to, const struct mm *from)
 {
+    to->userns = ns_userns_get(from->userns);
     if (from->exe) {
         mm_set_exe(to, from->exe);
     }

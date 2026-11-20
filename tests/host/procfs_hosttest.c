@@ -502,6 +502,9 @@ static int refuse, allocations, failures;
 /* Process 7's address space in the /proc/7/mem rows, the description of
  * their descriptor, and the reads that reached the memory. */
 static struct mm space;
+/* A user namespace process 7 joined after its exec, and the one that owns
+ * its address space, for the rows that judge CAP_SYS_PTRACE. */
+static struct userns target_ns, image_ns;
 static struct open_file mem_ofd;
 static int mem_reads;
 /* The process whose arguments `reaped_during_read` reads, 13, from the heap,
@@ -2122,6 +2125,15 @@ static void descriptor_search_ids(void)
     caller.cap_lost[0] = 1u << CAP_SYS_ADMIN;
     caller.nocaps = 1;
     check(procfs_may_read_as(7, 0), "SYS_PTRACE suffices after dropping SYS_ADMIN");
+    process.userns = &target_ns;
+    space.userns = &image_ns;
+    check(procfs_may_read_as(7, 0) && ns_capable_asked == &image_ns,
+          "SYS_PTRACE counts in the user namespace that owns the address space");
+    process.mm = NULL;
+    check(procfs_may_read_as(7, 0) && ns_capable_asked == &target_ns,
+          "and in the target's own when it has no address space");
+    process.mm = &space;
+    process.userns = space.userns = NULL;
     caller.euid = 1001;
     caller.cap_lost[0] = caller.nocaps = 0;
     sd.own.kept = 1;

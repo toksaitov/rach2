@@ -2364,6 +2364,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     ns_exec(current_proc);
     exec_ambient(current_proc, s->secure);
     exec_privileges(s->mm, s->secure, s->unreadable, ids_moved, was_privileged);
+    s->mm->userns = ns_exec_owner(current_proc, s->unreadable, s->id.uid, s->id.gid);
     proc_set_comm(current_proc, s->script[0] ? s->script : s->path);
     /* Linux's flush_signal_handlers: a caught signal reverts to its
      * default, an ignored one stays ignored, and each loses its flags,

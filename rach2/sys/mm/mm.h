@@ -46,6 +46,7 @@
 #include "vm.h"
 
 struct page_dir;
+struct userns;
 struct open_file;
 struct vfs_mount;
 struct vfs_ref;
@@ -128,6 +129,12 @@ struct mm {
      * that its caller may not read, and once any sharer's effective ids
      * move; PR_SET_DUMPABLE sets it, and fork's copy takes it. */
     uint32_t dumpable;
+    /* The user namespace that owns the image, with a reference, NULL for
+     * the first, as Linux's mm->user_ns: that of the process whose exec
+     * built it, or one above it for an image its caller could not read
+     * (`ns_exec_owner`). A tracer's CAP_SYS_PTRACE counts in it. A fork's
+     * copy takes it (`mm_copy_info`). */
+    struct userns *userns;
     /* The membarrier(2) commands the space registered for, as
      * MEMBARRIER_STATE_ bits (proc/membarrier.h); 0 for a new space and
      * for an image an exec builds, and a fork's copy takes them. */
@@ -190,7 +197,8 @@ struct mm *mm_new(void);
 /** Copy what `from` keeps beside its pages, for /proc and the dumpable flag,
  * into `to`, a copy of its address space that fork made: the program's file,
  * and its ELF interpreter, whose descriptions the two then share, the path
- * when there is room, and the protection keys allocated. */
+ * when there is room, the user namespace that owns it, and the protection
+ * keys allocated. */
 void mm_copy_info(struct mm *to, const struct mm *from);
 
 /** Keep the heap copy of the path `path` as the path the exec found `mm`'s

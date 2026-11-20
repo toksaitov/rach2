@@ -952,7 +952,9 @@ static int procfs_may_read_mem(const process_t *p)
 
 /** Judge a proc walk as ptrace READ_FSCREDS with its selected credentials.
  * Same-group access passes. Otherwise compare all three IDs, dumpability
- * and permitted capabilities, or require SYS_PTRACE in the target namespace. */
+ * and permitted capabilities, or require SYS_PTRACE in the user namespace
+ * that owns the target's address space (`mm.h`), or the target's own for
+ * one without, as Linux's `__ptrace_may_access`. */
 static int procfs_may_trace(const process_t *p, int use_real)
 {
     process_t *c = current_proc;
@@ -965,7 +967,8 @@ static int procfs_may_trace(const process_t *p, int use_real)
         return 1;
     }
     cap0 = fs_access_caps(c, 0, use_real);
-    if (ns_capable_with(c, p->userns, (cap0 & (1u << CAP_SYS_PTRACE)) != 0)) {
+    if (ns_capable_with(c, p->mm ? p->mm->userns : p->userns,
+                        (cap0 & (1u << CAP_SYS_PTRACE)) != 0)) {
         return 1;
     }
     uid = use_real ? c->ruid : proc_fsuid(c);
