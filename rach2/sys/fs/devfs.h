@@ -53,7 +53,9 @@ int devfs_open(const char *name, int flags);
  * The mode, device number and inode of /dev, for an empty `name`, or of the
  * device `name` present now: its type, a block device for a disk node or a
  * loop device and a character device for the rest, with its permission
- * bits; its major and minor as major << 8 | minor; and the inode its place
+ * bits; its major and minor as Linux's new_encode_dev packs them, the
+ * minor's low byte, the major << 8 and the minor's other bits << 12; and
+ * the inode its place
  * in the table gives. Each pointer may be NULL. Returns 0, or -1 for no such
  * device.
  */
@@ -67,8 +69,9 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
  */
 const char *devfs_name_of(int block, uint32_t rdev);
 
-/** The device number, major << 8 | minor, of the device the descriptor `e`
- * is open on, for fstat; 0 for a descriptor that is not of a device. */
+/** The device number, packed as `devfs_stat` gives it, of the device the
+ * descriptor `e` is open on, for fstat; 0 for a descriptor that is not of a
+ * device. */
 uint32_t devfs_rdev(struct fd_entry *e);
 
 /** The inode of the device the descriptor `e` is open on, as `devfs_stat`
@@ -315,8 +318,10 @@ int devfs_subdir_present(int row);
 /* The devices that may have an owner, group or mode of their own at once. */
 #define DEVFS_OWNED_MAX     256
 /* A node's path below /dev, with its NUL, as a lookup carries it
- * (synthfs.h's `struct vpath`). */
-#define DEVFS_NODE_NAME_MAX 64
+ * (synthfs.h's `struct vpath`): the longest is a link of udev's
+ * /dev/virtio-ports, its directory's 13 bytes and a name of Linux's
+ * NAME_MAX, 255. */
+#define DEVFS_NODE_NAME_MAX 269
 struct devfs_node {
     const char *name;
     uint16_t major, minor;
