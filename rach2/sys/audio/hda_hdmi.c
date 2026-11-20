@@ -44,7 +44,6 @@
 #include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
 #include "../lib/kstring.h"
-#include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../proc/mutex.h"
 #include "../proc/percpu.h"
@@ -310,13 +309,17 @@ struct hh_pcm {
 static struct hh_pcm hh_pcms[HH_MAX_PCMS];
 static int hh_npcms;
 static volatile hda_bdl_entry_t hh_bdl[HH_MAX_PCMS][HH_BDL_MAX] __attribute__((aligned(128)));
-/* Each PCM's DMA buffer, HH_DMA_MAX bytes of consecutive frames, and its
- * physical address, made when the display binds and the PCM is made, as
- * Linux preallocates a PCM's buffer in snd_pcm_set_managed_buffer_all, so
- * that a machine without the codec keeps none of the megabyte; kept
- * across unbinds. */
+/* Each PCM's DMA buffer, HH_DMA_PAGES frames taken one at a time and their
+ * physical addresses, below 4 GiB when GCAP lacks 64OK, and the window of
+ * the MMIO region the processor writes them through, as Linux's
+ * snd_hda_intel takes a PCM's buffer scattered (SNDRV_DMA_TYPE_DEV_SG) and
+ * maps it with vmap. Made when the display binds, as Linux preallocates a
+ * PCM's buffer in snd_pcm_set_managed_buffer_all, so that a machine
+ * without the codec keeps none of the megabyte; kept across unbinds. */
+#define HH_DMA_PAGES (HH_DMA_MAX / PAGE_SIZE)
+#define HH_RING_MAX  (HH_BDL_MAX - HH_DMA_PAGES) /* periods at most */
 static uint8_t *hh_dma[HH_MAX_PCMS];
-static uintptr_t hh_dma_phys[HH_MAX_PCMS];
+static uintptr_t hh_dma_frames[HH_MAX_PCMS][HH_DMA_PAGES];
 static uint8_t hh_stage[HH_MAX_PCMS][HH_STAGE_BYTES];
 
 /* The rates of the PCM parameter's bits 0 to 11, with their stream format
@@ -412,28 +415,41 @@ static void hh_msleep(uint32_t ms)
 }
 
 /**
- * Make PCM `k`'s DMA buffer unless it has one: 0, or -ENOMEM. A buffer
- * above 4 GiB is given back when GCAP lacks 64OK, since the controller then
- * drives only 32 address bits, as azx_first_init limits its DMA mask.
+ * Make PCM `k`'s DMA buffer unless it has one: 0, or -ENOMEM with nothing
+ * kept. Its frames lie below 4 GiB when GCAP lacks 64OK, since the
+ * controller then drives only 32 address bits, as azx_first_init limits
+ * its DMA mask, and anywhere otherwise.
  */
 static int hh_dma_make(int k)
 {
-#ifdef RACH2_HOSTTEST
-    static uint8_t host_dma[HH_MAX_PCMS][HH_DMA_MAX] __attribute__((aligned(128)));
+    int low = !(hh_read(HDA_GCAP, 16) & HDA_GCAP_64OK);
+    uintptr_t *f = hh_dma_frames[k];
+    uint32_t i, n;
 
-    hh_dma[k] = host_dma[k];
-    hh_dma_phys[k] = (uintptr_t)virt_to_phys(host_dma[k]);
-#else
+    if (hh_dma[k]) {
+        return 0;
+    }
+    for (n = 0; n < HH_DMA_PAGES; n++) {
+        f[n] = low ? alloc_frame_below(0x100000000ull) : alloc_frame();
+        if (f[n] == 0) {
+            break;
+        }
+    }
+    if (n == HH_DMA_PAGES) {
+        uintptr_t va = mmio_map_frames(f, HH_DMA_PAGES, 0);
+
+        hh_dma[k] = (uint8_t *)va;
+    }
     if (!hh_dma[k]) {
-        hh_dma[k] = (uint8_t *)kalloc_contig(HH_DMA_MAX / PAGE_SIZE, &hh_dma_phys[k]);
+        for (i = 0; i < n; i++) {
+            free_frame(f[i]);
+            f[i] = 0;
+        }
+        klog(KLOG_WARN, "hdmi-audio", "pcm %d: no memory for its %u KiB buffer", k,
+             HH_DMA_MAX / 1024u);
+        return -ENOMEM;
     }
-    if (hh_dma[k] && hh_hi((uint64_t)hh_dma_phys[k] + HH_DMA_MAX - 1) != 0 &&
-        !(hh_read(HDA_GCAP, 16) & HDA_GCAP_64OK)) {
-        kfree_pages(hh_dma[k], HH_DMA_MAX / PAGE_SIZE);
-        hh_dma[k] = NULL;
-    }
-#endif
-    return hh_dma[k] ? 0 : -ENOMEM;
+    return 0;
 }
 
 /* ---- the link ---- */
@@ -1488,10 +1504,13 @@ static int hh_nearest_rate(const struct hh_pcm *m, uint32_t rate)
  * period are granted, at the DMA's rate, channels and frame that `m` has:
  * a DMA period covering the stream period's time, a multiple of 128 bytes,
  * or of 384 for the 12- and 24-byte frames of six channels, which hold
- * whole frames, from the least that fits HH_BUFFER_MS in HH_BDL_MAX
+ * whole frames, from the least that fits HH_BUFFER_MS in HH_RING_MAX
  * periods up to HH_PERIOD_MAX; and as many as HH_BUFFER_MS needs, two at
  * least. The periods after the one playing, which the tick has refilled,
  * then hold at least half of HH_BUFFER_MS, five ticks, whatever the stream.
+ * The descriptor list holds an entry for each period and one more for each
+ * frame boundary inside a period, at most HH_DMA_PAGES - 1: within
+ * HH_BDL_MAX.
  * The buffer is HH_BUFFER_MS's bytes, at most 240 KiB, and less than a
  * period more, or two periods of at most 16 KiB: within HH_DMA_MAX. Sets
  * m->copy and m->pb, and returns the periods.
@@ -1508,7 +1527,7 @@ static uint32_t hh_ring(struct hh_pcm *m, const audio_stream_t *s, int wide)
     pb = pb < unit ? unit : pb > HH_PERIOD_MAX ? HH_PERIOD_MAX / unit * unit : pb;
     /* At most 192 kHz times 32 bytes times 40: 32 bits hold it. */
     need = m->rate * m->frame * HH_BUFFER_MS / 1000u;
-    least = (need + HH_BDL_MAX * unit - 1u) / (HH_BDL_MAX * unit) * unit;
+    least = (need + HH_RING_MAX * unit - 1u) / (HH_RING_MAX * unit) * unit;
     if (pb < least) {
         pb = least;
     }
@@ -1730,8 +1749,9 @@ static int hh_stream_start(audio_stream_t *s)
 {
     struct hh_pcm *m;
     volatile hda_bdl_entry_t *bdl;
+    const uintptr_t *frames;
     uint64_t addr, list;
-    uint32_t i, flags;
+    uint32_t i, e, at, len, flags;
 
     mutex_lock(&hh_mutex);
     m = hh_pcm_of(s);
@@ -1740,7 +1760,7 @@ static int hh_stream_start(audio_stream_t *s)
         return -EIO;
     }
     bdl = hh_bdl[m - hh_pcms];
-    addr = (uint64_t)hh_dma_phys[m - hh_pcms];
+    frames = hh_dma_frames[m - hh_pcms];
     list = (uint64_t)virt_to_phys(bdl);
     hh_sd_reset(m);
     /* The first DMA frame takes two of the stream's: the first, exactly,
@@ -1748,19 +1768,28 @@ static int hh_stream_start(audio_stream_t *s)
     m->acc = 2u * m->rate;
     k_memset(m->cur, 0, sizeof(m->cur));
     m->taken = 0;
+    /* An entry for each piece of a period within one frame, as
+     * azx_setup_periods splits a period at the buffer's chunks. */
+    e = 0;
     for (i = 0; i < m->n; i++) {
-        bdl[i].addr_low = (uint32_t)(addr + i * m->pb);
-        bdl[i].addr_high = hh_hi(addr + i * m->pb);
-        bdl[i].length = m->pb;
-        bdl[i].ioc = 0;
+        for (at = i * m->pb; at < (i + 1u) * m->pb; at += len) {
+            len = PAGE_SIZE - at % PAGE_SIZE;
+            len = len < (i + 1u) * m->pb - at ? len : (i + 1u) * m->pb - at;
+            addr = (uint64_t)frames[at / PAGE_SIZE] + at % PAGE_SIZE;
+            bdl[e].addr_low = (uint32_t)addr;
+            bdl[e].addr_high = hh_hi(addr);
+            bdl[e].length = len;
+            bdl[e].ioc = 0;
+            e++;
+        }
         m->in[i] = hh_fill(m, i);
         m->taken += m->in[i];
     }
-    arch_dma_flush(bdl, m->n * sizeof(bdl[0]));
+    arch_dma_flush(bdl, e * sizeof(bdl[0]));
     hh_write(hh_sd(m, HDA_SD_BDPL), (uint32_t)list, 32);
     hh_write(hh_sd(m, HDA_SD_BDPU), hh_hi(list), 32);
     hh_write(hh_sd(m, HDA_SD_CBL), m->n * m->pb, 32);
-    hh_write(hh_sd(m, HDA_SD_LVI), m->n - 1, 16);
+    hh_write(hh_sd(m, HDA_SD_LVI), e - 1u, 16);
     hh_write(hh_sd(m, HDA_SD_FORMAT), m->fmt, 16);
     hh_write(hh_sd(m, HDA_SD_CTL), (uint32_t)m->tag << 20, 32);
     if (m->pin >= 0) {
