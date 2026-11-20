@@ -1175,7 +1175,7 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, const struct w
     ifa[0] = AF_INET;
     ifa[1] = (uint8_t)prefix_of(a->mask);
     ifa[2] = (uint8_t)a->flags;
-    ifa[3] = nd->loopback ? RT_SCOPE_HOST : RT_SCOPE_UNIVERSE;
+    ifa[3] = nd->loopback ? RT_SCOPE_HOST : a->opts.scope;
     put32(ifa + 4, (uint32_t)a->index);
     msg_attr_ip(msg, IFA_ADDRESS, a->dst);
     msg_attr_ip(msg, IFA_LOCAL, a->ip);
@@ -1565,7 +1565,7 @@ static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
 {
     return a->index == b->index && a->ip == b->ip && a->dst == b->dst && a->mask == b->mask &&
            a->metric == b->metric && a->brd == b->brd && a->flags == b->flags &&
-           a->opts.valid_until == b->opts.valid_until &&
+           a->opts.scope == b->opts.scope && a->opts.valid_until == b->opts.valid_until &&
            a->opts.preferred_until == b->opts.preferred_until && a->opts.proto == b->opts.proto;
 }
 
@@ -2214,7 +2214,7 @@ static void set_addr4_options(struct netdev *nd, int slot, const uint8_t *req, u
 
 /** Set the prefix metric and broadcast attributes of a netlink address. */
 static int addr4_add(const uint8_t *req, uint32_t body, struct netdev *nd, uint32_t ip,
-                     uint32_t mask, uint32_t peer)
+                     uint32_t mask, const uint32_t *peer)
 {
     uint16_t flags = get16(req + 6), len;
     const uint8_t *ci = req_attr(req, body, 8, IFA_CACHEINFO, &len);
@@ -2222,10 +2222,12 @@ static int addr4_add(const uint8_t *req, uint32_t body, struct netdev *nd, uint3
     int r;
     if (ci && (len != 16 || !get32(ci + 4) || get32(ci) > get32(ci + 4)))
         return -EINVAL;
+    if (!ip)
+        return 0;
     lock = net_lock();
-    r = netconf_add_address(nd, ip, mask, peer);
+    r = netconf_add_address(nd, ip, mask, peer, req[NLMSG_HDRLEN + 3]);
     if (!r || (r == -EEXIST && (flags & NLM_F_REPLACE) && !(flags & NLM_F_EXCL))) {
-        int slot = netconf_addr_find(nd, ip, mask, peer ? peer : ip);
+        int slot = netconf_addr_find(nd, ip, mask, peer ? peer : &ip);
         if (slot < nd->naddr2)
             set_addr4_options(nd, slot, req, body, ci, !r);
         r = 0;
@@ -2236,8 +2238,8 @@ static int addr4_add(const uint8_t *req, uint32_t body, struct netdev *nd, uint3
 
 /** RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
  * its first or another. Returns the result of `netconf_add_address` or
- * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for an
- * address of 0 to add; and to add one the interface has, 0, or -EEXIST
+ * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for a
+ * missing local address on add; and to add one the interface has, 0, or -EEXIST
  * with NLM_F_EXCL. On `lo` only that last is answered, and the rest is
  * EOPNOTSUPP. A request of AF_INET6 is `addr6_change`'s, and EOPNOTSUPP in
  * a network namespace other than the first. */
@@ -2245,6 +2247,9 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
 {
     struct netdev *nd;
     uint32_t prefix, ip, peer, mask;
+    const uint32_t *dst;
+    const uint8_t *local, *destination;
+    uint16_t len;
 
     if (body < 8) {
         return -ENODEV;
@@ -2259,9 +2264,15 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     prefix = req[NLMSG_HDRLEN + 1];
     ip = req_ip(req, body, 8, IFA_LOCAL);
     peer = req_ip(req, body, 8, IFA_ADDRESS);
-    if (!ip && type != RTM_DELADDR) {
-        ip = peer;
-    }
+    local = req_attr(req, body, 8, IFA_LOCAL, &len);
+    if ((local && len != 4) || (!local && type != RTM_DELADDR))
+        return -EINVAL;
+    destination = req_attr(req, body, 8, IFA_ADDRESS, &len);
+    if (destination && len != 4)
+        return -EINVAL;
+    dst = destination ? &peer : 0;
+    if (type == RTM_DELADDR && local && !ip)
+        return -EADDRNOTAVAIL;
     if (!net_ns_seen()) {
         return ns_addr_change(nd, ip, prefix, type, flags);
     }
@@ -2274,12 +2285,9 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     }
     mask = prefix ? 0xFFFFFFFFu << (32 - prefix) : 0;
     if (type == RTM_DELADDR) {
-        return netconf_del_address(nd, ip, mask, peer);
+        return netconf_del_address(nd, ip, mask, dst);
     }
-    if (ip == 0) {
-        return -EINVAL;
-    }
-    return addr4_add(req, body, nd, ip, mask, peer);
+    return addr4_add(req, body, nd, ip, mask, dst);
 }
 
 /** The interface a route request is for: the one RTA_OIF names, NULL when
