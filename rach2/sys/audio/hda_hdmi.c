@@ -979,6 +979,17 @@ static void hh_cvt_setup(void)
 /* ---- the stream ---- */
 
 /**
+ * The descriptors of `e` there are to read: its count, which root's write
+ * to the ELD file may set to anything, held between 0 and ELD_MAX_SAD.
+ * Linux's snd_hdmi_eld_update_pcm_info and snd_hdmi_print_eld_info walk
+ * the count unbounded, past the array's end.
+ */
+static int hh_sads(const struct hh_eld_info *e)
+{
+    return e->sad_count < 0 ? 0 : e->sad_count > ELD_MAX_SAD ? ELD_MAX_SAD : e->sad_count;
+}
+
+/**
  * Limit the stream's rates and width by the sink's ELD `e`, Linux's
  * snd_hdmi_eld_update_pcm_info: the rates every sink plays, 32, 44.1 and
  * 48 kHz, with those its descriptors add, and 24 bits when an LPCM
@@ -989,7 +1000,7 @@ static void hh_eld_limit(const struct hh_eld_info *e)
     int alsa = (1 << 5) | (1 << 6) | (1 << 7), wide = 0, i, b;
     uint32_t ok = 0;
 
-    for (i = 0; i < e->sad_count; i++) {
+    for (i = 0; i < hh_sads(e); i++) {
         alsa |= e->sad[i].rates;
         if (e->sad[i].format == 1 && (e->sad[i].bits & (3 << 18))) {
             wide = 1;
@@ -1956,7 +1967,7 @@ static void put_eld(struct hh_text *t, const struct hh_pin *p)
     put_s(t, "\nsad_count\t\t");
     put_d(t, e->sad_count);
     put_s(t, "\n");
-    for (i = 0; i < e->sad_count && i < ELD_MAX_SAD; i++) {
+    for (i = 0; i < hh_sads(e); i++) {
         put_sad(t, i, &e->sad[i]);
     }
 }
@@ -2080,7 +2091,7 @@ static void hh_eld_sad(struct hh_eld_info *e, int n, const char *name, int v)
         e->sad[n].rates = v;
     } else if (hh_streq(name, "_bits")) {
         e->sad[n].bits = v;
-    } else if (hh_streq(name, "_byte2")) {
+    } else if (hh_streq(name, "_max_bitrate")) {
         e->sad[n].max_bitrate = v;
     } else if (hh_streq(name, "_profile")) {
         e->sad[n].profile = v;
