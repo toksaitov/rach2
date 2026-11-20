@@ -965,9 +965,10 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 /**
  * A card's address joins its solicited-node group, which neighbour
  * discovery asks for it on, and is tentative until duplicate detection
- * passes (`nd6_dad_start`), unless it is NETDEV_A6_NODAD; `lo` has no link
- * to be asked on. A preferred lifetime of 0 makes the address deprecated
- * from the start.
+ * passes (`nd6_dad_start`), unless it is NETDEV_A6_NODAD; `lo` and an
+ * interface of IP datagrams (`l3`) have no link to be asked on, and join
+ * none, as Linux's addrconf_join_solict skips IFF_LOOPBACK and IFF_NOARP.
+ * A preferred lifetime of 0 makes the address deprecated from the start.
  */
 int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
                             uint32_t valid, uint32_t preferred)
@@ -994,7 +995,7 @@ int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, 
         rc = -EEXIST;
     } else if (netdev_addr6_room(nd, nd->naddr6 + 1)) {
         rc = -ENOBUFS;
-    } else if (!nd->loopback) {
+    } else if (!nd->loopback && !nd->l3) {
         ip6_solicited_node(addr, group);
         rc = netdev_join6(nd, group);
     }
@@ -1007,6 +1008,7 @@ int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, 
     k_memcpy(a->addr, addr, IP6_ADDR_LEN);
     a->prefix = (uint8_t)prefix;
     a->scope = (uint8_t)ip6_scope(addr);
+    a->solicited = (uint8_t)(!nd->loopback && !nd->l3);
     a->flags = (uint8_t)(flags & (NETDEV_A6_NODAD | NETDEV_A6_PERMANENT));
     if (preferred == 0) {
         a->flags |= NETDEV_A6_DEPRECATED;
@@ -1055,7 +1057,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
         net_unlock(lock);
         return -EADDRNOTAVAIL;
     }
-    if (!nd->loopback) {
+    if (a->solicited) {
         ip6_solicited_node(addr, group);
         netdev_leave6(nd, group);
     }
