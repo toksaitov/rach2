@@ -12,6 +12,7 @@
 #include "../lib/kstring.h"
 #include "bcache.h"
 #include "fatcommon.h"
+#include "fatopts.h"
 #include "../panic.h"
 #include "../proc/process.h"
 
@@ -67,8 +68,8 @@ struct ex_mount {
     /* FatOffset, FatLength and ClusterHeapOffset in sectors, ClusterCount,
      * the root directory's first cluster, and the active FAT, 0 or 1. */
     uint32_t fat_offset, fat_length, heap_offset, clusters, root, active_fat;
-    uint64_t volume_length;   /* in sectors */
-    uint32_t uid, gid, umask; /* the mount's options */
+    uint64_t volume_length;  /* in sectors */
+    struct fat_options opts; /* the mount's options (`fat_parse_options`) */
     int writable;
     /* The allocation bitmap's first cluster and length in bytes. */
     uint32_t bitmap_first;
@@ -1062,9 +1063,10 @@ static int ex_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
  * The epoch second of an exFAT timestamp `ts`, with the nanoseconds of its
  * 10 ms count `inc` in `*nsec`: the same bit fields as a DOS date and time,
  * the 10 ms count, which past 199 counts as 0, and the UTC offset `off` when
- * its valid bit is set; without one the field is reported as if it were UTC.
+ * its valid bit is set; without one the stamp is read as `east` minutes east
+ * of UTC, as Linux's exfat_get_entry_time reads it.
  */
-static int64_t ex_epoch(uint32_t ts, uint8_t inc, uint8_t off, int64_t *nsec)
+static int64_t ex_epoch(uint32_t ts, uint8_t inc, uint8_t off, int32_t east, int64_t *nsec)
 {
     int64_t sec = fat_epoch((uint16_t)(ts >> 16), (uint16_t)(ts & 0xFFFF));
     uint32_t tenth = inc > 199 ? 0 : inc;
@@ -1078,34 +1080,44 @@ static int64_t ex_epoch(uint32_t ts, uint8_t inc, uint8_t off, int64_t *nsec)
             units -= 128; /* a signed seven-bit count of quarter hours */
         }
         sec -= (int64_t)units * 15 * 60;
+    } else {
+        sec -= (int64_t)east * 60;
     }
     return sec;
 }
 
+/** The mode of `n`, as Linux's exfat_make_mode gives it: 0777 less the
+ * write bits of a file with the read-only attribute, less `dmask` or
+ * `fmask`. */
+static uint32_t ex_mode(const struct ex_mount *em, const struct ex_node *n)
+{
+    if (n->is_dir) {
+        return EX_S_IFDIR | (0777u & ~em->opts.dmask);
+    }
+    return EX_S_IFREG | ((n->attr & ATTR_READ_ONLY ? 0555u : 0777u) & ~em->opts.fmask);
+}
+
 /**
- * The `getattr` of `vfs_ops`: the mode from the mount's umask and the
- * read-only attribute, the mount's owner, one link, DataLength as the size,
- * the inode number of `fat_inode`, and the three times, the access time
- * without a 10 ms count. Always 0.
+ * The `getattr` of `vfs_ops`: the mode of `ex_mode`, the mount's owner,
+ * one link, DataLength as the size, the inode number of `fat_inode`, and
+ * the three times, the access time without a 10 ms count. Always 0.
  */
 static int ex_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct ex_mount *em = em_of(mnt);
     struct ex_node *n = node;
+    int32_t east = fat_minutes_east(&em->opts);
 
     k_memset(st, 0, sizeof(*st));
-    st->mode = (n->is_dir ? EX_S_IFDIR : EX_S_IFREG) | (0777u & ~em->umask);
-    if (n->attr & ATTR_READ_ONLY) {
-        st->mode &= ~0222u;
-    }
-    st->uid = em->uid;
-    st->gid = em->gid;
+    st->mode = ex_mode(em, n);
+    st->uid = em->opts.uid;
+    st->gid = em->opts.gid;
     st->nlink = 1;
     st->size = n->length;
     st->ino = fat_inode(n->is_dir, n->first, n->dir_cluster, n->index);
-    st->mtime_sec = ex_epoch(n->mtime, n->m10, n->moff, &st->mtime_nsec);
-    st->ctime_sec = ex_epoch(n->ctime, n->c10, n->coff, &st->ctime_nsec);
-    st->atime_sec = ex_epoch(n->atime, 0, n->aoff, &st->atime_nsec);
+    st->mtime_sec = ex_epoch(n->mtime, n->m10, n->moff, east, &st->mtime_nsec);
+    st->ctime_sec = ex_epoch(n->ctime, n->c10, n->coff, east, &st->ctime_nsec);
+    st->atime_sec = ex_epoch(n->atime, 0, n->aoff, east, &st->atime_nsec);
     return 0;
 }
 
@@ -1511,7 +1523,7 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     int rc;
 
     em->dev = dev;
-    rc = fat_parse_options(options, &em->uid, &em->gid, &em->umask);
+    rc = fat_parse_options(options, 1, &em->opts);
     if (rc != 0) {
         return rc;
     }
@@ -1748,19 +1760,12 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     return 0;
 }
 
-/** Emit the volume's ownership and permission-mask options. */
+/** Emit the mount's options, as Linux's exfat_show_options does. */
 static void ex_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
 {
     const struct ex_mount *em = mnt->priv;
 
-    if (em->uid != 0) {
-        emit(out, "uid", em->uid, VFS_OPT_DEC);
-    }
-    if (em->gid != 0) {
-        emit(out, "gid", em->gid, VFS_OPT_DEC);
-    }
-    emit(out, "fmask", em->umask, VFS_OPT_OCT3);
-    emit(out, "dmask", em->umask, VFS_OPT_OCT3);
+    fat_show_options(&em->opts, 1, emit, out);
 }
 
 /** The constructor of `vfs_exfat_type`, whose contract is in exfat.h: the
@@ -1782,6 +1787,7 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
         kfree(em);
     } else {
         mnt->show_options = ex_options;
+        mnt->allow_utime = em->opts.allow_utime;
     }
     return rc;
 }
@@ -2207,7 +2213,7 @@ static uint32_t ex_stamp_now(uint8_t *tenth)
 {
     uint16_t date, time;
 
-    fat_now(&date, &time, tenth);
+    fat_now(0, &date, &time, tenth); /* UTC, with the offset valid and zero */
     return ((uint32_t)date << 16) | time;
 }
 
@@ -3708,8 +3714,10 @@ out:
 /**
  * The `setattr` of `vfs_ops`: the mode's write bits, kept as the read-only
  * attribute, and the access and modification times; the root, which has no
- * set, changes nothing. A change of owner, group or any other attribute,
- * and a mode that `fat_mode_change` refuses, is -EPERM. A time is
+ * set, changes nothing. As in Linux's exfat_setattr, a change of owner or
+ * group to another than the mount's, a set-user-ID, set-group-ID or sticky
+ * bit, or another attribute is -EPERM, and a mode that `fat_mode_change`
+ * refuses is left unchanged while the rest is taken. A time is
  * a DOS stamp with its UTC offset valid and zero; the stamp counts two
  * seconds, so the modification time's odd second goes in its 10 ms count,
  * whose range of 0 to 199 is for that, and the access time, which has no
@@ -3723,20 +3731,20 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     int read_only = -1;
     int rc;
 
-    if (((what & VFS_SET_UID) && st->uid != em->uid) ||
-        ((what & VFS_SET_GID) && st->gid != em->gid) ||
+    if (((what & VFS_SET_UID) && st->uid != em->opts.uid) ||
+        ((what & VFS_SET_GID) && st->gid != em->opts.gid) ||
+        ((what & VFS_SET_MODE) && (st->mode & 07000u)) ||
         (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME | VFS_SET_CTIME | VFS_SET_UID |
                   VFS_SET_GID))) {
         return -EPERM;
     }
+    if ((what & VFS_SET_MODE) &&
+        fat_mode_change(n->is_dir ? em->opts.dmask : em->opts.fmask, ex_mode(em, n),
+                        !n->is_dir && (~em->opts.fmask & 0222u), st->mode, &read_only) != 0) {
+        what &= ~VFS_SET_MODE;
+    }
     if (!(what & (VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME))) {
         return 0; /* no separately stored change time */
-    }
-    if (what & VFS_SET_MODE) {
-        rc = fat_mode_change(em->umask, st->mode, &read_only);
-        if (rc != 0) {
-            return rc;
-        }
     }
     if (n->is_dir && n->first == em->root) {
         return 0;

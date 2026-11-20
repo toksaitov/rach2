@@ -178,97 +178,21 @@ int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t ca
 
 /* The mount options. */
 
-/** Whether the text from `key` to `end` is exactly `word`. */
-static int key_is(const char *key, const char *end, const char *word)
-{
-    while (key < end && *word && *key == *word) {
-        key++;
-        word++;
-    }
-    return key == end && *word == '\0';
-}
-
-/* `umask=`, `uid=` and `gid=` are the options Linux's vfat takes and
- * BusyBox passes through; `ro` is the mount flag, accepted when it is given
- * as data. */
-int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_t *umask)
-{
-    const char *p = options ? options : "";
-
-    *umask = 022;
-    *uid = 0;
-    *gid = 0;
-    while (*p) {
-        const char *key = p;
-        const char *keyend;
-        uint32_t value = 0;
-        int base = 10;
-        int digits = 0;
-
-        int has_value = 0;
-
-        while (*p && *p != ',' && *p != '=') {
-            p++;
-        }
-        keyend = p;
-        if (*p == '=') {
-            p++;
-            has_value = 1;
-            if (key_is(key, keyend, "umask")) {
-                base = 8;
-            }
-            while (*p >= '0' && *p < '0' + base) {
-                uint32_t digit = (uint32_t)(*p - '0');
-
-                if (value > (0xFFFFFFFFu - digit) / (uint32_t)base) {
-                    return -EINVAL;
-                }
-                value = value * (uint32_t)base + digit;
-                p++;
-                digits++;
-            }
-        }
-        if (*p != '\0' && *p != ',') {
-            return -EINVAL;
-        }
-        if (key_is(key, keyend, "ro") && !has_value) {
-            /* the mount flag given as data */
-        } else if (key_is(key, keyend, "umask") && digits) {
-            *umask = value & 0777u;
-        } else if (key_is(key, keyend, "uid") && digits) {
-            *uid = value;
-        } else if (key_is(key, keyend, "gid") && digits) {
-            *gid = value;
-        } else if (p == key) {
-            /* an empty item, as in a trailing comma */
-        } else {
-            return -EINVAL;
-        }
-        if (*p == ',') {
-            p++;
-        }
-    }
-    return 0;
-}
-
 /* The mode the mount gives every entry stands in for the bits FAT cannot
- * store, so a requested mode is cut by the umask before it is compared, as
+ * store, so a requested mode is cut by the mask before it is compared, as
  * fat_sanitize_mode_change in Linux's vfat does: chmod 0755 on a mount with
  * umask=077 asks for 0700, which is the mount's own. */
-int fat_mode_change(uint32_t umask, uint32_t mode, int *read_only)
+int fat_mode_change(uint32_t mask, uint32_t cur, int hold_ro, uint32_t mode, int *read_only)
 {
-    uint32_t perm = mode & 0777u & ~umask;
-    uint32_t writable = 0222u & ~umask;
+    uint32_t perm = mode & 0777u & ~mask;
+    uint32_t writable = 0222u & ~mask;
 
-    if (mode & 07000u) {
+    if ((perm & 0555u) != (cur & 0555u)) {
         return -EPERM;
     }
-    if ((perm & 0555u) != (0555u & ~umask)) {
-        return -EPERM;
-    }
-    if (writable == 0) {
+    if (!hold_ro) {
         *read_only = -1;
-        return 0;
+        return (perm & 0222u) == writable ? 0 : -EPERM;
     }
     if ((perm & 0222u) != 0 && (perm & 0222u) != writable) {
         return -EPERM;
@@ -279,9 +203,9 @@ int fat_mode_change(uint32_t umask, uint32_t mode, int *read_only)
 
 /* Timestamps. */
 
-/* FAT keeps local time with no zone, and this driver reads it as UTC. The
- * days are counted in 32-bit arithmetic, since the kernel has no 64-bit
- * division. */
+/* FAT keeps local time with no zone; the drivers move the result by the
+ * zone of `fat_minutes_east`. The days are counted in 32-bit arithmetic,
+ * since the kernel has no 64-bit division. */
 int64_t fat_epoch(uint16_t date, uint16_t time)
 {
     uint32_t year = 1980 + (date >> 9);
@@ -352,14 +276,16 @@ void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
     *time = (uint16_t)(((rem / 3600) << 11) | (((rem / 60) % 60) << 5) | ((rem % 60) / 2));
 }
 
-/* The stamp is the UTC of `rtc_realtime`, converted as `fat_stamp` does. */
-void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
+/* The stamp is `rtc_realtime` moved `east` minutes, converted as
+ * `fat_stamp` does. */
+void fat_now(int32_t east, uint16_t *date, uint16_t *time, uint8_t *tenth)
 {
     int64_t sec, nsec;
     uint32_t days, rem, year, month, day;
     static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
     rtc_realtime(&sec, &nsec);
+    sec += (int64_t)east * 60;
     if (sec < 315532800) {
         sec = 315532800; /* before 1980: the stamp floors at the epoch FAT has */
     }

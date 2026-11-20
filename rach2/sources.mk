@@ -66,6 +66,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/fat32.c \
     sys/fs/fat32name.c \
     sys/fs/fatcommon.c \
+    sys/fs/fatopts.c \
     sys/fs/exfat.c \
     sys/fs/ext2.c \
     sys/fs/ext2_alloc.c \

@@ -451,8 +451,8 @@ struct kernel_timeval {
 /*
  * The struct timezone of gettimeofday and settimeofday, the same in every
  * ABI, and the kernel's, Linux's sys_tz (kernel/time/time.c:50), which only
- * settimeofday changes and nothing in the kernel reads. Each field is one
- * store, read and written without a lock, as Linux's are.
+ * settimeofday changes and the FAT drivers read (`rtc_minuteswest`). Each
+ * field is one store, read and written without a lock, as Linux's are.
  */
 struct kernel_timezone {
     int32_t tz_minuteswest; /* minutes west of UTC, -900 to 900 */
@@ -460,6 +460,12 @@ struct kernel_timezone {
 };
 
 static struct kernel_timezone sys_tz;
+
+/** The minutes west of UTC of `sys_tz`, for rtc.h. */
+int32_t rtc_minuteswest(void)
+{
+    return sys_tz.tz_minuteswest;
+}
 
 /**
  * gettimeofday(2) takes tv (timeval*) and tz (timezone*), each of which may

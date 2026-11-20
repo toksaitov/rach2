@@ -4,7 +4,7 @@
 
 ## Interfaces
 
-* `vfs_exfat_type` (`exfat.h`) is the type `exfat` of `mount(2)`, on a partition, a stick or a loop device ([vfs.Readme.md](vfs.Readme.md)). `MS_RDONLY` gives a read-only mount, and the options are those of `vfat`: `umask=`, `uid=`, `gid=` and `ro`. A remount between read-only and writable is `EINVAL` ([mount(2)](../../../man/man2/mount.2)).
+* `vfs_exfat_type` (`exfat.h`) is the type `exfat` of `mount(2)`, on a partition, a stick or a loop device ([vfs.Readme.md](vfs.Readme.md)). `MS_RDONLY` gives a read-only mount, and the options are Linux 6.12's exfat options, as [mount(2)](../../../man/man2/mount.2) lists them, parsed and shown by `fatopts.c` ([fat32.Readme.md](fat32.Readme.md)); `uid=`, `gid=`, `fmask=`, `dmask=`, `umask=`, `allow_utime=`, `time_offset=` and `sys_tz` are in force, and `errors=`, `discard`, `keep_last_dots` and `zero_size_dir` are kept and shown and change nothing. A remount between read-only and writable is `EINVAL` ([mount(2)](../../../man/man2/mount.2)).
 * What each call does on this type is in its manual page: [stat(2)](../../../man/man2/stat.2), [statfs(2)](../../../man/man2/statfs.2), [open(2)](../../../man/man2/open.2), [chmod(2)](../../../man/man2/chmod.2), [chown(2)](../../../man/man2/chown.2), [mkdir(2)](../../../man/man2/mkdir.2), [rename(2)](../../../man/man2/rename.2), [link(2)](../../../man/man2/link.2), [truncate(2)](../../../man/man2/truncate.2), [getdents64(2)](../../../man/man2/getdents64.2), [fcntl(2)](../../../man/man2/fcntl.2) and [sync(2)](../../../man/man2/sync.2).
 * Every change runs under the mount's namespace lock. The caller holds it for `create`, `unlink`, `mkdir`, `rmdir` and `rename`, and the driver takes it for `write`, `truncate`, `setattr`, `fsync`, `sync` and the last `put` of an unlinked file; a change made without it panics. Reads run without it.
 
@@ -93,7 +93,7 @@ Otherwise three states the order of writes leaves after a crash are repaired, in
 * The logical sector must be 512 bytes (`BytesPerSectorShift` 9), and a cluster at most 32 MiB.
 * A volume with two FATs (TexFAT) mounts read-only.
 * A file is at most 2^63 - 1 bytes; a write or `truncate` past that is `EFBIG`. A directory is at most 256 MiB, and a creation that would grow one past it is `ENOSPC`.
-* There are no hard links, symbolic links, device nodes, FIFOs or sockets (`EPERM`), and no `fallocate` (`EOPNOTSUPP`). Owner, group and mode come from the mount; only the write bits change, through the read-only attribute.
+* There are no hard links, symbolic links, device nodes, FIFOs or sockets (`EPERM`), and no `fallocate` (`EOPNOTSUPP`). Owner, group and mode come from the mount; only a file's write bits change, through the read-only attribute, which a directory ignores, as Linux's exfat_make_mode does. A chmod the rule of `fat_mode_change` refuses succeeds and changes nothing, as Linux's exfat_setattr lets it.
 * A rename to another case of the same name in its own directory, such as `a` to `A`, succeeds and changes nothing.
 * The volume label is neither read nor set.
 * A dirty volume mounted read-only is read without a check.

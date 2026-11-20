@@ -19935,6 +19935,20 @@ static int utimes_read_only(struct vfs_mount *mnt, void *node)
     return vfs_synth_vpath(mnt, node) || attr_read_only(mnt);
 }
 
+/** Whether a caller who is not the owner of the file of `st` on `mnt` may
+ * set its times to given values: when the base mount's `allow_utime` has
+ * the write bit of the group, for a caller in the file's group, or of
+ * others, as Linux's fat_allow_set_time decides. 0 or -EPERM. */
+static int32_t utimes_allowed(struct vfs_mount *mnt, const struct vfs_stat *st)
+{
+    uint32_t allow = vfs_mount_base(mnt)->allow_utime;
+
+    if (cred_in_group(st->gid)) {
+        allow >>= 3;
+    }
+    return allow & 02u ? 0 : -EPERM;
+}
+
 /**
  * Set the times of the node `kn` of the KRFFS root as `utimes_node` does,
  * with the clock's `now_sec` and `now_nsec` already read and `now_both` set
@@ -19987,12 +20001,13 @@ static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times
  *
  * The POSIX permission split: setting both to now is the owner's, or anyone's
  * with write permission, or root's; an explicit time is the owner's or root's
- * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
- * no stored times and is -EROFS, as is a file reached through a read-only
- * mount or file system (`utimes_read_only`), before any permission check;
- * the KRFFS root's times are not changed and the call succeeds, and a
- * header of the KRFFS root that cannot be read or a store that fails is
- * -EIO. On another type the read, the check and the store are one step
+ * alone, or on vfat and exfat that of a caller the mount's `allow_utime` admits
+ * (`utimes_allowed`). A tv_nsec out of range is -EINVAL, as on Linux. A
+ * synthetic file has no stored times and is -EROFS, as is a file reached
+ * through a read-only mount or file system (`utimes_read_only`), before any
+ * permission check; the KRFFS root's times are not changed and the call
+ * succeeds, and a header of the KRFFS root that cannot be read or a store that
+ * fails is -EIO. On another type the read, the check and the store are one step
  * under the file's lock (`vfs_node_lock`), as for chmod and chown.
  */
 static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime_spec *times)
@@ -20019,7 +20034,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         vfs_node_lock(&ref);
         rc = vfs_getattr(mnt, node, &vst);
         if (rc == 0 && !inode_owner_or_capable(vst.uid)) {
-            rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
+            rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : utimes_allowed(mnt, &vst);
         }
         if (rc == 0 && (times == NULL || times[0].tv_nsec != UTIME_OMIT)) {
             int now = times == NULL || times[0].tv_nsec == UTIME_NOW;

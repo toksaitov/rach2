@@ -25,6 +25,7 @@
 #include "bcache.h"
 #include "fat32name.h"
 #include "fatcommon.h"
+#include "fatopts.h"
 
 #define FAT_S_IFDIR 0040000u
 #define FAT_S_IFREG 0100000u
@@ -84,11 +85,11 @@ struct fat_mount {
     uint32_t total; /* sectors in the volume */
     uint32_t fatsz; /* sectors in one FAT */
     uint32_t root_cluster;
-    uint32_t data_start;    /* the sector of cluster 2 */
-    uint32_t cluster_count; /* data clusters, numbered 2 to cluster_count + 1 */
-    uint32_t active_fat;    /* the FAT that is read: 0, or the one the flags name */
-    uint32_t uid, gid, umask;
-    int free_known; /* free_clusters has been counted and is kept current */
+    uint32_t data_start;     /* the sector of cluster 2 */
+    uint32_t cluster_count;  /* data clusters, numbered 2 to cluster_count + 1 */
+    uint32_t active_fat;     /* the FAT that is read: 0, or the one the flags name */
+    struct fat_options opts; /* the mount's options (`fat_parse_options`) */
+    int free_known;          /* free_clusters has been counted and is kept current */
     uint32_t free_clusters;
     uint32_t fsinfo_sector; /* 0 when the volume has none */
     int mirrored;           /* every FAT write goes to both copies */
@@ -1092,13 +1093,14 @@ static void unjoin_run(struct fat_mount *fm, uint32_t tail, uint32_t run_first)
     }
 }
 
-/** Set the modification date and time of `n` to now; the hundredths that
- * `fat_now` also gives belong to the creation time and are dropped. */
-static void stamp_mtime(struct fat_node *n)
+/** Set the modification date and time of `n` of `fm` to now; the
+ * hundredths that `fat_now` also gives belong to the creation time and are
+ * dropped. */
+static void stamp_mtime(const struct fat_mount *fm, struct fat_node *n)
 {
     uint8_t tenth;
 
-    fat_now(&n->date, &n->time, &tenth);
+    fat_now(fat_minutes_east(&fm->opts), &n->date, &n->time, &tenth);
 }
 
 /** Build the 32 bytes of the entry of `n` in `raw` from its fields. */
@@ -1458,35 +1460,78 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     }
 }
 
+/** Whether the short name `name11` of a file names a program to `showexec`:
+ * its extension is EXE, COM or BAT, as Linux's is_exec decides. */
+static int is_exec(const uint8_t *name11)
+{
+    static const char exts[] = "EXECOMBAT";
+    int i;
+
+    for (i = 0; i < 9; i += 3) {
+        if (name11[8] == exts[i] && name11[9] == exts[i + 1] && name11[10] == exts[i + 2]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether `n` can keep the read-only attribute through a chmod, as Linux's
+ * fat_mode_can_hold_ro decides: a directory only under `rodir`, and either
+ * only when its mask leaves a write bit. */
+static int can_hold_ro(const struct fat_mount *fm, const struct fat_node *n)
+{
+    if (n->is_dir && !(fm->opts.flags & FAT_OPT_RODIR)) {
+        return 0;
+    }
+    return (~(n->is_dir ? fm->opts.dmask : fm->opts.fmask) & 0222u) != 0;
+}
+
+/** The mode of `n`, as Linux's fat_make_mode gives it: 0777 less the
+ * execute bits of a file `showexec` does not call a program, less the write
+ * bits under the read-only attribute, which a directory has only under
+ * `rodir`, less `dmask` or `fmask`. FAT has no execute bit, so a program
+ * runs unless the mount is `noexec` or `showexec`. */
+static uint32_t fat_mode(const struct fat_mount *fm, const struct fat_node *n)
+{
+    uint32_t mode = 0777u;
+
+    if (!n->is_dir && (fm->opts.flags & FAT_OPT_SHOWEXEC) && !is_exec(n->name11)) {
+        mode &= ~0111u;
+    }
+    if ((n->attr & ATTR_READ_ONLY) && (!n->is_dir || (fm->opts.flags & FAT_OPT_RODIR))) {
+        mode &= ~0222u;
+    }
+    if (n->is_dir) {
+        return FAT_S_IFDIR | (mode & ~fm->opts.dmask);
+    }
+    return FAT_S_IFREG | (mode & ~fm->opts.fmask);
+}
+
 /**
- * The `getattr` operation. Every entry reports 0777 less the mount's
- * umask, as vfat on Linux does: FAT has no execute bit, and a program on a
- * volume runs unless the mount is `noexec`. The read-only attribute takes
- * away the write bits.
+ * The `getattr` operation: the mode of `fat_mode`, the mount's owner and
+ * group, and the stamps read in the zone `fat_minutes_east` gives.
  */
 static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = node;
+    int64_t east = (int64_t)fat_minutes_east(&fm->opts) * 60;
 
     k_memset(st, 0, sizeof(*st));
-    st->mode = (n->is_dir ? FAT_S_IFDIR : FAT_S_IFREG) | (0777u & ~fm->umask);
-    if (n->attr & ATTR_READ_ONLY) {
-        st->mode &= ~0222u;
-    }
-    st->uid = fm->uid;
-    st->gid = fm->gid;
+    st->mode = fat_mode(fm, n);
+    st->uid = fm->opts.uid;
+    st->gid = fm->opts.gid;
     st->nlink = 1;
     st->size = n->size;
     st->ino = fat_inode(n->is_dir, n->first, n->dir_cluster, n->index);
-    st->mtime_sec = fat_epoch(n->date, n->time);
+    st->mtime_sec = fat_epoch(n->date, n->time) - east;
     {
         uint32_t tenth = n->ctenth > 199 ? 0 : n->ctenth; /* 0 to 199 by the format */
 
-        st->ctime_sec = fat_epoch(n->cdate, n->ctime) + tenth / 100;
+        st->ctime_sec = fat_epoch(n->cdate, n->ctime) + tenth / 100 - east;
         st->ctime_nsec = (int64_t)(tenth % 100) * 10000000;
     }
-    st->atime_sec = fat_epoch(n->adate, 0);
+    st->atime_sec = fat_epoch(n->adate, 0) - east;
     return 0;
 }
 
@@ -1859,7 +1904,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (end > n->size) {
         n->size = (uint32_t)end;
     }
-    stamp_mtime(n);
+    stamp_mtime(fm, n);
     rc = write_node_entry(fm, n);
     if (rc != 0) {
         goto out;
@@ -1984,7 +2029,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int 
             n->first = run_first;
         }
         n->size = (uint32_t)size;
-        stamp_mtime(n);
+        stamp_mtime(fm, n);
         rc = write_node_entry(fm, n);
         n->hint_cluster = 0;
         goto out;
@@ -1997,7 +2042,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int 
         if (keep == 0) {
             n->first = 0;
         }
-        stamp_mtime(n);
+        stamp_mtime(fm, n);
         rc = write_node_entry(fm, n);
         if (rc == 0) {
             rc = bcache_flush(fm->dev);
@@ -2032,31 +2077,37 @@ out:
 }
 
 /** The `setattr` operation, for what the volume can store: the access and
- * modification times, and the write bits as the read-only attribute. A mode
- * that `fat_mode_change` refuses, or a change of the owner or of the group,
- * is -EPERM, as Linux's vfat answers; the root, which has no entry, takes
- * any change it allows and stores none. */
+ * modification times, in the zone `fat_minutes_east` gives, and the write
+ * bits as the read-only attribute. As in Linux's fat_setattr, a change of
+ * the owner or the group to another than the mount's, or a set-user-ID,
+ * set-group-ID or sticky bit, is -EPERM, or under `quiet` 0 with nothing
+ * changed, and a mode `fat_mode_change` refuses is left unchanged while the
+ * rest is taken; another field is -EPERM. The root, which has no entry,
+ * takes any change it allows and stores none. */
 static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = node;
+    int64_t east = (int64_t)fat_minutes_east(&fm->opts) * 60;
     int read_only = -1;
     int rc;
 
-    if (((what & VFS_SET_UID) && st->uid != fm->uid) ||
-        ((what & VFS_SET_GID) && st->gid != fm->gid) ||
-        (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME | VFS_SET_CTIME | VFS_SET_UID |
-                  VFS_SET_GID))) {
+    if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME | VFS_SET_CTIME | VFS_SET_UID |
+                 VFS_SET_GID)) {
         return -EPERM;
+    }
+    if (((what & VFS_SET_UID) && st->uid != fm->opts.uid) ||
+        ((what & VFS_SET_GID) && st->gid != fm->opts.gid) ||
+        ((what & VFS_SET_MODE) && (st->mode & 07000u))) {
+        return fm->opts.flags & FAT_OPT_QUIET ? 0 : -EPERM;
+    }
+    if ((what & VFS_SET_MODE) &&
+        fat_mode_change(n->is_dir ? fm->opts.dmask : fm->opts.fmask, fat_mode(fm, n),
+                        can_hold_ro(fm, n), st->mode, &read_only) != 0) {
+        what &= ~VFS_SET_MODE;
     }
     if (!(what & (VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME))) {
         return 0; /* no separately stored change time */
-    }
-    if (what & VFS_SET_MODE) {
-        rc = fat_mode_change(fm->umask, st->mode, &read_only);
-        if (rc != 0) {
-            return rc;
-        }
     }
     if (n->is_dir && n->first == fm->root_cluster) {
         return 0;
@@ -2076,10 +2127,10 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
         if (what & VFS_SET_ATIME) {
             uint16_t unused;
 
-            fat_stamp(st->atime_sec, &n->adate, &unused);
+            fat_stamp(st->atime_sec + east, &n->adate, &unused);
         }
         if (what & VFS_SET_MTIME) {
-            fat_stamp(st->mtime_sec, &n->date, &n->time);
+            fat_stamp(st->mtime_sec + east, &n->date, &n->time);
         }
         rc = write_node_entry(fm, n);
     }
@@ -2173,7 +2224,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     n->first = 0;
     n->size = 0;
     n->attr = 0x20;
-    fat_now(&n->cdate, &n->ctime, &n->ctenth);
+    fat_now(fat_minutes_east(&fm->opts), &n->cdate, &n->ctime, &n->ctenth);
     n->date = n->cdate;
     n->time = n->ctime;
     n->adate = n->cdate;
@@ -2329,7 +2380,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     n.is_dir = 1;
     n.attr = ATTR_DIRECTORY;
     n.first = c;
-    fat_now(&n.cdate, &n.ctime, &n.ctenth);
+    fat_now(fat_minutes_east(&fm->opts), &n.cdate, &n.ctime, &n.ctenth);
     n.date = n.cdate;
     n.time = n.ctime;
     n.adate = n.cdate;
@@ -3075,8 +3126,8 @@ static int refuse(const char *field)
 }
 
 /**
- * Mount the volume on `dev` into `fm`, which `fat_mount` allocated: the
- * options, the boot sector checked field by field, FSInfo, and the
+ * Mount the volume on `dev` into `fm`, which `fat_mount` allocated with its
+ * options parsed: the boot sector checked field by field, FSInfo, and the
  * dirty-volume check, before anything is published in `mnt`.
  *
  * FAT32 is recognised as Linux recognises it, by a zero 16-bit FAT size, a
@@ -3085,10 +3136,10 @@ static int refuse(const char *field)
  * fails its check is mounted read-only. On failure the caller frees the
  * nodes taken.
  *
- * @return 0, -EINVAL for a refused field or option, -EIO, or -ENOMEM.
+ * @return 0, -EINVAL for a refused field, -EIO, or -ENOMEM.
  */
 static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_device_t *dev,
-                        uint32_t flags, const char *options)
+                        uint32_t flags)
 {
     uint8_t bpb[512];
     uint32_t bytes_per_sector, total, fatsz16, fatsz, root_entries;
@@ -3097,10 +3148,6 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     int rc;
 
     fm->dev = dev;
-    rc = fat_parse_options(options, &fm->uid, &fm->gid, &fm->umask);
-    if (rc != 0) {
-        return rc;
-    }
     rc = fat_read_bytes(fm, 0, bpb, sizeof(bpb));
     if (rc != 0) {
         return rc;
@@ -3218,23 +3265,17 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     return 0;
 }
 
-/** Emit the volume's ownership and permission-mask options. */
+/** Emit the mount's options, as Linux's fat_show_options does. */
 static void fat_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
 {
     const struct fat_mount *fm = mnt->priv;
 
-    if (fm->uid != 0) {
-        emit(out, "uid", fm->uid, VFS_OPT_DEC);
-    }
-    if (fm->gid != 0) {
-        emit(out, "gid", fm->gid, VFS_OPT_DEC);
-    }
-    emit(out, "fmask", fm->umask, VFS_OPT_OCT4);
-    emit(out, "dmask", fm->umask, VFS_OPT_OCT4);
+    fat_show_options(&fm->opts, 0, emit, out);
 }
 
-/** The `mount` operation of the type: a mount allocated from the heap and
- * `fat_mount_on`, which leaves nothing allocated when it fails. */
+/** The `mount` operation of the type: a mount allocated from the heap, its
+ * options (`fat_parse_options`), of which `nfs=nostale_ro` makes it
+ * read-only, and `fat_mount_on`; nothing is left allocated when it fails. */
 static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                      const char *options)
 {
@@ -3244,7 +3285,14 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     if (!fm) {
         return -ENOMEM;
     }
-    rc = fat_mount_on(fm, mnt, dev, flags, options);
+    rc = fat_parse_options(options, 0, &fm->opts);
+    if (rc == 0 && fm->opts.nfs == FAT_NFS_NOSTALE_RO) {
+        flags |= VFS_MS_RDONLY; /* Linux's fat_fill_super sets SB_RDONLY */
+        mnt->flags |= VFS_MS_RDONLY;
+    }
+    if (rc == 0) {
+        rc = fat_mount_on(fm, mnt, dev, flags);
+    }
     if (rc != 0) {
         while (fm->nodes) {
             node_drop(fm, fm->nodes);
@@ -3252,6 +3300,7 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
         kfree(fm);
     } else {
         mnt->show_options = fat_options;
+        mnt->allow_utime = fm->opts.allow_utime;
     }
     return rc;
 }

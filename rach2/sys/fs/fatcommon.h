@@ -5,7 +5,7 @@
 
 /*
  * fatcommon: what the FAT32 and exFAT drivers both need and neither owns:
- * the check and conversion of a name, the mount options and the mode rule,
+ * the check and conversion of a name, the mode rule,
  * the DOS timestamp bit fields, the inode numbers, the first-fit allocation
  * hint, and the dirty-volume walk's bitmap with its lock. Everything on disk
  * stays with its driver.
@@ -45,31 +45,21 @@ int fat_name_units(const char *name, uint16_t *units, uint32_t *count);
 int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t cap);
 
 /**
- * Parse the mount options both types take, separated by commas: `umask=`
- * in octal, `uid=` and `gid=` in decimal, and `ro`. An empty item is
- * skipped and `options` may be NULL.
- *
- * @return 0 with the three filled, 022, 0 and 0 where absent, and the umask
- *         cut to 0777; -EINVAL for any other option, a value with no digits
- *         or past 32 bits, or `ro=`.
- */
-int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_t *umask);
-
-/**
- * Judge a chmod to `mode` on a mount with `umask`, by the rule of Linux's
- * vfat and exfat: the requested bits are first cut by the umask; of those,
- * the read and execute bits must be the mount's, and the write bits all the
- * mount allows or none.
+ * Judge a chmod to `mode` of an entry whose mode is `cur`, under the
+ * permission bits `mask` its kind lacks, by the rule of Linux's
+ * fat_sanitize_mode_change and exfat_sanitize_mode: the requested bits
+ * are first cut by `mask`; of those, the read and execute bits must be the
+ * entry's, and the write bits, when `hold_ro` says the entry can keep the
+ * read-only attribute, all the mask allows or none, else all it allows.
  *
  * @return 0 with `*read_only` 1 to set the read-only attribute, 0 to clear
- *         it, or -1 to leave it, when the umask allows no write bit; -EPERM
- *         for set-user-ID, set-group-ID or sticky bits, or a mode the rule
- *         refuses.
+ *         it, or -1 to leave it; -EPERM for a mode the rule refuses, which
+ *         both drivers then leave unchanged without an error, as Linux's do.
  */
-int fat_mode_change(uint32_t umask, uint32_t mode, int *read_only);
+int fat_mode_change(uint32_t mask, uint32_t cur, int hold_ro, uint32_t mode, int *read_only);
 
-/** The epoch second of a DOS date and time, read as UTC; a field out of
- * range reads as 1980-01-01. */
+/** The epoch second of a DOS date and time, read as UTC, which the caller
+ * moves by the volume's zone; a field out of range reads as 1980-01-01. */
 int64_t fat_epoch(uint16_t date, uint16_t time);
 
 /** The DOS date and time of the epoch second `sec`, floored at 1980-01-01
@@ -77,10 +67,10 @@ int64_t fat_epoch(uint16_t date, uint16_t time);
  * down to two seconds. */
 void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time);
 
-/** The DOS date and time of the present moment, as `fat_stamp` gives them,
- * and in `tenth` the hundredths of a second past the even second of
- * `time`, 0 to 199. */
-void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth);
+/** The DOS date and time of the present moment in the zone `east` minutes
+ * east of UTC, as `fat_stamp` gives them, and in `tenth` the hundredths of
+ * a second past the even second of `time`, 0 to 199. */
+void fat_now(int32_t east, uint16_t *date, uint16_t *time, uint8_t *tenth);
 
 /** The inode number of an entry, the same policy for both types: a
  * directory is its first cluster; a file is its directory's cluster (0 for

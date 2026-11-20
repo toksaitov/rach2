@@ -133,14 +133,23 @@ See
 .Xr chown 2 .
 .Pp
 FAT32 and exFAT store only a read-only attribute.
-As on Linux, the requested mode is first cut by the mount's umask; its
-read and execute bits must then match the mode derived from the umask,
-and its write bits must be all that the umask allows or none, or the
-change gives
+As on Linux, the requested mode is first cut by the mount's
+.Ql fmask
+or
+.Ql dmask ;
+its read and execute bits must then be the entry's, and its write bits
+all that the mask allows or none, or the mode is left unchanged and the
+call succeeds.
+A directory, which keeps the attribute only under vfat's
+.Ql rodir ,
+and an entry whose mask allows no write bit, must keep every write bit
+the mask allows.
+Set-user-ID, set-group-ID and sticky bits give
 .Er EPERM ,
-as set-user-ID, set-group-ID and sticky bits do.
-Write bits clear the read-only attribute; no write bits set it, unless
-the umask allows none, when the attribute is left as it is.
+or under vfat's
+.Ql quiet
+success with nothing changed.
+Write bits clear the read-only attribute; no write bits set it.
 Their root directory has no entry to change and remains unchanged.
 .Pp
 A pseudoterminal slave under

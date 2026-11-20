@@ -148,6 +148,10 @@ void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds);
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
 
+/** The minutes west of UTC that settimeofday last set, Linux's
+ * sys_tz.tz_minuteswest, 0 until then; kept in syscall.c. */
+int32_t rtc_minuteswest(void);
+
 /** The real time to the last tick, without the timer's place within it and
  * without `rtc_realtime`'s floor: the coarse clock, which reads no timer;
  * the TSC's clock as of its last tick while that one runs, and otherwise

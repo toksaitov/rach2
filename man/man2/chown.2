@@ -179,8 +179,10 @@ Path resolution still requires search permission on ancestor directories.
 KRFFS and ext2 store ownership per file.
 On a writable mounted KRFFS volume, an otherwise permitted change to its
 root returns success without storing the IDs.
-FAT32 and exFAT report the mount's owner and group; a change to either
-is refused.
+FAT32 and exFAT report the mount's owner and group; a change to another
+is refused, or under vfat's
+.Ql quiet
+succeeds and changes nothing.
 A pseudo-terminal slave under
 .Pa /dev/pts
 stores its own owner and group, by the same rules.

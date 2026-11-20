@@ -53,7 +53,14 @@ first, so that a
 that cannot be written fails the call with
 .Fa tz
 unwritten, for an i386 program too.
-The kernel keeps the zone only to give it back: no clock reads it.
+No clock reads the zone; a vfat mount without
+.Ql tz=
+or
+.Ql time_offset= ,
+and an exfat mount with
+.Ql sys_tz ,
+read and write their stamps in it, as on Linux; see
+.Xr mount 2 .
 Real time is the CMOS clock reading taken at boot plus
 .Dv CLOCK_MONOTONIC ,
 the time since, to the microsecond, so that the rate that
@@ -333,6 +340,10 @@ before it looks at the path, the descriptor or the flags, as Linux does.
 The file's owner, judged by filesystem user ID, or a caller with
 .Dv CAP_FOWNER
 over its owner may set either timestamp.
+On vfat and exfat, so may a caller in the file's group when the mount's
+.Ql allow_utime
+has 0020, and any other caller when it has 0002; see
+.Xr mount 2 .
 Write permission also suffices when setting both timestamps to the current time.
 Omitting both timestamps requires neither.
 .Pp
@@ -616,7 +627,9 @@ A caller that is not privileged sets the real time or the time zone, or
 calls
 .Fn settimeofday
 with neither; or a caller that is
-neither the owner nor privileged requests a timestamp change other than
+neither the owner nor privileged, nor admitted by a FAT mount's
+.Ql allow_utime ,
+requests a timestamp change other than
 setting both times to the current time; or the file is immutable or
 append-only, where Linux lets an append-only file have its times set to
 the current time.

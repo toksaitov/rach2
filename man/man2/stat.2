@@ -278,21 +278,44 @@ number in bits 0 to 7, the major number in bits 8 to 19, and the rest
 of the minor number in bits 20 to 31.
 .It FAT32
 Owner and group are the mount's values.
-Permissions are 0777 with the mount mask removed; the read-only attribute
-also removes write bits.
+Permissions are 0777 with the mount's
+.Ql fmask
+or
+.Ql dmask
+removed; the read-only attribute also removes write bits, from a
+directory only under
+.Ql rodir ,
+and under
+.Ql showexec
+a file not named EXE, COM or BAT has no execute bits.
 The link count is 1 and the size is the directory entry's stored size.
 Modification time has two-second precision, access time has date precision,
 and creation time is reported as
 .Va st_ctim
 with hundredths of a second.
-Stored times are interpreted as UTC.
+Stored times are local times in the mount's zone: its
+.Ql time_offset
+or
+.Ql tz=UTC ,
+or the zone
+.Xr settimeofday 2
+set.
 .It exFAT
-Owner, group, permissions, and link count follow the FAT32 rules.
+Owner, group, permissions, and link count follow the FAT32 rules, but a
+directory always ignores the read-only attribute and every name keeps its
+execute bits.
 The size is the stored data length.
 Creation time is reported as
 .Va st_ctim .
 Creation and modification times include the stored 10 ms increments.
-A valid stored UTC offset is applied; otherwise the time is treated as UTC.
+A valid stored UTC offset is applied; otherwise the time is read in the
+mount's
+.Ql time_offset ,
+or under
+.Ql sys_tz
+the zone
+.Xr settimeofday 2
+set.
 .El
 .Pp
 Reads do not advance access times.

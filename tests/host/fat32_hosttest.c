@@ -12,6 +12,7 @@
  * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
+ * host-deps: rach2/sys/fs/fatopts.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
@@ -38,6 +39,7 @@
 
 #include "../../rach2/sys/fs/fat32.h"
 #include "../../rach2/sys/fs/fatcommon.h"
+#include "../../rach2/sys/fs/fatopts.h"
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
@@ -45,6 +47,7 @@
 #include "fixdir_host.h"
 #include "command_host.h"
 #include "mkfatfixture.h"
+#include "ids_first.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
@@ -959,6 +962,8 @@ static int mount_rw(const char *options)
     return rc;
 }
 
+#include "fat_options_rows.h"
+
 /**
  * Write the image `what` to a file and run `mkfatfixture --check` over it,
  * its output in `out`, at most `cap` bytes. Returns the check's exit
@@ -1613,20 +1618,38 @@ static void long_names_mtools(void)
     }
 }
 
-/** The mode rule of a chmod on other umasks than the fixture's mount has,
+/** Whether a chmod of the held node `n` to `mode` succeeds and leaves it
+ * with the permission bits `want`. */
+static int mode_kept(void *n, uint32_t mode, uint32_t want)
+{
+    struct vfs_stat st;
+
+    __builtin_memset(&st, 0, sizeof(st));
+    st.mode = mode;
+    return OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == 0 && OPS->getattr(&mnt, n, &st) == 0 &&
+           (st.mode & 0777) == want;
+}
+
+/** The mode rule of a chmod on other masks than the fixture's mount has,
  * judged by `fat_mode_change`, which both drivers' `setattr` call. */
 static void mode_rows(void)
 {
     int ro = 2;
 
-    check(fat_mode_change(077, 0755, &ro) == 0 && ro == 0,
+    check(fat_mode_change(077, 0700, 1, 0755, &ro) == 0 && ro == 0,
           "under umask=077 a mode of 0755 is cut to the mount's 0700, as on Linux");
-    check(fat_mode_change(077, 0555, &ro) == 0 && ro == 1,
+    check(fat_mode_change(077, 0700, 1, 0555, &ro) == 0 && ro == 1,
           "and 0555 to 0500, which sets the read-only attribute");
-    check(fat_mode_change(0, 0755, &ro) == -EPERM, "under umask=0 one write bit of three is EPERM");
-    check(fat_mode_change(0222, 0555, &ro) == 0 && ro == -1,
-          "a umask that allows no write bit leaves the attribute alone");
-    check(fat_mode_change(022, 04755, &ro) == -EPERM, "a set-user-ID bit is EPERM");
+    check(fat_mode_change(0, 0777, 1, 0755, &ro) == -EPERM,
+          "under umask=0 one write bit of three is refused");
+    check(fat_mode_change(0222, 0555, 0, 0555, &ro) == 0 && ro == -1,
+          "a mask that allows no write bit leaves the attribute alone");
+    check(fat_mode_change(022, 0755, 0, 0555, &ro) == -EPERM &&
+              fat_mode_change(022, 0755, 0, 0755, &ro) == 0 && ro == -1,
+          "an entry that cannot keep the attribute must keep every write bit");
+    check(fat_mode_change(022, 0644, 1, 0755, &ro) == -EPERM &&
+              fat_mode_change(022, 0644, 1, 0444, &ro) == 0 && ro == 1,
+          "the execute bits must be the entry's own, which showexec may have taken");
 }
 
 /**
@@ -1776,9 +1799,8 @@ static void long_rows(void)
         check(OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == 0 && OPS->getattr(&mnt, n, &st) == 0 &&
                   (st.mode & 0777) == 0755,
               "and setting them clears it");
-        st.mode = 0700;
-        check(OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == -EPERM,
-              "a mode change outside the write bits is EPERM");
+        check(mode_kept(n, 0700, 0755),
+              "a mode change outside the write bits succeeds and changes nothing, as on Linux");
         mode_rows();
         st.uid = 5;
         check(OPS->setattr(&mnt, n, VFS_SET_UID, &st) == -EPERM, "an owner change is EPERM");
@@ -3078,6 +3100,14 @@ int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    if (argc > 1 && streq(argv[1], "--options-only")) {
+        fat_option_rows();
+        printf("fat32_hosttest: %s\n", fails == 0 ? "OK" : "failed");
+        if (fails == 0) {
+            fix_passed();
+        }
+        return fails != 0;
+    }
     if (argc > 1 && streq(argv[1], "--publish-only")) {
         mkdir_fail_row();
         printf("fat32_hosttest: %s\n", fails == 0 ? "OK" : "failed");
@@ -3098,6 +3128,7 @@ int main(int argc, char **argv)
     neighbour_rows();
     join_rows();
     mkdir_fail_row();
+    fat_option_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
         fix_passed();

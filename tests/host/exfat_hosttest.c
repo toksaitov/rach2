@@ -9,7 +9,7 @@
  * host-deps: tools/etude/posix/process.c
  * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
- * host-deps: rach2/sys/fs/fatcommon.c
+ * host-deps: rach2/sys/fs/fatcommon.c rach2/sys/fs/fatopts.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
@@ -35,6 +35,7 @@
 #include "devmodel.h"
 #include "fixdir_host.h"
 #include "command_host.h"
+#include "ids_first.h"
 
 /* No hosted headers: the kernel headers define the fixed-width types. */
 extern int printf(const char *fmt, ...);
@@ -133,6 +134,13 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 1788264000; /* 2026-09-01 12:00:00 UTC */
     *nanoseconds = 0;
+}
+
+/** settimeofday's zone, six hours east, which exfat reads only under
+ * sys_tz. */
+int32_t rtc_minuteswest(void)
+{
+    return -360;
 }
 
 /** Whether the caller holds a mount's namespace lock: 0 here. */
@@ -848,6 +856,63 @@ static void damaged_rows(void)
     }
     unmount_image();
     check(mount_image(VFS_MS_RDONLY, "nosuch=1") == -EINVAL, "an unknown option is EINVAL");
+}
+
+/* The options the mount table was given, comma-separated. */
+static char ex_shown[256];
+
+/** Append one emitted option to `ex_shown`: words, and fmask, dmask and
+ * allow_utime in four octal digits. */
+static void ex_show_into(void *out, const char *name, uint64_t value, enum vfs_option_format f)
+{
+    size_t at = strlen(ex_shown);
+
+    (void)out;
+    if (f == VFS_OPT_WORD) {
+        snprintf(ex_shown + at, sizeof(ex_shown) - at, "%s%s", at ? "," : "", name);
+    } else {
+        snprintf(ex_shown + at, sizeof(ex_shown) - at, "%s%s=%04lo", at ? "," : "", name,
+                 (unsigned long)value);
+    }
+}
+
+/**
+ * exfat's options on a mount: fmask and dmask apart, the mount table's line
+ * in exfat_show_options's order, a time offset that leaves a stamp with a
+ * valid zone alone, and sys_tz, which the fixture's stamps also ignore.
+ */
+static void option_rows(void)
+{
+    struct vfs_stat st;
+    void *n;
+    int err;
+
+    load("");
+    check(mount_image(VFS_MS_RDONLY, "fmask=0133,dmask=0027,time_offset=30") == 0,
+          "a mount with fmask and dmask apart");
+    n = walk("/hello.txt", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && (st.mode & 0777) == 0644, "a file takes fmask");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->getattr(&mnt, mnt.root, &st) == 0 && (st.mode & 0777) == 0750,
+          "and a directory dmask");
+    ex_shown[0] = 0;
+    mnt.show_options(&mnt, ex_show_into, NULL);
+    check(strcmp(ex_shown, "fmask=0133,dmask=0027,iocharset=utf8,"
+                           "errors=remount-ro,time_offset=30") == 0,
+          "the mount table shows them as exfat_show_options does");
+    unmount_image();
+    load("--zoned");
+    check(mount_image(VFS_MS_RDONLY, "sys_tz") == 0, "a mount under sys_tz");
+    n = walk("/hello.txt", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && st.mtime_sec == 1788264000 - 6 * 3600,
+          "a stamp with its own zone ignores the mount's");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+    check(mount_image(VFS_MS_RDONLY, "showexec") == -EINVAL, "a vfat option is EINVAL");
 }
 
 /** An independent volume produced during preparation mounts and has every
@@ -2828,6 +2893,14 @@ int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    if (argc > 1 && strcmp(argv[1], "--options-only") == 0) {
+        option_rows();
+        printf("exfat_hosttest: %s\n", fails == 0 ? "OK" : "failed");
+        if (fails == 0) {
+            fix_passed();
+        }
+        return fails != 0;
+    }
     if (argc > 1 && strcmp(argv[1], "--publish-only") == 0) {
         fill_pattern();
         mkdir_fail_row();
@@ -2849,6 +2922,7 @@ int main(int argc, char **argv)
     free_durability_row();
     matrix_pass();
     dirty_rows();
+    option_rows();
     if (fails == 0) {
         printf("exfat_hosttest: OK\n");
         fix_passed();

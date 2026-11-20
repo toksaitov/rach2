@@ -562,6 +562,12 @@ struct vfs_mount {
     int sb_noexec; /* the file system forbids exec through every mount */
     /* Optional, on the base mount. Emits current file-system options. */
     void (*show_options)(const struct vfs_mount *, vfs_option_emit, void *);
+    /* On the base mount of vfat or exfat, the 0020 and 0002 bits of its
+     * `allow_utime`: a caller other than a file's owner may set the
+     * file's times to given values when the bit for its relation to the
+     * file, group or other, is set, as Linux's fat_allow_set_time lets it
+     * (`utimes_node`). 0 on every other type. */
+    uint32_t allow_utime;
     int state;
     struct vfs_mount *parent;
     void *covered;

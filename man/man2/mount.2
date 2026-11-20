@@ -509,6 +509,99 @@ describes; the silent flag and the file system's own options are not
 shown.
 KRFFS, mqueue and pstore ignore the option string; FAT32, exFAT,
 tmpfs and debugfs parse it.
+.Pp
+vfat and exfat take Linux's options.
+Both take
+.Ql uid=
+and
+.Ql gid= ,
+the owner and group of every entry, which the caller's user namespace
+maps;
+.Ql fmask=
+and
+.Ql dmask= ,
+in octal, the permission bits files and directories lack, and
+.Ql umask= ,
+both at once, all three the caller's umask by default and the owner and
+group the caller's real ones;
+.Ql allow_utime= ,
+whose 0020 and 0002 let the file's group and others set its times to
+given values, by default those of the two that
+.Ql dmask
+leaves; the error policy
+.Ql errors=continue ,
+.Ql errors=panic
+or
+.Ql errors=remount-ro ;
+.Ql iocharset=utf8 ,
+the only character set;
+.Ql time_offset= ,
+the minutes east of UTC, at most 1440 either way, that stamps are in;
+and
+.Ql discard .
+vfat also takes
+.Ql showexec ,
+under which a file's execute bits are kept for the extensions EXE, COM and
+BAT alone;
+.Ql rodir ,
+under which a directory keeps the read-only attribute, which it otherwise
+ignores;
+.Ql quiet ,
+under which a change of owner or group, or a set-id or sticky bit, that
+chown or chmod refuses succeeds and changes nothing;
+.Ql tz=UTC ,
+a time offset of 0; without either, the stamps are in the zone
+.Xr settimeofday 2
+set;
+.Ql nfs=nostale_ro ,
+which mounts read-only;
+.Ql codepage=437 ,
+the only code page; and
+.Ql check= ,
+.Ql shortname= ,
+.Ql utf8 ,
+.Ql uni_xlate ,
+.Ql nonumtail ,
+.Ql usefree ,
+.Ql nocase ,
+.Ql debug ,
+.Ql sys_immutable ,
+.Ql flush ,
+.Ql nfs ,
+.Ql dos1xfloppy ,
+and the deprecated
+.Ql conv= ,
+.Ql fat= ,
+.Ql blocksize= ,
+.Ql cvf_format= ,
+.Ql cvf_options=
+and
+.Ql posix ,
+which are kept and shown and change nothing else.
+exfat also takes
+.Ql sys_tz ,
+under which a stamp without a valid UTC offset is read in the zone
+.Xr settimeofday 2
+set, as without it a stamp is read in
+.Ql time_offset ;
+.Ql keep_last_dots
+and
+.Ql zero_size_dir ,
+which are kept and shown; and the deprecated
+.Ql utf8 ,
+.Ql debug ,
+.Ql namecase=
+and
+.Ql codepage= .
+A deprecated option logs
+.Ql TYPE: Deprecated parameter 'NAME' .
+Another option, a bad value, or another code page or character set is
+.Er EINVAL .
+The mount table shows the options as Linux's
+.Fn fat_show_options
+and
+.Fn exfat_show_options
+do.
 ext2 takes Linux's options:
 .Ql errors=continue ,
 .Ql errors=remount-ro
