@@ -1144,14 +1144,17 @@ int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, u
  * The `setattr` of `vfs_ops`: the permission bits, the owner, the group, the
  * access and modification times and the flags chattr may change, as `what`
  * selects, with the change time set to the present and the inode stored.
- * A strict mount drains the batch first (`ext2_assert_writable`). Takes the
- * node's lock, which the caller may hold already. 0, -EROFS, or -errno.
+ * A change of the mode gives the access ACL its new bits (`ext2_acl_chmod`),
+ * and a failure there is the call's, with the mode changed, as Linux's
+ * `ext2_setattr` answers. A strict mount drains the batch first
+ * (`ext2_assert_writable`). Takes the node's lock, which the caller may hold
+ * already, and is admitted. 0, -EROFS, or -errno.
  */
 int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = node;
-    int rc;
+    int rc, acl = 0;
 
     ext2_node_lock(n);
     rc = ext2_assert_writable(mnt, em);
@@ -1181,10 +1184,13 @@ int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_s
                       (n->flags & ~EXT2_FL_USER_MODIFIABLE) |
                           (st->flags & EXT2_FL_USER_MODIFIABLE));
     }
+    if (what & VFS_SET_MODE) {
+        acl = ext2_acl_chmod(mnt, n);
+    }
     ext2_stamp(n, T_CTIME);
     rc = ext2_inode_store(em, n);
     ext2_node_unlock(n);
-    return rc;
+    return rc != 0 ? rc : acl;
 }
 
 /**

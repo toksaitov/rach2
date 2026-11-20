@@ -552,6 +552,15 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** The mode's judgement alone, since no row's mount keeps POSIX ACLs. */
+int vfs_may_access(struct vfs_mount *mnt, void *node, const struct vfs_stat *st, int want,
+                   int use_real)
+{
+    (void)mnt;
+    (void)node;
+    return inode_may_access(st->uid, st->gid, st->mode, (uint32_t)want, use_real) ? 0 : -EACCES;
+}
+
 /** Take every change of attributes: 0. */
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {

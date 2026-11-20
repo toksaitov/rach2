@@ -4540,6 +4540,7 @@ static const struct vfs_ops exfat_ops = {
     ex_uncache,                /* uncache */
     0,                         /* phase */
     0,                         /* data_at */
+    0,                         /* check_acl */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops,       0, 0, 0, 0, 0,

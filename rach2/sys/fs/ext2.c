@@ -11,6 +11,7 @@
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
 static struct sleep_lock_record write_record = SLEEP_LOCK_RECORD("ext2 write");
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
+static struct sleep_lock_record xattr_record = SLEEP_LOCK_RECORD("ext2 xattr");
 static struct sleep_lock_record batch_record = SLEEP_LOCK_RECORD("ext2 batch");
 static struct sleep_lock_record group_record = SLEEP_LOCK_RECORD("ext2 group");
 static struct sleep_lock_record super_record = SLEEP_LOCK_RECORD("ext2 super");
@@ -192,6 +193,7 @@ struct ext2_node *ext2_node_make(struct ext2_mount *em)
         n->dirty_meta = 1;
         sleep_lock_init(&n->lock, &node_record, SLEEP_LOCK_FILE);
         sleep_lock_init(&n->write_lock, &write_record, 0);
+        sleep_lock_init(&n->xattr_lock, &xattr_record, SLEEP_LOCK_FILE);
 #ifdef RACH2_LOCKDEP
         ext2_lock_layer(&n->lock, em->lockdep_depth, node_layer);
 #endif
@@ -4312,22 +4314,86 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
     return rc;
 }
 
+int ext2_attr_get(struct ext2_mount *em, struct ext2_node *n, int index, const char *name,
+                  void *value, uint32_t size)
+{
+    uint8_t *raw = NULL;
+    int rc;
+
+    sleep_lock_take(&n->xattr_lock);
+    rc = n->fenced ? -EIO : attr_read(em, n, &raw);
+    if (!rc)
+        rc = ext2_xattr_read(raw, em->block_size, index, name, value, size);
+    if (rc == -ENODATA && index == EXT2_XATTR_ACL_ACCESS)
+        n->acl_absent = 1;
+    sleep_lock_give(&n->xattr_lock);
+    kfree(raw);
+    return rc;
+}
+
+int ext2_attr_set(struct vfs_mount *mnt, struct ext2_node *n, int index,
+                  const struct vfs_xattr *arg)
+{
+    struct ext2_mount *em = ext2_em_of(mnt);
+    uint8_t *raw = NULL, *out = NULL;
+    int rc;
+
+    sleep_lock_take(&n->xattr_lock);
+    rc = n->fenced ? -EIO : attr_read(em, n, &raw);
+    if (!rc) {
+        out = kmalloc(em->block_size);
+        rc = out ? ext2_xattr_edit(raw, out, em->block_size, index, arg) : -ENOMEM;
+    }
+    if (rc >= 0)
+        rc = attr_replace(mnt, n, out, rc, raw && ext2_le32(raw + 4) == 1);
+    n->acl_absent = 0;
+    sleep_lock_give(&n->xattr_lock);
+    kfree(raw);
+    kfree(out);
+    return rc;
+}
+
+/** The user attributes' names of node `n`, and with `acl` the names of its
+ * POSIX ACLs, into `value` of `size` bytes (`ext2_xattr_list`). */
+static int attr_list(struct ext2_mount *em, struct ext2_node *n, int acl, void *value,
+                     uint32_t size)
+{
+    uint8_t *raw = NULL;
+    int rc;
+
+    sleep_lock_take(&n->xattr_lock);
+    rc = n->fenced ? -EIO : attr_read(em, n, &raw);
+    if (!rc)
+        rc = ext2_xattr_list(raw, em->block_size, acl, value, size);
+    sleep_lock_give(&n->xattr_lock);
+    kfree(raw);
+    return rc;
+}
+
 /** The extended attribute operation, admitted and locked for shutdown.
  * Kernel buffers only; user. attributes of regular files and directories
- * are supported. Other namespaces return -EOPNOTSUPP. A fenced node
- * (`n->fenced`) is -EIO under its lock, before its attribute block is read
- * or written in place (`attr_inplace`) ahead of the store that would refuse
- * it. */
+ * are supported, and the POSIX ACLs, system.posix_acl_access and
+ * system.posix_acl_default, of every type but a symbolic link where the
+ * mount keeps them (`ext2_acl_xattr`). Other names return -EOPNOTSUPP. A
+ * fenced node (`n->fenced`) is -EIO under its lock, before its attribute
+ * block is read or written in place (`attr_inplace`) ahead of the store
+ * that would refuse it. */
 static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
 {
     int op = arg->op;
     const char *name = arg->name;
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = node;
-    uint8_t *raw = NULL, *out = NULL;
     uint32_t type = n->mode & S_IFMT_;
+    int acl = op != VFS_XATTR_LIST ? ext2_acl_index(name) : 0;
     int rc;
 
+    if (acl) {
+        em_enter_node(em, n);
+        rc = n->fenced ? -EIO : ext2_acl_xattr(mnt, n, acl, arg);
+        em_finish_node(em, n);
+        return rc;
+    }
     if (op != VFS_XATTR_LIST && (!name || k_strlen(name) < 5 || name[0] != 'u' || name[1] != 's' ||
                                  name[2] != 'e' || name[3] != 'r' || name[4] != '.'))
         return -EOPNOTSUPP;
@@ -4336,22 +4402,15 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
     if (op != VFS_XATTR_LIST && type != S_IFREG_ && type != S_IFDIR_)
         return op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
     em_enter_node(em, n);
-    rc = n->fenced ? -EIO : attr_read(em, n, &raw);
-    if (!rc && op <= VFS_XATTR_LIST)
-        rc = ext2_xattr_read(raw, em->block_size, name ? name + 5 : NULL, arg->value, arg->size);
-    else if (!rc) {
-        out = kmalloc(em->block_size);
-        if (out) {
-            struct vfs_xattr edit = *arg;
-            edit.name += 5;
-            rc = ext2_xattr_edit(raw, out, em->block_size, &edit);
-        } else
-            rc = -ENOMEM;
-        if (rc >= 0)
-            rc = attr_replace(mnt, n, out, rc, raw && ext2_le32(raw + 4) == 1);
+    if (op == VFS_XATTR_LIST) {
+        rc = attr_list(em, n, mnt->sb_posixacl, arg->value, arg->size);
+    } else if (op == VFS_XATTR_GET) {
+        rc = ext2_attr_get(em, n, EXT2_XATTR_USER, name + 5, arg->value, arg->size);
+    } else {
+        struct vfs_xattr edit = *arg;
+        edit.name += 5;
+        rc = ext2_attr_set(mnt, n, EXT2_XATTR_USER, &edit);
     }
-    kfree(raw);
-    kfree(out);
     em_finish_node(em, n);
     return rc;
 }
@@ -4447,6 +4506,7 @@ static const struct vfs_ops ext2_ops = {
     admit_uncache,
     0, /* phase */
     admit_data_at,
+    ext2_check_acl,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,
