@@ -495,17 +495,16 @@ static void addr_prune_routes(struct netdev *nd)
 }
 
 /**
- * Put `ip`, `mask` and `peer` in force on `nd`, with the costs
- * `netconf_set_address` lists.
+ * Put `ip`, `mask` and `peer` in force on `nd` as its first address, and
+ * leave its gateway and added routes alone.
  *
  * A change, a new address or a new mask under an address, is logged, drops the
  * ARP mappings of the interface but the permanent ones (of every interface, for
  * the first) and the datagrams waiting for them; a TCP connection from the old
- * address is kept (`tcp_ip_tx`). Routes through a gateway `nd` no longer
- * reaches are pruned. The first interface's values are copied to
- * `net_ip_addr` and the two after it. The caller holds `net_lock`.
+ * address is kept (`tcp_ip_tx`). The first interface's address and mask are
+ * copied to `net_ip_addr` and `net_ip_mask`. The caller holds `net_lock`.
  */
-static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
+static void addr_install(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
     uint32_t old = nd->ip;
     uint32_t old_mask = nd->mask;
@@ -534,6 +533,17 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t
             arp_forget_dev(nd);
         }
     }
+}
+
+/**
+ * Put `ip`, `mask` and `peer` in force on `nd`, with the costs
+ * `netconf_set_address` lists: those of `addr_install`, and the routes
+ * through a gateway `nd` no longer reaches are pruned. The caller holds
+ * `net_lock`.
+ */
+static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
+{
+    addr_install(nd, ip, mask, peer);
     addr_prune_routes(nd);
 }
 
@@ -615,7 +625,11 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
             nd->peer2[i - 1] = nd->peer2[i];
         }
         nd->naddr2 -= nd->naddr2 > 0;
-        addr_publish(nd, next, next_mask, next_peer);
+        if (next != 0) {
+            addr_install(nd, next, next_mask, next_peer);
+        } else {
+            addr_publish(nd, 0, 0, 0);
+        }
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
         net_unlock(flags);
@@ -627,7 +641,6 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
         nd->peer2[i] = nd->peer2[i + 1];
     }
     nd->naddr2--;
-    addr_prune_routes(nd);
     net_unlock(flags);
     return 0;
 }

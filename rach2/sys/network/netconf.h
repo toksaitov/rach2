@@ -202,11 +202,14 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 /**
  * Take the address `ip` from `nd`, matching any local address when `ip`
  * is 0. If `dst` is nonzero, also match its prefix `dst`/`mask`. The first is
- * replaced by the next address, as Linux's promote_secondaries has it, or with
- * none after it leaves the interface unconfigured, and the change drops what
- * `netconf_set_address` lists. For another address the added routes whose
- * gateway only its subnet reached are removed. EADDRNOTAVAIL for an address the
- * interface does not hold. Takes `net_lock`.
+ * replaced by the next address, as Linux's promote_secondaries has it, which
+ * drops the ARP mappings `netconf_set_address` lists. While an address
+ * remains, the gateway and the added routes stay, as Linux's
+ * `fib_del_ifaddr` keeps routes through a gateway. Taking the last address
+ * leaves the interface unconfigured and drops all that `netconf_set_address`
+ * lists, gateway and added routes among them, as Linux's `fib_disable_ip`
+ * flushes them. EADDRNOTAVAIL for an address the interface does not hold.
+ * Takes `net_lock`.
  */
 int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst);
 
