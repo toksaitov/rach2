@@ -1459,7 +1459,8 @@ struct watch_state {
     struct watch_addr4 addr4[WATCH_IFS * (NETDEV_ADDRS + 1)];
     struct watch_addr6 addr6[WATCH_IFS * NETDEV_ADDRS6];
     struct netdev_rt route4[WATCH_ROUTES];
-    struct route6_row route6[WATCH_ROUTES];
+    struct route6_row *route6;
+    int cap6; /* allocated route rows */
 };
 
 /* The state at the last comparison is `watch_buf[watch_cur]`; the other
@@ -1491,8 +1492,34 @@ static int listening(void)
     return 0;
 }
 
+/** Snapshot the IPv6 table, including prefixes retained after address removal.
+ * Return zero on allocation failure so a partial snapshot sends no deletes. */
+static int watch_routes6(struct watch_state *w)
+{
+    struct route6_row row;
+    while (route6_at(w->nroute6, &row)) {
+        if (w->nroute6 == w->cap6) {
+            int cap;
+            struct route6_row *more;
+            if ((unsigned)w->cap6 > 0x7fffffffu / sizeof(row) / 2)
+                return 0;
+            cap = w->cap6 ? w->cap6 * 2 : ROUTE6_MAX;
+            more = kmalloc((size_t)cap * sizeof(row));
+            if (!more)
+                return 0;
+            if (w->nroute6)
+                k_memcpy(more, w->route6, (size_t)w->nroute6 * sizeof(row));
+            kfree(w->route6);
+            w->cap6 = cap;
+            w->route6 = more;
+        }
+        w->route6[w->nroute6++] = row;
+    }
+    return 1;
+}
+
 /** Take the state now into `w`. */
-static void watch_take(struct watch_state *w)
+static int watch_take(struct watch_state *w)
 {
     int i, j, n = netdev_listed();
 
@@ -1525,9 +1552,7 @@ static void watch_take(struct watch_state *w)
     }
     for (i = 0; w->nroute4 < WATCH_ROUTES && netdev_local_route_at(i, &w->route4[w->nroute4]); i++)
         w->nroute4++;
-    while (w->nroute6 < WATCH_ROUTES && route6_at(w->nroute6, &w->route6[w->nroute6])) {
-        w->nroute6++;
-    }
+    return watch_routes6(w);
 }
 
 static int same_link(const struct watch_link *a, const struct watch_link *b)
@@ -1643,8 +1668,7 @@ static void watch_compare(const struct watch_state *was, const struct watch_stat
 static void watch_start(void)
 {
     if (!watching && listening()) {
-        watch_take(&watch_buf[watch_cur]);
-        watching = 1;
+        watching = watch_take(&watch_buf[watch_cur]);
     }
 }
 
@@ -1653,6 +1677,12 @@ static void watch_start(void)
 static void watch_run(void)
 {
     if (!listening()) {
+        int i;
+        for (i = 0; i < 2; i++) {
+            kfree(watch_buf[i].route6);
+            watch_buf[i].route6 = 0;
+            watch_buf[i].cap6 = 0;
+        }
         watching = 0;
         return;
     }
@@ -1660,7 +1690,8 @@ static void watch_run(void)
         watch_start();
         return;
     }
-    watch_take(&watch_buf[!watch_cur]);
+    if (!watch_take(&watch_buf[!watch_cur]))
+        return;
     watch_compare(&watch_buf[watch_cur], &watch_buf[!watch_cur]);
     watch_cur = !watch_cur;
 }
