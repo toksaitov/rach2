@@ -52,11 +52,28 @@ names a directory: both calls follow a final symbolic link then, and
 anything but a directory returns
 .Er ENOTDIR ,
 as on Linux.
-The
+A node of
+.Pa /proc/sys
+refuses an owner with
+.Er EPERM ,
+root's too, as Linux's
+.Fn proc_sys_setattr
+does.
+A node of a process under
+.Pa /proc/ Ns Ar pid
+takes what the rules of chown allow and keeps nothing, as its next lookup
+gives it its process's owner again on Linux.
+Any other node of
 .Pa /proc
-links have fixed ownership, which
-.Fn lchown
-reaches; a
+or
+.Pa /sys ,
+the
+.Pa /proc/self
+link among them, and a directory of
+.Pa /dev ,
+keeps the owner and group it is given, as Linux's kernfs, proc_dir_entry
+and devtmpfs inodes keep them.
+A
 .Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
 link is owned by its process, and
 .Fn lchown
@@ -85,7 +102,7 @@ does.
 .Fn chown
 follows
 .Pa /proc/self
-to a process directory, whose ownership is fixed too, follows a
+to a process directory, whose owner its next lookup gives again, follows a
 .Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
 link to what the descriptor is open on, a descriptor opened with
 .Dv O_PATH
@@ -392,7 +409,9 @@ or
 reaches something else.
 .It Bq Er EPERM
 The caller lacks permission to make the ownership change, the object
-has fixed ownership, or the file is immutable or append-only.
+has fixed ownership or is a node of
+.Pa /proc/sys ,
+or the file is immutable or append-only.
 .It Bq Er EROFS
 The file's mount, or the mount a descriptor was opened through, is
 read-only, made so alone or over a read-only file system, the halted

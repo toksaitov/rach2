@@ -25,6 +25,7 @@
 #include "proc/tgroup.h"
 #include "proc/ns.h"
 #include "fs/permission.h"
+#include "fs/synth_attr.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/wait_queue.h"
@@ -10326,8 +10327,10 @@ static int32_t synth_stat_dev(const struct vpath *vp, struct kstat *kst)
 }
 
 /**
- * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
- * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
+ * Fill `kst` with the fixed attributes of the /dev, /proc or /sys node
+ * `vp`, those it has until a chmod, chown or utimensat changes them
+ * (`synth_stat_node`), a /proc link followed to what it names when
+ * `follow`. Returns 0, or
  * -ENOENT for a node that is not there, a process that has exited, a device
  * that is gone and a pty that is not allocated among them; -ENOTDIR for a
  * name under a node that is not a directory; or -EACCES for a descriptor's
@@ -10361,7 +10364,7 @@ static int32_t synth_stat_dev(const struct vpath *vp, struct kstat *kst)
  * group are kept on the pty, where the login server's chown and chmod put
  * them.
  */
-static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int follow, int use_real)
+static int32_t synth_stat_fixed(const struct vpath *vp, struct kstat *kst, int follow, int use_real)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
 
@@ -10604,6 +10607,63 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return procfs_ino_global(vp->kind) ? synth_proc_stat(kst, procfs_ino_global(vp->kind))
                                            : -ENOENT;
     }
+}
+
+/** The fields `kst` and a vfs_stat share: the mode, the owner, the group
+ * and the three times, from `kst` into `st`. */
+static void kst_to_vfs(const struct kstat *kst, struct vfs_stat *st)
+{
+    k_memset(st, 0, sizeof(*st));
+    st->mode = kst->st_mode;
+    st->uid = kst->st_uid;
+    st->gid = kst->st_gid;
+    st->atime_sec = kst->st_atime;
+    st->atime_nsec = kst->st_atime_nsec;
+    st->mtime_sec = kst->st_mtime;
+    st->mtime_nsec = kst->st_mtime_nsec;
+    st->ctime_sec = kst->st_ctime;
+    st->ctime_nsec = kst->st_ctime_nsec;
+}
+
+/** The same fields from `st` into `kst`. */
+static void vfs_to_kst(const struct vfs_stat *st, struct kstat *kst)
+{
+    kst->st_mode = st->mode;
+    kst->st_uid = st->uid;
+    kst->st_gid = st->gid;
+    kst->st_atime = st->atime_sec;
+    kst->st_atime_nsec = (uint32_t)st->atime_nsec;
+    kst->st_mtime = st->mtime_sec;
+    kst->st_mtime_nsec = (uint32_t)st->mtime_nsec;
+    kst->st_ctime = st->ctime_sec;
+    kst->st_ctime_nsec = (uint32_t)st->ctime_nsec;
+}
+
+/** Give `kst`, a synthetic node's, what a chmod, chown or utimensat of the
+ * node has kept for it (`synth_attr_apply`). */
+static void kst_kept(struct kstat *kst)
+{
+    struct vfs_stat st;
+
+    kst_to_vfs(kst, &st);
+    synth_attr_apply(kst->st_dev, kst->st_ino, &st);
+    vfs_to_kst(&st, kst);
+}
+
+/**
+ * `synth_stat_fixed`, with the mode, owner and times a chmod, chown or
+ * utimensat of the node has kept (`synth_attr_store`) in place of its
+ * fixed ones, as Linux's kernfs, proc_dir_entry and devtmpfs inodes keep
+ * them.
+ */
+static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int follow, int use_real)
+{
+    int32_t rc = synth_stat_fixed(vp, kst, follow, use_real);
+
+    if (rc == 0) {
+        kst_kept(kst);
+    }
+    return rc;
 }
 
 /**
@@ -12174,6 +12234,8 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
     }
 }
 
+static int fd_set_class(fd_entry_t *entry, int device);
+
 /**
  * The mode, owner and times of the anonymous pipe or the socket the
  * descriptor `entry` is open on (inode_attr.h), or NULL for any other kind,
@@ -12205,15 +12267,7 @@ static void kst_attr(struct kstat *kst, const struct inode_attr *a)
         return;
     }
     inode_attr_get(a, &vst);
-    kst->st_mode = vst.mode;
-    kst->st_uid = vst.uid;
-    kst->st_gid = vst.gid;
-    kst->st_atime = vst.atime_sec;
-    kst->st_atime_nsec = (uint32_t)vst.atime_nsec;
-    kst->st_mtime = vst.mtime_sec;
-    kst->st_mtime_nsec = (uint32_t)vst.mtime_nsec;
-    kst->st_ctime = vst.ctime_sec;
-    kst->st_ctime_nsec = (uint32_t)vst.ctime_nsec;
+    vfs_to_kst(&vst, kst);
 }
 
 /**
@@ -12268,7 +12322,7 @@ static void kst_attr(struct kstat *kst, const struct inode_attr *a)
  * device of mode 0620 once its pty is gone. Anything else, a pty master, the
  * framebuffer or the mouse, is a character device of mode 0666 and size 0.
  */
-static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
+static int32_t fstat_fill_fixed(fd_entry_t *entry, struct kstat *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
     stat64_boot_times(kst);
@@ -12368,8 +12422,26 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
     }
-    kst_attr(kst, fd_inode_attr(entry)); /* a pipe's or a socket's own */
     return 0;
+}
+
+/**
+ * `fstat_fill_fixed`, with an anonymous pipe's or a socket's own mode,
+ * owner and times (`fd_inode_attr`), and those a chmod, chown or utimensat
+ * has kept for a file or directory of /proc or /sys or a device of /dev
+ * (`kst_kept`). 0 or a negative errno.
+ */
+static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
+{
+    int32_t rc = fstat_fill_fixed(entry, kst);
+
+    if (rc == 0) {
+        kst_attr(kst, fd_inode_attr(entry));
+    }
+    if (rc == 0 && fd_set_class(entry, 1) == PROCFS_SET_KEPT) {
+        kst_kept(kst);
+    }
+    return rc;
 }
 
 /**
@@ -14062,6 +14134,109 @@ static int32_t chown_fixed(uint32_t ouid, uint32_t ogid, uint32_t uid, uint32_t 
     return rc;
 }
 
+/**
+ * The PROCFS_SET_* class of the /dev, /proc or /sys node `vp`: a node of
+ * /proc/sys is PROCFS_SET_SYSCTL; /proc/PID, its files, links and
+ * directories PROCFS_SET_TASK; and every other node PROCFS_SET_KEPT, the
+ * /proc/self link among them, whose Linux inode has no setattr of its own
+ * and keeps what it is given.
+ */
+static int synth_set_class(const struct vpath *vp)
+{
+    if (vp->kind == VNODE_PROC_PID && synth_is_link(vp)) {
+        return PROCFS_SET_KEPT;
+    }
+    switch (vp->kind) {
+    case VNODE_PROC_SYS_DIR:
+    case VNODE_PROC_SYS_FILE:
+        return PROCFS_SET_SYSCTL;
+    case VNODE_PROC_PID:
+    case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_FILE:
+    case VNODE_PROC_FD_LINK:
+    case VNODE_PROC_EXE:
+    case VNODE_PROC_TASK_DIR:
+    case VNODE_PROC_CWD:
+    case VNODE_PROC_ROOT:
+    case VNODE_PROC_NS_DIR:
+    case VNODE_PROC_NS_LINK:
+    case VNODE_PROC_FDINFO_DIR:
+    case VNODE_PROC_FDINFO:
+        return PROCFS_SET_TASK;
+    default:
+        return PROCFS_SET_KEPT;
+    }
+}
+
+/**
+ * The PROCFS_SET_* class of what the descriptor `entry` is open on when it
+ * is a file or directory of /proc or /sys, or, with `device`, a device of
+ * /dev, which keeps its times; -1 for any other kind.
+ */
+static int fd_set_class(fd_entry_t *entry, int device)
+{
+    if (entry->type == FD_TYPE_PROC) {
+        return procfs_fd_set_class(entry);
+    }
+    if (entry->type == FD_TYPE_SYNTH_DIR && entry->priv) {
+        const struct synth_dir *sd = (const struct synth_dir *)entry->priv;
+        struct vpath vp;
+
+        k_memset(&vp, 0, sizeof(vp));
+        vp.kind = sd->kind;
+        vp.pid = sd->pid;
+        return synth_set_class(&vp);
+    }
+    return device && entry->type == FD_TYPE_DEVICE ? PROCFS_SET_KEPT : -1;
+}
+
+/**
+ * chmod of a node of /dev, /proc or /sys of the PROCFS_SET_* `class`,
+ * whose stat is `ks`, as Linux 6.12 takes it: a process's node
+ * (`proc_setattr`) and one of /proc/sys (`proc_sys_setattr`) refuse a mode
+ * with -EPERM, root's too; any other keeps it (`synth_attr_store`) for its
+ * owner or a privileged caller, -EPERM for another, with the setgid bit
+ * dropped as `chmod_vfs` drops it. 0 or a negative errno.
+ */
+static int32_t chmod_synth_kept(int class, const struct kstat *ks, uint32_t mode)
+{
+    struct vfs_stat st;
+
+    if (class != PROCFS_SET_KEPT || !inode_owner_or_capable(ks->st_uid)) {
+        return -EPERM;
+    }
+    if (!inode_capable(ks->st_uid, ks->st_gid, CAP_FSETID) && !cred_in_group(ks->st_gid)) {
+        mode &= ~02000u;
+    }
+    kst_to_vfs(ks, &st);
+    st.mode = mode;
+    return synth_attr_store(ks->st_dev, ks->st_ino, VFS_SET_MODE, &st);
+}
+
+/**
+ * chown of a node of /dev, /proc or /sys of the PROCFS_SET_* `class`, whose
+ * stat is `ks`, to the kernel's `uid` and `gid`, as Linux 6.12 takes it: a
+ * node of /proc/sys refuses an owner with -EPERM; a process's takes what
+ * `vfs_chown_plan` allows and keeps nothing, as its next lookup gives it
+ * its process's owner again (`pid_revalidate`); any other keeps the plan
+ * (`synth_attr_store`). 0 or a negative errno.
+ */
+static int32_t chown_synth_kept(int class, const struct kstat *ks, uint32_t uid, uint32_t gid)
+{
+    struct vfs_stat st;
+    int what;
+
+    if (class == PROCFS_SET_SYSCTL) {
+        return -EPERM;
+    }
+    kst_to_vfs(ks, &st);
+    what = vfs_chown_plan(&st, uid, gid);
+    if (what < 0 || class != PROCFS_SET_KEPT) {
+        return what < 0 ? what : 0;
+    }
+    return synth_attr_store(ks->st_dev, ks->st_ino, what, &st);
+}
+
 static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode);
 
 /**
@@ -14070,11 +14245,13 @@ static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode);
  * entry root made under /dev by `chmod_made`; a device by `chmod_dev`; and a
  * /proc/PID/fd/N link, as any symbolic link, -EOPNOTSUPP, as Linux 6.12's
  * `notify_change` answers. A followed link is the caller's
- * (`chmod_proc_link`). Every other node has fixed metadata, which root's
- * request leaves as it is.
+ * (`chmod_proc_link`). Every other node is `chmod_synth_kept`'s.
  */
 static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
 {
+    struct kstat ks;
+    int32_t rc;
+
     if (vp->kind == VNODE_DEV && vp->pts_index == SYNTH_PTS_PTMX) {
         struct vfs_ptmx_node *ptmx;
 
@@ -14107,7 +14284,8 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
     if (synth_is_link(vp)) {
         return -EOPNOTSUPP; /* a link's mode does not change, as on Linux */
     }
-    return proc_fsuid(current_proc) == 0 ? 0 : -EPERM; /* fixed metadata root owns */
+    rc = synth_stat_node(vp, &ks, 0, 0);
+    return rc != 0 ? rc : chmod_synth_kept(synth_set_class(vp), &ks, mode);
 }
 
 /**
@@ -14280,9 +14458,8 @@ static int32_t chown_proc_link(const struct vpath *vp, const struct synth_owner 
  * A pty slave keeps its owner and group on the pty (`chown_pty`), an entry
  * root made under /dev its own (`chown_made`), and a device its own
  * (`chown_dev`); a /proc/PID/fd/N link, followed or not, is `do_chown`'s.
- * Every other node has a fixed owner, the one its stat gives
- * (`chown_fixed`). 0 or a negative errno, -ENOENT for a pty or a node that
- * is gone among them.
+ * Every other node is `chown_synth_kept`'s. 0 or a negative errno, -ENOENT
+ * for a pty or a node that is gone among them.
  */
 static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
@@ -14314,7 +14491,7 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
         return pt ? chown_pty(pt, uid, gid) : -ENOENT;
     }
     rc = synth_stat(vp, &ks, 0);
-    return rc != 0 ? rc : chown_fixed((uint32_t)ks.st_uid, (uint32_t)ks.st_gid, uid, gid);
+    return rc != 0 ? rc : chown_synth_kept(synth_set_class(vp), &ks, uid, gid);
 }
 
 /**
@@ -14614,12 +14791,15 @@ static int32_t chmod_attr(struct inode_attr *a, uint32_t mode)
  * fchmod of the descriptor `entry` when it is on no file of a file system:
  * an anonymous pipe or a socket by `chmod_attr`, a pty slave stores the
  * bits on the pty under the owner-or-root rule (-EBADF when the pty is
- * gone), a directory made under /dev on the entry (`chmod_made`), and any
- * other has fixed metadata, which root's request leaves as it is and
- * anyone else's is -EPERM.
+ * gone), a directory made under /dev on the entry (`chmod_made`), a file
+ * or directory of /proc or /sys by `chmod_synth_kept`, and any other has
+ * fixed metadata, which root's request leaves as it is and anyone else's
+ * is -EPERM.
  */
 static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
 {
+    struct kstat ks;
+
     if (fd_inode_attr(entry)) {
         return chmod_attr(fd_inode_attr(entry), mode);
     }
@@ -14642,6 +14822,9 @@ static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
         }
         pt->mode = (uint16_t)(mode & 0777u);
         return 0;
+    }
+    if (fd_set_class(entry, 0) >= 0 && fstat_fill_attrs(entry, &ks) == 0) {
+        return chmod_synth_kept(fd_set_class(entry, 0), &ks, mode);
     }
     return proc_fsuid(current_proc) == 0 ? 0 : -EPERM;
 }
@@ -14908,8 +15091,9 @@ static int32_t chown_attr(fd_entry_t *entry, uint32_t uid, uint32_t gid)
  * node opened with O_PATH by `chown_synth`, a /proc/PID/fd/N link so opened
  * by `chown_proc_link`, a directory made under /dev by `chown_made`, a pty
  * slave on the pty (`chown_pty`), -EBADF when the pty is gone, an anonymous
- * pipe or a socket by `chown_attr`, and every other kind with the fixed
- * owner its fstat gives (`chown_fixed`).
+ * pipe or a socket by `chown_attr`, a file or directory of /proc or /sys by
+ * `chown_synth_kept`, and every other kind with the fixed owner its fstat
+ * gives (`chown_fixed`).
  */
 static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
@@ -14943,6 +15127,9 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         return pt ? chown_pty(pt, uid, gid) : -EBADF;
     }
     rc = fstat_fill_attrs(entry, &ks);
+    if (rc == 0 && fd_set_class(entry, 0) >= 0) {
+        return chown_synth_kept(fd_set_class(entry, 0), &ks, uid, gid);
+    }
     return rc != 0 ? rc : chown_fixed((uint32_t)ks.st_uid, (uint32_t)ks.st_gid, uid, gid);
 }
 
@@ -20165,14 +20352,28 @@ static int utime_nsec_valid(long nsec)
     return nsec == UTIME_NOW || nsec == UTIME_OMIT || (nsec >= 0 && nsec <= 999999999);
 }
 
-/** Whether utimensat on (`mnt`, `node`) is -EROFS whoever asks: a
- * synthetic file, which has no stored times, or a file reached through a
- * read-only mount or file system, the halted KRFFS root among them, as
- * Linux's `vfs_utimes` takes `mnt_want_write` before any permission check
- * (`attr_read_only`). */
+/** Whether utimensat on (`mnt`, `node`) is -EROFS whoever asks: a file
+ * reached through a read-only mount or file system, the halted KRFFS root
+ * among them, as Linux's `vfs_utimes` takes `mnt_want_write` before any
+ * permission check (`attr_read_only`), and a terminal of /dev, which keeps
+ * no times. */
 static int utimes_read_only(struct vfs_mount *mnt, void *node)
 {
-    return vfs_synth_vpath(mnt, node) || attr_read_only(mnt);
+    const struct vpath *vp = vfs_synth_vpath(mnt, node);
+
+    return (vp && vp->kind == VNODE_PTS) || attr_read_only(mnt);
+}
+
+static int32_t utimes_synth(int class, const struct kstat *ks, const struct utime_spec *times);
+
+/** utimensat of the /dev, /proc or /sys node `vp` itself, by
+ * `utimes_synth`. 0 or a negative errno, the stat's among them. */
+static int32_t utimes_synth_node(const struct vpath *vp, const struct utime_spec *times)
+{
+    struct kstat ks;
+    int32_t rc = synth_stat_node(vp, &ks, 0, 0);
+
+    return rc != 0 ? rc : utimes_synth(synth_set_class(vp), &ks, times);
 }
 
 /** Whether a caller who is not the owner of the file of `st` on `mnt` may
@@ -20263,6 +20464,9 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
     if (utimes_read_only(mnt, node)) {
         return -EROFS;
     }
+    if (vfs_synth_vpath(mnt, node)) {
+        return utimes_synth_node(vfs_synth_vpath(mnt, node), times);
+    }
     get_current_time(&now_sec, &now_nsec);
     if (!mnt_is_root(vfs_mount_base(mnt))) {
         struct vfs_ref ref;
@@ -20320,26 +20524,25 @@ static uint32_t utimes_events(const struct utime_spec *times)
 }
 
 /**
- * Set the times of an anonymous pipe or a socket, whose attributes are `a`
- * (`fd_inode_attr`), to `times` by the rules of `utimes_node`: both to now
- * for the owner, a privileged caller or one with write permission, -EACCES
- * for another, and given times for the owner or a privileged caller alone,
- * -EPERM for another.
+ * Plan a utimensat of `times` on the file whose mode, owner and times are
+ * `st`, by the rules of `utimes_node`: both to now for the owner, a
+ * privileged caller or one with write permission, -EACCES for another,
+ * and given times for the owner or a privileged caller alone, -EPERM for
+ * another. The times go into `st`; returns the VFS_SET_* fields to store,
+ * or the negative errno.
  */
-static int32_t utimes_attr(struct inode_attr *a, const struct utime_spec *times)
+static int utimes_plan(struct vfs_stat *st, const struct utime_spec *times)
 {
     int now_both =
         times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
     int64_t now_sec, now_nsec;
-    struct vfs_stat vst;
     int what = 0, i;
 
-    inode_attr_get(a, &vst);
-    if (!inode_owner_or_capable(vst.uid)) {
+    if (!inode_owner_or_capable(st->uid)) {
         if (!now_both) {
             return -EPERM;
         }
-        if (cred_access_bits(vst.uid, vst.gid, vst.mode, CRED_W, 0) != 0) {
+        if (cred_access_bits(st->uid, st->gid, st->mode, CRED_W, 0) != 0) {
             return -EACCES;
         }
     }
@@ -20353,17 +20556,74 @@ static int32_t utimes_attr(struct inode_attr *a, const struct utime_spec *times)
             continue;
         }
         if (i == 0) {
-            vst.atime_sec = sec;
-            vst.atime_nsec = nsec;
+            st->atime_sec = sec;
+            st->atime_nsec = nsec;
             what |= VFS_SET_ATIME;
         } else {
-            vst.mtime_sec = sec;
-            vst.mtime_nsec = nsec;
+            st->mtime_sec = sec;
+            st->mtime_nsec = nsec;
             what |= VFS_SET_MTIME;
         }
     }
-    inode_attr_set(a, what, &vst);
+    return what;
+}
+
+/** Set the times of an anonymous pipe or a socket, whose attributes are
+ * `a` (`fd_inode_attr`), to `times` (`utimes_plan`). 0 or a negative
+ * errno. */
+static int32_t utimes_attr(struct inode_attr *a, const struct utime_spec *times)
+{
+    struct vfs_stat st;
+    int what;
+
+    inode_attr_get(a, &st);
+    what = utimes_plan(&st, times);
+    if (what < 0) {
+        return what;
+    }
+    inode_attr_set(a, what, &st);
     return 0;
+}
+
+/**
+ * Set the times of a node of /dev, /proc or /sys of the PROCFS_SET_*
+ * `class`, whose stat is `ks`, to `times` (`utimes_plan`), as Linux 6.12
+ * sets those of its inode: a node of a process or of /proc/sys takes them
+ * and keeps nothing past its inode's life in the cache, and any other
+ * keeps them (`synth_attr_store`). 0 or a negative errno.
+ */
+static int32_t utimes_synth(int class, const struct kstat *ks, const struct utime_spec *times)
+{
+    struct vfs_stat st;
+    int what;
+
+    kst_to_vfs(ks, &st);
+    what = utimes_plan(&st, times);
+    if (what < 0 || class != PROCFS_SET_KEPT) {
+        return what < 0 ? what : 0;
+    }
+    return synth_attr_store(ks->st_dev, ks->st_ino, what, &st);
+}
+
+/**
+ * utimensat of the descriptor `entry` when it is on no file of a file
+ * system: an anonymous pipe or a socket by `utimes_attr`, a file or
+ * directory of /proc or /sys, or a device of /dev, by `utimes_synth`, and
+ * -EROFS for any other, a terminal among them, which keeps no times.
+ */
+static int32_t utimes_fd_synth(fd_entry_t *entry, const struct utime_spec *times)
+{
+    struct kstat ks;
+    int32_t rc;
+
+    if (fd_inode_attr(entry)) {
+        return utimes_attr(fd_inode_attr(entry), times);
+    }
+    if (fd_set_class(entry, 1) < 0) {
+        return -EROFS;
+    }
+    rc = fstat_fill_attrs(entry, &ks);
+    return rc != 0 ? rc : utimes_synth(fd_set_class(entry, 1), &ks, times);
 }
 
 /**
@@ -20409,7 +20669,7 @@ static int32_t utimes_fd(fd_entry_t *entry, const struct utime_spec *times, int 
     }
     if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
         if (!fd_node_file(entry, &file)) {
-            return fd_inode_attr(entry) ? utimes_attr(fd_inode_attr(entry), times) : -EROFS;
+            return utimes_fd_synth(entry, times);
         }
         vfs_node_lock(&file);
         rc = utimes_node(file.mnt, file.node, times);

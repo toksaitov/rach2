@@ -1121,6 +1121,13 @@ const char *synth_net_name(int origin)
     return NULL;
 }
 
+/** No file of /proc/sysvipc is opened here. */
+const char *synth_sysvipc_name(int origin)
+{
+    (void)origin;
+    return NULL;
+}
+
 /** No file of /proc/net is opened here, so none has a place: -1. */
 int synth_net_slot(int origin)
 {

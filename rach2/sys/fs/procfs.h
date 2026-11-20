@@ -342,6 +342,19 @@ uint32_t procfs_ino_busdir(void);
  * /sys, which fstat and fstatfs report as sysfs's. */
 int procfs_fd_is_sys(struct fd_entry *e);
 
+/* How Linux 6.12 takes a chmod, chown or utimensat of a node of /proc, /sys
+ * or /dev: a node that keeps what it is given, as kernfs, a proc_dir_entry
+ * and devtmpfs do; a node of a process (`proc_setattr`), which refuses a
+ * mode and keeps nothing past its next lookup; and a node of /proc/sys
+ * (`proc_sys_setattr`), which refuses a mode and an owner. */
+#define PROCFS_SET_KEPT   0
+#define PROCFS_SET_TASK   1
+#define PROCFS_SET_SYSCTL 2
+
+/** The PROCFS_SET_* class of the file `e`, a descriptor of type
+ * FD_TYPE_PROC, is open on. */
+int procfs_fd_set_class(struct fd_entry *e);
+
 /** The inode of the /sys directory `node`, with its device `key`, when
  * `file` is 0, and of its attribute `file` - 1 when `file` is positive; a
  * PCI function or a USB device has its uevent as `file` 1 and its link as

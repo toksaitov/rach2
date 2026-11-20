@@ -4,6 +4,7 @@
  * write lock, and the SIGPIPE of a writev to a TCP stream.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
+ * host-deps: tests/host/compat/synth_attr_none.c
  * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -1126,6 +1127,41 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
 {
     (void)e;
     return 0;
+}
+
+/** The device numbers of a device descriptor, which no row has: 0. */
+uint32_t devfs_rdev(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** The inode of a device descriptor, which no row has: 0. */
+uint32_t devfs_fd_ino(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** The owner of a device descriptor, which no row has: root. */
+void devfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+{
+    (void)e;
+    *uid = *gid = 0;
+}
+
+/** No row's descriptor is a namespace file: NULL. */
+struct ns_common *nsfs_ns(const struct fd_entry *e)
+{
+    (void)e;
+    return NULL;
+}
+
+/** No row's descriptor is a /proc file: a process's. */
+int procfs_fd_set_class(struct fd_entry *e)
+{
+    (void)e;
+    return PROCFS_SET_TASK;
 }
 
 /** No row's descriptor is a raw device: 0. */

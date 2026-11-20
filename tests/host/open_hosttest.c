@@ -5,6 +5,7 @@
  * rach2/sys/mm/filemap.c, on a model mounted type and a model KRFFS root.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
+ * host-deps: tests/host/compat/synth_attr_none.c
  * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
@@ -2844,6 +2845,13 @@ uint32_t unix_inode(const fd_entry_t *e)
 {
     (void)e;
     return 0;
+}
+
+/** No row's descriptor is a /proc file: a process's. */
+int procfs_fd_set_class(struct fd_entry *e)
+{
+    (void)e;
+    return PROCFS_SET_TASK;
 }
 
 /* The attributes `unix_attr` gives every row's Unix socket. */

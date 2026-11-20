@@ -7103,6 +7103,19 @@ int procfs_fd_is_sys(struct fd_entry *e)
     return pf && pf->origin_file == SYNTH_SYS_UEVENT;
 }
 
+int procfs_fd_set_class(struct fd_entry *e)
+{
+    const struct procfs_file *pf = e ? (const struct procfs_file *)e->priv : 0;
+
+    if (!pf) {
+        return PROCFS_SET_TASK;
+    }
+    if (pf->origin_file == SYNTH_PROC_SYSCTL) {
+        return PROCFS_SET_SYSCTL;
+    }
+    return procfs_fd_ino(e) == procfs_ino_pid(pf->origin_pid) ? PROCFS_SET_TASK : PROCFS_SET_KEPT;
+}
+
 uint32_t sysfs_ino(int node, int key, int file)
 {
     if (node == SYSFS_REG) {

@@ -79,6 +79,7 @@ enum {
     EMPTY_PATH_EBADF,
     PROC_SELF,
     DEV_NULL,
+    SYNTHETIC,
     LINK_OWNER,
     CHOWN_FOLLOWS,
     NOFOLLOW_LINK,
@@ -109,6 +110,7 @@ static const struct {
     {"empty-path-ebadf", "AT_EMPTY_PATH on a descriptor that is not open"},
     {"proc-self", "the /proc/self link"},
     {"dev-null", "an O_PATH descriptor on /dev/null changes the device's owner"},
+    {"synthetic", "chmod, chown and utimensat of /proc, /sys and /dev nodes"},
     {"link-owner", "lchown changes the link and not its target"},
     {"chown-follows", "chown follows the link"},
     {"nofollow-link", "AT_SYMLINK_NOFOLLOW changes the link"},
@@ -265,10 +267,45 @@ static int file_rows(const char *dir)
     return 0;
 }
 
+/* A file of /sys the rows give an owner and set back. */
+#define LOCKDOWN "/sys/kernel/security/lockdown"
+
 /**
- * Check the errors of the flags, /proc/self, whose owner is fixed at root,
- * and /dev/null, whose owner root changes as udev does on Linux and sets
- * back. Returns 0, or 1 once the failure is reported.
+ * Check chmod, chown and utimensat of /proc, /sys and /dev nodes as Linux
+ * 6.12 takes them: a process's file refuses a mode with EPERM, root's too,
+ * as proc_setattr does, and a file of /proc/sys a mode and an owner, as
+ * proc_sys_setattr does; /proc/version keeps a mode and times, the
+ * lockdown file of /sys an owner, and /dev/null times, as their inodes
+ * keep them; the mode and the owner are set back. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int synthetic_rows(void)
+{
+    struct timespec times[2] = {{7, 0}, {8, 0}};
+    struct stat st;
+    int ok;
+
+    if (!refused(chmod("/proc/self/status", 0600), EPERM) ||
+        !refused(chmod("/proc/sys/kernel/hostname", 0600), EPERM) ||
+        !refused(chown("/proc/sys/kernel/hostname", 0, 0), EPERM)) {
+        return fail(SYNTHETIC);
+    }
+    ok = chmod("/proc/version", 0400) == 0 && stat("/proc/version", &st) == 0 &&
+         (st.st_mode & 07777) == 0400;
+    ok = chmod("/proc/version", 0444) == 0 && ok;
+    ok = ok && utimensat(AT_FDCWD, "/proc/version", times, 0) == 0 &&
+         stat("/proc/version", &st) == 0 && st.st_atime == 7 && st.st_mtime == 8;
+    ok = ok && chown(LOCKDOWN, 1000, 1001) == 0 && owner_is(LOCKDOWN, 1, 1000) &&
+         group_is(LOCKDOWN, 1001);
+    ok = chown(LOCKDOWN, 0, 0) == 0 && ok;
+    ok = ok && utimensat(AT_FDCWD, "/dev/null", NULL, 0) == 0;
+    return ok ? 0 : fail(SYNTHETIC);
+}
+
+/**
+ * Check the errors of the flags, and /proc/self and /dev/null, whose owner
+ * root changes, as Linux keeps it on their inodes, and sets back; then
+ * `synthetic_rows`. Returns 0, or 1 once the failure is reported.
  */
 static int refusal_rows(void)
 {
@@ -284,7 +321,8 @@ static int refusal_rows(void)
     if (!refused(fchownat(999, "", 0, 0, AT_EMPTY_PATH), EBADF)) {
         return fail(EMPTY_PATH_EBADF);
     }
-    if (lchown("/proc/self", 0, 0) != 0 || !refused(lchown("/proc/self", 1000, -1), EPERM)) {
+    ok = lchown("/proc/self", 1000, -1) == 0 && owner_is("/proc/self", 0, 1000);
+    if (lchown("/proc/self", 0, 0) != 0 || !ok) {
         return fail(PROC_SELF);
     }
     fd = open("/dev/null", O_PATH);
@@ -295,7 +333,7 @@ static int refusal_rows(void)
     if (!ok) {
         return fail(DEV_NULL);
     }
-    return 0;
+    return synthetic_rows();
 }
 
 /**

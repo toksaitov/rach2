@@ -178,7 +178,27 @@ ext2, changes that node.
 of an anonymous pipe or a socket changes the mode the object keeps, which
 both ends of a pipe share, by the owner's or a privileged caller's
 request, as Linux changes its pipefs or sockfs inode.
-Other synthetic objects and descriptors have fixed metadata.
+A node of a process under
+.Pa /proc/ Ns Ar pid ,
+and one of
+.Pa /proc/sys ,
+refuse a mode with
+.Er EPERM ,
+root's too, as Linux's
+.Fn proc_setattr
+and
+.Fn proc_sys_setattr
+do.
+Any other node of
+.Pa /proc
+or
+.Pa /sys ,
+and a directory of
+.Pa /dev ,
+keeps the mode its owner or a privileged caller gives it, which its stat
+and the permission checks then use, as Linux's kernfs, proc_dir_entry and
+devtmpfs inodes keep it.
+Other descriptors, a terminal or the console, have fixed metadata.
 For these, filesystem user ID 0 receives success without a change;
 other callers receive
 .Er EPERM ,
@@ -285,8 +305,12 @@ handling, or
 with that flag, met a symbolic link.
 .It Er EPERM
 The caller is neither owner nor root, an unprivileged caller addresses
-fixed metadata, FAT32 or exFAT cannot represent the requested mode, or
-the file is immutable or append-only.
+fixed metadata, the node is a process's under
+.Pa /proc
+or one of
+.Pa /proc/sys ,
+FAT32 or exFAT cannot represent the requested mode, or the file is
+immutable or append-only.
 .It Er EROFS
 The mount or its file system is read-only, or the file system has no
 attribute-setting operation.
