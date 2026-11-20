@@ -6100,7 +6100,7 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     struct vfs_mount *m = mount_base(named);
     uint32_t changed = (flags ^ m->flags) & VFS_MS_SUPER;
     int rc, closing = (changed & flags & VFS_MS_RDONLY) != 0;
-    struct vfs_pts_options popts;
+    struct vfs_pts_options popts = {0};
 
     if ((flags & ~VFS_MS_KNOWN) || (m->pts && pty_parse_options(options, &popts) != 0)) {
         return -EINVAL;
@@ -6391,7 +6391,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
                  const char *options)
 {
     int pts = streq(type, "devpts");
-    struct vfs_pts_options popts;
+    struct vfs_pts_options popts = {0};
     const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type
                                : pts               ? &vfs_devfs_type
                                                    : type_named(type);

@@ -22,6 +22,13 @@
 #include "../../rach2/sys/fs/ext2xattr.h"
 #include "fuzz.h"
 
+/** CAP_SYS_RESOURCE for the reserved blocks: the fuzzing process is root. */
+int cap_holds(const process_t *p, uint32_t cap)
+{
+    (void)cap;
+    return p->euid == 0;
+}
+
 /** 0: no input closes the mount, whose wait for its writers alone reads the
  * clock. */
 uint64_t tick_count(void)

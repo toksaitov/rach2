@@ -6,6 +6,7 @@
  *
  * fuzz-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * fuzz-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
+ * fuzz-deps: rach2/sys/fs/fatopts.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * fuzz-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * fuzz-deps: tests/host/compat/pressure_host.c tests/host/mkfatfixture.c

@@ -12,6 +12,7 @@
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/block/block.h"
 #include "../../rach2/sys/lib/kerrno.h"
+#include "../host/ids_first.h"
 #include "../../rach2/sys/proc/process.h"
 
 /* The one process, current on the one processor. */
@@ -118,6 +119,12 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     if (mnt->ns.depth == 0) {
         mnt->ns.holder = -1;
     }
+}
+
+/** settimeofday's zone, which no fuzzed call sets. */
+int32_t rtc_minuteswest(void)
+{
+    return 0;
 }
 
 /** A fixed time of day, 1000000000 seconds after the epoch. */
