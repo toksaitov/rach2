@@ -10,6 +10,8 @@
 
 #include "pty.h"
 #include "../fs/fd.h"
+#include "../fs/vfs.h"
+#include "../klog.h"
 #include "../fs/file.h"
 #include "../fs/krffs.h"
 #include "../proc/process.h"
@@ -55,6 +57,130 @@ static struct pty *ptys;
 void pty_init_pool(void)
 {
     ptys = NULL;
+}
+
+/**
+ * Read the number from `v` to `end` as Linux's match_token and match_int
+ * read a devpts option's: in `base`, or with `base` 0 in the base a leading
+ * `0x` or `0` names, a minus only when `sign` is set, and nothing after
+ * the digits; the value must fit an int. 0 with `*out` set, or -EINVAL.
+ */
+static int pts_number(const char *v, const char *end, int base, int sign, int32_t *out)
+{
+    uint32_t value = 0;
+    int neg = sign && v < end && *v == '-';
+
+    v += neg;
+    if (base == 0) {
+        base = 10;
+        if (end - v > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
+            base = 16;
+            v += 2;
+        } else if (v < end && v[0] == '0') {
+            base = 8;
+        }
+    }
+    if (v == end) {
+        return -EINVAL;
+    }
+    for (; v < end; v++) {
+        uint32_t d = *v >= 'a'   ? (uint32_t)(*v - 'a' + 10)
+                     : *v >= 'A' ? (uint32_t)(*v - 'A' + 10)
+                                 : (uint32_t)(*v - '0');
+
+        if (d >= (uint32_t)base || value > (0x80000000u - d) / (uint32_t)base) {
+            return -EINVAL;
+        }
+        value = value * (uint32_t)base + d;
+    }
+    if (value == 0x80000000u && !neg) {
+        return -EINVAL;
+    }
+    *out = neg ? (int32_t)(0u - value) : (int32_t)value;
+    return 0;
+}
+
+/** Whether the text from `key` to `end` is exactly `word`. */
+static int pts_key_is(const char *key, const char *end, const char *word)
+{
+    while (key < end && *word && *key == *word) {
+        key++;
+        word++;
+    }
+    return key == end && *word == '\0';
+}
+
+/** Apply the devpts option named from `key` to `keyend`, whose value runs
+ * from `v` to `end`, NULL when it has none, to `*o`. 0, or -EINVAL. */
+static int pts_option(const char *key, const char *keyend, const char *v, const char *end,
+                      struct vfs_pts_options *o)
+{
+    int is_uid = pts_key_is(key, keyend, "uid"), is_gid = pts_key_is(key, keyend, "gid");
+    int octal = pts_key_is(key, keyend, "mode") || pts_key_is(key, keyend, "ptmxmode");
+    int32_t n;
+    int64_t k;
+
+    if (!v) {
+        return pts_key_is(key, keyend, "newinstance") ? 0 : -EINVAL;
+    }
+    if (!is_uid && !is_gid && !octal && !pts_key_is(key, keyend, "max")) {
+        return -EINVAL;
+    }
+    if (pts_number(v, end, octal ? 8 : 0, pts_key_is(key, keyend, "max"), &n) != 0) {
+        return -EINVAL;
+    }
+    if (is_uid || is_gid) {
+        k = is_uid ? ns_uid_to_kernel(proc_userns(current_proc), (uint32_t)n)
+                   : ns_gid_to_kernel(proc_userns(current_proc), (uint32_t)n);
+        if (k < 0) {
+            return -EINVAL;
+        }
+        *(is_uid ? &o->uid : &o->gid) = (uint32_t)k;
+        *(is_uid ? &o->setuid : &o->setgid) = 1;
+    } else if (octal) {
+        *(key[0] == 'm' ? &o->mode : &o->ptmxmode) = (uint32_t)n & 07777u;
+    } else if (n < 0 || (uint32_t)n > PTY_MAX_PAIRS) {
+        return -EINVAL;
+    } else {
+        o->max = (uint32_t)n;
+    }
+    return 0;
+}
+
+int pty_parse_options(const char *options, struct vfs_pts_options *o)
+{
+    const char *p = options ? options : "";
+
+    k_memset(o, 0, sizeof(*o));
+    o->mode = 0600;     /* DEVPTS_DEFAULT_MODE */
+    o->ptmxmode = 0000; /* DEVPTS_DEFAULT_PTMX_MODE */
+    o->max = PTY_MAX_PAIRS;
+    while (*p) {
+        const char *key = p, *keyend, *v = NULL, *end;
+
+        while (*p && *p != ',' && *p != '=') {
+            p++;
+        }
+        keyend = p;
+        if (*p == '=') {
+            v = ++p;
+            while (*p && *p != ',') {
+                p++;
+            }
+        }
+        end = p;
+        if (*p == ',') {
+            p++;
+        }
+        if (key == keyend && !v) {
+            continue; /* strsep's empty item */
+        }
+        if (pts_option(key, keyend, v, end, o) != 0) {
+            klog(KLOG_WARN, "devpts", "called with bogus options");
+            return -EINVAL;
+        }
+    }
+    return 0;
 }
 
 /** The live pty with index `index`, or NULL. */
@@ -224,15 +350,16 @@ static void pty_flow(struct tty *t, int what)
 }
 
 /**
- * Allocate a pair at the lowest free index from `first` on, 0 for a pair of
- * /dev/ptmx, or return NULL when the heap has no room or a pair of
- * /dev/ptmx would reach PTY_KERNEL_INDEX, past which its slave's inode
- * would be another node's of /dev. One queue serves the
+ * Allocate a pair at the lowest free index from `first` on, 0 for a pair
+ * of /dev/ptmx, its slave owned and moded by the devpts options `o`, or
+ * NULL for the kernel's defaults, or return NULL when the heap has no room
+ * or a pair of /dev/ptmx would reach PTY_KERNEL_INDEX, past which its
+ * slave's inode would be another node's of /dev. One queue serves the
  * master's readers, writers and pollers; the slave's `space_wq` points at
  * it, so a flush, a termios change, or a signal char or an erase the master
  * wrote wakes a master writer waiting for room.
  */
-static struct pty *pty_alloc(int first)
+static struct pty *pty_alloc(int first, const struct vfs_pts_options *o)
 {
     struct pty *p = kzalloc(sizeof(*p));
     int i;
@@ -252,6 +379,11 @@ static struct pty *pty_alloc(int first)
     p->gid = PTY_GID;
     p->atime = p->mtime = pty_now();
     p->mode = 0620; /* crw--w----, the Unix98 slave default */
+    if (o) {
+        p->uid = o->setuid ? o->uid : p->uid; /* Linux's devpts_pty_new */
+        p->gid = o->setgid ? o->gid : current_proc ? proc_fsgid(current_proc) : 0;
+        p->mode = (uint16_t)(o->mode & 07777u);
+    }
     tty_init(&p->slave, pty_slave_sink, p);
     p->slave.room = pty_room;
     p->slave.flush = pty_flush;
@@ -1155,6 +1287,8 @@ static const struct file_ops pts_ops = {pts_read,  pts_write, pts_poll, NULL,
 
 int pty_open_master(int flags)
 {
+    struct vfs_pts_options o;
+    int mounted, i;
     struct pty *p;
     int fd;
     fd_entry_t *e;
@@ -1162,7 +1296,13 @@ int pty_open_master(int flags)
     if (!current_proc) {
         return -ESRCH;
     }
-    p = pty_alloc(0);
+    mounted = vfs_devpts_options(&o);
+    for (i = 0; pty_by_index(i); i++) {
+    }
+    if (mounted && (uint32_t)i >= o.max) {
+        return -ENOSPC; /* Linux's devpts_new_index past the instance's max */
+    }
+    p = pty_alloc(0, mounted ? &o : NULL);
     if (!p) {
         return -ENFILE;
     }
@@ -1262,7 +1402,7 @@ int pty_open_slave(int index, int flags)
 
 struct pty *pty_kernel_make(uint32_t dev, const char *node)
 {
-    struct pty *p = pty_alloc(PTY_KERNEL_INDEX);
+    struct pty *p = pty_alloc(PTY_KERNEL_INDEX, NULL);
 
     if (!p) {
         return NULL;

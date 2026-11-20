@@ -36,8 +36,14 @@
 
 #define PTY_BUF_SIZE 4096 /* slave->master ring; power of two for the mask */
 
-/* The group of a new slave, `tty`, as Linux's devpts gives it with gid=5. */
+/* The group of a new slave, `tty`, as Linux's devpts gives it with gid=5,
+ * where no devpts mount is at /dev/pts. */
 #define PTY_GID 5
+
+/* Linux's NR_UNIX98_PTY_MAX: the largest devpts `max=`, and its default. */
+#define PTY_MAX_PAIRS (1u << 20)
+
+struct vfs_pts_options;
 
 struct pty {
     struct pty *next; /* the list of live ptys */
@@ -83,17 +89,32 @@ struct pty {
  * /dev/pts/N: they are not listed there and take none of its numbers. */
 #define PTY_KERNEL_INDEX 0x100000
 
+/**
+ * Parse `options`, mount(2)'s data for devpts or NULL, into `*o`, as
+ * Linux's devpts parse_mount_options does: from the defaults, the
+ * opener's ids, mode 0600, ptmxmode 0000 and max PTY_MAX_PAIRS, the
+ * options `uid=` and `gid=`, numbers the caller's user namespace maps,
+ * `mode=` and `ptmxmode=` in octal, cut to 07777, `newinstance`, which
+ * every mount is, and `max=` from 0 to PTY_MAX_PAIRS. 0, or -EINVAL with
+ * the record `devpts: called with bogus options` for another option or a
+ * bad number. A remount parses from the defaults too, as Linux's does.
+ */
+int pty_parse_options(const char *options, struct vfs_pts_options *o);
+
 /** Empty the list of live ptys; called once at boot. Each pair is allocated
  * from the heap when its master opens. */
 void pty_init_pool(void);
 
 /**
  * open("/dev/ptmx"): allocate a pty pair and install the master end on a
- * fresh descriptor (locked until unlockpt). Returns the master fd (>= 0), or
- * -errno (-ESRCH with no current process, -ENFILE if the heap has no room for
- * a pair or PTY_KERNEL_INDEX pairs of /dev/ptmx are open, -EMFILE if the fd
- * table is full, -ENOMEM if the heap has no room
- * for the descriptor).
+ * fresh descriptor (locked until unlockpt). The slave takes the owner,
+ * group and mode of the devpts mount at /dev/pts (`vfs_devpts_options`),
+ * or without one the opener's user, group PTY_GID and mode 0620. Returns
+ * the master fd (>= 0), or -errno (-ESRCH with no current process, -ENOSPC
+ * when the lowest free index is not below that mount's `max`, -ENFILE if
+ * the heap has no room for a pair or PTY_KERNEL_INDEX pairs of /dev/ptmx
+ * are open, -EMFILE if the fd table is full, -ENOMEM if the heap has no
+ * room for the descriptor).
  */
 int pty_open_master(int flags);
 

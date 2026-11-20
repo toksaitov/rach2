@@ -301,6 +301,41 @@ A file in memory reaches 16 TiB less a page on both architectures, as on
 Linux on i386; Linux on x86-64 allows more.
 .Pp
 For
+.Ql devpts ,
+the source is any string, recorded as given, and nothing is claimed.
+Every mount shows the system's one set of terminals.
+It takes Linux's options:
+.Ql uid=
+and
+.Ql gid= ,
+the owner and group of a new terminal, numbers the caller's user
+namespace maps, without which it is the opener's;
+.Ql mode= ,
+in octal, its permission bits, 0600 by default;
+.Ql ptmxmode= ,
+in octal, 0000 by default, which is shown and leaves
+.Pa /dev/pts/ptmx
+with the mode of
+.Pa /dev/ptmx ;
+.Ql max= ,
+from 0 to 1048576, below which a new terminal's number must be, or
+.Pa /dev/ptmx
+fails with
+.Er ENOSPC ;
+and
+.Ql newinstance ,
+which every mount is.
+A terminal opened through
+.Pa /dev/ptmx
+takes the options of the devpts mount at
+.Pa /dev/pts
+under the opener's root, and without one the opener's user, group 5 and
+mode 0620.
+A remount takes its options from the defaults again, as on Linux.
+Another option or a bad number is
+.Er EINVAL .
+.Pp
+For
 .Ql mqueue ,
 the source is any string, recorded as given, nothing is claimed, and the
 options are ignored.

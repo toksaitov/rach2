@@ -5685,6 +5685,26 @@ static const struct vfs_ops sysfs_vops = {
     0, /* phase */
 };
 
+/** Emit the options of the devpts mount `m`, as Linux's
+ * devpts_show_options writes them: uid= and gid= when given, mode= and
+ * ptmxmode= in three octal digits, and max= below its greatest. */
+static void pts_show_options(const struct vfs_mount *m, vfs_option_emit emit, void *out)
+{
+    const struct vfs_pts_options *o = &m->pts_opts;
+
+    if (o->setuid) {
+        emit(out, "uid", o->uid, VFS_OPT_DEC);
+    }
+    if (o->setgid) {
+        emit(out, "gid", o->gid, VFS_OPT_DEC);
+    }
+    emit(out, "mode", o->mode, VFS_OPT_OCT3);
+    emit(out, "ptmxmode", o->ptmxmode, VFS_OPT_OCT3);
+    if (o->max < PTY_MAX_PAIRS) {
+        emit(out, "max", o->max, VFS_OPT_DEC);
+    }
+}
+
 /** The constructor of a synthetic mount: its root is a node of the
  * namespace's own directory, whose name `options` has, held for the life of
  * the mount. 0, or -ENOMEM. */
@@ -6080,8 +6100,9 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     struct vfs_mount *m = mount_base(named);
     uint32_t changed = (flags ^ m->flags) & VFS_MS_SUPER;
     int rc, closing = (changed & flags & VFS_MS_RDONLY) != 0;
+    struct vfs_pts_options popts;
 
-    if (flags & ~VFS_MS_KNOWN) {
+    if ((flags & ~VFS_MS_KNOWN) || (m->pts && pty_parse_options(options, &popts) != 0)) {
         return -EINVAL;
     }
     if (named->state != VFS_ACTIVE || m->state != VFS_ACTIVE) {
@@ -6118,6 +6139,9 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
         }
     }
     m->flags = (m->flags & ~VFS_MS_SUPER) | (flags & VFS_MS_SUPER);
+    if (m->pts) {
+        m->pts_opts = popts; /* Linux's devpts_remount, from the defaults */
+    }
     set_mount_attrs(named, flags);
     if (closing) {
         fd_mount_readonly_end(m);
@@ -6358,13 +6382,16 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
  * flags. A proc mount shows the PID namespace of its mounter and may
  * cover the permanent /proc when a container mounts its own view. A mount
  * of type devpts is a mount of /dev's type whose root is /dev/pts, so it
- * shows the system's terminals and ptmx, whatever its options ask, since
- * this kernel keeps one set of terminals.
+ * shows the system's terminals and ptmx, since this kernel keeps one set of
+ * terminals; its options (`pty_parse_options`) give the pairs /dev/ptmx
+ * makes while it is at /dev/pts their owner, mode and greatest index
+ * (`vfs_devpts_options`), and -EINVAL when they are bad.
  */
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options)
 {
     int pts = streq(type, "devpts");
+    struct vfs_pts_options popts;
     const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type
                                : pts               ? &vfs_devfs_type
                                                    : type_named(type);
@@ -6378,7 +6405,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (!t) {
         return -ENODEV;
     }
-    if (flags & ~VFS_MS_KNOWN) {
+    if ((flags & ~VFS_MS_KNOWN) || (pts && pty_parse_options(options, &popts) != 0)) {
         return -EINVAL;
     }
     rc = vfs_resolve(0, target, 0, &tref, 0, 0);
@@ -6418,6 +6445,11 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     }
     m->dev = dev;
     m->claim = claim;
+    if (pts) {
+        m->pts = 1;
+        m->pts_opts = popts;
+        m->show_options = pts_show_options;
+    }
     vfs_node_unlock(&tref);
     vfs_leave(tref.mnt);
 
@@ -6446,6 +6478,24 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path, t->name,
          (flags & VFS_MS_RDONLY) ? ", read-only" : "");
     return 0;
+}
+
+int vfs_devpts_options(struct vfs_pts_options *out)
+{
+    struct vfs_ref ref;
+    const struct vfs_mount *base;
+    int found;
+
+    if (!vfs_root_mounted() || vfs_resolve(0, "/dev/pts", 0, &ref, 0, 0) != 0) {
+        return 0;
+    }
+    base = vfs_mount_base(ref.mnt);
+    found = base->pts;
+    if (found) {
+        *out = base->pts_opts;
+    }
+    vfs_ref_release(&ref);
+    return found;
 }
 
 int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source, uint32_t flags)

@@ -675,6 +675,10 @@ group
 .Ql tty ,
 5, with mode 0620, as Linux's devpts gives a slave with
 .Ql gid=5,mode=620 ,
+unless a devpts mount at
+.Pa /dev/pts
+gives other options; see
+.Xr mount 2 ,
 so that
 .Xr write 1
 and

@@ -4,6 +4,7 @@
  *
  * host-deps: rach2/sys/tty/n_tty.c rach2/sys/wcwidth.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/bkl_held.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The test's `schedule` runs a producer only after the consumer has blocked,
@@ -94,10 +95,12 @@
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 #include "tty/tty.c"
 #include "tty/pty.c"
+#include "ids_first.h"
 
 extern int printf(const char *format, ...);
 extern int snprintf(char *str, size_t size, const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
+extern int strcmp(const char *a, const char *b);
 
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_list;
@@ -608,7 +611,7 @@ static void setup_pair(void)
     service_action = NULL;
     irq_enabled = 1;
     pty_init_pool();
-    CHECK(pty_alloc() == &pair, "production allocation initializes the pair");
+    CHECK(pty_alloc(0, NULL) == &pair, "production allocation initializes the pair");
     pair.master_open = pair.slave_opens = 1;
     pair.slave.ldisc.tio.c_lflag &= ~(ICANON | ECHO | ISIG);
     clear(&master, sizeof(master));
@@ -2738,8 +2741,89 @@ static void hangup_writer_waits(void)
     tty_set_session(&console_tty, 0, 0, 0);
 }
 
-int main(void)
+/* The devpts mount at /dev/pts the rows give `vfs_devpts_options`. */
+static int devpts_mounted;
+static struct vfs_pts_options devpts_opts;
+
+/** The options of the devpts mount the rows put at /dev/pts, if any. */
+int vfs_devpts_options(struct vfs_pts_options *out)
 {
+    if (devpts_mounted) {
+        *out = devpts_opts;
+    }
+    return devpts_mounted;
+}
+
+/** Whether `options` parse, as Linux's devpts parse_mount_options does. */
+static int pts_parses(const char *options)
+{
+    struct vfs_pts_options o;
+
+    return pty_parse_options(options, &o) == 0;
+}
+
+/** devpts's options as Linux's parse_mount_options reads them. */
+static void devpts_parse_rows(void)
+{
+    struct vfs_pts_options o;
+
+    CHECK(pty_parse_options(NULL, &o) == 0 && !o.setuid && !o.setgid && o.mode == 0600 &&
+              o.ptmxmode == 0 && o.max == PTY_MAX_PAIRS,
+          "devpts's defaults are Linux's: no owner, mode 0600, ptmxmode 0000, max 1048576");
+    CHECK(pty_parse_options("uid=0x10,gid=5,mode=620,ptmxmode=0666,newinstance,max=16,,", &o) ==
+                  0 &&
+              o.setuid && o.uid == 16 && o.setgid && o.gid == 5 && o.mode == 0620 &&
+              o.ptmxmode == 0666 && o.max == 16,
+          "every devpts option is taken");
+    CHECK(!pts_parses("uid=-1") && !pts_parses("uid=2147483648") && !pts_parses("uid=5x") &&
+              !pts_parses("uid") && !pts_parses("mode=8") && !pts_parses("mode=0x1") &&
+              !pts_parses("max=-1") && !pts_parses("max=1048577") && !pts_parses("newinstance=1") &&
+              !pts_parses("bogus") && pts_parses("max=1048576"),
+          "a bad number, a missing value or another option is EINVAL");
+}
+
+/**
+ * devpts's options, a new slave's owner, group and mode from them as
+ * devpts_pty_new gives them, and ENOSPC from /dev/ptmx past `max`.
+ */
+static void devpts_options(void)
+{
+    struct vfs_pts_options o;
+    struct pty *p;
+
+    devpts_parse_rows();
+    pty_init_pool();
+    consumer.euid = 1000;
+    consumer.egid = 100;
+    current_proc = &consumer;
+    pty_parse_options("mode=0640", &o);
+    p = pty_alloc(0, &o);
+    CHECK(p && p->uid == 1000 && p->gid == 100 && p->mode == 0640,
+          "without uid= and gid= a slave is the opener's, with the mount's mode");
+    pty_init_pool(); /* the test's heap has one pair */
+    pty_parse_options("uid=7,gid=5", &o);
+    p = pty_alloc(0, &o);
+    CHECK(p && p->uid == 7 && p->gid == 5 && p->mode == 0600,
+          "with them it is theirs, mode 0600 by default");
+    pty_init_pool();
+    p = pty_alloc(0, NULL);
+    CHECK(p && p->uid == 1000 && p->gid == PTY_GID && p->mode == 0620,
+          "the kernel's own /dev/pts gives the opener, group tty and mode 0620");
+    pty_parse_options("max=1", &devpts_opts);
+    devpts_mounted = 1;
+    CHECK(pty_open_master(0) == -ENOSPC, "/dev/ptmx past the mount's max is ENOSPC");
+    devpts_mounted = 0;
+    consumer.euid = consumer.egid = 0;
+    pty_init_pool();
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && strcmp(argv[1], "--devpts-only") == 0) {
+        devpts_options();
+        printf("tty_hosttest: %s\n", failures == 0 ? "OK" : "failed");
+        return failures != 0;
+    }
     read_wakes_poll();
     flush_wakes_writer(0);
     flush_wakes_writer(1);
@@ -2769,6 +2853,7 @@ int main(void)
     echo_room();
     master_after_close();
     console_silent_restart();
+    devpts_options();
     lookahead_nonblocking();
     lookahead_bounded();
     lookahead_interrupted();

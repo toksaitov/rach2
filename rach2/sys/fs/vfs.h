@@ -544,6 +544,17 @@ typedef void (*vfs_option_emit)(void *out, const char *name, uint64_t value,
  * operations in flight, which is what unmount drains. Both change in one
  * atomic step (`vfs_mount_get`, `vfs_mount_put`, `vfs_enter`, `vfs_leave`),
  * and the unmount judges them under the big lock. */
+/* The options of a devpts mount, Linux's pts_mount_opts, which
+ * `pty_parse_options` reads and a pair of /dev/ptmx takes as it is made
+ * (`vfs_devpts_options`). */
+struct vfs_pts_options {
+    uint32_t uid, gid;  /* a new slave's owner and group, kernel ids */
+    int setuid, setgid; /* uid= or gid= given: else the opener's */
+    uint32_t mode;      /* a new slave's permission bits */
+    uint32_t ptmxmode;  /* the permission bits of /dev/pts/ptmx */
+    uint32_t max;       /* a new pair's index is below it */
+};
+
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
@@ -568,6 +579,10 @@ struct vfs_mount {
      * file, group or other, is set, as Linux's fat_allow_set_time lets it
      * (`utimes_node`). 0 on every other type. */
     uint32_t allow_utime;
+    /* A mount of devpts, a view of the system's /dev/pts, and its options
+     * (`vfs_devpts_options`). */
+    int pts;
+    struct vfs_pts_options pts_opts;
     int state;
     struct vfs_mount *parent;
     void *covered;
@@ -1324,6 +1339,12 @@ int vfs_do_bind(const char *source, const char *target, int rec);
  * still refuses writes if the mount flag is cleared.
  */
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
+
+/** Copy into `*out` the options of the devpts mount at /dev/pts under the
+ * caller's root, where Linux's devpts_acquire finds the instance an open
+ * of /dev/ptmx makes its pair in. 1 when one is there; 0, `*out` untouched,
+ * when /dev/pts is the kernel's own or does not resolve. */
+int vfs_devpts_options(struct vfs_pts_options *out);
 
 /**
  * mount(2) with MS_REMOUNT: apply the file-system flags to the base and
