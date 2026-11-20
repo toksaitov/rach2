@@ -31,7 +31,9 @@
  * whole, also for a directory opened with O_PATH through another's link.
  * /proc/thread-self names the calling thread, in the main thread and in a
  * second one, and /proc lists it and /proc/self as links, each with an inode
- * of its own.
+ * of its own. Both links of a proc mount whose PID namespace does not see
+ * the probe are links to lstat, to fstat through O_PATH and O_NOFOLLOW, and
+ * ENOENT to readlink and to stat.
  *
  * Prints "PROCLINKMUSL OK" on success and "PROCLINKMUSL FAIL (detail)"
  * otherwise. Uids 1000 and 1001 are the NEW of each when a native run gives
@@ -47,7 +49,8 @@
  * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
  * `cwd-root-self`, `fd-other-root`, `fd-other-same-uid`, `fd-other-eacces`,
  * `fd-dir-owner`, `fd-dir-eacces`, `fd-dir-ended`, `long-link`,
- * `long-removal`, `thread-self`, `self-inodes` and `cleanup`. The first
+ * `long-removal`, `thread-self`, `self-inodes`, `self-other-ns` and
+ * `cleanup`. The first
  * failure fails its assertion and leaves the rest not run.
  */
 
@@ -56,6 +59,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -849,6 +853,109 @@ static int self_inodes(void)
     return 0;
 }
 
+/**
+ * Check one self link `path` of a proc mount whose PID namespace does not
+ * see the caller, which has lstat'ed /proc's link of the same name into
+ * `own`: it lstats as a link with that inode, opens with O_PATH and
+ * O_NOFOLLOW and fstats as the same link, and gives ENOENT to readlink, to
+ * readlinkat of the descriptor and to stat, which follows it. Returns 0, or
+ * the number of the first check that failed.
+ */
+static int unseen_link(const char *path, const struct stat *own)
+{
+    struct stat lst, fst;
+    char text[32];
+    int fd, ok;
+
+    if (lstat(path, &lst) != 0 || !S_ISLNK(lst.st_mode) || lst.st_ino != own->st_ino) {
+        return 1;
+    }
+    fd = open(path, O_PATH | O_NOFOLLOW);
+    if (fd < 0) {
+        return 2;
+    }
+    ok = fstat(fd, &fst) == 0 && S_ISLNK(fst.st_mode) && fst.st_ino == lst.st_ino &&
+         fst.st_dev == lst.st_dev;
+    if (ok && !refused((int)readlinkat(fd, "", text, sizeof(text)), ENOENT)) {
+        ok = -1;
+    }
+    close(fd);
+    if (ok != 1) {
+        return ok == 0 ? 3 : 4;
+    }
+    if (!refused((int)readlink(path, text, sizeof(text)), ENOENT)) {
+        return 5;
+    }
+    return refused(stat(path, &lst), ENOENT) ? 0 : 6;
+}
+
+/**
+ * Check /proc/self and /proc/thread-self of a proc mount whose PID
+ * namespace does not see the caller. A child unshares its PID namespace and
+ * forks the namespace's first process, which mounts proc on TOP/p in the
+ * mount namespace it shares with the probe and waits. To the probe each link
+ * of that mount is there, as `unseen_link` checks, since Linux makes the
+ * link's inode with the mount and asks for a caller the namespace sees only
+ * for its text and its target (fs/proc/self.c and thread_self.c). Returns 0,
+ * or 1 after printing the failure.
+ */
+static int self_other_ns(void)
+{
+    struct stat self, thread;
+    int ready[2], go[2];
+    char c = 0;
+    pid_t pid, first;
+    int st, sent;
+
+    if (lstat("/proc/self", &self) != 0 || lstat("/proc/thread-self", &thread) != 0 ||
+        mkdir(TOP "/p", 0755) != 0 || pipe(ready) != 0 || pipe(go) != 0) {
+        return fail("the links, the mount point and the pipes");
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(ready[0]);
+        close(go[1]);
+        if (unshare(CLONE_NEWPID) != 0) {
+            _exit(2);
+        }
+        first = fork();
+        if (first == 0) {
+            if (mount("proc", TOP "/p", "proc", 0, NULL) != 0) {
+                _exit(3);
+            }
+            if (write(ready[1], &c, 1) != 1) {
+                _exit(4);
+            }
+            (void)read(go[0], &c, 1);
+            _exit(umount2(TOP "/p", 0) != 0 ? 5 : 0);
+        }
+        close(ready[1]);
+        close(go[0]);
+        _exit(first < 0 ? 6 : child_status(first));
+    }
+    close(ready[1]);
+    close(go[0]);
+    if (pid < 0 || read(ready[0], &c, 1) != 1) {
+        st = let_go(pid, ready[0], go[1]);
+        rmdir(TOP "/p");
+        return fail_step("the mount of another PID namespace", st);
+    }
+    st = unseen_link(TOP "/p/self", &self);
+    if (st == 0) {
+        st = unseen_link(TOP "/p/thread-self", &thread);
+        st = st == 0 ? 0 : 10 + st;
+    }
+    sent = write(go[1], &c, 1) == 1;
+    if (let_go(pid, ready[0], go[1]) != 0 || !sent || rmdir(TOP "/p") != 0) {
+        return fail("the mount of another PID namespace's removal");
+    }
+    if (st != 0) {
+        return fail_step("a self link the mount's PID namespace does not see", st);
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
@@ -886,6 +993,7 @@ static void plan(void)
                                       "long-removal",
                                       "thread-self",
                                       "self-inodes",
+                                      "self-other-ns",
                                       "cleanup"};
     unsigned i;
 
@@ -927,7 +1035,7 @@ int main(int argc, char **argv)
         return fail("the directory");
     }
     bad = through(d) || renamed(d) || removed() || not_dirs() || cwd_root() || other_process() ||
-          fd_dir_search() || long_paths() || thread_self() || self_inodes();
+          fd_dir_search() || long_paths() || thread_self() || self_inodes() || self_other_ns();
     close(d);
     if (umount2(TOP, 0) != 0 || rmdir(TOP) != 0) {
         return fail("the tmpfs's removal");
