@@ -8065,11 +8065,11 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
         return file_read_plain(ofd, buf, count, pos);
     }
     if (direct_misaligned(ofd, (__force uintptr_t)buf, count, pos)) {
-        struct kernel_iovec one;
+        struct kernel_iovec one[1];
 
-        one.iov_base = (__force uintptr_t)buf;
-        one.iov_len = count;
-        if (direct_read_refused(ofd, &one, 1, pos, &r)) {
+        one[0].iov_base = (__force uintptr_t)buf;
+        one[0].iov_len = count;
+        if (direct_read_refused(ofd, one, 1, pos, &r)) {
             return r;
         }
     }
