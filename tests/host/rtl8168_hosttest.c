@@ -511,8 +511,7 @@ void pci_disable_bus_master(pci_device_t *dev)
  * the next, so that no two pages are adjacent. `heap_run_max` is the
  * longest run of free frames, as on a machine whose memory is fragmented,
  * and `heap_left`, unless it is -1, the allocations that may still succeed.
- * `heap_pages` counts the pages held and `heap_bad` the frees of what the
- * heap did not give. */
+ * `heap_pages` counts the pages held and `heap_bad` the refused frees. */
 #define POOL_RUNS  80
 #define POOL_PAGES 48
 static unsigned char run_pool[POOL_RUNS][4 * 4096] __attribute__((aligned(4096)));
@@ -569,11 +568,15 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return page_pool[i];
 }
 
-/** Give back a run or a page, counting a free of anything else. */
+/** Give back a run or a page with bus mastering off, counting refusals. */
 void kfree_pages(void *p, uint32_t count)
 {
     unsigned i;
 
+    if (pci_master_enabled) {
+        heap_bad++;
+        return;
+    }
     for (i = 0; i < POOL_RUNS; i++) {
         if (p == run_pool[i] && run_used[i] == (int)count) {
             run_used[i] = 0;
@@ -1402,9 +1405,9 @@ static int bufs_none(void)
  * keeping its buffers across a stop and a second bring-up; a heap that
  * runs out at a transmit page or at a receive buffer part way through, or
  * has no run of four frames, which fails the bring-up with every page
- * given back; a bring-up that
- * fails after the buffers were made, whose stop gives them back once bus
- * mastering is off; and a revision this driver refuses, which takes none.
+ * given back; a bring-up whose second reset fails with bus mastering on,
+ * whose stop gives the buffers back once bus mastering is off; and a
+ * revision this driver refuses, which takes none.
  */
 static void check_buffers(void)
 {
@@ -1463,9 +1466,10 @@ static void check_buffers(void)
     heap_run_max = 256;
 
     model_reset();
-    model_stuck_reset = 1;
+    model_stuck_reset = 2;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && heap_pages == BUF_PAGES,
-          "buffers: a reset that never completes fails with the buffers made");
+          "buffers: a second reset that never completes fails with the buffers made");
+    CHECK(pci_master_enabled, "buffers: bus mastering stays on until the stop");
     rtl8168_stop(model_iface.dev);
     CHECK(!pci_master_enabled && bufs_none(),
           "buffers: its stop ends bus mastering and gives them back");
