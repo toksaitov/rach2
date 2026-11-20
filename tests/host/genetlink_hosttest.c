@@ -120,6 +120,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     CHECK(!lock_depth && cond(arg));
     return 0;
 }
+/** No mq_notify cookie waits for room in this model; the condition holds. */
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    CHECK(cond(arg));
+    return 0;
+}
 /** Return the model tick count. */
 uint64_t tick_count(void)
 {
