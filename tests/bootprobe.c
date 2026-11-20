@@ -246,7 +246,8 @@ static int proc_disk_field(const char *key, unsigned long long *out)
  * The rows of a recovery kernel's write at the end of the whole-disk node
  * open on `fd`, with and without O_DIRECT, in the order of Linux's
  * `blkdev_write_iter`, which answers ENOSPC at the end and cuts a write that
- * crosses it before the alignment is judged: 513 bytes at the end are
+ * crosses it before the alignment is judged: no bytes are 0 at an offset
+ * off the sector inside the disk and past its end, 513 bytes at the end are
  * ENOSPC, and 513 bytes a sector before it are cut to the last sector, which
  * is written back as the read before it found it. The boot windows keep
  * their own rule, a write that crosses the end writing nothing. Closes `fd`.
@@ -263,6 +264,18 @@ static void disk_end_rows(int fd)
             check(flags >= 0 && syscall3(SYS_FCNTL, fd, F_SETFL, flags | O_DIRECT) == 0,
                   "F_SETFL gives the whole-disk node O_DIRECT");
         }
+        check(probe_llseek(fd, size - SECTOR + 1, SEEK_SET, &pos) == 0,
+              "seek a byte past the last sector's start");
+        n = syscall3(SYS_WRITE, fd, (long)direct_buf, 0);
+        check(n == 0, pass ? "an O_DIRECT write of no bytes off the sector inside the disk is 0"
+                           : "a write of no bytes off the sector inside the disk is 0");
+        check(probe_llseek(fd, size + 1, SEEK_SET, &pos) == 0 && pos == size + 1,
+              "seek a byte past the disk's end");
+        n = syscall3(SYS_WRITE, fd, (long)(direct_buf + 1), 0);
+        check(n == 0, pass ? "an O_DIRECT write of no bytes a byte past the disk's end is 0"
+                           : "a write of no bytes a byte past the disk's end is 0");
+        check(probe_llseek(fd, 0, SEEK_CUR, &pos) == 0 && pos == size + 1,
+              "a write of no bytes leaves the offset where it was");
         check(probe_llseek(fd, size, SEEK_SET, &pos) == 0, "seek to the end to write there");
         n = syscall3(SYS_WRITE, fd, (long)direct_buf, SECTOR + 1);
         check(n == -ENOSPC, pass ? "an O_DIRECT write of 513 bytes at the disk's end is -ENOSPC"
