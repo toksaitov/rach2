@@ -205,6 +205,9 @@ an unmask, by ioctl or by an eventfd given to
 .Dv VFIO_IRQ_SET_ACTION_UNMASK ,
 lifts the mask, or while the function still asserts the line keeps it and
 signals the eventfd again.
+While the owner sets the Interrupt Disable bit, the line stays masked and
+nothing is signalled; clearing the bit unmasks the line, or signals again
+while the function still asserts it.
 An eventfd unmask is served by a kernel worker.
 The line is offered only to a function that masks it that way.
 MSI-X entries can be set and cleared while MSI-X is on.

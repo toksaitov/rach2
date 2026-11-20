@@ -229,6 +229,7 @@ uint32_t vfio_irq_count(const struct vfio_device *d, uint32_t index);
 int32_t vfio_irq_set(struct vfio_device *d, uintptr_t arg);
 void vfio_irq_disable(struct vfio_device *d);
 void vfio_irq_restore(struct vfio_device *d);
+void vfio_irq_intx_owner(struct vfio_device *d);
 /** Whether any unmask request is queued. */
 int vfio_irq_pending(void *arg);
 /** Serve one pass of queued unmask requests, with the big lock held. */
