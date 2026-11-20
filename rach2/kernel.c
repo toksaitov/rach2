@@ -258,6 +258,13 @@ static void memory_map_line(char *buf, uint32_t buflen, uint64_t addr, uint64_t 
     buf[pos] = '\0';
 }
 
+/** Hold `first` to `last` of memory for the host, so that no PCI BAR over
+ * it is claimed (`frame_map_host_ranges`, `pci_host_reserve`). */
+static void host_memory_hold(uint64_t first, uint64_t last)
+{
+    pci_host_reserve(first, last, 0);
+}
+
 static bool test_timer(void);
 static bool test_udelay(uint32_t *measured_ms);
 static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_clock,
@@ -5012,14 +5019,11 @@ void kernel_main(const struct boot_info *boot)
 
             memory_map_line(line, sizeof(line), addr, len, type);
             klog(KLOG_DEBUG, "memory", "map: %s", line);
-            /* Linux's e820__reserve_resources: all but reserved above 1 MiB. */
-            if (len != 0 && (type != 2 || addr < 0x100000u)) {
-                pci_host_reserve(addr, addr + len - 1u, 0);
-            }
         }
         if (frame_map_build(&map, mmap, mmap_len, boot->mem_upper_kb, mmu_phys_reach()) != 0) {
             k_panic("memory: the firmware's map has more ranges than the kernel keeps");
         }
+        frame_map_host_ranges(&map, mmap, mmap_len, boot->mem_upper_kb, host_memory_hold);
         if (map.from_mem_upper) {
             klog(KLOG_WARN, "memory", "no usable map; mem_upper taken as one range");
         }
