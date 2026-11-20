@@ -307,8 +307,10 @@ int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, i
 }
 
 /** The generic family model has no local route to delete. */
-int netdev_local_route_del(const struct netdev *nd, const struct netdev_rt *r)
+int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
 {
+    (void)del;
+    (void)replace;
     (void)nd;
     (void)r;
     return -ESRCH;

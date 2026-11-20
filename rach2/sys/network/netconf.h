@@ -182,9 +182,7 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer);
  * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
  * does, or make it the first. A distinct `peer` gives the destination
  * prefix; 0 uses the local address. An address added beside the first
- * drops nothing. EINVAL for an impossible address or a noncontiguous
- * mask, or, for an Ethernet address with no peer, a zero mask or a
- * non-host address; EEXIST for an
+ * drops nothing. EINVAL for address zero or a noncontiguous mask; EEXIST for an
  * address the interface holds; ENOSPC past NETDEV_ADDRS more. Takes
  * `net_lock`.
  */
@@ -192,9 +190,9 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 
 /**
  * Take the address `ip` from `nd`, matching any local address when `ip`
- * is 0. If `dst` is nonzero, also match its prefix `dst`/`mask`. The first is
- * replaced by the next address, as Linux's promote_secondaries has it, which
- * drops the ARP mappings `netconf_set_address` lists. While an address
+ * is 0. If `dst` is nonzero, also match its prefix `dst`/`mask`. Deleting a
+ * primary removes its same-prefix secondaries. A surviving primary takes
+ * the first slot. While an address
  * remains, the gateway and the added routes stay, as Linux's
  * `fib_del_ifaddr` keeps routes through a gateway. Taking the last address
  * leaves the interface unconfigured and drops all that `netconf_set_address`

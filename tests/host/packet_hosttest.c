@@ -454,6 +454,26 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
     return route_available ? &the_iface : 0;
 }
 
+/** Describe the route used by the packet model, including its source. */
+struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *r)
+{
+    uint32_t via;
+    struct netdev *nd = netdev_route_on(dst, ifindex, &via);
+    if (nd) {
+        r->gw = 0;
+        r->src = nd->ip;
+    }
+    return nd;
+}
+
+/** The model has address-generated broadcasts only. */
+struct netdev *netdev_added_local(uint32_t dst, int kind)
+{
+    (void)dst;
+    (void)kind;
+    return 0;
+}
+
 /** Return `nd`'s one address as the source for any next hop. */
 uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
 {
@@ -510,7 +530,8 @@ int netdev_is_broadcast(uint32_t ip)
     for (i = 0; i < ifaces; i++) {
         const struct netdev *nd = netdev_at(i);
 
-        if (nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask)) {
+        if (ip && (ip == netdev_addr_local(nd, -1, ADDR4_BROADCAST) ||
+                   ip == netdev_addr_local(nd, -1, ADDR4_SUBNET_BROADCAST))) {
             return 1;
         }
     }
@@ -1378,6 +1399,11 @@ static void test_broadcast_iface(void)
         CHECK("to the all-ones hardware address, without ARP",
               tx_frame[0] == 0xFF && tx_frame[5] == 0xFF && arp_queries == 0);
     }
+    second_iface.addr4[0].given_broadcast = 1;
+    second_iface.addr4[0].broadcast = 0xc0000260u;
+    CHECK("a configured broadcast leaves by its owning interface",
+          ip_tx(0xc0000260u, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0 &&
+              tx_card == &second_iface);
     second_iface.mask = 0x80000000u;
     tx_frames = arp_queries = 0;
     tx_card = 0;

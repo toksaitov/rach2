@@ -136,6 +136,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
     int i;
     for (i = 0; i < nd->naddr6; i++) {
         if (ip6_equal(nd->addr6[i].addr, addr)) {
+            route6_address_removed(nd, i);
             for (; i + 1 < nd->naddr6; i++)
                 nd->addr6[i] = nd->addr6[i + 1];
             nd->naddr6--;
@@ -353,7 +354,7 @@ static void route_lifetime(void)
     eth0.naddr6 = 1;
     CHECK(count_prefix(a->addr, 128, 0, 80) == 1 && count_prefix(a->addr, 128, 1, 0) == 0);
     CHECK(count_prefix(a->peer, 128, 0, 80) == 0);
-    a->flags = NETDEV_A6_NODAD;
+    a->flags = NETDEV_A6_NODAD | NETDEV_A6_PERMANENT;
     CHECK(count_prefix(a->addr, 128, 1, 0) == 1 && count_prefix(a->peer, 128, 0, 80) == 1);
     a->noprefix = 1;
     CHECK(count_prefix(a->addr, 128, 0, 80) == 0 && count_prefix(a->peer, 128, 0, 80) == 1);
@@ -386,6 +387,34 @@ static void route_lifetime(void)
     CHECK(eth0.naddr6 == 0 && route6_lookup(dst, eth0.index, via) == 0);
     CHECK(route6_lookup(other, wlan0.index, via) == &wlan0);
     CHECK(route6_change_row(&wlan0, &r, 1, 0) == 0);
+}
+
+/** A finite manual prefix keeps its expiry after its address is removed. */
+static void finite_prefix(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row r = {0};
+    uint8_t via[16], dst[16] = {0x20, 0x04};
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, dst, 16);
+    a->addr[15] = 1;
+    a->prefix = 64;
+    a->valid = 10;
+    a->since = kernel_ticks;
+    eth0.naddr6 = 1;
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0);
+    CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
+    kernel_ticks += 10 * TICK_HZ;
+    route6_tick();
+    CHECK(!route6_lookup(dst, eth0.index, via));
+    r.local = 1;
+    r.proto = 99;
+    r.plen = 64;
+    k_memcpy(r.dst, dst, 16);
+    CHECK(route6_change_row(&eth0, &r, 0, 0) == 0 && route6_added_local(dst) == &eth0);
+    CHECK(!route6_lookup(dst, eth0.index, via));
+    nd6_if_down(&eth0);
+    CHECK(!route6_added_local(dst));
 }
 
 int main(void)
@@ -459,6 +488,7 @@ int main(void)
     CHECK(nd6_conf_set(ND6_CONF_DEFAULT, ND6_RA_DEFRTR_METRIC, 700) == 0);
     CHECK(nd6_conf_get(wlan0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 600);
     route_lifetime();
+    finite_prefix();
     CHECK(lock_depth == 0);
 
     if (failures) {

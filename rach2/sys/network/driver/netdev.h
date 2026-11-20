@@ -162,6 +162,8 @@ struct netdev_ops {
 #define NETDEV_SCOPE_LINK   253
 #define NETDEV_SCOPE_HOST   254
 
+#define NETDEV_A6_LOCAL_ROUTE 4u /* local-route bit in deleted_routes */
+
 /* An IPv6 address's state, in Linux's `IFA_F_` bits, so that netlink can
  * report them as they are: a temporary address of RFC 8981, no duplicate
  * detection is to be done, the detection failed, the preferred lifetime has
@@ -488,8 +490,11 @@ int netdev_route_at(int n, struct netdev_rt *out);
 /** Enumerate the local table, with each shared route listed once. */
 int netdev_local_route_at(int n, struct netdev_rt *out);
 
-/** Remove a matching address route from the local table. */
-int netdev_local_route_del(const struct netdev *only, const struct netdev_rt *r);
+/** Change a local-table route under net_lock, including an address route. */
+int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace);
+
+/** Return the device of an added local or broadcast route covering dst. */
+struct netdev *netdev_added_local(uint32_t dst, int kind);
 
 /** Whether `nd` has an implied link route to exactly `dst`/`mask`.
  * Call under net_lock. */
@@ -547,8 +552,8 @@ static __inline__ int netdev_addr_has_route(uint32_t ip, uint32_t dst, uint32_t 
     return ip != 0 && ((dst & mask) >> 24) != 0 && (mask != 0xFFFFFFFFu || dst != ip);
 }
 
-/** Whether an earlier address is primary for this destination prefix. */
-static __inline__ int netdev_secondary(const struct netdev *nd, int a)
+/** Index of the primary address sharing this destination prefix. */
+static __inline__ int netdev_primary_slot(const struct netdev *nd, int a)
 {
     int i;
     uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
@@ -556,10 +561,16 @@ static __inline__ int netdev_secondary(const struct netdev *nd, int a)
     for (i = -1; i < a; i++) {
         if ((i < 0 ? nd->mask : nd->mask2[i]) == mask &&
             ((netdev_addr_dst(nd, i) ^ dst) & mask) == 0) {
-            return 1;
+            return i;
         }
     }
-    return 0;
+    return a;
+}
+
+/** Whether an earlier address supplies the prefix route for slot a. */
+static __inline__ int netdev_secondary(const struct netdev *nd, int a)
+{
+    return netdev_primary_slot(nd, a) != a;
 }
 
 /* Whether a subnet of the contiguous `mask` has a network and a broadcast
