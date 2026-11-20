@@ -20,7 +20,7 @@
 # to it.
 #
 #   shm      bed-shm.sh -w -g 0000:00:02.0: the session on the region's
-#            virtio-gpu card drawing through the VM's i915 on the GPU, each
+#            virtio-gpu card drawing through i915 in the 8 GiB VM, each
 #            scene's figure on the rungs shm-virgl and shm-venus, glmark2 as
 #            the load, the VM killed under it, the session headless on
 #            llvmpipe and back on Rach2's driver (83-7.5's shm rows, 83-7.6)
@@ -153,7 +153,7 @@ case $rung in
     shm)
         MEASURE_RUNNERS=$here/kit/measure/runners sh kit/bed-shm.sh -d "$bed/vm.disk" \
             -p ./vgshmprobe -w -x "$here/kit/measure" -S 'glmark2 piglit game venus:glmark2' \
-            -g "$gpu" -o "$here/out" > run.out 2>&1 || status=$?
+            -g "$gpu" -m 8192 -o "$here/out" > run.out 2>&1 || status=$?
         cat run.out
         grep -q '^bed-shm: result: pass' run.out || status=1
         ;;
