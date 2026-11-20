@@ -1386,6 +1386,8 @@ static void route6_msg(struct nl_build *b, const struct route6_row *r, uint16_t 
         msg_attr(msg, RTA_DST, r->dst, IP6_ADDR_LEN);
     }
     msg_attr32(msg, RTA_PRIORITY, r->metric);
+    if (!ip6_is_unspecified(r->prefsrc))
+        msg_attr(msg, RTA_PREFSRC, r->prefsrc, IP6_ADDR_LEN);
     if (!ip6_is_unspecified(r->gw)) {
         msg_attr(msg, RTA_GATEWAY, r->gw, IP6_ADDR_LEN);
     }
@@ -1565,8 +1567,8 @@ static int same_route4(const struct netdev_rt *a, const struct netdev_rt *b)
 static int same_route6(const struct route6_row *a, const struct route6_row *b)
 {
     return a->ifindex == b->ifindex && a->plen == b->plen && a->metric == b->metric &&
-           a->proto == b->proto && a->local == b->local && ip6_equal(a->dst, b->dst) &&
-           ip6_equal(a->gw, b->gw);
+           a->proto == b->proto && a->local == b->local && ip6_equal(a->prefsrc, b->prefsrc) &&
+           ip6_equal(a->dst, b->dst) && ip6_equal(a->gw, b->gw);
 }
 
 /**
@@ -1998,6 +2000,7 @@ static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t via[IP6_ADDR_LEN], src[IP6_ADDR_LEN];
+    struct route6_row route = {0};
     const uint8_t *dst = req_ip6(req, body, 12, RTA_DST);
     uint16_t len;
     const uint8_t *oif = req_attr(req, body, 12, RTA_OIF, &len);
@@ -2011,7 +2014,12 @@ static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
     }
     lock = net_lock();
     local = ip6_is_loopback(dst) || (!ip6_is_multicast(dst) && netdev_owner6(dst) != 0);
-    nd = local ? netdev_loopback() : ip6_route(dst, oif && len == 4 ? (int)get32(oif) : 0, via);
+    if (local)
+        nd = netdev_loopback();
+    else if (ip6_link_scoped(dst) || ip6_is_multicast(dst))
+        nd = ip6_route(dst, oif && len == 4 ? (int)get32(oif) : 0, via);
+    else
+        nd = route6_resolve(dst, oif && len == 4 ? (int)get32(oif) : 0, &route);
     if (nd && local) {
         k_memcpy(src, dst, IP6_ADDR_LEN);
     } else if (nd) {
@@ -2035,8 +2043,8 @@ static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
     msg_attr(msg, RTA_DST, dst, IP6_ADDR_LEN);
     msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
     msg_attr(msg, RTA_PREFSRC, src, IP6_ADDR_LEN);
-    if (!local && !ip6_equal(via, dst)) {
-        msg_attr(msg, RTA_GATEWAY, via, IP6_ADDR_LEN);
+    if (!ip6_is_unspecified(route.gw)) {
+        msg_attr(msg, RTA_GATEWAY, route.gw, IP6_ADDR_LEN);
     }
     nl_append(b, msg);
     return 0;
@@ -2276,6 +2284,7 @@ static int32_t route6_change(const uint8_t *req, uint16_t type, uint16_t flags, 
     uint8_t via[IP6_ADDR_LEN];
     const uint8_t *dst = req_ip6(req, body, 12, RTA_DST);
     const uint8_t *gw = req_ip6(req, body, 12, RTA_GATEWAY);
+    const uint8_t *src = req_ip6(req, body, 12, RTA_PREFSRC);
     struct netdev *nd = 0;
     uint16_t len;
     const uint8_t *at = req_attr(req, body, 12, RTA_PRIORITY, &len);
@@ -2284,6 +2293,8 @@ static int32_t route6_change(const uint8_t *req, uint16_t type, uint16_t flags, 
     row.proto = req[NLMSG_HDRLEN + 5];
     row.plen = req[NLMSG_HDRLEN + 1];
     row.local = route_table(req, body) == RT_TABLE_LOCAL;
+    if (src)
+        k_memcpy(row.prefsrc, src, IP6_ADDR_LEN);
     if (dst)
         k_memcpy(row.dst, dst, IP6_ADDR_LEN);
     if (gw)

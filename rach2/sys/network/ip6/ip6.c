@@ -8,6 +8,7 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "ip6.h"
+#include "route6.h"
 #include "../tcp/tcp.h"
 #include "../udp/udp.h"
 #include "icmp6.h"
@@ -83,6 +84,8 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
     if (!out) {
         return -EADDRNOTAVAIL;
     }
+    if (!ip6_is_multicast(dst) && !ip6_link_scoped(dst) && route6_preferred_source(out, dst, src))
+        return 0;
     if (ip6_is_multicast(dst)) {
         want = scope_rank(ip6_link_scoped(dst) ? NETDEV_SCOPE_LINK : NETDEV_SCOPE_GLOBAL);
     } else {
