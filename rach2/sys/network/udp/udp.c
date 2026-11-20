@@ -29,17 +29,17 @@ typedef struct udp_binding {
 
 static udp_binding_t *bindings;
 
-/* The bindings of each ephemeral port, counted from NET_PORT_LOW, which
- * `udp_bind_ephemeral` reads in place of the list. */
-static uint32_t udp_ports[NET_PORTS];
+/* The bindings of each port, indexed by port, which `udp_bind_ephemeral`
+ * reads in place of the list. Every port is counted, since a write of
+ * ip_local_port_range may move the ephemeral range over ports bound
+ * before it. */
+static uint32_t udp_ports[65536];
 
 /** Count a binding of `port` made (`delta` 1) or taken away (-1) in
- * `udp_ports`, when the port is of the ephemeral range. */
+ * `udp_ports`. */
 static void udp_port_count(uint16_t port, int delta)
 {
-    if (port >= NET_PORT_LOW && port <= NET_PORT_HIGH) {
-        udp_ports[port - NET_PORT_LOW] += (uint32_t)delta;
-    }
+    udp_ports[port] += (uint32_t)delta;
 }
 
 /* The datagram being sent when it fits one frame; a larger one is built in
@@ -114,16 +114,17 @@ int udp_bind(uint16_t port, struct socket *sock)
  */
 uint16_t udp_bind_ephemeral(struct socket *sock)
 {
-    uint32_t start = krandom_u32() % NET_PORTS, i, k;
+    uint32_t r = net_port_range, low = NET_PORT_LOW(r);
+    uint32_t span = NET_PORT_HIGH(r) - low + 1u, start = krandom_u32() % span, i, k;
     uint16_t port;
 
-    for (i = 0; i < NET_PORTS; i++) {
+    for (i = 0; i < span; i++) {
         k = start + i;
-        if (k >= NET_PORTS) {
-            k -= NET_PORTS;
+        if (k >= span) {
+            k -= span;
         }
-        port = (uint16_t)(NET_PORT_LOW + k);
-        if (udp_ports[k] == 0) {
+        port = (uint16_t)(low + k);
+        if (udp_ports[port] == 0) {
             int rc = udp_bind(port, sock);
 
             if (rc == -ENOMEM) {

@@ -860,7 +860,8 @@ static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
         return -EADDRNOTAVAIL;
     }
 
-    if (port != 0 && port < 1024 && (!current_proc || !proc_privileged(current_proc))) {
+    if (port != 0 && port < NET_PORT_UNPRIVILEGED &&
+        (!current_proc || !proc_privileged(current_proc))) {
         return -EACCES;
     }
 

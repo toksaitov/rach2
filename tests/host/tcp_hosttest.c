@@ -356,6 +356,14 @@ uint32_t krandom_u32(void)
 struct net_mib net_mib;
 struct net_mib6 net_mib6;
 
+/* The ephemeral range, which net_core.c defines and a row moves. */
+uint32_t net_port_range = NET_PORT_RANGE_DEFAULT;
+
+/* Linux's default range, 32768 to 60999, which the rows assume unless they
+ * move it. */
+#define RANGE_LOW  32768u
+#define RANGE_HIGH 60999u
+
 /* ---- the cases ---- */
 
 static int fails;
@@ -389,6 +397,7 @@ static void reset_all(void)
     cb_connected = cb_fin = cb_writable = cb_deliver = cb_accept = 0;
     delivered_bytes = 0;
     kernel_ticks = 1000;
+    net_port_range = NET_PORT_RANGE_DEFAULT;
     while (tcbs) {
         tcb_free(tcbs);
     }
@@ -974,16 +983,15 @@ static void hold_ports(uint32_t first, uint32_t last, unsigned parity, int hold)
 
 /**
  * Make the next connection from `from` to PEER:`dport` start its search for
- * a port at `port`, an even one of the range, by setting the place of
- * `port_perturb` its hash picks.
+ * a port at `port`, one of the range an even offset from its low end, by
+ * setting the place of `port_perturb` its hash picks.
  */
 static void aim_connect(net_addr_t from, uint16_t dport, uint16_t port)
 {
     net_addr_t to = net_addr4(PEER);
-    uint32_t h = tcp_tuple_hash(&from, &to, 0, dport);
+    uint32_t h = tcp_tuple_hash(&from, &to, 0, dport), low, span = tcp_port_span(&low);
 
-    port_perturb[h & (TCP_PERTURB_SIZE - 1u)] =
-        ((uint32_t)(port - NET_PORT_LOW) + NET_PORTS - (h >> 8) % NET_PORTS) % NET_PORTS;
+    port_perturb[h & (TCP_PERTURB_SIZE - 1u)] = ((port - low) + span - (h >> 8) % span) % span;
 }
 
 /**
@@ -1025,7 +1033,7 @@ static void ephemeral_rows(void)
         ok &= port >= 32768u && port <= 60999u && (port & 1u) == 1u;
     }
     CHECK("a bind's ephemeral port is an odd one from 32768 to 60999", ok);
-    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 1, 1);
+    hold_ports(RANGE_LOW, RANGE_HIGH, 1, 1);
     hold_ports(40001, 40001, 1, 0);
     CHECK("a bind passes over every port a bound socket holds", tcp_bind_ephemeral() == 40001);
     hold_ports(40001, 40001, 1, 1);
@@ -1041,7 +1049,7 @@ static void ephemeral_rows(void)
               (conn->local_port & 1u) == 0u && conn->port_held == TCP_PORT_AUTO);
     from = conn ? conn->local_ip : net_addr4(0);
     tcp_close(&sock);
-    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 1, 0);
+    hold_ports(RANGE_LOW, RANGE_HIGH, 1, 0);
 
     hold_ports(60996, 60998, 0, 1);
     aim_connect(from, 80, 60996);
@@ -1052,7 +1060,7 @@ static void ephemeral_rows(void)
     tcp_close(&sock);
     hold_ports(60996, 60998, 0, 0);
 
-    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 1);
+    hold_ports(RANGE_LOW, RANGE_HIGH, 2, 1);
     hold_ports(32771, 32771, 2, 0);
     k_memset(&sock, 0, sizeof(sock));
     CHECK("with every even port held a connection takes the one odd port free",
@@ -1064,15 +1072,67 @@ static void ephemeral_rows(void)
     CHECK("with every port held a connection is EADDRNOTAVAIL and a bind gets none",
           tcp_connect(&other, net_addr4(PEER), 80) == -EADDRNOTAVAIL && other.tcb == 0 &&
               tcp_bind_ephemeral() == 0);
-    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 0);
-    for (i = 0, ok = 1; i < NET_PORTS; i++) {
+    hold_ports(RANGE_LOW, RANGE_HIGH, 2, 0);
+    for (i = 0, ok = 1; i < 65536u; i++) {
         ok &= port_fixed[i] == 0 && port_auto[i] == 0;
     }
     reset_all();
-    for (i = 0; i < NET_PORTS; i++) {
+    for (i = 0; i < 65536u; i++) {
         ok &= port_fixed[i] == 0 && port_auto[i] == 0;
     }
     CHECK("and every count is back to 0 once the holds and the blocks are gone", ok);
+}
+
+/**
+ * Check the ports chosen in a range that a write of ip_local_port_range
+ * moved, as Linux 6.12's searches choose them: a bind's port an odd offset
+ * from the low end and a connection's an even one; a port bound before the
+ * range moved over it passed over; a range of one port, given to a bind
+ * once; and a range of an odd count, whose top port no search reaches.
+ */
+static void range_rows(void)
+{
+    struct socket sock;
+    uint16_t port;
+    unsigned i, ok = 1;
+
+    reset_all();
+    net_port_range = (40003UL << 16) | 40000UL;
+    for (i = 0; i < 16; i++) {
+        port = tcp_bind_ephemeral();
+        ok &= port == 40001u || port == 40003u;
+    }
+    CHECK("in the range 40000 to 40003 a bind takes 40001 or 40003", ok);
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("and a connection 40000 or 40002",
+          tcp_connect(&sock, net_addr4(PEER), 80) == 0 && sock.tcb &&
+              (sock.tcb->local_port == 40000u || sock.tcb->local_port == 40002u));
+    tcp_close(&sock);
+
+    net_port_range = NET_PORT_RANGE_DEFAULT;
+    hold_ports(20001, 20001, 1, 1);
+    net_port_range = (20001UL << 16) | 20000UL;
+    CHECK("a port bound outside the range is passed over once the range covers it",
+          tcp_bind_ephemeral() == 20000u);
+    hold_ports(20000, 20000, 0, 1);
+    CHECK("and with both of its ports held a bind gets none", tcp_bind_ephemeral() == 0);
+    hold_ports(20000, 20001, 2, 0);
+
+    net_port_range = (45000UL << 16) | 45000UL;
+    CHECK("a range of one port gives a bind that port", tcp_bind_ephemeral() == 45000u);
+    hold_ports(45000, 45000, 2, 1);
+    CHECK("and none once it is held", tcp_bind_ephemeral() == 0);
+    hold_ports(45000, 45000, 2, 0);
+
+    net_port_range = (40004UL << 16) | 40000UL;
+    hold_ports(40000, 40003, 2, 1);
+    CHECK("in the range 40000 to 40004 no search reaches 40004, as on Linux",
+          tcp_bind_ephemeral() == 0);
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("a connection there is EADDRNOTAVAIL",
+          tcp_connect(&sock, net_addr4(PEER), 80) == -EADDRNOTAVAIL);
+    hold_ports(40000, 40003, 2, 0);
+    reset_all();
 }
 
 /**
@@ -1106,11 +1166,11 @@ static void time_wait_rows(void)
     k_memset(&shared, 0, sizeof(shared));
     CHECK("a connection to another port of the peer shares it, as on Linux",
           tcp_connect(&shared, net_addr4(PEER), 83) == 0 && shared.tcb &&
-              shared.tcb->local_port == lport && port_auto[lport - NET_PORT_LOW] == 2);
+              shared.tcb->local_port == lport && port_auto[lport] == 2);
     tcp_close(&shared);
     tcp_close(&next);
 
-    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 1);
+    hold_ports(RANGE_LOW, RANGE_HIGH, 2, 1);
     hold_ports(lport, lport, 2, 0);
     CHECK("a bind does not get a port only a TIME_WAIT block holds", tcp_bind_ephemeral() == 0);
 
@@ -1123,7 +1183,7 @@ static void time_wait_rows(void)
     tcp_tick();
     CHECK("and is freed at 60 s", tw_first == 0 && tw_count == 0 && tcbs == 0);
     CHECK("which gives its port back to a bind", tcp_bind_ephemeral() == lport);
-    hold_ports(NET_PORT_LOW, NET_PORT_HIGH, 2, 0);
+    hold_ports(RANGE_LOW, RANGE_HIGH, 2, 0);
     reset_all();
 }
 
@@ -3238,6 +3298,7 @@ int main(void)
     sack_rows();
     half_close_rows();
     ephemeral_rows();
+    range_rows();
     time_wait_rows();
     time_wait_more_rows();
     path_mtu_row();

@@ -43,11 +43,27 @@
 #define NET_IP_MASK_DEFAULT    0xFFFFFF00UL /* 255.255.255.0 */
 #define NET_IP_GATEWAY_DEFAULT 0x0A000202UL /* 10.0.2.2      */
 
-/* The ephemeral ports, which TCP and UDP give a socket that bound none:
-   Linux's ip_local_port_range, 32768 to 60999. */
-#define NET_PORT_LOW  32768u
-#define NET_PORT_HIGH 60999u
-#define NET_PORTS     (NET_PORT_HIGH - NET_PORT_LOW + 1u)
+/* The ephemeral ports, which TCP and UDP give a socket that bound none, as
+   Linux keeps its ip_local_port_range: the lowest in the low 16 bits of
+   `net_port_range` and the highest in the high 16, so that one load reads
+   both ends of one range. 32768 to 60999 until a write of
+   /proc/sys/net/ipv4/ip_local_port_range sets others (`net_port_range_set`). */
+#define NET_PORT_RANGE_DEFAULT ((60999UL << 16) | 32768UL)
+#define NET_PORT_LOW(r)        ((uint32_t)(r) & 0xFFFFu)
+#define NET_PORT_HIGH(r)       ((uint32_t)(r) >> 16)
+extern uint32_t net_port_range;
+
+/* The first port a process without privilege may bind, Linux's PROT_SOCK,
+   and the lowest the ephemeral range may start at. */
+#define NET_PORT_UNPRIVILEGED 1024u
+
+/** Make `low` through `high` the ephemeral range, as Linux's
+ * `ipv4_local_port_range` does after a write: 0, or -EINVAL, which changes
+ * nothing, when `high` is below `low`, `low` below NET_PORT_UNPRIVILEGED
+ * or `high` above 65535. The first range set whose ends are both even or
+ * both odd is logged, as Linux logs it, since the port searches give a
+ * connection the ports of the low end's parity and a bind the others. */
+int net_port_range_set(int low, int high);
 
 /* The first interface's station address, which `netdev_probe` copies in; all
    zeros with no card. */

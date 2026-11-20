@@ -415,7 +415,8 @@ static const struct {
                {6, "sched_autogroup_enabled", ""},
                {6, "sched_rr_timeslice_ms", ""},
                {6, "sched_rt_period_us", ""},
-               {6, "sched_rt_runtime_us", ""}};
+               {6, "sched_rt_runtime_us", ""},
+               {21, "ip_local_port_range", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -457,7 +458,8 @@ static const int sys_writable_lone[] = {SYNTH_SYS_HOSTNAME,           SYNTH_SYS_
                                         SYNTH_SYS_NETDEV_BUDGET,      SYNTH_SYS_NETDEV_BUDGET_USECS,
                                         SYNTH_SYS_SCHED_SCHEDSTATS,   SYNTH_SYS_PID_MAX,
                                         SYNTH_SYS_SCHED_AUTOGROUP,    SYNTH_SYS_SCHED_RR_TIMESLICE,
-                                        SYNTH_SYS_SCHED_RT_PERIOD,    SYNTH_SYS_SCHED_RT_RUNTIME};
+                                        SYNTH_SYS_SCHED_RT_PERIOD,    SYNTH_SYS_SCHED_RT_RUNTIME,
+                                        SYNTH_SYS_IP_LOCAL_PORT_RANGE};
 
 int synth_sys_writable(int entry)
 {

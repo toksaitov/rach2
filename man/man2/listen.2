@@ -22,7 +22,9 @@ The operation is subcall 4 of i386
 system call 102.
 .Pp
 A socket with no local port, or one bound to port zero, listens on a free
-port from 32768 through 60999, as on Linux, and
+port of the ephemeral range,
+.Pa /proc/sys/net/ipv4/ip_local_port_range ,
+as on Linux, and
 .Xr getsockname 2
 reports it.
 Listeners may share a port at disjoint addresses.
