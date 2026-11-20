@@ -733,6 +733,11 @@ static void tcb_take_port(struct tcb *tcb, uint16_t port, int kind)
     }
 }
 
+int tcp_port_in_use(uint16_t port)
+{
+    return port_fixed[port] != 0 || port_auto[port] != 0;
+}
+
 void tcp_port_hold(uint16_t port)
 {
     if (port != 0) {
@@ -1873,6 +1878,9 @@ static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
 {
     const struct tcb *t;
 
+    if (port_fixed[port] == 0) {
+        return 0; /* every listener counts its port there */
+    }
     for (t = tcbs; t && t != tw_first; t = t->next) {
         if (t->state == TCP_LISTEN && t->local_port == port &&
             (t->sock && socket_bind_conflict(t->sock, sock))) {
@@ -2753,6 +2761,9 @@ static int backlog_refusal_logged;
  *
  * A socket that never bound a port listens on the next ephemeral one, as a
  * `listen` on Linux binds it, and `getsockname` reports the port chosen.
+ * A port the tables count no holder of (`tcp_port_in_use`) has no listener
+ * and no bound socket, so the search for one is not made, as Linux's bind
+ * table answers for a port without a bucket.
  */
 int tcp_listen(struct socket *sock, uint16_t port)
 {
@@ -2765,7 +2776,8 @@ int tcp_listen(struct socket *sock, uint16_t port)
     if (port == 0) {
         port = tcp_free_port();
     }
-    if (port == 0 || tcp_port_has_listener(sock, port) || socket_stream_conflict(sock, port)) {
+    if (port == 0 || (tcp_port_in_use(port) &&
+                      (tcp_port_has_listener(sock, port) || socket_stream_conflict(sock, port)))) {
         net_unlock(flags);
         return -EADDRINUSE;
     }

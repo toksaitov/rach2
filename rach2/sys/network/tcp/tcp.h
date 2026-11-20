@@ -642,6 +642,12 @@ uint16_t tcp_bind_ephemeral(void);
 void tcp_port_hold(uint16_t port);
 void tcp_port_unhold(uint16_t port);
 
+/** Whether a block or a bound stream socket holds `port`, as the table of
+ * ports in use counts them: when not, no listener, connection or bound
+ * socket has it, and a bind need search for none. The caller holds
+ * `net_lock`. */
+int tcp_port_in_use(uint16_t port);
+
 /**
  * Make `sock` a listener on `port`, at the address it bound or any, or on
  * the next ephemeral port when `port` is 0, and set `sock->local_port` to
