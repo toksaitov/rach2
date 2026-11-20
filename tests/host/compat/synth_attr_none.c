@@ -4,11 +4,12 @@
 #include "../../../rach2/sys/fs/vfs.h"
 
 /** Nothing: no node has kept attributes. */
-void synth_attr_apply(uint64_t dev, uint64_t ino, struct vfs_stat *st)
+int synth_attr_apply(uint64_t dev, uint64_t ino, struct vfs_stat *st)
 {
     (void)dev;
     (void)ino;
     (void)st;
+    return 0;
 }
 
 /** Keep nothing, and succeed: no row reads a change back. */

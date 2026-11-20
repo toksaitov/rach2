@@ -448,9 +448,10 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
  * identity class is chosen, then the DAC capabilities are checked for
  * an inode whose IDs are mapped. The ids are the
  * file-system ones (`proc_fsuid`, `proc_fsgid`); `use_real` judges by the
- * real ids, for access(2). A node of a type without `getattr` is
- * searchable, and so is every directory to the kernel when no process
- * runs.
+ * real ids, for access(2). A synthetic directory a chmod or chown has
+ * changed is judged by what they kept (`synth_kept_may`). A node of a type
+ * without `getattr` is searchable, and so is every directory to the
+ * kernel when no process runs.
  */
 static int may_search(struct vfs_mount *mnt, void *node, int use_real)
 {
@@ -469,6 +470,13 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     }
     if (vp && (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR)) {
         return procfs_fd_dir_access(vp->kind, procfs_resolve_id(vp), 1, use_real);
+    }
+    if (vp && current_proc) {
+        int kept = synth_kept_may(vp, 1, use_real);
+
+        if (kept >= 0) {
+            return kept ? 0 : -EACCES;
+        }
     }
     if (!mnt->type->ops->getattr) {
         return 0;

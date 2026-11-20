@@ -15,10 +15,11 @@ struct vfs_stat;
 /**
  * Give `st` the fields kept for the node of device `dev` and inode `ino`:
  * the permission bits, keeping the type, the owner, the group and the three
- * times, each only once a change has set it. Nothing for a node no change
- * has reached.
+ * times, each only once a change has set it. Returns the VFS_SET_* bits of
+ * the fields kept, 0 for a node no change has reached, which `st` keeps as
+ * it was.
  */
-void synth_attr_apply(uint64_t dev, uint64_t ino, struct vfs_stat *st);
+int synth_attr_apply(uint64_t dev, uint64_t ino, struct vfs_stat *st);
 
 /**
  * Keep for the node of `dev` and `ino` the fields of `st` that `what`, an

@@ -4683,6 +4683,7 @@
         {"assertion_id": "proc-self", "checks": "Lchown of /proc/self to 1000 succeeds and its stat shows it, as Linux keeps it on the link's inode, and back to root succeeds.", "source": "program"},
         {"assertion_id": "dev-null", "checks": "AT_EMPTY_PATH on an O_PATH descriptor of /dev/null changes the device's owner to 1000, as on Linux, which stat reads, and back to root.", "source": "program"},
         {"assertion_id": "synthetic", "checks": "Chmod of /proc/self/status and chmod and chown of /proc/sys/kernel/hostname are EPERM for root, as Linux's proc_setattr and proc_sys_setattr answer; /proc/version keeps a mode and times, /sys/kernel/security/lockdown an owner and /dev/null times, as their Linux inodes keep them.", "source": "program"},
+        {"assertion_id": "synthetic-access", "checks": "The mode root gives keeps governing access, as on Linux: an ordinary user cannot open or access /proc/version at 0400 or search /sys/kernel at 0700, and opens /sys/kernel/security/lockdown for writing at 0666, which its own 0644 refuses; every mode is set back.", "source": "program"},
         {"assertion_id": "link-owner", "checks": "Lchown changes a link's owner and group and not its target's.", "source": "program"},
         {"assertion_id": "chown-follows", "checks": "Chown through the link changes the target and not the link.", "source": "program"},
         {"assertion_id": "nofollow-link", "checks": "Fchownat with AT_SYMLINK_NOFOLLOW changes the link and not its target.", "source": "program"},

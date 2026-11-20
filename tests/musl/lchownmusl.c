@@ -40,6 +40,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
@@ -80,6 +81,7 @@ enum {
     PROC_SELF,
     DEV_NULL,
     SYNTHETIC,
+    SYNTHETIC_ACCESS,
     LINK_OWNER,
     CHOWN_FOLLOWS,
     NOFOLLOW_LINK,
@@ -111,6 +113,7 @@ static const struct {
     {"proc-self", "the /proc/self link"},
     {"dev-null", "an O_PATH descriptor on /dev/null changes the device's owner"},
     {"synthetic", "chmod, chown and utimensat of /proc, /sys and /dev nodes"},
+    {"synthetic-access", "the mode root gives /proc and /sys nodes governs access"},
     {"link-owner", "lchown changes the link and not its target"},
     {"chown-follows", "chown follows the link"},
     {"nofollow-link", "AT_SYMLINK_NOFOLLOW changes the link"},
@@ -302,10 +305,81 @@ static int synthetic_rows(void)
     return ok ? 0 : fail(SYNTHETIC);
 }
 
+/** The checks an ordinary user's child makes after `synthetic_access_rows`
+ * has made /proc/version 0400 and /sys/kernel 0700: open and access of the
+ * one and a search of the other are EACCES. 0 when they all are. */
+static int closed_to_user(void)
+{
+    struct stat st;
+
+    return refused(open("/proc/version", O_RDONLY), EACCES) &&
+                   refused(access("/proc/version", R_OK), EACCES) &&
+                   refused(stat(LOCKDOWN, &st), EACCES)
+               ? 0
+               : 1;
+}
+
+/** The check an ordinary user's child makes once the lockdown file is
+ * 0666: it opens for writing. 0 when it does. */
+static int open_to_user(void)
+{
+    int fd = open(LOCKDOWN, O_WRONLY);
+
+    if (fd < 0) {
+        return 1;
+    }
+    close(fd);
+    return 0;
+}
+
+/** Run `check` in a child with the ids 1000 and 1001, which have no
+ * capabilities; whether it exited 0. */
+static int as_user(int (*check)(void))
+{
+    int status;
+    pid_t pid;
+
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+        _exit(setgid(1001) == 0 && setuid(1000) == 0 ? check() : 2);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/**
+ * Check that the mode root gives a node of /proc or /sys governs the
+ * access of others, as the mode Linux keeps on its proc_dir_entry or
+ * kernfs inode does: with /proc/version 0400 an ordinary user can neither
+ * open nor access it, with /sys/kernel 0700 not search it, and with the
+ * lockdown file 0666 open that for writing, which its 0644 refuses. Every
+ * mode is set back. Returns 0, or 1 once the failure is reported.
+ */
+static int synthetic_access_rows(void)
+{
+    struct stat ver, dir, lock;
+    int ok;
+
+    if (stat("/proc/version", &ver) != 0 || stat("/sys/kernel", &dir) != 0 ||
+        stat(LOCKDOWN, &lock) != 0) {
+        return fail(SYNTHETIC_ACCESS);
+    }
+    ok = !as_user(open_to_user);
+    ok = ok && chmod("/proc/version", 0400) == 0 && chmod("/sys/kernel", 0700) == 0 &&
+         as_user(closed_to_user);
+    ok = chmod("/sys/kernel", dir.st_mode & 07777) == 0 && ok;
+    ok = ok && chmod(LOCKDOWN, 0666) == 0 && as_user(open_to_user);
+    ok = chmod(LOCKDOWN, lock.st_mode & 07777) == 0 && ok;
+    ok = chmod("/proc/version", ver.st_mode & 07777) == 0 && ok;
+    return ok ? 0 : fail(SYNTHETIC_ACCESS);
+}
+
 /**
  * Check the errors of the flags, and /proc/self and /dev/null, whose owner
  * root changes, as Linux keeps it on their inodes, and sets back; then
- * `synthetic_rows`. Returns 0, or 1 once the failure is reported.
+ * `synthetic_rows` and `synthetic_access_rows`. Returns 0, or 1 once the
+ * failure is reported.
  */
 static int refusal_rows(void)
 {
@@ -333,7 +407,7 @@ static int refusal_rows(void)
     if (!ok) {
         return fail(DEV_NULL);
     }
-    return synthetic_rows();
+    return synthetic_rows() || synthetic_access_rows();
 }
 
 /**

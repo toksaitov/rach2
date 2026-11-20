@@ -355,6 +355,17 @@ int procfs_fd_is_sys(struct fd_entry *e);
  * FD_TYPE_PROC, is open on. */
 int procfs_fd_set_class(struct fd_entry *e);
 
+/**
+ * Judge the access `want`, an OR of 4 read, 2 write and 1 search or
+ * execute, to the /dev, /proc or /sys node `vp` of class PROCFS_SET_KEPT
+ * by the owner, group and mode its stat gives once a chmod or chown has
+ * kept one of them (synth_attr.h), as Linux's generic_permission judges a
+ * kernfs, proc_dir_entry or devtmpfs inode by what its setattr left; by
+ * the real ids with `use_real`, for access(2). 1 allowed, 0 refused, or -1
+ * for a node with nothing kept, whose own fixed checks stand (syscall_fs.c).
+ */
+int synth_kept_may(const struct vpath *vp, uint32_t want, int use_real);
+
 /** The inode of the /sys directory `node`, with its device `key`, when
  * `file` is 0, and of its attribute `file` - 1 when `file` is positive; a
  * PCI function or a USB device has its uevent as `file` 1 and its link as

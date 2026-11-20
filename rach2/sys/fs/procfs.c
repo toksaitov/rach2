@@ -9132,8 +9132,22 @@ static int sysfs_open_acc(int flags)
 }
 
 /**
- * Whether the caller may open the /sys attribute `attr` of the node `node`
- * and the key `key` with the flags `flags`, whose access mode is 0 read,
+ * `sysfs_file_may` of the /sys node `vp`, root's with the mode `mode`
+ * until a chmod or chown keeps another owner, group or mode for it, which
+ * then judge alone (`synth_kept_may`), as kernfs judges by what its setattr
+ * left.
+ */
+static int sysfs_node_may(const struct vpath *vp, uint32_t mode, int acc)
+{
+    int kept = synth_kept_may(vp, acc == 0 ? 4u : acc == 1 ? 2u : 6u, 0);
+
+    return kept >= 0 ? kept : sysfs_file_may(mode, acc);
+}
+
+/**
+ * Whether the caller may open the /sys attribute `vp` names, its attribute
+ * `procfile` of the node `sysent` and the key `syskey`, with the flags
+ * `flags`, whose access mode is 0 read,
  * 1 write, 2 both or 3 neither, as Linux judges the open of a kernfs file.
  * A direction the descriptor would have that the file does not support is
  * refused first, whatever capabilities the caller holds, as
@@ -9144,15 +9158,17 @@ static int sysfs_open_acc(int flags)
  * attribute's own, or a fixed one's (`sysfs_attr_mode`), whose directions
  * are a read and those `sysfs_attr_writable` gives it.
  */
-static int sysfs_attr_may(int node, int key, int attr, int flags)
+static int sysfs_attr_may(const struct vpath *vp, int flags)
 {
+    int node = vp->sysent, key = vp->syskey, attr = vp->procfile;
     int acc = flags & 3;
 
     if (acc == 3 || (acc != 1 && node == SYSFS_REG && !sysfs_node_readable(key)) ||
         (acc != 0 && !sysfs_file_writable(node, key, attr))) {
         return 0;
     }
-    return sysfs_file_may(node == SYSFS_REG ? sysfs_node_mode(key) : sysfs_attr_mode(node, attr),
+    return sysfs_node_may(vp,
+                          node == SYSFS_REG ? sysfs_node_mode(key) : sysfs_attr_mode(node, attr),
                           sysfs_open_acc(flags));
 }
 
@@ -9165,7 +9181,7 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !sysfs_file_may(0644, sysfs_open_acc(flags))) {
+    if (acc == 3 || !sysfs_node_may(vp, 0644, sysfs_open_acc(flags))) {
         return -EACCES;
     }
     if (!sysfs_pci_present(vp->syskey)) {
@@ -9422,7 +9438,7 @@ static int procfs_open_pcibar(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || !sysfs_file_may(0600, sysfs_open_acc(flags))) {
+    if (acc == 3 || !sysfs_node_may(vp, 0600, sysfs_open_acc(flags))) {
         return -EACCES;
     }
     if (!sysfs_pci_attr_present(vp->syskey, vp->procfile)) {
@@ -11888,24 +11904,26 @@ static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read,
                                                    0};
 
 /**
- * Open the writable attribute `attr` of the /sys directory `node` of the
- * device `key` for writing, or for reading and writing, as `sysfs_attr_may`
- * judges the access: by the directions the file supports, then against its
- * mode, owned by root, a registered attribute's own (`sysfs_node_mode`) and
- * 0644 for a fixed one's, as `procfs_fd_writable` reports them. -EACCES
+ * Open the writable /sys attribute `vp` names for writing, or for reading
+ * and writing, as `sysfs_attr_may` judges the access: by the directions the
+ * file supports, then against its mode, owned by root, a registered
+ * attribute's own (`sysfs_node_mode`) and 0644 for a fixed one's, as
+ * `procfs_fd_writable` reports them, or the owner and mode a chmod or chown
+ * kept (`sysfs_node_may`). -EACCES
  * for an access it refuses. Each read and write reaches
  * the value as it is then. The descriptor is a sysfs one, with the node and
  * the attribute in `origin_task` and the key in `origin_pid`, as a snapshot
  * of a /sys file has them.
  */
-static int procfs_open_sysattr(int node, int key, int attr, int flags)
+static int procfs_open_sysattr(const struct vpath *vp, int flags)
 {
+    int node = vp->sysent, key = vp->syskey, attr = vp->procfile;
     struct procfs_file *f;
     fd_entry_t *e;
     int acc = flags & 3;
     int fd;
 
-    if (!sysfs_attr_may(node, key, attr, flags)) {
+    if (!sysfs_attr_may(vp, flags)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -12793,7 +12811,7 @@ static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
                                                : procfs_open_pcibar(vp, flags);
     } else if (vp->kind == VNODE_SYS_FILE &&
                sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) && acc != 0) {
-        *fd = procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
+        *fd = procfs_open_sysattr(vp, flags);
     } else {
         return 0;
     }
@@ -12814,10 +12832,10 @@ static int sysfs_read_refused(const struct vpath *vp, int flags)
         return 0;
     }
     if (vp->sysent == SYSFS_REG) {
-        return sysfs_node_kind(vp->syskey) == SYSFS_NODE_ATTR &&
-               !sysfs_attr_may(SYSFS_REG, vp->syskey, vp->procfile, flags & ~3);
+        return sysfs_node_kind(vp->syskey) == SYSFS_NODE_ATTR && !sysfs_attr_may(vp, flags & ~3);
     }
-    return !sysfs_file_may(sysfs_attr_mode(vp->sysent, vp->procfile), sysfs_open_acc(flags & ~3));
+    return !sysfs_node_may(vp, sysfs_attr_mode(vp->sysent, vp->procfile),
+                           sysfs_open_acc(flags & ~3));
 }
 
 /**

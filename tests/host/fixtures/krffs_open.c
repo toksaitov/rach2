@@ -363,6 +363,15 @@ static void path_buf_put(char *buf)
     free(buf);
 }
 
+/** No model node has an owner or mode a chmod or chown kept. */
+int synth_kept_may(const struct vpath *vp, uint32_t want, int use_real)
+{
+    (void)vp;
+    (void)want;
+    (void)use_real;
+    return -1;
+}
+
 /** No model node is a process descriptor directory. */
 int procfs_fd_dir_access(int kind, int pid, int want, int use_real)
 {

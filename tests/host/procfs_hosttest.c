@@ -922,6 +922,29 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     k_memcpy(out, path, n + 1);
     return 0;
 }
+/** A root the fixture's mount tables hold is held by nothing. */
+void vfs_place_hold(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+}
+
+/** Let go of nothing, as `vfs_place_hold` took nothing. */
+void vfs_place_release(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+}
+
+/** No fixture node has an owner or mode a chmod or chown kept. */
+int synth_kept_may(const struct vpath *vp, uint32_t want, int use_real)
+{
+    (void)vp;
+    (void)want;
+    (void)use_real;
+    return -1;
+}
+
 /** The model executable has a link exactly while its current path exists. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
@@ -4687,6 +4710,7 @@ static int32_t store_flag(void *obj, int arg, const char *buf, uint32_t len)
 static int reg_file_open(int h, int flags)
 {
     fd_entry_t *e = &entries[0];
+    struct vpath vp;
 
     process.fds = &table;
     table.chunks[0] = entries;
@@ -4694,7 +4718,11 @@ static int reg_file_open(int h, int flags)
     k_memset(e, 0, sizeof(*e));
     k_memset(&mem_ofd, 0, sizeof(mem_ofd));
     e->ofd = &mem_ofd;
-    return procfs_open_sysattr(SYSFS_REG, h, 0, flags);
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_REG;
+    vp.syskey = h;
+    return procfs_open_sysattr(&vp, flags);
 }
 
 /** Whether a read open of the registered attribute `h` with `flags` is

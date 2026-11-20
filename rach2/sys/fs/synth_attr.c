@@ -65,15 +65,17 @@ static void synth_attr_copy(struct vfs_stat *to, const struct vfs_stat *from, in
     }
 }
 
-void synth_attr_apply(uint64_t dev, uint64_t ino, struct vfs_stat *st)
+int synth_attr_apply(uint64_t dev, uint64_t ino, struct vfs_stat *st)
 {
     uint32_t irq = spin_lock_irqsave(&synth_attrs_lock);
     const struct synth_attr *a = synth_attr_find(dev, ino);
+    int what = a ? a->what : 0;
 
     if (a) {
         synth_attr_copy(st, &a->st, a->what);
     }
     spin_unlock_irqrestore(&synth_attrs_lock, irq);
+    return what;
 }
 
 int32_t synth_attr_store(uint64_t dev, uint64_t ino, int what, const struct vfs_stat *st)

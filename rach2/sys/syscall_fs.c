@@ -3776,6 +3776,13 @@ static int open_want(int flags)
     }
 }
 
+/** The access an open with `flags` asks of a file's mode, `open_want`'s,
+ * with a write for O_TRUNC, as Linux's build_open_flags adds MAY_WRITE. */
+static int synth_open_want(int flags)
+{
+    return open_want(flags) | ((flags & O_TRUNC) ? CRED_W : 0);
+}
+
 /** Open the file of /proc at `vp` that is root's alone, checked for the
  * access `want` as a file of `mode` that root owns: /proc/disk for reading
  * as 0400, whatever `flags` ask, and /proc/acpi/call as 0600. */
@@ -3832,9 +3839,19 @@ static int32_t pts_ptmx_open(const struct vpath *vp, int flags)
  * follows its link (`proc_fd_open`), /proc/PID/fdinfo/N opens for a caller
  * that may read the process, and a namespace link opens its namespace
  * (`procfs_open_ns`).
+ *
+ * A node whose mode or owner a chmod or chown kept is judged first by
+ * those (`synth_kept_may`), as Linux judges a kernfs, proc_dir_entry or
+ * devtmpfs inode by what its setattr left, and its fixed checks then do
+ * not apply: -EACCES for an access they refuse.
  */
 static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, int flags)
 {
+    int kept = synth_kept_may(vp, (uint32_t)synth_open_want(flags), 0);
+
+    if (kept == 0) {
+        return -EACCES;
+    }
     if (synth_kind_is_dir(vp->kind)) {
         return synth_open_dir(mnt, vp, flags, NULL);
     }
@@ -3903,9 +3920,10 @@ static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, i
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
-        return synth_open_root(vp, flags, 0400u, CRED_R);
+        return kept > 0 ? procfs_open(vp, flags) : synth_open_root(vp, flags, 0400u, CRED_R);
     case VNODE_PROC_ACPI_CALL:
-        return synth_open_root(vp, flags, 0600u, open_want(flags));
+        return kept > 0 ? procfs_open(vp, flags)
+                        : synth_open_root(vp, flags, 0600u, open_want(flags));
     case VNODE_DEV_MADE:
         return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(mnt, vp, flags, NULL) : -ENOENT;
     case VNODE_ENOTDIR:
@@ -10742,14 +10760,17 @@ static void vfs_to_kst(const struct vfs_stat *st, struct kstat *kst)
 }
 
 /** Give `kst`, a synthetic node's, what a chmod, chown or utimensat of the
- * node has kept for it (`synth_attr_apply`). */
-static void kst_kept(struct kstat *kst)
+ * node has kept for it (`synth_attr_apply`), and return the VFS_SET_* bits
+ * of what was kept. */
+static int kst_kept(struct kstat *kst)
 {
     struct vfs_stat st;
+    int what;
 
     kst_to_vfs(kst, &st);
-    synth_attr_apply(kst->st_dev, kst->st_ino, &st);
+    what = synth_attr_apply(kst->st_dev, kst->st_ino, &st);
     vfs_to_kst(&st, kst);
+    return what;
 }
 
 /**
@@ -14339,6 +14360,17 @@ static int32_t chown_synth_kept(int class, const struct kstat *ks, uint32_t uid,
         return what < 0 ? what : 0;
     }
     return synth_attr_store(ks->st_dev, ks->st_ino, what, &st);
+}
+
+int synth_kept_may(const struct vpath *vp, uint32_t want, int use_real)
+{
+    struct kstat kst;
+
+    if (synth_set_class(vp) != PROCFS_SET_KEPT || synth_stat_fixed(vp, &kst, 0, use_real) != 0 ||
+        !(kst_kept(&kst) & (VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID))) {
+        return -1;
+    }
+    return inode_may_access(kst.st_uid, kst.st_gid, kst.st_mode, want, use_real);
 }
 
 static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode);
