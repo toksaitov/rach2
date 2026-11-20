@@ -55,25 +55,22 @@ int32_t i915_gt_ggtt_take_aligned(struct drm_i915_private *i915, uint32_t bytes,
 {
     struct i915_gt *gt = &i915->gt;
     const struct i915_ggtt *ggtt = &i915->ggtt;
+    const struct i915_gtt_range *range;
     uint64_t size =
         ((uint64_t)bytes + I915_GTT_PAGE_SIZE - 1) & ~(uint64_t)(I915_GTT_PAGE_SIZE - 1);
     uint64_t mask = ~(uint64_t)(align - 1u);
     const struct i915_vma *vma;
     uint64_t start;
-    int i;
 
     if (size == 0 || size >= gt->ggtt_bottom) {
         return -ENOSPC;
     }
     start = (gt->ggtt_bottom - size) & mask;
-    for (i = 0; i < ggtt->nkept; i++) {
-        if (start < ggtt->kept[i].end && start + size > ggtt->kept[i].start) {
-            if (ggtt->kept[i].start < size) {
-                return -ENOSPC;
-            }
-            start = (ggtt->kept[i].start - size) & mask;
-            i = -1;
+    while ((range = i915_ggtt_kept_overlap(ggtt, start, start + size)) != 0) {
+        if (range->start < size) {
+            return -ENOSPC;
         }
+        start = (range->start - size) & mask;
     }
     /* Nor the space a buffer's binding holds. */
     for (vma = i915->gem.bound; vma; vma = vma->ggtt_next) {
@@ -392,16 +389,23 @@ static void i915_ring_irq(struct drm_i915_private *i915, uint32_t iir, void *dat
 }
 
 /** Give `e` its status page and ring, mapped in the global GTT at the
- * LLC's cache level, as Linux's internal objects on an LLC part: 0 or
- * -ENOMEM. */
+ * LLC's cache level. Reserve the record needed if the page cannot be
+ * unmapped before mapping it. Return 0 or -ENOMEM. */
 static int32_t i915_engine_alloc(struct drm_i915_private *i915, struct i915_engine *e)
 {
+    struct i915_ggtt_status *status;
     uint32_t ggtt;
 
-    e->hws = (uint32_t *)i915_gt_pages_map(i915, 1, I915_CACHE_LLC, &ggtt);
-    if (!e->hws) {
+    status = kmalloc(sizeof(*status));
+    if (!status) {
         return -ENOMEM;
     }
+    e->hws = (uint32_t *)i915_gt_pages_map(i915, 1, I915_CACHE_LLC, &ggtt);
+    if (!e->hws) {
+        kfree(status);
+        return -ENOMEM;
+    }
+    e->hws_keep = status;
     e->hws_ggtt = ggtt;
     e->ring = (uint32_t *)i915_gt_pages_map(i915, I915_RING_SIZE / I915_GTT_PAGE_SIZE,
                                             I915_CACHE_LLC, &ggtt);
@@ -508,16 +512,18 @@ void i915_gt_fini(struct drm_i915_private *i915)
             i915_write(&i915->hw, RING_HWSTAM(e->mmio_base), 0xffffffffu);
             if (fw && i915_read(&i915->hw, RING_HWSTAM(e->mmio_base)) == 0xffffffffu) {
                 i915_gt_pages_unmap(i915, e->hws, 1, e->hws_ggtt);
+                kfree(e->hws_keep);
             } else {
                 klog(KLOG_WARN, "i915",
                      "rings: %s: status page kept at 0x%x: its writes not masked", e->name,
                      (unsigned)e->hws_ggtt);
-                i915_ggtt_carry(i915, e->hws_ggtt);
+                i915_ggtt_carry(i915, e->hws_keep, e->hws_ggtt);
                 if (e->hws_ggtt < kept) {
                     kept = e->hws_ggtt;
                 }
             }
             e->hws = 0;
+            e->hws_keep = 0;
         }
     }
     i915_ppgtt_fini(i915);

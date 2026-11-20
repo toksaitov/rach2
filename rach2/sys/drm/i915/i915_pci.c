@@ -268,6 +268,7 @@ static void i915_unplug(struct drm_device *dev)
     i915_devices_remove(i915);
     i915_gt_fini(i915);
     i915_gem_unplug(i915);
+    i915_ggtt_carry_park(i915);
     i915_uncore_fini(i915);
     i915_gem_unlock(i915, taken);
 }
@@ -509,6 +510,7 @@ static int32_t i915_register(struct drm_i915_private *i915, uint16_t command, in
         i915_msi_stop(i915);
         i915_devices_remove(i915);
         i915_gt_fini(i915);
+        i915_ggtt_carry_park(i915);
         i915_uncore_fini(i915);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
         if (claimed) {
