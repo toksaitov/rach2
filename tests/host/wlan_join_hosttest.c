@@ -257,6 +257,12 @@ void netdev_unregister(struct netdev *nd)
     iface = 0;
 }
 
+/** Withdraw the only model interface after the radio has stopped. */
+void netdev_withdraw(struct netdev *nd)
+{
+    netdev_unregister(nd);
+}
+
 /** The interface's IPv6 reassemblies, which no row makes. */
 void ip6_forget_dev(struct netdev *nd)
 {

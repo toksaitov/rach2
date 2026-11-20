@@ -414,33 +414,26 @@ int netconf_set_up(struct netdev *nd, int up)
     return 0;
 }
 
-/* The withdrawal's calls into the stack (`netdev_withdraw`), which no row
- * makes: no route, address or neighbour to forget. */
-
-/** No route to give. */
-int netdev_route_at(int n, struct netdev_rt *out)
+/** The driver fixture has no explicit local-table routes. */
+struct netdev *netdev_added_local(uint32_t dst, int kind)
 {
-    (void)n;
-    (void)out;
+    (void)dst;
+    (void)kind;
     return 0;
 }
 
-/** No route to delete. */
-int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
+/** Model a complete IPv4 device flush, including routes without an address. */
+void netdev_route_flush(struct netdev *nd, int all)
 {
-    (void)nd;
-    (void)dst;
-    (void)mask;
-    (void)gw;
-    return -ESRCH;
+    CHECK(all, "device removal flushes all routes");
+    nd->gateway = 0;
 }
 
-/** No address to clear. */
+/** Promote the remaining model address when the first address is removed. */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
-    (void)nd;
-    (void)ip;
-    (void)mask;
+    nd->ip = nd->naddr2 ? nd->ip2[--nd->naddr2] : ip;
+    nd->mask = mask;
     return 0;
 }
 
@@ -486,6 +479,13 @@ int nd6_forget(struct netdev *nd, const uint8_t *addr)
     (void)nd;
     (void)addr;
     return -ENOENT;
+}
+
+/** No explicit IPv6 local route in the driver model. */
+struct netdev *route6_added_local(const uint8_t *dst)
+{
+    (void)dst;
+    return 0;
 }
 
 /** No IPv6 route to forget. */
@@ -670,10 +670,14 @@ static void check_handover(void)
           "a name that is no function's is refused");
     CHECK(m_second.stops == 0, "and nothing is stopped by a refused write");
 
+    nd->ip = 0xc0000201u;
+    nd->ip2[nd->naddr2++] = 0xc6336401u;
+    nd->gateway = 0xc0000202u;
     txs = m_second.txs;
     CHECK(write_attr(0, 1, name) == (int32_t)(sizeof(name) - 1), "unbind takes the name");
     CHECK(m_second.stops == 1, "the driver stops the card");
     CHECK(k.set_ups == 1 && k.last_up == 0, "the interface is set down");
+    CHECK(!nd->ip && !nd->naddr2 && !nd->gateway, "unbind removes both prefixes and the gateway");
     CHECK(k.unclaims == 1 && k.unclaim_devfn == (3 << 3) && same(k.unclaim_owner, "kernel"),
           "the function is given up");
     CHECK(k.unbinds == 1 && k.unbind_key == (3 << 3) && same(k.uevent, "unbind"),

@@ -94,34 +94,36 @@
 #define NETLINK_EXT_ACK         11
 
 /* Attributes of a link, an address and a route. */
-#define IFLA_ADDRESS   1
-#define IFLA_BROADCAST 2
-#define IFLA_IFNAME    3
-#define IFLA_MTU       4
-#define IFLA_STATS     7
-#define IFLA_OPERSTATE 16
-#define IFLA_LINKMODE  17
-#define IFLA_STATS64   23
-#define IFA_ADDRESS    1
-#define IFA_LOCAL      2
-#define IFA_LABEL      3
-#define IFA_BROADCAST  4
-#define IFA_CACHEINFO  6
-#define IFA_FLAGS      8
-#define IFA_PROTO      11
-#define RTA_DST        1
-#define RTA_OIF        4
-#define RTA_GATEWAY    5
-#define RTA_PREFSRC    7
-#define RTA_PRIORITY   6
-#define RTA_CACHEINFO  12
-#define RTA_TABLE      15
-#define RTA_PREF       20
-#define NDA_DST        1
-#define NDA_LLADDR     2
-#define NDA_IFINDEX    8
-#define NTF_PROXY      0x08u
-#define NTF_ROUTER     0x80u
+#define IFLA_ADDRESS        1
+#define IFLA_BROADCAST      2
+#define IFLA_IFNAME         3
+#define IFLA_MTU            4
+#define IFLA_STATS          7
+#define IFLA_OPERSTATE      16
+#define IFLA_LINKMODE       17
+#define IFLA_STATS64        23
+#define IFA_ADDRESS         1
+#define IFA_LOCAL           2
+#define IFA_LABEL           3
+#define IFA_BROADCAST       4
+#define IFA_CACHEINFO       6
+#define IFA_FLAGS           8
+#define IFA_RT_PRIORITY     9
+#define IFA_F_NOPREFIXROUTE 0x200u
+#define IFA_PROTO           11
+#define RTA_DST             1
+#define RTA_OIF             4
+#define RTA_GATEWAY         5
+#define RTA_PREFSRC         7
+#define RTA_PRIORITY        6
+#define RTA_CACHEINFO       12
+#define RTA_TABLE           15
+#define RTA_PREF            20
+#define NDA_DST             1
+#define NDA_LLADDR          2
+#define NDA_IFINDEX         8
+#define NTF_PROXY           0x08u
+#define NTF_ROUTER          0x80u
 
 /* Attributes of an interface's configuration, and the indexes Linux gives
  * the configuration of all interfaces and the default for new ones. */
@@ -132,7 +134,6 @@
 #define NETCONFA_IFINDEX_ALL                 0xFFFFFFFFu
 #define NETCONFA_IFINDEX_DEFAULT             0xFFFFFFFEu
 
-#define ARPHRD_ETHER      1
 #define IFF_LOWER_UP      0x10000u
 #define IF_OPER_UP        6
 #define IF_OPER_DORMANT   5
@@ -147,6 +148,7 @@
 #define RT_TABLE_LOCAL    255
 #define RT_SCOPE_HOST     254
 #define RTN_LOCAL         2
+#define RTN_BROADCAST     3
 #define RTM_F_CLONED      0x200u
 #define FRA_PRIORITY      6
 #define FRA_TABLE         15
@@ -942,12 +944,14 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     uint32_t lock;
     int i;
 
-    put16(ifi + 2, nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER);
+    put16(ifi + 2, (uint16_t)NETDEV_TYPE(nd));
     put32(ifi + 4, (uint32_t)nd->index);
-    put32(ifi + 8, up | (nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST));
+    put32(ifi + 8, up | NETIF_KIND_FLAGS(nd));
     msg_attr(msg, IFLA_IFNAME, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
-    msg_attr(msg, IFLA_ADDRESS, nd->mac, 6);
-    msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
+    if (NETDEV_ADDR_LEN(nd)) {
+        msg_attr(msg, IFLA_ADDRESS, nd->mac, 6);
+        msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
+    }
     msg_attr32(msg, IFLA_MTU, nd->mtu);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
     msg_attr(msg, IFLA_LINKMODE, &mode, 1);
@@ -1130,24 +1134,63 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
     }
 }
 
-/** Append the address `ip`/`mask` of `nd`, its first or, with `secondary`,
- * another. */
-static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, uint32_t mask,
-                     int secondary)
+struct watch_addr4 {
+    int index;
+    uint32_t ip, dst, mask;
+    uint32_t brd, flags, metric;
+    struct addr4_routes opts;
+};
+
+/** Copy the IPv4 address at slot i and the attributes used by rtnetlink. */
+static void read_addr4(const struct netdev *nd, int i, struct watch_addr4 *a)
+{
+    a->index = nd->index;
+    a->ip = i < 0 ? nd->ip : nd->ip2[i];
+    a->mask = i < 0 ? nd->mask : nd->mask2[i];
+    a->dst = netdev_addr_dst(nd, i);
+    a->brd = netdev_addr_brd(nd, i);
+    a->metric = nd->addr4[i + 1].metric;
+    a->opts = nd->addr4[i + 1];
+    a->flags = (a->opts.valid_until ? 0 : IFA_F_PERMANENT) |
+               (a->opts.deprecated ? NETDEV_A6_DEPRECATED : 0) |
+               (netdev_secondary(nd, i) ? IFA_F_SECONDARY : 0) |
+               (nd->addr4[i + 1].noprefix ? IFA_F_NOPREFIXROUTE : 0);
+}
+
+/** Seconds remaining to an IPv4 address deadline, rounded up. */
+static uint32_t addr4_left(uint64_t until)
+{
+    uint64_t now = tick_count();
+    return !until        ? NETDEV_LIFETIME_FOREVER
+           : until > now ? (uint32_t)tick_div(until - now + TICK_HZ - 1, TICK_HZ, 0)
+                         : 0;
+}
+
+/** Append an IPv4 address as captured before or after a change. */
+static void addr_msg(struct nl_build *b, const struct netdev *nd, const struct watch_addr4 *a)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ifa = msg_start(b, msg, RTM_NEWADDR, NLM_F_MULTI, 8);
-
+    uint8_t ci[16];
     ifa[0] = AF_INET;
-    ifa[1] = (uint8_t)prefix_of(mask);
-    ifa[2] = IFA_F_PERMANENT | (secondary ? IFA_F_SECONDARY : 0u);
-    ifa[3] = nd->loopback ? RT_SCOPE_HOST : RT_SCOPE_UNIVERSE;
-    put32(ifa + 4, (uint32_t)nd->index);
-    msg_attr_ip(msg, IFA_ADDRESS, ip);
-    msg_attr_ip(msg, IFA_LOCAL, ip);
-    if (!nd->loopback && NETDEV_MASK_HAS_BROADCAST(mask)) {
-        msg_attr_ip(msg, IFA_BROADCAST, ip | ~mask);
-    }
+    ifa[1] = (uint8_t)prefix_of(a->mask);
+    ifa[2] = (uint8_t)a->flags;
+    ifa[3] = nd->loopback ? RT_SCOPE_HOST : a->opts.scope;
+    put32(ifa + 4, (uint32_t)a->index);
+    msg_attr_ip(msg, IFA_ADDRESS, a->dst);
+    msg_attr_ip(msg, IFA_LOCAL, a->ip);
+    if (a->brd)
+        msg_attr_ip(msg, IFA_BROADCAST, a->brd);
+    put32(ci, a->opts.deprecated ? 0 : addr4_left(a->opts.preferred_until));
+    put32(ci + 4, addr4_left(a->opts.valid_until));
+    put32(ci + 8, a->opts.created);
+    put32(ci + 12, a->opts.updated);
+    msg_attr(msg, IFA_CACHEINFO, ci, sizeof(ci));
+    if (a->opts.proto)
+        msg_attr(msg, IFA_PROTO, &a->opts.proto, 1);
+    msg_attr32(msg, IFA_FLAGS, a->flags);
+    if (a->metric)
+        msg_attr32(msg, IFA_RT_PRIORITY, a->metric);
     msg_attr(msg, IFA_LABEL, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
     nl_append(b, msg);
 }
@@ -1180,13 +1223,20 @@ static void addr6_msg(struct nl_build *b, const struct netdev *nd, const struct 
     ifa[2] = a->flags;
     ifa[3] = a->scope;
     put32(ifa + 4, (uint32_t)nd->index);
-    msg_attr(msg, IFA_ADDRESS, a->addr, IP6_ADDR_LEN);
+    if (ip6_is_unspecified(a->peer)) {
+        msg_attr(msg, IFA_ADDRESS, a->addr, IP6_ADDR_LEN);
+    } else {
+        msg_attr(msg, IFA_LOCAL, a->addr, IP6_ADDR_LEN);
+        msg_attr(msg, IFA_ADDRESS, a->peer, IP6_ADDR_LEN);
+    }
     put32(ci, life_left(a->preferred, age));
     put32(ci + 4, life_left(a->valid, age));
     put32(ci + 8, stamp);
     put32(ci + 12, stamp);
     msg_attr(msg, IFA_CACHEINFO, ci, sizeof(ci));
-    msg_attr32(msg, IFA_FLAGS, a->flags);
+    msg_attr32(msg, IFA_FLAGS, a->flags | (a->noprefix ? IFA_F_NOPREFIXROUTE : 0));
+    if (a->metric)
+        msg_attr32(msg, IFA_RT_PRIORITY, a->metric);
     if (a->proto != NETDEV_PROTO_UNSPEC) {
         msg_attr(msg, IFA_PROTO, &a->proto, 1);
     }
@@ -1211,14 +1261,20 @@ static void addr6_msgs(struct nl_build *b, const struct netdev *nd)
 /** Append every IPv4 address of `nd`, its first then the others. */
 static void addr_msgs(struct nl_build *b, const struct netdev *nd)
 {
+    struct watch_addr4 a;
     int i;
+    for (i = -1; i < nd->naddr2; i++) {
+        read_addr4(nd, i, &a);
+        if (a.ip)
+            addr_msg(b, nd, &a);
+    }
+}
 
-    if (nd->ip) {
-        addr_msg(b, nd, nd->ip, nd->mask, 0);
-    }
-    for (i = 0; i < nd->naddr2; i++) {
-        addr_msg(b, nd, nd->ip2[i], nd->mask2[i], 1);
-    }
+/** The linkdown flag of a route whose next hop follows physical carrier. */
+static uint32_t route_link_flag(int ifindex, int watches_carrier)
+{
+    const struct netdev *nd = netdev_by_index(ifindex);
+    return watches_carrier && nd && !netdev_running(nd) ? 16u : 0;
 }
 
 /** Append the route `r` of the table: a subnet an address implies, reached
@@ -1230,27 +1286,77 @@ static void route_msg(struct nl_build *b, const struct netdev_rt *r)
 
     rtm[0] = AF_INET;
     rtm[1] = (uint8_t)prefix_of(r->mask);
-    rtm[4] = RT_TABLE_MAIN;
-    rtm[5] = r->kind == NETDEV_RT_LINK      ? RTPROT_KERNEL
-             : r->kind == NETDEV_RT_DEFAULT ? RTPROT_BOOT
-                                            : RTPROT_STATIC;
-    rtm[6] = r->gw ? RT_SCOPE_UNIVERSE : RT_SCOPE_LINK;
-    rtm[7] = RTN_UNICAST;
-    msg_attr32(msg, RTA_TABLE, RT_TABLE_MAIN);
+    rtm[4] = r->kind >= NETDEV_RT_LOCAL ? RT_TABLE_LOCAL : RT_TABLE_MAIN;
+    rtm[5] = r->proto;
+    rtm[6] = r->scope;
+    rtm[7] = r->kind == NETDEV_RT_LOCAL       ? RTN_LOCAL
+             : r->kind == NETDEV_RT_BROADCAST ? RTN_BROADCAST
+                                              : RTN_UNICAST;
+    put32(rtm + 8, route_link_flag(r->ifindex, r->scope != RT_SCOPE_HOST));
+    msg_attr32(msg, RTA_TABLE, rtm[4]);
     if (r->mask != 0) {
         msg_attr_ip(msg, RTA_DST, r->dst);
     }
     if (r->gw) {
         msg_attr_ip(msg, RTA_GATEWAY, r->gw);
     }
-    if (r->kind == NETDEV_RT_LINK) {
-        msg_attr_ip(msg, RTA_PREFSRC, r->src);
+    if (r->prefsrc) {
+        msg_attr_ip(msg, RTA_PREFSRC, r->prefsrc);
     }
     if (r->metric != 0) {
         msg_attr32(msg, RTA_PRIORITY, r->metric);
     }
     msg_attr32(msg, RTA_OIF, (uint32_t)r->ifindex);
     nl_append(b, msg);
+}
+
+/** The payload of attribute `type` in the request `req` of `body` bytes past
+ * its header, whose fixed part is `fixed` bytes, with its length in `*len`;
+ * NULL when it has none. */
+static const uint8_t *req_attr(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type,
+                               uint16_t *len)
+{
+    const uint8_t *attr = req + NLMSG_HDRLEN + fixed;
+    const uint8_t *end = req + NLMSG_HDRLEN + body;
+
+    while (body >= fixed && attr + 4 <= end) {
+        uint16_t alen = get16(attr);
+
+        if (alen < 4 || attr + alen > end) {
+            break;
+        }
+        if (get16(attr + 2) == type) {
+            *len = (uint16_t)(alen - 4u);
+            return attr + 4;
+        }
+        attr += (alen + 3u) & ~3u;
+    }
+    return 0;
+}
+
+/** Get the table selector from the extended attribute or the rtmsg. */
+static uint32_t route_table(const uint8_t *req, uint32_t body)
+{
+    uint16_t len;
+    const uint8_t *attr = req_attr(req, body, 12, RTA_TABLE, &len);
+    if (attr && len == 4)
+        return get32(attr);
+    return body >= 12 ? req[NLMSG_HDRLEN + 4] : 0;
+}
+
+/** Append the IPv4 tables selected by a route dump. */
+static void route4_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
+{
+    uint32_t table = route_table(req, body);
+    struct netdev_rt r;
+    int i;
+
+    if (!table || table == RT_TABLE_MAIN)
+        for (i = 0; netdev_route_at(i, &r); i++)
+            route_msg(b, &r);
+    if (!table || table == RT_TABLE_LOCAL)
+        for (i = 0; netdev_local_route_at(i, &r); i++)
+            route_msg(b, &r);
 }
 
 /**
@@ -1270,15 +1376,18 @@ static void route6_msg(struct nl_build *b, const struct route6_row *r, uint16_t 
 
     rtm[0] = AF_INET6;
     rtm[1] = r->plen;
-    rtm[4] = RT_TABLE_MAIN;
+    rtm[4] = r->local ? RT_TABLE_LOCAL : RT_TABLE_MAIN;
     rtm[5] = r->proto;
     rtm[6] = RT_SCOPE_UNIVERSE;
-    rtm[7] = RTN_UNICAST;
-    msg_attr32(msg, RTA_TABLE, RT_TABLE_MAIN);
+    rtm[7] = r->local ? RTN_LOCAL : RTN_UNICAST;
+    put32(rtm + 8, route_link_flag(r->ifindex, !r->local));
+    msg_attr32(msg, RTA_TABLE, rtm[4]);
     if (r->plen != 0) {
         msg_attr(msg, RTA_DST, r->dst, IP6_ADDR_LEN);
     }
     msg_attr32(msg, RTA_PRIORITY, r->metric);
+    if (!ip6_is_unspecified(r->prefsrc))
+        msg_attr(msg, RTA_PREFSRC, r->prefsrc, IP6_ADDR_LEN);
     if (!ip6_is_unspecified(r->gw)) {
         msg_attr(msg, RTA_GATEWAY, r->gw, IP6_ADDR_LEN);
     }
@@ -1294,7 +1403,7 @@ static void route6_msg(struct nl_build *b, const struct route6_row *r, uint16_t 
 
 /** Append every IPv6 route, each copied out of the table under net_lock
  * (`route6_at`). */
-static void route6_dump(struct nl_build *b)
+static void route6_dump(struct nl_build *b, uint32_t table)
 {
     struct route6_row r;
     uint32_t flags;
@@ -1307,7 +1416,8 @@ static void route6_dump(struct nl_build *b)
         if (!more) {
             break;
         }
-        route6_msg(b, &r, NLM_F_MULTI);
+        if (!table || table == (r.local ? RT_TABLE_LOCAL : RT_TABLE_MAIN))
+            route6_msg(b, &r, NLM_F_MULTI);
     }
 }
 
@@ -1330,18 +1440,12 @@ static void route6_dump(struct nl_build *b)
 
 /* The interfaces, and the routes of each family, the watch keeps. */
 #define WATCH_IFS    (NETDEV_MAX + 1)
-#define WATCH_ROUTES 80
+#define WATCH_ROUTES (32 + WATCH_IFS * (NETDEV_ADDRS + 1) * 4 + WATCH_IFS)
 
 struct watch_link {
     int index;
     uint8_t up, running, oper, mode;
     uint32_t mtu;
-};
-
-struct watch_addr4 {
-    int index;
-    uint32_t ip, mask;
-    int secondary;
 };
 
 struct watch_addr6 {
@@ -1355,7 +1459,8 @@ struct watch_state {
     struct watch_addr4 addr4[WATCH_IFS * (NETDEV_ADDRS + 1)];
     struct watch_addr6 addr6[WATCH_IFS * NETDEV_ADDRS6];
     struct netdev_rt route4[WATCH_ROUTES];
-    struct route6_row route6[WATCH_ROUTES];
+    struct route6_row *route6;
+    int cap6; /* allocated route rows */
 };
 
 /* The state at the last comparison is `watch_buf[watch_cur]`; the other
@@ -1387,8 +1492,34 @@ static int listening(void)
     return 0;
 }
 
+/** Snapshot the IPv6 table, including prefixes retained after address removal.
+ * Return zero on allocation failure so a partial snapshot sends no deletes. */
+static int watch_routes6(struct watch_state *w)
+{
+    struct route6_row row;
+    while (route6_at(w->nroute6, &row)) {
+        if (w->nroute6 == w->cap6) {
+            int cap;
+            struct route6_row *more;
+            if ((unsigned)w->cap6 > 0x7fffffffu / sizeof(row) / 2)
+                return 0;
+            cap = w->cap6 ? w->cap6 * 2 : ROUTE6_MAX;
+            more = kmalloc((size_t)cap * sizeof(row));
+            if (!more)
+                return 0;
+            if (w->nroute6)
+                k_memcpy(more, w->route6, (size_t)w->nroute6 * sizeof(row));
+            kfree(w->route6);
+            w->cap6 = cap;
+            w->route6 = more;
+        }
+        w->route6[w->nroute6++] = row;
+    }
+    return 1;
+}
+
 /** Take the state now into `w`. */
-static void watch_take(struct watch_state *w)
+static int watch_take(struct watch_state *w)
 {
     int i, j, n = netdev_listed();
 
@@ -1406,11 +1537,8 @@ static void watch_take(struct watch_state *w)
         for (j = -1; j < nd->naddr2; j++) {
             struct watch_addr4 *a = &w->addr4[w->naddr4];
 
-            a->ip = j < 0 ? nd->ip : nd->ip2[j];
-            a->mask = j < 0 ? nd->mask : nd->mask2[j];
-            if (a->ip != 0) {
-                a->index = nd->index;
-                a->secondary = j >= 0;
+            read_addr4(nd, j, a);
+            if (a->ip) {
                 w->naddr4++;
             }
         }
@@ -1422,9 +1550,9 @@ static void watch_take(struct watch_state *w)
     while (w->nroute4 < WATCH_ROUTES && netdev_route_at(w->nroute4, &w->route4[w->nroute4])) {
         w->nroute4++;
     }
-    while (w->nroute6 < WATCH_ROUTES && route6_at(w->nroute6, &w->route6[w->nroute6])) {
-        w->nroute6++;
-    }
+    for (i = 0; w->nroute4 < WATCH_ROUTES && netdev_local_route_at(i, &w->route4[w->nroute4]); i++)
+        w->nroute4++;
+    return watch_routes6(w);
 }
 
 static int same_link(const struct watch_link *a, const struct watch_link *b)
@@ -1435,7 +1563,10 @@ static int same_link(const struct watch_link *a, const struct watch_link *b)
 
 static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
 {
-    return a->index == b->index && a->ip == b->ip && a->mask == b->mask;
+    return a->index == b->index && a->ip == b->ip && a->dst == b->dst && a->mask == b->mask &&
+           a->metric == b->metric && a->brd == b->brd && a->flags == b->flags &&
+           a->opts.scope == b->opts.scope && a->opts.valid_until == b->opts.valid_until &&
+           a->opts.preferred_until == b->opts.preferred_until && a->opts.proto == b->opts.proto;
 }
 
 /** Whether two IPv6 addresses are one, and with `whole`, in the same
@@ -1445,21 +1576,24 @@ static int same_addr6(const struct watch_addr6 *a, const struct watch_addr6 *b, 
     if (a->index != b->index || !ip6_equal(a->a.addr, b->a.addr)) {
         return 0;
     }
-    return !whole ||
-           (a->a.prefix == b->a.prefix && a->a.flags == b->a.flags && a->a.valid == b->a.valid &&
-            a->a.preferred == b->a.preferred && a->a.since == b->a.since);
+    return !whole || (ip6_equal(a->a.peer, b->a.peer) && a->a.noprefix == b->a.noprefix &&
+                      a->a.metric == b->a.metric && a->a.prefix == b->a.prefix &&
+                      a->a.flags == b->a.flags && a->a.valid == b->a.valid &&
+                      a->a.preferred == b->a.preferred && a->a.since == b->a.since);
 }
 
 static int same_route4(const struct netdev_rt *a, const struct netdev_rt *b)
 {
     return a->dst == b->dst && a->mask == b->mask && a->gw == b->gw && a->metric == b->metric &&
-           a->ifindex == b->ifindex && a->kind == b->kind;
+           a->ifindex == b->ifindex && a->kind == b->kind && a->proto == b->proto &&
+           a->scope == b->scope && a->prefsrc == b->prefsrc;
 }
 
 static int same_route6(const struct route6_row *a, const struct route6_row *b)
 {
     return a->ifindex == b->ifindex && a->plen == b->plen && a->metric == b->metric &&
-           a->proto == b->proto && ip6_equal(a->dst, b->dst) && ip6_equal(a->gw, b->gw);
+           a->proto == b->proto && a->local == b->local && ip6_equal(a->prefsrc, b->prefsrc) &&
+           ip6_equal(a->dst, b->dst) && ip6_equal(a->gw, b->gw);
 }
 
 /**
@@ -1497,7 +1631,7 @@ static void watch_compare(const struct watch_state *was, const struct watch_stat
             for (j = 0; j < in->naddr4 && !same_addr4(&in->addr4[j], a); j++) {
             }
             if (j == in->naddr4 && (nd = watch_dev(a->index)) != 0) {
-                addr_msg(b, nd, a->ip, a->mask, a->secondary);
+                addr_msg(b, nd, a);
             }
         }
         b->group = RTNLGRP_IPV6_IFADDR;
@@ -1534,8 +1668,7 @@ static void watch_compare(const struct watch_state *was, const struct watch_stat
 static void watch_start(void)
 {
     if (!watching && listening()) {
-        watch_take(&watch_buf[watch_cur]);
-        watching = 1;
+        watching = watch_take(&watch_buf[watch_cur]);
     }
 }
 
@@ -1544,6 +1677,12 @@ static void watch_start(void)
 static void watch_run(void)
 {
     if (!listening()) {
+        int i;
+        for (i = 0; i < 2; i++) {
+            kfree(watch_buf[i].route6);
+            watch_buf[i].route6 = 0;
+            watch_buf[i].cap6 = 0;
+        }
         watching = 0;
         return;
     }
@@ -1551,7 +1690,8 @@ static void watch_run(void)
         watch_start();
         return;
     }
-    watch_take(&watch_buf[!watch_cur]);
+    if (!watch_take(&watch_buf[!watch_cur]))
+        return;
     watch_compare(&watch_buf[watch_cur], &watch_buf[!watch_cur]);
     watch_cur = !watch_cur;
 }
@@ -1562,6 +1702,7 @@ void netlink_tick(void)
         return;
     }
     watch_next = (uint32_t)kernel_ticks + MS_TO_TICKS(100);
+    netconf_expire_addresses(tick_count());
     watch_run();
 }
 
@@ -1618,16 +1759,19 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     uint8_t msg[NL_MSG_MAX];
     uint8_t *rtm;
     const struct netdev *nd;
-    uint32_t via = 0;
-    int i, local = 0;
+    struct netdev_rt selected = {0}, r;
+    int i, local = 0, broadcast = 0;
 
-    nd = netdev_route(dst, &via);
-    for (i = 0; i < netdev_seen_count(); i++) {
-        const struct netdev *own = netdev_at(i);
-
-        if (own && netdev_holds(own, dst)) {
-            nd = own;
-            local = 1;
+    nd = netdev_route_lookup(dst, 0, &selected);
+    for (i = 0; netdev_local_route_at(i, &r); i++) {
+        if ((dst & r.mask) == r.dst &&
+            (!broadcast || r.kind == NETDEV_RT_LOCAL || r.mask > selected.mask)) {
+            nd = watch_dev(r.ifindex);
+            local = r.kind == NETDEV_RT_LOCAL;
+            broadcast = !local;
+            selected = r;
+            if (local)
+                break;
         }
     }
     if ((local || IP_IS_LOOPBACK(dst)) && netdev_loopback()) {
@@ -1640,17 +1784,17 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     rtm = msg_start(b, msg, RTM_NEWROUTE, 0, 12);
     rtm[0] = AF_INET;
     rtm[1] = 32;
-    rtm[4] = local ? RT_TABLE_LOCAL : RT_TABLE_MAIN;
+    rtm[4] = local || broadcast ? RT_TABLE_LOCAL : RT_TABLE_MAIN;
     rtm[6] = local ? RT_SCOPE_HOST : RT_SCOPE_UNIVERSE;
-    rtm[7] = local ? RTN_LOCAL : RTN_UNICAST;
+    rtm[7] = local ? RTN_LOCAL : broadcast ? RTN_BROADCAST : RTN_UNICAST;
     put32(rtm + 8, RTM_F_CLONED);
-    msg_attr32(msg, RTA_TABLE, local ? RT_TABLE_LOCAL : RT_TABLE_MAIN);
+    msg_attr32(msg, RTA_TABLE, local || broadcast ? RT_TABLE_LOCAL : RT_TABLE_MAIN);
     msg_attr_ip(msg, RTA_DST, dst);
     msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
     msg_attr_ip(msg, RTA_PREFSRC,
-                local ? (IP_IS_LOOPBACK(dst) ? IP_LOOPBACK_ADDR : dst) : netdev_source(nd, via));
-    if (!local && via != dst) {
-        msg_attr_ip(msg, RTA_GATEWAY, via);
+                local ? (IP_IS_LOOPBACK(dst) ? IP_LOOPBACK_ADDR : dst) : selected.src);
+    if (!local && selected.gw) {
+        msg_attr_ip(msg, RTA_GATEWAY, selected.gw);
     }
     nl_append(b, msg);
     return 0;
@@ -1718,30 +1862,6 @@ static void qdisc_dump(struct nl_build *b)
  * and dropped: a rename, and on `lo` being taken down, an MTU but its own
  * and any change of its addresses, routes or neighbours.
  */
-
-/** The payload of attribute `type` in the request `req` of `body` bytes past
- * its header, whose fixed part is `fixed` bytes, with its length in `*len`;
- * NULL when it has none. */
-static const uint8_t *req_attr(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type,
-                               uint16_t *len)
-{
-    const uint8_t *attr = req + NLMSG_HDRLEN + fixed;
-    const uint8_t *end = req + NLMSG_HDRLEN + body;
-
-    while (body >= fixed && attr + 4 <= end) {
-        uint16_t alen = get16(attr);
-
-        if (alen < 4 || attr + alen > end) {
-            break;
-        }
-        if (get16(attr + 2) == type) {
-            *len = (uint16_t)(alen - 4u);
-            return attr + 4;
-        }
-        attr += (alen + 3u) & ~3u;
-    }
-    return 0;
-}
 
 /** An IPv4 attribute's address in the host's order, or 0 for none or for an
  * attribute that is not four bytes. */
@@ -1911,6 +2031,7 @@ static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t via[IP6_ADDR_LEN], src[IP6_ADDR_LEN];
+    struct route6_row route = {0};
     const uint8_t *dst = req_ip6(req, body, 12, RTA_DST);
     uint16_t len;
     const uint8_t *oif = req_attr(req, body, 12, RTA_OIF, &len);
@@ -1924,7 +2045,12 @@ static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
     }
     lock = net_lock();
     local = ip6_is_loopback(dst) || (!ip6_is_multicast(dst) && netdev_owner6(dst) != 0);
-    nd = local ? netdev_loopback() : ip6_route(dst, oif && len == 4 ? (int)get32(oif) : 0, via);
+    if (local)
+        nd = netdev_loopback();
+    else if (ip6_link_scoped(dst) || ip6_is_multicast(dst))
+        nd = ip6_route(dst, oif && len == 4 ? (int)get32(oif) : 0, via);
+    else
+        nd = route6_resolve(dst, oif && len == 4 ? (int)get32(oif) : 0, &route);
     if (nd && local) {
         k_memcpy(src, dst, IP6_ADDR_LEN);
     } else if (nd) {
@@ -1948,68 +2074,89 @@ static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
     msg_attr(msg, RTA_DST, dst, IP6_ADDR_LEN);
     msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
     msg_attr(msg, RTA_PREFSRC, src, IP6_ADDR_LEN);
-    if (!local && !ip6_equal(via, dst)) {
-        msg_attr(msg, RTA_GATEWAY, via, IP6_ADDR_LEN);
+    if (!ip6_is_unspecified(route.gw)) {
+        msg_attr(msg, RTA_GATEWAY, route.gw, IP6_ADDR_LEN);
     }
     nl_append(b, msg);
     return 0;
 }
 
-/**
- * RTM_NEWADDR and RTM_DELADDR of AF_INET6: an IPv6 address of an
- * interface, `lo` among them, with its prefix, by IFA_LOCAL or
- * IFA_ADDRESS. The state taken is IFA_F_NODAD, from the `ifaddrmsg`'s
- * flags or IFA_FLAGS; an address with lifetimes in IFA_CACHEINFO, where
- * the preferred comes before the valid, has them, and one with none or
- * both forever is permanent, as `ip -6 addr add` makes it. Returns the
- * result of `netconf_add_address6` or `netconf_del_address6`; -ENODEV for
- * no such interface, -EINVAL for a request with no address; and to add one
- * the interface has, 0, or -EEXIST with NLM_F_EXCL.
- */
+/* Attributes of an IPv6 address request after decoding the netlink message. */
+struct addr6_options {
+    const uint8_t *peer;
+    uint32_t flags, valid, preferred, metric;
+};
+
+/** Read the optional lifetime, prefix metric and full flag word. */
+static void read_addr6_options(const uint8_t *req, uint32_t body, struct addr6_options *opts)
+{
+    uint16_t len;
+    const uint8_t *a = req_attr(req, body, 8, IFA_FLAGS, &len);
+    opts->flags = a && len == 4 ? get32(a) : req[NLMSG_HDRLEN + 2];
+    a = req_attr(req, body, 8, IFA_CACHEINFO, &len);
+    opts->preferred = a && len >= 8 ? get32(a) : NETDEV_LIFETIME_FOREVER;
+    opts->valid = a && len >= 8 ? get32(a + 4) : NETDEV_LIFETIME_FOREVER;
+    a = req_attr(req, body, 8, IFA_RT_PRIORITY, &len);
+    opts->metric = a && len == 4 ? get32(a) : 0;
+    opts->peer = req_ip6(req, body, 8, IFA_ADDRESS);
+}
+
+/** Apply an accepted address change while its table slot is locked. */
+static void update_addr6(struct netdev *nd, struct netdev_addr6 *held,
+                         const struct addr6_options *opts, int replace)
+{
+    struct netdev_addr6 next = *held;
+    next.noprefix = (opts->flags & IFA_F_NOPREFIXROUTE) != 0;
+    if (opts->peer && !ip6_equal(held->addr, opts->peer))
+        k_memcpy(next.peer, opts->peer, IP6_ADDR_LEN);
+    next.since = tick_count();
+    next.preferred = opts->preferred;
+    next.valid = opts->valid;
+    next.flags &= ~(NETDEV_A6_DEPRECATED | NETDEV_A6_PERMANENT | NETDEV_A6_NODAD);
+    next.flags |= (opts->flags & NETDEV_A6_NODAD) | (!opts->preferred ? NETDEV_A6_DEPRECATED : 0) |
+                  (opts->valid == NETDEV_LIFETIME_FOREVER ? NETDEV_A6_PERMANENT : 0);
+    if (opts->metric)
+        next.metric = opts->metric;
+    route6_address_update(nd, replace ? held : 0, &next);
+    *held = next;
+}
+
+/** Change the IPv6 address selected by its local address and, on deletion,
+ * its prefix length. A distinct IFA_ADDRESS supplies its peer. */
 static int32_t addr6_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct netdev *nd = dev_of_index(get32(req + NLMSG_HDRLEN + 4));
     const uint8_t *addr = req_ip6(req, body, 8, IFA_LOCAL);
-    uint32_t valid = NETDEV_LIFETIME_FOREVER, preferred = NETDEV_LIFETIME_FOREVER;
-    uint32_t state = req[NLMSG_HDRLEN + 2], lock;
-    uint16_t len;
-    const uint8_t *a;
-    int held;
-
-    if (!addr) {
-        addr = req_ip6(req, body, 8, IFA_ADDRESS);
-    }
-    if (!nd) {
+    struct addr6_options opts;
+    struct netdev_addr6 *held;
+    uint32_t lock;
+    int rc = 0, prefix = req[NLMSG_HDRLEN + 1];
+    read_addr6_options(req, body, &opts);
+    if (!addr)
+        addr = opts.peer;
+    if (!nd)
         return -ENODEV;
-    }
-    if (!addr) {
+    if (!addr || prefix > 128)
         return -EINVAL;
-    }
-    if (type == RTM_DELADDR) {
-        return netconf_del_address6(nd, addr);
-    }
-    a = req_attr(req, body, 8, IFA_FLAGS, &len);
-    if (a && len == 4) {
-        state = get32(a);
-    }
-    a = req_attr(req, body, 8, IFA_CACHEINFO, &len);
-    if (a && len >= 8) {
-        preferred = get32(a);
-        valid = get32(a + 4);
-    }
     lock = net_lock();
-    held = netdev_addr6_of(nd, addr) != 0;
-    net_unlock(lock);
-    if (held) {
-        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    held = netdev_addr6_of(nd, addr);
+    if (type == RTM_DELADDR) {
+        rc = held && prefix == held->prefix ? netconf_del_address6(nd, addr) : -EADDRNOTAVAIL;
+    } else if (!opts.valid || opts.preferred > opts.valid) {
+        rc = -EINVAL;
+    } else if (held) {
+        if ((flags & NLM_F_EXCL) || !(flags & NLM_F_REPLACE))
+            rc = -EEXIST;
+        else
+            update_addr6(nd, held, &opts, 1);
+    } else {
+        rc = netconf_insert_address6(nd, addr, prefix, (int)(opts.flags & NETDEV_A6_NODAD),
+                                     opts.valid, opts.preferred);
+        if (!rc)
+            update_addr6(nd, netdev_addr6_of(nd, addr), &opts, 0);
     }
-    return netconf_add_address6(
-        nd, addr, req[NLMSG_HDRLEN + 1],
-        (int)(state & NETDEV_A6_NODAD) |
-            (valid == NETDEV_LIFETIME_FOREVER && preferred == NETDEV_LIFETIME_FOREVER
-                 ? NETDEV_A6_PERMANENT
-                 : 0),
-        valid, preferred);
+    net_unlock(lock);
+    return rc;
 }
 
 /** RTM_NEWADDR and RTM_DELADDR on a network namespace's `lo` `nd`, whose one
@@ -2036,29 +2183,96 @@ static int32_t ns_addr_change(struct netdev *nd, uint32_t ip, uint32_t prefix, u
     return 0;
 }
 
+/** Set creation attributes on insertion and renew the address's lifetimes. */
+static void set_addr4_options(struct netdev *nd, int slot, const uint8_t *req, uint32_t body,
+                              const uint8_t *ci, int fresh)
+{
+    uint16_t len;
+    const uint8_t *at = req_attr(req, body, 8, IFA_FLAGS, &len);
+    struct addr4_routes *opts = &nd->addr4[slot + 1];
+    uint32_t preferred = ci ? get32(ci) : NETDEV_LIFETIME_FOREVER;
+    uint32_t valid = ci ? get32(ci + 4) : NETDEV_LIFETIME_FOREVER;
+    uint64_t now = tick_count();
+    uint32_t metric;
+    opts->updated = (uint32_t)TICKS_TO_CLOCK(now);
+    if (fresh) {
+        opts->given_broadcast = 1;
+        opts->broadcast = req_ip(req, body, 8, IFA_BROADCAST);
+        opts->noprefix = at && len == 4 && (get32(at) & IFA_F_NOPREFIXROUTE);
+        opts->created = opts->updated;
+    }
+    opts->valid_until = valid == NETDEV_LIFETIME_FOREVER ? 0 : now + (uint64_t)valid * TICK_HZ;
+    opts->preferred_until =
+        preferred == NETDEV_LIFETIME_FOREVER ? 0 : now + (uint64_t)preferred * TICK_HZ;
+    opts->deprecated = !preferred;
+    at = req_attr(req, body, 8, IFA_PROTO, &len);
+    opts->proto = at && len == 1 ? *at : 0;
+    at = req_attr(req, body, 8, IFA_RT_PRIORITY, &len);
+    metric = at && len == 4 ? get32(at) : 0;
+    netdev_prefix_metric(nd, slot, metric, fresh);
+}
+
+/** Set the prefix metric and broadcast attributes of a netlink address. */
+static int addr4_add(const uint8_t *req, uint32_t body, struct netdev *nd, uint32_t ip,
+                     uint32_t mask, const uint32_t *peer)
+{
+    uint16_t flags = get16(req + 6), len;
+    const uint8_t *ci = req_attr(req, body, 8, IFA_CACHEINFO, &len);
+    uint32_t lock;
+    int r;
+    if (ci && (len != 16 || !get32(ci + 4) || get32(ci) > get32(ci + 4)))
+        return -EINVAL;
+    if (!ip)
+        return 0;
+    lock = net_lock();
+    r = netconf_add_address(nd, ip, mask, peer, req[NLMSG_HDRLEN + 3]);
+    if (!r || (r == -EEXIST && (flags & NLM_F_REPLACE) && !(flags & NLM_F_EXCL))) {
+        int slot = netconf_addr_find(nd, ip, mask, peer ? peer : &ip);
+        if (slot < nd->naddr2)
+            set_addr4_options(nd, slot, req, body, ci, !r);
+        r = 0;
+    }
+    net_unlock(lock);
+    return r;
+}
+
 /** RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
  * its first or another. Returns the result of `netconf_add_address` or
- * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for an
- * address of 0 to add; and to add one the interface has, 0, or -EEXIST
+ * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for a
+ * missing local address on add; and to add one the interface has, 0, or -EEXIST
  * with NLM_F_EXCL. On `lo` only that last is answered, and the rest is
  * EOPNOTSUPP. A request of AF_INET6 is `addr6_change`'s, and EOPNOTSUPP in
  * a network namespace other than the first. */
 static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
-    struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
-    uint32_t prefix = body >= 8 ? req[NLMSG_HDRLEN + 1] : 0;
-    uint32_t ip = req_ip(req, body, 8, IFA_LOCAL);
-    uint32_t mask = prefix == 0 || prefix > 32 ? 0 : 0xFFFFFFFFu << (32 - prefix);
+    struct netdev *nd;
+    uint32_t prefix, ip, peer, mask;
+    const uint32_t *dst;
+    const uint8_t *local, *destination;
+    uint16_t len;
 
-    if (body >= 8 && req[NLMSG_HDRLEN] == AF_INET6) {
+    if (body < 8) {
+        return -ENODEV;
+    }
+    if (req[NLMSG_HDRLEN] == AF_INET6) {
         return net_ns_seen() ? addr6_change(req, type, flags, body) : -EOPNOTSUPP;
     }
-    if (ip == 0) {
-        ip = req_ip(req, body, 8, IFA_ADDRESS);
-    }
+    nd = dev_of_index(get32(req + NLMSG_HDRLEN + 4));
     if (!nd) {
         return -ENODEV;
     }
+    prefix = req[NLMSG_HDRLEN + 1];
+    ip = req_ip(req, body, 8, IFA_LOCAL);
+    peer = req_ip(req, body, 8, IFA_ADDRESS);
+    local = req_attr(req, body, 8, IFA_LOCAL, &len);
+    if ((local && len != 4) || (!local && type != RTM_DELADDR))
+        return -EINVAL;
+    destination = req_attr(req, body, 8, IFA_ADDRESS, &len);
+    if (destination && len != 4)
+        return -EINVAL;
+    dst = destination ? &peer : 0;
+    if (type == RTM_DELADDR && local && !ip)
+        return -EADDRNOTAVAIL;
     if (!net_ns_seen()) {
         return ns_addr_change(nd, ip, prefix, type, flags);
     }
@@ -2066,16 +2280,14 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
         return type == RTM_NEWADDR && netdev_holds(nd, ip) ? ((flags & NLM_F_EXCL) ? -EEXIST : 0)
                                                            : -EOPNOTSUPP;
     }
-    if (type == RTM_DELADDR) {
-        return netconf_del_address(nd, ip);
-    }
-    if (ip == 0) {
+    if (prefix > 32) {
         return -EINVAL;
     }
-    if (netdev_holds(nd, ip)) {
-        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    mask = prefix ? 0xFFFFFFFFu << (32 - prefix) : 0;
+    if (type == RTM_DELADDR) {
+        return netconf_del_address(nd, ip, mask, dst);
     }
-    return netconf_add_address(nd, ip, mask);
+    return addr4_add(req, body, nd, ip, mask, dst);
 }
 
 /** The interface a route request is for: the one RTA_OIF names, NULL when
@@ -2093,110 +2305,60 @@ static struct netdev *route_dev(const uint8_t *req, uint32_t body, uint32_t gw)
     for (i = 0; i < netdev_seen_count(); i++) {
         struct netdev *at = netdev_at(i);
 
-        if (at && netdev_on_link(at, gw)) {
+        if (at && netdev_gateway_reachable(at, gw)) {
             return at;
         }
     }
     return netdev_first();
 }
 
-/** The default route of `nd`, which is its gateway: set to `gw`, which is
- * EEXIST with a route already there, unless NLM_F_REPLACE is set or the
- * route is the same one and NLM_F_EXCL is not; or cleared, which is ESRCH
- * with no route there. A route to set with no gateway is EINVAL. */
-static int32_t default_route_change(struct netdev *nd, uint16_t type, uint16_t flags, uint32_t gw)
-{
-    if (type == RTM_DELROUTE) {
-        return nd->gateway == 0 || (gw != 0 && gw != nd->gateway) ? -ESRCH
-                                                                  : netconf_set_gateway(nd, 0);
-    }
-    if (gw == 0) {
-        return -EINVAL;
-    }
-    if (nd->gateway != 0 && !(flags & NLM_F_REPLACE)) {
-        return nd->gateway == gw && !(flags & NLM_F_EXCL) ? 0 : -EEXIST;
-    }
-    return netconf_set_gateway(nd, gw);
-}
-
-/* A route as a request names it. */
-struct route_req {
-    uint32_t dst, mask, gw, metric;
-};
-
-/** Add the route `r` to the table by `nd`, or remove it, under `net_lock`:
- * the result of `netdev_route_add` or `netdev_route_del`. */
-static int32_t added_route_change(struct netdev *nd, uint16_t type, uint16_t flags,
-                                  const struct route_req *r)
-{
-    uint32_t net = net_lock();
-    int32_t rc = type == RTM_NEWROUTE ? netdev_route_add(nd, r->dst, r->mask, r->gw, r->metric,
-                                                         (flags & NLM_F_REPLACE) != 0)
-                                      : netdev_route_del(nd, r->dst, r->mask, r->gw);
-
-    net_unlock(net);
-    return rc;
-}
-
-/**
- * RTM_NEWROUTE and RTM_DELROUTE of AF_INET6: a route of the IPv6 table, by
- * the card RTA_OIF names, else the one a datagram to the gateway leaves
- * by, else the first; at the metric RTA_PRIORITY gives, else 1024, as
- * Linux gives a route a program adds, and made by the `rtmsg`'s protocol,
- * RTPROT_BOOT when it gives none. NLM_F_REPLACE takes the table's route of
- * that prefix by that card away first. Returns the result of `route6_add`
- * or `route6_del`, 0 for a route there already without NLM_F_EXCL,
- * -ENODEV for no card, -EOPNOTSUPP for `lo`, or -EINVAL for a prefix past
- * 128. A route an address implies is not the table's, and removing it is
- * -ESRCH.
- */
+/** Apply an IPv6 route to the named interface, or resolve its gateway.
+ * Unspecified delete selectors match any route in the selected table. */
 static int32_t route6_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
-    uint8_t dst[IP6_ADDR_LEN], via[IP6_ADDR_LEN];
-    const uint8_t *a = req_ip6(req, body, 12, RTA_DST);
+    struct route6_row row = {0};
+    uint8_t via[IP6_ADDR_LEN];
+    const uint8_t *dst = req_ip6(req, body, 12, RTA_DST);
     const uint8_t *gw = req_ip6(req, body, 12, RTA_GATEWAY);
-    uint32_t plen = req[NLMSG_HDRLEN + 1], metric = 1024, lock;
-    int proto = req[NLMSG_HDRLEN + 5] != 0 ? req[NLMSG_HDRLEN + 5] : ROUTE6_PROTO_BOOT;
+    const uint8_t *src = req_ip6(req, body, 12, RTA_PREFSRC);
     struct netdev *nd = 0;
     uint16_t len;
-    const uint8_t *at;
-    int32_t rc;
-
-    k_memset(dst, 0, sizeof(dst));
-    if (a) {
-        k_memcpy(dst, a, IP6_ADDR_LEN);
-    }
-    at = req_attr(req, body, 12, RTA_PRIORITY, &len);
-    if (at && len == 4) {
-        metric = get32(at);
-    }
+    const uint8_t *at = req_attr(req, body, 12, RTA_PRIORITY, &len);
+    int del = type == RTM_DELROUTE;
+    row.metric = at && len == 4 ? get32(at) : 0;
+    row.proto = req[NLMSG_HDRLEN + 5];
+    row.plen = req[NLMSG_HDRLEN + 1];
+    row.local = route_table(req, body) == RT_TABLE_LOCAL;
+    if (src)
+        k_memcpy(row.prefsrc, src, IP6_ADDR_LEN);
+    if (dst)
+        k_memcpy(row.dst, dst, IP6_ADDR_LEN);
+    if (gw)
+        k_memcpy(row.gw, gw, IP6_ADDR_LEN);
     at = req_attr(req, body, 12, RTA_OIF, &len);
     if (at) {
         nd = len == 4 ? dev_of_index(get32(at)) : 0;
-    } else if (gw) {
-        lock = net_lock();
-        nd = ip6_route(gw, 0, via);
+        if (!nd)
+            return -ENODEV;
+    } else if (!del) {
+        uint32_t lock = net_lock();
+        nd = gw ? ip6_route(gw, 0, via) : netdev_first();
         net_unlock(lock);
-    } else if (type == RTM_NEWROUTE) {
-        nd = netdev_first();
+        if (!nd)
+            return -ENODEV;
     }
-    if (plen > 128) {
-        return -EINVAL;
-    }
-    if (type == RTM_DELROUTE) {
-        return nd && nd->loopback ? -EOPNOTSUPP : route6_del(at ? nd : 0, dst, (int)plen, gw);
-    }
-    if (!nd) {
-        return -ENODEV;
-    }
-    if (nd->loopback) {
-        return -EOPNOTSUPP;
-    }
-    if (flags & NLM_F_REPLACE) {
-        (void)route6_del(nd, dst, (int)plen, 0);
-    }
-    rc = route6_add(nd, dst, (int)plen, gw, metric, proto);
-    return rc == -EEXIST && !(flags & NLM_F_EXCL) ? 0 : rc;
+    return route6_change_row(nd, &row, del, (flags & NLM_F_REPLACE) != 0);
+}
+
+/** Whether the request selects a device route in the main or local table. */
+static int supported_route(const uint8_t *req, uint32_t body)
+{
+    uint32_t table = route_table(req, body);
+    uint8_t kind = req[NLMSG_HDRLEN + 7];
+    if (table == RT_TABLE_LOCAL)
+        return !kind || kind == RTN_LOCAL ||
+               (kind == RTN_BROADCAST && req[NLMSG_HDRLEN] == AF_INET);
+    return (!table || table == RT_TABLE_MAIN) && (!kind || kind == RTN_UNICAST);
 }
 
 /** RTM_NEWROUTE and RTM_DELROUTE: the default route of an interface, which
@@ -2207,12 +2369,16 @@ static int32_t route6_change(const uint8_t *req, uint16_t type, uint16_t flags, 
  * `route6_change`'s. */
 static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
-    struct route_req r;
+    struct netdev_rt r = {0};
+    int rc;
+    uint32_t lock;
     struct netdev *nd;
     uint32_t dst_len = body >= 12 ? req[NLMSG_HDRLEN + 1] : 0;
     uint16_t len;
     const uint8_t *prio = req_attr(req, body, 12, RTA_PRIORITY, &len);
 
+    if (body >= 12 && !supported_route(req, body))
+        return -EOPNOTSUPP;
     if (body >= 12 && req[NLMSG_HDRLEN] == AF_INET6) {
         return route6_change(req, type, flags, body);
     }
@@ -2230,16 +2396,22 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
     if (dst_len > 32) {
         return -EINVAL;
     }
-    if (dst_len == 0 && r.metric == 0 &&
-        (type == RTM_NEWROUTE ? nd->gateway == 0 || (flags & NLM_F_REPLACE) || nd->gateway == r.gw
-                              : nd->gateway != 0)) {
-        return default_route_change(nd, type, flags, r.gw);
+    r.proto = req[NLMSG_HDRLEN + 5];
+    r.scope = req[NLMSG_HDRLEN + 6];
+    r.prefsrc = req_ip(req, body, 12, RTA_PREFSRC);
+    if (type == RTM_DELROUTE && !req_attr(req, body, 12, RTA_OIF, &len))
+        nd = 0;
+    lock = net_lock();
+    if (route_table(req, body) == RT_TABLE_LOCAL) {
+        r.kind = req[NLMSG_HDRLEN + 7] == RTN_LOCAL       ? NETDEV_RT_LOCAL
+                 : req[NLMSG_HDRLEN + 7] == RTN_BROADCAST ? NETDEV_RT_BROADCAST
+                                                          : 0;
+        rc = netdev_local_route_change(nd, &r, type == RTM_DELROUTE, (flags & NLM_F_REPLACE) != 0);
+    } else {
+        rc = netdev_route_change(nd, &r, type == RTM_DELROUTE, (flags & NLM_F_REPLACE) != 0);
     }
-    if (type == RTM_NEWROUTE && r.gw == 0 && nd->mask != 0 && nd->mask != 0xFFFFFFFFu &&
-        dst_len == prefix_of(nd->mask) && r.dst == (nd->ip & nd->mask)) {
-        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
-    }
-    return added_route_change(nd, type, flags, &r);
+    net_unlock(lock);
+    return rc;
 }
 
 /** RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each;
@@ -2503,13 +2675,10 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         return;
     }
     if (type == RTM_GETROUTE) {
-        struct netdev_rt r;
-
-        for (i = 0; family != AF_INET6 && netdev_route_at(i, &r); i++) {
-            route_msg(b, &r);
-        }
+        if (family != AF_INET6)
+            route4_dump(b, req, body);
         if (family != AF_INET) {
-            route6_dump(b);
+            route6_dump(b, route_table(req, body));
         }
         end_msg(b, 0, 0);
         return;

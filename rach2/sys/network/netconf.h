@@ -123,22 +123,16 @@ int netconf_is_broadcast(uint32_t ip);
 /**
  * Set `nd`'s first address and mask, as SIOCSIFADDR does.
  *
- * An address of 0 unconfigures the interface, mask and all. Any other must be
- * a possible address (`netconf_address_is_impossible`), under a mask that is
- * contiguous and leaves the address a host of its subnet, as any address of
- * a /31 or /32 is; EINVAL otherwise. A mask of 0 means the classful mask the
- * first octet implies, as on Linux, until `netconf_set_netmask` gives one:
- * `ifconfig` sends the address and the mask in two ioctls. An address that is
- * no host under the classful mask waits for its mask with the interface
- * unconfigured. The address in force given again with a mask of 0, once its
- * mask has been given, changes nothing.
+ * Zero removes the first address. A new address without a mask takes /32 on
+ * a TUN or the classful mask on a broadcast interface. The same address
+ * given without a mask keeps its current mask. A multicast address and a
+ * noncontiguous mask return EINVAL.
  *
  * A change of the address or the mask is logged, and it drops what the old
  * address made true. The ARP mappings of the interface go, but the permanent
  * ones, and those of every interface for the first, with the datagrams
- * waiting for one; a gateway the new subnet does not have is cleared; and
- * the added routes whose gateway the interface no longer reaches are
- * removed (`netdev_route_prune`). A TCP connection opened from the old
+ * waiting for one. Removing or replacing the last address flushes every
+ * IPv4 route through the interface. A TCP connection opened from the old
  * address is kept, as on Linux: its sends fail for want of a route until
  * the address returns, and it ends only by its own timeout. The first
  * interface's change is copied to `net_ip_addr` and `net_ip_mask`. The
@@ -147,32 +141,24 @@ int netconf_is_broadcast(uint32_t ip);
  * Takes `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface, EINVAL as
- *         above.
+ *         above, or EEXIST when reinsertion finds the replacement present.
  */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask);
 
 /**
- * Set `nd`'s mask, as SIOCSIFNETMASK does: the mask of the address waiting
- * for one when there is one, else of the address in force.
- *
- * A mask of 0 leaves the address in force with no subnet, and drops an
- * address waiting for its mask. Otherwise the mask must be contiguous and
- * leave the address a host of its subnet, and the interface must have an
- * address; EINVAL otherwise. A refusal while the mask in force
- * is the classful one, or while an address waits for its mask, unconfigures
- * the interface. A change drops what `netconf_set_address` lists. Takes
- * `net_lock`.
- *
- * @return 0, or a negative errno: ENODEV for a null interface, EINVAL as
- *         above.
+ * Set the first address's mask under net_lock. A custom broadcast survives.
+ * Return ENODEV for a missing device, EADDRNOTAVAIL for a missing address
+ * or EINVAL for a noncontiguous mask, as negative errno values.
  */
 int netconf_set_netmask(struct netdev *nd, uint32_t mask);
 
 /**
  * Set `nd`'s gateway, which is its default route, or clear it with 0, which
- * leaves a send to another subnet ENETUNREACH. A gateway needs the
- * interface's address and mask, and must be one `netconf_gateway_ok` takes;
- * EINVAL otherwise. The first interface's gateway is copied to
+ * leaves a send to another subnet ENETUNREACH. A gateway must be a host on
+ * the first subnet, as `netconf_gateway_ok` checks. On a TUN or when the
+ * first address has a peer, a link prefix must reach it and it must differ
+ * from the local addresses.
+ * EINVAL for an unusable gateway. The first interface's gateway is copied to
  * `net_ip_gateway`. Takes `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface, EINVAL as
@@ -180,27 +166,52 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask);
  */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw);
 
-/**
- * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
- * does, or make it the first address of an interface with none
- * (`netconf_set_address`). An address added beside the first drops nothing.
- * EINVAL for an impossible address, a mask that is 0 or not contiguous, or
- * an address that is no host under its mask, which every address of a /31
- * or /32 is; EEXIST for an
- * address the interface holds; ENOSPC past NETDEV_ADDRS more. Takes
- * `net_lock`.
- */
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask);
+/** Find the IPv4 slot matching the supplied local and destination prefix.
+ * Return -1 for the first or naddr2 for a miss. Call under net_lock. */
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst);
+
+/** Change the broadcast attribute of the first address under net_lock. */
+int netconf_set_broadcast(struct netdev *nd, uint32_t addr);
+
+/** Set the destination of `nd`'s first IPv4 address, as SIOCSIFDSTADDR.
+ * Takes net_lock. Returns 0, -EADDRNOTAVAIL with no address, or -EINVAL
+ * for an invalid destination. */
+int netconf_set_peer(struct netdev *nd, uint32_t peer);
 
 /**
- * Take the address `ip` from `nd`. The first, when `ip` is 0 or the first, is
- * replaced by the next address, as Linux's promote_secondaries has it, or with
- * none after it leaves the interface unconfigured, and the change drops what
- * `netconf_set_address` lists. For another address the added routes whose
- * gateway only its subnet reached are removed. EADDRNOTAVAIL for an address the
- * interface does not hold. Takes `net_lock`.
+ * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
+ * does, or make it the first. A supplied `peer` gives the destination
+ * prefix. A null pointer uses the local address. A secondary must have its
+ * primary's scope. Return -EINVAL for a scope conflict, zero local address
+ * or noncontiguous mask, -EEXIST for a duplicate or -ENOSPC when full. Takes
+ * `net_lock`.
  */
-int netconf_del_address(struct netdev *nd, uint32_t ip);
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
+                        uint8_t scope);
+
+/**
+ * Take the address `ip` from `nd`, matching any local address when `ip`
+ * is 0. If `dst` is supplied, also match its prefix `*dst`/`mask`. Deleting a
+ * primary removes its same-prefix secondaries. A surviving primary takes
+ * the first slot. While an address
+ * remains, the gateway and the added routes stay, as Linux's
+ * `fib_del_ifaddr` keeps routes through a gateway. Taking the last address
+ * leaves the interface unconfigured and drops all that `netconf_set_address`
+ * lists, gateway and added routes among them, as Linux's `fib_disable_ip`
+ * flushes them. EADDRNOTAVAIL for an address the interface does not hold.
+ * Takes `net_lock`.
+ */
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst);
+
+/** Deprecate or delete IPv4 addresses whose lifetime has ended at now.
+ * The network timer calls with interrupts disabled. */
+void netconf_expire_addresses(uint64_t now);
+
+/** Insert the IPv6 address record and start duplicate address detection.
+ * The caller sets up its prefix route from netlink options or an
+ * advertisement. Arguments and errors are those of netconf_add_address6. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred);
 
 /**
  * Give `nd` the IPv6 address `addr` with the on-link prefix of `prefix`

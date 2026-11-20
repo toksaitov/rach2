@@ -6307,11 +6307,12 @@ static int procfs_gen_netifinet6(struct procfs_text *t)
 /* The route flags of /proc/net/ipv6_route, Linux's RTF_ bits: up, through
  * a gateway, a default router's, learned from a router advertisement, and
  * with a lifetime. */
-#define PROCFS_RTF_UP       0x00000001u
-#define PROCFS_RTF_GATEWAY  0x00000002u
-#define PROCFS_RTF_DEFAULT  0x00010000u
-#define PROCFS_RTF_ADDRCONF 0x00040000u
-#define PROCFS_RTF_EXPIRES  0x00400000u
+#define PROCFS_RTF_UP        0x00000001u
+#define PROCFS_RTF_GATEWAY   0x00000002u
+#define PROCFS_RTF_DEFAULT   0x00010000u
+#define PROCFS_RTF_ADDRCONF  0x00040000u
+#define PROCFS_RTF_PREFIX_RT 0x00080000u
+#define PROCFS_RTF_EXPIRES   0x00400000u
 
 /**
  * Render /proc/net/ipv6_route: the IPv6 routes, each copied out under
@@ -6338,8 +6339,9 @@ static int procfs_gen_netipv6route(struct procfs_text *t)
         if (!ip6_is_unspecified(r.gw)) {
             rtf |= PROCFS_RTF_GATEWAY;
         }
-        if (r.proto == ROUTE6_PROTO_RA) {
-            rtf |= PROCFS_RTF_ADDRCONF | (r.plen == 0 ? PROCFS_RTF_DEFAULT : 0u);
+        if (r.learned) {
+            rtf |= PROCFS_RTF_ADDRCONF |
+                   (ip6_is_unspecified(r.gw) ? PROCFS_RTF_PREFIX_RT : PROCFS_RTF_DEFAULT);
         }
         if (r.expires != 0) {
             rtf |= PROCFS_RTF_EXPIRES;
@@ -7588,14 +7590,38 @@ static void ap_mac(struct procfs_text *t, const uint8_t *mac)
     }
 }
 
+/** Append the station address `mac` of `nd`, or nothing for an interface
+ * whose address has no bytes, as Linux's sysfs_format_mac of `addr_len`. */
+static void ap_lladdr(struct procfs_text *t, const struct netdev *nd, const uint8_t *mac)
+{
+    if (NETDEV_ADDR_LEN(nd)) {
+        ap_mac(t, mac);
+    }
+}
+
+/** The text of /sys/class/net/IF/flags for `nd`: Linux's `dev->flags` in
+ * hex, those of its kind (`NETIF_KIND_FLAGS`) and IFF_UP. */
+static const char *netattr_flags(const struct netdev *nd)
+{
+    if (nd->loopback) {
+        return "0x9";
+    }
+    if (nd->l3) {
+        return nd->up ? "0x1091" : "0x1090";
+    }
+    return nd->up ? "0x1003" : "0x1002";
+}
+
 /**
  * Render the attribute `attr` of /sys/class/net/IF, or of its `statistics`
  * when `node` is SYSFS_NET_STATS, of the interface `index`: what Linux's
  * files of the same names give. The link comes from the card where it can
  * say, and an interface down has no carrier, as on Linux; the MTU is the
  * Ethernet frame's, which the interface ioctls report too. `lo` has Linux's
- * loopback type, flags and MTU, and a broadcast address of zeros. -ENOENT
- * for no such interface or attribute.
+ * loopback type, flags and MTU, and a broadcast address of zeros; an
+ * interface of IP datagrams (`l3`) has the type none, Linux's tun flags and
+ * an address and broadcast of no bytes. -ENOENT for no such interface or
+ * attribute.
  */
 static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int attr)
 {
@@ -7634,13 +7660,13 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
     }
     switch (attr) {
     case 0:
-        ap_mac(t, nd->mac);
+        ap_lladdr(t, nd, nd->mac);
         break;
     case 1:
-        ap_str(t, "6");
+        ap_u32(t, (uint32_t)NETDEV_ADDR_LEN(nd));
         break;
     case 2:
-        ap_mac(t, nd->loopback ? nd->mac : broadcast);
+        ap_lladdr(t, nd, nd->loopback ? nd->mac : broadcast);
         break;
     case 3:
         ap_str(t, nd->up && netdev_running(nd) ? "1" : "0");
@@ -7654,7 +7680,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
                                                             : "half");
         break;
     case 6:
-        ap_str(t, nd->loopback ? "0x9" : nd->up ? "0x1003" : "0x1002");
+        ap_str(t, netattr_flags(nd));
         break;
     case 7:
     case 8:
@@ -7677,7 +7703,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_str(t, "1000");
         break;
     case 13:
-        ap_u32(t, nd->loopback ? NETDEV_LOOPBACK_TYPE : 1u);
+        ap_u32(t, (uint32_t)NETDEV_TYPE(nd));
         break;
     default:
         ap_str(t, "INTERFACE=");

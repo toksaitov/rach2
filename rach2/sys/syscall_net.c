@@ -423,8 +423,6 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 
 #define SOCKADDR_LL_HATYPE 8
 
-#define ARPHRD_ETHER 1 /* sll_hatype for an Ethernet interface */
-
 #define SOCKADDR_LL_HALEN 11
 
 #define SOCKADDR_LL_ADDR 12
@@ -1466,6 +1464,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
 
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
+        struct packet_dest dst;
         uint16_t proto;
         int32_t ifindex;
 
@@ -1478,18 +1477,17 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         if (copy_from_user(sll, (const void __user *)sa_ptr, SOCKADDR_LL_LEN) != 0) {
             return -EFAULT;
         }
-        if (sll[SOCKADDR_LL_HALEN] != 6) {
+        if (sll[SOCKADDR_LL_HALEN] > addrlen - SOCKADDR_LL_ADDR) {
             return -EINVAL;
         }
         proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
         if (proto == 0) {
             proto = entry->sock->protocol;
         }
-        ifindex = (int32_t)((uint32_t)sll[SOCKADDR_LL_IFINDEX] |
-                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
-                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
-                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
-        return (int32_t)packet_send(entry->sock, (int)ifindex, sll + SOCKADDR_LL_ADDR, proto,
+        ifindex = (int32_t)SC_LE32(sll + SOCKADDR_LL_IFINDEX);
+        dst.addr = sll + SOCKADDR_LL_ADDR;
+        dst.len = sizeof(sll) - SOCKADDR_LL_ADDR;
+        return (int32_t)packet_send(entry->sock, (int)ifindex, dst, proto,
                                     (const uint8_t __force *)(const void __user *)buf_ptr,
                                     (uint16_t)len);
     }
@@ -2213,10 +2211,9 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         sll[SOCKADDR_LL_PROTOCOL + 1] = (uint8_t)(entry->sock->protocol & 0xff);
         SC_WLE32(sll + SOCKADDR_LL_IFINDEX, (uint32_t)ifindex);
         if (nd) {
-            sll[SOCKADDR_LL_HATYPE] =
-                (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE & 0xff : ARPHRD_ETHER);
-            sll[SOCKADDR_LL_HATYPE + 1] = (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE >> 8 : 0);
-            sll[SOCKADDR_LL_HALEN] = 6;
+            sll[SOCKADDR_LL_HATYPE] = (uint8_t)(NETDEV_TYPE(nd) & 0xff);
+            sll[SOCKADDR_LL_HATYPE + 1] = (uint8_t)(NETDEV_TYPE(nd) >> 8);
+            sll[SOCKADDR_LL_HALEN] = (uint8_t)NETDEV_ADDR_LEN(nd);
             k_memcpy(sll + SOCKADDR_LL_ADDR, nd->mac, 6);
         }
         copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len : (uint32_t)SOCKADDR_LL_LEN;

@@ -317,6 +317,7 @@ void packet_note_head(struct socket *sock)
 int packet_last_addr(struct socket *sock, uint8_t *sll)
 {
     struct packet_last *q;
+    struct netdev *nd;
     uint32_t flags;
     int i;
 
@@ -337,17 +338,23 @@ int packet_last_addr(struct socket *sock, uint8_t *sll)
     sll[5] = (uint8_t)((q->last_ifindex >> 8) & 0xff);
     sll[6] = (uint8_t)((q->last_ifindex >> 16) & 0xff);
     sll[7] = (uint8_t)((q->last_ifindex >> 24) & 0xff);
+    nd = netdev_by_index(q->last_ifindex);
     sll[8] = (uint8_t)PACKET_HATYPE_ETHER;
     sll[10] = q->last_pkttype;
     sll[11] = 6;
-    for (i = 0; i < 6; i++) {
+    if (nd && nd->l3) {
+        sll[8] = (uint8_t)(NETDEV_NONE_TYPE & 0xff); /* sll_hatype, in host order */
+        sll[9] = (uint8_t)(NETDEV_NONE_TYPE >> 8);
+        sll[11] = 0;
+    }
+    for (i = 0; i < sll[11]; i++) {
         sll[12 + i] = q->last_src[i];
     }
     net_unlock(flags);
     return PACKET_SLL_LEN;
 }
 
-int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16_t ethertype,
+int packet_send(struct socket *sock, int ifindex, struct packet_dest dst, uint16_t ethertype,
                 const uint8_t *data, uint16_t len)
 {
     uint32_t flags;
@@ -374,11 +381,15 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
         net_unlock(flags);
         return -ENETDOWN;
     }
+    if (dst.len < (uint32_t)NETDEV_ADDR_LEN(nd)) {
+        net_unlock(flags);
+        return -EINVAL;
+    }
     if (len > nd->mtu) {
         net_unlock(flags);
         return -EMSGSIZE;
     }
-    if (ethernet_tx(nd, dst_mac, ethertype, data, len) != NETDEV_TX_OK) {
+    if (ethernet_tx(nd, nd->l3 ? nd->mac : dst.addr, ethertype, data, len) != NETDEV_TX_OK) {
         net_unlock(flags);
         return -ENETDOWN;
     }

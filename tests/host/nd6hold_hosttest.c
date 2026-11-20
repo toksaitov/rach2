@@ -244,6 +244,13 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     return -1;
 }
 
+/** Model insertion of a SLAAC address with the same fixture as a manual one. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
+{
+    return netconf_add_address6(nd, addr, prefix, flags, valid, preferred);
+}
+
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
     (void)nd;
@@ -320,6 +327,13 @@ int route6_at(int n, struct route6_row *out)
     (void)n;
     (void)out;
     return -1;
+}
+
+/** No peer address completes duplicate detection in this fixture. */
+void route6_address_ready(struct netdev *nd, const struct netdev_addr6 *a)
+{
+    (void)nd;
+    (void)a;
 }
 
 void route6_forget(struct netdev *nd, int proto)

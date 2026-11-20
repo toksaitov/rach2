@@ -8,6 +8,7 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "ip6.h"
+#include "route6.h"
 #include "../tcp/tcp.h"
 #include "../udp/udp.h"
 #include "icmp6.h"
@@ -83,6 +84,8 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
     if (!out) {
         return -EADDRNOTAVAIL;
     }
+    if (!ip6_is_multicast(dst) && !ip6_link_scoped(dst) && route6_preferred_source(out, dst, src))
+        return 0;
     if (ip6_is_multicast(dst)) {
         want = scope_rank(ip6_link_scoped(dst) ? NETDEV_SCOPE_LINK : NETDEV_SCOPE_GLOBAL);
     } else {
@@ -388,10 +391,12 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
         }
         return 0;
     }
-    if (!ip6_is_multicast(via)) {
+    if (!ip6_is_multicast(via) && !out->l3) {
         return nd6_output(out, via, buf, (uint16_t)len, mtu);
     }
-    net_mib6.ip6_out_mcast_pkts++;
+    if (ip6_is_multicast(via)) {
+        net_mib6.ip6_out_mcast_pkts++;
+    }
     ip6_mcast_mac(via, mac);
     sent = ethernet_tx(out, mac, ETH_TYPE_IPV6, buf, (uint16_t)len);
     if (sent == ETHERNET_TX_TOOLONG) {

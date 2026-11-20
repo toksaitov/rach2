@@ -185,7 +185,6 @@ rach2/sys/network/ip/ip.c:ip_header params 8 the parameters are the fields of on
 rach2/sys/network/ip/ip.c:ip_fragment_to params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/network/ip/ip.c:ip_fragment params 9 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/network/ip/ip.c:ip_tx_opts params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-rach2/sys/network/ip/ip.c:ip_tx_opts complexity 26 one datagram's transmit: its route, source, options and fragments in the order the RFC takes them
 
 rach2/sys/network/ip/ipfrag.c:ip_frag_input complexity 28 a parser over an external format, one check per field in the format's order
 
@@ -204,7 +203,6 @@ rach2/sys/network/ip6/ip6.c:ip6_tx_opts complexity 39 one datagram's transmit: i
 rach2/sys/network/ip6/nd6.c:nd6_output_whole params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/network/ip6/nd6.c:rx_ra complexity 26 a parser over an external format, one check per field in the format's order
 
-rach2/sys/network/netif.c:route_ioctl complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/network/socket/netlink.c:answer complexity 52 a dispatcher, one arm per command, read as a table
 rach2/sys/network/socket/netlink.c:neigh_dump complexity 26 a dump, one test for each filter the request may carry

@@ -194,6 +194,9 @@ struct netdev_ops {
  */
 struct netdev_addr6 {
     uint8_t addr[16];
+    uint8_t peer[16]; /* :: for no distinct destination */
+    uint32_t metric;  /* zero selects the default prefix metric */
+    uint8_t noprefix, local_route_deleted;
     uint8_t prefix;     /* the on-link prefix's length, 0 to 128 */
     uint8_t scope;      /* NETDEV_SCOPE_* */
     uint8_t flags;      /* NETDEV_A6_* */
@@ -212,6 +215,21 @@ struct netdev_addr6 {
     uint8_t dad_count;
     uint8_t regen;
 };
+
+/* Route attributes of one IPv4 address, indexed from its first slot. */
+struct addr4_routes {
+    uint32_t broadcast, metric;
+    uint64_t valid_until, preferred_until; /* absolute ticks, zero for forever */
+    uint32_t created, updated;             /* clock ticks in hundredths of a second */
+    uint8_t proto, deprecated, scope;
+    uint8_t zero_peer; /* an explicit destination of 0.0.0.0 */
+    unsigned char given_broadcast, noprefix, deleted;
+};
+
+#define ADDR4_PREFIX           1
+#define ADDR4_LOCAL            2
+#define ADDR4_BROADCAST        4
+#define ADDR4_SUBNET_BROADCAST 8
 
 /**
  * One interface: the driver that drives it and that driver's record for the
@@ -240,21 +258,16 @@ struct netdev {
     uint32_t ip;
     uint32_t mask;
     uint32_t gateway;
+    uint32_t peer; /* a distinct IPv4 destination, or zero (see addr4) */
 
     /* The `naddr2` addresses after the first, as `ip addr add` gives them,
      * each with its mask: an interface may be on more than one subnet, and
      * answers for each of its addresses. */
     uint32_t ip2[NETDEV_ADDRS];
     uint32_t mask2[NETDEV_ADDRS];
+    uint32_t peer2[NETDEV_ADDRS]; /* same convention as peer */
     int naddr2;
-
-    /* What an address change made of two ioctls, the address and then the
-     * mask, leaves between them (netconf.c): an address given that is a host
-     * only under a mask wider than its class's, waiting for the mask, or 0;
-     * and whether the mask in force is the one the address's class implies
-     * and not one given. */
-    uint32_t pending_ip;
-    int mask_provisional;
+    struct addr4_routes addr4[NETDEV_ADDRS + 1];
 
     /* The interface's counts, in 64 bits as Linux's `rtnl_link_stats64`,
      * so that none wraps in practice: ethernet.c keeps a card's, and the IP
@@ -293,6 +306,16 @@ struct netdev {
     /* Nonzero for `lo`, which no card stands behind (`netdev_loopback`). */
     int loopback;
 
+    /* Nonzero for an interface of IP datagrams with no link header, a TUN
+     * of /dev/net/tun, Linux's ARPHRD_NONE with IFF_POINTOPOINT and
+     * IFF_NOARP: it has no station address, `mac` all zeros, and neither
+     * ARP nor neighbour discovery finds a next hop on it, so a datagram
+     * leaves at once. Its driver's `tx` is given the frame `ethernet_tx`
+     * builds, whose header carries only the EtherType, and a datagram it
+     * receives comes to `ethernet_rx` behind such a header; the counts are
+     * of the datagrams alone. */
+    int l3;
+
     /* The MTU: the largest IP datagram, header included, that the interface
      * sends in one frame. NETDEV_ETH_MTU_MIN to NETDEV_ETH_MTU_MAX on a
      * card, 1500 from the probe; NETDEV_LOOPBACK_MTU on `lo`. */
@@ -322,6 +345,17 @@ struct netdev {
  * address, all zeros, and its MTU. */
 #define NETDEV_LOOPBACK_TYPE 772
 #define NETDEV_LOOPBACK_MTU  65536
+
+/* Linux's other hardware types of an interface's address (ARPHRD_*): a
+ * card's Ethernet, and none for an interface with `l3` set. */
+#define NETDEV_ETHER_TYPE 1
+#define NETDEV_NONE_TYPE  65534
+
+/* The hardware type of `nd`'s address, Linux's `dev->type`, and the bytes
+ * of the address, its `addr_len`: none on an interface with `l3` set. */
+#define NETDEV_TYPE(nd) \
+    ((nd)->loopback ? NETDEV_LOOPBACK_TYPE : (nd)->l3 ? NETDEV_NONE_TYPE : NETDEV_ETHER_TYPE)
+#define NETDEV_ADDR_LEN(nd) ((nd)->l3 ? 0 : 6)
 
 /* The MTUs a card's interface may have, Linux's for Ethernet: the least
  * every IPv4 host must carry (RFC 791) and the most a frame without jumbo
@@ -429,14 +463,21 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via);
  * subnet an address implies, NETDEV_RT_DEFAULT for an interface's gateway
  * and NETDEV_RT_ADDED for one a program added; the two implied kinds have a
  * `metric` of 0. */
-#define NETDEV_RT_LINK    0
-#define NETDEV_RT_DEFAULT 1
-#define NETDEV_RT_ADDED   2
+#define NETDEV_RT_LINK      0
+#define NETDEV_RT_DEFAULT   1
+#define NETDEV_RT_ADDED     2
+#define NETDEV_RT_LOCAL     3
+#define NETDEV_RT_BROADCAST 4
 struct netdev_rt {
     uint32_t dst, mask, gw, metric, src;
     int ifindex;
     int kind;
+    uint8_t proto, scope;
+    uint32_t prefsrc; /* specified source, or zero for source selection */
 };
+
+/** Select the route to dst. On success copy its gateway and source to row. */
+struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *row);
 
 /* The lookups `netdev_route` made, and those that found no route, which
  * /proc/net/stat/rt_cache reports. */
@@ -447,6 +488,23 @@ extern uint32_t netdev_route_misses;
  * the last. The routes addresses and gateways imply come first, interface
  * by interface, then the added ones. */
 int netdev_route_at(int n, struct netdev_rt *out);
+
+/** Enumerate the local table, with each shared route listed once. */
+int netdev_local_route_at(int n, struct netdev_rt *out);
+
+/** Change a local-table route under net_lock, including an address route. */
+int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace);
+
+/** Return the device of an added local or broadcast route covering dst. */
+struct netdev *netdev_added_local(uint32_t dst, int kind);
+
+/** Install or change address slot a's prefix metric under net_lock.
+ * fresh distinguishes insertion from replacement of an existing address. */
+void netdev_prefix_metric(struct netdev *nd, int a, uint32_t metric, int fresh);
+
+/** Whether `nd` has an implied link route to exactly `dst`/`mask`.
+ * Call under net_lock. */
+int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask);
 
 /**
  * Add a route to `dst`/`mask` by `nd`, through `gw` or on the link when it
@@ -470,32 +528,112 @@ int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw
  * its own; 0 for none. Call under net_lock. */
 uint32_t netdev_default_gateway(const struct netdev *nd);
 
-/** Drop the added routes of `nd` whose gateway its subnets no longer have,
- * as Linux drops a route whose next hop an address change made unreachable.
- * Call under net_lock. */
-void netdev_route_prune(struct netdev *nd);
+/** Drop device routes on last address removal (all) or link down.
+ * Host-scope routes survive link down. Call under net_lock. */
+void netdev_route_flush(struct netdev *nd, int all);
 
-/** Whether `ip` is one of `nd`'s addresses, its first or another; 0 for a
- * NULL `nd` or an `ip` of 0. */
-int netdev_holds(const struct netdev *nd, uint32_t ip);
+/** Remove routes whose specified source has ceased to be local. */
+void netdev_route_lost_source(uint32_t ip);
 
-/** Whether `ip` is on one of `nd`'s subnets; a /32 puts no other address
- * on the link, as on Linux, so its own address is not counted. */
-int netdev_on_link(const struct netdev *nd, uint32_t ip);
+/** Change a main-table route under net_lock. Delete matches the supplied
+ * selectors, with scope 255 and zero protocol and metric as wildcards. */
+int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace);
 
-/** The address of `nd` a datagram to the next hop `hop` leaves from: the
- * one whose subnet has `hop`, else its first. */
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
+/** Whether a direct route on the device can resolve a gateway. */
+int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw);
 
-/** Whether `ip` is an address of one of the cards' interfaces, which makes
- * a datagram to it this machine's. `lo`'s 127.0.0.1 is not counted. */
-int netdev_owns(uint32_t ip);
+/** The IPv4 destination of address `a` (-1 for the first), the local address
+ * when there is no distinct peer. This is Linux's IFA_ADDRESS. */
+static __inline__ uint32_t netdev_addr_dst(const struct netdev *nd, int a)
+{
+    uint32_t peer = a < 0 ? nd->peer : nd->peer2[a];
+
+    if (peer || nd->addr4[a + 1].zero_peer)
+        return peer;
+    return a < 0 ? nd->ip : nd->ip2[a];
+}
+
+/** Whether an IPv4 address implies a link route to `dst`/`mask`.
+ * A host prefix implies one only when it names a distinct peer. */
+static __inline__ int netdev_addr_has_route(uint32_t ip, uint32_t dst, uint32_t mask)
+{
+    return ip != 0 && ((dst & mask) >> 24) != 0 && (mask != 0xFFFFFFFFu || dst != ip);
+}
+
+/** Index of the primary address sharing this destination prefix. */
+static __inline__ int netdev_primary_slot(const struct netdev *nd, int a)
+{
+    int i;
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t dst = netdev_addr_dst(nd, a);
+    for (i = -1; i < a; i++) {
+        if ((i < 0 ? nd->mask : nd->mask2[i]) == mask &&
+            ((netdev_addr_dst(nd, i) ^ dst) & mask) == 0) {
+            return i;
+        }
+    }
+    return a;
+}
+
+/** Whether an earlier address supplies the prefix route for slot a. */
+static __inline__ int netdev_secondary(const struct netdev *nd, int a)
+{
+    return netdev_primary_slot(nd, a) != a;
+}
 
 /* Whether a subnet of the contiguous `mask` has a network and a broadcast
  * address: whether its prefix is 1 to 30. Every address of a /31 is a host
  * (RFC 3021), as the one of a /32 is, and Linux gives neither a broadcast
  * address. */
 #define NETDEV_MASK_HAS_BROADCAST(mask) ((mask) != 0u && ((mask) | 1u) != 0xFFFFFFFFu)
+
+/** The configured broadcast attribute, including an ioctl-derived one. */
+static __inline__ uint32_t netdev_addr_brd(const struct netdev *nd, int a)
+{
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
+    if (nd->addr4[a + 1].given_broadcast) {
+        return nd->addr4[a + 1].broadcast;
+    }
+    return ip && !nd->l3 && !nd->loopback && NETDEV_MASK_HAS_BROADCAST(mask) ? ip | ~mask : 0;
+}
+
+/** Address of the local-table route of kind bit, or zero if absent. */
+static __inline__ uint32_t netdev_addr_local(const struct netdev *nd, int a, int bit)
+{
+    uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t dst = netdev_addr_dst(nd, a);
+    if (!ip || (nd->addr4[a + 1].deleted & bit))
+        return 0;
+    if (bit == ADDR4_LOCAL)
+        return ip;
+    if (!nd->up)
+        return 0;
+    if (bit == ADDR4_BROADCAST) {
+        uint32_t brd = netdev_addr_brd(nd, a);
+        return brd == 0xffffffffu ? 0 : brd;
+    }
+    return NETDEV_MASK_HAS_BROADCAST(mask) && ((dst & mask) >> 24) && !netdev_secondary(nd, a)
+               ? dst | ~mask
+               : 0;
+}
+
+/** Whether `ip` is one of `nd`'s addresses, its first or another; 0 for a
+ * NULL `nd` or an `ip` of 0. */
+int netdev_holds(const struct netdev *nd, uint32_t ip);
+
+/** Whether `ip` is on one of `nd`'s subnets or peer prefixes. A /32
+ * puts only a distinct peer on the link. */
+int netdev_on_link(const struct netdev *nd, uint32_t ip);
+
+/** The local address of `nd` whose subnet or peer prefix reaches `hop`,
+ * or its first if no prefix matches. On a TUN, prefer the longest match. */
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
+
+/** Whether `ip` is an address of one of the cards' interfaces, which makes
+ * a datagram to it this machine's. `lo`'s 127.0.0.1 is not counted. */
+int netdev_owns(uint32_t ip);
 
 /** Whether `ip` is 255.255.255.255 or the broadcast address of a subnet
  * one of the cards' interfaces is on. */
@@ -607,12 +745,11 @@ int netdev_running(const struct netdev *nd);
 /**
  * Let go of the card of `nd`, an interface of the probe's, so that another
  * driver, vfio-pci above all, can take the function: the interface is set
- * down and stays, with its name, index and the addresses a down interface
- * keeps, without a carrier, dropping what is sent on it and refusing to be
- * set up; the driver stops the card, and the function
- * has no owner. 0, or -ENODEV for an interface that is no card, a card that
- * is away already or a driver that cannot stop. Called under the big kernel
- * lock with interrupts on; it waits while the card drains.
+ * down and keeps its name and index. Its addresses and routes are removed.
+ * It drops frames and refuses a request to bring it up. The driver stops
+ * the card and releases the PCI function. Return zero on success or
+ * -ENODEV for an absent, released or unstoppable card. Called under the
+ * big kernel lock with interrupts on. Waits for the card to drain.
  */
 int netdev_release(struct netdev *nd);
 

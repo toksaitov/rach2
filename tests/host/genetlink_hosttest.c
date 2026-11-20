@@ -1,6 +1,7 @@
 /* Exercise generic netlink, its real socket queue and userspace link policy.
  * host-deps: rach2/sys/network/socket/genetlink.c rach2/sys/tick.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
+ * host-deps: rach2/sys/network/ip6/route6.c rach2/sys/network/route.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  */
@@ -11,6 +12,8 @@ extern int printf(const char *format, ...);
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 volatile uint64_t kernel_ticks;
+struct net_mib6 net_mib6;
+uint32_t net_ip_gateway;
 static struct netdev card;
 static int carrier = 1, privileged = 1, failures, lock_depth, completed, calls;
 static int failed_dumps;
@@ -148,13 +151,25 @@ int arp_snapshot(struct arp_row *out, int max)
     return 0;
 }
 
-/** Model ip6_route with no addresses, routes or sockets. */
-struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
+/** The model has one card with IPv6 enabled. */
+int netdev_count(void)
 {
-    (void)dst;
-    (void)ifindex;
-    (void)via;
+    return 1;
+}
+
+/** IPv6 is enabled on the model card. */
+int nd6_disabled(const struct netdev *nd)
+{
+    (void)nd;
     return 0;
+}
+
+/** Every router on the model link is reachable. */
+int nd6_router_usable(struct netdev *nd, const uint8_t *addr)
+{
+    (void)nd;
+    (void)addr;
+    return 1;
 }
 
 /** Model ip6_source with no addresses, routes or sockets. */
@@ -192,41 +207,61 @@ int nd6_snapshot(struct nd6_row *out, int max)
     return 0;
 }
 
-/** Model netconf_add_address with no addresses, routes or sockets. */
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
+/** The address-expiry timer has no work in the netlink socket fixture. */
+void netconf_expire_addresses(uint64_t now)
 {
-    (void)nd;
-    (void)ip;
-    (void)mask;
+    (void)now;
+}
+
+/** Allocate the fixture's one IPv4 address, reporting duplicate insertion. */
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
+                        uint8_t scope)
+{
+    if (nd->ip)
+        return -EEXIST;
+    nd->ip = ip;
+    nd->mask = mask;
+    nd->peer = peer ? *peer : 0;
+    nd->addr4[0].scope = scope;
     return 0;
 }
 
-/** Model netconf_add_address6 with no addresses, routes or sockets. */
-int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
-                         uint32_t valid, uint32_t preferred)
+/** Allocate the address record used by the netlink and route code. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
 {
-    (void)nd;
-    (void)addr;
-    (void)prefix;
-    (void)flags;
-    (void)valid;
-    (void)preferred;
+    struct netdev_addr6 *a = &nd->addr6[nd->naddr6++];
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, addr, 16);
+    a->prefix = (uint8_t)prefix;
+    a->flags = (uint8_t)flags;
+    a->valid = valid;
+    a->preferred = preferred;
     return 0;
 }
 
 /** Model netconf_del_address with no addresses, routes or sockets. */
-int netconf_del_address(struct netdev *nd, uint32_t ip)
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst)
 {
     (void)nd;
     (void)ip;
+    (void)mask;
+    (void)dst;
     return 0;
 }
 
 /** Model netconf_del_address6 with no addresses, routes or sockets. */
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
-    (void)nd;
-    (void)addr;
+    struct netdev_addr6 *a = netdev_addr6_of(nd, addr);
+    int i;
+    if (!a)
+        return -EADDRNOTAVAIL;
+    i = (int)(a - nd->addr6);
+    route6_address_removed(nd, i);
+    for (; i + 1 < nd->naddr6; i++)
+        nd->addr6[i] = nd->addr6[i + 1];
+    nd->naddr6--;
     return 0;
 }
 
@@ -241,8 +276,10 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 /** Model netdev_addr6_of with no addresses, routes or sockets. */
 struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)
 {
-    (void)nd;
-    (void)addr;
+    int i;
+    for (i = 0; i < nd->naddr6; i++)
+        if (ip6_equal(addr, nd->addr6[i].addr))
+            return &nd->addr6[i];
     return 0;
 }
 
@@ -281,43 +318,17 @@ struct netdev *netdev_owner6(const uint8_t *addr)
     return 0;
 }
 
-/** Model netdev_route with no addresses, routes or sockets. */
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+/** The fixture can supply its one address as an explicit preferred source. */
+int netdev_owns(uint32_t ip)
 {
-    (void)dst;
-    (void)via;
-    return 0;
+    return ip && card.ip == ip;
 }
 
-/** Model netdev_route_add with no addresses, routes or sockets. */
-int netdev_route_add(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw, uint32_t metric,
-                     int replace)
+/** Match the fixture's single IPv4 address. */
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst)
 {
-    (void)nd;
-    (void)dst;
-    (void)mask;
-    (void)gw;
-    (void)metric;
-    (void)replace;
-    return 0;
-}
-
-/** Model netdev_route_at with no addresses, routes or sockets. */
-int netdev_route_at(int n, struct netdev_rt *out)
-{
-    (void)n;
-    (void)out;
-    return 0;
-}
-
-/** Model netdev_route_del with no addresses, routes or sockets. */
-int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
-{
-    (void)nd;
-    (void)dst;
-    (void)mask;
-    (void)gw;
-    return 0;
+    return nd->ip == ip && nd->mask == mask && (!dst || (*dst & mask) == (ip & mask)) ? -1
+                                                                                      : nd->naddr2;
 }
 
 /** Model netdev_source with no addresses, routes or sockets. */
@@ -339,37 +350,6 @@ void netif_ns_lo_set_up(struct netdev *nd, int up)
 {
     (void)nd;
     (void)up;
-}
-
-/** Model route6_add with no addresses, routes or sockets. */
-int route6_add(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw, uint32_t metric,
-               int proto)
-{
-    (void)nd;
-    (void)dst;
-    (void)plen;
-    (void)gw;
-    (void)metric;
-    (void)proto;
-    return 0;
-}
-
-/** Model route6_at with no addresses, routes or sockets. */
-int route6_at(int n, struct route6_row *out)
-{
-    (void)n;
-    (void)out;
-    return 0;
-}
-
-/** Model route6_del with no addresses, routes or sockets. */
-int route6_del(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw)
-{
-    (void)nd;
-    (void)dst;
-    (void)plen;
-    (void)gw;
-    return 0;
 }
 
 /** Model socket_snapshot with no addresses, routes or sockets. */
@@ -761,6 +741,227 @@ static void stats_test(struct socket *route)
     CHECK(netlink_pending(route) == -1);
 }
 
+/** Exercise netlink's local and peer selectors and extended address flags. */
+static void peer_address(void)
+{
+    uint8_t local[16] = {0x20, 1}, peer[16] = {0x30, 1};
+    struct nl_build b = {0};
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, 0, 8);
+    uint32_t body;
+    ifa[0] = AF_INET6;
+    ifa[1] = 64;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr(request, IFA_LOCAL, local, 16);
+    msg_attr(request, IFA_ADDRESS, peer, 16);
+    msg_attr32(request, IFA_FLAGS, IFA_F_NOPREFIXROUTE | NETDEV_A6_NODAD);
+    msg_attr32(request, IFA_RT_PRIORITY, 57);
+    body = get32(request) - NLMSG_HDRLEN;
+    CHECK(addr_change(request, RTM_NEWADDR, NLM_F_EXCL, body) == 0);
+    CHECK(card.naddr6 == 1 && ip6_equal(card.addr6[0].peer, peer));
+    CHECK(card.addr6[0].metric == 57 && card.addr6[0].noprefix);
+    CHECK(addr_change(request, RTM_NEWADDR, NLM_F_EXCL, body) == -EEXIST);
+    CHECK(addr_change(request, RTM_NEWADDR, NLM_F_REPLACE, body) == 0);
+    CHECK(card.addr6[0].noprefix);
+    ifa[1] = 128;
+    CHECK(addr_change(request, RTM_DELADDR, 0, body) == -EADDRNOTAVAIL && card.naddr6 == 1);
+    ifa[1] = 64;
+    CHECK(addr_change(request, RTM_DELADDR, 0, body) == 0 && !card.naddr6);
+}
+
+/** Submit a /64 address change with a metric and valid lifetime. */
+static void prefix_address(int host, int replace, unsigned flags, uint32_t metric, uint32_t life)
+{
+    uint8_t local[16] = {0x20, 1}, cache[16] = {0};
+    struct nl_build b = {0};
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, 0, 8);
+    local[15] = (uint8_t)host;
+    ifa[0] = AF_INET6;
+    ifa[1] = 64;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr(request, IFA_LOCAL, local, 16);
+    msg_attr32(request, IFA_FLAGS, NETDEV_A6_NODAD | flags);
+    msg_attr32(request, IFA_RT_PRIORITY, metric);
+    put32(cache, life);
+    put32(cache + 4, life);
+    msg_attr(request, IFA_CACHEINFO, cache, sizeof(cache));
+    CHECK(!addr_change(request, RTM_NEWADDR, replace ? NLM_F_REPLACE : NLM_F_EXCL,
+                       get32(request) - NLMSG_HDRLEN));
+}
+
+/** Count every direct route for the test subnet and metric in the dump. */
+static int prefix_rows(uint32_t metric, uint32_t proto, uint32_t expires)
+{
+    uint8_t dst[16] = {0x20, 1};
+    struct route6_row r;
+    int n, count = 0;
+    for (n = 0; route6_at(n, &r); n++)
+        if (r.ifindex == card.index && !r.local && r.plen == 64 && r.metric == metric &&
+            ip6_equal(r.dst, dst) && ip6_is_unspecified(r.gw)) {
+            CHECK(r.proto == proto && r.expires == expires);
+            count++;
+        }
+    return count;
+}
+
+/** End a row with an empty interface and routing table. */
+static void clear_addresses(void)
+{
+    while (card.naddr6)
+        CHECK(!netconf_del_address6(&card, card.addr6[0].addr));
+    route6_forget(&card, -1);
+    route6_tick();
+}
+
+/** Modify the actual route left by an explicit replacement. */
+static void replace_address_prefix(void)
+{
+    struct route6_row r = {0};
+    r.dst[0] = 0x20;
+    r.dst[1] = 1;
+    r.plen = 64;
+    r.metric = 256;
+    r.proto = 99;
+    prefix_address(1, 0, 0, 256, NETDEV_LIFETIME_FOREVER);
+    CHECK(!route6_change_row(&card, &r, 0, 1));
+    CHECK(prefix_rows(256, 99, 0) == 1);
+    prefix_address(1, 1, IFA_F_NOPREFIXROUTE, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(!prefix_rows(256, 99, 0));
+    prefix_address(1, 1, 0, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(!route6_change_row(&card, &r, 0, 1));
+    prefix_address(1, 1, 0, 0, 20);
+    CHECK(prefix_rows(256, 99, 20) == 1);
+    prefix_address(1, 1, 0, 0, NETDEV_LIFETIME_FOREVER);
+    prefix_address(1, 1, 0, 512, NETDEV_LIFETIME_FOREVER);
+    CHECK(!prefix_rows(256, 99, 0) && prefix_rows(512, ROUTE6_PROTO_KERNEL, 0) == 1);
+    clear_addresses();
+}
+
+/** Use the last addition's deadline, even after that address is deleted. */
+static void shared_deadline(void)
+{
+    struct route6_row r;
+    uint8_t dst[16] = {0x20, 1};
+    prefix_address(1, 0, 0, 256, 100);
+    prefix_address(2, 0, 0, 512, 60);
+    kernel_ticks += TICK_HZ;
+    prefix_address(3, 0, 0, 256, 10);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    CHECK(!netconf_del_address6(&card, card.addr6[2].addr));
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    kernel_ticks += 10 * TICK_HZ;
+    route6_tick();
+    CHECK(!prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) && card.naddr6 == 2);
+    CHECK(route6_resolve(dst, card.index, &r) == &card && r.metric == 512 && r.expires == 49);
+    clear_addresses();
+}
+
+/** A permanent route takes the longest remaining deadline on cleanup only. */
+static void permanent_prefix(void)
+{
+    prefix_address(1, 0, 0, 256, 10);
+    prefix_address(2, 0, 0, 256, NETDEV_LIFETIME_FOREVER);
+    prefix_address(3, 0, 0, 256, 80);
+    prefix_address(4, 0, 0, 256, 12);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) == 1);
+    prefix_address(2, 1, IFA_F_NOPREFIXROUTE, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 80) == 1);
+    prefix_address(3, 1, IFA_F_NOPREFIXROUTE, 0, 5);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 80) == 1);
+    prefix_address(4, 1, 0, 256, 7);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 7) == 1);
+    prefix_address(4, 1, 0, 512, 9);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 7) == 1 &&
+          prefix_rows(512, ROUTE6_PROTO_KERNEL, 9) == 1);
+    clear_addresses();
+}
+
+/** A replacement selects the lowest direct metric across shared addresses. */
+static void lowest_prefix(void)
+{
+    prefix_address(1, 0, 0, 128, NETDEV_LIFETIME_FOREVER);
+    prefix_address(2, 0, 0, 256, NETDEV_LIFETIME_FOREVER);
+    prefix_address(2, 1, 0, 512, NETDEV_LIFETIME_FOREVER);
+    CHECK(!prefix_rows(128, ROUTE6_PROTO_KERNEL, 0) &&
+          prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) == 1 &&
+          prefix_rows(512, ROUTE6_PROTO_KERNEL, 0) == 1);
+    prefix_address(2, 1, IFA_F_NOPREFIXROUTE, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) == 1);
+    clear_addresses();
+}
+
+/** An advertised on-link prefix and a manual address share one FIB entry. */
+static void advertised_prefix(void)
+{
+    uint8_t dst[16] = {0x20, 1};
+    route6_learn(&card, dst, 64, 0, 256, 100);
+    prefix_address(1, 0, 0, 256, 10);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    route6_learn(&card, dst, 64, 0, 256, 0);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    route6_learn(&card, dst, 64, 0, 256, 22);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 22) == 1);
+    clear_addresses();
+}
+
+/** Submit an IPv4 address request with the given prefix metric. */
+static void metric_address4(int replace, uint32_t metric)
+{
+    struct nl_build b = {0};
+    uint16_t flags = replace ? NLM_F_REPLACE : NLM_F_EXCL;
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, flags, 8);
+    ifa[0] = AF_INET;
+    ifa[1] = 24;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr_ip(request, IFA_LOCAL, 0xc0000201u);
+    msg_attr32(request, IFA_RT_PRIORITY, metric);
+    CHECK(!addr_change(request, RTM_NEWADDR, flags, get32(request) - NLMSG_HDRLEN));
+}
+
+/** Distinguish omitted IPv4 attributes from zero addresses on the wire. */
+static void zero_address4(void)
+{
+    struct nl_build b = {0};
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, 0, 8);
+    uint32_t body;
+    ifa[0] = AF_INET;
+    ifa[1] = 24;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr_ip(request, IFA_ADDRESS, 0xc0000201u);
+    body = get32(request) - NLMSG_HDRLEN;
+    CHECK(addr_change(request, RTM_NEWADDR, 0, body) == -EINVAL);
+    msg_attr_ip(request, IFA_LOCAL, 0);
+    body = get32(request) - NLMSG_HDRLEN;
+    CHECK(!addr_change(request, RTM_NEWADDR, 0, body) && !card.ip);
+    CHECK(addr_change(request, RTM_DELADDR, 0, body) == -EADDRNOTAVAIL);
+}
+
+/** Change the address metric after replacing its route with each protocol. */
+static void replaced_metric4(uint32_t old_metric, uint8_t proto)
+{
+    struct netdev_rt row, r = {0};
+    int n, old = 0, fresh = 0;
+    metric_address4(0, old_metric);
+    r.dst = card.ip & card.mask;
+    r.mask = card.mask;
+    r.prefsrc = card.ip;
+    r.proto = proto;
+    r.scope = RT_SCOPE_LINK;
+    r.metric = old_metric;
+    CHECK(!netdev_route_change(&card, &r, 0, 1));
+    metric_address4(1, 84);
+    for (n = 0; netdev_route_at(n, &row); n++) {
+        if (row.metric == old_metric && row.proto == proto)
+            old++;
+        if (row.metric == 84 && row.proto == 2)
+            fresh++;
+    }
+    CHECK(old == (proto != 2));
+    CHECK(fresh == (old_metric != 0 || proto == 2));
+    netdev_route_flush(&card, 1);
+    card.ip = card.mask = 0;
+    k_memset(card.addr4, 0, sizeof(card.addr4));
+}
+
 /** Register a family and run every row, releasing all sockets and storage. */
 int main(void)
 {
@@ -793,6 +994,17 @@ int main(void)
     CHECK(netlink_open(&route, NETLINK_ROUTE) == 0 && netlink_open(&watch, NETLINK_ROUTE) == 0);
     CHECK(netlink_bind(&a, 77, 0) == 0 && netlink_bind(&route, 77, 0) == 0);
     CHECK(netlink_bind(&b, 77, 0) == -EADDRINUSE);
+    zero_address4();
+    replaced_metric4(42, 2);
+    replaced_metric4(42, 99);
+    replaced_metric4(0, 2);
+    replaced_metric4(0, 99);
+    peer_address();
+    replace_address_prefix();
+    shared_deadline();
+    permanent_prefix();
+    lowest_prefix();
+    advertised_prefix();
     requests(&a);
     multicast(&a, &b);
     link_policy_test(&route, &watch);

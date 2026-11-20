@@ -55,7 +55,8 @@
  * `qdisc-dump`, `second-addr`, `neigh-permanent`, `neigh-forget`, `route-add`,
  * `proc-net-route`, `route-del`, `route-enetunreach`, `route-on-link`,
  * `padded-dump`, `peek-trunc`, `cut-trunc`, `nametoindex`, `ifconf-length`,
- * `ifconf-buffer`, `uevent-silent` and `eprotonosupport`. A native run reports
+ * `ifconf-buffer`, `uevent-silent`, `eprotonosupport`, and the TUN peer and
+ * packet socket checks. A native run reports
  * the changes, `addr-eexist` to `delneigh-enoent` and `second-addr` to
  * `route-on-link`, not run, and a first link with no address leaves the four
  * lookups, `route-get-local` to `qdisc-dump`, not run. The first failure fails
@@ -64,8 +65,11 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <net/if.h>
+#include <net/route.h>
 #include <netinet/in.h>
+#include <netpacket/packet.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
@@ -83,6 +87,7 @@
 #define NLM_F_REQUEST          0x001
 #define NLM_F_MULTI            0x002
 #define NLM_F_ACK              0x004
+#define NLM_F_REPLACE          0x100
 #define NLM_F_EXCL             0x200
 #define NLM_F_CREATE           0x400
 #define NLM_F_DUMP             0x300
@@ -111,10 +116,17 @@
 #define NDA_LLADDR             2
 #define NUD_PERMANENT          0x80
 #define RT_TABLE_MAIN          254
+#define RT_SCOPE_LINK          253
 #define RTN_UNICAST            1
 #define RTN_LOCAL              2
 #define IFLA_IFNAME            3
+#define IFA_ADDRESS            1
 #define IFA_LOCAL              2
+#define TUNSETIFF              0x400454caU
+#define TUN_IFF_TUN            0x0001
+#define TUN_IFF_NO_PI          0x1000
+#define ETH_TYPE_IP            0x0800
+#define ARPHRD_NONE            65534
 
 struct sockaddr_nl {
     unsigned short nl_family;
@@ -184,45 +196,11 @@ struct rtattr {
 #define PAYLOAD(h, body) ((int)(h)->nlmsg_len - NLMSG_HDRLEN - (int)NLMSG_ALIGN(sizeof(body)))
 #define FIRST_RTA(p)     ((struct rtattr *)((char *)(p) + NLMSG_ALIGN(sizeof(*(p)))))
 
-/* The assertions of etude's report in the order they are checked, more than
- * probe_report.h's path holds, and how many are planned and reported. */
-static const char *rows[40];
-static int rows_planned, rows_reported;
-
-/** Add the assertion `id` to the end of the planned rows. */
-static void plan_row(const char *id)
-{
-    rows[rows_planned++] = id;
-}
-
-/** Report that the next planned row held. */
-static void held(void)
-{
-    report_pass(rows[rows_reported++]);
-}
-
-/** In the process that began the report, report that the next planned row
- * failed with `why`, that those after it were not run, and the report's
- * end; after the end, nothing. */
-static void stop(const char *why)
-{
-    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
-        return;
-    }
-    if (rows_reported < rows_planned) {
-        report_fail(rows[rows_reported++], why);
-    }
-    while (rows_reported < rows_planned) {
-        report_notrun(rows[rows_reported++], "an earlier check failed");
-    }
-    report_end();
-}
-
 /** Report the next `n` planned rows not run, for `why`. */
 static void skip(int n, const char *why)
 {
-    while (n-- > 0 && rows_reported < rows_planned) {
-        report_notrun(rows[rows_reported++], why);
+    while (n-- > 0) {
+        report_skip(why);
     }
 }
 
@@ -233,7 +211,7 @@ static int fail(const char *what)
 
     snprintf(why, sizeof(why), "%s: errno %d", what, errno);
     printf("NETLINKMUSL FAIL (%s)\n", why);
-    stop(why);
+    report_stop(why);
     return 1;
 }
 
@@ -452,7 +430,7 @@ static int route_socket(int *out)
         me.nl_family != AF_NETLINK || me.nl_pad != 0 || me.nl_pid != (unsigned int)getpid()) {
         return fail("the first socket's port id is not the process ID");
     }
-    held();
+    report_held();
     port = me.nl_pid;
     second = socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
     memset(&me, 0, sizeof me);
@@ -461,7 +439,7 @@ static int route_socket(int *out)
         getsockname(second, (struct sockaddr *)&me, &len) != 0 || me.nl_pid == port) {
         return fail("a second socket's port id");
     }
-    held();
+    report_held();
     close(second);
     second = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     memset(&me, 0, sizeof me);
@@ -470,7 +448,7 @@ static int route_socket(int *out)
     if (bind(second, (struct sockaddr *)&me, sizeof me) != -1 || errno != EADDRINUSE) {
         return fail("a bind of a port id another socket has was not EADDRINUSE");
     }
-    held();
+    report_held();
     close(second);
     return 0;
 }
@@ -493,28 +471,28 @@ static int requests(int fd)
     if (links < 0) {
         return 1;
     }
-    held();
+    report_held();
     if (dump(fd, RTM_GETADDR, 2) < 0) {
         return 1;
     }
-    held();
+    report_held();
     if (dump(fd, RTM_GETROUTE, 3) < 1) {
         return fail("no route");
     }
-    held();
+    report_held();
     memset(&ifi, 0, sizeof ifi);
     ifi.ifi_index = first_index;
     if (request(fd, RTM_GETLINK, 0, 4, &ifi, sizeof ifi) != 0 ||
         one_answer(fd, &index, &error) != RTM_NEWLINK || index != first_index) {
         return fail("RTM_GETLINK of the first link");
     }
-    held();
+    report_held();
     ifi.ifi_index = 9999;
     if (request(fd, RTM_GETLINK, 0, 5, &ifi, sizeof ifi) != 0 ||
         one_answer(fd, &index, &error) != NLMSG_ERROR || error != -ENODEV) {
         return fail("RTM_GETLINK of no link was not ENODEV");
     }
-    held();
+    report_held();
     memset(&ifa, 0, sizeof ifa);
     ifa.ifa_family = AF_INET;
     ifa.ifa_index = (unsigned int)first_index;
@@ -522,7 +500,7 @@ static int requests(int fd)
         one_answer(fd, &index, &error) != NLMSG_ERROR || error != -EINVAL) {
         return fail("RTM_NEWADDR with no address was not EINVAL");
     }
-    held();
+    report_held();
     return 0;
 }
 
@@ -583,17 +561,17 @@ static int address_changes(int fd)
     if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 40, body, len) != -EEXIST) {
         return fail("RTM_NEWADDR of the address the link has was not EEXIST");
     }
-    held();
+    report_held();
     if (ask(fd, RTM_DELADDR, 0, 41, body, len) != 0 || ioctl_addr(first_index, &now) != 0 ||
         now.s_addr != 0) {
         return fail("RTM_DELADDR did not take the address away");
     }
-    held();
+    report_held();
     if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 42, body, len) != 0 ||
         ioctl_addr(first_index, &now) != 0 || now.s_addr != addr.s_addr) {
         return fail("RTM_NEWADDR did not give the address back");
     }
-    held();
+    report_held();
     return 0;
 }
 
@@ -629,13 +607,13 @@ static int route_changes(int fd)
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 45, body, len) != -EEXIST) {
         return fail("RTM_NEWROUTE of the default route, then again");
     }
-    held();
+    report_held();
     if (ask(fd, RTM_DELROUTE, 0, 46, body, len) != 0 ||
         ask(fd, RTM_DELROUTE, 0, 47, body, len) != -ESRCH ||
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 48, body, len) != 0) {
         return fail("RTM_DELROUTE of the default route, then again, and setting it back");
     }
-    held();
+    report_held();
     (void)net;
     memset(&ifi, 0, sizeof ifi);
     ifi.ifi_index = first_index;
@@ -646,12 +624,12 @@ static int route_changes(int fd)
     if (ask(fd, RTM_NEWLINK, 0, 50, body, len) != 0) {
         return fail("RTM_NEWLINK setting the link up");
     }
-    held();
+    report_held();
     attr32(body, &len, IFLA_MTU, &mtu);
     if (ask(fd, RTM_NEWLINK, 0, 51, body, len) != -EINVAL) {
         return fail("RTM_NEWLINK of an MTU of 9000 was not EINVAL");
     }
-    held();
+    report_held();
     memset(ndm, 0, sizeof ndm);
     ndm[0] = AF_INET;
     memcpy(ndm + 4, &first_index, 4);
@@ -661,7 +639,7 @@ static int route_changes(int fd)
     if (ask(fd, RTM_DELNEIGH, 0, 52, body, len) != -ENOENT) {
         return fail("RTM_DELNEIGH of a neighbour the cache does not have was not ENOENT");
     }
-    held();
+    report_held();
     return 0;
 }
 
@@ -710,16 +688,16 @@ static int table_routes(int fd)
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 61, body, len) != -EEXIST) {
         return fail("RTM_NEWROUTE of another network through the gateway, then again");
     }
-    held();
+    report_held();
     if (!file_has("/proc/net/route", "\t0000630A\t0202000A\t0003\t0\t0\t0\t0000FFFF")) {
         return fail("/proc/net/route did not list the route added");
     }
-    held();
+    report_held();
     if (ask(fd, RTM_DELROUTE, 0, 62, body, len) != 0 ||
         ask(fd, RTM_DELROUTE, 0, 63, body, len) != -ESRCH) {
         return fail("RTM_DELROUTE of the route added, then again");
     }
-    held();
+    report_held();
     len = sizeof rtm;
     attr32(body, &len, RTA_DST, &net);
     attr32(body, &len, RTA_GATEWAY, &far);
@@ -727,7 +705,7 @@ static int table_routes(int fd)
     if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 64, body, len) != -ENETUNREACH) {
         return fail("RTM_NEWROUTE through a gateway no subnet has was not ENETUNREACH");
     }
-    held();
+    report_held();
     len = sizeof rtm;
     attr32(body, &len, RTA_DST, &net);
     attr32(body, &len, RTA_OIF, &oif);
@@ -737,7 +715,7 @@ static int table_routes(int fd)
         got_gw != 0 || ask(fd, RTM_DELROUTE, 0, 74, body, len) != 0) {
         return fail("a route on the link to another network, which ip route get takes");
     }
-    held();
+    report_held();
     return 0;
 }
 
@@ -772,7 +750,7 @@ static int table_changes(int fd)
         ask(fd, RTM_DELADDR, 0, 68, body, len) != -EADDRNOTAVAIL) {
         return fail("a second address added, a local route, and taken away");
     }
-    held();
+    report_held();
     memcpy(ndm + 4, &first_index, 4);
     memcpy(ndm + 8, &state, 2);
     memcpy(body, ndm, sizeof ndm);
@@ -792,14 +770,14 @@ static int table_changes(int fd)
         return fail("a neighbour set by hand as permanent, in /proc/net/arp with 0x6 "
                     "in lowercase");
     }
-    held();
+    report_held();
     len = sizeof ndm;
     attr32(body, &len, NDA_DST, &neigh);
     if (ask(fd, RTM_DELNEIGH, 0, 70, body, len) != 0 ||
         ask(fd, RTM_DELNEIGH, 0, 71, body, len) != -ENOENT) {
         return fail("forgetting the permanent neighbour, then again");
     }
-    held();
+    report_held();
     return table_routes(fd);
 }
 
@@ -871,21 +849,21 @@ static int lookups(int fd)
         oif != (int)if_nametoindex("lo")) {
         return fail("ip route get of the machine's own address was not a local route on lo");
     }
-    held();
+    report_held();
     other.s_addr = own.s_addr ^ htonl(1);
     if (route_get(fd, 21, other, &type, &oif, &gw) != 0 || type != RTN_UNICAST ||
         oif != first_index) {
         return fail("ip route get of a neighbour was not a unicast route on the first link");
     }
-    held();
+    report_held();
     if (dump(fd, RTM_GETRULE, 22) != 3) {
         return fail("ip rule did not list Linux's three rules");
     }
-    held();
+    report_held();
     if (dump(fd, RTM_GETQDISC, 23) < 1) {
         return fail("tc qdisc listed nothing");
     }
-    held();
+    report_held();
     return 0;
 }
 
@@ -924,7 +902,7 @@ static int padded(int fd)
                 return fail("the dump of a request with zeros after it");
             }
             if (h->nlmsg_type == NLMSG_DONE) {
-                held();
+                report_held();
                 return 0;
             }
             routes += h->nlmsg_type == RTM_NEWROUTE && h->nlmsg_seq == 8;
@@ -958,14 +936,14 @@ static int truncation(int fd)
     if (whole <= (ssize_t)sizeof buf) {
         return fail("MSG_PEEK and MSG_TRUNC did not give the answer's length");
     }
-    held();
+    report_held();
     iov.iov_base = buf;
     iov.iov_len = sizeof buf;
     n = recvmsg(fd, &msg, 0);
     if (n != (ssize_t)sizeof buf || !(msg.msg_flags & MSG_TRUNC)) {
         return fail("an answer longer than the buffer was not cut with MSG_TRUNC");
     }
-    held();
+    report_held();
     return 0;
 }
 
@@ -983,13 +961,13 @@ static int interfaces(void)
     if (if_nametoindex(first_name) != (unsigned int)first_index) {
         return fail("if_nametoindex of the first link");
     }
-    held();
+    report_held();
     memset(&ifc, 0, sizeof ifc);
     if (s < 0 || ioctl(s, SIOCGIFCONF, &ifc) != 0 || ifc.ifc_len <= 0 ||
         ifc.ifc_len % (int)sizeof(struct ifreq) != 0) {
         return fail("SIOCGIFCONF with no buffer");
     }
-    held();
+    report_held();
     want = ifc.ifc_len;
     ifc.ifc_len = sizeof reqs;
     ifc.ifc_req = reqs;
@@ -997,7 +975,7 @@ static int interfaces(void)
         reqs[0].ifr_addr.sa_family != AF_INET) {
         return fail("SIOCGIFCONF with a buffer");
     }
-    held();
+    report_held();
     close(s);
     return 0;
 }
@@ -1025,13 +1003,366 @@ static int uevents(void)
     if (poll(&pf, 1, 0) != 0 || recv(fd, &c, 1, 0) != -1 || errno != EAGAIN) {
         return fail("a socket of NETLINK_KOBJECT_UEVENT heard something");
     }
-    held();
+    report_held();
     close(fd);
     if (socket(AF_NETLINK, SOCK_RAW, 99) != -1 || errno != EPROTONOSUPPORT) {
         return fail("a netlink protocol the kernel has not was not EPROTONOSUPPORT");
     }
-    held();
+    report_held();
     return 0;
+}
+
+/** Whether the IPv4 address dump reports `local` and `peer` on `index`
+ * with prefix length `prefix`. Drain the dump to NLMSG_DONE. */
+static int tun_pair(int fd, int index, struct in_addr local, struct in_addr peer, int prefix)
+{
+    struct rtgenmsg g = {AF_INET};
+    char buf[8192] __attribute__((aligned(4)));
+    int found = 0;
+
+    if (request(fd, RTM_GETADDR, NLM_F_DUMP, 81, &g, sizeof(g)) != 0) {
+        return 0;
+    }
+    for (;;) {
+        struct nlmsghdr *h;
+        int n = (int)recv(fd, buf, sizeof(buf), 0);
+
+        if (n <= 0) {
+            return 0;
+        }
+        for (h = (struct nlmsghdr *)buf; NLMSG_OK(h, n); h = NLMSG_NEXT(h, n)) {
+            struct ifaddrmsg *ifa = NLMSG_DATA(h);
+            struct in_addr got_local = {0}, got_peer = {0};
+            int left = PAYLOAD(h, struct ifaddrmsg);
+            struct rtattr *a;
+
+            if (h->nlmsg_type == NLMSG_DONE) {
+                return found;
+            }
+            if (h->nlmsg_type == NLMSG_ERROR) {
+                return 0;
+            }
+            if (h->nlmsg_type != RTM_NEWADDR || left < 0 || ifa->ifa_index != (unsigned int)index ||
+                ifa->ifa_prefixlen != prefix) {
+                continue;
+            }
+            for (a = FIRST_RTA(ifa); RTA_OK(a, left); a = RTA_NEXT(a, left)) {
+                if (a->rta_len != sizeof(*a) + sizeof(local)) {
+                    continue;
+                }
+                if (a->rta_type == IFA_LOCAL) {
+                    memcpy(&got_local, RTA_DATA(a), sizeof(got_local));
+                }
+                if (a->rta_type == IFA_ADDRESS) {
+                    memcpy(&got_peer, RTA_DATA(a), sizeof(got_peer));
+                }
+            }
+            found |= got_local.s_addr == local.s_addr && got_peer.s_addr == peer.s_addr;
+        }
+    }
+}
+
+/** Ask for a route to `peer`. Is it a direct unicast route on `index`? */
+static int tun_route(int fd, unsigned int seq, struct in_addr peer, int index)
+{
+    int type, oif;
+    unsigned int gw;
+
+    return route_get(fd, seq, peer, &type, &oif, &gw) == 0 && type == RTN_UNICAST && oif == index &&
+           gw == 0;
+}
+
+/** Check the implied peer route and add and delete the separate local
+ * prefix through rtnetlink. Return whether both routes behave as expected. */
+static int tun_local_route_netlink(int fd, int index)
+{
+    unsigned char rtm[12] = {AF_INET, 24, 0, 0, RT_TABLE_MAIN, 0, RT_SCOPE_LINK, RTN_UNICAST};
+    char body[sizeof(rtm) + 16];
+    struct in_addr peer_net = {inet_addr("198.51.100.0")};
+    struct in_addr local_net = {inet_addr("192.0.2.0")};
+    struct in_addr host = {inet_addr("192.0.2.2")};
+    int len = sizeof(rtm);
+
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &peer_net);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 90, body, len) != -EEXIST) {
+        return 0;
+    }
+    len = sizeof(rtm);
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &local_net);
+    return ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 91, body, len) == 0 &&
+           tun_route(fd, 92, host, index) && ask(fd, RTM_DELROUTE, 0, 93, body, len) == 0 &&
+           !tun_route(fd, 94, host, index);
+}
+
+/** Add and delete the separate local /24 through the route ioctls.
+ * Return whether the route appears and disappears. */
+static int tun_local_route_ioctl(int fd, int s, int index, char *name)
+{
+    struct rtentry rt = {0};
+    struct sockaddr_in sin = {0};
+    struct in_addr host = {inet_addr("192.0.2.2")};
+
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = inet_addr("192.0.2.0");
+    memcpy(&rt.rt_dst, &sin, sizeof(sin));
+    sin.sin_addr.s_addr = 0;
+    memcpy(&rt.rt_gateway, &sin, sizeof(sin));
+    sin.sin_addr.s_addr = inet_addr("255.255.255.0");
+    memcpy(&rt.rt_genmask, &sin, sizeof(sin));
+    rt.rt_flags = RTF_UP;
+    rt.rt_dev = name;
+    return ioctl(s, SIOCADDRT, &rt) == 0 && tun_route(fd, 95, host, index) &&
+           ioctl(s, SIOCDELRT, &rt) == 0 && !tun_route(fd, 96, host, index);
+}
+
+/** Set the TUN's default route through `gw`. Return the netlink result. */
+static int tun_set_gateway(int fd, int index, struct in_addr gw)
+{
+    unsigned char rtm[12] = {AF_INET, 0, 0, 0, RT_TABLE_MAIN, 0, 0, RTN_UNICAST};
+    char body[sizeof(rtm) + 16];
+    int len = sizeof(rtm);
+
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    return ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_REPLACE, 97, body, len);
+}
+
+/** Send an IPv4 datagram to the TUN's reported packet socket address and
+ * match it on the TUN descriptor. */
+static int tun_packet(int tun, int index)
+{
+    const unsigned char datagram[20] = {0x45, 0, 0,   20, 0, 0, 0,   0,  64,  17,
+                                        0,    0, 192, 0,  2, 1, 198, 51, 100, 3};
+    unsigned char received[1500];
+    struct sockaddr_ll sa;
+    socklen_t len = sizeof(sa);
+    int packet = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_TYPE_IP));
+    int ok = 0;
+
+    if (packet < 0) {
+        return 0;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sll_family = AF_PACKET;
+    sa.sll_protocol = htons(ETH_TYPE_IP);
+    sa.sll_ifindex = index;
+    if (bind(packet, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
+        getsockname(packet, (struct sockaddr *)&sa, &len) == 0 && sa.sll_halen == 0 &&
+        sa.sll_hatype == ARPHRD_NONE &&
+        sendto(packet, datagram, sizeof(datagram), 0, (struct sockaddr *)&sa, sizeof(sa)) ==
+            sizeof(datagram)) {
+        ssize_t n;
+
+        while ((n = read(tun, received, sizeof(received))) > 0) {
+            if (n == sizeof(datagram) && memcmp(received, datagram, sizeof(datagram)) == 0) {
+                ok = 1;
+                break;
+            }
+        }
+    }
+    close(packet);
+    return ok;
+}
+
+/** Read the TUN peer with SIOCGIFDSTADDR and replace it with SIOCSIFDSTADDR.
+ * Return 0 on success or -1 if an ioctl fails or the old peer differs. */
+static int tun_replace_peer(int s, struct ifreq *ifr, struct in_addr old, struct in_addr next)
+{
+    struct sockaddr_in sin;
+
+    if (ioctl(s, SIOCGIFDSTADDR, ifr) != 0) {
+        return -1;
+    }
+    memcpy(&sin, &ifr->ifr_dstaddr, sizeof(sin));
+    if (sin.sin_family != AF_INET || sin.sin_addr.s_addr != old.s_addr) {
+        return -1;
+    }
+    sin.sin_addr = next;
+    memcpy(&ifr->ifr_dstaddr, &sin, sizeof(sin));
+    return ioctl(s, SIOCSIFDSTADDR, ifr);
+}
+
+/** Install two explicit routes that must disappear with the last address. */
+static int tun_last_routes(int fd, int index, struct in_addr gw)
+{
+    unsigned char rtm[12] = {AF_INET, 24, 0, 0, RT_TABLE_MAIN, 4, RT_SCOPE_LINK, RTN_UNICAST};
+    struct in_addr dst = {inet_addr("192.0.2.0")};
+    char body[sizeof(rtm) + 24];
+    int len = sizeof(rtm);
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &dst);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 100, body, len) != 0)
+        return 0;
+    len = sizeof(rtm);
+    rtm[6] = 0;
+    dst.s_addr = inet_addr("198.18.0.0");
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &dst);
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    return ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 101, body, len) == 0;
+}
+
+/** Check a second peer and its default gateway while the first changes.
+ * Return a failure description or NULL. The caller owns the TUN. */
+static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
+                                    struct in_addr local, struct in_addr peer)
+{
+    const char *default_route = "tunprob\t00000000\t027100CB\t";
+    struct ifaddrmsg ifa = {AF_INET, 32, 0, 0, (unsigned int)index};
+    struct in_addr next = {inet_addr("198.51.101.3")};
+    struct in_addr second = {inet_addr("203.0.113.2")};
+    char body[sizeof(ifa) + 16];
+    const char *failure;
+    int len;
+
+    failure = "could not give the same local address a second peer";
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &second);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 85, body, len) != 0 ||
+        !tun_route(fd, 86, second, index)) {
+        return failure;
+    }
+    report_held();
+
+    failure = "the second TUN peer was refused as default gateway";
+    if (tun_set_gateway(fd, index, second) != 0 || !file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    report_held();
+
+    failure = "the destination ioctls did not read and replace the peer and its route";
+    if (tun_replace_peer(s, ifr, peer, next) != 0 || !tun_pair(fd, index, local, next, 24) ||
+        tun_route(fd, 83, peer, index) || !tun_route(fd, 84, next, index)) {
+        return failure;
+    }
+    report_held();
+
+    failure = "the second peer's gateway was lost when the first peer changed";
+    if (!file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    report_held();
+
+    failure = "removing and restoring the second peer did not keep the default gateway";
+    if (ask(fd, RTM_DELADDR, 0, 98, body, len) != 0 || tun_route(fd, 97, second, index) ||
+        !file_has("/proc/net/route", default_route) ||
+        ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 99, body, len) != 0 ||
+        !tun_route(fd, 96, second, index) || !file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    report_held();
+
+    failure = "deleting the first peer did not remove only its route";
+    ifa.ifa_prefixlen = 24;
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &next);
+    if (ask(fd, RTM_DELADDR, 0, 87, body, len) != 0 || tun_route(fd, 88, next, index) ||
+        !tun_route(fd, 89, second, index) || !tun_pair(fd, index, local, second, 32) ||
+        !file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    report_held();
+
+    failure = "deleting the last address left the default gateway or a route";
+    ifa.ifa_prefixlen = 32;
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &second);
+    if (!tun_last_routes(fd, index, second) || ask(fd, RTM_DELADDR, 0, 95, body, len) != 0 ||
+        tun_pair(fd, index, local, second, 32) || file_has("/proc/net/route", "tunprob\t")) {
+        return failure;
+    }
+    report_held();
+    return NULL;
+}
+
+/** Check a TUN's IPv4 peer, link and default routes, and a packet socket
+ * send. Close the descriptor on every exit to remove the interface. */
+static int tun_changes(int fd)
+{
+    struct ifreq ifr;
+    struct ifaddrmsg ifa = {AF_INET, 24, 0, 0, 0};
+    struct in_addr local = {inet_addr("192.0.2.1")};
+    struct in_addr peer = {inet_addr("198.51.100.2")};
+    char body[sizeof(ifa) + 16];
+    int tun = -1, s = -1, index, len, rc;
+    const char *failure = "make tunprob and set it up";
+
+    memset(&ifr, 0, sizeof(ifr));
+    strcpy(ifr.ifr_name, "tunprob");
+    ifr.ifr_flags = TUN_IFF_TUN | TUN_IFF_NO_PI;
+    tun = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (tun < 0 || s < 0 || ioctl(tun, TUNSETIFF, &ifr) != 0 || ioctl(s, SIOCGIFINDEX, &ifr) != 0) {
+        goto out;
+    }
+    index = ifr.ifr_ifindex;
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) != 0) {
+        goto out;
+    }
+    ifr.ifr_flags |= IFF_UP;
+    if (ioctl(s, SIOCSIFFLAGS, &ifr) != 0) {
+        goto out;
+    }
+    report_held();
+
+    failure = "RTM_NEWADDR or RTM_GETADDR did not give the TUN its peer";
+    ifa.ifa_index = (unsigned int)index;
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &peer);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 80, body, len) != 0 ||
+        !tun_pair(fd, index, local, peer, 24)) {
+        goto out;
+    }
+    report_held();
+
+    failure = "the peer has no direct IPv4 route through the TUN";
+    if (!tun_route(fd, 82, peer, index)) {
+        goto out;
+    }
+    report_held();
+
+    failure = "rtnetlink did not distinguish the implied peer prefix from the local prefix";
+    if (!tun_local_route_netlink(fd, index)) {
+        goto out;
+    }
+    report_held();
+
+    failure = "the route ioctls did not add and remove the local prefix";
+    if (!tun_local_route_ioctl(fd, s, index, ifr.ifr_name)) {
+        goto out;
+    }
+    report_held();
+
+    failure = "the TUN did not transmit the packet socket's datagram with sll_halen 0";
+    if (!tun_packet(tun, index)) {
+        goto out;
+    }
+    report_held();
+
+    failure = tun_peer_changes(fd, s, &ifr, index, local, peer);
+out:
+    rc = failure ? fail(failure) : 0;
+    if (tun >= 0) {
+        close(tun);
+    }
+    if (s >= 0) {
+        close(s);
+    }
+    return rc;
 }
 
 /** Plan each assertion of `ids`, `n` of them. */
@@ -1040,7 +1371,7 @@ static void plan_rows(const char *const *ids, unsigned n)
     unsigned i;
 
     for (i = 0; i < n; i++) {
-        plan_row(ids[i]);
+        report_plan(ids[i]);
     }
 }
 
@@ -1056,7 +1387,7 @@ static void plan_changes(const char *const *ids, unsigned n, int left_out)
         if (left_out) {
             report_notrun(ids[i], "a native run leaves out the changes");
         } else {
-            plan_row(ids[i]);
+            report_plan(ids[i]);
         }
     }
 }
@@ -1084,6 +1415,19 @@ static void plan(char **envp)
     static const char *const after[] = {"padded-dump",   "peek-trunc",     "cut-trunc",
                                         "nametoindex",   "ifconf-length",  "ifconf-buffer",
                                         "uevent-silent", "eprotonosupport"};
+    static const char *const tun[] = {"tun-up",
+                                      "tun-peer",
+                                      "tun-route",
+                                      "tun-local-route-netlink",
+                                      "tun-local-route-ioctl",
+                                      "tun-packet",
+                                      "tun-second-peer",
+                                      "tun-second-gateway",
+                                      "tun-peer-ioctl",
+                                      "tun-gateway-retained",
+                                      "tun-gateway-kept",
+                                      "tun-peer-delete",
+                                      "tun-last-delete"};
 
     report_begin(report_case(envp, "guest.default.netlinkmusl"));
     PLAN(before);
@@ -1091,6 +1435,7 @@ static void plan(char **envp)
     PLAN(lookup_ids);
     PLAN_CHANGES(table);
     PLAN(after);
+    PLAN_CHANGES(tun);
 }
 
 int main(int argc, char **argv, char **envp)
@@ -1104,7 +1449,7 @@ int main(int argc, char **argv, char **envp)
     if (route_socket(&fd) || requests(fd) ||
         (changes && (address_changes(fd) || route_changes(fd))) || lookups(fd) ||
         (changes && table_changes(fd)) || padded(fd) || truncation(fd) || interfaces() ||
-        uevents()) {
+        uevents() || (changes && tun_changes(fd))) {
         return 1;
     }
     close(fd);

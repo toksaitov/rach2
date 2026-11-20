@@ -198,27 +198,19 @@ static void set_word(uint8_t *ifr, uint32_t v)
     ifr[IFREQ_UNION + 3] = (uint8_t)((v >> 24) & 0xff);
 }
 
-/** The hardware type of `nd`'s address: Ethernet, or `lo`'s loopback. */
+/** The hardware type of `nd`'s address: Ethernet, `lo`'s loopback, or
+ * none for an interface of IP datagrams. */
 static uint32_t if_type(const struct netdev *nd)
 {
-    return nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER;
-}
-
-/** The broadcast address of `nd`'s subnet, or 0 for none, for `lo`, and
- * for a /31 or /32, as on Linux. */
-static uint32_t if_broadcast(const struct netdev *nd)
-{
-    return nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && !nd->loopback
-               ? (nd->ip | ~nd->mask)
-               : 0;
+    return (uint32_t)NETDEV_TYPE(nd);
 }
 
 /** The flags SIOCGIFFLAGS reports: up as an administrator left it, running
  * while it is up and `netdev_running` judges the link up, as on Linux, and
- * broadcast and multicast, or for `lo` loopback. */
+ * those of the interface's kind (`NETIF_KIND_FLAGS`). */
 static uint32_t if_flags(struct netdev *nd)
 {
-    uint32_t flags = nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST;
+    uint32_t flags = NETIF_KIND_FLAGS(nd);
 
     if (nd->up) {
         flags |= IFF_UP;
@@ -334,7 +326,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
 
     setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK || request == SIOCSIFBRDADDR ||
-              request == SIOCSIFFLAGS || request == SIOCSIFMTU);
+              request == SIOCSIFFLAGS || request == SIOCSIFMTU || request == SIOCSIFDSTADDR);
     if (setter && !net_admin()) {
         return -EPERM;
     }
@@ -365,11 +357,17 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     case SIOCGIFADDR:
         set_sa(ifr, nd->ip);
         break;
+    case SIOCGIFDSTADDR:
+        if (!nd->ip) {
+            return -EADDRNOTAVAIL;
+        }
+        set_sa(ifr, netdev_addr_dst(nd, -1));
+        break;
     case SIOCGIFNETMASK:
         set_sa(ifr, nd->mask);
         break;
     case SIOCGIFBRDADDR:
-        set_sa(ifr, if_broadcast(nd));
+        set_sa(ifr, netdev_addr_brd(nd, -1));
         break;
     case SIOCGIFMTU:
         set_word(ifr, nd->mtu);
@@ -385,15 +383,15 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
     case SIOCSIFADDR:
         return netconf_set_address(nd, be32(ifr + IFREQ_SA_ADDR), 0);
+    case SIOCSIFDSTADDR:
+        if (ifr[IFREQ_UNION] != AF_INET || ifr[IFREQ_UNION + 1] != 0) {
+            return -EINVAL;
+        }
+        return netconf_set_peer(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFNETMASK:
         return netconf_set_netmask(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFBRDADDR:
-        if (be32(ifr + IFREQ_SA_ADDR) != (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask)
-                                              ? (nd->ip | ~nd->mask)
-                                              : 0xFFFFFFFFu)) {
-            return -EINVAL;
-        }
-        return 0;
+        return netconf_set_broadcast(nd, be32(ifr + IFREQ_SA_ADDR));
     default:
         return -ENOTTY;
     }
@@ -418,7 +416,7 @@ static int32_t route_device(uintptr_t dev, uint32_t gw, struct netdev **out)
 
     *out = netdev_first();
     for (i = 0; dev == 0 && gw != 0 && i < netdev_seen_count(); i++) {
-        if (netdev_on_link(netdev_at(i), gw)) {
+        if (netdev_gateway_reachable(netdev_at(i), gw)) {
             *out = netdev_at(i);
             break;
         }
@@ -443,16 +441,8 @@ static int32_t route_device(uintptr_t dev, uint32_t gw, struct netdev **out)
  * a fixed sixteen bytes could run off the end of the caller's page. A
  * gateway off that interface's subnet is `ENETUNREACH`, as on Linux.
  *
- * A default route of no metric sets the interface's gateway, and one with no
- * gateway is refused without touching anything, so `route add default dev
- * eth0` cannot quietly remove the gateway. Removing a default route clears
- * the gateway, and removing one that is not there is `ESRCH`: a DHCP
- * client's script removes default routes in a loop that ends when a removal
- * fails. A route to the interface's own subnet is accepted and does nothing,
- * because it is already true; removing it is `EOPNOTSUPP` while the address
- * that implies it is in force. Any other route goes in the table
- * (`netdev_route_add`), with the metric the caller gives, which `route` sends
- * one more than, as Linux takes it.
+ * Direct and gateway routes use the same table as rtnetlink. A nonzero
+ * rt_metric is one more than the route priority.
  */
 static int32_t route_ioctl(uint32_t request, uintptr_t arg)
 {
@@ -461,7 +451,7 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
     uintptr_t dev;
     struct netdev *nd;
     int32_t rc;
-    int gateway_route;
+    struct netdev_rt r = {0};
 
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
@@ -479,29 +469,14 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
     if (rc != 0) {
         return rc;
     }
-    gateway_route = dst == 0 && mask == 0 && metric == 0;
-    if (request == SIOCADDRT && gw != 0 && !netdev_on_link(nd, gw)) {
-        return -ENETUNREACH;
-    }
-    if (request == SIOCADDRT && gateway_route && gw == 0) {
-        return -EINVAL;
-    }
-    if (nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask && gw == 0) {
-        return request == SIOCADDRT ? 0 : -EOPNOTSUPP;
-    }
-    if (gateway_route &&
-        (request == SIOCADDRT ? nd->gateway == 0 || nd->gateway == gw : nd->gateway != 0)) {
-        if (request == SIOCADDRT) {
-            return netconf_set_gateway(nd, gw);
-        }
-        if (gw != 0 && gw != nd->gateway) {
-            return -ESRCH;
-        }
-        return netconf_set_gateway(nd, 0);
-    }
+    r.dst = dst;
+    r.mask = (rt.flags & 4) ? 0xffffffffu : mask;
+    r.gw = gw;
+    r.metric = metric;
+    r.scope = request == SIOCDELRT ? 255 : gw ? 0 : 253;
+    r.proto = request == SIOCDELRT ? 0 : 3;
     flags = net_lock();
-    rc = request == SIOCADDRT ? netdev_route_add(nd, dst, mask, gw, metric, 0)
-                              : netdev_route_del(dev != 0 ? nd : 0, dst, mask, gw);
+    rc = netdev_route_change(request == SIOCDELRT && !dev ? 0 : nd, &r, request == SIOCDELRT, 0);
     net_unlock(flags);
     return rc;
 }
@@ -664,25 +639,22 @@ static int32_t in6_addr_ioctl(uint32_t request, uintptr_t arg)
         return -EINVAL;
     }
     if (request == SIOCDIFADDR) {
-        return netconf_del_address6(nd, r.addr);
+        uint32_t lock = net_lock();
+        struct netdev_addr6 *a = netdev_addr6_of(nd, r.addr);
+        int rc = a && a->prefix == r.prefixlen ? netconf_del_address6(nd, r.addr) : -EADDRNOTAVAIL;
+        net_unlock(lock);
+        return rc;
     }
     return netconf_add_address6(nd, r.addr, (int)r.prefixlen, NETDEV_A6_PERMANENT,
                                 NETDEV_LIFETIME_FOREVER, NETDEV_LIFETIME_FOREVER);
 }
 
-/**
- * SIOCADDRT and SIOCDELRT on an AF_INET6 socket: add the route of the
- * caller's `in6_rtmsg` to the IPv6 table (`route6_add`), through its
- * gateway when RTF_GATEWAY is set, by the interface of its index, or with
- * none by the one its gateway is reached by, at its metric, 1024 for 0 as
- * on Linux; or remove the table's route of that prefix by that interface,
- * or any, through that gateway, or any (`route6_del`). Root only. -ENODEV
- * for an index no interface has or a route no interface carries,
- * -EOPNOTSUPP on `lo`, and -EINVAL for a prefix past 128.
- */
+/** Apply a privileged IPv6 route ioctl to the same table as rtnetlink.
+ * A zero metric selects the default on add and any metric on delete. */
 static int32_t in6_route_ioctl(uint32_t request, uintptr_t arg)
 {
     struct in6_rtmsg_shape r;
+    struct route6_row row = {0};
     uint8_t via[IP6_ADDR_LEN];
     const uint8_t *gw;
     struct netdev *nd = 0;
@@ -711,13 +683,14 @@ static int32_t in6_route_ioctl(uint32_t request, uintptr_t arg)
     if (nd && nd->loopback) {
         return -EOPNOTSUPP;
     }
-    if (request == SIOCDELRT) {
-        return route6_del(nd, r.dst, r.dst_len, gw);
-    }
-    if (!nd) {
+    if (!nd && request == SIOCADDRT)
         return -ENODEV;
-    }
-    return route6_add(nd, r.dst, r.dst_len, gw, r.metric != 0 ? r.metric : 1024, ROUTE6_PROTO_BOOT);
+    row.plen = (uint8_t)r.dst_len;
+    row.metric = r.metric;
+    k_memcpy(row.dst, r.dst, IP6_ADDR_LEN);
+    if (gw)
+        k_memcpy(row.gw, gw, IP6_ADDR_LEN);
+    return route6_change_row(nd, &row, request == SIOCDELRT, 0);
 }
 
 int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)
@@ -739,6 +712,8 @@ int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)
     case SIOCSIFFLAGS:
     case SIOCGIFADDR:
     case SIOCSIFADDR:
+    case SIOCGIFDSTADDR:
+    case SIOCSIFDSTADDR:
     case SIOCGIFBRDADDR:
     case SIOCSIFBRDADDR:
     case SIOCGIFNETMASK:

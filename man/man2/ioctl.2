@@ -717,6 +717,14 @@ and
 .Dv SIOCGIFFLAGS
 return its index, hardware address, IPv4 address, netmask, broadcast
 address, MTU, and flags, respectively.
+.Dv SIOCGIFDSTADDR
+returns the first IPv4 address's destination, which is the peer address
+when one is set.
+.Dv SIOCSIFDSTADDR
+sets the destination and requires network administration privilege.
+Both return
+.Er EADDRNOTAVAIL
+when the interface has no IPv4 address.
 .Dv SIOCGIWNAME
 returns
 .Er EOPNOTSUPP ;
@@ -729,7 +737,7 @@ wireless stations use nl80211 instead of wireless extensions.
 and
 .Dv SIOCSIFMTU
 require effective user ID 0.
-They set the address or netmask, check the derived broadcast address,
+They set the address, netmask or broadcast address,
 change the interface's
 .Dv IFF_UP
 state, or set its MTU.
@@ -744,17 +752,16 @@ privilege in the user namespace that owns it is enough, and they take
 .Ql lo
 up or down, the address 127.0.0.1 and the netmask 255.0.0.0 alone.
 Other flag bits are ignored by the setter.
-An address set without its mask uses a provisional classful mask until
-the separate netmask request.
-If the address is a network or broadcast address under the provisional
-mask, the interface remains unconfigured until a valid netmask is
-supplied.
-A netmask request that fails with
-.Er EINVAL ,
-for a mask that is not contiguous, is all ones, or makes the address a
-network or broadcast address, unconfigures the interface when the mask is
-provisional or an address is pending, and the address must be set again.
+A TUN address set without a mask takes a host prefix.
+An Ethernet address set without its mask takes the classful mask immediately.
+An assigned address may equal its subnet's network or broadcast address.
+A noncontiguous netmask returns
+.Er EINVAL
+and preserves the current configuration.
 Repeating the existing configured address leaves its mask unchanged.
+Changing the address, peer, mask or broadcast removes the old address
+and reinserts the replacement in address scope order.
+A replacement on a surviving primary's prefix becomes secondary.
 Changing any interface's address leaves every TCP connection and
 listening socket as it is, as on Linux.
 A connection whose local address is no longer configured sends nothing
@@ -763,8 +770,9 @@ connection times out with
 .Er ENETUNREACH ;
 see
 .Xr tcp 7 .
-The change invalidates ARP mappings and clears a gateway that is no
-longer on the interface's subnet.
+Removing the last address removes all IPv4 routes through its interface.
+When other addresses remain, explicit routes survive unless their specified
+source address ceases to be local.
 .Pp
 .Dv SIOCADDRT
 and
@@ -773,23 +781,12 @@ take a
 .Vt "struct rtentry"
 in the processor's layout, 84 bytes on i386 and 120 on x86-64,
 and require effective user ID 0.
-A default route of no metric sets or removes the selected interface's
-default gateway; any other route is added to or removed from the table
-of 32, with the metric one less than
-.Va rt_metric ,
-as
-.Ic route
-sends it.
-A null device-name pointer selects the interface whose subnet has the
-gateway, or the first.
-Adding the interface's existing subnet route succeeds without action, and
-removing it is
-.Er EOPNOTSUPP
-while its address is in force.
-A default route of no metric and no gateway is
-.Er EINVAL
-and leaves the gateway as it was.
-A gateway none of the interface's subnets has is
+Direct and gateway routes, including defaults, use the same table.
+A positive
+.Va rt_metric
+selects a priority one less than its value.
+Deleting a connected prefix leaves its address configured.
+A gateway needs a link route through the selected interface or the call returns
 .Er ENETUNREACH ,
 a route already there
 .Er EEXIST ,

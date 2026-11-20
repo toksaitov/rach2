@@ -6,18 +6,14 @@
 /*
  * route6: the IPv6 routing table behind `ip6_route`.
  *
- * The routes a card's addresses imply are found from them when asked for:
- * the prefix of each address given by a program or made at link up, at
- * metric 256, reached on the link. The routes a router advertises, its
- * on-link prefixes at metric 256 and itself as a default route at metric
- * 1024, and those a program adds, are kept in a table of ROUTE6_MAX, the
- * learned ones with the tick they expire at. A SLAAC address implies no
- * route: its prefix's route is the advertisement's, as on Linux.
+ * Direct routes installed by addresses keep their own metric and deadline
+ * in the table. An expiring duplicate takes the last insertion's lifetime.
+ * These entries have separate storage from the ROUTE6_MAX routes learned
+ * from advertisements or set explicitly. Only local host routes are read
+ * from the address list. A SLAAC address leaves its prefix to its router.
  *
- * A lookup takes, of the routes of cards that are up with IPv6 enabled and
- * that match, the one of the longest prefix, then of the lowest metric,
- * then one whose gateway may be reachable (`nd6_router_usable`), then the
- * first found, which puts an implied route before a table's.
+ * Lookup prefers the longest prefix, the lowest metric and then a gateway
+ * that may be reachable, among matching routes on enabled cards.
  */
 
 #define ROUTE6_MAX 32
@@ -34,15 +30,19 @@
 #define ROUTE6_METRIC_DEFAULT 1024
 
 struct netdev;
+struct netdev_addr6;
 
 /** One route, copied out for a reader. */
 struct route6_row {
     int ifindex;
     uint8_t dst[16];
     uint8_t plen;
-    uint8_t gw[16]; /* :: for a route on the link */
+    uint8_t prefsrc[16]; /* :: leaves source selection to the interface */
+    uint8_t gw[16];      /* :: for a route on the link */
     uint32_t metric;
     uint8_t proto;    /* ROUTE6_PROTO_* */
+    uint8_t learned;  /* currently managed by router advertisements */
+    uint8_t local;    /* a host route in the local table */
     uint32_t expires; /* seconds left, or 0 for a route that does not expire */
 };
 
@@ -59,20 +59,33 @@ int route6_at(int n, struct route6_row *out);
  */
 struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via);
 
-/**
- * Add the route to `dst`/`plen` by `nd`, through the gateway `gw`, NULL or
- * :: for on the link, at `metric`, made by `proto`. Returns 0, -EINVAL for
- * a prefix past 128, a NULL `nd` or `lo`, or a gateway that is a group or
- * this machine's, -EEXIST for a route of that prefix, card, gateway and
- * metric, or -ENOSPC for a full table. Takes net_lock.
- */
-int route6_add(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw, uint32_t metric,
-               int proto);
+/** Apply the new address's prefix and peer routes under net_lock.
+ * old is the current address record for a replacement, NULL for creation. */
+void route6_address_update(struct netdev *nd, const struct netdev_addr6 *old,
+                           const struct netdev_addr6 *a);
 
-/** Remove the table's route to `dst`/`plen` by `nd`, or by any card for
- * NULL, through `gw`, or any gateway for NULL: 0, or -ESRCH. Takes
- * net_lock. */
-int route6_del(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw);
+/** Insert the peer host route when duplicate address detection completes. */
+void route6_address_ready(struct netdev *nd, const struct netdev_addr6 *a);
+
+/** Preserve a prefix with an independent lifetime before removing slot.
+ * The caller holds net_lock and slot is still present. */
+void route6_address_removed(struct netdev *nd, int slot);
+
+/** The device of an explicit local route covering dst, or NULL. */
+struct netdev *route6_added_local(const uint8_t *dst);
+
+/** Copy the route's specified source and return one, or return zero
+ * when ordinary source selection applies. Call under net_lock. */
+int route6_preferred_source(const struct netdev *nd, const uint8_t *dst, uint8_t *src);
+
+/** Select a main-table route, including its gateway and preferred source.
+ * An interface index of zero searches every card. Call under net_lock. */
+struct netdev *route6_resolve(const uint8_t *dst, int ifindex, struct route6_row *row);
+
+/** Apply a netlink or ioctl route under net_lock. A zero metric or
+ * protocol in a deletion omits that selector. Replacement validates
+ * the new route before removing the old one. */
+int route6_change_row(struct netdev *nd, const struct route6_row *r, int del, int replace);
 
 /**
  * Put in the table, or refresh, the route a router advertised: to

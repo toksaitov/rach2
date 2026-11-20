@@ -51,8 +51,9 @@ void ip6_set_class(uint8_t *buf, uint8_t tclass);
 
 /**
  * Hand the whole datagram of `len` bytes at `buf` to `out`, toward the next
- * hop `via`: onto the loopback backlog for `lo`, to the station address of a
- * group, or to a unicast hop by the neighbour cache (`nd6_output`), which
+ * hop `via`: onto the loopback backlog for `lo`, at once on an interface of
+ * IP datagrams (`l3`), to the station address of a group, or to a unicast
+ * hop by the neighbour cache (`nd6_output`), which
  * takes `mtu` as the most its fragments may be, or 0 when it may not be
  * cut. Returns 0, or -EMSGSIZE or -ENOBUFS as `ip6_tx` says. Called with
  * interrupts off.

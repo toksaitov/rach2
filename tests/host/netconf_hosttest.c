@@ -3,7 +3,8 @@
  * gives, and the setters of netconf.c that change it while the machine runs.
  *
  * host-deps: rach2/sys/network/netconf.c rach2/sys/cmdline.c
- * host-deps: rach2/sys/lib/kstd.c
+ * host-deps: rach2/sys/network/route.c
+ * host-deps: rach2/sys/tick.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -28,6 +29,7 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 #include "../../rach2/sys/network/net.h"
 #include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/network/ip6/nd6.h"
+#include "../../rach2/sys/network/ip6/route6.h"
 #include "../../rach2/sys/cmdline.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/lib/kstring.h"
@@ -125,7 +127,7 @@ static struct netdev other_iface;
 /** Report whether `ip` is the address of either interface. */
 int netdev_owns(uint32_t ip)
 {
-    return ip != 0 && (ip == the_iface.ip || ip == other_iface.ip);
+    return netdev_holds(&the_iface, ip) || netdev_holds(&other_iface, ip);
 }
 
 /** Report whether `ip` is one of `nd`'s addresses, its first or another; 0
@@ -142,10 +144,28 @@ int netdev_holds(const struct netdev *nd, uint32_t ip)
     return ip != 0 && ip == nd->ip;
 }
 
-/** Prune the routes added through `nd`: a no-op, since no row adds one. */
-void netdev_route_prune(struct netdev *nd)
+/** Report a configured link prefix that covers `ip`, as netdev.c does. */
+int netdev_on_link(const struct netdev *nd, uint32_t ip)
 {
-    (void)nd;
+    int i;
+
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
+        uint32_t dst = netdev_addr_dst(nd, i);
+
+        if (netdev_addr_has_route(local, dst, mask) && (ip & mask) == (dst & mask)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Use the first address as source for the model interfaces. */
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+{
+    (void)hop;
+    return nd->ip;
 }
 
 /** Report whether `ip` is the broadcast address of `nd`'s subnet, which a
@@ -192,6 +212,22 @@ volatile uint64_t kernel_ticks;
 uint64_t tick_count(void)
 {
     return kernel_ticks;
+}
+
+/** No IPv4 test adds IPv6 routes. */
+void route6_address_update(struct netdev *nd, const struct netdev_addr6 *old,
+                           const struct netdev_addr6 *a)
+{
+    (void)nd;
+    (void)old;
+    (void)a;
+}
+
+/** The IPv4 fixture has no IPv6 prefixes to retain. */
+void route6_address_removed(struct netdev *nd, int slot)
+{
+    (void)nd;
+    (void)slot;
 }
 
 /** No row gives an IPv6 address. */
@@ -255,10 +291,16 @@ void nd6_if_up(struct netdev *nd)
     CHECK(0, "no row starts neighbour discovery");
 }
 
+void nd6_random_link_local(struct netdev *nd, uint8_t *ll)
+{
+    (void)nd;
+    (void)ll;
+    CHECK(0, "no row brings up an interface of IP datagrams");
+}
+
 void nd6_if_down(struct netdev *nd)
 {
     (void)nd;
-    CHECK(0, "no row stops neighbour discovery");
 }
 
 /* The ARP cache is not linked in here either, so a per-interface forget is
@@ -281,11 +323,14 @@ void arp_forget_dev(struct netdev *nd)
 /** Put one interface where a fresh boot leaves it. */
 static void iface_reset(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t gw)
 {
+    nd->up = 1;
+    nd->index = nd == &the_iface ? 1 : 2;
+    nd->naddr2 = 0;
+    nd->peer = 0;
     nd->ip = ip;
     nd->mask = mask;
     nd->gateway = gw;
-    nd->pending_ip = 0;
-    nd->mask_provisional = 0;
+    k_memset(nd->addr4, 0, sizeof(nd->addr4));
 }
 
 /** Put the configuration back where a fresh boot starts. */
@@ -426,21 +471,21 @@ static void narrow_subnets_added(void)
 {
     iface_reset(&other_iface, 0, 0, 0);
     other_iface.naddr2 = 0;
-    CHECK(netconf_add_address(&other_iface, IP4(192, 168, 0, 105), 0xFFFFFFFFu) == 0 &&
+    CHECK(netconf_add_address(&other_iface, IP4(192, 168, 0, 105), 0xFFFFFFFFu, 0, 0) == 0 &&
               other_iface.ip == IP4(192, 168, 0, 105) && other_iface.mask == 0xFFFFFFFFu,
           "a /32 is added as an interface's first address");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu) == 0 &&
-              netconf_add_address(&other_iface, IP4(10, 0, 0, 1), 0xFFFFFFFEu) == 0 &&
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu, 0, 0) == 0 &&
+              netconf_add_address(&other_iface, IP4(10, 0, 0, 1), 0xFFFFFFFEu, 0, 0) == 0 &&
               other_iface.naddr2 == 2,
           "both addresses of a /31 are added beside it");
     CHECK(!netconf_is_broadcast(IP4(10, 0, 0, 0)) && !netconf_is_broadcast(IP4(10, 0, 0, 1)),
           "neither of which is a broadcast address");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu) == -EINVAL &&
-              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu) == -EINVAL,
-          "a /30's network and broadcast addresses are not added");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 2), 0xFFFFFFFCu) == 0 &&
-              other_iface.naddr2 == 3,
-          "its host is");
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu, 0, 0) == 0 &&
+              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu, 0, 0) == 0,
+          "both endpoint addresses can be assigned");
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 2), 0xFFFFFFFCu, 0, 0) == 0 &&
+              other_iface.naddr2 == 5,
+          "and so can another host");
     other_iface.naddr2 = 0;
 }
 
@@ -495,25 +540,235 @@ static void narrow_subnets(void)
     CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu) == 0 &&
               net_ip_gateway == 0,
           "the lower address of a /31 is taken too, which drops that gateway");
-    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFCu) == -EINVAL &&
-              netconf_set_address(&the_iface, IP4(10, 0, 0, 3), 0xFFFFFFFCu) == -EINVAL,
-          "a /30 refuses its network and broadcast addresses");
+    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFCu) == 0 &&
+              netconf_set_address(&the_iface, IP4(10, 0, 0, 3), 0xFFFFFFFCu) == 0,
+          "a /30 accepts local addresses at both ends");
     CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 1), 0xFFFFFFFCu) == 0 &&
               netconf_broadcast() == IP4(10, 0, 0, 3) && netconf_is_broadcast(IP4(10, 0, 0, 3)),
           "and a host of it has the broadcast address");
 
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0 && net_ip_addr == 0,
-          "an address waiting for its mask");
+    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0 &&
+              net_ip_addr == IP4(192, 168, 1, 0),
+          "the address takes effect with its classful mask");
     CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFFu) == 0 && net_ip_addr == IP4(192, 168, 1, 0) &&
               net_ip_mask == 0xFFFFFFFFu,
           "is a host under a /32 mask");
     CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFEu) == 0 && net_ip_mask == 0xFFFFFFFEu,
           "and under a /31 mask");
-    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFCu) == -EINVAL,
-          "but not under a /30 mask, of which it is the network address");
+    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFCu) == 0,
+          "a /30 also accepts its network address");
 
     narrow_subnets_added();
     conf_reset();
+}
+
+/** Check explicit routes through a device as its peers and link change. */
+static void route_lifetime(int l3)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t ip = IP4(192, 0, 2, 1), peer = IP4(198, 51, 100, 1);
+    uint32_t gw = IP4(203, 0, 113, 2), dst = IP4(172, 16, 0, 0);
+    uint32_t via, mask = 0xffffff00u;
+    struct netdev_rt r = {0};
+
+    conf_reset();
+    nd->l3 = l3;
+    CHECK(netconf_add_address(nd, ip, mask, &peer, 0) == 0 &&
+              netconf_add_address(nd, ip, ~0u, &gw, 0) == 0,
+          "two destination prefixes on one interface");
+    CHECK(netdev_route_add(nd, ip & mask, mask, 0, 10, 0) == 0 &&
+              netdev_route_add(nd, dst, mask, gw, 20, 0) == 0 &&
+              netdev_route_add(nd, 0, 0, gw, 1, 0) == 0,
+          "install direct, gateway and default routes");
+    CHECK(netconf_del_address(nd, ip, ~0u, &gw) == 0 && netdev_route(dst, &via) == nd && via == gw,
+          "a removed peer keeps the explicit route");
+    CHECK(netdev_route_lookup(gw, nd->index, &r) == nd && r.gw == gw,
+          "a lookup of the removed peer now reports the default route's gateway");
+    r.gw = r.prefsrc = 0;
+    CHECK(netdev_gateway_reachable(nd, ip + 1), "an explicit direct route resolves a gateway");
+    CHECK(netconf_del_address(nd, ip, mask, &peer) == 0 && netdev_route(dst, &via) != nd &&
+              netdev_route(ip + 1, &via) != nd && netdev_default_gateway(nd) == 0,
+          "last address flushes direct and gateway routes");
+    CHECK(netconf_add_address(nd, ip, mask, &peer, 0) == 0 && !netdev_gateway_reachable(nd, ip + 1),
+          "a restored address does not restore a direct route");
+    CHECK(netdev_route_del(nd, peer & mask, mask, 0) == 0 && !netdev_gateway_reachable(nd, peer),
+          "a deleted kernel prefix stays deleted");
+    CHECK(netconf_set_peer(nd, gw) == 0 && netdev_gateway_reachable(nd, gw),
+          "changing the peer installs its new prefix");
+    r.dst = dst;
+    r.mask = mask;
+    r.metric = 8;
+    r.proto = 99;
+    r.scope = 254;
+    CHECK(netdev_route_change(nd, &r, 0, 0) == 0, "install a host-scope route");
+    r.proto = 4;
+    CHECK(netdev_route_change(nd, &r, 1, 0) == -ESRCH, "wrong protocol leaves the route intact");
+    CHECK(netdev_route_add(nd, ip & mask, mask, 0, 0, 0) == 0 && netconf_set_up(nd, 0) == 0 &&
+              !netdev_has_link_route(nd, gw & mask, mask),
+          "taking the link down hides address prefixes");
+    r.proto = 99;
+    CHECK(netdev_route_change(nd, &r, 1, 0) == 0 &&
+              netdev_route_del(nd, ip & mask, mask, 0) == -ESRCH,
+          "down retains only host scope");
+    CHECK(netconf_del_address(nd, ip, mask, &gw) == 0, "remove address from the down interface");
+    nd->l3 = 0;
+}
+
+/** Reinsert each ioctl replacement behind the surviving primary. */
+static void ioctl_reinsert(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t ip = IP4(192, 0, 2, 1), keep = IP4(198, 51, 100, 1), mask = 0xffffff00u;
+    uint32_t brd = IP4(198, 51, 100, 252);
+    int op;
+    for (op = 0; op < 4; op++) {
+        uint32_t old = op == 2 ? keep + 1 : ip;
+        uint32_t next = op == 0 ? keep + 1 : old;
+        conf_reset();
+        CHECK(netconf_add_address(nd, old, op == 2 ? ~0u : mask, 0, 0) == 0 &&
+                  netconf_add_address(nd, keep, mask, 0, 0) == 0,
+              "configure two primary addresses");
+        nd->addr4[0].metric = 23;
+        if (op == 0)
+            CHECK(netconf_set_address(nd, next, 0) == 0, "replace the first address");
+        else if (op == 1)
+            CHECK(netconf_set_peer(nd, keep + 2) == 0, "replace the peer");
+        else if (op == 2)
+            CHECK(netconf_set_netmask(nd, mask) == 0, "replace the mask");
+        else
+            CHECK(netconf_set_broadcast(nd, brd) == 0, "replace the broadcast");
+        CHECK(nd->ip == keep && nd->naddr2 == 1 && nd->ip2[0] == next &&
+                  netdev_secondary(nd, 0) == (op != 3) && nd->addr4[1].metric == 23,
+              "the surviving primary remains first and each address keeps its attributes");
+        CHECK(op != 3 || netdev_addr_brd(nd, 0) == brd, "the new broadcast follows its address");
+        CHECK(netconf_del_address(nd, next, 0, 0) == 0 && nd->ip == keep &&
+                  netdev_has_link_route(nd, keep & mask, mask),
+              "deleting the replacement keeps the surviving primary and route");
+    }
+}
+
+/** A duplicate replacement leaves only the existing address. */
+static void ioctl_duplicate(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t ip = IP4(192, 0, 2, 1), keep = IP4(198, 51, 100, 1), mask = 0xffffff00u;
+    conf_reset();
+    CHECK(!netconf_add_address(nd, ip, mask, 0, 0) && !netconf_add_address(nd, keep, mask, 0, 0),
+          "configure distinct prefixes");
+    CHECK(netconf_set_address(nd, keep, 0) == -EEXIST && nd->ip == keep && !nd->naddr2,
+          "the old address is gone when reinsertion finds a duplicate");
+}
+
+/** Reinsertion keeps Linux's address scope order and rejects a mixed subnet. */
+static void scope_reinsert(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t first = IP4(192, 0, 2, 1), link = IP4(198, 51, 100, 1);
+    uint32_t mask = 0xffffff00u;
+    conf_reset();
+    CHECK(!netconf_add_address(nd, first, mask, 0, 0) &&
+              !netconf_add_address(nd, first + 1, mask, 0, 0) &&
+              !netconf_add_address(nd, link, mask, 0, 253) && nd->ip == link &&
+              nd->ip2[0] == first && nd->ip2[1] == first + 1,
+          "a link-scope primary precedes global primaries and their secondaries");
+    CHECK(!netconf_set_broadcast(nd, link + 42) && nd->ip == link && nd->addr4[0].scope == 253 &&
+              netdev_addr_brd(nd, -1) == link + 42,
+          "reinsert the link-scope primary ahead of the surviving global addresses");
+    CHECK(netconf_add_address(nd, first + 2, mask, 0, 253) == -EINVAL && nd->naddr2 == 2,
+          "a secondary must have the primary's scope");
+    CHECK(!netconf_set_address(nd, first + 2, 0) && nd->ip == first && nd->ip2[1] == first + 2 &&
+              !nd->addr4[2].scope,
+          "replacing a link-scope address resets its scope and appends it as secondary");
+}
+
+/** An explicit zero peer has its own destination prefix. */
+static void zero_peer(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t first = IP4(192, 0, 2, 1), keep = IP4(198, 51, 100, 1);
+    uint32_t mask = 0xffffff00u, zero = 0;
+    conf_reset();
+    CHECK(!netconf_add_address(nd, first, mask, 0, 0) &&
+              !netconf_add_address(nd, keep, mask, &zero, 0),
+          "configure an address with an explicit zero peer");
+    CHECK(!netconf_set_peer(nd, 0) && nd->ip == keep && netdev_secondary(nd, 0) &&
+              !netdev_has_link_route(nd, first & mask, mask) && !netdev_addr_dst(nd, -1),
+          "a zero peer joins the existing zero subnet");
+    CHECK(!netconf_del_address(nd, first, mask, &zero) && nd->ip == keep && !nd->naddr2,
+          "deletion by the zero prefix preserves its primary");
+    CHECK(!netconf_set_peer(nd, keep) && netdev_has_link_route(nd, keep & mask, mask),
+          "resetting the peer to the local address installs its subnet route");
+}
+
+/** Count a generated or explicit local-table row with its preferred source. */
+static int local_row(uint32_t dst, int kind, uint32_t src)
+{
+    struct netdev_rt r;
+    int i;
+    for (i = 0; netdev_local_route_at(i, &r); i++)
+        if (r.dst == dst && r.kind == kind && r.prefsrc == src)
+            return 1;
+    return 0;
+}
+
+/** Check local, broadcast and preferred-source routes on a shared prefix. */
+static void local_lifetime(void)
+{
+    struct netdev *nd = &other_iface;
+    struct netdev_rt r = {0};
+    uint32_t ip = 0xc0000201u, mask = 0xffffff00u, other = 0xc6336401u;
+    conf_reset();
+    CHECK(netconf_add_address(nd, ip, mask, 0, 0) == 0 &&
+              netconf_add_address(nd, ip + 1, mask, 0, 0) == 0 &&
+              netconf_add_address(nd, other, mask, 0, 0) == 0,
+          "install a primary, alias and other subnet");
+    CHECK(local_row(ip + 1, NETDEV_RT_LOCAL, ip), "an alias uses the primary's preferred source");
+    nd->addr4[0].noprefix = 1;
+    CHECK(!netdev_has_link_route(nd, ip & mask, mask) &&
+              local_row(ip | ~mask, NETDEV_RT_BROADCAST, ip),
+          "noprefix preserves the subnet broadcast");
+    CHECK(netconf_set_broadcast(nd, other + 2) == 0 &&
+              local_row(other + 2, NETDEV_RT_BROADCAST, ip) && nd->naddr2 == 1,
+          "a custom broadcast is installed");
+    CHECK(netconf_set_netmask(nd, 0xffff0000u) == 0 && nd->ip == ip &&
+              netconf_set_netmask(nd, 0xffff0000u) == 0 && netdev_addr_brd(nd, 0) == other + 2,
+          "a mask change preserves a custom broadcast");
+    r.dst = 0xac100001u;
+    r.mask = ~0u;
+    r.prefsrc = ip;
+    r.scope = 253;
+    r.proto = 99;
+    CHECK(netdev_route_change(&the_iface, &r, 0, 0) == 0, "another card uses this source");
+    CHECK(netconf_del_address(nd, ip, 0, 0) == 0 &&
+              netdev_route_change(&the_iface, &r, 1, 0) == -ESRCH && nd->ip == other,
+          "losing the source flushes its dependent route and keeps the other primary");
+    r.prefsrc = 0;
+    r.kind = NETDEV_RT_LOCAL;
+    r.scope = 254;
+    CHECK(netdev_local_route_change(nd, &r, 0, 0) == 0 && netdev_added_local(r.dst, r.kind) == nd,
+          "an explicit host-scope local route");
+    CHECK(netconf_set_up(nd, 0) == 0 && netdev_added_local(r.dst, r.kind) == nd &&
+              local_row(other, NETDEV_RT_LOCAL, other),
+          "local routes survive administrative down");
+    CHECK(netconf_del_address(nd, other, 0, 0) == 0 && !netdev_added_local(r.dst, r.kind),
+          "last-address deletion flushes the explicit local route");
+}
+
+/** Address expiry deprecates first and flushes routes only on deletion. */
+static void timed_address(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t dst = 0xac100000u, mask = 0xffffff00u;
+    conf_reset();
+    CHECK(netconf_add_address(nd, 0xc0000201u, mask, 0, 0) == 0, "add a finite IPv4 address");
+    nd->addr4[0].preferred_until = 10;
+    nd->addr4[0].valid_until = 20;
+    CHECK(netdev_route_add(nd, dst, mask, 0, 3, 0) == 0, "add a route under its lifetime");
+    netconf_expire_addresses(10);
+    CHECK(nd->ip && nd->addr4[0].deprecated, "preferred lifetime ends first");
+    netconf_expire_addresses(20);
+    CHECK(!nd->ip && netdev_route_del(nd, dst, mask, 0) == -ESRCH,
+          "valid lifetime ends with last-address cleanup");
 }
 
 /**
@@ -570,6 +825,14 @@ int main(void)
 
     configure_by_mac();
     secondary_address_change();
+    route_lifetime(0);
+    route_lifetime(1);
+    ioctl_reinsert();
+    ioctl_duplicate();
+    scope_reinsert();
+    zero_peer();
+    local_lifetime();
+    timed_address();
     narrow_subnets();
     ip = 0;
     mask = 0;
@@ -700,12 +963,6 @@ int main(void)
     CHECK(net_ip_gateway == 0, "a gateway that is no longer on this subnet is not a gateway");
 
     arp_flushes = 0;
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 0), IP4(255, 255, 255, 0)) == -EINVAL,
-          "a network address is not a host");
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 255), IP4(255, 255, 255, 0)) == -EINVAL,
-          "nor is a broadcast address");
-    CHECK(netconf_set_address(&the_iface, IP4(127, 0, 0, 1), IP4(255, 0, 0, 0)) == -EINVAL,
-          "nor is loopback");
     CHECK(netconf_set_address(&the_iface, IP4(224, 0, 0, 1), IP4(255, 255, 255, 0)) == -EINVAL,
           "nor is a multicast address");
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 0, 255, 0)) == -EINVAL,
@@ -720,11 +977,11 @@ int main(void)
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == 0, "and the real mask follows");
     CHECK(net_ip_mask == IP4(255, 255, 255, 0) && net_ip_addr == IP4(10, 1, 2, 3),
           "leaving the address where it was");
-    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 252)) == -EINVAL,
-          "a mask that would make this address a broadcast address is refused");
+    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 252)) == 0,
+          "an assigned address may equal its subnet broadcast");
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 0, 255, 0)) == -EINVAL,
           "and so is one that is not a run of ones");
-    CHECK(net_ip_mask == IP4(255, 255, 255, 0), "neither of which moved the one that works");
+    CHECK(net_ip_mask == IP4(255, 255, 255, 252), "an invalid mask preserves the last good one");
 
     CHECK(netconf_set_address(&the_iface, 0, 0) == 0, "unconfiguring first");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0, "leaves nothing set");
@@ -736,18 +993,12 @@ int main(void)
 
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
           "an address that is a network address under its classful mask is taken");
-    CHECK(net_ip_addr == 0 && net_ip_mask == 0,
-          "and waits out of force, so a client killed here leaves no machine "
-          "answering for a network address");
+    CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == 0xffffff00u,
+          "its address and local route take effect immediately");
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 0, 0)) == 0,
           "and the wider mask makes it a host");
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
           "which is the pair the machine ends up on");
-    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == -EINVAL,
-          "and narrowing it back to where the address is not a host is refused");
-    CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
-          "leaving the pair that works");
-
     arp_flushes = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0, "the same address again");
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
@@ -763,12 +1014,10 @@ int main(void)
     CHECK(net_ip_mask == IP4(255, 255, 255, 0), "keeps the mask it had, not the classful one");
     CHECK(arp_flushes == 1, "and forgot nothing beyond the one real change");
 
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
-          "the waiting address again");
-    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == -EINVAL,
-          "and a mask that refuses it");
-    CHECK(net_ip_addr == 0 && net_ip_mask == 0,
-          "leaves the machine unconfigured, not answering for a network address");
+    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0, "a classful address again");
+    CHECK(netconf_set_netmask(&the_iface, 0xff00ff00u) == -EINVAL &&
+              net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == 0xffffff00u,
+          "an invalid separate mask preserves the address");
 
     arp_flushes = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
@@ -827,8 +1076,8 @@ int main(void)
 
     CHECK(netconf_set_address(&other_iface, IP4(192, 168, 5, 0), 0) == 0,
           "an address that waits for a wider mask, on the second interface");
-    CHECK(other_iface.ip == 0 && the_iface.ip == IP4(192, 168, 90, 20),
-          "waits there, and the first interface is still in force");
+    CHECK(other_iface.ip == IP4(192, 168, 5, 0) && the_iface.ip == IP4(192, 168, 90, 20),
+          "both cards hold their own addresses");
     CHECK(netconf_set_netmask(&other_iface, IP4(255, 255, 0, 0)) == 0 &&
               other_iface.ip == IP4(192, 168, 5, 0),
           "and the mask that justifies it puts it in force");

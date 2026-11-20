@@ -209,11 +209,13 @@ struct netdev *netdev_owner6(const uint8_t *addr)
     int i;
 
     for (i = 0; i < netdev_listed(); i++) {
-        if (netdev_holds6(netdev_at(i), addr)) {
-            return netdev_at(i);
-        }
+        struct netdev *nd = netdev_at(i);
+        struct netdev_addr6 *a = netdev_addr6_of(nd, addr);
+        if (nd->up && a && !(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) &&
+            !a->local_route_deleted)
+            return nd;
     }
-    return 0;
+    return route6_added_local(addr);
 }
 
 /** The slot of `group` among `nd`'s groups, or -1. */
@@ -317,40 +319,52 @@ int netdev_on_link(const struct netdev *nd, uint32_t ip)
 {
     int i;
 
-    for (i = 0; i < nd->naddr2; i++) {
-        if (nd->mask2[i] != 0xFFFFFFFFu && (ip & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
-            return 1;
-        }
-    }
-    return nd->ip != 0 && nd->mask != 0 && nd->mask != 0xFFFFFFFFu &&
-           (ip & nd->mask) == (nd->ip & nd->mask);
-}
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
+        uint32_t dst = netdev_addr_dst(nd, i);
 
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
-{
-    int i;
-
-    if (nd->ip != 0 && nd->mask != 0 && (hop & nd->mask) == (nd->ip & nd->mask)) {
-        return nd->ip;
-    }
-    for (i = 0; i < nd->naddr2; i++) {
-        if ((hop & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
-            return nd->ip2[i];
-        }
-    }
-    return nd->ip;
-}
-
-int netdev_owns(uint32_t ip)
-{
-    int i;
-
-    for (i = 0; i < netdev_count(); i++) {
-        if (netdev_holds(netdev_at(i), ip)) {
+        if (nd->up && !nd->addr4[i + 1].noprefix && !(nd->addr4[i + 1].deleted & ADDR4_PREFIX) &&
+            !netdev_secondary(nd, i) && (ip & mask) == (dst & mask) &&
+            netdev_addr_has_route(local, dst, mask)) {
             return 1;
         }
     }
     return 0;
+}
+
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+{
+    uint32_t source = nd->ip, best_mask = 0;
+    int i;
+
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
+
+        if (local != 0 && mask > best_mask && (hop & mask) == (netdev_addr_dst(nd, i) & mask)) {
+            if (!nd->l3) {
+                return local;
+            }
+            source = local;
+            best_mask = mask;
+        }
+    }
+    return source;
+}
+
+int netdev_owns(uint32_t ip)
+{
+    int i, a;
+    if (!ip)
+        return 0;
+    for (i = 0; i < netdev_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+        for (a = -1; a < nd->naddr2; a++)
+            if (netdev_addr_local(nd, a, ADDR4_LOCAL) == ip)
+                return 1;
+    }
+    return netdev_added_local(ip, NETDEV_RT_LOCAL) != 0;
 }
 
 int netdev_is_broadcast(uint32_t ip)
@@ -363,16 +377,13 @@ int netdev_is_broadcast(uint32_t ip)
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *nd = netdev_at(i);
 
-        if (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && ip == (nd->ip | ~nd->mask)) {
-            return 1;
-        }
-        for (a = 0; a < nd->naddr2; a++) {
-            if (NETDEV_MASK_HAS_BROADCAST(nd->mask2[a]) && ip == (nd->ip2[a] | ~nd->mask2[a])) {
+        for (a = -1; a < nd->naddr2; a++) {
+            if (ip && (ip == netdev_addr_local(nd, a, ADDR4_BROADCAST) ||
+                       ip == netdev_addr_local(nd, a, ADDR4_SUBNET_BROADCAST)))
                 return 1;
-            }
         }
     }
-    return 0;
+    return ip && netdev_added_local(ip, NETDEV_RT_BROADCAST) != 0;
 }
 
 /** Name `nd`, the interface of card `n` from 0, `ethN`, for N up to 99. */
@@ -667,24 +678,24 @@ void netdev_unregister(struct netdev *nd)
 static struct arp_row withdraw_arp[ARP_CACHE_SIZE];
 static struct nd6_row withdraw_nd6[ND6_CACHE_SIZE];
 
+/** Flush the device's IPv4 routes and remove all its addresses before its
+ * driver leaves. A card without an address may still have explicit routes. */
+static void drop_addresses(struct netdev *nd)
+{
+    nd6_if_down(nd);
+    netdev_route_flush(nd, 1);
+    while (nd->ip)
+        (void)netconf_set_address(nd, 0, 0);
+}
+
 void netdev_withdraw(struct netdev *nd)
 {
-    struct netdev_rt r;
     uint32_t flags;
     int n, count;
 
     flags = net_lock();
     (void)netconf_set_up(nd, 0);
-    nd6_if_down(nd);
-    route6_forget(nd, -1);
-    for (n = 0; netdev_route_at(n, &r);) {
-        if (r.ifindex == nd->index && r.kind == NETDEV_RT_ADDED) {
-            (void)netdev_route_del(nd, r.dst, r.mask, r.gw);
-        } else {
-            ++n;
-        }
-    }
-    (void)netconf_set_address(nd, 0, 0);
+    drop_addresses(nd);
     arp_forget_dev(nd);
     count = arp_snapshot(withdraw_arp, ARP_CACHE_SIZE);
     for (n = 0; n < count; ++n) {
@@ -772,6 +783,7 @@ int netdev_release(struct netdev *nd)
     devfn = (uint8_t)nd->pci_key;
     (void)netconf_set_up(nd, 0);
     flags = net_lock();
+    drop_addresses(nd);
     away_ops[i].name = card_ops[i]->name;
     away_ops[i].tx = away_tx;
     away_ops[i].link = away_link;

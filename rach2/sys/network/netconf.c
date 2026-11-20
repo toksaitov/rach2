@@ -14,8 +14,10 @@
 #include "net.h"
 #include "driver/netdev.h"
 #include "arp/arp.h"
+#include "ip/ip.h"
 #include "ip6/ip6.h"
 #include "ip6/nd6.h"
+#include "ip6/route6.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -101,7 +103,7 @@ static int mac_equal(const uint8_t *a, const uint8_t *b)
  * order on the next boot still takes the address the operator meant for it.
  * The address and prefix are copied out to the comma before they are parsed,
  * since `netconf_parse_cidr` reads a whole string. The configuration is
- * written into the card's record directly, without what `addr_publish`
+ * written into the card's record directly, without what `addr_replace`
  * drops, since this runs at boot, before any program has opened a socket.
  */
 void netconf_apply_by_mac(void)
@@ -455,6 +457,10 @@ static uint32_t classful_mask(uint32_t ip)
 {
     uint32_t top = ip >> 24;
 
+    if (!top || ip == 0xffffffffu)
+        return 0;
+    if (top >= 240)
+        return 0xffffffffu;
     if (top < 128u) {
         return 0xFF000000u;
     }
@@ -471,30 +477,30 @@ static int is_machine(const struct netdev *nd)
 }
 
 /**
- * Put `ip`/`mask` in force on `nd`, with the costs `netconf_set_address`
- * lists.
+ * Put `ip`, `mask` and `peer` in force on `nd` as its first address, and
+ * leave its gateway and added routes alone.
  *
  * A change, a new address or a new mask under an address, is logged, drops the
  * ARP mappings of the interface but the permanent ones (of every interface, for
  * the first) and the datagrams waiting for them; a TCP connection from the old
- * address is kept (`tcp_ip_tx`). A gateway the subnet does not have is cleared,
- * change or not, and so are the added routes whose gateway `nd` no longer
- * reaches. The first interface's values are copied to `net_ip_addr` and the two
- * after it. The caller holds `net_lock`.
+ * address is kept (`tcp_ip_tx`). The first interface's address and mask are
+ * copied to `net_ip_addr` and `net_ip_mask`. The caller holds `net_lock`.
  */
-static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
+static void addr_install(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
     uint32_t old = nd->ip;
     uint32_t old_mask = nd->mask;
+    uint32_t old_peer = nd->peer;
 
     nd->ip = ip;
     nd->mask = mask;
+    nd->peer = peer;
     if (is_machine(nd)) {
         net_ip_addr = ip;
         net_ip_mask = mask;
     }
 
-    if (ip != old || (ip != 0 && mask != old_mask)) {
+    if (ip != old || (ip != 0 && (mask != old_mask || peer != old_peer))) {
         char addr[16];
 
         if (ip != 0) {
@@ -509,49 +515,145 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
             arp_forget_dev(nd);
         }
     }
-    if (nd->gateway != 0 &&
-        (nd->ip == 0 || nd->mask == 0 || !netconf_gateway_ok(nd->gateway, nd->ip, nd->mask))) {
-        nd->gateway = 0;
-    }
-    if (is_machine(nd)) {
-        net_ip_gateway = nd->gateway;
-    }
-    netdev_route_prune(nd);
 }
 
-/** Whether `ip`/`mask` may be an address of an interface: a possible
- * address, a contiguous mask other than 0, and a host of its subnet; 0, or
- * -EINVAL. */
-static int addr_valid(uint32_t ip, uint32_t mask)
+/** Erase the extra address at slot i and slide the following slots up. */
+static void addr_erase_extra(struct netdev *nd, int i)
 {
-    if (netconf_address_is_impossible(ip) || !mask_ok(mask) || mask == 0 || !is_host(ip, mask)) {
-        return -EINVAL;
+    for (; i + 1 < nd->naddr2; i++) {
+        nd->ip2[i] = nd->ip2[i + 1];
+        nd->mask2[i] = nd->mask2[i + 1];
+        nd->peer2[i] = nd->peer2[i + 1];
+        nd->addr4[i + 1] = nd->addr4[i + 2];
+    }
+    nd->naddr2--;
+}
+
+/** Delete the same-subnet secondaries of a departing primary. */
+static void addr_remove_aliases(struct netdev *nd, int a)
+{
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t prefix = netdev_addr_dst(nd, a) & mask;
+    int i;
+    if (netdev_secondary(nd, a))
+        return;
+    for (i = nd->naddr2 - 1; i > a; i--) {
+        if (nd->mask2[i] == mask && (netdev_addr_dst(nd, i) & mask) == prefix) {
+            uint32_t old = nd->ip2[i];
+            addr_erase_extra(nd, i);
+            netdev_route_lost_source(old);
+        }
+    }
+}
+
+/** Apply the removal of the first address before reinsertion.
+ * All lookups during this interval run under the caller's network lock. */
+static void addr_unlink(struct netdev *nd)
+{
+    uint32_t old = nd->ip;
+    addr_remove_aliases(nd, -1);
+    nd->ip = 0;
+    netdev_route_lost_source(old);
+    nd->ip = old;
+    if (!nd->naddr2)
+        netdev_route_flush(nd, 1);
+}
+
+/** The slot matching the local address `ip` and destination prefix
+ * `*dst`/`mask`. A zero ip or null dst omits that match. The first slot
+ * is -1, and `nd->naddr2` means no match. The caller holds net_lock. */
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst)
+{
+    int i;
+
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t m = i < 0 ? nd->mask : nd->mask2[i];
+
+        if (local && (!ip || ip == local) &&
+            (!dst || (m == mask && (netdev_addr_dst(nd, i) & m) == (*dst & m)))) {
+            break;
+        }
+    }
+    return i;
+}
+
+/** Move the address preceding extra slot i into it, including its options. */
+static void addr_shift_right(struct netdev *nd, int i)
+{
+    nd->ip2[i] = i ? nd->ip2[i - 1] : nd->ip;
+    nd->mask2[i] = i ? nd->mask2[i - 1] : nd->mask;
+    nd->peer2[i] = i ? nd->peer2[i - 1] : nd->peer;
+    nd->addr4[i + 1] = nd->addr4[i];
+}
+
+/** Insert among primaries by scope, or append a same-scope secondary.
+ * The caller holds net_lock and supplies the attributes of this address. */
+static int addr_insert(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer,
+                       const struct addr4_routes *opts)
+{
+    uint32_t dst = peer || opts->zero_peer ? peer : ip;
+    int i = -1;
+    if (nd->ip) {
+        int primary = netconf_addr_find(nd, 0, mask, &dst);
+        i = nd->naddr2;
+        if (netconf_addr_find(nd, ip, mask, &dst) < i)
+            return -EEXIST;
+        if (primary < i && nd->addr4[primary + 1].scope != opts->scope)
+            return -EINVAL;
+        if (i == NETDEV_ADDRS)
+            return -ENOSPC;
+        if (primary == i)
+            while (i >= 0 && (netdev_secondary(nd, i - 1) || nd->addr4[i].scope < opts->scope))
+                addr_shift_right(nd, i--);
+        nd->naddr2++;
+    }
+    nd->addr4[i + 1] = *opts;
+    if (i < 0)
+        addr_install(nd, ip, mask, peer);
+    else {
+        nd->ip2[i] = ip;
+        nd->mask2[i] = mask;
+        nd->peer2[i] = peer;
     }
     return 0;
 }
 
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
+/** Remove the first address and reinsert its replacement among survivors.
+ * Zero stops after removal. Return the insertion error under net_lock. */
+static int addr_replace(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer,
+                        struct addr4_routes opts)
+{
+    opts.deleted = 0;
+    if (nd->ip)
+        addr_unlink(nd);
+    if (!nd->naddr2) {
+        if (!ip)
+            k_memset(&opts, 0, sizeof(opts));
+        nd->addr4[0] = opts;
+        addr_install(nd, ip, mask, peer);
+        return 0;
+    }
+    nd->addr4[0] = nd->addr4[1];
+    addr_install(nd, nd->ip2[0], nd->mask2[0], nd->peer2[0]);
+    addr_erase_extra(nd, 0);
+    return ip ? addr_insert(nd, ip, mask, peer, &opts) : 0;
+}
+
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
+                        uint8_t scope)
 {
     uint32_t flags;
-    int rc = addr_valid(ip, mask);
-
-    if (rc != 0) {
-        return rc;
-    }
-    if (nd->ip == 0) {
-        return netconf_set_address(nd, ip, mask);
-    }
+    struct addr4_routes opts = {0};
+    int rc;
+    if (!ip || !mask_ok(mask))
+        return -EINVAL;
     flags = net_lock();
-    if (netdev_holds(nd, ip)) {
-        rc = -EEXIST;
-    } else if (nd->naddr2 == NETDEV_ADDRS) {
-        rc = -ENOSPC;
-    } else {
+    opts.zero_peer = peer && !*peer;
+    opts.scope = scope;
+    rc = addr_insert(nd, ip, mask, peer && *peer != ip ? *peer : 0, &opts);
+    if (!rc && nd->naddr2) {
         char text[16];
-
-        nd->ip2[nd->naddr2] = ip;
-        nd->mask2[nd->naddr2] = mask;
-        nd->naddr2++;
         netconf_format(ip, text);
         klog(KLOG_INFO, "net", "%s: IPv4 %s/%d added", nd->name, text, netconf_prefix_of(mask));
     }
@@ -559,169 +661,139 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
     return rc;
 }
 
-int netconf_del_address(struct netdev *nd, uint32_t ip)
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst)
 {
-    uint32_t flags;
-    int i;
+    uint32_t flags = net_lock();
+    int i = netconf_addr_find(nd, ip, mask, dst);
 
-    if (ip == 0 || ip == nd->ip) {
-        uint32_t next = nd->naddr2 > 0 ? nd->ip2[0] : 0;
-        uint32_t next_mask = nd->naddr2 > 0 ? nd->mask2[0] : 0;
-
-        if (nd->ip == 0) {
-            return -EADDRNOTAVAIL;
-        }
-        flags = net_lock();
-        for (i = 1; i < nd->naddr2; i++) {
-            nd->ip2[i - 1] = nd->ip2[i];
-            nd->mask2[i - 1] = nd->mask2[i];
-        }
-        nd->naddr2 -= nd->naddr2 > 0;
-        addr_publish(nd, next, next_mask);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-        net_unlock(flags);
-        return 0;
-    }
-    flags = net_lock();
-    for (i = 0; i < nd->naddr2 && nd->ip2[i] != ip; i++) {
-    }
     if (i == nd->naddr2) {
         net_unlock(flags);
         return -EADDRNOTAVAIL;
     }
-    for (; i + 1 < nd->naddr2; i++) {
-        nd->ip2[i] = nd->ip2[i + 1];
-        nd->mask2[i] = nd->mask2[i + 1];
+    if (i < 0) {
+        addr_replace(nd, 0, 0, 0, nd->addr4[0]);
+    } else {
+        uint32_t old = nd->ip2[i];
+        addr_remove_aliases(nd, i);
+        addr_erase_extra(nd, i);
+        netdev_route_lost_source(old);
     }
-    nd->naddr2--;
-    netdev_route_prune(nd);
     net_unlock(flags);
     return 0;
 }
 
-/**
- * The whole change runs under `net_lock`, so an interrupt never finds the new
- * address in force while the control blocks still record the old one. A DHCP
- * client writes an address of 0 when a lease ends.
- *
- * With a mask of 0 the classful mask stands in, and `mask_provisional`
- * records that it was derived and not given. An address that is a host under
- * it goes into force at once. One that is not, a host only under a wider mask
- * still to come, waits in `pending_ip` with the interface unconfigured: put
- * in force, it would leave the interface answering for a network or
- * broadcast address until the next call, and for good if the program making
- * the calls were killed before it. An unconfigured interface is a state
- * anyone can see and nobody takes for a working one.
- *
- * The address in force repeated with no mask changes nothing, since a DHCP
- * client runs the same `ifconfig` at every renewal, and taking the address
- * down each time would drop the ARP mappings and stall every connection.
- */
+void netconf_expire_addresses(uint64_t now)
+{
+    int i, a;
+    for (i = 0; i < netdev_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+        for (a = nd->naddr2 - 1; a >= -1; a--) {
+            struct addr4_routes *opts = &nd->addr4[a + 1];
+            uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
+            if (opts->valid_until && now >= opts->valid_until) {
+                uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+                uint32_t dst = netdev_addr_dst(nd, a);
+                netconf_del_address(nd, ip, mask, &dst);
+            } else if (opts->preferred_until && now >= opts->preferred_until) {
+                opts->deprecated = 1;
+            }
+        }
+    }
+}
+
+/** Set the first IPv4 address with its ioctl default mask or an explicit mask.
+ * Zero removes the address. Repeating it preserves a mask set separately. */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
-    uint32_t flags;
+    uint32_t lock;
+    struct addr4_routes opts;
     int rc = 0;
-
-    if (!nd) {
+    if (!nd)
         return -ENODEV;
-    }
-
-    flags = net_lock();
-
-    if (ip == 0) {
-        addr_publish(nd, 0, 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-        net_unlock(flags);
-        return 0;
-    }
-
-    if (netconf_address_is_impossible(ip)) {
-        net_unlock(flags);
+    if ((ip >> 28) == 14 || !mask_ok(mask))
         return -EINVAL;
-    }
-
-    if (mask == 0) {
-        uint32_t derived = classful_mask(ip);
-
-        if (ip == nd->ip && nd->mask != 0 && !nd->mask_provisional && nd->pending_ip == 0) {
-            net_unlock(flags);
-            return 0;
-        }
-
-        if (!is_host(ip, derived)) {
-            addr_publish(nd, 0, 0);
-            nd->pending_ip = ip;
-        } else {
-            addr_publish(nd, ip, derived);
-            nd->pending_ip = 0;
-        }
-        nd->mask_provisional = 1;
-        net_unlock(flags);
-        return 0;
-    }
-
-    if (!mask_ok(mask) || !is_host(ip, mask)) {
-        rc = -EINVAL;
-    }
-    if (rc == 0) {
-        addr_publish(nd, ip, mask);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-    }
-    net_unlock(flags);
+    lock = net_lock();
+    opts = nd->addr4[0];
+    if (ip != nd->ip) {
+        if (!ip || !nd->ip)
+            k_memset(&opts, 0, sizeof(opts));
+        opts.given_broadcast = opts.deprecated = opts.zero_peer = 0;
+        opts.scope = IP_IS_LOOPBACK(ip) ? NETDEV_SCOPE_HOST : 0;
+        opts.updated = (uint32_t)TICKS_TO_CLOCK(tick_count());
+        if (!opts.created)
+            opts.created = opts.updated;
+        opts.valid_until = opts.preferred_until = 0;
+        if (!mask && ip)
+            mask = nd->l3 ? 0xffffffffu : classful_mask(ip);
+        rc = addr_replace(nd, ip, mask, 0, opts);
+    } else if (ip && mask && mask != nd->mask)
+        rc = addr_replace(nd, ip, mask, nd->peer, opts);
+    net_unlock(lock);
     return rc;
 }
 
-/**
- * A mask with no address is refused, since it would give the interface a
- * subnet broadcast address derived from nothing. A refusal while the mask in
- * force is provisional unconfigures the interface: the address is a host
- * under the classful mask but may be the network or broadcast address of the
- * subnet the caller meant, and an interface answering for such an address is
- * worse than one with no address at all. A refusal while an address waits
- * for its mask unconfigures the interface too, since nothing would put that
- * address in force.
- */
+/** Replace the first IPv4 address's mask, preserving a custom broadcast.
+ * A rejected mask leaves the address and every route in force. */
 int netconf_set_netmask(struct netdev *nd, uint32_t mask)
 {
-    uint32_t flags;
-    uint32_t ip;
+    uint32_t lock, brd;
+    int rc = 0;
+    if (!nd)
+        return -ENODEV;
+    lock = net_lock();
+    if (!nd->ip)
+        rc = -EADDRNOTAVAIL;
+    else if (!mask_ok(mask))
+        rc = -EINVAL;
+    else if (mask != nd->mask) {
+        struct addr4_routes opts = nd->addr4[0];
+        brd = netdev_addr_brd(nd, -1);
+        if (!nd->l3 && !nd->loopback && mask < 0xfffffffeu && brd == (nd->ip | ~nd->mask))
+            brd = nd->ip | ~mask;
+        opts.given_broadcast = 1;
+        opts.broadcast = brd;
+        addr_replace(nd, nd->ip, mask, nd->peer, opts);
+    }
+    net_unlock(lock);
+    return rc;
+}
+
+int netconf_set_peer(struct netdev *nd, uint32_t peer)
+{
+    uint32_t flags = net_lock();
     int rc = 0;
 
-    if (!nd) {
-        return -ENODEV;
-    }
-
-    flags = net_lock();
-    ip = nd->pending_ip ? nd->pending_ip : nd->ip;
-
-    if (mask == 0) {
-        addr_publish(nd, nd->pending_ip ? 0 : nd->ip, 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-    } else if (ip == 0) {
+    if (nd->ip == 0) {
+        rc = -EADDRNOTAVAIL;
+    } else if ((peer >> 28) == 14) {
         rc = -EINVAL;
-    } else if (!mask_ok(mask) || !is_host(ip, mask)) {
-        rc = -EINVAL;
-    } else {
-        addr_publish(nd, ip, mask);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-    }
-
-    if (rc != 0 && (nd->mask_provisional || nd->pending_ip)) {
-        addr_publish(nd, 0, 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
+    } else if (peer != netdev_addr_dst(nd, -1)) {
+        struct addr4_routes opts = nd->addr4[0];
+        opts.zero_peer = !peer;
+        addr_replace(nd, nd->ip, nd->mask, peer == nd->ip ? 0 : peer, opts);
     }
     net_unlock(flags);
     return rc;
 }
 
-/** With no mask `netconf_gateway_ok` would take almost any address, so a
- * gateway needs the interface's address and mask first. */
+int netconf_set_broadcast(struct netdev *nd, uint32_t addr)
+{
+    uint32_t flags = net_lock();
+    if (!nd->ip) {
+        net_unlock(flags);
+        return -EADDRNOTAVAIL;
+    }
+    if (addr != netdev_addr_brd(nd, -1)) {
+        struct addr4_routes opts = nd->addr4[0];
+        opts.given_broadcast = 1;
+        opts.broadcast = addr;
+        addr_replace(nd, nd->ip, nd->mask, nd->peer, opts);
+    }
+    net_unlock(flags);
+    return 0;
+}
+
+/** Set `nd`'s default gateway after checking that the interface reaches it. */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 {
     uint32_t flags;
@@ -734,9 +806,7 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
     flags = net_lock();
     if (gw == 0) {
         nd->gateway = 0;
-    } else if (nd->ip == 0 || nd->mask == 0) {
-        rc = -EINVAL;
-    } else if (!netconf_gateway_ok(gw, nd->ip, nd->mask)) {
+    } else if (!netdev_gateway_reachable(nd, gw) || netdev_owns(gw)) {
         rc = -EINVAL;
     } else {
         nd->gateway = gw;
@@ -755,8 +825,8 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
  * to be asked on. A preferred lifetime of 0 makes the address deprecated
  * from the start.
  */
-int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
-                         uint32_t valid, uint32_t preferred)
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
 {
     struct netdev_addr6 *a;
     uint8_t group[IP6_ADDR_LEN];
@@ -789,6 +859,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
         return rc;
     }
     a = &nd->addr6[nd->naddr6++];
+    k_memset(a, 0, sizeof(*a));
     k_memcpy(a->addr, addr, IP6_ADDR_LEN);
     a->prefix = (uint8_t)prefix;
     a->scope = (uint8_t)ip6_scope(addr);
@@ -802,7 +873,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     a->since = tick_count();
     a->dad_count = 0;
     a->regen = 0;
-    if (!nd->loopback && !(flags & NETDEV_A6_NODAD)) {
+    if (!nd->loopback && !nd->l3 && !(flags & NETDEV_A6_NODAD)) {
         a->flags |= NETDEV_A6_TENTATIVE;
         nd6_dad_start(a);
     }
@@ -810,6 +881,17 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     ip6_format(addr, text);
     klog(KLOG_INFO, "net", "%s: IPv6 %s/%d added", nd->name, text, prefix);
     return 0;
+}
+
+int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                         uint32_t valid, uint32_t preferred)
+{
+    uint32_t lock = net_lock();
+    int rc = netconf_insert_address6(nd, addr, prefix, flags, valid, preferred);
+    if (!rc)
+        route6_address_update(nd, 0, netdev_addr6_of(nd, addr));
+    net_unlock(lock);
+    return rc;
 }
 
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
@@ -834,6 +916,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
         netdev_leave6(nd, group);
     }
     ip6_format(addr, text);
+    route6_address_removed(nd, (int)(a - nd->addr6));
     for (i = (int)(a - nd->addr6); i + 1 < nd->naddr6; i++) {
         nd->addr6[i] = nd->addr6[i + 1];
     }
@@ -846,9 +929,9 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 /**
  * The interface identifier is the modified EUI-64 of the station address
  * (RFC 4291, appendix A): ff:fe in its middle and the universal bit
- * inverted. The address is kept across a down and up, as an address given
- * by hand is, so only an interface without one gets it. An interface with
- * IPv6 disabled gets nothing.
+ * inverted, or on an interface of IP datagrams, which has none, a random
+ * one (`nd6_random_link_local`). Only an interface without one gets
+ * it. An interface with IPv6 disabled gets nothing.
  */
 static void link_local_up(struct netdev *nd)
 {
@@ -871,6 +954,9 @@ static void link_local_up(struct netdev *nd)
     ll[14] = nd->mac[4];
     ll[15] = nd->mac[5];
     lock = net_lock();
+    if (nd->l3) {
+        nd6_random_link_local(nd, ll);
+    }
     if (!netdev_member6(nd, ip6_all_nodes)) {
         netdev_join6(nd, ip6_all_nodes);
     }
@@ -902,10 +988,20 @@ int netconf_set_up(struct netdev *nd, int up)
         }
     }
     nd->up = up;
+    if (was && !up) {
+        uint32_t flags = net_lock();
+        netdev_route_flush(nd, 0);
+        net_unlock(flags);
+    }
     if (up != was) {
         netdev_carrier_changed(nd);
     }
     if (nd->up && !nd->loopback) {
+        if (!was) {
+            int a;
+            for (a = 0; a <= nd->naddr2; a++)
+                nd->addr4[a].deleted = 0;
+        }
         link_local_up(nd);
         nd6_if_up(nd);
     } else if (was && !nd->loopback) {

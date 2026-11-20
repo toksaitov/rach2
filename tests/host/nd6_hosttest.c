@@ -130,12 +130,27 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     return 0;
 }
 
-/** Addresses are not removed in this model. */
+/** Model insertion of a SLAAC address with the same fixture as a manual one. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
+{
+    return netconf_add_address6(nd, addr, prefix, flags, valid, preferred);
+}
+
+/** Remove the address whose slot the ND state machine is visiting. */
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
-    (void)nd;
-    (void)addr;
-    return 0;
+    int i;
+    for (i = 0; i < nd->naddr6; i++) {
+        if (ip6_equal(nd->addr6[i].addr, addr)) {
+            route6_address_removed(nd, i);
+            for (; i + 1 < nd->naddr6; i++)
+                nd->addr6[i] = nd->addr6[i + 1];
+            nd->naddr6--;
+            return 0;
+        }
+    }
+    return -EADDRNOTAVAIL;
 }
 
 /** Cards are not brought up again in this model. */
@@ -319,6 +334,234 @@ static int defaults(const struct netdev *nd, uint32_t *metric, uint8_t *gw, uint
     return n;
 }
 
+/** Count exact address-generated routes in the selected table. */
+static int count_prefix(const uint8_t *dst, unsigned plen, int local, unsigned metric)
+{
+    struct route6_row row;
+    int i, count = 0;
+    for (i = 0; route6_at(i, &row); i++)
+        if (row.local == local && row.proto == ROUTE6_PROTO_KERNEL && row.plen == plen &&
+            row.metric == metric && ip6_equal(dst, row.dst))
+            count++;
+    return count;
+}
+
+/** Check routes after address removal, carrier loss and device shutdown. */
+static void route_lifetime(void)
+{
+    struct route6_row r = {0};
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    uint8_t via[16], dst[16] = {0x20, 0x01}, other[16] = {0x30, 0x01};
+    a->addr[0] = 0x40;
+    a->peer[0] = 0x50;
+    a->prefix = 128;
+    a->metric = 80;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    a->flags = NETDEV_A6_TENTATIVE;
+    eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
+    CHECK(count_prefix(a->addr, 128, 0, 80) == 1 && count_prefix(a->addr, 128, 1, 0) == 0);
+    CHECK(count_prefix(a->peer, 128, 0, 80) == 0);
+    a->flags |= NETDEV_A6_PERMANENT;
+    a->preferred = NETDEV_LIFETIME_FOREVER;
+    a->local_route_deleted = 1;
+    dad_timers(&eth0);
+    CHECK(!(a->flags & NETDEV_A6_TENTATIVE));
+    if_of(&eth0)->running = 0;
+    if_timers(&eth0, if_of(&eth0));
+    CHECK(!(a->flags & NETDEV_A6_TENTATIVE));
+    CHECK(count_prefix(a->addr, 128, 1, 0) == 1 && count_prefix(a->peer, 128, 0, 80) == 1);
+    {
+        struct netdev_addr6 next = *a;
+        next.noprefix = 1;
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
+    CHECK(count_prefix(a->addr, 128, 0, 80) == 0 && count_prefix(a->peer, 128, 0, 80) == 1);
+    {
+        struct netdev_addr6 next = *a;
+        next.noprefix = 0;
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
+    r.plen = 128;
+    k_memcpy(r.dst, a->addr, 16);
+    r.proto = 9;
+    CHECK(route6_change_row(&eth0, &r, 1, 0) == -ESRCH);
+    r.proto = 2;
+    r.metric = 81;
+    CHECK(route6_change_row(&eth0, &r, 1, 0) == -ESRCH);
+    r.metric = 80;
+    CHECK(route6_change_row(&eth0, &r, 1, 0) == 0 && count_prefix(a->addr, 128, 0, 80) == 0);
+    CHECK(count_prefix(a->addr, 128, 1, 0) == 1);
+    k_memcpy(r.dst, dst, 16);
+    r.proto = 99;
+    k_memcpy(r.prefsrc, a->addr, 16);
+    CHECK(route6_change_row(&eth0, &r, 0, 0) == 0);
+    CHECK(route6_preferred_source(&eth0, dst, via) && ip6_equal(via, a->addr));
+    r.gw[0] = 0xff;
+    CHECK(route6_change_row(&eth0, &r, 0, 1) == -EINVAL);
+    CHECK(route6_lookup(dst, eth0.index, via) == &eth0 && ip6_equal(dst, via));
+    r.gw[0] = 0;
+    k_memcpy(r.dst, other, 16);
+    CHECK(route6_change_row(&wlan0, &r, 0, 0) == 0);
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0 && count_prefix(a->peer, 128, 0, 80) == 0);
+    CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
+    {
+        struct route6_row got;
+        CHECK(route6_resolve(dst, eth0.index, &got) == &eth0 && ip6_is_unspecified(got.prefsrc));
+    }
+    eth0.naddr6 = 1;
+    forget_if(&eth0, 0);
+    CHECK(eth0.naddr6 == 1 && route6_lookup(dst, eth0.index, via) == &eth0);
+    nd6_if_down(&eth0);
+    CHECK(eth0.naddr6 == 0 && route6_lookup(dst, eth0.index, via) == 0);
+    CHECK(route6_lookup(other, wlan0.index, via) == &wlan0);
+    CHECK(route6_change_row(&wlan0, &r, 1, 0) == 0);
+}
+
+/** A finite manual prefix keeps its expiry after its address is removed. */
+static void finite_prefix(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row r = {0};
+    uint8_t via[16], dst[16] = {0x20, 0x04};
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, dst, 16);
+    a->addr[15] = 1;
+    a->prefix = 64;
+    a->valid = 10;
+    a->since = kernel_ticks;
+    {
+        struct route6_row used = {0};
+        int i;
+        used.dst[0] = 0x60;
+        used.plen = 128;
+        for (i = 0; i < ROUTE6_MAX; i++) {
+            used.dst[15] = (uint8_t)i;
+            CHECK(route6_change_row(&wlan0, &used, 0, 0) == 0);
+        }
+    }
+    eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0);
+    CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
+    kernel_ticks += 10 * TICK_HZ;
+    route6_tick();
+    CHECK(!route6_lookup(dst, eth0.index, via));
+    nd6_if_down(&wlan0);
+    r.local = 1;
+    r.proto = 99;
+    r.plen = 64;
+    k_memcpy(r.dst, dst, 16);
+    CHECK(route6_change_row(&eth0, &r, 0, 0) == 0 && route6_added_local(dst) == &eth0);
+    CHECK(!route6_lookup(dst, eth0.index, via));
+    nd6_if_down(&eth0);
+    CHECK(!route6_added_local(dst));
+}
+
+/** Changing a ready /64 peer updates its prefix and keeps the old /128. */
+static void change_peer(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row explicit = {0};
+    uint8_t old[16] = {0x20, 1}, peer[16] = {0x30, 1};
+    k_memset(a, 0, sizeof(*a));
+    a->addr[0] = 0x40;
+    a->prefix = 64;
+    a->flags = NETDEV_A6_PERMANENT;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    k_memcpy(a->peer, old, 16);
+    eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
+    k_memcpy(explicit.dst, old, 16);
+    explicit.metric = 42;
+    explicit.plen = 64;
+    explicit.proto = ROUTE6_PROTO_STATIC;
+    CHECK(!route6_change_row(&eth0, &explicit, 0, 0));
+    {
+        struct netdev_addr6 next = *a;
+        next.metric = 512;
+        k_memcpy(next.peer, peer, 16);
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
+    CHECK(count_prefix(old, 128, 0, 256) == 1 && count_prefix(peer, 64, 0, 512) == 1);
+    CHECK(count_prefix(peer, 128, 0, 256) == 0);
+    CHECK(route6_change_row(&eth0, &explicit, 1, 0) == -ESRCH);
+    k_memcpy(explicit.dst, peer, 16);
+    explicit.metric = 512;
+    CHECK(!route6_change_row(&eth0, &explicit, 0, 1));
+    {
+        struct netdev_addr6 next = *a;
+        next.metric = 600;
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
+    CHECK(route6_change_row(&eth0, &explicit, 1, 0) == -ESRCH &&
+          count_prefix(peer, 64, 0, 600) == 1 && count_prefix(old, 128, 0, 256) == 1);
+    nd6_if_down(&eth0);
+    CHECK(count_prefix(old, 128, 0, 256) == 0);
+}
+
+/** Delete one metric at a time, even after a prefix outlives its address. */
+static void delete_shared_prefix(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row key = {0};
+    key.dst[0] = 0x30;
+    key.plen = 64;
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, key.dst, 16);
+    a->addr[15] = 1;
+    a->prefix = 64;
+    a->valid = 10;
+    a->since = kernel_ticks;
+    a->metric = 80;
+    eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0);
+    CHECK(count_prefix(key.dst, 64, 0, 80) == 1);
+    eth0.addr6[1] = *a;
+    eth0.addr6[1].addr[15] = 2;
+    eth0.addr6[1].metric = 40;
+    eth0.naddr6 = 2;
+    route6_address_update(&eth0, 0, a);
+    route6_address_update(&eth0, 0, &eth0.addr6[1]);
+    CHECK(route6_change_row(&eth0, &key, 1, 0) == 0);
+    CHECK(count_prefix(key.dst, 64, 0, 80) == 1 && count_prefix(key.dst, 64, 0, 40) == 0);
+    CHECK(route6_change_row(&eth0, &key, 1, 0) == 0);
+    CHECK(count_prefix(key.dst, 64, 0, 80) == 0);
+    CHECK(route6_change_row(&eth0, &key, 1, 0) == -ESRCH);
+    nd6_if_down(&eth0);
+}
+
+/** Remove explicit replacements for the subnet and peer routes. */
+static void remove_replaced_prefix(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row r = {0};
+    uint8_t via[16];
+    k_memset(a, 0, sizeof(*a));
+    a->addr[0] = 0x30;
+    a->peer[0] = 0x40;
+    a->prefix = 64;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    a->flags = NETDEV_A6_PERMANENT;
+    eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
+    k_memcpy(r.dst, a->addr, 16);
+    r.plen = 64;
+    r.metric = 256;
+    r.proto = 99;
+    CHECK(route6_change_row(&eth0, &r, 0, 1) == 0);
+    r.plen = 128;
+    k_memcpy(r.dst, a->peer, 16);
+    CHECK(route6_change_row(&eth0, &r, 0, 1) == 0);
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0);
+    CHECK(!route6_lookup(a->addr, eth0.index, via) && !route6_lookup(a->peer, eth0.index, via));
+}
+
 int main(void)
 {
     static const uint8_t dst[IP6_ADDR_LEN] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -389,6 +632,11 @@ int main(void)
      * is left alone. */
     CHECK(nd6_conf_set(ND6_CONF_DEFAULT, ND6_RA_DEFRTR_METRIC, 700) == 0);
     CHECK(nd6_conf_get(wlan0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 600);
+    route_lifetime();
+    finite_prefix();
+    change_peer();
+    delete_shared_prefix();
+    remove_replaced_prefix();
     CHECK(lock_depth == 0);
 
     if (failures) {

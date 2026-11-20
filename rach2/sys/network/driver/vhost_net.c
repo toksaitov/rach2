@@ -19,6 +19,7 @@
 #include "../../mm/paging.h"
 #include "../../mm/pin.h"
 #include "../../mm/usercopy.h"
+#include "../../proc/mutex.h"
 #include "../../proc/process.h"
 #include "../../proc/sched.h"
 #include "../../proc/smp.h"
@@ -39,7 +40,7 @@
 #define VN_TX      1
 #define VN_HDR_MAX 12   /* struct virtio_net_hdr_mrg_rxbuf */
 #define VN_BUDGET  128u /* frames of a transmit ring a pass takes */
-#define VN_TXBUF   (VN_HDR_MAX + ETH_HDR_SIZE + ETH_MTU)
+#define VN_TXBUF   (VN_HDR_MAX + TAP_PI + ETH_HDR_SIZE + ETH_MTU)
 #define VN_UNBIND  (-1) /* VHOST_FILE_UNBIND */
 
 /* One region of the guest's memory, as VHOST_SET_MEM_TABLE gives it, with
@@ -95,6 +96,11 @@ struct vnet {
     struct tap_backend tb; /* first: the tap's */
     struct vnet *next;     /* on `vn_devs` */
     struct spinlock lock;
+    /* Held across each request but the two that read the features, and
+     * across the last close, as Linux's `dev->mutex`, so that a request
+     * that sleeps, in a pin, a release or a wait for the thread's refill,
+     * lets no other request of the device run meanwhile. */
+    struct mutex mutex;
     struct mm *mm; /* the owner's, VHOST_SET_OWNER; compared, never used */
     uint64_t features;
     uint32_t hdr;          /* bytes of the virtio header before each frame */
@@ -1024,16 +1030,15 @@ fail:
  * a disk file among it, since the pins hold a page only until it changes
  * and a write-back's taking of write access is such a change. 0; -E2BIG for
  * more than VHOST_NET_REGIONS; -EFAULT for an unreadable table or a bad
- * region; -ENOMEM; each of which leaves the old table; -EPERM when a reset
- * took the owner meanwhile. A pin may sleep, letting the big lock go, so a
- * table that changed meanwhile, which `gen` tells, sends the call round
- * again; the old pins go once no refill of the thread's uses them.
- * Under the big lock.
+ * region; -ENOMEM; each of which leaves the old table. The old pins go once
+ * no refill of the thread's uses them. Under the big lock and the device's
+ * mutex, which keeps the table and the owner as they are while a pin
+ * sleeps.
  */
 static int32_t vn_set_mem(struct vnet *n, uintptr_t arg)
 {
     struct vn_region *reg, *old;
-    uint32_t head[2], flags, gen, nold;
+    uint32_t head[2], flags, nold;
     uint64_t fresh, gone;
     int32_t r;
 
@@ -1047,21 +1052,11 @@ static int32_t vn_set_mem(struct vnet *n, uintptr_t arg)
     if (!reg) {
         return -ENOMEM;
     }
-    do {
-        if (n->mm != current_proc->mm) {
-            kfree(reg);
-            return -EPERM;
-        }
-        gen = n->gen;
-        r = vn_pin_table(n, arg, head[0], reg, &fresh);
-        if (r != 0) {
-            kfree(reg);
-            return r;
-        }
-        if (n->gen != gen) {
-            vn_unpin(reg, head[0], fresh);
-        }
-    } while (n->gen != gen);
+    r = vn_pin_table(n, arg, head[0], reg, &fresh);
+    if (r != 0) {
+        kfree(reg);
+        return r;
+    }
     gone = vn_pins_but(n->reg, n->nreg, reg, head[0]);
     old = n->reg;
     nold = n->nreg;
@@ -1264,8 +1259,9 @@ static int32_t vn_set_kick(struct vn_vq *q, int32_t fd)
 }
 
 /** Stop every ring and let go of the tap, the eventfds, the descriptors
- * held and the pins, as Linux's vhost_dev_reset_owner. Under the big lock;
- * may sleep. */
+ * held, the pins and the owner, as Linux's vhost_dev_reset_owner. Under the
+ * big lock and the device's mutex, so that no request of the owner's other
+ * threads runs while a release or the wait for a refill sleeps; may sleep. */
 static void vn_reset(struct vnet *n)
 {
     struct vn_region *old;
@@ -1440,7 +1436,8 @@ static int32_t vn_set_features(struct vnet *n, uintptr_t arg)
     return 0;
 }
 
-/** The requests Linux answers whoever the caller: 1 for another. */
+/** The requests Linux answers whoever the caller: 1 for another. Under the
+ * device's mutex, but for the two that read the features. */
 static int32_t vn_ioctl_any(struct vnet *n, uint32_t req, uintptr_t arg)
 {
     uint64_t v = 0;
@@ -1469,28 +1466,10 @@ static int32_t vn_ioctl_any(struct vnet *n, uint32_t req, uintptr_t arg)
     }
 }
 
-/**
- * The descriptor's control, Linux's vhost-net ioctls: -EPERM from a caller
- * whose address space is not the owner's, as Linux's
- * vhost_dev_check_owner, -E2BIG, -ENOBUFS, -EBUSY, -EINVAL, -EOPNOTSUPP,
- * -ENOTSOCK and eventfd_get's errors as the requests' own functions say,
- * and -ENOTTY for another request. Under the big lock.
- */
-static int32_t vn_ioctl(fd_entry_t *e, uint32_t req, uintptr_t arg)
+/** The requests of the owner alone, as `vn_ioctl` says. Under the big lock
+ * and the device's mutex. */
+static int32_t vn_ioctl_owner(struct vnet *n, uint32_t req, uintptr_t arg)
 {
-    struct vnet *n = (struct vnet *)e->priv;
-    int32_t r;
-
-    if (!n) {
-        return -EBADFD;
-    }
-    r = vn_ioctl_any(n, req, arg);
-    if (r != 1) {
-        return r;
-    }
-    if (!n->mm || n->mm != current_proc->mm) {
-        return -EPERM;
-    }
     switch (req) {
     case VHOST_RESET_OWNER:
         vn_reset(n);
@@ -1515,6 +1494,40 @@ static int32_t vn_ioctl(fd_entry_t *e, uint32_t req, uintptr_t arg)
     }
 }
 
+/**
+ * The descriptor's control, Linux's vhost-net ioctls: -EPERM from a caller
+ * whose address space is not the owner's, as Linux's
+ * vhost_dev_check_owner, -E2BIG, -ENOBUFS, -EBUSY, -EINVAL, -EOPNOTSUPP,
+ * -ENOTSOCK and eventfd_get's errors as the requests' own functions say,
+ * and -ENOTTY for another request. Each request but the two that read the
+ * features runs under the device's mutex, as Linux's vhost_net_ioctl takes
+ * `dev->mutex`, so that one that sleeps, VHOST_RESET_OWNER waiting for the
+ * thread's refill among them, lets no other change the device midway.
+ * Under the big lock.
+ */
+static int32_t vn_ioctl(fd_entry_t *e, uint32_t req, uintptr_t arg)
+{
+    struct vnet *n = (struct vnet *)e->priv;
+    int32_t r;
+
+    if (!n) {
+        return -EBADFD;
+    }
+    if (req == VHOST_GET_FEATURES || req == VHOST_GET_BACKEND_FEATURES) {
+        return vn_ioctl_any(n, req, arg);
+    }
+    mutex_lock(&n->mutex);
+    r = vn_ioctl_any(n, req, arg);
+    if (r == 1 && (!n->mm || n->mm != current_proc->mm)) {
+        r = -EPERM;
+    }
+    if (r == 1) {
+        r = vn_ioctl_owner(n, req, arg);
+    }
+    mutex_unlock(&n->mutex);
+    return r;
+}
+
 /** An open: a device of its own. 0, or -ENOMEM. */
 static int32_t vn_open(struct devfs_node *node, struct fd_entry *e, int flags)
 {
@@ -1527,6 +1540,7 @@ static int32_t vn_open(struct devfs_node *node, struct fd_entry *e, int flags)
         return -ENOMEM;
     }
     spin_lock_init(&n->lock, "vnet");
+    mutex_init(&n->mutex, "vhost-net");
     n->tb.rx = vn_rx;
     n->tb.gone = vn_gone;
     n->holder.release = vn_release;
@@ -1541,8 +1555,9 @@ static int32_t vn_open(struct devfs_node *node, struct fd_entry *e, int flags)
     return 0;
 }
 
-/** The last close: the device stops and goes. Under the big lock, which
- * keeps the thread off the list. */
+/** The last close: the device stops and goes, once a request that sleeps
+ * has let the mutex go. Under the big lock, which keeps the thread off the
+ * list. */
 static void vn_close(fd_entry_t *e)
 {
     struct vnet *n = (struct vnet *)e->priv, **pp;
@@ -1551,7 +1566,9 @@ static void vn_close(fd_entry_t *e)
         return;
     }
     e->priv = 0;
+    mutex_lock(&n->mutex);
     vn_reset(n);
+    mutex_unlock(&n->mutex);
     for (pp = &vn_devs; *pp && *pp != n; pp = &(*pp)->next) {
     }
     if (*pp) {

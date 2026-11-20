@@ -338,9 +338,6 @@ static void if_set(struct netdev *nd, int key, int32_t value)
     }
     if (key == ND6_DISABLE_IPV6 && value) {
         forget_if(nd, 1);
-        while (nd->naddr6 > 0) {
-            netconf_del_address6(nd, nd->addr6[nd->naddr6 - 1].addr);
-        }
     } else if (key == ND6_DISABLE_IPV6) {
         if (nd->loopback) {
             netconf_add_address6(nd, ip6_loopback, 128, NETDEV_A6_PERMANENT,
@@ -356,8 +353,8 @@ static void if_set(struct netdev *nd, int key, int32_t value)
             netdev_join6(nd, all_routers);
             ni->rs_left = 0;
             for (i = 0; route6_at(i, &r);) {
-                if (r.ifindex == nd->index && r.proto == ROUTE6_PROTO_RA && r.plen == 0 &&
-                    ni->conf.v[ND6_ACCEPT_RA] != 2) {
+                if (r.ifindex == nd->index && r.learned && !ip6_is_unspecified(r.gw) &&
+                    r.plen == 0 && ni->conf.v[ND6_ACCEPT_RA] != 2) {
                     route6_learn(nd, r.dst, 0, r.gw, r.metric, 0);
                 } else {
                     i++;
@@ -459,12 +456,18 @@ uint32_t nd6_link_mtu(const struct netdev *nd)
 
 /* ---- Sending ---- */
 
-/** Put the link-layer address option of `type` for `nd` at `p`; 8 bytes. */
-static void put_lladdr(uint8_t *p, uint8_t type, const struct netdev *nd)
+/** Put the link-layer address option of `type` for `nd` at `p`: its 8
+ * bytes, or none on an interface of IP datagrams (`l3`), which has no
+ * address, as Linux's ndisc leaves the option out for an `addr_len` of 0. */
+static uint32_t put_lladdr(uint8_t *p, uint8_t type, const struct netdev *nd)
 {
+    if (nd->l3) {
+        return 0;
+    }
     p[0] = type;
     p[1] = 1;
     k_memcpy(p + 2, nd->mac, 6);
+    return 8;
 }
 
 /** A usable link-local address of `nd` into `out`: 1, or 0 for none. */
@@ -503,8 +506,9 @@ static void send_ns(struct netdev *nd, const uint8_t *target, const uint8_t *src
         ip6_solicited_node(target, dst);
     }
     if (src) {
-        put_lladdr(nd6_msg + 24, OPT_SLLA, nd);
-        icmp6_send_opts(src, dst, nd->index, nd6_msg, 32, 255, unicast ? IP6_TXF_ONLINK : 0);
+        icmp6_send_opts(src, dst, nd->index, nd6_msg,
+                        (uint16_t)(24 + put_lladdr(nd6_msg + 24, OPT_SLLA, nd)), 255,
+                        unicast ? IP6_TXF_ONLINK : 0);
         return;
     }
     nd6_msg[24] = OPT_NONCE;
@@ -531,8 +535,8 @@ static void send_na(struct netdev *nd, const uint8_t *target, const uint8_t *dst
         nd6_msg[4] |= NA_ROUTER;
     }
     k_memcpy(nd6_msg + 8, target, IP6_ADDR_LEN);
-    put_lladdr(nd6_msg + 24, OPT_TLLA, nd);
-    icmp6_send_opts(target, dst ? dst : ip6_all_nodes, nd->index, nd6_msg, 32, 255,
+    icmp6_send_opts(target, dst ? dst : ip6_all_nodes, nd->index, nd6_msg,
+                    (uint16_t)(24 + put_lladdr(nd6_msg + 24, OPT_TLLA, nd)), 255,
                     dst ? IP6_TXF_ONLINK : 0);
 }
 
@@ -541,8 +545,8 @@ static void send_rs(struct netdev *nd, const uint8_t *src)
 {
     k_memset(nd6_msg, 0, 16);
     nd6_msg[0] = ND6_ROUTER_SOLICIT;
-    put_lladdr(nd6_msg + 8, OPT_SLLA, nd);
-    icmp6_send_opts(src, all_routers, nd->index, nd6_msg, 16, 255, 0);
+    icmp6_send_opts(src, all_routers, nd->index, nd6_msg,
+                    (uint16_t)(8 + put_lladdr(nd6_msg + 8, OPT_SLLA, nd)), 255, 0);
 }
 
 /* ---- The neighbour cache ---- */
@@ -775,7 +779,7 @@ int nd6_output_whole(struct netdev *out, const uint8_t *hop, const uint8_t *hdr,
     uint8_t *copy;
 
     *held = 0;
-    if (usable(e)) {
+    if (out->l3 || usable(e)) {
         return 0;
     }
     *held = 1;
@@ -907,6 +911,24 @@ static int make_address(const struct netdev *nd, const uint8_t *prefix, uint8_t 
     }
 }
 
+void nd6_random_link_local(struct netdev *nd, uint8_t *ll)
+{
+    static const uint8_t fe80[8] = {0xfe, 0x80, 0, 0, 0, 0, 0, 0};
+    struct nd6_if *ni = if_of(nd);
+    uint8_t count = 0;
+
+    if (!ni) {
+        k_memcpy(ll, fe80, 8);
+        nd6_random(ll + 8, 8);
+        return;
+    }
+    if (!ni->conf.secret_set) {
+        nd6_random(ni->conf.secret, sizeof(ni->conf.secret));
+        ni->conf.secret_set = 1;
+    }
+    (void)make_address(nd, fe80, &count, ll);
+}
+
 /** Seconds since the address `a` was given or last renewed, held at
  * 2^32 - 2, short of NETDEV_LIFETIME_FOREVER. */
 static uint32_t age(const struct netdev_addr6 *a)
@@ -931,7 +953,7 @@ static uint32_t left(const struct netdev_addr6 *a, uint32_t life)
  * Give `nd` the address `addr`/64 made from a router advertisement, with
  * the lifetimes `valid` and `preferred`, its DAD_Counter `count`, and
  * NETDEV_A6_TEMPORARY in `temp` for a temporary one. Returns 0 or the
- * error of `netconf_add_address6`.
+ * error of `netconf_insert_address6`.
  */
 static int add_auto(struct netdev *nd, const uint8_t *addr, uint32_t valid, uint32_t preferred,
                     uint8_t count, int temp)
@@ -939,7 +961,7 @@ static int add_auto(struct netdev *nd, const uint8_t *addr, uint32_t valid, uint
     struct netdev_addr6 *a;
     int rc;
 
-    rc = netconf_add_address6(nd, addr, 64, 0, valid, preferred);
+    rc = netconf_insert_address6(nd, addr, 64, 0, valid, preferred);
     if (rc != 0) {
         return rc;
     }
@@ -1405,13 +1427,14 @@ static void solicit_routers(struct netdev *nd, struct nd6_if *ni)
 
 /**
  * The tentative addresses, and on a card that went down every address
- * that may be detected, detect again.
+ * that may be detected, detect again; none on an interface of IP datagrams
+ * (`l3`), which Linux's addrconf_dad_begin skips as IFF_NOARP.
  */
 static void redetect(struct netdev *nd, int all)
 {
     int i;
 
-    for (i = 0; i < nd->naddr6; i++) {
+    for (i = 0; i < nd->naddr6 && !nd->l3; i++) {
         struct netdev_addr6 *a = &nd->addr6[i];
 
         if (a->flags & (NETDEV_A6_NODAD | NETDEV_A6_DADFAILED)) {
@@ -1445,12 +1468,9 @@ void nd6_if_up(struct netdev *nd)
     net_unlock(lock);
 }
 
-/**
- * Forget what `nd` learned from its link: its neighbours and the datagrams
- * waiting for them, its routers' routes and settings, and the addresses
- * they made; with `stop`, discovery stops until `nd6_if_up` starts it
- * again. The caller holds no lock, or net_lock.
- */
+/** Drop nonpermanent neighbours and datagrams waiting on the link.
+ * Administrative shutdown also removes addresses, routes and router state.
+ * The caller may hold net_lock. */
 static void forget_if(struct netdev *nd, int stop)
 {
     struct nd6_if *ni = if_of(nd);
@@ -1467,17 +1487,19 @@ static void forget_if(struct netdev *nd, int stop)
             cache6[i].nd = 0;
         }
     }
-    route6_forget(nd, ROUTE6_PROTO_RA);
+    if (!stop) {
+        net_unlock(lock);
+        return;
+    }
     if (ni) {
-        ni->started = (uint8_t)(ni->started && !stop);
+        ni->started = 0;
         ni->rs_left = 0;
         if_defaults(ni);
     }
     for (i = nd->naddr6 - 1; i >= 0; i--) {
-        if (i < nd->naddr6 && nd->addr6[i].proto == NETDEV_PROTO_KERNEL_RA) {
-            netconf_del_address6(nd, nd->addr6[i].addr);
-        }
+        netconf_del_address6(nd, nd->addr6[i].addr);
     }
+    route6_forget(nd, -1);
     net_unlock(lock);
 }
 
@@ -1588,17 +1610,14 @@ static void dad_timers(struct netdev *nd)
             send_ns(nd, a->addr, 0, 0);
         } else {
             a->flags &= (uint8_t)~NETDEV_A6_TENTATIVE;
+            a->local_route_deleted = 0;
+            route6_address_ready(nd, a);
         }
     }
 }
 
-/**
- * A card's timers: a link that went down forgets what it learned from its
- * routers, as a card taken down does, since the link that comes back may be
- * another network, and one that came back detects its addresses and
- * solicits routers again, as Linux does on a carrier change; then the
- * tentative addresses, the router solicitations and the lifetimes.
- */
+/** Drop unresolved neighbours on carrier loss. Keep addresses and routes
+ * until their own lifetimes end or the device is taken down. */
 static void if_timers(struct netdev *nd, struct nd6_if *ni)
 {
     uint8_t ll[IP6_ADDR_LEN];
@@ -1607,7 +1626,7 @@ static void if_timers(struct netdev *nd, struct nd6_if *ni)
     if (!running && ni->running) {
         forget_if(nd, 0);
     } else if (running && !ni->running) {
-        redetect(nd, 1);
+        redetect(nd, 0);
         solicit_routers(nd, ni);
     }
     ni->running = (uint8_t)running;
