@@ -54,7 +54,8 @@
  * QEMU does; two devices, both bound, the line on the second; each
  * allocation failing in turn, and every one from it on; a third port added
  * and removed through the control queue, with its nodes; a generic port's
- * vport node read, written and polled with the host's end open and closed;
+ * vport node read, written and polled with the host's end open and closed,
+ * and opened again after its pages came back with no interrupt;
  * a second console port's hvc terminal; a console port added late on a
  * machine without a UART, given the log's ring then; the emergency write
  * of early output and of a panic on the second device; a device that
@@ -2287,6 +2288,53 @@ static void vport(void)
 }
 
 /**
+ * A vport closed while the device holds every page, which the host's end
+ * returns while the closed port's transmit queue asks for no interrupt:
+ * the open again takes the pages back, as Linux's port_fops_open reclaims
+ * them, so that poll finds room and a write goes out, though no transmit
+ * interrupt comes. The row raises no interrupt after the host's taking,
+ * as a dedicated vector would give none.
+ */
+static void vport_reopen(void)
+{
+    struct devfs_node *n;
+    struct open_file ofd;
+    struct wait_queue *wq = 0;
+    fd_entry_t e;
+
+    fresh("console=hvc0", MULTI | UART);
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    n = node("vport0p1");
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    e.ofd = &ofd;
+    ofd.status_flags = OFD_NONBLOCK;
+    check(n && n->open(n, &e, 0) == 0, "the generic port opens");
+    irq();
+    m.port[1].throttled = 1;
+    fill(0, 4096);
+    check(vcon_vport_ops.write(&e, (const char *)big, 4096) == 2048 &&
+              vcon_tx_busy(P(1)) == VCON_TX_BUFS && vcon_vport_ops.poll(&e, POLLOUT, &wq) == 0,
+          "a host's end that takes nothing leaves the device every page, and no room");
+    vcon_vport_ops.close(&e);
+    irq();
+    check(P(1)->tx_irq == 0, "the close asks the transmit queue for no interrupt");
+    m.port[1].throttled = 0;
+    model_tx();
+    check(m.port[1].nout == 2048 && vcon_tx_busy(P(1)) == VCON_TX_BUFS,
+          "the host's end takes the pages, and no interrupt tells the driver");
+    check(n->open(n, &e, 0) == 0 && vcon_tx_busy(P(1)) == 0,
+          "the open again takes back the pages the device returned");
+    check(vcon_vport_ops.poll(&e, POLLOUT, &wq) == POLLOUT,
+          "poll finds room on the port opened again");
+    m.port[1].nout = 0;
+    check(vcon_vport_ops.write(&e, "again", 5) == 5 && host_read(1, "again"),
+          "and a write goes out");
+    vcon_vport_ops.close(&e);
+}
+
+/**
  * A console port that is not the console's line is an hvc terminal of its
  * own, as Linux's hvc tty: /dev/hvc1, 229:1, opens the pair's slave; what
  * the host writes goes to the slave's discipline, held while it is full;
@@ -2715,6 +2763,7 @@ int main(void)
         no_memory();
         third_port();
         vport();
+        vport_reopen();
         hvc_tty();
         late_console();
         emergency();
