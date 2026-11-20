@@ -949,9 +949,45 @@ static void rows_exec(void)
     }
 }
 
+/** The rows of noexec on /dev/zero, which maps as anonymous memory. Through
+ * a bind of /dev remounted noexec, an executable private mapping is EPERM
+ * and mprotect refuses execute to a readable private or shared mapping with
+ * EACCES, as Linux's mmap clears VM_MAYEXEC before /dev/zero's own mmap
+ * runs; through /dev, which is executable, mprotect gives it to either. */
+static void rows_zero_exec(void)
+{
+    long fd;
+
+    if (syscall5(SYS_MOUNT, (long)"/dev", (long)mnt, 0, MS_BIND, 0) != 0 ||
+        syscall5(SYS_MOUNT, 0, (long)mnt, 0, MS_REMOUNT | MS_BIND | MS_NOEXEC, 0) != 0) {
+        fail("a bind of /dev remounted noexec");
+    }
+    fd = syscall3(SYS_OPEN, (long)in_mnt("/zero"), O_RDONLY, 0);
+    if (fd < 0 || probe_mmap(0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0) != -EPERM) {
+        fail("an executable mapping of /dev/zero on a noexec mount is EPERM");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (map_then_exec(in_mnt("/zero"), MAP_PRIVATE, "a private mapping of a noexec /dev/zero") !=
+        -EACCES) {
+        fail("mprotect execute of a private mapping of /dev/zero on a noexec mount is EACCES");
+    }
+    if (map_then_exec(in_mnt("/zero"), MAP_SHARED, "a shared mapping of a noexec /dev/zero") !=
+        -EACCES) {
+        fail("mprotect execute of a shared mapping of /dev/zero on a noexec mount is EACCES");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
+        fail("umount2 of the bind of /dev");
+    }
+    if (map_then_exec("/dev/zero", MAP_PRIVATE, "a private mapping of /dev/zero") != 0 ||
+        map_then_exec("/dev/zero", MAP_SHARED, "a shared mapping of /dev/zero") != 0) {
+        fail("mprotect execute of a mapping of /dev/zero on an executable mount");
+    }
+}
+
 /** The rows of umount2's flags and the permanent mounts, an unprivileged
- * caller, noexec and a program run from the mount (`rows_exec`), and a
- * target too long for the mount's record, which claims nothing. MNT_DETACH
+ * caller, noexec and a program run from the mount (`rows_exec`) and on
+ * /dev/zero (`rows_zero_exec`), and a target too long for the mount's
+ * record, which claims nothing. MNT_DETACH
  * takes a mount with two files open from view, and their last close
  * unmounts it; the two keep its record apart from the one `rows_record`
  * looks for. */
@@ -1005,6 +1041,7 @@ static void rows_flags(void)
         fail("umount2 before the noexec rows");
     }
     rows_exec();
+    rows_zero_exec();
     row_long_target();
 }
 
