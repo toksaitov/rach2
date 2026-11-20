@@ -333,6 +333,16 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
                PCI_IORESOURCE_SIZEALIGN;
 }
 
+/** A BAR is claimed when the walk sized it and it has an address: this
+ * bus's BARs lie on no fixed port and over no other. */
+int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i)
+{
+    struct pci_resource r;
+
+    pci_resource(bus, device, function, i, &r);
+    return r.flags != 0 && r.start != 0 ? 0 : -EINVAL;
+}
+
 /** The function's power state, or -1 with no power management. */
 int pci_power_state(const pci_device_t *dev)
 {
@@ -2218,6 +2228,33 @@ static void msix_power_rows(int xhci)
     CHECK(evs[4].count == 2, "the restored MSI-X entry reaches its original eventfd");
 }
 
+/** An I/O BAR the firmware left without an address, BAR 4 of the xHCI,
+ * which would decode ports 0 to 255: neither exposed nor decoded. */
+static void unassigned_io_rows(int xhci)
+{
+    struct vfio_region_info ri;
+    uint8_t b[4] = {0xAA, 0xAA, 0xAA, 0xAA};
+    uint16_t w = 0x0007;
+    int32_t rd, wr;
+    int i, untouched = 1;
+
+    ri.argsz = sizeof(ri);
+    ri.index = 4;
+    CHECK(ioc(xhci, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == 0 && ri.size == 0 &&
+              ri.flags == 0,
+          "an unassigned I/O BAR is no region");
+    rd = pread_at(xhci, (4ull << 40) + 0x20, b, 1);
+    wr = pwrite_at(xhci, (4ull << 40) + 0x40, b, 4);
+    CHECK(rd == -EINVAL && wr == -EINVAL, "and reads and writes no port");
+    for (i = 0; i < 256; i++) {
+        untouched = untouched && ports[i] == 0;
+    }
+    CHECK(untouched, "the host's ports 0 to 255 are not reached");
+    CHECK((fns[2].cfg[4] & 0x01) == 0, "the open turns its I/O decoding off");
+    CHECK(pwrite_at(xhci, (7ull << 40) + 4, &w, 2) == 2 && (fns[2].cfg[4] & 0x07) == 0x06,
+          "and the owner cannot turn it on");
+}
+
 /** MSI-X on the xHCI, entry by entry. */
 static void msix_rows(void)
 {
@@ -2227,8 +2264,11 @@ static void msix_rows(void)
 
     g2 = open_node("vfio/2");
     CHECK(ioc(g2, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&g2fd) == 0, "the xHCI's group");
+    add_bar(&fns[2], 4, 0, 256, 1, 0); /* ports the firmware left unassigned */
+    fns[2].cfg[4] |= 0x01;
     xhci = ioc(g2, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0");
     CHECK(xhci > 0, "the xHCI opens");
+    unassigned_io_rows(xhci);
     CHECK(set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 0, 4, fd) == 0 &&
               msix_vectors[0] >= 48 && msix_vectors[1] >= 48 && msix_vectors[2] == -1 &&
               msix_vectors[3] >= 48 && msix_unmasks == 1 && windows == 1,

@@ -93,6 +93,7 @@ struct vfio_device {
     uint64_t bar_phys[6];
     uint64_t bar_size[6]; /* 0 for none, and the upper half of a 64-bit BAR */
     int bar_io[6];
+    int io_off;           /* an I/O BAR is not claimed: I/O decoding stays off */
     uint32_t vbar[6];     /* the BARs as the owner wrote them */
     uint8_t bar_flags[6]; /* the low bits of each BAR, its kind */
     uint32_t vrom;
