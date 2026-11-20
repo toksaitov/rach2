@@ -22,10 +22,11 @@ int net_addr_local(net_addr_t addr)
 /* Whether the model's card reports its link down. */
 static int link_down;
 
-/** Report the model card's link, whatever the destination. */
-int net_addr_link_down(net_addr_t dst)
+/** Report the model card's link, whatever the destination and binding. */
+int net_addr_link_down(net_addr_t dst, int ifindex)
 {
     (void)dst;
+    (void)ifindex;
     return link_down;
 }
 
@@ -79,12 +80,28 @@ uint32_t nd6_link_mtu(const struct netdev *nd)
  * Ethernet's MTU. */
 static struct netdev model_card;
 
-/** Route every IPv4 destination by the model card, to itself. */
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+/** Route every IPv4 destination by the model card, to itself, whatever
+ * card a binding names. */
+struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
 {
+    (void)ifindex;
     model_card.mtu = 1500;
     *via = dst;
     return &model_card;
+}
+
+/* The card the segment being delivered came by: none, since the model's
+ * segments come off no card, which every binding takes. */
+int ip_rx_ifindex;
+
+/** Send as the test's `ip_tx_from` does: the model has one card, so the
+ * binding and the path MTU discovery mode change nothing. */
+int ip_tx_opts(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,
+               uint8_t ttl, int pmtudisc, int ifindex)
+{
+    (void)pmtudisc;
+    (void)ifindex;
+    return ip_tx_from(src, dst, proto, payload, len, ttl);
 }
 
 /** Report no card address as this machine's beyond what `ip_is_local`
