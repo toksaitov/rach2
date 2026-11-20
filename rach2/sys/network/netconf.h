@@ -141,7 +141,7 @@ int netconf_is_broadcast(uint32_t ip);
  * Takes `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface, EINVAL as
- *         above.
+ *         above, or EEXIST when reinsertion finds the replacement present.
  */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask);
 

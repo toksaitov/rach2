@@ -316,6 +316,8 @@ static void iface_reset(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 {
     nd->up = 1;
     nd->index = nd == &the_iface ? 1 : 2;
+    nd->naddr2 = 0;
+    nd->peer = 0;
     nd->ip = ip;
     nd->mask = mask;
     nd->gateway = gw;
@@ -602,6 +604,51 @@ static void route_lifetime(int l3)
     nd->l3 = 0;
 }
 
+/** Reinsert each ioctl replacement behind the surviving primary. */
+static void ioctl_reinsert(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t ip = IP4(192, 0, 2, 1), keep = IP4(198, 51, 100, 1), mask = 0xffffff00u;
+    uint32_t brd = IP4(198, 51, 100, 252);
+    int op;
+    for (op = 0; op < 4; op++) {
+        uint32_t old = op == 2 ? keep + 1 : ip;
+        uint32_t next = op == 0 ? keep + 1 : old;
+        conf_reset();
+        CHECK(netconf_add_address(nd, old, op == 2 ? ~0u : mask, 0) == 0 &&
+                  netconf_add_address(nd, keep, mask, 0) == 0,
+              "configure two primary addresses");
+        nd->addr4[0].metric = 23;
+        if (op == 0)
+            CHECK(netconf_set_address(nd, next, 0) == 0, "replace the first address");
+        else if (op == 1)
+            CHECK(netconf_set_peer(nd, keep + 2) == 0, "replace the peer");
+        else if (op == 2)
+            CHECK(netconf_set_netmask(nd, mask) == 0, "replace the mask");
+        else
+            CHECK(netconf_set_broadcast(nd, brd) == 0, "replace the broadcast");
+        CHECK(nd->ip == keep && nd->naddr2 == 1 && nd->ip2[0] == next &&
+                  netdev_secondary(nd, 0) == (op != 3) && nd->addr4[1].metric == 23,
+              "the surviving primary remains first and each address keeps its attributes");
+        CHECK(op != 3 || netdev_addr_brd(nd, 0) == brd, "the new broadcast follows its address");
+        CHECK(netconf_del_address(nd, next, 0, 0) == 0 && nd->ip == keep &&
+                  netdev_has_link_route(nd, keep & mask, mask),
+              "deleting the replacement keeps the surviving primary and route");
+    }
+}
+
+/** A duplicate replacement leaves only the existing address. */
+static void ioctl_duplicate(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t ip = IP4(192, 0, 2, 1), keep = IP4(198, 51, 100, 1), mask = 0xffffff00u;
+    conf_reset();
+    CHECK(!netconf_add_address(nd, ip, mask, 0) && !netconf_add_address(nd, keep, mask, 0),
+          "configure distinct prefixes");
+    CHECK(netconf_set_address(nd, keep, 0) == -EEXIST && nd->ip == keep && !nd->naddr2,
+          "the old address is gone when reinsertion finds a duplicate");
+}
+
 /** Count a generated or explicit local-table row with its preferred source. */
 static int local_row(uint32_t dst, int kind, uint32_t src)
 {
@@ -632,7 +679,8 @@ static void local_lifetime(void)
     CHECK(netconf_set_broadcast(nd, other + 2) == 0 &&
               local_row(other + 2, NETDEV_RT_BROADCAST, ip) && nd->naddr2 == 1,
           "a custom broadcast is installed");
-    CHECK(netconf_set_netmask(nd, 0xffff0000u) == 0 && netdev_addr_brd(nd, -1) == other + 2,
+    CHECK(netconf_set_netmask(nd, 0xffff0000u) == 0 && nd->ip == ip &&
+              netconf_set_netmask(nd, 0xffff0000u) == 0 && netdev_addr_brd(nd, 0) == other + 2,
           "a mask change preserves a custom broadcast");
     r.dst = 0xac100001u;
     r.mask = ~0u;
@@ -728,6 +776,8 @@ int main(void)
     secondary_address_change();
     route_lifetime(0);
     route_lifetime(1);
+    ioctl_reinsert();
+    ioctl_duplicate();
     local_lifetime();
     timed_address();
     narrow_subnets();
