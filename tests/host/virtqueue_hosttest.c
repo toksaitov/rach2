@@ -711,8 +711,8 @@ static void stuck_reset(void)
 
 /**
  * A device on the legacy interface: 32 feature bits settled without
- * FEATURES_OK, and queues of the size the device states, up to
- * VIRTQ_LEGACY_MAX, whose device's ring begins on a page.
+ * FEATURES_OK, and queues of the size the device states, any power of two,
+ * whose device's ring begins on a page.
  */
 static void legacy(void)
 {
@@ -739,13 +739,16 @@ static void legacy(void)
     check(vq->avail_addr == vq->desc_addr + 4096u && vq->used_addr == vq->desc_addr + 8192u &&
               vq->ring_bytes == 8192u + 6u + 8u * 256u && m.q[0].size == 256,
           "its device's ring begins on the page after the driver's, as the legacy layout asks");
-    check(virtio_queue_setup(d, 1, done, 0, &spare) == -EINVAL &&
-              virtio_queue_setup(d, 2, done, 0, &spare) == -EINVAL && !d->queues[1] &&
-              !d->queues[2],
-          "a legacy queue of 100 or of 2048 is refused, as its size cannot be changed");
+    check(virtio_queue_setup(d, 1, done, 0, &spare) == -EINVAL && !d->queues[1],
+          "a legacy queue of 100 is refused, as its size cannot be changed");
     check(virtio_queue_setup(d, 3, done, 0, &spare) == 0 && spare->size == 1024 &&
               spare->used_addr == spare->desc_addr + 20480u,
           "a legacy queue of 1024 is taken, in eight pages");
+    spare = 0;
+    check(virtio_queue_setup(d, 2, done, 0, &spare) == 0 && spare && spare->size == 2048 &&
+              spare->used_addr == spare->desc_addr + 40960u &&
+              spare->ring_bytes == 40960u + 6u + 8u * 2048u && m.q[2].size == 2048,
+          "a legacy queue of 2048 is taken, in fifteen pages, as Linux takes any power of two");
     data = (uint8_t *)virtio_dma_alloc(d, 4096, &data_addr);
     virtio_ready(d);
     ndone = 0;
