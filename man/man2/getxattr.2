@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt GETXATTR 2
 .Os
 .Sh NAME
@@ -24,7 +24,8 @@ The ext2 file system stores attributes whose names begin with
 .Li user.
 on regular files and directories; all names, values and their format
 overhead must fit one file-system block, and other namespaces fail with
-.Er EOPNOTSUPP .
+.Er EOPNOTSUPP ,
+but for the POSIX ACLs below.
 A tmpfs keeps, in memory, attributes whose names begin with
 .Li user. ,
 .Li trusted.
@@ -97,6 +98,39 @@ A successful change updates the change time and reports
 .Dv IN_ATTRIB
 to inotify.
 .Pp
+On an ext2 mount with POSIX ACLs, the names
+.Li system.posix_acl_access
+and
+.Li system.posix_acl_default
+are a file's access ACL and a directory's default ACL, in the form
+.Li setfacl
+writes: a 4-byte version, 2, then for each entry a 2-byte tag, 2-byte
+permissions and a 4-byte id, little-endian, the id of a named user or group
+in the caller's user namespace.
+Every kind of file but a symbolic link keeps them, and
+.Fn listxattr
+names the ones a file has.
+Anyone may read them.
+Only the file's owner or a caller with
+.Dv CAP_FOWNER
+may set or remove one, which is otherwise
+.Er EPERM ;
+the flags are not read, an empty value removes the ACL, and removing an ACL
+the file does not have succeeds.
+An ACL whose entries are not in the order owner, named users, group, named
+groups, mask, others, or that has a named entry and no mask, fails with
+.Er EINVAL ,
+and a value of another version with
+.Er EOPNOTSUPP .
+A default ACL on anything but a directory fails with
+.Er EACCES .
+Setting an access ACL sets the file's group permission bits to its mask's,
+or, for an ACL the mode can say whole, sets the mode and keeps no ACL.
+The access ACL then decides access for anyone but the owner, and a new file
+takes its directory's default ACL in place of the umask.
+On a symbolic link, or a mount without ACLs, both names fail with
+.Er EOPNOTSUPP .
+.Pp
 Each call first finds the file, so a path that names nothing fails as it
 would for
 .Xr stat 2 .
@@ -147,7 +181,7 @@ is not a directory.
 .It Bq Er EOPNOTSUPP
 The file system or namespace stores no extended attributes.
 .It Bq Er EINVAL
-Unknown flags, or an empty name after a namespace's prefix.
+Unknown flags, an empty name after a namespace's prefix, or a malformed ACL.
 .It Bq Er ENODATA
 The requested attribute does not exist.
 .It Bq Er EEXIST
@@ -160,9 +194,10 @@ A set value exceeds 65536 bytes.
 .It Bq Er ENOSPC
 The attributes do not fit a block, or no free block holds a new or shared-block replacement, on ext2; or a tmpfs has no inode space left for the value.
 .It Bq Er EACCES
-The file's permissions deny the operation.
+The file's permissions deny the operation, or a default ACL is set on a file
+that is not a directory.
 .It Bq Er EPERM
-The file's type, sticky bit or inode flags forbid the change, or a caller without privilege changes a trusted or security attribute.
+The file's type, sticky bit or inode flags forbid the change, a caller without privilege changes a trusted or security attribute, or a caller who neither owns the file nor holds CAP_FOWNER changes its ACL.
 .It Bq Er EROFS
 The mount is read-only.
 .It Bq Er EIO
