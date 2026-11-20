@@ -4,7 +4,9 @@
  * ring filled in the sender's context and the transmit ring taken by the
  * thread's pass, a page the pin does not hold brought in by the thread
  * while the frame waits, and the descriptors the device holds, with the
- * tap, the eventfds, the pins and the guest's memory stood in for.
+ * tap, the eventfds, the pins and the guest's memory stood in for, and
+ * another thread's request while VHOST_RESET_OWNER waits for the thread's
+ * refill.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -403,19 +405,67 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     k.wakes++;
 }
 
-/** No one waits for a refill: the rows make none that sleeps. */
+/** Nothing to wake: a wait for a refill returns once its row is done. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
-/** Not reached: the rows run the thread's passes themselves. */
+/* A request another thread makes while a wait sleeps, a row's, and where a
+ * take of a held mutex goes back to: the wait's hook, as another thread
+ * that blocks gives the processor back. */
+static struct {
+    void (*hook)(void);
+    void *jump[5];
+    int in_hook, blocked;
+} other;
+
+/** A wait for a refill: the hook a row set runs once, as another thread
+ * runs while this one sleeps; then the refill ends and the wait with it. */
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    void (*hook)(void) = other.hook;
+
     (void)wq;
-    (void)cond;
-    (void)arg;
-    return 0;
+    other.hook = 0;
+    if (hook) {
+        other.in_hook = 1;
+        if (__builtin_setjmp(other.jump) == 0) {
+            hook();
+        } else {
+            other.blocked = 1;
+        }
+        other.in_hook = 0;
+    }
+    ((struct vnet *)arg)->refilling = 0;
+    return cond(arg) ? 0 : -EINTR;
+}
+
+/** Make `m` free. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = 0;
+}
+
+/** Take `m`. A take of a held one in another thread's request goes back
+ * to the wait that ran it, as that thread would sleep until the holder lets
+ * it go; any other is a fault of the device's. */
+void mutex_lock(struct mutex *m)
+{
+    if (m->owner && other.in_hook) {
+        __builtin_longjmp(other.jump, 1);
+    }
+    CHECK(!m->owner, "a mutex the one thread holds is not taken again");
+    m->owner = 1;
+}
+
+/** Give `m` back. */
+void mutex_unlock(struct mutex *m)
+{
+    CHECK(m->owner, "a mutex let go is held");
+    m->owner = 0;
 }
 
 /** Not reached. */
@@ -979,6 +1029,44 @@ static void test_refill(void)
     vn_ops.close(&e);
 }
 
+static fd_entry_t race_e;
+static int32_t race_r;
+
+/** Another thread of the owner's sets a memory table. */
+static void race_table(void)
+{
+    race_r = mem_table(&race_e, 1, 0);
+}
+
+/** VHOST_RESET_OWNER while the thread's refill sleeps, with another thread
+ * of the owner's setting a memory table meanwhile: the table waits for the
+ * reset, as Linux's device mutex makes it, and then finds no owner, so no
+ * table of the old owner's is left for the next. */
+static void test_reset_race(void)
+{
+    struct vnet *n;
+    int made;
+
+    printf("reset race\n");
+    ready(&race_e);
+    n = (struct vnet *)race_e.priv;
+    n->refilling = 1;
+    other.hook = race_table;
+    other.blocked = 0;
+    race_r = 1;
+    made = k.pins_made;
+    CHECK(ioc(&race_e, VHOST_RESET_OWNER, 0) == 0, "the reset");
+    CHECK(other.blocked && race_r == 1 && k.pins_made == made,
+          "a table set while the reset waits for the refill waits for the reset");
+    CHECK(n->reg == 0 && n->nreg == 0 && n->mm == 0, "the reset leaves no table and no owner");
+    CHECK(mem_table(&race_e, 1, 0) == -EPERM && n->reg == 0,
+          "and the table, run once the reset ends, is refused, as the owner has gone");
+    CHECK(ioc(&race_e, VHOST_SET_OWNER, 0) == 0 && n->reg == 0,
+          "so the next owner finds no table of the last one's");
+    vn_ops.close(&race_e);
+    CHECK(k.pins_made == k.pins_freed, "every pin let go");
+}
+
 /** Start the device and run the rows. */
 int main(void)
 {
@@ -999,6 +1087,7 @@ int main(void)
     test_transmit();
     test_teardown();
     test_refill();
+    test_reset_race();
     printf("%d failed\n", fails);
     return fails > 255 ? 255 : fails;
 }
