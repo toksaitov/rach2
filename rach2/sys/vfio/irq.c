@@ -281,10 +281,13 @@ static int32_t intx_enable(struct vfio_device *d, int32_t fd)
     return 0;
 }
 
-/** Give back the vector of the interrupt `q` and drop its eventfd. */
+/** Give back the vector of the interrupt `q`, whose message the caller has
+ * turned off, once a message sent before then has signalled its eventfd
+ * (`isr_vector_sync`), as Linux's free_irq; then drop the eventfd. */
 static void vector_drop(struct vfio_irq *q)
 {
     if (q->vector >= 0) {
+        isr_vector_sync(q->vector);
         vector_irq[q->vector] = NULL;
         isr_free_vector(q->vector);
     }

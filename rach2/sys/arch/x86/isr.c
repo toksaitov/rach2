@@ -5,6 +5,7 @@
  * pair or the I/O APIC.
  */
 
+#include "../arch.h"
 #include "apictimer.h"
 #include "smpboot.h"
 #include "../../pci.h"
@@ -1560,6 +1561,19 @@ int isr_vector_pending(int vector)
         }
     }
     return 0;
+}
+
+void isr_vector_sync(int vector)
+{
+    uint32_t flags;
+
+    while (isr_vector_pending(vector)) {
+        flags = kirq_save();
+        bkl_yield();
+        arch_irq_enable(); /* a message pending at this processor is taken here */
+        arch_relax();
+        kirq_restore(flags);
+    }
 }
 
 uint32_t isr_spurious_count(void)
