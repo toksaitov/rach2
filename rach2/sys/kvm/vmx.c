@@ -3306,10 +3306,9 @@ static void vmx_inject(struct kvm_vcpu *v)
  * already passed in the same way (lapic.c:2167-2178). Every other exit,
  * and these under the caller's single step, while an event was under
  * delivery, or for a WRMSR the MSR filter denies, is `exit`'s; so is the
- * preemption timer's expiry when the PIT's or a Hyper-V synthetic timer's
- * time has come (`kvm_lapic_other_due`), which bounds the run too and
- * which only the run loop delivers: entered again here, the guest would
- * exit at once on a timer of 0, ahead of the host's interrupts, for ever.
+ * preemption timer's expiry when a PIT, Hyper-V or Xen deadline is due
+ * (`kvm_lapic_other_due`), which only the run loop handles. Entered again
+ * here, the guest would exit at once on a timer of 0.
  */
 static int vmx_fast(struct kvm_vcpu *v)
 {
