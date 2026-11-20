@@ -1496,7 +1496,7 @@ int main(void)
         unsigned char frame[20];
         unsigned char dirty = 0xAA;
 
-        for (i = 0; i < sizeof(r8168_tx_buf[1]); i++) {
+        for (i = 0; i < R8168_FRAME_MAX; i++) {
             r8168_tx_buf[1][i] = dirty;
         }
         for (i = 0; i < sizeof(frame); i++) {
