@@ -2649,6 +2649,12 @@ The text of
 .Pa /proc/mounts
 for the process: the mounts its mount namespace sees, with each target
 from its root, as Linux gives them.
+The open takes the namespace and the root and holds them until the last
+close, as Linux does, so a reread from offset 0 lists the same namespace
+from the same root after the process has called
+.Xr unshare 2 ,
+changed its root or ended.
+An open answers
 .Er ENOENT
 once the process has ended.
 .It Pa /proc/PID/mountinfo

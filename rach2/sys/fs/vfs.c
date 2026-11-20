@@ -7648,18 +7648,28 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
     if (mnt && mnt == mounts[0] && node == mnt->root) {
         mnt = 0;
     }
-    if (mnt) {
-        if (mnt->type->ops->hold) {
-            mnt->type->ops->hold(mount_base(mnt), node);
-        }
-        vfs_mount_get(mnt);
-    }
+    vfs_place_hold(mnt, node);
     flags = spin_lock_irqsave(&p->fs->lock);
     p->fs->root_mnt = mnt;
     p->fs->root_node = mnt ? node : 0;
     p->fs->root_seq++;
     spin_unlock_irqrestore(&p->fs->lock, flags);
     hold_release(was, was_node);
+}
+
+void vfs_place_hold(struct vfs_mount *mnt, void *node)
+{
+    if (mnt) {
+        if (mnt->type->ops->hold) {
+            mnt->type->ops->hold(mount_base(mnt), node);
+        }
+        vfs_mount_get(mnt);
+    }
+}
+
+void vfs_place_release(struct vfs_mount *mnt, void *node)
+{
+    hold_release(mnt, node);
 }
 
 void vfs_root_copy(struct process *child, const struct process *parent)

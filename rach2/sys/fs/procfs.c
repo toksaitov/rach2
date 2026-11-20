@@ -314,6 +314,18 @@ static const char *procfs_kind_name(const struct vpath *vp)
  * the entry of a /proc/sys file, and the key of a /sys file's device,
  * interface or disk node.
  */
+/* What a mount table of /proc lists, held for as long as its description
+ * is open, as Linux's `mounts_open_common` (fs/proc_namespace.c:222)
+ * keeps the task's mount namespace and root: the namespace, with a
+ * reference, and the root directory, held as a root holds its node
+ * (`vfs_place_hold`), a NULL `root_mnt` for the root of the mount table.
+ * `ns` is NULL for a file that is not a mount table. */
+struct procfs_mntview {
+    struct mntns *ns;
+    struct vfs_mount *root_mnt;
+    void *root_node;
+};
+
 struct procfs_file {
     char *data; /* the text, from the heap; NULL for a file with no snapshot */
     int len;
@@ -340,6 +352,8 @@ struct procfs_file {
     /* The owner the last lookup of a file of /proc/<pid> or of a
      * descriptor's fdinfo file gave it (`procfs_lookup_owner`). */
     struct synth_owner own;
+    /* A mount table's namespace and root (`procfs_mntview_take`). */
+    struct procfs_mntview mv;
 };
 
 /* The kept owners of the open descriptors, as a Linux inode of /proc/<pid>
@@ -5283,34 +5297,35 @@ static int procfs_gen_usb(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/** Whether entry `i` of the mount table, `m`, is listed in the mount table
- * of the process `p`: the root, /dev and /proc always, and every other mount
- * that is active, whose device is present, that has a place in the tree,
- * which the memfd mount lacks, and that `p`'s mount namespace sees. */
-static int procfs_mount_listed(int i, const struct vfs_mount *m, const process_t *p)
+/** Whether entry `i` of the mount table, `m`, is listed in a mount table of
+ * the mount namespace `ns`: the root, /dev and /proc always, and every
+ * other mount that is active, whose device is present, that has a place in
+ * the tree, which the memfd mount lacks, and that `ns` sees. */
+static int procfs_mount_listed(int i, const struct vfs_mount *m, const struct mntns *ns)
 {
     if (i < 3) {
         return m != NULL;
     }
     return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent &&
-           vfs_mount_seen_by(m, p);
+           vfs_mount_seen_in(m, ns);
 }
 
-/** The path of the root of the process `p` from the root of the mount
- * table into `prefix`, of VFS_COVERED_PATH_MAX bytes, as an empty string for
- * the root of the mount table, or when the path cannot be had, so that the
- * table is shown whole. */
-static void mount_root_of(const process_t *p, char *prefix)
+/** The path of the root directory `root_node` of `root_mnt` from the root
+ * of the mount table into `prefix`, of VFS_COVERED_PATH_MAX bytes, as an
+ * empty string for a NULL `root_mnt`, the root of the mount table, or when
+ * the path cannot be had, so that the table is shown whole. The caller
+ * holds the root. May sleep. */
+static void mount_root_at(struct vfs_mount *root_mnt, void *root_node, char *prefix)
 {
     struct vfs_ref root;
     int rc = -ENOENT;
 
     prefix[0] = '\0';
-    if (!p || !p->fs || !p->fs->root_mnt) {
+    if (!root_mnt) {
         return;
     }
-    root.mnt = p->fs->root_mnt;
-    root.node = p->fs->root_node;
+    root.mnt = root_mnt;
+    root.node = root_node;
     if (root.node == root.mnt->root) {
         k_strncpy(prefix, root.mnt->covered_path, VFS_COVERED_PATH_MAX);
         rc = 0;
@@ -5324,6 +5339,51 @@ static void mount_root_of(const process_t *p, char *prefix)
     if (rc != 0 || (prefix[0] == '/' && prefix[1] == '\0')) {
         prefix[0] = '\0';
     }
+}
+
+/** `mount_root_at` for the root of the running process `p`, which the
+ * process's own record holds while it runs. */
+static void mount_root_of(const process_t *p, char *prefix)
+{
+    prefix[0] = '\0';
+    if (p && p->fs) {
+        mount_root_at(p->fs->root_mnt, p->fs->root_node, prefix);
+    }
+}
+
+/**
+ * Take into `mv` the mount namespace and the root of the process `p`, for a
+ * mount table of /proc to list, with a reference to the one and a hold on
+ * the other (`procfs_mntview`), which `procfs_mntview_drop` lets go of.
+ * Nothing here sleeps, so `p` stays as the caller found it. -ENOENT for a
+ * process that has ended, which has no root.
+ */
+static int procfs_mntview_take(struct procfs_mntview *mv, const process_t *p)
+{
+    if (!p || !p->fs) {
+        return -ENOENT;
+    }
+    mv->ns = (struct mntns *)ns_of(p, NS_MNT);
+    mv->root_mnt = p->fs->root_mnt;
+    mv->root_node = p->fs->root_node;
+    vfs_place_hold(mv->root_mnt, mv->root_node);
+    return 0;
+}
+
+/** Let go of what `procfs_mntview_take` took into `mv`, if anything, and
+ * clear it. May sleep. */
+static void procfs_mntview_drop(struct procfs_mntview *mv)
+{
+    struct mntns *ns = mv->ns;
+
+    if (!ns) {
+        return;
+    }
+    mv->ns = NULL;
+    vfs_place_release(mv->root_mnt, mv->root_node);
+    mv->root_mnt = NULL;
+    mv->root_node = NULL;
+    ns_put(&ns->c);
 }
 
 /** The path `path`, from the root of the mount table, as a process whose
@@ -5354,17 +5414,17 @@ static const char *mount_point_seen(const struct vfs_mount *m, const char *prefi
 }
 
 /** The index of the listed mount made next after the one whose `seq` is
- * `after`, as `procfs_mount_listed` lists them for `p`, or -1 when none is;
+ * `after`, as `procfs_mount_listed` lists them for `ns`, or -1 when none is;
  * with `first`, the one made first. The tables list the mounts in the
  * order they were made, so that a mount over another's root follows it. */
-static int mount_next_made(const process_t *p, uint32_t after, int first)
+static int mount_next_made(const struct mntns *ns, uint32_t after, int first)
 {
     int i, best = -1;
 
     for (i = 0; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
-        if (procfs_mount_listed(i, m, p) && (first || m->seq > after) &&
+        if (procfs_mount_listed(i, m, ns) && (first || m->seq > after) &&
             (best < 0 || m->seq < vfs_mount_at(best)->seq)) {
             best = i;
         }
@@ -5546,26 +5606,28 @@ static void ap_mount_options(struct procfs_text *t, const struct vfs_mount *m)
 }
 
 /**
- * Render the mounts of the process `p`, /proc/PID/mounts and, for the
- * reader, /proc/mounts, in the six-field fstab shape `df` and `mount`
- * parse: the root, then /dev and /proc, which are real mounts to every
- * program that walks this file, then every other mount `p`'s mount
+ * Render the mounts of the view `mv` of a process, /proc/PID/mounts and,
+ * for the reader, /proc/mounts, in the six-field fstab shape `df` and
+ * `mount` parse: the root, then /dev and /proc, which are real mounts to
+ * every program that walks this file, then every other mount the view's
  * namespace sees, in the order they were made, each with its source as the
- * caller gave it, its mount point from `p`'s root, its type and its
- * options, as Linux's `mounts_open_common` takes the task's namespace and
- * root. A mount outside that root is left out. -ENOENT for a process that
- * has ended, which has no root.
+ * caller gave it, its mount point from the view's root, its type and its
+ * options. The view is the one the open took (`procfs_mntview_take`), so
+ * a reread lists the same namespace from the same root after the process
+ * has moved or ended. A mount outside that root is left out. -ENOENT for
+ * an empty view.
  */
-static int procfs_gen_mounts(struct procfs_text *t, const process_t *p)
+static int procfs_gen_mounts(struct procfs_text *t, const struct procfs_mntview *mv)
 {
     char prefix[VFS_COVERED_PATH_MAX];
     int i;
 
-    if (!p || !p->fs) {
+    if (!mv->ns) {
         return -ENOENT;
     }
-    mount_root_of(p, prefix);
-    for (i = mount_next_made(p, 0, 1); i >= 0; i = mount_next_made(p, vfs_mount_at(i)->seq, 0)) {
+    mount_root_at(mv->root_mnt, mv->root_node, prefix);
+    for (i = mount_next_made(mv->ns, 0, 1); i >= 0;
+         i = mount_next_made(mv->ns, vfs_mount_at(i)->seq, 0)) {
         struct vfs_mount *m = vfs_mount_at(i);
         const char *point = mount_point_seen(m, prefix);
 
@@ -5646,20 +5708,22 @@ uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
  * source and the file system's options. The id is the entry's index plus
  * one, and the root is its own parent. A bind mount has the device of the
  * mount it shows and the path of its root within that file system. The
- * table is that of the process `p` the file is of, with its mount points
- * from `p`'s root: it leaves out the mounts `p`'s mount namespace does not
- * see (`procfs_mount_listed`). -ENOENT for a process that has ended.
+ * table is that of the view `mv` the open took of the process the file is
+ * of, with its mount points from the view's root: it leaves out the mounts
+ * the view's namespace does not see (`procfs_mount_listed`). -ENOENT for
+ * an empty view.
  */
-static int procfs_gen_mountinfo(struct procfs_text *t, const process_t *p)
+static int procfs_gen_mountinfo(struct procfs_text *t, const struct procfs_mntview *mv)
 {
     char prefix[VFS_COVERED_PATH_MAX];
     int i, j;
 
-    if (!p || !p->fs) {
+    if (!mv->ns) {
         return -ENOENT;
     }
-    mount_root_of(p, prefix);
-    for (i = mount_next_made(p, 0, 1); i >= 0; i = mount_next_made(p, vfs_mount_at(i)->seq, 0)) {
+    mount_root_at(mv->root_mnt, mv->root_node, prefix);
+    for (i = mount_next_made(mv->ns, 0, 1); i >= 0;
+         i = mount_next_made(mv->ns, vfs_mount_at(i)->seq, 0)) {
         struct vfs_mount *m = vfs_mount_at(i);
         const char *point = mount_point_seen(m, prefix);
         uint32_t dev;
@@ -8792,7 +8856,8 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
 
 /* The operations of a descriptor of /proc or /sys. */
 
-static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid, int *key);
+static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid, int *key,
+                         const struct procfs_mntview *mv);
 static int procfs_needs_pid(int kind);
 
 /**
@@ -8805,7 +8870,7 @@ static int procfs_regen(struct procfs_file *f)
 {
     struct procfs_text text;
     int key = f->gen_pid;
-    int len = procfs_render(&text, &f->vp, f->gen_pid, &key);
+    int len = procfs_render(&text, &f->vp, f->gen_pid, &key, &f->mv);
 
     if (len < 0) {
         return len == -ENOENT && procfs_needs_pid(f->vp.kind) ? -ESRCH : len;
@@ -8920,6 +8985,7 @@ static void procfs_close(fd_entry_t *e)
         procfs_owner_drop(&f->own);
         e->priv = NULL;
         mm_unhold(f->mm);
+        procfs_mntview_drop(&f->mv);
         if (f->userns) {
             ns_put(&f->userns->c);
         }
@@ -12404,7 +12470,8 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
  * a kind with no generator of its own. Returns the text's length, or a
  * negative error from the generator.
  */
-static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpath *vp)
+static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpath *vp,
+                               const struct procfs_mntview *mv)
 {
     switch (vp->procfile) {
     case SYNTH_PROC_STAT:
@@ -12424,9 +12491,9 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
     case SYNTH_PROC_ENVIRON:
         return procfs_gen_environ(t, pid);
     case SYNTH_PROC_PIDMOUNTS:
-        return procfs_gen_mounts(t, procfs_proc(pid));
+        return procfs_gen_mounts(t, mv);
     case SYNTH_PROC_MOUNTINFO:
-        return procfs_gen_mountinfo(t, procfs_proc(pid));
+        return procfs_gen_mountinfo(t, mv);
     case SYNTH_PROC_COMM:
         return procfs_gen_comm(t, pid);
     case SYNTH_PROC_LIMITS:
@@ -12571,7 +12638,8 @@ static int procfs_needs_pid(int kind)
  * text's length, -EOVERFLOW for a /proc/disk past its bound, or a negative
  * error from the generator; the caller frees the text either way.
  */
-static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pid, int *key)
+static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pid, int *key,
+                           const struct procfs_mntview *mv)
 {
     int len;
 
@@ -12626,7 +12694,7 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         len = len < 0 ? len : t->len;
         *key = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
-        len = procfs_gen_mounts(t, current_proc);
+        len = procfs_gen_mounts(t, mv);
     } else if (procfs_is_device_text(vp->kind)) {
         len = procfs_gen_device_text(t, vp, key);
     } else if (vp->kind == VNODE_PROC_USB) {
@@ -12652,9 +12720,18 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
     } else if (vp->kind == VNODE_SYS_FILE) {
         len = procfs_gen_sysfile(t, vp, key);
     } else {
-        len = procfs_gen_pid_file(t, pid, vp);
+        len = procfs_gen_pid_file(t, pid, vp, mv);
     }
     return len;
+}
+
+/** Whether `vp` names a mount table, which lists the view its open took
+ * (`procfs_mntview`): /proc/mounts or a process's mounts or mountinfo. */
+static int procfs_is_mount_table(const struct vpath *vp)
+{
+    return vp->kind == VNODE_PROC_MOUNTS ||
+           (vp->kind == VNODE_PROC_FILE &&
+            (vp->procfile == SYNTH_PROC_PIDMOUNTS || vp->procfile == SYNTH_PROC_MOUNTINFO));
 }
 
 /**
@@ -12662,12 +12739,13 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
  * starts: its length, with the text in `t->buf` for the caller to free, or
  * a negative error with nothing to free, -ENOMEM when the heap ran out.
  */
-static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid, int *key)
+static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid, int *key,
+                         const struct procfs_mntview *mv)
 {
     int len;
 
     procfs_text_init(t);
-    len = procfs_gen_text(t, vp, pid, key);
+    len = procfs_gen_text(t, vp, pid, key, mv);
     /* -1 from a generator that ran out of heap is not -EPERM. */
     if (len < 0 || t->nomem) {
         kfree(t->buf);
@@ -12743,6 +12821,63 @@ static int sysfs_read_refused(const struct vpath *vp, int flags)
 }
 
 /**
+ * Make the record of a snapshot of the file `vp` names, of the process or
+ * thread `pid` for a file of a process: its text, with what a reread needs,
+ * and for a mount table the view it lists (`procfs_mntview_take`). Returns
+ * the record from the heap, or NULL with the error in `*err`.
+ */
+static struct procfs_file *procfs_snapshot(const struct vpath *vp, int pid, int *err)
+{
+    struct procfs_file *f = kzalloc(sizeof(*f));
+    const struct procfs_global *g;
+    struct procfs_text text;
+    int len = 0, key = pid;
+
+    *err = -ENOMEM;
+    if (!f) {
+        return NULL;
+    }
+    f->stale = vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_SYSCALL;
+    if (procfs_is_mount_table(vp)) {
+        len = procfs_mntview_take(&f->mv,
+                                  vp->kind == VNODE_PROC_MOUNTS ? current_proc : procfs_proc(pid));
+    }
+    if (len == 0) {
+        len = procfs_render(&text, vp, pid, &key, &f->mv);
+    }
+    if (len == -EPERM && f->stale) {
+        /* The ptrace check is the read's, as Linux's lock_trace. */
+        text.buf = NULL;
+        len = 0;
+    }
+    if (len < 0) {
+        procfs_mntview_drop(&f->mv);
+        kfree(f);
+        *err = len;
+        return NULL;
+    }
+    f->data = text.buf;
+    f->len = len;
+    f->fresh = 1;
+    f->vp = *vp;
+    f->gen_pid = pid;
+    f->origin_pid = key;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid, vp->pidns_ino) : 0;
+    g = procfs_global_find(vp->kind, 0);
+    if (g) {
+        f->origin_file = g->origin;
+    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
+        f->origin_file = SYNTH_PROC_SYSCTL;
+    } else if (vp->kind == VNODE_SYS_FILE) {
+        f->origin_file = SYNTH_SYS_UEVENT;
+        f->origin_task = vp->sysent << 8 | vp->procfile;
+    } else {
+        f->origin_file = vp->procfile;
+    }
+    return f;
+}
+
+/**
  * The checks of the flags are in the order that gives the errno of a
  * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
  * O_DIRECTORY -ENOTDIR, then -EACCES for a file of a process whose mode
@@ -12759,10 +12894,8 @@ int procfs_open(const struct vpath *vp, int flags)
 {
     int pid = 0;
     struct procfs_file *f = NULL;
-    const struct procfs_global *g;
-    struct procfs_text text;
     fd_entry_t *e;
-    int fd, len, key;
+    int fd;
 
     if (procfs_needs_pid(vp->kind)) {
         pid = procfs_resolve_id(vp);
@@ -12789,43 +12922,14 @@ int procfs_open(const struct vpath *vp, int flags)
         return -EACCES;
     }
 
-    f = kzalloc(sizeof(*f));
+    f = procfs_snapshot(vp, pid, &fd);
     if (!f) {
-        return -ENOMEM;
-    }
-    key = pid;
-    f->stale = vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_SYSCALL;
-    len = procfs_render(&text, vp, pid, &key);
-    if (len == -EPERM && f->stale) {
-        /* The ptrace check is the read's, as Linux's lock_trace. */
-        text.buf = NULL;
-        len = 0;
-    }
-    if (len < 0) {
-        kfree(f);
-        return len;
-    }
-    f->data = text.buf;
-    f->len = len;
-    f->fresh = 1;
-    f->vp = *vp;
-    f->gen_pid = pid;
-    f->origin_pid = key;
-    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid, vp->pidns_ino) : 0;
-    g = procfs_global_find(vp->kind, 0);
-    if (g) {
-        f->origin_file = g->origin;
-    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
-        f->origin_file = SYNTH_PROC_SYSCTL;
-    } else if (vp->kind == VNODE_SYS_FILE) {
-        f->origin_file = SYNTH_SYS_UEVENT;
-        f->origin_task = vp->sysent << 8 | vp->procfile;
-    } else {
-        f->origin_file = vp->procfile;
+        return fd;
     }
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
+        procfs_mntview_drop(&f->mv);
         kfree(f->data);
         kfree(f);
         return fd;

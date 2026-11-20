@@ -959,6 +959,10 @@ int vfs_mount_seen(const struct vfs_mount *m);
 /** Whether the mount namespace of the process `p` sees the mount `m`. */
 int vfs_mount_seen_by(const struct vfs_mount *m, const struct process *p);
 
+struct mntns;
+/** Whether the mount namespace `ns` sees the mount `m`. */
+int vfs_mount_seen_in(const struct vfs_mount *m, const struct mntns *ns);
+
 /** `vfs_mount_seen` for a caller without the big lock, which may read only
  * the set's first word, since its other words grow under the lock: 1 or 0,
  * or -1 when the caller's namespace id lies past that word. */
@@ -1095,6 +1099,12 @@ void vfs_cwd_clear(struct process *p);
  * root of the mount table itself, leaves the process with that root.
  */
 void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node);
+/** Hold `node` of `mnt` as a root holds its node: the node, on a type that
+ * counts holds, and a reference on the mount, which unmount then answers
+ * EBUSY for. A NULL `mnt` holds nothing. Does not sleep. */
+void vfs_place_hold(struct vfs_mount *mnt, void *node);
+/** Let go of a hold `vfs_place_hold` took. The put may sleep. */
+void vfs_place_release(struct vfs_mount *mnt, void *node);
 /** Give `child`, of fork, the root of `parent`. */
 void vfs_root_copy(struct process *child, const struct process *parent);
 /** Let go of the root of `p`, at its exit. */

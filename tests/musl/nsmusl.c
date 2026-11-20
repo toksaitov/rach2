@@ -121,6 +121,7 @@ enum row {
     R_MNT_OUTSIDE,
     R_MNT_INSIDE,
     R_MNT_LISTED,
+    R_MNT_HELD,
     R_MNT_MANY,
     R_MNT_MANY_OWN,
     R_MAP_EXTRA,
@@ -179,6 +180,7 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "mount-unseen-outside",
                                                "mount-seen-inside",
                                                "mount-listed-by-pid",
+                                               "mount-list-held",
                                                "mount-forty-namespaces",
                                                "mount-forty-own-views",
                                                "map-341st-einval",
@@ -952,9 +954,10 @@ static int mnt(void)
 {
     int up[2], down[2];
     pid_t pid;
-    int fd, ok, status, rc = 0;
-    char c = 'x';
+    int fd, held = -1, ok, status, rc = 0;
+    char c = 'x', path[64], buf[4096];
     struct stat st;
+    ssize_t n;
 
     mkdir("/tmp/nsmnt", 0755);
     if (pipe(up) != 0 || pipe(down) != 0) {
@@ -981,6 +984,12 @@ static int mnt(void)
         } else if (!listed_for(pid)) {
             rc = fail(R_MNT_LISTED, "/proc/PID/mounts lists the mounts of PID's namespace");
         }
+        snprintf(path, sizeof(path), "/proc/%ld/mounts", (long)pid);
+        held = open(path, O_RDONLY);
+        if (held >= 0 && read(held, buf, sizeof(buf) - 1) <= 0) {
+            close(held);
+            held = -1;
+        }
         write(down[1], &c, 1);
     }
     close(up[0]);
@@ -988,6 +997,15 @@ static int mnt(void)
     ok = waitpid(pid, &status, 0) == pid;
     if (child_failed(ok, status, R_MNT)) {
         rc = 1;
+    }
+    /* The open kept the namespace and the root; a reread at 0 lists them. */
+    n = held >= 0 && ok ? pread(held, buf, sizeof(buf) - 1, 0) : -1;
+    buf[n > 0 ? n : 0] = '\0';
+    if (n <= 0 || !strstr(buf, "nsmusl /tmp/nsmnt tmpfs ")) {
+        rc = fail(R_MNT_HELD, "an open /proc/PID/mounts lists PID's namespace after PID is reaped");
+    }
+    if (held >= 0) {
+        close(held);
     }
     return rc;
 }
