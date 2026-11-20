@@ -91,7 +91,8 @@ void pty_init_pool(void);
  * open("/dev/ptmx"): allocate a pty pair and install the master end on a
  * fresh descriptor (locked until unlockpt). Returns the master fd (>= 0), or
  * -errno (-ESRCH with no current process, -ENFILE if the heap has no room for
- * a pair, -EMFILE if the fd table is full, -ENOMEM if the heap has no room
+ * a pair or PTY_KERNEL_INDEX pairs of /dev/ptmx are open, -EMFILE if the fd
+ * table is full, -ENOMEM if the heap has no room
  * for the descriptor).
  */
 int pty_open_master(int flags);
