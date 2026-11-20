@@ -592,7 +592,7 @@
   },
   {
    "case_id": "guest.hvc.ports",
-   "behavior": "a virtio console of four ports that a machine with COM1 has from the boot, with a generic port named org.rach2.boot, gives every port its nodes: the generic port is /dev/vport0p1 and /dev/virtio-ports/org.rach2.boot, a byte device that tells the host's end it is open; a console port added through QMP after the boot becomes hvc0, which the boot line names, gets the console's record of it through emerg_wr and is /dev/hvc0, a terminal of its own whose output reaches the host; and a port added at port 3 through QMP is /dev/vport0p3 and /dev/virtio-ports/org.rach2.late, which reads and writes the host's end and goes when QMP removes the port",
+   "behavior": "a virtio console of six ports that a machine with COM1 has from the boot, with a generic port named org.rach2.boot, gives every port its nodes: the generic port is /dev/vport0p1 and /dev/virtio-ports/org.rach2.boot, a byte device that tells the host's end it is open; a console port added through QMP after the boot becomes hvc0, which the boot line names, gets the console's record of it through emerg_wr and is /dev/hvc0, a terminal of its own whose output reaches the host; and a port added at port 3 through QMP is /dev/vport0p3 and /dev/virtio-ports/org.rach2.late, which reads and writes the host's end and goes when QMP removes the port; and two ports added at ports 4 and 5 through QMP, whose names are 255 bytes long and differ only in their last byte, are listed whole in /dev/virtio-ports and open by the listed names, through paths of 273 bytes",
    "units": [
     "hvc"
    ],
@@ -630,7 +630,7 @@
      "step_id": "ports",
      "stage": "execute",
      "machine": "fixture",
-     "does": "boot to the debug shell, run hvcmusl's boot mode, add a virtconsole with a file as its host's end and run hvcmusl's tty mode, add a virtserialport at port 3 whose host's end is an abstract Unix socket, which the scenario connects to and writes pong to, and run hvcmusl's late mode, remove the port and run hvcmusl's gone mode, and end the machine"
+     "does": "boot to the debug shell, run hvcmusl's boot mode, add a virtconsole with a file as its host's end and run hvcmusl's tty mode, add a virtserialport at port 3 whose host's end is an abstract Unix socket, which the scenario connects to and writes pong to, and run hvcmusl's late mode, remove the port and run hvcmusl's gone mode, add two virtserialports at ports 4 and 5 with names of 255 bytes and run hvcmusl's long mode, and end the machine"
     }
    ],
    "machines": [
@@ -649,7 +649,7 @@
         "model": "virtio-serial-pci",
         "id": "vs",
         "properties": {
-         "max_ports": "4"
+         "max_ports": "6"
         }
        },
        {
@@ -705,6 +705,11 @@
     {
      "assertion_id": "removed",
      "checks": "after QMP's device_del, hvcmusl gone exits 0: the late port's nodes go and the boot port's stays",
+     "source": "scenario"
+    },
+    {
+     "assertion_id": "long",
+     "checks": "after QMP's device_add of two ports at 4 and 5 named org.rach2. and 244 bytes of n and then a or b, hvcmusl long exits 0: /dev/virtio-ports lists each name once and whole, and each name getdents64 gives opens /dev/virtio-ports/NAME as the device of /dev/vport0p4 or /dev/vport0p5",
      "source": "scenario"
     }
    ],

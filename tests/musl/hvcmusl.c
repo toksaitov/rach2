@@ -19,9 +19,11 @@
  * The machine case guest.hvc.ports runs the other modes from the debug
  * shell of a machine with a UART, whose boot line names hvc0 before ttyS0,
  * and whose virtio console has a generic port named org.rach2.boot with no
- * host's end at the boot; the case adds a console port and a third port,
- * org.rach2.late, through QMP. Each of `tty`, `late` and `gone` first waits
- * for the port it checks to come or go. `boot`: /dev/vport0p1 and
+ * host's end at the boot; through QMP the case adds a console port, a
+ * third port, org.rach2.late, and then two ports at 4 and 5 whose names
+ * are of NAME_MAX bytes and differ only in their last byte. Each of `tty`,
+ * `late`, `gone` and `long` first waits for the port it checks to come or
+ * go. `boot`: /dev/vport0p1 and
  * /dev/virtio-ports/org.rach2.boot are one character device of major 245,
  * whose open gives the end of a file, POLLHUP and EAGAIN for a write while
  * the host's end is closed, and refuses a second open; /dev/hvc0 is absent
@@ -31,7 +33,9 @@
  * /dev/vport0p3 and /dev/virtio-ports/org.rach2.late are one device, which
  * takes `ping` and a newline and gives `pong` and a newline, the bytes the
  * host's end has, and polls writable. `gone`: the late port's nodes are
- * absent and the boot port's stays.
+ * absent and the boot port's stays. `long`: /dev/virtio-ports lists each
+ * long name once and whole, and the name it gives opens the port's device,
+ * /dev/vport0p4 or /dev/vport0p5.
  *
  * Prints `HVCMUSL OK` and exits 0 on success, and prints `HVCMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
@@ -69,6 +73,13 @@
 #define BOOT_LINK "/dev/virtio-ports/org.rach2.boot"
 #define LATE_NODE "/dev/vport0p3"
 #define LATE_LINK "/dev/virtio-ports/org.rach2.late"
+
+/* The two ports of names of NAME_MAX bytes, the prefix, 244 of 'n' and a
+ * last byte of 'a' or 'b', at ports 4 and 5: their aliases' paths are 273
+ * bytes, and the names differ only in their last byte. */
+#define PORTS_DIR   "/dev/virtio-ports"
+#define LONG_PREFIX "org.rach2."
+#define LONG_NAME   255
 
 /* The kernel's log, read whole: the ring is 128 KiB. */
 static char ring[131072 + 1];
@@ -308,6 +319,71 @@ static void settle(const char *path, int present)
     }
 }
 
+/** Put in `name`, of LONG_NAME + 1 bytes, the long port's name that ends
+ * in `last`. */
+static void long_name(char *name, char last)
+{
+    size_t n = strlen(LONG_PREFIX);
+
+    memcpy(name, LONG_PREFIX, n);
+    memset(name + n, 'n', LONG_NAME - 1 - n);
+    name[LONG_NAME - 1] = last;
+    name[LONG_NAME] = '\0';
+}
+
+/** The rows of `long`: /dev/virtio-ports lists each long port once with
+ * its whole name, and the name the listing gives opens, through the walk,
+ * the port's own device, /dev/vport0p4 or /dev/vport0p5. 0 when each held. */
+static int long_rows(void)
+{
+    char want[2][LONG_NAME + 1], path[sizeof(PORTS_DIR) + LONG_NAME + 1];
+    static const char *const nodes[2] = {"/dev/vport0p4", "/dev/vport0p5"};
+    struct dirent *e;
+    struct stat st;
+    int seen[2] = {0, 0}, i, fd;
+    DIR *dir;
+
+    long_name(want[0], 'a');
+    long_name(want[1], 'b');
+    snprintf(path, sizeof(path), PORTS_DIR "/%s", want[1]);
+    settle(path, 1);
+    dir = opendir(PORTS_DIR);
+    if (dir == NULL) {
+        return fail(PORTS_DIR " does not open");
+    }
+    while ((e = readdir(dir)) != NULL) {
+        if (strncmp(e->d_name, LONG_PREFIX "nnnn", sizeof(LONG_PREFIX) + 3) != 0) {
+            continue;
+        }
+        for (i = 0; i < 2 && strcmp(e->d_name, want[i]) != 0; i++) {
+        }
+        if (i == 2) {
+            closedir(dir);
+            errno = 0;
+            return fail("the listing gives a long port's name cut short");
+        }
+        seen[i]++;
+        snprintf(path, sizeof(path), PORTS_DIR "/%s", e->d_name);
+        fd = open(path, O_RDWR | O_NONBLOCK);
+        if (fd < 0) {
+            closedir(dir);
+            return fail("a long port's listed name does not open");
+        }
+        if (fstat(fd, &st) != 0 || char_dev(nodes[i], PORT_MAJOR) != st.st_rdev) {
+            close(fd);
+            closedir(dir);
+            return fail("a long port's name opens another device than its vport node");
+        }
+        close(fd);
+    }
+    closedir(dir);
+    if (seen[0] != 1 || seen[1] != 1) {
+        errno = 0;
+        return fail("the listing does not give each long port's name once");
+    }
+    return 0;
+}
+
 /** The rows of `boot`; 0 when each held. */
 static int boot_rows(void)
 {
@@ -444,8 +520,10 @@ static int machine_mode(const char *mode)
         r = late_rows();
     } else if (strcmp(mode, "gone") == 0) {
         r = gone_rows();
+    } else if (strcmp(mode, "long") == 0) {
+        r = long_rows();
     } else {
-        fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0|boot|tty|late|gone\n");
+        fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0|boot|tty|late|gone|long\n");
         return 2;
     }
     if (r == 0) {
@@ -465,7 +543,7 @@ int main(int argc, char **argv)
 
     if (!port && !(argc == 2 && strcmp(argv[1], "ttyS0") == 0)) {
         if (argc != 2) {
-            fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0|boot|tty|late|gone\n");
+            fprintf(stderr, "usage: hvcmusl vport0p1|ttyS0|boot|tty|late|gone|long\n");
             return 2;
         }
         return machine_mode(argv[1]);
