@@ -221,7 +221,8 @@ struct addr4_routes {
     uint32_t broadcast, metric;
     uint64_t valid_until, preferred_until; /* absolute ticks, zero for forever */
     uint32_t created, updated;             /* clock ticks in hundredths of a second */
-    uint8_t proto, deprecated;
+    uint8_t proto, deprecated, scope;
+    uint8_t zero_peer; /* an explicit destination of 0.0.0.0 */
     unsigned char given_broadcast, noprefix, deleted;
 };
 
@@ -257,7 +258,7 @@ struct netdev {
     uint32_t ip;
     uint32_t mask;
     uint32_t gateway;
-    uint32_t peer; /* distinct IPv4 destination, or 0 for the local address */
+    uint32_t peer; /* a distinct IPv4 destination, or zero (see addr4) */
 
     /* The `naddr2` addresses after the first, as `ip addr add` gives them,
      * each with its mask: an interface may be on more than one subnet, and
@@ -547,7 +548,9 @@ static __inline__ uint32_t netdev_addr_dst(const struct netdev *nd, int a)
 {
     uint32_t peer = a < 0 ? nd->peer : nd->peer2[a];
 
-    return peer ? peer : a < 0 ? nd->ip : nd->ip2[a];
+    if (peer || nd->addr4[a + 1].zero_peer)
+        return peer;
+    return a < 0 ? nd->ip : nd->ip2[a];
 }
 
 /** Whether an IPv4 address implies a link route to `dst`/`mask`.

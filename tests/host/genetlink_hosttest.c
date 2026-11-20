@@ -214,13 +214,15 @@ void netconf_expire_addresses(uint64_t now)
 }
 
 /** Allocate the fixture's one IPv4 address, reporting duplicate insertion. */
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
+                        uint8_t scope)
 {
     if (nd->ip)
         return -EEXIST;
     nd->ip = ip;
     nd->mask = mask;
-    nd->peer = peer;
+    nd->peer = peer ? *peer : 0;
+    nd->addr4[0].scope = scope;
     return 0;
 }
 
@@ -239,7 +241,7 @@ int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, 
 }
 
 /** Model netconf_del_address with no addresses, routes or sockets. */
-int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst)
 {
     (void)nd;
     (void)ip;
@@ -323,9 +325,10 @@ int netdev_owns(uint32_t ip)
 }
 
 /** Match the fixture's single IPv4 address. */
-int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst)
 {
-    return nd->ip == ip && nd->mask == mask && (dst & mask) == (ip & mask) ? -1 : nd->naddr2;
+    return nd->ip == ip && nd->mask == mask && (!dst || (*dst & mask) == (ip & mask)) ? -1
+                                                                                      : nd->naddr2;
 }
 
 /** Model netdev_source with no addresses, routes or sockets. */
@@ -914,6 +917,24 @@ static void metric_address4(int replace, uint32_t metric)
     CHECK(!addr_change(request, RTM_NEWADDR, flags, get32(request) - NLMSG_HDRLEN));
 }
 
+/** Distinguish omitted IPv4 attributes from zero addresses on the wire. */
+static void zero_address4(void)
+{
+    struct nl_build b = {0};
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, 0, 8);
+    uint32_t body;
+    ifa[0] = AF_INET;
+    ifa[1] = 24;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr_ip(request, IFA_ADDRESS, 0xc0000201u);
+    body = get32(request) - NLMSG_HDRLEN;
+    CHECK(addr_change(request, RTM_NEWADDR, 0, body) == -EINVAL);
+    msg_attr_ip(request, IFA_LOCAL, 0);
+    body = get32(request) - NLMSG_HDRLEN;
+    CHECK(!addr_change(request, RTM_NEWADDR, 0, body) && !card.ip);
+    CHECK(addr_change(request, RTM_DELADDR, 0, body) == -EADDRNOTAVAIL);
+}
+
 /** Change the address metric after replacing its route with each protocol. */
 static void replaced_metric4(uint32_t old_metric, uint8_t proto)
 {
@@ -973,6 +994,7 @@ int main(void)
     CHECK(netlink_open(&route, NETLINK_ROUTE) == 0 && netlink_open(&watch, NETLINK_ROUTE) == 0);
     CHECK(netlink_bind(&a, 77, 0) == 0 && netlink_bind(&route, 77, 0) == 0);
     CHECK(netlink_bind(&b, 77, 0) == -EADDRINUSE);
+    zero_address4();
     replaced_metric4(42, 2);
     replaced_metric4(42, 99);
     replaced_metric4(0, 2);

@@ -168,7 +168,7 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw);
 
 /** Find the IPv4 slot matching the supplied local and destination prefix.
  * Return -1 for the first or naddr2 for a miss. Call under net_lock. */
-int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst);
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst);
 
 /** Change the broadcast attribute of the first address under net_lock. */
 int netconf_set_broadcast(struct netdev *nd, uint32_t addr);
@@ -180,17 +180,18 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer);
 
 /**
  * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
- * does, or make it the first. A distinct `peer` gives the destination
- * prefix; 0 uses the local address. An address added beside the first
- * drops nothing. EINVAL for address zero or a noncontiguous mask; EEXIST for an
- * address the interface holds; ENOSPC past NETDEV_ADDRS more. Takes
+ * does, or make it the first. A supplied `peer` gives the destination
+ * prefix. A null pointer uses the local address. A secondary must have its
+ * primary's scope. Return -EINVAL for a scope conflict, zero local address
+ * or noncontiguous mask, -EEXIST for a duplicate or -ENOSPC when full. Takes
  * `net_lock`.
  */
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer);
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
+                        uint8_t scope);
 
 /**
  * Take the address `ip` from `nd`, matching any local address when `ip`
- * is 0. If `dst` is nonzero, also match its prefix `dst`/`mask`. Deleting a
+ * is 0. If `dst` is supplied, also match its prefix `*dst`/`mask`. Deleting a
  * primary removes its same-prefix secondaries. A surviving primary takes
  * the first slot. While an address
  * remains, the gateway and the added routes stay, as Linux's
@@ -200,7 +201,7 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
  * flushes them. EADDRNOTAVAIL for an address the interface does not hold.
  * Takes `net_lock`.
  */
-int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst);
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *dst);
 
 /** Deprecate or delete IPv4 addresses whose lifetime has ended at now.
  * The network timer calls with interrupts disabled. */
