@@ -209,6 +209,22 @@ int main(void)
     block_partition_init(&part, &backing, 900u, 500u);
     CHECK(part.device.sector_count == 100u);
 
+    /* A view made in memory that holds an odd size sequence, as an
+     * uninitialized stack record may, is readable: the parity is checked
+     * before the read, which would spin on an odd sequence. */
+    {
+        block_partition_t odd;
+
+        odd.device.size_seq = 0xFFFFFFFFu;
+        block_partition_init(&odd, &backing, 100u, 200u);
+        CHECK((odd.device.size_seq & 1u) == 0);
+        if ((odd.device.size_seq & 1u) == 0) {
+            CHECK(block_sectors(&odd.device) == 200u);
+        }
+        block_partition_init(&odd, &backing, 100u, 300u);
+        CHECK((odd.device.size_seq & 1u) == 0 && block_sectors(&odd.device) == 300u);
+    }
+
     {
         block_partition_t inner;
         static struct {

@@ -118,6 +118,7 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
 
     partition->device.sector_size = backing->sector_size;
     partition->device.sector_phase = backing->sector_phase;
+    partition->device.size_seq &= ~1u; /* odd garbage would spin readers */
     block_set_sectors(&partition->device, sector_count);
     partition->device.read = block_partition_read;
     partition->device.write = block_partition_write;

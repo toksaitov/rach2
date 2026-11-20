@@ -364,6 +364,10 @@ typedef struct block_partition {
  * flags and deadlines, but `block_flags` and `block_max_sectors` read the
  * backing's at each call, and `submit` is always present, since a disk gains
  * `submit` and loses `BLOCK_FAULT_SAFE` after its views exist.
+ * `partition` may be uninitialized memory, or a view already published,
+ * which a reader of `block_sectors` may read throughout: the size sequence
+ * is made even before the size is set through it, which changes nothing in
+ * a published view, since its writers are serialized and leave it even.
  */
 void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
                           uint64_t sector_count);
