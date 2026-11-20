@@ -130,12 +130,19 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     return 0;
 }
 
-/** Addresses are not removed in this model. */
+/** Remove the address whose slot the ND state machine is visiting. */
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
-    (void)nd;
-    (void)addr;
-    return 0;
+    int i;
+    for (i = 0; i < nd->naddr6; i++) {
+        if (ip6_equal(nd->addr6[i].addr, addr)) {
+            for (; i + 1 < nd->naddr6; i++)
+                nd->addr6[i] = nd->addr6[i + 1];
+            nd->naddr6--;
+            return 0;
+        }
+    }
+    return -EADDRNOTAVAIL;
 }
 
 /** Cards are not brought up again in this model. */
@@ -319,6 +326,68 @@ static int defaults(const struct netdev *nd, uint32_t *metric, uint8_t *gw, uint
     return n;
 }
 
+/** Count exact address-generated routes in the selected table. */
+static int count_prefix(const uint8_t *dst, unsigned plen, int local, unsigned metric)
+{
+    struct route6_row row;
+    int i, count = 0;
+    for (i = 0; route6_at(i, &row); i++)
+        if (row.local == local && row.proto == ROUTE6_PROTO_KERNEL && row.plen == plen &&
+            row.metric == metric && ip6_equal(dst, row.dst))
+            count++;
+    return count;
+}
+
+/** Check routes after address removal, carrier loss and device shutdown. */
+static void route_lifetime(void)
+{
+    struct route6_row r = {0};
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    uint8_t via[16], dst[16] = {0x20, 0x01}, other[16] = {0x30, 0x01};
+    a->addr[0] = 0x40;
+    a->peer[0] = 0x50;
+    a->prefix = 128;
+    a->metric = 80;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    a->flags = NETDEV_A6_TENTATIVE;
+    eth0.naddr6 = 1;
+    CHECK(count_prefix(a->addr, 128, 0, 80) == 1 && count_prefix(a->addr, 128, 1, 0) == 0);
+    CHECK(count_prefix(a->peer, 128, 0, 80) == 0);
+    a->flags = NETDEV_A6_NODAD;
+    CHECK(count_prefix(a->addr, 128, 1, 0) == 1 && count_prefix(a->peer, 128, 0, 80) == 1);
+    a->noprefix = 1;
+    CHECK(count_prefix(a->addr, 128, 0, 80) == 0 && count_prefix(a->peer, 128, 0, 80) == 1);
+    a->noprefix = 0;
+    r.plen = 128;
+    k_memcpy(r.dst, a->addr, 16);
+    r.proto = 9;
+    CHECK(route6_change_row(&eth0, &r, 1, 0) == -ESRCH);
+    r.proto = 2;
+    r.metric = 81;
+    CHECK(route6_change_row(&eth0, &r, 1, 0) == -ESRCH);
+    r.metric = 80;
+    CHECK(route6_change_row(&eth0, &r, 1, 0) == 0 && count_prefix(a->addr, 128, 0, 80) == 0);
+    CHECK(count_prefix(a->addr, 128, 1, 0) == 1);
+    k_memcpy(r.dst, dst, 16);
+    r.proto = 99;
+    CHECK(route6_change_row(&eth0, &r, 0, 0) == 0);
+    r.gw[0] = 0xff;
+    CHECK(route6_change_row(&eth0, &r, 0, 1) == -EINVAL);
+    CHECK(route6_lookup(dst, eth0.index, via) == &eth0 && ip6_equal(dst, via));
+    r.gw[0] = 0;
+    k_memcpy(r.dst, other, 16);
+    CHECK(route6_change_row(&wlan0, &r, 0, 0) == 0);
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0 && count_prefix(a->peer, 128, 0, 80) == 0);
+    CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
+    eth0.naddr6 = 1;
+    forget_if(&eth0, 0);
+    CHECK(eth0.naddr6 == 1 && route6_lookup(dst, eth0.index, via) == &eth0);
+    nd6_if_down(&eth0);
+    CHECK(eth0.naddr6 == 0 && route6_lookup(dst, eth0.index, via) == 0);
+    CHECK(route6_lookup(other, wlan0.index, via) == &wlan0);
+    CHECK(route6_change_row(&wlan0, &r, 1, 0) == 0);
+}
+
 int main(void)
 {
     static const uint8_t dst[IP6_ADDR_LEN] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -389,6 +458,7 @@ int main(void)
      * is left alone. */
     CHECK(nd6_conf_set(ND6_CONF_DEFAULT, ND6_RA_DEFRTR_METRIC, 700) == 0);
     CHECK(nd6_conf_get(wlan0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 600);
+    route_lifetime();
     CHECK(lock_depth == 0);
 
     if (failures) {
