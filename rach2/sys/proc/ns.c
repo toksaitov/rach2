@@ -1434,20 +1434,21 @@ int cap_ids(const process_t *p)
     return p->ns_granted || ns_uid_from_kernel(p->userns, p->euid) == 0;
 }
 
-uint32_t cap_word(const process_t *p, uint32_t i)
-{
-    uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-
-    if (i > 1) {
-        return 0;
-    }
-    return p->amb_granted || cap_ids(p) ? full & ~p->cap_lost[i] : 0u;
-}
-
 /** Whether `uid` is root in `p`'s user namespace. */
 static int uid_root_in(const process_t *p, uint32_t uid)
 {
     return p->userns ? ns_uid_from_kernel(p->userns, uid) == 0 : uid == 0;
+}
+
+uint32_t cap_word(const process_t *p, uint32_t i)
+{
+    uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
+    int ids = cap_ids(p) || uid_root_in(p, p->ruid) || uid_root_in(p, p->suid);
+
+    if (i > 1) {
+        return 0;
+    }
+    return p->amb_granted || ids ? full & ~p->cap_lost[i] : 0u;
 }
 
 uint32_t cap_eff_word(const process_t *p, uint32_t i)
@@ -1457,6 +1458,17 @@ uint32_t cap_eff_word(const process_t *p, uint32_t i)
 
     if (i > 1) {
         return 0;
+    }
+    if (p->eff_own) {
+        held &= p->cap_eff[i];
+        if ((p->fs_own & PROC_FSCAPS_OFF) ||
+            (!uid_root_in(p, proc_fsuid(p)) && uid_root_in(p, p->euid))) {
+            held &= ~fs;
+        }
+        return held;
+    }
+    if (!p->amb_granted && !cap_ids(p)) {
+        held = 0;
     }
     if (p->fs_own & PROC_FSCAPS_OFF) {
         return held & ~fs;
@@ -1476,13 +1488,23 @@ void cap_store(process_t *p, uint32_t lost0, uint32_t lost1)
 {
     p->cap_lost[0] = lost0;
     p->cap_lost[1] = lost1 & CAP_HIGH_WORD;
+    p->eff_own = 0;
     p->nocaps = (lost0 & (1u << CAP_SYS_ADMIN)) != 0;
+}
+
+void cap_store_eff(process_t *p, uint32_t eff0, uint32_t eff1)
+{
+    p->eff_own = 1;
+    p->cap_eff[0] = eff0;
+    p->cap_eff[1] = eff1 & CAP_HIGH_WORD;
+    p->nocaps = ((p->cap_lost[0] | ~eff0) & (1u << CAP_SYS_ADMIN)) != 0;
 }
 
 void ns_caps_fill(process_t *p)
 {
     p->ns_granted = 1;
     p->amb_granted = 0;
+    p->securebits = 0;
     p->bset_lost[0] = p->bset_lost[1] = 0;
     p->cap_inh[0] = p->cap_inh[1] = 0;
     p->cap_amb[0] = p->cap_amb[1] = 0;
@@ -1867,8 +1889,9 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
 {
     struct ns_common *ns[NS_KINDS];
     struct userns *old = self->userns;
-    uint32_t cap_lost[2], bset_lost[2], inh[2], amb[2];
+    uint32_t cap_lost[2], bset_lost[2], inh[2], amb[2], eff[2];
     uint32_t nocaps = self->nocaps, granted = self->ns_granted, amb_granted = self->amb_granted;
+    uint32_t eff_own = self->eff_own, securebits = self->securebits;
     uint64_t cred_id = self->cred_id;
     int32_t err = 0;
     int k, joined = 0;
@@ -1888,6 +1911,7 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
     bset_lost[1] = self->bset_lost[1];
     k_memcpy(inh, self->cap_inh, sizeof(inh));
     k_memcpy(amb, self->cap_amb, sizeof(amb));
+    k_memcpy(eff, self->cap_eff, sizeof(eff));
     if (old) {
         ns_get(&old->c);
     }
@@ -1914,6 +1938,9 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
         self->cap_lost[0] = cap_lost[0];
         self->cap_lost[1] = cap_lost[1];
         self->nocaps = nocaps;
+        self->eff_own = eff_own;
+        self->securebits = securebits;
+        k_memcpy(self->cap_eff, eff, sizeof(eff));
         self->cred_id = cred_id;
         k_memcpy(self->cap_inh, inh, sizeof(inh));
         k_memcpy(self->cap_amb, amb, sizeof(amb));

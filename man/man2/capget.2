@@ -17,10 +17,15 @@ musl has no wrappers for the two calls.
 .Sh DESCRIPTION
 Capabilities are the privileges Linux divides the power of user ID 0
 into, numbered 0 to 40.
-A thread whose effective user ID is 0 has every capability it has not
-given up, and any other thread none.
-The kernel keeps one set for each thread as its effective and permitted
-sets, and keeps its inheritable and ambient sets as Linux does.
+A thread whose real, effective or saved user ID is 0 has every
+capability it has not given up in its permitted set, and any other thread
+none.
+Its effective set is the permitted set while its effective user ID is 0,
+and empty otherwise, until
+.Fn capset
+gives it one of its own.
+The kernel keeps the effective, permitted, inheritable and ambient sets
+apart, as Linux does.
 The eight capabilities of file access, which
 .Xr setfsuid 2
 lists, are in the effective set by the file-system user ID instead: a
@@ -28,8 +33,6 @@ thread has those it has not given up while that ID is 0, and none of
 them once
 .Xr setfsuid 2
 has taken it from 0, as on Linux.
-The permitted set reported is the capabilities the effective user ID
-gives together with the effective set.
 The ambient set, which
 .Dv PR_CAP_AMBIENT
 of
@@ -74,9 +77,7 @@ and
 .Pp
 .Fn capget
 stores the sets of the thread whose ID the header gives, or of the
-caller for 0: every capability in the effective and permitted sets of a
-thread that has them, none in those of one that does not, and the
-inheritable set the thread keeps.
+caller for 0: its effective, permitted and inheritable sets.
 With a null
 .Fa datap
 it checks the version alone.
@@ -86,7 +87,11 @@ changes the caller's sets: the thread keeps the capabilities of the
 permitted set given and loses the rest.
 The permitted set may hold only capabilities the thread has, and the
 effective set only those of the permitted set; the thread then holds the
-permitted set as both.
+two sets given, and a later
+.Fn capset
+may raise into the effective set any capability still permitted.
+An exec, and an effective user ID that moves to or from 0, end the
+effective set given, which then follows the user IDs as above.
 The inheritable set may add to the one the thread has only capabilities
 of the bounding set, and, for a thread without
 .Dv CAP_SETPCAP ,
@@ -133,7 +138,16 @@ A
 .Xr setreuid 2
 or
 .Xr setresuid 2
-that leaves none of the three user IDs root empties it too, as on Linux.
+that leaves none of the three user IDs root empties it too, as on Linux,
+and empties the permitted and effective sets unless
+.Dv PR_SET_KEEPCAPS
+of
+.Xr prctl 2
+is set, which keeps the permitted set; one that moves the effective user
+ID from 0 empties the effective set, and one that moves it to 0 makes it
+the permitted set.
+.Dv SECBIT_NO_SETUID_FIXUP
+leaves all of them as they were.
 The tracer is judged at the exec, by every live thread of the tracing
 process; Linux judges the credentials the attaching thread had when it
 attached.
@@ -210,11 +224,8 @@ names no thread.
 .Xr setfsuid 2 ,
 .Xr proc 5
 .Sh STANDARDS
-Linux keeps the effective set apart from the permitted one and checks
-each capability on its own.
-The effective set differs from the permitted one here only in the
-capabilities of file access, which go by the file-system user ID.
-A thread whose user IDs are not root holds no capability here but those
-an exec gave it from the ambient set.
-.Dv PR_SET_KEEPCAPS
-and the securebits are not supported.
+Linux checks each capability on its own, where the kernel asks for
+.Dv CAP_SYS_ADMIN
+in place of most of them.
+There are no file capabilities: an exec gives an image those of its user
+IDs and of the ambient set alone.

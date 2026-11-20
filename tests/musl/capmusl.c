@@ -34,6 +34,11 @@
  * execs an image that holds them alone; that image calls setuid(0) and execs
  * one of root, which has every capability again, as Linux gives a root
  * image its bounding set, but under no_new_privs only the two it held.
+ * capset keeps the effective set apart from the permitted one, and may
+ * raise it again within that; under PR_SET_KEEPCAPS, setresuid to user 1000
+ * keeps every capability permitted and none effective, and capset then
+ * makes CAP_CHOWN effective, with which fchown gives user 1000 a file of
+ * root's.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
@@ -155,6 +160,8 @@ enum {
     TRACEME,
     TRACEME_LEADER,
     OWN_EXE,
+    EFFECTIVE_APART,
+    KEEP_CAPS,
     CHECKS
 };
 
@@ -201,6 +208,8 @@ static const struct {
     {"traceme", "a child with capabilities made a parent without them its tracer"},
     {"traceme-leader", "a privileged child made its tracer a parent whose live thread was not"},
     {"own-exe", "a thread without capabilities could not read its own process's exe link"},
+    {"effective-apart", "capset did not keep the effective set apart from the permitted one"},
+    {"keep-caps", "PR_SET_KEEPCAPS did not keep the permitted set through setresuid to user 1000"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -1121,6 +1130,98 @@ static int later_rows(void)
     return 0;
 }
 
+/** Whether the two words of `d` have `eff` and `perm` as their first
+ * effective and permitted words, and nothing in the second. */
+static int sets_are(const struct cap_data *d, unsigned eff, unsigned perm)
+{
+    return d[0].effective == eff && d[0].permitted == perm && d[1].effective == 0 &&
+           d[1].permitted == 0;
+}
+
+/**
+ * In a child of root: capset keeps CAP_CHOWN effective and CAP_CHOWN and
+ * CAP_DAC_OVERRIDE permitted, and capget reports the two sets apart; a
+ * second capset raises CAP_DAC_OVERRIDE into the effective set again.
+ * Returns 1 when all of it holds, else 0.
+ */
+static int effective_apart(void)
+{
+    struct cap_data d[2];
+
+    memset(d, 0, sizeof(d));
+    d[0].effective = CHOWN;
+    d[0].permitted = CHOWN | DAC;
+    if (set_caps(d) != 0 || get_caps(d) != 0 || !sets_are(d, CHOWN, CHOWN | DAC)) {
+        return 0;
+    }
+    memset(d, 0, sizeof(d));
+    d[0].effective = d[0].permitted = CHOWN | DAC;
+    return set_caps(d) == 0 && get_caps(d) == 0 && sets_are(d, CHOWN | DAC, CHOWN | DAC);
+}
+
+/**
+ * In a child of root: under PR_SET_KEEPCAPS, which PR_GET_KEEPCAPS and
+ * PR_GET_SECUREBITS (SECBIT_KEEP_CAPS, 0x10) then report, setresuid to user
+ * 1000 keeps every capability permitted and none effective; capset makes
+ * CAP_CHOWN effective again, and fchown of a file root made gives it to
+ * user 1000. Returns 1 when all of it holds, else 0.
+ */
+static int keeps_caps(int fd)
+{
+    struct cap_data d[2];
+    uid_t user = (uid_t)probe_id(1000);
+
+    if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0 || prctl(PR_GET_KEEPCAPS, 0, 0, 0, 0) != 1 ||
+        prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) != 0x10 || setresuid(user, user, user) != 0) {
+        return 0;
+    }
+    if (get_caps(d) != 0 || d[0].effective != 0 || d[1].effective != 0 ||
+        d[0].permitted != 0xFFFFFFFFu || d[1].permitted != HIGH_WORD) {
+        return 0;
+    }
+    if (fchown(fd, user, (gid_t)-1) != -1 || errno != EPERM) {
+        return 0;
+    }
+    memset(d, 0, sizeof(d));
+    d[0].effective = d[0].permitted = CHOWN;
+    return set_caps(d) == 0 && get_caps(d) == 0 && sets_are(d, CHOWN, CHOWN) &&
+           fchown(fd, user, (gid_t)-1) == 0;
+}
+
+/**
+ * Run `effective_apart` and `keeps_caps` each in a forked child. Returns 0,
+ * or 1 after the failure is printed.
+ */
+static int sets_rows(void)
+{
+    const char *path = "/tmp/capmusl.keep";
+    pid_t pid = fork();
+    int status, fd;
+
+    if (pid == 0) {
+        _exit(effective_apart() ? 0 : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail(EFFECTIVE_APART);
+    }
+    fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        return fail(KEEP_CAPS);
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(keeps_caps(fd) ? 0 : 1);
+    }
+    close(fd);
+    unlink(path);
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail(KEEP_CAPS);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int row;
@@ -1142,6 +1243,9 @@ int main(int argc, char **argv)
         return fail(DROPPED_CHILD + row - 1);
     }
     if (later_rows() != 0) {
+        return 1;
+    }
+    if (sets_rows() != 0) {
         return 1;
     }
 

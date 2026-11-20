@@ -412,11 +412,12 @@ void ns_exec(process_t *p);
 int cap_ids(const process_t *p);
 
 /**
- * Word `i` of the capabilities `p` holds by its effective user id, its
- * permitted set and, but for the capabilities of CAP_FS_SET
- * (`cap_eff_word`), its effective one: those it has not lost (`cap_lost`)
- * when its ids give them (`cap_ids`) or an exec gave it its ambient set
- * (`amb_granted`); none otherwise.
+ * Word `i` of `p`'s permitted set: the capabilities it has not lost
+ * (`cap_lost`) while its ids give them, its real, effective or saved user
+ * id root in its user namespace or `cap_ids`, or an exec gave it its
+ * ambient set (`amb_granted`); none otherwise. Linux keeps the permitted
+ * set while one of the three ids is root and empties it when the last
+ * leaves root (`cap_emulate_setxuid`).
  */
 uint32_t cap_word(const process_t *p, uint32_t i);
 
@@ -428,7 +429,11 @@ uint32_t cap_word(const process_t *p, uint32_t i);
 #define CAP_FS_WORD1 0x1u
 
 /**
- * Word `i` of `p`'s effective set: `cap_word`, with the capabilities of
+ * Word `i` of `p`'s effective set. Set by capset (`eff_own`), it is
+ * `cap_eff` within the permitted set, less CAP_FS_SET while the
+ * file-system user id is not root and the effective one is. Otherwise it
+ * is the permitted set while `cap_ids` or `amb_granted` holds, and empty
+ * else, with the capabilities of
  * CAP_FS_SET by the file-system user id in place of the effective one, as
  * Linux's `cap_task_fix_setuid` moves them for setfsuid: those `p` has not
  * lost while that id is root in its user namespace, and none once
@@ -443,9 +448,29 @@ uint32_t cap_eff_word(const process_t *p, uint32_t i);
  * effective set (`cap_eff_word`). */
 int cap_holds(const process_t *p, uint32_t cap);
 
-/** Make `lost0` and `lost1` the capabilities `p` has lost, `cap_lost`, and
- * set `nocaps` by whether CAP_SYS_ADMIN is among them. */
+/** Make `lost0` and `lost1` the capabilities `p` has lost, `cap_lost`,
+ * let its effective set follow its ids again (`eff_own`), and set `nocaps`
+ * by whether CAP_SYS_ADMIN is among them. */
 void cap_store(process_t *p, uint32_t lost0, uint32_t lost1);
+
+/* The secure bits, Linux's `securebits.h`. Each even bit has a lock at the
+ * bit above it, which, once set, keeps both. SECBIT_NOROOT: root gains no
+ * capability at an exec. SECBIT_NO_SETUID_FIXUP: a change of user ids
+ * leaves the capabilities as they were. SECBIT_KEEP_CAPS: user ids that
+ * all leave root keep the permitted set; an exec clears it.
+ * SECBIT_NO_CAP_AMBIENT_RAISE: PR_CAP_AMBIENT_RAISE is refused. */
+#define SECBIT_NOROOT               0x01u
+#define SECBIT_NO_SETUID_FIXUP      0x04u
+#define SECBIT_KEEP_CAPS            0x10u
+#define SECBIT_KEEP_CAPS_LOCKED     0x20u
+#define SECBIT_NO_CAP_AMBIENT_RAISE 0x40u
+#define SECBIT_ALL_BITS             0x55u
+#define SECBIT_ALL_LOCKS            0xAAu
+
+/** Make `eff0` and `eff1` `p`'s effective set within its permitted one,
+ * as capset does, and set `nocaps` by whether CAP_SYS_ADMIN is out of
+ * it. */
+void cap_store_eff(process_t *p, uint32_t eff0, uint32_t eff1);
 
 /** Give `p` every capability in its user namespace, whatever its ids there,
  * a full bounding set and empty inheritable and ambient sets, as making or

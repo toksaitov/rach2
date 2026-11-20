@@ -1093,19 +1093,73 @@ static int uids_root(const process_t *p)
     return uid_seen(p->ruid) == 0 || uid_seen(p->euid) == 0 || uid_seen(p->suid) == 0;
 }
 
-/**
- * Empty `p`'s ambient set when its user ids leave root: `had_root`, from
- * `uids_root` before the change, said one of them was root, and none is
- * now. Linux's `cap_emulate_setxuid` does so, since a program written
- * before the ambient set expects a change to ids other than root and an
- * exec to leave no capability; it empties the permitted set too, and so
- * the capabilities an exec gave from the ambient set go (`amb_granted`).
- */
-static void ambient_uid_moved(process_t *p, int had_root)
+/* A thread's capabilities and user ids before a call that sets user ids,
+ * for `uid_caps_moved`. */
+struct uid_caps {
+    int had_root;      /* `uids_root` */
+    uint32_t old_euid; /* the effective uid */
+    uint32_t perm[2];  /* the permitted set, `cap_word` */
+    uint32_t eff[2];   /* the effective set, `cap_eff_word` */
+};
+
+/** Keep in `c` what `uid_caps_moved` needs of `p` before its ids change. */
+static void uid_caps_save(const process_t *p, struct uid_caps *c)
 {
-    if (had_root && !uids_root(p)) {
-        p->cap_amb[0] = p->cap_amb[1] = 0;
-        p->amb_granted = 0;
+    uint32_t i;
+
+    c->had_root = uids_root(p);
+    c->old_euid = p->euid;
+    for (i = 0; i < 2; i++) {
+        c->perm[i] = cap_word(p, i);
+        c->eff[i] = cap_eff_word(p, i);
+    }
+}
+
+/**
+ * Give `p`, whose user ids a call has just set, the capabilities Linux's
+ * `cap_emulate_setxuid` leaves, from those `c` kept before the call. Ids
+ * that all leave root empty the ambient set, since a program written before
+ * it expects a change to ids other than root and an exec to leave no
+ * capability, and empty the permitted and effective sets too, unless
+ * SECBIT_KEEP_CAPS keeps them; an effective uid that leaves root empties
+ * the effective set, and one that comes to root makes it the permitted
+ * one. SECBIT_NO_SETUID_FIXUP leaves all of them as they were. Where the
+ * sets that result are not those the new ids give, they are stored: the
+ * permitted set, held without ids that give it, as `amb_granted` holds it,
+ * and the effective set by `cap_store_eff`.
+ */
+static void uid_caps_moved(process_t *p, const struct uid_caps *c)
+{
+    uint32_t perm[2], eff[2], i;
+    int was_root = uid_seen(c->old_euid) == 0, is_root = uid_seen(p->euid) == 0;
+    int same = 1;
+
+    k_memcpy(perm, c->perm, sizeof(perm));
+    k_memcpy(eff, c->eff, sizeof(eff));
+    if (!(p->securebits & SECBIT_NO_SETUID_FIXUP)) {
+        if (c->had_root && !uids_root(p)) {
+            p->cap_amb[0] = p->cap_amb[1] = 0;
+            p->amb_granted = 0;
+            if (!(p->securebits & SECBIT_KEEP_CAPS)) {
+                k_memset(perm, 0, sizeof(perm));
+                k_memset(eff, 0, sizeof(eff));
+            }
+        }
+        if (was_root != is_root) {
+            eff[0] = is_root ? perm[0] : 0;
+            eff[1] = is_root ? perm[1] : 0;
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        same = same && cap_word(p, i) == perm[i] && cap_eff_word(p, i) == eff[i];
+    }
+    if (same) {
+        return;
+    }
+    cap_store(p, ~perm[0], ~perm[1]);
+    p->amb_granted = (perm[0] | perm[1]) != 0 && !uids_root(p) && !cap_ids(p);
+    if (cap_eff_word(p, 0) != eff[0] || cap_eff_word(p, 1) != eff[1]) {
+        cap_store_eff(p, eff[0], eff[1]);
     }
 }
 
@@ -1840,19 +1894,28 @@ static void exec_ids(struct exec_state *s)
  * (`exec_ids`). An image whose ids give no capability (`cap_ids`) holds
  * those of the ambient set and loses the rest (`amb_granted`), so that a
  * sandbox an ordinary user starts, such as bubblewrap's --cap-add in a user
- * namespace whose uid is not 0, keeps what it was asked to keep.
+ * namespace whose uid is not 0, keeps what it was asked to keep; one whose
+ * real or saved uid is root keeps the permitted set of root and has the
+ * ambient set as its effective one. Under SECBIT_NOROOT, root is not
+ * special and every image holds its ambient set alone. The exec clears
+ * SECBIT_KEEP_CAPS.
  */
 static void exec_ambient(process_t *p, int secure)
 {
     uint32_t i;
+    int amb = (p->cap_amb[0] | p->cap_amb[1]) != 0;
 
     p->amb_granted = 0;
+    p->securebits &= ~SECBIT_KEEP_CAPS;
     if (secure) {
         p->cap_amb[0] = p->cap_amb[1] = 0;
+        amb = 0;
     }
-    if (!cap_ids(p) && (p->cap_amb[0] | p->cap_amb[1]) != 0) {
+    if ((p->securebits & SECBIT_NOROOT) || (!cap_ids(p) && amb && !cap_word(p, 0))) {
         p->amb_granted = 1;
         cap_store(p, ~p->cap_amb[0], ~p->cap_amb[1]);
+    } else if (!cap_ids(p) && amb) {
+        cap_store_eff(p, p->cap_amb[0], p->cap_amb[1]);
     }
     for (i = 0; i < 2; i++) {
         p->cap_amb[i] &= cap_word(p, i);
@@ -2879,6 +2942,10 @@ static void fork_ids(process_t *child, const process_t *parent)
     k_memcpy(child->cap_amb, parent->cap_amb, sizeof(child->cap_amb));
     child->amb_granted = parent->amb_granted;
     cap_store(child, parent->cap_lost[0], parent->cap_lost[1]);
+    if (parent->eff_own) {
+        cap_store_eff(child, parent->cap_eff[0], parent->cap_eff[1]);
+    }
+    child->securebits = parent->securebits;
     if (child->tg == parent->tg) {
         child->cred_id = parent->cred_id; /* CLONE_THREAD shares the creds */
     }
@@ -7523,7 +7590,7 @@ long sys_umask(isr_params_t *params)
  * make its real or saved ID its effective one. The change is the calling
  * thread's alone, as on Linux, and a new effective ID loses what `cred_moved`
  * takes away; ids that leave root empty the ambient set
- * (`ambient_uid_moved`). -EINVAL for -1 or an ID the namespace does not map
+ * (`uid_caps_moved`). -EINVAL for -1 or an ID the namespace does not map
  * (`ids_named`), -EPERM otherwise.
  */
 long sys_setuid(isr_params_t *params)
@@ -7531,8 +7598,9 @@ long sys_setuid(isr_params_t *params)
     process_t *p = current_proc;
     uint32_t uid = (uint32_t)SC_ARG(params, 0);
     uint32_t old_euid = p->euid;
-    int had_root = uids_root(p);
+    struct uid_caps caps;
 
+    uid_caps_save(p, &caps);
     if (uid == SC_ID_KEEP || ids_named(&uid, 1, 0) != 0) {
         return -EINVAL;
     }
@@ -7544,14 +7612,14 @@ long sys_setuid(isr_params_t *params)
         p->suid = uid;
         fsuid_follow(p);
         cred_moved(p, old_euid, p->egid);
-        ambient_uid_moved(p, had_root);
+        uid_caps_moved(p, &caps);
         return 0;
     }
     if (uid == p->ruid || uid == p->suid) {
         p->euid = uid;
         fsuid_follow(p);
         cred_moved(p, old_euid, p->egid);
-        ambient_uid_moved(p, had_root);
+        uid_caps_moved(p, &caps);
         return 0;
     }
     return -EPERM;
@@ -7590,7 +7658,7 @@ long sys_setgid(isr_params_t *params)
  * effective one, and the effective ID to any of its three. The saved ID takes
  * the new effective one when the real ID is set, or when the effective ID is
  * set to other than the old real one. Ids that leave root empty the ambient
- * set (`ambient_uid_moved`). -EINVAL for an ID the namespace does not map,
+ * set (`uid_caps_moved`). -EINVAL for an ID the namespace does not map,
  * -EPERM.
  */
 long sys_setreuid(isr_params_t *params)
@@ -7599,8 +7667,9 @@ long sys_setreuid(isr_params_t *params)
     uint32_t v[2];
     uint32_t r, e, new_r, new_e;
     uint32_t old_euid = p->euid;
-    int had_root = uids_root(p);
+    struct uid_caps caps;
 
+    uid_caps_save(p, &caps);
     v[0] = (uint32_t)SC_ARG(params, 0);
     v[1] = (uint32_t)SC_ARG(params, 1);
     if (ids_named(v, 2, 0) != 0) {
@@ -7628,7 +7697,7 @@ long sys_setreuid(isr_params_t *params)
     p->euid = new_e;
     fsuid_follow(p);
     cred_moved(p, old_euid, p->egid);
-    ambient_uid_moved(p, had_root);
+    uid_caps_moved(p, &caps);
     return 0;
 }
 
@@ -7673,7 +7742,7 @@ long sys_setregid(isr_params_t *params)
  * one of its current three. A call that would change no id, the file-system
  * one included, returns 0 at once, as Linux's does, and so leaves an id that
  * setfsuid set apart, the dumpable flag and the parent-death signal. Ids that
- * leave root empty the ambient set (`ambient_uid_moved`). -EINVAL for an ID
+ * leave root empty the ambient set (`uid_caps_moved`). -EINVAL for an ID
  * the namespace does not map, -EPERM.
  */
 long sys_setresuid(isr_params_t *params)
@@ -7682,8 +7751,9 @@ long sys_setresuid(isr_params_t *params)
     uint32_t v[3];
     uint32_t r, e, s;
     uint32_t old_euid = p->euid;
-    int had_root = uids_root(p);
+    struct uid_caps caps;
 
+    uid_caps_save(p, &caps);
     v[0] = (uint32_t)SC_ARG(params, 0);
     v[1] = (uint32_t)SC_ARG(params, 1);
     v[2] = (uint32_t)SC_ARG(params, 2);
@@ -7718,7 +7788,7 @@ long sys_setresuid(isr_params_t *params)
     }
     fsuid_follow(p);
     cred_moved(p, old_euid, p->egid);
-    ambient_uid_moved(p, had_root);
+    uid_caps_moved(p, &caps);
     return 0;
 }
 
@@ -11576,7 +11646,13 @@ long sys_sched_setaffinity(isr_params_t *params)
 
 #define PR_CAPBSET_DROP 24
 
-#define PR_CAP_AMBIENT 47
+#define PR_CAP_AMBIENT    47
+/* Whether user ids that leave root keep the permitted capabilities. */
+#define PR_GET_KEEPCAPS   7
+#define PR_SET_KEEPCAPS   8
+/* The secure bits, SECBIT_* (ns.h). */
+#define PR_GET_SECUREBITS 27
+#define PR_SET_SECUREBITS 28
 
 #define PR_SET_THP_DISABLE 41
 
@@ -11598,8 +11674,9 @@ static int cap_in(const uint32_t *set, unsigned long cap)
  * prctl's PR_CAP_AMBIENT, the operation `op` with the capability `cap` and
  * the last two arguments `rest`, which must be 0, as Linux's `cap_task_prctl`
  * takes it. PR_CAP_AMBIENT_IS_SET answers whether `cap` is in the ambient
- * set, 1 or 0; PR_CAP_AMBIENT_RAISE adds it, for a thread that holds it
- * (`cap_word`) and has it in its inheritable set, else -EPERM;
+ * set, 1 or 0; PR_CAP_AMBIENT_RAISE adds it, for a thread that has it
+ * in its permitted (`cap_word`) and inheritable sets and has not set
+ * SECBIT_NO_CAP_AMBIENT_RAISE, else -EPERM;
  * PR_CAP_AMBIENT_LOWER takes it out, and PR_CAP_AMBIENT_CLEAR_ALL, whose
  * `cap` must be 0 too, empties the set. -EINVAL for another operation or a
  * capability past CAP_LAST_CAP.
@@ -11623,7 +11700,8 @@ static long prctl_ambient(unsigned long op, unsigned long cap, unsigned long res
     case PR_CAP_AMBIENT_IS_SET:
         return cap_in(p->cap_amb, cap);
     case PR_CAP_AMBIENT_RAISE:
-        if (!cap_holds(p, (uint32_t)cap) || !cap_in(p->cap_inh, cap)) {
+        if (!(cap_word(p, (uint32_t)(cap >> 5)) & (1u << (cap & 31u))) ||
+            !cap_in(p->cap_inh, cap) || (p->securebits & SECBIT_NO_CAP_AMBIENT_RAISE)) {
             return -EPERM;
         }
         p->cap_amb[cap >> 5] |= 1u << (cap & 31u);
@@ -11636,6 +11714,47 @@ static long prctl_ambient(unsigned long op, unsigned long cap, unsigned long res
     default:
         return -EINVAL;
     }
+}
+
+/**
+ * prctl's PR_GET_KEEPCAPS, PR_SET_KEEPCAPS, PR_GET_SECUREBITS and
+ * PR_SET_SECUREBITS, `op`, with the second argument `arg2`, as Linux's
+ * `cap_task_prctl` takes them. PR_SET_KEEPCAPS sets or clears
+ * SECBIT_KEEP_CAPS: -EINVAL for other than 0 or 1, -EPERM while its lock
+ * is set. PR_SET_SECUREBITS makes `arg2` the bits, for a thread with
+ * CAP_SETPCAP, and -EPERM without it, for a bit Linux does not define,
+ * for a change to a locked bit and for clearing a lock. The two gets return
+ * SECBIT_KEEP_CAPS as 1 or 0, and the bits.
+ */
+static long prctl_securebits(unsigned long op, uintptr_t arg2)
+{
+    process_t *p = current_proc;
+    uint32_t old = p->securebits;
+
+    switch (op) {
+    case PR_GET_KEEPCAPS:
+        return (old & SECBIT_KEEP_CAPS) != 0;
+    case PR_SET_KEEPCAPS:
+        if (arg2 > 1) {
+            return -EINVAL;
+        }
+        if (old & SECBIT_KEEP_CAPS_LOCKED) {
+            return -EPERM;
+        }
+        p->securebits = arg2 ? old | SECBIT_KEEP_CAPS : old & ~SECBIT_KEEP_CAPS;
+        return 0;
+    case PR_GET_SECUREBITS:
+        return (long)old;
+    default:
+        break;
+    }
+    if ((((old & SECBIT_ALL_LOCKS) >> 1) & (old ^ arg2)) != 0 ||
+        (old & SECBIT_ALL_LOCKS & ~arg2) != 0 || (arg2 & ~(uintptr_t)0xFFu) != 0 ||
+        !cap_holds(p, CAP_SETPCAP)) {
+        return -EPERM;
+    }
+    p->securebits = (uint32_t)arg2;
+    return 0;
 }
 
 /**
@@ -11805,6 +11924,11 @@ long sys_prctl(isr_params_t *params)
     case PR_CAPBSET_READ:
     case PR_CAPBSET_DROP:
         return prctl_bset(SC_ARG(params, 0), arg2);
+    case PR_GET_KEEPCAPS:
+    case PR_SET_KEEPCAPS:
+    case PR_GET_SECUREBITS:
+    case PR_SET_SECUREBITS:
+        return prctl_securebits(SC_ARG(params, 0), arg2);
     case PR_CAP_AMBIENT:
         return prctl_ambient(arg2, SC_ARG(params, 2), SC_ARG(params, 3) | SC_ARG(params, 4));
     case PR_SET_THP_DISABLE:
@@ -11941,13 +12065,14 @@ long sys_capget(isr_params_t *params)
  *
  * The calling thread keeps the capabilities of the permitted set it gives
  * and loses the rest (`cap_store`), until an exec gives back those of its
- * bounding and inheritable sets (`exec_ids`). The kernel keeps one set for
- * the effective and permitted ones, so the effective set a thread holds is
- * its permitted one, and it is privileged while that has CAP_SYS_ADMIN
- * (`nocaps`): Chromium's zygote gives up every capability in each process
- * it forks, and keeps CAP_SYS_ADMIN alone in a user namespace; bubblewrap
- * keeps those its caller asks for, in the inheritable set too, and raises
- * them as ambient so that the command it runs keeps them.
+ * bounding and inheritable sets (`exec_ids`). Its effective set is the one
+ * it gives (`cap_store_eff`), which it may later raise again within the
+ * permitted set, until an exec or a move of its effective uid to or from
+ * root makes the ids decide it again. It is privileged while that set has
+ * CAP_SYS_ADMIN (`nocaps`): Chromium's zygote gives up every capability in
+ * each process it forks, and keeps CAP_SYS_ADMIN alone in a user namespace;
+ * bubblewrap keeps those its caller asks for, in the inheritable set too,
+ * and raises them as ambient so that the command it runs keeps them.
  *
  * The rules are Linux's `cap_capset`: bits past CAP_LAST_CAP are ignored; a
  * pid other than 0 and the caller's is -EPERM, as is a permitted set wider
@@ -11999,6 +12124,7 @@ long sys_capset(isr_params_t *params)
         }
     }
     cap_store(p, ~d[0].permitted, ~d[1].permitted);
+    cap_store_eff(p, d[0].effective, d[1].effective);
     for (i = 0; i < 2; i++) {
         p->cap_inh[i] = d[i].inheritable;
         p->cap_amb[i] &= d[i].permitted & d[i].inheritable;

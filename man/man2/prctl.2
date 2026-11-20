@@ -37,6 +37,16 @@ process, and a child that
 made with
 .Dv CLONE_VM ,
 share one, so what one of them sets the others read.
+.It Dv PR_GET_KEEPCAPS No (7)
+Return 1 when the caller keeps its permitted capabilities through user
+IDs that all leave 0, and 0 when not.
+.It Dv PR_SET_KEEPCAPS No (8)
+Set that to the second argument, 0 or 1: the bit
+.Dv SECBIT_KEEP_CAPS
+of
+.Dv PR_SET_SECUREBITS ,
+which an exec clears
+.Pq see Xr capget 2 .
 .It Dv PR_SET_NAME No (15)
 Set the caller's program name, which
 .Pa /proc/ Ns Ar pid Ns Pa /stat
@@ -63,6 +73,27 @@ bounding set, for good: no exec gives it again.
 The caller needs
 .Dv CAP_SETPCAP .
 A thread that holds the capability keeps it.
+.It Dv PR_GET_SECUREBITS No (27)
+Return the caller's secure bits.
+.It Dv PR_SET_SECUREBITS No (28)
+Make the second argument the caller's secure bits, Linux's, each with a
+lock at the bit above it that, once set, keeps the two as they are:
+.Dv SECBIT_NOROOT
+(0x01), under which root gains no capability at an exec but those of its
+ambient set;
+.Dv SECBIT_NO_SETUID_FIXUP
+(0x04), under which a change of user IDs leaves the capabilities as they
+were;
+.Dv SECBIT_KEEP_CAPS
+(0x10); and
+.Dv SECBIT_NO_CAP_AMBIENT_RAISE
+(0x40), under which
+.Dv PR_CAP_AMBIENT_RAISE
+is refused.
+The caller needs
+.Dv CAP_SETPCAP .
+A fork passes the bits on, and making or joining a user namespace clears
+them.
 .It Dv PR_SET_TIMERSLACK No (29)
 Set the calling thread's timer slack, how many nanoseconds past the time
 it asks for a
@@ -120,7 +151,9 @@ The second argument is the operation and the third a capability of 0 to
 .Dv PR_CAP_AMBIENT_IS_SET
 (1) returns 1 when the capability is in the set and 0 when not.
 .Dv PR_CAP_AMBIENT_RAISE
-(2) adds it, when the thread holds it and has it in its inheritable set.
+(2) adds it, when the thread has it in its permitted and inheritable sets
+and has not set
+.Dv SECBIT_NO_CAP_AMBIENT_RAISE .
 .Dv PR_CAP_AMBIENT_LOWER
 (3) takes it out.
 .Dv PR_CAP_AMBIENT_CLEAR_ALL
@@ -245,7 +278,9 @@ first; the setting is as it was.
 .It Bq Er EINVAL
 .Fa option
 is none of those above, the signal is past 64, the dumpable value is
-neither 0 nor 1, or the arguments of the no_new_privs options are not as
+neither 0 nor 1, nor is that of
+.Dv PR_SET_KEEPCAPS ,
+or the arguments of the no_new_privs options are not as
 above, or a capability is past 40, or the ambient operation is none of the
 four or has an argument that must be 0 and is not.
 Every option Linux has and this kernel does not is refused this way, as
@@ -256,8 +291,17 @@ by a thread without
 .Dv CAP_SETPCAP ,
 or
 .Dv PR_CAP_AMBIENT_RAISE
-of a capability the thread does not hold or that is not in its
-inheritable set.
+of a capability that is not in the thread's permitted or inheritable set,
+or under
+.Dv SECBIT_NO_CAP_AMBIENT_RAISE ;
+.Dv PR_SET_KEEPCAPS
+while the lock of
+.Dv SECBIT_KEEP_CAPS
+is set;
+.Dv PR_SET_SECUREBITS
+by a thread without
+.Dv CAP_SETPCAP ,
+with a bit past 0x80, or that changes a locked bit or clears a lock.
 .El
 .Sh SEE ALSO
 .Xr capget 2 ,

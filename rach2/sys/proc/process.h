@@ -599,10 +599,16 @@ struct process {
      * its ids give it privilege, which capset takes away and an exec gives
      * back up to the bounding set; `bset_lost` are those dropped from the
      * bounding set with PR_CAPBSET_DROP, which no exec gives back. A fork
-     * passes both on (`fork_ids`). `nocaps` is set while CAP_SYS_ADMIN is
-     * in `cap_lost`: the kernel's checks of privilege are whole, and a
-     * thread without that capability is not privileged, whatever its ids
-     * (`proc_privileged`). `cap_store` keeps the three in step.
+     * passes both on (`fork_ids`). `cap_lost` is of the permitted set;
+     * while `eff_own` is set, the effective set is `cap_eff` within the
+     * permitted one, as capset left it, and while it is clear the effective
+     * set follows the ids (`cap_eff_word`), as an exec, a move of the
+     * effective uid to or from root and making or joining a user namespace
+     * leave it. `nocaps` is set while CAP_SYS_ADMIN is out of the effective
+     * set by `cap_lost` or `cap_eff`: the kernel's checks of privilege are
+     * whole, and a thread without that capability is not privileged,
+     * whatever its ids (`proc_privileged`). `cap_store` and `cap_store_eff`
+     * keep them in step.
      * `cap_inh` and `cap_amb` are the inheritable and ambient sets, stored
      * as the bits held, empty in a record of zeros. An exec keeps the
      * inheritable set and adds it to the bounding set an image of root
@@ -618,6 +624,12 @@ struct process {
     uint32_t cap_lost[2];
     uint32_t bset_lost[2];
     uint32_t nocaps;
+    uint32_t eff_own;
+    uint32_t cap_eff[2];
+    /* prctl's PR_SET_SECUREBITS bits, SECBIT_* in ns.h, Linux's numbering:
+     * a fork passes them on, an exec clears SECBIT_KEEP_CAPS, and making or
+     * joining a user namespace clears them all. */
+    uint32_t securebits;
     uint32_t cap_inh[2];
     uint32_t cap_amb[2];
     uint32_t amb_granted;
