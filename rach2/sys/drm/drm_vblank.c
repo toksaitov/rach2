@@ -1052,9 +1052,13 @@ int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t fr
     return rc;
 }
 
-int drm_crtc_crc_ready(const struct drm_crtc *crtc)
+int drm_crtc_crc_ready(struct drm_crtc *crtc)
 {
-    return crtc->crc.entries && crc_count(&crtc->crc) != 0;
+    uint32_t flags = spin_lock_irqsave(&crtc->crc.lock);
+    int ready = crtc->crc.entries && crc_count(&crtc->crc) != 0;
+
+    spin_unlock_irqrestore(&crtc->crc.lock, flags);
+    return ready;
 }
 
 /** Whether crc/data's reader of `arg`, a CRTC, may go on: an entry, or the
