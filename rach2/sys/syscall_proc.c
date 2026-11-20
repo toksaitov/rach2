@@ -7977,6 +7977,8 @@ long sys_getgroups(isr_params_t *params)
 
 #define RLIMIT_AS_RES 9
 
+#define RLIMIT_MSGQUEUE_RES 12
+
 #define RLIMIT_NICE_RES 13
 
 #define RLIMIT_RTPRIO_RES 14
@@ -8006,6 +8008,8 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_NICE;
     case RLIMIT_RTPRIO_RES:
         return RLIM_RTPRIO;
+    case RLIMIT_MSGQUEUE_RES:
+        return RLIM_MSGQUEUE;
     default:
         return -1;
     }

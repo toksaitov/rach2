@@ -83,6 +83,11 @@ struct userns {
      * NS_LIMIT_UNSET until first read, then half the threads Linux would
      * allow the machine's memory; the others' start at 0x7FFFFFFF. */
     int32_t max_mnt;
+    /* The soft RLIMIT_MSGQUEUE of its creator when it was made: the bytes
+     * the creator's record in the parent namespace may hold for the queues
+     * made in it and below it (`mq_charge` in ipc/mqueue.c). Unused in the
+     * first. */
+    unsigned long msgqueue_max;
 };
 
 /* The first user namespace's max_mnt before it is first read. */
@@ -308,6 +313,10 @@ uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid);
 /** Take a reference to the PID namespace `ns`, which the caller drops with
  * `ns_put`, and return `ns`. */
 struct pidns *pidns_get(struct pidns *ns);
+
+/** Take a reference to the user namespace `ns`, which the caller drops
+ * with `ns_put`, and return `ns`. */
+struct userns *userns_get(struct userns *ns);
 
 /** Whether the PID namespace `ns` is the current process's or one below it,
  * those whose processes the current process may name, as Linux's

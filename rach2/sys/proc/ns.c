@@ -67,7 +67,8 @@ struct userns init_userns = {{1, 0xEFFFFFFDu, NS_USER, NULL},
                              {1, {{0, 0, 0xFFFFFFFFu}}, NULL, NULL},
                              {1, {{0, 0, 0xFFFFFFFFu}}, NULL, NULL},
                              0,
-                             NS_LIMIT_UNSET};
+                             NS_LIMIT_UNSET,
+                             0};
 struct pidns init_pidns = {{1, 0xEFFFFFFCu, NS_PID, NULL}, NULL, 0, 0, 1, 0, 1};
 struct mntns init_mntns = {{1, 0xF0000000u, NS_MNT, NULL}, 0, 0, NULL, NULL};
 struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}, NULL};
@@ -879,6 +880,12 @@ struct pidns *pidns_get(struct pidns *ns)
     return ns;
 }
 
+struct userns *userns_get(struct userns *ns)
+{
+    ns_get(&ns->c);
+    return ns;
+}
+
 uint32_t pidns_last_pid(void)
 {
     const struct pidns *ns = proc_pidns(current_proc);
@@ -1041,6 +1048,7 @@ static struct userns *userns_new(struct userns *parent, const process_t *p, int3
     ns->owner_uid = p->euid;
     ns->owner_gid = p->egid;
     ns->max_mnt = NS_LIMIT_MAX;
+    ns->msgqueue_max = p->rlim[RLIM_MSGQUEUE].cur;
     return ns;
 }
 

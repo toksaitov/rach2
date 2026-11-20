@@ -3,7 +3,12 @@
  * of the clock, as Linux's wq_sleep waits on an hrtimer of CLOCK_REALTIME,
  * and that a signal pending at its deadline ends it with EINTR; and that the
  * mqueue file system's setattr stores a queue's and the root's attributes
- * as Linux's simple_setattr does, and a message moves the queue's times.
+ * as Linux's simple_setattr does, and a message moves the queue's times;
+ * that a queue is charged to its maker's RLIMIT_MSGQUEUE and to each
+ * ancestor namespace's creator, as Linux's ucounts charge it; that
+ * mq_notify takes SIGEV_THREAD with a netlink socket and sends its cookie,
+ * a signal of 0, and sends no signal to a process that ran an exec since
+ * it registered; and that FIBMAP is Linux's.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
@@ -32,6 +37,20 @@
 extern int printf(const char *format, ...);
 
 static process_t self;
+static struct tgroup self_tg;
+struct userns init_userns;
+/* The user namespace the rows' process is in, the first unless a row sets
+ * it; the references `userns_get` and `ns_put` count; the datagrams sent
+ * and the references taken on the rows' netlink socket; and the process
+ * `get_process` finds and the signals posted to it. */
+static struct userns *self_ns = &init_userns;
+static int ns_refs;
+static struct socket nl_sock;
+static uint8_t nl_last[64];
+static uint32_t nl_len;
+static int nl_sent;
+static process_t *found;
+static int posted, posted_signo;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 struct ipcns init_ipcns;
 volatile uint64_t kernel_ticks;
@@ -466,19 +485,55 @@ void fd_ofd_status_set(struct open_file *ofd, uint32_t clear, uint32_t set)
     (void)set;
 }
 
-/** No row notifies a process. */
+/** The process a row lets notifications find, `found`. */
 process_t *get_process(uint32_t pid)
 {
-    (void)pid;
-    return NULL;
+    return found && found->tgid == pid ? found : NULL;
 }
 
-/** No row posts a signal. */
+/** Count a posted signal. */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
     (void)target;
-    (void)signo;
     (void)info;
+    posted++;
+    posted_signo = signo;
+}
+
+/** Record the datagram queued on the rows' netlink socket. */
+void netlink_deliver(struct socket *sock, const uint8_t *data, uint32_t len)
+{
+    if (sock == &nl_sock && len <= sizeof(nl_last)) {
+        k_memcpy(nl_last, data, len);
+        nl_len = len;
+        nl_sent++;
+    }
+}
+
+/** Count a reference to the rows' socket. */
+void socket_ref(struct socket *sock)
+{
+    sock->refcount++;
+}
+
+/** Drop a reference to the rows' socket. */
+void socket_unref(struct socket *sock)
+{
+    sock->refcount--;
+}
+
+/** Count a reference to a user namespace. */
+struct userns *userns_get(struct userns *ns)
+{
+    ns_refs++;
+    return ns;
+}
+
+/** Drop a reference to a namespace. */
+void ns_put(struct ns_common *c)
+{
+    (void)c;
+    ns_refs--;
 }
 
 /** The model's one IPC namespace. */
@@ -488,11 +543,11 @@ struct ipcns *proc_ipcns(const process_t *p)
     return &init_ipcns;
 }
 
-/** No user namespace is consulted by the rows. */
+/** The rows' user namespace, `self_ns`. */
 struct userns *proc_userns(const process_t *p)
 {
     (void)p;
-    return NULL;
+    return self_ns;
 }
 
 /** PIDs are the kernel's. */
@@ -796,6 +851,22 @@ static void queue_operations(int fd)
               "a queue has no extent map");
         CHECK(e->ops->ioctl && e->ops->ioctl(e, 0x1234, 16) == -ENOTTY,
               "a private ioctl has no queue handler");
+        {
+            uint32_t euid = self.euid;
+            int32_t block = 5;
+
+            k_memcpy(user + 16, &block, sizeof(block));
+            self.euid = 10;
+            CHECK(e->ops->ioctl(e, 1, 16) == -EPERM, "FIBMAP needs CAP_SYS_RAWIO");
+            self.euid = 0;
+            CHECK(e->ops->ioctl(e, 1, 16) == -EINVAL, "a queue's inode has no bmap");
+            k_memcpy(&block, user + 16, sizeof(block));
+            CHECK(block == 0, "FIBMAP of a queue gives block 0");
+            block = -1;
+            k_memcpy(user + 16, &block, sizeof(block));
+            CHECK(e->ops->ioctl(e, 1, 16) == -EINVAL, "FIBMAP refuses a negative block");
+            self.euid = euid;
+        }
     }
     q->notify_tgid = self.tgid = 1;
     mq_flush(e);
@@ -919,17 +990,224 @@ static void namespace_rows(void)
     mq_ns_gone(&init_ipcns);
 }
 
+/**
+ * A default queue costs 10 * 8192 bytes and 10 * (12 * sizeof(long)) of
+ * bookkeeping. Nine fit under the default RLIMIT_MSGQUEUE and the tenth is
+ * EMFILE, privileged or not; a lower limit refuses the first; invalid
+ * attributes are EINVAL before the charge; and in a namespace below the
+ * first, the creator's record in the first holds each queue too, up to the
+ * limit the creator had. Each queue's end gives its bytes back.
+ */
+static void charge_rows(void)
+{
+    static struct fs_struct fs;
+    struct vfs_mount *m;
+    struct mqueue *made[10];
+    struct mq_attr bad;
+    struct userns child;
+    unsigned long cost = 10ul * 8192ul + 10ul * 12ul * sizeof(long);
+    int i, n = 0;
+
+    CHECK(mq_root_made(&init_ipcns) == 0, "make the namespace's root again");
+    m = init_ipcns.mq;
+    self.fs = &fs;
+    self.ruid = 7;
+    self.euid = 0;
+    for (i = 0; i < 10; i++) {
+        char name[3] = {'c', (char)('0' + i), 0};
+        int32_t rc = mq_create(m, name, 0600, NULL, &made[n]);
+
+        if (rc == 0) {
+            n++;
+        } else {
+            CHECK(rc == -EMFILE && i == 9, "only the tenth default queue passes the limit");
+        }
+    }
+    CHECK(n == 9 && mq_users && mq_users->bytes == 9 * cost && mq_users->queues == 9,
+          "nine default queues are charged to their maker");
+    while (n > 0) {
+        mq_unname(made[--n]);
+    }
+    CHECK(!mq_users && ns_refs == 0, "a queue's end gives its charge back");
+    self.rlim[RLIM_MSGQUEUE].cur = cost - 1;
+    k_memset(&bad, 0, sizeof(bad));
+    CHECK(mq_create(m, "d", 0600, &bad, &made[0]) == -EINVAL,
+          "invalid attributes are refused before the charge");
+    CHECK(mq_create(m, "d", 0600, NULL, &made[0]) == -EMFILE && !mq_users,
+          "a queue past the soft limit is refused, with no charge left");
+    self.rlim[RLIM_MSGQUEUE].cur = RLIM_MSGQUEUE_DEFAULT;
+
+    k_memset(&child, 0, sizeof(child));
+    child.parent = &init_userns;
+    child.owner_uid = 5;
+    child.msgqueue_max = cost + cost / 2;
+    self_ns = &child;
+    CHECK(mq_create(m, "e", 0600, NULL, &made[0]) == 0 && mq_users &&
+              mq_users->ns == &init_userns && mq_users->uid == 5 && mq_users->bytes == cost &&
+              mq_users->next && mq_users->next->ns == &child && mq_users->next->uid == 7,
+          "a queue made below the first is charged to the namespace's creator too");
+    CHECK(mq_create(m, "f", 0600, NULL, &made[1]) == -EMFILE && mq_users->bytes == cost &&
+              mq_users->next->bytes == cost,
+          "the creator's limit when it made the namespace holds its queues");
+    mq_unname(made[0]);
+    CHECK(!mq_users && ns_refs == 0, "both records go with the last queue");
+    self_ns = &init_userns;
+}
+
+/** Empty `q` of its messages, so that the next one reaches it empty. */
+static void drain(struct mqueue *q)
+{
+    while (q->head) {
+        struct mq_msg *m = q->head;
+
+        q->head = m->next;
+        kfree(m);
+    }
+    q->curmsgs = 0;
+}
+
+/** Put the sigevent of kind `notify`, signal `signo` and value `value` at
+ * user address 100, where the rows' mq_notify reads it. */
+static void sigevent_at(int notify, int signo, uintptr_t value)
+{
+    struct {
+        uintptr_t value;
+        int32_t signo;
+        int32_t notify;
+    } ev;
+
+    ev.value = value;
+    ev.signo = signo;
+    ev.notify = notify;
+    k_memcpy(user + 100, &ev, sizeof(ev));
+}
+
+/**
+ * SIGEV_THREAD registers the netlink socket whose descriptor, 3, is the
+ * sigevent's signal and the cookie its value points at, 200; a message
+ * sends the cookie with NOTIFY_WOKENUP last, and a registration taken away
+ * by mq_notify with NOTIFY_REMOVED. A descriptor that is no socket is
+ * ENOTSOCK and a socket of another family EINVAL.
+ */
+static void socket_notify_rows(int fd, struct isr_params *note, struct isr_params *send)
+{
+    struct mqueue *q = slots[fd].ofd->vnode;
+
+    sigevent_at(2, fd, 200);
+    CHECK(sys_mq_notify(note) == -ENOTSOCK, "SIGEV_THREAD needs a socket");
+    nl_sock.family = 2;
+    sigevent_at(2, 3, 200);
+    CHECK(sys_mq_notify(note) == -EINVAL, "SIGEV_THREAD needs a netlink socket");
+    nl_sock.family = AF_NETLINK;
+    sigevent_at(2, 3, 0);
+    CHECK(sys_mq_notify(note) == -EFAULT, "the cookie is read from the caller");
+    sigevent_at(2, 3, 200);
+    q->atime_s = q->ctime_s = -1;
+    CHECK(sys_mq_notify(note) == 0 && nl_sock.refcount == 1 && q->atime_s != -1 &&
+              q->ctime_s == q->atime_s,
+          "SIGEV_THREAD registers the socket and moves the queue's times");
+    CHECK(sys_mq_notify(note) == -EBUSY, "a second registration is EBUSY");
+    CHECK(sys_mq_timedsend(send) == 0 && nl_sent == 1 && nl_len == 32 && nl_last[0] == 1 &&
+              nl_last[30] == 31 && nl_last[31] == 1 && nl_sock.refcount == 0 && !q->notify_tgid,
+          "a message sends the cookie with NOTIFY_WOKENUP and lets the socket go");
+    drain(q);
+    CHECK(sys_mq_notify(note) == 0, "register again");
+    note->ecx = 0;
+    CHECK(sys_mq_notify(note) == 0 && nl_sent == 2 && nl_last[31] == 2 && nl_sock.refcount == 0,
+          "taking the registration away sends NOTIFY_REMOVED");
+    note->ecx = 100;
+}
+
+/** A signal of 0 registers and posts nothing, one past 64 is EINVAL, and a
+ * process that ran an exec after it registered is sent no signal. */
+static void signal_notify_rows(int fd, struct isr_params *note, struct isr_params *send)
+{
+    struct mqueue *q = slots[fd].ofd->vnode;
+
+    sigevent_at(0, 0, 0);
+    found = &self;
+    posted = 0;
+    CHECK(sys_mq_notify(note) == 0 && sys_mq_timedsend(send) == 0 && posted == 0 && !q->notify_tgid,
+          "a signal of 0 registers and posts nothing");
+    drain(q);
+    sigevent_at(0, 65, 0);
+    CHECK(sys_mq_notify(note) == -EINVAL, "a signal past 64 is EINVAL");
+    sigevent_at(0, 10, 0);
+    CHECK(sys_mq_notify(note) == 0, "register a signal");
+    self_tg.exec_generation++;
+    CHECK(sys_mq_timedsend(send) == 0 && posted == 0 && !q->notify_tgid,
+          "no signal goes to a process that ran an exec since it registered");
+    drain(q);
+    CHECK(sys_mq_notify(note) == 0 && sys_mq_timedsend(send) == 0 && posted == 1 &&
+              posted_signo == 10,
+          "the signal goes to the process that registered");
+    drain(q);
+    found = NULL;
+}
+
+/** Make a queue and a netlink socket at descriptor 3, run the
+ * notification rows on them, and check that a close by the registrant
+ * sends NOTIFY_REMOVED. */
+static void thread_rows(void)
+{
+    static struct fs_struct fs;
+    struct isr_params args = {0}, note = {0}, send = {0};
+    int fd, i;
+
+    self.fs = &fs;
+    self.euid = 10;
+    self.tgid = 1;
+    for (i = 0; i < 32; i++) {
+        user[200 + i] = (uint8_t)(i + 1);
+    }
+    nl_sock.family = AF_NETLINK;
+    slots[3].ofd = &descriptions[3];
+    slots[3].type = FD_TYPE_SOCKET;
+    slots[3].sock = &nl_sock;
+    args.ebx = 1;
+    args.ecx = O_CREAT | 2;
+    args.edx = 0666;
+    user[1] = 't';
+    user[2] = 0;
+    fd = (int)sys_mq_open(&args);
+    CHECK(fd >= 0, "make a queue to notify");
+    if (fd < 0)
+        return;
+    note.ebx = send.ebx = fd;
+    note.ecx = 100;
+    send.ecx = 1;
+    send.edx = 1;
+    socket_notify_rows(fd, &note, &send);
+    signal_notify_rows(fd, &note, &send);
+    sigevent_at(2, 3, 200);
+    CHECK(sys_mq_notify(&note) == 0, "register the socket again");
+    sys_mq_unlink(&args);
+    fd_free(NULL, fd);
+    CHECK(nl_sent == 3 && nl_last[31] == 2 && nl_sock.refcount == 0,
+          "a close by the registrant sends NOTIFY_REMOVED");
+    k_memset(&slots[3], 0, sizeof(slots[3]));
+    k_memset(&descriptions[3], 0, sizeof(descriptions[3]));
+    k_memset(user, 0, sizeof(user));
+    CHECK(!queues && !mq_users, "the queue and its charge are gone");
+    mq_ns_gone(&init_ipcns);
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
+    self.rlim[RLIM_MSGQUEUE].cur = RLIM_MSGQUEUE_DEFAULT;
+    self.tg = &self_tg;
     realtime_steps();
     signal_rows();
     attr_rows();
     bad_names();
     namespace_rows();
+    charge_rows();
+    thread_rows();
     if (failures) {
         return 1;
     }
-    printf("mqueue-test: pass: the steps of real time, a signal at the deadline and setattr\n");
+    printf("mqueue-test: pass: the steps of real time, a signal at the deadline, setattr, "
+           "the queues' charge and SIGEV_THREAD\n");
     return 0;
 }

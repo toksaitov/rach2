@@ -562,6 +562,17 @@ static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
     return enqueue_group(st, data, len, 0);
 }
 
+void netlink_deliver(struct socket *sock, const uint8_t *data, uint32_t len)
+{
+    uint32_t flags = net_lock();
+    struct netlink_state *st = state_of(sock);
+
+    if (st) {
+        (void)enqueue(st, data, len);
+    }
+    net_unlock(flags);
+}
+
 /** Queue a generic reply for the same socket and port that sent the request.
  * Copy data under net_lock; return 0 or a negative errno. */
 int netlink_genl_reply(struct socket *sock, uint32_t portid, const uint8_t *data, unsigned len)

@@ -55,7 +55,8 @@ struct proc_rlimit {
 #define RLIM_MEMLOCK  6
 #define RLIM_NICE     7 /* the lowest nice value as 20 less it, Linux's */
 #define RLIM_RTPRIO   8 /* the highest real-time priority */
-#define RLIM_COUNT    9
+#define RLIM_MSGQUEUE 9 /* bytes of POSIX message queues per real user */
+#define RLIM_COUNT    10
 #define RLIM_INFINITY (~0UL)
 
 /* RLIMIT_MEMLOCK a process starts with, soft and hard, 8 MiB, which is
@@ -66,6 +67,11 @@ struct proc_rlimit {
 /* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;
  * an exec that runs with ids its caller lacks lowers a larger one to it. */
 #define RLIM_STACK_DEFAULT 0x800000u
+
+/* RLIMIT_MSGQUEUE a process starts with, soft and hard, 819200 bytes, which
+ * is Linux's MQ_BYTES_MAX: what the message queues one user makes may hold,
+ * with their bookkeeping (ipc/Readme.md). */
+#define RLIM_MSGQUEUE_DEFAULT 819200u
 
 /* Policy: the working directory's path is kept in the record when it fits
  * here, which nearly every path does; a longer one, up to PATH_MAX, is kept

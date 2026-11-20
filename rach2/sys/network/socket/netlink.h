@@ -170,6 +170,14 @@ uint32_t netlink_last_group(struct socket *sock);
  * user and group ids into `cred`, all 0 for the kernel. */
 uint32_t netlink_last_sender(struct socket *sock, int32_t cred[3]);
 
+/** Queue the `len` bytes at `data` on the netlink socket `sock` as one
+ * datagram from the kernel, whatever its protocol and however full its
+ * queue, as Linux's netlink_sendskb queues a message whose room was charged
+ * before (mq_notify's SIGEV_THREAD cookie in ipc/mqueue.c); a socket whose
+ * state is gone, or a copy that cannot be allocated, drops it. Takes
+ * net_lock. */
+void netlink_deliver(struct socket *sock, const uint8_t *data, uint32_t len);
+
 /** Bytes in the oldest queued datagram, or -1 when none is queued. */
 int netlink_pending(struct socket *sock);
 

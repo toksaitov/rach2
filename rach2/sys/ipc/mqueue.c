@@ -39,6 +39,8 @@
 #include "../io/poll.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../network/socket/netlink.h"
+#include "../network/socket/socket.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
@@ -71,6 +73,20 @@
 #define SIGEV_NONE   1
 #define SIGEV_THREAD 2
 
+/* A SIGEV_THREAD notification is the caller's cookie of NOTIFY_COOKIE_LEN
+ * bytes, sent on its netlink socket with the last byte NOTIFY_WOKENUP for a
+ * message or NOTIFY_REMOVED for a registration taken away, as Linux sends
+ * it and musl's and glibc's mq_notify read it. */
+#define NOTIFY_COOKIE_LEN 32
+#define NOTIFY_WOKENUP    1
+#define NOTIFY_REMOVED    2
+
+/* The bookkeeping Linux charges RLIMIT_MSGQUEUE for each message a queue
+ * may hold besides its bytes: a struct msg_msg and a struct
+ * posix_msg_tree_node, six longs each in Linux 6.12 on i386 and x86-64. */
+#define MQ_MSG_COST  (6u * (unsigned long)sizeof(long))
+#define MQ_NODE_COST (6u * (unsigned long)sizeof(long))
+
 /* A message: its priority and `len` bytes, which follow the record. */
 struct mq_msg {
     struct mq_msg *next;
@@ -92,7 +108,8 @@ struct mq_root {
  * waiter's and each open of its file; `head` is its messages, highest
  * priority first. `gen` rises at every change, which a sleeper compares
  * (`struct mq_wait`). A registered notification is `notify_how`,
- * SIGEV_SIGNAL or SIGEV_NONE, with its signal and value. */
+ * SIGEV_SIGNAL, SIGEV_NONE or SIGEV_THREAD, with its signal and value, or
+ * its socket and cookie. */
 struct mqueue {
     struct mqueue *next;   /* the list of named queues */
     char *name;            /* kept after mq_unlink for the /proc links */
@@ -115,7 +132,31 @@ struct mqueue {
     int notify_how;
     int notify_signo;
     uintptr_t notify_value;
+    uint32_t notify_exec;       /* the registrant's exec generation */
+    struct socket *notify_sock; /* SIGEV_THREAD's, with a reference */
+    uint8_t notify_cookie[NOTIFY_COOKIE_LEN];
+    /* The record its bytes, `charge`, are charged to (`mq_charge`), NULL
+     * for none. */
+    struct mq_user *user;
+    unsigned long charge;
 };
+
+/*
+ * The bytes of the queues one real user made in one user namespace, as
+ * Linux's ucounts keep UCOUNT_RLIMIT_MSGQUEUE: each queue is charged to its
+ * maker's record and to the record of each ancestor namespace's creator in
+ * that namespace's parent, as Linux's inc_rlimit_ucounts walks up. A record
+ * lives while a queue is charged to it, and holds its namespace.
+ */
+struct mq_user {
+    struct mq_user *next;
+    struct userns *ns;
+    uint32_t uid; /* the kernel's */
+    uint32_t queues;
+    unsigned long bytes;
+};
+
+static struct mq_user *mq_users;
 
 /* Linux's struct mq_attr. */
 struct mq_attr {
@@ -135,11 +176,151 @@ static void mq_touch(struct mqueue *q)
     q->atime_ns = q->mtime_ns = q->ctime_ns;
 }
 
+/** The record of `uid` in `ns`, made with no bytes when `make` is set and
+ * it is missing; NULL when it is missing and not made. */
+static struct mq_user *mq_user_of(struct userns *ns, uint32_t uid, int make)
+{
+    struct mq_user *u;
+
+    for (u = mq_users; u; u = u->next) {
+        if (u->ns == ns && u->uid == uid) {
+            return u;
+        }
+    }
+    if (!make || !(u = kzalloc(sizeof(*u)))) {
+        return NULL;
+    }
+    u->ns = userns_get(ns);
+    u->uid = uid;
+    u->next = mq_users;
+    mq_users = u;
+    return u;
+}
+
+/** Take `bytes` from `u`'s record and those above it, as Linux's
+ * dec_rlimit_ucounts does, freeing each that no queue is charged to. Every
+ * record of the walk exists while a queue is charged through it. */
+static void mq_uncharge(struct mq_user *u, unsigned long bytes)
+{
+    while (u) {
+        struct userns *ns = u->ns;
+        struct mq_user *up = ns->parent ? mq_user_of(ns->parent, ns->owner_uid, 0) : NULL;
+        struct mq_user **link = &mq_users;
+
+        u->bytes -= bytes;
+        if (--u->queues == 0) {
+            while (*link != u) {
+                link = &(*link)->next;
+            }
+            *link = u->next;
+            kfree(u);
+            ns_put(&ns->c);
+        }
+        u = up;
+    }
+}
+
+/**
+ * Charge a queue of `maxmsg` messages of `msgsize` bytes to the caller's
+ * real user, as Linux's mqueue_get_inode does: the bytes, with the cost of
+ * MQ_MSG_COST for each message and MQ_NODE_COST for each up to MQ_PRIO_MAX,
+ * go to the caller's record and each record above it. The caller's own may
+ * reach its soft RLIMIT_MSGQUEUE, each above it the limit the namespace's
+ * creator had when it made it, privileged or not. Sets `q`'s `user` and
+ * `charge`; 0, -EOVERFLOW for bytes past a long, -EMFILE past a limit, or
+ * -ENOMEM.
+ */
+static int32_t mq_charge(struct mqueue *q, int32_t maxmsg, int32_t msgsize)
+{
+    unsigned long n = (unsigned long)maxmsg, size = (unsigned long)msgsize;
+    unsigned long bytes, tree, max = current_proc->rlim[RLIM_MSGQUEUE].cur;
+    struct userns *ns = proc_userns(current_proc);
+    uint32_t uid = current_proc->ruid;
+    struct mq_user *first = NULL, *u;
+    int over = 0;
+
+    if (size > ~0UL / n) {
+        return -EOVERFLOW;
+    }
+    tree = n * MQ_MSG_COST + (n < MQ_PRIO_MAX ? n : MQ_PRIO_MAX) * MQ_NODE_COST;
+    bytes = n * size;
+    if (bytes + tree < bytes || bytes + tree > ~0UL >> 1) {
+        return -EOVERFLOW;
+    }
+    bytes += tree;
+    for (;;) {
+        u = mq_user_of(ns, uid, 1);
+        if (!u) {
+            mq_uncharge(first, bytes);
+            return -ENOMEM;
+        }
+        if (!first) {
+            first = u;
+        }
+        u->queues++;
+        u->bytes += bytes;
+        if (u->bytes < bytes || u->bytes > max) {
+            over = 1;
+        }
+        if (!ns->parent) {
+            break;
+        }
+        max = ns->msgqueue_max;
+        uid = ns->owner_uid;
+        ns = ns->parent;
+    }
+    if (over) {
+        mq_uncharge(first, bytes);
+        return -EMFILE;
+    }
+    q->user = first;
+    q->charge = bytes;
+    return 0;
+}
+
+/** Let go of `q`'s SIGEV_THREAD socket, after sending its cookie with the
+ * last byte `how` unless `how` is 0, as Linux's netlink_sendskb does. */
+static void mq_notify_sock_drop(struct mqueue *q, uint8_t how)
+{
+    if (!q->notify_sock) {
+        return;
+    }
+    if (how) {
+        q->notify_cookie[NOTIFY_COOKIE_LEN - 1] = how;
+        netlink_deliver(q->notify_sock, q->notify_cookie, NOTIFY_COOKIE_LEN);
+    }
+    socket_unref(q->notify_sock);
+    q->notify_sock = NULL;
+}
+
+/** Take the registration away, as Linux's remove_notification does: a
+ * SIGEV_THREAD registrant's socket hears NOTIFY_REMOVED. */
+static void mq_unnotify(struct mqueue *q)
+{
+    if (q->notify_tgid && q->notify_how == SIGEV_THREAD) {
+        mq_notify_sock_drop(q, NOTIFY_REMOVED);
+    }
+    q->notify_tgid = 0;
+}
+
+/** Set the access and change times of `q`'s file to now, as a change of
+ * its registration does on Linux. */
+static void mq_touch_notify(struct mqueue *q)
+{
+    get_current_time(&q->ctime_s, &q->ctime_ns);
+    q->atime_s = q->ctime_s;
+    q->atime_ns = q->ctime_ns;
+}
+
 /** Drop a reference to `q`, freeing it and its messages with the last. */
 static void mq_put(struct mqueue *q)
 {
     if (--q->refs != 0) {
         return;
+    }
+    mq_notify_sock_drop(q, 0);
+    if (q->user) {
+        mq_uncharge(q->user, q->charge);
     }
     while (q->head) {
         struct mq_msg *m = q->head;
@@ -205,6 +386,7 @@ static void mq_unname(struct mqueue *q)
 static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count);
 static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 
+#define FIBMAP        1u
 #define FIGETBSZ      2u
 #define FIONREAD      0x541bu
 #define FIOASYNC      0x5452u
@@ -226,6 +408,17 @@ static int32_t mq_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
     if (request == FS_IOC_FIEMAP)
         return -EOPNOTSUPP;
+    if (request == FIBMAP) {
+        /* Linux's ioctl_fibmap: a queue's inode has no bmap. */
+        if (current_proc->userns || !cap_holds(current_proc, CAP_SYS_RAWIO))
+            return -EPERM;
+        if (copy_from_user(&value, (const void __user *)arg, sizeof(value)))
+            return -EFAULT;
+        if (value < 0)
+            return -EINVAL;
+        value = 0;
+        return copy_to_user((void __user *)arg, &value, sizeof(value)) ? -EFAULT : -EINVAL;
+    }
     if (request == FIGETBSZ || request == FIONREAD) {
         value = request == FIGETBSZ ? PAGE_SIZE : avail;
         return copy_to_user((void __user *)arg, &value, sizeof(value)) ? -EFAULT : 0;
@@ -348,7 +541,7 @@ void mq_flush(const fd_entry_t *e)
     struct mqueue *q = e->ofd->vnode;
 
     if (current_proc && q->notify_tgid == current_proc->tgid) {
-        q->notify_tgid = 0;
+        mq_unnotify(q);
     }
 }
 
@@ -416,8 +609,8 @@ static int32_t mq_new_attr(const struct mq_attr *a, int32_t *maxmsg, int32_t *ms
 
 /** A new queue `name` in `*out`, the caller's, with the bits of `mode` its
  * umask leaves, entered in the list with the reference its name holds.
- * Returns 0, the refusals of `mq_new_attr`, -ENOSPC past MQ_QUEUES queues
- * for an unprivileged caller, or -ENOMEM. */
+ * Returns 0, the refusals of `mq_new_attr` and `mq_charge`, -ENOSPC past
+ * MQ_QUEUES queues for an unprivileged caller, or -ENOMEM. */
 static int32_t mq_create(struct vfs_mount *mnt, const char *name, uint32_t mode,
                          const struct mq_attr *attr, struct mqueue **out)
 {
@@ -443,6 +636,12 @@ static int32_t mq_create(struct vfs_mount *mnt, const char *name, uint32_t mode,
     if (!q || !q->name) {
         kfree(q);
         return -ENOMEM;
+    }
+    rc = mq_charge(q, maxmsg, msgsize);
+    if (rc != 0) {
+        kfree(q->name);
+        kfree(q);
+        return rc;
     }
     k_memcpy(q->name, name, k_strlen(name) + 1);
     q->mnt = mnt;
@@ -850,8 +1049,10 @@ static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
 }
 
 /** Post the queue's notification, when a message has come to it empty and
- * no receiver waits for it: the signal its process asked for, with
- * SI_MESGQ, its value and the sender; the registration goes either way. */
+ * no receiver waits for it, as Linux's __do_notify does: the signal its
+ * process asked for, with SI_MESGQ, its value and the sender, unless the
+ * signal is 0 or the process has run an exec since it registered; or the
+ * cookie of SIGEV_THREAD on its socket. The registration goes either way. */
 static void mq_notify_now(struct mqueue *q)
 {
     process_t *p;
@@ -860,8 +1061,14 @@ static void mq_notify_now(struct mqueue *q)
     if (!q->notify_tgid || q->curmsgs != 1 || q->receivers != 0) {
         return;
     }
+    if (q->notify_how == SIGEV_THREAD) {
+        mq_notify_sock_drop(q, NOTIFY_WOKENUP);
+        q->notify_tgid = 0;
+        return;
+    }
     p = get_process(q->notify_tgid);
-    if (p && q->notify_how == SIGEV_SIGNAL) {
+    if (p && q->notify_how == SIGEV_SIGNAL && q->notify_signo != 0 &&
+        p->tg->exec_generation == q->notify_exec) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_MESGQ;
         info.pid = pid_seen_by(p, current_proc->tgid);
@@ -1040,14 +1247,44 @@ long sys_mq_timedreceive_time64(struct isr_params *params)
 }
 
 /**
- * mq_notify(2) takes the descriptor and a `struct sigevent`. With a null
- * one it takes the caller's registration away; else it registers the
- * caller for the queue's next message as the sigevent says, a signal or
- * nothing. EBUSY when a process is registered already, EINVAL for
- * SIGEV_THREAD, whose notice Linux sends through a netlink socket this
- * kernel does not have, for another kind or for a signal outside 1 to 64;
- * EBADF for a descriptor not open on a queue, EFAULT. An i386 call on
- * x86-64 passes Linux's compat_sigevent, whose value is 32 bits.
+ * Find the netlink socket of the caller's descriptor `fd` for a SIGEV_THREAD
+ * notification, as Linux's netlink_getsockbyfilp does: the socket, or NULL
+ * with `*err` -EBADF for no descriptor, -ENOTSOCK for one that is no socket,
+ * or -EINVAL for a socket of another family.
+ */
+static struct socket *mq_notify_socket(int fd, int32_t *err)
+{
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
+
+    if (!e || (e->flags & FD_FLAG_PATH)) {
+        *err = -EBADF;
+        return NULL;
+    }
+    if (e->type == FD_TYPE_UNIX ||
+        (e->type == FD_TYPE_SOCKET && e->sock && e->sock->family != AF_NETLINK)) {
+        *err = -EINVAL;
+        return NULL;
+    }
+    if (e->type != FD_TYPE_SOCKET || !e->sock) {
+        *err = -ENOTSOCK;
+        return NULL;
+    }
+    return e->sock;
+}
+
+/**
+ * mq_notify(2) takes the descriptor and a `struct sigevent`, in Linux's
+ * order (do_mq_notify). With a null one it takes the caller's registration
+ * away; else it registers the caller for the queue's next message as the
+ * sigevent says: a signal, 0 among them, which sends none; nothing; or, for
+ * SIGEV_THREAD, the cookie of NOTIFY_COOKIE_LEN bytes at the sigevent's
+ * value, sent on the netlink socket whose descriptor is its signal, as musl
+ * and glibc ask for it. Either change sets the queue's access and change
+ * times. EINVAL for another kind or a signal past 64, then for SIGEV_THREAD
+ * EFAULT for the cookie and the errors of `mq_notify_socket`; then EBADF for
+ * a descriptor not open on a queue, and EBUSY when a process is registered
+ * already. An i386 call on x86-64 passes Linux's compat_sigevent, whose
+ * value is 32 bits.
  */
 long sys_mq_notify(struct isr_params *params)
 {
@@ -1061,39 +1298,62 @@ long sys_mq_notify(struct isr_params *params)
         int32_t signo;
         int32_t notify;
     } ev32; /* an i386 call's, compat_sigevent's */
+    uint8_t cookie[NOTIFY_COOKIE_LEN];
+    struct socket *sock = NULL;
     fd_entry_t *e;
-    struct mqueue *q = mq_of((int)SC_ARG(params, 0), &e);
+    struct mqueue *q;
+    int32_t err;
 
+    if (SC_ARG(params, 1)) {
+        if (mq_compat()) {
+            if (copy_from_user(&ev32, (const void __user *)SC_ARG(params, 1), sizeof(ev32)) != 0) {
+                return -EFAULT;
+            }
+            ev.value = ev32.value;
+            ev.signo = ev32.signo;
+            ev.notify = ev32.notify;
+        } else if (copy_from_user(&ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
+            return -EFAULT;
+        }
+        if ((ev.notify != SIGEV_SIGNAL && ev.notify != SIGEV_NONE && ev.notify != SIGEV_THREAD) ||
+            (ev.notify == SIGEV_SIGNAL && (uint32_t)ev.signo > KSIG_MAX)) {
+            return -EINVAL;
+        }
+        if (ev.notify == SIGEV_THREAD) {
+            if (copy_from_user(cookie, (const void __user *)ev.value, sizeof(cookie)) != 0) {
+                return -EFAULT;
+            }
+            sock = mq_notify_socket(ev.signo, &err);
+            if (!sock) {
+                return err;
+            }
+        }
+    }
+    q = mq_of((int)SC_ARG(params, 0), &e);
     if (!q) {
         return -EBADF;
     }
     if (!SC_ARG(params, 1)) {
         if (q->notify_tgid == current_proc->tgid) {
-            q->notify_tgid = 0;
+            mq_unnotify(q);
+            mq_touch_notify(q);
         }
         return 0;
     }
-    if (mq_compat()) {
-        if (copy_from_user(&ev32, (const void __user *)SC_ARG(params, 1), sizeof(ev32)) != 0) {
-            return -EFAULT;
-        }
-        ev.value = ev32.value;
-        ev.signo = ev32.signo;
-        ev.notify = ev32.notify;
-    } else if (copy_from_user(&ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
-        return -EFAULT;
-    }
-    if ((ev.notify != SIGEV_SIGNAL && ev.notify != SIGEV_NONE) ||
-        (ev.notify == SIGEV_SIGNAL && (ev.signo < 1 || ev.signo > KSIG_MAX))) {
-        return -EINVAL;
-    }
     if (q->notify_tgid) {
         return -EBUSY;
+    }
+    if (sock) {
+        socket_ref(sock);
+        q->notify_sock = sock;
+        k_memcpy(q->notify_cookie, cookie, sizeof(cookie));
     }
     q->notify_tgid = current_proc->tgid;
     q->notify_how = ev.notify;
     q->notify_signo = ev.signo;
     q->notify_value = ev.value;
+    q->notify_exec = current_proc->tg->exec_generation;
+    mq_touch_notify(q);
     return 0;
 }
 

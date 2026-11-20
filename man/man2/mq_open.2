@@ -82,18 +82,44 @@ while no receiver waits:
 .Dv SIGEV_SIGNAL
 posts the signal asked for, with
 .Dv SI_MESGQ ,
-the value given, and the sender's pid and uid, and
+the value given, and the sender's pid and uid, unless the signal is 0 or
+the process has run an exec since it registered;
 .Dv SIGEV_NONE
-posts nothing.
+posts nothing; and
+.Dv SIGEV_THREAD
+sends the 32 bytes at the value's pointer, with the last set to 1, on the
+netlink socket whose descriptor is the signal, as musl's and glibc's
+.Fn mq_notify
+ask for it and read it in the thread they start.
 Delivery removes the registration.
 Closing any descriptor for the queue in the registered process also removes it.
 A NULL
 .Fa sevp
 takes the caller's registration away.
-.Dv SIGEV_THREAD ,
-which Linux carries through a netlink socket of a kind this kernel does
-not have, is
-.Er EINVAL .
+A registration of
+.Dv SIGEV_THREAD
+that goes without a message sends its bytes with the last set to 2.
+Registering and taking a registration away set the queue's access and
+change times.
+.Pp
+Each queue is charged to the real user of its maker, as on Linux: its
+messages' bytes, and 12 longs for each message it may hold, up to 32768 of
+them, for the kernel's bookkeeping.
+The queues one user has made may hold at most its soft
+.Dv RLIMIT_MSGQUEUE ,
+819200 bytes by default, privileged or not, and those made in a user
+namespace also count to its creator in the parent, up to the limit the
+creator had when it made it.
+The charge ends with the queue.
+.Pp
+.Dv FIBMAP
+on a queue's descriptor is
+.Er EPERM
+without
+.Dv CAP_SYS_RAWIO ,
+and otherwise stores block 0 and fails with
+.Er EINVAL ,
+since a queue has no blocks.
 .Pp
 .Xr poll 2
 reports a descriptor readable while the queue has a message and writable
@@ -211,10 +237,22 @@ for a queue that exists.
 A signal ended the wait, also one pending when the timeout ran out.
 .It Bq Er EINVAL
 An access mode of 3 on an existing queue, attributes outside the caller's limits, a priority
-past 32767, a malformed timeout, a notification of another kind or a
-signal outside 1 to 64, or a flag besides
+past 32767, a malformed timeout, a notification of another kind, a
+signal past 64, a
+.Dv SIGEV_THREAD
+descriptor of a socket other than a netlink socket, or a flag besides
 .Dv O_NONBLOCK
 to set.
+.It Bq Er EMFILE
+The new queue would take its user past
+.Dv RLIMIT_MSGQUEUE .
+.It Bq Er ENOTSOCK
+A
+.Dv SIGEV_THREAD
+descriptor that is not a socket.
+.It Bq Er EOVERFLOW
+The new queue's bytes would not fit in a
+.Vt long .
 .It Bq Er EMSGSIZE
 A message past the queue's size, or a buffer smaller than it.
 .It Bq Er ENAMETOOLONG

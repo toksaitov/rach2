@@ -278,7 +278,7 @@ A thread holds Linux's 41 capabilities, numbered 0 to 40, but those it gave up (
 
 ### Resource limits
 
-A record has nine limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
+A record has ten limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
 
 | Limit | Default soft, hard | Enforced by |
 | --- | --- | --- |
@@ -291,6 +291,7 @@ A record has nine limits, `RLIM_COUNT` in `process.h`, each a soft value that is
 | `RLIMIT_MEMLOCK` | 8 MiB (`RLIM_MEMLOCK_DEFAULT`), 8 MiB | the `mlock` calls, `MAP_LOCKED`, the growth of locked memory under `MCL_FUTURE` and a driver's pins (`mem_lock_room` in `rach2/sys/mm/paging.c`); a privileged caller is exempt ([memory's Readme](../mm/Readme.md#locked-memory-and-pins)) |
 | `RLIMIT_NICE` | 0, 0 | the lowest nice value, as 20 less it, that `setpriority`, `sched_setattr` and the ia32 `nice` give without privilege, and the leaving of `SCHED_IDLE` (`proc_nice_allowed` in `rach2/sys/syscall_proc.c`) |
 | `RLIMIT_RTPRIO` | 0, 0 | the real-time priority `sched_setscheduler`, `sched_setparam` and `sched_setattr` give without privilege; at 0, no real-time policy (`sched_user_check`) |
+| `RLIMIT_MSGQUEUE` | 819200, 819200 (`RLIM_MSGQUEUE_DEFAULT`) | `mq_open`: the bytes of the POSIX message queues charged to the caller's real user (`mq_charge` in `rach2/sys/ipc/mqueue.c`), privileged or not, as [the IPC document](../ipc/Readme.md#posix-message-queues) says |
 
 Init sets the machine's defaults from `/etc/rach2/limits` before its first child, as [limits(7)](../../../man/man7/limits.7) describes.
 

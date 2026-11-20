@@ -181,6 +181,14 @@ and
 refuse such a caller a real-time policy with
 .Er EPERM ;
 otherwise they refuse a priority above both it and the present one.
+.It Dv RLIMIT_MSGQUEUE
+The bytes the POSIX message queues made by the process's real user may
+hold, with the kernel's bookkeeping for each, 819200 soft and hard by
+default, as on Linux.
+.Xr mq_open 2
+fails with
+.Er EMFILE
+for a queue past it, privileged or not.
 .El
 .Pp
 For these resources the soft limit must not exceed the hard limit.
@@ -190,14 +198,15 @@ Fork inherits both values and exec preserves them.
 The kernel's initial soft and hard limits are 4096 processes,
 1024 descriptors, and unlimited address space; the stack's are 8 MiB
 soft and unlimited hard, the core file's 0 soft and unlimited hard, a
-file's size unlimited, locked memory 8 MiB soft and hard, and the nice
-and real-time priority limits 0 soft and hard, which are Linux's.
+file's size unlimited, locked memory 8 MiB soft and hard, the nice
+and real-time priority limits 0 soft and hard, and message queues 819200
+bytes soft and hard, which are Linux's.
 Init may replace these defaults as described in
 .Xr limits 7 .
 .Pp
 Every other resource number, including an unknown number, reports
 unlimited values.
-Setting any resource other than the nine stored resources succeeds
+Setting any resource other than the ten stored resources succeeds
 without changing anything, even if its soft value exceeds its hard value.
 .Pp
 Linux measures each growth of the stack against the limit in force when
