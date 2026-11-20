@@ -6348,7 +6348,8 @@ static int procfs_gen_netnetstat(struct procfs_text *t)
     ap_str(t, "TcpExt: DelayedACKLost TCPTimeouts TCPAbortOnData TCPAbortOnClose "
               "TCPAbortOnTimeout TCPTimeWaitOverflow TCPChallengeACK TCPSYNChallenge "
               "TCPACKSkippedSynRecv "
-              "TCPACKSkippedSeq TCPACKSkippedChallenge TCPKeepAlive TCPMTUPFail "
+              "TCPACKSkippedSeq TCPACKSkippedTimeWait TCPACKSkippedChallenge TCPKeepAlive "
+              "TCPMTUPFail "
               "TCPMTUPSuccess\n"
               "TcpExt:");
     ap_mib(t, m->tcp_delayed_ack_lost);
@@ -6361,6 +6362,7 @@ static int procfs_gen_netnetstat(struct procfs_text *t)
     ap_mib(t, m->tcp_syn_challenge);
     ap_mib(t, m->tcp_ack_skipped_syn_recv);
     ap_mib(t, m->tcp_ack_skipped_seq);
+    ap_mib(t, m->tcp_ack_skipped_time_wait);
     ap_mib(t, m->tcp_ack_skipped_challenge);
     ap_mib(t, m->tcp_keepalive);
     ap_mib(t, m->tcp_mtup_fail);
