@@ -1360,6 +1360,59 @@ static void time_wait_attached_rows(void)
 }
 
 /**
+ * Check the ACK rate limit when the socket closes before its FIN is
+ * acknowledged (`close_first`), or after. Detached FIN_WAIT_2 starts
+ * a fresh limit that carries into TIME_WAIT, as in Linux's time-wait
+ * socket.
+ */
+static void time_wait_detached_rows(int close_first)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 44000, before, skipped;
+    uint16_t lport;
+
+    reset_all();
+    conn = open_conn(&sock, 89, &peer_seq, &lport);
+    before = net_mib.tcp_challenge_ack;
+    rx(89, lport, peer_seq, conn->snd_nxt, F_SYN, 65535, (const char *)0, 0);
+    CHECK("a SYN before the close draws a challenge ACK", net_mib.tcp_challenge_ack == before + 1u);
+    (void)tcp_shutdown(&sock, 0, 1);
+    if (close_first) {
+        tcp_close(&sock);
+    }
+    rx(89, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    if (!close_first) {
+        tcp_close(&sock);
+    }
+    CHECK("the block is detached in FIN_WAIT_2", conn->state == TCP_FIN_WAIT_2 && !conn->sock);
+    n_segs = 0;
+    rx(89, lport, peer_seq - 10u, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    CHECK("detached FIN_WAIT_2 answers the first old ACK in the same tick",
+          n_segs == 1 && last_flags() == F_ACK);
+
+    rx(89, lport, peer_seq, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK), 65535, (const char *)0, 0);
+    CHECK("the peer's FIN moves the detached block to TIME_WAIT", conn->state == TCP_TIME_WAIT);
+    n_segs = 0;
+    skipped = net_mib.tcp_ack_skipped_time_wait;
+    rx(89, lport, peer_seq - 10u, 0, F_SYN, 65535, (const char *)0, 0);
+    CHECK("TIME_WAIT keeps the limit from detached FIN_WAIT_2",
+          n_segs == 0 && net_mib.tcp_ack_skipped_time_wait == skipped + 1u);
+    reset_all();
+}
+
+/** Run the TIME_WAIT rows for port use, expiry and segment handling. */
+static void time_wait_cases(void)
+{
+    time_wait_rows();
+    time_wait_reuse_rows();
+    time_wait_attached_rows();
+    time_wait_detached_rows(0);
+    time_wait_detached_rows(1);
+    time_wait_more_rows();
+}
+
+/**
  * Tick the clock until the stack has sent a segment more than `before` or
  * `most` ticks have passed; returns the ticks taken.
  */
@@ -3431,10 +3484,7 @@ int main(void)
     half_close_rows();
     ephemeral_rows();
     range_rows();
-    time_wait_rows();
-    time_wait_reuse_rows();
-    time_wait_attached_rows();
-    time_wait_more_rows();
+    time_wait_cases();
     path_mtu_row();
     keepalive_rows();
     skipped_tick_rows();
