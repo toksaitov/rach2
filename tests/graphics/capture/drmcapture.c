@@ -21,7 +21,9 @@
  *
  * With -v it reads no frame: it asks for COUNT vblank events of the CRTC,
  * four ahead, and prints how late each reached it by CLOCK_MONOTONIC after
- * the vblank's own stamp, and with -c it has the CRTC's CRC source, "auto",
+ * the vblank's own stamp, the clock read once when the read that gave it
+ * returns, for every event that read gave, and counts COUNT events exactly,
+ * however many a read gives. With -c it has the CRTC's CRC source, "auto",
  * compose each frame meanwhile. On vkms, Linux's and Rach2's, the stamp is
  * the vblank timer's due time, so the lateness is the timer's and the
  * reader's wake together, and a stamp more than a period and a half after
@@ -639,19 +641,23 @@ struct vblank_run {
 };
 
 /**
- * Count the events in `buf`, `got` bytes that a read of the card gave, in
- * `r`, each late by the time now after its stamp, and ask for one more
- * vblank for each.
+ * Count the events in `buf`, `got` bytes that a read of the card completed
+ * at `now` us gave, in `r`, each late by `now` after its stamp, up to
+ * `count` events in all, and then ask for one more vblank for each counted.
+ * The whole batch is counted before any request, since a request may wait
+ * for the big lock and the later events were already in hand.
  *
  * @return 0, or 1 after a failure, reported.
  */
-static int vblank_take(struct card *c, struct vblank_run *r, const char *buf, ssize_t got)
+static int vblank_take(struct card *c, struct vblank_run *r, const char *buf, ssize_t got,
+                       long long now, long count)
 {
     ssize_t at;
+    long taken = 0;
 
-    for (at = 0; at + (ssize_t)sizeof(struct event_vblank) <= got;) {
+    for (at = 0; at + (ssize_t)sizeof(struct event_vblank) <= got && r->n < count;) {
         struct event_vblank e;
-        long long stamp, now = now_us();
+        long long stamp;
         long l;
 
         memcpy(&e, buf + at, sizeof(e));
@@ -669,6 +675,11 @@ static int vblank_take(struct card *c, struct vblank_run *r, const char *buf, ss
         if (r->n < VBLANK_MAX)
             r->late[r->n] = l;
         r->n++;
+        taken++;
+    }
+    if (r->n >= count)
+        return 0;
+    for (; taken > 0; taken--) {
         if (wait_vblank(c, r->index, &r->next, 1) != 0)
             return fail("WAIT_VBLANK");
         r->next++;
@@ -711,7 +722,7 @@ static int vblank_loop(struct card *c, struct vblank_run *r, int crcfd, long cou
             continue;
         if ((got = read(c->fd, buf, sizeof(buf))) <= 0)
             return fail("read of a vblank event");
-        if (vblank_take(c, r, buf, got) != 0)
+        if (vblank_take(c, r, buf, got, now_us(), count) != 0)
             return 1;
     }
     return 0;
