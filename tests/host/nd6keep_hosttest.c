@@ -337,23 +337,66 @@ static void withdraw(void)
     CHECK(eth0.ngroup6 == 0 && eth0.group6 == 0);
 }
 
+/** Join or leave, with `join`, the solicited-node group of `addr` on eth0
+ * as a socket's IPV6_JOIN_GROUP does, apart from the address's own join. */
+static void socket_join(const uint8_t *addr, int join)
+{
+    uint8_t group[IP6_ADDR_LEN];
+
+    ip6_solicited_node(addr, group);
+    if (join) {
+        CHECK(netdev_join6(&eth0, group) == 0);
+    } else {
+        netdev_leave6(&eth0, group);
+    }
+}
+
+/** Take eth0, up with its link-local `ll` and kept `global`, down and up
+ * three times while a socket holds a join of global's solicited-node
+ * group: each down leaves the socket's join alone and each up adds the
+ * address's one join back, and no cycle holds another heap block. */
+static void cycle_kept(const uint8_t *global, const uint8_t *ll)
+{
+    struct netdev_addr6 *a;
+    long held;
+    int i;
+
+    socket_join(global, 1);
+    held = kheap_host_blocks;
+    for (i = 0; i < 3; i++) {
+        a = netdev_addr6_of(&eth0, global);
+        CHECK(eth0.naddr6 == 2 && a && !(a->flags & NETDEV_A6_TENTATIVE));
+        CHECK(solicited_refs(global) == 2 && solicited_refs(ll) == 1 && eth0.ngroup6 == 3);
+        CHECK(count_prefix(global, 64, 0) == 1 && count_prefix(global, 128, 1) == 1);
+        CHECK(netconf_set_up(&eth0, 0) == 0 && eth0.naddr6 == 1);
+        CHECK(solicited_refs(global) == 1 && solicited_refs(ll) == 0 && eth0.ngroup6 == 2);
+        CHECK(netconf_set_up(&eth0, 1) == 0);
+        settle();
+        CHECK(kheap_host_blocks == held);
+    }
+    socket_join(global, 0);
+    CHECK(solicited_refs(global) == 1);
+}
+
 /**
  * keep_addr_on_down, as Linux's addrconf_ifdown reads it: with it above 0
  * on the card, and `all` 0, a card taken down keeps its permanent global
- * address, tentative again, with its one solicited-node join, and deletes
- * its link-local and autoconfigured ones and every route; up gives the kept
- * one its routes back and joins nothing twice. A negative `all` wins over
- * the card's, and the card's removal frees every block it took.
+ * address, tentative again and out of its solicited-node group, and
+ * deletes its link-local and autoconfigured ones and every route; up joins
+ * the group again, once, and gives the kept one its routes back. A
+ * socket's join of the same group holds across both. A negative `all`
+ * wins over the card's; an address given to a card that is down joins
+ * once and no more at up; and the card's removal frees every block it
+ * took.
  */
 static void keep_addr_on_down(void)
 {
     static const uint8_t global[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
     static const uint8_t auto_[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
-    long blocks = kheap_host_blocks, held;
+    long blocks = kheap_host_blocks;
     struct netdev_addr6 *a;
     uint8_t ll[16];
     int32_t v = 0;
-    int i;
 
     CHECK(nd6_conf_get(eth0.index, ND6_KEEP_ADDR_ON_DOWN, &v) == 0 && v == 0);
     CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 1) == 0);
@@ -371,22 +414,13 @@ static void keep_addr_on_down(void)
     CHECK(netconf_set_up(&eth0, 0) == 0);
     a = netdev_addr6_of(&eth0, global);
     CHECK(eth0.naddr6 == 1 && a == &eth0.addr6[0] && (a->flags & NETDEV_A6_TENTATIVE));
-    CHECK(solicited_refs(ll) == 0 && solicited_refs(global) == 1 && eth0.ngroup6 == 2);
+    CHECK(solicited_refs(ll) == 0 && solicited_refs(global) == 0 && eth0.ngroup6 == 1);
     CHECK(count_prefix(global, 64, 0) == 0 && count_prefix(global, 128, 1) == 0);
 
     CHECK(netconf_set_up(&eth0, 1) == 0);
+    CHECK(solicited_refs(global) == 1);
     settle();
-    held = kheap_host_blocks;
-    for (i = 0; i < 3; i++) {
-        a = netdev_addr6_of(&eth0, global);
-        CHECK(eth0.naddr6 == 2 && a && !(a->flags & NETDEV_A6_TENTATIVE));
-        CHECK(solicited_refs(global) == 1 && solicited_refs(ll) == 1 && eth0.ngroup6 == 3);
-        CHECK(count_prefix(global, 64, 0) == 1 && count_prefix(global, 128, 1) == 1);
-        CHECK(netconf_set_up(&eth0, 0) == 0 && eth0.naddr6 == 1);
-        CHECK(netconf_set_up(&eth0, 1) == 0);
-        settle();
-        CHECK(kheap_host_blocks == held);
-    }
+    cycle_kept(global, ll);
 
     CHECK(nd6_conf_set(ND6_CONF_ALL, ND6_KEEP_ADDR_ON_DOWN, -1) == 0);
     CHECK(netconf_set_up(&eth0, 0) == 0);
@@ -394,7 +428,9 @@ static void keep_addr_on_down(void)
     CHECK(solicited_refs(global) == 0 && eth0.ngroup6 == 1);
     CHECK(nd6_conf_set(ND6_CONF_ALL, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
 
-    CHECK(netconf_set_up(&eth0, 1) == 0 && add(global, NETDEV_A6_PERMANENT) == 0);
+    CHECK(add(global, NETDEV_A6_PERMANENT) == 0 && solicited_refs(global) == 1);
+    CHECK(netconf_set_up(&eth0, 1) == 0);
+    CHECK(solicited_refs(global) == 1 && solicited_refs(ll) == 1 && eth0.ngroup6 == 3);
     withdraw();
     CHECK(count_prefix(global, 64, 0) == 0 && kheap_host_blocks == blocks);
     CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
@@ -402,7 +438,10 @@ static void keep_addr_on_down(void)
 
 /** A retained address is ready at once on TUN (`l3`) or with NODAD. An
  * Ethernet address that failed DAD probes again and wins its host route
- * back. Each case ends with the card's removal and its blocks freed. */
+ * back. On Ethernet the address holds its solicited-node group while the
+ * card is up and not while it is down; on TUN it never does, and the card
+ * holds only ff02::1. Each case ends with the card's removal and its
+ * blocks freed. */
 static void retained_dad(int l3, int nodad)
 {
     static const uint8_t global[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
@@ -417,6 +456,7 @@ static void retained_dad(int l3, int nodad)
     settle();
     a = netdev_addr6_of(&eth0, global);
     CHECK(a && !(a->flags & NETDEV_A6_TENTATIVE) && count_prefix(global, 128, 1) == 1);
+    CHECK(solicited_refs(global) == (l3 ? 0u : 1u) && eth0.ngroup6 == (l3 ? 1 : 3));
     if (nodad) {
         r.plen = 128;
         r.local = 1;
@@ -429,7 +469,7 @@ static void retained_dad(int l3, int nodad)
     }
 
     CHECK(netconf_set_up(&eth0, 0) == 0);
-    CHECK(eth0.naddr6 == 1 && solicited_refs(global) == 1);
+    CHECK(eth0.naddr6 == 1 && solicited_refs(global) == 0 && eth0.ngroup6 == 1);
     CHECK(netconf_set_up(&eth0, 1) == 0);
     a = netdev_addr6_of(&eth0, global);
     CHECK(a != 0);
@@ -442,7 +482,8 @@ static void retained_dad(int l3, int nodad)
         dad_timers(&eth0);
     }
     CHECK(a && !(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) &&
-          count_prefix(global, 128, 1) == 1 && solicited_refs(global) == 1);
+          count_prefix(global, 128, 1) == 1);
+    CHECK(solicited_refs(global) == (l3 ? 0u : 1u) && eth0.ngroup6 == (l3 ? 1 : 3));
     withdraw();
     CHECK(count_prefix(global, 128, 1) == 0 && kheap_host_blocks == blocks);
     eth0.l3 = 0;

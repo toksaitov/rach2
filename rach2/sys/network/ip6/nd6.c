@@ -1458,6 +1458,27 @@ static int kept_on_down(const struct netdev_addr6 *a)
            !ip6_is_loopback(a->addr);
 }
 
+/** Join the solicited-node group of `nd`'s address `a` with `join`, or
+ * leave it, keeping the address to one join of its own (`solicited`), so
+ * that a socket's joins of the group are untouched. `lo` and an `l3` card
+ * join none, as Linux's addrconf_join_solict skips IFF_LOOPBACK and
+ * IFF_NOARP. A join that finds no room is tried again at the next up. */
+static void solicit(struct netdev *nd, struct netdev_addr6 *a, int join)
+{
+    uint8_t group[IP6_ADDR_LEN];
+
+    if (!a->solicited == !join || (join && (nd->loopback || nd->l3))) {
+        return;
+    }
+    ip6_solicited_node(a->addr, group);
+    if (!join) {
+        netdev_leave6(nd, group);
+        a->solicited = 0;
+    } else if (netdev_join6(nd, group) == 0) {
+        a->solicited = 1;
+    }
+}
+
 void nd6_if_up(struct netdev *nd)
 {
     struct nd6_if *ni = if_of(nd);
@@ -1472,6 +1493,7 @@ void nd6_if_up(struct netdev *nd)
     for (i = 0; i < nd->naddr6; i++) {
         struct netdev_addr6 *a = &nd->addr6[i];
 
+        solicit(nd, a, 1);
         if (!kept_on_down(a))
             continue;
         a->flags &= (uint8_t)~NETDEV_A6_DADFAILED;
@@ -1491,8 +1513,9 @@ void nd6_if_up(struct netdev *nd)
 
 /** Drop nonpermanent neighbours and datagrams waiting on the link. `stop`
  * also removes routes and router state, and the addresses but, with
- * `keep`, those `kept_on_down` names, which become tentative unless they
- * take no detection. The caller may hold net_lock. */
+ * `keep`, those `kept_on_down` names, which leave their solicited-node
+ * groups, as Linux's addrconf_ifdown leaves them, and become tentative
+ * unless they take no detection. The caller may hold net_lock. */
 static void forget_if(struct netdev *nd, int stop, int keep)
 {
     struct nd6_if *ni = if_of(nd);
@@ -1523,7 +1546,10 @@ static void forget_if(struct netdev *nd, int stop, int keep)
 
         if (!keep || !kept_on_down(a)) {
             netconf_del_address6(nd, a->addr);
-        } else if (!(a->flags & NETDEV_A6_NODAD)) {
+            continue;
+        }
+        solicit(nd, a, 0);
+        if (!(a->flags & NETDEV_A6_NODAD)) {
             a->flags |= NETDEV_A6_TENTATIVE;
         }
     }

@@ -120,8 +120,10 @@ show them.
 .Pp
 .Va keep_addr_on_down
 can retain permanent non-link-local addresses when an interface is
-taken down.
-When the interface comes up, its retained addresses regain their prefix
+taken down; each leaves its solicited-node group while the interface is
+down.
+When the interface comes up, its retained addresses join their
+solicited-node groups again, regain their prefix
 routes and undergo duplicate detection again, including addresses marked
 .Dv IFA_F_DADFAILED .
 A TUN address or an address with
@@ -223,8 +225,8 @@ sets another
 .Pq Xr setsockopt 2 .
 The machine forwards nothing.
 .Ss Multicast
-A card joins ff02::1 and the solicited-node group of each of its
-addresses, with ff02::2 while
+A card joins ff02::1 and, unless it is a TUN, the solicited-node group of
+each of its addresses, with ff02::2 while
 .Va forwarding
 is on, and reports them to the link's routers by MLD, RFC 3810, or MLDv1
 where a querier speaks it.
