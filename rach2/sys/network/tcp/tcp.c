@@ -74,13 +74,14 @@ static uint32_t tw_max;
 #define TCP_HASH_SIZE 4096
 static struct tcb *tcp_hash[TCP_HASH_SIZE];
 
-/* The ephemeral ports in use, each counted from NET_PORT_LOW, as Linux's
- * table of bound ports: the blocks and bound stream sockets that hold a
- * port no other connection may share (`port_fixed`), and the connections
- * whose port `tcp_connect` chose, which one to another peer may share
- * (`port_auto`). */
-static uint32_t port_fixed[NET_PORTS];
-static uint32_t port_auto[NET_PORTS];
+/* The ports in use, indexed by port, as Linux's table of bound ports: the
+ * blocks and bound stream sockets that hold a port no other connection may
+ * share (`port_fixed`), and the connections whose port `tcp_connect` chose,
+ * which one to another peer may share (`port_auto`). Every port is
+ * counted, since a write of ip_local_port_range may move the ephemeral
+ * range over ports bound before it. */
+static uint32_t port_fixed[65536];
+static uint32_t port_auto[65536];
 
 /* Where the next connection to a destination begins its search for a port,
  * by a keyed hash of the destination, as Linux's table_perturb (RFC 6056,
@@ -713,41 +714,35 @@ static void tcb_hash_del(struct tcb *tcb)
     tcb->hashed = 0;
 }
 
-/** Whether `port` is one of the ephemeral range, which the tables count. */
-static int tcp_port_ephemeral(uint16_t port)
-{
-    return port >= NET_PORT_LOW && port <= NET_PORT_HIGH;
-}
-
 /**
- * Give `tcb` the local port `port`, counted in the table of ephemeral ports
- * as `kind`, TCP_PORT_FIXED or TCP_PORT_AUTO, until `tcb_free`.
+ * Give `tcb` the local port `port`, counted in the table of ports in use as
+ * `kind`, TCP_PORT_FIXED or TCP_PORT_AUTO, until `tcb_free`.
  */
 static void tcb_take_port(struct tcb *tcb, uint16_t port, int kind)
 {
     tcb->local_port = port;
-    if (!tcp_port_ephemeral(port)) {
+    if (port == 0) {
         return;
     }
     tcb->port_held = (uint8_t)kind;
     if (kind == TCP_PORT_AUTO) {
-        port_auto[port - NET_PORT_LOW]++;
+        port_auto[port]++;
     } else {
-        port_fixed[port - NET_PORT_LOW]++;
+        port_fixed[port]++;
     }
 }
 
 void tcp_port_hold(uint16_t port)
 {
-    if (tcp_port_ephemeral(port)) {
-        port_fixed[port - NET_PORT_LOW]++;
+    if (port != 0) {
+        port_fixed[port]++;
     }
 }
 
 void tcp_port_unhold(uint16_t port)
 {
-    if (tcp_port_ephemeral(port) && port_fixed[port - NET_PORT_LOW] > 0) {
-        port_fixed[port - NET_PORT_LOW]--;
+    if (port != 0 && port_fixed[port] > 0) {
+        port_fixed[port]--;
     }
 }
 
@@ -812,9 +807,9 @@ void tcb_free(struct tcb *tcb)
         tcb->batch_owed = 0;
     }
     if (tcb->port_held == TCP_PORT_AUTO) {
-        port_auto[tcb->local_port - NET_PORT_LOW]--;
+        port_auto[tcb->local_port]--;
     } else if (tcb->port_held == TCP_PORT_FIXED) {
-        port_fixed[tcb->local_port - NET_PORT_LOW]--;
+        port_fixed[tcb->local_port]--;
     }
     tcb->port_held = 0;
     tcb->in_use = 0;
@@ -1759,29 +1754,47 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 }
 
 /**
+ * The ports of the ephemeral range the searches of `tcp_free_port` and
+ * `tcp_connect_port` walk, from `*low`, as Linux 6.12 counts them: an even
+ * number, the range's own count less one when that is odd, so that the
+ * walk by twos from any place comes back to it, or 1 for a range of one
+ * port. The range is read once, so that a write of ip_local_port_range
+ * during the search does not mix two.
+ */
+static uint32_t tcp_port_span(uint32_t *low)
+{
+    uint32_t r = net_port_range, span;
+
+    *low = NET_PORT_LOW(r);
+    span = NET_PORT_HIGH(r) + 1u - *low;
+    return span > 1u ? span & ~1u : span;
+}
+
+/**
  * A port of the ephemeral range that no block and no bound stream socket
  * holds, or 0 when none is free: Linux's inet_csk_find_open_port, which
- * starts at a random place and tries the odd ports first, then the even
- * ones, leaving the even ones to `tcp_connect_port`. The place is a keyed
- * hash of a count of the searches, which no host off the machine can
- * predict. The caller holds `net_lock`.
+ * starts at a random place and tries the ports of that odd offset from the
+ * range's low end first, then the even ones, leaving the even ones to
+ * `tcp_connect_port`. The place is a keyed hash of a count of the
+ * searches, which no host off the machine can predict. The caller holds
+ * `net_lock`.
  */
 static uint16_t tcp_free_port(void)
 {
     net_addr_t none = net_addr4(0), count;
-    uint32_t offset, i, k;
+    uint32_t low, span = tcp_port_span(&low), offset, i, port;
 
     tcp_isn_key();
     count = net_addr4(bind_searches++);
-    offset = (tcp_tuple_hash(&none, &count, 0, 0) % NET_PORTS) | 1u;
+    offset = (tcp_tuple_hash(&none, &count, 0, 0) % span) | 1u;
     for (;;) {
-        for (i = 0; i < NET_PORTS; i += 2) {
-            k = offset + i;
-            if (k >= NET_PORTS) {
-                k -= NET_PORTS;
+        port = low + offset;
+        for (i = 0; i < span; i += 2, port += 2) {
+            if (port >= low + span) {
+                port -= span;
             }
-            if (port_fixed[k] == 0 && port_auto[k] == 0) {
-                return (uint16_t)(NET_PORT_LOW + k);
+            if (port_fixed[port] == 0 && port_auto[port] == 0) {
+                return (uint16_t)port;
             }
         }
         if (!(offset & 1u)) {
@@ -1793,19 +1806,18 @@ static uint16_t tcp_free_port(void)
 
 /**
  * The port for a connection of the network namespace `ns` from `from` to
- * `dst`:`dst_port` that a socket with no port opens, or 0 when none is
- * free, chosen as Linux's __inet_hash_connect chooses it (RFC 6056,
- * algorithm 4). The search starts where the last one to this destination
- * ended, a keyed hash of the addresses and the peer's port picking the place
- * in `port_perturb` that keeps it, tries the even ports first, then the odd
- * ones, and takes the first port that no listener, passive connection or
- * bound socket holds and no connection from `from` has to this peer
- * already. So a port comes back to one peer only after the rest of the
- * range, ports are shared among connections to different peers, and a
- * block in TIME_WAIT keeps its port from the next connection to its peer.
- * The place moves past the port, and a little further by the hash of the
- * chosen pair, as Linux moves it by a random step, so that its next value
- * is not plain to the peer.
+ * `dst`:`dst_port` that a socket with no port opens, or 0 when none is free,
+ * chosen as Linux's __inet_hash_connect chooses it (RFC 6056, algorithm 4). The
+ * search starts where the last one to this destination ended, a keyed hash of
+ * the addresses and the peer's port picking the place in `port_perturb` that
+ * keeps it, tries the ports an even offset from the range's low end first, then
+ * the others, and takes the first port that no listener, passive connection or
+ * bound socket holds and no connection from `from` has to this peer already. So
+ * a port comes back to one peer only after the rest of the range, ports are
+ * shared among connections to different peers, and a block in TIME_WAIT keeps
+ * its port from the next connection to its peer. The place moves past the port,
+ * and a little further by the hash of the chosen pair, as Linux moves it by a
+ * random step, so that its next value is not plain to the peer.
  * `ifindex` is the card the connection is bound to (`tcp_pair_in_use`).
  * The caller holds `net_lock`.
  */
@@ -1814,29 +1826,29 @@ static uint16_t tcp_connect_port(const struct netns *ns, net_addr_t from, net_ad
 {
     uint32_t h = tcp_tuple_hash(&from, &dst, 0, dst_port);
     uint32_t place = h & (TCP_PERTURB_SIZE - 1u);
-    uint32_t offset = ((port_perturb[place] + (h >> 8)) % NET_PORTS) & ~1u;
-    uint32_t i, k, step;
-    uint16_t port;
+    uint32_t low, span = tcp_port_span(&low);
+    uint32_t offset = ((port_perturb[place] + (h >> 8)) % span) & ~1u;
+    uint32_t i, step, port;
 
     for (;;) {
-        for (i = 0; i < NET_PORTS; i += 2) {
-            k = offset + i;
-            if (k >= NET_PORTS) {
-                k -= NET_PORTS;
+        port = low + offset;
+        for (i = 0; i < span; i += 2, port += 2) {
+            if (port >= low + span) {
+                port -= span;
             }
-            port = (uint16_t)(NET_PORT_LOW + k);
-            if (port_fixed[k] != 0 ||
-                (port_auto[k] != 0 && tcp_pair_in_use(ns, from, port, dst, dst_port, ifindex))) {
+            if (port_fixed[port] != 0 ||
+                (port_auto[port] != 0 &&
+                 tcp_pair_in_use(ns, from, (uint16_t)port, dst, dst_port, ifindex))) {
                 continue;
             }
-            step = (tcp_tuple_hash(&from, &dst, port, dst_port) >> 29) * 2u;
+            step = (tcp_tuple_hash(&from, &dst, (uint16_t)port, dst_port) >> 29) * 2u;
             port_perturb[place] += (i > step ? i : step) + 2u;
-            return port;
-        }
-        if (offset & 1u) {
-            return 0;
+            return (uint16_t)port;
         }
         offset++;
+        if (!(offset & 1u) || span <= 1u) {
+            return 0;
+        }
     }
 }
 
