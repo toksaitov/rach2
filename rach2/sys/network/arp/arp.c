@@ -81,6 +81,7 @@ static uint32_t arp_stamp(void)
  * Whether `ip` may be a neighbour's address on `nd`: not an address no host
  * can have (`netconf_address_is_impossible`), and not the network or
  * broadcast address of one of `nd`'s subnets. A NULL `nd` has no subnets.
+ * The caller holds net_lock.
  */
 static int arp_address_is_a_neighbour(struct netdev *nd, uint32_t ip)
 {
@@ -229,14 +230,12 @@ static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
 
 int arp_set(struct netdev *nd, uint32_t ip, const uint8_t *mac, int permanent)
 {
-    uint32_t flags;
-    int rc;
+    uint32_t flags = net_lock();
+    int rc = -EINVAL;
 
-    if (!arp_address_is_a_neighbour(nd, ip)) {
-        return -EINVAL;
+    if (arp_address_is_a_neighbour(nd, ip)) {
+        rc = arp_store(nd, ip, mac, permanent ? 1 : 0);
     }
-    flags = net_lock();
-    rc = arp_store(nd, ip, mac, permanent ? 1 : 0);
     net_unlock(flags);
     return rc;
 }
@@ -331,7 +330,7 @@ int arp_request(struct netdev *nd, uint32_t target_ip)
         return NETDEV_TX_DROPPED;
     }
     k_memcpy(arp_req_buf + 8, nd->mac, 6);
-    write32be(arp_req_buf + 14, netdev_source(nd, target_ip));
+    write32be(arp_req_buf + 14, netdev_source(nd, target_ip, NETDEV_SCOPE_LINK));
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);
 

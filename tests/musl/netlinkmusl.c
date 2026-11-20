@@ -1287,6 +1287,56 @@ static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
     return NULL;
 }
 
+/** Add one IPv4 primary to the TUN with the given prefix and scope. */
+static int tun_primary(int fd, int index, struct in_addr addr, int prefix, int scope)
+{
+    struct ifaddrmsg ifa = {AF_INET, (unsigned char)prefix, 0, (unsigned char)scope,
+                            (unsigned int)index};
+    char body[sizeof(ifa) + 16];
+    int len = sizeof(ifa);
+
+    memcpy(body, &ifa, sizeof(ifa));
+    attr32(body, &len, IFA_LOCAL, &addr);
+    attr32(body, &len, IFA_ADDRESS, &addr);
+    return ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 102, body, len);
+}
+
+/** Send a limited broadcast through a device-bound UDP socket. The first,
+ * link-scope address must be the source even with a global default route. */
+static const char *tun_broadcast(int fd, int tun, int s, int index, const char *name)
+{
+    struct in_addr link = {inet_addr("169.254.1.1")};
+    struct in_addr global = {inet_addr("192.0.2.1")};
+    struct in_addr gw = {inet_addr("192.0.2.2")};
+    struct sockaddr_in dst;
+    unsigned char packet[128];
+    int one = 1;
+    ssize_t len;
+
+    if (tun_primary(fd, index, link, 16, RT_SCOPE_LINK) || tun_primary(fd, index, global, 24, 0) ||
+        tun_set_gateway(fd, index, gw))
+        return "could not set up the TUN's link-scope address and default route";
+    if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, name, strlen(name) + 1) ||
+        setsockopt(s, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)))
+        return "could not enable broadcast on the device-bound UDP socket";
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(43123);
+    dst.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    if (sendto(s, "x", 1, 0, (struct sockaddr *)&dst, sizeof(dst)) != 1)
+        return "could not send a UDP limited broadcast";
+    while ((len = read(tun, packet, sizeof(packet))) > 0) {
+        if (len != 29 || packet[0] != 0x45 || packet[9] != IPPROTO_UDP ||
+            memcmp(packet + 16, &dst.sin_addr, sizeof(dst.sin_addr)) || packet[28] != 'x')
+            continue;
+        if (memcmp(packet + 12, &link, sizeof(link)))
+            return "the UDP broadcast source was not the TUN's link-scope address";
+        report_held();
+        return NULL;
+    }
+    return "the UDP broadcast did not leave on the TUN";
+}
+
 /** Check a TUN's IPv4 peer, link and default routes, and a packet socket
  * send. Close the descriptor on every exit to remove the interface. */
 static int tun_changes(int fd)
@@ -1354,6 +1404,8 @@ static int tun_changes(int fd)
     report_held();
 
     failure = tun_peer_changes(fd, s, &ifr, index, local, peer);
+    if (!failure)
+        failure = tun_broadcast(fd, tun, s, index, ifr.ifr_name);
 out:
     rc = failure ? fail(failure) : 0;
     if (tun >= 0) {
@@ -1427,7 +1479,8 @@ static void plan(char **envp)
                                       "tun-gateway-retained",
                                       "tun-gateway-kept",
                                       "tun-peer-delete",
-                                      "tun-last-delete"};
+                                      "tun-last-delete",
+                                      "tun-broadcast-source"};
 
     report_begin(report_case(envp, "guest.default.netlinkmusl"));
     PLAN(before);

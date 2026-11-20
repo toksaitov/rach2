@@ -26,9 +26,14 @@ struct route6 {
     uint64_t expires;
 };
 
-static struct route6 initial_routes[ROUTE6_MAX];
+/* The table: `initial_routes` until more are needed, then an array that
+ * `free_slot` doubles, which `trim_table` gives back once the routes fit
+ * the first again. */
+#define ROUTE6_INITIAL 32
+
+static struct route6 initial_routes[ROUTE6_INITIAL];
 static struct route6 *table6 = initial_routes;
-static int table_size = ROUTE6_MAX;
+static int table_size = ROUTE6_INITIAL;
 
 /** Clear the bits of `a` past its first `plen`. */
 static void mask_prefix(uint8_t *a, int plen)
@@ -195,22 +200,13 @@ static int find(const struct netdev *nd, const uint8_t *dst, int plen, const uin
     return -1;
 }
 
-/** A free entry of the table, or -1. */
+/** A free entry of the table, made by doubling it when every entry is
+ * taken; -1 when the heap has no room. */
 static int free_slot(void)
-{
-    int i;
-    for (i = 0; i < ROUTE6_MAX; i++)
-        if (!table6[i].nd)
-            return i;
-    return -1;
-}
-
-/** Allocate a slot for an address route outside the explicit route table. */
-static int address_slot(void)
 {
     int i, next;
     struct route6 *rows;
-    for (i = ROUTE6_MAX; i < table_size; i++)
+    for (i = 0; i < table_size; i++)
         if (!table6[i].nd)
             return i;
     if ((unsigned)table_size > 0x7fffffffu / sizeof(*rows) / 2)
@@ -227,19 +223,19 @@ static int address_slot(void)
     return i;
 }
 
-/** Return unused overflow storage when the last address route leaves. */
+/** Give back the grown table once its routes fit the first entries. */
 static void trim_table(void)
 {
     int i;
     if (table6 == initial_routes)
         return;
-    for (i = ROUTE6_MAX; i < table_size; i++)
+    for (i = ROUTE6_INITIAL; i < table_size; i++)
         if (table6[i].nd)
             return;
     k_memcpy(initial_routes, table6, sizeof(initial_routes));
     kfree(table6);
     table6 = initial_routes;
-    table_size = ROUTE6_MAX;
+    table_size = ROUTE6_INITIAL;
 }
 
 /** Match an IPv6 prefix and any selectors supplied for deletion. */
@@ -379,7 +375,7 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
 {
     struct route6_row r = *input, selector;
     uint32_t lock;
-    int i, stored, generated, rc;
+    int i, generated, rc;
     if (r.plen > 128 || (!del && !nd))
         return -EINVAL;
     if (nd && nd->loopback)
@@ -410,15 +406,12 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
         net_unlock(lock);
         return -EEXIST;
     }
-    stored = i;
-    if (i < 0 || i >= ROUTE6_MAX)
+    if (i < 0)
         i = free_slot();
     if (i < 0) {
         net_unlock(lock);
-        return -ENOSPC;
+        return -ENOBUFS;
     }
-    if (stored >= ROUTE6_MAX)
-        table6[stored].nd = 0;
     if (generated)
         generated_local(nd, &selector, 1);
     table6[i].nd = nd;
@@ -450,7 +443,10 @@ static int prefix_slot(const struct netdev *nd, const uint8_t *dst, int plen, in
 }
 
 /** Insert an address route, refreshing a duplicate only when it expires.
- * expires is an absolute tick count, or zero for a permanent route. */
+ * expires is an absolute tick count, or zero for a permanent route. A
+ * refreshed advertised prefix stays learned, so that a router's later
+ * withdrawal still removes it, as Linux's fib6_add_rt2node keeps the
+ * existing route's RTF_ADDRCONF. */
 static void add_prefix(struct netdev *nd, const uint8_t *dst, int plen, uint32_t metric,
                        uint64_t expires)
 {
@@ -460,13 +456,11 @@ static void add_prefix(struct netdev *nd, const uint8_t *dst, int plen, uint32_t
     mask_prefix(prefix, plen);
     i = find(nd, prefix, plen, ip6_any, metric);
     if (i >= 0) {
-        if (table6[i].expires) {
+        if (table6[i].expires)
             table6[i].expires = expires;
-            table6[i].learned = 0;
-        }
         return;
     }
-    i = address_slot();
+    i = free_slot();
     if (i < 0)
         return;
     k_memset(&table6[i], 0, sizeof(table6[i]));
@@ -581,8 +575,8 @@ struct netdev *route6_added_local(const uint8_t *dst)
     return best ? best->nd : 0;
 }
 
-/** A full table refuses the route; the advertisement that would refresh it
- * comes again. */
+/** A table the heap has no room to grow refuses the route; the
+ * advertisement that would refresh it comes again. */
 void route6_learn(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw,
                   uint32_t metric, uint32_t lifetime)
 {
@@ -700,7 +694,8 @@ struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
     return nd;
 }
 
-struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
+/** Resolve the route and next hop under the caller's net_lock. */
+static struct netdev *route_find(const uint8_t *dst, int ifindex, uint8_t *via)
 {
     struct netdev *nd = 0;
 
@@ -732,5 +727,14 @@ struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
         return 0;
     }
     k_memcpy(via, dst, IP6_ADDR_LEN);
+    return nd;
+}
+
+struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
+{
+    uint32_t flags = net_lock();
+    struct netdev *nd = route_find(dst, ifindex, via);
+
+    net_unlock(flags);
     return nd;
 }
