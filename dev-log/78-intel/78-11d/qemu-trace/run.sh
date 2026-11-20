@@ -30,6 +30,7 @@ guest()
 
 git rev-parse HEAD > "$out/commit"
 shasum -a 256 build/x86_64/rach2/kernel > "$out/kernel.sha256"
+: > "$out/serial.log"
 qemu-system-x86_64 -accel tcg,thread=multi -cpu max -smp 4 -m 6G -machine q35 \
     -kernel build/x86_64/rach2/kernel \
     -append 'rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/t3504t/root-5ed936d79361e924.img rach2.slot=trialroot' \
