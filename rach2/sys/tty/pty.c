@@ -225,7 +225,9 @@ static void pty_flow(struct tty *t, int what)
 
 /**
  * Allocate a pair at the lowest free index from `first` on, 0 for a pair of
- * /dev/ptmx, or return NULL when the heap has no room. One queue serves the
+ * /dev/ptmx, or return NULL when the heap has no room or a pair of
+ * /dev/ptmx would reach PTY_KERNEL_INDEX, past which its slave's inode
+ * would be another node's of /dev. One queue serves the
  * master's readers, writers and pollers; the slave's `space_wq` points at
  * it, so a flush, a termios change, or a signal char or an erase the master
  * wrote wakes a master writer waiting for room.
@@ -239,6 +241,10 @@ static struct pty *pty_alloc(int first)
         return NULL;
     }
     for (i = first; pty_by_index(i); i++) {
+    }
+    if (first < PTY_KERNEL_INDEX && i >= PTY_KERNEL_INDEX) {
+        kfree(p);
+        return NULL;
     }
     p->index = i;
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
