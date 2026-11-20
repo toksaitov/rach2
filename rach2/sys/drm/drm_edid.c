@@ -2098,6 +2098,15 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
     return n;
 }
 
+int drm_connector_add_edid_modes(struct drm_connector *connector)
+{
+    struct drm_property_blob *blob = connector->edid;
+
+    return blob ? drm_edid_parse_modes((const uint8_t *)blob->data, blob->length, add_probed,
+                                       connector)
+                : 0;
+}
+
 uint32_t drm_match_cea_mode(const struct drm_mode_modeinfo *mode)
 {
     return match_cea(mode, -1);
