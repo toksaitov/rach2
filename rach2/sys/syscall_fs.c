@@ -7124,6 +7124,60 @@ long sys_fadvise64(isr_params_t *params)
 #define FS_IOC_SETFLAGS   (0x40006602u | FS_IOC_LONG)
 #define FS_IOC_GETVERSION (0x80007601u | FS_IOC_LONG)
 
+/* vfat's attribute requests, _IOR and _IOW of 'r', 0x10 and 0x11, a u32,
+ * the same on both architectures. */
+#define FAT_IOCTL_GET_ATTRIBUTES 0x80047210u
+#define FAT_IOCTL_SET_ATTRIBUTES 0x40047211u
+
+/**
+ * FAT_IOCTL_GET_ATTRIBUTES and FAT_IOCTL_SET_ATTRIBUTES of the file `entry`
+ * is open on, on a vfat mount, as Linux's fat_generic_ioctl answers them:
+ * the attribute byte (`fat_attr_get`) into the u32 at `arg`, or the one
+ * there stored (`fat_attr_set`), by a caller who may chmod the file, and
+ * under sys_immutable, for a change that has the system bit, one with
+ * CAP_LINUX_IMMUTABLE. 0, -EFAULT, -EROFS for a read-only mount, or
+ * `fat_attr_set`'s error.
+ */
+static int32_t fat_attr_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg)
+{
+    struct vfs_mount *mnt = entry->ofd->vmnt;
+    struct vfs_mount *base = mnt->bind_of ? mnt->bind_of : mnt;
+    struct vfs_stat st;
+    uint32_t attr;
+    int rights = 0, rc;
+
+    if (request == FAT_IOCTL_GET_ATTRIBUTES) {
+        attr = fat_attr_get(base, entry->ofd->vnode);
+        return copy_to_user((void __user *)arg, &attr, sizeof(attr)) ? -EFAULT : 0;
+    }
+    if (copy_from_user(&attr, (const void __user *)arg, sizeof(attr)) != 0) {
+        return -EFAULT;
+    }
+    if (vfs_mount_rdonly(entry->ofd->vmnt)) {
+        return -EROFS;
+    }
+    rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    if (inode_owner_or_capable(st.uid)) {
+        rights |= FAT_ATTR_MAY_CHANGE;
+    }
+    if (ns_capable_with(current_proc, NULL, cap_holds(current_proc, CAP_LINUX_IMMUTABLE))) {
+        rights |= FAT_ATTR_MAY_SYS;
+    }
+    return fat_attr_set(base, entry->ofd->vnode, attr, rights);
+}
+
+/** Whether `request` is one of vfat's attribute requests and `entry` a
+ * file or a directory of a vfat mount, which `fat_attr_ioctl` answers. */
+static int fat_attr_request(const fd_entry_t *entry, uint32_t request)
+{
+    return (request == FAT_IOCTL_GET_ATTRIBUTES || request == FAT_IOCTL_SET_ATTRIBUTES) &&
+           (entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
+           entry->ofd->vmnt && vfs_mount_base(entry->ofd->vmnt)->type == &vfs_vfat_type;
+}
+
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled)
 {
     struct vfs_stat st;
@@ -7131,6 +7185,10 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
     int rc;
 
     *handled = 0;
+    if (fat_attr_request(entry, request)) {
+        *handled = 1;
+        return fat_attr_ioctl(entry, request, arg);
+    }
     if ((request != FS_IOC_GETFLAGS && request != FS_IOC_SETFLAGS &&
          request != FS_IOC_GETVERSION) ||
         (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) || !entry->ofd ||
@@ -7138,7 +7196,8 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
         return 0;
     }
     rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st);
-    if (rc != 0 || !st.flags_known || (request == FS_IOC_GETVERSION && !st.generation_known)) {
+    if (rc != 0 || st.flags_known != VFS_FLAGS_KEPT ||
+        (request == FS_IOC_GETVERSION && !st.generation_known)) {
         return 0;
     }
     *handled = 1;

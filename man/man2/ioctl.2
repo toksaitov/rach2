@@ -524,6 +524,51 @@ Request 0x80047601 writes the inode's generation number as a 32-bit
 integer through
 .Fa arg .
 .El
+.Ss FAT attribute requests
+A file or a directory of a vfat volume takes Linux's
+.Dv FAT_IOCTL_GET_ATTRIBUTES
+and
+.Dv FAT_IOCTL_SET_ATTRIBUTES ,
+whose
+.Fa arg
+points to a 32-bit integer, the entry's attribute byte, as
+.Xr fatattr 1
+uses them.
+.Bl -tag -width "FAT_IOCTL_SET_ATTRIBUTES"
+.It Dv FAT_IOCTL_GET_ATTRIBUTES
+Request 0x80047210 writes the attributes: read-only 0x01, hidden 0x02,
+system 0x04, volume 0x08, directory 0x10 and archive 0x20, with the
+read-only bit for a node whose mode has no write bit.
+.It Dv FAT_IOCTL_SET_ATTRIBUTES
+Request 0x40047211 stores the low byte of the integer as the attributes,
+keeping the volume and directory bits as they were, for the file's owner or
+a caller with
+.Dv CAP_FOWNER ,
+and fails with
+.Er EPERM
+for another, with
+.Er EROFS
+on a read-only mount, and with
+.Er EINVAL
+for the root directory given any attribute but the directory bit.
+The read-only bit takes the write bits from the mode, as a
+.Xr chmod 2
+does.
+On a mount with
+.Ql sys_immutable
+a change to a file that has the system bit, before or after, needs
+.Dv CAP_LINUX_IMMUTABLE ,
+and fails with
+.Er EPERM
+without it; a file with that bit is immutable, as on Linux, refusing a
+write, a truncation, a removal, a rename, a link and a change of its
+attributes, though this request still changes them.
+A vfat file answers
+.Dv FS_IOC_GETFLAGS
+with
+.Er ENOTTY ,
+as Linux's does.
+.El
 .Ss Clone requests
 .Dv FICLONE ,
 0x40049409, whose

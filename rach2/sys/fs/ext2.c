@@ -1843,7 +1843,7 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->blocks_known = 1;
     st->flags = n->flags & EXT2_FL_USER_VISIBLE;
     st->generation = n->generation;
-    st->flags_known = 1;
+    st->flags_known = VFS_FLAGS_KEPT;
     st->generation_known = 1;
     return 0;
 }

@@ -11,7 +11,9 @@
  * what says the write reached the file and not only the cache. On a vfat
  * image it also exchanges two directories across parents with
  * RENAME_EXCHANGE, whose four writes go down through the device into the
- * volume's file system, and reads the exchanged names back.
+ * volume's file system, and reads the exchanged names back, and mounts the
+ * image with sys_immutable, under which a file given the system bit takes
+ * no change (`immutable_rows`).
  *
  * It then asks for everything the attachment refuses: the same file twice, a
  * write of an attached file, a detach with a mount on it, an unmount of the
@@ -96,9 +98,17 @@
 #define PROT_READ   1
 #define MAP_PRIVATE 2
 
+/* vfat's attribute requests, _IOR and _IOW of 'r', 0x10 and 0x11, a u32,
+ * and the attribute bits the rows give: archive, and system. */
+#define FAT_IOCTL_GET_ATTRIBUTES 0x80047210L
+#define FAT_IOCTL_SET_ATTRIBUTES 0x40047211L
+#define FAT_ARCHIVE              0x20u
+#define FAT_SYSTEM               0x04u
+
 /* The writes the durable mode makes, each a sync point of KRFFS. */
 #define DURABLE_WRITES 128
 
+#define EPERM  1
 #define ENOENT 2
 #define ENXIO  6
 #define ENOSPC 28
@@ -1177,6 +1187,61 @@ static void exchange_rows(void)
     }
 }
 
+/**
+ * sys_immutable, on the image mounted again with it: root, which holds
+ * CAP_LINUX_IMMUTABLE, gives a file the system bit with
+ * FAT_IOCTL_SET_ATTRIBUTES, which FAT_IOCTL_GET_ATTRIBUTES reads back; an
+ * open of the file for writing, a chmod, an unlink and a rename are then
+ * EPERM, as Linux's S_IMMUTABLE makes them, and once the bit is cleared the
+ * unlink goes through. The image stays mounted with the option.
+ */
+static void immutable_rows(void)
+{
+    char path[PATH_CAP], moved[PATH_CAP];
+    unsigned int attr = FAT_ARCHIVE | FAT_SYSTEM;
+    int fd, rc;
+
+    rc = unmount((long)mount_dir, 0);
+    if (rc != 0) {
+        fail_with("unmounting the image to mount it with sys_immutable", rc);
+    }
+    rc = mount_at((long)node_a, (long)mount_dir, (long)"vfat", 0, (long)"sys_immutable");
+    if (rc != 0) {
+        fail_with("mounting the image with sys_immutable", rc);
+    }
+    make_text(mount_dir, "SYS.BIN", "system", 6);
+    join(path, mount_dir, "SYS.BIN");
+    join(moved, mount_dir, "MOVED.BIN");
+    fd = syscall2(SYS_OPEN, (long)path, O_RDONLY);
+    if (fd < 0) {
+        fail_with("opening the file to give it the system bit", fd);
+    }
+    rc = syscall3(SYS_IOCTL, fd, FAT_IOCTL_SET_ATTRIBUTES, (long)&attr);
+    attr = 0;
+    if (rc == 0) {
+        rc = syscall3(SYS_IOCTL, fd, FAT_IOCTL_GET_ATTRIBUTES, (long)&attr);
+    }
+    if (rc != 0 || attr != (FAT_ARCHIVE | FAT_SYSTEM)) {
+        fail_with("FAT_IOCTL_SET_ATTRIBUTES giving a file the system bit", rc);
+    }
+    if (syscall2(SYS_OPEN, (long)path, O_WRONLY) != -EPERM ||
+        syscall2(SYS_CHMOD, (long)path, 0444) != -EPERM ||
+        syscall1(SYS_UNLINK, (long)path) != -EPERM ||
+        syscall2(SYS_RENAME, (long)path, (long)moved) != -EPERM) {
+        fail("a system file under sys_immutable takes a write, chmod, unlink or rename");
+    }
+    attr = FAT_ARCHIVE;
+    rc = syscall3(SYS_IOCTL, fd, FAT_IOCTL_SET_ATTRIBUTES, (long)&attr);
+    syscall1(SYS_CLOSE, fd);
+    if (rc != 0) {
+        fail_with("clearing the system bit", rc);
+    }
+    rc = syscall1(SYS_UNLINK, (long)path);
+    if (rc != 0) {
+        fail_with("unlinking the file once it has no system bit", rc);
+    }
+}
+
 /** The names the exchange rows left, on the image mounted again. */
 static void exchanged_names(void)
 {
@@ -1321,6 +1386,7 @@ static void read_back_rows(const char *type)
     syscall1(SYS_CLOSE, fd);
     if (streq(type, "vfat")) {
         exchange_rows();
+        immutable_rows();
     }
     rc = unmount((long)mount_dir, 0);
     if (rc != 0) {

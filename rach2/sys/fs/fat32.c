@@ -1533,6 +1533,10 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         st->ctime_nsec = (int64_t)(tenth % 100) * 10000000;
     }
     st->atime_sec = fat_epoch(n->adate, 0) - east;
+    if ((fm->opts.flags & FAT_OPT_SYS_IMMUTABLE) && (n->attr & ATTR_SYSTEM)) {
+        st->flags = VFS_FL_IMMUTABLE;
+        st->flags_known = VFS_FLAGS_ENFORCED;
+    }
     return 0;
 }
 
@@ -2189,6 +2193,52 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
             fat_stamp(st->mtime_sec + east, &n->date, &n->time);
         }
         rc = write_node_entry(fm, n);
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+uint32_t fat_attr_get(struct vfs_mount *mnt, void *node)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    struct fat_node *n = node;
+    uint32_t attr = n->attr & (uint32_t)~(ATTR_READ_ONLY | ATTR_DIRECTORY);
+
+    if ((n->attr & ATTR_READ_ONLY) || !(fat_mode(fm, n) & 0222u)) {
+        attr |= ATTR_READ_ONLY;
+    }
+    return n->is_dir ? attr | ATTR_DIRECTORY : attr;
+}
+
+int fat_attr_set(struct vfs_mount *mnt, void *node, uint32_t attr, int rights)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    struct fat_node *n = node;
+    uint32_t mask = n->is_dir ? fm->opts.dmask : fm->opts.fmask;
+    int rc;
+
+    attr &= 0xffu & (uint32_t)~(ATTR_VOLUME | ATTR_DIRECTORY);
+    attr |= (n->attr & ATTR_VOLUME) | (n->is_dir ? ATTR_DIRECTORY : 0u);
+    if (!(~mask & 0222u)) {
+        attr |= ATTR_READ_ONLY; /* a mode with no write bit is stored read-only */
+    }
+    rc = begin_write(mnt, fm);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->is_dir && n->first == fm->root_cluster) {
+        rc = attr == ATTR_DIRECTORY ? 0 : -EINVAL;
+    } else if ((fm->opts.flags & FAT_OPT_SYS_IMMUTABLE) &&
+               ((attr | fat_attr_get(mnt, n)) & ATTR_SYSTEM) && !(rights & FAT_ATTR_MAY_SYS)) {
+        rc = -EPERM;
+    } else if (!(rights & FAT_ATTR_MAY_CHANGE)) {
+        rc = -EPERM;
+    } else if (attr != n->attr) {
+        rc = mark_dirty(fm);
+        if (rc == 0) {
+            n->attr = (uint8_t)attr;
+            rc = write_node_entry(fm, n);
+        }
     }
     vfs_ns_unlock(mnt);
     return rc;

@@ -480,7 +480,9 @@ long sys_readahead(isr_params_t *params);
  * immutable and append-only flags, which the VFS enforces, only a privileged
  * caller changes, as CAP_LINUX_IMMUTABLE does on Linux, and another caller is
  * -EPERM. The type answers a flag it does not keep: ext2 drops it, and tmpfs
- * answers -EOPNOTSUPP.
+ * answers -EOPNOTSUPP. A vfat file or directory takes vfat's
+ * FAT_IOCTL_GET_ATTRIBUTES and FAT_IOCTL_SET_ATTRIBUTES here too
+ * (`fat_attr_ioctl`), and no FS_IOC_GETFLAGS, as on Linux.
  */
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
 

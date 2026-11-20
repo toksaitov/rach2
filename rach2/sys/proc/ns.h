@@ -410,6 +410,7 @@ void ns_exec(process_t *p);
 #define CAP_DAC_READ_SEARCH    2
 #define CAP_FOWNER             3
 #define CAP_FSETID             4
+#define CAP_LINUX_IMMUTABLE    9
 #define CAP_SETPCAP            8
 #define CAP_NET_ADMIN          12
 #define CAP_SYS_RAWIO          17

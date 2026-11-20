@@ -249,11 +249,72 @@ static void fat_option_mount_rows(void)
     check(mount_rw("codepage=850") == -EINVAL, "a code page other than 437 fails the mount");
 }
 
+/**
+ * sys_immutable: a system file is immutable, as Linux's fat_fill_inode sets
+ * S_IMMUTABLE, which the VFS then enforces, and FAT_IOCTL_SET_ATTRIBUTES
+ * sets or clears the system bit only with CAP_LINUX_IMMUTABLE; without the
+ * option the bit is an attribute like any other.
+ */
+static void fat_option_immutable_rows(void)
+{
+    struct vfs_stat st;
+    int err;
+    void *n, *root;
+
+    load("");
+    check(mount_rw("sys_immutable") == 0 && fat_touch("SYS.BIN") == 0,
+          "a mount with sys_immutable");
+    n = walk("/SYS.BIN", &err);
+    root = walk("/", &err);
+    if (n && root) {
+        check(fat_attr_get(&mnt, n) == 0x20 && fat_attr_get(&mnt, root) == 0x10,
+              "a new file has the archive bit alone, and the root the directory bit");
+        check(fat_attr_set(&mnt, n, 0x24, FAT_ATTR_MAY_CHANGE) == -EPERM,
+              "the system bit needs CAP_LINUX_IMMUTABLE under sys_immutable");
+        check(OPS->getattr(&mnt, n, &st) == 0 && st.flags_known == 0,
+              "and a file without it reports no flags");
+        check(fat_attr_set(&mnt, n, 0x24, FAT_ATTR_MAY_CHANGE | FAT_ATTR_MAY_SYS) == 0 &&
+                  fat_attr_get(&mnt, n) == 0x24,
+              "with it the system bit is stored");
+        check(OPS->getattr(&mnt, n, &st) == 0 && st.flags_known == VFS_FLAGS_ENFORCED &&
+                  st.flags == VFS_FL_IMMUTABLE,
+              "a system file is immutable, enforced and not kept for FS_IOC_GETFLAGS");
+        check(fat_attr_set(&mnt, n, 0x20, FAT_ATTR_MAY_CHANGE) == -EPERM &&
+                  fat_attr_get(&mnt, n) == 0x24,
+              "clearing the bit needs the capability too");
+        check(fat_attr_set(&mnt, root, 0x02, FAT_ATTR_MAY_CHANGE | FAT_ATTR_MAY_SYS) == -EINVAL &&
+                  fat_attr_set(&mnt, root, 0x10, FAT_ATTR_MAY_CHANGE) == 0,
+              "the root takes the directory bit alone");
+        check(fat_attr_set(&mnt, n, 0x21, FAT_ATTR_MAY_CHANGE | FAT_ATTR_MAY_SYS) == 0 &&
+                  OPS->getattr(&mnt, n, &st) == 0 && st.flags_known == 0 && (st.mode & 0222) == 0 &&
+                  fat_attr_get(&mnt, n) == 0x21,
+              "clearing it ends the immutability, and the read-only bit takes the write bits");
+    }
+    if (root) {
+        OPS->put(&mnt, root);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+    check(mount_rw("") == 0, "a mount without sys_immutable");
+    n = walk("/SYS.BIN", &err);
+    if (n) {
+        check(fat_attr_set(&mnt, n, 0x24, FAT_ATTR_MAY_CHANGE) == 0 &&
+                  OPS->getattr(&mnt, n, &st) == 0 && st.flags_known == 0,
+              "the system bit is anyone's to set and makes nothing immutable");
+        check(fat_attr_set(&mnt, n, 0x20, 0) == -EPERM, "a caller who may not chmod is EPERM");
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+}
+
 /** Run the option rows. */
 static void fat_option_rows(void)
 {
     fat_option_word_rows();
     fat_option_mount_rows();
+    fat_option_immutable_rows();
 }
 
 #endif

@@ -567,7 +567,7 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->ctime_sec = n->ctime;
     st->ctime_nsec = n->ctime_ns;
     st->flags = n->fsflags;
-    st->flags_known = 1;
+    st->flags_known = VFS_FLAGS_KEPT;
     return 0;
 }
 

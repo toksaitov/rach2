@@ -654,7 +654,6 @@ the only code page; and
 .Ql usefree ,
 .Ql nocase ,
 .Ql debug ,
-.Ql sys_immutable ,
 .Ql flush ,
 .Ql nfs ,
 .Ql dos1xfloppy ,
@@ -667,6 +666,15 @@ and the deprecated
 and
 .Ql posix ,
 which are kept and shown and change nothing else.
+vfat's
+.Ql sys_immutable
+makes each file with the system attribute immutable, as Linux's
+.Fn fat_fill_inode
+sets
+.Dv S_IMMUTABLE ,
+and has a change of that attribute need
+.Dv CAP_LINUX_IMMUTABLE
+.Pq Xr ioctl 2 .
 exfat also takes
 .Ql sys_tz ,
 under which a stamp without a valid UTC offset is read in the zone

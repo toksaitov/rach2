@@ -141,7 +141,7 @@ struct vfs_stat {
     uint32_t blocks_known;
     uint32_t flags;            /* the inode flags of FS_IOC_GETFLAGS */
     uint32_t generation;       /* and the generation of FS_IOC_GETVERSION */
-    uint32_t flags_known;      /* 0 for a type that keeps no flags */
+    uint32_t flags_known;      /* VFS_FLAGS_*: 0 for a type that keeps none */
     uint32_t generation_known; /* 0 for a type that keeps no generation */
 };
 
@@ -159,6 +159,13 @@ struct vfs_stat {
  * file at all, and its data only appended to. */
 #define VFS_FL_IMMUTABLE 0x00000010u
 #define VFS_FL_APPEND    0x00000020u
+
+/* What a type's `flags_known` says of `flags`: kept, so that the VFS
+ * enforces them and FS_IOC_GETFLAGS and FS_IOC_SETFLAGS read and change
+ * them; or enforced alone, as Linux's vfat sets S_IMMUTABLE under
+ * sys_immutable and has no FS_IOC_GETFLAGS. */
+#define VFS_FLAGS_KEPT     1u
+#define VFS_FLAGS_ENFORCED 2u
 
 /*
  * An entry's file type as getdents64 reports it in `d_type`: the type bits
