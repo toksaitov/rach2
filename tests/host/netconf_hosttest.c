@@ -255,6 +255,13 @@ void nd6_if_up(struct netdev *nd)
     CHECK(0, "no row starts neighbour discovery");
 }
 
+void nd6_random_link_local(struct netdev *nd, uint8_t *ll)
+{
+    (void)nd;
+    (void)ll;
+    CHECK(0, "no row brings up an interface of IP datagrams");
+}
+
 void nd6_if_down(struct netdev *nd)
 {
     (void)nd;

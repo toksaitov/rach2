@@ -178,7 +178,8 @@ int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uin
  * into fragments of `mtu` bytes (`frag6_output`) once the answer comes, so
  * that its own fragments cannot put each other out of a queue of a few
  * slots. Sets `*held` to 0 and returns 0, holding nothing, when the address
- * is known and the caller is to fragment at once; else sets it to 1 and
+ * is known, or `out` is an interface of IP datagrams (`l3`), which needs
+ * none, and the caller is to fragment at once; else sets it to 1 and
  * returns as `nd6_output` does. Called with interrupts off.
  */
 int nd6_output_whole(struct netdev *out, const uint8_t *hop, const uint8_t *hdr,
@@ -208,6 +209,16 @@ uint32_t nd6_link_mtu(const struct netdev *nd);
  * random wait of up to a second, then a second's wait for an objection.
  */
 void nd6_dad_start(struct netdev_addr6 *a);
+
+/**
+ * Write to `ll` the link-local address of `nd`, an interface of IP
+ * datagrams (`l3`), which has no station address for a modified EUI-64, as
+ * Linux's IN6_ADDR_GEN_MODE_RANDOM makes it: RFC 7217's identifier with the
+ * interface's stable secret, which is drawn at random when none is set
+ * (ipv6_gen_mode_random_init), so that SLAAC on the interface takes the
+ * same secret. Under net_lock.
+ */
+void nd6_random_link_local(struct netdev *nd, uint8_t *ll);
 
 /** What a card that came up starts: duplicate detection of each of its
  * addresses, and router solicitation once its link-local address is

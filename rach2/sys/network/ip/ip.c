@@ -533,9 +533,10 @@ static void ip_header(uint8_t *buf, uint16_t total_len, uint16_t id, uint16_t fr
 
 /**
  * Hand the datagram of `len` bytes in `ip_tx_buf` to `out`, toward
- * `route_ip`: to the all-ones station address for a broadcast to `dst_ip`,
- * else to the next hop's from ARP. On a miss the datagram is held and an
- * ARP request goes out; `mtu` is the most its fragments may be should the
+ * `route_ip`: to the all-ones station address for a broadcast to `dst_ip`
+ * or on an interface of IP datagrams (`l3`), which has no ARP, else to the
+ * next hop's from ARP. On a miss the datagram is held and an ARP request
+ * goes out; `mtu` is the most its fragments may be should the
  * card's MTU fall below it while it waits, or 0 when its sender forbade
  * fragments (`ip_hold_put`). Returns 0, -EMSGSIZE or -ENOBUFS, as
  * `ip_tx_opts` says.
@@ -548,7 +549,7 @@ static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint1
     const uint8_t *to = dst_mac;
     int sent;
 
-    if (netconf_is_broadcast(dst_ip)) {
+    if (netconf_is_broadcast(dst_ip) || out->l3) {
         to = all_ones;
     } else if (!arp_lookup(out, route_ip, dst_mac)) {
         ip_hold_put(out, route_ip, ip_tx_buf, ip_tx_buf + IP_HDR_SIZE,
@@ -611,8 +612,9 @@ static int ip_fragment_to(struct netdev *out, const uint8_t *mac, const uint8_t 
 /**
  * Send the `plen` bytes at `payload` in fragments of at most `mtu` bytes
  * each by `out`, as `ip_tx_opts` says, to the all-ones station address for
- * a broadcast, else to the next hop's from ARP. On a miss the datagram is
- * held whole and an ARP request goes out.
+ * a broadcast or on an interface of IP datagrams, else to the next hop's
+ * from ARP. On a miss the datagram is held whole and an ARP request goes
+ * out.
  */
 static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint32_t dst_ip,
                        uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl,
@@ -622,7 +624,7 @@ static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint
     uint8_t hdr[IP_HDR_SIZE], mac[6];
 
     ip_header(hdr, (uint16_t)(IP_HDR_SIZE + plen), ip_id_counter++, 0, ttl, proto, src, dst_ip);
-    if (netconf_is_broadcast(dst_ip)) {
+    if (netconf_is_broadcast(dst_ip) || out->l3) {
         return ip_fragment_to(out, all_ones, hdr, payload, plen, mtu, ip_tx_buf);
     }
     if (!arp_lookup(out, route_ip, mac)) {
