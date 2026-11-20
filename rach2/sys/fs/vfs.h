@@ -948,6 +948,9 @@ int vfs_mount_index(const struct vfs_mount *m);
 /** Whether the caller's mount namespace sees the mount `m`. */
 int vfs_mount_seen(const struct vfs_mount *m);
 
+/** Whether the mount namespace of the process `p` sees the mount `m`. */
+int vfs_mount_seen_by(const struct vfs_mount *m, const struct process *p);
+
 /** `vfs_mount_seen` for a caller without the big lock, which may read only
  * the set's first word, since its other words grow under the lock: 1 or 0,
  * or -1 when the caller's namespace id lies past that word. */

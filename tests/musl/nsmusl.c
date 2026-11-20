@@ -120,6 +120,7 @@ enum row {
     R_MNT,
     R_MNT_OUTSIDE,
     R_MNT_INSIDE,
+    R_MNT_LISTED,
     R_MNT_MANY,
     R_MNT_MANY_OWN,
     R_MAP_EXTRA,
@@ -177,6 +178,7 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "mount-in-namespace",
                                                "mount-unseen-outside",
                                                "mount-seen-inside",
+                                               "mount-listed-by-pid",
                                                "mount-forty-namespaces",
                                                "mount-forty-own-views",
                                                "map-341st-einval",
@@ -920,6 +922,26 @@ static int ipc(void)
 }
 
 /**
+ * Whether /proc/PID/mounts and /proc/PID/mountinfo list the tmpfs `mnt`
+ * mounts in the namespace of `pid`, and /proc/self/mounts does not, as
+ * Linux lists a file's mounts from its process's namespace.
+ */
+static int listed_for(pid_t pid)
+{
+    char path[64], buf[4096];
+
+    snprintf(path, sizeof(path), "/proc/%ld/mounts", (long)pid);
+    if (get(path, buf, sizeof(buf)) <= 0 || !strstr(buf, "nsmusl /tmp/nsmnt tmpfs ")) {
+        return 0;
+    }
+    snprintf(path, sizeof(path), "/proc/%ld/mountinfo", (long)pid);
+    if (get(path, buf, sizeof(buf)) <= 0 || !strstr(buf, " /tmp/nsmnt ")) {
+        return 0;
+    }
+    return get("/proc/self/mounts", buf, sizeof(buf)) > 0 && !strstr(buf, "/tmp/nsmnt");
+}
+
+/**
  * Check that a tmpfs mounted in a child's new mount namespace, and a file
  * made in it, are seen by the child and not by this process. Two pipes keep
  * the child in place while this process looks; a child that fails before its
@@ -956,6 +978,8 @@ static int mnt(void)
     if (read(up[0], &c, 1) == 1) {
         if (stat("/tmp/nsmnt/inner", &st) == 0) {
             rc = fail(R_MNT_OUTSIDE, "the mount is not seen outside its namespace");
+        } else if (!listed_for(pid)) {
+            rc = fail(R_MNT_LISTED, "/proc/PID/mounts lists the mounts of PID's namespace");
         }
         write(down[1], &c, 1);
     }

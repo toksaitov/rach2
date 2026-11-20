@@ -27,6 +27,11 @@ int vfs_mount_seen(const struct vfs_mount *m)
     return idset_has(&m->ns_seen, caller_id());
 }
 
+int vfs_mount_seen_by(const struct vfs_mount *m, const struct process *p)
+{
+    return idset_has(&m->ns_seen, proc_mntns(p)->id);
+}
+
 int vfs_mount_seen_word(const struct vfs_mount *m)
 {
     uint32_t id = caller_id();

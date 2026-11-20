@@ -6191,6 +6191,7 @@
         {"assertion_id": "mount-in-namespace", "checks": "a tmpfs mounts in a new mount namespace", "source": "program"},
         {"assertion_id": "mount-unseen-outside", "checks": "the mount is not seen outside its namespace", "source": "program"},
         {"assertion_id": "mount-seen-inside", "checks": "the mount's file is seen inside its namespace", "source": "program"},
+        {"assertion_id": "mount-listed-by-pid", "checks": "/proc/PID/mounts and mountinfo list the mounts of PID's namespace, and the reader's own file does not", "source": "program"},
         {"assertion_id": "mount-forty-namespaces", "checks": "40 children each unshare a mount namespace and mount a tmpfs on /tmp/nsmany at once, past the 32 Rach2 once had room for, and the caller sees none of their files", "source": "program"},
         {"assertion_id": "mount-forty-own-views", "checks": "each of the 40 sees its own file on /tmp/nsmany and no other", "source": "program"},
         {"assertion_id": "map-341st-einval", "checks": "root writing a uid map of 341 extents to a child's new user namespace gets EINVAL", "source": "program"},

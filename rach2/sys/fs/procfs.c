@@ -3825,7 +3825,7 @@ static void anon_target(struct procfs_text *t, const fd_entry_t *e)
     ap_str(t, e->priv ? ((const struct anon_obj *)e->priv)->name : "[unknown]");
 }
 
-static void mount_reader_root(char *prefix);
+static void mount_root_of(const process_t *p, char *prefix);
 static const char *path_seen(const char *path, const char *prefix);
 
 /**
@@ -3842,7 +3842,7 @@ static void synth_dir_target(struct procfs_text *t, const fd_entry_t *e)
         char prefix[VFS_COVERED_PATH_MAX];
         const char *seen;
 
-        mount_reader_root(prefix);
+        mount_root_of(current_proc, prefix);
         seen = path_seen(e->ofd->dirpath, prefix);
         ap_str(t, seen ? seen : e->ofd->dirpath);
     } else if (sd) {
@@ -5283,33 +5283,34 @@ static int procfs_gen_usb(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/** Whether entry `i` of the mount table, `m`, is listed in /proc/mounts:
- * the root, /dev and /proc always, and every other mount that is active,
- * whose device is present, that has a place in the tree, which the memfd
- * mount lacks, and that the reader's mount namespace sees. */
-static int procfs_mount_listed(int i, const struct vfs_mount *m)
+/** Whether entry `i` of the mount table, `m`, is listed in the mount table
+ * of the process `p`: the root, /dev and /proc always, and every other mount
+ * that is active, whose device is present, that has a place in the tree,
+ * which the memfd mount lacks, and that `p`'s mount namespace sees. */
+static int procfs_mount_listed(int i, const struct vfs_mount *m, const process_t *p)
 {
     if (i < 3) {
         return m != NULL;
     }
-    return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent && vfs_mount_seen(m);
+    return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent &&
+           vfs_mount_seen_by(m, p);
 }
 
-/** The path of the reader's root from the root of the mount table into
- * `prefix`, of VFS_COVERED_PATH_MAX bytes, as an empty string for the root
- * of the mount table, or when the path cannot be had, so that the table is
- * shown whole. */
-static void mount_reader_root(char *prefix)
+/** The path of the root of the process `p` from the root of the mount
+ * table into `prefix`, of VFS_COVERED_PATH_MAX bytes, as an empty string for
+ * the root of the mount table, or when the path cannot be had, so that the
+ * table is shown whole. */
+static void mount_root_of(const process_t *p, char *prefix)
 {
     struct vfs_ref root;
     int rc = -ENOENT;
 
     prefix[0] = '\0';
-    if (!current_proc || !current_proc->fs || !current_proc->fs->root_mnt) {
+    if (!p || !p->fs || !p->fs->root_mnt) {
         return;
     }
-    root.mnt = current_proc->fs->root_mnt;
-    root.node = current_proc->fs->root_node;
+    root.mnt = p->fs->root_mnt;
+    root.node = p->fs->root_node;
     if (root.node == root.mnt->root) {
         k_strncpy(prefix, root.mnt->covered_path, VFS_COVERED_PATH_MAX);
         rc = 0;
@@ -5325,8 +5326,8 @@ static void mount_reader_root(char *prefix)
     }
 }
 
-/** The path `path`, from the root of the mount table, as a reader whose
- * root's path is `prefix` (`mount_reader_root`) sees it, or NULL for a place
+/** The path `path`, from the root of the mount table, as a process whose
+ * root's path is `prefix` (`mount_root_of`) sees it, or NULL for a place
  * outside that root. */
 static const char *path_seen(const char *path, const char *prefix)
 {
@@ -5353,17 +5354,17 @@ static const char *mount_point_seen(const struct vfs_mount *m, const char *prefi
 }
 
 /** The index of the listed mount made next after the one whose `seq` is
- * `after`, as `procfs_mount_listed` lists them, or -1 when none is; with
- * `first`, the one made first. The tables list the mounts in the order
- * they were made, so that a mount over another's root follows it. */
-static int mount_next_made(uint32_t after, int first)
+ * `after`, as `procfs_mount_listed` lists them for `p`, or -1 when none is;
+ * with `first`, the one made first. The tables list the mounts in the
+ * order they were made, so that a mount over another's root follows it. */
+static int mount_next_made(const process_t *p, uint32_t after, int first)
 {
     int i, best = -1;
 
     for (i = 0; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
-        if (procfs_mount_listed(i, m) && (first || m->seq > after) &&
+        if (procfs_mount_listed(i, m, p) && (first || m->seq > after) &&
             (best < 0 || m->seq < vfs_mount_at(best)->seq)) {
             best = i;
         }
@@ -5545,20 +5546,26 @@ static void ap_mount_options(struct procfs_text *t, const struct vfs_mount *m)
 }
 
 /**
- * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse:
- * the root, then /dev and /proc, which are real mounts to every program
- * that walks this file, then every other mount in the order they were made,
- * each with its source as the caller gave it, its mount point from the
- * reader's root, its type and its options. A mount outside the reader's
- * root is left out.
+ * Render the mounts of the process `p`, /proc/PID/mounts and, for the
+ * reader, /proc/mounts, in the six-field fstab shape `df` and `mount`
+ * parse: the root, then /dev and /proc, which are real mounts to every
+ * program that walks this file, then every other mount `p`'s mount
+ * namespace sees, in the order they were made, each with its source as the
+ * caller gave it, its mount point from `p`'s root, its type and its
+ * options, as Linux's `mounts_open_common` takes the task's namespace and
+ * root. A mount outside that root is left out. -ENOENT for a process that
+ * has ended, which has no root.
  */
-static int procfs_gen_mounts(struct procfs_text *t)
+static int procfs_gen_mounts(struct procfs_text *t, const process_t *p)
 {
     char prefix[VFS_COVERED_PATH_MAX];
     int i;
 
-    mount_reader_root(prefix);
-    for (i = mount_next_made(0, 1); i >= 0; i = mount_next_made(vfs_mount_at(i)->seq, 0)) {
+    if (!p || !p->fs) {
+        return -ENOENT;
+    }
+    mount_root_of(p, prefix);
+    for (i = mount_next_made(p, 0, 1); i >= 0; i = mount_next_made(p, vfs_mount_at(i)->seq, 0)) {
         struct vfs_mount *m = vfs_mount_at(i);
         const char *point = mount_point_seen(m, prefix);
 
@@ -5639,16 +5646,20 @@ uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
  * source and the file system's options. The id is the entry's index plus
  * one, and the root is its own parent. A bind mount has the device of the
  * mount it shows and the path of its root within that file system. The
- * table is the reader's, whatever process the file is of: it leaves out the
- * mounts the reader's mount namespace does not see (`procfs_mount_listed`).
+ * table is that of the process `p` the file is of, with its mount points
+ * from `p`'s root: it leaves out the mounts `p`'s mount namespace does not
+ * see (`procfs_mount_listed`). -ENOENT for a process that has ended.
  */
-static int procfs_gen_mountinfo(struct procfs_text *t)
+static int procfs_gen_mountinfo(struct procfs_text *t, const process_t *p)
 {
     char prefix[VFS_COVERED_PATH_MAX];
     int i, j;
 
-    mount_reader_root(prefix);
-    for (i = mount_next_made(0, 1); i >= 0; i = mount_next_made(vfs_mount_at(i)->seq, 0)) {
+    if (!p || !p->fs) {
+        return -ENOENT;
+    }
+    mount_root_of(p, prefix);
+    for (i = mount_next_made(p, 0, 1); i >= 0; i = mount_next_made(p, vfs_mount_at(i)->seq, 0)) {
         struct vfs_mount *m = vfs_mount_at(i);
         const char *point = mount_point_seen(m, prefix);
         uint32_t dev;
@@ -12400,9 +12411,9 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
     case SYNTH_PROC_ENVIRON:
         return procfs_gen_environ(t, pid);
     case SYNTH_PROC_PIDMOUNTS:
-        return procfs_gen_mounts(t);
+        return procfs_gen_mounts(t, procfs_proc(pid));
     case SYNTH_PROC_MOUNTINFO:
-        return procfs_gen_mountinfo(t);
+        return procfs_gen_mountinfo(t, procfs_proc(pid));
     case SYNTH_PROC_COMM:
         return procfs_gen_comm(t, pid);
     case SYNTH_PROC_LIMITS:
@@ -12602,7 +12613,7 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         len = len < 0 ? len : t->len;
         *key = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
-        len = procfs_gen_mounts(t);
+        len = procfs_gen_mounts(t, current_proc);
     } else if (procfs_is_device_text(vp->kind)) {
         len = procfs_gen_device_text(t, vp, key);
     } else if (vp->kind == VNODE_PROC_USB) {

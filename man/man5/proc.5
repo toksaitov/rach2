@@ -836,7 +836,7 @@ mounts, the tmpfs at
 .Pa /dev/shm ,
 the synthetic
 .Pa /sys ,
-read-only, the
+read-write with nosuid, nodev and noexec, the
 .Ql mqueue
 mount at
 .Pa /dev/mqueue
@@ -2646,11 +2646,14 @@ address space too, a
 child excepted; here it sets the one process's.
 .It Pa /proc/PID/mounts
 The text of
-.Pa /proc/mounts ,
-the reader's mounts, whatever process the file is of.
+.Pa /proc/mounts
+for the process: the mounts its mount namespace sees, with each target
+from its root, as Linux gives them.
+.Er ENOENT
+once the process has ended.
 .It Pa /proc/PID/mountinfo
 A line for each mount of
-.Pa /proc/mounts ,
+.Pa /proc/PID/mounts ,
 in its order, as util-linux's libmount reads it:
 .Dl ID PARENT MAJOR:MINOR ROOT TARGET OPTIONS - TYPE SOURCE SUPER
 The id is the mount's place in the table plus one; the root mount is 1
