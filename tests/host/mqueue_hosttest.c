@@ -500,13 +500,52 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
     posted_signo = signo;
 }
 
-/** Record the datagram queued on the rows' netlink socket. */
-void netlink_deliver(struct socket *sock, const uint8_t *data, uint32_t len)
+/* A datagram of the rows' netlink stand-in, whose bytes fit the cookie. */
+struct nl_dgram {
+    uint32_t len;
+    uint8_t data[32];
+};
+
+/* Whether `netlink_dgram_new` fails, as with no memory, and the datagrams
+ * made and not yet sent or freed. */
+static int nl_refuse, nl_live;
+
+/** A zeroed datagram of `len` bytes, or NULL while `nl_refuse` is set. */
+struct nl_dgram *netlink_dgram_new(uint32_t len)
 {
-    if (sock == &nl_sock && len <= sizeof(nl_last)) {
-        k_memcpy(nl_last, data, len);
-        nl_len = len;
+    struct nl_dgram *d = nl_refuse || len > 32 ? NULL : kzalloc(sizeof(*d));
+
+    if (d) {
+        d->len = len;
+        nl_live++;
+    }
+    return d;
+}
+
+/** The bytes of `d`. */
+uint8_t *netlink_dgram_data(struct nl_dgram *d)
+{
+    return d->data;
+}
+
+/** Record `d` when it goes to the rows' netlink socket, and free it. */
+void netlink_dgram_send(struct socket *sock, struct nl_dgram *d)
+{
+    if (sock == &nl_sock) {
+        k_memcpy(nl_last, d->data, d->len);
+        nl_len = d->len;
         nl_sent++;
+    }
+    kfree(d);
+    nl_live--;
+}
+
+/** Free `d`, never sent. */
+void netlink_dgram_free(struct nl_dgram *d)
+{
+    if (d) {
+        kfree(d);
+        nl_live--;
     }
 }
 
@@ -1087,7 +1126,9 @@ static void sigevent_at(int notify, int signo, uintptr_t value)
  * sigevent's signal and the cookie its value points at, 200; a message
  * sends the cookie with NOTIFY_WOKENUP last, and a registration taken away
  * by mq_notify with NOTIFY_REMOVED. A descriptor that is no socket is
- * ENOTSOCK and a socket of another family EINVAL.
+ * ENOTSOCK and a socket of another family EINVAL. The cookie's datagram is
+ * made at the registration, which is ENOMEM without it, so that a message
+ * sends it though memory has run out since.
  */
 static void socket_notify_rows(int fd, struct isr_params *note, struct isr_params *send)
 {
@@ -1100,21 +1141,30 @@ static void socket_notify_rows(int fd, struct isr_params *note, struct isr_param
     CHECK(sys_mq_notify(note) == -EINVAL, "SIGEV_THREAD needs a netlink socket");
     nl_sock.family = AF_NETLINK;
     sigevent_at(2, 3, 0);
-    CHECK(sys_mq_notify(note) == -EFAULT, "the cookie is read from the caller");
+    CHECK(sys_mq_notify(note) == -EFAULT && nl_live == 0, "the cookie is read from the caller");
     sigevent_at(2, 3, 200);
+    nl_refuse = 1;
+    CHECK(sys_mq_notify(note) == -ENOMEM && !q->notify_tgid && nl_sock.refcount == 0,
+          "a registration whose cookie's datagram cannot be made is ENOMEM and registers nothing");
+    nl_refuse = 0;
     q->atime_s = q->ctime_s = -1;
     CHECK(sys_mq_notify(note) == 0 && nl_sock.refcount == 1 && q->atime_s != -1 &&
               q->ctime_s == q->atime_s,
           "SIGEV_THREAD registers the socket and moves the queue's times");
-    CHECK(sys_mq_notify(note) == -EBUSY, "a second registration is EBUSY");
+    CHECK(sys_mq_notify(note) == -EBUSY && nl_live == 1,
+          "a second registration is EBUSY and keeps no datagram");
+    nl_refuse = 1;
     CHECK(sys_mq_timedsend(send) == 0 && nl_sent == 1 && nl_len == 32 && nl_last[0] == 1 &&
               nl_last[30] == 31 && nl_last[31] == 1 && nl_sock.refcount == 0 && !q->notify_tgid,
-          "a message sends the cookie with NOTIFY_WOKENUP and lets the socket go");
+          "a message sends the cookie with NOTIFY_WOKENUP and lets the socket go, "
+          "though no memory is left");
+    nl_refuse = 0;
     drain(q);
     CHECK(sys_mq_notify(note) == 0, "register again");
     note->ecx = 0;
     CHECK(sys_mq_notify(note) == 0 && nl_sent == 2 && nl_last[31] == 2 && nl_sock.refcount == 0,
           "taking the registration away sends NOTIFY_REMOVED");
+    CHECK(nl_live == 0, "every datagram is sent or freed");
     note->ecx = 100;
 }
 

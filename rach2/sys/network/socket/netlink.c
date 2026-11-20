@@ -528,6 +528,21 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     put32(sa + 8, st->groups);
 }
 
+/** Queue the datagram `d` on `st` and wake a reader. The caller holds
+ * net_lock. */
+static void enqueue_dgram(struct netlink_state *st, struct nl_dgram *d)
+{
+    d->next = 0;
+    if (st->tail) {
+        st->tail->next = d;
+    } else {
+        st->head = d;
+    }
+    st->tail = d;
+    st->queued += d->len;
+    wq_wake(&st->sock->waiters, WQ_DATA);
+}
+
 /** Queue a copy of the `len` bytes at `data` on `st` as one datagram sent
  * to the multicast `group`, 0 for an answer, and wake a reader; 0, or
  * -ENOMEM. The caller holds net_lock. */
@@ -539,20 +554,12 @@ static int enqueue_group(struct netlink_state *st, const uint8_t *data, uint32_t
     if (!d) {
         return -ENOMEM;
     }
-    d->next = 0;
     d->len = len;
     d->group = group;
     d->portid = 0;
     d->cred[0] = d->cred[1] = d->cred[2] = 0;
     k_memcpy(d + 1, data, len);
-    if (st->tail) {
-        st->tail->next = d;
-    } else {
-        st->head = d;
-    }
-    st->tail = d;
-    st->queued += len;
-    wq_wake(&st->sock->waiters, WQ_DATA);
+    enqueue_dgram(st, d);
     return 0;
 }
 
@@ -562,15 +569,37 @@ static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
     return enqueue_group(st, data, len, 0);
 }
 
-void netlink_deliver(struct socket *sock, const uint8_t *data, uint32_t len)
+struct nl_dgram *netlink_dgram_new(uint32_t len)
+{
+    struct nl_dgram *d = kzalloc(sizeof(*d) + len);
+
+    if (d) {
+        d->len = len;
+    }
+    return d;
+}
+
+uint8_t *netlink_dgram_data(struct nl_dgram *d)
+{
+    return (uint8_t *)(d + 1);
+}
+
+void netlink_dgram_send(struct socket *sock, struct nl_dgram *d)
 {
     uint32_t flags = net_lock();
     struct netlink_state *st = state_of(sock);
 
     if (st) {
-        (void)enqueue(st, data, len);
+        enqueue_dgram(st, d);
+        d = NULL;
     }
     net_unlock(flags);
+    kfree(d);
+}
+
+void netlink_dgram_free(struct nl_dgram *d)
+{
+    kfree(d);
 }
 
 /** Queue a generic reply for the same socket and port that sent the request.

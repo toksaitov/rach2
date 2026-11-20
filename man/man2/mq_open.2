@@ -99,6 +99,9 @@ takes the caller's registration away.
 A registration of
 .Dv SIGEV_THREAD
 that goes without a message sends its bytes with the last set to 2.
+The kernel makes the datagram that carries them when the process
+registers, as Linux does, so that a registration that succeeded is never
+lost for want of memory.
 Registering and taking a registration away set the queue's access and
 change times.
 .Pp
@@ -246,6 +249,10 @@ to set.
 .It Bq Er EMFILE
 The new queue would take its user past
 .Dv RLIMIT_MSGQUEUE .
+.It Bq Er ENOMEM
+No memory for a
+.Dv SIGEV_THREAD
+registration's datagram.
 .It Bq Er ENOTSOCK
 A
 .Dv SIGEV_THREAD

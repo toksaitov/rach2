@@ -170,13 +170,25 @@ uint32_t netlink_last_group(struct socket *sock);
  * user and group ids into `cred`, all 0 for the kernel. */
 uint32_t netlink_last_sender(struct socket *sock, int32_t cred[3]);
 
-/** Queue the `len` bytes at `data` on the netlink socket `sock` as one
- * datagram from the kernel, whatever its protocol and however full its
- * queue, as Linux's netlink_sendskb queues a message whose room was charged
- * before (mq_notify's SIGEV_THREAD cookie in ipc/mqueue.c); a socket whose
- * state is gone, or a copy that cannot be allocated, drops it. Takes
- * net_lock. */
-void netlink_deliver(struct socket *sock, const uint8_t *data, uint32_t len);
+struct nl_dgram;
+
+/** A datagram from the kernel of `len` bytes, zero, made before it is sent
+ * so that the sending cannot fail for memory, as Linux's mq_notify
+ * allocates the skb of its SIGEV_THREAD cookie at the registration
+ * (ipc/mqueue.c); NULL for no memory. */
+struct nl_dgram *netlink_dgram_new(uint32_t len);
+
+/** The bytes of `d`, which its owner may write until it is sent. */
+uint8_t *netlink_dgram_data(struct nl_dgram *d);
+
+/** Queue `d` on the netlink socket `sock`, whatever its protocol and however
+ * full its queue, as Linux's netlink_sendskb queues a message whose room was
+ * charged before; `d` is the socket's after, or freed when the socket's
+ * state is gone. Takes net_lock. */
+void netlink_dgram_send(struct socket *sock, struct nl_dgram *d);
+
+/** Free `d`, which was never sent. */
+void netlink_dgram_free(struct nl_dgram *d);
 
 /** Bytes in the oldest queued datagram, or -1 when none is queued. */
 int netlink_pending(struct socket *sock);

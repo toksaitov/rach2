@@ -132,9 +132,9 @@ struct mqueue {
     int notify_how;
     int notify_signo;
     uintptr_t notify_value;
-    uint32_t notify_exec;       /* the registrant's exec generation */
-    struct socket *notify_sock; /* SIGEV_THREAD's, with a reference */
-    uint8_t notify_cookie[NOTIFY_COOKIE_LEN];
+    uint32_t notify_exec;          /* the registrant's exec generation */
+    struct socket *notify_sock;    /* SIGEV_THREAD's, with a reference */
+    struct nl_dgram *notify_dgram; /* its cookie, made at the registration */
     /* The record its bytes, `charge`, are charged to (`mq_charge`), NULL
      * for none. */
     struct mq_user *user;
@@ -278,17 +278,21 @@ static int32_t mq_charge(struct mqueue *q, int32_t maxmsg, int32_t msgsize)
     return 0;
 }
 
-/** Let go of `q`'s SIGEV_THREAD socket, after sending its cookie with the
- * last byte `how` unless `how` is 0, as Linux's netlink_sendskb does. */
+/** Let go of `q`'s SIGEV_THREAD socket, after sending its cookie, the
+ * datagram made at the registration, with the last byte `how` unless `how`
+ * is 0, as Linux's netlink_sendskb does; a cookie not sent is freed. */
 static void mq_notify_sock_drop(struct mqueue *q, uint8_t how)
 {
     if (!q->notify_sock) {
         return;
     }
     if (how) {
-        q->notify_cookie[NOTIFY_COOKIE_LEN - 1] = how;
-        netlink_deliver(q->notify_sock, q->notify_cookie, NOTIFY_COOKIE_LEN);
+        netlink_dgram_data(q->notify_dgram)[NOTIFY_COOKIE_LEN - 1] = how;
+        netlink_dgram_send(q->notify_sock, q->notify_dgram);
+    } else {
+        netlink_dgram_free(q->notify_dgram);
     }
+    q->notify_dgram = NULL;
     socket_unref(q->notify_sock);
     q->notify_sock = NULL;
 }
@@ -1273,6 +1277,35 @@ static struct socket *mq_notify_socket(int fd, int32_t *err)
 }
 
 /**
+ * Make the SIGEV_THREAD cookie of NOTIFY_COOKIE_LEN bytes at the user
+ * address `value` into a datagram for the netlink socket whose descriptor
+ * is `fd`, in Linux's order (do_mq_notify): the datagram first, so that the
+ * notification cannot be lost for memory later, then the cookie, then the
+ * socket. Sets `*sock` and returns the datagram, or NULL with `*err`
+ * -ENOMEM, -EFAULT or an error of `mq_notify_socket`.
+ */
+static struct nl_dgram *mq_notify_cookie(uintptr_t value, int fd, struct socket **sock,
+                                         int32_t *err)
+{
+    struct nl_dgram *d = netlink_dgram_new(NOTIFY_COOKIE_LEN);
+
+    if (!d) {
+        *err = -ENOMEM;
+        return NULL;
+    }
+    if (copy_from_user(netlink_dgram_data(d), (const void __user *)value, NOTIFY_COOKIE_LEN) != 0) {
+        *err = -EFAULT;
+    } else {
+        *sock = mq_notify_socket(fd, err);
+        if (*sock) {
+            return d;
+        }
+    }
+    netlink_dgram_free(d);
+    return NULL;
+}
+
+/**
  * mq_notify(2) takes the descriptor and a `struct sigevent`, in Linux's
  * order (do_mq_notify). With a null one it takes the caller's registration
  * away; else it registers the caller for the queue's next message as the
@@ -1281,7 +1314,7 @@ static struct socket *mq_notify_socket(int fd, int32_t *err)
  * value, sent on the netlink socket whose descriptor is its signal, as musl
  * and glibc ask for it. Either change sets the queue's access and change
  * times. EINVAL for another kind or a signal past 64, then for SIGEV_THREAD
- * EFAULT for the cookie and the errors of `mq_notify_socket`; then EBADF for
+ * the errors of `mq_notify_cookie`; then EBADF for
  * a descriptor not open on a queue, and EBUSY when a process is registered
  * already. An i386 call on x86-64 passes Linux's compat_sigevent, whose
  * value is 32 bits.
@@ -1298,7 +1331,7 @@ long sys_mq_notify(struct isr_params *params)
         int32_t signo;
         int32_t notify;
     } ev32; /* an i386 call's, compat_sigevent's */
-    uint8_t cookie[NOTIFY_COOKIE_LEN];
+    struct nl_dgram *dgram = NULL;
     struct socket *sock = NULL;
     fd_entry_t *e;
     struct mqueue *q;
@@ -1320,18 +1353,16 @@ long sys_mq_notify(struct isr_params *params)
             return -EINVAL;
         }
         if (ev.notify == SIGEV_THREAD) {
-            if (copy_from_user(cookie, (const void __user *)ev.value, sizeof(cookie)) != 0) {
-                return -EFAULT;
-            }
-            sock = mq_notify_socket(ev.signo, &err);
-            if (!sock) {
+            dgram = mq_notify_cookie(ev.value, ev.signo, &sock, &err);
+            if (!dgram) {
                 return err;
             }
         }
     }
     q = mq_of((int)SC_ARG(params, 0), &e);
-    if (!q) {
-        return -EBADF;
+    if (!q || (SC_ARG(params, 1) && q->notify_tgid)) {
+        netlink_dgram_free(dgram);
+        return q ? -EBUSY : -EBADF;
     }
     if (!SC_ARG(params, 1)) {
         if (q->notify_tgid == current_proc->tgid) {
@@ -1340,13 +1371,10 @@ long sys_mq_notify(struct isr_params *params)
         }
         return 0;
     }
-    if (q->notify_tgid) {
-        return -EBUSY;
-    }
     if (sock) {
         socket_ref(sock);
         q->notify_sock = sock;
-        k_memcpy(q->notify_cookie, cookie, sizeof(cookie));
+        q->notify_dgram = dgram;
     }
     q->notify_tgid = current_proc->tgid;
     q->notify_how = ev.notify;
