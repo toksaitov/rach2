@@ -70,8 +70,9 @@ static void option_word_rows(void)
               mount_options(rw_flags, "resgid=4294967295") == -EINVAL,
           "a malformed or out-of-range id is EINVAL");
     check(mount_options(rw_flags, "sb=1x,debug") == -EINVAL, "a malformed sb= is EINVAL");
-    check(mount_rw() == 0 && streq(options_shown(), "errors=continue,user_xattr,acl"),
-          "a volume of mke2fs's defaults shows its error policy and default options");
+    check(mount_rw() == 0 && streq(options_shown(), "errors=continue,user_xattr"),
+          "a volume of mke2fs's defaults shows its error policy and default options, and no "
+          "acl, since no ACL is kept, as on a Linux without CONFIG_EXT2_FS_POSIX_ACL");
     if (mnt.root) {
         check(OPS->statfs(&mnt, &sf) == 0, "statfs answers");
         plain_blocks = (uint32_t)sf.blocks;
@@ -82,7 +83,7 @@ static void option_word_rows(void)
                                   "grpid,xip") == 0,
           "every word of Linux's table is taken");
     check(streq(options_shown(), "minixdf,grpid,resuid=1000,resgid=100,errors=continue,nouid32,"
-                                 "debug,oldalloc,nouser_xattr,acl,usrquota,grpquota,xip,"
+                                 "debug,oldalloc,nouser_xattr,usrquota,grpquota,xip,"
                                  "noreservation"),
           "the options show in ext2_show_options's order, dax turned off");
     if (!mnt.root) {
@@ -114,14 +115,21 @@ static void option_word_rows(void)
     proc_a.euid = proc_a.egid = 0;
     check(OPS->remount(&mnt, rw_flags, "user_xattr,nogrpid,dax") == 0 &&
               streq(options_shown(), "minixdf,resuid=1000,resgid=100,errors=continue,nouid32,"
-                                     "debug,oldalloc,user_xattr,acl,usrquota,grpquota,xip,"
+                                     "debug,oldalloc,user_xattr,usrquota,grpquota,xip,"
                                      "noreservation"),
           "a remount starts from the options in force and refuses a change of dax");
-    check(OPS->remount(&mnt, rw_flags, "noacl,frob") == -EINVAL &&
+    check(OPS->remount(&mnt, rw_flags, "nouser_xattr,frob") == -EINVAL &&
               streq(options_shown(), "minixdf,resuid=1000,resgid=100,errors=continue,nouid32,"
-                                     "debug,oldalloc,user_xattr,acl,usrquota,grpquota,xip,"
+                                     "debug,oldalloc,user_xattr,usrquota,grpquota,xip,"
                                      "noreservation"),
           "a remount with an unknown option changes nothing");
+    check(OPS->remount(&mnt, rw_flags, "acl") == 0 &&
+              streq(last_log, "(no)acl options not supported") &&
+              streq(options_shown(), "minixdf,resuid=1000,resgid=100,errors=continue,nouid32,"
+                                     "debug,oldalloc,user_xattr,usrquota,grpquota,xip,"
+                                     "noreservation"),
+          "acl is taken, logged as unsupported and changes nothing, so no mount claims ACLs "
+          "the driver does not enforce");
     check(unmount_rw() == 0, "the options volume unmounts");
     check(mount_rw() == 0, "and mounts again without options");
     n = walk("/grp", &err);

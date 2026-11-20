@@ -123,7 +123,6 @@
 #define EXT2_OPT_DEBUG       0x0008u
 #define EXT2_OPT_OLDALLOC    0x0010u
 #define EXT2_OPT_XATTR_USER  0x0020u /* user. extended attributes */
-#define EXT2_OPT_POSIX_ACL   0x0040u
 #define EXT2_OPT_USRQUOTA    0x0080u
 #define EXT2_OPT_GRPQUOTA    0x0100u
 #define EXT2_OPT_XIP         0x0200u
@@ -134,7 +133,7 @@
 #define EXT2_DEFM_DEBUG      0x0001u
 #define EXT2_DEFM_BSDGROUPS  0x0002u
 #define EXT2_DEFM_XATTR_USER 0x0004u
-#define EXT2_DEFM_ACL        0x0008u
+#define EXT2_DEFM_ACL        0x0008u /* not read: the driver keeps no ACLs */
 #define EXT2_DEFM_UID16      0x0010u
 
 /* The id a 32-bit uid or gid past 16 bits becomes under `nouid32`, Linux's

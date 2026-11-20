@@ -2288,7 +2288,9 @@ static int option_is(const char *key, const char *end, const char *word)
 
 /* The options of Linux's ext2 that set and clear bits of `opts`, in the
  * words of its token table (fs/ext2/super.c), with the record a few of them
- * leave; `noquota` and `nobh` change nothing. */
+ * leave; `noquota` and `nobh` change nothing, nor do `acl` and `noacl`,
+ * which a Linux built without CONFIG_EXT2_FS_POSIX_ACL takes so, since the
+ * driver keeps no ACLs. */
 static const struct ext2_word {
     const char *word;
     uint32_t set, clear;
@@ -2307,8 +2309,8 @@ static const struct ext2_word {
     {"nobh", 0, 0, "nobh option not supported"},
     {"user_xattr", EXT2_OPT_XATTR_USER, 0, 0},
     {"nouser_xattr", 0, EXT2_OPT_XATTR_USER, 0},
-    {"acl", EXT2_OPT_POSIX_ACL, 0, 0},
-    {"noacl", 0, EXT2_OPT_POSIX_ACL, 0},
+    {"acl", 0, 0, "(no)acl options not supported"},
+    {"noacl", 0, 0, "(no)acl options not supported"},
     {"xip", EXT2_OPT_XIP | EXT2_OPT_DAX, 0, "use dax instead of xip"},
     {"dax", EXT2_OPT_DAX, 0, "DAX enabled. Warning: EXPERIMENTAL, use at your own risk"},
     {"grpquota", EXT2_OPT_GRPQUOTA, 0, 0},
@@ -3817,9 +3819,6 @@ static int state_take(struct ext2_mount *em, const uint8_t *sb, const char *opti
     if (defm & EXT2_DEFM_XATTR_USER) {
         em->opts |= EXT2_OPT_XATTR_USER;
     }
-    if (defm & EXT2_DEFM_ACL) {
-        em->opts |= EXT2_OPT_POSIX_ACL;
-    }
     rc = ext2_parse_options(options, &em->opts, &em->resuid, &em->resgid, &em->errors);
     if (rc == 0 && (em->opts & EXT2_OPT_DAX)) {
         klog(KLOG_WARN, "ext2", "DAX unsupported by block device. Turning off DAX.");
@@ -4117,11 +4116,6 @@ static void ext2_options(const struct vfs_mount *mnt, vfs_option_emit emit, void
         emit(out, "user_xattr", 0, VFS_OPT_WORD);
     } else if (d & EXT2_DEFM_XATTR_USER) {
         emit(out, "nouser_xattr", 0, VFS_OPT_WORD);
-    }
-    if (o & EXT2_OPT_POSIX_ACL) {
-        emit(out, "acl", 0, VFS_OPT_WORD);
-    } else if (d & EXT2_DEFM_ACL) {
-        emit(out, "noacl", 0, VFS_OPT_WORD);
     }
     if (o & EXT2_OPT_USRQUOTA) {
         emit(out, "usrquota", 0, VFS_OPT_WORD);

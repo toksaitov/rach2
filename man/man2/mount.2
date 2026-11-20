@@ -736,9 +736,16 @@ without which a
 .Ql user.
 attribute is
 .Er EOPNOTSUPP ;
+.Ql acl
 and
-.Ql acl ,
 .Ql noacl ,
+which log
+.Ql (no)acl options not supported
+and change nothing, as a Linux built without
+.Dv CONFIG_EXT2_FS_POSIX_ACL
+takes them, since the driver keeps no ACLs: a mount never shows
+.Ql acl ,
+whatever the volume's defaults; and
 .Ql debug ,
 .Ql oldalloc ,
 .Ql orlov ,
