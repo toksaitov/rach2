@@ -56,6 +56,8 @@ Only the recovery kernel accepts writes through whole-disk and partition
 nodes, and each write requires effective user ID 0.
 The ordinary kernel returns
 .Er EPERM .
+A write of no bytes returns 0 at any offset, before the end and the
+alignment are judged.
 A write at or past the end of the node returns
 .Er ENOSPC ,
 and one that crosses the end is cut to the sectors before it; the offset

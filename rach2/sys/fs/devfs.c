@@ -442,10 +442,11 @@ static int block_direct_misaligned(const fd_entry_t *e, uintptr_t addr, uint32_t
  * down: a write that starts at or crosses the end writes nothing, because
  * these windows are fixed in size and a half-written boot loader or kernel
  * slot helps nobody. A disk node's write, `cut`, is judged as Linux's
- * `blkdev_write_iter` judges it: 0 for no bytes, -ENOSPC at or past the
- * end, and a write that crosses the end cut to the sectors before it, all
- * before the alignment. The range arithmetic subtracts instead of adding,
- * so a count near the 32-bit edge cannot wrap past the check.
+ * `blkdev_write_iter` judges it: 0 for no bytes at any offset, -ENOSPC at
+ * or past the end, and a write that crosses the end cut to the sectors
+ * before it, all before the alignment. The range arithmetic subtracts
+ * instead of adding, so a count near the 32-bit edge cannot wrap past the
+ * check.
  *
  * A short return divides the request into three parts, and only the first is a
  * guarantee. The sectors it counts are written. The batch that failed begins at
@@ -484,9 +485,12 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
     }
-    if (cut && count != 0) {
+    if (cut) {
         uint64_t size = total * BLOCK_SECTOR_SIZE;
 
+        if (count == 0) {
+            return 0;
+        }
         if (off >= size) {
             return -ENOSPC;
         }
