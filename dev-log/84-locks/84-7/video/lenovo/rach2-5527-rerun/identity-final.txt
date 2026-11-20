@@ -1,0 +1,17 @@
+machine-identity: booted: candidate
+bootctl: candidate: first sector 6163, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: candidate: runs: 6163+4096 24136+28672
+bootctl: fallback: first sector 11848, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: fallback: runs: 11848+8192 52808+24576
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+bootctl: slot size: 16777216 bytes
+machine-identity: candidate: runs: 6163+4096 24136+3210
+machine-identity: sha256: candidate 64f227dfbd4ce5d1ddf33d717f339c4134eaf1e4089d87ef15b2227d32747458
+machine-identity: fallback: runs: 11848+7306
+machine-identity: sha256: fallback 64f227dfbd4ce5d1ddf33d717f339c4134eaf1e4089d87ef15b2227d32747458
+machine-identity: named: slot candidate, kernel /Users/toksaitov/Desktop/rach2/build/runs/t5527-video/release-kernel, 3740240 bytes, sha256 64f227dfbd4ce5d1ddf33d717f339c4134eaf1e4089d87ef15b2227d32747458
+machine-identity: result: the machine runs the named kernel: slot candidate, sha256 64f227dfbd4ce5d1ddf33d717f339c4134eaf1e4089d87ef15b2227d32747458, /Users/toksaitov/Desktop/rach2/build/runs/t5527-video/release-kernel; the fallback slot holds it too

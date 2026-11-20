@@ -132,7 +132,12 @@ struct sock_filter {
 
 /* One installed filter. A chain is its newest filter, and a filter's
  * `refs` counts the threads whose chain begins at it and each newer filter
- * whose `prev` it is. */
+ * whose `prev` it is. Every change of the counts and of a thread's chain is
+ * made under the big lock: an install, a fork's inheritance, a TSYNC and the
+ * reap. A thread reads its own chain without it (`seccomp_check`), as
+ * Linux's __seccomp_filter reads current's under no lock: a TSYNC by another
+ * thread gives it a chain that holds the one it had (`tsync_blocker`), so
+ * no filter it walks is freed before its own reap. */
 struct seccomp_filter {
     uint32_t refs;
     struct seccomp_filter *prev; /* the next older filter, NULL for none */
@@ -338,7 +343,8 @@ static void put_u64(struct seccomp_words *d, int at, uint64_t v)
  * of highest precedence. */
 static uint32_t chain_action(const process_t *p, const isr_params_t *tf, uint32_t nr)
 {
-    const struct seccomp_filter *f;
+    /* Read once: another thread's TSYNC may replace it meanwhile. */
+    const struct seccomp_filter *f = *(struct seccomp_filter *const volatile *)&p->seccomp;
     struct seccomp_words d;
     uint32_t ret = SECCOMP_RET_ALLOW;
 
@@ -352,7 +358,7 @@ static uint32_t chain_action(const process_t *p, const isr_params_t *tf, uint32_
     put_u64(&d, 10, (uint64_t)SC_ARG(tf, 3));
     put_u64(&d, 12, (uint64_t)SC_ARG(tf, 4));
     put_u64(&d, 14, (uint64_t)SC_ARG(tf, 5));
-    for (f = p->seccomp; f; f = f->prev) {
+    for (; f; f = f->prev) {
         uint32_t cur = run_filter(f, &d);
 
         if (precedence(cur) < precedence(ret)) {
@@ -426,6 +432,31 @@ static int seccomp_trace(isr_params_t *tf, uint32_t nr, uint32_t data, long *ret
         return 1;
     }
     return seccomp_permit(tf, (uint32_t)self->orig_nr, ret);
+}
+
+int seccomp_check(isr_params_t *tf, uint32_t nr, long *ret)
+{
+    const process_t *self = current_proc;
+    uint32_t action, data;
+
+    if (self->seccomp_mode == SECCOMP_MODE_STRICT) {
+        return strict_allows(tf, nr) ? 1 : -1;
+    }
+    action = chain_action(self, tf, nr);
+    data = action & SECCOMP_RET_DATA;
+    switch (action & SECCOMP_RET_ACTION_FULL) {
+    case SECCOMP_RET_ALLOW:
+    case SECCOMP_RET_LOG:
+        return 1;
+    case SECCOMP_RET_ERRNO:
+        *ret = -(int32_t)(data > MAX_ERRNO ? MAX_ERRNO : data);
+        return 0;
+    case SECCOMP_RET_USER_NOTIF:
+        *ret = -ENOSYS;
+        return 0;
+    default:
+        return -1;
+    }
 }
 
 int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret)

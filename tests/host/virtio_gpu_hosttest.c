@@ -223,6 +223,12 @@ uint64_t rtc_ticks_now(void)
     return (uint64_t)(now_ns / TICK_NS);
 }
 
+/** The vblank timer's fine service deadline, which no row reads. */
+void timer_service_wake_at(int64_t ns)
+{
+    (void)ns;
+}
+
 /** A busy wait: the clock advances and nothing else runs. */
 void k_udelay(uint32_t us)
 {

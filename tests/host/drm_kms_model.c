@@ -7,6 +7,7 @@
  * the real fences and sync files and their descriptors itself, one that
  * defines KMS_MODEL_DEVICES its own device holds, one that defines
  * KMS_MODEL_KERNEL its own log and interrupt flags, one that defines
+ * KMS_MODEL_TIMER its own fine service deadline, one that defines
  * KMS_MODEL_CLIENT the console's client, and one that sets `model_wait`
  * makes a wait's condition come true, as a sleep would. The hotplug
  * events the core sends are counted in `model_hotplugs`.
@@ -131,6 +132,18 @@ uint64_t rtc_ticks_now(void)
 {
     return (uint64_t)(model_now_ns / TICK_NS);
 }
+
+#ifndef KMS_MODEL_TIMER
+/* The fine service deadline the vblank timer last asked for, in monotonic
+ * ns; a test that defines KMS_MODEL_TIMER keeps its own. */
+int64_t model_wake_at_ns;
+
+/** Keep the deadline asked for. */
+void timer_service_wake_at(int64_t ns)
+{
+    model_wake_at_ns = ns;
+}
+#endif
 
 /** Initialize a queue. */
 void wait_queue_init(wait_queue_t *wq)

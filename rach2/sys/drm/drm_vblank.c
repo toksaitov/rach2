@@ -85,22 +85,34 @@ static int64_t vblank_timestamp(struct drm_crtc *crtc, int in_vblank_irq, int *p
 
 /**
  * The length of a frame of `mode` in nanoseconds, Linux's
- * drm_calc_timestamping_constants: the pixels of a frame, blanking
- * included, over the clock, halved for an interlaced mode; 0 for a mode
- * with no clock.
+ * drm_calc_timestamping_constants: the pixels of a frame, including
+ * blanking and repeated scanlines, over the clock. An interlaced field
+ * takes half a frame. Returns 0 if the period cannot be calculated.
  */
 static int64_t vblank_framedur(const struct drm_mode_modeinfo *mode)
 {
-    uint64_t ns;
+    uint64_t pixels, clock = mode->clock, us, scaled;
 
     if (mode->clock == 0 || mode->htotal == 0 || mode->vtotal == 0) {
         return 0;
     }
-    ns = drm_div64((uint64_t)mode->htotal * mode->vtotal * 1000000u, mode->clock);
-    if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
-        ns /= 2;
+    pixels = (uint64_t)mode->htotal * mode->vtotal;
+    if (mode->flags & DRM_MODE_FLAG_DBLSCAN) {
+        pixels *= 2;
     }
-    return (int64_t)ns;
+    if (mode->vscan > 1) {
+        pixels *= mode->vscan;
+    }
+    if (mode->flags & DRM_MODE_FLAG_INTERLACE) {
+        clock *= 2;
+    }
+    /* The 16-bit timing fields fit when scaled to microseconds. */
+    scaled = pixels * 1000u;
+    us = drm_div64(scaled, clock);
+    if (us >= ((uint64_t)1 << 63) / 1000u) {
+        return 0;
+    }
+    return (int64_t)(us * 1000u + drm_div64((scaled - us * clock) * 1000u, clock));
 }
 
 /** A monotonic time `ns`, not negative, as the seconds and microseconds of
@@ -576,6 +588,168 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
     spin_unlock_irqrestore(&crtc->dev->vbl_lock, flags);
 }
 
+/* ------------------------------------------------------------------------
+ * The vblank timer
+ *
+ * Linux runs each CRTC's timer as an hrtimer whose callback forwards it by
+ * whole frames past the clock and then handles the vblank
+ * (drm_vblank_timer_function). Here the boot processor's tick runs every
+ * timer whose expiry has come, at the fine service deadline it asks for at
+ * the earliest expiry, as vkms's timer runs. `vblank_timer_lock` guards the
+ * CRTCs' `timer_` members and the chain `vblank_timers` of those whose
+ * timer is on, as an hrtimer's base lock does, and is taken last, since the
+ * core calls `enable_vblank`, `disable_vblank` and `get_vblank_timestamp`
+ * under its `vbl_lock`. It is not held across the core's vblank handling,
+ * which may stop the timer.
+ */
+
+static struct spinlock vblank_timer_lock = SPINLOCK_INIT_NAMED("drm_vblank_timer");
+static struct drm_crtc *vblank_timers;
+
+/** Take `crtc` off the chain of running timers. `vblank_timer_lock` is
+ * held. */
+static void vblank_timer_unlink(struct drm_crtc *crtc)
+{
+    struct drm_crtc **p;
+
+    for (p = &vblank_timers; *p; p = &(*p)->vblank.timer_link) {
+        if (*p == crtc) {
+            *p = crtc->vblank.timer_link;
+            crtc->vblank.timer_link = NULL;
+            return;
+        }
+    }
+}
+
+int32_t drm_crtc_vblank_start_timer(struct drm_crtc *crtc)
+{
+    struct drm_vblank *v = &crtc->vblank;
+    int64_t period = v->framedur_ns > 0 ? v->framedur_ns : 16666667;
+    int64_t now = vblank_now(), next;
+    uint32_t flags;
+
+    if (period > 0x7fffffffffffffffll - now) {
+        return -ERANGE;
+    }
+    next = now + period;
+    flags = spin_lock_irqsave(&vblank_timer_lock);
+    v->timer_period_ns = period;
+    v->timer_next_ns = next;
+    if (!v->timer_on) {
+        v->timer_on = 1;
+        v->timer_link = vblank_timers;
+        vblank_timers = crtc;
+    }
+    spin_unlock_irqrestore(&vblank_timer_lock, flags);
+    timer_service_wake_at(next);
+    return 0;
+}
+
+void drm_crtc_vblank_cancel_timer(struct drm_crtc *crtc)
+{
+    uint32_t flags = spin_lock_irqsave(&vblank_timer_lock);
+
+    if (crtc->vblank.timer_on) {
+        crtc->vblank.timer_on = 0;
+        vblank_timer_unlink(crtc);
+    }
+    spin_unlock_irqrestore(&vblank_timer_lock, flags);
+}
+
+void drm_crtc_vblank_get_vblank_timeout(struct drm_crtc *crtc, int64_t *time_ns)
+{
+    uint32_t flags = spin_lock_irqsave(&vblank_timer_lock);
+
+    *time_ns = crtc->vblank.timer_next_ns - crtc->vblank.timer_period_ns;
+    spin_unlock_irqrestore(&vblank_timer_lock, flags);
+}
+
+int32_t drm_crtc_vblank_helper_enable_vblank_timer(struct drm_crtc *crtc)
+{
+    return drm_crtc_vblank_start_timer(crtc);
+}
+
+void drm_crtc_vblank_helper_disable_vblank_timer(struct drm_crtc *crtc)
+{
+    drm_crtc_vblank_cancel_timer(crtc);
+}
+
+int drm_crtc_vblank_helper_get_vblank_timestamp_from_timer(struct drm_crtc *crtc, int64_t *time_ns,
+                                                           int in_vblank_irq)
+{
+    uint32_t flags = spin_lock_irqsave(&vblank_timer_lock);
+    int on = crtc->vblank.enabled && crtc->vblank.timer_on;
+    int64_t t = crtc->vblank.timer_next_ns - crtc->vblank.timer_period_ns;
+
+    spin_unlock_irqrestore(&vblank_timer_lock, flags);
+    (void)in_vblank_irq;
+    *time_ns = on ? t : vblank_now();
+    return 1;
+}
+
+/**
+ * The first CRTC on the chain whose timer has expired at `now`, with its
+ * expiry moved past `now` by whole frames, as hrtimer_forward_now moves it,
+ * and `timer_busy` set so that its release waits for the tick; NULL when
+ * none has. `vblank_timer_lock` is held.
+ */
+static struct drm_crtc *vblank_timer_due(int64_t now)
+{
+    struct drm_crtc *crtc;
+    struct drm_vblank *v;
+
+    for (crtc = vblank_timers; crtc; crtc = v->timer_link) {
+        v = &crtc->vblank;
+        if (now >= v->timer_next_ns) {
+            v->timer_next_ns += ((int64_t)drm_div64((uint64_t)(now - v->timer_next_ns),
+                                                    (uint64_t)v->timer_period_ns) +
+                                 1) *
+                                v->timer_period_ns;
+            v->timer_busy = 1;
+            return crtc;
+        }
+    }
+    return NULL;
+}
+
+void drm_vblank_timer_tick(void)
+{
+    struct drm_crtc *crtc;
+    int64_t now = vblank_now(), next = 0;
+    uint32_t flags = spin_lock_irqsave(&vblank_timer_lock);
+
+    while ((crtc = vblank_timer_due(now)) != NULL) {
+        spin_unlock_irqrestore(&vblank_timer_lock, flags);
+        (void)drm_crtc_handle_vblank(crtc);
+        flags = spin_lock_irqsave(&vblank_timer_lock);
+        crtc->vblank.timer_busy = 0;
+    }
+    for (crtc = vblank_timers; crtc; crtc = crtc->vblank.timer_link) {
+        if (next == 0 || crtc->vblank.timer_next_ns < next) {
+            next = crtc->vblank.timer_next_ns;
+        }
+    }
+    spin_unlock_irqrestore(&vblank_timer_lock, flags);
+    if (next != 0) {
+        timer_service_wake_at(next);
+    }
+}
+
+/** Stop `crtc`'s timer and wait until the tick has let it go, for the
+ * CRTC's release; never from inside the tick. */
+static void vblank_timer_release(struct drm_crtc *crtc)
+{
+    uint32_t flags;
+    int busy;
+
+    drm_crtc_vblank_cancel_timer(crtc);
+    do {
+        flags = spin_lock_irqsave(&vblank_timer_lock);
+        busy = crtc->vblank.timer_busy;
+        spin_unlock_irqrestore(&vblank_timer_lock, flags);
+    } while (busy);
+}
+
 void drm_vblank_unplug(struct drm_device *dev)
 {
     struct drm_pending_event *e;
@@ -599,7 +773,10 @@ void drm_crtc_vblank_cleanup(struct drm_crtc *crtc)
 {
     struct drm_pending_event *e, *queued;
     struct drm_crtc_crc_entry *entries;
-    uint32_t flags = spin_lock_irqsave(&crtc->dev->event_lock);
+    uint32_t flags;
+
+    vblank_timer_release(crtc);
+    flags = spin_lock_irqsave(&crtc->dev->event_lock);
 
     queued = crtc->vblank.events;
     crtc->vblank.events = NULL;

@@ -1,0 +1,72 @@
+play kind number holds us
+chromium-h264 vector 0 100585 930177
+chromium-h264 vector 32 49803 771863
+chromium-h264 syscall 257 3349 323938
+chromium-h264 take 1 7158 223334
+chromium-h264 vector 52 2423 97217
+chromium-h264 syscall 56 218 95694
+chromium-h264 syscall 262 763 12116
+chromium-h264 syscall 82 97 10297
+chromium-h264 vector 51 558 7882
+chromium-h264 syscall 21 222 3815
+chromium-h264 syscall 74 12 3314
+chromium-h264 syscall 87 47 1430
+chromium-h264 syscall 7 1300 603
+chromium-h264 syscall 45 86 249
+chromium-h264 take 0 0 0
+chromium-h264 syscall 1 absent from end 235267
+chromium-h264 syscall 0 absent from start 279609
+chromium-vp9 vector 32 49819 810768
+chromium-vp9 vector 0 92338 761033
+chromium-vp9 syscall 257 3356 373393
+chromium-vp9 take 1 8887 252953
+chromium-vp9 syscall 0 3742 174966
+chromium-vp9 syscall 56 218 103117
+chromium-vp9 vector 52 2254 92296
+chromium-vp9 syscall 262 800 16334
+chromium-vp9 syscall 82 103 12649
+chromium-vp9 vector 51 517 7630
+chromium-vp9 syscall 21 199 5180
+chromium-vp9 syscall 263 45 3325
+chromium-vp9 syscall 87 27 946
+chromium-vp9 syscall 7 1297 619
+chromium-vp9 syscall 74 0 0
+chromium-vp9 take 0 0 0
+firefox-h264 syscall 257 52832 1266303
+firefox-h264 vector 32 54080 1063514
+firefox-h264 take 1 44979 1031430
+firefox-h264 vector 0 65442 723853
+firefox-h264 syscall 262 7051 393608
+firefox-h264 syscall 82 3393 379839
+firefox-h264 syscall 56 231 140654
+firefox-h264 syscall 1 52101 97334
+firefox-h264 vector 52 2255 90464
+firefox-h264 take 0 0 0
+firefox-h264 syscall 16 absent from end 12514
+firefox-h264 syscall 2 absent from end 12613
+firefox-h264 syscall 231 absent from end 50200
+firefox-h264 syscall 271 absent from end 22652
+firefox-h264 syscall 3 absent from end 10636
+firefox-h264 syscall 59 absent from end 47849
+firefox-h264 syscall 21 absent from start 219200
+firefox-h264 syscall 45 absent from start 136016
+firefox-h264 syscall 7 absent from start 134351
+firefox-h264 syscall 74 absent from start 145065
+firefox-h264 syscall 87 absent from start 557880
+firefox-h264 vector 51 absent from start 306210
+firefox-vp9 syscall 257 49010 1306510
+firefox-vp9 vector 32 52184 1015804
+firefox-vp9 take 1 45271 947291
+firefox-vp9 vector 0 64158 643797
+firefox-vp9 syscall 87 28160 535285
+firefox-vp9 syscall 82 3104 390361
+firefox-vp9 syscall 262 5910 337424
+firefox-vp9 vector 51 14886 299346
+firefox-vp9 syscall 21 2634 208985
+firefox-vp9 syscall 56 227 149703
+firefox-vp9 syscall 7 639383 132989
+firefox-vp9 syscall 74 2257 131061
+firefox-vp9 syscall 45 61393 117874
+firefox-vp9 syscall 1 62771 112696
+firefox-vp9 vector 52 2395 95658
+firefox-vp9 take 0 0 0

@@ -200,21 +200,36 @@ void rseq_migrate(process_t *p)
 
 /**
  * The look repeats while it is asked for again, since a write to the area
- * may sleep bringing its page in, and the switch marks the thread anew. A
- * failure's SIGSEGV is delivered here (`deliver_signals`), not at the next
- * entry to the kernel, which a thread in a loop may make only at the next
- * tick.
+ * may sleep bringing its page in, and the switch marks the thread anew.
  */
-void rseq_return(isr_params_t *params)
+int rseq_return_unlocked(isr_params_t *params)
 {
     process_t *p = current_proc;
 
     while (p->rseq_notify) {
         p->rseq_notify = 0;
         if (p->rseq != 0 && (rseq_fixup(p, params) != 0 || rseq_update(p) != 0)) {
-            rseq_fail(0);
-            deliver_signals(params);
+            return -1;
         }
+    }
+    return 0;
+}
+
+/**
+ * A failure's SIGSEGV is delivered here (`deliver_signals`), not at the next
+ * entry to the kernel, which a thread in a loop may make only at the next
+ * tick.
+ */
+void rseq_return_failed(isr_params_t *params)
+{
+    rseq_fail(0);
+    deliver_signals(params);
+}
+
+void rseq_return(isr_params_t *params)
+{
+    while (rseq_return_unlocked(params) != 0) {
+        rseq_return_failed(params);
     }
 }
 

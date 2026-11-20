@@ -1,0 +1,4 @@
+rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000002,6:/trial3984-video/root-63a0a394929533f3.img rach2.console=term nomodeset intel_iommu=off intremap=off
+/dev/loop0 / ext2 rw,relatime,errors=continue 0 0
+/dev/disk0p6 /data ext2 rw,relatime,errors=continue 0 0
+[    1.140000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0

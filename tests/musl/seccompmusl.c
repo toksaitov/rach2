@@ -22,6 +22,11 @@
  * The strict mode lets write, read and exit through, by the architecture's
  * numbers, and kills the process with SIGKILL at getpid and at close.
  *
+ * A traced child's filter answers getppid with SECCOMP_RET_TRACE, and at the
+ * PTRACE_EVENT_SECCOMP stop the tracer makes the call getpid, which runs:
+ * getppid returns the child's own pid, as Linux runs the number the tracer
+ * left.
+ *
  * Run with an argument other than NAME=VALUE ones, the program is the image
  * the filter child execs, and checks that the filters were kept. The parent
  * prints "SECCOMPMUSL OK" and exits 0 on success; a failure prints
@@ -33,22 +38,26 @@
  * from the parent alone and has an assertion for each row in order:
  * `no-filter`, `einval-programs`, `allow-available`,
  * `user-notif-unavailable`, `eacces-unprivileged`, `strict-allows`,
- * `strict-kills-getpid`, `strict-kills-close`, and the rows of the filter
- * child, `filter-install`, `filter-errno`, `status-file`, `trap-siginfo`,
- * `trap-wins`, `grandchild-sigsys`, `tsync-install`, `tsync-thread` and
- * `exec-keeps`. The filter child and the image it execs exit with the number
- * of the row that failed, counted from 1, which the parent reports. The
- * first failure fails its assertion and leaves the rest not run.
+ * `strict-kills-getpid`, `strict-kills-close`, `trace-redirect`, and the
+ * rows of the filter child, `filter-install`, `filter-errno`, `status-file`,
+ * `trap-siginfo`, `trap-wins`, `grandchild-sigsys`, `tsync-install`,
+ * `tsync-thread` and `exec-keeps`. The filter child and the image it execs
+ * exit with the number of the row that failed, counted from 1, which the
+ * parent reports. The first failure fails its assertion and leaves the rest
+ * not run.
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/ptrace.h>
+#include <sys/user.h>
 
 #include "../probe_report.h"
 #include <sys/syscall.h>
@@ -66,6 +75,7 @@
 
 #define RET_KILL_PROCESS 0x80000000u
 #define RET_TRAP         0x00030000u
+#define RET_TRACE        0x7ff00000u
 #define RET_ERRNO        0x00050000u
 #define RET_USER_NOTIF   0x7fc00000u
 #define RET_ALLOW        0x7fff0000u
@@ -87,11 +97,13 @@
 #define NR_GETGID       SYS_getgid
 #define AUDIT_ARCH_SELF 0xC000003Eu /* AUDIT_ARCH_X86_64 */
 #define REG_NR          REG_RAX
+#define USER_ORIG_NR    offsetof(struct user, regs.orig_rax)
 #else
 #define NR_GETUID       SYS_getuid32
 #define NR_GETGID       SYS_getgid32
 #define AUDIT_ARCH_SELF 0x40000003u /* AUDIT_ARCH_I386 */
 #define REG_NR          REG_EAX
+#define USER_ORIG_NR    offsetof(struct user, regs.orig_eax)
 #endif
 
 /* A classic BPF instruction and program, Linux's sock_filter and sock_fprog. */
@@ -399,13 +411,49 @@ static int strict(void)
     return 0;
 }
 
+/**
+ * Check that the number a tracer leaves at a PTRACE_EVENT_SECCOMP stop is
+ * the call that runs: a traced child's filter answers getppid with
+ * SECCOMP_RET_TRACE, the tracer makes it getpid, and the child exits 0 when
+ * getppid returned its own pid. Returns 0, or 1 after the failure is printed.
+ */
+static int trace_redirect(void)
+{
+    int status = 0, ok;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0 || raise(SIGSTOP) != 0 ||
+            prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 || answer(NR_GETPPID, RET_TRACE, 0) != 0) {
+            _exit(2);
+        }
+        _exit(syscall(NR_GETPPID) == getpid() ? 0 : 3);
+    }
+    ok = pid > 0 && waitpid(pid, &status, 0) == pid && WIFSTOPPED(status) &&
+         ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)PTRACE_O_TRACESECCOMP) == 0 &&
+         ptrace(PTRACE_CONT, pid, NULL, NULL) == 0 && waitpid(pid, &status, 0) == pid &&
+         status >> 8 == (SIGTRAP | PTRACE_EVENT_SECCOMP << 8) &&
+         ptrace(PTRACE_POKEUSER, pid, (void *)USER_ORIG_NR, (void *)(long)SYS_getpid) == 0 &&
+         ptrace(PTRACE_CONT, pid, NULL, NULL) == 0 && waitpid(pid, &status, 0) == pid &&
+         WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    if (!ok) {
+        if (pid > 0 && kill(pid, SIGKILL) == 0) {
+            waitpid(pid, &status, 0);
+        }
+        return fail("the number a tracer leaves at a seccomp trace stop is the call that runs");
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
 {
     static const char *const ids[] = {
         "no-filter",           "einval-programs", "allow-available",     "user-notif-unavailable",
-        "eacces-unprivileged", "strict-allows",   "strict-kills-getpid", "strict-kills-close"};
+        "eacces-unprivileged", "strict-allows",   "strict-kills-getpid", "strict-kills-close",
+        "trace-redirect"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.seccompmusl"));
@@ -443,7 +491,7 @@ int main(int argc, char **argv)
         return after_exec();
     }
     plan();
-    if (refusals() || strict()) {
+    if (refusals() || strict() || trace_redirect()) {
         return 1;
     }
     fflush(stdout);

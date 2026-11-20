@@ -361,6 +361,7 @@ and a line follows for each part, in the order the tick runs them:
 .Ql speaker ,
 .Ql i915 ,
 .Ql vkms ,
+.Ql vblank ,
 .Ql lock ,
 .Ql signals ,
 .Ql load ,
@@ -380,7 +381,7 @@ and a line follows for each part, in the order the tick runs them:
 and
 .Ql nested .
 .Pp
-The first nine run without the big lock:
+The first ten run without the big lock:
 .Ql clock
 is the count of the tick and the clock's pass, which the boot processor's
 tick makes, or another processor's when the boot processor's is late,
@@ -395,9 +396,11 @@ tick that made the clock's pass; and
 .Ql block_lag ,
 .Ql block_request ,
 .Ql speaker ,
-.Ql i915
-and
+.Ql i915 ,
 .Ql vkms
+and
+.Ql vblank ,
+the core's vblank timers of the CRTCs without a vblank interrupt,
 are the boot processor's periodic services that take only locks of their
 own, on each of its ticks.
 .Ql lock
