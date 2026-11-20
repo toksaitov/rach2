@@ -287,6 +287,9 @@ void sched_make_ready(process_t *p)
     (void)p;
 }
 
+void sched_resched_local(void)
+{}
+
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
     (void)proc;
