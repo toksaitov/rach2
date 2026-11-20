@@ -249,7 +249,7 @@ static void put_byte(uint32_t *v, unsigned int off, uint8_t b)
  * Linux's vfio_pci_zap_bars on the same write. */
 static void command_write8(struct vfio_device *d, unsigned int off, uint8_t b)
 {
-    uint16_t cmd = pci_read_config16(DEV(d), PCI_COMMAND);
+    uint16_t cmd = pci_read_config16(DEV(d), PCI_COMMAND), was = d->vcmd_intx;
 
     if (off == 0x04) {
         if ((cmd & CMD_MEMORY) && !(b & CMD_MEMORY)) {
@@ -261,6 +261,9 @@ static void command_write8(struct vfio_device *d, unsigned int off, uint8_t b)
         cmd = (uint16_t)((cmd & 0x00FFu) | ((uint16_t)b << 8));
     }
     pci_write_config16(DEV(d), PCI_COMMAND, vfio_config_command(d, cmd));
+    if (d->vcmd_intx != was) {
+        vfio_irq_intx_owner(d);
+    }
 }
 
 /** The owner's write of a virtual byte of a capability. */

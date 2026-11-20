@@ -1978,6 +1978,40 @@ static int32_t set_irqs(int fd, uint32_t flags, uint32_t index, uint32_t start, 
 #define EVENTFD_TRIGGER (VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER)
 #define NONE_TRIGGER    (VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_TRIGGER)
 
+/** The owner's Interrupt Disable over an interrupt it has not served, as
+ * Linux's virq_disabled: no signal while it is set, and the mask kept until
+ * it is clear. The line is unmasked and idle at the start and the end. */
+static void intx_owner_rows(void)
+{
+    struct fn *m = &fns[1];
+    uint64_t cmd = (7ull << 40) + 4;
+    uint16_t w = 0x0406;
+
+    m->cfg[6] |= 0x08;
+    raise(IRQ_VECTOR(11));
+    CHECK(evs[0].count == 6 && (m->cfg[5] & 0x04), "an interrupt the owner has not served");
+    CHECK(pwrite_at(device, cmd, &w, 2) == 2 && (m->cfg[5] & 0x04) && evs[0].count == 6,
+          "the owner's Interrupt Disable keeps the line masked");
+    eventfd_signal(&evs[1]);
+    vfio_irq_work();
+    CHECK((m->cfg[5] & 0x04) && evs[0].count == 6,
+          "an unmask while it is set keeps the mask and signals nothing");
+    CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 6,
+          "nor does a trigger without data");
+    w = 0x0006;
+    CHECK(pwrite_at(device, cmd, &w, 2) == 2 && (m->cfg[5] & 0x04) && evs[0].count == 7,
+          "clearing it while the line is asserted keeps the mask and signals again");
+    m->cfg[6] &= (uint8_t)~0x08;
+    eventfd_signal(&evs[1]);
+    vfio_irq_work();
+    CHECK((m->cfg[5] & 0x04) == 0, "and the owner's unmask then lifts the mask");
+    w = 0x0406;
+    (void)pwrite_at(device, cmd, &w, 2);
+    w = 0x0006;
+    CHECK(pwrite_at(device, cmd, &w, 2) == 2 && (m->cfg[5] & 0x04) == 0 && evs[0].count == 7,
+          "setting and clearing it over an idle line unmasks it again without a signal");
+}
+
 /** The line: its eventfd, its mask at each interrupt, its unmasks. */
 static void intx_rows(void)
 {
@@ -2039,6 +2073,7 @@ static void intx_rows(void)
     CHECK((m->cfg[5] & 0x04) == 0 && evs[1].count == 0, "the worker unmasks the idle line");
     CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 5,
           "a trigger without data signals the eventfd");
+    intx_owner_rows();
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, &fd) == -EINVAL,
           "MSI while the line is on is refused");
     eventfd_signal(&evs[1]);
