@@ -269,6 +269,12 @@ int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active)
     return active;
 }
 
+/** Whether a model slot has a contact. */
+int evdev_mt_slot_active(struct evdev *dev, int slot)
+{
+    return slot >= 0 && slot < dev->slots && dev->id[slot] >= 0;
+}
+
 /** Clear the marks of slots used in the finished frame. */
 void evdev_mt_end_frame(struct evdev *dev)
 {
@@ -1792,6 +1798,96 @@ static void mt_implicit_lift_rows(void)
     drop(hid);
 }
 
+/** The index of the first event seen from `from` on that is `type`,
+ * `code`, `value`, or -1. */
+static int seen_at(int from, unsigned type, unsigned code, int32_t value)
+{
+    int i;
+
+    for (i = from; i < nseen; i++) {
+        if (is(i, type, code, value)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** A serial touchscreen's lift with a Contact Count of zero ends its
+ * contact, as Linux takes it from a serial device. */
+static void mt_serial_rows(void)
+{
+    static const uint8_t touch[] = {1, 17, 100, 0, 120, 0, 1};
+    static const uint8_t lift[] = {0, 17, 0, 0, 0, 0, 0};
+    static const uint8_t touchscreen[] = {
+        0x05, 0x0d, 0x09, 0x04, 0xa1, 0x01, /* Digitizer, Touch Screen, Application */
+        0x09, 0x22, 0xa1, 0x02,             /* Finger, Logical Collection */
+        0x09, 0x42, 0x15, 0,    0x25, 1,    0x75, 8,    0x95, 1,    0x81, 2, /* Tip Switch */
+        0x09, 0x51, 0x26, 0xff, 0,    0x81, 2, /* Contact Identifier */
+        0x05, 1,    0x09, 0x30, 0x09, 0x31, 0x26, 0xff, 0x7f, 0x75, 16,   0x95,
+        2,    0x81, 2,    0xc0,                                              /* X, Y */
+        0x05, 0x0d, 0x09, 0x54, 0x25, 8,    0x75, 8,    0x95, 1,    0x81, 2, /* Contact Count */
+        0xc0};
+    struct hid_dev *hid;
+    struct evdev *d = &devs[0];
+    int inputs;
+
+    ndevs = 0;
+    hid = connect(touchscreen, sizeof(touchscreen), "HID serial touch screen", &inputs);
+    feed(hid, touch, sizeof(touch));
+    CHECK("serial: a counted contact starts",
+          inputs == 1 && d->id[0] == 0 && bit(d->down, BTN_TOUCH));
+    feed(hid, lift, sizeof(lift));
+    CHECK("serial: a lift with a count of zero ends the contact and BTN_TOUCH",
+          d->id[0] == -1 && saw(EV_ABS, ABS_MT_TRACKING_ID, -1) && saw(EV_KEY, BTN_TOUCH, 0) &&
+              saw(EV_SYN, SYN_REPORT, 0));
+    drop(hid);
+}
+
+/* A precision touchpad with one record in report 2, a serial device. */
+static const uint8_t serial_pad[] = {
+    0x05,         0x0d, 0x09, 5,    0xa1, 1,    0x85, 2, 0x09, 0x22, 0xa1, 2,
+    TEST_CONTACT, 0xc0, 0x09, 0x54, 0x25, 16,   0x95, 1, 0x81, 2, /* Contact Count */
+    0x85,         3,    0x09, 0x55, 0x25, 16,   0x75, 8, 0xb1, 2, /* Contact Count Maximum */
+    0x09,         0x52, 0x25, 3,    0xb1, 2,                      /* Input Mode */
+    0x06,         0,    0xff, 0x09, 0xc5, 0x26, 0xff, 0, 0xb1, 2,    0xc0 /* Microsoft profile */
+};
+
+/** A palm that lifts is reported as a palm before its lift, and a serial
+ * touchpad's contact lifts with a Contact Count of zero. */
+static void mt_palm_lift_rows(void)
+{
+    static const uint8_t finger[] = {2, 1, 100, 0, 120, 0, 1, 1, 51, 1};
+    static const uint8_t palm_lift[] = {2, 0, 100, 0, 120, 0, 0, 0, 51, 1};
+    static const uint8_t lift[] = {2, 0, 100, 0, 120, 0, 1, 0, 51, 0};
+    struct hid_dev *hid;
+    struct evdev *d = &devs[0];
+    int inputs, palm, syn, gone;
+
+    ndevs = 0;
+    hid = connect(precision_pad, sizeof(precision_pad), "Precision Touchpad", &inputs);
+    feed(hid, finger, sizeof(finger));
+    CHECK("palm: a finger starts", inputs == 1 && d->id[0] == 0);
+    feed(hid, palm_lift, sizeof(palm_lift));
+    palm = seen_at(0, EV_ABS, ABS_MT_TOOL_TYPE, MT_TOOL_PALM);
+    syn = seen_at(0, EV_SYN, SYN_REPORT, 0);
+    gone = seen_at(0, EV_ABS, ABS_MT_TRACKING_ID, -1);
+    CHECK("palm: a lift without confidence is an active palm in one frame",
+          palm >= 0 && syn > palm && d->id[0] == -1);
+    CHECK("palm: and its lift in the next", gone > syn &&
+                                                seen_at(gone, EV_KEY, BTN_TOUCH, 0) > gone &&
+                                                seen_at(gone, EV_SYN, SYN_REPORT, 0) > gone);
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(serial_pad, sizeof(serial_pad), "Serial Touchpad", &inputs);
+    feed(hid, finger, sizeof(finger));
+    CHECK("serial pad: a finger starts", inputs == 1 && d->id[0] == 0);
+    feed(hid, lift, sizeof(lift));
+    CHECK("serial pad: a lift with a count of zero ends the contact",
+          d->id[0] == -1 && saw(EV_KEY, BTN_TOUCH, 0));
+    drop(hid);
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -1815,6 +1911,8 @@ int main(void)
     mt_sparse_apps_rows();
     mt_precision_rows();
     mt_implicit_lift_rows();
+    mt_serial_rows();
+    mt_palm_lift_rows();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;
