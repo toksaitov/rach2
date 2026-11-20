@@ -423,8 +423,6 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 
 #define SOCKADDR_LL_HATYPE 8
 
-#define ARPHRD_ETHER 1 /* sll_hatype for an Ethernet interface */
-
 #define SOCKADDR_LL_HALEN 11
 
 #define SOCKADDR_LL_ADDR 12
@@ -2213,10 +2211,9 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         sll[SOCKADDR_LL_PROTOCOL + 1] = (uint8_t)(entry->sock->protocol & 0xff);
         SC_WLE32(sll + SOCKADDR_LL_IFINDEX, (uint32_t)ifindex);
         if (nd) {
-            sll[SOCKADDR_LL_HATYPE] =
-                (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE & 0xff : ARPHRD_ETHER);
-            sll[SOCKADDR_LL_HATYPE + 1] = (uint8_t)(nd->loopback ? NETDEV_LOOPBACK_TYPE >> 8 : 0);
-            sll[SOCKADDR_LL_HALEN] = 6;
+            sll[SOCKADDR_LL_HATYPE] = (uint8_t)(NETDEV_TYPE(nd) & 0xff);
+            sll[SOCKADDR_LL_HATYPE + 1] = (uint8_t)(NETDEV_TYPE(nd) >> 8);
+            sll[SOCKADDR_LL_HALEN] = (uint8_t)NETDEV_ADDR_LEN(nd);
             k_memcpy(sll + SOCKADDR_LL_ADDR, nd->mac, 6);
         }
         copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len : (uint32_t)SOCKADDR_LL_LEN;

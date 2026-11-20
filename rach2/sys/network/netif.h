@@ -51,11 +51,22 @@
 #define SIOCBRDELBR 0x89a1
 
 /* The interface flags this kernel reports, with Linux's values. */
-#define IFF_UP        0x0001
-#define IFF_BROADCAST 0x0002
-#define IFF_LOOPBACK  0x0008
-#define IFF_RUNNING   0x0040
-#define IFF_MULTICAST 0x1000
+#define IFF_UP          0x0001
+#define IFF_BROADCAST   0x0002
+#define IFF_LOOPBACK    0x0008
+#define IFF_POINTOPOINT 0x0010
+#define IFF_RUNNING     0x0040
+#define IFF_NOARP       0x0080
+#define IFF_MULTICAST   0x1000
+
+/* The flags of `nd`'s kind, Linux's `dev->flags` but for IFF_UP: loopback
+ * for `lo`, point-to-point and no ARP for an interface of IP datagrams
+ * (`l3`), as Linux's tun_net_initialize sets them, and broadcast for a
+ * card; multicast for both of the last. */
+#define NETIF_KIND_FLAGS(nd)                                                  \
+    ((nd)->loopback ? IFF_LOOPBACK                                            \
+     : (nd)->l3     ? (uint32_t)(IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST) \
+                    : (uint32_t)(IFF_BROADCAST | IFF_MULTICAST))
 
 /**
  * Answer one interface ioctl, which `sys_ioctl` passes for a socket of any

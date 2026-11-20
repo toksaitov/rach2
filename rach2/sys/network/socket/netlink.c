@@ -132,7 +132,6 @@
 #define NETCONFA_IFINDEX_ALL                 0xFFFFFFFFu
 #define NETCONFA_IFINDEX_DEFAULT             0xFFFFFFFEu
 
-#define ARPHRD_ETHER      1
 #define IFF_LOWER_UP      0x10000u
 #define IF_OPER_UP        6
 #define IF_OPER_DORMANT   5
@@ -942,12 +941,14 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     uint32_t lock;
     int i;
 
-    put16(ifi + 2, nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER);
+    put16(ifi + 2, (uint16_t)NETDEV_TYPE(nd));
     put32(ifi + 4, (uint32_t)nd->index);
-    put32(ifi + 8, up | (nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST));
+    put32(ifi + 8, up | NETIF_KIND_FLAGS(nd));
     msg_attr(msg, IFLA_IFNAME, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
-    msg_attr(msg, IFLA_ADDRESS, nd->mac, 6);
-    msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
+    if (NETDEV_ADDR_LEN(nd)) {
+        msg_attr(msg, IFLA_ADDRESS, nd->mac, 6);
+        msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
+    }
     msg_attr32(msg, IFLA_MTU, nd->mtu);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
     msg_attr(msg, IFLA_LINKMODE, &mode, 1);

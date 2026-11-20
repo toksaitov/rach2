@@ -802,7 +802,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     a->since = tick_count();
     a->dad_count = 0;
     a->regen = 0;
-    if (!nd->loopback && !(flags & NETDEV_A6_NODAD)) {
+    if (!nd->loopback && !nd->l3 && !(flags & NETDEV_A6_NODAD)) {
         a->flags |= NETDEV_A6_TENTATIVE;
         nd6_dad_start(a);
     }
@@ -846,9 +846,10 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 /**
  * The interface identifier is the modified EUI-64 of the station address
  * (RFC 4291, appendix A): ff:fe in its middle and the universal bit
- * inverted. The address is kept across a down and up, as an address given
- * by hand is, so only an interface without one gets it. An interface with
- * IPv6 disabled gets nothing.
+ * inverted, or on an interface of IP datagrams, which has none, a random
+ * one (`nd6_random_link_local`). The address is kept across a down and up,
+ * as an address given by hand is, so only an interface without one gets
+ * it. An interface with IPv6 disabled gets nothing.
  */
 static void link_local_up(struct netdev *nd)
 {
@@ -871,6 +872,9 @@ static void link_local_up(struct netdev *nd)
     ll[14] = nd->mac[4];
     ll[15] = nd->mac[5];
     lock = net_lock();
+    if (nd->l3) {
+        nd6_random_link_local(nd, ll);
+    }
     if (!netdev_member6(nd, ip6_all_nodes)) {
         netdev_join6(nd, ip6_all_nodes);
     }

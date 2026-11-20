@@ -459,12 +459,18 @@ uint32_t nd6_link_mtu(const struct netdev *nd)
 
 /* ---- Sending ---- */
 
-/** Put the link-layer address option of `type` for `nd` at `p`; 8 bytes. */
-static void put_lladdr(uint8_t *p, uint8_t type, const struct netdev *nd)
+/** Put the link-layer address option of `type` for `nd` at `p`: its 8
+ * bytes, or none on an interface of IP datagrams (`l3`), which has no
+ * address, as Linux's ndisc leaves the option out for an `addr_len` of 0. */
+static uint32_t put_lladdr(uint8_t *p, uint8_t type, const struct netdev *nd)
 {
+    if (nd->l3) {
+        return 0;
+    }
     p[0] = type;
     p[1] = 1;
     k_memcpy(p + 2, nd->mac, 6);
+    return 8;
 }
 
 /** A usable link-local address of `nd` into `out`: 1, or 0 for none. */
@@ -503,8 +509,9 @@ static void send_ns(struct netdev *nd, const uint8_t *target, const uint8_t *src
         ip6_solicited_node(target, dst);
     }
     if (src) {
-        put_lladdr(nd6_msg + 24, OPT_SLLA, nd);
-        icmp6_send_opts(src, dst, nd->index, nd6_msg, 32, 255, unicast ? IP6_TXF_ONLINK : 0);
+        icmp6_send_opts(src, dst, nd->index, nd6_msg,
+                        (uint16_t)(24 + put_lladdr(nd6_msg + 24, OPT_SLLA, nd)), 255,
+                        unicast ? IP6_TXF_ONLINK : 0);
         return;
     }
     nd6_msg[24] = OPT_NONCE;
@@ -531,8 +538,8 @@ static void send_na(struct netdev *nd, const uint8_t *target, const uint8_t *dst
         nd6_msg[4] |= NA_ROUTER;
     }
     k_memcpy(nd6_msg + 8, target, IP6_ADDR_LEN);
-    put_lladdr(nd6_msg + 24, OPT_TLLA, nd);
-    icmp6_send_opts(target, dst ? dst : ip6_all_nodes, nd->index, nd6_msg, 32, 255,
+    icmp6_send_opts(target, dst ? dst : ip6_all_nodes, nd->index, nd6_msg,
+                    (uint16_t)(24 + put_lladdr(nd6_msg + 24, OPT_TLLA, nd)), 255,
                     dst ? IP6_TXF_ONLINK : 0);
 }
 
@@ -541,8 +548,8 @@ static void send_rs(struct netdev *nd, const uint8_t *src)
 {
     k_memset(nd6_msg, 0, 16);
     nd6_msg[0] = ND6_ROUTER_SOLICIT;
-    put_lladdr(nd6_msg + 8, OPT_SLLA, nd);
-    icmp6_send_opts(src, all_routers, nd->index, nd6_msg, 16, 255, 0);
+    icmp6_send_opts(src, all_routers, nd->index, nd6_msg,
+                    (uint16_t)(8 + put_lladdr(nd6_msg + 8, OPT_SLLA, nd)), 255, 0);
 }
 
 /* ---- The neighbour cache ---- */
@@ -775,7 +782,7 @@ int nd6_output_whole(struct netdev *out, const uint8_t *hop, const uint8_t *hdr,
     uint8_t *copy;
 
     *held = 0;
-    if (usable(e)) {
+    if (out->l3 || usable(e)) {
         return 0;
     }
     *held = 1;
@@ -905,6 +912,24 @@ static int make_address(const struct netdev *nd, const uint8_t *prefix, uint8_t 
             return 1;
         }
     }
+}
+
+void nd6_random_link_local(struct netdev *nd, uint8_t *ll)
+{
+    static const uint8_t fe80[8] = {0xfe, 0x80, 0, 0, 0, 0, 0, 0};
+    struct nd6_if *ni = if_of(nd);
+    uint8_t count = 0;
+
+    if (!ni) {
+        k_memcpy(ll, fe80, 8);
+        nd6_random(ll + 8, 8);
+        return;
+    }
+    if (!ni->conf.secret_set) {
+        nd6_random(ni->conf.secret, sizeof(ni->conf.secret));
+        ni->conf.secret_set = 1;
+    }
+    (void)make_address(nd, fe80, &count, ll);
 }
 
 /** Seconds since the address `a` was given or last renewed, held at
@@ -1405,13 +1430,14 @@ static void solicit_routers(struct netdev *nd, struct nd6_if *ni)
 
 /**
  * The tentative addresses, and on a card that went down every address
- * that may be detected, detect again.
+ * that may be detected, detect again; none on an interface of IP datagrams
+ * (`l3`), which Linux's addrconf_dad_begin skips as IFF_NOARP.
  */
 static void redetect(struct netdev *nd, int all)
 {
     int i;
 
-    for (i = 0; i < nd->naddr6; i++) {
+    for (i = 0; i < nd->naddr6 && !nd->l3; i++) {
         struct netdev_addr6 *a = &nd->addr6[i];
 
         if (a->flags & (NETDEV_A6_NODAD | NETDEV_A6_DADFAILED)) {
