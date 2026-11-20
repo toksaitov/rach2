@@ -18,8 +18,9 @@
  * that cannot start again once the display is back, whose close gives
  * nothing more back. /proc/asound numbers the PCH's analog card 0 and the
  * HDMI card 1, with Linux's names and ids, and root's write to an ELD file
- * sets the fields Linux's snd_hdmi_write_eld_info sets, its reads bounded
- * where Linux's index past their tables.
+ * sets the fields Linux's snd_hdmi_write_eld_info sets, sadN_max_bitrate
+ * among them, its reads and the open's limit by the sink bounded where
+ * Linux's index past their tables, a count of 7fffffff among them.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -208,6 +209,7 @@ static void row_eld_write(void)
                                "audio_sync_delay 0xffffffff";
     const struct hh_pin *p = &hh_pins[0];
     int eld = ASOUND_FILE(1, ASOUND_ELD);
+    audio_stream_t s;
 
     check(asound_write(eld, text, (int)sizeof(text) - 1) == 0, "eld write: taken");
     check(p->monitor_present == 0 && p->eld_valid == 1 && strcmp(p->info.monitor_name, "IGT") == 0,
@@ -225,6 +227,15 @@ static void row_eld_write(void)
               p->info.sad_count == 0x30 && p->info.sad[10].channels == 3 &&
               strstr(proc(eld), "sad15_coding_type") != NULL && strstr(proc(eld), "sad16_") == NULL,
           "eld write: a count past the table prints the 16 SADs there");
+    check(asound_write(eld, "sad0_max_bitrate 1f400\n", 23) == 0 &&
+              p->info.sad[0].max_bitrate == 128000 &&
+              strstr(proc(eld), "sad0_max_bitrate\t128000\n") != NULL,
+          "eld write: sad0_max_bitrate sets the bitrate the read prints");
+    check(asound_write(eld, "sad_count 7fffffff\n", 19) == 0 && p->info.sad_count == 0x7fffffff,
+          "eld write: a count of 7fffffff kept, as Linux keeps it");
+    stream_init(&s, 48000, AUDIO_S16LE, 4096);
+    check(hh_stream_open(&s) == 0, "eld write: an open limits by the 16 SADs there, no more");
+    hh_stream_close(&s);
     check(asound_write(ASOUND_FILE(1, ASOUND_ID), "x 1\n", 4) == -EACCES &&
               asound_write(ASOUND_FILE(0, ASOUND_ELD), "x 1\n", 4) == -ENOENT,
           "eld write: only an ELD file of the HDMI card");
