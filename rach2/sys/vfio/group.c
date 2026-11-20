@@ -324,6 +324,7 @@ int vfio_groups_build(void)
             continue;
         }
         k_memset(&vfio_devices[vfio_ndevices], 0, sizeof(vfio_devices[0]));
+        mutex_init(&vfio_devices[vfio_ndevices].state_lock, "vfio_state");
         vfio_devices[vfio_ndevices].anon.name = "[vfio-device]";
         vfio_devices[vfio_ndevices].pci = dev;
         vfio_devices[vfio_ndevices].key = (uint16_t)(dev.bus << 8 | devfn_of(&dev));
@@ -1006,11 +1007,8 @@ static int32_t get_device_fd(struct vfio_group *g, uintptr_t arg)
         return n;
     }
     d = vfio_device_by_name(name, (int)n);
-    if (d == NULL || &vfio_groups[d->group] != g || !d->bound) {
+    if (d == NULL || &vfio_groups[d->group] != g) {
         return -ENODEV;
-    }
-    if (g->container == NULL || g->container->iommu_type == 0) {
-        return -EINVAL;
     }
     return vfio_device_open_fd(d);
 }

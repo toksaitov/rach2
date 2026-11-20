@@ -8,6 +8,7 @@
 
 #include "vfio.h"
 
+#include "../arch/arch.h"
 #include "../io/eventfd.h"
 #include "../irq.h"
 #include "../klog.h"
@@ -42,8 +43,6 @@ struct unmask_hook {
  * vfio_pci_get_irq_count counts them. */
 uint32_t vfio_irq_count(const struct vfio_device *d, uint32_t index)
 {
-    uint16_t flags;
-
     switch (index) {
     case VFIO_PCI_INTX_IRQ_INDEX:
         return d->intx_ok ? 1u : 0u;
@@ -51,8 +50,7 @@ uint32_t vfio_irq_count(const struct vfio_device *d, uint32_t index)
         if (d->msi_cap == 0) {
             return 0;
         }
-        flags = pci_read_config16(DEV(d), (uint8_t)(d->msi_cap + 2));
-        return 1u << ((flags >> 1) & 0x7u);
+        return 1u << ((d->vmsi[2] >> 1) & 0x7u);
     case VFIO_PCI_MSIX_IRQ_INDEX:
         return d->msix_cap != 0 ? d->msix_entries : 0u;
     case VFIO_PCI_ERR_IRQ_INDEX:
@@ -81,6 +79,15 @@ static void intx_apply(struct vfio_device *d)
     pci_write_config16(DEV(d), PCI_COMMAND, vfio_config_command(d, cmd));
 }
 
+/** Notify the owner of an INTx interrupt without feeding it back to this
+ * device's unmask hook when both roles name the same counter. */
+static void intx_notify(const struct vfio_device *d)
+{
+    if (d->intx.trigger != NULL) {
+        eventfd_signal_except(d->intx.trigger, d->unmask_hook);
+    }
+}
+
 /** A message's interrupt: its eventfd's signal. */
 static void msi_isr(isr_params_t *params)
 {
@@ -106,15 +113,13 @@ static void intx_isr(isr_params_t *params)
         struct vfio_device *d = &vfio_devices[i];
 
         if (d->refs == 0 || d->irq_type != VFIO_PCI_INTX_IRQ_INDEX || d->pci.irq != line ||
-            d->intx_masked) {
+            d->intx_masked || d->power_low || d->resetting) {
             continue;
         }
         if (pci_read_config16(DEV(d), PCI_STATUS) & STATUS_INTX) {
             d->intx_masked = 1;
             intx_apply(d);
-            if (d->intx.trigger != NULL) {
-                eventfd_signal(d->intx.trigger);
-            }
+            intx_notify(d);
         }
     }
 }
@@ -128,22 +133,54 @@ static void intx_unmask(struct vfio_device *d)
         return;
     }
     if (pci_read_config16(DEV(d), PCI_STATUS) & STATUS_INTX) {
-        if (d->intx.trigger != NULL) {
-            eventfd_signal(d->intx.trigger);
-        }
+        intx_notify(d);
         return;
     }
     d->intx_masked = 0;
     intx_apply(d);
 }
 
-/** The unmask eventfd rose: unmask, or signal again while the line is
- * still asserted, as Linux's virqfd runs vfio_pci_intx_unmask_handler and
- * then vfio_send_intx_eventfd; the count is taken. */
+/** Queue an unmask under the eventfd's spinlock and take the counter.
+ * The worker owns the device state and signals outside that lock. */
 static int unmask_signal(struct eventfd_hook *h)
 {
-    intx_unmask(((struct unmask_hook *)h)->d);
+    struct vfio_device *d = ((struct unmask_hook *)h)->d;
+
+    if (arch_atomic_xchg(&d->unmask_pending, 1) == 0) {
+        vfio_hw_irq_wake();
+    }
     return 1;
+}
+
+int vfio_irq_pending(void *arg)
+{
+    int i;
+
+    (void)arg;
+    for (i = 0; i < vfio_ndevices; i++) {
+        if (vfio_devices[i].unmask_pending) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void vfio_irq_work(void)
+{
+    int i;
+
+    for (i = 0; i < vfio_ndevices; i++) {
+        struct vfio_device *d = &vfio_devices[i];
+
+        if (!d->unmask_pending) {
+            continue;
+        }
+        mutex_lock(&d->state_lock);
+        if (arch_atomic_xchg(&d->unmask_pending, 0)) {
+            intx_unmask(d);
+        }
+        mutex_unlock(&d->state_lock);
+    }
 }
 
 /** Drop the unmask eventfd, if any. */
@@ -153,6 +190,7 @@ static void unmask_drop(struct vfio_device *d)
         return;
     }
     (void)eventfd_hook_remove(d->intx_unmask, d->unmask_hook, NULL);
+    (void)arch_atomic_xchg(&d->unmask_pending, 0);
     eventfd_put(d->intx_unmask);
     kfree(d->unmask_hook);
     d->intx_unmask = NULL;
@@ -174,6 +212,11 @@ static int32_t unmask_set(struct vfio_device *d, int32_t fd)
     if (ev == NULL) {
         return err;
     }
+    err = vfio_hw_irq_start();
+    if (err != 0) {
+        eventfd_put(ev);
+        return err;
+    }
     u = (struct unmask_hook *)kzalloc(sizeof(*u));
     if (u == NULL) {
         eventfd_put(ev);
@@ -184,15 +227,17 @@ static int32_t unmask_set(struct vfio_device *d, int32_t fd)
     d->intx_unmask = ev;
     d->unmask_hook = &u->h;
     if (eventfd_hook_add(ev, &u->h) == 1) {
-        intx_unmask(d);
+        (void)unmask_signal(&u->h);
     }
     return 0;
 }
 
-/** Replace the eventfd `*slot` by the one of `fd`, or with -1 by none. */
+/** Replace the eventfd `*slot` by the one of `fd`, or with -1 by none.
+ * Publish the new target before dropping the one an ISR could see. */
 static int32_t trigger_set(struct eventfd **slot, int32_t fd)
 {
     struct eventfd *ev = NULL;
+    struct eventfd *old = *slot;
     int32_t err = 0;
 
     if (fd >= 0) {
@@ -201,10 +246,10 @@ static int32_t trigger_set(struct eventfd **slot, int32_t fd)
             return err;
         }
     }
-    if (*slot != NULL) {
-        eventfd_put(*slot);
-    }
     *slot = ev;
+    if (old != NULL) {
+        eventfd_put(old);
+    }
     return 0;
 }
 
@@ -320,6 +365,8 @@ static int32_t msi_set_vector(struct vfio_device *d, unsigned int i, int32_t fd)
     if (fd < 0) {
         if (d->irq_type == VFIO_PCI_MSIX_IRQ_INDEX) {
             pci_msix_entry_clear(&d->pci, i);
+        } else if (q->vector >= 0) {
+            pci_msi_disable(&d->pci);
         }
         vector_drop(q);
         return 0;
@@ -491,8 +538,8 @@ static int32_t intx_trigger(struct vfio_device *d, const struct vfio_irq_set *h,
     if (!is_intx) {
         return -EINVAL;
     }
-    if (((h->flags & VFIO_IRQ_SET_DATA_NONE) || data[0]) && d->intx.trigger != NULL) {
-        eventfd_signal(d->intx.trigger);
+    if ((h->flags & VFIO_IRQ_SET_DATA_NONE) || data[0]) {
+        intx_notify(d);
     }
     return 0;
 }
@@ -585,7 +632,9 @@ int32_t vfio_irq_set(struct vfio_device *d, uintptr_t arg)
             return -EFAULT;
         }
     }
+    mutex_lock(&d->state_lock);
     r = irq_dispatch(d, &h, data);
+    mutex_unlock(&d->state_lock);
     kfree(data);
     return r;
 }
@@ -603,27 +652,37 @@ void vfio_irq_disable(struct vfio_device *d)
     (void)trigger_set(&d->req_trigger, -1);
 }
 
-/** Program the interrupts again after a reset, which lost them, as
- * Linux's pci_restore_msi_state. */
+/** Program the interrupts again after a reset or D3hot, as Linux's
+ * pci_restore_msi_state. The caller holds the state lock. */
 void vfio_irq_restore(struct vfio_device *d)
 {
     uint16_t cmd;
     unsigned int i;
+    int msix = d->irq_type == VFIO_PCI_MSIX_IRQ_INDEX;
 
-    if (d->irq_type != VFIO_PCI_MSI_IRQ_INDEX && d->irq_type != VFIO_PCI_MSIX_IRQ_INDEX) {
+    if (d->irq_type != VFIO_PCI_MSI_IRQ_INDEX && !msix) {
         intx_apply(d);
         return;
     }
     cmd = memory_on(d);
-    if (d->irq_type == VFIO_PCI_MSIX_IRQ_INDEX && pci_msix_hold(&d->pci) != 0) {
+    if (msix && pci_msix_hold(&d->pci) != 0) {
         klog(KLOG_WARN, "vfio", "reset: %s: MSI-X lost", d->name);
+        memory_restore(d, cmd);
+        intx_apply(d);
+        return;
     }
     for (i = 0; i < d->nmsi; i++) {
+        if (msix) {
+            uintptr_t ctl = msix_table(d) + (uintptr_t)i * 16u + 12u;
+
+            /* A reset loses the vector mask bits along with the messages. */
+            mmio_write32(ctl, mmio_read32(ctl) | 1u);
+        }
         if (d->msi[i].vector >= 0 && msi_program(d, i) != 0) {
             klog(KLOG_WARN, "vfio", "reset: %s: interrupt %u lost", d->name, i);
         }
     }
-    if (d->irq_type == VFIO_PCI_MSIX_IRQ_INDEX) {
+    if (msix) {
         pci_msix_unmask(&d->pci);
     }
     memory_restore(d, cmd);
