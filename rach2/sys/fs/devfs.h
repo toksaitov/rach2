@@ -305,16 +305,18 @@ int devfs_subdir_present(int row);
  * `priv` NULL, and then calls `open`, unless NULL, which may set the
  * descriptor's `priv` and refuse with -errno. A node with NULL `ops` opens
  * the console terminal, as /dev/console does, for the node of a device
- * that carries the console. Its inode is its slot's,
- * the same for the life of the kernel unless the slots run out. A node
- * unregistered leaves /dev at once; a descriptor open on it keeps its
- * operations and its `priv`, and fstat gives its name and numbers until
- * its slot is taken again, first by a node of the same name.
+ * that carries the console. The registry holds as many nodes as the heap
+ * has room for, and a register refuses with -ENOMEM when it has none. A
+ * node's inode is its slot's. A node unregistered leaves /dev at once; a
+ * descriptor open on it keeps its operations and its `priv`, and fstat
+ * gives its name and numbers until its slot is taken again: first by a
+ * node of the same name, which keeps the inode across an unbind and a bind,
+ * and by any other only once DEVFS_SLOTS_SPARE slots are free.
  */
-/* The most nodes at once: one msr for each of the 64 processors
- * (proc/percpu.h's NR_CPUS) and the rest for the drivers, a virtio
- * console's ports among them. */
-#define DEVFS_NODES_MAX     512
+/* The free slots the registry keeps before it gives one to a node of
+ * another name, so that its slots number at most this many more than the
+ * most nodes it held at once. */
+#define DEVFS_SLOTS_SPARE   64
 /* The devices that may have an owner, group or mode of their own at once. */
 #define DEVFS_OWNED_MAX     256
 /* A node's path below /dev, with its NUL, as a lookup carries it

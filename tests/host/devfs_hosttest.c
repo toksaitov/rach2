@@ -15,6 +15,7 @@
 #include "fs/devfs.c"
 
 extern int printf(const char *format, ...);
+extern int snprintf(char *str, size_t size, const char *format, ...);
 static int failures, master_calls, descriptor_calls;
 /* Set by the rows that publish a window, which log, cut a partition view and
    copy an ioctl's answer out; every other row must reach none of those. The
@@ -528,9 +529,93 @@ static void wide_numbers(void)
     devfs_node_unregister(&port);
 }
 
+/* Two virtio consoles of 129 generic ports, each port with a node and a
+ * second name in /dev/virtio-ports: 516 nodes. */
+#define PORT_DEVICES 2
+#define PORT_COUNT   129
+#define PORT_NODES   (PORT_DEVICES * PORT_COUNT * 2)
+
+/** Fill `nodes` with the nodes of the ports, their names in `names`: the
+ * node vportDpN at major 245 - D and minor N, then its alias
+ * virtio-ports/TAG.D.N, whose tag sets one round's names apart from
+ * another's. */
+static void port_nodes(struct devfs_node *nodes, char (*names)[48], const char *tag)
+{
+    int d, n, i = 0;
+
+    for (d = 0; d < PORT_DEVICES; d++) {
+        for (n = 0; n < PORT_COUNT; n++, i += 2) {
+            snprintf(names[i], sizeof(names[i]), "vport%dp%d", d, n);
+            snprintf(names[i + 1], sizeof(names[i + 1]), "virtio-ports/%s.%d.%d", tag, d, n);
+            k_memset(&nodes[i], 0, 2 * sizeof(nodes[i]));
+            nodes[i].name = names[i];
+            nodes[i].major = (uint16_t)(245 - d);
+            nodes[i].minor = (uint16_t)n;
+            nodes[i].mode = 0600;
+            nodes[i].ops = &node_ops;
+            nodes[i + 1] = nodes[i];
+            nodes[i + 1].name = names[i + 1];
+            nodes[i + 1].alias = 1;
+        }
+    }
+}
+
+/** Register the `PORT_NODES` nodes of `nodes`; the count that registered
+ * and are found by their path at their numbers. */
+static int port_register(struct devfs_node *nodes)
+{
+    uint32_t rdev;
+    int i, found = 0;
+
+    for (i = 0; i < PORT_NODES; i++) {
+        rdev = 0;
+        if (devfs_node_register(&nodes[i]) == 0 && devfs_stat(nodes[i].name, 0, &rdev, 0) == 0 &&
+            rdev == ((uint32_t)nodes[i].major << 8 | nodes[i].minor)) {
+            found++;
+        }
+    }
+    return found;
+}
+
+/**
+ * Two virtio consoles of 129 named ports register 516 nodes, beyond any
+ * fixed count of the registry's, each found by its path and a port's node
+ * by its number too; a node more still registers. Unregistered and
+ * registered again under other names, the ports take back the free slots,
+ * so the registry holds at most DEVFS_SLOTS_SPARE slots more than the most
+ * nodes it held at once.
+ */
+static void many_ports(void)
+{
+    static struct devfs_node nodes[PORT_NODES], again[PORT_NODES];
+    static char names[PORT_NODES][48], names2[PORT_NODES][48];
+    static struct devfs_node extra = {"vport9p0", 236, 0, 0600, &node_ops, NULL, NULL, 0};
+    int i, made;
+
+    port_nodes(nodes, names, "one");
+    check(port_register(nodes) == PORT_NODES,
+          "two consoles of 129 named ports register all 516 nodes, each found by its path");
+    check(name_eq(devfs_name_of(0, 244u << 8 | 128u), "vport1p128"),
+          "and the last port's number names its node and not its alias");
+    check(devfs_node_register(&extra) == 0, "and a node more registers after them");
+    devfs_node_unregister(&extra);
+    made = reg_slot_count;
+    for (i = 0; i < PORT_NODES; i++) {
+        devfs_node_unregister(&nodes[i]);
+    }
+    check(devfs_stat("virtio-ports/one.1.128", 0, 0, 0) != 0, "unregistered, the ports are gone");
+    port_nodes(again, names2, "two");
+    check(port_register(again) == PORT_NODES && reg_slot_count <= made + DEVFS_SLOTS_SPARE,
+          "registered again under other names, they reuse the free slots");
+    for (i = 0; i < PORT_NODES; i++) {
+        devfs_node_unregister(&again[i]);
+    }
+}
+
 /**
  * The rows of an open, then those of `offset_devices`, `grubcore_windows`,
- * `whole_disk_window`, `registry`, `nested_registry` and `wide_numbers`. An
+ * `whole_disk_window`, `registry`, `nested_registry`, `wide_numbers` and
+ * `many_ports`. An
  * exclusive create of ptmx, null or an absent name, in each access mode and
  * with or without O_DIRECTORY and O_NONBLOCK, is EEXIST for a device and
  * ENOENT for an absent one, and
@@ -562,12 +647,19 @@ int main(void)
     registry();
     nested_registry();
     wide_numbers();
+    many_ports();
     if (!failures) {
         printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
                "boot loader windows, the whole-disk window, the registry, nested rows, "
-               "wide numbers\n");
+               "wide numbers, many ports\n");
     }
     return failures != 0;
+}
+
+/** The host's allocator, for the registry's slots. */
+void *kzalloc(size_t size)
+{
+    return __builtin_calloc(1, size);
 }
 
 /** Fail the test: a row reached a call it should not. Returns -EIO. */
