@@ -651,7 +651,7 @@ static int ip_may_cut(int pmtudisc)
 static int ip_tx_route(uint32_t *src, uint32_t dst, int ifindex, struct netdev **out, uint32_t *hop)
 {
     struct netdev_rt row;
-    uint32_t selected;
+    uint32_t selected = 0;
     if (ip_is_local(dst)) {
         *out = 0;
         *hop = dst;
