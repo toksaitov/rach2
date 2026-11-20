@@ -461,6 +461,60 @@ static void change_peer(void)
     CHECK(count_prefix(old, 128, 0, 256) == 0);
 }
 
+/** Delete one metric at a time, even after a prefix outlives its address. */
+static void delete_shared_prefix(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row key = {0};
+    key.dst[0] = 0x30;
+    key.plen = 64;
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, key.dst, 16);
+    a->addr[15] = 1;
+    a->prefix = 64;
+    a->valid = 10;
+    a->since = kernel_ticks;
+    a->metric = 80;
+    eth0.naddr6 = 1;
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0);
+    CHECK(count_prefix(key.dst, 64, 0, 80) == 1);
+    eth0.addr6[1] = *a;
+    eth0.addr6[1].addr[15] = 2;
+    eth0.addr6[1].metric = 40;
+    eth0.naddr6 = 2;
+    CHECK(route6_change_row(&eth0, &key, 1, 0) == 0);
+    CHECK(count_prefix(key.dst, 64, 0, 80) == 1 && count_prefix(key.dst, 64, 0, 40) == 0);
+    CHECK(route6_change_row(&eth0, &key, 1, 0) == 0);
+    CHECK(count_prefix(key.dst, 64, 0, 80) == 0);
+    CHECK(route6_change_row(&eth0, &key, 1, 0) == -ESRCH);
+    nd6_if_down(&eth0);
+}
+
+/** Remove explicit replacements for the subnet and peer routes. */
+static void remove_replaced_prefix(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row r = {0};
+    uint8_t via[16];
+    k_memset(a, 0, sizeof(*a));
+    a->addr[0] = 0x30;
+    a->peer[0] = 0x40;
+    a->prefix = 64;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    a->flags = NETDEV_A6_PERMANENT;
+    eth0.naddr6 = 1;
+    k_memcpy(r.dst, a->addr, 16);
+    r.plen = 64;
+    r.metric = 256;
+    r.proto = 99;
+    CHECK(route6_change_row(&eth0, &r, 0, 1) == 0);
+    r.plen = 128;
+    k_memcpy(r.dst, a->peer, 16);
+    CHECK(route6_change_row(&eth0, &r, 0, 1) == 0);
+    CHECK(netconf_del_address6(&eth0, a->addr) == 0);
+    CHECK(!route6_lookup(a->addr, eth0.index, via) && !route6_lookup(a->peer, eth0.index, via));
+}
+
 int main(void)
 {
     static const uint8_t dst[IP6_ADDR_LEN] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -534,6 +588,8 @@ int main(void)
     route_lifetime();
     finite_prefix();
     change_peer();
+    delete_shared_prefix();
+    remove_replaced_prefix();
     CHECK(lock_depth == 0);
 
     if (failures) {
