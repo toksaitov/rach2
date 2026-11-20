@@ -337,7 +337,7 @@ static int dsp_layout(struct dsp *d, struct dsp_chan *c)
     audio_stream_t *s = &c->stream;
     audio_stream_t old = c->stream;
     int play = c == &d->play;
-    uint32_t bytes, count, frame, size, flags;
+    uint32_t bytes, count, frame, size = 0, flags;
     uint8_t *ring = NULL, *was = NULL;
     int rc;
 

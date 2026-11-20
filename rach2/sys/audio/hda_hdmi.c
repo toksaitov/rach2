@@ -1094,7 +1094,8 @@ static const struct hh_ca *hh_choose_ca(int spk_alloc, int channels)
         }
     }
     for (i = 0; i < HH_NCAS; i++) {
-        for (need = 0, j = 0; j < 8; j++) {
+        need = 0;
+        for (j = 0; j < 8; j++) {
             need |= hh_cas[i].speakers[j];
         }
         if (hh_ca_channels(&hh_cas[i]) == channels && (mask & need) == need) {
