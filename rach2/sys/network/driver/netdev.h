@@ -497,6 +497,10 @@ int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int 
 /** Return the device of an added local or broadcast route covering dst. */
 struct netdev *netdev_added_local(uint32_t dst, int kind);
 
+/** Install or change address slot a's prefix metric under net_lock.
+ * fresh distinguishes insertion from replacement of an existing address. */
+void netdev_prefix_metric(struct netdev *nd, int a, uint32_t metric, int fresh);
+
 /** Whether `nd` has an implied link route to exactly `dst`/`mask`.
  * Call under net_lock. */
 int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask);

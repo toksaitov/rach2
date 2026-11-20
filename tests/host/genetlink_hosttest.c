@@ -1,7 +1,7 @@
 /* Exercise generic netlink, its real socket queue and userspace link policy.
  * host-deps: rach2/sys/network/socket/genetlink.c rach2/sys/tick.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
- * host-deps: rach2/sys/network/ip6/route6.c
+ * host-deps: rach2/sys/network/ip6/route6.c rach2/sys/network/route.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  */
@@ -13,6 +13,7 @@ static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 volatile uint64_t kernel_ticks;
 struct net_mib6 net_mib6;
+uint32_t net_ip_gateway;
 static struct netdev card;
 static int carrier = 1, privileged = 1, failures, lock_depth, completed, calls;
 static int failed_dumps;
@@ -212,13 +213,14 @@ void netconf_expire_addresses(uint64_t now)
     (void)now;
 }
 
-/** Model netconf_add_address with no addresses, routes or sockets. */
+/** Allocate the fixture's one IPv4 address, reporting duplicate insertion. */
 int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
-    (void)nd;
-    (void)ip;
-    (void)mask;
-    (void)peer;
+    if (nd->ip)
+        return -EEXIST;
+    nd->ip = ip;
+    nd->mask = mask;
+    nd->peer = peer;
     return 0;
 }
 
@@ -314,64 +316,16 @@ struct netdev *netdev_owner6(const uint8_t *addr)
     return 0;
 }
 
-/** Model netdev_route with no addresses, routes or sockets. */
-struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *row)
+/** The fixture can supply its one address as an explicit preferred source. */
+int netdev_owns(uint32_t ip)
 {
-    (void)dst;
-    (void)ifindex;
-    (void)row;
-    return 0;
+    return ip && card.ip == ip;
 }
 
-/** The generic family model has no routes to change. */
-int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
-{
-    (void)nd;
-    (void)r;
-    (void)del;
-    (void)replace;
-    return -ESRCH;
-}
-
-/** The generic family model has no local route to delete. */
-int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
-{
-    (void)del;
-    (void)replace;
-    (void)nd;
-    (void)r;
-    return -ESRCH;
-}
-
-/** No local or main table entries. */
-int netdev_route_at(int n, struct netdev_rt *r)
-{
-    (void)n;
-    (void)r;
-    return 0;
-}
-
-/** No addresses to install local routes. */
-int netdev_local_route_at(int n, struct netdev_rt *r)
-{
-    return netdev_route_at(n, r);
-}
-
-/** No gateway is reachable through the mock interface. */
-int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw)
-{
-    (void)nd;
-    (void)gw;
-    return 0;
-}
-
-/** Return the slot just past the model's IPv4 addresses. */
+/** Match the fixture's single IPv4 address. */
 int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
 {
-    (void)ip;
-    (void)mask;
-    (void)dst;
-    return nd->naddr2;
+    return nd->ip == ip && nd->mask == mask && (dst & mask) == (ip & mask) ? -1 : nd->naddr2;
 }
 
 /** Model netdev_source with no addresses, routes or sockets. */
@@ -946,6 +900,47 @@ static void advertised_prefix(void)
     clear_addresses();
 }
 
+/** Submit an IPv4 address request with the given prefix metric. */
+static void metric_address4(int replace, uint32_t metric)
+{
+    struct nl_build b = {0};
+    uint16_t flags = replace ? NLM_F_REPLACE : NLM_F_EXCL;
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, flags, 8);
+    ifa[0] = AF_INET;
+    ifa[1] = 24;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr_ip(request, IFA_LOCAL, 0xc0000201u);
+    msg_attr32(request, IFA_RT_PRIORITY, metric);
+    CHECK(!addr_change(request, RTM_NEWADDR, flags, get32(request) - NLMSG_HDRLEN));
+}
+
+/** Change the address metric after replacing its route with each protocol. */
+static void replaced_metric4(uint32_t old_metric, uint8_t proto)
+{
+    struct netdev_rt row, r = {0};
+    int n, old = 0, fresh = 0;
+    metric_address4(0, old_metric);
+    r.dst = card.ip & card.mask;
+    r.mask = card.mask;
+    r.prefsrc = card.ip;
+    r.proto = proto;
+    r.scope = RT_SCOPE_LINK;
+    r.metric = old_metric;
+    CHECK(!netdev_route_change(&card, &r, 0, 1));
+    metric_address4(1, 84);
+    for (n = 0; netdev_route_at(n, &row); n++) {
+        if (row.metric == old_metric && row.proto == proto)
+            old++;
+        if (row.metric == 84 && row.proto == 2)
+            fresh++;
+    }
+    CHECK(old == (proto != 2));
+    CHECK(fresh == (old_metric != 0 || proto == 2));
+    netdev_route_flush(&card, 1);
+    card.ip = card.mask = 0;
+    k_memset(card.addr4, 0, sizeof(card.addr4));
+}
+
 /** Register a family and run every row, releasing all sockets and storage. */
 int main(void)
 {
@@ -978,6 +973,10 @@ int main(void)
     CHECK(netlink_open(&route, NETLINK_ROUTE) == 0 && netlink_open(&watch, NETLINK_ROUTE) == 0);
     CHECK(netlink_bind(&a, 77, 0) == 0 && netlink_bind(&route, 77, 0) == 0);
     CHECK(netlink_bind(&b, 77, 0) == -EADDRINUSE);
+    replaced_metric4(42, 2);
+    replaced_metric4(42, 99);
+    replaced_metric4(0, 2);
+    replaced_metric4(0, 99);
     peer_address();
     replace_address_prefix();
     shared_deadline();

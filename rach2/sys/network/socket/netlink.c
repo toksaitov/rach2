@@ -2184,11 +2184,12 @@ static int32_t ns_addr_change(struct netdev *nd, uint32_t ip, uint32_t prefix, u
 }
 
 /** Set creation attributes on insertion and renew the address's lifetimes. */
-static void set_addr4_options(struct addr4_routes *opts, const uint8_t *req, uint32_t body,
+static void set_addr4_options(struct netdev *nd, int slot, const uint8_t *req, uint32_t body,
                               const uint8_t *ci, int fresh)
 {
     uint16_t len;
     const uint8_t *at = req_attr(req, body, 8, IFA_FLAGS, &len);
+    struct addr4_routes *opts = &nd->addr4[slot + 1];
     uint32_t preferred = ci ? get32(ci) : NETDEV_LIFETIME_FOREVER;
     uint32_t valid = ci ? get32(ci + 4) : NETDEV_LIFETIME_FOREVER;
     uint64_t now = tick_count();
@@ -2208,10 +2209,7 @@ static void set_addr4_options(struct addr4_routes *opts, const uint8_t *req, uin
     opts->proto = at && len == 1 ? *at : 0;
     at = req_attr(req, body, 8, IFA_RT_PRIORITY, &len);
     metric = at && len == 4 ? get32(at) : 0;
-    if (opts->metric != metric) {
-        opts->metric = metric;
-        opts->deleted &= ~ADDR4_PREFIX;
-    }
+    netdev_prefix_metric(nd, slot, metric, fresh);
 }
 
 /** Set the prefix metric and broadcast attributes of a netlink address. */
@@ -2229,7 +2227,7 @@ static int addr4_add(const uint8_t *req, uint32_t body, struct netdev *nd, uint3
     if (!r || (r == -EEXIST && (flags & NLM_F_REPLACE) && !(flags & NLM_F_EXCL))) {
         int slot = netconf_addr_find(nd, ip, mask, peer ? peer : ip);
         if (slot < nd->naddr2)
-            set_addr4_options(&nd->addr4[slot + 1], req, body, ci, !r);
+            set_addr4_options(nd, slot, req, body, ci, !r);
         r = 0;
     }
     net_unlock(lock);
