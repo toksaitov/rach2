@@ -1088,7 +1088,9 @@ static void ephemeral_rows(void)
  * moved, as Linux 6.12's searches choose them: a bind's port an odd offset
  * from the low end and a connection's an even one; a port bound before the
  * range moved over it passed over; a range of one port, given to a bind
- * once; and a range of an odd count, whose top port no search reaches.
+ * once; a listen on a port nothing holds, which searches no socket for a
+ * conflict, as Linux's bind table answers without one; and a range of an
+ * odd count, whose top port no search reaches.
  */
 static void range_rows(void)
 {
@@ -1123,6 +1125,19 @@ static void range_rows(void)
     hold_ports(45000, 45000, 2, 1);
     CHECK("and none once it is held", tcp_bind_ephemeral() == 0);
     hold_ports(45000, 45000, 2, 0);
+
+    net_port_range = NET_PORT_RANGE_DEFAULT;
+    stream_conflict_calls = 0;
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("a listen on an ephemeral port searches no socket for a conflict",
+          tcp_listen(&sock, 0) == 0 && stream_conflict_calls == 0);
+    tcp_close(&sock);
+    hold_ports(8080, 8080, 2, 1);
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("one on a port a bound socket holds does",
+          tcp_listen(&sock, 8080) == 0 && stream_conflict_calls == 1);
+    tcp_close(&sock);
+    hold_ports(8080, 8080, 2, 0);
 
     net_port_range = (40004UL << 16) | 40000UL;
     hold_ports(40000, 40003, 2, 1);
