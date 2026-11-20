@@ -369,6 +369,13 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
     return 0;
 }
 
+/** No explicit IPv6 local route in the driver model. */
+struct netdev *route6_added_local(const uint8_t *dst)
+{
+    (void)dst;
+    return 0;
+}
+
 /** This model installs IPv4 routes only. */
 void route6_forget(struct netdev *nd, int proto)
 {
