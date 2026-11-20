@@ -14,8 +14,11 @@
  * the result back with getcwd. On the tmpfs of /dev/shm, renameat2 swaps
  * two names with RENAME_EXCHANGE and leaves a whiteout with
  * RENAME_WHITEOUT; open makes a file with no name with O_TMPFILE, which
- * linkat names through AT_EMPTY_PATH and through /proc/self/fd, and takes
- * O_DIRECT, which /proc and a character device refuse.
+ * linkat names through AT_EMPTY_PATH and through /proc/self/fd, and which
+ * follows a link to a directory before a slash whatever O_NOFOLLOW says,
+ * and takes O_DIRECT, which /proc and a character device refuse; and a
+ * rename or an exchange by another user that moves a directory it cannot
+ * write to another parent is EACCES.
  *
  * Prints `ATCALLMUSL OK` and exits 0 on success, and prints
  * `ATCALLMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -30,6 +33,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "../probe_report.h"
@@ -91,6 +95,9 @@ enum {
     TMPFILE_EOPNOTSUPP,
     DIRECT_TMPFS,
     DIRECT_EINVAL,
+    TMPFILE_SLASH,
+    MOVE_DIR_WRITE,
+    EXCHANGE_DIR_WRITE,
     CHECKS
 };
 
@@ -147,6 +154,11 @@ static const struct {
     {"tmpfile-eopnotsupp", "open O_TMPFILE on the root is not EOPNOTSUPP"},
     {"direct-tmpfs", "open O_DIRECT of a tmpfs file, its F_GETFL, or an unaligned write"},
     {"direct-einval", "open O_DIRECT of a /proc file or a character device is not EINVAL"},
+    {"tmpfile-slash", "open O_TMPFILE with O_NOFOLLOW of a link to a directory and a slash"},
+    {"move-dir-write",
+     "a rename by another user that moves a directory it cannot write is not EACCES"},
+    {"exchange-dir-write", "renameat2 RENAME_EXCHANGE by another user that moves a directory it "
+                           "cannot write is not EACCES, or one in its own parent is refused"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -515,11 +527,97 @@ static int shm_direct_rows(void)
     return rc;
 }
 
+/** Check that O_TMPFILE follows SHM/link, a link to SHM, when a slash
+ * comes after it, whatever O_NOFOLLOW says, as Linux's walk follows a link
+ * before a trailing slash. Returns 0, or 1 once the failure is reported. */
+static int shm_tmpfile_slash(void)
+{
+    int fd = -1;
+
+    if (symlink(SHM, SHM "/link") == 0) {
+        fd = open(SHM "/link/", O_TMPFILE | O_RDWR | O_NOFOLLOW, 0600);
+    }
+    unlink(SHM "/link");
+    if (fd < 0) {
+        return fail(TMPFILE_SLASH);
+    }
+    close(fd);
+    return 0;
+}
+
+/* The user the rows of a moved directory's write permission run as. */
+#define NOBODY 65534
+
+/** As NOBODY, try the renames of `shm_dir_write_rows`: 0 when each is
+ * answered as on Linux, 1 for the rename, 2 for an exchange, 3 when the
+ * user cannot be taken. */
+static int dir_write_child(void)
+{
+    if (setgid(NOBODY) != 0 || setuid(NOBODY) != 0) {
+        return 3;
+    }
+    if (!refused(rename(SHM "/a/ro", SHM "/b/ro"), EACCES)) {
+        return 1;
+    }
+    if (!refused(
+            syscall(SYS_renameat2, AT_FDCWD, SHM "/a/ro", AT_FDCWD, SHM "/b/g", RENAME_EXCHANGE),
+            EACCES) ||
+        !refused(
+            syscall(SYS_renameat2, AT_FDCWD, SHM "/b/g", AT_FDCWD, SHM "/a/ro", RENAME_EXCHANGE),
+            EACCES) ||
+        syscall(SYS_renameat2, AT_FDCWD, SHM "/a/ro", AT_FDCWD, SHM "/a/f", RENAME_EXCHANGE) != 0) {
+        return 2;
+    }
+    return 0;
+}
+
+/**
+ * Check, as NOBODY with write permission on both parents, SHM/a and SHM/b,
+ * that a rename moving the directory SHM/a/ro, of mode 0555, to the other
+ * parent, and RENAME_EXCHANGE moving it there from either name, are EACCES,
+ * since each rewrites the directory's `..`, as Linux's `vfs_rename` asks
+ * write permission on a directory that changes parent; and that its
+ * exchange with SHM/a/f, in its own parent, moves nothing and is allowed.
+ * What the rows make is removed. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int shm_dir_write_rows(void)
+{
+    int status = 0, code = 3;
+    pid_t pid;
+
+    if (mkdir(SHM "/a", 0777) == 0 && chmod(SHM "/a", 0777) == 0 && mkdir(SHM "/b", 0777) == 0 &&
+        chmod(SHM "/b", 0777) == 0 && mkdir(SHM "/a/ro", 0555) == 0 &&
+        make_file(AT_FDCWD, SHM "/a/f", "f") && make_file(AT_FDCWD, SHM "/b/g", "g")) {
+        pid = fork();
+        if (pid == 0) {
+            _exit(dir_write_child());
+        }
+        if (pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status)) {
+            code = WEXITSTATUS(status);
+        }
+    }
+    unlink(SHM "/a/f");
+    rmdir(SHM "/a/f");
+    unlink(SHM "/a/ro");
+    rmdir(SHM "/a/ro");
+    rmdir(SHM "/b/ro");
+    unlink(SHM "/b/g");
+    rmdir(SHM "/b/g");
+    rmdir(SHM "/a");
+    rmdir(SHM "/b");
+    if (code != 0) {
+        return fail(code == 2 ? EXCHANGE_DIR_WRITE : MOVE_DIR_WRITE);
+    }
+    return 0;
+}
+
 /**
  * Check renameat2's RENAME_EXCHANGE and RENAME_WHITEOUT, O_TMPFILE with the
- * two ways linkat names its file, and O_DIRECT, in a directory of the tmpfs
- * of /dev/shm, which is removed again. Returns 0, or 1 once the failure is
- * reported.
+ * two ways linkat names its file and through a link with a slash, O_DIRECT,
+ * and the write permission a moved directory needs, in a directory of the
+ * tmpfs of /dev/shm, which is removed again. Returns 0, or 1 once the
+ * failure is reported.
  */
 static int tmpfs_rows(void)
 {
@@ -539,6 +637,12 @@ static int tmpfs_rows(void)
     }
     if (rc == 0) {
         rc = shm_direct_rows();
+    }
+    if (rc == 0) {
+        rc = shm_tmpfile_slash();
+    }
+    if (rc == 0) {
+        rc = shm_dir_write_rows();
     }
     unlink(SHM "/named");
     unlink(SHM "/named2");

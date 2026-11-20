@@ -14,11 +14,17 @@ allow a file system in a regular file to be mounted.
 They are block devices owned by root with mode 0660, Linux's loop major
 number 7, and minor numbers 0 through 3, and are there whether or not a
 file is attached.
-A node reads and writes its device in whole sectors at offsets of whole
-sectors, as a disk node does, and answers
+A node reads any byte range of its device and writes whole sectors at
+offsets of whole sectors, as a disk node does, with the rule of
+.Dv O_DIRECT
+of
+.Xr disk 4 ,
+and answers
 .Er ENXIO
 with nothing attached; a write needs root, a device attached for writing,
-and no file system mounted on it.
+and no file system mounted on it, and one at or past the end returns
+.Er ENOSPC ,
+while one that crosses it writes the sectors before it.
 .Pp
 The control node,
 .Pa /dev/loop-control ,
@@ -174,8 +180,10 @@ The file is already attached, an operation conflicts with an attachment,
 or the device cannot yet be detached.
 .It Er EINVAL
 The file is not regular, its length is zero or not a whole number of
-sectors, the device number is outside 0 through 3, or a transfer of a
-node is not of whole sectors.
+sectors, the device number is outside 0 through 3, a write of a node is
+not of whole sectors, or a transfer of a node opened with
+.Dv O_DIRECT
+is off the sector.
 .It Er ELOOP
 The file is on a loop-mounted volume.
 .It Er ENXIO

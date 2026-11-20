@@ -140,12 +140,66 @@ static int join_mirror_read;
 static int64_t fault_read_lba = -1;
 static int faults_fired;
 
+/* The device under the image in the loop row (`exchange_loop_row`), a disk
+   of zeros that drops its writes: while `loop_holds` is above 0 the image
+   stands on it, as a loop device stands on the volume of its file, and
+   each read and write of the image first holds `loop_holds` of its blocks
+   at once, as the file system of that volume does in the read or the write
+   of the file that a loop device's request makes. `loop_calls` counts them. */
+static int loop_holds, loop_calls;
+
+/** Read `count` sectors of zeros for the device under the image. */
+static int under_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
+{
+    (void)d;
+    (void)lba;
+    __builtin_memset(buf, 0, count * 512);
+    return 0;
+}
+
+/** Take a write of the device under the image and drop it. */
+static int under_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
+{
+    (void)d;
+    (void)lba;
+    (void)count;
+    (void)buf;
+    return 0;
+}
+
+static block_device_t under = {512, 64u, BLOCK_FAULT_SAFE, 0, 0, 0, under_read, under_write, 0,
+                               0,   0};
+
+/** Hold `loop_holds` blocks of the device under the image at once and let
+ * them go, as a request through a loop device does on the volume under it;
+ * the cache panics when the caller already holds too many. */
+static void through_loop(void)
+{
+    struct bbuf *held[BCACHE_HOLD_MAX];
+    int n = 0;
+
+    while (n < loop_holds && n < BCACHE_HOLD_MAX) {
+        held[n] = bcache_get(&under, (uint64_t)n);
+        if (!held[n]) {
+            break;
+        }
+        n++;
+    }
+    while (n > 0) {
+        bcache_release(held[--n]);
+    }
+    loop_calls++;
+}
+
 /** Read `count` sectors at `lba` from the model, counting the read; a read
  * of the sector `fault_read_lba` fails once with -5 (EIO). */
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
     reads_made++;
+    if (loop_holds > 0) {
+        through_loop();
+    }
     if (fault_read_lba >= 0 && (uint64_t)fault_read_lba >= lba &&
         (uint64_t)fault_read_lba < lba + count) {
         fault_read_lba = -1;
@@ -217,6 +271,11 @@ static int writes_entry(uint64_t lba, uint32_t count, const unsigned char *buf)
     return 0;
 }
 
+/* The write fault of the exchange's undo rows: while `write_fail_in` is
+   above 0 it counts down at each write, and the write that brings it to 0
+   fails with -5 (EIO) and counts in `faults_fired`. */
+static int write_fail_in;
+
 /* Writes go to the model, pending until the driver's next barrier.
    `stop_after` is the interruption matrix's crash: the writes after that
    many fail, as a machine stopped after the Nth write would, and what the
@@ -234,6 +293,10 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
 {
     (void)d;
     int rc;
+
+    if (loop_holds > 0) {
+        through_loop();
+    }
 
     if (join_faults > 0 && join_in(join_copy, lba, count, buf) != 0) {
         join_faults--;
@@ -255,6 +318,10 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
             fault_read_lba = (int64_t)((at + get32(image + 36) * bps) / BCACHE_BLOCK_BYTES *
                                        BCACHE_BLOCK_SECTORS);
         }
+    }
+    if (write_fail_in > 0 && --write_fail_in == 0) {
+        faults_fired++;
+        return -5;
     }
     if (stop_after >= 0 && writes_made >= stop_after) {
         return -5;
@@ -1875,6 +1942,421 @@ static void tree_rows(void)
     unmount_image();
 }
 
+/**
+ * renameat2's RENAME_EXCHANGE, as Linux's vfat makes it: two files in two
+ * directories swap the files their names reach, a held node follows its
+ * file, a directory swapped with a file across directories moves with its
+ * `..` rewritten, a directory swapped below itself is EINVAL, and so is
+ * RENAME_WHITEOUT; a later mount reads every name where the exchanges put
+ * it, and the volume walks clean.
+ */
+static void exchange_rows(void)
+{
+    void *a = 0, *f = 0, *g = 0, *n = 0;
+    unsigned char buf[16];
+    struct vfs_stat st;
+    int err;
+
+    load("--junk");
+    check(mount_rw("") == 0, "a writable mount for the exchange rows");
+    check(OPS->rename_flags != 0, "vfat has rename_flags");
+    if (!OPS->rename_flags) {
+        unmount_image();
+        return;
+    }
+    check(OPS->mkdir(&mnt, mnt.root, "A", 0755) == 0 && OPS->lookup(&mnt, mnt.root, "A", &a) == 0,
+          "a directory A");
+    f = make_file(mnt.root, "ONE.TXT");
+    g = a ? make_file(a, "Second Name.txt") : 0;
+    check(f && g && write_at(f, "one", 3, 0) == 0 && write_at(g, "second", 6, 0) == 0,
+          "a file in the root and one in A");
+    check(OPS->mkdir(&mnt, mnt.root, "D", 0755) == 0, "a directory D in the root");
+    check(OPS->rename_flags(&mnt, mnt.root, "ONE.TXT", a, "Second Name.txt", VFS_RENAME_EXCHANGE) ==
+              0,
+          "two files in two directories are exchanged");
+    check(OPS->lookup(&mnt, mnt.root, "ONE.TXT", &n) == 0 && n == g,
+          "the root's name reaches the held node of the file from A");
+    if (n) {
+        OPS->put(&mnt, n);
+        n = 0;
+    }
+    check(OPS->lookup(&mnt, a, "Second Name.txt", &n) == 0 && n == f &&
+              read_all(n, buf, sizeof(buf)) == 3 && __builtin_memcmp(buf, "one", 3) == 0,
+          "and A's name the file from the root, with its bytes");
+    if (n) {
+        OPS->put(&mnt, n);
+        n = 0;
+    }
+    check(OPS->rename_flags(&mnt, mnt.root, "D", a, "Second Name.txt", VFS_RENAME_EXCHANGE) == 0,
+          "a directory and a file across directories are exchanged");
+    check(OPS->rename_flags(&mnt, mnt.root, "A", a, "Second Name.txt", VFS_RENAME_EXCHANGE) ==
+              -EINVAL,
+          "a directory exchanged below itself is EINVAL");
+    check(OPS->rename_flags(&mnt, mnt.root, "ONE.TXT", mnt.root, "D", VFS_RENAME_WHITEOUT) ==
+              -EINVAL,
+          "RENAME_WHITEOUT is EINVAL, as on Linux's vfat");
+    if (f) {
+        OPS->put(&mnt, f);
+    }
+    if (g) {
+        OPS->put(&mnt, g);
+    }
+    if (a) {
+        OPS->put(&mnt, a);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "the exchanges' clean unmount");
+    unmount_image();
+    check_consistent("and the exchanged tree walks clean", 0);
+    check(mount_image("") == 0, "the volume mounts again");
+    n = walk("/ONE.TXT", &err);
+    check(n && read_all(n, buf, sizeof(buf)) == 6 && __builtin_memcmp(buf, "second", 6) == 0,
+          "ONE.TXT has the bytes of the file from A");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/D", &err);
+    check(n && read_all(n, buf, sizeof(buf)) == 3 && __builtin_memcmp(buf, "one", 3) == 0,
+          "D is the file from the root");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/A/Second Name.txt", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && (st.mode & 0170000u) == 0040000u,
+          "A's name is the directory D, whose .. the walk found to be A");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+}
+
+/* The exchange of the undo rows: D1 in the root and D2 in A, two
+   directories whose exchange writes both short entries and both `..`
+   entries; the nodes are held from `exchange_setup` to `exchange_teardown`,
+   and `xdot1` and `xdot2` keep the `..` entries as they stood before. */
+static void *xa, *xd1, *xd2;
+static uint64_t xdot1_at, xdot2_at, xino1, xino2;
+static unsigned char xdot1[32], xdot2[32];
+
+/** The byte offset in the image of the `..` entry of the directory whose
+ * chain starts at cluster `first`. */
+static uint64_t dotdot_at(uint32_t first)
+{
+    uint64_t bps = image[11] | ((uint32_t)image[12] << 8);
+    uint64_t reserved = image[14] | ((uint32_t)image[15] << 8);
+    uint64_t data = reserved + (uint64_t)image[16] * get32(image + 36);
+
+    return (data + (uint64_t)(first - 2) * image[13]) * bps + 32;
+}
+
+/** Whether the cache holds the 32 bytes `want` at byte `off` of the volume. */
+static int cached_is(uint64_t off, const unsigned char *want)
+{
+    unsigned char got[32];
+
+    return bcache_copy_cached(&dev, off / BCACHE_BLOCK_BYTES, (uint32_t)(off % BCACHE_BLOCK_BYTES),
+                              got, 32) == 1 &&
+           __builtin_memcmp(got, want, 32) == 0;
+}
+
+/** Load a volume, mount it and make the undo rows' directories, with every
+ * write on the medium; 0, or -1 when a step fails. A filler of two cache
+ * blocks before D2 puts its `..` in a block of its own, away from the
+ * directories the exchange's lookups read. */
+static int exchange_setup(void)
+{
+    static unsigned char filler[2 * BCACHE_BLOCK_BYTES];
+    struct vfs_stat st1, st2;
+    void *f;
+
+    xa = xd1 = xd2 = 0;
+    load("--junk");
+    if (mount_rw("") != 0) {
+        return -1;
+    }
+    if (OPS->mkdir(&mnt, mnt.root, "A", 0755) != 0 || OPS->lookup(&mnt, mnt.root, "A", &xa) != 0 ||
+        OPS->mkdir(&mnt, mnt.root, "D1", 0755) != 0 ||
+        OPS->lookup(&mnt, mnt.root, "D1", &xd1) != 0) {
+        return -1;
+    }
+    f = make_file(mnt.root, "FILLER.BIN");
+    if (!f || write_at(f, filler, sizeof(filler), 0) != 0) {
+        return -1;
+    }
+    OPS->put(&mnt, f);
+    if (OPS->mkdir(&mnt, xa, "D2", 0755) != 0 || OPS->lookup(&mnt, xa, "D2", &xd2) != 0 ||
+        OPS->getattr(&mnt, xd1, &st1) != 0 || OPS->getattr(&mnt, xd2, &st2) != 0) {
+        return -1;
+    }
+    bcache_sync(&dev);
+    settle();
+    xino1 = st1.ino;
+    xino2 = st2.ino;
+    xdot1_at = dotdot_at((uint32_t)st1.ino);
+    xdot2_at = dotdot_at((uint32_t)st2.ino);
+    __builtin_memcpy(xdot1, image + xdot1_at, 32);
+    __builtin_memcpy(xdot2, image + xdot2_at, 32);
+    return 0;
+}
+
+/** Put the undo rows' nodes and unmount. */
+static void exchange_teardown(void)
+{
+    void **held[3];
+    int i;
+
+    held[0] = &xd1;
+    held[1] = &xd2;
+    held[2] = &xa;
+    for (i = 0; i < 3; i++) {
+        if (*held[i]) {
+            OPS->put(&mnt, *held[i]);
+            *held[i] = 0;
+        }
+    }
+    bcache_sync(&dev);
+    if (mnt.root) {
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        mnt.root = 0;
+    }
+}
+
+/** Whether the names of the undo rows reach the directories they named. */
+static int exchange_names_kept(void)
+{
+    void *n1 = 0, *n2 = 0;
+    int ok = OPS->lookup(&mnt, mnt.root, "D1", &n1) == 0 && n1 == xd1 &&
+             OPS->lookup(&mnt, xa, "D2", &n2) == 0 && n2 == xd2;
+
+    if (n1) {
+        OPS->put(&mnt, n1);
+    }
+    if (n2) {
+        OPS->put(&mnt, n2);
+    }
+    return ok;
+}
+
+/** Whether the names of the undo rows reach the directories they named and
+ * the cache holds both `..` entries as they were. */
+static int exchange_unchanged(void)
+{
+    return exchange_names_kept() && cached_is(xdot1_at, xdot1) && cached_is(xdot2_at, xdot2);
+}
+
+/** The inode number of the node `path` names on the mount, or 0 when the
+ * walk or its getattr fails. */
+static uint64_t ino_at(const char *path)
+{
+    struct vfs_stat st;
+    int err;
+    void *n = walk(path, &err);
+    uint64_t ino = 0;
+
+    if (n && OPS->getattr(&mnt, n, &st) == 0) {
+        ino = st.ino;
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    return ino;
+}
+
+/**
+ * Whether the medium, after the undo rows' teardown, which syncs, has both
+ * `..` entries as they were and, mounted again from it alone, each name on
+ * its own directory: what a failed exchange must leave on the disk, not
+ * only in the cache. The cache is emptied first, which clears the device's
+ * failed write, so that the mount reads the medium.
+ */
+static int exchange_on_medium(void)
+{
+    int ok;
+
+    settle();
+    if (__builtin_memcmp(image + xdot1_at, xdot1, 32) != 0 ||
+        __builtin_memcmp(image + xdot2_at, xdot2, 32) != 0 || bcache_invalidate(&dev) != 0 ||
+        mount_image("") != 0) {
+        return 0;
+    }
+    ok = ino_at("/D1") == xino1 && ino_at("/A/D2") == xino2;
+    unmount_image();
+    mnt.root = 0;
+    return ok;
+}
+
+/**
+ * The undo of a failed RENAME_EXCHANGE, as Linux's `vfat_rename_exchange`
+ * restores what it changed: the exchange of two directories across parents
+ * is counted in writes and barriers, then made to fail at each write and at
+ * each barrier in turn, and each time it must fail with every name reaching
+ * its directory and both `..` entries as they were in the cache, and, once
+ * a sync has run, on the medium mounted again (`exchange_on_medium`). An
+ * exchange whose `..` block cannot be read fails with -EIO before it writes
+ * anything.
+ */
+static void exchange_undo_rows(void)
+{
+    int writes, barriers, k, rc, failed;
+    char what[160];
+
+    if (exchange_setup() != 0) {
+        check(0, "the undo rows' directories");
+        exchange_teardown();
+        return;
+    }
+    writes = writes_made;
+    barriers = model.barriers;
+    rc = OPS->rename_flags(&mnt, mnt.root, "D1", xa, "D2", VFS_RENAME_EXCHANGE);
+    writes = writes_made - writes;
+    barriers = model.barriers - barriers;
+    check(rc == 0 && writes >= 4 && barriers >= 1,
+          "an exchange of two directories across parents writes four places and flushes");
+    exchange_teardown();
+    for (k = 1; k <= writes; k++) {
+        if (exchange_setup() != 0) {
+            check(0, "the undo rows' directories for a failed write");
+            exchange_teardown();
+            return;
+        }
+        faults_fired = 0;
+        write_fail_in = k;
+        rc = OPS->rename_flags(&mnt, mnt.root, "D1", xa, "D2", VFS_RENAME_EXCHANGE);
+        write_fail_in = 0;
+        snprintf(what, sizeof(what),
+                 "an exchange whose write %d of %d fails fails with every name as it was", k,
+                 writes);
+        check(rc != 0 && faults_fired == 1 && exchange_unchanged(), what);
+        exchange_teardown();
+        snprintf(what, sizeof(what),
+                 "and after a sync every name and both `..` entries of the medium are as they "
+                 "were (write %d)",
+                 k);
+        check(exchange_on_medium(), what);
+    }
+    for (k = 1; k <= barriers; k++) {
+        if (exchange_setup() != 0) {
+            check(0, "the undo rows' directories for a failed barrier");
+            exchange_teardown();
+            return;
+        }
+        model.fail_barrier = model.barriers + k;
+        rc = OPS->rename_flags(&mnt, mnt.root, "D1", xa, "D2", VFS_RENAME_EXCHANGE);
+        failed = model.failed;
+        model.fail_barrier = 0;
+        snprintf(what, sizeof(what),
+                 "an exchange whose barrier %d of %d fails fails with every name as it was", k,
+                 barriers);
+        check(rc != 0 && failed && exchange_unchanged(), what);
+        exchange_teardown();
+        snprintf(what, sizeof(what),
+                 "and after a sync every name and both `..` entries of the medium are as they "
+                 "were (barrier %d)",
+                 k);
+        check(exchange_on_medium(), what);
+    }
+    if (exchange_setup() != 0) {
+        check(0, "the undo rows' directories for a failed read");
+        exchange_teardown();
+        return;
+    }
+    bcache_forget(&dev, xdot2_at / BCACHE_BLOCK_BYTES);
+    faults_fired = 0;
+    writes = writes_made;
+    fault_read_lba = (int64_t)(xdot2_at / 512);
+    rc = OPS->rename_flags(&mnt, mnt.root, "D1", xa, "D2", VFS_RENAME_EXCHANGE);
+    fault_read_lba = -1;
+    check(rc == -EIO && faults_fired == 1 && writes_made == writes,
+          "an exchange whose `..` block cannot be read fails with EIO and writes nothing");
+    settle();
+    check(exchange_names_kept() && __builtin_memcmp(image + xdot1_at, xdot1, 32) == 0 &&
+              __builtin_memcmp(image + xdot2_at, xdot2, 32) == 0,
+          "and every name and both `..` entries are as they were");
+    exchange_teardown();
+}
+
+/**
+ * The exchange of the undo rows on an image that stands on another device,
+ * as a FAT image on a loop device stands on the volume of its file: each
+ * read and write of the image holds three blocks of the device under it at
+ * once (`through_loop`), which leaves the exchange one block of the
+ * `BCACHE_HOLD_MAX` a process may hold. The `..` block of D2 is dropped from
+ * the cache first, so that a read goes down too. The exchange must succeed
+ * without a panic of the hold rules, with each name on the other's
+ * directory.
+ */
+static void exchange_loop_row(void)
+{
+    void *n1 = 0, *n2 = 0;
+    int rc;
+
+    if (exchange_setup() != 0) {
+        check(0, "the loop row's directories");
+        exchange_teardown();
+        return;
+    }
+    bcache_forget(&dev, xdot2_at / BCACHE_BLOCK_BYTES);
+    dev.backing = &under;
+    loop_holds = BCACHE_HOLD_MAX - 1;
+    loop_calls = 0;
+    rc = OPS->rename_flags(&mnt, mnt.root, "D1", xa, "D2", VFS_RENAME_EXCHANGE);
+    loop_holds = 0;
+    dev.backing = 0;
+    check(rc == 0 && loop_calls >= 5,
+          "an exchange of two directories across parents on a device over another, which "
+          "holds three of its blocks in each request, holds one block at a time");
+    check(OPS->lookup(&mnt, mnt.root, "D1", &n1) == 0 && n1 == xd2 &&
+              OPS->lookup(&mnt, xa, "D2", &n2) == 0 && n2 == xd1,
+          "and each name reaches the other's directory");
+    if (n1) {
+        OPS->put(&mnt, n1);
+    }
+    if (n2) {
+        OPS->put(&mnt, n2);
+    }
+    exchange_teardown();
+    check(bcache_invalidate(&under) == 0, "the device under the image is let go");
+}
+
+/**
+ * The uncache of an O_DIRECT transfer: once a file's bytes are on the
+ * medium, `uncache` drops their blocks from the buffer cache, so that the
+ * next read of them goes to the device, as Linux's FAT reads O_DIRECT
+ * around the page cache.
+ */
+static void uncache_rows(void)
+{
+    void *f = 0, *h = 0;
+    int before;
+
+    load("--junk");
+    check(mount_rw("") == 0, "a writable mount for the uncache rows");
+    check(OPS->uncache != 0, "vfat has uncache");
+    fill_pattern();
+    f = make_file(mnt.root, "DIRECT.BIN");
+    check(f && write_at(f, pattern, sizeof(pattern), 0) == 0 && OPS->open(&mnt, f, 0, &h) == 0 &&
+              OPS->fsync(&mnt, h) == 0,
+          "a file written and synced");
+    if (h && OPS->uncache) {
+        check(OPS->read(&mnt, h, back, sizeof(pattern), 0) == (int32_t)sizeof(pattern), "its read");
+        before = reads_made;
+        check(OPS->read(&mnt, h, back, sizeof(pattern), 0) == (int32_t)sizeof(pattern) &&
+                  reads_made == before,
+              "a second read is the cache's");
+        OPS->uncache(&mnt, h, 0, sizeof(pattern));
+        check(OPS->read(&mnt, h, back, sizeof(pattern), 0) == (int32_t)sizeof(pattern) &&
+                  reads_made > before && __builtin_memcmp(back, pattern, sizeof(pattern)) == 0,
+              "a read after the uncache goes to the device for the same bytes");
+    }
+    if (h) {
+        OPS->release(&mnt, h);
+    }
+    if (f) {
+        OPS->put(&mnt, f);
+    }
+    unmount_image();
+}
+
 /* ---- two mounts at once ---- */
 
 /* A second volume on a device of its own, read and written in place. The
@@ -3083,6 +3565,13 @@ int main(int argc, char **argv)
         printf("fat32_hosttest: %s\n", fails == 0 ? "OK" : "failed");
         return fails != 0;
     }
+    if (argc > 1 && streq(argv[1], "--exchange-only")) {
+        exchange_rows();
+        exchange_undo_rows();
+        exchange_loop_row();
+        printf("fat32_hosttest: %s\n", fails == 0 ? "OK" : "failed");
+        return fails != 0;
+    }
     checker_equivalence();
     well_formed_rows();
     small_and_active_rows();
@@ -3091,6 +3580,10 @@ int main(int argc, char **argv)
     write_rows();
     long_rows();
     tree_rows();
+    exchange_rows();
+    exchange_undo_rows();
+    exchange_loop_row();
+    uncache_rows();
     interleaved_rows();
     dirty_rows();
     matrix_rows();

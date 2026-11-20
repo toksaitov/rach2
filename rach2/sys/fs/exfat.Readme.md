@@ -76,6 +76,8 @@ Every file and directory this driver creates has a FAT chain and `NoFatChain` cl
 
 A write that begins past `ValidDataLength` first writes zeros up to its offset within the file's clusters, and a new cluster is zeroed, so the valid length can rise to the write's end. A growing `truncate` raises `DataLength` alone, and a shrink lowers `ValidDataLength` to the new length when it was past it. A new set has its three times set to the present, with the 10 ms count and each UTC offset byte `0x80`, valid and zero. A write and a `truncate` set the modification time, and a read does not change the access time.
 
+After an O_DIRECT read or write, `ex_uncache` drops from the buffer cache the clean blocks of the range moved within `ValidDataLength`, as Linux's exFAT reads and writes O_DIRECT around the page cache.
+
 ### The dirty bit
 
 A writable mount sets `VolumeDirty` in the main boot sector, and it stays set for the mount's life, as Linux's driver keeps it. The mount, each `sync` and the clean unmount also write `PercentInUse`, or `0xFF` while the free count is not known. The clean unmount runs `sync_disk`, writes the percent, and clears the bit last, so a failure before leaves the volume marked dirty, as does a mount that a failed write made read-only. On such a mount, the file system's `sync` and unmount preparation skip their metadata writes, so the mount can be unmounted without clearing `VolumeDirty`. The backup boot region is never written.

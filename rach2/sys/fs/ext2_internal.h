@@ -786,6 +786,10 @@ int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
 int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                    uint64_t len);
 void ext2_uncache(struct vfs_mount *mnt, void *node, uint64_t offset, uint64_t len);
+
+/** The `data_at` of `vfs_ops` for regular file `node`: the first byte in
+ * [`offset`, `end`) that a data block holds, or `end` for only holes. */
+uint64_t ext2_data_at(struct vfs_mount *mnt, void *node, uint64_t offset, uint64_t end);
 void ext2_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
                     struct vfs_cachestat *cs);
 

@@ -466,6 +466,7 @@ static const struct vfs_ops pstore_vops = {
     0,                       /* tmpfile */
     0,                       /* uncache */
     0,                       /* phase */
+    0,                       /* data_at */
 };
 
 /** The constructor: every mount shows the one directory, as Linux's
