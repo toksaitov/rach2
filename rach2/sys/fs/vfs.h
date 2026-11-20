@@ -42,7 +42,8 @@
  * with VFS_ENTER, and the walk enters that mount there. A rest that goes
  * on past /proc/PID/fd/N, cwd or root, or /dev/fd/N, is answered with
  * VFS_LINK, and the walk goes on from the object the link refers to. No
- * mount covers a node of such a type.
+ * mount covers a node of such a type. VFS_STEP returns a held process
+ * directory and the suffix to walk from that inode.
  *
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
@@ -94,6 +95,7 @@
 /* What `lookup_rest` returns when the remainder reaches the names of a
  * nameless mount entered by more than one, with the mount in its node. */
 #define VFS_ENTER 4
+#define VFS_STEP  6 /* continue below the returned proc directory */
 
 #define VFS_XATTR_GET    0
 #define VFS_XATTR_LIST   1
@@ -150,6 +152,7 @@ struct vfs_stat {
 #define VFS_SET_MTIME 0x10
 #define VFS_SET_SIZE  0x20
 #define VFS_SET_FLAGS 0x40 /* the inode flags of FS_IOC_SETFLAGS */
+#define VFS_SET_CTIME 0x80 /* change time alone, without an inotify event */
 
 /* The inode flags the VFS enforces, as Linux names them: no change to the
  * file at all, and its data only appended to. */
@@ -218,7 +221,7 @@ struct vfs_ops {
      * it, which the walk goes on with from the link's object; or a negative
      * errno. */
     int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
-                       const char **left);
+                       const char **left, int use_real);
     void (*hold)(struct vfs_mount *mnt, void *node);
     void (*put)(struct vfs_mount *mnt, void *node);
     int (*getattr)(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
@@ -235,7 +238,9 @@ struct vfs_ops {
                     uint64_t offset);
     int32_t (*write)(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                      uint64_t offset);
-    int (*truncate)(struct vfs_mount *mnt, void *handle, uint64_t size);
+    /* Ftruncate and O_TRUNC request modification and change times even
+     * at equal length. A pathname truncate requests only the size. */
+    int (*truncate)(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times);
     int (*fsync)(struct vfs_mount *mnt, void *handle);
     /* One directory entry at `*cursor`, a position whose meaning belongs
      * to the file system (an image offset, a directory-entry index); the
@@ -297,9 +302,7 @@ struct vfs_ops {
      * mount made read-only is synced and left as an unmount leaves its
      * volume, and one made writable is set up as a writable mount is; and
      * take the options of `options`, mount(2)'s data, NULL for none, that
-     * the type lets a remount change. Called for a change of VFS_MS_RDONLY,
-     * VFS_MS_SYNCHRONOUS or VFS_MS_DIRSYNC, which a type that orders its
-     * writes may need to settle first, and for options that are not empty.
+     * the type lets a remount change. Called on every full remount.
      * NULL for a type that does none of this, whose remounts change only
      * the other flags. */
     int (*remount)(struct vfs_mount *mnt, uint32_t flags, const char *options);
@@ -521,6 +524,18 @@ struct vfs_type {
     int direct_io;
 };
 
+/* How a file system renders one of its options to the mount tables. */
+enum vfs_option_format {
+    VFS_OPT_WORD, /* complete option in the name */
+    VFS_OPT_DEC,
+    VFS_OPT_OCT,
+    VFS_OPT_OCT3,
+    VFS_OPT_OCT4,
+    VFS_OPT_KIB
+};
+typedef void (*vfs_option_emit)(void *out, const char *name, uint64_t value,
+                                enum vfs_option_format format);
+
 /* One table entry. `covered` is the held node of the directory this mount
  * covers, on `parent`; the root and the nameless mounts cover nothing.
  * `refs` counts what keeps the mount from being unmounted: the
@@ -532,7 +547,21 @@ struct vfs_type {
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
+    /* The mount's VFS_MS_ flags. On a base mount VFS_MS_RDONLY is the file
+     * system's read-only state, Linux's SB_RDONLY, which a mount or a
+     * remount without MS_BIND sets and a type, a failed write or a halt
+     * may set later, and `mnt_rdonly` is the mount's own; on a bind it is
+     * the bind's own, Linux's MNT_READONLY (`vfs_mount_flags`). */
     uint32_t flags;
+    /* On a base mount, whether this mount alone is read-only, Linux's
+     * MNT_READONLY: set by a mount read-only, or one its type made
+     * read-only as it mounted, as mount(8) mounts again read-only on
+     * Linux, and by MS_REMOUNT with MS_RDONLY, with MS_BIND while its file
+     * system stays writable. Unused on a bind. */
+    int mnt_rdonly;
+    int sb_noexec; /* the file system forbids exec through every mount */
+    /* Optional, on the base mount. Emits current file-system options. */
+    void (*show_options)(const struct vfs_mount *, vfs_option_emit, void *);
     int state;
     struct vfs_mount *parent;
     void *covered;
@@ -565,7 +594,9 @@ struct vfs_mount {
     /* Set while a remount makes this mount read-only, from the check for
      * writers on (`fd_mount_readonly_begin`) to the flag's change: an open
      * for writing is refused with EROFS meanwhile (`fd_ofd_access`), as
-     * Linux's s_readonly_remount makes mnt_is_readonly true. Under fd.c's
+     * Linux's s_readonly_remount makes mnt_is_readonly true: 1 through the
+     * mount and, on a base, every bind of it, and 2 on a base whose own
+     * flag alone changes (MS_BIND), through the base alone. Under fd.c's
      * lock of the descriptions. */
     int readonly_pending;
     /* The write-back errors of the file system, on the base mount, as
@@ -903,6 +934,22 @@ int vfs_mount_gone(const struct vfs_mount *mnt);
  * base mount through every mount that shows it. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m);
 
+/** The flags of the mount `m` alone, Linux's `mnt_flags`: a bind's own, or
+ * a base's with VFS_MS_RDONLY from its `mnt_rdonly`, not from its file
+ * system's state. A bind made of `m` copies them. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m);
+
+/** Whether the file system `m` shows is read-only, Linux's `sb_rdonly`,
+ * through every mount that shows it: the base's VFS_MS_RDONLY. W_OK of a
+ * regular file, directory or link there is EROFS before any permission
+ * check, as Linux's `sb_permission` answers. */
+int vfs_sb_rdonly(const struct vfs_mount *m);
+
+/** Whether a write through `m` is refused with EROFS, Linux's
+ * `__mnt_is_readonly`: the mount's own flag (`vfs_mount_flags`) or its
+ * file system's (`vfs_sb_rdonly`). */
+int vfs_mount_rdonly(const struct vfs_mount *m);
+
 /** Whether a root is installed at entry zero, of any type, read under the
  * mount table's lock, so a caller needs no lock of its own. */
 int vfs_root_mounted(void);
@@ -961,7 +1008,7 @@ struct process;
  * Make `node` of `mnt` the working directory of `p`. A working directory
  * inside a mount is a reference on it, so the mount cannot be unmounted
  * from under it, and holds its node on a type that counts holds; one in
- * /dev or /proc takes neither. The new directory is stored before the old
+ * the permanent /dev takes neither. The new directory is stored before the old
  * one is let go of, a put that may sleep.
  */
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node);
@@ -1267,14 +1314,15 @@ int vfs_do_bind(const char *source, const char *target, int rec);
  * remounted. 0, -EINVAL for a flag not listed above, -EBUSY for a mount
  * that is not active or, made read-only, through which a description is
  * open for writing (`fd_mount_readonly_begin`), as Linux's
- * mnt_make_readonly answers (fs/namespace.c), or -EROFS for a writable flag
- * set over a read-only base.
+ * mnt_make_readonly answers (fs/namespace.c). A read-only file system
+ * still refuses writes if the mount flag is cleared.
  */
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 
 /**
- * mount(2) with MS_REMOUNT: the flags of the active mount `m` become
- * `flags`. A change between read-only and writable goes through the type's
+ * mount(2) with MS_REMOUNT: apply the file-system flags to the base and
+ * the per-mount flags to the active mount `m`. A change of the file
+ * system between read-only and writable goes through the type's
  * `remount`, and is EINVAL on a type without one; a change of
  * VFS_MS_SYNCHRONOUS or VFS_MS_DIRSYNC goes through it when the type has
  * one, which may settle its writes first; a read-only device
@@ -1431,6 +1479,10 @@ void vfs_writeback_aged(const struct vfs_mount *mnt, uint64_t born);
  * retaken.
  */
 void vfs_desc_open(struct vfs_mount *mnt);
+
+/** Allocate an active, unlisted mount with one reference, or return NULL.
+ * The caller supplies its type, root inode and mount flags. */
+struct vfs_mount *vfs_kernel_mount(const struct vfs_type *type, void *root, uint32_t flags);
 /**
  * The last close of a description on `mnt`: release the handle, put the
  * node, drop the reference. A description opened with O_PATH has a NULL
@@ -1480,7 +1532,7 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 /** Truncate through `handle`, the handle of an open of the file, which on
  * the KRFFS root is the node: 0, -EBUSY for a file that backs a loop
  * device, -EROFS for a type without `truncate`, or the type's error. */
-int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size);
+int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times);
 /** Count into `*cs`, zeroed first, the pages from `first` to `last` of the
  * regular file `node` of `mnt` that are in memory, by the type's
  * `cachestat`, up to the file's size; the caller holds the description's
@@ -1647,6 +1699,10 @@ struct vpath;
 /** The classification stored in a synthetic node, or NULL when `mnt` is not
  * a mount of one of the three synthetic types. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node);
+
+struct synth_owner;
+/** Borrow the retained task identity of a resolved proc directory. */
+const struct synth_owner *vfs_proc_dir_owner(const struct vfs_ref *ref);
 
 /* The types defined in vfs.c: the KRFFS root's adapter, the three
  * synthetic types and debugfs, whose operations are debugfs.c's. */

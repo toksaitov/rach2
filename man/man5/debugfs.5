@@ -30,8 +30,17 @@ with
 .Dv O_TRUNC
 makes, sets the size that
 .Xr stat 2
-reports and nothing else, as on Linux.
-The times of a node are those of its making.
+reports and the modification and change times, as on Linux.
+The times of a node are those of its making until a change sets them:
+.Xr chmod 2 ,
+.Xr chown 2
+and
+.Xr utimensat 2
+store the mode, the ids and the times they set, and the change time, a
+.Xr chown 2
+that names no id among them, as Linux's
+.Fn simple_setattr
+does.
 .Pa /sys/kernel/debug
 is a mount of its own, with a device number of its own, and its
 .Pa ..
@@ -41,7 +50,7 @@ is
 reports
 .Dv DEBUGFS_MAGIC ,
 0x64626720.
-Nothing else makes, removes, renames or changes a node there;
+Nothing else makes, removes or renames a node there;
 those calls fail with
 .Er EROFS
 or
@@ -62,13 +71,16 @@ A write to a text file that takes none fails with
 .Er EINVAL .
 .Pp
 .Xr mount 2
-places another debugfs mount, which shows the same files; its options
+places another mount of the same files.
+On a full remount, the options
 .Ql mode= ,
 in octal,
 .Ql uid=
 and
 .Ql gid=
-set the root directory's mode and owner for every mount, as on Linux.
+set the supplied attributes of the shared root directory.
+Mount listings show the last full remount's options.
+A chmod or chown of the root changes its inode alone.
 .Ss Files
 .Bl -tag -width Ds
 .It Pa files/creators

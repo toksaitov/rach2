@@ -1917,7 +1917,7 @@ static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uin
  * kept, flushes it, then ends the kept part of the chain and frees the
  * rest, so that no size covers a freed cluster after a crash.
  */
-static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = handle;
@@ -1925,6 +1925,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     uint32_t have, keep;
     int rc;
 
+    (void)stamp_times;
     if (n->is_dir) {
         return -EISDIR;
     }
@@ -2042,8 +2043,14 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
     int read_only = -1;
     int rc;
 
-    if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
+    if (((what & VFS_SET_UID) && st->uid != fm->uid) ||
+        ((what & VFS_SET_GID) && st->gid != fm->gid) ||
+        (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME | VFS_SET_CTIME | VFS_SET_UID |
+                  VFS_SET_GID))) {
         return -EPERM;
+    }
+    if (!(what & (VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME))) {
+        return 0; /* no separately stored change time */
     }
     if (what & VFS_SET_MODE) {
         rc = fat_mode_change(fm->umask, st->mode, &read_only);
@@ -3211,6 +3218,21 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     return 0;
 }
 
+/** Emit the volume's ownership and permission-mask options. */
+static void fat_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
+{
+    const struct fat_mount *fm = mnt->priv;
+
+    if (fm->uid != 0) {
+        emit(out, "uid", fm->uid, VFS_OPT_DEC);
+    }
+    if (fm->gid != 0) {
+        emit(out, "gid", fm->gid, VFS_OPT_DEC);
+    }
+    emit(out, "fmask", fm->umask, VFS_OPT_OCT4);
+    emit(out, "dmask", fm->umask, VFS_OPT_OCT4);
+}
+
 /** The `mount` operation of the type: a mount allocated from the heap and
  * `fat_mount_on`, which leaves nothing allocated when it fails. */
 static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -3228,6 +3250,8 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
             node_drop(fm, fm->nodes);
         }
         kfree(fm);
+    } else {
+        mnt->show_options = fat_options;
     }
     return rc;
 }

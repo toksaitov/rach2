@@ -64,8 +64,10 @@ A write to a file on a read-only mount fails with
 A file attached to a loop device cannot be written directly;
 the call fails with
 .Er EBUSY .
-A write of one or more bytes by an unprivileged process clears setuid and,
-when group execute is set, setgid.
+Before a nonempty write by a process without
+.Dv CAP_FSETID
+over the inode, a regular file loses setuid, and loses setgid when group execute is set or the caller
+is outside the file's group.
 .Pp
 On ext2, allocated overwrites and contiguous appends can remain in a
 bounded mount-wide batch after a successful write.

@@ -1,5 +1,5 @@
-/* debugfs's tree, its VFS operations, and a software fence made, signalled
- * and read through sync/sw_sync and sync/info.
+/* debugfs's tree, its VFS operations, its setattr and truncation, and a
+ * software fence made, signalled and read through sync/sw_sync and sync/info.
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -42,10 +42,13 @@ static int failures;
         }                                          \
     } while (0)
 
-/** A fixed wall clock for the nodes' times. */
+/* The wall clock's seconds, which the setattr rows move. */
+static int64_t wall = 1700000000;
+
+/** The model wall clock for the nodes' times. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 1700000000;
+    *seconds = wall;
     *nanoseconds = 5;
 }
 /** A fixed monotonic clock for the fences' stamps. */
@@ -243,6 +246,74 @@ static void tree_cases(struct vfs_mount *m)
     dfs_put(m, sync);
 }
 
+/** setattr as Linux's simple_setattr: a ctime-only call moves the change
+ * time alone, each field is stored as asked with the change time, and a
+ * refused size or flags change nothing; a truncation moves the modification
+ * and change times. The file is put back as it was. */
+static void setattr_cases(struct vfs_mount *m)
+{
+    struct debugfs_node *sync = look(m, NULL, "sync"), *sw;
+    struct vfs_stat st, in;
+
+    CHECK(sync != NULL, "sync for the setattr rows");
+    if (!sync)
+        return;
+    sw = look(m, sync, "sw_sync");
+    CHECK(sw != NULL, "sw_sync for the setattr rows");
+    if (!sw) {
+        dfs_put(m, sync);
+        return;
+    }
+    k_memset(&in, 0, sizeof(in));
+    wall = 1700000100;
+    CHECK(dfs_setattr(m, sw, VFS_SET_CTIME, &in) == 0, "a ctime-only setattr succeeds");
+    dfs_getattr(m, sw, &st);
+    CHECK(st.ctime_sec == 1700000100 && st.mtime_sec == 1700000000 && st.atime_sec == 1700000000 &&
+              st.mode == (DFS_IFREG | 0644u) && st.uid == 0,
+          "a ctime-only setattr moves the change time alone");
+    wall = 1700000200;
+    in.mode = 0170600u;
+    in.uid = 5;
+    in.gid = 6;
+    in.atime_sec = 11;
+    in.atime_nsec = 12;
+    in.mtime_sec = 13;
+    in.mtime_nsec = 14;
+    CHECK(dfs_setattr(m, sw,
+                      VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID | VFS_SET_ATIME | VFS_SET_MTIME,
+                      &in) == 0,
+          "a full setattr succeeds");
+    dfs_getattr(m, sw, &st);
+    CHECK(st.mode == (DFS_IFREG | 0600u) && st.uid == 5 && st.gid == 6, "mode and ids stored");
+    CHECK(st.atime_sec == 11 && st.atime_nsec == 12 && st.mtime_sec == 13 && st.mtime_nsec == 14 &&
+              st.ctime_sec == 1700000200,
+          "times stored, the change time now");
+    wall = 1700000300;
+    in.size = 9;
+    CHECK(dfs_setattr(m, sync, VFS_SET_SIZE, &in) == -EISDIR, "a directory takes no size");
+    CHECK(dfs_setattr(m, sw, VFS_SET_FLAGS, &in) == -EOPNOTSUPP, "no inode flags");
+    dfs_getattr(m, sw, &st);
+    CHECK(st.ctime_sec == 1700000200 && st.size == 0, "a refused setattr changes nothing");
+    CHECK(dfs_truncate(m, sw, 7, 1) == 0, "a truncation succeeds");
+    dfs_getattr(m, sw, &st);
+    CHECK(st.size == 7 && st.mtime_sec == 1700000300 && st.ctime_sec == 1700000300,
+          "a truncation moves the size and the modification and change times");
+    wall++;
+    CHECK(dfs_truncate(m, sw, 6, 0) == 0 && dfs_truncate(m, sw, 0x80000000ull, 1) == -EFBIG,
+          "pathname size change and refused descriptor growth");
+    dfs_getattr(m, sw, &st);
+    CHECK(st.size == 6 && st.mtime_sec == 1700000300 && st.ctime_sec == 1700000300,
+          "neither operation requests a successful time change");
+    in.mode = 0644u;
+    in.uid = 0;
+    in.gid = 0;
+    in.size = 0;
+    dfs_setattr(m, sw, VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID | VFS_SET_SIZE, &in);
+    wall = 1700000000;
+    dfs_put(m, sw);
+    dfs_put(m, sync);
+}
+
 static const struct file_ops none_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 static int binds;
 
@@ -356,6 +427,26 @@ static void sync_cases(struct vfs_mount *m)
     dfs_put(m, sync);
 }
 
+/** Check the displayed options and root fields after each full remount. */
+static void remount_cases(struct vfs_mount *m)
+{
+    struct vfs_stat attr = {0};
+
+    CHECK(debugfs_vops.remount(m, 0, "uid=11,mode=0710") == 0, "full remount");
+    attr.mode = 0750;
+    CHECK(dfs_setattr(m, &root, VFS_SET_MODE, &attr) == 0 && mount_options.mode == 0710u,
+          "chmod leaves the mount options alone");
+    CHECK(debugfs_vops.remount(m, 0, "uid=9,gid=4294967296") == -EINVAL && root.uid == 11 &&
+              mount_options.uid == 11,
+          "bad option leaves the old options and owner");
+    CHECK(debugfs_vops.remount(m, 0, "gid=12") == 0 && root.uid == 11 && root.gid == 12 &&
+              root.mode == (DFS_IFDIR | 0750u) && mount_options.uid == 0 &&
+              mount_options.mode == 0700u,
+          "omitted options reset only in the mount listing");
+    CHECK(debugfs_vops.remount(m, 0, NULL) == 0 && mount_options.gid == 0 && root.gid == 12,
+          "empty full remount");
+}
+
 /** Run the cases and fail on any check. */
 int main(void)
 {
@@ -368,8 +459,10 @@ int main(void)
     self.fds = &table;
     k_memset(&m, 0, sizeof(m));
     tree_cases(&m);
+    setattr_cases(&m);
     register_cases(&m);
     sync_cases(&m);
+    remount_cases(&m);
     for (i = 0; i < 64; i++)
         CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
     if (!failures)

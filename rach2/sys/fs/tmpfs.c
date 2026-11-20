@@ -130,6 +130,7 @@ struct tmpfs_mount {
     struct tmpfs_node *root;
     uint64_t next_ino;        /* the last inode number given; the root's is 1 */
     struct shmem_quota quota; /* the pages its files hold, against size= */
+    uint32_t mount_mode;      /* initial mode from mode= */
     uint64_t max_inodes;
     uint64_t free_ispace;
 };
@@ -726,9 +727,12 @@ static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
  * which sets its modification and change times; -EISDIR for a directory,
  * -EINVAL for any other node and for a file of memfd_secret whose size is
  * set already, or -EPERM where the seals forbid the size. */
-static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)handle;
+
+    int rc;
+    int changed = size != n->data.size;
 
     (void)mnt;
     if ((n->mode & T_IFMT) != T_IFREG) {
@@ -740,8 +744,11 @@ static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (seals_allow_size(n, size) != 0) {
         return -EPERM;
     }
-    stamp(n, STAMP_M | STAMP_C);
-    return shmem_truncate(&n->data, size);
+    rc = shmem_truncate(&n->data, size);
+    if (rc == 0 && (changed || stamp_times)) {
+        stamp(n, STAMP_M | STAMP_C);
+    }
+    return rc;
 }
 
 /** The `fsync` of tmpfs, which has nothing to write: 0. */
@@ -1579,6 +1586,23 @@ static int64_t inode_count(const char *options, int *seen)
     return (int64_t)n;
 }
 
+/** Emit the current limits and the mode given at mount time. */
+static void tmpfs_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
+{
+    const struct tmpfs_mount *tm = mnt->priv;
+    uint64_t def = frame_total_count() / 2u;
+
+    if (tm->quota.limit != def) {
+        emit(out, "size", (uint64_t)tm->quota.limit * (PAGE_SIZE / 1024u), VFS_OPT_KIB);
+    }
+    if (tm->max_inodes != def) {
+        emit(out, "nr_inodes", tm->max_inodes, VFS_OPT_DEC);
+    }
+    if (tm->mount_mode != 01777u) {
+        emit(out, "mode", tm->mount_mode, VFS_OPT_OCT3);
+    }
+}
+
 /** The constructor of tmpfs: a mount whose files may hold the pages size=
  * gives and which may have the inodes nr_inodes= gives, the root's among
  * them, with a root directory of the mode mode= gives, owned by the caller;
@@ -1608,7 +1632,8 @@ static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     tm->max_inodes = (uint64_t)inodes;
     tm->free_ispace = tm->max_inodes * INODE_SPACE;
     mnt->priv = tm;
-    root = new_node(mnt, NULL, T_IFDIR | root_mode(options));
+    tm->mount_mode = root_mode(options);
+    root = new_node(mnt, NULL, T_IFDIR | tm->mount_mode);
     if (!root) {
         kfree(tm);
         mnt->priv = NULL;
@@ -1619,6 +1644,7 @@ static int tmpfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     root->refs = 1;
     tm->root = root;
     mnt->root = root;
+    mnt->show_options = tmpfs_options;
     return 0;
 }
 

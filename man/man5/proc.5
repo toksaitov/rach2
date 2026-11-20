@@ -851,21 +851,34 @@ mount's path from the reader's root, as after
 .Xr pivot_root 2 .
 The source, target, type, and options describe the mounted file system;
 a bind mount has the source of the mount it shows.
-Options are comma-separated:
+Options are comma-separated and read from the current flags, so that a
+remount shows at once:
 .Ql ro
-or
-.Ql rw ,
-and the applicable
-.Ql sync ,
-.Ql dirsync ,
+when the mount or its file system is read-only, otherwise
+.Ql rw ;
+the file system's
+.Ql sync
+and
+.Ql dirsync ;
+the mount's own
 .Ql nosuid ,
 .Ql nodev ,
 .Ql noexec ,
 .Ql noatime ,
-.Ql nodiratime ,
+.Ql nodiratime
 and
-.Ql relatime
-flags.
+.Ql relatime ;
+and last the file system's other options, such as
+.Ql window
+for a KRFFS root read through the page-cache window.
+The root,
+.Pa /dev
+and
+.Pa /proc
+are mounted
+.Ql relatime ,
+as Linux mounts by default, and a remount that names no atime flag keeps
+the mount's.
 .It Pa /proc/net/arp
 A header followed by one row per complete ARP cache entry.
 The columns are IP address, hardware type, flags, hardware address,
@@ -2180,9 +2193,21 @@ directory work their owner out at each
 .Xr fstat 2 .
 The directories of
 .Pa /proc
-are the processes the reader's PID namespace has, named by their numbers
-there, and the IDs in the files are as the reader's user and PID
-namespaces see them; see
+use the PID namespace of the process that mounted proc.
+An inherited proc mount keeps its original numbering.
+Mounting proc in a new PID namespace gives that namespace's numbering.
+A descriptor of a process's fd or fdinfo directory keeps its target
+across a change of namespace or a new mount over its pathname.
+After the process is reaped, a working directory or descriptor on
+.Pa /proc/PID/ns
+still names the same directory.
+A lookup of
+.Pa \&..
+there reaches its original parent.
+A namespace name returns
+.Er ENOENT .
+The IDs in process status text use the reader's user and PID namespaces.
+See
 .Xr unshare 2 .
 .It Pa /proc/PID/stat
 One line of 52 space-separated fields, as Linux 6.12 writes it:
@@ -2344,9 +2369,15 @@ following it, are
 .Er EACCES
 as well to a caller that may not read
 .Pa environ .
-A symbolic link for each open descriptor N, whose target names what the
-descriptor is open on: a file by its path now, from the reader's root, as
-Linux's
+Each open descriptor N is a symbolic link owned as the directory is, whose
+mode gives that owner read and execute when the descriptor reads, write and
+execute when it writes, and no bit for an
+.Dv O_PATH
+descriptor, as Linux's
+.Fn tid_fd_update_inode
+gives it.
+Its target names what the descriptor is open on: a file by its path now,
+from the reader's root, as Linux's
 .Fn d_path
 gives it, so that a rename of the file or of a directory above it moves
 the link, with
@@ -2629,15 +2660,32 @@ is the root of the mount within its file system:
 for a mount of a file system, and for a bind the path of its source
 directory or file within the file system it shows.
 .Ar OPTIONS
-are those of
-.Pa /proc/mounts ,
-the hyphen stands where Linux puts the propagation fields, which this
+are the mount's own:
+.Ql ro
+only for a mount made read-only itself, by its mount or by
+.Dv MS_REMOUNT
+and
+.Dv MS_RDONLY ,
+otherwise
+.Ql rw ,
+then its flags from
+.Ql nosuid
+to
+.Ql relatime .
+The hyphen stands where Linux puts the propagation fields, which this
 kernel has none of, and
 .Ar SUPER
-is
-.Ql rw
-or
-.Ql ro .
+are the file system's:
+.Ql ro
+for a read-only file system, one mounted or remounted so, or turned
+read-only by a failed write or a halt, otherwise
+.Ql rw ,
+then
+.Ql sync ,
+.Ql dirsync
+and its other options, the same through every mount that shows it.
+For example, a tmpfs reports its current nondefault size and inode
+limits and its initial root mode, with the same values on its binds.
 .It Pa /proc/PID/maps
 A line for each region of the address space:
 .Dl start-end perms offset major:minor inode path

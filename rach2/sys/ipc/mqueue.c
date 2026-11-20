@@ -6,7 +6,7 @@
  * only a process of that namespace finds it by name. It stays on the list
  * until mq_unlink takes its name, and it lives while its name, a descriptor,
  * a waiter or an open of its file has a reference.
- * A descriptor is an anonymous one whose object refers to the queue; its
+ * A queue description retains the queue's inode and its mount. Its
  * access mode is the descriptor's read and write flags and its O_NONBLOCK
  * the description's. Its stat is that of the queue's file and its /proc
  * link the queue's name, as Linux's descriptor is open on that file.
@@ -33,8 +33,9 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../fs/krffs.h"
+#include "../fs/pathbuf.h"
+#include "../fs/permission.h"
 #include "../fs/vfs.h"
-#include "../io/anon.h"
 #include "../io/poll.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
@@ -77,19 +78,33 @@ struct mq_msg {
     uint32_t len;
 };
 
+/* The directory shared by a namespace's private and visible mounts. */
+struct mq_root {
+    uint32_t mode, uid, gid;
+    unsigned int queues; /* includes open unlinked queues */
+    int namespace_live;
+    int mounted;      /* the root outlives any waiter on an unlinked queue */
+    uint32_t entries; /* includes dot and dot-dot */
+    int64_t atime_s, atime_ns, mtime_s, mtime_ns, ctime_s, ctime_ns;
+};
+
 /* A queue. `refs` counts its name's reference, each description's, each
  * waiter's and each open of its file; `head` is its messages, highest
  * priority first. `gen` rises at every change, which a sleeper compares
  * (`struct mq_wait`). A registered notification is `notify_how`,
  * SIGEV_SIGNAL or SIGEV_NONE, with its signal and value. */
 struct mqueue {
-    struct mqueue *next;    /* the list of named queues */
-    char *name;             /* kept after mq_unlink for the /proc links */
-    int unlinked;           /* the name has left the list */
-    const struct ipcns *ns; /* the IPC namespace whose name it is */
+    struct mqueue *next;   /* the list of named queues */
+    char *name;            /* kept after mq_unlink for the /proc links */
+    int unlinked;          /* the name has left the list */
+    struct mq_root *root;  /* retained while this queue lives */
+    struct vfs_mount *mnt; /* the private mount where its name was created */
+    uint32_t size;         /* stat size, independent of the status text */
     uint32_t refs;
-    uint32_t ino;  /* its file's number in the mqueue file system */
-    int64_t ctime; /* when it was made, the file's times */
+    uint32_t ino; /* its file's number in the mqueue file system */
+    /* Its file's access, modification and change times: of its making, then
+     * of its last message sent or received, or what a setattr stored. */
+    int64_t atime_s, atime_ns, mtime_s, mtime_ns, ctime_s, ctime_ns;
     uint32_t uid, gid, mode;
     int32_t maxmsg, msgsize, curmsgs;
     struct mq_msg *head;
@@ -102,23 +117,23 @@ struct mqueue {
     uintptr_t notify_value;
 };
 
-/* A descriptor's object: the queue it was opened on. */
-struct mq_file {
-    struct anon_obj anon;
-    struct mqueue *q;
-};
-
 /* Linux's struct mq_attr. */
 struct mq_attr {
     long flags, maxmsg, msgsize, curmsgs;
     long reserved[4];
 };
 
-/* The named queues, the count of the queues alive, named or not, and the
- * next file number to give a queue, 1 being the mqueue root's. */
+/* The named queues and the next inode number, 1 being the root's. */
 static struct mqueue *queues;
-static int nqueues;
 static uint32_t next_ino = 2;
+
+/** Set the access, modification and change times of `q`'s file to now. */
+static void mq_touch(struct mqueue *q)
+{
+    get_current_time(&q->ctime_s, &q->ctime_ns);
+    q->atime_s = q->mtime_s = q->ctime_s;
+    q->atime_ns = q->mtime_ns = q->ctime_ns;
+}
 
 /** Drop a reference to `q`, freeing it and its messages with the last. */
 static void mq_put(struct mqueue *q)
@@ -132,25 +147,42 @@ static void mq_put(struct mqueue *q)
         q->head = m->next;
         kfree(m);
     }
+    if (--q->root->queues == 0 && !q->root->mounted) {
+        kfree(q->root);
+    }
     kfree(q->name);
     kfree(q);
-    nqueues--;
 }
 
-/** The queue named `name` in the caller's IPC namespace, or NULL. */
-static struct mqueue *mq_find(const char *name)
+/** Return whether two queue names are equal. */
+static int name_is(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** Find a queue by name on the namespace's private mount. */
+static struct mqueue *mq_find(const struct vfs_mount *mnt, const char *name)
 {
     struct mqueue *q;
-    int i;
 
     for (q = queues; q; q = q->next) {
-        for (i = 0; q->name[i] && q->name[i] == name[i]; i++) {
-        }
-        if (q->name[i] == name[i] && q->ns == proc_ipcns(current_proc)) {
+        if (q->mnt == mnt && name_is(q->name, name)) {
             return q;
         }
     }
     return NULL;
+}
+
+/** Stamp all three directory times after a change of names. */
+static void mq_root_stamp(struct mq_root *r)
+{
+    get_current_time(&r->ctime_s, &r->ctime_ns);
+    r->atime_s = r->mtime_s = r->ctime_s;
+    r->atime_ns = r->mtime_ns = r->ctime_ns;
 }
 
 /** Take `q`'s name away: out of the list, the reference the name held
@@ -158,44 +190,53 @@ static struct mqueue *mq_find(const char *name)
 static void mq_unname(struct mqueue *q)
 {
     struct mqueue **link = &queues;
+    struct mq_root *r = q->mnt->root;
 
     while (*link != q) {
         link = &(*link)->next;
     }
     *link = q->next;
+    r->entries--;
+    mq_root_stamp(r);
     q->unlinked = 1;
     mq_put(q);
 }
 
-/** Whether the caller may open `q` for the access mode `acc`: the owner's,
- * the group's or the others' bits, by its file-system ids as for any file,
- * or a caller with privilege over files. */
-static int mq_may(const struct mqueue *q, int acc)
-{
-    uint32_t want = acc == 0 ? 4u : acc == 1 ? 2u : 6u;
-    uint32_t bits = q->mode;
-    uint32_t i;
-
-    if (proc_fsuid(current_proc) == q->uid) {
-        bits >>= 6;
-    } else {
-        int in = q->gid == proc_fsgid(current_proc);
-
-        for (i = 0; !in && i < current_proc->ngroups; i++) {
-            in = current_proc->groups[i] == q->gid;
-        }
-        if (in) {
-            bits >>= 3;
-        }
-    }
-    return (want & ~bits & 7u) == 0 || proc_fs_privileged(current_proc);
-}
-
 static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count);
 static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq);
-static void mq_close(fd_entry_t *e);
 
-static const struct file_ops mq_ops = {mq_read, NULL, mq_poll, NULL, mq_close, NULL, NULL, 0};
+#define FIGETBSZ      2u
+#define FIONREAD      0x541bu
+#define FIOASYNC      0x5452u
+#define FIOQSIZE      0x5460u
+#define FS_IOC_FIEMAP 0xc020660bu
+
+/** Answer the VFS ioctl requests that apply to a queue description. */
+static int32_t mq_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    const struct mqueue *q = e->ofd->vnode;
+    int avail = (int)(q->size - e->ofd->offset);
+    uint64_t allocated = 0;
+    int value;
+
+    if (request == FIOASYNC) {
+        if (copy_from_user(&value, (const void __user *)arg, sizeof(value)))
+            return -EFAULT;
+        return value ? -ENOTTY : 0;
+    }
+    if (request == FS_IOC_FIEMAP)
+        return -EOPNOTSUPP;
+    if (request == FIGETBSZ || request == FIONREAD) {
+        value = request == FIGETBSZ ? PAGE_SIZE : avail;
+        return copy_to_user((void __user *)arg, &value, sizeof(value)) ? -EFAULT : 0;
+    }
+    if (request == FIOQSIZE)
+        return copy_to_user((void __user *)arg, &allocated, sizeof(allocated)) ? -EFAULT : 0;
+    return -ENOTTY;
+}
+
+const struct file_ops mq_ops = {mq_read, NULL, mq_poll, mq_ioctl,
+                                NULL,    NULL, NULL,    FILE_OPS_POSITIONED};
 
 /** The queue the caller's descriptor `fd` is open on, with the descriptor
  * in `*ep`, or NULL when `fd` is no queue's. */
@@ -203,11 +244,11 @@ static struct mqueue *mq_of(int fd, fd_entry_t **ep)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
 
-    if (!e || e->ops != &mq_ops || !e->priv) {
+    if (!e || e->ops != &mq_ops) {
         return NULL;
     }
     *ep = e;
-    return ((struct mq_file *)e->priv)->q;
+    return e->ofd->vnode;
 }
 
 /**
@@ -261,7 +302,8 @@ static int mq_status(const struct mqueue *q, char *out, int cap)
 static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     char text[96];
-    int n = mq_status(((struct mq_file *)e->priv)->q, text, (int)sizeof(text) - 1);
+    struct mqueue *q = e->ofd->vnode;
+    int n = mq_status(q, text, (int)sizeof(text) - 1);
     uint32_t at = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
 
     if (at >= (uint32_t)n) {
@@ -273,6 +315,11 @@ static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (copy_to_user(buf, text + at, count) != 0) {
         return -EFAULT;
     }
+    if (count) {
+        get_current_time(&q->ctime_s, &q->ctime_ns);
+        q->atime_s = q->ctime_s;
+        q->atime_ns = q->ctime_ns;
+    }
     e->ofd->offset += count;
     return (int32_t)count;
 }
@@ -281,7 +328,7 @@ static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count)
  * while a message is queued, writable while there is room for one. */
 static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    struct mqueue *q = ((struct mq_file *)e->priv)->q;
+    struct mqueue *q = e->ofd->vnode;
     short ready = 0;
 
     if (wq) {
@@ -296,18 +343,13 @@ static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(ready & events);
 }
 
-/** The last close of a description: the notification goes if the closing
- * process registered it, as Linux removes it, and the queue is put. */
-static void mq_close(fd_entry_t *e)
+void mq_flush(const fd_entry_t *e)
 {
-    struct mq_file *f = e->priv;
+    struct mqueue *q = e->ofd->vnode;
 
-    if (current_proc && f->q->notify_tgid == current_proc->tgid) {
-        f->q->notify_tgid = 0;
+    if (current_proc && q->notify_tgid == current_proc->tgid) {
+        q->notify_tgid = 0;
     }
-    mq_put(f->q);
-    kfree(f);
-    e->priv = NULL;
 }
 
 /* Whether the call is an i386 call on x86-64, whose mq_attr, timespec and
@@ -352,47 +394,47 @@ static int32_t mq_attr_put(void __user *u, const struct mq_attr *a)
     return copy_to_user(u, &a32, sizeof(a32)) != 0 ? -EFAULT : 0;
 }
 
-/** The attributes a new queue takes from `uattr`, or the defaults without
- * one: EINVAL for a count or a size below 1 or past the caller's limit,
- * EFAULT for an address it cannot read. */
-static int32_t mq_new_attr(const void __user *uattr, int32_t *maxmsg, int32_t *msgsize)
+/** Set a new queue's limits from the supplied attributes or the defaults.
+ * Return -EINVAL for a count or size outside the caller's limits. */
+static int32_t mq_new_attr(const struct mq_attr *a, int32_t *maxmsg, int32_t *msgsize)
 {
-    struct mq_attr a;
     int priv = proc_privileged(current_proc);
 
     *maxmsg = MQ_MSG_MAX;
     *msgsize = MQ_MSGSIZE_MAX;
-    if (!uattr) {
+    if (!a) {
         return 0;
     }
-    if (mq_attr_get(uattr, &a) != 0) {
-        return -EFAULT;
-    }
-    if (a.maxmsg <= 0 || a.msgsize <= 0 || a.maxmsg > (priv ? MQ_HARD_MSGMAX : MQ_MSG_MAX) ||
-        a.msgsize > (priv ? MQ_HARD_MSGSIZEMAX : MQ_MSGSIZE_MAX)) {
+    if (a->maxmsg <= 0 || a->msgsize <= 0 || a->maxmsg > (priv ? MQ_HARD_MSGMAX : MQ_MSG_MAX) ||
+        a->msgsize > (priv ? MQ_HARD_MSGSIZEMAX : MQ_MSGSIZE_MAX)) {
         return -EINVAL;
     }
-    *maxmsg = (int32_t)a.maxmsg;
-    *msgsize = (int32_t)a.msgsize;
+    *maxmsg = (int32_t)a->maxmsg;
+    *msgsize = (int32_t)a->msgsize;
     return 0;
 }
 
 /** A new queue `name` in `*out`, the caller's, with the bits of `mode` its
  * umask leaves, entered in the list with the reference its name holds.
- * Returns 0, the refusals of `mq_new_attr`, -ENFILE past MQ_QUEUES queues
+ * Returns 0, the refusals of `mq_new_attr`, -ENOSPC past MQ_QUEUES queues
  * for an unprivileged caller, or -ENOMEM. */
-static int32_t mq_create(const char *name, uint32_t mode, const void __user *uattr,
-                         struct mqueue **out)
+static int32_t mq_create(struct vfs_mount *mnt, const char *name, uint32_t mode,
+                         const struct mq_attr *attr, struct mqueue **out)
 {
     struct mqueue *q;
+    struct mq_root *root = mnt->root;
     int32_t maxmsg, msgsize;
-    int32_t rc = mq_new_attr(uattr, &maxmsg, &msgsize);
+    int32_t rc;
 
+    if (!root->namespace_live) {
+        return -EACCES;
+    }
+    if (root->queues >= MQ_QUEUES && !proc_privileged(current_proc)) {
+        return -ENOSPC;
+    }
+    rc = mq_new_attr(attr, &maxmsg, &msgsize);
     if (rc != 0) {
         return rc;
-    }
-    if (nqueues >= MQ_QUEUES && !proc_privileged(current_proc)) {
-        return -ENFILE;
     }
     q = kzalloc(sizeof(*q));
     if (q) {
@@ -403,83 +445,146 @@ static int32_t mq_create(const char *name, uint32_t mode, const void __user *uat
         return -ENOMEM;
     }
     k_memcpy(q->name, name, k_strlen(name) + 1);
-    q->ns = proc_ipcns(current_proc);
+    q->mnt = mnt;
+    q->root = root;
+    q->size = 80;
     q->refs = 1;
     q->ino = next_ino++;
-    {
-        int64_t ns;
-
-        get_current_time(&q->ctime, &ns);
-    }
+    mq_touch(q);
     q->uid = proc_fsuid(current_proc);
     q->gid = proc_fsgid(current_proc);
-    q->mode = mode & 0777u & ~current_proc->fs->umask;
+    q->mode = mode & 07777u & ~current_proc->fs->umask;
     q->maxmsg = maxmsg;
     q->msgsize = msgsize;
     wait_queue_init(&q->wq);
     q->next = queues;
     queues = q;
-    nqueues++;
+    root->queues++;
+    root->entries++;
+    mq_root_stamp(root);
     *out = q;
     return 0;
 }
 
-/** Copy the queue name at `uname` into `name`, of MQ_NAME_MAX + 1 bytes:
- * ENAMETOOLONG past MQ_NAME_MAX, ENOENT for an empty one, EACCES for one
- * with a slash, EFAULT for an address it cannot read. */
-static int32_t mq_name(const char __user *uname, char *name)
+/** Copy the user pathname before allocating a descriptor, as getname does. */
+static int mq_name(const char __user *uname, char **out)
 {
-    int32_t n = strncpy_from_user(name, uname, MQ_NAME_MAX + 1);
+    int n;
+    char *name = path_buf_get();
 
-    if (n < 0) {
-        return n == -ENAMETOOLONG ? n : -EFAULT;
+    if (!name) {
+        return -ENOMEM;
     }
-    if (n > MQ_NAME_MAX) {
-        return -ENAMETOOLONG;
+    n = strncpy_from_user(name, uname, VFS_PATH_MAX);
+    if (n <= 0) {
+        path_buf_put(name);
+        return n == 0 ? -ENOENT : n;
     }
-    if (n == 0) {
-        return -ENOENT;
+    *out = name;
+    return 0;
+}
+
+/** Check the component, root search and maximum queue name length. */
+static int mq_lookup_allowed(const struct mq_root *r, const char *name)
+{
+    size_t n = 0;
+
+    if (name_is(name, ".") || name_is(name, "..")) {
+        return -EACCES;
     }
-    while (n-- > 0) {
-        if (name[n] == '/') {
+    while (name[n]) {
+        if (name[n++] == '/') {
             return -EACCES;
         }
     }
-    return 0;
+    if (!inode_may_access(r->uid, r->gid, 0040000u | r->mode, 1, 0)) {
+        return -EACCES;
+    }
+    return n > MQ_NAME_MAX ? -ENAMETOOLONG : 0;
 }
 
 /** A descriptor open on `q` for the access mode of `oflag`, with its
  * O_NONBLOCK and O_CLOEXEC; it takes a reference to `q`. Returns the
  * descriptor, or -ENOMEM or `fd_alloc`'s error. */
-static int32_t mq_install(struct mqueue *q, uint32_t oflag)
+static int32_t mq_install(int fd, struct mqueue *q, uint32_t oflag)
 {
-    struct mq_file *f = kzalloc(sizeof(*f));
     int acc = (int)(oflag & O_ACCMODE);
-    fd_entry_t *e;
-    int fd;
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
+    struct vfs_ref file;
+    int rc;
 
-    if (!f) {
-        return -ENOMEM;
+    file.mnt = q->mnt;
+    file.node = q;
+    if (acc == 1 || acc == 2) {
+        rc = fd_ofd_access(e->ofd, &file, 1);
+        if (rc != 0) {
+            return rc;
+        }
     }
-    fd = fd_alloc(current_proc->fds);
-    if (fd < 0) {
-        kfree(f);
-        return fd;
+    rc = vfs_open_node(file.mnt, q, (int)oflag, &e->ofd->fhandle);
+    if (rc != 0) {
+        return rc;
     }
-    f->anon.name = "mqueue";
-    f->q = q;
-    q->refs++;
-    e = fd_slot(current_proc->fds, fd);
-    e->type = FD_TYPE_ANON;
-    e->ops = &mq_ops;
-    e->priv = f;
-    e->flags = (acc != 1 ? FD_FLAG_READ : 0u) | (acc != 0 ? FD_FLAG_WRITE : 0u) |
-               ((oflag & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    q->refs++; /* the vnode held by the open file description */
+    vfs_desc_open(file.mnt);
+    e->ofd->vmnt = file.mnt;
+    e->ofd->vnode = q;
+    e->ofd->ino = q->ino;
+    mq_bind(e, (unsigned)acc, FD_FLAG_CLOEXEC);
     if (oflag & O_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
     fd_install(current_proc->fds, fd);
     return fd;
+}
+
+/** Reserve a descriptor before lookup and release it if the open fails. */
+static int mq_open_named(const char *name, uint32_t oflag, uint32_t mode,
+                         const struct mq_attr *attr)
+{
+    struct vfs_mount *mnt = proc_ipcns(current_proc)->mq;
+    const struct mq_root *r = mnt->root;
+    struct mqueue *q;
+    uint32_t acc = oflag & O_ACCMODE;
+    int fd, rc;
+
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        return fd;
+    }
+    vfs_ns_lock(mnt);
+    rc = mq_lookup_allowed(r, name);
+    if (rc != 0) {
+        vfs_ns_unlock(mnt);
+        fd_free(current_proc->fds, fd);
+        return rc;
+    }
+    q = mq_find(mnt, name);
+    if (!q && !(oflag & O_CREAT)) {
+        rc = -ENOENT;
+    } else if (!q && vfs_mount_rdonly(mnt)) {
+        rc = -EROFS;
+    } else if (!q && !inode_may_access(r->uid, r->gid, 0040000u | r->mode, 3, 0)) {
+        rc = -EACCES;
+    } else if (!q) {
+        rc = mq_create(mnt, name, mode, attr, &q);
+    } else if ((oflag & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
+        rc = -EEXIST;
+    } else if (acc == 3) {
+        rc = -EINVAL;
+    } else if (acc != 0 && vfs_sb_rdonly(mnt)) {
+        rc = -EROFS;
+    } else if (!inode_may_access(q->uid, q->gid, q->mode, acc == 0 ? 4u : acc == 1 ? 2u : 6u, 0)) {
+        rc = -EACCES;
+    }
+    if (rc == 0) {
+        rc = mq_install(fd, q, oflag);
+    }
+    vfs_ns_unlock(mnt);
+    if (rc < 0) {
+        fd_free(current_proc->fds, fd);
+    }
+    return rc;
 }
 
 /**
@@ -489,71 +594,43 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
  * namespace. An existing queue is EEXIST under O_CREAT|O_EXCL and EACCES for
  * an access its bits do not give; a missing one is ENOENT without O_CREAT.
  * EINVAL for the access mode 3, and the refusals of `mq_name`, `mq_create`
- * and `mq_install`; a queue made for an open that fails is unmade.
+ * and `mq_install`.
  */
 long sys_mq_open(struct isr_params *params)
 {
-    char name[MQ_NAME_MAX + 1];
-    uint32_t oflag = (uint32_t)SC_ARG(params, 1);
-    struct mqueue *q;
-    int created = 0;
-    int32_t rc;
+    const void __user *uattr = (const void __user *)SC_ARG(params, 3);
+    struct mq_attr attr;
+    char *name;
+    int rc;
 
-    if ((oflag & O_ACCMODE) == 3) {
-        return -EINVAL;
+    if (uattr && mq_attr_get(uattr, &attr) != 0) {
+        return -EFAULT;
     }
-    rc = mq_name((const char __user *)SC_ARG(params, 0), name);
-    if (rc != 0) {
-        return rc;
-    }
-    q = mq_find(name);
-    if (q && (oflag & O_CREAT) && (oflag & O_EXCL)) {
-        return -EEXIST;
-    }
-    if (!q && !(oflag & O_CREAT)) {
-        return -ENOENT;
-    }
-    if (q && !mq_may(q, (int)(oflag & O_ACCMODE))) {
-        return -EACCES;
-    }
-    if (!q) {
-        rc = mq_create(name, (uint32_t)SC_ARG(params, 2), (const void __user *)SC_ARG(params, 3),
-                       &q);
-        if (rc != 0) {
-            return rc;
-        }
-        created = 1;
-    }
-    rc = mq_install(q, oflag);
-    if (rc < 0 && created) {
-        mq_unname(q);
+    rc = mq_name((const char __user *)SC_ARG(params, 0), &name);
+    if (rc == 0) {
+        rc = mq_open_named(name, (uint32_t)SC_ARG(params, 1), (uint32_t)SC_ARG(params, 2),
+                           uattr ? &attr : NULL);
+        path_buf_put(name);
     }
     return rc;
 }
 
-/** mq_unlink(2) takes a name, as mq_open does, and removes it from its
- * queue, which lives while a descriptor has it. ENOENT for no such queue,
- * EACCES for a caller that neither owns it nor is privileged, the rule of
- * the sticky directory of Linux's mqueue mount, and the refusals of
- * `mq_name`. */
+static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name);
+
+/** Remove a name through the caller's private mount, under its root lock. */
 long sys_mq_unlink(struct isr_params *params)
 {
-    char name[MQ_NAME_MAX + 1];
-    struct mqueue *q;
-    int32_t rc = mq_name((const char __user *)SC_ARG(params, 0), name);
+    char *name;
+    struct vfs_mount *mnt = proc_ipcns(current_proc)->mq;
+    int rc = mq_name((const char __user *)SC_ARG(params, 0), &name);
 
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        vfs_ns_lock(mnt);
+        rc = vfs_mount_rdonly(mnt) ? -EROFS : mqfs_unlink(mnt, mnt->root, name);
+        vfs_ns_unlock(mnt);
+        path_buf_put(name);
     }
-    q = mq_find(name);
-    if (!q) {
-        return -ENOENT;
-    }
-    if (q->uid != proc_fsuid(current_proc) && !proc_fs_privileged(current_proc)) {
-        return -EACCES;
-    }
-    mq_unname(q);
-    return 0;
+    return rc;
 }
 
 /* What a sender or a receiver sleeps for: a change of the queue, or the
@@ -796,7 +873,8 @@ static void mq_notify_now(struct mqueue *q)
     q->notify_tgid = 0;
 }
 
-/** Put `m` in `q` after every message of its priority or a higher one. */
+/** Put `m` in `q` after every message of its priority or a higher one,
+ * and set the queue file's times to now, as Linux's mq_timedsend does. */
 static void mq_enqueue(struct mqueue *q, struct mq_msg *m)
 {
     struct mq_msg **link = &q->head;
@@ -807,6 +885,7 @@ static void mq_enqueue(struct mqueue *q, struct mq_msg *m)
     m->next = *link;
     *link = m;
     q->curmsgs++;
+    mq_touch(q);
 }
 
 /**
@@ -912,6 +991,7 @@ static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *
     } else if (m) {
         q->head = m->next;
         q->curmsgs--;
+        mq_touch(q);
         rc = (int32_t)m->len;
         kfree(m);
         q->gen++;
@@ -1062,55 +1142,42 @@ long sys_mq_getsetattr(struct isr_params *params)
 
 void mq_ns_gone(const struct ipcns *ns)
 {
-    struct mqueue *q = queues;
+    struct mq_root *r;
 
-    while (q) {
-        struct mqueue *next = q->next;
-
-        if (q->ns == ns) {
-            mq_unname(q);
-        }
-        q = next;
+    if (!ns->mq) {
+        return;
+    }
+    r = ns->mq->root;
+    r->namespace_live = 0;
+    if (vfs_mount_put(ns->mq) == 0) {
+        vfs_reap_detached();
     }
 }
 
-/* The mqueue file system. */
-
-/* Linux's MQUEUE_MAGIC, and the file type bits of stat. */
 #define MQFS_MAGIC   0x19800202u
 #define MQFS_S_IFDIR 0040000u
 #define MQFS_S_IFREG 0100000u
 
-/* The mount's root directory, the one node that is not a queue. */
-static char mqfs_root;
-
-/** Whether the strings `a` and `b` are the same. */
-static int name_is(const char *a, const char *b)
+int mq_root_made(struct ipcns *ns)
 {
-    while (*a && *a == *b) {
-        a++;
-        b++;
+    struct mq_root *r = kzalloc(sizeof(*r));
+
+    if (!r) {
+        return -ENOMEM;
     }
-    return *a == *b;
-}
-
-/** The IPC namespace whose queues the mount lists. */
-static const struct ipcns *mqfs_ns(const struct vfs_mount *mnt)
-{
-    return (const struct ipcns *)mnt->priv;
-}
-
-/** The queue named `name` in the mount's namespace, or NULL. */
-static struct mqueue *mqfs_find(const struct vfs_mount *mnt, const char *name)
-{
-    struct mqueue *q;
-
-    for (q = queues; q; q = q->next) {
-        if (q->ns == mqfs_ns(mnt) && name_is(q->name, name)) {
-            return q;
-        }
+    r->mode = 01777u;
+    r->uid = current_proc ? proc_fsuid(current_proc) : 0;
+    r->gid = current_proc ? proc_fsgid(current_proc) : 0;
+    r->namespace_live = r->mounted = 1;
+    r->entries = 2;
+    mq_root_stamp(r);
+    ns->mq = vfs_kernel_mount(&vfs_mqueue_type, r, VFS_MS_NOEXEC | VFS_MS_NODEV);
+    if (!ns->mq) {
+        kfree(r);
+        return -ENOMEM;
     }
-    return NULL;
+    ns->mq->sb_noexec = 1;
+    return 0;
 }
 
 /** Look `name` up in the root: `.` and `..` are the root, another name the
@@ -1120,14 +1187,14 @@ static int mqfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 {
     struct mqueue *q;
 
-    if (dir && dir != &mqfs_root) {
+    if (dir && dir != mnt->root) {
         return -ENOTDIR;
     }
     if (name_is(name, ".") || name_is(name, "..")) {
-        *node = &mqfs_root;
+        *node = mnt->root;
         return 0;
     }
-    q = mqfs_find(mnt, name);
+    q = mq_find(mnt, name);
     if (!q) {
         return -ENOENT;
     }
@@ -1140,7 +1207,7 @@ static int mqfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 static void mqfs_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
-    if (node != &mqfs_root) {
+    if (node != mnt->root) {
         ((struct mqueue *)node)->refs++;
     }
 }
@@ -1150,25 +1217,33 @@ static void mqfs_hold(struct vfs_mount *mnt, void *node)
 static void mqfs_put(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
-    if (node != &mqfs_root) {
+    if (node != mnt->root) {
         mq_put((struct mqueue *)node);
     }
 }
 
-/** A queue's file: its owner and mode, as its size the bytes of its
- * messages, and no link once unlinked; the root: a sticky directory of mode
- * 1777, as Linux's. */
+/** Report the queue or directory inode. The queue's inode size is
+ * independent of its messages and of the status line returned by read. */
 static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct mqueue *q = (const struct mqueue *)node;
-    const struct mq_msg *m;
 
-    (void)mnt;
     k_memset(st, 0, sizeof(*st));
-    if (node == &mqfs_root) {
-        st->mode = MQFS_S_IFDIR | 01777u;
+    if (node == mnt->root) {
+        const struct mq_root *r = mnt->root;
+
+        st->mode = MQFS_S_IFDIR | r->mode;
         st->nlink = 2;
         st->ino = 1;
+        st->size = (uint64_t)r->entries * 20;
+        st->uid = r->uid;
+        st->gid = r->gid;
+        st->atime_sec = r->atime_s;
+        st->atime_nsec = r->atime_ns;
+        st->mtime_sec = r->mtime_s;
+        st->mtime_nsec = r->mtime_ns;
+        st->ctime_sec = r->ctime_s;
+        st->ctime_nsec = r->ctime_ns;
         return 0;
     }
     st->mode = MQFS_S_IFREG | q->mode;
@@ -1176,11 +1251,99 @@ static int mqfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->uid = q->uid;
     st->gid = q->gid;
     st->ino = q->ino;
-    for (m = q->head; m; m = m->next) {
-        st->size += m->len;
-    }
-    st->atime_sec = st->mtime_sec = st->ctime_sec = q->ctime;
+    st->size = q->size;
+    st->atime_sec = q->atime_s;
+    st->atime_nsec = q->atime_ns;
+    st->mtime_sec = q->mtime_s;
+    st->mtime_nsec = q->mtime_ns;
+    st->ctime_sec = q->ctime_s;
+    st->ctime_nsec = q->ctime_ns;
     return 0;
+}
+
+/**
+ * The `setattr` of the mqueue file system, as Linux's simple_setattr, which
+ * mqueue's inodes take: the permission bits of `st->mode`, the owner, the
+ * group and the access and modification times of a queue's file or the
+ * root, as `what` selects, and the change time set to now for every call, a
+ * VFS_SET_CTIME call with nothing else among them. The caller has judged
+ * the permission. A size or inode flags are -EINVAL and -EOPNOTSUPP, and
+ * change nothing; 0 otherwise.
+ */
+static int mqfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
+{
+    uint32_t *mode, *uid, *gid;
+    int64_t *at_s, *at_ns, *mt_s, *mt_ns, *ct_s, *ct_ns;
+
+    if (what & VFS_SET_FLAGS) {
+        return -EOPNOTSUPP;
+    }
+    if (what & VFS_SET_SIZE) {
+        return -EINVAL;
+    }
+    if (node == mnt->root) {
+        struct mq_root *r = mnt->root;
+
+        mode = &r->mode;
+        uid = &r->uid;
+        gid = &r->gid;
+        at_s = &r->atime_s;
+        at_ns = &r->atime_ns;
+        mt_s = &r->mtime_s;
+        mt_ns = &r->mtime_ns;
+        ct_s = &r->ctime_s;
+        ct_ns = &r->ctime_ns;
+    } else {
+        struct mqueue *q = (struct mqueue *)node;
+
+        mode = &q->mode;
+        uid = &q->uid;
+        gid = &q->gid;
+        at_s = &q->atime_s;
+        at_ns = &q->atime_ns;
+        mt_s = &q->mtime_s;
+        mt_ns = &q->mtime_ns;
+        ct_s = &q->ctime_s;
+        ct_ns = &q->ctime_ns;
+    }
+    if (what & VFS_SET_MODE) {
+        *mode = st->mode & 07777u;
+    }
+    if (what & VFS_SET_UID) {
+        *uid = st->uid;
+    }
+    if (what & VFS_SET_GID) {
+        *gid = st->gid;
+    }
+    if (what & VFS_SET_ATIME) {
+        *at_s = st->atime_sec;
+        *at_ns = st->atime_nsec;
+    }
+    if (what & VFS_SET_MTIME) {
+        *mt_s = st->mtime_sec;
+        *mt_ns = st->mtime_nsec;
+    }
+    get_current_time(ct_s, ct_ns);
+    return 0;
+}
+
+/** Create a named queue through its directory and return a held inode. */
+static int mqfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                       void **node)
+{
+    struct mqueue *q;
+    int rc;
+
+    if (dir && dir != mnt->root)
+        return -ENOTDIR;
+    if (mq_find(mnt, name))
+        return -EEXIST;
+    rc = mq_create(mnt, name, mode, NULL, &q);
+    if (rc == 0) {
+        q->refs++;
+        *node = q;
+    }
+    return rc;
 }
 
 /** An open of a node: the handle is the node, held while it is open. */
@@ -1189,6 +1352,26 @@ static int mqfs_open(struct vfs_mount *mnt, void *node, int flags, void **handle
     (void)flags;
     mqfs_hold(mnt, node);
     *handle = node;
+    return 0;
+}
+
+/** Set the inode size of a queue. Its messages and status line stay intact. */
+static int mqfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
+{
+    struct mqueue *q = handle;
+
+    if (handle == mnt->root) {
+        return -EISDIR;
+    }
+    if (size > 0x7FFFFFFFu) {
+        return -EFBIG;
+    }
+    q->size = (uint32_t)size;
+    if (stamp_times) {
+        get_current_time(&q->ctime_s, &q->ctime_ns);
+        q->mtime_s = q->ctime_s;
+        q->mtime_ns = q->ctime_ns;
+    }
     return 0;
 }
 
@@ -1207,7 +1390,7 @@ static int32_t mqfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     int n;
 
     (void)mnt;
-    if (handle == &mqfs_root) {
+    if (handle == mnt->root) {
         return -EISDIR;
     }
     n = mq_status((const struct mqueue *)handle, text, (int)sizeof(text));
@@ -1230,7 +1413,7 @@ static int mqfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     struct mqueue *q;
     uint32_t i = 2;
 
-    if (handle != &mqfs_root) {
+    if (handle != mnt->root) {
         return -ENOTDIR;
     }
     k_memset(ent, 0, sizeof(*ent));
@@ -1244,7 +1427,7 @@ static int mqfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         return 1;
     }
     for (q = queues; q; q = q->next) {
-        if (q->ns != mqfs_ns(mnt)) {
+        if (q->mnt != mnt) {
             continue;
         }
         if (i++ == *cursor) {
@@ -1258,21 +1441,30 @@ static int mqfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 0;
 }
 
-/** mq_unlink by the file's name, for the queue's owner or a privileged
- * caller, since the directory is sticky: -EPERM for another, -ENOENT for no
- * such queue, -ENOTDIR under a queue. */
+/** Remove a name after the root's search, write and sticky checks. */
 static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct mqueue *q;
+    const struct mq_root *r = mnt->root;
+    uint32_t uid = proc_fsuid(current_proc);
+    int rc;
 
-    if (dir && dir != &mqfs_root) {
+    if (dir && dir != mnt->root) {
         return -ENOTDIR;
     }
-    q = mqfs_find(mnt, name);
+    rc = mq_lookup_allowed(r, name);
+    if (rc != 0) {
+        return rc;
+    }
+    q = mq_find(mnt, name);
     if (!q) {
         return -ENOENT;
     }
-    if (proc_fsuid(current_proc) != q->uid && !proc_fs_privileged(current_proc)) {
+    if (!inode_may_access(r->uid, r->gid, 0040000u | r->mode, 3, 0)) {
+        return -EACCES;
+    }
+    if ((r->mode & 01000u) && uid != r->uid && uid != q->uid &&
+        !inode_capable(q->uid, q->gid, CAP_FOWNER)) {
         return -EPERM;
     }
     mq_unname(q);
@@ -1301,34 +1493,24 @@ int mq_fd_statfs(const struct fd_entry *e, struct vfs_statfs *st)
 
 int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r)
 {
-    struct mqueue *q;
-    struct vfs_mount *m;
-    int i;
-
-    if (!e || e->ops != &mq_ops || !e->priv) {
+    if (!e || e->ops != &mq_ops) {
         return 0;
     }
-    q = ((struct mq_file *)e->priv)->q;
-    r->mnt = NULL;
-    for (i = 0; i < vfs_mount_slots(); i++) {
-        m = vfs_mount_at(i);
-        if (m && m->type == &vfs_mqueue_type && !m->bind_of && m->priv &&
-            (!r->mnt || (mqfs_ns(m) == q->ns && mqfs_ns(r->mnt) != q->ns))) {
-            r->mnt = m;
-        }
+    if (r) {
+        r->mnt = e->ofd->vmnt;
+        r->node = e->ofd->vnode;
     }
-    r->node = q;
-    return r->mnt != NULL;
+    return 1;
 }
 
 const char *mq_fd_name(const struct fd_entry *e, int *unlinked)
 {
     const struct mqueue *q;
 
-    if (!e || e->ops != &mq_ops || !e->priv) {
+    if (!e || e->ops != &mq_ops) {
         return NULL;
     }
-    q = ((const struct mq_file *)e->priv)->q;
+    q = e->ofd->vnode;
     *unlinked = q->unlinked;
     return q->name;
 }
@@ -1338,18 +1520,51 @@ const char *mq_fd_name(const struct fd_entry *e, int *unlinked)
 static int mqfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                       const char *options)
 {
+    struct ipcns *ns = current_proc ? proc_ipcns(current_proc) : &init_ipcns;
+    int rc;
+
     (void)dev;
     (void)flags;
     (void)options;
-    mnt->priv = (void *)(current_proc ? proc_ipcns(current_proc) : &init_ipcns);
-    mnt->root = &mqfs_root;
+    if (!ns->mq) {
+        rc = mq_root_made(ns);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    mnt->bind_of = ns->mq;
+    mnt->root = ns->mq->root;
+    k_strncpy(mnt->bind_root, "/", sizeof(mnt->bind_root));
+    vfs_mount_get(ns->mq);
     return 0;
 }
 
-/** Forget the namespace the mount lists. */
+/** Free the names and directory of a private mount after its last hold. */
 static void mqfs_unmount(struct vfs_mount *mnt)
 {
-    mnt->priv = 0;
+    struct mqueue *q = queues;
+    struct mq_root *r = mnt->root;
+
+    while (q) {
+        struct mqueue *next = q->next;
+
+        if (q->mnt == mnt) {
+            mq_unname(q);
+        }
+        q = next;
+    }
+    r->mounted = 0;
+    if (r->queues == 0) {
+        kfree(r);
+    }
+}
+
+/** Accept changes to generic superblock flags. Mqueue has no mount options. */
+static int mqfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
+{
+    (void)mnt;
+    (void)flags;
+    return options && *options ? -EINVAL : 0;
 }
 
 static const struct vfs_ops mqfs_ops = {
@@ -1358,15 +1573,15 @@ static const struct vfs_ops mqfs_ops = {
     mqfs_hold,
     mqfs_put,
     mqfs_getattr,
-    0, /* setattr */
+    mqfs_setattr,
     mqfs_open,
     mqfs_release,
     mqfs_read,
     0, /* write */
-    0, /* truncate */
+    mqfs_truncate,
     0, /* fsync */
     mqfs_readdir,
-    0, /* create */
+    mqfs_create,
     mqfs_unlink,
     0, /* mkdir */
     0, /* rmdir */
@@ -1383,7 +1598,7 @@ static const struct vfs_ops mqfs_ops = {
     0, /* mknod */
     0, /* pin: a hold keeps a node */
     0, /* unpin */
-    0, /* remount */
+    mqfs_remount,
     0, /* fallocate */
     0, /* fdatasync */
     0, /* lock_node */

@@ -319,7 +319,20 @@ of
 for all three times, with zero nanoseconds, one link, and zero size.
 Setting the clock moves those times by the size of the step.
 Proc text files report zero size even when reading them returns data.
-Unfollowed proc links report symbolic-link type and mode 0777.
+Unfollowed proc links report symbolic-link type and mode 0777, except a
+.Pa /proc/PID/fd/N
+link, whose mode gives its owner read and execute when the descriptor reads,
+write and execute when it writes, and nothing for an
+.Dv O_PATH
+descriptor, as Linux gives it.
+The mode, owner and group are those of the link's last lookup, or of a
+.Xr chown 2
+of the link since, so a descriptor opened on the link with
+.Dv O_PATH
+and
+.Dv O_NOFOLLOW
+keeps them while the descriptor it names is closed or replaced, until a
+lookup of its path sets them again.
 .Pp
 A socket or pipe descriptor reports the object's own inode.
 A descriptor opened with
@@ -334,6 +347,11 @@ A followed
 link reports the target descriptor's attributes, so its inode agrees
 with
 .Fn fstat .
+An
+.Dv O_PATH
+descriptor of the link itself keeps its inode and mode after a lookup
+finds the target descriptor closed.
+A new link for a reused descriptor number has its own inode.
 Proc-file descriptors use their source files' inode numbers; a master
 descriptor opened through
 .Pa /dev/ptmx

@@ -17,6 +17,7 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../io/anon.h"
+#include "../ipc/mqueue.h"
 #include "../lib/idset.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
@@ -71,7 +72,7 @@ struct pidns init_pidns = {{1, 0xEFFFFFFCu, NS_PID, NULL}, NULL, 0, 0, 1, 0, 1};
 struct mntns init_mntns = {{1, 0xF0000000u, NS_MNT, NULL}, 0, 0, NULL, NULL};
 struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}, NULL};
 struct utsns init_utsns = {{1, 0xEFFFFFFEu, NS_UTS, NULL}, "rach2", "(none)"};
-struct ipcns init_ipcns = {{1, 0xEFFFFFFFu, NS_IPC, NULL}};
+struct ipcns init_ipcns = {{1, 0xEFFFFFFFu, NS_IPC, NULL}, NULL};
 
 /* The set of the first namespaces, which a record without a set uses. */
 static struct nsset init_nsset = {1,           &init_mntns, &init_netns,
@@ -325,6 +326,11 @@ uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid)
 uint32_t ns_gid_from_kernel(const struct userns *ns, uint32_t kid)
 {
     return id_up(ns, &ns->gid_map, kid, ns_overflowgid);
+}
+
+int ns_uid_mapped(const struct userns *ns, uint32_t uid)
+{
+    return ns == &init_userns || idmap_up(&ns->uid_map, uid) != NULL;
 }
 
 int ns_ids_mapped(const struct userns *ns, uint32_t uid, uint32_t gid)
@@ -658,7 +664,7 @@ int ns_setgroups_denied(const process_t *p)
 
 /* ---- privilege ---- */
 
-int ns_capable(const process_t *p, const struct userns *ns, uint32_t cap)
+int ns_capable_with(const process_t *p, const struct userns *ns, int held)
 {
     const struct userns *own = proc_userns(p);
 
@@ -667,7 +673,7 @@ int ns_capable(const process_t *p, const struct userns *ns, uint32_t cap)
     }
     for (;;) {
         if (ns == own) {
-            return cap_holds(p, cap);
+            return held;
         }
         if (ns->level <= own->level) {
             return 0;
@@ -677,6 +683,11 @@ int ns_capable(const process_t *p, const struct userns *ns, uint32_t cap)
         }
         ns = ns->parent;
     }
+}
+
+int ns_capable(const process_t *p, const struct userns *ns, uint32_t cap)
+{
+    return ns_capable_with(p, ns, cap_holds(p, cap));
 }
 
 int ns_privileged(const process_t *p, const struct userns *ns)
@@ -1239,6 +1250,11 @@ static struct nsset *nsset_copy(const struct nsset *from, uint32_t flags, struct
         struct ipcns *i = ns_new(sizeof(*i), NS_IPC, owner);
 
         if (!i) {
+            *err = -ENOMEM;
+            goto fail;
+        }
+        if (mq_root_made(i) != 0) {
+            ns_put(&i->c);
             *err = -ENOMEM;
             goto fail;
         }

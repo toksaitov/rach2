@@ -711,6 +711,109 @@ static int pid_parent_reaped(void)
     return rc;
 }
 
+/** A new PID 1 cannot use its same-process exception on the old PID 1. */
+static int old_fd_dir_denied(int fd)
+{
+    int denied;
+
+    if (seteuid(NS_USER) != 0)
+        return 0;
+    errno = 0;
+    denied =
+        syscall(SYS_faccessat2, fd, "", W_OK, AT_EMPTY_PATH | AT_EACCESS) < 0 && errno == EACCES;
+    return seteuid(0) == 0 && denied;
+}
+
+/** A restricted openat2 walk and its final open both use the held mount. */
+static int proc_scoped_self(int dir, const char *outer, ssize_t len)
+{
+    unsigned long long how[3] = {O_PATH | O_NOFOLLOW, 0, 8}; /* RESOLVE_BENEATH */
+    char number[32];
+    int fd = (int)syscall(SYS_openat2, dir, "self", how, sizeof(how));
+    int ok = fd >= 0 && readlinkat(fd, "", number, sizeof(number)) == len &&
+             memcmp(number, outer, len) == 0;
+
+    if (fd >= 0)
+        close(fd);
+    return ok;
+}
+
+/** A held directory keeps its mount after a chroot shortens its name. */
+static int proc_chroot_place(const char *place)
+{
+    int status, dir;
+    char before[32], after[32];
+    ssize_t n;
+    pid_t child = fork();
+
+    if (child == 0) {
+        dir = open(place, O_RDONLY | O_DIRECTORY);
+        n = dir < 0 ? -1 : readlinkat(dir, "self", before, sizeof(before));
+        _exit(n <= 0 || unshare(CLONE_NEWNS) != 0 || mount("tmpfs", place, "tmpfs", 0, NULL) != 0 ||
+              chroot("/tmp") != 0 || chdir("/") != 0 ||
+              readlinkat(dir, "self", after, sizeof(after)) != n || memcmp(before, after, n) != 0);
+    }
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/** A proc mount has the directory name chosen by its caller. */
+static int proc_other_place(void)
+{
+    char place[] = "/tmp/nsproc-XXXXXX";
+    char cwd[64], number[16];
+    int ok;
+
+    if (!mkdtemp(place))
+        return 0;
+    ok = mount("proc", place, "proc", 0, NULL) == 0;
+    if (ok) {
+        ok = chdir(place) == 0 && getcwd(cwd, sizeof(cwd)) && strcmp(cwd, place) == 0 &&
+             readlink("self", number, sizeof(number)) == 1 && number[0] == '1' &&
+             proc_chroot_place(place);
+        if (chdir("/") != 0 || umount(place) != 0)
+            ok = 0;
+    }
+    return rmdir(place) == 0 && ok;
+}
+
+/** Walk through the held directory by its descriptor link and as the cwd. */
+static int proc_fd_paths(int dir, const char *outer, ssize_t n)
+{
+    char via[64], held[32];
+    int ok;
+
+    snprintf(via, sizeof(via), "/proc/self/fd/%d/self", dir);
+    ok = readlink(via, held, sizeof(held)) == n && memcmp(outer, held, n) == 0 &&
+         fchdir(dir) == 0 && readlink("self", held, sizeof(held)) == n &&
+         memcmp(outer, held, n) == 0;
+    return chdir("/") == 0 && ok;
+}
+
+/** Check both proc mounts from the first child of a new PID namespace. */
+static int proc_mount_numbers(void)
+{
+    char outer[32], held[32], inner[32];
+    struct stat before, after;
+    int dir = open("/proc", O_RDONLY | O_DIRECTORY);
+    int fds = open("/proc/1/fd", O_RDONLY | O_DIRECTORY);
+    ssize_t n = readlink("/proc/self", outer, sizeof(outer));
+    int ok = dir >= 0 && fds >= 0 && n > 0 && (n != 1 || outer[0] != '1') &&
+             fstat(fds, &before) == 0 && unshare(CLONE_NEWNS) == 0 &&
+             mount("proc", "/proc", "proc", 0, NULL) == 0 &&
+             readlink("/proc/self", inner, sizeof(inner)) == 1 && inner[0] == '1' &&
+             readlinkat(dir, "self", held, sizeof(held)) == n && memcmp(outer, held, n) == 0 &&
+             fstatat(fds, ".", &after, 0) == 0 && before.st_ino == after.st_ino;
+
+    ok = ok && proc_fd_paths(dir, outer, n) && proc_scoped_self(dir, outer, n) &&
+         old_fd_dir_denied(fds) && proc_other_place();
+    if (dir >= 0)
+        close(dir);
+    if (fds >= 0)
+        close(fds);
+    return ok ? 0 : fail(R_PID_LINK, "inherited and new proc mounts keep their PID namespaces");
+}
+
 /**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
  * parent 0, that its child is 2, that its NSpid line has the one number, that
@@ -738,6 +841,9 @@ static int pid_first(void)
     if (pid != 2 || waitpid(pid, &status, 0) != 2 || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
         return fail(R_PID_TWO, "its child is 2");
+    }
+    if (proc_mount_numbers() != 0) {
+        return 1;
     }
     if (!nspid_is("self", "1")) {
         return fail(R_PID_NSPID, "its status file shows it the one number");

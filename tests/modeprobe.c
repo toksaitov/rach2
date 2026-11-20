@@ -11,17 +11,11 @@
  * the root parent's own chown: the same identity that was just exempted from
  * the write clear is not exempt here.
  *
- * Against that stands the case a clear must not reach. `chown(path, -1, -1)`
- * succeeds for any caller by design, since a value that changes nothing needs
- * no right, so a clear that ran on a no-change chown would let any uid disarm
- * a setuid-root program with one call. A uid-1000 child asks for exactly that
- * on a root-owned 04755 file and the mode must come back untouched.
- *
- * Setgid is dropped only when the group-execute bit is set with it, matching
- * the grant: `execve` honors `KRFFS_MODE_SGID` only on a mode that has
- * group-execute, so 02645 is an inert mark and survives while 02755 goes. A
- * directory keeps both bits whatever happens to it, since neither is an
- * execution grant there.
+ * Linux requires ownership of a setuid file when chown(-1, -1) would clear
+ * its mode. The uid-1000 child checks EPERM and an untouched mode on the
+ * root-owned file. Setgid on a file goes with group-execute, or when the
+ * caller is outside the group and lacks privilege. A directory keeps both
+ * bits on chown.
  *
  * The escalation needs a program and not just a mode, so the probe makes one:
  * the root parent copies the staged `/suidhelper` byte for byte to
@@ -29,8 +23,8 @@
  * set-id allowlist (tools/inspect/setid.allow). It is chmod'd 02700 and
  * chowned `1000:0`, in that order, and the mode must survive the chown:
  * 02700 has no group-execute, so the clear spares its setgid bit. A uid-1000
- * child rewrites a byte of the copy and stats it back at 02700, the survival
- * the clear rule deliberately allows, and a grandchild execs it with
+ * child rewrites a byte of the copy, clearing setgid because the child is
+ * outside its group, and a grandchild execs it with
  * `suidhelper`'s `plain` scenario, which exits 0 only if all three uids and
  * all three gids read 1000 and AT_SECURE is 0. The same child then chmods
  * the copy 02710 and stats it back at 0710, because an unprivileged caller
@@ -413,7 +407,7 @@ static const struct {
     {"reopen-copy", "reopen the copy to write it back"},
     {"rewrite-copy", "rewrite a byte of the copy"},
     {"close-rewritten", "close the rewritten copy"},
-    {"copy-write-keeps", "a write took setgid without group-execute"},
+    {"copy-write-keeps", "a write by a user outside the group kept setgid"},
     {"exec-02700", "exec the 02700 copy"},
     {"chmod-02710", "chmod the copy 02710"},
     {"chmod-02710-strips", "chmod stored setgid for a caller outside the group"},
@@ -598,9 +592,8 @@ static void want_mode(const char *step, const char *path, u32 mode)
     held(step);
 }
 
-/* The stored times of the last stat, for the rows that must leave them alone:
- * a chown that changes nothing changes nothing, and a status time that moved
- * is a write the kernel had no reason to make. */
+/* The stored times of the last stat, for the rows whose chown must fail
+ * without changing either time. */
 static unsigned long kept_mtime;
 static unsigned long kept_mtime_ns;
 static unsigned long kept_ctime;
@@ -788,14 +781,9 @@ static int run_helper(const char *path, const char *arg)
  * permission and a surviving bit is the kernel's answer, not an unnoticed
  * -EACCES.
  *
- * chown(path, -1, -1) needs no right, so it must also take none away, or
- * this one call would disarm /bin/su from uid 1000. The same call with the
- * ids it already has named in place of the sentinel is asked too: a rule
- * written against (uid != -1 || gid != -1) rather than against a field
- * actually moving passes the first and fails the second, and that kernel
- * would let chown("/bin/su", 0, 0) from uid 1000 disarm the file. Through
- * the descriptor the times are checked as well: a call that changes no field
- * writes nothing, so the status time may not move either.
+ * Linux refuses chown(-1, -1) by a nonowner when it would clear setuid,
+ * and also refuses a nonowner naming the file's current IDs. The refusals
+ * leave its mode and times alone.
  *
  * A write that grows mp_grow past its node's data room must move the node,
  * since mp_block sits right behind it, and the mode is read through the
@@ -818,9 +806,10 @@ static void user_child(void)
     drop_to_1000();
 
     want_eq("chown(-1, -1) on a root-owned setuid file",
-            syscall3(SYS_CHOWN, (long)NOCHG, (int)KEEP, (int)KEEP), 0);
+            syscall3(SYS_CHOWN, (long)NOCHG, (int)KEEP, (int)KEEP), -EPERM);
     want_mode("a no-change chown disarmed the file", NOCHG, 04755);
-    want_eq("chown(0, 0) on a root-owned setuid file", syscall3(SYS_CHOWN, (long)NOCHG, 0, 0), 0);
+    want_eq("chown(0, 0) on a root-owned setuid file", syscall3(SYS_CHOWN, (long)NOCHG, 0, 0),
+            -EPERM);
     want_mode("naming the ids it already had disarmed the file", NOCHG, 04755);
 
     write_bytes("write in place", INPLACE, 8);
@@ -856,11 +845,11 @@ static void user_child(void)
     want_ok("open the root-owned setuid file", fd);
     keep_times(FNOCHG);
     want_eq("fchown(-1, -1) on a root-owned setuid file",
-            syscall3(SYS_FCHOWN, fd, (int)KEEP, (int)KEEP), 0);
+            syscall3(SYS_FCHOWN, fd, (int)KEEP, (int)KEEP), -EPERM);
     want_mode("a no-change fchown disarmed the file", FNOCHG, 04755);
     want_owner("a no-change fchown moved the owner", FNOCHG, 0, 0);
     want_times_kept("a no-change fchown moved the times", FNOCHG);
-    want_eq("fchown(0, 0) on a root-owned setuid file", syscall3(SYS_FCHOWN, fd, 0, 0), 0);
+    want_eq("fchown(0, 0) on a root-owned setuid file", syscall3(SYS_FCHOWN, fd, 0, 0), -EPERM);
     want_mode("naming the ids it already had, through a descriptor, disarmed the file", FNOCHG,
               04755);
     want_times_kept("a no-change fchown by name moved the times", FNOCHG);
@@ -909,7 +898,7 @@ static void escalation_child(void)
     want_eq("rewrite a byte of the copy", syscall3(SYS_WRITE, fd, (long)&byte, 1), 1);
     want_eq("close the rewritten copy", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
-    want_mode("a write took setgid without group-execute", SGID0, 02700);
+    want_mode("a write by a user outside the group kept setgid", SGID0, 0700);
     want_eq("exec the 02700 copy", run_helper(SGID0, "plain"), 0);
 
     want_eq("chmod the copy 02710", syscall3(SYS_CHMOD, (long)SGID0, 02710, 0), 0);

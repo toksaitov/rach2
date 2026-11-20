@@ -455,8 +455,8 @@ int main(void)
     if (chown(FILE_IN_DIR, (uid_t)-1, (gid_t)-1) != 0) {
         return fail("a chown that changes nothing failed");
     }
-    if (ctime_of(FILE_IN_DIR) != ctime_before) {
-        return fail("a chown that changed nothing still moved a time");
+    if (ctime_of(FILE_IN_DIR) <= ctime_before || mtime_of(FILE_IN_DIR) != before) {
+        return fail("chown(-1, -1) did not move only the change time");
     }
     report_held();
 
