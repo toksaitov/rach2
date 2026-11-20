@@ -608,7 +608,7 @@ static void setup_pair(void)
     service_action = NULL;
     irq_enabled = 1;
     pty_init_pool();
-    CHECK(pty_alloc() == &pair, "production allocation initializes the pair");
+    CHECK(pty_alloc(0) == &pair, "production allocation initializes the pair");
     pair.master_open = pair.slave_opens = 1;
     pair.slave.ldisc.tio.c_lflag &= ~(ICANON | ECHO | ISIG);
     clear(&master, sizeof(master));
