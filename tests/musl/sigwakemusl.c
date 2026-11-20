@@ -289,9 +289,10 @@ static void run_victim(int ready[2])
     }
 }
 
-/* The third part's count of the timer's signals taken, and the waiter's
- * word to the leader that its waits are over. */
-static volatile sig_atomic_t ticks, drained;
+/* The third part's count of the timer's signals taken, the waiter's word
+ * to the leader that its waits are over, and the exit status the waiter
+ * gives the process when they failed, else 0. */
+static volatile sig_atomic_t ticks, drained, wait_failed;
 
 /** Count one of the timer's SIGUSR1. */
 static void on_tick(int signo)
@@ -302,8 +303,8 @@ static void on_tick(int signo)
 
 /** The waiter: with SIGWINCH unblocked and SIGUSR1 blocked, as the leader
  * left it, wait for DRAIN_ROUNDS children in turn, each of which sleeps
- * DRAIN_SLEEP_NS. Returns NULL when every child exited 0, else the exit
- * status for the process, as a pointer. */
+ * DRAIN_SLEEP_NS. Sets `wait_failed` when a step fails, and `drained`
+ * either way. */
 static void *wait_children(void *arg)
 {
     struct timespec nap = {0, DRAIN_SLEEP_NS};
@@ -315,14 +316,16 @@ static void *wait_children(void *arg)
     sigemptyset(&set);
     sigaddset(&set, SIGWINCH);
     if (pthread_sigmask(SIG_UNBLOCK, &set, NULL) != 0) {
+        wait_failed = 33;
         drained = 1;
-        return (void *)33;
+        return NULL;
     }
     for (i = 0; i < DRAIN_ROUNDS; i++) {
         child = fork();
         if (child < 0) {
+            wait_failed = 34;
             drained = 1;
-            return (void *)34;
+            return NULL;
         }
         if (child == 0) {
             /* interval: the child lives a millisecond so the wait sleeps */
@@ -332,13 +335,15 @@ static void *wait_children(void *arg)
         }
         while (waitpid(child, &status, 0) != child) {
             if (errno != EINTR) {
+                wait_failed = 35;
                 drained = 1;
-                return (void *)35;
+                return NULL;
             }
         }
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            wait_failed = 36;
             drained = 1;
-            return (void *)36;
+            return NULL;
         }
     }
     drained = 1;
@@ -360,7 +365,6 @@ static void run_drain(void)
     pthread_t waiter;
     timer_t timer;
     sigset_t set;
-    void *rc;
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_tick;
@@ -395,10 +399,10 @@ static void run_drain(void)
             _exit(22);
         }
     }
-    if (pthread_join(waiter, &rc) != 0) {
+    if (pthread_join(waiter, NULL) != 0) {
         _exit(38);
     }
-    _exit(rc != NULL ? (int)(long)rc : ticks > 0 ? 0 : 39);
+    _exit(wait_failed != 0 ? wait_failed : ticks > 0 ? 0 : 39);
 }
 
 /** Run the third part's process to its end: 0 when it exits 0, else 1
