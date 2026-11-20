@@ -315,7 +315,7 @@ int nd6_conf_get(int which, int key, int32_t *value)
     return 0;
 }
 
-static void forget_if(struct netdev *nd, int stop);
+static void forget_if(struct netdev *nd, int stop, int keep);
 static void solicit_routers(struct netdev *nd, struct nd6_if *ni);
 
 /**
@@ -337,7 +337,7 @@ static void if_set(struct netdev *nd, int key, int32_t value)
         return;
     }
     if (key == ND6_DISABLE_IPV6 && value) {
-        forget_if(nd, 1);
+        forget_if(nd, 1, 0);
     } else if (key == ND6_DISABLE_IPV6) {
         if (nd->loopback) {
             netconf_add_address6(nd, ip6_loopback, 128, NETDEV_A6_PERMANENT,
@@ -1083,7 +1083,7 @@ static void slaac(struct netdev *nd, struct nd6_if *ni, const uint8_t *prefix, u
     }
     if (!stable) {
         make_address(nd, prefix, &count, addr);
-        if (add_auto(nd, addr, valid, preferred, count, 0) == -ENOSPC) {
+        if (add_auto(nd, addr, valid, preferred, count, 0) == -ENOBUFS) {
             klog(KLOG_WARN, "nd6", "%s: no room for a SLAAC address", nd->name);
         }
     }
@@ -1449,16 +1449,59 @@ static void redetect(struct netdev *nd, int all)
     }
 }
 
+/** Whether `a` stays on a card taken down with keep_addr_on_down: a
+ * permanent address that is neither link-local nor ::1, as Linux's
+ * addrconf_ifdown keeps one that `addr_is_local` does not name. */
+static int kept_on_down(const struct netdev_addr6 *a)
+{
+    return (a->flags & NETDEV_A6_PERMANENT) && !ip6_is_linklocal(a->addr) &&
+           !ip6_is_loopback(a->addr);
+}
+
+/** Join the solicited-node group of `nd`'s address `a` with `join`, or
+ * leave it, keeping the address to one join of its own (`solicited`), so
+ * that a socket's joins of the group are untouched. `lo` and an `l3` card
+ * join none, as Linux's addrconf_join_solict skips IFF_LOOPBACK and
+ * IFF_NOARP. A join that finds no room is tried again at the next up. */
+static void solicit(struct netdev *nd, struct netdev_addr6 *a, int join)
+{
+    uint8_t group[IP6_ADDR_LEN];
+
+    if (!a->solicited == !join || (join && (nd->loopback || nd->l3))) {
+        return;
+    }
+    ip6_solicited_node(a->addr, group);
+    if (!join) {
+        netdev_leave6(nd, group);
+        a->solicited = 0;
+    } else if (netdev_join6(nd, group) == 0) {
+        a->solicited = 1;
+    }
+}
+
 void nd6_if_up(struct netdev *nd)
 {
     struct nd6_if *ni = if_of(nd);
     uint32_t lock;
+    int i;
 
     if (!ni || nd->loopback || ni->started) {
         return;
     }
     lock = net_lock();
     ni->started = 1;
+    for (i = 0; i < nd->naddr6; i++) {
+        struct netdev_addr6 *a = &nd->addr6[i];
+
+        solicit(nd, a, 1);
+        if (!kept_on_down(a))
+            continue;
+        a->flags &= (uint8_t)~NETDEV_A6_DADFAILED;
+        if (nd->l3 || (a->flags & NETDEV_A6_NODAD))
+            a->flags &= (uint8_t)~NETDEV_A6_TENTATIVE;
+        a->local_route_deleted = 0;
+        route6_address_update(nd, 0, a);
+    }
     redetect(nd, 1);
     ni->running = (uint8_t)netdev_running(nd);
     if (ni->conf.v[ND6_FORWARDING] && !netdev_member6(nd, all_routers)) {
@@ -1468,10 +1511,12 @@ void nd6_if_up(struct netdev *nd)
     net_unlock(lock);
 }
 
-/** Drop nonpermanent neighbours and datagrams waiting on the link.
- * Administrative shutdown also removes addresses, routes and router state.
- * The caller may hold net_lock. */
-static void forget_if(struct netdev *nd, int stop)
+/** Drop nonpermanent neighbours and datagrams waiting on the link. `stop`
+ * also removes routes and router state, and the addresses but, with
+ * `keep`, those `kept_on_down` names, which leave their solicited-node
+ * groups, as Linux's addrconf_ifdown leaves them, and become tentative
+ * unless they take no detection. The caller may hold net_lock. */
+static void forget_if(struct netdev *nd, int stop, int keep)
 {
     struct nd6_if *ni = if_of(nd);
     uint32_t lock = net_lock();
@@ -1497,7 +1542,16 @@ static void forget_if(struct netdev *nd, int stop)
         if_defaults(ni);
     }
     for (i = nd->naddr6 - 1; i >= 0; i--) {
-        netconf_del_address6(nd, nd->addr6[i].addr);
+        struct netdev_addr6 *a = &nd->addr6[i];
+
+        if (!keep || !kept_on_down(a)) {
+            netconf_del_address6(nd, a->addr);
+            continue;
+        }
+        solicit(nd, a, 0);
+        if (!(a->flags & NETDEV_A6_NODAD)) {
+            a->flags |= NETDEV_A6_TENTATIVE;
+        }
     }
     route6_forget(nd, -1);
     net_unlock(lock);
@@ -1505,8 +1559,21 @@ static void forget_if(struct netdev *nd, int stop)
 
 void nd6_if_down(struct netdev *nd)
 {
+    struct nd6_if *ni;
+
     if (nd && !nd->loopback) {
-        forget_if(nd, 1);
+        ni = if_of(nd);
+        forget_if(nd, 1,
+                  ni && !ni->conf.v[ND6_DISABLE_IPV6] &&
+                      (conf_all.v[ND6_KEEP_ADDR_ON_DOWN] ? conf_all.v[ND6_KEEP_ADDR_ON_DOWN]
+                                                         : ni->conf.v[ND6_KEEP_ADDR_ON_DOWN]) > 0);
+    }
+}
+
+void nd6_if_remove(struct netdev *nd)
+{
+    if (nd && !nd->loopback) {
+        forget_if(nd, 1, 0);
     }
 }
 
@@ -1624,7 +1691,7 @@ static void if_timers(struct netdev *nd, struct nd6_if *ni)
     int running = netdev_running(nd);
 
     if (!running && ni->running) {
-        forget_if(nd, 0);
+        forget_if(nd, 0, 0);
     } else if (running && !ni->running) {
         redetect(nd, 0);
         solicit_routers(nd, ni);

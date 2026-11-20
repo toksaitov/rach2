@@ -41,6 +41,7 @@
 #include "../../serial.h"
 #include "../../udelay.h"
 #include "../../pci.h"
+#include "../../mm/kheap.h"
 #include "../../mm/paging.h"
 #include "../../irq.h"
 
@@ -201,11 +202,25 @@ static uint32_t r8168_tick_work; /* frames the tick handled with messages on */
  * file at -O1, so the type states the sharing whatever the flags. A buffer
  * is read only after its descriptor changed hands, so making a megabyte of
  * buffer volatile would slow every copy to no purpose.
+ *
+ * The buffers, and their physical addresses, are made once a card of the
+ * GU family is found (`r8168_bufs_make`), as Linux's rtl_open allocates its
+ * receive buffers, so that a machine without the card keeps none of the
+ * megabyte: each receive buffer is four consecutive frames of its own, as
+ * Linux takes one of order 2, and the transmit buffers lie
+ * R8168_TX_PER_PAGE to a page of their own, so that no run of frames is
+ * needed for them. A bring-up that fails gives them back once the card's
+ * DMA has ended (`rtl8168_stop`).
  */
 static volatile struct r8168_desc r8168_tx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
 static volatile struct r8168_desc r8168_rx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
-static uint8_t r8168_rx_buf[R8168_RING_SIZE][R8168_RX_BUF_SIZE + 1] __attribute__((aligned(8)));
-static uint8_t r8168_tx_buf[R8168_RING_SIZE][R8168_FRAME_MAX] __attribute__((aligned(8)));
+static uint8_t *r8168_rx_buf[R8168_RING_SIZE];
+static uint8_t *r8168_tx_buf[R8168_RING_SIZE];
+static uintptr_t r8168_rx_phys[R8168_RING_SIZE], r8168_tx_phys[R8168_RING_SIZE];
+
+#define R8168_RX_PAGES    ((R8168_RX_BUF_SIZE + 1 + PAGE_SIZE - 1) / PAGE_SIZE)
+#define R8168_TX_STRIDE   ((R8168_FRAME_MAX + 7) & ~7)
+#define R8168_TX_PER_PAGE (PAGE_SIZE / R8168_TX_STRIDE)
 /* The block the chip writes its tally counters into on request. */
 static struct r8168_counters r8168_counters __attribute__((aligned(64)));
 static int r8168_counters_command(uint32_t command);
@@ -836,6 +851,59 @@ static int r8168_hw_start(void)
 
 /* Rings. */
 
+/** Give back every receive and transmit buffer made, and clear their
+ * pointers; the card's DMA has ended. */
+static void r8168_bufs_free(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < R8168_RING_SIZE; i++) {
+        if (r8168_rx_buf[i]) {
+            kfree_pages(r8168_rx_buf[i], R8168_RX_PAGES);
+        }
+        if (r8168_tx_buf[i] && i % R8168_TX_PER_PAGE == 0) {
+            kfree_pages(r8168_tx_buf[i], 1);
+        }
+        r8168_rx_buf[i] = NULL;
+        r8168_tx_buf[i] = NULL;
+        r8168_rx_phys[i] = 0;
+        r8168_tx_phys[i] = 0;
+    }
+}
+
+/**
+ * Make the receive and transmit buffers unless they are made, and keep
+ * them for a later bring-up: 1, or 0 when the heap has no room for one,
+ * with none kept.
+ */
+static int r8168_bufs_make(void)
+{
+    uint8_t *page = NULL;
+    uintptr_t phys = 0;
+    uint32_t i, k;
+
+    if (r8168_rx_buf[0]) {
+        return 1;
+    }
+    for (i = 0; i < R8168_RING_SIZE; i++) {
+        r8168_rx_buf[i] = (uint8_t *)kalloc_contig(R8168_RX_PAGES, &r8168_rx_phys[i]);
+        k = i % R8168_TX_PER_PAGE;
+        if (k == 0) {
+            page = (uint8_t *)kalloc_pages(1, &phys);
+        }
+        if (!r8168_rx_buf[i] || !page) {
+            if (page && k == 0) {
+                kfree_pages(page, 1);
+            }
+            r8168_bufs_free();
+            return 0;
+        }
+        r8168_tx_buf[i] = page + k * R8168_TX_STRIDE;
+        r8168_tx_phys[i] = phys + k * R8168_TX_STRIDE;
+    }
+    return 1;
+}
+
 /** Hand every receive descriptor to the chip, the last one marked
  * end-of-ring. */
 static void r8168_rx_fill(void)
@@ -845,8 +913,8 @@ static void r8168_rx_fill(void)
     for (i = 0; i < R8168_RING_SIZE; i++) {
         uint32_t eor = (i == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
 
-        r8168_rx_ring[i].addr_lo = (uint32_t)virt_to_phys(r8168_rx_buf[i]);
-        r8168_rx_ring[i].addr_hi = 0;
+        r8168_rx_ring[i].addr_lo = (uint32_t)r8168_rx_phys[i];
+        r8168_rx_ring[i].addr_hi = (uint32_t)((uint64_t)r8168_rx_phys[i] >> 32);
         r8168_rx_ring[i].opts2 = 0;
         /* The address and options must be visible before ownership moves. */
         k_barrier();
@@ -1001,6 +1069,28 @@ static uint8_t rtl8168_mac[6];
  * frame it delivers says where it arrived. */
 static struct netdev *rtl8168_iface;
 
+/** The physical address of the card's first memory window with an
+ * address, or 0 when it has none. */
+static uint64_t r8168_window_find(void)
+{
+    uint64_t addr;
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        if (!pci_bar_is_memory(r8168_pci.bar[i])) {
+            continue;
+        }
+        addr = pci_bar_address64(&r8168_pci, i);
+        if (addr != 0) {
+            return addr;
+        }
+        if (pci_bar_is_64bit(r8168_pci.bar[i])) {
+            i++;
+        }
+    }
+    return 0;
+}
+
 /**
  * The driver table's `init` (netdev.h): find the first 10EC:8168 function,
  * take the chip out of whatever state it was left in, and start it. Any
@@ -1020,9 +1110,8 @@ static struct netdev *rtl8168_iface;
 static int rtl8168_init(struct netdev *nd, int nth)
 {
     uint32_t txconfig;
-    uint64_t addr = 0;
+    uint64_t addr;
     uintptr_t mapped;
-    int i;
 
     nd->dev = 0;
     if (nth != 0) {
@@ -1038,18 +1127,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
     }
     nd->pci_key = r8168_pci.bus << 8 | r8168_pci.device << 3 | r8168_pci.function;
 
-    for (i = 0; i < 6; i++) {
-        if (!pci_bar_is_memory(r8168_pci.bar[i])) {
-            continue;
-        }
-        addr = pci_bar_address64(&r8168_pci, i);
-        if (addr != 0) {
-            break;
-        }
-        if (pci_bar_is_64bit(r8168_pci.bar[i])) {
-            i++;
-        }
-    }
+    addr = r8168_window_find();
     if (addr == 0) {
         r8168_err = "the RTL8168 has no memory window";
         return NETDEV_FAILED;
@@ -1074,6 +1152,10 @@ static int rtl8168_init(struct netdev *nd, int nth)
     r8168_xid = (txconfig >> R8168_XID_SHIFT) & R8168_XID_MASK;
     if ((r8168_xid & R8168_XID_FAMILY_MASK) != R8168_XID_8168GU) {
         r8168_err = "this RTL8168 is not the GU this driver was written for";
+        return NETDEV_FAILED;
+    }
+    if (!r8168_bufs_make()) {
+        r8168_err = "no memory for the RTL8168's buffers";
         return NETDEV_FAILED;
     }
 
@@ -1231,8 +1313,8 @@ static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
     }
 
     eor = (idx == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0;
-    r8168_tx_ring[idx].addr_lo = (uint32_t)virt_to_phys(r8168_tx_buf[idx]);
-    r8168_tx_ring[idx].addr_hi = 0;
+    r8168_tx_ring[idx].addr_lo = (uint32_t)r8168_tx_phys[idx];
+    r8168_tx_ring[idx].addr_hi = (uint32_t)((uint64_t)r8168_tx_phys[idx] >> 32);
     r8168_tx_ring[idx].opts2 = 0;
     /* Every field must be visible before ownership moves to the chip. */
     k_barrier();
@@ -1695,7 +1777,10 @@ static void rtl8168_print_info(void *dev)
  * Safe on a chip that never finished starting, which is how the probe calls
  * it after a failed bring-up. `rtl8168_init` enables bus mastering and can
  * still fail afterwards in the PHY sequence or the hardware start, so this
- * runs against a half-configured chip and assumes none of it.
+ * runs against a half-configured chip and assumes none of it. After such a
+ * bring-up it gives the buffers back once bus mastering is off, as Linux's
+ * rtl_open frees what it allocated when the open fails; a card that came up
+ * keeps them for its next bring-up.
  *
  * What it may write depends on how far the bring-up got, and the revision
  * check decides it. One PCI device id covers the whole 8168 family, and the
@@ -1707,6 +1792,7 @@ static void rtl8168_print_info(void *dev)
  */
 static void rtl8168_stop(void *dev)
 {
+    int was_up = r8168_up;
     uint32_t i;
 
     (void)dev;
@@ -1750,6 +1836,11 @@ static void rtl8168_stop(void *dev)
         pci_disable_bus_master(&r8168_pci);
     }
     r8168_up = 0;
+    /* With bus mastering off the card writes no buffer, and a bring-up
+     * that never finished has had no transmit or service in them. */
+    if (!was_up) {
+        r8168_bufs_free();
+    }
 }
 
 const struct netdev_ops rtl8168_netdev = {

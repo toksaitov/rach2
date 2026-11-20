@@ -45,6 +45,8 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 #include "../../rach2/sys/network/ethernet/ethernet.h"
 #include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/network/ip/ip.h"
+#include "../../rach2/sys/network/net.h"
+#include "../../rach2/sys/lib/kirq.h"
 #include "../../rach2/sys/arch/arch.h"
 #include "../../rach2/sys/timer.h"
 #include "../../rach2/sys/arch/x86/pit.h"
@@ -63,6 +65,18 @@ static unsigned to_arp, to_icmp, to_udp, to_tcp, to_raw, to_packet, to_ip6;
 uint8_t net_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 uint32_t net_ip_addr = 0x0A00020Fu; /* 10.0.2.15 */
 uint32_t net_ip_mask = 0xFFFFFF00u;
+
+/** Save the model interrupt state before a route scan. */
+uint32_t net_lock(void)
+{
+    return kirq_save();
+}
+
+/** Restore the model interrupt state when a route scan ends. */
+void net_unlock(uint32_t flags)
+{
+    kirq_restore(flags);
+}
 
 /** Count an ARP packet received. */
 void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
@@ -475,9 +489,10 @@ struct netdev *netdev_added_local(uint32_t dst, int kind)
 }
 
 /** Return `nd`'s one address as the source for any next hop. */
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop, int scope)
 {
     (void)hop;
+    (void)scope;
     return nd->ip;
 }
 
@@ -1399,8 +1414,8 @@ static void test_broadcast_iface(void)
         CHECK("to the all-ones hardware address, without ARP",
               tx_frame[0] == 0xFF && tx_frame[5] == 0xFF && arp_queries == 0);
     }
-    second_iface.addr4[0].given_broadcast = 1;
-    second_iface.addr4[0].broadcast = 0xc0000260u;
+    NETDEV_ADDR4(&second_iface, 0).given_broadcast = 1;
+    NETDEV_ADDR4(&second_iface, 0).broadcast = 0xc0000260u;
     CHECK("a configured broadcast leaves by its owning interface",
           ip_tx(0xc0000260u, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0 &&
               tx_card == &second_iface);

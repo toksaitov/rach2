@@ -865,15 +865,15 @@ and
 (0x8936) take a 24-byte
 .Vt "struct in6_ifreq" ,
 an address, a prefix length and an interface index, and give the
-interface that address, permanent, one of at most eight, or take it away;
+interface that address, permanent, or take it away;
 an index no interface has is
 .Er ENODEV ,
 a prefix past 128
 .Er EINVAL ,
 as is a group, :: or ::1 on a card, an address it has already
 .Er EEXIST ,
-one past the eight
-.Er ENOSPC ,
+one the kernel has no memory for
+.Er ENOBUFS ,
 any on an interface whose
 .Va disable_ipv6
 is 1

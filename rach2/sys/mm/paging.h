@@ -727,6 +727,16 @@ uintptr_t alloc_frame(void);
  */
 uintptr_t alloc_frames(uint32_t count);
 
+/**
+ * A free frame wholly below the physical address `limit`, marked used with
+ * one reference, for a device that drives fewer address bits than the
+ * machine has, as Linux's GFP_DMA32 gives one below 4 GiB: its physical
+ * address, or 0 when none is free there or under the same refusals as
+ * `alloc_frame`. The caller reaches it through a mapping, and gives it back
+ * with `free_frame`. It never sleeps.
+ */
+uintptr_t alloc_frame_below(uint64_t limit);
+
 /** Drop a reference to the frame at `phys`, as `frame_unref` does; the
  * frame goes back to the pool with its last. */
 void free_frame(uintptr_t phys);

@@ -216,6 +216,7 @@ C_SRC_SHARED = kernel.c \
     sys/network/wireless/wlan.c \
     sys/network/wireless/reg.c \
     sys/network/driver/netdev.c \
+    sys/network/driver/netdev_room.c \
     sys/network/driver/e1000.c \
     sys/network/driver/rtl8139.c \
     sys/network/driver/rtl8168.c \

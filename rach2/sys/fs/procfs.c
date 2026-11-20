@@ -6973,8 +6973,8 @@ static void ap_ifname8(struct procfs_text *t, int index)
  */
 static int procfs_gen_netifinet6(struct procfs_text *t)
 {
-    struct netdev_addr6 addrs[NETDEV_ADDRS6];
-    int i, k, n;
+    struct netdev_addr6 a;
+    int i, k, more;
 
     for (i = 0; i < netdev_seen_count(); i++) {
         struct netdev *nd = netdev_at(i);
@@ -6983,22 +6983,26 @@ static int procfs_gen_netifinet6(struct procfs_text *t)
         if (!nd) {
             continue;
         }
-        flags = net_lock();
-        n = nd->naddr6;
-        k_memcpy(addrs, nd->addr6, (uint32_t)n * sizeof(addrs[0]));
-        net_unlock(flags);
-        for (k = 0; k < n; k++) {
-            uint8_t scope = addrs[k].scope;
+        for (k = 0;; k++) {
+            uint8_t scope;
 
-            ap_ip6_hex(t, addrs[k].addr);
+            flags = net_lock();
+            more = k < nd->naddr6;
+            if (more)
+                a = nd->addr6[k];
+            net_unlock(flags);
+            if (!more)
+                break;
+            scope = a.scope;
+            ap_ip6_hex(t, a.addr);
             ap_ch(t, ' ');
             ap_hex2_lower(t, (uint32_t)nd->index);
-            ap_hex2_lower(t, addrs[k].prefix);
+            ap_hex2_lower(t, a.prefix);
             ap_hex2_lower(t, scope == NETDEV_SCOPE_HOST   ? 0x10u
                              : scope == NETDEV_SCOPE_LINK ? 0x20u
                              : scope == NETDEV_SCOPE_SITE ? 0x40u
                                                           : 0u);
-            ap_hex2_lower(t, addrs[k].flags);
+            ap_hex2_lower(t, a.flags);
             ap_ifname8(t, nd->index);
         }
     }
@@ -10853,9 +10857,10 @@ static void ap_uuid(struct procfs_text *t, const uint8_t *b)
     }
 }
 
-/** The `which` of nd6.h for the net/ipv6/conf directory `dir`, a name
- * `synth_sys_ipv6` gave: `all`, `default`, or the index of the interface
- * of that name, -ENODEV when there is none. */
+/** The `which` of nd6.h, or of netconf.h, whose values are the same, for
+ * the net/ipv6/conf or net/ipv4/conf directory `dir`, a name
+ * `synth_sys_ipv6` or `synth_sys_ipv4` gave: `all`, `default`, or the index
+ * of the interface of that name, -ENODEV when there is none. */
 static int sysctl_ipv6_which(const char *dir)
 {
     int len = (int)k_strlen(dir), index;
@@ -10872,8 +10877,14 @@ static int sysctl_ipv6_which(const char *dir)
 
 /* The ND6_ setting of each SYNTH_IPV6_ file but stable_secret. */
 static const int sysctl_ipv6_keys[SYNTH_IPV6_KEYS] = {
-    ND6_ACCEPT_RA,        ND6_AUTOCONF, ND6_DISABLE_IPV6, ND6_FORWARDING,
+    ND6_ACCEPT_RA,        ND6_AUTOCONF, ND6_DISABLE_IPV6, ND6_FORWARDING, ND6_KEEP_ADDR_ON_DOWN,
     ND6_RA_DEFRTR_METRIC, -1,           ND6_USE_TEMPADDR};
+
+/* The NETCONF4_ setting of each SYNTH_IPV4_ file. */
+static const int sysctl_ipv4_keys[SYNTH_IPV4_KEYS] = {NETCONF4_PROMOTE_SECONDARIES};
+
+typedef char ipv4_which_fits
+    [(NETCONF4_CONF_ALL == ND6_CONF_ALL && NETCONF4_CONF_DEFAULT == ND6_CONF_DEFAULT) ? 1 : -1];
 
 /* The length of a stable secret's text as Linux's `%pI6` writes it, eight
  * groups of four hexadecimal digits, and the most of it a write leaves,
@@ -11019,6 +11030,20 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry, struct userns *u
     if (synth_sys_ipv6(entry, &dir, &key) && key >= 0) {
         return sysctl_ipv6_text(t, dir, key);
     }
+    if (synth_sys_ipv4(entry, &dir, &key) && key >= 0) {
+        int32_t v;
+        int which = sysctl_ipv6_which(dir), rc;
+
+        if (which == -ENODEV) {
+            return which;
+        }
+        rc = netconf4_conf_get(which, sysctl_ipv4_keys[key], &v);
+        if (rc == 0) {
+            ap_int(t, (int)v);
+            ap_ch(t, '\n');
+        }
+        return rc;
+    }
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
         ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
         ap_ch(t, '\n');
@@ -11078,6 +11103,9 @@ static int sysctl_numeric(int entry)
 
     if (synth_sys_ipv6(entry, &dir, &key)) {
         return key >= 0 && key != SYNTH_IPV6_STABLE_SECRET;
+    }
+    if (synth_sys_ipv4(entry, &dir, &key)) {
+        return key >= 0;
     }
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME ||
         entry == SYNTH_SYS_BOOT_ID || entry == SYNTH_SYS_UUID) {
@@ -11317,6 +11345,33 @@ static int sysctl_ulong_store(int entry, unsigned long v, int *rc)
 }
 
 /**
+ * Store `v` in the file `entry` of net/ipv6/conf, through `nd6_conf_set`,
+ * or of net/ipv4/conf, through `netconf4_conf_set`, with the result in
+ * `*rc`: -ENODEV for an interface gone, and -EINVAL for a ra_defrtr_metric
+ * of 0. Returns 1 for such a file, else 0.
+ */
+static int sysctl_conf_store(int entry, int32_t v, int *rc)
+{
+    const char *dir;
+    int key, which;
+
+    if (synth_sys_ipv6(entry, &dir, &key)) {
+        which = sysctl_ipv6_which(dir);
+        *rc = which == -ENODEV ? which
+              : key == SYNTH_IPV6_RA_DEFRTR_METRIC && v == 0
+                  ? -EINVAL
+                  : nd6_conf_set(which, sysctl_ipv6_keys[key], v);
+        return 1;
+    }
+    if (synth_sys_ipv4(entry, &dir, &key)) {
+        which = sysctl_ipv6_which(dir);
+        *rc = which == -ENODEV ? which : netconf4_conf_set(which, sysctl_ipv4_keys[key], v);
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * Store the number written to the numeric /proc/sys file `entry`, of the
  * handler family `kind`, given as its magnitude `mag` and 1 in `neg` for a
  * minus, as Linux's handler of the file converts and stores it.
@@ -11333,14 +11388,13 @@ static int sysctl_ulong_store(int entry, unsigned long v, int *rc)
  * sets the last number of the caller's PID namespace
  * (`pidns_set_last_pid`), -EPERM unless the caller is privileged over that
  * namespace and -EINVAL out of 0 to pid_max, and a file of net/ipv6/conf
- * is `nd6_conf_set`'s. A row of
+ * or net/ipv4/conf is `sysctl_conf_store`'s. A row of
  * `sysctl_ints` of any family is `sysctl_int_write`'s, -EINVAL out of the
  * row's range. Returns 0, -EINVAL, or the error named.
  */
 static int sysctl_num_store(int entry, int kind, unsigned long mag, int neg, struct userns *uns)
 {
-    const char *dir;
-    int key, which, rc, i = sysctl_int(entry);
+    int rc, i = sysctl_int(entry);
     int32_t v;
 
     if (neg && kind != SYSCTL_INT) {
@@ -11374,15 +11428,8 @@ static int sysctl_num_store(int entry, int kind, unsigned long mag, int neg, str
         return -EINVAL;
     }
     v = neg ? (int32_t)(0u - (uint32_t)mag) : (int32_t)(uint32_t)mag;
-    if (synth_sys_ipv6(entry, &dir, &key)) {
-        which = sysctl_ipv6_which(dir);
-        if (which == -ENODEV) {
-            return which;
-        }
-        if (key == SYNTH_IPV6_RA_DEFRTR_METRIC && mag == 0) {
-            return -EINVAL;
-        }
-        return nd6_conf_set(which, sysctl_ipv6_keys[key], v);
+    if (sysctl_conf_store(entry, v, &rc)) {
+        return rc;
     }
     if (entry == SYNTH_SYS_NS_LAST_PID) {
         return pidns_set_last_pid(v);

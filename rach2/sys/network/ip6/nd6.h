@@ -90,13 +90,14 @@ struct nd6_row {
 #define ND6_CONF_ALL     (-1) /* `which` for `all` */
 #define ND6_CONF_DEFAULT 0    /* `which` for `default`; an ifindex otherwise */
 
-#define ND6_DISABLE_IPV6     0 /* not 0: no IPv6 on the interface, its addresses gone */
-#define ND6_ACCEPT_RA        1 /* 0 ignore, 2 always, any other when not forwarding */
-#define ND6_AUTOCONF         2 /* not 0: SLAAC addresses from prefixes advertised */
-#define ND6_FORWARDING       3 /* not 0: a router: no solicitations, R set in answers */
-#define ND6_USE_TEMPADDR     4 /* <= 0 none, 1 make temporary addresses, 2 prefer them */
-#define ND6_RA_DEFRTR_METRIC 5 /* unsigned: a router's default route's metric, 1024 */
-#define ND6_CONF_KEYS        6
+#define ND6_DISABLE_IPV6      0 /* not 0: no IPv6 on the interface, its addresses gone */
+#define ND6_ACCEPT_RA         1 /* 0 ignore, 2 always, any other when not forwarding */
+#define ND6_AUTOCONF          2 /* not 0: SLAAC addresses from prefixes advertised */
+#define ND6_FORWARDING        3 /* not 0: a router: no solicitations, R set in answers */
+#define ND6_USE_TEMPADDR      4 /* <= 0 none, 1 make temporary addresses, 2 prefer them */
+#define ND6_RA_DEFRTR_METRIC  5 /* unsigned: a router's default route's metric, 1024 */
+#define ND6_KEEP_ADDR_ON_DOWN 6 /* > 0: a card taken down keeps its permanent addresses */
+#define ND6_CONF_KEYS         7
 
 /**
  * Read the setting `key` of `which` into `*value`. Returns 0, or -EINVAL
@@ -220,17 +221,29 @@ void nd6_dad_start(struct netdev_addr6 *a);
  */
 void nd6_random_link_local(struct netdev *nd, uint8_t *ll);
 
-/** What a card that came up starts: duplicate detection of each of its
- * addresses, and router solicitation once its link-local address is
- * usable. Nothing for a card already started, so that a flag change that
- * leaves it up restarts nothing. Called from `netconf_set_up`. */
+/** What a card that came up starts: the solicited-node group of each
+ * address that keep_addr_on_down kept, which Linux's addrconf_dad_begin
+ * joins again, duplicate detection of each of its addresses, and router
+ * solicitation once its link-local address is usable. Nothing for a card
+ * already started, so that a flag change that leaves it up restarts
+ * nothing. Called from `netconf_set_up`. */
 void nd6_if_up(struct netdev *nd);
 
-/** What a card that went down forgets: its neighbours and the datagrams
- * waiting for them, all its IPv6 addresses and routes, and its routers'
- * settings. Called from
- * `netconf_set_up`. */
+/**
+ * What a card taken down forgets: its neighbours and the datagrams waiting
+ * for them, its IPv6 routes, its routers' settings, and its addresses, but
+ * when keep_addr_on_down of `all`, or else of the card, is above 0, its
+ * permanent addresses that are neither link-local nor ::1, which stay,
+ * tentative unless NETDEV_A6_NODAD and out of their solicited-node groups,
+ * until `nd6_if_up` rejoins the groups, gives them their prefix routes
+ * back and detects them again, as Linux's addrconf_ifdown and
+ * addrconf_permanent_addr do. Called from `netconf_set_up`.
+ */
 void nd6_if_down(struct netdev *nd);
+
+/** What a card removed forgets: as `nd6_if_down`, and every address,
+ * whatever keep_addr_on_down says. Called as its interface leaves. */
+void nd6_if_remove(struct netdev *nd);
 
 /**
  * Run the timers: the solicitations of resolution, of unreachability

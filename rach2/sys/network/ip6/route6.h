@@ -8,15 +8,13 @@
  *
  * Direct routes installed by addresses keep their own metric and deadline
  * in the table. An expiring duplicate takes the last insertion's lifetime.
- * These entries have separate storage from the ROUTE6_MAX routes learned
+ * They share the table, which grows as it fills, with the routes learned
  * from advertisements or set explicitly. Only local host routes are read
  * from the address list. A SLAAC address leaves its prefix to its router.
  *
  * Lookup prefers the longest prefix, the lowest metric and then a gateway
  * that may be reachable, among matching routes on enabled cards.
  */
-
-#define ROUTE6_MAX 32
 
 /* Who made a route, in Linux's RTPROT_ numbers: the kernel, from an
  * address; the boot line or start-up; a program; a router advertisement. */

@@ -3,7 +3,8 @@
  * gives, and the setters of netconf.c that change it while the machine runs.
  *
  * host-deps: rach2/sys/network/netconf.c rach2/sys/cmdline.c
- * host-deps: rach2/sys/network/route.c
+ * host-deps: rach2/sys/network/route.c rach2/sys/network/driver/netdev_room.c
+ * host-deps: tests/host/compat/kheap_host.c
  * host-deps: rach2/sys/tick.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -24,6 +25,8 @@
 
 extern int printf(const char *fmt, ...);
 extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
+extern unsigned long kheap_host_largest;
+extern void (*kheap_host_freeing)(void *p);
 
 #include "../../rach2/sys/network/netconf.h"
 #include "../../rach2/sys/network/net.h"
@@ -162,9 +165,10 @@ int netdev_on_link(const struct netdev *nd, uint32_t ip)
 }
 
 /** Use the first address as source for the model interfaces. */
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop, int scope)
 {
     (void)hop;
+    (void)scope;
     return nd->ip;
 }
 
@@ -192,6 +196,12 @@ struct netdev *netdev_first(void)
 
 /** Report the model's two interfaces. */
 int netdev_count(void)
+{
+    return 2;
+}
+
+/** Report the model's two interfaces, which it lists without `lo`. */
+int netdev_listed(void)
 {
     return 2;
 }
@@ -239,36 +249,10 @@ struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)
     return 0;
 }
 
-/** No row gives an IPv6 address, which joins a group. */
-int netdev_join6(struct netdev *nd, const uint8_t *group)
-{
-    (void)nd;
-    (void)group;
-    CHECK(0, "no row joins an IPv6 group");
-    return 0;
-}
-
-/** No row takes an IPv6 address, which leaves a group. */
-void netdev_leave6(struct netdev *nd, const uint8_t *group)
-{
-    (void)nd;
-    (void)group;
-    CHECK(0, "no row leaves an IPv6 group");
-}
-
 /** A change of an interface's state forgets its carrier: nothing to do. */
 void netdev_carrier_changed(struct netdev *nd)
 {
     (void)nd;
-}
-
-/** No row brings an interface up, which joins the all-nodes group. */
-int netdev_member6(const struct netdev *nd, const uint8_t *group)
-{
-    (void)nd;
-    (void)group;
-    CHECK(0, "no row brings an interface up");
-    return 0;
 }
 
 /** No row brings an interface up or down, nor gives an IPv6 address, which
@@ -330,7 +314,7 @@ static void iface_reset(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     nd->ip = ip;
     nd->mask = mask;
     nd->gateway = gw;
-    k_memset(nd->addr4, 0, sizeof(nd->addr4));
+    k_memset(&nd->addr4_first, 0, sizeof(nd->addr4_first));
 }
 
 /** Put the configuration back where a fresh boot starts. */
@@ -628,7 +612,7 @@ static void ioctl_reinsert(void)
         CHECK(netconf_add_address(nd, old, op == 2 ? ~0u : mask, 0, 0) == 0 &&
                   netconf_add_address(nd, keep, mask, 0, 0) == 0,
               "configure two primary addresses");
-        nd->addr4[0].metric = 23;
+        NETDEV_ADDR4(nd, 0).metric = 23;
         if (op == 0)
             CHECK(netconf_set_address(nd, next, 0) == 0, "replace the first address");
         else if (op == 1)
@@ -638,7 +622,7 @@ static void ioctl_reinsert(void)
         else
             CHECK(netconf_set_broadcast(nd, brd) == 0, "replace the broadcast");
         CHECK(nd->ip == keep && nd->naddr2 == 1 && nd->ip2[0] == next &&
-                  netdev_secondary(nd, 0) == (op != 3) && nd->addr4[1].metric == 23,
+                  netdev_secondary(nd, 0) == (op != 3) && NETDEV_ADDR4(nd, 1).metric == 23,
               "the surviving primary remains first and each address keeps its attributes");
         CHECK(op != 3 || netdev_addr_brd(nd, 0) == brd, "the new broadcast follows its address");
         CHECK(netconf_del_address(nd, next, 0, 0) == 0 && nd->ip == keep &&
@@ -671,13 +655,13 @@ static void scope_reinsert(void)
               !netconf_add_address(nd, link, mask, 0, 253) && nd->ip == link &&
               nd->ip2[0] == first && nd->ip2[1] == first + 1,
           "a link-scope primary precedes global primaries and their secondaries");
-    CHECK(!netconf_set_broadcast(nd, link + 42) && nd->ip == link && nd->addr4[0].scope == 253 &&
-              netdev_addr_brd(nd, -1) == link + 42,
+    CHECK(!netconf_set_broadcast(nd, link + 42) && nd->ip == link &&
+              NETDEV_ADDR4(nd, 0).scope == 253 && netdev_addr_brd(nd, -1) == link + 42,
           "reinsert the link-scope primary ahead of the surviving global addresses");
     CHECK(netconf_add_address(nd, first + 2, mask, 0, 253) == -EINVAL && nd->naddr2 == 2,
           "a secondary must have the primary's scope");
     CHECK(!netconf_set_address(nd, first + 2, 0) && nd->ip == first && nd->ip2[1] == first + 2 &&
-              !nd->addr4[2].scope,
+              !NETDEV_ADDR4(nd, 2).scope,
           "replacing a link-scope address resets its scope and appends it as secondary");
 }
 
@@ -723,7 +707,7 @@ static void local_lifetime(void)
               netconf_add_address(nd, other, mask, 0, 0) == 0,
           "install a primary, alias and other subnet");
     CHECK(local_row(ip + 1, NETDEV_RT_LOCAL, ip), "an alias uses the primary's preferred source");
-    nd->addr4[0].noprefix = 1;
+    NETDEV_ADDR4(nd, 0).noprefix = 1;
     CHECK(!netdev_has_link_route(nd, ip & mask, mask) &&
               local_row(ip | ~mask, NETDEV_RT_BROADCAST, ip),
           "noprefix preserves the subnet broadcast");
@@ -754,6 +738,164 @@ static void local_lifetime(void)
           "last-address deletion flushes the explicit local route");
 }
 
+/**
+ * An interface holds as many addresses, and the table as many added routes,
+ * as are given, as on Linux: 21 addresses on one card and 40 routes, past
+ * the 8 and 32 a fixed table would hold. Deleting every address flushes the
+ * routes and gives back the room the addresses took.
+ */
+static void many_addresses(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t via;
+    int i, added = 0, routed = 0;
+
+    conf_reset();
+    iface_reset(nd, 0, 0, 0);
+    for (i = 0; i < 21; i++) {
+        added += netconf_add_address(nd, IP4(10, 1, i, 1), IP4(255, 255, 255, 0), 0, 0) == 0;
+    }
+    CHECK(added == 21 && nd->ip == IP4(10, 1, 0, 1) && nd->naddr2 == 20 &&
+              nd->ip2[19] == IP4(10, 1, 20, 1),
+          "a card takes 21 addresses");
+    CHECK(netdev_holds(nd, IP4(10, 1, 20, 1)) && netdev_route_on(IP4(10, 1, 20, 9), 0, &via) == nd,
+          "and answers for and reaches the subnet of the last");
+    for (i = 0; i < 40; i++) {
+        routed += netdev_route_add(nd, IP4(172, 16, i, 0), IP4(255, 255, 255, 0), 0, 5, 0) == 0;
+    }
+    CHECK(routed == 40 && netdev_route_on(IP4(172, 16, 39, 7), 0, &via) == nd,
+          "the table takes 40 added routes and finds the last");
+    for (i = 20; i >= 0; i--) {
+        (void)netconf_del_address(nd, IP4(10, 1, i, 1), 0, 0);
+    }
+    CHECK(!nd->ip && !nd->naddr2 && !nd->ip2 && !nd->room2,
+          "deleting them all gives back their room");
+    CHECK(netdev_route_on(IP4(172, 16, 39, 7), 0, &via) != nd, "and flushes the added routes");
+}
+
+/** Reinsert a primary with a surviving primary while the heap refuses
+ * another address block. Its old block has room for both addresses. */
+static void replace_without_memory(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t old = IP4(10, 5, 0, 1), next = IP4(10, 6, 0, 1);
+    uint32_t survivor = IP4(10, 7, 0, 1), mask = 0xffffff00u;
+    int rc;
+
+    conf_reset();
+    iface_reset(nd, old, mask, 0);
+    CHECK(netconf_add_address(nd, survivor, mask, 0, 0) == 0, "add a second primary");
+    kheap_host_largest = 1;
+    rc = netconf_set_address(nd, next, mask);
+    kheap_host_largest = 0;
+    CHECK(rc == 0 && netdev_holds(nd, next) && netdev_holds(nd, survivor) && !netdev_holds(nd, old),
+          "replacing the first primary needs no allocation");
+    (void)netconf_del_address(nd, survivor, 0, 0);
+    (void)netconf_del_address(nd, next, 0, 0);
+}
+
+static int route_frees;
+
+/** Count a route table allocation returned to the heap. */
+static void route_freed(void *p)
+{
+    (void)p;
+    route_frees++;
+}
+
+/** The explicit table shrinks when most routes are removed and is freed
+ * when the last goes. A failed shrink leaves every remaining route. */
+static void trim_routes(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t mask = 0xffffff00u, via;
+    int i;
+
+    conf_reset();
+    iface_reset(nd, 0, 0, 0);
+    for (i = 0; i < 40; i++)
+        CHECK(netdev_route_add(nd, IP4(172, 17, i, 0), mask, 0, 5, 0) == 0, "add a route");
+    route_frees = 0;
+    kheap_host_freeing = route_freed;
+    kheap_host_largest = 1;
+    for (i = 0; i < 24; i++)
+        CHECK(netdev_route_del(nd, IP4(172, 17, i, 0), mask, 0) == 0, "delete a route");
+    kheap_host_largest = 0;
+    CHECK(route_frees == 0 && netdev_route_on(IP4(172, 17, 39, 1), 0, &via) == nd,
+          "failed shrink keeps the table and its routes");
+    CHECK(netdev_route_del(nd, IP4(172, 17, 24, 0), mask, 0) == 0 && route_frees == 1,
+          "a sparse table returns its old block when it can shrink");
+    CHECK(netdev_route_on(IP4(172, 17, 39, 1), 0, &via) == nd, "shrinking keeps the survivors");
+    netdev_route_flush(nd, 1);
+    CHECK(route_frees == 2, "flushing the last routes returns the table itself");
+    kheap_host_freeing = 0;
+}
+
+/** Give `nd` 10.2.0.1/24 first, 10.3.0.1/24, and 10.2.0.2 and 10.2.0.3
+ * on the first's subnet, in that order; the second is listed before the
+ * two secondaries, as on Linux. */
+static void promote_card(struct netdev *nd)
+{
+    iface_reset(nd, 0, 0, 0);
+    CHECK(netconf_add_address(nd, IP4(10, 2, 0, 1), IP4(255, 255, 255, 0), 0, 0) == 0 &&
+              netconf_add_address(nd, IP4(10, 2, 0, 2), IP4(255, 255, 255, 0), 0, 0) == 0 &&
+              netconf_add_address(nd, IP4(10, 2, 0, 3), IP4(255, 255, 255, 0), 0, 0) == 0 &&
+              netconf_add_address(nd, IP4(10, 3, 0, 1), IP4(255, 255, 255, 0), 0, 0) == 0 &&
+              nd->naddr2 == 3 && nd->ip2[0] == IP4(10, 3, 0, 1),
+          "a card takes two primaries and two secondaries");
+}
+
+/**
+ * net.ipv4.conf's promote_secondaries, as Linux's __inet_del_ifa reads it:
+ * off, deleting a primary deletes its secondaries; on, on the card or in
+ * `all`, its first secondary takes its place as primary after the other
+ * primary, keeps the subnet's route, and the rest stay its secondaries. A
+ * write of `default` reaches a card whose own value was never written.
+ */
+static void promote_secondaries(void)
+{
+    struct netdev *nd = &other_iface;
+    int32_t v = -1;
+    uint32_t via;
+
+    conf_reset();
+    CHECK(netconf4_conf_get(nd->index, NETCONF4_PROMOTE_SECONDARIES, &v) == 0 && v == 0,
+          "promote_secondaries starts at 0");
+    CHECK(netconf4_conf_get(9, NETCONF4_PROMOTE_SECONDARIES, &v) == -ENODEV,
+          "no interface of index 9 has settings");
+    promote_card(nd);
+    (void)netconf_del_address(nd, IP4(10, 2, 0, 1), 0, 0);
+    CHECK(nd->ip == IP4(10, 3, 0, 1) && nd->naddr2 == 0,
+          "without promotion a primary's secondaries go with it");
+
+    CHECK(netconf4_conf_set(nd->index, NETCONF4_PROMOTE_SECONDARIES, 1) == 0,
+          "promote_secondaries is set on the card");
+    promote_card(nd);
+    (void)netconf_del_address(nd, IP4(10, 2, 0, 1), 0, 0);
+    CHECK(nd->ip == IP4(10, 3, 0, 1) && nd->naddr2 == 2 && nd->ip2[0] == IP4(10, 2, 0, 2) &&
+              nd->ip2[1] == IP4(10, 2, 0, 3) && !netdev_secondary(nd, 0) && netdev_secondary(nd, 1),
+          "the first secondary is promoted after the other primary");
+    CHECK(netdev_route_on(IP4(10, 2, 0, 9), 0, &via) == nd, "and its subnet stays reachable");
+    (void)netconf_del_address(nd, IP4(10, 2, 0, 2), 0, 0);
+    CHECK(nd->naddr2 == 1 && nd->ip2[0] == IP4(10, 2, 0, 3) && !netdev_secondary(nd, 0),
+          "a promoted primary's deletion promotes the next");
+
+    CHECK(netconf4_conf_set(nd->index, NETCONF4_PROMOTE_SECONDARIES, 0) == 0 &&
+              netconf4_conf_set(NETCONF4_CONF_ALL, NETCONF4_PROMOTE_SECONDARIES, 1) == 0,
+          "promote_secondaries is set in all");
+    promote_card(nd);
+    (void)netconf_del_address(nd, IP4(10, 2, 0, 1), 0, 0);
+    CHECK(nd->naddr2 == 2 && !netdev_secondary(nd, 0), "all's setting promotes too");
+    CHECK(netconf4_conf_set(NETCONF4_CONF_ALL, NETCONF4_PROMOTE_SECONDARIES, 0) == 0 &&
+              netconf4_conf_set(NETCONF4_CONF_DEFAULT, NETCONF4_PROMOTE_SECONDARIES, 1) == 0 &&
+              netconf4_conf_get(the_iface.index, NETCONF4_PROMOTE_SECONDARIES, &v) == 0 && v == 1 &&
+              netconf4_conf_get(nd->index, NETCONF4_PROMOTE_SECONDARIES, &v) == 0 && v == 0,
+          "default reaches only the card never written");
+    (void)netconf4_conf_set(NETCONF4_CONF_DEFAULT, NETCONF4_PROMOTE_SECONDARIES, 0);
+    (void)netconf4_conf_set(the_iface.index, NETCONF4_PROMOTE_SECONDARIES, 0);
+    iface_reset(nd, 0, 0, 0);
+}
+
 /** Address expiry deprecates first and flushes routes only on deletion. */
 static void timed_address(void)
 {
@@ -761,11 +903,11 @@ static void timed_address(void)
     uint32_t dst = 0xac100000u, mask = 0xffffff00u;
     conf_reset();
     CHECK(netconf_add_address(nd, 0xc0000201u, mask, 0, 0) == 0, "add a finite IPv4 address");
-    nd->addr4[0].preferred_until = 10;
-    nd->addr4[0].valid_until = 20;
+    NETDEV_ADDR4(nd, 0).preferred_until = 10;
+    NETDEV_ADDR4(nd, 0).valid_until = 20;
     CHECK(netdev_route_add(nd, dst, mask, 0, 3, 0) == 0, "add a route under its lifetime");
     netconf_expire_addresses(10);
-    CHECK(nd->ip && nd->addr4[0].deprecated, "preferred lifetime ends first");
+    CHECK(nd->ip && NETDEV_ADDR4(nd, 0).deprecated, "preferred lifetime ends first");
     netconf_expire_addresses(20);
     CHECK(!nd->ip && netdev_route_del(nd, dst, mask, 0) == -ESRCH,
           "valid lifetime ends with last-address cleanup");
@@ -833,6 +975,10 @@ int main(void)
     zero_peer();
     local_lifetime();
     timed_address();
+    many_addresses();
+    replace_without_memory();
+    trim_routes();
+    promote_secondaries();
     narrow_subnets();
     ip = 0;
     mask = 0;

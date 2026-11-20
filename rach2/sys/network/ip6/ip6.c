@@ -9,6 +9,7 @@
 #include "../../lib/kstring.h"
 #include "ip6.h"
 #include "route6.h"
+#include "../net.h"
 #include "../tcp/tcp.h"
 #include "../udp/udp.h"
 #include "icmp6.h"
@@ -68,7 +69,8 @@ static int better_source(const struct netdev_addr6 *a, const struct netdev_addr6
     return ip6_common_prefix(a->addr, dst) > ip6_common_prefix(b->addr, dst);
 }
 
-int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
+/** Select a source from the address arrays under the caller's net_lock. */
+static int source_locked(const struct netdev *out, const uint8_t *dst, uint8_t *src)
 {
     const struct netdev_addr6 *best = 0;
     int want, i;
@@ -106,6 +108,15 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
     }
     k_memcpy(src, best->addr, IP6_ADDR_LEN);
     return 0;
+}
+
+int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
+{
+    uint32_t flags = net_lock();
+    int rc = source_locked(out, dst, src);
+
+    net_unlock(flags);
+    return rc;
 }
 
 /* The option types every node knows (RFC 8200, 4.2): one byte of padding,

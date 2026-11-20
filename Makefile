@@ -1465,12 +1465,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # and the frames whose address a device is given, which alloc_kernel_frame takes
 # from the window's top for the block requests, the page cache and the drivers'
 # buffers; the kernel stacks and the heap come from above the window first.
-# Booted by QEMU, the kernel ends at 10.2 MiB on i686 and 10.6 MiB on x86-64,
-# the module follows it to 50.2 MiB and 52.6 MiB, the boot's tables take 0.8 MiB
-# and 0.2 MiB with 128 MiB of memory, and 13.0 MiB and 11.2 MiB are left for
+# Booted by QEMU, the kernel ends at 9.7 MiB on i686 and 10.1 MiB on x86-64,
+# the module follows it to 49.7 MiB and 52.1 MiB, the boot's tables take 0.8 MiB
+# and 0.2 MiB with 128 MiB of memory, and 13.5 MiB and 11.7 MiB are left for
 # those frames. On i686 the frame table, 4 bytes for each 4 KiB frame below the
 # top of usable memory, is among the boot's tables, so a machine with 4 GiB
-# takes 3 MiB more of the window and leaves 10.0 MiB; the module is kept well
+# takes 3 MiB more of the window and leaves 10.5 MiB; the module is kept well
 # below the window for that reason. The manual's aliases are a table and not
 # files, since the RAM root and a KRFFS disk walk every node on a lookup and
 # hundreds of alias files would make the self-build suite five times slower.

@@ -425,7 +425,15 @@ A distinct
 .Dv IFA_ADDRESS
 names the peer.
 The IPv4 prefix and subnet broadcast are derived from the destination.
-Deleting a primary also deletes its same-prefix secondaries.
+Deleting a primary also deletes its same-prefix secondaries, unless
+.Pa /proc/sys/net/ipv4/conf/ Ns Ar NAME Ns Pa /promote_secondaries
+is on, for the interface or
+.Ql all :
+then the first of them becomes primary, and an
+.Dv RTM_NEWADDR
+without
+.Dv IFA_F_SECONDARY
+announces it.
 An unrelated primary survives.
 Removing the last IPv4 address flushes all routes through the interface.
 A route with a specified preferred source goes when that source ceases to be local.

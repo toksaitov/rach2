@@ -37,4 +37,7 @@ void mld6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t 
 /** Send the reports and answers that are due. Called from `nd6_tick`. */
 void mld6_tick(void);
 
+/** Release the reports and timers for a departing interface under net_lock. */
+void mld6_if_remove(const struct netdev *nd);
+
 #endif /* _MLD6_H_ */

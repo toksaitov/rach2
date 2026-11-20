@@ -4,7 +4,7 @@
  * The routes the cards imply are found from them when they are asked for:
  * each address's subnet or peer prefix, reached on the link, and a card's
  * gateway as its default route; `lo` has none. The routes a program adds,
- * through SIOCADDRT or RTM_NEWROUTE, are kept in a table of NETDEV_ROUTES. A
+ * through SIOCADDRT or RTM_NEWROUTE, are kept in a table that grows. A
  * lookup takes, of the routes of interfaces that are up and have that
  * destination, the one of the longest prefix, then of the lowest metric, then
  * the first found, which puts an implied route before an added one of the
@@ -15,8 +15,8 @@
 #include "net.h"
 #include "netconf.h"
 #include "../lib/kerrno.h"
-
-#define NETDEV_ROUTES 32
+#include "../lib/kstring.h"
+#include "../mm/kheap.h"
 
 /* An added route: datagrams for `dst`/`mask` leave by `nd`, to `gw`, or on
  * the link when it is 0, at `metric`. `nd` is NULL in a free entry. */
@@ -25,12 +25,87 @@ struct added_rt {
     struct netdev_rt row;
 };
 
-static struct added_rt added[NETDEV_ROUTES];
+/* The added routes, in an array of `added_room` that `added_free` doubles
+ * when every entry is taken. */
+#define ROUTE4_INITIAL 32
+
+static struct added_rt *added;
+static int added_room, added_used;
 
 /* The lookups the stack made and those that found no route, which
  * /proc/net/stat/rt_cache reports. */
 uint32_t netdev_route_lookups;
 uint32_t netdev_route_misses;
+
+/** A free entry of the added routes, made by doubling the array when every
+ * entry is taken; -1 when the heap has no room. Call under net_lock. */
+static int added_free(void)
+{
+    struct added_rt *more;
+    int i, room;
+
+    for (i = 0; i < added_room; i++) {
+        if (!added[i].nd)
+            return i;
+    }
+    if (added_room > 0x7fffffff / 2 / (int)sizeof(*more))
+        return -1;
+    room = added_room ? added_room * 2 : ROUTE4_INITIAL;
+    more = kzalloc((size_t)room * sizeof(*more));
+    if (!more)
+        return -1;
+    if (added_room)
+        k_memcpy(more, added, (size_t)added_room * sizeof(*more));
+    kfree(added);
+    added = more;
+    i = added_room;
+    added_room = room;
+    return i;
+}
+
+/** Return an empty table to the heap, or compact a quarter-full table to
+ * half its capacity. Keep its previous order and storage on a failed
+ * allocation. The caller holds net_lock. */
+static void added_trim(void)
+{
+    struct added_rt *less = 0;
+    int i, n = 0, room = 0;
+
+    if (added_used) {
+        if (added_room <= ROUTE4_INITIAL || added_used > added_room / 4)
+            return;
+        room = added_room / 2;
+        while (room > ROUTE4_INITIAL && added_used <= room / 4)
+            room /= 2;
+        less = kzalloc((size_t)room * sizeof(*less));
+        if (!less)
+            return;
+        for (i = 0; i < added_room; i++) {
+            if (added[i].nd)
+                less[n++] = added[i];
+        }
+    }
+    kfree(added);
+    added = less;
+    added_room = room;
+}
+
+/** Remove an occupied slot under net_lock. The caller trims after the walk. */
+static void added_remove(int i)
+{
+    added[i].nd = 0;
+    added_used--;
+}
+
+/** Add or replace a route in its chosen slot under net_lock. */
+static void added_store(int i, struct netdev *nd, const struct netdev_rt *r)
+{
+    if (!added[i].nd)
+        added_used++;
+    added[i].nd = nd;
+    added[i].row = *r;
+    added[i].row.ifindex = nd->index;
+}
 
 /** Whether `mask` is contiguous: ones from the top, then zeros. */
 static int mask_contiguous(uint32_t mask)
@@ -53,7 +128,7 @@ static int implied_at(const struct netdev *nd, int n, struct netdev_rt *out)
         uint32_t dst = netdev_addr_dst(nd, a);
 
         if (!netdev_addr_has_route(ip, dst, mask) || netdev_secondary(nd, a) ||
-            nd->addr4[a + 1].noprefix || (nd->addr4[a + 1].deleted & ADDR4_PREFIX)) {
+            NETDEV_ADDR4(nd, a + 1).noprefix || (NETDEV_ADDR4(nd, a + 1).deleted & ADDR4_PREFIX)) {
             continue;
         }
         if (count++ == n) {
@@ -65,14 +140,14 @@ static int implied_at(const struct netdev *nd, int n, struct netdev_rt *out)
             out->proto = 2;
             out->scope = 253;
             out->prefsrc = ip;
-            out->metric = nd->addr4[a + 1].metric;
+            out->metric = NETDEV_ADDR4(nd, a + 1).metric;
             return 1;
         }
     }
     if (nd->gateway != 0 && count++ == n) {
         out->dst = out->mask = 0;
         out->gw = nd->gateway;
-        out->src = netdev_source(nd, nd->gateway);
+        out->src = netdev_source(nd, nd->gateway, 0);
         out->kind = NETDEV_RT_DEFAULT;
         out->proto = 3;
         out->scope = 0;
@@ -102,20 +177,19 @@ static int local_seen(const struct netdev *nd, int a, int bit, uint32_t dst)
 static int added_at(int n, int local, struct netdev_rt *out)
 {
     int i;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         const struct added_rt *entry = &added[i];
         if (entry->nd && (entry->row.kind >= NETDEV_RT_LOCAL) == local && n-- == 0) {
             *out = entry->row;
-            out->src = out->prefsrc ? out->prefsrc
-                                    : netdev_source(entry->nd, out->gw ? out->gw : out->dst);
+            out->src = out->prefsrc ? out->prefsrc : netdev_source(entry->nd, out->gw, out->scope);
             return 1;
         }
     }
     return 0;
 }
 
-/** Enumerate routes created by addresses, then explicit local-table routes. */
-int netdev_local_route_at(int n, struct netdev_rt *out)
+/** Enumerate local routes under the caller's net_lock. */
+static int local_route_at(int n, struct netdev_rt *out)
 {
     int i, a, bit;
     for (i = 0; i < netdev_count(); i++) {
@@ -143,6 +217,15 @@ int netdev_local_route_at(int n, struct netdev_rt *out)
     return added_at(n, 1, out);
 }
 
+int netdev_local_route_at(int n, struct netdev_rt *out)
+{
+    uint32_t flags = net_lock();
+    int found = local_route_at(n, out);
+
+    net_unlock(flags);
+    return found;
+}
+
 int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask)
 {
     struct netdev_rt r;
@@ -156,7 +239,8 @@ int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask)
     return 0;
 }
 
-int netdev_route_at(int n, struct netdev_rt *out)
+/** Enumerate main-table routes under the caller's net_lock. */
+static int route_at(int n, struct netdev_rt *out)
 {
     int i, got;
 
@@ -171,6 +255,15 @@ int netdev_route_at(int n, struct netdev_rt *out)
         n += got;
     }
     return added_at(n, 0, out);
+}
+
+int netdev_route_at(int n, struct netdev_rt *out)
+{
+    uint32_t flags = net_lock();
+    int found = route_at(n, out);
+
+    net_unlock(flags);
+    return found;
 }
 
 /** The card of index `index`, or NULL. */
@@ -200,14 +293,15 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
     return nd;
 }
 
-struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *best)
+/** Select a main-table route and its interface under the caller's net_lock. */
+static struct netdev *route_lookup(uint32_t dst, int ifindex, struct netdev_rt *best)
 {
     struct netdev_rt r;
     struct netdev *out = 0;
     int n;
 
     netdev_route_lookups++;
-    for (n = 0; netdev_route_at(n, &r); n++) {
+    for (n = 0; route_at(n, &r); n++) {
         struct netdev *nd = dev_of(r.ifindex);
 
         if (!nd || !nd->up || (dst & r.mask) != r.dst || (ifindex && r.ifindex != ifindex)) {
@@ -227,7 +321,7 @@ struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *
             direct.dst = dst;
             direct.mask = 0xffffffffu;
             direct.ifindex = ifindex;
-            direct.src = netdev_source(out, dst);
+            direct.src = netdev_source(out, 0, NETDEV_SCOPE_LINK);
             *best = direct;
             return out;
         }
@@ -238,11 +332,21 @@ struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *
         return 0;
     }
     if (!best->prefsrc)
-        best->src = netdev_source(out, best->gw ? best->gw : dst);
+        best->src = netdev_source(out, best->gw, best->scope);
     return out;
 }
 
-int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw)
+struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *best)
+{
+    uint32_t flags = net_lock();
+    struct netdev *nd = route_lookup(dst, ifindex, best);
+
+    net_unlock(flags);
+    return nd;
+}
+
+/** Check whether a gateway can be reached under the caller's net_lock. */
+static int gateway_reachable(const struct netdev *nd, uint32_t gw)
 {
     struct netdev_rt r;
     int i;
@@ -252,13 +356,22 @@ int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw)
         if (r.kind == NETDEV_RT_LINK && (gw & r.mask) == r.dst)
             return 1;
     }
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         r = added[i].row;
         if (added[i].nd == nd && r.kind == NETDEV_RT_ADDED && !r.gw && r.scope >= 253 &&
             (gw & r.mask) == r.dst)
             return 1;
     }
     return 0;
+}
+
+int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw)
+{
+    uint32_t flags = net_lock();
+    int found = gateway_reachable(nd, gw);
+
+    net_unlock(flags);
+    return found;
 }
 
 /** Match the prefix and the optional delete selectors. */
@@ -275,7 +388,7 @@ static int route_matches(const struct netdev_rt *old, const struct netdev_rt *r)
 static int stored_prefix4(const struct netdev *nd, const struct netdev_rt *key, int exact)
 {
     int i, best = -1;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         const struct netdev_rt *r = &added[i].row;
         if (added[i].nd == nd && r->kind == NETDEV_RT_ADDED && route_matches(r, key) &&
             (!exact || r->metric == key->metric) &&
@@ -287,7 +400,7 @@ static int stored_prefix4(const struct netdev *nd, const struct netdev_rt *key, 
 
 void netdev_prefix_metric(struct netdev *nd, int a, uint32_t metric, int fresh)
 {
-    struct addr4_routes *opts = &nd->addr4[a + 1];
+    struct addr4_routes *opts = &NETDEV_ADDR4(nd, a + 1);
     uint32_t dst = netdev_addr_dst(nd, a), prior = opts->metric;
     uint32_t local = a < 0 ? nd->ip : nd->ip2[a];
     struct netdev_rt key = {0};
@@ -307,9 +420,10 @@ void netdev_prefix_metric(struct netdev *nd, int a, uint32_t metric, int fresh)
         key.metric = prior;
         old = stored_prefix4(nd, &key, 0);
         /* Linux inserts first, then deletes with zero as a metric wildcard. */
-        if (old >= 0 && (prior || added[old].row.metric <= metric))
-            added[old].nd = 0;
-        else if (!prior)
+        if (old >= 0 && (prior || added[old].row.metric <= metric)) {
+            added_remove(old);
+            added_trim();
+        } else if (!prior)
             hidden = 1;
     }
     if (hidden)
@@ -326,7 +440,7 @@ static void remove_local(struct netdev *nd, const struct netdev_rt *old)
         for (bit = ADDR4_LOCAL; bit <= ADDR4_SUBNET_BROADCAST; bit *= 2) {
             if ((bit == ADDR4_LOCAL) == (old->kind == NETDEV_RT_LOCAL) &&
                 netdev_addr_local(nd, a, bit) == old->dst)
-                nd->addr4[a + 1].deleted |= bit;
+                NETDEV_ADDR4(nd, a + 1).deleted |= bit;
         }
     }
 }
@@ -335,7 +449,7 @@ struct netdev *netdev_added_local(uint32_t dst, int kind)
 {
     const struct added_rt *best = 0;
     int i;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         const struct added_rt *e = &added[i];
         if (e->nd && e->row.kind == kind && (dst & e->row.mask) == e->row.dst &&
             (!best || e->row.mask > best->row.mask ||
@@ -358,7 +472,7 @@ static void remove_generated(struct netdev *nd, const struct netdev_rt *r)
     for (a = -1; a < nd->naddr2; a++) {
         uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
         if (mask == r->mask && (netdev_addr_dst(nd, a) & mask) == r->dst) {
-            nd->addr4[a + 1].deleted |= ADDR4_PREFIX;
+            NETDEV_ADDR4(nd, a + 1).deleted |= ADDR4_PREFIX;
         }
     }
 }
@@ -389,7 +503,7 @@ static int route_valid(struct netdev *nd, const struct netdev_rt *r)
         return -EINVAL;
     if (!nd->up && r->scope != 254)
         return -ENETDOWN;
-    if (r->gw && (r->scope >= 253 || !netdev_gateway_reachable(nd, r->gw)))
+    if (r->gw && (r->scope >= 253 || !gateway_reachable(nd, r->gw)))
         return -ENETUNREACH;
     return 0;
 }
@@ -398,7 +512,7 @@ static int route_valid(struct netdev *nd, const struct netdev_rt *r)
 static int local_slot(const struct netdev *nd, const struct netdev_rt *r, int del)
 {
     int i, slot = -1;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         const struct added_rt *e = &added[i];
         if (!e->nd) {
             if (!del && slot < 0)
@@ -415,44 +529,43 @@ static int local_slot(const struct netdev *nd, const struct netdev_rt *r, int de
 int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
 {
     struct netdev_rt row;
-    int n, slot = local_slot(nd, r, del);
+    int n, found, slot = local_slot(nd, r, del);
     if (!del) {
         int rc = route_valid(nd, r);
         if (rc)
             return rc;
         if (r->kind < NETDEV_RT_LOCAL || r->gw)
             return -EINVAL;
-        if (slot < 0)
-            return -ENOSPC;
     }
     if (slot >= 0 && added[slot].nd) {
         if (del) {
-            added[slot].nd = 0;
+            added_remove(slot);
+            added_trim();
             return 0;
         }
         if (!replace)
             return -EEXIST;
     } else {
-        for (n = 0; netdev_local_route_at(n, &row); n++) {
+        for (n = 0; (found = local_route_at(n, &row)); n++) {
             if ((!nd || nd->index == row.ifindex) && (!r->kind || r->kind == row.kind) &&
                 (del ? route_matches(&row, r)
-                     : (r->dst == row.dst && r->mask == row.mask && r->metric == row.metric))) {
-                if (!del && !replace)
-                    return -EEXIST;
-                remove_local(dev_of(row.ifindex), &row);
-                if (del)
-                    return 0;
+                     : (r->dst == row.dst && r->mask == row.mask && r->metric == row.metric)))
                 break;
-            }
         }
-        if (del)
-            return -ESRCH;
+        if (del) {
+            if (!found)
+                return -ESRCH;
+            remove_local(dev_of(row.ifindex), &row);
+            return 0;
+        }
+        if (found && !replace)
+            return -EEXIST;
+        if (slot < 0 && (slot = added_free()) < 0)
+            return -ENOBUFS;
+        if (found)
+            remove_local(dev_of(row.ifindex), &row);
     }
-    if (slot < 0)
-        return -ENOSPC;
-    added[slot].nd = nd;
-    added[slot].row = *r;
-    added[slot].row.ifindex = nd->index;
+    added_store(slot, nd, r);
     return 0;
 }
 
@@ -471,7 +584,7 @@ int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, i
     }
     if (generated && !replace)
         return -EEXIST;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         const struct netdev_rt *row = &added[i].row;
         if (!added[i].nd) {
             if (slot < 0)
@@ -480,7 +593,8 @@ int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, i
             continue;
         } else if (del) {
             if ((!nd || nd == added[i].nd) && route_matches(row, r)) {
-                added[i].nd = 0;
+                added_remove(i);
+                added_trim();
                 return 0;
             }
         } else if (row->dst == r->dst && row->mask == r->mask && row->metric == r->metric) {
@@ -492,14 +606,12 @@ int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, i
     }
     if (del)
         return -ESRCH;
-    if (slot < 0)
-        return -ENOSPC;
+    if (slot < 0 && (slot = added_free()) < 0)
+        return -ENOBUFS;
     if (generated)
         remove_generated(generated, &old);
-    added[slot].nd = nd;
-    added[slot].row = *r;
+    added_store(slot, nd, r);
     added[slot].row.kind = NETDEV_RT_ADDED;
-    added[slot].row.ifindex = nd->index;
     return 0;
 }
 
@@ -524,7 +636,7 @@ uint32_t netdev_default_gateway(const struct netdev *nd)
     if (gw != 0) {
         return gw;
     }
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         if (added[i].nd == nd && added[i].row.mask == 0 && added[i].row.gw != 0 &&
             (gw == 0 || added[i].row.metric < metric)) {
             gw = added[i].row.gw;
@@ -547,10 +659,11 @@ int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw
 void netdev_route_flush(struct netdev *nd, int all)
 {
     int i;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         if (added[i].nd == nd && (all || added[i].row.scope != 254))
-            added[i].nd = 0;
+            added_remove(i);
     }
+    added_trim();
     nd->gateway = 0;
     if (nd == netdev_first())
         net_ip_gateway = 0;
@@ -561,8 +674,9 @@ void netdev_route_lost_source(uint32_t ip)
     int i;
     if (!ip || netdev_owns(ip))
         return;
-    for (i = 0; i < NETDEV_ROUTES; i++) {
+    for (i = 0; i < added_room; i++) {
         if (added[i].nd && added[i].row.prefsrc == ip)
-            added[i].nd = 0;
+            added_remove(i);
     }
+    added_trim();
 }

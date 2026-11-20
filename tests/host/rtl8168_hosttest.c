@@ -505,6 +505,95 @@ void pci_disable_bus_master(pci_device_t *dev)
     pci_master_enabled = 0;
 }
 
+/* The heap's pages. A run of `kalloc_contig` is a slot of run_pool, its
+ * frames above 4 GiB and each slot 64 KiB from the next, and a page of
+ * `kalloc_pages` a slot of page_pool, also above 4 GiB and two frames from
+ * the next, so that no two pages are adjacent. `heap_run_max` is the
+ * longest run of free frames, as on a machine whose memory is fragmented,
+ * and `heap_left`, unless it is -1, the allocations that may still succeed.
+ * `heap_pages` counts the pages held and `heap_bad` the refused frees. */
+#define POOL_RUNS  80
+#define POOL_PAGES 48
+static unsigned char run_pool[POOL_RUNS][4 * 4096] __attribute__((aligned(4096)));
+static unsigned char page_pool[POOL_PAGES][4096] __attribute__((aligned(4096)));
+static int run_used[POOL_RUNS], page_used[POOL_PAGES];
+static unsigned heap_run_max = 256;
+static long heap_left = -1, heap_pages, heap_bad;
+
+/** Whether one more allocation may succeed, counting it. */
+static int heap_take(void)
+{
+    if (heap_left == 0) {
+        return 0;
+    }
+    heap_left -= heap_left > 0;
+    return 1;
+}
+
+/** A free run of up to four frames from run_pool, or NULL. */
+void *kalloc_contig(uint32_t count, uintptr_t *phys)
+{
+    unsigned i;
+
+    if (count == 0 || count > 4 || count > heap_run_max || !heap_take()) {
+        return NULL;
+    }
+    for (i = 0; i < POOL_RUNS && run_used[i]; i++) {
+    }
+    if (i == POOL_RUNS) {
+        return NULL;
+    }
+    run_used[i] = (int)count;
+    heap_pages += count;
+    *phys = (uintptr_t)0x200000000ull + (uintptr_t)i * 0x10000u;
+    return run_pool[i];
+}
+
+/** A free page of page_pool, or NULL; the model gives one at a time. */
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    unsigned i;
+
+    if (count != 1 || !heap_take()) {
+        return NULL;
+    }
+    for (i = 0; i < POOL_PAGES && page_used[i]; i++) {
+    }
+    if (i == POOL_PAGES) {
+        return NULL;
+    }
+    page_used[i] = 1;
+    heap_pages++;
+    *phys = (uintptr_t)0x300000000ull + (uintptr_t)i * 2u * PAGE_SIZE;
+    return page_pool[i];
+}
+
+/** Give back a run or a page with bus mastering off, counting refusals. */
+void kfree_pages(void *p, uint32_t count)
+{
+    unsigned i;
+
+    if (pci_master_enabled) {
+        heap_bad++;
+        return;
+    }
+    for (i = 0; i < POOL_RUNS; i++) {
+        if (p == run_pool[i] && run_used[i] == (int)count) {
+            run_used[i] = 0;
+            heap_pages -= count;
+            return;
+        }
+    }
+    for (i = 0; i < POOL_PAGES; i++) {
+        if (p == page_pool[i] && page_used[i] && count == 1) {
+            page_used[i] = 0;
+            heap_pages--;
+            return;
+        }
+    }
+    heap_bad++;
+}
+
 /** Map `size` bytes at `phys` one to one. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
@@ -1291,6 +1380,108 @@ static void stop_rows(void)
           "after the sources were masked");
 }
 
+/** The pages the buffers hold: four for each receive buffer and one for
+ * each R8168_TX_PER_PAGE transmit buffers. */
+#define BUF_PAGES (R8168_RING_SIZE * R8168_RX_PAGES + R8168_RING_SIZE / R8168_TX_PER_PAGE)
+
+/** Whether no buffer is held and every pointer is clear. */
+static int bufs_none(void)
+{
+    unsigned i;
+
+    for (i = 0; i < R8168_RING_SIZE; i++) {
+        if (r8168_rx_buf[i] || r8168_tx_buf[i] || r8168_rx_phys[i] || r8168_tx_phys[i]) {
+            return 0;
+        }
+    }
+    return heap_pages == 0 && heap_bad == 0;
+}
+
+/**
+ * The buffers through the driver's own allocation, from the heap's model:
+ * a bring-up on a heap with no run longer than a receive buffer's four
+ * frames, its transmit buffers each inside one page and every descriptor
+ * given the high half of an address above 4 GiB; a card that came up
+ * keeping its buffers across a stop and a second bring-up; a heap that
+ * runs out at a transmit page or at a receive buffer part way through, or
+ * has no run of four frames, which fails the bring-up with every page
+ * given back; a bring-up whose second reset fails with bus mastering on,
+ * whose stop gives the buffers back once bus mastering is off; and a
+ * revision this driver refuses, which takes none.
+ */
+static void check_buffers(void)
+{
+    unsigned char frame[64];
+    unsigned i;
+    int ok = 1;
+
+    r8168_bufs_free(); /* the earlier rows' buffers, as a fresh boot has none */
+    heap_pages = 0;
+    for (i = 0; i < sizeof(frame); i++) {
+        frame[i] = (unsigned char)i;
+    }
+
+    model_reset();
+    heap_run_max = 4;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && heap_pages == BUF_PAGES,
+          "buffers: the bring-up needs no run longer than a receive buffer's");
+    for (i = 0; i < R8168_RING_SIZE; i++) {
+        ok = ok && r8168_tx_phys[i] % PAGE_SIZE + R8168_TX_STRIDE <= PAGE_SIZE &&
+             r8168_rx_ring[i].addr_lo == (uint32_t)r8168_rx_phys[i] &&
+             r8168_rx_ring[i].addr_hi == (uint32_t)((uint64_t)r8168_rx_phys[i] >> 32) &&
+             r8168_rx_ring[i].addr_hi != 0;
+    }
+    CHECK(ok, "buffers: each transmit buffer inside a page, each receive address above 4 GiB");
+    CHECK(rtl8168_tx(model_iface.dev, frame, sizeof(frame)) == NETDEV_TX_OK &&
+              r8168_tx_ring[0].addr_lo == (uint32_t)r8168_tx_phys[0] &&
+              r8168_tx_ring[0].addr_hi == (uint32_t)((uint64_t)r8168_tx_phys[0] >> 32) &&
+              r8168_tx_ring[0].addr_hi != 0 && r8168_tx_buf[0][63] == 63,
+          "buffers: a transmit gives the chip its buffer's whole address");
+    rtl8168_stop(model_iface.dev);
+    CHECK(heap_pages == BUF_PAGES && r8168_rx_buf[0] != NULL,
+          "buffers: a card that came up keeps them across its stop");
+    model_reset();
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && heap_pages == BUF_PAGES,
+          "buffers: and its next bring-up takes no more");
+    rtl8168_stop(model_iface.dev);
+    r8168_bufs_free();
+    heap_run_max = 256;
+
+    model_reset();
+    heap_left = 4; /* receive 0, page 0, receive 1, receive 2; page 1 fails */
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && bufs_none() && !pci_master_enabled,
+          "buffers: no transmit page: the bring-up fails holding none");
+    rtl8168_stop(model_iface.dev);
+    model_reset();
+    heap_left = 69; /* three for each two buffers: receive buffer 46 fails */
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && bufs_none(),
+          "buffers: no receive buffer part way: the bring-up fails holding none");
+    rtl8168_stop(model_iface.dev);
+    heap_left = -1;
+    model_reset();
+    heap_run_max = 2;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && bufs_none(),
+          "buffers: no run of four frames: the first transmit page is given back too");
+    rtl8168_stop(model_iface.dev);
+    heap_run_max = 256;
+
+    model_reset();
+    model_stuck_reset = 2;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && heap_pages == BUF_PAGES,
+          "buffers: a second reset that never completes fails with the buffers made");
+    CHECK(pci_master_enabled, "buffers: bus mastering stays on until the stop");
+    rtl8168_stop(model_iface.dev);
+    CHECK(!pci_master_enabled && bufs_none(),
+          "buffers: its stop ends bus mastering and gives them back");
+
+    model_reset();
+    model_xid_txconfig = 0x5c8u << 20;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_FAILED && bufs_none(),
+          "buffers: a refused revision takes none");
+    rtl8168_stop(model_iface.dev);
+    CHECK(bufs_none(), "buffers: nor does its stop give back what it never took");
+}
+
 int main(void)
 {
     int a, b, c, d, e;
@@ -1496,7 +1687,7 @@ int main(void)
         unsigned char frame[20];
         unsigned char dirty = 0xAA;
 
-        for (i = 0; i < sizeof(r8168_tx_buf[1]); i++) {
+        for (i = 0; i < R8168_FRAME_MAX; i++) {
             r8168_tx_buf[1][i] = dirty;
         }
         for (i = 0; i < sizeof(frame); i++) {
@@ -1966,6 +2157,8 @@ int main(void)
                   find_write(before, 32, R8168_COUNTERADDRLOW) < 0,
               "a stopped card is not asked");
     }
+
+    check_buffers();
 
     return fails > 255 ? 255 : fails;
 }

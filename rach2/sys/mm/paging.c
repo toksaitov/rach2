@@ -3669,6 +3669,38 @@ uintptr_t alloc_frames(uint32_t count)
     return frame * PAGE_SIZE;
 }
 
+/** Above the window and below `limit` first, from the lowest, and then in
+ * the window while WINDOW_KEEP frames would be left to `alloc_kernel_frame`,
+ * as `find_free_frame` orders them; one search when every frame lies below
+ * `limit`. */
+uintptr_t alloc_frame_below(uint64_t limit)
+{
+    uintptr_t frame, top, end;
+    uint32_t flags;
+
+    if ((uint64_t)_frames_number * PAGE_SIZE <= limit) {
+        return alloc_frame();
+    }
+    if (framefail_now() || !mem_may_take(0)) {
+        return 0;
+    }
+    top = (uintptr_t)(limit / PAGE_SIZE);
+    flags = spin_lock_irqsave(&frame_lock);
+    frame = top > _window_frames ? frame_next_free(_window_frames, top) : top;
+    if (frame >= top && _free_window_frames > WINDOW_KEEP) {
+        end = top < _window_frames ? top : _window_frames;
+        frame = frame_next_free(_user_frames_start, end);
+        frame = frame < end ? frame : top;
+    }
+    if (frame >= top) {
+        spin_unlock_irqrestore(&frame_lock, flags);
+        return 0;
+    }
+    frame_take(frame);
+    spin_unlock_irqrestore(&frame_lock, flags);
+    return frame * PAGE_SIZE;
+}
+
 #if MMU_HUGE
 /* Where the next search for a huge page's frames starts, a frame number on
  * a 2 MiB boundary, and the frees counted when the last search found none,

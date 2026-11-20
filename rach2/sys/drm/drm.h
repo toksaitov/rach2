@@ -2045,8 +2045,9 @@ void drm_crtc_crc_release(struct drm_crtc *crtc);
  * line's length with its NUL, 0 for a CRTC without CRCs, -EAGAIN, -EINTR,
  * or -EINVAL for a buffer shorter than a line. */
 int32_t drm_crtc_crc_read(struct drm_crtc *crtc, char *buf, uint32_t count, int nonblock);
-/** Whether crc/data has an entry to read, for its poll. */
-int drm_crtc_crc_ready(const struct drm_crtc *crtc);
+/** Whether crc/data has an entry to read, for its poll, under the CRC's
+ * spinlock alone, as Linux's crtc_crc_poll reads it; needs no big lock. */
+int drm_crtc_crc_ready(struct drm_crtc *crtc);
 
 /** debugfs's `force` write of a connector, Linux's connector_write: "on",
  * "digital", "off" or "unspecified", with or without a newline, up to a
