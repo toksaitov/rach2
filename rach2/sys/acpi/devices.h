@@ -9,7 +9,13 @@
 
 #include "../lib/kint.h"
 
+struct acpi_resource;
 struct evdev;
+
+/* What a resource of a _CRS describes (`acpi_resource_range`). */
+#define ACPI_RANGE_IO     1 /* I/O ports */
+#define ACPI_RANGE_MEMORY 2 /* memory */
+#define ACPI_RANGE_BUS    3 /* bus numbers, which only an address descriptor gives */
 
 /**
  * Find the embedded controller, PNP0C09, and install the handler of its
@@ -75,6 +81,19 @@ void acpi_pnp_i8042(void);
  * runs, since a _STA may read it.
  */
 void acpi_pnp_reserve(void);
+
+/**
+ * The range a resource `res` of a _CRS describes, as Linux's
+ * acpi_dev_resource_memory, _io, _address_space and _ext_address_space
+ * read it: an I/O or fixed I/O descriptor's ports; a 24-bit, 32-bit or
+ * fixed 32-bit descriptor's memory, a 24-bit one's address and length
+ * shifted up by 8; and a Word, DWord, QWord or Extended address
+ * descriptor's memory, ports or bus numbers, its translation added to its
+ * start. Sets `*start` and `*len`, which may be 0, and `*address` to 1 for
+ * an address descriptor, the only kind a bridge's window comes in, and
+ * returns an `ACPI_RANGE_` kind; 0 for any other resource.
+ */
+int acpi_resource_range(struct acpi_resource *res, uint64_t *start, uint64_t *len, int *address);
 
 /**
  * Take the hot plug slots of the host bridge of bus 0, its children with
