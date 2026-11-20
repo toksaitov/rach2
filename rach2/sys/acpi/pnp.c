@@ -95,62 +95,92 @@ static void pnp_reserve_block(const ACPI_GENERIC_ADDRESS *g, UINT32 len)
     }
 }
 
-int acpi_resource_range(ACPI_RESOURCE *res, uint64_t *start, uint64_t *len, int *address)
+/**
+ * The range an address descriptor gives, of `type` (ACPI_MEMORY_RANGE and
+ * so on), as Linux's acpi_decode_space reads it: from its Minimum to its
+ * Maximum, whatever its AddressLength says, which some firmware gets wrong,
+ * with its TranslationOffset added only for a producer, a bridge's window,
+ * since a consumer's addresses are the host's already. A range of bus
+ * numbers takes no translation. Returns the `ACPI_RANGE_` kind, or 0 for a
+ * range of no length, one whose Maximum lies below its Minimum, I/O ports
+ * past 0x10002 and any other type.
+ */
+static int pnp_address_range(UINT8 type, UINT8 producer, const ACPI_ADDRESS64_ATTRIBUTE *at,
+                             uint64_t *start, uint64_t *end)
+{
+    uint64_t offset =
+        producer == ACPI_PRODUCER && type != ACPI_BUS_NUMBER_RANGE ? at->TranslationOffset : 0;
+
+    *start = at->Minimum + offset;
+    *end = at->Maximum + offset;
+    if (at->AddressLength == 0 || *end < *start || *end - *start + 1u == 0) {
+        return 0;
+    }
+    if (type == ACPI_MEMORY_RANGE) {
+        return ACPI_RANGE_MEMORY;
+    }
+    if (type == ACPI_IO_RANGE) {
+        return *end < 0x10003u ? ACPI_RANGE_IO : 0;
+    }
+    return type == ACPI_BUS_NUMBER_RANGE ? ACPI_RANGE_BUS : 0;
+}
+
+int acpi_resource_range(ACPI_RESOURCE *res, uint64_t *start, uint64_t *end, int *address)
 {
     ACPI_RESOURCE_ADDRESS64 a;
-    UINT8 type;
+    uint64_t len;
+    int kind;
 
     *address = 0;
     switch (res->Type) {
     case ACPI_RESOURCE_TYPE_IO:
         *start = res->Data.Io.Minimum;
-        *len = res->Data.Io.AddressLength;
-        return ACPI_RANGE_IO;
+        len = res->Data.Io.AddressLength;
+        kind = ACPI_RANGE_IO;
+        break;
     case ACPI_RESOURCE_TYPE_FIXED_IO:
         *start = res->Data.FixedIo.Address;
-        *len = res->Data.FixedIo.AddressLength;
-        return ACPI_RANGE_IO;
+        len = res->Data.FixedIo.AddressLength;
+        kind = ACPI_RANGE_IO;
+        break;
     case ACPI_RESOURCE_TYPE_MEMORY24:
         /* ACPICA keeps the descriptor's bits 23:8 of each. */
         *start = (uint64_t)res->Data.Memory24.Minimum << 8;
-        *len = (uint64_t)res->Data.Memory24.AddressLength << 8;
-        return ACPI_RANGE_MEMORY;
+        len = (uint64_t)res->Data.Memory24.AddressLength << 8;
+        kind = ACPI_RANGE_MEMORY;
+        break;
     case ACPI_RESOURCE_TYPE_MEMORY32:
         *start = res->Data.Memory32.Minimum;
-        *len = res->Data.Memory32.AddressLength;
-        return ACPI_RANGE_MEMORY;
+        len = res->Data.Memory32.AddressLength;
+        kind = ACPI_RANGE_MEMORY;
+        break;
     case ACPI_RESOURCE_TYPE_FIXED_MEMORY32:
         *start = res->Data.FixedMemory32.Address;
-        *len = res->Data.FixedMemory32.AddressLength;
-        return ACPI_RANGE_MEMORY;
+        len = res->Data.FixedMemory32.AddressLength;
+        kind = ACPI_RANGE_MEMORY;
+        break;
     case ACPI_RESOURCE_TYPE_ADDRESS16:
     case ACPI_RESOURCE_TYPE_ADDRESS32:
     case ACPI_RESOURCE_TYPE_ADDRESS64:
         if (ACPI_FAILURE(AcpiResourceToAddress64(res, &a))) {
             return 0;
         }
-        type = a.ResourceType;
-        *start = a.Address.Minimum + a.Address.TranslationOffset;
-        *len = a.Address.AddressLength;
-        break;
+        *address = 1;
+        return pnp_address_range(a.ResourceType, a.ProducerConsumer, &a.Address, start, end);
     case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
         /* AcpiResourceToAddress64 takes only the three above. */
-        type = res->Data.ExtAddress64.ResourceType;
-        *start = res->Data.ExtAddress64.Address.Minimum +
-                 res->Data.ExtAddress64.Address.TranslationOffset;
-        *len = res->Data.ExtAddress64.Address.AddressLength;
-        break;
+        *address = 1;
+        return pnp_address_range(res->Data.ExtAddress64.ResourceType,
+                                 res->Data.ExtAddress64.ProducerConsumer,
+                                 &res->Data.ExtAddress64.Address, start, end);
     default:
         return 0;
     }
-    *address = 1;
-    if (type == ACPI_MEMORY_RANGE) {
-        return ACPI_RANGE_MEMORY;
+    *end = *start + len - 1u;
+    if (len == 0 || *end < *start || (kind == ACPI_RANGE_IO && *end >= 0x10003u)) {
+        return 0;
     }
-    if (type == ACPI_IO_RANGE) {
-        return ACPI_RANGE_IO;
-    }
-    return type == ACPI_BUS_NUMBER_RANGE ? ACPI_RANGE_BUS : 0;
+    return kind;
 }
 
 /**
@@ -161,13 +191,13 @@ int acpi_resource_range(ACPI_RESOURCE *res, uint64_t *start, uint64_t *len, int 
  */
 static ACPI_STATUS pnp_reserve_one(ACPI_RESOURCE *res, void *context)
 {
-    uint64_t start = 0, len = 0;
+    uint64_t start = 0, end = 0;
     int address, kind;
 
     (void)context;
-    kind = acpi_resource_range(res, &start, &len, &address);
-    if (len != 0 && (kind == ACPI_RANGE_MEMORY || (kind == ACPI_RANGE_IO && start >= 0x100u))) {
-        pci_host_reserve(start, start + len - 1u, kind == ACPI_RANGE_IO);
+    kind = acpi_resource_range(res, &start, &end, &address);
+    if (kind == ACPI_RANGE_MEMORY || (kind == ACPI_RANGE_IO && start >= 0x100u)) {
+        pci_host_reserve(start, end, kind == ACPI_RANGE_IO);
     }
     return AE_OK;
 }
