@@ -696,7 +696,7 @@
         {"assertion_id": "child", "checks": "Each child, which writes the page first, is reaped and exits cleanly.", "source": "program"},
         {"assertion_id": "parent-unchanged", "checks": "The parent's bytes are unchanged by each child's write.", "source": "program"},
         {"assertion_id": "regrant-write", "checks": "The parent's write after each reap sticks.", "source": "program"},
-        {"assertion_id": "memfree", "checks": "MemFree in /proc/meminfo can be read, and does not fall by more than the slack across the cycles.", "source": "program"}
+        {"assertion_id": "memfree", "checks": "MemAvailable in /proc/meminfo can be read, and does not fall by more than the slack across the cycles.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

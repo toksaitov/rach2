@@ -10,21 +10,24 @@
  * arm and leaves the parent the sole owner), and the parent reaps it and then
  * writes the same page (that write takes the re-grant arm). Over many cycles
  * it catches the faults that arm can have: a leak of the re-granted frame
- * shows as MemFree in /proc/meminfo fallen by more than SLACK across the
- * cycles after a warm-up, a double free as a fork that runs out of frames or
- * a kernel fault, and a re-grant of a frame still shared as the child's
- * write changing the parent's bytes. It cannot tell a correct re-grant in
- * place from a correct but wasteful copy every time, since the two look the
- * same from user space; telling them apart needs a host test or a count of
- * the kernel's copies.
+ * shows as MemAvailable in /proc/meminfo fallen by more than SLACK across
+ * the cycles after a warm-up, a double free as a fork that runs out of
+ * frames or a kernel fault, and a re-grant of a frame still shared as the
+ * child's write changing the parent's bytes. It cannot tell a correct
+ * re-grant in place from a correct but wasteful copy every time, since the
+ * two look the same from user space; telling them apart needs a host test
+ * or a count of the kernel's copies.
  *
  * Prints "COWREGRANT OK" on success. etude's report (probe_report.h), for
  * the case ETUDE_CASE names, has an assertion for each check of the cycles,
  * `fork`, `child`, `parent-unchanged` and `regrant-write`, reported once
- * the cycles end, and `memfree`, the reads of MemFree and its fall. The
+ * the cycles end, and `memfree`, the reads of MemAvailable and its fall.
+ * MemAvailable counts the runs the kernel heap keeps after a reap
+ * (KReclaimable), which fill to a high-water over the first few hundred
+ * cycles of a boot and are no leak, as memprobe judges it too. The
  * first failure fails its assertion and leaves those not yet reported not
  * run. Given `machine=native` (probe_args.h), as a native run on a machine
- * that other processes share starts it, it leaves out the fall of MemFree,
+ * that other processes share starts it, it leaves out the fall,
  * which their allocations move. Freestanding; direct system calls (probe.h).
  */
 
@@ -39,8 +42,8 @@
 
 #define WARMUP 8
 #define CYCLES 200
-/* The fall in MemFree allowed, in KiB: well below the 800 KiB a leak of a
- * frame a cycle would cost, and above the jitter of the kernel heap. */
+/* The fall in MemAvailable allowed, in KiB: well below the 800 KiB a leak of
+ * a frame a cycle would cost, and above the jitter of the kernel heap. */
 #define SLACK  64u
 
 /* A global lives in the writable data segment, so after fork it is a COW
@@ -122,10 +125,10 @@ PROBE_SP_ENTRY;
 /**
  * Run WARMUP and then CYCLES cycles of fork, the child's write, the reap and
  * the parent's write, and fail at the first wrong value or failed call, or
- * when MemFree after the cycles is more than SLACK below where it was after
- * the warm-up. The child exits 7 when its copy held the parent's value and
- * took its own write, 11 when it did not inherit the value and 12 when its
- * write did not stick. `_start` calls it with the initial stack.
+ * when MemAvailable after the cycles is more than SLACK below where it was
+ * after the warm-up. The child exits 7 when its copy held the parent's value
+ * and took its own write, 11 when it did not inherit the value and 12 when
+ * its write did not stick. `_start` calls it with the initial stack.
  */
 void probe_main(unsigned long *sp)
 {
@@ -138,9 +141,9 @@ void probe_main(unsigned long *sp)
         unsigned base = 0x10000u + (unsigned)i;
 
         if (i == WARMUP && !probe_native()) {
-            free_kb = probe_meminfo("MemFree:");
+            free_kb = probe_meminfo("MemAvailable:");
             if (free_kb == 0xFFFFFFFFu) {
-                fail(MEMFREE, "MemFree in /proc/meminfo");
+                fail(MEMFREE, "MemAvailable in /proc/meminfo");
             }
         }
         shared_val = base;
@@ -179,9 +182,9 @@ void probe_main(unsigned long *sp)
     for (; held < MEMFREE; held++) {
         report_pass(ids[held]);
     }
-    end_kb = probe_native() ? free_kb : probe_meminfo("MemFree:");
+    end_kb = probe_native() ? free_kb : probe_meminfo("MemAvailable:");
     if (end_kb == 0xFFFFFFFFu || (free_kb > end_kb && free_kb - end_kb > SLACK)) {
-        fail(MEMFREE, "MemFree fell across the cycles: the re-grant arm leaks a frame");
+        fail(MEMFREE, "MemAvailable fell across the cycles: the re-grant arm leaks a frame");
     }
 
     report_pass(ids[MEMFREE]);
