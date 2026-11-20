@@ -365,7 +365,7 @@ static void data_rows(void)
              "grows the file past its neighbour and moves it");
     alpha = krffs_resolve("/alpha");
     watch("kfs_truncate");
-    rc = kfs_truncate(&mount, alpha, 16);
+    rc = kfs_truncate(&mount, alpha, 16, 1);
     judge("kfs_truncate");
     alpha = krffs_resolve("/alpha");
     check_op(rc == 0 && alpha && alpha->data_size == 16, "kfs_truncate", "shortens the file");

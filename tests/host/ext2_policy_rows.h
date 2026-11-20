@@ -154,7 +154,7 @@ static void *policy_node, *policy_handle;
 /** Truncate the policy node to nothing. */
 static int policy_truncate(void)
 {
-    return OPS->truncate(&mnt, policy_handle, 0);
+    return OPS->truncate(&mnt, policy_handle, 0, 1);
 }
 
 /** Remove /many/file2.txt, whose directory is the policy node. */

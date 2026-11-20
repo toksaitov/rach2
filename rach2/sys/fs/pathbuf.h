@@ -15,6 +15,8 @@
  */
 
 struct process;
+struct vfs_mount;
+struct vfs_ref;
 
 /**
  * A page of `VFS_PATH_MAX` bytes for one path, from the calling process's
@@ -24,6 +26,17 @@ struct process;
  */
 char *path_buf_get(void);
 
+/** Keep a relative proc pathname on its directory's mount until buf is put. */
+void path_buf_set_mount(char *buf, struct vfs_mount *mnt);
+
+/** Keep a proc task directory and its name as the start of a copied path.
+ * For other proc directories keep the mount root. Return 1 for a task. */
+int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base);
+
+/** Return the held mount for a spelling in a path page and skip its prefix.
+ * A path outside such a page or prefix gives NULL and leaves *path alone. */
+struct vfs_mount *path_buf_mount(const char **path, void **node);
+
 /** Give back a page `path_buf_get` returned; NULL is ignored. */
 void path_buf_put(char *buf);
 
@@ -32,8 +45,8 @@ void path_buf_put(char *buf);
 const char *proc_cwd(const struct process *p);
 
 /** Copy the working directory's path into `out`, a path page, under the
- * lock of `p`'s `fs_struct`, for a caller without the big lock. */
-void proc_cwd_read(const struct process *p, char *out);
+ * lock of `p`'s `fs_struct`. Return nonzero for a directory on procfs. */
+int proc_cwd_read(const struct process *p, char *out);
 
 /**
  * Make `path` the working directory's path: 0, `-ENAMETOOLONG` past

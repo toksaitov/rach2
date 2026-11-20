@@ -1497,7 +1497,8 @@ static int32_t exec_check(struct exec_file *f, const struct vfs_ref *ref, const 
 {
     int32_t rc;
 
-    if (vfs_synth_vpath(ref->mnt, ref->node) || (ref->mnt->flags & VFS_MS_NOEXEC)) {
+    if (vfs_synth_vpath(ref->mnt, ref->node) || (ref->mnt->flags & VFS_MS_NOEXEC) ||
+        vfs_mount_base(ref->mnt)->sb_noexec) {
         return -EACCES;
     }
     if (vfs_getattr(ref->mnt, ref->node, vst) == 0 && (vst->mode & 0170000u) == 0040000u) {
@@ -8548,22 +8549,6 @@ struct map_source {
     uint32_t thp;
 };
 
-/** 0 when the descriptor `e` may be mapped, shared or not, with the
- * protection `prot`: ENODEV for what is neither a file nor an object whose
- * operations map it (`file_ops.mmap`), and EACCES for a descriptor not open
- * for reading, or for a writable shared mapping, not open for writing. */
-static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
-{
-    if (!(e->ops && e->ops->mmap) && (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt)) {
-        return -ENODEV;
-    }
-    if (!(e->flags & FD_FLAG_READ) ||
-        (shared && (prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
-        return -EACCES;
-    }
-    return 0;
-}
-
 /**
  * The rules of a mapping through `e` of a file whose memory is `sh`, when
  * it is a file of memfd_secret: shared alone, else -EINVAL, and never
@@ -8591,7 +8576,7 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
  * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
  * shared mapping of a file in memory is VM_SHARED, the file's own pages; a
- * descriptor that fails `mmap_file_check` is not mapped. A shared mapping of a
+ * descriptor that fails `filemap_check` is not mapped. A shared mapping of a
  * file on ext2 is VM_SHARED too, the file's pages in memory, which its stores
  * are written back from (`filemap_disk_shared`):
  * ext2's inode number names one file for as long as anything holds it, which
@@ -8613,7 +8598,7 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
 {
     struct shmem *sh;
     int disk;
-    int32_t rc = mmap_file_check(e, shared, src->prot);
+    int32_t rc = filemap_check(e, shared, src->prot);
 
     if (rc != 0) {
         return rc;
@@ -8657,12 +8642,12 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
  * /sys, has a target that names the object and is the same from every
  * root, so a reader with another root would build the same path; with no
  * room for the path the region has none. The operation's error, or
- * `mmap_file_check`'s.
+ * `filemap_check`'s.
  */
 static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, struct map_source *src)
 {
     vma_t vma;
-    int32_t rc = mmap_file_check(e, shared, src->prot);
+    int32_t rc = filemap_check(e, shared, src->prot);
 
     if (rc != 0) {
         return rc;

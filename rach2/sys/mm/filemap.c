@@ -3,6 +3,7 @@
  */
 
 #include "filemap.h"
+#include "../fs/file.h"
 
 #include "kheap.h"
 #include "mm.h"
@@ -29,6 +30,23 @@
 #include "filecache.h"
 #include "../network/socket/socket.h"
 #include "../syscall_internal.h"
+
+int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot)
+{
+    struct vfs_mount *mnt = e->ofd ? e->ofd->vmnt : NULL;
+
+    if (e->flags & FD_FLAG_PATH)
+        return -EBADF;
+    if (!(e->flags & FD_FLAG_READ) ||
+        (shared && (prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE)))
+        return -EACCES;
+    if (mnt && (prot & VM_PROT_EXEC) &&
+        ((vfs_mount_flags(mnt) & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec))
+        return -EPERM;
+    if (e->ops)
+        return e->ops->mmap ? 0 : -ENODEV;
+    return e->type == FD_TYPE_FILE && mnt ? 0 : -ENODEV;
+}
 
 /*
  * A disk file's resident pages belong to its private and shared mappings.

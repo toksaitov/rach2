@@ -1,7 +1,9 @@
 /**
  * Check that a message-queue wait to a time of real time follows a setting
  * of the clock, as Linux's wq_sleep waits on an hrtimer of CLOCK_REALTIME,
- * and that a signal pending at its deadline ends it with EINTR.
+ * and that a signal pending at its deadline ends it with EINTR; and that the
+ * mqueue file system's setattr stores a queue's and the root's attributes
+ * as Linux's simple_setattr does, and a message moves the queue's times.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
@@ -25,6 +27,7 @@
  * that never ends cannot hang the test.
  */
 #include "ipc/mqueue.c"
+#include "fs_caps_first.h"
 
 extern int printf(const char *format, ...);
 
@@ -32,7 +35,7 @@ static process_t self;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 struct ipcns init_ipcns;
 volatile uint64_t kernel_ticks;
-static uint8_t user[256];
+static uint8_t user[512];
 static int failures, waits;
 static int calls; /* the calls of the wait since the row began */
 /* The tick, the time and the step count the last wait was armed with. */
@@ -183,13 +186,32 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
-/** No row names a queue: -EFAULT. */
+/** Model the process's pathname page with a heap allocation. */
+char *path_buf_get(void)
+{
+    return kmalloc(VFS_PATH_MAX);
+}
+
+/** Return the page after lookup. */
+void path_buf_put(char *name)
+{
+    kfree(name);
+}
+
+/** Copy a terminated name from the model's user memory. */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
 {
-    (void)dst;
-    (void)src;
-    (void)n;
-    return -EFAULT;
+    uintptr_t at = (uintptr_t)src;
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (!in_user(at + i, 1))
+            return -EFAULT;
+        dst[i] = user[at + i];
+        if (!dst[i])
+            return (int)i;
+    }
+    return -ENAMETOOLONG;
 }
 
 /** The model's calls are native, not i386 calls on x86-64. */
@@ -304,19 +326,136 @@ void wait_queue_init(wait_queue_t *wq)
     (void)wq;
 }
 
-/** No row opens a descriptor. */
+static fd_entry_t slots[4];
+static struct open_file descriptions[4];
+static struct vfs_mount private_mount;
+
+/** Reserve one slot and its description, as fd_alloc does. */
 int fd_alloc(fd_table_t *table)
 {
+    int i;
+
     (void)table;
+    for (i = 0; i < 4; i++) {
+        if (!slots[i].ofd) {
+            slots[i].ofd = &descriptions[i];
+            return i;
+        }
+    }
     return -EMFILE;
 }
 
-/** No row has a descriptor. */
+/** Find a reserved or installed slot. */
+fd_entry_t *fd_slot(const fd_table_t *table, int fd)
+{
+    (void)table;
+    return fd >= 0 && fd < 4 ? &slots[fd] : NULL;
+}
+
+/** Find an installed slot. */
 fd_entry_t *fd_get(fd_table_t *table, int fd)
+{
+    fd_entry_t *e = fd_slot(table, fd);
+
+    return e && e->type ? e : NULL;
+}
+
+/** The model has one writer and publishes each slot immediately. */
+void fd_install(fd_table_t *table, int fd)
 {
     (void)table;
     (void)fd;
-    return NULL;
+}
+
+/** Release the open handle, inode and description of one descriptor. */
+int fd_free(fd_table_t *table, int fd)
+{
+    fd_entry_t *e = fd_slot(table, fd);
+    struct open_file *ofd = e->ofd;
+
+    if (e->ops == &mq_ops)
+        mq_flush(e);
+    if (ofd->vmnt) {
+        mqfs_release(ofd->vmnt, ofd->fhandle);
+        mqfs_put(ofd->vmnt, ofd->vnode);
+        vfs_mount_put(ofd->vmnt);
+    }
+    k_memset(ofd, 0, sizeof(*ofd));
+    k_memset(e, 0, sizeof(*e));
+    return 0;
+}
+
+/** A queue in this model has no conflicting text mapping. */
+int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
+{
+    (void)ofd;
+    (void)ref;
+    (void)access;
+    return 0;
+}
+
+/** Construct the one namespace's private mount. */
+struct vfs_mount *vfs_kernel_mount(const struct vfs_type *type, void *root, uint32_t flags)
+{
+    private_mount.root = root;
+    private_mount.type = type;
+    private_mount.flags = flags;
+    private_mount.refs = 1;
+    return &private_mount;
+}
+
+/** Take the mount hold of a visible mount. */
+void vfs_mount_get(struct vfs_mount *m)
+{
+    m->refs++;
+}
+
+/** Take the mount hold of a descriptor. */
+void vfs_desc_open(struct vfs_mount *m)
+{
+    vfs_mount_get(m);
+}
+
+/** Drop one mount hold. */
+uint32_t vfs_mount_put(struct vfs_mount *m)
+{
+    return --m->refs;
+}
+
+/** Release the namespace root after the last hold. */
+void vfs_reap_detached(void)
+{
+    mqfs_unmount(&private_mount);
+}
+
+/** Open the actual queue handle. */
+int vfs_open_node(struct vfs_mount *m, void *node, int flags, void **handle)
+{
+    return mqfs_open(m, node, flags, handle);
+}
+
+/** The private mount carries the namespace's superblock flags. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (m->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** Read the model's mount flags. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (m->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** Namespace operations run on one thread. */
+void vfs_ns_lock(struct vfs_mount *m)
+{
+    (void)m;
+}
+
+/** End a namespace operation. */
+void vfs_ns_unlock(struct vfs_mount *m)
+{
+    (void)m;
 }
 
 /** No row has a descriptor whose flags mq_getsetattr sets. */
@@ -354,13 +493,6 @@ struct userns *proc_userns(const process_t *p)
 {
     (void)p;
     return NULL;
-}
-
-/** User IDs are the kernel's. */
-uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid)
-{
-    (void)ns;
-    return kid;
 }
 
 /** PIDs are the kernel's. */
@@ -541,14 +673,263 @@ static void signal_rows(void)
           "with no signal pending the wait past its time is ETIMEDOUT");
 }
 
+/**
+ * The root's attributes are its namespace's, made at the first use for the
+ * first namespace: 01777 and the caller's ids. A ctime-only setattr moves
+ * the change time alone, on the root and on a queue; a full one stores the
+ * mode, the ids and the times; a size or inode flags are refused with
+ * nothing changed; and a message sent moves all three of the queue's times.
+ */
+static void attr_rows(void)
+{
+    static struct mqueue q;
+    static struct mq_msg msg;
+    struct vfs_mount *m;
+    struct vfs_stat st, in;
+    int64_t t0, t0_ns, t1, t1_ns;
+
+    k_memset(&in, 0, sizeof(in));
+    rt_sec = 500;
+    CHECK(mq_root_made(&init_ipcns) == 0, "create the IPC namespace root");
+    m = init_ipcns.mq;
+    get_current_time(&t0, &t0_ns);
+    CHECK(mqfs_getattr(m, m->root, &st) == 0 && st.mode == (MQFS_S_IFDIR | 01777u) &&
+              st.uid == proc_fsuid(&self) && st.ctime_sec == t0 && st.mtime_sec == t0,
+          "the first namespace's root is made 01777, the caller's, at its first use");
+    rt_sec = 600;
+    get_current_time(&t1, &t1_ns);
+    CHECK(mqfs_setattr(m, m->root, VFS_SET_CTIME, &in) == 0, "a ctime-only setattr of the root");
+    mqfs_getattr(m, m->root, &st);
+    CHECK(st.ctime_sec == t1 && st.mtime_sec == t0 && st.mode == (MQFS_S_IFDIR | 01777u),
+          "a ctime-only setattr moves the root's change time alone");
+    q.mode = 0600u;
+    mq_touch(&q);
+    rt_sec = 700;
+    get_current_time(&t1, &t1_ns);
+    in.mode = 0100640u;
+    in.uid = 7;
+    in.gid = 8;
+    in.atime_sec = 21;
+    in.mtime_sec = 22;
+    CHECK(mqfs_setattr(m, &q,
+                       VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID | VFS_SET_ATIME | VFS_SET_MTIME,
+                       &in) == 0,
+          "a full setattr of a queue");
+    mqfs_getattr(m, &q, &st);
+    CHECK(st.mode == (MQFS_S_IFREG | 0640u) && st.uid == 7 && st.gid == 8 && st.atime_sec == 21 &&
+              st.mtime_sec == 22 && st.ctime_sec == t1,
+          "a queue's mode, ids and times stored, its change time now");
+    CHECK(mqfs_setattr(m, &q, VFS_SET_SIZE, &in) == -EINVAL &&
+              mqfs_setattr(m, &q, VFS_SET_FLAGS, &in) == -EOPNOTSUPP,
+          "a size and inode flags are refused");
+    mqfs_getattr(m, &q, &st);
+    CHECK(st.ctime_sec == t1 && st.mtime_sec == 22, "a refused setattr changes nothing");
+    rt_sec = 800;
+    get_current_time(&t1, &t1_ns);
+    mq_enqueue(&q, &msg);
+    mqfs_getattr(m, &q, &st);
+    CHECK(st.atime_sec == t1 && st.mtime_sec == t1 && st.ctime_sec == t1,
+          "a message sent moves the queue's three times");
+    q.head = NULL;
+    q.curmsgs = 0;
+}
+
+/** Descriptor exhaustion precedes validation of a single queue component. */
+static void bad_names(void)
+{
+    struct isr_params args = {0};
+    int i;
+
+    args.ebx = 1;
+    for (i = 0; i < 4; i++)
+        fd_alloc(NULL);
+    user[1] = '/';
+    CHECK(sys_mq_open(&args) == -EMFILE, "reserve the descriptor before validating a component");
+    for (i = 0; i < 4; i++)
+        fd_free(NULL, i);
+    CHECK(sys_mq_open(&args) == -EACCES, "a slash is not a single queue name");
+    k_memset(user + 1, 'q', MQ_NAME_MAX + 1);
+    user[MQ_NAME_MAX + 2] = 0;
+    CHECK(sys_mq_open(&args) == -ENAMETOOLONG, "a queue component past NAME_MAX");
+    k_memset(user, 0, sizeof(user));
+}
+
+/** Queue operations use the inode held by an ordinary file description. */
+static void queue_operations(int fd)
+{
+    struct isr_params args = {0};
+    struct mq_attr attr;
+    fd_entry_t *e = &slots[fd];
+    struct mqueue *q = e->ofd->vnode;
+
+    args.ebx = fd;
+    args.ecx = 1;
+    args.edx = 1;
+    CHECK(sys_mq_timedsend(&args) == 0 && (e->ops->poll(e, POLLIN, NULL) & POLLIN),
+          "sending a message makes the queue readable");
+    args.ecx = 0;
+    args.edx = 16;
+    CHECK(sys_mq_getsetattr(&args) == 0, "read the queue attributes");
+    k_memcpy(&attr, user + 16, sizeof(attr));
+    CHECK(attr.curmsgs == 1, "the queue contains the message");
+    {
+        int32_t remaining;
+        uint64_t allocated;
+        q->atime_s = q->ctime_s = -1;
+        CHECK(e->ops->read(e, (char __user *)16, 6) == 6 &&
+                  !__builtin_memcmp(user + 16, "QSIZE:", 6) && q->atime_s != -1 &&
+                  q->ctime_s == q->atime_s,
+              "a status read advances the offset and times");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 0x541b, 16) == 0, "FIONREAD succeeds");
+        k_memcpy(&remaining, user + 16, sizeof(remaining));
+        CHECK(remaining == (int)q->size - 6, "FIONREAD uses inode size and file position");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 0x5460, 16) == 0, "FIOQSIZE succeeds");
+        k_memcpy(&allocated, user + 16, sizeof(allocated));
+        CHECK(!allocated, "the queue inode has no allocated blocks");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 0x5452, 16) == 0, "async is already clear");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 2, 16) == 0, "FIGETBSZ succeeds");
+        k_memcpy(&remaining, user + 16, sizeof(remaining));
+        CHECK(remaining == PAGE_SIZE, "the queue block size is one page");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 0x5452, 16) == -ENOTTY,
+              "a queue cannot enable async I/O");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 0xc020660b, 0) == -EOPNOTSUPP,
+              "a queue has no extent map");
+        CHECK(e->ops->ioctl && e->ops->ioctl(e, 0x1234, 16) == -ENOTTY,
+              "a private ioctl has no queue handler");
+    }
+    q->notify_tgid = self.tgid = 1;
+    mq_flush(e);
+    CHECK(!q->notify_tgid, "closing a descriptor removes its owner's notification");
+}
+
+/** Exclusive creation and invalid access precede write permission. */
+static void readonly_queue(struct isr_params *args, struct vfs_ref *file)
+{
+    struct vfs_stat st = {0};
+
+    st.mode = 0600;
+    mqfs_setattr(file->mnt, file->node, VFS_SET_MODE, &st);
+    self.euid = 20;
+    file->mnt->flags |= VFS_MS_RDONLY;
+    args->ecx = O_CREAT | O_EXCL | 3;
+    CHECK(sys_mq_open(args) == -EEXIST, "exclusive creation precedes access checks");
+    args->ecx = 3;
+    CHECK(sys_mq_open(args) == -EINVAL, "an existing queue refuses an invalid access mode");
+    args->ecx = 1;
+    CHECK(sys_mq_open(args) == -EROFS, "a read-only superblock precedes queue write permission");
+    args->ecx = 0;
+    CHECK(sys_mq_open(args) == -EACCES, "a read-only open checks queue read permission");
+    file->mnt->flags &= ~VFS_MS_RDONLY;
+    args->ecx = O_CREAT | 2;
+    st.mode = 0666;
+    mqfs_setattr(file->mnt, file->node, VFS_SET_MODE, &st);
+}
+
+/** Exercise name lookup and deletion through the actual queue syscalls. */
+static void namespace_rows(void)
+{
+    static struct fs_struct fs;
+    struct isr_params args = {0};
+    struct vfs_mount *m = init_ipcns.mq;
+    struct vfs_stat st = {0};
+    struct vfs_ref file;
+    int fd, other;
+
+    self.fs = &fs;
+    self.euid = 10;
+    args.ebx = 1;
+    args.ecx = O_CREAT | 2;
+    args.edx = 0666;
+    user[1] = 'q';
+    fd = (int)sys_mq_open(&args);
+    CHECK(fd >= 0, "make a queue");
+    if (fd < 0)
+        return;
+    CHECK(mq_fd_ref(&slots[fd], &file) && file.mnt == m && file.node == slots[fd].ofd->vnode &&
+              file.node == slots[fd].ofd->fhandle,
+          "mq_open holds the inode and mount for descriptor operations");
+    CHECK(slots[fd].ops == &mq_ops && !slots[fd].ops->mmap,
+          "mq_open installs the operations that refuse mappings");
+    queue_operations(fd);
+    readonly_queue(&args, &file);
+    mqfs_setattr(m, m->root, VFS_SET_MODE, &st);
+    self.euid = 20;
+    mqfs_getattr(m, m->root, &st);
+    CHECK(st.mode == MQFS_S_IFDIR && st.uid == 0, "mode zero preserves the owner's directory");
+    CHECK(sys_mq_open(&args) == -EACCES && sys_mq_unlink(&args) == -EACCES,
+          "no search permission on an existing name");
+    self.euid = 0;
+    self.cap_lost[0] = ~(1u << CAP_DAC_READ_SEARCH);
+    CHECK(sys_mq_unlink(&args) == -EACCES, "READ_SEARCH does not grant directory write access");
+    self.euid = 20;
+    self.cap_lost[0] = 0;
+    user[1] = 'x';
+    CHECK(sys_mq_open(&args) == -EACCES && sys_mq_unlink(&args) == -EACCES,
+          "no search permission on a missing name");
+    st.mode = 0111;
+    mqfs_setattr(m, m->root, VFS_SET_MODE, &st);
+    CHECK(sys_mq_open(&args) == -EACCES, "creation needs directory write permission");
+    args.ecx = 0;
+    CHECK(sys_mq_open(&args) == -ENOENT, "a searchable missing queue");
+    user[1] = 'q';
+    other = (int)sys_mq_open(&args);
+    CHECK(other >= 0 && sys_mq_unlink(&args) == -EACCES,
+          "existing open needs search and unlink also needs write");
+    if (other >= 0)
+        fd_free(NULL, other);
+    st.mode = 01777;
+    mqfs_setattr(m, m->root, VFS_SET_MODE, &st);
+    CHECK(sys_mq_unlink(&args) == -EPERM, "sticky removal by a third user");
+    st.uid = self.euid;
+    mqfs_setattr(m, m->root, VFS_SET_UID, &st);
+    CHECK(sys_mq_unlink(&args) == 0, "the sticky directory owner can unlink");
+    CHECK(mqfs_getattr(m, file.node, &st) == 0 && st.nlink == 0 && st.size == 80,
+          "unlinked descriptor retains its inode and its initial size");
+    st.mode = 0640;
+    mqfs_setattr(m, file.node, VFS_SET_MODE, &st);
+    CHECK(mqfs_truncate(m, file.node, 7, 1) == 0 &&
+              mqfs_truncate(m, file.node, 0x80000000ull, 1) == -EFBIG,
+          "resize the held inode up to the superblock limit");
+    mqfs_getattr(m, file.node, &st);
+    CHECK(st.mode == (MQFS_S_IFREG | 0640) && st.size == 7, "held inode attributes survive unlink");
+    fd_free(NULL, fd);
+    st.mode = 0777;
+    mqfs_setattr(m, m->root, VFS_SET_MODE, &st);
+    args.ecx = O_CREAT;
+    self.euid = 10;
+    fd = (int)sys_mq_open(&args);
+    self.euid = 30;
+    CHECK(fd >= 0 && mqfs_unlink(m, m->root, "q") == 0, "a non-sticky directory allows unlink");
+    if (fd >= 0)
+        fd_free(NULL, fd);
+    {
+        void *node = NULL;
+        struct mq_root *root = m->root;
+
+        root->queues = MQ_QUEUES;
+        CHECK(mqfs_create(m, root, "limit", 0600, &node) == -ENOSPC,
+              "full namespace refuses another queue");
+        root->queues = 0;
+        CHECK(mqfs_create(m, root, "file", 0600, &node) == 0 && mqfs_unlink(m, root, "file") == 0,
+              "creating through the mount holds its inode");
+        if (node)
+            mqfs_put(m, node);
+    }
+    CHECK(m->refs == 1 && !queues, "closing drops each inode and mount hold");
+    mq_ns_gone(&init_ipcns);
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     realtime_steps();
     signal_rows();
+    attr_rows();
+    bad_names();
+    namespace_rows();
     if (failures) {
         return 1;
     }
-    printf("mqueue-test: pass: the steps of real time and a signal at the deadline\n");
+    printf("mqueue-test: pass: the steps of real time, a signal at the deadline and setattr\n");
     return 0;
 }

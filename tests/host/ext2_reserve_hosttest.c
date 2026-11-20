@@ -1195,7 +1195,7 @@ static void admission_rows(void)
     check(admit_write(&mount, &h, payload, 4096, 0) == 4096 && writers_at_wait == 0,
           "a write sleeps on the file's lock before admission");
     lock_held_elsewhere();
-    check(admit_truncate(&mount, &h, 4096) == 0 && writers_at_wait == 0,
+    check(admit_truncate(&mount, &h, 4096, 1) == 0 && writers_at_wait == 0,
           "a truncate sleeps on the file's lock before admission");
     lock_held_elsewhere();
     st.mode = 0640;
@@ -1270,7 +1270,7 @@ static void inode_store_sync_row(void)
     k_memcpy(durable_table, disk[4], sizeof(durable_table));
     table_gets = table_syncs = store_pauses = 0;
     table_tracking = 1;
-    check(ext2_truncate(&mount, &file, 8192) == 0 && store_pauses == 1,
+    check(ext2_truncate(&mount, &file, 8192, 1) == 0 && store_pauses == 1,
           "a growth stores its inode, stopped once between its encode and its store");
     check(ext2_le32(durable_table + at + 4) == 0 && table_syncs == 0,
           "the truncation leaves the size store in the cache");

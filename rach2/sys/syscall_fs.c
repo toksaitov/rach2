@@ -24,6 +24,7 @@
 #include "proc/sched.h"
 #include "proc/tgroup.h"
 #include "proc/ns.h"
+#include "fs/permission.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/wait_queue.h"
@@ -97,18 +98,6 @@
 #include "timer.h"
 #include "syscall_internal.h"
 
-/*
- * The record from the heap that the `priv` of an O_PATH descriptor on a
- * synthetic leaf, FD_TYPE_SYNTH_PATH, points at: the node's classified path,
- * first so that `priv` reads as a `struct vpath`, and the owner its last
- * lookup gave it when its inode keeps one (struct synth_owner). The release
- * of the description's last reference frees it (`fd_release_objects`).
- */
-struct synth_path {
-    struct vpath vp;
-    struct synth_owner own;
-};
-
 /**
  * A record from the heap of the synthetic directory an FD_TYPE_SYNTH_DIR
  * descriptor is open on, or NULL when the heap has no room. The kind, a
@@ -140,6 +129,7 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
     k_memset(vp, 0, sizeof(*vp));
     vp->kind = sd ? sd->kind : VNODE_ENOENT;
     vp->pid = sd ? sd->pid : 0;
+    vp->pidns_ino = sd ? sd->pidns_ino : 0;
     vp->tid = sd ? sd->tid : 0;
     if (vp->kind == VNODE_PROC_SYS_DIR) {
         vp->sysent = vp->pid;
@@ -402,9 +392,11 @@ static int fd_locks_by_node(const fd_entry_t *e)
  * close do; the table owns them for every thread and process that shares it
  * (`lock.h`), so a close by any of them drops them all. The copy of an entry
  * a file mapping or a message in flight keeps is not a descriptor of the
- * table (`fd_in_table`), and its release drops none; nor does the close of
+ * table (`fd_in_table`), and its release drops neither record locks nor
+ * queue notifications. A queue descriptor close cancels the caller's
+ * registration even on a duplicated description. No locks go on the close of
  * an O_PATH descriptor, which Linux does not count as a close of the file.
- * Nothing is done when no lock exists, as Linux's locks_remove_posix looks
+ * The record lock check ends when none exists. Linux's locks_remove_posix looks
  * at the file's list first (fs/locks.c:2617-2631); the list has its own
  * lock, and the big lock is taken only for a file keyed by its node
  * (`fd_locks_by_node`), which a KRFFS write moves under it. A caller that
@@ -415,12 +407,18 @@ static int fd_locks_by_node(const fd_entry_t *e)
 static void fd_close_locks(const fd_entry_t *e)
 {
     struct lock_key key;
-    int big;
+    int big, locks = lock_any();
 
-    if (!lock_any() || !e->ofd || (e->flags & FD_FLAG_PATH) || !current_proc ||
-        !fd_in_table(current_proc->fds, e)) {
+    if ((!locks && e->ops != &mq_ops) || !e->ofd || (e->flags & FD_FLAG_PATH) || !current_proc ||
+        !fd_in_table(current_proc->fds, e))
         return;
+    if (e->ops == &mq_ops) {
+        bkl_enter();
+        mq_flush(e);
+        bkl_exit();
     }
+    if (!locks)
+        return;
     big = fd_locks_by_node(e);
     if (big) {
         bkl_enter();
@@ -791,6 +789,9 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
     return rc;
 }
 
+static int write_kill_setid(struct open_file *ofd);
+static void attr_told_desc(struct open_file *ofd, uint32_t mask, int self);
+
 /** Take the big lock unless the caller holds it: 1 when taken, for
  * `big_give`, as a write of a file `file_vfs_writes_unlocked` admits takes
  * it for the steps that still need it. */
@@ -1154,6 +1155,9 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         vfs_node_unlock(&state->file);
         n = vm_prefault_range(from + done, count - done, 0) ? 0 : -EFAULT;
         vfs_node_lock(&state->file);
+        if (n == 0) {
+            n = write_kill_setid(entry->ofd);
+        }
         if (n != 0) {
             break;
         }
@@ -1187,7 +1191,7 @@ static int halted_root_mount(struct vfs_mount *mnt)
  * (`direct_misaligned`). The bytes written widen the range in `state`.
  * A caller without privilege clears the file's set-id bits before a byte
  * is written, as Linux's file_remove_privs does, and a clear that fails is
- * the write's error with nothing written (`mnt_kill_setid`).
+ * the write's error with nothing written (`write_kill_setid`).
  *
  * On a type that does not set `file_locked` the description's lock orders
  * only the writes through that description, so an append there, and a
@@ -1229,14 +1233,11 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         written = -EINVAL;
         goto out;
     }
-    if (count > 0 && !cred_fs_privileged()) {
-        written = mnt_kill_setid(ofd->vmnt, ofd->vnode);
-        if (written != 0) {
-            goto out;
-        }
-    }
     start = pos;
-    written = file_write_pieces(entry, state, buf, count, &pos);
+    written = count != 0 ? write_kill_setid(ofd) : 0;
+    if (written == 0) {
+        written = file_write_pieces(entry, state, buf, count, &pos);
+    }
     if (written > 0) {
         state->lo = start < state->lo ? start : state->lo;
         state->hi = start + (uint64_t)written > state->hi ? start + (uint64_t)written : state->hi;
@@ -1311,12 +1312,9 @@ static long write_synced(fd_entry_t *entry, long written, const struct file_writ
  * since the file system mounted on it may not have its image change
  * underneath, and is -EBUSY: that is asked before the description is locked
  * and again under the lock, since an attachment can publish itself while
- * this call waits for the lock. Only a write that moved bytes disarms the
- * set-id bits, through the node as the write left it (a
- * grow relocates a KRFFS file and repoints every holder), and a privileged
- * writer is exempt: that is the CAP_FSETID analogue, without which any root
- * process disarms /bin/su by rewriting it. A file whose pages shared
- * mappings hold in memory is written from a kernel copy of the caller's
+ * this call waits for the lock. A nonempty write clears the applicable
+ * set-id bits before storing data (`write_kill_setid`). A write to a file
+ * whose pages shared mappings hold uses a kernel copy of the caller's
  * bytes, which the pages take under the file's lock, held from before the
  * write, so that no write-back of the pages comes between the two
  * (`file_write_piece`). Under
@@ -1584,26 +1582,27 @@ static int fd_change_lock(int fd);
 static int rw_call_lock(const fd_entry_t *e, uint32_t free);
 
 /**
- * A change clears set-user-ID, and set-group-ID where group execute is set, for
- * a caller without privilege, as a write does. Whether the file backs a loop
- * device is asked before the description is locked and again under the lock,
- * since an attachment can publish itself while this call waits for it. Shared
- * mappings of the file lose the pages past the new end
- * (`filemap_file_truncated`), under the file's lock on a type that sets
- * `file_locked` (`file_lock`), so that no write-back of a mapped page past
- * the new end comes between the two and no fault brings one in again; the
- * pages are cut under the big lock, taken when the caller lacks it, as is
- * inotify's report. A length that grows the file past the caller's
- * RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under the same locks
- * (`fsize_growth_refused`), and on FAT32 and exFAT under the namespace lock
- * (`size_ns_lock`); a shrink is never refused. 0 or a negative errno.
+ * Clear set-id bits according to `write_kill_setid` once the file system has
+ * taken the length, so that a refused one, a sealed memfd's among them, changes
+ * neither the mode nor the change time, as in Linux's shmem_setattr and
+ * notify_change; a clear that fails is the answer, the length set. Ask whether
+ * the file backs a loop device before taking the description's lock and again
+ * under it, since an attachment can publish itself while the call waits. Shared
+ * mappings lose pages past the new end (`filemap_file_truncated`), under the
+ * file's lock on a type that sets `file_locked` (`file_lock`), so that no
+ * write-back of a mapped page past the new end comes between the two and no
+ * fault brings one in again; the pages are cut under the big lock, taken when
+ * the caller lacks it, as is inotify's report. A length that grows the file
+ * past the caller's RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under the same
+ * locks (`fsize_growth_refused`), and on FAT32 and exFAT under the namespace
+ * lock (`size_ns_lock`); a shrink is never refused. 0 or a negative errno.
  */
 static long ftruncate_fd(int fd, long long length)
 {
     fd_entry_t *entry;
     struct vfs_ref file;
     int own, ns, big = 0;
-    int rc;
+    int rc, kill = 0;
 
     if (!current_proc) {
         return -ESRCH;
@@ -1615,7 +1614,8 @@ static long ftruncate_fd(int fd, long long length)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    if (entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE)) {
+    if (!(entry->flags & FD_FLAG_WRITE) ||
+        (entry->type != FD_TYPE_FILE && !mq_fd_ref(entry, NULL))) {
         return -EINVAL;
     }
     if (!entry->ofd || !entry->ofd->vmnt) {
@@ -1636,11 +1636,11 @@ static long ftruncate_fd(int fd, long long length)
     }
     ns = size_ns_lock(entry->ofd);
     rc = fsize_growth_refused(entry->ofd, (uint64_t)length);
-    if (rc == 0 && !cred_fs_privileged()) {
-        rc = mnt_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
+    if (rc == 0) {
+        rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length, 1);
     }
     if (rc == 0) {
-        rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length);
+        kill = write_kill_setid(entry->ofd);
     }
     size_ns_unlock(entry->ofd, ns);
     if (rc == 0 && own && filemap_disk_mapped(entry->ofd->vmnt, entry->ofd->ino)) {
@@ -1661,7 +1661,7 @@ static long ftruncate_fd(int fd, long long length)
         }
     }
     big_give(big);
-    return rc;
+    return rc != 0 ? rc : kill;
 }
 
 /**
@@ -2371,6 +2371,49 @@ static int cwd_outside(const char *cwd)
     return cwd[0] == '/' && cwd[1] == '/';
 }
 
+/** Rebuild a synthetic directory's path on its held mount. */
+static int fd_synth_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
+{
+    struct synth_dir *sd = (struct synth_dir *)entry->priv;
+
+    int pid, tid, r;
+
+    if (!sd) {
+        return -EBADF;
+    }
+    if (sd->pidns_ino && entry->ofd && entry->ofd->synth_mnt) {
+        struct vfs_mount *mnt = entry->ofd->synth_mnt;
+        uint32_t prefix = (uint32_t)k_strlen(mnt->covered_path);
+
+        if (prefix + 2 >= cap) {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(out, mnt->covered_path, prefix);
+        out[prefix] = '/';
+        r = procfs_dir_relative(sd, mnt, out + prefix + 1, (int)(cap - prefix - 1));
+        if (r < 0) {
+            return r;
+        }
+        if (r == 1 && out[prefix + 1] == '.')
+            out[prefix] = '\0';
+        return path_in_root_at(out, outside);
+    }
+    if (procfs_dir_coords(sd, &pid, &tid) != 0)
+        return -ENOENT;
+    if (entry->ofd && entry->ofd->dirpath) {
+        if (pid != sd->pid || tid != sd->tid) {
+            return -ENOENT;
+        }
+        if (k_strlen(entry->ofd->dirpath) + 1 > cap) {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(out, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
+    } else {
+        synth_dir_path(sd->kind, pid, tid, out, (int)cap);
+    }
+    return path_in_root_at(out, outside);
+}
+
 /**
  * The absolute path of the directory a descriptor is open on, into `out` of
  * `cap` bytes: what its `*at` calls resolve relative names against, and what
@@ -2399,20 +2442,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
     int r;
 
     if (entry->type == FD_TYPE_SYNTH_DIR) {
-        struct synth_dir *sd = (struct synth_dir *)entry->priv;
-
-        if (!sd) {
-            return -EBADF;
-        }
-        if (entry->ofd && entry->ofd->dirpath) {
-            if (k_strlen(entry->ofd->dirpath) + 1 > cap) {
-                return -ENAMETOOLONG;
-            }
-            k_memcpy(out, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
-        } else {
-            synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
-        }
-        return path_in_root_at(out, outside);
+        return fd_synth_dir_path(entry, out, cap, outside);
     }
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
@@ -2552,7 +2582,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
 {
     fd_entry_t *entry;
     char *dirpath;
-    int len, r = 0, outside = 0;
+    int len, r = 0, outside = 0, task = 0;
 
     len = strncpy_from_user(pathbuf, upath, size);
     if (len < 0) {
@@ -2568,8 +2598,10 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         int dotdot = pathbuf[0] == '.' && pathbuf[1] == '.';
 
         outside = cwd_outside(proc_cwd(current_proc));
+        task = path_buf_set_dir(pathbuf, current_proc->fs->cwd_mnt, current_proc->fs->cwd_node,
+                                proc_cwd(current_proc));
         r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
-        if (r >= 0 && dotdot && cwd_removed()) {
+        if (r >= 0 && !task && dotdot && cwd_removed()) {
             removed_cwd_parents(pathbuf, (uint32_t)(r - len - 1));
         }
     } else if (pathbuf[0] != '/') {
@@ -2582,6 +2614,10 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
             return -ENOMEM;
         }
         r = fd_dir_path(entry, dirpath, VFS_PATH_MAX, &outside);
+        if (r == 0 && entry->type == FD_TYPE_SYNTH_DIR && entry->ofd) {
+            task =
+                path_buf_set_dir(pathbuf, entry->ofd->synth_mnt, entry->ofd->synth_node, dirpath);
+        }
         if (r == 0) {
             r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
         }
@@ -2590,7 +2626,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
     if (r < 0) {
         return r;
     }
-    len = canonicalize_abs(pathbuf);
+    len = task ? r : canonicalize_abs(pathbuf);
     if (outside) {
         if ((uint32_t)len + 4 > size) {
             return -ENAMETOOLONG;
@@ -2599,7 +2635,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         pathbuf[1] = '/';
         len += 2;
     }
-    return (dir && *dir == PATH_END_DOT) ? path_put_dot(pathbuf, len) : len;
+    return (!task && dir && *dir == PATH_END_DOT) ? path_put_dot(pathbuf, len) : len;
 }
 
 /**
@@ -2661,9 +2697,9 @@ static int path_from_user_unlocked(int dirfd, const char __user *upath, char **o
     if (len > 0 && buf[0] != '/') {
         cwd = dirfd == AT_FDCWD && !(buf[0] == '.' && buf[1] == '.') ? path_buf_get() : NULL;
         if (cwd) {
-            proc_cwd_read(current_proc, cwd);
+            locked = proc_cwd_read(current_proc, cwd);
         }
-        locked = !cwd || cwd_outside(cwd);
+        locked = locked || !cwd || cwd_outside(cwd);
         if (!locked) {
             len = path_prepend(buf, VFS_PATH_MAX, (uint32_t)len, cwd);
         }
@@ -2859,7 +2895,7 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
     path_buf_put(full);
 }
 
-static int32_t synth_open_dir(const struct vpath *vp, int flags);
+static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct synth_owner *own);
 static int synth_kind_is_dir(int kind);
 static uint32_t synth_pid_dir_mode(const struct vpath *vp);
 
@@ -2894,10 +2930,11 @@ static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct v
         return;
     }
     root.mnt = ref->mnt;
-    root.node = root.mnt->root;
+    root.node = ref->node;
     vfs_ref_hold(&root);
     vfs_desc_open(root.mnt);
     ofd->synth_mnt = root.mnt;
+    ofd->synth_node = root.node;
 }
 
 /**
@@ -2953,15 +2990,6 @@ static void synth_dir_record(int fd, int permanent, const char *name)
     e->ofd->dirpath = full;
 }
 
-/** Whether a synthetic directory of `kind` is one of a process's, whose
- * process must be there and whose record keeps its pid: /proc/<pid> and its
- * `fd`, `fdinfo`, `task` and `ns`. */
-static int synth_dir_of_proc(int kind)
-{
-    return kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_FDINFO_DIR ||
-           kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_NS_DIR;
-}
-
 static int32_t open_path(const char *name, int flags);
 static int32_t proc_fd_open_path(const struct vpath *vp, int flags);
 
@@ -2975,77 +3003,6 @@ int cred_privileged(void)
 int cred_fs_privileged(void)
 {
     return proc_fs_privileged(current_proc);
-}
-
-/**
- * Setuid always goes: a file whose contents or owner just changed no longer
- * grants what its owner meant it to grant. Setgid goes only when the
- * group-execute bit is set with it, matching the grant rule in `execve`:
- * without that bit the file cannot hand out a gid, and the pair means the
- * mandatory-lock mark elsewhere in Unix.
- *
- * The root directory is skipped by node identity, since `KRFFS_IS_DIR` reads
- * false on it: `mkfs` stamps the root a bare 0755 with no type bits, and
- * `KRFFS_MODE_DIRTY` shares the setuid position. A clear that reached the root
- * would report an unclean image as cleanly unmounted, which corrupts the file
- * system, and `chown(path, -1, -1)` is permitted to every caller.
- */
-int cred_kill_setid(krffs_node_t *node)
-{
-    krffs_node_t head;
-    uint16_t mode;
-
-    if (!node || node == krffs_fs->node) {
-        return 0;
-    }
-    if (krffs_node_head(node, &head) != 0) {
-        return krffs_root_halted() ? -EROFS : -EIO;
-    }
-    if (KRFFS_IS_DIR(head.mode)) {
-        return 0;
-    }
-    mode = (uint16_t)(head.mode & ~KRFFS_MODE_SUID);
-    if (mode & 0010u) {
-        mode &= (uint16_t)~KRFFS_MODE_SGID;
-    }
-    if (mode != head.mode && krffs_node_set_mode(node, mode) != 0) {
-        return krffs_root_halted() ? -EROFS : -EIO;
-    }
-    return 0;
-}
-
-int vfs_kill_setid(struct vfs_mount *mnt, void *node)
-{
-    struct vfs_stat vst;
-    int big;
-    int rc;
-
-    if (!mnt || !node) {
-        return 0;
-    }
-    rc = vfs_getattr(mnt, node, &vst);
-    if (rc != 0) {
-        return rc;
-    }
-    if ((vst.mode & 0170000u) == 0040000u || !(vst.mode & 06000u)) {
-        return 0;
-    }
-    vst.mode &= ~04000u;
-    if (vst.mode & 0010u) {
-        vst.mode &= ~02000u;
-    }
-    big = big_take();
-    rc = vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
-    big_give(big);
-    return rc;
-}
-
-int mnt_kill_setid(struct vfs_mount *mnt, void *node)
-{
-    if (mnt && mnt_is_root(vfs_mount_base(mnt))) {
-        return cred_kill_setid(node);
-    }
-    return vfs_kill_setid(mnt, node);
 }
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
@@ -3069,13 +3026,86 @@ static int cred_in_group(uint32_t gid)
     return gid == proc_fsgid(current_proc) || cred_in_suppl(gid);
 }
 
+/** Bits Linux's chown removes from a non-directory before storing IDs. */
+static uint32_t chown_setid_bits(uint32_t mode, uint32_t uid, uint32_t gid)
+{
+    uint32_t clear = mode & 04000u;
+
+    if ((mode & S_IFMT) == S_IFDIR) {
+        return 0;
+    }
+    if ((mode & 02000u) &&
+        ((mode & 0010u) || (!cred_in_group(gid) && !inode_capable(uid, gid, CAP_FSETID)))) {
+        clear |= 02000u;
+    }
+    return clear;
+}
+
+/** Bits a write or a truncate removes, as Linux's file_remove_privs. */
+static uint32_t write_setid_bits(uint32_t mode, uint32_t uid, uint32_t gid)
+{
+    if ((mode & S_IFMT) != S_IFREG ||
+        (!current_proc->userns && cap_holds(current_proc, CAP_FSETID))) {
+        return 0;
+    }
+    return chown_setid_bits(mode, uid, gid);
+}
+
+/**
+ * Clear the set-id bits before changing a held file's data or size. The
+ * caller holds the file's write and node locks where its type has them.
+ * Returns 0, or the error of reading or storing the mode.
+ */
+static int write_kill_setid(struct open_file *ofd)
+{
+    struct vfs_mount *mnt = ofd->vmnt;
+    struct vfs_stat st;
+    uint32_t clear;
+    int rc, big;
+
+    if (!current_proc->userns && cap_holds(current_proc, CAP_FSETID)) {
+        return 0;
+    }
+    rc = vfs_getattr(mnt, ofd->vnode, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    clear = write_setid_bits(st.mode, st.uid, st.gid);
+    if (!clear) {
+        return 0;
+    }
+    big = big_take();
+    if (mnt_is_root(vfs_mount_base(mnt))) {
+        krffs_node_t *node = ofd->vnode;
+        krffs_node_t head;
+
+        if (vfs_mount_rdonly(mnt) || krffs_root_halted()) {
+            rc = -EROFS;
+        } else if (krffs_node_head(node, &head) != 0 ||
+                   krffs_node_set_mode(node, (uint16_t)(head.mode & ~clear)) != 0) {
+            rc = krffs_root_halted() ? -EROFS : -EIO;
+        } else {
+            krffs_stamp(node, KRFFS_STAMP_ATTR);
+            attr_told_desc(ofd, IN_ATTRIB, 1);
+        }
+    } else {
+        st.mode &= ~clear;
+        rc = vfs_setattr(mnt, ofd->vnode, VFS_SET_MODE, &st);
+        if (rc == 0) {
+            attr_told_desc(ofd, IN_ATTRIB, 0);
+        }
+    }
+    big_give(big);
+    return rc;
+}
+
 /**
  * The nine-bit permission check over explicit metadata: 0 when `mode`
  * grants the caller the `want` bits (CRED_R, CRED_W, CRED_X), else -EACCES.
  * One identity class is chosen and judged alone, the classic rule. The owner
  * is judged by the owner bits, else a group match (primary or supplementary)
- * by the group bits, else the other bits; a uid of 0 passes everything,
- * unless the thread gave up its capabilities (`nocaps`). The ids are the
+ * by the group bits, else the other bits. DAC capabilities may override
+ * the result for an inode whose IDs are mapped. The ids are the
  * file-system ones (`proc_fsuid`, `proc_fsgid`), which are the effective
  * ones unless setfsuid or setfsgid set them apart. `use_real` judges by the
  * real ids instead, for access(2), the one call that asks who the process
@@ -3084,21 +3114,7 @@ static int cred_in_group(uint32_t gid)
 static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, int want,
                                 int use_real)
 {
-    process_t *p = current_proc;
-    uint32_t uid = use_real ? p->ruid : proc_fsuid(p);
-    uint32_t bits;
-
-    if (uid == 0 && !p->nocaps) {
-        return 0;
-    }
-    if (uid == owner) {
-        bits = mode >> 6;
-    } else if ((use_real ? p->rgid : proc_fsgid(p)) == group || cred_in_suppl(group)) {
-        bits = mode >> 3;
-    } else {
-        bits = mode;
-    }
-    return ((uint32_t)want & ~bits & 7u) ? -EACCES : 0;
+    return inode_may_access(owner, group, mode, (uint32_t)want, use_real) ? 0 : -EACCES;
 }
 
 int mnt_is_root(const struct vfs_mount *mnt)
@@ -3121,6 +3137,23 @@ krffs_node_t *fd_root_node(const fd_entry_t *e)
     return e->node;
 }
 
+/** Whether a file of mode `fmode` is a device, FIFO or socket, which W_OK
+ * on a read-only file system still allows, as Linux's sb_permission. */
+static int special_file(uint32_t fmode)
+{
+    uint32_t type = fmode & 0170000u;
+
+    return type == 0010000u || type == 0140000u || type == 0020000u || type == 0060000u;
+}
+
+/** Whether inode_permission refuses a write before checking the inode. */
+static int inode_read_only(struct vfs_mount *mnt, uint32_t mode, int want)
+{
+    return (want & CRED_W) && !special_file(mode) && mnt &&
+           vfs_mount_base(mnt)->type != &vfs_sysfs_type &&
+           (vfs_sb_rdonly(mnt) || halted_root_mount(mnt));
+}
+
 int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
 {
     struct vfs_stat st;
@@ -3129,13 +3162,20 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
     if (rc != 0) {
         return rc;
     }
+    if (inode_read_only(r->mnt, st.mode, want))
+        return -EROFS;
+    if ((want & CRED_W) && st.flags_known && (st.flags & VFS_FL_IMMUTABLE)) {
+        return -EPERM; /* before the mode, as Linux's inode_permission */
+    }
     if ((want & CRED_X) && (st.mode & 0170000u) != 0040000u && !(st.mode & 0111u)) {
         return -EACCES;
     }
-    if ((want & CRED_W) && st.flags_known && (st.flags & VFS_FL_IMMUTABLE)) {
-        return -EPERM;
+    if (r->mnt->type == &vfs_procfs_type) {
+        const struct synth_owner *own = vfs_proc_dir_owner(r);
+        if (own)
+            return proc_held_dir_permission(vfs_synth_vpath(r->mnt, r->node), own, want, use_real);
     }
-    return cred_access_bits(st.uid, st.gid, st.mode & 0777u, want, use_real);
+    return cred_access_bits(st.uid, st.gid, st.mode, want, use_real);
 }
 
 /** Whether the inode flags of `node` on `mnt` forbid a change of its size,
@@ -3169,9 +3209,15 @@ int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
     if (krffs_node_head(node, &head) != 0) {
         return -EIO;
     }
+    if (inode_read_only(vfs_root_mount(),
+                        node == krffs_fs->node ? S_IFDIR : krffs_mode_type(head.mode), want))
+        return -EROFS;
     mode = (node == krffs_fs->node) ? 0755u : (uint32_t)(head.mode & 0777u);
     if ((want & CRED_X) && !KRFFS_IS_DIR(head.mode) && node != krffs_fs->node && !(mode & 0111u)) {
         return -EACCES;
+    }
+    if (node == krffs_fs->node || KRFFS_IS_DIR(head.mode)) {
+        mode |= S_IFDIR;
     }
     return cred_access_bits(head.uid, head.gid, mode, want, use_real);
 }
@@ -3203,15 +3249,14 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
     if (krffs_node_head(dir, &d) != 0) {
         return -EIO;
     }
-    if (!(d.mode & KRFFS_MODE_STICKY) || cred_fs_privileged() ||
-        proc_fsuid(current_proc) == d.uid) {
+    if (!(d.mode & KRFFS_MODE_STICKY) || proc_fsuid(current_proc) == d.uid) {
         return 0;
     }
     if (victim) {
         if (krffs_node_head(victim, &v) != 0) {
             return -EIO;
         }
-        if (proc_fsuid(current_proc) == v.uid) {
+        if (proc_fsuid(current_proc) == v.uid || inode_capable(v.uid, v.gid, CAP_FOWNER)) {
             return 0;
         }
     }
@@ -3343,6 +3388,8 @@ static int32_t proc_fd_share(fd_table_t *fds, int procfd, int flags)
  * caller gives them back with `fd_peek_drop`. 0, -ENOENT for no such
  * process or descriptor, or -EACCES.
  */
+static int32_t proc_fd_hold(const struct vpath *vp, process_t **owner, fd_entry_t *src);
+
 static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry_t *src)
 {
     int pid = procfs_resolve_id(vp);
@@ -3354,7 +3401,20 @@ static int32_t proc_fd_entry(const struct vpath *vp, process_t **owner, fd_entry
     if (p->fds != current_proc->fds && !cred_privileged() && p->euid != proc_fsuid(current_proc)) {
         return -EACCES;
     }
-    if (fd_peek_hold(p->fds, vp->procfd, src) != 0) {
+    return proc_fd_hold(vp, owner, src);
+}
+
+/**
+ * `proc_fd_entry` without its credential check, for a caller that has made
+ * Linux's own checks (`proc_fd_follow`). 0 or -ENOENT.
+ */
+static int32_t proc_fd_hold(const struct vpath *vp, process_t **owner, fd_entry_t *src)
+{
+    int pid = procfs_resolve_id(vp);
+    process_t *p = pid < 0 ? NULL : get_process((uint32_t)pid);
+
+    if (!p || p->state == PROC_UNUSED || !p->fds || vp->procfd < 0 ||
+        fd_peek_hold(p->fds, vp->procfd, src) != 0) {
         return -ENOENT;
     }
     *owner = p;
@@ -3389,6 +3449,39 @@ static int proc_fd_xdev(const fd_entry_t *entry, const struct vfs_mount *mnt)
                                            : ofd->synth_mnt) != mnt)
                ? -EXDEV
                : 0;
+}
+
+/**
+ * The mount the descriptor `e` was opened through, NULL for none: a file's
+ * or a named FIFO's (`vmnt`), the KRFFS root for a file of the root opened
+ * by no mount record, the device node's for a device opened through one
+ * (`dev_mnt`), and a synthetic node's (`synth_mnt`). A change of attributes
+ * through the descriptor is judged by its flags, as Linux's
+ * `mnt_want_write_file` judges `f_path.mnt`.
+ */
+static struct vfs_mount *fd_mount(const fd_entry_t *e)
+{
+    const struct open_file *ofd = e->ofd;
+
+    if (ofd && ofd->vmnt) {
+        return ofd->vmnt;
+    }
+    if ((e->type == FD_TYPE_FILE && e->node) || e->type == FD_TYPE_DIR) {
+        return vfs_root_mount();
+    }
+    return !ofd ? NULL : ofd->dev_mnt ? ofd->dev_mnt : ofd->synth_mnt;
+}
+
+/**
+ * Whether a change of attributes through `mnt` is -EROFS before any other
+ * check, as Linux's `mnt_want_write` refuses it (`vfs_mount_rdonly`), the
+ * halted KRFFS root among them; never for sysfs, which is mounted read-only
+ * though its files keep what they are given, nor for NULL, no mount.
+ */
+static int attr_read_only(struct vfs_mount *mnt)
+{
+    return mnt && (halted_root_mount(mnt) ||
+                   (vfs_mount_rdonly(mnt) && vfs_mount_base(mnt)->type != &vfs_sysfs_type));
 }
 
 static int open_want(int flags);
@@ -3512,12 +3605,27 @@ static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_
     if (rc != 0) {
         return rc;
     }
-    if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
+    if (src->ofd && src->ofd->vmnt &&
+        (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR || mq_fd_ref(src, NULL))) {
         held = src->ofd;
         fd_ofd_ref(held);
         rc = proc_fd_reopen(held, flags);
         fd_ofd_unref(held);
         return rc;
+    }
+    if (src->type == FD_TYPE_SYNTH_DIR && src->ofd && src->ofd->synth_mnt) {
+        struct vfs_ref ref;
+        const struct synth_owner *own;
+
+        ref.mnt = src->ofd->synth_mnt;
+        ref.node = src->ofd->synth_node;
+        own = vfs_proc_dir_owner(&ref);
+        if (own) {
+            const struct vpath *dir = vfs_synth_vpath(ref.mnt, ref.node);
+            rc = synth_open_dir(dir, flags, own);
+            synth_mount_record(rc, &ref, dir, flags);
+            return rc;
+        }
     }
     if (src->type == FD_TYPE_DEVICE && src->dev) {
         return proc_fd_reopen_device(src, flags);
@@ -3543,7 +3651,8 @@ int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_fi
     if (rc != 0) {
         return rc;
     }
-    if (!src.ofd || !src.ofd->vmnt || (src.type != FD_TYPE_FILE && src.type != FD_TYPE_DIR)) {
+    if (!src.ofd || !src.ofd->vmnt ||
+        (src.type != FD_TYPE_FILE && src.type != FD_TYPE_DIR && !mq_fd_ref(&src, NULL))) {
         fd_peek_drop(&src);
         return -EACCES;
     }
@@ -3615,7 +3724,7 @@ static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode,
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
     if (synth_kind_is_dir(vp->kind)) {
-        return synth_open_dir(vp, flags);
+        return synth_open_dir(vp, flags, NULL);
     }
     switch (vp->kind) {
     case VNODE_DEV: {
@@ -3683,7 +3792,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_ACPI_CALL:
         return synth_open_root(vp, flags, 0600u, open_want(flags));
     case VNODE_DEV_MADE:
-        return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags) : -ENOENT;
+        return devtree_is_dir(vp->syskey) == 1 ? synth_open_dir(vp, flags, NULL) : -ENOENT;
     case VNODE_ENOTDIR:
         return -ENOTDIR;
     case VNODE_PROC_FD_LINK:
@@ -3692,7 +3801,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
-        return procfs_may_read(procfs_resolve_pid(vp->pid)) ? procfs_open(vp, flags) : -EACCES;
+        return procfs_may_read(procfs_resolve_pid(vp->pid, vp->pidns_ino)) ? procfs_open(vp, flags)
+                                                                           : -EACCES;
     case VNODE_PROC_NS_LINK:
         if (current_proc->walk_replay_mnt) {
             return -EXDEV;
@@ -3729,39 +3839,48 @@ static int32_t proc_ns_dir_read(const struct vpath *vp, int pid, int flags)
  * negative errno. /proc/PID/fd is judged as Linux's `proc_fd_permission`
  * judges it: by its mode, 0500, and its owner (`procfs_pid_owner`), with a
  * thread of the caller's own process always let in. A walk judges the owner
- * the lookup gives it now, and fchdir the one `sd`, the record of a
+ * the lookup gives it now, and fchdir the one `own`, the record of a
  * descriptor open on the directory, keeps from its last lookup
  * (`procfs_owner_keep`), as Linux judges the inode's owner, which only a
  * lookup sets (fs/proc/fd.c:331-345); with no record, a process that has
  * ended is -ENOENT. /proc/PID/fdinfo, mode 0555, takes Linux's ptrace check
  * as well (`procfs_may_read`), -EACCES, and -ESRCH once the process has
  * ended, as Linux's `proc_fdinfo_permission` answers. Any other kind is 0.
+ * With `use_real` both checks go by the real ids, as access(2)'s do.
  */
-static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synth_dir *sd)
+static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synth_owner *own,
+                                  int use_real)
 {
-    uint32_t uid, gid;
-
-    if (kind == VNODE_PROC_FDINFO_DIR) {
-        if (procfs_pid_owner(pid, S_IFDIR | 0555, &uid, &gid) != 0) {
+    if (own && kind == VNODE_PROC_FDINFO_DIR) {
+        if (pid < 0)
             return -ESRCH;
-        }
-        return procfs_may_read(pid) ? 0 : -EACCES;
+        if (!procfs_may_read_as(pid, use_real))
+            return -EACCES;
+        return cred_access_bits(own->uid, own->gid, S_IFDIR | 0555, want, use_real);
     }
-    if (kind != VNODE_PROC_FD_DIR) {
+    if (!own || kind != VNODE_PROC_FD_DIR) {
+        int rc = procfs_fd_dir_access(kind, pid, want, use_real);
+
+        return rc == -ENOENT && kind == VNODE_PROC_FDINFO_DIR ? -ESRCH : rc;
+    }
+    if (procfs_same_group(pid)) {
         return 0;
     }
-    if (procfs_pid_owner(pid, S_IFDIR | 0500, &uid, &gid) != 0) {
-        if (!sd) {
-            return -ENOENT;
-        }
-    } else if (procfs_same_group(pid)) {
-        return 0;
+    return cred_access_bits(own->uid, own->gid, S_IFDIR | 0500, want, use_real);
+}
+
+int proc_held_dir_permission(const struct vpath *vp, const struct synth_owner *own, int want,
+                             int real)
+{
+    int pid = procfs_held_pid(own);
+
+    if ((vp->kind == VNODE_PROC_PID && !vp->tid) || vp->kind == VNODE_PROC_TASK_DIR) {
+        if (pid < 0)
+            return -ESRCH;
     }
-    if (sd) {
-        uid = sd->own.uid;
-        gid = sd->own.gid;
-    }
-    return cred_access_bits(uid, gid, 0500, want, 0);
+    if (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR)
+        return proc_fd_dir_access(vp->kind, pid, want, own, real);
+    return cred_access_bits(own->uid, own->gid, synth_pid_dir_mode(vp), want, real);
 }
 
 /** Whether a device directory or message directory still exists at open. */
@@ -3779,13 +3898,35 @@ static int synth_dir_present(const struct vpath *vp)
     return 1;
 }
 
+/** Allocate a directory record with the coordinates its listing uses. */
+static struct synth_dir *synth_directory_record(const struct vpath *vp,
+                                                const struct synth_owner *own, int pid)
+{
+    if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
+        return synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
+    } else if (vp->kind == VNODE_PROC_IRQ_DIR || vp->kind == VNODE_PROC_ASOUND_DIR ||
+               vp->kind == VNODE_PROC_BUS_DIR) {
+        return synth_dir_alloc(vp->kind, vp->pid, 0);
+    } else if (vp->kind == VNODE_DEV_SUBDIR) {
+        return synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
+    } else if (vp->kind == VNODE_DEV_MADE) {
+        return synth_dir_alloc(VNODE_DEV_MADE, vp->syskey, 0);
+    } else {
+        return synth_dir_alloc(vp->kind,
+                               vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent
+                               : own                          ? vp->pid
+                                     : (int)procfs_pid_number((uint32_t)pid, vp->pidns_ino),
+                               vp->tid);
+    }
+}
+
 /**
  * Open a synthetic directory (/dev, /proc, /proc/<pid> and its fd, fdinfo
  * and ns, a thread's under /proc/<pid>/task, a directory of /proc/sys or of
  * /sys) for reading, and return the descriptor or a negative errno. The
  * descriptor keeps a record of its own (`synth_dir_alloc`), freed at the
  * last close, with the process's pid and, for a thread's directory, the
- * thread's id, as the caller's PID namespace numbers them, which is how its
+ * thread's id, as the proc mount's PID namespace numbers them, which is how its
  * listing, its /proc/PID/fd link and the names relative to it read them, so
  * they stay the thread's; and for an fd, fdinfo or task directory the owner
  * a lookup last gave it (`procfs_owner_keep`).
@@ -3803,19 +3944,19 @@ static int synth_dir_present(const struct vpath *vp)
  * (`devfs_subdir_present`), and a record the heap has no room for is
  * -ENFILE. A directory made under /dev is one the caller found there.
  */
-static int32_t synth_open_dir(const struct vpath *vp, int flags)
+static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct synth_owner *own)
 {
     fd_entry_t *e;
     int fd;
-    int pid = 0;
-
+    int pid = 0, id = 0;
     struct synth_dir *sd;
 
-    if (synth_dir_of_proc(vp->kind)) {
-        if (procfs_resolve_id(vp) < 0) {
+    if (!own && synth_dir_of_proc(vp->kind)) {
+        id = procfs_resolve_id(vp);
+        if (id < 0) {
             return -ENOENT;
         }
-        pid = procfs_resolve_pid(vp->pid);
+        pid = procfs_resolve_pid(vp->pid, vp->pidns_ino);
     }
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
@@ -3823,31 +3964,20 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if ((flags & 3) != 0 || (flags & O_CREAT)) {
         return -EISDIR;
     }
-    fd = (flags & O_PATH) ? 0 : proc_fd_dir_access(vp->kind, pid, CRED_R, NULL);
+    fd = (flags & O_PATH) ? 0
+         : own            ? proc_held_dir_permission(vp, own, CRED_R, 0)
+                          : proc_fd_dir_access(vp->kind, id, CRED_R, NULL, 0);
     if (fd != 0) {
         return fd;
     }
-    fd = proc_ns_dir_read(vp, pid, flags);
+    fd = own ? 0 : proc_ns_dir_read(vp, id, flags);
     if (fd != 0) {
         return fd;
     }
     if (!synth_dir_present(vp)) {
         return -ENOENT;
     }
-    if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
-        sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
-    } else if (vp->kind == VNODE_PROC_IRQ_DIR || vp->kind == VNODE_PROC_ASOUND_DIR ||
-               vp->kind == VNODE_PROC_BUS_DIR) {
-        sd = synth_dir_alloc(vp->kind, vp->pid, 0);
-    } else if (vp->kind == VNODE_DEV_SUBDIR) {
-        sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
-    } else if (vp->kind == VNODE_DEV_MADE) {
-        sd = synth_dir_alloc(VNODE_DEV_MADE, vp->syskey, 0);
-    } else {
-        sd = synth_dir_alloc(
-            vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : (int)pid_seen((uint32_t)pid),
-            vp->tid);
-    }
+    sd = synth_directory_record(vp, own, pid);
     if (!sd) {
         return -ENFILE;
     }
@@ -3856,7 +3986,11 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         kfree(sd);
         return fd;
     }
-    procfs_owner_keep(&sd->own, vp);
+    sd->pidns_ino = vp->pidns_ino;
+    if (own)
+        procfs_owner_copy(&sd->own, own);
+    else
+        procfs_owner_keep(&sd->own, vp);
     e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_SYNTH_DIR;
     e->node = NULL;
@@ -4212,7 +4346,7 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
     }
     if (mnt_is_root(parent.mnt)) {
         rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-    } else if (parent.mnt->flags & VFS_MS_RDONLY) {
+    } else if (vfs_mount_rdonly(parent.mnt)) {
         rc = -EROFS;
     } else {
         rc = (int)cred_access_ref(&parent, CRED_W, 0);
@@ -4473,9 +4607,9 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
  * under O_NOFOLLOW; EISDIR for a directory opened for writing, with O_TRUNC
  * or with O_CREAT, which asks for a file, as on Linux; ENOTDIR for
  * O_DIRECTORY on anything else. Then come EROFS for a write-side request on a
- * read-only mount; EPERM for an append-only file opened for writing without
- * O_APPEND or with O_TRUNC, as Linux's may_open answers; the permission the
- * access mode asks for, O_TRUNC asking for write; and EBUSY for O_TRUNC of a
+ * read-only file system or for O_TRUNC on a read-only mount; the inode
+ * permission the access mode and O_TRUNC ask for; EPERM for an append-only
+ * write without O_APPEND or with O_TRUNC; and EBUSY for O_TRUNC of a
  * file that backs a loop device. Returns 0, or a negative errno with the
  * reference released. The truncation is `open_install`'s, through the open
  * handle.
@@ -4509,22 +4643,22 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -ENOTDIR;
     }
-    if ((acc != 0 || (flags & O_TRUNC)) && (ref->mnt->flags & VFS_MS_RDONLY)) {
-        vfs_ref_release(ref);
-        return -EROFS;
-    }
-    if (vst.flags_known && (vst.flags & VFS_FL_APPEND) &&
-        ((acc != 0 && !(flags & O_APPEND)) || (flags & O_TRUNC))) {
-        vfs_ref_release(ref);
-        return -EPERM;
-    }
     if (flags & O_TRUNC) {
+        if (vfs_mount_rdonly(ref->mnt)) {
+            vfs_ref_release(ref);
+            return -EROFS;
+        }
         want |= CRED_W;
     }
     rc = (int)cred_access_ref(ref, want, 0);
     if (rc != 0) {
         vfs_ref_release(ref);
         return rc;
+    }
+    if (vst.flags_known && (vst.flags & VFS_FL_APPEND) &&
+        ((acc != 0 && !(flags & O_APPEND)) || (flags & O_TRUNC))) {
+        vfs_ref_release(ref);
+        return -EPERM;
     }
     if ((flags & O_TRUNC) && loop_backs(ref->mnt, node)) {
         vfs_ref_release(ref);
@@ -4576,7 +4710,8 @@ static int open_root_node(struct vfs_ref *ref, int flags)
     if (flags & O_TRUNC) {
         want |= CRED_W;
     }
-    crc = cred_access_node(node, want, 0);
+    crc =
+        (flags & O_TRUNC) && vfs_mount_rdonly(ref->mnt) ? -EROFS : cred_access_node(node, want, 0);
     if (crc != 0) {
         vfs_ref_release(ref);
         return crc;
@@ -4586,28 +4721,26 @@ static int open_root_node(struct vfs_ref *ref, int flags)
 
 /**
  * O_TRUNC of the description `ofd`, open on the mount `mnt`: the file cut to
- * nothing under its lock, the set-id bits cleared for a caller without
- * privilege and the pages of its shared mappings let go. 0 or the file
- * system's error. May sleep, and takes `ofd` because the descriptor table
- * may move meanwhile.
+ * nothing under its lock, then the set-id bits cleared for a caller without
+ * privilege, which a refused truncation leaves alone, and the pages of its
+ * shared mappings let go. 0, the file system's error, or the clear's. May
+ * sleep, and takes `ofd` because the descriptor table may move meanwhile.
  */
 static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
 {
     struct vfs_ref file;
     int own = file_lock(ofd, &file);
-    int rc = 0;
+    int rc, kill = 0;
 
-    if (!cred_fs_privileged()) {
-        rc = mnt_kill_setid(mnt, ofd->vnode);
-    }
+    rc = vfs_truncate(mnt, ofd->fhandle, 0, 1);
     if (rc == 0) {
-        rc = vfs_truncate(mnt, ofd->fhandle, 0);
+        kill = write_kill_setid(ofd);
     }
     if (rc == 0 && own) {
         filemap_file_truncated(mnt, ofd->ino, 0);
     }
     file_unlock(&file, own);
-    return rc;
+    return rc != 0 ? rc : kill;
 }
 
 /**
@@ -4708,11 +4841,12 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     fd_entry_t *entry = fd_slot(current_proc->fds, fd);
     krffs_node_t *node = ref->node;
     fd_type_t type;
+    int acc = flags & 3;
     int rc;
 
     rc = open_install_kind(ref, entry->ofd, name, &type);
     entry->ofd->offset = 0;
-    if (rc == 0 && ((flags & 3) != 0 || (flags & O_TRUNC))) {
+    if (rc == 0 && (acc == 1 || acc == 2 || (flags & O_TRUNC))) {
         rc = fd_ofd_access(entry->ofd, ref, 1);
     }
     if (rc == 0 && open_direct_refused(ref->mnt, type == FD_TYPE_DIR ? S_IFDIR : S_IFREG, flags)) {
@@ -4732,33 +4866,13 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     entry->ofd->vnode = node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
-    if (flags & O_TRUNC) {
-        rc = open_truncate(entry->ofd, ref->mnt);
-        if (rc != 0) {
-            fd_free(current_proc->fds, fd);
-            return rc;
-        }
-    }
-
-    if ((flags & 3) == 0) {
-        fd_ofd_access_drop(entry->ofd);
-    }
-    if ((flags & 3) == 1) {
-        entry->flags = FD_FLAG_WRITE;
-    } else if ((flags & 3) == 2) {
-        entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
-    } else {
-        entry->flags = FD_FLAG_READ;
-    }
+    entry->flags = fd_open_rights((unsigned)acc);
     if (entry->ofd) {
         entry->ofd->status_flags |= OFD_OPEN_STATUS(flags) | ((uint32_t)flags & OFD_DIRECT);
     }
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC;
     }
-    entry->node = mnt_is_root(entry->ofd->vmnt) && entry->ofd->vnode != krffs_fs->node
-                      ? (krffs_node_t *)entry->ofd->vnode
-                      : NULL;
     if (type == FD_TYPE_FILE && vfs_mount_base(entry->ofd->vmnt)->type == &vfs_debugfs_type) {
         rc = debugfs_bind(entry->ofd->vnode, entry, flags);
         if (rc != 0) {
@@ -4766,7 +4880,28 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
             return rc;
         }
     }
-    entry->type = type;
+    if (flags & O_TRUNC) {
+        rc = open_truncate(entry->ofd, ref->mnt);
+        if (rc != 0) {
+            if (entry->ops && entry->ops->close) {
+                entry->ops->close(entry);
+            }
+            fd_free(current_proc->fds, fd);
+            return rc;
+        }
+    }
+
+    if (acc == 0 || acc == 3) {
+        fd_ofd_access_drop(entry->ofd);
+    }
+    entry->node = mnt_is_root(entry->ofd->vmnt) && entry->ofd->vnode != krffs_fs->node
+                      ? (krffs_node_t *)entry->ofd->vnode
+                      : NULL;
+    if (type == FD_TYPE_FILE && vfs_mount_base(ref->mnt)->type == &vfs_mqueue_type) {
+        mq_bind(entry, (unsigned)acc, entry->flags & FD_FLAG_CLOEXEC);
+    } else {
+        entry->type = type;
+    }
     fd_install(current_proc->fds, fd);
     return fd;
 }
@@ -4782,7 +4917,7 @@ static int synth_is_block(const struct vpath *vp);
  * takes it and reads and writes as without it. Anything else opens as its
  * kind opens.
  */
-static int32_t open_synth_node(const struct vpath *vp, int flags)
+static int32_t open_synth_node(const struct vfs_ref *ref, const struct vpath *vp, int flags)
 {
     if (synth_is_link(vp) && (flags & O_NOFOLLOW)) {
         return -ELOOP;
@@ -4793,29 +4928,37 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
     if ((flags & (O_DIRECT | O_PATH)) == O_DIRECT && !synth_is_link(vp) && !synth_is_block(vp)) {
         return -EINVAL;
     }
+    if (vfs_proc_dir_owner(ref))
+        return synth_open_dir(vp, flags, vfs_proc_dir_owner(ref));
     return synth_open(vp, flags);
 }
 
+static int32_t access_synth_ref(const struct vfs_ref *ref, const struct vpath *vp,
+                                const struct synth_owner *own, int mode, int dir, int flags);
+
 /**
- * Whether a request with the open flags `flags` of the place of /proc that
- * `ref` holds is refused with EROFS: a write-side request through a
- * read-only mount of /proc, such as the bind bubblewrap makes of
- * /proc/sys, as open(2) and access(2) refuse it on any other read-only
- * mount (`open_mounted_node`, `do_access`). A directory is refused only
- * with `dirs`, for access(2), since open(2) answers EISDIR for it
- * (`synth_open_dir`). /proc/PID/fd/N opens the file it refers to, whose own
- * mount decides. /sys is mounted read-only though its attributes take
- * writes, and keeps them, as do the devices of /dev.
+ * The error for a write open of a proc file through a read-only mount,
+ * or zero to proceed. Inode permission precedes a per-mount restriction
+ * unless truncation needs mount write access first. A directory goes to
+ * `synth_open_dir`. A descriptor link uses its target mount.
  */
-static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
+static int proc_read_only(const struct vfs_ref *ref, int flags)
 {
     const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
     struct vfs_stat st;
 
-    return ((flags & 3) != 0 || (flags & O_TRUNC)) && (ref->mnt->flags & VFS_MS_RDONLY) &&
-           vfs_mount_base(ref->mnt)->type == &vfs_procfs_type && vp &&
-           vp->kind != VNODE_PROC_FD_LINK && vfs_getattr(ref->mnt, ref->node, &st) == 0 &&
-           (dirs || (st.mode & 0170000u) != 0040000u);
+    if (!vp || vfs_mount_base(ref->mnt)->type != &vfs_procfs_type || !vfs_mount_rdonly(ref->mnt) ||
+        (!(flags & 3) && !(flags & O_TRUNC)) || vp->kind == VNODE_PROC_FD_LINK ||
+        vp->kind == VNODE_PROC_NS_LINK || vfs_getattr(ref->mnt, ref->node, &st) != 0 ||
+        (st.mode & S_IFMT) != S_IFREG)
+        return 0;
+    if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL))
+        return -EEXIST;
+    if (flags & O_DIRECTORY)
+        return -ENOTDIR;
+    if ((flags & O_TRUNC) || vfs_sb_rdonly(ref->mnt))
+        return -EROFS;
+    return access_synth_ref(ref, vp, NULL, open_want(flags), 0, AT_EACCESS);
 }
 
 /**
@@ -4949,13 +5092,13 @@ again:
 
         if (vp) {
             struct vpath vpc = *vp;
-            int ro = proc_read_only(&ref, flags, 0);
+            int ro = proc_read_only(&ref, flags);
             int permanent = mount_permanent_at(ref.mnt);
 
             vfs_walk_unlock(ref.mnt);
             fd_free(current_proc->fds, fd);
             fd = -1;
-            rc = ro ? -EROFS : open_synth_node(&vpc, flags);
+            rc = ro ? ro : open_synth_node(&ref, &vpc, flags);
             synth_mount_record(rc, &ref, &vpc, flags);
             vfs_ref_release(&ref);
             synth_dir_record(rc, permanent, name);
@@ -5003,9 +5146,9 @@ out:
 static uint32_t atime_flags(uint32_t flags)
 {
     if (flags & MS_STRICTATIME) {
-        flags &= ~(MS_STRICTATIME | VFS_MS_RELATIME | VFS_MS_NOATIME);
+        return flags & ~(MS_STRICTATIME | VFS_MS_RELATIME | VFS_MS_NOATIME);
     }
-    return flags;
+    return flags & VFS_MS_NOATIME ? flags & ~VFS_MS_RELATIME : flags | VFS_MS_RELATIME;
 }
 
 /* The propagation flags, which mount(2) takes alone, with MS_REC. */
@@ -5058,8 +5201,12 @@ static int mount_privileged(const char *type)
  * Linux. A caller without privilege, which `sys_mount` let through as
  * privileged over its mount namespace, may change only a bind that no other
  * live namespace sees, and may not clear REMOUNT_LOCKED there, -EPERM.
+ * With `keep_atime`, for a call that named no atime flag, the mount keeps
+ * its noatime, nodiratime and relatime, as Linux's `path_mount` keeps them
+ * for a remount.
  */
-static int32_t remount_at(const char *path, uint32_t flags, int bind, const char *data)
+static int32_t remount_at(const char *path, uint32_t flags, int bind, const char *data,
+                          int keep_atime)
 {
     struct vfs_ref ref;
     struct vfs_mount *m;
@@ -5072,9 +5219,14 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
         vfs_ref_release(&ref);
         return -EINVAL;
     }
-    m = bind || !ref.mnt->bind_of ? ref.mnt : ref.mnt->bind_of;
+    m = ref.mnt;
+    if (keep_atime) {
+        uint32_t atime = VFS_MS_NOATIME | VFS_MS_NODIRATIME | VFS_MS_RELATIME;
+
+        flags = (flags & ~atime) | (vfs_mount_flags(m) & atime);
+    }
     if (!cred_privileged() &&
-        (!bind || vfs_mount_shared(m) || (m->flags & REMOUNT_LOCKED & ~flags))) {
+        (!bind || vfs_mount_shared(m) || (vfs_mount_flags(m) & REMOUNT_LOCKED & ~flags))) {
         vfs_ref_release(&ref);
         return -EPERM;
     }
@@ -5104,7 +5256,9 @@ static int32_t remount_call(const isr_params_t *params)
     n = path_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 1), &tpath);
     if (n == 0) {
         n = remount_at(tpath, atime_flags(SC_ARG(params, 3) & ~(uint32_t)(MS_REMOUNT | MS_BIND)),
-                       (SC_ARG(params, 3) & MS_BIND) != 0, data);
+                       (SC_ARG(params, 3) & MS_BIND) != 0, data,
+                       !(SC_ARG(params, 3) &
+                         (VFS_MS_NOATIME | VFS_MS_NODIRATIME | VFS_MS_RELATIME | MS_STRICTATIME)));
         path_buf_put(tpath);
     }
     return n;
@@ -5425,7 +5579,7 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
     void *node;
     int rc = cred_access_ref(parent, CRED_W, 0);
 
-    if (rc != 0 || cred_fs_privileged()) {
+    if (rc != 0) {
         return rc;
     }
     rc = vfs_getattr(parent->mnt, parent->node, &pst);
@@ -5443,7 +5597,9 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
     if (rc != 0) {
         return rc;
     }
-    return est.uid == proc_fsuid(current_proc) ? 0 : -EPERM;
+    return est.uid == proc_fsuid(current_proc) || inode_capable(est.uid, est.gid, CAP_FOWNER)
+               ? 0
+               : -EPERM;
 }
 
 /**
@@ -5515,6 +5671,7 @@ static void attr_told(const char *name, struct vfs_mount *mnt, void *node, uint3
     char leaf[VFS_NAME_MAX + 1];
     struct vfs_stat st;
     uint64_t dir_ino;
+    char *cwd = NULL;
 
     if (!inotify_watches || mask == 0 || vfs_getattr(mnt, node, &st) != 0) {
         return;
@@ -5522,10 +5679,18 @@ static void attr_told(const char *name, struct vfs_mount *mnt, void *node, uint3
     if (self) {
         inotify_file(mnt, st.ino, mask);
     }
+    if (!name) {
+        cwd = path_buf_get();
+        if (!cwd)
+            return;
+        proc_cwd_read(current_proc, cwd);
+        name = cwd;
+    }
     if (named_parent(name, mnt, st.ino, leaf, &dir_ino) == 0) {
         inotify_child(mnt, dir_ino, leaf, mask | ((st.mode & S_IFMT) == S_IFDIR ? IN_ISDIR : 0u),
                       0);
     }
+    path_buf_put(cwd);
 }
 
 /**
@@ -5920,6 +6085,7 @@ static int32_t openat2_dir(int dirfd, char *out, int *outside)
         }
         *outside = cwd_outside(cwd);
         k_memcpy(out, cwd, k_strlen(cwd) + 1);
+        path_buf_set_dir(out, current_proc->fs->cwd_mnt, current_proc->fs->cwd_node, out);
     } else {
         entry = fd_get(current_proc->fds, dirfd);
         if (!entry) {
@@ -5928,6 +6094,9 @@ static int32_t openat2_dir(int dirfd, char *out, int *outside)
         r = fd_dir_path(entry, out, VFS_PATH_MAX, outside);
         if (r != 0) {
             return r;
+        }
+        if (entry->type == FD_TYPE_SYNTH_DIR && entry->ofd) {
+            path_buf_set_dir(out, entry->ofd->synth_mnt, entry->ofd->synth_node, out);
         }
     }
     len = canonicalize_abs(out);
@@ -6104,6 +6273,7 @@ static int32_t openat2_walk(int dirfd, const char *name, uint32_t resolve, int w
         vfs_ref_hold(&checked->xdev);
         vfs_desc_open(checked->xdev.mnt);
     }
+    path_buf_set_dir(real, ref.mnt, ref.node, real);
     if (walk & VFS_WALK_LOCK) {
         vfs_walk_unlock(ref.mnt);
     }
@@ -6543,9 +6713,10 @@ long sys_close(isr_params_t *params)
  * sequence since the description last looked (`vfs_ino_err_check`), whose
  * cursor moves past it whatever the answer, so that a later pass that wrote
  * the pages does not erase it and the description is not told it twice.
- * The type's EIO comes before the mapped pages' error, the EROFS a mount
- * that a failed write or a halt turned read-only gives them, as Linux
- * reports a failed writeback.
+ * The type's EIO comes before the mapped pages' error only when that error
+ * is the EROFS a mount that a failed write or a halt turned read-only gives
+ * them, as Linux reports a failed writeback; any other error of the pages,
+ * such as an ENOSPC of a page written into a hole, comes first.
  */
 static long sync_entry(fd_entry_t *e,
                        int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
@@ -6561,8 +6732,10 @@ static long sync_entry(fd_entry_t *e,
         }
         rc = sync_op(e->ofd->vmnt, e->ofd->fhandle, &e->ofd->wb_seen);
         kept = vfs_ino_err_check(e->ofd->vmnt, e->ofd->ino, &e->ofd->ino_seen);
-        if (mapped == 0 || rc == -EIO) {
-            mapped = rc != 0 ? rc : kept; /* the file's EIO over the mapping's EROFS, as Linux */
+        if (mapped == 0) {
+            mapped = rc != 0 ? rc : kept;
+        } else if (mapped == -EROFS && rc == -EIO) {
+            mapped = rc; /* the file's EIO over the mapping's EROFS, as Linux */
         }
         return mapped;
     }
@@ -8743,7 +8916,7 @@ static int synth_dev_parent(const struct vfs_ref *parent)
 {
     const struct vpath *vp = vfs_synth_vpath(parent->mnt, parent->node);
 
-    if (!vp || (parent->mnt->flags & VFS_MS_RDONLY)) {
+    if (!vp || vfs_mount_rdonly(parent->mnt)) {
         return DEVTREE_NONE;
     }
     if (vp->kind == VNODE_DEV_DIR) {
@@ -8870,9 +9043,9 @@ static int32_t synth_dev_remove(const struct vfs_ref *parent, const char *leaf, 
 
 /**
  * Make `path`, the canonical path of the directory at (`mnt`, `node`), the
- * working directory, and hold the mount it is on: `vfs_cwd_set` takes no hold
- * on /dev or /proc, and a synthetic directory, whose `mnt` is NULL, has
- * none to take. The path and the hold are stored with nothing between them
+ * working directory and hold its mount. The permanent /dev and a directory
+ * passed without a mount take no hold. The path and hold are stored together
+ * with no intervening operation
  * that sleeps, and the old hold is let go after both, so a thread that shares
  * them (CLONE_FS) finds the path and the hold of one directory. Returns 0, or
  * -ENOMEM with nothing changed.
@@ -8937,16 +9110,19 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
  */
 static int32_t synth_chdir_path(const struct vpath *vp, char *path)
 {
+    int id = -1;
     int at = vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent
              : vp->kind == VNODE_DEV_SUBDIR ? vp->devdir
              : vp->kind == VNODE_DEV_MADE   ? vp->syskey
                                             : 0;
 
     if (synth_dir_of_proc(vp->kind)) {
-        if (procfs_resolve_id(vp) < 0) {
+        id = procfs_resolve_id(vp);
+        if (id < 0) {
             return -ENOENT;
         }
-        at = procfs_resolve_pid(vp->pid);
+        at = (int)procfs_pid_number((uint32_t)procfs_resolve_pid(vp->pid, vp->pidns_ino),
+                                    vp->pidns_ino);
     }
     if (vp->kind == VNODE_DEV_MADE && devtree_is_dir(vp->syskey) < 0) {
         return -ENOENT;
@@ -8955,7 +9131,7 @@ static int32_t synth_chdir_path(const struct vpath *vp, char *path)
         return -ENOTDIR;
     }
     if (synth_dir_of_proc(vp->kind)) {
-        int32_t rc = proc_fd_dir_access(vp->kind, at, CRED_X, NULL);
+        int32_t rc = proc_fd_dir_access(vp->kind, id, CRED_X, NULL, 0);
 
         if (rc != 0) {
             return rc;
@@ -8970,6 +9146,45 @@ static int32_t synth_chdir_path(const struct vpath *vp, char *path)
         synth_dir_path(vp->kind, at, vp->tid, path, VFS_PATH_MAX);
     }
     return 0;
+}
+
+/** Mark the spelling of a working directory outside the process root. */
+static int cwd_mark_outside(char *path, int outside)
+{
+    size_t len;
+
+    if (!outside)
+        return 0;
+    len = k_strlen(path);
+    if (len + 2 > VFS_PATH_MAX)
+        return -ENAMETOOLONG;
+    k_memmove(path + 1, path, len + 1);
+    return 0;
+}
+
+/** Enter a synthetic directory by its mount's name in the caller's root. */
+static int chdir_synth(const struct vfs_ref *ref, const struct vpath *vp, char *path)
+{
+    const struct synth_owner *own = vfs_proc_dir_owner(ref);
+    int outside = 0, rc;
+
+    if (own) {
+        rc = proc_held_dir_permission(vp, own, CRED_X, 0);
+        synth_dir_path(vp->kind, vp->pid, vp->tid, path, VFS_PATH_MAX);
+    } else {
+        rc = synth_chdir_path(vp, path);
+    }
+
+    if (rc != 0 || !vp->pidns_ino) {
+        return rc != 0 ? rc : cwd_enter(path, NULL, NULL);
+    }
+    rc = procfs_dir_name(ref->mnt, path, VFS_PATH_MAX);
+    if (rc == 0) {
+        rc = path_in_root_at(path, &outside);
+    }
+    if (rc == 0)
+        rc = cwd_mark_outside(path, outside);
+    return rc != 0 ? rc : cwd_enter(path, ref->mnt, ref->node);
 }
 
 /**
@@ -9024,11 +9239,9 @@ static int32_t do_chdir(char *path)
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (svp) {
-        struct vpath vp = *svp;
-
+        rc = chdir_synth(&ref, svp, path);
         vfs_ref_release(&ref);
-        rc = synth_chdir_path(&vp, path);
-        return rc != 0 ? rc : cwd_enter(path, NULL, NULL);
+        return rc;
     }
     node = ref.node;
     if (!mnt_is_root(ref.mnt)) {
@@ -9130,23 +9343,36 @@ long sys_fchdir(isr_params_t *params)
         const struct synth_dir *sd = (const struct synth_dir *)entry->priv;
 
         rc = sd ? 0 : -EBADF;
-        if (rc == 0) {
-            rc = proc_fd_dir_access(sd->kind, procfs_resolve_pid(sd->pid), CRED_X, sd);
+        if (sd && sd->own.kept) {
+            struct vpath vp;
+            synth_dir_vpath(sd, &vp);
+            rc = proc_held_dir_permission(&vp, &sd->own, CRED_X, 0);
         }
         if (rc == 0) {
-            synth_dir_path(sd->kind, sd->pid, sd->tid, path, VFS_PATH_MAX);
-            rc = cwd_enter(path, NULL, NULL);
+            int pid, tid;
+
+            if (sd->pidns_ino && entry->ofd && entry->ofd->synth_mnt) {
+                rc = fd_dir_path(entry, path, VFS_PATH_MAX, &outside);
+                if (rc == 0)
+                    rc = cwd_mark_outside(path, outside);
+                if (rc == 0) {
+                    rc = cwd_enter(path, entry->ofd->synth_mnt, entry->ofd->synth_node);
+                }
+                path_buf_put(path);
+                return rc;
+            }
+            rc = procfs_dir_coords(sd, &pid, &tid);
+            if (rc == 0) {
+                synth_dir_path(sd->kind, pid, tid, path, VFS_PATH_MAX);
+                rc = cwd_enter(path, NULL, NULL);
+            }
         }
         path_buf_put(path);
         return rc;
     }
     rc = fd_dir_path(entry, path, VFS_PATH_MAX, &outside);
-    if (rc == 0 && outside) {
-        rc = k_strlen(path) + 2 > VFS_PATH_MAX ? -ENAMETOOLONG : 0;
-        if (rc == 0) {
-            k_memmove(path + 1, path, k_strlen(path) + 1);
-        }
-    }
+    if (rc == 0)
+        rc = cwd_mark_outside(path, outside);
     if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
         rc = -EBADF;
     } else if (rc == 0) {
@@ -9197,8 +9423,11 @@ static int32_t root_check(const struct vfs_ref *ref)
             rc = cred_access_ref(ref, CRED_X, 0);
         }
     }
-    if (rc == 0 && vp && vp->kind == VNODE_PROC_FDINFO_DIR &&
-        (procfs_resolve_id(vp) < 0 || !procfs_may_read(procfs_resolve_pid(vp->pid)))) {
+    if (rc == 0 && vp && vfs_proc_dir_owner(ref))
+        rc = proc_held_dir_permission(vp, vfs_proc_dir_owner(ref), CRED_X, 0);
+    else if (rc == 0 && vp && vp->kind == VNODE_PROC_FDINFO_DIR &&
+             (procfs_resolve_id(vp) < 0 ||
+              !procfs_may_read(procfs_resolve_pid(vp->pid, vp->pidns_ino)))) {
         rc = -EACCES;
     }
     if (rc == 0 && !cap_holds(current_proc, CAP_SYS_CHROOT)) {
@@ -9844,24 +10073,95 @@ static uint32_t synth_pid_dir_mode(const struct vpath *vp)
  * readlink agree); then for a link followed, `follow`, the ptrace check that
  * Linux's `proc_pid_get_link` takes (`procfs_may_read`), -EACCES. An lstat
  * of a link takes no check past the lookup, as Linux's link inode has no
- * permission or getattr of its own. Returns 0 when it is there.
+ * permission or getattr of its own. With `use_real` the checks go by the
+ * real ids, as access(2)'s lookup does. Returns 0 when it is there.
  */
-static int32_t synth_fd_visible(int rpid, int fd, int info, int follow)
+static int32_t synth_fd_visible(int rpid, int fd, int info, int follow, int use_real)
 {
-    char scratch[16];
+    uint32_t mode;
     int32_t rc;
 
     if (rpid < 0) {
         return -ENOENT;
     }
-    rc = proc_fd_dir_access(info ? VNODE_PROC_FDINFO_DIR : VNODE_PROC_FD_DIR, rpid, CRED_X, NULL);
+    rc = proc_fd_dir_access(info ? VNODE_PROC_FDINFO_DIR : VNODE_PROC_FD_DIR, rpid, CRED_X, NULL,
+                            use_real);
     if (rc != 0) {
         return rc == -ESRCH ? -ENOENT : rc;
     }
-    if (procfs_readlink_fd(rpid, fd, scratch, (int)sizeof(scratch)) < 0) {
+    if (procfs_fd_link_mode(rpid, fd, &mode) < 0) {
         return -ENOENT;
     }
-    return !follow || procfs_may_read(rpid) ? 0 : -EACCES;
+    return !follow || procfs_may_read_as(rpid, use_real) ? 0 : -EACCES;
+}
+
+/**
+ * A copy of the descriptor the /proc/PID/fd/N link `vp` followed names, as
+ * `proc_fd_hold` takes it, for access, chmod, chown and utimensat, once
+ * `synth_fd_visible` has made the checks of Linux's lookup and
+ * `proc_pid_get_link` (fs/proc/base.c): the search of the fd directory by
+ * its mode and owner, the descriptor open, and the ptrace read check of the
+ * process, by the real ids with `use_real`, as access(2) makes them. The
+ * caller gives the copy back with `fd_peek_drop`. 0, -ENOENT or -EACCES.
+ */
+static int32_t proc_fd_follow(const struct vpath *vp, process_t **owner, fd_entry_t *src,
+                              int use_real)
+{
+    int32_t rc = synth_fd_visible(procfs_resolve_id(vp), vp->procfd, 0, 1, use_real);
+
+    return rc != 0 ? rc : proc_fd_hold(vp, owner, src);
+}
+
+/**
+ * Fill `kst`, as `synth_stat_node` has begun it, for the link
+ * /proc/`rpid`/fd/`fd` unfollowed. Its owner is the process's
+ * (`synth_pid_owner`), and its mode is the one Linux's `tid_fd_update_inode`
+ * gives from the descriptor's access: S_IFLNK with read and execute for the
+ * owner when the descriptor reads, write and execute when it writes, and no
+ * bit for an O_PATH one. Returns 0, or -ENOENT when the process or the
+ * descriptor is gone.
+ */
+static int32_t proc_fd_link_stat(const struct vpath *vp, int rpid, struct kstat *kst)
+{
+    uint32_t mode;
+
+    if (procfs_fd_link_mode(rpid, vp->procfd, &mode) != 0) {
+        return -ENOENT;
+    }
+    kst->st_dev = PROCFS_FSID;
+    kst->st_mode = mode;
+    kst->st_ino = procfs_fd_link_ino(vp, rpid);
+    synth_pid_owner(rpid, kst);
+    return 0;
+}
+
+/**
+ * The lookup of the /proc/PID/fd/N link `vp` unfollowed, for access(2) with
+ * AT_SYMLINK_NOFOLLOW, lchown(2), and chmod(2) and utimensat(2) of the
+ * link itself: `synth_fd_visible`'s checks, by the real ids with
+ * `use_real`, then the link's attributes into `kst` (`proc_fd_link_stat`),
+ * which the lookup also gives the descriptors open on the link
+ * (`procfs_lookup_owner`), as Linux's `tid_fd_revalidate` sets its inode.
+ * The calls make it before any check of their own, as Linux's walk ends
+ * before the call begins. 0, -ENOENT or -EACCES.
+ */
+static int32_t proc_fd_link_lookup(const struct vpath *vp, struct kstat *kst, int use_real)
+{
+    int rpid = procfs_resolve_id(vp);
+    int32_t rc = synth_fd_visible(rpid, vp->procfd, 0, 0, use_real);
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(kst, 0, sizeof(*kst));
+    kst->st_nlink = 1;
+    kst->st_blksize = 4096;
+    stat64_boot_times(kst);
+    rc = proc_fd_link_stat(vp, rpid, kst);
+    if (rc == 0) {
+        procfs_lookup_owner(vp);
+    }
+    return rc;
 }
 
 /** Whether the file `procfile` of a process's directory takes a write,
@@ -9883,10 +10183,8 @@ static int synth_proc_writable(int procfile)
  * as Linux's `proc_fd_getattr` gives it (fs/proc/fd.c:350-366). Returns 0,
  * or -ENOENT once the process or thread is gone.
  */
-static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int follow)
+static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int follow, int id)
 {
-    int id = procfs_resolve_id(vp);
-
     if (id < 0) {
         return -ENOENT;
     }
@@ -9976,20 +10274,20 @@ static int synth_irq_stat(const struct vpath *vp, struct kstat *kst)
  * process has open (`procfs_fd_count`), as Linux's `proc_fd_getattr` gives
  * it (fs/proc/fd.c:350-366).
  *
- * The /proc links, /proc/self, a process's cwd, root and exe, its namespace
- * links and its descriptors' links, are links of mode 0777 when not
- * followed. A cwd, root or exe link comes here only unfollowed, since the
- * walk follows it; one the caller may not read is there, as on Linux, and
- * one of no process, or the exe of a process with no program, is not.
- * Followed, /proc/self is the process's directory, a namespace link is
- * nsfs's file of the namespace, and a descriptor's link is the stat of the
- * file the descriptor is open on (`synth_fd_stat`).
+ * The /proc links, /proc/self, a process's cwd, root and exe and its namespace
+ * links, are links of mode 0777 when not followed, and a descriptor's link has
+ * the mode `proc_fd_link_stat` gives it. A cwd, root or exe link comes here
+ * only unfollowed, since the walk follows it; one the caller may not read is
+ * there, as on Linux, and one of no process, or the exe of a process with no
+ * program, is not. Followed, /proc/self is the process's directory, a namespace
+ * link is nsfs's file of the namespace, and a descriptor's link is the stat of
+ * the file the descriptor is open on (`synth_fd_stat`).
  *
  * A pty slave, /dev/pts/N, is a character device whose mode, owner and
  * group are kept on the pty, where the login server's chown and chmod put
  * them.
  */
-static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int follow)
+static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int follow, int use_real)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
 
@@ -10137,17 +10435,19 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return 0;
     }
     case VNODE_PROC_NS_LINK: {
-        char scratch[1];
         int rpid = procfs_resolve_id(vp);
-        int rc = rpid < 0 ? -ENOENT : procfs_readlink_ns(rpid, vp->procfd, scratch, 0);
+        uint32_t inum = rpid < 0 ? 0 : procfs_ns_ino(rpid, vp->procfd);
 
-        if (rc == -ENOENT || (follow && rc < 0)) {
-            return rc < 0 ? rc : -ENOENT;
+        if (follow && rpid >= 0 && !procfs_may_read_as(rpid, use_real)) {
+            return -EACCES;
+        }
+        if (inum == 0 && (follow || rpid < 0)) {
+            return -ENOENT;
         }
         if (follow) {
             kst->st_dev = NSFS_DEV;
             kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ns_ino(rpid, vp->procfd);
+            kst->st_ino = inum;
             kst->st_nlink = 1;
             return 0;
         }
@@ -10162,7 +10462,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     case VNODE_PROC_FDINFO_DIR:
     case VNODE_PROC_TASK_DIR:
     case VNODE_PROC_NS_DIR:
-        return synth_stat_pid_dir(vp, kst, follow);
+        return synth_stat_pid_dir(vp, kst, follow, procfs_resolve_id(vp));
     case VNODE_PROC_FILE:
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
@@ -10179,7 +10479,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return 0;
     case VNODE_PROC_FDINFO: {
         int rpid = procfs_resolve_id(vp);
-        int32_t rc = synth_fd_visible(rpid, vp->procfd, 1, 0);
+        int32_t rc = synth_fd_visible(rpid, vp->procfd, 1, 0, use_real);
 
         if (rc != 0) {
             return rc;
@@ -10192,7 +10492,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     }
     case VNODE_PROC_FD_LINK: {
         int rpid = procfs_resolve_id(vp);
-        int32_t rc = synth_fd_visible(rpid, vp->procfd, 0, follow);
+        int32_t rc = synth_fd_visible(rpid, vp->procfd, 0, follow, use_real);
 
         if (rc != 0) {
             return rc;
@@ -10200,11 +10500,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         if (follow) {
             return synth_fd_stat(rpid, vp->procfd, kst);
         }
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-        kst->st_ino = procfs_ino_pid(rpid);
-        synth_pid_owner(rpid, kst);
-        return 0;
+        return proc_fd_link_stat(vp, rpid, kst);
     }
     case VNODE_DEV_LINK:
         kst->st_dev = DEVFS_FSID;
@@ -10254,12 +10550,48 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
  */
 static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
 {
-    int32_t rc = synth_stat_node(vp, kst, follow);
+    int32_t rc = synth_stat_node(vp, kst, follow, 0);
 
     if (rc == 0) {
         procfs_lookup_owner(vp);
     }
     return rc;
+}
+
+/** Fill the inode attributes of a held proc directory. A public getattr of
+ * an fd directory needs its original task to count the open files. */
+static int32_t stat_held_proc_dir(const struct vpath *vp, const struct synth_owner *own,
+                                  struct kstat *kst)
+{
+    int id = procfs_held_pid(own);
+    int32_t rc = 0;
+
+    k_memset(kst, 0, sizeof(*kst));
+    stat64_boot_times(kst);
+    kst->st_dev = PROCFS_FSID;
+    kst->st_ino = own->ino;
+    kst->st_mode = synth_pid_dir_mode(vp);
+    kst->st_nlink = vp->kind == VNODE_PROC_TASK_DIR ? 2 : 1;
+    kst->st_blksize = 4096;
+    if (id >= 0) {
+        rc = synth_stat_pid_dir(vp, kst, 1, id);
+    } else if (vp->kind == VNODE_PROC_FD_DIR) {
+        rc = -ENOENT;
+    }
+    if (vp->kind != VNODE_PROC_PID && vp->kind != VNODE_PROC_NS_DIR) {
+        kst->st_uid = own->uid;
+        kst->st_gid = own->gid;
+    }
+    return rc;
+}
+
+/** Read the attributes of the inode reached by a synthetic walk. */
+static int32_t synth_stat_ref(const struct vfs_ref *ref, const struct vpath *vp, struct kstat *kst,
+                              int follow)
+{
+    const struct synth_owner *own = vfs_proc_dir_owner(ref);
+
+    return own ? stat_held_proc_dir(vp, own, kst) : synth_stat(vp, kst, follow);
 }
 
 /** Whether the synthetic node `vp` is a block device, a disk or a loop
@@ -10288,6 +10620,8 @@ static int32_t ref_dir_check(const struct vfs_ref *r, int follow)
     int32_t rc;
 
     if (vp) {
+        if (vfs_proc_dir_owner(r))
+            return 0;
         rc = synth_stat(vp, &kst, follow);
         return rc != 0 ? rc : ((kst.st_mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR);
     }
@@ -10324,6 +10658,40 @@ static int32_t leaf_dir_check(const struct vfs_ref *parent, const char *leaf)
     return rc;
 }
 
+/** Hold the working directory for an empty pathname. Take a serialised
+ * mount's lock before reading a movable node. A shared cwd may have
+ * changed mounts during that wait. The caller releases the walk as usual. */
+static int32_t resolve_cwd(int walk, struct vfs_ref *ref)
+{
+    struct fs_struct *fs = current_proc->fs;
+    char *path;
+    int rc;
+
+    while ((ref->mnt = fs->cwd_mnt) != NULL) {
+        rc = vfs_enter(ref->mnt);
+        if (rc != 0)
+            return rc;
+        if (ref->mnt->type->ns_serialised)
+            vfs_ns_lock(ref->mnt);
+        if (ref->mnt == fs->cwd_mnt) {
+            ref->node = fs->cwd_node;
+            vfs_ref_hold(ref);
+            if (!(walk & VFS_WALK_LOCK))
+                vfs_walk_unlock(ref->mnt);
+            return 0;
+        }
+        vfs_walk_unlock(ref->mnt);
+        vfs_leave(ref->mnt);
+    }
+    path = path_buf_get();
+    if (!path)
+        return -ENOMEM;
+    k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+    rc = vfs_resolve(NULL, path, walk, ref, NULL, 0);
+    path_buf_put(path);
+    return rc;
+}
+
 /**
  * The node checked is the node returned, so a call that goes on with `ref` acts
  * on what was checked; execve opens its program and interpreters through it
@@ -10332,7 +10700,7 @@ static int32_t leaf_dir_check(const struct vfs_ref *parent, const char *leaf)
  */
 int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
 {
-    return resolve_named_real(name, walk, dir, ref, NULL);
+    return name ? resolve_named_real(name, walk, dir, ref, NULL) : resolve_cwd(walk, ref);
 }
 
 int32_t resolve_named_real(const char *name, int walk, int dir, struct vfs_ref *ref, char *real)
@@ -10451,7 +10819,7 @@ static int32_t open_tmpfile(const char *name, int flags, uint32_t mode)
     rc = ref_dir_check(&dir, 0);
     if (rc == 0 && vfs_synth_vpath(dir.mnt, dir.node)) {
         rc = -EOPNOTSUPP;
-    } else if (rc == 0 && ((dir.mnt->flags | vfs_mount_base(dir.mnt)->flags) & VFS_MS_RDONLY)) {
+    } else if (rc == 0 && vfs_mount_rdonly(dir.mnt)) {
         rc = -EROFS;
     } else if (rc == 0) {
         rc = cred_access_ref(&dir, CRED_W | CRED_X, 0);
@@ -10565,7 +10933,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
         return -ENOENT;
     }
     if ((kst.st_mode & S_IFMT) == S_IFDIR) {
-        return synth_open_dir(vp, (flags & O_CLOEXEC) | O_PATH);
+        return synth_open_dir(vp, (flags & O_CLOEXEC) | O_PATH, NULL);
     }
     if (flags & O_DIRECTORY) {
         return -ENOTDIR;
@@ -10703,7 +11071,8 @@ static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_e
     if (rc != 0) {
         return rc;
     }
-    if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
+    if (src->ofd && src->ofd->vmnt &&
+        (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR || mq_fd_ref(src, NULL))) {
         rc = proc_fd_file(vp, &ref, &held);
         if (rc != 0) {
             return rc;
@@ -10767,7 +11136,8 @@ static int32_t open_path(const char *name, int flags)
 
         vfs_walk_unlock(locked);
         vfs_name_put(entry);
-        rc = synth_open_path(&vpc, name, flags);
+        rc = vfs_proc_dir_owner(&ref) ? synth_open_dir(&vpc, flags, vfs_proc_dir_owner(&ref))
+                                      : synth_open_path(&vpc, name, flags);
         synth_mount_record(rc, &ref, &vpc, flags);
         vfs_ref_release(&ref);
         synth_dir_record(rc, permanent, name);
@@ -10861,9 +11231,9 @@ static int synth_readlink(const struct vpath *vp, char *link)
         uint32_t uv;
         char t[12];
         int tn = 0;
-        pid = procfs_resolve_pid(vp->pid);
+        pid = procfs_resolve_pid(vp->pid, vp->pidns_ino);
         n = 0;
-        uv = pid < 0 ? 0u : pid_seen((uint32_t)pid);
+        uv = pid < 0 ? 0u : procfs_pid_number((uint32_t)pid, vp->pidns_ino);
         if (pid < 0) {
             n = -ENOENT;
         } else if (uv == 0) {
@@ -11172,7 +11542,7 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
         }
         vp = vfs_synth_vpath(ref.mnt, ref.node);
         if (vp) {
-            rc = synth_stat(vp, &kst, follow);
+            rc = synth_stat_ref(&ref, vp, &kst, follow);
         } else if (!mnt_is_root(ref.mnt)) {
             rc = vfs_fill_stat64(&kst, &ref);
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
@@ -11645,11 +12015,31 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
     return 0;
 }
 
+/** Read a directory inode for a descriptor permission check. */
+static void fstat_synth_dir(const struct synth_dir *sd, struct kstat *kst)
+{
+    struct vpath vp;
+
+    synth_dir_vpath(sd, &vp);
+    if (sd && sd->own.kept) {
+        (void)stat_held_proc_dir(&vp, &sd->own, kst);
+    } else if (synth_stat_node(&vp, kst, 1, 0) != 0) {
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        kst->st_dev = PROCFS_FSID;
+        if (synth_is_sys(&vp)) {
+            synth_sys_identity(&vp, kst, 1);
+        }
+    }
+}
+
 /**
  * Fill `kst`, zeroed with the boot times, for the synthetic descriptor
  * `entry`, FD_TYPE_SYNTH_DIR or FD_TYPE_SYNTH_PATH, as `fstat_fill_attrs`
  * describes, with the owner its record keeps (`procfs_owner_keep`) when the
- * node's inode keeps one.
+ * node's inode keeps one, and for a descriptor's link the mode the record
+ * keeps too, which the last lookup of the link set.
  */
 static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
 {
@@ -11657,25 +12047,22 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
 
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         const struct synth_dir *sd = (const struct synth_dir *)entry->priv;
-        struct vpath vp;
-
-        own = sd ? &sd->own : NULL;
-        synth_dir_vpath(sd, &vp);
-        if (synth_stat_node(&vp, kst, 1) != 0) {
-            kst->st_mode = own && own->kept ? synth_pid_dir_mode(&vp) : S_IFDIR | 0555;
-            kst->st_nlink = 1;
-            kst->st_blksize = 4096;
-            kst->st_dev = PROCFS_FSID;
-            if (synth_is_sys(&vp)) {
-                synth_sys_identity(&vp, kst, 1);
-            }
-        }
+        fstat_synth_dir(sd, kst);
+        return;
     } else {
         const struct synth_path *sp = (const struct synth_path *)entry->priv;
         const struct vpath *vp = sp ? &sp->vp : NULL;
 
         own = sp ? &sp->own : NULL;
-        if (!vp || synth_stat_node(vp, kst, 0) != 0) {
+        if (own && own->kept && (own->mode || own->node[0] == VNODE_PROC_FDINFO)) {
+            k_memset(kst, 0, sizeof(*kst));
+            stat64_boot_times(kst);
+            kst->st_dev = PROCFS_FSID;
+            kst->st_ino = own->ino;
+            kst->st_mode = own->mode ? own->mode : S_IFREG | 0444u;
+            kst->st_blksize = 4096;
+            kst->st_nlink = 1;
+        } else if (!vp || synth_stat_node(vp, kst, 0, 0) != 0) {
             int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
 
             k_memset(kst, 0, sizeof(*kst));
@@ -11691,6 +12078,9 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
     if (own && own->kept) {
         kst->st_uid = own->uid;
         kst->st_gid = own->gid;
+    }
+    if (own && own->kept && own->mode != 0) {
+        kst->st_mode = own->mode;
     }
 }
 
@@ -11836,7 +12226,7 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         k_memset(&vp, 0, sizeof(vp));
         vp.kind = VNODE_PTS;
         vp.pts_index = pty_slave_index(entry);
-        if (synth_stat_node(&vp, kst, 1) != 0) {
+        if (synth_stat_node(&vp, kst, 1, 0) != 0) {
             kst->st_mode = 020620; /* S_IFCHR | 0620 */
             kst->st_nlink = 1;
             kst->st_blksize = 4096;
@@ -11890,15 +12280,23 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
  */
 static int32_t fstat_getattr(fd_entry_t *entry, struct kstat *kst)
 {
-    if (entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_SYNTH_PATH) {
+    if (entry->priv && (entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_SYNTH_PATH)) {
+        const struct synth_owner *own;
         struct vpath vp;
 
         if (entry->type == FD_TYPE_SYNTH_DIR) {
-            synth_dir_vpath((const struct synth_dir *)entry->priv, &vp);
-        } else if (entry->priv) {
-            vp = ((const struct synth_path *)entry->priv)->vp;
+            const struct synth_dir *sd = entry->priv;
+            synth_dir_vpath(sd, &vp);
+            own = &sd->own;
         } else {
-            vp.kind = VNODE_ENOENT;
+            const struct synth_path *sp = entry->priv;
+            vp = sp->vp;
+            own = &sp->own;
+        }
+        if (own->kept && synth_dir_of_proc(vp.kind)) {
+            int32_t rc = stat_held_proc_dir(&vp, own, kst);
+            kst->st_mnt_id = procfs_synth_mount_id(PROCFS_FSID, fd_mount(entry));
+            return rc;
         }
         if (vp.kind == VNODE_PROC_FD_DIR && procfs_resolve_id(&vp) < 0) {
             return -ENOENT;
@@ -12022,7 +12420,7 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
     int32_t rc;
 
     k_memset(kst, 0, sizeof(*kst));
-    if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
+    if (path && names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = 1;
         kst->st_nlink = 1;
@@ -12030,14 +12428,14 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
         kst->st_mnt_id = procfs_mount_id(vfs_root_mount());
         return stat64_root_times(kst);
     }
-    rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);
+    rc = resolve_named(path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), 0, &ref);
     if (rc != 0) {
         return rc;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (svp) {
         /* A followed /proc/PID/fd link has its file's mount already. */
-        rc = synth_stat(svp, kst, follow);
+        rc = synth_stat_ref(&ref, svp, kst, follow);
         if (rc == 0 && kst->st_mnt_id == 0) {
             kst->st_mnt_id = procfs_synth_mount_id(kst->st_dev, ref.mnt);
         }
@@ -12087,11 +12485,7 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct ks
         return entry ? fstat_getattr(entry, kst) : -EBADF;
     }
     if (empty) {
-        pathbuf = path_buf_get();
-        if (!pathbuf) {
-            return -ENOMEM;
-        }
-        k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
+        return fstatat_path(NULL, 1, kst);
     } else {
         if (!upath) {
             return -EFAULT;
@@ -12691,13 +13085,116 @@ long sys_open_by_handle_at(isr_params_t *params)
 
 #define R_OK 4
 
-/** Whether a file of mode `fmode` is a device, FIFO or socket, which W_OK
- * on a read-only file system still allows, as Linux's sb_permission. */
-static int special_file(uint32_t fmode)
+/** Check mount execution, superblock write and immutable restrictions before
+ * the inode's permission operation. */
+static int32_t access_precheck(struct vfs_mount *mnt, const struct vfs_stat *st, int mode)
 {
-    uint32_t type = fmode & 0170000u;
+    if (mnt && (mode & X_OK) && (st->mode & S_IFMT) == S_IFREG &&
+        ((vfs_mount_flags(mnt) & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec)) {
+        return -EACCES;
+    }
+    if (inode_read_only(mnt, st->mode, mode)) {
+        return -EROFS;
+    }
+    if ((mode & W_OK) && st->flags_known && (st->flags & VFS_FL_IMMUTABLE)) {
+        return -EPERM;
+    }
+    return 0;
+}
 
-    return type == 0010000u || type == 0140000u || type == 0020000u || type == 0060000u;
+/**
+ * access(2)'s judgement of a file with the type, mode, owner, group and
+ * inode flags of `st`, reached through `mnt`, NULL for no mount, for `mode`
+ * by the real ids with `real`, in Linux 6.12's order
+ * (fs/open.c:468-519, fs/namei.c:476-551): X_OK of a regular file through
+ * a noexec mount is -EACCES; W_OK of anything but a device, FIFO or socket
+ * on a read-only file system -EROFS (`vfs_sb_rdonly`, `sb_permission`); W_OK
+ * of an immutable file -EPERM; then the nine-bit check, with X_OK of
+ * anything but a directory needing an execute bit even for root, -EACCES;
+ * and last W_OK of anything but a device, FIFO or socket through a mount
+ * made read-only alone -EROFS (`__mnt_is_readonly`). The halted KRFFS root
+ * is a read-only file system. sysfs is judged as no mount, since it is
+ * mounted read-only though its files take writes (`attr_read_only`).
+ */
+static int32_t access_judge(struct vfs_mount *mnt, const struct vfs_stat *st, int mode, int real)
+{
+    uint32_t fmode = st->mode;
+    int write = (mode & W_OK) && !special_file(fmode);
+    int32_t rc;
+
+    if (mnt && vfs_mount_base(mnt)->type == &vfs_sysfs_type) {
+        mnt = NULL;
+    }
+    rc = access_precheck(mnt, st, mode);
+    if (rc != 0)
+        return rc;
+    rc = cred_access_bits(st->uid, st->gid, fmode, mode, real);
+    if (rc == 0 && (mode & X_OK) && (fmode & S_IFMT) != S_IFDIR && !(fmode & 0111u)) {
+        rc = -EACCES;
+    }
+    if (rc == 0 && mnt && write && vfs_mount_rdonly(mnt)) {
+        rc = -EROFS;
+    }
+    return rc;
+}
+
+/**
+ * `access_judge` of the file `ref` of a file system, the KRFFS root's
+ * included, by its attributes. 0 or a negative errno, the attributes' read
+ * among them.
+ */
+static int32_t access_ref(const struct vfs_ref *ref, int mode, int real)
+{
+    struct vfs_stat st;
+    int32_t rc;
+
+    rc = vfs_getattr(ref->mnt, ref->node, &st);
+    return rc != 0 ? rc : access_judge(ref->mnt, &st, mode, real);
+}
+
+static int32_t access_fd(fd_entry_t *entry, int mode, int flags, int dir);
+
+/** Judge a synthetic inode, using its kept task for an empty pathname. */
+static int32_t access_synth_ref(const struct vfs_ref *ref, const struct vpath *vp,
+                                const struct synth_owner *own, int mode, int dir, int flags)
+{
+    struct kstat s;
+    struct vfs_stat st;
+    int real = !(flags & AT_EACCESS);
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
+    int32_t rc;
+
+    if (own) {
+        st.mode = synth_pid_dir_mode(vp);
+        if (inode_read_only(ref->mnt, st.mode, mode))
+            return -EROFS;
+        rc = proc_held_dir_permission(vp, own, mode, real);
+        if (!rc && (mode & W_OK) && ref->mnt && vfs_mount_rdonly(ref->mnt))
+            return -EROFS;
+        return rc;
+    } else {
+        rc = vp->kind == VNODE_PROC_FD_LINK ? proc_fd_link_lookup(vp, &s, real)
+                                            : synth_stat_node(vp, &s, follow || dir, real);
+    }
+    if (rc == 0 && dir && (s.st_mode & S_IFMT) != S_IFDIR) {
+        rc = -ENOTDIR;
+    }
+    if (rc == 0 && (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR)) {
+        if (inode_read_only(ref->mnt, s.st_mode, mode))
+            return -EROFS;
+        rc = proc_fd_dir_access(vp->kind, procfs_resolve_id(vp), mode, NULL, real);
+        if (vp->kind == VNODE_PROC_FD_DIR) {
+            s.st_mode |= 0777u; /* proc_fd_permission already checked the mode */
+        }
+    }
+    if (rc == 0) {
+        k_memset(&st, 0, sizeof(st));
+        st.mode = s.st_mode;
+        st.uid = (uint32_t)s.st_uid;
+        st.gid = (uint32_t)s.st_gid;
+        rc = access_judge(ref->mnt, &st, mode, real);
+    }
+    return rc;
 }
 
 /**
@@ -12705,10 +13202,14 @@ static int special_file(uint32_t fmode)
  * `name`, leading '/' stripped, exists and grants `mode`, an OR of R_OK,
  * W_OK and X_OK, or F_OK alone, to the caller's real ids, or to its
  * effective ids with AT_EACCESS in `flags`; otherwise a negative errno:
- * -EINVAL for any other bit in `mode`, the walk's error, -EACCES, or -EROFS
- * for W_OK on a read-only mounted volume. A final symbolic link is
- * followed unless `flags` has AT_SYMLINK_NOFOLLOW, and a path that named a
- * directory by its end, `dir`, must reach one (`resolve_named`).
+ * -EINVAL for any other bit in `mode`, the walk's error, or an error of
+ * `access_judge`, in Linux's order. A final symbolic link is followed
+ * unless `flags` has AT_SYMLINK_NOFOLLOW, and a path that named a directory
+ * by its end, `dir`, must reach one (`resolve_named`); a followed
+ * /proc/PID/fd/N is judged as its descriptor (`access_fd`), once
+ * `proc_fd_follow` has made the checks of Linux's lookup and of
+ * `proc_pid_get_link`, and one unfollowed by the mode its descriptor gives
+ * it (`proc_fd_link_lookup`), both lookups by the ids the walk uses.
  *
  * access(2) is the one call judged by the real ids: it exists so that a set-id
  * program can ask what its invoker could do. The walk charges search permission
@@ -12726,44 +13227,42 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
     int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     struct vfs_ref ref;
     const struct vpath *vp;
-    krffs_node_t head;
     int32_t rc;
     int werr;
 
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return -EINVAL;
     }
-    werr = resolve_named(
-        name, (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW),
-        dir, &ref);
+    werr = resolve_named(name,
+                         (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK |
+                             (follow || dir ? 0 : VFS_WALK_NOFOLLOW),
+                         0, &ref);
     if (werr != 0) {
         return werr;
     }
     vp = vfs_synth_vpath(ref.mnt, ref.node);
-    if (vp) {
-        struct kstat s;
-        int ro = (mode & W_OK) && proc_read_only(&ref, 1, 1);
+    if (vp && vp->kind == VNODE_PROC_FD_LINK && (follow || dir)) {
+        process_t *p;
+        fd_entry_t src;
 
-        rc = synth_stat(vp, &s, follow || dir);
         vfs_walk_unlock(ref.mnt);
+        rc = proc_fd_follow(vp, &p, &src, real);
+        if (rc == 0) {
+            rc = access_fd(&src, mode, flags, dir);
+            fd_peek_drop(&src);
+        }
         vfs_ref_release(&ref);
-        if (rc != 0) {
-            return rc;
-        }
-        rc =
-            cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode, real);
-        return rc == 0 && ro ? -EROFS : rc;
+        return rc;
     }
-    if ((mode & W_OK) && halted_root_mount(ref.mnt) &&
-        (krffs_node_head(ref.node, &head) != 0 || !special_file(head.mode))) {
-        rc = -EROFS;
-    } else if (!mnt_is_root(ref.mnt)) {
-        rc = cred_access_ref(&ref, mode, real);
-        if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
-            rc = -EROFS;
-        }
+    if (vp) {
+        const struct synth_owner *own = vfs_proc_dir_owner(&ref);
+
+        rc = access_synth_ref(&ref, vp, own, mode, dir, flags);
     } else {
-        rc = cred_access_node((krffs_node_t *)ref.node, mode, real);
+        rc = dir ? ref_dir_check(&ref, 1) : 0;
+        if (rc == 0) {
+            rc = access_ref(&ref, mode, real);
+        }
     }
     vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
@@ -12814,10 +13313,7 @@ static int32_t access_unlocked(int dirfd, const char __user *upath, int mode, in
         rc = rc != 0 ? rc : ((st.mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR);
     }
     if (rc == 0) {
-        rc = cred_access_ref(&ref, mode, real);
-    }
-    if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
-        rc = -EROFS;
+        rc = access_ref(&ref, mode, real);
     }
     vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
@@ -12936,7 +13432,12 @@ long sys_inotify_add_watch(isr_params_t *params)
             vp = NULL;
         }
     }
-    if (vp) {
+    if (vp && vfs_proc_dir_owner(&ref)) {
+        const struct synth_owner *own = vfs_proc_dir_owner(&ref);
+        rc = proc_held_dir_permission(vp, own, CRED_R, 0);
+        ino = own->ino;
+        isdir = 1;
+    } else if (vp) {
         struct kstat s;
 
         rc = synth_stat(vp, &s, !(mask & IN_DONT_FOLLOW));
@@ -12967,36 +13468,107 @@ long sys_inotify_add_watch(isr_params_t *params)
     return rc;
 }
 
-/**
- * Whether the caller may use what the descriptor `entry` is open on as
- * `mode` asks, for faccessat2's AT_EMPTY_PATH: the nine-bit rule over the
- * owner, group and mode fstat reports, by the real ids unless `flags` has
- * AT_EACCESS, X_OK on anything but a directory needing an execute bit even
- * for root, and W_OK on a read-only mounted volume -EROFS. Returns 0 or a
- * negative errno.
- */
-static int32_t access_fd(fd_entry_t *entry, int mode, int flags)
+/** Read access permission from a synthetic descriptor's retained inode. */
+static int32_t access_proc_dir(const fd_entry_t *entry, int mode, int flags, int *handled)
 {
+    const struct synth_owner *own;
+    struct vpath vp;
+    struct vfs_ref ref;
+
+    *handled = 0;
+    if (!entry->priv)
+        return 0;
+    if (entry->type == FD_TYPE_SYNTH_DIR) {
+        const struct synth_dir *sd = entry->priv;
+        own = &sd->own;
+        synth_dir_vpath(sd, &vp);
+    } else if (entry->type == FD_TYPE_SYNTH_PATH) {
+        const struct synth_path *sp = entry->priv;
+        own = &sp->own;
+        vp = sp->vp;
+    } else {
+        return 0;
+    }
+    if (!own->kept || !synth_dir_of_proc(vp.kind))
+        return 0;
+    *handled = 1;
+    ref.mnt = fd_mount(entry);
+    ref.node = NULL;
+    return access_synth_ref(&ref, &vp, own, mode, 1, flags);
+}
+
+/** Check a proc superblock before calling its inode permission hook. */
+static int32_t access_proc_fd(fd_entry_t *entry, const struct vfs_stat *st, int mode, int real)
+{
+    struct vfs_mount *mnt = fd_mount(entry);
+    int32_t rc = mnt && mnt->type == &vfs_procfs_type ? access_precheck(mnt, st, mode) : 0;
+
+    return rc != 0 ? rc : procfs_fdinfo_access(entry, real);
+}
+
+/**
+ * Whether the caller may use what the descriptor `entry` is open on as `mode`
+ * asks, for faccessat2's AT_EMPTY_PATH and access(2) of a followed
+ * /proc/PID/fd/N: `access_judge` by the real ids unless `flags` has AT_EACCESS,
+ * through the mount the descriptor was opened through (`fd_mount`). A file, a
+ * named FIFO, or a device opened through a device node is judged by that file's
+ * or node's own attributes, and anything else by those fstat reports. A
+ * /proc/PID/fd directory is judged first by `access_proc_dir`. With `dir`,
+ * for a path that named a directory by its end, anything but a directory is
+ * -ENOTDIR. Returns 0 or a negative errno.
+ */
+static int32_t access_fd(fd_entry_t *entry, int mode, int flags, int dir)
+{
+    const struct open_file *ofd = entry->ofd;
+    struct vfs_ref file;
+    struct vfs_stat vst;
     struct kstat st;
     int32_t rc;
+    int handled;
 
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return -EINVAL;
     }
+    rc = access_proc_dir(entry, mode, flags, &handled);
+    if (handled)
+        return rc;
     rc = fstat_fill(entry, &st);
     if (rc != 0) {
         return rc;
     }
-    rc = cred_access_bits((uint32_t)st.st_uid, (uint32_t)st.st_gid, st.st_mode & 0777u, mode,
-                          !(flags & AT_EACCESS));
-    if (rc == 0 && (mode & X_OK) && (st.st_mode & S_IFMT) != S_IFDIR && !(st.st_mode & 0111u)) {
-        rc = -EACCES;
+    k_memset(&vst, 0, sizeof(vst));
+    vst.mode = st.st_mode;
+    vst.uid = (uint32_t)st.st_uid;
+    vst.gid = (uint32_t)st.st_gid;
+    file.mnt = NULL;
+    if (ofd && ofd->vmnt && ofd->vnode && entry->type != FD_TYPE_FILE &&
+        entry->type != FD_TYPE_DIR) {
+        file.mnt = ofd->vmnt; /* a named FIFO */
+        file.node = ofd->vnode;
+    } else if (ofd && !ofd->vmnt && ofd->dev_mnt && ofd->dev_node) {
+        file.mnt = ofd->dev_mnt;
+        file.node = ofd->dev_node;
     }
-    if (rc == 0 && (mode & W_OK) && entry->ofd && entry->ofd->vmnt &&
-        (entry->ofd->vmnt->flags & VFS_MS_RDONLY)) {
-        rc = -EROFS;
+    if (file.mnt) {
+        rc = vfs_getattr(file.mnt, file.node, &vst);
+        if (rc != 0) {
+            return rc;
+        }
+    } else if (ofd && ofd->vmnt && ofd->vnode && !mnt_is_root(vfs_mount_base(ofd->vmnt))) {
+        struct vfs_stat fst; /* a file's: its immutable flag, which fstat leaves out */
+
+        if (vfs_getattr(ofd->vmnt, ofd->vnode, &fst) == 0) {
+            vst.flags_known = fst.flags_known;
+            vst.flags = fst.flags;
+        }
     }
-    return rc;
+    if (dir && (vst.mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
+    rc = access_proc_fd(entry, &vst, mode, !(flags & AT_EACCESS));
+    if (rc != 0)
+        return rc;
+    return access_judge(fd_mount(entry), &vst, mode, !(flags & AT_EACCESS));
 }
 
 /**
@@ -13006,22 +13578,12 @@ static int32_t access_fd(fd_entry_t *entry, int mode, int flags)
  */
 static int32_t access_empty(int dirfd, int mode, int flags)
 {
-    char *path;
-    int32_t rc;
-
     if (dirfd != AT_FDCWD) {
         fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
 
-        return entry ? access_fd(entry, mode, flags) : -EBADF;
+        return entry ? access_fd(entry, mode, flags, 0) : -EBADF;
     }
-    path = path_buf_get();
-    if (!path) {
-        return -ENOMEM;
-    }
-    k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
-    rc = do_access(path_name(path), mode, 0, flags);
-    path_buf_put(path);
-    return rc;
+    return do_access(NULL, mode, 0, flags);
 }
 
 /**
@@ -13096,11 +13658,11 @@ long sys_faccessat2(isr_params_t *params)
  * but the rule still answers, so a caller who does not own `/` gets -EPERM.
  *
  * An unprivileged caller who stores a mode on a file whose group is not one
- * of the caller's loses setgid, as chmod(2) has it; a directory keeps it.
+ * of the caller's loses setgid, on a directory as on a regular file.
  * That is the third set-id clear POSIX names, after write and chown, and
  * the one no clear at a write can stand for, since an owner could make a
  * gid-0 file 02710 by chmod alone and never write it. The clear does not
- * depend on group-execute, as `cred_kill_setid`'s does, since the caller
+ * depend on group-execute, as the write clear does, since the caller
  * chooses that bit in the same call. Setuid needs no rule here: only the
  * owner may chmod, and the bit grants that owner's own identity. A halted
  * root (`krffs_root_halted`) is -EROFS before anything else, as a file
@@ -13117,13 +13679,13 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
     if (krffs_node_head(node, &head) != 0) {
         return -EIO;
     }
-    if (!cred_fs_privileged() && proc_fsuid(current_proc) != head.uid) {
+    if (!inode_owner_or_capable(head.uid)) {
         return -EPERM;
     }
     if (node != krffs_fs->node) {
         uint32_t want = mode & 07777u;
 
-        if (!cred_fs_privileged() && !KRFFS_IS_DIR(head.mode) && !cred_in_group(head.gid)) {
+        if (!inode_capable(head.uid, head.gid, CAP_FSETID) && !cred_in_group(head.gid)) {
             want &= ~(uint32_t)KRFFS_MODE_SGID;
         }
         if (krffs_node_set_mode(node, (uint16_t)((head.mode & ~07777u) | want)) != 0) {
@@ -13135,31 +13697,76 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
 }
 
 /**
- * chown of the node `node` of the KRFFS boot root, the POSIX split: a
- * change of owner takes a privileged caller, and a change of group takes a
- * privileged caller or the owner naming one of the owner's own groups;
- * otherwise -EPERM, and 0 on success. `(id_t)-1` keeps a field, and a value
- * that changes nothing needs no right, so `chown(path, -1, -1)` succeeds on
- * any file that exists.
- *
- * A call that changes either field clears the node's set-id bits
- * (`cred_kill_setid`) whoever asks, as POSIX has it, which is why cp and
- * install chown before they chmod; the clear goes first, so that one that
- * fails changes nothing. It then stamps the attribute-change time once,
- * after both fields. Both happen only when a field changes, and a call
- * that changes nothing, `chown(path, -1, -1)`, succeeds for every caller
- * and leaves the times alone: a clear that ran on it would let any user
- * clear the set-user-ID bit of /bin/su with one call. A halted root
- * (`krffs_root_halted`) is -EROFS before anything else, for a call that
- * changes nothing too, as a file system turned read-only is on Linux; a
- * header that cannot be read or a store that fails is -EIO.
+ * Whether the caller may give a node owned by `ouid` and `ogid` the owner
+ * `uid` and the group `gid`, -1 asking for neither, as Linux's `chown_ok`
+ * and `chgrp_ok` judge it (fs/attr.c:21-74): an owner given, even the one
+ * the node has, takes the owner naming itself or a privileged caller, and a
+ * group given the owner naming the node's group or one of its own, or a
+ * privileged caller. Every chown applies it before it looks at what would
+ * change. 0 or -EPERM.
  */
-static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
+static int32_t chown_rule(uint32_t ouid, uint32_t ogid, uint32_t uid, uint32_t gid)
+{
+    uint32_t fsuid = proc_fsuid(current_proc);
+
+    if (inode_capable(ouid, ogid, CAP_CHOWN)) {
+        return 0;
+    }
+    if (uid != (uint32_t)-1 && (fsuid != ouid || uid != ouid)) {
+        return -EPERM;
+    }
+    if (gid != (uint32_t)-1 && (fsuid != ouid || (gid != ogid && !cred_in_group(gid)))) {
+        return -EPERM;
+    }
+    return 0;
+}
+
+/**
+ * Plan Linux's chown in `st`: check supplied IDs, including unchanged
+ * ones, and permission to clear set-id bits. Return the setattr mask,
+ * including an attribute-change time when nothing else changes, or -EPERM.
+ */
+static int vfs_chown_plan(struct vfs_stat *st, uint32_t uid, uint32_t gid)
+{
+    uint32_t clear = chown_setid_bits(st->mode, st->uid, st->gid);
+    int what = 0;
+
+    if (chown_rule(st->uid, st->gid, uid, gid) != 0 ||
+        (clear && !inode_owner_or_capable(st->uid))) {
+        return -EPERM;
+    }
+    if (clear && gid != (uint32_t)-1 && !cred_in_group(gid) &&
+        !inode_capable(st->uid, st->gid, CAP_FSETID)) {
+        clear |= st->mode & 02000u;
+    }
+    if (uid != (uint32_t)-1) {
+        st->uid = uid;
+        what |= VFS_SET_UID;
+    }
+    if (gid != (uint32_t)-1) {
+        st->gid = gid;
+        what |= VFS_SET_GID;
+    }
+    if (clear) {
+        st->mode &= ~clear;
+        what |= VFS_SET_MODE;
+    }
+    return what ? what : VFS_SET_CTIME;
+}
+
+/**
+ * Apply the chown plan to a node of the KRFFS boot root and return its
+ * inotify mask in `events`. The root's mode field holds the dirty bit,
+ * so present it to the plan as a directory, whose set-id bits stay. The
+ * set-id clear is stored before the ids, so that a store that fails leaves
+ * the owner as it was. 0, -EPERM, -EROFS on a halted root, or -EIO for a
+ * header that cannot be read or a store that fails.
+ */
+static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid, uint32_t *events)
 {
     krffs_node_t head;
-    int uid_changes;
-    int gid_changes;
-    int rc;
+    struct vfs_stat st;
+    int what, which;
 
     if (krffs_root_halted()) {
         return -EROFS;
@@ -13167,28 +13774,24 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     if (krffs_node_head(node, &head) != 0) {
         return -EIO;
     }
-    uid_changes = (uid != (uint32_t)-1 && uid != head.uid);
-    gid_changes = (gid != (uint32_t)-1 && gid != head.gid);
-    if (uid_changes && !cred_fs_privileged()) {
-        return -EPERM;
+    k_memset(&st, 0, sizeof(st));
+    st.mode = node == krffs_fs->node ? S_IFDIR : krffs_mode_type(head.mode) | (head.mode & 07777u);
+    st.uid = head.uid;
+    st.gid = head.gid;
+    what = vfs_chown_plan(&st, uid, gid);
+    if (what < 0) {
+        return what;
     }
-    if (gid_changes && !cred_fs_privileged() &&
-        (proc_fsuid(current_proc) != head.uid || !cred_in_group(gid))) {
-        return -EPERM;
+    which = ((what & VFS_SET_UID) ? KRFFS_SET_UID : 0) | ((what & VFS_SET_GID) ? KRFFS_SET_GID : 0);
+    if ((what & VFS_SET_MODE) &&
+        krffs_node_set_mode(node, (uint16_t)((head.mode & ~07777u) | (st.mode & 07777u))) != 0) {
+        return krffs_root_halted() ? -EROFS : -EIO;
     }
-    if (!uid_changes && !gid_changes) {
-        return 0;
-    }
-    rc = cred_kill_setid(node);
-    if (rc != 0) {
-        return rc;
-    }
-    if (krffs_node_set_owner(node, uid, gid,
-                             (uid_changes ? KRFFS_SET_UID : 0) |
-                                 (gid_changes ? KRFFS_SET_GID : 0)) != 0) {
-        return -EIO;
+    if (which && krffs_node_set_owner(node, st.uid, st.gid, which) != 0) {
+        return krffs_root_halted() ? -EROFS : -EIO;
     }
     krffs_stamp(node, KRFFS_STAMP_ATTR);
+    *events = vfs_setattr_events(what);
     return 0;
 }
 
@@ -13229,34 +13832,29 @@ static int32_t chmod_made(int id, uint32_t mode)
     if (devtree_attr(id, &a) != 0) {
         return -ENOENT;
     }
-    if (!cred_fs_privileged() && proc_fsuid(current_proc) != a.uid) {
+    if (!inode_owner_or_capable(a.uid)) {
         return -EPERM;
     }
-    if (!cred_fs_privileged() && !cred_in_group(a.gid)) {
+    if (!inode_capable(a.uid, a.gid, CAP_FSETID) && !cred_in_group(a.gid)) {
         mode &= ~02000u;
     }
     return devtree_setattr(id, mode & 07777u, (uint32_t)-1, (uint32_t)-1);
 }
 
 /**
- * chown of the entry `id` root made under /dev: a new owner takes a
- * privileged caller, and a new group a privileged caller or the owner
- * naming one of its groups, as on Linux; -1 leaves a field. 0, -ENOENT for
- * an entry that is gone, or -EPERM.
+ * chown of the entry `id` root made under /dev, by `chown_rule`; -1 leaves
+ * a field. 0, -ENOENT for an entry that is gone, or -EPERM.
  */
 static int32_t chown_made(int id, uint32_t uid, uint32_t gid)
 {
     struct devtree_attr a;
+    int32_t rc;
 
     if (devtree_attr(id, &a) != 0) {
         return -ENOENT;
     }
-    if (!cred_fs_privileged() && ((uid != (uint32_t)-1 && uid != a.uid) ||
-                                  (gid != (uint32_t)-1 && gid != a.gid &&
-                                   (proc_fsuid(current_proc) != a.uid || !cred_in_group(gid))))) {
-        return -EPERM;
-    }
-    return devtree_setattr(id, (uint32_t)-1, uid, gid);
+    rc = chown_rule(a.uid, a.gid, uid, gid);
+    return rc != 0 ? rc : devtree_setattr(id, (uint32_t)-1, uid, gid);
 }
 
 /**
@@ -13271,42 +13869,74 @@ static int32_t chmod_dev(const char *name, uint32_t mode)
     if (devfs_owner(name, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (!cred_fs_privileged() && proc_fsuid(current_proc) != uid) {
+    if (!inode_owner_or_capable(uid)) {
         return -EPERM;
     }
     return devfs_setattr(name, mode & 0777u, (uint32_t)-1, (uint32_t)-1);
 }
 
 /**
- * chown of the device `name` under /dev, by the rule of `chown_made`: a new
- * owner takes a privileged caller, and a new group a privileged caller or
- * the owner naming one of its groups; -1 leaves a field. 0, -ENOENT, -ENOSPC
- * or -EPERM.
+ * chown of the device `name` under /dev, by `chown_rule`; -1 leaves a
+ * field. 0, -ENOENT, -ENOSPC or -EPERM.
  */
 static int32_t chown_dev(const char *name, uint32_t uid, uint32_t gid)
 {
     uint32_t ouid, ogid;
+    int32_t rc;
 
     if (devfs_owner(name, &ouid, &ogid) != 0) {
         return -ENOENT;
     }
-    if (!cred_fs_privileged() && ((uid != (uint32_t)-1 && uid != ouid) ||
-                                  (gid != (uint32_t)-1 && gid != ogid &&
-                                   (proc_fsuid(current_proc) != ouid || !cred_in_group(gid))))) {
-        return -EPERM;
+    rc = chown_rule(ouid, ogid, uid, gid);
+    return rc != 0 ? rc : devfs_setattr(name, (uint32_t)-1, uid, gid);
+}
+
+/**
+ * chown of the pty slave `pt`, whose owner and group are kept on the pty,
+ * by `chown_rule`, as a devpts node takes it on Linux; -1 leaves a field.
+ * 0 or -EPERM.
+ */
+static int32_t chown_pty(struct pty *pt, uint32_t uid, uint32_t gid)
+{
+    int32_t rc = chown_rule(pt->uid, pt->gid, uid, gid);
+
+    if (rc != 0) {
+        return rc;
     }
-    return devfs_setattr(name, (uint32_t)-1, uid, gid);
+    if (uid != (uint32_t)-1) {
+        pt->uid = uid;
+    }
+    if (gid != (uint32_t)-1) {
+        pt->gid = gid;
+    }
+    return 0;
+}
+
+/**
+ * chown of a node whose owner `ouid` and group `ogid` do not change: what
+ * `chown_rule` allows that names the ids the node has, and -EPERM for any
+ * other. 0 or -EPERM.
+ */
+static int32_t chown_fixed(uint32_t ouid, uint32_t ogid, uint32_t uid, uint32_t gid)
+{
+    int32_t rc = chown_rule(ouid, ogid, uid, gid);
+
+    if (rc == 0 && ((uid != (uint32_t)-1 && uid != ouid) || (gid != (uint32_t)-1 && gid != ogid))) {
+        rc = -EPERM;
+    }
+    return rc;
 }
 
 static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode);
 
 /**
- * chmod of the /dev, /proc or /sys node `vp`: a pty slave on the pty, its
- * owner or a privileged caller only, -ENOENT when the pty is gone; an entry
- * root made under /dev by `chmod_made`; a device by `chmod_dev`; and a
- * /proc/PID/fd/N link on the descriptor it names (`chmod_fd`), as Linux
- * follows the link, which udev's chmod of an O_PATH descriptor takes. Every
- * other node has fixed metadata, which root's request leaves as it is.
+ * chmod of the /dev, /proc or /sys node `vp` itself: a pty slave on the pty,
+ * its owner or a privileged caller only, -ENOENT when the pty is gone; an
+ * entry root made under /dev by `chmod_made`; a device by `chmod_dev`; and a
+ * /proc/PID/fd/N link, as any symbolic link, -EOPNOTSUPP, as Linux 6.12's
+ * `notify_change` answers. A followed link is the caller's
+ * (`chmod_proc_link`). Every other node has fixed metadata, which root's
+ * request leaves as it is.
  */
 static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
 {
@@ -13315,7 +13945,7 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
         if (!pt) {
             return -ENOENT;
         }
-        if (!cred_fs_privileged() && proc_fsuid(current_proc) != pt->uid) {
+        if (!inode_owner_or_capable(pt->uid)) {
             return -EPERM;
         }
         pt->mode = (uint16_t)(mode & 0777u);
@@ -13327,25 +13957,73 @@ static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
     if (vp->kind == VNODE_DEV && vp->name[0] != '\0') {
         return chmod_dev(vp->name, mode);
     }
-    if (vp->kind == VNODE_PROC_FD_LINK) {
-        process_t *p;
-        fd_entry_t src;
-        int32_t rc = proc_fd_entry(vp, &p, &src);
-
-        if (rc == 0) {
-            rc = chmod_fd(&src, mode);
-            fd_peek_drop(&src);
-        }
-        return rc;
+    if (synth_is_link(vp)) {
+        return -EOPNOTSUPP; /* a link's mode does not change, as on Linux */
     }
     return proc_fsuid(current_proc) == 0 ? 0 : -EPERM; /* fixed metadata root owns */
+}
+
+/**
+ * chmod of a followed /proc/PID/fd/N link `vp`: what the descriptor it names
+ * is open on (`chmod_fd`), as Linux follows the link to the descriptor's
+ * path, which udev's chmod of an O_PATH descriptor takes. 0 or a negative
+ * errno, an error of `proc_fd_follow` among them.
+ */
+static int32_t chmod_proc_link(const struct vpath *vp, uint32_t mode)
+{
+    process_t *p;
+    fd_entry_t src;
+    int32_t rc = proc_fd_follow(vp, &p, &src, 0);
+
+    if (rc == 0) {
+        rc = chmod_fd(&src, mode);
+        fd_peek_drop(&src);
+    }
+    return rc;
+}
+
+/**
+ * Set the mode of the node `ref` of a mounted type, or of a bind of the
+ * KRFFS root, to `mode`: its owner or a privileged caller, -EPERM for
+ * another, and the setgid bit dropped for a caller outside the file's group
+ * who lacks privilege. With `link_refused`, a symbolic link is -EOPNOTSUPP,
+ * as Linux answers for a link's mode. The read, the check and the store are
+ * one step under the file's lock (`vfs_node_lock`). 0 or a negative errno.
+ */
+static int32_t chmod_vfs(const struct vfs_ref *ref, uint32_t mode, int link_refused)
+{
+    struct vfs_stat vst;
+    int32_t rc;
+
+    vfs_node_lock(ref);
+    rc = vfs_getattr(ref->mnt, ref->node, &vst);
+    if (rc == 0 && link_refused && (vst.mode & 0170000u) == 0120000u) {
+        rc = -EOPNOTSUPP;
+    }
+    if (rc == 0 && !inode_owner_or_capable(vst.uid)) {
+        rc = -EPERM;
+    }
+    if (rc == 0) {
+        if (!inode_capable(vst.uid, vst.gid, CAP_FSETID) && !cred_in_group(vst.gid)) {
+            mode &= ~02000u;
+        }
+        vst.mode = mode;
+        rc = vfs_setattr(ref->mnt, ref->node, VFS_SET_MODE, &vst);
+    }
+    vfs_node_unlock(ref);
+    return rc;
 }
 
 /**
  * Set the mode of the file `name`, resolved against `dir`, for chmod,
  * fchmodat and fchmodat2.  A nonzero `follow` follows a last symbolic link;
  * zero gives -EOPNOTSUPP for a link, as Linux does, since a link has no mode
- * of its own.  Returns 0 or a negative errno.
+ * of its own.  A read-only mount or file system is -EROFS once the path
+ * resolves, before any other check, as Linux's `chmod_common` takes
+ * `mnt_want_write` first (`attr_read_only`); a followed /proc/PID/fd/N is
+ * judged by the descriptor's own mount (`chmod_proc_link`), and one
+ * unfollowed is looked up first (`proc_fd_link_lookup`).  Returns 0 or a
+ * negative errno.
  */
 static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
 {
@@ -13360,39 +14038,39 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
         return rc;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
-    if (svp) {
+    if (svp && svp->kind == VNODE_PROC_FD_LINK && (follow || dir)) {
         vp = *svp;
         vfs_walk_unlock(ref.mnt);
+        rc = chmod_proc_link(&vp, mode);
         vfs_ref_release(&ref);
-        if (!follow && synth_is_link(&vp)) {
-            return -EOPNOTSUPP; /* a link's mode does not change, as on Linux */
-        }
-        return chmod_synth(&vp, mode);
+        return rc;
     }
-    if (halted_root_mount(ref.mnt)) {
+    if (svp && svp->kind == VNODE_PROC_FD_LINK) {
+        struct kstat ks;
+
+        rc = proc_fd_link_lookup(svp, &ks, 0);
+        if (rc != 0) {
+            vfs_walk_unlock(ref.mnt);
+            vfs_ref_release(&ref);
+            return rc;
+        }
+    }
+    if (attr_read_only(ref.mnt)) {
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return -EROFS;
     }
-    if (!mnt_is_root(ref.mnt)) {
-        struct vfs_stat vst;
-
-        vfs_node_lock(&ref);
-        rc = vfs_getattr(ref.mnt, ref.node, &vst);
-        if (rc == 0 && !follow && (vst.mode & 0170000u) == 0120000u) {
-            rc = -EOPNOTSUPP;
+    if (svp) {
+        vp = *svp;
+        vfs_walk_unlock(ref.mnt);
+        vfs_ref_release(&ref);
+        if (!follow && !dir && synth_is_link(&vp)) {
+            return -EOPNOTSUPP; /* a link's mode does not change, as on Linux */
         }
-        if (rc == 0 && !cred_fs_privileged() && proc_fsuid(current_proc) != vst.uid) {
-            rc = -EPERM;
-        }
-        if (rc == 0) {
-            if (!cred_fs_privileged() && !cred_in_group(vst.gid)) {
-                mode &= ~02000u;
-            }
-            vst.mode = mode;
-            rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
-        }
-        vfs_node_unlock(&ref);
+        return chmod_synth(&vp, mode);
+    }
+    if (!mnt_is_root(vfs_mount_base(ref.mnt))) {
+        rc = chmod_vfs(&ref, mode, !follow);
         vfs_walk_unlock(ref.mnt);
         if (rc == 0) {
             attr_told(name, ref.mnt, ref.node, IN_ATTRIB, 0);
@@ -13410,88 +14088,60 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
     return rc;
 }
 
-/**
- * Whether a chown of `uid` and `gid` names an owner or a group, which makes
- * it a change of the attributes for inotify even when the file has them
- * already, as Linux's `fsnotify_change` reports it; -1 for both is none.
- */
-static int chown_asks(uint32_t uid, uint32_t gid)
-{
-    return uid != (uint32_t)-1 || gid != (uint32_t)-1;
-}
-
-/**
- * What a chown changes on a mounted file system, and the set-id bits it
- * takes with it.
- *
- * `vst` is read from the node and updated in place; the return is the
- * `VFS_SET_*` mask to apply, 0 when the call changes nothing, or `-EPERM`
- * when this caller may not make the change. A chown that changes neither
- * owner is permitted to every caller, as it is on the boot root: a value
- * that changes nothing needs no right, and a refusal there would stop
- * `chown(path, -1, -1)`. The set-id clear is `vfs_kill_setid`'s rule, which
- * is `cred_kill_setid`'s rule for the boot root: a directory keeps its bits,
- * and a file without group-execute keeps setgid, since there the bit marks
- * mandatory locking and grants nobody anything.
- */
-static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
-{
-    int what = 0;
-
-    if (uid != (uint32_t)-1 && uid != vst->uid) {
-        what |= VFS_SET_UID;
-    }
-    if (gid != (uint32_t)-1 && gid != vst->gid) {
-        what |= VFS_SET_GID;
-    }
-    if (what == 0) {
-        return 0;
-    }
-    if (!cred_fs_privileged() &&
-        (proc_fsuid(current_proc) != vst->uid || (what & VFS_SET_UID) != 0 ||
-         ((what & VFS_SET_GID) != 0 && !cred_in_group(gid)))) {
-        return -EPERM;
-    }
-    if (what & VFS_SET_UID) {
-        vst->uid = uid;
-    }
-    if (what & VFS_SET_GID) {
-        vst->gid = gid;
-    }
-    if ((vst->mode & 06000u) && (vst->mode & 0170000u) != 0040000u) {
-        vst->mode &= ~04000u;
-        if (vst->mode & 0010u) {
-            vst->mode &= ~02000u;
-        }
-        what |= VFS_SET_MODE;
-    }
-    return what;
-}
-
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
+static int32_t chown_ids_named(uint32_t *uid, uint32_t *gid);
 
 /**
- * chown of the /dev or /proc node `vp`, for the path forms and for a
- * descriptor opened with O_PATH on one. A pty slave keeps its owner and group
- * on the pty, and changing either takes root, since the login server that
- * chowns a pty is root. An entry root made under /dev keeps its own
- * (`chown_made`). Every other node has fixed root ownership: a request
- * for 0 or -1 in each field succeeds and changes nothing, and any other is
- * -EPERM.
+ * chown of a /proc/PID/fd/N link `vp` itself, for lchown(2) and fchownat(2)
+ * with AT_SYMLINK_NOFOLLOW, whose lookup `proc_fd_link_lookup` has made and
+ * whose attributes it gave in `ks`, and for fchownat(2) with AT_EMPTY_PATH
+ * of an O_PATH descriptor of the link, `ks` NULL, whose record `held` keeps
+ * the owner its node had, as Linux's held inode does, with no lookup made
+ * again: the process's (`synth_pid_owner`), root's once it is gone, when the
+ * record is not kept. The rule is `chown_rule` over that owner and group,
+ * and what it allows is stored in the node's kept owners
+ * (`procfs_owner_chown`), as Linux's `proc_setattr` stores it in the inode,
+ * until a lookup gives the link its process's owner again
+ * (`tid_fd_revalidate`, fs/proc/fd.c). 0 or -EPERM.
+ */
+static int32_t chown_proc_link(const struct vpath *vp, const struct synth_owner *held,
+                               const struct kstat *ks, uint32_t uid, uint32_t gid)
+{
+    struct kstat s;
+    int32_t rc;
+
+    if (!ks) {
+        k_memset(&s, 0, sizeof(s));
+        s.st_mode = 0120000u;
+        synth_pid_owner(procfs_resolve_id(vp), &s);
+        if (held && held->kept) {
+            s.st_uid = held->uid;
+            s.st_gid = held->gid;
+        }
+        ks = &s;
+    }
+    rc = chown_rule((uint32_t)ks->st_uid, (uint32_t)ks->st_gid, uid, gid);
+    if (rc == 0) {
+        procfs_owner_chown(vp, held, uid, gid);
+    }
+    return rc;
+}
+
+/**
+ * chown of the /dev or /proc node `vp` itself, for the path forms and for a
+ * descriptor opened with O_PATH on one, to the kernel's ids `uid` and `gid`.
+ * A pty slave keeps its owner and group on the pty (`chown_pty`), an entry
+ * root made under /dev its own (`chown_made`), and a device its own
+ * (`chown_dev`); a /proc/PID/fd/N link, followed or not, is `do_chown`'s.
+ * Every other node has a fixed owner, the one its stat gives
+ * (`chown_fixed`). 0 or a negative errno, -ENOENT for a pty or a node that
+ * is gone among them.
  */
 static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
-    if (vp->kind == VNODE_PROC_FD_LINK) {
-        process_t *p;
-        fd_entry_t src;
-        int32_t rc = proc_fd_entry(vp, &p, &src);
+    struct kstat ks;
+    int32_t rc;
 
-        if (rc == 0) {
-            rc = chown_fd(&src, uid, gid);
-            fd_peek_drop(&src);
-        }
-        return rc;
-    }
     if (vp->kind == VNODE_DEV_MADE) {
         return chown_made(vp->syskey, uid, gid);
     }
@@ -13500,40 +14150,70 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
     }
     if (vp->kind == VNODE_PTS) {
         struct pty *pt = pty_get(vp->pts_index);
-        int uid_changes;
-        int gid_changes;
 
-        if (!pt) {
-            return -ENOENT;
-        }
-        uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
-        gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
-        if ((uid_changes || gid_changes) && !cred_fs_privileged()) {
-            return -EPERM;
-        }
-        if (uid != (uint32_t)-1) {
-            pt->uid = uid;
-        }
-        if (gid != (uint32_t)-1) {
-            pt->gid = gid;
-        }
-        return 0;
+        return pt ? chown_pty(pt, uid, gid) : -ENOENT;
     }
-    if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
-        return -EPERM;
+    rc = synth_stat(vp, &ks, 0);
+    return rc != 0 ? rc : chown_fixed((uint32_t)ks.st_uid, (uint32_t)ks.st_gid, uid, gid);
+}
+
+/**
+ * Change the owner and group of the node `ref` of a mounted type, or of a
+ * bind of the KRFFS root, to `uid` and `gid` by `vfs_chown_plan`, the plan
+ * into `*what`. The read, the plan and the store are one step under the
+ * file's lock, for the reason `do_chown` gives. 0 or a negative errno.
+ */
+static int32_t chown_vfs(const struct vfs_ref *ref, uint32_t uid, uint32_t gid, int *what)
+{
+    struct vfs_stat vst;
+    int32_t rc;
+
+    vfs_node_lock(ref);
+    rc = vfs_getattr(ref->mnt, ref->node, &vst);
+    *what = 0;
+    if (rc == 0) {
+        *what = vfs_chown_plan(&vst, uid, gid);
+        rc = *what < 0 ? *what : vfs_setattr(ref->mnt, ref->node, *what, &vst);
     }
-    return 0;
+    vfs_node_unlock(ref);
+    return rc;
+}
+
+/**
+ * chown of a followed /proc/PID/fd/N link `vp`: what the descriptor it names
+ * is open on (`chown_fd`), as Linux follows the link to the descriptor's
+ * path, with the ids as the caller's namespace names them. 0 or a negative
+ * errno, an error of `proc_fd_follow` among them.
+ */
+static int32_t chown_proc_follow(const struct vpath *vp, uint32_t uid, uint32_t gid)
+{
+    process_t *p;
+    fd_entry_t src;
+    int32_t rc = proc_fd_follow(vp, &p, &src, 0);
+
+    if (rc == 0) {
+        rc = chown_fd(&src, uid, gid);
+        fd_peek_drop(&src);
+    }
+    return rc;
 }
 
 /**
  * chown core for the path forms: the file at `name`, leading '/' stripped,
  * through a final symbolic link when `follow`, as chown(2) and fchownat(2)
  * without AT_SYMLINK_NOFOLLOW go, and the link itself otherwise, as lchown(2)
- * and fchownat(2) with the flag go. A /dev or /proc node is `chown_synth`'s,
- * a node of a mounted type follows `vfs_chown_plan`, and a KRFFS node
- * `krffs_chown_node`; the boot root has no links, so there `follow` changes
- * nothing. A path that named a directory by its end, `dir`, follows a final
- * link either way and must reach a directory (`resolve_named`). The walk
+ * and fchownat(2) with the flag go, to `uid` and `gid` as the caller's user
+ * namespace names them. Once the path resolves, a read-only mount or file
+ * system is -EROFS (`attr_read_only`), then an id the namespace does not map
+ * -EINVAL, as Linux's `do_fchownat` takes `mnt_want_write` before
+ * `chown_common` maps the ids; a followed /proc/PID/fd/N is judged through
+ * the descriptor (`chown_proc_follow`), and one unfollowed is looked up
+ * first and changed itself (`chown_proc_link`). A /dev or /proc node is
+ * `chown_synth`'s, a node of a mounted type follows `vfs_chown_plan`, and a
+ * KRFFS node `krffs_chown_node`; the boot root has no links, so there
+ * `follow` changes nothing. A path that named a directory by its end,
+ * `dir`, follows a final link either way and must reach a directory
+ * (`resolve_named`). The walk
  * keeps its mount's lock through the store, as `do_chmod`'s does, and for
  * the same reason.
  *
@@ -13553,47 +14233,71 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
     struct vfs_ref ref;
     krffs_node_t *node;
     int32_t rc;
+    uint32_t events;
 
     rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
         return rc;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp && svp->kind == VNODE_PROC_FD_LINK && (follow || dir)) {
+        vp = *svp;
+        vfs_walk_unlock(ref.mnt);
+        rc = chown_proc_follow(&vp, uid, gid);
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    if (svp && svp->kind == VNODE_PROC_FD_LINK) {
+        struct kstat ks;
+
+        vp = *svp;
+        vfs_walk_unlock(ref.mnt);
+        rc = proc_fd_link_lookup(&vp, &ks, 0);
+        if (rc == 0) {
+            rc = attr_read_only(ref.mnt) ? -EROFS : chown_ids_named(&uid, &gid);
+        }
+        if (rc == 0) {
+            rc = chown_proc_link(&vp, NULL, &ks, uid, gid);
+        }
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    rc = attr_read_only(ref.mnt) ? -EROFS : chown_ids_named(&uid, &gid);
+    if (rc != 0) {
+        vfs_walk_unlock(ref.mnt);
+        vfs_ref_release(&ref);
+        return rc;
+    }
     if (svp) {
+        const struct synth_owner *own = vfs_proc_dir_owner(&ref);
+
+        if (own) {
+            rc = chown_fixed(own->uid, own->gid, uid, gid);
+            vfs_walk_unlock(ref.mnt);
+            vfs_ref_release(&ref);
+            return rc;
+        }
         vp = *svp;
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return chown_synth(&vp, uid, gid);
     }
-    if (halted_root_mount(ref.mnt)) {
-        vfs_walk_unlock(ref.mnt);
-        vfs_ref_release(&ref);
-        return -EROFS;
-    }
-    if (!mnt_is_root(ref.mnt)) {
-        struct vfs_stat vst;
+    if (!mnt_is_root(vfs_mount_base(ref.mnt))) {
         int what;
 
-        vfs_node_lock(&ref);
-        rc = vfs_getattr(ref.mnt, ref.node, &vst);
-        what = 0;
-        if (rc == 0) {
-            what = vfs_chown_plan(&vst, uid, gid);
-            rc = what < 0 ? what : (what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0);
-        }
-        vfs_node_unlock(&ref);
+        rc = chown_vfs(&ref, uid, gid, &what);
         vfs_walk_unlock(ref.mnt);
-        if (rc == 0 && chown_asks(uid, gid)) {
-            attr_told(name, ref.mnt, ref.node, IN_ATTRIB, what == 0);
+        if (rc == 0) {
+            attr_told(name, ref.mnt, ref.node, vfs_setattr_events(what), 0);
         }
         vfs_ref_release(&ref);
         return rc;
     }
     node = ref.node;
-    rc = krffs_chown_node(node, uid, gid);
+    rc = krffs_chown_node(node, uid, gid, &events);
     vfs_walk_unlock(ref.mnt);
-    if (rc == 0 && chown_asks(uid, gid)) {
-        attr_told(name, ref.mnt, ref.node, IN_ATTRIB, 1);
+    if (rc == 0) {
+        attr_told(name, ref.mnt, ref.node, events, 1);
     }
     vfs_ref_release(&ref);
     return rc;
@@ -13692,11 +14396,7 @@ long sys_fchmodat2(isr_params_t *params)
         return entry ? chmod_fd(entry, mode) : -EBADF;
     }
     if (empty) {
-        path = path_buf_get();
-        if (!path) {
-            return -ENOMEM;
-        }
-        k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+        return do_chmod(NULL, mode, 0, 1);
     } else {
         rc = path_from_user_dir(dirfd, upath, &path, &dir);
         if (rc != 0) {
@@ -13727,7 +14427,7 @@ long sys_fchmodat2(isr_params_t *params)
  */
 static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
 {
-    if (entry->type == FD_TYPE_SYNTH_PATH) {
+    if (entry->type == FD_TYPE_SYNTH_PATH) { /* a link's own: -EOPNOTSUPP */
         return entry->priv ? chmod_synth((const struct vpath *)entry->priv, mode) : -EBADF;
     }
     if (synth_fd_made(entry)) {
@@ -13741,7 +14441,7 @@ static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
         if (!pt) {
             return -EBADF;
         }
-        if (!cred_fs_privileged() && proc_fsuid(current_proc) != pt->uid) {
+        if (!inode_owner_or_capable(pt->uid)) {
             return -EPERM;
         }
         pt->mode = (uint16_t)(mode & 0777u);
@@ -13767,20 +14467,51 @@ long sys_fchmod(isr_params_t *params)
 }
 
 /**
+ * The file a descriptor is open on that is no file or directory of its own
+ * kind: a named FIFO's node (`vmnt`, `vnode`), or the device node a device
+ * was opened through (`dev_mnt`, `dev_node`), into `*file`. 0 when `entry`
+ * has none. Its attributes are the node's, as Linux's `fchmod` and `fchown`
+ * of such a descriptor change the inode its path names.
+ */
+static int fd_node_file(const fd_entry_t *entry, struct vfs_ref *file)
+{
+    const struct open_file *ofd = entry->ofd;
+
+    if (!ofd || entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) {
+        return 0;
+    }
+    if (ofd->vmnt && ofd->vnode) {
+        file->mnt = ofd->vmnt;
+        file->node = ofd->vnode;
+        return 1;
+    }
+    if (ofd->dev_mnt && ofd->dev_node) {
+        file->mnt = ofd->dev_mnt;
+        file->node = ofd->dev_node;
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * chmod of the file descriptor `entry` refers to, for fchmod(2), and for
  * fchmodat2(2) with AT_EMPTY_PATH and chmod(2) of /proc/PID/fd/N, which
- * take an O_PATH descriptor too: a KRFFS node or a node of a mounted type
- * by the rules of the path forms, and any other kind as `fchmod_synth`
- * says.
+ * take an O_PATH descriptor too: -EROFS first through a read-only mount the
+ * descriptor was opened through (`fd_mount`, `attr_read_only`); a KRFFS
+ * node or a node of a mounted type by the rules of the path forms, a named
+ * FIFO or a device opened through a device node on that node
+ * (`fd_node_file`), and any other kind as `fchmod_synth` says.
  */
 static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
 {
-    if (entry->ofd && entry->ofd->vmnt && halted_root_mount(entry->ofd->vmnt)) {
-        return -EROFS; /* a named FIFO's descriptor of the halted root too */
+    struct vfs_ref file;
+    int rc;
+
+    if (attr_read_only(fd_mount(entry))) {
+        return -EROFS;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
-        int rc = krffs_chmod_node(entry->node, mode);
-
+        rc = krffs_chmod_node(entry->node, mode);
         if (rc == 0) {
             attr_told_desc(entry->ofd, IN_ATTRIB, 1);
         }
@@ -13788,27 +14519,20 @@ static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
-        struct vfs_ref file;
-        struct vfs_stat vst;
-        int rc;
-
         file.mnt = entry->ofd->vmnt;
         file.node = entry->ofd->vnode;
-        vfs_node_lock(&file);
-        rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
-        if (rc == 0 && !cred_fs_privileged() && proc_fsuid(current_proc) != vst.uid) {
-            rc = -EPERM;
-        }
+        rc = mnt_is_root(vfs_mount_base(file.mnt)) ? krffs_chmod_node(file.node, mode)
+                                                   : chmod_vfs(&file, mode, 0);
         if (rc == 0) {
-            if (!cred_fs_privileged() && !cred_in_group(vst.gid)) {
-                mode &= ~02000u;
-            }
-            vst.mode = mode;
-            rc = vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_MODE, &vst);
+            attr_told_desc(entry->ofd, IN_ATTRIB, mnt_is_root(vfs_mount_base(file.mnt)));
         }
-        vfs_node_unlock(&file);
+        return rc;
+    }
+    if (fd_node_file(entry, &file)) {
+        rc = mnt_is_root(vfs_mount_base(file.mnt)) ? krffs_chmod_node(file.node, mode)
+                                                   : chmod_vfs(&file, mode, 0);
         if (rc == 0) {
-            attr_told_desc(entry->ofd, IN_ATTRIB, 0);
+            attr_told_desc(entry->ofd, IN_ATTRIB, mnt_is_root(vfs_mount_base(file.mnt)));
         }
         return rc;
     }
@@ -13848,9 +14572,6 @@ static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, 
 
     if (!current_proc || !upath) {
         return -EFAULT;
-    }
-    if (chown_ids_named(&uid, &gid) != 0) {
-        return -EINVAL;
     }
     rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
     if (rc != 0) {
@@ -13905,7 +14626,7 @@ long sys_fchownat(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) || chown_ids_named(&uid, &gid) != 0) {
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
     }
     if (!upath) {
@@ -13923,11 +14644,7 @@ long sys_fchownat(isr_params_t *params)
         return entry ? chown_fd(entry, uid, gid) : -EBADF;
     }
     if (empty) {
-        path = path_buf_get();
-        if (!path) {
-            return -ENOMEM;
-        }
-        k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+        return do_chown(NULL, uid, gid, 1, 0);
     } else {
         rc = path_from_user_dir(dirfd, upath, &path, &dir);
         if (rc != 0) {
@@ -13962,22 +14679,31 @@ long sys_fchown(isr_params_t *params)
     }
     uid = (uint32_t)SC_ARG(params, 1);
     gid = (uint32_t)SC_ARG(params, 2);
-    if (chown_ids_named(&uid, &gid) != 0) {
-        return -EINVAL;
-    }
     return chown_fd(entry, uid, gid);
 }
 
 /**
  * chown_fd of a descriptor on no file of a file system: a /dev or /proc
- * node opened with O_PATH by `chown_synth`, a directory made under /dev by
- * `chown_made`, a pty slave on the pty, -EBADF when the pty is gone, and
- * every other kind with fixed root ownership.
+ * node opened with O_PATH by `chown_synth`, a /proc/PID/fd/N link so opened
+ * by `chown_proc_link`, a directory made under /dev by `chown_made`, a pty
+ * slave on the pty (`chown_pty`), -EBADF when the pty is gone, and every
+ * other kind with the fixed owner its fstat gives (`chown_fixed`).
  */
 static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
-    if (entry->type == FD_TYPE_SYNTH_PATH) {
-        return entry->priv ? chown_synth((const struct vpath *)entry->priv, uid, gid) : -EBADF;
+    struct kstat ks;
+    int32_t rc;
+
+    if (entry->type == FD_TYPE_SYNTH_PATH) { /* a link's own, never followed */
+        const struct synth_path *sp = (const struct synth_path *)entry->priv;
+
+        if (!sp) {
+            return -EBADF;
+        }
+        if (sp->vp.kind == VNODE_PROC_FD_LINK) {
+            return chown_proc_link(&sp->vp, &sp->own, NULL, uid, gid);
+        }
+        return chown_synth(&sp->vp, uid, gid);
     }
     if (synth_fd_made(entry)) {
         return chown_made(synth_fd_made(entry), uid, gid);
@@ -13987,72 +14713,65 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
     }
     if (entry->type == FD_TYPE_PTS) {
         struct pty *pt = pty_get(pty_slave_index(entry));
-        int uid_changes;
-        int gid_changes;
-        if (!pt) {
-            return -EBADF;
-        }
-        uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
-        gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
-        if ((uid_changes || gid_changes) && !cred_fs_privileged()) {
-            return -EPERM;
-        }
-        if (uid != (uint32_t)-1) {
-            pt->uid = uid;
-        }
-        if (gid != (uint32_t)-1) {
-            pt->gid = gid;
-        }
-        return 0;
+
+        return pt ? chown_pty(pt, uid, gid) : -EBADF;
     }
-    if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
-        return -EPERM;
-    }
-    return 0;
+    rc = fstat_fill_attrs(entry, &ks);
+    return rc != 0 ? rc : chown_fixed((uint32_t)ks.st_uid, (uint32_t)ks.st_gid, uid, gid);
 }
 
 /**
  * chown of the file descriptor `entry` refers to, for fchown(2) and for
- * fchownat(2) with AT_EMPTY_PATH, which takes an O_PATH descriptor too: a
- * KRFFS node or a node of a mounted type by the rules of the path forms, and
- * any other kind as `chown_fd_synth` says; fixed root ownership takes a
- * request that changes nothing, and any other is -EPERM. On a mounted type
- * the read, the plan and the store are one step under the mount's namespace
- * lock, as in `do_chown`, and for the same reason.
+ * fchownat(2) with AT_EMPTY_PATH, which takes an O_PATH descriptor too, to
+ * `uid` and `gid` as the caller's user namespace names them: -EROFS first
+ * through a read-only mount the descriptor was opened through (`fd_mount`,
+ * `attr_read_only`), then -EINVAL for an id the namespace does not map, as
+ * Linux's `vfs_fchown` takes `mnt_want_write_file` first; a KRFFS node or a
+ * node of a mounted type by the rules of the path forms, a named FIFO or a
+ * device opened through a device node on that node (`fd_node_file`), and
+ * any other kind as `chown_fd_synth` says. On a mounted type
+ * the read, the plan and the store are one step under the file's lock, as
+ * in `do_chown`, and for the same reason.
  */
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
-    if (entry->ofd && entry->ofd->vmnt && halted_root_mount(entry->ofd->vmnt)) {
-        return -EROFS; /* a named FIFO's descriptor of the halted root too */
+    struct vfs_ref file;
+    int what = 0;
+    int rc;
+    uint32_t events;
+
+    if (attr_read_only(fd_mount(entry))) {
+        return -EROFS;
+    }
+    if (chown_ids_named(&uid, &gid) != 0) {
+        return -EINVAL;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
-        int rc = krffs_chown_node(entry->node, uid, gid);
-
-        if (rc == 0 && chown_asks(uid, gid)) {
-            attr_told_desc(entry->ofd, IN_ATTRIB, 1);
+        rc = krffs_chown_node(entry->node, uid, gid, &events);
+        if (rc == 0) {
+            attr_told_desc(entry->ofd, events, 1);
         }
         return rc;
     }
+    file.mnt = NULL;
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
-        struct vfs_ref file;
-        struct vfs_stat vst;
-        int what = 0;
-        int rc;
-
         file.mnt = entry->ofd->vmnt;
         file.node = entry->ofd->vnode;
-        vfs_node_lock(&file);
-        rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+    } else {
+        (void)fd_node_file(entry, &file);
+    }
+    if (file.mnt && mnt_is_root(vfs_mount_base(file.mnt))) {
+        rc = krffs_chown_node(file.node, uid, gid, &events);
         if (rc == 0) {
-            what = vfs_chown_plan(&vst, uid, gid);
-            rc = what < 0
-                     ? what
-                     : (what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst) : 0);
+            attr_told_desc(entry->ofd, events, 1);
         }
-        vfs_node_unlock(&file);
-        if (rc == 0 && chown_asks(uid, gid)) {
-            attr_told_desc(entry->ofd, IN_ATTRIB, what == 0);
+        return rc;
+    }
+    if (file.mnt) {
+        rc = chown_vfs(&file, uid, gid, &what);
+        if (rc == 0) {
+            attr_told_desc(entry->ofd, vfs_setattr_events(what), 0);
         }
         return rc;
     }
@@ -14060,12 +14779,11 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 }
 
 /**
- * The refusals of truncate(2) for the file `ref` resolved to. An immutable
- * or append-only file of a mounted type is -EPERM before anything else;
- * then, in Linux's order, a directory is -EISDIR and anything but a regular
- * file -EINVAL, a read-only mount -EROFS, a caller without write permission
- * -EACCES, and a file a loop device holds -EBUSY. A /proc file is -EACCES
- * to every caller, root included, as an open of one for writing is.
+ * The refusals of truncate(2) for the file `ref` resolved to, in order:
+ * a directory is -EISDIR and another nonregular file -EINVAL; a read-only
+ * mount is -EROFS, an immutable file -EPERM, denied write access -EACCES,
+ * an append-only file -EPERM and a loop backing file -EBUSY. A proc data
+ * file on a writable mount gives -EACCES.
  * Returns 0 or the errno.
  */
 static int32_t truncate_checks(const struct vfs_ref *ref)
@@ -14073,6 +14791,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
     krffs_node_t *node = ref->node;
     uint32_t mode;
+    int append = 0;
     int32_t rc;
 
     if (vp) {
@@ -14097,9 +14816,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
         if (rc != 0) {
             return rc;
         }
-        if (vst.flags_known && (vst.flags & (VFS_FL_IMMUTABLE | VFS_FL_APPEND))) {
-            return -EPERM;
-        }
+        append = vst.flags_known && (vst.flags & VFS_FL_APPEND);
         mode = vst.mode;
     }
     if ((mode & S_IFMT) == S_IFDIR) {
@@ -14108,12 +14825,10 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     if ((mode & S_IFMT) != S_IFREG) {
         return -EINVAL;
     }
-    if (vp) {
-        return -EACCES;
-    }
-    if (ref->mnt->flags & VFS_MS_RDONLY) {
+    if (attr_read_only(ref->mnt))
         return -EROFS;
-    }
+    if (vp)
+        return -EACCES;
     if (mnt_is_root(ref->mnt)) {
         rc = cred_access_node(node, CRED_W, 0);
     } else {
@@ -14122,6 +14837,8 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     if (rc != 0) {
         return rc;
     }
+    if (append)
+        return -EPERM;
     return loop_backs(ref->mnt, ref->node) ? -EBUSY : 0;
 }
 
@@ -14136,8 +14853,11 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  * its own, which no descriptor points at, with the open, the lock and the
  * close of an open for writing and an ftruncate, so that a loop attachment
  * sees the truncation in progress, as it sees an ftruncate. A caller without
- * privilege clears the file's set-id bits first, as Linux's do_truncate
- * does, and a clear that fails is the answer with the file unchanged. A
+ * privilege clears the file's set-id bits with the truncation, under the
+ * same locks and once the file system has taken the length, as Linux's
+ * notify_change stores the mode after the size, so that a refused length
+ * leaves the mode and the change time alone; a clear that fails is the
+ * answer. A
  * length that grows the file past the caller's RLIMIT_FSIZE is -EFBIG with
  * SIGXFSZ, judged under the file's lock, or on FAT32 and exFAT the namespace
  * lock (`fsize_growth_refused`); a shrink is never refused. A file reserved
@@ -14149,7 +14869,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     struct vfs_mount *locked;
     struct open_file *desc = NULL;
     int32_t rc;
-    int own, ns;
+    int own, ns, kill = 0;
 
     rc = resolve_named(path_name(path), VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
@@ -14182,11 +14902,11 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     if (!loop_backs(desc->vmnt, desc->vnode)) {
         rc = fsize_growth_refused(desc, (uint64_t)length);
     }
-    if (rc == 0 && !cred_fs_privileged()) {
-        rc = mnt_kill_setid(desc->vmnt, desc->vnode);
+    if (rc == 0) {
+        rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length, 0);
     }
     if (rc == 0) {
-        rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
+        kill = write_kill_setid(desc);
     }
     size_ns_unlock(desc, ns);
     if (rc == 0) {
@@ -14203,7 +14923,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     fd_ofd_unlock(desc);
     fd_ofd_unref(desc);
     vfs_walk_unlock(locked);
-    return rc;
+    return rc != 0 ? rc : kill;
 }
 
 long ksys_truncate(const char __user *upath, long long length)
@@ -14430,7 +15150,7 @@ static int32_t link_ref(struct vfs_ref *src, const char *newname, int newend)
     }
     if (rc == 0 && (st.mode & 0170000u) == 0040000u) {
         rc = -EPERM;
-    } else if (rc == 0 && (parent.mnt->flags & VFS_MS_RDONLY)) {
+    } else if (rc == 0 && vfs_mount_rdonly(parent.mnt)) {
         rc = -EROFS;
     } else if (rc == 0) {
         rc = may_linkat(src, &st);
@@ -14606,7 +15326,7 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
         vfs_ref_release(&parent);
         return rc;
     }
-    if (parent.mnt->flags & VFS_MS_RDONLY) {
+    if (vfs_mount_rdonly(parent.mnt)) {
         rc = -EROFS;
     } else if (mnt_is_root(parent.mnt) || !parent.mnt->type->ops->symlink) {
         rc = -EPERM;
@@ -14714,20 +15434,14 @@ static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirf
     if (flags & AT_EMPTY_PATH) {
         rc = link_empty_check(olddirfd, uold, &empty);
     }
-    if (rc == 0 && empty && olddirfd == AT_FDCWD) {
-        oldpath = path_buf_get();
-        if (!oldpath) {
-            return -ENOMEM;
-        }
-        k_strncpy(oldpath, proc_cwd(current_proc), VFS_PATH_MAX);
-    } else if (rc == 0 && !empty) {
+    if (rc == 0 && !empty) {
         rc = path_from_user_dir(olddirfd, uold, &oldpath, &olddir);
     }
     if (rc == 0) {
         rc = path_from_user_dir(newdirfd, unew, &newpath, &newend);
     }
     if (rc == 0 && !oldpath) {
-        rc = link_fd_file(olddirfd, &src);
+        rc = olddirfd == AT_FDCWD ? resolve_cwd(0, &src) : link_fd_file(olddirfd, &src);
         if (rc == 0) {
             rc = link_ref(&src, path_name(newpath), newend);
         }
@@ -16639,6 +17353,24 @@ long sys_splice(isr_params_t *params)
     return rc;
 }
 
+/** Reject splice on a queue after checking the offset and output pipe. */
+static long splice_queue(fd_entry_t *in, fd_entry_t *out, uintptr_t uin, uintptr_t uout,
+                         int nonblock)
+{
+    uintptr_t offset = in->ops == &mq_ops ? uin : uout;
+    uint64_t pos = 0;
+    int rc;
+
+    if (offset && (rc = copy_off_get(offset, 0, &pos)) != 0)
+        return rc;
+    if (in->ops == &mq_ops && pipe_is(out)) {
+        rc = pipe_splice_room(out, nonblock || copy_nonblock(out), (uint32_t)pos);
+        if (rc < 0)
+            return rc;
+    }
+    return -EINVAL;
+}
+
 /**
  * The part of splice(2) in `params` whose ends are a pipe and something
  * else, the descriptors `in` and `out`, which `sys_splice` has looked up
@@ -16656,6 +17388,8 @@ static long splice_file(const isr_params_t *params, fd_entry_t *in, fd_entry_t *
     int32_t rc;
     char *buf;
 
+    if (in->ops == &mq_ops || out->ops == &mq_ops)
+        return splice_queue(in, out, uoff_in, uoff_out, nonblock);
     if (pipe_is(in)) {
         if (out->ofd && (out->ofd->status_flags & OFD_APPEND)) {
             return -EINVAL;
@@ -17365,11 +18099,15 @@ long sys_memfd_secret(isr_params_t *params)
  * Linux's can_do_cachestat has it since a fix that 6.12's stable kernels
  * carry: the descriptor is open for writing, or the caller owns the file
  * by its file-system user id or has privilege over files, as Linux's
- * inode_owner_or_capable judges, or may write it by its mode.
+ * inode_owner_or_capable judges, or may write it by its mode, as Linux's
+ * file_permission judges, which a read-only file system refuses and a
+ * mount read-only alone does not.
  */
 static int cachestat_allowed(fd_entry_t *e)
 {
+    struct vfs_mount *m = fd_mount(e);
     struct kstat st;
+    int32_t rc;
 
     if (e->flags & FD_FLAG_WRITE) {
         return 1;
@@ -17377,8 +18115,11 @@ static int cachestat_allowed(fd_entry_t *e)
     if (fstat_fill(e, &st) != 0) {
         return 0;
     }
-    return (uint32_t)st.st_uid == proc_fsuid(current_proc) || cred_fs_privileged() ||
-           access_fd(e, W_OK, AT_EACCESS) == 0;
+    if ((uint32_t)st.st_uid == proc_fsuid(current_proc) || cred_fs_privileged()) {
+        return 1;
+    }
+    rc = access_fd(e, W_OK, AT_EACCESS, 0);
+    return rc == 0 || (rc == -EROFS && m && !vfs_sb_rdonly(m) && !halted_root_mount(m));
 }
 
 /**
@@ -17657,15 +18398,7 @@ static long fcntl_cmd(fd_entry_t *entry, int cmd, uintptr_t arg)
         fd_set_flags(current_proc->fds, entry, FD_FLAG_CLOEXEC, (arg & 1) ? FD_FLAG_CLOEXEC : 0u);
         return 0;
     case F_GETFL: {
-        int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
-        int fl;
-        if (rw == (FD_FLAG_READ | FD_FLAG_WRITE)) {
-            fl = 2;
-        } else if (rw == FD_FLAG_WRITE) {
-            fl = 1;
-        } else {
-            fl = 0;
-        }
+        int fl = fd_access_mode(entry);
         if (entry->ofd) {
             fl |= (int)(entry->ofd->status_flags &
                         (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC | OFD_DIRECT));
@@ -17857,7 +18590,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         if (svp) {
             struct kstat s64;
 
-            rc = synth_stat(svp, &s64, follow);
+            rc = synth_stat_ref(&ref, svp, &s64, follow);
             vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
             if (rc != 0) {
@@ -18005,7 +18738,7 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
     if (loop_backs(parent->mnt, node)) {
         return -EBUSY;
     }
-    if ((parent->mnt->flags | vfs_mount_base(parent->mnt)->flags) & VFS_MS_RDONLY) {
+    if (vfs_mount_rdonly(parent->mnt)) {
         return -EROFS;
     }
     if (fd_node_holders(node, NULL) > 0) {
@@ -18457,7 +19190,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     }
     if (mnt_is_root(parent.mnt)) {
         rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-    } else if (parent.mnt->flags & VFS_MS_RDONLY) {
+    } else if (vfs_mount_rdonly(parent.mnt)) {
         rc = -EROFS;
     } else {
         rc = cred_access_ref(&parent, CRED_W, 0);
@@ -18843,7 +19576,7 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
     if (is_dir) {
         return -EPERM;
     }
-    if ((opar->mnt->flags | vfs_mount_base(opar->mnt)->flags) & VFS_MS_RDONLY) {
+    if (vfs_mount_rdonly(opar->mnt)) {
         return -EROFS;
     }
     if (flags & RENAME_NOREPLACE) {
@@ -19193,11 +19926,13 @@ static int utime_nsec_valid(long nsec)
 }
 
 /** Whether utimensat on (`mnt`, `node`) is -EROFS whoever asks: a
- * synthetic file, which has no stored times, or a file of the halted KRFFS
- * root (`halted_root_mount`). */
+ * synthetic file, which has no stored times, or a file reached through a
+ * read-only mount or file system, the halted KRFFS root among them, as
+ * Linux's `vfs_utimes` takes `mnt_want_write` before any permission check
+ * (`attr_read_only`). */
 static int utimes_read_only(struct vfs_mount *mnt, void *node)
 {
-    return vfs_synth_vpath(mnt, node) || halted_root_mount(mnt);
+    return vfs_synth_vpath(mnt, node) || attr_read_only(mnt);
 }
 
 /**
@@ -19212,19 +19947,18 @@ static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times
 {
     krffs_node_t head;
 
-    if (kn == krffs_fs->node) {
-        return 0;
-    }
     if (krffs_node_head(kn, &head) != 0) {
         return -EIO;
     }
     if (now_both) {
-        if (!cred_fs_privileged() && proc_fsuid(current_proc) != head.uid &&
-            cred_access_node(kn, CRED_W, 0) != 0) {
+        if (!inode_owner_or_capable(head.uid) && cred_access_node(kn, CRED_W, 0) != 0) {
             return -EACCES;
         }
-    } else if (!cred_fs_privileged() && proc_fsuid(current_proc) != head.uid) {
+    } else if (!inode_owner_or_capable(head.uid)) {
         return -EPERM;
+    }
+    if (kn == krffs_fs->node) {
+        return 0;
     }
     if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
         int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
@@ -19254,12 +19988,12 @@ static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times
  * The POSIX permission split: setting both to now is the owner's, or anyone's
  * with write permission, or root's; an explicit time is the owner's or root's
  * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
- * no stored times and is -EROFS, as is a file of the halted KRFFS root,
- * before any permission check; the KRFFS root's times are not changed and
- * the call succeeds, and a header of the KRFFS root that cannot be read or
- * a store that fails is -EIO. On another type the read, the check and the
- * store are one step under the file's lock (`vfs_node_lock`), as for chmod
- * and chown.
+ * no stored times and is -EROFS, as is a file reached through a read-only
+ * mount or file system (`utimes_read_only`), before any permission check;
+ * the KRFFS root's times are not changed and the call succeeds, and a
+ * header of the KRFFS root that cannot be read or a store that fails is
+ * -EIO. On another type the read, the check and the store are one step
+ * under the file's lock (`vfs_node_lock`), as for chmod and chown.
  */
 static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime_spec *times)
 {
@@ -19275,7 +20009,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         return -EROFS;
     }
     get_current_time(&now_sec, &now_nsec);
-    if (!mnt_is_root(mnt)) {
+    if (!mnt_is_root(vfs_mount_base(mnt))) {
         struct vfs_ref ref;
         struct vfs_stat vst;
         int what = 0;
@@ -19284,7 +20018,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         ref.node = node;
         vfs_node_lock(&ref);
         rc = vfs_getattr(mnt, node, &vst);
-        if (rc == 0 && !cred_fs_privileged() && proc_fsuid(current_proc) != vst.uid) {
+        if (rc == 0 && !inode_owner_or_capable(vst.uid)) {
             rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
         }
         if (rc == 0 && (times == NULL || times[0].tv_nsec != UTIME_OMIT)) {
@@ -19331,26 +20065,32 @@ static uint32_t utimes_events(const struct utime_spec *times)
 }
 
 /**
- * utimensat on the file descriptor `fd` refers to: a NULL path, which is GNU
- * libc's futimens, and an empty one with AT_EMPTY_PATH, which `empty` says.
+ * utimensat on the file the descriptor `entry` refers to, NULL for one not
+ * open: a NULL path, which is GNU libc's futimens, an empty one with
+ * AT_EMPTY_PATH, which `empty` says, and a followed /proc/PID/fd/N link,
+ * whose copy of the descriptor `utimes_path` passes with `empty` set.
  *
- * A file or a directory of a file system has its times set by the rules of
- * `utimes_node`, and one of the KRFFS boot root must still be the node it
- * was, or have lost its name to an unlink since: -EBADF otherwise, and
- * -EIO when that cannot be read (`fd_node_check`). A pipe, a socket, a
- * terminal, a device or a synthetic directory has no times stored for it and
- * is -EROFS, as the path to a synthetic one answers; Linux sets the times of
- * such an inode. An O_PATH descriptor names its file for the empty path and
- * is -EBADF to the NULL one, as on Linux.
+ * In Linux's order (`do_utimes_fd`, `vfs_utimes`): a descriptor that is not
+ * open is -EBADF, a tv_nsec out of range -EINVAL, and a read-only mount the
+ * descriptor was opened through, or its file system, -EROFS (`fd_mount`,
+ * `attr_read_only`). A file or a directory of a file system has its times
+ * set by the rules of `utimes_node`, and one of the KRFFS boot root must
+ * still be the node it was, or have lost its name to an unlink since,
+ * -EBADF otherwise and -EIO when that cannot be read (`fd_node_check`); a
+ * named FIFO, or a device opened through a device node, has its node's
+ * times set (`fd_node_file`). An anonymous pipe, a socket, a terminal, a
+ * device of /dev or a synthetic directory has no times stored for it and
+ * is -EROFS, as the path to a synthetic one answers; Linux sets the times
+ * of such an inode. An O_PATH descriptor names its file for the empty path
+ * and is -EBADF to the NULL one, as on Linux.
  *
  * The description's node is read under the mount's namespace lock, which
  * `utimes_node` takes again: a KRFFS write that grows the file moves it
  * under that lock and repoints the description, so a node read before the
  * wait for the lock could be the storage the file left.
  */
-static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
+static int32_t utimes_fd(fd_entry_t *entry, const struct utime_spec *times, int empty)
 {
-    fd_entry_t *entry = fd_get(current_proc->fds, fd);
     struct vfs_ref file;
     struct vfs_mount *mnt;
     int32_t rc;
@@ -19358,8 +20098,23 @@ static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
     if (!entry || (!empty && (entry->flags & FD_FLAG_PATH))) {
         return -EBADF;
     }
-    if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
+    if (times && (!utime_nsec_valid(times[0].tv_nsec) || !utime_nsec_valid(times[1].tv_nsec))) {
+        return -EINVAL;
+    }
+    if (attr_read_only(fd_mount(entry))) {
         return -EROFS;
+    }
+    if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
+        if (!fd_node_file(entry, &file)) {
+            return -EROFS;
+        }
+        vfs_node_lock(&file);
+        rc = utimes_node(file.mnt, file.node, times);
+        vfs_node_unlock(&file);
+        if (rc == 0) {
+            attr_told_desc(entry->ofd, utimes_events(times), mnt_is_root(vfs_mount_base(file.mnt)));
+        }
+        return rc;
     }
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
@@ -19374,7 +20129,7 @@ static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
     }
     vfs_node_unlock(&file);
     if (rc == 0) {
-        attr_told_desc(entry->ofd, utimes_events(times), mnt_is_root(mnt));
+        attr_told_desc(entry->ofd, utimes_events(times), mnt_is_root(vfs_mount_base(mnt)));
     }
     return rc;
 }
@@ -19384,12 +20139,18 @@ static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
  * symbolic link's own times under AT_SYMLINK_NOFOLLOW in `flags`, by the
  * rules of `utimes_node`; a path that named a directory by its end, `dir`,
  * follows a final link either way and must reach a directory
- * (`resolve_named`). A type that serialises its uses keeps the final mount's
- * namespace lock from the resolution to the store, so a KRFFS write cannot
- * move the file between the two.
+ * (`resolve_named`). A followed /proc/PID/fd/N, which the walk leaves to
+ * the caller, is the file its descriptor refers to, through the mount the
+ * descriptor was opened through (`utimes_fd`), once `proc_fd_follow` has
+ * made the checks of Linux's lookup, as Linux's `vfs_utimes` takes the
+ * path the link leads to; one unfollowed is looked up first
+ * (`proc_fd_link_lookup`). A type that serialises its uses keeps the final
+ * mount's namespace lock from the resolution to the store, so a KRFFS write
+ * cannot move the file between the two.
  */
 static int32_t utimes_path(const char *path, int flags, int dir, const struct utime_spec *times)
 {
+    const struct vpath *svp;
     struct vfs_ref ref;
     int32_t rc;
 
@@ -19398,10 +20159,34 @@ static int32_t utimes_path(const char *path, int flags, int dir, const struct ut
     if (rc != 0) {
         return rc;
     }
-    rc = utimes_node(ref.mnt, ref.node, times);
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp && svp->kind == VNODE_PROC_FD_LINK && (!(flags & AT_SYMLINK_NOFOLLOW) || dir)) {
+        struct vpath vp = *svp;
+        process_t *p;
+        fd_entry_t src;
+
+        vfs_walk_unlock(ref.mnt);
+        rc = proc_fd_follow(&vp, &p, &src, 0);
+        if (rc == 0) {
+            rc = utimes_fd(&src, times, 1);
+            fd_peek_drop(&src);
+        }
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    rc = 0;
+    if (svp && svp->kind == VNODE_PROC_FD_LINK) {
+        struct kstat ks;
+
+        rc = proc_fd_link_lookup(svp, &ks, 0);
+    }
+    if (rc == 0) {
+        rc = utimes_node(ref.mnt, ref.node, times);
+    }
     vfs_walk_unlock(ref.mnt);
     if (rc == 0) {
-        attr_told(path, ref.mnt, ref.node, utimes_events(times), mnt_is_root(ref.mnt));
+        attr_told(path, ref.mnt, ref.node, utimes_events(times),
+                  mnt_is_root(vfs_mount_base(ref.mnt)));
     }
     vfs_ref_release(&ref);
     return rc;
@@ -19479,7 +20264,7 @@ static long utimensat_body(isr_params_t *params, int wide)
         times = ktimes;
     }
     if (!user_path && dirfd != AT_FDCWD) {
-        return flags != 0 ? -EINVAL : utimes_fd(dirfd, times, 0);
+        return flags != 0 ? -EINVAL : utimes_fd(fd_get(current_proc->fds, dirfd), times, 0);
     }
     if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
@@ -19494,14 +20279,10 @@ static long utimensat_body(isr_params_t *params, int wide)
         }
     }
     if (empty && dirfd != AT_FDCWD) {
-        return utimes_fd(dirfd, times, 1);
+        return utimes_fd(fd_get(current_proc->fds, dirfd), times, 1);
     }
     if (empty) {
-        pathbuf = path_buf_get();
-        if (!pathbuf) {
-            return -ENOMEM;
-        }
-        k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
+        return utimes_path(NULL, flags, 0, times);
     } else {
         rc = path_from_user_dir(dirfd, user_path, &pathbuf, &dir);
         if (rc != 0) {
@@ -19617,7 +20398,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
     int id, i, c = 0;
 
     synth_dir_vpath(sd, &vp);
-    id = procfs_resolve_id(&vp);
+    id = sd->own.kept ? procfs_held_pid(&sd->own) : procfs_resolve_id(&vp);
     pp = id < 0 ? NULL : get_process((uint32_t)id);
     if (!pp) {
         return 0;
@@ -19668,7 +20449,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
                 continue;
             }
             if (c++ == n) {
-                synth_u32_str(name, pid_seen(t->pid));
+                synth_u32_str(name, procfs_pid_number(t->pid, sd->pidns_ino));
                 *ino = procfs_ino_pid((int)t->pid);
                 *dtype = DT_DIR;
                 return 1;
@@ -20277,7 +21058,7 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
             name[i] = fdnames[n][i];
         }
         name[i] = '\0';
-        *ino = synth_stat_node(&fvp, &fst, 0) == 0 ? fst.st_ino : 1u;
+        *ino = synth_stat_node(&fvp, &fst, 0, 0) == 0 ? fst.st_ino : 1u;
         *dtype = n == 0 ? DT_DIR : DT_LNK;
         return 1;
     }
@@ -20576,12 +21357,12 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
             return 1;
         }
         {
-            int p = procfs_nth_pid(n - count);
+            int p = procfs_nth_pid(n - count, sd->pidns_ino);
             if (p < 0) {
                 return 0;
             }
             synth_u32_str(name, (uint32_t)p);
-            *ino = procfs_ino_pid(procfs_resolve_pid(p));
+            *ino = procfs_ino_pid(procfs_resolve_pid(p, sd->pidns_ino));
             *dtype = DT_DIR;
             return 1;
         }
@@ -20670,7 +21451,7 @@ static long dirent_put(char *buf, uint32_t count, const struct vfs_dirent *de, u
  */
 static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int format)
 {
-    static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0, {0, {0, 0, 0, 0}, 0, 0, NULL}};
+    static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0, 0, {0}};
     const struct synth_dir *sd = e->priv ? (const struct synth_dir *)e->priv : &none;
     uint32_t written = 0;
     int idx = (int)e->ofd->offset;

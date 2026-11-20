@@ -33,6 +33,11 @@ Without the options there is no region and no
 .Pa /sys/fs/pstore .
 Nothing is written to the firmware's variables.
 .Pp
+Truncating an open record changes the size reported by
+.Xr stat 2 .
+Reads continue to return the saved record.
+Unlinking the file erases it.
+.Pp
 The options are Linux's module parameters, read as Linux reads them;
 each number may be decimal, octal with a leading 0, or hexadecimal with
 a leading 0x:
@@ -112,7 +117,19 @@ empties the console zone, this boot's log in it too, as on Linux.
 .Pp
 The root directory is root's with mode 0750, and each file root's with
 mode 0444, as Linux makes them.
-A file's size is its record's.
+.Xr chmod 2 ,
+.Xr chown 2
+and
+.Xr utimensat 2
+store the mode, the ids and the times they set, and the change time, a
+.Xr chown 2
+that names no id among them, as Linux's
+.Fn simple_setattr
+does.
+A file begins with the size of its saved record.
+.Xr truncate 2
+changes the inode size.
+Reads still return the saved record.
 Its access time is the time of the first mount, when the file is made, as
 Linux makes the files at mount; its modification and change times are the
 time in its record's header, or the time of the first mount for the
@@ -127,6 +144,14 @@ The type is
 to
 .Xr mount 2 ,
 which shows the same files at every mount.
+The mount option
+.Cm kmsg_bytes Ns = Ns Ar bytes
+sets the shared dump threshold, initially 10240 bytes.
+Zero disables panic dumps.
+A positive threshold admits the first record,
+whose capacity comes from
+.Cm ramoops.record_size .
+Ramoops stores one record per panic.
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa /sys/fs/pstore/dmesg-ramoops- Ns Ar N

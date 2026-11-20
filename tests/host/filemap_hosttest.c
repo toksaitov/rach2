@@ -782,7 +782,9 @@ void vfs_ino_err_set(struct vfs_mount *mnt, uint64_t ino, int rc)
     if (seq) {
         model_err_record(seq, rc);
     }
-    model_err_record(&vfs_mount_base(mnt)->sb_wb_err, rc);
+    if (mnt->bind_of)
+        mnt = mnt->bind_of;
+    model_err_record(&mnt->sb_wb_err, rc);
     sb_records++;
 }
 
@@ -858,6 +860,12 @@ int vfs_mount_gone(const struct vfs_mount *mnt)
 {
     (void)mnt;
     return mount_gone;
+}
+
+/** Return the mount options of the mapping's open description. */
+uint32_t vfs_mount_flags(const struct vfs_mount *mnt)
+{
+    return mnt->flags;
 }
 
 /** The file system a bind shows, or the mount itself. */
@@ -2346,8 +2354,32 @@ static void clean_rows(void)
     check(!maps && dshare_count == 0 && !model_dead, "the clean rows leave no mapping");
 }
 
+/** Access and execute checks precede a file's absent mmap operation. */
+static void mapping_permission(void)
+{
+    static const struct file_ops ops = {0};
+    struct vfs_mount mnt = {0};
+    struct open_file ofd = {.vmnt = &mnt};
+    fd_entry_t file = {.ofd = &ofd, .type = FD_TYPE_FILE, .ops = &ops};
+
+    check(filemap_check(&file, 0, VM_PROT_READ) == -EACCES, "mapping needs a readable file");
+    file.flags = FD_FLAG_READ;
+    check(filemap_check(&file, 1, VM_PROT_WRITE) == -EACCES, "a shared writer needs write access");
+    mnt.sb_noexec = 1;
+    check(filemap_check(&file, 0, VM_PROT_EXEC) == -EPERM, "the superblock forbids execution");
+    mnt.sb_noexec = 0;
+    mnt.flags = VFS_MS_NOEXEC;
+    check(filemap_check(&file, 0, VM_PROT_EXEC) == -EPERM, "the mount forbids execution");
+    check(filemap_check(&file, 0, VM_PROT_READ) == -ENODEV, "file operations have no mmap");
+    file.ops = NULL;
+    check(filemap_check(&file, 0, VM_PROT_READ) == 0, "an ordinary file uses its backing");
+    file.flags = FD_FLAG_PATH;
+    check(filemap_check(&file, 0, VM_PROT_READ) == -EBADF, "a path descriptor cannot map");
+}
+
 int main(void)
 {
+    mapping_permission();
     anon_shared_rows();
     disk_stores_rows();
     unlocked_rows();

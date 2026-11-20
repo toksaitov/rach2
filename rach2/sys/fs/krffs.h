@@ -513,6 +513,11 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
 int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
                            uint64_t *node_out);
 
+/** Resize as krffs_truncate_node_at, preserving the times on an equal size
+ * when stamp_times is zero, as for pathname truncate. */
+int krffs_resize_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size, uint64_t *node_out,
+                         int stamp_times);
+
 /**
  * `krffs_truncate_node_at` of the node `path` names, with a log record for
  * KRFFS_EBAD and KRFFS_ENOSPACE.
@@ -987,7 +992,7 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, ui
  * the node is afterwards, NULL when a failed move freed it. KRFFS_EBAD
  * before the mount or for a null argument.
  */
-int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size);
+int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size, int stamp_times);
 
 /* Read operations by path. */
 

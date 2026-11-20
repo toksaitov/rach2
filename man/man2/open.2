@@ -49,6 +49,8 @@ is
 (1), or
 .Dv O_RDWR
 (2), requesting read, write, or both permissions.
+Access mode 3 requests both permissions on a regular file and opens a
+descriptor that permits neither reads nor writes.
 Search permission is required on ancestor directories.
 File permissions are checked using the caller's effective user and
 group IDs.
@@ -90,8 +92,8 @@ Truncate an existing regular file to zero.
 This requires write permission even with
 .Dv O_RDONLY .
 Truncating a directory is refused.
-A nonprivileged truncation clears set-user-ID and clears set-group-ID
-when group execute is set.
+A nonprivileged truncation that the file system takes clears set-user-ID
+and clears set-group-ID when group execute is set.
 A file backing an attached loop device cannot be truncated.
 .It Dv O_APPEND
 Place each write at the current end of the file.

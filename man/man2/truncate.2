@@ -24,14 +24,27 @@ the length of the file
 is open on, to
 .Fa length
 bytes.
-KRFFS, FAT32, exFAT, and ext2 support both shrinking and extending files.
+KRFFS, FAT32, exFAT, ext2 and tmpfs support shrinking and extending files.
 An extended region reads as zeros.
 A file attached to a loop device cannot be truncated, even to its
 current length.
 .Pp
-After a successful call by a process whose effective uid is not 0,
-the set-user-ID bit is cleared.
-The set-group-ID bit is cleared if group execute permission is set.
+On ext2, tmpfs and KRFFS a change in length updates the modification
+and change times.
+.Fn ftruncate
+and an open with
+.Dv O_TRUNC
+request both times even when the length is unchanged.
+On debugfs, mqueue and pstore the inode length is independent of the
+data supplied by the file's read operation.
+A pathname truncation sets that length without requesting either time.
+.Pp
+Once the file system accepts the length, a caller without
+.Dv CAP_FSETID
+over the inode clears set-user-ID, so a refused length, such as one a sealed
+memfd forbids, leaves the mode and the change time alone, as on Linux.
+The set-group-ID bit is cleared if group execute
+permission is set or the caller is outside the file's group.
 .Pp
 KRFFS and FAT32 accept lengths through 4294967295 bytes, subject to
 available space.

@@ -46,6 +46,9 @@ int ramoops_ready(void);
  */
 void pstore_console_write(const char *text, uint32_t n);
 
+/** Whether the shared pstore dump threshold permits a first ramoops record. */
+int pstore_dump_enabled(void);
+
 /**
  * Write the tail of the log, as many of its newest whole records as fit,
  * into the next dmesg zone with Linux's headers, as kmsg_dump does with

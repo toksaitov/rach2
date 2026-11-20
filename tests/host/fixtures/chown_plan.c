@@ -1,19 +1,7 @@
 /**
- * The set-id rules of a chown on a mounted file system.
- *
- * The rule of mk/host-fixtures.mk extracts `vfs_chown_plan` and the
- * four credential helpers it calls unchanged from rach2/sys/syscall_fs.c
- * into chown_plan.inc, with the `proc_privileged` macro and the
- * file-system id macros from rach2/sys/proc/process.h, `struct vfs_stat`
- * and the `VFS_SET_` masks from rach2/sys/fs/vfs.h and `EPERM` from
- * rach2/sys/lib/kerrno.h. The chown by path and the chown by descriptor
- * both decide through that plan for every volume but the boot root, so
- * these rows are their rule: a directory keeps its set-id bits, setuid goes
- * with any change of owner or group, and setgid goes only when
- * group-execute is set beside it, which is the rule `cred_kill_setid`
- * applies on the boot root. That the two calls reach the plan is shown on
- * an ext2 root by `modeprobe`, not here. The caller's record has only the
- * fields the helpers and the macro read.
+ * Check the chown and write set-id rules extracted from syscall_fs.c.
+ * The setattr mask also distinguishes a change of mode or IDs, which
+ * inotify reports, from a change of ctime alone.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -32,6 +20,7 @@ struct fixture_proc {
     uint32_t fsgid;
     uint32_t fs_own;
     uint32_t nocaps;
+    uint32_t cap_lost;
     struct userns *userns; /* NULL in the first user namespace */
     uint32_t ngroups;
     uint32_t groups[8];
@@ -40,6 +29,34 @@ struct fixture_proc {
 static struct fixture_proc caller;
 static struct fixture_proc *current_proc = &caller;
 static struct userns child_ns = {1};
+
+#define S_IFMT  0170000u
+#define S_IFDIR 0040000u
+#define S_IFREG 0100000u
+
+#define CAP_CHOWN  0
+#define CAP_FOWNER 3
+#define CAP_FSETID 4
+
+/** The effective capabilities of this fixture's root. */
+static int cap_holds(const struct fixture_proc *p, uint32_t cap)
+{
+    return p->euid == 0 && !(p->cap_lost & (1u << cap));
+}
+
+/** The child namespace in this fixture has empty ID maps. */
+static int inode_capable(uint32_t uid, uint32_t gid, uint32_t cap)
+{
+    (void)uid;
+    (void)gid;
+    return !caller.userns && cap_holds(&caller, cap);
+}
+
+/** The caller owns the inode or holds FOWNER over its mapped owner. */
+static int inode_owner_or_capable(uint32_t uid)
+{
+    return caller.euid == uid || inode_capable(uid, 0, CAP_FOWNER);
+}
 
 #include "chown_plan.inc"
 
@@ -158,8 +175,7 @@ static void owner_rows(void)
           "an owner may not give a file to a group it is not in");
 }
 
-/** A caller that does not own the file changes nothing, and needs no right
- * for a request that changes nothing. */
+/** A nonowner can request ctime alone but cannot change mode or IDs. */
 static void stranger_rows(void)
 {
     struct vfs_stat st;
@@ -171,11 +187,53 @@ static void stranger_rows(void)
     check(what == -EPERM && st.gid == 1000,
           "a caller that does not own a file may not change its group");
     what = vfs_chown_plan(&st, UNCHANGED, UNCHANGED);
-    check(what == 0 && st.mode == (FILE_MODE | 04755u),
-          "a chown that changes nothing is permitted to any caller and keeps the set-id bits");
+    check(what == -EPERM && st.mode == (FILE_MODE | 04755u),
+          "a nonowner cannot clear a set-id file with chown(-1, -1)");
     what = vfs_chown_plan(&st, 1000, 1000);
-    check(what == 0 && st.uid == 1000 && st.mode == (FILE_MODE | 04755u),
-          "a chown to the owner and group the file has changes nothing and is permitted");
+    check(what == -EPERM && st.uid == 1000 && st.mode == (FILE_MODE | 04755u),
+          "a nonowner cannot supply unchanged IDs");
+    st = attrs(FILE_MODE | 0644u, 1000, 1000);
+    check(vfs_chown_plan(&st, UNCHANGED, UNCHANGED) == VFS_SET_CTIME,
+          "a ctime-only chown of a plain file needs no ownership");
+}
+
+/** Exercise owner chown without supplied IDs and both write clear rules. */
+static void clear_rows(void)
+{
+    struct vfs_stat st;
+
+    as_caller(1000, 1000, 100);
+    st = attrs(FILE_MODE | 06700u, 1000, 2000);
+    check(vfs_chown_plan(&st, UNCHANGED, UNCHANGED) == VFS_SET_MODE &&
+              st.mode == (FILE_MODE | 0700u),
+          "an owner outside the group clears both bits even without supplied IDs");
+    st = attrs(FILE_MODE | 02700u, 1000, 100);
+    check(vfs_chown_plan(&st, UNCHANGED, UNCHANGED) == VFS_SET_CTIME &&
+              st.mode == (FILE_MODE | 02700u),
+          "a member of the file's group keeps non-executable setgid");
+    st = attrs(FILE_MODE | 0644u, 1000, 1000);
+    check(vfs_chown_plan(&st, 1000, 1000) == (VFS_SET_UID | VFS_SET_GID),
+          "permitted unchanged IDs remain in the mask for inotify");
+    check(write_setid_bits(FILE_MODE | 06700u, 1000, 2000) == 06000u,
+          "a writer outside the group clears setgid without group execute");
+    check(write_setid_bits(FILE_MODE | 06700u, 1000, 100) == 04000u,
+          "a supplementary group preserves setgid without group execute");
+    check(write_setid_bits(FILE_MODE | 02710u, 1000, 100) == 02000u,
+          "a writer with group execute clears setgid even in the group");
+    as_caller(0, 0, 0);
+    check(write_setid_bits(FILE_MODE | 06710u, 1000, 2000) == 0,
+          "a privileged writer preserves both bits");
+    caller.cap_lost = 1u << CAP_FSETID;
+    check(write_setid_bits(FILE_MODE | 06710u, 1000, 2000) == 06000u,
+          "a writer without FSETID loses both bits even as root");
+    st = attrs(FILE_MODE | 06700u, 0, 0);
+    check(vfs_chown_plan(&st, UNCHANGED, 2000) == (VFS_SET_MODE | VFS_SET_GID) &&
+              st.mode == (FILE_MODE | 0700u),
+          "a new outside group clears setgid with setuid");
+    caller.cap_lost = 1u << CAP_CHOWN;
+    st = attrs(FILE_MODE | 0644u, 1000, 2000);
+    check(vfs_chown_plan(&st, 0, UNCHANGED) == -EPERM, "FOWNER alone cannot change the owner");
+    caller.cap_lost = 0;
 }
 
 /** Run the rows: 0 when every row passes, 1 otherwise. */
@@ -185,6 +243,7 @@ int main(void)
     namespace_rows();
     owner_rows();
     stranger_rows();
+    clear_rows();
     if (fails) {
         printf("chown-plan: result: fail: %d rows\n", fails);
         return 1;

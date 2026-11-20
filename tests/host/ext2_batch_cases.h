@@ -458,7 +458,7 @@ static void batch_reuse_row(void)
     before = writes_made;
     check(OPS->write(&mnt, newhandle, old, sizeof(old), 0) == -ENOSPC && writes_made == before,
           "allocation refusal preserves the earlier pending generation");
-    check(OPS->truncate(&mnt, handle, 123) == 0 && OPS->truncate(&mnt, handle, 0) == 0,
+    check(OPS->truncate(&mnt, handle, 123, 1) == 0 && OPS->truncate(&mnt, handle, 0, 1) == 0,
           "truncate drains pending bytes and tail zeroing before freeing");
     check(write_at(newnode, old, sizeof(old), 0) == 0, "the new owner reuses freed space");
     newn = debugfs_list("blocks /replacement", "", next, 20);
@@ -548,7 +548,7 @@ static void batch_stage_rows(void)
         if (!node || !writer || !stage_attribute || !handle || !stage_writer) {
             return;
         }
-        check(OPS->truncate(&mnt, handle, 1035ull * 4096) == 0 &&
+        check(OPS->truncate(&mnt, handle, 1035ull * 4096, 1) == 0 &&
                   OPS->write(&mnt, handle, bytes, 4096, 1035ull * 4096) == 4096 &&
                   OPS->write(&mnt, handle, bytes + 4096, 4096, 1036ull * 4096) == 4096,
               "the frozen generation crosses an indirect level");
