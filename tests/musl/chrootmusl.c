@@ -18,7 +18,10 @@
  * and a second chroot inside the first gives the working directory its path
  * from the inner root. In a tmpfs jail an absolute symbolic link and one that
  * climbs past the root by ".." both resolve inside, and the working directory
- * has its path from the root there too. While a process has its root in a
+ * has its path from the root there too. A child whose root is its own
+ * /proc/self/fdinfo finds there the file of a descriptor it holds, stays
+ * there on "..", and makes no name; one whose root is /proc/self reads its
+ * own comm at /comm, as on Linux. While a process has its root in a
  * directory, rmdir of the directory fails with EBUSY, on KRFFS and on tmpfs,
  * and so does umount2 of the tmpfs; both succeed once the process is gone.
  *
@@ -26,9 +29,9 @@
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each row in order: `jail`, `refusals`, `chroot-root`,
  * `eperm-nonroot`, `private-root`, `krffs-root`, `moved-cwd`, `tmpfs-root`,
- * `busy-krffs`, `busy-tmpfs` and `cleanup`. The first failure fails its
- * assertion and leaves the rest not run; the copy exec'd inside writes no
- * record.
+ * `proc-root`, `busy-krffs`, `busy-tmpfs` and `cleanup`. The first failure
+ * fails its assertion and leaves the rest not run; the copy exec'd inside
+ * writes no record.
  * The other uid and gid are 1000, or the NEW of 1000 when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
@@ -394,6 +397,45 @@ static int tmpfs_root(void)
 }
 
 /**
+ * Check a root in a directory of a process, as Linux allows: a child whose
+ * root is its own /proc/self/fdinfo finds the file of a pipe it holds by
+ * the descriptor's number, stays there on "..", where its process's status
+ * is not, and makes no name; one whose root is /proc/self reads its comm at
+ * /comm. Returns 0, or 1 after printing the failure.
+ */
+static int proc_root(void)
+{
+    char name[16];
+    pid_t pid;
+    int fds[2], st;
+
+    pid = fork();
+    if (pid == 0) {
+        if (pipe(fds) != 0 || chroot("/proc/self/fdinfo") != 0) {
+            _exit(2);
+        }
+        snprintf(name, sizeof(name), "/%d", fds[1]);
+        if (access(name, R_OK) != 0 || !same_file("/..", "/")) {
+            _exit(3);
+        }
+        if (!refused(access("/../status", F_OK), ENOENT) || mkdir("/x", 0755) == 0) {
+            _exit(4);
+        }
+        _exit(0);
+    }
+    st = child_status(pid);
+    if (st != 0) {
+        return fail_step("a root in /proc/self/fdinfo", st);
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(chroot("/proc/self") != 0 ? 2 : !holds("/comm", "chrootmusl\n") ? 3 : 0);
+    }
+    st = child_status(pid);
+    return st == 0 ? 0 : fail_step("a root in /proc/self", st);
+}
+
+/**
  * Check that while a child has its root in `dir`, rmdir of `dir` is EBUSY,
  * and so is umount2 of `mnt` when it is not NULL, and that the rmdir succeeds
  * after the child ends. Two pipes hold the child in place while the parent
@@ -467,7 +509,7 @@ int main(int argc, char **argv)
 {
     static const char *const ids[] = {"jail",         "refusals",   "chroot-root", "eperm-nonroot",
                                       "private-root", "krffs-root", "moved-cwd",   "tmpfs-root",
-                                      "busy-krffs",   "busy-tmpfs", "cleanup"};
+                                      "proc-root",    "busy-krffs", "busy-tmpfs",  "cleanup"};
     unsigned i;
 
     probe_args(argc, argv);
@@ -485,7 +527,7 @@ int main(int argc, char **argv)
     }
     mkdir(EMPTY, 0755);
     if (build_jail() || held(refusals()) || held(private_root()) || held(krffs_root()) ||
-        held(moved_cwd()) || held(tmpfs_root()) || held(busy(EMPTY, NULL)) ||
+        held(moved_cwd()) || held(tmpfs_root()) || held(proc_root()) || held(busy(EMPTY, NULL)) ||
         held(busy(TJAIL "/a", TJAIL)) || held(clean())) {
         return 1;
     }

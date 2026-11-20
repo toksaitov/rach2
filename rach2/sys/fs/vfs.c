@@ -5955,8 +5955,7 @@ struct vfs_mount *vfs_kernel_mount(const struct vfs_type *type, void *root, uint
  * type cannot host a mount point, so /dev/shm is a nameless mount entered
  * by its name, as /dev and /proc are. Then the tmpfs of memfd_create, with
  * no parent and no path, which nothing enters by name, and whose root, mode
- * 0555, stays empty, since its files have no names; chroot to a
- * /proc/PID/fdinfo makes that root the process's root. Then /sys, nosuid,
+ * 0555, stays empty, since its files have no names. Then /sys, nosuid,
  * nodev, noexec and relatime, as systemd mounts it, entered by name as /dev
  * and /proc are, the mqueue file system at /dev/mqueue, which lists the
  * first IPC namespace's POSIX queues and is entered by its name in /dev as

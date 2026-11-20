@@ -1341,16 +1341,16 @@ static int fdinfo_helper(void)
  * Check a file of /proc/self/fdinfo, its offset, flags, mount id and inode
  * as Linux gives them, and then, as uid 1000 in a user
  * namespace of its own, Chromium's chroot into that directory by a CLONE_FS
- * helper: the root left has no entries and takes none, and a descriptor of
- * /proc opened before still reaches self/fd. Returns 0, or 1 after printing
- * the failure.
+ * helper: the root left is the fdinfo directory of a process that has
+ * ended, which refuses a lookup in it and its opening with ESRCH, as
+ * Linux's proc_fdinfo_permission does, and takes no name, and a descriptor
+ * of /proc opened before still reaches self/fd. Returns 0, or 1 after
+ * printing the failure.
  */
 static int empty_root(void)
 {
     char buf[128], path[64];
-    DIR *d;
-    struct dirent *de;
-    int fd, proc, entries = 0, status;
+    int fd, proc, status;
     long pid;
 
     fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
@@ -1377,15 +1377,11 @@ static int empty_root(void)
         return fail(R_EMPTY_HELPER,
                     "a helper sharing the directories chroots to /proc/self/fdinfo");
     }
-    if (access("/proc", F_OK) == 0 || !(d = opendir("/"))) {
-        return fail(R_EMPTY_NOTHING, "the root holds nothing");
+    if (access("/proc", F_OK) == 0 || errno != ESRCH) {
+        return fail(R_EMPTY_NOTHING, "a lookup in the root is ESRCH");
     }
-    while ((de = readdir(d)) != NULL) {
-        entries += strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0;
-    }
-    closedir(d);
-    if (entries != 0 || mkdir("/x", 0755) == 0) {
-        return fail(R_EMPTY_TAKES, "the root holds nothing and takes nothing");
+    if (open("/", O_RDONLY | O_DIRECTORY) >= 0 || errno != ESRCH || mkdir("/x", 0755) == 0) {
+        return fail(R_EMPTY_TAKES, "the root does not open and takes no name");
     }
     fd = openat(proc, "self/fd/", O_RDONLY | O_DIRECTORY);
     if (fd < 0 || close(fd) != 0) {

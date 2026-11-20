@@ -66,16 +66,25 @@ inside the root, which opens the
 .Pa /dev
 device with its number.
 A directory of
-.Pa /dev
-or
+.Pa /dev ,
 .Pa /proc
-cannot be a root, but for
-.Pa /proc/ Ns Ar pid Ns Pa /fdinfo
-of a process the caller may read: the caller's root becomes the empty root
-of a file system no path reaches, which holds nothing and takes nothing, as
-a browser's sandbox asks for it.
-Linux's root is then that directory, which holds nothing once the process
-has ended.
+or
+.Pa /sys
+cannot be a root, but for a directory of a process:
+.Pa /proc/ Ns Ar pid
+and its
+.Pa fd ,
+.Pa fdinfo ,
+.Pa task
+and
+.Pa ns .
+Such a root is that directory, as on Linux: names below it are that
+process's, it holds nothing once the process has ended, and it takes no
+new name.
+A browser's sandbox has a helper enter its own
+.Pa /proc/self/fdinfo
+and end, to leave an empty root, which needs read access to that
+process's descriptors as well.
 .Xr mount 2
 takes its source by its name under
 .Pa /dev
@@ -95,7 +104,10 @@ returns 0 on success, or -1 on failure and sets
 The kernel interface returns the negative error number.
 .Sh EXAMPLES
 .Pa tests/musl/chrootmusl.c
-chroots into a directory of the KRFFS root and one of a tmpfs.
+chroots into a directory of the KRFFS root, one of a tmpfs, and
+.Pa /proc/self/fdinfo
+and
+.Pa /proc/self .
 It checks that the new root's files are found by absolute paths and
 nothing above it is, that
 .Ql ..
@@ -130,13 +142,12 @@ is outside the caller's memory.
 .It Bq Er EINVAL
 .Fa path
 names a directory of
-.Pa /dev
-or
+.Pa /dev ,
 .Pa /proc
-other than a
-.Pa fdinfo ,
-whose file systems take the rest of a path in one step, so the resolver
-could not stop
+or
+.Pa /sys
+other than a directory of a process, whose file systems take the rest of
+a path in one step, so the resolver could not stop
 .Ql ..
 there.
 Linux has no such refusal.

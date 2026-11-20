@@ -6214,8 +6214,8 @@
         {"assertion_id": "fdinfo-offset-flags", "checks": "its file in /proc/self/fdinfo has the offset and the flags, then the mount id and the inode", "source": "program"},
         {"assertion_id": "empty-uid-1000", "checks": "the child becomes uid 1000 in a user namespace and opens /proc", "source": "program"},
         {"assertion_id": "empty-helper-chroot", "checks": "a helper made by clone(CLONE_FS) chroots to /proc/self/fdinfo and exits 0", "source": "program"},
-        {"assertion_id": "empty-root-no-proc", "checks": "after the helper ends, /proc does not exist in the shared root, and / opens", "source": "program"},
-        {"assertion_id": "empty-root-takes-nothing", "checks": "the root lists no entries and mkdir in it fails", "source": "program"},
+        {"assertion_id": "empty-root-no-proc", "checks": "after the helper ends, a lookup of /proc in the shared root, the ended helper's fdinfo directory, is ESRCH, as Linux's proc_fdinfo_permission answers", "source": "program"},
+        {"assertion_id": "empty-root-takes-nothing", "checks": "the root does not open, with ESRCH, and mkdir in it fails", "source": "program"},
         {"assertion_id": "empty-proc-reaches-fd", "checks": "the descriptor of /proc opened before the chroot reaches self/fd", "source": "program"}
       ],
       "branches": [
@@ -6717,6 +6717,7 @@
         {"assertion_id": "krffs-root", "checks": "In the KRFFS jail the working directory keeps its path from the new root, absolute paths find only the jail, `..` stays at the root, a directory descriptor from outside opens a file and fchdir enters it, where getcwd is ENOENT and a relative name reaches a file, until chdir by an absolute path comes back, and fork and exec keep the root.", "source": "program"},
         {"assertion_id": "moved-cwd", "checks": "A working directory outside the new root moves to it, and a nested chroot gives it its path from the inner root.", "source": "program"},
         {"assertion_id": "tmpfs-root", "checks": "In a tmpfs jail an absolute symbolic link and a `..` climb resolve inside it.", "source": "program"},
+        {"assertion_id": "proc-root", "checks": "A root in /proc/self/fdinfo holds the caller's descriptors and stays there on `..`, and one in /proc/self reads its comm, as on Linux.", "source": "program"},
         {"assertion_id": "busy-krffs", "checks": "While a child has its root in a KRFFS directory, rmdir of it is EBUSY, and it succeeds after the child ends.", "source": "program"},
         {"assertion_id": "busy-tmpfs", "checks": "While a child has its root in the tmpfs, rmdir of the directory and umount2 of the tmpfs are EBUSY, and both succeed after the child ends.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The KRFFS jails are removed.", "source": "program"}

@@ -9437,12 +9437,14 @@ long sys_fchdir(isr_params_t *params)
  * Whether the node `ref` holds may be a process's root: a directory, which
  * the KRFFS root is whatever its stored mode says, that the caller may
  * search, and a caller with CAP_SYS_CHROOT, checked in Linux's order.
- * A directory of /dev or /proc is EINVAL: those types take the rest
+ * A directory of /dev, /proc or /sys is EINVAL: those types take the rest
  * of a path in one call, and the resolver could not stop `..` inside it.
- * The exception is a /proc/PID/fdinfo the caller may read, which a
- * browser's sandbox enters to have a root that holds nothing once that
- * process has ended (`sys_chroot`). Returns 0, -ENOTDIR, -EACCES, -EPERM
- * or -EINVAL.
+ * The exception is a directory of a process, /proc/PID and its `fd`,
+ * `fdinfo`, `task` and `ns`, whose node keeps its process
+ * (`vfs_proc_dir_owner`), so that the walk steps through it and stops `..`
+ * at it as at any root; a browser's sandbox enters a /proc/PID/fdinfo the
+ * caller may read to have a root that holds nothing once that process has
+ * ended. Returns 0, -ENOTDIR, -EACCES, -EPERM or -EINVAL.
  */
 static int32_t root_check(const struct vfs_ref *ref)
 {
@@ -9478,7 +9480,7 @@ static int32_t root_check(const struct vfs_ref *ref)
     if (rc == 0 && !cap_holds(current_proc, CAP_SYS_CHROOT)) {
         rc = -EPERM;
     }
-    return rc == 0 && vp && vp->kind != VNODE_PROC_FDINFO_DIR ? -EINVAL : rc;
+    return rc == 0 && vp && !vfs_proc_dir_owner(ref) ? -EINVAL : rc;
 }
 
 /**
@@ -9593,11 +9595,10 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
  * and exec keeps it. While a process has it, rmdir refuses the directory
  * with EBUSY and the root holds its mount against unmount.
  *
- * A /proc/PID/fdinfo becomes the root of the tmpfs of memfd_create, an
- * empty directory no name is ever made in and no path reaches. Linux's root
- * is the directory itself, which lists that process's descriptors while it
- * lives and nothing after; the sandbox that does this has a helper process
- * enter it, through CLONE_FS, and end.
+ * A directory of a process, such as /proc/PID/fdinfo, is a root as on
+ * Linux: it lists that process's descriptors while it lives and nothing
+ * after, and takes no new name; a browser's sandbox has a helper process
+ * enter its own, through CLONE_FS, and end.
  */
 long sys_chroot(isr_params_t *params)
 {
@@ -9616,13 +9617,7 @@ long sys_chroot(isr_params_t *params)
     rc = vfs_resolve(0, path, 0, &ref, 0, 0);
     if (rc == 0) {
         rc = root_check(&ref);
-        if (rc == 0 && vfs_synth_vpath(ref.mnt, ref.node)) {
-            struct vfs_ref empty;
-
-            empty.mnt = vfs_memfd_mount();
-            empty.node = empty.mnt->root;
-            rc = root_enter(&empty, path);
-        } else if (rc == 0) {
+        if (rc == 0) {
             rc = root_enter(&ref, path);
         }
         vfs_ref_release(&ref);
