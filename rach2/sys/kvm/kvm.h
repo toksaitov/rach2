@@ -1982,10 +1982,9 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
  */
 int kvm_lapic_timer_expire(struct kvm_vcpu *v);
 
-/** Whether a timer that bounds `v`'s run beside its local APIC's, the PIT's
- * or a Hyper-V synthetic timer's, is due, which only the run loop delivers
- * (KVM_REQ_TIMER): the fast path re-enters only for the APIC timer, as
- * Linux's hv timer is the APIC timer alone (start_hv_timer and
+/** Whether a PIT, Hyper-V or Xen deadline that bounds `v`'s run is due.
+ * The run loop handles it (KVM_REQ_TIMER). The fast path handles only
+ * the local APIC timer, as Linux's hv timer does (start_hv_timer and
  * kvm_lapic_expired_hv_timer in arch/x86/kvm/lapic.c), since with another
  * due the run's bound is 0 at every entry. With interrupts off; takes the
  * controllers' lock. */

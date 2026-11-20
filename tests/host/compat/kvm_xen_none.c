@@ -1,6 +1,7 @@
 /* xen.c's interface (kvm/kvm.h) for a host test of KVM without Xen: no VM
  * has a Xen MSR, an intercept, a shared info page or a vCPU area, so every
- * hook does nothing, as xen.c's do before the caller sets one up. */
+ * hook does nothing, as xen.c's do before the caller sets one up. A
+ * timer row can supply its vCPU's next deadline through v->xen. */
 #include "../../../rach2/sys/kvm/kvm.h"
 #include "../../../rach2/sys/lib/kerrno.h"
 
@@ -158,11 +159,12 @@ uint64_t kvm_xen_timers(struct kvm_vcpu *v)
     return 0;
 }
 
-/** No Xen timer. */
+/** The model's Xen deadline, or 0 if the row supplied none. */
 uint64_t kvm_xen_next(struct kvm_vcpu *v)
 {
-    (void)v;
-    return 0;
+    const uint64_t *deadline = v->xen;
+
+    return deadline ? *deadline : 0;
 }
 
 /** No poll to end. */
