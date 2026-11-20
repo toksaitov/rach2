@@ -1614,8 +1614,9 @@ int32_t vfs_read_frames(struct vfs_mount *mnt, void *handle, uint32_t first, uin
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset);
 /** Truncate through `handle`, the handle of an open of the file, which on
- * the KRFFS root is the node: 0, -EBUSY for a file that backs a loop
- * device, -EROFS for a type without `truncate`, or the type's error. */
+ * the KRFFS root is the node: 0, -EBUSY for a file whose length a loop
+ * device pins (`loop_length_pinned`), -EROFS for a type without
+ * `truncate`, or the type's error. */
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times);
 /** Count into `*cs`, zeroed first, the pages from `first` to `last` of the
  * regular file `node` of `mnt` that are in memory, by the type's
@@ -1662,7 +1663,7 @@ int vfs_fdatasync(struct vfs_mount *mnt, void *handle, uint32_t *seen);
 /** The type's getattr, or -EINVAL for a type without one. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
 /** The type's setattr of the fields `what` gives: 0, -EBUSY for a size
- * change of a file that backs a loop device, whose length is the device's,
+ * change of a file whose length a loop device pins (`loop_length_pinned`),
  * -EROFS for a type without `setattr`, -EPERM for a change other than of the
  * flags to an immutable or append-only file, or the type's error. A change
  * made is told to the file's own inotify watches; the caller, which knows

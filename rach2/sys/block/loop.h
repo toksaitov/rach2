@@ -74,6 +74,13 @@ int loop_detach(int index);
  * for each open on a type with a `handle_node`. */
 int loop_backs(struct vfs_mount *mnt, void *node);
 
+/** Whether a change of the length of the file at (`mnt`, `node`), which
+ * may move it, is refused while it backs a loop device: on a type whose
+ * files begin anywhere in a sector, KRFFS, whose `phase` the device took at
+ * the attach. A file of any other type keeps its place, and its length may
+ * change under the device as Linux's may. */
+int loop_length_pinned(struct vfs_mount *mnt, void *node);
+
 /** Follow a node the file system moved, for `vfs_repoint`, which owns that
  * sweep. */
 void loop_repoint(struct vfs_mount *mnt, const void *from, void *to);

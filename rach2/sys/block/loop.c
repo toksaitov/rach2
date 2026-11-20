@@ -16,9 +16,10 @@
  * holding one of its blocks take a block of the device below.
  *
  * While a file is attached it is reached through the device and nowhere
- * else: a write, a truncation and an attribute change that would change its
- * length are refused, so the image does not move under the file system
- * mounted on the device.
+ * else: a write and an fallocate are refused, so the image does not change
+ * under the file system mounted on the device. Its length may change, as on
+ * Linux, except on KRFFS, where that may move the file
+ * (`loop_length_pinned`).
  *
  * The block layer calls the device without the big lock.
  * A transfer reads the attachment and counts itself in flight under
@@ -305,10 +306,11 @@ static int loop_count_ok(uint32_t count)
 /**
  * Read whole sectors from the file through the file system it is on.
  *
- * A short answer is a device error, `-EIO`: the file's length fixed the
- * sector count at the attachment and nothing may change it while it is
- * attached, so a transfer that does not move every byte means the file is not
- * what it was. The same holds for `loop_write`.
+ * The file's length at the attachment fixed the sector count, and a
+ * truncation may have cut the file since (`loop_length_pinned`): the
+ * bytes past its end read as zeros, as Linux 6.12's loop fills a short read
+ * of its file (`lo_read_simple`). An error of the file system is a device
+ * error, `-EIO`.
  */
 static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
@@ -325,10 +327,13 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     got = vfs_read(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
     loop_fs_exit(big);
     loop_end(loop, &f, 0, 0);
-    if (got < 0 || (uint32_t)got != bytes) {
-        klog(KLOG_WARN, "loop", "read: loop%d: sector %u: short by %d", loop->index, (uint32_t)lba,
-             (int)(bytes - (got < 0 ? 0 : (uint32_t)got)));
+    if (got < 0) {
+        klog(KLOG_WARN, "loop", "read: loop%d: sector %u: error %d", loop->index, (uint32_t)lba,
+             (int)got);
         return -EIO;
+    }
+    if ((uint32_t)got < bytes) {
+        k_memset((uint8_t *)buffer + got, 0, bytes - (uint32_t)got);
     }
     return 0;
 }
@@ -336,7 +341,8 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 /**
  * Write whole sectors into the file and sync it, since the buffer cache
  * takes a written block to be on the device; `-EROFS` on a read-only
- * attachment, `-EIO` for a short write or a failed sync.
+ * attachment, `-EIO` for a short write or a failed sync. A write past the
+ * end of a file a truncation cut extends it, as Linux's does.
  */
 static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -466,6 +472,23 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     }
     spin_unlock_irqrestore(&loop_lock, flags);
     return backs;
+}
+
+/**
+ * Whether the length of `node` of `mnt` may not change while it backs a
+ * loop device. A type with a `phase` places a file's first byte anywhere in
+ * a sector, and a change of length may move the file (KRFFS's relocation),
+ * which would change the phase the device gave the volume on it at the
+ * attach: that volume keeps each field it publishes inside one sector of
+ * that phase, so that a stop cannot tear it. Every other type keeps a file
+ * where it is, in whole blocks, and Linux's loop reads past the new end as
+ * zeros and writes there by extending the file (`loop_read`).
+ */
+int loop_length_pinned(struct vfs_mount *mnt, void *node)
+{
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+
+    return base->type->ops && base->type->ops->phase && loop_backs(mnt, node);
 }
 
 /**

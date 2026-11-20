@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd November 20, 2026
 .Dt TRUNCATE 2
 .Os
 .Sh NAME
@@ -26,8 +26,12 @@ is open on, to
 bytes.
 KRFFS, FAT32, exFAT, ext2 and tmpfs support shrinking and extending files.
 An extended region reads as zeros.
-A file attached to a loop device cannot be truncated, even to its
-current length.
+A file attached to a loop device can be truncated, as on Linux; the
+device keeps its size and reads past the file's new end as zeros
+.Pq Xr loop 4 .
+On KRFFS, where a change of length may move the file and with it the
+offset in a sector the device reported to the volume on it, such a file
+cannot be truncated, even to its current length.
 .Pp
 On ext2, tmpfs and KRFFS a change in length updates the modification
 and change times.
@@ -84,9 +88,8 @@ or
 .Pa /sys
 is judged by its mode and owner as an open of it for writing is, and one
 the caller may write keeps its contents and returns 0, as on Linux.
-A file backing a loop device returns
+A KRFFS file backing a loop device returns
 .Er EBUSY .
-Linux has no such loop-device rule.
 A running program or its ELF interpreter returns
 .Er ETXTBSY ,
 as on Linux, until the last process exits or executes another image.
@@ -96,8 +99,8 @@ descriptor refers to, so the call does what an open for writing,
 .Fn ftruncate
 and
 .Xr close 2
-do, without taking a descriptor: an attachment of the file to a loop
-device made meanwhile returns
+do, without taking a descriptor: an attachment of a KRFFS file to a
+loop device made meanwhile returns
 .Er EBUSY ,
 as it does during an
 .Fn ftruncate .
@@ -189,8 +192,8 @@ is not an open descriptor, was opened with
 .Dv O_PATH ,
 or has no mounted open file description.
 .It Er EBUSY
-The file backs an attached loop device, or path resolution enters a
-mount being mounted or unmounted.
+The file is on KRFFS and backs an attached loop device, or path
+resolution enters a mount being mounted or unmounted.
 .It Er EFAULT
 The path cannot be read from user memory.
 .It Er EFBIG

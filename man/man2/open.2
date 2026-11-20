@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -94,7 +94,9 @@ This requires write permission even with
 Truncating a directory is refused.
 A nonprivileged truncation that the file system takes clears set-user-ID
 and clears set-group-ID when group execute is set.
-A file backing an attached loop device cannot be truncated.
+A file on KRFFS that backs an attached loop device cannot be truncated;
+on another file system it can, as on Linux
+.Pq Xr loop 4 .
 .It Dv O_APPEND
 Place each write at the current end of the file.
 .It Dv O_NONBLOCK
@@ -722,7 +724,7 @@ was given an invalid descriptor, or a relative
 path uses an invalid directory descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted;
-truncation was requested on a file backing a loop device;
+truncation was requested on a KRFFS file backing a loop device;
 the framebuffer belongs to a process other than the caller or its ancestor; or a raw device's
 exclusive-open or sector-claim rules prevent the open.
 .It Bq Er EEXIST

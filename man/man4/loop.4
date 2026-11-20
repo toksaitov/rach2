@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 20, 2026
 .Dt LOOP 4
 .Os
 .Sh NAME
@@ -120,10 +120,20 @@ same file for this purpose.
 A file on a loop-mounted volume cannot be attached to another loop device.
 A chain may contain only one loop device.
 .Pp
-While attached, the file cannot be written, truncated, grown by
+While attached, the file cannot be written, grown by
 .Xr fallocate 2 ,
 mapped shared through a descriptor open for writing, or written by a core
 dump, through any mount that shows it, a bind included.
+Its length may change, by
+.Xr truncate 2 ,
+.Xr ftruncate 2
+or an open with
+.Dv O_TRUNC ,
+as on Linux: the device keeps the size it was attached with, reads past
+the file's new end give zeros, and a write there extends the file.
+On KRFFS, the boot root among them, a change of length may move the
+file, which would change the offset in a sector the device reported to
+the volume on it, so there it is refused.
 On the KRFFS boot root it cannot be unlinked or renamed over either; on
 every other file system it then loses its name and the device keeps the
 file until the detach, as on Linux.

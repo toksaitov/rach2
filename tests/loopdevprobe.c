@@ -11,9 +11,11 @@
  * what says the write reached the file and not only the cache.
  *
  * It then asks for everything the attachment refuses: the same file twice, a
- * write and a truncation of an attached file, a detach with a mount on it, an
- * unmount of the volume holding the file, a directory, and a file whose
- * length is not whole sectors.
+ * write of an attached file, a detach with a mount on it, an unmount of the
+ * volume holding the file, a directory, and a file whose length is not whole
+ * sectors. A truncation of an attached file goes through, as on Linux, on
+ * every file system but KRFFS: one to the file's own length, and one of a
+ * small file on a device, past whose new end the device reads zeros.
  *
  * Last come Linux's loop ioctls, the way util-linux's mount -o loop makes
  * them: /dev/loop-control's LOOP_CTL_GET_FREE names a free device, whose node
@@ -73,6 +75,8 @@
 #define O_TRUNC  01000
 
 #define MS_RDONLY 1
+
+#define SEEK_END 2
 
 #define PROT_READ   1
 #define MAP_PRIVATE 2
@@ -971,9 +975,11 @@ static void refusal_rows(void)
     if (rc != -EBUSY) {
         fail_with("writing a file that backs a device", rc);
     }
-    rc = syscall2(SYS_FTRUNCATE, fd, 0);
-    if (rc != -EBUSY) {
-        fail_with("truncating a file that backs a device", rc);
+    /* Linux lets the length of a loop's file change; here every file
+     * system but KRFFS does, and the images' volume is FAT32 or a tmpfs. */
+    rc = syscall3(SYS_LSEEK, fd, 0, SEEK_END);
+    if (rc <= 0 || syscall2(SYS_FTRUNCATE, fd, rc) != 0) {
+        fail_with("truncating a file that backs a device to its own length", rc);
     }
     syscall1(SYS_CLOSE, fd);
     if (control(detach_a) != -EBUSY) {
@@ -1048,6 +1054,76 @@ static void read_only_rows(void)
     }
     if (control(detach_b) != 0) {
         fail("detaching the device that will not write");
+    }
+}
+
+/** Whether the `count` bytes at `p` are each `want`. */
+static int all_bytes(const char *p, int count, char want)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (p[i] != want) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * A truncation of a file a device stands on, as Linux takes it: cut.img, 8
+ * sectors of 'Z' on the images' volume, is attached to B and cut by a
+ * sector, and the device, whose size stays what it was, reads the cut
+ * sector as zeros, as Linux's loop fills a short read of its file. A
+ * truncate by path and an open with O_TRUNC go through as well. The device
+ * is read once, after the cut, so that no cached block of it predates it.
+ */
+static void length_rows(void)
+{
+    char path[PATH_CAP], block[4096];
+    int fd, rc;
+
+    for (fd = 0; fd < (int)sizeof(block); fd++) {
+        block[fd] = 'Z';
+    }
+    fd = syscall3(SYS_OPEN, (long)join(path, images_dir, "cut.img"), O_WRONLY | O_CREAT | O_TRUNC,
+                  0644);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)block, (int)sizeof(block)) != (int)sizeof(block)) {
+        fail("making the file to cut");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (control_on(attach_b, path) != 0) {
+        fail("attaching the file to cut");
+    }
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY, 0);
+    rc = fd < 0 ? fd : syscall2(SYS_FTRUNCATE, fd, 3584);
+    if (rc != 0) {
+        fail_with("cutting a sector off a file that backs a device", rc);
+    }
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)node_b, O_RDONLY, 0);
+    rc = fd < 0 ? fd : syscall3(SYS_READ, fd, (long)block, (int)sizeof(block));
+    if (rc != (int)sizeof(block)) {
+        fail_with("reading a device whose file was cut", rc);
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (!all_bytes(block, 3584, 'Z') || !all_bytes(block + 3584, 512, 0)) {
+        fail("the device does not read its file's bytes and zeros past its new end");
+    }
+    rc = syscall2(SYS_TRUNCATE, (long)path, 4096);
+    if (rc != 0) {
+        fail_with("truncating a file that backs a device by its path", rc);
+    }
+    fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_TRUNC, 0);
+    if (fd < 0) {
+        fail_with("an open that truncates a file that backs a device", fd);
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (control(detach_b) != 0) {
+        fail("detaching the file that was cut");
+    }
+    if (syscall1(SYS_UNLINK, (long)path) != 0) {
+        fail("removing the file that was cut");
     }
 }
 
@@ -1156,9 +1232,9 @@ static void native_copy_names(const char *type, const char *ram)
 /**
  * The image copied into the copy's directory, the root, which is memory and
  * has no device under it, or a tmpfs mounted on `copy=`, mounted as `type`.
- * An open that truncates the file under the device is refused while the
- * device stands on it, and on the KRFFS root an unlink of it and a rename
- * over it are refused too; a tmpfs allows those two, as Linux does.
+ * On the KRFFS root an open that truncates the file under the device, an
+ * unlink of it and a rename over it are refused while the device stands on
+ * it; a tmpfs allows the last two, as Linux does.
  */
 static void copy_rows(const char *type)
 {
@@ -1178,9 +1254,10 @@ static void copy_rows(const char *type)
     if (rc != 0) {
         fail_with("attaching an image that lives in memory", rc);
     }
-    /* An open that truncates is a change of its length like any other. */
-    if (syscall3(SYS_OPEN, (long)ram, O_WRONLY | O_TRUNC, 0) != -EBUSY) {
-        fail("an attached image was truncated by an open");
+    /* On the KRFFS root a change of length may move the file, and an open
+     * that truncates is one; a tmpfs would take it, as Linux's does. */
+    if (copy_dir[0] == '\0' && syscall3(SYS_OPEN, (long)ram, O_WRONLY | O_TRUNC, 0) != -EBUSY) {
+        fail("an attached image on the KRFFS root was truncated by an open");
     }
     if (copy_dir[0] == '\0') {
         if (syscall1(SYS_UNLINK, (long)ram) != -EBUSY) {
@@ -1254,6 +1331,7 @@ static void type_mode(const char *type)
     attach_rows(type);
     refusal_rows();
     read_only_rows();
+    length_rows();
     read_back_rows(type);
     copy_rows(type);
     ioctl_rows(type);

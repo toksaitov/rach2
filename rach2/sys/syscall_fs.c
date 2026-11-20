@@ -1587,8 +1587,9 @@ static int rw_call_lock(const fd_entry_t *e, uint32_t free);
  * taken the length, so that a refused one, a sealed memfd's among them, changes
  * neither the mode nor the change time, as in Linux's shmem_setattr and
  * notify_change; a clear that fails is the answer, the length set. Ask whether
- * the file backs a loop device before taking the description's lock and again
- * under it, since an attachment can publish itself while the call waits. Shared
+ * the file's length is pinned by a loop device (`loop_length_pinned`) before
+ * taking the description's lock and again under it, since an attachment can
+ * publish itself while the call waits. Shared
  * mappings lose pages past the new end (`filemap_file_truncated`), under the
  * file's lock on a type that sets `file_locked` (`file_lock`), so that no
  * write-back of a mapped page past the new end comes between the two and no
@@ -1625,12 +1626,12 @@ static long ftruncate_fd(int fd, long long length)
     if (size_guarded(entry->ofd->vmnt, entry->ofd->vnode)) {
         return -EPERM;
     }
-    if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+    if (loop_length_pinned(entry->ofd->vmnt, entry->ofd->vnode)) {
         return -EBUSY;
     }
     fd_ofd_lock(entry->ofd);
     own = file_lock(entry->ofd, &file);
-    if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+    if (loop_length_pinned(entry->ofd->vmnt, entry->ofd->vnode)) {
         file_unlock(&file, own);
         fd_ofd_unlock(entry->ofd);
         return -EBUSY;
@@ -4647,9 +4648,9 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
  * read-only file system or for O_TRUNC on a read-only mount; the inode
  * permission the access mode and O_TRUNC ask for; EPERM for an append-only
  * write without O_APPEND or with O_TRUNC; and EBUSY for O_TRUNC of a
- * file that backs a loop device. Returns 0, or a negative errno with the
- * reference released. The truncation is `open_install`'s, through the open
- * handle.
+ * file whose length a loop device pins (`loop_length_pinned`). Returns 0,
+ * or a negative errno with the reference released. The truncation is
+ * `open_install`'s, through the open handle.
  */
 static int open_mounted_node(struct vfs_ref *ref, int flags)
 {
@@ -4697,7 +4698,7 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -EPERM;
     }
-    if ((flags & O_TRUNC) && loop_backs(ref->mnt, node)) {
+    if ((flags & O_TRUNC) && loop_length_pinned(ref->mnt, node)) {
         vfs_ref_release(ref);
         return -EBUSY;
     }
@@ -15195,7 +15196,8 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
  * The refusals of truncate(2) for the file `ref` resolved to, in order:
  * a directory is -EISDIR and another nonregular file -EINVAL; a read-only
  * mount is -EROFS, an immutable file -EPERM, denied write access -EACCES,
- * an append-only file -EPERM and a loop backing file -EBUSY. A file of
+ * an append-only file -EPERM and a file whose length a loop device pins
+ * -EBUSY (`loop_length_pinned`). A file of
  * /proc or /sys is judged by its mode and owner, and its permission hooks,
  * as an open for writing is (`access_synth_ref`).
  * Returns 0 or the errno.
@@ -15253,7 +15255,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     }
     if (append)
         return -EPERM;
-    return loop_backs(ref->mnt, ref->node) ? -EBUSY : 0;
+    return loop_length_pinned(ref->mnt, ref->node) ? -EBUSY : 0;
 }
 
 /**
@@ -15320,7 +15322,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     own = file_lock(desc, &file);
     ns = size_ns_lock(desc);
     rc = -EBUSY;
-    if (!loop_backs(desc->vmnt, desc->vnode)) {
+    if (!loop_length_pinned(desc->vmnt, desc->vnode)) {
         rc = fsize_growth_refused(desc, (uint64_t)length);
     }
     if (rc == 0) {

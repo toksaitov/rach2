@@ -628,6 +628,17 @@ static int sched_spin_on(const struct process *owner, int cpu)
     return 0;
 }
 
+/** The fixture's proc mount takes no options, which hide no name. */
+static int proc_root_hidden(const struct vfs_mount *mnt, const char *full, const struct vpath *vp,
+                            int use_real)
+{
+    (void)mnt;
+    (void)full;
+    (void)vp;
+    (void)use_real;
+    return 0;
+}
+
 #define vfs_name_put fixture_name_put
 #include "vfs_open.inc"
 #undef vfs_name_put
@@ -667,7 +678,7 @@ static int proc_lookup_live(const struct vfs_ref *cur, struct synth_tail *tail, 
     while (p < tail->end && *p != '/')
         p++;
     *left = p;
-    return proc_child(cur->mnt, cur->node, full, p < tail->end, node);
+    return proc_child(cur->mnt, cur->node, full, p < tail->end, node, 0);
 }
 
 /** The original task is gone from each held proc directory. */
@@ -678,9 +689,10 @@ int procfs_held_pid(const struct synth_owner *own)
 }
 
 /** A departed process base rejects search. Its ns directory allows it. */
-int proc_held_dir_permission(const struct vpath *vp, const struct synth_owner *own, int want,
-                             int real)
+int proc_held_dir_permission(const struct vfs_mount *mnt, const struct vpath *vp,
+                             const struct synth_owner *own, int want, int real)
 {
+    (void)mnt;
     (void)own;
     (void)want;
     (void)real;
@@ -832,8 +844,10 @@ static struct vfs_mount e2m_mount;
 
 /**
  * Open the ext2 model's file twice, as a loop attachment and an unrelated
- * opener of its image would, and require vfs_truncate and vfs_fallocate to
- * refuse either handle with EBUSY while the file backs a loop device; then,
+ * opener of its image would, and require vfs_fallocate to refuse either
+ * handle with EBUSY while the file backs a loop device, and vfs_truncate to
+ * give the type the truncation, since an ext2 file keeps its place as its
+ * length changes (`loop_length_pinned`), as Linux's does; then,
  * with no attachment, require vfs_write, vfs_truncate and vfs_fallocate to
  * give the type the handle and the file page cache and the flag check the
  * node.
@@ -858,11 +872,11 @@ static void ext2_handles(void)
     e2m_calls = 0;
     check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == -EBUSY,
           "fallocate by another open of a loop's backing file is EBUSY");
-    check(vfs_truncate(&e2m_mount, other, 0, 1) == -EBUSY, "and so is a truncation by that open");
-    check(vfs_fallocate(&e2m_mount, attached, 0, 0, 4096) == -EBUSY &&
-              vfs_truncate(&e2m_mount, attached, 0, 1) == -EBUSY,
-          "and by the attachment's own handle");
-    check(e2m_calls == 0, "the type never sees a change of a loop's backing file");
+    check(vfs_fallocate(&e2m_mount, attached, 0, 0, 4096) == -EBUSY,
+          "and so is one by the attachment's own handle");
+    check(e2m_calls == 0, "the type never sees an fallocate of a loop's backing file");
+    check(vfs_truncate(&e2m_mount, other, 0, 1) == 0 && e2m_data == other && e2m_calls == 1,
+          "a truncation of a loop's backing ext2 file by another open reaches the type");
     k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
     forgot_node = NULL;
     check(vfs_write(&e2m_mount, other, "x", 1, 0) == 1 && e2m_data == other &&
@@ -989,8 +1003,9 @@ static int synth_is_block(const struct vpath *vp)
 }
 
 /** Reject an unexpected synthetic open. */
-static int32_t synth_open(const struct vpath *vp, int flags)
+static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, int flags)
 {
+    (void)mnt;
     (void)vp;
     (void)flags;
     check(0, "unexpected synthetic open");
@@ -998,10 +1013,11 @@ static int32_t synth_open(const struct vpath *vp, int flags)
 }
 
 /** No open row installs a proc descriptor. */
-static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct synth_owner *own)
+static int32_t synth_open_dir(const struct vfs_mount *mnt, const struct vpath *vp, int flags,
+                              const struct synth_owner *own)
 {
     (void)own;
-    return synth_open(vp, flags);
+    return synth_open(mnt, vp, flags);
 }
 
 /** Reject an unexpected framebuffer open. */
