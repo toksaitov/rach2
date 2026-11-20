@@ -1263,9 +1263,11 @@ static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
     }
     held();
 
-    failure = "the gateway survived removal of its peer or the peer could not be restored";
-    if (ask(fd, RTM_DELADDR, 0, 98, body, len) != 0 || file_has("/proc/net/route", default_route) ||
-        ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 99, body, len) != 0) {
+    failure = "removing and restoring the second peer did not keep the default gateway";
+    if (ask(fd, RTM_DELADDR, 0, 98, body, len) != 0 || tun_route(fd, 97, second, index) ||
+        !file_has("/proc/net/route", default_route) ||
+        ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 99, body, len) != 0 ||
+        !tun_route(fd, 96, second, index) || !file_has("/proc/net/route", default_route)) {
         return failure;
     }
     held();
@@ -1277,7 +1279,20 @@ static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
     attr32(body, &len, IFA_LOCAL, &local);
     attr32(body, &len, IFA_ADDRESS, &next);
     if (ask(fd, RTM_DELADDR, 0, 87, body, len) != 0 || tun_route(fd, 88, next, index) ||
-        !tun_route(fd, 89, second, index) || !tun_pair(fd, index, local, second, 32)) {
+        !tun_route(fd, 89, second, index) || !tun_pair(fd, index, local, second, 32) ||
+        !file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    held();
+
+    failure = "deleting the last address left the default gateway or a route";
+    ifa.ifa_prefixlen = 32;
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &second);
+    if (ask(fd, RTM_DELADDR, 0, 95, body, len) != 0 || tun_pair(fd, index, local, second, 32) ||
+        file_has("/proc/net/route", "tunprob\t")) {
         return failure;
     }
     held();
@@ -1422,8 +1437,9 @@ static void plan(char **envp)
                                       "tun-second-gateway",
                                       "tun-peer-ioctl",
                                       "tun-gateway-retained",
-                                      "tun-gateway-pruned",
-                                      "tun-peer-delete"};
+                                      "tun-gateway-kept",
+                                      "tun-peer-delete",
+                                      "tun-last-delete"};
 
     report_begin(report_case(envp, "guest.default.netlinkmusl"));
     PLAN(before);
