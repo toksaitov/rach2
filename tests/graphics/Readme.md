@@ -18,7 +18,7 @@ A run on a machine with an installed site policy is a claim of the site's ledger
         -i tests/graphics/capture/drmcapture.c \
         'cc -std=c99 -O2 -o /tmp/drmcapture /tmp/drmcapture.c && sudo /tmp/drmcapture -p'
 
-On Rach2 it is `/drmcapture` of the test image, which `tests/Makefile` builds from the same source against the ported musl.
+On Rach2 it is `/drmcapture` of the test image, which `tests/Makefile` builds from the same source against the ported musl. With `-p -v COUNT` it reads no frame but takes COUNT vblank events of the CRTC it set, and prints how late each reached it after the vblank's stamp, and each processor's busy and steal time meanwhile; `-c` has the CRTC's CRC source compose each frame. On vkms both kernels stamp a vblank with its timer's due time, so the two guests run under the same host load compare their vblank timers and their readers' wakes.
 
 Rach2's run scripts take the same profiles: `DISPLAY_PROFILE=virtio-gpu ARCH=x86_64 sh rach2/run.sh os-simple` boots with that display in place of QEMU's default VGA ([rach2/qemu_devices.sh](../../rach2/qemu_devices.sh), [rach2/run.Readme.md](../../rach2/run.Readme.md)). A machine case names its profile in its QEMU profile's `display` ([etude's display profiles](../../tools/etude/Readme.md#display-profiles)).
 
