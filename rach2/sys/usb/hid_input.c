@@ -98,10 +98,12 @@
 #define HID_DG_INPUTMODE              0x000D0052u
 #define HID_DG_CONTACTCOUNT           0x000D0054u
 #define HID_DG_CONTACTMAX             0x000D0055u
+#define HID_DG_SCANTIME               0x000D0056u
 #define HID_MS_MT_FEATURE             0xff0000c5u
 
 #define HID_MT_COUNT   0xffffu /* marks the frame's Contact Count usage */
 #define HID_MT_BUTTON  0xfffeu /* a precision touchpad's frame button */
+#define HID_MT_SCAN    0xfffdu /* marks the frame's Scan Time usage */
 #define HID_MT_DEFAULT 10
 #define HID_MT_AXES    (ABS_MT_LAST - ABS_MT_FIRST + 1)
 
@@ -951,6 +953,10 @@ static int configure_mt(struct hid_dev *hid, struct hid_input *in, struct hid_fi
     if (u->hid == HID_DG_CONTACTCOUNT) {
         u->mt_group = HID_MT_COUNT;
         in->mt_flags |= flags;
+        return 1;
+    }
+    if (u->hid == HID_DG_SCANTIME) {
+        u->mt_group = HID_MT_SCAN;
         return 1;
     }
     i = (int)(u - usages_of(hid, f));
@@ -1884,7 +1890,7 @@ static void mt_find_serial(struct hid_dev *hid)
         u = usages_of(hid, f);
         count = input_usage_count(hid, f);
         for (j = 0; j < count; j++) {
-            if (!u[j].mt_group || u[j].mt_group >= HID_MT_BUTTON) {
+            if (!u[j].mt_group || u[j].mt_group >= HID_MT_SCAN) {
                 continue;
             }
             key = ((f->report + 1u) << 16) | u[j].mt_group;
@@ -2271,6 +2277,10 @@ static void mt_collect(struct hid_dev *hid, struct hid_input *in, const struct h
         in->mt_count = value >= 0 && value <= EVDEV_MT_SLOTS ? value : -1;
         return;
     }
+    if (u->mt_group == HID_MT_SCAN) {
+        in->mt_scan = value;
+        return;
+    }
     if (u->mt_group == HID_MT_BUTTON) {
         unsigned int mask = 1u << ((u->hid - 1) & HID_USAGE);
 
@@ -2388,15 +2398,18 @@ static void mt_report_buttons(struct hid_input *in)
 /**
  * Report the packet and return whether its frame is complete, as Linux's
  * `mt_touch_report`. A positive Contact Count starts a frame and zero
- * continues one still under way; zero at a frame's start keeps the last
- * positive count, except on a Precision Touchpad, where it is a frame of
- * buttons alone. Contacts past the count are dropped, except on a serial
- * device, whose count is not trusted.
+ * continues one still under way; zero at a frame's start keeps the frame
+ * size, except on a Precision Touchpad whose Scan Time changed since the
+ * last packet, where it is a frame of buttons alone. Contacts past the
+ * count are dropped, except on a serial device, whose count is not trusted.
  */
 static int mt_packet(struct hid_dev *hid, struct hid_input *in)
 {
     struct hid_mt_contact *c;
     unsigned int i = in->mt_first;
+    int rescanned = in->mt_scan != in->mt_prev_scan;
+
+    in->mt_prev_scan = in->mt_scan;
 
     if (in->mt_count > 0 || !in->mt_left) {
         in->mt_frame_buttons &= ~in->mt_button_fields;
@@ -2408,7 +2421,10 @@ static int mt_packet(struct hid_dev *hid, struct hid_input *in)
         }
         in->mt_left = in->mt_count;
         in->mt_expected = in->mt_count;
-    } else if (in->mt_count == 0 && !in->mt_left && !in->mt_precision) {
+    } else if (in->mt_count == 0 && !in->mt_left) {
+        if (in->mt_precision && rescanned) {
+            in->mt_expected = 0;
+        }
         in->mt_left = in->mt_expected;
     }
     while (i) {
