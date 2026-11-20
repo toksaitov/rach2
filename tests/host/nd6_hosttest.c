@@ -407,12 +407,23 @@ static void finite_prefix(void)
     a->prefix = 64;
     a->valid = 10;
     a->since = kernel_ticks;
+    {
+        struct route6_row used = {0};
+        int i;
+        used.dst[0] = 0x60;
+        used.plen = 128;
+        for (i = 0; i < ROUTE6_MAX; i++) {
+            used.dst[15] = (uint8_t)i;
+            CHECK(route6_change_row(&wlan0, &used, 0, 0) == 0);
+        }
+    }
     eth0.naddr6 = 1;
     CHECK(netconf_del_address6(&eth0, a->addr) == 0);
     CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
     kernel_ticks += 10 * TICK_HZ;
     route6_tick();
     CHECK(!route6_lookup(dst, eth0.index, via));
+    nd6_if_down(&wlan0);
     r.local = 1;
     r.proto = 99;
     r.plen = 64;

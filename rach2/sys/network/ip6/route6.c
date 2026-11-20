@@ -11,6 +11,7 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../timer.h"
+#include "../../mm/kheap.h"
 
 /* A route of the table; `nd` is NULL in a free entry. `expires` is the
  * whole tick count a learned route ends at, and 0 for one that does not
@@ -25,7 +26,9 @@ struct route6 {
     uint64_t expires;
 };
 
-static struct route6 table6[ROUTE6_MAX];
+static struct route6 initial_routes[ROUTE6_MAX];
+static struct route6 *table6 = initial_routes;
+static int table_size = ROUTE6_MAX;
 
 /** Clear the bits of `a` past its first `plen`. */
 static void mask_prefix(uint8_t *a, int plen)
@@ -146,7 +149,7 @@ int route6_at(int n, struct route6_row *out)
             }
         }
     }
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         struct route6 *r = &table6[i];
 
         if (!r->nd)
@@ -236,7 +239,7 @@ int route6_preferred_source(const struct netdev *nd, const uint8_t *dst, uint8_t
 {
     struct route6_row row;
     int i;
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         const struct route6 *r = &table6[i];
         if (r->nd == nd && !ip6_is_unspecified(r->prefsrc) &&
             ip6_prefix_match(dst, r->dst, r->plen)) {
@@ -266,7 +269,7 @@ static int find(const struct netdev *nd, const uint8_t *dst, int plen, const uin
 {
     int i;
 
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         struct route6 *r = &table6[i];
 
         if (r->nd && !r->local && (!nd || r->nd == nd) && r->plen == plen &&
@@ -281,13 +284,47 @@ static int find(const struct netdev *nd, const uint8_t *dst, int plen, const uin
 static int free_slot(void)
 {
     int i;
-
-    for (i = 0; i < ROUTE6_MAX; i++) {
-        if (!table6[i].nd) {
+    for (i = 0; i < ROUTE6_MAX; i++)
+        if (!table6[i].nd)
             return i;
-        }
-    }
     return -1;
+}
+
+/** Allocate additional slots for routes whose address record went away. */
+static int retained_slot(void)
+{
+    int i, next;
+    struct route6 *rows;
+    for (i = ROUTE6_MAX; i < table_size; i++)
+        if (!table6[i].nd)
+            return i;
+    if ((unsigned)table_size > 0x7fffffffu / sizeof(*rows) / 2)
+        return -1;
+    next = table_size * 2;
+    rows = kzalloc((size_t)next * sizeof(*rows));
+    if (!rows)
+        return -1;
+    k_memcpy(rows, table6, (size_t)table_size * sizeof(*rows));
+    if (table6 != initial_routes)
+        kfree(table6);
+    table6 = rows;
+    table_size = next;
+    return i;
+}
+
+/** Return unused overflow storage after the last retained route expires. */
+static void trim_retained(void)
+{
+    int i;
+    if (table6 == initial_routes)
+        return;
+    for (i = ROUTE6_MAX; i < table_size; i++)
+        if (table6[i].nd)
+            return;
+    k_memcpy(initial_routes, table6, sizeof(initial_routes));
+    kfree(table6);
+    table6 = initial_routes;
+    table_size = ROUTE6_MAX;
 }
 
 /** Match an IPv6 prefix and any selectors supplied for deletion. */
@@ -328,7 +365,7 @@ static int generated6(const struct netdev *only, const struct route6_row *want, 
 static int table_match(const struct netdev *nd, const struct route6_row *want)
 {
     int i;
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         struct route6 *r = &table6[i];
         if (want->local == r->local && r->nd && (!nd || nd == r->nd) && r->plen == want->plen &&
             ip6_equal(want->dst, r->dst) && (!want->proto || want->proto == r->proto) &&
@@ -451,7 +488,7 @@ static void retain_prefix(struct netdev *nd, const struct route6_row *r, uint64_
 {
     int i = find(nd, r->dst, r->plen, r->gw, r->metric);
     if (i < 0) {
-        i = free_slot();
+        i = retained_slot();
         if (i < 0)
             return;
         k_memset(&table6[i], 0, sizeof(table6[i]));
@@ -487,7 +524,7 @@ void route6_address_removed(struct netdev *nd, int slot)
     struct route6_row r;
     uint64_t expires;
     int i;
-    for (i = 0; i < ROUTE6_MAX; i++)
+    for (i = 0; i < table_size; i++)
         if (table6[i].nd && ip6_equal(table6[i].prefsrc, a->addr) &&
             !has_source(table6[i].nd, a->addr, a))
             k_memset(table6[i].prefsrc, 0, IP6_ADDR_LEN);
@@ -516,7 +553,7 @@ struct netdev *route6_added_local(const uint8_t *dst)
 {
     const struct route6 *best = 0;
     int i;
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         const struct route6 *r = &table6[i];
         if (r->nd && r->local && ip6_prefix_match(dst, r->dst, r->plen) &&
             (!best || r->plen > best->plen || (r->plen == best->plen && r->metric < best->metric)))
@@ -575,7 +612,7 @@ void route6_forget(struct netdev *nd, int proto)
 {
     int i;
 
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         if (table6[i].nd == nd && (proto < 0 || table6[i].proto == proto)) {
             table6[i].nd = 0;
         }
@@ -586,7 +623,7 @@ void route6_ra_metric(struct netdev *nd, uint32_t metric)
 {
     int i, j;
 
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         struct route6 *r = &table6[i];
 
         if (r->nd != nd || r->proto != ROUTE6_PROTO_RA || r->plen != 0 || r->metric == metric) {
@@ -609,13 +646,14 @@ void route6_tick(void)
 {
     int i;
 
-    for (i = 0; i < ROUTE6_MAX; i++) {
+    for (i = 0; i < table_size; i++) {
         struct route6 *r = &table6[i];
 
         if (r->nd && r->expires != 0 && tick_count() >= r->expires) {
             r->nd = 0;
         }
     }
+    trim_retained();
 }
 
 /** The interface of index `ifindex`, or NULL for one that does not exist. */

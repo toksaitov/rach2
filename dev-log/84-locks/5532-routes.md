@@ -34,6 +34,6 @@ The IPv4 implementations are in [devinet.c](https://github.com/torvalds/linux/bl
 
 ## Limits
 
-Rach2 has one next hop per route and accepts device routes in the main and local tables of the initial namespace. It has no multipath or policy routing and does not expose Linux's secondary-promotion or keep-address-on-down switches. The explicit IPv4 and IPv6 tables each have 32 slots. An interface holds up to eight addresses in each family. An independent IPv6 prefix that outlives its address uses a route slot. If all 32 slots are occupied, that prefix can disappear early.
+Rach2 has one next hop per route and accepts device routes in the main and local tables of the initial namespace. It has no multipath or policy routing and does not expose Linux's secondary-promotion or keep-address-on-down switches. The explicit IPv4 and IPv6 tables each have 32 slots. An interface holds up to eight addresses in each family. An IPv6 prefix that outlives its address takes separate kernel memory, so a full explicit route table does not shorten its lifetime.
 
 PCI handover on the e1000 and RTL8168 removes the addresses and routes but keeps the interface's name and index for the driver that reclaims it. Virtio removal and nonpersistent tunnel close unregister the interface.
