@@ -158,6 +158,8 @@
 #define PROCFS_INO_LOCKWAIT      0x1F3u
 #define PROCFS_INO_LOCKDEP       0x1F4u
 #define PROCFS_INO_LOCKDEP_STATS 0x1F5u
+#define PROCFS_INO_SELF          0x3F000u /* /proc/self, above /proc/bus's */
+#define PROCFS_INO_THREAD_SELF   0x3F001u
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
@@ -612,7 +614,9 @@ int procfs_resolve_id(const struct vpath *vp)
         return pid;
     }
     p = get_process((uint32_t)pid);
-    {
+    if (vp->tid == SYNTH_PID_SELF) {
+        t = procfs_pid_number(current_proc->pid, vp->pidns_ino) ? current_proc : NULL;
+    } else {
         int tid = procfs_resolve_pid(vp->tid, vp->pidns_ino);
 
         t = tid > 0 ? get_process((uint32_t)tid) : NULL;
@@ -1390,6 +1394,49 @@ int procfs_readlink_exe(int pid, char *buf, int cap)
 int procfs_exe_name(int pid, char *buf, int cap)
 {
     return exe_text(pid, buf, cap, 0);
+}
+
+/** Append the decimal digits of `v` to the `n` bytes of `buf`, as far as
+ * `cap` allows, and return the new length. */
+static int self_put_u32(char *buf, int cap, int n, uint32_t v)
+{
+    char digits[10];
+    int k = 0;
+
+    do {
+        digits[k++] = (char)('0' + v % 10u);
+        v /= 10u;
+    } while (v);
+    while (k && n < cap) {
+        buf[n++] = digits[--k];
+    }
+    return n;
+}
+
+int procfs_readlink_self(const struct vpath *vp, char *buf, int cap)
+{
+    int which = synth_self_link(vp);
+    int pid = procfs_resolve_pid(SYNTH_PID_SELF, vp->pidns_ino);
+    uint32_t tgid, tid;
+    int n;
+
+    if (!which) {
+        return -EINVAL;
+    }
+    if (pid < 0) {
+        return -ENOENT;
+    }
+    tgid = procfs_pid_number((uint32_t)pid, vp->pidns_ino);
+    n = self_put_u32(buf, cap, 0, tgid);
+    if (which == 2) {
+        tid = procfs_pid_number(current_proc->pid, vp->pidns_ino);
+        if (tid == 0) {
+            return -ENOENT;
+        }
+        n = exe_put(buf, cap, n, "/task/");
+        n = self_put_u32(buf, cap, n, tid);
+    }
+    return n;
 }
 
 int procfs_readlink_ns(int pid, int kind, char *buf, int cap)
@@ -3850,6 +3897,16 @@ int procfs_nth_pid(int n, uint32_t pidns_ino)
 uint32_t procfs_ino_dir(void)
 {
     return PROCFS_INO_DIR;
+}
+
+uint32_t procfs_ino_self(void)
+{
+    return PROCFS_INO_SELF;
+}
+
+uint32_t procfs_ino_thread_self(void)
+{
+    return PROCFS_INO_THREAD_SELF;
 }
 
 uint32_t procfs_ino_cmdline(void)
@@ -9402,7 +9459,7 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
         node[1] = vp->procfd;
         break;
     case VNODE_PROC_PID:
-        if (vp->pid == SYNTH_PID_SELF && !vp->tid)
+        if (synth_self_link(vp))
             return 0;
         node[1] = 0;
         break;

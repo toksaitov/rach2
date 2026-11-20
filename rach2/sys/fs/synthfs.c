@@ -2357,7 +2357,8 @@ static int synth_classify_irq(const struct comp *c, int n, struct vpath *vp)
 
 /** Classify the components `c` of `n` from "proc": its fixed names first,
  * since `cmdline`, `self` and the rest are not numbers, then a process by
- * its pid; a pid of 0, the kernel's idle context, is no process's. */
+ * its pid; a pid of 0, the kernel's idle context, is no process's. Below
+ * `thread-self` is the caller's thread, as below /proc/self/task/TID. */
 static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
 {
     int pid;
@@ -2411,6 +2412,11 @@ static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
     }
     if (comp_eq(c[1], "bus")) {
         return synth_classify_bus(c + 2, n - 2, vp);
+    }
+    if (comp_eq(c[1], "thread-self")) {
+        vp->pid = SYNTH_PID_SELF;
+        vp->tid = SYNTH_PID_SELF;
+        return synth_classify_pid(c + 1, n - 1, vp, 0);
     }
     if (comp_eq(c[1], "self")) {
         pid = SYNTH_PID_SELF;

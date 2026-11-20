@@ -3395,6 +3395,14 @@ The calling thread's process.
 .Pa /proc
 lists each process once; the ID of a thread that did not begin its
 process also names a directory, which is not listed.
+.It Pa /proc/thread-self
+The calling thread: a link whose text is
+.Ar pid Ns Pa /task/ Ns Ar tid ,
+the IDs the mount's PID namespace gives the caller's process and thread.
+For a caller that namespace does not see,
+.Xr readlink 2
+of the link fails with
+.Er ENOENT .
 .El
 .Sh SEE ALSO
 .Xr bootlog 4 ,

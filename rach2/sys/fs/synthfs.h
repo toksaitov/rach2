@@ -205,7 +205,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_AUTOGROUP     78
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
- * (`procfs_resolve_pid`). */
+ * (`procfs_resolve_pid`), and the tid of /proc/thread-self, which it takes
+ * as the calling thread's (`procfs_resolve_id`). */
 #define SYNTH_PID_SELF (-1)
 
 /** Whether a synthetic directory of `kind` is one of a process's, whose
@@ -233,13 +234,25 @@ struct vpath {
     int procfd;     /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
     int procfile;   /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
     int pts_index;  /* VNODE_PTS: the pty slave number N in /dev/pts/N */
-    int tid;        /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
+    int tid;        /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, SYNTH_PID_SELF
+                     * for /proc/thread-self, or 0 */
     int sysent;     /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
     int syskey;     /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
                      * VNODE_DEV_MADE: the entry's id (devtree.h) */
     int sysreg;     /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
     uint32_t pidns_ino; /* PID namespace number of the proc mount */
 };
+
+/** Whether `vp` is one of the text links to the caller in /proc's root:
+ * 1 for /proc/self, which names its process, 2 for /proc/thread-self,
+ * which names its thread under the process's `task`, or 0. */
+static __inline__ int synth_self_link(const struct vpath *vp)
+{
+    if (vp->kind != VNODE_PROC_PID || vp->pid != SYNTH_PID_SELF) {
+        return 0;
+    }
+    return vp->tid == 0 ? 1 : vp->tid == SYNTH_PID_SELF ? 2 : 0;
+}
 
 /**
  * Classify `path`, with or without its leading slash and with `.` and `..`
