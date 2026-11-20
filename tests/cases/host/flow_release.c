@@ -628,6 +628,19 @@ static int ssh_mock(int argc, char **argv)
         puts("bootscreen: weston: 0 running\nbootscreen: result: pass");
         return 0;
     }
+    if (!strcmp(command, "sh -s -- -l")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read final login\n");
+        if (!strcmp(ev("RELEASE_TEST_SCREEN"), "no-login")) {
+            puts("bootscreen: result: fail: term -l has started no login");
+            return 1;
+        }
+        puts("bootscreen: result: pass");
+        return 0;
+    }
+    if (!strcmp(command, "cat /proc/sys/kernel/random/boot_id")) {
+        puts("aaaa");
+        return 0;
+    }
     if (!strcmp(command, "sh -s -- free")) {
         append(ev("RELEASE_TEST_CALLS"), "machine write stop term\n");
         puts("aaaa");
@@ -912,7 +925,7 @@ struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
         *cmdline, *open, *slots;
-    const char *screen; /* "dark": the trial boot's bootscreen.sh fails */
+    const char *screen; /* "dark" fails the trial, "no-login" fails the final check */
     const char *detach; /* the Mac's run waits until the release has ended */
     const char *again;  /* the machine of -a, or NULL for a release */
     int rerun, preparing, only;
@@ -1385,7 +1398,11 @@ static int machine_record_rows(struct release *r)
     "lenovo target /var/native\nlenovo peer 192.168.0.100\nlenovo echo-port 55090\nlenovo " \
     "network "                                                                              \
     "192.168.0.106/24\nlenovo interface eth0\nlenovo gateway 192.168.0.1\nlenovo far "      \
-    "1.1.1.1\nlenovo empty 192.168.0.250\nlenovo silent 192.168.0.252\n"
+    "1.1.1.1\nlenovo empty 192.168.0.250\nlenovo silent 192.168.0.252\n"                    \
+    "lenovo boot ramoops.mem_size=0x100000\nlenovo netconsole 6666\n"
+#define TRIAL_BOOT \
+    "root=/dev/disk0p3 rach2.slot=candidate rach2.console=term ramoops.mem_size=0x100000"
+#define NETCONSOLE " netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59"
 #define MAC_FAILED "milestone7-111111111111-mac-1029-000000"
 static int machine_line(struct release *r, const char *prefix, char *rest, size_t size)
 {
@@ -1638,8 +1655,9 @@ static int trial_rows(struct release *r)
                                  .git = "yes",
                                  .writes = "yes",
                                  .accept = "pass",
-                                 .cmdline = "root=/dev/disk0p3 rach2.slot=candidate "
-                                            "rach2.console=term"});
+                                 .machines = LENOVO,
+                                 .native = "pass",
+                                 .cmdline = TRIAL_BOOT NETCONSOLE});
     ok = check(r,
                !f->status && archived(r, "7-11111111-") &&
                    count(r->retired, "^trial done .* the new kernel runs from the candidate slot "
@@ -1662,13 +1680,21 @@ static int trial_rows(struct release *r)
                    !called(r, "^(identity|accept|machine write)") && !called(r, " push "),
                "a trial boot without rach2.console=term fails trial and is not committed") &&
          ok;
+    run(r, &(struct release_row){.record = installed, .machines = LENOVO, .cmdline = TRIAL_BOOT});
+    ok = check(r,
+               f->status == 1 &&
+                   fx_has(record(r), "failed trial: the trial boot's command line lacks "
+                                     "netconsole=6665@192.168.0.106/,6666@") &&
+                   !called(r, "^(accept|machine write)"),
+               "a trial boot without UDP netconsole stays uncommitted") &&
+         ok;
     run(r, &(struct release_row){.record = installed,
                                  .git = "yes",
                                  .writes = "yes",
                                  .accept = "pass",
                                  .screen = "dark",
-                                 .cmdline = "root=/dev/disk0p3 rach2.slot=candidate "
-                                            "rach2.console=term"});
+                                 .machines = LENOVO,
+                                 .cmdline = TRIAL_BOOT NETCONSOLE});
     ok = check(r,
                f->status == 1 &&
                    last_is(record(r), "failed trial: the trial boot's screen is not term's lit "
@@ -3939,7 +3965,8 @@ static int lenovo_rows(struct release *r)
                !f->status && archived(r, "7-11111111-") &&
                    before(r, "accept 192.168.0.106\n", "native-deploy stage ") &&
                    before(r, "native-deploy stage ", "native-deploy run ") &&
-                   before(r, "native-deploy run ", "machine write bootctl commit\n") &&
+                   before(r, "native-deploy run ", "machine read final login\n") &&
+                   before(r, "machine read final login\n", "machine write bootctl commit\n") &&
                    called(r, "^native-deploy run .*/state/wt/build/x86_64/images/../tests/native/"
                              "prepared 192.168.0.106 candidate .*/rach2/kernel .* /var/native "
                              "milestone7-111111111111-lenovo-[0-9a-f-]+ .* --hostpeer "
@@ -3948,6 +3975,20 @@ static int lenovo_rows(struct release *r)
                    count(r->retired, "^lenovo done ") == 1,
                "acceptance reads the trial boot's log before the native cases run, and the "
                "trial is committed after both") &&
+         ok;
+    run(r, &(struct release_row){.record = r->tried,
+                                 .git = "yes",
+                                 .writes = "yes",
+                                 .accept = "pass",
+                                 .machines = LENOVO,
+                                 .native = "pass",
+                                 .screen = "no-login"});
+    ok = check(r,
+               f->status == 1 && count(record(r), "^lenovo done ") == 1 &&
+                   last_is(record(r), "failed commit: the console's login did not return: "
+                                      "bootscreen: result: fail: term -l has started no login") &&
+                   !called(r, "^machine write bootctl commit$"),
+               "a missing final login keeps the trial uncommitted and the native pass recorded") &&
          ok;
     run(r, &(struct release_row){
                .record = r->tried, .accept = "pass", .machines = LENOVO, .native = "fail"});
