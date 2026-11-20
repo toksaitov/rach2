@@ -192,6 +192,12 @@ int nd6_snapshot(struct nd6_row *out, int max)
     return 0;
 }
 
+/** The address-expiry timer has no work in the netlink socket fixture. */
+void netconf_expire_addresses(uint64_t now)
+{
+    (void)now;
+}
+
 /** Model netconf_add_address with no addresses, routes or sockets. */
 int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
@@ -366,6 +372,14 @@ void netif_ns_lo_set_up(struct netdev *nd, int up)
 {
     (void)nd;
     (void)up;
+}
+
+/** Only the route fixture exercises a change to an existing peer. */
+void route6_peer_change(struct netdev *nd, struct netdev_addr6 *a, const uint8_t *peer)
+{
+    (void)nd;
+    (void)a;
+    (void)peer;
 }
 
 /** The generic family model has no IPv6 routes to change. */
@@ -794,6 +808,8 @@ static void peer_address(void)
     CHECK(card.naddr6 == 1 && ip6_equal(card.addr6[0].peer, peer));
     CHECK(card.addr6[0].metric == 57 && card.addr6[0].noprefix);
     CHECK(addr_change(request, RTM_NEWADDR, NLM_F_EXCL, body) == -EEXIST);
+    CHECK(addr_change(request, RTM_NEWADDR, NLM_F_REPLACE, body) == 0);
+    CHECK(card.addr6[0].noprefix && !card.addr6[0].peer_prefix);
     ifa[1] = 128;
     CHECK(addr_change(request, RTM_DELADDR, 0, body) == -EADDRNOTAVAIL && card.naddr6 == 1);
     ifa[1] = 64;

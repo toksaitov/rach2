@@ -655,6 +655,23 @@ static void local_lifetime(void)
           "last-address deletion flushes the explicit local route");
 }
 
+/** Address expiry deprecates first and flushes routes only on deletion. */
+static void timed_address(void)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t dst = 0xac100000u, mask = 0xffffff00u;
+    conf_reset();
+    CHECK(netconf_add_address(nd, 0xc0000201u, mask, 0) == 0, "add a finite IPv4 address");
+    nd->addr4[0].preferred_until = 10;
+    nd->addr4[0].valid_until = 20;
+    CHECK(netdev_route_add(nd, dst, mask, 0, 3, 0) == 0, "add a route under its lifetime");
+    netconf_expire_addresses(10);
+    CHECK(nd->ip && nd->addr4[0].deprecated, "preferred lifetime ends first");
+    netconf_expire_addresses(20);
+    CHECK(!nd->ip && netdev_route_del(nd, dst, mask, 0) == -ESRCH,
+          "valid lifetime ends with last-address cleanup");
+}
+
 /**
  * Run the rows of configure_by_mac, secondary_address_change and
  * narrow_subnets, then:
@@ -712,6 +729,7 @@ int main(void)
     route_lifetime(0);
     route_lifetime(1);
     local_lifetime();
+    timed_address();
     narrow_subnets();
     ip = 0;
     mask = 0;
