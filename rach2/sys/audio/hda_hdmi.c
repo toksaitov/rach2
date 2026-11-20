@@ -132,21 +132,22 @@
  * them; the channels the DMA plays at most, HDMI's eight; the channels a
  * program's stream may have, which the refill routes to the DMA's, as
  * Linux's OSS layer takes up to 128 (snd_pcm_oss_set_channels); and of each
- * PCM's DMA buffer the periods at most and their bytes, and the audio it
- * holds at least, so that the tick, which refills it, has time to come
- * round. A period is a multiple of 128 bytes, the alignment of a
- * descriptor's buffer. A PCM's stream tag on the link is its index plus 1. */
+ * PCM's DMA buffer the periods at most and their bytes, the audio it holds,
+ * ten ticks' worth, so that the tick, which refills it, has time to come
+ * round, and its bytes at most: HH_BUFFER_MS of eight channels of 32 bits
+ * at 192 kHz, 240 KiB, and less than a period more (hh_ring). A period is a
+ * multiple of 128 bytes, the alignment of a descriptor's buffer. A PCM's
+ * stream tag on the link is its index plus 1. */
 #define HH_MAX_PCMS   HH_MAX_CVTS
 #define HH_MAX_CH     8
 #define HH_CLIENT_CH  128
 #define HH_BDL_MAX    256
 #define HH_PERIOD_MAX 16384u
-#define HH_DMA_MAX    (3u * HH_PERIOD_MAX)
 #define HH_BUFFER_MS  40u
+#define HH_DMA_MAX    (16u * HH_PERIOD_MAX)
 
 /* The stream's rates, as OSS's /dev/dsp takes them (dsp.c's DSP_RATE_MIN
- * and DSP_RATE_MAX); the most bytes of the stream the caller's buffer keeps
- * for the driver's, dsp.c's DSP_BUFFER_MAX; and a PCM's stage, which holds
+ * and DSP_RATE_MAX); and a PCM's stage, which holds
  * the stream's frames a conversion takes at once for at most
  * HH_STAGE_FRAMES of the DMA's: six for each at the largest ratio, 192 kHz
  * to the 32 kHz every sink plays, and two more for the interpolation, of
@@ -155,7 +156,6 @@
  * channels of 32 bits the stage holds. */
 #define HH_RATE_MIN     1000u
 #define HH_RATE_MAX     192000u
-#define HH_STREAM_MAX   65536u
 #define HH_STAGE_FRAMES 256u
 #define HH_STAGE_BYTES  ((HH_STAGE_FRAMES * 6u + 2u) * 8u)
 
@@ -1407,14 +1407,24 @@ static uint32_t hh_need(const struct hh_pcm *m, uint32_t n)
     return m->copy ? n : (m->acc + (n - 1u) * m->stream->rate) / m->rate;
 }
 
+/** `a` times `b` over `c`, rounded down, for `a` below 2^17 and `b` and
+ * `c` from 1 to 2^18, in 32-bit arithmetic: `a`'s top bits are divided
+ * first and their remainder carried into the low byte's share. */
+static uint32_t hh_scale(uint32_t a, uint32_t b, uint32_t c)
+{
+    uint32_t t = (a >> 8) * b;
+
+    return t / c * 256u + (t % c * 256u + (a & 255u) * b) / c;
+}
+
 /** The stream bytes the DMA's `n` periods take, in whole periods of the
- * stream, with a conversion's two frames of lookahead. The DMA's frames are
- * at most HH_DMA_MAX / 4, so their product with a rate fits in 32 bits. */
+ * stream, with a conversion's two frames of lookahead. The DMA's frames
+ * are at most HH_DMA_MAX / 4, 2^16. */
 static uint32_t hh_lead(const struct hh_pcm *m, uint32_t n)
 {
     const audio_stream_t *s = m->stream;
     uint32_t spf = s->period_bytes / m->sframe;
-    uint32_t frames = n * (m->pb / m->frame) * s->rate / m->rate + (m->copy ? 0u : 2u);
+    uint32_t frames = hh_scale(n * (m->pb / m->frame), s->rate, m->rate) + (m->copy ? 0u : 2u);
 
     return (frames + spf - 1u) / spf * s->period_bytes;
 }
@@ -1445,13 +1455,17 @@ static int hh_nearest_rate(const struct hh_pcm *m, uint32_t rate)
  * period are granted, at the DMA's rate, channels and frame that `m` has:
  * a DMA period covering the stream period's time, a multiple of 128 bytes,
  * or of 384 for the 12- and 24-byte frames of six channels, which hold
- * whole frames, up to HH_PERIOD_MAX; and enough of them for HH_BUFFER_MS,
- * fewer when the stream bytes they take would pass HH_STREAM_MAX, but two
- * at least. Sets m->copy and m->pb, and returns the periods.
+ * whole frames, from the least that fits HH_BUFFER_MS in HH_BDL_MAX
+ * periods up to HH_PERIOD_MAX; and as many as HH_BUFFER_MS needs, two at
+ * least. The periods after the one playing, which the tick has refilled,
+ * then hold at least half of HH_BUFFER_MS, five ticks, whatever the stream.
+ * The buffer is HH_BUFFER_MS's bytes, at most 240 KiB, and less than a
+ * period more, or two periods of at most 16 KiB: within HH_DMA_MAX. Sets
+ * m->copy and m->pb, and returns the periods.
  */
 static uint32_t hh_ring(struct hh_pcm *m, const audio_stream_t *s, int wide)
 {
-    uint32_t unit = m->frame % 3u ? 128u : 384u, frames, pb, need, n;
+    uint32_t unit = m->frame % 3u ? 128u : 384u, frames, pb, least, need, n;
 
     m->copy = s->rate == m->rate && s->channels == m->ch &&
               s->format == (wide ? AUDIO_S32LE : AUDIO_S16LE);
@@ -1459,18 +1473,14 @@ static uint32_t hh_ring(struct hh_pcm *m, const audio_stream_t *s, int wide)
     frames = s->period_bytes / m->sframe * m->rate / s->rate;
     pb = (frames * m->frame + unit / 2u) / unit * unit;
     pb = pb < unit ? unit : pb > HH_PERIOD_MAX ? HH_PERIOD_MAX / unit * unit : pb;
-    need = m->rate / 1000u * m->frame * HH_BUFFER_MS;
+    /* At most 192 kHz times 32 bytes times 40: 32 bits hold it. */
+    need = m->rate * m->frame * HH_BUFFER_MS / 1000u;
+    least = (need + HH_BDL_MAX * unit - 1u) / (HH_BDL_MAX * unit) * unit;
+    if (pb < least) {
+        pb = least;
+    }
     n = (need + pb - 1) / pb;
-    if (n > HH_BDL_MAX) {
-        n = HH_BDL_MAX;
-    }
-    if (n > HH_DMA_MAX / pb) {
-        n = HH_DMA_MAX / pb;
-    }
     m->pb = pb;
-    while (n > 2 && hh_lead(m, n) > HH_STREAM_MAX) {
-        n--;
-    }
     return n < 2 ? 2 : n;
 }
 
@@ -1485,12 +1495,11 @@ static uint32_t hh_ring(struct hh_pcm *m, const audio_stream_t *s, int wide)
  * bits in 32 for a stream of more than 16 where the converter and sink take
  * them; the refill converts (hh_fill). The stream's period is the one asked
  * for, in whole frames, one at least, and the DMA's buffer is laid out by
- * hh_ring. Where even its two periods would take more than HH_STREAM_MAX of
- * the stream, as 128 channels of 32 bits at four times the rate of a stereo
- * sink's DMA do, the stream is granted the DMA's rate, at which two fit, as
- * an OSS device may grant another rate than the one asked for. -EINVAL for
- * a stream of no PCM, a period shorter than 128 bytes or a frame, or a PCM
- * that allows no rate.
+ * hh_ring; `device_periods` covers the stream bytes it takes, which the
+ * caller's buffer holds, up to some 3.9 MiB for 128 channels of 32 bits at
+ * 192 kHz, as Linux's OSS layer sizes its buffer from the hardware's. The
+ * stream keeps its rate, as Linux's does. -EINVAL for a stream of no PCM, a
+ * period shorter than 128 bytes or a frame, or a PCM that allows no rate.
  */
 static int hh_stream_setup(audio_stream_t *s)
 {
@@ -1525,10 +1534,6 @@ static int hh_stream_setup(audio_stream_t *s)
     m->ch = ch;
     m->frame = (uint32_t)ch * (wide ? 4u : 2u);
     n = hh_ring(m, s, wide);
-    if (hh_lead(m, n) > HH_STREAM_MAX) {
-        s->rate = m->rate;
-        n = hh_ring(m, s, wide);
-    }
     s->device_periods = hh_lead(m, n) / s->period_bytes;
     m->n = n;
     m->fmt = (uint16_t)(hh_rate_fmt[bi] | (wide ? HDA_FMT_BITS_24 : HDA_FMT_BITS_16) |
