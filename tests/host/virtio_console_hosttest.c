@@ -37,8 +37,10 @@
  * queues, the log's ring replayed to the port on a machine without a UART
  * and not on one with it, and the nodes; `console=hvc0` on the same device
  * and on one of a single port, with the size of its configuration and a
- * change of it; the `console=` words, each in turn, with a line for output
- * alone beside the UART, whose port is hvc0's own terminal; output of
+ * change of it, and with no memory for its port's pages, which leaves no
+ * hvc number after the removal; the `console=` words, each in turn, with
+ * a line for output alone beside the UART, whose port is hvc0's own
+ * terminal; output of
  * 100,000 bytes to a device that takes late and to a host that stops
  * reading for a while, with no byte lost and no interrupt asked for on the
  * transmit queue; a host that stops for ever, which costs one wait of 30
@@ -1570,6 +1572,37 @@ static void one_port(void)
           "a port without the control queues needs no open to give input");
 }
 
+/**
+ * A device of one port whose pages cannot be had: the port is refused
+ * before it takes hvc0, as Linux's add_port fills the receive queue before
+ * it makes the hvc console, so that the device's removal, which takes down
+ * only the ports present, leaves no hvc number naming the port's freed
+ * record, which the console's service reads.
+ */
+static void one_port_no_memory(void)
+{
+    int calls;
+
+    fresh("console=hvc0", UART);
+    check(virtio_console_start() == 1 && vcon_hvc[0] == P(0), "the boot binds the console");
+    calls = m.dma_calls;
+    m.dev.removed(&m.dev);
+    fresh("console=hvc0", UART);
+    /* Every page of the port fails: four to send, the panic's, eight to
+     * receive. */
+    m.dma_fail_from = calls - (VCON_TX_BUFS + 1 + VCON_RX_BUFS);
+    check(virtio_console_start() == 1 && P(0) && !P(0)->present,
+          "a port without its pages is refused");
+    check(vcon_hvc[0] == 0 && P(0)->hvc < 0, "and takes no hvc number");
+    m.dev.removed(&m.dev);
+    check(vcon_hvc[0] == 0 && m.dma_out == 0,
+          "the device's removal leaves no hvc number and no page");
+    vcon_service();
+    say("uart", 4);
+    serial_flush();
+    check(uart_sent("uart"), "and the console stays on the UART");
+}
+
 /** What `console=` words leave: the ports asked for, in order and each
  * once, the one the input is to come from, and whether the UART stays a
  * console. */
@@ -2750,6 +2783,7 @@ int main(void)
         boot_port_line();
         boot_hvc();
         one_port();
+        one_port_no_memory();
         words();
         output();
         stuck();

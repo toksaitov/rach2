@@ -2410,18 +2410,23 @@ static void vcon_early_start(struct vcon *d)
 }
 
 /** Start a device of one port: port 0, a console port with the size of the
- * configuration, is there from the start. */
+ * configuration, is there from the start. It takes an hvc number only once
+ * its pages are made, as Linux's add_port fills the receive queue before
+ * init_port_console, so that a port refused for want of them, which its
+ * device's removal does not take down, leaves no entry in `vcon_hvc`. */
 static void vcon_one_port_start(struct vcon *d)
 {
     struct vcon_port *p = &d->port[0];
 
     p->console = 1;
-    vcon_hvc_take(p);
     if (d->size) {
         virtio_config_read(d->vdev, VIRTIO_CONSOLE_CFG_COLS, &p->cols, 2);
         virtio_config_read(d->vdev, VIRTIO_CONSOLE_CFG_ROWS, &p->rows, 2);
     }
     vcon_port_add(p);
+    if (p->present) {
+        vcon_hvc_take(p);
+    }
     vcon_ports_try();
     vcon_settle(p);
 }
