@@ -74,9 +74,10 @@ and a write while the kernel runs no ACPI interpreter is
 Linux's ALSA files for the sound cards: card 0 the analog HD Audio
 controller's, while its driver runs, and the next the card of the Intel
 display's HDMI codec, which
-.Pa /dev/dsp1
-and
+.Pa /dev/dsp1 ,
 .Pa /dev/adsp1
+and
+.Pa /dev/dsp2
 play through, card 0 when there is no analog card; with both, card 1 is
 the one they play, as Linux's OSS emulation ties them.
 .Pa cards

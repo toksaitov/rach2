@@ -71,15 +71,16 @@
  * A playback buffer may take one period more, DSP_RING_MAX in all, so that
  * it holds a period beyond the start (dsp_layout).
  */
-#define DSP_BUFFER_MAX 65536u
-#define DSP_PERIOD_MIN 128u
-#define DSP_PERIOD_MAX 16384u
-#define DSP_RING_MAX   (DSP_BUFFER_MAX + DSP_PERIOD_MAX)
-#define DSP_PERIOD_HZ  43u
-#define DSP_PERIODS    4u
-#define DSP_RATE_MIN   1000u
-#define DSP_RATE_MAX   192000u
-#define DSP_CHUNK      256u /* bytes a read or write copies at a time */
+#define DSP_BUFFER_MAX   65536u
+#define DSP_PERIOD_MIN   128u
+#define DSP_PERIOD_MAX   16384u
+#define DSP_RING_MAX     (DSP_BUFFER_MAX + DSP_PERIOD_MAX)
+#define DSP_PERIOD_HZ    43u
+#define DSP_PERIODS      4u
+#define DSP_RATE_MIN     1000u
+#define DSP_RATE_MAX     192000u
+#define DSP_CHUNK        256u /* bytes a read or write copies at a time */
+#define DSP_CHANNELS_MAX 128  /* CHANNELS asks no more, as Linux's OSS layer */
 
 /* OSS's `audio_buf_info`, GETOSPACE's and GETISPACE's answer. */
 struct dsp_buf_info {
@@ -317,9 +318,10 @@ static void dsp_period(audio_stream_t *s)
  * `device_periods` periods, which the first start takes, and at least one
  * more, since a program may keep a period free and still wait for the start,
  * as cmus does, which writes only as much as GETOSPACE's free periods less
- * one; a capture buffer needs only two. 0; or the driver's error, or -EIO
- * for a grant outside the contract of `stream_setup`, with the stream as it
- * was.
+ * one; a capture buffer needs only two. A period holds one frame at least,
+ * the smallest power of two that does where SETFRAGMENT asks for less. 0;
+ * or the driver's error, or -EIO for a grant outside the contract of
+ * `stream_setup`, with the stream as it was.
  */
 static int dsp_layout(struct dsp *d, struct dsp_chan *c)
 {
@@ -338,6 +340,10 @@ static int dsp_layout(struct dsp *d, struct dsp_chan *c)
         count = DSP_PERIODS;
     }
     bytes = clamp(bytes, DSP_PERIOD_MIN, DSP_PERIOD_MAX);
+    /* A period holds a frame, of DSP_CHANNELS_MAX of 4 bytes at most. */
+    while (bytes < frame_bytes(s)) {
+        bytes <<= 1;
+    }
     s->period_bytes = bytes;
     s->periods = clamp(count, 2, DSP_BUFFER_MAX / bytes);
     rc = c->drv->stream_setup(s);
@@ -863,6 +869,8 @@ static audio_format_t format_of(int value)
  * `main_chan` and configures nothing: on a duplex open capture's grant can
  * differ from playback's, and asking for playback's values in both
  * directions would reset the streams and drop their buffered data.
+ * CHANNELS asks for at most the driver's `channels_max`, and fails with
+ * -EINVAL above DSP_CHANNELS_MAX, as Linux's snd_pcm_oss_set_channels does.
  */
 static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
 {
@@ -886,6 +894,9 @@ static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
         channels = value ? 2 : 1;
         break;
     case DSP_CHANNELS:
+        if (value > DSP_CHANNELS_MAX) {
+            return -EINVAL;
+        }
         query = value <= 0;
         max = main_chan(d)->drv->channels_max > 2 ? main_chan(d)->drv->channels_max : 2;
         channels = query ? channels : value > max ? max : value;
