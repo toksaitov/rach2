@@ -33,9 +33,9 @@
  * is deprecated and then removed as its lifetimes end. The RDNSS and DNSSL
  * options of RFC 8106 go to netlink's RTNLGRP_ND_USEROPT
  * (`netlink_nd_useropt`), whose listener sets the resolver. A card whose
- * link goes down forgets its neighbours, its routers' routes and settings
- * and its SLAAC and temporary addresses, as one taken down does, and when
- * the link comes back detects its addresses and solicits routers again.
+ * carrier drops forgets nonpermanent neighbours. Its addresses and routes
+ * live until their expiry or administrative shutdown. On carrier return
+ * it detects its addresses and solicits routers again.
  * Redirects are counted and ignored.
  *
  * Everything here runs with interrupts off: from the receive path, from
@@ -227,8 +227,8 @@ void nd6_random_link_local(struct netdev *nd, uint8_t *ll);
 void nd6_if_up(struct netdev *nd);
 
 /** What a card that went down forgets: its neighbours and the datagrams
- * waiting for them, its SLAAC and temporary addresses, the routes learned
- * from its routers, and its routers' settings. Called from
+ * waiting for them, all its IPv6 addresses and routes, and its routers'
+ * settings. Called from
  * `netconf_set_up`. */
 void nd6_if_down(struct netdev *nd);
 

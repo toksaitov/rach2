@@ -19,7 +19,7 @@ struct route6 {
     struct netdev *nd;
     uint8_t dst[IP6_ADDR_LEN];
     uint8_t plen;
-    uint8_t proto, local;
+    uint8_t proto, local, retained;
     uint8_t gw[IP6_ADDR_LEN];
     uint32_t metric;
     uint64_t expires;
@@ -40,7 +40,12 @@ static void mask_prefix(uint8_t *a, int plen)
     }
 }
 
-enum addr6_route_kind { PREFIX6 = 1, PEER6 = 2, LOCAL6 = NETDEV_A6_LOCAL_ROUTE, PEER_PREFIX6 = 8 };
+enum addr6_route_kind {
+    PREFIX6 = 1,
+    PEER6 = NETDEV_A6_PEER_ROUTE,
+    LOCAL6 = NETDEV_A6_LOCAL_ROUTE,
+    PEER_PREFIX6 = 8
+};
 
 /** Describe one route installed by an address, when it is in force. */
 static int address_route(const struct netdev *nd, int a, int kind, struct route6_row *r)
@@ -100,6 +105,17 @@ static int already_listed(const struct netdev *nd, int a, int kind, const struct
     return 0;
 }
 
+/** Whether another address supplies this generated prefix on the same card. */
+static int other_prefix(struct netdev *nd, int slot, const struct route6_row *r)
+{
+    struct route6_row other;
+    int i;
+    for (i = 0; i < nd->naddr6; i++)
+        if (i != slot && address_route(nd, i, PREFIX6, &other) && same_prefix(r, &other))
+            return 1;
+    return 0;
+}
+
 int route6_at(int n, struct route6_row *out)
 {
     int i, a, k;
@@ -116,7 +132,17 @@ int route6_at(int n, struct route6_row *out)
     for (i = 0; i < ROUTE6_MAX; i++) {
         struct route6 *r = &table6[i];
 
-        if (!r->nd || n-- != 0) {
+        if (!r->nd)
+            continue;
+        if (r->retained) {
+            struct route6_row key = {0};
+            key.plen = r->plen;
+            key.metric = r->metric;
+            k_memcpy(key.dst, r->dst, IP6_ADDR_LEN);
+            if (other_prefix(r->nd, -1, &key))
+                continue;
+        }
+        if (n-- != 0) {
             continue;
         }
         out->ifindex = r->nd->index;
@@ -344,6 +370,7 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
         generated6(nd, &selector, 1);
     table6[i].nd = nd;
     table6[i].local = r.local;
+    table6[i].retained = 0;
     k_memcpy(table6[i].dst, r.dst, IP6_ADDR_LEN);
     table6[i].plen = r.plen;
     k_memcpy(table6[i].gw, r.gw, IP6_ADDR_LEN);
@@ -367,21 +394,24 @@ static void retain_prefix(struct netdev *nd, const struct route6_row *r, uint64_
         table6[i].nd = nd;
         table6[i].plen = r->plen;
         table6[i].proto = ROUTE6_PROTO_KERNEL;
+        table6[i].retained = 1;
         table6[i].metric = r->metric;
         k_memcpy(table6[i].dst, r->dst, IP6_ADDR_LEN);
         table6[i].expires = expires;
     }
 }
 
-/** Whether another address supplies this generated prefix on the same card. */
-static int other_prefix(struct netdev *nd, int slot, const struct route6_row *r)
+void route6_peer_change(struct netdev *nd, struct netdev_addr6 *a, const uint8_t *peer)
 {
-    struct route6_row other;
-    int i;
-    for (i = 0; i < nd->naddr6; i++)
-        if (i != slot && address_route(nd, i, PREFIX6, &other) && same_prefix(r, &other))
-            return 1;
-    return 0;
+    struct route6_row old;
+    int slot = (int)(a - nd->addr6);
+    if (!peer || ip6_equal(peer, a->addr) || ip6_equal(peer, a->peer))
+        return;
+    if (a->prefix != 128 && address_route(nd, slot, PEER6, &old))
+        retain_prefix(nd, &old, 0);
+    if (!(a->flags & NETDEV_A6_TENTATIVE))
+        a->deleted_routes |= PEER6;
+    k_memcpy(a->peer, peer, IP6_ADDR_LEN);
 }
 
 void route6_address_removed(struct netdev *nd, int slot)
@@ -406,6 +436,9 @@ void route6_address_removed(struct netdev *nd, int slot)
             return;
         }
     }
+    i = find(nd, r.dst, r.plen, r.gw, r.metric);
+    if (i >= 0 && table6[i].retained && !other_prefix(nd, slot, &r))
+        table6[i].nd = 0;
 }
 
 struct netdev *route6_added_local(const uint8_t *dst)
@@ -452,6 +485,7 @@ void route6_learn(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t
         }
         table6[i].nd = nd;
         table6[i].local = 0;
+        table6[i].retained = 0;
         k_memcpy(table6[i].dst, d, IP6_ADDR_LEN);
         table6[i].plen = (uint8_t)plen;
         k_memcpy(table6[i].gw, g, IP6_ADDR_LEN);

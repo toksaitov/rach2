@@ -417,6 +417,26 @@ static void finite_prefix(void)
     CHECK(!route6_added_local(dst));
 }
 
+/** Changing a ready /64 peer updates its prefix and keeps the old /128. */
+static void change_peer(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    uint8_t old[16] = {0x20, 1}, peer[16] = {0x30, 1};
+    k_memset(a, 0, sizeof(*a));
+    a->addr[0] = 0x40;
+    a->prefix = 64;
+    a->flags = NETDEV_A6_PERMANENT;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    k_memcpy(a->peer, old, 16);
+    eth0.naddr6 = 1;
+    route6_peer_change(&eth0, a, peer);
+    a->peer_prefix = 1;
+    CHECK(count_prefix(old, 128, 0, 256) == 1 && count_prefix(peer, 64, 0, 256) == 1);
+    CHECK(count_prefix(peer, 128, 0, 256) == 0);
+    nd6_if_down(&eth0);
+    CHECK(count_prefix(old, 128, 0, 256) == 0);
+}
+
 int main(void)
 {
     static const uint8_t dst[IP6_ADDR_LEN] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -489,6 +509,7 @@ int main(void)
     CHECK(nd6_conf_get(wlan0.index, ND6_RA_DEFRTR_METRIC, &v) == 0 && v == 600);
     route_lifetime();
     finite_prefix();
+    change_peer();
     CHECK(lock_depth == 0);
 
     if (failures) {

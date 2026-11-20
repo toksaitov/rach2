@@ -162,6 +162,7 @@ struct netdev_ops {
 #define NETDEV_SCOPE_LINK   253
 #define NETDEV_SCOPE_HOST   254
 
+#define NETDEV_A6_PEER_ROUTE  2u /* peer host route in deleted_routes */
 #define NETDEV_A6_LOCAL_ROUTE 4u /* local-route bit in deleted_routes */
 
 /* An IPv6 address's state, in Linux's `IFA_F_` bits, so that netlink can
@@ -221,6 +222,9 @@ struct netdev_addr6 {
 /* Route attributes of one IPv4 address, indexed from its first slot. */
 struct addr4_routes {
     uint32_t broadcast, metric;
+    uint64_t valid_until, preferred_until; /* absolute ticks, zero for forever */
+    uint32_t created, updated;             /* clock ticks in hundredths of a second */
+    uint8_t proto, deprecated;
     unsigned char given_broadcast, noprefix, deleted;
 };
 

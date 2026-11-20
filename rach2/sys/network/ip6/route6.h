@@ -34,6 +34,7 @@
 #define ROUTE6_METRIC_DEFAULT 1024
 
 struct netdev;
+struct netdev_addr6;
 
 /** One route, copied out for a reader. */
 struct route6_row {
@@ -59,6 +60,9 @@ int route6_at(int n, struct route6_row *out);
  * `dst` itself, in `via`; NULL with no route. Call with interrupts off.
  */
 struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via);
+
+/** Update a distinct peer on an existing address under net_lock. */
+void route6_peer_change(struct netdev *nd, struct netdev_addr6 *a, const uint8_t *peer);
 
 /** Preserve a prefix with an independent lifetime before removing slot.
  * The caller holds net_lock and slot is still present. */
