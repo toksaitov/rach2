@@ -211,7 +211,7 @@ extern void free(void *ptr);
 
 /* The model dump: a header, a hole to the next page, a page the process
  * has, and a page it never touched, a hole at the file's end. */
-#define MODEL_HEADER 96u
+#define MODEL_HEADER 512u
 #define MODEL_LENGTH (3u * PAGE_SIZE)
 #define MODEL_BYTES  (MODEL_HEADER + PAGE_SIZE)
 
@@ -244,9 +244,10 @@ static int core_made, opens, releases, ns_depth;
 static uint8_t file[MODEL_LENGTH];
 static uint32_t file_len, file_written;
 
-/* What the process sharing the table does while the dump waits, and what
- * its calls answered. */
+/* What another process does before the dump writes part `meanwhile_part`,
+ * and what the process sharing the table got from its calls. */
 static void (*meanwhile)(void);
+static int meanwhile_part;
 static int32_t sharer_write, sharer_dup;
 static int sharer_writes;
 /* The model of a type that sets `file_locked`, for the refault rows: nonzero
@@ -301,11 +302,11 @@ uint8_t *core_notes(int signo, uint32_t *size)
 }
 
 /**
- * Write the model dump through `write`: first the row's `meanwhile`, which
- * runs once, as another process runs while a write sleeps; then the header,
- * the pages and the holes, the bytes counted toward `limit` as `core_write`
- * counts them. Returns 0, -EFBIG when a part with bytes passes the limit, or
- * the error of `write`.
+ * Write the model dump through `write`: the header, the pages and the
+ * holes, the bytes counted toward `limit` as `core_write` counts them.
+ * Run the row's `meanwhile` before its chosen part, as another process
+ * runs while the dump sleeps. Returns 0, -EFBIG when a part with bytes
+ * passes the limit, or the error of `write`.
  */
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
                    uint64_t limit)
@@ -319,12 +320,6 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     int i;
 
     check(notes && notes_size == 20, "the dump writes the notes it was given");
-    if (meanwhile) {
-        void (*run)(void) = meanwhile;
-
-        meanwhile = 0;
-        run();
-    }
     k_memset(page, 0x5A, sizeof(page));
     parts[0] = header;
     lens[0] = MODEL_HEADER;
@@ -335,6 +330,12 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     parts[3] = NULL;
     lens[3] = PAGE_SIZE;
     for (i = 0; i < 4; i++) {
+        if (meanwhile && i == meanwhile_part) {
+            void (*run)(void) = meanwhile;
+
+            meanwhile = 0;
+            run();
+        }
         if (parts[i] && lens[i] > limit - done) {
             return -EFBIG;
         }
@@ -2285,6 +2286,7 @@ static void row_begin(void)
     sharer_write = sharer_dup = 0;
     sharer_writes = 0;
     meanwhile = 0;
+    meanwhile_part = 0;
     model_file_locked = write_depth = 0;
     row_buf = NULL;
     absent_at = NO_ABSENT;
@@ -2381,6 +2383,7 @@ static void trailing_zero_limit(void)
 /** A loop device is attached to the core file while the dump waits. */
 static void core_gets_attached(void)
 {
+    check(file_len == MODEL_HEADER, "the attachment has a whole sector to stand on");
     files_attached = 1;
 }
 
@@ -2394,7 +2397,8 @@ static void attached_core_rows(void)
 {
     row_begin();
     meanwhile = core_gets_attached;
-    check(fs_core_file(SIGABRT, 0xFFFFFFFFu) == 0 && file_len == MODEL_LENGTH &&
+    meanwhile_part = 2;
+    check(fs_core_file(SIGABRT, 0xFFFFFFFFu) == 0 && file_len == MODEL_LENGTH && !meanwhile &&
               __builtin_memcmp(file, "\177ELF", 4) == 0,
           "a dump into a file a loop device stands on writes the whole file");
     files_attached = 0;
@@ -2402,7 +2406,8 @@ static void attached_core_rows(void)
     row_begin();
     files_pinned = 1;
     meanwhile = core_gets_attached;
-    check(fs_core_file(SIGABRT, 0xFFFFFFFFu) == -EBUSY && file_written == 0,
+    meanwhile_part = 2;
+    check(fs_core_file(SIGABRT, 0xFFFFFFFFu) == -EBUSY && file_written == MODEL_HEADER,
           "on KRFFS the dump stops at its next write with EBUSY");
     files_attached = files_pinned = 0;
     row_end();
