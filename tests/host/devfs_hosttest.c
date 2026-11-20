@@ -612,16 +612,72 @@ static void many_ports(void)
     }
 }
 
+#define WIDE_DEVICES 4
+#define WIDE_PORTS   500
+#define WIDE_NODES   (WIDE_DEVICES * WIDE_PORTS * 2)
+
+/**
+ * Four virtio consoles of 500 named ports register 4000 nodes, which take
+ * slots past 3896, whose inode, 200 + the slot's number, was once
+ * /dev/pts/0's.
+ * Each node's inode, as stat gives it, is the registry's own, above the
+ * slaves' of /dev/pts and below devtree's, and no two nodes share one; the
+ * last alias is listed in /dev/virtio-ports with that inode.
+ */
+static void distinct_inodes(void)
+{
+    static struct devfs_node nodes[WIDE_NODES];
+    static char names[WIDE_NODES][40];
+    static uint32_t inos[WIDE_NODES];
+    int d, n, i = 0, j, ok = 1, apart = 1, own = 1;
+
+    for (d = 0; d < WIDE_DEVICES; d++) {
+        for (n = 0; n < WIDE_PORTS; n++, i += 2) {
+            snprintf(names[i], sizeof(names[i]), "vport%dp%d", d, n);
+            snprintf(names[i + 1], sizeof(names[i + 1]), "virtio-ports/wide.%d.%d", d, n);
+            nodes[i].name = names[i];
+            nodes[i].major = (uint16_t)(245 - d);
+            nodes[i].minor = (uint16_t)n;
+            nodes[i].mode = 0600;
+            nodes[i].ops = &node_ops;
+            nodes[i + 1] = nodes[i];
+            nodes[i + 1].name = names[i + 1];
+            nodes[i + 1].alias = 1;
+        }
+    }
+    for (i = 0; i < WIDE_NODES; i++) {
+        inos[i] = 0;
+        if (devfs_node_register(&nodes[i]) != 0 || devfs_stat(nodes[i].name, 0, 0, &inos[i]) != 0) {
+            ok = 0;
+        }
+        /* /dev/pts/N is 0x1000 + N, N below PTY_KERNEL_INDEX (syscall_fs.c). */
+        own = own && inos[i] >= 0x1000u + PTY_KERNEL_INDEX && inos[i] < DEVTREE_INO_BASE;
+    }
+    check(ok && reg_slot_count > 3896,
+          "four consoles of 500 named ports register 4000 nodes, past slot 3896");
+    check(own, "and each inode is above /dev/pts's slaves' and below devtree's");
+    for (i = 0; i < WIDE_NODES && apart; i++) {
+        for (j = i + 1; j < WIDE_NODES && apart; j++) {
+            apart = inos[i] != inos[j];
+        }
+    }
+    check(apart, "and no two of the 4000 share an inode");
+    check(listed("virtio-ports", "wide.3.499", inos[WIDE_NODES - 1]),
+          "and the last alias is listed with the inode stat gives");
+    for (i = 0; i < WIDE_NODES; i++) {
+        devfs_node_unregister(&nodes[i]);
+    }
+}
+
 /**
  * The rows of an open, then those of `offset_devices`, `grubcore_windows`,
- * `whole_disk_window`, `registry`, `nested_registry`, `wide_numbers` and
- * `many_ports`. An
- * exclusive create of ptmx, null or an absent name, in each access mode and
- * with or without O_DIRECTORY and O_NONBLOCK, is EEXIST for a device and
- * ENOENT for an absent one, and
- * opens no pty master and takes no descriptor. An open of ptmx with
- * O_DIRECTORY is ENOTDIR and opens nothing, and an ordinary open of ptmx
- * opens a pty master. Returns 0 when every check passed and 1 otherwise.
+ * `whole_disk_window`, `registry`, `nested_registry`, `wide_numbers`,
+ * `many_ports` and `distinct_inodes`. An exclusive create of ptmx, null or
+ * an absent name, in each access mode and with or without O_DIRECTORY and
+ * O_NONBLOCK, is EEXIST for a device and ENOENT for an absent one, and opens
+ * no pty master and takes no descriptor. An open of ptmx with O_DIRECTORY
+ * is ENOTDIR and opens nothing, and an ordinary open of ptmx opens a pty
+ * master. Returns 0 when every check passed and 1 otherwise.
  */
 int main(void)
 {
@@ -648,10 +704,11 @@ int main(void)
     nested_registry();
     wide_numbers();
     many_ports();
+    distinct_inodes();
     if (!failures) {
         printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
                "boot loader windows, the whole-disk window, the registry, nested rows, "
-               "wide numbers, many ports\n");
+               "wide numbers, many ports, distinct inodes\n");
     }
     return failures != 0;
 }

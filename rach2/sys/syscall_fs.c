@@ -9760,6 +9760,10 @@ int32_t fd_stat_ids(int pid, int fd, uint32_t *mnt_id, uint64_t *ino)
  * comparison of (st_dev, st_ino) ttyname makes matches. */
 #define PTS_INO_BASE 0x1000u
 
+/* The slaves' inodes, N below PTY_KERNEL_INDEX, end below the first of
+ * devfs's registry (devfs.h). */
+typedef char pts_ino_fits[PTS_INO_BASE + PTY_KERNEL_INDEX <= DEVFS_INO_SLOT_BASE ? 1 : -1];
+
 /** Fill `kst` for an entry root made under /dev, `id` (devtree.h): its
  * own type, mode, owner, size and times; or -ENOENT once it is removed. */
 static int32_t synth_stat_made(int id, struct kstat *kst)

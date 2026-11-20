@@ -307,7 +307,9 @@ int devfs_subdir_present(int row);
  * the console terminal, as /dev/console does, for the node of a device
  * that carries the console. The registry holds as many nodes as the heap
  * has room for, and a register refuses with -ENOMEM when it has none. A
- * node's inode is its slot's. A node unregistered leaves /dev at once; a
+ * node's inode is its slot's, DEVFS_INO_SLOT_BASE and the slot's number,
+ * apart from every other inode of DEVFS_FSID. A node unregistered leaves
+ * /dev at once; a
  * descriptor open on it keeps its operations and its `priv`, and fstat
  * gives its name and numbers until its slot is taken again: first by a
  * node of the same name, which keeps the inode across an unbind and a bind,
@@ -317,6 +319,16 @@ int devfs_subdir_present(int row);
  * another name, so that its slots number at most this many more than the
  * most nodes it held at once. */
 #define DEVFS_SLOTS_SPARE   64
+/*
+ * The inode of the registry's first slot. The inodes of DEVFS_FSID below it
+ * are /dev's own: its directory, /dev/pts and /dev/log from 2, the
+ * directories of /dev from 5 (synthfs.c), the table's devices and the disk
+ * nodes from 16, /dev/cpu's directories from 0xF00 and the slaves of
+ * /dev/pts from 0x1000 (syscall_fs.c), which stay below 0x1000 +
+ * PTY_KERNEL_INDEX. Those above the last slot's are devtree's, from
+ * DEVTREE_INO_BASE, which bounds the slots' count (DEVFS_SLOTS_MAX).
+ */
+#define DEVFS_INO_SLOT_BASE 0x00200000u
 /* The devices that may have an owner, group or mode of their own at once. */
 #define DEVFS_OWNED_MAX     256
 /* A node's path below /dev, with its NUL, as a lookup carries it
@@ -340,7 +352,8 @@ struct devfs_node {
 /** Register `node`: 0, -EINVAL for a name no directory of /dev takes or
  * one too long, -EEXIST for a name the table, a disk
  * or a registered node has, or, unless `alias`, the numbers of a character
- * device present, or -ENOSPC when every slot is held. */
+ * device present, -ENOMEM when no slot is free and the heap has no room
+ * for one, or -ENOSPC when no slot is free and DEVFS_SLOTS_MAX are made. */
 int32_t devfs_node_register(struct devfs_node *node);
 
 /** Withdraw `node` from /dev; nothing for a node not registered. */
