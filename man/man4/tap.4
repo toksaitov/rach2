@@ -1,16 +1,16 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt TAP 4
 .Os
 .Sh NAME
 .Nm tap ,
 .Nm tun
-.Nd Ethernet interface whose other end is a descriptor
+.Nd network interface whose other end is a descriptor
 .Sh SYNOPSIS
 .Pa /dev/net/tun
 .Sh DESCRIPTION
 The character device
 .Pa /dev/net/tun ,
-10:200 as on Linux, makes an Ethernet interface whose wire is a file
+10:200 as on Linux, makes a network interface whose wire is a file
 descriptor: each frame the stack sends on the interface is one
 .Xr read 2
 of the descriptor, and each
@@ -18,11 +18,12 @@ of the descriptor, and each
 or
 .Xr writev 2
 of the descriptor is one frame the interface receives.
-QEMU's
+A TAP carries Ethernet frames; QEMU's
 .Ql -netdev tap
-is its main user: it joins a guest's network card to an interface of the
-host, so that the host routes through the guest or the guest through the
-host.
+joins a guest's network card to one, so that the host routes through the
+guest or the guest through the host.
+A TUN carries IP datagrams with no link header, as a VPN's daemon uses
+it.
 .Pp
 A program opens the device and gives the descriptor an interface with
 .Dv TUNSETIFF ,
@@ -32,15 +33,34 @@ with the name in
 .Va ifr_name
 and the flags in
 .Va ifr_flags .
-The flags must hold
-.Dv IFF_TAP | IFF_NO_PI :
-Ethernet frames with no packet information before them;
+When an interface has the name, the call attaches it: a TUN for
+.Dv IFF_TUN
+or a TAP for
+.Dv IFF_TAP ,
+when the caller is its owner and in its group, as
+.Dv TUNSETOWNER
+and
+.Dv TUNSETGROUP
+set them, or has
+.Dv CAP_NET_ADMIN ;
 .Dv IFF_TUN_EXCL
-refuses a name an interface already has, and
+refuses it.
+Otherwise the call, which needs
+.Dv CAP_NET_ADMIN ,
+makes a TUN for
+.Dv IFF_TUN
+or a TAP for
+.Dv IFF_TAP .
+.Dv IFF_NO_PI
+leaves out the packet information below, and
 .Dv IFF_ONE_QUEUE
-is ignored, as on Linux.
+is ignored, as on Linux; the interface keeps both from the call that
+attaches it.
 An empty name is
-.Ql tap%d .
+.Ql tun%d
+for a TUN and
+.Ql tap%d
+for a TAP.
 A name with a
 .Ql %
 is a template, whose one
@@ -61,8 +81,6 @@ present
 .Ql a%d0
 gives
 .Li a10 .
-Another name takes that interface when it is a tap no descriptor holds,
-and makes it when no interface has the name.
 A name may not be
 .Ql \&.
 or
@@ -77,8 +95,12 @@ with the flags as the caller gave them.
 It reads and writes the caller's whole
 .Vt struct ifreq ,
 32 bytes for an i386 program and 40 for an x86-64 one.
-The interface starts down, with a random locally administered station
-address and an MTU of 1500; it has a carrier while a descriptor holds it.
+The interface starts down with an MTU of 1500 and has a carrier while a
+descriptor holds it.
+A TAP has a random locally administered station address.
+A TUN has none: it is of type none, 65534, point-to-point with no ARP and
+no neighbour discovery, and its IPv6 link-local address has a random
+identifier, as Linux's random address mode gives it.
 .Pp
 A read returns one frame, whole, or its first bytes when the buffer is
 shorter, and
@@ -88,14 +110,38 @@ scatters one frame across its vector; a descriptor opened with
 returns
 .Er EAGAIN
 when no frame waits.
+A TUN's frame is the IP datagram alone.
+Without
+.Dv IFF_NO_PI
+each frame read is behind Linux's
+.Vt struct tun_pi :
+a 16-bit word of flags, in the machine's order, then the frame's protocol,
+an EtherType, big-endian.
+The flags are
+.Dv TUN_PKT_STRIP ,
+1, when the buffer is shorter than the whole, and a buffer shorter than
+the 4 bytes of the header is
+.Er EINVAL ,
+and loses the frame, as on Linux.
 Each interface holds up to 1024 frames for its reader, as Linux's tun
 queues 1000; a frame sent while the queue is full is dropped and counted
 in the interface's transmit drops.
+.Pp
 A write, or a
 .Xr writev 2
-whose vector is gathered into one, is one frame of 14 to 1514 bytes; a
-longer one is taken unread and counted as dropped, so that the writer goes
-on.
+whose vector is gathered into one, is one frame: without
+.Dv IFF_NO_PI
+behind a
+.Vt struct tun_pi ,
+then for a TAP an Ethernet frame of 14 to 1514 bytes, and for a TUN an IP
+datagram of up to 1500, received as the protocol of the header, or with
+.Dv IFF_NO_PI
+as IPv4 or IPv6 by its version.
+A longer one is taken unread and counted as dropped, so that the writer
+goes on.
+A TUN's datagram of no IP version without the header is
+.Er EINVAL
+and counted as dropped, as on Linux.
 A
 .Xr writev 2
 of no bytes returns 0 and sends nothing, as Linux's.
@@ -111,7 +157,7 @@ keeps it, is removed with its addresses, routes and neighbours.
 .Bl -tag -width TUNGETVNETHDRSZ
 .It Dv TUNGETFEATURES
 Writes
-.Dv IFF_TAP | IFF_NO_PI
+.Dv IFF_TUN | IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE
 to the
 .Vt unsigned int
 at the argument, the flags
@@ -120,11 +166,19 @@ takes.
 .It Dv TUNSETIFF
 As above.
 .It Dv TUNGETIFF
-Writes the interface's name and flags,
+Writes the interface's name and flags:
+.Dv IFF_TUN
+or
+.Dv IFF_TAP ,
+those the attach kept and
 .Dv IFF_PERSIST
-among them when set.
+when set.
 .It Dv TUNSETPERSIST
 A nonzero argument keeps the interface after its descriptor closes.
+.It Dv TUNSETOWNER , TUNSETGROUP
+The argument, a user or group of the caller's user namespace, becomes the
+interface's owner or group, which may attach it without
+.Dv CAP_NET_ADMIN .
 .It Dv TUNSETOFFLOAD
 Takes 0, no offload; any other flag is
 .Er EINVAL .
@@ -132,20 +186,19 @@ Takes 0, no offload; any other flag is
 Writes
 .Dv INT_MAX ,
 Linux's default.
-.It Dv TUNSETSNDBUF , TUNSETOWNER , TUNSETGROUP , TUNSETLINK , TUNSETNOCSUM , TUNSETDEBUG
+.It Dv TUNSETSNDBUF , TUNSETLINK , TUNSETNOCSUM , TUNSETDEBUG
 Taken and ignored.
 .It Dv TUNSETVNETHDRSZ , TUNGETVNETHDRSZ , TUNSETVNETLE , TUNGETVNETLE , TUNSETVNETBE , TUNGETVNETBE , TUNSETQUEUE
 .Er EINVAL :
 there is no virtio header and one queue.
 .El
 .Sh LIMITS
-Two tap interfaces at once, among the four interfaces the kernel has
-besides
+The interfaces take the slots of the four the kernel has besides
 .Li lo .
-Only the TAP form: no TUN interface of IP packets, no packet information
-header, no virtio header and so no offload, and one queue.
-Taps are made only in the first network namespace.
-A frame written is at most 1514 bytes, where Linux takes up to 64 KiB.
+No virtio header and so no offload, and one queue.
+Interfaces are made only in the first network namespace.
+A frame written is at most 1514 bytes, a TUN's datagram 1500, where Linux
+takes up to 64 KiB.
 A name is at most 7 bytes, where Linux takes 15, and a template's
 .Ql %d
 takes the digits 0 to 9 alone.
@@ -186,10 +239,11 @@ descriptor keeps the interface
 made or took, as on Linux.
 .It Er EINVAL
 .Dv TUNSETIFF
-without
-.Dv IFF_TAP | IFF_NO_PI ,
+with neither
+.Dv IFF_TUN
+nor
+.Dv IFF_TAP ,
 with
-.Dv IFF_TUN ,
 .Dv IFF_VNET_HDR
 or
 .Dv IFF_MULTI_QUEUE ,
@@ -197,14 +251,20 @@ with a name too long or one a name may not be, a template with a
 .Ql %
 that is not one
 .Ql %d ,
-or the name of an interface that is no tap; a write shorter than an
-Ethernet header.
+or the name of an interface of another kind;
+.Dv TUNSETOWNER
+or
+.Dv TUNSETGROUP
+with an id the caller's namespace does not map;
+a read shorter than the packet information; a write shorter than the
+packet information or a TAP's Ethernet header, or a TUN's datagram of no
+IP version.
 .It Er ENFILE
 Every digit of the template's
 .Ql %d
 is taken, or the first not taken gives a name that exists.
 .It Er ENOSPC
-Every interface of the kernel's, or both tap records, are taken.
+Every interface of the kernel's is taken.
 .It Er ENOTTY
 An unknown request.
 .It Er EOPNOTSUPP
@@ -213,7 +273,9 @@ in a network namespace other than the first.
 .It Er EPERM
 .Dv TUNSETIFF
 without
-.Dv CAP_NET_ADMIN .
+.Dv CAP_NET_ADMIN
+to make an interface, or to attach one whose owner or group the caller
+is not.
 .El
 .Sh SEE ALSO
 .Xr ifconfig 1 ,

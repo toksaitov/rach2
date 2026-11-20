@@ -1,8 +1,10 @@
 /**
  * Test /dev/net/tun of sys/network/driver/tap.c: TUNSETIFF and the other
  * requests, the ring of frames for the reader, writes, the backend and the
- * close, and TUNSETIFF on a duplicated descriptor while another call's copy
- * sleeps, with the stack around the device stood in for.
+ * close, TUNSETIFF on a duplicated descriptor while another call's copy
+ * sleeps, as many taps as the stack takes, TUN interfaces and the packet
+ * information header, and a persistent interface delegated to a user or a
+ * group, with the stack around the device stood in for.
  *
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -25,6 +27,7 @@
 #include "fs/file.h"
 #include "fs/devfs.h"
 #include "io/poll.h"
+#include "proc/percpu.h"
 #include "network/driver/netdev.h"
 #include "network/driver/tap.h"
 #include "network/driver/tap.c"
@@ -68,7 +71,9 @@ static struct {
     int ring_given_back;       /* kfree_pages had that ring, whole */
     struct netdev *iface[4];   /* the interfaces registered */
     int registered, unregistered;
-    int rx, rx_len; /* frames given to ethernet_rx, and the last one's length */
+    int rx, rx_len;   /* frames given to ethernet_rx, and the last one's length */
+    uint16_t rx_type; /* the last one's EtherType */
+    uint8_t rx_first; /* and its first byte after the header */
     int wakes, carrier, set_ups, last_up, locks;
 } k;
 
@@ -141,9 +146,10 @@ void netdev_carrier_changed(struct netdev *nd)
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     (void)nd;
-    (void)data;
     k.rx++;
     k.rx_len = len;
+    k.rx_type = (uint16_t)(data[12] << 8 | data[13]);
+    k.rx_first = len > ETH_HDR_SIZE ? data[ETH_HDR_SIZE] : 0;
 }
 
 /** Open a bracket of the stack's lock, counted. */
@@ -217,6 +223,22 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
+struct percpu cpu_table[NR_CPUS];
+static process_t self;
+
+/** The kernel's id of a user of the caller's namespace: itself below
+ * 60000, unmapped above. */
+int64_t uid_named(uint32_t id)
+{
+    return id < 60000u ? (int64_t)id : -1;
+}
+
+/** The kernel's id of a group, as `uid_named`. */
+int64_t gid_named(uint32_t id)
+{
+    return id < 60000u ? (int64_t)id : -1;
+}
+
 /** Whether the caller is in the first network namespace. */
 int net_ns_seen(void)
 {
@@ -265,9 +287,9 @@ void klog(int level, const char *subsystem, const char *format, ...)
 /* ------------------------------------------------------------------ */
 
 /* The descriptors and their descriptions: [0] and [1] share one, as dup
-   makes them; [2] and [3] are opens of their own. */
-static struct open_file ofd[3];
-static fd_entry_t fds[4];
+   makes them; [2] to [5] are opens of their own. */
+static struct open_file ofd[5];
+static fd_entry_t fds[6];
 
 /** Open the device as descriptor `n` on description `d`. */
 static int open_tap(int n, int d)
@@ -365,8 +387,8 @@ static void check_before(void)
     CHECK(k.node->ops->ioctl(&fds[0], TUNGETIFF, (uintptr_t)buf) == -EBADFD,
           "TUNGETIFF before TUNSETIFF");
     CHECK(k.node->ops->ioctl(&fds[0], TUNGETFEATURES, (uintptr_t)&word) == 0 &&
-              word == (TAP_IFF_TAP | TAP_IFF_NO_PI),
-          "TUNGETFEATURES offers IFF_TAP | IFF_NO_PI");
+              word == (TAP_IFF_TUN | TAP_IFF_TAP | TAP_IFF_NO_PI | TAP_IFF_ONE_QUEUE),
+          "TUNGETFEATURES offers IFF_TUN, IFF_TAP, IFF_NO_PI and IFF_ONE_QUEUE");
     CHECK(k.node->ops->ioctl(&fds[0], 0x1234u, 0) == -ENOTTY, "an unknown request");
     CHECK(k.node->ops->ioctl(&fds[0], TUNSETVNETHDRSZ, (uintptr_t)&word) == -EINVAL &&
               k.node->ops->ioctl(&fds[0], TUNSETQUEUE, (uintptr_t)&word) == -EINVAL,
@@ -375,8 +397,7 @@ static void check_before(void)
     k.admin = 0;
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EPERM, "TUNSETIFF needs NET_ADMIN");
     k.admin = 1;
-    CHECK(set_iff(0, "", TAP_IFF_TUN | TAP_IFF_NO_PI, 0) == -EINVAL, "no TUN interface");
-    CHECK(set_iff(0, "", TAP_IFF_TAP, 0) == -EINVAL, "no packet information header");
+    CHECK(set_iff(0, "", TAP_IFF_NO_PI, 0) == -EINVAL, "neither IFF_TUN nor IFF_TAP");
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI | TAP_IFF_VNET_HDR, 0) == -EINVAL,
           "no virtio header");
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI | TAP_IFF_MULTI_QUEUE, 0) == -EINVAL,
@@ -399,8 +420,7 @@ static void check_before(void)
     CHECK(set_iff(0, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EOPNOTSUPP,
           "a network namespace other than the first has no tap");
     k.other_ns = 0;
-    CHECK(k.registered == 0 && !taps[0].frames && !taps[1].frames,
-          "and no interface or ring is made by a refusal");
+    CHECK(k.registered == 0 && !taps, "and no interface, record or ring is made by a refusal");
 }
 
 /** TUNSETIFF names and makes interfaces, and a descriptor of the same open
@@ -445,11 +465,17 @@ static void check_setiff(void)
           "but is busy under IFF_TUN_EXCL, as Linux checks that first");
     CHECK(set_iff(2, "vm%d", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 && same_str(name, "vm0") == 0,
           "a stem with %d takes its first free digit");
-    CHECK(open_tap(3, 2) == 0 && set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
-          "a third interface finds both records taken");
-    CHECK(set_iff(3, ".%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC &&
-              set_iff(3, "%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
+    CHECK(open_tap(3, 2) == 0 && set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
+              same_str(name, "tap1") == 0,
+          "a third tap takes the stack's last free slot, as Linux has no bound of its own");
+    CHECK(open_tap(4, 3) == 0 && set_iff(4, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
+          "a fourth finds the stack full");
+    CHECK(set_iff(4, ".%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC &&
+              set_iff(4, "%d", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -ENOSPC,
           "the templates .%d and %d pass the checks of a name, as dev_valid_name allows them");
+    k.node->ops->close(&fds[4]);
+    k.node->ops->close(&fds[3]);
+    CHECK(netdev_by_name("tap1") == 0 && open_tap(3, 2) == 0, "tap1 is removed at its close");
 }
 
 /** Set O_NONBLOCK on the first open, as another thread's fcntl does. */
@@ -605,7 +631,7 @@ static void check_close(void)
     t = tap_of(&fds[0]);
     k.node->ops->close(&fds[0]);
     CHECK(be.gone == 1 && t->backend == 0, "the close lets the backend go");
-    CHECK(netdev_by_name("tap0") == 0 && k.unregistered == 2 && k.set_ups >= 2 && k.last_up == 0,
+    CHECK(netdev_by_name("tap0") == 0 && k.unregistered == 3 && k.set_ups >= 2 && k.last_up == 0,
           "tap0 is set down and removed");
     CHECK(set_iff(3, "", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 && same_str(name, "tap0") == 0,
           "and its record serves the next TUNSETIFF");
@@ -665,6 +691,227 @@ static void check_race(void)
     k.node->ops->close(&fds[3]);
 }
 
+/** An ioctl of descriptor `n`. */
+static int32_t ioc(int n, uint32_t request, uintptr_t arg)
+{
+    return k.node->ops->ioctl(&fds[n], request, arg);
+}
+
+/** The flags TUNGETIFF gives for descriptor `n`. */
+static uint16_t get_flags(int n)
+{
+    uint8_t ifr[TAP_IFR_MAX];
+    uint16_t flags = 0xffff;
+
+    k_memset(ifr, 0, sizeof(ifr));
+    if (ioc(n, TUNGETIFF, (uintptr_t)ifr) == 0) {
+        k_memcpy(&flags, ifr + TAP_IFNAME, 2);
+    }
+    return flags;
+}
+
+/** A frame as ethernet_tx gives a TUN: a header of zeros but for the
+ * EtherType `type`, then a datagram of `len` bytes whose first byte is
+ * `first` and whose others count up from 1. */
+static uint8_t *datagram(uint16_t type, uint8_t first, uint16_t len)
+{
+    static uint8_t f[2048];
+    uint16_t i;
+
+    k_memset(f, 0, ETH_HDR_SIZE);
+    f[12] = (uint8_t)(type >> 8);
+    f[13] = (uint8_t)type;
+    f[ETH_HDR_SIZE] = first;
+    for (i = 1; i < len; i++) {
+        f[ETH_HDR_SIZE + i] = (uint8_t)i;
+    }
+    return f;
+}
+
+/** IFF_TUN: an interface of IP datagrams with no station address, whose
+ * reader is given the datagram without a header and whose writes are
+ * received by their IP version, as Linux's tun_get_user judges it. */
+static void check_tun(void)
+{
+    char name[TAP_IFNAME];
+    struct tap *t;
+    uint8_t buf[128];
+    uint64_t dropped;
+    int took;
+
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "", TAP_IFF_TUN | TAP_IFF_NO_PI, name) == 0 &&
+              same_str(name, "tun0") == 0,
+          "IFF_TUN makes tun0");
+    t = tap_of(&fds[2]);
+    CHECK(t && t->nd.l3 && t->nd.mac[0] == 0 && t->nd.mac[5] == 0,
+          "an interface of IP datagrams with no station address");
+    if (!t) {
+        return;
+    }
+    CHECK(get_flags(2) == (TAP_IFF_TUN | TAP_IFF_NO_PI), "TUNGETIFF gives IFF_TUN | IFF_NO_PI");
+    CHECK(open_tap(3, 2) == 0 && set_iff(3, "tun0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EINVAL,
+          "IFF_TAP does not attach a TUN, as Linux's tun_set_iff");
+    k.node->ops->close(&fds[3]);
+    ofd[1].status_flags = OFD_NONBLOCK;
+    CHECK(tap_ops.tx(t, datagram(ETH_TYPE_IP, 0x45, 46), 60) == NETDEV_TX_OK &&
+              k.node->ops->read(&fds[2], (char *)buf, sizeof(buf)) == 46 && buf[0] == 0x45 &&
+              buf[45] == 45,
+          "a read gives the datagram the stack sent without a header");
+    CHECK(k.node->ops->write(&fds[2], (const char *)datagram(0, 0x45, 46) + ETH_HDR_SIZE, 46) ==
+                  46 &&
+              k.rx_len == 60 && k.rx_type == ETH_TYPE_IP && k.rx_first == 0x45,
+          "a write of an IPv4 datagram is received as IPv4");
+    CHECK(k.node->ops->write(&fds[2], (const char *)datagram(0, 0x60, 40) + ETH_HDR_SIZE, 40) ==
+                  40 &&
+              k.rx_len == 54 && k.rx_type == ETH_TYPE_IPV6,
+          "and one of IPv6 as IPv6, by its version");
+    dropped = t->nd.rx_dropped;
+    CHECK(k.node->ops->write(&fds[2], (const char *)datagram(0, 0x20, 40) + ETH_HDR_SIZE, 40) ==
+                  -EINVAL &&
+              t->nd.rx_dropped == dropped + 1,
+          "a datagram of no IP version is refused and counted, as Linux's");
+    CHECK(k.node->ops->write(&fds[2], (const char *)buf, 0) == -EINVAL &&
+              t->nd.rx_dropped == dropped + 2,
+          "and so is a write of nothing");
+    be.room = 1;
+    took = be.took;
+    CHECK(tap_backend_set(t, &be.b) == 0 &&
+              tap_ops.tx(t, datagram(ETH_TYPE_IP, 0x45, 46), 60) == NETDEV_TX_OK &&
+              be.took == took + 1 && be.first == 0x45,
+          "a backend is given the datagram as a reader is");
+    (void)tap_backend_set(t, 0);
+    ofd[1].status_flags = 0;
+    k.node->ops->close(&fds[2]);
+    CHECK(netdev_by_name("tun0") == 0, "tun0 is removed at its close");
+}
+
+/** Without IFF_NO_PI on a TAP: each frame read behind a `struct tun_pi` of
+ * its protocol, TUN_PKT_STRIP for a short read and EINVAL for one short of
+ * the header, and each write taken behind one. */
+static void check_pi(void)
+{
+    char name[TAP_IFNAME];
+    struct kernel_iovec v[2];
+    uint8_t buf[128], pi[4];
+    struct tap *t;
+
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "", TAP_IFF_TAP, name) == 0 &&
+              same_str(name, "tap0") == 0 && get_flags(2) == TAP_IFF_TAP,
+          "IFF_TAP without IFF_NO_PI makes tap0");
+    t = tap_of(&fds[2]);
+    if (!t) {
+        return;
+    }
+    ofd[1].status_flags = OFD_NONBLOCK;
+    tap_ops.tx(t, frame_of(60, 1), 60);
+    CHECK(k.node->ops->read(&fds[2], (char *)buf, sizeof(buf)) == 64 && buf[0] == 0 &&
+              buf[1] == 0 && buf[2] == 13 && buf[3] == 14 && buf[4] == 1 && buf[63] == 60,
+          "a read gives the packet information, its protocol the EtherType, then the frame");
+    tap_ops.tx(t, frame_of(60, 1), 60);
+    CHECK(k.node->ops->read(&fds[2], (char *)buf, 10) == 10 && buf[0] == TUN_PKT_STRIP &&
+              buf[4] == 1,
+          "a short read is marked TUN_PKT_STRIP");
+    tap_ops.tx(t, frame_of(60, 1), 60);
+    CHECK(k.node->ops->read(&fds[2], (char *)buf, 3) == -EINVAL &&
+              k.node->ops->read(&fds[2], (char *)buf, sizeof(buf)) == -EAGAIN,
+          "and one short of the header is EINVAL and loses the frame, as Linux's");
+    tap_ops.tx(t, frame_of(60, 1), 60);
+    v[0].iov_base = (uintptr_t)pi;
+    v[0].iov_len = sizeof(pi);
+    v[1].iov_base = (uintptr_t)buf;
+    v[1].iov_len = sizeof(buf);
+    CHECK(tap_readv(&fds[2], v, 2) == 64 && pi[2] == 13 && buf[0] == 1,
+          "readv gives the header and the frame across its vector");
+    k_memset(buf, 0, 4);
+    k_memcpy(buf + 4, frame_of(60, 7), 60);
+    CHECK(k.node->ops->write(&fds[2], (const char *)buf, 64) == 64 && k.rx_len == 60 &&
+              k.rx_first == (uint8_t)(7 + ETH_HDR_SIZE),
+          "a write's frame is taken after its packet information");
+    CHECK(k.node->ops->write(&fds[2], (const char *)buf, 3) == -EINVAL &&
+              k.node->ops->write(&fds[2], (const char *)buf, 17) == -EINVAL,
+          "and one short of it, or of a frame after it, is EINVAL");
+    ofd[1].status_flags = 0;
+    k.node->ops->close(&fds[2]);
+}
+
+/** Without IFF_NO_PI on a TUN: each datagram read behind its protocol, and
+ * each write received as the protocol its header names. */
+static void check_pi_tun(void)
+{
+    char name[TAP_IFNAME];
+    uint8_t buf[128];
+    struct tap *t;
+
+    CHECK(open_tap(3, 2) == 0 && set_iff(3, "", TAP_IFF_TUN, name) == 0 &&
+              same_str(name, "tun0") == 0 && get_flags(3) == TAP_IFF_TUN,
+          "IFF_TUN without IFF_NO_PI makes tun0");
+    t = tap_of(&fds[3]);
+    if (!t) {
+        return;
+    }
+    ofd[2].status_flags = OFD_NONBLOCK;
+    tap_ops.tx(t, datagram(ETH_TYPE_IPV6, 0x60, 46), 60);
+    CHECK(k.node->ops->read(&fds[3], (char *)buf, sizeof(buf)) == 50 && buf[2] == 0x86 &&
+              buf[3] == 0xdd && buf[4] == 0x60,
+          "a TUN's read gives the protocol and then the datagram");
+    buf[0] = 0;
+    buf[1] = 0;
+    buf[2] = 0x08;
+    buf[3] = 0x00;
+    buf[4] = 0x00;
+    CHECK(k.node->ops->write(&fds[3], (const char *)buf, 44) == 44 && k.rx_len == 54 &&
+              k.rx_type == ETH_TYPE_IP,
+          "and a write is received as the protocol its header names");
+    ofd[2].status_flags = 0;
+    k.node->ops->close(&fds[3]);
+}
+
+/** TUNSETOWNER and TUNSETGROUP: a persistent interface an administrator
+ * made, which its owner, or a member of its group, attaches without
+ * NET_ADMIN, as Linux's tun_not_capable allows. */
+static void check_owner(void)
+{
+    char name[TAP_IFNAME];
+
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "vm%d", TAP_IFF_TAP | TAP_IFF_NO_PI, name) == 0 &&
+              ioc(2, TUNSETPERSIST, 1) == 0 && ioc(2, TUNSETOWNER, 1000) == 0,
+          "an administrator makes vm0 persistent and gives it to user 1000");
+    CHECK(ioc(2, TUNSETOWNER, 0xffffffffu) == -EINVAL && ioc(2, TUNSETGROUP, 70000) == -EINVAL,
+          "an id the caller's namespace does not map is EINVAL");
+    k.node->ops->close(&fds[2]);
+    k.admin = 0;
+    self.euid = 1001;
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EPERM,
+          "another user may not attach it");
+    self.euid = 1000;
+    CHECK(set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0,
+          "its owner attaches it without NET_ADMIN");
+    CHECK(ioc(2, TUNSETGROUP, 50) == 0, "and gives it the group 50");
+    k.node->ops->close(&fds[2]);
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EPERM,
+          "with both set, the owner outside the group may not attach it");
+    k.node->ops->close(&fds[2]);
+    self.groups[0] = 50;
+    self.ngroups = 1;
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0,
+          "and in it by a supplementary group may");
+    k.node->ops->close(&fds[2]);
+    self.ngroups = 0;
+    self.euid = 1001;
+    self.egid = 50;
+    CHECK(open_tap(2, 1) == 0 && set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EPERM,
+          "a member of the group who is not the owner may not");
+    CHECK(set_iff(2, "", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == -EPERM,
+          "and no caller without NET_ADMIN makes an interface");
+    k.admin = 1;
+    CHECK(set_iff(2, "vm0", TAP_IFF_TAP | TAP_IFF_NO_PI, 0) == 0 && ioc(2, TUNSETPERSIST, 0) == 0,
+          "NET_ADMIN attaches it whoever owns it");
+    k.node->ops->close(&fds[2]);
+    self.euid = 0;
+    self.egid = 0;
+    CHECK(netdev_by_name("vm0") == 0, "and vm0, transient again, is removed at its close");
+}
+
 /** Run the rows; return the number of failed checks, at most 255. */
 int main(void)
 {
@@ -673,6 +920,7 @@ int main(void)
     k_strncpy(eth0.name, "eth0", sizeof(eth0.name) - 1);
     k.iface[3] = &eth0;
     k.admin = 1;
+    cpu_table[0].current = &self;
     tap_start();
     CHECK(k.node && same_str(k.node->name, "net/tun") == 0 && k.node->major == 10 &&
               k.node->minor == 200,
@@ -684,6 +932,10 @@ int main(void)
     check_backend();
     check_close();
     check_race();
+    check_tun();
+    check_pi();
+    check_pi_tun();
+    check_owner();
     if (!fails) {
         printf("tap-hosttest: result: pass\n");
     }
