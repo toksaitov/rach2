@@ -34,7 +34,6 @@
 /* Linux's `struct tun_pi`, before each frame without IFF_NO_PI: a 16-bit
  * word of flags, TUN_PKT_STRIP when a read cut the frame short, and the
  * frame's protocol, big-endian. */
-#define TAP_PI        4u
 #define TUN_PKT_STRIP 0x0001u
 
 /* A frame buffer: the packet information, then the longest frame. */

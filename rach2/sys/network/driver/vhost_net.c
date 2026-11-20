@@ -40,7 +40,7 @@
 #define VN_TX      1
 #define VN_HDR_MAX 12   /* struct virtio_net_hdr_mrg_rxbuf */
 #define VN_BUDGET  128u /* frames of a transmit ring a pass takes */
-#define VN_TXBUF   (VN_HDR_MAX + ETH_HDR_SIZE + ETH_MTU)
+#define VN_TXBUF   (VN_HDR_MAX + TAP_PI + ETH_HDR_SIZE + ETH_MTU)
 #define VN_UNBIND  (-1) /* VHOST_FILE_UNBIND */
 
 /* One region of the guest's memory, as VHOST_SET_MEM_TABLE gives it, with

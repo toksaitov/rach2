@@ -32,6 +32,9 @@
  * its data. */
 #define TAP_RING 1024
 
+/* Linux's struct tun_pi: two bytes of flags and two of protocol. */
+#define TAP_PI 4u
+
 /* The ioctls of the descriptor, Linux's numbers (linux/if_tun.h). */
 #define TUNSETNOCSUM    0x400454c8u
 #define TUNSETDEBUG     0x400454c9u

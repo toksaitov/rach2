@@ -60,6 +60,9 @@ which the kick wakes, and given to the stack as a
 .Xr write 2
 of the tap would give it, its virtio header stripped; a pass takes at
 most 128 frames before the thread gives way.
+When the tap uses packet information, the frame carries its
+.Vt struct tun_pi
+after the virtio header in each direction.
 The device asks the guest for no kicks while it can go on without them,
 and raises a ring's interrupt unless the guest asks for none.
 .Ss Requests
