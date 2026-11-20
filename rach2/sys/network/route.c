@@ -400,6 +400,8 @@ int netdev_local_route_change(struct netdev *nd, const struct netdev_rt *r, int 
         if (del)
             return -ESRCH;
     }
+    if (slot < 0)
+        return -ENOSPC;
     added[slot].nd = nd;
     added[slot].row = *r;
     added[slot].row.ifindex = nd->index;
