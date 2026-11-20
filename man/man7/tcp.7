@@ -57,8 +57,17 @@ the whole range.
 The side that closes first holds the connection in
 .Dv TIME_WAIT
 for 60 seconds, Linux's length, which keeps its port from the next
-connection to the same peer; a FIN the peer sends again is acknowledged
-and starts the 60 seconds again.
+connection to the same peer; a FIN the peer sends again, or any segment
+with an acknowledgement, is acknowledged and starts the 60 seconds again.
+A SYN from the peer whose sequence number lies past the old connection's
+ends
+.Dv TIME_WAIT
+when a listener has the port and opens the pair again, the new connection
+starting its own sequence numbers 65537 past the old one's last, as Linux
+does without timestamps; a reset at the next sequence number expected ends
+it too.
+Another SYN, or an older one, is acknowledged at most once in 500 ms,
+the rest counted in TCPACKSkippedTimeWait.
 A connection there gives back its send buffer on entering it, and its
 receive buffer then if nothing is unread or no socket holds it, and
 otherwise when the socket is closed.
@@ -360,8 +369,10 @@ TCPAbortOnClose, and those a timeout ended, TCPAbortOnTimeout; the connections t
 for a full table of them, TCPTimeWaitOverflow; the challenge acknowledgements sent, TCPChallengeACK,
 and the SYNs that drew one, TCPSYNChallenge; the answers of a handshake
 not yet ended held back by the limit, TCPACKSkippedSynRecv, those to a
-segment outside the window, TCPACKSkippedSeq, and the challenges held
-back, TCPACKSkippedChallenge; the keepalive probes sent,
+segment outside the window, TCPACKSkippedSeq, those to a connection in
+.Dv TIME_WAIT ,
+TCPACKSkippedTimeWait, and the challenges held back,
+TCPACKSkippedChallenge; the keepalive probes sent,
 TCPKeepAlive; and the probes of a larger segment lost and taken,
 TCPMTUPFail and TCPMTUPSuccess.
 .Pa /proc/net/snmp

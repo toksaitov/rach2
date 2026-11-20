@@ -119,8 +119,9 @@ struct net_mib {
      * connections that skipped TIME_WAIT for a full table of them, the
      * challenge acknowledgements of
      * RFC 5961 sent, the SYNs challenged, the answers of a handshake not
-     * yet ended, of a segment outside the receive window and of a challenge
-     * held back by TCP_INVALID_RATELIMIT, the keepalive probes sent, and
+     * yet ended, of a segment outside the receive window, of one to a
+     * connection in TIME_WAIT and of a challenge held back by
+     * TCP_INVALID_RATELIMIT, the keepalive probes sent, and
      * the probes of a larger segment lost and taken. */
     uint32_t tcp_delayed_ack_lost;
     uint32_t tcp_timeouts;
@@ -132,6 +133,7 @@ struct net_mib {
     uint32_t tcp_syn_challenge;
     uint32_t tcp_ack_skipped_syn_recv;
     uint32_t tcp_ack_skipped_seq;
+    uint32_t tcp_ack_skipped_time_wait;
     uint32_t tcp_ack_skipped_challenge;
     uint32_t tcp_keepalive;
     uint32_t tcp_mtup_fail;

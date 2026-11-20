@@ -165,6 +165,7 @@ static void tcp_free_half_opens(const struct tcb *listener);
 static int tcp_pair_in_use(const struct netns *ns, net_addr_t local_ip, uint16_t local_port,
                            net_addr_t remote_ip, uint16_t remote_port, int ifindex);
 static void tcp_reset(struct tcb *tcb);
+static int tcp_oow_limited(struct tcb *tcb, uint32_t *skipped);
 
 /* The key the initial sequence numbers are hashed under, and whether it has
  * been drawn; `tcp_isn_key` draws it. */
@@ -3172,6 +3173,100 @@ static void tcp_enter_time_wait(struct tcb *tcb)
 }
 
 /**
+ * Start the 60 s of `tcb`'s TIME_WAIT again, as Linux's
+ * inet_twsk_reschedule does, keeping the block at the run's end, which is
+ * ordered by the time each TIME_WAIT ends. A block that skipped TIME_WAIT
+ * for a full run (`tcp_enter_time_wait`) is left to end at the next tick.
+ */
+static void tcp_time_wait_restart(struct tcb *tcb)
+{
+    if (tcb->tw_listed || tcb->sock) {
+        tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
+    }
+    if (tcb->tw_listed) {
+        tcp_tw_list(tcb);
+    }
+}
+
+/**
+ * End the TIME_WAIT of `tcb` at once, as Linux's inet_twsk_deschedule_put
+ * ends it for a reset or a new SYN: a detached block is freed, and one a
+ * socket still holds leaves the table of connections as CLOSED, with no
+ * error, for the socket's close to free, so that the next segment for its
+ * pair finds the listener. The caller must not use a freed `tcb`.
+ */
+static void tcp_time_wait_kill(struct tcb *tcb)
+{
+    if (!tcb->sock) {
+        tcb_free(tcb);
+        return;
+    }
+    tcb_hash_del(tcb);
+    tcp_closed_or_free(tcb);
+}
+
+/**
+ * Take a segment other than a reset that starts at `seq` and ends before
+ * `end`, its SYN and FIN counted, for `tcb` in TIME_WAIT, as Linux 6.12's
+ * tcp_timewait_state_process takes one without timestamps (RFC 1122,
+ * 4.2.2.13). One at `rcv_nxt` that occupies nothing starts the 60 s again.
+ * A SYN without ACK past `rcv_nxt` may open the pair again, which
+ * `tcp_time_wait_reopen` does. Any other segment starts the 60 s again when
+ * it has ACK and is acknowledged, as Linux's
+ * tcp_timewait_check_oow_rate_limit answers it: one with data or a FIN and
+ * no SYN always, a FIN sent again among them, and any other only when
+ * `tcp_oow_limited` allows, counted in TCPACKSkippedTimeWait when not.
+ * Returns 1 for the SYN that may open the pair again, or 0 when the
+ * segment ends here. The caller holds `net_lock`.
+ */
+static int tcp_rx_time_wait(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t end)
+{
+    if (seq == tcb->rcv_nxt && end == seq) {
+        tcp_time_wait_restart(tcb);
+        return 0;
+    }
+    if ((flags & (TCP_SYN | TCP_ACK)) == TCP_SYN && (int32_t)(seq - tcb->rcv_nxt) > 0) {
+        return 1;
+    }
+    if (flags & TCP_ACK) {
+        tcp_time_wait_restart(tcb);
+    }
+    if (((flags & TCP_SYN) || end == seq) &&
+        tcp_oow_limited(tcb, &net_mib.tcp_ack_skipped_time_wait)) {
+        return 0;
+    }
+    tcp_send_flags(tcb, TCP_ACK);
+    return 0;
+}
+
+/**
+ * Open the pair of `tcb`, in TIME_WAIT, again for a SYN to `dst_ip`:
+ * `dst_port` that `tcp_rx_time_wait` let through, as Linux's tcp_v4_rcv
+ * and tcp_v6_rcv take TCP_TW_SYN: when a listener has the port
+ * (`tcp_find_listener`), the TIME_WAIT ends (`tcp_time_wait_kill`) and the
+ * listener is returned, with in `*isn` the initial sequence number its
+ * connection must take, 65537 past the last one sent here and never 0, so
+ * that the new connection's numbers lie above the old one's. With none the
+ * SYN is acknowledged and NULL returned. The caller holds `net_lock`.
+ */
+static struct tcb *tcp_time_wait_reopen(struct tcb *tcb, net_addr_t dst_ip, uint16_t dst_port,
+                                        uint32_t *isn)
+{
+    struct tcb *listener = tcp_find_listener(dst_ip, dst_port);
+
+    if (!listener) {
+        tcp_send_flags(tcb, TCP_ACK);
+        return NULL;
+    }
+    *isn = tcb->snd_nxt + 65535u + 2u;
+    if (*isn == 0) {
+        *isn = 1;
+    }
+    tcp_time_wait_kill(tcb);
+    return listener;
+}
+
+/**
  * Whether `tcb` must be ended with a reset at its socket's close, as
  * Linux's __tcp_close ends a connection whose receive queue held a byte
  * past copied_seq (net/ipv4/tcp.c:3085-3093): data received and never read,
@@ -3918,7 +4013,9 @@ static uint32_t tcp_sack_right(const struct tcb *tcb)
  * of the window's values. In SYN_SENT there is no receive window yet, and a
  * reset counts only when it acknowledges the SYN (RFC 793). In SYN_RCVD one
  * at `rcv_nxt` is accepted and one in the window last offered challenged.
- * LISTEN, TIME_WAIT and CLOSED have no connection to reset.
+ * TIME_WAIT accepts one at `rcv_nxt` alone, which ends it, as Linux's
+ * tcp_timewait_state_process does with tcp_rfc1337 off, its default.
+ * LISTEN and CLOSED have no connection to reset.
  *
  * @return TCP_RST_ACCEPT, TCP_RST_CHALLENGE or TCP_RST_IGNORE.
  */
@@ -3927,9 +4024,10 @@ static int tcp_rst_verdict(const struct tcb *tcb, uint32_t seq, uint32_t end, ui
 {
     switch (tcb->state) {
     case TCP_LISTEN:
-    case TCP_TIME_WAIT:
     case TCP_CLOSED:
         return TCP_RST_IGNORE;
+    case TCP_TIME_WAIT:
+        return seq == tcb->rcv_nxt ? TCP_RST_ACCEPT : TCP_RST_IGNORE;
     case TCP_SYN_SENT:
         return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;
     case TCP_SYN_RCVD:
@@ -3969,8 +4067,8 @@ static int tcp_rst_verdict(const struct tcb *tcb, uint32_t seq, uint32_t end, ui
  * A challenged reset is answered through `tcp_challenge_ack`, at most one
  * in TCP_INVALID_RATELIMIT, in SYN_RCVD too, whatever it carries, as
  * Linux's tcp_reqsk_send_challenge_ack and tcp_send_challenge_ack answer
- * it. An accepted one ends the connection (`tcp_reset`). The caller must
- * not use `tcb` afterwards.
+ * it. An accepted one ends the connection (`tcp_reset`), or the TIME_WAIT
+ * (`tcp_time_wait_kill`). The caller must not use `tcb` afterwards.
  */
 static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t end, uint32_t ack_num,
                          uint8_t flags)
@@ -3982,6 +4080,10 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t end, uint32_t a
         return;
     }
     if (verdict != TCP_RST_ACCEPT) {
+        return;
+    }
+    if (tcb->state == TCP_TIME_WAIT) {
+        tcp_time_wait_kill(tcb);
         return;
     }
     tcp_reset(tcb);
@@ -4817,9 +4919,11 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
  * counts in DelayedACKLost (`tcp_rx_resent`); one whose data runs past the
  * peer's FIN ends the connection, in all three states, as an accepted reset
  * does, and is answered with a reset (`tcp_abort_on_data`), counted in
- * TCPAbortOnData. TIME_WAIT acknowledges a
- * FIN the peer sent again because its acknowledgement was lost, and
- * restarts its 2MSL wait.
+ * TCPAbortOnData. TIME_WAIT takes a segment as `tcp_rx_time_wait` says:
+ * it acknowledges a FIN the peer sent again because its acknowledgement
+ * was lost and restarts its 2MSL wait, ends at a reset at `rcv_nxt`, and
+ * gives a SYN past `rcv_nxt` to the listener, which opens the pair again
+ * with an initial sequence number above the old connection's.
  */
 static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len)
 {
@@ -4832,6 +4936,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
     struct tcb *conn_tcb;
     struct socket *conn_sock;
     struct socket *listen_sock;
+    uint32_t tw_isn = 0;
 
     bkl_assert_held();
     hdr_len = tcp_seg_check(src_ip, dst_ip, data, len);
@@ -4866,6 +4971,13 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                      seq + (uint32_t)(len - hdr_len) + ((flags & TCP_SYN) != 0) +
                          ((flags & TCP_FIN) != 0),
                      ack_num, flags);
+        return;
+    }
+    if (tcb->state == TCP_TIME_WAIT &&
+        (!tcp_rx_time_wait(tcb, flags, seq,
+                           seq + (uint32_t)(len - hdr_len) + ((flags & TCP_SYN) != 0) +
+                               ((flags & TCP_FIN) != 0)) ||
+         !(tcb = tcp_time_wait_reopen(tcb, dst_ip, dst_port, &tw_isn)))) {
         return;
     }
     window = (flags & TCP_SYN) ? field : (uint32_t)field << tcb->snd_wscale;
@@ -4940,7 +5052,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         conn_tcb->rcv_nxt = seq + 1;
         tcp_take_wnd(conn_tcb, window);
         tcp_take_options(conn_tcb, data, hdr_len);
-        conn_tcb->iss = tcp_isn(conn_tcb);
+        conn_tcb->iss = tw_isn ? tw_isn : tcp_isn(conn_tcb);
         conn_tcb->snd_nxt = conn_tcb->iss;
         conn_tcb->snd_una = conn_tcb->iss;
         conn_tcb->recover = conn_tcb->iss;
@@ -5124,18 +5236,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         tcp_pump(tcb);
         break;
 
-    case TCP_TIME_WAIT:
-        if (flags & TCP_FIN) {
-            if (tcb->tw_listed || tcb->sock) {
-                tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
-            }
-            if (tcb->tw_listed) {
-                tcp_tw_list(tcb);
-            }
-            tcp_send_flags(tcb, TCP_ACK);
-        }
-        break;
-
+    case TCP_TIME_WAIT: /* `tcp_rx_time_wait` took the segment */
     case TCP_CLOSED:
     default:
         break;
