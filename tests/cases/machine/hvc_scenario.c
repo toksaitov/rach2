@@ -6,7 +6,7 @@
  * the virtio console's transmit lock held (`rach2.vconpanic`) on a machine
  * whose only console is the port, and the panic's record must reach the
  * host through it. In `ports` QMP adds a console port and a third port to
- * a virtio console of four ports after the boot, and removes the third,
+ * a virtio console of six ports after the boot, and removes the third,
  * while hvcmusl checks each port's nodes from the debug shell and the host
  * reads and writes the ports' ends, a file and an abstract Unix socket.
  */
@@ -182,16 +182,37 @@ static void sock_wait(struct lc *l, struct etude_case_machine *m, uint64_t *at, 
 }
 
 /**
+ * Add through QMP a virtserialport with no host's end at port `nr`, named
+ * org.rach2. and 244 bytes of `n` and then `last`, 255 bytes in all, the
+ * NAME_MAX of Linux; 1, or 0 with the case halted.
+ */
+static int long_port(struct lc *l, struct etude_case_machine *m, int nr, char last)
+{
+    char name[256], args[512];
+
+    memcpy(name, "org.rach2.", 10);
+    memset(name + 10, 'n', 244);
+    name[254] = last;
+    name[255] = '\0';
+    snprintf(args, sizeof(args),
+             "{\"driver\": \"virtserialport\", \"bus\": \"vs.0\", \"nr\": %d, "
+             "\"name\": \"%s\", \"id\": \"long%c\"}",
+             nr, name, last);
+    return qmp(l, m, "device_add", args);
+}
+
+/**
  * Boot to the debug shell on a machine whose boot line names hvc0 and then
- * ttyS0 and whose virtio console has the generic port org.rach2.boot, and
- * check that port's nodes; add a virtconsole, whose host's end must get
- * the driver's record of its addition, which only emerg_wr carries, since
- * the port takes the log only after it, and a line written to /dev/hvc0;
- * add org.rach2.late at port 3, whose host's end is a socket that the
- * scenario connects to and writes `pong` to, since QEMU closes a file's
- * end at the end of its input, and check it reads, writes and polls;
- * remove it and check its nodes go. Assertions `boot`, `emergency`,
- * `terminal`, `tty-out`, `late`, `late-out` and `removed`.
+ * ttyS0 and whose virtio console has the generic port org.rach2.boot, and check
+ * that port's nodes; add a virtconsole, whose host's end must get the driver's
+ * record of its addition, which only emerg_wr carries, since the port takes the
+ * log only after it, and a line written to /dev/hvc0; add org.rach2.late at
+ * port 3, whose host's end is a socket that the scenario connects to and writes
+ * `pong` to, since QEMU closes a file's end at the end of its input, and check
+ * it reads, writes and polls; remove it and check its nodes go; add two ports
+ * at 4 and 5 whose names are 255 bytes long, longer than a case's property may
+ * be, and check that they list and open by those names. Assertions `boot`,
+ * `emergency`, `terminal`, `tty-out`, `late`, `late-out`, `removed` and `long`.
  */
 static void ports(struct lc *l)
 {
@@ -240,6 +261,9 @@ static void ports(struct lc *l)
     if (!qmp(l, m, "device_del", "{\"id\": \"late\"}"))
         return;
     free(lc_run(l, m, "fixture", "exec /musl/hvcmusl gone\r", &at, "removed"));
+    if (!long_port(l, m, 4, 'a') || !long_port(l, m, 5, 'b'))
+        return;
+    free(lc_run(l, m, "fixture", "exec /musl/hvcmusl long\r", &at, "long"));
     (void)lc_quit(l, m, NULL);
 }
 
@@ -247,8 +271,8 @@ int etude_scenario(struct etude_case *c)
 {
     static const char *const restart_ids[] = {"enabled", "halted", "then-restart", "reset", NULL};
     static const char *const panic_ids[] = {"enabled", "panicked", NULL};
-    static const char *const ports_ids[] = {"boot", "emergency", "terminal", "tty-out",
-                                            "late", "late-out",  "removed",  NULL};
+    static const char *const ports_ids[] = {"boot",     "emergency", "terminal", "tty-out", "late",
+                                            "late-out", "removed",   "long",     NULL};
     const char *name = case_name(c);
     struct lc l;
 
