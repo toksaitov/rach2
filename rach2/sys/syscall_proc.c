@@ -8577,8 +8577,8 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * shared or not, as Linux's mmap clears VM_MAYWRITE and VM_MAYEXEC:
  * VM_PROT_NOWRITE for a shared one through a descriptor not open for
  * writing, or whose stores would not reach the file since it is served as
- * a private one (`served` 1), and VM_PROT_NOEXEC for one of a file on a
- * noexec mount (`filemap_noexec`).
+ * a private one (`served` 1), and VM_PROT_NOEXEC for one of a file or a
+ * device opened through a noexec mount (`filemap_noexec`).
  */
 static uint32_t mmap_never(const fd_entry_t *e, int shared, int served)
 {
@@ -8694,7 +8694,10 @@ static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, str
  * caller set from its arguments: an object that maps itself, a device's or
  * a driver's (`mmap_object`), a mapping of a file (`mmap_file`), shared
  * anonymous memory (VM_SHARED), or NULL for private anonymous memory
- * (VM_ANON). /dev/zero maps as anonymous memory.
+ * (VM_ANON). /dev/zero maps as anonymous memory, after the access checks a
+ * file's mapping makes (`filemap_access`) and with the marks of the rights
+ * mprotect may never give it (`mmap_never`), as Linux's do_mmap checks and
+ * clears VM_MAYWRITE and VM_MAYEXEC before /dev/zero's mmap runs.
  * Anonymous memory has its pages from its own first on, so its offset is
  * set to 0, as Linux ignores it. The alignment is MAP_THP_ANON for private
  * anonymous memory but /dev/zero's, `mmap_file`'s for a file, and
@@ -8705,6 +8708,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 {
     int shared = (flags & MAP_TYPE) != MAP_PRIVATE;
     fd_entry_t *e;
+    int32_t rc;
 
     src->file = NULL;
     src->type = VM_ANON;
@@ -8720,6 +8724,11 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
         if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
             return mmap_file(e, shared, src);
         }
+        rc = filemap_access(e, shared, src->prot);
+        if (rc != 0) {
+            return rc;
+        }
+        src->prot |= mmap_never(e, shared, 0);
     }
     src->pgoff = 0;
     if (shared) {

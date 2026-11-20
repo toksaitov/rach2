@@ -42,7 +42,8 @@
 #define VM_PROT_NOWRITE     0x10u
 /* Kept the same way: the region may never be made executable, as Linux's
  * mmap clears VM_MAYEXEC for a file on a noexec mount (mm/mmap.c:386-391).
- * A mapping of a file on such a mount has it, and `vm_protect` answers a
+ * A mapping of a file or a device opened through such a mount, /dev/zero's
+ * among them, has it (`filemap_noexec`), and `vm_protect` answers a
  * request for execute with -3 while it is set, as Linux's mprotect answers
  * EACCES. */
 #define VM_PROT_NOEXEC      0x800u
