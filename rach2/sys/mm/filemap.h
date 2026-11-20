@@ -19,8 +19,13 @@
 struct shmem;
 
 /** Check mmap's access mode, execute permission and mapping operation.
- * Return zero or the error to report before creating a mapping. */
+ * Return zero or the error to report before creating a mapping: -EPERM for
+ * execute asked of a file `filemap_noexec` names. */
 int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot);
+
+/** Whether the file `e` is open on is on a noexec mount or file system, so
+ * that a mapping of it may never execute, as Linux's path_noexec: 1 or 0. */
+int filemap_noexec(const fd_entry_t *e);
 
 /**
  * A mapped file for the open descriptor `e`, for a private mapping, with one
