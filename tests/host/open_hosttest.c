@@ -4909,7 +4909,7 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
-/** sysfs's type, which no row mounts: what `attr_read_only` compares. */
+/** sysfs's type, which no row mounts: what `proc_or_sysfs` compares. */
 const struct vfs_type vfs_sysfs_type = {"sysfs"};
 
 /** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */

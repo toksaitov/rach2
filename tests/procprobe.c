@@ -250,7 +250,7 @@ static const struct row {
             {"unix-row", ROW_PLAIN},
             {"pci-link", ROW_PLAIN},
             {"pci-uevent", ROW_PLAIN},
-            {"mounts-sys-ro", ROW_PLAIN},
+            {"mounts-sys-rw", ROW_PLAIN},
             {"mountinfo", ROW_PLAIN},
             {"mountinfo-shm-device", ROW_PLAIN},
             {"hostname-write", ROW_PLAIN},
@@ -1237,7 +1237,7 @@ static int root_line(const char *buf, int n)
 
 /** /sys: the host bridge every machine here has at 00:00.0, its link in the
  * bus's list leading where Linux's does, and its uevent with the variables
- * lspci reads; the mount table listing /sys read-only; and mountinfo with
+ * lspci reads; the mount table listing /sys read-write; and mountinfo with
  * each mount's id, parent and options, and the device stat gives. */
 static void sys_rows(void)
 {
@@ -1264,14 +1264,15 @@ static void sys_rows(void)
               contains(buf, n, join3(want, (int)sizeof(want), "\nPCI_SLOT_NAME=", slot, "\n")),
           "and its uevent has the class, the IDs and the slot lspci reads");
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
-    check("mounts-sys-ro", contains(buf, n, "\nsysfs /sys sysfs ro,"),
-          "/proc/mounts lists /sys, read-only");
+    check("mounts-sys-rw", contains(buf, n, "\nsysfs /sys sysfs rw,nosuid,nodev,noexec,relatime "),
+          "/proc/mounts lists /sys, read-write, as Linux systems mount it");
     n = slurp("/proc/self/mountinfo", buf, (int)sizeof(buf));
-    check("mountinfo",
-          root_line(buf, n) && contains(buf, n, "\n3 1 0:6 / /proc rw,relatime - proc proc rw\n") &&
-              contains(buf, n, "\n4 2 0:19 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n") &&
-              contains(buf, n, "\n6 1 0:7 / /sys ro,nosuid,nodev,noexec - sysfs sysfs ro\n"),
-          "/proc/self/mountinfo has each mount's id, parent, device and options");
+    check(
+        "mountinfo",
+        root_line(buf, n) && contains(buf, n, "\n3 1 0:6 / /proc rw,relatime - proc proc rw\n") &&
+            contains(buf, n, "\n4 2 0:19 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n") &&
+            contains(buf, n, "\n6 1 0:7 / /sys rw,nosuid,nodev,noexec,relatime - sysfs sysfs rw\n"),
+        "/proc/self/mountinfo has each mount's id, parent, device and options");
     check("mountinfo-shm-device",
           syscall3(SYS_STAT, (long)"/dev/shm", (long)st, 0) == 0 && *(unsigned int *)st == 19,
           "and the device it gives /dev/shm is the one stat gives");

@@ -3151,7 +3151,6 @@ static int special_file(uint32_t fmode)
 static int inode_read_only(struct vfs_mount *mnt, uint32_t mode, int want)
 {
     return (want & CRED_W) && !special_file(mode) && mnt &&
-           vfs_mount_base(mnt)->type != &vfs_sysfs_type &&
            (vfs_sb_rdonly(mnt) || halted_root_mount(mnt));
 }
 
@@ -3477,13 +3476,11 @@ static struct vfs_mount *fd_mount(const fd_entry_t *e)
 /**
  * Whether a change of attributes through `mnt` is -EROFS before any other
  * check, as Linux's `mnt_want_write` refuses it (`vfs_mount_rdonly`), the
- * halted KRFFS root among them; never for sysfs, which is mounted read-only
- * though its files keep what they are given, nor for NULL, no mount.
+ * halted KRFFS root among them; never for NULL, no mount.
  */
 static int attr_read_only(struct vfs_mount *mnt)
 {
-    return mnt && (halted_root_mount(mnt) ||
-                   (vfs_mount_rdonly(mnt) && vfs_mount_base(mnt)->type != &vfs_sysfs_type));
+    return mnt && (halted_root_mount(mnt) || vfs_mount_rdonly(mnt));
 }
 
 static int open_want(int flags);
@@ -4975,18 +4972,26 @@ static int32_t open_synth_node(const struct vfs_ref *ref, const struct vpath *vp
 static int32_t access_synth_ref(const struct vfs_ref *ref, const struct vpath *vp,
                                 const struct synth_owner *own, int mode, int dir, int flags);
 
+/** Whether `mnt` is of proc or sysfs, whose files `proc_read_only` judges. */
+static int proc_or_sysfs(const struct vfs_mount *mnt)
+{
+    const struct vfs_type *t = vfs_mount_base(mnt)->type;
+
+    return t == &vfs_procfs_type || t == &vfs_sysfs_type;
+}
+
 /**
- * The error for a write open of a proc file through a read-only mount,
- * or zero to proceed. Inode permission precedes a per-mount restriction
- * unless truncation needs mount write access first. A directory goes to
- * `synth_open_dir`. A descriptor link uses its target mount.
+ * The error for a write open of a proc or sysfs file through a read-only
+ * mount, or zero to proceed. Inode permission precedes a per-mount
+ * restriction unless truncation needs mount write access first. A directory
+ * goes to `synth_open_dir`. A descriptor link uses its target mount.
  */
 static int proc_read_only(const struct vfs_ref *ref, int flags)
 {
     const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
     struct vfs_stat st;
 
-    if (!vp || vfs_mount_base(ref->mnt)->type != &vfs_procfs_type || !vfs_mount_rdonly(ref->mnt) ||
+    if (!vp || !proc_or_sysfs(ref->mnt) || !vfs_mount_rdonly(ref->mnt) ||
         (!(flags & 3) && !(flags & O_TRUNC)) || vp->kind == VNODE_PROC_FD_LINK ||
         vp->kind == VNODE_PROC_NS_LINK || vfs_getattr(ref->mnt, ref->node, &st) != 0 ||
         (st.mode & S_IFMT) != S_IFREG)
@@ -13210,8 +13215,7 @@ static int32_t access_precheck(struct vfs_mount *mnt, const struct vfs_stat *st,
  * anything but a directory needing an execute bit even for root, -EACCES;
  * and last W_OK of anything but a device, FIFO or socket through a mount
  * made read-only alone -EROFS (`__mnt_is_readonly`). The halted KRFFS root
- * is a read-only file system. sysfs is judged as no mount, since it is
- * mounted read-only though its files take writes (`attr_read_only`).
+ * is a read-only file system.
  */
 static int32_t access_judge(struct vfs_mount *mnt, const struct vfs_stat *st, int mode, int real)
 {
@@ -13219,9 +13223,6 @@ static int32_t access_judge(struct vfs_mount *mnt, const struct vfs_stat *st, in
     int write = (mode & W_OK) && !special_file(fmode);
     int32_t rc;
 
-    if (mnt && vfs_mount_base(mnt)->type == &vfs_sysfs_type) {
-        mnt = NULL;
-    }
     rc = access_precheck(mnt, st, mode);
     if (rc != 0)
         return rc;
@@ -14913,8 +14914,9 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
  * The refusals of truncate(2) for the file `ref` resolved to, in order:
  * a directory is -EISDIR and another nonregular file -EINVAL; a read-only
  * mount is -EROFS, an immutable file -EPERM, denied write access -EACCES,
- * an append-only file -EPERM and a loop backing file -EBUSY. A proc data
- * file on a writable mount gives -EACCES.
+ * an append-only file -EPERM and a loop backing file -EBUSY. A file of
+ * /proc or /sys is judged by its mode and owner, and its permission hooks,
+ * as an open for writing is (`access_synth_ref`).
  * Returns 0 or the errno.
  */
 static int32_t truncate_checks(const struct vfs_ref *ref)
@@ -14959,7 +14961,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     if (attr_read_only(ref->mnt))
         return -EROFS;
     if (vp)
-        return -EACCES;
+        return access_synth_ref(ref, vp, NULL, CRED_W, 0, AT_EACCESS);
     if (mnt_is_root(ref->mnt)) {
         rc = cred_access_node(node, CRED_W, 0);
     } else {
@@ -14992,7 +14994,9 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  * length that grows the file past the caller's RLIMIT_FSIZE is -EFBIG with
  * SIGXFSZ, judged under the file's lock, or on FAT32 and exFAT the namespace
  * lock (`fsize_growth_refused`); a shrink is never refused. A file reserved
- * for execution gives -ETXTBSY, as on Linux.
+ * for execution gives -ETXTBSY, as on Linux. A file of /proc or /sys that
+ * the checks pass keeps its contents and answers 0, as Linux's
+ * `proc_setattr` and kernfs's setattr take a size and store nothing.
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
 {
@@ -15008,6 +15012,11 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     }
     locked = ref.mnt;
     rc = truncate_checks(&ref);
+    if (rc == 0 && vfs_synth_vpath(ref.mnt, ref.node)) {
+        vfs_walk_unlock(locked);
+        vfs_ref_release(&ref);
+        return 0;
+    }
     if (rc == 0) {
         desc = fd_ofd_new();
         rc = desc ? fd_ofd_access(desc, &ref, 1) : -ENOMEM;

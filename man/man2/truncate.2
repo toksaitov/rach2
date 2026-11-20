@@ -80,10 +80,10 @@ and a file the caller may not write
 .Er EACCES .
 A file under
 .Pa /proc
-returns
-.Er EACCES
-to every caller, as an open of one for writing does; Linux lets root
-truncate one and changes nothing.
+or
+.Pa /sys
+is judged by its mode and owner as an open of it for writing is, and one
+the caller may write keeps its contents and returns 0, as on Linux.
 A file backing a loop device returns
 .Er EBUSY .
 Linux has no such loop-device rule.
@@ -182,8 +182,7 @@ each refusal of both functions in order.
 .It Er EACCES
 .Fn truncate
 was denied search permission on a directory in the path or write
-permission on the file, or the file is under
-.Pa /proc .
+permission on the file.
 .It Er EBADF
 .Fa fd
 is not an open descriptor, was opened with

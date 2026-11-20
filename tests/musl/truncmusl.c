@@ -17,12 +17,14 @@
  * the row, empty, with a second empty file made right after it, so that
  * nothing behind its node is free, the method tests/fdstale.c describes. Then
  * each error, in Linux's order: a negative length before the path is looked
- * at, a missing file, a directory, a device, a /proc file, a file used as a
- * directory, a path too long, and a length past what the file system can
+ * at, a missing file, a directory, a device, a file used as a directory, a
+ * path too long, and a length past what the file system can
  * hold. ftruncate's errors follow, in Linux's order: a negative length through
  * each of its calls before the descriptor is looked at, a descriptor that is
  * not open, and EINVAL for a descriptor open on a directory, a pipe, a socket
- * or a device.
+ * or a device. Between them, truncate of /proc/meminfo succeeds for root
+ * and changes nothing, as Linux's proc_setattr takes a size and stores none,
+ * and fails with EACCES for user 1000, whom its mode 0444 refuses.
  *
  * The program runs as root. It prints `TRUNCMUSL OK` and exits 0 on success,
  * and prints `TRUNCMUSL FAIL (detail)` and exits 1 otherwise. Uid and gid
@@ -60,7 +62,7 @@ static const char *const assertion_id[] = {"make-file",        "shorten",
                                            "user-drops-setid", "moved-drops-setid",
                                            "no-write-eacces",  "negative-length",
                                            "enoent",           "eisdir",
-                                           "device-einval",    "proc-eacces",
+                                           "device-einval",    "proc-file",
                                            "enotdir",          "long-path-alloc",
                                            "enametoolong",     "efbig",
                                            "ftruncate-file",   "ftruncate-negative",
@@ -147,6 +149,36 @@ static int fresh_file(void)
         close(next);
     }
     return fd >= 0 && next >= 0 ? 0 : -1;
+}
+
+/** Whether /proc/meminfo still reads, after a truncate of it. */
+static int proc_still_reads(void)
+{
+    char buf[64];
+    int fd = open("/proc/meminfo", O_RDONLY);
+    ssize_t n = fd >= 0 ? read(fd, buf, sizeof(buf)) : -1;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    return n > 0;
+}
+
+/** Whether truncate of /proc/meminfo fails with EACCES for uid and gid
+ * 1000, in a child. */
+static int proc_user_refused(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
+            _exit(2);
+        }
+        _exit(refused(truncate("/proc/meminfo", 0), EACCES) ? 0 : 1);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
 }
 
 /**
@@ -281,7 +313,7 @@ static int refusal_rows(void)
         return fail("a device");
     }
     report_held();
-    if (!refused(truncate("/proc/meminfo", 0), EACCES)) {
+    if (truncate("/proc/meminfo", 0) != 0 || !proc_still_reads() || !proc_user_refused()) {
         return fail("a /proc file");
     }
     report_held();

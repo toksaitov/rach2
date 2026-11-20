@@ -5,9 +5,15 @@
 .Nm sysfs
 .Nd the devices, input devices, display devices, network interfaces, processors, firmware, clock, backlights and sleep states under /sys
 .Sh DESCRIPTION
-The kernel mounts a synthetic, read-only file system at
+The kernel mounts a synthetic file system at
 .Pa /sys ,
-as Linux mounts sysfs there, with the parts of Linux's tree that
+with
+.Ql nosuid ,
+.Ql nodev ,
+.Ql noexec
+and
+.Ql relatime ,
+as Linux systems mount sysfs there, with the parts of Linux's tree that
 BusyBox's
 .Ic lspci
 and
@@ -42,6 +48,10 @@ user id: a process whose file-system user id is 0 writes a file of mode
 and root has neither after
 .Xr setfsuid 2
 has taken that id from it.
+An open for writing through a read-only mount, or a bind made read-only,
+fails with
+.Er EROFS ,
+as on Linux.
 A file is given the first 4096 bytes of a write at most, as Linux's
 kernfs gives a page, so a longer write is taken in part, and parses them
 with its own limits; the descriptor's offset moves past the bytes taken,

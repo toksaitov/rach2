@@ -5956,12 +5956,13 @@ struct vfs_mount *vfs_kernel_mount(const struct vfs_type *type, void *root, uint
  * by its name, as /dev and /proc are. Then the tmpfs of memfd_create, with
  * no parent and no path, which nothing enters by name, and whose root, mode
  * 0555, stays empty, since its files have no names; chroot to a
- * /proc/PID/fdinfo makes that root the process's root. Then /sys,
- * read-only, nosuid, nodev and noexec, entered by name as /dev and /proc
- * are, the mqueue file system at /dev/mqueue, which lists the first IPC
- * namespace's POSIX queues and is entered by its name in /dev as /dev/shm
- * is, and last debugfs, nosuid, nodev and noexec, entered from /sys's root
- * directory by the names kernel/debug, where Linux systems mount it.
+ * /proc/PID/fdinfo makes that root the process's root. Then /sys, nosuid,
+ * nodev, noexec and relatime, as systemd mounts it, entered by name as /dev
+ * and /proc are, the mqueue file system at /dev/mqueue, which lists the
+ * first IPC namespace's POSIX queues and is entered by its name in /dev as
+ * /dev/shm is, and last debugfs, nosuid, nodev and noexec, entered from
+ * /sys's root directory by the names kernel/debug, where Linux systems
+ * mount it.
  */
 static void install_permanent(void)
 {
@@ -5973,8 +5974,7 @@ static void install_permanent(void)
     install(4, &vfs_tmpfs_type, "", 0, "mode=0555,size=0,nr_inodes=0");
     mounts[4]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
     install(5, &vfs_sysfs_type, "/sys", mounts[0], 0);
-    mounts[5]->flags = VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
-    mounts[5]->mnt_rdonly = 1;
+    mounts[5]->flags = VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC | VFS_MS_RELATIME;
     k_strncpy(mounts[5]->source, "sysfs", sizeof(mounts[5]->source));
     install(6, &vfs_mqueue_type, "/dev/mqueue", mounts[1], 0);
     mounts[6]->flags = VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
