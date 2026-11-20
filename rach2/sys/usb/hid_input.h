@@ -46,7 +46,9 @@ struct hid_input {
     uint16_t mt_first, mt_last;          /* the contact groups in this packet */
     int mt_count;                        /* frame size in the packet, or -1 if absent */
     int mt_left;                         /* contacts still due in a counted frame */
-    int mt_expected;                     /* the last positive Contact Count */
+    int mt_expected;                     /* the frame size a zero count keeps */
+    int32_t mt_scan;                     /* the last Scan Time read, 0 if none */
+    int32_t mt_prev_scan;                /* Scan Time at the last packet's start */
     unsigned int mt_buttons;             /* the buttons described by the touch application */
     unsigned int mt_pressed;             /* button bits read in this packet */
     unsigned int mt_button_fields;       /* button sources present in this packet */

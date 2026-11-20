@@ -1888,6 +1888,125 @@ static void mt_palm_lift_rows(void)
     drop(hid);
 }
 
+/* A precision touchpad with two records, each in its own Finger
+ * collection, and Scan Time before Contact Count, in report 4. */
+static const uint8_t scan_pad[] = {
+    0x05,
+    0x0d,
+    0x09,
+    5,
+    0xa1,
+    1,
+    0x85,
+    4,
+    0x09,
+    0x22,
+    0xa1,
+    2,
+    TEST_CONTACT,
+    0xc0,
+    0x09,
+    0x22,
+    0xa1,
+    2,
+    TEST_CONTACT,
+    0xc0,
+    0x09,
+    0x56,
+    0x27,
+    0xff,
+    0xff,
+    0,
+    0,
+    0x75,
+    16,
+    0x95,
+    1,
+    0x81,
+    2, /* Scan Time */
+    0x09,
+    0x54,
+    0x25,
+    16,
+    0x75,
+    8,
+    0x95,
+    1,
+    0x81,
+    2, /* Contact Count */
+    0x85,
+    3,
+    0x09,
+    0x55,
+    0x25,
+    16,
+    0xb1,
+    2, /* Contact Count Maximum */
+    0x09,
+    0x52,
+    0x25,
+    3,
+    0xb1,
+    2, /* Input Mode */
+    0x06,
+    0,
+    0xff,
+    0x09,
+    0xc5,
+    0x26,
+    0xff,
+    0,
+    0xb1,
+    2,
+    0xc0 /* Microsoft profile */
+};
+
+/** A zero Contact Count at a Precision Touchpad's frame start keeps the
+ * frame size unless Scan Time changed, as Linux's `mt_touch_report`. */
+static void mt_scan_time_rows(void)
+{
+    static const uint8_t touch[] = {1, 1, 100, 0, 120, 0, 1, 1, 17, 0, 0,
+                                    0, 0, 0,   0, 0,   0, 0, 0, 0,  1};
+    static const uint8_t lift[] = {1, 0, 100, 0, 120, 0, 1, 0, 17, 0, 0,
+                                   0, 0, 0,   0, 0,   0, 0, 0, 0,  0};
+    static const uint8_t scan_touch[] = {4, 1, 100, 0, 120, 0, 1, 1,  17, 0,
+                                         0, 0, 0,   0, 0,   0, 0, 10, 0,  1};
+    static const uint8_t scan_same[] = {4, 0, 100, 0, 120, 0, 1, 0,  17, 0,
+                                        0, 0, 0,   0, 0,   0, 0, 10, 0,  0};
+    static const uint8_t scan_new[] = {4, 0, 100, 0, 120, 0, 1, 0,  17, 0,
+                                       0, 0, 0,   0, 0,   0, 0, 20, 0,  0};
+    struct hid_dev *hid;
+    struct evdev *d = &devs[0];
+    int inputs;
+
+    ndevs = 0;
+    hid = connect(precision_pad, sizeof(precision_pad), "Precision Touchpad", &inputs);
+    feed(hid, touch, sizeof(touch));
+    CHECK("no scan time: a counted contact starts", inputs == 1 && d->id[0] == 0);
+    feed(hid, lift, sizeof(lift));
+    CHECK("no scan time: a lift with a count of zero ends the contact",
+          d->id[0] == -1 && saw(EV_KEY, BTN_TOUCH, 0) && saw(EV_SYN, SYN_REPORT, 0));
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(scan_pad, sizeof(scan_pad), "Scan Time Touchpad", &inputs);
+    feed(hid, scan_touch, sizeof(scan_touch));
+    CHECK("scan time: a counted contact starts", inputs == 1 && d->id[0] == 0);
+    feed(hid, scan_same, sizeof(scan_same));
+    CHECK("scan time unchanged: a lift with a count of zero ends the contact",
+          d->id[0] == -1 && saw(EV_KEY, BTN_TOUCH, 0) && saw(EV_SYN, SYN_REPORT, 0));
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(scan_pad, sizeof(scan_pad), "Scan Time Touchpad", &inputs);
+    feed(hid, scan_touch, sizeof(scan_touch));
+    feed(hid, scan_new, sizeof(scan_new));
+    CHECK("scan time changed: a count of zero ends a frame without contacts",
+          hid->inputs[0].mt_left == 0 && d->id[0] == 0 && !saw(EV_ABS, ABS_MT_TRACKING_ID, -1) &&
+              bit(d->down, BTN_TOUCH));
+    drop(hid);
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -1913,6 +2032,7 @@ int main(void)
     mt_implicit_lift_rows();
     mt_serial_rows();
     mt_palm_lift_rows();
+    mt_scan_time_rows();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;
