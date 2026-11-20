@@ -772,8 +772,8 @@ connection times out with
 .Er ENETUNREACH ;
 see
 .Xr tcp 7 .
-The change invalidates ARP mappings and clears a gateway that is no
-longer on the interface's subnet.
+The change invalidates ARP mappings and clears a gateway that the interface
+can no longer reach.
 .Pp
 .Dv SIOCADDRT
 and
@@ -791,8 +791,9 @@ as
 sends it.
 A null device-name pointer selects the interface whose subnet has the
 gateway, or the first.
-Adding the interface's existing subnet route succeeds without action, and
-removing it is
+Adding a route that an address already implies, including a TUN peer prefix,
+at the same metric succeeds without action.
+Removing an implied route is
 .Er EOPNOTSUPP
 while its address is in force.
 A default route of no metric and no gateway is

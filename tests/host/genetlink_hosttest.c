@@ -313,6 +313,15 @@ int netdev_route_at(int n, struct netdev_rt *out)
     return 0;
 }
 
+/** Model netdev_has_link_route with no addresses or routes. */
+int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask)
+{
+    (void)nd;
+    (void)dst;
+    (void)mask;
+    return 0;
+}
+
 /** Model netdev_route_del with no addresses, routes or sockets. */
 int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
 {

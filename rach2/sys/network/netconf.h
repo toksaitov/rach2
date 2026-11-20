@@ -170,9 +170,11 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask);
 
 /**
  * Set `nd`'s gateway, which is its default route, or clear it with 0, which
- * leaves a send to another subnet ENETUNREACH. A gateway needs the
- * interface's address and mask, and must be one `netconf_gateway_ok` takes;
- * EINVAL otherwise. The first interface's gateway is copied to
+ * leaves a send to another subnet ENETUNREACH. A gateway must be a host on
+ * the first subnet, as `netconf_gateway_ok` checks. On a TUN or when the
+ * first address has a peer, a link prefix must reach it and it must differ
+ * from the local addresses.
+ * EINVAL for an unusable gateway. The first interface's gateway is copied to
  * `net_ip_gateway`. Takes `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface, EINVAL as
