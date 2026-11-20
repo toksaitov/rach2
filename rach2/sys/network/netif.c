@@ -336,7 +336,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
 
     setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK || request == SIOCSIFBRDADDR ||
-              request == SIOCSIFFLAGS || request == SIOCSIFMTU);
+              request == SIOCSIFFLAGS || request == SIOCSIFMTU || request == SIOCSIFDSTADDR);
     if (setter && !net_admin()) {
         return -EPERM;
     }
@@ -367,6 +367,12 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     case SIOCGIFADDR:
         set_sa(ifr, nd->ip);
         break;
+    case SIOCGIFDSTADDR:
+        if (!nd->ip) {
+            return -EADDRNOTAVAIL;
+        }
+        set_sa(ifr, netdev_addr_dst(nd, -1));
+        break;
     case SIOCGIFNETMASK:
         set_sa(ifr, nd->mask);
         break;
@@ -387,6 +393,11 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
     case SIOCSIFADDR:
         return netconf_set_address(nd, be32(ifr + IFREQ_SA_ADDR), 0);
+    case SIOCSIFDSTADDR:
+        if (ifr[IFREQ_UNION] != AF_INET || ifr[IFREQ_UNION + 1] != 0) {
+            return -EINVAL;
+        }
+        return netconf_set_peer(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFNETMASK:
         return netconf_set_netmask(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFBRDADDR:
@@ -741,6 +752,8 @@ int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)
     case SIOCSIFFLAGS:
     case SIOCGIFADDR:
     case SIOCSIFADDR:
+    case SIOCGIFDSTADDR:
+    case SIOCSIFDSTADDR:
     case SIOCGIFBRDADDR:
     case SIOCSIFBRDADDR:
     case SIOCGIFNETMASK:

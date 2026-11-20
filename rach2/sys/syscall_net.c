@@ -1464,6 +1464,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
 
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
+        struct packet_dest dst;
         uint16_t proto;
         int32_t ifindex;
 
@@ -1476,18 +1477,17 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         if (copy_from_user(sll, (const void __user *)sa_ptr, SOCKADDR_LL_LEN) != 0) {
             return -EFAULT;
         }
-        if (sll[SOCKADDR_LL_HALEN] != 6) {
+        if (sll[SOCKADDR_LL_HALEN] > addrlen - SOCKADDR_LL_ADDR) {
             return -EINVAL;
         }
         proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
         if (proto == 0) {
             proto = entry->sock->protocol;
         }
-        ifindex = (int32_t)((uint32_t)sll[SOCKADDR_LL_IFINDEX] |
-                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
-                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
-                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
-        return (int32_t)packet_send(entry->sock, (int)ifindex, sll + SOCKADDR_LL_ADDR, proto,
+        ifindex = (int32_t)SC_LE32(sll + SOCKADDR_LL_IFINDEX);
+        dst.addr = sll + SOCKADDR_LL_ADDR;
+        dst.len = sizeof(sll) - SOCKADDR_LL_ADDR;
+        return (int32_t)packet_send(entry->sock, (int)ifindex, dst, proto,
                                     (const uint8_t __force *)(const void __user *)buf_ptr,
                                     (uint16_t)len);
     }

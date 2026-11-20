@@ -1131,10 +1131,10 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
     }
 }
 
-/** Append the address `ip`/`mask` of `nd`, its first or, with `secondary`,
- * another. */
-static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, uint32_t mask,
-                     int secondary)
+/** Append the local address `ip` and its destination prefix `dst`/`mask`
+ * on `nd`, its first or, with `secondary`, another. */
+static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, uint32_t dst,
+                     uint32_t mask, int secondary)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ifa = msg_start(b, msg, RTM_NEWADDR, NLM_F_MULTI, 8);
@@ -1144,9 +1144,9 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, u
     ifa[2] = IFA_F_PERMANENT | (secondary ? IFA_F_SECONDARY : 0u);
     ifa[3] = nd->loopback ? RT_SCOPE_HOST : RT_SCOPE_UNIVERSE;
     put32(ifa + 4, (uint32_t)nd->index);
-    msg_attr_ip(msg, IFA_ADDRESS, ip);
+    msg_attr_ip(msg, IFA_ADDRESS, dst);
     msg_attr_ip(msg, IFA_LOCAL, ip);
-    if (!nd->loopback && NETDEV_MASK_HAS_BROADCAST(mask)) {
+    if (!nd->loopback && !nd->l3 && NETDEV_MASK_HAS_BROADCAST(mask)) {
         msg_attr_ip(msg, IFA_BROADCAST, ip | ~mask);
     }
     msg_attr(msg, IFA_LABEL, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
@@ -1215,10 +1215,10 @@ static void addr_msgs(struct nl_build *b, const struct netdev *nd)
     int i;
 
     if (nd->ip) {
-        addr_msg(b, nd, nd->ip, nd->mask, 0);
+        addr_msg(b, nd, nd->ip, netdev_addr_dst(nd, -1), nd->mask, 0);
     }
     for (i = 0; i < nd->naddr2; i++) {
-        addr_msg(b, nd, nd->ip2[i], nd->mask2[i], 1);
+        addr_msg(b, nd, nd->ip2[i], netdev_addr_dst(nd, i), nd->mask2[i], 1);
     }
 }
 
@@ -1341,7 +1341,7 @@ struct watch_link {
 
 struct watch_addr4 {
     int index;
-    uint32_t ip, mask;
+    uint32_t ip, dst, mask;
     int secondary;
 };
 
@@ -1408,6 +1408,7 @@ static void watch_take(struct watch_state *w)
             struct watch_addr4 *a = &w->addr4[w->naddr4];
 
             a->ip = j < 0 ? nd->ip : nd->ip2[j];
+            a->dst = netdev_addr_dst(nd, j);
             a->mask = j < 0 ? nd->mask : nd->mask2[j];
             if (a->ip != 0) {
                 a->index = nd->index;
@@ -1436,7 +1437,7 @@ static int same_link(const struct watch_link *a, const struct watch_link *b)
 
 static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
 {
-    return a->index == b->index && a->ip == b->ip && a->mask == b->mask;
+    return a->index == b->index && a->ip == b->ip && a->dst == b->dst && a->mask == b->mask;
 }
 
 /** Whether two IPv6 addresses are one, and with `whole`, in the same
@@ -1498,7 +1499,7 @@ static void watch_compare(const struct watch_state *was, const struct watch_stat
             for (j = 0; j < in->naddr4 && !same_addr4(&in->addr4[j], a); j++) {
             }
             if (j == in->naddr4 && (nd = watch_dev(a->index)) != 0) {
-                addr_msg(b, nd, a->ip, a->mask, a->secondary);
+                addr_msg(b, nd, a->ip, a->dst, a->mask, a->secondary);
             }
         }
         b->group = RTNLGRP_IPV6_IFADDR;
@@ -2046,19 +2047,25 @@ static int32_t ns_addr_change(struct netdev *nd, uint32_t ip, uint32_t prefix, u
  * a network namespace other than the first. */
 static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
-    struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
-    uint32_t prefix = body >= 8 ? req[NLMSG_HDRLEN + 1] : 0;
-    uint32_t ip = req_ip(req, body, 8, IFA_LOCAL);
-    uint32_t mask = prefix == 0 || prefix > 32 ? 0 : 0xFFFFFFFFu << (32 - prefix);
+    struct netdev *nd;
+    uint32_t prefix, ip, peer, mask;
+    int r;
 
-    if (body >= 8 && req[NLMSG_HDRLEN] == AF_INET6) {
+    if (body < 8) {
+        return -ENODEV;
+    }
+    if (req[NLMSG_HDRLEN] == AF_INET6) {
         return net_ns_seen() ? addr6_change(req, type, flags, body) : -EOPNOTSUPP;
     }
-    if (ip == 0) {
-        ip = req_ip(req, body, 8, IFA_ADDRESS);
-    }
+    nd = dev_of_index(get32(req + NLMSG_HDRLEN + 4));
     if (!nd) {
         return -ENODEV;
+    }
+    prefix = req[NLMSG_HDRLEN + 1];
+    ip = req_ip(req, body, 8, IFA_LOCAL);
+    peer = req_ip(req, body, 8, IFA_ADDRESS);
+    if (!ip && (!nd->l3 || type != RTM_DELADDR)) {
+        ip = peer;
     }
     if (!net_ns_seen()) {
         return ns_addr_change(nd, ip, prefix, type, flags);
@@ -2067,16 +2074,21 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
         return type == RTM_NEWADDR && netdev_holds(nd, ip) ? ((flags & NLM_F_EXCL) ? -EEXIST : 0)
                                                            : -EOPNOTSUPP;
     }
+    if (prefix > 32) {
+        return -EINVAL;
+    }
+    mask = prefix ? 0xFFFFFFFFu << (32 - prefix) : 0;
     if (type == RTM_DELADDR) {
-        return netconf_del_address(nd, ip);
+        return netconf_del_address(nd, ip, mask, nd->l3 ? peer : 0);
     }
     if (ip == 0) {
         return -EINVAL;
     }
-    if (netdev_holds(nd, ip)) {
+    if (!nd->l3 && netdev_holds(nd, ip)) {
         return (flags & NLM_F_EXCL) ? -EEXIST : 0;
     }
-    return netconf_add_address(nd, ip, mask);
+    r = netconf_add_address(nd, ip, mask, peer);
+    return r == -EEXIST && !(flags & NLM_F_EXCL) ? 0 : r;
 }
 
 /** The interface a route request is for: the one RTA_OIF names, NULL when

@@ -102,6 +102,19 @@ A TUN has none: it is of type none, 65534, point-to-point with no ARP and
 no neighbour discovery, and its IPv6 link-local address has a random
 identifier, as Linux's random address mode gives it.
 .Pp
+For IPv4 a TUN address may name a peer and its prefix, for example
+.Ql ip addr add 192.0.2.1 peer 198.51.100.2/32 dev tun0 .
+The peer's prefix is routed through the TUN while the interface is up.
+.Dv SIOCGIFDSTADDR
+and
+.Dv SIOCSIFDSTADDR
+read and set the first address's peer.
+.Pp
+A packet socket of type
+.Dv SOCK_DGRAM
+reports a TUN hardware address length of zero and accepts that address
+on sends.
+.Pp
 A read returns one frame, whole, or its first bytes when the buffer is
 shorter, and
 .Xr readv 2

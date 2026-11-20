@@ -5684,13 +5684,13 @@
     },
     {
       "case_id": "guest.default.netlinkmusl",
-      "behavior": "NETLINK_ROUTE gives each socket a port, dumps links, addresses and routes, answers requests and makes the changes ip makes, as Linux's does, and the other protocols answer as Linux's do.",
+      "behavior": "NETLINK_ROUTE gives each socket a port, dumps links, addresses and routes, answers requests and makes the changes ip makes. A TUN reports its IPv4 peer and routes to it, and accepts a packet socket send with a hardware address length of zero. The other netlink protocols answer as Linux's do.",
       "units": ["default", "musl/netlinkmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["virtio-net-pci"], "boot_options": []}},
-      "execution": {"program": "netlinkmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "execution": {"program": "netlinkmusl", "stdin": null, "role": "ordinary", "privileges": "root for guest network changes and the packet socket", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "socket-port-pid", "checks": "The first NETLINK_ROUTE socket's port id is the process ID.", "source": "program"},
         {"assertion_id": "second-port", "checks": "A second socket's port id differs.", "source": "program"},
@@ -5728,7 +5728,14 @@
         {"assertion_id": "ifconf-length", "checks": "SIOCGIFCONF with no buffer gives the length.", "source": "program"},
         {"assertion_id": "ifconf-buffer", "checks": "SIOCGIFCONF with a buffer fills it.", "source": "program"},
         {"assertion_id": "uevent-silent", "checks": "A NETLINK_KOBJECT_UEVENT socket opens and hears nothing.", "source": "program"},
-        {"assertion_id": "eprotonosupport", "checks": "A netlink protocol the kernel lacks is EPROTONOSUPPORT.", "source": "program"}
+        {"assertion_id": "eprotonosupport", "checks": "A netlink protocol the kernel lacks is EPROTONOSUPPORT.", "source": "program"},
+        {"assertion_id": "tun-up", "checks": "A TUN interface is created and set up.", "source": "program"},
+        {"assertion_id": "tun-peer", "checks": "Adding an IPv4 address and its peer reports the two separately in IFA_LOCAL and IFA_ADDRESS.", "source": "program"},
+        {"assertion_id": "tun-route", "checks": "The peer has a direct unicast route through the TUN.", "source": "program"},
+        {"assertion_id": "tun-peer-ioctl", "checks": "SIOCGIFDSTADDR reads the peer and SIOCSIFDSTADDR replaces it and its route.", "source": "program"},
+        {"assertion_id": "tun-packet", "checks": "A packet socket sends a datagram to a TUN address with sll_halen 0. Reading the TUN gives the same datagram.", "source": "program"},
+        {"assertion_id": "tun-second-peer", "checks": "The same local address can reach a second peer through its own route.", "source": "program"},
+        {"assertion_id": "tun-peer-delete", "checks": "Deleting the first peer removes its route and keeps the second peer and its route.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

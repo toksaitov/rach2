@@ -317,28 +317,36 @@ int netdev_on_link(const struct netdev *nd, uint32_t ip)
 {
     int i;
 
-    for (i = 0; i < nd->naddr2; i++) {
-        if (nd->mask2[i] != 0xFFFFFFFFu && (ip & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
+        uint32_t dst = netdev_addr_dst(nd, i);
+
+        if ((ip & mask) == (dst & mask) && netdev_addr_has_route(local, dst, mask)) {
             return 1;
         }
     }
-    return nd->ip != 0 && nd->mask != 0 && nd->mask != 0xFFFFFFFFu &&
-           (ip & nd->mask) == (nd->ip & nd->mask);
+    return 0;
 }
 
 uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
 {
+    uint32_t source = nd->ip, best_mask = 0;
     int i;
 
-    if (nd->ip != 0 && nd->mask != 0 && (hop & nd->mask) == (nd->ip & nd->mask)) {
-        return nd->ip;
-    }
-    for (i = 0; i < nd->naddr2; i++) {
-        if ((hop & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
-            return nd->ip2[i];
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
+
+        if (local != 0 && mask > best_mask && (hop & mask) == (netdev_addr_dst(nd, i) & mask)) {
+            if (!nd->l3) {
+                return local;
+            }
+            source = local;
+            best_mask = mask;
         }
     }
-    return nd->ip;
+    return source;
 }
 
 int netdev_owns(uint32_t ip)
@@ -363,6 +371,9 @@ int netdev_is_broadcast(uint32_t ip)
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *nd = netdev_at(i);
 
+        if (nd->l3) {
+            continue;
+        }
         if (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && ip == (nd->ip | ~nd->mask)) {
             return 1;
         }

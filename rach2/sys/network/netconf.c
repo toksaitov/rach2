@@ -470,9 +470,18 @@ static int is_machine(const struct netdev *nd)
     return nd != 0 && nd == netdev_first();
 }
 
+/** Whether `gw` is reachable through the first address's link prefix. */
+static int addr_gateway_ok(const struct netdev *nd, uint32_t gw)
+{
+    return nd->ip != 0 && nd->mask != 0 &&
+           (nd->peer ? gw != nd->ip && !netconf_address_is_impossible(gw) &&
+                           (gw & nd->mask) == (nd->peer & nd->mask)
+                     : netconf_gateway_ok(gw, nd->ip, nd->mask));
+}
+
 /**
- * Put `ip`/`mask` in force on `nd`, with the costs `netconf_set_address`
- * lists.
+ * Put `ip`, `mask` and `peer` in force on `nd`, with the costs
+ * `netconf_set_address` lists.
  *
  * A change, a new address or a new mask under an address, is logged, drops the
  * ARP mappings of the interface but the permanent ones (of every interface, for
@@ -482,19 +491,21 @@ static int is_machine(const struct netdev *nd)
  * reaches. The first interface's values are copied to `net_ip_addr` and the two
  * after it. The caller holds `net_lock`.
  */
-static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
+static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
     uint32_t old = nd->ip;
     uint32_t old_mask = nd->mask;
+    uint32_t old_peer = nd->peer;
 
     nd->ip = ip;
     nd->mask = mask;
+    nd->peer = peer;
     if (is_machine(nd)) {
         net_ip_addr = ip;
         net_ip_mask = mask;
     }
 
-    if (ip != old || (ip != 0 && mask != old_mask)) {
+    if (ip != old || (ip != 0 && (mask != old_mask || peer != old_peer))) {
         char addr[16];
 
         if (ip != 0) {
@@ -509,8 +520,7 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
             arp_forget_dev(nd);
         }
     }
-    if (nd->gateway != 0 &&
-        (nd->ip == 0 || nd->mask == 0 || !netconf_gateway_ok(nd->gateway, nd->ip, nd->mask))) {
+    if (nd->gateway != 0 && !addr_gateway_ok(nd, nd->gateway)) {
         nd->gateway = 0;
     }
     if (is_machine(nd)) {
@@ -519,30 +529,44 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
     netdev_route_prune(nd);
 }
 
-/** Whether `ip`/`mask` may be an address of an interface: a possible
- * address, a contiguous mask other than 0, and a host of its subnet; 0, or
- * -EINVAL. */
-static int addr_valid(uint32_t ip, uint32_t mask)
+/** The slot matching the local address `ip` and destination prefix
+ * `dst`/`mask`. Zero for either address omits that match. The first slot
+ * is -1, and `nd->naddr2` means no match. The caller holds net_lock. */
+static int addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
 {
-    if (netconf_address_is_impossible(ip) || !mask_ok(mask) || mask == 0 || !is_host(ip, mask)) {
-        return -EINVAL;
+    int i;
+
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t m = i < 0 ? nd->mask : nd->mask2[i];
+
+        if (local && (!ip || ip == local) &&
+            (!dst || (m == mask && (netdev_addr_dst(nd, i) & m) == (dst & m)))) {
+            break;
+        }
     }
-    return 0;
+    return i;
 }
 
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
     uint32_t flags;
-    int rc = addr_valid(ip, mask);
+    int rc = 0;
 
-    if (rc != 0) {
-        return rc;
+    if (peer == ip) {
+        peer = 0;
     }
-    if (nd->ip == 0) {
-        return netconf_set_address(nd, ip, mask);
+    if (netconf_address_is_impossible(ip) || !mask_ok(mask) ||
+        (!peer && !nd->l3 && (mask == 0 || !is_host(ip, mask))) ||
+        (peer && netconf_address_is_impossible(peer))) {
+        return -EINVAL;
     }
     flags = net_lock();
-    if (netdev_holds(nd, ip)) {
+    if (nd->ip == 0) {
+        addr_publish(nd, ip, mask, peer);
+        nd->mask_provisional = 0;
+        nd->pending_ip = 0;
+    } else if (addr_find(nd, ip, mask, nd->l3 ? (peer ? peer : ip) : 0) < nd->naddr2) {
         rc = -EEXIST;
     } else if (nd->naddr2 == NETDEV_ADDRS) {
         rc = -ENOSPC;
@@ -551,6 +575,7 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 
         nd->ip2[nd->naddr2] = ip;
         nd->mask2[nd->naddr2] = mask;
+        nd->peer2[nd->naddr2] = peer;
         nd->naddr2++;
         netconf_format(ip, text);
         klog(KLOG_INFO, "net", "%s: IPv4 %s/%d added", nd->name, text, netconf_prefix_of(mask));
@@ -559,40 +584,36 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
     return rc;
 }
 
-int netconf_del_address(struct netdev *nd, uint32_t ip)
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
 {
-    uint32_t flags;
-    int i;
+    uint32_t flags = net_lock();
+    int i = addr_find(nd, ip, mask, dst);
 
-    if (ip == 0 || ip == nd->ip) {
+    if (i == nd->naddr2) {
+        net_unlock(flags);
+        return -EADDRNOTAVAIL;
+    }
+    if (i < 0) {
         uint32_t next = nd->naddr2 > 0 ? nd->ip2[0] : 0;
         uint32_t next_mask = nd->naddr2 > 0 ? nd->mask2[0] : 0;
+        uint32_t next_peer = nd->naddr2 > 0 ? nd->peer2[0] : 0;
 
-        if (nd->ip == 0) {
-            return -EADDRNOTAVAIL;
-        }
-        flags = net_lock();
         for (i = 1; i < nd->naddr2; i++) {
             nd->ip2[i - 1] = nd->ip2[i];
             nd->mask2[i - 1] = nd->mask2[i];
+            nd->peer2[i - 1] = nd->peer2[i];
         }
         nd->naddr2 -= nd->naddr2 > 0;
-        addr_publish(nd, next, next_mask);
+        addr_publish(nd, next, next_mask, next_peer);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
         net_unlock(flags);
         return 0;
     }
-    flags = net_lock();
-    for (i = 0; i < nd->naddr2 && nd->ip2[i] != ip; i++) {
-    }
-    if (i == nd->naddr2) {
-        net_unlock(flags);
-        return -EADDRNOTAVAIL;
-    }
     for (; i + 1 < nd->naddr2; i++) {
         nd->ip2[i] = nd->ip2[i + 1];
         nd->mask2[i] = nd->mask2[i + 1];
+        nd->peer2[i] = nd->peer2[i + 1];
     }
     nd->naddr2--;
     netdev_route_prune(nd);
@@ -605,8 +626,9 @@ int netconf_del_address(struct netdev *nd, uint32_t ip)
  * address in force while the control blocks still record the old one. A DHCP
  * client writes an address of 0 when a lease ends.
  *
- * With a mask of 0 the classful mask stands in, and `mask_provisional`
- * records that it was derived and not given. An address that is a host under
+ * On a TUN, a new address with a mask of 0 takes a /32. On other interfaces
+ * the classful mask stands in, and `mask_provisional` records that it was
+ * derived and not given. An address that is a host under
  * it goes into force at once. One that is not, a host only under a wider mask
  * still to come, waits in `pending_ip` with the interface unconfigured: put
  * in force, it would leave the interface answering for a network or
@@ -630,7 +652,7 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
     flags = net_lock();
 
     if (ip == 0) {
-        addr_publish(nd, 0, 0);
+        addr_publish(nd, 0, 0, 0);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
         net_unlock(flags);
@@ -642,6 +664,16 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
         return -EINVAL;
     }
 
+    if (nd->l3 && mask == 0) {
+        if (ip != nd->ip) {
+            addr_publish(nd, ip, 0xFFFFFFFFu, 0);
+            nd->mask_provisional = 0;
+            nd->pending_ip = 0;
+        }
+        net_unlock(flags);
+        return 0;
+    }
+
     if (mask == 0) {
         uint32_t derived = classful_mask(ip);
 
@@ -651,10 +683,10 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
         }
 
         if (!is_host(ip, derived)) {
-            addr_publish(nd, 0, 0);
+            addr_publish(nd, 0, 0, 0);
             nd->pending_ip = ip;
         } else {
-            addr_publish(nd, ip, derived);
+            addr_publish(nd, ip, derived, 0);
             nd->pending_ip = 0;
         }
         nd->mask_provisional = 1;
@@ -666,7 +698,7 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
         rc = -EINVAL;
     }
     if (rc == 0) {
-        addr_publish(nd, ip, mask);
+        addr_publish(nd, ip, mask, ip == nd->ip ? nd->peer : 0);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
     }
@@ -698,23 +730,39 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask)
     ip = nd->pending_ip ? nd->pending_ip : nd->ip;
 
     if (mask == 0) {
-        addr_publish(nd, nd->pending_ip ? 0 : nd->ip, 0);
+        addr_publish(nd, nd->pending_ip ? 0 : nd->ip, 0, nd->pending_ip ? 0 : nd->peer);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
     } else if (ip == 0) {
         rc = -EINVAL;
-    } else if (!mask_ok(mask) || !is_host(ip, mask)) {
+    } else if (!mask_ok(mask) || (!nd->l3 && !nd->peer && !is_host(ip, mask))) {
         rc = -EINVAL;
     } else {
-        addr_publish(nd, ip, mask);
+        addr_publish(nd, ip, mask, nd->peer);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
     }
 
     if (rc != 0 && (nd->mask_provisional || nd->pending_ip)) {
-        addr_publish(nd, 0, 0);
+        addr_publish(nd, 0, 0, 0);
         nd->mask_provisional = 0;
         nd->pending_ip = 0;
+    }
+    net_unlock(flags);
+    return rc;
+}
+
+int netconf_set_peer(struct netdev *nd, uint32_t peer)
+{
+    uint32_t flags = net_lock();
+    int rc = 0;
+
+    if (nd->ip == 0) {
+        rc = -EADDRNOTAVAIL;
+    } else if (netconf_address_is_impossible(peer)) {
+        rc = -EINVAL;
+    } else {
+        addr_publish(nd, nd->ip, nd->mask, peer == nd->ip ? 0 : peer);
     }
     net_unlock(flags);
     return rc;
@@ -734,9 +782,7 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
     flags = net_lock();
     if (gw == 0) {
         nd->gateway = 0;
-    } else if (nd->ip == 0 || nd->mask == 0) {
-        rc = -EINVAL;
-    } else if (!netconf_gateway_ok(gw, nd->ip, nd->mask)) {
+    } else if (!addr_gateway_ok(nd, gw)) {
         rc = -EINVAL;
     } else {
         nd->gateway = gw;

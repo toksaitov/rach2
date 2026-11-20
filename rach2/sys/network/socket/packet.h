@@ -164,15 +164,23 @@ void packet_flush(struct socket *sock);
  */
 int packet_last_addr(struct socket *sock, uint8_t *sll);
 
+/* A packet send's destination hardware address and the size of its buffer. */
+struct packet_dest {
+    const uint8_t *addr;
+    uint32_t len;
+};
+
 /**
- * Send one payload to `dst_mac` under `ethertype` (host order).
+ * Send one payload under `ethertype` (host order). The destination buffer
+ * `dst` holds at least six bytes for Ethernet. A TUN uses
+ * no destination hardware address. A short destination gives -EINVAL.
  *
  * The caller takes the EtherType from the `sockaddr_ll` it was given, falling
  * back to the socket's own protocol, so a program that names neither is told
  * so rather than having a frame sent under a type it did not choose. `ifindex`
  * is the interface the caller's `sockaddr_ll` named, or 0 for none; the frame
  * leaves by that one, or by the one the socket is bound to, or by the first.
- * There is no address to route on here, since the caller gave a MAC.
+ * The interface is selected without an IP route lookup.
  *
  * Returns the bytes sent; -EMSGSIZE for an empty payload or one past the
  * interface's MTU, `nd->mtu`, -EINVAL for an EtherType other than IPv4, ARP and
@@ -180,7 +188,7 @@ int packet_last_addr(struct socket *sock, uint8_t *sll);
  * Takes `net_lock` itself, since the Ethernet transmit buffer is shared with
  * the receive interrupt.
  */
-int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16_t ethertype,
+int packet_send(struct socket *sock, int ifindex, struct packet_dest dst, uint16_t ethertype,
                 const uint8_t *data, uint16_t len);
 
 #endif /* _PACKET_H_ */

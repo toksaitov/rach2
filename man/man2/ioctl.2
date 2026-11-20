@@ -717,6 +717,14 @@ and
 .Dv SIOCGIFFLAGS
 return its index, hardware address, IPv4 address, netmask, broadcast
 address, MTU, and flags, respectively.
+.Dv SIOCGIFDSTADDR
+returns the first IPv4 address's destination, which is the peer address
+when one is set.
+.Dv SIOCSIFDSTADDR
+sets the destination and requires network administration privilege.
+Both return
+.Er EADDRNOTAVAIL
+when the interface has no IPv4 address.
 .Dv SIOCGIWNAME
 returns
 .Er EOPNOTSUPP ;
@@ -744,14 +752,15 @@ privilege in the user namespace that owns it is enough, and they take
 .Ql lo
 up or down, the address 127.0.0.1 and the netmask 255.0.0.0 alone.
 Other flag bits are ignored by the setter.
-An address set without its mask uses a provisional classful mask until
+A TUN address set without a mask takes a host prefix.
+An Ethernet address set without its mask uses a provisional classful mask until
 the separate netmask request.
 If the address is a network or broadcast address under the provisional
 mask, the interface remains unconfigured until a valid netmask is
 supplied.
 A netmask request that fails with
 .Er EINVAL ,
-for a mask that is not contiguous, is all ones, or makes the address a
+for a mask that is not contiguous or makes an Ethernet address a
 network or broadcast address, unconfigures the interface when the mask is
 provisional or an address is pending, and the address must be set again.
 Repeating the existing configured address leaves its mask unchanged.
