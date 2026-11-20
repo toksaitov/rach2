@@ -30,7 +30,9 @@
  * frees what the descriptor holds. With a limit of the bytes the dump writes
  * before the zero at its end, the zero must not be written, the file must end
  * with the last page written and the call must answer EFBIG; with one byte
- * more, the zero is written at the file's last byte.
+ * more, the zero is written at the file's last byte. A loop device attached
+ * to the file while the dump waits lets it write the whole file, unless the
+ * file is on KRFFS, where the next write answers EBUSY.
  *
  * The refault rows write 32 bytes through `file_lock` and
  * `file_write_locked` as on a type that sets `file_locked`, whose file has
@@ -865,20 +867,26 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return -1;
 }
 
-/** No row's file backs a loop device: 0. */
+/* Whether a loop device stands on every file of the model, as the
+ * attachment rows set it while a dump runs, and whether the model type is
+ * one whose files a change may move, KRFFS's. */
+static int files_attached, files_pinned;
+
+/** Whether the file backs a loop device: `files_attached`. */
 int loop_backs(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
     (void)node;
-    return 0;
+    return files_attached;
 }
 
-/** No row's file backs a loop device, so none has its length pinned: 0. */
+/** Whether the file backs a loop device on a type whose files a change may
+ * move: `files_attached` and `files_pinned`. */
 int loop_length_pinned(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
     (void)node;
-    return 0;
+    return files_attached && files_pinned;
 }
 
 /** No row's file is locked: 0. */
@@ -2370,6 +2378,36 @@ static void trailing_zero_limit(void)
     row_end();
 }
 
+/** A loop device is attached to the core file while the dump waits. */
+static void core_gets_attached(void)
+{
+    files_attached = 1;
+}
+
+/**
+ * A loop device attached to the core file while the dump runs: on a type
+ * whose files keep their place the dump writes the whole file, as Linux's
+ * does; on KRFFS, where a write may move the file, it stops at its next
+ * write with EBUSY.
+ */
+static void attached_core_rows(void)
+{
+    row_begin();
+    meanwhile = core_gets_attached;
+    check(fs_core_file(SIGABRT, 0xFFFFFFFFu) == 0 && file_len == MODEL_LENGTH &&
+              __builtin_memcmp(file, "\177ELF", 4) == 0,
+          "a dump into a file a loop device stands on writes the whole file");
+    files_attached = 0;
+    row_end();
+    row_begin();
+    files_pinned = 1;
+    meanwhile = core_gets_attached;
+    check(fs_core_file(SIGABRT, 0xFFFFFFFFu) == -EBUSY && file_written == 0,
+          "on KRFFS the dump stops at its next write with EBUSY");
+    files_attached = files_pinned = 0;
+    row_end();
+}
+
 /** Another process's append of 16 bytes of 'B' at the file's end. */
 static void competing_append(void)
 {
@@ -2612,6 +2650,7 @@ int main(void)
     mount.type = &model_type;
     sharer_finds_no_descriptor();
     trailing_zero_limit();
+    attached_core_rows();
     refault_rows();
     stream_writev();
     if (!failures) {
