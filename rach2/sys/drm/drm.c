@@ -782,10 +782,13 @@ static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
 }
 
 /* read and poll take only the event lock; ioctl takes the big lock for a
- * row without DRM_UNLOCKED, and close for the file's release. */
+ * row without DRM_UNLOCKED, and close for the file's release. A device
+ * node's read and close take the big lock all the same
+ * (`file_ops_unlocked`); its poll does not (FILE_OPS_POLL_UNLOCKED), as
+ * Linux's drm_poll takes none. */
 static const struct file_ops drm_fops = {
     drm_read,       NULL,          drm_poll, drm_node_ioctl,
-    drm_node_close, drm_node_mmap, NULL,     FILE_OPS_UNLOCKED};
+    drm_node_close, drm_node_mmap, NULL,     FILE_OPS_UNLOCKED | FILE_OPS_POLL_UNLOCKED};
 
 /** Whether the held descriptor belongs to this DRM core's node operations. */
 int drm_is_file(const fd_entry_t *entry)

@@ -736,7 +736,9 @@ static int32_t crc_data_read(fd_entry_t *e, char __user *buf, uint32_t count)
 }
 
 /** crc/data's poll, Linux's crtc_crc_poll: POLLIN and POLLRDNORM while an
- * entry waits. */
+ * entry waits. It runs without the big lock (FILE_OPS_POLL_UNLOCKED), as
+ * Linux's does, so that a reader's poll does not wait for a holder whose
+ * virtual processor the host has stopped. */
 static short crc_data_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct drm_crtc *crtc = (struct drm_crtc *)e->priv;
@@ -760,8 +762,9 @@ static int64_t crc_data_llseek(fd_entry_t *e, int64_t offset, int whence)
     return -ESPIPE;
 }
 
-static const struct file_ops crc_data_ops = {crc_data_read,  NULL, crc_data_poll,   NULL,
-                                             crc_data_close, NULL, crc_data_llseek, 0};
+static const struct file_ops crc_data_ops = {
+    crc_data_read,  NULL, crc_data_poll,   NULL,
+    crc_data_close, NULL, crc_data_llseek, FILE_OPS_POLL_UNLOCKED};
 
 /* ------------------------------------------------------------------------
  * A connector's files, Linux's drm_debugfs_connector_add
