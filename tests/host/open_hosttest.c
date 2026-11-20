@@ -743,6 +743,13 @@ struct pty *pty_get(uint32_t inst, int index)
     return 0;
 }
 
+/** /dev's device for every instance: no row mounts devpts. */
+uint32_t vfs_pts_dev(uint32_t inst)
+{
+    (void)inst;
+    return DEVFS_FSID;
+}
+
 /** No model has a devpts instance but the system's, whose ptmx is root's of
  * mode 0000. */
 int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx)
@@ -759,6 +766,15 @@ int pty_open_master_in(uint32_t inst, const struct vfs_pts_options *o, int flags
 {
     (void)inst;
     (void)o;
+    (void)flags;
+    return -ENODEV;
+}
+
+/** No row opens a multiplexer. */
+int pty_open_master_near(const struct vfs_ref *start, const char *path, int flags)
+{
+    (void)start;
+    (void)path;
     (void)flags;
     return -ENODEV;
 }

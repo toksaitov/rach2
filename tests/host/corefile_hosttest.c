@@ -1233,6 +1233,13 @@ struct pty *pty_get(uint32_t inst, int index)
     return NULL;
 }
 
+/** /dev's device for every instance: no row mounts devpts. */
+uint32_t vfs_pts_dev(uint32_t inst)
+{
+    (void)inst;
+    return DEVFS_FSID;
+}
+
 /** No model has a devpts instance but the system's, whose ptmx is root's of
  * mode 0000. */
 int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx)

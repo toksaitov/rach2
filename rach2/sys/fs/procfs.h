@@ -298,7 +298,7 @@ struct vfs_mount;
  * table (`vfs_fill_stat64`): 0 on the KRFFS root; the node of /dev it was
  * mounted from, in Linux's encoding, as a disk's or a loop device's mount
  * has it; else the synthetic types' own numbers, and the entry's index plus
- * 16 for any other mount. */
+ * 16 for any other mount, a devpts mount among them (`vfs_pts_dev`). */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m);
 
 /** The name of the `idx`-th file system type /proc/filesystems lists, in
@@ -313,7 +313,8 @@ uint32_t procfs_mount_id(const struct vfs_mount *m);
 
 /** The id of the /dev, /proc or /sys mount a file of device `dev`,
  * DEVFS_FSID, PROCFS_FSID or SYSFS_FSID, is on: `hint`'s when it is of that
- * type, else the first such mount the caller sees; 0 for another device. */
+ * type, or a devpts mount whose instance's device is `dev` (`vfs_pts_dev`),
+ * else the first such mount the caller sees; 0 for another device. */
 uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint);
 
 /** The inode of /proc/net/stat. */

@@ -22,8 +22,12 @@
  * a new mount namespace is not seen outside it, and a new IPC namespace has
  * none of the first's System V objects. Forty mount namespaces exist at
  * once, past the 32 Rach2 once had room for, each with a mount of its own
- * that it alone sees. A map of 340 extents, the most Linux takes, written by
- * root from outside the namespace as newuidmap writes one, is taken, a 341st
+ * that it alone sees. Two devpts mounts are two instances, whose first
+ * terminals and ptmx nodes differ by device; a remount of one with a bad
+ * option is EINVAL yet takes the options before it; and a ptmx opened
+ * beside a devpts mount makes its pair there. A map of 340 extents, the
+ * most Linux takes, written by root from outside the namespace as
+ * newuidmap writes one, is taken, a 341st
  * extent is EINVAL, the map reads back sorted by the first id, and ids map
  * through it both ways.
  *
@@ -68,6 +72,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/ipc.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
@@ -75,6 +80,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -125,6 +131,9 @@ enum row {
     R_MNT_HELD,
     R_MNT_MANY,
     R_MNT_MANY_OWN,
+    R_PTS_DEV,
+    R_PTS_REMOUNT,
+    R_PTS_BESIDE,
     R_MAP_EXTRA,
     R_MAP_TAKEN,
     R_MAP_SORTED,
@@ -185,6 +194,9 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "mount-list-held",
                                                "mount-forty-namespaces",
                                                "mount-forty-own-views",
+                                               "devpts-own-device",
+                                               "devpts-failed-remount",
+                                               "devpts-beside-ptmx",
                                                "map-341st-einval",
                                                "map-340-extents",
                                                "map-reads-sorted",
@@ -253,6 +265,13 @@ static int child_failed(int ok, int status, int row)
                "a check in a child failed; its NSMUSL FAIL line names it");
     return 1;
 }
+
+/* The places of the devpts rows: two devpts mounts, a tmpfs with a ptmx
+ * device node and a devpts mount on its pts, and a bind of /dev with one. */
+#define PTS_A    "/tmp/nspts-a"
+#define PTS_B    "/tmp/nspts-b"
+#define PTS_DEV  "/tmp/nspts-dev"
+#define PTS_BIND "/tmp/nspts-bind"
 
 /** Run `fn`, whose first row is `row`, in a child; 0 when it exits 0. */
 static int in_child(int (*fn)(void), int row)
@@ -1025,6 +1044,147 @@ static int listed_for(pid_t pid)
     return get("/proc/self/mounts", buf, sizeof(buf)) > 0 && !strstr(buf, "/tmp/nsmnt");
 }
 
+/** Open the multiplexer `ptmx`, unlock its pair and put the pair's number
+ * in `*n`; the master's descriptor, or -1. */
+static int new_pair(const char *ptmx, int *n)
+{
+    int fd = open(ptmx, O_RDWR | O_NOCTTY), unlock = 0;
+
+    if (fd >= 0 && (ioctl(fd, TIOCSPTLCK, &unlock) != 0 || ioctl(fd, TIOCGPTN, n) != 0)) {
+        close(fd);
+        fd = -1;
+    }
+    return fd;
+}
+
+/**
+ * Whether the first terminals of the devpts mounts PTS_A and PTS_B, both 0
+ * with one inode number, and their ptmx nodes and directories are told
+ * apart by device, each mount's files sharing its own, and the descriptor
+ * of PTS_A's terminal stats as its path does, as Linux gives each devpts
+ * superblock a device.
+ */
+static int pts_devices_apart(void)
+{
+    struct stat a0, b0, ax, bx, ad, fa;
+    int na = -1, nb = -1, slave = -1;
+    int ma = new_pair(PTS_A "/ptmx", &na), mb = new_pair(PTS_B "/ptmx", &nb);
+    int ok = ma >= 0 && mb >= 0 && na == 0 && nb == 0 && stat(PTS_A "/0", &a0) == 0 &&
+             stat(PTS_B "/0", &b0) == 0 && stat(PTS_A "/ptmx", &ax) == 0 &&
+             stat(PTS_B "/ptmx", &bx) == 0 && stat(PTS_A, &ad) == 0 && a0.st_ino == b0.st_ino &&
+             a0.st_dev != b0.st_dev && ax.st_dev != bx.st_dev && ax.st_dev == a0.st_dev &&
+             ad.st_dev == a0.st_dev;
+
+    slave = ok ? open(PTS_A "/0", O_RDWR | O_NOCTTY) : -1;
+    ok = ok && slave >= 0 && fstat(slave, &fa) == 0 && fa.st_dev == a0.st_dev &&
+         fa.st_ino == a0.st_ino;
+    if (slave >= 0) {
+        close(slave);
+    }
+    if (ma >= 0) {
+        close(ma);
+    }
+    if (mb >= 0) {
+        close(mb);
+    }
+    return ok;
+}
+
+/**
+ * Whether a remount of PTS_A, mounted with ptmxmode=0666, with
+ * "mode=0620,ptmxmode=0640,bogus" is EINVAL and yet, as Linux's
+ * devpts_remount, takes the defaults and the two options before the bad
+ * one: its ptmx has mode 0640 and its line of /proc/self/mountinfo shows
+ * mode=620,ptmxmode=640.
+ */
+static int pts_failed_remount(void)
+{
+    static char buf[16384];
+    const char *line;
+    struct stat st;
+
+    errno = 0;
+    if (mount("devpts", PTS_A, "devpts", MS_REMOUNT, "mode=0620,ptmxmode=0640,bogus") != -1 ||
+        errno != EINVAL || stat(PTS_A "/ptmx", &st) != 0 || (st.st_mode & 07777) != 0640 ||
+        get("/proc/self/mountinfo", buf, sizeof(buf)) <= 0) {
+        return 0;
+    }
+    line = strstr(buf, " " PTS_A " ");
+    return line && strstr(line, "mode=620,ptmxmode=640") &&
+           strstr(line, "mode=620,ptmxmode=640") < strchr(line, '\n');
+}
+
+/**
+ * Whether a ptmx opened beside a devpts mount makes its pair in that
+ * mount's instance, as Linux's devpts_acquire finds the `pts` beside the
+ * opened file: a ptmx device node on a tmpfs at PTS_DEV with a devpts mount
+ * on its pts, and the ptmx of a bind of /dev at PTS_BIND with one on its
+ * pts, each give the pair 0 of its fresh instance, which its pts lists.
+ */
+static int pts_beside(void)
+{
+    struct stat st;
+    int n = -1, m, ok;
+
+    if (mount("tmpfs", PTS_DEV, "tmpfs", 0, NULL) != 0 ||
+        mknod(PTS_DEV "/ptmx", S_IFCHR | 0666, makedev(5, 2)) != 0 ||
+        mkdir(PTS_DEV "/pts", 0755) != 0 ||
+        mount("devpts", PTS_DEV "/pts", "devpts", 0, "ptmxmode=0666") != 0) {
+        return 0;
+    }
+    m = new_pair(PTS_DEV "/ptmx", &n);
+    ok = m >= 0 && n == 0 && stat(PTS_DEV "/pts/0", &st) == 0;
+    if (m >= 0) {
+        close(m);
+    }
+    if (!ok || mount("/dev", PTS_BIND, NULL, MS_BIND, NULL) != 0 ||
+        mount("devpts", PTS_BIND "/pts", "devpts", 0, NULL) != 0) {
+        return 0;
+    }
+    n = -1;
+    m = new_pair(PTS_BIND "/ptmx", &n);
+    ok = m >= 0 && n == 0 && stat(PTS_BIND "/pts/0", &st) == 0;
+    if (m >= 0) {
+        close(m);
+    }
+    return ok;
+}
+
+/** In a mount namespace of its own, mount PTS_A and PTS_B and run the
+ * devpts rows; 0, or 1 after printing the failure. */
+static int devpts(void)
+{
+    if (unshare(CLONE_NEWNS) != 0 ||
+        mount("devpts", PTS_A, "devpts", 0, "newinstance,ptmxmode=0666") != 0 ||
+        mount("devpts", PTS_B, "devpts", 0, "newinstance,ptmxmode=0666") != 0) {
+        return fail(R_PTS_DEV, "two devpts mounts in a mount namespace of its own");
+    }
+    if (!pts_devices_apart()) {
+        return fail(R_PTS_DEV, "each devpts mount's terminals and ptmx have a device of its own");
+    }
+    if (!pts_failed_remount()) {
+        return fail(R_PTS_REMOUNT, "a remount with a bad option takes the options before it");
+    }
+    return pts_beside() ? 0 : fail(R_PTS_BESIDE, "a ptmx makes its pair in the devpts beside it");
+}
+
+/** Make the devpts rows' directories, run `devpts` in a child and remove
+ * them; 0, or 1 after the failure is taken. */
+static int devpts_rows(void)
+{
+    static const char *const dirs[] = {PTS_A, PTS_B, PTS_DEV, PTS_BIND};
+    int i, rc;
+
+    for (i = 0; i < 4; i++) {
+        mkdir(dirs[i], 0755);
+    }
+    rc = in_child(devpts, R_PTS_DEV);
+    for (i = 0; i < 4; i++) {
+        rmdir(dirs[i]);
+    }
+    return rc;
+}
+
 /**
  * Check that a tmpfs mounted in a child's new mount namespace, and a file
  * made in it, are seen by the child and not by this process. Two pipes keep
@@ -1528,7 +1688,7 @@ int main(int argc, char **argv)
     }
     rc = wide_flags() || in_child(uts, R_UTS_LINK) || in_child(pid_ns, R_PID_KEEP) ||
          in_child(net, R_NET) || in_child(ipc, R_IPC) || mnt() || in_child(many_mnt, R_MNT_MANY) ||
-         in_child(long_map, R_MAP_EXTRA) || in_child(sandbox, R_SANDBOX_USER) ||
+         devpts_rows() || in_child(long_map, R_MAP_EXTRA) || in_child(sandbox, R_SANDBOX_USER) ||
          in_child(user, R_USER_BECOME) || in_child(setid, R_SETID_MAP) ||
          in_child(empty_root, R_FDINFO_OPEN);
     shmctl(id, IPC_RMID, NULL);

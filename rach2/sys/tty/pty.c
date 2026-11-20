@@ -377,6 +377,7 @@ static struct pty *pty_alloc(uint32_t inst, int first, const struct vfs_pts_opti
     }
     p->index = i;
     p->inst = inst;
+    p->dev = vfs_pts_dev(inst);
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
     p->uid = current_proc ? proc_fsuid(current_proc) : 0;
     p->gid = PTY_GID;
@@ -1290,6 +1291,11 @@ static const struct file_ops pts_ops = {pts_read,  pts_write, pts_poll, NULL,
 
 int pty_open_master(int flags)
 {
+    return pty_open_master_near(NULL, "/dev/pts", flags);
+}
+
+int pty_open_master_near(const struct vfs_ref *start, const char *path, int flags)
+{
     struct vfs_pts_options o;
     uint32_t inst;
     int mounted;
@@ -1297,7 +1303,7 @@ int pty_open_master(int flags)
     if (!current_proc) {
         return -ESRCH;
     }
-    mounted = vfs_devpts_options(&o, &inst);
+    mounted = vfs_devpts_options(start, path, &o, &inst);
     return pty_open_master_in(inst, mounted ? &o : NULL, flags);
 }
 

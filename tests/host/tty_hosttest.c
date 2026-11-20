@@ -2754,14 +2754,25 @@ static void hangup_writer_waits(void)
 static int devpts_mounted;
 static struct vfs_pts_options devpts_opts;
 
-/** The options of the devpts mount the rows put at /dev/pts, if any. */
-int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst)
+/** The options of the devpts mount the rows put at /dev/pts, if any,
+ * wherever the open's ptmx is. */
+int vfs_devpts_options(const struct vfs_ref *start, const char *path, struct vfs_pts_options *out,
+                       uint32_t *inst)
 {
+    (void)start;
+    (void)path;
     *inst = devpts_mounted ? 1u : 0u;
     if (devpts_mounted) {
         *out = devpts_opts;
     }
     return devpts_mounted;
+}
+
+/** /dev's device, 5, for every instance, which no row stats. */
+uint32_t vfs_pts_dev(uint32_t inst)
+{
+    (void)inst;
+    return 5u;
 }
 
 /** Whether `options` parse, as Linux's devpts parse_mount_options does. */

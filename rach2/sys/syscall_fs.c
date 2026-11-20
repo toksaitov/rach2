@@ -3353,7 +3353,7 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
     return -EPERM;
 }
 
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result);
+static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result, const char *path);
 static int open_mounted_node(struct vfs_ref *ref, int flags);
 static int open_root_node(struct vfs_ref *ref, int flags);
 static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags);
@@ -3391,7 +3391,7 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
     ref.mnt = mnt;
     ref.node = src->vnode;
     vfs_ref_hold(&ref);
-    if (open_special(&ref, fd, flags, &rc)) {
+    if (open_special(&ref, fd, flags, &rc, NULL)) {
         return rc;
     }
     rc = mnt_is_root(mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
@@ -3601,7 +3601,7 @@ static int32_t proc_fd_reopen_node(const struct vfs_ref *keep, int flags)
     }
     ref = *keep;
     vfs_ref_hold(&ref);
-    if (open_special(&ref, fd, flags, &rc)) {
+    if (open_special(&ref, fd, flags, &rc, NULL)) {
         return rc;
     }
     vfs_walk_unlock(mnt);
@@ -3793,6 +3793,31 @@ static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode,
     return rc != 0 ? rc : procfs_open(vp, flags);
 }
 
+static int name_is(const char *name, const char *lit);
+
+/**
+ * open of /dev/ptmx through the /dev mount `mnt` the walk reached, whose
+ * root holds it: the pair is made in the instance of the devpts mount at
+ * `pts` beside it in the caller's tree (`pty_open_master_near`), as Linux's
+ * devpts_acquire finds it from the opened file's path, and not that of
+ * /dev/pts under the caller's root. -EEXIST for O_CREAT|O_EXCL and
+ * -ENOTDIR for O_DIRECTORY first, as `devfs_open` refuses them.
+ */
+static int32_t dev_ptmx_open(struct vfs_mount *mnt, int flags)
+{
+    struct vfs_ref dir;
+
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        return -EEXIST;
+    }
+    if (flags & O_DIRECTORY) {
+        return -ENOTDIR;
+    }
+    dir.mnt = mnt;
+    dir.node = mnt->root;
+    return pty_open_master_near(&dir, "pts", flags);
+}
+
 /**
  * open of /dev/pts/ptmx, `vp`, the multiplexer of the devpts instance the
  * walk reached: the caller's access is judged by the instance's ptmx inode
@@ -3815,6 +3840,31 @@ static int32_t pts_ptmx_open(const struct vpath *vp, int flags)
     }
     rc = cred_access_bits(ptmx->uid, ptmx->gid, ptmx->mode & 0777u, open_want(flags), 0);
     return rc != 0 ? rc : pty_open_master_in(vp->pts_inst, found ? &o : NULL, flags);
+}
+
+/**
+ * Open the devfs node `vp` of the mount `mnt`, or the ptmx of a devpts
+ * mount, after judging the caller against the node's owner, group and
+ * mode; a /dev/ptmx makes its pair in the devpts mount on the `pts` beside
+ * it (`dev_ptmx_open`). The descriptor, -ENOENT for a node devfs does not
+ * have, or the access check's error.
+ */
+static int32_t synth_dev_open(struct vfs_mount *mnt, const struct vpath *vp, int flags)
+{
+    uint32_t dmode, uid, gid;
+    int32_t rc;
+
+    if (vp->pts_index == SYNTH_PTS_PTMX) {
+        return pts_ptmx_open(vp, flags);
+    }
+    if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0 || devfs_owner(vp->name, &uid, &gid) != 0) {
+        return -ENOENT;
+    }
+    rc = cred_access_bits(uid, gid, dmode & 0777u, open_want(flags), 0);
+    if (rc == 0 && name_is(vp->name, "ptmx")) {
+        return dev_ptmx_open(mnt, flags);
+    }
+    return rc != 0 ? rc : devfs_open(vp->name, flags);
 }
 
 /**
@@ -3845,7 +3895,7 @@ static int32_t pts_ptmx_open(const struct vpath *vp, int flags)
  * devtmpfs inode by what its setattr left, and its fixed checks then do
  * not apply: -EACCES for an access they refuse.
  */
-static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, int flags)
+static int32_t synth_open(struct vfs_mount *mnt, const struct vpath *vp, int flags)
 {
     int kept = synth_kept_may(vp, (uint32_t)synth_open_want(flags), 0);
 
@@ -3856,20 +3906,8 @@ static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, i
         return synth_open_dir(mnt, vp, flags, NULL);
     }
     switch (vp->kind) {
-    case VNODE_DEV: {
-        uint32_t dmode, uid, gid;
-        int32_t rc;
-
-        if (vp->pts_index == SYNTH_PTS_PTMX) {
-            return pts_ptmx_open(vp, flags);
-        }
-        if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0 ||
-            devfs_owner(vp->name, &uid, &gid) != 0) {
-            return -ENOENT;
-        }
-        rc = cred_access_bits(uid, gid, dmode & 0777u, open_want(flags), 0);
-        return rc != 0 ? rc : devfs_open(vp->name, flags);
-    }
+    case VNODE_DEV:
+        return synth_dev_open(mnt, vp, flags);
     case VNODE_PTS:
         if (flags & O_DIRECTORY) {
             return -ENOTDIR;
@@ -4577,13 +4615,41 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
 }
 
 /**
+ * An open of a ptmx device node at `path`, joined to the root as an open's
+ * walk takes it: the pair is made in the instance of the devpts mount at
+ * `pts` in the node's directory (`pty_open_master_near`), as Linux's
+ * devpts_acquire finds it beside the opened file. -ENOMEM for no path page.
+ */
+static int32_t ptmx_node_open(const char *path, int flags)
+{
+    char *pts = path_buf_get();
+    uint32_t n, cut = 0;
+    int32_t rc;
+
+    if (!pts) {
+        return -ENOMEM;
+    }
+    for (n = 0; path[n] != '\0'; n++) {
+        if (path[n] == '/') {
+            cut = n + 1;
+        }
+    }
+    k_memcpy(pts, path, cut);
+    k_memcpy(pts + cut, "pts", 4);
+    rc = pty_open_master_near(NULL, pts, flags);
+    path_buf_put(pts);
+    return rc;
+}
+
+/**
  * The device half of `open_special`: the /dev device a device node's number
  * and kind name, opened as an open of its /dev path opens it, without the
  * permission check the node's own mode has already made. A pseudo-terminal
- * slave is major 136 and its index. A number no device present has is
- * ENXIO.
+ * slave is major 136 and its index; the multiplexer, ptmx, makes its pair
+ * beside the node at `path` (`ptmx_node_open`), or, with `path` NULL, as
+ * an open of /dev/ptmx does. A number no device present has is ENXIO.
  */
-static int32_t open_device(int block, uint32_t rdev, int flags)
+static int32_t open_device(int block, uint32_t rdev, int flags, const char *path)
 {
     uint32_t major = (rdev >> 8) & 0xFFFu;
     uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
@@ -4593,6 +4659,9 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
         return pty_get(0, (int)minor) ? pty_open_slave(0, (int)minor, flags) : -ENXIO;
     }
     name = devfs_name_of(block, rdev);
+    if (name && path && !block && name_is(name, "ptmx")) {
+        return ptmx_node_open(path, flags);
+    }
     return name ? devfs_open(name, flags) : -ENXIO;
 }
 
@@ -4603,10 +4672,12 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
  * kept by the new description (`dev_node`). Until then the node is kept by a
  * description of its own, since the device's open may sleep. Only tmpfs and
  * ext2 make device nodes, and the hold of either keeps a node with no name
- * until its last put. Returns the descriptor or a negative errno, with `ref`
- * and the walk's lock released either way.
+ * until its last put. `path` is the open's, or NULL (`open_device`).
+ * Returns the descriptor or a negative errno, with `ref` and the walk's lock
+ * released either way.
  */
-static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t rdev, int flags)
+static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t rdev, int flags,
+                                const char *path)
 {
     struct vfs_mount *mnt = ref->mnt;
     struct open_file *keep = fd_ofd_new(), *to;
@@ -4624,7 +4695,7 @@ static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t
     vfs_walk_unlock(mnt);
     vfs_leave(mnt);
     fd_free(current_proc->fds, fd);
-    rc = open_device(block, rdev, flags);
+    rc = open_device(block, rdev, flags, path);
     to = rc >= 0 ? fd_slot(current_proc->fds, rc)->ofd : NULL;
     if (to && !to->dev_mnt) {
         to->dev_mnt = keep->dev_mnt;
@@ -4673,12 +4744,14 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
 
 /**
  * Open the FIFO, the socket file or the device node at `ref`, which name no
- * bytes of their own: 1 with the descriptor or the errno in `*result`, `ref`
- * and the walk's lock released, and the descriptor `fd` the open reserved
- * taken, by a FIFO, or freed, since a device's open takes a descriptor of
- * its own; 0, with all three as they were, for any other node, which the
- * ordinary open takes, and for a node of a mounted type whose attributes
- * cannot be read, so that the ordinary open reports the error.
+ * bytes of their own, reached by the open of `path`, or NULL for an open
+ * through a descriptor (`open_device`): 1 with the descriptor or the errno
+ * in `*result`, `ref` and the walk's lock released, and the descriptor `fd`
+ * the open reserved taken, by a FIFO, or freed, since a device's open takes
+ * a descriptor of its own; 0, with all three as they were, for any other
+ * node, which the ordinary open takes, and for a node of a mounted type
+ * whose attributes cannot be read, so that the ordinary open reports the
+ * error.
  *
  * The checks are open's, in its order: O_CREAT|O_EXCL is EEXIST,
  * O_DIRECTORY is ENOTDIR, then the permission the access mode asks for; a
@@ -4697,7 +4770,7 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
  * keeps its place, nameless after an unlink, while an end holds it
  * (`fd_node_holders`).
  */
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
+static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result, const char *path)
 {
     struct vfs_mount *mnt = ref->mnt;
     uint32_t type, rdev = 0;
@@ -4733,7 +4806,7 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
         return 1;
     }
     if (rc == 0 && type != S_IFSOCK) {
-        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags);
+        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags, path);
         return 1;
     }
     vfs_walk_unlock(mnt);
@@ -5261,7 +5334,7 @@ again:
             vfs_ref_release(&ref);
             goto out;
         }
-        if (open_special(&ref, fd, flags, &rc)) {
+        if (open_special(&ref, fd, flags, &rc, name)) {
             fd = -1;
             goto out;
         }
@@ -10498,6 +10571,7 @@ static int32_t synth_stat_dev(const struct vpath *vp, struct kstat *kst)
     if (vfs_pts_instance(vp->pts_inst, NULL, &ptmx) < 0) {
         return -ENOENT;
     }
+    kst->st_dev = vfs_pts_dev(vp->pts_inst);
     kst->st_mode = 0020000u | (ptmx->mode & 07777u);
     kst->st_uid = ptmx->uid;
     kst->st_gid = ptmx->gid;
@@ -10757,7 +10831,7 @@ static int32_t synth_stat_fixed(const struct vpath *vp, struct kstat *kst, int f
         kst->st_size = (int64_t)k_strlen(SYNTH_DEV_LOG_TARGET);
         return 0;
     case VNODE_PTS_DIR:
-        kst->st_dev = DEVFS_FSID;
+        kst->st_dev = vfs_pts_dev(vp->pts_inst);
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = PTS_INO_DIR;
         return 0;
@@ -10770,7 +10844,7 @@ static int32_t synth_stat_fixed(const struct vpath *vp, struct kstat *kst, int f
         if (!pt) {
             return -ENOENT;
         }
-        kst->st_dev = DEVFS_FSID;
+        kst->st_dev = pt->dev;
         kst->st_mode = 0020000u | (uint32_t)(pt->mode & 0777u);
         kst->st_uid = pt->uid;
         kst->st_gid = pt->gid;

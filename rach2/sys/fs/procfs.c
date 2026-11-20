@@ -5678,7 +5678,7 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
     if (devfs_numbers(m->source, &major, &minor)) {
         return (minor & 0xFFu) | major << 8 | (minor & ~0xFFu) << 12;
     }
-    if (m->type == &vfs_devfs_type) {
+    if (m->type == &vfs_devfs_type && !m->pts) {
         return DEVFS_FSID;
     }
     if (m->type == &vfs_procfs_type) {
@@ -5701,8 +5701,12 @@ uint32_t procfs_synth_mount_id(uint64_t dev, const struct vfs_mount *hint)
                                   : dev == PROCFS_FSID ? &vfs_procfs_type
                                   : dev == SYSFS_FSID  ? &vfs_sysfs_type
                                                        : NULL;
+    const struct vfs_mount *base = hint ? vfs_mount_base(hint) : NULL;
     int j;
 
+    if (base && base->pts && dev == vfs_pts_dev(base->pts_inst)) {
+        return procfs_mount_id(hint);
+    }
     if (!type) {
         return 0;
     }

@@ -52,6 +52,10 @@ struct pty {
      * system's (`vfs_pts_instance`); a pair of /dev/ptmx takes that of the
      * devpts mount its master was opened through. */
     uint32_t inst;
+    /* The st_dev of the slave, its instance's when the pair was made
+     * (`vfs_pts_dev`), kept for the pair's life as Linux's pins the
+     * instance's superblock, though its mount go. */
+    uint32_t dev;
     struct tty slave; /* the slave end: a full tty + N_TTY discipline */
 
     unsigned char m_buf[PTY_BUF_SIZE]; /* slave output + echo, read by the master */
@@ -101,7 +105,9 @@ struct pty {
  * `mode=` and `ptmxmode=` in octal, cut to 07777, `newinstance`, which
  * every mount is, and `max=` from 0 to PTY_MAX_PAIRS. 0, or -EINVAL with
  * the record `devpts: called with bogus options` for another option or a
- * bad number. A remount parses from the defaults too, as Linux's does.
+ * bad number, with `*o` the defaults and the options before it. A remount
+ * parses from the defaults too and takes that `*o` even on -EINVAL, as
+ * Linux's devpts_remount does (`pts_remount` in vfs.c).
  */
 int pty_parse_options(const char *options, struct vfs_pts_options *o);
 
@@ -110,11 +116,21 @@ int pty_parse_options(const char *options, struct vfs_pts_options *o);
 void pty_init_pool(void);
 
 /**
- * open("/dev/ptmx"): `pty_open_master_in` in the instance of the devpts
- * mount at /dev/pts (`vfs_devpts_options`), with its options, or without
- * one in the system's instance with none.
+ * open("/dev/ptmx"): `pty_open_master_near` of /dev/pts under the
+ * caller's root, for an open that knows no place of its ptmx.
  */
 int pty_open_master(int flags);
+
+struct vfs_ref;
+
+/**
+ * An open of a ptmx device: `pty_open_master_in` in the instance of the
+ * devpts mount at `path`, walked from `start` (`vfs_resolve`), the `pts`
+ * beside the device the open reached, as Linux's devpts_acquire looks for
+ * it (path_pts), with its options; without one, in the system's instance
+ * with none.
+ */
+int pty_open_master_near(const struct vfs_ref *start, const char *path, int flags);
 
 /**
  * Allocate a pty pair in the devpts instance `inst`, at the lowest index

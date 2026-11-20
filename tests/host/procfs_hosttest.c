@@ -2747,6 +2747,13 @@ void vm_file_put(struct vm_file *f)
  * vfs.c puts it; empty otherwise. */
 static int memfd_mounted;
 
+/** /dev's device for every instance: no row mounts devpts. */
+uint32_t vfs_pts_dev(uint32_t inst)
+{
+    (void)inst;
+    return DEVFS_FSID;
+}
+
 /** The places of the mount table the identity of a maps line searches. */
 int vfs_mount_slots(void)
 {

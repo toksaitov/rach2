@@ -1408,12 +1408,14 @@ int vfs_do_bind(const char *source, const char *target, int rec);
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 
 /** Copy into `*out` the options, and into `*inst` the instance, of the
- * devpts mount at /dev/pts under the caller's root, where Linux's
- * devpts_acquire finds the instance an open of /dev/ptmx makes its pair
- * in. 1 when one is there; 0, `*out` untouched and `*inst` 0, the
- * system's instance, when /dev/pts is the kernel's own or does not
- * resolve. */
-int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst);
+ * devpts mount at `path`, walked from `start` as `vfs_resolve` walks it,
+ * which is the `pts` beside the ptmx device an open reached, where Linux's
+ * devpts_acquire finds the instance that open makes its pair in
+ * (path_pts). 1 when one is there; 0, `*out` untouched and `*inst` 0, the
+ * system's instance, when `path` is the kernel's own /dev/pts, is no
+ * devpts mount or does not resolve. */
+int vfs_devpts_options(const struct vfs_ref *start, const char *path, struct vfs_pts_options *out,
+                       uint32_t *inst);
 
 /**
  * The devpts instance `inst`: 1 with its mount's options in `*opts`, when
@@ -1423,6 +1425,12 @@ int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst);
  * whose mount is gone. Under the big lock.
  */
 int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx);
+
+/** The st_dev of the files of the devpts instance `inst`, its directory,
+ * terminals and ptmx: its mount's own number (`procfs_mount_dev`), as Linux
+ * gives each devpts superblock a device of its own, and /dev's for the
+ * system's instance, 0, or one whose mount is gone. Under the big lock. */
+uint32_t vfs_pts_dev(uint32_t inst);
 
 /** The options of the proc file system `m` shows, a bind's its base's, or
  * NULL when `m` is NULL or of another type. */

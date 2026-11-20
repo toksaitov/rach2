@@ -347,7 +347,11 @@ to
 .Ql ptmxmode= ,
 as on Linux.
 Another option or a bad number is
-.Er EINVAL .
+.Er EINVAL ;
+a remount that meets one has still taken the defaults and the options
+before it, and set the mode of
+.Pa ptmx ,
+as Linux's does, though it changes none of the mount's flags.
 .Pp
 For
 .Ql proc ,

@@ -6189,6 +6189,23 @@ static void set_mount_attrs(struct vfs_mount *m, uint32_t flags)
     }
 }
 
+/**
+ * Give the devpts mount `m` the options `*popts` that a remount parsed from
+ * the defaults, as Linux's devpts_remount does, and its ptmx node their
+ * ptmxmode (update_ptmx_mode), even when the parse stopped at a bad option
+ * (`bad`), whose options before it then hold; -EINVAL then, else 0. Any
+ * other mount is left alone.
+ */
+static int pts_remount(struct vfs_mount *m, const struct vfs_pts_options *popts, int bad)
+{
+    if (!m->pts) {
+        return 0;
+    }
+    m->pts_opts = *popts;
+    m->ptmx.mode = popts->ptmxmode;
+    return bad ? -EINVAL : 0;
+}
+
 int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
 {
     struct vfs_mount *m = mount_base(named);
@@ -6196,8 +6213,9 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     int rc, closing = (changed & flags & VFS_MS_RDONLY) != 0;
     struct vfs_pts_options popts = {0};
     struct vfs_proc_options procopts = m->proc_opts;
+    int pts_bad = m->pts && pty_parse_options(options, &popts) != 0;
 
-    if ((flags & ~VFS_MS_KNOWN) || (m->pts && pty_parse_options(options, &popts) != 0) ||
+    if ((flags & ~VFS_MS_KNOWN) ||
         (m->type == &vfs_procfs_type && procfs_parse_options(options, &procopts) != 0)) {
         return -EINVAL;
     }
@@ -6225,20 +6243,17 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
             return rc;
         }
     }
-    if (m->type->ops->remount) {
+    rc = pts_remount(m, &popts, pts_bad);
+    if (rc == 0 && m->type->ops->remount) {
         rc = m->type->ops->remount(m, flags, options);
-        if (rc != 0) {
-            if (closing) {
-                fd_mount_readonly_end(m);
-            }
-            return rc;
+    }
+    if (rc != 0) {
+        if (closing) {
+            fd_mount_readonly_end(m);
         }
+        return rc;
     }
     m->flags = (m->flags & ~VFS_MS_SUPER) | (flags & VFS_MS_SUPER);
-    if (m->pts) {
-        m->pts_opts = popts;           /* Linux's devpts_remount, from the defaults */
-        m->ptmx.mode = popts.ptmxmode; /* and its update_ptmx_mode */
-    }
     m->proc_opts = procopts; /* Linux's proc_reconfigure, from those in force */
     set_mount_attrs(named, flags);
     if (closing) {
@@ -6611,14 +6626,15 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     return 0;
 }
 
-int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst)
+int vfs_devpts_options(const struct vfs_ref *start, const char *path, struct vfs_pts_options *out,
+                       uint32_t *inst)
 {
     struct vfs_ref ref;
     const struct vfs_mount *base;
     int found;
 
     *inst = 0;
-    if (!vfs_root_mounted() || vfs_resolve(0, "/dev/pts", 0, &ref, 0, 0) != 0) {
+    if (!vfs_root_mounted() || vfs_resolve(start, path, 0, &ref, 0, 0) != 0) {
         return 0;
     }
     base = vfs_mount_base(ref.mnt);
@@ -6652,6 +6668,20 @@ int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptm
         }
     }
     return -ENOENT;
+}
+
+uint32_t vfs_pts_dev(uint32_t inst)
+{
+    int i;
+
+    for (i = 0; inst != 0 && i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+
+        if (m && m->state == VFS_ACTIVE && !m->bind_of && m->pts && m->pts_inst == inst) {
+            return procfs_mount_dev(i, m);
+        }
+    }
+    return DEVFS_FSID;
 }
 
 int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source, uint32_t flags)
