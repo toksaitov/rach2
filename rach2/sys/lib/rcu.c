@@ -270,7 +270,13 @@ static int gp_tick_due(void *arg)
  * (kernel/rcu/tree.c:2229): sleep until a callback is queued, begin a grace
  * period, look at each tick whether it has ended, and run its callbacks. It
  * gives up the big lock it starts with, since no step needs it. Its own
- * sleeps are its processor's quiescent states.
+ * sleeps are its processor's quiescent states, and so is the point just
+ * after it begins a grace period: the thread is in no read section, and no
+ * other thread can be in one on its processor, since none is switched out
+ * inside one. With one processor online, or the others idle, the grace
+ * period then ends at once, as Linux's `rcu_blocking_is_gp` takes the
+ * caller's own context for the grace period on one processor, and does not
+ * wait for a tick while the callbacks' memory waits with it.
  */
 static void gp_main(void)
 {
@@ -284,6 +290,9 @@ static void gp_main(void)
         if (!rcu_gp_begin()) {
             continue;
         }
+        flags = kirq_save();
+        rcu_qs();
+        kirq_restore(flags);
         while (!rcu_gp_ended()) {
             flags = kirq_save();
             due = tick_count() + 1u;
