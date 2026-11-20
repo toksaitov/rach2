@@ -203,7 +203,7 @@ Beside the authority is the writer reservation, `writer_held` in `struct disk`: 
 * `diskcmd_hosttest.c`: all 256 command bytes under both policies.
 * `diskinfo_hosttest.c`: IDENTIFY strings, 64-bit decimal and the `/proc/disk` record.
 * `usbdisk_hosttest.c`: a stick's registration, table scan, pull, holds and reclaiming.
-* `loop_attach_hosttest.c`, `open_hosttest.c`: loop attachment across a KRFFS relocation, its sector phase, and the refusal of a loop device on a loop device.
+* `loop_attach_hosttest.c`, `open_hosttest.c`: loop attachment across a KRFFS relocation, its sector phase, the refusal of a loop device on a loop device, and a device's read of a shared mapping's stores.
 * `devfs_hosttest.c`: where `/dev/grubcore` is published.
 * `bcache_hosttest.c`, `bcache_cost_hosttest.c`, `fat32_hosttest.c`, `exfat_hosttest.c`, `ext2_hosttest.c`: link `chain.c`.
 
@@ -217,6 +217,6 @@ Beside the authority is the writer reservation, `writer_held` in `struct disk`: 
 * virtio-blk: `vblk` (core), reads on two queues by their interrupts, the serial and discard limit in sysfs, on the recovery kernel a raw write, flush, discard and write of zeroes, and a restart from the debug shell in which the driver must say it reset the device before the kernel restarts; the machine cases whose disk is only the way to their system, the GNU root among them, boot from virtio-blk.
 * Partition tables and identities: `parts` (core).
 * The request pool and the lag device: `mount`, `fatwrite` and `exfat` (core), `krffsmount` (full).
-* Sticks: `usbdisk` (core). Loop devices: `ext2` (core), `loopdev` (full).
+* Sticks: `usbdisk` (core). Loop devices: `ext2` (core), `loopdev` (full), whose `loopdevprobe` also writes an attached file and reads the bytes through its device, and on ext2 attaches a file that a shared, writable mapping maps, reads the mapping's stores through the device, sees a write of the device in the mapping, and msyncs and grows the file.
 * The write policy: `authority` and `metal` (core), `diskpolicy` and `diskdiag` (full).
 * The raw and boot windows: `grub` (core); `bootpart`, `menu`, `install`, `drill`, `sealed` and `uefi` (full).
