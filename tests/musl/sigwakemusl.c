@@ -1,8 +1,10 @@
 /**
  * sigwakemusl: check that a wait woken by a signal ignored at its default
  * drops that signal before it sleeps again, so that a later fatal signal
- * still ends the process, and that kill(-1, 0) from an unprivileged process
- * succeeds when it selects processes it may not signal, as on Linux.
+ * still ends the process, that a child wait drops it while a POSIX timer's
+ * signal is posted on another processor, and that kill(-1, 0) from an
+ * unprivileged process succeeds when it selects processes it may not
+ * signal, as on Linux.
  *
  * First, a child gives up root, if it has it, for user and group 65534, and
  * calls kill(-1, 0). The call selects every process but its own and init,
@@ -27,6 +29,20 @@
  * nothing; the probe then waits for the process without end, and the run's
  * own bound reports it.
  *
+ * Third, on more than one processor, a process with a POSIX timer that
+ * sends SIGUSR1 every 50 us: its leader blocks SIGWINCH, takes SIGUSR1 and
+ * sends SIGWINCH to the process without pause, while its other thread,
+ * which blocks SIGUSR1 and leaves SIGWINCH unblocked, waits for each of a
+ * series of children that sleep a millisecond. The leader's block keeps
+ * each SIGWINCH, which is ignored at its default, from being dropped as it
+ * is sent (kernel/signal.c:104-112), so it goes to the waiting thread and
+ * wakes its wait, which discards it before it sleeps again; the discard
+ * rearms the process's timers under timerfd's lock, while another
+ * processor's timer interrupt posts the timer's SIGUSR1. A wait that
+ * discarded the signal under the signal lock without the big lock met the
+ * post, which holds the timer lock and takes the signal lock, and the two
+ * processors spun for ever; the run's own bound reports such a hang.
+ *
  * The probe makes itself a child subreaper, so that the child of the
  * process it ends is reaped here. Writes etude's report records
  * (../probe_report.h) for the case ETUDE_CASE names,
@@ -48,12 +64,21 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../probe_report.h"
 
 /* The user and group the kill(-1) child takes, nobody's. */
 #define NOBODY 65534
+
+/* The children the third part waits for, each of which sleeps
+ * DRAIN_SLEEP_NS, and the interval of its timer. */
+#define DRAIN_ROUNDS 2000
+
+#define DRAIN_SLEEP_NS 1000000L
+
+#define DRAIN_TIMER_NS 50000L
 
 extern char **environ;
 
@@ -264,6 +289,144 @@ static void run_victim(int ready[2])
     }
 }
 
+/* The third part's count of the timer's signals taken, and the waiter's
+ * word to the leader that its waits are over. */
+static volatile sig_atomic_t ticks, drained;
+
+/** Count one of the timer's SIGUSR1. */
+static void on_tick(int signo)
+{
+    (void)signo;
+    ticks++;
+}
+
+/** The waiter: with SIGWINCH unblocked and SIGUSR1 blocked, as the leader
+ * left it, wait for DRAIN_ROUNDS children in turn, each of which sleeps
+ * DRAIN_SLEEP_NS. Returns NULL when every child exited 0, else the exit
+ * status for the process, as a pointer. */
+static void *wait_children(void *arg)
+{
+    struct timespec nap = {0, DRAIN_SLEEP_NS};
+    sigset_t set;
+    pid_t child;
+    int i, status;
+
+    (void)arg;
+    sigemptyset(&set);
+    sigaddset(&set, SIGWINCH);
+    if (pthread_sigmask(SIG_UNBLOCK, &set, NULL) != 0) {
+        drained = 1;
+        return (void *)33;
+    }
+    for (i = 0; i < DRAIN_ROUNDS; i++) {
+        child = fork();
+        if (child < 0) {
+            drained = 1;
+            return (void *)34;
+        }
+        if (child == 0) {
+            /* interval: the child lives a millisecond so the wait sleeps */
+            while (nanosleep(&nap, &nap) != 0 && errno == EINTR) {
+            }
+            _exit(0);
+        }
+        while (waitpid(child, &status, 0) != child) {
+            if (errno != EINTR) {
+                drained = 1;
+                return (void *)35;
+            }
+        }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            drained = 1;
+            return (void *)36;
+        }
+    }
+    drained = 1;
+    return NULL;
+}
+
+/**
+ * The third part's process: block SIGWINCH and SIGUSR1, arm a timer that
+ * sends SIGUSR1 every DRAIN_TIMER_NS, start the waiter, then take SIGUSR1
+ * in the leader and send SIGWINCH to the process until the waiter is done.
+ * Exits 0 when every child was reaped and the leader took at least one of
+ * the timer's signals.
+ */
+static void run_drain(void)
+{
+    struct itimerspec every;
+    struct sigaction sa;
+    struct sigevent ev;
+    pthread_t waiter;
+    timer_t timer;
+    sigset_t set;
+    void *rc;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_tick;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&set);
+    sigaddset(&set, SIGWINCH);
+    sigaddset(&set, SIGUSR1);
+    if (sigaction(SIGUSR1, &sa, NULL) != 0 || pthread_sigmask(SIG_BLOCK, &set, NULL) != 0) {
+        _exit(30);
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.sigev_notify = SIGEV_SIGNAL;
+    ev.sigev_signo = SIGUSR1;
+    every.it_value.tv_sec = 0;
+    every.it_value.tv_nsec = DRAIN_TIMER_NS;
+    every.it_interval = every.it_value;
+    if (timer_create(CLOCK_MONOTONIC, &ev, &timer) != 0 ||
+        timer_settime(timer, 0, &every, NULL) != 0) {
+        _exit(31);
+    }
+    if (pthread_create(&waiter, NULL, wait_children, NULL) != 0) {
+        _exit(32);
+    }
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    if (pthread_sigmask(SIG_UNBLOCK, &set, NULL) != 0) {
+        _exit(37);
+    }
+    while (!drained) {
+        if (kill(getpid(), SIGWINCH) != 0) {
+            _exit(22);
+        }
+    }
+    if (pthread_join(waiter, &rc) != 0) {
+        _exit(38);
+    }
+    _exit(rc != NULL ? (int)(long)rc : ticks > 0 ? 0 : 39);
+}
+
+/** Run the third part's process to its end: 0 when it exits 0, else 1
+ * with the reason in `why`. */
+static int drain_waits(char *why, size_t size)
+{
+    int status;
+
+    victim = fork();
+    if (victim < 0) {
+        snprintf(why, size, "fork of the waiting process: %s", strerror(errno));
+        return 1;
+    }
+    if (victim == 0) {
+        run_drain();
+    }
+    if (waitpid(victim, &status, 0) != victim) {
+        snprintf(why, size, "the waiting process could not be reaped");
+        return 1;
+    }
+    victim = 0;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        snprintf(why, size, "the waiting process ended with status 0x%x", (unsigned)status);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     unsigned long long switches, pending;
@@ -276,6 +439,7 @@ int main(void)
     report_plan("reader-asleep");
     report_plan("ignored-discarded");
     report_plan("sigterm-ends");
+    report_plan("wait-discard-timer");
 
     if (kill_all_unprivileged(why, sizeof(why)) != 0) {
         return fail(why);
@@ -332,6 +496,11 @@ int main(void)
     orphan = 0;
     if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGTERM) {
         return fail("the process did not end by SIGTERM");
+    }
+    report_held();
+
+    if (drain_waits(why, sizeof(why)) != 0) {
+        return fail(why);
     }
     report_held();
     report_end();
