@@ -142,6 +142,23 @@ int netdev_holds(const struct netdev *nd, uint32_t ip)
     return ip != 0 && ip == nd->ip;
 }
 
+/** Report a configured link prefix that covers `ip`, as netdev.c does. */
+int netdev_on_link(const struct netdev *nd, uint32_t ip)
+{
+    int i;
+
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
+        uint32_t dst = netdev_addr_dst(nd, i);
+
+        if (netdev_addr_has_route(local, dst, mask) && (ip & mask) == (dst & mask)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Prune the routes added through `nd`: a no-op, since no row adds one. */
 void netdev_route_prune(struct netdev *nd)
 {

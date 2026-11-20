@@ -67,6 +67,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <net/if.h>
+#include <net/route.h>
 #include <netinet/in.h>
 #include <netpacket/packet.h>
 #include <poll.h>
@@ -86,6 +87,7 @@
 #define NLM_F_REQUEST          0x001
 #define NLM_F_MULTI            0x002
 #define NLM_F_ACK              0x004
+#define NLM_F_REPLACE          0x100
 #define NLM_F_EXCL             0x200
 #define NLM_F_CREATE           0x400
 #define NLM_F_DUMP             0x300
@@ -114,6 +116,7 @@
 #define NDA_LLADDR             2
 #define NUD_PERMANENT          0x80
 #define RT_TABLE_MAIN          254
+#define RT_SCOPE_LINK          253
 #define RTN_UNICAST            1
 #define RTN_LOCAL              2
 #define IFLA_IFNAME            3
@@ -1044,8 +1047,8 @@ static int uevents(void)
 }
 
 /** Whether the IPv4 address dump reports `local` and `peer` on `index`
- * with a /32 prefix. Drain the dump to NLMSG_DONE. */
-static int tun_pair(int fd, int index, struct in_addr local, struct in_addr peer)
+ * with prefix length `prefix`. Drain the dump to NLMSG_DONE. */
+static int tun_pair(int fd, int index, struct in_addr local, struct in_addr peer, int prefix)
 {
     struct rtgenmsg g = {AF_INET};
     char buf[8192] __attribute__((aligned(4)));
@@ -1074,7 +1077,7 @@ static int tun_pair(int fd, int index, struct in_addr local, struct in_addr peer
                 return 0;
             }
             if (h->nlmsg_type != RTM_NEWADDR || left < 0 || ifa->ifa_index != (unsigned int)index ||
-                ifa->ifa_prefixlen != 32) {
+                ifa->ifa_prefixlen != prefix) {
                 continue;
             }
             for (a = FIRST_RTA(ifa); RTA_OK(a, left); a = RTA_NEXT(a, left)) {
@@ -1101,6 +1104,65 @@ static int tun_route(int fd, unsigned int seq, struct in_addr peer, int index)
 
     return route_get(fd, seq, peer, &type, &oif, &gw) == 0 && type == RTN_UNICAST && oif == index &&
            gw == 0;
+}
+
+/** Check the implied peer route and add and delete the separate local
+ * prefix through rtnetlink. Return whether both routes behave as expected. */
+static int tun_local_route_netlink(int fd, int index)
+{
+    unsigned char rtm[12] = {AF_INET, 24, 0, 0, RT_TABLE_MAIN, 0, RT_SCOPE_LINK, RTN_UNICAST};
+    char body[sizeof(rtm) + 16];
+    struct in_addr peer_net = {inet_addr("198.51.100.0")};
+    struct in_addr local_net = {inet_addr("192.0.2.0")};
+    struct in_addr host = {inet_addr("192.0.2.2")};
+    int len = sizeof(rtm);
+
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &peer_net);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 90, body, len) != -EEXIST) {
+        return 0;
+    }
+    len = sizeof(rtm);
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &local_net);
+    return ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 91, body, len) == 0 &&
+           tun_route(fd, 92, host, index) && ask(fd, RTM_DELROUTE, 0, 93, body, len) == 0 &&
+           !tun_route(fd, 94, host, index);
+}
+
+/** Add and delete the separate local /24 through the route ioctls.
+ * Return whether the route appears and disappears. */
+static int tun_local_route_ioctl(int fd, int s, int index, char *name)
+{
+    struct rtentry rt = {0};
+    struct sockaddr_in sin = {0};
+    struct in_addr host = {inet_addr("192.0.2.2")};
+
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = inet_addr("192.0.2.0");
+    memcpy(&rt.rt_dst, &sin, sizeof(sin));
+    sin.sin_addr.s_addr = 0;
+    memcpy(&rt.rt_gateway, &sin, sizeof(sin));
+    sin.sin_addr.s_addr = inet_addr("255.255.255.0");
+    memcpy(&rt.rt_genmask, &sin, sizeof(sin));
+    rt.rt_flags = RTF_UP;
+    rt.rt_dev = name;
+    return ioctl(s, SIOCADDRT, &rt) == 0 && tun_route(fd, 95, host, index) &&
+           ioctl(s, SIOCDELRT, &rt) == 0 && !tun_route(fd, 96, host, index);
+}
+
+/** Set the TUN's default route through `gw`. Return the netlink result. */
+static int tun_set_gateway(int fd, int index, struct in_addr gw)
+{
+    unsigned char rtm[12] = {AF_INET, 0, 0, 0, RT_TABLE_MAIN, 0, 0, RTN_UNICAST};
+    char body[sizeof(rtm) + 16];
+    int len = sizeof(rtm);
+
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    return ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_REPLACE, 97, body, len);
 }
 
 /** Send an IPv4 datagram to the TUN's reported packet socket address and
@@ -1158,15 +1220,78 @@ static int tun_replace_peer(int s, struct ifreq *ifr, struct in_addr old, struct
     return ioctl(s, SIOCSIFDSTADDR, ifr);
 }
 
-/** Check a TUN's distinct local and peer IPv4 addresses, the peer route
- * through an ioctl change and deletion, and a packet socket send. */
+/** Check a second peer and its default gateway while the first changes.
+ * Return a failure description or NULL. The caller owns the TUN. */
+static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
+                                    struct in_addr local, struct in_addr peer)
+{
+    const char *default_route = "tunprob\t00000000\t027100CB\t";
+    struct ifaddrmsg ifa = {AF_INET, 32, 0, 0, (unsigned int)index};
+    struct in_addr next = {inet_addr("198.51.101.3")};
+    struct in_addr second = {inet_addr("203.0.113.2")};
+    char body[sizeof(ifa) + 16];
+    const char *failure;
+    int len;
+
+    failure = "could not give the same local address a second peer";
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &second);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 85, body, len) != 0 ||
+        !tun_route(fd, 86, second, index)) {
+        return failure;
+    }
+    held();
+
+    failure = "the second TUN peer was refused as default gateway";
+    if (tun_set_gateway(fd, index, second) != 0 || !file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    held();
+
+    failure = "the destination ioctls did not read and replace the peer and its route";
+    if (tun_replace_peer(s, ifr, peer, next) != 0 || !tun_pair(fd, index, local, next, 24) ||
+        tun_route(fd, 83, peer, index) || !tun_route(fd, 84, next, index)) {
+        return failure;
+    }
+    held();
+
+    failure = "the second peer's gateway was lost when the first peer changed";
+    if (!file_has("/proc/net/route", default_route)) {
+        return failure;
+    }
+    held();
+
+    failure = "the gateway survived removal of its peer or the peer could not be restored";
+    if (ask(fd, RTM_DELADDR, 0, 98, body, len) != 0 || file_has("/proc/net/route", default_route) ||
+        ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 99, body, len) != 0) {
+        return failure;
+    }
+    held();
+
+    failure = "deleting the first peer did not remove only its route";
+    ifa.ifa_prefixlen = 24;
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &next);
+    if (ask(fd, RTM_DELADDR, 0, 87, body, len) != 0 || tun_route(fd, 88, next, index) ||
+        !tun_route(fd, 89, second, index) || !tun_pair(fd, index, local, second, 32)) {
+        return failure;
+    }
+    held();
+    return NULL;
+}
+
+/** Check a TUN's IPv4 peer, link and default routes, and a packet socket
+ * send. Close the descriptor on every exit to remove the interface. */
 static int tun_changes(int fd)
 {
     struct ifreq ifr;
-    struct ifaddrmsg ifa = {AF_INET, 32, 0, 0, 0};
+    struct ifaddrmsg ifa = {AF_INET, 24, 0, 0, 0};
     struct in_addr local = {inet_addr("192.0.2.1")};
     struct in_addr peer = {inet_addr("198.51.100.2")};
-    struct in_addr next = {inet_addr("198.51.100.3")};
     char body[sizeof(ifa) + 16];
     int tun = -1, s = -1, index, len, rc;
     const char *failure = "make tunprob and set it up";
@@ -1196,7 +1321,7 @@ static int tun_changes(int fd)
     attr32(body, &len, IFA_LOCAL, &local);
     attr32(body, &len, IFA_ADDRESS, &peer);
     if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 80, body, len) != 0 ||
-        !tun_pair(fd, index, local, peer)) {
+        !tun_pair(fd, index, local, peer, 24)) {
         goto out;
     }
     held();
@@ -1207,9 +1332,14 @@ static int tun_changes(int fd)
     }
     held();
 
-    failure = "the destination ioctls did not read and replace the peer and its route";
-    if (tun_replace_peer(s, &ifr, peer, next) != 0 || !tun_pair(fd, index, local, next) ||
-        tun_route(fd, 83, peer, index) || !tun_route(fd, 84, next, index)) {
+    failure = "rtnetlink did not distinguish the implied peer prefix from the local prefix";
+    if (!tun_local_route_netlink(fd, index)) {
+        goto out;
+    }
+    held();
+
+    failure = "the route ioctls did not add and remove the local prefix";
+    if (!tun_local_route_ioctl(fd, s, index, ifr.ifr_name)) {
         goto out;
     }
     held();
@@ -1220,26 +1350,7 @@ static int tun_changes(int fd)
     }
     held();
 
-    failure = "could not give the same local address a second peer";
-    len = sizeof(ifa);
-    attr32(body, &len, IFA_LOCAL, &local);
-    attr32(body, &len, IFA_ADDRESS, &peer);
-    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 85, body, len) != 0 ||
-        !tun_route(fd, 86, peer, index)) {
-        goto out;
-    }
-    held();
-
-    failure = "deleting the first peer did not remove only its route";
-    len = sizeof(ifa);
-    attr32(body, &len, IFA_LOCAL, &local);
-    attr32(body, &len, IFA_ADDRESS, &next);
-    if (ask(fd, RTM_DELADDR, 0, 87, body, len) != 0 || tun_route(fd, 88, next, index) ||
-        !tun_route(fd, 89, peer, index) || !tun_pair(fd, index, local, peer)) {
-        goto out;
-    }
-    held();
-    failure = NULL;
+    failure = tun_peer_changes(fd, s, &ifr, index, local, peer);
 out:
     rc = failure ? fail(failure) : 0;
     if (tun >= 0) {
@@ -1301,8 +1412,17 @@ static void plan(char **envp)
     static const char *const after[] = {"padded-dump",   "peek-trunc",     "cut-trunc",
                                         "nametoindex",   "ifconf-length",  "ifconf-buffer",
                                         "uevent-silent", "eprotonosupport"};
-    static const char *const tun[] = {"tun-up",         "tun-peer",   "tun-route",
-                                      "tun-peer-ioctl", "tun-packet", "tun-second-peer",
+    static const char *const tun[] = {"tun-up",
+                                      "tun-peer",
+                                      "tun-route",
+                                      "tun-local-route-netlink",
+                                      "tun-local-route-ioctl",
+                                      "tun-packet",
+                                      "tun-second-peer",
+                                      "tun-second-gateway",
+                                      "tun-peer-ioctl",
+                                      "tun-gateway-retained",
+                                      "tun-gateway-pruned",
                                       "tun-peer-delete"};
 
     report_begin(report_case(envp, "guest.default.netlinkmusl"));

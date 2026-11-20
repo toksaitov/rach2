@@ -471,6 +471,10 @@ extern uint32_t netdev_route_misses;
  * by interface, then the added ones. */
 int netdev_route_at(int n, struct netdev_rt *out);
 
+/** Whether `nd` has an implied link route to exactly `dst`/`mask`.
+ * Call under net_lock. */
+int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask);
+
 /**
  * Add a route to `dst`/`mask` by `nd`, through `gw` or on the link when it
  * is 0, of `metric`; with `replace`, an added route of the same prefix and

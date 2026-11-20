@@ -92,6 +92,19 @@ static int implied_at(const struct netdev *nd, int n, struct netdev_rt *out)
     return -count;
 }
 
+int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask)
+{
+    struct netdev_rt r;
+    int n;
+
+    for (n = 0; implied_at(nd, n, &r) > 0 && r.kind == NETDEV_RT_LINK; n++) {
+        if (r.dst == dst && r.mask == mask) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int netdev_route_at(int n, struct netdev_rt *out)
 {
     int i, got;

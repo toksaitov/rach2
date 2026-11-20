@@ -2137,15 +2137,22 @@ struct route_req {
     uint32_t dst, mask, gw, metric;
 };
 
-/** Add the route `r` to the table by `nd`, or remove it, under `net_lock`:
- * the result of `netdev_route_add` or `netdev_route_del`. */
+/** Add or remove `r` by `nd` under net_lock. Adding the same route an
+ * address implies succeeds without action, or is EEXIST with NLM_F_EXCL.
+ * Otherwise return the result of netdev_route_add or netdev_route_del. */
 static int32_t added_route_change(struct netdev *nd, uint16_t type, uint16_t flags,
                                   const struct route_req *r)
 {
     uint32_t net = net_lock();
-    int32_t rc = type == RTM_NEWROUTE ? netdev_route_add(nd, r->dst, r->mask, r->gw, r->metric,
-                                                         (flags & NLM_F_REPLACE) != 0)
-                                      : netdev_route_del(nd, r->dst, r->mask, r->gw);
+    int32_t rc;
+
+    if (type == RTM_DELROUTE) {
+        rc = netdev_route_del(nd, r->dst, r->mask, r->gw);
+    } else if (r->gw == 0 && r->metric == 0 && netdev_has_link_route(nd, r->dst, r->mask)) {
+        rc = (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    } else {
+        rc = netdev_route_add(nd, r->dst, r->mask, r->gw, r->metric, (flags & NLM_F_REPLACE) != 0);
+    }
 
     net_unlock(net);
     return rc;
@@ -2247,10 +2254,6 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
         (type == RTM_NEWROUTE ? nd->gateway == 0 || (flags & NLM_F_REPLACE) || nd->gateway == r.gw
                               : nd->gateway != 0)) {
         return default_route_change(nd, type, flags, r.gw);
-    }
-    if (type == RTM_NEWROUTE && r.gw == 0 && nd->mask != 0 && nd->mask != 0xFFFFFFFFu &&
-        dst_len == prefix_of(nd->mask) && r.dst == (nd->ip & nd->mask)) {
-        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
     }
     return added_route_change(nd, type, flags, &r);
 }
