@@ -2,7 +2,7 @@
 # bootscreen.sh: whether a boot left the screen to the console's login, lit
 # and with the keyboard, and no desktop session on it.
 #
-#   bootscreen.sh
+#   bootscreen.sh [-l]
 #
 # Run as root on the machine, or piped to `sh -s` over ssh. It counts, and
 # requires:
@@ -21,10 +21,20 @@
 #   backlight  every backlight of /sys/class/backlight has brightness and
 #              actual_brightness above 0 and bl_power 0, on
 #
+# With -l, require only no Weston and the term login. The release uses it
+# after the native cases, when the boot's card messages may have rotated out.
+#
 # A boot may answer before init has started its console session, so the
 # checks are made again, once a second, until they pass or 30 tries have
 # failed; the last try's lines are printed. The last line is
 # `bootscreen: result: pass` or `fail: why`, and the status 0 on a pass.
+
+login_only=no
+case $#:$* in
+    0:) ;;
+    1:-l) login_only=yes ;;
+    *) echo 'usage: bootscreen.sh [-l]' >&2; exit 2 ;;
+esac
 
 # console_session: print the pid, name and arguments of init's console
 # session, the child of init that leads a session whose controlling terminal
@@ -112,17 +122,19 @@ check()
     echo "bootscreen: weston: $n running"
     [ "$n" = 0 ] || why="$n weston running"
 
-    held=$(console_card)
-    echo "bootscreen: console: ${held:-no card}"
-    case $held in
-        *' on') ;;
-        *' handed') [ -n "$why" ] || why="the console handed ${held% *} to a master" ;;
-        *) [ -n "$why" ] || why="the console holds no card" ;;
-    esac
+    if [ "$login_only" = no ]; then
+        held=$(console_card)
+        echo "bootscreen: console: ${held:-no card}"
+        case $held in
+            *' on') ;;
+            *' handed') [ -n "$why" ] || why="the console handed ${held% *} to a master" ;;
+            *) [ -n "$why" ] || why="the console holds no card" ;;
+        esac
+    fi
 
     current=$(console_session)
     echo "bootscreen: session: ${current:-none}"
-    if tr ' ' '\n' < /proc/cmdline | grep -qx 'rach2\.console=term'; then
+    if [ "$login_only" = yes ] || tr ' ' '\n' < /proc/cmdline | grep -qx 'rach2\.console=term'; then
         case $current in
             *' term term -l')
                 login=$(login_child "${current%% *}")
@@ -133,6 +145,7 @@ check()
         esac
     fi
 
+    [ "$login_only" = no ] || return 0
     for light in /sys/class/backlight/*; do
         [ -d "$light" ] || continue
         name=${light##*/}
