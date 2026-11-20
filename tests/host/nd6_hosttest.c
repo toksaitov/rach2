@@ -354,7 +354,14 @@ static void route_lifetime(void)
     eth0.naddr6 = 1;
     CHECK(count_prefix(a->addr, 128, 0, 80) == 1 && count_prefix(a->addr, 128, 1, 0) == 0);
     CHECK(count_prefix(a->peer, 128, 0, 80) == 0);
-    a->flags = NETDEV_A6_NODAD | NETDEV_A6_PERMANENT;
+    a->flags |= NETDEV_A6_PERMANENT;
+    a->preferred = NETDEV_LIFETIME_FOREVER;
+    a->deleted_routes = NETDEV_A6_LOCAL_ROUTE | NETDEV_A6_PEER_ROUTE;
+    dad_timers(&eth0);
+    CHECK(!(a->flags & NETDEV_A6_TENTATIVE));
+    if_of(&eth0)->running = 0;
+    if_timers(&eth0, if_of(&eth0));
+    CHECK(!(a->flags & NETDEV_A6_TENTATIVE));
     CHECK(count_prefix(a->addr, 128, 1, 0) == 1 && count_prefix(a->peer, 128, 0, 80) == 1);
     a->noprefix = 1;
     CHECK(count_prefix(a->addr, 128, 0, 80) == 0 && count_prefix(a->peer, 128, 0, 80) == 1);
