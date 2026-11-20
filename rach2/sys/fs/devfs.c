@@ -559,6 +559,10 @@ struct reg_slot {
 };
 
 static struct reg_slot reg_slots[DEVFS_NODES_MAX];
+
+/* A lookup carries every name a slot may hold. */
+typedef char
+    vpath_holds_node_name[sizeof(((struct vpath *)0)->name) == DEVFS_NODE_NAME_MAX ? 1 : -1];
 static int reg_slot_count; /* slots ever used, from the first */
 
 /** The registry's slot `dev` is, or NULL for an entry of the table or a
@@ -2711,6 +2715,15 @@ int devfs_open(const char *name, int flags)
     return fd;
 }
 
+/** The device number of `major` and `minor` as Linux's new_encode_dev
+ * makes it, which stat gives and `open_device` reads: the minor's low
+ * byte, the major's 12 bits above it and the rest of the minor above
+ * those, so that a minor past 255 keeps its own number. */
+static uint32_t devno(uint32_t major, uint32_t minor)
+{
+    return (minor & 0xFFu) | (major << 8) | ((minor & 0xFFF00u) << 12);
+}
+
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
 {
     const struct devfs_entry *dev;
@@ -2736,7 +2749,7 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
         *mode = devfs_type_bits(dev) | dev_mode(dev);
     }
     if (rdev) {
-        *rdev = ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
+        *rdev = devno(dev->major, dev->minor);
     }
     if (ino) {
         *ino = DEVFS_INO(entry_index(dev));
@@ -2751,7 +2764,7 @@ const char *devfs_name_of(int block, uint32_t rdev)
     for (i = 0; i < DEVFS_NDEV; i++) {
         const struct devfs_entry *dev = &dev_table[i];
 
-        if (devfs_entry_present(dev) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+        if (devfs_entry_present(dev) && devno(dev->major, dev->minor) == rdev &&
             (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
             return dev->name;
         }
@@ -2760,14 +2773,14 @@ const char *devfs_name_of(int block, uint32_t rdev)
         const struct devfs_entry *dev = &reg_slots[i].entry;
 
         if (devfs_entry_present(dev) && !reg_slots[i].node->alias &&
-            (((uint32_t)dev->major << 8) | dev->minor) == rdev) {
+            devno(dev->major, dev->minor) == rdev) {
             return reg_slots[i].name;
         }
     }
     for (i = 0; i < disk_node_count; i++) {
         const struct devfs_entry *dev = &disk_nodes[i].entry;
 
-        if (disk_node_present(i) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+        if (disk_node_present(i) && devno(dev->major, dev->minor) == rdev &&
             (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
             return disk_nodes[i].name;
         }
@@ -2783,7 +2796,7 @@ uint32_t devfs_rdev(struct fd_entry *e)
         return 0;
     }
     dev = e->dev;
-    return ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
+    return devno(dev->major, dev->minor);
 }
 
 uint32_t devfs_fd_ino(struct fd_entry *e)
@@ -2977,7 +2990,7 @@ static int reg_name_ok(const char *name)
  * `major` and `minor`. */
 static int reg_taken(const char *name, uint16_t major, uint16_t minor, int alias)
 {
-    uint32_t rdev = ((uint32_t)major << 8) | minor;
+    uint32_t rdev = devno(major, minor);
     int i;
 
     for (i = 0; i < DEVFS_NDEV; i++) {

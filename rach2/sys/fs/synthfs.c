@@ -100,7 +100,7 @@ static int comp_uint(struct comp c)
     return v;
 }
 
-/** Copy the component `c` into `vp->name`, NUL-terminated and cut to 63
+/** Copy the component `c` into `vp->name`, NUL-terminated and cut to 268
  * bytes. */
 static void synth_copy_name(struct vpath *vp, struct comp c)
 {
