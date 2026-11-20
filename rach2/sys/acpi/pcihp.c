@@ -190,8 +190,9 @@ static void pcihp_slots(ACPI_HANDLE root)
     }
 }
 
-/** The first host bridge of bus 0: its windows and slots; the walk stops
- * there. A bridge whose _BBN names another bus is passed over. */
+/** The first host bridge of bus 0: its windows, which the PCI layer keeps
+ * too, and its slots; the walk stops there. A bridge whose _BBN names
+ * another bus is passed over. */
 static ACPI_STATUS pcihp_root(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
 {
     static char bbn[] = "_BBN", crs[] = "_CRS";
@@ -208,6 +209,7 @@ static ACPI_STATUS pcihp_root(ACPI_HANDLE handle, UINT32 depth, void *context, v
         return AE_OK;
     }
     (void)AcpiWalkResources(handle, crs, pcihp_window, NULL);
+    pci_root_windows(apertures, napertures);
     pcihp_slots(handle);
     return AE_CTRL_TERMINATE;
 }

@@ -1,10 +1,13 @@
 /*
  * pnp.c: the 8042's devices in the firmware's namespace, found as Linux's
  * pnpacpi and i8042 PNP drivers find them, so that the touchpad's driver
- * can choose Linux's quirks by the PS/2 mouse's PNP ID.
+ * can choose Linux's quirks by the PS/2 mouse's PNP ID; and the ports and
+ * memory that ACPI's fixed registers and system devices hold, which no
+ * PCI BAR may be claimed over.
  */
 
 #include "../klog.h"
+#include "../pci.h"
 #include "../arch/x86/i8042.h"
 
 #include "acpi.h"
@@ -74,4 +77,112 @@ static ACPI_STATUS pnp_found(ACPI_HANDLE handle, UINT32 depth, void *context, vo
 void acpi_pnp_i8042(void)
 {
     (void)AcpiGetDevices(NULL, pnp_found, NULL, NULL);
+}
+
+/** Hold `len` bytes of the fixed register block `g` for the host, of ports
+ * or of memory as its space says, as Linux's acpi_request_region. */
+static void pnp_reserve_block(const ACPI_GENERIC_ADDRESS *g, UINT32 len)
+{
+    UINT64 at = g->Address;
+
+    if (at == 0 || len == 0) {
+        return;
+    }
+    if (g->SpaceId == ACPI_ADR_SPACE_SYSTEM_IO) {
+        pci_host_reserve(at, at + len - 1u, 1);
+    } else if (g->SpaceId == ACPI_ADR_SPACE_SYSTEM_MEMORY) {
+        pci_host_reserve(at, at + len - 1u, 0);
+    }
+}
+
+/**
+ * A resource of a system device's _CRS held for the host, as Linux's
+ * pnp/system.c reserves it: ports from 0x100 up, since those below are the
+ * PC's own, which the PCI layer holds already, and memory of any address.
+ */
+static ACPI_STATUS pnp_reserve_one(ACPI_RESOURCE *res, void *context)
+{
+    ACPI_RESOURCE_ADDRESS64 a;
+    UINT64 start = 0, len = 0;
+    int io = 0;
+
+    (void)context;
+    switch (res->Type) {
+    case ACPI_RESOURCE_TYPE_IO:
+        start = res->Data.Io.Minimum;
+        len = res->Data.Io.AddressLength;
+        io = 1;
+        break;
+    case ACPI_RESOURCE_TYPE_FIXED_IO:
+        start = res->Data.FixedIo.Address;
+        len = res->Data.FixedIo.AddressLength;
+        io = 1;
+        break;
+    case ACPI_RESOURCE_TYPE_MEMORY32:
+        start = res->Data.Memory32.Minimum;
+        len = res->Data.Memory32.AddressLength;
+        break;
+    case ACPI_RESOURCE_TYPE_FIXED_MEMORY32:
+        start = res->Data.FixedMemory32.Address;
+        len = res->Data.FixedMemory32.AddressLength;
+        break;
+    default:
+        if (ACPI_FAILURE(AcpiResourceToAddress64(res, &a)) ||
+            (a.ResourceType != ACPI_MEMORY_RANGE && a.ResourceType != ACPI_IO_RANGE)) {
+            return AE_OK;
+        }
+        start = a.Address.Minimum + a.Address.TranslationOffset;
+        len = a.Address.AddressLength;
+        io = a.ResourceType == ACPI_IO_RANGE;
+        break;
+    }
+    if (len != 0 && (!io || start >= 0x100u)) {
+        pci_host_reserve(start, start + len - 1u, io);
+    }
+    return AE_OK;
+}
+
+/** A device of the namespace: one that is present and names PNP0C01 or
+ * PNP0C02, a system device, by its _HID or a _CID has its _CRS held. */
+static ACPI_STATUS pnp_system(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
+{
+    static char crs[] = "_CRS";
+    ACPI_DEVICE_INFO *info = NULL;
+    ACPI_HANDLE h;
+    UINT32 i;
+    int system = 0;
+
+    (void)depth;
+    (void)context;
+    (void)ret;
+    if (ACPI_FAILURE(AcpiGetHandle(handle, crs, &h)) ||
+        ACPI_FAILURE(AcpiGetObjectInfo(handle, &info))) {
+        return AE_OK;
+    }
+    if (info->Valid & ACPI_VALID_HID) {
+        system = strcmp(info->HardwareId.String, "PNP0C01") == 0 ||
+                 strcmp(info->HardwareId.String, "PNP0C02") == 0;
+    }
+    for (i = 0; (info->Valid & ACPI_VALID_CID) && i < info->CompatibleIdList.Count; i++) {
+        system |= strcmp(info->CompatibleIdList.Ids[i].String, "PNP0C01") == 0 ||
+                  strcmp(info->CompatibleIdList.Ids[i].String, "PNP0C02") == 0;
+    }
+    ACPI_FREE(info);
+    if (system && present(handle)) {
+        (void)AcpiWalkResources(handle, crs, pnp_reserve_one, NULL);
+    }
+    return AE_OK;
+}
+
+void acpi_pnp_reserve(void)
+{
+    pnp_reserve_block(&AcpiGbl_FADT.XPm1aEventBlock, AcpiGbl_FADT.Pm1EventLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XPm1bEventBlock, AcpiGbl_FADT.Pm1EventLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XPm1aControlBlock, AcpiGbl_FADT.Pm1ControlLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XPm1bControlBlock, AcpiGbl_FADT.Pm1ControlLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XPm2ControlBlock, AcpiGbl_FADT.Pm2ControlLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XPmTimerBlock, AcpiGbl_FADT.PmTimerLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XGpe0Block, AcpiGbl_FADT.Gpe0BlockLength);
+    pnp_reserve_block(&AcpiGbl_FADT.XGpe1Block, AcpiGbl_FADT.Gpe1BlockLength);
+    (void)AcpiGetDevices(NULL, pnp_system, NULL, NULL);
 }

@@ -658,6 +658,130 @@ static int pci_bridge_window(const struct pci_place *p, int w, uint64_t *start, 
     return *start <= *end;
 }
 
+/* The PC's fixed I/O ports, which Linux on x86 reserves before it claims a
+ * PCI resource (standard_io_resources, the RTC's and "PCI conf1"), and the
+ * ports of the devices the kernel drives at fixed addresses, which Linux's
+ * drivers request: the two legacy ATA channels ata.c probes and COM1, the
+ * serial console. */
+static const struct {
+    uint16_t start, end;
+} pci_pc_ports[] = {{0x00, 0x1F},   {0x20, 0x21},   {0x40, 0x43},   {0x50, 0x53},   {0x60, 0x60},
+                    {0x64, 0x64},   {0x70, 0x77},   {0x80, 0x8F},   {0xA0, 0xA1},   {0xC0, 0xDF},
+                    {0xF0, 0xFF},   {0x170, 0x177}, {0x1F0, 0x1F7}, {0x376, 0x376}, {0x3F6, 0x3F6},
+                    {0x3F8, 0x3FF}, {0xCF8, 0xCFF}};
+
+/* The host's other ranges, which `pci_host_reserve` was given: a PC's map
+ * and system devices give a few dozen, merged where they touch. */
+#define PCI_HOST_RANGES 64
+
+static struct pci_aperture pci_host_ranges[PCI_HOST_RANGES];
+static int pci_host_nranges;
+
+/* The windows of bus 0's host bridge (`pci_root_windows`). */
+#define PCI_ROOT_WINDOWS 8
+
+static struct pci_aperture pci_root_win[PCI_ROOT_WINDOWS];
+static int pci_root_nwin;
+
+/** Whether `a` to `b` and `c` to `d`, inclusive, overlap or adjoin. */
+static int pci_ranges_touch(uint64_t a, uint64_t b, uint64_t c, uint64_t d)
+{
+    return !(b < c && c - b > 1u) && !(d < a && a - d > 1u);
+}
+
+/** Make room in a full table: the two ranges of one kind with the least
+ * between them become one, which holds what lay between them too. */
+static void pci_host_squeeze(void)
+{
+    struct pci_aperture *a, *b;
+    uint64_t gap, best = 0;
+    int i, j, bi = -1, bj = -1;
+
+    for (i = 0; i < pci_host_nranges; i++) {
+        for (j = i + 1; j < pci_host_nranges; j++) {
+            a = &pci_host_ranges[i];
+            b = &pci_host_ranges[j];
+            if (!a->io != !b->io) {
+                continue;
+            }
+            gap =
+                a->end < b->start ? b->start - a->end : (b->end < a->start ? a->start - b->end : 0);
+            if (bi < 0 || gap < best) {
+                bi = i;
+                bj = j;
+                best = gap;
+            }
+        }
+    }
+    a = &pci_host_ranges[bi];
+    b = &pci_host_ranges[bj];
+    a->start = a->start < b->start ? a->start : b->start;
+    a->end = a->end > b->end ? a->end : b->end;
+    *b = pci_host_ranges[--pci_host_nranges];
+}
+
+void pci_host_reserve(uint64_t start, uint64_t end, int io)
+{
+    struct pci_aperture *h;
+    int k;
+
+    if (end < start) {
+        return;
+    }
+    for (k = 0; k < pci_host_nranges;) {
+        h = &pci_host_ranges[k];
+        if (!h->io != !io || !pci_ranges_touch(start, end, h->start, h->end)) {
+            k++;
+            continue;
+        }
+        start = h->start < start ? h->start : start;
+        end = h->end > end ? h->end : end;
+        *h = pci_host_ranges[--pci_host_nranges];
+        k = 0;
+    }
+    if (pci_host_nranges == PCI_HOST_RANGES) {
+        pci_host_squeeze();
+    }
+    h = &pci_host_ranges[pci_host_nranges++];
+    h->start = start;
+    h->end = end;
+    h->io = io != 0;
+}
+
+void pci_root_windows(const struct pci_aperture *ap, int n)
+{
+    int k;
+
+    pci_root_nwin = 0;
+    for (k = 0; k < n && pci_root_nwin < PCI_ROOT_WINDOWS; k++) {
+        pci_root_win[pci_root_nwin++] = ap[k];
+    }
+}
+
+/** Whether `start` to `end`, of I/O ports when `io` is set, overlaps a
+ * range of the host's own: a fixed port or one `pci_host_reserve` holds;
+ * `*next` is then the address after it. */
+static int pci_host_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
+{
+    int j;
+
+    for (j = 0; io && j < (int)(sizeof(pci_pc_ports) / sizeof(pci_pc_ports[0])); j++) {
+        if (start <= pci_pc_ports[j].end && pci_pc_ports[j].start <= end) {
+            *next = (uint64_t)pci_pc_ports[j].end + 1u;
+            return 1;
+        }
+    }
+    for (j = 0; j < pci_host_nranges; j++) {
+        const struct pci_aperture *h = &pci_host_ranges[j];
+
+        if (!h->io == !io && start <= h->end && h->start <= end) {
+            *next = h->end + 1u;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Whether `start` to `end`, of I/O ports when `io` is set, overlaps a
  * window of a listed bridge; `*next` is then the address after it. */
 static int pci_window_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
@@ -684,7 +808,7 @@ static int pci_range_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
     struct pci_resource r;
     int i, k, n = pci_list_count();
 
-    if (pci_window_taken(start, end, io, next)) {
+    if (pci_window_taken(start, end, io, next) || pci_host_taken(start, end, io, next)) {
         return 1;
     }
     for (k = 0; k < n; k++) {
@@ -701,18 +825,77 @@ static int pci_range_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
     return 0;
 }
 
-/* The PC's fixed I/O ports, which Linux on x86 reserves before it claims a
- * PCI resource (standard_io_resources, the RTC's and "PCI conf1"). */
-static const struct {
-    uint16_t start, end;
-} pci_pc_ports[] = {{0x00, 0x1F}, {0x20, 0x21}, {0x40, 0x43}, {0x50, 0x53},
-                    {0x60, 0x60}, {0x64, 0x64}, {0x70, 0x77}, {0x80, 0x8F},
-                    {0xA0, 0xA1}, {0xC0, 0xDF}, {0xF0, 0xFF}, {0xCF8, 0xCFF}};
+/** Whether bus 0's host bridge passes `r`: a window of its kind holds it
+ * whole, or the firmware gave the bridge no window of that kind. */
+static int pci_root_holds(const struct pci_resource *r)
+{
+    int k, any = 0, io = (r->flags & PCI_IORESOURCE_IO) != 0;
 
-/** Whether the bridge to `bus` that decodes positively has a window of the
- * kind of `r` that holds it whole; 1 too when no such bridge leads there,
- * as for a root bus or behind a subtractive one. */
-static int pci_parent_holds(uint8_t bus, const struct pci_resource *r)
+    for (k = 0; k < pci_root_nwin; k++) {
+        if (!pci_root_win[k].io != !io) {
+            continue;
+        }
+        any = 1;
+        if (pci_root_win[k].start <= r->start && r->end <= pci_root_win[k].end) {
+            return 1;
+        }
+    }
+    return !any;
+}
+
+/**
+ * Whether the host reaches `r`, a resource of a function on `bus`, as
+ * Linux's pci_find_parent_resource finds a parent at every level up to the
+ * root: each bridge on the way that decodes positively has a window of the
+ * kind of `r` that holds it whole, a prefetchable window only for a
+ * prefetchable BAR; a subtractive one passes it to its own bus; and at bus
+ * 0 the host bridge's windows hold it (`pci_root_holds`). Another root
+ * bus, whose host bridge's windows are not kept, passes it. A bridge
+ * without a bus number leads nowhere, and a loop of bridges reaches
+ * nothing.
+ */
+static int pci_route_holds(uint8_t bus, const struct pci_resource *r)
+{
+    uint64_t ws, we;
+    uint8_t sec;
+    int depth, k, w, held, n = pci_list_count();
+    int io = (r->flags & PCI_IORESOURCE_IO) != 0;
+    int last = io ? 1 : ((r->flags & PCI_IORESOURCE_PREFETCH) ? 3 : 2);
+
+    for (depth = 0; depth < 256; depth++) {
+        const struct pci_place *p = NULL;
+
+        for (k = 0; k < n && p == NULL; k++) {
+            if (pci_list[k].header == 1) {
+                sec = pci_read_config8(pci_list[k].bus, pci_list[k].device, pci_list[k].function,
+                                       0x19);
+                if (sec != 0 && sec == bus) {
+                    p = &pci_list[k];
+                }
+            }
+        }
+        if (p == NULL) {
+            return bus != 0 || pci_root_holds(r);
+        }
+        if (pci_read_config8(p->bus, p->device, p->function, PCI_PROG_IF) != 0x01) {
+            held = 0;
+            for (w = io ? 0 : 1; w < last && !held; w++) {
+                held = pci_bridge_window(p, w, &ws, &we) && ws <= r->start && r->end <= we;
+            }
+            if (!held) {
+                return 0;
+            }
+        }
+        bus = p->bus;
+    }
+    return 0;
+}
+
+/** Whether `r`, of the function bus:device.function, overlaps a window of
+ * another bridge on its bus, which Linux's request_resource finds as a
+ * sibling. */
+static int pci_sibling_window(uint8_t bus, uint8_t device, uint8_t function,
+                              const struct pci_resource *r)
 {
     uint64_t ws, we;
     int k, w, n = pci_list_count();
@@ -721,40 +904,34 @@ static int pci_parent_holds(uint8_t bus, const struct pci_resource *r)
     for (k = 0; k < n; k++) {
         const struct pci_place *p = &pci_list[k];
 
-        if (p->header != 1 || pci_read_config8(p->bus, p->device, p->function, 0x19) != bus) {
+        if (p->header != 1 || p->bus != bus || (p->device == device && p->function == function)) {
             continue;
         }
-        if (pci_read_config8(p->bus, p->device, p->function, PCI_PROG_IF) == 0x01) {
-            return 1; /* subtractive decode passes what no window takes */
-        }
         for (w = io ? 0 : 1; w < (io ? 1 : 3); w++) {
-            if (pci_bridge_window(p, w, &ws, &we) && ws <= r->start && r->end <= we) {
+            if (pci_bridge_window(p, w, &ws, &we) && ws <= r->end && r->start <= we) {
                 return 1;
             }
         }
-        return 0;
     }
-    return 1;
+    return 0;
 }
 
 int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i)
 {
     struct pci_resource r, o;
+    uint64_t next;
     uint32_t kind;
     int j, k, n = pci_list_count();
 
     pci_resource(bus, device, function, i, &r);
     kind = r.flags & (PCI_IORESOURCE_IO | PCI_IORESOURCE_MEM);
     if (i < 0 || i >= PCI_ROM_RESOURCE || kind == 0 || r.start == 0 || r.end < r.start ||
-        (kind == PCI_IORESOURCE_IO && r.end > 0xFFFFu) || !pci_parent_holds(bus, &r)) {
+        (kind == PCI_IORESOURCE_IO && r.end > 0xFFFFu) || !pci_route_holds(bus, &r)) {
         return -EINVAL;
     }
-    for (j = 0;
-         kind == PCI_IORESOURCE_IO && j < (int)(sizeof(pci_pc_ports) / sizeof(pci_pc_ports[0]));
-         j++) {
-        if (r.start <= pci_pc_ports[j].end && pci_pc_ports[j].start <= r.end) {
-            return -EBUSY;
-        }
+    if (pci_host_taken(r.start, r.end, kind == PCI_IORESOURCE_IO, &next) ||
+        pci_sibling_window(bus, device, function, &r)) {
+        return -EBUSY;
     }
     for (k = 0; k < n; k++) {
         const struct pci_place *p = &pci_list[k];
