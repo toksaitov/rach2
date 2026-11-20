@@ -18,10 +18,11 @@
  * a wide format and a narrow one at a rate the sink lacks granted as asked,
  * the DMA playing 24 bits where the sink takes them and the sink's nearest
  * rate; a monitor that comes while a stream plays given the stream; a
- * second monitor's PCM, which plays beside the first; surround, its
- * channels limited by the sink and given Linux's channel allocations,
- * slots and infoframes; and the close, which gives the display's power
- * back.
+ * second monitor's PCM, which plays beside the first, and a third's, all
+ * three playing at once; surround, its channels limited by the sink and
+ * given Linux's channel allocations, slots and infoframes; more channels
+ * than HDMI's eight granted, the DMA playing the first of each frame; and
+ * the close, which gives the display's power back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -36,9 +37,11 @@ extern char *strstr(const char *text, const char *needle);
 
 static int failures;
 
-/* The first PCM, /dev/dsp1's, and the second, /dev/adsp1's. */
+/* The first PCM, /dev/dsp1's, the second, /dev/adsp1's, and the third,
+ * /dev/dsp2's. */
 #define M0 (&hh_pcms[0])
 #define M1 (&hh_pcms[1])
+#define M2 (&hh_pcms[2])
 
 /** Count a failed row and name it. */
 static void check(int ok, const char *what)
@@ -229,6 +232,7 @@ static const uint8_t igt_eld[28] = {0x10, 0x00, 0x06, 0x00, 0x63, 0x10, 0x00, 0x
 static int display_power, display_powers;
 static int sink_on = 1; /* the display plays audio on port B */
 static int sink2_on;    /* and on port C */
+static int sink3_on;    /* and on port D */
 static int rate_port, rate_set;
 
 /** The display's get_power. */
@@ -264,13 +268,13 @@ static int32_t d_rate(void *dev, int port, int pipe, int rate)
     return 0;
 }
 
-/** The display's get_eld: IGT's on port B, entry 0, and on port C, entry
- * 0, while it plays audio there. */
+/** The display's get_eld: IGT's on entry 0 of ports B, C and D, while it
+ * plays audio there. */
 static int32_t d_eld(void *dev, int port, int pipe, int *enabled, uint8_t *buf, int max)
 {
     (void)dev;
     *enabled = 0;
-    if (pipe > 0 || !(port == 1 ? sink_on : port == 2 ? sink2_on : 0)) {
+    if (pipe > 0 || !(port == 1 ? sink_on : port == 2 ? sink2_on : port == 3 ? sink3_on : 0)) {
         return -EINVAL;
     }
     *enabled = 1;
@@ -516,7 +520,7 @@ static void row_two(void)
 {
     sink2_on = 1;
     acomp_eld_notify(2, -1);
-    check(hh_npcms == 2 && hh_pins[3].eld_valid && hh_pins[3].pcm == 1 && M1->pin == 3 &&
+    check(hh_npcms == 3 && hh_pins[3].eld_valid && hh_pins[3].pcm == 1 && M1->pin == 3 &&
               M0->pin == 0,
           "two: port C's monitor attached to the second PCM");
     stream_init(&two_b, 48000, AUDIO_S16LE, 4096);
@@ -569,6 +573,58 @@ static void row_two_close(void)
           "two: the monitor's going detaches its PCM");
 }
 
+/* The streams of row_three's monitors, port B's, C's and D's. */
+static audio_stream_t three_b, three_c, three_d;
+
+/** A third monitor, on port D, attached to the third PCM, whose device is
+ * /dev/dsp2, though no stream is open: three PCMs, one for each converter,
+ * as Linux makes them on Haswell, open at once, and no fourth. */
+static void row_three(void)
+{
+    sink2_on = 1;
+    sink3_on = 1;
+    acomp_eld_notify(2, -1);
+    acomp_eld_notify(3, -1);
+    check(hh_npcms == 3 && hh_dsp_registered[2] && hh_pins[6].eld_valid && hh_pins[6].pcm == 2 &&
+              M2->pin == 6 && M1->pin == 3 && M0->pin == 0,
+          "three: port D's monitor attached to the third PCM, whose device is there");
+    stream_init(&three_b, 48000, AUDIO_S16LE, 4096);
+    stream_init(&three_c, 48000, AUDIO_S16LE, 4096);
+    stream_init(&three_d, 44100, AUDIO_S16LE, 4096);
+    check(hh_open0(&three_b) == 0 && hh_open1(&three_c) == 0 && hh_open2(&three_d) == 0,
+          "three: the three PCMs open");
+    check(hh_open3(&three_d) == -ENODEV, "three: there is no fourth");
+    check(hh_pins[0].cvt == 2 && hh_pins[3].cvt == 3 && hh_pins[6].cvt == 4,
+          "three: each PCM takes a converter of its own");
+    check(conn_sel[5] == 0 && conn_sel[6] == 1 && conn_sel[7] == 2,
+          "three: each pin selects its PCM's converter");
+}
+
+/** row_three's PCMs play at once, the third on a descriptor and tag of its
+ * own, and close. */
+static void row_three_play(void)
+{
+    check(hh_stream_setup(&three_b) == 0 && hh_stream_setup(&three_c) == 0 &&
+              hh_stream_setup(&three_d) == 0,
+          "three: all three set up");
+    check(hh_stream_start(&three_b) == 0 && hh_stream_start(&three_c) == 0 &&
+              hh_stream_start(&three_d) == 0,
+          "three: all three start");
+    check(M2->sd == 6 && (mm_get(hh_sd(M2, HDA_SD_CTL), 32) >> 20) == 3,
+          "three: the third runs on descriptor 6 with tag 3");
+    check(streamid[4] == 0x30 && format[4] == 0x4011 && rate_port == 3 && rate_set == 44100,
+          "three: its converter has its tag and format, port D's clocks set");
+    hh_stream_close(&three_b);
+    hh_stream_close(&three_c);
+    hh_stream_close(&three_d);
+    sink2_on = 0;
+    sink3_on = 0;
+    acomp_eld_notify(2, -1);
+    acomp_eld_notify(3, -1);
+    check(display_power == 0 && M1->pin < 0 && M2->pin < 0 && hdmi_audio_idle_ticks() == TICK_HZ,
+          "three: the closes and the monitors' going leave nothing held");
+}
+
 /* The bytes fill_transfer gives. */
 static uint8_t fill_byte;
 
@@ -604,6 +660,44 @@ static void row_surround(void)
           "surround: six asked of a sink of two granted");
     check(!M0->copy && M0->fmt == 0x0011, "surround: the DMA in two");
     hh_stream_close(&s);
+}
+
+/** 128 channels of 32 bits at 192 kHz on IGT's sink, whose LPCM is stereo
+ * at 48 kHz at most: the channels granted, two played; and, since two of
+ * the DMA's shortest periods would take more of the stream than the
+ * caller's buffer holds, the DMA's 48 kHz. */
+static void row_many(void)
+{
+    audio_stream_t s;
+
+    stream_init(&s, 192000, AUDIO_S32LE, 16384);
+    s.channels = 128;
+    check(hh_open0(&s) == 0 && hh_stream_setup(&s) == 0 && s.channels == 128 && M0->ch == 2 &&
+              M0->fmt == 0x0031,
+          "many: 128 channels granted, the DMA in two of 24 bits");
+    check(s.rate == 48000 && M0->rate == 48000 && s.period_bytes == 16384 && M0->pb == 256 &&
+              M0->n == 3 && s.device_periods == 4,
+          "many: 48 kHz granted, at which the DMA's periods fit the caller's buffer");
+    hh_stream_close(&s);
+}
+
+/* The channels of the frames chan_transfer gives, and the stream bytes it
+ * has given. */
+static int pat_channels;
+static uint32_t pat_off;
+
+/** A transfer of 16-bit frames of `pat_channels` whose sample of channel c
+ * in frame f is c * 256 + f % 256. */
+static void chan_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    uint32_t i, sample, v;
+
+    (void)s;
+    for (i = 0; i < (uint32_t)size; i++, pat_off++) {
+        sample = pat_off / 2u;
+        v = (sample % (uint32_t)pat_channels) << 8 | (sample / (uint32_t)pat_channels & 0xffu);
+        buf[i] = (uint8_t)(pat_off & 1u ? v >> 8 : v);
+    }
 }
 
 /** On a sink of 7.1 LPCM, as root's write to its ELD file makes it, six
@@ -656,6 +750,32 @@ static void row_surround_odd(void)
     check(display_power == 0, "surround: the closes leave nothing held");
 }
 
+/** On row_surround_six's sink, sixteen channels are granted and played as
+ * eight: of each frame the first eight, the other eight dropped whole, as
+ * Linux's route plugin drops them. */
+static void row_many_eight(void)
+{
+    audio_stream_t s;
+    uint32_t f, c;
+    int ok = 1;
+
+    check(open_channels(&s, 16) && s.channels == 16 && M0->ch == 8 && !M0->copy &&
+              M0->fmt == 0x0017,
+          "many: sixteen channels granted, eight played");
+    s.transfer = chan_transfer;
+    pat_channels = 16;
+    pat_off = 0;
+    check(hh_stream_start(&s) == 0, "many: sixteen channels start");
+    for (f = 0; f < 4; f++) {
+        for (c = 0; c < 8; c++) {
+            ok = ok && dma0(f * 8u + c) == (int)(c << 8 | f);
+        }
+    }
+    check(ok, "many: each DMA frame holds its stream frame's first eight channels");
+    hh_stream_close(&s);
+    check(display_power == 0, "many: the close leaves nothing held");
+}
+
 /** The display going unbinds the card. */
 static void row_unbind(void)
 {
@@ -677,9 +797,13 @@ int main(void)
     row_two();
     row_two_play();
     row_two_close();
+    row_three();
+    row_three_play();
     row_surround();
+    row_many();
     row_surround_six();
     row_surround_odd();
+    row_many_eight();
     row_unbind();
     if (failures == 0) {
         printf("hdmi-audio-test: ok\n");

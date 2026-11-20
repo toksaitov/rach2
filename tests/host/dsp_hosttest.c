@@ -6,10 +6,11 @@
  * negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs and of
  * sox_ng's and FFmpeg's OSS inputs, and several opens playing at once: their
  * mix, its clipping, the conversion of each open's format and rate, and one
- * player closing while another plays. The mix is of 24 bits: a model that
- * plays 24 bits in 32 is given the 24-bit formats exactly and a sum clipped
- * at 24 bits, and one of 16 bits each sample rounded to 16; a reader in a
- * wide format has the 16 bits recorded on top of zeros.
+ * player closing while another plays; and an open of a driver of its own, as
+ * /dev/dsp1's, that takes up to 128 channels. The mix is of 24 bits: a model
+ * that plays 24 bits in 32 is given the 24-bit formats exactly and a sum
+ * clipped at 24 bits, and one of 16 bits each sample rounded to 16; a reader in
+ * a wide format has the 16 bits recorded on top of zeros.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/audio/resample.c
@@ -71,6 +72,7 @@ static struct {
     uint32_t play_max;   /* the largest playback period it grants, in bytes
                             of 16 bits; twice that of 32 */
     int wide;            /* it plays 24 bits in 32, AUDIO_S32LE, not 16 */
+    int channels_max;    /* the channels it grants, as the driver's own */
     int refuse_open;     /* stream_open's error, or 0 */
     int refuse_start;    /* stream_start's error, or 0 */
     int starts, stops, closes;
@@ -225,7 +227,8 @@ static int model_setup(audio_stream_t *s)
     check(!(in ? cap.running : m.running), "setup while stopped");
     check(s->format == AUDIO_U8 || s->format == AUDIO_S16LE || (!in && s->format == AUDIO_S32LE),
           "a known format");
-    check(s->channels == 1 || s->channels == 2, "one or two channels");
+    check(s->channels >= 1 && s->channels <= (m.channels_max > 2 ? m.channels_max : 2),
+          "no more channels than the driver's channels_max");
     if (!in && AUDIO_SAMPLE_BYTES(s->format) > 2) {
         s->period_bytes = s->period_bytes / AUDIO_SAMPLE_BYTES(s->format) * (m.wide ? 4 : 2);
         s->format = m.wide ? AUDIO_S32LE : AUDIO_S16LE;
@@ -2059,6 +2062,34 @@ static void row_loopback(void)
     vchan_set_loopback(0);
 }
 
+/** A device that converts any count of channels, as the HDMI codec's
+ * /dev/dsp1 does, opened on its driver alone: CHANNELS grants up to 128 and
+ * refuses more with EINVAL, as Linux's OSS layer does, and a fragment asked
+ * smaller than a frame of 128 channels holds one. */
+static void row_many_channels(void)
+{
+    int value = 129;
+
+    begin("many channels");
+    m.channels_max = 128;
+    model.channels_max = 128;
+    m.play_max = MODEL_PERIOD_MAX;
+    k_memset(&entry, 0, sizeof(entry));
+    k_memset(&description, 0, sizeof(description));
+    entry.ofd = &description;
+    description.refcount = 1;
+    check(dspdev_open_driver(&entry, 1, &model) == 0, "open on the driver itself");
+    check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "S16_LE granted");
+    check(ask(DSP_CHANNELS, 16) == 16 && ask(DSP_CHANNELS, 0) == 16, "sixteen channels granted");
+    check(ask(DSP_CHANNELS, 128) == 128, "128 channels granted");
+    check(call(DSP_CHANNELS, &value) == -EINVAL && ask(DSP_CHANNELS, 0) == 128,
+          "129 refused, 128 kept");
+    check(call(DSP_SETFRAGMENT, &(int){0x00040007}) == 0 && ask(DSP_GETBLKSIZE, 0) == 256,
+          "a fragment of 128 bytes grows to hold a frame of 256");
+    close_dsp();
+    model.channels_max = 0;
+}
+
 int main(void)
 {
     uint32_t i;
@@ -2101,6 +2132,7 @@ int main(void)
     row_console_client();
     row_loopback();
     row_service_context();
+    row_many_channels();
     if (failures) {
         printf("dsp-hosttest: %d failures\n", failures);
         return 1;

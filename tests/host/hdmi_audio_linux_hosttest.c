@@ -8,19 +8,19 @@
  * host-deps: rach2/sys/lib/kctypes.c
  *
  * The rows: a controller the firmware left in D3hot is brought to D0, its
- * header kept, before the bind enables its decoding; a refill late by a
- * whole lap of the ring counts the lap, as Linux's snd_pcm_update_hw_ptr0
- * counts jiffies, and one a tick late counts none; OSS's default, unsigned
- * 8-bit mono at 8 kHz, is granted and converted to 16-bit stereo at the
- * sink's 32 kHz, the samples moved to signed and linearly interpolated, as
- * Linux's OSS plugins do; and the display's going stops the stream, gives
- * the display's power back, tells the stream's owner, and leaves a stream
- * that cannot start again once the display is back, whose close gives
- * nothing more back. /proc/asound numbers the PCH's analog card 0 and the
- * HDMI card 1, with Linux's names and ids, and root's write to an ELD file
- * sets the fields Linux's snd_hdmi_write_eld_info sets, sadN_max_bitrate
- * among them, its reads and the open's limit by the sink bounded where
- * Linux's index past their tables, a count of 7fffffff among them.
+ * header kept, before the bind enables its decoding; a refill late by a whole
+ * lap of the ring counts the lap, as Linux's snd_pcm_update_hw_ptr0 counts
+ * jiffies, and one a tick late counts none; OSS's default, unsigned 8-bit mono
+ * at 8 kHz, is granted and converted to 16-bit stereo at the sink's 32 kHz, the
+ * samples moved to signed and linearly interpolated, as Linux's OSS plugins do;
+ * and the display's going stops the stream, gives the display's power back,
+ * tells the stream's owner, and leaves a stream that cannot start again once
+ * the display is back, which a monitor's notification gives no pin and whose
+ * close gives nothing more back. /proc/asound numbers the PCH's analog card 0
+ * and the HDMI card 1, with Linux's names and ids, and root's write to an ELD
+ * file sets the fields Linux's snd_hdmi_write_eld_info sets, sadN_max_bitrate
+ * among them, its reads and the open's limit by the sink bounded where Linux's
+ * index past their tables, a count of 7fffffff among them.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -142,6 +142,9 @@ static void row_gone(void)
     check(acomp_register_display(&disp_ops, &disp_dev) == 0 && hdmi_audio_present() &&
               display_power == 0,
           "gone: the display comes back");
+    acomp_eld_notify(1, -1);
+    check(M0->pin == 0 && hh_pins[0].pcm == 0 && hh_pins[0].cvt == 0 && M0->cvt_idx < 0,
+          "gone: a notification after the return gives the old stream no pin");
     check(hh_stream_start(&s) == -EIO && hh_open0(&s) == -EBUSY,
           "gone: the old stream cannot start, and holds the device until its close");
     hh_stream_close(&s);

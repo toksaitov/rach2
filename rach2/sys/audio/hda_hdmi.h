@@ -9,14 +9,14 @@
 
 #include "audio.h"
 
-/* The OSS devices of the HDMI codec's two PCMs, /dev/dsp1 and /dev/adsp1,
- * at Linux's numbers for the second card's dsp and adsp. */
+/* The OSS devices of the HDMI codec's PCMs: /dev/dsp1 and /dev/adsp1, at
+ * Linux's numbers for the second card's dsp and adsp, then /dev/dsp2 and
+ * /dev/dsp3, at its numbers for the next cards' dsp, which no other device
+ * of Rach2 takes. */
 #define HDMI_DSP_MINOR  19
 #define HDMI_ADSP_MINOR 28
-
-/* The stream operations of the HDMI codec's first PCM, which /dev/dsp1
- * opens. */
-extern audio_driver_t hdmi_audio_driver;
+#define HDMI_DSP2_MINOR 35
+#define HDMI_DSP3_MINOR 51
 
 /**
  * Find Haswell's display audio controller, 8086:0a0c, 0c0c or 0d0c, which

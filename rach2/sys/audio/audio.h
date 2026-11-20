@@ -87,7 +87,7 @@ typedef struct audio_stream {
     audio_dir_t dir;
     uint32_t rate;           /* frames per second */
     audio_format_t format;   /* any; a device grants U8, S16LE or S32LE */
-    int channels;            /* 1 or 2; up to the driver's channels_max */
+    int channels;            /* 1 to the driver's channels_max, or 2 */
     uint32_t period_bytes;   /* bytes of one period, a whole number of frames */
     uint32_t periods;        /* periods in the caller's buffer, at least 2 */
     uint32_t device_periods; /* periods in the driver's buffer, at least 1 */
