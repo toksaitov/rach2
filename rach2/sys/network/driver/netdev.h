@@ -213,6 +213,17 @@ struct netdev_addr6 {
     uint8_t regen;
 };
 
+/* Route attributes of one IPv4 address, indexed from its first slot. */
+struct addr4_routes {
+    uint32_t broadcast, metric;
+    unsigned char given_broadcast, noprefix, deleted;
+};
+
+#define ADDR4_PREFIX           1
+#define ADDR4_LOCAL            2
+#define ADDR4_BROADCAST        4
+#define ADDR4_SUBNET_BROADCAST 8
+
 /**
  * One interface: the driver that drives it and that driver's record for the
  * card, with the name and index the rest of the kernel knows it by, the
@@ -249,6 +260,7 @@ struct netdev {
     uint32_t mask2[NETDEV_ADDRS];
     uint32_t peer2[NETDEV_ADDRS]; /* same convention as peer */
     int naddr2;
+    struct addr4_routes addr4[NETDEV_ADDRS + 1];
 
     /* What an address change made of two ioctls, the address and then the
      * mask, leaves between them (netconf.c): an address given that is a host
@@ -452,13 +464,17 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via);
  * subnet an address implies, NETDEV_RT_DEFAULT for an interface's gateway
  * and NETDEV_RT_ADDED for one a program added; the two implied kinds have a
  * `metric` of 0. */
-#define NETDEV_RT_LINK    0
-#define NETDEV_RT_DEFAULT 1
-#define NETDEV_RT_ADDED   2
+#define NETDEV_RT_LINK      0
+#define NETDEV_RT_DEFAULT   1
+#define NETDEV_RT_ADDED     2
+#define NETDEV_RT_LOCAL     3
+#define NETDEV_RT_BROADCAST 4
 struct netdev_rt {
     uint32_t dst, mask, gw, metric, src;
     int ifindex;
     int kind;
+    uint8_t proto, scope;
+    uint32_t prefsrc; /* specified source, or zero for source selection */
 };
 
 /* The lookups `netdev_route` made, and those that found no route, which
@@ -470,6 +486,12 @@ extern uint32_t netdev_route_misses;
  * the last. The routes addresses and gateways imply come first, interface
  * by interface, then the added ones. */
 int netdev_route_at(int n, struct netdev_rt *out);
+
+/** Enumerate the local table, with each shared route listed once. */
+int netdev_local_route_at(int n, struct netdev_rt *out);
+
+/** Remove a matching address route from the local table. */
+int netdev_local_route_del(const struct netdev *only, const struct netdev_rt *r);
 
 /** Whether `nd` has an implied link route to exactly `dst`/`mask`.
  * Call under net_lock. */
@@ -497,10 +519,19 @@ int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw
  * its own; 0 for none. Call under net_lock. */
 uint32_t netdev_default_gateway(const struct netdev *nd);
 
-/** Drop the added routes of `nd` whose gateway its subnets no longer have,
- * as Linux drops a route whose next hop an address change made unreachable.
- * Call under net_lock. */
-void netdev_route_prune(struct netdev *nd);
+/** Drop device routes on last address removal (all) or link down.
+ * Host-scope routes survive link down. Call under net_lock. */
+void netdev_route_flush(struct netdev *nd, int all);
+
+/** Remove routes whose specified source has ceased to be local. */
+void netdev_route_lost_source(uint32_t ip);
+
+/** Change a main-table route under net_lock. Delete matches the supplied
+ * selectors, with scope 255 and zero protocol and metric as wildcards. */
+int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace);
+
+/** Whether a direct route on the device can resolve a gateway. */
+int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw);
 
 /** The IPv4 destination of address `a` (-1 for the first), the local address
  * when there is no distinct peer. This is Linux's IFA_ADDRESS. */
@@ -515,7 +546,60 @@ static __inline__ uint32_t netdev_addr_dst(const struct netdev *nd, int a)
  * A host prefix implies one only when it names a distinct peer. */
 static __inline__ int netdev_addr_has_route(uint32_t ip, uint32_t dst, uint32_t mask)
 {
-    return ip != 0 && mask != 0 && (mask != 0xFFFFFFFFu || dst != ip);
+    return ip != 0 && ((dst & mask) >> 24) != 0 && (mask != 0xFFFFFFFFu || dst != ip);
+}
+
+/** Whether an earlier address is primary for this destination prefix. */
+static __inline__ int netdev_secondary(const struct netdev *nd, int a)
+{
+    int i;
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t dst = netdev_addr_dst(nd, a);
+    for (i = -1; i < a; i++) {
+        if ((i < 0 ? nd->mask : nd->mask2[i]) == mask &&
+            ((netdev_addr_dst(nd, i) ^ dst) & mask) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Whether a subnet of the contiguous `mask` has a network and a broadcast
+ * address: whether its prefix is 1 to 30. Every address of a /31 is a host
+ * (RFC 3021), as the one of a /32 is, and Linux gives neither a broadcast
+ * address. */
+#define NETDEV_MASK_HAS_BROADCAST(mask) ((mask) != 0u && ((mask) | 1u) != 0xFFFFFFFFu)
+
+/** The configured broadcast attribute, including an ioctl-derived one. */
+static __inline__ uint32_t netdev_addr_brd(const struct netdev *nd, int a)
+{
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
+    if (nd->addr4[a + 1].given_broadcast) {
+        return nd->addr4[a + 1].broadcast;
+    }
+    return ip && !nd->l3 && !nd->loopback && NETDEV_MASK_HAS_BROADCAST(mask) ? ip | ~mask : 0;
+}
+
+/** Address of the local-table route of kind bit, or zero if absent. */
+static __inline__ uint32_t netdev_addr_local(const struct netdev *nd, int a, int bit)
+{
+    uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
+    uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+    uint32_t dst = netdev_addr_dst(nd, a);
+    if (!ip || (nd->addr4[a + 1].deleted & bit))
+        return 0;
+    if (bit == ADDR4_LOCAL)
+        return ip;
+    if (!nd->up)
+        return 0;
+    if (bit == ADDR4_BROADCAST) {
+        uint32_t brd = netdev_addr_brd(nd, a);
+        return brd == 0xffffffffu ? 0 : brd;
+    }
+    return NETDEV_MASK_HAS_BROADCAST(mask) && ((dst & mask) >> 24) && !netdev_secondary(nd, a)
+               ? dst | ~mask
+               : 0;
 }
 
 /** Whether `ip` is one of `nd`'s addresses, its first or another; 0 for a
@@ -533,12 +617,6 @@ uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
 /** Whether `ip` is an address of one of the cards' interfaces, which makes
  * a datagram to it this machine's. `lo`'s 127.0.0.1 is not counted. */
 int netdev_owns(uint32_t ip);
-
-/* Whether a subnet of the contiguous `mask` has a network and a broadcast
- * address: whether its prefix is 1 to 30. Every address of a /31 is a host
- * (RFC 3021), as the one of a /32 is, and Linux gives neither a broadcast
- * address. */
-#define NETDEV_MASK_HAS_BROADCAST(mask) ((mask) != 0u && ((mask) | 1u) != 0xFFFFFFFFu)
 
 /** Whether `ip` is 255.255.255.255 or the broadcast address of a subnet
  * one of the cards' interfaces is on. */

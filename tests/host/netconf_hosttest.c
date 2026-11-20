@@ -3,6 +3,7 @@
  * gives, and the setters of netconf.c that change it while the machine runs.
  *
  * host-deps: rach2/sys/network/netconf.c rach2/sys/cmdline.c
+ * host-deps: rach2/sys/network/route.c
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -159,10 +160,11 @@ int netdev_on_link(const struct netdev *nd, uint32_t ip)
     return 0;
 }
 
-/** Prune the routes added through `nd`: a no-op, since no row adds one. */
-void netdev_route_prune(struct netdev *nd)
+/** Use the first address as source for the model interfaces. */
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
 {
-    (void)nd;
+    (void)hop;
+    return nd->ip;
 }
 
 /** Report whether `ip` is the broadcast address of `nd`'s subnet, which a
@@ -282,7 +284,6 @@ void nd6_random_link_local(struct netdev *nd, uint8_t *ll)
 void nd6_if_down(struct netdev *nd)
 {
     (void)nd;
-    CHECK(0, "no row stops neighbour discovery");
 }
 
 /* The ARP cache is not linked in here either, so a per-interface forget is
@@ -305,6 +306,8 @@ void arp_forget_dev(struct netdev *nd)
 /** Put one interface where a fresh boot leaves it. */
 static void iface_reset(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t gw)
 {
+    nd->up = 1;
+    nd->index = nd == &the_iface ? 1 : 2;
     nd->ip = ip;
     nd->mask = mask;
     nd->gateway = gw;
@@ -540,6 +543,54 @@ static void narrow_subnets(void)
     conf_reset();
 }
 
+/** Check explicit routes through a device as its peers and link change. */
+static void route_lifetime(int l3)
+{
+    struct netdev *nd = &other_iface;
+    uint32_t ip = IP4(192, 0, 2, 1), peer = IP4(198, 51, 100, 1);
+    uint32_t gw = IP4(203, 0, 113, 2), dst = IP4(172, 16, 0, 0);
+    uint32_t via, mask = 0xffffff00u;
+    struct netdev_rt r = {0};
+
+    conf_reset();
+    nd->l3 = l3;
+    CHECK(netconf_add_address(nd, ip, mask, peer) == 0 && netconf_add_address(nd, ip, ~0u, gw) == 0,
+          "two destination prefixes on one interface");
+    CHECK(netdev_route_add(nd, ip & mask, mask, 0, 10, 0) == 0 &&
+              netdev_route_add(nd, dst, mask, gw, 20, 0) == 0 &&
+              netdev_route_add(nd, 0, 0, gw, 1, 0) == 0,
+          "install direct, gateway and default routes");
+    CHECK(netconf_del_address(nd, ip, ~0u, gw) == 0 && netdev_route(dst, &via) == nd && via == gw,
+          "a removed peer keeps the explicit route");
+    CHECK(netdev_gateway_reachable(nd, ip + 1), "an explicit direct route resolves a gateway");
+    CHECK(netconf_del_address(nd, ip, mask, peer) == 0 && netdev_route(dst, &via) != nd &&
+              netdev_route(ip + 1, &via) != nd && netdev_default_gateway(nd) == 0,
+          "last address flushes direct and gateway routes");
+    CHECK(netconf_add_address(nd, ip, mask, peer) == 0 && !netdev_gateway_reachable(nd, ip + 1),
+          "a restored address does not restore a direct route");
+    CHECK(netdev_route_del(nd, peer & mask, mask, 0) == 0 && !netdev_gateway_reachable(nd, peer),
+          "a deleted kernel prefix stays deleted");
+    CHECK(netconf_set_peer(nd, gw) == 0 && netdev_gateway_reachable(nd, gw),
+          "changing the peer installs its new prefix");
+    r.dst = dst;
+    r.mask = mask;
+    r.metric = 8;
+    r.proto = 99;
+    r.scope = 254;
+    CHECK(netdev_route_change(nd, &r, 0, 0) == 0, "install a host-scope route");
+    r.proto = 4;
+    CHECK(netdev_route_change(nd, &r, 1, 0) == -ESRCH, "wrong protocol leaves the route intact");
+    CHECK(netdev_route_add(nd, ip & mask, mask, 0, 0, 0) == 0 && netconf_set_up(nd, 0) == 0 &&
+              !netdev_has_link_route(nd, gw & mask, mask),
+          "taking the link down hides address prefixes");
+    r.proto = 99;
+    CHECK(netdev_route_change(nd, &r, 1, 0) == 0 &&
+              netdev_route_del(nd, ip & mask, mask, 0) == -ESRCH,
+          "down retains only host scope");
+    CHECK(netconf_del_address(nd, ip, mask, gw) == 0, "remove address from the down interface");
+    nd->l3 = 0;
+}
+
 /**
  * Run the rows of configure_by_mac, secondary_address_change and
  * narrow_subnets, then:
@@ -594,6 +645,8 @@ int main(void)
 
     configure_by_mac();
     secondary_address_change();
+    route_lifetime(0);
+    route_lifetime(1);
     narrow_subnets();
     ip = 0;
     mask = 0;

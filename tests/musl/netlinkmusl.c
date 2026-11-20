@@ -1220,6 +1220,28 @@ static int tun_replace_peer(int s, struct ifreq *ifr, struct in_addr old, struct
     return ioctl(s, SIOCSIFDSTADDR, ifr);
 }
 
+/** Install two explicit routes that must disappear with the last address. */
+static int tun_last_routes(int fd, int index, struct in_addr gw)
+{
+    unsigned char rtm[12] = {AF_INET, 24, 0, 0, RT_TABLE_MAIN, 4, RT_SCOPE_LINK, RTN_UNICAST};
+    struct in_addr dst = {inet_addr("192.0.2.0")};
+    char body[sizeof(rtm) + 24];
+    int len = sizeof(rtm);
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &dst);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 100, body, len) != 0)
+        return 0;
+    len = sizeof(rtm);
+    rtm[6] = 0;
+    dst.s_addr = inet_addr("198.18.0.0");
+    memcpy(body, rtm, sizeof(rtm));
+    attr32(body, &len, RTA_OIF, &index);
+    attr32(body, &len, RTA_DST, &dst);
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    return ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 101, body, len) == 0;
+}
+
 /** Check a second peer and its default gateway while the first changes.
  * Return a failure description or NULL. The caller owns the TUN. */
 static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
@@ -1291,8 +1313,8 @@ static const char *tun_peer_changes(int fd, int s, struct ifreq *ifr, int index,
     len = sizeof(ifa);
     attr32(body, &len, IFA_LOCAL, &local);
     attr32(body, &len, IFA_ADDRESS, &second);
-    if (ask(fd, RTM_DELADDR, 0, 95, body, len) != 0 || tun_pair(fd, index, local, second, 32) ||
-        file_has("/proc/net/route", "tunprob\t")) {
+    if (!tun_last_routes(fd, index, second) || ask(fd, RTM_DELADDR, 0, 95, body, len) != 0 ||
+        tun_pair(fd, index, local, second, 32) || file_has("/proc/net/route", "tunprob\t")) {
         return failure;
     }
     held();
