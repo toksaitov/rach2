@@ -60,6 +60,9 @@ static uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16]);
 #include "network/socket/packet.c"
 #include "ns_first.h"
 
+/* Linux's if_arp.h: the hardware type of an Ethernet card. */
+#define ARPHRD_ETHER 1
+
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);

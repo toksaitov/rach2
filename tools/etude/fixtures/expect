@@ -405,9 +405,9 @@
 1 manifest ./networks.json | fixture.networks.guest-both: the machine server forwards port 0 both to the guest and from it
 1 manifest ./networks.json | fixture.networks.guest-twice: the machine server forwards connections to 10.0.2.100:443 twice
 1 manifest ./networks.json | fixture.networks.guest-relay: the machine server relays through curl, which is neither a tool of its requirements nor an artifact that prepare lists
-1 manifest ./networks.json | fixture.networks.guest-boot: a guest case's boot has no forwards, no guest forwards and no restricted network, which only a scenario's machines are given
-1 manifest ./networks.json | fixture.networks.guest-boot-restricted: a guest case's boot has no forwards, no guest forwards and no restricted network, which only a scenario's machines are given
-1 manifest ./networks.json | fixture.networks.guest-boot-relay: a guest case's boot has no forwards, no guest forwards and no restricted network, which only a scenario's machines are given
+1 manifest ./networks.json | fixture.networks.guest-boot: a guest case's boot has no forwards, no guest forwards, no tap and no restricted network, which only a scenario's machines are given
+1 manifest ./networks.json | fixture.networks.guest-boot-restricted: a guest case's boot has no forwards, no guest forwards, no tap and no restricted network, which only a scenario's machines are given
+1 manifest ./networks.json | fixture.networks.guest-boot-relay: a guest case's boot has no forwards, no guest forwards, no tap and no restricted network, which only a scenario's machines are given
 
 # Architecture projection follows complete shared-history validation.
 0 verdict --project-architecture -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/both/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/both/item-x0.jsonl ./verdict/both/item-x1.jsonl ./verdict/both/run.jsonl | etude check: result: passed

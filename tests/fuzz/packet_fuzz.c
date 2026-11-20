@@ -4,7 +4,8 @@
  * frame.
  *
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * fuzz-deps: tests/host/compat/kheap_host.c
+ * fuzz-deps: tests/host/compat/kheap_host.c rach2/sys/arch/x86/pit.c
+ * fuzz-deps: tests/host/compat/kirq_none.c tests/host/compat/spinlock_host.c
  *
  * The host test's own interface, stubs and `deliver` are what the harness
  * stands on, so a frame is handed over from the end of an allocation of
