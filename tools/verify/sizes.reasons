@@ -487,6 +487,8 @@ tests/host/n_tty_hosttest.c:main lines 403 a test's rows, each a case, read as o
 
 tests/host/nd6_hosttest.c:frag6_output params 10 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/nd6_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
+tests/host/nd6keep_hosttest.c:frag6_output params 10 a stub of the kernel's, whose parameters are the fields of one packet
+tests/host/nd6keep_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/nd6hold_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/nd6hold_hosttest.c:ip6_walk params 7 a stub of the kernel's, whose parameters are the fields of one packet
 
