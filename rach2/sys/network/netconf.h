@@ -136,9 +136,8 @@ int netconf_is_broadcast(uint32_t ip);
  * A change of the address or the mask is logged, and it drops what the old
  * address made true. The ARP mappings of the interface go, but the permanent
  * ones, and those of every interface for the first, with the datagrams
- * waiting for one; a gateway the new subnet does not have is cleared; and
- * the added routes whose gateway the interface no longer reaches are
- * removed (`netdev_route_prune`). A TCP connection opened from the old
+ * waiting for one. Removing or replacing the last address flushes every
+ * IPv4 route through the interface. A TCP connection opened from the old
  * address is kept, as on Linux: its sends fail for want of a route until
  * the address returns, and it ends only by its own timeout. The first
  * interface's change is copied to `net_ip_addr` and `net_ip_mask`. The
@@ -181,6 +180,13 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask);
  *         above.
  */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw);
+
+/** Find the IPv4 slot matching the supplied local and destination prefix.
+ * Return -1 for the first or naddr2 for a miss. Call under net_lock. */
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst);
+
+/** Change the broadcast attribute of the first address under net_lock. */
+int netconf_set_broadcast(struct netdev *nd, uint32_t addr);
 
 /** Set the destination of `nd`'s first IPv4 address, as SIOCSIFDSTADDR.
  * Takes net_lock. Returns 0, -EADDRNOTAVAIL with no address, or -EINVAL
