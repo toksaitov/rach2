@@ -2995,6 +2995,9 @@ static void page_fault(isr_params_t *params, uintptr_t fault_address)
              "pid %d ran past the end of its kernel stack",
              (unsigned long)fault_address, (uint32_t)params->error_code,
              (unsigned long)FRAME_PC(params), pid);
+#ifdef FRAME_FP
+        fault_callers((uintptr_t)FRAME_FP(params));
+#endif
         k_panic("page fault: a kernel stack ran out");
     }
 

@@ -413,8 +413,10 @@ static void _hardware_fault_handler(isr_params_t *params)
  * it; the interrupt stack is why this handler can run at all. CR2 has the
  * address the push faulted at; one in the guard below the running thread's
  * kernel stack (`kstack_overrun_pid`) says that stack ran out, and the
- * diagnostic names the thread. Either way the kernel cannot go on and the
- * handler panics; its record goes out directly, even when the fault came
+ * diagnostic names the thread and logs the frames on that stack, from the
+ * frame pointer the fault left, since the panic's own trace walks this
+ * interrupt stack. Either way the kernel cannot go on and the handler
+ * panics; its record goes out directly, even when the fault came
  * while another record was being written.
  */
 static void _double_fault_handler(isr_params_t *params)
@@ -432,6 +434,7 @@ static void _double_fault_handler(isr_params_t *params)
              "kernel exception: double fault (vector 8, rip 0x%lx, rsp 0x%lx): "
              "pid %d ran past the end of its kernel stack at 0x%lx",
              (unsigned long)params->rip, (unsigned long)params->rsp, pid, cr2);
+        watchdog_show_trace("isr", KLOG_CRIT, (uintptr_t)params->rbp, current_proc->kernel_stack);
         k_panic("double fault: a kernel stack ran out");
     }
     klog(KLOG_CRIT, "isr",
