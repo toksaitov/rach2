@@ -1798,6 +1798,14 @@ int devfs_fd_is_raw(struct fd_entry *e)
     return 0;
 }
 
+/** No row syncs a loop device. */
+int devfs_loop_sync(const struct fd_entry *e, int *result)
+{
+    (void)e;
+    (void)result;
+    return 0;
+}
+
 /** Fail the row: no row seeks a raw device window. */
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
 {

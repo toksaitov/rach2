@@ -46,8 +46,10 @@ static uint32_t root_phase(struct vfs_mount *mnt, void *node, void *handle)
 
 static const struct vfs_ops root_ops = {.phase = root_phase};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops};
-/* No processor runs a thread: the rows call no transfer, whose count of
- * loop transfers is the only reader of `current_proc` here. */
+static const struct vfs_ops disk_file_ops;
+static const struct vfs_type disk_file_type = {
+    .name = "disk file", .ops = &disk_file_ops, .file_locked = 1, .reads_unlocked = 1};
+/* No processor runs a thread. The device I/O accounting accepts this. */
 struct percpu cpu_table[NR_CPUS];
 static krffs_node_t *original, *relocated;
 /* What runs while the attachment waits for the namespace lock. */
@@ -58,12 +60,12 @@ static void (*waiting)(void);
 static int failures, depth, opened, refs, active, busy, resolves;
 /* The faults a row sets: an open's error, a sync's error, a path resolving
    on another mount, and a missing path. */
-static int open_error, sync_error, switch_mount, missing;
-/* Whether a shared mapping may have stored into the file's pages, and the
-   bytes the last overlay was asked for. */
-static int stores;
-static uint64_t overlay_off;
-static uint32_t overlay_len;
+static int open_error, sync_error, switch_mount, missing, read_error;
+/* A resident page, a pending store into it, and the byte a sync committed. */
+static int mapped, resident, dirty_byte, synced_byte, mapped_error, disk_reads;
+/* A writer paused in a refault, still holding the write lock. */
+static void (*refault)(void);
+static int write_depth;
 static char payload[4096], replacement[512], output[512];
 
 /** Count a failed check and print `what`. */
@@ -217,7 +219,36 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
     (void)mnt;
+    disk_reads++;
+    if (read_error) {
+        return read_error;
+    }
     return krffs_read_node(handle, buf, count, (uint32_t)offset);
+}
+
+/** Grant the write lock, after a descriptor writer finishes its refault. */
+void vfs_write_lock(const struct vfs_ref *file)
+{
+    if (file->mnt->type == &disk_file_type) {
+        check(depth == 0, "loop takes the write lock before the node lock");
+        if (refault) {
+            void (*resume)(void) = refault;
+
+            refault = NULL;
+            resume();
+        }
+        check(write_depth == 0, "the preceding writer finished before the loop write");
+        write_depth++;
+    }
+}
+
+/** Give the write lock back after the node lock. */
+void vfs_write_unlock(const struct vfs_ref *file)
+{
+    if (file->mnt->type == &disk_file_type) {
+        check(depth == 0 && write_depth == 1, "loop releases the node lock before the write lock");
+        write_depth--;
+    }
 }
 
 /** Write through the production root interface. */
@@ -225,8 +256,12 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
                   uint64_t offset)
 {
     krffs_node_t *node = handle;
-    int rc = krffs_write_node(&node, buf, count, (uint32_t)offset);
+    int rc;
 
+    if (mnt->type == &disk_file_type) {
+        check(write_depth == 1 && depth == 1, "loop writes with both file locks");
+    }
+    rc = krffs_write_node(&node, buf, count, (uint32_t)offset);
     if (node != handle) {
         loop_repoint(mnt, handle, node);
     }
@@ -236,34 +271,72 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 /** Sync the backing file and return `sync_error`. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
+    char byte;
+
     (void)mnt;
-    (void)handle;
     (void)seen;
+    if (!sync_error && krffs_read_node(handle, &byte, 1, 0) == 1) {
+        synced_byte = (uint8_t)byte;
+    }
     return sync_error;
 }
 
-/** Whether a shared mapping may have stored into the file: `stores`. */
-int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino)
+/** The modeled backing inode has no earlier write-back error. */
+uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)
 {
     (void)mnt;
     (void)ino;
-    return stores;
+    return 0;
 }
 
-/** Stand for the pages of a shared mapping: record the range asked for
- * and put 0x6D, which no file of the rows holds, in its first byte, under
- * the big lock that the pages are walked under. */
-void filemap_disk_overlay(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
-                          uint32_t len)
+/** No asynchronous write-back error was recorded. */
+int vfs_ino_err_check(struct vfs_mount *mnt, uint64_t ino, uint32_t *seen)
 {
     (void)mnt;
     (void)ino;
+    (void)seen;
+    return 0;
+}
+
+/** Whether the modeled file has a mapping. */
+int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
+{
+    (void)mnt;
+    (void)ino;
+    return mapped;
+}
+
+/** Copy from the resident page when present, or report a miss. */
+uint32_t filemap_disk_read(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
+                           uint32_t len)
+{
+    (void)mnt;
+    (void)ino;
+    check(off == 0 && len == 512, "loop looks for the requested sector in the mapping");
     check(bkl_held(), "a loop read takes a mapping's stores under the big lock");
-    overlay_off = off;
-    overlay_len = len;
-    if (len) {
-        *(uint8_t *)buf = 0x6D;
+    if (!resident) {
+        return 0;
     }
+    k_memset(buf, 0x6D, len);
+    return len;
+}
+
+/** Write the modeled dirty byte before the file system syncs it. */
+int filemap_sync_inode(const struct vfs_mount *mnt, uint64_t ino)
+{
+    char byte = (char)dirty_byte;
+
+    (void)mnt;
+    (void)ino;
+    check(bkl_held(), "loop writes back mapped pages under the big lock");
+    if (mapped_error) {
+        return mapped_error;
+    }
+    if (dirty_byte >= 0) {
+        check(krffs_write_node(&original, &byte, 1, 0) == 1, "write a dirty mapped byte");
+        dirty_byte = -1;
+    }
+    return 0;
 }
 
 /** No row keeps resident file pages for a private mapping. */
@@ -370,10 +443,10 @@ static void reset(void)
     mount.type = &vfs_krffs_type;
     mount.dev = &disk;
     depth = opened = refs = active = busy = resolves = 0;
-    open_error = sync_error = switch_mount = missing = stores = 0;
-    overlay_off = ~(uint64_t)0;
-    overlay_len = 0;
-    waiting = NULL;
+    open_error = sync_error = switch_mount = missing = read_error = 0;
+    mapped = resident = mapped_error = disk_reads = write_depth = 0;
+    dirty_byte = synced_byte = -1;
+    waiting = refault = NULL;
 }
 
 /** Complete relocation while attachment waits, then release the writer. */
@@ -523,34 +596,92 @@ static void error_rows(void)
 }
 
 /**
- * Read the attached file while a shared mapping may hold stores the file
- * lacks, from a caller without the big lock: the device's read takes them
- * over what the file system read, for the bytes it read, under the big lock,
- * and asks nothing of the pages when no mapping may have stored.
+ * Read a mapped backing file from a caller without the big lock. A resident
+ * page supplies a read even with an underlying read error. On a miss, the
+ * file system supplies the bytes or its error.
  */
 static void mapped_row(void)
 {
     block_device_t *loop;
 
     reset();
+    mount.type = &disk_file_type;
     check(loop_attach(0, "/image", 1) == 0, "mapped: attach the file");
     loop = loop_attached_at(0);
-    stores = 1;
+    mapped = resident = 1;
+    read_error = -EIO;
     bkl_host_free = 1;
     bkl_host_takes = 0;
-    k_memset(output, 0, sizeof(output));
-    check(loop && loop->read(loop, 0, 1, output) == 0 && output[0] == 0x6D &&
-              memcmp(output + 1, payload + 1, 511) == 0 && overlay_off == 0 && overlay_len == 512 &&
-              !bkl_held(),
-          "mapped: a read takes a shared mapping's stores over the file's bytes");
+    k_memset(replacement, 0x6D, sizeof(replacement));
+    check(loop && loop->read(loop, 0, 1, output) == 0 &&
+              memcmp(output, replacement, sizeof(output)) == 0 && disk_reads == 0 &&
+              bkl_host_takes == 1 && !bkl_held(),
+          "mapped: read the resident page without touching the file system");
+    resident = 0;
+    check(loop && loop->read(loop, 0, 1, output) == -EIO && disk_reads == 1,
+          "mapped: return the file system error when the page is missing");
+    read_error = 0;
+    check(loop && loop->read(loop, 0, 1, output) == 0 &&
+              memcmp(output, payload, sizeof(output)) == 0 && disk_reads == 2,
+          "mapped: read a missing page from the file system");
     bkl_host_free = 0;
-    stores = 0;
-    overlay_len = 0;
-    check(loop && loop->read(loop, 0, 1, output) == 0 && output[0] == payload[0] &&
-              overlay_len == 0,
-          "mapped: with no store, a read is the file's");
     check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
           "mapped: detach releases the attachment");
+}
+
+/** Flush a backing store modified through a mapping, without a loop write. */
+static void flush_row(void)
+{
+    block_device_t *loop;
+
+    reset();
+    mount.type = &disk_file_type;
+    check(loop_attach(0, "/image", 1) == 0, "flush: attach the file");
+    loop = loop_attached_at(0);
+    dirty_byte = 0x6D;
+    check(loop && !loop->unflushed && !block_flush_skips(loop) && loop->flush(loop, NULL) == 0 &&
+              synced_byte == 0x6D && dirty_byte == -1,
+          "flush: a dirty mapped byte reaches stable storage without a loop write");
+    dirty_byte = 0x6E;
+    mapped_error = -ENOSPC;
+    check(loop && loop->flush(loop, NULL) == -EIO && synced_byte == 0x6D && dirty_byte == 0x6E,
+          "flush: report a failed write-back and leave the dirty byte for retry");
+    mapped_error = 0;
+    check(loop && loop->flush(loop, NULL) == 0 && synced_byte == 0x6E,
+          "flush: retry the dirty byte");
+    check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
+          "flush: detach releases the attachment");
+}
+
+/** Finish the file writer's second half after its user buffer refaults. */
+static void writer_resumes(void)
+{
+    check(write_depth == 1 && depth == 0, "the refault kept only the write lock");
+    check(krffs_write_node(&original, replacement + 256, 256, 256) == 256,
+          "the file writer completes its second half");
+    write_depth--;
+}
+
+/** A loop write waits for the writer that dropped its node lock to refault. */
+static void write_lock_row(void)
+{
+    block_device_t *loop;
+
+    reset();
+    mount.type = &disk_file_type;
+    check(loop_attach(0, "/image", 1) == 0, "write lock: attach the file");
+    loop = loop_attached_at(0);
+    write_depth = 1;
+    check(krffs_write_node(&original, replacement, 256, 0) == 256,
+          "the file writer refaults after its first half");
+    refault = writer_resumes;
+    check(loop && loop->write(loop, 0, 1, payload) == 0 && !refault && !write_depth && !depth,
+          "the loop writer runs after the refaulting write is whole");
+    check(loop && loop->read(loop, 0, 1, output) == 0 &&
+              memcmp(output, payload, sizeof(output)) == 0,
+          "both halves hold the later writer's bytes");
+    check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
+          "write lock: detach releases the attachment");
 }
 
 /** Copy a loop ioctl's status block in, which fails: no row issues one. */
@@ -579,6 +710,8 @@ int main(void)
     phase_row();
     nested_row();
     mapped_row();
+    flush_row();
+    write_lock_row();
     error_rows();
     if (!failures) {
         printf("loop-attach-hosttest: result: pass: relocation, reuse and cleanup\n");

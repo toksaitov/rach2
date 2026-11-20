@@ -137,6 +137,8 @@ attached.
 The device reads and writes the bytes these see: a read of the device
 returns what a shared mapping has stored and not yet written back, and a
 write of the device reaches the pages mappings hold.
+A flush of the device writes the backing file's dirty mapped pages and
+syncs the file to stable storage.
 The file cannot be truncated, through any mount that shows it, a bind
 included.
 On KRFFS, where a change may move the file, it cannot be written or

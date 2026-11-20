@@ -22,47 +22,49 @@ struct block_request;
  * `nvme_start` move them to their interrupts; a device that sleeps its caller
  * does not, and the page-cache window refuses such a device as a backing
  * store. */
-#define BLOCK_FAULT_SAFE    0x1u
+#define BLOCK_FAULT_SAFE      0x1u
 /* Set by the buffer cache when a write to the device failed; cleared when
  * the cache drops the device at unmount. */
-#define BLOCK_WRITE_FAILED  0x2u
+#define BLOCK_WRITE_FAILED    0x2u
 /* The medium refuses writes and says so: a stick with its switch across, or
  * a partition view over one. Every mount of it is read-only. */
-#define BLOCK_READ_ONLY     0x4u
+#define BLOCK_READ_ONLY       0x4u
 /* The device sleeps its caller and answers in the same call: a loop device
  * over a file, whose read is a read of that file through the file system it
  * is on. It may sleep, so it cannot be called with interrupts off, and it
  * takes no request, because the device under it takes one from the same pool
  * while it waits. It is called directly, in syscall context only. */
-#define BLOCK_CALLER_SYNC   0x10u
+#define BLOCK_CALLER_SYNC     0x10u
 /* The device has gone: a stick pulled out. Nothing can reach it again, so an
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
-#define BLOCK_GONE          0x8u
+#define BLOCK_GONE            0x8u
 /* The device answers a polled `read` or `write` from any context, its queue
  * drained first: an AHCI or NVMe disk on its interrupts. A caller that cannot
  * sleep, a page fault with interrupts off, takes that path instead of a
  * request. */
-#define BLOCK_POLLABLE      0x40u
+#define BLOCK_POLLABLE        0x40u
 /* The disk makes a write durable before it answers it, with a flush of its
  * own cache after the transfer, unless the request asks it not to
  * (`BLOCK_REQ_NOFLUSH`). Its `unflushed` says whether it has answered such a
- * write since its last flush; `block_flush` sends a flush only then. */
-#define BLOCK_WRITE_THROUGH 0x80u
+ * write since its last flush; `block_flush` may omit a flush otherwise. */
+#define BLOCK_WRITE_THROUGH   0x80u
 /* The device's `submit` takes a read whose request names the caller's page
  * frames (`frames`) in place of a buffer of its own, and gives the
  * controller their physical addresses, so that the transfer lands in the
  * caller's pages with no copy: an AHCI disk that reaches every frame and an
  * NVMe namespace, on their interrupts. `block_read_frames` reads any other
  * device through a buffer. */
-#define BLOCK_FRAMES        0x100u
+#define BLOCK_FRAMES          0x100u
 /* A file system on the device halted after an error (`bcache_halt_writes`):
  * the cache writes none of its blocks, for a sync, an eviction or the
  * flusher alike, as Linux's ext4 writes nothing after a shutdown. Cleared
  * when the cache drops the device at unmount. */
-#define BLOCK_WRITES_HALTED 0x200u
+#define BLOCK_WRITES_HALTED   0x200u
 /* While repairing metadata, the first cache write error halts the device. */
-#define BLOCK_RECOVERING    0x400u
+#define BLOCK_RECOVERING      0x400u
+/* The backing storage can be written without going through the device. */
+#define BLOCK_EXTERNAL_WRITES 0x800u
 
 /**
  * A sector-addressed storage device behind a small table of functions.
@@ -224,11 +226,13 @@ static __inline__ void block_set_sectors(block_device_t *device, uint64_t sector
  * Whether `block_flush` of `device`, the submitter, has nothing to send: a
  * device with no `flush` has nothing of its own to flush, and a
  * `BLOCK_WRITE_THROUGH` disk not marked `unflushed` flushed every write
- * before it answered it.
+ * before it answered it. A device with external writers still needs a flush.
  */
 static __inline__ int block_flush_skips(const block_device_t *device)
 {
-    return !device->flush || ((device->flags & BLOCK_WRITE_THROUGH) && !device->unflushed);
+    return !device->flush || ((device->flags & (BLOCK_WRITE_THROUGH | BLOCK_EXTERNAL_WRITES)) ==
+                                  BLOCK_WRITE_THROUGH &&
+                              !device->unflushed);
 }
 
 /* How long a chain of backing devices may be: a loop device stands on a real

@@ -17,8 +17,8 @@
  *
  * While a file is attached, other callers may write it, extend it, map it
  * shared and writable and dump into it, as on Linux, and the device reads
- * and writes the same bytes they do: a read takes what a shared mapping has
- * stored and not yet written back (`loop_mapped_stores`), and a write puts
+ * and writes the same bytes they do: a read takes resident pages first
+ * (`loop_read_mapped`), and a write puts
  * its bytes in the pages mappings hold (`filemap_disk_written`). A
  * truncation and an attribute change that would change its length are
  * refused, and on KRFFS, where a change may move the file, so is every
@@ -71,10 +71,9 @@ struct loop_device {
     const struct vfs_mount *base;
     void *node;
     void *handle;
-    /* The attachment's cursor into the write-back errors of the file
-     * system the file is on, which the flush reports from (`vfs_fsync`),
-     * as Linux's loop syncs through its own open of the file. */
-    uint32_t wb_seen;
+    /* The attachment's cursors into the backing mount's and inode's
+     * write-back errors, reported by a flush. */
+    uint32_t wb_seen, ino_seen;
     int writable;
     int in_flight; /* transfers inside the file system the file is on */
     /* The writes of the file and its syncs by the flush, which /proc/loop
@@ -84,7 +83,7 @@ struct loop_device {
     uint32_t syncs;
     int release_due;          /* the medium went during a transfer: the last one out releases */
     char path[LOOP_PATH_MAX]; /* what it was called when it was attached */
-    uint32_t ino;             /* the file's inode number, which LOOP_GET_STATUS64 reports */
+    uint64_t ino;             /* the file's inode number, which LOOP_GET_STATUS64 reports */
     int autoclear;            /* detach when the last description and mount have gone */
     int opens;                /* descriptions open on the node, attached or not */
 };
@@ -107,7 +106,7 @@ struct loop_file {
     struct vfs_mount *mnt;
     void *node;
     void *handle;
-    uint32_t ino;
+    uint64_t ino;
     int writable;
     uint32_t writes; /* `writes` as the transfer began, for the flush */
 };
@@ -307,27 +306,45 @@ static int loop_count_ok(uint32_t count)
 }
 
 /**
- * Put into `buffer`, which holds the `len` bytes the file system read of
- * `f`'s file at `at`, what the file's pages in memory hold of them, up to
- * the file's size:
- * the stores of a shared mapping through a descriptor open for writing,
- * which reach the file only at their write-back, as Linux's loop reads the
- * file's page cache, which holds them (`lo_read_simple`,
- * drivers/block/loop.c). A page that comes in after the file system's read
- * was read from the file then and holds only stores made since. The caller
- * holds the big lock, under which the pages are walked; nothing here sleeps.
+ * Read up to `len` bytes at `at` of `f`'s file into `buffer`. Read each
+ * resident page, including stores awaiting write-back, before asking the
+ * file system for a missing page, as Linux's `lo_read_simple` reads the
+ * page cache. The caller holds the big lock. Returns a byte count or the
+ * error of the attribute lookup or file system read, which may sleep.
  */
-static void loop_mapped_stores(const struct loop_file *f, uint64_t at, void *buffer, uint32_t len)
+static int32_t loop_read_mapped(const struct loop_file *f, uint64_t at, void *buffer, uint32_t len)
 {
     struct vfs_stat st;
+    uint8_t *out = buffer;
+    uint32_t done = 0;
+    int32_t rc = vfs_getattr(f->mnt, f->node, &st);
 
-    if (vfs_getattr(f->mnt, f->node, &st) != 0 || at >= st.size) {
-        return;
+    if (rc != 0 || at >= st.size) {
+        return rc;
     }
     if (len > st.size - at) {
         len = (uint32_t)(st.size - at);
     }
-    filemap_disk_overlay(f->mnt, f->ino, at, buffer, len);
+    while (done < len) {
+        uint64_t off = at + done;
+        uint32_t piece = PAGE_SIZE - (uint32_t)(off % PAGE_SIZE);
+
+        if (piece > len - done) {
+            piece = len - done;
+        }
+        rc = (int32_t)filemap_disk_read(f->mnt, f->ino, off, out + done, piece);
+        if (rc == 0) {
+            rc = vfs_read(f->mnt, f->handle, out + done, piece, off);
+        }
+        if (rc < 0) {
+            return rc;
+        }
+        done += (uint32_t)rc;
+        if ((uint32_t)rc < piece) {
+            break;
+        }
+    }
+    return (int32_t)done;
 }
 
 /**
@@ -336,9 +353,8 @@ static void loop_mapped_stores(const struct loop_file *f, uint64_t at, void *buf
  * A short answer is a device error, `-EIO`: the file's length fixed the
  * sector count at the attachment and nothing may change it while it is
  * attached, so a transfer that does not move every byte means the file is not
- * what it was. The same holds for `loop_write`. The bytes a shared mapping
- * of the file has stored replace what the file system read
- * (`loop_mapped_stores`).
+ * what it was. The same holds for `loop_write`. A file with resident pages
+ * is read page by page (`loop_read_mapped`).
  */
 static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
@@ -352,13 +368,14 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
         return -EIO;
     }
     big = loop_fs_enter(f.mnt, 1);
-    got = vfs_read(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
-    if (got > 0 && filemap_disk_stores(f.mnt, f.ino)) {
+    if (filemap_disk_mapped(f.mnt, f.ino)) {
         if (!bkl_held()) {
             bkl_enter();
             big = 1;
         }
-        loop_mapped_stores(&f, lba * BLOCK_SECTOR_SIZE, buffer, (uint32_t)got);
+        got = loop_read_mapped(&f, lba * BLOCK_SECTOR_SIZE, buffer, bytes);
+    } else {
+        got = vfs_read(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
     }
     loop_fs_exit(big);
     loop_end(loop, &f, 0, 0);
@@ -373,7 +390,9 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 /**
  * Write whole sectors into the file and sync it, since the buffer cache
  * takes a written block to be on the device; `-EROFS` on a read-only
- * attachment, `-EIO` for a short write or a failed sync.
+ * attachment, `-EIO` for a short write or a failed sync. Take the file's
+ * write lock before its node lock, so a descriptor write that lets go of
+ * its node lock to fault in a user buffer can finish before this write.
  */
 static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -394,12 +413,14 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     big = loop_fs_enter(f.mnt, 0);
     file.mnt = f.mnt;
     file.node = f.node;
+    vfs_write_lock(&file);
     vfs_node_lock(&file);
     wrote = vfs_write(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
     if (wrote > 0) {
         filemap_disk_written(f.mnt, f.ino, lba * BLOCK_SECTOR_SIZE, buffer, (uint32_t)wrote);
     }
     vfs_node_unlock(&file);
+    vfs_write_unlock(&file);
     loop_fs_exit(big);
     loop_end(loop, &f, 1, 0);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
@@ -411,22 +432,28 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 }
 
 /**
- * Sync the file, in the call; `request` is always NULL for this device. The
- * device is marked flushed only when no write was answered while the sync
- * slept, since the sync may not have covered it.
+ * Write back the file's mapped pages and sync its data and metadata, as
+ * Linux's `lo_req_flush` does. Returns -EIO on a write-back or sync error.
+ * `request` is always NULL for this device. Clear the unflushed mark only
+ * when no device write was answered while the sync slept.
  */
 static int loop_flush(block_device_t *device, struct block_request *request)
 {
     struct loop_device *loop = loop_of(device);
     struct loop_file f;
-    int big, rc;
+    int big, mapped, rc, kept;
 
     (void)request;
     if (loop_begin(loop, 0, 0, &f) != 0) {
         return -EIO;
     }
     big = loop_fs_enter(f.mnt, 0);
+    mapped = filemap_sync_inode(f.mnt, f.ino);
     rc = vfs_fsync(f.mnt, f.handle, &loop->wb_seen);
+    kept = vfs_ino_err_check(f.mnt, f.ino, &loop->ino_seen);
+    if (rc == 0) {
+        rc = mapped != 0 ? mapped : kept;
+    }
     loop_fs_exit(big);
     loop_end(loop, &f, 0, rc == 0);
     return rc == 0 ? 0 : -EIO;
@@ -734,7 +761,7 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
  * (`loop_length_pinned`), that no write or truncation is in flight on it.
  * 0, or `-EINVAL` or `-EBUSY`, or what the sync or the attribute read
  * answered. A shared mapping of the file does not refuse it, as Linux's
- * does not: the device reads the mapping's stores (`loop_mapped_stores`).
+ * does not: the device reads the mapping's stores (`loop_read_mapped`).
  *
  * Resolution and open run under the same lock, which the caller keeps
  * through publication on success, so no writer can relocate the node between
@@ -774,6 +801,9 @@ static void loop_publish(struct loop_device *loop, void *node, block_device_t *b
     loop->dev.sector_count = size / BLOCK_SECTOR_SIZE;
     loop->dev.flags =
         BLOCK_CALLER_SYNC | BLOCK_WRITE_THROUGH | (loop->writable ? 0u : BLOCK_READ_ONLY);
+    if (!loop->mnt->type->ops->phase) {
+        loop->dev.flags |= BLOCK_EXTERNAL_WRITES;
+    }
     loop->dev.unflushed = 0;
     loop->dev.deadline_ticks = 0;
     loop->dev.read = loop_read;
@@ -905,8 +935,9 @@ int loop_attach(int index, const char *path, int writable)
     loop->mnt = ref.mnt;
     loop->handle = handle;
     loop->wb_seen = seen;
+    loop->ino_seen = vfs_ino_err_sample(ref.mnt, st.ino);
     loop->writable = writable ? 1 : 0;
-    loop->ino = (uint32_t)st.ino;
+    loop->ino = st.ino;
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
     loop->attaching = 0;
@@ -1165,7 +1196,7 @@ static void loop_info_fill(const struct loop_device *loop, uint8_t *info)
         (loop->writable ? 0u : LO_FLAGS_READ_ONLY) | (loop->autoclear ? LO_FLAGS_AUTOCLEAR : 0u);
 
     k_memset(info, 0, INFO_SIZE);
-    k_memcpy(info + INFO_INODE, &loop->ino, 4);
+    k_memcpy(info + INFO_INODE, &loop->ino, sizeof(loop->ino));
     k_memcpy(info + INFO_NUMBER, &number, 4);
     k_memcpy(info + INFO_FLAGS, &flags, 4);
     k_strncpy((char *)info + INFO_NAME, loop->path, INFO_NAME_SIZE - 1);

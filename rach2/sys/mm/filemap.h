@@ -126,16 +126,14 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
 int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino);
 
 /**
- * Copy over the `len` bytes of the kernel buffer `buf`, which a read of the
- * disk file `ino` of `mnt` at `off` filled from the file, those of them that
- * the file's pages in memory hold, when a shared mapping may have stored into
- * them (`filemap_disk_stores`), so that the read sees those stores as a read
- * of Linux's page cache does: what a loop device over the file reads. The
- * caller limits `len` to the file's size and holds the big lock. Does not
- * sleep or allocate.
+ * Copy up to `len` bytes at `off` of the disk file `ino` of `mnt` to the
+ * kernel buffer `buf` from the resident page, as a loop device reads
+ * Linux's page cache. Returns the bytes copied within that page, or 0 if
+ * the caller must fetch it from the file system. The caller cuts `len` at
+ * the end of the file and holds the big lock. Does not sleep or allocate.
  */
-void filemap_disk_overlay(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
-                          uint32_t len);
+uint32_t filemap_disk_read(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
+                           uint32_t len);
 
 /** After a write of the file `ino` on `mnt` that the file system accepted,
  * copy the `len` bytes at `off` from the kernel buffer `buf` the write was
@@ -193,16 +191,19 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
  * pin relies to find the page still the file's (`filemap_pin_dirty`). */
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
 
-/** For fsync of the file `ofd` is open on, write the file's dirty pages
+/** For fsync of file `ino` on `mnt`, write the file's dirty pages
  * back, those of mappings whose release is still queued among them; 0, or
  * the errno of this write-back's first failure, which the caller returns, as
  * Linux's fsync returns its own write-back's error. A page whose write fails
  * stays dirty for the next write-back, and the failure is recorded in the
  * file's own error sequence and for syncfs (`vfs_ino_err_set`), which the
- * caller's check then moves `ofd`'s cursor past (`vfs_ino_err_check`), so
+ * caller's check then moves its cursor past (`vfs_ino_err_check`), so
  * that each other description of the file reports it once and the fsync of
  * another file of the file system does not. Under the big lock; this may
  * sleep. */
+int filemap_sync_inode(const struct vfs_mount *mnt, uint64_t ino);
+
+/** Write back the dirty pages of `ofd`'s file (`filemap_sync_inode`). */
 int filemap_sync_file(const struct open_file *ofd);
 
 /** For sync, the flusher and the shutdown, write back the dirty pages of

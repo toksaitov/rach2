@@ -1732,35 +1732,30 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
     return rc == 0 ? (int32_t)count : -EFAULT;
 }
 
-void filemap_disk_overlay(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
-                          uint32_t len)
+uint32_t filemap_disk_read(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
+                           uint32_t len)
 {
     struct dshare *ds;
-    uint8_t *out = buf;
+    uint32_t at = (uint32_t)(off % PAGE_SIZE), flags;
+    uintptr_t phys;
+    uint8_t *page;
 
     bkl_assert_held();
     ds = dshare_of(mnt, ino);
-    if (!ds || !ds->stores) {
-        return;
+    if (!ds || off / PAGE_SIZE >= ds->sh.npages) {
+        return 0;
     }
-    while (len) {
-        uint32_t at = (uint32_t)(off % PAGE_SIZE);
-        uint32_t take = PAGE_SIZE - at, flags;
-        uintptr_t phys = shmem_resident(&ds->sh, (uint32_t)(off / PAGE_SIZE));
-        uint8_t *page;
-
-        if (take > len) {
-            take = len;
-        }
-        if (phys) {
-            page = kmap_cpu(phys, &flags);
-            k_memcpy(out, page + at, take);
-            kunmap_cpu(page, flags);
-        }
-        out += take;
-        off += take;
-        len -= take;
+    phys = shmem_resident(&ds->sh, (uint32_t)(off / PAGE_SIZE));
+    if (!phys) {
+        return 0;
     }
+    if (len > PAGE_SIZE - at) {
+        len = PAGE_SIZE - at;
+    }
+    page = kmap_cpu(phys, &flags);
+    k_memcpy(buf, page + at, len);
+    kunmap_cpu(page, flags);
+    return len;
 }
 
 void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,
@@ -1820,9 +1815,9 @@ void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t 
     }
 }
 
-int filemap_sync_file(const struct open_file *ofd)
+int filemap_sync_inode(const struct vfs_mount *mnt, uint64_t ino)
 {
-    struct dshare *ds = dshare_of(ofd->vmnt, ofd->ino);
+    struct dshare *ds = dshare_of(mnt, ino);
     int rc;
 
     if (!ds) {
@@ -1832,6 +1827,11 @@ int filemap_sync_file(const struct open_file *ofd)
     rc = dshare_sync(ds, 0, 0xFFFFFFFFu, NULL, 0);
     dshare_put(ds);
     return rc;
+}
+
+int filemap_sync_file(const struct open_file *ofd)
+{
+    return filemap_sync_inode(ofd->vmnt, ofd->ino);
 }
 
 int filemap_sync_mount(struct vfs_mount *mnt)

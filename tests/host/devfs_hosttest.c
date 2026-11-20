@@ -982,6 +982,13 @@ int block_request(block_device_t *dev, int write, uint64_t lba, uint32_t count, 
     return unexpected();
 }
 
+/** No row flushes a loop device. */
+int block_flush(block_device_t *dev)
+{
+    (void)dev;
+    return unexpected();
+}
+
 /**
  * Fail a copy no row expects. The destination is cleared first: GCC 15
  * reads a caller through this stub, and a byte the stub leaves unwritten is

@@ -6792,7 +6792,8 @@ long sys_close(isr_params_t *params)
  * Flush what the descriptor `e`, which the caller holds and has checked,
  * is open on, by `sync_op`, as `sync_fd` says: a file or directory of a
  * mount through its type, with the pages shared mappings of the file hold
- * written back first, and anything else by writing back the whole cache.
+ * written back first, a loop node through its device, and other descriptors
+ * by writing back the whole cache.
  * The pages are written back under the big lock, taken when the caller
  * lacks it. Returns 0, -EIO, the type's error, a write-back error of the
  * file system recorded since the description's last sync looked, which
@@ -6809,6 +6810,11 @@ long sys_close(isr_params_t *params)
 static long sync_entry(fd_entry_t *e,
                        int (*sync_op)(struct vfs_mount *mnt, void *handle, uint32_t *seen))
 {
+    int device;
+
+    if (devfs_loop_sync(e, &device)) {
+        return device;
+    }
     if (e->ofd && e->ofd->vmnt) {
         int32_t mapped = 0, rc, kept;
 
@@ -6836,7 +6842,8 @@ static long sync_entry(fd_entry_t *e,
  * Any open descriptor but an O_PATH one is accepted, whatever its type. A
  * descriptor of a file or directory of a mount, the KRFFS root among them,
  * writes back the pages shared mappings of the file hold
- * (`filemap_sync_file`) and goes to the type by `sync_op`. Any other writes
+ * (`filemap_sync_file`) and goes to the type by `sync_op`. A loop node
+ * flushes its backing file (`devfs_loop_sync`). Other descriptors write
  * back every dirty page of the disk-backed window (`pc_sync_wait`):
  * the whole cache and not one file's pages, which does more than the call
  * asks. When KRFFS is the RAM module the cache is empty, so that flush does

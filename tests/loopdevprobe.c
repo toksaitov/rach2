@@ -382,9 +382,9 @@ static int line_has(const char *line, const char *text)
     return 0;
 }
 
-/** The `writes` and `syncs` counts /proc/loop gives device A, into `writes`
+/** The `writes` and `syncs` counts /proc/loop gives `device`, into `writes`
  * and `syncs`; a count it does not give is left -1. */
-static void loop_counts(int *writes, int *syncs)
+static void loop_counts(const char *device, int *writes, int *syncs)
 {
     char lines[512];
     const char *line;
@@ -392,7 +392,7 @@ static void loop_counts(int *writes, int *syncs)
     *writes = -1;
     *syncs = -1;
     loop_lines(lines, (int)sizeof(lines));
-    for (line = device_line(lines, line_a); line != 0 && *line && *line != '\n'; line++) {
+    for (line = device_line(lines, device); line != 0 && *line && *line != '\n'; line++) {
         if (*writes < 0 && starts(line, " writes ")) {
             *writes = read_number(line + 8);
         }
@@ -918,7 +918,7 @@ static void durable_mode(void)
     if (filler < 0) {
         fail_with("the file written through the image", filler);
     }
-    loop_counts(&writes_before, &syncs_before);
+    loop_counts(line_a, &writes_before, &syncs_before);
     if (writes_before < 0 || syncs_before < 0) {
         fail("/proc/loop gives the device no write and sync counts");
     }
@@ -933,7 +933,7 @@ static void durable_mode(void)
             fail("writing the file through the image");
         }
     }
-    loop_counts(&writes, &syncs);
+    loop_counts(line_a, &writes, &syncs);
     syscall1(SYS_CLOSE, filler);
     if (writes - writes_before < DURABLE_WRITES) {
         fail_with("the device writes the image's sync points made", writes - writes_before);
@@ -959,9 +959,9 @@ static void durable_mode(void)
  * The rows of a file on ext2 that a shared, writable mapping maps, on device
  * B, as Linux's loop allows: the file is attached while mapped; the device
  * reads what the mapping stored, before any write-back takes it to the
- * file; the mapping sees what a write of the device put in the file; msync
- * writes the mapping back; and fallocate grows the file while the device
- * keeps the size it was attached with.
+ * file; an fsync of the device reaches the backing file; the mapping sees
+ * what a write of the device put in the file; msync writes later stores
+ * back; and fallocate grows the file while the device keeps its size.
  */
 static void mapped_rows(void)
 {
@@ -969,7 +969,7 @@ static void mapped_rows(void)
     long long size;
     long addr;
     char *m;
-    int fd, rc, i;
+    int fd, rc, i, writes_before, syncs_before, writes, syncs;
 
     make_blank(path, "mapped.img");
     fd = syscall3(SYS_OPEN, (long)path, O_RDWR, 0);
@@ -989,6 +989,20 @@ static void mapped_rows(void)
         fail_with("attaching a file a shared, writable mapping maps", rc);
     }
     expect_sector(node_b, 1024, 'M', "the device reads what a shared mapping stored");
+    loop_counts(line_b, &writes_before, &syncs_before);
+    rc = syscall3(SYS_OPEN, (long)node_b, O_RDONLY, 0);
+    if (rc < 0) {
+        fail_with("opening the device to flush its backing file", rc);
+    }
+    i = syscall1(SYS_FSYNC, rc);
+    syscall1(SYS_CLOSE, rc);
+    if (i != 0) {
+        fail_with("flushing a device with stores in its backing file's mapping", i);
+    }
+    loop_counts(line_b, &writes, &syncs);
+    if (writes_before < 0 || syncs_before < 0 || writes != writes_before || syncs <= syncs_before) {
+        fail("fsync did not flush the loop device without a device write");
+    }
     put_sector(node_b, 1536, 'D', "writing the device over a mapped file");
     for (i = 1536; i < 2048 && m[i] == 'D'; i++) {
     }

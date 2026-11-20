@@ -2149,6 +2149,20 @@ static int devfs_loop_index(const struct devfs_entry *dev)
     return (int)dev->minor;
 }
 
+/** Flush the attached file's pages and the storage beneath a loop node. */
+int devfs_loop_sync(const struct fd_entry *e, int *result)
+{
+    block_device_t *dev;
+    int32_t err;
+
+    if (e->type != FD_TYPE_DEVICE || !e->dev || e->dev->ops != &loop_ops) {
+        return 0;
+    }
+    dev = loop_node_device(devfs_loop_index(e->dev), 0, &err);
+    *result = dev ? block_flush(dev) : err;
+    return 1;
+}
+
 /** Whether `dev`, an entry of the table or a slot of the registry, is
  * present now: a slot while its node is registered; bootpart and grubcore
  * only while published; the mixer, dsp and an event device only while

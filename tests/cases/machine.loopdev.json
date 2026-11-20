@@ -161,7 +161,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-ext2back"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
       "steps": [
-        {"step_id": "ext2back", "stage": "execute", "machine": "ext2back", "does": "boot the copy of the disk whose volume is ext2, run loopdevprobe ext2back at the debug shell: an image on the ext2 volume attached, a second device under a second name refused, and a file that a shared, writable mapping maps attached, the device reading the mapping's stores and the mapping a write of the device, msync and fallocate going through, and end the machine with QMP's quit"}
+        {"step_id": "ext2back", "stage": "execute", "machine": "ext2back", "does": "boot the copy of the disk whose volume is ext2, run loopdevprobe ext2back at the debug shell: an image on the ext2 volume attached, a second device under a second name refused, and a file that a shared, writable mapping maps attached, the device reading the mapping's stores, fsync flushing it without a device write, the mapping seeing a device write, and msync and fallocate going through, and end the machine with QMP's quit"}
       ],
       "machines": [
         {"machine_id": "ext2back", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["loopdev-ext2back"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}

@@ -1151,6 +1151,14 @@ int devfs_fd_is_raw(struct fd_entry *e)
     return 0;
 }
 
+/** No row syncs a loop device. */
+int devfs_loop_sync(const struct fd_entry *e, int *result)
+{
+    (void)e;
+    (void)result;
+    return 0;
+}
+
 /** No row's descriptor is the kernel log: 0. */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {

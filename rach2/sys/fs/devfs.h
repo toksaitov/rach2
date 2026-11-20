@@ -222,6 +222,10 @@ void devfs_disk_withdraw(void);
  */
 int devfs_fd_is_raw(struct fd_entry *e);
 
+/** Sync a loop node held by `e`. Returns 1 with its status in `*result`,
+ * or 0 for any other descriptor. The caller holds the big lock. */
+int devfs_loop_sync(const struct fd_entry *e, int *result);
+
 /**
  * Whether an O_DIRECT transfer through `e` of `len` bytes at byte `off` of
  * its device, from or into the user address `addr`, breaks Linux's rule for

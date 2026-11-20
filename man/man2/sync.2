@@ -104,7 +104,11 @@ For a descriptor on a mounted file system, it runs that file system's
 fsync operation, or writes the device's dirty buffers if the file
 system has no such operation.
 On success it also flushes the device.
-For a KRFFS boot-root file, or a descriptor without a mount, it flushes
+For a loop device it writes back the dirty mapped pages of the backing
+file and syncs that file, as
+.Xr loop 4
+describes.
+For a KRFFS boot-root file or another descriptor without a mount, it flushes
 the entire page cache.
 That flush does nothing on a direct RAM root.
 An in-flight page write keeps its slot and frame reserved.
