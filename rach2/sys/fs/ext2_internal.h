@@ -817,7 +817,7 @@ int ext2_attr_set(struct vfs_mount *mnt, struct ext2_node *n, int index,
 /* ext2_acl.c */
 
 /** The name index of the ACL whose full attribute name is `name`, or 0 for
- * a name that is not an ACL's. */
+ * a name that is not an ACL's, or for NULL. */
 int ext2_acl_index(const char *name);
 /** getxattr, setxattr and removexattr of the ACL of `index` of node `n`,
  * as Linux's `do_get_acl` and `do_set_acl` answer them, the value in the
