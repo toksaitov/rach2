@@ -21,8 +21,10 @@
  * second monitor's PCM, which plays beside the first, and a third's, all
  * three playing at once; surround, its channels limited by the sink and
  * given Linux's channel allocations, slots and infoframes; more channels
- * than HDMI's eight granted, the DMA playing the first of each frame; and
- * the close, which gives the display's power back.
+ * than HDMI's eight granted, the DMA playing the first of each frame, and
+ * 128 at 192 kHz kept at their rate and served by the tick, the ring always
+ * 40 ms of the stream ahead of the DMA; and the close, which gives the
+ * display's power back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -289,6 +291,9 @@ static int disp_dev;
 
 static int transfers, periods;
 static uint32_t last_size;
+
+/* The clock, in ticks, which a row may move. */
+static uint64_t now_ticks;
 
 /** The stream's transfer: fill with a byte the count names. */
 static void s_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
@@ -662,23 +667,96 @@ static void row_surround(void)
     hh_stream_close(&s);
 }
 
+/* The stream frames many_transfer has given. */
+static uint32_t many_frame;
+
+/** A transfer of frames of 128 channels of 32 bits whose sample of channel
+ * c in frame f holds, in its top 24 bits, (f % 32768) * 256 + c. */
+static void many_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    uint32_t i, c, v;
+
+    (void)s;
+    for (i = 0; i + 512u <= (uint32_t)size; i += 512u, many_frame++) {
+        for (c = 0; c < 128u; c++) {
+            v = (many_frame & 0x7fffu) << 8 | c;
+            buf[i + 4u * c] = 0;
+            buf[i + 4u * c + 1u] = (uint8_t)v;
+            buf[i + 4u * c + 2u] = (uint8_t)(v >> 8);
+            buf[i + 4u * c + 3u] = (uint8_t)(v >> 16);
+        }
+    }
+}
+
+/** The 32-bit sample `i` of the first PCM's DMA buffer. */
+static uint32_t dma0_32(uint32_t i)
+{
+    const uint8_t *p = hh_dma[0] + 4u * i;
+
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/** Whether the first PCM's ring holds DMA frames `from` to `from` + 1920 of
+ * many_transfer's stream at four times their rate: frame g, at g % 1920,
+ * holds the first two channels of stream frame 4g. */
+static int many_ring_holds(uint32_t from)
+{
+    uint32_t g, c, at;
+
+    for (g = from; g < from + 1920u; g++) {
+        at = g % 1920u;
+        for (c = 0; c < 2u; c++) {
+            if (dma0_32(2u * at + c) != (((4u * g) & 0x7fffu) << 8 | c) << 8) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 /** 128 channels of 32 bits at 192 kHz on IGT's sink, whose LPCM is stereo
- * at 48 kHz at most: the channels granted, two played; and, since two of
- * the DMA's shortest periods would take more of the stream than the
- * caller's buffer holds, the DMA's 48 kHz. */
+ * at 48 kHz at most: the channels and the rate granted, as Linux's OSS
+ * layer keeps them, two channels played at 48 kHz in a ring of 40 ms whose
+ * stream bytes the caller's buffer is to hold. Served by the tick every
+ * 4 ms over two and a half laps of the ring, the DMA has ahead of its place
+ * the next 40 ms of the stream in order, each fourth frame's first two
+ * channels, so that it never comes round to a period not refilled. */
 static void row_many(void)
 {
     audio_stream_t s;
+    uint32_t k, lpib = 0;
+    int ok = 1;
 
     stream_init(&s, 192000, AUDIO_S32LE, 16384);
     s.channels = 128;
+    s.transfer = many_transfer;
     check(hh_open0(&s) == 0 && hh_stream_setup(&s) == 0 && s.channels == 128 && M0->ch == 2 &&
               M0->fmt == 0x0031,
           "many: 128 channels granted, the DMA in two of 24 bits");
-    check(s.rate == 48000 && M0->rate == 48000 && s.period_bytes == 16384 && M0->pb == 256 &&
-              M0->n == 3 && s.device_periods == 4,
-          "many: 48 kHz granted, at which the DMA's periods fit the caller's buffer");
+    check(s.rate == 192000 && M0->rate == 48000 && s.period_bytes == 16384 && M0->pb == 128 &&
+              M0->n == 120 && s.device_periods == 241,
+          "many: 192 kHz kept, the DMA at 48 kHz in 120 periods of 128 bytes, 40 ms");
+    check((M0->n - 1u) * M0->pb >= 5u * 1536u,
+          "many: the periods after the one playing hold five ticks");
+    many_frame = 0;
+    periods = 0;
+    now_ticks = 5000;
+    mm_put(hh_sd(M0, HDA_SD_LPIB), 0, 32);
+    check(hh_stream_start(&s) == 0 && mm_get(hh_sd(M0, HDA_SD_CBL), 32) == 15360 &&
+              many_frame == 7678 && many_ring_holds(0),
+          "many: the start fills the ring from the stream's first 7678 frames");
+    for (k = 1; k <= 25; k++) {
+        now_ticks++;
+        lpib = (lpib + 1536u) % 15360u;
+        mm_put(hh_sd(M0, HDA_SD_LPIB), lpib, 32);
+        hdmi_audio_tick();
+        ok = ok && many_ring_holds(192u * k);
+    }
+    check(ok, "many: each tick leaves the next 40 ms of the stream ahead of the DMA, in order");
+    check(periods == 24 * 25 - 1 && many_frame == 7678 + 25u * 768u,
+          "many: the stream's periods told as its frames play");
     hh_stream_close(&s);
+    check(display_power == 0, "many: the close leaves nothing held");
 }
 
 /* The channels of the frames chan_transfer gives, and the stream bytes it
@@ -830,9 +908,6 @@ void arch_dma_flush(const volatile void *p, size_t len)
     (void)p;
     (void)len;
 }
-
-/* The clock, in ticks, which a row may move. */
-static uint64_t now_ticks;
 
 uint64_t rtc_ticks_now(void)
 {
