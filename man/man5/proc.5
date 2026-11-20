@@ -3346,18 +3346,28 @@ Past the mode, they, the
 .Pa exe
 link and the other files that say so need what Linux's ptrace check with
 .Dv PTRACE_MODE_FSCREDS
-needs: a thread of the process, a privileged caller, one that holds
+needs: a thread of the process, or a caller that passes three checks in
+turn, as on Linux.
+Its file-system user and group IDs are each of the process's three user
+and group IDs, or it holds
 .Dv CAP_SYS_PTRACE
 .Pq see Xr capget 2
-in the user namespace that owns the process's image, or one whose
-file-system user and group IDs are each of the process's three user and
-group IDs, while the process is dumpable and not privileged.
-That namespace, as on Linux, is the one the process was in when its
+in the process's user namespace.
+While the process is not dumpable, it holds
+.Dv CAP_SYS_PTRACE
+in the user namespace that owns the process's image.
+And it is in the process's user namespace with every capability the
+process has permitted, or holds
+.Dv CAP_SYS_PTRACE
+there.
+The namespace that owns the image, as on Linux, is the one the process
+was in when its
 .Xr execve 2
 built the image, or, for an image it could not read, the nearest above
 that whose maps hold the file's owner and group; a process that later
 makes or joins a user namespace stays out of reach of that namespace's
-root.
+root while it is not dumpable, and a child it forks there with other IDs
+and makes dumpable is within that root's reach.
 .It Pa /proc/PID/mem
 The process's memory, read and written at the descriptor's offset, which
 is the address, as GDB uses it through

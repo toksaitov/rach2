@@ -67,16 +67,18 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c)
 }
 
 /* The namespace the last `ns_capable_with` was asked about, for a row
- * that checks which one a caller judges privilege in. */
-const struct userns *ns_capable_asked;
+ * that checks which one a caller judges privilege in; and, while
+ * `ns_capable_limit` is set, the one namespace it grants privilege in. */
+const struct userns *ns_capable_asked, *ns_capable_only;
+int ns_capable_limit;
 
-/** The target namespace is the caller's own in this fixture; `ns` is kept
- * in `ns_capable_asked`. */
+/** The target namespace is the caller's own in this fixture, unless
+ * `ns_capable_limit` names one; `ns` is kept in `ns_capable_asked`. */
 int ns_capable_with(const process_t *p, const struct userns *ns, int held)
 {
     (void)p;
     ns_capable_asked = ns;
-    return held;
+    return held && (!ns_capable_limit || ns == ns_capable_only);
 }
 
 #include "fs_caps_first.h"

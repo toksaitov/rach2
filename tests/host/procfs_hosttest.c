@@ -2132,6 +2132,38 @@ static void descriptor_links(void)
           "a descriptor being released has no link");
 }
 
+/**
+ * With process 7 in `target_ns` and its address space owned by `image_ns`,
+ * as after an unshare without an exec, a caller whose ids are not 7's
+ * needs SYS_PTRACE in `target_ns` for the credentials and, while 7 is not
+ * dumpable, in `image_ns` too, as Linux's `__ptrace_may_access`.
+ */
+static void ptrace_namespace_rows(void)
+{
+    process.userns = &target_ns;
+    space.userns = &image_ns;
+    ns_capable_limit = 1;
+    ns_capable_only = &target_ns;
+    check(procfs_may_read_as(7, 0), "SYS_PTRACE in the target's credential user namespace passes "
+                                    "a dumpable target whose address space an older one owns");
+    space.dumpable = 0;
+    check(!procfs_may_read_as(7, 0), "but not one that is not dumpable, which needs SYS_PTRACE "
+                                     "in the namespace that owns its address space");
+    ns_capable_only = &image_ns;
+    check(!procfs_may_read_as(7, 0),
+          "nor does SYS_PTRACE there alone pass the target's credentials");
+    ns_capable_limit = 0;
+    check(procfs_may_read_as(7, 0), "and the two together do");
+    space.dumpable = 1;
+    process.mm = NULL;
+    ns_capable_limit = 1;
+    ns_capable_only = &target_ns;
+    check(procfs_may_read_as(7, 0), "a target without an address space needs it in its own alone");
+    ns_capable_limit = 0;
+    process.mm = &space;
+    process.userns = space.userns = NULL;
+}
+
 /** An access lookup uses real IDs even when the file-system IDs match. */
 static void descriptor_search_ids(void)
 {
@@ -2166,15 +2198,7 @@ static void descriptor_search_ids(void)
     caller.cap_lost[0] = 1u << CAP_SYS_ADMIN;
     caller.nocaps = 1;
     check(procfs_may_read_as(7, 0), "SYS_PTRACE suffices after dropping SYS_ADMIN");
-    process.userns = &target_ns;
-    space.userns = &image_ns;
-    check(procfs_may_read_as(7, 0) && ns_capable_asked == &image_ns,
-          "SYS_PTRACE counts in the user namespace that owns the address space");
-    process.mm = NULL;
-    check(procfs_may_read_as(7, 0) && ns_capable_asked == &target_ns,
-          "and in the target's own when it has no address space");
-    process.mm = &space;
-    process.userns = space.userns = NULL;
+    ptrace_namespace_rows();
     caller.euid = 1001;
     caller.cap_lost[0] = caller.nocaps = 0;
     sd.own.kept = 1;

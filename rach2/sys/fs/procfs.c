@@ -965,15 +965,32 @@ static int procfs_may_read_mem(const process_t *p)
     return procfs_may_trace(p, 0);
 }
 
-/** Judge a proc walk as ptrace READ_FSCREDS with its selected credentials.
- * Same-group access passes. Otherwise compare all three IDs, dumpability
- * and permitted capabilities, or require SYS_PTRACE in the user namespace
- * that owns the target's address space (`mm.h`), or the target's own for
- * one without, as Linux's `__ptrace_may_access`. */
+/** Whether the caller `c`'s file-system ids, or its real ones with
+ * `use_real`, are each of the three user and group ids of `p`. */
+static int procfs_trace_ids(const process_t *c, const process_t *p, int use_real)
+{
+    uint32_t uid = use_real ? c->ruid : proc_fsuid(c), gid = use_real ? c->rgid : proc_fsgid(c);
+
+    return uid == p->ruid && uid == p->euid && uid == p->suid && gid == p->rgid && gid == p->egid &&
+           gid == p->sgid;
+}
+
+/**
+ * Judge a proc walk as ptrace READ_FSCREDS with its selected credentials,
+ * in the order of Linux's `__ptrace_may_access`. Same-group access passes.
+ * Otherwise the caller needs the target's three user and group ids, or
+ * SYS_PTRACE in the target's credential user namespace; then, for a target
+ * whose address space is not dumpable, SYS_PTRACE in the user namespace
+ * that owns that space (`mm.h`), which may be an older one than the
+ * credentials' after an unshare; then, as Linux's `cap_ptrace_access_check`,
+ * the target's permitted capabilities within its own in the same user
+ * namespace, or SYS_PTRACE in the target's.
+ */
 static int procfs_may_trace(const process_t *p, int use_real)
 {
     process_t *c = current_proc;
-    uint32_t uid, gid, cap0;
+    uint32_t cap0;
+    int ptrace;
 
     if (!c) {
         return 0;
@@ -982,15 +999,16 @@ static int procfs_may_trace(const process_t *p, int use_real)
         return 1;
     }
     cap0 = fs_access_caps(c, 0, use_real);
-    if (ns_capable_with(c, p->mm ? p->mm->userns : p->userns,
-                        (cap0 & (1u << CAP_SYS_PTRACE)) != 0)) {
-        return 1;
+    ptrace = (cap0 & (1u << CAP_SYS_PTRACE)) != 0;
+    if (!procfs_trace_ids(c, p, use_real) && !ns_capable_with(c, p->userns, ptrace)) {
+        return 0;
     }
-    uid = use_real ? c->ruid : proc_fsuid(c);
-    gid = use_real ? c->rgid : proc_fsgid(c);
-    return uid == p->ruid && uid == p->euid && uid == p->suid && gid == p->rgid && gid == p->egid &&
-           gid == p->sgid && (!p->mm || p->mm->dumpable == 1u) && c->userns == p->userns &&
-           !(cap_word(p, 0) & ~cap0) && !(cap_word(p, 1) & ~fs_access_caps(c, 1, use_real));
+    if (p->mm && p->mm->dumpable != 1u && !ns_capable_with(c, p->mm->userns, ptrace)) {
+        return 0;
+    }
+    return (c->userns == p->userns && !(cap_word(p, 0) & ~cap0) &&
+            !(cap_word(p, 1) & ~fs_access_caps(c, 1, use_real))) ||
+           ns_capable_with(c, p->userns, ptrace);
 }
 
 /* Proc mount options. */
