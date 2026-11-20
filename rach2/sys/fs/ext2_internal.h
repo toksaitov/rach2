@@ -273,8 +273,9 @@ struct ext2_node {
     int queued;                  /* on `em->reap`, which no thread is freeing yet */
     struct ext2_node *reap_next; /* the next node on `em->reap` */
     /* The blocks other files share that were dirtied for this inode since
-     * its last `fsync`, `nshared` of them: bitmaps, descriptors and the
-     * superblock. `shared_over` once more were, after which its `fsync`
+     * its last `fsync`, `nshared` of them: bitmaps, descriptors, the
+     * superblock and the directory blocks that took a name for it
+     * (`name_commit`). `shared_over` once more were, after which its `fsync`
      * writes the whole device. Its table block is not listed, since an
      * `fsync` always writes it. */
     uint32_t shared[EXT2_NODE_SHARED];
