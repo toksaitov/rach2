@@ -151,6 +151,53 @@ static void async_create_row(void)
 }
 
 /**
+ * On a mount that writes back, on a write-through disk that answers writes
+ * from its volatile cache (a virtio disk under QEMU's cache=writeback), 64
+ * directories and 64 files made in the root, then a sync: the sync sends
+ * one flush for each level of the orders the operations made, the new
+ * directories' blocks, the root's inode, the new inodes and the root's
+ * entries, and one at its end, 4 in all, where it sent 197, one or two for
+ * each block that waits. Linux's ext4 driver, mounting the volume without a
+ * journal, sends one flush for the sync and keeps no order across a crash.
+ * The flushes are printed, as `ext2-flush: result:`.
+ */
+static void async_flush_row(void)
+{
+    char name[40];
+    int i, rc = 0, sent;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    stop_after = -1;
+    bcache_set_limit(8192);
+    dev.flags |= BLOCK_WRITE_THROUGH;
+    dev.unflushed = 0;
+    track_unflushed = 1;
+    if (mount_flags(0) != 0) {
+        check(0, "the flush row's volume mounts so that it writes back");
+    } else {
+        check(OPS->sync(&mnt) == 0, "the flush row's volume syncs after its mount");
+        for (i = 0; rc == 0 && i < 64; i++) {
+            snprintf(name, sizeof name, "d%d", i);
+            rc = async_make(1, name);
+            snprintf(name, sizeof name, "f%d", i);
+            rc = rc ? rc : async_make(0, name);
+        }
+        sent = flushes_sent;
+        check(rc == 0 && OPS->sync(&mnt) == 0, "64 mkdirs and 64 creates sync");
+        sent = flushes_sent - sent;
+        printf("ext2-flush: result: the sync of 64 mkdirs and 64 creates sent %d flushes\n", sent);
+        check(sent <= 4,
+              "and the sync sends one flush for each level of its orders and one at its end");
+        check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
+    }
+    track_unflushed = 0;
+    dev.flags &= ~BLOCK_WRITE_THROUGH;
+    dev.unflushed = 0;
+    bcache_set_limit(0);
+}
+
+/**
  * On a mount that writes back, a file made and written, then synced by an
  * fsync of the file alone, keeps its name and bytes when the device stops
  * right after the call, and the stop is clean (`fsync_stop_judge`): the
@@ -426,6 +473,7 @@ static void async_fsync_rows(void)
 static void async_rows(void)
 {
     async_create_row();
+    async_flush_row();
     async_image_row();
     async_fsync_rows();
     async_matrix_rows();

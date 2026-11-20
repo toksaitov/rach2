@@ -547,6 +547,30 @@ void kunmap_cpu(void *va, uint32_t flags)
     (void)flags;
 }
 
+/** The MMIO region has no room on the host, so the composer reads each
+ * page through `kmap_cpu`, whose mapping of a frame is its address. */
+void mmio_usage(size_t *used, size_t *largest)
+{
+    *used = 0;
+    *largest = 0;
+}
+
+/** No window: `mmio_usage` leaves the composer no room for one. */
+uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
+{
+    (void)frames;
+    (void)count;
+    (void)cache;
+    return 0;
+}
+
+/** Nothing to unmap. */
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    (void)va;
+    (void)size;
+}
+
 /** No eventfd: the program makes none. */
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {

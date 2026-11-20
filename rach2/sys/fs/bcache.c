@@ -1174,6 +1174,54 @@ static struct bbuf *order_before(const struct bbuf *b)
     return 0;
 }
 
+/* What the rules of the classes read of a block that may have to reach the
+ * device before another (`must_precede`), kept apart from its buffer so
+ * that the list of unflushed writes can judge a block written since. */
+struct block_class {
+    uint64_t dirtied; /* the mark at which it went dirty */
+    uint64_t owner;
+    int level;
+    int order;
+    int entry;
+    int last; /* a block its device writes last (`block_last`) */
+};
+
+/** Fill `c` with the class of the dirty block `d`. */
+static void class_of(const struct bbuf *d, struct block_class *c)
+{
+    c->dirtied = d->dirtied;
+    c->owner = d->owner;
+    c->level = d->level;
+    c->order = d->order;
+    c->entry = d->entry;
+    c->last = block_last(d);
+}
+
+/** The rules of `must_precede` for a block of class `c` of `b`'s device
+ * and another block than `b`. */
+static int class_precedes(const struct block_class *c, const struct bbuf *b, int last)
+{
+    if (c->dirtied > b->touched || c->entry) {
+        return 0;
+    }
+    if (b->order == BCACHE_ORDER_AFTER && c->order == BCACHE_ORDER_FIRST) {
+        return 1;
+    }
+    if (c->order == BCACHE_ORDER_AFTER || c->last) {
+        return 0;
+    }
+    if (last) {
+        return c->owner == 0 || last_names(b, c->owner);
+    }
+    if (b->order == BCACHE_ORDER_AFTER) {
+        return 0;
+    }
+    if (c->owner == b->owner) {
+        return c->level < b->level;
+    }
+    return c->owner == 0 && c->level == 0;
+}
+
 /**
  * Whether the dirty block `d` must reach the device before `b`, which
  * `follows`, with `last` saying whether `b` is a block written last. Only a
@@ -1192,25 +1240,13 @@ static struct bbuf *order_before(const struct bbuf *b)
  */
 static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
 {
-    if (d == b || d->dev != b->dev || d->dirtied > b->touched || d->entry) {
+    struct block_class c;
+
+    if (d == b || d->dev != b->dev) {
         return 0;
     }
-    if (b->order == BCACHE_ORDER_AFTER && d->order == BCACHE_ORDER_FIRST) {
-        return 1;
-    }
-    if (d->order == BCACHE_ORDER_AFTER || block_last(d)) {
-        return 0;
-    }
-    if (last) {
-        return d->owner == 0 || last_names(b, d->owner);
-    }
-    if (b->order == BCACHE_ORDER_AFTER) {
-        return 0;
-    }
-    if (d->owner == b->owner) {
-        return d->level < b->level;
-    }
-    return d->owner == 0 && d->level == 0;
+    class_of(d, &c);
+    return class_precedes(&c, b, last);
 }
 
 /** The earliest dirtied block of `list` that must reach the device before
@@ -1446,8 +1482,10 @@ static void written_clean(struct bbuf **run, int n)
  * keeps them, and what an order puts before a block is on the medium before
  * it: the block a wait names, met or not, and an image written in its
  * place. `order_flush` leaves the flush out before an `after` whose firsts
- * are on the medium already, and `block_flush` on a write-through disk that
- * answered no write without the flush since its last. */
+ * are on the medium already and before a block none of whose waits names a
+ * write the last flush to begin did not cover (`flush_owed`), and
+ * `block_flush` on a write-through disk that answered no write without the
+ * flush since its last. */
 static int flush_before(const struct bbuf *b, uint32_t flags)
 {
     return ordered(b) ||
@@ -1485,28 +1523,106 @@ static int keeps_cache(block_device_t *dev)
     return s && s->flush;
 }
 
-/** Count a write of `n` buffers from `run` that `dev` answered with the
- * request `flags`: one more `first` write answered without the disk's
- * flush, when a `first` is among its buffers and the request had
- * `BLOCK_REQ_NOFLUSH`, or `dev` keeps a cache and is not write-through, as
- * a USB stick, which answers every write before it leaves its cache.
- * Called before `written_clean` clears their order. */
-static void count_firsts(block_device_t *dev, struct bbuf *const *run, int n, uint32_t flags)
+/* The blocks the cache wrote that their disk answered without its flush
+ * and that no flush begun since has put on the medium, one entry for each
+ * block: its device and number, the least mark at which a write of it went
+ * dirty, and the device's count of such writes at its newest. A write that
+ * finds no room leaves its count in the device's `writes_lost`, which owes
+ * the next block that waits a flush. Under `cache_spin`. */
+#define UNFLUSHED_MAX 128
+static struct unflushed {
+    block_device_t *dev; /* NULL: the entry is free */
+    uint64_t blk;
+    struct block_class c; /* its class at the write, with the least mark */
+    int mixed;            /* writes of other classes: it precedes any block */
+    uint64_t seq;
+} unflushed[UNFLUSHED_MAX];
+
+/** Whether a write `dev` answered with the request `flags` may still be in
+ * the disk's own cache: one with `BLOCK_REQ_NOFLUSH`, and every write of a
+ * disk that keeps a cache and is not write-through, as a USB stick, which
+ * answers every write before it leaves its cache. */
+static int answered_unflushed(block_device_t *dev, uint32_t flags)
 {
-    uint32_t lf;
+    return (flags & BLOCK_REQ_NOFLUSH) ||
+           (!(block_flags(dev) & BLOCK_WRITE_THROUGH) && keeps_cache(dev));
+}
+
+/** Enter the block of the dirty buffer `b`, written and answered without
+ * the flush as its device's write `seq`, in the list of such writes
+ * (`unflushed`). A block written again keeps the least mark, and is taken
+ * to precede any block once two of its writes differ in class.
+ * `cache_spin` is held. */
+static void unflushed_note(const struct bbuf *b, uint64_t seq)
+{
+    struct unflushed *free = 0;
+    struct block_class c;
     int i;
 
-    if (!(flags & BLOCK_REQ_NOFLUSH) &&
-        ((block_flags(dev) & BLOCK_WRITE_THROUGH) || !keeps_cache(dev))) {
+    class_of(b, &c);
+    for (i = 0; i < UNFLUSHED_MAX; i++) {
+        struct unflushed *e = &unflushed[i];
+
+        if (e->dev == b->dev && e->blk == b->blk) {
+            e->mixed = e->mixed || c.owner != e->c.owner || c.level != e->c.level ||
+                       c.order != e->c.order || c.entry != e->c.entry || c.last != e->c.last;
+            e->c.dirtied = c.dirtied < e->c.dirtied ? c.dirtied : e->c.dirtied;
+            e->seq = seq;
+            return;
+        }
+        if (!e->dev && !free) {
+            free = e;
+        }
+    }
+    if (!free) {
+        b->dev->writes_lost = seq;
         return;
     }
-    for (i = 0; i < n && run[i]->order != BCACHE_ORDER_FIRST; i++) {
+    free->dev = b->dev;
+    free->blk = b->blk;
+    free->c = c;
+    free->mixed = 0;
+    free->seq = seq;
+}
+
+/** Drop from the list of unflushed writes those of `dev` up to its write
+ * `seq`, which a flush has put on the medium; all of them for a `seq` of
+ * all ones. `cache_spin` is held. */
+static void unflushed_drop(block_device_t *dev, uint64_t seq)
+{
+    int i;
+
+    for (i = 0; i < UNFLUSHED_MAX; i++) {
+        if (unflushed[i].dev == dev && unflushed[i].seq <= seq) {
+            unflushed[i].dev = 0;
+        }
     }
-    if (i == n) {
+}
+
+/** Count a write of `n` buffers from `run` that `dev` answered with the
+ * request `flags`. Answered without the disk's flush (`answered_unflushed`),
+ * it takes the next of the device's count of such writes and enters each
+ * block in the list of them (`unflushed_note`), and is one more `first`
+ * write answered without the flush when a `first` is among its buffers.
+ * Called before `written_clean` clears their marks and order. */
+static void count_written(block_device_t *dev, struct bbuf *const *run, int n, uint32_t flags)
+{
+    uint64_t seq;
+    uint32_t lf;
+    int i, first = 0;
+
+    if (!answered_unflushed(dev, flags)) {
         return;
     }
     lf = cache_lock();
-    dev->firsts_unflushed++;
+    seq = ++dev->writes_unflushed;
+    for (i = 0; i < n; i++) {
+        unflushed_note(run[i], seq);
+        first = first || run[i]->order == BCACHE_ORDER_FIRST;
+    }
+    if (first) {
+        dev->firsts_unflushed++;
+    }
     cache_unlock(lf);
 }
 
@@ -1528,7 +1644,7 @@ static int write_buffer_flags(struct bbuf *b, uint32_t flags)
 
     wb_back(held);
     if (rc == 0) {
-        count_firsts(b->dev, &b, 1, flags);
+        count_written(b->dev, &b, 1, flags);
     }
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), kept dirty",
@@ -1559,12 +1675,14 @@ static uint32_t reclaim_flags(const struct bbuf *b)
 }
 
 /** Flush `dev`, a disk that keeps a cache, for the cache, and on success
- * record that every `first` answered before the flush began is on the
- * medium. A failure is the caller's to record. 0, or -errno. */
+ * record that every `first`, and every write, answered before the flush
+ * began is on the medium (`unflushed_drop`). A failure is the caller's to
+ * record. 0, or -errno. */
 static int flush_firsts(block_device_t *dev)
 {
     uint32_t lf = cache_lock();
     uint64_t seen = dev->firsts_unflushed;
+    uint64_t wseen = dev->writes_unflushed;
     int rc;
 
     if (dev->flags & BLOCK_WRITES_HALTED) {
@@ -1578,6 +1696,10 @@ static int flush_firsts(block_device_t *dev)
         if (seen > dev->firsts_flushed) {
             dev->firsts_flushed = seen;
         }
+        if (wseen > dev->writes_flushed) {
+            dev->writes_flushed = wseen;
+        }
+        unflushed_drop(dev, wseen);
         cache_unlock(lf);
     }
     return rc;
@@ -1600,30 +1722,83 @@ static int firsts_only(struct bbuf *const *run, int n)
     return 1;
 }
 
+/** Whether the write of `b` may need on the medium the unflushed write
+ * `e` of another block: `e`'s block is one the rules of the classes put
+ * before `b` (`class_precedes`), or went dirty at or before `b`'s last
+ * mark in writes of more than one class, or one of `b`'s orders names it,
+ * or `b` has an older image not yet written. An earlier write of `b`'s own
+ * block is not needed: `b`'s write takes its place. */
+static int needs_unflushed(const struct bbuf *b, const struct unflushed *e)
+{
+    uint32_t i;
+
+    if (e->blk == b->blk) {
+        return 0;
+    }
+    if (b->older) {
+        return 1;
+    }
+    if (follows_classes(b) &&
+        (e->mixed ? e->c.dirtied <= b->touched : class_precedes(&e->c, b, block_last(b)))) {
+        return 1;
+    }
+    for (i = 0; b->waits && i < b->waits->n; i++) {
+        if (b->waits->w[i].blk == e->blk) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether a flush of `dev` must go before the `n` buffers of `run`: one
+ * that waits for others may need a write the disk answered without its
+ * flush that no flush begun since has covered (`needs_unflushed`), or such
+ * a write found no room in the list. So a block whose waits an earlier
+ * flush covered is written without another, as ext4's commit flushes once
+ * for the blocks it orders. `cache_spin` and `wb_lock` are held. */
+static int flush_owed(block_device_t *dev, struct bbuf *const *run, int n)
+{
+    int i, j;
+
+    if (dev->writes_lost > dev->writes_flushed) {
+        return 1;
+    }
+    for (i = 0; i < UNFLUSHED_MAX; i++) {
+        if (unflushed[i].dev != dev) {
+            continue;
+        }
+        for (j = 0; j < n; j++) {
+            if (follows(run[j]) && needs_unflushed(run[j], &unflushed[i])) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /** Put what a disk under `dev` holds in its cache on the medium
  * (`keeps_cache`), before the `n` buffers of `run`, one of which must
  * follow what went before it; a write-through disk with nothing unflushed
  * answers at once (`block_flush`). An `after` that names no blocks follows
  * only the `first` buffers, so a run of such blocks needs the flush only
  * while a first was answered without it since the last flush began
- * (`count_firsts`): a `first` written to a write-through disk with the
+ * (`count_written`): a `first` written to a write-through disk with the
  * flush is on the medium when answered. A failure is recorded as a failed
  * write's. 0, or -errno. */
 static int order_flush(block_device_t *dev, struct bbuf *const *run, int n)
 {
-    int rc, held;
+    uint32_t lf;
+    int rc, held, done;
 
     if (!keeps_cache(dev)) {
         return 0;
     }
-    if (firsts_only(run, n)) {
-        uint32_t lf = cache_lock();
-        int done = dev->firsts_unflushed == dev->firsts_flushed;
-
-        cache_unlock(lf);
-        if (done) {
-            return 0;
-        }
+    lf = cache_lock();
+    done = (firsts_only(run, n) && dev->firsts_unflushed == dev->firsts_flushed) ||
+           !flush_owed(dev, run, n);
+    cache_unlock(lf);
+    if (done) {
+        return 0;
     }
     held = wb_out();
     rc = flush_firsts(dev);
@@ -1763,7 +1938,9 @@ static int write_follower(struct bbuf *b, uint32_t flags, struct buffer_wait *me
         if (holder != -1) {
             rc = -EIO;
         } else if (follows(d)) {
-            rc = write_one_met(d, quiet ? quiet | unflushed_flags(b->dev) : 0, &busy);
+            rc = write_one_met(
+                d, quiet || d->order != BCACHE_ORDER_FIRST ? quiet | unflushed_flags(b->dev) : 0,
+                &busy);
         } else {
             rc = write_run_met(
                 d, &end,
@@ -1960,7 +2137,7 @@ static int write_run_met(struct bbuf *first, uint64_t *last, uint32_t flags,
         device_failed(dev, first->blk * BCACHE_BLOCK_SECTORS, rc);
     }
     if (rc == 0) {
-        count_firsts(dev, run, n, flags);
+        count_written(dev, run, n, flags);
         written_clean(run, n); /* before the let_go: a fill may take a buffer once let go */
     }
     *last = run[n - 1]->blk;
@@ -3338,7 +3515,7 @@ static void batch_sift_up(uint64_t *heap, int at)
 static int sync_wants(const struct bbuf *b, int pass, const struct sync_scope *scope)
 {
     return b->dirty && (pass != 0 || b->order == BCACHE_ORDER_FIRST) &&
-           (!scope->since || b->dirtied <= scope->since) &&
+           (pass != 1 || !follows(b)) && (!scope->since || b->dirtied <= scope->since) &&
            (!scope->owner || b->owner == scope->owner) && !sync_leaves(b, scope);
 }
 
@@ -3560,12 +3737,15 @@ static int sync_pass(block_device_t *dev, int pass, struct sync_scope *scope)
     return rc;
 }
 
-/** The two passes of a sync. */
+/** The three passes of a sync: the firsts, then the blocks that wait for
+ * nothing, then the rest, so that what the blocks that wait need is mostly
+ * written before the first of them, and one flush covers it. */
 static int sync_passes(block_device_t *dev, struct sync_scope *scope)
 {
     int rc = sync_pass(dev, 0, scope);
 
-    return rc != 0 ? rc : sync_pass(dev, 1, scope);
+    rc = rc != 0 ? rc : sync_pass(dev, 1, scope);
+    return rc != 0 ? rc : sync_pass(dev, 2, scope);
 }
 
 static int sync_device(block_device_t *dev, int durable, uint64_t since);
@@ -3887,6 +4067,7 @@ void bcache_device_gone(block_device_t *dev)
     wb_take();
     flags = cache_lock();
     dev->flags |= BLOCK_GONE;
+    unflushed_drop(dev, ~(uint64_t)0);
     for (b = bufs; b; b = bufs_next(b, &n, &flags)) {
         stat_visits++;
         if (b->dev != dev) {
