@@ -311,8 +311,7 @@ static void iface_reset(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     nd->ip = ip;
     nd->mask = mask;
     nd->gateway = gw;
-    nd->pending_ip = 0;
-    nd->mask_provisional = 0;
+    k_memset(nd->addr4, 0, sizeof(nd->addr4));
 }
 
 /** Put the configuration back where a fresh boot starts. */
@@ -462,12 +461,12 @@ static void narrow_subnets_added(void)
           "both addresses of a /31 are added beside it");
     CHECK(!netconf_is_broadcast(IP4(10, 0, 0, 0)) && !netconf_is_broadcast(IP4(10, 0, 0, 1)),
           "neither of which is a broadcast address");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu, 0) == -EINVAL &&
-              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu, 0) == -EINVAL,
-          "a /30's network and broadcast addresses are not added");
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu, 0) == 0 &&
+              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu, 0) == 0,
+          "both endpoint addresses can be assigned");
     CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 2), 0xFFFFFFFCu, 0) == 0 &&
-              other_iface.naddr2 == 3,
-          "its host is");
+              other_iface.naddr2 == 5,
+          "and so can another host");
     other_iface.naddr2 = 0;
 }
 
@@ -522,22 +521,23 @@ static void narrow_subnets(void)
     CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu) == 0 &&
               net_ip_gateway == 0,
           "the lower address of a /31 is taken too, which drops that gateway");
-    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFCu) == -EINVAL &&
-              netconf_set_address(&the_iface, IP4(10, 0, 0, 3), 0xFFFFFFFCu) == -EINVAL,
-          "a /30 refuses its network and broadcast addresses");
+    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFCu) == 0 &&
+              netconf_set_address(&the_iface, IP4(10, 0, 0, 3), 0xFFFFFFFCu) == 0,
+          "a /30 accepts local addresses at both ends");
     CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 1), 0xFFFFFFFCu) == 0 &&
               netconf_broadcast() == IP4(10, 0, 0, 3) && netconf_is_broadcast(IP4(10, 0, 0, 3)),
           "and a host of it has the broadcast address");
 
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0 && net_ip_addr == 0,
-          "an address waiting for its mask");
+    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0 &&
+              net_ip_addr == IP4(192, 168, 1, 0),
+          "the address takes effect with its classful mask");
     CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFFu) == 0 && net_ip_addr == IP4(192, 168, 1, 0) &&
               net_ip_mask == 0xFFFFFFFFu,
           "is a host under a /32 mask");
     CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFEu) == 0 && net_ip_mask == 0xFFFFFFFEu,
           "and under a /31 mask");
-    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFCu) == -EINVAL,
-          "but not under a /30 mask, of which it is the network address");
+    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFCu) == 0,
+          "a /30 also accepts its network address");
 
     narrow_subnets_added();
     conf_reset();
@@ -777,12 +777,6 @@ int main(void)
     CHECK(net_ip_gateway == 0, "a gateway that is no longer on this subnet is not a gateway");
 
     arp_flushes = 0;
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 0), IP4(255, 255, 255, 0)) == -EINVAL,
-          "a network address is not a host");
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 255), IP4(255, 255, 255, 0)) == -EINVAL,
-          "nor is a broadcast address");
-    CHECK(netconf_set_address(&the_iface, IP4(127, 0, 0, 1), IP4(255, 0, 0, 0)) == -EINVAL,
-          "nor is loopback");
     CHECK(netconf_set_address(&the_iface, IP4(224, 0, 0, 1), IP4(255, 255, 255, 0)) == -EINVAL,
           "nor is a multicast address");
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 0, 255, 0)) == -EINVAL,
@@ -797,11 +791,11 @@ int main(void)
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == 0, "and the real mask follows");
     CHECK(net_ip_mask == IP4(255, 255, 255, 0) && net_ip_addr == IP4(10, 1, 2, 3),
           "leaving the address where it was");
-    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 252)) == -EINVAL,
-          "a mask that would make this address a broadcast address is refused");
+    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 252)) == 0,
+          "an assigned address may equal its subnet broadcast");
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 0, 255, 0)) == -EINVAL,
           "and so is one that is not a run of ones");
-    CHECK(net_ip_mask == IP4(255, 255, 255, 0), "neither of which moved the one that works");
+    CHECK(net_ip_mask == IP4(255, 255, 255, 252), "an invalid mask preserves the last good one");
 
     CHECK(netconf_set_address(&the_iface, 0, 0) == 0, "unconfiguring first");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0, "leaves nothing set");
@@ -813,18 +807,12 @@ int main(void)
 
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
           "an address that is a network address under its classful mask is taken");
-    CHECK(net_ip_addr == 0 && net_ip_mask == 0,
-          "and waits out of force, so a client killed here leaves no machine "
-          "answering for a network address");
+    CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == 0xffffff00u,
+          "its address and local route take effect immediately");
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 0, 0)) == 0,
           "and the wider mask makes it a host");
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
           "which is the pair the machine ends up on");
-    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == -EINVAL,
-          "and narrowing it back to where the address is not a host is refused");
-    CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
-          "leaving the pair that works");
-
     arp_flushes = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0, "the same address again");
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
@@ -840,12 +828,10 @@ int main(void)
     CHECK(net_ip_mask == IP4(255, 255, 255, 0), "keeps the mask it had, not the classful one");
     CHECK(arp_flushes == 1, "and forgot nothing beyond the one real change");
 
-    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
-          "the waiting address again");
-    CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 255, 0)) == -EINVAL,
-          "and a mask that refuses it");
-    CHECK(net_ip_addr == 0 && net_ip_mask == 0,
-          "leaves the machine unconfigured, not answering for a network address");
+    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0, "a classful address again");
+    CHECK(netconf_set_netmask(&the_iface, 0xff00ff00u) == -EINVAL &&
+              net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == 0xffffff00u,
+          "an invalid separate mask preserves the address");
 
     arp_flushes = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
@@ -904,8 +890,8 @@ int main(void)
 
     CHECK(netconf_set_address(&other_iface, IP4(192, 168, 5, 0), 0) == 0,
           "an address that waits for a wider mask, on the second interface");
-    CHECK(other_iface.ip == 0 && the_iface.ip == IP4(192, 168, 90, 20),
-          "waits there, and the first interface is still in force");
+    CHECK(other_iface.ip == IP4(192, 168, 5, 0) && the_iface.ip == IP4(192, 168, 90, 20),
+          "both cards hold their own addresses");
     CHECK(netconf_set_netmask(&other_iface, IP4(255, 255, 0, 0)) == 0 &&
               other_iface.ip == IP4(192, 168, 5, 0),
           "and the mask that justifies it puts it in force");

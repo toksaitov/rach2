@@ -262,14 +262,6 @@ struct netdev {
     int naddr2;
     struct addr4_routes addr4[NETDEV_ADDRS + 1];
 
-    /* What an address change made of two ioctls, the address and then the
-     * mask, leaves between them (netconf.c): an address given that is a host
-     * only under a mask wider than its class's, waiting for the mask, or 0;
-     * and whether the mask in force is the one the address's class implies
-     * and not one given. */
-    uint32_t pending_ip;
-    int mask_provisional;
-
     /* The interface's counts, in 64 bits as Linux's `rtnl_link_stats64`,
      * so that none wraps in practice: ethernet.c keeps a card's, and the IP
      * layer's loopback backlog `lo`'s. Each is changed with interrupts off, as
