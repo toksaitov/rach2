@@ -660,15 +660,30 @@ static char proc_state_char(const process_t *p)
     return 'R';
 }
 
+/** The PID namespace of the proc mount whose namespace's inode is `ino`,
+ * found among `p`'s and those above it, which hold that of every mount that
+ * shows `p`; the reader's for 0 or for one not found. */
+static const struct pidns *procfs_mount_pidns(const process_t *p, uint32_t ino)
+{
+    const struct pidns *ns;
+
+    for (ns = ino ? proc_pidns(p) : NULL; ns; ns = ns->parent) {
+        if (ns->c.inum == ino) {
+            return ns;
+        }
+    }
+    return proc_pidns(current_proc);
+}
+
 /** Append the device number of `p`'s controlling terminal and its
- * foreground process group, as the caller's PID namespace sees it, or 0 and
- * -1 for a process with no terminal, as /proc/<pid>/stat's fields 7 and 8. */
-static void ap_tty(struct procfs_text *t, const process_t *p)
+ * foreground process group, as the PID namespace `ns` sees it, or 0 and -1
+ * for a process with no terminal, as /proc/<pid>/stat's fields 7 and 8. */
+static void ap_tty(struct procfs_text *t, const process_t *p, const struct pidns *ns)
 {
     uint32_t dev;
     int fg;
 
-    if (!tty_controlling(p, &dev, &fg)) {
+    if (!tty_controlling(p, ns, &dev, &fg)) {
         ap_str(t, " 0 -1");
         return;
     }
@@ -810,7 +825,9 @@ static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
 
 /**
  * Format /proc/<pid>/stat into `t`: its length, or -ENOENT for no such
- * process.
+ * process. The ids are numbered in the PID namespace of the proc mount, whose
+ * inode is `ino` (`procfs_mount_pidns`), as Linux numbers them in the
+ * mount's.
  *
  * The fields are separated by spaces, as ps and top parse them. comm, field
  * 2, is in parentheses, with each parenthesis in it made '_', so that a
@@ -829,8 +846,9 @@ static void ap_stat_tail(struct procfs_text *t, const process_t *p, int whole)
  * itrealvalue is 0, as on Linux. The 52 fields end with
  * `ap_stat_tail`'s, field 39 the processor the thread last ran on.
  */
-static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
+static int procfs_gen_stat(struct procfs_text *t, int pid, int whole, uint32_t ino)
 {
+    const struct pidns *ns;
     process_t *p;
     uint64_t user;
     uint64_t sys;
@@ -841,9 +859,9 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     if (!p || p->state == PROC_UNUSED) {
         return -ENOENT;
     }
-
-    ap_int(t, (int)pid_seen((uint32_t)pid)); /* 1 pid */
-    ap_str(t, " (");                         /* 2 comm */
+    ns = procfs_mount_pidns(p, ino);
+    ap_int(t, (int)pid_seen_in(ns, (uint32_t)pid)); /* 1 pid */
+    ap_str(t, " (");                                /* 2 comm */
     if (p->comm[0]) {
         for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
             char c = p->comm[i];
@@ -855,12 +873,12 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_str(t, ") ");
     ap_ch(t, proc_state_char(p)); /* 3 state */
     ap_ch(t, ' ');
-    ap_int(t, (int)pid_seen(p->parent_pid)); /* 4 ppid */
+    ap_int(t, (int)pid_seen_in(ns, p->parent_pid)); /* 4 ppid */
     ap_ch(t, ' ');
-    ap_int(t, (int)pid_seen(p->pgid)); /* 5 pgrp */
+    ap_int(t, (int)pid_seen_in(ns, p->pgid)); /* 5 pgrp */
     ap_ch(t, ' ');
-    ap_int(t, (int)pid_seen(p->sid)); /* 6 session */
-    ap_tty(t, p);                     /* 7 tty_nr, 8 tpgid */
+    ap_int(t, (int)pid_seen_in(ns, p->sid)); /* 6 session */
+    ap_tty(t, p, ns);                        /* 7 tty_nr, 8 tpgid */
     if (whole) {
         proc_cpu_time(p, &user, &sys);
         proc_faults(p, &minor, &major);
@@ -1968,27 +1986,30 @@ static int procfs_gen_auxv(struct procfs_text *t, int pid)
 
 /**
  * /proc/<pid>/task/<tid>/children: the PID of each child of the process,
- * as the reader's PID namespace sees it, each followed by one space, in the
+ * as the PID namespace of the proc mount, whose inode is `ino`, sees it
+ * (`procfs_mount_pidns`), each followed by one space, in the
  * order of the process list. A child records the process that made it and
  * not the thread, so the file of the leader, whose id `tid` is the
  * process's, lists every child, and the file of any other thread is empty;
  * Linux lists each thread's own.
  */
-static int procfs_gen_children(struct procfs_text *t, int tid)
+static int procfs_gen_children(struct procfs_text *t, int tid, uint32_t ino)
 {
     process_t *self = procfs_proc(tid);
+    const struct pidns *ns;
     process_t *c;
 
     if (!self) {
         return -ENOENT;
     }
+    ns = procfs_mount_pidns(self, ino);
     if (self->pid != self->tgid) {
         return t->len;
     }
     for (c = proc_list; c; c = c->next) {
         if (c->state != PROC_UNUSED && c->pid == c->tgid && c->parent_pid == self->tgid &&
-            pid_seen(c->pid) != 0) {
-            ap_u32(t, pid_seen(c->pid));
+            pid_seen_in(ns, c->pid) != 0) {
+            ap_u32(t, pid_seen_in(ns, c->pid));
             ap_ch(t, ' ');
         }
     }
@@ -2274,9 +2295,10 @@ struct sched_snap {
 /**
  * /proc/<pid>/sched and /proc/<pid>/task/<tid>/sched, as Linux 6.12's
  * `proc_sched_show_task` prints them (kernel/sched/debug.c:1168) for
- * Debian's configuration: the thread's name, id in the reader's PID
- * namespace and its process's thread count, then its entity's start of
- * charging, virtual runtime, run time and migrations; the schedstats while
+ * Debian's configuration: the thread's name, id in the PID namespace of
+ * the proc mount, whose inode is `ino`, and its process's thread count,
+ * then its entity's start of charging, virtual runtime, run time and
+ * migrations; the schedstats while
  * they are kept; its switches; its weight and load averages; its policy,
  * priority and, for an ordinary thread, its slice; and the nanoseconds
  * between two readings of the clock. Rach2 balances no NUMA memory, so the
@@ -2284,7 +2306,7 @@ struct sched_snap {
  * averages and ratios are Linux's: `avg_atom` is the run time per switch
  * and `avg_per_cpu` per migration, -1 for none, in nanoseconds.
  */
-static int procfs_gen_sched(struct procfs_text *t, int pid)
+static int procfs_gen_sched(struct procfs_text *t, int pid, uint32_t ino)
 {
     process_t *p = procfs_proc(pid);
     struct sched_snap *s;
@@ -2313,7 +2335,7 @@ static int procfs_gen_sched(struct procfs_text *t, int pid)
         ap_ch(t, p->comm[i]);
     }
     ap_str(t, " (");
-    ap_int(t, (int)pid_seen((uint32_t)pid));
+    ap_int(t, (int)pid_seen_in(procfs_mount_pidns(p, ino), (uint32_t)pid));
     ap_str(t, ", #threads: ");
     ap_u32(t, p->tg->live);
     ap_str(t, ")\n");
@@ -3210,47 +3232,28 @@ static void ap_cred_ids(struct procfs_text *t, const process_t *p)
     ap_ids(t, "Gid", ids);
 }
 
-/** The number of the id `kid` in the PID namespace of the proc mount whose
- * namespace's inode is `ino`, as `pid_seen` gives it when that is the
- * reader's own or `ino` is 0, the reader's. */
-static uint32_t status_pid(uint32_t kid, uint32_t ino)
+/**
+ * `head`, then the number of the id `kid` in each PID namespace from `ns`,
+ * the proc mount's, down to that of `p`, tab-separated, as Linux's status
+ * shows NStgid, NSpid, NSpgid and NSsid; the first alone when `p` is not
+ * in `ns`.
+ */
+static void ap_ns_ids(struct procfs_text *t, const char *head, const process_t *p,
+                      const struct pidns *ns, uint32_t kid)
 {
-    if (!ino || ino == proc_pidns(current_proc)->c.inum) {
-        return pid_seen(kid);
-    }
-    return procfs_pid_number(kid, ino);
-}
-
-/** The level of the PID namespace whose inode is `ino`, at or above `p`'s
- * own, the reader's for 0, or `p`'s own when it is neither. */
-static uint32_t status_level(const process_t *p, uint32_t ino)
-{
-    const struct pidns *ns;
-
-    if (!ino) {
-        return proc_pidns(current_proc)->level;
-    }
-    for (ns = proc_pidns(p); ns; ns = ns->parent) {
-        if (ns->c.inum == ino) {
-            return ns->level;
-        }
-    }
-    return proc_pidns(p)->level;
-}
-
-/** `head`, then the numbers of `p` in each PID namespace from the proc
- * mount's, whose inode is `ino`, down to its own, as the NSpid line has
- * them. */
-static void ap_ns_pids(struct procfs_text *t, const char *head, const process_t *p, uint32_t ino)
-{
-    uint32_t from = status_level(p, ino), to = proc_pidns(p)->level, l;
-    uint32_t first = status_pid(p->pid, ino);
+    const struct pidns *at;
+    uint32_t l, to = proc_pidns(p)->level;
 
     ap_str(t, head);
-    ap_u32(t, first);
-    for (l = from + 1u; l <= to && first != 0; l++) {
+    ap_u32(t, pid_seen_in(ns, kid));
+    if (!pid_seen_in(ns, p->pid)) {
+        return;
+    }
+    for (l = ns->level + 1u; l <= to; l++) {
+        for (at = proc_pidns(p); at->level != l; at = at->parent) {
+        }
         ap_ch(t, '\t');
-        ap_u32(t, p->nspid[l]);
+        ap_u32(t, pid_seen_in(at, kid));
     }
 }
 
@@ -3432,6 +3435,7 @@ static void procfs_status_rest(struct procfs_text *t, const process_t *p)
 static int procfs_gen_status(struct procfs_text *t, int pid, uint32_t ino)
 {
     process_t *p = procfs_proc(pid);
+    const struct pidns *ns;
     struct procfs_text rest;
     struct mm *mm;
     uint32_t i;
@@ -3439,6 +3443,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid, uint32_t ino)
     if (!p) {
         return -ENOENT;
     }
+    ns = procfs_mount_pidns(p, ino);
     mm = p->mm;
     ap_str(t, "Name:\t");
     for (i = 0; i < sizeof(p->comm) && p->comm[i]; i++) {
@@ -3457,13 +3462,13 @@ static int procfs_gen_status(struct procfs_text *t, int pid, uint32_t ino)
               : p->state == PROC_BLOCKED ? (p->uninterruptible ? "D (disk sleep)" : "S (sleeping)")
                                          : "R (running)");
     ap_str(t, "\nTgid:\t");
-    ap_u32(t, status_pid(p->tgid, ino));
+    ap_u32(t, pid_seen_in(ns, p->tgid));
     ap_str(t, "\nNgid:\t0\nPid:\t");
-    ap_u32(t, status_pid(p->pid, ino));
+    ap_u32(t, pid_seen_in(ns, p->pid));
     ap_str(t, "\nPPid:\t");
-    ap_u32(t, status_pid(p->parent_pid, ino));
+    ap_u32(t, pid_seen_in(ns, p->parent_pid));
     ap_str(t, "\nTracerPid:\t");
-    ap_u32(t, p->ptrace ? status_pid(p->tracer, ino) : 0u);
+    ap_u32(t, p->ptrace ? pid_seen_in(ns, p->tracer) : 0u);
     ap_ch(t, '\n');
     ap_cred_ids(t, p);
     ap_str(t, "FDSize:\t");
@@ -3473,12 +3478,10 @@ static int procfs_gen_status(struct procfs_text *t, int pid, uint32_t ino)
         ap_u32(t, gid_seen(p->groups[i]));
         ap_ch(t, ' ');
     }
-    ap_ns_pids(t, "\nNStgid:\t", p->tg->leader ? p->tg->leader : p, ino);
-    ap_ns_pids(t, "\nNSpid:\t", p, ino);
-    ap_str(t, "\nNSpgid:\t");
-    ap_u32(t, status_pid(p->pgid, ino));
-    ap_str(t, "\nNSsid:\t");
-    ap_u32(t, status_pid(p->sid, ino));
+    ap_ns_ids(t, "\nNStgid:\t", p, ns, p->tgid);
+    ap_ns_ids(t, "\nNSpid:\t", p, ns, p->pid);
+    ap_ns_ids(t, "\nNSpgid:\t", p, ns, p->pgid);
+    ap_ns_ids(t, "\nNSsid:\t", p, ns, p->sid);
     ap_ch(t, '\n');
     procfs_text_init(&rest);
     procfs_status_rest(&rest, p);
@@ -10267,7 +10270,7 @@ static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count
 
     procfs_text_init(&t);
     rc = f->origin_file == SYNTH_PROC_COMM    ? procfs_gen_comm(&t, f->origin_pid)
-         : f->origin_file == SYNTH_PROC_SCHED ? procfs_gen_sched(&t, f->origin_pid)
+         : f->origin_file == SYNTH_PROC_SCHED ? procfs_gen_sched(&t, f->origin_pid, f->vp.pidns_ino)
          : f->origin_file == SYNTH_PROC_AUTOGROUP
              ? procfs_gen_autogroup(&t, f->origin_pid)
              : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
@@ -12531,7 +12534,7 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
 {
     switch (vp->procfile) {
     case SYNTH_PROC_STAT:
-        return procfs_gen_stat(t, pid, vp->tid == 0);
+        return procfs_gen_stat(t, pid, vp->tid == 0, vp->pidns_ino);
     case SYNTH_PROC_MAPS:
         return procfs_gen_maps(t, pid);
     case SYNTH_PROC_SMAPS:
@@ -12555,7 +12558,7 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
     case SYNTH_PROC_LIMITS:
         return procfs_gen_limits(t, pid);
     case SYNTH_PROC_CHILDREN:
-        return procfs_gen_children(t, pid);
+        return procfs_gen_children(t, pid, vp->pidns_ino);
     case SYNTH_PROC_SYSCALL:
         return procfs_gen_syscall(t, pid);
     case SYNTH_PROC_WCHAN:
@@ -12563,7 +12566,7 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
     case SYNTH_PROC_SCHEDSTAT:
         return procfs_gen_schedstat(t, pid);
     case SYNTH_PROC_SCHED:
-        return procfs_gen_sched(t, pid);
+        return procfs_gen_sched(t, pid, vp->pidns_ino);
     case SYNTH_PROC_AUTOGROUP:
         return procfs_gen_autogroup(t, pid);
     default:

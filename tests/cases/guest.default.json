@@ -6186,6 +6186,7 @@
         {"assertion_id": "pid-robust-list-esrch", "checks": "get_robust_list of a pid the namespace has not given fails with ESRCH", "source": "program"},
         {"assertion_id": "pid-kill-esrch", "checks": "kill of a pid the namespace has not given fails with ESRCH", "source": "program"},
         {"assertion_id": "pid-proc-link", "checks": "the link of its descriptor of a /proc file names it 1", "source": "program"},
+        {"assertion_id": "pid-outer-levels", "checks": "a session leader in the new PID namespace reads, through the inherited proc mount of the namespace above, NSpid, NSpgid and NSsid lines that each give its number there and then its own, and a stat file whose pid, group and session fields are its number there", "source": "program"},
         {"assertion_id": "pid-proc-inode", "checks": "the entry 1 in a listing of /proc has the inode of /proc/1", "source": "program"},
         {"assertion_id": "pid-own-fd-dir", "checks": "a name relative to its descriptor of /proc/self/fd reaches its own descriptors", "source": "program"},
         {"assertion_id": "pid-reaped-leader-group", "checks": "in a new PID namespace a group whose leader its init has reaped keeps the leader's number there: getpgid of the member reads it and kill of its negation with signal 0 succeeds, as Linux's struct pid lasts while a member has it", "source": "program"},

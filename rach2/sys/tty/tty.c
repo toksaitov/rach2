@@ -119,7 +119,12 @@ static void tty_deliver_signal(struct tty *t, int signo)
 
 uint32_t tty_fg_seen(const struct tty *t)
 {
-    return t->fg_pgid > 0 ? pid_nums_seen(&t->fg_nums, (uint32_t)t->fg_pgid) : 0;
+    return tty_fg_seen_in(t, proc_pidns(current_proc));
+}
+
+uint32_t tty_fg_seen_in(const struct tty *t, const struct pidns *ns)
+{
+    return t->fg_pgid > 0 ? pid_nums_seen_in(&t->fg_nums, (uint32_t)t->fg_pgid, ns) : 0;
 }
 
 int tty_is_ctty(const struct tty *t, const process_t *p)

@@ -108,6 +108,7 @@ enum row {
     R_PID_ROBUST_ESRCH,
     R_PID_KILL_ESRCH,
     R_PID_LINK,
+    R_PID_LEVELS,
     R_PID_INODE,
     R_PID_FD,
     R_PID_GROUP,
@@ -167,6 +168,7 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "pid-robust-list-esrch",
                                                "pid-kill-esrch",
                                                "pid-proc-link",
+                                               "pid-outer-levels",
                                                "pid-proc-inode",
                                                "pid-own-fd-dir",
                                                "pid-reaped-leader-group",
@@ -794,6 +796,78 @@ static int proc_fd_paths(int dir, const char *outer, ssize_t n)
     return chdir("/") == 0 && ok;
 }
 
+/** Whether the line `head` of `buf` holds `want` and nothing more. */
+static int line_is(const char *buf, const char *head, const char *want)
+{
+    const char *line = strstr(buf, head), *nl;
+    size_t h = strlen(head), w = strlen(want);
+
+    nl = line ? strchr(line, '\n') : NULL;
+    return nl && (size_t)(nl - line) == h + w && strncmp(line + h, want, w) == 0;
+}
+
+/** Read the file `path` under the directory `dir` into `buf`, as `get`. */
+static int get_at(int dir, const char *path, char *buf, int cap)
+{
+    int fd = openat(dir, path, O_RDONLY);
+    ssize_t n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, buf, (size_t)cap - 1);
+    close(fd);
+    buf[n > 0 ? n : 0] = '\0';
+    return (int)n;
+}
+
+/**
+ * Whether the caller, a process of a new PID namespace that setsid makes the
+ * leader of its group and session, reads through `dir`, the inherited proc
+ * mount of the namespace above, a status file whose NSpid, NSpgid and NSsid
+ * lines are each its number there and then its own, and a stat file whose
+ * pid, group and session are its number there, as Linux renders both in
+ * the mount's namespace.
+ */
+static int outer_levels_hold(int dir)
+{
+    char buf[2048], self[16], want[40];
+    ssize_t n = readlinkat(dir, "self", self, sizeof(self) - 1);
+    const char *end;
+    int pgrp = -1, sid = -1, ppid;
+    char state;
+
+    if (n <= 0 || setsid() < 0) {
+        return 0;
+    }
+    self[n] = '\0';
+    snprintf(want, sizeof(want), "%s\t%d", self, (int)getpid());
+    if (get_at(dir, "self/status", buf, sizeof(buf)) <= 0 || !line_is(buf, "NSpid:\t", want) ||
+        !line_is(buf, "NSpgid:\t", want) || !line_is(buf, "NSsid:\t", want)) {
+        return 0;
+    }
+    snprintf(want, sizeof(want), "%s (", self);
+    if (get_at(dir, "self/stat", buf, sizeof(buf)) <= 0 || strncmp(buf, want, strlen(want)) != 0 ||
+        !(end = strrchr(buf, ')'))) {
+        return 0;
+    }
+    return sscanf(end + 2, "%c %d %d %d", &state, &ppid, &pgrp, &sid) == 4 && pgrp == atoi(self) &&
+           sid == atoi(self);
+}
+
+/** Run `outer_levels_hold` in a child; whether it held. */
+static int pid_levels(int dir)
+{
+    pid_t child = fork();
+    int status;
+
+    if (child == 0) {
+        _exit(outer_levels_hold(dir) ? 0 : 1);
+    }
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
 /** Check both proc mounts from the first child of a new PID namespace. */
 static int proc_mount_numbers(void)
 {
@@ -809,13 +883,21 @@ static int proc_mount_numbers(void)
              readlinkat(dir, "self", held, sizeof(held)) == n && memcmp(outer, held, n) == 0 &&
              fstatat(fds, ".", &after, 0) == 0 && before.st_ino == after.st_ino;
 
+    int levels;
+
     ok = ok && proc_fd_paths(dir, outer, n) && proc_scoped_self(dir, outer, n) &&
          old_fd_dir_denied(fds) && proc_other_place();
+    levels = ok && pid_levels(dir);
     if (dir >= 0)
         close(dir);
     if (fds >= 0)
         close(fds);
-    return ok ? 0 : fail(R_PID_LINK, "inherited and new proc mounts keep their PID namespaces");
+    if (!ok) {
+        return fail(R_PID_LINK, "inherited and new proc mounts keep their PID namespaces");
+    }
+    return levels ? 0
+                  : fail(R_PID_LEVELS, "the outer proc mount renders status and stat in its "
+                                       "namespace, NSpgid and NSsid at every level");
 }
 
 /**

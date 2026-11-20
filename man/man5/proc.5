@@ -2212,7 +2212,12 @@ directory work their owner out at each
 .Xr fstat 2 .
 The directories of
 .Pa /proc
-use the PID namespace of the process that mounted proc.
+use the PID namespace of the process that mounted proc, and so do the
+IDs that a process's
+.Pa stat
+and
+.Pa status
+show, as on Linux, whoever reads them.
 An inherited proc mount keeps its original numbering.
 Mounting proc in a new PID namespace gives that namespace's numbering.
 A descriptor of a process's fd or fdinfo directory keeps its target
@@ -2575,7 +2580,7 @@ A descriptor open on it, or on its
 keeps both IDs: its link names that path, and a name relative to it is
 found under it.
 .It Pa /proc/PID/task/TID/children
-The process ID of each child of the process, as the reader's PID
+The process ID of each child of the process, as the proc mount's PID
 namespace numbers it, each followed by one space, with no newline at the
 end, in the order of the kernel's process table.
 A child that has ended is listed until it is reaped, and one adopted
@@ -2967,7 +2972,8 @@ NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters
 .Pq see Xr seccomp 2 ,
 NStgid, NSpid, NSpgid and NSsid, the IDs in each PID namespace from
-the reader's down to the process's own, separated by tabs,
+the proc mount's down to the process's own, separated by tabs, 0 where a
+group or session has no number,
 Cpus_allowed and Cpus_allowed_list, the processors the thread may run
 on as
 .Xr sched_getaffinity 2
@@ -3152,7 +3158,7 @@ a thread's own.
 adds the second number's growth to a guest's steal time.
 .It Pa /proc/PID/sched
 The thread's scheduler state, as Linux 6.12 prints it: a header line of
-its name, its id in the reader's PID namespace and its process's thread
+its name, its id in the proc mount's PID namespace and its process's thread
 count, a line of dashes, then one line for each value, its name in 45
 places and a colon.
 A count fills the 21 places after the colon; a time is milliseconds with

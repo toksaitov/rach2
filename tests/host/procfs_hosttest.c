@@ -113,6 +113,7 @@ static int sysfs_attr_present(int node, int attr);
 #include "drm/drm.h"
 #include "evdev.h"
 #include "arch/i686/mmu.h"
+#define NS_FIRST_PID_RECORDS
 #include "ns_first.h"
 
 /** No dma-buf descriptor is installed in this model. */
@@ -808,9 +809,10 @@ int pty_slave_index(struct fd_entry *e)
 }
 
 /** No process of these rows has a controlling terminal. */
-int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid)
+int tty_controlling(const process_t *proc, const struct pidns *ns, uint32_t *dev, int *fg_pgid)
 {
     (void)proc;
+    (void)ns;
     (void)dev;
     (void)fg_pgid;
     return 0;
@@ -1682,15 +1684,15 @@ static void thread_times(void)
     thread.utime = 30u * (TICK_HZ / USER_HZ);
     thread.stime = 40u * (TICK_HZ / USER_HZ);
     procfs_text_init(&text);
-    check(procfs_gen_stat(&text, 7, 1) > 0 && stat_times(text.buf, 35, 46),
+    check(procfs_gen_stat(&text, 7, 1, 0) > 0 && stat_times(text.buf, 35, 46),
           "a process's stat has every thread's time");
     kfree(text.buf);
     procfs_text_init(&text);
-    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_times(text.buf, 30, 40),
+    check(procfs_gen_stat(&text, 9, 0, 0) > 0 && stat_times(text.buf, 30, 40),
           "a thread's stat has its own time");
     kfree(text.buf);
     procfs_text_init(&text);
-    check(procfs_gen_stat(&text, 7, 0) > 0 && stat_times(text.buf, 5, 6),
+    check(procfs_gen_stat(&text, 7, 0, 0) > 0 && stat_times(text.buf, 5, 6),
           "the leader's stat under task has the leader's own time");
     kfree(text.buf);
     process.min_flt = 7;
@@ -1700,16 +1702,16 @@ static void thread_times(void)
     group.cmin_flt = 500;
     group.cmaj_flt = 4;
     procfs_text_init(&text);
-    check(procfs_gen_stat(&text, 7, 1) > 0 && stat_faults(text.buf, 77, 500, 3, 4),
+    check(procfs_gen_stat(&text, 7, 1, 0) > 0 && stat_faults(text.buf, 77, 500, 3, 4),
           "a process's stat has every thread's faults and its children's");
     kfree(text.buf);
     procfs_text_init(&text);
-    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_faults(text.buf, 70, 500, 2, 4),
+    check(procfs_gen_stat(&text, 9, 0, 0) > 0 && stat_faults(text.buf, 70, 500, 2, 4),
           "a thread's stat has its own faults and the process's children's");
     kfree(text.buf);
     thread.cpu = 3;
     procfs_text_init(&text);
-    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_field(text.buf, 39, &field) && field == 3 &&
+    check(procfs_gen_stat(&text, 9, 0, 0) > 0 && stat_field(text.buf, 39, &field) && field == 3 &&
               stat_field(text.buf, 38, &field) && field == -1 && stat_field(text.buf, 52, &field) &&
               !stat_field(text.buf, 53, &field),
           "a thread's stat has 52 fields, its processor the 39th and -1 its exit signal");
@@ -1771,7 +1773,7 @@ static int sched_reads(int pid)
     int len, ok;
 
     procfs_text_init(&text);
-    len = procfs_gen_sched(&text, pid);
+    len = procfs_gen_sched(&text, pid, 0);
     ok = len == sched_want_len && text.buf &&
          __builtin_memcmp(text.buf, sched_want, (unsigned long)len) == 0;
     if (!ok) {
@@ -1892,7 +1894,7 @@ static void sched_rows(void)
           "a write of sched clears the schedstats alone");
     check(procfs_sched_clear(5) == -ESRCH, "and of a process that is not there is ESRCH");
     procfs_text_init(&text);
-    check(procfs_gen_sched(&text, 5) == -ENOENT, "which has no sched to read");
+    check(procfs_gen_sched(&text, 5, 0) == -ENOENT, "which has no sched to read");
     kfree(text.buf);
     check(sched_lock_depth == 0, "and each reading gives the run queues' lock back");
     fair_schedstats = 0;
@@ -3277,7 +3279,7 @@ static void stat_reaped_during_wait(void)
     host_read_begin = reap_at_walk;
     host_read_end = put_at_walk;
     procfs_text_init(&text);
-    len = procfs_gen_stat(&text, 13, 1);
+    len = procfs_gen_stat(&text, 13, 1, 0);
     host_read_begin = NULL;
     host_read_end = NULL;
     check(len > 0 && reaps == before + 1 && !reading,
@@ -3330,15 +3332,18 @@ static void status_reaped_during_wait(void)
  * The status of process 7, which is 1 in a PID namespace below the first,
  * read through a proc mount of that namespace gives its ids there, as
  * Linux's `proc_pid_status` takes the mount's namespace, and through one of
- * the reader's namespace, the first, gives its kernel ids.
+ * the first gives its kernel ids, with its group and session, which it
+ * leads, at each level; its stat numbers it in the mount's namespace too.
  */
 static void status_namespace_rows(void)
 {
     struct pidns view = {0};
     struct pidns *old = process.pidns;
+    uint32_t saved_pgid = process.pgid, saved_sid = process.sid;
     struct procfs_text text;
     int len;
 
+    init_pidns.c.inum = 70;
     view.c.inum = 71;
     view.level = 1;
     view.parent = &init_pidns;
@@ -3351,11 +3356,28 @@ static void status_namespace_rows(void)
               __builtin_strstr(text.buf, "\nNSpid:\t1\n") != NULL,
           "status through a proc mount of the process's namespace gives its ids there");
     kfree(text.buf);
+    process.pgid = process.sid = 7;
     procfs_text_init(&text);
-    len = procfs_gen_status(&text, 7, 0);
-    check(len > 0 && __builtin_strstr(text.buf, "\nPid:\t7\n") != NULL,
-          "and through one of the reader's namespace its ids in the reader's");
+    len = procfs_gen_status(&text, 7, init_pidns.c.inum);
+    check(len > 0 && __builtin_strstr(text.buf, "\nPid:\t7\n") != NULL &&
+              __builtin_strstr(text.buf, "\nNSpid:\t7\t1\n") != NULL &&
+              __builtin_strstr(text.buf, "\nNSpgid:\t7\t1\n") != NULL &&
+              __builtin_strstr(text.buf, "\nNSsid:\t7\t1\n") != NULL,
+          "and through one of the first its kernel ids, with NSpgid and NSsid at each level");
     kfree(text.buf);
+    procfs_text_init(&text);
+    len = procfs_gen_stat(&text, 7, 1, view.c.inum);
+    check(len > 0 && __builtin_strncmp(text.buf, "1 (", 3) == 0,
+          "stat through a proc mount of the process's namespace numbers it there");
+    kfree(text.buf);
+    procfs_text_init(&text);
+    len = procfs_gen_stat(&text, 7, 1, init_pidns.c.inum);
+    check(len > 0 && __builtin_strncmp(text.buf, "7 (", 3) == 0,
+          "and through one of the first by its kernel id, whatever the reader's");
+    kfree(text.buf);
+    process.pgid = saved_pgid;
+    process.sid = saved_sid;
+    init_pidns.c.inum = 0;
     process.pidns = old;
     process.nspid[1] = 0;
 }
@@ -5861,7 +5883,7 @@ int main(int argc, char **argv)
     procfs_text_init(&text);
     thp_rows();
     refuse = 1;
-    len = procfs_gen_stat(&text, 7, 1);
+    len = procfs_gen_stat(&text, 7, 1, 0);
     check(len == 0 && text.nomem && !text.buf && allocations > 0,
           "stat allocation failure retains empty text for ENOMEM");
     refuse = 0;
@@ -5869,13 +5891,13 @@ int main(int argc, char **argv)
     text.cap = 2;
     text.nomem = 0;
     refuse = 1;
-    len = procfs_gen_stat(&text, 7, 1);
+    len = procfs_gen_stat(&text, 7, 1, 0);
     check(len == 1 && text.nomem && text.buf[0] == '7',
           "stat growth failure retains partial text for disposal");
     kfree(text.buf);
     procfs_text_init(&text);
     refuse = 0;
-    len = procfs_gen_stat(&text, 7, 1);
+    len = procfs_gen_stat(&text, 7, 1, 0);
     check(len > 0 && !text.nomem && text.buf[len] == '\0' && text.buf[len - 1] == '\n',
           "stat success terminates the complete snapshot");
     check(__builtin_memcmp(text.buf, "7 (test) R ", 11) == 0, "stat fields retain their order");

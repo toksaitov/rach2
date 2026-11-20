@@ -1512,13 +1512,13 @@ const char *pty_session_node(int sid)
     return NULL;
 }
 
-int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid)
+int tty_controlling(const process_t *proc, const struct pidns *ns, uint32_t *dev, int *fg_pgid)
 {
     struct pty *p;
 
     if (tty_is_ctty(&console_tty, proc)) {
         *dev = (5u << 8) | 1u;
-        *fg_pgid = (int)tty_fg_seen(&console_tty);
+        *fg_pgid = (int)tty_fg_seen_in(&console_tty, ns);
         return 1;
     }
     for (p = ptys; p; p = p->next) {
@@ -1526,7 +1526,7 @@ int tty_controlling(const process_t *proc, uint32_t *dev, int *fg_pgid)
             uint32_t n = (uint32_t)p->index;
 
             *dev = p->kdev ? p->kdev : (136u << 8) | (n & 0xFFu) | ((n & ~0xFFu) << 12);
-            *fg_pgid = (int)tty_fg_seen(&p->slave);
+            *fg_pgid = (int)tty_fg_seen_in(&p->slave, ns);
             return 1;
         }
     }

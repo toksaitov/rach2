@@ -188,6 +188,11 @@ void tty_set_foreground(struct tty *t, int pgid, uint64_t serial);
  * namespace. */
 uint32_t tty_fg_seen(const struct tty *t);
 
+struct pidns;
+
+/** `tty_fg_seen` for a viewer in the PID namespace `ns`. */
+uint32_t tty_fg_seen_in(const struct tty *t, const struct pidns *ns);
+
 /**
  * Whether `t` is the controlling terminal of the process of `p`: the
  * terminal of its session, which it has not left by TIOCNOTTY

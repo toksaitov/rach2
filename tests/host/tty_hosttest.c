@@ -271,10 +271,18 @@ void pid_nums_set(struct pid_nums *n, uint32_t kid)
 }
 
 /** No row has a PID namespace: the kernel's number, `kid`. */
-uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid)
+uint32_t pid_nums_seen_in(const struct pid_nums *n, uint32_t kid, const struct pidns *v)
 {
     (void)n;
+    (void)v;
     return kid;
+}
+
+/** No row has a PID namespace. */
+struct pidns *proc_pidns(const process_t *p)
+{
+    (void)p;
+    return NULL;
 }
 
 /** The test's pair, zeroed, for `pty_alloc`; a request of another size is

@@ -24,9 +24,15 @@ struct userns *proc_userns(const process_t *p)
     return &init_userns;
 }
 
-/** The first PID namespace, whatever `p`. */
+/** The first PID namespace, whatever `p`; with NS_FIRST_PID_RECORDS, the
+ * one a row sets on `p`, if any. */
 struct pidns *proc_pidns(const process_t *p)
 {
+#ifdef NS_FIRST_PID_RECORDS
+    if (p && p->pidns) {
+        return p->pidns;
+    }
+#endif
     (void)p;
     return &init_pidns;
 }
@@ -123,6 +129,26 @@ uint32_t pid_named(uint32_t pid)
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid)
 {
     (void)viewer;
+    return kid;
+}
+
+/** The kernel id `kid` itself, as the first PID namespace sees it; with
+ * NS_FIRST_PID_RECORDS defined, for a test that has `get_process`, the
+ * number of a record whose namespaces a row sets in another, `v`, or 0
+ * when `v` is not among them. */
+uint32_t pid_seen_in(const struct pidns *v, uint32_t kid)
+{
+#ifdef NS_FIRST_PID_RECORDS
+    const process_t *p = kid ? get_process(kid) : NULL;
+    const struct pidns *ns;
+
+    if (v && v != &init_pidns && p) {
+        for (ns = p->pidns; ns && ns != v; ns = ns->parent) {
+        }
+        return ns ? p->nspid[v->level] : 0;
+    }
+#endif
+    (void)v;
     return kid;
 }
 

@@ -850,7 +850,11 @@ static int pid_held_keep(process_t *p)
 
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid)
 {
-    const struct pidns *v = proc_pidns(viewer);
+    return pid_seen_in(proc_pidns(viewer), kid);
+}
+
+uint32_t pid_seen_in(const struct pidns *v, uint32_t kid)
+{
     const struct pid_held *h;
     const process_t *p;
 
@@ -891,8 +895,11 @@ void pid_nums_set(struct pid_nums *n, uint32_t kid)
 
 uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid)
 {
-    const struct pidns *v = proc_pidns(current_proc);
+    return pid_nums_seen_in(n, kid, proc_pidns(current_proc));
+}
 
+uint32_t pid_nums_seen_in(const struct pid_nums *n, uint32_t kid, const struct pidns *v)
+{
     if (v == &init_pidns || kid == 0) {
         return kid;
     }

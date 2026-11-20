@@ -305,6 +305,11 @@ process_t *proc_named(uint32_t pid);
 /** pid_seen for the viewer `viewer` in place of the current process. */
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
 
+/** pid_seen for a viewer in the PID namespace `v`, as Linux's pid_nr_ns
+ * gives the number of an id in a namespace that need not be the caller's,
+ * such as a proc mount's. */
+uint32_t pid_seen_in(const struct pidns *v, uint32_t kid);
+
 /*
  * The numbers of an id in its PID namespace and in those above it, kept
  * apart from any record, as Linux's struct pid keeps them for whoever holds
@@ -327,6 +332,9 @@ void pid_nums_set(struct pid_nums *n, uint32_t kid);
  * it, as `pid_seen` gives it, 0 when it is not in the current process's
  * namespace or below it. */
 uint32_t pid_nums_seen(const struct pid_nums *n, uint32_t kid);
+
+/** `pid_nums_seen` for a viewer in the PID namespace `v`. */
+uint32_t pid_nums_seen_in(const struct pid_nums *n, uint32_t kid, const struct pidns *v);
 
 /** Take a reference to the PID namespace `ns`, which the caller drops with
  * `ns_put`, and return `ns`. */
