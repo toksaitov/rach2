@@ -674,24 +674,24 @@ void netdev_unregister(struct netdev *nd)
 static struct arp_row withdraw_arp[ARP_CACHE_SIZE];
 static struct nd6_row withdraw_nd6[ND6_CACHE_SIZE];
 
+/** Flush the device's IPv4 routes and remove all its addresses before its
+ * driver leaves. A card without an address may still have explicit routes. */
+static void drop_addresses(struct netdev *nd)
+{
+    nd6_if_down(nd);
+    netdev_route_flush(nd, 1);
+    while (nd->ip)
+        (void)netconf_set_address(nd, 0, 0);
+}
+
 void netdev_withdraw(struct netdev *nd)
 {
-    struct netdev_rt r;
     uint32_t flags;
     int n, count;
 
     flags = net_lock();
     (void)netconf_set_up(nd, 0);
-    nd6_if_down(nd);
-    route6_forget(nd, -1);
-    for (n = 0; netdev_route_at(n, &r);) {
-        if (r.ifindex == nd->index && r.kind == NETDEV_RT_ADDED) {
-            (void)netdev_route_del(nd, r.dst, r.mask, r.gw);
-        } else {
-            ++n;
-        }
-    }
-    (void)netconf_set_address(nd, 0, 0);
+    drop_addresses(nd);
     arp_forget_dev(nd);
     count = arp_snapshot(withdraw_arp, ARP_CACHE_SIZE);
     for (n = 0; n < count; ++n) {
@@ -779,6 +779,7 @@ int netdev_release(struct netdev *nd)
     devfn = (uint8_t)nd->pci_key;
     (void)netconf_set_up(nd, 0);
     flags = net_lock();
+    drop_addresses(nd);
     away_ops[i].name = card_ops[i]->name;
     away_ops[i].tx = away_tx;
     away_ops[i].link = away_link;
