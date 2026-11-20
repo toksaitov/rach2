@@ -1402,8 +1402,9 @@ static int machine_record_rows(struct release *r)
     "lenovo boot ramoops.mem_size=0x100000\nlenovo netconsole 6666\n"
 #define TRIAL_BOOT \
     "root=/dev/disk0p3 rach2.slot=candidate rach2.console=term ramoops.mem_size=0x100000"
-#define NETCONSOLE " netconsole=6665@192.168.0.106/,6666@192.168.0.100/d0:11:e5:c8:0d:59"
+#define NETCONSOLE " netconsole=6665@192.168.0.106/,6666@192.168.0.100/02:00:00:00:00:01"
 #define MAC_FAILED "milestone7-111111111111-mac-1029-000000"
+
 static int machine_line(struct release *r, const char *prefix, char *rest, size_t size)
 {
     char *s = fx_read(record(r)), *line, *save = NULL;

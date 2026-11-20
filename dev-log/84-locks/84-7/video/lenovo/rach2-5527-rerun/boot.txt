@@ -1,4 +1,4 @@
-rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial3984-video/root-63a0a394929533f3.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 nomodeset intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6667@192.168.0.100/d0:11:e5:c8:0d:59
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial3984-video/root-63a0a394929533f3.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 nomodeset intel_iommu=off intremap=off netconsole=6665@192.168.0.106/,6667@192.168.0.100/02:00:00:00:00:01
 bootctl: candidate: first sector 6163, 32768 sectors in 32768 clusters, 16777216 bytes
 bootctl: candidate: runs: 6163+4096 24136+28672
 bootctl: fallback: first sector 11848, 32768 sectors in 32768 clusters, 16777216 bytes
