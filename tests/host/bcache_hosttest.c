@@ -907,6 +907,53 @@ static void last_rows(void)
     bcache_invalidate(&vast);
 }
 
+/* The blocks `waiting_rows` orders after its block 100, one more than a
+ * round of `bcache_sync_waiting` gathers. */
+#define WAITING_ROW_BLOCKS (BCACHE_WAITING + 2)
+
+/**
+ * Check that `bcache_sync_waiting` writes every dirty block that waits by an
+ * order for a block, not only the first round's BCACHE_WAITING: block 100
+ * of `vast`, dirty, is ordered before a change of each of WAITING_ROW_BLOCKS
+ * blocks of entries, and once block 100 is written, the call leaves none of
+ * them dirty.
+ */
+static void waiting_rows(void)
+{
+    struct bbuf *b;
+    int i, left = 0;
+
+    bcache_invalidate(&vast);
+    bcache_set_limit(300);
+    dirty_for(&vast, 100, 0, 0);
+    check(bcache_order_after(&vast, 100) == 0, "an order after a dirty block is kept");
+    for (i = 0; i < WAITING_ROW_BLOCKS; i++) {
+        b = bcache_get_blank(&vast, 110 + (uint64_t)i);
+        if (!b || bcache_change(b) != 0) {
+            check(0, "a block of entries changes after the order");
+            bcache_release(b);
+            bcache_order_end();
+            return;
+        }
+        b->data[0] = 0xE0;
+        bcache_dirty_entry(b);
+        bcache_release(b);
+    }
+    bcache_order_end();
+    check(bcache_sync_block(&vast, 100) == 0 && !dirty_now(&vast, 100),
+          "the block they wait for is written");
+    check(bcache_sync_waiting(&vast, 100) == 0, "a sync of the blocks that wait for it succeeds");
+    for (i = 0; i < WAITING_ROW_BLOCKS; i++) {
+        left += dirty_now(&vast, 110 + (uint64_t)i);
+    }
+    if (left) {
+        printf("  %d of %d blocks left dirty\n", left, WAITING_ROW_BLOCKS);
+    }
+    check(left == 0, "and leaves none of them dirty, past one round of BCACHE_WAITING");
+    bcache_set_limit(BCACHE_BUFFERS);
+    bcache_invalidate(&vast);
+}
+
 /** Name blocks 40 and 42 as those `follow_rows` writes last. */
 static int table_block(void *arg, uint64_t blk)
 {
@@ -1662,6 +1709,7 @@ static void writeback_rows(void)
     ordered_flush_rows();
     flush_skip_rows();
     last_rows();
+    waiting_rows();
     follow_rows();
     pointer_order_rows();
     pointer_wait_rows();
