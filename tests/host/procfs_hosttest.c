@@ -3346,11 +3346,15 @@ int autogroup_nice(process_t *p, int nice)
 /**
  * A write to /proc/PID/autogroup parses its first 12 bytes and answers 12
  * for a longer one, as Linux 6.12 clamps the count before its copy, so that
- * the writer sees the byte it lost; a shorter write answers its count.
+ * the writer sees the byte it lost; a shorter write answers its count. Once
+ * the process the descriptor opened is reaped and its PID goes to another,
+ * a write answers ESRCH and leaves the new process's group alone, as
+ * Linux's `get_proc_task` finds no task in the inode's struct pid.
  */
 static void autogroup_write_rows(void)
 {
     struct procfs_file file;
+    struct vpath vp = {0};
     fd_entry_t entry;
     const char *text = "000000000005X";
 
@@ -3358,11 +3362,24 @@ static void autogroup_write_rows(void)
     k_memset(&entry, 0, sizeof(entry));
     entry.priv = &file;
     file.origin_pid = 7;
+    file.origin_file = SYNTH_PROC_AUTOGROUP;
+    vp.kind = VNODE_PROC_FILE;
+    vp.procfile = SYNTH_PROC_AUTOGROUP;
+    vp.pid = 7;
+    procfs_owner_keep(&file.own, &vp);
+    check(file.own.kept, "an autogroup descriptor holds its process's lifetime");
     check(procfs_autogroup_write(&entry, (const char __user *)text, 13) == 12 && autogroup_set == 5,
           "an autogroup write of 13 bytes parses 12 and answers 12");
     text = "-3\n";
     check(procfs_autogroup_write(&entry, (const char __user *)text, 3) == 3 && autogroup_set == -3,
           "an autogroup write of 3 bytes answers 3");
+    process.serial++;
+    text = "19";
+    check(procfs_autogroup_write(&entry, (const char __user *)text, 2) == -ESRCH &&
+              autogroup_set == -3,
+          "an autogroup write after the PID is reused answers ESRCH and sets nothing");
+    process.serial--;
+    procfs_owner_drop(&file.own);
     autogroup_set = 99;
 }
 
