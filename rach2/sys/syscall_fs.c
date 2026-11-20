@@ -3676,9 +3676,11 @@ static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_
  * (`proc_fd_reopen`), with its description held across the sleeps of that
  * open, since another thread may close the descriptor meanwhile, and so is
  * a device of /dev (`proc_fd_reopen_device`). Anything else, a pipe, a
- * socket or a terminal, has the descriptor's own description shared with
- * the new one (`proc_fd_share`), when the descriptor has the access asked
- * for and is no O_DIRECTORY open of what is not a directory; Linux opens a
+ * socket, a terminal or a file of /proc or /sys, has the descriptor's own
+ * description shared with the new one (`proc_fd_share`), when the
+ * descriptor has the access asked for, is no O_DIRECTORY open of what is
+ * not a directory, and, for a file of /proc or /sys, the mode and owner
+ * kept for it allow it (`proc_fd_kept_may`); Linux opens a
  * pipe's other end for the other access, and this answers EACCES. Returns
  * the new descriptor, or a negative errno: an error of `proc_fd_entry`,
  * -EACCES, -ENOTDIR, or the open's.
@@ -3697,6 +3699,8 @@ static int32_t proc_fd_open(const struct vpath *vp, int flags)
     fd_peek_drop(&src);
     return rc;
 }
+
+static int32_t proc_fd_kept_may(fd_entry_t *src, int flags);
 
 /** `proc_fd_open` of the copy `src` of descriptor `vp->procfd` of `p`. */
 static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_t *src, int flags)
@@ -3741,7 +3745,8 @@ static int32_t proc_fd_open_from(const struct vpath *vp, process_t *p, fd_entry_
     if ((flags & O_DIRECTORY) && src->type != FD_TYPE_SYNTH_DIR) {
         return -ENOTDIR;
     }
-    return proc_fd_share(p->fds, vp->procfd, flags);
+    rc = proc_fd_kept_may(src, flags);
+    return rc != 0 ? rc : proc_fd_share(p->fds, vp->procfd, flags);
 }
 
 int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_file **held)
@@ -12838,6 +12843,31 @@ static int32_t fstat_fill_fixed(fd_entry_t *entry, struct kstat *kst)
         kst->st_blksize = 4096;
     }
     return 0;
+}
+
+/**
+ * Whether the caller may open again, with `flags`, the file of /proc or
+ * /sys that the descriptor `src` is open on, by the mode and owner a chmod
+ * or chown kept for its node, as an open of its path judges them
+ * (`synth_kept_may`) and Linux's may_open judges the inode the descriptor's
+ * link leads to: 0, or -EACCES. A node with none kept leaves the open to the
+ * descriptor's own access mode, as its open by path is left to the fixed
+ * checks of its kind. The node is the one the descriptor's open resolved,
+ * so a file of /proc/self is the opener's.
+ */
+static int32_t proc_fd_kept_may(fd_entry_t *src, int flags)
+{
+    struct kstat kst;
+
+    if (src->type != FD_TYPE_PROC || fd_set_class(src, 0) != PROCFS_SET_KEPT ||
+        fstat_fill_fixed(src, &kst) != 0 ||
+        !(kst_kept(&kst) & (VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID))) {
+        return 0;
+    }
+    return inode_may_access(kst.st_uid, kst.st_gid, kst.st_mode, (uint32_t)synth_open_want(flags),
+                            0)
+               ? 0
+               : -EACCES;
 }
 
 /**

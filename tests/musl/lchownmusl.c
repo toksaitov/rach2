@@ -305,16 +305,24 @@ static int synthetic_rows(void)
     return ok ? 0 : fail(SYNTHETIC);
 }
 
+/* A descriptor of /proc/version root opened, which `closed_to_user`
+ * inherits, or -1. */
+static int version_fd = -1;
+
 /** The checks an ordinary user's child makes after `synthetic_access_rows`
  * has made /proc/version 0400 and /sys/kernel 0700: open and access of the
- * one and a search of the other are EACCES. 0 when they all are. */
+ * one, an open of it again through /proc/self/fd of the descriptor root
+ * opened, as Linux's may_open judges the inode the link leads to, and a
+ * search of the other are EACCES. 0 when they all are. */
 static int closed_to_user(void)
 {
+    char path[64];
     struct stat st;
 
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", version_fd);
     return refused(open("/proc/version", O_RDONLY), EACCES) &&
                    refused(access("/proc/version", R_OK), EACCES) &&
-                   refused(stat(LOCKDOWN, &st), EACCES)
+                   refused(open(path, O_RDONLY), EACCES) && refused(stat(LOCKDOWN, &st), EACCES)
                ? 0
                : 1;
 }
@@ -355,7 +363,8 @@ static int as_user(int (*check)(void))
  * Check that the mode root gives a node of /proc or /sys governs the
  * access of others, as the mode Linux keeps on its proc_dir_entry or
  * kernfs inode does: with /proc/version 0400 an ordinary user can neither
- * open nor access it, with /sys/kernel 0700 not search it, and with the
+ * open nor access it, nor open again a descriptor of it root opened, with
+ * /sys/kernel 0700 not search it, and with the
  * lockdown file 0666 open that for writing, which its 0644 refuses, and
  * write it, a word that names no level being EINVAL. Every mode is set
  * back. Returns 0, or 1 once the failure is reported.
@@ -370,8 +379,12 @@ static int synthetic_access_rows(void)
         return fail(SYNTHETIC_ACCESS);
     }
     ok = !as_user(open_to_user);
-    ok = ok && chmod("/proc/version", 0400) == 0 && chmod("/sys/kernel", 0700) == 0 &&
-         as_user(closed_to_user);
+    version_fd = open("/proc/version", O_RDONLY);
+    ok = ok && version_fd >= 0 && chmod("/proc/version", 0400) == 0 &&
+         chmod("/sys/kernel", 0700) == 0 && as_user(closed_to_user);
+    if (version_fd >= 0) {
+        close(version_fd);
+    }
     ok = chmod("/sys/kernel", dir.st_mode & 07777) == 0 && ok;
     ok = ok && chmod(LOCKDOWN, 0666) == 0 && as_user(open_to_user);
     ok = chmod(LOCKDOWN, lock.st_mode & 07777) == 0 && ok;
