@@ -33,7 +33,7 @@
  * the walk: the rows check that its slot's functions join the list in
  * their place, that its BARs are given the lowest free addresses in the
  * host bridge's windows, around the BARs taken, and that the slot leaves
- * the list again.
+ * the list again. A last model checks which BARs a driver may claim.
  */
 
 #include "../../rach2/sys/pci.c"
@@ -807,6 +807,62 @@ static void hotplug_rows(void)
     list_forget();
 }
 
+/**
+ * pci_resource_claimable finds a BAR as Linux's pci_claim_resource and
+ * request_region do: one without an address, past the ports, on the PC's
+ * fixed ports or over another function's BAR is refused, and behind a
+ * bridge one must lie in the bridge's window, unless the bridge decodes
+ * subtractively.
+ */
+static void claim_rows(void)
+{
+    struct func *f, *bridge, *sub;
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    f = model_add(0, 3, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x00000001u, 0xFFFFFF00u);
+    model_bar(f, 0x14, 0x00000061u, 0xFFFFFFF0u);
+    model_bar(f, 0x18, 0x0000C001u, 0xFFFFFFE0u);
+    model_bar(f, 0x1C, 0, 0xFFFFF000u);
+    f = model_add(0, 4, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x0000C011u, 0xFFFFFFF0u);
+    model_bar(f, 0x14, 0x00000CF1u, 0xFFFFFFF0u);
+    bridge = model_bridge(0, 5, 0, 0x01, 1, 1);
+    put32(bridge, 0x1C, 0x00002020u);
+    put32(bridge, 0x20, 0xF000F000u);
+    f = model_add(1, 0, 0, 0x816810ECu, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x00002001u, 0xFFFFFF00u);
+    model_bar(f, 0x14, 0x00003001u, 0xFFFFFF00u);
+    model_bar(f, 0x18, 0xF0000000u, 0xFFFFF000u);
+    model_bar(f, 0x1C, 0xF0100000u, 0xFFFFF000u);
+    sub = model_bridge(0, 6, 0, 0x01, 2, 2);
+    sub->space[0x09] = 0x01;
+    f = model_add(2, 0, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x00004001u, 0xFFFFFF00u);
+    list_forget();
+    (void)pci_list_count();
+
+    check(pci_resource_claimable(0, 3, 0, 0) == -EINVAL,
+          "claim: an I/O BAR the firmware left at 0 is not claimed");
+    check(pci_resource_claimable(0, 3, 0, 1) == -EBUSY, "claim: nor one on the timer's ports");
+    check(pci_resource_claimable(0, 3, 0, 3) == -EINVAL, "claim: nor a memory BAR at 0");
+    check(pci_resource_claimable(0, 3, 0, 4) == -EINVAL, "claim: nor a BAR the function lacks");
+    check(pci_resource_claimable(0, 3, 0, 2) == -EBUSY &&
+              pci_resource_claimable(0, 4, 0, 0) == -EBUSY,
+          "claim: nor two I/O BARs over each other");
+    check(pci_resource_claimable(0, 4, 0, 1) == -EBUSY,
+          "claim: nor one over the configuration ports");
+    check(pci_resource_claimable(1, 0, 0, 0) == 0 && pci_resource_claimable(1, 0, 0, 2) == 0,
+          "claim: BARs inside their bridge's windows are claimed");
+    check(pci_resource_claimable(1, 0, 0, 1) == -EINVAL &&
+              pci_resource_claimable(1, 0, 0, 3) == -EINVAL,
+          "claim: BARs outside them are not");
+    check(pci_resource_claimable(2, 0, 0, 0) == 0,
+          "claim: a subtractive bridge passes a BAR outside its windows");
+    list_forget();
+}
+
 /** Run the rows. */
 /** 0: no row maps a window of a BAR (pci_bar_map). */
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
@@ -833,6 +889,7 @@ int main(void)
     heap_rows();
     size_rows();
     hotplug_rows();
+    claim_rows();
     if (fails) {
         printf("pciwalk_hosttest: %d failed\n", fails);
         return 1;

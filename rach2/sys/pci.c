@@ -701,6 +701,77 @@ static int pci_range_taken(uint64_t start, uint64_t end, int io, uint64_t *next)
     return 0;
 }
 
+/* The PC's fixed I/O ports, which Linux on x86 reserves before it claims a
+ * PCI resource (standard_io_resources, the RTC's and "PCI conf1"). */
+static const struct {
+    uint16_t start, end;
+} pci_pc_ports[] = {{0x00, 0x1F}, {0x20, 0x21}, {0x40, 0x43}, {0x50, 0x53},
+                    {0x60, 0x60}, {0x64, 0x64}, {0x70, 0x77}, {0x80, 0x8F},
+                    {0xA0, 0xA1}, {0xC0, 0xDF}, {0xF0, 0xFF}, {0xCF8, 0xCFF}};
+
+/** Whether the bridge to `bus` that decodes positively has a window of the
+ * kind of `r` that holds it whole; 1 too when no such bridge leads there,
+ * as for a root bus or behind a subtractive one. */
+static int pci_parent_holds(uint8_t bus, const struct pci_resource *r)
+{
+    uint64_t ws, we;
+    int k, w, n = pci_list_count();
+    int io = (r->flags & PCI_IORESOURCE_IO) != 0;
+
+    for (k = 0; k < n; k++) {
+        const struct pci_place *p = &pci_list[k];
+
+        if (p->header != 1 || pci_read_config8(p->bus, p->device, p->function, 0x19) != bus) {
+            continue;
+        }
+        if (pci_read_config8(p->bus, p->device, p->function, PCI_PROG_IF) == 0x01) {
+            return 1; /* subtractive decode passes what no window takes */
+        }
+        for (w = io ? 0 : 1; w < (io ? 1 : 3); w++) {
+            if (pci_bridge_window(p, w, &ws, &we) && ws <= r->start && r->end <= we) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    return 1;
+}
+
+int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i)
+{
+    struct pci_resource r, o;
+    uint32_t kind;
+    int j, k, n = pci_list_count();
+
+    pci_resource(bus, device, function, i, &r);
+    kind = r.flags & (PCI_IORESOURCE_IO | PCI_IORESOURCE_MEM);
+    if (i < 0 || i >= PCI_ROM_RESOURCE || kind == 0 || r.start == 0 || r.end < r.start ||
+        (kind == PCI_IORESOURCE_IO && r.end > 0xFFFFu) || !pci_parent_holds(bus, &r)) {
+        return -EINVAL;
+    }
+    for (j = 0;
+         kind == PCI_IORESOURCE_IO && j < (int)(sizeof(pci_pc_ports) / sizeof(pci_pc_ports[0]));
+         j++) {
+        if (r.start <= pci_pc_ports[j].end && pci_pc_ports[j].start <= r.end) {
+            return -EBUSY;
+        }
+    }
+    for (k = 0; k < n; k++) {
+        const struct pci_place *p = &pci_list[k];
+
+        for (j = 0; j < PCI_ROM_RESOURCE; j++) {
+            if (p->bus == bus && p->device == device && p->function == function && j == i) {
+                continue;
+            }
+            pci_resource(p->bus, p->device, p->function, j, &o);
+            if ((o.flags & kind) && o.start != 0 && o.start <= r.end && r.start <= o.end) {
+                return -EBUSY;
+            }
+        }
+    }
+    return 0;
+}
+
 /**
  * The lowest address in the apertures `ap` for `size` bytes aligned to
  * `size`, of I/O when `io` is set, below `limit`, that no listed function

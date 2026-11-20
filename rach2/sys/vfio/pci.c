@@ -195,20 +195,37 @@ static int pm_loses_state(const struct vfio_device *d)
            !(pci_read_config16(DEV(d), (uint8_t)(pm + PM_CTRL)) & PM_NO_SOFT_RESET);
 }
 
-/** Read the BARs: their addresses, sizes and kinds. An I/O BAR's size is
- * the one the bus's walk found, as Linux's pci_resource_len gives it. */
+/**
+ * Read the BARs: their addresses, sizes and kinds. A BAR is exposed only
+ * once it is claimed (`pci_resource_claimable`), as Linux's vfio-pci
+ * reaches a BAR only through pci_request_selected_regions: one without an
+ * address, out of range or over another's decodes nothing VFIO gives, and
+ * its size is 0. An I/O BAR's size is the one the bus's walk found, as
+ * Linux's pci_resource_len gives it; one that is not claimed keeps the
+ * function's I/O decoding off (`io_off`), as Linux's pci_enable_resources
+ * refuses to turn it on, since the function would answer for host ports.
+ */
 static void bars_init(struct vfio_device *d)
 {
     struct pci_resource r;
-    int i;
+    int i, claim;
 
+    d->io_off = 0;
     for (i = 0; i < 6; i++) {
         uint32_t v = pci_read_config32(DEV(d), (uint8_t)(0x10 + 4 * i));
 
         d->bar_io[i] = (v & 1u) != 0;
-        if (d->bar_io[i]) {
-            pci_resource(DEV(d), i, &r);
-            d->bar_size[i] = (r.flags & PCI_IORESOURCE_IO) ? r.end - r.start + 1u : 0;
+        pci_resource(DEV(d), i, &r);
+        claim = pci_resource_claimable(DEV(d), i);
+        if (claim != 0) {
+            d->bar_size[i] = 0;
+            if (r.flags != 0) {
+                klog(KLOG_WARN, "vfio", "open: %s: BAR %d at 0x%lx not claimed: %d", d->name, i,
+                     (unsigned long)r.start, claim);
+            }
+            d->io_off |= d->bar_io[i] && r.flags != 0;
+        } else if (d->bar_io[i]) {
+            d->bar_size[i] = r.end - r.start + 1u;
         } else {
             d->bar_size[i] = pci_bar_size64(&d->pci, i);
         }

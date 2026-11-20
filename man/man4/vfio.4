@@ -179,6 +179,9 @@ uncached; its pages fault in only while the function decodes memory and
 is not in D3hot, and a reset, turning decoding off or D3hot takes them
 from every mapping.
 An I/O BAR is read and written port by port and cannot be mapped.
+A BAR the firmware left without an address, or one over the PC's fixed
+ports or another BAR, is a region of size 0, and an I/O one keeps the
+function's I/O decoding off.
 The MSI-X table's bytes read as all ones and take no write.
 .Pp
 The configuration space is the function's but for what
