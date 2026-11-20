@@ -4,6 +4,7 @@
  * host-deps: rach2/sys/network/ip6/route6.c rach2/sys/network/route.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: rach2/sys/network/driver/netdev_room.c
  */
 #include "../../rach2/sys/network/socket/netlink.c"
 
@@ -17,6 +18,7 @@ uint32_t net_ip_gateway;
 static struct netdev card;
 static int carrier = 1, privileged = 1, failures, lock_depth, completed, calls;
 static int failed_dumps;
+static int expire_after_snapshot, route_snapshot;
 static uint8_t request[512], received[32768], storage[8192];
 
 #define CHECK(x)                                                                   \
@@ -38,6 +40,10 @@ void net_unlock(uint32_t flags)
 {
     CHECK(lock_depth == (int)flags + 1);
     lock_depth = (int)flags;
+    if (!lock_depth && expire_after_snapshot && --expire_after_snapshot == 0) {
+        card.naddr2 = 0;
+        (void)netdev_addr4_room(&card, 0);
+    }
 }
 
 /** The model has only the initial network namespace. */
@@ -63,6 +69,8 @@ int netdev_seen_count(void)
 /** Return the one interface at index zero. */
 struct netdev *netdev_at(int n)
 {
+    if (route_snapshot)
+        CHECK(lock_depth > 0);
     return n == 0 ? &card : 0;
 }
 /** Report the physical carrier independently of administrative state. */
@@ -222,7 +230,7 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uin
     nd->ip = ip;
     nd->mask = mask;
     nd->peer = peer ? *peer : 0;
-    nd->addr4[0].scope = scope;
+    NETDEV_ADDR4(nd, 0).scope = scope;
     return 0;
 }
 
@@ -230,7 +238,10 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uin
 int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
                             uint32_t valid, uint32_t preferred)
 {
-    struct netdev_addr6 *a = &nd->addr6[nd->naddr6++];
+    struct netdev_addr6 *a;
+    if (netdev_addr6_room(nd, nd->naddr6 + 1))
+        return -ENOBUFS;
+    a = &nd->addr6[nd->naddr6++];
     k_memset(a, 0, sizeof(*a));
     k_memcpy(a->addr, addr, 16);
     a->prefix = (uint8_t)prefix;
@@ -332,10 +343,11 @@ int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, const
 }
 
 /** Model netdev_source with no addresses, routes or sockets. */
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop, int scope)
 {
     (void)nd;
     (void)hop;
+    (void)scope;
     return 0;
 }
 
@@ -959,7 +971,41 @@ static void replaced_metric4(uint32_t old_metric, uint8_t proto)
     CHECK(fresh == (old_metric != 0 || proto == 2));
     netdev_route_flush(&card, 1);
     card.ip = card.mask = 0;
-    k_memset(card.addr4, 0, sizeof(card.addr4));
+    k_memset(&card.addr4_first, 0, sizeof(card.addr4_first));
+}
+
+/** Expire the last extra address between copying its row and formatting
+ * it. Main and local route scans must also hold the network lock. */
+static void ipv4_snapshots(void)
+{
+    static struct nl_build b;
+    struct netdev_rt row;
+    const uint8_t *msg;
+    uint32_t first;
+
+    b.len = 0;
+    b.cap = sizeof(b.buf);
+    card.ip = 0xc0000201u;
+    card.mask = 0xffffff00u;
+    CHECK(netdev_addr4_room(&card, 1) == 0);
+    card.naddr2 = 1;
+    card.ip2[0] = 0xc6336401u;
+    card.mask2[0] = card.mask;
+    card.peer2[0] = 0;
+    k_memset(&NETDEV_ADDR4(&card, 1), 0, sizeof(card.addr4_first));
+    route_snapshot = 1;
+    CHECK(netdev_route_at(1, &row) && row.dst == 0xc6336400u);
+    CHECK(netdev_local_route_at(0, &row) && row.dst == card.ip);
+    route_snapshot = 0;
+    expire_after_snapshot = 2;
+    addr_msgs(&b, &card);
+    first = get32(b.buf);
+    msg = b.buf + first;
+    CHECK(!expire_after_snapshot && !card.ip2 && first < b.len &&
+          req_ip(msg, get32(msg) - NLMSG_HDRLEN, 8, IFA_LOCAL) == 0xc6336401u);
+    expire_after_snapshot = 0;
+    netdev_addr_free(&card);
+    card.ip = card.mask = 0;
 }
 
 /** Register a family and run every row, releasing all sockets and storage. */
@@ -995,6 +1041,7 @@ int main(void)
     CHECK(netlink_bind(&a, 77, 0) == 0 && netlink_bind(&route, 77, 0) == 0);
     CHECK(netlink_bind(&b, 77, 0) == -EADDRINUSE);
     zero_address4();
+    ipv4_snapshots();
     replaced_metric4(42, 2);
     replaced_metric4(42, 99);
     replaced_metric4(0, 2);

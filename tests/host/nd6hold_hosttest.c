@@ -336,6 +336,15 @@ void route6_address_ready(struct netdev *nd, const struct netdev_addr6 *a)
     (void)a;
 }
 
+/** This fixture never restores an address on a link coming up. */
+void route6_address_update(struct netdev *nd, const struct netdev_addr6 *old,
+                           const struct netdev_addr6 *a)
+{
+    (void)nd;
+    (void)old;
+    (void)a;
+}
+
 void route6_forget(struct netdev *nd, int proto)
 {
     (void)nd;

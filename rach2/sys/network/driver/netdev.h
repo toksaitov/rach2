@@ -146,14 +146,6 @@ struct netdev_ops {
     int (*set_up)(void *dev, int up);
 };
 
-/* The addresses an interface may have after its first. */
-#define NETDEV_ADDRS 7
-
-/* The IPv6 addresses an interface may hold, and the IPv6 multicast groups
- * it may be a member of at once. */
-#define NETDEV_ADDRS6  8
-#define NETDEV_GROUPS6 16
-
 /* An IPv6 address's scope, in Linux's numbers for `ifa_scope`: the machine
  * alone for ::1, the link for fe80::/10, the deprecated site for fec0::/10,
  * which QEMU's user network still uses, and everywhere for the rest. */
@@ -216,6 +208,13 @@ struct netdev_addr6 {
     uint8_t regen;
 };
 
+/* An IPv6 multicast group an interface is a member of, with the count of
+ * the joins that hold it. */
+struct netdev_group6 {
+    uint8_t addr[16];
+    uint32_t refs;
+};
+
 /* Route attributes of one IPv4 address, indexed from its first slot. */
 struct addr4_routes {
     uint32_t broadcast, metric;
@@ -225,6 +224,10 @@ struct addr4_routes {
     uint8_t zero_peer; /* an explicit destination of 0.0.0.0 */
     unsigned char given_broadcast, noprefix, deleted;
 };
+
+/* The route attributes of `nd`'s address `k`: 0 for its first, `ip`, and
+ * `i + 1` for `ip2[i]`. An lvalue. */
+#define NETDEV_ADDR4(nd, k) (*((k) == 0 ? &(nd)->addr4_first : &(nd)->addr4_more[(k) - 1]))
 
 #define ADDR4_PREFIX           1
 #define ADDR4_LOCAL            2
@@ -261,13 +264,18 @@ struct netdev {
     uint32_t peer; /* a distinct IPv4 destination, or zero (see addr4) */
 
     /* The `naddr2` addresses after the first, as `ip addr add` gives them,
-     * each with its mask: an interface may be on more than one subnet, and
-     * answers for each of its addresses. */
-    uint32_t ip2[NETDEV_ADDRS];
-    uint32_t mask2[NETDEV_ADDRS];
-    uint32_t peer2[NETDEV_ADDRS]; /* same convention as peer */
-    int naddr2;
-    struct addr4_routes addr4[NETDEV_ADDRS + 1];
+     * each with its mask and peer: an interface may be on any number of
+     * subnets, and answers for each of its addresses. The arrays have room
+     * for `room2`, in one block that `netdev_addr4_room` grows and frees
+     * when the last of them goes; NULL with no room. */
+    uint32_t *ip2;
+    uint32_t *mask2;
+    uint32_t *peer2; /* same convention as peer */
+    int naddr2, room2;
+    /* The route attributes of the first address and of each of the others,
+     * which NETDEV_ADDR4 names; `addr4_more` is part of the same block. */
+    struct addr4_routes addr4_first;
+    struct addr4_routes *addr4_more;
 
     /* The interface's counts, in 64 bits as Linux's `rtnl_link_stats64`,
      * so that none wraps in practice: ethernet.c keeps a card's, and the IP
@@ -326,19 +334,20 @@ struct netdev {
      * driver sets at bring-up; 0 for NETDEV_ETH_MTU_MAX. */
     uint32_t mtu_max;
 
-    /* The `naddr6` IPv6 addresses, kept in the order they were given; `lo`
-     * has ::1 and a card its link-local address from the time it comes up
-     * (netconf.c). */
-    struct netdev_addr6 addr6[NETDEV_ADDRS6];
-    int naddr6;
+    /* The `naddr6` IPv6 addresses, kept in the order they were given, in
+     * an array of `room6` that `netdev_addr6_room` grows and frees when the
+     * last goes, which moves them: a pointer to one lasts until the next
+     * address is added; `lo` has ::1 and a card its link-local address
+     * from the time it comes up (netconf.c). */
+    struct netdev_addr6 *addr6;
+    int naddr6, room6;
 
-    /* The `ngroup6` IPv6 multicast groups the interface is a member of,
-     * each with the count of the joins that hold it. A datagram to a group
-     * is accepted on an interface that is a member; the cards themselves
-     * pass every multicast frame. */
-    uint8_t group6[NETDEV_GROUPS6][16];
-    uint8_t group6_refs[NETDEV_GROUPS6];
-    int ngroup6;
+    /* The `ngroup6` IPv6 multicast groups the interface is a member of, in
+     * an array of `room_group6` that `netdev_join6` grows. A datagram to a
+     * group is accepted on an interface that is a member; the cards
+     * themselves pass every multicast frame. */
+    struct netdev_group6 *group6;
+    int ngroup6, room_group6;
 };
 
 /* What Linux gives its loopback interface: the hardware type of its
@@ -512,8 +521,8 @@ int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask);
  * metric, by any interface, is changed to this one instead of refused.
  * Returns 0, or -EINVAL for a mask that is not contiguous or a destination
  * with bits outside it, -ENETUNREACH for a gateway none of `nd`'s subnets
- * has, -EEXIST for an added route of that prefix and metric, -ENOSPC with
- * the table full. Call under net_lock.
+ * has, -EEXIST for an added route of that prefix and metric, -ENOBUFS
+ * when the heap has no room for it. Call under net_lock.
  */
 int netdev_route_add(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw, uint32_t metric,
                      int replace);
@@ -548,7 +557,7 @@ static __inline__ uint32_t netdev_addr_dst(const struct netdev *nd, int a)
 {
     uint32_t peer = a < 0 ? nd->peer : nd->peer2[a];
 
-    if (peer || nd->addr4[a + 1].zero_peer)
+    if (peer || NETDEV_ADDR4(nd, a + 1).zero_peer)
         return peer;
     return a < 0 ? nd->ip : nd->ip2[a];
 }
@@ -592,8 +601,8 @@ static __inline__ uint32_t netdev_addr_brd(const struct netdev *nd, int a)
 {
     uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
     uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
-    if (nd->addr4[a + 1].given_broadcast) {
-        return nd->addr4[a + 1].broadcast;
+    if (NETDEV_ADDR4(nd, a + 1).given_broadcast) {
+        return NETDEV_ADDR4(nd, a + 1).broadcast;
     }
     return ip && !nd->l3 && !nd->loopback && NETDEV_MASK_HAS_BROADCAST(mask) ? ip | ~mask : 0;
 }
@@ -604,7 +613,7 @@ static __inline__ uint32_t netdev_addr_local(const struct netdev *nd, int a, int
     uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
     uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
     uint32_t dst = netdev_addr_dst(nd, a);
-    if (!ip || (nd->addr4[a + 1].deleted & bit))
+    if (!ip || (NETDEV_ADDR4(nd, a + 1).deleted & bit))
         return 0;
     if (bit == ADDR4_LOCAL)
         return ip;
@@ -619,6 +628,27 @@ static __inline__ uint32_t netdev_addr_local(const struct netdev *nd, int a, int
                : 0;
 }
 
+/**
+ * Give `nd` room for at least `n` IPv4 addresses after its first, keeping
+ * those it holds; with `n` of 0 and none held, free the room. The room
+ * grows by doubling, so that adding addresses one at a time copies each a
+ * bounded number of times. Returns 0, or -ENOBUFS when the heap has no
+ * room, as Linux's inet_rtm_newaddr answers it, leaving `nd` as it was.
+ * The caller holds net_lock.
+ */
+int netdev_addr4_room(struct netdev *nd, int n);
+
+/**
+ * Give `nd` room for at least `n` IPv6 addresses, keeping those it holds;
+ * with `n` of 0 and none held, free the room. Returns 0, or -ENOBUFS when
+ * the heap has no room, leaving `nd` as it was. The caller holds net_lock.
+ */
+int netdev_addr6_room(struct netdev *nd, int n);
+
+/** Free what `nd`'s address and group arrays hold, once its addresses and
+ * groups are gone, before its record is freed or cleared. */
+void netdev_addr_free(struct netdev *nd);
+
 /** Whether `ip` is one of `nd`'s addresses, its first or another; 0 for a
  * NULL `nd` or an `ip` of 0. */
 int netdev_holds(const struct netdev *nd, uint32_t ip);
@@ -627,9 +657,15 @@ int netdev_holds(const struct netdev *nd, uint32_t ip);
  * puts only a distinct peer on the link. */
 int netdev_on_link(const struct netdev *nd, uint32_t ip);
 
-/** The local address of `nd` whose subnet or peer prefix reaches `hop`,
- * or its first if no prefix matches. On a TUN, prefer the longest match. */
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
+/**
+ * The source address a route of scope `scope` (Linux's RT_SCOPE_ numbers)
+ * through `nd` gives, Linux's inet_select_addr: of `nd`'s primary
+ * addresses of that scope or wider, the first whose subnet or peer prefix
+ * holds `hop`, or the first of them when `hop` is 0 or none holds it; with
+ * none, the first primary address of another interface, in order, of that
+ * scope or wider and not of link scope; 0 with none at all.
+ */
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop, int scope);
 
 /** Whether `ip` is an address of one of the cards' interfaces, which makes
  * a datagram to it this machine's. `lo`'s 127.0.0.1 is not counted. */
@@ -654,8 +690,8 @@ struct netdev *netdev_owner6(const uint8_t *addr);
 /**
  * Make `nd` a member of the IPv6 multicast group `group`, or count one more
  * join of a group it is a member of. Returns 0, -EINVAL for an address that
- * is no group or a NULL `nd`, or -ENOSPC with `NETDEV_GROUPS6` groups
- * joined. Call under net_lock.
+ * is no group or a NULL `nd`, or -ENOBUFS when the heap has no room for
+ * another group. Call under net_lock.
  */
 int netdev_join6(struct netdev *nd, const uint8_t *group);
 

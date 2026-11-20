@@ -286,37 +286,36 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
 #define SYSCTL_SHMMAX "4278190079\n"
 #endif
 
-/* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
- * kernel's name, its release, the bound of its process IDs, the name it
- * gives a core file (proc/coredump.h), and the host and domain names of the
- * reader's UTS namespace, whose texts procfs reads when the file is opened;
- * the limits of System V IPC (ipc/sysv.c), which util-linux's ipcs reads;
- * IPv4 forwarding, which this stack does not do; the limits of POSIX message
- * queues (ipc/mqueue.c); the swap's weight and the overcommit policy at
- * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
- * there being no swap; the regions a process may map (mm/vm.h); the ids an
- * unmapped id reads as (proc/ns.h); the boot's UUID and a new one for
- * each open; the bounds of descriptors and open files and the count of
- * those open (fs/fd.h); whether exec randomizes a new image's layout
- * (mm/vm.h); net/ipv6/conf, whose entries follow the table's
- * (`synth_sys_ipv6`); TCP's keepalive defaults, black-hole detection and
- * give-up (tcp.h); Linux 6.12's highest capability, 40, and FIPS mode,
- * off, which libcap and libgcrypt read; the mount namespaces a user may
- * own, the limit of the reader's user namespace (proc/ns.h); the largest
- * pipe an unprivileged F_SETPIPE_SZ makes and the limits of one user's pipe
- * pages (ipc/pipe.h); what a panic does once its record is out and
- * whether an oops panics (panic.h); the settings of the lockup detectors
- * (watchdog.h); the write-back's thresholds and periods (bcache.h,
- * writeback.h); whether the sleeping locks time their holds
- * (fs/sleeplock.h); the loopback backlog's limit (ip.h); the last
- * process ID the reader's PID namespace gave out (proc/ns.h); the
- * budgets of a drain of the loopback backlog (ip.h); whether the
- * scheduler keeps its statistics (proc/fair.h); and whether it schedules
- * sessions as groups, RR's slice and the real-time bandwidth
- * (proc/autogroup.h, proc/sched.h). An entry
- * whose text is empty is procfs's, which reads its value when the file is
- * opened. A new entry goes at the end, so that the indices SYNTH_SYS_ names
- * stay the same. */
+/* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the kernel's
+ * name, its release, the bound of its process IDs, the name it gives a core
+ * file (proc/coredump.h), and the host and domain names of the reader's UTS
+ * namespace, whose texts procfs reads when the file is opened; the limits of
+ * System V IPC (ipc/sysv.c), which util-linux's ipcs reads; IPv4 forwarding,
+ * which this stack does not do; the limits of POSIX message queues
+ * (ipc/mqueue.c); the swap's weight and the overcommit policy at Linux's
+ * defaults, 60 and 0, which scripts read and nothing here acts on, there being
+ * no swap; the regions a process may map (mm/vm.h); the ids an unmapped id
+ * reads as (proc/ns.h); the boot's UUID and a new one for each open; the bounds
+ * of descriptors and open files and the count of those open (fs/fd.h); whether
+ * exec randomizes a new image's layout (mm/vm.h); net/ipv6/conf and
+ * net/ipv4/conf, whose entries follow the table's (`synth_sys_ipv6`,
+ * `synth_sys_ipv4`); TCP's keepalive defaults, black-hole detection and give-up
+ * (tcp.h); Linux 6.12's highest capability, 40, and FIPS mode, off, which
+ * libcap and libgcrypt read; the mount namespaces a user may own, the limit of
+ * the reader's user namespace (proc/ns.h); the largest pipe an unprivileged
+ * F_SETPIPE_SZ makes and the limits of one user's pipe pages (ipc/pipe.h); what
+ * a panic does once its record is out and whether an oops panics (panic.h); the
+ * settings of the lockup detectors (watchdog.h); the write-back's thresholds
+ * and periods (bcache.h, writeback.h); whether the sleeping locks time their
+ * holds (fs/sleeplock.h); the loopback backlog's limit (ip.h); the last process
+ * ID the reader's PID namespace gave out (proc/ns.h); the budgets of a drain of
+ * the loopback backlog (ip.h); whether the scheduler keeps its statistics
+ * (proc/fair.h); whether it schedules sessions as groups, RR's slice and
+ * the real-time bandwidth (proc/autogroup.h, proc/sched.h); and net/ipv4/conf's
+ * directory (netconf.h). An entry whose text is empty is procfs's, which reads
+ * its value when the file is opened. A new entry goes at the end, so that the
+ * indices SYNTH_SYS_ names stay the same.
+ */
 static const struct {
     int parent;
     const char *name;
@@ -416,7 +415,8 @@ static const struct {
                {6, "sched_rr_timeslice_ms", ""},
                {6, "sched_rt_period_us", ""},
                {6, "sched_rt_runtime_us", ""},
-               {21, "ip_local_port_range", ""}};
+               {21, "ip_local_port_range", ""},
+               {21, "conf", 0}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -427,25 +427,47 @@ static const struct {
  * table's, followed by an entry for each of its files. */
 static const char *const ipv6_dirs[2] = {"all", "default"};
 static const char *const ipv6_files[SYNTH_IPV6_KEYS] = {
-    "accept_ra",        "autoconf",      "disable_ipv6", "forwarding",
-    "ra_defrtr_metric", "stable_secret", "use_tempaddr"};
+    "accept_ra",         "autoconf",         "disable_ipv6",  "forwarding",
+    "keep_addr_on_down", "ra_defrtr_metric", "stable_secret", "use_tempaddr"};
+
+/* net/ipv4/conf's files, in the order of SYNTH_IPV4_*. Its directories,
+ * named as net/ipv6/conf's are, follow net/ipv6/conf's entries. */
+static const char *const ipv4_files[SYNTH_IPV4_KEYS] = {"promote_secondaries"};
+
+/* The entries of net/ipv6/conf, and the first of net/ipv4/conf. */
+#define SYNTH_IPV6_ENTRIES (SYNTH_IPV6_DIRS * (1 + SYNTH_IPV6_KEYS))
+#define SYNTH_IPV4_FIRST   (SYNTH_SYS_TABLE + SYNTH_IPV6_ENTRIES)
 
 int synth_sys_count(void)
 {
-    return SYNTH_SYS_TABLE + SYNTH_IPV6_DIRS * (1 + SYNTH_IPV6_KEYS);
+    return SYNTH_IPV4_FIRST + SYNTH_IPV6_DIRS * (1 + SYNTH_IPV4_KEYS);
+}
+
+/** Whether `at`, an entry counted from the first of a tree of directories
+ * of `keys` files each, falls among its `SYNTH_IPV6_DIRS` directories:
+ * 1 with the directory's name in `*dir` and the file's index in `*key`,
+ * -1 for the directory itself, or 0. */
+static int conf_tree(int at, int keys, const char **dir, int *key)
+{
+    int d;
+
+    if (at < 0 || at >= SYNTH_IPV6_DIRS * (1 + keys)) {
+        return 0;
+    }
+    d = at / (1 + keys);
+    *dir = d < 2 ? ipv6_dirs[d] : sysfs_net_slot_name(d - 1);
+    *key = at % (1 + keys) - 1;
+    return 1;
 }
 
 int synth_sys_ipv6(int entry, const char **dir, int *key)
 {
-    int at = entry - SYNTH_SYS_TABLE, d;
+    return conf_tree(entry - SYNTH_SYS_TABLE, SYNTH_IPV6_KEYS, dir, key);
+}
 
-    if (at < 0 || entry >= synth_sys_count()) {
-        return 0;
-    }
-    d = at / (1 + SYNTH_IPV6_KEYS);
-    *dir = d < 2 ? ipv6_dirs[d] : sysfs_net_slot_name(d - 1);
-    *key = at % (1 + SYNTH_IPV6_KEYS) - 1;
-    return 1;
+int synth_sys_ipv4(int entry, const char **dir, int *key)
+{
+    return conf_tree(entry - SYNTH_IPV4_FIRST, SYNTH_IPV4_KEYS, dir, key);
 }
 
 /* The entries outside a range of `synth_sys_writable`'s that take a write. */
@@ -467,7 +489,7 @@ int synth_sys_writable(int entry)
     int key;
     unsigned i;
 
-    if (synth_sys_ipv6(entry, &dir, &key)) {
+    if (synth_sys_ipv6(entry, &dir, &key) || synth_sys_ipv4(entry, &dir, &key)) {
         return key >= 0;
     }
     for (i = 0; i < sizeof(sys_writable_lone) / sizeof(sys_writable_lone[0]); i++) {
@@ -555,6 +577,9 @@ const char *synth_sys_name(int entry)
     if (synth_sys_ipv6(entry, &dir, &key)) {
         return key < 0 ? dir : ipv6_files[key];
     }
+    if (synth_sys_ipv4(entry, &dir, &key)) {
+        return key < 0 ? dir : ipv4_files[key];
+    }
     return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].name : 0;
 }
 
@@ -566,6 +591,9 @@ int synth_sys_parent(int entry)
     if (synth_sys_ipv6(entry, &dir, &key)) {
         return key >= 0 ? entry - 1 - key : dir[0] != '\0' ? SYNTH_SYS_IPV6_CONF : -1;
     }
+    if (synth_sys_ipv4(entry, &dir, &key)) {
+        return key >= 0 ? entry - 1 - key : dir[0] != '\0' ? SYNTH_SYS_IPV4_CONF : -1;
+    }
     return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].parent : -1;
 }
 
@@ -574,7 +602,7 @@ const char *synth_sys_text(int entry)
     const char *dir;
     int key;
 
-    if (synth_sys_ipv6(entry, &dir, &key)) {
+    if (synth_sys_ipv6(entry, &dir, &key) || synth_sys_ipv4(entry, &dir, &key)) {
         return key < 0 ? 0 : "";
     }
     return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].text : 0;

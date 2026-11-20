@@ -2,7 +2,9 @@
  * Test the walk of the driver table of sys/network/driver/netdev.c with
  * model drivers in place of the real ones.
  *
- * host-deps:
+ * host-deps: rach2/sys/network/driver/netdev_room.c
+ * host-deps: rach2/sys/network/ip6/mld6.c rach2/sys/network/ip6/addr6.c
+ * host-deps: tests/host/compat/kheap_host.c
  *
  * The table is small and it decides three things no single driver can be
  * asked about: which card a machine with more than one gets, what happens to
@@ -29,13 +31,18 @@
 #include "fs/synthfs.h"
 #include "pci.h"
 #include "network/driver/netdev.h"
+#include "network/core/byteorder.h"
+#include "network/ip6/icmp6.h"
 
 /* Declared, not included: the kernel's kint.h and the host's headers disagree
  * about uintptr_t, so this test pulls in no host header and names the one
  * function it needs to say which check failed. */
 extern int printf(const char *fmt, ...);
+extern void (*kheap_host_freeing)(void *p);
 
 static int fails;
+static int mld_reports, mld_frees;
+struct net_mib6 net_mib6;
 
 /* The tick count netdev.c keeps a carrier reading by; the test moves it. */
 volatile uint64_t kernel_ticks;
@@ -333,6 +340,19 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** Copy `n` bytes from `src` to `dst`: the kernel's k_memcpy, which the
+ * address arrays call and this test does not build. */
+void *k_memcpy(void *dst, const void *src, size_t n)
+{
+    unsigned char *q = (unsigned char *)dst;
+    const unsigned char *p = (const unsigned char *)src;
+
+    while (n-- > 0) {
+        *q++ = *p++;
+    }
+    return dst;
+}
+
 /** Fill `n` bytes at `ptr` with `c`: the kernel's k_memset, which the walk
  * calls and this test does not build. */
 void *k_memset(void *ptr, int c, size_t n)
@@ -460,9 +480,50 @@ int arp_forget(struct netdev *nd, uint32_t ip)
 }
 
 /** No IPv6 state to take down. */
-void nd6_if_down(struct netdev *nd)
+void nd6_if_remove(struct netdev *nd)
 {
     (void)nd;
+}
+
+/** The model link has IPv6 enabled. */
+int nd6_disabled(const struct netdev *nd)
+{
+    (void)nd;
+    return 0;
+}
+
+/** Schedule repeats at the shortest permitted delay. */
+uint32_t nd6_random_below(uint32_t n)
+{
+    (void)n;
+    return 0;
+}
+
+/** Read the network order field at `p`. */
+uint16_t read16be(const uint8_t *p)
+{
+    return (uint16_t)(p[0] << 8 | p[1]);
+}
+
+/** Store the network order field at `p`. */
+void write16be(uint8_t *p, uint16_t value)
+{
+    p[0] = (uint8_t)(value >> 8);
+    p[1] = (uint8_t)value;
+}
+
+/** Count an MLD report sent with a router alert. */
+int icmp6_send_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg, uint16_t len,
+                    uint8_t hlim, int opts)
+{
+    (void)src;
+    (void)dst;
+    (void)ifindex;
+    (void)len;
+    CHECK(msg[0] == ICMP6_MLD_V2_REPORT && hlim == 1 && (opts & IP6_TXF_RTALERT),
+          "MLD sends a version 2 report to the link");
+    mld_reports++;
+    return 0;
 }
 
 /** No IPv6 neighbour to list. */
@@ -671,6 +732,9 @@ static void check_handover(void)
     CHECK(m_second.stops == 0, "and nothing is stopped by a refused write");
 
     nd->ip = 0xc0000201u;
+    CHECK(netdev_addr4_room(nd, nd->naddr2 + 1) == 0, "room for a second address");
+    nd->mask2[nd->naddr2] = nd->peer2[nd->naddr2] = 0;
+    k_memset(&NETDEV_ADDR4(nd, nd->naddr2 + 1), 0, sizeof(struct addr4_routes));
     nd->ip2[nd->naddr2++] = 0xc6336401u;
     nd->gateway = 0xc0000202u;
     txs = m_second.txs;
@@ -853,6 +917,84 @@ static void check_carrier(void)
  *
  * Returns the number of failed checks, at most 255.
  */
+/**
+ * A route's source address takes the route's scope, as Linux's
+ * inet_select_addr does: a link-scope address listed first is not the
+ * source of a universe-scope route; with no address of the scope on the
+ * card, another card's first primary of that scope, not of link scope, is.
+ */
+static void check_source(void)
+{
+    struct netdev *a, *b;
+
+    reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
+    CHECK(netdev_probe() == 1 && netdev_count() == 3, "three cards for the source rows");
+    a = netdev_at(0);
+    b = netdev_at(1);
+    a->ip = 0xa9fe0101u; /* 169.254.1.1/16, scope link */
+    a->mask = 0xffff0000u;
+    NETDEV_ADDR4(a, 0).scope = NETDEV_SCOPE_LINK;
+    CHECK(netdev_addr4_room(a, 1) == 0, "room for a second address");
+    a->ip2[0] = 0x0a000001u; /* 10.0.0.1/24, scope global */
+    a->mask2[0] = 0xffffff00u;
+    a->peer2[0] = 0;
+    k_memset(&NETDEV_ADDR4(a, 1), 0, sizeof(NETDEV_ADDR4(a, 1)));
+    a->naddr2 = 1;
+    CHECK(netdev_source(a, 0xc0000201u, 0) == 0x0a000001u,
+          "a universe route's gateway off both subnets takes the global address");
+    CHECK(netdev_source(a, 0, 0) == 0x0a000001u, "and so does a direct universe route");
+    CHECK(netdev_source(a, 0xa9fe0202u, NETDEV_SCOPE_LINK) == 0xa9fe0101u,
+          "a link route to the link-local subnet takes the link-local address");
+    CHECK(netdev_source(a, 0xc0000201u, NETDEV_SCOPE_LINK) == 0xa9fe0101u,
+          "a link route off both subnets takes the first address of link scope or wider");
+    CHECK(netdev_source(a, 0x0a000002u, NETDEV_SCOPE_LINK) == 0x0a000001u,
+          "a link route to the global subnet takes the global address");
+    a->naddr2 = 0;
+    b->ip = 0xc0a80105u; /* 192.168.1.5/24 */
+    b->mask = 0xffffff00u;
+    NETDEV_ADDR4(b, 0).scope = 0;
+    CHECK(netdev_source(a, 0x08080808u, 0) == 0xc0a80105u,
+          "with no address of the scope on the card, another card's global one");
+    NETDEV_ADDR4(b, 0).scope = NETDEV_SCOPE_LINK;
+    CHECK(netdev_source(a, 0x08080808u, 0) == 0, "and none when every address is of link scope");
+    a->ip = b->ip = 0;
+    NETDEV_ADDR4(a, 0).scope = NETDEV_ADDR4(b, 0).scope = 0;
+    (void)netdev_addr4_room(a, 0);
+}
+
+/** Count each live allocation returned by withdrawal. */
+static void mld_freed(void *p)
+{
+    (void)p;
+    CHECK(k.locks > 0, "withdrawal frees multicast storage under the network lock");
+    mld_frees++;
+}
+
+/** Withdraw a card that reported more than eight groups. Withdrawal gives
+ * back both the membership array and MLD's report array before slot reuse. */
+static void check_mld_withdraw(void)
+{
+    struct netdev *nd;
+    uint8_t group[16] = {0xff, 2};
+    int i;
+
+    reset(NETDEV_UP, NETDEV_ABSENT, NETDEV_ABSENT);
+    CHECK(netdev_probe() == 1, "one card for MLD");
+    nd = netdev_first();
+    for (i = 0; i < 12; i++) {
+        group[15] = (uint8_t)(20 + i);
+        CHECK(netdev_join6(nd, group) == 0, "join a reportable IPv6 group");
+    }
+    kernel_ticks++;
+    mld6_tick();
+    CHECK(mld_reports == 12, "MLD reported all twelve groups");
+    kheap_host_freeing = mld_freed;
+    netdev_withdraw(nd);
+    kheap_host_freeing = 0;
+    CHECK(mld_frees == 2 && !nd->group6 && netdev_count() == 0,
+          "withdrawal returns both arrays without another tick");
+}
+
 int main(void)
 {
     unsigned char frame[64];
@@ -952,6 +1094,8 @@ int main(void)
     }
 
     check_carrier();
+    check_source();
+    check_mld_withdraw();
 
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_UP);
     CHECK(netdev_probe() == 1, "the driver with no link report is bound");

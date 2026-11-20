@@ -50,7 +50,7 @@ A connect to a destination no route reaches fails at once with
 .Er ENETUNREACH ,
 so that a program can try the next address it was given.
 .Ss Addresses
-An interface holds at most eight IPv6 addresses, each with its prefix
+An interface holds any number of IPv6 addresses, each with its prefix
 length, scope, flags and lifetimes:
 .Bl -bullet
 .It
@@ -101,7 +101,7 @@ A card's new address is tentative, neither accepted nor used as a source,
 for about a second, until duplicate address detection finds no other node
 with it; a duplicate is marked
 .Dv IFA_F_DADFAILED
-and never used.
+and remains unusable until duplicate detection succeeds.
 An address whose preferred lifetime ends is deprecated, used only by the
 connections it has, and one whose valid lifetime ends goes, ending those
 connections.
@@ -117,6 +117,17 @@ is 2.
 and
 .Pa /proc/net/if_inet6
 show them.
+.Pp
+.Va keep_addr_on_down
+can retain permanent non-link-local addresses when an interface is
+taken down.
+When the interface comes up, its retained addresses regain their prefix
+routes and undergo duplicate detection again, including addresses marked
+.Dv IFA_F_DADFAILED .
+A TUN address or an address with
+.Dv IFA_F_NODAD
+regains its local route immediately.
+Other addresses regain it when detection succeeds.
 .Ss Routes
 A datagram to ::1 or to one of the machine's own addresses goes by
 .Ql lo .
@@ -140,8 +151,7 @@ and the routes a program adds, with
 .Ql route -A inet6 add
 or
 .Ql ip -6 route add ,
-at 1024 unless a metric is given, at most 32 of these and the routers'
-together.
+at 1024 unless a metric is given, as many as memory holds.
 .El
 .Pp
 .Ql route -A inet6 ,
@@ -175,6 +185,7 @@ describes:
 .Va autoconf ,
 .Va disable_ipv6 ,
 .Va forwarding ,
+.Va keep_addr_on_down ,
 .Va ra_defrtr_metric ,
 .Va stable_secret
 and

@@ -1573,6 +1573,20 @@ and what it leaves is delivered at the sender's next return to user mode,
 the idle wait or the tick.
 A privileged caller's write of any int sets the first, and of two ticks
 or more the second, as Linux 6.12.115 takes them.
+.Pa net/ipv4/conf/ Ns Ar NAME ,
+for
+.Ar NAME
+.Ql all ,
+.Ql default
+and each interface, holds
+.Pa promote_secondaries ,
+0, which when not 0 on the interface or in
+.Ql all
+makes the deletion of a primary IPv4 address promote the first secondary
+address on its subnet in its place instead of deleting them all; it takes
+any int, and a write of
+.Ql default
+sets every interface whose own value was never written.
 .Pa net/ipv6/conf/ Ns Ar NAME ,
 for
 .Ar NAME
@@ -1593,6 +1607,12 @@ IPv6, and set to 0 again starts it from its link-local address, making
 its addresses again;
 .Pa forwarding ,
 0, which when not 0 makes the interface answer as a router and solicit none;
+.Pa keep_addr_on_down ,
+0, which above 0 keeps an interface's permanent addresses but its
+link-local ones when it is taken down, tentative again, and gives them
+their prefix routes when it comes up, and below 0 drops them;
+.Ql all Ns 's
+value, when not 0, is used in place of the interface's, as on Linux;
 .Pa ra_defrtr_metric ,
 1024, the metric of the default route each router's advertisement gives,
 from 1 to 4294967295, which a write sets on the routes already learned as

@@ -432,10 +432,11 @@ int synth_sys_count(void);
 #define SYNTH_IPV6_AUTOCONF              1
 #define SYNTH_IPV6_DISABLE               2
 #define SYNTH_IPV6_FORWARDING            3
-#define SYNTH_IPV6_RA_DEFRTR_METRIC      4
-#define SYNTH_IPV6_STABLE_SECRET         5
-#define SYNTH_IPV6_USE_TEMPADDR          6
-#define SYNTH_IPV6_KEYS                  7
+#define SYNTH_IPV6_KEEP_ADDR_ON_DOWN     4
+#define SYNTH_IPV6_RA_DEFRTR_METRIC      5
+#define SYNTH_IPV6_STABLE_SECRET         6
+#define SYNTH_IPV6_USE_TEMPADDR          7
+#define SYNTH_IPV6_KEYS                  8
 /* The entries of net/ipv4's tcp_keepalive_time, tcp_keepalive_intvl,
  * tcp_keepalive_probes, tcp_mtu_probing and tcp_retries2, in that order,
  * whose values procfs reads from tcp.h's variables. */
@@ -509,6 +510,12 @@ int synth_sys_count(void);
 /* The entry of net/ipv4/ip_local_port_range, whose value is net.h's
  * `net_port_range`, which procfs sets through `net_port_range_set`. */
 #define SYNTH_SYS_IP_LOCAL_PORT_RANGE    95
+/* net/ipv4/conf, the directory of IPv4's settings, with a directory for
+ * `all`, `default` and each slot as net/ipv6/conf has, and the files of
+ * each, in this order, which procfs reads and writes through netconf.h. */
+#define SYNTH_SYS_IPV4_CONF              96
+#define SYNTH_IPV4_PROMOTE_SECONDARIES   0
+#define SYNTH_IPV4_KEYS                  1
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the
@@ -518,6 +525,9 @@ int synth_sys_count(void);
  * or listed.
  */
 int synth_sys_ipv6(int entry, const char **dir, int *key);
+/** Whether `entry` is under net/ipv4/conf, as `synth_sys_ipv6` says of
+ * net/ipv6/conf, with in `*key` the SYNTH_IPV4_* of its file. */
+int synth_sys_ipv4(int entry, const char **dir, int *key);
 /** Whether a privileged caller may write the file entry `entry`: not
  * nmi_watchdog where the hard-lockup detector cannot run, whose file Linux
  * makes 0444 (kernel/watchdog.c:1162 and :1173-1174), so that an open for

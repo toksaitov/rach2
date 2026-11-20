@@ -281,10 +281,16 @@ uint32_t read32be(const uint8_t *p)
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
-/** Make a card of index `index` named `name`, up. */
+/** Make a card of index `index` named `name`, up, with room for eight
+ * addresses, which the rows write in place. */
 static void card(struct netdev *nd, int index, const char *name)
 {
+    static struct netdev_addr6 room[3][8];
+    static int cards;
+
     k_memset(nd, 0, sizeof(*nd));
+    nd->addr6 = room[cards++ % 3];
+    nd->room6 = 8;
     k_memcpy(nd->name, name, k_strlen(name) + 1);
     nd->index = index;
     nd->up = 1;
@@ -412,7 +418,7 @@ static void route_lifetime(void)
         CHECK(route6_resolve(dst, eth0.index, &got) == &eth0 && ip6_is_unspecified(got.prefsrc));
     }
     eth0.naddr6 = 1;
-    forget_if(&eth0, 0);
+    forget_if(&eth0, 0, 0);
     CHECK(eth0.naddr6 == 1 && route6_lookup(dst, eth0.index, via) == &eth0);
     nd6_if_down(&eth0);
     CHECK(eth0.naddr6 == 0 && route6_lookup(dst, eth0.index, via) == 0);
@@ -437,7 +443,7 @@ static void finite_prefix(void)
         int i;
         used.dst[0] = 0x60;
         used.plen = 128;
-        for (i = 0; i < ROUTE6_MAX; i++) {
+        for (i = 0; i < 40; i++) {
             used.dst[15] = (uint8_t)i;
             CHECK(route6_change_row(&wlan0, &used, 0, 0) == 0);
         }
@@ -562,6 +568,124 @@ static void remove_replaced_prefix(void)
     CHECK(!route6_lookup(a->addr, eth0.index, via) && !route6_lookup(a->peer, eth0.index, via));
 }
 
+/** An advertised prefix that a manual address refreshes stays the router's:
+ * a later advertisement of lifetime 0 removes it, as Linux's prefix route
+ * keeps RTF_ADDRCONF when fib6_add_rt2node refreshes it. */
+static void manual_refresh_keeps_ra(void)
+{
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    uint8_t via[16], prefix[16] = {0x20, 0x05};
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, prefix, 16);
+    a->addr[15] = 1;
+    a->prefix = 64;
+    a->flags = NETDEV_A6_PERMANENT;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    a->preferred = NETDEV_LIFETIME_FOREVER;
+    route6_learn(&eth0, prefix, 64, 0, ROUTE6_METRIC_PREFIX, 60);
+    CHECK(count_prefix(prefix, 64, 0, ROUTE6_METRIC_PREFIX) == 1);
+    eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
+    CHECK(count_prefix(prefix, 64, 0, ROUTE6_METRIC_PREFIX) == 1);
+    route6_learn(&eth0, prefix, 64, 0, ROUTE6_METRIC_PREFIX, 0);
+    CHECK(count_prefix(prefix, 64, 0, ROUTE6_METRIC_PREFIX) == 0);
+    CHECK(!route6_lookup(a->addr, eth0.index, via));
+    nd6_if_down(&eth0);
+}
+
+/** Put on eth0 the address of `prefix`/64 ending in `last`, with `flags`. */
+static void keep_address(int i, const uint8_t *prefix, uint8_t last, uint32_t flags)
+{
+    struct netdev_addr6 *a = &eth0.addr6[i];
+
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, prefix, 8);
+    a->addr[15] = last;
+    a->prefix = 64;
+    a->metric = 90;
+    a->flags = flags;
+    a->valid = NETDEV_LIFETIME_FOREVER;
+    a->preferred = NETDEV_LIFETIME_FOREVER;
+    eth0.naddr6 = i + 1;
+    route6_address_update(&eth0, 0, a);
+}
+
+/**
+ * keep_addr_on_down, as Linux's addrconf_ifdown reads it: with it above 0
+ * on the card, and `all` 0, a card taken down keeps its permanent global
+ * address, tentative again, and drops its link-local and autoconfigured
+ * ones and every route; up gives the kept one its prefix route back. A
+ * nonzero `all` wins over the card's, and removing the card drops all.
+ */
+static void keep_addr_on_down(void)
+{
+    static const uint8_t global[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 7};
+    static const uint8_t auto_[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 8};
+    static const uint8_t link[16] = {0xfe, 0x80};
+    int32_t v = 0;
+
+    CHECK(nd6_conf_get(eth0.index, ND6_KEEP_ADDR_ON_DOWN, &v) == 0 && v == 0);
+    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 1) == 0);
+    keep_address(0, link, 1, NETDEV_A6_PERMANENT);
+    keep_address(1, global, 1, NETDEV_A6_PERMANENT);
+    keep_address(2, auto_, 2, 0);
+    CHECK(count_prefix(global, 64, 0, 90) == 1);
+    nd6_if_down(&eth0);
+    CHECK(eth0.naddr6 == 1 && eth0.addr6[0].addr[5] == 7 &&
+          (eth0.addr6[0].flags & NETDEV_A6_TENTATIVE));
+    CHECK(count_prefix(global, 64, 0, 90) == 0);
+    nd6_if_up(&eth0);
+    CHECK(eth0.naddr6 == 1 && count_prefix(global, 64, 0, 90) == 1);
+
+    CHECK(nd6_conf_set(ND6_CONF_ALL, ND6_KEEP_ADDR_ON_DOWN, -1) == 0);
+    nd6_if_down(&eth0);
+    CHECK(eth0.naddr6 == 0);
+    CHECK(nd6_conf_set(ND6_CONF_ALL, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
+    keep_address(0, global, 1, NETDEV_A6_PERMANENT);
+    nd6_if_remove(&eth0);
+    CHECK(eth0.naddr6 == 0 && count_prefix(global, 64, 0, 90) == 0);
+    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
+}
+
+/** A retained address is ready at once on TUN or with NODAD. An Ethernet
+ * address that failed DAD probes again and wins its host route back. */
+static void retained_dad(int l3, int nodad)
+{
+    static const uint8_t global[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 9};
+    struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row r = {0};
+
+    eth0.l3 = l3;
+    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 1) == 0);
+    keep_address(0, global, 1, NETDEV_A6_PERMANENT | (nodad ? NETDEV_A6_NODAD : 0));
+    if (nodad) {
+        r.plen = 128;
+        r.local = 1;
+        k_memcpy(r.dst, a->addr, sizeof(r.dst));
+        CHECK(route6_change_row(&eth0, &r, 1, 0) == 0 && a->local_route_deleted);
+    } else if (!l3) {
+        a->flags |= NETDEV_A6_TENTATIVE;
+        dad_failed(&eth0, a);
+        CHECK(a->flags & NETDEV_A6_DADFAILED);
+    }
+
+    nd6_if_down(&eth0);
+    nd6_if_up(&eth0);
+    if (!l3 && !nodad) {
+        CHECK((a->flags & NETDEV_A6_TENTATIVE) && a->dad_left == 1);
+        kernel_ticks = a->dad_at;
+        dad_timers(&eth0);
+        CHECK(a->dad_left == 0 && (a->flags & NETDEV_A6_TENTATIVE));
+        kernel_ticks = a->dad_at;
+        dad_timers(&eth0);
+    }
+    CHECK(!(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) &&
+          count_prefix(a->addr, 128, 1, 0) == 1);
+    nd6_if_remove(&eth0);
+    eth0.l3 = 0;
+    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
+}
+
 int main(void)
 {
     static const uint8_t dst[IP6_ADDR_LEN] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -637,6 +761,11 @@ int main(void)
     change_peer();
     delete_shared_prefix();
     remove_replaced_prefix();
+    manual_refresh_keeps_ra();
+    keep_addr_on_down();
+    retained_dad(1, 0);
+    retained_dad(0, 0);
+    retained_dad(0, 1);
     CHECK(lock_depth == 0);
 
     if (failures) {

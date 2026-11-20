@@ -483,21 +483,6 @@ int ip_is_local(uint32_t ip)
     return IP_IS_LOOPBACK(ip) || netdev_owns(ip);
 }
 
-uint32_t ip_source(uint32_t dst)
-{
-    return ip_source_on(dst, 0);
-}
-
-uint32_t ip_source_on(uint32_t dst, int ifindex)
-{
-    struct netdev_rt row;
-    if (IP_IS_LOOPBACK(dst))
-        return IP_LOOPBACK_ADDR;
-    if (netdev_owns(dst))
-        return dst;
-    return netdev_route_lookup(dst, ifindex, &row) ? row.src : net_ip_addr;
-}
-
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
     return ip_tx_opts(0, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT, 0);
@@ -646,7 +631,7 @@ static int ip_may_cut(int pmtudisc)
  * `*hop`. An address of this machine's is reached through the loopback backlog
  * whatever card `ifindex` names, as on Linux. Returns 0, -EINVAL for a
  * source in 127/8 and a destination that is not this machine's, or
- * -ENETUNREACH with no route, counted in OutNoRoutes.
+ * -ENETUNREACH with no route. The caller holds net_lock.
  */
 static int ip_tx_route(uint32_t *src, uint32_t dst, int ifindex, struct netdev **out, uint32_t *hop)
 {
@@ -662,7 +647,9 @@ static int ip_tx_route(uint32_t *src, uint32_t dst, int ifindex, struct netdev *
         if (netdev_is_broadcast(dst)) {
             *out = ifindex ? netdev_route_on(dst, ifindex, hop) : ip_broadcast_iface(dst);
             *hop = dst;
-            selected = *out ? netdev_source(*out, dst) : net_ip_addr;
+            selected = !*out                ? 0
+                       : dst == 0xFFFFFFFFu ? netdev_source(*out, 0, NETDEV_SCOPE_LINK)
+                                            : netdev_source(*out, dst, NETDEV_SCOPE_LINK);
         } else {
             *out = netdev_route_lookup(dst, ifindex, &row);
             if (*out) {
@@ -670,14 +657,31 @@ static int ip_tx_route(uint32_t *src, uint32_t dst, int ifindex, struct netdev *
                 selected = row.src;
             }
         }
-        if (!*out) {
-            net_mib.ip_out_no_routes++;
+        if (!*out)
             return -ENETUNREACH;
-        }
     }
     if (!*src || !ip_is_local(*src))
         *src = selected;
     return 0;
+}
+
+int ip_source_on(uint32_t dst, int ifindex, uint32_t *src)
+{
+    struct netdev *out;
+    uint32_t flags = net_lock(), hop, selected = 0;
+    int rc = ip_tx_route(&selected, dst, ifindex, &out, &hop);
+
+    net_unlock(flags);
+    if (!rc)
+        *src = selected;
+    return rc;
+}
+
+uint32_t ip_source(uint32_t dst)
+{
+    uint32_t src;
+
+    return ip_source_on(dst, 0, &src) ? net_ip_addr : src;
 }
 
 /**
@@ -722,6 +726,8 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
 
     r = ip_tx_route(&src, dst_ip, ifindex, &out, &route_ip);
     if (r < 0) {
+        if (r == -ENETUNREACH)
+            net_mib.ip_out_no_routes++;
         return r;
     }
     local = IP_IS_LOOPBACK(dst_ip) || netdev_owns(dst_ip);

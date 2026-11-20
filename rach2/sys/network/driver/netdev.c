@@ -23,6 +23,7 @@
 #include "../netconf.h"
 #include "../arp/arp.h"
 #include "../ip6/ip6.h"
+#include "../ip6/mld6.h"
 #include "../ip6/nd6.h"
 #include "../ip6/route6.h"
 #include "../socket/packet.h"
@@ -32,6 +33,7 @@
 #include "../../klog.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
+#include "../../mm/kheap.h"
 #include "../../pci.h"
 #include "../../timer.h"
 #include "../../udelay.h"
@@ -149,6 +151,11 @@ static void loopback_up(void)
     netdev_loopback_init(nd, niface + 1);
     nd->ip = 0x7F000001u;
     nd->mask = 0xFF000000u;
+    if (netdev_addr6_room(nd, 1)) {
+        klog(KLOG_ERR, "net", "lo: no memory for ::1");
+        return;
+    }
+    k_memset(&nd->addr6[0], 0, sizeof(nd->addr6[0]));
     nd->addr6[0].addr[15] = 1; /* ::1 */
     nd->addr6[0].prefix = 128;
     nd->addr6[0].scope = NETDEV_SCOPE_HOST;
@@ -224,7 +231,7 @@ static int group_slot(const struct netdev *nd, const uint8_t *group)
     int i;
 
     for (i = 0; i < nd->ngroup6; i++) {
-        if (same6(nd->group6[i], group)) {
+        if (same6(nd->group6[i].addr, group)) {
             return i;
         }
     }
@@ -240,34 +247,47 @@ int netdev_join6(struct netdev *nd, const uint8_t *group)
     }
     i = group_slot(nd, group);
     if (i >= 0) {
-        if (nd->group6_refs[i] == 0xff) {
-            return -ENOSPC;
-        }
-        nd->group6_refs[i]++;
+        nd->group6[i].refs++;
         return 0;
     }
-    if (nd->ngroup6 == NETDEV_GROUPS6) {
-        return -ENOSPC;
+    if (nd->ngroup6 == nd->room_group6) {
+        struct netdev_group6 *more;
+        int room = nd->room_group6 ? nd->room_group6 * 2 : 8;
+
+        if (nd->room_group6 > 0x7fffffff / 2 / (int)sizeof(*more))
+            return -ENOBUFS;
+        more = kmalloc((size_t)room * sizeof(*more));
+        if (!more)
+            return -ENOBUFS;
+        if (nd->ngroup6)
+            k_memcpy(more, nd->group6, (size_t)nd->ngroup6 * sizeof(*more));
+        kfree(nd->group6);
+        nd->group6 = more;
+        nd->room_group6 = room;
     }
-    copy6(nd->group6[nd->ngroup6], group);
-    nd->group6_refs[nd->ngroup6] = 1;
+    copy6(nd->group6[nd->ngroup6].addr, group);
+    nd->group6[nd->ngroup6].refs = 1;
     nd->ngroup6++;
     return 0;
 }
 
 /** The last slot moves into the one freed, since the order of the groups
- * means nothing. */
+ * means nothing; the array is freed with the last. */
 void netdev_leave6(struct netdev *nd, const uint8_t *group)
 {
     int i = nd ? group_slot(nd, group) : -1;
 
-    if (i < 0 || --nd->group6_refs[i] != 0) {
+    if (i < 0 || --nd->group6[i].refs != 0) {
         return;
     }
     nd->ngroup6--;
     if (i != nd->ngroup6) {
-        copy6(nd->group6[i], nd->group6[nd->ngroup6]);
-        nd->group6_refs[i] = nd->group6_refs[nd->ngroup6];
+        nd->group6[i] = nd->group6[nd->ngroup6];
+    }
+    if (nd->ngroup6 == 0) {
+        kfree(nd->group6);
+        nd->group6 = 0;
+        nd->room_group6 = 0;
     }
 }
 
@@ -302,58 +322,93 @@ struct netdev *netdev_by_name(const char *name)
 
 int netdev_holds(const struct netdev *nd, uint32_t ip)
 {
-    int i;
+    uint32_t flags;
+    int i, found;
 
     if (ip == 0 || !nd) {
         return 0;
     }
-    for (i = 0; i < nd->naddr2; i++) {
-        if (nd->ip2[i] == ip) {
-            return 1;
-        }
+    flags = net_lock();
+    for (i = 0; i < nd->naddr2 && nd->ip2[i] != ip; i++) {
     }
-    return nd->ip == ip;
+    found = i < nd->naddr2 || nd->ip == ip;
+    net_unlock(flags);
+    return found;
 }
 
 int netdev_on_link(const struct netdev *nd, uint32_t ip)
 {
-    int i;
+    uint32_t flags = net_lock();
+    int i, found;
 
     for (i = -1; i < nd->naddr2; i++) {
         uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
         uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
         uint32_t dst = netdev_addr_dst(nd, i);
 
-        if (nd->up && !nd->addr4[i + 1].noprefix && !(nd->addr4[i + 1].deleted & ADDR4_PREFIX) &&
-            !netdev_secondary(nd, i) && (ip & mask) == (dst & mask) &&
-            netdev_addr_has_route(local, dst, mask)) {
-            return 1;
+        if (nd->up && !NETDEV_ADDR4(nd, i + 1).noprefix &&
+            !(NETDEV_ADDR4(nd, i + 1).deleted & ADDR4_PREFIX) && !netdev_secondary(nd, i) &&
+            (ip & mask) == (dst & mask) && netdev_addr_has_route(local, dst, mask)) {
+            break;
         }
+    }
+    found = i < nd->naddr2;
+    net_unlock(flags);
+    return found;
+}
+
+/** The first primary address of `nd` of scope `scope` or wider that is not
+ * of link scope, Linux's in_dev_select_addr; 0 for none. */
+static uint32_t select_any(const struct netdev *nd, int scope)
+{
+    int i;
+    for (i = -1; i < nd->naddr2; i++) {
+        uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
+        int s = NETDEV_ADDR4(nd, i + 1).scope;
+        if (local && !netdev_secondary(nd, i) && s != NETDEV_SCOPE_LINK && s <= scope)
+            return local;
     }
     return 0;
 }
 
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+/** Select a source from the address arrays under the caller's net_lock. */
+static uint32_t source_locked(const struct netdev *nd, uint32_t hop, int scope)
 {
-    uint32_t source = nd->ip, best_mask = 0;
+    uint32_t first = 0;
     int i;
 
     for (i = -1; i < nd->naddr2; i++) {
         uint32_t local = i < 0 ? nd->ip : nd->ip2[i];
         uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
 
-        if (local != 0 && mask > best_mask && (hop & mask) == (netdev_addr_dst(nd, i) & mask)) {
-            if (!nd->l3) {
-                return local;
-            }
-            source = local;
-            best_mask = mask;
-        }
+        if (!local || netdev_secondary(nd, i) || NETDEV_ADDR4(nd, i + 1).scope > scope)
+            continue;
+        if (!hop || ((hop ^ netdev_addr_dst(nd, i)) & mask) == 0)
+            return local;
+        if (!first)
+            first = local;
     }
-    return source;
+    if (first)
+        return first;
+    for (i = 0; i < netdev_count(); i++) {
+        first = select_any(netdev_at(i), scope);
+        if (first)
+            return first;
+    }
+    return 0;
 }
 
-int netdev_owns(uint32_t ip)
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop, int scope)
+{
+    uint32_t flags = net_lock();
+    uint32_t src = source_locked(nd, hop, scope);
+
+    net_unlock(flags);
+    return src;
+}
+
+/** Check for an IPv4 address or local route under the caller's net_lock. */
+static int owns_locked(uint32_t ip)
 {
     int i, a;
     if (!ip)
@@ -367,7 +422,17 @@ int netdev_owns(uint32_t ip)
     return netdev_added_local(ip, NETDEV_RT_LOCAL) != 0;
 }
 
-int netdev_is_broadcast(uint32_t ip)
+int netdev_owns(uint32_t ip)
+{
+    uint32_t flags = net_lock();
+    int found = owns_locked(ip);
+
+    net_unlock(flags);
+    return found;
+}
+
+/** Check for a broadcast address or route under the caller's net_lock. */
+static int broadcast_locked(uint32_t ip)
 {
     int i, a;
 
@@ -384,6 +449,15 @@ int netdev_is_broadcast(uint32_t ip)
         }
     }
     return ip && netdev_added_local(ip, NETDEV_RT_BROADCAST) != 0;
+}
+
+int netdev_is_broadcast(uint32_t ip)
+{
+    uint32_t flags = net_lock();
+    int found = broadcast_locked(ip);
+
+    net_unlock(flags);
+    return found;
 }
 
 /** Name `nd`, the interface of card `n` from 0, `ethN`, for N up to 99. */
@@ -435,6 +509,9 @@ int netdev_probe(void)
     int fail_at = nicfail_at();
     int found = 0;
 
+    for (i = 0; i <= NETDEV_MAX; i++) {
+        netdev_addr_free(&ifaces[i]);
+    }
     niface = 0;
     probe_error = "no supported network card";
 
@@ -657,21 +734,25 @@ int netdev_register(struct netdev *nd)
  * the probe's is marked gone, an attached interface taken off the list. */
 void netdev_unregister(struct netdev *nd)
 {
+    uint32_t flags = net_lock();
     int i;
 
     for (i = 0; i < niface; i++) {
         if (&ifaces[i] == nd) {
             gone |= 1u << i;
-            return;
+            goto done;
         }
     }
     for (i = 0; i < nextra && extra[i] != nd; ++i) {
     }
-    if (i == nextra)
-        return;
-    for (; i + 1 < nextra; ++i)
-        extra[i] = extra[i + 1];
-    extra[--nextra] = 0;
+    if (i < nextra) {
+        for (; i + 1 < nextra; ++i)
+            extra[i] = extra[i + 1];
+        extra[--nextra] = 0;
+    }
+done:
+    netdev_addr_free(nd);
+    net_unlock(flags);
 }
 
 /* The neighbours `netdev_withdraw` reads, under net_lock. */
@@ -682,7 +763,8 @@ static struct nd6_row withdraw_nd6[ND6_CACHE_SIZE];
  * driver leaves. A card without an address may still have explicit routes. */
 static void drop_addresses(struct netdev *nd)
 {
-    nd6_if_down(nd);
+    nd6_if_remove(nd);
+    mld6_if_remove(nd);
     netdev_route_flush(nd, 1);
     while (nd->ip)
         (void)netconf_set_address(nd, 0, 0);

@@ -1,6 +1,7 @@
 /* Route and local address checks shared by Internet socket callers. */
 #include "address.h"
 #include "socket.h"
+#include "../net.h"
 #include "../ip/ip.h"
 #include "../ip6/ip6.h"
 #include "../ip6/nd6.h"
@@ -12,18 +13,16 @@
 int net_addr_local(net_addr_t a)
 {
     struct netdev *nd;
-    int i;
+    uint32_t flags;
+    int local;
+
     if (a.family != AF_INET6)
         return ip_is_local(a.v4);
+    flags = net_lock();
     nd = netdev_owner6(a.v6);
-    if (!nd || !nd->up || (a.scope && a.scope != (uint32_t)nd->index))
-        return 0;
-    for (i = 0; i < nd->naddr6; i++) {
-        if (ip6_equal(nd->addr6[i].addr, a.v6) &&
-            !(nd->addr6[i].flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)))
-            return 1;
-    }
-    return 0;
+    local = nd && nd->up && (!a.scope || a.scope == (uint32_t)nd->index) && netdev_holds6(nd, a.v6);
+    net_unlock(flags);
+    return local;
 }
 
 /** Resolve a route and source before a connect or checksum calculation. */
@@ -31,7 +30,7 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *s
 {
     struct netdev *nd;
     uint8_t via[16], from[16];
-    uint32_t via4;
+    uint32_t from4;
     int rc;
     if (!net_addr_any(bound) && bound.family != dst.family)
         return -ENETUNREACH;
@@ -53,9 +52,10 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *s
         *src = net_addr6(from, nd->loopback ? dst.scope : (uint32_t)nd->index);
         return 0;
     }
-    if (!ip_is_local(dst.v4) && !netdev_route_on(dst.v4, ifindex, &via4))
-        return -ENETUNREACH;
-    *src = net_addr_any(bound) ? net_addr4(ip_source_on(dst.v4, ifindex)) : bound;
+    rc = ip_source_on(dst.v4, ifindex, &from4);
+    if (rc)
+        return rc;
+    *src = net_addr_any(bound) ? net_addr4(from4) : bound;
     if (!net_addr_local(*src))
         return -EADDRNOTAVAIL;
     if (IP_IS_LOOPBACK(src->v4) && !ip_is_local(dst.v4))

@@ -1141,7 +1141,7 @@ struct watch_addr4 {
     struct addr4_routes opts;
 };
 
-/** Copy the IPv4 address at slot i and the attributes used by rtnetlink. */
+/** Copy the IPv4 address at slot i under the caller's net_lock. */
 static void read_addr4(const struct netdev *nd, int i, struct watch_addr4 *a)
 {
     a->index = nd->index;
@@ -1149,12 +1149,12 @@ static void read_addr4(const struct netdev *nd, int i, struct watch_addr4 *a)
     a->mask = i < 0 ? nd->mask : nd->mask2[i];
     a->dst = netdev_addr_dst(nd, i);
     a->brd = netdev_addr_brd(nd, i);
-    a->metric = nd->addr4[i + 1].metric;
-    a->opts = nd->addr4[i + 1];
+    a->metric = NETDEV_ADDR4(nd, i + 1).metric;
+    a->opts = NETDEV_ADDR4(nd, i + 1);
     a->flags = (a->opts.valid_until ? 0 : IFA_F_PERMANENT) |
                (a->opts.deprecated ? NETDEV_A6_DEPRECATED : 0) |
                (netdev_secondary(nd, i) ? IFA_F_SECONDARY : 0) |
-               (nd->addr4[i + 1].noprefix ? IFA_F_NOPREFIXROUTE : 0);
+               (NETDEV_ADDR4(nd, i + 1).noprefix ? IFA_F_NOPREFIXROUTE : 0);
 }
 
 /** Seconds remaining to an IPv4 address deadline, rounded up. */
@@ -1243,28 +1243,41 @@ static void addr6_msg(struct nl_build *b, const struct netdev *nd, const struct 
     nl_append(b, msg);
 }
 
-/** Append every IPv6 address of `nd`, from a copy taken under net_lock,
- * since a removal moves the ones after it. */
+/** Append every IPv6 address of `nd`, each from a copy taken under
+ * net_lock, since a removal moves the ones after it. */
 static void addr6_msgs(struct nl_build *b, const struct netdev *nd)
 {
-    struct netdev_addr6 addrs[NETDEV_ADDRS6];
-    uint32_t flags = net_lock();
-    int i, n = nd->naddr6;
+    struct netdev_addr6 a;
+    uint32_t flags;
+    int i, more;
 
-    k_memcpy(addrs, nd->addr6, (uint32_t)n * sizeof(addrs[0]));
-    net_unlock(flags);
-    for (i = 0; i < n; i++) {
-        addr6_msg(b, nd, &addrs[i]);
+    for (i = 0;; i++) {
+        flags = net_lock();
+        more = i < nd->naddr6;
+        if (more)
+            a = nd->addr6[i];
+        net_unlock(flags);
+        if (!more)
+            break;
+        addr6_msg(b, nd, &a);
     }
 }
 
-/** Append every IPv4 address of `nd`, its first then the others. */
+/** Append each IPv4 address from a copy taken under net_lock. */
 static void addr_msgs(struct nl_build *b, const struct netdev *nd)
 {
     struct watch_addr4 a;
-    int i;
-    for (i = -1; i < nd->naddr2; i++) {
-        read_addr4(nd, i, &a);
+    uint32_t flags;
+    int i, more;
+
+    for (i = -1;; i++) {
+        flags = net_lock();
+        more = i < nd->naddr2;
+        if (more)
+            read_addr4(nd, i, &a);
+        net_unlock(flags);
+        if (!more)
+            break;
         if (a.ip)
             addr_msg(b, nd, &a);
     }
@@ -1438,9 +1451,8 @@ static void route6_dump(struct nl_build *b, uint32_t table)
  * interrupts off.
  */
 
-/* The interfaces, and the routes of each family, the watch keeps. */
-#define WATCH_IFS    (NETDEV_MAX + 1)
-#define WATCH_ROUTES (32 + WATCH_IFS * (NETDEV_ADDRS + 1) * 4 + WATCH_IFS)
+/* The interfaces the watch keeps. */
+#define WATCH_IFS (NETDEV_MAX + 1)
 
 struct watch_link {
     int index;
@@ -1453,14 +1465,17 @@ struct watch_addr6 {
     struct netdev_addr6 a;
 };
 
+/* The addresses and routes are kept in arrays that `watch_grow` makes
+ * larger as the tables grow and `watch_run` frees when nobody listens;
+ * `cap4`, `cap6`, `capr4` and `capr6` are their sizes. */
 struct watch_state {
     int nlink, naddr4, naddr6, nroute4, nroute6;
+    int cap4, cap6, capr4, capr6;
     struct watch_link link[WATCH_IFS];
-    struct watch_addr4 addr4[WATCH_IFS * (NETDEV_ADDRS + 1)];
-    struct watch_addr6 addr6[WATCH_IFS * NETDEV_ADDRS6];
-    struct netdev_rt route4[WATCH_ROUTES];
+    struct watch_addr4 *addr4;
+    struct watch_addr6 *addr6;
+    struct netdev_rt *route4;
     struct route6_row *route6;
-    int cap6; /* allocated route rows */
 };
 
 /* The state at the last comparison is `watch_buf[watch_cur]`; the other
@@ -1492,35 +1507,48 @@ static int listening(void)
     return 0;
 }
 
-/** Snapshot the IPv6 table, including prefixes retained after address removal.
- * Return zero on allocation failure so a partial snapshot sends no deletes. */
-static int watch_routes6(struct watch_state *w)
+/**
+ * Make room in the array `*rows` of `*cap` entries of `size` bytes, of which
+ * `used` are taken, for one more: 0, or -1 when the heap has none, which
+ * leaves the array as it was. The caller holds net_lock.
+ */
+static int watch_grow(void **rows, int *cap, int used, size_t size)
 {
-    struct route6_row row;
-    while (route6_at(w->nroute6, &row)) {
-        if (w->nroute6 == w->cap6) {
-            int cap;
-            struct route6_row *more;
-            if ((unsigned)w->cap6 > 0x7fffffffu / sizeof(row) / 2)
-                return 0;
-            cap = w->cap6 ? w->cap6 * 2 : ROUTE6_MAX;
-            more = kmalloc((size_t)cap * sizeof(row));
-            if (!more)
-                return 0;
-            if (w->nroute6)
-                k_memcpy(more, w->route6, (size_t)w->nroute6 * sizeof(row));
-            kfree(w->route6);
-            w->cap6 = cap;
-            w->route6 = more;
-        }
-        w->route6[w->nroute6++] = row;
-    }
-    return 1;
+    void *more;
+    int next;
+    if (used < *cap)
+        return 0;
+    if ((unsigned)*cap > 0x7fffffffu / size / 2)
+        return -1;
+    next = *cap ? *cap * 2 : 16;
+    more = kmalloc((size_t)next * size);
+    if (!more)
+        return -1;
+    if (used)
+        k_memcpy(more, *rows, (size_t)used * size);
+    kfree(*rows);
+    *rows = more;
+    *cap = next;
+    return 0;
 }
 
-/** Take the state now into `w`. */
+/** Free the arrays of `w`. */
+static void watch_free(struct watch_state *w)
+{
+    kfree(w->addr4);
+    kfree(w->addr6);
+    kfree(w->route4);
+    kfree(w->route6);
+    k_memset(w, 0, sizeof(*w));
+}
+
+/** Take the state now into `w`: 1, or 0 when the heap has no room for it,
+ * so that a partial state sends no deletions. */
 static int watch_take(struct watch_state *w)
 {
+    struct watch_addr4 a4;
+    struct netdev_rt r4;
+    struct route6_row r6;
     int i, j, n = netdev_listed();
 
     w->nlink = w->naddr4 = w->naddr6 = w->nroute4 = w->nroute6 = 0;
@@ -1535,24 +1563,36 @@ static int watch_take(struct watch_state *w)
         l->oper = operstate(nd);
         l->mode = linkmode(nd);
         for (j = -1; j < nd->naddr2; j++) {
-            struct watch_addr4 *a = &w->addr4[w->naddr4];
-
-            read_addr4(nd, j, a);
-            if (a->ip) {
-                w->naddr4++;
-            }
+            read_addr4(nd, j, &a4);
+            if (!a4.ip)
+                continue;
+            if (watch_grow((void **)&w->addr4, &w->cap4, w->naddr4, sizeof(a4)))
+                return 0;
+            w->addr4[w->naddr4++] = a4;
         }
         for (j = 0; j < nd->naddr6; j++) {
+            if (watch_grow((void **)&w->addr6, &w->cap6, w->naddr6, sizeof(*w->addr6)))
+                return 0;
             w->addr6[w->naddr6].index = nd->index;
             w->addr6[w->naddr6++].a = nd->addr6[j];
         }
     }
-    while (w->nroute4 < WATCH_ROUTES && netdev_route_at(w->nroute4, &w->route4[w->nroute4])) {
-        w->nroute4++;
+    for (i = 0; netdev_route_at(i, &r4); i++) {
+        if (watch_grow((void **)&w->route4, &w->capr4, w->nroute4, sizeof(r4)))
+            return 0;
+        w->route4[w->nroute4++] = r4;
     }
-    for (i = 0; w->nroute4 < WATCH_ROUTES && netdev_local_route_at(i, &w->route4[w->nroute4]); i++)
-        w->nroute4++;
-    return watch_routes6(w);
+    for (i = 0; netdev_local_route_at(i, &r4); i++) {
+        if (watch_grow((void **)&w->route4, &w->capr4, w->nroute4, sizeof(r4)))
+            return 0;
+        w->route4[w->nroute4++] = r4;
+    }
+    for (i = 0; route6_at(i, &r6); i++) {
+        if (watch_grow((void **)&w->route6, &w->capr6, w->nroute6, sizeof(r6)))
+            return 0;
+        w->route6[w->nroute6++] = r6;
+    }
+    return 1;
 }
 
 static int same_link(const struct watch_link *a, const struct watch_link *b)
@@ -1561,12 +1601,18 @@ static int same_link(const struct watch_link *a, const struct watch_link *b)
            a->oper == b->oper && a->mode == b->mode;
 }
 
-static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
+/** Whether two IPv4 addresses are one, and with `whole`, with the same
+ * flags, scope and lifetimes; a changed address, a promoted secondary
+ * among them, is announced only as new, as Linux's rtmsg_ifa does. */
+static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b, int whole)
 {
-    return a->index == b->index && a->ip == b->ip && a->dst == b->dst && a->mask == b->mask &&
-           a->metric == b->metric && a->brd == b->brd && a->flags == b->flags &&
-           a->opts.scope == b->opts.scope && a->opts.valid_until == b->opts.valid_until &&
-           a->opts.preferred_until == b->opts.preferred_until && a->opts.proto == b->opts.proto;
+    if (a->index != b->index || a->ip != b->ip || a->dst != b->dst || a->mask != b->mask) {
+        return 0;
+    }
+    return !whole ||
+           (a->metric == b->metric && a->brd == b->brd && a->flags == b->flags &&
+            a->opts.scope == b->opts.scope && a->opts.valid_until == b->opts.valid_until &&
+            a->opts.preferred_until == b->opts.preferred_until && a->opts.proto == b->opts.proto);
 }
 
 /** Whether two IPv6 addresses are one, and with `whole`, in the same
@@ -1628,7 +1674,7 @@ static void watch_compare(const struct watch_state *was, const struct watch_stat
         for (i = 0; i < from->naddr4; i++) {
             const struct watch_addr4 *a = &from->addr4[i];
 
-            for (j = 0; j < in->naddr4 && !same_addr4(&in->addr4[j], a); j++) {
+            for (j = 0; j < in->naddr4 && !same_addr4(&in->addr4[j], a, pass); j++) {
             }
             if (j == in->naddr4 && (nd = watch_dev(a->index)) != 0) {
                 addr_msg(b, nd, a);
@@ -1677,12 +1723,8 @@ static void watch_start(void)
 static void watch_run(void)
 {
     if (!listening()) {
-        int i;
-        for (i = 0; i < 2; i++) {
-            kfree(watch_buf[i].route6);
-            watch_buf[i].route6 = 0;
-            watch_buf[i].cap6 = 0;
-        }
+        watch_free(&watch_buf[0]);
+        watch_free(&watch_buf[1]);
         watching = 0;
         return;
     }
@@ -2189,7 +2231,7 @@ static void set_addr4_options(struct netdev *nd, int slot, const uint8_t *req, u
 {
     uint16_t len;
     const uint8_t *at = req_attr(req, body, 8, IFA_FLAGS, &len);
-    struct addr4_routes *opts = &nd->addr4[slot + 1];
+    struct addr4_routes *opts = &NETDEV_ADDR4(nd, slot + 1);
     uint32_t preferred = ci ? get32(ci) : NETDEV_LIFETIME_FOREVER;
     uint32_t valid = ci ? get32(ci + 4) : NETDEV_LIFETIME_FOREVER;
     uint64_t now = tick_count();

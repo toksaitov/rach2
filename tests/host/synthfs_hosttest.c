@@ -654,9 +654,10 @@ static void dev_cpu_rows(void)
 }
 
 /**
- * /proc/sys/net/ipv6/conf: a directory for `all`, `default` and each
- * interface in a slot, whatever its name, wlan4 among them, and none for a
- * name no slot holds.
+ * /proc/sys/net/ipv6/conf and net/ipv4/conf: a directory for `all`,
+ * `default` and each interface in a slot, whatever its name, wlan4 among
+ * them, and none for a name no slot holds; keep_addr_on_down in the first
+ * and promote_secondaries in the second.
  */
 static void ipv6_conf(void)
 {
@@ -674,6 +675,18 @@ static void ipv6_conf(void)
           synth_sys_ipv6(vp.sysent, &dir, &key) && eq(dir, "wlan4") && key == SYNTH_IPV6_DISABLE);
     CHECK(synth_classify("proc/sys/net/ipv6/conf/wlan1", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/sys/net/ipv6/conf/eth1/autoconf", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/all/keep_addr_on_down", &vp) ==
+              VNODE_PROC_SYS_FILE &&
+          synth_sys_ipv6(vp.sysent, &dir, &key) && key == SYNTH_IPV6_KEEP_ADDR_ON_DOWN);
+    CHECK(synth_classify("proc/sys/net/ipv4/conf/wlan4", &vp) == VNODE_PROC_SYS_DIR);
+    synth_dir_path(VNODE_PROC_SYS_DIR, vp.sysent, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/proc/sys/net/ipv4/conf/wlan4"));
+    CHECK(synth_classify("proc/sys/net/ipv4/conf/default/promote_secondaries", &vp) ==
+              VNODE_PROC_SYS_FILE &&
+          synth_sys_ipv4(vp.sysent, &dir, &key) && eq(dir, "default") &&
+          key == SYNTH_IPV4_PROMOTE_SECONDARIES && !synth_sys_ipv6(vp.sysent, &dir, &key));
+    CHECK(synth_classify("proc/sys/net/ipv4/conf/wlan1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/sys/net/ipv4/conf/lo/forwarding", &vp) == VNODE_ENOENT);
 }
 
 /**
