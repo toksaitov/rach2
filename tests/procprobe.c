@@ -1572,6 +1572,25 @@ static const struct sysctl_try sysctl_ranges[] = {
     {"/proc/sys/net/core/netdev_budget_usecs", "-1\n", -EINVAL, 0},
     {"/proc/sys/fs/nr_open", "1048576  junk\n", 14, "1048576\n"}};
 
+#define SYS_PORTS "/proc/sys/net/ipv4/ip_local_port_range"
+
+/* net/ipv4/ip_local_port_range, of Linux 6.12's `ipv4_local_port_range`
+ * over `proc_dointvec_minmax`: two numbers, each 1 to 65535, the low end
+ * and the high end, or one, which keeps the high end, read back with a tab
+ * between them; refused with EINVAL when the high end is below the low
+ * end, the low end below 1024 or either out of range; a write counted to
+ * the end of the spaces after its second number. */
+static const struct sysctl_try sysctl_port_range[] = {
+    {SYS_PORTS, "40000 50000\n", 12, "40000\t50000\n"},
+    {SYS_PORTS, "45000\n", 6, "45000\t60999\n"},
+    {SYS_PORTS, "40000 40000\n", 12, "40000\t40000\n"},
+    {SYS_PORTS, "  1024   65535  junk\n", 16, "1024\t65535\n"},
+    {SYS_PORTS, "50001 50000\n", -EINVAL, 0},
+    {SYS_PORTS, "1023 50000\n", -EINVAL, 0},
+    {SYS_PORTS, "1024 65536\n", -EINVAL, 0},
+    {SYS_PORTS, "-40000 50000\n", -EINVAL, 0},
+    {SYS_PORTS, "x\n", -EINVAL, 0}};
+
 /* A refused number written to IPv6's forwarding, or an empty write,
  * returns its whole count and changes nothing, as Linux's
  * `addrconf_sysctl_forward` stores the value it had. */
@@ -1888,6 +1907,10 @@ static void sysctl_handler_rows(void)
           "seconds within INT_MAX / HZ, tcp_mtu_probing 255, ipv6's accept_ra and autoconf any "
           "int, netdev_budget_usecs 8000 and not 1 or 0, and fs/nr_open a number with text "
           "after it, returning the whole count, as Linux 6.12.115's handlers do");
+    check("sysctl-port-range", sysctl_tries(sysctl_port_range, SYSCTL_TRIES(sysctl_port_range)),
+          "net/ipv4/ip_local_port_range takes one port, keeping the high end of 60999, or two, and "
+          "refuses a high end below the low end, a low end below 1024 and a port past 65535, as "
+          "Linux 6.12's ipv4_local_port_range does");
     check("sysctl-forwarding-kept",
           sysctl_tries(sysctl_forwarding, SYSCTL_TRIES(sysctl_forwarding)),
           "a refused number written to ipv6's forwarding returns the whole count and changes "
