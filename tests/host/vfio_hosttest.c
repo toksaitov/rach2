@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/vfio/irq.c rach2/sys/vfio/igd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/fiber_host.c
  * host-cflags: -DRACH2_HOST_X86_64
  *
  * The bus is the Lenovo's Haswell in small: the host bridge, the HD 4400
@@ -45,6 +46,7 @@
 #include "proc/ns.h"
 #include "proc/percpu.h"
 #include "proc/process.h"
+#include "compat/fiber_host.h"
 
 extern int printf(const char *format, ...);
 
@@ -359,6 +361,13 @@ int pci_set_power_state(const pci_device_t *dev, int state)
             m->cfg[0x10 + 4 * i] &= (uint8_t)((m->cfg[0x10 + 4 * i] & 1) ? 3 : 0xF);
             k_memset(m->cfg + 0x11 + 4 * i, 0, 3);
         }
+        if (pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI)) {
+            pci_msi_disable(dev);
+        }
+        if (pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX)) {
+            pci_msix_disable(dev);
+            k_memset(m->mem + 0x2000, 0, 8 * 16);
+        }
     }
     return 0;
 }
@@ -453,6 +462,7 @@ int pci_msix_entry_set(const pci_device_t *dev, uintptr_t table, unsigned int in
         return -1;
     }
     msix_vectors[index] = vector;
+    put32(m->mem + 0x2000 + index * 16 + 12, 0);
     return 0;
 }
 
@@ -796,6 +806,8 @@ struct eventfd {
     struct eventfd_hook *hooks;
 };
 static struct eventfd evs[8]; /* descriptors 100 to 107, and 1100 to 1107 */
+static int in_eventfd_hook;
+static int irq_wakes;
 
 /** The eventfd of descriptor `fd`; 1100 to 1107 name the same eventfds as
  * 100 to 107, so that a row sees a descriptor above a byte read whole. */
@@ -817,16 +829,33 @@ void eventfd_put(struct eventfd *ev)
     ev->refs--;
 }
 
-void eventfd_signal(struct eventfd *ev)
+void eventfd_signal_except(struct eventfd *ev, const struct eventfd_hook *skip)
 {
     struct eventfd_hook *h;
 
+    CHECK(!in_eventfd_hook, "the trigger is signalled outside the unmask hook");
+    if (in_eventfd_hook) {
+        return;
+    }
     ev->count++;
     for (h = ev->hooks; h != NULL; h = h->next) {
-        if (h->signal(h)) {
+        int take;
+
+        if (h == skip) {
+            continue;
+        }
+        in_eventfd_hook = 1;
+        take = h->signal(h);
+        in_eventfd_hook = 0;
+        if (take) {
             ev->count = 0;
         }
     }
+}
+
+void eventfd_signal(struct eventfd *ev)
+{
+    eventfd_signal_except(ev, NULL);
 }
 
 int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h)
@@ -1118,6 +1147,7 @@ static struct open_file ofds[64];
 static int nfds = 3;
 static int unsafe_option;
 static unsigned int slept;
+static int pause_power_wait;
 
 /* The OpRegion at the GPU's ASLS. */
 #define ASLS 0xDAF00000u
@@ -1126,6 +1156,47 @@ static uint8_t opregion[0x2000];
 void vfio_hw_msleep(unsigned int ms)
 {
     slept += ms;
+    if (pause_power_wait && ms == PCI_PM_D3HOT_WAIT && fiber_running() == 0) {
+        fiber_yield();
+    }
+}
+
+int vfio_hw_irq_start(void)
+{
+    return 0;
+}
+
+void vfio_hw_irq_wake(void)
+{
+    irq_wakes++;
+}
+
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = 0;
+}
+
+/** Model a sleeping mutex by giving the test the next turn. */
+void mutex_lock(struct mutex *m)
+{
+    uintptr_t owner = (uintptr_t)(fiber_running() + 2);
+
+    while (m->owner != 0) {
+        if (m->owner == owner || fiber_running() < 0) {
+            CHECK(0, "the caller can wait for the device lock");
+            return;
+        }
+        fiber_yield();
+    }
+    m->owner = owner;
+}
+
+void mutex_unlock(struct mutex *m)
+{
+    CHECK(m->owner == (uintptr_t)(fiber_running() + 2), "the caller holds the device lock");
+    m->owner = 0;
 }
 
 struct mm *vfio_hw_mm(void)
@@ -1245,6 +1316,7 @@ static void build(void)
     put16(m->cfg + 0x82, 7); /* eight entries */
     put32(m->cfg + 0x84, 0x2000);
     put32(m->cfg + 0x88, 0x3000);
+    add_cap(m, PCI_CAP_ID_PM, 0xD0);
     m = add_fn(0, 0x1C, 0, 0x9C108086, 0x0604, 1);
     m->cfg[0x19] = 2;
     add_cap(m, PCI_CAP_ID_PCIE, 0x40);
@@ -1772,11 +1844,57 @@ static void power_rows(void)
     m->cfg[0xD4] = 0x0B; /* No_Soft_Reset, in D3hot behind VFIO's back */
     put32(m->cfg + 0x18, 0x00000004u);
     d->pm_restore = 0;
-    vfio_device_power(d, PCI_D0);
-    CHECK((m->cfg[0xD4] & 3) == 0 && get32(m->cfg + 0x18) == 0xE0000004u,
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 &&
+              get32(m->cfg + 0x18) == 0xE0000004u,
           "D0 with no state kept writes back the BARs the bus's walk found");
     m->cfg[0xD4] = 0;
     d->pm_restore = 1;
+}
+
+static int power_fd[2];
+static int32_t power_result[2];
+
+/** Request D0 through this call's own device description. */
+static void write_d0(void)
+{
+    int id = fiber_running();
+    uint16_t d0 = PCI_D0;
+
+    power_result[id] = pwrite_at(power_fd[id], (7ull << 40) + 0xD4, &d0, sizeof(d0));
+}
+
+/** A second caller waits for the first D0 write to finish restoring state. */
+static void power_wait_rows(void)
+{
+    struct vfio_device *d = vdev("0000:00:02.0");
+    uint16_t d3 = PCI_D3HOT;
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+
+    power_fd[0] = device;
+    power_fd[1] = ioc(group0, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)d->name);
+    CHECK(power_fd[1] > 0, "another description of the same function opens");
+    if (power_fd[1] <= 0) {
+        return;
+    }
+    CHECK(pwrite_at(device, pmcsr, &d3, 2) == 2, "the function enters D3hot");
+    pause_power_wait = 1;
+    power_result[0] = power_result[1] = -1;
+    CHECK(fiber_start(0, write_d0) == 0 && d->power_low && d->pm_saved_ok,
+          "the first write waits before restoring the function");
+    CHECK(fiber_start(1, write_d0) == 0 && power_result[1] == -1 && d->power_low,
+          "another D0 write waits while the first is restoring the function");
+    if (fiber_live(0)) {
+        CHECK(fiber_resume(0) == 1, "the first write finishes after its wait");
+    }
+    CHECK(power_result[0] == 2 && !d->power_low && !d->pm_saved_ok &&
+              get32(fns[1].cfg + 0x18) == 0xE0000004u,
+          "the first write makes the restored function available");
+    if (fiber_live(1)) {
+        CHECK(fiber_resume(1) == 1, "the second write finishes after the restore");
+    }
+    CHECK(power_result[1] == 2, "the second write succeeds");
+    pause_power_wait = 0;
+    closefd(power_fd[1]);
 }
 
 /* ---- interrupts ---- */
@@ -1848,6 +1966,7 @@ static void intx_rows(void)
     int32_t fd = 100, un = 1101;
     struct fn *m = &fns[1];
     uint16_t w = 0x0006;
+    int wakes = irq_wakes;
 
     (void)pwrite_at(device, (7ull << 40) + 4, &w, 2); /* the owner's INTx on */
     CHECK(set_irqs(device, EVENTFD_TRIGGER, 5, 0, 1, &fd) == -EINVAL, "no sixth kind");
@@ -1889,24 +2008,35 @@ static void intx_rows(void)
     m->cfg[6] |= 0x08;
     raise(IRQ_VECTOR(11));
     eventfd_signal(&evs[1]);
+    eventfd_signal(&evs[1]);
+    CHECK((m->cfg[5] & 0x04) && evs[0].count == 3 && evs[1].count == 0 && vfio_irq_pending(NULL) &&
+              irq_wakes == wakes + 1,
+          "an asserted line's unmask requests coalesce before delivery");
+    vfio_irq_work();
     CHECK((m->cfg[5] & 0x04) && evs[0].count == 4 && evs[1].count == 0,
-          "a write of it while the line is asserted keeps the mask and signals again");
+          "the worker keeps the asserted line masked and signals again");
     m->cfg[6] &= (uint8_t)~0x08;
     eventfd_signal(&evs[1]);
-    CHECK((m->cfg[5] & 0x04) == 0 && evs[1].count == 0, "a write of it unmasks the line");
+    vfio_irq_work();
+    CHECK((m->cfg[5] & 0x04) == 0 && evs[1].count == 0, "the worker unmasks the idle line");
     CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 5,
           "a trigger without data signals the eventfd");
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, &fd) == -EINVAL,
           "MSI while the line is on is refused");
+    eventfd_signal(&evs[1]);
+    CHECK(vfio_irq_pending(NULL), "an unmask is queued before the line is turned off");
     CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 0, NULL) == 0 && evs[0].refs == 0 &&
               evs[1].refs == 0 && (m->cfg[5] & 0x04),
           "no data and no count turns the line off");
+    CHECK(!vfio_irq_pending(NULL), "turning the line off clears pending work");
 }
 
 /** MSI, and VFIO_DEVICE_RESET with it on. */
 static void msi_rows(void)
 {
     int32_t fd[4] = {102, 103, -1, 104};
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uint16_t d3 = PCI_D3HOT, d0 = PCI_D0;
     int v;
 
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 2, fd) == 1,
@@ -1920,9 +2050,39 @@ static void msi_rows(void)
     CHECK(ioc(device, VFIO_DEVICE_RESET, 0) == 0 && fns[1].resets == 2 && msi_enables == 2 &&
               msi_vector == v,
           "a reset programs the message again");
+    CHECK(pwrite_at(device, pmcsr, &d3, 2) == 2 && pwrite_at(device, pmcsr, &d0, 2) == 2 &&
+              msi_vector == v && msi_enables == 3 && vectors_held() == 1,
+          "D0 restores the message after a D3hot soft reset");
+    if (msi_vector == v) {
+        raise(msi_vector);
+    }
+    CHECK(evs[2].count == 2, "the restored message reaches its original eventfd");
+    fd[0] = -1;
+    CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, fd) == 0 &&
+              msi_vector == -1 && vectors_held() == 0 && evs[2].refs == 0,
+          "removing the MSI eventfd turns off the message before giving the vector back");
     CHECK(set_irqs(device, NONE_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 0, NULL) == 0 &&
               vectors_held() == 0 && evs[2].refs == 0 && msi_vector == -1,
           "MSI off gives its vector back");
+}
+
+/** MSI-X messages that return on the xHCI after a D3hot soft reset. */
+static void msix_power_rows(int xhci)
+{
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uint16_t d3 = PCI_D3HOT, d0 = PCI_D0;
+    int v1 = msix_vectors[1], v3 = msix_vectors[3], v6 = msix_vectors[6];
+
+    CHECK(pwrite_at(xhci, pmcsr, &d3, 2) == 2 && pwrite_at(xhci, pmcsr, &d0, 2) == 2 &&
+              msix_vectors[1] == v1 && msix_vectors[3] == v3 && msix_vectors[6] == v6 &&
+              msix_vectors[0] == -1 && vectors_held() == 3,
+          "D0 restores the active MSI-X vectors");
+    CHECK(get32(fns[2].mem + 0x2000 + 12) == 1 && get32(fns[2].mem + 0x2000 + 16 + 12) == 0,
+          "D0 masks unused MSI-X entries and unmasks active ones");
+    if (v3 >= 48 && msix_vectors[3] == v3) {
+        raise(v3);
+    }
+    CHECK(evs[4].count == 2, "the restored MSI-X entry reaches its original eventfd");
 }
 
 /** MSI-X on the xHCI, entry by entry. */
@@ -1950,6 +2110,7 @@ static void msix_rows(void)
     CHECK(set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 6, 1, fd) == 0 &&
               msix_vectors[6] >= 48,
           "an entry is added while MSI-X is on");
+    msix_power_rows(xhci);
     CHECK(pread_at(xhci, 0x2000, &v, 4) == 4 && v == -1, "the table reads as all ones");
     v = 0x12345678;
     CHECK(pwrite_at(xhci, 0x2000, &v, 4) == 4 && get32(fns[2].mem + 0x2000) == 0,
@@ -2017,6 +2178,7 @@ int main(void)
     pcie_rows();
     map_rows();
     power_rows();
+    power_wait_rows();
     info_rows();
     intx_rows();
     msi_rows();

@@ -43,6 +43,7 @@ static int32_t device_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void device_close(fd_entry_t *e);
 static int32_t device_mmap(fd_entry_t *e, struct vma *vma);
 static int64_t device_llseek(fd_entry_t *e, int64_t offset, int whence);
+static void device_release(struct vfio_device *d);
 
 static const struct file_ops device_ops = {device_read,  device_write, NULL,          device_ioctl,
                                            device_close, device_mmap,  device_llseek, 0};
@@ -64,8 +65,16 @@ static void device_get(struct vfio_device *d)
  * still in its domain. */
 static void device_put(struct vfio_device *d)
 {
-    if (--d->refs == 0) {
-        vfio_device_release(d);
+    if (d->refs == 1) {
+        mutex_lock(&d->state_lock);
+        if (d->refs == 1) {
+            device_release(d);
+        }
+        d->refs--;
+        mutex_unlock(&d->state_lock);
+    } else {
+        /* A BAR mapping can be dropped with the regions lock held. */
+        d->refs--;
     }
     vfio_group_put_device(&vfio_groups[d->group]);
 }
@@ -90,10 +99,11 @@ void vfio_device_zap(struct vfio_device *d)
  * vfio_pci_set_power_state with vfio_lock_and_set_power_state. On the way
  * to D3hot the BARs' pages are taken from every mapping and refused until
  * D0, and a function that loses its state there (`pm_restore`) has it
- * kept; back in D0 that state is written back, or else the BARs the bus's
- * walk gave the function, as Linux's pci_restore_bars after D3hot. The
- * change waits PCI_PM_D3HOT_WAIT to or from D3hot, giving up the big lock.
- * Nothing for a function without a power management capability.
+ * kept; back in D0 that state and the interrupts are written back, or
+ * else the BARs the bus's walk gave the function, as Linux's
+ * pci_restore_bars after D3hot. The state lock is held across the change,
+ * including PCI_PM_D3HOT_WAIT, which gives up the big lock. Nothing for
+ * a function without a power management capability.
  */
 void vfio_device_power(struct vfio_device *d, int state)
 {
@@ -123,6 +133,7 @@ void vfio_device_power(struct vfio_device *d, int state)
     if (now == PCI_D3HOT && state == PCI_D0) {
         if (d->pm_saved_ok) {
             pci_restore_state(&d->pci, &d->pm_saved);
+            vfio_irq_restore(d);
             d->pm_saved_ok = 0;
         } else {
             for (i = 0; i < 6; i++) {
@@ -219,7 +230,7 @@ static int intx_mask_supported(const struct vfio_device *d)
  * OpRegion; then decoding on and the line off until the owner takes it.
  * 0, or the OpRegion's error.
  */
-int vfio_device_enable(struct vfio_device *d)
+static int device_enable(struct vfio_device *d)
 {
     uint8_t bar;
     uint32_t off, entries;
@@ -269,7 +280,7 @@ int vfio_device_enable(struct vfio_device *d)
  * kept then written back; then the identity and the header read back to
  * see the device came back as it was.
  */
-void vfio_device_release(struct vfio_device *d)
+static void device_release(struct vfio_device *d)
 {
     struct pci_saved_state now;
     int r = 0, i, bad = 0;
@@ -297,23 +308,29 @@ void vfio_device_release(struct vfio_device *d)
 /** A descriptor on `d` for the caller, `d` made ready if it is the first. */
 int32_t vfio_device_open_fd(struct vfio_device *d)
 {
+    struct vfio_group *g = &vfio_groups[d->group];
     int32_t fd;
-    int r;
 
-    if (d->refs == 0) {
-        r = vfio_device_enable(d);
-        if (r != 0) {
-            return r;
+    mutex_lock(&d->state_lock);
+    if (!d->bound) {
+        fd = -ENODEV;
+    } else if (g->container == NULL || g->container->iommu_type == 0) {
+        fd = -EINVAL;
+    } else {
+        device_get(d);
+        fd = d->refs == 1 ? device_enable(d) : 0;
+        if (fd == 0) {
+            fd = vfio_hw_fd_new(&device_ops, d);
+            if (fd < 0 && d->refs == 1) {
+                device_release(d);
+            }
+        }
+        if (fd < 0) {
+            d->refs--;
+            vfio_group_put_device(g);
         }
     }
-    fd = vfio_hw_fd_new(&device_ops, d);
-    if (fd < 0) {
-        if (d->refs == 0) {
-            vfio_device_release(d);
-        }
-        return fd;
-    }
-    device_get(d);
+    mutex_unlock(&d->state_lock);
     return fd;
 }
 
@@ -556,7 +573,9 @@ static int32_t device_rw(fd_entry_t *e, uint8_t __user *ubuf, uint32_t count, in
         if (write && copy_from_user(buf, ubuf + done, len) != 0) {
             n = -EFAULT;
         } else {
+            mutex_lock(&d->state_lock);
             n = region_rw(d, pos, buf, len, write);
+            mutex_unlock(&d->state_lock);
         }
         if (n > 0 && !write && copy_to_user(ubuf + done, buf, (uint32_t)n) != 0) {
             n = -EFAULT;
@@ -767,12 +786,14 @@ static int32_t device_reset(struct vfio_device *d)
     if (!d->reset_works) {
         return -EINVAL;
     }
+    mutex_lock(&d->state_lock);
     vfio_device_zap(d);
     d->resetting = 1;
     vfio_device_power(d, PCI_D0);
     r = pci_reset_function(&d->pci, vfio_hw_msleep);
-    d->resetting = 0;
     vfio_irq_restore(d);
+    d->resetting = 0;
+    mutex_unlock(&d->state_lock);
     return r;
 }
 
