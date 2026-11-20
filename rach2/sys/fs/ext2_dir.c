@@ -2042,7 +2042,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     struct ext2_acl_new acls;
     struct ext2_node *n;
     struct ext2_scan sc;
-    uint32_t at, prev, b;
+    uint32_t at, prev, b = 0;
     uint8_t head[24];
     int rc, fresh;
 

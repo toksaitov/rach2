@@ -537,6 +537,8 @@ static int acl_name_is(const char *a, const char *b)
 
 int ext2_acl_index(const char *name)
 {
+    if (!name)
+        return 0;
     if (acl_name_is(name, "system.posix_acl_access"))
         return EXT2_XATTR_ACL_ACCESS;
     if (acl_name_is(name, "system.posix_acl_default"))
