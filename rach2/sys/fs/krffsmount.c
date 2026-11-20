@@ -1397,6 +1397,7 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* tmpfile */
     0, /* uncache */
     kv_phase_of,
+    0, /* data_at */
 };
 
 /**

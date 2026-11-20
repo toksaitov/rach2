@@ -88,10 +88,22 @@ It may be given with
 .Dv RENAME_NOREPLACE .
 .Pp
 tmpfs takes both flags, as Linux's does.
+FAT32 takes
+.Dv RENAME_EXCHANGE ,
+as Linux's vfat does: each name keeps its entries, and the two files swap
+attributes, times, clusters and sizes, a directory that changes parent
+having its
+.Pa ..
+entry rewritten; as on Linux, a crash between the two entries' writes
+leaves both naming one file for
+.Xr fsck 8
+to find.
 ext2 refuses both with
 .Er EINVAL
 once both names are found and checked, as Linux's ext2 does; so do
-KRFFS, FAT32, exFAT and the directories of
+KRFFS, exFAT, FAT32 for
+.Dv RENAME_WHITEOUT ,
+and the directories of
 .Pa /dev .
 .Dv RENAME_EXCHANGE
 with either other flag, and any flag Linux does not have, return
@@ -130,6 +142,12 @@ or
 In a sticky directory, removing the source entry or replacing the
 destination entry additionally requires effective user ID 0, ownership
 of the directory, or ownership of the affected entry.
+A directory that moves to the other parent, the source of a rename or
+either name under
+.Dv RENAME_EXCHANGE ,
+needs write permission on itself, since its
+.Pa ..
+entry is rewritten, as on Linux.
 The KRFFS boot root is treated as mode 0755 and non-sticky.
 .Pp
 KRFFS, the boot root and a mounted volume alike, refuses a directory
@@ -243,7 +261,8 @@ whiteout behind a rename.
 .Bl -tag -width ENAMETOOLONG
 .It Er EACCES
 Search permission was denied on an ancestor directory, or write
-permission was denied on either parent directory.
+permission was denied on either parent directory or on a directory that
+moves to the other parent.
 .It Er EBADF
 A relative path's directory descriptor is not open.
 .It Er EEXIST

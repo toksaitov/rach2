@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.loopdev.vfat",
-      "behavior": "a FAT32 image on a FAT32 volume is attached to a loop device, mounted, read through a private mapping, written and read back, every refusal holds, and the host finds the write inside the image file",
+      "behavior": "a FAT32 image on a FAT32 volume is attached to a loop device, mounted, read through a private mapping, written and read back, two of its directories are exchanged across parents through the device and read back exchanged, every refusal holds, and the host finds the write inside the image file",
       "units": ["loopdev"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -13,7 +13,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure; the scenario removes the images it takes out of the copy after a pass"},
       "steps": [
-        {"step_id": "vfat", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe vfat at the debug shell: an image of type vfat on the disk's FAT32 volume attached to loop0, mounted, read, written, unmounted, detached, attached again and read back, everything an attachment refuses, and Linux's loop ioctls, and end the machine with QMP's quit"},
+        {"step_id": "vfat", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe vfat at the debug shell: an image of type vfat on the disk's FAT32 volume attached to loop0, mounted, read, written, two of its directories exchanged across parents with RENAME_EXCHANGE, unmounted, detached, attached again and read back, the exchanged names among it, everything an attachment refuses, and Linux's loop ioctls, and end the machine with QMP's quit"},
         {"step_id": "image", "stage": "execute", "does": "take fat.img out of the copy's volume with mcopy and read its made.txt with mtype"}
       ],
       "machines": [

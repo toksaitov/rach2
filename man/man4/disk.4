@@ -34,6 +34,21 @@ on its command line, also probe for a disk the boot did not register.
 A whole-disk window covers the disk's full reported sector count.
 The nodes are block devices with mode 0400, accessible only to root.
 Reads accept any byte range.
+A descriptor opened with
+.Dv O_DIRECT ,
+or given it by
+.Xr fcntl 2 ,
+reads and writes only at offsets, of lengths and from buffers that are
+each a multiple of the 512-byte sector, as on Linux; any other transfer,
+or a vector with any element off the sector, returns
+.Er EINVAL
+before a byte moves, and a read at or past the end returns 0.
+A transfer is first cut at the end of the device, and a write at or past
+the end returns
+.Er ENOSPC ,
+before the alignment is judged, as Linux's
+.Fn blkdev_write_iter
+orders them.
 A read from a pulled stick fails with
 .Er EIO .
 .Pp
@@ -41,7 +56,14 @@ Only the recovery kernel accepts writes through whole-disk and partition
 nodes, and each write requires effective user ID 0.
 The ordinary kernel returns
 .Er EPERM .
-Write offsets and lengths must be multiples of the 512-byte sector size.
+A write at or past the end of the node returns
+.Er ENOSPC ,
+and one that crosses the end is cut to the sectors before it; the offset
+and the length so cut must be multiples of the 512-byte sector size, else
+the write returns
+.Er EINVAL ,
+with or without
+.Dv O_DIRECT .
 A raw write to a write-protected stick fails with
 .Er EIO .
 .Pp

@@ -4328,7 +4328,7 @@
     },
     {
       "case_id": "guest.default.atcallmusl",
-      "behavior": "The directory-descriptor forms of the namespace calls, mkdirat, unlinkat, renameat, renameat2 and fchdir, resolve names from the descriptor's directory and return Linux's errors; on tmpfs renameat2 exchanges and leaves whiteouts, O_TMPFILE makes a file linkat names, and O_DIRECT opens where Linux's does.",
+      "behavior": "The directory-descriptor forms of the namespace calls, mkdirat, unlinkat, renameat, renameat2 and fchdir, resolve names from the descriptor's directory and return Linux's errors; on tmpfs renameat2 exchanges and leaves whiteouts, O_TMPFILE makes a file linkat names and follows a link before a slash, O_DIRECT opens where Linux's does, and a directory another user cannot write does not move to another parent.",
       "units": ["default", "musl/atcallmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -4382,7 +4382,10 @@
         {"assertion_id": "tmpfile-einval", "checks": "Open with O_TMPFILE and O_RDONLY is EINVAL.", "source": "program"},
         {"assertion_id": "tmpfile-eopnotsupp", "checks": "Open with O_TMPFILE of a directory of the root is EOPNOTSUPP.", "source": "program"},
         {"assertion_id": "direct-tmpfs", "checks": "A tmpfs file opens with O_DIRECT, F_GETFL reports it, and an unaligned pwrite writes its bytes.", "source": "program"},
-        {"assertion_id": "direct-einval", "checks": "Open with O_DIRECT of a /proc file and of /dev/null is EINVAL.", "source": "program"}
+        {"assertion_id": "direct-einval", "checks": "Open with O_DIRECT of a /proc file and of /dev/null is EINVAL.", "source": "program"},
+        {"assertion_id": "tmpfile-slash", "checks": "Open with O_TMPFILE and O_NOFOLLOW of a link to a tmpfs directory with a slash after it makes a file.", "source": "program"},
+        {"assertion_id": "move-dir-write", "checks": "A rename by uid 65534 of a directory of mode 0555 to another writable parent is EACCES.", "source": "program"},
+        {"assertion_id": "exchange-dir-write", "checks": "RENAME_EXCHANGE by uid 65534 that moves a directory of mode 0555 to another parent, from either name, is EACCES, and its exchange within its parent succeeds.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

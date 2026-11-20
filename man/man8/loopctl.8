@@ -67,7 +67,8 @@ or
 .Ql detach N .
 The control node is owned by root with mode 0600.
 The loop nodes are block devices.
-A node also reads and writes its device in whole sectors, as
+A node also reads any byte range of its device and writes whole sectors,
+as
 .Xr loop 4
 describes.
 .Pp

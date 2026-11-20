@@ -421,7 +421,7 @@
     },
     {
       "case_id": "machine.ext2.direct",
-      "behavior": "ext2probe direct on the fixture volume mounted for writing: O_DIRECT writes and reads whole sectors from an aligned buffer and leaves no block of the file in the cache, refuses a buffer, a length or an offset off the sector with EINVAL, and F_SETFL clears and sets it; O_TMPFILE makes a file with no name that linkat names through AT_EMPTY_PATH and whose inode its last close frees; and RENAME_EXCHANGE is EINVAL, as on Linux's ext2",
+      "behavior": "ext2probe direct on the fixture volume mounted for writing: O_DIRECT writes and reads whole sectors from an aligned buffer and leaves no block of the file in the cache, refuses a buffer, a length or an offset off the sector with EINVAL but reads zeros off the sector within a hole, and refuses a readv off the sector that reaches a block in a later element, and F_SETFL clears and sets it; the fixture's block node takes O_DIRECT with the same rule, over a readv's whole vector too, and none without it; O_TMPFILE makes a file with no name that linkat names through AT_EMPTY_PATH and whose inode its last close frees; and RENAME_EXCHANGE is EINVAL, as on Linux's ext2",
       "units": ["ext2", "tests/ext2probe.c", "tests/system/mkext2fixture.sh"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
