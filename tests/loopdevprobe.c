@@ -14,9 +14,12 @@
  * volume's file system, and reads the exchanged names back.
  *
  * It then asks for everything the attachment refuses: the same file twice, a
- * write and a truncation of an attached file, a detach with a mount on it, an
- * unmount of the volume holding the file, a directory, and a file whose
- * length is not whole sectors.
+ * truncation of an attached file, a detach with a mount on it, an unmount of
+ * the volume holding the file, a directory, and a file whose length is not
+ * whole sectors. A write of an attached file goes through, as on Linux, and
+ * the device reads what it wrote, as the file reads what a write of the
+ * device put there; on the KRFFS root, where a write may move the file, it
+ * is refused.
  *
  * Last come Linux's loop ioctls, the way util-linux's mount -o loop makes
  * them: /dev/loop-control's LOOP_CTL_GET_FREE names a free device, whose node
@@ -47,7 +50,11 @@
  * backing file before it returned. The counts are taken after the mount, so
  * the mount's own write of the volume's dirty flag is not among them.
  * `loopdevprobe ext2back` attaches an image that lives on an ext2 volume, and
- * refuses it a second device under a second name.
+ * refuses it a second device under a second name. It then attaches a file
+ * that a shared, writable mapping maps, as Linux allows: the device reads
+ * what the mapping stored before any write-back, the mapping sees what a
+ * write of the device put in the file, msync writes the mapping back, and
+ * fallocate grows the file while the device keeps its size.
  *
  * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image,
  * `vfat` with no argument. Prints "LOOPPROBE OK (type)", the type or the
@@ -90,7 +97,18 @@
 #endif
 
 #define PROT_READ   1
+#define PROT_WRITE  2
+#define MAP_SHARED  1
 #define MAP_PRIVATE 2
+#define MS_SYNC     4
+
+#if defined __x86_64__
+#define SYS_MSYNC_     26
+#define SYS_FALLOCATE_ 285
+#else
+#define SYS_MSYNC_     144
+#define SYS_FALLOCATE_ 324
+#endif
 
 /* The writes the durable mode makes, each a sync point of KRFFS. */
 #define DURABLE_WRITES 128
@@ -492,6 +510,59 @@ static void expect_mapped(const char *path, const char *want)
     }
 }
 
+/* A sector the write rows put in a file or a device and read back. */
+static char sector_buf[512];
+
+/** Write 512 bytes of `c` at `off` of the file or device node `path`, or
+ * fail with `why`. */
+static void put_sector(const char *path, long long off, char c, const char *why)
+{
+    long long at;
+    int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY, 0);
+    int i, rc;
+
+    for (i = 0; i < 512; i++) {
+        sector_buf[i] = c;
+    }
+    if (fd < 0) {
+        fail_with(why, fd);
+    }
+    rc = (int)probe_llseek(fd, off, 0, &at);
+    if (rc == 0) {
+        rc = syscall3(SYS_WRITE, fd, (long)sector_buf, 512);
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (rc != 512) {
+        fail_with(why, rc);
+    }
+}
+
+/** Fail with `why` unless the 512 bytes at `off` of the file or device node
+ * `path` are all `c`. */
+static void expect_sector(const char *path, long long off, char c, const char *why)
+{
+    long long at;
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    int i, rc;
+
+    if (fd < 0) {
+        fail_with(why, fd);
+    }
+    rc = (int)probe_llseek(fd, off, 0, &at);
+    if (rc == 0) {
+        rc = syscall3(SYS_READ, fd, (long)sector_buf, 512);
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (rc != 512) {
+        fail_with(why, rc);
+    }
+    for (i = 0; i < 512 && sector_buf[i] == c; i++) {
+    }
+    if (i != 512) {
+        fail_with(why, i);
+    }
+}
+
 /* The longest path the probe makes. */
 #define PATH_CAP 192
 
@@ -614,6 +685,20 @@ static void stage_images(void)
                   0644);
     if (fd < 0 || syscall3(SYS_WRITE, fd, (long)zero, (int)sizeof(zero)) != (int)sizeof(zero)) {
         fail("making the file whose length is not whole sectors");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** Make the file `name` of eight sectors of zeros in the images' directory,
+ * its path in `out`, or fail. */
+static void make_blank(char *out, const char *name)
+{
+    static char zeros[4096];
+    int fd =
+        syscall3(SYS_OPEN, (long)join(out, images_dir, name), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)zeros, (int)sizeof(zeros)) != (int)sizeof(zeros)) {
+        fail("making a file of eight sectors to attach");
     }
     syscall1(SYS_CLOSE, fd);
 }
@@ -871,6 +956,82 @@ static void durable_mode(void)
 }
 
 /**
+ * The rows of a file on ext2 that a shared, writable mapping maps, on device
+ * B, as Linux's loop allows: the file is attached while mapped; the device
+ * reads what the mapping stored, before any write-back takes it to the
+ * file; the mapping sees what a write of the device put in the file; msync
+ * writes the mapping back; and fallocate grows the file while the device
+ * keeps the size it was attached with.
+ */
+static void mapped_rows(void)
+{
+    char path[PATH_CAP];
+    long long size;
+    long addr;
+    char *m;
+    int fd, rc, i;
+
+    make_blank(path, "mapped.img");
+    fd = syscall3(SYS_OPEN, (long)path, O_RDWR, 0);
+    if (fd < 0) {
+        fail_with("opening the file to map", fd);
+    }
+    addr = probe_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (sys_failed(addr)) {
+        fail_with("a shared, writable mapping of a file to attach", (int)addr);
+    }
+    m = (char *)addr;
+    for (i = 1024; i < 1536; i++) {
+        m[i] = 'M';
+    }
+    rc = control_on(attach_b, path);
+    if (rc != 0) {
+        fail_with("attaching a file a shared, writable mapping maps", rc);
+    }
+    expect_sector(node_b, 1024, 'M', "the device reads what a shared mapping stored");
+    put_sector(node_b, 1536, 'D', "writing the device over a mapped file");
+    for (i = 1536; i < 2048 && m[i] == 'D'; i++) {
+    }
+    if (i != 2048) {
+        fail_with("the mapping sees what a write of the device put in the file", i);
+    }
+    for (i = 2048; i < 2560; i++) {
+        m[i] = 'N';
+    }
+    rc = syscall3(SYS_MSYNC_, addr, 4096, MS_SYNC);
+    if (rc != 0) {
+        fail_with("msync of a mapping of a file that backs a device", rc);
+    }
+    expect_sector(node_b, 2048, 'N', "the device reads what the mapping wrote back");
+#if defined __x86_64__
+    rc = syscall4(SYS_FALLOCATE_, fd, 0, 4096, 4096);
+#else
+    rc = syscall6(SYS_FALLOCATE_, fd, 0, 4096, 0, 4096, 0);
+#endif
+    if (rc != 0) {
+        fail_with("fallocate growing a file that backs a device", rc);
+    }
+    if (probe_llseek(fd, 0, 2, &size) != 0 || size != 8192) {
+        fail("fallocate did not grow the file that backs a device");
+    }
+    syscall2(SYS_MUNMAP, addr, 4096);
+    syscall1(SYS_CLOSE, fd);
+    fd = syscall3(SYS_OPEN, (long)node_b, O_RDONLY, 0);
+    if (fd < 0 || probe_llseek(fd, 0, 2, &size) != 0 || size != 4096) {
+        fail("the device did not keep the size it was attached with");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (control(detach_b) != 0) {
+        fail("detaching the mapped file");
+    }
+    expect_sector(path, 1024, 'M', "the file holds what the mapping stored");
+    expect_sector(path, 1536, 'D', "the file holds what the device wrote");
+    if (syscall1(SYS_UNLINK, (long)path) != 0) {
+        fail("removing the mapped file");
+    }
+}
+
+/**
  * `ext2back`: the volume the file lives on need not be a FAT one, and a file
  * is named by its mount and its node rather than by a path, so a hard link
  * to an attached image is the same file and a second device over it is
@@ -914,6 +1075,7 @@ static void ext2back_mode(void)
     if (syscall1(SYS_UNLINK, (long)alias) != 0) {
         fail("removing the second name");
     }
+    mapped_rows();
     if (unmount_images() != 0) {
         fail("unmounting the ext2 volume");
     }
@@ -1008,6 +1170,34 @@ static void attach_rows(const char *type)
     expect_file(path, "hello from inside an image");
 }
 
+/**
+ * A file that backs a device may be written, as on Linux: the device reads
+ * what a write(2) put in the file, and the file what a write of the device
+ * put there. On a file of eight sectors on device B, which no mount stands
+ * on.
+ */
+static void write_rows(void)
+{
+    char path[PATH_CAP];
+    int rc;
+
+    make_blank(path, "written.img");
+    rc = control_on(attach_b, path);
+    if (rc != 0) {
+        fail_with("attaching a file to write", rc);
+    }
+    put_sector(path, 1024, 'W', "writing a file that backs a device");
+    expect_sector(node_b, 1024, 'W', "the device reads what a write put in its file");
+    put_sector(node_b, 1536, 'D', "writing a device over a file");
+    expect_sector(path, 1536, 'D', "the file reads what its device wrote");
+    if (control(detach_b) != 0) {
+        fail("detaching the written file");
+    }
+    if (syscall1(SYS_UNLINK, (long)path) != 0) {
+        fail("removing the written file");
+    }
+}
+
 /** Everything the attachment of `image` refuses, as the file's opening
  * comment lists it, and the commands the control node does not take. */
 static void refusal_rows(void)
@@ -1026,10 +1216,6 @@ static void refusal_rows(void)
     fd = syscall3(SYS_OPEN, (long)image, O_WRONLY, 0);
     if (fd < 0) {
         fail_with("opening a file that backs a device", fd);
-    }
-    rc = syscall3(SYS_WRITE, fd, (long)"x", 1);
-    if (rc != -EBUSY) {
-        fail_with("writing a file that backs a device", rc);
     }
     rc = syscall2(SYS_FTRUNCATE, fd, 0);
     if (rc != -EBUSY) {
@@ -1292,8 +1478,9 @@ static void native_copy_names(const char *type, const char *ram)
  * The image copied into the copy's directory, the root, which is memory and
  * has no device under it, or a tmpfs mounted on `copy=`, mounted as `type`.
  * An open that truncates the file under the device is refused while the
- * device stands on it, and on the KRFFS root an unlink of it and a rename
- * over it are refused too; a tmpfs allows those two, as Linux does.
+ * device stands on it, and on the KRFFS root a write of it, an unlink of it
+ * and a rename over it are refused too; a tmpfs allows the last two, as
+ * Linux does.
  */
 static void copy_rows(const char *type)
 {
@@ -1318,6 +1505,13 @@ static void copy_rows(const char *type)
         fail("an attached image was truncated by an open");
     }
     if (copy_dir[0] == '\0') {
+        /* A write may move a file of the KRFFS root. */
+        fd = syscall3(SYS_OPEN, (long)ram, O_WRONLY, 0);
+        rc = fd < 0 ? fd : syscall3(SYS_WRITE, fd, (long)"x", 1);
+        syscall1(SYS_CLOSE, fd);
+        if (rc != -EBUSY) {
+            fail_with("writing a file of the KRFFS root under an attached device", rc);
+        }
         if (syscall1(SYS_UNLINK, (long)ram) != -EBUSY) {
             fail("the file under an attached device was unlinked");
         }
@@ -1388,6 +1582,7 @@ static void type_mode(const char *type)
     mount_images("vfat", "mounting the volume that holds the images");
     attach_rows(type);
     refusal_rows();
+    write_rows();
     read_only_rows();
     read_back_rows(type);
     copy_rows(type);

@@ -13,7 +13,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure; the scenario removes the images it takes out of the copy after a pass"},
       "steps": [
-        {"step_id": "vfat", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe vfat at the debug shell: an image of type vfat on the disk's FAT32 volume attached to loop0, mounted, read, written, two of its directories exchanged across parents with RENAME_EXCHANGE, unmounted, detached, attached again and read back, the exchanged names among it, everything an attachment refuses, and Linux's loop ioctls, and end the machine with QMP's quit"},
+        {"step_id": "vfat", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe vfat at the debug shell: an image of type vfat on the disk's FAT32 volume attached to loop0, mounted, read, written, two of its directories exchanged across parents with RENAME_EXCHANGE, unmounted, detached, attached again and read back, the exchanged names among it, everything an attachment refuses, a write of an attached file that the device reads and a write of the device that the file reads, and Linux's loop ioctls, and end the machine with QMP's quit"},
         {"step_id": "image", "stage": "execute", "does": "take fat.img out of the copy's volume with mcopy and read its made.txt with mtype"}
       ],
       "machines": [
@@ -61,7 +61,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure; the scenario removes the images it takes out of the copy after a pass"},
       "steps": [
-        {"step_id": "krffs", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe krffs at the debug shell: an image of type KRFFS on the disk's FAT32 volume attached to loop0, mounted, read, written, unmounted, detached, attached again and read back, everything an attachment refuses, and Linux's loop ioctls, and end the machine with QMP's quit"},
+        {"step_id": "krffs", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe krffs at the debug shell: an image of type KRFFS on the disk's FAT32 volume attached to loop0, mounted, read, written, unmounted, detached, attached again and read back, everything an attachment refuses, a write of an attached file that the device reads and a write of the device that the file reads, a write of the attached copy on the KRFFS root refused, and Linux's loop ioctls, and end the machine with QMP's quit"},
         {"step_id": "durable", "stage": "execute", "machine": "volume", "does": "boot the copy again, run loopdevprobe durable, 128 writes to a file of the KRFFS image through loop0, each a sync point that /proc/loop counts as at least one write and one sync of the backing file, and end the machine with QMP's quit"},
         {"step_id": "image", "stage": "execute", "does": "take krffs.img out of the copy's volume with mcopy, check it with fsck.krffs --strict and read its /made.txt with readfile.krffs"}
       ],
@@ -161,7 +161,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-ext2back"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
       "steps": [
-        {"step_id": "ext2back", "stage": "execute", "machine": "ext2back", "does": "boot the copy of the disk whose volume is ext2, run loopdevprobe ext2back at the debug shell, and end the machine with QMP's quit"}
+        {"step_id": "ext2back", "stage": "execute", "machine": "ext2back", "does": "boot the copy of the disk whose volume is ext2, run loopdevprobe ext2back at the debug shell: an image on the ext2 volume attached, a second device under a second name refused, and a file that a shared, writable mapping maps attached, the device reading the mapping's stores and the mapping a write of the device, msync and fallocate going through, and end the machine with QMP's quit"}
       ],
       "machines": [
         {"machine_id": "ext2back", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["loopdev-ext2back"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
