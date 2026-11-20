@@ -423,11 +423,14 @@ static int lock_device(int fd, int lock, int root)
 /** Run the command the arguments name, under `MIXER_LOCK` and a lock on
  *  /dev/mixer, each shared to read and exclusive to change; a user, who
  *  cannot open `MIXER_LOCK`, and so cannot change the record either,
- *  takes only the device's. Exits 0, 1 on a failure and 2 on a usage
- *  error. */
+ *  takes only the device's. Root is known by its effective user id, not
+ *  by the open of `MIXER_LOCK`, so that root on a read-only /var/run still
+ *  tries the device's lock for a second at most rather than waiting.
+ *  Exits 0, 1 on a failure and 2 on a usage error. */
 int main(int argc, char **argv)
 {
     int fd, lockfd, lock, status, ch = parse(argc, argv);
+    int root = geteuid() == 0;
 
     if (ch == -2) {
         fputs("usage: mixer [NAME [N | L:R | +N | -N] | =rec NAME | mute | unmute]\n", stderr);
@@ -446,7 +449,7 @@ int main(int argc, char **argv)
         close(fd);
         return 1;
     }
-    if (lock_device(fd, lock, lockfd >= 0) != 0) {
+    if (lock_device(fd, lock, root) != 0) {
         perror("mixer: " MIXER_DEVICE);
         if (lockfd >= 0) {
             close(lockfd);
