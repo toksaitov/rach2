@@ -270,6 +270,54 @@ static int route_matches(const struct netdev_rt *old, const struct netdev_rt *r)
            (!r->prefsrc || r->prefsrc == old->prefsrc);
 }
 
+/** Find the lowest-metric explicit copy of the kernel prefix matching key.
+ * With exact set, zero also selects that metric alone. */
+static int stored_prefix4(const struct netdev *nd, const struct netdev_rt *key, int exact)
+{
+    int i, best = -1;
+    for (i = 0; i < NETDEV_ROUTES; i++) {
+        const struct netdev_rt *r = &added[i].row;
+        if (added[i].nd == nd && r->kind == NETDEV_RT_ADDED && route_matches(r, key) &&
+            (!exact || r->metric == key->metric) &&
+            (best < 0 || r->metric < added[best].row.metric))
+            best = i;
+    }
+    return best;
+}
+
+void netdev_prefix_metric(struct netdev *nd, int a, uint32_t metric, int fresh)
+{
+    struct addr4_routes *opts = &nd->addr4[a + 1];
+    uint32_t dst = netdev_addr_dst(nd, a), prior = opts->metric;
+    uint32_t local = a < 0 ? nd->ip : nd->ip2[a];
+    struct netdev_rt key = {0};
+    int old, hidden;
+    opts->metric = metric;
+    key.mask = a < 0 ? nd->mask : nd->mask2[a];
+    if ((!fresh && prior == metric) || !nd->up || opts->noprefix || netdev_secondary(nd, a) ||
+        !netdev_addr_has_route(local, dst, key.mask))
+        return;
+    key.dst = dst & key.mask;
+    key.scope = 253;
+    key.proto = 2;
+    key.prefsrc = local;
+    key.metric = metric;
+    hidden = stored_prefix4(nd, &key, 1) >= 0;
+    if (!fresh && (opts->deleted & ADDR4_PREFIX)) {
+        key.metric = prior;
+        old = stored_prefix4(nd, &key, 0);
+        /* Linux inserts first, then deletes with zero as a metric wildcard. */
+        if (old >= 0 && (prior || added[old].row.metric <= metric))
+            added[old].nd = 0;
+        else if (!prior)
+            hidden = 1;
+    }
+    if (hidden)
+        opts->deleted |= ADDR4_PREFIX;
+    else
+        opts->deleted &= ~ADDR4_PREFIX;
+}
+
 /** Suppress every address reference to the generated local-table route. */
 static void remove_local(struct netdev *nd, const struct netdev_rt *old)
 {
