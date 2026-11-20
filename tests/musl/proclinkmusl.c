@@ -29,6 +29,9 @@
  * ENOENT, and a descriptor on /dev reaches its devices. The links of a
  * directory and a file whose paths are longer than 64 bytes name them
  * whole, also for a directory opened with O_PATH through another's link.
+ * /proc/thread-self names the calling thread, in the main thread and in a
+ * second one, and /proc lists it and /proc/self as links, each with an inode
+ * of its own.
  *
  * Prints "PROCLINKMUSL OK" on success and "PROCLINKMUSL FAIL (detail)"
  * otherwise. Uids 1000 and 1001 are the NEW of each when a native run gives
@@ -44,19 +47,22 @@
  * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
  * `cwd-root-self`, `fd-other-root`, `fd-other-same-uid`, `fd-other-eacces`,
  * `fd-dir-owner`, `fd-dir-eacces`, `fd-dir-ended`, `long-link`,
- * `long-removal` and `cleanup`. The first failure fails its
- * assertion and leaves the rest not run.
+ * `long-removal`, `thread-self`, `self-inodes` and `cleanup`. The first
+ * failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -735,6 +741,114 @@ static int fd_dir_search(void)
     return st == 0 ? 0 : fail_step("another process's fd directory", st);
 }
 
+/**
+ * Check /proc/thread-self from the calling thread: its text is
+ * "PID/task/TID", unfollowed it is a link with an inode of its own,
+ * followed it is /proc/self/task/TID, and its stat file is the thread's.
+ * Returns 0, or the number of the first check that failed.
+ */
+static int thread_self_of_caller(void)
+{
+    char want[48], text[48], dir[48];
+    struct stat lst, proc;
+    long tid = syscall(SYS_gettid);
+    ssize_t n;
+    int fd;
+
+    snprintf(want, sizeof(want), "%d/task/%ld", (int)getpid(), tid);
+    n = readlink("/proc/thread-self", text, sizeof(text));
+    if (n != (ssize_t)strlen(want) || memcmp(text, want, (size_t)n) != 0) {
+        return 1;
+    }
+    if (lstat("/proc/thread-self", &lst) != 0 || !S_ISLNK(lst.st_mode) ||
+        stat("/proc", &proc) != 0 || lst.st_ino == proc.st_ino) {
+        return 2;
+    }
+    snprintf(dir, sizeof(dir), "/proc/self/task/%ld", tid);
+    if (!is_dir("/proc/thread-self") || !same_file("/proc/thread-self", dir)) {
+        return 3;
+    }
+    snprintf(want, sizeof(want), "%ld (", tid);
+    fd = open("/proc/thread-self/stat", O_RDONLY);
+    n = fd < 0 ? -1 : read(fd, text, sizeof(text));
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n < (ssize_t)strlen(want) || memcmp(text, want, strlen(want)) != 0) {
+        return 4;
+    }
+    return 0;
+}
+
+/** The second thread of `thread_self`: its checks' result as a pointer. */
+static void *thread_self_thread(void *arg)
+{
+    (void)arg;
+    return (void *)(long)thread_self_of_caller();
+}
+
+/**
+ * Check /proc/thread-self from the main thread, whose thread ID is the
+ * process's, and from a second thread, whose is its own, as Linux's
+ * fs/proc/thread_self.c gives the link. Returns 0, or 1 after printing the
+ * failure.
+ */
+static int thread_self(void)
+{
+    pthread_t t;
+    void *res = (void *)-1L;
+    int st = thread_self_of_caller();
+
+    if (st == 0 && (pthread_create(&t, NULL, thread_self_thread, NULL) != 0 ||
+                    pthread_join(t, &res) != 0 || res != NULL)) {
+        st = res == (void *)-1L ? 9 : 10 + (int)(long)res;
+    }
+    if (st != 0) {
+        return fail_step("/proc/thread-self", st);
+    }
+    report_held();
+    return 0;
+}
+
+/**
+ * Check that /proc lists `self` and `thread-self` as links, each with the
+ * inode lstat gives it, which is neither /proc's nor the other's, as Linux's
+ * self_inum and thread_self_inum are each a number of its own. Returns 0, or
+ * 1 after printing the failure.
+ */
+static int self_inodes(void)
+{
+    struct stat proc, self, thread;
+    struct dirent *e;
+    DIR *d;
+    int seen = 0;
+
+    if (stat("/proc", &proc) != 0 || lstat("/proc/self", &self) != 0 ||
+        lstat("/proc/thread-self", &thread) != 0 || self.st_ino == proc.st_ino ||
+        thread.st_ino == proc.st_ino || self.st_ino == thread.st_ino) {
+        return fail("the inodes of /proc/self and /proc/thread-self");
+    }
+    d = opendir("/proc");
+    if (!d) {
+        return fail("the listing of /proc");
+    }
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, "self") == 0 && e->d_type == DT_LNK && e->d_ino == self.st_ino) {
+            seen |= 1;
+        }
+        if (strcmp(e->d_name, "thread-self") == 0 && e->d_type == DT_LNK &&
+            e->d_ino == thread.st_ino) {
+            seen |= 2;
+        }
+    }
+    closedir(d);
+    if (seen != 3) {
+        return fail_step("the entries of /proc/self and /proc/thread-self", seen);
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
@@ -770,6 +884,8 @@ static void plan(void)
                                       "fd-dir-ended",
                                       "long-link",
                                       "long-removal",
+                                      "thread-self",
+                                      "self-inodes",
                                       "cleanup"};
     unsigned i;
 
@@ -811,7 +927,7 @@ int main(int argc, char **argv)
         return fail("the directory");
     }
     bad = through(d) || renamed(d) || removed() || not_dirs() || cwd_root() || other_process() ||
-          fd_dir_search() || long_paths();
+          fd_dir_search() || long_paths() || thread_self() || self_inodes();
     close(d);
     if (umount2(TOP, 0) != 0 || rmdir(TOP) != 0) {
         return fail("the tmpfs's removal");
