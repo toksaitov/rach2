@@ -1760,19 +1760,15 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 }
 
 /**
- * The ports of the ephemeral range the searches of `tcp_free_port` and
- * `tcp_connect_port` walk, from `*low`, as Linux 6.12 counts them: an even
- * number, the range's own count less one when that is odd, so that the
- * walk by twos from any place comes back to it, or 1 for a range of one
- * port. The range is read once, so that a write of ip_local_port_range
- * during the search does not mix two.
+ * The span used to choose an offset, count probes and subtract on wrapping
+ * in a TCP port search over the packed `range`. As in Linux 6.12, the span
+ * is rounded down to an even count unless it is 1. The search wraps at
+ * the range's unrounded exclusive upper bound.
  */
-static uint32_t tcp_port_span(uint32_t *low)
+static uint32_t tcp_port_span(uint32_t range)
 {
-    uint32_t r = net_port_range, span;
+    uint32_t span = NET_PORT_HIGH(range) + 1u - NET_PORT_LOW(range);
 
-    *low = NET_PORT_LOW(r);
-    span = NET_PORT_HIGH(r) + 1u - *low;
     return span > 1u ? span & ~1u : span;
 }
 
@@ -1788,7 +1784,9 @@ static uint32_t tcp_port_span(uint32_t *low)
 static uint16_t tcp_free_port(void)
 {
     net_addr_t none = net_addr4(0), count;
-    uint32_t low, span = tcp_port_span(&low), offset, i, port;
+    uint32_t range = net_port_range;
+    uint32_t low = NET_PORT_LOW(range), high = NET_PORT_HIGH(range) + 1u;
+    uint32_t span = tcp_port_span(range), offset, i, port;
 
     tcp_isn_key();
     count = net_addr4(bind_searches++);
@@ -1796,7 +1794,7 @@ static uint16_t tcp_free_port(void)
     for (;;) {
         port = low + offset;
         for (i = 0; i < span; i += 2, port += 2) {
-            if (port >= low + span) {
+            if (port >= high) {
                 port -= span;
             }
             if (port_fixed[port] == 0 && port_auto[port] == 0) {
@@ -1819,9 +1817,9 @@ static uint16_t tcp_free_port(void)
  * keeps it, tries the ports an even offset from the range's low end first, then
  * the others, and takes the first port that no listener, passive connection or
  * bound socket holds and no connection from `from` has to this peer already. So
- * a port comes back to one peer only after the rest of the range, ports are
- * shared among connections to different peers, and a block in TIME_WAIT keeps
- * its port from the next connection to its peer. The place moves past the port,
+ * ports can be shared among connections to different peers, and a block in
+ * TIME_WAIT keeps its port from the next connection to its peer.
+ * The place moves past the port,
  * and a little further by the hash of the chosen pair, as Linux moves it by a
  * random step, so that its next value is not plain to the peer.
  * `ifindex` is the card the connection is bound to (`tcp_pair_in_use`).
@@ -1832,14 +1830,16 @@ static uint16_t tcp_connect_port(const struct netns *ns, net_addr_t from, net_ad
 {
     uint32_t h = tcp_tuple_hash(&from, &dst, 0, dst_port);
     uint32_t place = h & (TCP_PERTURB_SIZE - 1u);
-    uint32_t low, span = tcp_port_span(&low);
+    uint32_t range = net_port_range;
+    uint32_t low = NET_PORT_LOW(range), high = NET_PORT_HIGH(range) + 1u;
+    uint32_t span = tcp_port_span(range);
     uint32_t offset = ((port_perturb[place] + (h >> 8)) % span) & ~1u;
     uint32_t i, step, port;
 
     for (;;) {
         port = low + offset;
         for (i = 0; i < span; i += 2, port += 2) {
-            if (port >= low + span) {
+            if (port >= high) {
                 port -= span;
             }
             if (port_fixed[port] != 0 ||
@@ -3155,16 +3155,18 @@ static void tcp_tw_list(struct tcb *tcb)
 static int tw_overflow_logged;
 
 /**
- * Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS, trimmed, and, when no socket
- * holds it, to the TIME_WAIT run. With the run full (`tcp_tw_max`) the
- * TIME_WAIT ends at once, counted in TCPTimeWaitOverflow, as Linux's
- * tcp_time_wait closes a connection it has no bucket for: the block is
- * freed at the next tick, or at its socket's close.
+ * Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS with a fresh ACK rate limit,
+ * trim its buffers and, when no socket holds it, add it to the TIME_WAIT
+ * run. With the run full (`tcp_tw_max`) the TIME_WAIT ends at once,
+ * counted in TCPTimeWaitOverflow, as Linux's tcp_time_wait closes a
+ * connection it has no bucket for. The block is freed at the next tick,
+ * or at its socket's close.
  */
 static void tcp_enter_time_wait(struct tcb *tcb)
 {
     tcb->state = TCP_TIME_WAIT;
     tcb->delack_due = 0;
+    tcb->oow_stamp = 0;
     tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
     tcp_time_wait_trim(tcb);
     if (tw_count >= tcp_tw_max()) {
