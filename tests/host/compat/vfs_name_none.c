@@ -1,6 +1,18 @@
 /* Models with no captured entry must not silently accept a real record. */
 #include "fs/name.h"
 
+/** Admit a change in a model that has no name walks to exclude. */
+void vfs_name_lock_changes(struct vfs_mount *mnt)
+{
+    (void)mnt;
+}
+
+/** End the model's change of names. */
+void vfs_name_unlock_changes(struct vfs_mount *mnt)
+{
+    (void)mnt;
+}
+
 void vfs_name_put(struct vfs_name *name)
 {
     if (name) {

@@ -31,17 +31,24 @@ int vfs_name_seq_peek(uint32_t *seq);
  * checks the sequence of the directory it climbs from before it trusts the
  * parent (fs/namei.c:1990-1995). */
 int vfs_name_seq_still(uint32_t seq);
-/* Bracket an unlink or a rename, from the name cache's first forget to the
+/* Bracket an unlink, rmdir or rename, from the name cache's first forget to the
  * records' update, so that a record captured without the big lock across
  * it is refused (`vfs_name_capture_at`). Under the big lock; may nest. */
 void vfs_name_change_begin(void);
 void vfs_name_change_end(void);
+/** Admit an unlink, rmdir or rename before it takes its inode locks. On a
+ * file-locked mount, changes may overlap until a path retry waits. */
+void vfs_name_lock_changes(struct vfs_mount *mnt);
+/** Release the shared hold after the change and its name updates. */
+void vfs_name_unlock_changes(struct vfs_mount *mnt);
 struct vfs_name *vfs_name_ref(struct vfs_name *name);
 void vfs_name_put(struct vfs_name *name);
 int vfs_name_deleted(const struct vfs_name *name);
 
-/* Read the selected entry's path under its namespace lock. A deleted entry
- * keeps its own leaf, never another hard link. Return 0 or a negative errno. */
+/* Read the selected entry's path under the big lock. On a file-locked
+ * mount, enter without inode or namespace locks. A change during a sleeping
+ * walk restarts it with changes excluded. Other types need the namespace lock.
+ * A deleted entry keeps its own leaf. Return 0 or a negative errno. */
 int vfs_name_path(struct vfs_name *name, void *node, char *out, uint32_t cap, int *deleted);
 
 /* Namespace notifications run only after successful mutation, under its

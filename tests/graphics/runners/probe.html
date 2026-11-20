@@ -14,6 +14,7 @@
 var SIZE = 1024, FILLS = 200, LOOPS = 512, PASSES = 4, ROUNDS = 5;
 // THREADS: probe.sh -t opens the page as probe.html?threads.
 var THREADS = /(^\?|&)threads(&|$)/.test(location.search);
+var ROUND_DRAW = new URLSearchParams(location.search).get("rounds");
 
 function post(event) {
   var r = new XMLHttpRequest();
@@ -52,23 +53,36 @@ function sync(gl) {
 }
 
 // timed: the milliseconds of ROUNDS runs of draw, after one to warm up, in
-// the order they ran; median() gives the measure. With THREADS, a mark
-// before the first run and after the last has server.py snapshot every
+// the order they ran; median() gives the measure. Add each round's start,
+// end of draw and return from readPixels to stamps on performance.now()'s
+// clock. With THREADS, a mark before the first run and after the last has
+// server.py snapshot every
 // thread's run and wait counts, so that probe.sh can say which threads ran
 // during the draws and how long each waited for a processor.
-function timed(gl, api, name, draw) {
+function timed(gl, api, name, stamps, draw) {
   var t = [];
+  var markRound = ROUND_DRAW === "webgl" + api + "-" + name;
   if (THREADS) {
     sync(gl);
     post({kind: "mark", api: api, draw: name, at: "start", threads: true});
   }
   for (var i = 0; i <= ROUNDS; i++) {
     sync(gl);
+    if (markRound && i > 0)
+      post({kind: "mark", api: api, draw: name, at: "start", round: i, threads: true});
     var t0 = performance.now();
     draw();
+    var t1 = performance.now();
     sync(gl);
-    if (i > 0)
-      t.push(performance.now() - t0);
+    if (i > 0) {
+      var t2 = performance.now();
+      var elapsed = t2 - t0;
+      t.push(elapsed);
+      stamps.push([t0, t1, t2]);
+      if (markRound)
+        post({kind: "mark", api: api, draw: name, at: "end", round: i,
+              elapsed_ms: elapsed, threads: true});
+    }
   }
   if (THREADS)
     post({kind: "mark", api: api, draw: name, at: "end", threads: true});
@@ -82,7 +96,8 @@ function measure(api) {
   var attrs = {antialias: false, depth: false, stencil: false, alpha: false,
                preserveDrawingBuffer: false, powerPreference: "high-performance"};
   var gl = canvas.getContext(api === 1 ? "webgl" : "webgl2", attrs);
-  var result = {kind: "probe", api: api};
+  var result = {kind: "probe", api: api, time_origin_ms: performance.timeOrigin,
+                fill_stamps_ms: [], alu_stamps_ms: []};
   if (!gl) {
     result.error = "no context";
     document.body.removeChild(canvas);
@@ -104,7 +119,7 @@ function measure(api) {
   gl.useProgram(fill);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  result.fill_rounds = timed(gl, api, "fill", function () {
+  result.fill_rounds = timed(gl, api, "fill", result.fill_stamps_ms, function () {
     for (var i = 0; i < FILLS; i++)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   });
@@ -117,7 +132,7 @@ function measure(api) {
                     "for (int i = 0; i < " + LOOPS + "; i++) { a = fract(a * 1.0001 + b); b = sin(a + b); }" +
                     "gl_FragColor = vec4(a, b, 0.0, 1.0); }");
   gl.useProgram(alu);
-  result.alu_rounds = timed(gl, api, "alu", function () {
+  result.alu_rounds = timed(gl, api, "alu", result.alu_stamps_ms, function () {
     for (var i = 0; i < PASSES; i++)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   });
