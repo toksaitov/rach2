@@ -102,8 +102,9 @@ static void pnp_reserve_block(const ACPI_GENERIC_ADDRESS *g, UINT32 len)
  * with its TranslationOffset added only for a producer, a bridge's window,
  * since a consumer's addresses are the host's already. A range of bus
  * numbers takes no translation. Returns the `ACPI_RANGE_` kind, or 0 for a
- * range of no length, one whose Maximum lies below its Minimum, I/O ports
- * past 0x10002 and any other type.
+ * range of no length, one whose Maximum lies below its Minimum, one of
+ * every address, whose length 64 bits do not hold, I/O ports past 0x10002
+ * and any other type.
  */
 static int pnp_address_range(UINT8 type, UINT8 producer, const ACPI_ADDRESS64_ATTRIBUTE *at,
                              uint64_t *start, uint64_t *end)
@@ -113,7 +114,7 @@ static int pnp_address_range(UINT8 type, UINT8 producer, const ACPI_ADDRESS64_AT
 
     *start = at->Minimum + offset;
     *end = at->Maximum + offset;
-    if (at->AddressLength == 0 || *end < *start || *end - *start + 1u == 0) {
+    if (at->AddressLength == 0 || *end < *start || (*start == 0 && *end == ~(uint64_t)0)) {
         return 0;
     }
     if (type == ACPI_MEMORY_RANGE) {
