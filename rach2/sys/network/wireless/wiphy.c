@@ -8,10 +8,6 @@
 #include "../ethernet/ethernet.h"
 #include "../net.h"
 #include "../netconf.h"
-#include "../arp/arp.h"
-#include "../ip6/route6.h"
-#include "../ip6/nd6.h"
-#include "../ip6/ip6.h"
 #include "../socket/netlink.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -511,12 +507,6 @@ void wlan_stop(struct wlan *wlan)
 void wlan_unregister_radio(struct wlan *wlan)
 {
     unsigned i;
-    int n;
-    uint32_t flags;
-    struct netdev_rt r;
-    struct arp_row neighbors[ARP_CACHE_SIZE];
-    int count;
-    struct nd6_row neighbors6[ND6_CACHE_SIZE];
     struct wlan_request *req;
 
     if (!wlan || wlan->removing)
@@ -537,29 +527,7 @@ void wlan_unregister_radio(struct wlan *wlan)
     if (wlan->quiesce)
         wlan->quiesce(wlan);
     wlan_data_detach(wlan);
-    flags = net_lock();
-    netconf_set_up(&wlan->netdev, 0);
-    nd6_if_down(&wlan->netdev);
-    route6_forget(&wlan->netdev, -1);
-    for (n = 0; netdev_route_at(n, &r);) {
-        if (r.ifindex == wlan->netdev.index && r.kind == NETDEV_RT_ADDED)
-            netdev_route_del(&wlan->netdev, r.dst, r.mask, r.gw);
-        else
-            ++n;
-    }
-    netconf_set_address(&wlan->netdev, 0, 0);
-    arp_forget_dev(&wlan->netdev);
-    count = arp_snapshot(neighbors, ARP_CACHE_SIZE);
-    for (n = 0; n < count; ++n)
-        if (neighbors[n].iface == wlan->netdev.name)
-            arp_forget(&wlan->netdev, neighbors[n].ip);
-    count = nd6_snapshot(neighbors6, ND6_CACHE_SIZE);
-    for (n = 0; n < count; ++n)
-        if (neighbors6[n].ifindex == wlan->netdev.index)
-            nd6_forget(&wlan->netdev, neighbors6[n].addr);
-    ip6_forget_dev(&wlan->netdev);
-    netdev_unregister(&wlan->netdev);
-    net_unlock(flags);
+    netdev_withdraw(&wlan->netdev);
     for (i = 0; i < WLAN_MAX_RADIOS; ++i)
         if (radios[i] == wlan)
             radios[i] = 0;
