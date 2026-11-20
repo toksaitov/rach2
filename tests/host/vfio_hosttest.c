@@ -397,7 +397,8 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
     return (get32(c + 0x10 + 4 * i) & 6u) == 4u ? lo | (uint64_t)get32(c + 0x14 + 4 * i) << 32 : lo;
 }
 
-static int windows; /* windows mapped now */
+static int windows;  /* windows mapped now */
+static int bar_maps; /* windows asked for, made or not */
 
 uintptr_t pci_bar_map(const pci_device_t *dev, int i, uint64_t offset, size_t size, pte_t cache,
                       struct pci_window *w)
@@ -405,6 +406,7 @@ uintptr_t pci_bar_map(const pci_device_t *dev, int i, uint64_t offset, size_t si
     struct fn *m = fn_at(dev->bus, dev->device, dev->function);
 
     (void)cache;
+    bar_maps++;
     if (i != 0 || offset + size > sizeof(m->mem)) {
         return 0;
     }
@@ -2255,6 +2257,31 @@ static void unassigned_io_rows(int xhci)
           "and the owner cannot turn it on");
 }
 
+/** MSI-X refused, with nothing mapped, for a table outside a claimed
+ * memory BAR: in BAR 3, which the xHCI lacks, and past BAR 0's end. */
+static void msix_table_rows(int g2)
+{
+    static const uint32_t table[2] = {0x2003u, 0xFFC0u};
+    static const char *what[2] = {"MSI-X with its table in a BAR the function lacks is refused",
+                                  "MSI-X with its table past its BAR's end is refused"};
+    int32_t fd[1] = {102};
+    int xhci, k, maps;
+
+    for (k = 0; k < 2; k++) {
+        put32(fns[2].cfg + 0x84, table[k]);
+        xhci = ioc(g2, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0");
+        maps = bar_maps;
+        CHECK(xhci > 0 &&
+                  set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 0, 1, fd) == -EINVAL &&
+                  bar_maps == maps && vectors_held() == 0,
+              what[k]);
+        if (xhci > 0) {
+            closefd(xhci);
+        }
+    }
+    put32(fns[2].cfg + 0x84, 0x2000u);
+}
+
 /** MSI-X on the xHCI, entry by entry. */
 static void msix_rows(void)
 {
@@ -2264,6 +2291,13 @@ static void msix_rows(void)
 
     g2 = open_node("vfio/2");
     CHECK(ioc(g2, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&g2fd) == 0, "the xHCI's group");
+    add_bar(&fns[2], 2, 0, 0x1000, 0, 0); /* memory the firmware left unassigned */
+    fns[2].cfg[4] &= (uint8_t)~0x02u;
+    CHECK(ioc(g2, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0") == -EINVAL &&
+              (fns[2].cfg[4] & 0x02) == 0 && fns[2].resets == 0,
+          "a memory BAR without an address refuses the open, with no reset and memory "
+          "decoding off");
+    add_bar(&fns[2], 2, 0, 0, 0, 0);
     add_bar(&fns[2], 4, 0, 256, 1, 0); /* ports the firmware left unassigned */
     fns[2].cfg[4] |= 0x01;
     xhci = ioc(g2, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0");
@@ -2294,6 +2328,7 @@ static void msix_rows(void)
     CHECK(vectors_held() == 0 && evs[3].refs == 0 && evs[4].refs == 0 && evs[5].refs == 0 &&
               windows == 0 && fns[2].resets == 2,
           "the release gives back every vector, eventfd and window, and resets");
+    msix_table_rows(g2);
     closefd(g2);
 }
 
