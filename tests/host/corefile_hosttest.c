@@ -1171,15 +1171,28 @@ int procfs_is_mem(const struct fd_entry *e)
 }
 
 /** No pseudo-terminal: NULL. */
-struct pty *pty_get(int index)
+struct pty *pty_get(uint32_t inst, int index)
 {
+    (void)inst;
     (void)index;
     return NULL;
 }
 
-/** No pseudo-terminal: -ENXIO. */
-int pty_open_slave(int index, int flags)
+/** No model has a devpts instance but the system's, whose ptmx is root's of
+ * mode 0000. */
+int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx)
 {
+    static struct vfs_ptmx_node none;
+
+    (void)opts;
+    *ptmx = &none;
+    return inst == 0 ? 0 : -ENOENT;
+}
+
+/** No pseudo-terminal: -ENXIO. */
+int pty_open_slave(uint32_t inst, int index, int flags)
+{
+    (void)inst;
     (void)index;
     (void)flags;
     return -ENXIO;

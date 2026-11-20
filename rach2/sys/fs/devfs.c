@@ -2666,13 +2666,13 @@ int devfs_open(const char *name, int flags)
         int sid = current_proc && !current_proc->tg->tty_detached ? (int)current_proc->sid : 0;
         if (console_tty.sid == 0 || console_tty.sid != sid) {
             const char *held = pty_session_node(sid);
-            int idx = pty_session_slave(sid);
+            struct pty *pair = pty_session_pair(sid);
 
             if (held) {
                 return devfs_open(held, flags);
             }
-            if (idx >= 0) {
-                return pty_open_slave(idx, flags);
+            if (pair) {
+                return pty_open_pair_slave(pair, flags);
             }
             return -ENXIO; /* the caller has no controlling terminal */
         }

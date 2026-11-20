@@ -574,6 +574,15 @@ struct vfs_proc_options {
     int pidonly;  /* subset=pid: the root shows processes alone */
 };
 
+/* The inode of /dev/pts/ptmx of a devpts instance, Linux's that mknod_ptmx
+ * makes: its permission bits, `ptmxmode=` at the mount and at each remount,
+ * which chmod changes too, and its owner, root of the mounter's user
+ * namespace, which chown changes. */
+struct vfs_ptmx_node {
+    uint32_t mode;
+    uint32_t uid, gid; /* kernel ids */
+};
+
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
@@ -602,6 +611,10 @@ struct vfs_mount {
      * (`vfs_devpts_options`). */
     int pts;
     struct vfs_pts_options pts_opts;
+    /* On a mount of devpts, the number of its instance, Linux's superblock
+     * of its own, which its terminals carry (`struct pty`), and its ptmx. */
+    uint32_t pts_inst;
+    struct vfs_ptmx_node ptmx;
     /* On the base mount of proc, its options (`vfs_proc_options`). */
     struct vfs_proc_options proc_opts;
     int state;
@@ -1361,11 +1374,22 @@ int vfs_do_bind(const char *source, const char *target, int rec);
  */
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 
-/** Copy into `*out` the options of the devpts mount at /dev/pts under the
- * caller's root, where Linux's devpts_acquire finds the instance an open
- * of /dev/ptmx makes its pair in. 1 when one is there; 0, `*out` untouched,
- * when /dev/pts is the kernel's own or does not resolve. */
-int vfs_devpts_options(struct vfs_pts_options *out);
+/** Copy into `*out` the options, and into `*inst` the instance, of the
+ * devpts mount at /dev/pts under the caller's root, where Linux's
+ * devpts_acquire finds the instance an open of /dev/ptmx makes its pair
+ * in. 1 when one is there; 0, `*out` untouched and `*inst` 0, the
+ * system's instance, when /dev/pts is the kernel's own or does not
+ * resolve. */
+int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst);
+
+/**
+ * The devpts instance `inst`: 1 with its mount's options in `*opts`, when
+ * `opts` is not NULL, and its ptmx inode in `*ptmx`; 0 for the system's
+ * instance, 0, whose /dev/pts/ptmx is root's of mode 0000, as Linux's
+ * default ptmxmode makes it, `*opts` untouched; -ENOENT for an instance
+ * whose mount is gone. Under the big lock.
+ */
+int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx);
 
 /** The options of the proc file system `m` shows, a bind's its base's, or
  * NULL when `m` is NULL or of another type. */

@@ -1287,17 +1287,27 @@ int paging_framefail_arm(uint32_t count)
 }
 
 /** An open of a pty slave, which no row makes. */
-int pty_open_slave(int index, int flags)
+int pty_open_slave(uint32_t inst, int index, int flags)
 {
+    (void)inst;
     (void)index;
     (void)flags;
     return unexpected();
 }
 
 /** The pty of a session's controlling terminal, which no row looks up. */
-int pty_session_slave(int sid)
+struct pty *pty_session_pair(int sid)
 {
     (void)sid;
+    (void)unexpected();
+    return NULL;
+}
+
+/** An open of a pair's slave, which no row makes. */
+int pty_open_pair_slave(struct pty *p, int flags)
+{
+    (void)p;
+    (void)flags;
     return unexpected();
 }
 

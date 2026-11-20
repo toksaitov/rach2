@@ -732,16 +732,38 @@ int devfs_open(const char *name, int flags)
 }
 
 /** Fail the row: no row looks up a terminal. */
-struct pty *pty_get(int index)
+struct pty *pty_get(uint32_t inst, int index)
 {
+    (void)inst;
     (void)index;
     check(0, "unexpected terminal lookup");
     return 0;
 }
 
-/** Fail the row: no row opens a terminal. */
-int pty_open_slave(int index, int flags)
+/** No model has a devpts instance but the system's, whose ptmx is root's of
+ * mode 0000. */
+int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx)
 {
+    static struct vfs_ptmx_node none;
+
+    (void)opts;
+    *ptmx = &none;
+    return inst == 0 ? 0 : -ENOENT;
+}
+
+/** No row opens a multiplexer. */
+int pty_open_master_in(uint32_t inst, const struct vfs_pts_options *o, int flags)
+{
+    (void)inst;
+    (void)o;
+    (void)flags;
+    return -ENODEV;
+}
+
+/** Fail the row: no row opens a terminal. */
+int pty_open_slave(uint32_t inst, int index, int flags)
+{
+    (void)inst;
     (void)index;
     (void)flags;
     check(0, "unexpected terminal open");

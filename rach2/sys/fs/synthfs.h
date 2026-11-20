@@ -207,6 +207,8 @@ const char *synth_ns_name(int kind);
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
 #define SYNTH_PID_SELF (-1)
+/* The pts_index of /dev/pts/ptmx, the multiplexer of a devpts instance. */
+#define SYNTH_PTS_PTMX (-2)
 
 /** Whether a synthetic directory of `kind` is one of a process's, whose
  * process must be there and whose record keeps its pid: /proc/<pid> and its
@@ -226,18 +228,22 @@ static __inline__ int synth_dir_of_proc(int kind)
  */
 struct vpath {
     int kind;
-    char name[269]; /* VNODE_DEV: device name, "input/eventN" below /dev/input,
-                     * of up to DEVFS_NODE_NAME_MAX bytes with its NUL */
-    int devdir;     /* VNODE_DEV_SUBDIR: the row of /dev's directories (`synth_dev_dir_at`) */
-    int pid;        /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
-    int procfd;     /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
-    int procfile;   /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
-    int pts_index;  /* VNODE_PTS: the pty slave number N in /dev/pts/N */
-    int tid;        /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
-    int sysent;     /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
-    int syskey;     /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
-                     * VNODE_DEV_MADE: the entry's id (devtree.h) */
-    int sysreg;     /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
+    char name[269];    /* VNODE_DEV: device name, "input/eventN" below /dev/input,
+                        * of up to DEVFS_NODE_NAME_MAX bytes with its NUL */
+    int devdir;        /* VNODE_DEV_SUBDIR: the row of /dev's directories (`synth_dev_dir_at`) */
+    int pid;           /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
+    int procfd;        /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
+    int procfile;      /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
+    int pts_index;     /* VNODE_PTS: the pty slave number N in /dev/pts/N;
+                        * SYNTH_PTS_PTMX for /dev/pts/ptmx, a VNODE_DEV */
+    uint32_t pts_inst; /* VNODE_PTS and /dev/pts/ptmx: the devpts instance
+                        * of the mount the walk reached (`vfs_pts_instance`),
+                        * 0 for the system's /dev/pts */
+    int tid;           /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
+    int sysent; /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
+    int syskey; /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
+                 * VNODE_DEV_MADE: the entry's id (devtree.h) */
+    int sysreg; /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
     uint32_t pidns_ino; /* PID namespace number of the proc mount */
 };
 

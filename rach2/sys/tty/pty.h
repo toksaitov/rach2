@@ -47,7 +47,11 @@ struct vfs_pts_options;
 
 struct pty {
     struct pty *next; /* the list of live ptys */
-    int index;        /* N in /dev/pts/N */
+    int index;        /* N in /dev/pts/N, unique in its instance */
+    /* The devpts instance whose /dev/pts lists the slave, 0 for the
+     * system's (`vfs_pts_instance`); a pair of /dev/ptmx takes that of the
+     * devpts mount its master was opened through. */
+    uint32_t inst;
     struct tty slave; /* the slave end: a full tty + N_TTY discipline */
 
     unsigned char m_buf[PTY_BUF_SIZE]; /* slave output + echo, read by the master */
@@ -106,20 +110,29 @@ int pty_parse_options(const char *options, struct vfs_pts_options *o);
 void pty_init_pool(void);
 
 /**
- * open("/dev/ptmx"): allocate a pty pair and install the master end on a
- * fresh descriptor (locked until unlockpt). The slave takes the owner,
- * group and mode of the devpts mount at /dev/pts (`vfs_devpts_options`),
- * or without one the opener's user, group PTY_GID and mode 0620. Returns
- * the master fd (>= 0), or -errno (-ESRCH with no current process, -ENOSPC
- * when the lowest free index is not below that mount's `max`, -ENFILE if
- * the heap has no room for a pair or PTY_KERNEL_INDEX pairs of /dev/ptmx
- * are open, -EMFILE if the fd table is full, -ENOMEM if the heap has no
- * room for the descriptor).
+ * open("/dev/ptmx"): `pty_open_master_in` in the instance of the devpts
+ * mount at /dev/pts (`vfs_devpts_options`), with its options, or without
+ * one in the system's instance with none.
  */
 int pty_open_master(int flags);
 
 /**
- * open("/dev/pts/N"): install the slave end of pty N on a fresh descriptor.
+ * Allocate a pty pair in the devpts instance `inst`, at the lowest index
+ * it has free, and install the master end on a fresh descriptor (locked
+ * until unlockpt), as an open of /dev/ptmx or of the instance's
+ * /dev/pts/ptmx does. The slave takes the owner, group and mode of the
+ * devpts options `o`, or with NULL the opener's user, group PTY_GID and
+ * mode 0620. Returns the master fd (>= 0), or -errno (-ESRCH with no
+ * current process, -ENOSPC when the lowest free index is not below `o`'s
+ * `max`, -ENFILE if the heap has no room for a pair or PTY_KERNEL_INDEX
+ * pairs of the instance are open, -EMFILE if the fd table is full, -ENOMEM
+ * if the heap has no room for the descriptor).
+ */
+int pty_open_master_in(uint32_t inst, const struct vfs_pts_options *o, int flags);
+
+/**
+ * open("/dev/pts/N"): install the slave end of pty N of the devpts instance
+ * `inst` on a fresh descriptor.
  * Returns the slave fd (>= 0), or -errno (-ESRCH with no current process,
  * -ENXIO if no pty N has its master open, -EIO if the pair is still locked,
  * -EMFILE if the fd table is full, -ENOMEM if the heap has no room for the
@@ -130,7 +143,10 @@ int pty_open_master(int flags);
  * foreground; BusyBox's telnetd relies on this, where an ssh server uses
  * TIOCSCTTY.
  */
-int pty_open_slave(int index, int flags);
+int pty_open_slave(uint32_t inst, int index, int flags);
+
+/** `pty_open_slave` of the pair `p`, NULL for none, -ENXIO. */
+int pty_open_pair_slave(struct pty *p, int flags);
 
 /*
  * A terminal whose master end the kernel holds, as a console driver holds
@@ -193,9 +209,14 @@ struct kernel_iovec;
 int32_t pty_master_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
 
 /** Index of the pty whose slave is session `sid`'s controlling terminal, or
- * -1 (always for `sid` 0). /dev/tty opens the caller's controlling pty
- * through this. */
+ * -1 (always for `sid` 0). */
 int pty_session_slave(int sid);
+
+/** The pair whose slave is session `sid`'s controlling terminal, or NULL
+ * (always for `sid` 0). /dev/tty opens the caller's controlling pty
+ * through this (`pty_open_pair_slave`), in whichever devpts instance it
+ * is. */
+struct pty *pty_session_pair(int sid);
 
 /**
  * Make `keep` the sole controlling terminal of session `sid`, with `pgid` of
@@ -219,16 +240,17 @@ struct tty *pty_slave_tty(struct fd_entry *e);
  * right name. */
 int pty_slave_index(struct fd_entry *e);
 
-/** Whether pty `index` exists and its master is open (for /dev/pts
- * stat/getdents). */
-int pty_is_allocated(int index);
+/** Whether pty `index` of the devpts instance `inst` exists and its master
+ * is open (for /dev/pts stat/getdents). */
+int pty_is_allocated(uint32_t inst, int index);
 
-/** One past the highest index a live pty has, for a walk of `/dev/pts`. */
-int pty_index_limit(void);
+/** One past the highest index a live pty of the devpts instance `inst` has,
+ * for a walk of its `/dev/pts`. */
+int pty_index_limit(uint32_t inst);
 
-/** The pty behind /dev/pts/N when its master is open, or NULL: the ownership
- * fields for the stat/chown/chmod paths. */
-struct pty *pty_get(int index);
+/** The pty behind /dev/pts/N of the devpts instance `inst` when its master
+ * is open, or NULL: the ownership fields for the stat/chown/chmod paths. */
+struct pty *pty_get(uint32_t inst, int index);
 
 /**
  * The controlling terminal of the process of `proc` (`tty_is_ctty`): 1 with

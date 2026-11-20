@@ -4797,7 +4797,7 @@ static int synth_past_present(const struct vpath *vp)
     if (vp->pid != 0 && procfs_resolve_id(vp) < 0) {
         return 0;
     }
-    if (vp->pts_index >= 0 && !pty_get(vp->pts_index)) {
+    if (vp->pts_index >= 0 && !pty_get(vp->pts_inst, vp->pts_index)) {
         return 0;
     }
     if (vp->name[0] != '\0' && devfs_stat(vp->name, 0, 0, 0) != 0) {
@@ -4900,8 +4900,8 @@ static int synth_more(const char *p, const char *end)
  * tid_fd_revalidate (fs/proc/fd.c:145-161), before it follows a link and
  * even when a later lookup fails.
  */
-static int synth_link_part(uint32_t pidns_ino, char *full, uint32_t out, uint32_t plen, int more,
-                           void **node)
+static int synth_link_part(const struct vpath *root, char *full, uint32_t out, uint32_t plen,
+                           int more, void **node)
 {
     struct vpath vp;
     char dir[256];
@@ -4912,7 +4912,8 @@ static int synth_link_part(uint32_t pidns_ino, char *full, uint32_t out, uint32_
         return 0;
     }
     synth_classify(full, &vp);
-    vp.pidns_ino = pidns_ino;
+    vp.pidns_ino = root->pidns_ino;
+    vp.pts_inst = root->pts_inst;
     synth_made(full, &vp);
     rc = procfs_lookup_owner(&vp);
     if (rc != 0) {
@@ -5049,14 +5050,16 @@ static int proc_child(struct vfs_mount *mnt, void *parent, const char *full, int
     return VFS_STEP;
 }
 
-/** Finish a synthetic lookup by classifying the last name and holding it. */
-static int synth_final(char *full, uint32_t pidns_ino, void **node)
+/** Finish a synthetic lookup by classifying the last name and holding it,
+ * in the PID namespace and devpts instance of `root`, the mount's root. */
+static int synth_final(char *full, const struct vpath *root, void **node)
 {
     struct vpath vp;
     int kind;
 
     synth_classify(full, &vp);
-    vp.pidns_ino = pidns_ino;
+    vp.pidns_ino = root->pidns_ino;
+    vp.pts_inst = root->pts_inst;
     synth_made(full, &vp);
     kind = vp.kind;
     if (kind == VNODE_ENOENT) {
@@ -5106,7 +5109,8 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const struct sy
 {
     struct vfs_mount *deep;
     uint32_t plen = tail->root_len;
-    uint32_t pidns_ino = ((struct synth_node *)mount_base(mnt)->root)->vp.pidns_ino;
+    const struct vpath *root = &((struct synth_node *)mount_base(mnt)->root)->vp;
+    uint32_t pidns_ino = root->pidns_ino;
     uint32_t out;
     const char *p = tail->start;
     const char *end = tail->end;
@@ -5172,14 +5176,14 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const struct sy
         full[out] = '\0';
         kind = proc_child(mnt, tail->dir, full, synth_more(p, end), node, tail->use_real);
         if (!kind)
-            kind = synth_link_part(pidns_ino, full, out, plen, synth_more(p, end), node);
+            kind = synth_link_part(root, full, out, plen, synth_more(p, end), node);
         if (kind != 0) {
             *left = p;
             goto done;
         }
     }
     full[out] = '\0';
-    kind = synth_final(full, pidns_ino, node);
+    kind = synth_final(full, root, node);
 done:
     path_buf_put(full);
     return kind;
@@ -5722,6 +5726,9 @@ static const struct vfs_ops sysfs_vops = {
     0, /* phase */
 };
 
+/* The last devpts instance a mount made; the system's /dev/pts is 0. */
+static uint32_t pts_instances;
+
 /** Emit the options of the devpts mount `m`, as Linux's
  * devpts_show_options writes them: uid= and gid= when given, mode= and
  * ptmxmode= in three octal digits, and max= below its greatest. */
@@ -6209,7 +6216,8 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     }
     m->flags = (m->flags & ~VFS_MS_SUPER) | (flags & VFS_MS_SUPER);
     if (m->pts) {
-        m->pts_opts = popts; /* Linux's devpts_remount, from the defaults */
+        m->pts_opts = popts;           /* Linux's devpts_remount, from the defaults */
+        m->ptmx.mode = popts.ptmxmode; /* and its update_ptmx_mode */
     }
     m->proc_opts = procopts; /* Linux's proc_reconfigure, from those in force */
     set_mount_attrs(named, flags);
@@ -6431,6 +6439,23 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     return m;
 }
 
+/** Make the new mount `m` a devpts instance of its own with the options
+ * `o`: its number, and its ptmx, of mode `ptmxmode=` and root's of the
+ * mounter's user namespace, as Linux's mknod_ptmx makes it. */
+static void mount_pts_setup(struct vfs_mount *m, const struct vfs_pts_options *o)
+{
+    int64_t root_uid = ns_uid_to_kernel(proc_userns(current_proc), 0);
+    int64_t root_gid = ns_gid_to_kernel(proc_userns(current_proc), 0);
+
+    m->pts = 1;
+    m->pts_opts = *o;
+    m->pts_inst = ++pts_instances;
+    m->ptmx.mode = o->ptmxmode;
+    m->ptmx.uid = root_uid < 0 ? 0 : (uint32_t)root_uid;
+    m->ptmx.gid = root_gid < 0 ? 0 : (uint32_t)root_gid;
+    m->show_options = pts_show_options;
+}
+
 /** Read the options of a new mount of `t`, a mount of devpts when `pts`,
  * that the VFS keeps for the type: devpts's into `*popts`
  * (`pty_parse_options`) and proc's into `*procopts`
@@ -6530,9 +6555,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->dev = dev;
     m->claim = claim;
     if (pts) {
-        m->pts = 1;
-        m->pts_opts = popts;
-        m->show_options = pts_show_options;
+        mount_pts_setup(m, &popts);
     }
     m->proc_opts = procopts;
     vfs_node_unlock(&tref);
@@ -6540,6 +6563,9 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
 
     sleep_lock_take(&m->ns);
     rc = pts ? synth_mount_root(m, dev, flags, "dev/pts") : t->mount(m, dev, flags, options);
+    if (rc == 0 && pts) {
+        ((struct synth_node *)m->root)->vp.pts_inst = m->pts_inst;
+    }
     if (rc == 0 && t == &vfs_debugfs_type) {
         m->bind_of = mounts[7];
         k_strncpy(m->bind_root, "/", sizeof(m->bind_root));
@@ -6565,22 +6591,47 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     return 0;
 }
 
-int vfs_devpts_options(struct vfs_pts_options *out)
+int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst)
 {
     struct vfs_ref ref;
     const struct vfs_mount *base;
     int found;
 
+    *inst = 0;
     if (!vfs_root_mounted() || vfs_resolve(0, "/dev/pts", 0, &ref, 0, 0) != 0) {
         return 0;
     }
     base = vfs_mount_base(ref.mnt);
-    found = base->pts;
+    found = base->pts && ref.node == base->root;
     if (found) {
         *out = base->pts_opts;
+        *inst = base->pts_inst;
     }
     vfs_ref_release(&ref);
     return found;
+}
+
+int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx)
+{
+    static struct vfs_ptmx_node system_ptmx = {0, 0, 0};
+    int i;
+
+    if (inst == 0) {
+        *ptmx = &system_ptmx;
+        return 0;
+    }
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+
+        if (m && m->state == VFS_ACTIVE && !m->bind_of && m->pts && m->pts_inst == inst) {
+            if (opts) {
+                *opts = m->pts_opts;
+            }
+            *ptmx = &m->ptmx;
+            return 1;
+        }
+    }
+    return -ENOENT;
 }
 
 int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source, uint32_t flags)

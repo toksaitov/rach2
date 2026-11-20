@@ -3701,6 +3701,30 @@ static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode,
 }
 
 /**
+ * open of /dev/pts/ptmx, `vp`, the multiplexer of the devpts instance the
+ * walk reached: the caller's access is judged by the instance's ptmx inode
+ * (`vfs_pts_instance`), and the pair is made in that instance with its
+ * mount's options, as Linux's ptmx_open makes it in the devpts the inode
+ * is on. -ENOENT for an instance whose mount is gone.
+ */
+static int32_t pts_ptmx_open(const struct vpath *vp, int flags)
+{
+    struct vfs_pts_options o;
+    struct vfs_ptmx_node *ptmx;
+    int found = vfs_pts_instance(vp->pts_inst, &o, &ptmx);
+    int32_t rc;
+
+    if (found < 0) {
+        return found;
+    }
+    if (flags & O_DIRECTORY) {
+        return -ENOTDIR;
+    }
+    rc = cred_access_bits(ptmx->uid, ptmx->gid, ptmx->mode & 0777u, open_want(flags), 0);
+    return rc != 0 ? rc : pty_open_master_in(vp->pts_inst, found ? &o : NULL, flags);
+}
+
+/**
  * Open with `flags` the node of /dev, /proc or /sys that a path classified
  * as `vp`, and return the descriptor or a negative errno. Nothing is created
  * there, and no name falls through to KRFFS: a name the class does not know
@@ -3733,6 +3757,9 @@ static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, i
         uint32_t dmode, uid, gid;
         int32_t rc;
 
+        if (vp->pts_index == SYNTH_PTS_PTMX) {
+            return pts_ptmx_open(vp, flags);
+        }
         if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0 ||
             devfs_owner(vp->name, &uid, &gid) != 0) {
             return -ENOENT;
@@ -3745,7 +3772,7 @@ static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, i
             return -ENOTDIR;
         }
         {
-            struct pty *pt = pty_get(vp->pts_index);
+            struct pty *pt = pty_get(vp->pts_inst, vp->pts_index);
             if (pt) {
                 int32_t rc = cred_access_bits(pt->uid, pt->gid, (uint32_t)(pt->mode & 0777u),
                                               open_want(flags), 0);
@@ -3754,7 +3781,7 @@ static int32_t synth_open(const struct vfs_mount *mnt, const struct vpath *vp, i
                 }
             }
         }
-        return pty_open_slave(vp->pts_index, flags);
+        return pty_open_slave(vp->pts_inst, vp->pts_index, flags);
     case VNODE_PROC_FILE:
     case VNODE_PROC_CMDLINE:
     case VNODE_PROC_NET_DEV:
@@ -4459,7 +4486,7 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
     const char *name;
 
     if (!block && major == 136) {
-        return pty_get((int)minor) ? pty_open_slave((int)minor, flags) : -ENXIO;
+        return pty_get(0, (int)minor) ? pty_open_slave(0, (int)minor, flags) : -ENXIO;
     }
     name = devfs_name_of(block, rdev);
     return name ? devfs_open(name, flags) : -ENXIO;
@@ -10002,6 +10029,9 @@ int32_t fd_stat_ids(int pid, int fd, uint32_t *mnt_id, uint64_t *ino)
  * comparison of (st_dev, st_ino) ttyname makes matches. */
 #define PTS_INO_BASE 0x1000u
 
+/* The inode of /dev/pts/ptmx, the last below the slaves'. */
+#define PTS_INO_PTMX (PTS_INO_BASE - 1u)
+
 /* The slaves' inodes, N below PTY_KERNEL_INDEX, end below the first of
  * devfs's registry (devfs.h). */
 typedef char pts_ino_fits[PTS_INO_BASE + PTY_KERNEL_INDEX <= DEVFS_INO_SLOT_BASE ? 1 : -1];
@@ -10264,6 +10294,37 @@ static int synth_irq_stat(const struct vpath *vp, struct kstat *kst)
     return 0;
 }
 
+/** Fill `kst` for the device `vp` of /dev, as devfs registers it, and for
+ * /dev/pts/ptmx with the mode, owner and inode of its devpts instance's
+ * ptmx (`vfs_pts_instance`), as Linux's mknod_ptmx makes that inode apart
+ * from the device's node in /dev. 0, or -ENOENT for a device that is not
+ * there or an instance whose mount is gone. */
+static int32_t synth_stat_dev(const struct vpath *vp, struct kstat *kst)
+{
+    struct vfs_ptmx_node *ptmx;
+    uint32_t mode, rdev, ino;
+
+    if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0 ||
+        devfs_owner(vp->name, &kst->st_uid, &kst->st_gid) != 0) {
+        return -ENOENT;
+    }
+    kst->st_dev = DEVFS_FSID;
+    kst->st_mode = mode;
+    kst->st_rdev = rdev;
+    kst->st_ino = ino;
+    if (vp->pts_index != SYNTH_PTS_PTMX) {
+        return 0;
+    }
+    if (vfs_pts_instance(vp->pts_inst, NULL, &ptmx) < 0) {
+        return -ENOENT;
+    }
+    kst->st_mode = 0020000u | (ptmx->mode & 07777u);
+    kst->st_uid = ptmx->uid;
+    kst->st_gid = ptmx->gid;
+    kst->st_ino = PTS_INO_PTMX;
+    return 0;
+}
+
 /**
  * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
  * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
@@ -10317,15 +10378,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         kst->st_ino = ino;
         return 0;
     case VNODE_DEV:
-        if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0 ||
-            devfs_owner(vp->name, &kst->st_uid, &kst->st_gid) != 0) {
-            return -ENOENT;
-        }
-        kst->st_dev = DEVFS_FSID;
-        kst->st_mode = mode;
-        kst->st_rdev = rdev;
-        kst->st_ino = ino;
-        return 0;
+        return synth_stat_dev(vp, kst);
     case VNODE_PROC_DIR:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;
@@ -10531,7 +10584,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         return synth_stat_dev_dir(vp, kst);
     case VNODE_PTS: {
         /* Linux's major for a Unix98 pty slave is 136. */
-        struct pty *pt = pty_get(vp->pts_index);
+        struct pty *pt = pty_get(vp->pts_inst, vp->pts_index);
         if (!pt) {
             return -ENOENT;
         }
@@ -13984,8 +14037,20 @@ static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode);
  */
 static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
 {
+    if (vp->kind == VNODE_DEV && vp->pts_index == SYNTH_PTS_PTMX) {
+        struct vfs_ptmx_node *ptmx;
+
+        if (vfs_pts_instance(vp->pts_inst, NULL, &ptmx) < 0) {
+            return -ENOENT;
+        }
+        if (!inode_owner_or_capable(ptmx->uid)) {
+            return -EPERM;
+        }
+        ptmx->mode = mode & 07777u;
+        return 0;
+    }
     if (vp->kind == VNODE_PTS) {
-        struct pty *pt = pty_get(vp->pts_index);
+        struct pty *pt = pty_get(vp->pts_inst, vp->pts_index);
         if (!pt) {
             return -ENOENT;
         }
@@ -14189,11 +14254,24 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
     if (vp->kind == VNODE_DEV_MADE) {
         return chown_made(vp->syskey, uid, gid);
     }
+    if (vp->kind == VNODE_DEV && vp->pts_index == SYNTH_PTS_PTMX) {
+        struct vfs_ptmx_node *ptmx;
+
+        if (vfs_pts_instance(vp->pts_inst, NULL, &ptmx) < 0) {
+            return -ENOENT;
+        }
+        rc = chown_rule(ptmx->uid, ptmx->gid, uid, gid);
+        if (rc == 0) {
+            ptmx->uid = uid != (uint32_t)-1 ? uid : ptmx->uid;
+            ptmx->gid = gid != (uint32_t)-1 ? gid : ptmx->gid;
+        }
+        return rc;
+    }
     if (vp->kind == VNODE_DEV && vp->name[0] != '\0') {
         return chown_dev(vp->name, uid, gid);
     }
     if (vp->kind == VNODE_PTS) {
-        struct pty *pt = pty_get(vp->pts_index);
+        struct pty *pt = pty_get(vp->pts_inst, vp->pts_index);
 
         return pt ? chown_pty(pt, uid, gid) : -ENOENT;
     }
@@ -14462,6 +14540,15 @@ long sys_fchmodat2(isr_params_t *params)
  * change, and anyone else is -EPERM. A descriptor that is not open, or was
  * opened with O_PATH, is -EBADF, as on Linux.
  */
+/** The pair of the slave descriptor `entry` while its master is open, as
+ * `pty_get` finds it in its own devpts instance, or NULL. */
+static struct pty *pts_entry_pair(const fd_entry_t *entry)
+{
+    struct pty *p = entry->type == FD_TYPE_PTS ? (struct pty *)entry->priv : NULL;
+
+    return p && pty_get(p->inst, p->index) == p ? p : NULL;
+}
+
 /**
  * fchmod of the descriptor `entry` when it is on no file of a file system:
  * a pty slave stores the bits on the pty under the owner-or-root rule
@@ -14481,7 +14568,7 @@ static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
         return chmod_dev(devfs_fd_name(entry), mode);
     }
     if (entry->type == FD_TYPE_PTS) {
-        struct pty *pt = pty_get(pty_slave_index(entry));
+        struct pty *pt = pts_entry_pair(entry);
         if (!pt) {
             return -EBADF;
         }
@@ -14756,7 +14843,7 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         return chown_dev(devfs_fd_name(entry), uid, gid);
     }
     if (entry->type == FD_TYPE_PTS) {
-        struct pty *pt = pty_get(pty_slave_index(entry));
+        struct pty *pt = pts_entry_pair(entry);
 
         return pt ? chown_pty(pt, uid, gid) : -EBADF;
     }
@@ -21321,6 +21408,64 @@ static int synth_proc_pidonly_dirent(const struct synth_dir *sd, const struct vf
 }
 
 /**
+ * The `n`-th entry of /dev/pts, past "." and "..": the `n`-th allocated
+ * pseudoterminal of the devpts instance of `mnt`, named by its index, or of
+ * the system's instance when `mnt` is NULL or no devpts mount. 1 with the
+ * entry filled, or 0 past the end.
+ */
+static int synth_pts_dirent(const struct vfs_mount *mnt, int n, char *name, uint64_t *ino,
+                            uint8_t *dtype)
+{
+    const struct vfs_mount *base = mnt ? vfs_mount_base(mnt) : NULL;
+    uint32_t inst = base && base->pts ? base->pts_inst : 0;
+    int i, c = 0;
+
+    for (i = 0; i < pty_index_limit(inst); i++) {
+        if (!pty_is_allocated(inst, i)) {
+            continue;
+        }
+        if (c++ == n) {
+            synth_u32_str(name, (uint32_t)i);
+            *ino = PTS_INO_BASE + (uint32_t)i;
+            *dtype = DT_CHR;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The `n`-th entry of /proc, past "." and "..": its files, then a directory
+ * for each process of `sd`'s pid namespace that the mount options `o`, NULL
+ * for none, let the caller see (`procfs_nth_pid`). 1 with the entry filled,
+ * or 0 past the end.
+ */
+static int synth_proc_root_dirent(const struct synth_dir *sd, const struct vfs_proc_options *o,
+                                  int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    int count = (int)(sizeof(synth_proc_globals) / sizeof(synth_proc_globals[0]));
+    int i, p;
+
+    if (n < count) {
+        for (i = 0; synth_proc_globals[n].name[i] != '\0'; i++) {
+            name[i] = synth_proc_globals[n].name[i];
+        }
+        name[i] = '\0';
+        *dtype = synth_proc_globals[n].type;
+        *ino = synth_proc_globals[n].inode();
+        return 1;
+    }
+    p = procfs_nth_pid(n - count, sd->pidns_ino, o);
+    if (p < 0) {
+        return 0;
+    }
+    synth_u32_str(name, (uint32_t)p);
+    *ino = procfs_ino_pid(procfs_resolve_pid(p, sd->pidns_ino));
+    *dtype = DT_DIR;
+    return 1;
+}
+
+/**
  * The entry at position `*pos` of a synthetic directory, from the directory
  * descriptor's record `sd`, its kind, pid and tid: fills name/ino/dtype and
  * returns 1, or 0 past the end. "." and ".." are at 0 and 1 of every
@@ -21340,17 +21485,19 @@ static int synth_proc_pidonly_dirent(const struct synth_dir *sd, const struct vf
  * Each directory of /dev lists after these the entries root made in it
  * (`synth_dev_any_dirent`), and a directory root made lists those alone.
  * `name` has room for SYNTH_DIRENT_NAME bytes.
- * /dev/pts has an entry for each allocated pseudoterminal, named by its
- * index; /proc/acpi has `call`; a directory
+ * /dev/pts has an entry for each allocated pseudoterminal of the devpts
+ * instance of `mnt`, the mount the directory was opened through, named by
+ * its index (`synth_pts_dirent`); /proc/acpi has `call`; a directory
  * of /proc/sys has the entries of the table under it; and /proc has its
- * files, then a directory for each process the options `o` of its mount,
- * NULL for none, let the caller see (`procfs_nth_pid`), or under subset=pid
+ * files, then a directory for each process the options of `mnt` let the
+ * caller see (`synth_proc_root_dirent`), or under subset=pid
  * self and those directories alone (`synth_proc_pidonly_dirent`). The other
  * directories have functions of their own.
  */
-static int synth_dirent_at(const struct synth_dir *sd, const struct vfs_proc_options *o, int *pos,
+static int synth_dirent_at(const struct synth_dir *sd, const struct vfs_mount *mnt, int *pos,
                            char *name, uint64_t *ino, uint8_t *dtype)
 {
+    const struct vfs_proc_options *o = vfs_proc_options(mnt);
     int kind = sd->kind;
     int n = *pos;
 
@@ -21394,19 +21541,7 @@ static int synth_dirent_at(const struct synth_dir *sd, const struct vfs_proc_opt
         break;
     }
     if (kind == VNODE_PTS_DIR) {
-        int i, c = 0;
-        for (i = 0; i < pty_index_limit(); i++) {
-            if (pty_is_allocated(i)) {
-                if (c == n) {
-                    synth_u32_str(name, (uint32_t)i);
-                    *ino = PTS_INO_BASE + (uint32_t)i;
-                    *dtype = DT_CHR;
-                    return 1;
-                }
-                c++;
-            }
-        }
-        return 0;
+        return synth_pts_dirent(mnt, n, name, ino, dtype);
     }
     if (kind == VNODE_SYS_DIR) {
         return synth_sys_dirent(sd->pid, sd->tid, n, name, ino, dtype);
@@ -21437,27 +21572,7 @@ static int synth_dirent_at(const struct synth_dir *sd, const struct vfs_proc_opt
         return synth_net_dirent(kind == VNODE_PROC_NET_STAT_DIR, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_DIR) {
-        int count = (int)(sizeof(synth_proc_globals) / sizeof(synth_proc_globals[0]));
-
-        if (n < count) {
-            int i;
-            for (i = 0; synth_proc_globals[n].name[i] != '\0'; i++)
-                name[i] = synth_proc_globals[n].name[i];
-            name[i] = '\0';
-            *dtype = synth_proc_globals[n].type;
-            *ino = synth_proc_globals[n].inode();
-            return 1;
-        }
-        {
-            int p = procfs_nth_pid(n - count, sd->pidns_ino, o);
-            if (p < 0) {
-                return 0;
-            }
-            synth_u32_str(name, (uint32_t)p);
-            *ino = procfs_ino_pid(procfs_resolve_pid(p, sd->pidns_ino));
-            *dtype = DT_DIR;
-            return 1;
-        }
+        return synth_proc_root_dirent(sd, o, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_PID || kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_FD_DIR ||
         kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR) {
@@ -21550,8 +21665,7 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int form
     struct vfs_dirent de;
     uint8_t dtype;
 
-    while (
-        synth_dirent_at(sd, vfs_proc_options(e->ofd->synth_mnt), &idx, de.name, &de.ino, &dtype)) {
+    while (synth_dirent_at(sd, e->ofd->synth_mnt, &idx, de.name, &de.ino, &dtype)) {
         long n;
 
         de.type = dtype;

@@ -2285,8 +2285,10 @@ static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
             vp->kind = VNODE_PTS_DIR;
         } else if (comp_eq(c[2], "ptmx")) {
             /* The multiplexer, as a devpts mount has it beside its
-             * terminals: the device /dev/ptmx is. */
+             * terminals: the device /dev/ptmx is, with the inode of its
+             * instance (`vfs_pts_instance`). */
             vp->kind = n == 3 ? VNODE_DEV : VNODE_ENOTDIR;
+            vp->pts_index = SYNTH_PTS_PTMX;
             synth_copy_name(vp, c[2]);
         } else {
             vp->pts_index = comp_uint(c[2]);
@@ -2425,6 +2427,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->procfd = -1;
     vp->procfile = 0;
     vp->pts_index = -1;
+    vp->pts_inst = 0;
     vp->devdir = -1;
     vp->sysent = 0;
     vp->syskey = 0;

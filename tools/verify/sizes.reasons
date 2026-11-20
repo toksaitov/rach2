@@ -241,7 +241,6 @@ rach2/sys/arch/x86/cmos.c:rtc_decode complexity 31 a parser over an external for
 rach2/sys/syscall_fs.c:fstat_fill_attrs complexity 40 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat_node lines 252 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:copy_from_file params 8 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:copy_from_pipe params 7 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them

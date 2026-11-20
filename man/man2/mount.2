@@ -303,7 +303,12 @@ Linux on i386; Linux on x86-64 allows more.
 For
 .Ql devpts ,
 the source is any string, recorded as given, and nothing is claimed.
-Every mount shows the system's one set of terminals.
+Each mount is an instance of its own, as on Linux: it lists its own
+terminals, numbered from 0 apart from every other instance's, and its own
+.Pa ptmx .
+The system's
+.Pa /dev/pts ,
+which is no mount, is the first instance.
 It takes Linux's options:
 .Ql uid=
 and
@@ -313,25 +318,34 @@ namespace maps, without which it is the opener's;
 .Ql mode= ,
 in octal, its permission bits, 0600 by default;
 .Ql ptmxmode= ,
-in octal, 0000 by default, which is shown and leaves
-.Pa /dev/pts/ptmx
-with the mode of
-.Pa /dev/ptmx ;
+in octal, 0000 by default, the mode of the instance's
+.Pa ptmx ,
+owned by root of the mounter's user namespace, which an open of it
+checks and chmod and chown change;
 .Ql max= ,
-from 0 to 1048576, below which a new terminal's number must be, or
-.Pa /dev/ptmx
-fails with
+from 0 to 1048576, below which a new terminal's number in the instance
+must be, or the open of the multiplexer fails with
 .Er ENOSPC ;
 and
 .Ql newinstance ,
 which every mount is.
-A terminal opened through
+An open of
 .Pa /dev/ptmx
-takes the options of the devpts mount at
+makes its terminal in the instance mounted at
 .Pa /dev/pts
-under the opener's root, and without one the opener's user, group 5 and
-mode 0620.
-A remount takes its options from the defaults again, as on Linux.
+under the opener's root, with that mount's options, and without one in
+the system's, as the opener's user, group 5 and mode 0620; an open of an
+instance's
+.Pa ptmx
+makes it in that instance.
+The system's
+.Pa /dev/pts/ptmx
+is root's with mode 0000, as Debian mounts its devpts.
+A remount takes its options from the defaults again and sets the mode of
+.Pa ptmx
+to
+.Ql ptmxmode= ,
+as on Linux.
 Another option or a bad number is
 .Er EINVAL .
 .Pp

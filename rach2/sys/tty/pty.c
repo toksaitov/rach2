@@ -183,13 +183,14 @@ int pty_parse_options(const char *options, struct vfs_pts_options *o)
     return 0;
 }
 
-/** The live pty with index `index`, or NULL. */
-static struct pty *pty_by_index(int index)
+/** The live pty of the devpts instance `inst` with index `index`, or NULL.
+ * The kernel's pairs are the system instance's, 0. */
+static struct pty *pty_by_index(uint32_t inst, int index)
 {
     struct pty *p;
 
     for (p = ptys; p; p = p->next) {
-        if (p->index == index) {
+        if (p->index == index && p->inst == inst) {
             return p;
         }
     }
@@ -350,16 +351,17 @@ static void pty_flow(struct tty *t, int what)
 }
 
 /**
- * Allocate a pair at the lowest free index from `first` on, 0 for a pair
- * of /dev/ptmx, its slave owned and moded by the devpts options `o`, or
- * NULL for the kernel's defaults, or return NULL when the heap has no room
+ * Allocate a pair of the devpts instance `inst` at the lowest free index
+ * it has from `first` on, 0 for a pair of /dev/ptmx, its slave owned and
+ * moded by the devpts options `o`, or NULL for the kernel's defaults, or
+ * return NULL when the heap has no room
  * or a pair of /dev/ptmx would reach PTY_KERNEL_INDEX, past which its
  * slave's inode would be another node's of /dev. One queue serves the
  * master's readers, writers and pollers; the slave's `space_wq` points at
  * it, so a flush, a termios change, or a signal char or an erase the master
  * wrote wakes a master writer waiting for room.
  */
-static struct pty *pty_alloc(int first, const struct vfs_pts_options *o)
+static struct pty *pty_alloc(uint32_t inst, int first, const struct vfs_pts_options *o)
 {
     struct pty *p = kzalloc(sizeof(*p));
     int i;
@@ -367,13 +369,14 @@ static struct pty *pty_alloc(int first, const struct vfs_pts_options *o)
     if (!p) {
         return NULL;
     }
-    for (i = first; pty_by_index(i); i++) {
+    for (i = first; pty_by_index(inst, i); i++) {
     }
     if (first < PTY_KERNEL_INDEX && i >= PTY_KERNEL_INDEX) {
         kfree(p);
         return NULL;
     }
     p->index = i;
+    p->inst = inst;
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
     p->uid = current_proc ? proc_fsuid(current_proc) : 0;
     p->gid = PTY_GID;
@@ -1288,21 +1291,31 @@ static const struct file_ops pts_ops = {pts_read,  pts_write, pts_poll, NULL,
 int pty_open_master(int flags)
 {
     struct vfs_pts_options o;
-    int mounted, i;
+    uint32_t inst;
+    int mounted;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    mounted = vfs_devpts_options(&o, &inst);
+    return pty_open_master_in(inst, mounted ? &o : NULL, flags);
+}
+
+int pty_open_master_in(uint32_t inst, const struct vfs_pts_options *o, int flags)
+{
     struct pty *p;
-    int fd;
+    int fd, i;
     fd_entry_t *e;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    mounted = vfs_devpts_options(&o);
-    for (i = 0; pty_by_index(i); i++) {
+    for (i = 0; pty_by_index(inst, i); i++) {
     }
-    if (mounted && (uint32_t)i >= o.max) {
+    if (o && (uint32_t)i >= o->max) {
         return -ENOSPC; /* Linux's devpts_new_index past the instance's max */
     }
-    p = pty_alloc(0, mounted ? &o : NULL);
+    p = pty_alloc(inst, 0, o);
     if (!p) {
         return -ENFILE;
     }
@@ -1357,16 +1370,19 @@ static void pts_bind(struct pty *p, fd_entry_t *e, int flags)
     }
 }
 
-int pty_open_slave(int index, int flags)
+int pty_open_slave(uint32_t inst, int index, int flags)
 {
-    struct pty *p;
+    return pty_open_pair_slave(index < 0 ? NULL : pty_by_index(inst, index), flags);
+}
+
+int pty_open_pair_slave(struct pty *p, int flags)
+{
     int fd;
     fd_entry_t *e;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    p = index < 0 ? NULL : pty_by_index(index);
     if (!p || !p->master_open) {
         return -ENXIO;
     }
@@ -1402,7 +1418,7 @@ int pty_open_slave(int index, int flags)
 
 struct pty *pty_kernel_make(uint32_t dev, const char *node)
 {
-    struct pty *p = pty_alloc(PTY_KERNEL_INDEX, NULL);
+    struct pty *p = pty_alloc(0, PTY_KERNEL_INDEX, NULL);
 
     if (!p) {
         return NULL;
@@ -1537,17 +1553,24 @@ struct tty *tty_session_tty(int sid)
 
 int pty_session_slave(int sid)
 {
+    struct pty *p = pty_session_pair(sid);
+
+    return p ? p->index : -1;
+}
+
+struct pty *pty_session_pair(int sid)
+{
     struct pty *p;
 
     if (sid == 0) {
-        return -1;
+        return NULL;
     }
     for (p = ptys; p; p = p->next) {
         if (p->slave.sid == sid) {
-            return p->index;
+            return p;
         }
     }
-    return -1;
+    return NULL;
 }
 
 /**
@@ -1603,29 +1626,29 @@ struct tty *pty_slave_tty(struct fd_entry *e)
     return &((struct pty *)e->priv)->slave;
 }
 
-int pty_is_allocated(int index)
+int pty_is_allocated(uint32_t inst, int index)
 {
-    struct pty *p = index < 0 ? NULL : pty_by_index(index);
+    struct pty *p = index < 0 ? NULL : pty_by_index(inst, index);
 
     return p != NULL && p->master_open && !p->knode;
 }
 
-int pty_index_limit(void)
+int pty_index_limit(uint32_t inst)
 {
     struct pty *p;
     int limit = 0;
 
     for (p = ptys; p; p = p->next) {
-        if (!p->knode && p->index + 1 > limit) {
+        if (!p->knode && p->inst == inst && p->index + 1 > limit) {
             limit = p->index + 1;
         }
     }
     return limit;
 }
 
-struct pty *pty_get(int index)
+struct pty *pty_get(uint32_t inst, int index)
 {
-    return pty_is_allocated(index) ? pty_by_index(index) : NULL;
+    return pty_is_allocated(inst, index) ? pty_by_index(inst, index) : NULL;
 }
 
 int pty_slave_index(struct fd_entry *e)

@@ -611,7 +611,7 @@ static void setup_pair(void)
     service_action = NULL;
     irq_enabled = 1;
     pty_init_pool();
-    CHECK(pty_alloc(0, NULL) == &pair, "production allocation initializes the pair");
+    CHECK(pty_alloc(0, 0, NULL) == &pair, "production allocation initializes the pair");
     pair.master_open = pair.slave_opens = 1;
     pair.slave.ldisc.tio.c_lflag &= ~(ICANON | ECHO | ISIG);
     clear(&master, sizeof(master));
@@ -2741,13 +2741,15 @@ static void hangup_writer_waits(void)
     tty_set_session(&console_tty, 0, 0, 0);
 }
 
-/* The devpts mount at /dev/pts the rows give `vfs_devpts_options`. */
+/* The devpts mount at /dev/pts the rows give `vfs_devpts_options`, of
+ * instance 1. */
 static int devpts_mounted;
 static struct vfs_pts_options devpts_opts;
 
 /** The options of the devpts mount the rows put at /dev/pts, if any. */
-int vfs_devpts_options(struct vfs_pts_options *out)
+int vfs_devpts_options(struct vfs_pts_options *out, uint32_t *inst)
 {
+    *inst = devpts_mounted ? 1u : 0u;
     if (devpts_mounted) {
         *out = devpts_opts;
     }
@@ -2783,6 +2785,39 @@ static void devpts_parse_rows(void)
 }
 
 /**
+ * Two devpts instances, each numbering its pairs from 0 as Linux's
+ * devpts_new_index does in its own superblock: a slave is found by its
+ * instance and index, listed in its instance alone, and a new pair takes
+ * the lowest index free in its instance, which `max=` counts.
+ */
+static void devpts_instances(void)
+{
+    static struct pty first, second;
+    struct vfs_pts_options o;
+    struct pty *p;
+
+    pty_init_pool();
+    first.index = second.index = 0;
+    first.inst = 0;
+    second.inst = 1;
+    first.master_open = second.master_open = 1;
+    first.next = &second;
+    second.next = NULL;
+    ptys = &first;
+    CHECK(pty_get(0, 0) == &first && pty_get(1, 0) == &second && pty_get(2, 0) == NULL,
+          "each instance has its own /dev/pts/0");
+    CHECK(pty_index_limit(1) == 1 && pty_is_allocated(1, 0) && !pty_is_allocated(1, 1),
+          "an instance lists its own pairs");
+    p = pty_alloc(1, 0, NULL);
+    CHECK(p && p->inst == 1 && p->index == 1, "a new pair takes the lowest index of its instance");
+    ptys = &first; /* the test's heap pair goes back to the heap's */
+    first.next = &second;
+    pty_parse_options("max=1", &o);
+    CHECK(pty_open_master_in(1, &o, 0) == -ENOSPC, "max= counts the pairs of its own instance");
+    pty_init_pool();
+}
+
+/**
  * devpts's options, a new slave's owner, group and mode from them as
  * devpts_pty_new gives them, and ENOSPC from /dev/ptmx past `max`.
  */
@@ -2797,22 +2832,24 @@ static void devpts_options(void)
     consumer.egid = 100;
     current_proc = &consumer;
     pty_parse_options("mode=0640", &o);
-    p = pty_alloc(0, &o);
+    p = pty_alloc(0, 0, &o);
     CHECK(p && p->uid == 1000 && p->gid == 100 && p->mode == 0640,
           "without uid= and gid= a slave is the opener's, with the mount's mode");
     pty_init_pool(); /* the test's heap has one pair */
     pty_parse_options("uid=7,gid=5", &o);
-    p = pty_alloc(0, &o);
+    p = pty_alloc(0, 0, &o);
     CHECK(p && p->uid == 7 && p->gid == 5 && p->mode == 0600,
           "with them it is theirs, mode 0600 by default");
     pty_init_pool();
-    p = pty_alloc(0, NULL);
+    p = pty_alloc(0, 0, NULL);
     CHECK(p && p->uid == 1000 && p->gid == PTY_GID && p->mode == 0620,
           "the kernel's own /dev/pts gives the opener, group tty and mode 0620");
     pty_parse_options("max=1", &devpts_opts);
     devpts_mounted = 1;
+    p->inst = 1; /* the one pair is the mounted instance's */
     CHECK(pty_open_master(0) == -ENOSPC, "/dev/ptmx past the mount's max is ENOSPC");
     devpts_mounted = 0;
+    devpts_instances();
     consumer.euid = consumer.egid = 0;
     pty_init_pool();
 }
