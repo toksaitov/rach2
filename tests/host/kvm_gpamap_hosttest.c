@@ -87,6 +87,31 @@ static char maker_dir; /* stands for the maker's page directory */
  * the VM's references, taken across a wait. */
 static int maker_reads, maker_written, maker_waits, vm_refs;
 
+/** Return NULL because the model records frames without page tables. */
+pte_t *mmu_user_table(page_dir_t *dir, uintptr_t va, int create)
+{
+    (void)dir;
+    (void)va;
+    CHECK(maker_reads > 0 && !create, "the diagnostic reads under the maker's regions' lock");
+    return NULL;
+}
+
+/** Return NULL because the model has no region records. */
+vma_t *vm_find(vm_space_t *vm, uintptr_t addr)
+{
+    (void)addr;
+    CHECK(vm == &maker.vm && maker_reads > 0, "the diagnostic reads the maker's regions");
+    return NULL;
+}
+
+/** Discard the diagnostics for the test's expected refusals. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 /** Take `mm`'s regions' lock to read if that needs no wait: refused while
  * the other thread holds the maker's to write. */
 int mmap_read_trylock(struct mm *mm)
