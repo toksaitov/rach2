@@ -1,0 +1,8 @@
+[    4.404000] i915: display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
+[    4.424000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+bootctl: candidate: first sector 6163, 32768 sectors in 32768 clusters, 16777216 bytes
+bootctl: fallback: first sector 11848, 32768 sectors in 32768 clusters, 16777216 bytes
+machine-identity: sha256: candidate 64f227dfbd4ce5d1ddf33d717f339c4134eaf1e4089d87ef15b2227d32747458
+machine-identity: sha256: fallback 64f227dfbd4ce5d1ddf33d717f339c4134eaf1e4089d87ef15b2227d32747458
+        16          1         16 term -l
+        21         16         21 login

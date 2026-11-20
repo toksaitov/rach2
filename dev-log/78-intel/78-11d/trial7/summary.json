@@ -1,0 +1,78 @@
+[
+  {
+    "after_frame": 1,
+    "callback_end_ms": 20.6,
+    "callback_start_ms": 20.3,
+    "first_gaps_ms": [
+      16.6,
+      50.0,
+      16.7,
+      19.8,
+      16.7,
+      16.9,
+      16.7,
+      16.8,
+      16.7,
+      16.8,
+      16.8,
+      16.8,
+      16.7,
+      16.8,
+      16.8
+    ],
+    "frames": 480,
+    "gap_ms": 50.0,
+    "kind": "immediate",
+    "late_after_steady": 1,
+    "next_start_ms": 71.2,
+    "next_time_ms": 67.9,
+    "phases": {
+      "adapter": 61.5,
+      "begin": 29.8,
+      "configured": 67.5,
+      "device": 66.5,
+      "pipeline": 68.8
+    },
+    "run": 0,
+    "seconds": 8.085599999999998,
+    "steady_fps": 59.52
+  },
+  {
+    "after_frame": 6,
+    "callback_end_ms": 104.6,
+    "callback_start_ms": 104.2,
+    "first_gaps_ms": [
+      16.6,
+      16.7,
+      16.7,
+      16.6,
+      8.8,
+      16.7,
+      16.8,
+      16.7,
+      16.7,
+      16.8,
+      16.7,
+      16.8,
+      16.7,
+      16.7,
+      16.8
+    ],
+    "frames": 480,
+    "gap_ms": 16.8,
+    "kind": "settled",
+    "late_after_steady": 0,
+    "next_start_ms": 120.3,
+    "next_time_ms": 119.9,
+    "phases": {
+      "adapter": 47.1,
+      "begin": 22.8,
+      "configured": 52.6,
+      "device": 51.7,
+      "pipeline": 52.7
+    },
+    "run": 1,
+    "seconds": 8.007,
+    "steady_fps": 59.85
+  }
+]

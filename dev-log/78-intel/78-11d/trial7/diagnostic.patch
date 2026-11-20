@@ -1,0 +1,72 @@
+--- a/tests/graphics/browser/run.py
++++ b/tests/graphics/browser/run.py
+@@ -477,6 +477,10 @@
+     With TRACE, a path, Chromium's own trace of the picture page is kept
+     there, gzipped.
+     """
++    if trace:
++        b.client.call("Tracing.start", {"transferMode": "ReturnAsStream", "streamCompression": "gzip",
++            "traceConfig": {"recordMode": "recordContinuously", "traceBufferSizeInKb": 262144,
++                            "includedCategories": TRACE_CATEGORIES}})
+     b.navigate(url + "/page.html")
+     result = {"readback": b.script("""(async () => {
+         const adapter = await navigator.gpu.requestAdapter();
+@@ -488,10 +492,7 @@
+     save(b.out / "partial.json", result)
+     got = result["readback"]
+     assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
+-    if trace:
+-        b.client.call("Tracing.start", {"transferMode": "ReturnAsStream", "streamCompression": "gzip",
+-            "traceConfig": {"recordMode": "recordContinuously", "traceBufferSizeInKb": 262144,
+-                            "includedCategories": TRACE_CATEGORIES}})
++    time.sleep(float(os.environ.get("GRAPHICS_WEBGPU_SETTLE", "0")))
+     b.navigate(url + "/hasvk.html")
+     result["picture"] = b.until(lambda: b.script("window.result || null"))
+     if trace:
+--- a/tests/graphics/lenovo/stall.py
++++ b/tests/graphics/lenovo/stall.py
+@@ -226,28 +226,30 @@
+         summary = []
+         report = []
+         for index in range(count):
+-            kind = KINDS[index % len(KINDS)]
+-            mode = "webgpu-trace" if kind == "traced" else "webgpu-frames"
++            kind = ("immediate", "settled")[index]
++            mode = "webgpu-trace"
+             here = out / ("run-%d" % index)
+             here.mkdir()
+             os.chown(here, account.pw_uid, account.pw_gid)
+             snapshot(card, here / "before")
+-            profiled = kind == "bare" and RACH2
++            profiled = False
+             done = threading.Event()
+             if profiled:
+                 profile_start()
+                 gpu = threading.Thread(target=gpu_profile, args=(here / "bkl_gpu_profile", done))
+                 gpu.start()
+             log = here / "threadwatch.txt"
+-            if kind != "bare":
++            if False:
+                 watch = subprocess.Popen([str(sampler), "-i", "1000",
+                     "-f", str(card / "gt_act_freq_mhz"), "-f", "/proc/interrupts@i915",
+                     # Rach2's big lock and timer counters, which Linux lacks.
+                     "-f", "/proc/stat@bkl_wait|bkl_hold_max|latency_timer_us|timer_passes_late",
+                     str(log), "600", "chromium", "weston", "Xwayland"], start_new_session=True)
+             try:
++                browser_env = dict(env, MESA_SHADER_CACHE_DIR=str(work / kind),
++                                   GRAPHICS_WEBGPU_SETTLE="5" if index else "0")
+                 run(["python3", str(GRAPHICS / "browser/sandbox.py"), user, "chromium",
+-                     str(here / "browser"), mode], here / "browser.log", env)
++                     str(here / "browser"), mode], here / "browser.log", browser_env)
+             finally:
+                 if profiled:
+                     done.set()
+@@ -268,7 +270,7 @@
+                 row["late_after_steady"], row["seconds"]), flush=True)
+             k = row["after_frame"]
+             report.append("run %d (%s): %s" % (index, kind, json.dumps(row, sort_keys=True)))
+-            if kind == "bare":
++            if True:
+                 report.append("")
+                 (out / "stall.txt").write_text("\n".join(report) + "\n")
+                 continue
