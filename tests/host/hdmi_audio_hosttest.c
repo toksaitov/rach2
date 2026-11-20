@@ -24,7 +24,12 @@
  * than HDMI's eight granted, the DMA playing the first of each frame, and
  * 128 at 192 kHz kept at their rate and served by the tick, the ring always
  * 40 ms of the stream ahead of the DMA; and the close, which gives the
- * display's power back.
+ * display's power back. The DMA buffers come through the driver's own
+ * allocation from a model of the frame allocator whose frames are never
+ * adjacent: each PCM's 64 frames, above 4 GiB with GCAP's 64OK and below
+ * it without, the descriptor entries split at each frame's end, and a bind
+ * whose frames or window run out part way giving back what it took and
+ * offering only the PCMs with a buffer.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -403,6 +408,106 @@ static void row_proc(void)
           "proc: no eld#0.9; a length measured without a buffer");
 }
 
+/* ---- the frame allocator and the MMIO region ---- */
+
+/* The frame allocator: `alloc_frame` gives frames from 6 GiB up and
+ * `alloc_frame_below` from 256 MiB up, each two pages after the last, so
+ * that no two are adjacent, as on a machine whose free memory is scattered.
+ * A call past `frames_left`, unless it is -1, fails. `frames_held` counts
+ * the frames taken and not given back, `frames_low` those taken below. */
+static uint64_t frame_high = 0x180000000ull, frame_low = 0x10000000ull;
+static long frames_left = -1, frames_held, frames_low;
+
+/** The next frame from `*next`, or 0 when `frames_left` is spent. */
+static uintptr_t frame_take_model(uint64_t *next)
+{
+    uintptr_t f;
+
+    if (frames_left == 0) {
+        return 0;
+    }
+    frames_left -= frames_left > 0;
+    f = (uintptr_t)*next;
+    *next += 2u * PAGE_SIZE;
+    frames_held++;
+    return f;
+}
+
+uintptr_t alloc_frame(void)
+{
+    return frame_take_model(&frame_high);
+}
+
+uintptr_t alloc_frame_below(uint64_t limit)
+{
+    uintptr_t f = frame_take_model(&frame_low);
+
+    frames_low += f != 0;
+    check(f == 0 || (uint64_t)f + PAGE_SIZE <= limit, "dma: a frame below the limit asked for");
+    return f;
+}
+
+void free_frame(uintptr_t phys)
+{
+    (void)phys;
+    frames_held--;
+}
+
+/* The windows `mmio_map_frames` gives, host memory the driver writes the
+ * samples into; none while `map_fails` is set. */
+static uint8_t window_mem[3 * HH_MAX_PCMS][HH_DMA_MAX] __attribute__((aligned(128)));
+static int windows, map_fails;
+
+uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
+{
+    (void)frames;
+    (void)cache;
+    if (map_fails || count * PAGE_SIZE > HH_DMA_MAX ||
+        windows == (int)(sizeof(window_mem) / sizeof(window_mem[0]))) {
+        return 0;
+    }
+    return (uintptr_t)window_mem[windows++];
+}
+
+/** Whether PCM `m`'s descriptor list covers its buffer in order, an entry
+ * within one of its frames at a time, in `entries` entries. */
+static int bdl_ok(const struct hh_pcm *m, uint32_t entries)
+{
+    const volatile hda_bdl_entry_t *b = hh_bdl[m - hh_pcms];
+    const uintptr_t *f = hh_dma_frames[m - hh_pcms];
+    uint32_t i, at = 0;
+    uint64_t addr;
+
+    if (mm_get(hh_sd(m, HDA_SD_LVI), 16) != entries - 1u) {
+        return 0;
+    }
+    for (i = 0; i < entries; i++) {
+        addr = (uint64_t)b[i].addr_high << 32 | b[i].addr_low;
+        if (addr != (uint64_t)f[at / PAGE_SIZE] + at % PAGE_SIZE ||
+            at % PAGE_SIZE + b[i].length > PAGE_SIZE || b[i].length % 128u != 0) {
+            return 0;
+        }
+        at += b[i].length;
+    }
+    return at == mm_get(hh_sd(m, HDA_SD_CBL), 32) && at == m->n * m->pb;
+}
+
+/** Whether PCM `k`'s frames lie on the side of 4 GiB `high` names, no two
+ * adjacent. */
+static int frames_ok(int k, int high)
+{
+    const uintptr_t *f = hh_dma_frames[k];
+    uint32_t i;
+
+    for (i = 0; i < HH_DMA_PAGES; i++) {
+        if (f[i] == 0 || ((uint64_t)f[i] >= 0x100000000ull) != high ||
+            (i > 0 && f[i] == f[i - 1] + PAGE_SIZE)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static audio_stream_t played; /* the stream of row_stream and row_play */
 
 /** A stream at 44.1 kHz in 16 bits: granted as asked, port B's converter
@@ -431,7 +536,7 @@ static void row_stream(void)
     check((ctl & HDA_SD_CTL_RUN) && (ctl >> 20) == M0->tag &&
               mm_get(hh_sd(M0, HDA_SD_FORMAT), 16) == 0x4011 &&
               mm_get(hh_sd(M0, HDA_SD_CBL), 32) == 8192 && mm_get(hh_sd(M0, HDA_SD_LVI), 16) == 1 &&
-              hh_bdl[0][1].length == 4096,
+              hh_bdl[0][1].length == 4096 && bdl_ok(M0, 2),
           "stream: the descriptor runs with tag 1, the format and two periods");
     check(rate_port == 1 && rate_set == 44100, "stream: the display's clocks set for 44.1 kHz");
     check(chan_cnt[2] == 1 && nslots[5] == 8 && memcmp(slots[5], slot, 8) == 0,
@@ -800,6 +905,8 @@ static void row_surround_six(void)
     check(memcmp(dip[5], ai51, 9) == 0 && format[2] == 0x0015 &&
               mm_get(hh_sd(M0, HDA_SD_FORMAT), 16) == 0x0015,
           "surround: 5.1's infoframe and the format of six channels");
+    check(M0->n == 8 && bdl_ok(M0, 12),
+          "surround: eight periods of 3072 bytes in twelve entries, split at four frames' ends");
     hh_stream_close(&s);
 }
 
@@ -854,6 +961,65 @@ static void row_many_eight(void)
     check(display_power == 0, "many: the close leaves nothing held");
 }
 
+/** Each PCM's buffer, made at the bind, is 64 scattered frames above 4 GiB
+ * on this controller, whose GCAP has 64OK, mapped as one window. */
+static void row_dma(void)
+{
+    check(hh_npcms == 3 && frames_held == 3 * HH_DMA_PAGES && frames_low == 0 && frames_ok(0, 1) &&
+              frames_ok(1, 1) && frames_ok(2, 1) && hh_dma[2] != NULL,
+          "dma: three buffers of 64 frames, scattered above 4 GiB");
+}
+
+/** Forget the buffers the bind made, as a fresh boot has none, and bind
+ * again with GCAP `gcap`: the PCMs offered. */
+static int rebind(uint32_t gcap)
+{
+    int k;
+
+    acomp_unregister_display(&disp_dev);
+    for (k = 0; k < HH_MAX_PCMS; k++) {
+        hh_dma[k] = NULL;
+        k_memset(hh_dma_frames[k], 0, sizeof(hh_dma_frames[k]));
+    }
+    frames_held = 0;
+    frames_low = 0;
+    windows = 0;
+    mm_put(HDA_GCAP, gcap, 16);
+    check(acomp_register_display(&disp_ops, &disp_dev) == 0 && hdmi_audio_present(),
+          "dma: the display binds again");
+    return hh_npcms;
+}
+
+/** Without GCAP's 64OK the frames come from below 4 GiB; a bind whose
+ * frames run out part way through the second PCM's buffer, or whose window
+ * cannot be mapped, gives back what it took and offers only the PCMs that
+ * have a buffer. */
+static void row_dma_limits(void)
+{
+    audio_stream_t s;
+
+    check(rebind(0x4400) == 3 && frames_low == 3 * HH_DMA_PAGES && frames_ok(0, 0) &&
+              frames_ok(1, 0) && frames_ok(2, 0),
+          "dma: without 64OK every frame lies below 4 GiB");
+    stream_init(&s, 48000, AUDIO_S16LE, 4096);
+    check(hh_open0(&s) == 0 && hh_stream_setup(&s) == 0 && hh_stream_start(&s) == 0 &&
+              bdl_ok(M0, M0->n) && mm_get(hh_sd(M0, HDA_SD_BDPU), 32) == 0 &&
+              hh_bdl[0][0].addr_high == 0,
+          "dma: and the descriptor list points below it");
+    hh_stream_close(&s);
+    frames_left = HH_DMA_PAGES + 36;
+    check(rebind(0x4401) == 1 && frames_held == HH_DMA_PAGES && hh_dma[0] && !hh_dma[1] &&
+              hh_dma_frames[1][0] == 0,
+          "dma: frames gone part way: one PCM, the second's 36 frames given back");
+    frames_left = -1;
+    map_fails = 1;
+    check(rebind(0x4401) == 0 && frames_held == 0 && !hh_dma[0],
+          "dma: no window: no PCM, every frame given back");
+    map_fails = 0;
+    check(rebind(0x4401) == 3 && frames_held == 3 * HH_DMA_PAGES,
+          "dma: memory back: the three PCMs again");
+}
+
 /** The display going unbinds the card. */
 static void row_unbind(void)
 {
@@ -882,6 +1048,8 @@ int main(void)
     row_surround_six();
     row_surround_odd();
     row_many_eight();
+    row_dma();
+    row_dma_limits();
     row_unbind();
     if (failures == 0) {
         printf("hdmi-audio-test: ok\n");
