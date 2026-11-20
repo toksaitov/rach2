@@ -391,7 +391,7 @@ tests/host/fat32_hosttest.c:write_rows complexity 70 a test's rows, each a case,
 tests/host/fat32_hosttest.c:write_rows lines 200 a test's rows, each a case, read as one table
 
 tests/host/fatname_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
-tests/host/fatname_hosttest.c:main lines 122 a test's rows, each a case, read as one table
+tests/host/fatname_hosttest.c:main lines 123 a test's rows, each a case, read as one table
 
 tests/host/fbdev_hosttest.c:owners lines 102 a test's rows, each a case, read as one table
 tests/host/fbdev_hosttest.c:requests complexity 27 a test's rows, each a case, read as one table

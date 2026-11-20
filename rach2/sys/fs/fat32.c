@@ -392,46 +392,12 @@ static void lfn_units(const uint8_t *raw, uint16_t *units)
     }
 }
 
-/** Write the short name of the entry `raw` to `out`, 13 bytes, as it is
- * shown: the base and the extension, lower-cased where the case bits of
- * byte 12 say so, and a byte above 0x7F shown as `?`. */
+/** Write the short name of the entry `raw` to `out`, of
+ * `FAT32_SHORT_UTF8` bytes, as it is shown: decoded from code page 437 and
+ * lower-cased where the case bits of byte 12 say so. */
 static void short_to_name(const uint8_t *raw, char *out)
 {
-    uint8_t lower = raw[12];
-    int n = 0;
-    int i, end;
-
-    for (end = 8; end > 0 && raw[end - 1] == ' '; end--) {
-    }
-    for (i = 0; i < end; i++) {
-        uint8_t c = raw[i];
-
-        if (i == 0 && c == 0x05) {
-            c = 0xE5;
-        }
-        if (c > 0x7F) {
-            c = '?';
-        } else if ((lower & 0x08) && c >= 'A' && c <= 'Z') {
-            c = (uint8_t)(c + 32);
-        }
-        out[n++] = (char)c;
-    }
-    for (end = 11; end > 8 && raw[end - 1] == ' '; end--) {
-    }
-    if (end > 8) {
-        out[n++] = '.';
-        for (i = 8; i < end; i++) {
-            uint8_t c = raw[i];
-
-            if (c > 0x7F) {
-                c = '?';
-            } else if ((lower & 0x10) && c >= 'A' && c <= 'Z') {
-                c = (uint8_t)(c + 32);
-            }
-            out[n++] = (char)c;
-        }
-    }
-    out[n] = '\0';
+    fat32_short_utf8(raw, raw[12], out);
 }
 
 /* The record a directory scan yields: one real entry with its name. */
@@ -440,7 +406,7 @@ struct fat_scan {
     uint32_t index;        /* its index in the directory */
     uint32_t start;        /* the index of the name's first entry: a long one, or `index` */
     char name[VFS_NAME_MAX + 1];
-    char alias[13]; /* the short name as shown, always */
+    char alias[FAT32_SHORT_UTF8]; /* the short name as shown, always */
 };
 
 /**
@@ -1296,7 +1262,7 @@ static int prepare_name(struct fat_mount *fm, struct fat_node *dir, uint32_t fir
     }
     nn->lower = 0;
     nn->entries = fat32_long_entries(nn->count);
-    fat32_alias(name, nn->name11);
+    fat32_alias(nn->units, nn->count, nn->name11);
     for (n = 1; n <= 999999; n++) {
         int taken;
 

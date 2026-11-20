@@ -6,9 +6,10 @@
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c
  *
  * The conversion from UTF-8 to UTF-16 and the names it fails, the 8.3 rule
- * with its case bits, the alias and its numbering, the checksum and the
- * long entries' layout, and names whose entries mtools wrote: where this
- * driver's rule agrees with what mtools writes and where it does not.
+ * with its case bits, the alias and its numbering, the code page 437 of
+ * short names both ways, the checksum and the long entries' layout, and
+ * names whose entries mtools wrote: where this driver's rule agrees with
+ * what mtools writes and where it does not.
  */
 
 #include "../../rach2/sys/fs/fat32name.h"
@@ -44,6 +45,80 @@ static int eq11(const uint8_t *a, const char *b)
 
 static uint16_t units[FAT_NAME_UNITS];
 static uint8_t name11[11];
+
+/** Fill `name11` with the alias of the UTF-8 `name`, which must convert. */
+static void alias_of(const char *name)
+{
+    uint32_t n = 0;
+
+    check(fat_name_units(name, units, &n) == 0, name);
+    fat32_alias(units, n, name11);
+}
+
+/** Whether the short name `raw` with the case bits `case_bits` is shown
+ * as the UTF-8 `want`. */
+static int shown(const char *raw, uint8_t case_bits, const char *want)
+{
+    char out[FAT32_SHORT_UTF8];
+    int i;
+
+    fat32_short_utf8((const uint8_t *)raw, case_bits, out);
+    for (i = 0; want[i] && out[i] == want[i]; i++) {
+    }
+    return out[i] == want[i];
+}
+
+/**
+ * Run the rows of code page 437, Linux's vfat default: a short name's
+ * bytes above 0x7F decoded to UTF-8 and lower-cased by the code page's
+ * pairs, and a long name's characters encoded in its alias, upper-cased,
+ * with `_` for each UTF-16 unit the code page does not hold.
+ */
+static void cp437_rows(void)
+{
+    check(shown("F\x9AR     TXT", 0, "F\xC3\x9CR.TXT"), "0x9A is U-umlaut, two bytes of UTF-8");
+    check(shown("F\x9AR     TXT", 0x18, "f\xC3\xBCr.txt"),
+          "the case bits lower-case U-umlaut to u-umlaut, 0x81, as Linux's nls_cp437");
+    check(shown("CAF\x82    ", 0, "CAF\xC3\xA9") && shown("CAF\x8A    ", 0, "CAF\xC3\xA8"),
+          "e-acute and e-grave are two names, where both were CAF?");
+    check(shown("\xC9\xCD\xBB        ", 0, "\xE2\x95\x94\xE2\x95\x90\xE2\x95\x97"),
+          "box drawing takes three bytes each");
+    check(shown("\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xDB\xDB", 0,
+                "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
+                "\xE2\x96\x88\xE2\x96\x88.\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"),
+          "eleven three-byte characters and the dot fit FAT32_SHORT_UTF8");
+    check(shown("\x05"
+                "5FILE  TXT",
+                0x18,
+                "\xCF\x83"
+                "5file.txt"),
+          "a leading 0x05 is 0xE5, sigma, which has no upper case to lower");
+    check(shown("AB\0CD   TXT", 0, "AB.TXT"), "a 0 byte ends its part, as Linux reads it");
+    check(shown("\0          ", 0, "") && shown("ABC     \0XY", 0, "ABC"),
+          "a part that starts with 0 is empty, and an empty extension has no dot");
+
+    alias_of("f\xC3\xBCr.txt");
+    check(eq11(name11, "F\x9AR~1   TXT"), "u-umlaut is 0x81, upper-cased to 0x9A in the alias");
+    check(shown((const char *)name11, 0, "F\xC3\x9CR~1.TXT"), "and the alias reads back");
+    alias_of("caf\xC3\xA9 au lait.txt");
+    check(eq11(name11, "CAF\x90"
+                       "AU~1TXT"),
+          "e-acute is 0x82, upper-cased to E-acute, 0x90");
+    alias_of("\xC3\xA2.txt");
+    check(eq11(name11, "\x83~1     TXT"), "a-circumflex, 0x83, has no upper case and stays");
+    alias_of("\xCF\x83 x");
+    check(eq11(name11, "\xE4X~1       "),
+          "sigma, 0xE5, is upper-cased to 0xE4 and never left 0xE5");
+    alias_of("\xE2\x82\xAC.txt");
+    check(eq11(name11, "_~1     TXT"), "the euro sign is not in code page 437 and becomes _");
+    alias_of("\xE2\x95\x94x.\xC2\xB1");
+    check(eq11(name11, "\xC9X~1    \xF1  "), "box drawing and plus-minus are encoded as they are");
+    alias_of("long\x7fname.txt");
+    check(eq11(name11, "LONG\x7FN~1TXT"),
+          "DEL, 0x7F, is kept in the alias, as Linux's to_shortname_char");
+    alias_of("a+b,c.t;x");
+    check(eq11(name11, "A_B_C~1 T_X"), "ASCII outside the short set below 0x7F still becomes _");
+}
 
 /* What fatcommon.c needs of the kernel: the walk's lock and the clock,
    which the name rows never reach. */
@@ -81,8 +156,8 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 /**
  * Run the rows: the conversion and the names it fails; the 8.3 rule and
  * the case bits, against what mtools wrote; the alias and its numbering;
- * and the checksum and the long entries. Returns the count of failed
- * rows, at most 255.
+ * the checksum and the long entries; and code page 437. Returns the count
+ * of failed rows, at most 255.
  */
 int main(void)
 {
@@ -162,19 +237,19 @@ int main(void)
     check(fat32_name_short("NOEXT", name11, &lower) == 1 && eq11(name11, "NOEXT      "),
           "a name with no extension fits");
 
-    fat32_alias("long name.txt", name11);
+    alias_of("long name.txt");
     check(eq11(name11, "LONGNA~1TXT"), "long name.txt takes LONGNA~1.TXT, as mtools gave it");
-    fat32_alias("Mixed.c", name11);
+    alias_of("Mixed.c");
     check(eq11(name11, "MIXED~1 C  "),
           "Mixed.c takes MIXED~1.C, where mtools kept MIXED.C without a number");
-    fat32_alias("a.b.c", name11);
+    alias_of("a.b.c");
     check(eq11(name11, "AB~1    C  "), "a.b.c drops the inner dot");
-    fat32_alias("\xf0\x9f\x98\x80.txt", name11);
-    check(eq11(name11, "_~1     TXT"), "a character outside ASCII becomes an underscore");
-    fat32_alias(".hidden", name11);
+    alias_of("\xf0\x9f\x98\x80.txt");
+    check(eq11(name11, "__~1    TXT"), "each half of a surrogate pair becomes an underscore");
+    alias_of(".hidden");
     check(eq11(name11, "_~1     HID"),
           "a leading dot leaves an underscore base, where Windows keeps HIDDEN");
-    fat32_alias("longname1.txt", name11);
+    alias_of("longname1.txt");
     fat32_alias_number(name11, 2);
     check(eq11(name11, "LONGNA~2TXT"), "the second number");
     fat32_alias_number(name11, 12);
@@ -186,7 +261,7 @@ int main(void)
               fat32_long_entries(14) == 2 && fat32_long_entries(26) == 2 &&
               fat32_long_entries(27) == 3,
           "thirteen units per long entry");
-    fat32_alias("long name.txt", name11);
+    alias_of("long name.txt");
     sum = fat32_short_sum(name11);
     fat32_long_entry(raw, 1, 1, sum, units, n);
     check(raw[0] == 0x41 && raw[11] == 0x0F && raw[13] == sum && raw[1] == 'l' && raw[2] == 0 &&
@@ -203,6 +278,7 @@ int main(void)
           "the first entry: thirteen units and no flag");
     check(fat32_short_sum((const uint8_t *)"BOOT       ") == 221,
           "the checksum of BOOT is 221, by the rotate-and-add rule");
+    cp437_rows();
 
     if (fails == 0) {
         printf("fatname_hosttest: OK\n");
