@@ -205,9 +205,15 @@ struct drm_ident {
 #define DRM_IDENT_BOCHS                                                          \
     {"bochs-drm", "bochs dispi vga interface (qemu stdvga)",   "20130925", 1, 0, \
      0,           DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC, DRM_BUS_PCI}
-#define DRM_IDENT_SIMPLEDRM                                                                    \
-    {"simpledrm", "DRM driver for simple-framebuffer platform devices", "20200625",      1, 0, \
-     0,           DRIVER_ATOMIC | DRIVER_GEM | DRIVER_MODESET,          DRM_BUS_PLATFORM}
+#define DRM_IDENT_SIMPLEDRM                                             \
+    {"simpledrm",                                                       \
+     "DRM driver for simple-framebuffer platform devices",              \
+     "20200625",                                                        \
+     1,                                                                 \
+     0,                                                                 \
+     0,                                                                 \
+     DRIVER_ATOMIC | DRIVER_GEM | DRIVER_MODESET | DRIVER_KMS_UNLOCKED, \
+     DRM_BUS_PLATFORM}
 #define DRM_IDENT_VKMS                            \
     {"vkms",                                      \
      "Virtual Kernel Mode Setting",               \
@@ -1180,8 +1186,14 @@ struct drm_crtc_funcs {
  * counts the times stored before the latest one stored earlier,
  * `stamp_max_ns`, which debugfs's `crtc-N/vblank_backwards` reads.
  * `framedur_ns` is a frame of the CRTC's mode, Linux's field of that name,
- * which `drm_crtc_vblank_on` sets from the mode and which is 0 for a mode
- * with no clock.
+ * which `drm_crtc_vblank_on` sets from the mode and which is 0 when no
+ * duration can be calculated. The `timer_` members are the vblank timer
+ * of a CRTC without a vblank interrupt (`drm_crtc_vblank_start_timer`), which
+ * drm_vblank.c's timer lock guards: on while `timer_on`, a frame of
+ * `timer_period_ns` long, next firing at `timer_next_ns` of
+ * CLOCK_MONOTONIC; `timer_link` chains the CRTCs whose timers are on, and
+ * `timer_busy` is set while the tick handles this CRTC's vblank outside the
+ * lock.
  */
 struct drm_vblank {
     uint32_t seq; /* odd while `count` and `time_ns` change, Linux's seqlock */
@@ -1197,6 +1209,9 @@ struct drm_vblank {
     int64_t put_ns;
     struct drm_pending_event *events, *events_tail;
     wait_queue_t wait;
+    int timer_on, timer_busy;
+    int64_t timer_period_ns, timer_next_ns;
+    struct drm_crtc *timer_link;
 };
 
 /* One frame's CRC entry, which debugfs's crc/data reads, and the entries
@@ -2018,8 +2033,52 @@ int32_t drm_crtc_wait_flip(struct drm_crtc *crtc, int below, int intr, uint32_t 
  * does: each queued event sent, its fence signalled with -ENODEV. */
 void drm_vblank_unplug(struct drm_device *dev);
 /** Free what `crtc` still holds of events and CRC entries, for
- * `drm_mode_config_cleanup`. */
+ * `drm_mode_config_cleanup`, with its vblank timer stopped and let go by
+ * the tick. */
 void drm_crtc_vblank_cleanup(struct drm_crtc *crtc);
+
+/*
+ * The vblank timer, Linux's (drm_vblank.c and drm_vblank_helper.c, commits
+ * 74afeb812850 and d54dbb5963bd): vblanks simulated a frame of the CRTC's mode
+ * apart for a display without a vblank interrupt, so that a compositor
+ * paces its frames by them, as it does on hardware. The vblanks are not
+ * those of the screen, which such a display cannot tell; their rate is the
+ * mode's, and a commit's event comes at the next of them. The boot
+ * processor's tick runs the timers (`drm_vblank_timer_tick`) at each
+ * expiry, which it asks for as a fine service deadline, and stamps each
+ * vblank with its expiry less a frame, the end of the frame it closes, so
+ * that a late pass of the tick moves no stamp. A driver gives its CRTC
+ * the three helpers below as `enable_vblank`, `disable_vblank` and
+ * `get_vblank_timestamp`, Linux's DRM_CRTC_VBLANK_TIMER_FUNCS.
+ */
+
+/** Start `crtc`'s timer, Linux's drm_crtc_vblank_start_timer: the first
+ * vblank a frame of its mode from now, the core's `framedur_ns`, or of
+ * 60 Hz when no duration can be calculated. Under the device's `vbl_lock`.
+ * Returns 0, or -ERANGE if the first deadline cannot be represented. */
+int32_t drm_crtc_vblank_start_timer(struct drm_crtc *crtc);
+/** Stop `crtc`'s timer, Linux's drm_crtc_vblank_cancel_timer; from a commit
+ * or from inside the tick's vblank. Does not wait for a vblank the tick is
+ * handling. */
+void drm_crtc_vblank_cancel_timer(struct drm_crtc *crtc);
+/** The time of `crtc`'s latest simulated vblank in `*time_ns`, Linux's
+ * drm_crtc_vblank_get_vblank_timeout: the timer's next expiry less a
+ * frame. */
+void drm_crtc_vblank_get_vblank_timeout(struct drm_crtc *crtc, int64_t *time_ns);
+/** `enable_vblank` of a CRTC with a vblank timer, Linux's
+ * drm_crtc_vblank_helper_enable_vblank_timer. */
+int32_t drm_crtc_vblank_helper_enable_vblank_timer(struct drm_crtc *crtc);
+/** `disable_vblank` of a CRTC with a vblank timer. */
+void drm_crtc_vblank_helper_disable_vblank_timer(struct drm_crtc *crtc);
+/** `get_vblank_timestamp` of a CRTC with a vblank timer, Linux's
+ * drm_crtc_vblank_helper_get_vblank_timestamp_from_timer: the latest
+ * vblank's time while the vblanks are on, else the clock now. 1. */
+int drm_crtc_vblank_helper_get_vblank_timestamp_from_timer(struct drm_crtc *crtc, int64_t *time_ns,
+                                                           int in_vblank_irq);
+/** Run the vblank timers, from the boot processor's tick with interrupts
+ * off and no lock held: one vblank for each CRTC whose timer has expired,
+ * a frame passed or more, then the next expiry asked for. */
+void drm_vblank_timer_tick(void);
 
 /*
  * The CRC files of debugfs (76-18b), Linux's drm_debugfs_crc.c, on kernel

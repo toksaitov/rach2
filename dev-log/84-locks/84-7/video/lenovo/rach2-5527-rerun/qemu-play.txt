@@ -1,0 +1,7 @@
+desktop: result: weston 107 as desktop ; Using Pixman renderer; mode 1280x800@60.0, preferred, current, 61.4 MHz
+[    1.140000] fbdrm: registered: simpledrm 1280x800, XR24, pitch 5120, at 0xfd000000, card 0
+[09:17:59.544] Using Pixman renderer
+h264-1080p30.mp4: OK
+desktop: result: firefox-h264: 1666 frames, 1222 dropped, None corrupted, 1920x1080, 55.5 s played, error None, samples [(7, 150), (15, 409), (27, 756), (38, 913), (48, 1036), (55, 1222)]
+desktop: result: firefox-h264 decoder ffmpeg video decoder (RDD remote);
+vol 1:1

@@ -1,0 +1,14 @@
+r2-hl-free      1735 frames    4 dropped, by 10 s 2, error None
+deb-hl-free     1737 frames    6 dropped, by 10 s 4, error None
+r2-hl-q1a       1725 frames   50 dropped, by 10 s 27, error None
+r2-hl-q1b       1722 frames   55 dropped, by 10 s 29, error None
+r2-hl-q1c       1721 frames   56 dropped, by 10 s 31, error None
+r2-hl-q1e       1724 frames  116 dropped, by 10 s 44, error None
+deb-hl-q1a      1728 frames   40 dropped, by 10 s 24, error None
+deb-hl-q1b      1725 frames   35 dropped, by 10 s 18, error None
+deb-hl-q1c      1723 frames   34 dropped, by 10 s 20, error None
+deb-hl-q1e      1725 frames   42 dropped, by 10 s 24, error None
+r2-disk-q1a     1714 frames   78 dropped, by 10 s 53, error None
+r2-disk-q1b     1721 frames  105 dropped, by 10 s 70, error None
+r2-disk-free    1736 frames    8 dropped, by 10 s 5, error None
+deb-disk-q1b    1726 frames   45 dropped, by 11 s 30, error None (read from the guest, whose result files the next play replaced)

@@ -14,6 +14,29 @@
 #include "../../proc/smp.h"
 
 /**
+ * The rseq work of a return to user mode whose entry ran without the big
+ * lock and that has no signal work, done without the lock
+ * (`rseq_return_unlocked`) with interrupts on and the thread `p` marked in
+ * a call, as `isr_leave_work` does the locked work. Returns 1 when it is
+ * done, and 0 when the caller must take the big lock: for a signal that
+ * came meanwhile, or for the area's failure, which sets `*failed`.
+ * Interrupts are off again at the return.
+ */
+static int leave_rseq_unlocked(isr_params_t *params, process_t *p, int *failed)
+{
+    uint32_t was_in_call = p->in_syscall;
+    uint32_t flags;
+
+    p->in_syscall = 1;
+    flags = kirq_save();
+    kirq_restore(flags | 0x200u);
+    *failed = rseq_return_unlocked(params) != 0;
+    (void)kirq_save();
+    p->in_syscall = was_in_call;
+    return !*failed && !signal_return_work(params);
+}
+
+/**
  * The return to user mode's work, which the thread's work bits or threads
  * ended and not yet freed (`proc_dead_threads`) call for, with interrupts
  * off and the big lock held when `locked` says the entry took it, which
@@ -27,7 +50,10 @@
  * (`proc_tick_signals_own`), a signal to deliver and the thread's rseq
  * area (`rseq_return`), when `signal_return_work` or `rseq_notify` says so;
  * then the debug registers (`debugreg_resume`) and a timed wake's record
- * (`waketime_return`).
+ * (`waketime_return`). An entry that ran without the big lock and has only
+ * the rseq area to update does so without it (`rseq_return_unlocked`), as
+ * Linux's rseq_handle_notify_resume takes no lock, and takes the lock only
+ * for a signal that came meanwhile or for the area's failure.
  *
  * The user copies of signal and rseq work run with interrupts on, and may
  * sleep on a fault. When interrupts go off again, a migration, a tick's
@@ -56,6 +82,7 @@ K_NOINLINE void isr_leave_work(isr_params_t *params, process_t *p, int locked)
     uint32_t flags;
     uint32_t was_in_call;
     int signalled = 0;
+    int rseq_failed = 0;
 
     for (;;) {
         if (work & WORK_LOOP) {
@@ -67,22 +94,28 @@ K_NOINLINE void isr_leave_work(isr_params_t *params, process_t *p, int locked)
         if (!signal_return_work(params) && !p->rseq_notify) {
             break;
         }
-        if (!locked) {
-            bkl_enter();
-            locked = 1;
-        }
-        was_in_call = p->in_syscall;
-        p->in_syscall = 1;
-        flags = kirq_save();
-        do {
-            proc_tick_signals_own();
-            kirq_restore(flags | 0x200u);
-            deliver_signals(params);
-            rseq_return(params);
+        if (locked || signal_return_work(params) || !leave_rseq_unlocked(params, p, &rseq_failed)) {
+            if (!locked) {
+                bkl_enter();
+                locked = 1;
+            }
+            was_in_call = p->in_syscall;
+            p->in_syscall = 1;
             flags = kirq_save();
-        } while (p->rseq_notify || p->tick_sigs || p->sig_woken);
-        p->in_syscall = was_in_call;
-        signalled = 1;
+            do {
+                proc_tick_signals_own();
+                kirq_restore(flags | 0x200u);
+                if (rseq_failed) {
+                    rseq_failed = 0;
+                    rseq_return_failed(params);
+                }
+                deliver_signals(params);
+                rseq_return(params);
+                flags = kirq_save();
+            } while (p->rseq_notify || p->tick_sigs || p->sig_woken);
+            p->in_syscall = was_in_call;
+            signalled = 1;
+        }
         work = (work & (WORK_DEBUGREG | WORK_WAKETIME)) |
                proc_work_take(p, WORK_EXIT & ~(WORK_SIGNAL | WORK_TRACE));
         if (!(work & (WORK_RESCHED | WORK_LOOP)) && !p->rseq_notify) {

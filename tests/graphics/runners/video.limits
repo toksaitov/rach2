@@ -5,7 +5,9 @@
 # time under its big kernel lock, so Firefox drops more frames than the
 # Debian guest under the references' load (tests/graphics/Readme.md,
 # Limits). The lines go once futex, page faults and the timer tick no
-# longer take that lock.
+# longer take that lock and ext2's fsync, create, rename and unlink, and its
+# directory writes, no longer hold Firefox's profile commits back (VP9 1080p
+# on the Lenovo, 2026-11-20: a median of 75 drops against Debian's 55).
 firefox-h264-720p.mp4
 firefox-h264-1080p.mp4
 firefox-vp9-720p.webm

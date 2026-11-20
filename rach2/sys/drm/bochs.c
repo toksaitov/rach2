@@ -661,19 +661,23 @@ static int32_t bochs_atomic_commit(struct drm_device *dev, struct drm_atomic_sta
 
 static const struct drm_plane_funcs bochs_plane_funcs = {bochs_plane_check, bochs_plane_update,
                                                          NULL};
-static const struct drm_crtc_funcs bochs_crtc_funcs = {bochs_crtc_check,
-                                                       bochs_crtc_enable,
-                                                       bochs_crtc_disable,
-                                                       NULL,
-                                                       NULL,
-                                                       bochs_crtc_mode_valid,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL};
+/* The CRTC's vblanks come from the core's timer at the mode's rate, since
+ * the device has no vblank interrupt, as Linux's bochs does (commit
+ * bde44378397b, drm/bochs: Use vblank timer). */
+static const struct drm_crtc_funcs bochs_crtc_funcs = {
+    bochs_crtc_check,
+    bochs_crtc_enable,
+    bochs_crtc_disable,
+    NULL,
+    NULL,
+    bochs_crtc_mode_valid,
+    drm_crtc_vblank_helper_enable_vblank_timer,
+    drm_crtc_vblank_helper_disable_vblank_timer,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    drm_crtc_vblank_helper_get_vblank_timestamp_from_timer};
 static const struct drm_connector_funcs bochs_connector_funcs = {NULL, bochs_get_modes, NULL, NULL};
 
 /**

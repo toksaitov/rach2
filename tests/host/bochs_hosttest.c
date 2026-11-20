@@ -34,7 +34,9 @@
  * bochs-drm in /sys before its card registers, as Linux's driver core binds
  * it, and its bind uevent after; a failed registration, which releases the
  * device whole and leaves the function unbound; and a binding that cannot
- * be shown, which fails the bind before the card registers.
+ * be shown, which fails the bind before the card registers. A commit that
+ * waits for its flip, and a flip after another, run the core's vblank
+ * timer with the model's clock moved to each deadline it asks for.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -608,11 +610,37 @@ static int32_t setcrtc(uint32_t fb_id, const struct drm_mode_modeinfo *mode, uin
     return drm_mode_setcrtc(&b->drm, &s, &fa);
 }
 
-/** PAGE_FLIP to `fb_id`. */
+/**
+ * The vblank timer's ticks while a commit waits for its flip: the model's
+ * clock moved to each deadline the timer asks for and the timer run, at
+ * most a second of frames, as the boot processor's tick would.
+ */
+static void vblank_wait(wq_cond_fn cond, void *arg)
+{
+    int i;
+
+    for (i = 0; i < 60 && !cond(arg); i++) {
+        if (model_wake_at_ns > model_now_ns) {
+            model_now_ns = model_wake_at_ns;
+        }
+        drm_vblank_timer_tick();
+    }
+}
+
+/** Whether the CRTC has no flip pending. */
+static int flip_done(void *arg)
+{
+    (void)arg;
+    return !b->crtc.flip_pending;
+}
+
+/** PAGE_FLIP to `fb_id`, once the vblank timer has ended the flip before
+ * it, as a client waits for its flip's event. */
 static int32_t flip(uint32_t fb_id)
 {
     struct drm_mode_crtc_page_flip f;
 
+    vblank_wait(flip_done, NULL);
     k_memset(&f, 0, sizeof(f));
     f.crtc_id = b->crtc.base.id;
     f.fb_id = fb_id;
@@ -1047,6 +1075,7 @@ int main(void)
     int base;
 
     model_start("bochs-test");
+    model_wait = vblank_wait;
     vram = (uint8_t *)malloc(VRAM_SIZE);
     base = allocations;
     row_refusal();

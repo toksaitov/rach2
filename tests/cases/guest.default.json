@@ -6117,7 +6117,7 @@
     },
     {
       "case_id": "guest.default.seccompmusl",
-      "behavior": "seccomp's filters and strict mode refuse bad programs, return errno, trap or kill as their actions say, pass to children and threads, and survive exec.",
+      "behavior": "seccomp's filters and strict mode refuse bad programs, return errno, trap or kill as their actions say, run the call a tracer leaves at a trace stop, pass to children and threads, and survive exec.",
       "units": ["default", "musl/seccompmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -6133,6 +6133,7 @@
         {"assertion_id": "strict-allows", "checks": "Strict mode lets write, read and exit run.", "source": "program"},
         {"assertion_id": "strict-kills-getpid", "checks": "Strict mode kills the process with SIGKILL at getpid.", "source": "program"},
         {"assertion_id": "strict-kills-close", "checks": "Strict mode kills the process with SIGKILL at close.", "source": "program"},
+        {"assertion_id": "trace-redirect", "checks": "A tracer that changes the call's number at a SECCOMP_RET_TRACE stop has the new call run: getppid made getpid returns the child's pid.", "source": "program"},
         {"assertion_id": "filter-install", "checks": "A child with no_new_privs installs a filter.", "source": "program"},
         {"assertion_id": "filter-errno", "checks": "The filter fails getppid with errno 77 and lets the other calls run.", "source": "program"},
         {"assertion_id": "status-file", "checks": "/proc/self/status shows mode 2 and one filter.", "source": "program"},

@@ -42,6 +42,21 @@ void rseq_migrate(struct process *p);
  * and the big lock held (`isr_leave_work`). */
 void rseq_return(isr_params_t *params);
 
+/**
+ * The part of `rseq_return` that needs no big lock, as Linux's
+ * rseq_handle_notify_resume takes none: the abort and the area's update,
+ * which read and write only the thread's own frame, record and memory, the
+ * record's event bits being set only by the scheduler for the thread it
+ * switches away. 0 when the work is done; -1 when the area failed, which
+ * the caller passes to `rseq_return_failed` under the big lock. Interrupts
+ * are on and the thread marked in a call, as `rseq_return` has them.
+ */
+int rseq_return_unlocked(isr_params_t *params);
+
+/** Post and deliver the SIGSEGV of an area that failed in
+ * `rseq_return_unlocked`, as Linux's force_sigsegv. The big lock is held. */
+void rseq_return_failed(isr_params_t *params);
+
 /** The current thread's part of the delivery of `signo` to a handler, before
  * its frame records `params`: a critical section it is in is aborted, so
  * that the handler returns to the section's abort handler, and the area

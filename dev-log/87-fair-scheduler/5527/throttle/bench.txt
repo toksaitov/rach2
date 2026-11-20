@@ -1,0 +1,69 @@
+QEMU under KVM, the i3 shape, no CPU limit, 11-20. callbench 200000; fsbench DIR 500.
+
+== Rach2, callbench
+callbench: getppid                  200000 in   0.008 s,     0.04 us each
+callbench: futex wake, no waiter    200000 in   0.009 s,     0.05 us each
+callbench: futex round trip          50000 in   0.288 s,     5.75 us each
+callbench: poll 16 pipes            200000 in   0.069 s,     0.34 us each
+callbench: poll unix socket         200000 in   0.050 s,     0.25 us each
+callbench: sched_yield              200000 in   0.008 s,     0.04 us each
+callbench: page fault, anonymous     65536 in   0.044 s,     0.67 us each
+== Debian 6.12.115, callbench
+callbench: getppid                  200000 in   0.028 s,     0.14 us each
+callbench: futex wake, no waiter    200000 in   0.027 s,     0.13 us each
+callbench: futex round trip          50000 in   0.606 s,    12.11 us each
+callbench: poll 16 pipes            200000 in   0.093 s,     0.46 us each
+callbench: poll unix socket         200000 in   0.049 s,     0.25 us each
+callbench: sched_yield              200000 in   0.074 s,     0.37 us each
+callbench: page fault, anonymous     65536 in   0.046 s,     0.70 us each
+
+== Rach2, fsbench on the ext2 root (virtio-blk)
+fsbench: journal commit                500 in   0.703 s,    1405.8 us each
+fsbench: write, fsync, rename          500 in   0.862 s,    1723.6 us each
+fsbench: stat of a missing name      10000 in   0.004 s,       0.4 us each
+== Rach2, fsbench on tmpfs
+fsbench: journal commit                500 in   0.003 s,       5.1 us each
+fsbench: write, fsync, rename          500 in   0.004 s,       8.4 us each
+fsbench: stat of a missing name      10000 in   0.006 s,       0.6 us each
+== Rach2, fsbench on ext2 in a 2 GiB image on the ext2 root, mount -o loop
+fsbench: journal commit                500 in   1.045 s,    2089.2 us each
+fsbench: write, fsync, rename          500 in   1.096 s,    2191.3 us each
+fsbench: stat of a missing name      10000 in   0.004 s,       0.4 us each
+== Debian, fsbench on the ext4 root (virtio-blk)
+fsbench: journal commit                500 in   0.450 s,     899.2 us each
+fsbench: write, fsync, rename          500 in   0.354 s,     707.8 us each
+fsbench: stat of a missing name      10000 in   0.006 s,       0.6 us each
+== Debian, fsbench on ext2 in a 2 GiB image on the ext4 root, mount -o loop
+== (CONFIG_EXT2_FS is not set and CONFIG_EXT4_USE_FOR_EXT2=y: ext4's driver)
+fsbench: journal commit                500 in   0.528 s,    1055.1 us each
+fsbench: write, fsync, rename          500 in   0.308 s,     616.8 us each
+fsbench: stat of a missing name      10000 in   0.005 s,       0.5 us each
+
+== Device writes over fsbench's 1000 rounds (both tests), /proc/diskstats
+Rach2 ext2 root, disk0: 12001 writes, 104064 sectors
+Debian ext2 (ext4 driver) on loop0: 5094 writes, 36792 sectors, 1501 flushes
+Debian ext4 root, vda: 4004 writes, 92184 sectors, 2502 flushes
+
+== fssteps.py, writes per call (Rach2's diskstats count no flushes)
+Rach2 ext2 root, disk0
+create (open O_CREAT)        writes  0.00 sectors    0.0 flushes 0.00 per call
+pwrite 8 KiB                 writes  0.00 sectors    0.0 flushes 0.00 per call
+fsync of it                  writes  0.18 sectors   17.3 flushes 0.00 per call
+pwrite 4 KiB db              writes  0.00 sectors    0.0 flushes 0.00 per call
+fdatasync db                 writes  0.02 sectors    1.3 flushes 0.00 per call
+close                        writes  0.00 sectors    0.0 flushes 0.00 per call
+unlink                       writes  1.00 sectors    8.0 flushes 0.00 per call
+rename over a file           writes  6.00 sectors   56.0 flushes 0.00 per call
+Debian ext2 (ext4 driver) on loop0
+create (open O_CREAT)        writes  0.00 sectors    0.0 flushes 0.00 per call
+pwrite 8 KiB                 writes  0.00 sectors    0.0 flushes 0.00 per call
+fsync of it                  writes  2.10 sectors   16.8 flushes 1.00 per call
+pwrite 4 KiB db              writes  0.00 sectors    0.0 flushes 0.00 per call
+fdatasync db                 writes  1.04 sectors    1.4 flushes 1.00 per call
+close                        writes  0.00 sectors    0.0 flushes 0.00 per call
+unlink                       writes  0.00 sectors    0.0 flushes 0.00 per call
+rename over a file           writes  0.00 sectors    0.0 flushes 0.00 per call
+
+== Host CPU of each guest's QEMU over one play under one host core (cgroup cpu.stat)
+Rach2 (r2-hl-q1e): 42.9 s, guest user+system 30.8 s
+Debian (deb-hl-q1e): 39.4 s, guest user+system+softirq 32.4 s

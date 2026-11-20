@@ -28,9 +28,22 @@ struct seccomp_filter;
  * other than read, write, exit and sigreturn ends the process with SIGKILL.
  * A filter's kill does not return, its errno, at most 4095, is the call's
  * error, and its trap posts SIGSYS with the result register back at the
- * call's number.
+ * call's number. A trace stops for the tracer, which may change the call's
+ * number in the thread's `orig_nr`. The caller holds the big lock.
  */
 int seccomp_permit(isr_params_t *tf, uint32_t nr, long *ret);
+
+/**
+ * The part of `seccomp_permit` that needs no big lock, run first for every
+ * call of a thread with a mode: 1 for a call the filters allow or log, or
+ * the strict mode allows; 0 with its result in `*ret` for one a filter fails
+ * with its errno, or with ENOSYS for SECCOMP_RET_USER_NOTIF; and -1 for a
+ * trap, a trace, a kill or the strict mode's refusal, which the caller
+ * hands to `seccomp_permit` under the big lock, where the filters run again.
+ * The filters read only the call and the thread's chain, which this reads
+ * once (seccomp.c).
+ */
+int seccomp_check(isr_params_t *tf, uint32_t nr, long *ret);
 
 /**
  * seccomp(2) takes the operation, its flags and its argument.

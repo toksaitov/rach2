@@ -1,0 +1,6 @@
+bootctl: staged: 8 bytes of menu in a 8192-byte slot
+bootctl: armed: the next boot tries fallback once
+bootctl: committed: the candidate is the saved default
+bootctl: fallback: 16777216 bytes written from the committed candidate and read back
+bootctl: run `bootctl trial fallback` to boot it once
+2026-11-20 18:03:47 +0600

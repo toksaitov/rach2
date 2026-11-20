@@ -2,7 +2,11 @@
  * fbdrm.c: the framebuffer the firmware or the loader set up, as one fixed
  * mode, Linux's simpledrm: a CRTC, a primary plane and a connector on the
  * screen the boot record describes, whose dumb buffers are kept in memory
- * and copied to the screen, converted to its format, where they changed.
+ * and copied to the screen, converted to its format, where they changed,
+ * with vblanks from the core's timer (`drm_crtc_vblank_start_timer`).
+ * The display's hooks run under the device's commit lock alone
+ * (DRIVER_KMS_UNLOCKED), as simpledrm's do under no global lock; a copy
+ * takes the big lock only to gather its buffer's frames (`fbdrm_gather`).
  */
 
 #include "drm.h"
@@ -14,6 +18,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
+#include "../proc/smp.h"
 
 /*
  * The device. `screen` is the kernel's mapping of the framebuffer, the
@@ -21,6 +26,9 @@
  * `format` is the screen's pixel format and `formats` the plane's, the
  * screen's then XRGB8888, which is converted. `line` holds one row of the
  * screen's pixels and one of a framebuffer's while a row is converted.
+ * `frames` holds the frames of the pages a copy reads, `nframes` of them
+ * from page `first` of its buffer, `room` the array's length; `nframes` is
+ * 0 between copies. The commit lock keeps `line` and `frames`.
  */
 struct fbdrm_device {
     struct drm_device drm;
@@ -34,6 +42,9 @@ struct fbdrm_device {
     uint32_t formats[2];
     uint32_t nformats;
     uint8_t *line;
+    uintptr_t *frames;
+    uint64_t first;
+    uint32_t nframes, room;
     struct drm_plane plane;
     struct drm_crtc crtc;
     struct drm_encoder encoder;
@@ -145,14 +156,61 @@ static void fbdrm_convert(uint8_t *dst, const uint8_t *src, uint32_t n, uint32_t
 }
 
 /**
- * Read `len` bytes of the buffer object `obj`, a shmem object as every
- * object of this driver is, from byte `off` into `dst`, a page at a time
- * through a temporary mapping. A page that cannot be had or mapped reads
- * as zeros. May sleep.
+ * Gather the frames of `count` pages of the buffer object `obj` from page
+ * `first` for a copy, a shmem object as every object of this driver is, so
+ * that the copy reads them without the big lock: the object's table of
+ * pages changes under the big lock, where a fault on a mapping of the
+ * object gives a page its frame, as Linux pins a shmem object's pages under
+ * its reservation lock before a CPU copy (drm_gem_shmem_vmap). The frames
+ * stay while the plane's framebuffer holds the object, since a shmem
+ * object frees its pages only with itself. A page past the object's end,
+ * or one that cannot be had, has frame 0 and reads as zeros. Returns 0 with
+ * the frames in `frames`; or 1 when there was no room for them, with the
+ * big lock held for the copy, which then looks each page up itself and
+ * gives the lock back after. Called under the commit lock, whose waiters
+ * give the big lock up, as every sleep does. May sleep.
  */
-static void fbdrm_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, uint32_t len)
+static int fbdrm_gather(struct fbdrm_device *f, struct drm_gem_object *obj, uint64_t first,
+                        uint32_t count)
 {
     struct drm_gem_shmem_object *s = (struct drm_gem_shmem_object *)obj;
+    uint64_t pages = obj->size >> PAGE_SHIFT;
+    uint32_t i;
+
+    if (count > f->room) {
+        uintptr_t *grown = (uintptr_t *)kmalloc(count * (uint32_t)sizeof(*grown));
+
+        if (grown) {
+            kfree(f->frames);
+            f->frames = grown;
+            f->room = count;
+        }
+    }
+    bkl_enter();
+    if (count > f->room) {
+        return 1;
+    }
+    for (i = 0; i < count; i++) {
+        f->frames[i] = first + i < pages ? drm_gem_shmem_page(s, (uint32_t)(first + i)) : 0;
+    }
+    bkl_exit();
+    f->first = first;
+    f->nframes = count;
+    return 0;
+}
+
+/**
+ * Read `len` bytes of the buffer object `obj` from byte `off` into `dst`, a
+ * page at a time through a temporary mapping: from the frames
+ * `fbdrm_gather` gathered, or, while it holds the big lock instead, from
+ * the object's own table. A page that cannot be had or mapped reads as
+ * zeros. May sleep.
+ */
+static void fbdrm_read(const struct fbdrm_device *f, struct drm_gem_object *obj, uint64_t off,
+                       uint8_t *dst, uint32_t len)
+{
+    struct drm_gem_shmem_object *s = (struct drm_gem_shmem_object *)obj;
+    uint64_t pg;
     uint32_t n, in;
     uintptr_t phys;
     uint8_t *va;
@@ -160,7 +218,12 @@ static void fbdrm_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, u
     while (len > 0) {
         in = (uint32_t)(off & (PAGE_SIZE - 1));
         n = PAGE_SIZE - in < len ? PAGE_SIZE - in : len;
-        phys = off < obj->size ? drm_gem_shmem_page(s, (uint32_t)(off >> PAGE_SHIFT)) : 0;
+        pg = off >> PAGE_SHIFT;
+        if (f->nframes != 0) {
+            phys = pg - f->first < f->nframes ? f->frames[pg - f->first] : 0;
+        } else {
+            phys = off < obj->size ? drm_gem_shmem_page(s, (uint32_t)pg) : 0;
+        }
         va = phys ? (uint8_t *)kmap_temp(phys) : NULL;
         if (va) {
             k_memcpy(dst, va + in, n);
@@ -177,7 +240,8 @@ static void fbdrm_read(struct drm_gem_object *obj, uint64_t off, uint8_t *dst, u
 /**
  * Copy the rectangle `r` of the framebuffer `fb`, in its pixels, to the
  * screen at (`dx`, `dy`), converted to the screen's format. The caller has
- * clipped both to the screen.
+ * clipped both to the screen. The frames of the rows' pages are gathered
+ * first (`fbdrm_gather`), and the copy runs without the big lock.
  *
  * A row in the screen's own format goes from the buffer's pages straight to
  * the screen, and a converted row from `line`, both through `k_memcpy`,
@@ -189,9 +253,15 @@ static void fbdrm_blit(struct fbdrm_device *f, const struct drm_framebuffer *fb,
     uint32_t cpp = fb->info->cpp[0], w = (uint32_t)(r->x2 - r->x1), out, row_y;
     uint32_t screen_cpp = f->info->cpp[0];
     uint8_t *row = f->line + f->pitch;
-    uint64_t from;
+    uint64_t from, start, end;
     uint8_t *to;
+    int locked;
 
+    start = (uint64_t)fb->offsets[0] + (uint64_t)(uint32_t)r->y1 * fb->pitches[0] +
+            (uint64_t)(uint32_t)r->x1 * cpp;
+    end = start + (uint64_t)(uint32_t)(r->y2 - r->y1 - 1) * fb->pitches[0] + (uint64_t)w * cpp;
+    locked = fbdrm_gather(f, fb->obj[0], start >> PAGE_SHIFT,
+                          (uint32_t)(((end - 1) >> PAGE_SHIFT) - (start >> PAGE_SHIFT) + 1));
     out = w * screen_cpp;
     for (row_y = (uint32_t)r->y1; row_y < (uint32_t)r->y2; row_y++) {
         from = (uint64_t)fb->offsets[0] + (uint64_t)row_y * fb->pitches[0] +
@@ -200,12 +270,16 @@ static void fbdrm_blit(struct fbdrm_device *f, const struct drm_framebuffer *fb,
                                     (uint32_t)(dy + (int32_t)(row_y - (uint32_t)r->y1)) * f->pitch +
                                     (uint32_t)dx * screen_cpp);
         if (fb->format == f->format) {
-            fbdrm_read(fb->obj[0], from, to, out);
+            fbdrm_read(f, fb->obj[0], from, to, out);
         } else {
-            fbdrm_read(fb->obj[0], from, row, w * cpp);
+            fbdrm_read(f, fb->obj[0], from, row, w * cpp);
             fbdrm_convert(f->line, row, w, f->format);
             k_memcpy(to, f->line, out);
         }
+    }
+    f->nframes = 0;
+    if (locked) {
+        bkl_exit();
     }
 }
 
@@ -361,19 +435,24 @@ static int fbdrm_get_modes(struct drm_connector *connector)
 
 static const struct drm_plane_funcs fbdrm_plane_funcs = {fbdrm_plane_check, fbdrm_plane_update,
                                                          fbdrm_plane_disable};
-static const struct drm_crtc_funcs fbdrm_crtc_funcs = {fbdrm_crtc_check,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       fbdrm_crtc_mode_valid,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL};
+/* The CRTC's vblanks come from the core's timer at the mode's 60 Hz, since
+ * the firmware's framebuffer has no vblank interrupt, as Linux's bochs's
+ * come from it and as the series that added the timer gave them to
+ * simpledrm ("drm/simpledrm: Use vblank timer"). */
+static const struct drm_crtc_funcs fbdrm_crtc_funcs = {
+    fbdrm_crtc_check,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    fbdrm_crtc_mode_valid,
+    drm_crtc_vblank_helper_enable_vblank_timer,
+    drm_crtc_vblank_helper_disable_vblank_timer,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    drm_crtc_vblank_helper_get_vblank_timestamp_from_timer};
 static const struct drm_connector_funcs fbdrm_connector_funcs = {NULL, fbdrm_get_modes, NULL, NULL};
 static const uint64_t fbdrm_modifiers[] = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID};
 
@@ -384,6 +463,7 @@ static void fbdrm_release(struct drm_device *dev)
     struct fbdrm_device *f = to_fbdrm(dev);
 
     drm_mode_config_cleanup(dev);
+    kfree(f->frames);
     kfree(f->line);
     kfree(f);
 }

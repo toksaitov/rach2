@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>video probe</title></head>
+<body style="margin:0;background:#000">
+<video id="v" muted autoplay playsinline style="width:100vw;height:100vh"></video>
+<script>
+"use strict";
+// video-timing.html?name=N&clip=F&secs=S: play.sh's video.html with timing,
+// used in its place: play a muted clip for S seconds and post its playback
+// quality, sampled every 10 s, each frame's requestVideoFrameCallback times
+// and drop count (`frames`), and the first 4000 requestAnimationFrame times
+// (`rafs`), the page's refresh callbacks, in ms from navigation.
+const q = new URLSearchParams(location.search);
+const NAME = q.get('name') || 'video', SECS = +(q.get('secs') || 58);
+const v = document.getElementById('v'); v.src = q.get('clip') || 'h264-1080p30.mp4';
+v.play().catch(e => { window.playError = String(e); });
+const samples = [], frames = [], rafs = [];
+function raf(t) { if (rafs.length < 4000) rafs.push(+t.toFixed(2)); requestAnimationFrame(raf); }
+requestAnimationFrame(raf);
+function onf(now, m) { const p = v.getVideoPlaybackQuality();
+  frames.push([+now.toFixed(1), m.mediaTime, +m.presentationTime.toFixed(1), +m.expectedDisplayTime.toFixed(1),
+    m.processingDuration || 0, m.presentedFrames, p.droppedVideoFrames]);
+  v.requestVideoFrameCallback(onf); }
+if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(onf);
+function sample() { const p = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+  samples.push({ t: v.currentTime, total: p.totalVideoFrames, dropped: p.droppedVideoFrames }); }
+const iv = setInterval(sample, 10000);
+setTimeout(async () => {
+  clearInterval(iv); sample();
+  const p = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+  const r = { name: NAME, clip: v.src, currentTime: v.currentTime, readyState: v.readyState, error: v.error && v.error.message,
+    playError: window.playError, total: p.totalVideoFrames, dropped: p.droppedVideoFrames, corrupted: p.corruptedVideoFrames,
+    width: v.videoWidth, height: v.videoHeight, samples, frames, rafs };
+  await fetch('/result?name=' + encodeURIComponent(NAME), { method: 'POST', body: JSON.stringify(r) });
+  document.title = 'posted';
+}, SECS * 1000);
+</script></body></html>

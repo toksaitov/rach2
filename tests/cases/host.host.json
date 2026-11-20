@@ -346,6 +346,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drm_vblank_timer",
+          "checks": "tests/host/drm_vblank_timer_hosttest.c checks the vblank timer of a CRTC without a vblank interrupt: its first firing a frame after it starts, events and WAIT_VBLANK stamped on its frame grid, a late tick counting the frames it skipped in one vblank, counts and event timestamps for repeated-scan modes, and the timer stopped by the off-delay, the CRTC off and the device's release, under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_vblank_timer64",
+          "checks": "tests/host/drm_vblank_timer64_hosttest.c runs the vblank timer rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "drm_prime",
           "checks": "tests/host/drm_prime_hosttest.c checks PRIME exports, import caching, self-import, cross-device and udmabuf pages, lifetimes and failures under ASan and UBSan",
           "source": "scenario"

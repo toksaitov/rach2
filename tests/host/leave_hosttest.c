@@ -204,6 +204,23 @@ void rseq_return(isr_params_t *params)
     rseq_writes++;
 }
 
+/** Update the rseq area without the big lock, as the kernel's
+ * `rseq_return_unlocked` does for an entry that ran without it: the same
+ * model update, which never fails. */
+int rseq_return_unlocked(isr_params_t *params)
+{
+    check(bkl_depth == 0, "the unlocked rseq update runs without the big lock");
+    rseq_return(params);
+    return 0;
+}
+
+/** No modeled rseq area fails, so nothing posts its SIGSEGV. */
+void rseq_return_failed(isr_params_t *params)
+{
+    (void)params;
+    check(0, "no rseq area fails");
+}
+
 /** Start a row: a thread with no work, interrupts off, no lock, and a
  * post from another processor of `signo` at `at`. */
 static void setup(enum post_at at, int signo)

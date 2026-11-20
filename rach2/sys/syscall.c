@@ -276,8 +276,7 @@ int syscall_entry_locked(const isr_params_t *params)
     if (!p || p->fd_holding || usbdisk_waiting) {
         return 1;
     }
-    if ((p->work & WORK_ENTRY) &&
-        ((p->ptrace & PT_STEP) || p->seccomp_mode != SECCOMP_MODE_DISABLED)) {
+    if ((p->work & WORK_ENTRY) && (p->ptrace & PT_STEP)) {
         return 1;
     }
     return syscall_nr_locked(params, (uint32_t)SC_NR(params));
@@ -3883,12 +3882,21 @@ static void _syscall_handler(isr_params_t *params)
             syscall_relock_end(relock);
         }
         if (!skip && p->seccomp_mode != SECCOMP_MODE_DISABLED) {
-            relock = syscall_relock();
-            if (!seccomp_permit(params, syscall_num, &ret)) {
+            int run = seccomp_check(params, syscall_num, &ret);
+
+            if (run < 0) {
+                relock = syscall_relock();
+                run = seccomp_permit(params, syscall_num, &ret);
+                syscall_relock_end(relock);
+                /* A tracer's SECCOMP_RET_TRACE stop may have changed the
+                 * number, which the call then runs, as Linux's
+                 * syscall_trace_enter returns it. */
+                syscall_num = (uint32_t)p->orig_nr;
+            }
+            if (!run) {
                 skip = 1;
                 SC_RET(params) = (unsigned long)ret;
             }
-            syscall_relock_end(relock);
         }
         p->restart_kind = RESTART_SYS;
         p->restart_due = 0;

@@ -458,6 +458,7 @@ static int timer_lock_take(int boot)
  * under the pool's lock, the end of a speaker's tone under the speaker's
  * lock, the i915's release of forcewake under its register lock, and
  * vkms's vblank timer under the device's locks and the core's vblank
+ * locks, and the core's vblank timers under their lock and the core's vblank
  * locks, as Linux runs a driver's timer under the driver's own lock
  * (`timer_list` and hrtimer callbacks, kernel/time/timer.c,
  * kernel/time/hrtimer.c). No lock is held and interrupts are off. Returns
@@ -477,7 +478,9 @@ static uint64_t timer_own_work(uint64_t t)
     i915_tick();
     t = bkl_tick_charge(BKL_TICK_I915, t);
     vkms_tick();
-    return bkl_tick_charge(BKL_TICK_VKMS, t);
+    t = bkl_tick_charge(BKL_TICK_VKMS, t);
+    drm_vblank_timer_tick();
+    return bkl_tick_charge(BKL_TICK_VBLANK, t);
 }
 
 static void timer_service_rearm(void);

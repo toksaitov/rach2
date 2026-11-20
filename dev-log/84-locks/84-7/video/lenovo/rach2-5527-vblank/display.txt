@@ -1,0 +1,10 @@
+desktop: result: weston 174 as desktop ; Using Pixman renderer; mode 1366x768@60.0, preferred, current, 62.9 MHz
+[    4.320000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 0
+[11:57:41.595] Using Pixman renderer
+h264-1080p30.mp4: OK
+vp9-1080p30.webm: OK
+desktop: result: firefox-h264: 1717 frames, 62 dropped, None corrupted, 1920x1080, 57.2 s played, error None, samples [(9, 35), (19, 36), (29, 53), (39, 58), (49, 60), (57, 62)]
+vblank_backwards=0
+1
+vol 1:1
+vblank_backwards after playback: 0

@@ -13,6 +13,8 @@ The Debian reference guest's results for the graphics runners, which the `webgl`
 
 The video references ran beside three bound Debian guests of eight processors each, each with eight busy CPU workers, through `browser/loaded.py`. Their records retain the live admission ledger: the load group's 24-processor reservation and the browser guest's four. The release's full run runs Rach2's `video` and `browser` suites beside the same load, one case at a time ([tools/ci/loaded-suites](../../../../tools/ci/loaded-suites)). Chromium's h264-720p plays are the fourth of five runs without the load, which dropped up to 1 frame in a counted play where the single run beside the load dropped none; the most of the fourth is the most of all five, and the record's `reference` line names each run's drops. Three more runs beside the load, on 2026-11-19, dropped 0,0,0, 0,0,1 and 0,1,0, the same most.
 
+In `std-vga/igt/kms_flip.results`, `basic-flip-vs-wf_vblank` and its dynamic row are `skip-or-pass`. Linux 6.12's bochs-drm has no vblanks, and IGT skips the subtest for want of them; Rach2's bochs takes its vblanks from the core's vblank timer, as Linux's has since commit bde44378397b (drm/bochs: Use vblank timer), and the subtest runs and passes. A failure, crash or missing result still fails. The `kms_vblank` rows, which failed on Linux 6.12 for the same want, accept any result as before.
+
 The formats are those of [the runners' results](../../Readme.md#results). The runners' logs, igt_runner's and piglit's whole JSON results and glmark2's output are left out.
 
 ## Updating
