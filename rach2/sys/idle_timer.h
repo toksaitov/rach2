@@ -38,7 +38,6 @@ uint32_t block_lag_idle_ticks(void);
 uint32_t speaker_idle_ticks(void);
 uint32_t hda_idle_ticks(void);
 uint32_t blank_idle_ticks(void);
-uint32_t vkms_idle_ticks(void);
 uint32_t i915_idle_ticks(void);
 uint32_t tcp_idle_ticks(void);
 uint32_t tty_idle_ticks(void);

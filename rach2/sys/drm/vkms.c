@@ -6,7 +6,7 @@
  * each frame composed in memory. `rach2.vkms` starts it.
  */
 
-#include "../idle_timer.h"
+#include "../timer.h"
 #include "drm.h"
 
 #include "../cmdline.h"
@@ -1346,29 +1346,4 @@ void vkms_stats(uint32_t *overruns, uint32_t *skipped, uint32_t *missed, uint32_
     *missed = v->crc_missed;
     *catchups = v->catchups;
     spin_unlock_irqrestore(&v->lock, flags);
-}
-
-/** Return the next service deadline for the stopped idle tick. */
-uint32_t vkms_idle_ticks(void)
-{
-    struct vkms_device *v = vkms_dev;
-    int64_t gap, next;
-    uint32_t flags;
-    int on;
-
-    if (!v) {
-        return TICK_HZ;
-    }
-    flags = spin_lock_irqsave(&v->timer_lock);
-    on = v->timer_on;
-    next = v->next_ns;
-    spin_unlock_irqrestore(&v->timer_lock, flags);
-    if (!on) {
-        return TICK_HZ;
-    }
-    gap = next - vkms_now();
-    return gap <= 0 ? 1u
-           : gap >= (int64_t)1000000000
-               ? TICK_HZ
-               : (uint32_t)tick_div64((uint64_t)gap + TICK_NS - 1u, TICK_NS, NULL);
 }
