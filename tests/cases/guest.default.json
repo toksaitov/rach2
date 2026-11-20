@@ -5459,7 +5459,8 @@
         {"assertion_id": "effective-apart", "checks": "A child of root keeps CAP_CHOWN effective and CAP_CHOWN and CAP_DAC_OVERRIDE permitted with capset, capget reports the two sets apart, and a second capset makes CAP_DAC_OVERRIDE effective again.", "source": "program"},
         {"assertion_id": "keep-caps", "checks": "A child of root sets PR_SET_KEEPCAPS, which PR_GET_KEEPCAPS reports as 1 and PR_GET_SECUREBITS as 0x10; setresuid to user 1000 leaves every capability permitted and none effective, fchown of a file root made is EPERM, and after capset makes CAP_CHOWN effective and permitted it gives the file to user 1000.", "source": "program"},
         {"assertion_id": "fsuid-capset", "checks": "A child of root calls setfsuid(1000): capget shows CAP_DAC_OVERRIDE permitted but not effective and CAP_SYS_ADMIN effective, and opening /tmp/capmusl.fs, root's at mode 0600, is EACCES; capset of the permitted set as the effective one makes capget show CAP_DAC_OVERRIDE effective, and the open succeeds, as on Linux.", "source": "program"},
-        {"assertion_id": "fsuid-no-fixup", "checks": "A child of root sets SECBIT_NO_SETUID_FIXUP with PR_SET_SECUREBITS and calls setfsuid(1000): capget shows every capability effective and permitted, and /tmp/capmusl.fs opens.", "source": "program"}
+        {"assertion_id": "fsuid-no-fixup", "checks": "A child of root sets SECBIT_NO_SETUID_FIXUP with PR_SET_SECUREBITS and calls setfsuid(1000): capget shows every capability effective and permitted, and /tmp/capmusl.fs opens.", "source": "program"},
+        {"assertion_id": "dac-alone", "checks": "A child of root keeps every capability permitted and CAP_DAC_OVERRIDE alone effective with capset, and opens for writing the oom_score_adj file of a process of user 1000, which only its owner may write, as Linux lets that capability pass without CAP_SYS_ADMIN.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

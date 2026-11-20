@@ -41,7 +41,9 @@
  * root's. setfsuid to user 1000 takes CAP_DAC_OVERRIDE out of root's
  * effective set, so that a file only root may read is refused, and capset
  * makes it effective again, which capget reports and the open then passes
- * by; under SECBIT_NO_SETUID_FIXUP setfsuid leaves it effective.
+ * by; under SECBIT_NO_SETUID_FIXUP setfsuid leaves it effective. With
+ * CAP_DAC_OVERRIDE alone effective, root opens the oom_score_adj file of a
+ * process of user 1000 for writing.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
@@ -169,6 +171,7 @@ enum {
     KEEP_CAPS,
     FSUID_CAPSET,
     FSUID_NO_FIXUP,
+    DAC_ALONE,
     CHECKS
 };
 
@@ -220,6 +223,8 @@ static const struct {
     {"fsuid-capset",
      "capset could not make CAP_DAC_OVERRIDE effective again after setfsuid took it from root"},
     {"fsuid-no-fixup", "setfsuid under SECBIT_NO_SETUID_FIXUP moved the effective set"},
+    {"dac-alone",
+     "CAP_DAC_OVERRIDE alone effective could not open another user's oom_score_adj to write"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -1253,6 +1258,56 @@ static int fsuid_no_fixup(void)
     return (uid_t)setfsuid((uid_t)-1) == user && get_caps(d) == 0 && all_of(d) && reads_root_only();
 }
 
+/**
+ * In a child of root: with CAP_DAC_OVERRIDE alone effective and every
+ * capability permitted, the oom_score_adj file of a process of user 1000,
+ * which only its owner may write, opens for writing, as Linux's
+ * generic_permission lets that capability pass whatever else the effective
+ * set holds. Returns 1 when it does, else 0.
+ */
+static int dac_alone(void)
+{
+    struct cap_data d[2];
+    char path[64], c = 'x';
+    int ready[2], go[2], fd = -1, status;
+    pid_t pid;
+
+    if (pipe(ready) != 0 || pipe(go) != 0) {
+        return 0;
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(ready[0]);
+        close(go[1]);
+        if (setuid((uid_t)probe_id(1000)) != 0) {
+            _exit(1);
+        }
+        write(ready[1], &c, 1);
+        read(go[0], &c, 1);
+        _exit(0);
+    }
+    close(ready[1]);
+    close(go[0]);
+    memset(d, 0, sizeof(d));
+    d[0].effective = DAC;
+    d[0].permitted = 0xFFFFFFFFu;
+    d[1].permitted = HIGH_WORD;
+    if (pid > 0 && read(ready[0], &c, 1) == 1 && set_caps(d) == 0) {
+        snprintf(path, sizeof(path), "/proc/%ld/oom_score_adj", (long)pid);
+        fd = open(path, O_WRONLY);
+    }
+    close(go[1]);
+    close(ready[0]);
+    if (pid > 0) {
+        waitpid(pid, &status, 0);
+    }
+    if (fd < 0) {
+        return 0;
+    }
+    close(fd);
+    return 1;
+}
+
 /** Run `row` in a forked child. Returns 1 when it held there, else 0. */
 static int in_child(int (*row)(void))
 {
@@ -1267,9 +1322,9 @@ static int in_child(int (*row)(void))
 }
 
 /**
- * Run `fsuid_capset` and `fsuid_no_fixup` each in a forked child, with
- * ROOT_ONLY made for them and removed after. Returns 0, or 1 after the
- * failure is printed.
+ * Run `fsuid_capset`, `fsuid_no_fixup` and `dac_alone` each in a forked
+ * child, with ROOT_ONLY made for the first two and removed after. Returns
+ * 0, or 1 after the failure is printed.
  */
 static int fsuid_rows(void)
 {
@@ -1281,6 +1336,8 @@ static int fsuid_rows(void)
         check = FSUID_CAPSET;
     } else if (!in_child(fsuid_no_fixup)) {
         check = FSUID_NO_FIXUP;
+    } else if (!in_child(dac_alone)) {
+        check = DAC_ALONE;
     }
     if (fd >= 0) {
         close(fd);

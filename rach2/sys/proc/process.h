@@ -1346,12 +1346,13 @@ isr_params_t *proc_user_frame(const process_t *t);
 #define proc_fsuid(p) (((p)->fs_own & PROC_FSUID_OWN) ? (p)->fsuid : (p)->euid)
 #define proc_fsgid(p) (((p)->fs_own & PROC_FSGID_OWN) ? (p)->fsgid : (p)->egid)
 
-/* Whether thread `p` has privilege over files: `proc_privileged` judged by
- * CAP_DAC_OVERRIDE in its effective set, one of the capabilities Linux
- * checks for file access (CAP_FS_SET), which leave that set when setfsuid
- * takes the file-system user id from 0 (`cap_holds` in ns.h, which the
- * users include). */
-#define proc_fs_privileged(p) (!(p)->nocaps && !(p)->userns && cap_holds((p), CAP_DAC_OVERRIDE))
+/* Whether thread `p` may pass a file's permission bits: CAP_DAC_OVERRIDE in
+ * its effective set, in the first user namespace, as Linux's
+ * generic_permission asks it, whatever else that set holds; it leaves the
+ * set with the rest of CAP_FS_SET when setfsuid takes the file-system user
+ * id from 0 (`cap_holds` in ns.h, which the users include). A check for
+ * another privilege over files asks its own capability. */
+#define proc_fs_privileged(p) (!(p)->userns && cap_holds((p), CAP_DAC_OVERRIDE))
 
 /* Whether [addr, addr + len) lies in the kernel buffer the thread `p` has
  * opened to the user-copy checks (`user_window_open`). A macro, so that

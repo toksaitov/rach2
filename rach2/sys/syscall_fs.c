@@ -3091,11 +3091,6 @@ int cred_privileged(void)
     return proc_privileged(current_proc);
 }
 
-int cred_fs_privileged(void)
-{
-    return proc_fs_privileged(current_proc);
-}
-
 /** Non-zero when `gid` is in the caller's supplementary list. */
 static int cred_in_suppl(uint32_t gid)
 {
@@ -7401,10 +7396,11 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
     if (copy_from_user(&want, (const void __user *)arg, sizeof(want)) != 0) {
         return -EFAULT;
     }
-    if (!cred_fs_privileged() && proc_fsuid(current_proc) != st.uid) {
+    if (!inode_owner_or_capable(st.uid)) {
         return -EPERM;
     }
-    if (((want ^ st.flags) & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) && !cred_fs_privileged()) {
+    if (((want ^ st.flags) & (VFS_FL_IMMUTABLE | VFS_FL_APPEND)) &&
+        (current_proc->userns || !cap_holds(current_proc, CAP_LINUX_IMMUTABLE))) {
         return -EPERM;
     }
     st.flags = want;
@@ -7588,7 +7584,7 @@ static int xattr_access(const struct vfs_ref *ref, const struct vfs_xattr *arg)
         if ((st.mode & 0170000u) != 0100000u && (st.mode & 0170000u) != 0040000u)
             return write ? -EPERM : -ENODATA;
         if (write && (st.mode & 01000u) && (st.mode & 0170000u) == 0040000u &&
-            proc_fsuid(current_proc) != st.uid && !proc_fs_privileged(current_proc))
+            !inode_owner_or_capable(st.uid))
             return -EPERM;
     }
     return cred_access_ref(ref, write ? CRED_W : CRED_R, 0);
@@ -13708,7 +13704,7 @@ long sys_open_by_handle_at(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    if (!proc_fs_privileged(current_proc)) {
+    if (current_proc->userns || !cap_holds(current_proc, CAP_DAC_READ_SEARCH)) {
         return -EPERM;
     }
     m = kst.st_mnt_id ? vfs_mount_at((int)kst.st_mnt_id - 1) : NULL;
@@ -15990,7 +15986,7 @@ static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, co
  */
 static int32_t may_linkat(const struct vfs_ref *src, const struct vfs_stat *st)
 {
-    if (!vfs_protected_hardlinks || st->uid == proc_fsuid(current_proc) || cred_fs_privileged()) {
+    if (!vfs_protected_hardlinks || inode_owner_or_capable(st->uid)) {
         return 0;
     }
     if ((st->mode & S_IFMT) == S_IFREG && !(st->mode & 04000u) && (st->mode & 02010u) != 02010u &&
@@ -19017,7 +19013,7 @@ static int cachestat_allowed(fd_entry_t *e)
     if (fstat_fill(e, &st) != 0) {
         return 0;
     }
-    if ((uint32_t)st.st_uid == proc_fsuid(current_proc) || cred_fs_privileged()) {
+    if (inode_owner_or_capable((uint32_t)st.st_uid)) {
         return 1;
     }
     rc = access_fd(e, W_OK, AT_EACCESS, 0);
@@ -20103,7 +20099,8 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     } else {
         rc = cred_access_ref(&parent, CRED_W, 0);
     }
-    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && !cred_fs_privileged()) {
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) &&
+        (current_proc->userns || !cap_holds(current_proc, CAP_MKNOD))) {
         rc = -EPERM;
     }
     if (rc == 0) {

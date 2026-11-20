@@ -428,6 +428,7 @@ void ns_exec(process_t *p);
 #define CAP_SYS_BOOT           22
 #define CAP_SYS_RESOURCE       24
 #define CAP_SYS_TTY_CONFIG     26
+#define CAP_MKNOD              27
 #define CAP_CHECKPOINT_RESTORE 40
 
 /**
