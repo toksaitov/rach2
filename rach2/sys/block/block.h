@@ -166,6 +166,12 @@ struct block_device {
      * so that neither wraps. */
     uint64_t firsts_unflushed;
     uint64_t firsts_flushed;
+    /* The same counts of every write the cache sent that the disk answered
+     * without its flush, and the count of the newest such write the
+     * cache's list of them had no room for (bcache.c, `flush_owed`). */
+    uint64_t writes_unflushed;
+    uint64_t writes_flushed;
+    uint64_t writes_lost;
     /* Odd while `block_set_sectors` sets `sector_count`; moved on by each
      * change. */
     volatile uint32_t size_seq;

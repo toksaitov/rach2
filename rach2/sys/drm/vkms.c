@@ -156,6 +156,8 @@ struct vkms_pages {
     uintptr_t *phys;
     uint32_t first, n;
     int live;
+    uint8_t *va; /* the frames, in order, as one window of the MMIO region
+                  * (`compose_pages_map`), or NULL */
 };
 
 /**
@@ -180,6 +182,17 @@ static void vkms_read(const struct vkms_pages *pg, uint64_t off, uint8_t *dst, u
         in = (uint32_t)(off & (PAGE_SIZE - 1));
         n = PAGE_SIZE - in < len ? PAGE_SIZE - in : len;
         at = (off >> PAGE_SHIFT) - pg->first;
+        if (pg->va && (off >> PAGE_SHIFT) >= pg->first && at < pg->n) {
+            uint64_t base = (uint64_t)pg->first << PAGE_SHIFT;
+            uint64_t lim = base + ((uint64_t)pg->n << PAGE_SHIFT);
+
+            n = lim - off < len ? (uint32_t)(lim - off) : len;
+            k_memcpy(dst, pg->va + (uintptr_t)(off - base), n);
+            dst += n;
+            off += n;
+            len -= n;
+            continue;
+        }
         phys = (off >> PAGE_SHIFT) >= pg->first && at < pg->n ? pg->phys[at] : 0;
         if (phys & 1u) {
             phys &= ~(uintptr_t)1u;
@@ -425,6 +438,47 @@ static void compose_relock(int depth)
 #endif
 
 /**
+ * Map the frames `pg` holds, each pinned, into one window of the MMIO
+ * region, so that the rows read the framebuffer through one mapping, as
+ * Linux's prepare_fb maps it with drm_gem_fb_vmap, where `kmap_cpu` would
+ * map each page of each row on its own. Nothing where the direct map
+ * reaches every frame, for a plane with a frame the pool does not pin or a
+ * page without a frame, or when the region has no room, which leaves the
+ * reads to `kmap_cpu`. Under the big lock.
+ */
+static void compose_pages_map(struct vkms_pages *pg)
+{
+#ifndef ARCH_DIRECT_MAP_ALL
+    size_t used, largest;
+    uintptr_t *frames;
+    uint32_t k;
+
+    if (pg->live || pg->n == 0) {
+        return;
+    }
+    mmio_usage(&used, &largest);
+    if (largest < (size_t)pg->n * PAGE_SIZE) {
+        return;
+    }
+    frames = (uintptr_t *)kmalloc((size_t)pg->n * sizeof(uintptr_t));
+    if (!frames) {
+        return;
+    }
+    for (k = 0; k < pg->n && (pg->phys[k] & 1u); k++) {
+        frames[k] = pg->phys[k] & ~(uintptr_t)1u;
+    }
+    if (k == pg->n) {
+        uintptr_t va = mmio_map_frames(frames, pg->n, 0);
+
+        pg->va = (uint8_t *)va;
+    }
+    kfree(frames);
+#else
+    (void)pg;
+#endif
+}
+
+/**
  * Look up into `pg`, one for each frame of the scene `s`, the frames of the
  * pages of its buffer object that its framebuffer covers, from its offset
  * for its height of rows, and pin each frame the pool keeps, so that the
@@ -471,17 +525,21 @@ static int32_t compose_pages_get(const struct vkms_scene *s, struct vkms_pages *
                 all = 0;
             }
         }
+        compose_pages_map(&pg[i]);
     }
     return all;
 }
 
-/** Unpin and free what `compose_pages_get` took into `pg` for `s`. Under the
- * big lock. */
+/** Unmap, unpin and free what `compose_pages_get` took into `pg` for `s`.
+ * Under the big lock. */
 static void compose_pages_put(const struct vkms_scene *s, struct vkms_pages *pg)
 {
     uint32_t i, k;
 
     for (i = 0; i < s->nframes; i++) {
+        if (pg[i].va) {
+            mmio_unmap((uintptr_t)pg[i].va, (size_t)pg[i].n * PAGE_SIZE);
+        }
         for (k = 0; k < pg[i].n; k++) {
             if (pg[i].phys[k] & 1u) {
                 compose_unpin(pg[i].phys[k] & ~(uintptr_t)1u);
