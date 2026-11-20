@@ -1535,10 +1535,9 @@ static void pending_on_cpu(void *arg)
     q->pending = lapic_pending(q->vector);
 }
 
-/** Read every online controller, since a migrated vector can still be
- * pending on a previous destination. An acknowledged entry waiting for
- * the big lock or running its chain remains pending in vector_active. */
-int isr_vector_pending(int vector)
+/** Whether `vector` has an entry under way, or a message pending at
+ * another online processor's controller or, with `here`, at this one's. */
+static int vector_pending(int vector, int here)
 {
     struct pending_query q;
     int c;
@@ -1546,7 +1545,7 @@ int isr_vector_pending(int vector)
     if (vector < 0 || vector >= 256) {
         return 0;
     }
-    if (vector_active[vector] || lapic_pending((uint8_t)vector)) {
+    if (vector_active[vector] || (here && lapic_pending((uint8_t)vector))) {
         return 1;
     }
     q.vector = (uint8_t)vector;
@@ -1563,16 +1562,24 @@ int isr_vector_pending(int vector)
     return 0;
 }
 
+/** Read every online controller, since a migrated vector can still be
+ * pending on a previous destination. An acknowledged entry waiting for
+ * the big lock or running its chain remains pending in vector_active. */
+int isr_vector_pending(int vector)
+{
+    return vector_pending(vector, 1);
+}
+
 void isr_vector_sync(int vector)
 {
+    int on = kirq_enabled();
     uint32_t flags;
 
-    while (isr_vector_pending(vector)) {
+    while (vector_pending(vector, on)) {
         flags = kirq_save();
         bkl_yield();
-        arch_irq_enable(); /* a message pending at this processor is taken here */
+        kirq_restore(flags); /* with interrupts on, one pending here is taken now */
         arch_relax();
-        kirq_restore(flags);
     }
 }
 
