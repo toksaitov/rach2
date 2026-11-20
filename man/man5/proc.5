@@ -1172,9 +1172,10 @@ after this side's close; TCPAbortOnClose, those a close with data unread
 ended; TCPAbortOnTimeout, those a timeout ended; TCPTimeWaitOverflow, those
 that skipped TIME_WAIT for a full table of them; TCPChallengeACK and TCPSYNChallenge, the
 challenge acknowledgements sent and the SYNs that drew one;
-TCPACKSkippedSynRecv, TCPACKSkippedSeq and TCPACKSkippedChallenge, the
-answers of a handshake not yet ended, those to segments outside the
-window and the challenges the rate limit held back;
+TCPACKSkippedSynRecv, TCPACKSkippedSeq, TCPACKSkippedTimeWait and
+TCPACKSkippedChallenge, the answers of a handshake not yet ended, those to
+segments outside the window, those to a connection in TIME_WAIT and the
+challenges the rate limit held back;
 TCPKeepAlive, the keepalive probes sent; and TCPMTUPFail and
 TCPMTUPSuccess, the probes of a larger segment lost and taken, as
 .Xr tcp 7

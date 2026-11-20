@@ -1228,6 +1228,88 @@ static void time_wait_more_rows(void)
 }
 
 /**
+ * Check TIME_WAIT's answers to a peer's segments against Linux 6.12's
+ * tcp_timewait_state_process without timestamps: a SYN past `rcv_nxt` to
+ * a port with a listener ends the TIME_WAIT and opens the pair again with
+ * an initial sequence number 65537 past the old connection's last; one at
+ * or before `rcv_nxt`, an old duplicate, is acknowledged once in 500 ms,
+ * the next counted in TCPACKSkippedTimeWait, and one past it with no
+ * listener acknowledged; a reset at `rcv_nxt` ends the TIME_WAIT and one
+ * elsewhere does not; a bare acknowledgement at `rcv_nxt` restarts the
+ * 60 s; and a block a socket still holds, ended by a reset, leaves the
+ * table of connections as CLOSED for the socket's close to free.
+ */
+static void time_wait_reuse_rows(void)
+{
+    struct socket sock, lsock;
+    struct tcb *tw, *conn;
+    uint32_t peer_seq = 44000, old_nxt, skipped;
+    uint16_t lport;
+
+    reset_all();
+    sock_pooled = 0;
+    tw = time_wait_conn(&sock, 88, &peer_seq, &lport);
+    old_nxt = tw->snd_nxt;
+    k_memset(&lsock, 0, sizeof(lsock));
+    CHECK("a listener can be opened on the TIME_WAIT block's port", tcp_listen(&lsock, lport) == 0);
+    n_segs = 0;
+    rx(88, lport, peer_seq + 100000u, 0, F_SYN, 65535, (const char *)0, 0);
+    conn = tcp_find(net_addr4(net_ip_addr), lport, net_addr4(PEER), 88);
+    CHECK("a SYN past rcv_nxt ends the TIME_WAIT and the listener answers it",
+          tw_count == 0 && conn && conn->state == TCP_SYN_RCVD && n_segs == 1 &&
+              last_flags() == (F_SYN | F_ACK));
+    CHECK("from 65537 past the old connection's last sequence number",
+          read32be(segs[0].data + 4) == old_nxt + 65537u &&
+              read32be(segs[0].data + 8) == peer_seq + 100001u);
+
+    reset_all();
+    sock_pooled = 0;
+    tw = time_wait_conn(&sock, 88, &peer_seq, &lport);
+    k_memset(&lsock, 0, sizeof(lsock));
+    (void)tcp_listen(&lsock, lport);
+    n_segs = 0;
+    skipped = net_mib.tcp_ack_skipped_time_wait;
+    rx(88, lport, peer_seq - 10u, 0, F_SYN, 65535, (const char *)0, 0);
+    CHECK("an old SYN, before rcv_nxt, is acknowledged and opens nothing",
+          tw_count == 1 && tw->state == TCP_TIME_WAIT && n_segs == 1 && last_flags() == F_ACK &&
+              read32be(segs[0].data + 8) == peer_seq);
+    rx(88, lport, peer_seq - 10u, 0, F_SYN, 65535, (const char *)0, 0);
+    CHECK("a second at once is not, counted in TCPACKSkippedTimeWait",
+          n_segs == 1 && net_mib.tcp_ack_skipped_time_wait == skipped + 1u);
+    tcp_close(&lsock);
+    kernel_ticks += 100;
+    n_segs = 0;
+    rx(88, lport, peer_seq + 5u, 0, F_SYN, 65535, (const char *)0, 0);
+    CHECK("a SYN past rcv_nxt with no listener is acknowledged and ends nothing",
+          tw_count == 1 && n_segs == 1 && last_flags() == F_ACK);
+
+    rx(88, lport, peer_seq, tw->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    CHECK("a bare acknowledgement at rcv_nxt restarts the 60 s",
+          tw->timewait_until == (uint32_t)kernel_ticks + TCP_MS(60000));
+    rx(88, lport, peer_seq + 1u, 0, F_RST, 65535, (const char *)0, 0);
+    CHECK("a reset past rcv_nxt leaves the TIME_WAIT", tw_count == 1 && tw_first == tw);
+    rx(88, lport, peer_seq, 0, F_RST, 65535, (const char *)0, 0);
+    CHECK("and one at rcv_nxt ends it", tw_count == 0 && tcbs == 0);
+
+    reset_all();
+    conn = open_conn(&sock, 89, &peer_seq, &lport);
+    (void)tcp_shutdown(&sock, 0, 1);
+    rx(89, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    rx(89, lport, peer_seq, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK), 65535, (const char *)0, 0);
+    peer_seq++;
+    CHECK("a socket that shut its sending half holds its block in TIME_WAIT",
+          conn->state == TCP_TIME_WAIT && conn->sock == &sock && !conn->tw_listed);
+    rx(89, lport, peer_seq, 0, F_RST, 65535, (const char *)0, 0);
+    CHECK("a reset at rcv_nxt leaves it CLOSED, out of the table, with no error",
+          tcbs == conn && conn->state == TCP_CLOSED && conn->sock == &sock && !conn->hashed &&
+              conn->so_error == 0 &&
+              tcp_find(net_addr4(net_ip_addr), lport, net_addr4(PEER), 89) == 0);
+    tcp_close(&sock);
+    CHECK("for the socket's close to free", tcbs == 0);
+    reset_all();
+}
+
+/**
  * Tick the clock until the stack has sent a segment more than `before` or
  * `most` ticks have passed; returns the ticks taken.
  */
@@ -3300,6 +3382,7 @@ int main(void)
     ephemeral_rows();
     range_rows();
     time_wait_rows();
+    time_wait_reuse_rows();
     time_wait_more_rows();
     path_mtu_row();
     keepalive_rows();
