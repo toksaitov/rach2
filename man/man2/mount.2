@@ -305,7 +305,9 @@ For
 the source is any string, recorded as given, and nothing is claimed.
 Each mount is an instance of its own, as on Linux: it lists its own
 terminals, numbered from 0 apart from every other instance's, and its own
-.Pa ptmx .
+.Pa ptmx ,
+and its files have an anonymous device of the instance's own, major 0,
+whatever the source names.
 The system's
 .Pa /dev/pts ,
 which is no mount, is the first instance.
@@ -330,12 +332,27 @@ and
 .Ql newinstance ,
 which every mount is.
 An open of
-.Pa /dev/ptmx
-makes its terminal in the instance mounted at
-.Pa /dev/pts
-under the opener's root, with that mount's options, and without one in
-the system's, as the opener's user, group 5 and mode 0620; an open of an
-instance's
+.Pa /dev/ptmx ,
+or of any device node of its number, makes its terminal in the instance
+mounted at
+.Pa pts
+in the directory of the node the open reached, after any symbolic link,
+with that mount's options, as Linux's devpts_acquire finds it; when that
+.Pa pts
+is the system's
+.Pa /dev/pts ,
+in the system's instance, as the opener's user, group 5 and mode 0620.
+With nothing at
+.Pa pts
+the open fails with
+.Er ENOENT ,
+and with anything there but a devpts mount's root with
+.Er ENODEV .
+An O_PATH descriptor of such a node keeps the directory, and an open of it
+through
+.Pa /proc/self/fd
+looks there.
+An open of an instance's
 .Pa ptmx
 makes it in that instance.
 The system's

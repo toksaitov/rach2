@@ -6655,20 +6655,30 @@ int vfs_devpts_options(const struct vfs_ref *start, const char *path, struct vfs
 {
     struct vfs_ref ref;
     const struct vfs_mount *base;
-    int found;
+    const struct vpath *vp;
+    int rc;
 
     *inst = 0;
-    if (!vfs_root_mounted() || vfs_resolve(start, path, 0, &ref, 0, 0) != 0) {
+    if (!vfs_root_mounted()) {
         return 0;
     }
+    rc = vfs_resolve(start, path, VFS_WALK_NOFOLLOW, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
     base = vfs_mount_base(ref.mnt);
-    found = base->pts && ref.node == base->root;
-    if (found) {
+    vp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (base->pts && ref.node == base->root) {
         *out = base->pts_opts;
         *inst = base->pts_inst;
+        rc = 1;
+    } else if (!base->pts && vp && vp->kind == VNODE_PTS_DIR && vp->pts_inst == 0) {
+        rc = 0;
+    } else {
+        rc = -ENODEV;
     }
     vfs_ref_release(&ref);
-    return found;
+    return rc;
 }
 
 int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx)
@@ -6696,16 +6706,12 @@ int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptm
 
 uint32_t vfs_pts_dev(uint32_t inst)
 {
-    int i;
+    uint32_t minor = VFS_PTS_MINOR_BASE + inst;
 
-    for (i = 0; inst != 0 && i < mount_slots; i++) {
-        struct vfs_mount *m = mounts[i];
-
-        if (m && m->state == VFS_ACTIVE && !m->bind_of && m->pts && m->pts_inst == inst) {
-            return procfs_mount_dev(i, m);
-        }
+    if (inst == 0) {
+        return DEVFS_FSID;
     }
-    return DEVFS_FSID;
+    return (minor & 0xFFu) | (minor & ~0xFFu) << 12;
 }
 
 int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source, uint32_t flags)

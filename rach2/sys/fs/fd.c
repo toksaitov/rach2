@@ -556,7 +556,7 @@ static int ofd_end_big(const struct open_file *ofd)
         return 1;
     }
     if (ofd->vmnt) {
-        return ofd->dev_mnt || ofd->synth_mnt || ofd->pin || ofd->access ||
+        return ofd->dev_mnt || ofd->ptmx_dir_mnt || ofd->synth_mnt || ofd->pin || ofd->access ||
                !vfs_mount_base(ofd->vmnt)->type->reads_unlocked;
     }
     return ofd->dev_mnt || ofd->synth_mnt || ofd->name || ofd->pin || ofd->access || ofd->dirpath ||
@@ -626,6 +626,14 @@ void fd_ofd_unref(struct open_file *ofd)
 
                 ofd->dev_mnt = NULL;
                 ofd->dev_node = NULL;
+                vfs_desc_close(mnt, node, NULL);
+            }
+            if (ofd->ptmx_dir_mnt) {
+                struct vfs_mount *mnt = ofd->ptmx_dir_mnt;
+                void *node = ofd->ptmx_dir_node;
+
+                ofd->ptmx_dir_mnt = NULL;
+                ofd->ptmx_dir_node = NULL;
                 vfs_desc_close(mnt, node, NULL);
             }
             if (ofd->synth_mnt) {

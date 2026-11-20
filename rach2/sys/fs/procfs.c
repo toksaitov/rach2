@@ -5675,6 +5675,9 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
     if (i == 0 && m->type == &vfs_krffs_type) {
         return 0;
     }
+    if (m->pts) {
+        return vfs_pts_dev(m->pts_inst);
+    }
     if (devfs_numbers(m->source, &major, &minor)) {
         return (minor & 0xFFu) | major << 8 | (minor & ~0xFFu) << 12;
     }

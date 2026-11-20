@@ -125,10 +125,12 @@ struct vfs_ref;
 
 /**
  * An open of a ptmx device: `pty_open_master_in` in the instance of the
- * devpts mount at `path`, walked from `start` (`vfs_resolve`), the `pts`
- * beside the device the open reached, as Linux's devpts_acquire looks for
- * it (path_pts), with its options; without one, in the system's instance
- * with none.
+ * devpts mount at `path`, walked from `start` (`vfs_devpts_options`), the
+ * `pts` beside the device the open reached, as Linux's devpts_acquire looks
+ * for it (path_pts), with its options, or in the system's instance with
+ * none when `path` is the kernel's own /dev/pts. The walk's error, such as
+ * -ENOENT, when nothing is there, and -ENODEV when what is there is no
+ * devpts root, as Linux fails the open.
  */
 int pty_open_master_near(const struct vfs_ref *start, const char *path, int flags);
 

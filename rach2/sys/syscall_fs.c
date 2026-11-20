@@ -3353,7 +3353,16 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
     return -EPERM;
 }
 
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result, const char *path);
+/* Where an open of a ptmx device node looks for the directory beside it
+ * (`ptmx_node_open`): `dir`, held by the caller, or else the walk of `path`
+ * again; either may be NULL. */
+struct ptmx_way {
+    const struct vfs_ref *dir;
+    const char *path;
+};
+
+static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result,
+                        const struct ptmx_way *way);
 static int open_mounted_node(struct vfs_ref *ref, int flags);
 static int open_root_node(struct vfs_ref *ref, int flags);
 static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags);
@@ -3367,14 +3376,17 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
  * an open that then finds no slot; the node is read from `src` under the
  * mount's namespace lock, where a relocation of the KRFFS root moves it; and
  * a FIFO, a socket or a device file is opened as `open_special` opens one,
- * for a description made by O_PATH. The description is a new one. Returns
+ * for a description made by O_PATH, a ptmx node's pair in the `pts` of the
+ * directory the description holds (`ptmx_dir_mnt`), or without one of the
+ * directory its path leads to. The description is a new one. Returns
  * the new descriptor, or a negative errno: -ENOENT for a mount being
  * unmounted, or the open's.
  */
 static int32_t proc_fd_reopen(const struct open_file *src, int flags)
 {
     struct vfs_mount *mnt = src->vmnt;
-    struct vfs_ref ref;
+    struct vfs_ref ref, dir;
+    struct ptmx_way way;
     int32_t rc;
     int fd = fd_alloc(current_proc->fds);
 
@@ -3391,7 +3403,11 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
     ref.mnt = mnt;
     ref.node = src->vnode;
     vfs_ref_hold(&ref);
-    if (open_special(&ref, fd, flags, &rc, NULL)) {
+    dir.mnt = src->ptmx_dir_mnt;
+    dir.node = src->ptmx_dir_node;
+    way.dir = src->ptmx_dir_mnt ? &dir : NULL;
+    way.path = src->dirpath;
+    if (open_special(&ref, fd, flags, &rc, &way)) {
         return rc;
     }
     rc = mnt_is_root(mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
@@ -4627,30 +4643,99 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     return fd;
 }
 
-/**
- * An open of a ptmx device node at `path`, joined to the root as an open's
- * walk takes it: the pair is made in the instance of the devpts mount at
- * `pts` in the node's directory (`pty_open_master_near`), as Linux's
- * devpts_acquire finds it beside the opened file. -ENOMEM for no path page.
- */
-static int32_t ptmx_node_open(const char *path, int flags)
+/** Whether the node `node` of `mnt`, a mounted type's, is a ptmx device
+ * node: a character device whose number /dev gives the name `ptmx`. */
+static int ptmx_node(struct vfs_mount *mnt, void *node)
 {
-    char *pts = path_buf_get();
+    struct vfs_stat st;
+    const char *name;
+
+    if (mnt_is_root(vfs_mount_base(mnt)) || vfs_getattr(mnt, node, &st) != 0 ||
+        (st.mode & S_IFMT) != S_IFCHR) {
+        return 0;
+    }
+    name = devfs_name_of(0, st.rdev);
+    return name && name_is(name, "ptmx");
+}
+
+/**
+ * Hold in `dir` the directory in which the open of `path` found the ptmx
+ * device node `node`, as Linux's devpts_acquire takes the parent of the
+ * opened file's path. `path` is walked again as an open walks it, with the
+ * way the walk took recorded (`vfs_resolve_real`), so that a symbolic link
+ * leads to its target's directory; that directory is held, and the last
+ * name of the way must name `node` in it still. The text is never extended,
+ * so a path of any length that resolves has room. 0 with `dir` held and its
+ * mount entered, or a negative errno with nothing held: the walks',
+ * -ENAMETOOLONG when the way does not fit a path page, -ENOENT when the
+ * name no longer leads to `node`, -ENOMEM for no path page. The caller
+ * holds `node` and no walk's lock.
+ */
+static int32_t ptmx_dir_of(const char *path, const struct vfs_ref *node, struct vfs_ref *dir)
+{
+    char *real = path_buf_get();
+    struct vfs_ref ref;
     uint32_t n, cut = 0;
     int32_t rc;
+    int same;
 
-    if (!pts) {
+    if (!real) {
         return -ENOMEM;
     }
-    for (n = 0; path[n] != '\0'; n++) {
-        if (path[n] == '/') {
-            cut = n + 1;
+    rc = vfs_resolve_real(path, 0, &ref, real);
+    if (rc == 0) {
+        vfs_ref_release(&ref);
+        rc = real[0] == '/' ? 0 : -ENAMETOOLONG;
+    }
+    if (rc == 0) {
+        for (n = 0; real[n] != '\0'; n++) {
+            if (real[n] == '/') {
+                cut = n;
+            }
+        }
+        real[cut] = '\0';
+        rc = vfs_resolve(NULL, cut == 0 ? "/" : real, 0, dir, 0, 0);
+    }
+    if (rc == 0) {
+        rc = vfs_resolve(dir, real + cut + 1, VFS_WALK_NOFOLLOW, &ref, 0, 0);
+        if (rc == 0) {
+            same = vfs_mount_base(ref.mnt) == vfs_mount_base(node->mnt) && ref.node == node->node;
+            vfs_ref_release(&ref);
+            rc = same ? 0 : -ENOENT;
+        }
+        if (rc != 0) {
+            vfs_ref_release(dir);
         }
     }
-    k_memcpy(pts, path, cut);
-    k_memcpy(pts + cut, "pts", 4);
-    rc = pty_open_master_near(NULL, pts, flags);
-    path_buf_put(pts);
+    path_buf_put(real);
+    return rc;
+}
+
+/**
+ * An open of the ptmx device node `node`: the pair is made in the instance
+ * of the devpts mount at `pts` in the node's directory
+ * (`pty_open_master_near`), as Linux's devpts_acquire finds it beside the
+ * opened file. The directory is `way->dir`, held by the caller, or without
+ * it the one `ptmx_dir_of` finds by the walk of `way->path`. -ENOENT with
+ * neither. Returns the descriptor or a negative errno.
+ */
+static int32_t ptmx_node_open(const struct vfs_ref *node, const struct ptmx_way *way, int flags)
+{
+    struct vfs_ref found;
+    int32_t rc;
+
+    if (way && way->dir) {
+        return pty_open_master_near(way->dir, "pts", flags);
+    }
+    if (!way || !way->path) {
+        return -ENOENT;
+    }
+    rc = ptmx_dir_of(way->path, node, &found);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = pty_open_master_near(&found, "pts", flags);
+    vfs_ref_release(&found);
     return rc;
 }
 
@@ -4659,10 +4744,11 @@ static int32_t ptmx_node_open(const char *path, int flags)
  * and kind name, opened as an open of its /dev path opens it, without the
  * permission check the node's own mode has already made. A pseudo-terminal
  * slave is major 136 and its index; the multiplexer, ptmx, makes its pair
- * beside the node at `path` (`ptmx_node_open`), or, with `path` NULL, as
- * an open of /dev/ptmx does. A number no device present has is ENXIO.
+ * beside the node `node` in the directory `way` leads to
+ * (`ptmx_node_open`). A number no device present has is ENXIO.
  */
-static int32_t open_device(int block, uint32_t rdev, int flags, const char *path)
+static int32_t open_device(int block, uint32_t rdev, int flags, const struct vfs_ref *node,
+                           const struct ptmx_way *way)
 {
     uint32_t major = (rdev >> 8) & 0xFFFu;
     uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
@@ -4672,8 +4758,8 @@ static int32_t open_device(int block, uint32_t rdev, int flags, const char *path
         return pty_get(0, (int)minor) ? pty_open_slave(0, (int)minor, flags) : -ENXIO;
     }
     name = devfs_name_of(block, rdev);
-    if (name && path && !block && name_is(name, "ptmx")) {
-        return ptmx_node_open(path, flags);
+    if (name && !block && name_is(name, "ptmx")) {
+        return ptmx_node_open(node, way, flags);
     }
     return name ? devfs_open(name, flags) : -ENXIO;
 }
@@ -4685,15 +4771,16 @@ static int32_t open_device(int block, uint32_t rdev, int flags, const char *path
  * kept by the new description (`dev_node`). Until then the node is kept by a
  * description of its own, since the device's open may sleep. Only tmpfs and
  * ext2 make device nodes, and the hold of either keeps a node with no name
- * until its last put. `path` is the open's, or NULL (`open_device`).
+ * until its last put. `way` is as `open_device` takes it.
  * Returns the descriptor or a negative errno, with `ref` and the walk's lock
  * released either way.
  */
 static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t rdev, int flags,
-                                const char *path)
+                                const struct ptmx_way *way)
 {
     struct vfs_mount *mnt = ref->mnt;
     struct open_file *keep = fd_ofd_new(), *to;
+    struct vfs_ref node;
     int32_t rc;
 
     if (!keep) {
@@ -4708,7 +4795,9 @@ static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t
     vfs_walk_unlock(mnt);
     vfs_leave(mnt);
     fd_free(current_proc->fds, fd);
-    rc = open_device(block, rdev, flags, path);
+    node.mnt = keep->dev_mnt;
+    node.node = keep->dev_node;
+    rc = open_device(block, rdev, flags, &node, way);
     to = rc >= 0 ? fd_slot(current_proc->fds, rc)->ofd : NULL;
     if (to && !to->dev_mnt) {
         to->dev_mnt = keep->dev_mnt;
@@ -4757,8 +4846,8 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
 
 /**
  * Open the FIFO, the socket file or the device node at `ref`, which name no
- * bytes of their own, reached by the open of `path`, or NULL for an open
- * through a descriptor (`open_device`): 1 with the descriptor or the errno
+ * bytes of their own, reached by an open whose `way`, or NULL, leads a ptmx
+ * node to its directory (`open_device`): 1 with the descriptor or the errno
  * in `*result`, `ref` and the walk's lock released, and the descriptor `fd`
  * the open reserved taken, by a FIFO, or freed, since a device's open takes
  * a descriptor of its own; 0, with all three as they were, for any other
@@ -4783,7 +4872,8 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
  * keeps its place, nameless after an unlink, while an end holds it
  * (`fd_node_holders`).
  */
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result, const char *path)
+static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result,
+                        const struct ptmx_way *way)
 {
     struct vfs_mount *mnt = ref->mnt;
     uint32_t type, rdev = 0;
@@ -4819,7 +4909,7 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result,
         return 1;
     }
     if (rc == 0 && type != S_IFSOCK) {
-        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags, path);
+        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags, way);
         return 1;
     }
     vfs_walk_unlock(mnt);
@@ -5198,6 +5288,18 @@ static int proc_read_only(const struct vfs_ref *ref, int flags)
     return access_synth_ref(ref, vp, NULL, open_want(flags), 0, AT_EACCESS);
 }
 
+/** `open_special` for an open by the path `path`, which a ptmx node's
+ * open walks again to find its directory. */
+static int open_special_named(struct vfs_ref *ref, int fd, int flags, int32_t *result,
+                              const char *path)
+{
+    struct ptmx_way way;
+
+    way.dir = NULL;
+    way.path = path;
+    return open_special(ref, fd, flags, result, &way);
+}
+
 /**
  * Whether an open with O_CREAT and without O_EXCL may open the existing file
  * `ref`, found in the directory of attributes `dir`, as Linux's
@@ -5347,7 +5449,7 @@ again:
             vfs_ref_release(&ref);
             goto out;
         }
-        if (open_special(&ref, fd, flags, &rc, name)) {
+        if (open_special_named(&ref, fd, flags, &rc, name)) {
             fd = -1;
             goto out;
         }
@@ -10593,6 +10695,24 @@ static int32_t synth_stat_dev(const struct vpath *vp, struct kstat *kst)
 }
 
 /**
+ * Fill `kst` with the attributes of the slave of the pty pair `pt`, as its
+ * node /dev/pts/N in the pair's own devpts instance has them: the device
+ * the pair keeps (`dev`), its mode, owner and times, and the slave's
+ * number, which Linux's major 136 for a Unix98 pty slave leads.
+ */
+static void pts_stat_pair(const struct pty *pt, struct kstat *kst)
+{
+    kst->st_dev = pt->dev;
+    kst->st_mode = 0020000u | (uint32_t)(pt->mode & 0777u);
+    kst->st_uid = pt->uid;
+    kst->st_gid = pt->gid;
+    kst->st_rdev = (136u << 8) | (uint32_t)pt->index;
+    kst->st_ino = PTS_INO_BASE + (uint32_t)pt->index;
+    kst->st_atime = pt->atime;
+    kst->st_mtime = pt->mtime;
+}
+
+/**
  * Fill `kst` with the fixed attributes of the /dev, /proc or /sys node
  * `vp`, those it has until a chmod, chown or utimensat changes them
  * (`synth_stat_node`), a /proc link followed to what it names when
@@ -10852,19 +10972,12 @@ static int32_t synth_stat_fixed(const struct vpath *vp, struct kstat *kst, int f
     case VNODE_DEV_MADE:
         return synth_stat_dev_dir(vp, kst);
     case VNODE_PTS: {
-        /* Linux's major for a Unix98 pty slave is 136. */
         struct pty *pt = pty_get(vp->pts_inst, vp->pts_index);
+
         if (!pt) {
             return -ENOENT;
         }
-        kst->st_dev = pt->dev;
-        kst->st_mode = 0020000u | (uint32_t)(pt->mode & 0777u);
-        kst->st_uid = pt->uid;
-        kst->st_gid = pt->gid;
-        kst->st_rdev = (136u << 8) | (uint32_t)vp->pts_index;
-        kst->st_ino = PTS_INO_BASE + (uint32_t)vp->pts_index;
-        kst->st_atime = pt->atime;
-        kst->st_mtime = pt->mtime;
+        pts_stat_pair(pt, kst);
         return 0;
     }
     case VNODE_ENOTDIR:
@@ -11394,9 +11507,12 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
  * also takes a pin through the type's `pin`, which its last close drops, so
  * an unlink leaves the node to the descriptor as it would to an open one.
  * O_DIRECTORY on anything but a directory is -ENOTDIR. The reference is
- * released on every error, a failed pin's among them.
+ * released on every error, a failed pin's among them. With `dir` not NULL,
+ * the directory a ptmx node was found in, the description holds it too
+ * (`ptmx_dir_mnt`); the caller keeps its own hold.
  */
-static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
+static int32_t path_install(struct vfs_ref *ref, const char *name, int flags,
+                            const struct vfs_ref *dir)
 {
     krffs_node_t *node = ref->node;
     fd_entry_t *entry;
@@ -11440,6 +11556,12 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     }
     entry->type = is_dir ? FD_TYPE_DIR : FD_TYPE_FILE;
     entry->node = (mnt_is_root(ref->mnt) && node != krffs_fs->node) ? node : NULL;
+    if (dir && !is_dir) {
+        vfs_ref_hold(dir);
+        vfs_desc_open(dir->mnt);
+        entry->ofd->ptmx_dir_mnt = dir->mnt;
+        entry->ofd->ptmx_dir_node = dir->node;
+    }
     if (!mnt_is_root(ref->mnt)) {
         ofd_record_path(entry->ofd, name);
     }
@@ -11482,7 +11604,7 @@ static int32_t proc_fd_open_path(const struct vpath *vp, int flags)
 static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_entry_t *src,
                                       int flags)
 {
-    struct vfs_ref ref;
+    struct vfs_ref ref, dir;
     struct vfs_mount *mnt;
     struct open_file *held;
     int32_t rc;
@@ -11499,7 +11621,12 @@ static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_e
             return rc;
         }
         mnt = ref.mnt;
-        fd = path_install(&ref, held->dirpath ? path_name(held->dirpath) : "", flags);
+        if (held->ptmx_dir_mnt) {
+            dir.mnt = held->ptmx_dir_mnt;
+            dir.node = held->ptmx_dir_node;
+        }
+        fd = path_install(&ref, held->dirpath ? path_name(held->dirpath) : "", flags,
+                          held->ptmx_dir_mnt ? &dir : NULL);
         if (fd >= 0) {
             fd_slot(current_proc->fds, fd)->ofd->name = vfs_name_ref(held->name);
         }
@@ -11528,14 +11655,18 @@ static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_e
  * descriptor serves fstat, fstatfs, fchdir, the *at calls as a directory
  * and with AT_EMPTY_PATH, the two duplications, F_GETFD, F_SETFD, F_GETFL
  * and close; read, write and the other calls on a descriptor are -EBADF.
+ * One of a ptmx node of tmpfs or ext2 holds the directory the node was
+ * found in (`ptmx_dir_of`), where an open of it through /proc/PID/fd makes
+ * its pair, as Linux's descriptor keeps its path.
  */
 static int32_t open_path(const char *name, int flags)
 {
-    struct vfs_ref ref;
+    struct vfs_ref ref, dir;
     struct vfs_name *entry = NULL;
     struct vfs_mount *locked;
     const struct vpath *vp;
     int walk = VFS_WALK_LOCK;
+    int held;
     int32_t rc;
 
     flags &= O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
@@ -11565,10 +11696,25 @@ static int32_t open_path(const char *name, int flags)
         synth_dir_record(rc, permanent, name);
         return rc;
     }
-    rc = path_install(&ref, name, flags);
+    held = ptmx_node(ref.mnt, ref.node);
+    if (held) {
+        vfs_walk_unlock(locked);
+        held = ptmx_dir_of(name, &ref, &dir) == 0;
+        if (held && mnt_is_root(vfs_mount_base(dir.mnt))) {
+            vfs_ref_release(&dir);
+            held = 0;
+        }
+        if (locked->type->ns_serialised) {
+            vfs_ns_lock(locked);
+        }
+    }
+    rc = path_install(&ref, name, flags, held ? &dir : NULL);
     if (rc >= 0) {
         fd_slot(current_proc->fds, rc)->ofd->name = entry;
         entry = NULL;
+    }
+    if (held) {
+        vfs_ref_release(&dir);
     }
     vfs_name_put(entry);
     vfs_walk_unlock(locked);
@@ -12677,14 +12823,13 @@ static int32_t fstat_fill_fixed(fd_entry_t *entry, struct kstat *kst)
     } else if (entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_SYNTH_PATH) {
         fstat_synth(entry, kst);
     } else if (entry->type == FD_TYPE_PTS) {
-        struct vpath vp;
-        k_memset(&vp, 0, sizeof(vp));
-        vp.kind = VNODE_PTS;
-        vp.pts_index = pty_slave_index(entry);
-        if (synth_stat_node(&vp, kst, 1, 0) != 0) {
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        if (entry->priv) {
+            pts_stat_pair((const struct pty *)entry->priv, kst);
+            kst_kept(kst);
+        } else {
             kst->st_mode = 020620; /* S_IFCHR | 0620 */
-            kst->st_nlink = 1;
-            kst->st_blksize = 4096;
             kst->st_dev = DEVFS_FSID;
         }
     } else {

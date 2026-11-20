@@ -22,10 +22,12 @@
  * a new mount namespace is not seen outside it, and a new IPC namespace has
  * none of the first's System V objects. Forty mount namespaces exist at
  * once, past the 32 Rach2 once had room for, each with a mount of its own
- * that it alone sees. Two devpts mounts are two instances, whose first
- * terminals and ptmx nodes differ by device; a remount of one with a bad
- * option is EINVAL yet takes the options before it; and a ptmx opened
- * beside a devpts mount makes its pair there. A map of 340 extents, the
+ * that it alone sees. Two devpts mounts from one source are two instances,
+ * whose first terminals and ptmx nodes differ by device; a remount of one
+ * with a bad option is EINVAL yet takes the options before it; a ptmx
+ * opened beside a devpts mount makes its pair there, through a symbolic
+ * link or an O_PATH descriptor too; and one with no devpts beside it fails.
+ * A map of 340 extents, the
  * most Linux takes, written by root from outside the namespace as
  * newuidmap writes one, is taken, a 341st
  * extent is EINVAL, the map reads back sorted by the first id, and ids map
@@ -134,6 +136,8 @@ enum row {
     R_PTS_DEV,
     R_PTS_REMOUNT,
     R_PTS_BESIDE,
+    R_PTS_PATH,
+    R_PTS_MISSING,
     R_MAP_EXTRA,
     R_MAP_TAKEN,
     R_MAP_SORTED,
@@ -197,6 +201,8 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "devpts-own-device",
                                                "devpts-failed-remount",
                                                "devpts-beside-ptmx",
+                                               "devpts-ptmx-path",
+                                               "devpts-ptmx-missing",
                                                "map-341st-einval",
                                                "map-340-extents",
                                                "map-reads-sorted",
@@ -272,6 +278,7 @@ static int child_failed(int ok, int status, int row)
 #define PTS_B    "/tmp/nspts-b"
 #define PTS_DEV  "/tmp/nspts-dev"
 #define PTS_BIND "/tmp/nspts-bind"
+#define PTS_LINK "/tmp/nspts-link"
 
 /** Run `fn`, whose first row is `row`, in a child; 0 when it exits 0. */
 static int in_child(int (*fn)(void), int row)
@@ -1058,11 +1065,11 @@ static int new_pair(const char *ptmx, int *n)
 }
 
 /**
- * Whether the first terminals of the devpts mounts PTS_A and PTS_B, both 0
- * with one inode number, and their ptmx nodes and directories are told
- * apart by device, each mount's files sharing its own, and the descriptor
- * of PTS_A's terminal stats as its path does, as Linux gives each devpts
- * superblock a device.
+ * Whether the first terminals of the devpts mounts PTS_A and PTS_B, both
+ * mounted from /dev/null and both 0 with one inode number, and their ptmx
+ * nodes and directories are told apart by device, each mount's files
+ * sharing its own, and the descriptor of PTS_A's terminal stats as its path
+ * does, as Linux gives each devpts superblock a device.
  */
 static int pts_devices_apart(void)
 {
@@ -1150,13 +1157,106 @@ static int pts_beside(void)
     return ok;
 }
 
+/** Whether an open of the ptmx `ptmx` makes pair 0 in the devpts instance
+ * at PTS_DEV's pts, which lists it while the master is open. */
+static int pair_beside_dev(const char *ptmx)
+{
+    struct stat st;
+    int n = -1, m = new_pair(ptmx, &n), ok;
+
+    ok = m >= 0 && n == 0 && stat(PTS_DEV "/pts/0", &st) == 0;
+    if (m >= 0) {
+        close(m);
+    }
+    return ok;
+}
+
+/**
+ * Whether a ptmx open looks for the `pts` in the directory of the node its
+ * path reaches, as Linux's devpts_acquire takes the parent of the opened
+ * file's own path: a symbolic link PTS_LINK in /tmp, which has no pts, to
+ * PTS_DEV's ptmx, and an O_PATH descriptor of that ptmx opened again
+ * through /proc/self/fd, each make pair 0 in PTS_DEV's instance. Runs after
+ * `pts_beside`, which mounts it.
+ */
+static int pts_by_path(void)
+{
+    char path[64];
+    int fd, ok;
+
+    unlink(PTS_LINK);
+    if (symlink(PTS_DEV "/ptmx", PTS_LINK) != 0) {
+        return 0;
+    }
+    ok = pair_beside_dev(PTS_LINK);
+    unlink(PTS_LINK);
+    fd = ok ? open(PTS_DEV "/ptmx", O_PATH) : -1;
+    if (fd < 0) {
+        return 0;
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    ok = pair_beside_dev(path);
+    close(fd);
+    return ok;
+}
+
+/**
+ * Whether a ptmx open fails as Linux's devpts_ptmx_path fails it when no
+ * devpts root is beside the node: ENOENT for a node with no pts in its
+ * directory, at a short path and at one of 4095 bytes, the longest a path
+ * may be, and ENODEV for one whose pts is a plain directory.
+ */
+static int pts_missing(void)
+{
+    static char path[4096];
+    size_t len, k;
+    int fd;
+
+    if (mkdir(PTS_DEV "/lone", 0755) != 0 ||
+        mknod(PTS_DEV "/lone/ptmx", S_IFCHR | 0666, makedev(5, 2)) != 0) {
+        return 0;
+    }
+    errno = 0;
+    fd = open(PTS_DEV "/lone/ptmx", O_RDWR | O_NOCTTY);
+    if (fd >= 0 || errno != ENOENT || mkdir(PTS_DEV "/lone/pts", 0755) != 0) {
+        return 0;
+    }
+    errno = 0;
+    fd = open(PTS_DEV "/lone/ptmx", O_RDWR | O_NOCTTY);
+    if (fd >= 0 || errno != ENODEV) {
+        return 0;
+    }
+    /* Directories to 4093 bytes, so that "/x" ends the path at 4095. */
+    strcpy(path, PTS_DEV);
+    for (len = strlen(path); len < 4093; len += 1 + k) {
+        k = 4093 - len - 1;
+        k = k > 200 ? 200 : k;
+        if (4093 - len - 1 - k == 1) {
+            k--;
+        }
+        path[len] = '/';
+        memset(path + len + 1, 'd', k);
+        path[len + 1 + k] = '\0';
+        if (mkdir(path, 0755) != 0) {
+            return 0;
+        }
+    }
+    strcpy(path + len, "/x");
+    if (strlen(path) != 4095 || mknod(path, S_IFCHR | 0666, makedev(5, 2)) != 0) {
+        return 0;
+    }
+    errno = 0;
+    fd = open(path, O_RDWR | O_NOCTTY);
+    return fd < 0 && errno == ENOENT;
+}
+
 /** In a mount namespace of its own, mount PTS_A and PTS_B and run the
  * devpts rows; 0, or 1 after printing the failure. */
 static int devpts(void)
 {
     if (unshare(CLONE_NEWNS) != 0 ||
-        mount("devpts", PTS_A, "devpts", 0, "newinstance,ptmxmode=0666") != 0 ||
-        mount("devpts", PTS_B, "devpts", 0, "newinstance,ptmxmode=0666") != 0) {
+        mount("/dev/null", PTS_A, "devpts", 0, "newinstance,ptmxmode=0666") != 0 ||
+        mount("/dev/null", PTS_B, "devpts", 0, "newinstance,ptmxmode=0666") != 0) {
         return fail(R_PTS_DEV, "two devpts mounts in a mount namespace of its own");
     }
     if (!pts_devices_apart()) {
@@ -1165,7 +1265,13 @@ static int devpts(void)
     if (!pts_failed_remount()) {
         return fail(R_PTS_REMOUNT, "a remount with a bad option takes the options before it");
     }
-    return pts_beside() ? 0 : fail(R_PTS_BESIDE, "a ptmx makes its pair in the devpts beside it");
+    if (!pts_beside()) {
+        return fail(R_PTS_BESIDE, "a ptmx makes its pair in the devpts beside it");
+    }
+    if (!pts_by_path()) {
+        return fail(R_PTS_PATH, "a ptmx makes its pair beside the node its path reaches");
+    }
+    return pts_missing() ? 0 : fail(R_PTS_MISSING, "a ptmx with no devpts beside it fails");
 }
 
 /** Make the devpts rows' directories, run `devpts` in a child and remove
@@ -1179,6 +1285,7 @@ static int devpts_rows(void)
         mkdir(dirs[i], 0755);
     }
     rc = in_child(devpts, R_PTS_DEV);
+    unlink(PTS_LINK);
     for (i = 0; i < 4; i++) {
         rmdir(dirs[i]);
     }

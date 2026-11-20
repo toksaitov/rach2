@@ -1304,6 +1304,9 @@ int pty_open_master_near(const struct vfs_ref *start, const char *path, int flag
         return -ESRCH;
     }
     mounted = vfs_devpts_options(start, path, &o, &inst);
+    if (mounted < 0) {
+        return mounted;
+    }
     return pty_open_master_in(inst, mounted ? &o : NULL, flags);
 }
 

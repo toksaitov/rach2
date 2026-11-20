@@ -1420,12 +1420,15 @@ int vfs_do_bind(const char *source, const char *target, int rec);
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
 
 /** Copy into `*out` the options, and into `*inst` the instance, of the
- * devpts mount at `path`, walked from `start` as `vfs_resolve` walks it,
- * which is the `pts` beside the ptmx device an open reached, where Linux's
- * devpts_acquire finds the instance that open makes its pair in
- * (path_pts). 1 when one is there; 0, `*out` untouched and `*inst` 0, the
- * system's instance, when `path` is the kernel's own /dev/pts, is no
- * devpts mount or does not resolve. */
+ * devpts mount at `path`, walked from `start` as `vfs_resolve` walks it
+ * without following a symbolic link at the end, which is the `pts` beside
+ * the ptmx device an open reached, where Linux's devpts_acquire finds the
+ * instance that open makes its pair in (path_pts). 1 when a devpts mount's
+ * root is there; 0, `*out` untouched and `*inst` 0, for the system's
+ * instance, the kernel's own /dev/pts directory or a bind of it, and before
+ * the root is mounted; the walk's negative errno, such as -ENOENT, when
+ * `path` does not resolve; -ENODEV when it is anything else, as Linux's
+ * devpts_ptmx_path refuses what is no devpts root. */
 int vfs_devpts_options(const struct vfs_ref *start, const char *path, struct vfs_pts_options *out,
                        uint32_t *inst);
 
@@ -1438,10 +1441,19 @@ int vfs_devpts_options(const struct vfs_ref *start, const char *path, struct vfs
  */
 int vfs_pts_instance(uint32_t inst, struct vfs_pts_options *opts, struct vfs_ptmx_node **ptmx);
 
+/* The minor of the anonymous device that devpts instance 0 would have, which
+ * each instance's number follows; in Linux's encoding its devices are
+ * 0x100000 and up, above the 0x10 plus a mount's index that
+ * `procfs_mount_dev` gives every other mount without a device. */
+#define VFS_PTS_MINOR_BASE 0x100u
+
 /** The st_dev of the files of the devpts instance `inst`, its directory,
- * terminals and ptmx: its mount's own number (`procfs_mount_dev`), as Linux
- * gives each devpts superblock a device of its own, and /dev's for the
- * system's instance, 0, or one whose mount is gone. Under the big lock. */
+ * terminals and ptmx: a device of major 0 of the instance's own, from its
+ * number alone, as Linux gives each devpts superblock an anonymous device
+ * for its life, so that no source a mount names and no reuse of a mount's
+ * entry makes two instances share one; /dev's for the system's instance, 0.
+ * Instance numbers are never reused while the count stays below 2^20 less
+ * VFS_PTS_MINOR_BASE, the minors Linux's encoding holds. */
 uint32_t vfs_pts_dev(uint32_t inst);
 
 /** The options of the proc file system `m` shows, a bind's its base's, or

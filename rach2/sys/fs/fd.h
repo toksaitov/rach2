@@ -246,6 +246,14 @@ struct open_file {
      * The last unref gives back both. */
     struct vfs_mount *dev_mnt;
     void *dev_node;
+    /* For an O_PATH description of a ptmx device node of tmpfs or ext2, the
+     * directory the node was found in and its mount, held as `dev_mnt` is:
+     * where an open of /proc/PID/fd/N looks for the `pts` to make its pair
+     * in, as Linux's devpts_acquire takes the parent of the descriptor's
+     * path. NULL for every other description. The last unref gives back
+     * both. */
+    struct vfs_mount *ptmx_dir_mnt;
+    void *ptmx_dir_node;
     /* A write or executable reservation, taken before an open may sleep.
      * The resolver holds this node until the description takes ownership. */
     struct vfs_mount *access_mnt;

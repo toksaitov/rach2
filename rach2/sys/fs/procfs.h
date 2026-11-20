@@ -297,8 +297,9 @@ struct vfs_mount;
 /** The device stat gives the files of the mount `m`, entry `i` of the
  * table (`vfs_fill_stat64`): 0 on the KRFFS root; the node of /dev it was
  * mounted from, in Linux's encoding, as a disk's or a loop device's mount
- * has it; else the synthetic types' own numbers, and the entry's index plus
- * 16 for any other mount, a devpts mount among them (`vfs_pts_dev`). */
+ * has it; a devpts mount its instance's own (`vfs_pts_dev`), whatever its
+ * source names; else the synthetic types' own numbers, and the entry's index
+ * plus 16 for any other mount. */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m);
 
 /** The name of the `idx`-th file system type /proc/filesystems lists, in
