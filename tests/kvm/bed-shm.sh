@@ -220,6 +220,19 @@ until_line()
     done
 }
 
+# fences_pending: wait for all four submissions while the VM is stopped.
+# The probe must finish submitting even if it keeps logging or using CPU.
+fences_pending()
+{
+    pending_left=30
+    until grep -qx 'VGSHMPROBE PENDING 4' "$out/pending.out"; do
+        [ "$pending_left" -gt 0 ] && kill -0 "$waiter" 2>/dev/null &&
+            ! grep -q '^VGSHMPROBE FAIL' "$out/pending.out" || return 1
+        sleep 1
+        pending_left=$((left - 1))
+    done
+}
+
 # refused: how many of the load's submissions Mesa's virgl has said the
 # kernel refused since the death, "got error from kernel" in the load's
 # output from byte `at` on, read up to the output's size at the call, which
@@ -698,9 +711,11 @@ virgl_rows()
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
-    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 "$waiter" || true
+    pending=yes
+    fences_pending || pending=no
     kill_vm
     death_children
+    [ "$pending" = yes ] || death_error="${death_error:+$death_error, }four fences were not pending before the death"
     if [ -z "$death_error" ] && grep -q 'VGSHMPROBE OK' "$out/pending.out" &&
         grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
         pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1)"
@@ -719,7 +734,8 @@ since()
     log_size=$(command stat -c %s "$services" 2>/dev/null || echo 0)
     log_from=$1
     [ "$log_size" -ge "$log_from" ] || log_from=0
-    tail -c +"$((log_from + 1))" "$services" 2>/dev/null | tr -d '\r' > "$out/services.txt"
+    tail -c +"$((log_from + 1))" "$services" 2>/dev/null |
+        head -c "$((log_size - log_from))" | tr -d '\r' > "$out/services.txt"
     cat "$out/services.txt"
 }
 
@@ -869,9 +885,10 @@ desk_rows()
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
-    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 "$waiter" || true
+    pending=yes
+    fences_pending || pending=no
     alive=no
-    ! grep -q 'VGSHMPROBE PENDING' "$out/pending.out" || ! kill -0 "$load" 2>/dev/null || alive=yes
+    ! kill -0 "$load" 2>/dev/null || alive=yes
     dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
     tail -c 16384 "$services" > "$out/services-death.txt"
     stop_vm
@@ -884,6 +901,7 @@ desk_rows()
     done
     tail -c 16384 "$services" > "$out/services-after-death.txt"
     death_children
+    [ "$pending" = yes ] || death_error="${death_error:+$death_error, }four fences were not pending before the death"
     wait_vm
     # glmark2 ends with the session that leaves the gone card; one whose
     # submissions the kernel has refused 100000 times since the death, at
@@ -902,6 +920,8 @@ desk_rows()
     [ "$monitor" != listening ] ||
         { [ "$stopped" = yes ] && { [ "$ustatus" = 0 ] || [ "$ustatus" = 143 ]; }; } ||
         monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
+    [ "$monitor:$ustatus" != listening:143 ] ||
+        echo 'bed-shm: death: udev monitor stopped by sigterm' >&2
     umon=''
     if kill -0 "$load" 2>/dev/null; then
         ended="still running"
