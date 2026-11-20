@@ -2493,6 +2493,30 @@ static void fine_timer_row(void)
     vm_end();
 }
 
+/** The hardware run bound includes Xen's deadline and leaves its expiry
+ * for the run loop. The local APIC, PIT and Hyper-V have no timer armed. */
+static void xen_timer_row(void)
+{
+    struct kvm_vcpu *v;
+    uint64_t due = mono_ns + 250000u;
+    uint32_t flags;
+
+    vm_make(0);
+    v = vcpu[0];
+    v->xen = &due;
+    flags = kirq_save();
+    CHECK(kvm_lapic_run_bound(v, 10000000u) == 500000u && !kvm_lapic_other_due(v),
+          "a future Xen deadline bounds the hardware run without ending the fast path");
+    mono_ns = due;
+    CHECK(kvm_lapic_run_bound(v, 10000000u) == 0 && kvm_lapic_other_due(v),
+          "an expired Xen deadline needs the run loop");
+    v->xen = NULL;
+    CHECK(kvm_lapic_run_bound(v, 10000000u) == 10000000u && !kvm_lapic_other_due(v),
+          "a disarmed Xen timer no longer bounds the hardware run");
+    kirq_restore(flags);
+    vm_end();
+}
+
 /** Run the requested controller rows, or only the new fine-timer row. */
 int main(int argc, char **argv)
 {
@@ -2512,6 +2536,7 @@ int main(int argc, char **argv)
     }
     if (argc == 1) {
         fine_timer_row();
+        xen_timer_row();
         vm_make(0);
         reset_rows();
         priority_rows();

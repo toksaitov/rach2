@@ -1663,18 +1663,19 @@ uint64_t kvm_lapic_next_ns(struct kvm_vcpu *v)
 
 int kvm_lapic_other_due(struct kvm_vcpu *v)
 {
-    uint64_t now, hv, pit;
+    uint64_t now, hv, pit, xen;
 
     if (!apic_of(v)) {
         return 0;
     }
     hv = kvm_hv_stimer_next(v);
     pit = kvm_pit_next(v->vm);
-    if (!hv && !pit) {
+    xen = kvm_xen_next(v);
+    if (!hv && !pit && !xen) {
         return 0;
     }
     now = kvm_host_ns();
-    return (hv && hv <= now) || (pit && pit <= now);
+    return (hv && hv <= now) || (pit && pit <= now) || (xen && xen <= now);
 }
 
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
