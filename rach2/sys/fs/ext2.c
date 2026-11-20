@@ -5,6 +5,7 @@
  */
 
 #include "ext2_internal.h"
+#include "../proc/ns.h"
 #include "../lib/kirq.h"
 #include "../mm/filemap.h"
 
@@ -1268,8 +1269,12 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n, 
         }
     }
     n->mode = ext2_le16(raw + 0);
-    n->uid = ext2_le16(raw + 2) | (ext2_le16(raw + 120) << 16);
-    n->gid = ext2_le16(raw + 24) | (ext2_le16(raw + 122) << 16);
+    n->uid = ext2_le16(raw + 2);
+    n->gid = ext2_le16(raw + 24);
+    if (!(em->opts & EXT2_OPT_NO_UID32)) {
+        n->uid |= (uint32_t)ext2_le16(raw + 120) << 16;
+        n->gid |= (uint32_t)ext2_le16(raw + 122) << 16;
+    }
     n->size = ext2_le32(raw + 4);
     n->atime = time_load(n, raw, 8, EXT2_ATIME_EXTRA);
     n->ctime = time_load(n, raw, 12, EXT2_CTIME_EXTRA);
@@ -1863,13 +1868,13 @@ static uint32_t overhead_blocks(const struct ext2_mount *em)
  * The `statfs` of `vfs_ops`: the volume's size, free and reserved blocks and
  * inodes. The size leaves out the blocks of the volume's own structures
  * (`overhead_blocks`), as Linux's ext2 does under its default `bsddf`, so
- * `df` counts as used only what files and directories take, as `du` does.
- * Always 0.
+ * `df` counts as used only what files and directories take, as `du` does;
+ * under `minixdf` it is every block of the volume. Always 0.
  */
 static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    uint32_t overhead = overhead_blocks(em);
+    uint32_t overhead = (em->opts & EXT2_OPT_MINIX_DF) ? 0 : overhead_blocks(em);
 
     st->magic = EXT2_SUPER_MAGIC;
     st->bsize = em->block_size;
@@ -2258,7 +2263,7 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
     ext2_super_lock(em);
     LE16_PUT(raw, ext2_state_change(em, 0, EXT2_VALID_FS));
     em->valid_cleared = 1;
-    rc = ext2_write_bytes(em, 1024 + 58, raw, 2, WRITE_KIND(READ_SUPER));
+    rc = ext2_write_bytes(em, em->sb_at + 58, raw, 2, WRITE_KIND(READ_SUPER));
     ext2_super_unlock(em);
     if (rc == 0) {
         rc = bcache_sync(em->dev);
@@ -2281,20 +2286,155 @@ static int option_is(const char *key, const char *end, const char *word)
     return key == end && *word == '\0';
 }
 
+/* The options of Linux's ext2 that set and clear bits of `opts`, in the
+ * words of its token table (fs/ext2/super.c), with the record a few of them
+ * leave; `noquota` and `nobh` change nothing. */
+static const struct ext2_word {
+    const char *word;
+    uint32_t set, clear;
+    const char *note;
+} ext2_words[] = {
+    {"bsddf", 0, EXT2_OPT_MINIX_DF, 0},
+    {"minixdf", EXT2_OPT_MINIX_DF, 0, 0},
+    {"grpid", EXT2_OPT_GRPID, 0, 0},
+    {"bsdgroups", EXT2_OPT_GRPID, 0, 0},
+    {"nogrpid", 0, EXT2_OPT_GRPID, 0},
+    {"sysvgroups", 0, EXT2_OPT_GRPID, 0},
+    {"nouid32", EXT2_OPT_NO_UID32, 0, 0},
+    {"debug", EXT2_OPT_DEBUG, 0, 0},
+    {"oldalloc", EXT2_OPT_OLDALLOC, 0, 0},
+    {"orlov", 0, EXT2_OPT_OLDALLOC, 0},
+    {"nobh", 0, 0, "nobh option not supported"},
+    {"user_xattr", EXT2_OPT_XATTR_USER, 0, 0},
+    {"nouser_xattr", 0, EXT2_OPT_XATTR_USER, 0},
+    {"acl", EXT2_OPT_POSIX_ACL, 0, 0},
+    {"noacl", 0, EXT2_OPT_POSIX_ACL, 0},
+    {"xip", EXT2_OPT_XIP | EXT2_OPT_DAX, 0, "use dax instead of xip"},
+    {"dax", EXT2_OPT_DAX, 0, "DAX enabled. Warning: EXPERIMENTAL, use at your own risk"},
+    {"grpquota", EXT2_OPT_GRPQUOTA, 0, 0},
+    {"noquota", 0, 0, 0},
+    {"quota", EXT2_OPT_USRQUOTA, 0, 0},
+    {"usrquota", EXT2_OPT_USRQUOTA, 0, 0},
+    {"reservation", EXT2_OPT_RESERVATION, 0, 0},
+    {"noreservation", 0, EXT2_OPT_RESERVATION, 0}};
+
+/** Whether the text from `key` to `end` begins with `prefix`, which it
+ * then has past it from `*value`. */
+static int option_has(const char *key, const char *end, const char *prefix, const char **value)
+{
+    while (key < end && *prefix && *key == *prefix) {
+        key++;
+        prefix++;
+    }
+    *value = key;
+    return *prefix == '\0';
+}
+
 /**
- * Read `errors=` of `options`, mount(2)'s data or NULL, into `*errors`,
- * left as it is when the option is absent, as Linux's `parse_options`
- * overrides the disk's s_errors (fs/ext2/super.c:523-532); the last one
- * given counts, and other options are ignored. 0, or -EINVAL with the
- * record `ext2: refused: errors=` for a value other than `continue`,
- * `remount-ro` and `panic`.
+ * Read the number from `p` to `end` as Linux's match_token reads `%u` and
+ * match_int then takes it: hexadecimal after `0x`, octal after another
+ * leading 0, or decimal, with at least one digit and nothing after it, and
+ * at most INT_MAX. 0 with `*out` set, or -EINVAL.
  */
-static int errors_option(const char *options, int *errors)
+static int option_number(const char *p, const char *end, uint32_t *out)
+{
+    uint32_t base = 10, digits = 0;
+    uint64_t v = 0;
+
+    if (end - p > 1 && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        base = 16;
+        p += 2;
+    } else if (end - p > 1 && p[0] == '0') {
+        base = 8;
+    }
+    for (; p < end; p++, digits++) {
+        uint32_t d = (*p >= '0' && *p <= '9')   ? (uint32_t)(*p - '0')
+                     : (*p >= 'a' && *p <= 'f') ? (uint32_t)(*p - 'a' + 10)
+                     : (*p >= 'A' && *p <= 'F') ? (uint32_t)(*p - 'A' + 10)
+                                                : 99u;
+
+        if (d >= base) {
+            return -EINVAL;
+        }
+        v = v * base + d;
+        if (v > 0x7FFFFFFFu) {
+            return -EINVAL;
+        }
+    }
+    if (digits == 0) {
+        return -EINVAL;
+    }
+    *out = (uint32_t)v;
+    return 0;
+}
+
+/**
+ * Take the leading `sb=N` of `options`, as Linux's get_sb_block does before
+ * the other options are read: only an option string that begins with it,
+ * whose number, read as `option_number` reads one, ends at a comma or the
+ * end. Returns the block, in units of 1024 bytes, with `*rest` past the
+ * option; or 1, the primary superblock, with `*rest` at `options`, which the
+ * parse then refuses if the `sb=` is malformed.
+ */
+static uint32_t sb_option(const char *options, const char **rest)
+{
+    const char *end, *value;
+    uint32_t block;
+
+    *rest = options;
+    if (!options || !option_has(options, options + k_strlen(options), "sb=", &value)) {
+        return 1;
+    }
+    for (end = value; *end && *end != ','; end++) {
+    }
+    if (option_number(value, end, &block) != 0) {
+        klog(KLOG_WARN, "ext2", "refused: invalid sb specification: %s", options);
+        return 1;
+    }
+    *rest = *end == ',' ? end + 1 : end;
+    return block;
+}
+
+/** Read `resuid=` or `resgid=`'s number from `value` to `end` as a user or
+ * group id of the caller's user namespace into the kernel's id `*out`, as
+ * Linux's make_kuid takes it; 0, or -EINVAL for a malformed or unmapped
+ * one. */
+static int resid_option(const char *value, const char *end, int gid, uint32_t *out)
+{
+    uint32_t v;
+    int64_t k;
+
+    if (option_number(value, end, &v) != 0) {
+        return -EINVAL;
+    }
+    k = gid ? ns_gid_to_kernel(proc_userns(current_proc), v)
+            : ns_uid_to_kernel(proc_userns(current_proc), v);
+    if (k < 0) {
+        klog(KLOG_WARN, "ext2", "refused: invalid %s value %d", gid ? "gid" : "uid", (int)v);
+        return -EINVAL;
+    }
+    *out = (uint32_t)k;
+    return 0;
+}
+
+/**
+ * Parse `options`, mount(2)'s data or NULL, into the options `*opts`, the
+ * reserving ids `*resuid` and `*resgid` and the error policy `*errors`,
+ * which hold what is in force before and keep what no option changes, as
+ * Linux's ext2 parse_options does (fs/ext2/super.c): the words of
+ * `ext2_words`, `errors=continue`, `errors=remount-ro` and `errors=panic`,
+ * `resuid=` and `resgid=`, and `sb=` with a number, which only `sb_option`
+ * reads. An empty item between commas is skipped. 0, or -EINVAL with the
+ * record `ext2: refused: ...` for any other option or a bad number.
+ */
+static int ext2_parse_options(const char *options, uint32_t *opts, uint32_t *resuid,
+                              uint32_t *resgid, int *errors)
 {
     const char *p = options ? options : "";
 
     while (*p) {
         const char *key = p, *value, *end;
+        uint32_t i, sb;
 
         while (*p && *p != ',') {
             p++;
@@ -2303,18 +2443,42 @@ static int errors_option(const char *options, int *errors)
         if (*p == ',') {
             p++;
         }
-        if (end - key < 7 || !option_is(key, key + 7, "errors=")) {
+        if (key == end) {
             continue;
         }
-        value = key + 7;
-        if (option_is(value, end, "continue")) {
+        for (i = 0; i < sizeof(ext2_words) / sizeof(ext2_words[0]); i++) {
+            if (option_is(key, end, ext2_words[i].word)) {
+                break;
+            }
+        }
+        if (i < sizeof(ext2_words) / sizeof(ext2_words[0])) {
+            *opts = (*opts | ext2_words[i].set) & ~ext2_words[i].clear;
+            if (ext2_words[i].note) {
+                klog(KLOG_INFO, "ext2", "%s", ext2_words[i].note);
+            }
+        } else if (option_is(key, end, "errors=continue")) {
             *errors = EXT2_ERRORS_CONTINUE;
-        } else if (option_is(value, end, "remount-ro")) {
+        } else if (option_is(key, end, "errors=remount-ro")) {
             *errors = EXT2_ERRORS_RO;
-        } else if (option_is(value, end, "panic")) {
+        } else if (option_is(key, end, "errors=panic")) {
             *errors = EXT2_ERRORS_PANIC;
-        } else {
-            klog(KLOG_WARN, "ext2", "refused: errors=");
+        } else if (option_has(key, end, "resuid=", &value)) {
+            if (resid_option(value, end, 0, resuid) != 0) {
+                return -EINVAL;
+            }
+        } else if (option_has(key, end, "resgid=", &value)) {
+            if (resid_option(value, end, 1, resgid) != 0) {
+                return -EINVAL;
+            }
+        } else if (!option_has(key, end, "sb=", &value) || option_number(value, end, &sb) != 0) {
+            char word[48];
+            uint32_t n = (uint32_t)(end - key) < sizeof(word) - 1 ? (uint32_t)(end - key)
+                                                                  : (uint32_t)sizeof(word) - 1;
+
+            k_memcpy(word, key, n);
+            word[n] = '\0';
+            klog(KLOG_WARN, "ext2", "refused: unrecognized mount option \"%s\" or missing value",
+                 word);
             return -EINVAL;
         }
     }
@@ -2478,13 +2642,15 @@ static int remount_strictness(struct vfs_mount *mnt, struct ext2_mount *em, uint
 /**
  * The `remount` of `vfs_ops`: make the mount read-only or writable, by
  * VFS_MS_RDONLY in `flags`, give it the `sync` and `dirsync` of `flags`
- * (`remount_strictness`), and take `errors=` of `options`
- * (`errors_option`) once that succeeds, as Linux's `ext2_remount` sets the
- * options it parsed at its end; a remount that keeps the mount as it is
- * changes only the policy, and other options are ignored. -EINVAL for a
- * bad `errors=`, before anything changes. The final puts a check held back
- * are reaped once the mount is open again. Admission is closed first, so
- * that no writer is inside while the mount changes and new ones wait
+ * (`remount_strictness`), and take the options of `options`
+ * (`ext2_parse_options`) once that succeeds, as Linux's `ext2_remount` sets
+ * the options it parsed at its end, each starting from the one in force; a
+ * remount that keeps the mount as it is changes only the options. A change
+ * of `dax` is refused with a warning and the rest taken, as on Linux.
+ * -EINVAL for an option Linux refuses, before anything changes. The final
+ * puts a check held back are reaped once the mount is open again.
+ * Admission is closed first, so that no writer is inside while the mount
+ * changes and new ones wait
  * (`em_close`), and so is a second remount, which then reads the policy
  * this one left: a remount without `errors=` keeps the policy in force
  * when it ends, as Linux's `ext2_remount` starts from the options under
@@ -2505,13 +2671,25 @@ static int remount_strictness(struct vfs_mount *mnt, struct ext2_mount *em, uint
 static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
-    int errors = 0;
-    int rc = errors_option(options, &errors);
+    uint32_t opts, resuid, resgid;
+    int errors, rc;
 
+    em_close(em);
+    opts = em->opts;
+    resuid = em->resuid;
+    resgid = em->resgid;
+    errors = em->errors;
+    rc = ext2_parse_options(options, &opts, &resuid, &resgid, &errors);
     if (rc != 0) {
+        em_open(em);
+        em_reap(em);
         return rc;
     }
-    em_close(em);
+    if ((opts ^ em->opts) & EXT2_OPT_DAX) {
+        klog(KLOG_WARN, "ext2",
+             "warning: refusing change of dax flag with busy inodes while remounting");
+        opts ^= EXT2_OPT_DAX;
+    }
     if (flags & VFS_MS_RDONLY) {
         if (em->mode == EXT2_MODE_RW && !ext2_failed(em)) {
             rc = remount_readonly(mnt, em);
@@ -2524,8 +2702,13 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
     if (rc == 0) {
         rc = remount_strictness(mnt, em, flags);
     }
-    if (rc == 0 && errors != 0) {
+    if (rc == 0) {
+        ext2_super_lock(em);
+        em->opts = opts;
+        em->resuid = resuid;
+        em->resgid = resgid;
         em->errors = errors;
+        ext2_super_unlock(em);
     }
     em_open(em);
     em_reap(em);
@@ -2895,7 +3078,7 @@ void ext2_node_share(struct ext2_mount *em, struct ext2_node *n, uint32_t block)
 void ext2_node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_t g, uint32_t bitmap)
 {
     ext2_node_share(em, n, ext2_le32(em->gd + g * 32 + bitmap));
-    ext2_node_share(em, n, em->first_data + 1 + (g * 32) / BCACHE_BLOCK_BYTES);
+    ext2_node_share(em, n, em->gd_first + (g * 32) / BCACHE_BLOCK_BYTES);
 }
 
 /**
@@ -3123,9 +3306,20 @@ static int large_file_flag(struct ext2_mount *em)
 
     ext2_super_lock(em);
     LE32_PUT(raw, ext2_feature_add(em, &em->ro_compat, EXT2_RO_LARGE_FILE));
-    rc = ext2_write_bytes(em, 1024 + 100, raw, 4, WRITE_THROUGH | WRITE_KIND(READ_SUPER));
+    rc = ext2_write_bytes(em, em->sb_at + 100, raw, 4, WRITE_THROUGH | WRITE_KIND(READ_SUPER));
     ext2_super_unlock(em);
     return rc;
+}
+
+/** The low 16 bits of the id `id` on the medium: the id's own, or under
+ * `nouid32` EXT2_OVERFLOW_ID for an id past 16 bits, as Linux's
+ * fs_high2lowuid gives it. */
+static uint32_t ext2_id_low(const struct ext2_mount *em, uint32_t id)
+{
+    if ((em->opts & EXT2_OPT_NO_UID32) && id > 0xFFFFu) {
+        return EXT2_OVERFLOW_ID;
+    }
+    return id & 0xFFFFu;
 }
 
 /**
@@ -3142,13 +3336,13 @@ static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n,
     int i;
 
     LE16_PUT(raw + 0, n->mode);
-    LE16_PUT(raw + 2, n->uid & 0xFFFFu);
+    LE16_PUT(raw + 2, ext2_id_low(em, n->uid));
     LE32_PUT(raw + 4, (uint32_t)size);
     time_put(n, raw, 8, EXT2_ATIME_EXTRA, n->atime);
     time_put(n, raw, 12, EXT2_CTIME_EXTRA, n->ctime);
     time_put(n, raw, 16, EXT2_MTIME_EXTRA, n->mtime);
     LE32_PUT(raw + 20, 0); /* i_dtime: a live inode has none, whatever it had */
-    LE16_PUT(raw + 24, n->gid & 0xFFFFu);
+    LE16_PUT(raw + 24, ext2_id_low(em, n->gid));
     LE16_PUT(raw + 26, n->nlink);
     LE32_PUT(raw + 28, n->blocks);
     LE32_PUT(raw + 32, n->flags);
@@ -3157,8 +3351,8 @@ static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n,
     }
     LE32_PUT(raw + 100, n->generation);
     LE32_PUT(raw + 104, n->file_acl);
-    LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
-    LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
+    LE16_PUT(raw + 120, (em->opts & EXT2_OPT_NO_UID32) ? 0 : (n->uid >> 16) & 0xFFFFu);
+    LE16_PUT(raw + 122, (em->opts & EXT2_OPT_NO_UID32) ? 0 : (n->gid >> 16) & 0xFFFFu);
     if ((n->mode & S_IFMT_) == S_IFREG_) {
         LE32_PUT(raw + 108, (uint32_t)(size >> 32));
     }
@@ -3317,7 +3511,7 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
     }
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
         !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
-        ext2_node_share(em, n, 0);
+        ext2_node_share(em, n, (uint32_t)(em->sb_at >> BCACHE_BLOCK_SHIFT));
         rc = large_file_flag(em);
         if (rc != 0) {
             return rc;
@@ -3425,9 +3619,9 @@ static int sb_write(struct ext2_mount *em, int sync)
     LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
     LE16_PUT(state, em->state);
     spin_unlock_irqrestore(&em->count_lock, flags);
-    rc = ext2_write_bytes(em, 1024 + 12, raw, 8, sync);
+    rc = ext2_write_bytes(em, em->sb_at + 12, raw, 8, sync);
     if (rc == 0) {
-        rc = ext2_write_bytes(em, 1024 + 58, state, 2, sync);
+        rc = ext2_write_bytes(em, em->sb_at + 58, state, 2, sync);
     }
     ext2_super_unlock(em);
     return rc;
@@ -3589,18 +3783,49 @@ static uint64_t file_limit(uint32_t block_shift)
     return res << block_shift;
 }
 
-/** Take the superblock `sb`'s state into `em`, and its s_errors as the
- * error policy unless `errors=` set one: an unknown value is remount-ro, as
- * Linux's `ext2_fill_super` takes it (fs/ext2/super.c:898-903). */
-static void state_take(struct ext2_mount *em, const uint8_t *sb)
+/** Take the superblock `sb`'s state into `em`, and the options it asks
+ * for, then the mount's `options` over them, as Linux's `ext2_fill_super`
+ * takes them: s_errors as the error policy, an unknown value as
+ * remount-ro; the bits of s_default_mount_opts; s_def_resuid and
+ * s_def_resgid; and the reservation windows. `dax` is turned off with
+ * Linux's message, since no block device here has DAX. Returns 0, or
+ * -EINVAL for an option `ext2_parse_options` refuses. */
+static int state_take(struct ext2_mount *em, const uint8_t *sb, const char *options)
 {
-    uint32_t v = ext2_le16(sb + 60);
+    int rc;
+
+    uint32_t v = ext2_le16(sb + 60), defm = ext2_le32(sb + 256);
 
     em->state = ext2_le16(sb + 58);
     em->disk_errors = v == EXT2_ERRORS_PANIC || v == EXT2_ERRORS_CONTINUE ? (int)v : EXT2_ERRORS_RO;
-    if (em->errors == 0) {
-        em->errors = em->disk_errors;
+    em->errors = em->disk_errors;
+    em->def_opts = defm;
+    em->def_resuid = ext2_le16(sb + 80);
+    em->def_resgid = ext2_le16(sb + 82);
+    em->resuid = em->def_resuid;
+    em->resgid = em->def_resgid;
+    em->opts = EXT2_OPT_RESERVATION;
+    if (defm & EXT2_DEFM_DEBUG) {
+        em->opts |= EXT2_OPT_DEBUG;
     }
+    if (defm & EXT2_DEFM_BSDGROUPS) {
+        em->opts |= EXT2_OPT_GRPID;
+    }
+    if (defm & EXT2_DEFM_UID16) {
+        em->opts |= EXT2_OPT_NO_UID32;
+    }
+    if (defm & EXT2_DEFM_XATTR_USER) {
+        em->opts |= EXT2_OPT_XATTR_USER;
+    }
+    if (defm & EXT2_DEFM_ACL) {
+        em->opts |= EXT2_OPT_POSIX_ACL;
+    }
+    rc = ext2_parse_options(options, &em->opts, &em->resuid, &em->resgid, &em->errors);
+    if (rc == 0 && (em->opts & EXT2_OPT_DAX)) {
+        klog(KLOG_WARN, "ext2", "DAX unsupported by block device. Turning off DAX.");
+        em->opts &= ~EXT2_OPT_DAX;
+    }
+    return rc;
 }
 
 /** Log `ext2: refused: FIELD` and return -EINVAL, which fails the mount on
@@ -3662,7 +3887,7 @@ static int mount_mode(struct ext2_mount *em, struct vfs_mount *mnt, uint32_t fla
  * other; that is where `ext2_data_block_ok` looks for them.
  */
 static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_device_t *dev,
-                         uint32_t flags)
+                         uint32_t flags, const char *options)
 {
     uint8_t sb[1024];
     uint32_t log_size, rev, unknown;
@@ -3674,7 +3899,9 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->dev = dev;
     em->mnt = mnt;
     em->next_generation = now_seconds() << 8;
-    rc = ext2_read_bytes(em, READ_QUIET, 0, 1024, sb, sizeof(sb));
+    em->sb_block = sb_option(options, &options);
+    em->sb_at = (uint64_t)em->sb_block << 10;
+    rc = ext2_read_bytes(em, READ_QUIET, 0, em->sb_at, sb, sizeof(sb));
     if (rc != 0) {
         return rc;
     }
@@ -3685,12 +3912,17 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if (rev > 1) {
         return refuse("revision");
     }
+    rc = state_take(em, sb, options);
+    if (rc != 0) {
+        return rc;
+    }
     log_size = ext2_le32(sb + 24);
     if (log_size > 2) {
         return refuse("block size");
     }
     em->block_size = 1024u << log_size;
     em->block_shift = 10 + log_size;
+    em->gd_first = (uint32_t)(em->sb_at >> em->block_shift) + 1;
     em->file_limit = file_limit(em->block_shift);
     mnt->max_bytes = em->file_limit;
     em->inodes = ext2_le32(sb + 0);
@@ -3699,7 +3931,6 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->first_data = ext2_le32(sb + 20);
     em->bpg = ext2_le32(sb + 32);
     em->ipg = ext2_le32(sb + 40);
-    state_take(em, sb);
     if (rev == 0) {
         em->inode_size = 128;
         em->first_ino = 11;
@@ -3732,7 +3963,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if ((uint64_t)em->groups * em->ipg < em->inodes) {
         return refuse("inodes past the groups");
     }
-    if ((uint64_t)em->first_data + 1 + ext2_gd_blocks(em) + em->reserved_gdt > em->blocks) {
+    if ((uint64_t)em->gd_first + ext2_gd_blocks(em) + em->reserved_gdt > em->blocks) {
         return refuse("descriptor table past the volume");
     }
     unknown = em->incompat & ~EXT2_INCOMPAT_FILETYPE;
@@ -3774,7 +4005,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if (!em->gd) {
         return -ENOMEM;
     }
-    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
+    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)em->gd_first * em->block_size, em->gd,
                          em->groups * 32);
     if (rc != 0) {
         return rc;
@@ -3841,11 +4072,31 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     return 0;
 }
 
-/** Emit the active ext2 error policy. */
+/** Emit the options of the mount, as Linux's ext2_show_options writes
+ * them, in its order: those that differ from what the superblock asks for,
+ * and those in force that it always shows. */
 static void ext2_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
 {
     const struct ext2_mount *em = mnt->priv;
+    uint32_t o = em->opts, d = em->def_opts;
 
+    if (em->sb_block != 1) {
+        emit(out, "sb", em->sb_block, VFS_OPT_DEC);
+    }
+    if (o & EXT2_OPT_MINIX_DF) {
+        emit(out, "minixdf", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_GRPID) {
+        emit(out, "grpid", 0, VFS_OPT_WORD);
+    } else if (d & EXT2_DEFM_BSDGROUPS) {
+        emit(out, "nogrpid", 0, VFS_OPT_WORD);
+    }
+    if (em->resuid != 0 || em->def_resuid != 0) {
+        emit(out, "resuid", em->resuid, VFS_OPT_DEC);
+    }
+    if (em->resgid != 0 || em->def_resgid != 0) {
+        emit(out, "resgid", em->resgid, VFS_OPT_DEC);
+    }
     if (em->errors == EXT2_ERRORS_CONTINUE) {
         emit(out, "errors=continue", 0, VFS_OPT_WORD);
     } else if (em->errors == EXT2_ERRORS_PANIC) {
@@ -3853,12 +4104,46 @@ static void ext2_options(const struct vfs_mount *mnt, vfs_option_emit emit, void
     } else if (em->disk_errors != EXT2_ERRORS_RO) {
         emit(out, "errors=remount-ro", 0, VFS_OPT_WORD);
     }
+    if (o & EXT2_OPT_NO_UID32) {
+        emit(out, "nouid32", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_DEBUG) {
+        emit(out, "debug", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_OLDALLOC) {
+        emit(out, "oldalloc", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_XATTR_USER) {
+        emit(out, "user_xattr", 0, VFS_OPT_WORD);
+    } else if (d & EXT2_DEFM_XATTR_USER) {
+        emit(out, "nouser_xattr", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_POSIX_ACL) {
+        emit(out, "acl", 0, VFS_OPT_WORD);
+    } else if (d & EXT2_DEFM_ACL) {
+        emit(out, "noacl", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_USRQUOTA) {
+        emit(out, "usrquota", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_GRPQUOTA) {
+        emit(out, "grpquota", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_XIP) {
+        emit(out, "xip", 0, VFS_OPT_WORD);
+    }
+    if (o & EXT2_OPT_DAX) {
+        emit(out, "dax", 0, VFS_OPT_WORD);
+    }
+    if (!(o & EXT2_OPT_RESERVATION)) {
+        emit(out, "noreservation", 0, VFS_OPT_WORD);
+    }
 }
 
 /** The constructor of `vfs_ext2_type`, whose contract is in ext2.h: the
- * record from the heap, its policy set by `errors=` of `options` when they
- * have it (`errors_option`), given to `ext2_mount_on` and freed, with its
- * nodes, batch and descriptors, when that fails. */
+ * record from the heap, given to `ext2_mount_on` with `options`, which it
+ * reads once it has the superblock, and freed, with its nodes, batch and
+ * descriptors, when that fails. */
 int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
 {
     struct ext2_mount *em = kzalloc(sizeof(*em));
@@ -3871,10 +4156,7 @@ int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const
     em->lockdep_depth = block_depth(dev);
 #endif
     em_locks_init(em);
-    rc = errors_option(options, &em->errors);
-    if (rc == 0) {
-        rc = ext2_mount_on(em, mnt, dev, flags);
-    }
+    rc = ext2_mount_on(em, mnt, dev, flags, options);
     if (rc != 0) {
         nodes_free(em);
         ext2_writeback_free(em->wb);
@@ -4196,19 +4478,20 @@ static int attr_feature(struct ext2_mount *em)
     uint8_t raw[16], feature[4];
     int rc;
 
-    rc = ext2_read_bytes(em, READ_SUPER, 0, 1024 + 76, raw, sizeof(raw));
+    rc = ext2_read_bytes(em, READ_SUPER, 0, em->sb_at + 76, raw, sizeof(raw));
     ext2_super_lock(em);
     if (!rc && ext2_le32(raw) == 0) {
         LE32_PUT(raw, 1);
         LE32_PUT(raw + 8, em->first_ino);
         LE16_PUT(raw + 12, em->inode_size);
-        rc = ext2_write_bytes(em, 1024 + 76, raw, sizeof(raw),
+        rc = ext2_write_bytes(em, em->sb_at + 76, raw, sizeof(raw),
                               WRITE_DURABLE | WRITE_KIND(READ_SUPER));
     }
     if (!rc && !(em->compat & 8u)) {
         /* EXT2_FEATURE_COMPAT_EXT_ATTR precedes i_file_acl. */
         LE32_PUT(feature, ext2_feature_add(em, &em->compat, 8u));
-        rc = ext2_write_bytes(em, 1024 + 92, feature, 4, WRITE_DURABLE | WRITE_KIND(READ_SUPER));
+        rc = ext2_write_bytes(em, em->sb_at + 92, feature, 4,
+                              WRITE_DURABLE | WRITE_KIND(READ_SUPER));
     }
     ext2_super_unlock(em);
     return rc;
@@ -4292,7 +4575,7 @@ static int attr_replace(struct vfs_mount *mnt, struct ext2_node *n, const uint8_
         ext2_block_fetch(em, (uint64_t)old * em->block_size);
         rc = ext2_attr_release(em, n->ino, old);
         ext2_node_share(em, n, ext2_le32(em->gd + g * 32));
-        ext2_node_share(em, n, em->first_data + 1 + (g * 32) / em->block_size);
+        ext2_node_share(em, n, em->gd_first + (g * 32) / em->block_size);
     }
     if (!rc)
         rc = ext2_em_write_out(mnt);
@@ -4320,6 +4603,8 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
         return -EOPNOTSUPP;
     if (op != VFS_XATTR_LIST && !name[5])
         return -EINVAL;
+    if (!(em->opts & EXT2_OPT_XATTR_USER))
+        return op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP;
     if (op != VFS_XATTR_LIST && type != S_IFREG_ && type != S_IFDIR_)
         return op >= VFS_XATTR_SET ? -EPERM : -ENODATA;
     em_enter_node(em, n);

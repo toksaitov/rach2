@@ -111,8 +111,7 @@ to the file system, of whose options tmpfs takes
 .Ql size=
 and
 .Ql nr_inodes= ,
-and ext2
-.Ql errors= .
+and ext2 the options it takes at a mount, below.
 On ext2 it makes the mount read-only, synced and marked clean as an
 unmount leaves it, or writable, checked as a writable mount is; tmpfs
 changes between the two at once; every other type refuses a change
@@ -510,15 +509,69 @@ describes; the silent flag and the file system's own options are not
 shown.
 KRFFS, mqueue and pstore ignore the option string; FAT32, exFAT,
 tmpfs and debugfs parse it.
-ext2 takes
+ext2 takes Linux's options:
 .Ql errors=continue ,
 .Ql errors=remount-ro
-or
+and
 .Ql errors=panic ,
-which overrides the volume's own policy, and ignores the rest; another
-value of
-.Ql errors=
-is
+which override the volume's own policy;
+.Ql minixdf
+and
+.Ql bsddf ,
+whether
+.Xr statfs 2
+counts the volume's own blocks;
+.Ql grpid
+or
+.Ql bsdgroups ,
+under which a new file takes its directory's group, and
+.Ql nogrpid
+or
+.Ql sysvgroups ;
+.Ql resuid=
+and
+.Ql resgid= ,
+the user and group besides a caller with
+.Dv CAP_SYS_RESOURCE
+who may take the reserved blocks;
+.Ql sb= ,
+first in the string, the superblock to mount from in units of 1024
+bytes, whose group descriptors follow it;
+.Ql nouid32 ,
+which keeps 16 bits of an owner on the medium and reads no more;
+.Ql user_xattr
+and
+.Ql nouser_xattr ,
+without which a
+.Ql user.
+attribute is
+.Er EOPNOTSUPP ;
+and
+.Ql acl ,
+.Ql noacl ,
+.Ql debug ,
+.Ql oldalloc ,
+.Ql orlov ,
+.Ql nobh ,
+.Ql quota ,
+.Ql usrquota ,
+.Ql grpquota ,
+.Ql noquota ,
+.Ql reservation ,
+.Ql noreservation ,
+.Ql xip
+and
+.Ql dax ,
+which are kept and shown and change nothing else, with
+.Ql dax
+turned off as on a device without DAX.
+The volume's
+.Ql s_default_mount_opts ,
+.Ql s_def_resuid
+and
+.Ql s_def_resgid
+give the defaults, and a remount starts from the options in force.
+Another option, or a malformed number, is
 .Er EINVAL .
 .Ss Dirty-volume checks
 Before a writable mount, FAT32 checks a dirty volume with limits of

@@ -1241,7 +1241,8 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
     }
     free = ext2_free_blocks(em);
     if (1 + ext2_pointer_levels(em, index) > free ||
-        (!ext2_may_use_reserved() && free - (1 + ext2_pointer_levels(em, index)) < em->r_blocks)) {
+        (!ext2_may_use_reserved(em) &&
+         free - (1 + ext2_pointer_levels(em, index)) < em->r_blocks)) {
         return -ENOSPC;
     }
     rc = ext2_map_alloc(em, d, index, &b, &fresh);
@@ -1569,7 +1570,11 @@ static int inode_make(struct ext2_mount *em, const struct ext2_node *dir, uint32
     }
     EXT2_NODE_SET(n, uid, current_proc ? proc_fsuid(current_proc) : 0);
     EXT2_NODE_SET(n, gid, current_proc ? proc_fsgid(current_proc) : 0);
-    if (dir->mode & S_ISGID_) {
+    if (em->opts & EXT2_OPT_GRPID) {
+        /* grpid: the directory's group, and no set-group-ID bit given to
+         * a new directory, as Linux's ext2_new_inode does. */
+        EXT2_NODE_SET(n, gid, dir->gid);
+    } else if (dir->mode & S_ISGID_) {
         EXT2_NODE_SET(n, gid, dir->gid);
         if ((mode & S_IFMT_) == S_IFDIR_) {
             mode |= S_ISGID_;

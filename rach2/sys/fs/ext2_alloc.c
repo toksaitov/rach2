@@ -4,6 +4,7 @@
  */
 
 #include "ext2_internal.h"
+#include "../proc/ns.h"
 
 /** Write the primary descriptor of group `g` in the way `how` says; the
  * backup tables are not written. The caller holds the group's lock, so that
@@ -11,7 +12,7 @@
  * write. 0, or -errno. */
 static int gd_write(struct ext2_mount *em, uint32_t g, int how)
 {
-    uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
+    uint64_t at = (uint64_t)em->gd_first * em->block_size + (uint64_t)g * 32;
 
     ext2_assert_group_locked(em, g);
     return ext2_write_bytes(em, at, em->gd + g * 32, 32, how | WRITE_KIND(READ_DESC));
@@ -20,7 +21,7 @@ static int gd_write(struct ext2_mount *em, uint32_t g, int how)
 /** The block of the cache that holds group `g`'s descriptor. */
 static uint32_t gd_cache_block(const struct ext2_mount *em, uint32_t g)
 {
-    return (uint32_t)(((uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32) >>
+    return (uint32_t)(((uint64_t)em->gd_first * em->block_size + (uint64_t)g * 32) >>
                       BCACHE_BLOCK_SHIFT);
 }
 
@@ -320,11 +321,34 @@ int ext2_bitmap_turn(struct ext2_mount *em, uint32_t g)
     return bit_lock(em, g, EXT2_BLOCK_BITMAP, 0, 1);
 }
 
-/** Whether the caller may take the blocks the superblock reserves: a
- * privileged process (`proc_privileged`). */
-int ext2_may_use_reserved(void)
+/** Whether the caller may take the blocks the superblock reserves, as
+ * Linux's ext2_has_free_blocks allows them: with CAP_SYS_RESOURCE in the
+ * first user namespace, with the mount's `resuid` as its file-system user
+ * id, or with its `resgid` other than 0 as its file-system group or one of
+ * its supplementary groups. */
+int ext2_may_use_reserved(const struct ext2_mount *em)
 {
-    return current_proc && proc_privileged(current_proc);
+    const process_t *p = current_proc;
+    uint32_t gid = em->resgid, i;
+
+    if (!p) {
+        return 0;
+    }
+    if ((!p->userns && cap_holds(p, CAP_SYS_RESOURCE)) || proc_fsuid(p) == em->resuid) {
+        return 1;
+    }
+    if (gid == 0) {
+        return 0;
+    }
+    if (proc_fsgid(p) == gid) {
+        return 1;
+    }
+    for (i = 0; i < p->ngroups; i++) {
+        if (p->groups[i] == gid) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -447,7 +471,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
         return -EROFS;
     }
     free = ext2_free_blocks(em);
-    if (free == 0 || (!ext2_may_use_reserved() && free <= em->r_blocks)) {
+    if (free == 0 || (!ext2_may_use_reserved(em) && free <= em->r_blocks)) {
         return -ENOSPC;
     }
     if (hint < em->first_data || hint >= em->blocks) {
@@ -818,7 +842,7 @@ void ext2_group_fetch(struct ext2_mount *em, uint32_t hint)
     }
     g = (hint - em->first_data) / em->bpg;
     ext2_volume_fetch(em, ext2_le32(em->gd + g * 32));
-    ext2_volume_fetch(em, em->first_data + 1 + (g * 32) / BCACHE_BLOCK_BYTES);
+    ext2_volume_fetch(em, em->gd_first + (g * 32) / BCACHE_BLOCK_BYTES);
 }
 
 /**
@@ -955,5 +979,5 @@ int ext2_punch_free(struct ext2_mount *em, struct ext2_node *n, struct punch_lis
  * `ext2_gd_store` writes in part and so reads first. */
 void ext2_gd_fetch(struct ext2_mount *em, uint32_t g)
 {
-    ext2_block_fetch(em, (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32);
+    ext2_block_fetch(em, (uint64_t)em->gd_first * em->block_size + (uint64_t)g * 32);
 }

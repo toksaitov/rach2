@@ -343,7 +343,7 @@ static int reserve_in(struct ext2_mount *em, struct ext2_write_plan *plan, uint3
             return rc;
         }
         r->descriptor =
-            writeback_meta(em, READ_DESC, 0, em->first_data + 1 + (g * 32) / 4096, WB_ALLOC, &rc);
+            writeback_meta(em, READ_DESC, 0, em->gd_first + (g * 32) / 4096, WB_ALLOC, &rc);
         if (!r->descriptor) {
             return rc;
         }
@@ -381,7 +381,7 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_write_plan *plan
         return -EROFS;
     }
     if (free <= (uint32_t)count ||
-        (!ext2_may_use_reserved() && free - (uint32_t)count <= em->r_blocks)) {
+        (!ext2_may_use_reserved(em) && free - (uint32_t)count <= em->r_blocks)) {
         return -ENOSPC;
     }
     if (start >= em->blocks) {
@@ -523,7 +523,8 @@ static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t o
         return rc;
     }
     if (offset + len >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
-        plan->feature = writeback_meta(em, READ_SUPER, 0, 0, WB_FEATURE, &rc);
+        plan->feature =
+            writeback_meta(em, READ_SUPER, 0, (uint32_t)(em->sb_at >> 12), WB_FEATURE, &rc);
         if (!plan->feature) {
             return rc;
         }
@@ -608,8 +609,8 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
         }
     }
     if (plan->feature) {
-        ext2_node_share(em, n, 0);
-        LE32_PUT(plan->feature->data + 1024 + 100,
+        ext2_node_share(em, n, (uint32_t)(em->sb_at >> BCACHE_BLOCK_SHIFT));
+        LE32_PUT(plan->feature->data + (uint32_t)(em->sb_at & 4095u) + 100,
                  ext2_feature_add(em, &em->ro_compat, EXT2_RO_LARGE_FILE));
         plan->feature->dirty = 1;
     }
@@ -1239,7 +1240,7 @@ int ext2_writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t of
             }
             free = ext2_free_blocks(em);
             if (need > free ||
-                (!ext2_may_use_reserved() && need > 0 && free - need < em->r_blocks)) {
+                (!ext2_may_use_reserved(em) && need > 0 && free - need < em->r_blocks)) {
                 return -ENOSPC;
             }
         }

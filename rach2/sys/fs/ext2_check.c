@@ -1487,7 +1487,7 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
 
     em->free_blocks = free_blocks;
     em->free_inodes = free_inodes;
-    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
+    rc = ext2_read_bytes(em, READ_QUIET, 0, (uint64_t)em->gd_first * em->block_size, em->gd,
                          em->groups * 32);
     if (rc != 0) {
         return rc;
@@ -1500,7 +1500,7 @@ static int check_stopped(struct ext2_check *c, uint64_t free_blocks, uint64_t fr
     if (!c->limit) {
         ext2_super_lock(em);
         LE16_PUT(state, ext2_state_change(em, EXT2_ERROR_FS, 0));
-        rc = ext2_write_bytes(em, 1024 + 58, state, 2, WRITE_DURABLE | WRITE_KIND(READ_SUPER));
+        rc = ext2_write_bytes(em, em->sb_at + 58, state, 2, WRITE_DURABLE | WRITE_KIND(READ_SUPER));
         ext2_super_unlock(em);
         if (rc != 0) {
             return rc;

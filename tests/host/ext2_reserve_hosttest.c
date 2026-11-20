@@ -35,6 +35,7 @@ static unsigned int row_xchg(volatile unsigned int *p, unsigned int value);
 #include "fs/ext2_check.c"
 #include "fs/ext2_dir.c"
 #include "fs/ext2_file.c"
+#include "ext2_ids_first.h"
 
 extern int memcmp(const void *a, const void *b, unsigned long size);
 extern int printf(const char *format, ...);
@@ -753,6 +754,10 @@ static void reset(uint32_t available)
     volume.gd = descriptors;
     volume.free_blocks = available;
     volume.r_blocks = 8;
+    volume.gd_first = 1;
+    volume.sb_at = 1024;
+    volume.sb_block = 1;
+    volume.opts = EXT2_OPT_RESERVATION;
     volume.mode = EXT2_MODE_RW;
     volume.ro_compat = EXT2_RO_LARGE_FILE;
     volume.wb = &batch;

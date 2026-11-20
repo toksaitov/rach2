@@ -113,6 +113,34 @@
 #define EXT2_ERRORS_RO       2
 #define EXT2_ERRORS_PANIC    3
 
+/* The options of Linux's ext2 (fs/ext2/super.c) a mount keeps, the bits of
+ * `opts`; EXT2_OPT_RESERVATION is in force unless `noreservation` says
+ * otherwise, and the rest only when an option or the superblock's
+ * s_default_mount_opts asks for it. */
+#define EXT2_OPT_MINIX_DF    0x0001u /* statfs counts the volume's own blocks */
+#define EXT2_OPT_GRPID       0x0002u /* a new inode takes its directory's group */
+#define EXT2_OPT_NO_UID32    0x0004u /* ids of 16 bits on the medium */
+#define EXT2_OPT_DEBUG       0x0008u
+#define EXT2_OPT_OLDALLOC    0x0010u
+#define EXT2_OPT_XATTR_USER  0x0020u /* user. extended attributes */
+#define EXT2_OPT_POSIX_ACL   0x0040u
+#define EXT2_OPT_USRQUOTA    0x0080u
+#define EXT2_OPT_GRPQUOTA    0x0100u
+#define EXT2_OPT_XIP         0x0200u
+#define EXT2_OPT_DAX         0x0400u
+#define EXT2_OPT_RESERVATION 0x0800u
+
+/* The bits of s_default_mount_opts Linux's ext2 reads at a mount. */
+#define EXT2_DEFM_DEBUG      0x0001u
+#define EXT2_DEFM_BSDGROUPS  0x0002u
+#define EXT2_DEFM_XATTR_USER 0x0004u
+#define EXT2_DEFM_ACL        0x0008u
+#define EXT2_DEFM_UID16      0x0010u
+
+/* The id a 32-bit uid or gid past 16 bits becomes under `nouid32`, Linux's
+ * fs_overflowuid. */
+#define EXT2_OVERFLOW_ID 65534u
+
 #define S_IFMT_   0170000u
 #define S_IFREG_  0100000u
 #define S_IFDIR_  0040000u
@@ -425,6 +453,24 @@ struct ext2_mount {
      * the constructor reads the superblock. */
     int errors;
     int disk_errors; /* the superblock's default error policy */
+    /* The options in force, EXT2_OPT_ bits, and the kernel's user and group
+     * ids that may take the reserved blocks besides a caller with
+     * CAP_SYS_RESOURCE (`ext2_may_use_reserved`): the superblock's
+     * s_def_resuid and s_def_resgid unless `resuid=` or `resgid=` set
+     * them. A mount's or a remount's options set all three at once, under
+     * `em->super`, and a reader takes each as one word. */
+    uint32_t opts;
+    uint32_t resuid, resgid;
+    /* The superblock's s_default_mount_opts, s_def_resuid and s_def_resgid,
+     * against which the mount table shows the options (`ext2_options`). */
+    uint32_t def_opts, def_resuid, def_resgid;
+    /* The superblock the mount reads and writes: `sb=`'s block, in units of
+     * 1024 bytes, 1 by default; its byte offset; and the block of the first
+     * group descriptor, the one after it, as Linux's descriptor_loc puts
+     * the table after the superblock it mounted from. */
+    uint32_t sb_block;
+    uint64_t sb_at;
+    uint32_t gd_first;
     /* The generation the next inode made gets, counted from the mount's
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
@@ -718,7 +764,7 @@ int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const
 int ext2_gd_store(struct ext2_mount *em, uint32_t g);
 int ext2_bit_first_clear(struct ext2_mount *em, uint32_t g, int which, uint32_t from,
                          uint32_t count, uint32_t *out);
-int ext2_may_use_reserved(void);
+int ext2_may_use_reserved(const struct ext2_mount *em);
 int ext2_block_refused(struct ext2_mount *em, uint32_t g, uint32_t bit);
 int ext2_inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n);
 int ext2_inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir);

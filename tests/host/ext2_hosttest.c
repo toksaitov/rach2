@@ -50,6 +50,7 @@
 #include "fixdir_host.h"
 #include "command_host.h"
 #include "ext2_fixture.h"
+#include "ext2_ids_first.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
@@ -8469,12 +8470,12 @@ static void error_policy_rows(void)
     check(rc == 0 && policy_fault() && (mnt.flags & VFS_MS_RDONLY) == 0,
           "and a second fault leaves it writable too");
     check(rc == 0 && OPS->remount(&mnt, rw_flags, "errors=bogus") == -EINVAL &&
-              streq(last_warn, "refused: errors="),
+              streq(last_warn,
+                    "refused: unrecognized mount option \"errors=bogus\" or missing value"),
           "a remount with errors= of another value is EINVAL by name");
     check(rc == 0 && policy_fault() && (mnt.flags & VFS_MS_RDONLY) == 0, "and changes no policy");
-    check(rc == 0 && OPS->remount(&mnt, rw_flags, "noatime,errors=remount-ro") == 0 &&
-              policy_fault() && (mnt.flags & VFS_MS_RDONLY) != 0 &&
-              streq(last_log, "error: remounting read-only"),
+    check(rc == 0 && OPS->remount(&mnt, rw_flags, "errors=remount-ro") == 0 && policy_fault() &&
+              (mnt.flags & VFS_MS_RDONLY) != 0 && streq(last_log, "error: remounting read-only"),
           "after a remount with errors=remount-ro, a fault on a volume whose error bit is set "
           "makes the mount read-only by name");
     if (rc == 0) {
@@ -8488,7 +8489,9 @@ static void error_policy_rows(void)
     use_image(img, policy_image(img, 1));
     last_warn[0] = 0;
     rc = mount_options(rw_flags, "errors=never");
-    check(rc == -EINVAL && streq(last_warn, "refused: errors="),
+    check(rc == -EINVAL &&
+              streq(last_warn,
+                    "refused: unrecognized mount option \"errors=never\" or missing value"),
           "a mount with errors= of another value is EINVAL by name");
     if (rc == 0) {
         unmount_rw();
@@ -9008,6 +9011,7 @@ static void attr_rows(void)
 }
 
 #include "ext2_xattr_rows.h"
+#include "ext2_options_rows.h"
 
 /**
  * Judge the stop of sequence `i` after write `k` of `n`, whose crash state
@@ -10809,6 +10813,7 @@ static const struct {
     {"--times-only", time_rows},
     {"--cache-partial-only", cache_partial_row},
     {"--xattr-only", xattr_rows},
+    {"--options-only", option_rows},
     {"--dirty-only", dirty_rows},
     {"--counts-only", count_rows},
     {"--stopped-only", stopped_rows},
@@ -10898,6 +10903,7 @@ int main(int argc, char **argv)
     hardlink_check_rows();
     attr_rows();
     xattr_rows();
+    option_rows();
     matrix_rows();
     batch_rows();
     node_rows();
