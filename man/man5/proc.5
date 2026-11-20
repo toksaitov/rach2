@@ -3401,8 +3401,17 @@ The calling thread: a link whose text is
 the IDs the mount's PID namespace gives the caller's process and thread.
 For a caller that namespace does not see,
 .Xr readlink 2
-of the link fails with
-.Er ENOENT .
+of the link, or of
+.Pa /proc/self ,
+and a path through it fail with
+.Er ENOENT ,
+while
+.Xr lstat 2
+and an
+.Dv O_PATH
+open with
+.Dv O_NOFOLLOW
+find the link itself, as on Linux.
 .El
 .Sh SEE ALSO
 .Xr bootlog 4 ,

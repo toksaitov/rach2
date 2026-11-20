@@ -10291,18 +10291,21 @@ static int synth_proc_writable(int procfile)
  * A task directory has the links `procfs_task_links` counts, and an fd
  * directory the number of descriptors open as its size (`procfs_fd_count`),
  * as Linux's `proc_fd_getattr` gives it (fs/proc/fd.c:350-366). Returns 0,
- * or -ENOENT once the process or thread is gone.
+ * or -ENOENT once the process or thread is gone. An unfollowed self link
+ * has its attributes whether or not the mount's PID namespace sees the
+ * caller, as Linux's link inode is made with the mount (fs/proc/self.c and
+ * thread_self.c); only its text and its target need the caller.
  */
 static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int follow, int id)
 {
-    if (id < 0) {
-        return -ENOENT;
-    }
     kst->st_dev = PROCFS_FSID;
     if (synth_self_link(vp) && !follow) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
         kst->st_ino = synth_self_link(vp) == 1 ? procfs_ino_self() : procfs_ino_thread_self();
         return 0;
+    }
+    if (id < 0) {
+        return -ENOENT;
     }
     kst->st_mode = synth_pid_dir_mode(vp);
     kst->st_ino = procfs_ino_pid(id);
