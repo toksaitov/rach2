@@ -293,6 +293,16 @@ struct netdev {
     /* Nonzero for `lo`, which no card stands behind (`netdev_loopback`). */
     int loopback;
 
+    /* Nonzero for an interface of IP datagrams with no link header, a TUN
+     * of /dev/net/tun, Linux's ARPHRD_NONE with IFF_POINTOPOINT and
+     * IFF_NOARP: it has no station address, `mac` all zeros, and neither
+     * ARP nor neighbour discovery finds a next hop on it, so a datagram
+     * leaves at once. Its driver's `tx` is given the frame `ethernet_tx`
+     * builds, whose header carries only the EtherType, and a datagram it
+     * receives comes to `ethernet_rx` behind such a header; the counts are
+     * of the datagrams alone. */
+    int l3;
+
     /* The MTU: the largest IP datagram, header included, that the interface
      * sends in one frame. NETDEV_ETH_MTU_MIN to NETDEV_ETH_MTU_MAX on a
      * card, 1500 from the probe; NETDEV_LOOPBACK_MTU on `lo`. */
@@ -322,6 +332,17 @@ struct netdev {
  * address, all zeros, and its MTU. */
 #define NETDEV_LOOPBACK_TYPE 772
 #define NETDEV_LOOPBACK_MTU  65536
+
+/* Linux's other hardware types of an interface's address (ARPHRD_*): a
+ * card's Ethernet, and none for an interface with `l3` set. */
+#define NETDEV_ETHER_TYPE 1
+#define NETDEV_NONE_TYPE  65534
+
+/* The hardware type of `nd`'s address, Linux's `dev->type`, and the bytes
+ * of the address, its `addr_len`: none on an interface with `l3` set. */
+#define NETDEV_TYPE(nd) \
+    ((nd)->loopback ? NETDEV_LOOPBACK_TYPE : (nd)->l3 ? NETDEV_NONE_TYPE : NETDEV_ETHER_TYPE)
+#define NETDEV_ADDR_LEN(nd) ((nd)->l3 ? 0 : 6)
 
 /* The MTUs a card's interface may have, Linux's for Ethernet: the least
  * every IPv4 host must carry (RFC 791) and the most a frame without jumbo

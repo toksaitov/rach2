@@ -198,27 +198,29 @@ static void set_word(uint8_t *ifr, uint32_t v)
     ifr[IFREQ_UNION + 3] = (uint8_t)((v >> 24) & 0xff);
 }
 
-/** The hardware type of `nd`'s address: Ethernet, or `lo`'s loopback. */
+/** The hardware type of `nd`'s address: Ethernet, `lo`'s loopback, or
+ * none for an interface of IP datagrams. */
 static uint32_t if_type(const struct netdev *nd)
 {
-    return nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER;
+    return (uint32_t)NETDEV_TYPE(nd);
 }
 
-/** The broadcast address of `nd`'s subnet, or 0 for none, for `lo`, and
- * for a /31 or /32, as on Linux. */
+/** The broadcast address of `nd`'s subnet, or 0 for none, for `lo`, for an
+ * interface of IP datagrams, which has no broadcast, and for a /31 or /32,
+ * as on Linux. */
 static uint32_t if_broadcast(const struct netdev *nd)
 {
-    return nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && !nd->loopback
+    return nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && !nd->loopback && !nd->l3
                ? (nd->ip | ~nd->mask)
                : 0;
 }
 
 /** The flags SIOCGIFFLAGS reports: up as an administrator left it, running
  * while it is up and `netdev_running` judges the link up, as on Linux, and
- * broadcast and multicast, or for `lo` loopback. */
+ * those of the interface's kind (`NETIF_KIND_FLAGS`). */
 static uint32_t if_flags(struct netdev *nd)
 {
-    uint32_t flags = nd->loopback ? IFF_LOOPBACK : IFF_BROADCAST | IFF_MULTICAST;
+    uint32_t flags = NETIF_KIND_FLAGS(nd);
 
     if (nd->up) {
         flags |= IFF_UP;

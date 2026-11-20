@@ -388,10 +388,12 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
         }
         return 0;
     }
-    if (!ip6_is_multicast(via)) {
+    if (!ip6_is_multicast(via) && !out->l3) {
         return nd6_output(out, via, buf, (uint16_t)len, mtu);
     }
-    net_mib6.ip6_out_mcast_pkts++;
+    if (ip6_is_multicast(via)) {
+        net_mib6.ip6_out_mcast_pkts++;
+    }
     ip6_mcast_mac(via, mac);
     sent = ethernet_tx(out, mac, ETH_TYPE_IPV6, buf, (uint16_t)len);
     if (sent == ETHERNET_TX_TOOLONG) {

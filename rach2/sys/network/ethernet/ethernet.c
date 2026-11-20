@@ -28,7 +28,9 @@ static uint8_t eth_tx_frame[ETH_HDR_SIZE + ETH_MTU];
  * IPv4 and IPv6 frame first and whatever its destination, since `ip_rx` drops
  * what is not addressed to this machine, which is every reply a DHCP client
  * waits for. Every frame on an interface that is down is dropped, since
- * `ethernet_tx` would send no reply.
+ * `ethernet_tx` would send no reply. On an interface of IP datagrams (`l3`)
+ * the header stands in for none, so the counts leave it out, and ARP is not
+ * given what comes, as Linux's arp_rcv drops it on an IFF_NOARP device.
  */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
@@ -46,7 +48,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     }
 
     nd->rx_packets++;
-    nd->rx_bytes += len;
+    nd->rx_bytes += nd->l3 ? (uint32_t)(len - ETH_HDR_SIZE) : len;
 
     etype = (uint16_t)(((uint16_t)data[12] << 8) | data[13]);
 
@@ -56,7 +58,9 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
         break;
     case ETH_TYPE_ARP:
         packet_rx(nd, etype, data, len);
-        arp_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+        if (!nd->l3) {
+            arp_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+        }
         break;
     case ETH_TYPE_IP:
         packet_rx(nd, etype, data, len);
@@ -85,7 +89,8 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
  * having. A card that says its link is down is given nothing, as Linux
  * gives a card nothing while its carrier is off: the frame could not leave,
  * and a card such as the RTL8168 counts each one it is given as a transmit
- * error.
+ * error. An interface of IP datagrams (`l3`) is given the same frame, whose
+ * addresses mean nothing, and counts the payload alone.
  */
 int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *payload, uint16_t plen)
@@ -123,7 +128,7 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
         return NETDEV_TX_DROPPED;
     }
     out->tx_packets++;
-    out->tx_bytes += total;
+    out->tx_bytes += out->l3 ? plen : total;
     return NETDEV_TX_OK;
 }
 
