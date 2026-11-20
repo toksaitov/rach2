@@ -3215,7 +3215,7 @@ int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
     if (inode_read_only(vfs_root_mount(),
                         node == krffs_fs->node ? S_IFDIR : krffs_mode_type(head.mode), want))
         return -EROFS;
-    mode = (node == krffs_fs->node) ? 0755u : (uint32_t)(head.mode & 0777u);
+    mode = (uint32_t)(head.mode & 0777u);
     if ((want & CRED_X) && !KRFFS_IS_DIR(head.mode) && node != krffs_fs->node && !(mode & 0111u)) {
         return -EACCES;
     }
@@ -3237,16 +3237,15 @@ int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
  * is not POSIX and is not adopted here: it would let a mode a victim chose for
  * their own file decide who may delete it.
  *
- * The root is non-sticky by node identity, not by reading its mode, the
- * same fixed-mode rule `cred_access_node` uses, so `KRFFS_MODE_DIRTY` never
- * enters a permission answer.
+ * The root's sticky bit is its stored one, which chmod sets as on any
+ * directory; the dirty flag (KRFFS_MODE_DIRTY) lies in another bit.
  */
 static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victim)
 {
     krffs_node_t d;
     krffs_node_t v;
 
-    if (!dir || dir == krffs_fs->node) {
+    if (!dir) {
         return 0;
     }
     if (krffs_node_head(dir, &d) != 0) {
@@ -9882,22 +9881,28 @@ static int32_t stat64_put(struct user_stat __user *st, const struct kstat *kst)
 }
 
 /**
- * The root directory's own three times, into a kstat.
+ * The root directory's mode, owner and three times, into a kstat.
  *
- * The root is a node like any other, and creating an entry in it stamps its
- * times, so it reports them as any directory does; a machine with no file
- * system mounted has nothing to report but the boot time. 0, or -EIO, with
- * the boot time, when the root's header cannot be read.
+ * The root is a node like any other: chmod, chown and utimensat store its
+ * attributes, and creating an entry in it stamps its times, so it reports
+ * them as any directory does, its mode through KRFFS_ROOT_MODE_BITS, which
+ * leaves out the dirty flag. A machine with no file system mounted has
+ * nothing to report but a root's directory of mode 0755 and the boot time.
+ * 0, or -EIO, with those, when the root's header cannot be read.
  */
-static int32_t stat64_root_times(struct kstat *kst)
+static int32_t stat64_root_node(struct kstat *kst)
 {
     krffs_node_t head;
 
+    kst->st_mode = S_IFDIR | 0755;
     if (krffs_fs && krffs_fs->node) {
         if (krffs_node_head(krffs_fs->node, &head) != 0) {
             stat64_boot_times(kst);
             return -EIO;
         }
+        kst->st_mode = S_IFDIR | (head.mode & KRFFS_ROOT_MODE_BITS);
+        kst->st_uid = head.uid;
+        kst->st_gid = head.gid;
         stat64_node_times(kst, &head);
     } else {
         stat64_boot_times(kst);
@@ -9953,9 +9958,9 @@ static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
  * Fill `kst` from the node `node` of the KRFFS boot root: its type and
  * permission bits, owner, group, size and times, the size in 512-byte
  * blocks, and the inode `krffs_node_ino` gives it. The root node is a
- * directory of mode 0755 whatever its stored mode says: no mkdir made it,
- * and a path can reach it through "..". 0, or -EIO when the node's header
- * cannot be read.
+ * directory whatever its stored type says, since no mkdir made it and a
+ * path can reach it through "..", of the stored bits KRFFS_ROOT_MODE_BITS
+ * selects. 0, or -EIO when the node's header cannot be read.
  */
 static int32_t krffs_fill_stat64(struct kstat *kst, krffs_node_t *node)
 {
@@ -9966,7 +9971,7 @@ static int32_t krffs_fill_stat64(struct kstat *kst, krffs_node_t *node)
         return -EIO;
     }
     if (node == krffs_fs->node) {
-        kst->st_mode = S_IFDIR | 0755;
+        kst->st_mode = S_IFDIR | (head.mode & KRFFS_ROOT_MODE_BITS);
     } else {
         kst->st_mode = krffs_mode_type(head.mode) | (head.mode & 07777);
     }
@@ -11650,9 +11655,9 @@ static int synth_is_link(const struct vpath *vp)
  * searched, or -ENOTDIR for a path that names a directory by its end, which
  * follows a final link whatever `follow` says, and reaches anything else.
  *
- * The KRFFS root has a fixed identity, inode 1 and mode 0755, and times of
- * its own, which an entry made in it stamps, so that a program watching the
- * directory sees the change.
+ * The KRFFS root has a fixed inode, 1, and the mode, owner and times its
+ * node stores (`stat64_root_node`); an entry made in it stamps the times, so
+ * that a program watching the directory sees the change.
  *
  * The walk takes the lock of the mount it ends on, where the type asks for
  * one, and keeps it until the attributes are read: a node of a mounted
@@ -11697,11 +11702,10 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
         } else if (!mnt_is_root(ref.mnt)) {
             rc = vfs_fill_stat64(&kst, &ref);
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
-            kst.st_mode = S_IFDIR | 0755;
             kst.st_nlink = 1;
             kst.st_ino = 1;
             kst.st_blksize = 4096;
-            rc = stat64_root_times(&kst);
+            rc = stat64_root_node(&kst);
         } else {
             rc = krffs_fill_stat64(&kst, (krffs_node_t *)ref.node);
         }
@@ -12281,8 +12285,8 @@ static void kst_attr(struct kstat *kst, const struct inode_attr *a)
  * An object without times of its own reports the boot time.
  *
  * A file or a directory of a mounted type is `vfs_fill_stat64`'s. The KRFFS
- * root directory has the identity a stat of "/" gives, inode 1, mode 0755
- * and the root's own times. A KRFFS node reports its attributes while
+ * root directory has the identity a stat of "/" gives, inode 1 and the
+ * root's own mode, owner and times. A KRFFS node reports its attributes while
  * `fd_node_check` finds it live; a descriptor whose file went away by a
  * route that did not look for its holders reports only the boot times, and
  * reads nothing of a node that may be the free list's now.
@@ -12336,11 +12340,10 @@ static int32_t fstat_fill_fixed(fd_entry_t *entry, struct kstat *kst)
         return vfs_fill_stat64(kst, &r);
     }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
-        kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        return stat64_root_times(kst);
+        return stat64_root_node(kst);
     } else if (entry->node) {
         int32_t rc = fd_node_check(entry);
 
@@ -12633,12 +12636,11 @@ static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
 
     k_memset(kst, 0, sizeof(*kst));
     if (path && names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
-        kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_mnt_id = procfs_mount_id(vfs_root_mount());
-        return stat64_root_times(kst);
+        return stat64_root_node(kst);
     }
     rc = resolve_named(path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), 0, &ref);
     if (rc != 0) {
@@ -13861,9 +13863,10 @@ long sys_faccessat2(isr_params_t *params)
  * chmod of the node `node` of the KRFFS boot root: the owner or a
  * privileged caller (`cred_privileged`) replaces its permission bits with
  * those of `mode`, which stamps its attribute-change time, and anyone else
- * is -EPERM; 0 on success. The root node's mode is never changed,
- * since its set-user-ID bit is the volume's dirty flag (KRFFS_MODE_DIRTY),
- * but the rule still answers, so a caller who does not own `/` gets -EPERM.
+ * is -EPERM; 0 on success. The root node stores the bits of
+ * KRFFS_ROOT_MODE_BITS and no set-user-ID bit, since that bit's place holds
+ * the volume's dirty flag (KRFFS_MODE_DIRTY), which `krffs_node_set_mode`
+ * keeps.
  *
  * An unprivileged caller who stores a mode on a file whose group is not one
  * of the caller's loses setgid, on a directory as on a regular file.
@@ -13890,7 +13893,7 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
     if (!inode_owner_or_capable(head.uid)) {
         return -EPERM;
     }
-    if (node != krffs_fs->node) {
+    {
         uint32_t want = mode & 07777u;
 
         if (!inode_capable(head.uid, head.gid, CAP_FSETID) && !cred_in_group(head.gid)) {
@@ -13983,7 +13986,8 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid, 
         return -EIO;
     }
     k_memset(&st, 0, sizeof(st));
-    st.mode = node == krffs_fs->node ? S_IFDIR : krffs_mode_type(head.mode) | (head.mode & 07777u);
+    st.mode = node == krffs_fs->node ? S_IFDIR | (head.mode & KRFFS_ROOT_MODE_BITS)
+                                     : krffs_mode_type(head.mode) | (head.mode & 07777u);
     st.uid = head.uid;
     st.gid = head.gid;
     what = vfs_chown_plan(&st, uid, gid);
@@ -18911,13 +18915,18 @@ static int32_t old_stat_put(struct linux_stat __user *st, const struct linux_sta
     return copy_to_user(st, &seen, sizeof(seen)) != 0 ? -EFAULT : 0;
 }
 
-/** The root directory's three times, into the old stat: 0, or -EIO as
- * `stat64_root_times` answers. */
-static int32_t stat_root_times(struct linux_stat *kst)
+/** The root directory's mode, owner and three times, into the old stat: 0,
+ * or -EIO as `stat64_root_node` answers. */
+static int32_t stat_root_node(struct linux_stat *kst)
 {
     struct kstat s64;
-    int32_t rc = stat64_root_times(&s64);
+    int32_t rc;
 
+    k_memset(&s64, 0, sizeof(s64));
+    rc = stat64_root_node(&s64);
+    kst->st_mode = (unsigned short)s64.st_mode;
+    kst->st_uid = (unsigned short)s64.st_uid;
+    kst->st_gid = (unsigned short)s64.st_gid;
     stat_times_from_stat64(kst, &s64);
     return rc;
 }
@@ -18936,7 +18945,7 @@ static int32_t old_stat_root_node(krffs_node_t *node, struct linux_stat *kst)
     }
     /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
     kst->st_mode = node == krffs_fs->node
-                       ? S_IFDIR | 0755
+                       ? (unsigned short)(S_IFDIR | (head.mode & KRFFS_ROOT_MODE_BITS))
                        : (unsigned short)(krffs_mode_type(head.mode) | (head.mode & 07777));
     kst->st_nlink = 1;
     kst->st_uid = (unsigned short)head.uid;
@@ -18989,11 +18998,10 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
 
     if (names_tree_root(pathbuf) && vfs_root_mount()->type == &vfs_krffs_type) {
         path_buf_put(pathbuf);
-        kst.st_mode = S_IFDIR | 0755; /* drwxr-xr-x */
         kst.st_nlink = 1;
         kst.st_ino = 1;
         kst.st_blksize = 4096;
-        if (stat_root_times(&kst) != 0) {
+        if (stat_root_node(&kst) != 0) {
             return -EIO;
         }
         return old_stat_put(st, &kst, dir);
@@ -20395,8 +20403,8 @@ static int32_t utimes_allowed(struct vfs_mount *mnt, const struct vfs_stat *st)
 /**
  * Set the times of the node `kn` of the KRFFS root as `utimes_node` does,
  * with the clock's `now_sec` and `now_nsec` already read and `now_both` set
- * when both times are to be now. The root's own node keeps no times and
- * succeeds unchanged; a header that cannot be read or a store that fails is
+ * when both times are to be now. The root's own node stores its times as
+ * any node does. A header that cannot be read or a store that fails is
  * -EIO. The caller holds the big lock.
  */
 static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times, int64_t now_sec,
@@ -20413,9 +20421,6 @@ static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times
         }
     } else if (!inode_owner_or_capable(head.uid)) {
         return -EPERM;
-    }
-    if (kn == krffs_fs->node) {
-        return 0;
     }
     if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
         int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
@@ -20448,10 +20453,10 @@ static int32_t utimes_root_node(krffs_node_t *kn, const struct utime_spec *times
  * (`utimes_allowed`). A tv_nsec out of range is -EINVAL, as on Linux. A
  * synthetic file has no stored times and is -EROFS, as is a file reached
  * through a read-only mount or file system (`utimes_read_only`), before any
- * permission check; the KRFFS root's times are not changed and the call
- * succeeds, and a header of the KRFFS root that cannot be read or a store that
- * fails is -EIO. On another type the read, the check and the store are one step
- * under the file's lock (`vfs_node_lock`), as for chmod and chown.
+ * permission check; a header of the KRFFS root that cannot be read or a
+ * store that fails is -EIO. On another type the read, the check and the
+ * store are one step under the file's lock (`vfs_node_lock`), as for chmod
+ * and chown.
  */
 static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime_spec *times)
 {

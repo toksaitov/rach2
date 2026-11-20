@@ -2472,10 +2472,11 @@ static int _krffs_on_disk;
  * The root's mode is read through the page cache (`pc_copy_out`) before
  * either flush, so that a page that cannot be read or given a frame is an
  * error that keeps the flag set, and not the panic a fault in the
- * demand-paged window would be. The cleared mode is copied back the same
- * way (`pc_copy_in`), which needs no disk I/O, since `pc_sync` protects
- * frames again but evicts none, and an answer that it failed keeps the flag
- * set too.
+ * demand-paged window would be. It is read again after the flush, which
+ * sleeps, so that a chmod of the root meanwhile is kept, and the cleared
+ * mode is copied back the same way (`pc_copy_in`), which needs no disk I/O,
+ * since `pc_sync` protects frames again but evicts none, and an answer that
+ * it failed keeps the flag set too.
  */
 static int krffs_disk_mark_clean(void)
 {
@@ -2500,6 +2501,10 @@ static int krffs_disk_mark_clean(void)
 
     if (pc_sync() != 0) {
         klog(KLOG_WARN, "krffs", "flush failed before the clear; image stays dirty");
+        return -1;
+    }
+    if (pc_copy_out(KRFFS_FIELD_MODE, &mode, sizeof(mode)) != 0) {
+        klog(KLOG_WARN, "krffs", "the root's page cannot be read; image stays dirty");
         return -1;
     }
     mode = (uint16_t)(mode & ~KRFFS_MODE_DIRTY);

@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 20, 2026
 .Dt STAT 2
 .Os
 .Sh NAME
@@ -220,8 +220,10 @@ A node's type is a directory's, a FIFO's or a socket's when its stored
 mode has those bits, and a regular file's otherwise; KRFFS keeps no
 device nodes.
 The link count is 1.
-The root directory has inode 1, mode 0755, and its own stored times;
-without a mounted KRFFS image, the time helper uses boot time.
+The root directory has inode 1 and its own stored mode, owner and times,
+its mode without the set-user-ID bit, whose place holds the dirty flag;
+without a mounted KRFFS image, it is root's, of mode 0755, with the boot
+time.
 The file-system device number is 0.
 .Pp
 The root reports inode 1 through path and descriptor calls, the old

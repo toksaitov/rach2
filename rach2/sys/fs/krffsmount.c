@@ -338,11 +338,11 @@ static int kv_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
 /**
  * The attributes of `node` from its header, or -EIO when it cannot be read.
  *
- * The root directory's mode is the format's, S_IFDIR and 0755, not the
- * node's, since the root node keeps the dirty flag in the same field. A
- * directory has two links and any other node one. The inode number is the
- * offset plus one, unique at any moment, so a node that moves gets a new
- * number.
+ * The root directory's mode is S_IFDIR and the stored bits
+ * KRFFS_ROOT_MODE_BITS selects, which leave out the dirty flag that shares
+ * the field. A directory has two links and any other node one. The inode
+ * number is the offset plus one, unique at any moment, so a node that moves
+ * gets a new number.
  */
 static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
@@ -355,7 +355,7 @@ static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     }
     k_memset(st, 0, sizeof(*st));
     if (at == 0) {
-        st->mode = KRFFS_S_IFDIR | 0755u;
+        st->mode = KRFFS_S_IFDIR | (head.mode & KRFFS_ROOT_MODE_BITS);
         st->nlink = 2;
     } else {
         st->mode = krffs_mode_type(head.mode) | (head.mode & 07777u);
@@ -839,8 +839,7 @@ static uint32_t maker_uid(void)
  * The group a node made in `dir` has, in `*gid`, and the set-group-ID bit a
  * directory made there takes, in `*bit`, as Linux's `inode_init_owner` gives
  * them: a set-group-ID directory's group and its bit, or else the caller's
- * file-system group id, root's when there is no caller, and no bit. The root
- * directory's mode is the format's, which has no set-group-ID bit. 0, or
+ * file-system group id, root's when there is no caller, and no bit. 0, or
  * -EIO when the directory's header cannot be read.
  */
 static int maker_gid(struct vfs_mount *mnt, void *dir, uint32_t *gid, uint32_t *bit)
@@ -850,9 +849,6 @@ static int maker_gid(struct vfs_mount *mnt, void *dir, uint32_t *gid, uint32_t *
 
     *gid = current_proc ? proc_fsgid(current_proc) : 0;
     *bit = 0;
-    if (at == 0) {
-        return 0;
-    }
     if (krffs_head(&vol_of(mnt)->fs, at, &head) != 0) {
         return -EIO;
     }
@@ -1191,12 +1187,12 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
 /**
  * The attributes a volume keeps: the permission bits, the owner and the
  * times, under the mount's lock, with a new change time. The type field of
- * the mode is the node's kind and is not changed. The root's attributes
- * are the format's, and a call for it answers 0 and changes nothing.
- * Returns 0, -EROFS on a read-only mount, or -EIO for a header that cannot
- * be read or a store that fails, from the medium or because it would change
- * bytes on both sides of a block boundary. The stores before a failed one
- * stay, and the change time is stamped either way.
+ * the mode is the node's kind and is not changed, and the root keeps its
+ * dirty flag (`krffs_set_mode_at`). Returns 0, -EROFS on a read-only mount,
+ * or -EIO for a header that cannot be read or a store that fails, from the
+ * medium or because it would change bytes on both sides of a block
+ * boundary. The stores before a failed one stay, and the change time is
+ * stamped either way.
  */
 static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
@@ -1208,9 +1204,9 @@ static int kv_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     if (rc != 0) {
         return rc;
     }
-    if (at == 0 || krffs_head(&vol->fs, at, &head) != 0) {
+    if (krffs_head(&vol->fs, at, &head) != 0) {
         vfs_ns_unlock(mnt);
-        return at == 0 ? 0 : -EIO;
+        return -EIO;
     }
     if (what & VFS_SET_MODE) {
         rc |= krffs_set_mode_at(&vol->fs, at, (uint16_t)st->mode);

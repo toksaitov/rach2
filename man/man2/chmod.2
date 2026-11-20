@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 20, 2026
 .Dt CHMOD 2
 .Os
 .Sh NAME
@@ -113,8 +113,9 @@ KRFFS and ext2 store the low twelve bits of
 .Fa mode :
 the owner, group and other read, write and execute bits, set-user-ID,
 set-group-ID and sticky bits.
-A KRFFS root retains its fixed mode even when an authorized change
-reports success.
+A KRFFS root, the boot root's and a mounted volume's, stores all but
+set-user-ID, whose place in its mode holds the volume's dirty flag; that
+bit of a request is dropped.
 .Pp
 When the file's group is neither the caller's filesystem group nor a
 supplementary group, setting its mode clears set-group-ID unless the

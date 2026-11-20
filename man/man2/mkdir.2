@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 20, 2026
 .Dt MKDIR 2
 .Os
 .Sh NAME
@@ -125,7 +125,8 @@ Both calls require search permission on ancestor directories and
 write permission on the parent.
 The owner, group, and other permission bits are checked using the
 caller's effective IDs; effective user ID 0 overrides these checks.
-The KRFFS root directory is treated as mode 0755 and non-sticky.
+The KRFFS root directory is judged by the mode chmod gave it, sticky bit
+included.
 .Pp
 In a sticky directory,
 .Fn rmdir

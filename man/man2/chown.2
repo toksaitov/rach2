@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 20, 2026
 .Dt CHOWN 2
 .Os
 .Sh NAME
@@ -194,8 +194,8 @@ the call clears a set-id bit.
 Path resolution still requires search permission on ancestor directories.
 .Pp
 KRFFS and ext2 store ownership per file.
-On a writable mounted KRFFS volume, an otherwise permitted change to its
-root returns success without storing the IDs.
+A KRFFS root, the boot root's and a mounted volume's, stores them as any
+node does.
 FAT32 and exFAT report the mount's owner and group; a change to another
 is refused, or under vfat's
 .Ql quiet

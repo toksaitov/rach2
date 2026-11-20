@@ -1,4 +1,4 @@
-.Dd November 14, 2026
+.Dd November 20, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -381,10 +381,10 @@ for writing first.
 Timestamp changes are supported on KRFFS, ext2, FAT32, exFAT, tmpfs,
 debugfs, mqueue and pstore,
 subject to the file system's stored precision.
-On KRFFS, FAT32, and exFAT, a successful request on the volume's root
+On FAT32 and exFAT, a successful request on the volume's root
 directory leaves its timestamps unchanged.
-The root directory of the KRFFS boot file system accepts these requests
-without checking ownership; its other nodes undergo the checks above.
+The root directory of KRFFS, the boot root's and a mounted volume's,
+stores them under the checks above, as any node does.
 A node of
 .Pa /proc ,
 .Pa /sys

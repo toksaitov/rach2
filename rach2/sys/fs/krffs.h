@@ -24,6 +24,12 @@
 /* Default root node permissions (rwxr-xr-x). */
 #define KRFFS_FILE_SYSTEM_ROOT_NODE_MODE 0755
 
+/* The bits of the root node's mode that chmod stores and stat reports: the
+ * nine permission bits, set-group-ID and sticky. The root takes no
+ * set-user-ID bit, whose place holds the dirty flag (KRFFS_MODE_DIRTY), and
+ * keeps no type bits, since it is a directory by its place. */
+#define KRFFS_ROOT_MODE_BITS 03777u
+
 /*
  * The type bits of a node's mode, with the POSIX values. A node's directory
  * is the one whose id is in its `parent_id`, KRFFS_ROOT_ID for the root
@@ -49,9 +55,9 @@
  * failed, and leave an image that reads clean with data missing. A machine
  * that was killed, or whose flush failed, leaves it set. `sync` writes the
  * cache and leaves the flag. The bit lies above the nine permission bits
- * and below the 0170000 type field. No masked mode comparison sees it on
- * the root: stat reports the root with a fixed mode, chmod does not change
- * the root's mode, and the access check uses a fixed 0755 for the root. */
+ * and below the 0170000 type field. No mode comparison sees it on the root:
+ * stat, chmod and the access checks take the root's mode through
+ * KRFFS_ROOT_MODE_BITS, which leaves it out. */
 #define KRFFS_MODE_DIRTY 0004000u
 
 /* The set-id and sticky bits of a node other than the root, stored and
@@ -324,10 +330,10 @@ int krffs_chain_is_walkable(krffs_mount_t *mount);
 
 /**
  * Store the permission, set-id and sticky bits of `mode` in the node at
- * `offset`, keeping its type bits, so a directory stays a directory. 0, or
- * -1 when the header cannot be read or the store fails. The caller
- * stamps the change time, and does not pass the root, whose mode has the
- * dirty flag.
+ * `offset`, keeping its type bits, so a directory stays a directory, and
+ * of the root those of KRFFS_ROOT_MODE_BITS alone, keeping its dirty flag.
+ * 0, or -1 when the header cannot be read or the store fails. The caller
+ * stamps the change time.
  */
 int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode);
 
@@ -890,9 +896,9 @@ krffs_node_t *krffs_next_node(const krffs_node_t *node, const krffs_node_t *head
  * `field`, KRFFS_FIELD_ATIME, KRFFS_FIELD_MTIME or KRFFS_FIELD_CTIME. Each
  * is one store, as the root's attribute changes are, and is not held to the
  * rule of a field that publishes a change (`krffs_put`). 0, or -1 before the
- * mount, for a pointer outside the image, for the root's mode, which holds
- * the dirty flag, on a halted root, or when the store fails, a page that
- * cannot be read in included.
+ * mount, for a pointer outside the image, on a halted root, or when the
+ * store fails, a page that cannot be read in included. The root's mode takes
+ * the bits of KRFFS_ROOT_MODE_BITS alone and keeps its dirty flag.
  */
 int krffs_node_set_mode(krffs_node_t *node, uint16_t mode);
 int krffs_node_set_owner(krffs_node_t *node, uint32_t uid, uint32_t gid, int which);

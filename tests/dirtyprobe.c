@@ -3,20 +3,21 @@
  * root, whose spare mode bit is the dirty-mount flag.
  *
  * `KRFFS_MODE_DIRTY` and `KRFFS_MODE_SUID` are the same bit, 0004000. The flag
- * lives only on the root node, which nobody can exec and whose mode the
- * fixed-identity paths never expose, so the collision is safe as long as
- * nothing writes the root's mode. The set-id clear of chown would write it:
- * chown("/") reaches `krffs_chown_node` with the root node, since the empty
- * name resolves to the mounted root, and every chown that succeeds plans a
- * clear (`vfs_chown_plan`). `krffs_chown_node` shows the plan the root as a
- * directory by node identity and not by `KRFFS_IS_DIR`, because `mkfs`
- * stamps the root a bare 0755 with no type bits, so the directory test
- * reads false on it, and a directory keeps its set-id bits.
+ * lives only on the root node, which stores the rest of its mode, the bits
+ * of KRFFS_ROOT_MODE_BITS (03777), and never a set-user-ID bit, so every
+ * write of the root's mode must keep the flag. chmod("/") writes it, and so
+ * would the set-id clear of chown: chown("/") reaches `krffs_chown_node`
+ * with the root node, since the empty name resolves to the mounted root,
+ * and every chown that succeeds plans a clear (`vfs_chown_plan`).
+ * `krffs_chown_node` shows the plan the root as a directory by node identity
+ * and not by `KRFFS_IS_DIR`, because `mkfs` stamps the root a bare 0755 with
+ * no type bits, so the directory test reads false on it, and a directory
+ * keeps its set-id bits.
  *
- * The RAM image never sets the flag, and stat reports the root with a fixed
- * `S_IFDIR | 0755`, so neither can show a cleared flag. The probe runs on a
- * disk-backed root booted dirty and makes each call below that comes near
- * the root node's mode; the case machine.crash.dirtyprobe
+ * The RAM image never sets the flag, and stat leaves it out of the root's
+ * mode, so neither can show a cleared flag. The probe runs on a disk-backed
+ * root booted dirty and makes each call below that comes near the root
+ * node's mode; the case machine.crash.dirtyprobe
  * (tests/cases/machine.crash.json) then ends QEMU and requires the offline
  * `fsck.krffs` still to report "not cleanly unmounted".
  *
@@ -30,8 +31,10 @@
  *   chown("/", 0, 0)            0, the root node is already owned 0:0
  *   chown("/", -1, 1)           0, the one call that reaches the clear
  *   chown("/", -1, 0)           0, which puts the group back
- *   chmod("/", 0755)            0, and the stored mode is not written; an
- *                               unprivileged caller gets -EPERM
+ *   chmod("/", 01700)           0, and stat then reports S_IFDIR | 01700
+ *   chmod("/", 04755)           0, and stat reports S_IFDIR | 0755: the
+ *                               root takes no set-user-ID bit
+ *   chmod("/", 0755)            0, which puts the mode back
  *   open("/", O_WRONLY|O_TRUNC) -EISDIR, a directory takes neither
  *   creat("/", 0644)            -EISDIR, the open of a directory with O_CREAT
  *   write() on a descriptor
@@ -127,6 +130,15 @@ static void want_eq(const char *step, int got, int want)
     }
 }
 
+/** The mode stat(2) reports for the root, or the error, negated. */
+static int root_mode(void)
+{
+    unsigned char st[KSTAT_SIZE];
+    int rc = syscall2(SYS_STAT, (long)ROOT, (long)st);
+
+    return rc != 0 ? rc : (int)*(u32 *)(st + KSTAT_MODE);
+}
+
 /**
  * The probe: the calls of the table in order, each through `want_eq`.
  *
@@ -147,8 +159,12 @@ PROBE_START void _start(void)
     want_eq("chown(-1, 1) on the root", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, 1), 0);
     want_eq("restore the root's group", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, 0), 0);
 
-    /* A chmod of the root succeeds and stores nothing. */
-    want_eq("chmod the root", syscall3(SYS_CHMOD, (long)ROOT, 0755, 0), 0);
+    /* A chmod of the root stores its bits beside the flag, and no setuid. */
+    want_eq("chmod the root 01700", syscall3(SYS_CHMOD, (long)ROOT, 01700, 0), 0);
+    want_eq("the root's mode after 01700", root_mode(), 040000 | 01700);
+    want_eq("chmod the root 04755", syscall3(SYS_CHMOD, (long)ROOT, 04755, 0), 0);
+    want_eq("the root's mode after 04755", root_mode(), 040000 | 0755);
+    want_eq("chmod the root back", syscall3(SYS_CHMOD, (long)ROOT, 0755, 0), 0);
 
     /* The two truncating opens, each refused before it can reach a clear. */
     want_eq("open the root for writing with O_TRUNC",

@@ -78,6 +78,8 @@
 
 #define SEEK_END 2
 
+#define AT_FDCWD (-100)
+
 #define PROT_READ   1
 #define MAP_PRIVATE 2
 
@@ -1127,6 +1129,50 @@ static void length_rows(void)
     }
 }
 
+/**
+ * The root of a mounted KRFFS image keeps what chmod, chown and utimensat
+ * give it, as any directory does: its mode but set-user-ID, whose place
+ * holds the volume's dirty flag, its owner and its times. Each is put back,
+ * so that the read-back rows and the host's fsck find the image as it was.
+ */
+static void krffs_root_rows(void)
+{
+    unsigned char st[KSTAT_SIZE];
+    long times[4];
+    int rc;
+
+    rc = syscall3(SYS_CHMOD, (long)mount_dir, 05710, 0);
+    if (rc == 0) {
+        rc = syscall2(SYS_STAT, (long)mount_dir, (long)st);
+    }
+    if (rc != 0 || *(unsigned int *)(st + KSTAT_MODE) != (040000u | 01710u)) {
+        fail_with("a KRFFS volume's root does not keep its mode but set-user-ID", rc);
+    }
+    rc = syscall3(SYS_CHOWN, (long)mount_dir, 1000, 1001);
+    if (rc == 0) {
+        rc = syscall2(SYS_STAT, (long)mount_dir, (long)st);
+    }
+    if (rc != 0 || *(unsigned int *)(st + KSTAT_UID) != 1000u ||
+        *(unsigned int *)(st + KSTAT_GID) != 1001u) {
+        fail_with("a KRFFS volume's root does not keep its owner", rc);
+    }
+    times[0] = 1000000;
+    times[1] = 0;
+    times[2] = 2000000;
+    times[3] = 0;
+    rc = syscall4(SYS_UTIMENSAT, AT_FDCWD, (long)mount_dir, (long)times, 0);
+    if (rc == 0) {
+        rc = syscall2(SYS_STAT, (long)mount_dir, (long)st);
+    }
+    if (rc != 0 || *(unsigned int *)(st + KSTAT_MTIME) != 2000000u) {
+        fail_with("a KRFFS volume's root does not keep its times", rc);
+    }
+    if (syscall3(SYS_CHOWN, (long)mount_dir, 0, 0) != 0 ||
+        syscall3(SYS_CHMOD, (long)mount_dir, 0755, 0) != 0) {
+        fail("putting the KRFFS volume's root back");
+    }
+}
+
 /** A write inside the image mounted as `type`, read back after a detach and
  * a fresh attachment, after which the image is an ordinary file again. */
 static void read_back_rows(const char *type)
@@ -1332,6 +1378,9 @@ static void type_mode(const char *type)
     refusal_rows();
     read_only_rows();
     length_rows();
+    if (streq(type, "krffs")) {
+        krffs_root_rows();
+    }
     read_back_rows(type);
     copy_rows(type);
     ioctl_rows(type);

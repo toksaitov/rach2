@@ -20,7 +20,8 @@ extern struct krffs_file_system *KRFFS_File_System;
 /**
  * Fills `stat_buffer` from `node` with `file_type` as the type and
  * `hard_links_count` links. The mode takes the node's 07777 bits, or at the
- * root only the 0777 bits, since the dirty flag there is the set-user-ID bit.
+ * root its 03777 bits, since the dirty flag there is the set-user-ID bit, as
+ * the kernel reports them (KRFFS_ROOT_MODE_BITS).
  */
 static inline void fill_stat_buffer_for_node(struct PLATFORM_STAT *stat_buffer,
                                              struct krffs_node *node, uint16_t file_type,
@@ -30,7 +31,7 @@ static inline void fill_stat_buffer_for_node(struct PLATFORM_STAT *stat_buffer,
     stat_buffer->st_size = node->data_size;
     stat_buffer->st_mode =
         file_type |
-        (node->mode & (KRFFS_File_System && node == KRFFS_File_System->node ? 0777u : 07777u));
+        (node->mode & (KRFFS_File_System && node == KRFFS_File_System->node ? 03777u : 07777u));
     stat_buffer->st_uid = node->uid;
     stat_buffer->st_gid = node->gid;
 #if defined(APPLE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
@@ -659,7 +660,7 @@ int krffs_chmod(const char *path, mode_t mode)
     if (!node) {
         result = -ENOENT;
     } else {
-        uint16_t writable = node == KRFFS_File_System->node ? 0777u : 07777u;
+        uint16_t writable = node == KRFFS_File_System->node ? 03777u : 07777u;
 
         node->mode = (uint16_t)((node->mode & (uint16_t)~writable) | (mode & writable));
         node->attribute_change_time = krffs_get_current_node_time();

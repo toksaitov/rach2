@@ -87,7 +87,7 @@ $(HOST_FIXTURE_PREFIX)/krffs_stat-sources/krffs_stat_types.inc: rach2/sys/arch/i
 
 $(HOST_FIXTURE_PREFIX)/krffs_stat-sources/krffs_stat_funcs.inc: rach2/sys/syscall_fs.c rach2/sys/fs/vfs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c path_names_dir stat64_put stat64_node_times stat64_root_times krffs_fill_stat64 stat_times_from_stat64 stat_node_times stat_root_times do_stat64 old_stat_put old_stat_root_node do_old_stat -f rach2/sys/fs/vfs.c kfs_getattr
+	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_fs.c path_names_dir stat64_put stat64_node_times stat64_root_node krffs_fill_stat64 stat_times_from_stat64 stat_node_times stat_root_node do_stat64 old_stat_put old_stat_root_node do_old_stat -f rach2/sys/fs/vfs.c kfs_getattr
 
 # This fixture resolves only KRFFS nodes. Its synth_stat stub also serves
 # the synthetic branch of the stat calls that now take a held reference.

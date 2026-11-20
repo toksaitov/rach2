@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 20, 2026
 .Dt CHDIR 2
 .Os
 .Sh NAME
@@ -23,7 +23,8 @@ A relative path is resolved from the current working directory.
 The target must be a directory.
 Directory search uses the caller's effective user and group IDs and
 supplementary groups; the target also requires search permission.
-The KRFFS root is treated as a directory with mode 0755.
+The KRFFS root is a directory of the mode chmod gave it, 0755 as an
+image is made.
 .Pp
 The kernel records an absolute path of at most 4095 bytes for the new
 working directory: in the record the threads share when it is shorter

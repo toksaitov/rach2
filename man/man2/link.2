@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt LINK 2
 .Os
 .Sh NAME
@@ -200,7 +200,8 @@ In a sticky directory, unlink also requires effective user ID 0,
 ownership of the directory, or ownership of the entry.
 Write permission on the entry alone does not satisfy the sticky rule.
 The directory write check precedes the sticky check.
-The KRFFS boot root is treated as mode 0755 and non-sticky.
+The KRFFS boot root is judged by the mode chmod gave it, sticky bit
+included.
 .Pp
 A directory is removed with
 .Xr rmdir 2 .

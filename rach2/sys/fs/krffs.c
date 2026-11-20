@@ -4228,6 +4228,11 @@ int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode)
     if (krffs_head(mount, offset, &head) != 0) {
         return -1;
     }
+    if (offset == 0) {
+        return krffs_put_u16(
+            mount, 0, KRFFS_FIELD_MODE,
+            (uint16_t)((head.mode & ~KRFFS_ROOT_MODE_BITS) | (mode & KRFFS_ROOT_MODE_BITS)));
+    }
     return krffs_put_u16(mount, offset, KRFFS_FIELD_MODE,
                          (uint16_t)((head.mode & KRFFS_S_IFMT) | (mode & 07777u)));
 }
@@ -4425,8 +4430,16 @@ static int krffs_node_store(krffs_node_t *node, uint32_t field, const void *valu
 
 int krffs_node_set_mode(krffs_node_t *node, uint16_t mode)
 {
-    if (!krffs_fs || node == krffs_fs->node) {
+    krffs_node_t head;
+
+    if (!krffs_fs) {
         return -1;
+    }
+    if (node == krffs_fs->node) {
+        if (krffs_node_head(node, &head) != 0) {
+            return -1;
+        }
+        mode = (uint16_t)((head.mode & ~KRFFS_ROOT_MODE_BITS) | (mode & KRFFS_ROOT_MODE_BITS));
     }
     return krffs_node_store(node, KRFFS_FIELD_MODE, &mode, (uint32_t)sizeof(mode));
 }
