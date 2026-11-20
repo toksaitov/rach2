@@ -1698,9 +1698,365 @@ static void flush_skip_rows(void)
     bcache_invalidate(&vast);
 }
 
+/** Change block `blk` of `dev` as a directory's entries under the caller's
+ * orders (`bcache_change`), its byte 1 set to `byte`. 0, or the change's
+ * -errno with nothing changed. */
+static int change_entry(block_device_t *dev, uint64_t blk, unsigned char byte)
+{
+    struct bbuf *b = bcache_get(dev, blk);
+    int rc;
+
+    if (!b) {
+        return -EIO;
+    }
+    rc = bcache_change(b);
+    if (rc == 0) {
+        b->data[1] = byte;
+        bcache_dirty_entry(b);
+    }
+    bcache_release(b);
+    return rc;
+}
+
+/**
+ * Check that `bcache_sync_waiting` writes a block changed after an order
+ * met before the change, as a new file's fsync must write its name though
+ * another file's fsync wrote its inode's table block in between: the table
+ * block written after the order, before it, and gone from the cache before
+ * it. Then that it writes every block waiting for the table block, 65 of
+ * them, the first changed among them, and not the last 64 alone.
+ */
+static void met_order_rows(void)
+{
+    uint64_t i;
+    int all;
+
+    bcache_invalidate(&wide);
+    bcache_set_limit(300);
+    dirty_for(&wide, 10, 0, 0);
+    check(bcache_order_after(&wide, 10) == 0 && bcache_sync_block(&wide, 10) == 0 &&
+              change_entry(&wide, 20, 0x31) == 0,
+          "an entry changed after an order on a table block another call wrote");
+    bcache_order_end();
+    writes_made = 0;
+    check(bcache_sync_block(&wide, 10) == 0 && bcache_sync_waiting(&wide, 10) == 0 &&
+              writes_made == 1 && writes_lba[0] == 20 * 8 && !dirty_now(&wide, 20),
+          "is written by the walk of the blocks that wait for the table block");
+
+    dirty_for(&wide, 11, 0, 0);
+    check(bcache_sync_block(&wide, 11) == 0 && bcache_order_after(&wide, 11) == 0 &&
+              change_entry(&wide, 21, 0x32) == 0,
+          "an entry changed after an order on a table block on the device already");
+    bcache_order_end();
+    writes_made = 0;
+    check(bcache_sync_waiting(&wide, 11) == 0 && writes_made == 1 && writes_lba[0] == 21 * 8,
+          "is written by the walk too");
+
+    dirty_for(&wide, 12, 0, 0);
+    check(bcache_sync_block(&wide, 12) == 0, "a table block written");
+    bcache_forget(&wide, 12);
+    check(!bcache_cached(&wide, 12) && bcache_order_after(&wide, 12) == 0 &&
+              change_entry(&wide, 22, 0x33) == 0,
+          "an entry changed after an order on a table block gone from the cache");
+    bcache_order_end();
+    writes_made = 0;
+    check(bcache_sync_waiting(&wide, 12) == 0 && writes_made == 1 && writes_lba[0] == 22 * 8,
+          "is written by the walk too");
+
+    dirty_for(&wide, 30, 0, 0);
+    all = bcache_order_after(&wide, 30) == 0;
+    for (i = 100; i < 100 + BCACHE_WAITING + 1; i++) {
+        all = all && change_entry(&wide, i, 0x34) == 0;
+    }
+    bcache_order_end();
+    check(all, "65 entry blocks ordered after one table block");
+    check(bcache_sync_block(&wide, 30) == 0 && bcache_sync_waiting(&wide, 30) == 0,
+          "and the table block and the blocks that wait for it written");
+    for (i = 100, all = 1; i < 100 + BCACHE_WAITING + 1; i++) {
+        all = all && !dirty_now(&wide, i);
+    }
+    check(all, "every one of the 65, the first changed among them");
+    bcache_sync(&wide);
+    bcache_invalidate(&wide);
+}
+
+/** Whether a flush came before each of the first `n` writes since the last
+ * reset of the counts, and none came with them: each request without the
+ * flush. */
+static int writes_flushed_before(int n)
+{
+    int i;
+
+    for (i = 0; i < n && i < 8; i++) {
+        if (writes_flushes[i] < 1 || writes_flags[i] != BLOCK_REQ_NOFLUSH) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Check on `wide`, a write-through disk, that an entry block that waits by
+ * an order has the disk flushed before it, whichever write takes it, since
+ * the block it is ordered after may have gone to the disk without the
+ * flush: an entry whose order a table block written so met, which an
+ * fsync's walk writes; one whose table block goes before it, in an ordered
+ * write (`bcache_sync_block_ordered`) and in a block's sync. The stub
+ * flushes whenever asked, where a disk with nothing unflushed answers at
+ * once (`block_flush`).
+ */
+static void order_flush_entry_rows(void)
+{
+    dirty_for(&wide, 10, 0, 0);
+    check(bcache_order_after(&wide, 10) == 0 && bcache_sync_block(&wide, 10) == 0 &&
+              change_entry(&wide, 20, 0x41) == 0,
+          "an entry ordered after a table block written without the flush");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_waiting(&wide, 10) == 0 && writes_made == 1 && writes_lba[0] == 20 * 8 &&
+              writes_flushed_before(1),
+          "has the disk flushed before the walk writes it");
+
+    dirty_for(&wide, 11, 0, 0);
+    check(bcache_order_after(&wide, 11) == 0 && change_entry(&wide, 21, 0x42) == 0,
+          "an entry ordered after a dirty table block");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block_ordered(&wide, 21) == 0 && writes_made == 2 &&
+              writes_lba[0] == 11 * 8 && writes_lba[1] == 21 * 8 && writes_flushes[0] == 0 &&
+              writes_flushes[1] == 1 && writes_unflushed(2),
+          "goes after it in an ordered write, with the flush between them");
+
+    dirty_for(&wide, 12, 0, 0);
+    check(bcache_order_after(&wide, 12) == 0 && change_entry(&wide, 22, 0x43) == 0,
+          "an entry ordered after another dirty table block");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&wide, 22) == 0 && writes_made == 2 && writes_lba[0] == 12 * 8 &&
+              writes_lba[1] == 22 * 8 && writes_flushes[0] == 0 && writes_flushes[1] == 1,
+          "goes after it in a block's sync, with the flush between them");
+}
+
+/** Check on `wide`, a write-through disk, that a sync's run of two entry
+ * blocks ordered after a table block written without the flush has the
+ * disk flushed before it, though no `first` asks for it. */
+static void order_flush_run_rows(void)
+{
+    dirty_for(&wide, 13, 0, 0);
+    check(bcache_order_after(&wide, 13) == 0 && change_entry(&wide, 23, 0x44) == 0 &&
+              change_entry(&wide, 24, 0x45) == 0 && bcache_sync_block(&wide, 13) == 0,
+          "two entries ordered after a table block written without the flush");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync(&wide) == 0 && writes_made >= 1 && writes_made <= 2 &&
+              writes_lba[0] == 23 * 8 && writes_flushed_before(writes_made) &&
+              !dirty_now(&wide, 23) && !dirty_now(&wide, 24),
+          "have the disk flushed before a sync writes them");
+}
+
+/**
+ * Check on `wide`, a write-through disk, that a table block that waits for
+ * an entry block's image goes after the image with the disk flushed between
+ * them, and the entry block after both.
+ */
+static void order_flush_image_rows(void)
+{
+    struct bbuf *b;
+    int ok;
+
+    b = bcache_get_blank(&wide, 25);
+    b->data[0] = 0xD0;
+    bcache_dirty_entry(b);
+    bcache_release(b);
+    ok = bcache_order_after(&wide, 25) == 0;
+    b = ok ? bcache_get_blank(&wide, 14) : 0;
+    ok = b && bcache_change(b) == 0;
+    if (b) {
+        b->data[0] = 0x7A;
+        bcache_dirty(b);
+        bcache_release(b);
+    }
+    ok = ok && bcache_order_after(&wide, 14) == 0 && change_entry(&wide, 25, 0xD1) == 0;
+    bcache_order_end();
+    check(ok, "an entry block's image, a table block that waits for it, and the block after");
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&wide, 25) == 0 && writes_made == 3 && writes_lba[0] == 25 * 8 &&
+              writes_lba[1] == 14 * 8 && writes_lba[2] == 25 * 8 && writes_flushes[0] == 0 &&
+              writes_flags[0] == BLOCK_REQ_NOFLUSH && writes_flushes[1] == 1,
+          "go in that order, the image without the flush and the disk flushed after it");
+}
+
+/** A stick's flush, which the cache reaches through `block_flush`: the
+ * stub there counts it, so this is never called. */
+static int stick_flush(block_device_t *d, struct block_request *r)
+{
+    (void)d;
+    (void)r;
+    return 0;
+}
+
+/**
+ * Check on `wide`, made a disk with a flush that is not write-through, as a
+ * USB stick is, whose every write may wait in its cache: an entry whose
+ * order a table block's write met has the disk flushed before the fsync's
+ * walk writes it; an entry ordered after a dirty table block goes after it
+ * with the flush between them; and an `after` goes after a `first` with the
+ * flush between them, and a second `after` with no `first` written since
+ * that flush goes without one. Then, with the flush taken away, that the
+ * same met order sends no flush to a disk that keeps no cache.
+ */
+static void order_flush_stick_rows(void)
+{
+    wide.flush = stick_flush;
+    dirty_for(&wide, 15, 0, 0);
+    check(bcache_order_after(&wide, 15) == 0 && bcache_sync_block(&wide, 15) == 0 &&
+              change_entry(&wide, 26, 0x46) == 0,
+          "on a stick, an entry ordered after a table block already written");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_waiting(&wide, 15) == 0 && writes_made == 1 && writes_lba[0] == 26 * 8 &&
+              writes_flushes[0] == 1,
+          "has the stick flushed before the walk writes it");
+
+    dirty_for(&wide, 16, 0, 0);
+    check(bcache_order_after(&wide, 16) == 0 && change_entry(&wide, 27, 0x47) == 0,
+          "on a stick, an entry ordered after a dirty table block");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block_ordered(&wide, 27) == 0 && writes_made == 2 &&
+              writes_lba[0] == 16 * 8 && writes_lba[1] == 27 * 8 && writes_flushes[0] == 0 &&
+              writes_flushes[1] == 1,
+          "goes after it in an ordered write, with the flush between them");
+
+    dirty_for(&wide, 40, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&wide, 41, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&wide, 41) == 0 && writes_made == 2 && writes_lba[0] == 40 * 8 &&
+              writes_lba[1] == 41 * 8 && writes_flushes[0] == 0 && writes_flushes[1] == 1,
+          "on a stick, an `after` goes after its `first` with the flush between them");
+    dirty_for(&wide, 42, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&wide, 42) == 0 && writes_made == 1 && blockmax_flushes == 0,
+          "and the next `after`, with no `first` written since, without one");
+
+    wide.flush = 0;
+    dirty_for(&wide, 17, 0, 0);
+    check(bcache_order_after(&wide, 17) == 0 && bcache_sync_block(&wide, 17) == 0 &&
+              change_entry(&wide, 28, 0x48) == 0,
+          "on a disk with no cache, an entry ordered after a table block already written");
+    bcache_order_end();
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_waiting(&wide, 17) == 0 && writes_made == 1 && blockmax_flushes == 0,
+          "is written with no flush");
+}
+
+/** The rows of the flush before a block that waits by an order, on `wide`
+ * made a write-through disk for them. */
+static void order_flush_rows(void)
+{
+    bcache_sync(&wide);
+    bcache_invalidate(&wide);
+    bcache_set_limit(300);
+    wide.flags |= BLOCK_WRITE_THROUGH;
+    order_flush_entry_rows();
+    order_flush_run_rows();
+    order_flush_image_rows();
+    wide.flags &= ~BLOCK_WRITE_THROUGH;
+    order_flush_stick_rows();
+    bcache_sync(&wide);
+    bcache_invalidate(&wide);
+    bcache_set_limit(BCACHE_BUFFERS);
+}
+
+/**
+ * Fill the cache of 16 with eight pairs of `wide`'s blocks, as a directory
+ * that grows into a new block leaves them: entry block 200 + i, ordered
+ * before table block 220 + i, which changes and then orders the entry's
+ * second change after it, which keeps the entry's first bytes in an image.
+ * The table block waits for the image, and so does the entry block. The
+ * cache is emptied first, every device's buffers written and dropped. 1
+ * when every step succeeds.
+ */
+static int image_pairs(void)
+{
+    block_device_t *const devs[] = {&wide, &vast, &fake, &other, &sorted};
+    uint32_t written = 0;
+    struct bbuf *b;
+    uint64_t i;
+    int ok = 1;
+
+    for (i = 0; i < sizeof(devs) / sizeof(devs[0]); i++) {
+        bcache_sync(devs[i]);
+        bcache_invalidate(devs[i]);
+    }
+    bcache_set_limit(16);
+    bcache_shrink(0xFFFFFFFFu, 0, &written);
+    ok = bcache_resident() == 0;
+    for (i = 0; ok && i < 8; i++) {
+        b = bcache_get_blank(&wide, 200 + i);
+        b->data[0] = 0xD0;
+        bcache_dirty_entry(b);
+        bcache_release(b);
+        ok = bcache_order_after(&wide, 200 + i) == 0;
+        b = ok ? bcache_get_blank(&wide, 220 + i) : 0;
+        ok = b && bcache_change(b) == 0;
+        if (b) {
+            b->data[0] = 0x7A;
+            bcache_dirty(b);
+            bcache_release(b);
+        }
+        ok = ok && bcache_order_after(&wide, 220 + i) == 0 &&
+             change_entry(&wide, 200 + i, 0xD1) == 0;
+        bcache_order_end();
+    }
+    return ok && bcache_resident() == 16 && bcache_dirty_count() == 24;
+}
+
+/**
+ * Check that a full cache whose buffers all wait for images, as `image_pairs`
+ * leaves it, still gives a miss a buffer, a reserve a buffer ready and a
+ * shrink a frame: each writes an image, which no list of buffers holds, and
+ * the buffers that waited for it may be written after.
+ */
+static void image_victim_rows(void)
+{
+    uint32_t written = 0;
+    struct bbuf *b;
+
+    check(image_pairs(), "eight entry blocks and table blocks fill the cache, waiting for images");
+    b = bcache_get_blank(&wide, 300);
+    check(b != 0, "a miss writes an image to free a buffer");
+    if (b) {
+        bcache_release(b);
+    }
+    bcache_sync(&wide);
+
+    check(image_pairs(), "the pairs again");
+    check(bcache_reserve(&wide, 1) == 1, "a reserve writes an image to ready a buffer");
+    bcache_sync(&wide);
+
+    check(image_pairs(), "the pairs a third time");
+    check(bcache_shrink(1, 1, &written) == 1 && written == 1,
+          "a shrink writes an image and gives back its frame");
+    bcache_sync(&wide);
+    bcache_invalidate(&wide);
+    bcache_set_limit(BCACHE_BUFFERS);
+}
+
 /** The rows of a file's own writeback, of the blocks written last and what
  * they name, of pointer blocks, of the reserve, of a reclaim after a failed
- * write and of a sort's service point. */
+ * write, of a sort's service point, and of the orders met and the images
+ * a reclaim writes. */
 static void writeback_rows(void)
 {
     owned_rows();
@@ -1717,6 +2073,9 @@ static void writeback_rows(void)
     barred_rows();
     run_flush_rows();
     sort_rows();
+    met_order_rows();
+    order_flush_rows();
+    image_victim_rows();
 }
 
 /**

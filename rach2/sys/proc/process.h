@@ -158,7 +158,8 @@ struct bbuf; /* the buffer cache's buffer, bcache.h */
  * later changes of blocks that carry orders reach the device only after
  * block `blk` of `dev` as it stood at the count of marks `k`. `t` is the
  * block's buffer then, kept from the heap by a count in its waiters until
- * the operation ends (bcache.h). */
+ * the operation ends, or NULL when the block was on the device already
+ * (bcache.h). */
 struct bcache_token {
     struct bbuf *t;
     void *dev;
