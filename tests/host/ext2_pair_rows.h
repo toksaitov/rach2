@@ -110,7 +110,7 @@ static int pair_truncate(struct pair_side *s)
     int rc;
 
     OPS->lock_node(&mnt, s->file);
-    rc = OPS->truncate(&mnt, s->handle, 5 * 4096 + 100);
+    rc = OPS->truncate(&mnt, s->handle, 5 * 4096 + 100, 1);
     OPS->unlock_node(&mnt, s->file);
     return rc;
 }

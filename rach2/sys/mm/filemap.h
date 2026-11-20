@@ -18,6 +18,10 @@
 
 struct shmem;
 
+/** Check mmap's access mode, execute permission and mapping operation.
+ * Return zero or the error to report before creating a mapping. */
+int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot);
+
 /**
  * A mapped file for the open descriptor `e`, for a private mapping, with one
  * reference, which the caller puts once a region has taken its own; NULL

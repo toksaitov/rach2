@@ -1283,18 +1283,18 @@ static int seq_truncate(void)
     }
     rc = write_at(n, pattern, 2010, 0);
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
-        rc = OPS->truncate(&mnt, h, 700);
+        rc = OPS->truncate(&mnt, h, 700, 1);
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 1000);
+            rc = OPS->truncate(&mnt, h, 1000, 1);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 2600);
+            rc = OPS->truncate(&mnt, h, 2600, 1);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 0);
+            rc = OPS->truncate(&mnt, h, 0, 1);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 1500);
+            rc = OPS->truncate(&mnt, h, 1500, 1);
         }
         OPS->release(&mnt, h);
     }
@@ -1368,7 +1368,7 @@ static int seq_truncate_synced(void)
         rc = OPS->fsync(&mnt, n);
     }
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
-        rc = OPS->truncate(&mnt, h, 700);
+        rc = OPS->truncate(&mnt, h, 700, 1);
         OPS->release(&mnt, h);
     }
     OPS->put(&mnt, n);
@@ -2610,7 +2610,7 @@ static int join_grow(void *n, int how)
         if (OPS->open(&mnt, n, 0, &h) != 0) {
             return -1;
         }
-        rc = OPS->truncate(&mnt, h, 1024);
+        rc = OPS->truncate(&mnt, h, 1024, 1);
         OPS->release(&mnt, h);
         return rc;
     }

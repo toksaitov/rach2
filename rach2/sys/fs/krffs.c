@@ -2401,8 +2401,8 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
  * the copy. Otherwise the growth is zeroed and put on the medium before the
  * length that counts it. A shrink stores its length in `krffs_shrink_at`.
  */
-int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
-                           uint64_t *node_out)
+int krffs_resize_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size, uint64_t *node_out,
+                         int stamp_times)
 {
     uint64_t old_data_size;
     uint64_t live;
@@ -2426,6 +2426,9 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
     }
 
     old_data_size = head.data_size;
+    if (old_data_size == new_size && !stamp_times) {
+        return 0;
+    }
     rc = krffs_prepare_data(mount, node, &head, new_size);
     if (rc < 0) {
         return KRFFS_EIO;
@@ -2453,6 +2456,12 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
         return KRFFS_EIO;
     }
     return 0;
+}
+
+int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
+                           uint64_t *node_out)
+{
+    return krffs_resize_node_at(mount, node, new_size, node_out, 1);
 }
 
 int krffs_truncate_at(krffs_mount_t *mount, const char *path, uint32_t new_size, uint64_t *node_out)
@@ -4579,7 +4588,7 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, ui
     return written;
 }
 
-int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size)
+int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size, int stamp_times)
 {
     uint64_t node;
     int rc;
@@ -4588,7 +4597,7 @@ int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size)
         return KRFFS_EBAD;
     }
     node = krffs_offset_of(*nodep);
-    rc = krffs_truncate_node_at(&krffs_root_mount, node, new_size, &node);
+    rc = krffs_resize_node_at(&krffs_root_mount, node, new_size, &node, stamp_times);
     *nodep = krffs_node_of(node);
     return rc;
 }

@@ -56,7 +56,32 @@ The
 .Pa /proc
 links have fixed ownership, which
 .Fn lchown
-reaches.
+reaches; a
+.Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
+link is owned by its process, and
+.Fn lchown
+of it, or
+.Fn fchownat
+with
+.Dv AT_EMPTY_PATH
+of an
+.Dv O_PATH
+descriptor of it, stores the IDs in the link inode.
+Either asks the link's owner: a new owner, even the same one, takes the
+owner asking for itself or a privileged caller, and a new group the owner
+naming the link's group or one of its own, or a privileged caller, as
+Linux's
+.Fn chown_ok
+and
+.Fn chgrp_ok
+judge.
+.Fn lchown
+looks the link up, and returns
+.Er ENOENT
+once the descriptor is closed; an
+.Dv O_PATH
+descriptor holds the link and judges the owner its open gave it, as Linux
+does.
 .Fn chown
 follows
 .Pa /proc/self
@@ -74,7 +99,9 @@ of
 changes the program's owner on a writable file system.
 .Fn fchown
 uses the open descriptor
-.Fa fd .
+.Fa fd ;
+of a named FIFO, or of a device opened through a device node of tmpfs or
+ext2, it changes that node.
 The kernel's
 .Fn fchown
 returns
@@ -130,10 +157,23 @@ returns
 and a null one
 .Er EFAULT .
 .Ss Ownership rules
-Changing the owner requires effective user ID 0.
-Changing the group requires effective user ID 0, or ownership of the file
-and membership in the requested group.
-A request that changes neither field requires no ownership privilege.
+A caller with
+.Dv CAP_CHOWN
+over the inode may set either ID.
+Otherwise, only the owner, judged by filesystem user ID, may supply an ID.
+The owner may name itself as owner, and the file's group or one of its
+own groups as group.
+These checks also apply to an ID equal to the file's current ID.
+Any other request is
+.Er EPERM ,
+as Linux's
+.Fn chown_ok
+and
+.Fn chgrp_ok
+judge it.
+-1 leaves the corresponding ID.
+If neither ID is supplied, ownership permission is needed only when
+the call clears a set-id bit.
 Path resolution still requires search permission on ancestor directories.
 .Pp
 KRFFS and ext2 store ownership per file.
@@ -143,20 +183,32 @@ FAT32 and exFAT report the mount's owner and group; a change to either
 is refused.
 A pseudo-terminal slave under
 .Pa /dev/pts
-stores its own owner and group, but changing either requires effective
-user ID 0.
+stores its own owner and group, by the same rules.
 A directory or link made under
 .Pa /dev
 stores its owner and group as a file does, and so does a device under
 .Pa /dev ,
 whose owner and group the next open checks, as udev sets those of Linux's
 devtmpfs nodes; a device registered anew starts as root's.
+A
+.Pa /proc/PID/fd/N
+link named without following it, or by an
+.Dv O_PATH
+descriptor opened with
+.Dv O_NOFOLLOW ,
+is judged by the link's own owner, and a change stays with the link until
+the next lookup of its path gives it its process's owner again, as on
+Linux.
 Other synthetic objects under
-.Pa /dev
+.Pa /dev ,
+.Pa /proc
 and
-.Pa /proc ,
-and other descriptor kinds, have fixed root ownership.
-They accept only 0 or -1 for each ID.
+.Pa /sys ,
+and other descriptor kinds, keep the owner and group
+.Xr stat 2
+gives them: a request the rules allow succeeds when it names those IDs
+or -1, and any other is
+.Er EPERM .
 A
 .Pa /dev
 or
@@ -168,14 +220,21 @@ On Linux a pipe or a socket has an owner of its own, which
 .Fn fchown
 and
 .Dv AT_EMPTY_PATH
-change; here both have fixed root ownership.
+change; here both keep the owner
+.Xr fstat 2
+gives them.
 .Pp
-When either stored ID changes, set-user-ID is cleared on a nondirectory.
-Set-group-ID is also cleared when group execute is set.
-This applies even to a privileged caller.
-Directories keep both bits; a file without group execute keeps
-set-group-ID.
-A request that changes neither ID changes neither mode nor timestamps.
+A successful chown sets the change time, even when both IDs are -1.
+Modification time stays as it was.
+On a nondirectory, chown clears set-user-ID.
+It clears set-group-ID
+if group execute is set or if the caller is outside the file's group and
+lacks
+.Dv CAP_FSETID
+over the inode.
+A mode change requires the file's owner or
+.Dv CAP_FOWNER .
+Inotify reports a supplied ID or a mode change.
 .Ss System call numbers
 The i386 numbers are 182 for
 .Nm chown ,
@@ -298,6 +357,8 @@ was given a flag other than
 .Dv AT_SYMLINK_NOFOLLOW
 and
 .Dv AT_EMPTY_PATH ,
+an ID is one the caller's user namespace does not map, which is judged
+after the path resolves and after the read-only check, as Linux judges it,
 or the file system cannot supply the required attributes.
 .It Bq Er EIO
 File system metadata could not be read or written, or the device was removed.
@@ -329,9 +390,14 @@ reaches something else.
 The caller lacks permission to make the ownership change, the object
 has fixed ownership, or the file is immutable or append-only.
 .It Bq Er EROFS
-A change requires an attribute write on a read-only mount or a file
-system without an attribute-setting operation.
-A request that changes neither ID does not perform that write.
+The file's mount, or the mount a descriptor was opened through, is
+read-only, made so alone or over a read-only file system, the halted
+KRFFS root among them: checked once the path resolves and before any
+other check, even for a request that changes neither ID, as Linux takes
+the mount for writing first.
+.Pa /sys
+is mounted read-only though its attributes take writes, and gives none.
+A file system without an attribute-setting operation gives it too.
 .It Bq Er ESRCH
 .Fn fchown
 has no current process.

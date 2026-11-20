@@ -44,14 +44,18 @@ struct debugfs_node {
     uint64_t size;                         /* a file's, 0 until a truncation sets it */
     const struct debugfs_owner *owner_ops; /* what the node holds, or NULL */
     void *owner;
-    int64_t time_s, time_ns; /* when it was made: its access, change and modification */
+    /* Its access, modification and change times, each of its making until
+     * a setattr or a truncation stores another, as seconds and nanoseconds. */
+    int64_t atime_s, atime_ns, mtime_s, mtime_ns, ctime_s, ctime_ns;
 };
 
 /* The root directory, which lasts the life of the kernel. Linux's default
  * mode is 0700, root's: no one else may look below /sys/kernel/debug. */
-static struct debugfs_node root = {
-    "",   &root, NULL, NULL, DFS_IFDIR | 0700u, 0, 0, 1, 1, 0, NULL, NULL, NULL, NULL, NULL, 0,
-    NULL, NULL,  0,    0};
+static struct debugfs_node root = {"",   &root, NULL, NULL, DFS_IFDIR | 0700u,
+                                   0,    0,     1,    1,    0,
+                                   NULL, NULL,  NULL, NULL, NULL,
+                                   0,    NULL,  NULL, 0,    0,
+                                   0,    0,     0,    0};
 static uint64_t last_ino = 1;
 static int started;
 
@@ -105,7 +109,9 @@ static struct debugfs_node *make(struct debugfs_node *d, const char *name, uint3
     if (n->owner_ops) {
         n->owner_ops->get(n->owner);
     }
-    get_current_time(&n->time_s, &n->time_ns);
+    get_current_time(&n->atime_s, &n->atime_ns);
+    n->mtime_s = n->ctime_s = n->atime_s;
+    n->mtime_ns = n->ctime_ns = n->atime_ns;
     for (link = &d->children; *link; link = &(*link)->next) {
     }
     *link = n;
@@ -408,8 +414,67 @@ static int dfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         }
     }
     st->ino = n->ino;
-    st->atime_sec = st->mtime_sec = st->ctime_sec = n->time_s;
-    st->atime_nsec = st->mtime_nsec = st->ctime_nsec = n->time_ns;
+    st->atime_sec = n->atime_s;
+    st->atime_nsec = n->atime_ns;
+    st->mtime_sec = n->mtime_s;
+    st->mtime_nsec = n->mtime_ns;
+    st->ctime_sec = n->ctime_s;
+    st->ctime_nsec = n->ctime_ns;
+    return 0;
+}
+
+/** Set the change time of `n` to now, and its modification time with it
+ * when `data` says the size changed. */
+static void stamp(struct debugfs_node *n, int data)
+{
+    get_current_time(&n->ctime_s, &n->ctime_ns);
+    if (data) {
+        n->mtime_s = n->ctime_s;
+        n->mtime_ns = n->ctime_ns;
+    }
+}
+
+/**
+ * The `setattr` of debugfs, as Linux's debugfs_setattr and simple_setattr:
+ * the permission bits of `st->mode`, the type kept, the owner, the group,
+ * the access and modification times and a file's size, as `what` selects,
+ * and the change time set to now for every call, a VFS_SET_CTIME call with
+ * nothing else among them. The caller has judged the permission. A size on
+ * a directory is -EISDIR, and VFS_SET_FLAGS -EOPNOTSUPP, since debugfs
+ * keeps no inode flags; both change nothing. 0 otherwise.
+ */
+static int dfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
+{
+    struct debugfs_node *n = node_of(node);
+
+    (void)mnt;
+    if (what & VFS_SET_FLAGS) {
+        return -EOPNOTSUPP;
+    }
+    if ((what & VFS_SET_SIZE) && is_dir(n)) {
+        return -EISDIR;
+    }
+    if (what & VFS_SET_SIZE) {
+        n->size = st->size;
+    }
+    if (what & VFS_SET_MODE) {
+        n->mode = (n->mode & 0170000u) | (st->mode & 07777u);
+    }
+    if (what & VFS_SET_UID) {
+        n->uid = st->uid;
+    }
+    if (what & VFS_SET_GID) {
+        n->gid = st->gid;
+    }
+    if (what & VFS_SET_ATIME) {
+        n->atime_s = st->atime_sec;
+        n->atime_ns = st->atime_nsec;
+    }
+    stamp(n, (what & VFS_SET_SIZE) != 0);
+    if (what & VFS_SET_MTIME) {
+        n->mtime_s = st->mtime_sec;
+        n->mtime_ns = st->mtime_nsec;
+    }
     return 0;
 }
 
@@ -455,8 +520,9 @@ static int dfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
 }
 
 /** The `truncate` of debugfs, as Linux's simple_setattr: a file keeps no
- * bytes, so it takes the size, which stat reports, and nothing else. */
-static int dfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+ * bytes, so it takes the size, which stat reports, and the modification and
+ * change times of now, as a truncation sets them. */
+static int dfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct debugfs_node *n = node_of(handle);
 
@@ -464,7 +530,13 @@ static int dfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (is_dir(n)) {
         return -EISDIR;
     }
+    if (size > 0x7FFFFFFFu) {
+        return -EFBIG;
+    }
     n->size = size;
+    if (stamp_times) {
+        stamp(n, 1);
+    }
     return 0;
 }
 
@@ -534,13 +606,15 @@ static int dfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
     return 0;
 }
 
+static int dfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options);
+
 const struct vfs_ops debugfs_vops = {
     dfs_lookup,
     0, /* lookup_rest */
     dfs_hold,
     dfs_put,
     dfs_getattr,
-    0,            /* setattr */
+    dfs_setattr,  /* setattr */
     0,            /* open */
     0,            /* release */
     0,            /* read: the descriptor's operations read a file */
@@ -565,7 +639,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* mknod */
     0, /* pin */
     0, /* unpin */
-    0, /* remount */
+    dfs_remount,
     0, /* fallocate */
     0, /* fdatasync */
     0, /* lock_node */
@@ -586,17 +660,33 @@ const struct vfs_ops debugfs_vops = {
     0, /* phase */
 };
 
-/** The number at the start of `s` in `base`, 8 or 10, its end in `*end`. */
-static uint32_t option_number(const char *s, uint32_t base, const char **end)
+struct dfs_options {
+    uint32_t mode, uid, gid;
+    uint32_t supplied; /* VFS_SET bits for the options supplied */
+};
+
+static struct dfs_options mount_options = {0700u, 0, 0, 0};
+
+/** Read one complete unsigned option, leaving the next comma in *end. */
+static int option_number(const char *s, uint32_t base, const char **end, uint32_t *out)
 {
     uint32_t v = 0;
+    const char *start = s;
 
     while (*s >= '0' && *s < (char)('0' + base)) {
-        v = v * base + (uint32_t)(*s - '0');
-        s++;
+        uint32_t digit = (uint32_t)(*s++ - '0');
+
+        if (v > (0xffffffffu - digit) / base) {
+            return -EINVAL;
+        }
+        v = v * base + digit;
+    }
+    if (s == start || (*s && *s != ',')) {
+        return -EINVAL;
     }
     *end = s;
-    return v;
+    *out = v;
+    return 0;
 }
 
 /** Whether the option at `s` starts with `key`, which ends in `=`. */
@@ -609,34 +699,61 @@ static int option_is(const char *s, const char *key)
     return *key == '\0';
 }
 
-/** Apply Linux's root options `mode=`, `uid=` and `gid=` of `options`. */
-static void root_options(const char *options)
+/** Parse a complete list before changing the root or its mount options. */
+static int root_options(const char *s, struct dfs_options *opts)
 {
-    const char *s = options, *end;
-    uint32_t v;
-
     while (s && *s) {
         if (option_is(s, "mode=")) {
-            v = option_number(s + 5, 8, &end);
-            if (end != s + 5) {
-                root.mode = DFS_IFDIR | (v & 07777u);
+            if (option_number(s + 5, 8, &s, &opts->mode) != 0) {
+                return -EINVAL;
             }
-        } else if (option_is(s, "uid=")) {
-            v = option_number(s + 4, 10, &end);
-            if (end != s + 4) {
-                root.uid = v;
+            opts->mode &= 07777u;
+            opts->supplied |= VFS_SET_MODE;
+        } else if (option_is(s, "uid=") || option_is(s, "gid=")) {
+            int uid = *s == 'u';
+            uint32_t *id = uid ? &opts->uid : &opts->gid;
+
+            if (option_number(s + 4, 10, &s, id) != 0 || *id == 0xffffffffu) {
+                return -EINVAL;
             }
-        } else if (option_is(s, "gid=")) {
-            v = option_number(s + 4, 10, &end);
-            if (end != s + 4) {
-                root.gid = v;
+            opts->supplied |= uid ? VFS_SET_UID : VFS_SET_GID;
+        } else {
+            while (*s && *s != ',') {
+                s++;
             }
-        }
-        while (*s && *s != ',') {
-            s++;
         }
         s += *s == ',';
     }
+    return 0;
+}
+
+/** Save the option set; update only the root attributes the caller supplied. */
+static void apply_options(const struct dfs_options *opts)
+{
+    mount_options = *opts;
+    if (opts->supplied & VFS_SET_MODE) {
+        root.mode = DFS_IFDIR | opts->mode;
+    }
+    if (opts->supplied & VFS_SET_UID) {
+        root.uid = opts->uid;
+    }
+    if (opts->supplied & VFS_SET_GID) {
+        root.gid = opts->gid;
+    }
+}
+
+/** Apply a full remount to the singleton superblock. */
+static int dfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
+{
+    struct dfs_options opts = {0700u, 0, 0, 0};
+    int rc = root_options(options, &opts);
+
+    (void)mnt;
+    (void)flags;
+    if (rc == 0) {
+        apply_options(&opts);
+    }
+    return rc;
 }
 
 /*
@@ -790,8 +907,29 @@ static int32_t sw_sync_bind(fd_entry_t *e, int flags)
 /* sync/sw_sync's operations until `sw_sync_open` replaces them. */
 static const struct file_ops sw_sync_unbound = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 
+/** Emit the options that set ownership and mode of the debugfs root. */
+static void debugfs_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
+{
+    (void)mnt;
+    if (mount_options.uid != 0) {
+        emit(out, "uid", mount_options.uid, VFS_OPT_DEC);
+    }
+    if (mount_options.gid != 0) {
+        emit(out, "gid", mount_options.gid, VFS_OPT_DEC);
+    }
+    if (mount_options.mode != 0700u) {
+        emit(out, "mode", mount_options.mode, VFS_OPT_OCT);
+    }
+}
+
 int debugfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
 {
+    struct dfs_options opts = {0700u, 0, 0, 0};
+    int rc = root_options(options, &opts);
+
+    if (rc != 0) {
+        return rc;
+    }
     (void)dev;
     (void)flags;
     if (!started) {
@@ -805,11 +943,12 @@ int debugfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, co
             debugfs_remove("files");
             return -ENOMEM;
         }
+        apply_options(&opts);
         started = 1;
     }
-    root_options(options);
     mnt->priv = NULL;
     mnt->root = &root;
+    mnt->show_options = debugfs_options;
     root.refs++;
     return 0;
 }

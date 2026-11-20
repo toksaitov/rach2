@@ -1152,18 +1152,18 @@ static int seq_truncate(void)
     }
     rc = write_at(n, pattern, 6010, 0);
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
-        rc = OPS->truncate(&mnt, h, 700);
+        rc = OPS->truncate(&mnt, h, 700, 1);
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 1000);
+            rc = OPS->truncate(&mnt, h, 1000, 1);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 6600);
+            rc = OPS->truncate(&mnt, h, 6600, 1);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 0);
+            rc = OPS->truncate(&mnt, h, 0, 1);
         }
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 5000);
+            rc = OPS->truncate(&mnt, h, 5000, 1);
         }
         OPS->release(&mnt, h);
     }
@@ -1481,7 +1481,7 @@ static int rewrite_rows_run(void)
                 OPS->put(&mnt, n);
                 return -1;
             }
-            rc = OPS->truncate(&mnt, h, 0);
+            rc = OPS->truncate(&mnt, h, 0, 1);
             if (rc == 0) {
                 rc = OPS->write(&mnt, h, pattern, 1024, 0) == 1024 ? 0 : -1;
             }
@@ -1978,7 +1978,7 @@ static void join_fail_rows(void)
     used = used_clusters(image);
     rc = -1;
     if (n && OPS->open(&mnt, n, 0, &h) == 0) {
-        rc = OPS->truncate(&mnt, h, 9000);
+        rc = OPS->truncate(&mnt, h, 9000, 1);
         OPS->release(&mnt, h);
     }
     if (n) {

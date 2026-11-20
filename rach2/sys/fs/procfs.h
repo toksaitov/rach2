@@ -16,6 +16,13 @@ struct vpath;
 struct fd_entry;
 struct synth_owner;
 struct vfs_ref;
+struct synth_dir;
+struct vfs_mount;
+
+/** Judge a retained proc directory by its inode mode and permission hook.
+ * A gone process base, task listing or fdinfo directory gives ESRCH. */
+int proc_held_dir_permission(const struct vpath *vp, const struct synth_owner *own, int want,
+                             int real);
 
 /* st_dev for /proc nodes, distinct from KRFFS (0) and devfs (DEVFS_FSID). */
 #define PROCFS_FSID 6u
@@ -25,10 +32,14 @@ struct vfs_ref;
  * reach, Linux's nsfs's 0:4. */
 #define NSFS_DEV    4u
 
+/** Give kid's number in the proc mount's namespace, or zero if invisible.
+ * A zero namespace selects the caller's view for an unmounted path. */
+uint32_t procfs_pid_number(uint32_t kid, uint32_t pidns_ino);
+
 /** The kernel's id of the process or thread whose /proc directory has the
- * number `pid` in the caller's PID namespace, or of the caller's process for
+ * number `pid` in the given PID namespace, or of the caller's process for
  * SYNTH_PID_SELF; -1 when there is none that has not been reaped. */
-int procfs_resolve_pid(int pid);
+int procfs_resolve_pid(int pid, uint32_t pidns_ino);
 
 /** Whether the caller may see process `pid`'s memory map and descriptors,
  * as Linux's ptrace check with PTRACE_MODE_FSCREDS asks: a thread of its
@@ -37,10 +48,33 @@ int procfs_resolve_pid(int pid);
  * not privileged. 0 when there is no such process. */
 int procfs_may_read(int pid);
 
+/** `procfs_may_read`, judged with `use_real` by the caller's real user and
+ * group IDs and with privilege only for a real user ID of 0, as access(2)'s
+ * credentials have it (`do_faccessat`, fs/open.c:439-460). */
+int procfs_may_read_as(int pid, int use_real);
+
 /** Whether process `pid` is the caller's own, a thread of the caller's
  * thread group, as Linux's same_thread_group asks: 1 or 0, 0 when there is
  * no such process. */
 int procfs_same_group(int pid);
+
+/** Return the kernel PID retained by an open proc inode, or -1 after
+ * that PID lifetime ends. The caller holds the big lock. */
+int procfs_held_pid(const struct synth_owner *own);
+
+struct synth_dir;
+/** Return the directory's coordinates in the proc mount's PID namespace, or
+ * -ENOENT if the retained task has exited or has no name in the mount. */
+int procfs_dir_coords(const struct synth_dir *sd, int *pid, int *tid);
+
+/** Replace a canonical proc directory name with its path through mnt.
+ * Return zero, -ENOENT outside a bind root, or -ENAMETOOLONG. */
+int procfs_dir_name(const struct vfs_mount *mnt, char *path, int cap);
+
+/** Write a held proc directory's path relative to its mount root.
+ * Return the byte count, or a negative errno. The string is terminated. */
+int procfs_dir_relative(const struct synth_dir *sd, const struct vfs_mount *mnt, char *buf,
+                        int cap);
 
 /** The mode of the file `procfile` of a process's directory when only its
  * owner may open it, Linux's: 0400 for environ, auxv and syscall, 0600 for
@@ -154,12 +188,12 @@ int procfs_open_ns(int pid, int kind, int flags);
  * (`mm_exe_open`), which stay while nothing sleeps. 0, -ENOENT for no such
  * process or no program, or -EACCES as for the link's text.
  */
-int procfs_exe_file(int pid, struct vfs_ref *out);
+int procfs_exe_file(int pid, struct vfs_ref *out, int use_real);
 
 /* Hold the selected entry of the same executable, after the caller has
  * obtained its file with no intervening sleep; NULL if none is recorded. */
 struct vfs_name;
-struct vfs_name *procfs_exe_entry(int pid);
+struct vfs_name *procfs_exe_entry(int pid, int use_real);
 
 /**
  * The object the /proc link `vp` refers to, which the resolver goes on from
@@ -168,22 +202,22 @@ struct vfs_name *procfs_exe_entry(int pid);
  * /proc/PID/cwd and root, those of the process's working directory and root.
  * The node is not held: the descriptor is read under its table's lock, and
  * the node stays while the caller, which holds the big lock that the release
- * of a description on a mount takes, does not sleep. A directory of /dev,
- * /proc or /sys that a descriptor is open on, or a working directory there,
- * has no node, and its path from the root is written into `buf` of `cap`
- * bytes, without a terminator, instead. Returns 0 with `out` filled, the
+ * of a description on a mount takes, does not sleep. A positive length
+ * gives a pathname in buf. When out->mnt is set the name is relative to
+ * that mount's root. Otherwise it is absolute. Returns 0 with an object, the
  * path's length, or a negative errno: -ENOENT for no such process or
  * descriptor, -EACCES for a caller that may not read the process's memory,
  * as Linux asks a ptrace read check of these links, and -ENOTDIR for a
  * descriptor on anything that is neither a file nor a directory, a pipe, a
  * socket or a device, which no path goes on past.
  */
-int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap);
+int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap,
+                       int use_real);
 
 /** PID-directory enumeration: the pid in the caller's PID namespace of the
  * `n`th process it sees, counting from 0, one for each thread group, or -1
  * past the end. */
-int procfs_nth_pid(int n);
+int procfs_nth_pid(int n, uint32_t pidns_ino);
 
 /*
  * The inode numbers stat gives /proc and its files outside /proc/<pid>, one
@@ -335,8 +369,10 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
  * share, when its inode keeps that owner (struct synth_owner): a file of
  * /proc/<pid> outside its net directory, a descriptor's fdinfo file, a
  * process's fd, fdinfo or task directory, or its exe, cwd, root, descriptor
- * or namespace link. Any other node, and a process gone, change nothing. */
-void procfs_lookup_owner(const struct vpath *vp);
+ * or namespace link. Returns -ENOENT and detaches held descriptor inodes
+ * when their slot is closed, leaving their metadata as it was. Otherwise
+ * returns 0. */
+int procfs_lookup_owner(const struct vpath *vp);
 
 /** Put `o`, the zeroed record of a descriptor just opened on the node `vp`
  * names, on the list of kept owners when that node's inode keeps its owner
@@ -344,6 +380,32 @@ void procfs_lookup_owner(const struct vpath *vp);
  * owner of this lookup, the open's. Any other node, or a process gone,
  * leaves `o` off the list, with `kept` 0. */
 void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp);
+
+/** Register a new holder of a retained inode, including after task exit. */
+void procfs_owner_copy(struct synth_owner *to, const struct synth_owner *from);
+
+/** Check search or open of a proc descriptor directory with the selected
+ * filesystem IDs. Returns 0, -EACCES, or -ENOENT for a process gone. */
+int procfs_fd_dir_access(int kind, int pid, int want, int use_real);
+
+/** The type and mode of the link /proc/`pid`/fd/`fd`, into `*mode`, as
+ * Linux's `tid_fd_update_inode` sets them from the descriptor's access
+ * (fs/proc/fd.c:122-133): S_IFLNK with read and execute for the owner when
+ * the descriptor reads, write and execute when it writes, and no bit for an
+ * O_PATH one. 0, or -ENOENT when the process or the descriptor is gone. */
+int procfs_fd_link_mode(int pid, int fd, uint32_t *mode);
+
+/** The inode number of descriptor link `vp` for the resolved process
+ * `id`, distinct from any earlier unlinked inode whose holder remains. */
+uint32_t procfs_fd_link_ino(const struct vpath *vp, int id);
+
+/** Store the owner `uid` and group `gid` a chown of the descriptor's link
+ * `vp` gives it, -1 keeping one, in every kept owner of its node, as Linux's
+ * `proc_setattr` stores them in the inode until a lookup sets them again:
+ * the node `held` keeps when it is on the list, and otherwise the node `vp`
+ * names now. */
+void procfs_owner_chown(const struct vpath *vp, const struct synth_owner *held, uint32_t uid,
+                        uint32_t gid);
 
 /** Take `o` off the list of kept owners, if it is on it; at the last close
  * of the description that holds it, before its record is freed. */
@@ -357,6 +419,10 @@ void procfs_owner_drop(struct synth_owner *o);
  * gid_map, setgroups and comm, whose mode lets the owner write them, and 0
  * for another file; -1 when `e` is no such descriptor. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
+
+/** Apply the ptrace permission hook of an open fdinfo file, using the
+ * selected IDs; 0 for any other descriptor. */
+int procfs_fdinfo_access(const struct fd_entry *e, int use_real);
 
 /** The permission bits of `e` when it is open on a /proc/sys file, a /sys
  * file a privileged caller may write, or /proc/acpi/call: 0600 for

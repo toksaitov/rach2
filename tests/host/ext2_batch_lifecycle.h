@@ -311,7 +311,7 @@ static int lifecycle_pair(void **nodes, void **handles, uint32_t first)
 
             nodes[n] = node;
             if (OPS->open(&mnt, node, 2, &handles[n]) != 0 ||
-                OPS->truncate(&mnt, handles[n], (uint64_t)first * 4096) != 0 ||
+                OPS->truncate(&mnt, handles[n], (uint64_t)first * 4096, 1) != 0 ||
                 OPS->getattr(&mnt, node, &st[n]) != 0) {
                 return 0;
             }

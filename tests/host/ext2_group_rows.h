@@ -285,7 +285,7 @@ static int group_truncate(void *t)
         return rc;
     }
     OPS->lock_node(&mnt, t);
-    rc = OPS->truncate(&mnt, h, 0);
+    rc = OPS->truncate(&mnt, h, 0, 1);
     OPS->unlock_node(&mnt, t);
     OPS->release(&mnt, h);
     return rc;

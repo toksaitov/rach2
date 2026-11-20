@@ -22,8 +22,9 @@
 .Fn chmod
 changes the permission and special mode bits of
 .Fa path .
-The caller must own the file, as judged by its effective user ID, or
-have effective user ID 0.
+The caller's filesystem user ID must own the file, or the caller must hold
+.Dv CAP_FOWNER
+over that owner.
 File type bits are not changed.
 .Fn fchmod
 applies the change to the file or directory referred to by
@@ -115,15 +116,21 @@ set-group-ID and sticky bits.
 A KRFFS root retains its fixed mode even when an authorized change
 reports success.
 .Pp
-On the KRFFS boot root, an unprivileged owner setting the mode of a
-regular file loses the set-group-ID bit when the file's group is neither
-the caller's effective group nor a supplementary group.
-On other mounts this clearing also applies to directories.
+When the file's group is neither the caller's filesystem group nor a
+supplementary group, setting its mode clears set-group-ID unless the
+caller holds
+.Dv CAP_FSETID
+over the inode.
+This also applies to directories.
 .Pp
-A non-root write or truncate clears set-user-ID on a regular file and
-clears set-group-ID when group execute is set.
-Changing the owner or group applies the same clearing even for root.
-An unchanged owner and group leave these bits alone.
+A write or truncate by a caller without
+.Dv CAP_FSETID
+clears set-user-ID on a regular file and clears set-group-ID when group
+execute is set or the caller is outside the file's group.
+On a nondirectory, chown clears set-user-ID and executable set-group-ID
+even if both IDs are unchanged or omitted.
+See
+.Xr chown 2 .
 .Pp
 FAT32 and exFAT store only a read-only attribute.
 As on Linux, the requested mode is first cut by the mount's umask; its
@@ -139,7 +146,7 @@ Their root directory has no entry to change and remains unchanged.
 A pseudoterminal slave under
 .Pa /dev/pts
 stores the low nine permission bits on the terminal, by path or descriptor,
-under the owner-or-root rule.
+under the ownership check above.
 A directory or link made under
 .Pa /dev
 stores its permission bits under the same rule, and so does a device under
@@ -147,18 +154,36 @@ stores its permission bits under the same rule, and so does a device under
 whose bits the next open checks, as udev sets those of Linux's devtmpfs
 nodes; a device registered anew, such as a display that comes again,
 starts with its driver's mode.
-A
+A followed
 .Pa /proc/ Ns Ar PID Ns Pa /fd/ Ns Ar N
-link changes what the descriptor is open on.
+link changes what the descriptor is open on, judged by the mount the
+descriptor was opened through; the link itself, through an
+.Dv O_PATH
+descriptor of it, gives
+.Er EOPNOTSUPP ,
+as any symbolic link does.
+.Fn fchmod
+of a named FIFO, or of a device opened through a device node of tmpfs or
+ext2, changes that node.
 Other synthetic objects and descriptors have fixed metadata.
-For these, effective user ID 0 receives success without a change;
+For these, filesystem user ID 0 receives success without a change;
 other callers receive
 .Er EPERM ,
 even when requesting the existing mode.
 .Pp
-A read-only mount refuses a mode update with
+A read-only mount or file system refuses a mode update with
 .Er EROFS
-after the ownership check.
+once the path resolves, before any other check, as Linux takes the
+mount for writing first: a mount of the file, or the mount a descriptor
+was opened through, made read-only alone or over a read-only file system,
+the halted KRFFS root among them.
+This holds for a device or directory of
+.Pa /dev
+and for
+.Pa /proc
+reached through a read-only bind, but not for
+.Pa /sys ,
+which is mounted read-only though its attributes take writes.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set
@@ -250,7 +275,8 @@ The caller is neither owner nor root, an unprivileged caller addresses
 fixed metadata, FAT32 or exFAT cannot represent the requested mode, or
 the file is immutable or append-only.
 .It Er EROFS
-The mount is read-only or the file system has no attribute-setting operation.
+The mount or its file system is read-only, or the file system has no
+attribute-setting operation.
 .It Er ESRCH
 The raw
 .Fn fchmod

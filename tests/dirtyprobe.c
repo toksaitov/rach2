@@ -6,11 +6,12 @@
  * lives only on the root node, which nobody can exec and whose mode the
  * fixed-identity paths never expose, so the collision is safe as long as
  * nothing writes the root's mode. The set-id clear of chown would write it:
- * `cred_kill_setid` runs when a chown changes a field, and chown("/") reaches
- * `krffs_chown_node` with the root node, since the empty name resolves to the
- * mounted root. The clear skips the root by node identity and not by
- * `KRFFS_IS_DIR`, because `mkfs` stamps the root a bare 0755 with no type
- * bits, so the directory test reads false on it.
+ * chown("/") reaches `krffs_chown_node` with the root node, since the empty
+ * name resolves to the mounted root, and every chown that succeeds plans a
+ * clear (`vfs_chown_plan`). `krffs_chown_node` shows the plan the root as a
+ * directory by node identity and not by `KRFFS_IS_DIR`, because `mkfs`
+ * stamps the root a bare 0755 with no type bits, so the directory test
+ * reads false on it, and a directory keeps its set-id bits.
  *
  * The RAM image never sets the flag, and stat reports the root with a fixed
  * `S_IFDIR | 0755`, so neither can show a cleared flag. The probe runs on a
@@ -129,18 +130,18 @@ static void want_eq(const char *step, int got, int want)
 /**
  * The probe: the calls of the table in order, each through `want_eq`.
  *
- * Of the four chowns, the first changes nothing and needs no right, and the
- * second names the ids the root node already has, so neither changes a
- * field and neither reaches the set-id clear. The third moves the group, so
- * it is the one call that reaches `cred_kill_setid` with the root node, and
- * the fourth puts the group back, so the image is left as it was found.
+ * Of the four chowns, the first changes nothing, and the second names the
+ * ids the root node already has, so neither changes an id. The third moves
+ * the group and the fourth puts it back, so the image is left as it was
+ * found. Each plans the set-id clear over the root node, which must not
+ * reach its mode.
  */
 PROBE_START void _start(void)
 {
     char byte = 'x';
     int fd;
 
-    /* Only the third chown changes a field, and so reaches the clear. */
+    /* Every chown plans the clear; the root, a directory, keeps its bits. */
     want_eq("chown(-1, -1) on the root", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, (int)KEEP), 0);
     want_eq("chown(0, 0) on the root", syscall3(SYS_CHOWN, (long)ROOT, 0, 0), 0);
     want_eq("chown(-1, 1) on the root", syscall3(SYS_CHOWN, (long)ROOT, (int)KEEP, 1), 0);

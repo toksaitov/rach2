@@ -208,6 +208,15 @@ const char *synth_ns_name(int kind);
  * (`procfs_resolve_pid`). */
 #define SYNTH_PID_SELF (-1)
 
+/** Whether a synthetic directory of `kind` is one of a process's, whose
+ * process must be there and whose record keeps its pid: /proc/<pid> and its
+ * `fd`, `fdinfo`, `task` and `ns`. */
+static __inline__ int synth_dir_of_proc(int kind)
+{
+    return kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_FDINFO_DIR ||
+           kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_NS_DIR;
+}
+
 /*
  * A classified path: its kind, and the coordinates of its node, each
  * meaningful for the kinds its comment names. A VNODE_ENOTDIR path keeps
@@ -229,6 +238,7 @@ struct vpath {
     int syskey;     /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
                      * VNODE_DEV_MADE: the entry's id (devtree.h) */
     int sysreg;     /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
+    uint32_t pidns_ino; /* PID namespace number of the proc mount */
 };
 
 /**
@@ -279,9 +289,27 @@ struct synth_owner {
     int kept;     /* 1 while on procfs's list of kept owners */
     int node[4];  /* kind, file or descriptor, process or
                      thread, and a thread's process or 0 */
-    uint32_t uid; /* the owner the last lookup gave the node */
+    uint32_t uid; /* the owner the last lookup or chown gave the node */
     uint32_t gid;
+    /* A descriptor's link's type and mode, which the last lookup set from
+     * the descriptor's access (`procfs_fd_link_mode`); 0 for another node. */
+    uint32_t mode;
+    uint32_t ino;             /* a held descriptor link's inode number */
+    uint64_t serial;          /* lifetime of the kernel PID in node[2] */
+    uint64_t detached;        /* 0 for the live inode, else its invalidation serial */
     struct synth_owner *next; /* the next kept owner */
+};
+
+/*
+ * The record from the heap that the `priv` of an O_PATH descriptor on a
+ * synthetic leaf, FD_TYPE_SYNTH_PATH, points at: the node's classified path,
+ * first so that `priv` reads as a `struct vpath`, and the owner its last
+ * lookup gave it when its inode keeps one (struct synth_owner). The release
+ * of the description's last reference frees it (`fd_release_objects`).
+ */
+struct synth_path {
+    struct vpath vp;
+    struct synth_owner own;
 };
 
 /*
@@ -298,6 +326,7 @@ struct synth_dir {
     int pid;
     int used; /* 1 from its allocation; nothing reads it */
     int tid;
+    uint32_t pidns_ino;     /* namespace of the mounted proc root */
     struct synth_owner own; /* a /proc/PID/fd, fdinfo or task directory's
                                owner, which fstat and fchdir read */
 };

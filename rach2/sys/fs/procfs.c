@@ -24,6 +24,7 @@
 #include "../panic.h"
 #include "../irq.h"
 #include "procfs.h"
+#include "permission.h"
 
 #include "../latency.h"
 #include "../dmabuf/dmabuf.h"
@@ -555,26 +556,55 @@ static void ap_int(struct procfs_text *t, int v)
 
 /* The queries over the process table. */
 
-int procfs_resolve_pid(int pid)
+uint32_t procfs_pid_number(uint32_t kid, uint32_t pidns_ino)
+{
+    process_t *p;
+    const struct pidns *ns;
+
+    if (!pidns_ino) {
+        return pid_seen(kid);
+    }
+    if (pidns_ino == init_pidns.c.inum) {
+        return kid;
+    }
+    p = get_process(kid);
+    for (ns = p ? p->pidns : NULL; ns; ns = ns->parent) {
+        if (ns->c.inum == pidns_ino) {
+            return p->nspid[ns->level];
+        }
+    }
+    return 0;
+}
+
+int procfs_resolve_pid(int pid, uint32_t pidns_ino)
 {
     process_t *p;
 
     if (pid == SYNTH_PID_SELF) {
-        return current_proc ? (int)current_proc->tgid : -1;
+        return current_proc && procfs_pid_number(current_proc->tgid, pidns_ino)
+                   ? (int)current_proc->tgid
+                   : -1;
     }
-    if (pid < 0) {
+    if (pid <= 0) {
         return -1;
     }
-    p = proc_named((uint32_t)pid);
-    if (!p || p->state == PROC_UNUSED) {
-        return -1;
+    if (!pidns_ino || pidns_ino == proc_pidns(current_proc)->c.inum) {
+        p = proc_named((uint32_t)pid);
+    } else if (pidns_ino == init_pidns.c.inum) {
+        p = get_process((uint32_t)pid);
+    } else {
+        for (p = proc_list; p; p = p->next) {
+            if (p->state != PROC_UNUSED && procfs_pid_number(p->pid, pidns_ino) == (uint32_t)pid) {
+                break;
+            }
+        }
     }
-    return (int)p->pid;
+    return p && p->state != PROC_UNUSED ? (int)p->pid : -1;
 }
 
 int procfs_resolve_id(const struct vpath *vp)
 {
-    int pid = procfs_resolve_pid(vp->pid);
+    int pid = procfs_resolve_pid(vp->pid, vp->pidns_ino);
     process_t *p;
     process_t *t;
 
@@ -582,7 +612,11 @@ int procfs_resolve_id(const struct vpath *vp)
         return pid;
     }
     p = get_process((uint32_t)pid);
-    t = proc_named((uint32_t)vp->tid);
+    {
+        int tid = procfs_resolve_pid(vp->tid, vp->pidns_ino);
+
+        t = tid > 0 ? get_process((uint32_t)tid) : NULL;
+    }
     if (!p || !t || t->state == PROC_UNUSED || t->tg != p->tg ||
         (t->state == PROC_ZOMBIE && t != t->tg->leader)) {
         return -1;
@@ -650,6 +684,7 @@ static int procfs_task_prio(const process_t *p)
 }
 
 static int procfs_may_read_mem(const process_t *p);
+static int procfs_may_trace(const process_t *p, int use_real);
 
 /* The bits of Linux's task_struct.flags that stat's field 9 shows: a
  * kernel thread, PF_KTHREAD (include/linux/sched.h). */
@@ -909,31 +944,35 @@ int procfs_fd_count(int pid)
     return n;
 }
 
-/**
- * Whether the caller may see what /proc shows of `p` behind Linux's ptrace
- * check with PTRACE_MODE_FSCREDS, `__ptrace_may_access`: a thread of `p`'s
- * own process; a privileged caller, which stands for CAP_SYS_PTRACE; or a
- * caller whose file-system user and group IDs are each of `p`'s three, with
- * `p`'s address space dumpable and `p` not privileged, which stands for the
- * subset test of its permitted capabilities in `cap_ptrace_access_check`.
- * READ and ATTACH differ on Linux only by Yama, which Rach2 does not have,
- * so one test serves both: the memory, environment, auxiliary vector and
- * maps, the syscall and wchan files, the links and the descriptors.
- */
+/** Apply the ptrace filesystem-credential check to an ordinary proc read. */
 static int procfs_may_read_mem(const process_t *p)
 {
-    uint32_t uid, gid;
+    return procfs_may_trace(p, 0);
+}
 
-    if (!current_proc) {
+/** Judge a proc walk as ptrace READ_FSCREDS with its selected credentials.
+ * Same-group access passes. Otherwise compare all three IDs, dumpability
+ * and permitted capabilities, or require SYS_PTRACE in the target namespace. */
+static int procfs_may_trace(const process_t *p, int use_real)
+{
+    process_t *c = current_proc;
+    uint32_t uid, gid, cap0;
+
+    if (!c) {
         return 0;
     }
-    if (p->tg == current_proc->tg || proc_privileged(current_proc)) {
+    if (p->tg == c->tg) {
         return 1;
     }
-    uid = proc_fsuid(current_proc);
-    gid = proc_fsgid(current_proc);
+    cap0 = fs_access_caps(c, 0, use_real);
+    if (ns_capable_with(c, p->userns, (cap0 & (1u << CAP_SYS_PTRACE)) != 0)) {
+        return 1;
+    }
+    uid = use_real ? c->ruid : proc_fsuid(c);
+    gid = use_real ? c->rgid : proc_fsgid(c);
     return uid == p->ruid && uid == p->euid && uid == p->suid && gid == p->rgid && gid == p->egid &&
-           gid == p->sgid && (!p->mm || p->mm->dumpable == 1u) && !proc_privileged(p);
+           gid == p->sgid && (!p->mm || p->mm->dumpable == 1u) && c->userns == p->userns &&
+           !(cap_word(p, 0) & ~cap0) && !(cap_word(p, 1) & ~fs_access_caps(c, 1, use_real));
 }
 
 uint32_t procfs_owner_mode(int procfile)
@@ -974,6 +1013,117 @@ int procfs_may_read(int pid)
     return p && procfs_may_read_mem(p);
 }
 
+int procfs_may_read_as(int pid, int use_real)
+{
+    process_t *p = procfs_proc(pid);
+
+    return p && procfs_may_trace(p, use_real);
+}
+
+int procfs_held_pid(const struct synth_owner *own)
+{
+    process_t *p = own->kept ? procfs_proc(own->node[2]) : NULL;
+
+    return p && p->serial == own->serial && (p->state != PROC_ZOMBIE || p == p->tg->leader)
+               ? own->node[2]
+               : -1;
+}
+
+int procfs_dir_coords(const struct synth_dir *sd, int *pid, int *tid)
+{
+    int id;
+
+    *pid = sd->pid;
+    *tid = sd->tid;
+    if (!sd->own.kept) {
+        return 0;
+    }
+    id = procfs_held_pid(&sd->own);
+    if (id < 0) {
+        return -ENOENT;
+    }
+    *pid = (int)procfs_pid_number((uint32_t)(*tid ? sd->own.node[3] : id), sd->pidns_ino);
+    if (*tid) {
+        *tid = (int)procfs_pid_number((uint32_t)id, sd->pidns_ino);
+    }
+    return *pid && (!sd->tid || *tid) ? 0 : -ENOENT;
+}
+
+/** Return the part of a canonical proc name below the root of this mount. */
+static const char *proc_dir_suffix(const struct vfs_mount *mnt, const char *path)
+{
+    const char *s, *prefix;
+
+    if (path[0] != '/' || path[1] != 'p' || path[2] != 'r' || path[3] != 'o' || path[4] != 'c' ||
+        (path[5] && path[5] != '/')) {
+        return NULL;
+    }
+    s = path + 5;
+    prefix = mnt->bind_of ? mnt->bind_root : "";
+    while (*prefix == '/') {
+        prefix++;
+    }
+    if (*s == '/') {
+        s++;
+    }
+    if (*prefix) {
+        while (*prefix && *prefix == *s) {
+            prefix++;
+            s++;
+        }
+        if (*prefix || (*s && *s != '/')) {
+            return NULL;
+        }
+        if (*s == '/') {
+            s++;
+        }
+    }
+    return s;
+}
+
+int procfs_dir_name(const struct vfs_mount *mnt, char *path, int cap)
+{
+    const char *s = proc_dir_suffix(mnt, path);
+    size_t base = k_strlen(mnt->covered_path), len;
+
+    if (!s) {
+        return -ENOENT;
+    }
+    len = k_strlen(s);
+    if (base + (len != 0) + len >= (size_t)cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memmove(path + base + (len != 0), s, len + 1);
+    k_memcpy(path, mnt->covered_path, base);
+    if (len) {
+        path[base] = '/';
+    }
+    return 0;
+}
+
+int procfs_dir_relative(const struct synth_dir *sd, const struct vfs_mount *mnt, char *buf, int cap)
+{
+    char path[256];
+    const char *s;
+    int pid, tid, len;
+    int rc = procfs_dir_coords(sd, &pid, &tid);
+
+    if (rc != 0 && (!sd->own.kept || procfs_held_pid(&sd->own) >= 0))
+        return rc;
+    synth_dir_path(sd->kind, pid, tid, path, sizeof(path));
+    s = proc_dir_suffix(mnt, path);
+    if (!s) {
+        return -ENOENT;
+    }
+    s = *s ? s : ".";
+    len = (int)k_strlen(s);
+    if (len >= cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(buf, s, (size_t)len + 1);
+    return len;
+}
+
 int procfs_same_group(int pid)
 {
     process_t *p = procfs_proc(pid);
@@ -981,14 +1131,40 @@ int procfs_same_group(int pid)
     return p && current_proc && p->tg == current_proc->tg;
 }
 
-int procfs_exe_file(int pid, struct vfs_ref *out)
+int procfs_fd_dir_access(int kind, int pid, int want, int use_real)
+{
+    process_t *p = current_proc;
+    uint32_t uid, gid;
+
+    if (kind == VNODE_PROC_FDINFO_DIR) {
+        if (procfs_pid_owner(pid, 0040555u, &uid, &gid) != 0) {
+            return -ENOENT;
+        }
+        return procfs_may_read_as(pid, use_real) &&
+                       inode_may_access(uid, gid, 0040555u, (uint32_t)want, use_real)
+                   ? 0
+                   : -EACCES;
+    }
+    if (kind != VNODE_PROC_FD_DIR) {
+        return 0;
+    }
+    if (procfs_pid_owner(pid, 0040500u, &uid, &gid) != 0) {
+        return -ENOENT;
+    }
+    if (!p || !want || procfs_same_group(pid)) {
+        return 0;
+    }
+    return inode_may_access(uid, gid, 0040500u, (uint32_t)want, use_real) ? 0 : -EACCES;
+}
+
+int procfs_exe_file(int pid, struct vfs_ref *out, int use_real)
 {
     process_t *p = procfs_proc(pid);
 
     if (!p || !p->mm || !p->mm->exe_file) {
         return -ENOENT;
     }
-    if (!procfs_may_read_mem(p)) {
+    if (!procfs_may_trace(p, use_real)) {
         return -EACCES;
     }
     out->mnt = p->mm->exe_file->vmnt;
@@ -996,11 +1172,11 @@ int procfs_exe_file(int pid, struct vfs_ref *out)
     return 0;
 }
 
-struct vfs_name *procfs_exe_entry(int pid)
+struct vfs_name *procfs_exe_entry(int pid, int use_real)
 {
     process_t *p = procfs_proc(pid);
 
-    return p && p->mm && p->mm->exe_file && procfs_may_read_mem(p)
+    return p && p->mm && p->mm->exe_file && procfs_may_trace(p, use_real)
                ? vfs_name_ref(p->mm->exe_file->name)
                : NULL;
 }
@@ -1287,19 +1463,95 @@ int procfs_readlink_dir(int pid, int root, char *buf, int cap)
     return exe_put(buf, cap, 0, root ? "/" : proc_cwd(p));
 }
 
-int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap)
+/** Return the mount and remaining path for a jump through a cwd link. */
+static int procfs_cwd_target(process_t *p, struct vfs_ref *out, char *buf, int cap)
+{
+    if (!p->fs->cwd_mnt) {
+        return exe_put(buf, cap, 0, proc_cwd(p));
+    }
+    if (p->fs->cwd_mnt->type == &vfs_procfs_type) {
+        const char *cwd = proc_cwd(p);
+        const char *prefix = p->fs->cwd_mnt->covered_path;
+
+        out->mnt = p->fs->cwd_mnt;
+        out->node = p->fs->cwd_node;
+        if (vfs_proc_dir_owner(out))
+            return 0;
+        while (*prefix && *prefix == *cwd) {
+            prefix++;
+            cwd++;
+        }
+        if (!*prefix && (!*cwd || *cwd == '/')) {
+            while (*cwd == '/') {
+                cwd++;
+            }
+            out->mnt = p->fs->cwd_mnt;
+            return exe_put(buf, cap, 0, *cwd ? cwd : ".");
+        }
+    }
+    out->mnt = p->fs->cwd_mnt;
+    out->node = p->fs->cwd_node;
+    return 0;
+}
+
+/** Name a synthetic directory after releasing the descriptor table lock. */
+static int procfs_dir_target(const struct synth_dir *sd, const struct vfs_mount *mnt, char *buf,
+                             int cap)
+{
+    char path[64];
+    int dir_pid, tid;
+
+    if (mnt) {
+        return procfs_dir_relative(sd, mnt, buf, cap);
+    }
+    if (procfs_dir_coords(sd, &dir_pid, &tid) != 0) {
+        return -ENOENT;
+    }
+    synth_dir_path(sd->kind, dir_pid, tid, path, (int)sizeof(path));
+    return exe_put(buf, cap, 0, path);
+}
+
+/** Get the object of a descriptor link under the table lock. Return one
+ * for a synthetic directory that the caller must name after unlocking. */
+static int procfs_fd_target(const fd_entry_t *e, struct vfs_ref *out, struct synth_dir *sd)
+{
+    if (!e || !fd_entry_open(e))
+        return -ENOENT;
+    if (mq_fd_ref(e, out))
+        return 0;
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
+        out->mnt = e->ofd->vmnt;
+        out->node = e->ofd->vnode;
+        return 0;
+    }
+    if (e->type != FD_TYPE_SYNTH_DIR || !e->priv)
+        return -ENOTDIR;
+    *sd = *(const struct synth_dir *)e->priv;
+    if (sd->pidns_ino && e->ofd) {
+        out->mnt = e->ofd->synth_mnt;
+        if (sd->own.kept && e->ofd->synth_node) {
+            out->node = e->ofd->synth_node;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap,
+                       int use_real)
 {
     int pid = procfs_resolve_id(vp);
     process_t *p = pid < 0 ? NULL : procfs_proc(pid);
     const fd_entry_t *e;
     struct synth_dir sd;
     uint32_t flags;
-    int rc = -ENOTDIR;
+    int rc;
 
+    out->mnt = NULL;
     if (!p || !p->fs || !p->fds) {
         return -ENOENT;
     }
-    if (!procfs_may_read_mem(p)) {
+    if (!procfs_may_trace(p, use_real)) {
         return -EACCES;
     }
     if (vp->kind == VNODE_PROC_ROOT) {
@@ -1308,34 +1560,17 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
         return 0;
     }
     if (vp->kind == VNODE_PROC_CWD) {
-        if (!p->fs->cwd_mnt) {
-            return exe_put(buf, cap, 0, proc_cwd(p));
-        }
-        out->mnt = p->fs->cwd_mnt;
-        out->node = p->fs->cwd_node;
-        return 0;
+        return procfs_cwd_target(p, out, buf, cap);
     }
     if (vp->procfd < 0) {
         return -ENOENT;
     }
     flags = fd_table_lock(p->fds);
     e = vp->procfd < p->fds->cap ? fd_table_entry(p->fds, vp->procfd) : NULL;
-    if (!e || !fd_entry_open(e)) {
-        rc = -ENOENT;
-    } else if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
-        out->mnt = e->ofd->vmnt;
-        out->node = e->ofd->vnode;
-        rc = 0;
-    } else if (e->type == FD_TYPE_SYNTH_DIR && e->priv) {
-        sd = *(const struct synth_dir *)e->priv;
-        rc = 1;
-    }
+    rc = procfs_fd_target(e, out, &sd);
     fd_table_unlock(p->fds, flags);
     if (rc == 1) {
-        char path[64];
-
-        synth_dir_path(sd.kind, sd.pid, sd.tid, path, (int)sizeof(path));
-        return exe_put(buf, cap, 0, path);
+        return procfs_dir_target(&sd, out->mnt, buf, cap);
     }
     return rc;
 }
@@ -3259,6 +3494,28 @@ static int memfd_target(struct procfs_text *t, const fd_entry_t *e)
     return 1;
 }
 
+/** Append a queue's path on the mount used for the open, if it is a queue. */
+static int queue_target(struct procfs_text *t, const fd_entry_t *e)
+{
+    int deleted;
+    const char *queue = mq_fd_name(e, &deleted);
+    const struct open_file *file = e->ofd;
+
+    if (!queue) {
+        return 0;
+    }
+    if (file->vmnt->bind_of && file->dirpath) {
+        ap_str(t, file->dirpath);
+    } else {
+        ap_ch(t, '/');
+        ap_str(t, queue);
+    }
+    if (deleted) {
+        ap_str(t, " (deleted)");
+    }
+    return 1;
+}
+
 /**
  * Append the /proc/<pid>/fd/<fd> target of a file or directory descriptor to
  * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
@@ -3288,6 +3545,9 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
     int err = 0;
     int rc;
 
+    if (queue_target(t, e)) {
+        return;
+    }
     if (e->node && krffs_node_head(e->node, &head) != 0) {
         t->err = -EIO;
     } else if (e->node && head.type == KRFFS_RESERVED_NODE) {
@@ -3330,17 +3590,6 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
  */
 static void anon_target(struct procfs_text *t, const fd_entry_t *e)
 {
-    int unlinked;
-    const char *qname = mq_fd_name(e, &unlinked);
-
-    if (qname) {
-        ap_ch(t, '/');
-        ap_str(t, qname);
-        if (unlinked) {
-            ap_str(t, " (deleted)");
-        }
-        return;
-    }
     if (!nsfs_ns(e)) {
         ap_str(t, "anon_inode:");
     }
@@ -3449,10 +3698,10 @@ static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
     }
     ap_str(t, "/proc/");
     if (pf->origin_task != 0) {
-        ap_u32(t, pid_seen((uint32_t)pf->origin_task));
+        ap_u32(t, procfs_pid_number((uint32_t)pf->origin_task, pf->vp.pidns_ino));
         ap_str(t, "/task/");
     }
-    ap_u32(t, pid_seen((uint32_t)pf->origin_pid));
+    ap_u32(t, procfs_pid_number((uint32_t)pf->origin_pid, pf->vp.pidns_ino));
     ap_ch(t, '/');
     ap_str(t, procfs_pid_file_name(pf->origin_file));
 }
@@ -3569,9 +3818,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
  * listed once, by its leader; the ids of its other threads are not listed,
  * as on Linux, though /proc/<tid> still opens. The idle process, pid 0, is
  * not listed, as Linux lists no pid 0, nor is a process outside the
- * caller's PID namespace.
+ * mount's PID namespace.
  */
-int procfs_nth_pid(int n)
+int procfs_nth_pid(int n, uint32_t pidns_ino)
 {
     const process_t *p;
     int seen = 0;
@@ -3580,11 +3829,11 @@ int procfs_nth_pid(int n)
         return -1;
     }
     for (p = proc_list; p; p = p->next) {
-        if (p->pid != p->tgid || p == proc_idle || pid_seen(p->pid) == 0) {
+        if (p->pid != p->tgid || p == proc_idle || procfs_pid_number(p->pid, pidns_ino) == 0) {
             continue;
         }
         if (seen == n) {
-            return (int)pid_seen(p->pid);
+            return (int)procfs_pid_number(p->pid, pidns_ino);
         }
         seen++;
     }
@@ -4909,38 +5158,159 @@ static const char *procfs_mount_source(int i, const struct vfs_mount *m)
     return i == 1 ? "devfs" : i == 2 ? "proc" : m->source;
 }
 
-/**
- * Append the options of entry `i`, `m`, as /proc/mounts gives them: a KRFFS
- * root's as its mount recorded them (`krffs_mount_options`), since a RAM
- * root and a disk root differ in ways the mount table does not keep; rw or
- * ro with relatime for another of the first three entries, the root, /dev
- * and /proc; and another mount's flags as words.
- */
-static void ap_mount_options(struct procfs_text *t, int i, const struct vfs_mount *m)
-{
-    static const struct {
-        uint32_t flag;
-        const char *word;
-    } words[] = {{VFS_MS_SYNCHRONOUS, ",sync"},      {VFS_MS_DIRSYNC, ",dirsync"},
-                 {VFS_MS_NOSUID, ",nosuid"},         {VFS_MS_NODEV, ",nodev"},
-                 {VFS_MS_NOEXEC, ",noexec"},         {VFS_MS_NOATIME, ",noatime"},
-                 {VFS_MS_NODIRATIME, ",nodiratime"}, {VFS_MS_RELATIME, ",relatime"}};
-    uint32_t w;
+/* The flags of a mount alone that its options name, Linux's
+ * `show_mnt_opts` (fs/proc_namespace.c:73-88), and of its file system,
+ * `show_sb_opts` (fs/proc_namespace.c:49-66), in the order Linux prints
+ * them. */
+struct mount_word {
+    uint32_t flag;
+    const char *word; /* the option with a comma before it */
+};
+static const struct mount_word mount_words[] = {
+    {VFS_MS_NOSUID, ",nosuid"},         {VFS_MS_NODEV, ",nodev"},
+    {VFS_MS_NOEXEC, ",noexec"},         {VFS_MS_NOATIME, ",noatime"},
+    {VFS_MS_NODIRATIME, ",nodiratime"}, {VFS_MS_RELATIME, ",relatime"}};
+static const struct mount_word sb_words[] = {{VFS_MS_SYNCHRONOUS, ",sync"},
+                                             {VFS_MS_DIRSYNC, ",dirsync"}};
 
-    if (i == 0 && m->type == &vfs_krffs_type) {
-        ap_str(t, krffs_mount_options());
-        return;
-    }
-    ap_str(t, (m->flags & VFS_MS_RDONLY) ? "ro" : "rw");
-    if (i < 3) {
-        ap_str(t, ",relatime");
-        return;
-    }
-    for (w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
-        if (m->flags & words[w].flag) {
-            ap_str(t, words[w].word);
+/** Append the word of each of the `n` flags of `w` set in `flags`. */
+static void ap_flag_words(struct procfs_text *t, uint32_t flags, const struct mount_word *w, int n)
+{
+    int k;
+
+    for (k = 0; k < n; k++) {
+        if (flags & w[k].flag) {
+            ap_str(t, w[k].word);
         }
     }
+}
+
+/** Whether `word`, past its leading comma, is the `len` bytes at `s`. */
+static int procfs_word_is(const char *word, const char *s, int len)
+{
+    int k;
+
+    for (k = 0; k < len; k++) {
+        if (word[k + 1] != s[k]) {
+            return 0;
+        }
+    }
+    return word[len + 1] == '\0';
+}
+
+/** Whether the `len` bytes at `s` are ro, rw or a word of `mount_words` or
+ * `sb_words` without its comma. */
+static int procfs_flag_word(const char *s, int len)
+{
+    uint32_t k;
+
+    if (procfs_word_is(",ro", s, len) || procfs_word_is(",rw", s, len)) {
+        return 1;
+    }
+    for (k = 0; k < sizeof(mount_words) / sizeof(mount_words[0]); k++) {
+        if (procfs_word_is(mount_words[k].word, s, len)) {
+            return 1;
+        }
+    }
+    for (k = 0; k < sizeof(sb_words) / sizeof(sb_words[0]); k++) {
+        if (procfs_word_is(sb_words[k].word, s, len)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Append a file system's option, including its leading comma. */
+static void ap_fs_option(void *out, const char *name, uint64_t value, enum vfs_option_format format)
+{
+    struct procfs_text *t = out;
+
+    ap_ch(t, ',');
+    ap_str(t, name);
+    if (format == VFS_OPT_WORD) {
+        return;
+    }
+    ap_ch(t, '=');
+    if (format == VFS_OPT_OCT || format == VFS_OPT_OCT3 || format == VFS_OPT_OCT4) {
+        uint32_t v = (uint32_t)value;
+        int shift = 0;
+
+        while (shift < 30 && (v >> shift) > 7) {
+            shift += 3;
+        }
+        if (format == VFS_OPT_OCT4 && shift < 9) {
+            shift = 9;
+        } else if (format == VFS_OPT_OCT3 && shift < 6) {
+            shift = 6;
+        }
+        for (; shift >= 0; shift -= 3) {
+            ap_ch(t, (char)('0' + ((v >> shift) & 7u)));
+        }
+    } else {
+        ap_u64(t, value);
+        if (format == VFS_OPT_KIB) {
+            ap_ch(t, 'k');
+        }
+    }
+}
+
+/**
+ * Append the options of the file system `m` shows that no flag names, as
+ * its type's `show_options` gives them: for the KRFFS root and its binds,
+ * the words of what its mount recorded (`krffs_mount_options`) that are no
+ * flag (`procfs_flag_word`), such as window, since a RAM root and a disk
+ * root differ in ways the mount table does not keep. Other types give the
+ * options from their current state through the base mount's callback.
+ */
+static void ap_fs_options(struct procfs_text *t, const struct vfs_mount *m)
+{
+    const struct vfs_mount *base = vfs_mount_base(m);
+    const char *s;
+
+    if (base->show_options) {
+        base->show_options(base, ap_fs_option, t);
+    }
+    if (base != vfs_mount_at(0) || base->type != &vfs_krffs_type) {
+        return;
+    }
+    s = krffs_mount_options();
+    while (*s != '\0') {
+        int len = 0;
+
+        while (s[len] != '\0' && s[len] != ',') {
+            len++;
+        }
+        if (len > 0 && !procfs_flag_word(s, len)) {
+            ap_ch(t, ',');
+            while (len-- > 0) {
+                ap_ch(t, *s++);
+            }
+        } else {
+            s += len;
+        }
+        if (*s == ',') {
+            s++;
+        }
+    }
+}
+
+/**
+ * Append the options of the mount `m`, as /proc/mounts gives them, read
+ * from the flags each time so that a remount shows at once, as Linux's
+ * `show_vfsmnt` does (fs/proc_namespace.c:94-125): ro when a write through
+ * the mount is refused (`vfs_mount_rdonly`) and rw otherwise; the file
+ * system's sync and dirsync, which its base mount keeps; the mount's own
+ * flags (`vfs_mount_flags`); and the file system's other options
+ * (`ap_fs_options`).
+ */
+static void ap_mount_options(struct procfs_text *t, const struct vfs_mount *m)
+{
+    ap_str(t, vfs_mount_rdonly(m) ? "ro" : "rw");
+    ap_flag_words(t, vfs_mount_base(m)->flags, sb_words,
+                  (int)(sizeof(sb_words) / sizeof(sb_words[0])));
+    ap_flag_words(t, vfs_mount_flags(m), mount_words,
+                  (int)(sizeof(mount_words) / sizeof(mount_words[0])));
+    ap_fs_options(t, m);
 }
 
 /**
@@ -4970,7 +5340,7 @@ static int procfs_gen_mounts(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_str(t, m->type->name);
         ap_ch(t, ' ');
-        ap_mount_options(t, i, m);
+        ap_mount_options(t, m);
         ap_str(t, " 0 0\n");
     }
     return t->nomem ? -1 : t->len;
@@ -5077,12 +5447,18 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_str(t, point);
         ap_ch(t, ' ');
-        ap_mount_options(t, i, m);
+        ap_str(t, (vfs_mount_flags(m) & VFS_MS_RDONLY) ? "ro" : "rw");
+        ap_flag_words(t, vfs_mount_flags(m), mount_words,
+                      (int)(sizeof(mount_words) / sizeof(mount_words[0])));
         ap_str(t, " - ");
         ap_str(t, m->type->name);
         ap_ch(t, ' ');
         ap_str(t, procfs_mount_source(i, m));
-        ap_str(t, (m->flags & VFS_MS_RDONLY) ? " ro\n" : " rw\n");
+        ap_str(t, vfs_sb_rdonly(m) ? " ro" : " rw");
+        ap_flag_words(t, vfs_mount_base(m)->flags, sb_words,
+                      (int)(sizeof(sb_words) / sizeof(sb_words[0])));
+        ap_fs_options(t, m);
+        ap_ch(t, '\n');
     }
     return t->nomem ? -1 : t->len;
 }
@@ -8886,7 +9262,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     }
     f->origin_pid = pid;
     f->origin_file = SYNTH_PROC_MEM;
-    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid, vp->pidns_ino) : 0;
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
@@ -8900,6 +9276,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     e->sock = NULL;
     e->ops = &procfs_mem_ops;
     e->priv = f;
+    f->vp.pidns_ino = vp->pidns_ino;
     procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
@@ -8992,8 +9369,8 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
  * Name in `node` the node `vp` names whose inode keeps the owner its lookup
  * set (struct synth_owner): its kind, its file or descriptor, the process or
  * thread `id` that `procfs_resolve_id` gave, and for a thread's node its
- * process. Returns 1, or 0 for any other node, /proc/<pid> and its ns
- * directory among them, whose getattr works the owner out again
+ * process. Returns 1, or 0 for an untracked node. A process directory and
+ * its ns directory keep the task identity for dynamic ownership
  * (`pid_getattr`, fs/proc/base.c:2007, 3436 and 3767, and
  * fs/proc/namespaces.c:195).
  */
@@ -9011,6 +9388,12 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
     case VNODE_PROC_NS_LINK:
         node[1] = vp->procfd;
         break;
+    case VNODE_PROC_PID:
+        if (vp->pid == SYNTH_PID_SELF && !vp->tid)
+            return 0;
+        node[1] = 0;
+        break;
+    case VNODE_PROC_NS_DIR:
     case VNODE_PROC_FD_DIR:
     case VNODE_PROC_FDINFO_DIR:
     case VNODE_PROC_TASK_DIR:
@@ -9024,9 +9407,19 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
     }
     node[0] = vp->kind;
     node[2] = id;
-    node[3] = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
+    node[3] = vp->tid != 0 ? procfs_resolve_pid(vp->pid, vp->pidns_ino) : 0;
     return 1;
 }
+
+/** Whether the nodes `a` and `b` (`procfs_node_of`) are one. */
+static int procfs_same_node(const int a[4], const int b[4])
+{
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
+}
+
+/* A revalidation that loses a slot detaches all open references to that
+ * inode together. A later lookup of the number starts a new inode. */
+static uint64_t procfs_detached_serial;
 
 /**
  * Give every kept owner of the node `node` (`procfs_node_of`) the owner
@@ -9035,15 +9428,22 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
  * task directories, mode 0555, and for the fd directory, files and links
  * while it is dumpable, and root otherwise (`procfs_pid_owner`). Linux sets it
  * when the lookup makes the inode and again at each walk that finds the
- * dentry (fs/proc/base.c:1895, 2693 and 2066, fs/proc/fd.c:393 and 161).
+ * dentry (fs/proc/base.c:1895, 2693 and 2066, fs/proc/fd.c:393 and 161). A
+ * descriptor's link takes its mode from the descriptor then as well
+ * (`procfs_fd_link_mode`), and keeps the one it had once the descriptor is
+ * closed.
  */
-static void procfs_set_owner(const int node[4])
+static int procfs_set_owner(const int node[4])
 {
     struct synth_owner *o;
     uint32_t mode = 0100644u;
     uint32_t uid = 0, gid = 0;
 
-    if (node[0] == VNODE_PROC_FD_DIR) {
+    if (node[0] == VNODE_PROC_PID) {
+        mode = 0040555u;
+    } else if (node[0] == VNODE_PROC_NS_DIR) {
+        mode = 0040511u;
+    } else if (node[0] == VNODE_PROC_FD_DIR) {
         mode = 0040500u;
     } else if (node[0] == VNODE_PROC_FDINFO_DIR || node[0] == VNODE_PROC_TASK_DIR) {
         mode = 0040555u;
@@ -9052,16 +9452,99 @@ static void procfs_set_owner(const int node[4])
                node[0] == VNODE_PROC_NS_LINK) {
         mode = 0120777u;
     }
+    if (node[0] == VNODE_PROC_FD_LINK || node[0] == VNODE_PROC_FDINFO) {
+        uint32_t fd_mode;
+
+        if (procfs_fd_link_mode(node[2], node[1], &fd_mode) != 0) {
+            uint64_t serial = ++procfs_detached_serial;
+
+            for (o = procfs_owned; o; o = o->next) {
+                if (!o->detached && procfs_same_node(o->node, node) && procfs_held_pid(o) >= 0) {
+                    o->detached = serial;
+                }
+            }
+            return -ENOENT;
+        }
+        mode = node[0] == VNODE_PROC_FD_LINK ? fd_mode : 0100444u;
+    }
     if (procfs_pid_owner(node[2], mode, &uid, &gid) != 0) {
-        return;
+        return 0;
     }
     for (o = procfs_owned; o; o = o->next) {
-        if (o->node[0] == node[0] && o->node[1] == node[1] && o->node[2] == node[2] &&
-            o->node[3] == node[3]) {
+        if (!o->detached && procfs_same_node(o->node, node) && procfs_held_pid(o) >= 0) {
             o->uid = uid;
             o->gid = gid;
+            if (node[0] == VNODE_PROC_FD_LINK) {
+                o->mode = mode;
+            }
         }
     }
+    return 0;
+}
+
+void procfs_owner_chown(const struct vpath *vp, const struct synth_owner *held, uint32_t uid,
+                        uint32_t gid)
+{
+    struct synth_owner *o;
+    int node[4];
+    uint64_t detached = 0, serial;
+
+    if (held && held->kept) {
+        k_memcpy(node, held->node, sizeof(node));
+        detached = held->detached;
+    } else if (procfs_resolve_id(vp) < 0 || !procfs_node_of(vp, procfs_resolve_id(vp), node)) {
+        return;
+    }
+    serial = held && held->kept ? held->serial : procfs_proc(node[2])->serial;
+    for (o = procfs_owned; o; o = o->next) {
+        if (o->serial == serial && o->detached == detached && procfs_same_node(o->node, node)) {
+            o->uid = uid != (uint32_t)-1 ? uid : o->uid;
+            o->gid = gid != (uint32_t)-1 ? gid : o->gid;
+        }
+    }
+}
+
+int procfs_fd_link_mode(int pid, int fd, uint32_t *mode)
+{
+    process_t *p = pid < 0 ? NULL : get_process((uint32_t)pid);
+    fd_entry_t copy;
+
+    if (!p || p->state == PROC_UNUSED || !p->fds || fd_peek(p->fds, fd, &copy, 0) != 0) {
+        return -ENOENT;
+    }
+    *mode = 0120000u;
+    if (!(copy.flags & FD_FLAG_PATH) && (copy.flags & FD_FLAG_READ)) {
+        *mode |= 0500u;
+    }
+    if (!(copy.flags & FD_FLAG_PATH) && (copy.flags & FD_FLAG_WRITE)) {
+        *mode |= 0300u;
+    }
+    return 0;
+}
+
+uint32_t procfs_fd_link_ino(const struct vpath *vp, int id)
+{
+    struct synth_owner *o;
+    uint64_t previous = 0;
+    int node[4];
+
+    if (!procfs_node_of(vp, id, node)) {
+        return procfs_ino_pid(id);
+    }
+    for (o = procfs_owned; o; o = o->next) {
+        if (procfs_same_node(o->node, node)) {
+            if (!o->detached && procfs_held_pid(o) < 0) {
+                o->detached = ++procfs_detached_serial;
+            }
+            if (!o->detached) {
+                return o->ino;
+            }
+            if (o->detached > previous) {
+                previous = o->detached;
+            }
+        }
+    }
+    return previous ? 0x80000000u | (uint32_t)previous : procfs_ino_pid(id);
 }
 
 /**
@@ -9071,13 +9554,23 @@ static void procfs_set_owner(const int node[4])
  */
 static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id)
 {
-    if (o->kept || !procfs_node_of(vp, id, o->node)) {
+    process_t *p = procfs_proc(id);
+
+    if (!p || o->kept || !procfs_node_of(vp, id, o->node)) {
         return;
+    }
+    o->serial = p->serial;
+    if (vp->kind == VNODE_PROC_FD_LINK) {
+        o->ino = procfs_fd_link_ino(vp, id);
+    } else {
+        o->ino = procfs_ino_pid(id);
     }
     o->kept = 1;
     o->next = procfs_owned;
     procfs_owned = o;
-    procfs_set_owner(o->node);
+    if (procfs_set_owner(o->node) != 0) {
+        procfs_owner_drop(o);
+    }
 }
 
 void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
@@ -9087,6 +9580,13 @@ void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
     if (id >= 0) {
         procfs_own(o, vp, id);
     }
+}
+
+void procfs_owner_copy(struct synth_owner *to, const struct synth_owner *from)
+{
+    *to = *from;
+    to->next = procfs_owned;
+    procfs_owned = to;
 }
 
 void procfs_owner_drop(struct synth_owner *o)
@@ -9105,14 +9605,18 @@ void procfs_owner_drop(struct synth_owner *o)
     o->kept = 0;
 }
 
-void procfs_lookup_owner(const struct vpath *vp)
+int procfs_lookup_owner(const struct vpath *vp)
 {
     int node[4];
     int id = procfs_resolve_id(vp);
 
     if (id >= 0 && procfs_node_of(vp, id, node)) {
-        procfs_set_owner(node);
+        return procfs_set_owner(node);
     }
+    if (vp->kind == VNODE_PROC_FD_LINK || vp->kind == VNODE_PROC_FDINFO) {
+        return -ENOENT;
+    }
+    return 0;
 }
 
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
@@ -9131,6 +9635,29 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
            f->origin_file == SYNTH_PROC_SCHED || f->origin_file == SYNTH_PROC_AUTOGROUP ||
            procfs_is_idmap(f->origin_file);
+}
+
+int procfs_fdinfo_access(const struct fd_entry *e, int use_real)
+{
+    const struct synth_owner *own = NULL;
+
+    if (e->priv) {
+        if (e->type == FD_TYPE_PROC) {
+            own = &((const struct procfs_file *)e->priv)->own;
+        } else if (e->type == FD_TYPE_SYNTH_PATH) {
+            own = &((const struct synth_path *)e->priv)->own;
+        } else if (e->type == FD_TYPE_SYNTH_DIR) {
+            own = &((const struct synth_dir *)e->priv)->own;
+        }
+    }
+    if (!own || !own->kept ||
+        (own->node[0] != VNODE_PROC_FDINFO && own->node[0] != VNODE_PROC_FDINFO_DIR)) {
+        return 0;
+    }
+    if (procfs_held_pid(own) < 0) {
+        return -ESRCH;
+    }
+    return procfs_may_read_as(own->node[2], use_real) ? 0 : -EACCES;
 }
 
 int procfs_fd_writable(struct fd_entry *e)
@@ -9577,6 +10104,7 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
              : file == SYNTH_PROC_AUTOGROUP ? &procfs_autogroup_ops
                                             : &procfs_idmap_ops;
     e->priv = f;
+    f->vp.pidns_ino = vp->pidns_ino;
     procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
@@ -9620,7 +10148,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     }
     f->origin_pid = pid;
     f->origin_file = SYNTH_PROC_OOM_ADJ;
-    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid, vp->pidns_ino) : 0;
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
@@ -9632,6 +10160,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     e->sock = NULL;
     e->ops = &procfs_oom_ops;
     e->priv = f;
+    f->vp.pidns_ino = vp->pidns_ino;
     procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
@@ -11504,7 +12033,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     fd_entry_t copy;
     const fd_entry_t *e = &copy;
     char pos[24], name[DMA_BUF_NAME_LEN];
-    uint32_t rw, flags, mnt_id;
+    uint32_t flags, mnt_id;
     uint64_t ino;
     int named = 0;
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
@@ -11525,8 +12054,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
     vm = kvm_vm_irq_hold(e);
 #endif
-    rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
-    flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
+    flags = fd_access_mode(e);
     if (e->ofd) {
         flags |=
             e->ofd->status_flags & (OFD_EXCL | OFD_APPEND | OFD_NONBLOCK | OFD_SYNC | OFD_DIRECT);
@@ -11979,7 +12507,7 @@ int procfs_open(const struct vpath *vp, int flags)
     f->vp = *vp;
     f->gen_pid = pid;
     f->origin_pid = key;
-    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid, vp->pidns_ino) : 0;
     g = procfs_global_find(vp->kind, 0);
     if (g) {
         f->origin_file = g->origin;
@@ -12004,6 +12532,7 @@ int procfs_open(const struct vpath *vp, int flags)
     e->sock = NULL;
     e->ops = &procfs_file_ops;
     e->priv = f;
+    f->vp.pidns_ino = vp->pidns_ino;
     procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = FD_FLAG_READ;

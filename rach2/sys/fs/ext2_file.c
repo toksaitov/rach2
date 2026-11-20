@@ -1223,7 +1223,7 @@ static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offs
  * checks `s_maxbytes` only for growth. 0, -EINVAL for a file that is not
  * regular, -EFBIG, -EROFS, or -errno.
  */
-int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *n = handle;
@@ -1275,6 +1275,9 @@ int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             ext2_stamp(n, T_MTIME | T_CTIME);
             rc = ext2_inode_store(em, n);
         }
+    } else if (stamp_times) {
+        ext2_stamp(n, T_MTIME | T_CTIME);
+        rc = ext2_inode_store(em, n);
     }
     ext2_node_unlock(n);
     return rc;

@@ -11,6 +11,7 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lib/kstd.h"
 #include "../mm/kheap.h"
 #include "../rtc.h"
 
@@ -29,11 +30,15 @@ struct pstore_file {
     char name[48];
     int type;
     uint32_t id;
-    char *buf; /* the record, kmalloc'd */
-    uint32_t size;
+    char *buf;           /* the record, kmalloc'd */
+    uint32_t size;       /* saved record length */
+    uint64_t inode_size; /* stat size after truncation */
     uint64_t ino;
-    int64_t time_s, time_ns; /* mtime and ctime: the record's, else made_ */
-    int64_t made_s, made_ns; /* atime: when the file was made, the first mount */
+    int64_t time_s, time_ns;   /* mtime: the record's, else made_ */
+    int64_t ctime_s, ctime_ns; /* ctime: mtime's until a setattr sets it */
+    int64_t made_s, made_ns;   /* atime: when the file was made, the first mount */
+    uint32_t mode;             /* the permission bits: 0444, the root's 0750 */
+    uint32_t uid, gid;         /* root's until a chown */
     uint32_t refs;
     int removed;
     struct pstore_file *next;
@@ -95,10 +100,11 @@ int pstore_record_add(const struct pstore_record *r)
     f->type = r->type;
     f->id = r->id;
     f->buf = r->buf;
-    f->size = r->size;
+    f->inode_size = f->size = r->size;
     f->ino = ++last_ino;
-    f->time_s = r->sec;
-    f->time_ns = r->sec != 0 ? r->nsec : 0;
+    f->time_s = f->ctime_s = r->sec;
+    f->time_ns = f->ctime_ns = r->sec != 0 ? r->nsec : 0;
+    f->mode = 0444u;
     for (link = &files; *link; link = &(*link)->next) {
     }
     *link = f;
@@ -173,14 +179,80 @@ static int ps_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
-    st->mode = f == &root ? PS_IFDIR | 0750u : PS_IFREG | 0444u;
+    st->mode = (f == &root ? PS_IFDIR : PS_IFREG) | f->mode;
+    st->uid = f->uid;
+    st->gid = f->gid;
     st->nlink = f == &root ? 2 : f->removed ? 0 : 1;
-    st->size = f == &root ? 0 : f->size;
+    st->size = f->inode_size;
     st->ino = f->ino;
     st->atime_sec = f->made_s;
     st->atime_nsec = f->made_ns;
-    st->mtime_sec = st->ctime_sec = f->time_s;
-    st->mtime_nsec = st->ctime_nsec = f->time_ns;
+    st->mtime_sec = f->time_s;
+    st->mtime_nsec = f->time_ns;
+    st->ctime_sec = f->ctime_s;
+    st->ctime_nsec = f->ctime_ns;
+    return 0;
+}
+
+/**
+ * The `setattr` of pstore, as Linux's simple_setattr, which pstore's inodes
+ * take: the permission bits of `st->mode`, the owner, the group and the
+ * access and modification times of a file or the root, as `what` selects,
+ * and the change time set to the clock for every call, a VFS_SET_CTIME call
+ * with nothing else among them. The caller has judged the permission. A
+ * size or inode flags are -EINVAL and -EOPNOTSUPP, and change nothing; 0
+ * otherwise.
+ */
+static int ps_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
+{
+    struct pstore_file *f = node_of(node);
+
+    (void)mnt;
+    if (what & VFS_SET_FLAGS) {
+        return -EOPNOTSUPP;
+    }
+    if (what & VFS_SET_SIZE) {
+        return -EINVAL;
+    }
+    if (what & VFS_SET_MODE) {
+        f->mode = st->mode & 07777u;
+    }
+    if (what & VFS_SET_UID) {
+        f->uid = st->uid;
+    }
+    if (what & VFS_SET_GID) {
+        f->gid = st->gid;
+    }
+    if (what & VFS_SET_ATIME) {
+        f->made_s = st->atime_sec;
+        f->made_ns = st->atime_nsec;
+    }
+    if (what & VFS_SET_MTIME) {
+        f->time_s = st->mtime_sec;
+        f->time_ns = st->mtime_nsec;
+    }
+    rtc_coarse_realtime(&f->ctime_s, &f->ctime_ns);
+    return 0;
+}
+
+/** Set the stat size of a record, keeping the saved bytes for reads. */
+static int ps_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
+{
+    struct pstore_file *f = node_of(handle);
+
+    (void)mnt;
+    if (f == &root) {
+        return -EISDIR;
+    }
+    if (size > (sizeof(long) == 4 ? 0xFFFFFFFF000ULL : 0x7FFFFFFFFFFFFFFFULL)) {
+        return -EFBIG;
+    }
+    f->inode_size = size;
+    if (stamp_times) {
+        rtc_coarse_realtime(&f->ctime_s, &f->ctime_ns);
+        f->time_s = f->ctime_s;
+        f->time_ns = f->ctime_ns;
+    }
     return 0;
 }
 
@@ -305,63 +377,129 @@ static int ps_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
     return 0;
 }
 
+/* The anonymous mount lasts while a visible mount or a file holds it. */
+static struct vfs_mount *pstore_base;
+
+/** Drop the singleton once its last mount and file have gone. */
+static void ps_unmount(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    pstore_base = NULL;
+}
+
+#define PSTORE_DEFAULT_KMSG_BYTES 10240u
+static uint32_t kmsg_bytes = PSTORE_DEFAULT_KMSG_BYTES;
+
+int pstore_dump_enabled(void)
+{
+    return kmsg_bytes != 0;
+}
+
+/** Apply valid kmsg_bytes values in order, as Linux's parse_options does. */
+static int ps_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
+{
+    const char key[] = "kmsg_bytes=";
+
+    (void)mnt;
+    (void)flags;
+    while (options && *options) {
+        const char *end = options;
+        size_t i = 0;
+        unsigned long value;
+
+        while (*end && *end != ',') {
+            end++;
+        }
+        while (key[i] && key[i] == options[i]) {
+            i++;
+        }
+        if (!key[i] && options[i] >= '0' && options[i] <= '9' && end[-1] != '\n' &&
+            k_strtoul(options + i, end - (options + i), &value) == 0 && value <= 0x7fffffffu) {
+            kmsg_bytes = (uint32_t)value;
+        }
+        options = *end ? end + 1 : end;
+    }
+    return 0;
+}
+
+/** Print the shared dump threshold when it differs from its default. */
+static void ps_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
+{
+    (void)mnt;
+    if (kmsg_bytes != PSTORE_DEFAULT_KMSG_BYTES) {
+        emit(out, "kmsg_bytes", kmsg_bytes, VFS_OPT_DEC);
+    }
+}
+
 static const struct vfs_ops pstore_vops = {
-    ps_lookup,  0,                         /* lookup_rest */
-    ps_hold,    ps_put,     ps_getattr, 0, /* setattr */
-    ps_open,    ps_release, ps_read,    0, /* write */
-    0,                                     /* truncate */
-    0,                                     /* fsync */
-    ps_readdir, 0,                         /* create */
-    ps_unlink,  0,                         /* mkdir */
-    0,                                     /* rmdir */
-    0,                                     /* rename */
-    0,                                     /* link */
-    0,                                     /* readlink */
-    ps_statfs,  0,                         /* sync */
-    0,                                     /* prepare_unmount */
-    0,                                     /* abort_unmount */
-    0,                                     /* unmount */
-    ps_path,    0,                         /* symlink */
-    0,                                     /* mknod */
-    0,                                     /* pin */
-    0,                                     /* unpin */
-    0,                                     /* remount */
-    0,                                     /* fallocate */
-    0,                                     /* fdatasync */
-    0,                                     /* lock_node */
-    0,                                     /* unlock_node */
-    0,                                     /* shutdown */
-    0,                                     /* xattr */
-    0,                                     /* cachestat */
-    0,                                     /* put_unless_last */
-    0,                                     /* readlink_cached */
-    0,                                     /* read_frames */
-    0,                                     /* handle_node */
-    0,                                     /* writeback */
-    0,                                     /* lock_write */
-    0,                                     /* unlock_write */
-    0,                                     /* rename_flags */
-    0,                                     /* tmpfile */
-    0,                                     /* uncache */
-    0,                                     /* phase */
+    ps_lookup,   0,                                                                /* lookup_rest */
+    ps_hold,     ps_put,  ps_getattr, ps_setattr, ps_open, ps_release, ps_read, 0, /* write */
+    ps_truncate, 0,                                                                /* fsync */
+    ps_readdir,  0,                                                                /* create */
+    ps_unlink,   0,                                                                /* mkdir */
+    0,                                                                             /* rmdir */
+    0,                                                                             /* rename */
+    0,                                                                             /* link */
+    0,                                                                             /* readlink */
+    ps_statfs,   0,                                                                /* sync */
+    0,                       /* prepare_unmount */
+    0,                       /* abort_unmount */
+    ps_unmount,  ps_path, 0, /* symlink */
+    0,                       /* mknod */
+    0,                       /* pin */
+    0,                       /* unpin */
+    ps_remount,  0,          /* fallocate */
+    0,                       /* fdatasync */
+    0,                       /* lock_node */
+    0,                       /* unlock_node */
+    0,                       /* shutdown */
+    0,                       /* xattr */
+    0,                       /* cachestat */
+    0,                       /* put_unless_last */
+    0,                       /* readlink_cached */
+    0,                       /* read_frames */
+    0,                       /* handle_node */
+    0,                       /* writeback */
+    0,                       /* lock_write */
+    0,                       /* unlock_write */
+    0,                       /* rename_flags */
+    0,                       /* tmpfile */
+    0,                       /* uncache */
+    0,                       /* phase */
 };
 
 /** The constructor: every mount shows the one directory, as Linux's
- * single superblock does; a `kmsg_bytes=` option is taken and has no
- * effect, since a dump here is the record's size. */
+ * single superblock does. Its dump threshold is shared across mounts. */
 static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                         const char *options)
 {
     struct pstore_file *f;
 
+    int rc;
+
     (void)dev;
-    (void)flags;
-    (void)options;
+    if (pstore_base) {
+        rc = vfs_remount(pstore_base, flags, options);
+        if (rc != 0) {
+            return rc;
+        }
+        vfs_mount_get(pstore_base);
+    } else {
+        pstore_base = vfs_kernel_mount(&vfs_pstore_type, &root, flags);
+        if (!pstore_base) {
+            return -ENOMEM;
+        }
+        pstore_base->show_options = ps_options;
+        ps_remount(pstore_base, flags, options);
+    }
+    mnt->bind_of = pstore_base;
+    k_strncpy(mnt->bind_root, "/", sizeof(mnt->bind_root));
     if (root.ino == 0) {
         root.ino = 1;
         rtc_coarse_realtime(&root.time_s, &root.time_ns);
-        root.made_s = root.time_s;
-        root.made_ns = root.time_ns;
+        root.made_s = root.ctime_s = root.time_s;
+        root.made_ns = root.ctime_ns = root.time_ns;
+        root.mode = 0750u;
         /* Each file is made now, as Linux's pstore_fill_super makes the
          * files at mount (inode.c:436): pstore_get_inode sets its three
          * times to the clock (inode.c:223), and pstore_mkfile then sets
@@ -372,8 +510,8 @@ static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
             f->made_s = root.time_s;
             f->made_ns = root.time_ns;
             if (f->time_s == 0) {
-                f->time_s = root.time_s;
-                f->time_ns = root.time_ns;
+                f->time_s = f->ctime_s = root.time_s;
+                f->time_ns = f->ctime_ns = root.time_ns;
             }
         }
     }

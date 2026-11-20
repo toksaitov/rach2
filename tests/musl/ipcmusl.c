@@ -40,9 +40,9 @@
  * timeout ETIMEDOUT; mq_notify's signal comes with SI_MESGQ and its value
  * when a message reaches the queue empty; poll reports a message; the
  * name goes with mq_unlink. /dev/mqueue lists the queue as a file with its
- * mode and its messages' bytes as its size, reading it gives its status
- * line, and unlinking a queue's file removes its name. The file of an empty
- * queue, of size 0, gives EFAULT for a read into NULL at offset 0, since its
+ * mode and an initial size of 80. Its status line gives the queued bytes.
+ * Unlinking the file removes its name. An empty queue gives EFAULT for
+ * a read into NULL at offset 0, since its
  * status line has a byte there, as Linux's simple_read_from_buffer gives it,
  * and 0 for a pread at the line's end. fstat of a queue's
  * descriptor gives what stat of its file gives, and its /proc/self/fd link
@@ -77,6 +77,7 @@
 #include <mqueue.h>
 #include <sys/mount.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -720,6 +721,20 @@ static int fd_link_is(int fd, const char *want)
     return strcmp(link, want) == 0;
 }
 
+/** Set attributes as the unprivileged owner in another IPC namespace. */
+static int mq_owner_attrs(mqd_t q)
+{
+    const struct timespec times[2] = {{12, 0}, {34, 0}};
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        _exit(unshare(CLONE_NEWIPC) != 0 || setuid(1000) != 0 ||
+              fchown(q, (uid_t)-1, (gid_t)-1) != 0 || fchmod(q, 0640) != 0 ||
+              ftruncate(q, 7) != 0 || futimens(q, times) != 0);
+    }
+    return child_status(pid) == 0;
+}
+
 /**
  * Check the descriptor `q` of the queue /ipcfiles, whose file's stat is
  * `st` and which has one message of 4 bytes: fstat gives that stat and the
@@ -732,7 +747,7 @@ static int mq_fd_file(mqd_t q, const struct stat *st)
     struct stat fst;
 
     if (fstat(q, &fst) != 0 || fst.st_dev != st->st_dev || fst.st_ino != st->st_ino ||
-        fst.st_mode != st->st_mode || fst.st_nlink != 1 || fst.st_size != 4) {
+        fst.st_mode != st->st_mode || fst.st_nlink != 1 || fst.st_size != 80) {
         return fail("fstat of a queue's descriptor gives its file's stat");
     }
     held();
@@ -743,6 +758,12 @@ static int mq_fd_file(mqd_t q, const struct stat *st)
     if (mq_unlink("/ipcfiles") != 0 || !fd_link_is(q, "/ipcfiles (deleted)") ||
         fstat(q, &fst) != 0 || fst.st_nlink != 0 || fst.st_ino != st->st_ino) {
         return fail("an unlinked queue's link reads /NAME (deleted)");
+    }
+    held();
+    if (fchown(q, 1000, (gid_t)-1) != 0 || !mq_owner_attrs(q) || fstat(q, &fst) != 0 ||
+        fst.st_uid != 1000 || (fst.st_mode & 07777) != 0640 || fst.st_size != 7 ||
+        fst.st_atime != 12 || fst.st_mtime != 34 || fst.st_nlink != 0) {
+        return fail("setting the attributes of an unlinked queue by descriptor");
     }
     held();
     return 0;
@@ -771,10 +792,9 @@ static int mq_mount(void)
 }
 
 /**
- * Read the file `fd` of an empty queue, whose size is 0 and whose status
- * line is not empty: a read into NULL at offset 0 is EFAULT, since the line
- * has a byte there, as Linux's simple_read_from_buffer answers
- * (fs/libfs.c:1104-1110 in 6.12), and a pread at the line's end returns 0.
+ * Check the status line of an empty queue through fd.
+ * Reading into NULL at offset zero fails with EFAULT because the status line
+ * has data. Reading at the end of the line returns zero.
  * Returns 0, or 1 once the failure is reported.
  */
 static int mq_empty_rows(int fd)
@@ -841,7 +861,7 @@ static int mq_files(void)
         return fail("a queue for /dev/mqueue");
     }
     if (stat(mq_path("ipcfiles"), &st) != 0 || !S_ISREG(st.st_mode) ||
-        (st.st_mode & 0777) != 0600 || st.st_size != 4) {
+        (st.st_mode & 0777) != 0600 || st.st_size != 80) {
         return fail("/dev/mqueue gives the queue's file its mode and size");
     }
     held();
@@ -985,7 +1005,8 @@ static void plan(void)
                                      "mq-notify",        "mq-poll",        "mq-unlink",
                                      "mqueue-file",      "mqueue-status",  "mqueue-null-efault",
                                      "mqueue-pread-end", "mqueue-listed",  "mqueue-unlink-file",
-                                     "mq-fstat",         "mq-fd-link",     "mq-deleted-link"};
+                                     "mq-fstat",         "mq-fd-link",     "mq-deleted-link",
+                                     "mq-held-attrs"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.ipcmusl"));

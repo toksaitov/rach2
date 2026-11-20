@@ -210,7 +210,7 @@ static void wr_truncate_row(void)
     wr_b_at = 30 * 4096;
     wr_arm(wr_second_write, 0);
     OPS->lock_node(&mnt, f);
-    a_rc = OPS->truncate(&mnt, ha, 2 * 4096);
+    a_rc = OPS->truncate(&mnt, ha, 2 * 4096, 1);
     OPS->unlock_node(&mnt, f);
     wr_end("a write of block thirty inside a truncation's disk read");
     check(wr_slept && streq(wr_slept, "ext2 node"), "where it sleeps on the node's lock");

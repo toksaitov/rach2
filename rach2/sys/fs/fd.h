@@ -210,6 +210,7 @@ struct open_file {
     /* The held mount of a synthetic node opened by path, for NO_XDEV when
      * /proc/PID/fd follows this description; NULL on anonymous objects. */
     struct vfs_mount *synth_mnt;
+    void *synth_node; /* the held node on synth_mnt */
     void *vnode;
     void *fhandle;
     /* With `vmnt`, the inode number the file had when it was opened, or for
@@ -305,6 +306,26 @@ typedef struct fd_entry {
      * syscall_fs.c). */
     uint32_t mode;
 } fd_entry_t;
+
+/** The read and write rights granted by the low two open flag bits. */
+static __inline__ unsigned fd_open_rights(unsigned acc)
+{
+    return ((acc == 0 || acc == 2) ? FD_FLAG_READ : 0u) |
+           ((acc == 1 || acc == 2) ? FD_FLAG_WRITE : 0u);
+}
+
+/** The access mode reported by F_GETFL and fdinfo. A file opened with
+ * mode 3 permits neither reads nor writes. O_PATH reports mode zero. */
+static __inline__ unsigned fd_access_mode(const fd_entry_t *e)
+{
+    unsigned rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
+
+    if (rw == FD_FLAG_WRITE)
+        return 1;
+    if (rw == (FD_FLAG_READ | FD_FLAG_WRITE))
+        return 2;
+    return !rw && e->type == FD_TYPE_FILE && !(e->flags & FD_FLAG_PATH) ? 3 : 0;
+}
 
 /*
  * What a read or a write of a descriptor needs to know of it, in
@@ -735,11 +756,13 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
  * write reservation through it, one only a mapping holds among them, or
  * another such remount of it is under way; else 0, and new reservations
  * for writing through it are refused with EROFS (`readonly_pending`) until
- * `fd_mount_readonly_end`. A bind counts the descriptions opened through
- * it, a base those opened through it or any bind of it, as Linux counts a
- * mount's writers or every mount of the superblock's. Takes the lock of the
- * descriptions; nothing here sleeps. */
-int fd_mount_readonly_begin(struct vfs_mount *mnt);
+ * `fd_mount_readonly_end`. A bind, and a base with `alone`, for a remount
+ * of that mount's own flag (MS_BIND), count the descriptions opened
+ * through it and refuse writers through it alone; a base without counts
+ * those opened through it or any bind of it and refuses writers through
+ * them all, as Linux counts a mount's writers or every mount of the
+ * superblock's. Takes the lock of the descriptions; nothing here sleeps. */
+int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone);
 
 /** End the refusal `fd_mount_readonly_begin` began on `mnt`, once its
  * flags say whether it is read-only. */

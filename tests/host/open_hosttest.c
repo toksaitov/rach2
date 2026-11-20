@@ -37,6 +37,9 @@
  * - a chdir that pins its directory until the working directory records it;
  * - a chmod, a chown, the stat calls, access and utimensat of a file a write
  *   moves;
+ * - where EROFS falls among the other errors of access, chmod, chown and
+ *   utimensat on a read-only file system and through a mount read-only
+ *   alone, by path and by descriptor;
  * - an open that truncates while another thread sharing its table takes the
  *   table's last free slot;
  * - a loop device's handle when its node moves, and its attachment found by
@@ -118,8 +121,6 @@ static int canonicalize_named(char *path, int *end);
 static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 static int fd_node_check(fd_entry_t *entry);
 static int cred_privileged(void);
-static int cred_kill_setid(krffs_node_t *node);
-static int vfs_kill_setid(struct vfs_mount *mnt, void *node);
 static int mnt_is_root(const struct vfs_mount *mnt);
 static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 static int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
@@ -357,6 +358,10 @@ static void dir_unpin(struct vfs_mount *mnt, void *token);
 static const struct vfs_ops pinning_ops = {.pin = dir_pin, .unpin = dir_unpin};
 static const struct vfs_type pinning_type = {"pinning", 0, &pinning_ops, 1, 0};
 static struct vfs_mount mount;
+static struct vfs_mount cwd_proc = {.type = &vfs_procfs_type};
+static struct vpath proc_root = {.kind = VNODE_PROC_DIR};
+static int cwd_refs, reused_pid, queue_flushes;
+static struct synth_owner cwd_owner;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
 static int open_error, truncate_error, getattr_error, dropped, attrs, relocate;
@@ -396,6 +401,9 @@ static void (*waiting)(void);
 static int ns_depth, ns_takes, lookup_take;
 /* Set in the rows of chmod, chown and utimensat on a mounted type. */
 static int attr_row;
+/* The type and mode the read-only rows give the file, owned by root; 0
+ * outside them. */
+static uint32_t ro_mode, inode_flags;
 /* The path pages the rows' calls have taken and not given back. */
 static char path_pages[4][VFS_PATH_MAX];
 static int path_pages_out[4];
@@ -537,6 +545,10 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
 /** Copy from user memory, which in the model is the caller's own. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
+    if (src == (const void *)1 && n == 1) {
+        *(char *)dst = 0;
+        return 0;
+    }
     k_memcpy(dst, src, n);
     return 0;
 }
@@ -580,6 +592,22 @@ char *path_buf_get(void)
     return 0;
 }
 
+/** The model has no separate proc mount. */
+void path_buf_set_mount(char *buf, struct vfs_mount *mnt)
+{
+    (void)buf;
+    (void)mnt;
+}
+
+/** Record the held process directory as the walk's starting point. */
+int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base)
+{
+    struct vfs_ref ref = {mnt, node};
+    (void)buf;
+    (void)base;
+    return mnt && vfs_proc_dir_owner(&ref) != NULL;
+}
+
 /** Give back a path page `path_buf_get` took. */
 void path_buf_put(char *buf)
 {
@@ -595,8 +623,7 @@ void path_buf_put(char *buf)
 /** No row's path is relative. */
 const char *proc_cwd(const struct process *p)
 {
-    (void)p;
-    return "/";
+    return p->fs && p->fs->cwd[0] ? p->fs->cwd : "/";
 }
 
 /** The mount the model has, at the index a stat reports as its device. */
@@ -622,6 +649,13 @@ int is_dma_buf_file(const fd_entry_t *e)
 {
     (void)e;
     return 0;
+}
+
+/** Count notification cleanup on each actual queue descriptor close. */
+void mq_flush(const fd_entry_t *entry)
+{
+    (void)entry;
+    queue_flushes++;
 }
 
 /** No row opens a message queue. */
@@ -790,21 +824,25 @@ uint64_t krffs_node_ino(const krffs_node_t *node)
     return 0;
 }
 
-/** Fail the row: no row reads a header of the KRFFS root. */
+/** Read the header of a node in the model KRFFS root. */
 int krffs_node_head(const krffs_node_t *node, krffs_node_t *out)
 {
-    (void)node;
-    (void)out;
+    if (node == &root_dir || node == &victim || node == &source || node == &made_dir) {
+        *out = *node;
+        return 0;
+    }
     check(0, "unexpected root header read");
     return -1;
 }
 
-/** Fail the row: no row asks the type of a node of the KRFFS root. */
+/** The root is a directory and a child's mode gives its type. */
 int krffs_node_is_dir(const krffs_node_t *node)
 {
-    (void)node;
-    check(0, "unexpected root type read");
-    return -1;
+    krffs_node_t head;
+
+    if (node == &root_dir)
+        return 1;
+    return krffs_node_head(node, &head) != 0 ? -1 : KRFFS_IS_DIR(head.mode);
 }
 
 /** No node of the KRFFS root is in a row: 0. */
@@ -814,22 +852,27 @@ uint64_t krffs_ino_of(const krffs_node_t *node)
     return 0;
 }
 
-/** Fail the row: no row stores a mode on the KRFFS root. */
+/** Set the mode of the directory made by the mkdir row. */
 int krffs_node_set_mode(krffs_node_t *node, uint16_t mode)
 {
-    (void)node;
-    (void)mode;
+    if (mkdir_row && node == &made_dir) {
+        node->mode = mode;
+        return 0;
+    }
     check(0, "unexpected root mode store");
     return -1;
 }
 
-/** Fail the row: no row stores an owner on the KRFFS root. */
+/** Set the requested owner fields of the newly made directory. */
 int krffs_node_set_owner(krffs_node_t *node, uint32_t uid, uint32_t gid, int which)
 {
-    (void)node;
-    (void)uid;
-    (void)gid;
-    (void)which;
+    if (mkdir_row && node == &made_dir) {
+        if (which & KRFFS_SET_UID)
+            node->uid = uid;
+        if (which & KRFFS_SET_GID)
+            node->gid = gid;
+        return 0;
+    }
     check(0, "unexpected root owner store");
     return -1;
 }
@@ -942,6 +985,11 @@ static char *mapped_caller;
  * moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (mnt == &cwd_proc) {
+        k_memset(st, 0, sizeof(*st));
+        st->mode = S_IFDIR | 0555;
+        return 0;
+    }
     if (unlocked_row) {
         check(mnt == &mount && at == &node, "an unlocked open checks the file its walk found");
         k_memset(st, 0, sizeof(*st));
@@ -962,6 +1010,14 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
         k_memset(st, 0, sizeof(*st));
         st->mode = 0100644;
         st->size = sizeof(resident_pages);
+        return 0;
+    }
+    if (ro_mode) {
+        check(mnt == &mount && at == &node, "a read-only row reads the file its walk found");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = ro_mode;
+        st->flags_known = 1;
+        st->flags = inode_flags;
         return 0;
     }
     if (mnt == &fl_mount) {
@@ -991,6 +1047,8 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
     }
     check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     st->mode = 0106777;
+    if (mnt->type == &vfs_mqueue_type)
+        st->size = 80;
     return getattr_error;
 }
 
@@ -1152,8 +1210,9 @@ void filecache_forget_ino(const struct vfs_mount *mnt, uint64_t ino)
 }
 
 /** Require a live open handle before truncation. */
-int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
+int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size, int stamp_times)
 {
+    (void)stamp_times;
     check(mnt == &mount && at == &handle && opens == releases + 1 && size == 0,
           "mounted truncation uses a live open handle");
     check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
@@ -1179,6 +1238,10 @@ void vfs_release(struct vfs_mount *mnt, void *at)
 /** Record reference cleanup on failed open. */
 void vfs_ref_release(struct vfs_ref *ref)
 {
+    if (ref->mnt == &cwd_proc) {
+        cwd_refs--;
+        return;
+    }
     if (ref->mnt == &fl_mount) {
         return;
     }
@@ -1222,6 +1285,12 @@ void vfs_leave(struct vfs_mount *mnt)
  * descriptions open nothing on the root, and have nothing to close. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
+    if (mnt == &cwd_proc) {
+        check(at == &proc_root && !opened, "a proc directory keeps only its inode");
+        cwd_refs--;
+        refs--;
+        return;
+    }
     if (mnt == &dev_mount) {
         check(at == &dev_inode && !opened, "a device's description keeps its node only");
         dev_holds--;
@@ -1773,7 +1842,11 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
 NO_PROC_INO(procfs_ino_audio)
 NO_PROC_INO(procfs_ino_cmdline)
 NO_PROC_INO(procfs_ino_console)
-NO_PROC_INO(procfs_ino_dir)
+/** The proc root inode in the covered working directory row. */
+uint32_t procfs_ino_dir(void)
+{
+    return 1;
+}
 NO_PROC_INO(procfs_ino_disk)
 NO_PROC_INO(procfs_ino_filesystems)
 NO_PROC_INO(procfs_ino_interrupts)
@@ -2014,17 +2087,19 @@ uint32_t sysfs_node_mode(int handle)
     check(0, "unexpected stat of a /sys file");
     return 0;
 }
-/** No row's mount is debugfs. */
+/** The file whose open callback refuses the O_TRUNC request. */
+const struct vfs_type vfs_procfs_type = {.name = "proc"};
+const struct vfs_type vfs_mqueue_type = {.name = "mqueue"};
+const struct file_ops mq_ops = {0};
 const struct vfs_type vfs_debugfs_type = {"debugfs", 0, 0, 0, 1};
 
-/** Fail the row: no row opens a file of debugfs. */
+/** Refuse the open before truncation can change the file. */
 int32_t debugfs_bind(void *node, fd_entry_t *e, int flags)
 {
     (void)node;
     (void)e;
     (void)flags;
-    check(0, "unexpected open of a debugfs file");
-    return -EIO;
+    return -EACCES;
 }
 
 /** No PCI function of /sys exists, so none is a display. */
@@ -2287,11 +2362,12 @@ int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct 
 
 /** The working directory's path, which no unlocked row asks for, since the
  * unlocked open's row names an absolute path: "/". */
-void proc_cwd_read(const struct process *p, char *out)
+int proc_cwd_read(const struct process *p, char *out)
 {
     (void)p;
     out[0] = '/';
     out[1] = '\0';
+    return 0;
 }
 
 /** The walk with its path recorded, which the model does not record. */
@@ -2334,9 +2410,70 @@ void vfs_walk_unlock(struct vfs_mount *mnt)
 /** The root rows name no synthetic node and no mount point. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
-    (void)mnt;
-    (void)node;
+    return mnt == &cwd_proc && node == &proc_root ? &proc_root : NULL;
+}
+
+/** The model exposes no proc namespace links. */
+uint32_t procfs_ns_ino(int pid, int kind)
+{
+    (void)pid;
+    (void)kind;
     return 0;
+}
+
+/** No namespace link can be opened in the model. */
+int procfs_open_ns(int pid, int kind, int flags)
+{
+    (void)pid;
+    (void)kind;
+    (void)flags;
+    return -ENOENT;
+}
+
+/** No proc data file has a private mode in the model. */
+uint32_t procfs_owner_mode(int procfile)
+{
+    (void)procfile;
+    return 0;
+}
+
+/** The model tasks have no executable link. */
+int procfs_readlink_exe(int pid, char *buf, int cap)
+{
+    (void)pid;
+    (void)buf;
+    (void)cap;
+    return -ENOENT;
+}
+
+/** The model tasks expose no root or working directory link. */
+int procfs_readlink_dir(int pid, int root, char *buf, int cap)
+{
+    (void)root;
+    return procfs_readlink_exe(pid, buf, cap);
+}
+
+/** No row opens a proc data file. */
+int procfs_open(const struct vpath *vp, int flags)
+{
+    (void)vp;
+    (void)flags;
+    return -ENOENT;
+}
+
+/** No row makes a directory below /dev. */
+int synth_dev_dir_child(int parent, const char *leaf, int len)
+{
+    (void)parent;
+    (void)leaf;
+    (void)len;
+    return -1;
+}
+
+/** A proc task directory can outlive the task named by the cwd. */
+const struct synth_owner *vfs_proc_dir_owner(const struct vfs_ref *ref)
+{
+    return ref->mnt == &cwd_proc && cwd_owner.kept ? &cwd_owner : NULL;
 }
 
 /** No name is a mount point. */
@@ -2393,19 +2530,45 @@ static void resolve_closes(const struct vpath *vp)
     }
 }
 
-/** -1, the process gone: only the followed stat's row has a directory of
- * /proc (`resolve_closes`). The body stays a call and a constant, which the
- * compiler propagates, so the lookups that would follow a found process,
- * which no row reaches, and the procfs calls they make need no stub. */
+/** Resolve the replacement task in the PID reuse row. Another row closes
+ * the directory descriptor as its task lookup fails. */
 int procfs_resolve_id(const struct vpath *vp)
 {
+    if (reused_pid && vp->pid == reused_pid && vp->kind == VNODE_PROC_FD_DIR)
+        return reused_pid;
     resolve_closes(vp);
     return -1;
 }
 
-/** Fail the row: no row's path is of /proc. */
-int procfs_resolve_pid(int pid)
+/** No alternate proc mount exists in the model. */
+int procfs_dir_name(const struct vfs_mount *mnt, char *path, int cap)
 {
+    (void)mnt;
+    (void)path;
+    (void)cap;
+    return -ENOENT;
+}
+
+/** Name the namespace directory on its original mount. */
+int procfs_dir_relative(const struct synth_dir *sd, const struct vfs_mount *mnt, char *buf, int cap)
+{
+    if (sd->kind != VNODE_PROC_NS_DIR || mnt != &cwd_proc || cap < 5)
+        return -ENOENT;
+    k_memcpy(buf, "7/ns", 5);
+    return 4;
+}
+
+/** Use the kernel number in the model's PID namespace. */
+uint32_t procfs_pid_number(uint32_t kid, uint32_t pidns_ino)
+{
+    (void)pidns_ino;
+    return kid;
+}
+
+/** Provide the process lookup of the model. */
+int procfs_resolve_pid(int pid, uint32_t pidns_ino)
+{
+    (void)pidns_ino;
     (void)pid;
     check(0, "unexpected /proc lookup");
     return 0;
@@ -2420,6 +2583,44 @@ int procfs_may_read(int pid)
 }
 
 /** Fail the row: no row's path is of /proc. */
+int procfs_may_read_as(int pid, int use_real)
+{
+    (void)pid;
+    (void)use_real;
+    check(0, "unexpected /proc lookup");
+    return 0;
+}
+
+/** No model descriptor has a proc link inode. */
+uint32_t procfs_fd_link_ino(const struct vpath *vp, int id)
+{
+    (void)vp;
+    (void)id;
+    return 0;
+}
+
+/** Fail the row: no row's path is of /proc. */
+int procfs_fd_link_mode(int pid, int fd, uint32_t *mode)
+{
+    (void)pid;
+    (void)fd;
+    (void)mode;
+    check(0, "unexpected /proc lookup");
+    return -ENOENT;
+}
+
+/** Fail the row: no row's path is of /proc. */
+void procfs_owner_chown(const struct vpath *vp, const struct synth_owner *held, uint32_t uid,
+                        uint32_t gid)
+{
+    (void)vp;
+    (void)held;
+    (void)uid;
+    (void)gid;
+    check(0, "unexpected /proc lookup");
+}
+
+/** Fail the row: no row's path is of /proc. */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     (void)pid;
@@ -2430,21 +2631,23 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     return -ENOENT;
 }
 
-/** Fail the row: no row's path is of /proc. */
+/** The replacement task has an inode of its own. */
 uint32_t procfs_ino_pid(int pid)
 {
-    (void)pid;
+    if (reused_pid && pid == reused_pid)
+        return 71;
     check(0, "unexpected /proc lookup");
     return 0;
 }
 
-/** Fail the row: no row's path is of /proc. */
+/** Return the owner of the replacement task. */
 int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
 {
-    (void)pid;
     (void)mode;
-    (void)uid;
-    (void)gid;
+    if (reused_pid && pid == reused_pid) {
+        *uid = *gid = 71;
+        return 0;
+    }
     check(0, "unexpected /proc lookup");
     return -ENOENT;
 }
@@ -2465,10 +2668,63 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
+/** No descriptor is open in a model proc fd directory. */
+int procfs_fd_count(int pid)
+{
+    (void)pid;
+    return 0;
+}
+
+/** The one model thread has no siblings. */
+uint32_t procfs_task_links(int pid)
+{
+    (void)pid;
+    return 3;
+}
+
+/** The host model has a single PID namespace. */
+int procfs_dir_coords(const struct synth_dir *sd, int *pid, int *tid)
+{
+    *pid = sd->pid;
+    *tid = sd->tid;
+    return 0;
+}
+
+/** Return the model inode's retained kernel PID. */
+int procfs_held_pid(const struct synth_owner *own)
+{
+    return own->kept && own->serial == proc.serial ? own->node[2] : -1;
+}
+
+/** The model caller is the only member of its thread group. */
+int procfs_same_group(int pid)
+{
+    return pid == (int)proc.pid;
+}
+
+/** No model descriptor is open on fdinfo. */
+int procfs_fdinfo_access(const struct fd_entry *e, int use_real)
+{
+    (void)e;
+    (void)use_real;
+    return 0;
+}
+
+/** The model has no proc descriptor directories. */
+int procfs_fd_dir_access(int kind, int pid, int want, int use_real)
+{
+    (void)kind;
+    (void)pid;
+    (void)want;
+    (void)use_real;
+    return -ENOENT;
+}
+
 /** No descriptor is of /proc, so a lookup has no owner to set. */
-void procfs_lookup_owner(const struct vpath *vp)
+int procfs_lookup_owner(const struct vpath *vp)
 {
     (void)vp;
+    return 0;
 }
 
 /** No descriptor is of /proc, so an open keeps no owner. */
@@ -2476,6 +2732,12 @@ void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
 {
     (void)o;
     (void)vp;
+}
+
+/** Copy the inode of a second description in the model. */
+void procfs_owner_copy(struct synth_owner *to, const struct synth_owner *from)
+{
+    *to = *from;
 }
 
 /** No descriptor is of /proc, so a close has no kept owner to drop. */
@@ -2611,6 +2873,10 @@ int vfs_node_path(struct vfs_mount *mnt, void *at, char *out, uint32_t cap)
  * enters no process's root. */
 int vfs_enter(struct vfs_mount *mnt)
 {
+    if (mnt == &cwd_proc)
+        return 0;
+    if (mnt == &mount && mount.type == &vfs_mqueue_type)
+        return 0;
     if (mnt == &dev_mount) {
         dev_enters++;
         return 0;
@@ -2623,6 +2889,12 @@ int vfs_enter(struct vfs_mount *mnt)
  * process's root. */
 void vfs_ref_hold(const struct vfs_ref *r)
 {
+    if (r->mnt == &cwd_proc) {
+        cwd_refs++;
+        return;
+    }
+    if (r->mnt == &mount && mount.type == &vfs_mqueue_type)
+        return;
     if (r->mnt == &dev_mount) {
         check(r->node == &dev_inode, "a hold of the device's node");
         dev_holds++;
@@ -2806,7 +3078,8 @@ static void truncation(void)
     int mode, rc;
     struct vfs_ref ref;
 
-    for (mode = 0; mode < 4; mode++) {
+    for (mode = 0; mode < 5; mode++) {
+        mount.type = mode == 4 ? &vfs_debugfs_type : &mounted_type;
         proc.fds = &files;
         proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
         check(fd_table_init(proc.fds) == 0, "initialize descriptor table");
@@ -2832,9 +3105,12 @@ static void truncation(void)
                 fd_free(proc.fds, rc);
             }
         } else {
-            check(rc == (mode == 1 ? -ENOMEM : -EIO) && refs == 0 && leaves == (mode == 2) &&
-                      dropped == (mode == 1),
+            check(rc == (mode == 1   ? -ENOMEM
+                         : mode == 4 ? -EACCES
+                                     : -EIO) &&
+                      refs == 0 && leaves == (mode != 1) && dropped == (mode == 1),
                   "failed open returns error and releases resolution");
+            check(mode != 4 || truncates == 0, "refused debugfs open leaves the size alone");
             check(allocations == 1 && attrs == 0,
                   "failed open frees description without changing mode");
         }
@@ -2842,6 +3118,7 @@ static void truncation(void)
         fd_table_free(proc.fds);
         check(allocations == 0, "all descriptor storage released");
     }
+    mount.type = &mounted_type;
 }
 
 /** A fresh table of one thread for a row, with the counters at zero. */
@@ -3462,6 +3739,153 @@ static int model_open(void)
     return fd;
 }
 
+/** Identify the pipe end in the queue splice rows. */
+int pipe_is(const fd_entry_t *entry)
+{
+    return entry->type == FD_TYPE_PIPE;
+}
+
+/** The model output pipe is full. */
+int32_t pipe_splice_room(fd_entry_t *entry, int nonblock, uint32_t src)
+{
+    (void)entry;
+    (void)src;
+    return nonblock ? -EAGAIN : -EPIPE;
+}
+
+/** An ordinary open and a proc reopen both install queue operations. */
+static void mounted_queue(void)
+{
+    fd_entry_t *entry;
+    int fd, again;
+
+    row_begin();
+    mount.type = &vfs_mqueue_type;
+    fd = model_open();
+    entry = fd_get(proc.fds, fd);
+    check(entry && entry->ops == &mq_ops && entry->ofd->vmnt == &mount,
+          "an ordinary queue open installs queue operations on its mount");
+    if (entry) {
+        fd_entry_t pipe_end = {.type = FD_TYPE_PIPE};
+        isr_params_t regs = {0};
+
+        regs.ebx = fd;
+        regs.ecx = 11;
+        check(sys_lseek(&regs) == 11 && entry->ofd->offset == 11,
+              "a queue accepts a file position beyond the status text");
+        regs.ecx = 0;
+        regs.edx = 2;
+        check(sys_lseek(&regs) == 80, "SEEK_END uses the queue inode size");
+        check(write_allowed(entry) == -EINVAL, "a writable queue has no write operation");
+
+        check(splice_queue(&pipe_end, entry, 0, 0, 1) == -EINVAL &&
+                  splice_queue(entry, &pipe_end, 0, 0, 1) == -EAGAIN,
+              "only a queue splice to a full pipe waits for room");
+        check(filemap_check(entry, 0, VM_PROT_READ) == -ENODEV &&
+                  filemap_check(entry, 1, VM_PROT_READ) == -ENODEV,
+              "queue operations reject private and shared mappings");
+        again = proc_fd_reopen(entry->ofd, 2 | O_CLOEXEC);
+        check(again >= 0 && fd_slot(proc.fds, again)->ops == &mq_ops &&
+                  fd_slot(proc.fds, again)->ofd != entry->ofd &&
+                  (fd_slot(proc.fds, again)->flags & FD_FLAG_CLOEXEC),
+              "reopening the queue installs independent queue operations");
+    }
+    if (entry) {
+        again = proc_fd_reopen(entry->ofd, 3);
+        check(again >= 0 && fd_access_mode(fd_slot(proc.fds, again)) == 3 &&
+                  !(fd_slot(proc.fds, again)->flags & (FD_FLAG_READ | FD_FLAG_WRITE)),
+              "access mode three permits neither queue transfer");
+    }
+    if (entry) {
+        fd_entry_t copy = *entry;
+        int flushes = queue_flushes;
+
+        fd_close_locks(&copy);
+        check(queue_flushes == flushes, "dropping a borrowed queue does not cancel notification");
+        check(close_fd(fd) == 0 && queue_flushes == flushes + 1,
+              "closing a queue descriptor cancels notification");
+    }
+    mount.type = &mounted_type;
+    row_end();
+}
+
+/**
+ * Where EROFS falls among the other errors of access, chmod, chown and
+ * utimensat, as Linux 6.12 orders them, for a caller of uid 1 and a file of
+ * a mounted type owned by root, by path and through a descriptor opened
+ * before the mount turned read-only: on a read-only file system W_OK is
+ * EROFS before the mode is read (`sb_permission`), through a mount made
+ * read-only alone only once the mode allows the write (`do_faccessat`), and
+ * never for a device; X_OK on a noexec mount is EACCES first; and a change
+ * of attributes is EROFS before its EPERM, a chown that changes nothing
+ * included, but after utimensat's EINVAL for bad nanoseconds.
+ */
+static void read_only_order(void)
+{
+    struct utime_spec t[2];
+    fd_entry_t *e;
+    int fd;
+
+    row_begin();
+    proc.ruid = 1;
+    attr_row = 1;
+    fd = model_open();
+    e = fd < 0 ? NULL : fd_get(proc.fds, fd);
+    check(e != NULL, "a descriptor for the read-only rows");
+    if (!e) {
+        attr_row = 0;
+        proc.ruid = 0;
+        row_end();
+        return;
+    }
+    t[0].tv_sec = t[1].tv_sec = 1;
+    t[0].tv_nsec = t[1].tv_nsec = 0;
+    ro_mode = 0100444;
+    mount.flags = VFS_MS_RDONLY;
+    check(do_access("f", W_OK, 0, 0) == -EROFS && access_fd(e, W_OK, 0, 0) == -EROFS,
+          "W_OK of a 0444 file on a read-only file system is EROFS before the mode");
+    mount.flags = 0;
+    mount.mnt_rdonly = 1;
+    check(do_access("f", W_OK, 0, 0) == -EACCES && access_fd(e, W_OK, 0, 0) == -EACCES,
+          "through a mount read-only alone the mode's EACCES comes first");
+    ro_mode = 0100666;
+    check(do_access("f", W_OK, 0, 0) == -EROFS && access_fd(e, W_OK, 0, 0) == -EROFS,
+          "and EROFS once the mode allows the write");
+    ro_mode = 0020666;
+    mount.flags = VFS_MS_RDONLY;
+    check(do_access("f", W_OK, 0, 0) == 0 && access_fd(e, W_OK, 0, 0) == 0,
+          "a device on a read-only file system may be written");
+    ro_mode = 0100755;
+    mount.flags = VFS_MS_RDONLY | VFS_MS_NOEXEC;
+    check(do_access("f", W_OK | X_OK, 0, 0) == -EACCES && access_fd(e, X_OK, 0, 0) == -EACCES,
+          "X_OK on a noexec mount is EACCES before EROFS");
+    mount.flags = 0;
+    mount.sb_noexec = 1;
+    check(do_access("f", X_OK, 0, 0) == -EACCES && access_fd(e, X_OK, 0, 0) == -EACCES,
+          "a file system can forbid execution through every mount");
+    mount.sb_noexec = 0;
+    ro_mode = 0100644;
+    check(do_chmod("f", 0600, 0, 1) == -EROFS && chmod_fd(e, 0600) == -EROFS,
+          "another's chmod through a mount read-only alone is EROFS before EPERM");
+    check(do_chown("f", (uint32_t)-1, (uint32_t)-1, 1, 0) == -EROFS &&
+              chown_fd(e, (uint32_t)-1, (uint32_t)-1) == -EROFS,
+          "a chown that changes nothing is EROFS");
+    check(utimes_path("/f", 0, 0, t) == -EROFS && utimes_fd(fd_get(proc.fds, fd), t, 0) == -EROFS,
+          "another's explicit times are EROFS before EPERM");
+    t[1].tv_nsec = 1000000000;
+    check(utimes_fd(fd_get(proc.fds, fd), t, 0) == -EINVAL,
+          "bad nanoseconds are EINVAL before EROFS");
+    t[1].tv_nsec = 0;
+    check(attrs == 0, "nothing read-only is changed");
+    mount.mnt_rdonly = 0;
+    check(do_chmod("f", 0600, 0, 1) == -EPERM && utimes_fd(fd_get(proc.fds, fd), t, 0) == -EPERM,
+          "on a writable mount the same changes are EPERM");
+    ro_mode = 0;
+    attr_row = 0;
+    proc.ruid = 0;
+    row_end();
+}
+
 /**
  * A followed /proc/PID/fd link returns a mounted file's getattr error and
  * releases its temporary description reference on success and failure.
@@ -3581,7 +4005,7 @@ static void times_after_move(void)
             int fd = model_open();
 
             waiting = write_moves;
-            rc = fd < 0 ? fd : utimes_fd(fd, NULL, 0);
+            rc = fd < 0 ? fd : utimes_fd(fd_get(proc.fds, fd), NULL, 0);
         }
         check(rc == 0, "a utimensat of a file a write moves");
         check(attrs == 1 && ns_depth == 0 && !waiting,
@@ -4435,6 +4859,30 @@ int vfs_mount_unseen(const struct vfs_mount *m)
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
+}
+
+/** sysfs's type, which no row mounts: what `attr_read_only` compares. */
+const struct vfs_type vfs_sysfs_type = {"sysfs"};
+
+/** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    if (m->bind_of) {
+        return m->flags;
+    }
+    return (m->flags & ~VFS_MS_RDONLY) | (m->mnt_rdonly ? VFS_MS_RDONLY : 0);
+}
+
+/** vfs.c's: the base's VFS_MS_RDONLY, the file system's state. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_base(m)->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** vfs.c's: the mount's own flag or its file system's. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
 /** No mount holds a device. */
@@ -5460,6 +5908,246 @@ static void ioctl_entry_lock(void)
     check(!file_ioctl_unlocked(&entry), "a descriptor without device operations stays locked");
 }
 
+/** The directory number and the saved kernel PID can name different tasks. */
+static void held_fd_directory(void)
+{
+    struct synth_dir sd = {0};
+    fd_entry_t entry = {0};
+    int handled;
+    struct open_file ofd = {0};
+
+    proc.euid = 9;
+    entry.type = FD_TYPE_SYNTH_DIR;
+    entry.priv = &sd;
+    sd.kind = VNODE_PROC_FD_DIR;
+    sd.pid = (int)proc.pid;
+    sd.own.kept = 1;
+    sd.own.node[2] = sd.pid + 1;
+    check(access_proc_dir(&entry, CRED_W, AT_EACCESS, &handled) == -EACCES,
+          "a held directory judges its original process");
+    entry.ofd = &ofd;
+    ofd.synth_mnt = &cwd_proc;
+    sd.own.serial = proc.serial + 1;
+    cwd_proc.flags = VFS_MS_RDONLY;
+    check(access_fd(&entry, W_OK, AT_EACCESS, 0) == -EROFS,
+          "the read-only superblock precedes the held proc directory permission");
+    cwd_proc.flags = 0;
+    sd.own.serial = proc.serial;
+    sd.own.node[2] = (int)proc.pid;
+    check(access_proc_dir(&entry, CRED_W, AT_EACCESS, &handled) == 0,
+          "the retained task is in the caller's group");
+}
+
+/** Getattr uses the kept task, including after reuse of its numeric PID. */
+static void held_proc_stat(void)
+{
+    struct synth_dir sd = {0};
+    struct synth_path sp = {0};
+    fd_entry_t entry = {0};
+    struct kstat st;
+
+    entry.type = FD_TYPE_SYNTH_DIR;
+    entry.priv = &sd;
+    sd.pid = sd.own.node[2] = reused_pid = 7;
+    sd.kind = VNODE_PROC_FD_DIR;
+    sd.own.kept = 1;
+    sd.own.serial = proc.serial;
+    sd.own.ino = 31;
+    sd.own.uid = 42;
+    proc.serial++;
+    check(fstat_getattr(&entry, &st) == -ENOENT, "a departed fd directory has no file count");
+    sd.kind = VNODE_PROC_FDINFO_DIR;
+    check(fstat_getattr(&entry, &st) == 0 && st.st_uid == 42 && st.st_ino == 31,
+          "a departed fdinfo directory keeps its inode attributes");
+    sd.kind = VNODE_PROC_TASK_DIR;
+    check(fstat_getattr(&entry, &st) == 0 && st.st_nlink == 2,
+          "a departed task directory counts no threads");
+    sd.kind = VNODE_PROC_PID;
+    check(fstat_getattr(&entry, &st) == 0 && st.st_uid == 0 && st.st_ino == 31,
+          "a reused process number supplies no owner to the old directory");
+    check(access_fd(&entry, X_OK, AT_EACCESS, 0) == -ESRCH,
+          "a process descriptor uses the original task for access");
+    sp.vp.kind = VNODE_PROC_FD_DIR;
+    sp.vp.pid = reused_pid;
+    sp.own = sd.own;
+    entry.type = FD_TYPE_SYNTH_PATH;
+    entry.priv = &sp;
+    check(fstat_getattr(&entry, &st) == -ENOENT,
+          "a held path also names the departed fd directory");
+    proc.serial--;
+    reused_pid = 0;
+}
+
+/** The writable directory mounted over proc has no children. */
+static int covered_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found)
+{
+    (void)mnt;
+    (void)dir;
+    (void)name;
+    (void)found;
+    return -ENOENT;
+}
+
+/** Open the retained node and walk from it by descriptor and cwd. */
+static void departed_proc_open(void)
+{
+    struct kstat st;
+    char buf[64];
+    int outside, fd;
+    struct vfs_ref ref = {&cwd_proc, &proc_root};
+    struct vpath link = {.kind = VNODE_PROC_FD_LINK};
+    fd_entry_t *entry;
+
+    proc_root.kind = VNODE_PROC_NS_DIR;
+    proc_root.pid = 7;
+    proc_root.pidns_ino = 1;
+    cwd_owner.ino = 31;
+    k_memcpy(cwd_proc.covered_path, "/proc", 6);
+    fd = synth_open_dir(&proc_root, O_PATH | O_DIRECTORY, &cwd_owner);
+    check(fd >= 0, "O_PATH opens the original directory after reap");
+    synth_mount_record(fd, &ref, &proc_root, O_PATH);
+    entry = fd_get(proc.fds, fd);
+    if (entry) {
+        check(fstat_getattr(entry, &st) == 0 && st.st_ino == 31,
+              "the reopened namespace directory keeps the original inode");
+        check(copy_path_at(buf, sizeof(buf), fd, "../.", NULL) > 0 &&
+                  !__builtin_strcmp(buf, "/proc/7/ns/../.") && openat2_dir(fd, buf, &outside) == 0,
+              "both at walks keep the departed descriptor as their anchor");
+        proc_root.kind = VNODE_PROC_PID;
+        check(proc_fd_open_from(&link, &proc, entry, 0) == -ESRCH,
+              "a proc link reopen checks read permission on its original inode");
+        check(root_check(&ref) == -ESRCH && cred_access_ref(&ref, CRED_R, 0) == -ESRCH,
+              "root and inode checks use the permission hook");
+        check(synth_stat_ref(&ref, &proc_root, &st, 1) == 0 && st.st_ino == 31,
+              "a pathname stat reports the inode reached as parent");
+        proc_root.kind = VNODE_PROC_NS_DIR;
+        check(close_fd(fd) == 0, "close the namespace directory");
+    }
+    k_memcpy(row_fs.cwd, "/proc/7/ns", 11);
+    check(copy_path_at(buf, sizeof(buf), AT_FDCWD, ".", NULL) > 0 &&
+              !__builtin_strcmp(buf, "/proc/7/ns/."),
+          "a dot walk starts at the retained directory");
+    check(copy_path_at(buf, sizeof(buf), AT_FDCWD, "..", NULL) > 0 &&
+              !__builtin_strcmp(buf, "/proc/7/ns/..") && openat2_dir(AT_FDCWD, buf, &outside) == 0,
+          "parent and scoped walks retain the departed anchor");
+}
+
+/** Empty names reach the proc root even when a writable directory covers it. */
+static void covered_cwd(void)
+{
+    static const struct vfs_ops ops = {.lookup = covered_lookup};
+    static const struct vfs_type cover = {.ops = &ops};
+    isr_params_t regs = {0};
+    struct kstat st;
+    struct fs_struct *old = proc.fs;
+
+    row_begin();
+    mount.type = &cover;
+    proc.ruid = 1;
+    proc.fs = &row_fs;
+    row_fs.cwd_mnt = &cwd_proc;
+    row_fs.cwd_node = (void *)&proc_root;
+    attr_row = 1;
+    ro_mode = S_IFDIR | 0777;
+    check(do_access("covered", W_OK, 0, 0) == 0, "the covering directory grants write access");
+    check(access_empty(AT_FDCWD, W_OK, AT_EMPTY_PATH) == -EACCES,
+          "the held proc root denies write access");
+    check(stat_at(AT_FDCWD, "", AT_EMPTY_PATH, &st) == 0 && st.st_dev == PROCFS_FSID,
+          "an empty name stats the covered directory");
+    check(link_from_user(AT_FDCWD, "", AT_FDCWD, "/new", AT_EMPTY_PATH) == -EXDEV,
+          "linkat compares the held mount against the new directory");
+    cwd_proc.flags = VFS_MS_RDONLY;
+    regs.ebx = AT_FDCWD;
+    regs.ecx = 1;
+    regs.esi = AT_EMPTY_PATH;
+    check(sys_fchmodat2(&regs) == -EROFS, "chmod uses the held mount");
+    check(utimensat_body(&regs, 0) == -EROFS, "utimensat uses the held mount");
+    regs.edi = AT_EMPTY_PATH;
+    check(sys_fchownat(&regs) == -EROFS, "chown uses the held mount");
+    cwd_owner.kept = 1;
+    cwd_owner.node[2] = (int)proc.pid;
+    cwd_owner.serial = proc.serial + 1;
+    departed_proc_open();
+    proc_root.kind = VNODE_PROC_PID;
+    check(access_empty(AT_FDCWD, W_OK, AT_EMPTY_PATH) == -EROFS,
+          "superblock write permission precedes the process hook");
+    cwd_proc.flags = 0;
+    check(access_empty(AT_FDCWD, X_OK, AT_EMPTY_PATH) == -ESRCH,
+          "empty-path search checks the retained process");
+    proc_root.kind = VNODE_PROC_TASK_DIR;
+    check(access_empty(AT_FDCWD, 0, AT_EMPTY_PATH) == -ESRCH,
+          "even F_OK checks the retained task listing");
+    proc_root.kind = VNODE_PROC_PID;
+    proc_root.tid = 7;
+    check(access_empty(AT_FDCWD, X_OK, AT_EMPTY_PATH) == 0,
+          "a thread base uses ordinary directory permission");
+    proc_root.tid = 0;
+    proc_root.kind = VNODE_PROC_DIR;
+    proc_root.pid = 0;
+    proc_root.pidns_ino = 0;
+    cwd_owner.kept = 0;
+    check(cwd_refs == 0, "empty path calls release the held directory");
+    row_fs.cwd_mnt = NULL;
+    row_fs.cwd_node = NULL;
+    proc.fs = old;
+    cwd_proc.flags = 0;
+    mount.type = &mounted_type;
+    ro_mode = 0;
+    attr_row = 0;
+    proc.ruid = 0;
+    row_end();
+}
+
+/** Linux checks mount write access separately from inode permission. */
+static void open_permission_order(void)
+{
+    struct vfs_ref ref = {&mount, &node};
+    const int write_only = 1;
+
+    row_begin();
+    ro_mode = S_IFREG | 0444;
+    inode_flags = VFS_FL_APPEND;
+    mount.flags = VFS_MS_RDONLY;
+    check(cred_access_ref(&ref, CRED_W, 0) == -EROFS &&
+              open_mounted_node(&ref, write_only) == -EROFS && truncate_checks(&ref) == -EROFS,
+          "the read-only superblock precedes inode permission and append-only");
+    mount.flags = 0;
+    mount.mnt_rdonly = 1;
+    check(open_mounted_node(&ref, write_only) == -EACCES &&
+              open_mounted_node(&ref, write_only | O_TRUNC) == -EROFS,
+          "only truncation takes mount write access before open permission");
+    mount.mnt_rdonly = 0;
+    check(open_mounted_node(&ref, write_only) == -EACCES && truncate_checks(&ref) == -EACCES,
+          "denied write permission precedes the append-only check");
+    ro_mode = S_IFREG | 0666;
+    check(open_mounted_node(&ref, write_only) == -EPERM && truncate_checks(&ref) == -EPERM,
+          "append-only refuses a permitted overwrite");
+    ro_mode = S_IFDIR | 0777;
+    inode_flags = VFS_FL_IMMUTABLE;
+    check(truncate_checks(&ref) == -EISDIR, "truncate checks the file type first");
+    ro_mode = inode_flags = 0;
+    row_end();
+}
+
+/** Directory search and file execution use their respective DAC rules. */
+static void dac_capabilities(void)
+{
+    uint32_t uid = proc.euid;
+
+    proc.euid = 0;
+    proc.cap_lost[0] = ~(1u << CAP_DAC_READ_SEARCH);
+    check(cred_access_bits(12, 13, S_IFDIR, CRED_X, 0) == 0 &&
+              cred_access_bits(12, 13, S_IFDIR, CRED_W, 0) == -EACCES &&
+              cred_access_bits(12, 13, S_IFREG | 0100u, CRED_X, 0) == -EACCES,
+          "READ_SEARCH searches a directory but grants neither writes nor file execution");
+    proc.cap_lost[0] = ~(1u << CAP_DAC_OVERRIDE);
+    check(cred_access_bits(12, 13, S_IFREG, CRED_X, 0) == -EACCES &&
+              cred_access_bits(12, 13, S_IFREG | 0100u, CRED_X, 0) == 0,
+          "DAC_OVERRIDE executes files with at least one execute bit");
+    proc.euid = uid;
+    proc.cap_lost[0] = 0;
+}
+
 int main(int argc, char **argv)
 {
     mount.type = &mounted_type;
@@ -5471,6 +6159,19 @@ int main(int argc, char **argv)
             printf(
                 "open-hosttest: result: pass: a read sees a mapping's store made while it slept\n");
         }
+        return failures != 0;
+    }
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    mounted_queue();
+    held_fd_directory();
+    held_proc_stat();
+    covered_cwd();
+    open_permission_order();
+    dac_capabilities();
+    if (argc == 2 && __builtin_strcmp(argv[1], "--attribute-open-only") == 0) {
+        truncation();
+        read_only_order();
+        printf("open-hosttest: attributes: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
     ioctl_entry_lock();
@@ -5493,6 +6194,7 @@ int main(int argc, char **argv)
     proc_fd_stat_errors();
     proc_fd_stat_closed();
     times_after_move();
+    read_only_order();
     open_last_slot();
     loop_handles();
     lock_keys();

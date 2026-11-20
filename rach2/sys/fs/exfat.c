@@ -1748,6 +1748,21 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     return 0;
 }
 
+/** Emit the volume's ownership and permission-mask options. */
+static void ex_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
+{
+    const struct ex_mount *em = mnt->priv;
+
+    if (em->uid != 0) {
+        emit(out, "uid", em->uid, VFS_OPT_DEC);
+    }
+    if (em->gid != 0) {
+        emit(out, "gid", em->gid, VFS_OPT_DEC);
+    }
+    emit(out, "fmask", em->umask, VFS_OPT_OCT3);
+    emit(out, "dmask", em->umask, VFS_OPT_OCT3);
+}
+
 /** The constructor of `vfs_exfat_type`, whose contract is in exfat.h: the
  * record from the heap, given to `ex_mount_on` and freed with every node it
  * took when that fails. */
@@ -1765,6 +1780,8 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
             node_drop(em, em->nodes);
         }
         kfree(em);
+    } else {
+        mnt->show_options = ex_options;
     }
     return rc;
 }
@@ -3574,7 +3591,7 @@ static int join_run(struct ex_mount *em, struct ex_node *n, uint64_t have, uint3
  * Returns 0, -EISDIR, -EFBIG past 2^63 - 1 bytes, -EROFS, -ENOSPC, or
  * -errno.
  */
-static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct ex_mount *em = em_of(mnt);
     struct ex_node *n = handle;
@@ -3582,6 +3599,7 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     uint64_t have, keep;
     int rc;
 
+    (void)stamp_times;
     if (n->is_dir) {
         return -EISDIR;
     }
@@ -3705,8 +3723,14 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     int read_only = -1;
     int rc;
 
-    if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
+    if (((what & VFS_SET_UID) && st->uid != em->uid) ||
+        ((what & VFS_SET_GID) && st->gid != em->gid) ||
+        (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME | VFS_SET_CTIME | VFS_SET_UID |
+                  VFS_SET_GID))) {
         return -EPERM;
+    }
+    if (!(what & (VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME))) {
+        return 0; /* no separately stored change time */
     }
     if (what & VFS_SET_MODE) {
         rc = fat_mode_change(em->umask, st->mode, &read_only);

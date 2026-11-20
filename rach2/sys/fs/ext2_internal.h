@@ -424,6 +424,7 @@ struct ext2_mount {
      * or `errors=` of the mount's or a remount's options; 0 only before
      * the constructor reads the superblock. */
     int errors;
+    int disk_errors; /* the superblock's default error policy */
     /* The generation the next inode made gets, counted from the mount's
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
@@ -777,7 +778,7 @@ int ext2_punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep);
 int ext2_map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
                    int *fresh);
 int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st);
-int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size);
+int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times);
 int ext2_fsync(struct vfs_mount *mnt, void *handle);
 int ext2_fdatasync(struct vfs_mount *mnt, void *handle);
 int32_t ext2_file_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,

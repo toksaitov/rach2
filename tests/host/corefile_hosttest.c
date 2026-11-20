@@ -77,8 +77,6 @@ static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath,
 static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 static int fd_node_check(fd_entry_t *entry);
 static int cred_privileged(void);
-static int cred_kill_setid(krffs_node_t *node);
-static int vfs_kill_setid(struct vfs_mount *mnt, void *node);
 static int mnt_is_root(const struct vfs_mount *mnt);
 static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 static int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
@@ -187,6 +185,7 @@ static void fs_socket_unbind(struct vfs_ref *ref);
 static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino);
 static int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off);
 #include "syscall_fs.c"
+#include "fs_caps_first.h"
 
 /** No row advises a read: nothing to queue. */
 void filecache_willneed(struct open_file *ofd, uint64_t offset, uint64_t len)
@@ -372,6 +371,22 @@ char *path_buf_get(void)
     return calloc(1, VFS_PATH_MAX);
 }
 
+/** The model has no separate proc mount. */
+void path_buf_set_mount(char *buf, struct vfs_mount *mnt)
+{
+    (void)buf;
+    (void)mnt;
+}
+
+/** Record the held process directory as the walk's starting point. */
+int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base)
+{
+    struct vfs_ref ref = {mnt, node};
+    (void)buf;
+    (void)base;
+    return mnt && vfs_proc_dir_owner(&ref) != NULL;
+}
+
 /** Free a buffer from `path_buf_get`. */
 void path_buf_put(char *buf)
 {
@@ -383,6 +398,13 @@ const char *proc_cwd(const struct process *p)
 {
     (void)p;
     return "/";
+}
+
+/** Copy the working directory of the model's ordinary mount. */
+int proc_cwd_read(const struct process *p, char *out)
+{
+    k_strncpy(out, proc_cwd(p), VFS_PATH_MAX);
+    return 0;
 }
 
 /** The model mount is the root mount. Its type is not KRFFS's, so its nodes
@@ -499,6 +521,13 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
     (void)node;
+    return NULL;
+}
+
+/** No node of the model is a process directory. */
+const struct synth_owner *vfs_proc_dir_owner(const struct vfs_ref *ref)
+{
+    (void)ref;
     return NULL;
 }
 
@@ -1260,9 +1289,36 @@ int procfs_open(const struct vpath *vp, int flags)
     return -ENOENT;
 }
 
-/** No row names a /proc process: -1. */
-int procfs_resolve_pid(int pid)
+/** No alternate proc mount exists in the model. */
+int procfs_dir_name(const struct vfs_mount *mnt, char *path, int cap)
 {
+    (void)mnt;
+    (void)path;
+    (void)cap;
+    return -ENOENT;
+}
+
+/** No row names a /proc process: -1. */
+int procfs_dir_relative(const struct synth_dir *sd, const struct vfs_mount *mnt, char *buf, int cap)
+{
+    (void)sd;
+    (void)mnt;
+    (void)buf;
+    (void)cap;
+    return -ENOENT;
+}
+
+/** Use the kernel number in the model's PID namespace. */
+uint32_t procfs_pid_number(uint32_t kid, uint32_t pidns_ino)
+{
+    (void)pidns_ino;
+    return kid;
+}
+
+/** Provide the process lookup of the model. */
+int procfs_resolve_pid(int pid, uint32_t pidns_ino)
+{
+    (void)pidns_ino;
     (void)pid;
     return -1;
 }
@@ -1272,6 +1328,41 @@ int procfs_may_read(int pid)
 {
     (void)pid;
     return 0;
+}
+
+/** No row reads /proc: 0. */
+int procfs_may_read_as(int pid, int use_real)
+{
+    (void)pid;
+    (void)use_real;
+    return 0;
+}
+
+/** No model descriptor has a proc link inode. */
+uint32_t procfs_fd_link_ino(const struct vpath *vp, int id)
+{
+    (void)vp;
+    (void)id;
+    return 0;
+}
+
+/** No row's descriptor is of /proc: -ENOENT. */
+int procfs_fd_link_mode(int pid, int fd, uint32_t *mode)
+{
+    (void)pid;
+    (void)fd;
+    (void)mode;
+    return -ENOENT;
+}
+
+/** No row's descriptor is of /proc, so a chown has no kept owner to set. */
+void procfs_owner_chown(const struct vpath *vp, const struct synth_owner *held, uint32_t uid,
+                        uint32_t gid)
+{
+    (void)vp;
+    (void)held;
+    (void)uid;
+    (void)gid;
 }
 
 /** No kind is a system-wide file of /proc here, so the opens and stats
@@ -1386,6 +1477,20 @@ int is_dma_buf_file(const fd_entry_t *e)
     return 0;
 }
 
+/** The model queues hold no notification. */
+void mq_flush(const fd_entry_t *entry)
+{
+    (void)entry;
+}
+
+/** No queue descriptor is present in the model. */
+int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r)
+{
+    (void)e;
+    (void)r;
+    return 0;
+}
+
 /** No row looks up a process: NULL. */
 process_t *get_process(uint32_t pid)
 {
@@ -1402,10 +1507,57 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
+/** No descriptor is open in a model proc fd directory. */
+int procfs_fd_count(int pid)
+{
+    (void)pid;
+    return 0;
+}
+
+/** The host model has a single PID namespace. */
+int procfs_dir_coords(const struct synth_dir *sd, int *pid, int *tid)
+{
+    *pid = sd->pid;
+    *tid = sd->tid;
+    return 0;
+}
+
+/** No row holds a descriptor in the caller's own proc fd directory. */
+int procfs_same_group(int pid)
+{
+    (void)pid;
+    return 0;
+}
+
+/** Return the model inode's retained kernel PID. */
+int procfs_held_pid(const struct synth_owner *own)
+{
+    return own->kept ? own->node[2] : -1;
+}
+
+/** No model descriptor is open on fdinfo. */
+int procfs_fdinfo_access(const struct fd_entry *e, int use_real)
+{
+    (void)e;
+    (void)use_real;
+    return 0;
+}
+
+/** The model has no proc descriptor directories. */
+int procfs_fd_dir_access(int kind, int pid, int want, int use_real)
+{
+    (void)kind;
+    (void)pid;
+    (void)want;
+    (void)use_real;
+    return -ENOENT;
+}
+
 /** No row's descriptor is a /proc file, so a lookup has no owner to set. */
-void procfs_lookup_owner(const struct vpath *vp)
+int procfs_lookup_owner(const struct vpath *vp)
 {
     (void)vp;
+    return 0;
 }
 
 /** No row's descriptor is of /proc, so an open keeps no owner. */
@@ -1413,6 +1565,12 @@ void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
 {
     (void)o;
     (void)vp;
+}
+
+/** Copy the inode of a second description in the model. */
+void procfs_owner_copy(struct synth_owner *to, const struct synth_owner *from)
+{
+    *to = *from;
 }
 
 /** No row's descriptor is of /proc, so a close has no kept owner to drop. */
@@ -1866,8 +2024,9 @@ void pc_wait_release(uint32_t seen)
 }
 
 /** The truncation of an open with O_TRUNC, which no row asks for: -EROFS. */
-int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
+int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size, int stamp_times)
 {
+    (void)stamp_times;
     (void)mnt;
     (void)at;
     (void)size;
@@ -2019,6 +2178,14 @@ int sysfs_attr_present(int node, int attr)
     return 1;
 }
 
+/** No PCI function's attribute is there: no row has a PCI device. */
+int sysfs_pci_attr_present(int key, int attr)
+{
+    (void)key;
+    (void)attr;
+    return 0;
+}
+
 /** No attribute of /sys is private. */
 int sysfs_attr_private(int node, int attr)
 {
@@ -2034,6 +2201,9 @@ uint32_t sysfs_attr_mode(int node, int attr)
 }
 
 /** No row's mount is debugfs. */
+const struct vfs_type vfs_procfs_type = {.name = "proc"};
+const struct vfs_type vfs_mqueue_type = {.name = "mqueue"};
+const struct file_ops mq_ops = {0};
 const struct vfs_type vfs_debugfs_type = {"debugfs", 0, 0, 0, 1};
 
 /** Fail the row: no row opens a file of debugfs. */
@@ -2332,6 +2502,30 @@ static void refault_rows(void)
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
+}
+
+/** sysfs's type, which no row mounts: what `attr_read_only` compares. */
+const struct vfs_type vfs_sysfs_type = {"sysfs"};
+
+/** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    if (m->bind_of) {
+        return m->flags;
+    }
+    return (m->flags & ~VFS_MS_RDONLY) | (m->mnt_rdonly ? VFS_MS_RDONLY : 0);
+}
+
+/** vfs.c's: the base's VFS_MS_RDONLY, the file system's state. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_base(m)->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** vfs.c's: the mount's own flag or its file system's. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
 /** The SIGXFSZ of a row past RLIMIT_FSIZE, which no row reads. */

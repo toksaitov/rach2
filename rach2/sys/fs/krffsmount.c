@@ -685,7 +685,7 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
  * a read-only mount; -EFBIG for a size of 4 GiB or more; -ENOSPC when the
  * file could not grow; or -EIO.
  */
-static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct krffs_volume *vol = vol_of(mnt);
     int rc = begin_write(mnt);
@@ -702,7 +702,7 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         uint64_t now = was;
 
         vol->writer = handle;
-        rc = krffs_truncate_node_at(&vol->fs, now, (uint32_t)size, &now);
+        rc = krffs_resize_node_at(&vol->fs, now, (uint32_t)size, &now, stamp_times);
         vol->writer = NULL;
         if (now != KRFFS_NO_NODE && now != was) {
             open_moved(vol, was, now);

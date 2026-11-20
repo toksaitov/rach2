@@ -1365,7 +1365,10 @@ static void description_last(void)
  * sb_prepare_remount_readonly counts every mount of the superblock and
  * mnt_make_readonly one mount. Once begun, a reservation for writing through
  * it is EROFS, and so is a second remount, EBUSY, until it ends; a writer
- * through a read-only base is EROFS after it.
+ * through a read-only base is EROFS after it. A remount of the base's own
+ * flag alone (MS_BIND) counts and holds off only the writers through the
+ * base, as Linux's mnt_make_readonly of that one mount, and once the base
+ * alone is read-only a writer through a bind is admitted.
  */
 static void remount_writers(void)
 {
@@ -1388,17 +1391,31 @@ static void remount_writers(void)
     ref2.node = &node;
     check(fd_ofd_access(w, &ref, 1) == 0,
           "a description reserves a file for writing through a bind");
-    check(fd_mount_readonly_begin(&base) == -EBUSY && !base.readonly_pending,
+    check(fd_mount_readonly_begin(&base, 0) == -EBUSY && !base.readonly_pending,
           "the base's remount read-only is refused while it lives");
-    check(fd_mount_readonly_begin(&bind2) == 0 && bind2.readonly_pending,
+    check(fd_mount_readonly_begin(&bind2, 0) == 0 && bind2.readonly_pending,
           "another bind's is not, since no description writes through it");
     check(fd_ofd_access(n, &ref2, 1) == -EROFS && n->access == 0,
           "a writer through that bind is refused while its remount runs");
     fd_mount_readonly_end(&bind2);
     check(fd_ofd_access(n, &ref2, 1) == 0, "and admitted after it ends");
+    check(fd_mount_readonly_begin(&base, 1) == 0 && base.readonly_pending == 2,
+          "the base's own flag goes read-only alone while a bind of it writes");
+    fd_ofd_access_drop(n);
+    check(fd_ofd_access(n, &ref2, 1) == 0, "and a writer through a bind is admitted meanwhile");
+    ref2.mnt = &base;
+    check(fd_ofd_access(n, &ref2, 1) == -EROFS, "but not one through the base");
+    ref2.mnt = &bind2;
+    fd_mount_readonly_end(&base);
+    base.mnt_rdonly = 1;
+    check(fd_ofd_access(n, &ref2, 1) == 0, "a bind writes over a base read-only alone");
+    ref2.mnt = &base;
+    check(fd_ofd_access(n, &ref2, 1) == -EROFS, "and the base itself does not");
+    ref2.mnt = &bind2;
+    base.mnt_rdonly = 0;
     fd_ofd_access_drop(n);
     fd_ofd_access_drop(w);
-    check(fd_mount_readonly_begin(&base) == 0 && fd_mount_readonly_begin(&base) == -EBUSY,
+    check(fd_mount_readonly_begin(&base, 0) == 0 && fd_mount_readonly_begin(&base, 0) == -EBUSY,
           "with no writer the base's remount begins, and a second one is refused");
     check(fd_ofd_access(n, &ref, 1) == -EROFS, "a writer through a bind of the base is refused");
     base.flags = VFS_MS_RDONLY;
@@ -1570,6 +1587,27 @@ static void description_watch(void)
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m->bind_of ? m->bind_of : m;
+}
+
+/** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    if (m->bind_of) {
+        return m->flags;
+    }
+    return (m->flags & ~VFS_MS_RDONLY) | (m->mnt_rdonly ? VFS_MS_RDONLY : 0);
+}
+
+/** vfs.c's: the base's VFS_MS_RDONLY, the file system's state. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_base(m)->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** vfs.c's: the mount's own flag or its file system's. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
 /**

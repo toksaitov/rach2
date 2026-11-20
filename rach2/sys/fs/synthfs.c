@@ -2419,6 +2419,7 @@ int synth_classify(const char *path, struct vpath *vp)
     int n;
 
     vp->name[0] = '\0';
+    vp->pidns_ino = 0;
     vp->pid = 0;
     vp->tid = 0;
     vp->procfd = -1;

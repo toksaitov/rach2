@@ -46,6 +46,20 @@ does with
 .Dv F_SETFD ;
 both ignore
 .Fa arg .
+On a POSIX message queue,
+.Dv FIONREAD
+returns the inode size less the file position as an int, and
+.Dv FIOQSIZE
+returns zero allocated bytes as a 64-bit integer.
+.Dv FIGETBSZ
+returns the page size.
+.Dv FIOASYNC
+can clear async mode.
+Setting it returns
+.Er ENOTTY .
+.Dv FS_IOC_FIEMAP
+returns
+.Er EOPNOTSUPP .
 Sockets first handle network-interface requests.
 The console and pseudo-terminal slaves share the terminal requests below.
 A descriptor with device operations handles its remaining requests through

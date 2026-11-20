@@ -137,6 +137,7 @@ struct utsns {
 
 struct ipcns {
     struct ns_common c;
+    struct vfs_mount *mq; /* the namespace's private mqueue mount */
 };
 
 /* The namespaces of a process besides its user and PID namespaces, shared by
@@ -179,6 +180,9 @@ struct ipcns *proc_ipcns(const process_t *p);
  */
 int ns_privileged(const process_t *p, const struct userns *ns);
 
+/** Check namespace ancestry using the caller's selected capability bit. */
+int ns_capable_with(const process_t *p, const struct userns *ns, int held);
+
 /** Whether `p` holds the capability `cap` in the user namespace `ns`, NULL
  * for the first, as Linux's `cap_capable` answers: as `ns_privileged`
  * says for CAP_SYS_ADMIN, with `cap` in place of it. */
@@ -202,6 +206,9 @@ extern int ns_overflowgid;
  * `ns_overflowgid` when its map does not cover it. */
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid);
 uint32_t ns_gid_from_kernel(const struct userns *ns, uint32_t kid);
+
+/** Whether ns maps the kernel user ID uid. */
+int ns_uid_mapped(const struct userns *ns, uint32_t uid);
 
 /** Whether the maps of `ns` cover both the kernel's user id `uid` and its
  * group id `gid`, as an exec needs before it applies a file's set-id bits. */
@@ -371,12 +378,16 @@ void ns_exec(process_t *p);
  * in a user namespace, a write of its /proc/sys/user limits. */
 #define CAP_LAST_CAP           40
 #define CAP_HIGH_WORD          0x1FFu
+#define CAP_CHOWN              0
 #define CAP_DAC_OVERRIDE       1
 #define CAP_DAC_READ_SEARCH    2
+#define CAP_FOWNER             3
+#define CAP_FSETID             4
 #define CAP_SETPCAP            8
 #define CAP_NET_ADMIN          12
 #define CAP_SYS_RAWIO          17
 #define CAP_SYS_CHROOT         18
+#define CAP_SYS_PTRACE         19
 #define CAP_SYS_ADMIN          21
 #define CAP_SYS_BOOT           22
 #define CAP_SYS_RESOURCE       24

@@ -126,6 +126,12 @@ void ipc_ns_gone(struct ipcns *ns)
     (void)ns;
 }
 
+int mq_root_made(struct ipcns *ns)
+{
+    (void)ns;
+    return 0;
+}
+
 process_t *get_process(uint32_t pid)
 {
     (void)pid;

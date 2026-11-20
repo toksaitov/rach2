@@ -94,7 +94,14 @@ off the flags given, as on Linux, and is not recorded.
 .Dv MS_REMOUNT
 gives the mount whose root
 .Fa target
-names the other flags, reads neither
+names the other flags, keeping its
+.Dv MS_NOATIME ,
+.Dv MS_NODIRATIME
+and
+.Dv MS_RELATIME
+when none of them or
+.Dv MS_STRICTATIME
+is given, as on Linux, reads neither
 .Fa source
 nor
 .Fa filesystemtype ,
@@ -137,15 +144,20 @@ remount, so that the order the mount wrote back in still holds at a stop;
 a write that fails is the call's error, and the flags stay as they were.
 With
 .Dv MS_BIND
-as well, the change is to that mount alone, as Linux changes a bind
-mount's flags, and its file system is not remounted: only descriptions
-opened through that mount make it
-.Er EBUSY ;
-a mount whose file
-system is read-only is not made writable this way,
-.Er EROFS .
-Without it, a change made through a bind mount is a change of the file
-system it shows, through every mount of it.
+as well, the change is to the named mount's flags, including on an
+original mount.
+Its filesystem keeps its read-only and write-ordering
+flags.
+Only descriptions opened through that mount make it
+.Er EBUSY .
+Clearing the mount's read-only flag still leaves a read-only filesystem
+read-only.
+Without
+.Dv MS_BIND ,
+the filesystem changes through every mount that shows it.
+Only the
+named mount takes the per-mount flags.
+A remount that supplies no atime flag keeps the named mount's atime flags.
 Other bits, including
 .Dv MS_MOVE ,
 are refused.
@@ -352,18 +364,12 @@ Reject unsupported flag bits with
 .It
 Resolve and hold the target, returning any path-resolution error.
 .It
-Finish a mount of type
-.Ql proc :
-over a directory of the system's
-.Pa /proc
-it succeeds and changes nothing, since every
-.Pa /proc
-shows the processes of its reader's PID namespace, as
-.Ql unshare --mount-proc
-would have it.
-Over any other directory it places a mount of the one proc file system,
-as a sandbox mounts it in the root it builds, and that mount too shows
-its reader's PID namespace.
+For a mount of type
+.Ql proc ,
+use the mounter's active PID namespace.
+A new proc mount may cover the system's
+.Pa /proc .
+An inherited mount keeps its original PID namespace.
 .It
 Require the absolute target path to fit 255 bytes, excluding the null
 byte, or return
@@ -489,6 +495,8 @@ with
 or
 .Ql rw
 and whichever of
+.Ql sync ,
+.Ql dirsync ,
 .Ql nosuid ,
 .Ql nodev ,
 .Ql noexec ,
@@ -496,7 +504,9 @@ and whichever of
 .Ql nodiratime
 and
 .Ql relatime
-are set; the silent flag and the file system's own options are not
+are set, as
+.Xr proc 5
+describes; the silent flag and the file system's own options are not
 shown.
 KRFFS, mqueue and pstore ignore the option string; FAT32, exFAT,
 tmpfs and debugfs parse it.
@@ -529,9 +539,10 @@ repair, logs that
 is owed, and keeps its dirty flag, since a write could act on one of
 two nodes of one name.
 A read-only mount skips repair.
-A KRFFS volume whose core cannot undo a failed move halts: the volume and
-its bind mounts turn read-only until the next mount repairs it, as ext4
-does after an error, and its dirty flag stays set.
+A KRFFS volume whose core cannot undo a failed move halts: the file system
+turns read-only through every mount of it until the next mount repairs it,
+as ext4 does after an error, with each mount's own flag left as it was,
+and its dirty flag stays set.
 .Pp
 An ext2 volume with its valid bit clear or error bit set is checked
 before a writable mount or remount.
@@ -763,8 +774,7 @@ a user namespace inherits.
 .It Bq Er EROFS
 A remount tried to make writable a file system whose device refuses
 writes or has failed a write, an ext2 volume mounted read-only for a
-feature the driver does not write, or a bind whose file system is
-read-only.
+feature the driver does not write.
 .It Bq Er ESRCH
 There is no current process.
 .El

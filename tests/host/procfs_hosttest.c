@@ -42,8 +42,18 @@ struct fd_entry;
 struct vfs_ref;
 struct vfs_name;
 struct vfs_mount;
-static struct vfs_name *procfs_exe_entry(int pid);
-static int procfs_resolve_pid(int pid);
+static struct vfs_name *procfs_exe_entry(int pid, int use_real);
+struct synth_owner;
+static int procfs_lookup_owner(const struct vpath *vp);
+static void procfs_owner_chown(const struct vpath *vp, const struct synth_owner *held, uint32_t uid,
+                               uint32_t gid);
+static void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp);
+static void procfs_owner_drop(struct synth_owner *o);
+static int procfs_fd_link_mode(int pid, int fd, uint32_t *mode);
+static uint32_t procfs_fd_link_ino(const struct vpath *vp, int id);
+static int procfs_fdinfo_access(const struct fd_entry *e, int use_real);
+static int procfs_fd_dir_access(int kind, int pid, int want, int use_real);
+static int procfs_resolve_pid(int pid, uint32_t pidns_ino);
 static int procfs_filesystem_at(int idx, const char **name);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
@@ -51,8 +61,8 @@ static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 static int procfs_readlink_exe(int pid, char *buf, int cap);
 static int procfs_exe_name(int pid, char *buf, int cap);
 static int procfs_readlink_dir(int pid, int root, char *buf, int cap);
-static int procfs_exe_file(int pid, struct vfs_ref *out);
-static int procfs_nth_pid(int n);
+static int procfs_exe_file(int pid, struct vfs_ref *out, int use_real);
+static int procfs_nth_pid(int n, uint32_t pidns_ino);
 static uint32_t procfs_ino_dir(void);
 static uint32_t procfs_ino_cmdline(void);
 static uint32_t procfs_ino_netdir(void);
@@ -452,6 +462,12 @@ void net_unlock(uint32_t flags)
  * with these. */
 const struct vfs_type vfs_devfs_type, vfs_procfs_type, vfs_sysfs_type;
 
+/** The proc cwd in the descriptor row carries its owner as its node. */
+const struct synth_owner *vfs_proc_dir_owner(const struct vfs_ref *ref)
+{
+    return ref->mnt->type == &vfs_procfs_type ? ref->node : NULL;
+}
+
 /** No path names a node of /dev. Returns 0. */
 int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
 {
@@ -471,6 +487,7 @@ extern void free(void *ptr);
 static struct k_sigaction actions[KSIG_MAX + 1];
 static process_t process = {.sigacts = actions}, thread = {.sigacts = actions},
                  stranger = {.sigacts = actions};
+process_t *proc_list = &process;
 static struct tgroup group, other_group;
 /* The directory the reader runs in, which is not the reaped process's. */
 static page_dir_t reader_dir;
@@ -502,6 +519,14 @@ static void check(int ok, const char *what)
         printf("procfs-hosttest: fail: %s\n", what);
         failures++;
     }
+}
+
+/** No queue descriptor is present in the model. */
+int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r)
+{
+    (void)e;
+    (void)r;
+    return 0;
 }
 
 /** Return the process whose stat file is generated, 7, a thread of it, 9,
@@ -982,6 +1007,27 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *mnt)
 {
     return mnt->bind_of ? mnt->bind_of : mnt;
 }
+
+/** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    if (m->bind_of) {
+        return m->flags;
+    }
+    return (m->flags & ~VFS_MS_RDONLY) | (m->mnt_rdonly ? VFS_MS_RDONLY : 0);
+}
+
+/** vfs.c's: the base's VFS_MS_RDONLY, the file system's state. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_base(m)->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** vfs.c's: the mount's own flag or its file system's. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
+}
 void vfs_desc_open(struct vfs_mount *mnt)
 {
     mnt->refs++;
@@ -1052,15 +1098,13 @@ const char *tmpfs_label(void *node)
     return NULL;
 }
 
-/** The path of a synthetic directory, which no row reads: empty. */
+/** Name the fdinfo directory used in the held descriptor row. */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
-    (void)kind;
-    (void)pid;
-    (void)tid;
-    if (cap > 0) {
+    if (kind == VNODE_PROC_FDINFO_DIR && pid == 1 && !tid && cap >= 15)
+        k_memcpy(out, "/proc/1/fdinfo", 15);
+    else if (cap > 0)
         out[0] = '\0';
-    }
 }
 
 /** No file of /proc/net is opened here. */
@@ -2040,6 +2084,164 @@ static void descriptor_links(void)
           "a descriptor being released has no link");
 }
 
+/** An access lookup uses real IDs even when the file-system IDs match. */
+static void descriptor_search_ids(void)
+{
+    process_t *saved = current_proc;
+    uint32_t saved_uid = process.euid, saved_gid = process.egid;
+    uint32_t saved_ruid = process.ruid, saved_rgid = process.rgid;
+    uint32_t saved_suid = process.suid, saved_sgid = process.sgid;
+    struct mm *saved_mm = process.mm;
+    uint32_t saved_dumpable = space.dumpable;
+    process_t caller = {0};
+    struct synth_dir sd = {0};
+    fd_entry_t e = {0};
+    int pid, tid;
+
+    process.euid = process.ruid = process.suid = 1001;
+    process.egid = process.rgid = process.sgid = 1001;
+    process.mm = &space;
+    space.dumpable = 1;
+    caller.euid = caller.egid = 1001;
+    caller.ruid = caller.rgid = 1000;
+    caller.tg = &other_group;
+    current_proc = &caller;
+    check(procfs_fd_dir_access(VNODE_PROC_FD_DIR, 7, 1, 1) == -EACCES &&
+              procfs_fd_dir_access(VNODE_PROC_FD_DIR, 7, 1, 0) == 0,
+          "proc fd search uses access's selected IDs");
+    check(procfs_fd_dir_access(VNODE_PROC_FDINFO_DIR, 7, 1, 1) == -EACCES &&
+              procfs_fd_dir_access(VNODE_PROC_FDINFO_DIR, 7, 1, 0) == 0,
+          "proc fdinfo ptrace uses access's selected IDs");
+    caller.euid = 0;
+    caller.cap_lost[0] = 1u << CAP_SYS_PTRACE;
+    check(!procfs_may_read_as(7, 0), "root without SYS_PTRACE cannot override mismatched IDs");
+    caller.cap_lost[0] = 1u << CAP_SYS_ADMIN;
+    caller.nocaps = 1;
+    check(procfs_may_read_as(7, 0), "SYS_PTRACE suffices after dropping SYS_ADMIN");
+    caller.euid = 1001;
+    caller.cap_lost[0] = caller.nocaps = 0;
+    sd.own.kept = 1;
+    sd.own.node[0] = VNODE_PROC_FDINFO_DIR;
+    sd.own.node[2] = 7;
+    e.type = FD_TYPE_SYNTH_DIR;
+    e.priv = &sd;
+    check(procfs_fdinfo_access(&e, 1) == -EACCES && procfs_fdinfo_access(&e, 0) == 0,
+          "a held fdinfo inode applies the ptrace permission hook without a walk");
+    sd.pid = 1;
+    check(procfs_held_pid(&sd.own) == 7, "a held directory uses its kernel PID");
+    check(procfs_dir_coords(&sd, &pid, &tid) == 0 && pid == 7 && tid == 0,
+          "relative lookup names the retained process");
+    {
+        struct pidns view = {0};
+        struct pidns *old = process.pidns;
+        struct vpath vp = {0};
+
+        view.c.inum = 71;
+        view.level = 1;
+        view.parent = &init_pidns;
+        process.pidns = &view;
+        process.nspid[1] = 1;
+        sd.pidns_ino = vp.pidns_ino = view.c.inum;
+        vp.pid = 1;
+        check(procfs_resolve_id(&vp) == 7 && procfs_dir_coords(&sd, &pid, &tid) == 0 && pid == 1,
+              "the mounted namespace supplies the name of a held target");
+        process.pidns = old;
+        sd.pidns_ino = 0;
+    }
+    process.serial++;
+    check(procfs_fdinfo_access(&e, 0) == -ESRCH, "a reused PID has no claim on a held inode");
+    check(procfs_dir_coords(&sd, &pid, &tid) == -ENOENT, "no relative path to a reused PID");
+    {
+        struct vfs_mount mnt = {.type = &vfs_procfs_type};
+        struct fs_struct fs = {.cwd_mnt = &mnt, .cwd_node = &sd.own};
+        struct fs_struct *old = process.fs;
+        struct vfs_ref to;
+        char name[32];
+
+        sd.kind = VNODE_PROC_FDINFO_DIR;
+        check(procfs_dir_relative(&sd, &mnt, name, sizeof(name)) == 8 &&
+                  !__builtin_strcmp(name, "1/fdinfo"),
+              "the held directory still has its original mount-relative spelling");
+        process.fs = &fs;
+        check(procfs_cwd_target(&process, &to, name, sizeof(name)) == 0 && to.node == &sd.own,
+              "the cwd magic link reaches the original inode after PID reuse");
+        process.fs = old;
+    }
+    process.serial--;
+    current_proc = saved;
+    process.mm = saved_mm;
+    space.dumpable = saved_dumpable;
+    process.euid = saved_uid;
+    process.egid = saved_gid;
+    process.ruid = saved_ruid;
+    process.rgid = saved_rgid;
+    process.suid = saved_suid;
+    process.sgid = saved_sgid;
+}
+
+/** Hold the task identity at lookup for each proc task directory. */
+static void held_task_dirs(void)
+{
+    static const int kinds[] = {VNODE_PROC_PID, VNODE_PROC_TASK_DIR, VNODE_PROC_NS_DIR,
+                                VNODE_PROC_FD_DIR, VNODE_PROC_FDINFO_DIR};
+    struct vpath vp = {0};
+    unsigned i;
+
+    vp.pid = 7;
+    for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        struct synth_owner own = {0};
+
+        vp.kind = kinds[i];
+        procfs_owner_keep(&own, &vp);
+        check(own.kept && procfs_held_pid(&own) == 7, "the task directory retains its task");
+        process.serial++;
+        check(procfs_held_pid(&own) < 0, "the replacement task has another lifetime");
+        process.serial--;
+        procfs_owner_drop(&own);
+    }
+}
+
+/** Failed revalidation detaches a held link from later uses of its slot. */
+static void held_descriptor_links(void)
+{
+    struct vpath vp = {0};
+    struct synth_owner old = {0}, another = {0}, fresh = {0};
+
+    vp.kind = VNODE_PROC_FD_LINK;
+    vp.pid = 7;
+    vp.procfd = 0;
+    entries[0].flags = FD_FLAG_READ;
+    procfs_owner_keep(&old, &vp);
+    procfs_owner_keep(&another, &vp);
+    procfs_owner_chown(&vp, &old, 123, 456);
+    entries[0].flags = FD_FLAG_CLOSING;
+    check(procfs_lookup_owner(&vp) == -ENOENT && old.uid == 123 && old.gid == 456 &&
+              old.mode == 0120500u,
+          "failed lookup preserves the old link's owner and mode");
+    entries[0].flags = FD_FLAG_WRITE;
+    check(procfs_lookup_owner(&vp) == 0 && old.mode == 0120500u,
+          "reusing the descriptor number leaves the detached link alone");
+    procfs_owner_keep(&fresh, &vp);
+    check(fresh.mode == 0120300u && fresh.uid != 123 && fresh.ino != old.ino,
+          "the new link has its own inode and metadata");
+    procfs_owner_chown(&vp, &old, 321, 654);
+    check(another.uid == 321 && another.gid == 654 && fresh.uid != 321,
+          "a chown through an old holder changes only holders of that inode");
+    procfs_owner_drop(&fresh);
+    procfs_owner_drop(&another);
+    procfs_owner_drop(&old);
+    entries[0].flags = FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+}
+
+/** Check lookup, inode identity and permission of proc descriptor entries. */
+static void descriptor_rows(void)
+{
+    descriptor_links();
+    held_task_dirs();
+    held_descriptor_links();
+    descriptor_search_ids();
+}
+
 /**
  * A /proc/PID/mem descriptor holds the record of the address space and is no
  * user of it: its open takes a hold, a read takes a user's count for its
@@ -2114,7 +2316,7 @@ static void exe_links(void)
           "the link reads a renamed program's present path");
     check(procfs_readlink_exe(7, buf, 3) == 3 && __builtin_memcmp(buf, "/tm", 3) == 0,
           "a short buffer takes the first bytes");
-    check(procfs_exe_file(7, &ref) == 0 && ref.mnt == &root_mount && ref.node == &program,
+    check(procfs_exe_file(7, &ref, 0) == 0 && ref.mnt == &root_mount && ref.node == &program,
           "the resolver goes on from the program's file itself");
     program.name[0] = '\0';
     program_path = NULL;
@@ -2147,7 +2349,7 @@ static void entry_expect(struct vfs_name *name, void *node, const char *want)
 
     exe_ofd.name = name;
     exe_ofd.vnode = node;
-    held = procfs_exe_entry(7);
+    held = procfs_exe_entry(7, 0);
     check(held == name, "an exec of the proc link shares its exact selected entry");
     vfs_name_put(held);
     n = procfs_readlink_exe(7, text, sizeof(text));
@@ -2789,14 +2991,6 @@ static void reaped_during_read(void)
     kfree(text.buf);
 }
 
-/** The status rows' process has no effective capabilities: 0. */
-uint32_t cap_eff_word(const process_t *p, uint32_t i)
-{
-    (void)p;
-    (void)i;
-    return 0;
-}
-
 /** The status rows' process has no seccomp filter: 0. */
 uint32_t seccomp_filter_count(const process_t *p)
 {
@@ -2975,6 +3169,8 @@ static int make_reaped(void)
     reading->tg = &group;
     reading->mm = mm;
     reading->sigacts = acts;
+    reading->cap_lost[0] = 0xFFFFFFFFu;
+    reading->cap_lost[1] = CAP_HIGH_WORD;
     reading->cpu = 2;
     return 1;
 }
@@ -5361,30 +5557,49 @@ static void irq_rows(void)
           "a removed interrupt gives no stale mask");
 }
 
+/** Run a named group of rows. Return -1 for an unknown option. */
+static int selected_rows(const char *arg)
+{
+    if (__builtin_strcmp(arg, "--descriptor-search-only") == 0) {
+        held_task_dirs();
+        descriptor_search_ids();
+        printf("procfs-hosttest: descriptor search: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    if (__builtin_strcmp(arg, "--thp-only") == 0) {
+        thp_rows();
+        printf("procfs-hosttest: thp: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    if (__builtin_strcmp(arg, "--pci-config-only") == 0) {
+        pci_config_rows();
+        printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    if (__builtin_strcmp(arg, "--irq-only") == 0) {
+        irq_rows();
+        printf("procfs-hosttest: irq affinity: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
     struct procfs_text text;
     int len;
 
+    process.pid = process.tgid = 7;
     process.state = PROC_READY;
     process.tg = &group;
     group.leader = &process;
     group.live = 1;
     k_memcpy(process.comm, "test", 5);
-    if (argc == 2 && __builtin_strcmp(argv[1], "--thp-only") == 0) {
-        thp_rows();
-        printf("procfs-hosttest: thp: %s\n", failures ? "fail" : "pass");
-        return failures != 0;
-    }
-    if (argc == 2 && __builtin_strcmp(argv[1], "--pci-config-only") == 0) {
-        pci_config_rows();
-        printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
-        return failures != 0;
-    }
-    if (argc == 2 && __builtin_strcmp(argv[1], "--irq-only") == 0) {
-        irq_rows();
-        printf("procfs-hosttest: irq affinity: %s\n", failures ? "fail" : "pass");
-        return failures != 0;
+    if (argc == 2) {
+        int selected = selected_rows(argv[1]);
+
+        if (selected >= 0)
+            return selected;
     }
     irq_rows();
     procfs_text_init(&text);
@@ -5412,7 +5627,7 @@ int main(int argc, char **argv)
     thread_times();
     uptime_rows();
     netdev_rows();
-    descriptor_links();
+    descriptor_rows();
     task_ids();
     task_owners();
     syscall_wchan_rows();

@@ -13,7 +13,10 @@
 #define main            krffsmount_baseline_main
 #include "../krffsmount_hosttest.c"
 #undef main
+#include "fs/file.h"
+#include "ipc/mqueue.h"
 #include "fs/synthfs.h"
+#include "fs/procfs.h"
 #include "fs/name.h"
 #include "proc/smp.h"
 #include "block/loop.h"
@@ -21,6 +24,8 @@
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
 #include "proc/tgroup.h"
+#include "fs/permission.h"
+#include "../fs_caps_first.h"
 
 extern void exit(int status);
 extern void open_thread_start(void (*fn)(void));
@@ -325,6 +330,12 @@ int wq_active(const wait_queue_t *wq)
     return opener_asleep;
 }
 
+struct synth_tail;
+static int proc_live;
+static int synth_take(const struct vpath *vp, void **node);
+static int proc_lookup_live(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
+                            const char **left);
+
 /* The loop devices, which `loop_backs` of rach2/sys/block/loop.c reads
  * through this pointer, since the structure is complete only in
  * vfs_open.inc; `main` points it at `loop_table`. */
@@ -338,20 +349,46 @@ static char *path_buf_get(void)
     return calloc(1, VFS_PATH_MAX);
 }
 
+/** Every path in this fixture starts at the model root. */
+static struct vfs_mount *path_buf_mount(const char **path, void **node)
+{
+    (void)path;
+    (void)node;
+    return NULL;
+}
+
 /** Give back a page `path_buf_get` returned. */
 static void path_buf_put(char *buf)
 {
     free(buf);
 }
 
+/** No model node is a process descriptor directory. */
+int procfs_fd_dir_access(int kind, int pid, int want, int use_real)
+{
+    (void)kind;
+    (void)pid;
+    (void)want;
+    (void)use_real;
+    return -ENOENT;
+}
+
+/** Process 7 exists until the directory row reaps it. */
+int procfs_resolve_id(const struct vpath *vp)
+{
+    return proc_live && vp->pid == 7 ? 7 : -1;
+}
+
 /** The resolver's step through /proc/<pid>/exe, which no row's walk takes:
  * the fixture has no /proc. */
-static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_name **entry)
+static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_name **entry,
+                    int use_real)
 {
     (void)cur;
     (void)found;
     (void)locked;
     (void)entry;
+    (void)use_real;
     check(0, "no walk goes through /proc/<pid>/exe");
     return -ENOENT;
 }
@@ -380,14 +417,14 @@ struct walk_name {
 /** The resolver's step through a /proc link to its object, which no row's
  * walk takes. */
 static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char **linkpath,
-                       char **target, int locked)
+                       char **target, int flags)
 {
     (void)cur;
     (void)found;
     (void)rest;
     (void)linkpath;
     (void)target;
-    (void)locked;
+    (void)flags;
     check(0, "no walk goes through a /proc link to its object");
     return -ENOENT;
 }
@@ -518,6 +555,8 @@ static struct spinlock records_lock = SPINLOCK_INIT;
 /* The protection of /proc/sys/fs that a final link meets, at its default,
  * and the debugfs type, which no row opens. */
 int vfs_protected_symlinks = 1;
+const struct vfs_type vfs_mqueue_type = {.name = "mqueue"};
+const struct file_ops mq_ops = {0};
 const struct vfs_type vfs_debugfs_type;
 
 /** No fixture mount is detached, so a closed description reaps nothing,
@@ -592,6 +631,93 @@ static int sched_spin_on(const struct process *owner, int cpu)
 #define vfs_name_put fixture_name_put
 #include "vfs_open.inc"
 #undef vfs_name_put
+
+/* Storage for the two inodes constructed during the live lookup. */
+static struct synth_node *proc_pid_node, *proc_ns_node;
+
+/** Classify the two proc names in the fixture. */
+int synth_classify(const char *full, struct vpath *vp)
+{
+    k_memset(vp, 0, sizeof(*vp));
+    vp->pid = 7;
+    vp->kind = streq(full, "proc/7")      ? VNODE_PROC_PID
+               : streq(full, "proc/7/ns") ? VNODE_PROC_NS_DIR
+                                          : VNODE_ENOENT;
+    return vp->kind;
+}
+
+/** Give a new proc inode its first hold. */
+static int synth_take(const struct vpath *vp, void **node)
+{
+    struct synth_node *sn = vp->kind == VNODE_PROC_PID ? proc_pid_node : proc_ns_node;
+
+    sn->vp = *vp;
+    sn->refs = 1;
+    *node = sn;
+    return 0;
+}
+
+/** Look up a name in the fixture's live process tree. */
+static int proc_lookup_live(const struct vfs_ref *cur, struct synth_tail *tail, void **node,
+                            const char **left)
+{
+    const char *p = tail->start;
+    const char *full = p[0] == '7' ? "proc/7" : "proc/7/ns";
+    check(proc_live, "the old directory cannot look up a replacement task");
+    while (p < tail->end && *p != '/')
+        p++;
+    *left = p;
+    return proc_child(cur->mnt, cur->node, full, p < tail->end, node);
+}
+
+/** The original task is gone from each held proc directory. */
+int procfs_held_pid(const struct synth_owner *own)
+{
+    (void)own;
+    return proc_live ? 7 : -1;
+}
+
+/** A departed process base rejects search. Its ns directory allows it. */
+int proc_held_dir_permission(const struct vpath *vp, const struct synth_owner *own, int want,
+                             int real)
+{
+    (void)own;
+    (void)want;
+    (void)real;
+    return !proc_live && vp->kind == VNODE_PROC_PID ? -ESRCH : 0;
+}
+
+/** Both proc inodes belong to the departed task. */
+const struct synth_owner *vfs_proc_dir_owner(const struct vfs_ref *ref)
+{
+    static const struct synth_owner held = {.kept = 1};
+    return ref->mnt->type == &vfs_procfs_type && ref->node != ref->mnt->root ? &held : NULL;
+}
+
+/** Drop a hold on a proc inode that the fixture owns. */
+static void proc_put(struct vfs_mount *mnt, void *node)
+{
+    struct synth_node *sn = node;
+    if (--sn->refs == 0 && sn->parent)
+        proc_put(mnt, sn->parent);
+}
+
+/** The proc walk handles each name before calling this lookup. */
+static int proc_rest(struct vfs_mount *mnt, const char *p, uint32_t len, void **node,
+                     const char **left, int real)
+{
+    (void)mnt;
+    (void)p;
+    (void)len;
+    (void)node;
+    (void)left;
+    (void)real;
+    return -ENOENT;
+}
+
+static const struct vfs_ops proc_ops = {
+    .lookup_rest = proc_rest, .hold = synth_hold, .put = proc_put};
+const struct vfs_type vfs_procfs_type = {.name = "proc", .ops = &proc_ops};
 
 static struct loop_device loop_table[LOOP_DEVICES];
 
@@ -669,8 +795,9 @@ static int32_t e2m_write(struct vfs_mount *mnt, void *handle, const void *buf, u
 }
 
 /** The model's `truncate`: 0, with the handle recorded. */
-static int e2m_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int e2m_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
+    (void)stamp_times;
     (void)mnt;
     (void)size;
     e2m_data = handle;
@@ -731,9 +858,9 @@ static void ext2_handles(void)
     e2m_calls = 0;
     check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == -EBUSY,
           "fallocate by another open of a loop's backing file is EBUSY");
-    check(vfs_truncate(&e2m_mount, other, 0) == -EBUSY, "and so is a truncation by that open");
+    check(vfs_truncate(&e2m_mount, other, 0, 1) == -EBUSY, "and so is a truncation by that open");
     check(vfs_fallocate(&e2m_mount, attached, 0, 0, 4096) == -EBUSY &&
-              vfs_truncate(&e2m_mount, attached, 0) == -EBUSY,
+              vfs_truncate(&e2m_mount, attached, 0, 1) == -EBUSY,
           "and by the attachment's own handle");
     check(e2m_calls == 0, "the type never sees a change of a loop's backing file");
     k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
@@ -742,7 +869,8 @@ static void ext2_handles(void)
               forgot_mnt == &e2m_mount && forgot_node == &e2m_file,
           "vfs_write gives the type the handle and forgets the node's cached pages");
     forgot_node = NULL;
-    check(vfs_truncate(&e2m_mount, other, 0) == 0 && e2m_data == other && forgot_node == &e2m_file,
+    check(vfs_truncate(&e2m_mount, other, 0, 1) == 0 && e2m_data == other &&
+              forgot_node == &e2m_file,
           "and so does vfs_truncate");
     forgot_node = NULL;
     e2m_attr = NULL;
@@ -773,9 +901,7 @@ static int mnt_is_root(const struct vfs_mount *mnt)
 /** No fixture node belongs to a synthetic file system. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
-    (void)mnt;
-    (void)node;
-    return NULL;
+    return mnt->type == &vfs_procfs_type ? &((struct synth_node *)node)->vp : NULL;
 }
 
 /** No fixture name is a mount point. */
@@ -822,33 +948,11 @@ static int32_t cred_access_node(const krffs_node_t *node, int want, int real)
     return 0;
 }
 
-/** Root does not clear set-id bits. */
-static int cred_fs_privileged(void)
+/** The fixture has no set-id file to clear before truncation. */
+static int write_kill_setid(struct open_file *ofd)
 {
-    return 1;
-}
-
-/** No row changes the set-id bits of a file on the memory root. */
-static int cred_kill_setid(krffs_node_t *node)
-{
-    (void)node;
-    check(0, "unexpected memory-root set-id update");
+    (void)ofd;
     return 0;
-}
-
-/** Reject an unexpected set-id update. */
-static int vfs_kill_setid(struct vfs_mount *mnt, void *node)
-{
-    (void)mnt;
-    (void)node;
-    check(0, "unexpected set-id update");
-    return 0;
-}
-
-/** The set-id clear by the mount's kind, as syscall_fs.c chooses it. */
-static int mnt_kill_setid(struct vfs_mount *mnt, void *node)
-{
-    return mnt_is_root(mnt) ? cred_kill_setid(node) : vfs_kill_setid(mnt, node);
 }
 
 /** Reject creation through the memory-root adapter. */
@@ -891,6 +995,13 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     (void)flags;
     check(0, "unexpected synthetic open");
     return -EIO;
+}
+
+/** No open row installs a proc descriptor. */
+static int32_t synth_open_dir(const struct vpath *vp, int flags, const struct synth_owner *own)
+{
+    (void)own;
+    return synth_open(vp, flags);
 }
 
 /** Reject an unexpected framebuffer open. */
@@ -947,11 +1058,10 @@ static void path_expand_links(char *path)
 }
 
 /** Reject an unexpected synthetic read-only check; no row opens /proc. */
-static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
+static int proc_read_only(const struct vfs_ref *ref, int flags)
 {
     (void)ref;
     (void)flags;
-    (void)dirs;
     check(0, "unexpected /proc read-only check");
     return 0;
 }
@@ -1117,7 +1227,7 @@ static void publication_open(int flags, int before)
     loop_table[0].mnt = &mount;
     loop_table[0].base = &mount;
     loop_table[0].node = first->vnode;
-    check(vfs_truncate(&mount, first->fhandle, 0) == -EBUSY,
+    check(vfs_truncate(&mount, first->fhandle, 0, 1) == -EBUSY,
           "a truncation of a mounted KRFFS loop's backing file by its open record is EBUSY");
     k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
     moved = first->vnode;
@@ -1440,11 +1550,74 @@ static void cached_walks(void)
     mount_slots = was_slots;
 }
 
+/** Dot and its parent retain their inodes after reap; descent checks search. */
+static void departed_proc_walks(void)
+{
+    struct synth_node root = {0}, pid = {0}, ns = {0};
+    struct vfs_mount proc = {.type = &vfs_procfs_type, .state = VFS_ACTIVE, .root = &root};
+    struct vfs_ref start = {&proc, &ns}, found;
+    struct vfs_mount *saved = mounts[0];
+    int rc;
+
+    mounts[0] = &proc;
+    current_proc = &writer;
+    writer.fs = &dirs;
+    dirs.root_mnt = NULL;
+    root.vp.kind = VNODE_PROC_DIR;
+    root.refs = 1;
+    proc_pid_node = &pid;
+    proc_ns_node = &ns;
+    proc_live = 1;
+    rc = vfs_resolve(NULL, "/7/ns", 0, &start, NULL, 0);
+    check(!rc && start.node == &ns && ns.parent == &pid && pid.parent == &root,
+          "a live walk retains each process directory's parent");
+    if (rc) {
+        mounts[0] = saved;
+        return;
+    }
+    proc_live = 0;
+    rc = vfs_resolve(&start, ".", VFS_WALK_LOCK, &found, NULL, 0);
+    check(!rc && found.node == &ns, "dot stays on the held namespace inode");
+    if (!rc) {
+        vfs_walk_unlock(found.mnt);
+        vfs_ref_release(&found);
+    }
+    rc = vfs_resolve(&start, "./..", VFS_WALK_LOCK, &found, NULL, 0);
+    check(!rc && found.node == &pid, "parent selects the original process inode");
+    if (!rc) {
+        vfs_walk_unlock(found.mnt);
+        vfs_ref_release(&found);
+    }
+    check(vfs_resolve(&start, "../.", VFS_WALK_LOCK, &found, NULL, 0) == -ESRCH,
+          "a second component checks search on the departed parent");
+    check(vfs_resolve(&start, "mnt", VFS_WALK_LOCK, &found, NULL, 0) == -ENOENT,
+          "a child lookup cannot enter the replacement task");
+    {
+        struct vfs_scope scope = {.anchor = start, .anchor_real = "/proc/7/ns", .anchor_len = 10};
+        struct walk_record record = {.scope = &scope};
+
+        scope.seq = vfs_tree_seq();
+        scope.resolve = VFS_RESOLVE_BENEATH;
+        check(resolve_full(NULL, "..", 0, &found, NULL, 0, &record) == -EXDEV,
+              "BENEATH refuses the parent of the held directory");
+        scope.resolve = VFS_RESOLVE_IN_ROOT;
+        rc = resolve_full(NULL, "..", 0, &found, NULL, 0, &record);
+        check(!rc && found.node == &ns, "IN_ROOT keeps the held directory at its parent step");
+        if (!rc)
+            vfs_ref_release(&found);
+    }
+    vfs_ref_release(&start);
+    check(!ns.refs && !pid.refs && root.refs == 1 && !proc.inprogress,
+          "every walk releases its inode, parents and mount");
+    mounts[0] = saved;
+}
+
 /** Run the opens at relocation publication, then the locked walks once
  * those pass: 0 when every row passes, 1 otherwise. */
 int main(void)
 {
     loops = loop_table;
+    departed_proc_walks();
     publication_open(0, 0);
     publication_open(O_CREAT, 0);
     publication_open(0, 1);

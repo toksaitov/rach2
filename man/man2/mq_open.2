@@ -48,11 +48,14 @@ umask leaves, and the count and size of the
 given, at most 10 and 8192 for an unprivileged caller and 65536 and
 16 MiB for a privileged one, or 10 and 8192 without the structure.
 An unprivileged caller may make a queue while fewer than 256 exist,
-counted over every namespace.
+in the caller's IPC namespace.
 .Pp
 .Fn mq_unlink
-takes the name away from a queue the caller owns, or any for a
-privileged caller.
+removes a queue name.
+Opening requires search permission on the queue directory.
+Creating or removing a name also requires write permission.
+When the sticky bit is set, only the owner of the queue, the owner of
+the directory or a privileged caller can remove the name.
 .Pp
 .Fn mq_timedsend
 puts a message of priority
@@ -81,8 +84,9 @@ posts the signal asked for, with
 .Dv SI_MESGQ ,
 the value given, and the sender's pid and uid, and
 .Dv SIGEV_NONE
-posts nothing; the registration goes either way, and with the
-registered process's last close of the queue.
+posts nothing.
+Delivery removes the registration.
+Closing any descriptor for the queue in the registered process also removes it.
 A NULL
 .Fa sevp
 takes the caller's registration away.
@@ -101,7 +105,9 @@ of it gives Linux's line of the queued bytes and the registration:
 The
 .Ql mqueue
 file system lists the queues of the IPC namespace that mounted it as the
-files of one directory, sticky and writable by all, mode 1777.
+files of one directory, sticky and writable by all, mode 1777 and its
+creator's when the namespace is made; every mount of a namespace shows the
+same directory.
 The kernel mounts one at boot at
 .Pa /dev/mqueue ,
 with
@@ -114,13 +120,23 @@ for the first namespace, and
 mounts another with the type
 .Ql mqueue ,
 which a user namespace's owner may also do, as on Linux.
-A queue's file has the queue's owner and mode, the bytes of its messages
-as its size, and the time the queue was made as its times; reading it
+A queue file starts at 80 bytes.
+Truncating it changes the size reported by stat.
+Reads return the status line, and message traffic changes the queue's times.
+.Xr chmod 2 ,
+.Xr chown 2
+and
+.Xr utimensat 2
+store on a queue's file or the directory what they set and the change
+time, a
+.Xr chown 2
+that names no id among them.
+Reading a queue's file
 gives the line above, and
 .Xr unlink 2
 of it is
 .Fn mq_unlink ,
-by the queue's owner or a privileged caller.
+with the same directory permission checks.
 .Pp
 A descriptor that
 .Fn mq_open
@@ -135,20 +151,14 @@ reads
 with
 .Ql " (deleted)"
 after the name once the name is gone.
-Its device is that of the first
-.Ql mqueue
-mount of the queue's IPC namespace.
-Where Linux keeps a mount of each namespace's own, a queue of a namespace
-that no mount lists reports the device of another namespace's mount, and
-with no
-.Ql mqueue
-mount at all its descriptor is an anonymous inode of mode 0600.
-Unlike Linux's, an
+The descriptor retains the private mount of its IPC namespace.
+Opening a queue file with
 .Xr open 2
-with
+retains the mount used for that open and supplies the same queue operations.
 .Dv O_CREAT
-makes no queue there, and a queue's mode and owner do not change through
-its file.
+creates a queue with the default limits.
+.Dv O_PATH
+only retains the inode and mount.
 .Ss System call interface
 On i386 the numbers are 277 to 282 in the order above, with the timeouts
 as 32-bit timespecs, and 418
@@ -181,8 +191,10 @@ set.
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EACCES
-A name with a slash, an open its mode does not give, or an unlink of
-another user's queue.
+The name contains a slash, or the caller lacks the required permission
+on the directory or queue.
+.It Bq Er EPERM
+The sticky directory forbids removal by this caller.
 .It Bq Er EAGAIN
 A full queue to send to or an empty one to receive from, with
 .Dv O_NONBLOCK .
@@ -198,7 +210,7 @@ for a queue that exists.
 .It Bq Er EINTR
 A signal ended the wait, also one pending when the timeout ran out.
 .It Bq Er EINVAL
-An access mode of 3, attributes outside the caller's limits, a priority
+An access mode of 3 on an existing queue, attributes outside the caller's limits, a priority
 past 32767, a malformed timeout, a notification of another kind or a
 signal outside 1 to 64, or a flag besides
 .Dv O_NONBLOCK
@@ -207,8 +219,8 @@ to set.
 A message past the queue's size, or a buffer smaller than it.
 .It Bq Er ENAMETOOLONG
 A name past 255 bytes.
-.It Bq Er ENFILE
-256 queues already, for an unprivileged caller.
+.It Bq Er ENOSPC
+The namespace already contains 256 queues and the caller lacks privilege.
 .It Bq Er ENOENT
 No such queue and no
 .Dv O_CREAT ,

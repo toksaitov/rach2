@@ -248,7 +248,7 @@ static int svc_free(void *dir, void *node, void *handle, int unlink_it)
         return OPS->unlink(&mnt, dir, "victim");
     }
     OPS->lock_node(&mnt, node);
-    rc = OPS->truncate(&mnt, handle, (uint64_t)SVC_KEPT * 4096);
+    rc = OPS->truncate(&mnt, handle, (uint64_t)SVC_KEPT * 4096, 1);
     OPS->unlock_node(&mnt, node);
     return rc;
 }
@@ -720,7 +720,7 @@ static void svc_same_body(void)
         break;
     case SVC_SAME_CUT:
         OPS->lock_node(&mnt, svc_node);
-        svc_same_ok = OPS->truncate(&mnt, svc_handle, (uint64_t)SVC_KEPT * 4096) == 0;
+        svc_same_ok = OPS->truncate(&mnt, svc_handle, (uint64_t)SVC_KEPT * 4096, 1) == 0;
         OPS->unlock_node(&mnt, svc_node);
         break;
     case SVC_SAME_FSYNC:

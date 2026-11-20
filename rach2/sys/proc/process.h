@@ -528,6 +528,10 @@ struct process {
      * needs more at once than the record has, and kept, so that a path costs
      * no frame after the first (fs/pathbuf.c). */
     char *path_bufs[PATH_BUFS];
+    struct vfs_mount *path_mount[PATH_BUFS]; /* held proc mount of each path */
+    void *path_node[PATH_BUFS];              /* starting proc inode, held with its mount */
+    uint32_t path_prefix[PATH_BUFS];         /* prefix length plus one, or zero for a mount */
+    uint32_t paths_on_mounts;                /* number of non-NULL path_mount entries */
     uint32_t path_bufs_busy;
     /* A kernel buffer the user-copy checks take as user memory while a
      * descriptor-to-descriptor copy runs it through the read and write

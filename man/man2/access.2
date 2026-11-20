@@ -42,9 +42,14 @@ below.
 The owner bits apply when the real user ID matches the owner;
 otherwise the group bits apply when a group matches, and the other bits
 apply when none does.
-Real user ID 0 bypasses the mode-bit check, except that a regular file
-on KRFFS or another disk file system needs at least one execute bit for
-.Dv X_OK .
+A caller whose real user ID is zero in its user namespace uses its
+permitted capabilities for this check.
+.Dv CAP_DAC_READ_SEARCH
+grants read access and directory search.
+.Dv CAP_DAC_OVERRIDE
+grants the requested access, except that executing a regular file
+requires at least one execute bit.
+Both capabilities require the inode's owner and group to be mapped.
 For example, an existing
 .Pa /proc/PID/stat
 grants
@@ -54,20 +59,59 @@ and
 but denies
 .Dv W_OK
 to a caller whose real user ID is nonzero.
-After the permission check succeeds,
+The checks around the mode check come in Linux's order.
+.Dv X_OK
+of a regular file reached through a
+.Cm noexec
+mount gives
+.Er EACCES
+first.
+Then
 .Dv W_OK
-on a read-only mount other than the KRFFS boot root gives
-.Er EROFS ,
-as a read-only bind of
-.Pa /proc/sys
-does, but not in
-.Pa /dev
-or
-.Pa /sys ,
-whose devices and attributes take writes on a mount marked read-only,
-nor for
-.Pa /proc/PID/fd/N ,
-which leads to a file of another mount.
+of a regular file, directory or symbolic link on a read-only file
+system gives
+.Er EROFS
+before the mode is read: one mounted read-only, or turned read-only by
+a failed write or a halt, the KRFFS boot root among them.
+Then
+.Dv W_OK
+of an immutable file gives
+.Er EPERM ,
+and then the mode check.
+Last,
+.Dv W_OK
+through a mount made read-only alone, by
+.Dv MS_REMOUNT | MS_BIND | MS_RDONLY
+over a writable file system, as bubblewrap binds
+.Pa /proc/sys ,
+gives
+.Er EROFS
+only after the mode check has passed, so a mode that denies writing
+gives
+.Er EACCES
+there.
+A device, FIFO or socket never gives
+.Er EROFS .
+.Pa /sys
+is mounted read-only though its attributes take writes, and gives none.
+A followed
+.Pa /proc/PID/fd/N
+is judged as the file its descriptor is open on, through the mount the
+descriptor was opened through, by the mode of a named FIFO or of the
+device node a device was opened through;
+with
+.Dv AT_SYMLINK_NOFOLLOW
+the link itself is judged, on the mount of
+.Pa /proc ,
+by the mode its descriptor's access gives it.
+Either way the lookup's checks come first, the search of
+.Pa /proc/PID/fd ,
+the descriptor open and, to follow the link, the process's ptrace read
+check, and they too go by the real IDs unless
+.Dv AT_EACCESS
+is given, as Linux's
+.Fn faccessat
+lends the real IDs to the whole lookup.
 .Pp
 Relative paths are resolved from the current working directory.
 .Fn faccessat
@@ -100,7 +144,7 @@ is
 with
 .Fa flags :
 .Dv AT_EACCESS
-judges by the effective user and group IDs instead of the real ones,
+uses the caller's filesystem IDs and effective capabilities,
 .Dv AT_SYMLINK_NOFOLLOW
 judges a final symbolic link itself, and
 .Dv AT_EMPTY_PATH
@@ -112,6 +156,23 @@ is open on, by the owner, group and mode
 .Xr fstat 2
 reports, or the working directory for
 .Dv AT_FDCWD .
+A descriptor open on a
+.Pa /proc/PID/fd
+directory is judged as Linux's
+.Fn proc_fd_permission
+judges it, by the owner its last lookup gave it, and a thread of that
+process passes whatever the mode, with no new lookup.
+Access to a held
+.Pa /proc/PID
+or
+.Pa /proc/PID/task
+returns
+.Er ESRCH
+after the process is reaped, even for
+.Dv F_OK .
+A write check on a read-only superblock returns
+.Er EROFS
+first.
 .Pp
 The kernel calls are 33 for
 .Fn access ,
@@ -154,8 +215,12 @@ checks real-ID permission decisions with unequal real and effective IDs.
 .Sh ERRORS
 .Bl -tag -width ENAMETOOLONG
 .It Er EACCES
-Search permission is denied on a path component, or the target denies a
-requested permission.
+Search permission is denied on a path component, the target denies a
+requested permission, or
+.Dv X_OK
+asks for a regular file through a
+.Cm noexec
+mount.
 .It Er EBADF
 A relative path, or an empty one with
 .Dv AT_EMPTY_PATH ,
@@ -203,10 +268,14 @@ or a path that ends in a slash or in
 or
 .Pa \&..
 reaches something else.
+.It Er EPERM
+.Dv W_OK
+was requested of an immutable file.
 .It Er EROFS
 .Dv W_OK
-was requested on a read-only mount other than the KRFFS boot root
-after its mode check succeeded.
+was requested of a regular file, directory or symbolic link on a
+read-only file system, or through a mount made read-only alone after
+its mode check succeeded.
 .El
 .Sh SEE ALSO
 .Xr chmod 2 ,

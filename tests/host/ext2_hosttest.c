@@ -1960,6 +1960,26 @@ static int e2fsck_clean(const char *img)
     return ext2_fixture_fsck(img, "-fn", fix_path("fsck.out")) == 0;
 }
 
+/** Check pathname and descriptor timestamps at the current length. */
+static void equal_truncate_times(void *node)
+{
+    struct vfs_stat got;
+    void *handle = NULL;
+
+    check(OPS->open(&mnt, node, 2, &handle) == 0, "open the timestamp file");
+    if (handle) {
+        clock_seconds++;
+        check(OPS->truncate(&mnt, handle, 0, 0) == 0 && OPS->getattr(&mnt, node, &got) == 0 &&
+                  got.mtime_sec == clock_seconds - 1 && got.ctime_sec == clock_seconds - 1,
+              "equal pathname truncate preserves both times");
+        check(OPS->truncate(&mnt, handle, 0, 1) == 0 && OPS->getattr(&mnt, node, &got) == 0 &&
+                  got.mtime_sec == clock_seconds && got.ctime_sec == clock_seconds,
+              "equal descriptor truncate sets both times");
+        clock_seconds--;
+        OPS->release(&mnt, handle);
+    }
+}
+
 /**
  * Signed seconds and both range limits, set on a file with nanoseconds and
  * read again after each remount, on a volume of `inode`-byte inodes with
@@ -2002,6 +2022,7 @@ static void time_row(int inode, const char *features)
         unmount_rw();
         return;
     }
+    equal_truncate_times(node);
     for (i = 0; i < count; i++) {
         j = count - i - 1;
         memset(&set, 0, sizeof(set));
@@ -2257,9 +2278,9 @@ static int seq_truncate(void)
     if (rc == 0) {
         rc = OPS->open(&mnt, n, 1, &h);
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 5000);
+            rc = OPS->truncate(&mnt, h, 5000, 1);
             if (rc == 0) {
-                rc = OPS->truncate(&mnt, h, 7000);
+                rc = OPS->truncate(&mnt, h, 7000, 1);
             }
             OPS->release(&mnt, h);
         }
@@ -3241,7 +3262,7 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
     }
     if (f && cross_calls) {
         check(OPS->open(&mnt, f, 2, &handle) == 0, "the batch publication handle opens");
-        check(handle && OPS->truncate(&mnt, handle, (uint64_t)first * 4096) == 0,
+        check(handle && OPS->truncate(&mnt, handle, (uint64_t)first * 4096, 1) == 0,
               "a sparse prefix precedes contiguous batch appends");
         check(OPS->getattr(&mnt, f, &st) == 0, "the publication inode is known");
         batch_publication_ino = (uint32_t)st.ino;
@@ -3939,7 +3960,7 @@ static void batch_rows_under(uint32_t buffers)
     check(OPS->write(&mnt, handle, want + 20480, 4096, 20480) == 4096,
           "an append precedes truncate");
     writes_made = 0;
-    check(OPS->truncate(&mnt, handle, 4096) == 0 && writes_made > 0,
+    check(OPS->truncate(&mnt, handle, 4096, 1) == 0 && writes_made > 0,
           "truncate drains pending state before freeing blocks");
     check(OPS->fsync(&mnt, handle) == 0, "the truncated batch syncs");
     OPS->release(&mnt, handle);
@@ -4146,7 +4167,7 @@ static void batch_flush_error_row(int barrier, int large)
     if (!node || !handle) {
         return;
     }
-    check(OPS->truncate(&mnt, handle, first * 4096) == 0,
+    check(OPS->truncate(&mnt, handle, first * 4096, 1) == 0,
           "the failed-flush file has a sparse prefix");
     memset(bytes, 0x42, 4096);
     memset(bytes + 4096, 0x79, 4096);
@@ -4516,7 +4537,7 @@ static void overlap_second(void)
     void *y = overlap_node;
 
     OPS->lock_node(&mnt, y);
-    overlap_done = OPS->truncate(&mnt, overlap_handle, 0) == 0 ? 1 : -1;
+    overlap_done = OPS->truncate(&mnt, overlap_handle, 0, 1) == 0 ? 1 : -1;
     OPS->unlock_node(&mnt, y);
 }
 
@@ -4597,7 +4618,7 @@ static void overlap_punch_row(void)
     read_pause = overlap_turn;
     start_turns(overlap_second);
     OPS->lock_node(&mnt, x);
-    rc = OPS->truncate(&mnt, handle, 0);
+    rc = OPS->truncate(&mnt, handle, 0, 1);
     OPS->unlock_node(&mnt, x);
     finish_turns();
     read_pause = 0;
@@ -5560,7 +5581,7 @@ static int regrow_truncate(void)
     if (n) {
         rc = OPS->open(&mnt, n, 1, &h);
         if (rc == 0) {
-            rc = OPS->truncate(&mnt, h, 2 * 4096);
+            rc = OPS->truncate(&mnt, h, 2 * 4096, 1);
             OPS->release(&mnt, h);
         }
         OPS->put(&mnt, n);
@@ -6201,7 +6222,7 @@ static void limit_edge_rows(void)
         return;
     }
     if (OPS->open(&mnt, e, 1, &h) == 0) {
-        check(OPS->truncate(&mnt, h, 0x1FF7FDFE001ull) == -EFBIG,
+        check(OPS->truncate(&mnt, h, 0x1FF7FDFE001ull, 1) == -EFBIG,
               "a truncate past the limit answers EFBIG");
         check(OPS->write(&mnt, h, pattern, 2, 0x1FF7FDFDFFFull) == 1,
               "a two-byte write at the limit less one writes one byte");
@@ -6214,12 +6235,12 @@ static void limit_edge_rows(void)
         rc = ext2_inode_store(ext2_em_of(&mnt), e);
         ext2_node_unlock(e);
         check(rc == 0, "the file is given the size L+8192 an older limit allowed");
-        check(OPS->truncate(&mnt, h, 0x1FF7FDFF000ull) == 0 && OPS->getattr(&mnt, e, &st) == 0 &&
+        check(OPS->truncate(&mnt, h, 0x1FF7FDFF000ull, 1) == 0 && OPS->getattr(&mnt, e, &st) == 0 &&
                   st.size == 0x1FF7FDFF000ull,
               "a truncate of the oversized file to L+4096 shrinks it");
-        check(OPS->truncate(&mnt, h, 0x1FF7FE00000ull) == -EFBIG,
+        check(OPS->truncate(&mnt, h, 0x1FF7FE00000ull, 1) == -EFBIG,
               "and a truncate back to L+8192 answers EFBIG");
-        check(OPS->truncate(&mnt, h, 0) == 0 && OPS->getattr(&mnt, e, &st) == 0 && st.size == 0,
+        check(OPS->truncate(&mnt, h, 0, 1) == 0 && OPS->getattr(&mnt, e, &st) == 0 && st.size == 0,
               "and a truncate to 0 empties it");
         OPS->release(&mnt, h);
     }
@@ -8719,7 +8740,7 @@ static void runtime_damage_rows(void)
         rc = -1;
         n = walk("/dir/big.bin", &err);
         if (n && OPS->open(&mnt, n, 1, &h) == 0) {
-            rc = OPS->truncate(&mnt, h, 0);
+            rc = OPS->truncate(&mnt, h, 0, 1);
             OPS->release(&mnt, h);
         }
         if (n) {
@@ -9132,6 +9153,27 @@ int inotify_mount_watched(const struct vfs_mount *mnt)
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
+}
+
+/** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    if (m->bind_of) {
+        return m->flags;
+    }
+    return (m->flags & ~VFS_MS_RDONLY) | (m->mnt_rdonly ? VFS_MS_RDONLY : 0);
+}
+
+/** vfs.c's: the base's VFS_MS_RDONLY, the file system's state. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_base(m)->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** vfs.c's: the mount's own flag or its file system's. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
 /** A held regular file's path follows both file and parent renames. */
@@ -9623,7 +9665,7 @@ static void reuse_row(void)
     }
     wlog_reset();
     OPS->lock_node(&mnt, n);
-    rc = OPS->truncate(&mnt, handle, 0);
+    rc = OPS->truncate(&mnt, handle, 0, 1);
     OPS->unlock_node(&mnt, n);
     OPS->release(&mnt, handle);
     OPS->put(&mnt, n);
@@ -10002,10 +10044,10 @@ static void truncate_retry_row(void)
     fail_read_hits = 0;
     mark_fail_table(table);
     OPS->lock_node(&mnt, n);
-    first = rc == 0 ? OPS->truncate(&mnt, h, 100) : 0;
+    first = rc == 0 ? OPS->truncate(&mnt, h, 100, 1) : 0;
     mark_fail_table(-1);
-    again = OPS->truncate(&mnt, h, 100);
-    grow = OPS->truncate(&mnt, h, 3 * 4096);
+    again = OPS->truncate(&mnt, h, 100, 1);
+    grow = OPS->truncate(&mnt, h, 3 * 4096, 1);
     OPS->unlock_node(&mnt, n);
     OPS->release(&mnt, h);
     check(rc == 0 && first != 0 && fail_read_hits > 0,

@@ -82,10 +82,12 @@ void kfree(void *p)
     free(p);
 }
 
-/** The time of day, which stands at 1000 seconds. */
+static int64_t clock_sec = 1000;
+
+/** Read the time selected by the current row. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 1000;
+    *seconds = clock_sec;
     *nanoseconds = 0;
 }
 
@@ -306,8 +308,12 @@ static void bytes(void)
     CHECK(tmpfs_read(&mnt, f, buf, 5, 0) == 5 && k_memcmp(buf, "hello", 5) == 0);
     CHECK(tmpfs_read(&mnt, f, buf, 4, 8188) == 4 && buf[0] == 0 && buf[1] == 0 && buf[2] == 'x');
     CHECK(tmpfs_read(&mnt, f, buf, 4, 8192) == 0);
-    CHECK(tmpfs_truncate(&mnt, f, 3) == 0 && frames_in_use() == 1);
-    CHECK(tmpfs_truncate(&mnt, f, 10) == 0);
+    clock_sec++;
+    CHECK(tmpfs_truncate(&mnt, f, SHMEM_MAX_SIZE + 1ULL, 1) == -EFBIG);
+    CHECK(tmpfs_getattr(&mnt, f, &st) == 0 && st.size == 8192 && st.mtime_sec == clock_sec - 1 &&
+          st.ctime_sec == clock_sec - 1);
+    CHECK(tmpfs_truncate(&mnt, f, 3, 1) == 0 && frames_in_use() == 1);
+    CHECK(tmpfs_truncate(&mnt, f, 10, 1) == 0);
     CHECK(tmpfs_read(&mnt, f, buf, 10, 0) == 10 && k_memcmp(buf, "hel\0\0\0\0\0\0\0", 10) == 0);
     tmpfs_put(&mnt, f);
 }
@@ -352,7 +358,7 @@ static void sparse(void)
     CHECK(frames_in_use() == frames);
     f = make(NULL, "cache", 0644);
     CHECK(tmpfs_write(&mnt, f, "x", 1, 0) == 1);
-    CHECK(tmpfs_truncate(&mnt, f, SHMEM_MAX_SIZE) == 0);
+    CHECK(tmpfs_truncate(&mnt, f, SHMEM_MAX_SIZE, 1) == 0);
     k_memset(&cs, 0, sizeof(cs));
     service_points = 0;
     tmpfs_cachestat(&mnt, f, 0, 0xFFFFFFFEu, &cs);
@@ -556,7 +562,7 @@ static void mapping(void)
           sh->npages == npages);
     last = shmem_map_page(sh, most - 1u);
     CHECK(last != 0 && sh->npages == most && refs[frame_index(last)] == 2);
-    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && refs[frame_index(phys)] == 1 &&
+    CHECK(tmpfs_truncate(&mnt, f, 0, 1) == 0 && refs[frame_index(phys)] == 1 &&
           refs[frame_index(last)] == 1);
     free_frame(phys);
     free_frame(last);
@@ -578,16 +584,16 @@ static void truncation(void)
     mapped[3] = shmem_map_page(sh, 3);
     cuts = 0;
     sh->size = 0; /* a disk read-around may not have sampled the size */
-    CHECK(tmpfs_truncate(&mnt, f, PAGE_SIZE + 1) == 0 && cuts == 1 && cut_first == 2);
+    CHECK(tmpfs_truncate(&mnt, f, PAGE_SIZE + 1, 1) == 0 && cuts == 1 && cut_first == 2);
     CHECK(mapped[0] != 0 && mapped[3] == 0 && refs[frame_index(mapped[0])] == 2);
-    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && cuts == 2 && cut_first == 0 && mapped[0] == 0);
+    CHECK(tmpfs_truncate(&mnt, f, 0, 1) == 0 && cuts == 2 && cut_first == 0 && mapped[0] == 0);
     CHECK(tmpfs_write(&mnt, f, "x", 1, 3 * PAGE_SIZE) == 1);
     mapped[3] = shmem_map_page(sh, 3);
     CHECK(mapped[3] != 0 && pool[frame_index(mapped[3])][0] == 'x');
     free_frame(mapped[3]);
     mapped[3] = 0;
     sh->maps = 0;
-    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && cuts == 2);
+    CHECK(tmpfs_truncate(&mnt, f, 0, 1) == 0 && cuts == 2);
     tmpfs_put(&mnt, f);
 }
 
@@ -611,12 +617,12 @@ static void seals(void)
           tmpfs_seals(f) == 0);
     CHECK(tmpfs_write(&mnt, f, "sealed", 6, 0) == 6);
     CHECK(tmpfs_add_seals(f, TMPFS_SEAL_SHRINK) == 0);
-    CHECK(tmpfs_truncate(&mnt, f, 3) == -EPERM && tmpfs_truncate(&mnt, f, 10) == 0);
+    CHECK(tmpfs_truncate(&mnt, f, 3, 1) == -EPERM && tmpfs_truncate(&mnt, f, 10, 1) == 0);
     st.size = 2;
     CHECK(tmpfs_setattr(&mnt, f, VFS_SET_SIZE, &st) == -EPERM);
     CHECK(tmpfs_add_seals(f, TMPFS_SEAL_GROW) == 0);
     CHECK(tmpfs_write(&mnt, f, "x", 1, 10) == -EPERM && tmpfs_write(&mnt, f, "S", 1, 0) == 1);
-    CHECK(tmpfs_truncate(&mnt, f, 11) == -EPERM);
+    CHECK(tmpfs_truncate(&mnt, f, 11, 1) == -EPERM);
     CHECK(tmpfs_add_seals(f, TMPFS_SEAL_FUTURE_WRITE) == 0 &&
           tmpfs_write(&mnt, f, "s", 1, 0) == -EPERM);
     CHECK(tmpfs_add_seals(f, 0x40) == -EINVAL);
@@ -757,7 +763,7 @@ static void sizes(void)
           sf.blocks == 3 && sf.bfree == 1);
     CHECK(tmpfs_write(&m2, f, buf, 1, 2 * PAGE_SIZE) == 1);
     CHECK(tmpfs_remount(&m2, 0, NULL) == 0 && tmpfs_remount(&m2, 0, "size=8k") == -EINVAL);
-    CHECK(tmpfs_truncate(&m2, f, 0) == 0 && tmpfs_remount(&m2, 0, "size=8k") == 0 &&
+    CHECK(tmpfs_truncate(&m2, f, 0, 1) == 0 && tmpfs_remount(&m2, 0, "size=8k") == 0 &&
           tmpfs_statfs(&m2, &sf) == 0 && sf.bfree == 2);
     CHECK(tmpfs_write(&m2, f, "x", 1, 0x40000000ull + 5) == 1);
     CHECK(tmpfs_read(&m2, f, buf, 6, 0x40000000ull) == 6 && buf[5] == 'x' && buf[0] == 0);

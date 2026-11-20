@@ -529,7 +529,7 @@ static void second_move(void)
 
     waiting = first_move;
     if (truncating) {
-        rc = kv_truncate(&mount, descs[1]->fhandle, sizeof(payload));
+        rc = kv_truncate(&mount, descs[1]->fhandle, sizeof(payload), 1);
         check(rc == 0, "waiting truncation succeeds");
     } else {
         k_memset(payload, 'C', sizeof(payload));
@@ -653,7 +653,7 @@ static void failed_relocation(int truncate)
     fail_after_move = 1;
     clock_seconds++;
     k_memset(payload, 'F', sizeof(payload));
-    rc = truncate ? kv_truncate(&mount, descs[0]->fhandle, sizeof(payload))
+    rc = truncate ? kv_truncate(&mount, descs[0]->fhandle, sizeof(payload), 1)
                   : kv_write(&mount, descs[0]->fhandle, payload, sizeof(payload), 0);
     check(rc == (truncate ? -EIO : (int)sizeof(payload)) && syncs_after_free == 1,
           "a failed removal sync counts a visible write and fails a truncate");
@@ -760,7 +760,7 @@ static void failed_clean_flush(void)
           "read after failed clean-flag flush succeeds");
     check(kv_write(&mount, handle, "X", 1, 0) == -EROFS,
           "write after failed clean-flag flush is refused");
-    check(kv_truncate(&mount, handle, 0) == -EROFS,
+    check(kv_truncate(&mount, handle, 0, 1) == -EROFS,
           "truncate after failed clean-flag flush is refused");
     vfs_ns_lock(&mount);
     check(kv_create(&mount, mount.root, "later", 0644, &node) == -EROFS,
@@ -789,7 +789,7 @@ static void creation_errors(void)
     sync_error = 0;
     fd = open_node(create("big"));
     check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle,
-                      IMAGE_BYTES - 2 * sizeof(krffs_node_t) - 100) == 0,
+                      IMAGE_BYTES - 2 * sizeof(krffs_node_t) - 100, 1) == 0,
           "a file grows to fill the volume");
     vfs_ns_lock(&mount);
     check(kv_create(&mount, mount.root, "more", 0644, &node) == -ENOSPC,
@@ -814,8 +814,8 @@ static void owner_across(void)
 
     setup();
     fd = open_node(create("spacer"));
-    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, 3826 - 2 * sizeof(krffs_node_t)) ==
-              0,
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, 3826 - 2 * sizeof(krffs_node_t),
+                      1) == 0,
           "a spacer places the next node");
     maker.euid = maker.egid = 1000;
     current_proc = &maker;
@@ -1126,7 +1126,7 @@ static void owned_fsync(void)
               block_of(offset_of(&mount, other)),
           "fsync row: one's header shares no block with other");
     first = block_of(offset_of(&mount, other) + sizeof(krffs_node_t)) + 1;
-    check(kv_truncate(&mount, fd_slot(&table, fd_one)->ofd->fhandle, 4096) == 0,
+    check(kv_truncate(&mount, fd_slot(&table, fd_one)->ofd->fhandle, 4096, 1) == 0,
           "fsync row: stamp one at its current length");
     st.mode = 0600;
     check(kv_setattr(&mount, other, VFS_SET_MODE, &st) == 0, "fsync row: chmod other");
@@ -1174,12 +1174,12 @@ static void owned_across_move(void)
     at = offset_of(&mount, fd_slot(&table, fd)->ofd->vnode);
     check(at > 4096, "move row: target moved past the first block");
     fd_fill = open_node(create("filler"));
-    check(kv_truncate(&mount, fd_slot(&table, fd_fill)->ofd->fhandle, 4000) == 0,
+    check(kv_truncate(&mount, fd_slot(&table, fd_fill)->ofd->fhandle, 4000, 1) == 0,
           "move row: filler takes the old place");
     fd_tail = open_node(create("tail"));
     link = offset_of(&mount, fd_slot(&table, fd_tail)->ofd->vnode);
     check(link == at + sizeof(krffs_node_t) + 3 * 4096, "move row: tail follows target");
-    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, 100) == 0 &&
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, 100, 1) == 0 &&
               offset_of(&mount, fd_slot(&table, fd)->ofd->vnode) == at,
           "move row: shrink in place");
     check(buffers[block_of(link)].dirty &&
@@ -1229,12 +1229,13 @@ static void shrink_link(int reopen)
     check(block_of(link) != block_of(at) &&
               block_of(link) != block_of(at + sizeof(krffs_node_t) - 1),
           "link row: b's link is not in a's header block");
-    check(kv_truncate(&mount, fd_slot(&table, fd_a)->ofd->fhandle, 100) == 0, "link row: shrink a");
+    check(kv_truncate(&mount, fd_slot(&table, fd_a)->ofd->fhandle, 100, 1) == 0,
+          "link row: shrink a");
     was = fd_slot(&table, fd_a)->ofd->fhandle;
     check(buffers[block_of(link)].dirty && buffers[block_of(link)].owner == owner_of(was),
           "link row: the shrink leaves b's link dirty under a's record");
     if (!reopen) {
-        check(kv_truncate(&mount, fd_slot(&table, fd_b)->ofd->fhandle, 0) == 0 &&
+        check(kv_truncate(&mount, fd_slot(&table, fd_b)->ofd->fhandle, 0, 1) == 0 &&
                   buffers[block_of(link)].dirty &&
                   buffers[block_of(link)].owner == owner_of(fd_slot(&table, fd_b)->ofd->fhandle),
               "link row: a truncate of b to its size retags the link as b's");
@@ -1281,7 +1282,7 @@ static void failed_link(void)
     fs = &vol_of(&mount)->fs;
     flush_calls = 0;
     flush_hook = refuse_link_block;
-    check(kv_truncate(&mount, handle, 100) == 0 && fs->stale_links, "split link: write failed");
+    check(kv_truncate(&mount, handle, 100, 1) == 0 && fs->stale_links, "split link: write failed");
     flush_hook = NULL;
     check(krffs_head(fs, b, &head) == 0 &&
               krffs_previous_offset(fs, b, &head) == a + sizeof(head) + 100,
@@ -1316,7 +1317,7 @@ static void failed_shrink_flush(void)
     fs = &vol_of(&mount)->fs;
     flush_calls = 0;
     fail_flush_at = 2;
-    check(kv_truncate(&mount, handle, 100) == -EIO && flush_calls == 2,
+    check(kv_truncate(&mount, handle, 100, 1) == -EIO && flush_calls == 2,
           "shrink flush: the failed header flush returns EIO");
     check(krffs_head(fs, at, &head) == 0 && head.size == sizeof(head) + 4096 &&
               head.data_size == 100 && krffs_chain_is_valid(fs),
@@ -1657,6 +1658,27 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
+/** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    if (m->bind_of) {
+        return m->flags;
+    }
+    return (m->flags & ~VFS_MS_RDONLY) | (m->mnt_rdonly ? VFS_MS_RDONLY : 0);
+}
+
+/** vfs.c's: the base's VFS_MS_RDONLY, the file system's state. */
+int vfs_sb_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_base(m)->flags & VFS_MS_RDONLY) != 0;
+}
+
+/** vfs.c's: the mount's own flag or its file system's. */
+int vfs_mount_rdonly(const struct vfs_mount *m)
+{
+    return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
+}
+
 /**
  * Refuse one fetch of the header block for mtime or ctime. The overwrite
  * starts in the next block, so its payload never fetches the header.
@@ -1693,6 +1715,17 @@ static void stamp_fetch_failure(int skip)
     teardown();
 }
 
+/** An equal pathname truncate leaves both persisted times alone. */
+static void equal_truncate_times(struct open_file *file)
+{
+    struct vfs_stat st;
+
+    check(kv_truncate(&mount, file->fhandle, 6, 0) == 0 &&
+              kv_getattr(&mount, file->vnode, &st) == 0 && st.mtime_sec == clock_seconds - 1 &&
+              st.ctime_sec == clock_seconds - 1,
+          "equal pathname truncate preserves both times");
+}
+
 /**
  * Place the seconds of `field` at 4088 and its nanoseconds at 4096.
  * Fail a fetch with only the seconds changing, then change both halves
@@ -1709,16 +1742,17 @@ static void split_stamp(uint32_t field, int truncate)
 
     setup();
     fd = open_node(create("spacer"));
-    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, at - 2 * sizeof(*head)) == 0,
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, at - 2 * sizeof(*head), 1) == 0,
           "place the next node at the timestamp boundary");
     file = fd_slot(&table, open_node(create("edge")))->ofd;
     check(kv_write(&mount, file->fhandle, "abcdef", 6, 0) == 6 &&
               offset_of(&mount, file->vnode) == at,
           "seed a file with seconds and nanoseconds on opposite blocks");
     clock_seconds++;
+    equal_truncate_times(file);
     refuse_block = 1;
     refuse_skip = 1; /* fetch the header, then fail the split field's fetch */
-    rc = truncate ? kv_truncate(&mount, file->fhandle, 2)
+    rc = truncate ? kv_truncate(&mount, file->fhandle, 2, 1)
                   : kv_write(&mount, file->fhandle, "Y", 1, 2);
     check(rc == -EIO && refuse_block == -1 && offset_of(&mount, file->vnode) == at,
           "a failed fetch stops the operation on the original node");
@@ -1728,7 +1762,7 @@ static void split_stamp(uint32_t field, int truncate)
           "the failed fetch leaves the original length and bytes on disk");
 
     clock_nanoseconds = 1;
-    rc = truncate ? kv_truncate(&mount, file->fhandle, 6)
+    rc = truncate ? kv_truncate(&mount, file->fhandle, 6, 1)
                   : kv_write(&mount, file->fhandle, "X", 1, 2);
     check(rc == (truncate ? 0 : 1) && kv_lookup(&mount, mount.root, "edge", &node) == 0 &&
               file->vnode == node && offset_of(&mount, node) != at &&

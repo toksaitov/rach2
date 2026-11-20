@@ -432,7 +432,7 @@ int pstore_panic_dump(void)
     int32_t us;
     uint32_t hl = 0, room, off, len, n;
 
-    if (!ready || max_dump_cnt == 0 || dumped) {
+    if (!ready || max_dump_cnt == 0 || dumped || !pstore_dump_enabled()) {
         return 0;
     }
     dumped = 1;

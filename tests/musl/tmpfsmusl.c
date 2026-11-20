@@ -499,7 +499,8 @@ static int bound(void)
     int one, two;
 
     if (mkdir(BIND_SRC, 0755) != 0 || mkdir(BIND_DST, 0755) != 0 ||
-        mount("tmpfsmusl", BIND_SRC, "tmpfs", 0, NULL) != 0 || mkdir(BIND_SRC "/sub", 0755) != 0) {
+        mount("tmpfsmusl", BIND_SRC, "tmpfs", MS_SYNCHRONOUS, "size=64k,mode=0700") != 0 ||
+        mkdir(BIND_SRC "/sub", 0755) != 0) {
         return fail("the source of a bind");
     }
     row_held();
@@ -544,8 +545,19 @@ static int bound_mount(void)
         return fail("a bind remounted read-only refuses a write its source takes");
     }
     row_held();
-    if (!mountinfo_has(" /sub " BIND_DST " ")) {
-        return fail("mountinfo gives a bind its root within the file system");
+    if (mount(NULL, BIND_SRC, NULL, MS_REMOUNT | MS_BIND | MS_NOEXEC, NULL) != 0 ||
+        !mountinfo_has(" / " BIND_SRC
+                       " rw,noexec,relatime - tmpfs tmpfsmusl rw,sync,size=64k,mode=700") ||
+        !mountinfo_has(" /sub " BIND_DST
+                       " ro,relatime - tmpfs tmpfsmusl rw,sync,size=64k,mode=700")) {
+        return fail("bind remount of the source preserves the file system's flags and options");
+    }
+    if (mount(NULL, BIND_DST, NULL, MS_REMOUNT | MS_STRICTATIME | MS_SYNCHRONOUS, "size=32k") !=
+            0 ||
+        !mountinfo_has(" / " BIND_SRC
+                       " rw,noexec,relatime - tmpfs tmpfsmusl rw,sync,size=32k,mode=700") ||
+        !mountinfo_has(" /sub " BIND_DST " rw - tmpfs tmpfsmusl rw,sync,size=32k,mode=700")) {
+        return fail("a full remount changes the named mount and both mounts' shared options");
     }
     row_held();
     if (umount2(BIND_SRC, 0) != -1 || errno != EBUSY || umount2(BIND_DST, 0) != 0 ||

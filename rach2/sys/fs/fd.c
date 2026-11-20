@@ -359,8 +359,8 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
     int rc = 0;
 
     if (access == 1 &&
-        (ref->mnt->readonly_pending || vfs_mount_base(ref->mnt)->readonly_pending ||
-         (ref->mnt->flags & VFS_MS_RDONLY) || (vfs_mount_base(ref->mnt)->flags & VFS_MS_RDONLY))) {
+        (ref->mnt->readonly_pending || vfs_mount_base(ref->mnt)->readonly_pending == 1 ||
+         vfs_mount_rdonly(ref->mnt))) {
         rc = -EROFS;
     } else if (a && a->count[2 - access] > 0) {
         rc = -ETXTBSY;
@@ -381,7 +381,7 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
     return rc;
 }
 
-int fd_mount_readonly_begin(struct vfs_mount *mnt)
+int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone)
 {
     struct ofd_rec *rec;
     uint32_t flags = spin_lock_irqsave(&ofd_lock);
@@ -391,12 +391,12 @@ int fd_mount_readonly_begin(struct vfs_mount *mnt)
         struct open_file *f = &rec->ofd;
 
         if (f->access == 1 &&
-            (mnt->bind_of ? f->access_mnt == mnt : vfs_mount_base(f->access_mnt) == mnt)) {
+            (mnt->bind_of || alone ? f->access_mnt == mnt : vfs_mount_base(f->access_mnt) == mnt)) {
             rc = -EBUSY;
         }
     }
     if (rc == 0) {
-        mnt->readonly_pending = 1;
+        mnt->readonly_pending = alone && !mnt->bind_of ? 2 : 1;
     }
     spin_unlock_irqrestore(&ofd_lock, flags);
     return rc;
@@ -632,8 +632,9 @@ void fd_ofd_unref(struct open_file *ofd)
                 struct vfs_ref ref;
 
                 ref.mnt = ofd->synth_mnt;
-                ref.node = ref.mnt->root;
+                ref.node = ofd->synth_node;
                 ofd->synth_mnt = NULL;
+                ofd->synth_node = NULL;
                 vfs_desc_close(ref.mnt, ref.node, NULL);
             }
             flags = spin_lock_irqsave(&ofd_lock);

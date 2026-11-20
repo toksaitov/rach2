@@ -3597,8 +3597,9 @@ static void state_take(struct ext2_mount *em, const uint8_t *sb)
     uint32_t v = ext2_le16(sb + 60);
 
     em->state = ext2_le16(sb + 58);
+    em->disk_errors = v == EXT2_ERRORS_PANIC || v == EXT2_ERRORS_CONTINUE ? (int)v : EXT2_ERRORS_RO;
     if (em->errors == 0) {
-        em->errors = v == EXT2_ERRORS_PANIC || v == EXT2_ERRORS_CONTINUE ? (int)v : EXT2_ERRORS_RO;
+        em->errors = em->disk_errors;
     }
 }
 
@@ -3840,6 +3841,20 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     return 0;
 }
 
+/** Emit the active ext2 error policy. */
+static void ext2_options(const struct vfs_mount *mnt, vfs_option_emit emit, void *out)
+{
+    const struct ext2_mount *em = mnt->priv;
+
+    if (em->errors == EXT2_ERRORS_CONTINUE) {
+        emit(out, "errors=continue", 0, VFS_OPT_WORD);
+    } else if (em->errors == EXT2_ERRORS_PANIC) {
+        emit(out, "errors=panic", 0, VFS_OPT_WORD);
+    } else if (em->disk_errors != EXT2_ERRORS_RO) {
+        emit(out, "errors=remount-ro", 0, VFS_OPT_WORD);
+    }
+}
+
 /** The constructor of `vfs_ext2_type`, whose contract is in ext2.h: the
  * record from the heap, its policy set by `errors=` of `options` when they
  * have it (`errors_option`), given to `ext2_mount_on` and freed, with its
@@ -3865,8 +3880,11 @@ int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const
         ext2_writeback_free(em->wb);
         kfree(em->gd);
         kfree(em);
-    } else if (em->block_size == BCACHE_BLOCK_BYTES) {
-        bcache_sync_last(dev, block_in_table, table_names, em);
+    } else {
+        mnt->show_options = ext2_options;
+        if (em->block_size == BCACHE_BLOCK_BYTES) {
+            bcache_sync_last(dev, block_in_table, table_names, em);
+        }
     }
     return rc;
 }
@@ -3990,13 +4008,13 @@ static int32_t admit_write(struct vfs_mount *mnt, void *handle, const void *buf,
 
 /** The `truncate` of `vfs_ops`: `ext2_truncate`, admitted under the node's
  * lock. */
-static int admit_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int admit_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     struct ext2_handle *h = handle;
     int rc;
 
     em_enter_node(ext2_em_of(mnt), h->node);
-    rc = ext2_truncate(mnt, h->node, size);
+    rc = ext2_truncate(mnt, h->node, size, stamp_times);
     em_finish_node(ext2_em_of(mnt), h->node);
     return rc;
 }
