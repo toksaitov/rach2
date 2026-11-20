@@ -174,10 +174,13 @@ void i915_ggtt_invalidate(struct drm_i915_private *i915)
     (void)i915;
 }
 
-void i915_ggtt_carry(struct drm_i915_private *i915, uint64_t offset)
+/** Release the reserved record in this model, which never fails a mask. */
+void i915_ggtt_carry(struct drm_i915_private *i915, struct i915_ggtt_status *status,
+                     uint64_t offset)
 {
     (void)i915;
     (void)offset;
+    kfree(status);
 }
 
 uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache)

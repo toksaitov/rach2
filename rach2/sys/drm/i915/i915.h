@@ -170,10 +170,7 @@ struct i915_stolen {
 #define I915_CACHE_WT     3
 
 #define I915_GTT_PAGE_SIZE 4096u
-/* The ranges kept in the global GTT: the firmware's surfaces, one a pipe
- * at most, and the status pages a release before kept, one for each of
- * the I915_NUM_ENGINES rings. */
-#define I915_GGTT_KEPT_MAX 7
+#define I915_NUM_PIPES     3
 
 /* A range of GTT offsets, [start, end). */
 struct i915_gtt_range {
@@ -181,16 +178,23 @@ struct i915_gtt_range {
     uint64_t end;
 };
 
+/* One retained status page. The record is reserved before it is mapped. */
+struct i915_ggtt_status {
+    struct i915_ggtt_status *next;
+    struct i915_ggtt_status *next_fn; /* only used at the head of a parked list */
+    struct i915_gtt_range range;
+    uint16_t fn; /* PCI bus << 8 | devfn, for the list between binds */
+};
+
 /*
  * The global GTT (i915_gtt.c): `total` bytes of the GPU's address space,
  * an entry for each page, of which the first `mappable_end` bytes are
  * reached through the aperture, BAR 2. Every entry that maps nothing maps
  * the scratch page, a zeroed frame at `scratch` whose entry is
- * `scratch_pte`. `kept` holds the `nkept` ranges the bind left as it found
- * them and which the GTT's calls refuse to change: the firmware's
- * surfaces, since the console draws there through the aperture, and the
- * status pages an earlier binding kept (`i915_ggtt_carry`), which the GPU
- * may still write through them.
+ * `scratch_pte`. `kept` holds the firmware's `nkept` surfaces, at most one
+ * per pipe. `status` holds retained status pages in order by offset,
+ * including pages kept by earlier binds without a function reset. The GTT
+ * leaves both sets of ranges mapped.
  * `fw_tiled` is set when one of them is X-tiled, so that the swizzle the
  * firmware chose stands (Linux's preserve_bios_swizzle).
  */
@@ -200,9 +204,43 @@ struct i915_ggtt {
     uintptr_t scratch;
     uint32_t scratch_pte;
     int nkept;
-    struct i915_gtt_range kept[I915_GGTT_KEPT_MAX];
+    struct i915_gtt_range kept[I915_NUM_PIPES];
+    struct i915_ggtt_status *status;
     uint8_t fw_tiled;
 };
+
+/** Return a firmware surface intersecting [start, end), or NULL. */
+static __inline__ const struct i915_gtt_range *
+i915_ggtt_firmware_overlap(const struct i915_ggtt *ggtt, uint64_t start, uint64_t end)
+{
+    int i;
+
+    for (i = 0; i < ggtt->nkept; i++) {
+        if (ggtt->kept[i].start < end && start < ggtt->kept[i].end) {
+            return &ggtt->kept[i];
+        }
+    }
+    return 0;
+}
+
+/** Return a kept range intersecting [start, end), or NULL. The caller
+ * holds the GEM lock or has exclusive use of the GGTT during bind. */
+static __inline__ const struct i915_gtt_range *i915_ggtt_kept_overlap(const struct i915_ggtt *ggtt,
+                                                                      uint64_t start, uint64_t end)
+{
+    const struct i915_gtt_range *range = i915_ggtt_firmware_overlap(ggtt, start, end);
+    const struct i915_ggtt_status *status;
+
+    if (range) {
+        return range;
+    }
+    for (status = ggtt->status; status && status->range.start < end; status = status->next) {
+        if (start < status->range.end) {
+            return &status->range;
+        }
+    }
+    return 0;
+}
 
 /*
  * The interrupt banks of Haswell (i915_irq.c): the GT's, power
@@ -361,6 +399,7 @@ struct i915_engine {
     uint32_t fault_reg;
     uint32_t *hws;
     uint32_t hws_ggtt;
+    struct i915_ggtt_status *hws_keep; /* reserved while hws is mapped */
     uint32_t *ring;
     uint32_t ring_size;
     uint32_t ring_ggtt;
@@ -909,8 +948,6 @@ struct i915_gem {
  * primary, a sprite and a cursor plane, the eDP panel's connector and its
  * backlight, vblanks, page flips and the pipe CRC.
  */
-
-#define I915_NUM_PIPES 3
 
 /* A pipe's planes, by index into `intel_crtc`'s scanouts. */
 #define INTEL_PLANE_PRIMARY 0
@@ -1978,20 +2015,22 @@ uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache);
  */
 int32_t i915_ggtt_init(struct drm_i915_private *i915);
 
-/** Give the scratch page back; the GTT's entries are left as they are. */
+/** Park any retained ranges and give the scratch page back. */
 void i915_ggtt_fini(struct drm_i915_private *i915);
 
 /**
- * Note that the page at GTT offset `offset` of `i915`'s function stays
- * mapped after its binding goes, as a status page whose writes were not
- * masked does, so that each later bind of the function keeps its entry and
- * its range until a reset of the function (`i915_ggtt_carry_drop`) ends
- * the GPU's writes. A range that finds no room is logged.
+ * Keep the status page at `offset` mapped because its writes were not
+ * masked. This consumes `status`, reserved before the page was mapped.
+ * The binding has exclusive use of the GGTT or holds the GEM lock.
  */
-void i915_ggtt_carry(struct drm_i915_private *i915, uint64_t offset);
+void i915_ggtt_carry(struct drm_i915_private *i915, struct i915_ggtt_status *status,
+                     uint64_t offset);
 
-/** Forget the ranges `i915_ggtt_carry` noted for the function `pdev`, which
- * a reset has stopped. */
+/** Park the binding's retained ranges before releasing the PCI claim.
+ * The GGTT is unpublished or the caller holds the GEM lock at unplug. */
+void i915_ggtt_carry_park(struct drm_i915_private *i915);
+
+/** Drop the parked ranges for `pdev` after a successful function reset. */
 void i915_ggtt_carry_drop(const pci_device_t *pdev);
 
 /** Flush the chip's GTT cache, so that it sees the entries written, as
