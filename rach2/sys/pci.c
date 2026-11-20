@@ -785,10 +785,47 @@ void pci_host_reserve(uint64_t start, uint64_t end, int io)
     h->io = io != 0;
 }
 
+/** Join to window `f` of root set `s` every later window of its kind that
+ * overlaps it, as Linux's acpi_pci_root_validate_resources expands one
+ * window over another, keeping the order of the rest. */
+static void pci_root_join(struct pci_root_set *s, int f)
+{
+    struct pci_aperture *a = &s->win[f], *b;
+    int j, k;
+
+    for (k = 0; k < s->n;) {
+        b = &s->win[k];
+        if (k == f || !a->io != !b->io || b->end < a->start || a->end < b->start) {
+            k++;
+            continue;
+        }
+        a->start = a->start < b->start ? a->start : b->start;
+        a->end = a->end > b->end ? a->end : b->end;
+        for (j = k + 1; j < s->n; j++) {
+            s->win[j - 1] = s->win[j];
+        }
+        s->n--;
+        if (k < f) {
+            f--;
+            a = &s->win[f];
+        }
+        k = 0;
+    }
+}
+
 int pci_root_window_add(uint8_t bus, const struct pci_aperture *w)
 {
     struct pci_root_set *s = &pci_roots[bus];
+    int k;
 
+    for (k = 0; k < s->n; k++) {
+        if (!s->win[k].io == !w->io && s->win[k].start <= w->end && w->start <= s->win[k].end) {
+            s->win[k].start = s->win[k].start < w->start ? s->win[k].start : w->start;
+            s->win[k].end = s->win[k].end > w->end ? s->win[k].end : w->end;
+            pci_root_join(s, k);
+            return 0;
+        }
+    }
     if (s->n == s->cap) {
         int cap = s->cap ? s->cap * 2 : 4;
         struct pci_aperture *bigger = kmalloc((size_t)cap * sizeof(*bigger));
