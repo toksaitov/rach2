@@ -174,6 +174,8 @@ Blaster 16.
 A playback buffer holds the periods the mix takes at its start and at least
 one more, so that a program that keeps a period free, as cmus does, can
 queue the start.
+On a device of its own whose buffer holds more of the stream than that,
+it grows to hold them and a period more, up to 8 MiB.
 A recording period may be made smaller by the driver.
 .It Dv SNDCTL_DSP_GETBLKSIZE
 The bytes of a period.
@@ -288,9 +290,9 @@ allow: the nearest of its rates from 32000 to 192000 Hz, in 16 bits, or
 24 when the monitor takes them and the format is wider than 16, and the
 even count of channels from two to the most a descriptor of the ELD has,
 eight at most, nearest the count asked for, the higher on a tie.
-Where the driver's shortest buffer would take more than 64 KiB of the
-stream, as 128 channels of 32 bits at four times the rate a stereo monitor
-plays do, it grants the rate it plays instead.
+It keeps the rate asked for, and its buffer holds 40 ms of the converted
+stream: for 128 channels of 32 bits at 192000 Hz, some 3.9 MiB, which the
+open's buffer grows to hold.
 A mono stream plays on every channel, and another's channels play in
 order, those the device lacks dropped and those the stream lacks silent;
 the rate is changed by linear interpolation, as Linux's OSS plugins change
@@ -340,6 +342,16 @@ which leaves the device playing.
 A nonblocking write found no room, or a nonblocking read nothing recorded.
 .It Bq Er EIO
 The device failed to start.
+.It Bq Er ENOMEM
+.Xr open 2 :
+no memory for the buffers.
+.Dv SNDCTL_DSP_SETFMT ,
+.Dv SNDCTL_DSP_CHANNELS ,
+.Dv SNDCTL_DSP_SPEED
+or
+.Dv SNDCTL_DSP_SETFRAGMENT :
+no memory for the larger playback buffer an HDMI device needs for the
+settings; the old ones stay.
 .It Bq Er EINVAL
 .Xr open 2
 with an access mode of 3; a request for a direction the open does not have,
