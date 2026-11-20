@@ -24,6 +24,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../proc/mutex.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
 #include "../proc/wait_queue.h"
@@ -156,6 +157,11 @@ struct vcon_port {
     uint32_t hold_n;
     /* A vport's readers, writers and pollers. */
     wait_queue_t wq;
+    /* Held by a vport's reader from its peek to its consume, across the
+     * copy to the user, which may sleep: a second reader through a shared
+     * description would otherwise take the same bytes, and the first then
+     * consume bytes it never read. */
+    struct mutex rd;
     struct vcon_node vnode, hnode, lnode;
 };
 
@@ -1015,8 +1021,9 @@ static void vcon_rx_discard(void)
 /**
  * Copy up to `n` of the bytes `p`'s oldest returned buffer holds into
  * `out`, leaving them there; the caller takes them with `vcon_rx_consume`
- * once it has used them. Only one taker, the thread or the vport's reader,
- * empties a port's buffers, and the interrupt only adds to them. Returns
+ * once it has used them. Only one taker, the thread or the vport's reader
+ * that holds the port's `rd`, empties a port's buffers, and the interrupt
+ * only adds to them. Returns
  * the bytes copied, 0 when no buffer holds any.
  */
 static uint32_t vcon_rx_peek(struct vcon_port *p, unsigned char *out, uint32_t n)
@@ -1394,7 +1401,9 @@ static int vcon_nonblock(const fd_entry_t *e)
  * A vport's read, as Linux's port_fops_read: the bytes the host wrote, in
  * the order the device returned its buffers; 0, as an end of file, while
  * none wait and the host's end is closed; else a wait for them, or -EAGAIN
- * without one. -ENODEV once the port has gone.
+ * without one. -ENODEV once the port has gone, -EINTR when a signal ends a
+ * wait. The port's `rd` is held from the first peek to the last consume, so
+ * that readers sharing the port take each byte once.
  */
 static int32_t vcon_vport_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1407,8 +1416,23 @@ static int32_t vcon_vport_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (!vcon_live(h)) {
             return -ENODEV;
         }
-        if (p->rx_n > 0 || count == 0) {
-            break;
+        if (count == 0) {
+            return 0;
+        }
+        if (p->rx_n > 0) {
+            if (mutex_lock_interruptible(&p->rd) < 0) {
+                return -EINTR;
+            }
+            if (!vcon_live(h)) {
+                mutex_unlock(&p->rd);
+                return -ENODEV;
+            }
+            if (p->rx_n > 0) {
+                break;
+            }
+            /* Another reader took the bytes while this one waited. */
+            mutex_unlock(&p->rd);
+            continue;
         }
         if (!p->host_open) {
             return 0;
@@ -1426,12 +1450,19 @@ static int32_t vcon_vport_read(fd_entry_t *e, char __user *buf, uint32_t count)
             break;
         }
         if (copy_to_user(buf + done, tmp, n) != 0) {
+            mutex_unlock(&p->rd);
             return done ? (int32_t)done : -EFAULT;
+        }
+        if (!vcon_live(h)) {
+            /* The copy slept and the port went, dropping its buffers. */
+            done += n;
+            break;
         }
         vcon_rx_consume(p, n);
         vcon_n.rx_bytes += n;
         done += n;
     }
+    mutex_unlock(&p->rd);
     return (int32_t)done;
 }
 
@@ -2408,6 +2439,7 @@ static struct vcon *vcon_new(struct virtio_dev *vdev, uint32_t nports)
         p->id = k;
         p->hvc = p->minor = p->tx_cur = p->sent_open = -1;
         wait_queue_init_named(&p->wq, "virtio_console_port");
+        mutex_init(&p->rd, "virtio_console_read");
         vcon_vname(d, p);
     }
     vdev->priv = d;
