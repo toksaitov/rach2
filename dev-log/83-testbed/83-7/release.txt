@@ -1,0 +1,82 @@
+Lenovo test bed case output, selected lines from the release and lit trial.
+
+milestone21-287ca34847e7-lenovo-1118-153031, testbed/glmark2
+testbed: rach2: measure: result: glmark2 native-rach2 frames 93850 frame_ms 0.426 p50 0.401 p99 0.876 cpu_ms_per_frame 0.206 latency_ms - copied_bytes 0 exits 0 round_trips - seconds 40.7 passed -
+testbed: linux: measure: result: glmark2 native-linux frames 76439 frame_ms 0.523 p50 0.492 p99 1.825 cpu_ms_per_frame 0.400 latency_ms 0.090 copied_bytes - exits 0 round_trips - seconds 40.7 passed -
+testbed: result: pass
+
+milestone21-287ca34847e7-lenovo-1118-153031, testbed/piglit
+testbed: rach2: measure: result: piglit native-rach2 frames 9 frame_ms 375.818 p50 320.257 p99 702.783 cpu_ms_per_frame 1557.778 latency_ms - copied_bytes 0 exits 0 round_trips - seconds 14.5 passed 9/9
+testbed: linux: measure: result: piglit native-linux frames 10 frame_ms 1126.949 p50 386.567 p99 969.759 cpu_ms_per_frame 2134.000 latency_ms 0.137 copied_bytes - exits 0 round_trips - seconds 21.9 passed 10/10
+testbed: result: pass
+
+milestone21-287ca34847e7-lenovo-1118-153031, testbed/game
+testbed: rach2: measure: result: game native-rach2 frames 6685 frame_ms 13.464 p50 13.100 p99 18.530 cpu_ms_per_frame 28.707 latency_ms - copied_bytes 0 exits 0 round_trips - seconds 111.5 passed -
+testbed: linux: measure: result: game native-linux frames 6039 frame_ms 14.905 p50 14.440 p99 19.360 cpu_ms_per_frame 13.929 latency_ms 0.210 copied_bytes - exits 0 round_trips - seconds 107.1 passed -
+testbed: result: pass
+
+milestone21-b2066fa268b3-lenovo-1118-223422, bed/forward.virgl
+check: before: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: before: result: pass
+bed-forward: result: pass: virgl: measure: result: glmark2 forward-virgl frames 6415 frame_ms 6.241 p50 0.729 p99 17.050 cpu_ms_per_frame 2.316 latency_ms 0.287 copied_bytes - exits 159574 round_trips - seconds 40.7 passed -
+check: after: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: after: result: pass
+bed: result: pass
+
+milestone21-b2066fa268b3-lenovo-1118-223422, bed/forward.venus
+check: before: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: before: result: pass
+bed-forward: result: pass: venus: measure: result: glmark2 forward-venus frames 3563 frame_ms 11.237 p50 12.860 p99 29.280 cpu_ms_per_frame 4.942 latency_ms 0.823 copied_bytes - exits 306371 round_trips - seconds 42.7 passed -
+check: after: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: after: result: pass
+bed: result: pass
+
+milestone21-7a2168e3c244-lenovo-1119-002918, bed/shm
+check: before: backlight: 46 of 937, actual 46
+check: before: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: before: result: pass
+bed-shm: attach: pass: attached once, refused twice
+bed-shm: session: pass: Weston on card0 through virgl after 0 s: virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+bed-shm: figure: measure: result: glmark2 shm-virgl frames 820 frame_ms 48.960 p50 50.180 p99 91.410 cpu_ms_per_frame 50.988 latency_ms - copied_bytes 252258400 exits 138355 round_trips 1915 seconds 40.9 passed -
+bed-shm: figure: measure: result: piglit shm-virgl frames 9 frame_ms 3214.901 p50 1629.011 p99 6644.018 cpu_ms_per_frame 4605.556 latency_ms - copied_bytes 440295856 exits 166559 round_trips 21067 seconds 39.9 passed 9/9
+bed-shm: figure: measure: result: glmark2 shm-venus frames 610 frame_ms 65.704 p50 66.050 p99 68.010 cpu_ms_per_frame 69.197 latency_ms - copied_bytes 24560 exits 231431 round_trips 3237 seconds 41.5 passed -
+bed-shm: load: pass: glmark2 on virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2)), 106 doorbells
+bed-shm: death: pass: error -19; glmark2 ended with status 0
+bed-shm: fallback: pass: Weston headless on llvmpipe 1 s after the death
+bed-shm: return: pass: Weston on card0 from the headless session, Mesa Intel(R) HD Graphics 4400 (HSW GT2), pipe A crc 0x00000000 over 4 frames, 0 s after the death
+bed-shm: handoff: pass: 0000:00:02.0 to the guest and back to i915 after 140 s, QEMU killed
+bed-shm: result: pass
+check: after: backlight: 0 of 7500, actual 7500
+check: after: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+check: after: result: pass
+bed: result: pass
+
+Lenovo 5417 lit trial, bed/shm at 7a6a8a047b, 2026-11-19
+lit: 562/937 a562 p0
+check: before: backlight: 562 of 937, actual 562
+check: before: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+bed-shm: load: pass: glmark2 on virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2)), 101 doorbells
+bed-shm: death: pass: error -19; glmark2 ended with status 0
+bed-shm: fallback: pass: Weston headless on llvmpipe 1 s after the death
+bed-shm: return: pass: Weston on card0 from the headless session, Mesa Intel(R) HD Graphics 4400 (HSW GT2), pipe A crc 0x00000000 over 4 frames, 0 s after the death
+bed-shm: handoff: pass: 0000:00:02.0 to the guest and back to i915 after 142 s, QEMU killed
+check: after: backlight: 937 of 937, actual 937
+check: after: crcmodes: mode 1366x768 aspect crc 0xeeb1bf37 frames 8
+bed: result: pass
+native: result: 1 cases, 0 failed or incomplete
+lit: 562/937 a562 p0
+lit: 562/937 a562 p0
+crc: before the takeback (Weston)
+crcwatch: frames 120 distinct 1
+    120 0x0bbaedf6
+lit: 562/937 a562 p0
+crc: after the takeback
+crcwatch: frames 300 distinct 1
+    300 0x2d6ad698
+lit: 562/937 a562 p0
+crc: after term's start
+crcwatch: frames 300 distinct 1
+    300 0xf2d626e5
+crc: 30 s later
+crcwatch: frames 300 distinct 1
+    300 0xf2d626e5
