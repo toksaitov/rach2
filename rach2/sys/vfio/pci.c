@@ -196,14 +196,41 @@ static int pm_loses_state(const struct vfio_device *d)
 }
 
 /**
+ * Whether every memory BAR of `d` is claimed (`pci_resource_claimable`), as
+ * Linux's pci_enable_resources requires before it turns memory decoding
+ * on, so that the function never answers for addresses the host or
+ * another device has. 0, or -EINVAL with a record of the first that is not.
+ */
+static int bars_claimed(struct vfio_device *d)
+{
+    struct pci_resource r;
+    int i, claim;
+
+    for (i = 0; i < 6; i++) {
+        pci_resource(DEV(d), i, &r);
+        if (!(r.flags & PCI_IORESOURCE_MEM)) {
+            continue;
+        }
+        claim = pci_resource_claimable(DEV(d), i);
+        if (claim != 0) {
+            klog(KLOG_WARN, "vfio", "open: %s: memory BAR %d at 0x%lx not claimed: %d", d->name, i,
+                 (unsigned long)r.start, claim);
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+/**
  * Read the BARs: their addresses, sizes and kinds. A BAR is exposed only
  * once it is claimed (`pci_resource_claimable`), as Linux's vfio-pci
- * reaches a BAR only through pci_request_selected_regions: one without an
- * address, out of range or over another's decodes nothing VFIO gives, and
- * its size is 0. An I/O BAR's size is the one the bus's walk found, as
- * Linux's pci_resource_len gives it; one that is not claimed keeps the
- * function's I/O decoding off (`io_off`), as Linux's pci_enable_resources
- * refuses to turn it on, since the function would answer for host ports.
+ * reaches a BAR only through pci_request_selected_regions; every memory
+ * BAR is, since the open refuses a function with one that is not
+ * (`bars_claimed`). An I/O BAR without an address, out of range or over
+ * another's decodes nothing VFIO gives, and its size is 0. An I/O BAR's
+ * size is the one the bus's walk found, as Linux's pci_resource_len gives
+ * it; one that is not claimed keeps the function's I/O decoding off
+ * (`io_off`), since the function would answer for host ports.
  */
 static void bars_init(struct vfio_device *d)
 {
@@ -280,11 +307,11 @@ static int intx_mask_supported(const struct vfio_device *d)
 
 /**
  * Make `d` ready for its first descriptor, as Linux's vfio_pci_core_enable:
- * put it in D0, reset it when it can be, keep its state for the release,
- * read its BARs,
- * ROM, capabilities and MSI-X table, and for an Intel display its
- * OpRegion; then decoding on and the line off until the owner takes it.
- * 0, or the OpRegion's error.
+ * put it in D0, refuse it while a memory BAR is not claimed, reset it when
+ * it can be, keep its state for the release, read its BARs, ROM,
+ * capabilities and MSI-X table, and for an Intel display its OpRegion;
+ * then decoding on and the line off until the owner takes it. 0; -EINVAL
+ * for a memory BAR not claimed, before the reset; or the OpRegion's error.
  */
 static int device_enable(struct vfio_device *d)
 {
@@ -296,6 +323,10 @@ static int device_enable(struct vfio_device *d)
     d->pm_saved_ok = 0;
     d->power_low = 0;
     vfio_device_power(d, PCI_D0);
+    r = bars_claimed(d);
+    if (r != 0) {
+        return r;
+    }
     d->reset_method = pci_reset_method(&d->pci);
     d->reset_works =
         d->reset_method != PCI_RESET_NONE && pci_reset_function(&d->pci, vfio_hw_msleep) == 0;

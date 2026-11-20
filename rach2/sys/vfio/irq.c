@@ -414,13 +414,20 @@ static int32_t msi_set_vector(struct vfio_device *d, unsigned int i, int32_t fd)
 }
 
 /** Turn on MSI, or MSI-X with its table mapped and held masked, with room
- * for every interrupt of the kind and none yet given a vector. */
+ * for every interrupt of the kind and none yet given a vector. -EINVAL for
+ * MSI-X whose table is not whole in a claimed memory BAR, as Linux's
+ * msix_map_region refuses a table in a BAR without an address. */
 static int32_t msi_enable(struct vfio_device *d, int msix)
 {
     unsigned int n = msix ? d->msix_entries : 1u, i;
     uint32_t off = d->msix_offset & ~0xFFFu;
     uint32_t len = ((d->msix_offset & 0xFFFu) + d->msix_entries * 16u + 0xFFFu) & ~0xFFFu;
 
+    if (msix && (d->msix_bar < 0 || d->msix_bar > 5 || d->bar_io[d->msix_bar] ||
+                 d->bar_size[d->msix_bar] == 0 ||
+                 (uint64_t)d->msix_offset + d->msix_size > d->bar_size[d->msix_bar])) {
+        return -EINVAL;
+    }
     d->msi = (struct vfio_irq *)kzalloc(n * sizeof(d->msi[0]));
     if (d->msi == NULL) {
         return -ENOMEM;
