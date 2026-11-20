@@ -608,13 +608,12 @@ static uint32_t timer_service_ticks(void)
 {
     uint32_t wait = TICK_HZ, next;
     static uint32_t (*const queries[])(void) = {
-        netdev_idle_ticks,    ath9k_idle_ticks, netconsole_idle_ticks,    tcp_idle_ticks,
-        ip_frag_idle_ticks,   frag6_idle_ticks, nd6_idle_ticks,           netlink_idle_ticks,
-        usb_idle_ticks,       input_idle_ticks, ps2kbd_idle_ticks,        alps_idle_ticks,
-        itco_idle_ticks,      ata_idle_ticks,   block_request_idle_ticks, block_lag_idle_ticks,
-        speaker_idle_ticks,   hda_idle_ticks,   blank_idle_ticks,         vkms_idle_ticks,
-        i915_idle_ticks,      tty_idle_ticks,   sched_load_idle_ticks,    timerfd_idle_ticks,
-        hdmi_audio_idle_ticks};
+        netdev_idle_ticks,  ath9k_idle_ticks,      netconsole_idle_ticks,    tcp_idle_ticks,
+        ip_frag_idle_ticks, frag6_idle_ticks,      nd6_idle_ticks,           netlink_idle_ticks,
+        usb_idle_ticks,     input_idle_ticks,      ps2kbd_idle_ticks,        alps_idle_ticks,
+        itco_idle_ticks,    ata_idle_ticks,        block_request_idle_ticks, block_lag_idle_ticks,
+        speaker_idle_ticks, hda_idle_ticks,        blank_idle_ticks,         i915_idle_ticks,
+        tty_idle_ticks,     sched_load_idle_ticks, timerfd_idle_ticks,       hdmi_audio_idle_ticks};
     unsigned int i;
 
     if (ip_loop_pending() || klog_kept()) {
@@ -644,23 +643,36 @@ static void timer_service_rearm(void)
     timer_service_target(wait);
 }
 
-/** Run a due boot-processor service event without waiting for the big
- * lock. A failed try leaves the deadline due and retries in one millisecond.
- * Interrupts are off and no lock is held. */
+/**
+ * Run a due boot-processor service event without waiting for the big
+ * lock. A fine deadline alone runs the work that takes only locks of its
+ * own, whose devices published it, as Linux runs an hrtimer's callback in
+ * its interrupt with no other work: vkms's vblank timer would otherwise
+ * try the big lock just after waking the threads that take it, and retry
+ * each millisecond until they let it go, several wakes of the processor a
+ * frame. A due whole-tick target or poll runs the locked work too, where a
+ * failed try leaves it due and retries in one millisecond. Interrupts are
+ * off and no lock is held.
+ */
 static void timer_service_event(void)
 {
     uint64_t t;
+    int fine, coarse;
 
     if (arch_cpu_id() != 0) {
         return;
     }
-    if (!timer_service_fine_take() && (int32_t)((uint32_t)kernel_ticks - idle_boot_until) < 0 &&
-        (idle_poll_us == 0 || (int32_t)(timer_now_us() - idle_poll_us) < 0)) {
+    fine = timer_service_fine_take();
+    coarse = (int32_t)((uint32_t)kernel_ticks - idle_boot_until) >= 0 ||
+             (idle_poll_us != 0 && (int32_t)(timer_now_us() - idle_poll_us) >= 0);
+    if (!fine && !coarse) {
         timer_service_install();
         return;
     }
     t = timer_own_work(arch_cycles());
-    if (bkl_try_enter()) {
+    if (!coarse) {
+        timer_service_install();
+    } else if (bkl_try_enter()) {
         timer_locked_work(t);
         bkl_exit();
     } else {
