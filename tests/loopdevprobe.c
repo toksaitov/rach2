@@ -955,23 +955,75 @@ static void durable_mode(void)
     sys_exit(0);
 }
 
+/** Find the aligned sector of V bytes written to the ext2 fixture's disk.
+ * A raw read sees the disk's bytes even while ext2 has newer cached data. */
+static long long mapped_sector_on_disk(void)
+{
+    static char block[32768];
+    long long off = 0;
+    int fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
+    int got, at, i;
+
+    if (fd < 0) {
+        fail_with("opening the backing partition", fd);
+    }
+    while ((got = syscall3(SYS_READ, fd, (long)block, sizeof(block))) > 0) {
+        for (at = 0; at + 512 <= got; at += 512) {
+            for (i = 0; i < 512 && block[at + i] == 'V'; i++) {
+            }
+            if (i == 512) {
+                syscall1(SYS_CLOSE, fd);
+                return off + at;
+            }
+        }
+        off += got;
+    }
+    syscall1(SYS_CLOSE, fd);
+    fail_with("finding the mapped file's sector on the backing partition", got);
+}
+
+/** Flush the mapped store through the loop node and read it from the disk. */
+static void sync_mapped_sector(long long disk_at)
+{
+    int fd, rc, writes_before, syncs_before, writes, syncs;
+
+    loop_counts(line_b, &writes_before, &syncs_before);
+    fd = syscall3(SYS_OPEN, (long)node_b, O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("opening the device to flush its backing file", fd);
+    }
+    rc = syscall1(SYS_FSYNC, fd);
+    syscall1(SYS_CLOSE, fd);
+    if (rc != 0) {
+        fail_with("flushing a device with stores in its backing file's mapping", rc);
+    }
+    if (!native_images) {
+        expect_sector("/dev/disk0p1", disk_at, 'M', "fsync put the mapped sector on disk");
+    }
+    loop_counts(line_b, &writes, &syncs);
+    if (writes_before < 0 || syncs_before < 0 || writes != writes_before || syncs <= syncs_before) {
+        fail("fsync did not flush the loop device without a device write");
+    }
+}
+
 /**
  * The rows of a file on ext2 that a shared, writable mapping maps, on device
  * B, as Linux's loop allows: the file is attached while mapped; the device
  * reads what the mapping stored, before any write-back takes it to the
- * file; an fsync of the device reaches the backing file; the mapping sees
+ * file; an fsync of the device puts that store on disk; the mapping sees
  * what a write of the device put in the file; msync writes later stores
  * back; and fallocate grows the file while the device keeps its size.
  */
 static void mapped_rows(void)
 {
     char path[PATH_CAP];
-    long long size;
+    long long size, disk_at;
     long addr;
     char *m;
-    int fd, rc, i, writes_before, syncs_before, writes, syncs;
+    int fd, rc, i;
 
     make_blank(path, "mapped.img");
+    put_sector(path, 1024, 'V', "writing a marker sector to the file before mapping it");
     fd = syscall3(SYS_OPEN, (long)path, O_RDWR, 0);
     if (fd < 0) {
         fail_with("opening the file to map", fd);
@@ -981,28 +1033,17 @@ static void mapped_rows(void)
         fail_with("a shared, writable mapping of a file to attach", (int)addr);
     }
     m = (char *)addr;
-    for (i = 1024; i < 1536; i++) {
-        m[i] = 'M';
-    }
+    m[0] = 'W';
     rc = control_on(attach_b, path);
     if (rc != 0) {
         fail_with("attaching a file a shared, writable mapping maps", rc);
     }
+    disk_at = native_images ? 0 : mapped_sector_on_disk();
+    for (i = 1024; i < 1536; i++) {
+        m[i] = 'M';
+    }
     expect_sector(node_b, 1024, 'M', "the device reads what a shared mapping stored");
-    loop_counts(line_b, &writes_before, &syncs_before);
-    rc = syscall3(SYS_OPEN, (long)node_b, O_RDONLY, 0);
-    if (rc < 0) {
-        fail_with("opening the device to flush its backing file", rc);
-    }
-    i = syscall1(SYS_FSYNC, rc);
-    syscall1(SYS_CLOSE, rc);
-    if (i != 0) {
-        fail_with("flushing a device with stores in its backing file's mapping", i);
-    }
-    loop_counts(line_b, &writes, &syncs);
-    if (writes_before < 0 || syncs_before < 0 || writes != writes_before || syncs <= syncs_before) {
-        fail("fsync did not flush the loop device without a device write");
-    }
+    sync_mapped_sector(disk_at);
     put_sector(node_b, 1536, 'D', "writing the device over a mapped file");
     for (i = 1536; i < 2048 && m[i] == 'D'; i++) {
     }

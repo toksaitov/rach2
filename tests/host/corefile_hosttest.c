@@ -268,6 +268,10 @@ static int caps_next, caps_left;
  * ran; and how often the buffer was brought in. */
 static void (*competitor)(void);
 static int competitor_runs, prefaults;
+static int loop_fault_row, held_sources, held_frames;
+static struct mm source_mm;
+static unsigned char source_frames[PAGE_SIZE * 2] __attribute__((aligned(PAGE_SIZE)));
+static char source_buffer[PAGE_SIZE * 2] __attribute__((aligned(PAGE_SIZE)));
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -664,6 +668,10 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     if (offset + count > sizeof(file)) {
         return -EFBIG;
     }
+    if (loop_fault_row && held_frames) {
+        check(write_depth == 1 && ns_depth == 1, "both source pieces hold the file's locks");
+        k_memset(source_buffer, 'X', sizeof(source_buffer));
+    }
     if (row_buf && absent_at != NO_ABSENT && (const char *)buf <= row_buf + absent_at &&
         row_buf + absent_at < (const char *)buf + count) {
         count = (uint32_t)(row_buf + absent_at - (const char *)buf);
@@ -753,6 +761,7 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     (void)write;
     if (row_buf) {
         check(ns_depth == 0, "a buffer is brought in with the file's node lock let go");
+        check(!loop_fault_row, "a loop backing-file write never refaults under its locks");
         absent_at = NO_ABSENT;
         prefaults++;
         if (competitor && write_depth == 0) {
@@ -760,6 +769,88 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
         }
     }
     return 1;
+}
+
+/** Refault from the loop mount while its writer finishes first. */
+int vm_user_begin(uintptr_t addr, uintptr_t len, int write)
+{
+    struct vfs_ref backing;
+    static char other[512];
+
+    (void)addr;
+    (void)len;
+    (void)write;
+    check(loop_fault_row && !write_depth && !ns_depth && !held_sources,
+          "the source fault waits for the upper writer with the backing locks free");
+    backing.mnt = &mount;
+    backing.node = &core_node;
+    k_memset(other, 'B', sizeof(other));
+    vfs_write_lock(&backing);
+    vfs_node_lock(&backing);
+    check(vfs_write(&mount, &core_node, other, sizeof(other), 0) == sizeof(other),
+          "the writer holding the upper node can finish its loop write");
+    vfs_node_unlock(&backing);
+    vfs_write_unlock(&backing);
+    held_sources++;
+    return 1;
+}
+
+/** End the source address-space hold before file I/O. */
+void vm_user_end(void)
+{
+    check(held_sources == 1, "the source address-space hold is balanced");
+    held_sources--;
+}
+
+/** Model the source address space's page-table lock. */
+uint32_t mm_ptl_lock(struct mm *mm)
+{
+    check(mm == &source_mm && held_sources == 1, "the page tables belong to the held source");
+    return 0;
+}
+
+/** Give back the model's page-table lock. */
+void mm_ptl_unlock(struct mm *mm, uint32_t flags)
+{
+    (void)mm;
+    (void)flags;
+}
+
+/** Resolve each virtual source page to the corresponding model frame. */
+uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
+{
+    (void)dir;
+    return (uintptr_t)source_frames + addr - (uintptr_t)source_buffer;
+}
+
+/** Keep the frame available after the model replaces the user mapping. */
+int frame_pin(uintptr_t phys)
+{
+    (void)phys;
+    held_frames++;
+    return 0;
+}
+
+/** Release the source frame after use. */
+void frame_unpin(uintptr_t phys)
+{
+    (void)phys;
+    held_frames--;
+}
+
+/** Map a pinned source frame, backed by the fixture's array. */
+void *kmap_cpu(uintptr_t phys, uint32_t *flags)
+{
+    check(held_frames > 0 && !held_sources, "write uses a pin and no address-space hold");
+    *flags = 0;
+    return (void *)phys;
+}
+
+/** The model needs no temporary mapping. */
+void kunmap_cpu(void *va, uint32_t flags)
+{
+    (void)va;
+    (void)flags;
 }
 
 /** A refault row's mount locks each file; no other row's does. */
@@ -2491,6 +2582,7 @@ static int32_t refault_write(uint32_t absent, int append)
           "a write takes the file's write lock and then its node lock");
     state.append = append;
     state.big = 0;
+    state.source = NULL;
     n = file_write_locked(&entry, (const char __user *)buf, sizeof(buf), append ? NULL : &at,
                           &state);
     check(write_depth == 1 && ns_depth == 1, "and holds both when the write ends");
@@ -2554,6 +2646,38 @@ static void refault_rows(void)
     check(refault_write(8, 0) == 32 && competitor_runs == 1,
           "a write that faults after 8 bytes writes all 32 while a truncation waits");
     check(file_len == 0, "and the truncation comes wholly after it");
+    row_end();
+}
+
+/** Force a source fault to meet another writer on the loop mount. */
+static void loop_refault_row(void)
+{
+    struct open_file ofd;
+    fd_entry_t entry;
+    uint64_t at = 0;
+
+    row_begin();
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&entry, 0, sizeof(entry));
+    k_memset(source_frames, 'A', sizeof(source_frames));
+    k_memset(source_buffer, 'A', sizeof(source_buffer));
+    ofd.vmnt = &mount;
+    ofd.vnode = ofd.fhandle = &core_node;
+    entry.flags = FD_FLAG_WRITE;
+    entry.ofd = &ofd;
+    self.mm = &source_mm;
+    self.rlim[RLIM_FSIZE].cur = RLIM_INFINITY;
+    model_file_locked = files_attached = loop_fault_row = 1;
+    row_buf = source_buffer + PAGE_SIZE - 256;
+    absent_at = 256;
+    check(file_write(&entry, (const char __user *)row_buf, 512, &at, 512) == 512 &&
+              file_written == 1024 && file_is(0, 512, 'A') && source_buffer[PAGE_SIZE] == 'X',
+          "the loop write finishes before the whole backing-file write from held frames");
+    check(!held_sources && !held_frames && !write_depth && !ns_depth,
+          "both writers released their locks and the source frames");
+    row_buf = NULL;
+    model_file_locked = files_attached = loop_fault_row = 0;
+    self.mm = NULL;
     row_end();
 }
 
@@ -2665,6 +2789,7 @@ int main(void)
     trailing_zero_limit();
     attached_core_rows();
     refault_rows();
+    loop_refault_row();
     stream_writev();
     if (!failures) {
         printf("corefile-hosttest: result: pass: the core file's descriptor, its trailing "

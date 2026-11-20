@@ -2149,17 +2149,13 @@ static int devfs_loop_index(const struct devfs_entry *dev)
     return (int)dev->minor;
 }
 
-/** Flush the attached file's pages and the storage beneath a loop node. */
+/** Sync the buffers and backing file of a loop node. */
 int devfs_loop_sync(const struct fd_entry *e, int *result)
 {
-    block_device_t *dev;
-    int32_t err;
-
     if (e->type != FD_TYPE_DEVICE || !e->dev || e->dev->ops != &loop_ops) {
         return 0;
     }
-    dev = loop_node_device(devfs_loop_index(e->dev), 0, &err);
-    *result = dev ? block_flush(dev) : err;
+    *result = loop_node_sync(devfs_loop_index(e->dev));
     return 1;
 }
 

@@ -17,6 +17,7 @@ static struct sleep_lock_record super_record = SLEEP_LOCK_RECORD("ext2 super");
 
 #ifdef RACH2_LOCKDEP
 static struct lockdep_key node_layer[BLOCK_MAX_DEPTH];
+static struct lockdep_key write_layer[BLOCK_MAX_DEPTH];
 static struct lockdep_key batch_layer[BLOCK_MAX_DEPTH];
 static struct lockdep_key group_layer[BLOCK_MAX_DEPTH];
 static struct lockdep_key super_layer[BLOCK_MAX_DEPTH];
@@ -194,6 +195,7 @@ struct ext2_node *ext2_node_make(struct ext2_mount *em)
         sleep_lock_init(&n->write_lock, &write_record, 0);
 #ifdef RACH2_LOCKDEP
         ext2_lock_layer(&n->lock, em->lockdep_depth, node_layer);
+        ext2_lock_layer(&n->write_lock, em->lockdep_depth, write_layer);
 #endif
     }
     return n;

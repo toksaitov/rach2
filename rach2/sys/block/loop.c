@@ -390,9 +390,8 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 /**
  * Write whole sectors into the file and sync it, since the buffer cache
  * takes a written block to be on the device; `-EROFS` on a read-only
- * attachment, `-EIO` for a short write or a failed sync. Take the file's
- * write lock before its node lock, so a descriptor write that lets go of
- * its node lock to fault in a user buffer can finish before this write.
+ * attachment or `-EIO` for a short write. Take the file's write lock before
+ * its node lock to serialize against a whole descriptor write.
  */
 static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -476,6 +475,25 @@ block_device_t *loop_node_device(int index, int write, int32_t *err)
            : write && vfs_device_holds(dev)  ? -EBUSY
                                              : 0;
     return *err == 0 ? dev : 0;
+}
+
+/** Drain a loop node's buffers under one hold of its attachment. */
+int loop_node_sync(int index)
+{
+    struct loop_device *loop;
+    struct loop_file f;
+    int rc;
+
+    if (index < 0 || index >= LOOP_DEVICES) {
+        return -ENXIO;
+    }
+    loop = &loops[index];
+    if (loop_begin(loop, 0, 0, &f) != 0) {
+        return -ENXIO;
+    }
+    rc = bcache_sync(&loop->dev);
+    loop_end(loop, &f, 0, 0);
+    return rc;
 }
 
 /**
@@ -720,9 +738,10 @@ const char *loop_backing(int index, int *autoclear)
  * may move during that wait, so only the second resolution supplies the node
  * to open. A path moved to another mount answers EBUSY. Success keeps the
  * lock through open and publication. On a type that sets `file_locked`,
- * whose nodes do not move, the lock is the file's own (`vfs_node_lock`),
- * taken on the first resolution's node. The caller gives the lock back with
- * `vfs_node_unlock`.
+ * whose nodes do not move, the write and node locks of the file are taken
+ * on the first resolution's node. The write lock excludes descriptor
+ * writes that started before publication and may still fault on their
+ * sources. The caller gives the locks back with `loop_resolve_unlock`.
  */
 static int loop_resolve(const char *path, struct vfs_ref *ref)
 {
@@ -736,6 +755,7 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
     }
     if (vfs_file_locked(first.mnt)) {
         *ref = first;
+        vfs_write_lock(ref);
         vfs_node_lock(ref);
         return 0;
     }
@@ -751,6 +771,13 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
     }
     vfs_ref_release(&first);
     return rc;
+}
+
+/** Release the file or namespace locks that `loop_resolve` took. */
+static void loop_resolve_unlock(const struct vfs_ref *ref)
+{
+    vfs_node_unlock(ref);
+    vfs_write_unlock(ref);
 }
 
 /**
@@ -881,32 +908,32 @@ int loop_attach(int index, const char *path, int writable)
     }
     rc = vfs_getattr(ref.mnt, ref.node, &st);
     if (rc != 0) {
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
     }
     if ((st.mode & 0170000u) != 0100000u) {
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -EINVAL; /* only a regular file is an image */
     }
     if (st.size == 0 || st.size % BLOCK_SECTOR_SIZE != 0) {
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -EINVAL; /* whole sectors only */
     }
     if (loop_backs(ref.mnt, ref.node)) {
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -EBUSY;
     }
     if ((ref.mnt->dev && ref.mnt->dev->read == loop_read) ||
         block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -ELOOP; /* on a loop device, or deeper than the buffer cache serves */
@@ -914,7 +941,7 @@ int loop_attach(int index, const char *path, int writable)
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
     if (rc != 0) {
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
@@ -923,7 +950,7 @@ int loop_attach(int index, const char *path, int writable)
     rc = loop_prepare(&ref, handle, &st, &seen);
     if (rc != 0) {
         vfs_release(ref.mnt, handle);
-        vfs_node_unlock(&ref);
+        loop_resolve_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
@@ -943,7 +970,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->attaching = 0;
     loop_publish(loop, ref.node, ref.mnt->dev, st.size, loop_phase(&ref, handle));
 
-    vfs_node_unlock(&ref);
+    loop_resolve_unlock(&ref);
 
     klog(KLOG_INFO, "loop", "loop%d: %s, %u sectors, %s", index, loop->path,
          (uint32_t)(st.size / BLOCK_SECTOR_SIZE), loop->writable ? "read-write" : "read-only");

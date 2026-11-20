@@ -36,6 +36,11 @@ block_device_t *loop_attached_at(int index);
  */
 block_device_t *loop_node_device(int index, int write, int32_t *err);
 
+/** Write the buffers of device `index` and flush its backing file. Hold
+ * the attachment until both finish. Return -ENXIO if detached, 0 on
+ * success, or the write-back error. May sleep. */
+int loop_node_sync(int index);
+
 /**
  * Attach `path` to loop device `index`, or to the first free one when `index`
  * is -1. `writable` asks for a device that takes writes, which needs write

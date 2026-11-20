@@ -63,6 +63,7 @@ static int failures, depth, opened, refs, active, busy, resolves;
 static int open_error, sync_error, switch_mount, missing, read_error;
 /* A resident page, a pending store into it, and the byte a sync committed. */
 static int mapped, resident, dirty_byte, synced_byte, mapped_error, disk_reads;
+static int upper_dirty, upper_error;
 /* A writer paused in a refault, still holding the write lock. */
 static void (*refault)(void);
 static int write_depth;
@@ -395,11 +396,24 @@ int bcache_device_holds(block_device_t *dev)
     return 0;
 }
 
-/** No loop cache buffer is dirty in these rows. */
+/** Drain a modelled loop cache buffer, then flush the device. */
 int bcache_sync(block_device_t *dev)
 {
-    (void)dev;
-    return 0;
+    int rc;
+
+    if (!upper_dirty) {
+        return 0;
+    }
+    check(loop_busy(loop_of(dev)), "node sync keeps the attachment while draining buffers");
+    if (upper_error) {
+        return upper_error;
+    }
+    rc = dev->write(dev, 0, 1, replacement);
+    if (rc == 0) {
+        upper_dirty = 0;
+        rc = dev->flush(dev, NULL);
+    }
+    return rc;
 }
 
 /** No loop cache buffer survives detach. */
@@ -445,6 +459,7 @@ static void reset(void)
     depth = opened = refs = active = busy = resolves = 0;
     open_error = sync_error = switch_mount = missing = read_error = 0;
     mapped = resident = mapped_error = disk_reads = write_depth = 0;
+    upper_dirty = upper_error = 0;
     dirty_byte = synced_byte = -1;
     waiting = refault = NULL;
 }
@@ -649,8 +664,15 @@ static void flush_row(void)
     mapped_error = 0;
     check(loop && loop->flush(loop, NULL) == 0 && synced_byte == 0x6E,
           "flush: retry the dirty byte");
+    upper_dirty = 1;
+    upper_error = -EIO;
+    check(loop_node_sync(0) == -EIO && upper_dirty, "node sync: report a failed loop buffer write");
+    upper_error = 0;
+    check(loop_node_sync(0) == 0 && !upper_dirty && synced_byte == 0x72,
+          "node sync: drain the loop buffer before syncing the backing file");
     check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
           "flush: detach releases the attachment");
+    check(loop_node_sync(0) == -ENXIO, "node sync: no attachment");
 }
 
 /** Finish the file writer's second half after its user buffer refaults. */

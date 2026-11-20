@@ -982,10 +982,10 @@ int block_request(block_device_t *dev, int write, uint64_t lba, uint32_t count, 
     return unexpected();
 }
 
-/** No row flushes a loop device. */
-int block_flush(block_device_t *dev)
+/** No row syncs an open loop node. */
+int loop_node_sync(int index)
 {
-    (void)dev;
+    (void)index;
     return unexpected();
 }
 

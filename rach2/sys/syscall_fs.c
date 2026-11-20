@@ -1021,10 +1021,117 @@ static int direct_iov_misaligned(const struct open_file *ofd, const struct kerne
     return 0;
 }
 
+struct write_source_page {
+    uintptr_t frame; /* pinned RAM frame, or zero if copied */
+    void *copy;      /* kernel copy of a page's bytes when it cannot be pinned */
+};
+
+struct write_source {
+    struct write_source_page *pages;
+    uintptr_t base; /* first byte of the original input range */
+    uint32_t count; /* entries filled */
+};
+
+/** Give back the source references and copies of a backing-file write. */
+static void write_source_drop(struct write_source *source)
+{
+    uint32_t i;
+
+    for (i = 0; i < source->count; i++) {
+        struct write_source_page *page = &source->pages[i];
+
+        if (page->frame) {
+            frame_unpin(page->frame);
+        } else {
+            kfree(page->copy);
+        }
+    }
+    kfree(source->pages);
+}
+
+/** Hold readable bytes at `addr` across a backing-file write. Called
+ * before taking the file's write lock, since a fault can need a node lock
+ * on a volume whose writes take that lock. Pin each resident RAM frame
+ * under the page-table lock and copy other pages. The write no longer
+ * needs the source addresses to stay mapped. Kernel buffers need no hold.
+ * The caller drops the source on every return, including on error. */
+static int write_source_hold(struct write_source *source, uintptr_t addr, uint32_t len)
+{
+    struct mm *mm = current_proc->mm;
+    uint32_t pages, done = 0;
+    int held, rc = 0;
+
+    if (!len || proc_window_covers(current_proc, addr, len)) {
+        return 0;
+    }
+    pages = ((uint32_t)(addr % PAGE_SIZE) + len + PAGE_SIZE - 1u) / PAGE_SIZE;
+    source->base = addr;
+    source->pages = kmalloc(pages * sizeof(*source->pages));
+    if (!source->pages) {
+        return -ENOMEM;
+    }
+    held = vm_user_begin(addr, len, 0);
+    if (held <= 0) {
+        return -EFAULT;
+    }
+    while (done < len) {
+        struct write_source_page *page = &source->pages[source->count];
+        uintptr_t at = addr + done, phys;
+        uint32_t flags, take = PAGE_SIZE - (uint32_t)(at % PAGE_SIZE);
+
+        if (take > len - done) {
+            take = len - done;
+        }
+        flags = mm_ptl_lock(mm);
+        phys = paging_user_phys(mm->dir, at) & ~(uintptr_t)(PAGE_SIZE - 1u);
+        page->frame = phys && frame_pin(phys) == 0 ? phys : 0;
+        mm_ptl_unlock(mm, flags);
+        page->copy = NULL;
+        if (!page->frame) {
+            page->copy = kmalloc(take);
+            if (!page->copy) {
+                rc = -ENOMEM;
+                break;
+            }
+            rc = copy_from_user(page->copy, (const void __user *)at, take);
+        }
+        source->count++;
+        if (rc != 0) {
+            break;
+        }
+        done += take;
+    }
+    vm_user_end();
+    return rc;
+}
+
+/** Copy part of one held source page into `dst` without faulting. */
+static void write_source_copy(const struct write_source *source, uintptr_t at, void *dst,
+                              uint32_t len)
+{
+    uintptr_t base = source->base;
+    uintptr_t first = base & ~(uintptr_t)(PAGE_SIZE - 1u);
+    const struct write_source_page *page = &source->pages[(at - first) / PAGE_SIZE];
+    uint32_t in = (uint32_t)(at % PAGE_SIZE);
+
+    if (page->frame) {
+        uint32_t flags;
+        uint8_t *mapped = kmap_cpu(page->frame, &flags);
+
+        k_memcpy(dst, mapped + in, len);
+        kunmap_cpu(mapped, flags);
+    } else {
+        uintptr_t start = at & ~(uintptr_t)(PAGE_SIZE - 1u);
+
+        k_memcpy(dst, (const uint8_t *)page->copy + (at - (start < base ? base : start)), len);
+    }
+}
+
 struct file_write_state {
     struct vfs_ref file;
-    int own;    /* nonzero when the type's file lock is held */
-    int append; /* end-of-file placement without changing O_APPEND */
+    const struct write_source *source; /* held pages of the current buffer, if any */
+    int own;                           /* nonzero when the type's file lock is held */
+    int append;                        /* end-of-file placement without changing O_APPEND */
     /* nonzero once this call has taken the big lock for a file mappings
      * hold pages of (`file_write_mapped`), which its caller gives back */
     int big;
@@ -1095,19 +1202,21 @@ static int user_resident(uintptr_t addr, uint32_t len)
  * copy and the same bytes put into the file's pages (`filemap_disk_written`),
  * so that every byte the file system accepts is in the pages before the
  * lock goes, with no read and no failure path, and no write-back of a page
- * can put older bytes over the write. Otherwise the file system copies from
- * the caller itself. `snap` says what the piece did. Returns the bytes
- * written or the write's error.
+ * can put older bytes over the write. A held source also uses the buffer,
+ * filled from the saved pages. Where neither needs the buffer, the file
+ * system copies from the caller. `snap` says what the piece did. Returns
+ * the bytes written or the write's error.
  */
 static int32_t file_write_piece(const struct open_file *ofd, struct file_write_state *state,
                                 uintptr_t from, uint32_t len, uint64_t pos, struct write_snap *snap)
 {
     uint32_t take, page_left = PAGE_SIZE - (uint32_t)(from % PAGE_SIZE);
-    int present;
+    int present, mapped = file_write_mapped(ofd, state);
+    const struct write_source *source = state->source;
     int32_t n;
 
     snap->next = snap->absent = 0;
-    if (!file_write_mapped(ofd, state)) {
+    if (!mapped && !source) {
         return vfs_write(ofd->vmnt, ofd->fhandle, (const char *)from, len, pos);
     }
     if (!snap->buf) {
@@ -1116,18 +1225,23 @@ static int32_t file_write_piece(const struct open_file *ofd, struct file_write_s
         snap->buf = snap->buf ? snap->buf : snap->small;
     }
     take = len < snap->size ? len : snap->size;
-    present = vm_resident(from, take, 0);
-    if (!present && take > page_left) {
-        take = page_left;
+    if (source) {
+        take = take < page_left ? take : page_left;
+        write_source_copy(source, from, snap->buf, take);
+    } else {
         present = vm_resident(from, take, 0);
+        if (!present && take > page_left) {
+            take = page_left;
+            present = vm_resident(from, take, 0);
+        }
+        if (!present) {
+            snap->absent = 1;
+            return 0;
+        }
+        k_memcpy(snap->buf, (const void *)from, take);
     }
-    if (!present) {
-        snap->absent = 1;
-        return 0;
-    }
-    k_memcpy(snap->buf, (const void *)from, take);
     n = vfs_write(ofd->vmnt, ofd->fhandle, snap->buf, take, pos);
-    if (n > 0) {
+    if (n > 0 && mapped) {
         filemap_disk_written(ofd->vmnt, ofd->ino, pos, snap->buf, (uint32_t)n);
     }
     snap->next = n > 0 && (uint32_t)n == take;
@@ -1160,6 +1274,8 @@ static int32_t file_write_piece(const struct open_file *ofd, struct file_write_s
  * the end an append found stays the end. A rest that cannot be brought in
  * ends the write with the bytes moved, or -EFAULT for none, and a SIGKILL
  * with them, or -EINTR, as Linux's loop stops on `fatal_signal_pending`.
+ * A loop backing file's writer holds its source pages across all pieces
+ * and so never refaults while holding the write lock.
  */
 static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *state,
                                  const char __user *buf, uint32_t count, uint64_t *pos)
@@ -1183,7 +1299,7 @@ static int32_t file_write_pieces(fd_entry_t *entry, struct file_write_state *sta
         if (snap.next) {
             continue;
         }
-        if (!state->own) {
+        if (!state->own || state->source) {
             break;
         }
         if (current_proc->sig_pending & KSIG_BIT(SIGKILL)) {
@@ -1348,9 +1464,9 @@ static long write_synced(fd_entry_t *entry, long written, const struct file_writ
  * and faulted in first, and on a type that sets `file_locked` brought in
  * again with the file's node lock let go and its write lock held when one
  * goes, before or after bytes have moved, and the write goes on
- * (`file_write_pieces`). A file
- * that backs a loop device is written as any other, as on Linux, except on
- * KRFFS, where a write may move the file the device stands on and is -EBUSY
+ * (`file_write_pieces`). A writer of a loop backing file holds its source
+ * before taking the file's locks for the transfer (`write_source_hold`).
+ * On KRFFS a write may move the file the device stands on and is -EBUSY
  * (`loop_length_pinned`): that is asked before the description is locked
  * and again under the lock, since an attachment can publish itself while
  * this call waits for the lock. A nonempty write clears the applicable
@@ -1377,7 +1493,9 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
 {
     struct open_file *ofd = entry->ofd;
     struct file_write_state state;
+    struct write_source source = {NULL, 0, 0};
     int32_t written;
+    int prepared = 0;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -1391,12 +1509,25 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     if (loop_length_pinned(ofd->vmnt, ofd->vnode)) {
         return -EBUSY;
     }
+lock:
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
         fd_ofd_unlock(ofd);
-        return -EINVAL;
+        written = -EINVAL;
+        goto out;
     }
     state.own = file_lock(ofd, &state.file);
+    if (state.own && count && !prepared && loop_backs(ofd->vmnt, ofd->vnode)) {
+        file_unlock(&state.file, state.own);
+        fd_ofd_unlock(ofd);
+        written = write_source_hold(&source, (__force uintptr_t)buf, count);
+        if (written != 0) {
+            goto out;
+        }
+        prepared = 1;
+        goto lock;
+    }
+    state.source = source.pages ? &source : NULL;
     state.append = (ofd->status_flags & OFD_APPEND) != 0;
     state.big = 0;
     state.lo = ~(uint64_t)0;
@@ -1404,7 +1535,8 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     if (loop_length_pinned(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
-        return -EBUSY;
+        written = -EBUSY;
+        goto out;
     }
     written = file_write_locked(entry, buf, count, at, &state);
     file_unlock(&state.file, state.own);
@@ -1416,7 +1548,10 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         inotify_desc(ofd, IN_MODIFY);
     }
     big_give(state.big);
-    return (int32_t)write_synced(entry, written, &state);
+    written = (int32_t)write_synced(entry, written, &state);
+out:
+    write_source_drop(&source);
+    return written;
 }
 
 /**
@@ -16306,7 +16441,8 @@ static void iov_trim(struct kernel_iovec *iov, int count, uint32_t room)
  * advances the shared offset. Return the bytes written before a short
  * write or error, or the first error when no byte was written. */
 static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
-                              long long pos, struct file_write_state *state)
+                              long long pos, struct file_write_state *state,
+                              const struct write_source *sources)
 {
     uint64_t at = (uint64_t)pos;
     long total = 0, rc = 0;
@@ -16316,6 +16452,7 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
         if (!iov[i].iov_len) {
             continue;
         }
+        state->source = sources && sources[i].pages ? &sources[i] : NULL;
         rc = file_write_locked(entry, (const char __user *)iov[i].iov_base,
                                (uint32_t)iov[i].iov_len, pos == -1 ? NULL : &at, state);
         if (rc < 0) {
@@ -16351,6 +16488,50 @@ static long iov_file_refused(fd_entry_t *entry, const struct kernel_iovec *iov, 
     return direct_iov_misaligned(entry->ofd, iov, count) ? -EINVAL : 0;
 }
 
+/** Release the held sources of a write vector, if any. */
+static void iov_write_source_drop(struct write_source *sources, int count)
+{
+    int i;
+
+    if (sources) {
+        for (i = 0; i < count; i++) {
+            write_source_drop(&sources[i]);
+        }
+        kfree(sources);
+    }
+}
+
+/** Lock the description and file for a vector write. If it backs a loop
+ * device, hold all source ranges with those locks free, then take them
+ * again. On error no lock is held and the caller releases `*sources`. */
+static int iov_write_lock(struct open_file *ofd, const struct kernel_iovec *iov, int count,
+                          struct file_write_state *state, struct write_source **sources)
+{
+    int i;
+
+    fd_ofd_lock(ofd);
+    state->own = file_lock(ofd, &state->file);
+    if (!state->own || !loop_backs(ofd->vmnt, ofd->vnode)) {
+        return 0;
+    }
+    file_unlock(&state->file, state->own);
+    fd_ofd_unlock(ofd);
+    *sources = kzalloc((size_t)count * sizeof(**sources));
+    if (!*sources) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < count; i++) {
+        int rc = write_source_hold(&(*sources)[i], iov[i].iov_base, (uint32_t)iov[i].iov_len);
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    fd_ofd_lock(ofd);
+    state->own = file_lock(ofd, &state->file);
+    return 0;
+}
+
 /**
  * Write the vector of `count` elements at `addr` to the regular file of the
  * descriptor `entry`, which the caller holds, holding its description and file
@@ -16376,6 +16557,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     struct kernel_iovec *iov;
     struct open_file *ofd;
     struct file_write_state state;
+    struct write_source *sources = NULL;
     uint32_t wanted = 0, room = 0;
     long rc = 0;
 
@@ -16403,8 +16585,10 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
         rc = -EINVAL; /* rw_verify_area's check, which O_APPEND does not skip */
         goto out;
     }
-    fd_ofd_lock(ofd);
-    state.own = file_lock(ofd, &state.file);
+    rc = iov_write_lock(ofd, iov, count, &state, &sources);
+    if (rc != 0) {
+        goto out;
+    }
     if (!state.own) {
         vfs_node_lock(&state.file);
     }
@@ -16420,7 +16604,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
         iov_trim(iov, count, room);
     }
     if (rc == 0) {
-        rc = iov_file_elements(entry, iov, count, pos, &state);
+        rc = iov_file_elements(entry, iov, count, pos, &state, sources);
     }
     if (!state.own) {
         vfs_node_unlock(&state.file);
@@ -16436,6 +16620,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     big_give(state.big);
     rc = write_synced(entry, rc, &state);
 out:
+    iov_write_source_drop(sources, count);
     kfree(iov);
     return rc;
 }
