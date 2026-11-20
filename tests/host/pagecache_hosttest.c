@@ -660,6 +660,13 @@ int block_flush(block_device_t *dev)
     return 0;
 }
 
+/** The list of unflushed writes a flush clears is not modelled here. */
+static void unflushed_drop(block_device_t *dev, uint64_t seq)
+{
+    (void)dev;
+    (void)seq;
+}
+
 #include "disk_recovery.inc"
 
 /** The first failed device write ends boot recovery even within one sync. */
