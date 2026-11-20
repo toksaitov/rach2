@@ -1138,6 +1138,7 @@ struct watch_addr4 {
     int index;
     uint32_t ip, dst, mask;
     uint32_t brd, flags, metric;
+    struct addr4_routes opts;
 };
 
 /** Copy the IPv4 address at slot i and the attributes used by rtnetlink. */
@@ -1149,8 +1150,20 @@ static void read_addr4(const struct netdev *nd, int i, struct watch_addr4 *a)
     a->dst = netdev_addr_dst(nd, i);
     a->brd = netdev_addr_brd(nd, i);
     a->metric = nd->addr4[i + 1].metric;
-    a->flags = IFA_F_PERMANENT | (netdev_secondary(nd, i) ? IFA_F_SECONDARY : 0) |
+    a->opts = nd->addr4[i + 1];
+    a->flags = (a->opts.valid_until ? 0 : IFA_F_PERMANENT) |
+               (a->opts.deprecated ? NETDEV_A6_DEPRECATED : 0) |
+               (netdev_secondary(nd, i) ? IFA_F_SECONDARY : 0) |
                (nd->addr4[i + 1].noprefix ? IFA_F_NOPREFIXROUTE : 0);
+}
+
+/** Seconds remaining to an IPv4 address deadline, rounded up. */
+static uint32_t addr4_left(uint64_t until)
+{
+    uint64_t now = tick_count();
+    return !until        ? NETDEV_LIFETIME_FOREVER
+           : until > now ? (uint32_t)tick_div(until - now + TICK_HZ - 1, TICK_HZ, 0)
+                         : 0;
 }
 
 /** Append an IPv4 address as captured before or after a change. */
@@ -1158,6 +1171,7 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, const struct w
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ifa = msg_start(b, msg, RTM_NEWADDR, NLM_F_MULTI, 8);
+    uint8_t ci[16];
     ifa[0] = AF_INET;
     ifa[1] = (uint8_t)prefix_of(a->mask);
     ifa[2] = (uint8_t)a->flags;
@@ -1167,6 +1181,13 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, const struct w
     msg_attr_ip(msg, IFA_LOCAL, a->ip);
     if (a->brd)
         msg_attr_ip(msg, IFA_BROADCAST, a->brd);
+    put32(ci, a->opts.deprecated ? 0 : addr4_left(a->opts.preferred_until));
+    put32(ci + 4, addr4_left(a->opts.valid_until));
+    put32(ci + 8, a->opts.created);
+    put32(ci + 12, a->opts.updated);
+    msg_attr(msg, IFA_CACHEINFO, ci, sizeof(ci));
+    if (a->opts.proto)
+        msg_attr(msg, IFA_PROTO, &a->opts.proto, 1);
     msg_attr32(msg, IFA_FLAGS, a->flags);
     if (a->metric)
         msg_attr32(msg, IFA_RT_PRIORITY, a->metric);
@@ -1516,7 +1537,9 @@ static int same_link(const struct watch_link *a, const struct watch_link *b)
 static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
 {
     return a->index == b->index && a->ip == b->ip && a->dst == b->dst && a->mask == b->mask &&
-           a->metric == b->metric && a->brd == b->brd && a->flags == b->flags;
+           a->metric == b->metric && a->brd == b->brd && a->flags == b->flags &&
+           a->opts.valid_until == b->opts.valid_until &&
+           a->opts.preferred_until == b->opts.preferred_until && a->opts.proto == b->opts.proto;
 }
 
 /** Whether two IPv6 addresses are one, and with `whole`, in the same
@@ -1646,6 +1669,7 @@ void netlink_tick(void)
         return;
     }
     watch_next = (uint32_t)kernel_ticks + MS_TO_TICKS(100);
+    netconf_expire_addresses(tick_count());
     watch_run();
 }
 
@@ -2039,13 +2063,16 @@ static void read_addr6_options(const uint8_t *req, uint32_t body, struct addr6_o
 }
 
 /** Apply an accepted address change while its table slot is locked. */
-static void update_addr6(struct netdev_addr6 *held, const struct addr6_options *opts, int replace)
+static void update_addr6(struct netdev *nd, struct netdev_addr6 *held,
+                         const struct addr6_options *opts, int replace)
 {
     held->noprefix = (opts->flags & IFA_F_NOPREFIXROUTE) != 0;
-    if (opts->peer && !ip6_equal(held->addr, opts->peer))
+    if (replace)
+        route6_peer_change(nd, held, opts->peer);
+    else if (opts->peer && !ip6_equal(held->addr, opts->peer))
         k_memcpy(held->peer, opts->peer, IP6_ADDR_LEN);
     held->peer_prefix = replace && !held->noprefix && !ip6_is_unspecified(held->peer);
-    held->deleted_routes = 0;
+    held->deleted_routes &= NETDEV_A6_PEER_ROUTE | NETDEV_A6_LOCAL_ROUTE;
     held->since = tick_count();
     held->preferred = opts->preferred;
     held->valid = opts->valid;
@@ -2083,12 +2110,12 @@ static int32_t addr6_change(const uint8_t *req, uint16_t type, uint16_t flags, u
         if ((flags & NLM_F_EXCL) || !(flags & NLM_F_REPLACE))
             rc = -EEXIST;
         else
-            update_addr6(held, &opts, 1);
+            update_addr6(nd, held, &opts, 1);
     } else {
         rc = netconf_add_address6(nd, addr, prefix, (int)(opts.flags & NETDEV_A6_NODAD), opts.valid,
                                   opts.preferred);
         if (!rc)
-            update_addr6(netdev_addr6_of(nd, addr), &opts, 0);
+            update_addr6(nd, netdev_addr6_of(nd, addr), &opts, 0);
     }
     net_unlock(lock);
     return rc;
@@ -2118,31 +2145,53 @@ static int32_t ns_addr_change(struct netdev *nd, uint32_t ip, uint32_t prefix, u
     return 0;
 }
 
+/** Set creation attributes on insertion and renew the address's lifetimes. */
+static void set_addr4_options(struct addr4_routes *opts, const uint8_t *req, uint32_t body,
+                              const uint8_t *ci, int fresh)
+{
+    uint16_t len;
+    const uint8_t *at = req_attr(req, body, 8, IFA_FLAGS, &len);
+    uint32_t preferred = ci ? get32(ci) : NETDEV_LIFETIME_FOREVER;
+    uint32_t valid = ci ? get32(ci + 4) : NETDEV_LIFETIME_FOREVER;
+    uint64_t now = tick_count();
+    uint32_t metric;
+    opts->updated = (uint32_t)TICKS_TO_CLOCK(now);
+    if (fresh) {
+        opts->given_broadcast = 1;
+        opts->broadcast = req_ip(req, body, 8, IFA_BROADCAST);
+        opts->noprefix = at && len == 4 && (get32(at) & IFA_F_NOPREFIXROUTE);
+        opts->created = opts->updated;
+    }
+    opts->valid_until = valid == NETDEV_LIFETIME_FOREVER ? 0 : now + (uint64_t)valid * TICK_HZ;
+    opts->preferred_until =
+        preferred == NETDEV_LIFETIME_FOREVER ? 0 : now + (uint64_t)preferred * TICK_HZ;
+    opts->deprecated = !preferred;
+    at = req_attr(req, body, 8, IFA_PROTO, &len);
+    opts->proto = at && len == 1 ? *at : 0;
+    at = req_attr(req, body, 8, IFA_RT_PRIORITY, &len);
+    metric = at && len == 4 ? get32(at) : 0;
+    if (opts->metric != metric) {
+        opts->metric = metric;
+        opts->deleted &= ~ADDR4_PREFIX;
+    }
+}
+
 /** Set the prefix metric and broadcast attributes of a netlink address. */
 static int addr4_add(const uint8_t *req, uint32_t body, struct netdev *nd, uint32_t ip,
                      uint32_t mask, uint32_t peer)
 {
-    uint16_t flags = get16(req + 6);
+    uint16_t flags = get16(req + 6), len;
+    const uint8_t *ci = req_attr(req, body, 8, IFA_CACHEINFO, &len);
+    uint32_t lock;
     int r;
-    uint32_t lock = net_lock();
+    if (ci && (len != 16 || !get32(ci + 4) || get32(ci) > get32(ci + 4)))
+        return -EINVAL;
+    lock = net_lock();
     r = netconf_add_address(nd, ip, mask, peer);
     if (!r || (r == -EEXIST && (flags & NLM_F_REPLACE) && !(flags & NLM_F_EXCL))) {
         int slot = netconf_addr_find(nd, ip, mask, peer ? peer : ip);
-        if (slot < nd->naddr2) {
-            struct addr4_routes *opts = &nd->addr4[slot + 1];
-            uint16_t len;
-            const uint8_t *at = req_attr(req, body, 8, IFA_FLAGS, &len);
-            if (!r) {
-                opts->given_broadcast = 1;
-                opts->broadcast = req_ip(req, body, 8, IFA_BROADCAST);
-                opts->noprefix = at && len == 4 && (get32(at) & IFA_F_NOPREFIXROUTE);
-            }
-            at = req_attr(req, body, 8, IFA_RT_PRIORITY, &len);
-            if (opts->metric != (at && len == 4 ? get32(at) : 0)) {
-                opts->metric = at && len == 4 ? get32(at) : 0;
-                opts->deleted &= ~ADDR4_PREFIX;
-            }
-        }
+        if (slot < nd->naddr2)
+            set_addr4_options(&nd->addr4[slot + 1], req, body, ci, !r);
         r = 0;
     }
     net_unlock(lock);
@@ -2254,6 +2303,17 @@ static int32_t route6_change(const uint8_t *req, uint16_t type, uint16_t flags, 
     return route6_change_row(nd, &row, del, (flags & NLM_F_REPLACE) != 0);
 }
 
+/** Whether the request selects a device route in the main or local table. */
+static int supported_route(const uint8_t *req, uint32_t body)
+{
+    uint32_t table = route_table(req, body);
+    uint8_t kind = req[NLMSG_HDRLEN + 7];
+    if (table == RT_TABLE_LOCAL)
+        return !kind || kind == RTN_LOCAL ||
+               (kind == RTN_BROADCAST && req[NLMSG_HDRLEN] == AF_INET);
+    return (!table || table == RT_TABLE_MAIN) && (!kind || kind == RTN_UNICAST);
+}
+
 /** RTM_NEWROUTE and RTM_DELROUTE: the default route of an interface, which
  * is its gateway, the route a subnet implies, which is there while its
  * address is, and any other route, which goes in the table. Returns 0 or a
@@ -2270,6 +2330,8 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
     uint16_t len;
     const uint8_t *prio = req_attr(req, body, 12, RTA_PRIORITY, &len);
 
+    if (body >= 12 && !supported_route(req, body))
+        return -EOPNOTSUPP;
     if (body >= 12 && req[NLMSG_HDRLEN] == AF_INET6) {
         return route6_change(req, type, flags, body);
     }

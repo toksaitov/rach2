@@ -202,6 +202,10 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
  */
 int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst);
 
+/** Deprecate or delete IPv4 addresses whose lifetime has ended at now.
+ * The network timer calls with interrupts disabled. */
+void netconf_expire_addresses(uint64_t now);
+
 /**
  * Give `nd` the IPv6 address `addr` with the on-link prefix of `prefix`
  * bits, the state `flags` (NETDEV_A6_NODAD and NETDEV_A6_PERMANENT are

@@ -545,6 +545,19 @@ static void addr_remove_aliases(struct netdev *nd, int a)
     }
 }
 
+/** Apply the removal of the first address before reinsertion.
+ * All lookups during this interval run under the caller's network lock. */
+static void addr_unlink(struct netdev *nd)
+{
+    uint32_t old = nd->ip;
+    addr_remove_aliases(nd, -1);
+    nd->ip = 0;
+    netdev_route_lost_source(old);
+    nd->ip = old;
+    if (!nd->naddr2)
+        netdev_route_flush(nd, 1);
+}
+
 /** Replace the first address as the delete and insert of devinet_ioctl.
  * The caller holds net_lock. A surviving prefix keeps explicit routes. */
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
@@ -552,11 +565,8 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t
     uint32_t old = nd->ip;
     if (old == ip && nd->mask == mask && nd->peer == peer)
         return;
-    if (old) {
-        addr_remove_aliases(nd, -1);
-        if (!nd->naddr2)
-            netdev_route_flush(nd, 1);
-    }
+    if (old)
+        addr_unlink(nd);
     nd->addr4[0].deleted = 0;
     if (ip != old)
         k_memset(&nd->addr4[0], 0, sizeof(nd->addr4[0]));
@@ -568,7 +578,6 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t
         addr_erase_extra(nd, 0);
     }
     addr_install(nd, ip, mask, peer);
-    netdev_route_lost_source(old);
 }
 
 /** The slot matching the local address `ip` and destination prefix
@@ -644,6 +653,24 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     return 0;
 }
 
+void netconf_expire_addresses(uint64_t now)
+{
+    int i, a;
+    for (i = 0; i < netdev_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+        for (a = nd->naddr2 - 1; a >= -1; a--) {
+            struct addr4_routes *opts = &nd->addr4[a + 1];
+            uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
+            if (opts->valid_until && now >= opts->valid_until) {
+                uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
+                netconf_del_address(nd, ip, mask, netdev_addr_dst(nd, a));
+            } else if (opts->preferred_until && now >= opts->preferred_until) {
+                opts->deprecated = 1;
+            }
+        }
+    }
+}
+
 /** Set the first IPv4 address with its ioctl default mask or an explicit mask.
  * Zero removes the address. Repeating it preserves a mask set separately. */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
@@ -714,9 +741,7 @@ int netconf_set_broadcast(struct netdev *nd, uint32_t addr)
         return -EADDRNOTAVAIL;
     }
     if (addr != netdev_addr_brd(nd, -1)) {
-        addr_remove_aliases(nd, -1);
-        if (!nd->naddr2)
-            netdev_route_flush(nd, 1);
+        addr_unlink(nd);
         nd->addr4[0].deleted = 0;
         nd->addr4[0].given_broadcast = 1;
         nd->addr4[0].broadcast = addr;
