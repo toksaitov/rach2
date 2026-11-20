@@ -4861,6 +4861,23 @@ static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
     return text_parent(full, len);
 }
 
+/** The answer of `synth_rest` for the whole path it classified into `vp`:
+ * 0 with a new node of it held in `*node`, -ENOENT, -ENOTDIR or -ENOMEM. */
+static int synth_rest_found(struct vpath *vp, void **node)
+{
+    if (vp->kind == VNODE_ENOENT) {
+        return -ENOENT;
+    }
+    if (vp->kind == VNODE_ENOTDIR) {
+        return synth_past_present(vp) ? -ENOTDIR : -ENOENT;
+    }
+    if (vp->kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp->devdir)) {
+        return -ENOENT;
+    }
+    procfs_lookup_owner(vp);
+    return synth_take(vp, node);
+}
+
 /**
  * The rest of a path through a synthetic namespace whose root directory
  * `prefix` names, "dev", "proc" or "sys", its first `restlen` bytes. A `..`
@@ -4882,23 +4899,29 @@ static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
  * (`synth_classify`): 0 with a new node held, -ENOENT, also for a
  * directory of /dev that is absent (`devfs_subdir_present`), -ENOTDIR for a
  * path past a file that is there (`synth_past_present`), -ENAMETOOLONG for
- * a path longer than 255 bytes, or -ENOMEM. The node found last gets its
- * current owner as each one passed on the way does (`synth_link_part`), so
- * that readlink(2) and a stat or open that follows a /proc link update the
- * link's kept owner, as Linux's walk revalidates its last component.
+ * a path of VFS_PATH_MAX bytes or more, or -ENOMEM. The node found last gets
+ * its current owner as each one passed on the way does (`synth_link_part`),
+ * so that readlink(2) and a stat or open that follows a /proc link update
+ * the link's kept owner, as Linux's walk revalidates its last component.
+ * The path is built in a path page of the caller's (pathbuf.h), since a
+ * name of /dev, such as a port's alias in /dev/virtio-ports, may be
+ * NAME_MAX bytes after its directory.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, uint32_t restlen,
                       void **node, const char **left)
 {
-    char full[256];
     struct vpath vp;
     struct vfs_mount *deep;
     uint32_t plen = (uint32_t)k_strlen(prefix);
     uint32_t out;
     const char *p = rest;
     const char *end = rest + restlen;
+    char *full = path_buf_get();
     int kind;
 
+    if (!full) {
+        return -ENOMEM;
+    }
     out = plen;
     k_memcpy(full, prefix, out);
 
@@ -4919,7 +4942,8 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         }
         if (out == plen && mount_named_at(mnt, comp, len)) {
             *left = comp;
-            return VFS_ROOT;
+            kind = VFS_ROOT;
+            goto done;
         }
         if (len == 1 && comp[0] == '.') {
             continue;
@@ -4927,13 +4951,15 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         if (len == 2 && comp[0] == '.' && comp[1] == '.') {
             if (out <= plen) {
                 *left = comp;
-                return VFS_CLIMB;
+                kind = VFS_CLIMB;
+                goto done;
             }
             out = synth_dotdot(full, out, plen);
             continue;
         }
-        if (out + 1 + len + 1 > sizeof(full)) {
-            return -ENAMETOOLONG;
+        if (out + 1 + len + 1 > VFS_PATH_MAX) {
+            kind = -ENAMETOOLONG;
+            goto done;
         }
         full[out++] = '/';
         k_memcpy(full + out, comp, len);
@@ -4942,30 +4968,23 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         if (deep) {
             *node = deep;
             *left = p;
-            return VFS_ENTER;
+            kind = VFS_ENTER;
+            goto done;
         }
         kind = synth_link_part(full, out, plen, p, end, node);
         if (kind != 0) {
             *left = p;
-            return kind;
+            goto done;
         }
     }
     full[out] = '\0';
 
     synth_classify(full, &vp);
     synth_made(full, &vp);
-    kind = vp.kind;
-    if (kind == VNODE_ENOENT) {
-        return -ENOENT;
-    }
-    if (kind == VNODE_ENOTDIR) {
-        return synth_past_present(&vp) ? -ENOTDIR : -ENOENT;
-    }
-    if (kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp.devdir)) {
-        return -ENOENT;
-    }
-    procfs_lookup_owner(&vp);
-    return synth_take(&vp, node);
+    kind = synth_rest_found(&vp, node);
+done:
+    path_buf_put(full);
+    return kind;
 }
 
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
