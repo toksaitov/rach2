@@ -1340,6 +1340,11 @@ static void time_wait_attached_rows(void)
           n_segs == 1 && last_flags() == F_ACK && net_mib.tcp_challenge_ack == challenges + 1u);
     (void)tcp_shutdown(&sock, 0, 1);
     rx(89, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    n_segs = 0;
+    skipped = net_mib.tcp_ack_skipped_seq;
+    rx(89, lport, peer_seq - 10u, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    CHECK("attached FIN_WAIT_2 still limits an old ACK in the same tick",
+          n_segs == 0 && net_mib.tcp_ack_skipped_seq == skipped + 1u);
     rx(89, lport, peer_seq, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK), 65535, (const char *)0, 0);
     peer_seq++;
     CHECK("a socket that shut its sending half holds its block in TIME_WAIT",
