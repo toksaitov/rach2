@@ -322,12 +322,15 @@ static void whole_disk_window(void)
 }
 
 /* /dev's directories as synthfs.c has them: input, always present, dri,
-   present while it has a node, and cpu with its row cpu/0, present while a
-   node is in cpu/0. */
-static const struct synth_dev_dir dev_dirs[] = {
-    {"input", 5u, 1, -1}, {"dri", 6u, 0, -1}, {"cpu", 0xF00u, 0, -1}, {"cpu/0", 0xF01u, 0, 2}};
+   present while it has a node, cpu with its row cpu/0, present while a
+   node is in cpu/0, and virtio-ports. */
+static const struct synth_dev_dir dev_dirs[] = {{"input", 5u, 1, -1},
+                                                {"dri", 6u, 0, -1},
+                                                {"cpu", 0xF00u, 0, -1},
+                                                {"cpu/0", 0xF01u, 0, 2},
+                                                {"virtio-ports", 9u, 0, -1}};
 
-#define DEV_DIRS 4
+#define DEV_DIRS 5
 
 /** The number of rows of /dev's directories. */
 int synth_dev_dir_count(void)
@@ -406,6 +409,7 @@ static void registry(void)
     uint32_t mode = 0, rdev = 0, ino = 0, ino2 = 0;
     fd_entry_t e;
     int dri = synth_dev_dir_find("dri", 3), input = synth_dev_dir_find("input", 5);
+    char long_name[DEVFS_NODE_NAME_MAX + 1];
 
     check(dri >= 0 && input >= 0 && !devfs_subdir_present(dri) && devfs_subdir_present(input),
           "/dev/dri is absent with no node and /dev/input is present");
@@ -432,7 +436,10 @@ static void registry(void)
     check(devfs_node_register(&other) == -EINVAL, "a name in no directory of /dev is refused");
     other.name = "dri/card1/x";
     check(devfs_node_register(&other) == -EINVAL, "and one two levels down");
-    other.name = "dri/a-name-that-is-longer-than-the-sixty-three-bytes-a-slot-keeps";
+    k_memset(long_name, 'a', sizeof(long_name));
+    k_memcpy(long_name, "dri/", 4);
+    long_name[DEVFS_NODE_NAME_MAX] = '\0';
+    other.name = long_name;
     check(devfs_node_register(&other) == -EINVAL, "and one too long for a slot");
     other.name = "dri/by-name";
     other.alias = 1;
@@ -490,11 +497,43 @@ static void nested_registry(void)
 }
 
 /**
+ * A port of a second virtio console, at major 244 and the minor of its
+ * number, 300, as Linux's MKDEV gives it, is found by its number packed as
+ * Linux's new_encode_dev packs it, and a second name of it in
+ * /dev/virtio-ports, a name of Linux's NAME_MAX, 255 bytes, registers and
+ * is found by its path; one byte more is refused.
+ */
+static void wide_numbers(void)
+{
+    static struct devfs_node port = {"vport1p300", 244, 300, 0600, &node_ops, NULL, NULL, 0};
+    struct devfs_node link = port;
+    char name[DEVFS_NODE_NAME_MAX + 1];
+    uint32_t rdev = 0, want = (300u & 0xFFu) | (244u << 8) | ((300u & 0xFFF00u) << 12);
+
+    check(devfs_node_register(&port) == 0 && devfs_stat("vport1p300", 0, &rdev, 0) == 0 &&
+              rdev == want && name_eq(devfs_name_of(0, want), "vport1p300") &&
+              devfs_name_of(0, (244u << 8) | (300u & 0xFFu)) == NULL,
+          "a minor past 255 keeps its number, packed as Linux packs it");
+    k_memset(name, 'n', sizeof(name));
+    k_memcpy(name, "virtio-ports/", 13);
+    name[13 + 255] = '\0';
+    link.name = name;
+    link.alias = 1;
+    check(devfs_node_register(&link) == 0 && devfs_stat(name, 0, &rdev, 0) == 0 && rdev == want,
+          "a port's name of 255 bytes is its second name in /dev/virtio-ports");
+    devfs_node_unregister(&link);
+    name[13 + 255] = 'n';
+    name[13 + 256] = '\0';
+    check(devfs_node_register(&link) == -EINVAL, "and one of 256 bytes is refused");
+    devfs_node_unregister(&port);
+}
+
+/**
  * The rows of an open, then those of `offset_devices`, `grubcore_windows`,
- * `whole_disk_window`, `registry` and `nested_registry`. An exclusive
- * create of ptmx, null or an absent name, in each access mode and with or
- * without O_DIRECTORY and
- * O_NONBLOCK, is EEXIST for a device and ENOENT for an absent one, and
+ * `whole_disk_window`, `registry`, `nested_registry` and `wide_numbers`. An
+ * exclusive create of ptmx, null or an absent name, in each access mode and
+ * with or without O_DIRECTORY and O_NONBLOCK, is EEXIST for a device and
+ * ENOENT for an absent one, and
  * opens no pty master and takes no descriptor. An open of ptmx with
  * O_DIRECTORY is ENOTDIR and opens nothing, and an ordinary open of ptmx
  * opens a pty master. Returns 0 when every check passed and 1 otherwise.
@@ -522,9 +561,11 @@ int main(void)
     whole_disk_window();
     registry();
     nested_registry();
+    wide_numbers();
     if (!failures) {
         printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
-               "boot loader windows, the whole-disk window, the registry, nested rows\n");
+               "boot loader windows, the whole-disk window, the registry, nested rows, "
+               "wide numbers\n");
     }
     return failures != 0;
 }
