@@ -14,7 +14,8 @@
  * writable and keeps after once a page of it was written (`anon`), or
  * loses when anonymous memory never written stops being writable, `anon`
  * through splits, merges and a fork's copy, and its failure for a gap and
- * for write to a region that may never be written, which keeps that mark;
+ * for write to a region that may never be written and for execute to one
+ * that may never be executed, each of which keeps its mark;
  * the search for a free range; the bytes a range covers; and the file a
  * region maps: its pages through splits and merges, its references, and its
  * release, which waits for vm_file_reap after the last one goes, with the
@@ -155,6 +156,39 @@ static vma_t *region_at(const vm_space_t *vm, unsigned int i)
 
 #define PG 0x1000u
 
+/** A region that may never be executed, a mapping of a file on a noexec
+ * mount, keeps VM_PROT_NOEXEC through mprotect's splits and merges, and
+ * mprotect for execute over a range that reaches it fails, changing
+ * nothing, as Linux's mprotect answers EACCES without VM_MAYEXEC, while
+ * read and write still change. */
+static void noexec_rows(void)
+{
+    vm_space_t p = {0};
+    uintptr_t stop;
+    vma_t *r;
+    int why;
+
+    vm_init(&p);
+    CHECK(vm_insert(&p, 0x60000, 0x62000, VM_PROT_READ, VM_ANON) == 0);
+    CHECK(vm_insert(&p, 0x62000, 0x66000, VM_PROT_READ | VM_PROT_NOEXEC, VM_FILE) == 0);
+    stop = vm_protect_stop(&p, 0x60000, 0x64000, VM_PROT_READ | VM_PROT_EXEC, &why);
+    CHECK(stop == 0x62000 && why == -3);
+    CHECK(vm_protect(&p, 0x60000, 0x64000, VM_PROT_READ | VM_PROT_EXEC) == -3);
+    CHECK(vm_protect(&p, 0x63000, 0x64000, VM_PROT_EXEC) == -3);
+    CHECK(p.count == 2 && region_at(&p, 0)->prot == VM_PROT_READ &&
+          region_at(&p, 1)->prot == (VM_PROT_READ | VM_PROT_NOEXEC));
+    CHECK(vm_protect(&p, 0x63000, 0x64000, VM_PROT_READ | VM_PROT_WRITE) == 0 && p.count == 4);
+    r = vm_find(&p, 0x63000);
+    CHECK(r != NULL && r->start == 0x63000 && r->end == 0x64000 &&
+          (r->prot & ~(uint32_t)VM_PROT_ACCOUNT) ==
+              (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_NOEXEC));
+    stop = vm_protect_stop(&p, 0x63000, 0x64000, VM_PROT_READ | VM_PROT_EXEC, &why);
+    CHECK(stop == 0x63000 && why == -3);
+    CHECK(vm_protect(&p, 0x60000, 0x62000, VM_PROT_READ | VM_PROT_EXEC) == 0);
+    CHECK(region_at(&p, 0)->prot == (VM_PROT_READ | VM_PROT_EXEC));
+    vm_free(&p);
+}
+
 /** A region that may never be written keeps VM_PROT_NOWRITE through
  * mprotect's splits and merges, and mprotect for write over a range that
  * reaches it fails, changing nothing, as it does for a gap. */
@@ -177,6 +211,14 @@ static void nowrite_rows(void)
     CHECK(p.count == 2 && region_at(&p, 1)->start == 0x62000 && region_at(&p, 1)->end == 0x66000 &&
           region_at(&p, 1)->prot == (VM_PROT_READ | VM_PROT_NOWRITE));
     vm_free(&p);
+}
+
+/** The rows of regions that may never be given a right: write
+ * (`nowrite_rows`) or execute (`noexec_rows`). */
+static void never_rows(void)
+{
+    nowrite_rows();
+    noexec_rows();
 }
 
 /**
@@ -1017,7 +1059,7 @@ int main(int argc, char **argv)
         vm_free(&f);
     }
 
-    nowrite_rows();
+    never_rows();
     file_rows();
     reap_rows();
     dead_rows();
