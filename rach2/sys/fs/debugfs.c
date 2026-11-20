@@ -659,6 +659,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* uncache */
     0, /* phase */
     0, /* data_at */
+    0, /* check_acl */
 };
 
 struct dfs_options {

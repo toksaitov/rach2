@@ -444,6 +444,14 @@ struct vfs_ops {
      * of the whole read, as Linux's FAT and exFAT do
      * (`__blockdev_direct_IO`). */
     uint64_t (*data_at)(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end);
+    /* The answer of the POSIX access ACL of `node` for the `want` bits
+     * (CRED_R, CRED_W, CRED_X) to a caller that does not own it, as Linux's
+     * `check_acl` gives it: 0 when it grants them, -EACCES when it refuses
+     * them, -EAGAIN when the node has none, so that its group and other
+     * bits decide, or the error of reading it. `use_real` judges by the
+     * real ids. Called on a held node with or without its lock, only on a
+     * mount whose `sb_posixacl` is set; NULL for a type that keeps none. */
+    int (*check_acl)(struct vfs_mount *mnt, void *node, int want, int use_real);
 };
 
 /* renameat2(2)'s flags, Linux's values. */
@@ -569,6 +577,10 @@ struct vfs_mount {
      * system stays writable. Unused on a bind. */
     int mnt_rdonly;
     int sb_noexec; /* the file system forbids exec through every mount */
+    /* On a base mount, Linux's SB_POSIXACL: the file system enforces POSIX
+     * ACLs (`check_acl`) and applies the umask itself, where a directory
+     * has no default ACL, so a creation hands it the mode unmasked. */
+    int sb_posixacl;
     /* Optional, on the base mount. Emits current file-system options. */
     void (*show_options)(const struct vfs_mount *, vfs_option_emit, void *);
     int state;
@@ -1753,6 +1765,18 @@ int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *sou
 /** The tmpfs memfd_create makes its files on: no path reaches it, no
  * listing shows it, and it lasts as long as the kernel. */
 struct vfs_mount *vfs_memfd_mount(void);
+
+/**
+ * Whether the caller may have the `want` bits (CRED_R, CRED_W, CRED_X) of
+ * the held node `node` of `mnt`, whose attributes `st` holds, as Linux's
+ * `generic_permission` answers: the owner by the owner bits, anyone else by
+ * the node's POSIX access ACL where the type keeps one and the group bits
+ * are not 0, else by the group or other bits; then the DAC capabilities for
+ * a node whose ids are mapped. `use_real` judges by the real ids, for
+ * access(2). 0, -EACCES, or the error of reading the ACL.
+ */
+int vfs_may_access(struct vfs_mount *mnt, void *node, const struct vfs_stat *st, int want,
+                   int use_real);
 
 /** Extended attributes on a held node, in kernel buffers. The caller holds
  * the node lock and checks permission; unsupported types list empty and
