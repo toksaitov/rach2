@@ -206,6 +206,12 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
  * The network timer calls with interrupts disabled. */
 void netconf_expire_addresses(uint64_t now);
 
+/** Insert the IPv6 address record and start duplicate address detection.
+ * The caller sets up its prefix route from netlink options or an
+ * advertisement. Arguments and errors are those of netconf_add_address6. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred);
+
 /**
  * Give `nd` the IPv6 address `addr` with the on-link prefix of `prefix`
  * bits, the state `flags` (NETDEV_A6_NODAD and NETDEV_A6_PERMANENT are

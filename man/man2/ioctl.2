@@ -759,6 +759,9 @@ A noncontiguous netmask returns
 .Er EINVAL
 and preserves the current configuration.
 Repeating the existing configured address leaves its mask unchanged.
+Changing the address, peer, mask or broadcast removes the old address
+and reinserts the replacement after the surviving primaries.
+A replacement on a surviving primary's prefix becomes secondary.
 Changing any interface's address leaves every TCP connection and
 listening socket as it is, as on Linux.
 A connection whose local address is no longer configured sends nothing

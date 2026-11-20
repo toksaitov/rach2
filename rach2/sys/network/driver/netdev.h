@@ -162,9 +162,6 @@ struct netdev_ops {
 #define NETDEV_SCOPE_LINK   253
 #define NETDEV_SCOPE_HOST   254
 
-#define NETDEV_A6_PEER_ROUTE  2u /* peer host route in deleted_routes */
-#define NETDEV_A6_LOCAL_ROUTE 4u /* local-route bit in deleted_routes */
-
 /* An IPv6 address's state, in Linux's `IFA_F_` bits, so that netlink can
  * report them as they are: a temporary address of RFC 8981, no duplicate
  * detection is to be done, the detection failed, the preferred lifetime has
@@ -199,7 +196,7 @@ struct netdev_addr6 {
     uint8_t addr[16];
     uint8_t peer[16]; /* :: for no distinct destination */
     uint32_t metric;  /* zero selects the default prefix metric */
-    uint8_t noprefix, peer_prefix, deleted_routes;
+    uint8_t noprefix, local_route_deleted;
     uint8_t prefix;     /* the on-link prefix's length, 0 to 128 */
     uint8_t scope;      /* NETDEV_SCOPE_* */
     uint8_t flags;      /* NETDEV_A6_* */

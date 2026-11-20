@@ -353,8 +353,8 @@ static void if_set(struct netdev *nd, int key, int32_t value)
             netdev_join6(nd, all_routers);
             ni->rs_left = 0;
             for (i = 0; route6_at(i, &r);) {
-                if (r.ifindex == nd->index && r.proto == ROUTE6_PROTO_RA && r.plen == 0 &&
-                    ni->conf.v[ND6_ACCEPT_RA] != 2) {
+                if (r.ifindex == nd->index && r.learned && !ip6_is_unspecified(r.gw) &&
+                    r.plen == 0 && ni->conf.v[ND6_ACCEPT_RA] != 2) {
                     route6_learn(nd, r.dst, 0, r.gw, r.metric, 0);
                 } else {
                     i++;
@@ -953,7 +953,7 @@ static uint32_t left(const struct netdev_addr6 *a, uint32_t life)
  * Give `nd` the address `addr`/64 made from a router advertisement, with
  * the lifetimes `valid` and `preferred`, its DAD_Counter `count`, and
  * NETDEV_A6_TEMPORARY in `temp` for a temporary one. Returns 0 or the
- * error of `netconf_add_address6`.
+ * error of `netconf_insert_address6`.
  */
 static int add_auto(struct netdev *nd, const uint8_t *addr, uint32_t valid, uint32_t preferred,
                     uint8_t count, int temp)
@@ -961,7 +961,7 @@ static int add_auto(struct netdev *nd, const uint8_t *addr, uint32_t valid, uint
     struct netdev_addr6 *a;
     int rc;
 
-    rc = netconf_add_address6(nd, addr, 64, 0, valid, preferred);
+    rc = netconf_insert_address6(nd, addr, 64, 0, valid, preferred);
     if (rc != 0) {
         return rc;
     }
@@ -1610,7 +1610,8 @@ static void dad_timers(struct netdev *nd)
             send_ns(nd, a->addr, 0, 0);
         } else {
             a->flags &= (uint8_t)~NETDEV_A6_TENTATIVE;
-            a->deleted_routes &= (uint8_t)~(NETDEV_A6_LOCAL_ROUTE | NETDEV_A6_PEER_ROUTE);
+            a->local_route_deleted = 0;
+            route6_address_ready(nd, a);
         }
     }
 }

@@ -212,7 +212,7 @@ struct netdev *netdev_owner6(const uint8_t *addr)
         struct netdev *nd = netdev_at(i);
         struct netdev_addr6 *a = netdev_addr6_of(nd, addr);
         if (nd->up && a && !(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) &&
-            !(a->deleted_routes & NETDEV_A6_LOCAL_ROUTE))
+            !a->local_route_deleted)
             return nd;
     }
     return route6_added_local(addr);

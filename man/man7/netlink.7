@@ -444,6 +444,15 @@ skips duplicate address detection.
 .Dv IFA_CACHEINFO
 gives the preferred and valid lifetimes in seconds.
 An address with no lifetime attribute is permanent.
+Adding an address to an expiring IPv6 prefix at the same metric gives
+the route the new lifetime, even when shorter.
+Replacing a permanent address that supplied a prefix updates the
+lowest-metric direct route to that prefix, including an explicit route.
+At the same metric the route keeps its protocol.
+At a new metric the kernel removes the selected route and adds its own.
+Setting
+.Dv IFA_F_NOPREFIXROUTE
+on that address applies the same prefix cleanup as deleting it.
 Removal matches the local address and prefix length.
 Removing the last IPv6 address preserves independent routes.
 Taking the interface down drops its IPv6 addresses and routes.
