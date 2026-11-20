@@ -664,8 +664,10 @@ static void well_formed_rows(void)
     if (n) {
         OPS->put(&mnt, n);
     }
-    n = walk("/?5file.txt", &err);
-    check(n != 0, "and by its short alias, the byte above 0x7F shown as ?");
+    n = walk("/\xCF\x83"
+             "5file.txt",
+             &err);
+    check(n != 0, "and by its short alias, 0xE5 shown as sigma, as code page 437 has it");
     if (n) {
         OPS->put(&mnt, n);
     }
