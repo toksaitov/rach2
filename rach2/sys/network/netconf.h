@@ -123,15 +123,10 @@ int netconf_is_broadcast(uint32_t ip);
 /**
  * Set `nd`'s first address and mask, as SIOCSIFADDR does.
  *
- * An address of 0 unconfigures the interface, mask and all. Any other must be
- * a possible address (`netconf_address_is_impossible`), under a mask that is
- * contiguous and leaves the address a host of its subnet, as any address of
- * a /31 or /32 is; EINVAL otherwise. A mask of 0 means the classful mask the
- * first octet implies, as on Linux, until `netconf_set_netmask` gives one:
- * `ifconfig` sends the address and the mask in two ioctls. An address that is
- * no host under the classful mask waits for its mask with the interface
- * unconfigured. The address in force given again with a mask of 0, once its
- * mask has been given, changes nothing.
+ * Zero removes the first address. A new address without a mask takes /32 on
+ * a TUN or the classful mask on a broadcast interface. The same address
+ * given without a mask keeps its current mask. A multicast address and a
+ * noncontiguous mask return EINVAL.
  *
  * A change of the address or the mask is logged, and it drops what the old
  * address made true. The ARP mappings of the interface go, but the permanent
@@ -151,19 +146,9 @@ int netconf_is_broadcast(uint32_t ip);
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask);
 
 /**
- * Set `nd`'s mask, as SIOCSIFNETMASK does: the mask of the address waiting
- * for one when there is one, else of the address in force.
- *
- * A mask of 0 leaves the address in force with no subnet, and drops an
- * address waiting for its mask. Otherwise the mask must be contiguous and
- * leave the address a host of its subnet, and the interface must have an
- * address; EINVAL otherwise. A refusal while the mask in force
- * is the classful one, or while an address waits for its mask, unconfigures
- * the interface. A change drops what `netconf_set_address` lists. Takes
- * `net_lock`.
- *
- * @return 0, or a negative errno: ENODEV for a null interface, EINVAL as
- *         above.
+ * Set the first address's mask under net_lock. A custom broadcast survives.
+ * Return ENODEV for a missing device, EADDRNOTAVAIL for a missing address
+ * or EINVAL for a noncontiguous mask, as negative errno values.
  */
 int netconf_set_netmask(struct netdev *nd, uint32_t mask);
 
