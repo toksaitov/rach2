@@ -461,9 +461,9 @@ static int32_t route_device(uintptr_t dev, uint32_t gw, struct netdev **out)
  * eth0` cannot quietly remove the gateway. Removing a default route clears
  * the gateway, and removing one that is not there is `ESRCH`: a DHCP
  * client's script removes default routes in a loop that ends when a removal
- * fails. A route to the interface's own subnet is accepted and does nothing,
- * because it is already true; removing it is `EOPNOTSUPP` while the address
- * that implies it is in force. Any other route goes in the table
+ * fails. Adding a route that an address already implies, including a TUN
+ * peer prefix, succeeds without action at metric 0; removing an implied
+ * route is `EOPNOTSUPP`. Any other route goes in the table
  * (`netdev_route_add`), with the metric the caller gives, which `route` sends
  * one more than, as Linux takes it.
  */
@@ -499,9 +499,6 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
     if (request == SIOCADDRT && gateway_route && gw == 0) {
         return -EINVAL;
     }
-    if (nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask && gw == 0) {
-        return request == SIOCADDRT ? 0 : -EOPNOTSUPP;
-    }
     if (gateway_route &&
         (request == SIOCADDRT ? nd->gateway == 0 || nd->gateway == gw : nd->gateway != 0)) {
         if (request == SIOCADDRT) {
@@ -513,8 +510,16 @@ static int32_t route_ioctl(uint32_t request, uintptr_t arg)
         return netconf_set_gateway(nd, 0);
     }
     flags = net_lock();
-    rc = request == SIOCADDRT ? netdev_route_add(nd, dst, mask, gw, metric, 0)
-                              : netdev_route_del(dev != 0 ? nd : 0, dst, mask, gw);
+    if (request == SIOCADDRT) {
+        rc = gw == 0 && metric == 0 && netdev_has_link_route(nd, dst, mask)
+                 ? 0
+                 : netdev_route_add(nd, dst, mask, gw, metric, 0);
+    } else {
+        rc = netdev_route_del(dev != 0 ? nd : 0, dst, mask, gw);
+        if (rc == -ESRCH && gw == 0 && netdev_has_link_route(nd, dst, mask)) {
+            rc = -EOPNOTSUPP;
+        }
+    }
     net_unlock(flags);
     return rc;
 }

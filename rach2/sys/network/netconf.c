@@ -470,13 +470,28 @@ static int is_machine(const struct netdev *nd)
     return nd != 0 && nd == netdev_first();
 }
 
-/** Whether `gw` is reachable through the first address's link prefix. */
+/** Whether `gw` is a usable gateway on `nd`, through a peer prefix or on
+ * the first Ethernet subnet. A TUN can use any of its link prefixes. */
 static int addr_gateway_ok(const struct netdev *nd, uint32_t gw)
 {
-    return nd->ip != 0 && nd->mask != 0 &&
-           (nd->peer ? gw != nd->ip && !netconf_address_is_impossible(gw) &&
-                           (gw & nd->mask) == (nd->peer & nd->mask)
-                     : netconf_gateway_ok(gw, nd->ip, nd->mask));
+    if (nd->l3 || nd->peer) {
+        return !netconf_address_is_impossible(gw) && !netdev_holds(nd, gw) &&
+               netdev_on_link(nd, gw);
+    }
+    return nd->ip != 0 && nd->mask != 0 && netconf_gateway_ok(gw, nd->ip, nd->mask);
+}
+
+/** Drop routes whose gateways an address change made unreachable.
+ * The caller holds net_lock. */
+static void addr_prune_routes(struct netdev *nd)
+{
+    if (nd->gateway != 0 && !addr_gateway_ok(nd, nd->gateway)) {
+        nd->gateway = 0;
+    }
+    if (is_machine(nd)) {
+        net_ip_gateway = nd->gateway;
+    }
+    netdev_route_prune(nd);
 }
 
 /**
@@ -486,10 +501,9 @@ static int addr_gateway_ok(const struct netdev *nd, uint32_t gw)
  * A change, a new address or a new mask under an address, is logged, drops the
  * ARP mappings of the interface but the permanent ones (of every interface, for
  * the first) and the datagrams waiting for them; a TCP connection from the old
- * address is kept (`tcp_ip_tx`). A gateway the subnet does not have is cleared,
- * change or not, and so are the added routes whose gateway `nd` no longer
- * reaches. The first interface's values are copied to `net_ip_addr` and the two
- * after it. The caller holds `net_lock`.
+ * address is kept (`tcp_ip_tx`). Routes through a gateway `nd` no longer
+ * reaches are pruned. The first interface's values are copied to
+ * `net_ip_addr` and the two after it. The caller holds `net_lock`.
  */
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
@@ -520,13 +534,7 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t
             arp_forget_dev(nd);
         }
     }
-    if (nd->gateway != 0 && !addr_gateway_ok(nd, nd->gateway)) {
-        nd->gateway = 0;
-    }
-    if (is_machine(nd)) {
-        net_ip_gateway = nd->gateway;
-    }
-    netdev_route_prune(nd);
+    addr_prune_routes(nd);
 }
 
 /** The slot matching the local address `ip` and destination prefix
@@ -577,6 +585,9 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
         nd->mask2[nd->naddr2] = mask;
         nd->peer2[nd->naddr2] = peer;
         nd->naddr2++;
+        if (nd->gateway == ip) {
+            addr_prune_routes(nd);
+        }
         netconf_format(ip, text);
         klog(KLOG_INFO, "net", "%s: IPv4 %s/%d added", nd->name, text, netconf_prefix_of(mask));
     }
@@ -616,7 +627,7 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
         nd->peer2[i] = nd->peer2[i + 1];
     }
     nd->naddr2--;
-    netdev_route_prune(nd);
+    addr_prune_routes(nd);
     net_unlock(flags);
     return 0;
 }
@@ -768,8 +779,7 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer)
     return rc;
 }
 
-/** With no mask `netconf_gateway_ok` would take almost any address, so a
- * gateway needs the interface's address and mask first. */
+/** Set `nd`'s default gateway after checking that the interface reaches it. */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 {
     uint32_t flags;
