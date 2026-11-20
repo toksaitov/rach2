@@ -2433,19 +2433,20 @@ static fd_entry_t *shared_e;
 static char shared_buf[16];
 static int32_t shared_got;
 
-/** A second thread's read of the shared description, while the first's
- * copy sleeps. */
+/** A second thread's read of one buffer of the shared description, while
+ * the first's copy sleeps. */
 static void shared_read(void)
 {
-    shared_got = vcon_vport_ops.read(shared_e, shared_buf, sizeof(shared_buf));
+    shared_got = vcon_vport_ops.read(shared_e, shared_buf, 5);
 }
 
 /**
- * Two threads read one vport description, the first's copy to its memory
- * sleeping on a fault while the second reads, with two buffers from the
- * host waiting: the second waits for the first, which returns the first
- * buffer, and a read after returns the second, so that no byte is taken
- * twice or lost, as the port's read mutex makes it.
+ * Two threads read one vport description, each asking for one 5-byte
+ * buffer, the first's copy to its memory sleeping on a fault while the
+ * second reads, with two buffers from the host waiting: the second waits
+ * for the first, which returns the first buffer, and a read after returns
+ * the second, so that no byte is taken twice or lost, as the port's read
+ * mutex makes it. A read of more would take both buffers at once.
  */
 static void vport_shared(void)
 {
@@ -2471,11 +2472,10 @@ static void vport_shared(void)
     shared_got = 0;
     mutex_takes = mutex_waits = 0;
     copy_sleeps = shared_read;
-    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == 5 && memcmp(buf, "first", 5) == 0,
+    check(vcon_vport_ops.read(&e, buf, 5) == 5 && memcmp(buf, "first", 5) == 0,
           "the first reader gets the first buffer");
     check(shared_got == -EINTR && mutex_waits == 1, "the second waits for the first's read to end");
-    check(vcon_vport_ops.read(&e, buf, sizeof(buf)) == 5 && memcmp(buf, "secnd", 5) == 0 &&
-              P(1)->rx_n == 0,
+    check(vcon_vport_ops.read(&e, buf, 5) == 5 && memcmp(buf, "secnd", 5) == 0 && P(1)->rx_n == 0,
           "and a read after gets the second, which no reader lost");
     check(P(1)->rd.owner == 0 && mutex_takes == 2, "each read gives the mutex back");
     copy_sleeps = 0;
