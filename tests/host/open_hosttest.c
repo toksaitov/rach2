@@ -6,6 +6,7 @@
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: tests/host/compat/synth_attr_none.c
+ * host-deps: tests/host/compat/fat_attr_none.c
  * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c

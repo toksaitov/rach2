@@ -5,6 +5,7 @@
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: tests/host/compat/synth_attr_none.c
+ * host-deps: tests/host/compat/fat_attr_none.c
  * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -188,6 +189,15 @@ static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32
 static int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off);
 #include "syscall_fs.c"
 #include "fs_caps_first.h"
+
+/** The caller's privilege in `ns`, its own namespace in this fixture, is
+ * what its effective set gives (`held`). */
+int ns_capable_with(const process_t *p, const struct userns *ns, int held)
+{
+    (void)p;
+    (void)ns;
+    return held;
+}
 
 /** No row advises a read: nothing to queue. */
 void filecache_willneed(struct open_file *ofd, uint64_t offset, uint64_t len)
