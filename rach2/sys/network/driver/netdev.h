@@ -189,6 +189,10 @@ struct netdev_addr6 {
     uint8_t peer[16]; /* :: for no distinct destination */
     uint32_t metric;  /* zero selects the default prefix metric */
     uint8_t noprefix, local_route_deleted;
+    /* Whether the address holds its one join of its solicited-node group:
+     * from its insertion, or its card's up, to its deletion, or its card's
+     * down when the address is kept. None on `lo` or an `l3` card. */
+    uint8_t solicited;
     uint8_t prefix;     /* the on-link prefix's length, 0 to 128 */
     uint8_t scope;      /* NETDEV_SCOPE_* */
     uint8_t flags;      /* NETDEV_A6_* */

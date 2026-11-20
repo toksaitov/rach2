@@ -221,10 +221,12 @@ void nd6_dad_start(struct netdev_addr6 *a);
  */
 void nd6_random_link_local(struct netdev *nd, uint8_t *ll);
 
-/** What a card that came up starts: duplicate detection of each of its
- * addresses, and router solicitation once its link-local address is
- * usable. Nothing for a card already started, so that a flag change that
- * leaves it up restarts nothing. Called from `netconf_set_up`. */
+/** What a card that came up starts: the solicited-node group of each
+ * address that keep_addr_on_down kept, which Linux's addrconf_dad_begin
+ * joins again, duplicate detection of each of its addresses, and router
+ * solicitation once its link-local address is usable. Nothing for a card
+ * already started, so that a flag change that leaves it up restarts
+ * nothing. Called from `netconf_set_up`. */
 void nd6_if_up(struct netdev *nd);
 
 /**
@@ -232,9 +234,10 @@ void nd6_if_up(struct netdev *nd);
  * for them, its IPv6 routes, its routers' settings, and its addresses, but
  * when keep_addr_on_down of `all`, or else of the card, is above 0, its
  * permanent addresses that are neither link-local nor ::1, which stay,
- * tentative unless NETDEV_A6_NODAD, until `nd6_if_up` gives them their
- * prefix routes back and detects them again, as Linux's addrconf_ifdown
- * and addrconf_permanent_addr do. Called from `netconf_set_up`.
+ * tentative unless NETDEV_A6_NODAD and out of their solicited-node groups,
+ * until `nd6_if_up` rejoins the groups, gives them their prefix routes
+ * back and detects them again, as Linux's addrconf_ifdown and
+ * addrconf_permanent_addr do. Called from `netconf_set_up`.
  */
 void nd6_if_down(struct netdev *nd);
 
