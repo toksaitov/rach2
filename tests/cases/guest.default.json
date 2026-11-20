@@ -6795,6 +6795,9 @@
         {"assertion_id": "fd-dir-ended", "checks": "Once the child is reaped, a process of uid 1000 and gid 1001 enters its fd directory by fchdir through an O_PATH descriptor opened before, and gets ESRCH for its fdinfo directory, as Linux's proc_fdinfo_permission answers for a task that is gone.", "source": "program"},
         {"assertion_id": "long-link", "checks": "The links of paths over 64 bytes, including an O_PATH directory opened through another's link, name them whole.", "source": "program"},
         {"assertion_id": "long-removal", "checks": "The long path is removed.", "source": "program"},
+        {"assertion_id": "thread-self", "checks": "In the main thread and in a second one, readlink of /proc/thread-self gives PID/task/TID of the caller, lstat a link whose inode is not /proc's, stat the directory /proc/self/task/TID, and its stat file begins with the thread's ID, as Linux's fs/proc/thread_self.c gives the link.", "source": "program"},
+        {"assertion_id": "self-inodes", "checks": "/proc lists self and thread-self as DT_LNK with the inode lstat gives each, two numbers distinct from each other and from /proc's.", "source": "program"},
+        {"assertion_id": "self-other-ns", "checks": "In a proc mount that a child's new PID namespace makes in the shared mount namespace, self and thread-self lstat as links with /proc's inodes for them, open with O_PATH and O_NOFOLLOW and fstat as the same links, and give ENOENT to readlink, to readlinkat of the descriptor and to stat, as Linux's fs/proc/self.c and thread_self.c make the link with the mount and need a caller the namespace sees only for its text.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The directory and the tmpfs are removed.", "source": "program"}
       ],
       "branches": [],

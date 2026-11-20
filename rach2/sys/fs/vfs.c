@@ -4885,12 +4885,6 @@ static int synth_object_link(const struct vpath *vp)
            vp->kind == VNODE_PROC_ROOT;
 }
 
-/** Whether the synthetic node is /proc/self, a text link to the caller. */
-static int synth_self_link(const struct vpath *vp)
-{
-    return vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0;
-}
-
 /** The length of the first `out` bytes of `path` without their last name
  * and the slash before it: what `..` leaves of a path resolved as text. */
 static uint32_t text_parent(const char *path, uint32_t out)
@@ -5405,7 +5399,8 @@ static int synth_dir_kind(int kind)
  * root, /dev/log and a link made under /dev, and the mode the search rule
  * reads (0755 under /dev, 0555 under /proc and /sys, all root's, and an
  * entry's own mode and owner made under /dev, which is -ENOENT once it is
- * removed). /proc/self is a text link to the caller's process directory.
+ * removed). /proc/self and /proc/thread-self are text links to the caller's
+ * process and thread directories.
  * A device's link under /sys is classified as the directory it leads to. The
  * system call layer reports the full attributes itself. */
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
@@ -5441,7 +5436,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 }
 
 /** The `readlink` of the synthetic types, the target of a link as text:
- * /proc/self's, the caller's visible pid; /dev/log's, fixed; a link's made
+ * /proc/self's and /proc/thread-self's (`procfs_readlink_self`); /dev/log's,
+ * fixed; a link's made
  * under /dev, as it was written; a link's a driver added to /sys, as
  * kernfs writes it (`sysfs_link_text`);
  * /proc/<pid>/exe's, the path of the program the process
@@ -5472,24 +5468,10 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
         k_memcpy(buf, SYNTH_DEV_LOG_TARGET, n);
         return (int)n;
     }
-    pid = procfs_resolve_id(&sn->vp);
     if (synth_self_link(&sn->vp)) {
-        char digits[12];
-        uint32_t value = pid < 0 ? 0 : procfs_pid_number((uint32_t)pid, sn->vp.pidns_ino);
-        uint32_t n = 0, len = 0;
-
-        if (pid < 0) {
-            return -ENOENT;
-        }
-        do {
-            digits[n++] = (char)('0' + value % 10u);
-            value /= 10u;
-        } while (value);
-        while (n && len < cap) {
-            buf[len++] = digits[--n];
-        }
-        return (int)len;
+        return procfs_readlink_self(&sn->vp, buf, (int)cap);
     }
+    pid = procfs_resolve_id(&sn->vp);
     if (pid < 0 && (sn->vp.kind == VNODE_PROC_EXE || sn->vp.kind == VNODE_PROC_CWD ||
                     sn->vp.kind == VNODE_PROC_ROOT)) {
         return -ENOENT;

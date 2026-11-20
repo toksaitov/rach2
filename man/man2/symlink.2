@@ -96,7 +96,11 @@ Besides ext2 and tmpfs links,
 .Fn readlink
 supports
 .Pa /proc/self ,
-whose text is the caller's numeric process ID, and
+whose text is the caller's numeric process ID,
+.Pa /proc/thread-self ,
+whose text is that ID,
+.Pa /task/
+and the calling thread's ID, and
 .Pa /proc/<pid>/fd/<n> ,
 whose text describes that process's open descriptor.
 Reading an ordinary file or a node on a file system without a readlink

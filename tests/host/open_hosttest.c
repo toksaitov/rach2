@@ -1888,6 +1888,8 @@ uint32_t procfs_ino_dir(void)
 {
     return 1;
 }
+NO_PROC_INO(procfs_ino_self)
+NO_PROC_INO(procfs_ino_thread_self)
 NO_PROC_INO(procfs_ino_disk)
 NO_PROC_INO(procfs_ino_filesystems)
 NO_PROC_INO(procfs_ino_interrupts)
