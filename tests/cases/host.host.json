@@ -1106,6 +1106,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "nd6keep",
+          "checks": "tests/host/nd6keep_hosttest.c checks keep_addr_on_down through netconf's address insertion and deletion and netdev_room's groups: what a card keeps across down and up, its solicited-node joins and the heap blocks its removal frees, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "nd6hold",
           "checks": "tests/host/nd6hold_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

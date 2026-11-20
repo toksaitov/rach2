@@ -593,99 +593,6 @@ static void manual_refresh_keeps_ra(void)
     nd6_if_down(&eth0);
 }
 
-/** Put on eth0 the address of `prefix`/64 ending in `last`, with `flags`. */
-static void keep_address(int i, const uint8_t *prefix, uint8_t last, uint32_t flags)
-{
-    struct netdev_addr6 *a = &eth0.addr6[i];
-
-    k_memset(a, 0, sizeof(*a));
-    k_memcpy(a->addr, prefix, 8);
-    a->addr[15] = last;
-    a->prefix = 64;
-    a->metric = 90;
-    a->flags = flags;
-    a->valid = NETDEV_LIFETIME_FOREVER;
-    a->preferred = NETDEV_LIFETIME_FOREVER;
-    eth0.naddr6 = i + 1;
-    route6_address_update(&eth0, 0, a);
-}
-
-/**
- * keep_addr_on_down, as Linux's addrconf_ifdown reads it: with it above 0
- * on the card, and `all` 0, a card taken down keeps its permanent global
- * address, tentative again, and drops its link-local and autoconfigured
- * ones and every route; up gives the kept one its prefix route back. A
- * nonzero `all` wins over the card's, and removing the card drops all.
- */
-static void keep_addr_on_down(void)
-{
-    static const uint8_t global[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 7};
-    static const uint8_t auto_[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 8};
-    static const uint8_t link[16] = {0xfe, 0x80};
-    int32_t v = 0;
-
-    CHECK(nd6_conf_get(eth0.index, ND6_KEEP_ADDR_ON_DOWN, &v) == 0 && v == 0);
-    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 1) == 0);
-    keep_address(0, link, 1, NETDEV_A6_PERMANENT);
-    keep_address(1, global, 1, NETDEV_A6_PERMANENT);
-    keep_address(2, auto_, 2, 0);
-    CHECK(count_prefix(global, 64, 0, 90) == 1);
-    nd6_if_down(&eth0);
-    CHECK(eth0.naddr6 == 1 && eth0.addr6[0].addr[5] == 7 &&
-          (eth0.addr6[0].flags & NETDEV_A6_TENTATIVE));
-    CHECK(count_prefix(global, 64, 0, 90) == 0);
-    nd6_if_up(&eth0);
-    CHECK(eth0.naddr6 == 1 && count_prefix(global, 64, 0, 90) == 1);
-
-    CHECK(nd6_conf_set(ND6_CONF_ALL, ND6_KEEP_ADDR_ON_DOWN, -1) == 0);
-    nd6_if_down(&eth0);
-    CHECK(eth0.naddr6 == 0);
-    CHECK(nd6_conf_set(ND6_CONF_ALL, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
-    keep_address(0, global, 1, NETDEV_A6_PERMANENT);
-    nd6_if_remove(&eth0);
-    CHECK(eth0.naddr6 == 0 && count_prefix(global, 64, 0, 90) == 0);
-    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
-}
-
-/** A retained address is ready at once on TUN or with NODAD. An Ethernet
- * address that failed DAD probes again and wins its host route back. */
-static void retained_dad(int l3, int nodad)
-{
-    static const uint8_t global[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 9};
-    struct netdev_addr6 *a = &eth0.addr6[0];
-    struct route6_row r = {0};
-
-    eth0.l3 = l3;
-    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 1) == 0);
-    keep_address(0, global, 1, NETDEV_A6_PERMANENT | (nodad ? NETDEV_A6_NODAD : 0));
-    if (nodad) {
-        r.plen = 128;
-        r.local = 1;
-        k_memcpy(r.dst, a->addr, sizeof(r.dst));
-        CHECK(route6_change_row(&eth0, &r, 1, 0) == 0 && a->local_route_deleted);
-    } else if (!l3) {
-        a->flags |= NETDEV_A6_TENTATIVE;
-        dad_failed(&eth0, a);
-        CHECK(a->flags & NETDEV_A6_DADFAILED);
-    }
-
-    nd6_if_down(&eth0);
-    nd6_if_up(&eth0);
-    if (!l3 && !nodad) {
-        CHECK((a->flags & NETDEV_A6_TENTATIVE) && a->dad_left == 1);
-        kernel_ticks = a->dad_at;
-        dad_timers(&eth0);
-        CHECK(a->dad_left == 0 && (a->flags & NETDEV_A6_TENTATIVE));
-        kernel_ticks = a->dad_at;
-        dad_timers(&eth0);
-    }
-    CHECK(!(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) &&
-          count_prefix(a->addr, 128, 1, 0) == 1);
-    nd6_if_remove(&eth0);
-    eth0.l3 = 0;
-    CHECK(nd6_conf_set(eth0.index, ND6_KEEP_ADDR_ON_DOWN, 0) == 0);
-}
-
 int main(void)
 {
     static const uint8_t dst[IP6_ADDR_LEN] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
@@ -762,10 +669,6 @@ int main(void)
     delete_shared_prefix();
     remove_replaced_prefix();
     manual_refresh_keeps_ra();
-    keep_addr_on_down();
-    retained_dad(1, 0);
-    retained_dad(0, 0);
-    retained_dad(0, 1);
     CHECK(lock_depth == 0);
 
     if (failures) {

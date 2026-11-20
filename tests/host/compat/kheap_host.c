@@ -28,16 +28,27 @@ static int too_large(unsigned long n)
     return kheap_host_largest != 0 && n > kheap_host_largest;
 }
 
+/* The blocks `kmalloc` and `kzalloc` have granted that `kfree` has not
+ * taken back: a row that reads it before and after a series of calls sees
+ * whether the code under test freed what it allocated. */
+long kheap_host_blocks;
+
 /** `malloc`, or NULL for 0 bytes or a size over the limit. */
 void *kmalloc(size_t size)
 {
-    return size && !too_large(size) ? malloc(size) : NULL;
+    void *p = size && !too_large(size) ? malloc(size) : NULL;
+
+    kheap_host_blocks += p != NULL;
+    return p;
 }
 
 /** `calloc`, or NULL for 0 bytes or a size over the limit. */
 void *kzalloc(size_t size)
 {
-    return size && !too_large(size) ? calloc(1, size) : NULL;
+    void *p = size && !too_large(size) ? calloc(1, size) : NULL;
+
+    kheap_host_blocks += p != NULL;
+    return p;
 }
 
 /* Called with each block `kfree` is given, before it is freed, when a test
@@ -51,6 +62,7 @@ void kfree(void *p)
     if (p && kheap_host_freeing) {
         kheap_host_freeing(p);
     }
+    kheap_host_blocks -= p != NULL;
     free(p);
 }
 
