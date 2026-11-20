@@ -455,6 +455,10 @@ static uint32_t classful_mask(uint32_t ip)
 {
     uint32_t top = ip >> 24;
 
+    if (!top || ip == 0xffffffffu)
+        return 0;
+    if (top >= 240)
+        return 0xffffffffu;
     if (top < 128u) {
         return 0xFF000000u;
     }
@@ -593,16 +597,12 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     if (peer == ip) {
         peer = 0;
     }
-    if (netconf_address_is_impossible(ip) || !mask_ok(mask) ||
-        (!peer && !nd->l3 && (mask == 0 || !is_host(ip, mask))) ||
-        (peer && netconf_address_is_impossible(peer))) {
+    if (!ip || !mask_ok(mask)) {
         return -EINVAL;
     }
     flags = net_lock();
     if (nd->ip == 0) {
         addr_publish(nd, ip, mask, peer);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
     } else if (netconf_addr_find(nd, ip, mask, peer ? peer : ip) < nd->naddr2) {
         rc = -EEXIST;
     } else if (nd->naddr2 == NETDEV_ADDRS) {
@@ -633,8 +633,6 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     }
     if (i < 0) {
         addr_publish(nd, 0, 0, 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
     } else {
         uint32_t old = nd->ip2[i];
         addr_remove_aliases(nd, i);
@@ -645,134 +643,49 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     return 0;
 }
 
-/**
- * The whole change runs under `net_lock`, so an interrupt never finds the new
- * address in force while the control blocks still record the old one. A DHCP
- * client writes an address of 0 when a lease ends.
- *
- * On a TUN, a new address with a mask of 0 takes a /32. On other interfaces
- * the classful mask stands in, and `mask_provisional` records that it was
- * derived and not given. An address that is a host under
- * it goes into force at once. One that is not, a host only under a wider mask
- * still to come, waits in `pending_ip` with the interface unconfigured: put
- * in force, it would leave the interface answering for a network or
- * broadcast address until the next call, and for good if the program making
- * the calls were killed before it. An unconfigured interface is a state
- * anyone can see and nobody takes for a working one.
- *
- * The address in force repeated with no mask changes nothing, since a DHCP
- * client runs the same `ifconfig` at every renewal, and taking the address
- * down each time would drop the ARP mappings and stall every connection.
- */
+/** Set the first IPv4 address with its ioctl default mask or an explicit mask.
+ * Zero removes the address. Repeating it preserves a mask set separately. */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
-    uint32_t flags;
-    int rc = 0;
-
-    if (!nd) {
+    uint32_t lock;
+    if (!nd)
         return -ENODEV;
-    }
-
-    flags = net_lock();
-
-    if (ip == 0) {
-        addr_publish(nd, 0, 0, 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-        net_unlock(flags);
-        return 0;
-    }
-
-    if (netconf_address_is_impossible(ip)) {
-        net_unlock(flags);
+    if ((ip >> 28) == 14 || !mask_ok(mask))
         return -EINVAL;
-    }
-
-    if (nd->l3 && mask == 0) {
-        if (ip != nd->ip) {
-            addr_publish(nd, ip, 0xFFFFFFFFu, 0);
-            nd->mask_provisional = 0;
-            nd->pending_ip = 0;
-        }
-        net_unlock(flags);
-        return 0;
-    }
-
-    if (mask == 0) {
-        uint32_t derived = classful_mask(ip);
-
-        if (ip == nd->ip && nd->mask != 0 && !nd->mask_provisional && nd->pending_ip == 0) {
-            net_unlock(flags);
-            return 0;
-        }
-
-        if (!is_host(ip, derived)) {
-            addr_publish(nd, 0, 0, 0);
-            nd->pending_ip = ip;
-        } else {
-            addr_publish(nd, ip, derived, 0);
-            nd->pending_ip = 0;
-        }
-        nd->mask_provisional = 1;
-        net_unlock(flags);
-        return 0;
-    }
-
-    if (!mask_ok(mask) || !is_host(ip, mask)) {
-        rc = -EINVAL;
-    }
-    if (rc == 0) {
+    lock = net_lock();
+    if (!ip)
+        addr_publish(nd, 0, 0, 0);
+    else if (mask || ip != nd->ip) {
+        if (!mask)
+            mask = nd->l3 ? 0xffffffffu : classful_mask(ip);
         addr_publish(nd, ip, mask, ip == nd->ip ? nd->peer : 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
     }
-    net_unlock(flags);
-    return rc;
+    net_unlock(lock);
+    return 0;
 }
 
-/**
- * A mask with no address is refused, since it would give the interface a
- * subnet broadcast address derived from nothing. A refusal while the mask in
- * force is provisional unconfigures the interface: the address is a host
- * under the classful mask but may be the network or broadcast address of the
- * subnet the caller meant, and an interface answering for such an address is
- * worse than one with no address at all. A refusal while an address waits
- * for its mask unconfigures the interface too, since nothing would put that
- * address in force.
- */
+/** Replace the first IPv4 address's mask, preserving a custom broadcast.
+ * A rejected mask leaves the address and every route in force. */
 int netconf_set_netmask(struct netdev *nd, uint32_t mask)
 {
-    uint32_t flags;
-    uint32_t ip;
+    uint32_t lock, brd;
     int rc = 0;
-
-    if (!nd) {
+    if (!nd)
         return -ENODEV;
-    }
-
-    flags = net_lock();
-    ip = nd->pending_ip ? nd->pending_ip : nd->ip;
-
-    if (mask == 0) {
-        addr_publish(nd, nd->pending_ip ? 0 : nd->ip, 0, nd->pending_ip ? 0 : nd->peer);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-    } else if (ip == 0) {
+    lock = net_lock();
+    if (!nd->ip)
+        rc = -EADDRNOTAVAIL;
+    else if (!mask_ok(mask))
         rc = -EINVAL;
-    } else if (!mask_ok(mask) || (!nd->l3 && !nd->peer && !is_host(ip, mask))) {
-        rc = -EINVAL;
-    } else {
-        addr_publish(nd, ip, mask, nd->peer);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
+    else if (mask != nd->mask) {
+        brd = netdev_addr_brd(nd, -1);
+        if (!nd->l3 && !nd->loopback && mask < 0xfffffffeu && brd == (nd->ip | ~nd->mask))
+            brd = nd->ip | ~mask;
+        addr_publish(nd, nd->ip, mask, nd->peer);
+        nd->addr4[0].given_broadcast = 1;
+        nd->addr4[0].broadcast = brd;
     }
-
-    if (rc != 0 && (nd->mask_provisional || nd->pending_ip)) {
-        addr_publish(nd, 0, 0, 0);
-        nd->mask_provisional = 0;
-        nd->pending_ip = 0;
-    }
-    net_unlock(flags);
+    net_unlock(lock);
     return rc;
 }
 
@@ -783,7 +696,7 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer)
 
     if (nd->ip == 0) {
         rc = -EADDRNOTAVAIL;
-    } else if (netconf_address_is_impossible(peer)) {
+    } else if ((peer >> 28) == 14) {
         rc = -EINVAL;
     } else {
         addr_publish(nd, nd->ip, nd->mask, peer == nd->ip ? 0 : peer);

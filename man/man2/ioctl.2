@@ -753,16 +753,11 @@ privilege in the user namespace that owns it is enough, and they take
 up or down, the address 127.0.0.1 and the netmask 255.0.0.0 alone.
 Other flag bits are ignored by the setter.
 A TUN address set without a mask takes a host prefix.
-An Ethernet address set without its mask uses a provisional classful mask until
-the separate netmask request.
-If the address is a network or broadcast address under the provisional
-mask, the interface remains unconfigured until a valid netmask is
-supplied.
-A netmask request that fails with
-.Er EINVAL ,
-for a mask that is not contiguous or makes an Ethernet address a
-network or broadcast address, unconfigures the interface when the mask is
-provisional or an address is pending, and the address must be set again.
+An Ethernet address set without its mask takes the classful mask immediately.
+An assigned address may equal its subnet's network or broadcast address.
+A noncontiguous netmask returns
+.Er EINVAL
+and preserves the current configuration.
 Repeating the existing configured address leaves its mask unchanged.
 Changing any interface's address leaves every TCP connection and
 listening socket as it is, as on Linux.
