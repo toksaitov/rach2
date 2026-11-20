@@ -436,6 +436,14 @@ struct vfs_ops {
      * device over the file records at attachment, under the file's lock.
      * NULL for a type that keeps a file's bytes in whole blocks. */
     uint32_t (*phase)(struct vfs_mount *mnt, void *node, void *handle);
+    /* The first byte at or after `offset` and before `end` of the regular
+     * file open as `handle` that a block of the medium holds, or `end` when
+     * only holes lie between, for an unaligned O_DIRECT read, which Linux's
+     * ext2 answers with zeros where it meets only holes
+     * (`iomap_dio_hole_iter`). NULL for a type that checks the alignment
+     * of the whole read, as Linux's FAT and exFAT do
+     * (`__blockdev_direct_IO`). */
+    uint64_t (*data_at)(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end);
 };
 
 /* renameat2(2)'s flags, Linux's values. */
@@ -1695,6 +1703,12 @@ int vfs_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, v
  * the open handle `handle` holds, after an O_DIRECT read or write; nothing
  * on a type without it or a mount whose device has gone. */
 void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len);
+
+/** The type's `data_at` for the file open as `handle`: the first byte in
+ * [`offset`, `end`) that the medium holds, or `end` when only holes lie
+ * there; `offset` for a gone mount and a type without `data_at`, whose
+ * every byte counts as held. */
+uint64_t vfs_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end);
 /** The type's unlink of `name` in `dir`: 0, -EROFS for a type without
  * `unlink`, -EPERM when the directory or the file is immutable or
  * append-only, or the type's error. A file that backs a loop device loses

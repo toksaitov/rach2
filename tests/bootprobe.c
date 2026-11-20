@@ -19,7 +19,8 @@
  * before the start, and duplicates a descriptor to prove the wide offset is
  * shared through the open file description. With
  * `rach2.bootprobe=auth-ordinary` and `rach2.bootprobe=auth-recovery` the
- * probe checks whether the kernel may write its own disk (`auth_case`) and
+ * probe checks whether the kernel may write its own disk (`auth_case`), on
+ * the recovery kernel how a write at its end is cut (`disk_end_rows`), and
  * whether the bounded windows batch (`window_batch_case`); with
  * `rach2.bootprobe=shared`, behind a delayed device, it races a transfer on
  * an inherited description with another (`raw_readv_case`,
@@ -54,6 +55,10 @@
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR   2
+#define O_DIRECT 040000
+
+#define F_GETFL 3
+#define F_SETFL 4
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -186,6 +191,9 @@ static char big[200 * SECTOR];
    driver calls, and the bytes at the boundary between them are checked. */
 #define PAST_SECTORS 2100
 static char past[PAST_SECTORS * SECTOR];
+/* The buffer of the O_DIRECT rows at the disk's end, on a page, so that it
+ * and its sectors are aligned and the byte after its start is not. */
+static char direct_buf[2 * SECTOR] __attribute__((aligned(4096)));
 
 /**
  * Read the decimal field after `key` at the start of a line of /proc/disk
@@ -232,6 +240,64 @@ static int proc_disk_field(const char *key, unsigned long long *out)
         return 1;
     }
     return 0;
+}
+
+/**
+ * The rows of a recovery kernel's write at the end of the whole-disk node
+ * open on `fd`, with and without O_DIRECT, in the order of Linux's
+ * `blkdev_write_iter`, which answers ENOSPC at the end and cuts a write that
+ * crosses it before the alignment is judged: no bytes are 0 at an offset
+ * off the sector inside the disk and past its end, 513 bytes at the end are
+ * ENOSPC, and 513 bytes a sector before it are cut to the last sector, which
+ * is written back as the read before it found it. The boot windows keep
+ * their own rule, a write that crosses the end writing nothing. Closes `fd`.
+ */
+static void disk_end_rows(int fd)
+{
+    long long size = 0, pos = 0;
+    int flags, pass, n;
+
+    check(probe_llseek(fd, 0, SEEK_END, &size) == 0 && size > SECTOR, "seek to the disk's end");
+    for (pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            flags = syscall2(SYS_FCNTL, fd, F_GETFL);
+            check(flags >= 0 && syscall3(SYS_FCNTL, fd, F_SETFL, flags | O_DIRECT) == 0,
+                  "F_SETFL gives the whole-disk node O_DIRECT");
+        }
+        check(probe_llseek(fd, size - SECTOR + 1, SEEK_SET, &pos) == 0,
+              "seek a byte past the last sector's start");
+        n = syscall3(SYS_WRITE, fd, (long)direct_buf, 0);
+        check(n == 0, pass ? "an O_DIRECT write of no bytes off the sector inside the disk is 0"
+                           : "a write of no bytes off the sector inside the disk is 0");
+        check(probe_llseek(fd, size + 1, SEEK_SET, &pos) == 0 && pos == size + 1,
+              "seek a byte past the disk's end");
+        n = syscall3(SYS_WRITE, fd, (long)(direct_buf + 1), 0);
+        check(n == 0, pass ? "an O_DIRECT write of no bytes a byte past the disk's end is 0"
+                           : "a write of no bytes a byte past the disk's end is 0");
+        check(probe_llseek(fd, 0, SEEK_CUR, &pos) == 0 && pos == size + 1,
+              "a write of no bytes leaves the offset where it was");
+        check(probe_llseek(fd, size, SEEK_SET, &pos) == 0, "seek to the end to write there");
+        n = syscall3(SYS_WRITE, fd, (long)direct_buf, SECTOR + 1);
+        check(n == -ENOSPC, pass ? "an O_DIRECT write of 513 bytes at the disk's end is -ENOSPC"
+                                 : "a write of 513 bytes at the disk's end is -ENOSPC");
+        if (pass == 1) {
+            n = syscall3(SYS_WRITE, fd, (long)(direct_buf + 1), SECTOR);
+            check(n == -ENOSPC,
+                  "an O_DIRECT write at the disk's end from a buffer off the sector is -ENOSPC");
+        }
+        n = probe_pread(fd, direct_buf, SECTOR, size - SECTOR);
+        check(n == SECTOR, "the disk's last sector reads");
+        check(probe_llseek(fd, size - SECTOR, SEEK_SET, &pos) == 0, "seek to the last sector");
+        n = syscall3(SYS_WRITE, fd, (long)direct_buf, SECTOR + 1);
+        check(n == SECTOR, pass ? "an O_DIRECT write of 513 bytes a sector before the disk's end "
+                                  "is cut to 512"
+                                : "a write of 513 bytes a sector before the disk's end is cut "
+                                  "to 512");
+    }
+    flags = syscall2(SYS_FCNTL, fd, F_GETFL);
+    check(flags >= 0 && syscall3(SYS_FCNTL, fd, F_SETFL, flags & ~O_DIRECT) == 0,
+          "F_SETFL clears O_DIRECT on the whole-disk node");
+    syscall1(SYS_CLOSE, fd);
 }
 
 /**
@@ -415,7 +481,7 @@ static void auth_case(int recovery)
         check(ok || i / SECTOR < 2047 || i / SECTOR > 2049,
               "the first wrong byte, if any, is not at the boundary");
     }
-    syscall1(SYS_CLOSE, fd);
+    disk_end_rows(fd);
 }
 
 /**

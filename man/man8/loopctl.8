@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd November 20, 2026
 .Dt LOOPCTL 8
 .Os
 .Sh NAME
@@ -67,7 +67,8 @@ or
 .Ql detach N .
 The control node is owned by root with mode 0600.
 The loop nodes are block devices.
-A node also reads and writes its device in whole sectors, as
+A node also reads any byte range of its device and writes whole sectors,
+as
 .Xr loop 4
 describes.
 .Pp
@@ -78,8 +79,12 @@ attachment resolves the relocated file.
 If the path now resolves on another volume, attachment fails with
 .Er EBUSY .
 .Pp
-An attached file cannot be written or truncated; these operations fail with
+An attached file cannot be written; a write fails with
 .Er EBUSY .
+It can be truncated, as on Linux, except on KRFFS, where that fails with
+.Er EBUSY
+too
+.Pq Xr loop 4 .
 The volume containing the file cannot be unmounted until the device is
 detached.
 Removing a USB stick also removes loop devices attached to files on it.

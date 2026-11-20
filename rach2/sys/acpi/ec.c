@@ -9,6 +9,7 @@
 #include "../udelay.h"
 #include "../arch/x86/portio.h"
 #include "../lib/kirq.h"
+#include "../pci.h"
 
 #include "acpi.h"
 
@@ -290,6 +291,9 @@ void acpi_ec_probe(void)
         ec.handle = NULL;
         return;
     }
+    /* Linux's acpi_ec_add requests both ports. */
+    pci_host_reserve(ec.io.data, ec.io.data, 1);
+    pci_host_reserve(ec.io.command, ec.io.command, 1);
     ec_read_gpe();
     if (ACPI_FAILURE(AcpiOsCreateSemaphore(1, 1, &ec_lock))) {
         klog(KLOG_ERR, "acpi", "ec: refused: %s: no lock", ec.path);

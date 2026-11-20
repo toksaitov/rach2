@@ -3104,6 +3104,15 @@ void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t 
     (void)len;
 }
 
+/** No row's file takes O_DIRECT, so every byte counts as held: `offset`. */
+uint64_t vfs_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end)
+{
+    (void)mnt;
+    (void)handle;
+    (void)end;
+    return offset;
+}
+
 /** The name of an O_TMPFILE file, which no row makes: -ENOMEM. */
 int vfs_name_capture_deleted(const struct vfs_ref *parent, const char *leaf, struct vfs_name **out)
 {

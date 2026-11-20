@@ -53,6 +53,18 @@ for subtree in ('src', 'external'):
             output = tree / source.relative_to(repo)
             output.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, output)
+# The ACPI resource check includes ACPICA's headers, the same for both
+# architectures, from i686's extracted tree.
+headers = Path('build/vendor/acpica/include')
+if not (repo / headers / 'acpi.h').is_file():
+    raise ValueError(f'host inventory: missing extracted ACPICA headers: {headers}')
+for source in (repo / headers).rglob('*'):
+    if source.is_symlink():
+        raise ValueError(f'host inventory: extracted source must be regular: {source}')
+    if source.is_file() and source.suffix == '.h':
+        output = tree / source.relative_to(repo)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, output)
 PY
 for name in CLAUDE.md AGENTS.md Readme.md; do
     [ -f "$TREE/$name" ] || { echo "host inventory: missing root input $name" >&2; exit 1; }

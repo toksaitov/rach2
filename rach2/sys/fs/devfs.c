@@ -428,18 +428,26 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
 
+static int block_direct_misaligned(const fd_entry_t *e, uintptr_t addr, uint32_t count,
+                                   uint64_t off);
+
 /**
- * Write whole sectors to a bounded raw window at the description's
- * `raw_offset`, and move it past them. Returns the bytes written, -ENXIO
- * while the window is not published, -EPERM for a caller that is not
- * privileged, -EINVAL for a part of a sector, -ENOSPC for a write that
- * starts at or crosses the end, or -EFAULT or -EIO when nothing was written.
+ * Write whole sectors to a raw window at the description's `raw_offset`,
+ * and move it past them. Returns the bytes written, -ENXIO while the window
+ * is not published, -EPERM for a caller that is not privileged, -EINVAL for
+ * a part of a sector, -ENOSPC for a write that starts at or crosses the end,
+ * then -EINVAL under O_DIRECT for a buffer off a sector
+ * (`block_direct_misaligned`), or -EFAULT or -EIO when nothing was written.
  *
- * The whole request is judged before the first sector goes down: a write that
- * starts at or crosses the end writes nothing, because these windows are fixed
- * in size and a half-written boot loader or kernel slot helps nobody. The range
- * arithmetic subtracts instead of adding, so a count near the 32-bit edge
- * cannot wrap past the check.
+ * A boot window's whole request is judged before the first sector goes
+ * down: a write that starts at or crosses the end writes nothing, because
+ * these windows are fixed in size and a half-written boot loader or kernel
+ * slot helps nobody. A disk node's write, `cut`, is judged as Linux's
+ * `blkdev_write_iter` judges it: 0 for no bytes at any offset, -ENOSPC at
+ * or past the end, and a write that crosses the end cut to the sectors
+ * before it, all before the alignment. The range arithmetic subtracts
+ * instead of adding, so a count near the 32-bit edge cannot wrap past the
+ * check.
  *
  * A short return divides the request into three parts, and only the first is a
  * guarantee. The sectors it counts are written. The batch that failed begins at
@@ -462,7 +470,7 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
  * descriptor. Checking at write time is what makes that useless.
  */
 static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char __user *buf,
-                                uint32_t count)
+                                uint32_t count, int cut)
 {
     block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
@@ -478,6 +486,19 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
     }
+    if (cut) {
+        uint64_t size = total * BLOCK_SECTOR_SIZE;
+
+        if (count == 0) {
+            return 0;
+        }
+        if (off >= size) {
+            return -ENOSPC;
+        }
+        if ((uint64_t)count > size - off) {
+            count = (uint32_t)(size - off);
+        }
+    }
     if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
         return -EINVAL;
     }
@@ -488,6 +509,9 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     want = count / BLOCK_SECTOR_SIZE;
     if (lba >= total || (uint64_t)want > total - lba) {
         return -ENOSPC;
+    }
+    if (block_direct_misaligned(e, (__force uintptr_t)buf, count, off)) {
+        return -EINVAL;
     }
     done = 0;
     batch = raw_batch_take(&batch_sectors, want, part);
@@ -661,11 +685,48 @@ static struct disk_window *disk_node_window(const struct disk_node *node)
     return &node->disk->views[node->part - 1];
 }
 
-static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char __user *buf,
-                                     uint32_t count);
+static int32_t block_read_bytes(block_device_t *part, fd_entry_t *e, char __user *buf,
+                                uint32_t count);
 
 /**
- * Read a disk window at its descriptor's byte offset (`raw_window_read_bytes`),
+ * Whether an O_DIRECT transfer through the block node's descriptor `e` of
+ * `count` bytes at byte `off` of its device, from or into the user address
+ * `addr`, breaks Linux's rule for a block device's direct I/O
+ * (block/fops.c: `blkdev_dio_invalid`): the offset, the count and the
+ * buffer each a multiple of the 512-byte logical block. A descriptor
+ * without O_DIRECT and a transfer of no bytes are never misaligned. 1 or 0.
+ */
+static int block_direct_misaligned(const fd_entry_t *e, uintptr_t addr, uint32_t count,
+                                   uint64_t off)
+{
+    return count != 0 && e->ofd && (e->ofd->status_flags & OFD_DIRECT) &&
+           (((uint64_t)addr | count | off) & (BLOCK_SECTOR_SIZE - 1u)) != 0;
+}
+
+/**
+ * Read the block device `dev` of a block node at its descriptor's byte
+ * offset (`block_read_bytes`). Under O_DIRECT a read at or past the end is
+ * 0 and one whose offset, buffer or count, cut at the end, is off a sector
+ * is -EINVAL (`block_direct_misaligned`), in the order of Linux's
+ * `blkdev_read_iter`, which cuts the count at the device's end and returns
+ * there before it looks at the alignment.
+ */
+static int32_t block_node_read(block_device_t *dev, fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    uint64_t off = e->ofd->raw_offset;
+    uint64_t total = block_sectors(dev) * BLOCK_SECTOR_SIZE;
+
+    if (off < total && (uint64_t)count > total - off) {
+        count = (uint32_t)(total - off);
+    }
+    if (off < total && block_direct_misaligned(e, (__force uintptr_t)buf, count, off)) {
+        return -EINVAL;
+    }
+    return block_read_bytes(dev, e, buf, count);
+}
+
+/**
+ * Read a disk window at its descriptor's byte offset (`block_node_read`),
  * or -EIO for a descriptor of no node or a window not published.
  *
  * Reads accept arbitrary byte ranges. Writes require whole sectors and are
@@ -683,7 +744,7 @@ static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!w->present) {
         return -EIO; /* a stick pulled out from under the reader */
     }
-    return raw_window_read_bytes(w, e, buf, count);
+    return block_node_read(&w->part.device, e, buf, count);
 }
 
 /**
@@ -762,8 +823,9 @@ static int32_t dev_disk_discard(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /**
- * Write whole sectors anywhere on a disk (`raw_window_write`), in a recovery
- * build only; -EIO for a descriptor of no node.
+ * Write whole sectors anywhere on a disk (`raw_window_write`), cut at its
+ * end as Linux's `blkdev_write_iter` cuts it, in a recovery build only; -EIO
+ * for a descriptor of no node.
  *
  * Such a write can overwrite any sector of the disk, the boot loader and
  * every file system among them, so which kernel has it is decided when the
@@ -781,7 +843,7 @@ static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t co
     if (!node) {
         return -EIO;
     }
-    return raw_window_write(disk_node_window(node), e, buf, count);
+    return raw_window_write(disk_node_window(node), e, buf, count, 1);
 }
 #else
 static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -794,22 +856,21 @@ static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t co
 #endif
 
 /**
- * Read any byte range from a disk's window.
+ * Read any byte range from the block device `part` of a disk or loop node.
  *
  * The boot windows take whole sectors only, because their readers are the
- * reflash tools and a partial sector there is a mistake. A disk's nodes are
- * read by `blkid`, whose probers ask for the size of a superblock structure
- * at whatever offset it is, and a block device node on Linux answers
- * that. So the covering sectors are read into the staging buffer and the
- * bytes asked for are copied out of it, one batch at a time; the end is a
- * short read, as a regular file's is. Returns the bytes read, 0 at or past
- * the end, or -EFAULT or the request's error when nothing was read, and
- * moves `raw_offset` past what was read.
+ * reflash tools and a partial sector there is a mistake. A disk's and a
+ * loop device's nodes are read by `blkid`, whose probers ask for the size
+ * of a superblock structure at whatever offset it is, and a block device
+ * node on Linux answers that. So the covering sectors are read into the
+ * staging buffer and the bytes asked for are copied out of it, one batch at
+ * a time; the end is a short read, as a regular file's is. Returns the
+ * bytes read, 0 at or past the end, or -EFAULT or the request's error when
+ * nothing was read, and moves `raw_offset` past what was read.
  */
-static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char __user *buf,
-                                     uint32_t count)
+static int32_t block_read_bytes(block_device_t *part, fd_entry_t *e, char __user *buf,
+                                uint32_t count)
 {
-    block_device_t *part = &w->part.device;
     uint64_t off = e->ofd->raw_offset;
     uint64_t total = block_sectors(part) * BLOCK_SECTOR_SIZE;
     uint32_t done = 0;
@@ -864,7 +925,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
 /** write of /dev/bootpart (`raw_window_write`). */
 static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return raw_window_write(&bootpart, e, buf, count);
+    return raw_window_write(&bootpart, e, buf, count, 0);
 }
 
 /** read of /dev/grubcore (`raw_window_read`). */
@@ -876,7 +937,7 @@ static int32_t dev_grubcore_read(fd_entry_t *e, char __user *buf, uint32_t count
 /** write of /dev/grubcore (`raw_window_write`). */
 static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return raw_window_write(&grubcore, e, buf, count);
+    return raw_window_write(&grubcore, e, buf, count, 0);
 }
 
 /*
@@ -955,10 +1016,11 @@ static void dev_disk_close(fd_entry_t *e)
  *
  * The nodes are always there, as block devices with Linux's loop major, 7,
  * so that util-linux's losetup and mount find a free one and attach a file
- * to it with Linux's ioctls (`loop_node_ioctl`). A node reads and writes its
- * device in whole sectors, as a disk node does: blkid reads it to learn the
- * file system an image has, and mkfs writes one. A write is refused while a
- * file system is mounted on the device, since the cache may hold its blocks.
+ * to it with Linux's ioctls (`loop_node_ioctl`). A node reads any byte range
+ * of its device and writes whole sectors, as a disk node does: blkid reads
+ * it to learn the file system an image has, and mkfs writes one. A write is
+ * refused while a file system is mounted on the device, since the cache may
+ * hold its blocks.
  * The control node takes one line per write: `attach N /path`, `attach -
  * /path` for the first free device, `detach N`; `ro` after `attach`
  * attaches read-only.
@@ -966,19 +1028,33 @@ static void dev_disk_close(fd_entry_t *e)
 static int devfs_loop_index(const struct devfs_entry *dev);
 
 /**
- * A read of a loop device's node into `in`, or with `in` NULL a write from
- * `out`, of `count` bytes at the description's `raw_offset`, which moves
- * past them. Returns the bytes moved, `loop_node_device`'s error, -EPERM for
- * a write through a descriptor not open for writing or by a caller that is
- * not privileged, -EINVAL for a part of a sector, -ENOSPC for a write at or
- * past the end, or -EFAULT or the request's error when nothing moved.
+ * A read of a loop device's node of `count` bytes at the description's
+ * `raw_offset`, any byte range, as a disk node reads (`block_node_read`).
+ * Returns the bytes read, `loop_node_device`'s error, or what
+ * `block_node_read` answers.
  */
-static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __user *out,
-                                  uint32_t count)
+static int32_t loop_node_read(fd_entry_t *entry, char __user *buffer, uint32_t count)
 {
-    int write = in == 0;
     int32_t err;
-    block_device_t *dev = loop_node_device(devfs_loop_index(e->dev), write, &err);
+    block_device_t *dev = loop_node_device(devfs_loop_index(entry->dev), 0, &err);
+
+    return dev ? block_node_read(dev, entry, buffer, count) : err;
+}
+
+/**
+ * A write to a loop device's node from `out` of `count` bytes at the
+ * description's `raw_offset`, which moves past them. Returns the bytes
+ * written, `loop_node_device`'s error, -EPERM through a descriptor not open
+ * for writing or by a caller that is not privileged, 0 for no bytes, -ENOSPC
+ * at or past the end, then, with the count cut at the end, -EINVAL for a
+ * part of a sector or, under O_DIRECT, a buffer off a sector
+ * (`block_direct_misaligned`), in the order of Linux's `blkdev_write_iter`;
+ * or -EFAULT or the request's error when nothing was written.
+ */
+static int32_t loop_node_write(fd_entry_t *e, const char __user *out, uint32_t count)
+{
+    int32_t err;
+    block_device_t *dev = loop_node_device(devfs_loop_index(e->dev), 1, &err);
     uint64_t off = e->ofd->raw_offset, lba, size;
     uint32_t want, done = 0, chunk, sectors;
     uint8_t *batch;
@@ -987,35 +1063,34 @@ static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __u
     if (!dev) {
         return err;
     }
-    if (write && (!(e->flags & FD_FLAG_WRITE) || !proc_privileged(current_proc))) {
+    if (!(e->flags & FD_FLAG_WRITE) || !proc_privileged(current_proc)) {
         return -EPERM;
     }
-    if (off % BLOCK_SECTOR_SIZE != 0 || count % BLOCK_SECTOR_SIZE != 0) {
+    if (count == 0) {
+        return 0;
+    }
+    size = block_sectors(dev) * BLOCK_SECTOR_SIZE;
+    if (off >= size) {
+        return -ENOSPC;
+    }
+    if ((uint64_t)count > size - off) {
+        count = (uint32_t)(size - off);
+    }
+    if (off % BLOCK_SECTOR_SIZE != 0 || count % BLOCK_SECTOR_SIZE != 0 ||
+        block_direct_misaligned(e, (__force uintptr_t)out, count, off)) {
         return -EINVAL;
     }
     lba = off / BLOCK_SECTOR_SIZE;
-    size = block_sectors(dev);
-    if (lba >= size) {
-        return write ? -ENOSPC : 0;
-    }
     want = count / BLOCK_SECTOR_SIZE;
-    if ((uint64_t)want > size - lba) {
-        want = (uint32_t)(size - lba);
-    }
     batch = raw_batch_take(&sectors, want, dev);
     while (done < want && rc == 0) {
         chunk = want - done < sectors ? want - done : sectors;
-        if (write && copy_from_user(batch, (const void __user *)(out + done * BLOCK_SECTOR_SIZE),
-                                    chunk * BLOCK_SECTOR_SIZE) != 0) {
+        if (copy_from_user(batch, (const void __user *)(out + done * BLOCK_SECTOR_SIZE),
+                           chunk * BLOCK_SECTOR_SIZE) != 0) {
             rc = -EFAULT;
             break;
         }
-        rc = block_request(dev, write, lba + done, chunk, batch);
-        if (rc == 0 && !write &&
-            copy_to_user((void __user *)(in + done * BLOCK_SECTOR_SIZE), batch,
-                         chunk * BLOCK_SECTOR_SIZE) != 0) {
-            rc = -EFAULT;
-        }
+        rc = block_request(dev, 1, lba + done, chunk, batch);
         if (rc == 0) {
             done += chunk;
         }
@@ -1026,18 +1101,6 @@ static int32_t loop_node_transfer(fd_entry_t *e, char __user *in, const char __u
     }
     e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
-}
-
-/** read of a loop device's node (`loop_node_transfer`). */
-static int32_t loop_node_read(fd_entry_t *entry, char __user *buffer, uint32_t count)
-{
-    return loop_node_transfer(entry, buffer, 0, count);
-}
-
-/** write of a loop device's node (`loop_node_transfer`). */
-static int32_t loop_node_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
-{
-    return loop_node_transfer(entry, 0, buffer, count);
 }
 
 /**
@@ -3433,6 +3496,13 @@ int devfs_fd_is_raw(struct fd_entry *e)
     dev = e->dev;
     return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops ||
            dev->ops == &mem_ops || dev->ops == &loop_ops;
+}
+
+int devfs_fd_direct_misaligned(struct fd_entry *e, uintptr_t addr, uint32_t len, uint64_t off)
+{
+    return e && e->type == FD_TYPE_DEVICE && e->dev &&
+           (e->dev->ops == &diskwin_ops || e->dev->ops == &loop_ops) &&
+           block_direct_misaligned(e, addr, len, off);
 }
 
 int devfs_fd_is_mem(struct fd_entry *e)

@@ -14,10 +14,8 @@
 
 #include "devices.h"
 
-/* The slots and apertures kept: a bus has 32 slots, and a PC's host bridge
- * passes a few ranges of ports and memory. */
-#define PCIHP_SLOTS     32
-#define PCIHP_APERTURES 8
+/* The slots kept: a bus has 32. */
+#define PCIHP_SLOTS 32
 
 /* A slot: its device in the namespace and its device number on bus 0. */
 struct pcihp_slot {
@@ -27,8 +25,7 @@ struct pcihp_slot {
 
 static struct pcihp_slot slots[PCIHP_SLOTS];
 static int nslots;
-static struct pci_aperture apertures[PCIHP_APERTURES];
-static int napertures;
+static int root0; /* bus 0's first host bridge was found and its slots taken */
 
 /** The function's key in /sys, bus << 8 | devfn. */
 static int pcihp_key(uint8_t device, uint8_t function)
@@ -37,29 +34,42 @@ static int pcihp_key(uint8_t device, uint8_t function)
 }
 
 /**
- * A resource of the host bridge's _CRS: each range of memory or ports it
- * passes to its bus, as Linux's acpi_pci_root_create reads the windows; a
- * range of bus numbers, and memory below 1 MiB, which the legacy VGA
+ * A resource of a host bridge's _CRS: each range of memory or ports an
+ * address descriptor passes to its bus is kept for the root bus that
+ * `context` points to, as Linux's acpi_pci_root_create reads the windows;
+ * a range of bus numbers, and memory below 1 MiB, which the legacy VGA
  * window is, are not kept.
  */
 static ACPI_STATUS pcihp_window(ACPI_RESOURCE *res, void *context)
 {
-    ACPI_RESOURCE_ADDRESS64 a;
-    struct pci_aperture *w;
+    struct pci_aperture w;
+    uint64_t start, end;
+    int address, kind = acpi_resource_range(res, &start, &end, &address);
 
-    (void)context;
-    if (napertures == PCIHP_APERTURES || ACPI_FAILURE(AcpiResourceToAddress64(res, &a)) ||
-        a.Address.AddressLength == 0 ||
-        (a.ResourceType != ACPI_MEMORY_RANGE && a.ResourceType != ACPI_IO_RANGE)) {
+    if (!address || (kind != ACPI_RANGE_MEMORY && kind != ACPI_RANGE_IO) ||
+        (kind == ACPI_RANGE_MEMORY && start < 0x100000u)) {
         return AE_OK;
     }
-    if (a.ResourceType == ACPI_MEMORY_RANGE && a.Address.Minimum < 0x100000u) {
-        return AE_OK;
+    w.start = start;
+    w.end = end;
+    w.io = kind == ACPI_RANGE_IO;
+    (void)pci_root_window_add(*(const uint8_t *)context, &w);
+    return AE_OK;
+}
+
+/** A resource of a host bridge's _CRS: a range of bus numbers in a Word,
+ * DWord or QWord descriptor puts its first bus in the UINT64 `context`
+ * points to, the last such range winning, as Linux's
+ * get_root_bridge_busnr_callback reads them. */
+static ACPI_STATUS pcihp_busnr(ACPI_RESOURCE *res, void *context)
+{
+    uint64_t start, end;
+    int address;
+
+    if (res->Type != ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64 &&
+        acpi_resource_range(res, &start, &end, &address) == ACPI_RANGE_BUS) {
+        *(UINT64 *)context = start;
     }
-    w = &apertures[napertures++];
-    w->start = a.Address.Minimum + a.Address.TranslationOffset;
-    w->end = w->start + a.Address.AddressLength - 1;
-    w->io = a.ResourceType == ACPI_IO_RANGE;
     return AE_OK;
 }
 
@@ -72,9 +82,10 @@ static ACPI_STATUS pcihp_window(ACPI_RESOURCE *res, void *context)
  */
 static void pcihp_check(const struct pcihp_slot *s)
 {
+    const struct pci_aperture *ap;
     pci_device_t p;
     uint8_t devfn;
-    int i, rc;
+    int i, n, rc;
 
     if (pci_slot_add(0, s->device) == 0) {
         return;
@@ -85,7 +96,8 @@ static void pcihp_check(const struct pcihp_slot *s)
             continue;
         }
         devfn = (uint8_t)(p.device << 3 | p.function);
-        rc = pci_assign_bars(0, p.device, p.function, apertures, napertures);
+        n = pci_root_windows(0, &ap);
+        rc = pci_assign_bars(0, p.device, p.function, ap, n);
         klog(KLOG_INFO, "pci", "hotplug: added: 00:%02x.%d %04x:%04x%s", p.device, p.function,
              p.vendor_id, p.device_id, rc != 0 ? ", without addresses" : "");
         (void)sysfs_pci_uevent(pcihp_key(p.device, p.function), "add");
@@ -190,34 +202,76 @@ static void pcihp_slots(ACPI_HANDLE root)
     }
 }
 
-/** The first host bridge of bus 0: its windows and slots; the walk stops
- * there. A bridge whose _BBN names another bus is passed over. */
-static ACPI_STATUS pcihp_root(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
+/** Evaluate the integer `name` of `handle` into `*value`, 0 when the
+ * object is absent, as Linux's acpi_pci_root_add reads _SEG and _BBN;
+ * nonzero when it is there and cannot be read as an integer. */
+static int pcihp_integer(ACPI_HANDLE handle, char *name, UINT64 *value)
 {
-    static char bbn[] = "_BBN", crs[] = "_CRS";
     ACPI_BUFFER buf;
     ACPI_OBJECT obj;
+    ACPI_STATUS status;
+
+    buf.Length = sizeof(obj);
+    buf.Pointer = &obj;
+    status = AcpiEvaluateObjectTyped(handle, name, NULL, &buf, ACPI_TYPE_INTEGER);
+    *value = ACPI_SUCCESS(status) ? obj.Integer.Value : 0;
+    return ACPI_FAILURE(status) && status != AE_NOT_FOUND;
+}
+
+/**
+ * A host bridge, as Linux's acpi_pci_root_add takes it: one whose _SEG,
+ * which is 0 when absent, names another PCI segment is passed over, since
+ * the configuration ports reach segment 0 alone, and so is one whose _SEG
+ * or _BBN cannot be read. Its root bus is the first of the range of bus
+ * numbers its _CRS gives (`pcihp_busnr`), or else its _BBN, or else 0; it
+ * keeps the bridge's windows, and the first bridge of bus 0 gives its
+ * slots.
+ */
+static ACPI_STATUS pcihp_root(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
+{
+    static char bbn[] = "_BBN", crs[] = "_CRS", seg[] = "_SEG";
+    UINT64 busnr = ~(UINT64)0, segment;
+    uint8_t bus;
 
     (void)depth;
     (void)context;
     (void)ret;
-    buf.Length = sizeof(obj);
-    buf.Pointer = &obj;
-    if (ACPI_SUCCESS(AcpiEvaluateObjectTyped(handle, bbn, NULL, &buf, ACPI_TYPE_INTEGER)) &&
-        obj.Integer.Value != 0) {
+    if (pcihp_integer(handle, seg, &segment)) {
+        klog(KLOG_WARN, "pci", "host bridge: _SEG cannot be read: its windows are not kept");
         return AE_OK;
     }
-    (void)AcpiWalkResources(handle, crs, pcihp_window, NULL);
-    pcihp_slots(handle);
-    return AE_CTRL_TERMINATE;
+    if ((segment & 0xFFFFu) != 0) {
+        klog(KLOG_INFO, "pci", "host bridge: segment %lu: not reached, its windows are not kept",
+             (unsigned long)(segment & 0xFFFFu));
+        return AE_OK;
+    }
+    (void)AcpiWalkResources(handle, crs, pcihp_busnr, &busnr);
+    if (busnr == ~(UINT64)0 && pcihp_integer(handle, bbn, &busnr)) {
+        klog(KLOG_WARN, "pci", "host bridge: _BBN cannot be read: its windows are not kept");
+        return AE_OK;
+    }
+    if (busnr > 0xFFu) {
+        klog(KLOG_WARN, "pci", "host bridge: bus %lu is past 255: its windows are not kept",
+             (unsigned long)busnr);
+        return AE_OK;
+    }
+    bus = (uint8_t)busnr;
+    (void)AcpiWalkResources(handle, crs, pcihp_window, &bus);
+    if (bus == 0 && !root0) {
+        root0 = 1;
+        pcihp_slots(handle);
+    }
+    return AE_OK;
 }
 
 void acpi_pcihp_start(void)
 {
     static char root_hid[] = "PNP0A03";
+    const struct pci_aperture *ap;
 
     (void)AcpiGetDevices(root_hid, pcihp_root, NULL, NULL);
     if (nslots > 0) {
-        klog(KLOG_INFO, "pci", "hotplug: %d slots on bus 0, %d windows", nslots, napertures);
+        klog(KLOG_INFO, "pci", "hotplug: %d slots on bus 0, %d windows", nslots,
+             pci_root_windows(0, &ap));
     }
 }

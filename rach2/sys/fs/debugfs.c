@@ -685,6 +685,7 @@ const struct vfs_ops debugfs_vops = {
     0, /* tmpfile */
     0, /* uncache */
     0, /* phase */
+    0, /* data_at */
 };
 
 struct dfs_options {

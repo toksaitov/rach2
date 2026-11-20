@@ -9,7 +9,13 @@
 
 #include "../lib/kint.h"
 
+struct acpi_resource;
 struct evdev;
+
+/* What a resource of a _CRS describes (`acpi_resource_range`). */
+#define ACPI_RANGE_IO     1 /* I/O ports */
+#define ACPI_RANGE_MEMORY 2 /* memory */
+#define ACPI_RANGE_BUS    3 /* bus numbers, which only an address descriptor gives */
 
 /**
  * Find the embedded controller, PNP0C09, and install the handler of its
@@ -67,9 +73,38 @@ void acpi_ideapad_start(void);
 void acpi_pnp_i8042(void);
 
 /**
+ * Hold for the host, so that no PCI BAR over them is claimed
+ * (`pci_host_reserve`), the FADT's fixed register blocks, as Linux's
+ * acpi_reserve_resources, and the ports from 0x100 up and the memory of
+ * each present system device's _CRS, PNP0C01 or PNP0C02, as Linux's
+ * pnp/system.c. Called once ACPICA's objects are initialized and the EC
+ * runs, since a _STA may read it.
+ */
+void acpi_pnp_reserve(void);
+
+/**
+ * The range a resource `res` of a _CRS describes, as Linux's
+ * acpi_dev_resource_memory, _io, _address_space and _ext_address_space
+ * read it: an I/O or fixed I/O descriptor's ports; a 24-bit, 32-bit or
+ * fixed 32-bit descriptor's memory, a 24-bit one's address and length
+ * shifted up by 8, each from its address for its length; and a Word,
+ * DWord, QWord or Extended address descriptor's memory, ports or bus
+ * numbers from its Minimum to its Maximum, its translation added to both
+ * for a producer's memory and ports alone. Sets `*start` and `*end`,
+ * inclusive, and `*address` to 1 for an address descriptor, the only kind
+ * a bridge's window comes in, and returns an `ACPI_RANGE_` kind; 0 for any
+ * other resource and for a range Linux disables: one of no length, one
+ * that ends below its start, and ports past 0x10002.
+ */
+int acpi_resource_range(struct acpi_resource *res, uint64_t *start, uint64_t *end, int *address);
+
+/**
  * Take the hot plug slots of the host bridge of bus 0, its children with
- * _ADR and _EJ0, and their Notify, as Linux's acpiphp does, with the
- * bridge's windows from its _CRS for the BARs of a card put in. Called
+ * _ADR and _EJ0, and their Notify, as Linux's acpiphp does, and keep the
+ * windows of every host bridge from its _CRS for its root bus, as Linux's
+ * acpi_pci_root_add finds the bus and the windows
+ * (`pci_root_window_add`), which bus 0's give the BARs of a card put in
+ * and every root's hold the BARs a driver claims. Called
  * once ACPICA's objects are initialized and before AcpiUpdateAllGpes,
  * whose GPE method gives the Notify.
  */

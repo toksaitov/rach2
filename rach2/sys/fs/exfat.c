@@ -15,6 +15,7 @@
 #include "fatopts.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 
 #define EX_S_IFDIR 0040000u
 #define EX_S_IFREG 0100000u
@@ -1195,6 +1196,54 @@ static int32_t ex_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t 
         done += take;
     }
     return (int32_t)done;
+}
+
+/**
+ * The `uncache` of `vfs_ops`: drop from the buffer cache the clean blocks of
+ * bytes [`offset`, `offset` + `len`) of the regular file `handle` within
+ * its ValidDataLength, after an O_DIRECT read or write, so that the file's
+ * data stays in memory no longer than the call, as Linux's exFAT reads and
+ * writes O_DIRECT around the page cache (`exfat_direct_IO`). A block that is
+ * dirty or held stays, and so does one that also holds another file or the
+ * FAT, which a later read brings back. Takes the big lock, under which the
+ * chain does not change; a chain that ends early leaves the rest cached.
+ */
+static void ex_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *n = handle;
+    uint32_t cbytes = cluster_bytes(em);
+    uint64_t at, end, blk, first;
+    int big = !bkl_held();
+
+    if (n->is_dir || len == 0) {
+        return;
+    }
+    if (big) {
+        bkl_enter();
+    }
+    end = len > n->valid || offset > n->valid - len ? n->valid : offset + len;
+    for (at = offset; at < end;) {
+        uint32_t in = (uint32_t)(at & (cbytes - 1));
+        uint32_t take = cbytes - in;
+        uint32_t c;
+
+        if (take > end - at) {
+            take = (uint32_t)(end - at);
+        }
+        if (chain_at(em, n, n->first, n->nofat, n->length, (uint32_t)(at >> (9 + em->spc_shift)),
+                     &c) != 0) {
+            break;
+        }
+        first = cluster_offset(em, c) + in;
+        for (blk = first / BCACHE_BLOCK_BYTES; blk * BCACHE_BLOCK_BYTES < first + take; blk++) {
+            bcache_forget(em->dev, blk);
+        }
+        at += take;
+    }
+    if (big) {
+        bkl_exit();
+    }
 }
 
 /**
@@ -4496,8 +4545,9 @@ static const struct vfs_ops exfat_ops = {
     0,                         /* unlock_write */
     0,                         /* rename_flags */
     0,                         /* tmpfile */
-    0,                         /* uncache */
+    ex_uncache,                /* uncache */
     0,                         /* phase */
+    0,                         /* data_at */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops,       0, 0, 0, 0, 0,

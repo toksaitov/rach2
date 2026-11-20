@@ -222,6 +222,17 @@ void devfs_disk_withdraw(void);
  */
 int devfs_fd_is_raw(struct fd_entry *e);
 
+/**
+ * Whether an O_DIRECT transfer through `e` of `len` bytes at byte `off` of
+ * its device, from or into the user address `addr`, breaks Linux's rule for
+ * a block device's direct I/O (block/fops.c: `blkdev_dio_invalid`): the
+ * offset, the length and the address each a multiple of the 512-byte
+ * logical block. 0 for a descriptor that is not a disk or loop node, one
+ * without O_DIRECT, and no bytes. A vectored transfer asks it of each
+ * element before any moves, as Linux checks the whole iov_iter.
+ */
+int devfs_fd_direct_misaligned(struct fd_entry *e, uintptr_t addr, uint32_t len, uint64_t off);
+
 /** Whether `e` is open on `/dev/mem`, whose offsets are unsigned, as Linux's
  * FMODE_UNSIGNED_OFFSET makes them, so that no transfer is refused for
  * ending past 2^63-1: 1 or 0. */

@@ -3825,6 +3825,14 @@ void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t 
     }
 }
 
+uint64_t vfs_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end)
+{
+    if (vfs_mount_gone(mnt) || !mnt->type->ops->data_at || offset >= end) {
+        return offset;
+    }
+    return mnt->type->ops->data_at(mount_base(mnt), handle, offset, end);
+}
+
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct vfs_stat was, parent;
@@ -4674,7 +4682,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* rename_flags */
     0,                           /* tmpfile */
     0,                           /* uncache */
-    kfs_phase,
+    kfs_phase,   0,              /* data_at */
 };
 
 /* The mount of the KRFFS root, which `kfs_halted` turns read-only. */
@@ -5622,6 +5630,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* tmpfile */
     0, /* uncache */
     0, /* phase */
+    0, /* data_at */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -5674,6 +5683,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* tmpfile */
     0, /* uncache */
     0, /* phase */
+    0, /* data_at */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -5726,6 +5736,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* tmpfile */
     0, /* uncache */
     0, /* phase */
+    0, /* data_at */
 };
 
 /* The last devpts instance a mount made; the system's /dev/pts is 0. */

@@ -20,7 +20,8 @@
  * replayed against each and the four numbers checked, and the frame table
  * is placed with `frame_map_place`, and on i686 at the boot allocator's
  * break with `frame_map_first`, past the NVS ranges OVMF puts at 8 MiB.
- * Exits with the count of failed checks, at most 50.
+ * Last, the ranges the host holds from a map and from mem_upper alone
+ * (`frame_map_host_ranges`). Exits with the count of failed checks, at most 50.
  */
 
 #include "mm/frame.h"
@@ -629,6 +630,55 @@ static void first(void)
     CHECK(frame_map_first(&m, 0, MIB(7), FRAME_DIRECT_MAP_LIMIT, &at) == -1);
 }
 
+/* The ranges `frame_map_host_ranges` gave, first and last byte. */
+static uint64_t held[8][2];
+static int nheld;
+
+/** Note a range the host holds. */
+static void hold(uint64_t first, uint64_t last)
+{
+    if (nheld < 8) {
+        held[nheld][0] = first;
+        held[nheld][1] = last;
+    }
+    nheld++;
+}
+
+/**
+ * frame_map_host_ranges gives what Linux's e820__reserve_resources puts in
+ * its resource tree: a map's entries but the reserved ones above 1 MiB,
+ * and with no map, the two ranges of RAM e820__memory_setup_default makes
+ * from mem_upper, past the reach too, so that no PCI BAR is claimed over
+ * them.
+ */
+static void host_ranges(void)
+{
+    struct frame_map m;
+    uint8_t map[4 * BOOT_MMAP_ENTRY];
+    uint32_t n = 0;
+
+    n += put_entry(map, n, 0, KIB(639), MAP_USABLE);
+    n += put_entry(map, n, KIB(639), KIB(1), MAP_RESERVED);
+    n += put_entry(map, n, MIB(1), MIB(63), MAP_USABLE);
+    n += put_entry(map, n, 0xFEC00000u, KIB(4), MAP_RESERVED);
+    CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
+    nheld = 0;
+    frame_map_host_ranges(&m, map, n, 0, hold);
+    CHECK(nheld == 3 && held[0][0] == 0 && held[0][1] == KIB(639) - 1 && held[1][0] == KIB(639) &&
+          held[1][1] == KIB(640) - 1 && held[2][0] == MIB(1) && held[2][1] == MIB(64) - 1);
+
+    /* No map: 640 KiB from 0 and mem_upper from 1 MiB, past the reach too. */
+    CHECK(frame_map_build(&m, 0, 0, 63 * 1024, REACH_I686) == 0);
+    nheld = 0;
+    frame_map_host_ranges(&m, 0, 0, 63 * 1024, hold);
+    CHECK(nheld == 2 && held[0][0] == 0 && held[0][1] == 0x9FFFFu && held[1][0] == MIB(1) &&
+          held[1][1] == MIB(64) - 1);
+    CHECK(frame_map_build(&m, 0, 0, 0xFFFFFC00u, REACH_I686) == 0);
+    nheld = 0;
+    frame_map_host_ranges(&m, 0, 0, 0xFFFFFC00u, hold);
+    CHECK(nheld == 2 && held[1][1] == MIB(1) + (uint64_t)0xFFFFFC00u * 1024u - 1);
+}
+
 /** Run the rows; the count of failed checks, at most 50. */
 int main(void)
 {
@@ -643,5 +693,6 @@ int main(void)
     ranges_bound();
     place();
     first();
+    host_ranges();
     return (fails > 50) ? 50 : fails;
 }

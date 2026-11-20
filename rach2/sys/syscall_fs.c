@@ -948,17 +948,58 @@ static int direct_misaligned(const struct open_file *ofd, uintptr_t addr, uint32
 }
 
 /**
- * The answer of an O_DIRECT read at `pos` through `ofd` that the device
- * cannot take as it is (`direct_misaligned`): 0 at or past the end of the
- * file, as Linux's `iomap_dio_rw` returns there before it looks at the
- * alignment, -EINVAL before it, or getattr's error.
+ * Whether an O_DIRECT read through `ofd` at `pos` into the `count` elements
+ * of `iov`, which break the device's alignment (`direct_misaligned`,
+ * `direct_iov_misaligned`), is refused, with its answer in `*answer`: 0 at
+ * or past the end of the file, as Linux's `iomap_dio_rw` returns there
+ * before it looks at the alignment, or getattr's error; else -EINVAL, but
+ * for a read the type checks only where it meets the medium
+ * (`vfs_data_at`), as Linux's ext2 zeroes a hole without the check
+ * (`iomap_dio_hole_iter`) and asks it of the rest of the read from the
+ * first block it maps (`iomap_dio_bio_iter`): such a read goes on when it
+ * meets no block before the end of the file, or meets the first at a
+ * sector with the rest of the vector, each address and length, and its
+ * end, on sectors too. An empty element counts for nothing. 1 or 0.
  */
-static int32_t direct_read_refused(const struct open_file *ofd, uint64_t pos)
+static int direct_read_refused(const struct open_file *ofd, const struct kernel_iovec *iov,
+                               int count, uint64_t pos, int32_t *answer)
 {
+    const uint64_t mask = BLOCK_SECTOR_SIZE - 1u;
     struct vfs_stat st;
+    uint64_t want = 0, end, data, skip;
     int32_t rc = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
+    int i;
 
-    return rc != 0 ? rc : pos >= st.size ? 0 : -EINVAL;
+    if (rc != 0 || pos >= st.size) {
+        *answer = rc;
+        return 1;
+    }
+    for (i = 0; i < count; i++) {
+        want += iov[i].iov_len;
+    }
+    end = want < st.size - pos ? pos + want : st.size;
+    *answer = -EINVAL;
+    data = vfs_data_at(ofd->vmnt, ofd->fhandle, pos, end);
+    if (data >= end) {
+        return 0;
+    }
+    if (((data | (pos + want)) & mask) != 0) {
+        return 1;
+    }
+    skip = data - pos;
+    for (i = 0; i < count; i++) {
+        uint64_t len = iov[i].iov_len;
+
+        if (skip >= len) {
+            skip -= len;
+            continue;
+        }
+        if ((((uint64_t)iov[i].iov_base + skip) | (len - skip)) & mask) {
+            return 1;
+        }
+        skip = 0;
+    }
+    return 0;
 }
 
 /**
@@ -1856,6 +1897,50 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt, uint32_t 
     return total;
 }
 
+/**
+ * Whether the vector of `count` elements at `iov_user`, for a readv,
+ * writev, preadv or pwritev through the held descriptor `entry` at `pos`
+ * (-1 for its offset), breaks the alignment O_DIRECT asks of a block node
+ * (`devfs_fd_direct_misaligned`), which Linux checks over the whole vector
+ * before a byte moves (block/fops.c: `blkdev_dio_invalid`), after it cuts
+ * the vector at the device's end (`blkdev_read_iter`,
+ * `blkdev_write_iter`). A transfer at or past the end, of a device whose
+ * size cannot be read, or with an element that cannot be fetched is left to
+ * the transfer, which answers it. 1 or 0.
+ */
+static int block_vec_misaligned(fd_entry_t *entry, uintptr_t iov_user, int count, long long pos)
+{
+    struct kernel_iovec iov;
+    uint64_t at, size, left;
+    int i;
+
+    if (!entry || !entry->ofd || !(entry->ofd->status_flags & OFD_DIRECT) ||
+        !devfs_fd_raw_size(entry, &size)) {
+        return 0;
+    }
+    at = pos == -1 ? entry->ofd->raw_offset : (uint64_t)pos;
+    if (at >= size) {
+        return 0;
+    }
+    left = size - at;
+    if (devfs_fd_direct_misaligned(entry, 0, BLOCK_SECTOR_SIZE, at)) {
+        return 1;
+    }
+    for (i = 0; i < count && left > 0; i++) {
+        uint32_t len;
+
+        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
+            return 0;
+        }
+        len = (uint64_t)iov.iov_len < left ? (uint32_t)iov.iov_len : (uint32_t)left;
+        if (devfs_fd_direct_misaligned(entry, iov.iov_base, len, 0)) {
+            return 1;
+        }
+        left -= len;
+    }
+    return 0;
+}
+
 /** Whether a held descriptor is a file of a mount, whose vectors go
  * through `iov_file_write` under one lock. */
 static int iov_mount_file(const fd_entry_t *entry)
@@ -1966,6 +2051,9 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     rc = rw_offset_end(entry, (size_t)wanted);
     if (rc != 0) {
         return rc;
+    }
+    if (block_vec_misaligned(entry, iov_user, iovcnt, -1)) {
+        return -EINVAL;
     }
     return writev_elements(fd, iov_user, iovcnt, (uint32_t)wanted);
 }
@@ -7990,7 +8078,8 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * any other from `file_read_plain`, whose bytes are the page's when it was
  * chosen, since a mapping that brings the page in while that read sleeps
  * can hold only stores made after it. An O_DIRECT read the device cannot
- * take as it is (`direct_misaligned`) is `direct_read_refused`'s answer;
+ * take as it is (`direct_misaligned`) is `direct_read_refused`'s answer
+ * when it refuses;
  * one it can take leaves no copy of the bytes read in the cache
  * (`vfs_uncache`). The bytes read, which stop at the
  * first page that fails after some were read, 0 at the end, or the type's
@@ -8008,7 +8097,13 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
         return file_read_plain(ofd, buf, count, pos);
     }
     if (direct_misaligned(ofd, (__force uintptr_t)buf, count, pos)) {
-        return direct_read_refused(ofd, pos);
+        struct kernel_iovec one;
+
+        one.iov_base = (__force uintptr_t)buf;
+        one.iov_len = count;
+        if (direct_read_refused(ofd, &one, 1, pos, &r)) {
+            return r;
+        }
     }
     while (done < count) {
         if (!paged && file_read_cut(ofd)) {
@@ -8773,7 +8868,8 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
         }
     }
     wanted = iov_import(iov, iov_user, iovcnt, -1);
-    if (wanted > 0 && rw_offset_end(entry, (size_t)wanted) != 0) {
+    if (wanted > 0 && (rw_offset_end(entry, (size_t)wanted) != 0 ||
+                       block_vec_misaligned(entry, iov_user, iovcnt, -1))) {
         wanted = -EINVAL;
     }
     if (wanted > 0) {
@@ -10936,21 +11032,24 @@ static void tmpfile_leaf(char *buf, uint64_t v)
  * The open with O_TMPFILE of the directory `name`, leading '/' stripped: a
  * new regular file with no name there, opened with `flags`, as Linux's
  * `do_tmpfile` and `vfs_tmpfile` make one (fs/namei.c in 6.12). The walk
- * follows a final link unless O_NOFOLLOW. Then come -ENOTDIR for anything
- * but a directory, -EOPNOTSUPP for /dev, /proc and /sys, -EROFS on a
- * read-only mount, the write and search permission on the directory,
- * -EOPNOTSUPP on the KRFFS root and on a type without `tmpfile`, and the
- * type's error, made under the directory's lock (`vfs_node_lock`). The file's
- * permission bits are those of `mode` less the umask, and it is owned as a
- * file `create` makes. Without O_EXCL the file is linkable: linkat(2) may
- * give it a name once, through /proc/self/fd/N or AT_EMPTY_PATH. The
- * description's record names "#INO" in the directory, deleted from the
- * start, so that /proc/PID/fd shows "/dir/#INO (deleted)", as Linux's
- * d_path shows such a file; inotify hears of the open by that name. O_TRUNC
- * has nothing to cut. The descriptor, reserved before the walk as
- * `do_open` reserves it, or -errno with everything given back.
+ * follows a final link unless O_NOFOLLOW, and whatever O_NOFOLLOW says when
+ * the path named a directory by its end, `end` (`path_names_dir`), as
+ * Linux's walk follows a link before a trailing slash. Then come -ENOTDIR
+ * for anything but a directory, -EOPNOTSUPP for /dev, /proc and /sys,
+ * -EROFS on a read-only mount, the write and search permission on the
+ * directory, -EOPNOTSUPP on the KRFFS root and on a type without
+ * `tmpfile`, and the type's error, made under the directory's lock
+ * (`vfs_node_lock`). The file's permission bits are those of `mode` less
+ * the umask, and it is owned as a file `create` makes. Without O_EXCL the
+ * file is linkable: linkat(2) may give it a name once, through
+ * /proc/self/fd/N or AT_EMPTY_PATH. The description's record names "#INO"
+ * in the directory, deleted from the start, so that /proc/PID/fd shows
+ * "/dir/#INO (deleted)", as Linux's d_path shows such a file; inotify hears
+ * of the open by that name. O_TRUNC has nothing to cut. The descriptor,
+ * reserved before the walk as `do_open` reserves it, or -errno with
+ * everything given back.
  */
-static int32_t open_tmpfile(const char *name, int flags, uint32_t mode)
+static int32_t open_tmpfile(const char *name, int flags, uint32_t mode, int end)
 {
     struct vfs_name *entry = NULL;
     struct vfs_ref dir, file;
@@ -10966,7 +11065,7 @@ static int32_t open_tmpfile(const char *name, int flags, uint32_t mode)
     if (fd < 0) {
         return fd;
     }
-    rc = resolve_named(name, (flags & O_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, 0, &dir);
+    rc = resolve_named(name, (flags & O_NOFOLLOW) && !end ? VFS_WALK_NOFOLLOW : 0, 0, &dir);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         return rc;
@@ -11046,7 +11145,7 @@ static int32_t open_tmpfile(const char *name, int flags, uint32_t mode)
 static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
 {
     if (open_is_tmpfile(flags)) {
-        return open_tmpfile(name, flags, mode);
+        return open_tmpfile(name, flags, mode, end);
     }
     if (end && (flags & (O_CREAT | O_PATH)) == O_CREAT) {
         return open_create_dir_end(name, flags, end);
@@ -16529,6 +16628,9 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         return write ? iov_file_write(held, iov_user, iovcnt, pos, 0)
                      : iov_file_read(held, iov_user, iovcnt, pos);
     }
+    if (block_vec_misaligned(held, iov_user, iovcnt, pos)) {
+        return -EINVAL;
+    }
     return iov_at_move(fd, iov_user, iovcnt, pos, write, wanted);
 }
 
@@ -16800,8 +16902,9 @@ static long iov_file_elements_read(struct open_file *ofd, const struct kernel_io
  * which it takes and drops, for the imported vector `iov` of `count`
  * elements and `wanted` bytes, whose first `room` bytes the caller can
  * write: -EINVAL when, at the shared offset (`pos` -1), the end passes
- * 2^63-1 (`rw_offset_end`); for an O_DIRECT read that breaks the alignment
- * rules, `direct_read_refused`'s answer; for no writable byte,
+ * 2^63-1 (`rw_offset_end`); for an O_DIRECT read whose vector or offset
+ * breaks the alignment rules, judged over the whole vector before an element
+ * moves, `direct_read_refused`'s answer when it refuses; for no writable byte,
  * `file_read_unwritable`'s; otherwise the elements' read
  * (`iov_file_elements_read`). A read of a byte or more reports IN_ACCESS to
  * inotify. The big lock the read took is given back before the return.
@@ -16810,14 +16913,18 @@ static long iov_file_read_locked(fd_entry_t *entry, const struct kernel_iovec *i
                                  long long pos, uint32_t wanted, uint32_t room)
 {
     struct open_file *ofd = entry->ofd;
+    uint64_t at;
+    int32_t answer;
     int big = 0;
     long rc;
 
     fd_ofd_lock(ofd);
+    at = pos == -1 ? ofd->offset : (uint64_t)pos;
     if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
         rc = -EINVAL;
-    } else if (direct_iov_misaligned(ofd, iov, count)) {
-        rc = direct_read_refused(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
+    } else if ((direct_iov_misaligned(ofd, iov, count) || direct_misaligned(ofd, 0, wanted, at)) &&
+               direct_read_refused(ofd, iov, count, at, &answer)) {
+        rc = answer;
     } else if (room == 0) {
         rc = file_read_unwritable(ofd, pos == -1 ? ofd->offset : (uint64_t)pos);
     } else {
@@ -20043,6 +20150,34 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
 }
 
 /**
+ * Write permission on the directory that `leaf` names in `parent`, which a
+ * rename that gives it another parent changes by rewriting its `..`, as
+ * Linux's `vfs_rename` asks of each directory it moves (fs/namei.c in 6.12).
+ * 0 for a name that is missing or not a directory, else `cred_access_ref`'s
+ * answer or the lookup's error.
+ */
+static int32_t rename_dir_write(const struct vfs_ref *parent, const char *leaf)
+{
+    const struct vfs_ops *ops = parent->mnt->type->ops;
+    struct vfs_ref r;
+    struct vfs_stat st;
+    int32_t rc = ops->lookup(parent->mnt, parent->node, leaf, &r.node);
+
+    if (rc != 0) {
+        return rc == -ENOENT ? 0 : rc;
+    }
+    r.mnt = parent->mnt;
+    rc = vfs_getattr(r.mnt, r.node, &st);
+    if (rc == 0 && (st.mode & 0170000u) == 0040000u) {
+        rc = cred_access_ref(&r, CRED_W, 0);
+    }
+    if (ops->put) {
+        ops->put(r.mnt, r.node);
+    }
+    return rc;
+}
+
+/**
  * Rename `oleaf` in `opar` to `nleaf` in `npar` on a mounted type: the
  * other half of `do_rename`, which holds the rename's locks
  * (`vfs_rename_lock`) from the first lookup through the rename: the mount's
@@ -20057,8 +20192,9 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
  * slash, the new one first, as Linux's `do_renameat2` judges them. Two
  * names of one node then change nothing under RENAME_EXCHANGE and
  * RENAME_WHITEOUT, as Linux's `vfs_rename` returns before it looks further;
- * then come the removal rules of `cred_remove_ref` for both names, and the
- * type's own answers (`vfs_rename_flags` for either flag).
+ * then come the removal rules of `cred_remove_ref` for both names, write
+ * permission on each directory that changes parent (`rename_dir_write`),
+ * and the type's own answers (`vfs_rename_flags` for either flag).
  */
 static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *oleaf,
                                     const struct vfs_ref *npar, const char *nleaf, int flags,
@@ -20098,6 +20234,12 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
     }
     if (rc == 0) {
         rc = cred_remove_ref(npar, nleaf);
+    }
+    if (rc == 0 && opar->node != npar->node) {
+        rc = rename_dir_write(opar, oleaf);
+        if (rc == 0 && (flags & RENAME_EXCHANGE)) {
+            rc = rename_dir_write(npar, nleaf);
+        }
     }
     if (rc == 0 && (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT))) {
         rc = vfs_rename_flags(opar->mnt, opar->node, oleaf, npar->node, nleaf, (uint32_t)flags);

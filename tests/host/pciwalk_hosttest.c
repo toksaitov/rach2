@@ -863,6 +863,259 @@ static void claim_rows(void)
     list_forget();
 }
 
+/** Forget the host's ranges and every root's windows, giving back their
+ * heap arrays. */
+static void host_forget(void)
+{
+    int b;
+
+    if (pci_host_ranges != pci_host_first) {
+        kfree(pci_host_ranges);
+    }
+    pci_host_ranges = pci_host_first;
+    pci_host_cap = PCI_HOST_FIRST;
+    pci_host_nranges = 0;
+    for (b = 0; b < 256; b++) {
+        kfree(pci_roots[b].win);
+        pci_roots[b].win = NULL;
+        pci_roots[b].n = 0;
+        pci_roots[b].cap = 0;
+        pci_roots[b].lost = 0;
+    }
+}
+
+/** Keep the windows `win`, `n` of them, for root bus `bus`; 0 when each
+ * was kept. */
+static int root_windows(int bus, const struct pci_aperture *win, int n)
+{
+    int k, rc = 0;
+
+    for (k = 0; k < n; k++) {
+        rc |= pci_root_window_add((uint8_t)bus, &win[k]);
+    }
+    return rc;
+}
+
+/**
+ * On the model of claim_route_rows, a root keeps every window its host
+ * bridge gives, the ninth of nine among them, and a root whose window the
+ * heap could not keep refuses the BARs of its kind.
+ */
+static void root_window_rows(void)
+{
+    struct pci_aperture nine[9];
+    int k;
+
+    host_forget();
+    for (k = 0; k < 9; k++) {
+        nine[k].start = 0xC0000000u + 0x01000000u * (unsigned int)k;
+        nine[k].end = nine[k].start + 0x007FFFFFu;
+        nine[k].io = 0;
+    }
+    nine[8].start = 0xF8000000u;
+    nine[8].end = 0xF8FFFFFFu;
+    check(root_windows(0, nine, 9) == 0 && pci_resource_claimable(0, 3, 0, 4) == 0,
+          "claim: a BAR in the ninth of nine host bridge windows is claimed");
+    check(pci_resource_claimable(0, 3, 0, 2) == -EINVAL, "claim: one in none of the nine is not");
+    host_forget();
+    heap_refuses = 1;
+    check(root_windows(0, nine, 1) == -ENOMEM && pci_resource_claimable(0, 3, 0, 1) == -EINVAL,
+          "claim: a root whose window the heap could not keep refuses BARs of the kind");
+    heap_refuses = 0;
+}
+
+/**
+ * The table of the host's ranges joins only ranges that touch, keeps 64
+ * pages apart with the gaps between them free, moves to the heap past its
+ * first array, and only when the heap refuses joins two and loses none.
+ */
+static void host_range_rows(void)
+{
+    uint64_t next;
+    int k, lost = 0, free_gap = 1;
+
+    host_forget();
+    pci_host_reserve(0x9000u, 0x90FFu, 1);
+    pci_host_reserve(0x9100u, 0x91FFu, 1);
+    pci_host_reserve(0x9080u, 0x9180u, 1);
+    check(pci_host_nranges == 1 && pci_host_ranges[0].start == 0x9000u &&
+              pci_host_ranges[0].end == 0x91FFu,
+          "reserve: ranges that touch become one");
+    host_forget();
+    for (k = 0; k < 64; k++) {
+        pci_host_reserve(0x10000000u + 0x2000u * (unsigned int)k,
+                         0x10000FFFu + 0x2000u * (unsigned int)k, 0);
+    }
+    pci_host_reserve(0x40000000u, 0x4FFFFFFFu, 0);
+    for (k = 0; k < 64; k++) {
+        lost |= !pci_host_taken(0x10000000u + 0x2000u * (unsigned int)k,
+                                0x10000000u + 0x2000u * (unsigned int)k, 0, &next);
+        free_gap &= !pci_host_taken(0x10001000u + 0x2000u * (unsigned int)k,
+                                    0x10001FFFu + 0x2000u * (unsigned int)k, 0, &next);
+    }
+    check(pci_host_nranges == 65 && !lost && free_gap &&
+              pci_host_taken(0x48000000u, 0x48000000u, 0, &next),
+          "reserve: 64 pages apart and a distant range are kept apart, the gaps left free");
+    host_forget();
+    for (k = 0; k < 3 * PCI_HOST_FIRST; k++) {
+        pci_host_reserve(0xA0000000u + 0x2000u * (unsigned int)k,
+                         0xA0000FFFu + 0x2000u * (unsigned int)k, 0);
+    }
+    lost = 0;
+    free_gap = 1;
+    for (k = 0; k < 3 * PCI_HOST_FIRST; k++) {
+        lost |= !pci_host_taken(0xA0000000u + 0x2000u * (unsigned int)k,
+                                0xA0000000u + 0x2000u * (unsigned int)k, 0, &next);
+        free_gap &= !pci_host_taken(0xA0001000u + 0x2000u * (unsigned int)k,
+                                    0xA0001000u + 0x2000u * (unsigned int)k, 0, &next);
+    }
+    check(pci_host_nranges == 3 * PCI_HOST_FIRST && pci_host_ranges != pci_host_first && !lost &&
+              free_gap,
+          "reserve: past the first table the ranges move to the heap, each kept apart");
+    host_forget();
+    for (k = 0; k < PCI_HOST_FIRST; k++) {
+        pci_host_reserve(0xA000u + 0x10u * (unsigned int)k, 0xA000u + 0x10u * (unsigned int)k, 1);
+    }
+    heap_refuses = 1;
+    lost = 0;
+    pci_host_reserve(0x40000000u, 0x4FFFFFFFu, 0);
+    for (k = 0; k < PCI_HOST_FIRST; k++) {
+        lost |= !pci_host_taken(0xA000u + 0x10u * (unsigned int)k,
+                                0xA000u + 0x10u * (unsigned int)k, 1, &next);
+    }
+    heap_refuses = 0;
+    check(pci_host_nranges == PCI_HOST_FIRST && !lost &&
+              pci_host_taken(0x48000000u, 0x48000000u, 0, &next) &&
+              !pci_host_taken(0x48000000u, 0x48000000u, 1, &next),
+          "reserve: a full table the heap cannot grow joins two and loses none");
+    host_forget();
+}
+
+/**
+ * pci_resource_claimable follows a BAR to the root and holds the host's
+ * ranges, as Linux's pci_find_parent_resource and resource tree: every
+ * bridge on the way must pass it, a prefetchable window only a
+ * prefetchable BAR, and the host bridge of the root bus it reaches one of
+ * its windows, however many it has; and a BAR over COM1, a range
+ * `pci_host_reserve` holds or another bridge's window on its bus is
+ * refused. Then root_window_rows and host_range_rows run on the model.
+ */
+static void claim_route_rows(void)
+{
+    struct pci_aperture win[3] = {
+        {0x0000, 0x0CF7, 1}, {0x0D00, 0xFFFF, 1}, {0xC0000000u, 0xFEAFFFFFu, 0}};
+    struct pci_aperture high = {0xC0000000u, 0xCFFFFFFFu, 0};
+    struct func *f, *bridge;
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    f = model_add(0, 3, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x000003F9u, 0xFFFFFFF8u);
+    model_bar(f, 0x14, 0x10000000u, 0xFFFFF000u);
+    model_bar(f, 0x18, 0x80000000u, 0xFFFFF000u);
+    model_bar(f, 0x1C, 0xC0000000u, 0xFFFFF000u);
+    model_bar(f, 0x20, 0xF8000000u, 0xFFFFF000u);
+    bridge = model_bridge(0, 4, 0, 0x01, 1, 2);
+    put32(bridge, 0x1C, 0x00001010u);
+    put32(bridge, 0x20, 0xD0F0D000u);
+    put32(bridge, 0x24, 0xE0F0E000u);
+    bridge = model_bridge(1, 0, 0, 0x01, 2, 2);
+    put32(bridge, 0x1C, 0x00003030u);
+    put32(bridge, 0x20, 0xD000D000u);
+    f = model_add(1, 1, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x00001101u, 0xFFFFFF00u);
+    model_bar(f, 0x14, 0xD0000000u, 0xFFFFF000u);
+    model_bar(f, 0x18, 0xD0800000u, 0xFFFFF000u);
+    model_bar(f, 0x1C, 0xE0000000u, 0xFFFFF000u);
+    model_bar(f, 0x20, 0xE0100008u, 0xFFFFF000u);
+    f = model_add(2, 0, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0x00003001u, 0xFFFFFF00u);
+    model_bar(f, 0x14, 0x00001001u, 0xFFFFFF00u);
+    f = model_add(0x80, 0, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0xC1000000u, 0xFFFFF000u);
+    model_bar(f, 0x14, 0xD1000000u, 0xFFFFF000u);
+    list_forget();
+    (void)pci_list_count();
+
+    check(pci_resource_claimable(0, 3, 0, 0) == -EBUSY, "claim: an I/O BAR on COM1's ports is not");
+    check(pci_resource_claimable(0, 3, 0, 1) == 0 && pci_resource_claimable(0, 3, 0, 2) == 0,
+          "claim: with nothing reserved and no host bridge windows, memory BARs are claimed");
+    pci_host_reserve(0x100000u, 0x7FFFFFFFu, 0);
+    check(pci_resource_claimable(0, 3, 0, 1) == -EBUSY,
+          "claim: a memory BAR over RAM the firmware's map lists is not");
+    check(root_windows(0, win, 3) == 0, "root: bus 0's windows are kept");
+    check(pci_resource_claimable(0, 3, 0, 2) == -EINVAL,
+          "claim: nor one outside the host bridge's memory windows");
+    check(pci_resource_claimable(0, 3, 0, 3) == 0, "claim: one inside them is");
+    check(pci_resource_claimable(2, 0, 0, 0) == -EINVAL,
+          "claim: a BAR in its bridge's window but outside the upstream bridge's is not");
+    check(pci_resource_claimable(2, 0, 0, 1) == -EINVAL,
+          "claim: nor one in the upstream window but outside its own bridge's");
+    check(pci_resource_claimable(1, 1, 0, 0) == 0 && pci_resource_claimable(1, 1, 0, 2) == 0,
+          "claim: BARs in each window up to the root are claimed");
+    check(pci_resource_claimable(1, 1, 0, 1) == -EBUSY,
+          "claim: a BAR over another bridge's window on its bus is not");
+    check(pci_resource_claimable(1, 1, 0, 3) == -EINVAL,
+          "claim: nor a BAR that is not prefetchable in a prefetchable window");
+    check(pci_resource_claimable(1, 1, 0, 4) == 0, "claim: a prefetchable one there is");
+    pci_host_reserve(0x1100u, 0x11FFu, 1);
+    check(pci_resource_claimable(1, 1, 0, 0) == -EBUSY,
+          "claim: an I/O BAR over ports a system device holds is not");
+    check(pci_resource_claimable(0x80, 0, 0, 0) == 0 && pci_resource_claimable(0x80, 0, 0, 1) == 0,
+          "claim: on a root bus whose host bridge gave no windows, BARs are claimed");
+    check(root_windows(0x80, &high, 1) == 0 && pci_resource_claimable(0x80, 0, 0, 0) == 0,
+          "claim: on root bus 0x80, a BAR inside its host bridge's window is claimed");
+    check(pci_resource_claimable(0x80, 0, 0, 1) == -EINVAL,
+          "claim: and one outside it is not, though bus 0's windows hold it");
+
+    root_window_rows();
+    host_range_rows();
+    host_forget();
+    list_forget();
+}
+
+/**
+ * A root's windows that overlap are joined, as Linux's
+ * acpi_pci_root_validate_resources expands one over another: a 512 MiB BAR
+ * across two windows of root bus 0x80 that overlap is claimed, a window
+ * that overlaps two kept apart joins all three, and windows that only
+ * adjoin, or are of another kind, stay apart.
+ */
+static void root_join_rows(void)
+{
+    struct pci_aperture two[2] = {{0xC0000000u, 0xD7FFFFFFu, 0}, {0xC8000000u, 0xDFFFFFFFu, 0}};
+    struct pci_aperture three[3] = {{0xC0000000u, 0xC7FFFFFFu, 0},
+                                    {0xD0000000u, 0xD7FFFFFFu, 0},
+                                    {0xC4000000u, 0xD3FFFFFFu, 0}};
+    struct pci_aperture apart[3] = {
+        {0xE0000000u, 0xE7FFFFFFu, 0}, {0xE8000000u, 0xEFFFFFFFu, 0}, {0x1000u, 0xE7FFFFFFu, 1}};
+    const struct pci_aperture *ap;
+    struct func *f;
+    int n;
+
+    model_reset();
+    (void)model_add(0, 0, 0, 0x12378086u, 0x0600u, 0x00);
+    f = model_add(0x80, 0, 0, 0x10001AF4u, 0x0200u, 0x00);
+    model_bar(f, 0x10, 0xC0000000u, 0xE0000000u);
+    list_forget();
+    (void)pci_list_count();
+    host_forget();
+
+    check(root_windows(0x80, two, 2) == 0 && pci_resource_claimable(0x80, 0, 0, 0) == 0,
+          "root: a BAR across two windows that overlap is claimed");
+    n = pci_root_windows(0x80, &ap);
+    check(n == 1 && ap[0].start == 0xC0000000u && ap[0].end == 0xDFFFFFFFu && !ap[0].io,
+          "root: the two windows that overlap are one");
+    check(root_windows(0x81, three, 3) == 0 && pci_root_windows(0x81, &ap) == 1 &&
+              ap[0].start == 0xC0000000u && ap[0].end == 0xD7FFFFFFu,
+          "root: a window over two kept apart joins all three");
+    check(root_windows(0x82, apart, 3) == 0 && pci_root_windows(0x82, &ap) == 3 &&
+              ap[0].end == 0xE7FFFFFFu && ap[1].start == 0xE8000000u && ap[2].io,
+          "root: windows that adjoin, and one of ports over memory, stay apart");
+    host_forget();
+    list_forget();
+}
+
 /** Run the rows. */
 /** 0: no row maps a window of a BAR (pci_bar_map). */
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
@@ -890,6 +1143,8 @@ int main(void)
     size_rows();
     hotplug_rows();
     claim_rows();
+    claim_route_rows();
+    root_join_rows();
     if (fails) {
         printf("pciwalk_hosttest: %d failed\n", fails);
         return 1;

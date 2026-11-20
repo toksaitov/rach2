@@ -253,6 +253,25 @@ int frame_map_reserve(struct frame_map *m, uint64_t start, uint64_t end)
     return 0;
 }
 
+void frame_map_host_ranges(const struct frame_map *m, const void *mmap_buf, uint32_t mmap_len,
+                           uint32_t mem_upper_kb, void (*hold)(uint64_t first, uint64_t last))
+{
+    uint64_t addr, len;
+    uint32_t i, type;
+
+    for (i = 0; frame_map_entry(mmap_buf, mmap_len, i, &addr, &len, &type); i++) {
+        if (len != 0 && (type != 2 || addr < 0x100000u)) {
+            hold(addr, addr + len - 1u < addr ? ~(uint64_t)0 : addr + len - 1u);
+        }
+    }
+    if (m->from_mem_upper) {
+        hold(0, 0x9FFFFu);
+        if (mem_upper_kb > 0) {
+            hold(0x100000u, 0x100000u + (uint64_t)mem_upper_kb * 1024u - 1u);
+        }
+    }
+}
+
 int frame_map_usable(const struct frame_map *m, uint64_t frame)
 {
     uint64_t start = frame * FRAME_PAGE_SIZE;

@@ -4437,6 +4437,19 @@ static void admit_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, 
     em_finish_node(ext2_em_of(mnt), h->node);
 }
 
+/** The `data_at` of `vfs_ops`: `ext2_data_at` of the handle's node,
+ * admitted. */
+static uint64_t admit_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end)
+{
+    struct ext2_handle *h = handle;
+    uint64_t at;
+
+    em_enter_node(ext2_em_of(mnt), h->node);
+    at = ext2_data_at(mnt, h->node, offset, end);
+    em_finish_node(ext2_em_of(mnt), h->node);
+    return at;
+}
+
 /** Read a node's external attribute block into a private checked copy, as
  * a block of kind READ_ATTR: one out of range is refused and reported, and a
  * failed read returned unreported, as Linux's `ext2_xattr_get` returns it.
@@ -4718,6 +4731,7 @@ static const struct vfs_ops ext2_ops = {
     admit_tmpfile,
     admit_uncache,
     0, /* phase */
+    admit_data_at,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops,        0, 0, 1, 1, 1,

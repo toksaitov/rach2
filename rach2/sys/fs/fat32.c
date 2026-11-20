@@ -20,6 +20,7 @@
 #include "../lib/kstring.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "../proc/wait_queue.h"
 #include "../rtc.h"
 #include "bcache.h"
@@ -1600,6 +1601,61 @@ static int32_t fat_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
     return (int32_t)done;
 }
 
+/** Drop from the buffer cache the clean blocks that hold the volume's bytes
+ * [`off`, `off` + `len`) (`bcache_forget`). */
+static void fat_forget_bytes(struct fat_mount *fm, uint64_t off, uint32_t len)
+{
+    uint64_t blk;
+
+    for (blk = off / BCACHE_BLOCK_BYTES; blk * BCACHE_BLOCK_BYTES < off + len; blk++) {
+        bcache_forget(fm->dev, blk);
+    }
+}
+
+/**
+ * The `uncache` of `vfs_ops`: drop from the buffer cache the clean blocks of
+ * bytes [`offset`, `offset` + `len`) of the regular file `handle`, after an
+ * O_DIRECT read or write, so that the file's data stays in memory no longer
+ * than the call, as Linux's FAT reads and writes O_DIRECT around the page
+ * cache (`fat_direct_IO`). A block that is dirty or held stays, and so
+ * does one that also holds the FAT or another file, which a later read
+ * brings back. Takes the big lock, under which the chain does not change;
+ * a chain that ends early leaves the rest cached.
+ */
+static void fat_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t len)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    struct fat_node *n = handle;
+    uint32_t cbytes = cluster_bytes(fm);
+    uint64_t at, end;
+    int big = !bkl_held();
+
+    if (n->is_dir || n->first == 0 || len == 0) {
+        return;
+    }
+    if (big) {
+        bkl_enter();
+    }
+    end = len > n->size || offset > n->size - len ? n->size : offset + len;
+    for (at = offset; at < end;) {
+        uint32_t in = (uint32_t)at % cbytes; /* a FAT32 file is below 4 GiB */
+        uint32_t take = cbytes - in;
+        uint32_t cluster;
+
+        if (take > end - at) {
+            take = (uint32_t)(end - at);
+        }
+        if (chain_at(fm, n, n->first, (uint32_t)at / cbytes, &cluster) != 0) {
+            break;
+        }
+        fat_forget_bytes(fm, cluster_offset(fm, cluster) + in, take);
+        at += take;
+    }
+    if (big) {
+        bkl_exit();
+    }
+}
+
 /** The `readdir` operation: the cursor is the index of the next 32-byte
  * entry. */
 static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
@@ -2491,6 +2547,21 @@ static int is_under(struct fat_mount *fm, uint32_t dir, uint32_t anc)
     return 0;
 }
 
+/** Point the `..` entry of the directory whose chain starts at `c` at the
+ * directory at cluster `parent`, 0 for the root, written through. */
+static int set_dotdot(struct fat_mount *fm, uint32_t c, uint32_t parent)
+{
+    uint8_t dotdot[32];
+    int rc = fat_read_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32);
+
+    if (rc == 0) {
+        put16(dotdot + 20, parent >> 16);
+        put16(dotdot + 26, parent & 0xFFFFu);
+        rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, FAT_THROUGH);
+    }
+    return rc;
+}
+
 /**
  * The `rename` operation, within one mount.
  *
@@ -2622,15 +2693,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
         goto out;
     }
     if (is_dir && od_cluster != nd_cluster) {
-        uint8_t dotdot[32];
-        uint32_t c = entry_first(src.ent.raw);
-
-        rc = fat_read_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32);
-        if (rc == 0) {
-            put16(dotdot + 20, nd_cluster >> 16);
-            put16(dotdot + 26, nd_cluster & 0xFFFFu);
-            rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, FAT_THROUGH);
-        }
+        rc = set_dotdot(fm, entry_first(src.ent.raw), nd_cluster);
         if (rc == 0) {
             rc = bcache_flush(fm->dev);
         }
@@ -2654,6 +2717,314 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
 out:
     if (moved) {
         fat_put(mnt, moved);
+    }
+    return rc;
+}
+
+/** The node in memory of the file or directory of the short entry `sc` of
+ * the directory at cluster `dir_cluster`, held or not, or NULL. */
+static struct fat_node *scan_node(struct fat_mount *fm, uint32_t dir_cluster,
+                                  const struct fat_scan *sc)
+{
+    return (sc->ent.raw[11] & ATTR_DIRECTORY) ? dir_node_at(fm, entry_first(sc->ent.raw))
+                                              : node_at(fm, dir_cluster, sc->index);
+}
+
+/** Build in `raw` the short entry that keeps the name, and its case bits,
+ * of the entry `name` and gives it the file of the entry `from`, whose node
+ * `n`, when one is in memory, has its newest fields. */
+static void entry_swapped(const struct fat_node *n, const uint8_t *from, const uint8_t *name,
+                          uint8_t *raw)
+{
+    if (n) {
+        entry_of(n, raw);
+    } else {
+        k_memcpy(raw, from, 32);
+    }
+    k_memcpy(raw, name, 11);
+    raw[12] = name[12];
+}
+
+/* One name of an exchange: its directory's node and cluster, 0 for the
+ * root, its short entry and the node in memory of its file, or NULL. */
+struct fat_side {
+    struct fat_node *dir;
+    uint32_t cluster;
+    struct fat_scan sc;
+    struct fat_node *node;
+};
+
+/** Whether the side's file is a directory. */
+static int side_is_dir(const struct fat_side *s)
+{
+    return (s->sc.ent.raw[11] & ATTR_DIRECTORY) != 0;
+}
+
+/** Whether an exchange of the names `a` and `b` would move a directory below
+ * itself: -EINVAL when it would, 0 when not, or a walk's error. */
+static int exchange_allowed(struct fat_mount *fm, const struct fat_side *a,
+                            const struct fat_side *b)
+{
+    int rc = 0;
+
+    if (a->cluster == b->cluster) {
+        return 0;
+    }
+    if (side_is_dir(a)) {
+        rc = is_under(fm, b->cluster, entry_first(a->sc.ent.raw));
+    }
+    if (rc == 0 && side_is_dir(b)) {
+        rc = is_under(fm, a->cluster, entry_first(b->sc.ent.raw));
+    }
+    return rc < 0 ? rc : rc ? -EINVAL : 0;
+}
+
+/* The most places an exchange writes: the two short entries, then the `..`
+ * of each side's directory that changes parent. */
+#define EXCHANGE_SPOTS 4
+
+/* One place an exchange writes. */
+struct exchange_spot {
+    uint64_t off;    /* byte offset on the volume */
+    uint8_t old[32]; /* its bytes before the exchange */
+    uint8_t now[32]; /* the bytes the exchange gives it */
+    uint32_t parent; /* for a `..`, the cluster it is to name, 0 the root */
+};
+
+/* The places of one exchange. */
+struct exchange {
+    struct exchange_spot s[EXCHANGE_SPOTS];
+    int n;
+};
+
+/** Read the bytes of every place of `xc` into its `old`, holding one block at
+ * a time. 0, or -EIO when a block cannot be read. */
+static int exchange_read(struct fat_mount *fm, struct exchange *xc)
+{
+    int i;
+
+    for (i = 0; i < xc->n; i++) {
+        struct exchange_spot *s = &xc->s[i];
+        struct bbuf *b = bcache_get(fm->dev, s->off / BCACHE_BLOCK_BYTES);
+        uint32_t at = (uint32_t)(s->off % BCACHE_BLOCK_BYTES);
+
+        if (!b) {
+            return -EIO;
+        }
+        if (at + 32 > b->bytes) {
+            bcache_release(b);
+            return -EIO;
+        }
+        k_memcpy(s->old, b->data + at, 32);
+        bcache_release(b);
+    }
+    return 0;
+}
+
+/** Add to `xc` the place of the `..` entry of the directory whose chain
+ * starts at `c`, to point at the directory at cluster `parent`, 0 for the
+ * root; its bytes are filled once they are read. */
+static void exchange_dotdot(struct fat_mount *fm, struct exchange *xc, uint32_t c, uint32_t parent)
+{
+    struct exchange_spot *s = &xc->s[xc->n++];
+
+    s->off = cluster_offset(fm, c) + 32;
+    s->parent = parent;
+}
+
+/**
+ * Undo the first `done` places of `xc`, the last first, as Linux's
+ * `vfat_rename_exchange` does after a failed step: each takes back its old
+ * bytes in the cache, marked dirty, so that the names in memory reach their
+ * files again and no later write leaves the new bytes on the medium. Each
+ * block is then written by `bcache_sync_block`, which writes it whatever
+ * write of the device failed before, and the device flushed. A block that
+ * cannot be read or written is recorded, and the volume, marked dirty since
+ * the exchange began, keeps both names on one file for the next mount's
+ * check, as Linux leaves it after `fat_fs_error`; a restored block left
+ * dirty goes at the next sync.
+ */
+static void exchange_undo(struct fat_mount *fm, const struct exchange *xc, int done)
+{
+    int rc = 0, i;
+
+    for (i = done - 1; i >= 0; i--) {
+        const struct exchange_spot *s = &xc->s[i];
+        struct bbuf *b = bcache_get(fm->dev, s->off / BCACHE_BLOCK_BYTES);
+
+        if (!b) {
+            rc = rc != 0 ? rc : -EIO;
+            continue;
+        }
+        k_memcpy(b->data + s->off % BCACHE_BLOCK_BYTES, s->old, 32);
+        bcache_dirty_entry(b);
+        bcache_release(b);
+    }
+    for (i = done - 1; i >= 0; i--) {
+        int w = bcache_sync_block(fm->dev, xc->s[i].off / BCACHE_BLOCK_BYTES);
+
+        rc = rc != 0 ? rc : w;
+    }
+    if (rc == 0) {
+        rc = bcache_flush(fm->dev);
+    }
+    if (rc != 0) {
+        klog(KLOG_WARN, "vfat", "exchange: undo: not written (%d); the volume needs a check", rc);
+    }
+}
+
+/**
+ * Write the exchange of `a` and `b`: each short entry keeps its name and
+ * takes the other's file, a directory that changes parent has its `..`
+ * rewritten, and the writes are flushed. Every place is read before a byte
+ * changes, so that a block that cannot be read then fails the exchange with
+ * nothing written. One block is held at a time, so that a write through a
+ * loop device leaves the file system under it the holds its own write takes
+ * (`BCACHE_HOLD_MAX`). A place whose block cannot be read again, a write or
+ * the flush that fails has the places changed so far undone
+ * (`exchange_undo`). 0 or the first error.
+ */
+static int exchange_write(struct fat_mount *fm, const struct fat_side *a, const struct fat_side *b)
+{
+    struct exchange xc;
+    int rc, i, done;
+
+    xc.n = 2;
+    rc = entry_offset(fm, a->dir->first, a->sc.index, &xc.s[0].off);
+    if (rc == 0) {
+        rc = entry_offset(fm, b->dir->first, b->sc.index, &xc.s[1].off);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (a->cluster != b->cluster && side_is_dir(a)) {
+        exchange_dotdot(fm, &xc, entry_first(a->sc.ent.raw), b->cluster);
+    }
+    if (a->cluster != b->cluster && side_is_dir(b)) {
+        exchange_dotdot(fm, &xc, entry_first(b->sc.ent.raw), a->cluster);
+    }
+    rc = exchange_read(fm, &xc);
+    if (rc != 0) {
+        return rc;
+    }
+    for (i = 2; i < xc.n; i++) {
+        k_memcpy(xc.s[i].now, xc.s[i].old, 32);
+        put16(xc.s[i].now + 20, xc.s[i].parent >> 16);
+        put16(xc.s[i].now + 26, xc.s[i].parent & 0xFFFFu);
+    }
+    entry_swapped(b->node, xc.s[1].old, xc.s[0].old, xc.s[0].now);
+    entry_swapped(a->node, xc.s[0].old, xc.s[1].old, xc.s[1].now);
+    for (done = 0; done < xc.n && rc == 0; done++) {
+        const struct exchange_spot *s = &xc.s[done];
+        struct bbuf *blk = bcache_get(fm->dev, s->off / BCACHE_BLOCK_BYTES);
+
+        if (!blk) {
+            rc = -EIO;
+            break;
+        }
+        k_memcpy(blk->data + s->off % BCACHE_BLOCK_BYTES, s->now, 32);
+        rc = bcache_write(blk);
+        bcache_release(blk);
+    }
+    if (rc == 0) {
+        rc = bcache_flush(fm->dev);
+    }
+    if (rc != 0) {
+        exchange_undo(fm, &xc, done);
+    }
+    return rc;
+}
+
+/** Move the node in memory of `from`'s file, if any, to the entry of `to`,
+ * whose name it takes. */
+static void side_move(const struct fat_side *from, const struct fat_side *to)
+{
+    struct fat_node *n = from->node;
+
+    if (n) {
+        k_memcpy(n->name11, to->sc.ent.raw, 11);
+        n->lower = to->sc.ent.raw[12];
+        n->dir_cluster = to->cluster;
+        n->index = to->sc.index;
+    }
+}
+
+/** Find the name `name` in the directory `dir` of `mnt` for an exchange,
+ * into `s`: 0, -ENOENT, or the scan's error. */
+static int side_find(struct vfs_mount *mnt, struct fat_node *dir, const char *name,
+                     struct fat_side *s)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    int got;
+
+    s->dir = dir ? dir : mnt->root;
+    s->cluster = s->dir->first == fm->root_cluster ? 0 : s->dir->first;
+    s->node = 0;
+    got = find_entry(fm, s->dir, s->dir->first, name, &s->sc);
+    return got < 0 ? got : got == 0 ? -ENOENT : 0;
+}
+
+/**
+ * The `rename_flags` operation: RENAME_EXCHANGE, as Linux's
+ * `vfat_rename_exchange` makes it (fs/fat/namei_vfat.c in 6.12). Each name
+ * keeps its entries and its place, and the two short entries swap the
+ * files they describe: attributes, times, first cluster and size. A
+ * directory that moves to the other parent has its `..` rewritten, and the
+ * nodes in memory, held through the writes, take their new places and
+ * names. Every place is read before a byte changes, and a failed write
+ * has what was changed undone in the cache and on the medium, with the nodes
+ * left where they were (`exchange_write`). As on
+ * Linux the two entries are two writes, so a crash between leaves both
+ * naming one file for the check to find. -EINVAL for any other flag and for
+ * a directory moved below itself; -ENOENT when either name is missing.
+ */
+static int fat_rename_flags(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                            const char *newname, uint32_t flags)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    struct fat_side a, b;
+    int rc;
+
+    if (flags != VFS_RENAME_EXCHANGE) {
+        return -EINVAL;
+    }
+    if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    assert_locked(mnt);
+    rc = side_find(mnt, olddir, oldname, &a);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = side_find(mnt, newdir, newname, &b);
+    if (rc != 0 || (a.cluster == b.cluster && a.sc.index == b.sc.index)) {
+        return rc;
+    }
+    rc = exchange_allowed(fm, &a, &b);
+    if (rc == 0) {
+        rc = mark_dirty(fm);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    a.node = scan_node(fm, a.cluster, &a.sc);
+    b.node = scan_node(fm, b.cluster, &b.sc);
+    if (a.node) {
+        a.node->refs++;
+    }
+    if (b.node) {
+        b.node->refs++;
+    }
+    rc = exchange_write(fm, &a, &b);
+    if (rc == 0) {
+        side_move(&a, &b);
+        side_move(&b, &a);
+    }
+    if (a.node) {
+        fat_put(mnt, a.node);
+    }
+    if (b.node) {
+        fat_put(mnt, b.node);
     }
     return rc;
 }
@@ -3380,39 +3751,56 @@ static int fat_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 }
 
 static const struct vfs_ops vfat_ops = {
-    fat_lookup,  0, /* lookup_rest */
-    fat_hold,    fat_put,     fat_getattr,
-    fat_setattr, fat_open,    fat_release,
-    fat_read,    fat_write,   fat_truncate,
-    fat_fsync,   fat_readdir, fat_create,
-    fat_unlink,  fat_mkdir,   fat_rmdir,
-    fat_rename,  0, /* link */
-    0,              /* readlink */
-    fat_statfs,  fat_sync,    fat_prepare_unmount,
-    0,                           /* abort_unmount */
-    fat_unmount, fat_path,    0, /* symlink */
-    0,                           /* mknod */
-    0,                           /* pin: a hold keeps a node */
-    0,                           /* unpin */
-    0,                           /* remount */
-    0,                           /* fallocate */
-    0,                           /* fdatasync */
-    0,                           /* lock_node */
-    0,                           /* unlock_node */
-    0,                           /* shutdown */
-    0,                           /* xattr */
-    0,                           /* cachestat */
-    0,                           /* put_unless_last */
-    0,                           /* readlink_cached */
-    0,                           /* read_frames */
-    0,                           /* handle_node */
-    0,                           /* writeback */
-    0,                           /* lock_write */
-    0,                           /* unlock_write */
-    0,                           /* rename_flags */
-    0,                           /* tmpfile */
-    0,                           /* uncache */
-    0,                           /* phase */
+    fat_lookup,
+    0, /* lookup_rest */
+    fat_hold,
+    fat_put,
+    fat_getattr,
+    fat_setattr,
+    fat_open,
+    fat_release,
+    fat_read,
+    fat_write,
+    fat_truncate,
+    fat_fsync,
+    fat_readdir,
+    fat_create,
+    fat_unlink,
+    fat_mkdir,
+    fat_rmdir,
+    fat_rename,
+    0, /* link */
+    0, /* readlink */
+    fat_statfs,
+    fat_sync,
+    fat_prepare_unmount,
+    0, /* abort_unmount */
+    fat_unmount,
+    fat_path,
+    0,                /* symlink */
+    0,                /* mknod */
+    0,                /* pin: a hold keeps a node */
+    0,                /* unpin */
+    0,                /* remount */
+    0,                /* fallocate */
+    0,                /* fdatasync */
+    0,                /* lock_node */
+    0,                /* unlock_node */
+    0,                /* shutdown */
+    0,                /* xattr */
+    0,                /* cachestat */
+    0,                /* put_unless_last */
+    0,                /* readlink_cached */
+    0,                /* read_frames */
+    0,                /* handle_node */
+    0,                /* writeback */
+    0,                /* lock_write */
+    0,                /* unlock_write */
+    fat_rename_flags, /* rename_flags */
+    0,                /* tmpfile */
+    fat_uncache,      /* uncache */
+    0,                /* phase */
+    0,                /* data_at */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops,        0, 0, 0, 0, 0,

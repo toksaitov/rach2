@@ -435,11 +435,16 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
  * Whether BAR `i` (0 to 5) of the listed function bus:device.function may
  * be claimed by its driver, as Linux's pci_claim_resource and request_region
  * find: it has an address (`pci_resource`), an I/O one within the 64 KiB of
- * ports and on none of the PC's fixed ports; behind a bridge that decodes
- * positively it lies whole in a window of its kind; and it overlaps no other
- * BAR of its kind of a listed function. A BAR that is not claimed is
- * neither exposed nor decoded. 0; -EINVAL for a BAR the function lacks, one
- * without an address and one out of range; -EBUSY for an overlap. The
+ * ports; the host reaches it, each bridge on its way to the root that
+ * decodes positively holding it whole in a window of its kind, and the
+ * host bridge of the root bus it reaches in one of its windows
+ * (`pci_root_window_add`); and it overlaps
+ * none of the host's own ranges (the PC's fixed ports and the ports of the
+ * devices the kernel drives at fixed addresses, and what `pci_host_reserve`
+ * holds), no window of another bridge on its bus and no other BAR of its
+ * kind of a listed function. A BAR that is not claimed is neither exposed
+ * nor decoded. 0; -EINVAL for a BAR the function lacks, one without an
+ * address and one the host does not reach; -EBUSY for an overlap. The
  * caller holds the big lock, as for every search of the list.
  */
 int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i);
@@ -468,6 +473,43 @@ struct pci_aperture {
     uint64_t end;
     int io;
 };
+
+/**
+ * Hold `start` to `end`, inclusive, of I/O ports when `io` is set and of
+ * memory else, for the host, so that no BAR over it is claimed
+ * (`pci_resource_claimable`) or placed (`pci_assign_bars`), as Linux's
+ * resource tree holds the firmware's memory map (e820__reserve_resources),
+ * ACPI's fixed registers and system devices and what drivers request.
+ * Ranges that overlap or adjoin become one; the rest are kept apart, in a
+ * table that grows on the heap. Only when the heap refuses does a full
+ * table join its two closest of a kind, which holds more, never less.
+ * Called while the kernel starts, before any driver claims; until the heap
+ * is up, only for the boot map's ranges, which the first table holds.
+ */
+void pci_host_reserve(uint64_t start, uint64_t end, int io);
+
+/**
+ * Keep `w`, a window that the host bridge of root bus `bus` passes to it,
+ * from its _CRS, as Linux keeps each root bus's resources: a BAR the host
+ * reaches through root bus `bus` lies whole in one of that root's windows
+ * of its kind, and with none of a kind, no BAR of the kind is held to them.
+ * A window that overlaps one of its kind already kept is joined to it, and
+ * so is any other that the joined window then overlaps, as Linux's
+ * acpi_pci_root_validate_resources expands one window over another, so
+ * that a BAR across the overlap lies in one; windows that only adjoin stay
+ * apart. Every window is kept; 0, or -ENOMEM when the heap refuses, after
+ * which the root's BARs outside the windows kept are refused. Called while
+ * the kernel starts.
+ */
+int pci_root_window_add(uint8_t bus, const struct pci_aperture *w);
+
+/**
+ * The windows of root bus `bus` that `pci_root_window_add` kept, in the
+ * order given, a joined one where the first of its parts was, into `*ap`;
+ * returns how many. The array stays valid until
+ * the next window of that bus is added.
+ */
+int pci_root_windows(uint8_t bus, const struct pci_aperture **ap);
 
 /**
  * Give each BAR of the listed function `bus`:`device`.`function` that has
