@@ -88,8 +88,22 @@ A touchscreen has
 a touchpad has
 .Dv INPUT_PROP_POINTER .
 .Pp
-The virtio tablet and multitouch device take their event capabilities,
-axis limits and properties from the device configuration.
+A virtio input device takes its event capabilities, LEDs, axis limits and
+properties from the device configuration.
+One that states
+.Dv EV_REP ,
+as QEMU's
+.Cm virtio-keyboard-pci ,
+is a keyboard: its keys type on the console with the console's repeat, and
+its Num, Caps and Scroll Lock LEDs follow the console's, each change sent
+to the device.
+One with
+.Dv REL_X
+and
+.Dv REL_Y ,
+as QEMU's
+.Cm virtio-mouse-pci ,
+moves the pointer of the mouse device as well.
 QEMU's
 .Cm virtio-tablet-pci
 gives
