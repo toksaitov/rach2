@@ -1647,17 +1647,16 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     uint8_t msg[NL_MSG_MAX];
     uint8_t *rtm;
     const struct netdev *nd;
-    uint32_t via = 0;
-    struct netdev_rt r;
+    struct netdev_rt selected = {0}, r;
     int i, local = 0, broadcast = 0;
 
-    nd = netdev_route(dst, &via);
+    nd = netdev_route_lookup(dst, 0, &selected);
     for (i = 0; netdev_local_route_at(i, &r); i++) {
         if (dst == r.dst) {
             nd = watch_dev(r.ifindex);
             local = r.kind == NETDEV_RT_LOCAL;
             broadcast = !local;
-            via = dst;
+            selected = r;
             if (local)
                 break;
         }
@@ -1680,9 +1679,9 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     msg_attr_ip(msg, RTA_DST, dst);
     msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
     msg_attr_ip(msg, RTA_PREFSRC,
-                local ? (IP_IS_LOOPBACK(dst) ? IP_LOOPBACK_ADDR : dst) : netdev_source(nd, via));
-    if (!local && via != dst) {
-        msg_attr_ip(msg, RTA_GATEWAY, via);
+                local ? (IP_IS_LOOPBACK(dst) ? IP_LOOPBACK_ADDR : dst) : selected.src);
+    if (!local && selected.gw) {
+        msg_attr_ip(msg, RTA_GATEWAY, selected.gw);
     }
     nl_append(b, msg);
     return 0;

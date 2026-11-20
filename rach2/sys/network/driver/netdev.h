@@ -471,6 +471,9 @@ struct netdev_rt {
 
 /* The lookups `netdev_route` made, and those that found no route, which
  * /proc/net/stat/rt_cache reports. */
+/** Select the route to dst. On success copy its gateway and source to row. */
+struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *row);
+
 extern uint32_t netdev_route_lookups;
 extern uint32_t netdev_route_misses;
 

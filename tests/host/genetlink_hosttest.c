@@ -285,10 +285,11 @@ struct netdev *netdev_owner6(const uint8_t *addr)
 }
 
 /** Model netdev_route with no addresses, routes or sockets. */
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *row)
 {
     (void)dst;
-    (void)via;
+    (void)ifindex;
+    (void)row;
     return 0;
 }
 

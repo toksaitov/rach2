@@ -181,7 +181,16 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
 
 struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
 {
-    struct netdev_rt r, best;
+    struct netdev_rt row = {0};
+    struct netdev *nd = netdev_route_lookup(dst, ifindex, &row);
+    if (nd)
+        *via = row.gw ? row.gw : dst;
+    return nd;
+}
+
+struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *best)
+{
+    struct netdev_rt r;
     struct netdev *out = 0;
     int n;
 
@@ -192,8 +201,8 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
         if (!nd || !nd->up || (dst & r.mask) != r.dst || (ifindex && r.ifindex != ifindex)) {
             continue;
         }
-        if (!out || r.mask > best.mask || (r.mask == best.mask && r.metric < best.metric)) {
-            best = r;
+        if (!out || r.mask > best->mask || (r.mask == best->mask && r.metric < best->metric)) {
+            *best = r;
             out = nd;
         }
     }
@@ -202,7 +211,12 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
          * card's, the destination is taken to be on its link. */
         out = dev_of(ifindex);
         if (out && out->up) {
-            *via = dst;
+            struct netdev_rt direct = {0};
+            direct.dst = dst;
+            direct.mask = 0xffffffffu;
+            direct.ifindex = ifindex;
+            direct.src = netdev_source(out, dst);
+            *best = direct;
             return out;
         }
         out = 0;
@@ -211,7 +225,8 @@ struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
         netdev_route_misses++;
         return 0;
     }
-    *via = best.gw ? best.gw : dst;
+    if (!best->prefsrc)
+        best->src = netdev_source(out, best->gw ? best->gw : dst);
     return out;
 }
 
