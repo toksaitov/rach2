@@ -2643,8 +2643,8 @@ static void row_bring_up_unreset(void)
     kept =
         i915_ggtt_kept_overlap(&i915->ggtt, kept_hws_ggtt, kept_hws_ggtt + I915_GTT_PAGE_SIZE) != 0;
     snprintf(line, sizeof(line), "gtt: 0x%lx kept: a status page", (unsigned long)kept_hws_ggtt);
-    CHECK(logged("handoff: " CHIP ": no reset; bound as its last owner left it") && kept &&
-              logged(line) &&
+    CHECK(logged("handoff: " CHIP ": no reset; bound as its last owner left it") &&
+              logged("handoff: " CHIP ": bound without a reset") && kept && logged(line) &&
               reg(I915_GSM_OFFSET + (kept_hws_ggtt / I915_GTT_PAGE_SIZE) * 4u) == kept_hws_pte &&
               kept_hws_pte != i915->ggtt.scratch_pte,
           "unreset: the kept status page's GTT entry and range kept, logged");
