@@ -189,6 +189,18 @@ static int idle_cpu(int cpu)
     return bops->idle(cpu);
 }
 
+/**
+ * available_idle_cpu: `cpu` is idle and its hypervisor has not preempted
+ * it, so a thread woken there runs at once (kernel/sched/syscalls.c:226).
+ * An idle virtual processor that KVM took off its host processor, as it
+ * polled or between halts, runs nothing until the host's scheduler gives
+ * it a slice again, milliseconds under load, so a wake does not choose it.
+ */
+static int available_idle_cpu(int cpu)
+{
+    return idle_cpu(cpu) && !arch_cpu_preempted(cpu);
+}
+
 /** Whether `cpu` runs only SCHED_IDLE threads, at least one
  * (sched_idle_cpu). */
 static int sched_idle_cpu(int cpu)
@@ -729,13 +741,13 @@ static int wake_wide(process_t *cur, process_t *p, int this_cpu)
  * neither answers (wake_affine_idle). */
 static int wake_affine_idle(int this_cpu, int prev_cpu, int sync)
 {
-    if (idle_cpu(this_cpu) && cpus_share_cache(this_cpu, prev_cpu)) {
-        return idle_cpu(prev_cpu) ? prev_cpu : this_cpu;
+    if (available_idle_cpu(this_cpu) && cpus_share_cache(this_cpu, prev_cpu)) {
+        return available_idle_cpu(prev_cpu) ? prev_cpu : this_cpu;
     }
     if (sync && bops->nr_running(this_cpu) - cpu_cfs(this_cpu)->h_nr_delayed == 1) {
         return this_cpu;
     }
-    if (idle_cpu(prev_cpu)) {
+    if (available_idle_cpu(prev_cpu)) {
         return prev_cpu;
     }
     return NO_CPU;
@@ -806,24 +818,30 @@ static int wake_affine(struct sched_domain *sd, process_t *cur, process_t *p, in
 }
 
 /** Note that `cpu`'s core is all idle in its cache domain's record, as
- * `cpu` goes idle (__update_idle_core). */
+ * `cpu` goes idle and its siblings are idle and not preempted by the
+ * hypervisor (__update_idle_core). */
 static void update_idle_core(int cpu)
 {
     struct sched_domain_shared *sds = brq[cpu].sd_llc_shared;
+    uint64_t m = smt_mask[cpu] & ~cpu_bit(cpu);
+    int c;
 
     if (!smt_active || !sds || sds->has_idle_cores) {
         return;
     }
-    if (is_core_idle(cpu)) {
-        sds->has_idle_cores = 1;
+    for (c = 0; m; c++, m >>= 1) {
+        if ((m & 1u) && !available_idle_cpu(c)) {
+            return;
+        }
     }
+    sds->has_idle_cores = 1;
 }
 
 /** `cpu` when it can take `p` at once, idle or running only SCHED_IDLE
  * threads; else -1 (__select_idle_cpu). */
 static int select_idle_cpu1(int cpu)
 {
-    if (idle_cpu(cpu) || sched_idle_cpu(cpu)) {
+    if (available_idle_cpu(cpu) || sched_idle_cpu(cpu)) {
         return cpu;
     }
     return -1;
@@ -842,7 +860,7 @@ static int select_idle_core(int core, uint64_t *cpus, int *idle_cpu_found)
         if (!mask_test(smt_mask[core], c)) {
             continue;
         }
-        if (!idle_cpu(c)) {
+        if (!available_idle_cpu(c)) {
             idle = 0;
             if (*idle_cpu_found == -1) {
                 if (sched_idle_cpu(c) && mask_test(*cpus, c)) {
@@ -877,7 +895,7 @@ static int select_idle_smt(process_t *p, struct sched_domain *sd, int target)
         if (!mask_test(sd->span, c)) {
             continue;
         }
-        if (idle_cpu(c) || sched_idle_cpu(c)) {
+        if (available_idle_cpu(c) || sched_idle_cpu(c)) {
             return c;
         }
     }
@@ -940,11 +958,11 @@ static int select_idle_quick(process_t *cur, process_t *p, int prev, int target,
 {
     int recent_used_cpu;
 
-    if (idle_cpu(target) || sched_idle_cpu(target)) {
+    if (available_idle_cpu(target) || sched_idle_cpu(target)) {
         return target;
     }
     if (prev != target && cpus_share_cache(prev, target) &&
-        (idle_cpu(prev) || sched_idle_cpu(prev))) {
+        (available_idle_cpu(prev) || sched_idle_cpu(prev))) {
         return prev;
     }
     /* A per-processor kernel thread waking a thread that last ran on its
@@ -959,7 +977,7 @@ static int select_idle_quick(process_t *cur, process_t *p, int prev, int target,
     p->se.recent_used_cpu = prev;
     if (recent_used_cpu != prev && recent_used_cpu != target && recent_used_cpu >= 0 &&
         recent_used_cpu < NR_CPUS && cpus_share_cache(recent_used_cpu, target) &&
-        (idle_cpu(recent_used_cpu) || sched_idle_cpu(recent_used_cpu)) &&
+        (available_idle_cpu(recent_used_cpu) || sched_idle_cpu(recent_used_cpu)) &&
         cpu_allowed(p, recent_used_cpu)) {
         return recent_used_cpu;
     }
@@ -1284,7 +1302,7 @@ static int find_dst_group_cpu(struct sched_group *group, process_t *p, int this_
         if (sched_idle_cpu(i)) {
             return i;
         }
-        if (idle_cpu(i)) {
+        if (available_idle_cpu(i)) {
             if (brq[i].idle_stamp > latest_idle_timestamp) {
                 latest_idle_timestamp = brq[i].idle_stamp;
                 shallowest_idle_cpu = i;
