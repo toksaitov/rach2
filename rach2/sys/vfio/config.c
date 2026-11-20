@@ -152,10 +152,14 @@ void vfio_config_init(struct vfio_device *d)
 
 /** The command word to write for the owner's `cmd`: Interrupt Disable on
  * while the owner sets it, while the line is masked, and while the line is
- * not the device's interrupt. */
+ * not the device's interrupt; I/O decoding off while an I/O BAR is not
+ * claimed (`io_off`). */
 uint16_t vfio_config_command(const struct vfio_device *d, uint16_t cmd)
 {
     cmd = (uint16_t)(cmd & ~CMD_INTX_OFF);
+    if (d->io_off) {
+        cmd = (uint16_t)(cmd & ~CMD_IO);
+    }
     if (d->vcmd_intx || d->intx_masked || d->irq_type != VFIO_PCI_INTX_IRQ_INDEX) {
         cmd |= CMD_INTX_OFF;
     }

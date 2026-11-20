@@ -432,6 +432,19 @@ struct pci_resource {
 void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r);
 
 /**
+ * Whether BAR `i` (0 to 5) of the listed function bus:device.function may
+ * be claimed by its driver, as Linux's pci_claim_resource and request_region
+ * find: it has an address (`pci_resource`), an I/O one within the 64 KiB of
+ * ports and on none of the PC's fixed ports; behind a bridge that decodes
+ * positively it lies whole in a window of its kind; and it overlaps no other
+ * BAR of its kind of a listed function. A BAR that is not claimed is
+ * neither exposed nor decoded. 0; -EINVAL for a BAR the function lacks, one
+ * without an address and one out of range; -EBUSY for an overlap. The
+ * caller holds the big lock, as for every search of the list.
+ */
+int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i);
+
+/**
  * List the functions of the slot `bus`:`device` that the list lacks, as
  * Linux's pci_scan_slot does when a hot plug controller says a card came:
  * each is read, sized and put in its place (`pci_nth`). The caller holds
