@@ -1664,20 +1664,27 @@ int32_t i915_gem_wait_ioctl(struct drm_device *dev, void *data, struct drm_file 
 /**
  * GEM_GET_APERTURE, as Linux's i915_gem_get_aperture_ioctl: the global
  * GTT's bytes, and those left once the pinned bindings, the ranges the
- * kernel reserved, the firmware's kept surfaces and the GT's own objects
- * are taken away, which Linux counts as pinned or reserved too.
+ * kernel reserved, the firmware's kept surfaces, retained status pages
+ * and the GT's own objects are taken away.
  */
 int32_t i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_i915_gem_get_aperture *args = (struct drm_i915_gem_get_aperture *)data;
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *v;
+    const struct i915_ggtt_status *status;
     uint64_t pinned = i915->ggtt.total - i915->gt.ggtt_bottom;
     int i;
 
     (void)file;
     for (i = 0; i < i915->ggtt.nkept; i++) {
         pinned += i915->ggtt.kept[i].end - i915->ggtt.kept[i].start;
+    }
+    for (status = i915->ggtt.status; status && status->range.end <= i915->gt.ggtt_bottom;
+         status = status->next) {
+        if (!i915_ggtt_firmware_overlap(&i915->ggtt, status->range.start, status->range.end)) {
+            pinned += I915_GTT_PAGE_SIZE;
+        }
     }
     for (v = i915->gem.bound; v; v = v->ggtt_next) {
         if (v->pin_count) {

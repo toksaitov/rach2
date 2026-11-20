@@ -81,21 +81,14 @@ int32_t i915_gem_evict_something(struct drm_i915_private *i915, uint64_t size, u
     return evict_scan(i915, size, align, start, end, flags);
 }
 
-/** Whether [start, end) meets a surface the firmware keeps or the GT's own
- * objects at the top of the GTT. */
+/** Whether [start, end) meets a kept range or the GT's own objects at
+ * the top of the GTT. */
 static int range_reserved(const struct drm_i915_private *i915, uint64_t start, uint64_t end)
 {
-    int i;
-
     if (end > i915->gt.ggtt_bottom) {
         return 1;
     }
-    for (i = 0; i < i915->ggtt.nkept; i++) {
-        if (i915->ggtt.kept[i].start < end && start < i915->ggtt.kept[i].end) {
-            return 1;
-        }
-    }
-    return 0;
+    return i915_ggtt_kept_overlap(&i915->ggtt, start, end) != 0;
 }
 
 /*
