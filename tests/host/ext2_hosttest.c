@@ -10778,6 +10778,7 @@ static const struct {
     {"--fence-only", fence_rows},
     {"--matrix-only", matrix_rows},
     {"--async-only", async_rows},
+    {"--async-fsync-only", async_fsync_rows},
     {"--creates-only", async_create_row},
 };
 
