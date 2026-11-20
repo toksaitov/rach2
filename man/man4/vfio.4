@@ -190,8 +190,10 @@ A write cannot start a function level reset, and the OpRegion's address
 takes no write.
 A write of the power state is carried out by
 .Nm ,
-which keeps the state of a function that loses it in D3hot and restores
-it and its active interrupts at D0.
+which enters a low state only from a shallower one and D1 or D2 only when
+the function offers it, reads the state back after the change's wait,
+keeps the state of a function that loses it in D3hot, and restores it and
+its active interrupts once the function is back in D0.
 Another power-state write waits until the transition and restore finish.
 The extended space reads as the function answers it and takes no write.
 .Ss Interrupts
