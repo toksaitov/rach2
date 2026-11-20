@@ -1,7 +1,7 @@
 /*
- * netdev_room.c: the arrays of an interface's addresses, which grow as
- * addresses are added and are freed with the last, as driver/netdev.h
- * declares them.
+ * netdev_room.c: the arrays of an interface's addresses and IPv6 groups,
+ * which grow as addresses are added and groups joined and are freed with the
+ * last, as driver/netdev.h declares them.
  */
 
 #include "netdev.h"
@@ -78,6 +78,79 @@ int netdev_addr6_room(struct netdev *nd, int n)
     nd->addr6 = more;
     nd->room6 = room;
     return 0;
+}
+
+/** The slot of `group` among `nd`'s groups, or -1. */
+static int group_slot(const struct netdev *nd, const uint8_t *group)
+{
+    int i, j;
+
+    for (i = 0; i < nd->ngroup6; i++) {
+        for (j = 0; j < 16; j++)
+            if (nd->group6[i].addr[j] != group[j])
+                break;
+        if (j == 16)
+            return i;
+    }
+    return -1;
+}
+
+int netdev_join6(struct netdev *nd, const uint8_t *group)
+{
+    int i;
+
+    if (!nd || group[0] != 0xff) {
+        return -EINVAL;
+    }
+    i = group_slot(nd, group);
+    if (i >= 0) {
+        nd->group6[i].refs++;
+        return 0;
+    }
+    if (nd->ngroup6 == nd->room_group6) {
+        struct netdev_group6 *more;
+        int room = nd->room_group6 ? nd->room_group6 * 2 : 8;
+
+        if (nd->room_group6 > 0x7fffffff / 2 / (int)sizeof(*more))
+            return -ENOBUFS;
+        more = kmalloc((size_t)room * sizeof(*more));
+        if (!more)
+            return -ENOBUFS;
+        if (nd->ngroup6)
+            k_memcpy(more, nd->group6, (size_t)nd->ngroup6 * sizeof(*more));
+        kfree(nd->group6);
+        nd->group6 = more;
+        nd->room_group6 = room;
+    }
+    k_memcpy(nd->group6[nd->ngroup6].addr, group, 16);
+    nd->group6[nd->ngroup6].refs = 1;
+    nd->ngroup6++;
+    return 0;
+}
+
+/** The last slot moves into the one freed, since the order of the groups
+ * means nothing; the array is freed with the last. */
+void netdev_leave6(struct netdev *nd, const uint8_t *group)
+{
+    int i = nd ? group_slot(nd, group) : -1;
+
+    if (i < 0 || --nd->group6[i].refs != 0) {
+        return;
+    }
+    nd->ngroup6--;
+    if (i != nd->ngroup6) {
+        nd->group6[i] = nd->group6[nd->ngroup6];
+    }
+    if (nd->ngroup6 == 0) {
+        kfree(nd->group6);
+        nd->group6 = 0;
+        nd->room_group6 = 0;
+    }
+}
+
+int netdev_member6(const struct netdev *nd, const uint8_t *group)
+{
+    return nd && group_slot(nd, group) >= 0;
 }
 
 void netdev_addr_free(struct netdev *nd)

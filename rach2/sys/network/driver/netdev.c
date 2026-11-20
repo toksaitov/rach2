@@ -169,16 +169,6 @@ static void loopback_up(void)
     next_index = niface + 2;
 }
 
-/** Copy the IPv6 address at `from` to `to`. */
-static void copy6(uint8_t *to, const uint8_t *from)
-{
-    int i;
-
-    for (i = 0; i < 16; i++) {
-        to[i] = from[i];
-    }
-}
-
 /** Whether the IPv6 addresses at `a` and `b` are the same. */
 static int same6(const uint8_t *a, const uint8_t *b)
 {
@@ -223,77 +213,6 @@ struct netdev *netdev_owner6(const uint8_t *addr)
             return nd;
     }
     return route6_added_local(addr);
-}
-
-/** The slot of `group` among `nd`'s groups, or -1. */
-static int group_slot(const struct netdev *nd, const uint8_t *group)
-{
-    int i;
-
-    for (i = 0; i < nd->ngroup6; i++) {
-        if (same6(nd->group6[i].addr, group)) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-int netdev_join6(struct netdev *nd, const uint8_t *group)
-{
-    int i;
-
-    if (!nd || group[0] != 0xff) {
-        return -EINVAL;
-    }
-    i = group_slot(nd, group);
-    if (i >= 0) {
-        nd->group6[i].refs++;
-        return 0;
-    }
-    if (nd->ngroup6 == nd->room_group6) {
-        struct netdev_group6 *more;
-        int room = nd->room_group6 ? nd->room_group6 * 2 : 8;
-
-        if (nd->room_group6 > 0x7fffffff / 2 / (int)sizeof(*more))
-            return -ENOBUFS;
-        more = kmalloc((size_t)room * sizeof(*more));
-        if (!more)
-            return -ENOBUFS;
-        if (nd->ngroup6)
-            k_memcpy(more, nd->group6, (size_t)nd->ngroup6 * sizeof(*more));
-        kfree(nd->group6);
-        nd->group6 = more;
-        nd->room_group6 = room;
-    }
-    copy6(nd->group6[nd->ngroup6].addr, group);
-    nd->group6[nd->ngroup6].refs = 1;
-    nd->ngroup6++;
-    return 0;
-}
-
-/** The last slot moves into the one freed, since the order of the groups
- * means nothing; the array is freed with the last. */
-void netdev_leave6(struct netdev *nd, const uint8_t *group)
-{
-    int i = nd ? group_slot(nd, group) : -1;
-
-    if (i < 0 || --nd->group6[i].refs != 0) {
-        return;
-    }
-    nd->ngroup6--;
-    if (i != nd->ngroup6) {
-        nd->group6[i] = nd->group6[nd->ngroup6];
-    }
-    if (nd->ngroup6 == 0) {
-        kfree(nd->group6);
-        nd->group6 = 0;
-        nd->room_group6 = 0;
-    }
-}
-
-int netdev_member6(const struct netdev *nd, const uint8_t *group)
-{
-    return nd && group_slot(nd, group) >= 0;
 }
 
 struct netdev *netdev_first(void)
