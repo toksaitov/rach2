@@ -1553,9 +1553,10 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_t
 void vfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
                    struct vfs_cachestat *cs);
 /** fallocate(2) through an open handle: the type's operation, -EOPNOTSUPP
- * for a type without one, -EROFS on a read-only mount, -EBUSY for a file
- * that backs a loop device, and -EPERM for an immutable file or a mode
- * other than FALLOC_FL_KEEP_SIZE on an append-only one. */
+ * for a type without one, -EROFS on a read-only mount, -EBUSY for a KRFFS
+ * file that backs a loop device, which a change may move
+ * (`loop_length_pinned`), and -EPERM for an immutable file or a mode other
+ * than FALLOC_FL_KEEP_SIZE on an append-only one. */
 int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                   uint64_t len);
 /**
