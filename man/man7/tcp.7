@@ -39,13 +39,15 @@ on a nonblocking socket, as
 .Xr send 2
 says.
 .Ss Ports and TIME_WAIT
-A socket that binds no port is given one of the ephemeral range, 32768
-through 60999, Linux's
-.Pa ip_local_port_range .
+A socket that binds no port is given one of the ephemeral range,
+.Pa /proc/sys/net/ipv4/ip_local_port_range ,
+32768 through 60999 unless a privileged write of two ports, the low end
+and the high end, sets another, as on Linux.
 A bind to port zero and a listen without a port take a port no connection,
-listener or bound socket has, trying the odd ports first from a place no
-other host can predict.
-A connection takes the first even port, then odd, from where the last
+listener or bound socket has, trying those an odd offset from the range's
+low end first, from a place no other host can predict.
+A connection takes the first port an even offset from the low end, then
+the others, from where the last
 connection to the same peer address and port left off, chosen by a keyed
 hash of that destination, as Linux does (RFC 6056, algorithm 4): a port
 held by a listener or a bound socket is passed over, and one another

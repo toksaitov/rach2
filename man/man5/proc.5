@@ -1537,6 +1537,16 @@ from 0 to 255, and
 as 2, are the settings of
 .Xr tcp 7 ,
 which a privileged caller's write sets for every connection at once.
+.Pa net/ipv4/ip_local_port_range ,
+32768 and 60999 with a tab between, is the ephemeral range of TCP and UDP:
+a privileged caller's write of two ports, each from 1 to 65535, sets its
+low end and its high end, and a write of one its low end alone, as Linux's
+.Fn ipv4_local_port_range
+takes them; a high end below the low end or a low end below 1024 is
+refused with
+.Er EINVAL ,
+and the first range whose ends are both odd or both even is taken and
+logged.
 .Pa net/core/netdev_max_backlog ,
 1000, the datagrams the loopback backlog's input queue holds before it
 drops the next, less one, as Linux's: a send to this machine past it
