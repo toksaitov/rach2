@@ -33,15 +33,17 @@
 
 int filemap_noexec(const fd_entry_t *e)
 {
-    struct vfs_mount *mnt = e->ofd ? e->ofd->vmnt : NULL;
+    const struct open_file *ofd = e->ofd;
+    struct vfs_mount *mnt = !ofd           ? NULL
+                            : ofd->vmnt    ? ofd->vmnt
+                            : ofd->dev_mnt ? ofd->dev_mnt
+                                           : ofd->synth_mnt;
 
     return mnt && ((vfs_mount_flags(mnt) & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec);
 }
 
-int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot)
+int32_t filemap_access(const fd_entry_t *e, int shared, uint32_t prot)
 {
-    struct vfs_mount *mnt = e->ofd ? e->ofd->vmnt : NULL;
-
     if (e->flags & FD_FLAG_PATH)
         return -EBADF;
     if (!(e->flags & FD_FLAG_READ) ||
@@ -49,6 +51,16 @@ int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot)
         return -EACCES;
     if ((prot & VM_PROT_EXEC) && filemap_noexec(e))
         return -EPERM;
+    return 0;
+}
+
+int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot)
+{
+    struct vfs_mount *mnt = e->ofd ? e->ofd->vmnt : NULL;
+    int32_t rc = filemap_access(e, shared, prot);
+
+    if (rc != 0)
+        return rc;
     if (e->ops)
         return e->ops->mmap ? 0 : -ENODEV;
     return e->type == FD_TYPE_FILE && mnt ? 0 : -ENODEV;

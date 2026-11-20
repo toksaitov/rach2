@@ -18,13 +18,24 @@
 
 struct shmem;
 
-/** Check mmap's access mode, execute permission and mapping operation.
- * Return zero or the error to report before creating a mapping: -EPERM for
- * execute asked of a file `filemap_noexec` names. */
+/** Check mmap's access mode and execute permission for the descriptor `e`,
+ * as Linux's do_mmap checks them before the file's own mmap runs: -EBADF
+ * for an O_PATH descriptor, -EACCES for one not open for reading or for a
+ * shared writer through one not open for writing, -EPERM for execute asked
+ * of a file `filemap_noexec` names, and zero otherwise. */
+int32_t filemap_access(const fd_entry_t *e, int shared, uint32_t prot);
+
+/** Check mmap's access mode, execute permission (`filemap_access`) and
+ * mapping operation. Return zero or the error to report before creating a
+ * mapping: -ENODEV for a descriptor with neither its own mmap nor a file. */
 int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot);
 
-/** Whether the file `e` is open on is on a noexec mount or file system, so
- * that a mapping of it may never execute, as Linux's path_noexec: 1 or 0. */
+/** Whether the file `e` is open on was reached through a noexec mount or
+ * lies on a file system that forbids execution, so that a mapping of it may
+ * never execute, as Linux's path_noexec: 1 or 0. The mount is the file's
+ * (`vmnt`), that of the device node a device was opened through
+ * (`dev_mnt`), or that of a synthetic node such as /dev/zero opened by
+ * its path (`synth_mnt`), as Linux judges the open's f_path. */
 int filemap_noexec(const fd_entry_t *e);
 
 /**
