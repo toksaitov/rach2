@@ -471,29 +471,42 @@ TRACE_CATEGORIES = ["toplevel", "gpu", "gpu.dawn", "disabled-by-default-gpu.dawn
                     "ui", "mojom", "ipc", "wayland", "benchmark", "blink.user_timing"]
 
 
-def hasvk_picture(b, url, trace=None):
+def hasvk_picture(b, url, trace=None, swiftshader=False, picture_done=None):
     """Check hasvk's compute and render readback, then draw the picture page's 480 frames.
 
     With TRACE, a path, Chromium's own trace of the picture page is kept
-    there, gzipped.
+    there, gzipped. SWIFTSHADER selects the QEMU diagnostic, which traces
+    the readback too and marks every frame. PICTURE_DONE runs after the
+    picture has answered, while its threads are still alive.
     """
+    check = """
+        if (!adapter || adapter.info.vendor !== 'intel' ||
+            adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
+            throw Error('no native Intel gen-7 adapter');"""
+    if swiftshader:
+        check = """
+        if (!adapter || !/swiftshader/i.test(adapter.info.description))
+            throw Error('no SwiftShader adapter');"""
+    timing = {"transferMode": "ReturnAsStream", "streamCompression": "gzip",
+              "traceConfig": {"recordMode": "recordContinuously", "traceBufferSizeInKb": 262144,
+                              "includedCategories": TRACE_CATEGORIES}}
+    if trace and swiftshader:
+        b.client.call("Tracing.start", timing)
     b.navigate(url + "/page.html")
     result = {"readback": b.script("""(async () => {
         const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter || adapter.info.vendor !== 'intel' ||
-            adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
-            throw Error('no native Intel gen-7 adapter');
+        """ + check + """
         return await gpu(adapter);
     })()""")}
     save(b.out / "partial.json", result)
     got = result["readback"]
     assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
-    if trace:
-        b.client.call("Tracing.start", {"transferMode": "ReturnAsStream", "streamCompression": "gzip",
-            "traceConfig": {"recordMode": "recordContinuously", "traceBufferSizeInKb": 262144,
-                            "includedCategories": TRACE_CATEGORIES}})
-    b.navigate(url + "/hasvk.html")
+    if trace and not swiftshader:
+        b.client.call("Tracing.start", timing)
+    b.navigate(url + "/hasvk.html" + ("?swiftshader" if swiftshader else ""))
     result["picture"] = b.until(lambda: b.script("window.result || null"))
+    if picture_done:
+        picture_done()
     if trace:
         b.client.call("Tracing.end")
         stream = b.client.event("Tracing.tracingComplete")["params"]["stream"]
