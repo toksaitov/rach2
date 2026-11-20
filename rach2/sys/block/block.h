@@ -157,8 +157,10 @@ struct block_device {
     uint32_t max_discard;
     uint32_t max_zeroes;
     /* The buffer cache's counts, under its lock: the writes of its `first`
-     * buffers that a `BLOCK_WRITE_THROUGH` disk answered without its flush,
-     * and that count when the last flush the cache asked for began. While
+     * buffers that the disk answered without its flush, a
+     * `BLOCK_WRITE_THROUGH` disk when asked to and a disk that is not but
+     * has a flush always, and that count when the last flush the cache
+     * asked for began. While
      * the two are equal every `first` written is on the medium, and an
      * `after` needs no flush before it (bcache.c, `order_flush`). 64 bits,
      * so that neither wraps. */

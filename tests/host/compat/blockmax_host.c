@@ -3,7 +3,8 @@
  * on the host: the most a device takes in one request and its flags, read
  * from the record itself, since a host test's devices have no partition
  * views over them; the device's flush, which a fake device has nothing to do
- * for; and a request with flags, whose flags a test reads back.
+ * for; the device that takes its requests, itself; and a request with
+ * flags, whose flags a test reads back.
  */
 
 #include "block/block.h"
@@ -42,6 +43,13 @@ int block_flush(block_device_t *device)
 uint32_t block_flags(block_device_t *device)
 {
     return device->flags;
+}
+
+/** The device that takes the requests: a host device has no partition view
+ * over it. */
+block_device_t *block_submitter(block_device_t *dev)
+{
+    return dev;
 }
 
 /** A request with flags on the host: a fake device keeps no cache of its

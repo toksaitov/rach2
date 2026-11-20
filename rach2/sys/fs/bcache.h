@@ -121,7 +121,8 @@ struct bbuf {
 /* The orders a dirty buffer waits for: each a block, by its buffer, as it
  * stood at a count of marks (`bcache_order_after`). */
 struct bcache_wait {
-    struct bbuf *t;      /* the block's buffer, kept by a count in its waiters */
+    struct bbuf *t;      /* the block's buffer, kept by a count in its waiters,
+                          * or NULL for an order met when the wait was made */
     block_device_t *dev; /* its key then, to tell a buffer used again */
     uint64_t blk;
     uint64_t k; /* the count of marks it waits for */
@@ -261,8 +262,19 @@ void bcache_dirty_entry(struct bbuf *b);
  * the device writes last (`bcache_sync_last`), such as inode tables. The
  * caller holds no buffer, as for `bcache_sync`.
  *
- * @return 0 with the order kept, also for a block clean or gone from the
- *         cache, which is on the device already; -ENOSPC when the caller
+ * An order on a block clean or gone from the cache, on the device already,
+ * is kept as well, met: the changes after it wait for nothing, but keep a
+ * wait on the block that `bcache_sync_waiting` finds.
+ *
+ * On a disk that keeps a cache, write-through (`BLOCK_WRITE_THROUGH`) or
+ * with a flush, as a USB stick, a block that waits by orders, met or not,
+ * or has an image not yet written, is written only after a flush of the
+ * disk's cache, by any path; a write-through disk takes it only while it
+ * answered a write without the flush since its last. What the block is
+ * ordered after was perhaps written so, and only the flush puts it on the
+ * medium first.
+ *
+ * @return 0 with the order kept; -ENOSPC when the caller
  *         keeps BCACHE_TOKENS orders already, and -ENOMEM, for a caller
  *         that then writes the block with `bcache_sync_block_ordered`.
  */
@@ -398,17 +410,18 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk);
 /**
  * `bcache_sync_block` without the disk's flush: the blocks `blk` waits for
  * are written first, and each request that holds them is answered before a
- * block that waits for it is sent, so a
- * stop of the kernel finds them on the disk in that order, but none of the
- * writes, `blk`'s included, is flushed out of a disk's own cache. A loss of
- * power on a disk with a volatile cache may keep a later write and lose an
- * earlier one, as Linux's ext2 leaves it under `dirsync`, which writes a
- * directory and its inode without a flush. A flush still comes before an
- * `after` block among them, for one that names no blocks while a first was
- * answered without one, so a
- * free's cleared pointers and inodes reach the medium before its cleared
- * bits. `fsync`, `sync` and an unmount flush
- * what this left in the cache.
+ * block that waits for it is sent, so a stop of the kernel finds them on the
+ * disk in that order, but none of the writes, `blk`'s included, is flushed
+ * out of a disk's own cache. A loss of power on a disk with a volatile cache
+ * may keep a later write and lose an earlier one, as Linux's ext2 leaves it
+ * under `dirsync`, which writes a directory and its inode without a flush.
+ * A flush still comes before an `after` block among them, for one that
+ * names no blocks while a first was answered without one, so a free's
+ * cleared pointers and inodes reach the medium before its cleared bits, and
+ * before a block that waits by orders (`bcache_order_after`), while the
+ * disk answered a write without the flush since its last, so what it is
+ * ordered after is on the medium first. `fsync`, `sync` and an unmount
+ * flush what this left in the cache.
  *
  * @return as `bcache_sync_block`.
  */
@@ -418,10 +431,10 @@ int bcache_sync_block_ordered(block_device_t *dev, uint64_t blk);
  * Write, as `bcache_sync_block` writes each, the dirty blocks of `dev` that
  * wait by an order for block `blk` (`bcache_order_after`), so that a block
  * just written takes with it to the device what was ordered after it: an
- * inode table's block the entries that name its new inodes. The blocks are
- * gathered and written in rounds of at most BCACHE_WAITING, until a round
- * finds fewer, and a block that went dirty after the call began is left,
- * so a steady writer does not keep the call.
+ * inode table's block the entries that name its new inodes, including
+ * entries whose order was met before they changed. The blocks are gathered
+ * and written in rounds of at most BCACHE_WAITING, until a round finds
+ * fewer. Blocks that went dirty after the call began are left for later.
  *
  * @return 0, or the first failure's -errno with its buffer still dirty.
  */
@@ -567,7 +580,8 @@ int bcache_device_holds(block_device_t *dev);
 /**
  * Give back up to `want` buffers, each a frame: empty ones, then clean
  * ones oldest first, then, with `can_write`, dirty ones written back where
- * the caller may write them, which sleeps and takes the write lock. A
+ * the caller may write them, and the images a dirty one waits for, each
+ * given back once written, which sleeps and takes the write lock. A
  * buffer a process holds or waits for is left alone. Returns how many
  * went; `*written` is increased by the writebacks.
  */
