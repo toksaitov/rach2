@@ -3482,16 +3482,6 @@ static int winclean_mode_rows(struct release *r)
     ok = check(r, f->status == 1, "winclean.sh -l fails when it cannot read OUT") && ok;
     return ok;
 }
-/** Count the times TEXT holds WORD. */
-static unsigned count_text(const char *text, const char *word)
-{
-    unsigned n = 0;
-    while ((text = strstr(text, word)) != NULL) {
-        n++;
-        text += strlen(word);
-    }
-    return n;
-}
 static int stop_unknown_rows(struct release *r);
 static int stop_wsl_rows(struct release *r);
 /**
