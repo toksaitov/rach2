@@ -128,15 +128,17 @@
 #define ELD_MAX_SAD     16
 #define HH_ELD_MAX      128
 
-/* The streams: the PCMs at most, one for each of the OSS devices that
- * Linux's OSS layer names for a card, dsp and adsp; the channels a stream
- * plays at most, HDMI's eight; and of each PCM's DMA buffer the periods at
- * most and their bytes, and the audio it holds at least, so that the tick,
- * which refills it, has time to come round. A period is a multiple of 128
- * bytes, the alignment of a descriptor's buffer. A PCM's stream tag on the
- * link is its index plus 1. */
-#define HH_MAX_PCMS   2
+/* The streams: the PCMs at most, one for each converter, as Linux makes
+ * them; the channels the DMA plays at most, HDMI's eight; the channels a
+ * program's stream may have, which the refill routes to the DMA's, as
+ * Linux's OSS layer takes up to 128 (snd_pcm_oss_set_channels); and of each
+ * PCM's DMA buffer the periods at most and their bytes, and the audio it
+ * holds at least, so that the tick, which refills it, has time to come
+ * round. A period is a multiple of 128 bytes, the alignment of a
+ * descriptor's buffer. A PCM's stream tag on the link is its index plus 1. */
+#define HH_MAX_PCMS   HH_MAX_CVTS
 #define HH_MAX_CH     8
+#define HH_CLIENT_CH  128
 #define HH_BDL_MAX    256
 #define HH_PERIOD_MAX 16384u
 #define HH_DMA_MAX    (3u * HH_PERIOD_MAX)
@@ -149,7 +151,8 @@
  * HH_STAGE_FRAMES of the DMA's: six for each at the largest ratio, 192 kHz
  * to the 32 kHz every sink plays, and two more for the interpolation, of
  * two channels of 32 bits; a conversion of wider frames takes fewer of the
- * DMA's at once (hh_fill). */
+ * DMA's at once (hh_fill), one at the least, whose eight frames of 128
+ * channels of 32 bits the stage holds. */
 #define HH_RATE_MIN     1000u
 #define HH_RATE_MAX     192000u
 #define HH_STREAM_MAX   65536u
@@ -1237,9 +1240,20 @@ static void hh_pin_prepare(struct hh_pcm *m, struct hh_pin *p)
 }
 
 /**
+ * Whether PCM `m` has a stream of this bind: one open since the display
+ * came, which holds its power and a converter. A stream opened before the
+ * display last went holds neither until its close, and is given no pin.
+ */
+static int hh_pcm_live(const struct hh_pcm *m)
+{
+    return m->stream && m->held && m->cvt_idx >= 0 && m->cvt_idx < hh_ncvts;
+}
+
+/**
  * Give PCM `m`'s open stream entry `p`, Linux's hdmi_pcm_setup_pin: its
  * connection selects the stream's converter, and a running stream is
- * prepared on it. Under hh_mutex.
+ * prepared on it. `m` holds a converter: its open is taking one, or its
+ * stream is live (hh_pcm_live). Under hh_mutex.
  */
 static void hh_pin_attach(struct hh_pcm *m, struct hh_pin *p)
 {
@@ -1360,7 +1374,7 @@ static int hh_pcm_open(struct hh_pcm *m, audio_stream_t *s)
     m->cvt_idx = ci;
     m->rates = c->pcm & 0xfff;
     m->wide = (c->pcm & (1u << 19)) != 0;
-    m->chmax = c->chmax;
+    m->chmax = c->chmax < HH_MAX_CH ? c->chmax : HH_MAX_CH;
     /* IEC958 on, with alsa-lib's HDMI.conf status: original, PCM coder. */
     hh_verb(c->nid, V_SET_DIGI1, DIG1_ENABLE | 0x80);
     hh_verb(c->nid, V_SET_DIGI2, 0x02);
@@ -1427,63 +1441,25 @@ static int hh_nearest_rate(const struct hh_pcm *m, uint32_t rate)
 }
 
 /**
- * Grant `s` what it asks for, as Linux's OSS layer does through its
- * plugins: its format, 1 to HH_MAX_CH channels, and its rate, held between
- * HH_RATE_MIN and HH_RATE_MAX. The DMA plays, at the rate the converter and
- * sink allow nearest the stream's, the higher on a tie, the even count of
- * channels from 2 to what they allow nearest the stream's, the higher on a
- * tie, as Linux's hardware constraint of a step of 2 and the OSS layer's
- * snd_pcm_hw_param_near choose it, in 16 bits, or in 24 bits in 32 for a
- * stream of more than 16 where the converter and sink take them; the
- * refill converts (hh_fill). The stream's period is the one asked for, in
- * whole frames; the DMA's covers the same time, a multiple of 128 bytes up
- * to HH_PERIOD_MAX, and the DMA buffer holds enough of them for
- * HH_BUFFER_MS, fewer when the stream bytes they take would pass
- * HH_STREAM_MAX, but two at least.
+ * Lay out PCM `m`'s DMA buffer for `s`, whose rate, channels, format and
+ * period are granted, at the DMA's rate, channels and frame that `m` has:
+ * a DMA period covering the stream period's time, a multiple of 128 bytes,
+ * or of 384 for the 12- and 24-byte frames of six channels, which hold
+ * whole frames, up to HH_PERIOD_MAX; and enough of them for HH_BUFFER_MS,
+ * fewer when the stream bytes they take would pass HH_STREAM_MAX, but two
+ * at least. Sets m->copy and m->pb, and returns the periods.
  */
-static int hh_stream_setup(audio_stream_t *s)
+static uint32_t hh_ring(struct hh_pcm *m, const audio_stream_t *s, int wide)
 {
-    struct hh_pcm *m;
-    uint32_t best, pb, need, n, frames, unit;
-    int bi, wide, ch;
+    uint32_t unit = m->frame % 3u ? 128u : 384u, frames, pb, need, n;
 
-    mutex_lock(&hh_mutex);
-    m = hh_pcm_of(s);
-    if (!m || s->period_bytes < 128) {
-        mutex_unlock(&hh_mutex);
-        return -EINVAL;
-    }
-    s->rate = s->rate < HH_RATE_MIN ? HH_RATE_MIN : s->rate > HH_RATE_MAX ? HH_RATE_MAX : s->rate;
-    s->channels = s->channels < 1 ? 1 : s->channels > HH_MAX_CH ? HH_MAX_CH : s->channels;
-    if (s->period_bytes > HH_PERIOD_MAX) {
-        s->period_bytes = HH_PERIOD_MAX;
-    }
-    bi = hh_nearest_rate(m, s->rate);
-    if (bi < 0) {
-        mutex_unlock(&hh_mutex);
-        return -EINVAL;
-    }
-    ch = (s->channels + 1) & ~1;
-    if (ch > (m->chmax & ~1)) {
-        ch = m->chmax & ~1;
-    }
-    best = hh_rate_hz[bi];
-    wide = m->wide && AUDIO_SAMPLE_BYTES(s->format) > 2u;
-    m->rate = best;
-    m->ch = ch;
-    m->frame = (uint32_t)ch * (wide ? 4u : 2u);
-    m->sframe = (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
-    m->copy =
-        s->rate == best && s->channels == ch && s->format == (wide ? AUDIO_S32LE : AUDIO_S16LE);
-    s->period_bytes -= s->period_bytes % m->sframe;
+    m->copy = s->rate == m->rate && s->channels == m->ch &&
+              s->format == (wide ? AUDIO_S32LE : AUDIO_S16LE);
     /* At most 16384 frames times 192 kHz: 32 bits hold it. */
-    frames = s->period_bytes / m->sframe * best / s->rate;
-    /* A period holds whole frames and starts 128-byte aligned: a frame of
-     * 12 or 24 bytes, 6 channels, needs a multiple of 384. */
-    unit = m->frame % 3u ? 128u : 384u;
+    frames = s->period_bytes / m->sframe * m->rate / s->rate;
     pb = (frames * m->frame + unit / 2u) / unit * unit;
     pb = pb < unit ? unit : pb > HH_PERIOD_MAX ? HH_PERIOD_MAX / unit * unit : pb;
-    need = best / 1000u * m->frame * HH_BUFFER_MS;
+    need = m->rate / 1000u * m->frame * HH_BUFFER_MS;
     n = (need + pb - 1) / pb;
     if (n > HH_BDL_MAX) {
         n = HH_BDL_MAX;
@@ -1495,8 +1471,63 @@ static int hh_stream_setup(audio_stream_t *s)
     while (n > 2 && hh_lead(m, n) > HH_STREAM_MAX) {
         n--;
     }
-    if (n < 2) {
-        n = 2;
+    return n < 2 ? 2 : n;
+}
+
+/**
+ * Grant `s` what it asks for, as Linux's OSS layer does through its
+ * plugins: its format, 1 to HH_CLIENT_CH channels, and its rate, held
+ * between HH_RATE_MIN and HH_RATE_MAX. The DMA plays, at the rate the
+ * converter and sink allow nearest the stream's, the higher on a tie, the
+ * even count of channels from 2 to what they allow nearest the stream's,
+ * the higher on a tie, as Linux's hardware constraint of a step of 2 and
+ * the OSS layer's snd_pcm_hw_param_near choose it, in 16 bits, or in 24
+ * bits in 32 for a stream of more than 16 where the converter and sink take
+ * them; the refill converts (hh_fill). The stream's period is the one asked
+ * for, in whole frames, one at least, and the DMA's buffer is laid out by
+ * hh_ring. Where even its two periods would take more than HH_STREAM_MAX of
+ * the stream, as 128 channels of 32 bits at four times the rate of a stereo
+ * sink's DMA do, the stream is granted the DMA's rate, at which two fit, as
+ * an OSS device may grant another rate than the one asked for. -EINVAL for
+ * a stream of no PCM, a period shorter than 128 bytes or a frame, or a PCM
+ * that allows no rate.
+ */
+static int hh_stream_setup(audio_stream_t *s)
+{
+    struct hh_pcm *m;
+    uint32_t n;
+    int bi, wide, ch;
+
+    mutex_lock(&hh_mutex);
+    m = hh_pcm_of(s);
+    if (!m || s->period_bytes < 128) {
+        mutex_unlock(&hh_mutex);
+        return -EINVAL;
+    }
+    s->rate = s->rate < HH_RATE_MIN ? HH_RATE_MIN : s->rate > HH_RATE_MAX ? HH_RATE_MAX : s->rate;
+    s->channels = s->channels < 1 ? 1 : s->channels > HH_CLIENT_CH ? HH_CLIENT_CH : s->channels;
+    if (s->period_bytes > HH_PERIOD_MAX) {
+        s->period_bytes = HH_PERIOD_MAX;
+    }
+    m->sframe = (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
+    bi = hh_nearest_rate(m, s->rate);
+    if (s->period_bytes < m->sframe || bi < 0) {
+        mutex_unlock(&hh_mutex);
+        return -EINVAL;
+    }
+    s->period_bytes -= s->period_bytes % m->sframe;
+    ch = (s->channels + 1) & ~1;
+    if (ch > (m->chmax & ~1)) {
+        ch = m->chmax & ~1;
+    }
+    wide = m->wide && AUDIO_SAMPLE_BYTES(s->format) > 2u;
+    m->rate = hh_rate_hz[bi];
+    m->ch = ch;
+    m->frame = (uint32_t)ch * (wide ? 4u : 2u);
+    n = hh_ring(m, s, wide);
+    if (hh_lead(m, n) > HH_STREAM_MAX) {
+        s->rate = m->rate;
+        n = hh_ring(m, s, wide);
     }
     s->device_periods = hh_lead(m, n) / s->period_bytes;
     m->n = n;
@@ -1931,81 +1962,76 @@ static int hh_open1(audio_stream_t *s)
     return hh_pcm_open(&hh_pcms[1], s);
 }
 
+/** Take PCM 2's stream, /dev/dsp2's. */
+static int hh_open2(audio_stream_t *s)
+{
+    return hh_pcm_open(&hh_pcms[2], s);
+}
+
+/** Take PCM 3's stream, /dev/dsp3's. */
+static int hh_open3(audio_stream_t *s)
+{
+    return hh_pcm_open(&hh_pcms[3], s);
+}
+
 /** The driver has only streams: no write path, volume or input. */
 static int hh_none_init(void)
 {
     return -1;
 }
 
-/* The stream operations of each PCM, which differ only in their open. */
-audio_driver_t hdmi_audio_driver = {"HDA Intel HDMI",
-                                    AUDIO_DRIVER_HDA,
-                                    hh_none_init,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    hh_open0,
-                                    hh_stream_setup,
-                                    hh_stream_start,
-                                    hh_stream_stop,
-                                    hh_stream_close,
-                                    hh_stream_position,
-                                    hh_stream_delay,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    HH_MAX_CH};
-static audio_driver_t hh_driver1 = {"HDA Intel HDMI",
-                                    AUDIO_DRIVER_HDA,
-                                    hh_none_init,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    hh_open1,
-                                    hh_stream_setup,
-                                    hh_stream_start,
-                                    hh_stream_stop,
-                                    hh_stream_close,
-                                    hh_stream_position,
-                                    hh_stream_delay,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    HH_MAX_CH};
+/* The stream operations of each PCM, which differ only in their open; the
+ * template's `stream_open` is filled in for each by hdmi_audio_init. */
+static int (*const hh_opens[HH_MAX_PCMS])(audio_stream_t *s) = {hh_open0, hh_open1, hh_open2,
+                                                                hh_open3};
+static const audio_driver_t hh_driver_template = {"HDA Intel HDMI",
+                                                  AUDIO_DRIVER_HDA,
+                                                  hh_none_init,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  hh_stream_setup,
+                                                  hh_stream_start,
+                                                  hh_stream_stop,
+                                                  hh_stream_close,
+                                                  hh_stream_position,
+                                                  hh_stream_delay,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  HH_CLIENT_CH};
+static audio_driver_t hh_drivers[HH_MAX_PCMS];
 
-/* ---- /dev/dsp1 and /dev/adsp1 ---- */
+/* ---- the PCMs' OSS devices ---- */
 
 static const struct file_ops hh_dsp_ops = {dspdev_read,  dspdev_write, dspdev_poll, dspdev_ioctl,
                                            dspdev_close, NULL,         NULL,        0};
 
 static int32_t hh_dsp_open(struct devfs_node *node, struct fd_entry *e, int flags);
 
-/* The PCMs' OSS devices, as Linux's OSS layer names a card's first two
- * PCMs: dsp1 and adsp1, minors 19 and 28. */
+/* The PCMs' OSS devices: dsp1 and adsp1, minors 19 and 28, as Linux's OSS
+ * layer names a card's first two PCMs, then dsp2 and dsp3, minors 35 and
+ * 51, the names it gives the next cards' first, since it names no more of
+ * one card's and Rach2 has no ALSA PCM devices to reach them. */
 static struct devfs_node hh_dsp_nodes[HH_MAX_PCMS] = {
     {"dsp1", DSP_MAJOR, HDMI_DSP_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0},
-    {"adsp1", DSP_MAJOR, HDMI_ADSP_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0}};
+    {"adsp1", DSP_MAJOR, HDMI_ADSP_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0},
+    {"dsp2", DSP_MAJOR, HDMI_DSP2_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0},
+    {"dsp3", DSP_MAJOR, HDMI_DSP3_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0}};
 static int hh_dsp_registered[HH_MAX_PCMS];
 
-/** Open /dev/dsp1 or /dev/adsp1 on its PCM's stream. */
+/** Open a PCM's OSS device on its PCM's stream. */
 static int32_t hh_dsp_open(struct devfs_node *node, struct fd_entry *e, int flags)
 {
-    return dspdev_open_driver(e, flags,
-                              node == &hh_dsp_nodes[0] ? &hdmi_audio_driver : &hh_driver1);
+    return dspdev_open_driver(e, flags, &hh_drivers[node - hh_dsp_nodes]);
 }
 
 /* ---- the component ---- */
@@ -2014,8 +2040,9 @@ static int32_t hh_dsp_open(struct devfs_node *node, struct fd_entry *e, int flag
  * The display is there: bring the controller and codec up once to find the
  * pins, read each entry's ELD, attach a PCM to each valid one in turn, and
  * offer each PCM's device, as azx_probe_continue, patch_i915_hsw_hdmi and
- * generic_hdmi_build_pcms do: one PCM for each converter, as many as the
- * controller has output streams and OSS has names. Under the component's
+ * generic_hdmi_build_pcms do: one PCM for each converter, no more than
+ * there are pin entries, as Linux makes them, nor than the controller has
+ * output streams, one of which each PCM plays on. Under the component's
  * lock.
  */
 static void hh_bind(void *ptr, const struct acomp_ops *ops, void *dev)
@@ -2028,7 +2055,7 @@ static void hh_bind(void *ptr, const struct acomp_ops *ops, void *dev)
     hh_dev = dev;
     if (hh_power_get() == 0) {
         outs = (int)((hh_read(HDA_GCAP, 16) >> 12) & 0xf);
-        hh_npcms = hh_ncvts < HH_MAX_PCMS ? hh_ncvts : HH_MAX_PCMS;
+        hh_npcms = hh_ncvts < hh_npins ? hh_ncvts : hh_npins;
         hh_npcms = outs < hh_npcms ? outs : hh_npcms;
         for (k = 0; k < hh_npcms; k++) {
             hh_pcms[k].pin = -1;
@@ -2132,7 +2159,7 @@ static void hh_notify(void *ptr, int port, int pipe)
             hh_detach_pcm(p);
         }
         m = p->pcm >= 0 ? &hh_pcms[p->pcm] : NULL;
-        if (m && m->stream && (turned || !p->cvt)) {
+        if (m && hh_pcm_live(m) && (turned || !p->cvt)) {
             hh_pin_attach(m, p);
         }
         break;
@@ -2175,6 +2202,8 @@ void hdmi_audio_init(void)
     for (k = 0; k < HH_MAX_PCMS; k++) {
         hh_pcms[k].pin = -1;
         hh_pcms[k].cvt_idx = -1;
+        hh_drivers[k] = hh_driver_template;
+        hh_drivers[k].stream_open = hh_opens[k];
     }
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &d)) {
         if (HDMI_AUDIO_DRIVES(d.vendor_id, d.device_id)) {
