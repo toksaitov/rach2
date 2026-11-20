@@ -2001,6 +2001,7 @@ COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
     build/tests/cases/host/krffscheck build/tests/cases/host/pure64check \
     build/tests/cases/host/esctest2 build/tests/cases/machine/agent_server \
     build/tests/cases/gnu/sntpserver build/tests/system/fakeapi_test \
+    build/tests/cases/netguest/nettput-host \
     build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture \
     $(WIFI_MKCPIO) $(WIFI_HWSIMRELAY) $(AUDIO_MKRESAMPLE) $(AUDIO_RESAMPLEBENCH)
