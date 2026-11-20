@@ -307,10 +307,11 @@ static int loop_count_ok(uint32_t count)
  * Read whole sectors from the file through the file system it is on.
  *
  * The file's length at the attachment fixed the sector count, and a
- * truncation may have cut the file since (`loop_length_pinned`): the
- * bytes past its end read as zeros, as Linux 6.12's loop fills a short read
- * of its file (`lo_read_simple`). An error of the file system is a device
- * error, `-EIO`.
+ * truncation may have cut the file since (`loop_length_pinned`): a request
+ * that reaches past its end reads as zeros whole, the bytes before the end
+ * too, as Linux 6.12's loop zero-fills every bio of a request whose read
+ * of its file came up short (`lo_read_simple`). An error of the file system
+ * is a device error, `-EIO`.
  */
 static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
@@ -333,7 +334,7 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
         return -EIO;
     }
     if ((uint32_t)got < bytes) {
-        k_memset((uint8_t *)buffer + got, 0, bytes - (uint32_t)got);
+        k_memset(buffer, 0, bytes);
     }
     return 0;
 }

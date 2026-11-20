@@ -1267,8 +1267,10 @@ static int all_bytes(const char *p, int count, char want)
 /**
  * A truncation of a file a device stands on, as Linux takes it: cut.img, 8
  * sectors of 'Z' on the images' volume, is attached to B and cut by a
- * sector, and the device, whose size stays what it was, reads the cut
- * sector as zeros, as Linux's loop fills a short read of its file. A
+ * sector, and the device, whose size stays what it was, reads the one
+ * request of its 8 sectors as zeros whole, the 7 the file still has among
+ * them, as Linux 6.12's loop zero-fills a request whose read of its file
+ * came up short. A
  * truncate by path and an open with O_TRUNC go through as well. The device
  * is read once, after the cut, so that no cached block of it predates it.
  */
@@ -1301,8 +1303,8 @@ static void length_rows(void)
         fail_with("reading a device whose file was cut", rc);
     }
     syscall1(SYS_CLOSE, fd);
-    if (!all_bytes(block, 3584, 'Z') || !all_bytes(block + 3584, 512, 0)) {
-        fail("the device does not read its file's bytes and zeros past its new end");
+    if (!all_bytes(block, (int)sizeof(block), 0)) {
+        fail("the device does not read a request past its file's new end as zeros whole");
     }
     rc = syscall2(SYS_TRUNCATE, (long)path, 4096);
     if (rc != 0) {
