@@ -57,18 +57,20 @@ static ACPI_STATUS pcihp_window(ACPI_RESOURCE *res, void *context)
     return AE_OK;
 }
 
-/** A resource of a host bridge's _CRS: a range of bus numbers in a Word,
- * DWord or QWord descriptor puts its first bus in the UINT64 `context`
- * points to, the last such range winning, as Linux's
- * get_root_bridge_busnr_callback reads them. */
+/**
+ * A resource of a host bridge's _CRS: a Word, DWord or QWord descriptor of
+ * bus numbers whose AddressLength is not 0 puts its Minimum in the UINT64
+ * `context` points to, the last such range winning, as Linux's
+ * get_root_bridge_busnr_callback reads them. Its Maximum is not looked at,
+ * since some firmware leaves it 0.
+ */
 static ACPI_STATUS pcihp_busnr(ACPI_RESOURCE *res, void *context)
 {
-    uint64_t start, end;
-    int address;
+    ACPI_RESOURCE_ADDRESS64 a;
 
-    if (res->Type != ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64 &&
-        acpi_resource_range(res, &start, &end, &address) == ACPI_RANGE_BUS) {
-        *(UINT64 *)context = start;
+    if (ACPI_SUCCESS(AcpiResourceToAddress64(res, &a)) && a.ResourceType == ACPI_BUS_NUMBER_RANGE &&
+        a.Address.AddressLength != 0) {
+        *(UINT64 *)context = a.Address.Minimum;
     }
     return AE_OK;
 }

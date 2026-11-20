@@ -19,11 +19,12 @@
  * says, with its translation for a producer and without it for a consumer,
  * ports from 0x100 up only, and nothing for a range of bus numbers, one of
  * no length or one that ends below its start; and acpi_resource_range's
- * kind and address flag for each. Then the namespace's host bridges, two
+ * kind and address flag for each. Then the namespace's host bridges, three
  * of PCI segment 0 and three of segment 1, one of each with slots, one
  * with a _SEG that is no integer, show that only segment 0's windows and
  * slots are kept, with a producer's translation, for the root bus of the
- * last Word, DWord or QWord range of bus numbers in its _CRS.
+ * last Word, DWord or QWord range of bus numbers in its _CRS, whose
+ * Minimum counts whenever its length is not 0, whatever its Maximum.
  */
 
 /* The kernel's headers first, whose NULL ACPICA's leaves alone; then
@@ -110,7 +111,7 @@ struct model_slot {
     UINT64 adr;
 };
 
-static struct model_root model_roots[5];
+static struct model_root model_roots[6];
 static int model_nroots;
 static struct model_slot model_slots[8];
 static int model_nslots;
@@ -560,8 +561,9 @@ static int kept_is(int k, uint8_t bus, uint64_t start, uint64_t end)
  * 0x80, whose _CRS gives an Extended bus range first and then a QWord one,
  * and a translated window; segment 1's bus 0x80, with the window segment
  * 0's BAR at 0xD1000000 would otherwise lie in; segment 1's bus 0 with a
- * slot; a bridge whose _SEG is no integer; and segment 0's bus 0, by its
- * _BBN, with two slots.
+ * slot; a bridge whose _SEG is no integer; segment 0's bus 0, by its
+ * _BBN, with two slots; and segment 0's bus 0x90, with no _BBN, whose
+ * QWord bus range has a Maximum of 0 below its Minimum and a length.
  */
 static void segment_rows(void)
 {
@@ -586,12 +588,20 @@ static void segment_rows(void)
     r->bbn_status = AE_OK;
     window(&r->crs[0], 0, ACPI_MEMORY_RANGE, 0xA0000000u, 0xA0FFFFFFu, 0);
     r->ncrs = 1;
+    r = bridge(AE_NOT_FOUND, 0, 0);
+    window(&r->crs[0], 0, ACPI_BUS_NUMBER_RANGE, 0x90, 0, 0);
+    r->crs[0].Data.Address64.Address.AddressLength = 0x10;
+    window(&r->crs[1], 0, ACPI_MEMORY_RANGE, 0xB0000000u, 0xB0FFFFFFu, 0);
+    r->ncrs = 2;
 
     acpi_pcihp_start();
     check(kept_is(0, 0x80, 0xC0000000u, 0xCFFFFFFFu),
           "pcihp: segment 0's window is kept for the last QWord bus range, translated");
-    check(kept_is(1, 0, 0xA0000000u, 0xA0FFFFFFu) && nkept == 2,
+    check(kept_is(1, 0, 0xA0000000u, 0xA0FFFFFFu) && nkept == 3,
           "pcihp: no window of segment 1, nor of a bridge whose _SEG is no integer, is kept");
+    check(kept_is(2, 0x90, 0xB0000000u, 0xB0FFFFFFu),
+          "pcihp: a bus range's Minimum is the root bus whenever its length is not 0, whatever "
+          "its Maximum");
     check(nslots == 2 && slots[0].handle == &model_slots[1] && slots[1].handle == &model_slots[2],
           "pcihp: only segment 0's bus 0 gives its slots");
 }
