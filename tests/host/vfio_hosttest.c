@@ -895,8 +895,26 @@ int isr_alloc_vector(void)
     return -1;
 }
 
+/* A message sent before its vector's removal that another processor has
+ * taken and not yet run, which the sync runs; a vector given back first
+ * counts in `freed_in_flight`. */
+static int in_flight[256];
+static int freed_in_flight;
+
+static void raise(int vector);
+
+void isr_vector_sync(int vector)
+{
+    if (in_flight[vector]) {
+        in_flight[vector] = 0;
+        raise(vector);
+    }
+}
+
 void isr_free_vector(int vector)
 {
+    freed_in_flight += in_flight[vector];
+    in_flight[vector] = 0;
     vector_taken[vector] = 0;
     handlers[vector] = NULL;
 }
@@ -2058,9 +2076,14 @@ static void msi_rows(void)
     }
     CHECK(evs[2].count == 2, "the restored message reaches its original eventfd");
     fd[0] = -1;
+    if (msi_vector >= 48) {
+        in_flight[msi_vector] = 1;
+    }
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, fd) == 0 &&
               msi_vector == -1 && vectors_held() == 0 && evs[2].refs == 0,
           "removing the MSI eventfd turns off the message before giving the vector back");
+    CHECK(evs[2].count == 3 && freed_in_flight == 0,
+          "after a message sent before then has signalled its eventfd");
     CHECK(set_irqs(device, NONE_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 0, NULL) == 0 &&
               vectors_held() == 0 && evs[2].refs == 0 && msi_vector == -1,
           "MSI off gives its vector back");
