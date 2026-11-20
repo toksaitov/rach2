@@ -87,7 +87,7 @@ typedef struct audio_stream {
     audio_dir_t dir;
     uint32_t rate;           /* frames per second */
     audio_format_t format;   /* any; a device grants U8, S16LE or S32LE */
-    int channels;            /* 1 or 2 */
+    int channels;            /* 1 or 2; up to the driver's channels_max */
     uint32_t period_bytes;   /* bytes of one period, a whole number of frames */
     uint32_t periods;        /* periods in the caller's buffer, at least 2 */
     uint32_t device_periods; /* periods in the driver's buffer, at least 1 */
@@ -247,6 +247,10 @@ typedef struct audio_driver {
     /* Set the generator's level, 0 to 100, where 0 silences it; with
      * `level` negative only read it. The level after, or -ENODEV. */
     int (*beep_level)(int level);
+
+    /* The most channels `stream_setup` grants, as OSS's SNDCTL_DSP_CHANNELS
+     * asks for them; 0 for 2. */
+    int channels_max;
 } audio_driver_t;
 
 /*
