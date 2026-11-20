@@ -108,14 +108,15 @@ static int already_listed(const struct netdev *nd, int a, int kind, const struct
     return 0;
 }
 
-/** Whether another address supplies this generated prefix on the same card. */
-static int other_prefix(struct netdev *nd, int slot, const struct route6_row *r)
+/** Whether the address list supplies this retained route on the same card. */
+static int listed_prefix(struct netdev *nd, const struct route6_row *r)
 {
     struct route6_row other;
-    int i;
+    int i, k;
     for (i = 0; i < nd->naddr6; i++)
-        if (i != slot && address_route(nd, i, PREFIX6, &other) && same_prefix(r, &other))
-            return 1;
+        for (k = PREFIX6; k <= PEER_PREFIX6; k *= 2)
+            if (address_route(nd, i, k, &other) && same_prefix(r, &other))
+                return 1;
     return 0;
 }
 
@@ -159,7 +160,7 @@ int route6_at(int n, struct route6_row *out)
             key.plen = r->plen;
             key.metric = r->metric;
             k_memcpy(key.dst, r->dst, IP6_ADDR_LEN);
-            if (other_prefix(r->nd, -1, &key))
+            if (listed_prefix(r->nd, &key))
                 continue;
         }
         if (n-- != 0) {
@@ -339,7 +340,7 @@ static int matches(const struct route6_row *r, const struct route6_row *want)
 /** Find or withdraw all address references to one generated prefix. */
 static int generated6(const struct netdev *only, const struct route6_row *want, int remove)
 {
-    struct route6_row r;
+    struct route6_row r, selected;
     int i, a, k, found = 0;
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
@@ -347,18 +348,24 @@ static int generated6(const struct netdev *only, const struct route6_row *want, 
             continue;
         for (a = 0; a < nd->naddr6; a++) {
             for (k = PREFIX6; k <= PEER_PREFIX6; k *= 2) {
-                if (address_route(nd, a, k, &r) && matches(&r, want)) {
+                if (address_route(nd, a, k, &r) && matches(&r, want) &&
+                    (!found || same_prefix(&selected, &r))) {
                     if (!remove)
                         return 1;
+                    selected = r;
                     nd->addr6[a].deleted_routes |= (uint8_t)k;
                     found = 1;
                 }
             }
         }
-        if (found)
-            break;
+        if (found) {
+            int slot = find(nd, selected.dst, selected.plen, selected.gw, selected.metric);
+            if (!selected.local && slot >= 0 && table6[slot].retained)
+                table6[slot].nd = 0;
+            return 1;
+        }
     }
-    return found;
+    return 0;
 }
 
 /** The first table slot matching the requested prefix and selectors. */
@@ -374,6 +381,48 @@ static int table_match(const struct netdev *nd, const struct route6_row *want)
             return i;
     }
     return -1;
+}
+
+/** Select the lowest-metric route matching the supplied FIB selectors. */
+static int select_row6(const struct netdev *nd, const struct route6_row *key, int direct,
+                       struct route6_row *selected)
+{
+    struct route6_row r;
+    int n, found = 0;
+    for (n = 0; route6_at(n, &r); n++) {
+        if ((!nd || r.ifindex == nd->index) && matches(&r, key) &&
+            (!direct || ip6_is_unspecified(r.gw)) && (!found || r.metric < selected->metric)) {
+            *selected = r;
+            found = 1;
+        }
+    }
+    return found;
+}
+
+/** Find the stored copy of a selected row, including its exact gateway. */
+static int selected_slot(const struct netdev *nd, const struct route6_row *r)
+{
+    int i;
+    for (i = 0; i < table_size; i++) {
+        const struct route6 *entry = &table6[i];
+        if (entry->nd == nd && entry->plen == r->plen && entry->local == r->local &&
+            entry->proto == r->proto && entry->metric == r->metric &&
+            ip6_equal(entry->dst, r->dst) && ip6_equal(entry->gw, r->gw))
+            return i;
+    }
+    return -1;
+}
+
+/** Remove the selected FIB entry, including its address references. */
+static void remove_row6(const struct route6_row *r)
+{
+    struct netdev *nd = card_of(r->ifindex);
+    int i;
+    if (!generated6(nd, r, 1)) {
+        i = selected_slot(nd, r);
+        if (i >= 0)
+            table6[i].nd = 0;
+    }
 }
 
 /** Check the new route before consuming or replacing a table entry. */
@@ -433,15 +482,11 @@ int route6_change_row(struct netdev *nd, const struct route6_row *input, int del
     mask_prefix(r.dst, r.plen);
     lock = net_lock();
     if (del) {
-        if (generated6(nd, &r, 1)) {
-            net_unlock(lock);
-            return 0;
-        }
-        i = table_match(nd, &r);
-        if (i >= 0)
-            table6[i].nd = 0;
+        rc = select_row6(nd, &r, 0, &selector) ? 0 : -ESRCH;
+        if (!rc)
+            remove_row6(&selector);
         net_unlock(lock);
-        return i >= 0 ? 0 : -ESRCH;
+        return rc;
     }
     rc = route6_valid(nd, &r);
     if (rc) {
@@ -518,35 +563,71 @@ void route6_peer_change(struct netdev *nd, struct netdev_addr6 *a, const uint8_t
     k_memcpy(a->peer, peer, IP6_ADDR_LEN);
 }
 
+/** Delete the permanent address's direct prefix, or set its remaining
+ * lifetime from the other addresses on that subnet, as addrconf does. */
+static void cleanup_prefix(struct netdev *nd, int slot)
+{
+    struct netdev_addr6 *a = &nd->addr6[slot];
+    struct route6_row key = {0}, r;
+    uint64_t expires = 0;
+    int i;
+    for (i = 0; i < nd->naddr6; i++) {
+        const struct netdev_addr6 *other = &nd->addr6[i];
+        uint64_t end;
+        if (i == slot || other->prefix != a->prefix ||
+            !ip6_prefix_match(other->addr, a->addr, a->prefix))
+            continue;
+        if (other->noprefix || (other->flags & NETDEV_A6_PERMANENT))
+            return;
+        end = other->since + (uint64_t)other->valid * TICK_HZ;
+        if (end > expires)
+            expires = end;
+    }
+    key.plen = a->prefix;
+    k_memcpy(key.dst, a->addr, IP6_ADDR_LEN);
+    mask_prefix(key.dst, key.plen);
+    if (!select_row6(nd, &key, 1, &r))
+        return;
+    if (expires <= tick_count()) {
+        remove_row6(&r);
+    } else if (!r.expires) {
+        i = selected_slot(nd, &r);
+        if (generated6(nd, &r, 1))
+            retain_prefix(nd, &r, expires);
+        else if (i >= 0)
+            table6[i].expires = expires;
+    }
+}
+
 void route6_address_removed(struct netdev *nd, int slot)
 {
     struct netdev_addr6 *a = &nd->addr6[slot];
-    struct route6_row r;
+    struct route6_row key = {0}, r;
     uint64_t expires;
-    int i;
+    int i, k;
     for (i = 0; i < table_size; i++)
         if (table6[i].nd && ip6_equal(table6[i].prefsrc, a->addr) &&
             !has_source(table6[i].nd, a->addr, a))
             k_memset(table6[i].prefsrc, 0, IP6_ADDR_LEN);
-    if (!address_route(nd, slot, PREFIX6, &r))
-        return;
-    if (!(a->flags & NETDEV_A6_PERMANENT)) {
-        expires = a->since + (uint64_t)a->valid * TICK_HZ;
-        if (expires > tick_count())
-            retain_prefix(nd, &r, expires);
-        return;
+    if (!ip6_is_unspecified(a->peer)) {
+        key.plen = 128;
+        k_memcpy(key.dst, a->peer, IP6_ADDR_LEN);
+        if (select_row6(nd, &key, 0, &r))
+            remove_row6(&r);
     }
-    for (i = 0; i < nd->naddr6; i++) {
-        struct netdev_addr6 *other = &nd->addr6[i];
-        if (other->noprefix && other->prefix == r.plen &&
-            ip6_prefix_match(other->addr, r.dst, r.plen)) {
-            retain_prefix(nd, &r, 0);
-            return;
+    if ((a->flags & NETDEV_A6_PERMANENT) && !a->noprefix)
+        cleanup_prefix(nd, slot);
+    for (k = PREFIX6; k <= PEER_PREFIX6; k *= 2) {
+        if (k == LOCAL6 || !address_route(nd, slot, k, &r))
+            continue;
+        expires = 0;
+        if (k != PEER6 && a->valid != NETDEV_LIFETIME_FOREVER) {
+            expires = a->since + (uint64_t)a->valid * TICK_HZ;
+            if (expires <= tick_count())
+                continue;
         }
+        retain_prefix(nd, &r, expires);
     }
-    i = find(nd, r.dst, r.plen, r.gw, r.metric);
-    if (i >= 0 && table6[i].retained && !other_prefix(nd, slot, &r))
-        table6[i].nd = 0;
 }
 
 struct netdev *route6_added_local(const uint8_t *dst)
