@@ -16,14 +16,14 @@
  const phase = name => { phases[name] = Math.round(performance.now() * 10) / 10; };
  try {
   phase('begin');
-  const adapter = await navigator.gpu.requestAdapter();
+  const adapter = await navigator.gpu.requestAdapter(swiftshader ? {forceFallbackAdapter: true} : undefined);
   phase('adapter');
   if (!adapter) throw Error('no WebGPU adapter');
   const info = adapter.info;
   result.adapter = {vendor: info.vendor, architecture: info.architecture,
    device: info.device, description: info.description, isFallbackAdapter: info.isFallbackAdapter};
   if (swiftshader) {
-   if (!/swiftshader/i.test(info.description)) throw Error('no SwiftShader adapter');
+   if (info.architecture !== 'swiftshader') throw Error('no SwiftShader adapter');
   } else if (info.vendor !== 'intel' || info.architecture !== 'gen-7' || info.isFallbackAdapter)
    throw Error('no native Intel gen-7 adapter');
   const device = await adapter.requestDevice();

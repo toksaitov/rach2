@@ -479,13 +479,15 @@ def hasvk_picture(b, url, trace=None, swiftshader=False, picture_done=None):
     the readback too and marks every frame. PICTURE_DONE runs after the
     picture has answered, while its threads are still alive.
     """
+    request = "navigator.gpu.requestAdapter()"
     check = """
         if (!adapter || adapter.info.vendor !== 'intel' ||
             adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
             throw Error('no native Intel gen-7 adapter');"""
     if swiftshader:
+        request = "navigator.gpu.requestAdapter({forceFallbackAdapter: true})"
         check = """
-        if (!adapter || !/swiftshader/i.test(adapter.info.description))
+        if (!adapter || adapter.info.architecture !== 'swiftshader')
             throw Error('no SwiftShader adapter');"""
     timing = {"transferMode": "ReturnAsStream", "streamCompression": "gzip",
               "traceConfig": {"recordMode": "recordContinuously", "traceBufferSizeInKb": 262144,
@@ -494,10 +496,10 @@ def hasvk_picture(b, url, trace=None, swiftshader=False, picture_done=None):
         b.client.call("Tracing.start", timing)
     b.navigate(url + "/page.html")
     result = {"readback": b.script("""(async () => {
-        const adapter = await navigator.gpu.requestAdapter();
-        """ + check + """
+        const adapter = await %s;
+        %s
         return await gpu(adapter);
-    })()""")}
+    })()""" % (request, check))}
     save(b.out / "partial.json", result)
     got = result["readback"]
     assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got

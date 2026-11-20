@@ -69,7 +69,7 @@ def main():
                 if picture["frames"] != 480:
                     raise RuntimeError("expected 480 frames, got %d" % picture["frames"])
                 print("qemu: result: 480 frames, %.3f s, %s" %
-                      (picture["seconds"], picture["adapter"]["description"]))
+                      (picture["seconds"], picture["adapter"]["architecture"]))
         finally:
             stop(weston)
 
