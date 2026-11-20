@@ -68,7 +68,11 @@ static int signal_locked(struct eventfd *ev, const struct eventfd_hook *skip)
 
     for (h = ev->hooks; h; h = next) {
         next = h->next;
-        if (h != skip && h->signal(h) && ev->count != 0) {
+        /* Compared as addresses: cppcheck takes h == skip, skip NULL, as a
+         * null test of h. */
+        if ((uintptr_t)h == (uintptr_t)skip)
+            continue;
+        if (h->signal(h) && ev->count != 0) {
             take_locked(ev);
             took = 1;
         }
