@@ -1861,6 +1861,45 @@ void hidinput_mt_feature_answer(struct hid_dev *hid, const uint8_t *data, int le
     }
 }
 
+/**
+ * Mark each input whose contacts are one record in one report, which
+ * Linux's hid-multitouch takes for a serial device and whose Contact Count
+ * it does not trust (`mt_post_parse_default_settings`). A model in its
+ * device table, here one that omits lifted contacts, is not one.
+ */
+static void mt_find_serial(struct hid_dev *hid)
+{
+    uint32_t first[HID_MAX_INPUTS], key, i, j, count;
+    uint8_t many[HID_MAX_INPUTS];
+    const struct hid_usage *u;
+    const struct hid_field *f;
+
+    k_memset(first, 0, sizeof(first));
+    k_memset(many, 0, sizeof(many));
+    for (i = 0; i < hid->desc.nfields; i++) {
+        f = field_at(hid, i);
+        if (f->input >= hid->ninputs) {
+            continue;
+        }
+        u = usages_of(hid, f);
+        count = input_usage_count(hid, f);
+        for (j = 0; j < count; j++) {
+            if (!u[j].mt_group || u[j].mt_group >= HID_MT_BUTTON) {
+                continue;
+            }
+            key = ((f->report + 1u) << 16) | u[j].mt_group;
+            if (!first[f->input]) {
+                first[f->input] = key;
+            } else if (first[f->input] != key) {
+                many[f->input] = 1;
+            }
+        }
+    }
+    for (i = 0; i < hid->ninputs; i++) {
+        hid->inputs[i].mt_serial = first[i] && !many[i] && !hid->inputs[i].mt_drop_unused;
+    }
+}
+
 /** Set aside enough contact records for the largest multitouch report. */
 static int mt_workspace(struct hid_dev *hid)
 {
@@ -2027,6 +2066,7 @@ int hidinput_connect(struct hid_dev *hid)
     (void)detect_mt_reports(hid);
     setup_multipliers(hid, 0);
     configure_reports(hid);
+    mt_find_serial(hid);
     if (mt_workspace(hid) != 0) {
         return -1;
     }
@@ -2275,7 +2315,12 @@ static void mt_collect(struct hid_dev *hid, struct hid_input *in, const struct h
     }
 }
 
-/** Give one packet's contact to the slot keyed by its HID identifier. */
+/**
+ * Give one packet's contact to the slot keyed by its HID identifier, as
+ * Linux's `mt_process_slot`. A contact without confidence is a palm; one
+ * that leaves its slot as a palm is reported as an active palm and lifted
+ * after the frame (`mt_release_palms`), so that a reader learns it was one.
+ */
 static void mt_contact(struct hid_input *in, struct hid_mt_contact *c)
 {
     static const uint16_t axes[] = {ABS_MT_POSITION_X,  ABS_MT_POSITION_Y,  ABS_MT_TOOL_X,
@@ -2285,13 +2330,20 @@ static void mt_contact(struct hid_input *in, struct hid_mt_contact *c)
     int slot = evdev_mt_get_slot_by_key(dev, c->id);
     unsigned int i, axis;
     int32_t width, height;
+    int active = c->tip || c->in_range;
 
     if (slot < 0) {
         return;
     }
+    if (!c->confidence && !active && evdev_mt_slot_active(dev, slot)) {
+        active = 1;
+        if (!test_bit(in->mt_palm, (unsigned)slot)) {
+            set_bit(in->mt_palm, (unsigned)slot);
+            in->mt_palms++;
+        }
+    }
     evdev_report(dev, EV_ABS, ABS_MT_SLOT, slot);
-    if (!evdev_mt_report_slot_state(dev, c->confidence ? MT_TOOL_FINGER : MT_TOOL_PALM,
-                                    c->tip || c->in_range)) {
+    if (!evdev_mt_report_slot_state(dev, c->confidence ? MT_TOOL_FINGER : MT_TOOL_PALM, active)) {
         return;
     }
     if (test_bit(in->abs, ABS_MT_DISTANCE)) {
@@ -2333,8 +2385,14 @@ static void mt_report_buttons(struct hid_input *in)
     }
 }
 
-/** Report the packet and return whether its frame is complete. A positive
- * Contact Count starts a frame, and zero continues one still under way. */
+/**
+ * Report the packet and return whether its frame is complete, as Linux's
+ * `mt_touch_report`. A positive Contact Count starts a frame and zero
+ * continues one still under way; zero at a frame's start keeps the last
+ * positive count, except on a Precision Touchpad, where it is a frame of
+ * buttons alone. Contacts past the count are dropped, except on a serial
+ * device, whose count is not trusted.
+ */
 static int mt_packet(struct hid_dev *hid, struct hid_input *in)
 {
     struct hid_mt_contact *c;
@@ -2349,10 +2407,13 @@ static int mt_packet(struct hid_dev *hid, struct hid_input *in)
             evdev_mt_end_frame(in->dev);
         }
         in->mt_left = in->mt_count;
+        in->mt_expected = in->mt_count;
+    } else if (in->mt_count == 0 && !in->mt_left && !in->mt_precision) {
+        in->mt_left = in->mt_expected;
     }
     while (i) {
         c = &hid->contacts[i - 1];
-        if (c->identified && (in->mt_count < 0 || in->mt_left > 0)) {
+        if (c->identified && (in->mt_count < 0 || in->mt_serial || in->mt_left > 0)) {
             mt_contact(in, c);
             if (in->mt_left > 0) {
                 in->mt_left--;
@@ -2487,6 +2548,29 @@ static void array_field(struct hid_dev *hid, struct hid_field *f)
     }
 }
 
+/** Lift the palms the frame just ended reported active, in a frame of
+ * their own, as Linux's `mt_release_pending_palms`. */
+static void mt_release_palms(struct hid_input *in)
+{
+    unsigned int slot;
+
+    for (slot = 0; in->mt_palms; slot++) {
+        if (test_bit(in->mt_palm, slot)) {
+            clear_bit(in->mt_palm, slot);
+            in->mt_palms--;
+            evdev_report(in->dev, EV_ABS, ABS_MT_SLOT, (int32_t)slot);
+            evdev_mt_report_slot_state(in->dev, MT_TOOL_FINGER, 0);
+        }
+    }
+    if (in->mt_drop_unused) {
+        evdev_mt_drop_unused(in->dev);
+    } else {
+        evdev_mt_end_frame(in->dev);
+    }
+    evdev_mt_report_pointer_emulation(in->dev, (in->mt_flags & INPUT_MT_POINTER) != 0);
+    evdev_report(in->dev, EV_SYN, SYN_REPORT, 0);
+}
+
 /** End complete packets and give the console mouse its relative motion. */
 static void sync_inputs(struct hid_dev *hid)
 {
@@ -2505,6 +2589,9 @@ static void sync_inputs(struct hid_dev *hid)
             continue;
         }
         evdev_report(in->dev, EV_SYN, SYN_REPORT, 0);
+        if (in->mt_palms) {
+            mt_release_palms(in);
+        }
         if (in->mouse && in->touched) {
             if (!evdev_grabbed(in->dev)) {
                 mouse_push_packet((uint8_t)(in->buttons & 0x07u), in->dx, -in->dy);
