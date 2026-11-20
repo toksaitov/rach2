@@ -280,7 +280,7 @@ hold_copy()
     mkdir "$hold/holder" || return 1
     { hold_script "$1 from $(hostname -s):$REPO"; cat; } < "$hold/in" |
         perl "$REPO/tools/flow/hold.pl" run -P -k 10 "$hold/holder" \
-            ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- bash -s -- $DEST" \
+            ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -- bash -s -- $DEST" \
             > "$hold/out" 2> "$hold/err" &
     holder=$!
     exec 3> "$hold/in" 4< "$hold/out"
@@ -377,7 +377,7 @@ holder_lost()
 send()
 {
     rsync -a --no-times --checksum --delete \
-        --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' "$@" 3>&-
+        --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4' "$@" 3>&-
 }
 
 # send_git: make the copy's `.git` a repository of its own at this worktree's
@@ -450,7 +450,7 @@ run_held()
         <&5 5<&- > "$hold/command" 3>&- &
     feeder=$!
     perl "$REPO/tools/flow/hold.pl" run -P -k 10 "$hold/cmd" \
-        ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && mkdir -p build/held && perl tools/flow/hold.pl clear build/held && mkdir build/held/$HELD && read -r c && exec perl tools/flow/hold.pl run -P -k 60 build/held/$HELD bash <(base64 -d <<< \$c)'" \
+        ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && mkdir -p build/held && perl tools/flow/hold.pl clear build/held && mkdir build/held/$HELD && read -r c && exec perl tools/flow/hold.pl run -P -k 60 build/held/$HELD bash <(base64 -d <<< \$c)'" \
         < "$hold/command" 3>&- 5<&- &
     command=$!
     exec 5<&-
@@ -486,7 +486,7 @@ stop_command()
     perl "$REPO/tools/flow/hold.pl" stop "$hold/cmd" 30 > /dev/null || :
     wait "$command" 2>/dev/null || :
     command=
-    perl "$REPO/tools/flow/bound.pl" 180 ssh -o BatchMode=yes "$HOST" \
+    perl "$REPO/tools/flow/bound.pl" 180 ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$HOST" \
         "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && perl tools/flow/hold.pl stop build/held/$HELD 120'" \
         < /dev/null > /dev/null 2>&1 ||
         echo "testing: the run build/held/$HELD in $DEST is not confirmed stopped on the host" >&2
@@ -524,7 +524,7 @@ case "${1:-}" in
         for path in "$@"; do
             mkdir -p "$REPO/$(dirname "$path")"
             rsync --times --sparse --compress \
-                --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
+                --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4' \
                 "$HOST:$DEST/$path" "$REPO/$path"
         done
         ;;
