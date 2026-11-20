@@ -637,8 +637,9 @@ static void fork_rows(void)
  * rows wake beside a current thread with positive lag L. Three threads
  * give one at each round of picks, whatever the slice; two equal ones, at
  * a slice of whole ticks, switch at equal virtual runtimes, lag 0. A
- * wakee of lag L among n queued threads lowers V by L / (n + 1), which
- * leaves the current eligible and puts the wakee's deadline first.
+ * wakee of lag L beside n equal threads is placed with lag L * (n + 1) / n,
+ * so that it keeps lag L once in the average, and lowers V by L / n: the
+ * current keeps lag L - L / n and the wakee's deadline comes first.
  */
 static void parity_rows(void)
 {
