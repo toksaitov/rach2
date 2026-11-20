@@ -389,6 +389,7 @@ static struct sleep_lock_record mount_lock_record = SLEEP_LOCK_RECORD("mount");
 static void mount_lock_init(struct vfs_mount *m)
 {
     sleep_lock_init(&m->ns, &mount_lock_record, 0);
+    rwsem_init(&m->name_walk, "name_walk");
     vfs_rename_lock_init(m);
     wait_queue_init(&m->drain_wq);
 }
@@ -3891,10 +3892,12 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
+    vfs_name_change_begin();
     victim = dcache_forget_victim(mount_base(mnt), dir, name);
     rc = mnt->type->ops->rmdir(mount_base(mnt), dir, name);
     dcache_forget(mount_base(mnt), dir, name);
     dcache_forget_dir(mount_base(mnt), victim);
+    vfs_name_change_end();
     if (rc == 0 && watched) {
         watch_removed(mnt, parent.ino, name, &was);
     }
