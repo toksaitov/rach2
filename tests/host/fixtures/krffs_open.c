@@ -832,11 +832,11 @@ static struct vfs_mount e2m_mount;
 
 /**
  * Open the ext2 model's file twice, as a loop attachment and an unrelated
- * opener of its image would, and require vfs_truncate and vfs_fallocate to
- * refuse either handle with EBUSY while the file backs a loop device; then,
- * with no attachment, require vfs_write, vfs_truncate and vfs_fallocate to
- * give the type the handle and the file page cache and the flag check the
- * node.
+ * opener of its image would, and require vfs_truncate to refuse either
+ * handle with EBUSY while the file backs a loop device, and vfs_fallocate to
+ * give the type the other handle, as Linux's does; then, with no attachment,
+ * require vfs_write, vfs_truncate and vfs_fallocate to give the type the
+ * handle and the file page cache and the flag check the node.
  */
 static void ext2_handles(void)
 {
@@ -856,13 +856,14 @@ static void ext2_handles(void)
     loop_table[0].handle = attached;
     loop_table[0].attached = 1;
     e2m_calls = 0;
-    check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == -EBUSY,
-          "fallocate by another open of a loop's backing file is EBUSY");
-    check(vfs_truncate(&e2m_mount, other, 0, 1) == -EBUSY, "and so is a truncation by that open");
-    check(vfs_fallocate(&e2m_mount, attached, 0, 0, 4096) == -EBUSY &&
-              vfs_truncate(&e2m_mount, attached, 0, 1) == -EBUSY,
-          "and by the attachment's own handle");
-    check(e2m_calls == 0, "the type never sees a change of a loop's backing file");
+    check(vfs_truncate(&e2m_mount, other, 0, 1) == -EBUSY,
+          "a truncation by another open of a loop's backing file is EBUSY");
+    check(vfs_truncate(&e2m_mount, attached, 0, 1) == -EBUSY,
+          "and so is one by the attachment's own handle");
+    check(e2m_calls == 0, "the type never sees a truncation of a loop's backing file");
+    e2m_data = NULL;
+    check(vfs_fallocate(&e2m_mount, other, 0, 0, 4096) == 0 && e2m_data == other && e2m_calls == 1,
+          "an fallocate by another open of a loop's backing file on ext2 reaches the type");
     k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
     forgot_node = NULL;
     check(vfs_write(&e2m_mount, other, "x", 1, 0) == 1 && e2m_data == other &&
@@ -1229,6 +1230,8 @@ static void publication_open(int flags, int before)
     loop_table[0].node = first->vnode;
     check(vfs_truncate(&mount, first->fhandle, 0, 1) == -EBUSY,
           "a truncation of a mounted KRFFS loop's backing file by its open record is EBUSY");
+    check(vfs_fallocate(&mount, first->fhandle, 0, 0, 512) == -EBUSY,
+          "and so is an fallocate, which may move the file");
     k_memset(&loop_table[0], 0, sizeof(loop_table[0]));
     moved = first->vnode;
     k_memset(payload, 'C', sizeof(payload));

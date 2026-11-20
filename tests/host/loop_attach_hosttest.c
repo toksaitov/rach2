@@ -57,9 +57,13 @@ static void (*waiting)(void);
    writer's descriptor is busy, and the resolutions. */
 static int failures, depth, opened, refs, active, busy, resolves;
 /* The faults a row sets: an open's error, a sync's error, a path resolving
-   on another mount, a missing path, a shared mapping of the file, and a
-   shared mapping made during the sync. */
-static int open_error, sync_error, switch_mount, missing, mapped, map_in_sync;
+   on another mount, and a missing path. */
+static int open_error, sync_error, switch_mount, missing;
+/* Whether a shared mapping may have stored into the file's pages, and the
+   bytes the last overlay was asked for. */
+static int stores;
+static uint64_t overlay_off;
+static uint32_t overlay_len;
 static char payload[4096], replacement[512], output[512];
 
 /** Count a failed check and print `what`. */
@@ -229,33 +233,37 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return rc;
 }
 
-/** Sync the backing file and return `sync_error`; with `map_in_sync` the
- * file is mapped shared during the sync, as another process could map it. */
+/** Sync the backing file and return `sync_error`. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle, uint32_t *seen)
 {
     (void)mnt;
     (void)handle;
     (void)seen;
-    if (map_in_sync) {
-        mapped = 1;
-    }
     return sync_error;
 }
 
-/** Report whether a shared mapping has the file's pages in memory. */
-int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
+/** Whether a shared mapping may have stored into the file: `stores`. */
+int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino)
 {
     (void)mnt;
     (void)ino;
-    return mapped;
+    return stores;
 }
 
-/** No file of the model is in memory: nothing maps its own pages. */
-int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node)
+/** Stand for the pages of a shared mapping: record the range asked for
+ * and put 0x6D, which no file of the rows holds, in its first byte, under
+ * the big lock that the pages are walked under. */
+void filemap_disk_overlay(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
+                          uint32_t len)
 {
     (void)mnt;
-    (void)node;
-    return 0;
+    (void)ino;
+    check(bkl_held(), "a loop read takes a mapping's stores under the big lock");
+    overlay_off = off;
+    overlay_len = len;
+    if (len) {
+        *(uint8_t *)buf = 0x6D;
+    }
 }
 
 /** No row keeps resident file pages for a private mapping. */
@@ -362,7 +370,9 @@ static void reset(void)
     mount.type = &vfs_krffs_type;
     mount.dev = &disk;
     depth = opened = refs = active = busy = resolves = 0;
-    open_error = sync_error = switch_mount = missing = mapped = map_in_sync = 0;
+    open_error = sync_error = switch_mount = missing = stores = 0;
+    overlay_off = ~(uint64_t)0;
+    overlay_len = 0;
     waiting = NULL;
 }
 
@@ -484,14 +494,13 @@ static void remove_path(void)
 }
 
 /** Check cleanup after each failing step under the namespace lock: a path
- * that moved or went, an open or a sync that failed, a writer in flight, and
- * a shared mapping of the file made before the attach or while its sync
- * slept. */
+ * that moved or went, an open or a sync that failed, and a writer in flight
+ * on a KRFFS file, which may move it. */
 static void error_rows(void)
 {
     int row;
 
-    for (row = 0; row < 7; row++) {
+    for (row = 0; row < 5; row++) {
         int expected = -EBUSY;
 
         reset();
@@ -503,18 +512,45 @@ static void error_rows(void)
             open_error = expected = -EACCES;
         } else if (row == 3) {
             sync_error = expected = -EIO;
-        } else if (row == 4) {
-            busy = 1;
-        } else if (row == 5) {
-            mapped = 1;
         } else {
-            map_in_sync = 1;
+            busy = 1;
         }
         check(loop_attach(0, "/image", 1) == expected,
               "attachment returns the failing step's error");
         check(!loops[0].used && !depth && !opened && !refs && !active,
               "failed attachment releases locks and references");
     }
+}
+
+/**
+ * Read the attached file while a shared mapping may hold stores the file
+ * lacks, from a caller without the big lock: the device's read takes them
+ * over what the file system read, for the bytes it read, under the big lock,
+ * and asks nothing of the pages when no mapping may have stored.
+ */
+static void mapped_row(void)
+{
+    block_device_t *loop;
+
+    reset();
+    check(loop_attach(0, "/image", 1) == 0, "mapped: attach the file");
+    loop = loop_attached_at(0);
+    stores = 1;
+    bkl_host_free = 1;
+    bkl_host_takes = 0;
+    k_memset(output, 0, sizeof(output));
+    check(loop && loop->read(loop, 0, 1, output) == 0 && output[0] == 0x6D &&
+              memcmp(output + 1, payload + 1, 511) == 0 && overlay_off == 0 && overlay_len == 512 &&
+              !bkl_held(),
+          "mapped: a read takes a shared mapping's stores over the file's bytes");
+    bkl_host_free = 0;
+    stores = 0;
+    overlay_len = 0;
+    check(loop && loop->read(loop, 0, 1, output) == 0 && output[0] == payload[0] &&
+              overlay_len == 0,
+          "mapped: with no store, a read is the file's");
+    check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
+          "mapped: detach releases the attachment");
 }
 
 /** Copy a loop ioctl's status block in, which fails: no row issues one. */
@@ -542,6 +578,7 @@ int main(void)
     relocation_row();
     phase_row();
     nested_row();
+    mapped_row();
     error_rows();
     if (!failures) {
         printf("loop-attach-hosttest: result: pass: relocation, reuse and cleanup\n");

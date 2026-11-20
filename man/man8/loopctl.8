@@ -79,7 +79,8 @@ attachment resolves the relocated file.
 If the path now resolves on another volume, attachment fails with
 .Er EBUSY .
 .Pp
-An attached file cannot be written or truncated; these operations fail with
+An attached file cannot be truncated, nor written on KRFFS; these
+operations fail with
 .Er EBUSY .
 The volume containing the file cannot be unmounted until the device is
 detached.

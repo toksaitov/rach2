@@ -126,21 +126,23 @@ same file for this purpose.
 A file on a loop-mounted volume cannot be attached to another loop device.
 A chain may contain only one loop device.
 .Pp
-While attached, the file cannot be written, truncated, grown by
+While attached, the file may be written, grown by
 .Xr fallocate 2 ,
-mapped shared through a descriptor open for writing, or written by a core
-dump, through any mount that shows it, a bind included.
-On the KRFFS boot root it cannot be unlinked or renamed over either; on
-every other file system it then loses its name and the device keeps the
-file until the detach, as on Linux.
-A file on tmpfs is not attached while a shared mapping through a
-descriptor open for writing maps it, or once it is sealed against
-shrinking, which
+mapped shared and writable, handed to
 .Xr udmabuf 4
-and
-.Xr vgpu-shm 4
-require before they hand its pages on; neither takes a file that is
+or
+.Xr vgpu-shm 4 ,
+and written by a core dump, as on Linux, and a file mapped shared may be
 attached.
+The device reads and writes the bytes these see: a read of the device
+returns what a shared mapping has stored and not yet written back, and a
+write of the device reaches the pages mappings hold.
+The file cannot be truncated, through any mount that shows it, a bind
+included.
+On KRFFS, where a change may move the file, it cannot be written or
+grown either, and on the KRFFS boot root it cannot be unlinked or renamed
+over; on every other file system it then loses its name and the device
+keeps the file until the detach, as on Linux.
 The volume containing the file cannot be unmounted until the device
 is detached.
 These operations fail with

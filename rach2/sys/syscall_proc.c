@@ -49,7 +49,6 @@
 #include "tty/tty.h"
 #include "tty/pty.h"
 #include "rtc.h"
-#include "block/loop.h"
 #include "fs/ext2.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
@@ -8603,11 +8602,9 @@ static uint32_t mmap_never(const fd_entry_t *e, int shared, int served)
  * ext2's inode number names one file for as long as anything holds it, which
  * is what the pages are found by. Private tmpfs and ext2 mappings borrow
  * those same pages until their first store makes a copy. A shared mapping
- * of a tmpfs or ext2 file through a descriptor open for writing fails with
- * EBUSY while the file backs a loop device, as write(2) to the file does.
- * A shared mapping of a file of another disk file system, whose inode
- * numbers follow names, is served as a private one when it is read-only,
- * which reads the same bytes, and fails with ENODEV when it may be written.
+ * of a file of another disk file system, whose inode numbers follow names,
+ * is served as a private one when it is read-only, which reads the same
+ * bytes, and fails with ENODEV when it may be written.
  * The rights mprotect may never give the mapping are marked (`mmap_never`).
  * A file of memfd_secret maps as `mmap_secret` says. The file's path is
  * built at each reading of /proc/PID/maps (`procfs_maps_names`), as Linux's
@@ -8631,10 +8628,6 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
     disk = e->ofd->vmnt->type == &vfs_ext2_type;
     if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
         return -ENODEV;
-    }
-    if (shared && (sh || disk) && (e->flags & FD_FLAG_WRITE) &&
-        loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
-        return -EBUSY;
     }
     src->prot |= mmap_never(e, shared, !sh && !disk);
     src->file = !shared ? filemap_private(e, sh, disk)

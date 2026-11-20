@@ -15,10 +15,14 @@
  * as its `backing`, and the buffer cache reads the chain to let a caller
  * holding one of its blocks take a block of the device below.
  *
- * While a file is attached it is reached through the device and nowhere
- * else: a write, a truncation and an attribute change that would change its
- * length are refused, so the image does not move under the file system
- * mounted on the device.
+ * While a file is attached, other callers may write it, extend it, map it
+ * shared and writable and dump into it, as on Linux, and the device reads
+ * and writes the same bytes they do: a read takes what a shared mapping has
+ * stored and not yet written back (`loop_mapped_stores`), and a write puts
+ * its bytes in the pages mappings hold (`filemap_disk_written`). A
+ * truncation and an attribute change that would change its length are
+ * refused, and on KRFFS, where a change may move the file, so is every
+ * change but the device's own (`loop_length_pinned`).
  *
  * The block layer calls the device without the big lock.
  * A transfer reads the attachment and counts itself in flight under
@@ -303,12 +307,38 @@ static int loop_count_ok(uint32_t count)
 }
 
 /**
+ * Put into `buffer`, which holds the `len` bytes the file system read of
+ * `f`'s file at `at`, what the file's pages in memory hold of them, up to
+ * the file's size:
+ * the stores of a shared mapping through a descriptor open for writing,
+ * which reach the file only at their write-back, as Linux's loop reads the
+ * file's page cache, which holds them (`lo_read_simple`,
+ * drivers/block/loop.c). A page that comes in after the file system's read
+ * was read from the file then and holds only stores made since. The caller
+ * holds the big lock, under which the pages are walked; nothing here sleeps.
+ */
+static void loop_mapped_stores(const struct loop_file *f, uint64_t at, void *buffer, uint32_t len)
+{
+    struct vfs_stat st;
+
+    if (vfs_getattr(f->mnt, f->node, &st) != 0 || at >= st.size) {
+        return;
+    }
+    if (len > st.size - at) {
+        len = (uint32_t)(st.size - at);
+    }
+    filemap_disk_overlay(f->mnt, f->ino, at, buffer, len);
+}
+
+/**
  * Read whole sectors from the file through the file system it is on.
  *
  * A short answer is a device error, `-EIO`: the file's length fixed the
  * sector count at the attachment and nothing may change it while it is
  * attached, so a transfer that does not move every byte means the file is not
- * what it was. The same holds for `loop_write`.
+ * what it was. The same holds for `loop_write`. The bytes a shared mapping
+ * of the file has stored replace what the file system read
+ * (`loop_mapped_stores`).
  */
 static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
@@ -323,6 +353,13 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     }
     big = loop_fs_enter(f.mnt, 1);
     got = vfs_read(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    if (got > 0 && filemap_disk_stores(f.mnt, f.ino)) {
+        if (!bkl_held()) {
+            bkl_enter();
+            big = 1;
+        }
+        loop_mapped_stores(&f, lba * BLOCK_SECTOR_SIZE, buffer, (uint32_t)got);
+    }
     loop_fs_exit(big);
     loop_end(loop, &f, 0, 0);
     if (got < 0 || (uint32_t)got != bytes) {
@@ -466,6 +503,23 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     }
     spin_unlock_irqrestore(&loop_lock, flags);
     return backs;
+}
+
+/**
+ * Whether the length of `node` of `mnt` may not change while it backs a
+ * loop device. A type with a `phase` places a file's first byte anywhere in
+ * a sector, and a change of length may move the file (KRFFS's relocation),
+ * which would change the phase the device gave the volume on it at the
+ * attach: that volume keeps each field it publishes inside one sector of
+ * that phase, so that a stop cannot tear it. Every other type keeps a file
+ * where it is, in whole blocks, and Linux's loop reads past the new end as
+ * zeros and writes there by extending the file (`loop_read`).
+ */
+int loop_length_pinned(struct vfs_mount *mnt, void *node)
+{
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+
+    return base->type->ops && base->type->ops->phase && loop_backs(mnt, node);
 }
 
 /**
@@ -675,17 +729,16 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
 /**
  * Sync the file just opened as `handle`, through the attachment's cursor
  * `seen` into its file system's write-back errors, then check again, under
- * the mount's namespace lock, that its length is whole sectors and that it
- * is not open elsewhere, attached, or mapped shared: on disk at all, and in
- * memory (tmpfs) through a descriptor open for writing, whose stores reach
- * the file's own pages. 0, or `-EINVAL` or `-EBUSY`, or what the sync or
- * the attribute read answered.
+ * the mount's namespace lock, that its length is whole sectors, that it is
+ * not attached, and, on a type whose change may move the file
+ * (`loop_length_pinned`), that no write or truncation is in flight on it.
+ * 0, or `-EINVAL` or `-EBUSY`, or what the sync or the attribute read
+ * answered. A shared mapping of the file does not refuse it, as Linux's
+ * does not: the device reads the mapping's stores (`loop_mapped_stores`).
  *
  * Resolution and open run under the same lock, which the caller keeps
  * through publication on success, so no writer can relocate the node between
- * these steps. A shared mapping made while the sync slept is found here too,
- * since mmap does not take the lock: nothing between this check and the
- * publication sleeps.
+ * these steps.
  */
 static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st, uint32_t *seen)
 {
@@ -697,9 +750,10 @@ static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st, 
     if (rc == 0 && (st->size == 0 || st->size % BLOCK_SECTOR_SIZE != 0)) {
         rc = -EINVAL;
     }
-    if (rc == 0 && (fd_node_busy(ref->mnt, ref->node) || loop_backs(ref->mnt, ref->node) ||
-                    filemap_disk_shared_mapped(ref->mnt, st->ino) ||
-                    filemap_memory_shared_writable(ref->mnt, ref->node))) {
+    if (rc == 0 &&
+        (loop_backs(ref->mnt, ref->node) ||
+         (vfs_mount_base(ref->mnt)->type->ops && vfs_mount_base(ref->mnt)->type->ops->phase &&
+          fd_node_busy(ref->mnt, ref->node)))) {
         rc = -EBUSY;
     }
     return rc;
@@ -814,8 +868,7 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EINVAL; /* whole sectors only */
     }
-    if (loop_backs(ref.mnt, ref.node) || filemap_disk_shared_mapped(ref.mnt, st.ino) ||
-        filemap_memory_shared_writable(ref.mnt, ref.node)) {
+    if (loop_backs(ref.mnt, ref.node)) {
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);

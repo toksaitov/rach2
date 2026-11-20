@@ -125,21 +125,17 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
  * pages (`filemap_disk_mapped`). Without the big lock. */
 int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino);
 
-/** Whether any shared mapping holds this disk file's pages, or dirty
- * pages a shared mapping left keep them. Private mappings alone do not
- * prevent a loop device attaching the file. */
-int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino);
-
 /**
- * Whether stores may reach the pages of `node`, a file of `mnt`, without a
- * write of the file: on tmpfs, a shared mapping through a descriptor open
- * for writing, which maps the file's own pages, or a seal against shrinking,
- * which /dev/udmabuf and the virtio shared-memory transport require before
- * they hand the pages to a device or a mapping and keep no record against
- * the file. 0 on any other type. A loop device does not attach such a file.
- * Under the big lock, as mmap makes its backing.
+ * Copy over the `len` bytes of the kernel buffer `buf`, which a read of the
+ * disk file `ino` of `mnt` at `off` filled from the file, those of them that
+ * the file's pages in memory hold, when a shared mapping may have stored into
+ * them (`filemap_disk_stores`), so that the read sees those stores as a read
+ * of Linux's page cache does: what a loop device over the file reads. The
+ * caller limits `len` to the file's size and holds the big lock. Does not
+ * sleep or allocate.
  */
-int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node);
+void filemap_disk_overlay(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
+                          uint32_t len);
 
 /** After a write of the file `ino` on `mnt` that the file system accepted,
  * copy the `len` bytes at `off` from the kernel buffer `buf` the write was

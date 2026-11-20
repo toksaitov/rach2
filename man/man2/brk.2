@@ -253,13 +253,8 @@ failure was first reported reports the write-back error once, even if a
 retry succeeded, as
 .Xr sync 2
 says.
-A shared mapping of a tmpfs or ext2 file through a descriptor open for
-writing is refused with
-.Er EBUSY
-while a loop device stands on the file, as
-.Xr write 2
-refuses it, and a file that such a mapping maps, or on ext2 any shared
-mapping, is not attached to a loop device.
+A loop device may stand on a file a shared mapping maps, and reads what
+the mapping has stored.
 On another disk file system, whose inode numbers follow names, a shared
 mapping that may be written is refused with
 .Er ENODEV ,

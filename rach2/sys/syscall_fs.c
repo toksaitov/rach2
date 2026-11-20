@@ -1349,9 +1349,9 @@ static long write_synced(fd_entry_t *entry, long written, const struct file_writ
  * again with the file's node lock let go and its write lock held when one
  * goes, before or after bytes have moved, and the write goes on
  * (`file_write_pieces`). A file
- * that backs a loop device is reached through that device and nowhere else,
- * since the file system mounted on it may not have its image change
- * underneath, and is -EBUSY: that is asked before the description is locked
+ * that backs a loop device is written as any other, as on Linux, except on
+ * KRFFS, where a write may move the file the device stands on and is -EBUSY
+ * (`loop_length_pinned`): that is asked before the description is locked
  * and again under the lock, since an attachment can publish itself while
  * this call waits for the lock. A nonempty write clears the applicable
  * set-id bits before storing data (`write_kill_setid`). A write to a file
@@ -1388,7 +1388,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     if (!user_buffer_ok((__force uintptr_t)buf, count, 0)) {
         return -EFAULT;
     }
-    if (loop_backs(ofd->vmnt, ofd->vnode)) {
+    if (loop_length_pinned(ofd->vmnt, ofd->vnode)) {
         return -EBUSY;
     }
     fd_ofd_lock(ofd);
@@ -1401,7 +1401,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     state.big = 0;
     state.lo = ~(uint64_t)0;
     state.hi = 0;
-    if (loop_backs(ofd->vmnt, ofd->vnode)) {
+    if (loop_length_pinned(ofd->vmnt, ofd->vnode)) {
         file_unlock(&state.file, state.own);
         fd_ofd_unlock(ofd);
         return -EBUSY;
@@ -16327,7 +16327,8 @@ static long iov_file_elements(fd_entry_t *entry, const struct kernel_iovec *iov,
  * The refusals of `iov_file_write` under the description's lock of `entry`:
  * -EINVAL when, at the shared offset (`pos` -1), the end of `wanted` bytes
  * passes 2^63-1 (`rw_offset_end`), which a sharer's seek may have moved
- * since the caller's check, -EBUSY for a file that backs a loop device,
+ * since the caller's check, -EBUSY for a KRFFS file that backs a loop
+ * device (`loop_length_pinned`),
  * then -EINVAL for an O_DIRECT write whose vector of `count` elements at
  * `iov` breaks the alignment rules (`direct_iov_misaligned`), or 0.
  */
@@ -16337,7 +16338,7 @@ static long iov_file_refused(fd_entry_t *entry, const struct kernel_iovec *iov, 
     if (pos == -1 && rw_offset_end(entry, wanted) != 0) {
         return -EINVAL;
     }
-    if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+    if (loop_length_pinned(entry->ofd->vmnt, entry->ofd->vnode)) {
         return -EBUSY;
     }
     return direct_iov_misaligned(entry->ofd, iov, count) ? -EINVAL : 0;
@@ -16360,8 +16361,8 @@ static long iov_file_refused(fd_entry_t *entry, const struct kernel_iovec *iov, 
  * length, or a vector whose end at `pos`, or at the shared offset under the
  * description's lock (`iov_file_refused`), would pass 2^63-1, -EFAULT for a
  * vector or a buffer the caller cannot reach, -EBADF for a descriptor that is
- * not a file of a mount open for writing, -EBUSY for a file that backs a loop
- * device, or the write's error.
+ * not a file of a mount open for writing, -EBUSY for a KRFFS file that backs
+ * a loop device, or the write's error.
  */
 static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append)
 {
@@ -17994,10 +17995,10 @@ static uint32_t fallocate_type(fd_entry_t *entry)
  * once it has taken the mode, as Linux's shmem_fallocate does
  * (mm/shmem.c:3459-3498 in 6.12), so that a mode or a type that takes no
  * allocation is -EOPNOTSUPP with no SIGXFSZ. The file's lock is held from
- * before `vfs_fallocate` asks whether a loop device stands on the file to
- * the end of the change, since an attachment publishes itself under that
- * lock (`loop_attach`): a check made before it could pass a file attached
- * while the change waited for the lock.
+ * before `vfs_fallocate` asks whether a loop device stands on a KRFFS file
+ * (`loop_length_pinned`) to the end of the change, since an attachment
+ * publishes itself under that lock (`loop_attach`): a check made before it
+ * could pass a file attached while the change waited for the lock.
  */
 static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
@@ -18985,9 +18986,9 @@ struct core_file {
  * write's error; a short write is a full disk, -ENOSPC. Each piece takes
  * the file's write lock and then its node lock (`vfs_write_lock`), as
  * write(2) does, so that it never lands between the pieces of another
- * process's write. A file a loop
- * device stands on is -EBUSY, asked under the file's lock before each write
- * as write(2) asks: the dump holds no description lock, so another process
+ * process's write. A KRFFS file a loop device stands on is -EBUSY
+ * (`loop_length_pinned`), asked under the file's lock before each write as
+ * write(2) asks: the dump holds no description lock, so another process
  * may attach the file while the dump sleeps between pieces, and an
  * attachment publishes itself under that lock. A SIGKILL sent to
  * the dumping thread, which a SIGKILL to its process during the dump sends
@@ -19009,7 +19010,7 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
         file.node = cf->ofd->vnode;
         vfs_write_lock(&file);
         vfs_node_lock(&file);
-        if (loop_backs(cf->ofd->vmnt, cf->ofd->vnode)) {
+        if (loop_length_pinned(cf->ofd->vmnt, cf->ofd->vnode)) {
             vfs_node_unlock(&file);
             vfs_write_unlock(&file);
             return -EBUSY;

@@ -549,14 +549,6 @@ void klog(int level, const char *subsystem, const char *format, ...)
           "no log is made under a record's bitmap lock");
 }
 
-/** Not reached. */
-int loop_backs(struct vfs_mount *mnt, void *node)
-{
-    (void)mnt;
-    (void)node;
-    return 0;
-}
-
 /* tmpfs's type, which no mount of the model has. */
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", 0, 0, 0, 0};
 

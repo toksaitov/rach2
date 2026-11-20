@@ -215,11 +215,12 @@ A file whose last bytes are a hole is given its last byte, a zero, to
 have its whole length, and that byte counts toward the limit, as on
 Linux.
 .Pp
-A file
+On KRFFS, a file
 .Pa core
 that a loop device stands on is neither removed nor written, and a dump
 whose file is attached to a loop device while it runs stops at its next
 write; either way the wait status has no core bit.
+On every other file system the dump goes on, as on Linux.
 .Sh FILES
 .Bl -tag -width core
 .It Pa core

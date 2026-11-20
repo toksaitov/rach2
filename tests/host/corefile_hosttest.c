@@ -873,6 +873,14 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** No row's file backs a loop device, so none has its length pinned: 0. */
+int loop_length_pinned(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
 /** No row's file is locked: 0. */
 int lock_any(void)
 {

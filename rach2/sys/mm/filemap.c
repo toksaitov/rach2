@@ -16,7 +16,6 @@
 #include "../fs/tmpfs.h"
 #include "../fs/vfs.h"
 #include "../block/block.h"
-#include "../block/loop.h"
 #include "../klog.h"
 #include "../proc/process.h"
 #include "../proc/sched.h"
@@ -826,9 +825,8 @@ static int dshare_span_match(const vma_t *r, void *arg, uintptr_t *lo, uintptr_t
  * such a mapping outright (writable_file_mapping_allowed,
  * mm/gup.c:1225-1260), as `pin_user` does. `*next` is set to the page
  * after that word, or to `end` when no page is dirty. Returns the pages
- * written, or the first failure,
- * -EBUSY for a loop device's file or the write's error, with the pages
- * after it still written.
+ * written, or the first failure, the write's error, with the pages after
+ * it still written.
  */
 static int dshare_write_word(struct dshare *ds, uint32_t from, uint32_t end, uint32_t *next)
 {
@@ -856,8 +854,6 @@ static int dshare_write_word(struct dshare *ds, uint32_t from, uint32_t end, uin
     }
     if (word == 0) {
         rc = 0;
-    } else if (loop_backs(mnt, ds->wr_node)) {
-        rc = -EBUSY;
     } else if (vfs_getattr(mnt, ds->wr_node, &st) != 0) {
         rc = -EIO;
     } else {
@@ -1670,41 +1666,6 @@ struct vm_file *filemap_private(const fd_entry_t *e, struct shmem *sh, int disk)
     return f;
 }
 
-int filemap_disk_shared_mapped(const struct vfs_mount *mnt, uint64_t ino)
-{
-    const struct dshare *ds = dshare_of(mnt, ino);
-    const struct filemap *m;
-
-    if (ds && ds->wr_handle) {
-        return 1;
-    }
-    for (m = maps; ds && m; m = m->next) {
-        if (m->ds == ds && m->shared) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-int filemap_memory_shared_writable(const struct vfs_mount *mnt, void *node)
-{
-    const struct shmem *sh;
-    const struct filemap *m;
-
-    if (mnt->type != &vfs_tmpfs_type || !(sh = tmpfs_shmem(node))) {
-        return 0;
-    }
-    if (tmpfs_seals(node) & TMPFS_SEAL_SHRINK) {
-        return 1;
-    }
-    for (m = maps; m; m = m->next) {
-        if (m->sh == sh && m->shared && (m->entry.flags & FD_FLAG_WRITE)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 int filemap_disk_stores(const struct vfs_mount *mnt, uint64_t ino)
 {
     const struct dshare *ds;
@@ -1769,6 +1730,37 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
     }
     free_frame(phys);
     return rc == 0 ? (int32_t)count : -EFAULT;
+}
+
+void filemap_disk_overlay(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, void *buf,
+                          uint32_t len)
+{
+    struct dshare *ds;
+    uint8_t *out = buf;
+
+    bkl_assert_held();
+    ds = dshare_of(mnt, ino);
+    if (!ds || !ds->stores) {
+        return;
+    }
+    while (len) {
+        uint32_t at = (uint32_t)(off % PAGE_SIZE);
+        uint32_t take = PAGE_SIZE - at, flags;
+        uintptr_t phys = shmem_resident(&ds->sh, (uint32_t)(off / PAGE_SIZE));
+        uint8_t *page;
+
+        if (take > len) {
+            take = len;
+        }
+        if (phys) {
+            page = kmap_cpu(phys, &flags);
+            k_memcpy(out, page + at, take);
+            kunmap_cpu(page, flags);
+        }
+        out += take;
+        off += take;
+        len -= take;
+    }
 }
 
 void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, const void *buf,

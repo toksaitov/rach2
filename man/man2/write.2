@@ -61,9 +61,11 @@ each write uses the current end of the file, regardless of an intervening seek.
 .Pp
 A write to a file on a read-only mount fails with
 .Er EROFS .
-A file attached to a loop device cannot be written directly;
-the call fails with
+A file on KRFFS attached to a loop device cannot be written directly,
+since a write may move it; the call fails with
 .Er EBUSY .
+A file attached on another file system is written as any other, and the
+device reads the new bytes.
 Before a nonempty write by a process without
 .Dv CAP_FSETID
 over the inode, a regular file loses setuid, and loses setgid when group execute is set or the caller
