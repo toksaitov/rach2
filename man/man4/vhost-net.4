@@ -77,6 +77,9 @@ Every request below but the features' then comes from it.
 .It Dv VHOST_RESET_OWNER
 Stops both rings and lets go of the tap, the eventfds, the pins and the
 owner.
+Each request but the two that read the features waits for one of another
+thread that sleeps, as Linux's device mutex makes it, so a memory table
+set while the reset waits finds no owner.
 .It Dv VHOST_GET_FEATURES
 Writes the features the device offers:
 .Dv VHOST_NET_F_VIRTIO_NET_HDR ,
