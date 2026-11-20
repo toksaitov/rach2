@@ -55,7 +55,8 @@
  * `qdisc-dump`, `second-addr`, `neigh-permanent`, `neigh-forget`, `route-add`,
  * `proc-net-route`, `route-del`, `route-enetunreach`, `route-on-link`,
  * `padded-dump`, `peek-trunc`, `cut-trunc`, `nametoindex`, `ifconf-length`,
- * `ifconf-buffer`, `uevent-silent` and `eprotonosupport`. A native run reports
+ * `ifconf-buffer`, `uevent-silent`, `eprotonosupport`, and the TUN peer and
+ * packet socket checks. A native run reports
  * the changes, `addr-eexist` to `delneigh-enoent` and `second-addr` to
  * `route-on-link`, not run, and a first link with no address leaves the four
  * lookups, `route-get-local` to `qdisc-dump`, not run. The first failure fails
@@ -64,8 +65,10 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <netpacket/packet.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
@@ -114,7 +117,13 @@
 #define RTN_UNICAST            1
 #define RTN_LOCAL              2
 #define IFLA_IFNAME            3
+#define IFA_ADDRESS            1
 #define IFA_LOCAL              2
+#define TUNSETIFF              0x400454caU
+#define TUN_IFF_TUN            0x0001
+#define TUN_IFF_NO_PI          0x1000
+#define ETH_TYPE_IP            0x0800
+#define ARPHRD_NONE            65534
 
 struct sockaddr_nl {
     unsigned short nl_family;
@@ -1034,6 +1043,214 @@ static int uevents(void)
     return 0;
 }
 
+/** Whether the IPv4 address dump reports `local` and `peer` on `index`
+ * with a /32 prefix. Drain the dump to NLMSG_DONE. */
+static int tun_pair(int fd, int index, struct in_addr local, struct in_addr peer)
+{
+    struct rtgenmsg g = {AF_INET};
+    char buf[8192] __attribute__((aligned(4)));
+    int found = 0;
+
+    if (request(fd, RTM_GETADDR, NLM_F_DUMP, 81, &g, sizeof(g)) != 0) {
+        return 0;
+    }
+    for (;;) {
+        struct nlmsghdr *h;
+        int n = (int)recv(fd, buf, sizeof(buf), 0);
+
+        if (n <= 0) {
+            return 0;
+        }
+        for (h = (struct nlmsghdr *)buf; NLMSG_OK(h, n); h = NLMSG_NEXT(h, n)) {
+            struct ifaddrmsg *ifa = NLMSG_DATA(h);
+            struct in_addr got_local = {0}, got_peer = {0};
+            int left = PAYLOAD(h, struct ifaddrmsg);
+            struct rtattr *a;
+
+            if (h->nlmsg_type == NLMSG_DONE) {
+                return found;
+            }
+            if (h->nlmsg_type == NLMSG_ERROR) {
+                return 0;
+            }
+            if (h->nlmsg_type != RTM_NEWADDR || left < 0 || ifa->ifa_index != (unsigned int)index ||
+                ifa->ifa_prefixlen != 32) {
+                continue;
+            }
+            for (a = FIRST_RTA(ifa); RTA_OK(a, left); a = RTA_NEXT(a, left)) {
+                if (a->rta_len != sizeof(*a) + sizeof(local)) {
+                    continue;
+                }
+                if (a->rta_type == IFA_LOCAL) {
+                    memcpy(&got_local, RTA_DATA(a), sizeof(got_local));
+                }
+                if (a->rta_type == IFA_ADDRESS) {
+                    memcpy(&got_peer, RTA_DATA(a), sizeof(got_peer));
+                }
+            }
+            found |= got_local.s_addr == local.s_addr && got_peer.s_addr == peer.s_addr;
+        }
+    }
+}
+
+/** Ask for a route to `peer`. Is it a direct unicast route on `index`? */
+static int tun_route(int fd, unsigned int seq, struct in_addr peer, int index)
+{
+    int type, oif;
+    unsigned int gw;
+
+    return route_get(fd, seq, peer, &type, &oif, &gw) == 0 && type == RTN_UNICAST && oif == index &&
+           gw == 0;
+}
+
+/** Send an IPv4 datagram to the TUN's reported packet socket address and
+ * match it on the TUN descriptor. */
+static int tun_packet(int tun, int index)
+{
+    const unsigned char datagram[20] = {0x45, 0, 0,   20, 0, 0, 0,   0,  64,  17,
+                                        0,    0, 192, 0,  2, 1, 198, 51, 100, 3};
+    unsigned char received[1500];
+    struct sockaddr_ll sa;
+    socklen_t len = sizeof(sa);
+    int packet = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_TYPE_IP));
+    int ok = 0;
+
+    if (packet < 0) {
+        return 0;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sll_family = AF_PACKET;
+    sa.sll_protocol = htons(ETH_TYPE_IP);
+    sa.sll_ifindex = index;
+    if (bind(packet, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
+        getsockname(packet, (struct sockaddr *)&sa, &len) == 0 && sa.sll_halen == 0 &&
+        sa.sll_hatype == ARPHRD_NONE &&
+        sendto(packet, datagram, sizeof(datagram), 0, (struct sockaddr *)&sa, sizeof(sa)) ==
+            sizeof(datagram)) {
+        ssize_t n;
+
+        while ((n = read(tun, received, sizeof(received))) > 0) {
+            if (n == sizeof(datagram) && memcmp(received, datagram, sizeof(datagram)) == 0) {
+                ok = 1;
+                break;
+            }
+        }
+    }
+    close(packet);
+    return ok;
+}
+
+/** Read the TUN peer with SIOCGIFDSTADDR and replace it with SIOCSIFDSTADDR.
+ * Return 0 on success or -1 if an ioctl fails or the old peer differs. */
+static int tun_replace_peer(int s, struct ifreq *ifr, struct in_addr old, struct in_addr next)
+{
+    struct sockaddr_in sin;
+
+    if (ioctl(s, SIOCGIFDSTADDR, ifr) != 0) {
+        return -1;
+    }
+    memcpy(&sin, &ifr->ifr_dstaddr, sizeof(sin));
+    if (sin.sin_family != AF_INET || sin.sin_addr.s_addr != old.s_addr) {
+        return -1;
+    }
+    sin.sin_addr = next;
+    memcpy(&ifr->ifr_dstaddr, &sin, sizeof(sin));
+    return ioctl(s, SIOCSIFDSTADDR, ifr);
+}
+
+/** Check a TUN's distinct local and peer IPv4 addresses, the peer route
+ * through an ioctl change and deletion, and a packet socket send. */
+static int tun_changes(int fd)
+{
+    struct ifreq ifr;
+    struct ifaddrmsg ifa = {AF_INET, 32, 0, 0, 0};
+    struct in_addr local = {inet_addr("192.0.2.1")};
+    struct in_addr peer = {inet_addr("198.51.100.2")};
+    struct in_addr next = {inet_addr("198.51.100.3")};
+    char body[sizeof(ifa) + 16];
+    int tun = -1, s = -1, index, len, rc;
+    const char *failure = "make tunprob and set it up";
+
+    memset(&ifr, 0, sizeof(ifr));
+    strcpy(ifr.ifr_name, "tunprob");
+    ifr.ifr_flags = TUN_IFF_TUN | TUN_IFF_NO_PI;
+    tun = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (tun < 0 || s < 0 || ioctl(tun, TUNSETIFF, &ifr) != 0 || ioctl(s, SIOCGIFINDEX, &ifr) != 0) {
+        goto out;
+    }
+    index = ifr.ifr_ifindex;
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) != 0) {
+        goto out;
+    }
+    ifr.ifr_flags |= IFF_UP;
+    if (ioctl(s, SIOCSIFFLAGS, &ifr) != 0) {
+        goto out;
+    }
+    held();
+
+    failure = "RTM_NEWADDR or RTM_GETADDR did not give the TUN its peer";
+    ifa.ifa_index = (unsigned int)index;
+    memcpy(body, &ifa, sizeof(ifa));
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &peer);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 80, body, len) != 0 ||
+        !tun_pair(fd, index, local, peer)) {
+        goto out;
+    }
+    held();
+
+    failure = "the peer has no direct IPv4 route through the TUN";
+    if (!tun_route(fd, 82, peer, index)) {
+        goto out;
+    }
+    held();
+
+    failure = "the destination ioctls did not read and replace the peer and its route";
+    if (tun_replace_peer(s, &ifr, peer, next) != 0 || !tun_pair(fd, index, local, next) ||
+        tun_route(fd, 83, peer, index) || !tun_route(fd, 84, next, index)) {
+        goto out;
+    }
+    held();
+
+    failure = "the TUN did not transmit the packet socket's datagram with sll_halen 0";
+    if (!tun_packet(tun, index)) {
+        goto out;
+    }
+    held();
+
+    failure = "could not give the same local address a second peer";
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &peer);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 85, body, len) != 0 ||
+        !tun_route(fd, 86, peer, index)) {
+        goto out;
+    }
+    held();
+
+    failure = "deleting the first peer did not remove only its route";
+    len = sizeof(ifa);
+    attr32(body, &len, IFA_LOCAL, &local);
+    attr32(body, &len, IFA_ADDRESS, &next);
+    if (ask(fd, RTM_DELADDR, 0, 87, body, len) != 0 || tun_route(fd, 88, next, index) ||
+        !tun_route(fd, 89, peer, index) || !tun_pair(fd, index, local, peer)) {
+        goto out;
+    }
+    held();
+    failure = NULL;
+out:
+    rc = failure ? fail(failure) : 0;
+    if (tun >= 0) {
+        close(tun);
+    }
+    if (s >= 0) {
+        close(s);
+    }
+    return rc;
+}
+
 /** Plan each assertion of `ids`, `n` of them. */
 static void plan_rows(const char *const *ids, unsigned n)
 {
@@ -1084,6 +1301,9 @@ static void plan(char **envp)
     static const char *const after[] = {"padded-dump",   "peek-trunc",     "cut-trunc",
                                         "nametoindex",   "ifconf-length",  "ifconf-buffer",
                                         "uevent-silent", "eprotonosupport"};
+    static const char *const tun[] = {"tun-up",         "tun-peer",   "tun-route",
+                                      "tun-peer-ioctl", "tun-packet", "tun-second-peer",
+                                      "tun-peer-delete"};
 
     report_begin(report_case(envp, "guest.default.netlinkmusl"));
     PLAN(before);
@@ -1091,6 +1311,7 @@ static void plan(char **envp)
     PLAN(lookup_ids);
     PLAN_CHANGES(table);
     PLAN(after);
+    PLAN_CHANGES(tun);
 }
 
 int main(int argc, char **argv, char **envp)
@@ -1104,7 +1325,7 @@ int main(int argc, char **argv, char **envp)
     if (route_socket(&fd) || requests(fd) ||
         (changes && (address_changes(fd) || route_changes(fd))) || lookups(fd) ||
         (changes && table_changes(fd)) || padded(fd) || truncation(fd) || interfaces() ||
-        uevents()) {
+        uevents() || (changes && tun_changes(fd))) {
         return 1;
     }
     close(fd);

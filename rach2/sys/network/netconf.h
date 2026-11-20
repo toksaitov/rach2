@@ -180,27 +180,33 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask);
  */
 int netconf_set_gateway(struct netdev *nd, uint32_t gw);
 
+/** Set the destination of `nd`'s first IPv4 address, as SIOCSIFDSTADDR.
+ * Takes net_lock. Returns 0, -EADDRNOTAVAIL with no address, or -EINVAL
+ * for an invalid destination. */
+int netconf_set_peer(struct netdev *nd, uint32_t peer);
+
 /**
  * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
- * does, or make it the first address of an interface with none
- * (`netconf_set_address`). An address added beside the first drops nothing.
- * EINVAL for an impossible address, a mask that is 0 or not contiguous, or
- * an address that is no host under its mask, which every address of a /31
- * or /32 is; EEXIST for an
+ * does, or make it the first. A distinct `peer` gives the destination
+ * prefix; 0 uses the local address. An address added beside the first
+ * drops nothing. EINVAL for an impossible address or a noncontiguous
+ * mask, or, for an Ethernet address with no peer, a zero mask or a
+ * non-host address; EEXIST for an
  * address the interface holds; ENOSPC past NETDEV_ADDRS more. Takes
  * `net_lock`.
  */
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask);
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer);
 
 /**
- * Take the address `ip` from `nd`. The first, when `ip` is 0 or the first, is
+ * Take the address `ip` from `nd`, matching any local address when `ip`
+ * is 0. If `dst` is nonzero, also match its prefix `dst`/`mask`. The first is
  * replaced by the next address, as Linux's promote_secondaries has it, or with
  * none after it leaves the interface unconfigured, and the change drops what
  * `netconf_set_address` lists. For another address the added routes whose
  * gateway only its subnet reached are removed. EADDRNOTAVAIL for an address the
  * interface does not hold. Takes `net_lock`.
  */
-int netconf_del_address(struct netdev *nd, uint32_t ip);
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst);
 
 /**
  * Give `nd` the IPv6 address `addr` with the on-link prefix of `prefix`

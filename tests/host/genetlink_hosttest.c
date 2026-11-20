@@ -193,11 +193,12 @@ int nd6_snapshot(struct nd6_row *out, int max)
 }
 
 /** Model netconf_add_address with no addresses, routes or sockets. */
-int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask)
+int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer)
 {
     (void)nd;
     (void)ip;
     (void)mask;
+    (void)peer;
     return 0;
 }
 
@@ -215,10 +216,12 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
 }
 
 /** Model netconf_del_address with no addresses, routes or sockets. */
-int netconf_del_address(struct netdev *nd, uint32_t ip)
+int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
 {
     (void)nd;
     (void)ip;
+    (void)mask;
+    (void)dst;
     return 0;
 }
 
