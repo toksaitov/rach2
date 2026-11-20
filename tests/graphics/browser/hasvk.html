@@ -8,7 +8,9 @@
 'use strict';
 (async () => {
  const result = {ok: false};
- const swiftshader = new URLSearchParams(location.search).has('swiftshader');
+ const query = new URLSearchParams(location.search);
+ const swiftshader = query.has('swiftshader');
+ const traceAll = swiftshader || query.has('trace-all');
  // Each setup step's time in ms after the document's time origin, and that
  // origin in ms of the Unix epoch, to place the frames on a sampler's clock.
  result.timeOrigin = performance.timeOrigin;
@@ -60,8 +62,8 @@
     try {
      times.push(Math.round((now - start) * 10) / 10);
      starts.push(Math.round((performance.now() - start) * 10) / 10);
-     // stall.py searches the first 16 frames. The QEMU trace marks every frame.
-     if (swiftshader || frames < 16) performance.mark('hasvk-frame-' + frames);
+     // stall.py searches the first 16 frames. The startup trace marks every frame.
+     if (traceAll || frames < 16) performance.mark('hasvk-frame-' + frames);
      if (result.error) throw Error(result.error);
      const encoder = device.createCommandEncoder();
      const pass = encoder.beginRenderPass({colorAttachments: [{
