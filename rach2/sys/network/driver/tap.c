@@ -517,7 +517,7 @@ static int32_t tap_set_iff(fd_entry_t *e, uintptr_t arg)
     struct tap *t;
     uint16_t flags, type;
     uint32_t irq, size = tap_ifr_size();
-    int32_t err = 0;
+    int32_t err;
 
     k_memset(ifr, 0, sizeof(ifr));
     if (copy_from_user(ifr, (const void __user *)arg, size) != 0) {
