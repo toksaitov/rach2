@@ -43,31 +43,32 @@ static int pcihp_key(uint8_t device, uint8_t function)
 static ACPI_STATUS pcihp_window(ACPI_RESOURCE *res, void *context)
 {
     struct pci_aperture w;
-    uint64_t start, len;
-    int address, kind = acpi_resource_range(res, &start, &len, &address);
+    uint64_t start, end;
+    int address, kind = acpi_resource_range(res, &start, &end, &address);
 
-    if (!address || len == 0 || (kind != ACPI_RANGE_MEMORY && kind != ACPI_RANGE_IO) ||
+    if (!address || (kind != ACPI_RANGE_MEMORY && kind != ACPI_RANGE_IO) ||
         (kind == ACPI_RANGE_MEMORY && start < 0x100000u)) {
         return AE_OK;
     }
     w.start = start;
-    w.end = start + len - 1u;
+    w.end = end;
     w.io = kind == ACPI_RANGE_IO;
     (void)pci_root_window_add(*(const uint8_t *)context, &w);
     return AE_OK;
 }
 
-/** A resource of a host bridge's _CRS: the first range of bus numbers puts
- * its first bus in the UINT64 `context` points to, as Linux's
- * try_get_root_bridge_busnr reads it. */
+/** A resource of a host bridge's _CRS: a range of bus numbers in a Word,
+ * DWord or QWord descriptor puts its first bus in the UINT64 `context`
+ * points to, the last such range winning, as Linux's
+ * get_root_bridge_busnr_callback reads them. */
 static ACPI_STATUS pcihp_busnr(ACPI_RESOURCE *res, void *context)
 {
-    uint64_t start, len;
+    uint64_t start, end;
     int address;
 
-    if (acpi_resource_range(res, &start, &len, &address) == ACPI_RANGE_BUS && len != 0) {
+    if (res->Type != ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64 &&
+        acpi_resource_range(res, &start, &end, &address) == ACPI_RANGE_BUS) {
         *(UINT64 *)context = start;
-        return AE_CTRL_TERMINATE;
     }
     return AE_OK;
 }
@@ -201,29 +202,53 @@ static void pcihp_slots(ACPI_HANDLE root)
     }
 }
 
+/** Evaluate the integer `name` of `handle` into `*value`, 0 when the
+ * object is absent, as Linux's acpi_pci_root_add reads _SEG and _BBN;
+ * nonzero when it is there and cannot be read as an integer. */
+static int pcihp_integer(ACPI_HANDLE handle, char *name, UINT64 *value)
+{
+    ACPI_BUFFER buf;
+    ACPI_OBJECT obj;
+    ACPI_STATUS status;
+
+    buf.Length = sizeof(obj);
+    buf.Pointer = &obj;
+    status = AcpiEvaluateObjectTyped(handle, name, NULL, &buf, ACPI_TYPE_INTEGER);
+    *value = ACPI_SUCCESS(status) ? obj.Integer.Value : 0;
+    return ACPI_FAILURE(status) && status != AE_NOT_FOUND;
+}
+
 /**
- * A host bridge: its root bus, the first of the bus numbers its _CRS gives
- * or else its _BBN or else 0, as Linux's acpi_pci_root_add finds it, keeps
- * the bridge's windows, and the first bridge of bus 0 gives its slots.
+ * A host bridge, as Linux's acpi_pci_root_add takes it: one whose _SEG,
+ * which is 0 when absent, names another PCI segment is passed over, since
+ * the configuration ports reach segment 0 alone, and so is one whose _SEG
+ * or _BBN cannot be read. Its root bus is the first of the range of bus
+ * numbers its _CRS gives (`pcihp_busnr`), or else its _BBN, or else 0; it
+ * keeps the bridge's windows, and the first bridge of bus 0 gives its
+ * slots.
  */
 static ACPI_STATUS pcihp_root(ACPI_HANDLE handle, UINT32 depth, void *context, void **ret)
 {
-    static char bbn[] = "_BBN", crs[] = "_CRS";
-    ACPI_BUFFER buf;
-    ACPI_OBJECT obj;
-    UINT64 busnr = ~(UINT64)0;
+    static char bbn[] = "_BBN", crs[] = "_CRS", seg[] = "_SEG";
+    UINT64 busnr = ~(UINT64)0, segment;
     uint8_t bus;
 
     (void)depth;
     (void)context;
     (void)ret;
+    if (pcihp_integer(handle, seg, &segment)) {
+        klog(KLOG_WARN, "pci", "host bridge: _SEG cannot be read: its windows are not kept");
+        return AE_OK;
+    }
+    if ((segment & 0xFFFFu) != 0) {
+        klog(KLOG_INFO, "pci", "host bridge: segment %lu: not reached, its windows are not kept",
+             (unsigned long)(segment & 0xFFFFu));
+        return AE_OK;
+    }
     (void)AcpiWalkResources(handle, crs, pcihp_busnr, &busnr);
-    if (busnr == ~(UINT64)0) {
-        buf.Length = sizeof(obj);
-        buf.Pointer = &obj;
-        busnr = ACPI_SUCCESS(AcpiEvaluateObjectTyped(handle, bbn, NULL, &buf, ACPI_TYPE_INTEGER))
-                    ? obj.Integer.Value
-                    : 0;
+    if (busnr == ~(UINT64)0 && pcihp_integer(handle, bbn, &busnr)) {
+        klog(KLOG_WARN, "pci", "host bridge: _BBN cannot be read: its windows are not kept");
+        return AE_OK;
     }
     if (busnr > 0xFFu) {
         klog(KLOG_WARN, "pci", "host bridge: bus %lu is past 255: its windows are not kept",

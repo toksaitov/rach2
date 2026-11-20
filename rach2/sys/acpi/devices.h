@@ -87,13 +87,16 @@ void acpi_pnp_reserve(void);
  * acpi_dev_resource_memory, _io, _address_space and _ext_address_space
  * read it: an I/O or fixed I/O descriptor's ports; a 24-bit, 32-bit or
  * fixed 32-bit descriptor's memory, a 24-bit one's address and length
- * shifted up by 8; and a Word, DWord, QWord or Extended address
- * descriptor's memory, ports or bus numbers, its translation added to its
- * start. Sets `*start` and `*len`, which may be 0, and `*address` to 1 for
- * an address descriptor, the only kind a bridge's window comes in, and
- * returns an `ACPI_RANGE_` kind; 0 for any other resource.
+ * shifted up by 8, each from its address for its length; and a Word,
+ * DWord, QWord or Extended address descriptor's memory, ports or bus
+ * numbers from its Minimum to its Maximum, its translation added to both
+ * for a producer's memory and ports alone. Sets `*start` and `*end`,
+ * inclusive, and `*address` to 1 for an address descriptor, the only kind
+ * a bridge's window comes in, and returns an `ACPI_RANGE_` kind; 0 for any
+ * other resource and for a range Linux disables: one of no length, one
+ * that ends below its start, and ports past 0x10002.
  */
-int acpi_resource_range(struct acpi_resource *res, uint64_t *start, uint64_t *len, int *address);
+int acpi_resource_range(struct acpi_resource *res, uint64_t *start, uint64_t *end, int *address);
 
 /**
  * Take the hot plug slots of the host bridge of bus 0, its children with
