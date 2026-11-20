@@ -95,49 +95,79 @@ static void pnp_reserve_block(const ACPI_GENERIC_ADDRESS *g, UINT32 len)
     }
 }
 
+int acpi_resource_range(ACPI_RESOURCE *res, uint64_t *start, uint64_t *len, int *address)
+{
+    ACPI_RESOURCE_ADDRESS64 a;
+    UINT8 type;
+
+    *address = 0;
+    switch (res->Type) {
+    case ACPI_RESOURCE_TYPE_IO:
+        *start = res->Data.Io.Minimum;
+        *len = res->Data.Io.AddressLength;
+        return ACPI_RANGE_IO;
+    case ACPI_RESOURCE_TYPE_FIXED_IO:
+        *start = res->Data.FixedIo.Address;
+        *len = res->Data.FixedIo.AddressLength;
+        return ACPI_RANGE_IO;
+    case ACPI_RESOURCE_TYPE_MEMORY24:
+        /* ACPICA keeps the descriptor's bits 23:8 of each. */
+        *start = (uint64_t)res->Data.Memory24.Minimum << 8;
+        *len = (uint64_t)res->Data.Memory24.AddressLength << 8;
+        return ACPI_RANGE_MEMORY;
+    case ACPI_RESOURCE_TYPE_MEMORY32:
+        *start = res->Data.Memory32.Minimum;
+        *len = res->Data.Memory32.AddressLength;
+        return ACPI_RANGE_MEMORY;
+    case ACPI_RESOURCE_TYPE_FIXED_MEMORY32:
+        *start = res->Data.FixedMemory32.Address;
+        *len = res->Data.FixedMemory32.AddressLength;
+        return ACPI_RANGE_MEMORY;
+    case ACPI_RESOURCE_TYPE_ADDRESS16:
+    case ACPI_RESOURCE_TYPE_ADDRESS32:
+    case ACPI_RESOURCE_TYPE_ADDRESS64:
+        if (ACPI_FAILURE(AcpiResourceToAddress64(res, &a))) {
+            return 0;
+        }
+        type = a.ResourceType;
+        *start = a.Address.Minimum + a.Address.TranslationOffset;
+        *len = a.Address.AddressLength;
+        break;
+    case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
+        /* AcpiResourceToAddress64 takes only the three above. */
+        type = res->Data.ExtAddress64.ResourceType;
+        *start = res->Data.ExtAddress64.Address.Minimum +
+                 res->Data.ExtAddress64.Address.TranslationOffset;
+        *len = res->Data.ExtAddress64.Address.AddressLength;
+        break;
+    default:
+        return 0;
+    }
+    *address = 1;
+    if (type == ACPI_MEMORY_RANGE) {
+        return ACPI_RANGE_MEMORY;
+    }
+    if (type == ACPI_IO_RANGE) {
+        return ACPI_RANGE_IO;
+    }
+    return type == ACPI_BUS_NUMBER_RANGE ? ACPI_RANGE_BUS : 0;
+}
+
 /**
  * A resource of a system device's _CRS held for the host, as Linux's
  * pnp/system.c reserves it: ports from 0x100 up, since those below are the
- * PC's own, which the PCI layer holds already, and memory of any address.
+ * PC's own, which the PCI layer holds already, and memory of any address,
+ * from every descriptor of either (`acpi_resource_range`).
  */
 static ACPI_STATUS pnp_reserve_one(ACPI_RESOURCE *res, void *context)
 {
-    ACPI_RESOURCE_ADDRESS64 a;
-    UINT64 start = 0, len = 0;
-    int io = 0;
+    uint64_t start = 0, len = 0;
+    int address, kind;
 
     (void)context;
-    switch (res->Type) {
-    case ACPI_RESOURCE_TYPE_IO:
-        start = res->Data.Io.Minimum;
-        len = res->Data.Io.AddressLength;
-        io = 1;
-        break;
-    case ACPI_RESOURCE_TYPE_FIXED_IO:
-        start = res->Data.FixedIo.Address;
-        len = res->Data.FixedIo.AddressLength;
-        io = 1;
-        break;
-    case ACPI_RESOURCE_TYPE_MEMORY32:
-        start = res->Data.Memory32.Minimum;
-        len = res->Data.Memory32.AddressLength;
-        break;
-    case ACPI_RESOURCE_TYPE_FIXED_MEMORY32:
-        start = res->Data.FixedMemory32.Address;
-        len = res->Data.FixedMemory32.AddressLength;
-        break;
-    default:
-        if (ACPI_FAILURE(AcpiResourceToAddress64(res, &a)) ||
-            (a.ResourceType != ACPI_MEMORY_RANGE && a.ResourceType != ACPI_IO_RANGE)) {
-            return AE_OK;
-        }
-        start = a.Address.Minimum + a.Address.TranslationOffset;
-        len = a.Address.AddressLength;
-        io = a.ResourceType == ACPI_IO_RANGE;
-        break;
-    }
-    if (len != 0 && (!io || start >= 0x100u)) {
-        pci_host_reserve(start, start + len - 1u, io);
+    kind = acpi_resource_range(res, &start, &len, &address);
+    if (len != 0 && (kind == ACPI_RANGE_MEMORY || (kind == ACPI_RANGE_IO && start >= 0x100u))) {
+        pci_host_reserve(start, start + len - 1u, kind == ACPI_RANGE_IO);
     }
     return AE_OK;
 }

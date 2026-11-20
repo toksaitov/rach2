@@ -785,6 +785,18 @@ build/x86_64/tests/host-suite/tests.inventory.json \
 build/tests/style/sources.json build/x86_64/tests/style/sources.json: $(LIBTSM_HOST_STAMP)
 endif
 
+# The ACPI resource check includes ACPICA's headers, the same for both
+# architectures, from i686's extracted tree (vendor/acpica/build_acpica.sh).
+HOST_ACPICA_STAMP = build/vendor/acpica/.stamp
+$(HOST_ACPICA_STAMP): vendor/acpica/build_acpica.sh vendor/acpica/rach2-acenv.patch \
+    vendor/acpica/acpica-unix-20260930.tar.gz mk/arch.sh
+	RACH2_ARCH=i686 sh vendor/acpica/build_acpica.sh
+ifneq ($(OS),Windows_NT)
+build/tests/host-suite/tests.inventory.json \
+build/x86_64/tests/host-suite/tests.inventory.json \
+build/tests/style/sources.json build/x86_64/tests/style/sources.json: $(HOST_ACPICA_STAMP)
+endif
+
 # The native exFAT check uses one architecture-independent prepared volume.
 # Windows runs that check in the GNU helper, whose image builds it separately.
 ifneq ($(OS),Windows_NT)
