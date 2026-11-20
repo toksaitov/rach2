@@ -118,16 +118,20 @@ static int synthetic_run(int argc, char **argv)
 static int owner_ssh(int argc, char **argv)
 {
     char b[4096];
-    if (argc != 5)
+    int i = 1;
+    /* testing.sh gives `-o OPTION` pairs, then the host and the command. */
+    while (i + 1 < argc && !strcmp(argv[i], "-o"))
+        i += 2;
+    if (i == 1 || argc != i + 2)
         return 255;
-    if (strstr(argv[4], "bash -s ")) {
+    if (strstr(argv[argc - 1], "bash -s ")) {
         puts("held");
         fflush(stdout);
         while (read(0, b, sizeof(b)) > 0) {
         }
         return 0;
     }
-    execl("/bin/bash", "bash", "-c", argv[4], (char *)NULL);
+    execl("/bin/bash", "bash", "-c", argv[argc - 1], (char *)NULL);
     return 127;
 }
 static int record_make(int argc, char **argv)
