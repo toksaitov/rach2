@@ -1036,6 +1036,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "mixercmd",
+          "checks": "tests/host/mixercmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "mm",
           "checks": "tests/host/mm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
