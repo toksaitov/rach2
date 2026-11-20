@@ -231,26 +231,50 @@ int ext2_fixture_capture_test(const char *self, const char *root)
     return ok && restored == 0;
 }
 
+/** Read a whole line for the caller to free. Return NULL at EOF.
+ * A read or allocation error fails the test. */
+char *ext2_fixture_readline(void *stream)
+{
+    FILE *in = stream;
+    char *line = NULL;
+    size_t size = 0;
+
+    if (getline(&line, &size, in) >= 0)
+        return line;
+    free(line);
+    if (ferror(in) || !feof(in)) {
+        perror("ext2: reading checker output");
+        exit(1);
+    }
+    return NULL;
+}
+
 int ext2_fixture_findings(const char *input, const char *output)
 {
     static const char *const bare[] = {"Fix? no", "Clear? no", "Allocate? no", "Salvage? no",
                                        "Connect to /lost+found? no"};
-    char line[4096], previous[4096] = "";
+    char *line, *previous = NULL;
     FILE *in = fopen(input, "r"), *out = in ? fopen(output, "w") : NULL;
     size_t n, i;
     int ok = out != NULL;
-    while (ok && fgets(line, sizeof line, in)) {
+    while (ok && (line = ext2_fixture_readline(in)) != NULL) {
         n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
             line[--n] = '\0';
         if (n >= 4 && !strcmp(line + n - 4, "? no")) {
             for (i = 0; i < sizeof bare / sizeof bare[0] && strcmp(line, bare[i]); i++)
                 ;
-            ok = fprintf(out, "%s\n", i == sizeof bare / sizeof bare[0] ? line : previous) >= 0;
+            const char *finding = i == sizeof bare / sizeof bare[0] ? line : previous;
+            ok = finding && fprintf(out, "%s\n", finding) >= 0;
         }
-        if (n)
-            snprintf(previous, sizeof previous, "%s", line);
+        if (n) {
+            free(previous);
+            previous = line;
+        } else {
+            free(line);
+        }
     }
+    free(previous);
     if (in) {
         if (ferror(in))
             ok = 0;

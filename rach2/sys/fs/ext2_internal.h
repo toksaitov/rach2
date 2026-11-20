@@ -233,7 +233,8 @@ struct ext2_node {
     /* A fast link, its target in `block`: decided once, when the inode is
      * read or the link made, as Linux sets `i_link` (`readlink_cached`). */
     int fast_target;
-    uint32_t add_from; /* a directory's offset of the block where the last entry went */
+    uint32_t add_from;     /* a directory's offset of the block where the last entry went */
+    uint32_t growth_block; /* a directory's new empty block owed before its next store, or 0 */
     /* A directory's block where its next lookup starts, the one its last
      * lookup found a name in, kept under its lock, as Linux keeps
      * `i_dir_start_lookup` (fs/ext2/dir.c:356 and 395). */

@@ -5302,7 +5302,8 @@ int paging_collapse(struct mm *mm, uintptr_t start, int how)
     mmn_notify(mm, MMN_DROP, start, start + HUGE_SPAN);
     bkl_enter();
     batch_start(&b, dir);
-    for (i = 0, addr = start; i < HUGE_PAGES; i++, addr += PAGE_SIZE) {
+    for (i = 0; i < HUGE_PAGES; i++) {
+        addr = start + (uintptr_t)i * PAGE_SIZE;
         if (table[i] & PTE_P) {
             batch_add(&b, addr);
             huge_entry_going(&table[i]);
@@ -5404,7 +5405,8 @@ static uint32_t huge_underused_split(struct mm *mm, uintptr_t start)
     mmn_notify(mm, MMN_DROP, start, start + HUGE_SPAN);
     huge_split(dir, start);
     batch_start(&b, dir);
-    for (i = 0, addr = start; i < HUGE_PAGES; i++, addr += PAGE_SIZE) {
+    for (i = 0; i < HUGE_PAGES; i++) {
+        addr = start + (uintptr_t)i * PAGE_SIZE;
         if (table[i] & PTE_P) {
             batch_add(&b, addr);
             huge_entry_going(&table[i]);

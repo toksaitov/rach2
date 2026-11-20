@@ -76,6 +76,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "acpi_pnp",
+          "checks": "tests/host/acpi_pnp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "alps",
           "checks": "tests/host/alps_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1201,6 +1206,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "orphan",
+          "checks": "tests/host/orphan_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "packet",
           "checks": "tests/host/packet_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1301,6 +1311,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "proc_ref",
+          "checks": "tests/host/proc_ref_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "procfs",
           "checks": "tests/host/procfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1333,6 +1348,11 @@
         {
           "assertion_id": "pstore",
           "checks": "tests/host/pstore_hosttest.c checks ramoops's Reed-Solomon code, a persistent RAM zone's header, wrap and second-boot copy, and the parity's mending under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pstore_inode",
+          "checks": "tests/host/pstore_inode_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -2235,7 +2255,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 31
+          "limit": 32
         }
       ],
       "bounds": {

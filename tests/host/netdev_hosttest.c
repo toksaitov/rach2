@@ -302,6 +302,10 @@ static void reset(int a, int b, int c)
     info_calls = 0;
     trace_len = 0;
     trace[0] = '\0';
+    /* The kernel probes once a boot and never lists a withdrawn card's
+       record again; the rows probe afresh, and a card one of them withdrew
+       would hide the next probe's first card. */
+    gone = 0;
 }
 
 /** Return 1 when the strings `a` and `b` are equal, else 0. */

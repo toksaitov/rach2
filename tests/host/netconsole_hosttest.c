@@ -98,8 +98,9 @@ void klog(int level, const char *subsystem, const char *format, ...)
  * inside. */
 struct netdev;
 
-/* The one interface netdev_first gives, `eth0`; the target rows set its
- * IPv4 address, the only field netconsole.c reads here. */
+/* The one interface netdev_first gives, `eth0`, listed first with index 1,
+ * which a target looks up at each send; the target rows set its IPv4
+ * address. */
 static struct netdev the_iface;
 
 /* Whether the card says its link is up, and the frame after which it goes
@@ -358,11 +359,10 @@ struct netdev *netdev_by_name(const char *name)
     return (eth0[i] == '\0' && name[i] == '\0') ? &the_iface : 0;
 }
 
-/** No interface is listed here. */
+/** List `the_iface` alone, as interface 0. */
 struct netdev *netdev_at(int n)
 {
-    (void)n;
-    return 0;
+    return n == 0 ? &the_iface : 0;
 }
 
 /** There is no `lo` here. */
@@ -430,6 +430,7 @@ static void nc_reset(void)
     host_ncarrier = 0;
     pool_used = 0;
     the_iface.ip = 0;
+    the_iface.index = 1;
     host_ticks = 0;
     host_panicking = 0;
     nc_boot_id = 0;

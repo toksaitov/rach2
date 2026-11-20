@@ -1745,8 +1745,8 @@ static void long_rows(void)
     n = make_file(mnt.root, "a.b.c");
     check(n != 0 && found("/AB~1.C"), "two dots take an alias");
     n = make_file(mnt.root, "\xc3\xa9t\xc3\xa9.txt");
-    check(n != 0 && found("/\xc3\xa9t\xc3\xa9.txt") && found("/_T_~1.TXT"),
-          "a name outside ASCII is stored in UTF-16 and read back");
+    check(n != 0 && found("/\xc3\xa9t\xc3\xa9.txt") && found("/\xc3\x89T\xc3\x89~1.TXT"),
+          "a name outside ASCII is stored in UTF-16 and read back, its alias in code page 437");
     for (i = 0; i < 200; i++) {
         name[i] = (char)('a' + i % 26);
     }

@@ -115,7 +115,7 @@ done:
 static int xattr_findings(const char *out)
 {
     void *f;
-    char line[512];
+    char *line;
     int ok = 1;
 
     if (!ext2_fixture_findings(out, fix_path("xa-findings.txt")))
@@ -123,7 +123,7 @@ static int xattr_findings(const char *out)
     f = fopen(fix_path("xa-findings.txt"), "r");
     if (!f)
         return 0;
-    while (fgets(line, sizeof(line), f)) {
+    while ((line = ext2_fixture_readline(f)) != 0) {
         if (!matches_pattern(line, "Free blocks count wrong") &&
             !matches_pattern(line, "Block bitmap differences") &&
             !matches_pattern(line,
@@ -131,6 +131,7 @@ static int xattr_findings(const char *out)
             printf("ext2-xattr: unexpected repair: %s", line);
             ok = 0;
         }
+        free(line);
     }
     fclose(f);
     return ok;

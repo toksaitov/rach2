@@ -1087,7 +1087,7 @@ static int archived(struct release *r, const char *prefix)
         return 0;
     while ((e = readdir(d)))
         if (!strncmp(e->d_name, prefix, strlen(prefix)) && !strstr(e->d_name, ".sha256") &&
-            !strstr(e->d_name, ".sweep")) {
+            !strstr(e->d_name, ".sweep") && !strstr(e->d_name, ".netconsole")) {
             snprintf(r->retired, sizeof(r->retired), "%s/state/%s", r->f->work, e->d_name);
             count++;
         }

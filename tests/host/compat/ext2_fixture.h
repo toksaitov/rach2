@@ -8,6 +8,7 @@ int ext2_fixture_debugfs(const char *image, const char *request, int write, cons
 int ext2_fixture_fsck(const char *image, const char *flags, const char *output);
 int ext2_fixture_capture_child(void);
 int ext2_fixture_capture_test(const char *self, const char *root);
+char *ext2_fixture_readline(void *stream);
 int ext2_fixture_findings(const char *input, const char *output);
 int ext2_fixture_contains(const char *path, const char *text);
 void ext2_fixture_head(const char *path, unsigned lines);

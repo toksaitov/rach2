@@ -2157,13 +2157,13 @@ static int matches_pattern(const char *line, const char *pat)
 static int findings_allowed(int counts)
 {
     void *f = fopen(fix_path("findings.txt"), "r");
-    char line[512];
+    char *line;
     int ok = 1;
 
     if (!f) {
         return 0;
     }
-    while (fgets(line, sizeof(line), f)) {
+    while ((line = ext2_fixture_readline(f)) != 0) {
         unsigned k;
         int any = 0;
 
@@ -2177,6 +2177,7 @@ static int findings_allowed(int counts)
             printf("  a repair the order of writes does not allow: %s", line);
             ok = 0;
         }
+        free(line);
     }
     fclose(f);
     return ok;
@@ -3345,10 +3346,10 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
  * root's block at once, as Linux's `ext2_handle_dirsync` writes a
  * directory's pages (`dir_commit`), and so first the table block its new
  * names wait for, with both inodes in use there, so that a stop never
- * leaves an entry naming a zeroed inode. It does not flush the disk, as
- * `ext2_handle_dirsync` does not (`bcache_sync_block_ordered`). An fsync
- * writes the rest and flushes the disk, and the volume unmounts clean. The
- * device is marked write-through, so that a write sent without
+ * leaves an entry naming a zeroed inode. The disk is flushed between the
+ * table and the directory block to keep that order through power loss. An
+ * fsync writes the rest and flushes the disk, and the volume unmounts clean.
+ * The device is marked write-through, so that a write sent without
  * `BLOCK_REQ_NOFLUSH` would count as a flush; the removed file's inode and
  * blocks are freed at its last put.
  */
@@ -3356,7 +3357,7 @@ static uint64_t node_table_lba(void *node, uint32_t *slot);
 
 /** Whether the writes `wlog[from, to)` hold the table block of `node`'s
  * inode, with that inode in use, before the first write of the root's block
- * `root`, and that write of the root. */
+ * `root`, with the remove's one flush between the two writes. */
 static int inode_before_name(void *node, int from, int to, uint64_t root)
 {
     uint32_t slot = 0;
@@ -3376,7 +3377,8 @@ static int inode_before_name(void *node, int from, int to, uint64_t root)
         return 0;
     }
     p = wlog_data[t] + slot;
-    return (p[0] | p[1] << 8) != 0 && (p[26] | p[27] << 8) != 0;
+    return (p[0] | p[1] << 8) != 0 && (p[26] | p[27] << 8) != 0 && flush_n == 1 &&
+           t < flush_log[0] && flush_log[0] <= r;
 }
 
 static void default_mount_row(void)
@@ -3412,12 +3414,12 @@ static void default_mount_row(void)
     if (g) {
         OPS->put(&mnt, g);
     }
-    entries = entries && root > 0 && flush_n == 0 && !wlog_overflow;
+    entries = entries && root > 0 && !wlog_overflow;
     for (i = 0; i < wlog_n; i++) {
         entries = entries && wlog_count[i] % 8 == 0;
     }
     check(entries, "the remove sends the table block of both new inodes, in use, before the "
-                   "root's entries, with no flush, on a mount without dirsync");
+                   "root's entries, with a flush between them, on a mount without dirsync");
     flushes = flush_n;
     check(f && OPS->fsync(&mnt, 0) == 0 && wlog_n > 0 && flush_n > flushes,
           "and an fsync writes them and flushes the disk");
@@ -5218,13 +5220,13 @@ static int removal_run(int kind, int way, uint64_t *reused)
 static int findings_among(const char *const *allowed, unsigned count)
 {
     void *f = fopen(fix_path("findings.txt"), "r");
-    char line[512];
+    char *line;
     int ok = 1;
 
     if (!f) {
         return 0;
     }
-    while (fgets(line, sizeof(line), f)) {
+    while ((line = ext2_fixture_readline(f)) != 0) {
         unsigned k;
         int any = 0;
 
@@ -5235,6 +5237,7 @@ static int findings_among(const char *const *allowed, unsigned count)
             printf("  a repair the order of writes does not allow: %s", line);
             ok = 0;
         }
+        free(line);
     }
     fclose(f);
     return ok;
@@ -9586,6 +9589,7 @@ static void symlink_kept_row(void)
 
 /* Set when process A of `reuse_row` is done, for process B to end. */
 static int reuse_done;
+static int64_t reclaim_table = -1; /* table block to write and evict, or -1 */
 
 /** Process B of `reuse_row`: the memory reclaim, which gives back every
  * buffer nobody holds and writes the dirty ones, at each turn. */
@@ -9594,6 +9598,12 @@ static void reuse_reclaim(void)
     uint32_t written = 0;
 
     while (!reuse_done) {
+        if (reclaim_table >= 0) {
+            check(bcache_sync_block(&dev, reclaim_table) == 0, "the new inode reaches the disk");
+            bcache_forget(&dev, reclaim_table);
+            check(!bcache_cached(&dev, reclaim_table), "the new inode's table block is evicted");
+            reclaim_table = -1;
+        }
         (void)bcache_shrink(bcache_resident(), 1, &written);
         pass_turn();
     }
@@ -10098,17 +10108,21 @@ static void truncate_retry_row(void)
 /* The read of /dst's second block from which `abandon_turn` fails every
    read, 0 for none, and the reads of it counted. */
 static int64_t abandon_block = -1;
+static uint64_t abandon_table; /* new inode's table block in the control run */
 static int abandon_from, abandon_reads;
 
-/** The read hook of `abandon_row`: a turn for the reclaim, then the count
- * of /dst's second block and, from the `abandon_from`th read of it on, every
- * read failed. */
+/** Count reads of /dst's second block before reclaim takes its turn. On the
+ * chosen read, evict the new inode's slot and fail this and later reads, so
+ * the last put must read the slot to zero it. */
 static void abandon_turn(void)
 {
-    pass_turn();
     if (read_covers(abandon_block)) {
         abandon_reads++;
+        if (abandon_reads == abandon_from) {
+            reclaim_table = abandon_table;
+        }
     }
+    pass_turn();
     if (abandon_from > 0 && abandon_reads >= abandon_from) {
         fail_read_hits++;
         read_fails = 1;
@@ -10156,6 +10170,9 @@ static int abandon_run(int from, int *reads)
     finish_turns();
     *reads = abandon_reads;
     if (n) {
+        uint32_t slot;
+
+        abandon_table = node_table_lba(n, &slot) / 8;
         OPS->put(&mnt, n);
     }
     OPS->put(&mnt, dst);

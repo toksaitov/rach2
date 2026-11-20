@@ -209,6 +209,7 @@ static void cow_rows(void)
           "the parent's write splits its page and copies the page it shares");
     drop(&mm_a, A, A + H);
     drop(&mm_b, A, A + H);
+    vm_free(&mm_b.vm); /* the next fork's child starts empty, as mm_new's does */
 
     region(&mm_a, A, A + H, RW);
     check(resolve_held(&mm_a, A, 1, LIM) == 1 && is_huge(&dir_a, A), "a huge page again");
