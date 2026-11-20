@@ -6298,11 +6298,12 @@ static int procfs_gen_netifinet6(struct procfs_text *t)
 /* The route flags of /proc/net/ipv6_route, Linux's RTF_ bits: up, through
  * a gateway, a default router's, learned from a router advertisement, and
  * with a lifetime. */
-#define PROCFS_RTF_UP       0x00000001u
-#define PROCFS_RTF_GATEWAY  0x00000002u
-#define PROCFS_RTF_DEFAULT  0x00010000u
-#define PROCFS_RTF_ADDRCONF 0x00040000u
-#define PROCFS_RTF_EXPIRES  0x00400000u
+#define PROCFS_RTF_UP        0x00000001u
+#define PROCFS_RTF_GATEWAY   0x00000002u
+#define PROCFS_RTF_DEFAULT   0x00010000u
+#define PROCFS_RTF_ADDRCONF  0x00040000u
+#define PROCFS_RTF_PREFIX_RT 0x00080000u
+#define PROCFS_RTF_EXPIRES   0x00400000u
 
 /**
  * Render /proc/net/ipv6_route: the IPv6 routes, each copied out under
@@ -6329,8 +6330,9 @@ static int procfs_gen_netipv6route(struct procfs_text *t)
         if (!ip6_is_unspecified(r.gw)) {
             rtf |= PROCFS_RTF_GATEWAY;
         }
-        if (r.proto == ROUTE6_PROTO_RA) {
-            rtf |= PROCFS_RTF_ADDRCONF | (r.plen == 0 ? PROCFS_RTF_DEFAULT : 0u);
+        if (r.learned) {
+            rtf |= PROCFS_RTF_ADDRCONF |
+                   (ip6_is_unspecified(r.gw) ? PROCFS_RTF_PREFIX_RT : PROCFS_RTF_DEFAULT);
         }
         if (r.expires != 0) {
             rtf |= PROCFS_RTF_EXPIRES;

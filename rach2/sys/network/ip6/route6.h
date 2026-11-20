@@ -6,18 +6,14 @@
 /*
  * route6: the IPv6 routing table behind `ip6_route`.
  *
- * The routes a card's addresses imply are found from them when asked for:
- * the prefix of each address given by a program or made at link up, at
- * metric 256, reached on the link. The routes a router advertises, its
- * on-link prefixes at metric 256 and itself as a default route at metric
- * 1024, and those a program adds, are kept in a table of ROUTE6_MAX, the
- * learned ones with the tick they expire at. A SLAAC address implies no
- * route: its prefix's route is the advertisement's, as on Linux.
+ * Direct routes installed by addresses keep their own metric and deadline
+ * in the table. An expiring duplicate takes the last insertion's lifetime.
+ * These entries have separate storage from the ROUTE6_MAX routes learned
+ * from advertisements or set explicitly. Only local host routes are read
+ * from the address list. A SLAAC address leaves its prefix to its router.
  *
- * A lookup takes, of the routes of cards that are up with IPv6 enabled and
- * that match, the one of the longest prefix, then of the lowest metric,
- * then one whose gateway may be reachable (`nd6_router_usable`), then the
- * first found, which puts an implied route before a table's.
+ * Lookup prefers the longest prefix, the lowest metric and then a gateway
+ * that may be reachable, among matching routes on enabled cards.
  */
 
 #define ROUTE6_MAX 32
@@ -45,6 +41,7 @@ struct route6_row {
     uint8_t gw[16];      /* :: for a route on the link */
     uint32_t metric;
     uint8_t proto;    /* ROUTE6_PROTO_* */
+    uint8_t learned;  /* currently managed by router advertisements */
     uint8_t local;    /* a host route in the local table */
     uint32_t expires; /* seconds left, or 0 for a route that does not expire */
 };
@@ -62,8 +59,13 @@ int route6_at(int n, struct route6_row *out);
  */
 struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via);
 
-/** Update a distinct peer on an existing address under net_lock. */
-void route6_peer_change(struct netdev *nd, struct netdev_addr6 *a, const uint8_t *peer);
+/** Apply the new address's prefix and peer routes under net_lock.
+ * old is the current address record for a replacement, NULL for creation. */
+void route6_address_update(struct netdev *nd, const struct netdev_addr6 *old,
+                           const struct netdev_addr6 *a);
+
+/** Insert the peer host route when duplicate address detection completes. */
+void route6_address_ready(struct netdev *nd, const struct netdev_addr6 *a);
 
 /** Preserve a prefix with an independent lifetime before removing slot.
  * The caller holds net_lock and slot is still present. */

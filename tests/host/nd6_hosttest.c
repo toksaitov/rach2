@@ -130,6 +130,13 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     return 0;
 }
 
+/** Model insertion of a SLAAC address with the same fixture as a manual one. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
+{
+    return netconf_add_address6(nd, addr, prefix, flags, valid, preferred);
+}
+
 /** Remove the address whose slot the ND state machine is visiting. */
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
@@ -352,20 +359,31 @@ static void route_lifetime(void)
     a->valid = NETDEV_LIFETIME_FOREVER;
     a->flags = NETDEV_A6_TENTATIVE;
     eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
     CHECK(count_prefix(a->addr, 128, 0, 80) == 1 && count_prefix(a->addr, 128, 1, 0) == 0);
     CHECK(count_prefix(a->peer, 128, 0, 80) == 0);
     a->flags |= NETDEV_A6_PERMANENT;
     a->preferred = NETDEV_LIFETIME_FOREVER;
-    a->deleted_routes = NETDEV_A6_LOCAL_ROUTE | NETDEV_A6_PEER_ROUTE;
+    a->local_route_deleted = 1;
     dad_timers(&eth0);
     CHECK(!(a->flags & NETDEV_A6_TENTATIVE));
     if_of(&eth0)->running = 0;
     if_timers(&eth0, if_of(&eth0));
     CHECK(!(a->flags & NETDEV_A6_TENTATIVE));
     CHECK(count_prefix(a->addr, 128, 1, 0) == 1 && count_prefix(a->peer, 128, 0, 80) == 1);
-    a->noprefix = 1;
+    {
+        struct netdev_addr6 next = *a;
+        next.noprefix = 1;
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
     CHECK(count_prefix(a->addr, 128, 0, 80) == 0 && count_prefix(a->peer, 128, 0, 80) == 1);
-    a->noprefix = 0;
+    {
+        struct netdev_addr6 next = *a;
+        next.noprefix = 0;
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
     r.plen = 128;
     k_memcpy(r.dst, a->addr, 16);
     r.proto = 9;
@@ -425,6 +443,7 @@ static void finite_prefix(void)
         }
     }
     eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
     CHECK(netconf_del_address6(&eth0, a->addr) == 0);
     CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
     kernel_ticks += 10 * TICK_HZ;
@@ -445,6 +464,7 @@ static void finite_prefix(void)
 static void change_peer(void)
 {
     struct netdev_addr6 *a = &eth0.addr6[0];
+    struct route6_row explicit = {0};
     uint8_t old[16] = {0x20, 1}, peer[16] = {0x30, 1};
     k_memset(a, 0, sizeof(*a));
     a->addr[0] = 0x40;
@@ -453,10 +473,33 @@ static void change_peer(void)
     a->valid = NETDEV_LIFETIME_FOREVER;
     k_memcpy(a->peer, old, 16);
     eth0.naddr6 = 1;
-    route6_peer_change(&eth0, a, peer);
-    a->peer_prefix = 1;
-    CHECK(count_prefix(old, 128, 0, 256) == 1 && count_prefix(peer, 64, 0, 256) == 1);
+    route6_address_update(&eth0, 0, a);
+    k_memcpy(explicit.dst, old, 16);
+    explicit.metric = 42;
+    explicit.plen = 64;
+    explicit.proto = ROUTE6_PROTO_STATIC;
+    CHECK(!route6_change_row(&eth0, &explicit, 0, 0));
+    {
+        struct netdev_addr6 next = *a;
+        next.metric = 512;
+        k_memcpy(next.peer, peer, 16);
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
+    CHECK(count_prefix(old, 128, 0, 256) == 1 && count_prefix(peer, 64, 0, 512) == 1);
     CHECK(count_prefix(peer, 128, 0, 256) == 0);
+    CHECK(route6_change_row(&eth0, &explicit, 1, 0) == -ESRCH);
+    k_memcpy(explicit.dst, peer, 16);
+    explicit.metric = 512;
+    CHECK(!route6_change_row(&eth0, &explicit, 0, 1));
+    {
+        struct netdev_addr6 next = *a;
+        next.metric = 600;
+        route6_address_update(&eth0, a, &next);
+        *a = next;
+    }
+    CHECK(route6_change_row(&eth0, &explicit, 1, 0) == -ESRCH &&
+          count_prefix(peer, 64, 0, 600) == 1 && count_prefix(old, 128, 0, 256) == 1);
     nd6_if_down(&eth0);
     CHECK(count_prefix(old, 128, 0, 256) == 0);
 }
@@ -476,12 +519,15 @@ static void delete_shared_prefix(void)
     a->since = kernel_ticks;
     a->metric = 80;
     eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
     CHECK(netconf_del_address6(&eth0, a->addr) == 0);
     CHECK(count_prefix(key.dst, 64, 0, 80) == 1);
     eth0.addr6[1] = *a;
     eth0.addr6[1].addr[15] = 2;
     eth0.addr6[1].metric = 40;
     eth0.naddr6 = 2;
+    route6_address_update(&eth0, 0, a);
+    route6_address_update(&eth0, 0, &eth0.addr6[1]);
     CHECK(route6_change_row(&eth0, &key, 1, 0) == 0);
     CHECK(count_prefix(key.dst, 64, 0, 80) == 1 && count_prefix(key.dst, 64, 0, 40) == 0);
     CHECK(route6_change_row(&eth0, &key, 1, 0) == 0);
@@ -503,6 +549,7 @@ static void remove_replaced_prefix(void)
     a->valid = NETDEV_LIFETIME_FOREVER;
     a->flags = NETDEV_A6_PERMANENT;
     eth0.naddr6 = 1;
+    route6_address_update(&eth0, 0, a);
     k_memcpy(r.dst, a->addr, 16);
     r.plen = 64;
     r.metric = 256;
