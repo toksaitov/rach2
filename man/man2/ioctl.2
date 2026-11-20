@@ -737,7 +737,7 @@ wireless stations use nl80211 instead of wireless extensions.
 and
 .Dv SIOCSIFMTU
 require effective user ID 0.
-They set the address or netmask, check the derived broadcast address,
+They set the address, netmask or broadcast address,
 change the interface's
 .Dv IFF_UP
 state, or set its MTU.
@@ -772,8 +772,9 @@ connection times out with
 .Er ENETUNREACH ;
 see
 .Xr tcp 7 .
-The change invalidates ARP mappings and clears a gateway that the interface
-can no longer reach.
+Removing the last address removes all IPv4 routes through its interface.
+When other addresses remain, explicit routes survive unless their specified
+source address ceases to be local.
 .Pp
 .Dv SIOCADDRT
 and
@@ -782,24 +783,12 @@ take a
 .Vt "struct rtentry"
 in the processor's layout, 84 bytes on i386 and 120 on x86-64,
 and require effective user ID 0.
-A default route of no metric sets or removes the selected interface's
-default gateway; any other route is added to or removed from the table
-of 32, with the metric one less than
-.Va rt_metric ,
-as
-.Ic route
-sends it.
-A null device-name pointer selects the interface whose subnet has the
-gateway, or the first.
-Adding a route that an address already implies, including a TUN peer prefix,
-at the same metric succeeds without action.
-Removing an implied route is
-.Er EOPNOTSUPP
-while its address is in force.
-A default route of no metric and no gateway is
-.Er EINVAL
-and leaves the gateway as it was.
-A gateway none of the interface's subnets has is
+Direct and gateway routes, including defaults, use the same table.
+A positive
+.Va rt_metric
+selects a priority one less than its value.
+Deleting a connected prefix leaves its address configured.
+A gateway needs a link route through the selected interface or the call returns
 .Er ENETUNREACH ,
 a route already there
 .Er EEXIST ,

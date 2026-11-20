@@ -322,7 +322,9 @@ int netdev_on_link(const struct netdev *nd, uint32_t ip)
         uint32_t mask = i < 0 ? nd->mask : nd->mask2[i];
         uint32_t dst = netdev_addr_dst(nd, i);
 
-        if ((ip & mask) == (dst & mask) && netdev_addr_has_route(local, dst, mask)) {
+        if (nd->up && !nd->addr4[i + 1].noprefix && !(nd->addr4[i + 1].deleted & ADDR4_PREFIX) &&
+            !netdev_secondary(nd, i) && (ip & mask) == (dst & mask) &&
+            netdev_addr_has_route(local, dst, mask)) {
             return 1;
         }
     }
@@ -371,16 +373,10 @@ int netdev_is_broadcast(uint32_t ip)
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *nd = netdev_at(i);
 
-        if (nd->l3) {
-            continue;
-        }
-        if (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && ip == (nd->ip | ~nd->mask)) {
-            return 1;
-        }
-        for (a = 0; a < nd->naddr2; a++) {
-            if (NETDEV_MASK_HAS_BROADCAST(nd->mask2[a]) && ip == (nd->ip2[a] | ~nd->mask2[a])) {
+        for (a = -1; a < nd->naddr2; a++) {
+            if (ip && (ip == netdev_addr_local(nd, a, ADDR4_BROADCAST) ||
+                       ip == netdev_addr_local(nd, a, ADDR4_SUBNET_BROADCAST)))
                 return 1;
-            }
         }
     }
     return 0;

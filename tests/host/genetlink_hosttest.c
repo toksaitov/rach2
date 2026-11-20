@@ -292,44 +292,53 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     return 0;
 }
 
-/** Model netdev_route_add with no addresses, routes or sockets. */
-int netdev_route_add(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw, uint32_t metric,
-                     int replace)
+/** The generic family model has no routes to change. */
+int netdev_route_change(struct netdev *nd, const struct netdev_rt *r, int del, int replace)
 {
     (void)nd;
-    (void)dst;
-    (void)mask;
-    (void)gw;
-    (void)metric;
+    (void)r;
+    (void)del;
     (void)replace;
-    return 0;
+    return -ESRCH;
 }
 
-/** Model netdev_route_at with no addresses, routes or sockets. */
-int netdev_route_at(int n, struct netdev_rt *out)
+/** The generic family model has no local route to delete. */
+int netdev_local_route_del(const struct netdev *nd, const struct netdev_rt *r)
+{
+    (void)nd;
+    (void)r;
+    return -ESRCH;
+}
+
+/** No local or main table entries. */
+int netdev_route_at(int n, struct netdev_rt *r)
 {
     (void)n;
-    (void)out;
+    (void)r;
     return 0;
 }
 
-/** Model netdev_has_link_route with no addresses or routes. */
-int netdev_has_link_route(const struct netdev *nd, uint32_t dst, uint32_t mask)
+/** No addresses to install local routes. */
+int netdev_local_route_at(int n, struct netdev_rt *r)
 {
-    (void)nd;
-    (void)dst;
-    (void)mask;
-    return 0;
+    return netdev_route_at(n, r);
 }
 
-/** Model netdev_route_del with no addresses, routes or sockets. */
-int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
+/** No gateway is reachable through the mock interface. */
+int netdev_gateway_reachable(const struct netdev *nd, uint32_t gw)
 {
     (void)nd;
-    (void)dst;
-    (void)mask;
     (void)gw;
     return 0;
+}
+
+/** Return the slot just past the model's IPv4 addresses. */
+int netconf_addr_find(const struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t dst)
+{
+    (void)ip;
+    (void)mask;
+    (void)dst;
+    return nd->naddr2;
 }
 
 /** Model netdev_source with no addresses, routes or sockets. */

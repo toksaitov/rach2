@@ -76,6 +76,8 @@ uint8_t net_mac[6];
         }                                                                       \
     } while (0)
 
+uint32_t net_ip_gateway; /* the first interface's boot gateway */
+
 /** All Ethernet probes find no card; radios are attached after this probe. */
 static int absent(struct netdev *nd, int nth)
 {
@@ -1180,6 +1182,7 @@ static void check_default_gateway(void)
 {
     static struct netdev card, other;
 
+    card.up = other.up = 1;
     card.ip = other.ip = 0xc0000205u;
     card.mask = other.mask = 0xffffff00u;
     CHECK(netdev_default_gateway(&card) == 0);
