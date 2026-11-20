@@ -82,9 +82,10 @@ int procfs_dir_relative(const struct synth_dir *sd, const struct vfs_mount *mnt,
 uint32_t procfs_owner_mode(int procfile);
 
 /** The id of the process, or of the thread for a path under
- * /proc/<pid>/task/<tid>, whose files the path `vp` shows; -1 when the
- * process is gone or the thread is not one its task directory lists: a
- * thread of another process, or one that has ended other than the leader. */
+ * /proc/<pid>/task/<tid> or /proc/thread-self, whose files the path `vp`
+ * shows; -1 when the process is gone or the thread is not one its task
+ * directory lists: a thread of another process, or one that has ended other
+ * than the leader. */
 int procfs_resolve_id(const struct vpath *vp);
 
 /** The link count of process `pid`'s task directory: 2 and one for each of
@@ -156,6 +157,15 @@ int procfs_readlink_exe(int pid, char *buf, int cap);
 int procfs_exe_name(int pid, char *buf, int cap);
 
 /**
+ * The text of /proc/self, the caller's process ID, or of /proc/thread-self,
+ * "PID/task/TID" of the calling thread, as the PID namespace of `vp`'s mount
+ * numbers them (`synth_self_link`), into `buf` of `cap` bytes with no
+ * terminator, cut to fit. Returns its length, -ENOENT for a caller that
+ * namespace does not see, or -EINVAL for `vp` that is neither link.
+ */
+int procfs_readlink_self(const struct vpath *vp, char *buf, int cap);
+
+/**
  * The text of /proc/<pid>/cwd, or of /proc/<pid>/root with `root` set, into
  * `buf` of `cap` bytes: the working directory's path as getcwd gives it, or
  * the path of the directory chroot made the root, "/" when it made none.
@@ -222,11 +232,14 @@ int procfs_nth_pid(int n, uint32_t pidns_ino);
 /*
  * The inode numbers stat gives /proc and its files outside /proc/<pid>, one
  * function for each, named for the file: /proc itself (`procfs_ino_dir`),
+ * the links /proc/self and /proc/thread-self,
  * /proc/cmdline, /proc/net and /proc/net/dev (`procfs_ino_netdir`,
  * `procfs_ino_netdev`), /proc/disk, /proc/stat (`procfs_ino_statsys`) and
  * the rest. Each number is fixed.
  */
 uint32_t procfs_ino_dir(void);
+uint32_t procfs_ino_self(void);
+uint32_t procfs_ino_thread_self(void);
 uint32_t procfs_ino_cmdline(void);
 uint32_t procfs_ino_netdir(void);
 uint32_t procfs_ino_netdev(void);

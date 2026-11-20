@@ -10286,7 +10286,8 @@ static int synth_proc_writable(int procfile)
 
 /**
  * Fill `kst`, as `synth_stat_node` has begun it, for the directory of a
- * process or thread that `vp` names, or for /proc/self unfollowed, a link.
+ * process or thread that `vp` names, or for /proc/self or /proc/thread-self
+ * unfollowed, a link.
  * A task directory has the links `procfs_task_links` counts, and an fd
  * directory the number of descriptors open as its size (`procfs_fd_count`),
  * as Linux's `proc_fd_getattr` gives it (fs/proc/fd.c:350-366). Returns 0,
@@ -10298,9 +10299,9 @@ static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int
         return -ENOENT;
     }
     kst->st_dev = PROCFS_FSID;
-    if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0 && !follow) {
+    if (synth_self_link(vp) && !follow) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-        kst->st_ino = procfs_ino_dir();
+        kst->st_ino = synth_self_link(vp) == 1 ? procfs_ino_self() : procfs_ino_thread_self();
         return 0;
     }
     kst->st_mode = synth_pid_dir_mode(vp);
@@ -11278,7 +11279,8 @@ static int user_path_empty(const char __user *upath);
  *
  * The links are those of a mounted type that has them, read through the
  * type, and the synthetic ones: /proc/self, the number of the caller's
- * process as its PID namespace sees it; a process's exe, cwd and root, its
+ * process as its PID namespace sees it, and /proc/thread-self, that number,
+ * "/task/" and the calling thread's; a process's exe, cwd and root, its
  * namespace links, and its descriptors' links, which ttyname reads and
  * which are -EACCES to a caller that may not read the process's
  * descriptors; a /sys device link, relative as Linux writes it; and
@@ -11339,26 +11341,8 @@ static int synth_readlink(const struct vpath *vp, char *link)
     int n, pid;
     int kind = vp->kind;
 
-    if (kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0) {
-        uint32_t uv;
-        char t[12];
-        int tn = 0;
-        pid = procfs_resolve_pid(vp->pid, vp->pidns_ino);
-        n = 0;
-        uv = pid < 0 ? 0u : procfs_pid_number((uint32_t)pid, vp->pidns_ino);
-        if (pid < 0) {
-            n = -ENOENT;
-        } else if (uv == 0) {
-            link[n++] = '0';
-        } else {
-            while (uv) {
-                t[tn++] = (char)('0' + uv % 10u);
-                uv /= 10u;
-            }
-            while (tn) {
-                link[n++] = t[--tn];
-            }
-        }
+    if (synth_self_link(vp)) {
+        n = procfs_readlink_self(vp, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_FD_LINK) {
         pid = procfs_resolve_id(vp);
         n = pid < 0                 ? -ENOENT
@@ -21320,7 +21304,8 @@ static const struct {
                           {"asound", procfs_ino_asounddir, DT_DIR},
                           {"bus", procfs_ino_busdir, DT_DIR},
                           {"sys", procfs_ino_sysdir, DT_DIR},
-                          {"self", procfs_ino_dir, DT_LNK},
+                          {"self", procfs_ino_self, DT_LNK},
+                          {"thread-self", procfs_ino_thread_self, DT_LNK},
                           {"usb", procfs_ino_usb, DT_REG},
                           {"loop", procfs_ino_loop, DT_REG},
                           {"console", procfs_ino_console, DT_REG},
