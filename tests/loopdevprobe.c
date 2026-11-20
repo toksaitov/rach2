@@ -8,7 +8,10 @@
  * /dev/loop-control, mounts the device, reads what is in it, first through a
  * private mapping, which a page fault reads through the device, writes a file,
  * unmounts, detaches, attaches again and reads back what it wrote, which is
- * what says the write reached the file and not only the cache.
+ * what says the write reached the file and not only the cache. On a vfat
+ * image it also exchanges two directories across parents with
+ * RENAME_EXCHANGE, whose four writes go down through the device into the
+ * volume's file system, and reads the exchanged names back.
  *
  * It then asks for everything the attachment refuses: the same file twice, a
  * write and a truncation of an attached file, a detach with a mount on it, an
@@ -19,8 +22,11 @@
  * them: /dev/loop-control's LOOP_CTL_GET_FREE names a free device, whose node
  * is a block device of major 7; LOOP_CONFIGURE attaches the image open on a
  * descriptor, set to clear itself; LOOP_GET_STATUS64 names the file; the node
- * reads the image's first sector; and the device, mounted while its node is
- * still open, is detached by the unmount after the node is closed.
+ * reads the image's first sector; opened with O_DIRECT, it refuses a write
+ * at its end with ENOSPC before it judges the buffer, and cuts a write that
+ * crosses the end to the sectors before it; and the device, mounted while
+ * its node is still open, is detached by the unmount after the node is
+ * closed.
  * LOOP_SET_FD of a file open for reading attaches it read-only, and
  * LOOP_CLR_FD detaches it.
  *
@@ -71,8 +77,17 @@
 #define O_RDWR   2
 #define O_CREAT  0100
 #define O_TRUNC  01000
+#define O_DIRECT 040000
 
 #define MS_RDONLY 1
+
+#define AT_FDCWD        (-100)
+#define RENAME_EXCHANGE 2
+#if defined __x86_64__
+#define SYS_RENAMEAT2_ 316
+#else
+#define SYS_RENAMEAT2_ 353
+#endif
 
 #define PROT_READ   1
 #define MAP_PRIVATE 2
@@ -82,6 +97,7 @@
 
 #define ENOENT 2
 #define ENXIO  6
+#define ENOSPC 28
 #define EBUSY  16
 #define EINVAL 22
 #define EROFS  30
@@ -681,6 +697,47 @@ static void set_fd_rows(int index)
     syscall1(SYS_CLOSE, file);
 }
 
+/* The buffer of the O_DIRECT rows, on a page, so that it and its sectors
+ * are aligned and the byte after its start is not. */
+static unsigned char direct_buf[1024] __attribute__((aligned(4096)));
+
+/**
+ * The O_DIRECT rows of the node of device `index`, whose image is `size`
+ * bytes, in the order of Linux's `blkdev_write_iter`, which cuts a write
+ * at the device's end before `blkdev_dio_invalid` judges it: a write at the
+ * end from a buffer off the sector is ENOSPC, and one of 513 bytes a sector
+ * before the end is cut to the last sector, which it writes back as the
+ * read before it found it.
+ */
+static void direct_end_rows(int index, long long size)
+{
+    int dev = open_loop(index, O_RDWR | O_DIRECT);
+    long long at;
+    long rc;
+
+    if (dev < 0) {
+        fail_with("opening the loop node with O_DIRECT", dev);
+    }
+    if (probe_llseek(dev, size, 0, &at) != 0) {
+        fail("seeking to the end of the loop node");
+    }
+    rc = syscall3(SYS_WRITE, dev, (long)(direct_buf + 1), 512);
+    if (rc != -ENOSPC) {
+        fail_with("an O_DIRECT write at the node's end from a buffer off the sector is not ENOSPC",
+                  (int)rc);
+    }
+    if (probe_pread(dev, (char *)direct_buf, 512, size - 512) != 512 ||
+        probe_llseek(dev, size - 512, 0, &at) != 0) {
+        fail("reading the loop node's last sector with O_DIRECT");
+    }
+    rc = syscall3(SYS_WRITE, dev, (long)direct_buf, 513);
+    if (rc != 512) {
+        fail_with("an O_DIRECT write of 513 bytes a sector before the node's end is not cut to 512",
+                  (int)rc);
+    }
+    syscall1(SYS_CLOSE, dev);
+}
+
 /**
  * The rows of Linux's loop ioctls over `image`, which has a file system of
  * `type`, as the file's opening comment describes them. The node's mode has
@@ -692,6 +749,7 @@ static void ioctl_rows(const char *type)
     unsigned char config[304], info[232], first[512], sector[512], st[KSTAT_SIZE];
     char node[] = "/dev/loop0";
     char path[PATH_CAP];
+    long long size;
     int ctl, index, file, dev, rc, i;
 
     ctl = syscall3(SYS_OPEN, (long)"/dev/loop-control", O_RDWR, 0);
@@ -708,7 +766,8 @@ static void ioctl_rows(const char *type)
     }
     file = syscall3(SYS_OPEN, (long)image, O_RDWR, 0);
     dev = open_loop(index, O_RDWR);
-    if (file < 0 || dev < 0 || syscall3(SYS_READ, file, (long)first, 512) != 512) {
+    if (file < 0 || dev < 0 || probe_llseek(file, 0, 2, &size) != 0 ||
+        probe_pread(file, (char *)first, 512, 0) != 512) {
         fail("opening and reading the image and opening a free loop device");
     }
     for (i = 0; i < (int)sizeof(config); i++) {
@@ -733,6 +792,7 @@ static void ioctl_rows(const char *type)
     if (i != 512) {
         fail("the device's first sector is not the image's");
     }
+    direct_end_rows(index, size);
     rc = mount_at((long)node, (long)mount_dir, (long)type, 0, 0);
     if (rc != 0) {
         fail_with("mounting a device LOOP_CONFIGURE attached", rc);
@@ -1051,6 +1111,75 @@ static void read_only_rows(void)
     }
 }
 
+/* The bytes of each filler file of the exchange rows: 8 KiB, two blocks of
+ * the buffer cache, so that the directory made after a filler lies in a
+ * block of the cache apart from the one made before it. */
+static char exchange_filler[8192];
+
+/** Make the file `name` of the directory `dir` with the bytes of `text`. */
+static void make_text(const char *dir, const char *name, const char *text, int len)
+{
+    char path[PATH_CAP];
+    int fd = syscall3(SYS_OPEN, (long)join(path, dir, name), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd < 0) {
+        fail_with("creating a file for the exchange", fd);
+    }
+    if (syscall3(SYS_WRITE, fd, (long)text, len) != len) {
+        fail("writing a file for the exchange");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** Make the directory `name` of `dir` into `out`, of PATH_CAP bytes. */
+static void make_dir(char *out, const char *dir, const char *name)
+{
+    int rc = syscall2(SYS_MKDIR, (long)join(out, dir, name), 0755);
+
+    if (rc != 0) {
+        fail_with("making a directory for the exchange", rc);
+    }
+}
+
+/**
+ * RENAME_EXCHANGE of two directories across parents on the FAT image
+ * mounted through the device, whose file lives on the FAT volume: D1 in the
+ * root and A/D2, with a filler before each, so that both short entries and
+ * both `..` entries lie in four blocks of the cache. The exchange changes
+ * the four, and each write goes down through the loop device into the file
+ * system of the volume, which takes buffers of its own while the exchange
+ * goes on; the read-back rows find each directory's file under the other's
+ * name after the image is mounted again (`exchanged_names`).
+ */
+static void exchange_rows(void)
+{
+    char a[PATH_CAP], d1[PATH_CAP], d2[PATH_CAP];
+    int rc;
+
+    make_text(mount_dir, "F0.BIN", exchange_filler, (int)sizeof(exchange_filler));
+    make_dir(a, mount_dir, "A");
+    make_text(mount_dir, "F1.BIN", exchange_filler, (int)sizeof(exchange_filler));
+    make_dir(d1, mount_dir, "D1");
+    make_text(a, "F2.BIN", exchange_filler, (int)sizeof(exchange_filler));
+    make_dir(d2, a, "D2");
+    make_text(d1, "one.txt", "one", 3);
+    make_text(d2, "two.txt", "two", 3);
+    syscall0(SYS_SYNC);
+    rc = syscall5(SYS_RENAMEAT2_, AT_FDCWD, (long)d1, AT_FDCWD, (long)d2, RENAME_EXCHANGE);
+    if (rc != 0) {
+        fail_with("RENAME_EXCHANGE of two directories across parents on the image", rc);
+    }
+}
+
+/** The names the exchange rows left, on the image mounted again. */
+static void exchanged_names(void)
+{
+    char a[PATH_CAP], d[PATH_CAP], path[PATH_CAP];
+
+    expect_file(join(path, join(d, mount_dir, "D1"), "two.txt"), "two");
+    expect_file(join(path, join(d, join(a, mount_dir, "A"), "D2"), "one.txt"), "one");
+}
+
 /** A write inside the image mounted as `type`, read back after a detach and
  * a fresh attachment, after which the image is an ordinary file again. */
 static void read_back_rows(const char *type)
@@ -1070,6 +1199,9 @@ static void read_back_rows(const char *type)
         fail("fsync inside the image");
     }
     syscall1(SYS_CLOSE, fd);
+    if (streq(type, "vfat")) {
+        exchange_rows();
+    }
     rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the image", rc);
@@ -1091,6 +1223,9 @@ static void read_back_rows(const char *type)
         fail_with("mounting the image again", rc);
     }
     expect_file(made, "written through a loop device\n");
+    if (streq(type, "vfat")) {
+        exchanged_names();
+    }
     rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the image the second time", rc);

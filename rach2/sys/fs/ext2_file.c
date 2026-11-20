@@ -1882,6 +1882,34 @@ void ext2_uncache(struct vfs_mount *mnt, void *node, uint64_t offset, uint64_t l
     ext2_node_unlock(n);
 }
 
+/**
+ * The `data_at` of `vfs_ops` for the node: the first byte in [`offset`,
+ * `end`) of regular file `n` that an allocated block holds, or `end` when
+ * every block there is a hole, as Linux's ext2 maps a direct read
+ * (`ext2_iomap_begin`). Holds the node's lock, under which the map does not
+ * change (`ext2_block_at`), which may read a pointer block; a failed read
+ * counts its block as held, so that the caller's alignment rule applies.
+ */
+uint64_t ext2_data_at(struct vfs_mount *mnt, void *node, uint64_t offset, uint64_t end)
+{
+    struct ext2_mount *em = ext2_em_of(mnt);
+    struct ext2_node *n = node;
+    uint64_t at;
+    uint32_t b;
+
+    if ((n->mode & S_IFMT_) != S_IFREG_ || offset >= end) {
+        return offset;
+    }
+    ext2_node_lock(n);
+    for (at = offset & ~(uint64_t)(em->block_size - 1u); at < end; at += em->block_size) {
+        if (ext2_block_at(em, n, (uint32_t)(at >> em->block_shift), &b) != 0 || b != 0) {
+            break;
+        }
+    }
+    ext2_node_unlock(n);
+    return at < offset ? offset : at < end ? at : end;
+}
+
 /* The cached-only map walk, in logical block order. A page counts once,
  * after its last allocated block; holes alone count no page. */
 struct ext2_cache_walk {

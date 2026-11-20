@@ -20,10 +20,14 @@
  * whole sectors from a sector-aligned buffer, which leave no block of the
  * file in the cache by cachestat(2), the EINVAL of a buffer, a length or an
  * offset off the sector and the 0 of such a read past the end, F_SETFL
- * clearing and setting O_DIRECT, a directory opened with it; a file with no
- * name from O_TMPFILE, which takes an inode, linkat with AT_EMPTY_PATH
- * names, and whose inode a last close frees when it has none; and the
- * EINVAL of RENAME_EXCHANGE, which Linux's ext2 refuses too.
+ * clearing and setting O_DIRECT, a directory opened with it, the zeros of
+ * such a read within a hole and the EINVAL of one that reaches a block, a
+ * readv's whose first element meets only the hole among them, the
+ * same rule on the fixture's block node, over a readv's whole vector too,
+ * and no rule there without the flag; a file with no name from O_TMPFILE,
+ * which takes an inode, linkat with AT_EMPTY_PATH names, and whose inode a
+ * last close frees when it has none; and the EINVAL of RENAME_EXCHANGE,
+ * which Linux's ext2 refuses too.
  *
  * `ext2probe cost` mounts the same fixture for writing with `MS_SYNCHRONOUS`
  * and counts, through `/proc/disk`, the commands and cache flushes of
@@ -1569,6 +1573,93 @@ static void expect_is(long got, long want, const char *what)
     }
 }
 
+/* An element of readv's vector, as the caller's ABI lays it out. */
+struct probe_iovec {
+    void *base;
+    unsigned long len;
+};
+
+/* The second element of the hole rows' readv, a page on its own. */
+static unsigned char direct_page[4096] __attribute__((aligned(4096)));
+
+/** The O_DIRECT rows of a hole: a read off the sector that meets only
+ * holes reads zeros, as Linux's ext2 zeroes a hole without the alignment
+ * check, and one that reaches a block is EINVAL, a readv's too when its
+ * first element meets only the hole, since the offset is judged over the
+ * whole vector before an element moves. */
+static void direct_hole_rows(void)
+{
+    static struct probe_iovec iov[2];
+    long fd, i;
+
+    fd = syscall3(SYS_OPEN, (long)"/e2/sparse", O_CREAT | O_RDWR | O_DIRECT, 0644);
+    if (fd < 0) {
+        fail_with("opening a sparse file with O_DIRECT", (int)fd);
+    }
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf, 512, 16384), 512, "an O_DIRECT write past a hole");
+    for (i = 1024; i < 2048; i++) {
+        direct_buf[i] = 0xFF;
+    }
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1025, 100, 3), 100,
+              "an O_DIRECT read off the sector within a hole reads");
+    for (i = 1025; i < 1125; i++) {
+        if (direct_buf[i] != 0) {
+            fail_with("an O_DIRECT read within a hole gives zeros, wrong at", (int)i);
+        }
+    }
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1025, 300, 16300), -EINVAL,
+              "an O_DIRECT read off the sector that reaches a block is EINVAL");
+    expect_is(pio(SYS_PWRITE64_, fd, direct_buf, 512, 4096), 512,
+              "an O_DIRECT write of a block after the first hole");
+    expect_is(syscall3(SYS_LSEEK, fd, 1, 0), 1, "the offset off the sector for the readv");
+    iov[0].base = direct_buf;
+    iov[0].len = 512;
+    iov[1].base = direct_page;
+    iov[1].len = sizeof(direct_page);
+    expect_is(syscall3(SYS_READV, fd, (long)iov, 2), -EINVAL,
+              "an O_DIRECT readv off the sector whose second element reaches a block is EINVAL");
+    expect_is(syscall3(SYS_LSEEK, fd, 0, 1), 1, "the refused readv of the file moved nothing");
+    syscall1(SYS_CLOSE, fd);
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/sparse"), "removing the sparse file");
+}
+
+/** The O_DIRECT rows of the fixture's block node, which the mount leaves
+ * readable: a sector for the offset, the length and the buffer, checked
+ * over a whole vector before a byte moves, as Linux's block device asks
+ * (block/fops.c: `blkdev_dio_invalid`), and none once O_DIRECT is
+ * cleared. */
+static void direct_node_rows(void)
+{
+    static struct probe_iovec iov[2];
+    long fd, flags;
+
+    fd = syscall3(SYS_OPEN, (long)node, O_RDONLY | O_DIRECT, 0);
+    if (fd < 0) {
+        fail_with("opening the fixture's node with O_DIRECT", (int)fd);
+    }
+    expect_is(pio(SYS_PREAD64, fd, direct_buf, 512, 0), 512,
+              "an aligned O_DIRECT read of the node");
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1, 512, 0), -EINVAL,
+              "an O_DIRECT read of the node into a buffer off the sector is EINVAL");
+    expect_is(pio(SYS_PREAD64, fd, direct_buf, 100, 0), -EINVAL,
+              "an O_DIRECT read of the node of a length off the sector is EINVAL");
+    expect_is(pio(SYS_PREAD64, fd, direct_buf, 512, 1), -EINVAL,
+              "an O_DIRECT read of the node at an offset off the sector is EINVAL");
+    iov[0].base = direct_buf;
+    iov[0].len = 512;
+    iov[1].base = direct_buf + 1025;
+    iov[1].len = 512;
+    expect_is(syscall3(SYS_READV, fd, (long)iov, 2), -EINVAL,
+              "an O_DIRECT readv of the node with an element off the sector is EINVAL");
+    expect_is(syscall3(SYS_LSEEK, fd, 0, 1), 0, "the refused readv of the node moved nothing");
+    flags = syscall2(SYS_FCNTL, fd, F_GETFL);
+    expect_is(syscall3(SYS_FCNTL, fd, F_SETFL, flags & ~O_DIRECT), 0,
+              "F_SETFL clears O_DIRECT on the node");
+    expect_is(pio(SYS_PREAD64, fd, direct_buf + 1, 100, 3), 100,
+              "a read of the node off the sector without O_DIRECT");
+    syscall1(SYS_CLOSE, fd);
+}
+
 /** The O_DIRECT rows on the writable fixture, which leave nothing behind. */
 static void direct_io_rows(void)
 {
@@ -1616,6 +1707,8 @@ static void direct_io_rows(void)
     }
     syscall1(SYS_CLOSE, fd);
     expect_ok(syscall1(SYS_UNLINK, (long)"/e2/direct"), "removing the O_DIRECT file");
+    direct_hole_rows();
+    direct_node_rows();
     fd = syscall3(SYS_OPEN, (long)"/e2", O_RDONLY | O_DIRECTORY | O_DIRECT, 0);
     if (fd < 0) {
         fail_with("a directory of ext2 opens with O_DIRECT", (int)fd);

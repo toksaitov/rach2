@@ -176,7 +176,7 @@
     },
     {
       "case_id": "guest.authority.recovery",
-      "behavior": "the recovery kernel writes its whole disk past 2 GiB and reads it back, in batches of 2048 sectors with one cache flush each, as a whole-disk reflash needs",
+      "behavior": "the recovery kernel writes its whole disk past 2 GiB and reads it back, in batches of 2048 sectors with one cache flush each, as a whole-disk reflash needs, and orders a write at the disk's end as Linux's blkdev_write_iter does, with and without O_DIRECT: ENOSPC at the end, and a write that crosses it cut to the last sector, before the alignment is judged",
       "units": [
         "authority",
         "bootprobe, `rach2.bootprobe=auth-recovery`"
