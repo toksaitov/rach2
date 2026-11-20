@@ -3155,18 +3155,21 @@ static void tcp_tw_list(struct tcb *tcb)
 static int tw_overflow_logged;
 
 /**
- * Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS with a fresh ACK rate limit,
- * trim its buffers and, when no socket holds it, add it to the TIME_WAIT
- * run. With the run full (`tcp_tw_max`) the TIME_WAIT ends at once,
+ * Move `tcb` to TIME_WAIT for TCP_2MSL_TICKS with a fresh ACK rate limit
+ * unless it already began in detached FIN_WAIT_2, as in Linux's time-wait
+ * socket. Trim its buffers and, when no socket holds it, add it to the
+ * TIME_WAIT run. With the run full (`tcp_tw_max`) the TIME_WAIT ends at once,
  * counted in TCPTimeWaitOverflow, as Linux's tcp_time_wait closes a
  * connection it has no bucket for. The block is freed at the next tick,
  * or at its socket's close.
  */
 static void tcp_enter_time_wait(struct tcb *tcb)
 {
+    if (tcb->state != TCP_FIN_WAIT_2 || tcb->sock) {
+        tcb->oow_stamp = 0;
+    }
     tcb->state = TCP_TIME_WAIT;
     tcb->delack_due = 0;
-    tcb->oow_stamp = 0;
     tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
     tcp_time_wait_trim(tcb);
     if (tw_count >= tcp_tw_max()) {
@@ -3348,6 +3351,7 @@ void tcp_close(struct socket *sock)
         tcp_pump(tcb);
         break;
     case TCP_FIN_WAIT_2:
+        tcb->oow_stamp = 0; /* new FIN_WAIT_2 record on Linux */
         tcb->timewait_until = TCP_NOW() + TCP_FIN_WAIT2_TICKS;
         break;
     case TCP_FIN_WAIT_1:
@@ -5146,6 +5150,9 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             tcp_take_ack(tcb, ack_num, window);
             if (ack_num == tcb->snd_nxt) {
                 tcb->state = TCP_FIN_WAIT_2;
+                if (!tcb->sock) {
+                    tcb->oow_stamp = 0; /* new FIN_WAIT_2 record on Linux */
+                }
                 tcb->retx_flags = 0;
                 tcb->rto_due = 0;
                 tcb->timewait_until = TCP_NOW() + TCP_FIN_WAIT2_TICKS;
