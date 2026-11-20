@@ -47,6 +47,11 @@ void vfio_hw_msleep(unsigned int ms)
     }
 }
 
+void vfio_hw_udelay(unsigned int us)
+{
+    k_udelay(us);
+}
+
 static wait_queue_t irq_wait;
 static process_t *irq_worker;
 
