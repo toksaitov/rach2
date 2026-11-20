@@ -3257,8 +3257,8 @@ static int tcp_rx_time_wait(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32
  * and tcp_v6_rcv take TCP_TW_SYN: when a listener has the port
  * (`tcp_find_listener`), the TIME_WAIT ends (`tcp_time_wait_kill`) and the
  * listener is returned, with in `*isn` the initial sequence number its
- * connection must take, 65537 past the last one sent here and never 0, so
- * that the new connection's numbers lie above the old one's. With none the
+ * connection must take, 65537 past the last one sent here, so that the new
+ * connection's numbers lie above the old one's. With none the
  * SYN is acknowledged and NULL returned. The caller holds `net_lock`.
  */
 static struct tcb *tcp_time_wait_reopen(struct tcb *tcb, net_addr_t dst_ip, uint16_t dst_port,
@@ -3271,9 +3271,6 @@ static struct tcb *tcp_time_wait_reopen(struct tcb *tcb, net_addr_t dst_ip, uint
         return NULL;
     }
     *isn = tcb->snd_nxt + 65535u + 2u;
-    if (*isn == 0) {
-        *isn = 1;
-    }
     tcp_time_wait_kill(tcb);
     return listener;
 }
@@ -4949,6 +4946,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
     struct socket *conn_sock;
     struct socket *listen_sock;
     uint32_t tw_isn = 0;
+    int reopened = 0;
 
     bkl_assert_held();
     hdr_len = tcp_seg_check(src_ip, dst_ip, data, len);
@@ -4985,12 +4983,14 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                      ack_num, flags);
         return;
     }
-    if (tcb->state == TCP_TIME_WAIT &&
-        (!tcp_rx_time_wait(tcb, flags, seq,
-                           seq + (uint32_t)(len - hdr_len) + ((flags & TCP_SYN) != 0) +
-                               ((flags & TCP_FIN) != 0)) ||
-         !(tcb = tcp_time_wait_reopen(tcb, dst_ip, dst_port, &tw_isn)))) {
-        return;
+    if (tcb->state == TCP_TIME_WAIT) {
+        if (!tcp_rx_time_wait(tcb, flags, seq,
+                              seq + (uint32_t)(len - hdr_len) + ((flags & TCP_SYN) != 0) +
+                                  ((flags & TCP_FIN) != 0)) ||
+            !(tcb = tcp_time_wait_reopen(tcb, dst_ip, dst_port, &tw_isn))) {
+            return;
+        }
+        reopened = 1;
     }
     window = (flags & TCP_SYN) ? field : (uint32_t)field << tcb->snd_wscale;
     if (tcp_synced(tcb) && !tcp_rx_check(tcb, flags, seq, (uint32_t)(len - hdr_len), ack_num)) {
@@ -5064,7 +5064,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         conn_tcb->rcv_nxt = seq + 1;
         tcp_take_wnd(conn_tcb, window);
         tcp_take_options(conn_tcb, data, hdr_len);
-        conn_tcb->iss = tw_isn ? tw_isn : tcp_isn(conn_tcb);
+        conn_tcb->iss = reopened ? tw_isn : tcp_isn(conn_tcb);
         conn_tcb->snd_nxt = conn_tcb->iss;
         conn_tcb->snd_una = conn_tcb->iss;
         conn_tcb->recover = conn_tcb->iss;
