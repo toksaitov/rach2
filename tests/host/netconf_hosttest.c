@@ -562,6 +562,9 @@ static void route_lifetime(int l3)
           "install direct, gateway and default routes");
     CHECK(netconf_del_address(nd, ip, ~0u, gw) == 0 && netdev_route(dst, &via) == nd && via == gw,
           "a removed peer keeps the explicit route");
+    CHECK(netdev_route_lookup(gw, nd->index, &r) == nd && r.gw == gw,
+          "a lookup of the removed peer now reports the default route's gateway");
+    r.gw = r.prefsrc = 0;
     CHECK(netdev_gateway_reachable(nd, ip + 1), "an explicit direct route resolves a gateway");
     CHECK(netconf_del_address(nd, ip, mask, peer) == 0 && netdev_route(dst, &via) != nd &&
               netdev_route(ip + 1, &via) != nd && netdev_default_gateway(nd) == 0,
