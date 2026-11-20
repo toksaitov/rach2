@@ -1324,6 +1324,18 @@ static int vcon_readable(void *arg)
     return !vcon_live(h) || h->p->rx_n > 0 || !h->p->host_open;
 }
 
+/** Take back the pages of `p` the device has returned, as Linux's
+ * reclaim_consumed_buffers does before a port's writability is judged:
+ * those returned while its transmit queue asked for no interrupt have had
+ * no reap. Under the big lock; a reap needs no lock of the transmit side,
+ * as the queue's interrupt reaps without it. */
+static void vcon_tx_reclaim(struct vcon_port *p)
+{
+    if (p->txq) {
+        (void)virtqueue_reap(p->txq);
+    }
+}
+
 /** The wait condition of a vport's write: the host's end is open and a page
  * is free, or the port went. */
 static int vcon_writable(void *arg)
@@ -1404,6 +1416,7 @@ static int32_t vcon_vport_write(fd_entry_t *e, const char __user *buf, uint32_t 
         if (!vcon_live(h)) {
             return done ? (int32_t)done : -ENODEV;
         }
+        vcon_tx_reclaim(p);
         if (!vcon_writable(h)) {
             if (done) {
                 break;
@@ -1448,6 +1461,7 @@ static short vcon_vport_poll(fd_entry_t *e, short events, struct wait_queue **wq
     if (h->p->rx_n > 0 || !h->p->host_open) {
         ready |= POLLIN | POLLRDNORM;
     }
+    vcon_tx_reclaim(h->p);
     if (vcon_writable(h)) {
         ready |= POLLOUT | POLLWRNORM;
     }
@@ -1660,7 +1674,9 @@ static void vcon_settle_nodes(struct vcon_port *p, int live, int term)
  * is now (`vcon_settle_nodes`): a console port that is not the console's
  * input has an hvc terminal of its own, as Linux's init_port_console gives
  * it one, and the transmit queue asks for an interrupt while a writer may
- * wait for it. Under the big lock, in process context or the boot's wait.
+ * wait for it, the pages the device returned meanwhile taken back then, as
+ * Linux's port_fops_open reclaims them. Under the big lock, in process
+ * context or the boot's wait.
  */
 static void vcon_settle(struct vcon_port *p)
 {
@@ -1679,7 +1695,10 @@ static void vcon_settle(struct vcon_port *p)
     vcon_settle_nodes(p, live, term);
     irq = live && (p->tty != 0 || p->guest_open);
     if (p->txq && irq != p->tx_irq) {
-        (void)virtqueue_irq(p->txq, irq);
+        /* Pages returned while the queue was quiet raise no interrupt. */
+        if (virtqueue_irq(p->txq, irq)) {
+            (void)virtqueue_reap(p->txq);
+        }
         p->tx_irq = irq;
     }
 }
