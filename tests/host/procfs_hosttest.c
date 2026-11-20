@@ -20,6 +20,7 @@
  * host-deps: rach2/sys/evdev_sysfs.c
  * host-deps: rach2/sys/fs/name.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/mutex_none.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c

@@ -1258,9 +1258,10 @@ static void exe_relative(char *path)
     kfree(prefix);
 }
 
-/** Reconstruct the executable's present path under its mount's lock. The
- * description stays held across a sleeping path read and is released before
- * the reader's root is read, so two mount locks are never held together.
+/** Reconstruct the executable's present path with its description held.
+ * A named file on a file-locked mount uses the rename sequence and waits
+ * for changes with the namespace lock free. Other paths use that lock.
+ * The description is released before the reader's root is read.
  * NULL with `*err` -EIO when a header or a path of the KRFFS root, or the
  * path, the held name's path or the attributes of another type, cannot be
  * read, which the reader answers, never a recorded name in its place;
@@ -1270,7 +1271,7 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
     krffs_node_t *node;
     struct vfs_stat st;
     char *path = NULL;
-    int rc;
+    int rc, lock_mount;
 
     *deleted = 0;
     *err = 0;
@@ -1278,7 +1279,10 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
         return NULL;
     }
     fd_ofd_ref(file);
-    vfs_ns_lock(file->vmnt);
+    lock_mount = !file->name || !file->vmnt->type->file_locked;
+    if (lock_mount) {
+        vfs_ns_lock(file->vmnt);
+    }
     node = exe_root_node(file);
     if (node) {
         krffs_node_t head;
@@ -1317,7 +1321,9 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
             path = NULL;
         }
     }
-    vfs_ns_unlock(file->vmnt);
+    if (lock_mount) {
+        vfs_ns_unlock(file->vmnt);
+    }
     fd_ofd_unref(file);
     if (path) {
         exe_relative(path);
