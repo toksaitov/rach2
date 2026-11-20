@@ -2022,6 +2022,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* uncache */
     0, /* phase */
     0, /* data_at */
+    0, /* check_acl */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops,    1, 1, 0, 0, 0,

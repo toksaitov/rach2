@@ -19,10 +19,10 @@ static void xattr_parser_rows(void)
     check(a && b, "the parser row has private blocks");
     if (!a || !b)
         goto done;
-    check(ext2_xattr_edit(0, a, 4096, &arg) == 1 && ext2_xattr_check(a, 4096) == 0,
+    check(ext2_xattr_edit(0, a, 4096, EXT2_XATTR_USER, &arg) == 1 && ext2_xattr_check(a, 4096) == 0,
           "the codec builds a valid one-entry block");
     arg.name = "long";
-    check(ext2_xattr_edit(a, b, 4096, &arg) == 1 && ext2_xattr_check(b, 4096) == 0,
+    check(ext2_xattr_edit(a, b, 4096, EXT2_XATTR_USER, &arg) == 1 && ext2_xattr_check(b, 4096) == 0,
           "the codec sorts entries by index, length and name");
     b[54] = b[34];
     b[55] = b[35];
@@ -30,14 +30,16 @@ static void xattr_parser_rows(void)
     a[34] = 0;
     a[35] = 0;
     check(ext2_xattr_check(a, 4096) == -EIO, "a value over the header is refused");
-    check(ext2_xattr_edit(0, a, 4096, &arg) == 1, "the next malformed block starts valid");
+    check(ext2_xattr_edit(0, a, 4096, EXT2_XATTR_USER, &arg) == 1,
+          "the next malformed block starts valid");
     a[36] = 1;
     check(ext2_xattr_check(a, 4096) == -EIO, "external value blocks are refused");
     a[36] = 0;
     a[40] = 255;
     a[41] = 255;
     check(ext2_xattr_check(a, 4096) == -EIO, "a value beyond the block is refused");
-    check(ext2_xattr_edit(0, a, 4096, &arg) == 1, "the bad-magic block starts valid");
+    check(ext2_xattr_edit(0, a, 4096, EXT2_XATTR_USER, &arg) == 1,
+          "the bad-magic block starts valid");
     a[3] = 0;
     check(ext2_xattr_check(a, 4096) == -EIO, "bad magic is refused");
 done:

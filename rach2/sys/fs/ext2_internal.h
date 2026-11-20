@@ -5,9 +5,10 @@
  *
  * The locks, their order and what each covers are in ext2.Readme.md's
  * Locks section; in short, from the outermost: the mount's rename lock,
- * then directories' node locks, then other nodes', then `em->batch`, then
- * the groups' locks, then `em->super`, then buffers, then the spinlocks
- * `em->count_lock` and a batch's `wb->lock`. The rename lock is the mount's
+ * then directories' node locks, then other nodes', then a node's
+ * `xattr_lock`, then `em->batch`, then the groups' locks, then
+ * `em->super`, then buffers, then the spinlocks `em->count_lock` and a
+ * batch's `wb->lock`. The rename lock is the mount's
  * (`vfs_mount.rename`), which the VFS takes for a rename between two
  * directories before it orders and locks them (`vfs_rename_lock`), so
  * `ext2_rename` and `is_below` run with it held. Related directories go
@@ -270,6 +271,15 @@ struct ext2_node {
      * `lock` and held across a whole write, truncation or fallocate; no
      * fault and no reader takes it, so it does not count in `file_locks`. */
     struct sleep_lock write_lock;
+    /* The lock of the attribute block, Linux's `xattr_sem`: held by a change
+     * of `file_acl` or of the block it names, inside the node lock, and by a
+     * read of it, which an ACL's permission check makes without the node
+     * lock (`ext2_attr_get`). Counts in `file_locks`. */
+    struct sleep_lock xattr_lock;
+    /* Set under `xattr_lock` by a read that found no access ACL, cleared by
+     * every change of the attributes: a permission check reads it without
+     * the lock and does not look for an ACL while it is set. */
+    int acl_absent;
     int queued;                  /* on `em->reap`, which no thread is freeing yet */
     struct ext2_node *reap_next; /* the next node on `em->reap` */
     /* The blocks other files share that were dirtied for this inode since
@@ -767,6 +777,70 @@ int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node);
 int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target);
 int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                 const char *newname);
+
+/* One entry of a POSIX ACL in memory, Linux's `struct posix_acl_entry`. */
+struct ext2_acl_entry {
+    uint32_t tag;  /* ACL_USER_OBJ to ACL_OTHER, Linux's values */
+    uint32_t perm; /* 4 read, 2 write, 1 execute */
+    uint32_t id;   /* the kernel's user or group id of a named entry */
+};
+
+/* A POSIX ACL in memory: `count` entries at `e`, from the heap; none when
+ * `count` is 0. */
+struct ext2_acl {
+    uint32_t count;
+    struct ext2_acl_entry *e;
+};
+
+/* The ACLs a new inode takes from its directory's default ACL
+ * (`ext2_acl_inherit`), each empty for none. */
+struct ext2_acl_new {
+    struct ext2_acl access;
+    struct ext2_acl dflt;
+};
+
+/* ext2.c: the attribute block of a node, for the ACLs */
+
+/** Read the value of the entry `name` of index `index` of node `n` into
+ * `value` of `size` bytes, under its `xattr_lock`, which it takes with or
+ * without the node lock: its bytes, -ENODATA, -ERANGE, or the error of
+ * reading the block; -EIO for a fenced node. */
+int ext2_attr_get(struct ext2_mount *em, struct ext2_node *n, int index, const char *name,
+                  void *value, uint32_t size);
+/** Set or remove the entry of index `index` that `arg` names, as
+ * `ext2_xattr_edit` takes it, under `xattr_lock`. The caller holds `n`'s
+ * lock and is admitted (`em_enter_node`). 0 or -errno; -EIO for a fenced
+ * node. */
+int ext2_attr_set(struct vfs_mount *mnt, struct ext2_node *n, int index,
+                  const struct vfs_xattr *arg);
+
+/* ext2_acl.c */
+
+/** The name index of the ACL whose full attribute name is `name`, or 0 for
+ * a name that is not an ACL's. */
+int ext2_acl_index(const char *name);
+/** getxattr, setxattr and removexattr of the ACL of `index` of node `n`,
+ * as Linux's `do_get_acl` and `do_set_acl` answer them, the value in the
+ * xattr form. The caller holds `n`'s lock and is admitted. */
+int ext2_acl_xattr(struct vfs_mount *mnt, struct ext2_node *n, int index, struct vfs_xattr *arg);
+/** The `check_acl` of `vfs_ops`, Linux's `check_acl` over ext2's ACLs. */
+int ext2_check_acl(struct vfs_mount *mnt, void *node, int want, int use_real);
+/** Before a creation of mode `*mode`, its type included, in directory
+ * `dir`, whose lock the caller holds: the ACLs the new inode takes from
+ * `dir`'s default ACL into `out`, with `*mode` fitted to them, or the
+ * umask applied where `dir` has none, as Linux's `posix_acl_create`. 0, or
+ * the error of reading the default ACL, with `out` empty. */
+int ext2_acl_inherit(struct ext2_mount *em, struct ext2_node *dir, uint32_t *mode,
+                     struct ext2_acl_new *out);
+/** Store the ACLs `ext2_acl_inherit` gave on the new node `n`, whose lock
+ * the caller holds, before any entry names it, and free them, as Linux's
+ * `ext2_init_acl`. 0 or -errno. */
+int ext2_acl_init(struct vfs_mount *mnt, struct ext2_node *n, struct ext2_acl_new *acls);
+/** Free the ACLs `ext2_acl_inherit` gave. */
+void ext2_acl_new_free(struct ext2_acl_new *acls);
+/** After a change of node `n`'s mode, under its lock and admitted, give its
+ * access ACL the new permission bits, as Linux's `posix_acl_chmod`. */
+int ext2_acl_chmod(struct vfs_mount *mnt, struct ext2_node *n);
 
 /* ext2_file.c */
 int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle);

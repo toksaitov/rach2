@@ -1619,6 +1619,27 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
 }
 
 /**
+ * `inode_new` of mode `mode`, the type's bits among them, fitted first to
+ * the default ACL of `dir`, whose lock the caller holds, or less the umask
+ * where it has none (`ext2_acl_inherit`), with the ACLs the new inode takes
+ * into `acls`, which the caller stores once it locks the inode
+ * (`ext2_acl_init`). On a failure `acls` is empty.
+ */
+static int inode_new_acl(struct ext2_mount *em, struct ext2_node *dir, uint32_t mode, int store,
+                         struct ext2_node **out, struct ext2_acl_new *acls)
+{
+    int rc = ext2_acl_inherit(em, dir, &mode, acls);
+
+    if (rc == 0) {
+        rc = inode_new(em, dir, mode, store, out);
+    }
+    if (rc != 0) {
+        ext2_acl_new_free(acls);
+    }
+    return rc;
+}
+
+/**
  * The node of inode `ino`, which an entry of a directory whose lock the
  * caller holds names, held and locked, into `*out`: the one node every
  * holder of the inode shares (`ext2_node_for`), never a copy, so that a change
@@ -1740,7 +1761,8 @@ static void dir_lose_parent(struct ext2_mount *em, struct ext2_node *d, int lose
 /**
  * The `create` of `vfs_ops`: a new regular file `name` in `dir`, the root for
  * NULL, with the permission bits of `mode`: the inode allocated and written
- * whole, then the entry that names it, then the directory's times into the
+ * whole, then the ACLs it takes from `dir` (`inode_new_acl`), then the entry
+ * that names it, then the directory's times into the
  * cache. On a mount that writes back the entry's block waits in the cache
  * for the inode's (`inode_commit`), and the call writes nothing to the
  * device unless the directory grows through a pointer block (`dir_grow`). A
@@ -1756,6 +1778,7 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_acl_new acls;
     struct ext2_node *n;
     struct ext2_scan sc;
     uint32_t at, prev;
@@ -1779,14 +1802,17 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
     if (rc == 1) {
         return -EEXIST;
     }
-    rc = inode_new(em, d, S_IFREG_ | (mode & 07777u), 1, &n);
+    rc = inode_new_acl(em, d, S_IFREG_ | (mode & 07777u), 1, &n, &acls);
     if (rc != 0) {
         return rc;
     }
     sleep_lock_subclass(4);
     ext2_node_lock(n);
     sleep_lock_subclass(0);
-    rc = inode_commit(em, n);
+    rc = ext2_acl_init(mnt, n, &acls);
+    if (rc == 0) {
+        rc = inode_commit(em, n);
+    }
     if (rc == 0) {
         rc = dir_add(em, d, name, n, 1, DIR_BACK);
     }
@@ -1806,7 +1832,8 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
  * The `tmpfile` of `vfs_ops`: a new regular file with no name on the volume
  * of `dir`, the root for NULL, as O_TMPFILE makes it and Linux's
  * `ext2_tmpfile` does: the inode allocated and written whole, then its link
- * count dropped to 0 and stored, so that it is freed at its last put, or
+ * count dropped to 0 and stored, then the ACLs it takes from `dir`
+ * (`inode_new_acl`), so that it is freed at its last put, or
  * after a crash by e2fsck, which finds an inode in use that no entry names.
  * No entry names it, so nothing is ordered after its table block
  * (`inode_commit`) until `ext2_link` gives it a name.
@@ -1818,6 +1845,7 @@ int ext2_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, 
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_acl_new acls;
     struct ext2_node *n;
     int rc;
 
@@ -1829,7 +1857,7 @@ int ext2_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, 
     if (d->unlinked) {
         return -ENOENT;
     }
-    rc = inode_new(em, d, S_IFREG_ | (mode & 07777u), 1, &n);
+    rc = inode_new_acl(em, d, S_IFREG_ | (mode & 07777u), 1, &n, &acls);
     if (rc != 0) {
         return rc;
     }
@@ -1839,6 +1867,11 @@ int ext2_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, 
     ext2_node_nlink_set(n, 0);
     n->unlinked = 1;
     rc = ext2_inode_store(em, n);
+    if (rc == 0) {
+        rc = ext2_acl_init(mnt, n, &acls);
+    } else {
+        ext2_acl_new_free(&acls);
+    }
     if (rc != 0) {
         inode_abandon(em, n);
         return rc;
@@ -1851,8 +1884,9 @@ int ext2_tmpfile(struct vfs_mount *mnt, void *dir, uint32_t mode, int linkable, 
 
 /**
  * The `mknod` of `vfs_ops`: a FIFO, a socket or a device node `name` in
- * `dir`, in the order `create` keeps: the inode's bit, then the inode written
- * whole, then the entry that names it, which on a mount that writes back
+ * `dir`, in the order `create` keeps: the inode's bit, then the ACLs it takes
+ * from `dir` (`inode_new_acl`) and the inode written whole, then the entry
+ * that names it, which on a mount that writes back
  * waits in the cache for the inode, then the directory's times. A
  * device's number is where Linux keeps it: the old encoding, a byte each of
  * major and minor, in the first pointer word when both fit, and the new
@@ -1865,6 +1899,7 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_acl_new acls;
     struct ext2_node *n;
     struct ext2_scan sc;
     uint32_t type = mode & S_IFMT_;
@@ -1892,7 +1927,7 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     if (rc == 1) {
         return -EEXIST;
     }
-    rc = inode_new(em, d, type | (mode & 07777u), 0, &n);
+    rc = inode_new_acl(em, d, type | (mode & 07777u), 0, &n, &acls);
     if (rc != 0) {
         return rc;
     }
@@ -1909,7 +1944,10 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
             EXT2_NODE_SET(n, block[1], (minor & 0xFFu) | (major << 8) | ((minor & 0xFFF00u) << 12));
         }
     }
-    rc = ext2_inode_store(em, n);
+    rc = ext2_acl_init(mnt, n, &acls);
+    if (rc == 0) {
+        rc = ext2_inode_store(em, n);
+    }
     if (rc == 0) {
         rc = inode_commit(em, n);
     }
@@ -1976,7 +2014,8 @@ int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 
 /**
  * The `mkdir` of `vfs_ops`: a new directory `name` in `dir`, with the
- * permission bits of `mode`. Its block is written with `.` and `..`, then the
+ * permission bits of `mode` and the ACLs it takes from `dir`, stored first
+ * (`inode_new_acl`). Its block is written with `.` and `..`, then the
  * parent's raised count, then its inode with a count of two, and the
  * parent's entry last; a stop before the inode leaves a set bit with nothing
  * behind it. On a mount that writes back the same order is kept in the
@@ -2000,6 +2039,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
 {
     struct ext2_mount *em = ext2_em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_acl_new acls;
     struct ext2_node *n;
     struct ext2_scan sc;
     uint32_t at, prev, b;
@@ -2027,14 +2067,17 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     if (d->nlink >= 65000) {
         return -EMLINK;
     }
-    rc = inode_new(em, d, S_IFDIR_ | (mode & 07777u), 0, &n);
+    rc = inode_new_acl(em, d, S_IFDIR_ | (mode & 07777u), 0, &n, &acls);
     if (rc != 0) {
         return rc;
     }
     sleep_lock_subclass(4);
     ext2_node_lock(n);
     sleep_lock_subclass(0);
-    rc = ext2_map_alloc(em, n, 0, &b, &fresh);
+    rc = ext2_acl_init(mnt, n, &acls);
+    if (rc == 0) {
+        rc = ext2_map_alloc(em, n, 0, &b, &fresh);
+    }
     if (rc == 0) {
         dir_changed(n);
         k_memset(head, 0, sizeof(head));

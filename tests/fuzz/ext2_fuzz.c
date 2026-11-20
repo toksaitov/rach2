@@ -6,7 +6,8 @@
  * fuzz-deps: rach2/sys/fs/ext2xattr.c
  * fuzz-deps: rach2/sys/fs/ext2_alloc.c rach2/sys/fs/ext2_batch.c
  * fuzz-deps: rach2/sys/fs/ext2_check.c rach2/sys/fs/ext2_dir.c
- * fuzz-deps: rach2/sys/fs/ext2_file.c
+ * fuzz-deps: rach2/sys/fs/ext2_file.c rach2/sys/fs/ext2_acl.c
+ * fuzz-deps: tests/host/compat/ids_root.c
  * fuzz-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * fuzz-deps: rach2/sys/block/chain.c rach2/sys/fs/sleeplock.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -140,9 +141,10 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
         __builtin_memset(parsed, 0, sizeof(parsed));
         __builtin_memcpy(parsed, data, used);
         (void)ext2_xattr_check(parsed, sizeof(parsed));
-        (void)ext2_xattr_read(parsed, sizeof(parsed), "DOSATTRIB", value, sizeof(value));
-        (void)ext2_xattr_read(parsed, sizeof(parsed), 0, value, sizeof(value));
-        (void)ext2_xattr_edit(parsed, replacement, sizeof(parsed), &arg);
+        (void)ext2_xattr_read(parsed, sizeof(parsed), EXT2_XATTR_USER, "DOSATTRIB", value,
+                              sizeof(value));
+        (void)ext2_xattr_list(parsed, sizeof(parsed), 1, value, sizeof(value));
+        (void)ext2_xattr_edit(parsed, replacement, sizeof(parsed), EXT2_XATTR_USER, &arg);
     }
     fs_exercise(&vfs_ext2_type);
     return 0;

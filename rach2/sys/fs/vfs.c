@@ -444,9 +444,9 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
  * Whether the caller may search the directory `node` of `mnt`: 0, -EACCES,
  * -ENOTDIR for a node that is not a directory, or the error of `getattr`.
  *
- * The rule is the nine-bit rule over the attributes the type reports: one
- * identity class is chosen, then the DAC capabilities are checked for
- * an inode whose IDs are mapped. The ids are the
+ * The rule is `vfs_may_access`'s over the attributes the type reports: one
+ * identity class is chosen, or the node's POSIX ACL judges, then the DAC
+ * capabilities are checked for an inode whose IDs are mapped. The ids are the
  * file-system ones (`proc_fsuid`, `proc_fsgid`); `use_real` judges by the
  * real ids, for access(2). A node of a type without `getattr` is
  * searchable, and so is every directory to the kernel when no process
@@ -483,7 +483,27 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     if (!current_proc) {
         return 0;
     }
-    return inode_may_access(st.uid, st.gid, st.mode, 1, use_real) ? 0 : -EACCES;
+    return vfs_may_access(mnt, node, &st, 1, use_real);
+}
+
+int vfs_may_access(struct vfs_mount *mnt, void *node, const struct vfs_stat *st, int want,
+                   int use_real)
+{
+    process_t *p = current_proc;
+    uint32_t uid = use_real ? p->ruid : proc_fsuid(p);
+    int rc;
+
+    if (uid != st->uid && (st->mode & 0070u) && mount_base(mnt)->sb_posixacl &&
+        mnt->type->ops->check_acl) {
+        rc = mnt->type->ops->check_acl(mount_base(mnt), node, want, use_real);
+        if (rc == -EACCES)
+            return inode_dac_override(st->uid, st->gid, st->mode, (uint32_t)want, use_real)
+                       ? 0
+                       : -EACCES;
+        if (rc != -EAGAIN)
+            return rc;
+    }
+    return inode_may_access(st->uid, st->gid, st->mode, (uint32_t)want, use_real) ? 0 : -EACCES;
 }
 
 /* The protections of /proc/sys/fs, at the values Debian and Ubuntu set at
@@ -4684,6 +4704,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* tmpfile */
     0,                           /* uncache */
     kfs_phase,   0,              /* data_at */
+    0,                           /* check_acl */
 };
 
 /* The mount of the KRFFS root, which `kfs_halted` turns read-only. */
@@ -5591,6 +5612,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* uncache */
     0, /* phase */
     0, /* data_at */
+    0, /* check_acl */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -5644,6 +5666,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* uncache */
     0, /* phase */
     0, /* data_at */
+    0, /* check_acl */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -5697,6 +5720,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* uncache */
     0, /* phase */
     0, /* data_at */
+    0, /* check_acl */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

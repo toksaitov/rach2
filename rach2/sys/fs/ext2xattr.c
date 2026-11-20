@@ -109,41 +109,73 @@ int ext2_xattr_check(const uint8_t *b, uint32_t bytes)
     return xa_values(b, bytes, p + 4);
 }
 
-/** Read one user value, or list user names, from a checked block. */
-int ext2_xattr_read(const uint8_t *b, uint32_t bytes, const char *name, void *value, uint32_t size)
+/** Read one value from a checked block. */
+int ext2_xattr_read(const uint8_t *b, uint32_t bytes, int index, const char *name, void *value,
+                    uint32_t size)
 {
-    uint32_t p, used = 0, len = name ? (uint32_t)k_strlen(name) : 0;
+    uint32_t p, n, len = (uint32_t)k_strlen(name);
     int rc;
 
     if (!b)
-        return name ? -ENODATA : 0;
+        return -ENODATA;
     rc = ext2_xattr_check(b, bytes);
     if (rc)
         return rc;
     for (p = XA_HEAD; le32(b + p); p += xa_pad(XA_ENTRY + b[p])) {
-        uint32_t n = b[p];
-        if (b[p + 1] != 1)
+        if (b[p + 1] != (uint32_t)index || len != b[p] || xa_bytes(name, b + p + XA_ENTRY, len))
             continue;
-        if (name) {
-            if (len != n || xa_bytes(name, b + p + XA_ENTRY, n))
-                continue;
-            n = le32(b + p + 8);
-            if (size && size < n)
-                return -ERANGE;
-            if (size && n)
-                k_memcpy(value, b + le16(b + p + 2), n);
-            return (int)n;
-        }
-        if (size && used + 6 + n > size)
+        n = le32(b + p + 8);
+        if (size && size < n)
+            return -ERANGE;
+        if (size && n)
+            k_memcpy(value, b + le16(b + p + 2), n);
+        return (int)n;
+    }
+    return -ENODATA;
+}
+
+/** The full name's prefix of the entries of index `index`, or NULL for an
+ * index that is not listed. An ACL's name is its prefix alone. */
+static const char *xa_prefix(uint32_t index, int acl)
+{
+    if (index == EXT2_XATTR_USER)
+        return "user.";
+    if (acl && index == EXT2_XATTR_ACL_ACCESS)
+        return "system.posix_acl_access";
+    if (acl && index == EXT2_XATTR_ACL_DEFAULT)
+        return "system.posix_acl_default";
+    return NULL;
+}
+
+/** List the names of a checked block. */
+int ext2_xattr_list(const uint8_t *b, uint32_t bytes, int acl, void *value, uint32_t size)
+{
+    uint8_t *out = value;
+    uint32_t p, used = 0;
+    int rc;
+
+    if (!b)
+        return 0;
+    rc = ext2_xattr_check(b, bytes);
+    if (rc)
+        return rc;
+    for (p = XA_HEAD; le32(b + p); p += xa_pad(XA_ENTRY + b[p])) {
+        const char *prefix = xa_prefix(b[p + 1], acl);
+        uint32_t pre, n = b[p];
+
+        if (!prefix)
+            continue;
+        pre = (uint32_t)k_strlen(prefix);
+        if (size && used + pre + n + 1 > size)
             return -ERANGE;
         if (size) {
-            k_memcpy((uint8_t *)value + used, "user.", 5);
-            k_memcpy((uint8_t *)value + used + 5, b + p + XA_ENTRY, n);
-            ((uint8_t *)value)[used + 5 + n] = 0;
+            k_memcpy(out + used, prefix, pre);
+            k_memcpy(out + used + pre, b + p + XA_ENTRY, n);
+            out[used + pre + n] = 0;
         }
-        used += 6 + n;
+        used += pre + n + 1;
     }
-    return name ? -ENODATA : (int)used;
+    return (int)used;
 }
 
 /** Append one entry and value, leaving space for the zero terminator.
@@ -219,8 +251,9 @@ static int xa_pack(const uint8_t *b, uint8_t *out, uint32_t bytes, const uint8_t
     return pos != XA_HEAD;
 }
 
-/** Build a private replacement, preserving attributes in other namespaces. */
-int ext2_xattr_edit(const uint8_t *b, uint8_t *out, uint32_t bytes, const struct vfs_xattr *arg)
+/** Build a private replacement, preserving the other entries. */
+int ext2_xattr_edit(const uint8_t *b, uint8_t *out, uint32_t bytes, int index,
+                    const struct vfs_xattr *arg)
 {
     const char *name = arg->name;
     const void *value = arg->op == VFS_XATTR_REMOVE ? NULL : arg->value;
@@ -229,7 +262,8 @@ int ext2_xattr_edit(const uint8_t *b, uint8_t *out, uint32_t bytes, const struct
     uint32_t len = (uint32_t)k_strlen(name), p;
     int rc, found = 0;
 
-    if (!len || len > 255 || flags < 0 || (flags & ~3))
+    if ((!len && index == EXT2_XATTR_USER) || len > 255 || index < 1 || index > 255 || flags < 0 ||
+        (flags & ~3))
         return -EINVAL;
     if (bytes < 1024 || bytes > 4096)
         return -EIO;
@@ -242,7 +276,7 @@ int ext2_xattr_edit(const uint8_t *b, uint8_t *out, uint32_t bytes, const struct
     }
     k_memset(key, 0, sizeof(key));
     key[0] = (uint8_t)len;
-    key[1] = 1;
+    key[1] = (uint8_t)index;
     k_memcpy(key + XA_ENTRY, name, len);
     for (p = XA_HEAD; le32(b + p); p += xa_pad(XA_ENTRY + b[p]))
         if (!xa_cmp(key, b + p))

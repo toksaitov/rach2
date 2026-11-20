@@ -3030,6 +3030,15 @@ void vfs_uncache(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t 
     (void)len;
 }
 
+/** The mode's judgement alone, since no row's mount keeps POSIX ACLs. */
+int vfs_may_access(struct vfs_mount *mnt, void *node, const struct vfs_stat *st, int want,
+                   int use_real)
+{
+    (void)mnt;
+    (void)node;
+    return inode_may_access(st->uid, st->gid, st->mode, (uint32_t)want, use_real) ? 0 : -EACCES;
+}
+
 /** No row's file takes O_DIRECT, so every byte counts as held: `offset`. */
 uint64_t vfs_data_at(struct vfs_mount *mnt, void *handle, uint64_t offset, uint64_t end)
 {
