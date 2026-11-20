@@ -55,6 +55,10 @@ static int ssh_input(void)
 static int ssh_mock(int argc, char **argv)
 {
     const char *command;
+    int i = 1;
+    /* testing.sh gives `-o OPTION` pairs, then the host and the command. */
+    while (i + 1 < argc && !strcmp(argv[i], "-o"))
+        i += 2;
     if (argc == 4 && !strcmp(argv[1], "-t") && !strcmp(argv[2], "testing")) {
         char path[4096];
         snprintf(path, sizeof(path), "%s/../unreachable", ev("HOSTHOME"));
@@ -64,9 +68,9 @@ static int ssh_mock(int argc, char **argv)
             return 255;
         command = argv[3];
     } else {
-        if (argc != 5 || strcmp(argv[1], "-o") || strcmp(argv[3], "testing"))
+        if (i == 1 || argc != i + 2 || strcmp(argv[i], "testing"))
             return 255;
-        command = argv[4];
+        command = argv[i + 1];
         if (strlen(command) > 8191) {
             fprintf(stderr, "ssh fixture: cmd.exe refuses a line of %zu characters\n",
                     strlen(command));
