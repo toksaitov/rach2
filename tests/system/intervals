@@ -81,6 +81,7 @@ tests/musl/threadmusl.c: a thread's state is looked at again every 10 ms
 tests/musl/threadmusl.c: the other handler is looked for again every 10 ms
 tests/musl/threadmusl.c: the takers' states are looked at again every 10 ms
 tests/musl/sigwakemusl.c: a thread's state is looked at again every 10 ms
+tests/musl/sigwakemusl.c: the child lives a millisecond so the wait sleeps
 tests/musl/timerfdmusl.c: a process's state is looked at again every 10 ms
 tests/musl/unixmusl.c: a process's state is looked at again every 10 ms
 tests/musl/pollmusl.c: the parent's state is looked at again every millisecond
