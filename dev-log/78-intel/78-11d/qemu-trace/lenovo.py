@@ -79,7 +79,8 @@ def collect(case, work, settle, weston, account, env):
             if started:
                 TRACE.write_text("stop\n")
                 try:
-                    shutil.copyfile(TRACE, case / "kernel.bin")
+                    with TRACE.open("rb") as source, (case / "kernel.bin").open("wb") as target:
+                        shutil.copyfileobj(source, target)
                 finally:
                     TRACE.write_text("clear\n")
 
