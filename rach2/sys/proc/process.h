@@ -112,7 +112,7 @@ struct fs_struct {
 };
 
 /* Policy: the pages one process's system calls may copy paths into at once
- * (fs/pathbuf.c); the deepest call takes four. */
+ * (fs/pathbuf.c); the deepest call takes seven. */
 #define PATH_BUFS 8
 
 /* The deepest nesting of user and of PID namespaces (ns.h), the first
