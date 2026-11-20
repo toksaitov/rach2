@@ -179,9 +179,15 @@ uncached; its pages fault in only while the function decodes memory and
 is not in D3hot, and a reset, turning decoding off or D3hot takes them
 from every mapping.
 An I/O BAR is read and written port by port and cannot be mapped.
-A BAR the firmware left without an address, or one over the PC's fixed
-ports or another BAR, is a region of size 0, and an I/O one keeps the
-function's I/O decoding off.
+A BAR is given only once the kernel can claim it: it has an address,
+every bridge up to the host bridge passes it, and it lies over none of
+the host's own ports and memory, no other bridge's window and no other
+BAR.
+.Dv VFIO_GROUP_GET_DEVICE_FD
+fails with
+.Er EINVAL
+while a memory BAR cannot be claimed, as on Linux; an I/O BAR that
+cannot is a region of size 0 and keeps the function's I/O decoding off.
 The MSI-X table's bytes read as all ones and take no write.
 .Pp
 The configuration space is the function's but for what
@@ -216,6 +222,9 @@ while the function still asserts it.
 An eventfd unmask is served by a kernel worker.
 The line is offered only to a function that masks it that way.
 MSI-X entries can be set and cleared while MSI-X is on.
+MSI-X fails with
+.Er EINVAL
+unless its table lies whole in a memory BAR given as a region.
 .Ss Release
 When the last descriptor and mapping of a device close, or their owner
 dies, the function is put in D0, every interrupt goes off, bus mastering
