@@ -1675,6 +1675,18 @@ uint32_t procfs_ino_dir(void)
     return 0;
 }
 
+/** The inode number of /proc/self, which no row reads: 0. */
+uint32_t procfs_ino_self(void)
+{
+    return 0;
+}
+
+/** The inode number of /proc/thread-self, which no row reads: 0. */
+uint32_t procfs_ino_thread_self(void)
+{
+    return 0;
+}
+
 /** No message interrupt is present in the core-file model: 0. */
 int procfs_irq_exists(int vector)
 {
