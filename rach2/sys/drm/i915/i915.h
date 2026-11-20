@@ -1055,9 +1055,11 @@ struct intel_pps {
  * VBT says of it, and `pps` its power sequencer. `present` says the
  * panel answered at init, which makes its connector. Of a monitor:
  * `connector` its connector; `downstream_ports` the DPCD's ports of a
- * branch device and `sink_count` its sinks; `info` what its EDID says of
- * it; the `dfp_` limits of a branch's first port, Linux's intel_dp->dfp,
- * 0 for none: bits a colour, dot clock and TMDS clocks in kHz;
+ * branch device and `sink_count` its sinks; `has_edid` says the last
+ * detection found an EDID, the override or the sink's, as Linux's
+ * detect_edid is set, and `info` what that EDID says of it; the `dfp_`
+ * limits of a branch's first port, Linux's intel_dp->dfp, 0 for none:
+ * bits a colour, dot clock and TMDS clocks in kHz;
  * `reset_link` says a long pulse asks the next probe to forget the
  * fallback, and `retrain` that a short pulse found the link lost.
  */
@@ -1098,6 +1100,7 @@ struct intel_dp {
     struct drm_connector *connector;
     uint8_t downstream_ports[16];
     uint8_t sink_count;
+    uint8_t has_edid;
     struct drm_edid_hdmi_info info;
     uint32_t dfp_max_bpc, dfp_max_dotclock, dfp_min_tmds, dfp_max_tmds;
     struct i2c_adapter ddc; /* its I2C over AUX as /dev/i2c-N */

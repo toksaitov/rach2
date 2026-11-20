@@ -2254,6 +2254,10 @@ int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *ed
  * from a driver's detect. Under the device's mode_lock. */
 void drm_connector_update_edid_property(struct drm_connector *connector, const uint8_t *edid,
                                         uint32_t len);
+/** Add the modes of `connector`'s EDID blob, which a driver's detect set
+ * with drm_connector_update_edid_property, to its probed modes, Linux's
+ * drm_edid_connector_add_modes. The number added, 0 for no blob. */
+int drm_connector_add_edid_modes(struct drm_connector *connector);
 
 /** The CEA-861 mode of VIC `vic` into `out`, of type DRIVER and named,
  * Linux's drm_display_mode_from_cea_vic: 1, or 0 for a VIC the tables

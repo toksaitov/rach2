@@ -342,8 +342,8 @@ static uint32_t max_data_rate(uint32_t rate, uint32_t lanes)
  * compute_baseline_pipe_bpp and compute_sink_pipe_bpp: 36 on Haswell, cut
  * to the sink's colour depth, 8 bits when its EDID says none, and to "max
  * bpc". A monitor's depth is the connector's published one, as Linux's
- * display_info.bpc, which an override sets when the sink's DDC does not
- * answer; the panel's is the EDID read at init. */
+ * display_info.bpc, which each detection sets from the override or the
+ * sink's EDID; the panel's is the EDID read at init. */
 static uint32_t sink_pipe_bpp(const struct intel_dp *dp, const struct drm_connector_state *conn)
 {
     uint32_t bpc = dp->edp ? dp->edid_bpc : dp->connector->bpc, bpp = 36u;
@@ -824,9 +824,11 @@ static void update_dfp(struct intel_dp *dp, int digital_dp)
     }
 }
 
-/** Forget a monitor's EDID and what it said, Linux's intel_dp_unset_edid. */
+/** Forget a monitor's EDID and what it said, Linux's intel_dp_unset_edid;
+ * the connector's EDID property stays as the last detection set it. */
 static void unset_edid(struct intel_dp *dp)
 {
+    dp->has_edid = 0;
     dp->edid_len = 0;
     dp->edid_bpc = 0;
     k_memset(&dp->info, 0, sizeof(dp->info));
@@ -834,8 +836,13 @@ static void unset_edid(struct intel_dp *dp)
 }
 
 /**
- * Read the monitor's EDID and its capabilities. Probe DDC first on an
- * unforced connector, as drm_edid_read_ddc does. Return 1 for an EDID.
+ * Read the monitor's EDID and its capabilities, Linux's intel_dp_set_edid:
+ * the override, else the sink's, with DDC probed first on an unforced
+ * connector, as drm_edid_read_ddc does. Publish what was found, or that
+ * none was, in the connector's EDID property and bits a colour, as
+ * drm_edid_connector_update does, so that a mode set after a hotplug's
+ * detection, with no GETCONNECTOR between, takes the new sink's depth.
+ * Return 1 for an EDID. Under mode_lock.
  */
 static int set_edid(struct intel_dp *dp)
 {
@@ -844,18 +851,20 @@ static int set_edid(struct intel_dp *dp)
     uint32_t len = 0;
 
     unset_edid(dp);
-    if (connector->force == DRM_FORCE_OFF) {
-        return 0;
-    }
-    if (connector->force != DRM_FORCE_UNSPECIFIED || intel_dp_probe_ddc(dp)) {
+    if (connector->force != DRM_FORCE_OFF &&
+        (connector->force != DRM_FORCE_UNSPECIFIED || intel_dp_probe_ddc(dp))) {
         if (connector->edid_override) {
             edid = connector->edid_override;
             len = connector->edid_override_len;
         } else if (intel_dp_read_edid(dp, dp->edid, sizeof(dp->edid), &dp->edid_len) == 0) {
             edid = dp->edid;
             len = dp->edid_len;
+        } else {
+            dp->edid_len = 0;
         }
     }
+    dp->has_edid = len != 0;
+    drm_connector_update_edid_property(connector, edid, len);
     drm_edid_hdmi_info(NULL, edid, len, &dp->info);
     dp->edid_bpc = dp->info.bpc;
     update_dfp(dp, edid_digital_dp(edid, len));
@@ -1012,17 +1021,18 @@ static int downstream_mode(const struct intel_dp *dp, struct drm_mode_modeinfo *
     return drm_display_mode_from_cea_vic(vic, out);
 }
 
-/** The modes of a monitor's EDID, Linux's intel_dp_get_modes for an
- * external port; without an EDID a branch's port's mode, and without that
- * the core's modes stand in. */
+/** The modes of the EDID that detection published, the override or the
+ * sink's, Linux's intel_dp_get_modes for an external port. When detection
+ * found no EDID, a branch's port's mode; when that gives none either, or
+ * an EDID gives no mode, the core's modes stand in. */
 static int intel_dp_ext_get_modes(struct drm_connector *connector)
 {
     struct intel_dp *dp = ext_dp(connector);
     struct drm_mode_modeinfo mode;
     int n;
 
-    n = drm_connector_update_edid(connector, dp->edid_len ? dp->edid : NULL, dp->edid_len);
-    if (n == 0 && dp->edid_len == 0 && downstream_mode(dp, &mode) &&
+    n = drm_connector_add_edid_modes(connector);
+    if (n == 0 && !dp->has_edid && downstream_mode(dp, &mode) &&
         drm_mode_probed_add(connector, &mode) == 0) {
         n = 1;
     }
