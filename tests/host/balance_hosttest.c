@@ -385,6 +385,7 @@ static int ntasks, ncpus;
 static uint64_t now_ns;
 static process_t *mcurr[NR_CPUS];
 static int tick_stopped[NR_CPUS];
+static int mpreempted[NR_CPUS]; /* KVM's preempted mark of each processor */
 static unsigned int kick_nohz[NR_CPUS], kick_active[NR_CPUS];
 static unsigned int moves;
 static int model_balancing;
@@ -411,6 +412,12 @@ static struct process *m_curr(int cpu)
 static int m_idle(int cpu)
 {
     return mcurr[cpu] == NULL && m_nr_running(cpu) == 0;
+}
+
+/** Whether the model's hypervisor has preempted `cpu`'s virtual processor. */
+int arch_cpu_preempted(int cpu)
+{
+    return mpreempted[cpu];
 }
 
 /** The model's monotonic clock in ns. */
@@ -525,6 +532,7 @@ static void model_start(int n, const uint64_t *smt, const uint64_t *llc)
     k_memset(fair_rqs, 0, sizeof(fair_rqs));
     k_memset(mcurr, 0, sizeof(mcurr));
     k_memset(tick_stopped, 0, sizeof(tick_stopped));
+    k_memset(mpreempted, 0, sizeof(mpreempted));
     k_memset(brq, 0, sizeof(brq));
     k_memset(&nohz, 0, sizeof(nohz));
     k_memset(smt_mask, 0, sizeof(smt_mask));
@@ -809,6 +817,42 @@ static void placement_rows(void)
     (void)busy;
 }
 
+/** A wake does not go to an idle processor whose virtual processor the
+ * hypervisor has preempted, as Linux's available_idle_cpu leaves it out,
+ * but to another idle one of the cache; with every idle one preempted it
+ * stays on its last. */
+static void preempted_rows(void)
+{
+    static const uint64_t one_llc[4] = {0xf, 0xf, 0xf, 0xf};
+    process_t *p;
+    int cpu;
+
+    model_start(4, NULL, one_llc);
+    model_balancing = 0;
+    model_spinner(0, 1024, 0xf);
+    model_spinner(1, 1024, 0xf);
+    model_run(1);
+    p = &tasks[ntasks++];
+    p->state = PROC_READY;
+    p->affinity = 0xf;
+    p->se.load.weight = 1024;
+    p->cpu = 2;
+    p->se.recent_used_cpu = 2;
+    pelt_init_entity(&p->se);
+    p->se.cfs_rq = &fair_rqs[2].cfs;
+    brq[0].sd_llc_shared->nr_idle_scan = 4;
+    host_cpu = 0;
+    mpreempted[2] = 1;
+    cpu = fair_select_cpu(p, 2, FAIR_WF_TTWU);
+    CHECK(cpu == 3, "a wake whose idle last processor is preempted goes to an idle one");
+    mpreempted[3] = 1;
+    cpu = fair_select_cpu(p, 2, FAIR_WF_TTWU);
+    CHECK(cpu == 2, "with every idle processor preempted a wake stays on its last");
+    mpreempted[2] = mpreempted[3] = 0;
+    cpu = fair_select_cpu(p, 2, FAIR_WF_TTWU);
+    CHECK(cpu == 2, "a wake goes to its idle last processor once it runs again");
+}
+
 /*
  * Balancing (87-2d and 87-2e).
  */
@@ -949,6 +993,7 @@ int main(void)
     domain_smt_rows();
     domain_llc_rows();
     placement_rows();
+    preempted_rows();
     spread_rows();
     hot_rows();
     nohz_rows();
