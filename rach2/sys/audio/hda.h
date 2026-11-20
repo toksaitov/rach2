@@ -16,38 +16,39 @@
 /*
  * HDA controller register offsets (from MMIO base)
  */
-#define HDA_GCAP      0x00 /* Global Capabilities (16-bit) */
-#define HDA_VMIN      0x02 /* Minor Version (8-bit) */
-#define HDA_VMAJ      0x03 /* Major Version (8-bit) */
-#define HDA_OUTPAY    0x04 /* Output Payload Capability (16-bit) */
-#define HDA_INPAY     0x06 /* Input Payload Capability (16-bit) */
-#define HDA_GCTL      0x08 /* Global Control (32-bit) */
-#define HDA_WAKEEN    0x0C /* Wake Enable (16-bit) */
-#define HDA_STATESTS  0x0E /* State Change Status (16-bit) */
-#define HDA_GSTS      0x10 /* Global Status (16-bit) */
-#define HDA_INTCTL    0x20 /* Interrupt Control (32-bit) */
-#define HDA_INTSTS    0x24 /* Interrupt Status (32-bit) */
-#define HDA_WALCLK    0x30 /* Wall Clock Counter (32-bit) */
-#define HDA_SSYNC     0x38 /* Stream Synchronization (32-bit) */
-#define HDA_CORBLBASE 0x40 /* CORB Lower Base Address (32-bit) */
-#define HDA_CORBUBASE 0x44 /* CORB Upper Base Address (32-bit) */
-#define HDA_CORBWP    0x48 /* CORB Write Pointer (16-bit) */
-#define HDA_CORBRP    0x4A /* CORB Read Pointer (16-bit) */
-#define HDA_CORBCTL   0x4C /* CORB Control (8-bit) */
-#define HDA_CORBSTS   0x4D /* CORB Status (8-bit) */
-#define HDA_CORBSIZE  0x4E /* CORB Size (8-bit) */
-#define HDA_RIRBLBASE 0x50 /* RIRB Lower Base Address (32-bit) */
-#define HDA_RIRBUBASE 0x54 /* RIRB Upper Base Address (32-bit) */
-#define HDA_RIRBWP    0x58 /* RIRB Write Pointer (16-bit) */
-#define HDA_RINTCNT   0x5A /* Response Interrupt Count (16-bit) */
-#define HDA_RIRBCTL   0x5C /* RIRB Control (8-bit) */
-#define HDA_RIRBSTS   0x5D /* RIRB Status (8-bit) */
-#define HDA_RIRBSIZE  0x5E /* RIRB Size (8-bit) */
-#define HDA_ICW       0x60 /* Immediate Command Write (32-bit) */
-#define HDA_IRR       0x64 /* Immediate Response Read (32-bit) */
-#define HDA_ICS       0x68 /* Immediate Command Status (16-bit) */
-#define HDA_DPLBASE   0x70 /* DMA Position Lower Base (32-bit) */
-#define HDA_DPUBASE   0x74 /* DMA Position Upper Base (32-bit) */
+#define HDA_GCAP      0x00   /* Global Capabilities (16-bit) */
+#define HDA_GCAP_64OK 0x0001 /* GCAP: 64-bit addresses supported */
+#define HDA_VMIN      0x02   /* Minor Version (8-bit) */
+#define HDA_VMAJ      0x03   /* Major Version (8-bit) */
+#define HDA_OUTPAY    0x04   /* Output Payload Capability (16-bit) */
+#define HDA_INPAY     0x06   /* Input Payload Capability (16-bit) */
+#define HDA_GCTL      0x08   /* Global Control (32-bit) */
+#define HDA_WAKEEN    0x0C   /* Wake Enable (16-bit) */
+#define HDA_STATESTS  0x0E   /* State Change Status (16-bit) */
+#define HDA_GSTS      0x10   /* Global Status (16-bit) */
+#define HDA_INTCTL    0x20   /* Interrupt Control (32-bit) */
+#define HDA_INTSTS    0x24   /* Interrupt Status (32-bit) */
+#define HDA_WALCLK    0x30   /* Wall Clock Counter (32-bit) */
+#define HDA_SSYNC     0x38   /* Stream Synchronization (32-bit) */
+#define HDA_CORBLBASE 0x40   /* CORB Lower Base Address (32-bit) */
+#define HDA_CORBUBASE 0x44   /* CORB Upper Base Address (32-bit) */
+#define HDA_CORBWP    0x48   /* CORB Write Pointer (16-bit) */
+#define HDA_CORBRP    0x4A   /* CORB Read Pointer (16-bit) */
+#define HDA_CORBCTL   0x4C   /* CORB Control (8-bit) */
+#define HDA_CORBSTS   0x4D   /* CORB Status (8-bit) */
+#define HDA_CORBSIZE  0x4E   /* CORB Size (8-bit) */
+#define HDA_RIRBLBASE 0x50   /* RIRB Lower Base Address (32-bit) */
+#define HDA_RIRBUBASE 0x54   /* RIRB Upper Base Address (32-bit) */
+#define HDA_RIRBWP    0x58   /* RIRB Write Pointer (16-bit) */
+#define HDA_RINTCNT   0x5A   /* Response Interrupt Count (16-bit) */
+#define HDA_RIRBCTL   0x5C   /* RIRB Control (8-bit) */
+#define HDA_RIRBSTS   0x5D   /* RIRB Status (8-bit) */
+#define HDA_RIRBSIZE  0x5E   /* RIRB Size (8-bit) */
+#define HDA_ICW       0x60   /* Immediate Command Write (32-bit) */
+#define HDA_IRR       0x64   /* Immediate Response Read (32-bit) */
+#define HDA_ICS       0x68   /* Immediate Command Status (16-bit) */
+#define HDA_DPLBASE   0x70   /* DMA Position Lower Base (32-bit) */
+#define HDA_DPUBASE   0x74   /* DMA Position Upper Base (32-bit) */
 
 /* Immediate Command Status bits */
 #define HDA_ICS_ICB 0x01 /* Immediate Command Busy */
