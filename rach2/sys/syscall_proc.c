@@ -3711,6 +3711,9 @@ struct wait_report {
  * the signal code); used here for the lost-wakeup-safe sleep in wait_find. */
 static void sig_idle_wait(void);
 
+/* Whether the current thread has signal work, defined with the signal code. */
+static int sig_work_now(void);
+
 /* The big lock for the IDs a namespace maps, defined with the ID calls. */
 static int ids_lock(int lookup);
 
@@ -4137,7 +4140,12 @@ static int wait_scan(int idtype, uint32_t id, int options, struct wait_report *o
  * end without the big lock leaves the queue, takes the lock and looks
  * again (`big` in `out`), so that the order of the reports stays the
  * walk's; a later sleep of that call keeps the lock, which `schedule` lets
- * go while it sleeps.
+ * go while it sleeps. A look that finds no event while the caller has
+ * signal work (`sig_work_now`) takes the big lock the same way before it
+ * judges the signal: `signal_pending` discards an ignored signal, and the
+ * discard takes `timer_lock` (`ptimer_rearm`), which only a holder of the
+ * big lock may take under `sig_lock`, since a timer's post holds
+ * `timer_lock` and takes `sig_lock` (`ptimer_post_due`).
  *
  * Without WNOHANG the caller then sleeps on its process's child queue, which
  * an exit, a stop or a continue wakes, until a child has an event or a
@@ -4180,7 +4188,8 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         look = wait_scan(idtype, id, options, out, &have_child);
         rc = look == LOOK_HELD ? (int32_t)out->pid : 0;
         flags = sig_irq_save();
-        if (look == LOOK_BIG) {
+        if (look == LOOK_BIG ||
+            (rc == 0 && have_child && !(options & WNOHANG) && !out->big && sig_work_now())) {
             wq_poll_remove(&current_proc->tg->chld, &self);
             current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
@@ -4836,15 +4845,27 @@ static void sig_wake(process_t *t, uint64_t bits)
     }
 }
 
-/** Recompute the current thread's signal-work flag with interrupts off,
- * as Linux 6.12.115's recalc_sigpending (kernel/signal.c:157-178). No
- * other thread's flag is cleared, even when this one took its signal. */
+/** Whether the current thread has signal work, as Linux 6.12.115's
+ * recalc_sigpending judges it (kernel/signal.c:157-178): a signal it does
+ * not block, pending for it or for its process, a stop of its process it
+ * has not taken, or its tracer's PTRACE_INTERRUPT. These are what
+ * `signal_pending` looks at. With interrupts off, under `sig_lock`. */
+static int sig_work_now(void)
+{
+    process_t *self = current_proc;
+
+    return ((self->sig_pending | self->tg->pending) & ~self->sig_blocked) != 0 ||
+           (self->tg->stop && !self->stop_seen) || (self->ptrace & PT_INTERRUPT);
+}
+
+/** Recompute the current thread's signal-work flag with interrupts off
+ * (`sig_work_now`), as Linux 6.12.115's recalc_sigpending. No other
+ * thread's flag is cleared, even when this one took its signal. */
 static void sig_recalc(void)
 {
     process_t *self = current_proc;
 
-    self->sig_woken = ((self->sig_pending | self->tg->pending) & ~self->sig_blocked) != 0 ||
-                      (self->tg->stop && !self->stop_seen) || (self->ptrace & PT_INTERRUPT);
+    self->sig_woken = sig_work_now();
     if (self->sig_woken) {
         proc_work_set(self, WORK_SIGNAL);
     }
