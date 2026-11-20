@@ -97,8 +97,11 @@ int acpi_resource_range(struct acpi_resource *res, uint64_t *start, uint64_t *le
 
 /**
  * Take the hot plug slots of the host bridge of bus 0, its children with
- * _ADR and _EJ0, and their Notify, as Linux's acpiphp does, with the
- * bridge's windows from its _CRS for the BARs of a card put in. Called
+ * _ADR and _EJ0, and their Notify, as Linux's acpiphp does, and keep the
+ * windows of every host bridge from its _CRS for its root bus, as Linux's
+ * acpi_pci_root_add finds the bus and the windows
+ * (`pci_root_window_add`), which bus 0's give the BARs of a card put in
+ * and every root's hold the BARs a driver claims. Called
  * once ACPICA's objects are initialized and before AcpiUpdateAllGpes,
  * whose GPE method gives the Notify.
  */
