@@ -378,11 +378,13 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
 
         int a;
 
-        if (nd && nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) &&
-            dst == (nd->ip | ~nd->mask)) {
+        if (!nd || nd->l3) {
+            continue;
+        }
+        if (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && dst == (nd->ip | ~nd->mask)) {
             return nd;
         }
-        for (a = 0; nd && a < nd->naddr2; a++) {
+        for (a = 0; a < nd->naddr2; a++) {
             if (NETDEV_MASK_HAS_BROADCAST(nd->mask2[a]) && dst == (nd->ip2[a] | ~nd->mask2[a])) {
                 return nd;
             }

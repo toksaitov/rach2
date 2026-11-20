@@ -2252,12 +2252,12 @@ void icmp_count_out(uint8_t type)
 }
 
 /** No row sends on a packet socket: -EINVAL. */
-int packet_send(struct socket *s, int ifindex, const uint8_t *dst_mac, uint16_t ethertype,
+int packet_send(struct socket *s, int ifindex, struct packet_dest dst, uint16_t ethertype,
                 const uint8_t *data, uint16_t len)
 {
     (void)s;
     (void)ifindex;
-    (void)dst_mac;
+    (void)dst;
     (void)ethertype;
     (void)data;
     (void)len;

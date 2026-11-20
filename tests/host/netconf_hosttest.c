@@ -433,19 +433,19 @@ static void narrow_subnets_added(void)
 {
     iface_reset(&other_iface, 0, 0, 0);
     other_iface.naddr2 = 0;
-    CHECK(netconf_add_address(&other_iface, IP4(192, 168, 0, 105), 0xFFFFFFFFu) == 0 &&
+    CHECK(netconf_add_address(&other_iface, IP4(192, 168, 0, 105), 0xFFFFFFFFu, 0) == 0 &&
               other_iface.ip == IP4(192, 168, 0, 105) && other_iface.mask == 0xFFFFFFFFu,
           "a /32 is added as an interface's first address");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu) == 0 &&
-              netconf_add_address(&other_iface, IP4(10, 0, 0, 1), 0xFFFFFFFEu) == 0 &&
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu, 0) == 0 &&
+              netconf_add_address(&other_iface, IP4(10, 0, 0, 1), 0xFFFFFFFEu, 0) == 0 &&
               other_iface.naddr2 == 2,
           "both addresses of a /31 are added beside it");
     CHECK(!netconf_is_broadcast(IP4(10, 0, 0, 0)) && !netconf_is_broadcast(IP4(10, 0, 0, 1)),
           "neither of which is a broadcast address");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu) == -EINVAL &&
-              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu) == -EINVAL,
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu, 0) == -EINVAL &&
+              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu, 0) == -EINVAL,
           "a /30's network and broadcast addresses are not added");
-    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 2), 0xFFFFFFFCu) == 0 &&
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 2), 0xFFFFFFFCu, 0) == 0 &&
               other_iface.naddr2 == 3,
           "its host is");
     other_iface.naddr2 = 0;

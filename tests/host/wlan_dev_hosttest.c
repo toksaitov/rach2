@@ -653,13 +653,13 @@ static void station(void)
     struct wlan_radio radio, other;
     struct wlan *wlan = 0, *second = 0;
     static struct wlan_bss bss;
+    const struct packet_dest dst = {bss.bssid, sizeof(bss.bssid)};
     static struct socket pae, ip;
     static const uint8_t payload[] = {0x45, 0, 0, 20};
     static uint8_t ethernet[ETH_HDR_SIZE + 4], mpdu[128], decoded[128];
     unsigned len, got, i;
     int index, lo_index;
     struct netdev_rt route;
-
     CHECK(netdev_probe() == 0);
     lo_index = netdev_loopback()->index;
     setup(&radio, 1);
@@ -702,9 +702,9 @@ static void station(void)
     ip.protocol = ETH_TYPE_IP;
     ip.rcvbuf = 8192;
     CHECK(packet_bind(&pae, index) == 0 && packet_bind(&ip, index) == 0);
-    CHECK(packet_send(&ip, index, bss.bssid, ETH_TYPE_IP, payload, sizeof(payload)) == -ENETDOWN);
+    CHECK(packet_send(&ip, index, dst, ETH_TYPE_IP, payload, sizeof(payload)) == -ENETDOWN);
     CHECK(transmissions == 0 && queued_len == 0);
-    CHECK(packet_send(&pae, index, bss.bssid, ETH_TYPE_PAE, payload, sizeof(payload)) == 4);
+    CHECK(packet_send(&pae, index, dst, ETH_TYPE_PAE, payload, sizeof(payload)) == 4);
     CHECK(transmissions == 0 && queued_len == ETH_HDR_SIZE + sizeof(payload));
     drain(wlan);
     CHECK(transmissions == 1 && sent_len == 32 + sizeof(payload));
@@ -731,7 +731,7 @@ static void station(void)
     CHECK(wlan->state == WLAN_STA_ASSOCIATED);
     state_error = 0;
     CHECK(wlan_set_state(wlan, WLAN_STA_AUTHORIZED, &bss) == 0);
-    CHECK(packet_send(&ip, index, bss.bssid, ETH_TYPE_IP, payload, sizeof(payload)) == 4);
+    CHECK(packet_send(&ip, index, dst, ETH_TYPE_IP, payload, sizeof(payload)) == 4);
     drain(wlan);
     CHECK(sent[30] == 8 && sent[31] == 0);
     ethernet[12] = 8;
@@ -759,7 +759,7 @@ static void station(void)
     CHECK(netdev_by_index(index) == &wlan->netdev && netdev_by_index(lo_index)->loopback);
     wlan_unregister_radio(wlan);
     CHECK(netdev_route_at(0, &route) == 0);
-    CHECK(packet_send(&pae, index, bss.bssid, ETH_TYPE_PAE, payload, sizeof(payload)) == -ENODEV);
+    CHECK(packet_send(&pae, index, dst, ETH_TYPE_PAE, payload, sizeof(payload)) == -ENODEV);
     packet_unbind(&pae);
     packet_unbind(&ip);
     CHECK(radio.wlan == 0 && !wlan_by_index(radio.index) && !netdev_by_index(index));

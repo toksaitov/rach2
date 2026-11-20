@@ -240,12 +240,14 @@ struct netdev {
     uint32_t ip;
     uint32_t mask;
     uint32_t gateway;
+    uint32_t peer; /* distinct IPv4 destination, or 0 for the local address */
 
     /* The `naddr2` addresses after the first, as `ip addr add` gives them,
      * each with its mask: an interface may be on more than one subnet, and
      * answers for each of its addresses. */
     uint32_t ip2[NETDEV_ADDRS];
     uint32_t mask2[NETDEV_ADDRS];
+    uint32_t peer2[NETDEV_ADDRS]; /* same convention as peer */
     int naddr2;
 
     /* What an address change made of two ioctls, the address and then the
@@ -496,16 +498,32 @@ uint32_t netdev_default_gateway(const struct netdev *nd);
  * Call under net_lock. */
 void netdev_route_prune(struct netdev *nd);
 
+/** The IPv4 destination of address `a` (-1 for the first), the local address
+ * when there is no distinct peer. This is Linux's IFA_ADDRESS. */
+static __inline__ uint32_t netdev_addr_dst(const struct netdev *nd, int a)
+{
+    uint32_t peer = a < 0 ? nd->peer : nd->peer2[a];
+
+    return peer ? peer : a < 0 ? nd->ip : nd->ip2[a];
+}
+
+/** Whether an IPv4 address implies a link route to `dst`/`mask`.
+ * A host prefix implies one only when it names a distinct peer. */
+static __inline__ int netdev_addr_has_route(uint32_t ip, uint32_t dst, uint32_t mask)
+{
+    return ip != 0 && mask != 0 && (mask != 0xFFFFFFFFu || dst != ip);
+}
+
 /** Whether `ip` is one of `nd`'s addresses, its first or another; 0 for a
  * NULL `nd` or an `ip` of 0. */
 int netdev_holds(const struct netdev *nd, uint32_t ip);
 
-/** Whether `ip` is on one of `nd`'s subnets; a /32 puts no other address
- * on the link, as on Linux, so its own address is not counted. */
+/** Whether `ip` is on one of `nd`'s subnets or peer prefixes. A /32
+ * puts only a distinct peer on the link. */
 int netdev_on_link(const struct netdev *nd, uint32_t ip);
 
-/** The address of `nd` a datagram to the next hop `hop` leaves from: the
- * one whose subnet has `hop`, else its first. */
+/** The local address of `nd` whose subnet or peer prefix reaches `hop`,
+ * or its first if no prefix matches. On a TUN, prefer the longest match. */
 uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
 
 /** Whether `ip` is an address of one of the cards' interfaces, which makes
