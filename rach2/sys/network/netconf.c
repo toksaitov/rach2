@@ -102,7 +102,7 @@ static int mac_equal(const uint8_t *a, const uint8_t *b)
  * order on the next boot still takes the address the operator meant for it.
  * The address and prefix are copied out to the comma before they are parsed,
  * since `netconf_parse_cidr` reads a whole string. The configuration is
- * written into the card's record directly, without what `addr_publish`
+ * written into the card's record directly, without what `addr_replace`
  * drops, since this runs at boot, before any program has opened a socket.
  */
 void netconf_apply_by_mac(void)
@@ -806,8 +806,8 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
  * to be asked on. A preferred lifetime of 0 makes the address deprecated
  * from the start.
  */
-int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
-                         uint32_t valid, uint32_t preferred)
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
 {
     struct netdev_addr6 *a;
     uint8_t group[IP6_ADDR_LEN];
@@ -862,6 +862,17 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     ip6_format(addr, text);
     klog(KLOG_INFO, "net", "%s: IPv6 %s/%d added", nd->name, text, prefix);
     return 0;
+}
+
+int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                         uint32_t valid, uint32_t preferred)
+{
+    uint32_t lock = net_lock();
+    int rc = netconf_insert_address6(nd, addr, prefix, flags, valid, preferred);
+    if (!rc)
+        route6_address_update(nd, 0, netdev_addr6_of(nd, addr));
+    net_unlock(lock);
+    return rc;
 }
 
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)

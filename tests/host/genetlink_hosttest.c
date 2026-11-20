@@ -1,6 +1,7 @@
 /* Exercise generic netlink, its real socket queue and userspace link policy.
  * host-deps: rach2/sys/network/socket/genetlink.c rach2/sys/tick.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
+ * host-deps: rach2/sys/network/ip6/route6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  */
@@ -11,6 +12,7 @@ extern int printf(const char *format, ...);
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 volatile uint64_t kernel_ticks;
+struct net_mib6 net_mib6;
 static struct netdev card;
 static int carrier = 1, privileged = 1, failures, lock_depth, completed, calls;
 static int failed_dumps;
@@ -148,13 +150,25 @@ int arp_snapshot(struct arp_row *out, int max)
     return 0;
 }
 
-/** Model ip6_route with no addresses, routes or sockets. */
-struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
+/** The model has one card with IPv6 enabled. */
+int netdev_count(void)
 {
-    (void)dst;
-    (void)ifindex;
-    (void)via;
+    return 1;
+}
+
+/** IPv6 is enabled on the model card. */
+int nd6_disabled(const struct netdev *nd)
+{
+    (void)nd;
     return 0;
+}
+
+/** Every router on the model link is reachable. */
+int nd6_router_usable(struct netdev *nd, const uint8_t *addr)
+{
+    (void)nd;
+    (void)addr;
+    return 1;
 }
 
 /** Model ip6_source with no addresses, routes or sockets. */
@@ -208,9 +222,9 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
     return 0;
 }
 
-/** Model netconf_add_address6 with no addresses, routes or sockets. */
-int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
-                         uint32_t valid, uint32_t preferred)
+/** Allocate the address record used by the netlink and route code. */
+int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                            uint32_t valid, uint32_t preferred)
 {
     struct netdev_addr6 *a = &nd->addr6[nd->naddr6++];
     k_memset(a, 0, sizeof(*a));
@@ -235,8 +249,15 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 /** Model netconf_del_address6 with no addresses, routes or sockets. */
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
-    CHECK(nd->naddr6 == 1 && ip6_equal(nd->addr6[0].addr, addr));
-    nd->naddr6 = 0;
+    struct netdev_addr6 *a = netdev_addr6_of(nd, addr);
+    int i;
+    if (!a)
+        return -EADDRNOTAVAIL;
+    i = (int)(a - nd->addr6);
+    route6_address_removed(nd, i);
+    for (; i + 1 < nd->naddr6; i++)
+        nd->addr6[i] = nd->addr6[i + 1];
+    nd->naddr6--;
     return 0;
 }
 
@@ -372,41 +393,6 @@ void netif_ns_lo_set_up(struct netdev *nd, int up)
 {
     (void)nd;
     (void)up;
-}
-
-/** Only the route fixture exercises a change to an existing peer. */
-void route6_peer_change(struct netdev *nd, struct netdev_addr6 *a, const uint8_t *peer)
-{
-    (void)nd;
-    (void)a;
-    (void)peer;
-}
-
-/** The generic family model has no IPv6 routes to change. */
-int route6_change_row(struct netdev *nd, const struct route6_row *r, int del, int replace)
-{
-    (void)nd;
-    (void)r;
-    (void)del;
-    (void)replace;
-    return -ESRCH;
-}
-
-/** This socket fixture has no IPv6 main-table routes. */
-struct netdev *route6_resolve(const uint8_t *dst, int ifindex, struct route6_row *row)
-{
-    (void)dst;
-    (void)ifindex;
-    (void)row;
-    return 0;
-}
-
-/** Model route6_at with no addresses, routes or sockets. */
-int route6_at(int n, struct route6_row *out)
-{
-    (void)n;
-    (void)out;
-    return 0;
 }
 
 /** Model socket_snapshot with no addresses, routes or sockets. */
@@ -818,11 +804,146 @@ static void peer_address(void)
     CHECK(card.addr6[0].metric == 57 && card.addr6[0].noprefix);
     CHECK(addr_change(request, RTM_NEWADDR, NLM_F_EXCL, body) == -EEXIST);
     CHECK(addr_change(request, RTM_NEWADDR, NLM_F_REPLACE, body) == 0);
-    CHECK(card.addr6[0].noprefix && !card.addr6[0].peer_prefix);
+    CHECK(card.addr6[0].noprefix);
     ifa[1] = 128;
     CHECK(addr_change(request, RTM_DELADDR, 0, body) == -EADDRNOTAVAIL && card.naddr6 == 1);
     ifa[1] = 64;
     CHECK(addr_change(request, RTM_DELADDR, 0, body) == 0 && !card.naddr6);
+}
+
+/** Submit a /64 address change with a metric and valid lifetime. */
+static void prefix_address(int host, int replace, unsigned flags, uint32_t metric, uint32_t life)
+{
+    uint8_t local[16] = {0x20, 1}, cache[16] = {0};
+    struct nl_build b = {0};
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, 0, 8);
+    local[15] = (uint8_t)host;
+    ifa[0] = AF_INET6;
+    ifa[1] = 64;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr(request, IFA_LOCAL, local, 16);
+    msg_attr32(request, IFA_FLAGS, NETDEV_A6_NODAD | flags);
+    msg_attr32(request, IFA_RT_PRIORITY, metric);
+    put32(cache, life);
+    put32(cache + 4, life);
+    msg_attr(request, IFA_CACHEINFO, cache, sizeof(cache));
+    CHECK(!addr_change(request, RTM_NEWADDR, replace ? NLM_F_REPLACE : NLM_F_EXCL,
+                       get32(request) - NLMSG_HDRLEN));
+}
+
+/** Count every direct route for the test subnet and metric in the dump. */
+static int prefix_rows(uint32_t metric, uint32_t proto, uint32_t expires)
+{
+    uint8_t dst[16] = {0x20, 1};
+    struct route6_row r;
+    int n, count = 0;
+    for (n = 0; route6_at(n, &r); n++)
+        if (r.ifindex == card.index && !r.local && r.plen == 64 && r.metric == metric &&
+            ip6_equal(r.dst, dst) && ip6_is_unspecified(r.gw)) {
+            CHECK(r.proto == proto && r.expires == expires);
+            count++;
+        }
+    return count;
+}
+
+/** End a row with an empty interface and routing table. */
+static void clear_addresses(void)
+{
+    while (card.naddr6)
+        CHECK(!netconf_del_address6(&card, card.addr6[0].addr));
+    route6_forget(&card, -1);
+    route6_tick();
+}
+
+/** Modify the actual route left by an explicit replacement. */
+static void replace_address_prefix(void)
+{
+    struct route6_row r = {0};
+    r.dst[0] = 0x20;
+    r.dst[1] = 1;
+    r.plen = 64;
+    r.metric = 256;
+    r.proto = 99;
+    prefix_address(1, 0, 0, 256, NETDEV_LIFETIME_FOREVER);
+    CHECK(!route6_change_row(&card, &r, 0, 1));
+    CHECK(prefix_rows(256, 99, 0) == 1);
+    prefix_address(1, 1, IFA_F_NOPREFIXROUTE, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(!prefix_rows(256, 99, 0));
+    prefix_address(1, 1, 0, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(!route6_change_row(&card, &r, 0, 1));
+    prefix_address(1, 1, 0, 0, 20);
+    CHECK(prefix_rows(256, 99, 20) == 1);
+    prefix_address(1, 1, 0, 0, NETDEV_LIFETIME_FOREVER);
+    prefix_address(1, 1, 0, 512, NETDEV_LIFETIME_FOREVER);
+    CHECK(!prefix_rows(256, 99, 0) && prefix_rows(512, ROUTE6_PROTO_KERNEL, 0) == 1);
+    clear_addresses();
+}
+
+/** Use the last addition's deadline, even after that address is deleted. */
+static void shared_deadline(void)
+{
+    struct route6_row r;
+    uint8_t dst[16] = {0x20, 1};
+    prefix_address(1, 0, 0, 256, 100);
+    prefix_address(2, 0, 0, 512, 60);
+    kernel_ticks += TICK_HZ;
+    prefix_address(3, 0, 0, 256, 10);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    CHECK(!netconf_del_address6(&card, card.addr6[2].addr));
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    kernel_ticks += 10 * TICK_HZ;
+    route6_tick();
+    CHECK(!prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) && card.naddr6 == 2);
+    CHECK(route6_resolve(dst, card.index, &r) == &card && r.metric == 512 && r.expires == 49);
+    clear_addresses();
+}
+
+/** A permanent route takes the longest remaining deadline on cleanup only. */
+static void permanent_prefix(void)
+{
+    prefix_address(1, 0, 0, 256, 10);
+    prefix_address(2, 0, 0, 256, NETDEV_LIFETIME_FOREVER);
+    prefix_address(3, 0, 0, 256, 80);
+    prefix_address(4, 0, 0, 256, 12);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) == 1);
+    prefix_address(2, 1, IFA_F_NOPREFIXROUTE, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 80) == 1);
+    prefix_address(3, 1, IFA_F_NOPREFIXROUTE, 0, 5);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 80) == 1);
+    prefix_address(4, 1, 0, 256, 7);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 7) == 1);
+    prefix_address(4, 1, 0, 512, 9);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 7) == 1 &&
+          prefix_rows(512, ROUTE6_PROTO_KERNEL, 9) == 1);
+    clear_addresses();
+}
+
+/** A replacement selects the lowest direct metric across shared addresses. */
+static void lowest_prefix(void)
+{
+    prefix_address(1, 0, 0, 128, NETDEV_LIFETIME_FOREVER);
+    prefix_address(2, 0, 0, 256, NETDEV_LIFETIME_FOREVER);
+    prefix_address(2, 1, 0, 512, NETDEV_LIFETIME_FOREVER);
+    CHECK(!prefix_rows(128, ROUTE6_PROTO_KERNEL, 0) &&
+          prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) == 1 &&
+          prefix_rows(512, ROUTE6_PROTO_KERNEL, 0) == 1);
+    prefix_address(2, 1, IFA_F_NOPREFIXROUTE, 0, NETDEV_LIFETIME_FOREVER);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 0) == 1);
+    clear_addresses();
+}
+
+/** An advertised on-link prefix and a manual address share one FIB entry. */
+static void advertised_prefix(void)
+{
+    uint8_t dst[16] = {0x20, 1};
+    route6_learn(&card, dst, 64, 0, 256, 100);
+    prefix_address(1, 0, 0, 256, 10);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    route6_learn(&card, dst, 64, 0, 256, 0);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    route6_learn(&card, dst, 64, 0, 256, 22);
+    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 22) == 1);
+    clear_addresses();
 }
 
 /** Register a family and run every row, releasing all sockets and storage. */
@@ -858,6 +979,11 @@ int main(void)
     CHECK(netlink_bind(&a, 77, 0) == 0 && netlink_bind(&route, 77, 0) == 0);
     CHECK(netlink_bind(&b, 77, 0) == -EADDRINUSE);
     peer_address();
+    replace_address_prefix();
+    shared_deadline();
+    permanent_prefix();
+    lowest_prefix();
+    advertised_prefix();
     requests(&a);
     multicast(&a, &b);
     link_policy_test(&route, &watch);

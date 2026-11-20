@@ -214,6 +214,15 @@ uint64_t tick_count(void)
     return kernel_ticks;
 }
 
+/** No IPv4 test adds IPv6 routes. */
+void route6_address_update(struct netdev *nd, const struct netdev_addr6 *old,
+                           const struct netdev_addr6 *a)
+{
+    (void)nd;
+    (void)old;
+    (void)a;
+}
+
 /** The IPv4 fixture has no IPv6 prefixes to retain. */
 void route6_address_removed(struct netdev *nd, int slot)
 {

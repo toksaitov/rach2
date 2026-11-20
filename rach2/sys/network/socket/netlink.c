@@ -2105,21 +2105,20 @@ static void read_addr6_options(const uint8_t *req, uint32_t body, struct addr6_o
 static void update_addr6(struct netdev *nd, struct netdev_addr6 *held,
                          const struct addr6_options *opts, int replace)
 {
-    held->noprefix = (opts->flags & IFA_F_NOPREFIXROUTE) != 0;
-    if (replace)
-        route6_peer_change(nd, held, opts->peer);
-    else if (opts->peer && !ip6_equal(held->addr, opts->peer))
-        k_memcpy(held->peer, opts->peer, IP6_ADDR_LEN);
-    held->peer_prefix = replace && !held->noprefix && !ip6_is_unspecified(held->peer);
-    held->deleted_routes &= NETDEV_A6_PEER_ROUTE | NETDEV_A6_LOCAL_ROUTE;
-    held->since = tick_count();
-    held->preferred = opts->preferred;
-    held->valid = opts->valid;
-    held->flags &= ~(NETDEV_A6_DEPRECATED | NETDEV_A6_PERMANENT | NETDEV_A6_NODAD);
-    held->flags |= (opts->flags & NETDEV_A6_NODAD) | (!opts->preferred ? NETDEV_A6_DEPRECATED : 0) |
-                   (opts->valid == NETDEV_LIFETIME_FOREVER ? NETDEV_A6_PERMANENT : 0);
+    struct netdev_addr6 next = *held;
+    next.noprefix = (opts->flags & IFA_F_NOPREFIXROUTE) != 0;
+    if (opts->peer && !ip6_equal(held->addr, opts->peer))
+        k_memcpy(next.peer, opts->peer, IP6_ADDR_LEN);
+    next.since = tick_count();
+    next.preferred = opts->preferred;
+    next.valid = opts->valid;
+    next.flags &= ~(NETDEV_A6_DEPRECATED | NETDEV_A6_PERMANENT | NETDEV_A6_NODAD);
+    next.flags |= (opts->flags & NETDEV_A6_NODAD) | (!opts->preferred ? NETDEV_A6_DEPRECATED : 0) |
+                  (opts->valid == NETDEV_LIFETIME_FOREVER ? NETDEV_A6_PERMANENT : 0);
     if (opts->metric)
-        held->metric = opts->metric;
+        next.metric = opts->metric;
+    route6_address_update(nd, replace ? held : 0, &next);
+    *held = next;
 }
 
 /** Change the IPv6 address selected by its local address and, on deletion,
@@ -2151,8 +2150,8 @@ static int32_t addr6_change(const uint8_t *req, uint16_t type, uint16_t flags, u
         else
             update_addr6(nd, held, &opts, 1);
     } else {
-        rc = netconf_add_address6(nd, addr, prefix, (int)(opts.flags & NETDEV_A6_NODAD), opts.valid,
-                                  opts.preferred);
+        rc = netconf_insert_address6(nd, addr, prefix, (int)(opts.flags & NETDEV_A6_NODAD),
+                                     opts.valid, opts.preferred);
         if (!rc)
             update_addr6(nd, netdev_addr6_of(nd, addr), &opts, 0);
     }
