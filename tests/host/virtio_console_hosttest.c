@@ -337,12 +337,14 @@ static int term_node(const char *name)
     return n && n->ops == 0 && n->open == 0;
 }
 
-/** Whether `name` is registered with the vport's operations. */
+/** Whether `name` is registered with the vport's operations, at the
+ * major of one of the first two devices. */
 static int vport_node(const char *name)
 {
     struct devfs_node *n = node(name);
 
-    return n && n->ops == &vcon_vport_ops && n->major == VIRTIO_CONSOLE_VPORT_MAJOR;
+    return n && n->ops == &vcon_vport_ops &&
+           (n->major == vcon_major(0) || n->major == vcon_major(1));
 }
 
 /* A pair whose master the driver holds: what its slave's discipline took
@@ -1302,7 +1304,6 @@ static void fresh(const char *line, int kind)
     vcon_work = 0;
     k_memset(&vcon_n, 0, sizeof(vcon_n));
     k_memset(vcon_hvc, 0, sizeof(vcon_hvc));
-    k_memset(vcon_minor, 0, sizeof(vcon_minor));
     k_memset(nodes, 0, sizeof(nodes));
     k_memset(ptys, 0, sizeof(ptys));
     k_memset(waiters, 0, sizeof(waiters));
@@ -2046,10 +2047,27 @@ static int sent(uint32_t id, uint16_t event, uint16_t value)
 }
 
 /**
+ * Checks the numbers of `second`'s ports: each device's at a major of its
+ * own, the first's at VIRTIO_CONSOLE_VPORT_MAJOR and the second's at 244,
+ * with the ports' numbers as minors.
+ */
+static void numbered(void)
+{
+    check(node("vport0p0")->major == VIRTIO_CONSOLE_VPORT_MAJOR && node("vport0p0")->minor == 0 &&
+              node("vport0p1")->major == VIRTIO_CONSOLE_VPORT_MAJOR &&
+              node("vport0p1")->minor == 1 && node("vport1p0")->major == 244 &&
+              node("vport1p0")->minor == 0 && node("virtio-ports/other")->major == 244 &&
+              node("virtio-ports/other")->minor == 1,
+          "each device's ports have a major of their own and the minors of their numbers, as "
+          "Linux's register_chrdev and MKDEV give them");
+}
+
+/**
  * Two devices, each bound with its ports and numbered in the order found,
  * as Linux binds every virtio console: `console=vport1p1` names the
  * second's port 1, which carries the console, while the first's ports and
- * console port have their nodes; the first removed, the second goes on;
+ * console port have their nodes, each device's at a major of its own with
+ * the ports' numbers as minors; the first removed, the second goes on;
  * and a bind the bus refuses.
  */
 static void second(void)
@@ -2068,6 +2086,7 @@ static void second(void)
               term_node("virtio-ports/other"),
           "the line is the second's port 1, by its number and its name, and every other port "
           "is a byte device");
+    numbered();
     check(node("hvc0") && node("hvc0")->ops == &slave_ops && node("hvc1") && tty_of("hvc0") &&
               tty_of("hvc1") && P(0)->hvc == 0,
           "each console port is an hvc terminal, numbered in the order the devices were found");

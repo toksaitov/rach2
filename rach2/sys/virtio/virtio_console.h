@@ -47,7 +47,8 @@ struct virtio_console_control {
 #define VIRTIO_CONSOLE_PORTS_MAX (VIRTIO_MAX_QUEUES / 2 - 1)
 
 /* The device numbers of the nodes: /dev/hvcN at 229:N, Linux's, and
- * /dev/vportNpM at 245, with a minor for each port that has the node. */
+ * /dev/vport0pM at 245:M, each later device's ports at a major of its own
+ * (virtio_console.c's `vcon_major`). */
 #define VIRTIO_CONSOLE_HVC_MAJOR   229
 #define VIRTIO_CONSOLE_VPORT_MAJOR 245
 
