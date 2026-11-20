@@ -202,3 +202,4 @@ The bullets state only what the records show. A fact the records do not hold, su
 | Mesa's HUD drops its samples when its vertex upload fails | Mesa 25.0.7 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#mesas-hud-drops-its-samples-when-its-vertex-upload-fails) |
 | virglrenderer dereferences a null GBM device for a persistent buffer under external blobs | virglrenderer 1.1.0 | 84 | unreported | [84-locks/upstream.md](84-locks/upstream.md#virglrenderer-dereferences-a-null-gbm-device-for-a-persistent-buffer-under-external-blobs) |
 | Weston moves a null view to a layer | Weston 14.0.2 | 84 | unreported, draft | [84-locks/upstream.md](84-locks/upstream.md#weston-moves-a-null-view-to-a-layer) |
+| Linux's HDMI codec walks an ELD's written descriptor count past its array | Linux 6.12.115 | 87 | unreported | [87-fair-scheduler/upstream.md](87-fair-scheduler/upstream.md#linuxs-hdmi-codec-walks-an-elds-written-descriptor-count-past-its-array) |
