@@ -1468,12 +1468,9 @@ void nd6_if_up(struct netdev *nd)
     net_unlock(lock);
 }
 
-/**
- * Forget what `nd` learned from its link: its neighbours and the datagrams
- * waiting for them, its routers' routes and settings, and the addresses
- * they made; with `stop`, discovery stops until `nd6_if_up` starts it
- * again. The caller holds no lock, or net_lock.
- */
+/** Drop nonpermanent neighbours and datagrams waiting on the link.
+ * Administrative shutdown also removes addresses, routes and router state.
+ * The caller may hold net_lock. */
 static void forget_if(struct netdev *nd, int stop)
 {
     struct nd6_if *ni = if_of(nd);
@@ -1613,6 +1610,7 @@ static void dad_timers(struct netdev *nd)
             send_ns(nd, a->addr, 0, 0);
         } else {
             a->flags &= (uint8_t)~NETDEV_A6_TENTATIVE;
+            a->deleted_routes &= (uint8_t)~(NETDEV_A6_LOCAL_ROUTE | NETDEV_A6_PEER_ROUTE);
         }
     }
 }
@@ -1627,7 +1625,7 @@ static void if_timers(struct netdev *nd, struct nd6_if *ni)
     if (!running && ni->running) {
         forget_if(nd, 0);
     } else if (running && !ni->running) {
-        redetect(nd, 1);
+        redetect(nd, 0);
         solicit_routers(nd, ni);
     }
     ni->running = (uint8_t)running;

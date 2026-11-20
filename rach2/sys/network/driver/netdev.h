@@ -741,12 +741,11 @@ int netdev_running(const struct netdev *nd);
 /**
  * Let go of the card of `nd`, an interface of the probe's, so that another
  * driver, vfio-pci above all, can take the function: the interface is set
- * down and stays, with its name, index and the addresses a down interface
- * keeps, without a carrier, dropping what is sent on it and refusing to be
- * set up; the driver stops the card, and the function
- * has no owner. 0, or -ENODEV for an interface that is no card, a card that
- * is away already or a driver that cannot stop. Called under the big kernel
- * lock with interrupts on; it waits while the card drains.
+ * down and keeps its name and index. Its addresses and routes are removed.
+ * It drops frames and refuses a request to bring it up. The driver stops
+ * the card and releases the PCI function. Return zero on success or
+ * -ENODEV for an absent, released or unstoppable card. Called under the
+ * big kernel lock with interrupts on. Waits for the card to drain.
  */
 int netdev_release(struct netdev *nd);
 
