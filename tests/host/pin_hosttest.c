@@ -728,6 +728,7 @@ static void io_rows(void)
               vm_insert(&mm_a.vm, addr - P, addr, RW, VM_ANON) == 0,
           "a device range beside one RAM page");
     vma = vm_find(&mm_a.vm, addr);
+    vma->pgoff = 0; /* a device's mmap at offset 0, not an anonymous region's */
     check(vm_device_map(vma, &io_ops, &io_object, VM_PROT_UC) == 0, "the BAR is mapped");
     memlock(0);
     check(pin_user(&mm_a, addr, 2 * P, PIN_IO | PIN_WRITE, &holder, &p) == 0 && pin_count(p) == 2 &&

@@ -618,12 +618,13 @@ static int model_deliver(const unsigned char *data, unsigned len, unsigned char 
  * The window pointer and the PCI record are part of that state, and are what
  * `e1000_stop` reads to decide whether a register may be written at all; a
  * reset that left them set would be a driver that remembers a card the machine
- * no longer has. Every register the driver reads is then seeded with a value
- * that is wrong for the driver, so a driver that skips a write, or keeps bits
- * it should clear, fails a check it would pass against registers of zeroes. The
- * register pair has a valid station address, the QEMU case and the one the
- * driver prefers, and the EEPROM a different one, so a driver that reads the
- * wrong source is seen to.
+ * no longer has. The window a bring-up keeps for the next is dropped too, so
+ * that each row maps it again. Every register the driver reads is then seeded
+ * with a value that is wrong for the driver, so a driver that skips a write,
+ * or keeps bits it should clear, fails a check it would pass against
+ * registers of zeroes. The register pair has a valid station address, the
+ * QEMU case and the one the driver prefers, and the EEPROM a different one,
+ * so a driver that reads the wrong source is seen to.
  */
 static void model_reset(void)
 {
@@ -661,6 +662,8 @@ static void model_reset(void)
     rx_last_len = 0;
     e1000s[0].up = 0;
     e1000s[0].mmio = 0;
+    e1000_window[0] = 0; /* the window a bring-up keeps for the next */
+    e1000_window_at[0] = 0;
     e1000s[0].pci.vendor_id = 0;
     e1000s[0].pci.device_id = 0;
     e1000s[0].rx_cur = 0;

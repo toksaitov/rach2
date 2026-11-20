@@ -3208,6 +3208,24 @@ void ext2_node_meta_dirty(struct ext2_mount *em, struct ext2_node *n)
     spin_unlock_irqrestore(&em->share_lock, flags);
 }
 
+/**
+ * Write a directory's new empty block `b`, every cache block of it, and
+ * flush the disk, before the store of the inode that names it: a failed
+ * store ended the order that kept the block ahead of the inode
+ * (`dir_grow`). 0, or -errno with the block still dirty.
+ */
+static int growth_write(struct ext2_mount *em, uint32_t b)
+{
+    uint64_t off = (uint64_t)b * em->block_size, blk;
+    int rc = 0;
+
+    for (blk = off >> BCACHE_BLOCK_SHIFT;
+         rc == 0 && blk <= (off + em->block_size - 1) >> BCACHE_BLOCK_SHIFT; blk++) {
+        rc = bcache_sync_block(em->dev, blk);
+    }
+    return rc == 0 ? bcache_flush(em->dev) : rc;
+}
+
 /** `inode_encode` of `n` over the `len` bytes of its slot at `raw`; return
  * 1 when a byte other than a time's changes, else 0. The caller publishes
  * that change with `ext2_node_meta_dirty` after storing the table buffer. */
@@ -3329,6 +3347,13 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
     }
     if (!fresh && ext2_writeback_keeps(em, n)) {
         return 0;
+    }
+    if (n->growth_block) {
+        rc = growth_write(em, n->growth_block);
+        if (rc != 0) {
+            return rc;
+        }
+        n->growth_block = 0;
     }
     rc = ext2_write_bytes(em, at, raw, len, how | WRITE_KIND(READ_SLOT));
     if (changed) {

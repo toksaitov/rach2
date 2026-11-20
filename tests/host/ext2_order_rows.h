@@ -122,7 +122,8 @@ static void order_lost_row(void)
     }
     memset(data, 0x6c, sizeof(data));
     f = make_file(mnt.root, "lost", &rc);
-    check(f && write_at(f, data, 4096, 0) == 0, "a file of one block, in the cache");
+    check(f && OPS->sync(&mnt) == 0 && write_at(f, data, 4096, 0) == 0,
+          "a file with its name on disk and its first block in the cache");
     if (!f) {
         return;
     }

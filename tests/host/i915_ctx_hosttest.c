@@ -683,13 +683,18 @@ static struct drm_i915_private *fresh(struct i915_model *m)
     return &dev;
 }
 
-/** Close the files, unplug and stop the rings, and take the model off. */
+/** Close the files, unplug and stop the rings, and take the model off.
+ * A status page whose writes the rings' teardown could not mask, as after
+ * the device is gone, stays the function's until its reset, which the
+ * park and drop here stand in for. */
 static void done(struct i915_model *m)
 {
     i915_driver_postclose(&dev.drm, &file_a);
     i915_driver_postclose(&dev.drm, &file_b);
     i915_requests_unplug(&dev);
     i915_gt_fini(&dev);
+    i915_ggtt_carry_park(&dev);
+    i915_ggtt_carry_drop(&dev.pci);
     CHECK("done: every context image and range given back", ranges_held == 0);
     i915_model_free(m);
     bus = 0;

@@ -699,6 +699,12 @@ int block_flush(block_device_t *dev)
     return 0;
 }
 
+/** Flush the model's device, whose writes are already durable. */
+int bcache_flush(block_device_t *dev)
+{
+    return block_flush(dev);
+}
+
 /**
  * Build the volume afresh: one group of 64 blocks of 4 KiB, of which the
  * last `available` are free; its descriptor names the block bitmap at

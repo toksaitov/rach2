@@ -1064,7 +1064,8 @@ static void order_again(block_device_t *dev, uint64_t blk, int order)
  *
  * A sync writes owner 7's data block before the indirect block that names
  * it and that before the double indirect block above, though their numbers
- * run the other way, and another owner's block in block order. A pointer
+ * run the other way; the blocks that wait for none, another owner's among
+ * them, go first and in block order, so one flush covers them. A pointer
  * block does not wait for data dirtied after its last mark. The shared
  * tree, owner 0, as a directory's, waits for the shared blocks and not a
  * file's; a file's tree waits for a shared block dirtied before it, such as
@@ -1078,8 +1079,8 @@ static void pointer_order_rows(void)
     dirty_pointer_for(&vast, 50, 7, 2);
     dirty_for(&vast, 55, 9, 0);
     writes_made = 0;
-    check(bcache_sync(&vast) == 0 && writes_made == 4 && writes_lba[0] == 72 * 8 &&
-              writes_lba[1] == 61 * 8 && writes_lba[2] == 50 * 8 && writes_lba[3] == 55 * 8,
+    check(bcache_sync(&vast) == 0 && writes_made == 4 && writes_lba[0] == 55 * 8 &&
+              writes_lba[1] == 72 * 8 && writes_lba[2] == 61 * 8 && writes_lba[3] == 50 * 8,
           "data goes before its indirect block and that before the double indirect, by any "
           "numbers");
 

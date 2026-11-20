@@ -159,6 +159,11 @@ need zstd
 probe zstd --version
 admin apt-get install -y zstd
 
+# netguest's preparation runs one at a time on its cache under flock.
+need flock
+probe flock --version
+admin apt-get install -y util-linux
+
 need mkfs.exfat fsck.exfat
 probe command -v @TOOL@
 admin apt-get install -y exfatprogs
@@ -242,6 +247,10 @@ need xz zstd
 probe @TOOL@ --version
 user brew install xz zstd
 
+need flock
+probe command -v flock
+user brew install flock
+
 # macOS has these itself.
 need ar awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp nc shasum curl openssl hdiutil newfs_exfat
 probe command -v @TOOL@
@@ -264,7 +273,7 @@ need ar
 probe Runs C:\msys64\ucrt64\bin\ar.exe
 manual # the existing UCRT64 binutils, beside its compiler
 
-need make awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp openssl git curl python3 nc shasum tmux sha256sum sha512sum xz zstd
+need make awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp openssl git curl python3 nc shasum tmux sha256sum sha512sum xz zstd flock
 probe Has C:\msys64\usr\bin\@TOOL@.exe
 manual # use the supporting programs already present in MSYS2
 

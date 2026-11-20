@@ -901,7 +901,8 @@ static void lowest_prefix(void)
     clear_addresses();
 }
 
-/** An advertised on-link prefix and a manual address share one FIB entry. */
+/** An advertised on-link prefix and a manual address share one FIB entry,
+ * which stays the router's: an advertisement of lifetime 0 removes it. */
 static void advertised_prefix(void)
 {
     uint8_t dst[16] = {0x20, 1};
@@ -909,7 +910,7 @@ static void advertised_prefix(void)
     prefix_address(1, 0, 0, 256, 10);
     CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
     route6_learn(&card, dst, 64, 0, 256, 0);
-    CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 10) == 1);
+    CHECK(!prefix_rows(256, ROUTE6_PROTO_KERNEL, 0));
     route6_learn(&card, dst, 64, 0, 256, 22);
     CHECK(prefix_rows(256, ROUTE6_PROTO_KERNEL, 22) == 1);
     clear_addresses();

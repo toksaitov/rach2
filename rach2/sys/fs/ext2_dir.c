@@ -1223,13 +1223,15 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
  * leaves an empty block and no name, so that a caller that frees the inode it
  * would have named frees one with no name, and leaves the directory marked
  * (`ext2_node_dirty`), so that the next change of its entries, which may put
- * a name in that block, stores and writes the inode first. A failure before the
- * size, of the block's write or of `ext2_map_alloc`'s store of a new indirect
- * block, leaves the pointer in memory past the size, where no entry is looked
- * for, with `i_blocks` raised under the mark its change set
- * (`ext2_node_blocks_add`), and the next growth maps the same block and writes
- * it again. Linux
- * writes the inode after the
+ * a name in that block, stores and writes the inode first. On a mount that
+ * writes back the order on the empty block ends with the call, so the
+ * directory keeps the block (`growth_block`) and its next store of the
+ * inode, by whichever path, writes the block and flushes the disk first. A
+ * failure before the size, of the block's write or of `ext2_map_alloc`'s
+ * store of a new indirect block, leaves the pointer in memory past the
+ * size, where no entry is looked for, with `i_blocks` raised under the mark
+ * its change set (`ext2_node_blocks_add`), and the next growth maps the
+ * same block and writes it again. Linux writes the inode after the
  * entry (`ext2_handle_dirsync`), which puts both on the device before the next
  * step too. 0, -EFBIG for a directory that would pass 4 GiB less a block,
  * -ENOSPC, decided before any block is taken for the block and the pointer
@@ -1270,6 +1272,9 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
     ext2_stamp(d, T_MTIME | T_CTIME);
     rc = dir_settle(em, d);
     if (rc != 0) {
+        if (!ext2_em_strict(em)) {
+            d->growth_block = b;
+        }
         return rc;
     }
     d->add_from = index << em->block_shift;
