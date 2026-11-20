@@ -148,13 +148,14 @@ int fat32_name_short(const char *name, uint8_t *name11, uint8_t *lower)
 }
 
 /** The byte that unit `u` of a long name takes in its alias: an ASCII
- * character the short set has, or one of code page 437's above 0x7F, in
- * upper case; `_` for anything else. */
+ * character the short set has, or one of code page 437's from 0x7F up, in
+ * upper case; `_` for anything else. 0x7F is kept, as Linux's
+ * to_shortname_char keeps it. */
 static uint8_t alias_byte(uint32_t u)
 {
     uint8_t c = cp437_byte(u);
 
-    if (c >= 0x80 || (c != 0 && short_char(c))) {
+    if (c >= 0x7F || (c != 0 && short_char(c))) {
         return cp437_fold(c, 1);
     }
     return '_';

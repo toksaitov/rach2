@@ -37,11 +37,12 @@ int fat32_name_short(const char *name, uint8_t *name11, uint8_t *lower);
  * numbered 1.
  *
  * The base is up to six units before the last dot and the extension up to
- * three after it. Dots and spaces are dropped; a unit that code page 437
- * holds is stored as its byte, in upper case by the code page's own pairs;
- * a unit outside the short set or the code page, each half of a surrogate
- * pair among them, becomes `_`; an empty base becomes `_`. This is the
- * character mapping of Linux's vfat with codepage=437.
+ * three after it. Dots and spaces are dropped. A letter, a digit or a
+ * character of the short set, and a unit of code page 437 from 0x7F up,
+ * is stored as its byte, in upper case by the code page's own pairs; any
+ * other unit, each half of a surrogate pair among them, becomes `_`; an
+ * empty base becomes `_`. This is the character mapping of Linux's vfat
+ * with codepage=437.
  */
 void fat32_alias(const uint16_t *units, uint32_t count, uint8_t *name11);
 

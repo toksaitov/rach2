@@ -113,6 +113,11 @@ static void cp437_rows(void)
     check(eq11(name11, "_~1     TXT"), "the euro sign is not in code page 437 and becomes _");
     alias_of("\xE2\x95\x94x.\xC2\xB1");
     check(eq11(name11, "\xC9X~1    \xF1  "), "box drawing and plus-minus are encoded as they are");
+    alias_of("long\x7fname.txt");
+    check(eq11(name11, "LONG\x7FN~1TXT"),
+          "DEL, 0x7F, is kept in the alias, as Linux's to_shortname_char");
+    alias_of("a+b,c.t;x");
+    check(eq11(name11, "A_B_C~1 T_X"), "ASCII outside the short set below 0x7F still becomes _");
 }
 
 /* What fatcommon.c needs of the kernel: the walk's lock and the clock,
