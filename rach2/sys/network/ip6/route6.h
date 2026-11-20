@@ -43,6 +43,7 @@ struct route6_row {
     uint8_t gw[16]; /* :: for a route on the link */
     uint32_t metric;
     uint8_t proto;    /* ROUTE6_PROTO_* */
+    uint8_t local;    /* a host route in the local table */
     uint32_t expires; /* seconds left, or 0 for a route that does not expire */
 };
 
@@ -59,20 +60,10 @@ int route6_at(int n, struct route6_row *out);
  */
 struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via);
 
-/**
- * Add the route to `dst`/`plen` by `nd`, through the gateway `gw`, NULL or
- * :: for on the link, at `metric`, made by `proto`. Returns 0, -EINVAL for
- * a prefix past 128, a NULL `nd` or `lo`, or a gateway that is a group or
- * this machine's, -EEXIST for a route of that prefix, card, gateway and
- * metric, or -ENOSPC for a full table. Takes net_lock.
- */
-int route6_add(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw, uint32_t metric,
-               int proto);
-
-/** Remove the table's route to `dst`/`plen` by `nd`, or by any card for
- * NULL, through `gw`, or any gateway for NULL: 0, or -ESRCH. Takes
- * net_lock. */
-int route6_del(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw);
+/** Apply a netlink or ioctl route under net_lock. A zero metric or
+ * protocol in a deletion omits that selector. Replacement validates
+ * the new route before removing the old one. */
+int route6_change_row(struct netdev *nd, const struct route6_row *r, int del, int replace);
 
 /**
  * Put in the table, or refresh, the route a router advertised: to

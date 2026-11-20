@@ -194,6 +194,9 @@ struct netdev_ops {
  */
 struct netdev_addr6 {
     uint8_t addr[16];
+    uint8_t peer[16]; /* :: for no distinct destination */
+    uint32_t metric;  /* zero selects the default prefix metric */
+    uint8_t noprefix, peer_prefix, deleted_routes;
     uint8_t prefix;     /* the on-link prefix's length, 0 to 128 */
     uint8_t scope;      /* NETDEV_SCOPE_* */
     uint8_t flags;      /* NETDEV_A6_* */
@@ -469,11 +472,11 @@ struct netdev_rt {
     uint32_t prefsrc; /* specified source, or zero for source selection */
 };
 
-/* The lookups `netdev_route` made, and those that found no route, which
- * /proc/net/stat/rt_cache reports. */
 /** Select the route to dst. On success copy its gateway and source to row. */
 struct netdev *netdev_route_lookup(uint32_t dst, int ifindex, struct netdev_rt *row);
 
+/* The lookups `netdev_route` made, and those that found no route, which
+ * /proc/net/stat/rt_cache reports. */
 extern uint32_t netdev_route_lookups;
 extern uint32_t netdev_route_misses;
 

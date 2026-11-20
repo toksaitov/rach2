@@ -206,12 +206,13 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
                          uint32_t valid, uint32_t preferred)
 {
-    (void)nd;
-    (void)addr;
-    (void)prefix;
-    (void)flags;
-    (void)valid;
-    (void)preferred;
+    struct netdev_addr6 *a = &nd->addr6[nd->naddr6++];
+    k_memset(a, 0, sizeof(*a));
+    k_memcpy(a->addr, addr, 16);
+    a->prefix = (uint8_t)prefix;
+    a->flags = (uint8_t)flags;
+    a->valid = valid;
+    a->preferred = preferred;
     return 0;
 }
 
@@ -228,8 +229,8 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 /** Model netconf_del_address6 with no addresses, routes or sockets. */
 int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 {
-    (void)nd;
-    (void)addr;
+    CHECK(nd->naddr6 == 1 && ip6_equal(nd->addr6[0].addr, addr));
+    nd->naddr6 = 0;
     return 0;
 }
 
@@ -244,8 +245,10 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 /** Model netdev_addr6_of with no addresses, routes or sockets. */
 struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)
 {
-    (void)nd;
-    (void)addr;
+    int i;
+    for (i = 0; i < nd->naddr6; i++)
+        if (ip6_equal(addr, nd->addr6[i].addr))
+            return &nd->addr6[i];
     return 0;
 }
 
@@ -363,17 +366,14 @@ void netif_ns_lo_set_up(struct netdev *nd, int up)
     (void)up;
 }
 
-/** Model route6_add with no addresses, routes or sockets. */
-int route6_add(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw, uint32_t metric,
-               int proto)
+/** The generic family model has no IPv6 routes to change. */
+int route6_change_row(struct netdev *nd, const struct route6_row *r, int del, int replace)
 {
     (void)nd;
-    (void)dst;
-    (void)plen;
-    (void)gw;
-    (void)metric;
-    (void)proto;
-    return 0;
+    (void)r;
+    (void)del;
+    (void)replace;
+    return -ESRCH;
 }
 
 /** Model route6_at with no addresses, routes or sockets. */
@@ -381,16 +381,6 @@ int route6_at(int n, struct route6_row *out)
 {
     (void)n;
     (void)out;
-    return 0;
-}
-
-/** Model route6_del with no addresses, routes or sockets. */
-int route6_del(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw)
-{
-    (void)nd;
-    (void)dst;
-    (void)plen;
-    (void)gw;
     return 0;
 }
 
@@ -783,6 +773,31 @@ static void stats_test(struct socket *route)
     CHECK(netlink_pending(route) == -1);
 }
 
+/** Exercise netlink's local and peer selectors and extended address flags. */
+static void peer_address(void)
+{
+    uint8_t local[16] = {0x20, 1}, peer[16] = {0x30, 1};
+    struct nl_build b = {0};
+    uint8_t *ifa = msg_start(&b, request, RTM_NEWADDR, 0, 8);
+    uint32_t body;
+    ifa[0] = AF_INET6;
+    ifa[1] = 64;
+    put32(ifa + 4, (uint32_t)card.index);
+    msg_attr(request, IFA_LOCAL, local, 16);
+    msg_attr(request, IFA_ADDRESS, peer, 16);
+    msg_attr32(request, IFA_FLAGS, IFA_F_NOPREFIXROUTE | NETDEV_A6_NODAD);
+    msg_attr32(request, IFA_RT_PRIORITY, 57);
+    body = get32(request) - NLMSG_HDRLEN;
+    CHECK(addr_change(request, RTM_NEWADDR, NLM_F_EXCL, body) == 0);
+    CHECK(card.naddr6 == 1 && ip6_equal(card.addr6[0].peer, peer));
+    CHECK(card.addr6[0].metric == 57 && card.addr6[0].noprefix);
+    CHECK(addr_change(request, RTM_NEWADDR, NLM_F_EXCL, body) == -EEXIST);
+    ifa[1] = 128;
+    CHECK(addr_change(request, RTM_DELADDR, 0, body) == -EADDRNOTAVAIL && card.naddr6 == 1);
+    ifa[1] = 64;
+    CHECK(addr_change(request, RTM_DELADDR, 0, body) == 0 && !card.naddr6);
+}
+
 /** Register a family and run every row, releasing all sockets and storage. */
 int main(void)
 {
@@ -815,6 +830,7 @@ int main(void)
     CHECK(netlink_open(&route, NETLINK_ROUTE) == 0 && netlink_open(&watch, NETLINK_ROUTE) == 0);
     CHECK(netlink_bind(&a, 77, 0) == 0 && netlink_bind(&route, 77, 0) == 0);
     CHECK(netlink_bind(&b, 77, 0) == -EADDRINUSE);
+    peer_address();
     requests(&a);
     multicast(&a, &b);
     link_policy_test(&route, &watch);

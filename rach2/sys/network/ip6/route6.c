@@ -40,47 +40,77 @@ static void mask_prefix(uint8_t *a, int plen)
     }
 }
 
-/** Whether address `a` of `nd` implies a route: one a program gave or
- * made at link up, of a prefix shorter than 128 not implied by an address
- * before it. */
-static int implies(const struct netdev *nd, int a)
+enum addr6_route_kind { PREFIX6 = 1, PEER6 = 2, LOCAL6 = 4, PEER_PREFIX6 = 8 };
+
+/** Describe one route installed by an address, when it is in force. */
+static int address_route(const struct netdev *nd, int a, int kind, struct route6_row *r)
 {
     const struct netdev_addr6 *x = &nd->addr6[a];
-    int i;
-
-    if (x->prefix >= 128 || x->proto == NETDEV_PROTO_KERNEL_RA) {
+    const uint8_t *dst = x->addr;
+    int plen = x->prefix;
+    if (!nd->up || (x->deleted_routes & kind))
         return 0;
-    }
-    for (i = 0; i < a; i++) {
-        const struct netdev_addr6 *y = &nd->addr6[i];
-
-        if (y->prefix == x->prefix && y->proto != NETDEV_PROTO_KERNEL_RA &&
-            ip6_prefix_match(y->addr, x->addr, x->prefix)) {
+    if (kind == PREFIX6 && (x->noprefix || x->proto == NETDEV_PROTO_KERNEL_RA))
+        return 0;
+    if (kind == PEER6 || kind == PEER_PREFIX6) {
+        if (ip6_is_unspecified(x->peer) || (kind == PEER_PREFIX6 && !x->peer_prefix))
             return 0;
-        }
+        dst = x->peer;
+    }
+    if (kind == LOCAL6 || kind == PEER6) {
+        if (x->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED))
+            return 0;
+        plen = 128;
+    }
+    k_memset(r, 0, sizeof(*r));
+    r->ifindex = nd->index;
+    r->plen = (uint8_t)plen;
+    k_memcpy(r->dst, dst, IP6_ADDR_LEN);
+    mask_prefix(r->dst, plen);
+    r->local = kind == LOCAL6;
+    r->metric = r->local ? 0 : x->metric ? x->metric : ROUTE6_METRIC_PREFIX;
+    r->proto = ROUTE6_PROTO_KERNEL;
+    if ((kind == PREFIX6 || kind == PEER_PREFIX6) && x->valid != NETDEV_LIFETIME_FOREVER) {
+        uint64_t elapsed = tick_div(tick_count() - x->since, TICK_HZ, 0);
+        r->expires = elapsed < x->valid ? x->valid - (uint32_t)elapsed : 0;
     }
     return 1;
 }
 
+/** Whether two address routes name the same FIB entry on one device. */
+static int same_prefix(const struct route6_row *r, const struct route6_row *other)
+{
+    return r->plen == other->plen && r->local == other->local && r->metric == other->metric &&
+           ip6_equal(r->dst, other->dst);
+}
+
+/** Whether an earlier address route supplies this entry. */
+static int already_listed(const struct netdev *nd, int a, int kind, const struct route6_row *r)
+{
+    struct route6_row prior;
+    int i, k;
+    for (i = 0; i <= a; i++) {
+        for (k = PREFIX6; k <= PEER_PREFIX6; k *= 2) {
+            if (a == i && k == kind)
+                return 0;
+            if (address_route(nd, i, k, &prior) && same_prefix(r, &prior))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 int route6_at(int n, struct route6_row *out)
 {
-    int i, a;
+    int i, a, k;
 
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
-
         for (a = 0; a < nd->naddr6; a++) {
-            if (!implies(nd, a) || n-- != 0) {
-                continue;
+            for (k = PREFIX6; k <= PEER_PREFIX6; k *= 2) {
+                if (address_route(nd, a, k, out) && !already_listed(nd, a, k, out) && n-- == 0)
+                    return 1;
             }
-            k_memset(out, 0, sizeof(*out));
-            out->ifindex = nd->index;
-            k_memcpy(out->dst, nd->addr6[a].addr, IP6_ADDR_LEN);
-            out->plen = nd->addr6[a].prefix;
-            mask_prefix(out->dst, out->plen);
-            out->metric = ROUTE6_METRIC_PREFIX;
-            out->proto = ROUTE6_PROTO_KERNEL;
-            return 1;
         }
     }
     for (i = 0; i < ROUTE6_MAX; i++) {
@@ -95,6 +125,7 @@ int route6_at(int n, struct route6_row *out)
         k_memcpy(out->gw, r->gw, IP6_ADDR_LEN);
         out->metric = r->metric;
         out->proto = r->proto;
+        out->local = 0;
         out->expires = 0;
         if (r->expires != 0 && r->expires > tick_count()) {
             out->expires = (uint32_t)tick_div(r->expires - tick_count() + TICK_HZ - 1, TICK_HZ, 0);
@@ -143,8 +174,8 @@ struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via)
     for (n = 0; route6_at(n, &r); n++) {
         struct netdev *nd = card_of(r.ifindex);
 
-        if (!nd || !nd->up || nd6_disabled(nd) || (ifindex != 0 && r.ifindex != ifindex) ||
-            !ip6_prefix_match(dst, r.dst, r.plen)) {
+        if (r.local || !nd || !nd->up || nd6_disabled(nd) ||
+            (ifindex != 0 && r.ifindex != ifindex) || !ip6_prefix_match(dst, r.dst, r.plen)) {
             continue;
         }
         usable = ip6_is_unspecified(r.gw) || nd6_router_usable(nd, r.gw);
@@ -161,7 +192,7 @@ struct netdev *route6_lookup(const uint8_t *dst, int ifindex, uint8_t *via)
 }
 
 /** The table's route of `nd`, `dst`/`plen` (already masked) and `gw`, of
- * `metric` unless it is 0xFFFFFFFF; any card for a NULL `nd` and any
+ * `metric`; any card for a NULL `nd` and any
  * gateway for a NULL `gw`. -1 for none. */
 static int find(const struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw,
                 uint32_t metric)
@@ -172,7 +203,7 @@ static int find(const struct netdev *nd, const uint8_t *dst, int plen, const uin
         struct route6 *r = &table6[i];
 
         if (r->nd && (!nd || r->nd == nd) && r->plen == plen && ip6_equal(r->dst, dst) &&
-            (!gw || ip6_equal(r->gw, gw)) && (metric == 0xFFFFFFFFu || r->metric == metric)) {
+            (!gw || ip6_equal(r->gw, gw)) && r->metric == metric) {
             return i;
         }
     }
@@ -192,63 +223,124 @@ static int free_slot(void)
     return -1;
 }
 
-int route6_add(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw, uint32_t metric,
-               int proto)
+/** Match an IPv6 prefix and any selectors supplied for deletion. */
+static int matches(const struct route6_row *r, const struct route6_row *want)
 {
-    uint8_t d[IP6_ADDR_LEN], g[IP6_ADDR_LEN];
-    uint32_t lock;
-    int i, rc = 0;
-
-    if (!nd || nd->loopback || plen < 0 || plen > 128) {
-        return -EINVAL;
-    }
-    k_memcpy(d, dst, IP6_ADDR_LEN);
-    mask_prefix(d, plen);
-    k_memset(g, 0, sizeof(g));
-    if (gw) {
-        if (ip6_is_multicast(gw) || ip6_is_loopback(gw) || ip6_is_v4mapped(gw)) {
-            return -EINVAL;
-        }
-        k_memcpy(g, gw, IP6_ADDR_LEN);
-    }
-    lock = net_lock();
-    if (!ip6_is_unspecified(g) && netdev_owner6(g)) {
-        rc = -EINVAL;
-    } else if (find(nd, d, plen, g, metric) >= 0) {
-        rc = -EEXIST;
-    } else if ((i = free_slot()) < 0) {
-        rc = -ENOSPC;
-    } else {
-        table6[i].nd = nd;
-        k_memcpy(table6[i].dst, d, IP6_ADDR_LEN);
-        table6[i].plen = (uint8_t)plen;
-        k_memcpy(table6[i].gw, g, IP6_ADDR_LEN);
-        table6[i].metric = metric;
-        table6[i].proto = (uint8_t)proto;
-        table6[i].expires = 0;
-    }
-    net_unlock(lock);
-    return rc;
+    return r->local == want->local && r->plen == want->plen && ip6_equal(r->dst, want->dst) &&
+           (!want->proto || r->proto == want->proto) &&
+           (!want->metric || r->metric == want->metric) &&
+           (ip6_is_unspecified(want->gw) || ip6_equal(r->gw, want->gw));
 }
 
-int route6_del(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t *gw)
+/** Find or withdraw all address references to one generated prefix. */
+static int generated6(const struct netdev *only, const struct route6_row *want, int remove)
 {
-    uint8_t d[IP6_ADDR_LEN];
-    uint32_t lock;
-    int i;
+    struct route6_row r;
+    int i, a, k, found = 0;
+    for (i = 0; i < netdev_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+        if (only && nd != only)
+            continue;
+        for (a = 0; a < nd->naddr6; a++) {
+            for (k = PREFIX6; k <= PEER_PREFIX6; k *= 2) {
+                if (address_route(nd, a, k, &r) && matches(&r, want)) {
+                    if (!remove)
+                        return 1;
+                    nd->addr6[a].deleted_routes |= (uint8_t)k;
+                    found = 1;
+                }
+            }
+        }
+        if (found)
+            break;
+    }
+    return found;
+}
 
-    if (plen < 0 || plen > 128) {
-        return -ESRCH;
+/** The first table slot matching the requested prefix and selectors. */
+static int table_match(const struct netdev *nd, const struct route6_row *want)
+{
+    int i;
+    for (i = 0; i < ROUTE6_MAX; i++) {
+        struct route6 *r = &table6[i];
+        if (!want->local && r->nd && (!nd || nd == r->nd) && r->plen == want->plen &&
+            ip6_equal(want->dst, r->dst) && (!want->proto || want->proto == r->proto) &&
+            (!want->metric || want->metric == r->metric) &&
+            (ip6_is_unspecified(want->gw) || ip6_equal(want->gw, r->gw)))
+            return i;
     }
-    k_memcpy(d, dst, IP6_ADDR_LEN);
-    mask_prefix(d, plen);
+    return -1;
+}
+
+/** Check the new route before consuming or replacing a table entry. */
+static int valid_gateway(struct netdev *nd, const uint8_t *gw)
+{
+    uint8_t via[IP6_ADDR_LEN];
+    if (ip6_is_unspecified(gw))
+        return 0;
+    if (ip6_is_multicast(gw) || ip6_is_loopback(gw) || ip6_is_v4mapped(gw) || netdev_owner6(gw))
+        return -EINVAL;
+    if (!ip6_link_scoped(gw) && (route6_lookup(gw, nd->index, via) != nd || !ip6_equal(via, gw)))
+        return -EHOSTUNREACH;
+    return 0;
+}
+
+int route6_change_row(struct netdev *nd, const struct route6_row *input, int del, int replace)
+{
+    struct route6_row r = *input, selector;
+    uint32_t lock;
+    int i, generated, rc;
+    if (r.plen > 128 || (!del && !nd))
+        return -EINVAL;
+    if (nd && nd->loopback)
+        return -EOPNOTSUPP;
+    mask_prefix(r.dst, r.plen);
     lock = net_lock();
-    i = find(nd, d, plen, gw, 0xFFFFFFFFu);
-    if (i >= 0) {
-        table6[i].nd = 0;
+    if (del) {
+        if (generated6(nd, &r, 1)) {
+            net_unlock(lock);
+            return 0;
+        }
+        i = table_match(nd, &r);
+        if (i >= 0)
+            table6[i].nd = 0;
+        net_unlock(lock);
+        return i >= 0 ? 0 : -ESRCH;
     }
+    rc = nd->up ? valid_gateway(nd, r.gw) : -ENETDOWN;
+    if (rc || r.local) {
+        net_unlock(lock);
+        return rc ? rc : -EOPNOTSUPP;
+    }
+    if (!r.metric)
+        r.metric = 1024;
+    selector = r;
+    selector.proto = 0;
+    if (replace)
+        k_memset(selector.gw, 0, sizeof(selector.gw));
+    generated = generated6(nd, &selector, 0);
+    i = replace ? table_match(nd, &selector) : find(nd, r.dst, r.plen, r.gw, r.metric);
+    if ((generated || i >= 0) && !replace) {
+        net_unlock(lock);
+        return -EEXIST;
+    }
+    if (i < 0)
+        i = free_slot();
+    if (i < 0) {
+        net_unlock(lock);
+        return -ENOSPC;
+    }
+    if (generated)
+        generated6(nd, &selector, 1);
+    table6[i].nd = nd;
+    k_memcpy(table6[i].dst, r.dst, IP6_ADDR_LEN);
+    table6[i].plen = r.plen;
+    k_memcpy(table6[i].gw, r.gw, IP6_ADDR_LEN);
+    table6[i].metric = r.metric;
+    table6[i].proto = r.proto ? r.proto : ROUTE6_PROTO_BOOT;
+    table6[i].expires = 0;
     net_unlock(lock);
-    return i >= 0 ? 0 : -ESRCH;
+    return 0;
 }
 
 /** A full table refuses the route; the advertisement that would refresh it

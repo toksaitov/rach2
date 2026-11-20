@@ -639,25 +639,22 @@ static int32_t in6_addr_ioctl(uint32_t request, uintptr_t arg)
         return -EINVAL;
     }
     if (request == SIOCDIFADDR) {
-        return netconf_del_address6(nd, r.addr);
+        uint32_t lock = net_lock();
+        struct netdev_addr6 *a = netdev_addr6_of(nd, r.addr);
+        int rc = a && a->prefix == r.prefixlen ? netconf_del_address6(nd, r.addr) : -EADDRNOTAVAIL;
+        net_unlock(lock);
+        return rc;
     }
     return netconf_add_address6(nd, r.addr, (int)r.prefixlen, NETDEV_A6_PERMANENT,
                                 NETDEV_LIFETIME_FOREVER, NETDEV_LIFETIME_FOREVER);
 }
 
-/**
- * SIOCADDRT and SIOCDELRT on an AF_INET6 socket: add the route of the
- * caller's `in6_rtmsg` to the IPv6 table (`route6_add`), through its
- * gateway when RTF_GATEWAY is set, by the interface of its index, or with
- * none by the one its gateway is reached by, at its metric, 1024 for 0 as
- * on Linux; or remove the table's route of that prefix by that interface,
- * or any, through that gateway, or any (`route6_del`). Root only. -ENODEV
- * for an index no interface has or a route no interface carries,
- * -EOPNOTSUPP on `lo`, and -EINVAL for a prefix past 128.
- */
+/** Apply a privileged IPv6 route ioctl to the same table as rtnetlink.
+ * A zero metric selects the default on add and any metric on delete. */
 static int32_t in6_route_ioctl(uint32_t request, uintptr_t arg)
 {
     struct in6_rtmsg_shape r;
+    struct route6_row row = {0};
     uint8_t via[IP6_ADDR_LEN];
     const uint8_t *gw;
     struct netdev *nd = 0;
@@ -686,13 +683,14 @@ static int32_t in6_route_ioctl(uint32_t request, uintptr_t arg)
     if (nd && nd->loopback) {
         return -EOPNOTSUPP;
     }
-    if (request == SIOCDELRT) {
-        return route6_del(nd, r.dst, r.dst_len, gw);
-    }
-    if (!nd) {
+    if (!nd && request == SIOCADDRT)
         return -ENODEV;
-    }
-    return route6_add(nd, r.dst, r.dst_len, gw, r.metric != 0 ? r.metric : 1024, ROUTE6_PROTO_BOOT);
+    row.plen = (uint8_t)r.dst_len;
+    row.metric = r.metric;
+    k_memcpy(row.dst, r.dst, IP6_ADDR_LEN);
+    if (gw)
+        k_memcpy(row.gw, gw, IP6_ADDR_LEN);
+    return route6_change_row(nd, &row, request == SIOCDELRT, 0);
 }
 
 int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)

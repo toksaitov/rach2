@@ -420,88 +420,47 @@ either leaves the interface unchanged.
 .It Dv RTM_NEWADDR , RTM_DELADDR
 Give an interface the address in
 .Dv IFA_LOCAL
-with the prefix's mask, its first or one more of at most seven, which a
-dump reports with
-.Dv IFA_F_SECONDARY ,
-or take one away; when the first goes, the next takes its place, as
-Linux's
-.Va promote_secondaries
-has it.
-While an IPv4 address remains, taking one away keeps the gateway and the
-added routes, as on Linux; taking the last drops them.
+with the requested prefix length.
+A distinct
+.Dv IFA_ADDRESS
+names the peer.
+The IPv4 prefix and subnet broadcast are derived from the destination.
+Deleting a primary also deletes its same-prefix secondaries.
+An unrelated primary survives.
+Removing the last IPv4 address flushes all routes through the interface.
+A route with a specified preferred source goes when that source ceases to be local.
+.Pp
 For
 .Dv AF_INET6 ,
-the address in
-.Dv IFA_LOCAL
-or
-.Dv IFA_ADDRESS ,
-of any interface,
-.Ql lo
-among them, one of at most eight: it is tentative until duplicate address
-detection passes, unless the request's flags or
-.Dv IFA_FLAGS
-have
-.Dv IFA_F_NODAD ,
-lives for the preferred and valid seconds of an
-.Dv IFA_CACHEINFO ,
-and is permanent without one; its prefix becomes a route of metric 256.
-Adding an address it has is
-.Er EEXIST
-under
-.Dv NLM_F_EXCL ,
-one past the seven
-.Er ENOSPC ,
-and removing one it does not have is
-.Er EADDRNOTAVAIL .
+an address gets a local host route when it becomes usable and its peer
+gets a host route on the link.
+The prefix route defaults to metric 256.
+.Dv IFA_RT_PRIORITY
+sets the prefix metric and
+.Dv IFA_F_NOPREFIXROUTE
+suppresses the prefix route.
+.Dv IFA_F_NODAD
+skips duplicate address detection.
+.Dv IFA_CACHEINFO
+gives the preferred and valid lifetimes in seconds.
+An address with no lifetime attribute is permanent.
+Removal matches the local address and prefix length.
+Removing the last IPv6 address preserves independent routes.
+Taking the interface down drops its IPv6 addresses and routes.
 .It Dv RTM_NEWROUTE , RTM_DELROUTE
-A default route with no
+A direct, gateway or default route uses the interface in
+.Dv RTA_OIF .
+An IPv4 gateway must be reachable through a link route.
 .Dv RTA_PRIORITY
-sets or clears the gateway of the interface
-.Dv RTA_OIF
-names, or of the one whose subnet has the gateway; adding one where there
-is one is
-.Er EEXIST
-unless
+is the metric, which defaults to 0 for IPv4 and 1024 for IPv6.
+A lookup takes the longest matching prefix and then the lowest metric.
 .Dv NLM_F_REPLACE
-asks to replace it.
-Adding the route an interface's subnet implies is
-.Er EEXIST
-under
-.Dv NLM_F_EXCL .
-Any other route goes in the table of 32, by the interface, through
-.Dv RTA_GATEWAY
-or on the link, of the metric
-.Dv RTA_PRIORITY
-gives: a gateway none of the interface's subnets has is
-.Er ENETUNREACH ,
-a route of the same prefix and metric
-.Er EEXIST
-unless
-.Dv NLM_F_REPLACE ,
-a destination with bits outside its prefix
-.Er EINVAL ,
-and a full table
-.Er ENOSPC .
-Removing a route that is not there is
+replaces a matching route after validating the new one.
+A deletion can select an address-generated route as well as an added route.
+The supplied interface, prefix, gateway, protocol and metric must match.
+For IPv4 the scope also selects the route.
+A missing match returns
 .Er ESRCH .
-A lookup takes the longest prefix, then the lowest metric.
-For
-.Dv AF_INET6 ,
-a route of IPv6's table, of at most 32, by the card
-.Dv RTA_OIF
-names, else the one the gateway is reached by, else the first, at the
-metric of
-.Dv RTA_PRIORITY
-or 1024: one there already is acknowledged unless
-.Dv NLM_F_EXCL
-makes it
-.Er EEXIST ,
-.Dv NLM_F_REPLACE
-takes the card's route of the prefix away first,
-.Ql lo
-is
-.Er EOPNOTSUPP ,
-and a route an address implies cannot be removed.
 .It Dv RTM_NEWNEIGH , RTM_DELNEIGH
 Store the ARP mapping of
 .Dv NDA_DST

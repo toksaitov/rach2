@@ -790,6 +790,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
         return rc;
     }
     a = &nd->addr6[nd->naddr6++];
+    k_memset(a, 0, sizeof(*a));
     k_memcpy(a->addr, addr, IP6_ADDR_LEN);
     a->prefix = (uint8_t)prefix;
     a->scope = (uint8_t)ip6_scope(addr);
@@ -848,8 +849,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
  * The interface identifier is the modified EUI-64 of the station address
  * (RFC 4291, appendix A): ff:fe in its middle and the universal bit
  * inverted, or on an interface of IP datagrams, which has none, a random
- * one (`nd6_random_link_local`). The address is kept across a down and up,
- * as an address given by hand is, so only an interface without one gets
+ * one (`nd6_random_link_local`). Only an interface without one gets
  * it. An interface with IPv6 disabled gets nothing.
  */
 static void link_local_up(struct netdev *nd)

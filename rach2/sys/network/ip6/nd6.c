@@ -338,9 +338,6 @@ static void if_set(struct netdev *nd, int key, int32_t value)
     }
     if (key == ND6_DISABLE_IPV6 && value) {
         forget_if(nd, 1);
-        while (nd->naddr6 > 0) {
-            netconf_del_address6(nd, nd->addr6[nd->naddr6 - 1].addr);
-        }
     } else if (key == ND6_DISABLE_IPV6) {
         if (nd->loopback) {
             netconf_add_address6(nd, ip6_loopback, 128, NETDEV_A6_PERMANENT,
@@ -1493,16 +1490,18 @@ static void forget_if(struct netdev *nd, int stop)
             cache6[i].nd = 0;
         }
     }
-    route6_forget(nd, ROUTE6_PROTO_RA);
+    if (!stop) {
+        net_unlock(lock);
+        return;
+    }
+    route6_forget(nd, -1);
     if (ni) {
-        ni->started = (uint8_t)(ni->started && !stop);
+        ni->started = 0;
         ni->rs_left = 0;
         if_defaults(ni);
     }
     for (i = nd->naddr6 - 1; i >= 0; i--) {
-        if (i < nd->naddr6 && nd->addr6[i].proto == NETDEV_PROTO_KERNEL_RA) {
-            netconf_del_address6(nd, nd->addr6[i].addr);
-        }
+        netconf_del_address6(nd, nd->addr6[i].addr);
     }
     net_unlock(lock);
 }
@@ -1618,13 +1617,8 @@ static void dad_timers(struct netdev *nd)
     }
 }
 
-/**
- * A card's timers: a link that went down forgets what it learned from its
- * routers, as a card taken down does, since the link that comes back may be
- * another network, and one that came back detects its addresses and
- * solicits routers again, as Linux does on a carrier change; then the
- * tentative addresses, the router solicitations and the lifetimes.
- */
+/** Drop unresolved neighbours on carrier loss. Keep addresses and routes
+ * until their own lifetimes end or the device is taken down. */
 static void if_timers(struct netdev *nd, struct nd6_if *ni)
 {
     uint8_t ll[IP6_ADDR_LEN];
