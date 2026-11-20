@@ -512,6 +512,9 @@ int synth_sys_count(void);
 #define SYNTH_SYS_SCHED_RR_TIMESLICE     92
 #define SYNTH_SYS_SCHED_RT_PERIOD        93
 #define SYNTH_SYS_SCHED_RT_RUNTIME       94
+/* The entry of net/ipv4/ip_local_port_range, whose value is net.h's
+ * `net_port_range`, which procfs sets through `net_port_range_set`. */
+#define SYNTH_SYS_IP_LOCAL_PORT_RANGE    95
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

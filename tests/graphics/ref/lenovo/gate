@@ -20,10 +20,5 @@ webgl2-fill-chromium 1945.4 higher
 webgl2-alu-chromium 104.00 lower
 webgl1-fill-firefox 1906.5 higher
 webgl1-alu-firefox 104.00 lower
-# deferred: Firefox's WebGL2 fill measured 66% to 96% of Linux's from run to
-# run on 3ffd553f6, since Rach2's scheduler keeps the WebGL host thread
-# waiting behind Firefox's startup threads (rach2/sys/proc/Readme.md,
-# Limits; #5255), until the fair scheduler the owner set as a milestone of
-# its own lands.
-webgl2-fill-firefox 1889.3 higher xfail
+webgl2-fill-firefox 1889.3 higher
 webgl2-alu-firefox 104.00 lower

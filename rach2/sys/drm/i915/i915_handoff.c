@@ -523,6 +523,7 @@ static int32_t handoff_bring_up(const pci_device_t *pdev)
 {
     char name[HANDOFF_NAME];
     int32_t err;
+    int reset;
 
     bdf_name(pdev->bus, devfn_of(pdev), name);
     if (pdev->vendor_id != PCI_VENDOR_INTEL || !i915_id_lookup(pdev->device_id)) {
@@ -534,7 +535,8 @@ static int32_t handoff_bring_up(const pci_device_t *pdev)
         }
         return err;
     }
-    if (pci_reset_method(pdev) == PCI_RESET_NONE) {
+    reset = pci_reset_method(pdev) != PCI_RESET_NONE;
+    if (!reset) {
         klog(KLOG_WARN, "i915", "handoff: %s: no reset; bound as its last owner left it", name);
     } else {
         err = pci_reset_function(pdev, handoff_msleep);
@@ -550,7 +552,7 @@ static int32_t handoff_bring_up(const pci_device_t *pdev)
         bind_undo(pdev);
         klog(KLOG_ERR, "i915", "handoff: %s: not bound: error %d", name, (int)err);
     } else {
-        klog(KLOG_INFO, "i915", "handoff: %s: bound from a reset", name);
+        klog(KLOG_INFO, "i915", "handoff: %s: bound %s a reset", name, reset ? "from" : "without");
     }
     return err;
 }

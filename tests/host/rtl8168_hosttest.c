@@ -333,10 +333,29 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     model_handler_vector = vector;
 }
 
+/* A message the card sent before its stop, which another processor has
+ * taken and not yet run: 1 while it waits; the handler runs it at the
+ * sync, and a vector given back first counts in `model_freed_in_flight`. */
+static int model_in_flight;
+static int model_freed_in_flight;
+static int model_late_runs; /* deliveries run at the sync */
+
+/** Run the message on its way, if any, through the handler on its vector,
+ * as the router does once the stopping processor lets the big lock go. */
+void isr_vector_sync(int vector)
+{
+    if (model_in_flight && model_handler != 0 && model_handler_vector == vector) {
+        model_in_flight = 0;
+        model_late_runs++;
+        model_handler(0);
+    }
+}
+
 /** Record `vector` as given back, and drop the handler registered on it. */
 void isr_free_vector(int vector)
 {
     model_freed_vector = vector;
+    model_freed_in_flight += model_in_flight;
     if (model_handler_vector == vector) {
         model_handler = 0;
         model_handler_vector = -1;
@@ -1247,6 +1266,31 @@ static void check_fifo_waits(void)
           "and refused when the second reset, after the wait, does not complete");
 }
 
+/** The stop with the card's messages on: they are turned off after the
+ * sources are masked, and the vector is given back with its handler once a
+ * message sent before then has run. */
+static void stop_rows(void)
+{
+    unsigned before = model_log_len;
+    int mask_at;
+
+    model_freed_vector = -1;
+    model_in_flight = 1;
+    model_freed_in_flight = 0;
+    model_late_runs = 0;
+    rtl8168_stop(model_iface.dev);
+    mask_at = find_write_value(before, 16, R8168_INTRMASK, 0);
+    CHECK(!model_msi_on && r8168_msi_vector == -1, "the stop turns the messages off");
+    CHECK(model_freed_vector == 48 && model_handler == 0,
+          "and gives the vector back, with its handler");
+    CHECK(model_late_runs == 1 && model_freed_in_flight == 0,
+          "once a message sent before the stop has run its handler");
+    CHECK(m_r16(R8168_INTRMASK) == 0, "which leaves the sources masked after it");
+    model_in_flight = 0;
+    CHECK(mask_at >= 0 && (unsigned)mask_at < model_msi_disable_at,
+          "after the sources were masked");
+}
+
 int main(void)
 {
     int a, b, c, d, e;
@@ -1732,19 +1776,7 @@ int main(void)
         rtl8168_poll(model_iface.dev);
         CHECK(rx_calls == 1, "and the tick still drains the ring");
     }
-    {
-        unsigned before = model_log_len;
-        int mask_at;
-
-        model_freed_vector = -1;
-        rtl8168_stop(model_iface.dev);
-        mask_at = find_write_value(before, 16, R8168_INTRMASK, 0);
-        CHECK(!model_msi_on && r8168_msi_vector == -1, "the stop turns the messages off");
-        CHECK(model_freed_vector == 48 && model_handler == 0,
-              "and gives the vector back, with its handler");
-        CHECK(mask_at >= 0 && (unsigned)mask_at < model_msi_disable_at,
-              "after the sources were masked");
-    }
+    stop_rows();
     model_reset();
     model_msi_refuse = 1;
     rx_calls = 0;

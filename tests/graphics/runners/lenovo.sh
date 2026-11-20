@@ -47,7 +47,8 @@
 # LENOVO_IGT, the IGT stage's directory, LENOVO_CTS, VK-GL-CTS's, and
 # LENOVO_WEBGL, the WebGL suite's sdk/tests, other copies of those;
 # LENOVO_THREADS, when not empty, gives probe.sh -t, its threads' snapshots,
-# which the gate's own runs leave out. A run's environment is guest-env.sh's,
+# which the gate's own runs leave out. LENOVO_ROUNDS names one draw for
+# probe.sh -r, instead of using LENOVO_THREADS. A run uses guest-env.sh,
 # with Mesa's shader cache emptied first. It prints the runner's lines and
 # the judge's, for igt the end of IGT's own output for each subtest worse
 # than the reference, since the case keeps only what it prints, and exits 0
@@ -335,7 +336,13 @@ case $kind in
                 ;;
             probe)
                 mixer_low
-                run user performance probe.sh -b "$which" ${LENOVO_THREADS:+-t} -o "$work/out" || status=$?
+                set -- -b "$which" -o "$work/out"
+                if [ -n "${LENOVO_ROUNDS:-}" ]; then
+                    set -- "$@" -r "$LENOVO_ROUNDS"
+                elif [ -n "${LENOVO_THREADS:-}" ]; then
+                    set -- "$@" -t
+                fi
+                run user performance probe.sh "$@" || status=$?
                 mixer_low
                 ;;
             *) usage ;;

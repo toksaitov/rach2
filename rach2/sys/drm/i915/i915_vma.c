@@ -29,23 +29,6 @@ static uint64_t align_up(uint64_t v, uint64_t align)
     return r < v ? ~(uint64_t)0 : r;
 }
 
-/** Whether [start, start + size) meets a kept surface of the firmware's;
- * if so, its range in `*a` and `*b`. */
-static int kept_hit(const struct i915_ggtt *ggtt, uint64_t start, uint64_t size, uint64_t *a,
-                    uint64_t *b)
-{
-    int i;
-
-    for (i = 0; i < ggtt->nkept; i++) {
-        if (ggtt->kept[i].start < start + size && start < ggtt->kept[i].end) {
-            *a = ggtt->kept[i].start;
-            *b = ggtt->kept[i].end;
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /**
  * The highest range for `i915_ggtt_find`: a candidate below `hi` moves
  * below whatever it meets, and the search starts again.
@@ -58,7 +41,8 @@ static int32_t ggtt_find_high(struct drm_i915_private *i915, uint64_t size, uint
     int moved = 1;
 
     while (moved) {
-        uint64_t a = 0, b = 0;
+        const struct i915_gtt_range *range;
+        uint64_t a = 0;
         int hit = 0;
 
         moved = 0;
@@ -68,8 +52,9 @@ static int32_t ggtt_find_high(struct drm_i915_private *i915, uint64_t size, uint
                 hit = 1;
             }
         }
-        if (!hit) {
-            hit = kept_hit(&i915->ggtt, start, size, &a, &b);
+        if (!hit && (range = i915_ggtt_kept_overlap(&i915->ggtt, start, start + size)) != 0) {
+            a = range->start;
+            hit = 1;
         }
         if (hit) {
             if (a < size) {
@@ -90,7 +75,8 @@ int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t al
                        uint64_t hi, uint32_t flags, uint64_t *at)
 {
     struct i915_vma *v = i915->gem.bound;
-    uint64_t start = align_up(lo, align), a, b;
+    const struct i915_gtt_range *range;
+    uint64_t start = align_up(lo, align);
 
     if (hi > i915->gt.ggtt_bottom) {
         hi = i915->gt.ggtt_bottom;
@@ -113,8 +99,8 @@ int32_t i915_ggtt_find(struct drm_i915_private *i915, uint64_t size, uint64_t al
         }
         if (v && v->start < start + size) {
             start = align_up(v->start + v->node_size, align);
-        } else if (kept_hit(&i915->ggtt, start, size, &a, &b)) {
-            start = align_up(b, align);
+        } else if ((range = i915_ggtt_kept_overlap(&i915->ggtt, start, start + size)) != 0) {
+            start = align_up(range->end, align);
         } else {
             break;
         }

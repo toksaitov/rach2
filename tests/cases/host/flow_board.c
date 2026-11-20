@@ -774,6 +774,16 @@ static int release_rows(struct fixture *f)
     }
     if (!use(f, board_main))
         return 0;
+    fx_env("BOARD_TEST_ME", "zed");
+    call(f, "release", "49", "owner-only");
+    ok =
+        fx_check(f,
+                 f->status && is_field("49", F_STATUS, "In_progress") &&
+                     is_field("49", F_ASSIGNEES, "alpha") && is_field("49", F_LABELS, "bug") &&
+                     strstr(f->err, "alpha holds it") && !calls("item-edit") && !calls("-X DELETE"),
+                 "release-other-account") &&
+        ok;
+    fx_env("BOARD_TEST_ME", "alpha");
     call(f, "release", "49", "Backlog");
     ok = fx_check(f, f->status == 2 && !calls("item-edit"), "release-unknown") && ok;
     fx_env("BOARD_TEST_FAIL", "status");

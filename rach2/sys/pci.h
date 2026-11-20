@@ -432,6 +432,19 @@ struct pci_resource {
 void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r);
 
 /**
+ * Whether BAR `i` (0 to 5) of the listed function bus:device.function may
+ * be claimed by its driver, as Linux's pci_claim_resource and request_region
+ * find: it has an address (`pci_resource`), an I/O one within the 64 KiB of
+ * ports and on none of the PC's fixed ports; behind a bridge that decodes
+ * positively it lies whole in a window of its kind; and it overlaps no other
+ * BAR of its kind of a listed function. A BAR that is not claimed is
+ * neither exposed nor decoded. 0; -EINVAL for a BAR the function lacks, one
+ * without an address and one out of range; -EBUSY for an overlap. The
+ * caller holds the big lock, as for every search of the list.
+ */
+int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i);
+
+/**
  * List the functions of the slot `bus`:`device` that the list lacks, as
  * Linux's pci_scan_slot does when a hot plug controller says a card came:
  * each is read, sized and put in its place (`pci_nth`). The caller holds
@@ -579,11 +592,14 @@ int pci_reset_method(const pci_device_t *dev);
 /* What a reset loses: the header's sixteen dwords and the PCI Express
  * capability's control registers. */
 /* A function's power states, as its power management capability names
- * them, and Linux's wait after a change to or from D3hot, in ms
- * (PCI_PM_D3HOT_WAIT). */
+ * them, and Linux's waits after a change: to or from D3hot, in ms
+ * (PCI_PM_D3HOT_WAIT), and to or from D2, in us (PCI_PM_D2_DELAY). */
 #define PCI_D0            0
+#define PCI_D1            1
+#define PCI_D2            2
 #define PCI_D3HOT         3
 #define PCI_PM_D3HOT_WAIT 10u
+#define PCI_PM_D2_DELAY   200u
 
 /** The power state `dev` is in, PCI_D0 to PCI_D3HOT, read from its power
  * management capability, or -1 when it has none. */

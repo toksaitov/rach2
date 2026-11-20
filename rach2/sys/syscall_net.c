@@ -860,7 +860,8 @@ static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
         return -EADDRNOTAVAIL;
     }
 
-    if (port != 0 && port < 1024 && (!current_proc || !proc_privileged(current_proc))) {
+    if (port != 0 && port < NET_PORT_UNPRIVILEGED &&
+        (!current_proc || !proc_privileged(current_proc))) {
         return -EACCES;
     }
 
@@ -894,7 +895,8 @@ static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
         sock->local_ip = ip;
         if (!port)
             port = tcp_bind_ephemeral();
-        if (!port || socket_stream_conflict(sock, port) || tcp_port_listening(sock, port)) {
+        if (!port || (tcp_port_in_use(port) &&
+                      (socket_stream_conflict(sock, port) || tcp_port_listening(sock, port)))) {
             sock->local_ip = saved;
             net_unlock(held);
             return -EADDRINUSE;

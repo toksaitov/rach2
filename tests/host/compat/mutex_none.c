@@ -1,4 +1,4 @@
-/* The kernel's mutex for a host test of one thread (proc/mutex.h): the
+/* The kernel's mutex and reader-writer semaphore for one host thread: the
  * holder is marked, and a take of a held mutex, which in one thread could
  * never end, stops the test with a trap, as does the release of a free one.
  * No host header is included, since the kernel's define the same types. */
@@ -74,4 +74,40 @@ void mutex_unlock(struct mutex *m)
 int mutex_held(const struct mutex *m)
 {
     return m->owner == (uintptr_t)m;
+}
+
+/** Take a shared hold unless an exclusive holder would block the thread. */
+void down_read(struct rwsem *s)
+{
+    if (s->state & RWSEM_WRITER) {
+        __builtin_trap();
+    }
+    s->state++;
+}
+
+/** Give back one shared hold. */
+void up_read(struct rwsem *s)
+{
+    if (!(s->state & RWSEM_READERS)) {
+        __builtin_trap();
+    }
+    s->state--;
+}
+
+/** Take an exclusive hold on a free semaphore. */
+void down_write(struct rwsem *s)
+{
+    if (s->state) {
+        __builtin_trap();
+    }
+    s->state = RWSEM_WRITER;
+}
+
+/** Give back the exclusive hold. */
+void up_write(struct rwsem *s)
+{
+    if (s->state != RWSEM_WRITER) {
+        __builtin_trap();
+    }
+    s->state = 0;
 }

@@ -80,10 +80,12 @@ static void intx_apply(struct vfio_device *d)
 }
 
 /** Notify the owner of an INTx interrupt without feeding it back to this
- * device's unmask hook when both roles name the same counter. */
+ * device's unmask hook when both roles name the same counter; nothing while
+ * the owner's Interrupt Disable is set, as Linux's vfio_send_intx_eventfd
+ * with virq_disabled. */
 static void intx_notify(const struct vfio_device *d)
 {
-    if (d->intx.trigger != NULL) {
+    if (d->intx.trigger != NULL && !d->vcmd_intx) {
         eventfd_signal_except(d->intx.trigger, d->unmask_hook);
     }
 }
@@ -126,10 +128,11 @@ static void intx_isr(isr_params_t *params)
 
 /** Unmask the line, unless the device still asserts it: then it stays
  * masked and the eventfd is signalled again, as Linux's
- * __vfio_pci_intx_unmask. */
+ * __vfio_pci_intx_unmask. Nothing while the owner's Interrupt Disable is
+ * set, which keeps the mask until it is clear. */
 static void intx_unmask(struct vfio_device *d)
 {
-    if (d->irq_type != VFIO_PCI_INTX_IRQ_INDEX || !d->intx_masked) {
+    if (d->irq_type != VFIO_PCI_INTX_IRQ_INDEX || !d->intx_masked || d->vcmd_intx) {
         return;
     }
     if (pci_read_config16(DEV(d), PCI_STATUS) & STATUS_INTX) {
@@ -276,15 +279,34 @@ static int32_t intx_enable(struct vfio_device *d, int32_t fd)
         line_hooked[d->pci.irq] = 1;
     }
     d->irq_type = VFIO_PCI_INTX_IRQ_INDEX;
-    d->intx_masked = 0;
+    d->intx_masked = d->vcmd_intx != 0; /* as Linux's vfio_intx_enable */
     intx_apply(d);
     return 0;
 }
 
-/** Give back the vector of the interrupt `q` and drop its eventfd. */
+/**
+ * The owner changed its Interrupt Disable bit, now `d->vcmd_intx`, as
+ * Linux's vfio_basic_config_write: set, the line is masked until the bit is
+ * clear again; clear, it is unmasked, or signalled again while the device
+ * still asserts it. The caller holds the state lock.
+ */
+void vfio_irq_intx_owner(struct vfio_device *d)
+{
+    if (!d->vcmd_intx) {
+        intx_unmask(d);
+    } else if (d->irq_type == VFIO_PCI_INTX_IRQ_INDEX && !d->intx_masked) {
+        d->intx_masked = 1;
+        intx_apply(d);
+    }
+}
+
+/** Give back the vector of the interrupt `q`, whose message the caller has
+ * turned off, once a message sent before then has signalled its eventfd
+ * (`isr_vector_sync`), as Linux's free_irq; then drop the eventfd. */
 static void vector_drop(struct vfio_irq *q)
 {
     if (q->vector >= 0) {
+        isr_vector_sync(q->vector);
         vector_irq[q->vector] = NULL;
         isr_free_vector(q->vector);
     }

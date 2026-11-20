@@ -7,7 +7,8 @@
  * its files until it is taken away; the files on it stat, open, read and
  * list, its statfs is vfat's, and a symlink onto a name that exists there
  * is EEXIST before the mount's EROFS; a program on a `noexec` mount is
- * refused with EACCES though its mode allows it; a mount is busy while any
+ * refused with EACCES though its mode allows it, and a readable mapping of
+ * it is refused execute by mprotect with EACCES; a mount is busy while any
  * description on it lives, in this process or a forked one, through `dup`,
  * `dup2` and `F_DUPFD`, and a close-on-exec descriptor is dropped by
  * `execve`; a working directory inside it is busy too; MNT_DETACH takes a
@@ -71,6 +72,11 @@
 #define ENAMETOOLONG  36
 
 #define STATFS_MAGIC_VFAT 0x4d44
+
+#define PROT_READ   1
+#define PROT_EXEC   4
+#define MAP_SHARED  1
+#define MAP_PRIVATE 2
 
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status) __attribute__((noreturn));
@@ -851,12 +857,41 @@ static void row_long_target(void)
     }
 }
 
+/**
+ * Map the page of `path` that begins it readable, private or shared as
+ * `flags` says, and ask mprotect to make it executable: the mprotect's
+ * answer, 0 or a negated errno. `what` names the row a failed open or mmap
+ * fails. Linux's mmap takes a file on a noexec mount's right to execute
+ * away (VM_MAYEXEC), so the answer there is -EACCES.
+ */
+static long map_then_exec(const char *path, long flags, const char *what)
+{
+    long fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    long at, rc;
+
+    if (fd < 0) {
+        fail(what);
+    }
+    at = probe_mmap(0, 4096, PROT_READ, flags, fd, 0);
+    syscall1(SYS_CLOSE, fd);
+    if (at < 0 && at > -4096) {
+        fail(what);
+    }
+    rc = syscall3(SYS_MPROTECT, at, 4096, PROT_READ | PROT_EXEC);
+    syscall2(SYS_MUNMAP, at, 4096);
+    return rc;
+}
+
 /** The rows of noexec and of a program run from the mount. The noexec and
  * executable mounts pass `umask=000`, which makes every file 0777, so that
- * only noexec refuses the program. */
+ * only noexec refuses the program. A mapping of the program made readable
+ * on the noexec mount may not be made executable by mprotect, shared or
+ * private, and an executable mapping of it is EPERM; on the executable
+ * mount mprotect makes it executable. */
 static void rows_exec(void)
 {
     char *av[2];
+    long fd;
     int pid;
 
     if (do_mount(src, mnt, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
@@ -867,11 +902,25 @@ static void rows_exec(void)
     if (syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1)) != -EACCES) {
         fail("execve on a noexec mount is EACCES");
     }
+    fd = syscall3(SYS_OPEN, (long)av[0], O_RDONLY, 0);
+    if (fd < 0 || probe_mmap(0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0) != -EPERM) {
+        fail("an executable mapping of a file on a noexec mount is EPERM");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (map_then_exec(av[0], MAP_PRIVATE, "a private mapping on the noexec mount") != -EACCES) {
+        fail("mprotect execute of a private mapping on a noexec mount is EACCES");
+    }
+    if (map_then_exec(av[0], MAP_SHARED, "a shared mapping on the noexec mount") != -EACCES) {
+        fail("mprotect execute of a shared mapping on a noexec mount is EACCES");
+    }
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 after the noexec row");
     }
     if (do_mount(src, mnt, MS_RDONLY, "umask=000") != 0) {
         fail("the executable mount");
+    }
+    if (map_then_exec(av[0], MAP_PRIVATE, "a private mapping on the executable mount") != 0) {
+        fail("mprotect execute of a mapping on an executable mount");
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
@@ -900,9 +949,45 @@ static void rows_exec(void)
     }
 }
 
+/** The rows of noexec on /dev/zero, which maps as anonymous memory. Through
+ * a bind of /dev remounted noexec, an executable private mapping is EPERM
+ * and mprotect refuses execute to a readable private or shared mapping with
+ * EACCES, as Linux's mmap clears VM_MAYEXEC before /dev/zero's own mmap
+ * runs; through /dev, which is executable, mprotect gives it to either. */
+static void rows_zero_exec(void)
+{
+    long fd;
+
+    if (syscall5(SYS_MOUNT, (long)"/dev", (long)mnt, 0, MS_BIND, 0) != 0 ||
+        syscall5(SYS_MOUNT, 0, (long)mnt, 0, MS_REMOUNT | MS_BIND | MS_NOEXEC, 0) != 0) {
+        fail("a bind of /dev remounted noexec");
+    }
+    fd = syscall3(SYS_OPEN, (long)in_mnt("/zero"), O_RDONLY, 0);
+    if (fd < 0 || probe_mmap(0, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0) != -EPERM) {
+        fail("an executable mapping of /dev/zero on a noexec mount is EPERM");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (map_then_exec(in_mnt("/zero"), MAP_PRIVATE, "a private mapping of a noexec /dev/zero") !=
+        -EACCES) {
+        fail("mprotect execute of a private mapping of /dev/zero on a noexec mount is EACCES");
+    }
+    if (map_then_exec(in_mnt("/zero"), MAP_SHARED, "a shared mapping of a noexec /dev/zero") !=
+        -EACCES) {
+        fail("mprotect execute of a shared mapping of /dev/zero on a noexec mount is EACCES");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
+        fail("umount2 of the bind of /dev");
+    }
+    if (map_then_exec("/dev/zero", MAP_PRIVATE, "a private mapping of /dev/zero") != 0 ||
+        map_then_exec("/dev/zero", MAP_SHARED, "a shared mapping of /dev/zero") != 0) {
+        fail("mprotect execute of a mapping of /dev/zero on an executable mount");
+    }
+}
+
 /** The rows of umount2's flags and the permanent mounts, an unprivileged
- * caller, noexec and a program run from the mount (`rows_exec`), and a
- * target too long for the mount's record, which claims nothing. MNT_DETACH
+ * caller, noexec and a program run from the mount (`rows_exec`) and on
+ * /dev/zero (`rows_zero_exec`), and a target too long for the mount's
+ * record, which claims nothing. MNT_DETACH
  * takes a mount with two files open from view, and their last close
  * unmounts it; the two keep its record apart from the one `rows_record`
  * looks for. */
@@ -956,6 +1041,7 @@ static void rows_flags(void)
         fail("umount2 before the noexec rows");
     }
     rows_exec();
+    rows_zero_exec();
     row_long_target();
 }
 

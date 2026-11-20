@@ -120,6 +120,20 @@ int isr_line_pending(int line);
  * reads; any context except an NMI, with no lock a callback may need. */
 int isr_vector_pending(int vector);
 
+/**
+ * Wait until no delivery of `vector` is pending or running
+ * (`isr_vector_pending`), as Linux's synchronize_irq: for a driver that has
+ * turned its device's messages off and is about to give the vector back
+ * (`isr_free_vector`), so that a message sent before that runs the chain it
+ * was sent to, never the chain of the vector's next taker. Between reads the
+ * big lock goes to a processor whose entry waits for it (`bkl_yield`). With
+ * interrupts on, a message pending at this processor is taken; with them
+ * off, as at shutdown, it is not waited for, and runs when they come on.
+ * The caller holds no spinlock a handler of `vector` takes and runs none of
+ * its handlers.
+ */
+void isr_vector_sync(int vector);
+
 /** The interrupts that went away before the processor took them, which the
  * interrupt controller reports on a vector of its own. */
 uint32_t isr_spurious_count(void);

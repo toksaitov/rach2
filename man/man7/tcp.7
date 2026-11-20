@@ -39,26 +39,46 @@ on a nonblocking socket, as
 .Xr send 2
 says.
 .Ss Ports and TIME_WAIT
-A socket that binds no port is given one of the ephemeral range, 32768
-through 60999, Linux's
-.Pa ip_local_port_range .
+A socket that binds no port is given one of the ephemeral range,
+.Pa /proc/sys/net/ipv4/ip_local_port_range ,
+32768 through 60999 unless a privileged write of two ports, the low end
+and the high end, sets another, as on Linux.
 A bind to port zero and a listen without a port take a port no connection,
-listener or bound socket has, trying the odd ports first from a place no
-other host can predict.
-A connection takes the first even port, then odd, from where the last
+listener or bound socket has, trying those an odd offset from the range's
+low end first, from a place no other host can predict.
+A connection takes the first port an even offset from the low end, then
+the others, from where the last
 connection to the same peer address and port left off, chosen by a keyed
 hash of that destination, as Linux does (RFC 6056, algorithm 4): a port
 held by a listener or a bound socket is passed over, and one another
 connection has is taken only for a different peer, so each destination has
-the whole range.
+its own search.
+Both searches may reach the last port of a range with an odd number of
+ports, depending on where the search started.
 .Pp
 The side that closes first holds the connection in
 .Dv TIME_WAIT
 for 60 seconds, Linux's length, which keeps its port from the next
-connection to the same peer; a FIN the peer sends again is acknowledged
-and starts the 60 seconds again.
-A connection there gives back its send buffer on entering it, and its
-receive buffer then if nothing is unread or no socket holds it, and
+connection to the same peer; a FIN the peer sends again, or any segment
+with an acknowledgement, is acknowledged and starts the 60 seconds again.
+A SYN from the peer whose sequence number lies past the old connection's
+ends
+.Dv TIME_WAIT
+when a listener has the port and opens the pair again, the new connection
+starting its own sequence numbers 65537 past the old one's last, as Linux
+does without timestamps; a reset at the next sequence number expected ends
+it too.
+Another SYN, or an older one, is acknowledged at most once in 500 ms,
+the rest counted in TCPACKSkippedTimeWait.
+A connection in detached
+.Dv FIN_WAIT_2
+starts the limit there and carries it into
+.Dv TIME_WAIT .
+Other connections start a fresh limit on entering
+.Dv TIME_WAIT .
+A connection gives back its send buffer on entering
+.Dv TIME_WAIT ,
+and its receive buffer then if nothing is unread or no socket holds it, and
 otherwise when the socket is closed.
 The connections in
 .Dv TIME_WAIT
@@ -358,8 +378,10 @@ TCPAbortOnClose, and those a timeout ended, TCPAbortOnTimeout; the connections t
 for a full table of them, TCPTimeWaitOverflow; the challenge acknowledgements sent, TCPChallengeACK,
 and the SYNs that drew one, TCPSYNChallenge; the answers of a handshake
 not yet ended held back by the limit, TCPACKSkippedSynRecv, those to a
-segment outside the window, TCPACKSkippedSeq, and the challenges held
-back, TCPACKSkippedChallenge; the keepalive probes sent,
+segment outside the window, TCPACKSkippedSeq, those to a connection in
+.Dv TIME_WAIT ,
+TCPACKSkippedTimeWait, and the challenges held back,
+TCPACKSkippedChallenge; the keepalive probes sent,
 TCPKeepAlive; and the probes of a larger segment lost and taken,
 TCPMTUPFail and TCPMTUPSuccess.
 .Pa /proc/net/snmp

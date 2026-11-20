@@ -85,8 +85,9 @@
  * reset, which keeps that status page's GTT entry and range and takes a
  * scratch frame of its own; a release of a function with no reset method
  * whose device the runtime power management put to sleep, which turns RC6
- * and RPS off on the chip and keeps the scratch page; and a fourth
- * bring-up, from a reset, and the same release again. Every scratch page
+ * and RPS off on the chip and keeps the scratch page; repeated unbinds
+ * that leave eight more status pages mapped, with every mapping kept
+ * until a function reset; and the same release again. Every scratch page
  * is a frame of its own, and a kept one is never freed. The rows that
  * expect no failure also find no wait at its bound.
  *
@@ -1499,10 +1500,10 @@ static struct {
     uint64_t panel_on_us;
 } mark;
 
-/* A ring, by its index in `ring_bases`, whose RING_HWSTAM drops a write of
- * all ones, or -1; and a count a program's window of the aperture takes
+/* The rings, by bit in `ring_bases` order, whose RING_HWSTAM will not
+ * mask writes; and a count a program's window of the aperture takes
  * when the commit takes the panel's power, or NULL. */
-static int hwstam_stuck = -1;
+static unsigned hwstam_stuck;
 static uint32_t *hold_in_commit;
 
 /* Each ring's status page's index in the GTT, which `marks_take` notes. */
@@ -1641,6 +1642,7 @@ static void note_panel_write(uint32_t old, uint32_t value)
 static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
 {
     uint32_t old = i915_model_peek(&model, reg);
+    int i;
 
     note_access();
     if (reg == PP_CONTROL) {
@@ -1664,8 +1666,10 @@ static void chip_write(struct i915_hw *hw, uint32_t reg, uint32_t value)
         }
     }
     note_gt_write(reg, value);
-    if (hwstam_stuck >= 0 && reg == RING_HWSTAM(ring_bases[hwstam_stuck]) && value == 0xffffffffu) {
-        return;
+    for (i = 0; hwstam_stuck && i < I915_NUM_ENGINES; i++) {
+        if (hwstam_stuck & (1u << i) && reg == RING_HWSTAM(ring_bases[i]) && value == 0xffffffffu) {
+            value = 0;
+        }
     }
     model_ops->write32(hw, reg, value);
 }
@@ -2583,11 +2587,11 @@ static void row_kept(int k)
     snprintf(line, sizeof(line),
              "handoff: " CHIP ": scratch page kept at 0x%lx: the function was not reset",
              (unsigned long)kept_scratch);
-    hwstam_stuck = 0;
+    hwstam_stuck = 1u << I915_RCS0;
     reset_error = -ETIMEDOUT;
     CHECK(driver_write("unbind", CHIP "\n") == 13 && released() && strcmp(console_calls, "u") == 0,
           "kept: released once the GPU resets");
-    hwstam_stuck = -1;
+    hwstam_stuck = 0;
     reset_error = 0;
     CHECK(resets == before + 1 && !pci_mark.fn_reset && pci_mark.bm_off &&
               pci_mark.bm_off < pci_mark.unclaimed &&
@@ -2625,7 +2629,7 @@ static void row_bring_up_unreset(void)
 {
     struct drm_i915_private *i915;
     char line[128];
-    int i, kept = 0;
+    int i, kept;
 
     log_text[0] = 0;
     console_clear();
@@ -2636,13 +2640,11 @@ static void row_bring_up_unreset(void)
     if (!(i915 = bound_i915())) {
         return;
     }
-    for (i = 0; i < i915->ggtt.nkept; i++) {
-        kept |= i915->ggtt.kept[i].start == kept_hws_ggtt &&
-                i915->ggtt.kept[i].end == kept_hws_ggtt + I915_GTT_PAGE_SIZE;
-    }
+    kept =
+        i915_ggtt_kept_overlap(&i915->ggtt, kept_hws_ggtt, kept_hws_ggtt + I915_GTT_PAGE_SIZE) != 0;
     snprintf(line, sizeof(line), "gtt: 0x%lx kept: a status page", (unsigned long)kept_hws_ggtt);
-    CHECK(logged("handoff: " CHIP ": no reset; bound as its last owner left it") && kept &&
-              logged(line) &&
+    CHECK(logged("handoff: " CHIP ": no reset; bound as its last owner left it") &&
+              logged("handoff: " CHIP ": bound without a reset") && kept && logged(line) &&
               reg(I915_GSM_OFFSET + (kept_hws_ggtt / I915_GTT_PAGE_SIZE) * 4u) == kept_hws_pte &&
               kept_hws_pte != i915->ggtt.scratch_pte,
           "unreset: the kept status page's GTT entry and range kept, logged");
@@ -2698,6 +2700,77 @@ static void row_no_reset(void)
           "no reset: the record and every page freed, the scratch page kept, logged");
 }
 
+/** Keep all four rings' status pages on two unbinds without a function
+ * reset. Check every old entry on each bind and its release on reset. */
+static void row_repeated_unreset(void)
+{
+    struct drm_i915_private *i915;
+    struct {
+        uint64_t offset;
+        uint32_t pte;
+        void *page;
+    } saved[2 * I915_NUM_ENGINES];
+    pci_device_t other = model.pci;
+    const uint64_t phys = TEST_SCRATCH;
+    int round, i, n = 0;
+    int32_t rc;
+
+    other.bus ^= 1;
+    reset_none = 1;
+    for (round = 0; round <= 2; round++) {
+        i915_ggtt_carry_drop(&other);
+        CHECK(driver_write("bind", CHIP "\n") == 13, "repeated: bind with no reset method");
+        i915 = bound_i915();
+        if (!i915) {
+            break;
+        }
+        CHECK(i915->gt.ppgtt.ready && i915->gt.engine[I915_VECS0].running,
+              "repeated: the directory and rings still start");
+        for (i = 0; i < n; i++) {
+            CHECK(i915_ggtt_clear_range(i915, saved[i].offset, I915_GTT_PAGE_SIZE, 0) == -EBUSY &&
+                      i915_ggtt_insert(i915, saved[i].offset, &phys, 1, I915_CACHE_NONE) ==
+                          -EBUSY &&
+                      i915_ggtt_pte(i915, saved[i].offset) == saved[i].pte,
+                  "repeated: a retained entry is unchanged and cannot be cleared or replaced");
+        }
+        if (round < 2 && i915->gt.engine[I915_VECS0].running) {
+            for (i = 0; i < I915_NUM_ENGINES; i++) {
+                struct i915_engine *e = &i915->gt.engine[i];
+
+                saved[n + i].offset = e->hws_ggtt;
+                saved[n + i].pte = i915_ggtt_pte(i915, e->hws_ggtt);
+                saved[n + i].page = e->hws;
+            }
+            hwstam_stuck = (1u << I915_NUM_ENGINES) - 1u;
+        }
+        rc = driver_write("unbind", CHIP "\n");
+        if (rc == 13 && hwstam_stuck) {
+            n += I915_NUM_ENGINES;
+        }
+        hwstam_stuck = 0;
+        CHECK(rc == 13 && released() && pages_live == n,
+              "repeated: unbound with every retained frame still allocated");
+        if (rc != 13) {
+            break;
+        }
+    }
+    reset_none = 0;
+    CHECK(n == 2 * I915_NUM_ENGINES, "repeated: eight status pages retained over two unbinds");
+    row_bring_up("repeated: bind taken after a function reset");
+    i915 = bound_i915();
+    if (i915) {
+        for (i = 0; i < n; i++) {
+            CHECK(!i915_ggtt_kept_overlap(&i915->ggtt, saved[i].offset,
+                                          saved[i].offset + I915_GTT_PAGE_SIZE) &&
+                      i915_ggtt_pte(i915, saved[i].offset) != saved[i].pte,
+                  "repeated: a function reset releases the offset of each old mapping");
+        }
+    }
+    for (i = 0; i < n; i++) {
+        kfree_pages(saved[i].page, 1);
+    }
+}
+
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
 
 /* The requests' fences, i915_gem.c's, which no flip here waits on. */
@@ -2742,7 +2815,7 @@ int main(void)
         row_kept(1);
         row_bring_up_unreset();
         row_no_reset();
-        row_bring_up("bring-up, fourth: bind taken after kept releases, from a reset");
+        row_repeated_unreset();
         row_no_reset();
     }
     if (failures != 0) {

@@ -250,10 +250,11 @@
 # * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
 #   boot, before the native cases, since it reads the boot's records out of
 #   /dev/bootlog, a ring that their messages overwrite.
-# * commit: once the acceptance and the native cases have passed, `bootctl
-#   commit` makes the candidate the saved default, and `bootctl fallback`
-#   copies it into the fallback slot, so that a later trial, which overwrites
-#   the candidate, falls back to this release and not to an older kernel.
+# * commit: once the acceptance and the native cases have passed, restore
+#   term and check that it has started its login and Weston has ended.
+#   Then `bootctl commit` makes the candidate the saved default and
+#   `bootctl fallback` copies it into the fallback slot. A later trial
+#   that overwrites the candidate can then fall back to this release.
 # * record: /etc/rach2/release on the machine, which runs the committed
 #   candidate, is written with SHA, the milestone, the full run and the
 #   root's digest, flushed to the disk with the directories that hold it, and
@@ -2559,12 +2560,19 @@ screen_free()
     say "lenovo: the kernel console's login stands in for term during the run"
 }
 
-# screen_back: put term back on the boot where it gave up the framebuffer.
+# screen_back: put term back on the boot where it gave up the framebuffer,
+# or on the current candidate boot if the release resumed after the run.
 screen_back()
 {
-    [ -n "$screen_boot" ] || return 0
-    screen_result=$(screen_session back "$screen_boot") ||
+    if [ -z "$screen_boot" ]; then
+        where && [ "$now" = 'system candidate' ] || return 1
+        screen_boot=$(lenovo 'cat /proc/sys/kernel/random/boot_id') || return 1
+    fi
+    case $screen_boot in ''|*[!0-9a-f-]*) return 1 ;; esac
+    if ! screen_result=$(screen_session back "$screen_boot"); then
         say "lenovo: could not restore the console's term${screen_result:+: $screen_result}"
+        return 1
+    fi
     screen_boot=''
 }
 
@@ -2647,9 +2655,9 @@ lenovo_run()
             fail lenovo "the native cases' payload could not be staged: $(tail -n 3 "$state/$id.out" | tr '\n' ' ')"
         say "lenovo: staged $staged"
     fi
-    screen_free
     peer=$(peer_address)
     [ -n "$peer" ] || fail lenovo "this computer has no address on the way to $address"
+    screen_free
     id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
     note "lenovo started $id"
     # shellcheck disable=SC2086 # the cases are words
@@ -2661,7 +2669,6 @@ lenovo_run()
         --far "$(setting lenovo far)" --empty "$(setting lenovo empty)" \
         --silent "$(setting lenovo silent)" --purpose phase_first_run -- $words \
         > "$state/$id.out" 2>&1; then
-        screen_back
         mark lenovo "run $id"
         return 0
     fi
@@ -3534,6 +3541,10 @@ main()
 
     if ! done_ commit; then
         step=commit
+        screen_back || fail commit "the console's term could not be restored"
+        if ! lenovo 'sh -s -- -l' < tests/graphics/bootscreen.sh > "$state/finalscreen.log" 2>&1; then
+            fail commit "the console's login did not return: $(tail -n 1 "$state/finalscreen.log")"
+        fi
         lenovo 'bootctl commit' > "$state/commit.log" 2>&1
         grep -q '^bootctl: committed:' "$state/commit.log" ||
             fail commit "bootctl commit: $(tr '\n' ' ' < "$state/commit.log")"

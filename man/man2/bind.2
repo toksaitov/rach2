@@ -34,9 +34,9 @@ Linux.
 A nonzero port below 1024 requires effective user ID 0.
 .Pp
 A UDP bind registers the address and port for receiving datagrams.
-Port zero selects a free port from 32768 through 60999, Linux's
-.Pa ip_local_port_range ,
-starting at a random one.
+Port zero selects a free port of the ephemeral range,
+.Pa /proc/sys/net/ipv4/ip_local_port_range ,
+32768 through 60999 by default, starting at a random one.
 Two bindings of a port meet when one is to any address or both are to the
 same one; a socket may take a port at an address that meets another's only
 when all sockets so met have
@@ -50,9 +50,9 @@ It rejects a nonzero port that already has a live listener at an address
 that meets the one asked for, but does not reserve the port against
 another bind before
 .Xr listen 2 .
-Binding TCP port zero selects a free port from 32768 through 60999 that
+Binding TCP port zero selects a free port of the ephemeral range that
 no TCP connection or listener uses and no other stream socket has bound,
-odd ones first, as Linux does, and
+those an odd offset from the range's low end first, as Linux does, and
 .Xr getsockname 2
 reports it.
 .Pp

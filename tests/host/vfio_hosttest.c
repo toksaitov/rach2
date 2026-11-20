@@ -333,6 +333,16 @@ void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct p
                PCI_IORESOURCE_SIZEALIGN;
 }
 
+/** A BAR is claimed when the walk sized it and it has an address: this
+ * bus's BARs lie on no fixed port and over no other. */
+int pci_resource_claimable(uint8_t bus, uint8_t device, uint8_t function, int i)
+{
+    struct pci_resource r;
+
+    pci_resource(bus, device, function, i, &r);
+    return r.flags != 0 && r.start != 0 ? 0 : -EINVAL;
+}
+
 /** The function's power state, or -1 with no power management. */
 int pci_power_state(const pci_device_t *dev)
 {
@@ -342,8 +352,12 @@ int pci_power_state(const pci_device_t *dev)
     return pm != 0 ? m->cfg[pm + 4] & 3 : -1;
 }
 
+/* Nonzero while the function refuses every change of its power state. */
+static int power_refused;
+
 /** A change of power state as a function takes it: from D3hot to D0 with
- * No_Soft_Reset clear, its command word and BARs come back cleared. */
+ * No_Soft_Reset clear, its command word and BARs come back cleared. While
+ * `power_refused` is set it keeps the state it is in. */
 int pci_set_power_state(const pci_device_t *dev, int state)
 {
     struct fn *m = fn_at(dev->bus, dev->device, dev->function);
@@ -352,6 +366,9 @@ int pci_set_power_state(const pci_device_t *dev, int state)
 
     if (pm == 0) {
         return -1;
+    }
+    if (power_refused) {
+        return 0;
     }
     was = m->cfg[pm + 4] & 3;
     m->cfg[pm + 4] = (uint8_t)((m->cfg[pm + 4] & ~3) | (state & 3));
@@ -895,8 +912,26 @@ int isr_alloc_vector(void)
     return -1;
 }
 
+/* A message sent before its vector's removal that another processor has
+ * taken and not yet run, which the sync runs; a vector given back first
+ * counts in `freed_in_flight`. */
+static int in_flight[256];
+static int freed_in_flight;
+
+static void raise(int vector);
+
+void isr_vector_sync(int vector)
+{
+    if (in_flight[vector]) {
+        in_flight[vector] = 0;
+        raise(vector);
+    }
+}
+
 void isr_free_vector(int vector)
 {
+    freed_in_flight += in_flight[vector];
+    in_flight[vector] = 0;
     vector_taken[vector] = 0;
     handlers[vector] = NULL;
 }
@@ -1152,6 +1187,13 @@ static int pause_power_wait;
 /* The OpRegion at the GPU's ASLS. */
 #define ASLS 0xDAF00000u
 static uint8_t opregion[0x2000];
+
+static unsigned int udelayed; /* microseconds VFIO spun */
+
+void vfio_hw_udelay(unsigned int us)
+{
+    udelayed += us;
+}
 
 void vfio_hw_msleep(unsigned int ms)
 {
@@ -1851,6 +1893,67 @@ static void power_rows(void)
     d->pm_restore = 1;
 }
 
+/** Power states checked: D1 and D2 only when the function offers them and
+ * only deeper, D2 with Linux's wait both ways. Ends in D3hot. */
+static void power_check_rows(void)
+{
+    struct fn *m = &fns[1];
+    struct vfio_device *d = vdev("0000:00:02.0");
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uintptr_t phys = 0;
+    uint16_t w = PCI_D2;
+    uint32_t v;
+    unsigned int us = udelayed;
+
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 && udelayed == us,
+          "D2 is refused by a function that does not offer it");
+    put16(m->cfg + 0xD2, 0x0600); /* D1 and D2 offered */
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 2 &&
+              udelayed == us + PCI_PM_D2_DELAY && !d->power_low && pread_at(device, 0, &v, 4) == 4,
+          "D2 is entered after Linux's 200 us, its BARs still reached");
+    w = PCI_D1;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 2,
+          "D1 is refused from the deeper D2");
+    w = PCI_D0;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 &&
+              udelayed == us + 2 * PCI_PM_D2_DELAY,
+          "D0 from D2 waits the same 200 us");
+    w = PCI_D3HOT;
+    (void)pwrite_at(device, pmcsr, &w, 2);
+    w = PCI_D1;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 3 && d->power_low &&
+              mapped_ops->page(d, (2u << 28) + 1, &phys) == -1 &&
+              pread_at(device, 0, &v, 4) == -EIO,
+          "D1 is refused from D3hot, whose BARs stay out of reach");
+    put16(m->cfg + 0xD2, 0);
+}
+
+/** A function that refuses a power change, in D3hot at the start: the state
+ * read back decides the BARs' access and the state kept. */
+static void power_refused_rows(void)
+{
+    struct fn *m = &fns[1];
+    struct vfio_device *d = vdev("0000:00:02.0");
+    uint64_t pmcsr = (7ull << 40) + 0xD4;
+    uint16_t w = PCI_D0;
+    uint32_t v;
+
+    power_refused = 1;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 3 && d->power_low &&
+              d->pm_saved_ok && pread_at(device, 0, &v, 4) == -EIO,
+          "a function that refuses D0 keeps its BARs out of reach and its state owed");
+    power_refused = 0;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 && !d->power_low &&
+              !d->pm_saved_ok && get32(m->cfg + 0x18) == 0xE0000004u,
+          "and has it written back once it takes D0");
+    power_refused = 1;
+    w = PCI_D3HOT;
+    CHECK(pwrite_at(device, pmcsr, &w, 2) == 2 && (m->cfg[0xD4] & 3) == 0 && !d->power_low &&
+              !d->pm_saved_ok && pread_at(device, 0, &v, 4) == 4,
+          "a function that refuses D3hot keeps its BARs in reach and owes no state");
+    power_refused = 0;
+}
+
 static int power_fd[2];
 static int32_t power_result[2];
 
@@ -1960,6 +2063,40 @@ static int32_t set_irqs(int fd, uint32_t flags, uint32_t index, uint32_t start, 
 #define EVENTFD_TRIGGER (VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER)
 #define NONE_TRIGGER    (VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_TRIGGER)
 
+/** The owner's Interrupt Disable over an interrupt it has not served, as
+ * Linux's virq_disabled: no signal while it is set, and the mask kept until
+ * it is clear. The line is unmasked and idle at the start and the end. */
+static void intx_owner_rows(void)
+{
+    struct fn *m = &fns[1];
+    uint64_t cmd = (7ull << 40) + 4;
+    uint16_t w = 0x0406;
+
+    m->cfg[6] |= 0x08;
+    raise(IRQ_VECTOR(11));
+    CHECK(evs[0].count == 6 && (m->cfg[5] & 0x04), "an interrupt the owner has not served");
+    CHECK(pwrite_at(device, cmd, &w, 2) == 2 && (m->cfg[5] & 0x04) && evs[0].count == 6,
+          "the owner's Interrupt Disable keeps the line masked");
+    eventfd_signal(&evs[1]);
+    vfio_irq_work();
+    CHECK((m->cfg[5] & 0x04) && evs[0].count == 6,
+          "an unmask while it is set keeps the mask and signals nothing");
+    CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 6,
+          "nor does a trigger without data");
+    w = 0x0006;
+    CHECK(pwrite_at(device, cmd, &w, 2) == 2 && (m->cfg[5] & 0x04) && evs[0].count == 7,
+          "clearing it while the line is asserted keeps the mask and signals again");
+    m->cfg[6] &= (uint8_t)~0x08;
+    eventfd_signal(&evs[1]);
+    vfio_irq_work();
+    CHECK((m->cfg[5] & 0x04) == 0, "and the owner's unmask then lifts the mask");
+    w = 0x0406;
+    (void)pwrite_at(device, cmd, &w, 2);
+    w = 0x0006;
+    CHECK(pwrite_at(device, cmd, &w, 2) == 2 && (m->cfg[5] & 0x04) == 0 && evs[0].count == 7,
+          "setting and clearing it over an idle line unmasks it again without a signal");
+}
+
 /** The line: its eventfd, its mask at each interrupt, its unmasks. */
 static void intx_rows(void)
 {
@@ -2021,6 +2158,7 @@ static void intx_rows(void)
     CHECK((m->cfg[5] & 0x04) == 0 && evs[1].count == 0, "the worker unmasks the idle line");
     CHECK(set_irqs(device, NONE_TRIGGER, 0, 0, 1, NULL) == 0 && evs[0].count == 5,
           "a trigger without data signals the eventfd");
+    intx_owner_rows();
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, &fd) == -EINVAL,
           "MSI while the line is on is refused");
     eventfd_signal(&evs[1]);
@@ -2058,9 +2196,14 @@ static void msi_rows(void)
     }
     CHECK(evs[2].count == 2, "the restored message reaches its original eventfd");
     fd[0] = -1;
+    if (msi_vector >= 48) {
+        in_flight[msi_vector] = 1;
+    }
     CHECK(set_irqs(device, EVENTFD_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 1, fd) == 0 &&
               msi_vector == -1 && vectors_held() == 0 && evs[2].refs == 0,
           "removing the MSI eventfd turns off the message before giving the vector back");
+    CHECK(evs[2].count == 3 && freed_in_flight == 0,
+          "after a message sent before then has signalled its eventfd");
     CHECK(set_irqs(device, NONE_TRIGGER, VFIO_PCI_MSI_IRQ_INDEX, 0, 0, NULL) == 0 &&
               vectors_held() == 0 && evs[2].refs == 0 && msi_vector == -1,
           "MSI off gives its vector back");
@@ -2085,6 +2228,33 @@ static void msix_power_rows(int xhci)
     CHECK(evs[4].count == 2, "the restored MSI-X entry reaches its original eventfd");
 }
 
+/** An I/O BAR the firmware left without an address, BAR 4 of the xHCI,
+ * which would decode ports 0 to 255: neither exposed nor decoded. */
+static void unassigned_io_rows(int xhci)
+{
+    struct vfio_region_info ri;
+    uint8_t b[4] = {0xAA, 0xAA, 0xAA, 0xAA};
+    uint16_t w = 0x0007;
+    int32_t rd, wr;
+    int i, untouched = 1;
+
+    ri.argsz = sizeof(ri);
+    ri.index = 4;
+    CHECK(ioc(xhci, VFIO_DEVICE_GET_REGION_INFO, (uintptr_t)&ri) == 0 && ri.size == 0 &&
+              ri.flags == 0,
+          "an unassigned I/O BAR is no region");
+    rd = pread_at(xhci, (4ull << 40) + 0x20, b, 1);
+    wr = pwrite_at(xhci, (4ull << 40) + 0x40, b, 4);
+    CHECK(rd == -EINVAL && wr == -EINVAL, "and reads and writes no port");
+    for (i = 0; i < 256; i++) {
+        untouched = untouched && ports[i] == 0;
+    }
+    CHECK(untouched, "the host's ports 0 to 255 are not reached");
+    CHECK((fns[2].cfg[4] & 0x01) == 0, "the open turns its I/O decoding off");
+    CHECK(pwrite_at(xhci, (7ull << 40) + 4, &w, 2) == 2 && (fns[2].cfg[4] & 0x07) == 0x06,
+          "and the owner cannot turn it on");
+}
+
 /** MSI-X on the xHCI, entry by entry. */
 static void msix_rows(void)
 {
@@ -2094,8 +2264,11 @@ static void msix_rows(void)
 
     g2 = open_node("vfio/2");
     CHECK(ioc(g2, VFIO_GROUP_SET_CONTAINER, (uintptr_t)&g2fd) == 0, "the xHCI's group");
+    add_bar(&fns[2], 4, 0, 256, 1, 0); /* ports the firmware left unassigned */
+    fns[2].cfg[4] |= 0x01;
     xhci = ioc(g2, VFIO_GROUP_GET_DEVICE_FD, (uintptr_t)"0000:00:14.0");
     CHECK(xhci > 0, "the xHCI opens");
+    unassigned_io_rows(xhci);
     CHECK(set_irqs(xhci, EVENTFD_TRIGGER, VFIO_PCI_MSIX_IRQ_INDEX, 0, 4, fd) == 0 &&
               msix_vectors[0] >= 48 && msix_vectors[1] >= 48 && msix_vectors[2] == -1 &&
               msix_vectors[3] >= 48 && msix_unmasks == 1 && windows == 1,
@@ -2178,6 +2351,8 @@ int main(void)
     pcie_rows();
     map_rows();
     power_rows();
+    power_check_rows();
+    power_refused_rows();
     power_wait_rows();
     info_rows();
     intx_rows();

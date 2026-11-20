@@ -55,6 +55,7 @@
 
 #include "../block/block.h"
 #include "../lib/idset.h"
+#include "../proc/mutex.h"
 #include "../proc/wait_queue.h"
 #include "sleeplock.h"
 
@@ -626,6 +627,10 @@ struct vfs_mount {
     /* The namespace lock (`vfs_ns_lock`), and the queue on which an
      * unmount waits for `inprogress` to drain. */
     struct sleep_lock ns;
+    /* On the base of a file-locked mount, changes of names share this
+     * before taking any inode lock (vfs_name_lock_changes). A path retry
+     * takes it exclusively. */
+    struct rwsem name_walk;
     /* On a type that sets `file_locked`, the lock a rename between two
      * directories takes before either directory's (`vfs_rename_lock`), so
      * that no other such rename changes which is above the other while it

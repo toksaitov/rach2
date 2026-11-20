@@ -93,6 +93,7 @@ struct vfio_device {
     uint64_t bar_phys[6];
     uint64_t bar_size[6]; /* 0 for none, and the upper half of a 64-bit BAR */
     int bar_io[6];
+    int io_off;           /* an I/O BAR is not claimed: I/O decoding stays off */
     uint32_t vbar[6];     /* the BARs as the owner wrote them */
     uint8_t bar_flags[6]; /* the low bits of each BAR, its kind */
     uint32_t vrom;
@@ -101,7 +102,7 @@ struct vfio_device {
     int rom_shadow;    /* the ROM is the firmware's copy at 0xC0000 */
     int reset_works;   /* a reset succeeded at the open, as Linux's */
     int pm_restore;    /* it loses its state in D3hot: No_Soft_Reset clear */
-    int power_low;     /* VFIO put it in D3hot; its BARs are not reached */
+    int power_low;     /* it was read back in D3hot; its BARs are not reached */
     int pm_saved_ok;   /* `pm_saved` holds the state kept on the way to D3hot */
     struct pci_saved_state pm_saved;
     uint8_t cfg_map[256]; /* how each byte of the header is reached: CFG_* */
@@ -229,6 +230,7 @@ uint32_t vfio_irq_count(const struct vfio_device *d, uint32_t index);
 int32_t vfio_irq_set(struct vfio_device *d, uintptr_t arg);
 void vfio_irq_disable(struct vfio_device *d);
 void vfio_irq_restore(struct vfio_device *d);
+void vfio_irq_intx_owner(struct vfio_device *d);
 /** Whether any unmask request is queued. */
 int vfio_irq_pending(void *arg);
 /** Serve one pass of queued unmask requests, with the big lock held. */
@@ -249,6 +251,9 @@ int32_t vfio_igd_read(struct vfio_device *d, uint32_t index, uint32_t pos, uint8
 
 /** Wait `ms` milliseconds at least: a process sleeps, the boot spins. */
 void vfio_hw_msleep(unsigned int ms);
+
+/** Wait `us` microseconds at least, spinning. */
+void vfio_hw_udelay(unsigned int us);
 
 /** Start the shared IRQ worker, with the big lock held. 0 or -ENOMEM. */
 int vfio_hw_irq_start(void);

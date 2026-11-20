@@ -18942,6 +18942,7 @@ static int32_t unlink_named(const char *path, int end)
     } else {
         struct vfs_ref victim;
 
+        vfs_name_lock_changes(parent.mnt);
         vfs_node_lock(&parent);
         rc = vfs_child_lock(&parent, leaf, &victim);
         if (rc == 0) {
@@ -18958,6 +18959,7 @@ static int32_t unlink_named(const char *path, int end)
         }
         vfs_child_unlock(&victim);
         vfs_node_unlock(&parent);
+        vfs_name_unlock_changes(parent.mnt);
     }
     vfs_walk_unlock(parent.mnt);
     vfs_ref_release(&parent);
@@ -19514,6 +19516,7 @@ static int32_t do_rmdir(const char *pathbuf)
     } else {
         struct vfs_ref victim;
 
+        vfs_name_lock_changes(parent.mnt);
         vfs_node_lock(&parent);
         rc = vfs_child_lock(&parent, leaf, &victim);
         if (rc == 0) {
@@ -19527,6 +19530,7 @@ static int32_t do_rmdir(const char *pathbuf)
         }
         vfs_child_unlock(&victim);
         vfs_node_unlock(&parent);
+        vfs_name_unlock_changes(parent.mnt);
     }
     vfs_walk_unlock(parent.mnt);
     vfs_ref_release(&parent);
@@ -19935,7 +19939,9 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
     }
     vfs_tree_changed();
     if (!mnt_is_root(vfs_mount_base(opar.mnt))) {
+        vfs_name_lock_changes(opar.mnt);
         rc = rename_mounted_names(&opar, oleaf, &npar, nleaf, flags, slash);
+        vfs_name_unlock_changes(opar.mnt);
     } else {
         vfs_ns_lock(opar.mnt);
         rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);

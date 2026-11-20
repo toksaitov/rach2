@@ -10,6 +10,7 @@
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
 #include "../../mm/paging.h"
 #include "../../proc/mutex.h"
 #include "../../proc/sched.h"
@@ -38,16 +39,6 @@ void i915_ggtt_invalidate(struct drm_i915_private *i915)
     i915_write(&i915->hw, GFX_FLSH_CNTL_GEN6, GFX_FLSH_CNTL_EN);
     i915_posting_read(&i915->hw, GFX_FLSH_CNTL_GEN6);
     spin_unlock_irqrestore(&i915->uncore.lock, flags);
-}
-
-/** Add [start, end) to the kept ranges, when there is room. */
-static void i915_ggtt_keep(struct i915_ggtt *ggtt, uint64_t start, uint64_t end)
-{
-    if (ggtt->nkept < I915_GGTT_KEPT_MAX) {
-        ggtt->kept[ggtt->nkept].start = start;
-        ggtt->kept[ggtt->nkept].end = end;
-        ggtt->nkept++;
-    }
 }
 
 /**
@@ -91,84 +82,88 @@ static void i915_ggtt_find_firmware(struct drm_i915_private *i915)
         if (bytes > ggtt->total - surf) {
             bytes = ggtt->total - surf;
         }
-        i915_ggtt_keep(ggtt, surf, surf + bytes);
+        ggtt->kept[ggtt->nkept].start = surf;
+        ggtt->kept[ggtt->nkept].end = surf + bytes;
+        ggtt->nkept++;
         klog(KLOG_INFO, "i915", "gtt: pipe %c's firmware surface at 0x%lx, %lu KiB, kept",
              'A' + pipe, (unsigned long)surf, (unsigned long)(bytes / 1024));
     }
 }
 
 /*
- * The pages a binding left mapped, which the next bind of its function
- * keeps: their function, bus << 8 | devfn, and range, `ncarried` of them.
- * Linux has none, since its unbind frees a status page only after masking
- * its writes; here a release that could not mask them keeps the page, and
- * a bind with no reset of the function between could otherwise point the
- * range elsewhere while the GPU still writes there.
+ * Retained status pages belong to the bound GGTT or, between binds, to
+ * this list of per-function lists. The spin lock protects the parked
+ * list across PCI functions. Each function's PCI claim serializes moving
+ * its list between the parked list and a binding.
  */
-static struct {
-    int fn;
-    struct i915_gtt_range range;
-} carried[I915_NUM_ENGINES];
-static int ncarried;
+static struct i915_ggtt_status *carried;
+static struct spinlock carry_lock = SPINLOCK_INIT_NAMED("i915_ggtt_carry");
 
-/** The function `pdev` as `carried` names it. */
-static int carry_fn(const pci_device_t *pdev)
+/** Return the bus and devfn of `pdev` as one number. */
+static uint16_t carry_fn(const pci_device_t *pdev)
 {
     return (int)pdev->bus << 8 | pdev->device << 3 | pdev->function;
 }
 
-void i915_ggtt_carry(struct drm_i915_private *i915, uint64_t offset)
+/** Detach and return the parked pages belonging to `pdev`. */
+static struct i915_ggtt_status *carry_take(const pci_device_t *pdev)
 {
-    if (ncarried == I915_NUM_ENGINES) {
-        klog(KLOG_WARN, "i915", "gtt: no room to keep 0x%lx for the next bind",
-             (unsigned long)offset);
+    uint16_t fn = carry_fn(pdev);
+    struct i915_ggtt_status **link = &carried, *first;
+    uint32_t flags = spin_lock_irqsave(&carry_lock);
+
+    while (*link && (*link)->fn != fn) {
+        link = &(*link)->next_fn;
+    }
+    first = *link;
+    if (first) {
+        *link = first->next_fn;
+        first->next_fn = 0;
+    }
+    spin_unlock_irqrestore(&carry_lock, flags);
+    return first;
+}
+
+void i915_ggtt_carry(struct drm_i915_private *i915, struct i915_ggtt_status *status,
+                     uint64_t offset)
+{
+    struct i915_ggtt_status **link = &i915->ggtt.status;
+
+    while (*link && (*link)->range.start < offset) {
+        link = &(*link)->next;
+    }
+    status->fn = carry_fn(&i915->pci);
+    status->range.start = offset;
+    status->range.end = offset + I915_GTT_PAGE_SIZE;
+    status->next = *link;
+    *link = status;
+}
+
+void i915_ggtt_carry_park(struct drm_i915_private *i915)
+{
+    struct i915_ggtt_status *first = i915->ggtt.status;
+    uint32_t flags;
+
+    if (!first) {
         return;
     }
-    carried[ncarried].fn = carry_fn(&i915->pci);
-    carried[ncarried].range.start = offset;
-    carried[ncarried].range.end = offset + I915_GTT_PAGE_SIZE;
-    ncarried++;
+    i915->ggtt.status = 0;
+    flags = spin_lock_irqsave(&carry_lock);
+    first->next_fn = carried;
+    carried = first;
+    spin_unlock_irqrestore(&carry_lock, flags);
 }
 
 void i915_ggtt_carry_drop(const pci_device_t *pdev)
 {
-    int i, n = 0, fn = carry_fn(pdev);
+    struct i915_ggtt_status *status = carry_take(pdev);
 
-    for (i = 0; i < ncarried; i++) {
-        if (carried[i].fn != fn) {
-            carried[n++] = carried[i];
-        }
+    while (status) {
+        struct i915_ggtt_status *next = status->next;
+
+        kfree(status);
+        status = next;
     }
-    ncarried = n;
-}
-
-/** Keep the ranges an earlier binding of `i915`'s function carried. */
-static void i915_ggtt_keep_carried(struct drm_i915_private *i915)
-{
-    int i, fn = carry_fn(&i915->pci);
-
-    for (i = 0; i < ncarried; i++) {
-        if (carried[i].fn == fn) {
-            i915_ggtt_keep(&i915->ggtt, carried[i].range.start, carried[i].range.end);
-            klog(KLOG_WARN, "i915",
-                 "gtt: 0x%lx kept: a status page the function's last "
-                 "binding kept, with no reset since",
-                 (unsigned long)carried[i].range.start);
-        }
-    }
-}
-
-/** Whether the GTT offset `offset` lies in a kept range. */
-static int i915_ggtt_is_kept(const struct i915_ggtt *ggtt, uint64_t offset)
-{
-    int i;
-
-    for (i = 0; i < ggtt->nkept; i++) {
-        if (offset >= ggtt->kept[i].start && offset < ggtt->kept[i].end) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /**
@@ -177,18 +172,11 @@ static int i915_ggtt_is_kept(const struct i915_ggtt *ggtt, uint64_t offset)
  */
 static int32_t i915_ggtt_check(const struct i915_ggtt *ggtt, uint64_t offset, uint64_t size)
 {
-    int i;
-
     if (size == 0 || ((offset | size) & (I915_GTT_PAGE_SIZE - 1)) != 0 || offset > ggtt->total ||
         size > ggtt->total - offset) {
         return -EINVAL;
     }
-    for (i = 0; i < ggtt->nkept; i++) {
-        if (offset < ggtt->kept[i].end && offset + size > ggtt->kept[i].start) {
-            return -EBUSY;
-        }
-    }
-    return 0;
+    return i915_ggtt_kept_overlap(ggtt, offset, offset + size) ? -EBUSY : 0;
 }
 
 int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const uint64_t *pages,
@@ -289,6 +277,7 @@ int32_t i915_ggtt_init(struct drm_i915_private *i915)
 {
     struct i915_ggtt *ggtt = &i915->ggtt;
     const pci_device_t *pdev = &i915->pci;
+    const struct i915_ggtt_status *status;
     uint32_t gsm_size, entries, i, cleared = 0;
     uint16_t msac;
     int32_t err;
@@ -333,9 +322,15 @@ int32_t i915_ggtt_init(struct drm_i915_private *i915)
     ggtt->scratch_pte = i915_ggtt_pte_encode(ggtt->scratch, I915_CACHE_NONE);
 
     i915_ggtt_find_firmware(i915);
-    i915_ggtt_keep_carried(i915);
+    status = ggtt->status = carry_take(pdev);
     for (i = 0; i < entries; i++) {
-        if (!i915_ggtt_is_kept(ggtt, (uint64_t)i * I915_GTT_PAGE_SIZE)) {
+        uint64_t offset = (uint64_t)i * I915_GTT_PAGE_SIZE;
+
+        if (status && status->range.start == offset) {
+            klog(KLOG_WARN, "i915", "gtt: 0x%lx kept: a status page retained without a reset",
+                 (unsigned long)offset);
+            status = status->next;
+        } else if (!i915_ggtt_firmware_overlap(ggtt, offset, offset + I915_GTT_PAGE_SIZE)) {
             i915_gtt_write(&i915->hw, i, ggtt->scratch_pte);
             cleared++;
         }
@@ -351,6 +346,7 @@ int32_t i915_ggtt_init(struct drm_i915_private *i915)
 
 void i915_ggtt_fini(struct drm_i915_private *i915)
 {
+    i915_ggtt_carry_park(i915);
     if (i915->ggtt.scratch) {
         free_frame(i915->ggtt.scratch);
         i915->ggtt.scratch = 0;

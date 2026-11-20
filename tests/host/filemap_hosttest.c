@@ -2377,9 +2377,38 @@ static void mapping_permission(void)
     check(filemap_check(&file, 0, VM_PROT_READ) == -EBADF, "a path descriptor cannot map");
 }
 
+/** A device's description judges noexec by the mount it was opened
+ * through: a device node's (`dev_mnt`) or a synthetic node's (`synth_mnt`),
+ * such as /dev/zero opened through a bind of /dev, as Linux's path_noexec
+ * judges the open's f_path. */
+static void device_noexec(void)
+{
+    struct vfs_mount mnt = {0};
+    struct open_file ofd = {0};
+    fd_entry_t dev = {.ofd = &ofd, .type = FD_TYPE_DEVICE, .flags = FD_FLAG_READ};
+
+    check(filemap_access(&dev, 1, VM_PROT_READ | VM_PROT_EXEC) == 0 && !filemap_noexec(&dev),
+          "a device with no mount may execute");
+    mnt.flags = VFS_MS_NOEXEC;
+    ofd.synth_mnt = &mnt;
+    check(filemap_access(&dev, 0, VM_PROT_READ | VM_PROT_EXEC) == -EPERM && filemap_noexec(&dev),
+          "a device opened through a noexec synthetic mount may not execute");
+    ofd.synth_mnt = NULL;
+    ofd.dev_mnt = &mnt;
+    check(filemap_access(&dev, 1, VM_PROT_READ | VM_PROT_EXEC) == -EPERM && filemap_noexec(&dev),
+          "a device opened through a node on a noexec mount may not execute");
+    mnt.flags = 0;
+    check(filemap_access(&dev, 1, VM_PROT_READ) == 0 && !filemap_noexec(&dev),
+          "a device on an executable mount may execute");
+    dev.flags = 0;
+    check(filemap_access(&dev, 0, VM_PROT_READ) == -EACCES,
+          "a device mapping needs a readable descriptor");
+}
+
 int main(void)
 {
     mapping_permission();
+    device_noexec();
     anon_shared_rows();
     disk_stores_rows();
     unlocked_rows();

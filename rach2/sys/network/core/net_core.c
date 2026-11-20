@@ -6,6 +6,7 @@
 
 #include "../../lib/kirq.h"
 #include "../../klog.h"
+#include "../../lib/kerrno.h"
 #include "../net.h"
 #include "byteorder.h"
 #include "../driver/netdev.h"
@@ -20,6 +21,23 @@
 uint8_t net_mac[6] = {0, 0, 0, 0, 0, 0};
 
 struct net_mib net_mib;
+
+uint32_t net_port_range = NET_PORT_RANGE_DEFAULT;
+
+int net_port_range_set(int low, int high)
+{
+    static int parity_logged;
+
+    if (high < low || low < (int)NET_PORT_UNPRIVILEGED || high > 65535) {
+        return -EINVAL;
+    }
+    if (!((low ^ high) & 1) && !parity_logged) {
+        parity_logged = 1;
+        klog(KLOG_ERR, "net", "ip_local_port_range: prefer different parity for start/end values");
+    }
+    net_port_range = ((uint32_t)high << 16) | (uint32_t)low;
+    return 0;
+}
 
 uint16_t read16be(const uint8_t *p)
 {

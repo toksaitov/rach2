@@ -563,23 +563,32 @@ struct ext2_path_level {
 /**
  * The entry of directory `d`, whose lock the caller holds, that names inode
  * `ino` by a name other than `.` and `..`, into `sc`: 1, 0 when it has none,
- * or -EIO.
+ * or -EIO. The directory lock protects the scan. Give back the big lock
+ * hold the caller brought, as the name operations do, and copy each
+ * directory block once so that a long scan leaves the other CPUs free.
  */
 static int dir_name_of(struct ext2_mount *em, const struct ext2_node *d, uint32_t ino,
                        struct ext2_scan *sc)
 {
+    struct ext2_window w;
     uint32_t cursor = 0;
+    int big = bkl_held();
+    int got;
 
-    for (;;) {
-        int got = dir_scan(em, d, &cursor, sc);
-
-        if (got <= 0) {
-            return got;
-        }
+    if (big) {
+        bkl_exit();
+    }
+    window_open(em, &w);
+    while ((got = dir_scan_in(em, d, &w, &cursor, sc)) > 0) {
         if (sc->ino == ino && !names_equal(sc->name, ".") && !names_equal(sc->name, "..")) {
-            return 1;
+            break;
         }
     }
+    window_close(&w);
+    if (big) {
+        bkl_enter();
+    }
+    return got;
 }
 
 /** Whether node `d`, whose lock the caller holds, is a directory with a

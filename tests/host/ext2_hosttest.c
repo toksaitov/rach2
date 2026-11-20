@@ -569,6 +569,11 @@ static unsigned char *wlog_data[WLOG_MAX];
 static int wlog_n, wlog_capture, wlog_overflow;
 static int flush_calls, flush_fail_at = -1;
 static int flush_log[WLOG_MAX], flush_n;
+/* While set, a `BLOCK_WRITE_THROUGH` device keeps its `unflushed` mark as a
+   virtio or AHCI disk's driver does, and `block_flush` sends nothing while
+   the mark is clear, as the disk layer's does; `flushes_sent` counts the
+   flushes sent then. */
+static int track_unflushed, flushes_sent;
 /* Called with each write that lands, before it lands, while a row sets it. */
 static void (*write_watch)(uint64_t lba, uint32_t count, const void *buf);
 
@@ -579,14 +584,23 @@ uint32_t block_max_sectors(block_device_t *device)
 }
 
 /**
- * Flush the device. Call `flush_pause` first when a row set it; fail with
+ * Flush the device: under `track_unflushed`, a write-through device not
+ * marked unflushed sends nothing, as the disk layer's `block_flush`, and
+ * one marked has its mark cleared. Call `flush_pause` first when a row set
+ * it; fail with
  * `-EIO` the flush numbered `flush_fail_at`; otherwise, while writes are
  * captured, record in `flush_log` how many writes the flush follows. A full
  * `flush_log` sets `wlog_overflow` and fails.
  */
 int block_flush(block_device_t *device)
 {
-    (void)device;
+    if (track_unflushed && (device->flags & BLOCK_WRITE_THROUGH)) {
+        if (!device->unflushed) {
+            return 0;
+        }
+        device->unflushed = 0;
+        flushes_sent++;
+    }
     if (flush_pause) {
         flush_pause();
     }
@@ -621,13 +635,22 @@ block_device_t *block_submitter(block_device_t *dev)
  * Do a request with flags. The device keeps no cache of its own; one marked
  * `BLOCK_WRITE_THROUGH` records a captured write asked for without
  * `BLOCK_REQ_NOFLUSH` as the write and its flush, as a disk that writes
- * through makes it.
+ * through makes it, and under `track_unflushed` marks itself unflushed after
+ * a write with that flag and clears the mark after one without.
  */
 int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
                         void *buffer, uint32_t flags)
 {
     int rc = block_request(device, write, lba, count, buffer);
 
+    if (rc == 0 && write && track_unflushed && (device->flags & BLOCK_WRITE_THROUGH)) {
+        if (flags & BLOCK_REQ_NOFLUSH) {
+            device->unflushed = 1;
+        } else {
+            device->unflushed = 0;
+            flushes_sent++;
+        }
+    }
     if (rc == 0 && write && (device->flags & BLOCK_WRITE_THROUGH) && !(flags & BLOCK_REQ_NOFLUSH) &&
         wlog_capture) {
         if (flush_n == WLOG_MAX) {
@@ -10834,6 +10857,7 @@ static const struct {
     {"--async-only", async_rows},
     {"--async-fsync-only", async_fsync_rows},
     {"--creates-only", async_create_row},
+    {"--flushes-only", async_flush_row},
 };
 
 /**

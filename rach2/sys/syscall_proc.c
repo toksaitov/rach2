@@ -8577,6 +8577,27 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
 }
 
 /**
+ * The marks of the rights mprotect may never give a mapping through `e`,
+ * shared or not, as Linux's mmap clears VM_MAYWRITE and VM_MAYEXEC:
+ * VM_PROT_NOWRITE for a shared one through a descriptor not open for
+ * writing, or whose stores would not reach the file since it is served as
+ * a private one (`served` 1), and VM_PROT_NOEXEC for one of a file or a
+ * device opened through a noexec mount (`filemap_noexec`).
+ */
+static uint32_t mmap_never(const fd_entry_t *e, int shared, int served)
+{
+    uint32_t marks = 0;
+
+    if (shared && (!(e->flags & FD_FLAG_WRITE) || served)) {
+        marks |= VM_PROT_NOWRITE;
+    }
+    if (filemap_noexec(e)) {
+        marks |= VM_PROT_NOEXEC;
+    }
+    return marks;
+}
+
+/**
  * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
  * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
  * shared mapping of a file in memory is VM_SHARED, the file's own pages; a
@@ -8591,12 +8612,11 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * A shared mapping of a file of another disk file system, whose inode
  * numbers follow names, is served as a private one when it is read-only,
  * which reads the same bytes, and fails with ENODEV when it may be written.
- * A shared mapping served as a private one, or made through a descriptor
- * not open for writing, is given VM_PROT_NOWRITE, so that mprotect cannot
- * make it writable later. A file of memfd_secret maps as `mmap_secret`
- * says. The file's path is built at each reading of /proc/PID/maps
- * (`procfs_maps_names`), as Linux's d_path at that read. A file on ext2 is
- * aligned as MAP_THP_FILE, as Linux's ext2 and ext4 align theirs.
+ * The rights mprotect may never give the mapping are marked (`mmap_never`).
+ * A file of memfd_secret maps as `mmap_secret` says. The file's path is
+ * built at each reading of /proc/PID/maps (`procfs_maps_names`), as Linux's
+ * d_path at that read. A file on ext2 is aligned as MAP_THP_FILE, as
+ * Linux's ext2 and ext4 align theirs.
  */
 static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
 {
@@ -8620,9 +8640,7 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
         loop_backs(e->ofd->vmnt, e->ofd->vnode)) {
         return -EBUSY;
     }
-    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {
-        src->prot |= VM_PROT_NOWRITE;
-    }
+    src->prot |= mmap_never(e, shared, !sh && !disk);
     src->file = !shared ? filemap_private(e, sh, disk)
                 : sh    ? filemap_shared(e, sh)
                 : disk  ? filemap_disk_shared(e)
@@ -8637,16 +8655,15 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
  * maps itself (`file_ops.mmap`): a region of `len` bytes with the protection
  * and page offset in `src`, VM_SHARED for a shared mapping and VM_FILE for a
  * private one, is given to the operation, which sets its file, kind and
- * protection, and those go into `src`. A shared mapping through a
- * descriptor not open for writing is given VM_PROT_NOWRITE, as `mmap_file`
- * gives it. The region the call builds is not in the address space, so
- * its start is 0 and its end the length. The region is named for
- * /proc/PID/maps by the descriptor's link target now, once: every kind of
- * descriptor with its own mmap, a device, an anonymous inode or a file of
- * /sys, has a target that names the object and is the same from every
- * root, so a reader with another root would build the same path; with no
- * room for the path the region has none. The operation's error, or
- * `filemap_check`'s.
+ * protection, and those go into `src`. The region is given the marks of the
+ * rights mprotect may never give it first (`mmap_never`). The region the
+ * call builds is not in the address space, so its start is 0 and its end
+ * the length. The region is named for /proc/PID/maps by the descriptor's
+ * link target now, once: every kind of descriptor with its own mmap, a
+ * device, an anonymous inode or a file of /sys, has a target that names the
+ * object and is the same from every root, so a reader with another root
+ * would build the same path; with no room for the path the region has
+ * none. The operation's error, or `filemap_check`'s.
  */
 static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, struct map_source *src)
 {
@@ -8658,7 +8675,7 @@ static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, str
     }
     k_memset(&vma, 0, sizeof(vma));
     vma.end = len;
-    vma.prot = src->prot | ((shared && !(e->flags & FD_FLAG_WRITE)) ? VM_PROT_NOWRITE : 0u);
+    vma.prot = src->prot | mmap_never(e, shared, 0);
     vma.type = shared ? VM_SHARED : VM_FILE;
     vma.pgoff = src->pgoff;
     rc = e->ops->mmap(e, &vma);
@@ -8681,7 +8698,10 @@ static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, str
  * caller set from its arguments: an object that maps itself, a device's or
  * a driver's (`mmap_object`), a mapping of a file (`mmap_file`), shared
  * anonymous memory (VM_SHARED), or NULL for private anonymous memory
- * (VM_ANON). /dev/zero maps as anonymous memory.
+ * (VM_ANON). /dev/zero maps as anonymous memory, after the access checks a
+ * file's mapping makes (`filemap_access`) and with the marks of the rights
+ * mprotect may never give it (`mmap_never`), as Linux's do_mmap checks and
+ * clears VM_MAYWRITE and VM_MAYEXEC before /dev/zero's mmap runs.
  * Anonymous memory has its pages from its own first on, so its offset is
  * set to 0, as Linux ignores it. The alignment is MAP_THP_ANON for private
  * anonymous memory but /dev/zero's, `mmap_file`'s for a file, and
@@ -8692,6 +8712,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 {
     int shared = (flags & MAP_TYPE) != MAP_PRIVATE;
     fd_entry_t *e;
+    int32_t rc;
 
     src->file = NULL;
     src->type = VM_ANON;
@@ -8707,6 +8728,11 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
         if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
             return mmap_file(e, shared, src);
         }
+        rc = filemap_access(e, shared, src->prot);
+        if (rc != 0) {
+            return rc;
+        }
+        src->prot |= mmap_never(e, shared, 0);
     }
     src->pgoff = 0;
     if (shared) {
@@ -9316,7 +9342,8 @@ static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t leng
  * that cannot stops the call (`vm_protect_stop`): ENOMEM at a page that no
  * region holds; EACCES for write asked of a shared mapping that may never
  * be written (the VM_PROT_NOWRITE `mmap_file` and `mmap_shm` give) or for
- * execute asked of a mapping of memfd_secret; EPERM at a sealed region
+ * execute asked of a mapping of memfd_secret or of a file on a noexec mount
+ * (VM_PROT_NOEXEC); EPERM at a sealed region
  * (mseal). The regions and resident pages before the stop keep the new
  * protection, and their notifiers run, before the error is returned; a
  * split with no room for its region is ENOMEM with nothing changed. The

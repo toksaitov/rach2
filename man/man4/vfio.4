@@ -179,6 +179,9 @@ uncached; its pages fault in only while the function decodes memory and
 is not in D3hot, and a reset, turning decoding off or D3hot takes them
 from every mapping.
 An I/O BAR is read and written port by port and cannot be mapped.
+A BAR the firmware left without an address, or one over the PC's fixed
+ports or another BAR, is a region of size 0, and an I/O one keeps the
+function's I/O decoding off.
 The MSI-X table's bytes read as all ones and take no write.
 .Pp
 The configuration space is the function's but for what
@@ -190,8 +193,10 @@ A write cannot start a function level reset, and the OpRegion's address
 takes no write.
 A write of the power state is carried out by
 .Nm ,
-which keeps the state of a function that loses it in D3hot and restores
-it and its active interrupts at D0.
+which enters a low state only from a shallower one and D1 or D2 only when
+the function offers it, reads the state back after the change's wait,
+keeps the state of a function that loses it in D3hot, and restores it and
+its active interrupts once the function is back in D0.
 Another power-state write waits until the transition and restore finish.
 The extended space reads as the function answers it and takes no write.
 .Ss Interrupts
@@ -205,6 +210,9 @@ an unmask, by ioctl or by an eventfd given to
 .Dv VFIO_IRQ_SET_ACTION_UNMASK ,
 lifts the mask, or while the function still asserts the line keeps it and
 signals the eventfd again.
+While the owner sets the Interrupt Disable bit, the line stays masked and
+nothing is signalled; clearing the bit unmasks the line, or signals again
+while the function still asserts it.
 An eventfd unmask is served by a kernel worker.
 The line is offered only to a function that masks it that way.
 MSI-X entries can be set and cleared while MSI-X is on.

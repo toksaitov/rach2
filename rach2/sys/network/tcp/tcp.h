@@ -625,23 +625,28 @@ int tcp_port_listening(const struct socket *sock, uint16_t port);
 
 /**
  * A port for a stream socket bound to port 0, which Linux gives at the bind:
- * one of the ephemeral range, NET_PORT_LOW to NET_PORT_HIGH, that no control
- * block and no stream socket has, or 0 when none is free. The search starts
- * at a place no host off the machine can predict and tries the odd ports
- * first, as Linux's inet_csk_find_open_port does, leaving the even ones to
- * `connect`. Takes `net_lock` itself; a caller that counts the port with
- * `tcp_port_hold` holds the lock across both, as `bind` does.
+ * one of the ephemeral range, `net_port_range`, that no control block and no
+ * stream socket has, or 0 when none is free. The search starts at a place no
+ * host off the machine can predict and tries the ports an odd offset from the
+ * range's low end first, as Linux's inet_csk_find_open_port does, leaving the
+ * others to `connect`. Takes `net_lock` itself; a caller that counts the port
+ * with `tcp_port_hold` holds the lock across both, as `bind` does.
  */
 uint16_t tcp_bind_ephemeral(void);
 
 /**
- * Count `port` as bound by a stream socket in the table of ephemeral ports
- * in use, which every later choice of an ephemeral port passes over, or
- * take the count back. A port outside the range is not counted. The caller
- * holds `net_lock`.
+ * Count `port` as bound by a stream socket in the table of ports in use,
+ * which every later choice of an ephemeral port passes over, or take the
+ * count back. Port 0 is not counted. The caller holds `net_lock`.
  */
 void tcp_port_hold(uint16_t port);
 void tcp_port_unhold(uint16_t port);
+
+/** Whether a block or a bound stream socket holds `port`, as the table of
+ * ports in use counts them: when not, no listener, connection or bound
+ * socket has it, and a bind need search for none. The caller holds
+ * `net_lock`. */
+int tcp_port_in_use(uint16_t port);
 
 /**
  * Make `sock` a listener on `port`, at the address it bound or any, or on

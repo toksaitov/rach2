@@ -1444,9 +1444,10 @@ static void exe_relative(char *path)
     kfree(prefix);
 }
 
-/** Reconstruct the executable's present path under its mount's lock. The
- * description stays held across a sleeping path read and is released before
- * the reader's root is read, so two mount locks are never held together.
+/** Reconstruct the executable's present path with its description held.
+ * A named file on a file-locked mount uses the rename sequence and waits
+ * for changes with the namespace lock free. Other paths use that lock.
+ * The description is released before the reader's root is read.
  * NULL with `*err` -EIO when a header or a path of the KRFFS root, or the
  * path, the held name's path or the attributes of another type, cannot be
  * read, which the reader answers, never a recorded name in its place;
@@ -1456,7 +1457,7 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
     krffs_node_t *node;
     struct vfs_stat st;
     char *path = NULL;
-    int rc;
+    int rc, lock_mount;
 
     *deleted = 0;
     *err = 0;
@@ -1464,7 +1465,10 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
         return NULL;
     }
     fd_ofd_ref(file);
-    vfs_ns_lock(file->vmnt);
+    lock_mount = !file->name || !file->vmnt->type->file_locked;
+    if (lock_mount) {
+        vfs_ns_lock(file->vmnt);
+    }
     node = exe_root_node(file);
     if (node) {
         krffs_node_t head;
@@ -1503,7 +1507,9 @@ static char *exe_file_path(struct open_file *file, int *deleted, int *err)
             path = NULL;
         }
     }
-    vfs_ns_unlock(file->vmnt);
+    if (lock_mount) {
+        vfs_ns_unlock(file->vmnt);
+    }
     fd_ofd_unref(file);
     if (path) {
         exe_relative(path);
@@ -2750,7 +2756,8 @@ static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
  * sh, mr, mw, me and ms. A shared mapping is ms (`maps_shared`), and sh too
  * only when it may be made writable, as Linux clears VM_SHARED for a file
  * opened without write. The vDSO's pages have what Linux's special mappings
- * have: [vdso] mr mw me, and [vvar], which is VM_PROT_NOWRITE, mr.
+ * have: [vdso] mr mw me, and [vvar], which is VM_PROT_NOWRITE, mr. A mapping
+ * of memfd_secret or of a file on a noexec mount is not me.
  */
 static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
 {
@@ -2760,7 +2767,7 @@ static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
     ap_str(t, shared && !(r->prot & VM_PROT_NOWRITE) ? " sh" : "");
     ap_str(t, " mr");
     ap_str(t, !(r->prot & VM_PROT_NOWRITE) ? " mw" : "");
-    ap_str(t, vvar || (r->prot & VM_PROT_SECRET) ? "" : " me");
+    ap_str(t, vvar || (r->prot & (VM_PROT_SECRET | VM_PROT_NOEXEC)) ? "" : " me");
     ap_str(t, shared ? " ms" : "");
 }
 
@@ -6536,7 +6543,8 @@ static int procfs_gen_netnetstat(struct procfs_text *t)
     ap_str(t, "TcpExt: DelayedACKLost TCPTimeouts TCPAbortOnData TCPAbortOnClose "
               "TCPAbortOnTimeout TCPTimeWaitOverflow TCPChallengeACK TCPSYNChallenge "
               "TCPACKSkippedSynRecv "
-              "TCPACKSkippedSeq TCPACKSkippedChallenge TCPKeepAlive TCPMTUPFail "
+              "TCPACKSkippedSeq TCPACKSkippedTimeWait TCPACKSkippedChallenge TCPKeepAlive "
+              "TCPMTUPFail "
               "TCPMTUPSuccess\n"
               "TcpExt:");
     ap_mib(t, m->tcp_delayed_ack_lost);
@@ -6549,6 +6557,7 @@ static int procfs_gen_netnetstat(struct procfs_text *t)
     ap_mib(t, m->tcp_syn_challenge);
     ap_mib(t, m->tcp_ack_skipped_syn_recv);
     ap_mib(t, m->tcp_ack_skipped_seq);
+    ap_mib(t, m->tcp_ack_skipped_time_wait);
     ap_mib(t, m->tcp_ack_skipped_challenge);
     ap_mib(t, m->tcp_keepalive);
     ap_mib(t, m->tcp_mtup_fail);
@@ -10841,6 +10850,13 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry, struct userns *u
     } else if (entry >= SYNTH_SYS_SCHED_AUTOGROUP && entry <= SYNTH_SYS_SCHED_RT_RUNTIME) {
         ap_int(t, sysctl_sched_value(entry));
         ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_IP_LOCAL_PORT_RANGE) {
+        uint32_t r = net_port_range;
+
+        ap_u32(t, NET_PORT_LOW(r));
+        ap_ch(t, '\t');
+        ap_u32(t, NET_PORT_HIGH(r));
+        ap_ch(t, '\n');
     } else if (sysctl_ulong_text(t, entry)) {
         return 0;
     } else if (entry == SYNTH_SYS_FILE_NR) {
@@ -11240,6 +11256,41 @@ static int sysctl_refusal_kept(int entry)
 }
 
 /**
+ * Store the numbers written to net/ipv4/ip_local_port_range, the text of
+ * `n` bytes at `text` from `*at`, as Linux 6.12's `ipv4_local_port_range`
+ * takes them through `proc_dointvec_minmax`: one or two numbers, each from
+ * 1 to 65535, separated by spaces, the first the range's low end and the
+ * second its high end, a lone number keeping the high end; the range is
+ * then set unless its high end is below its low end or its low end below
+ * 1024 (`net_port_range_set`). `*at` is left past the last number read.
+ * Returns 0, or -EINVAL, which changes nothing.
+ */
+static int sysctl_port_range_store(const char *text, uint32_t n, uint32_t *at)
+{
+    uint32_t r = net_port_range;
+    unsigned long v[2], mag;
+    int i, neg, rc;
+
+    v[0] = NET_PORT_LOW(r);
+    v[1] = NET_PORT_HIGH(r);
+    for (i = 0; i < 2; i++) {
+        sysctl_skip(text, n, at);
+        if (*at == n) {
+            break;
+        }
+        rc = sysctl_get_long(text, n, at, &mag, &neg);
+        if (rc != 0) {
+            return rc;
+        }
+        if (neg || mag < 1ul || mag > 65535ul) {
+            return -EINVAL;
+        }
+        v[i] = mag;
+    }
+    return i == 0 ? -EINVAL : net_port_range_set((int)v[0], (int)v[1]);
+}
+
+/**
  * Write the numeric /proc/sys file `entry` through `e`, `count` bytes at
  * `buf`, as Linux 6.12's handler of the file takes them.
  *
@@ -11247,8 +11298,9 @@ static int sysctl_refusal_kept(int entry)
  * `count`, moving the offset by it (`sysctl_num_kept`). Otherwise the first
  * SYSCTL_WRITE_MAX bytes are read: spaces, which must not be all of them;
  * a number (`sysctl_get_long`), stored as the file's handler stores it
- * (`sysctl_num_store`), a file of user in the descriptor's user namespace;
- * and the spaces after it, while whatever follows
+ * (`sysctl_num_store`), a file of user in the descriptor's user namespace,
+ * or ip_local_port_range's one or two (`sysctl_port_range_store`); and the
+ * spaces after it, while whatever follows
  * them is left. A SYSCTL_UINT file then returns `count` and leaves the
  * offset where it was (`do_proc_douintvec_w`), so that each write on one
  * descriptor is read from offset 0; any other returns the bytes up to the
@@ -11279,9 +11331,13 @@ static int32_t sysctl_num_write(fd_entry_t *e, int entry, const char __user *buf
         return -EFAULT;
     }
     sysctl_skip(text, n, &at);
-    rc = at == n ? -EINVAL : sysctl_get_long(text, n, &at, &mag, &neg);
-    if (rc == 0) {
-        rc = sysctl_num_store(entry, kind, mag, neg, f->userns);
+    if (entry == SYNTH_SYS_IP_LOCAL_PORT_RANGE) {
+        rc = sysctl_port_range_store(text, n, &at);
+    } else {
+        rc = at == n ? -EINVAL : sysctl_get_long(text, n, &at, &mag, &neg);
+        if (rc == 0) {
+            rc = sysctl_num_store(entry, kind, mag, neg, f->userns);
+        }
     }
     sysctl_skip(text, n, &at);
     kfree(text);

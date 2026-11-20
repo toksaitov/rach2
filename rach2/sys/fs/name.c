@@ -206,15 +206,15 @@ static int same_node(struct vfs_mount *mnt, void *a, void *b)
            (vfs_getattr(mnt, a, &x) == 0 && vfs_getattr(mnt, b, &y) == 0 && x.ino == y.ino);
 }
 
-/** Verify the entry without accepting a different name of the same file. */
-static int name_still_present(struct vfs_name *name, void *node)
+/** Verify the entry of a held parent without accepting a different link. */
+static int name_still_present(const struct vfs_ref *parent, const char *leaf, void *node)
 {
     struct vfs_ref found;
-    struct vfs_mount *mnt = name->parent.mnt;
+    struct vfs_mount *mnt = parent->mnt;
     int rc;
 
     found.mnt = mnt;
-    rc = mnt->type->ops->lookup(name_base(mnt), name->parent.node, name->leaf, &found.node);
+    rc = mnt->type->ops->lookup(name_base(mnt), parent->node, leaf, &found.node);
     if (rc != 0) {
         return rc;
     }
@@ -223,24 +223,31 @@ static int name_still_present(struct vfs_name *name, void *node)
     return rc;
 }
 
-int vfs_name_path(struct vfs_name *name, void *node, char *out, uint32_t cap, int *deleted)
+/** Reconstruct one path with its parent held across every sleeping call.
+ * Return the lookup or walk error, or 0 with the path and deleted flag. */
+static int name_path_once(struct vfs_name *name, void *node, char *out, uint32_t cap, int *deleted)
 {
+    struct vfs_ref parent = name->parent;
+    char entry[VFS_NAME_MAX + 1];
     uint32_t n, leaf;
     int rc;
 
+    vfs_ref_hold(&parent);
+    k_memcpy(entry, name->leaf, sizeof(entry));
     *deleted = name->deleted;
-    if (!name->deleted && (rc = name_still_present(name, node)) != 0) {
-        return rc;
+    rc = *deleted ? 0 : name_still_present(&parent, entry, node);
+    if (rc == 0) {
+        rc = vfs_node_path(parent.mnt, parent.node, out, cap);
+        if (rc == -ENOENT && parent.mnt->bind_of) {
+            rc = vfs_node_path(name_base(parent.mnt), parent.node, out, cap);
+        }
     }
-    rc = vfs_node_path(name->parent.mnt, name->parent.node, out, cap);
-    if (rc == -ENOENT && name->parent.mnt->bind_of) {
-        rc = vfs_node_path(name_base(name->parent.mnt), name->parent.node, out, cap);
-    }
+    vfs_ref_put(&parent);
     if (rc != 0) {
         return rc;
     }
     n = (uint32_t)k_strlen(out);
-    leaf = (uint32_t)k_strlen(name->leaf);
+    leaf = (uint32_t)k_strlen(entry);
     if (n && out[n - 1] == '/') {
         n--;
     }
@@ -248,8 +255,53 @@ int vfs_name_path(struct vfs_name *name, void *node, char *out, uint32_t cap, in
         return -ENAMETOOLONG;
     }
     out[n++] = '/';
-    k_memcpy(out + n, name->leaf, leaf + 1);
+    k_memcpy(out + n, entry, leaf + 1);
     return 0;
+}
+
+/** Share the base mount's lock before taking any inode lock the reverse
+ * walk may need. Other types change names under the namespace lock. */
+void vfs_name_lock_changes(struct vfs_mount *mnt)
+{
+    struct vfs_mount *base = name_base(mnt);
+
+    if (base->type->file_locked) {
+        down_read(&base->name_walk);
+    }
+}
+
+/** End a change admitted by vfs_name_lock_changes. */
+void vfs_name_unlock_changes(struct vfs_mount *mnt)
+{
+    struct vfs_mount *base = name_base(mnt);
+
+    if (base->type->file_locked) {
+        up_read(&base->name_walk);
+    }
+}
+
+/** Read the whole path at one rename sequence. The caller's namespace lock
+ * excludes changes on other types. On a file-locked type, a racing change
+ * sends even a failed walk to one retry with the base mount's lock held. */
+int vfs_name_path(struct vfs_name *name, void *node, char *out, uint32_t cap, int *deleted)
+{
+    struct vfs_mount *base = name_base(name->parent.mnt);
+    uint32_t seq;
+    int rc;
+
+    if (!base->type->file_locked) {
+        return name_path_once(name, node, out, cap, deleted);
+    }
+    if (vfs_name_seq(&seq)) {
+        rc = name_path_once(name, node, out, cap, deleted);
+        if (vfs_name_seq_still(seq)) {
+            return rc;
+        }
+    }
+    down_write(&base->name_walk);
+    rc = name_path_once(name, node, out, cap, deleted);
+    up_write(&base->name_walk);
+    return rc;
 }
 
 /** Exact leaf equality, including the terminating byte. */
@@ -323,19 +375,26 @@ static struct vfs_name *name_next(struct vfs_name *name)
     return next;
 }
 
+/** Give the record `name` the name `leaf` in directory `to` before the
+ * previous parent's put, which may sleep. The big lock covers both fields. */
+static void name_move(struct vfs_name *name, void *to, const char *leaf)
+{
+    struct vfs_ref parent = name->parent;
+
+    name->parent.node = to;
+    vfs_ref_hold(&name->parent);
+    k_strncpy(name->leaf, leaf, sizeof(name->leaf));
+    name->leaf[sizeof(name->leaf) - 1] = '\0';
+    vfs_ref_put(&parent);
+}
+
 void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *to, const char *leaf)
 {
     struct vfs_name *name = name_next(NULL), *next;
 
     while (name) {
         if (names_entry(name, mnt, from, old)) {
-            struct vfs_ref parent = name->parent;
-
-            name->parent.node = to;
-            vfs_ref_hold(&name->parent);
-            vfs_ref_put(&parent);
-            k_strncpy(name->leaf, leaf, sizeof(name->leaf));
-            name->leaf[sizeof(name->leaf) - 1] = '\0';
+            name_move(name, to, leaf);
         } else if (names_entry(name, mnt, to, leaf)) {
             name->deleted = 1;
         }
@@ -343,19 +402,6 @@ void vfs_name_rename(struct vfs_mount *mnt, void *from, const char *old, void *t
         vfs_name_put(name);
         name = next;
     }
-}
-
-/** Give the record `name` the name `leaf` in the directory `to`, which it
- * holds in place of its old one. */
-static void name_move(struct vfs_name *name, void *to, const char *leaf)
-{
-    struct vfs_ref parent = name->parent;
-
-    name->parent.node = to;
-    vfs_ref_hold(&name->parent);
-    vfs_ref_put(&parent);
-    k_strncpy(name->leaf, leaf, sizeof(name->leaf));
-    name->leaf[sizeof(name->leaf) - 1] = '\0';
 }
 
 void vfs_name_exchange(struct vfs_mount *mnt, void *from, const char *old, void *to,

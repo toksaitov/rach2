@@ -40,6 +40,13 @@
  * VM_MAYWRITE; splits, merges, copies and moves keep it with the rest of
  * the protection. */
 #define VM_PROT_NOWRITE     0x10u
+/* Kept the same way: the region may never be made executable, as Linux's
+ * mmap clears VM_MAYEXEC for a file on a noexec mount (mm/mmap.c:386-391).
+ * A mapping of a file or a device opened through such a mount, /dev/zero's
+ * among them, has it (`filemap_noexec`), and `vm_protect` answers a
+ * request for execute with -3 while it is set, as Linux's mprotect answers
+ * EACCES. */
+#define VM_PROT_NOEXEC      0x800u
 /* Kept the same way: the region maps device memory, a device object's
  * pages (`vm_device_map`), whose fault asks the object for the page and
  * whose frames need not be the allocator's. Nothing reads it on a process's
@@ -133,10 +140,10 @@
 /* Whether the protection `prot` has Linux's VM_READ: PROT_READ was asked. */
 #define VM_READABLE(prot)   (((prot) & (VM_PROT_READ | VM_PROT_NOREAD)) == VM_PROT_READ)
 /* The bits a change of the access bits keeps. */
-#define VM_PROT_KEPT                                                                             \
-    (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
-     VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY | VM_PROT_ACCOUNT |     \
-     VM_PROT_NORESERVE | VM_PROT_VVAR | VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE)
+#define VM_PROT_KEPT                                                                              \
+    (VM_PROT_NOWRITE | VM_PROT_NOEXEC | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | \
+     VM_PROT_LOCKS | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY |        \
+     VM_PROT_ACCOUNT | VM_PROT_NORESERVE | VM_PROT_VVAR | VM_PROT_HUGEPAGE | VM_PROT_NOHUGEPAGE)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -582,10 +589,10 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
  * neighbours that then match. An empty range changes nothing. Returns 0; -1
  * for a gap, as Linux's mprotect answers ENOMEM; -2 when a split has no
  * room; -3 when `prot` has write and a region of the range has
- * VM_PROT_NOWRITE, or execute and a region has VM_PROT_SECRET, as Linux
- * answers EACCES. Of -1 and -3, the one met first
- * in address order is the answer, and every error leaves the regions as
- * they were.
+ * VM_PROT_NOWRITE, or execute and a region has VM_PROT_NOEXEC,
+ * VM_PROT_SECRET or VM_PROT_VVAR, as Linux answers EACCES. Of -1 and -3,
+ * the one met first in address order is the answer, and every error leaves
+ * the regions as they were.
  */
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
 

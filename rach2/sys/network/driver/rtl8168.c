@@ -1678,8 +1678,9 @@ static void rtl8168_print_info(void *dev)
 
 /**
  * The driver table's `stop`: interrupts masked, messages off and their
- * vector given back with its handler, as Linux's pci_free_irq_vectors, the
- * receiver and transmitter off with the receive gate closed, and bus
+ * vector given back with its handler once a message sent before then has
+ * run it (`isr_vector_sync`), as Linux's free_irq and pci_free_irq_vectors,
+ * the receiver and transmitter off with the receive gate closed, and bus
  * mastering cleared, which ends the chip's DMA.
  *
  * The frames the chip has taken are first given R8168_DRAIN_STEPS waits to
@@ -1731,6 +1732,8 @@ static void rtl8168_stop(void *dev)
         r8168_irq_mask_and_ack();
         if (r8168_msi_vector >= 0) {
             pci_msi_disable(&r8168_pci);
+            /* A message sent before the disable runs this handler first. */
+            isr_vector_sync(r8168_msi_vector);
             isr_free_vector(r8168_msi_vector);
             r8168_msi_vector = -1;
             /* A handler that ran beside the first masking opened them again. */

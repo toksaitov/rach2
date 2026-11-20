@@ -22,7 +22,10 @@
 #define CMD_MASTER   0x0004u
 #define CMD_INTX_OFF 0x0400u
 
-#define PM_CTRL          4       /* the power management capability's control word */
+#define PM_CAPS          2       /* the power management capability's PMC word */
+#define PM_D1_SUPPORT    0x0200u /* its bits: the states it offers */
+#define PM_D2_SUPPORT    0x0400u
+#define PM_CTRL          4       /* the capability's control word */
 #define PM_NO_SOFT_RESET 0x0008u /* its bit: the state survives D3hot */
 
 #define PAGE           0x1000u
@@ -94,28 +97,61 @@ void vfio_device_zap(struct vfio_device *d)
     paging_zap_device(d, 0, 6u << VFIO_PCI_PGOFF_SHIFT);
 }
 
+/** Whether `d` offers the power state `state`: D0 and D3hot always, D1
+ * and D2 when its capability's PMC says so, as Linux's d1_support and
+ * d2_support. */
+static int pm_supports(const struct vfio_device *d, int state)
+{
+    uint8_t pm = pci_find_capability(DEV(d), PCI_CAP_ID_PM);
+    uint16_t pmc = pm != 0 ? pci_read_config16(DEV(d), (uint8_t)(pm + PM_CAPS)) : 0;
+
+    return (state != PCI_D1 || (pmc & PM_D1_SUPPORT)) && (state != PCI_D2 || (pmc & PM_D2_SUPPORT));
+}
+
+/** Wait out a change from the power state `from` to `to`, as PCI PM 1.2
+ * asks and Linux's pci_set_low_power_state and pci_power_up wait: 10 ms to
+ * or from D3hot, which sleeps, 200 us to or from D2. */
+static void pm_settle(int from, int to)
+{
+    if (from == PCI_D3HOT || to == PCI_D3HOT) {
+        vfio_hw_msleep(PCI_PM_D3HOT_WAIT);
+    } else if (from == PCI_D2 || to == PCI_D2) {
+        vfio_hw_udelay(PCI_PM_D2_DELAY);
+    }
+}
+
 /**
  * Put `d` in the power state `state`, PCI_D0 to PCI_D3HOT, as Linux's
- * vfio_pci_set_power_state with vfio_lock_and_set_power_state. On the way
- * to D3hot the BARs' pages are taken from every mapping and refused until
- * D0, and a function that loses its state there (`pm_restore`) has it
- * kept; back in D0 that state and the interrupts are written back, or
- * else the BARs the bus's walk gave the function, as Linux's
- * pci_restore_bars after D3hot. The state lock is held across the change,
- * including PCI_PM_D3HOT_WAIT, which gives up the big lock. Nothing for
- * a function without a power management capability.
+ * vfio_pci_set_power_state with vfio_lock_and_set_power_state. A low state
+ * is entered only from a shallower one and only when the function offers
+ * it, as Linux's pci_set_low_power_state; D0 is entered from any. On the
+ * way to D3hot the BARs' pages are taken from every mapping, and a function
+ * that loses its state there (`pm_restore`) has it kept. After the wait the
+ * change needs, the state is read back, and it alone says whether the BARs
+ * are reached (`power_low`) and whether the kept state is still owed: a
+ * function that refused D3hot lost nothing, and one that came back to D0
+ * from D3hot has that state and its interrupts written back, or else the
+ * BARs the bus's walk gave it, as Linux's pci_restore_bars. The state lock
+ * is held across the change and its wait. Nothing for a function without
+ * a power management capability.
  */
 void vfio_device_power(struct vfio_device *d, int state)
 {
-    int now = pci_power_state(&d->pci), i;
+    int now = pci_power_state(&d->pci), got, i;
 
     if (now < 0) {
         return;
     }
     if (now == state) {
-        if (state != PCI_D3HOT) {
+        if (state == PCI_D3HOT && !d->power_low) {
+            vfio_device_zap(d); /* it went there without VFIO */
+            d->power_low = 1;
+        } else if (state != PCI_D3HOT) {
             d->power_low = 0; /* a reset brought it back without VFIO */
         }
+        return;
+    }
+    if (state != PCI_D0 && (state < now || !pm_supports(d, state))) {
         return;
     }
     if (state == PCI_D3HOT) {
@@ -127,10 +163,16 @@ void vfio_device_power(struct vfio_device *d, int state)
         }
     }
     (void)pci_set_power_state(&d->pci, state);
-    if (now == PCI_D3HOT || state == PCI_D3HOT) {
-        vfio_hw_msleep(PCI_PM_D3HOT_WAIT);
+    pm_settle(now, state);
+    got = pci_power_state(&d->pci);
+    d->power_low = got == PCI_D3HOT;
+    if (got != state) {
+        klog(KLOG_WARN, "vfio", "power: %s: refused D%d, in D%d", d->name, state, got);
     }
-    if (now == PCI_D3HOT && state == PCI_D0) {
+    if (state == PCI_D3HOT && got != PCI_D3HOT) {
+        d->pm_saved_ok = 0;
+    }
+    if (now == PCI_D3HOT && got == PCI_D0) {
         if (d->pm_saved_ok) {
             pci_restore_state(&d->pci, &d->pm_saved);
             vfio_irq_restore(d);
@@ -140,9 +182,6 @@ void vfio_device_power(struct vfio_device *d, int state)
                 pci_write_config32(DEV(d), (uint8_t)(0x10 + 4 * i), d->pci.bar[i]);
             }
         }
-    }
-    if (state != PCI_D3HOT) {
-        d->power_low = 0;
     }
 }
 
@@ -156,20 +195,37 @@ static int pm_loses_state(const struct vfio_device *d)
            !(pci_read_config16(DEV(d), (uint8_t)(pm + PM_CTRL)) & PM_NO_SOFT_RESET);
 }
 
-/** Read the BARs: their addresses, sizes and kinds. An I/O BAR's size is
- * the one the bus's walk found, as Linux's pci_resource_len gives it. */
+/**
+ * Read the BARs: their addresses, sizes and kinds. A BAR is exposed only
+ * once it is claimed (`pci_resource_claimable`), as Linux's vfio-pci
+ * reaches a BAR only through pci_request_selected_regions: one without an
+ * address, out of range or over another's decodes nothing VFIO gives, and
+ * its size is 0. An I/O BAR's size is the one the bus's walk found, as
+ * Linux's pci_resource_len gives it; one that is not claimed keeps the
+ * function's I/O decoding off (`io_off`), as Linux's pci_enable_resources
+ * refuses to turn it on, since the function would answer for host ports.
+ */
 static void bars_init(struct vfio_device *d)
 {
     struct pci_resource r;
-    int i;
+    int i, claim;
 
+    d->io_off = 0;
     for (i = 0; i < 6; i++) {
         uint32_t v = pci_read_config32(DEV(d), (uint8_t)(0x10 + 4 * i));
 
         d->bar_io[i] = (v & 1u) != 0;
-        if (d->bar_io[i]) {
-            pci_resource(DEV(d), i, &r);
-            d->bar_size[i] = (r.flags & PCI_IORESOURCE_IO) ? r.end - r.start + 1u : 0;
+        pci_resource(DEV(d), i, &r);
+        claim = pci_resource_claimable(DEV(d), i);
+        if (claim != 0) {
+            d->bar_size[i] = 0;
+            if (r.flags != 0) {
+                klog(KLOG_WARN, "vfio", "open: %s: BAR %d at 0x%lx not claimed: %d", d->name, i,
+                     (unsigned long)r.start, claim);
+            }
+            d->io_off |= d->bar_io[i] && r.flags != 0;
+        } else if (d->bar_io[i]) {
+            d->bar_size[i] = r.end - r.start + 1u;
         } else {
             d->bar_size[i] = pci_bar_size64(&d->pci, i);
         }
