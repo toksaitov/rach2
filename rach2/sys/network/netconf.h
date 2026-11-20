@@ -217,11 +217,12 @@ int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, 
  * Give `nd` the IPv6 address `addr` with the on-link prefix of `prefix`
  * bits, the state `flags` (NETDEV_A6_NODAD and NETDEV_A6_PERMANENT are
  * kept, and the rest ignored), and the lifetimes `valid` and `preferred`
- * in seconds, NETDEV_LIFETIME_FOREVER for none. A card joins the address's
- * solicited-node group, and the address is tentative until duplicate
- * detection passes, unless NETDEV_A6_NODAD is given (`nd6_dad_start`). An
- * address with lifetimes is deprecated and removed as they end (nd6.c).
- * Logged. Takes `net_lock`.
+ * in seconds, NETDEV_LIFETIME_FOREVER for none. A card other than `lo` and
+ * an interface of IP datagrams (`l3`) joins the address's solicited-node
+ * group, and the address is tentative until duplicate detection passes,
+ * unless NETDEV_A6_NODAD is given (`nd6_dad_start`). An address with
+ * lifetimes is deprecated and removed as they end (nd6.c). Logged. Takes
+ * `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface; EACCES for
  *         an interface with IPv6 disabled (`nd6_disabled`); EINVAL for
@@ -235,7 +236,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
 
 /**
  * Take the IPv6 address `addr` from `nd`, which leaves its solicited-node
- * group with it. Logged. Takes `net_lock`.
+ * group with it if it holds it. Logged. Takes `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface, or
  *         EADDRNOTAVAIL for an address `nd` does not hold.
