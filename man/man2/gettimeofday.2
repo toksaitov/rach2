@@ -297,7 +297,10 @@ refers to, or the current working directory for
 .Dv AT_FDCWD .
 A descriptor of a named FIFO, or of a device opened through a device node
 of tmpfs or ext2, sets that node's times.
-A descriptor on an anonymous pipe, a socket, a terminal, a device of
+A descriptor on an anonymous pipe or a socket sets the times the object
+keeps, as Linux sets those of its pipefs or sockfs inode, by the same
+permission rules.
+A descriptor on a terminal, a device of
 .Pa /dev
 or a synthetic directory has no stored times and returns
 .Er EROFS ;
@@ -635,8 +638,7 @@ append-only, where Linux lets an append-only file have its times set to
 the current time.
 .It Bq Er EROFS
 .Fn utimensat
-targets a synthetic file, or a descriptor on an anonymous pipe, a
-socket, a terminal, a device of
+targets a synthetic file, or a descriptor on a terminal, a device of
 .Pa /dev
 or a synthetic directory, or the file's mount, or the mount a descriptor
 was opened through, or its file system is read-only, or the file system

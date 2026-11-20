@@ -218,13 +218,15 @@ or
 node named by a descriptor opened with
 .Dv O_PATH
 follows the rules of its path.
-On Linux a pipe or a socket has an owner of its own, which
+A pipe or a socket has an owner of its own, its maker's file-system IDs,
+which
 .Fn fchown
 and
 .Dv AT_EMPTY_PATH
-change; here both keep the owner
-.Xr fstat 2
-gives them.
+change by the rules of a file, as on Linux; a socket's new owner is also
+the one
+.Pa /proc/net
+reports.
 .Pp
 A successful chown sets the change time, even when both IDs are -1.
 Modification time stays as it was.

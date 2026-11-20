@@ -227,6 +227,16 @@ int32_t unix_recvmsg(fd_entry_t *e, uintptr_t msg, int flags);
  * /proc/PID/fd. */
 uint32_t unix_inode(const fd_entry_t *e);
 
+struct inode_attr;
+
+/** The mode, owner and times of the inode of the socket of the descriptor
+ * `e`, which fstat reads and fchmod, fchown and futimens change. */
+struct inode_attr *unix_attr(const fd_entry_t *e);
+
+/** Make `uid` the owner the socket of `e` reports in its diagnostics, as a
+ * chown of a socket's inode sets Linux's `sk_uid`. */
+void unix_owner_set(const fd_entry_t *e, uint32_t uid);
+
 /** Whether an AF_UNIX socket not yet freed has the inode number `ino`. */
 int unix_inode_used(uint32_t ino);
 

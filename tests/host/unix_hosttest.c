@@ -3,6 +3,7 @@
  * inside their sleeps.
  *
  * host-deps: tests/host/compat/park_host.c
+ * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: tests/host/compat/kirq_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-deps: rach2/sys/tick.c

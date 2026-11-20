@@ -5,6 +5,7 @@
  * rach2/sys/mm/filemap.c, on a model mounted type and a model KRFFS root.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
+ * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
@@ -2845,6 +2846,23 @@ uint32_t unix_inode(const fd_entry_t *e)
     return 0;
 }
 
+/* The attributes `unix_attr` gives every row's Unix socket. */
+static struct inode_attr unix_attr_kept;
+
+/** No row's descriptor is a Unix socket: one record for all. */
+struct inode_attr *unix_attr(const fd_entry_t *e)
+{
+    (void)e;
+    return &unix_attr_kept;
+}
+
+/** Nothing: no row's descriptor is a Unix socket. */
+void unix_owner_set(const fd_entry_t *e, uint32_t uid)
+{
+    (void)e;
+    (void)uid;
+}
+
 /** No row's path names a link of /proc: every one is VNODE_KRFFS. */
 int synth_classify(const char *path, struct vpath *vp)
 {
@@ -4006,6 +4024,7 @@ static void proc_fd_stat_closed(void)
             e->priv = sp;
         } else {
             stat_pipe.inode = 77;
+            inode_attr_init(&stat_pipe.attr, 0010600u, 1);
             e->type = FD_TYPE_PIPE;
             e->flags = FD_FLAG_READ;
             e->ops = &stat_pipe_ops;
@@ -4016,7 +4035,7 @@ static void proc_fd_stat_closed(void)
         stat_closed_fd = fd;
         before = allocations;
         rc = synth_fd_stat((int)proc.pid, fd, &st);
-        check(failing ? rc == -ENOENT : rc == 0 && st.st_mode == 010666 && st.st_ino == 77,
+        check(failing ? rc == -ENOENT : rc == 0 && st.st_mode == 010600 && st.st_ino == 77,
               failing ? "a followed stat of a gone process's fd directory is ENOENT"
                       : "a followed stat reports the pipe");
         check(stat_closed_fd < 0 && stat_closed_allocations == before,

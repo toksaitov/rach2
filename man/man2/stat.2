@@ -335,11 +335,19 @@ uses
 5 and
 .Pa /proc
 uses 6.
-Synthetic objects, sockets, and pipes report the boot time, the
+Synthetic objects report the boot time, the
 .Li btime
 of
 .Pa /proc/stat ,
 for all three times, with zero nanoseconds, one link, and zero size.
+An anonymous pipe reports
+.Dv S_IFIFO
+and mode 0600, its maker's file-system IDs, and the time it was made,
+which a read moves for the access time and a write for the modification
+and change times; a socket reports
+.Dv S_IFSOCK
+and mode 0777, its maker's IDs and times of 0, as Linux's pipefs and
+sockfs give them.
 Setting the clock moves those times by the size of the step.
 Proc text files report zero size even when reading them returns data.
 Unfollowed proc links report symbolic-link type and mode 0777, except a

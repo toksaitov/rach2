@@ -12175,6 +12175,48 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
 }
 
 /**
+ * The mode, owner and times of the anonymous pipe or the socket the
+ * descriptor `entry` is open on (inode_attr.h), or NULL for any other kind,
+ * a FIFO among them, whose file has its own.
+ */
+static struct inode_attr *fd_inode_attr(const fd_entry_t *entry)
+{
+    pipe_t *pp = entry->type == FD_TYPE_PIPE ? (pipe_t *)entry->priv : NULL;
+
+    if (pp && !pp->fifo) {
+        return &pp->attr;
+    }
+    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+        return &entry->sock->attr;
+    }
+    if (entry->type == FD_TYPE_UNIX && entry->priv) {
+        return unix_attr(entry);
+    }
+    return NULL;
+}
+
+/** Give `kst` the mode, owner, group and times of `a`, when it is not
+ * NULL. */
+static void kst_attr(struct kstat *kst, const struct inode_attr *a)
+{
+    struct vfs_stat vst;
+
+    if (!a) {
+        return;
+    }
+    inode_attr_get(a, &vst);
+    kst->st_mode = vst.mode;
+    kst->st_uid = vst.uid;
+    kst->st_gid = vst.gid;
+    kst->st_atime = vst.atime_sec;
+    kst->st_atime_nsec = (uint32_t)vst.atime_nsec;
+    kst->st_mtime = vst.mtime_sec;
+    kst->st_mtime_nsec = (uint32_t)vst.mtime_nsec;
+    kst->st_ctime = vst.ctime_sec;
+    kst->st_ctime_nsec = (uint32_t)vst.ctime_nsec;
+}
+
+/**
  * Fill `kst` with the attributes of what the descriptor `entry` is open on,
  * for fstat64, for fstatat64 and statx with AT_EMPTY_PATH, and for a
  * followed /proc/PID/fd link; 0, or the error of a mounted type's getattr.
@@ -12253,21 +12295,20 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         if (rc == 0) {
             return krffs_fill_stat64(kst, entry->node);
         }
-    } else if (entry->type == FD_TYPE_SOCKET) {
-        kst->st_mode = 0140666; /* S_IFSOCK | 0666 */
-        kst->st_nlink = 1;
-        kst->st_blksize = 4096;
-        kst->st_ino = entry->sock ? entry->sock->inode : 0u;
-    } else if (entry->type == FD_TYPE_UNIX) {
+    } else if (entry->type == FD_TYPE_SOCKET || entry->type == FD_TYPE_UNIX) {
         kst->st_mode = 0140777; /* S_IFSOCK | 0777 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        kst->st_ino = entry->priv ? unix_inode(entry) : 0u;
+        if (entry->type == FD_TYPE_SOCKET) {
+            kst->st_ino = entry->sock ? entry->sock->inode : 0u;
+        } else {
+            kst->st_ino = entry->priv ? unix_inode(entry) : 0u;
+        }
     } else if (entry->type == FD_TYPE_ANON) {
         return fstat_anon(entry, kst);
     } else if (entry->type == FD_TYPE_PIPE) {
         pipe_t *pp = (pipe_t *)entry->priv;
-        kst->st_mode = 010666; /* S_IFIFO | 0666 */
+        kst->st_mode = 010600; /* S_IFIFO | 0600 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = pp ? pp->inode : 0u;
@@ -12327,6 +12368,7 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
     }
+    kst_attr(kst, fd_inode_attr(entry)); /* a pipe's or a socket's own */
     return 0;
 }
 
@@ -14546,14 +14588,41 @@ static struct pty *pts_entry_pair(const fd_entry_t *entry)
 }
 
 /**
+ * fchmod of an anonymous pipe or a socket, whose attributes are `a`
+ * (`fd_inode_attr`), by the rules `chmod_vfs` keeps: the owner or a
+ * privileged caller, -EPERM for another, and the setgid bit dropped for a
+ * caller outside the group who lacks privilege, as Linux's pipefs and
+ * sockfs inodes take it.
+ */
+static int32_t chmod_attr(struct inode_attr *a, uint32_t mode)
+{
+    struct vfs_stat vst;
+
+    inode_attr_get(a, &vst);
+    if (!inode_owner_or_capable(vst.uid)) {
+        return -EPERM;
+    }
+    if (!inode_capable(vst.uid, vst.gid, CAP_FSETID) && !cred_in_group(vst.gid)) {
+        mode &= ~02000u;
+    }
+    vst.mode = mode;
+    inode_attr_set(a, VFS_SET_MODE, &vst);
+    return 0;
+}
+
+/**
  * fchmod of the descriptor `entry` when it is on no file of a file system:
- * a pty slave stores the bits on the pty under the owner-or-root rule
- * (-EBADF when the pty is gone), a directory made under /dev on the entry
- * (`chmod_made`), and any other has fixed metadata, which root's request
- * leaves as it is and anyone else's is -EPERM.
+ * an anonymous pipe or a socket by `chmod_attr`, a pty slave stores the
+ * bits on the pty under the owner-or-root rule (-EBADF when the pty is
+ * gone), a directory made under /dev on the entry (`chmod_made`), and any
+ * other has fixed metadata, which root's request leaves as it is and
+ * anyone else's is -EPERM.
  */
 static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
 {
+    if (fd_inode_attr(entry)) {
+        return chmod_attr(fd_inode_attr(entry), mode);
+    }
     if (entry->type == FD_TYPE_SYNTH_PATH) { /* a link's own: -EOPNOTSUPP */
         return entry->priv ? chmod_synth((const struct vpath *)entry->priv, mode) : -EBADF;
     }
@@ -14810,16 +14879,46 @@ long sys_fchown(isr_params_t *params)
 }
 
 /**
+ * chown of an anonymous pipe or a socket, `entry`, by `vfs_chown_plan` on
+ * its attributes (`fd_inode_attr`); a socket's new owner is the one its
+ * diagnostics report too, as Linux's `sockfs_setattr` sets `sk_uid`.
+ */
+static int32_t chown_attr(fd_entry_t *entry, uint32_t uid, uint32_t gid)
+{
+    struct inode_attr *a = fd_inode_attr(entry);
+    struct vfs_stat vst;
+    int what;
+
+    inode_attr_get(a, &vst);
+    what = vfs_chown_plan(&vst, uid, gid);
+    if (what < 0) {
+        return what;
+    }
+    inode_attr_set(a, what, &vst);
+    if ((what & VFS_SET_UID) && entry->type == FD_TYPE_SOCKET) {
+        entry->sock->uid = vst.uid;
+    } else if ((what & VFS_SET_UID) && entry->type == FD_TYPE_UNIX) {
+        unix_owner_set(entry, vst.uid);
+    }
+    return 0;
+}
+
+/**
  * chown_fd of a descriptor on no file of a file system: a /dev or /proc
  * node opened with O_PATH by `chown_synth`, a /proc/PID/fd/N link so opened
  * by `chown_proc_link`, a directory made under /dev by `chown_made`, a pty
- * slave on the pty (`chown_pty`), -EBADF when the pty is gone, and every
- * other kind with the fixed owner its fstat gives (`chown_fixed`).
+ * slave on the pty (`chown_pty`), -EBADF when the pty is gone, an anonymous
+ * pipe or a socket by `chown_attr`, and every other kind with the fixed
+ * owner its fstat gives (`chown_fixed`).
  */
 static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
     struct kstat ks;
     int32_t rc;
+
+    if (fd_inode_attr(entry)) {
+        return chown_attr(entry, uid, gid);
+    }
 
     if (entry->type == FD_TYPE_SYNTH_PATH) { /* a link's own, never followed */
         const struct synth_path *sp = (const struct synth_path *)entry->priv;
@@ -20221,6 +20320,53 @@ static uint32_t utimes_events(const struct utime_spec *times)
 }
 
 /**
+ * Set the times of an anonymous pipe or a socket, whose attributes are `a`
+ * (`fd_inode_attr`), to `times` by the rules of `utimes_node`: both to now
+ * for the owner, a privileged caller or one with write permission, -EACCES
+ * for another, and given times for the owner or a privileged caller alone,
+ * -EPERM for another.
+ */
+static int32_t utimes_attr(struct inode_attr *a, const struct utime_spec *times)
+{
+    int now_both =
+        times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
+    int64_t now_sec, now_nsec;
+    struct vfs_stat vst;
+    int what = 0, i;
+
+    inode_attr_get(a, &vst);
+    if (!inode_owner_or_capable(vst.uid)) {
+        if (!now_both) {
+            return -EPERM;
+        }
+        if (cred_access_bits(vst.uid, vst.gid, vst.mode, CRED_W, 0) != 0) {
+            return -EACCES;
+        }
+    }
+    get_current_time(&now_sec, &now_nsec);
+    for (i = 0; i < 2; i++) {
+        int now = times == NULL || times[i].tv_nsec == UTIME_NOW;
+        int64_t sec = now ? now_sec : times[i].tv_sec;
+        int64_t nsec = now ? now_nsec : times[i].tv_nsec;
+
+        if (times && times[i].tv_nsec == UTIME_OMIT) {
+            continue;
+        }
+        if (i == 0) {
+            vst.atime_sec = sec;
+            vst.atime_nsec = nsec;
+            what |= VFS_SET_ATIME;
+        } else {
+            vst.mtime_sec = sec;
+            vst.mtime_nsec = nsec;
+            what |= VFS_SET_MTIME;
+        }
+    }
+    inode_attr_set(a, what, &vst);
+    return 0;
+}
+
+/**
  * utimensat on the file the descriptor `entry` refers to, NULL for one not
  * open: a NULL path, which is GNU libc's futimens, an empty one with
  * AT_EMPTY_PATH, which `empty` says, and a followed /proc/PID/fd/N link,
@@ -20234,11 +20380,12 @@ static uint32_t utimes_events(const struct utime_spec *times)
  * still be the node it was, or have lost its name to an unlink since,
  * -EBADF otherwise and -EIO when that cannot be read (`fd_node_check`); a
  * named FIFO, or a device opened through a device node, has its node's
- * times set (`fd_node_file`). An anonymous pipe, a socket, a terminal, a
- * device of /dev or a synthetic directory has no times stored for it and
- * is -EROFS, as the path to a synthetic one answers; Linux sets the times
- * of such an inode. An O_PATH descriptor names its file for the empty path
- * and is -EBADF to the NULL one, as on Linux.
+ * times set (`fd_node_file`), and an anonymous pipe or a socket its own
+ * (`utimes_attr`). A terminal, a device of /dev or a synthetic directory
+ * has no times stored for it and is -EROFS, as the path to a synthetic one
+ * answers; Linux sets the times of such an inode. An O_PATH descriptor
+ * names its file for the empty path and is -EBADF to the NULL one, as on
+ * Linux.
  *
  * The description's node is read under the mount's namespace lock, which
  * `utimes_node` takes again: a KRFFS write that grows the file moves it
@@ -20262,7 +20409,7 @@ static int32_t utimes_fd(fd_entry_t *entry, const struct utime_spec *times, int 
     }
     if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
         if (!fd_node_file(entry, &file)) {
-            return -EROFS;
+            return fd_inode_attr(entry) ? utimes_attr(fd_inode_attr(entry), times) : -EROFS;
         }
         vfs_node_lock(&file);
         rc = utimes_node(file.mnt, file.node, times);

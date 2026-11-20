@@ -4,6 +4,7 @@
  * write lock, and the SIGPIPE of a writev to a TCP stream.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
+ * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
@@ -1643,6 +1644,23 @@ uint32_t unix_inode(const fd_entry_t *e)
 {
     (void)e;
     return 0;
+}
+
+/* The attributes `unix_attr` gives every row's Unix socket. */
+static struct inode_attr unix_attr_kept;
+
+/** No row's descriptor is a Unix socket: one record for all. */
+struct inode_attr *unix_attr(const fd_entry_t *e)
+{
+    (void)e;
+    return &unix_attr_kept;
+}
+
+/** Nothing: no row's descriptor is a Unix socket. */
+void unix_owner_set(const fd_entry_t *e, uint32_t uid)
+{
+    (void)e;
+    (void)uid;
 }
 
 /** No row resolves a path on the KRFFS root: NULL. */

@@ -770,7 +770,8 @@ static int32_t do_socket(int domain, int type, int protocol)
         sock->protocol =
             (uint16_t)(((uint32_t)protocol & 0xffu) << 8 | (((uint32_t)protocol >> 8) & 0xffu));
     }
-    sock->uid = proc_fsuid(current_proc); /* as Linux owns a socket's inode */
+    sock->uid = proc_fsuid(current_proc);      /* as Linux owns a socket's inode */
+    inode_attr_init(&sock->attr, 0140777u, 0); /* S_IFSOCK | 0777 */
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
@@ -2050,6 +2051,7 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
         socket_unref(conn_sock);
         return -EFAULT;
     }
+    inode_attr_init(&conn_sock->attr, 0140777u, 0); /* S_IFSOCK | 0777 */
     new_entry = fd_slot(current_proc->fds, new_fd);
     new_entry->sock = conn_sock;
     new_entry->node = NULL;

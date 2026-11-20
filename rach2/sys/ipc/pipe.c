@@ -750,6 +750,17 @@ static uint32_t page_piece(uintptr_t addr, uint32_t n)
 /* Defined below, beside the vector helpers it shares with the write. */
 static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n);
 
+/** Stamp the times of `p`, an anonymous pipe, after a read or write of
+ * `done` bytes, `what` naming which (`inode_attr_stamp`), as Linux's
+ * pipe_read and pipe_write do when they moved a byte. A FIFO's file keeps
+ * its own times. */
+static void pipe_stamp(pipe_t *p, uint32_t done, int what)
+{
+    if (done > 0 && !p->fifo) {
+        inode_attr_stamp(&p->attr, what);
+    }
+}
+
 /** The read of a pipe end: `count` bytes into `buf`, read as a vector of
  * one (`pipe_read_vec`), as Linux reads a pipe for read(2) and readv(2)
  * through the one `pipe_read`. */
@@ -1202,6 +1213,7 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
     if (room) {
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
+    pipe_stamp(p, done, INODE_ATTR_READ);
     return (done > 0) ? (int32_t)done : err;
 }
 
@@ -1359,6 +1371,7 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
     if (err == -EPIPE) {
         pipe_sigpipe();
     }
+    pipe_stamp(p, done, INODE_ATTR_WRITE);
     return (done > 0) ? (int32_t)done : err;
 }
 
@@ -2227,8 +2240,12 @@ static int32_t pipe_open(uintptr_t fds_ptr, int flags)
 
     pipe = pipe_alloc();
     if (pipe) {
-        uint32_t irq = spin_lock_irqsave(&pipes_lock);
-        int over = pipe_publish(pipe) < 0;
+        uint32_t irq;
+        int over;
+
+        inode_attr_init(&pipe->attr, 0010600u, 1); /* S_IFIFO | 0600 */
+        irq = spin_lock_irqsave(&pipes_lock);
+        over = pipe_publish(pipe) < 0;
 
         spin_unlock_irqrestore(&pipes_lock, irq);
         if (over) {

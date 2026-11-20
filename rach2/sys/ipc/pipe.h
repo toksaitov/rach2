@@ -28,6 +28,7 @@
 #include "../lib/kint.h"
 #include "../lib/kuser.h"
 #include "../fs/sleeplock.h"
+#include "../fs/inode_attr.h"
 #include "../proc/wait_queue.h"
 
 #define PIPE_BUF_SIZE 65536   /* a new pipe's ring, a power of two */
@@ -132,6 +133,11 @@ typedef struct pipe {
      * may have exited; set under `lock`, read without it as a hint. */
     const struct process *writer;
     int writer_cpu;
+    /* An anonymous pipe's mode, owner and times, as Linux's pipefs gives
+     * them: S_IFIFO and 0600, the maker's file-system ids, the time it was
+     * made, then a read's access time and a write's modification and change
+     * times. A FIFO's are its file's, and these are unused. */
+    struct inode_attr attr;
     /* Linux's `pipe->mutex`: held by a read, a write, a splice's or a tee's
      * use of the ring, a resize, FIONREAD, a close and a FIFO's open from
      * their start to their return, across the page faults of their copies,

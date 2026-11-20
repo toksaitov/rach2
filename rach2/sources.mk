@@ -60,6 +60,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/vfs.c \
     sys/fs/fsize.c \
     sys/fs/vfs_ns.c \
+    sys/fs/inode_attr.c \
     sys/fs/sleeplock.c \
     sys/fs/nodelock.c \
     sys/fs/name.c \

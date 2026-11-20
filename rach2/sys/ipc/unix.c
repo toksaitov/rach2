@@ -175,6 +175,10 @@ struct unix_sock {
     int closed; /* its descriptors' side has ended */
     uint32_t inode;
     uint32_t uid; /* its maker's effective uid; an accepted one has the listener's */
+    /* The mode, owner and times of its inode, as Linux's sockfs gives them:
+     * S_IFSOCK and 0777, the file-system ids of the process it is
+     * published to, and the epoch (`publish`). */
+    struct inode_attr attr;
     /* The name bind gave it, or for an accepted socket the listener's name,
      * which it reports; only a `bound` socket is found by its name. */
     struct unix_name name;
@@ -472,6 +476,16 @@ int unix_snapshot(struct unix_row **rows)
 uint32_t unix_inode(const fd_entry_t *e)
 {
     return sock_of(e)->inode;
+}
+
+struct inode_attr *unix_attr(const fd_entry_t *e)
+{
+    return &sock_of(e)->attr;
+}
+
+void unix_owner_set(const fd_entry_t *e, uint32_t uid)
+{
+    sock_of(e)->uid = uid;
 }
 
 /** A new unconnected socket of `type`, the caller's, on the list with the
@@ -1067,6 +1081,7 @@ static void publish(int fd, struct unix_sock *s, int flags)
 {
     fd_entry_t *e = fd_slot(table(), fd);
 
+    inode_attr_init(&s->attr, 0140777u, 0); /* S_IFSOCK | 0777 */
     e->node = NULL;
     e->sock = NULL;
     e->ops = &unix_ops;

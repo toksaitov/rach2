@@ -11,10 +11,14 @@
  * followed and not, a pipe named by its descriptor with AT_EMPTY_PATH, and
  * the working directory named by AT_FDCWD and an empty path, and on x86-64 a
  * file whose times are 2^31 seconds, which statx reports whole. The mask
- * reports the basic set. Then the mount id: a file in /tmp, a /proc file,
- * /dev/null and the root each report STATX_MNT_ID, by path and by an O_PATH
- * descriptor, with the id their /proc/self/fdinfo/N gives and that
- * /proc/self/mountinfo gives the mount the path is on. Then the handles:
+ * reports the basic set. A pipe and sockets have the attributes Linux's
+ * pipefs and sockfs give them: a pipe mode 0600, its maker's ids and the
+ * time it was made, a socket mode 0777 and the epoch, and fchmod, fchown
+ * and futimens change them for both ends. Then the mount id: a file in
+ * /tmp, a /proc file, /dev/null and the root each report STATX_MNT_ID, by
+ * path and by an O_PATH descriptor, with the id their /proc/self/fdinfo/N
+ * gives and that /proc/self/mountinfo gives the mount the path is on. Then
+ * the handles:
  * name_to_handle_at of the file with no room answers EOVERFLOW with the
  * size and the mount id, and with room the twelve bytes of the inode;
  * a /proc file has a handle only with AT_HANDLE_FID; an unknown flag is
@@ -28,11 +32,11 @@
  * `STATXMUSL FAIL (detail)` and exits 1 otherwise. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
  * each row in order: `file`, `wide-time` on x86-64 alone, `directory`,
- * `fifo`, `dev-null`, `proc-self`, `pipe`, `cwd`, `sync-flag`, `mount-id`,
- * `handle`, `refused-flags` and `refused-paths`; the branch of the group
- * `arch`, `x86-64` or `i686`, says whether `wide-time` ran. The first
- * failure fails its assertion with the row and errno and leaves the rest
- * not run.
+ * `fifo`, `dev-null`, `proc-self`, `pipe`, `pipe-attrs`, `cwd`, `sync-flag`,
+ * `mount-id`, `handle`, `refused-flags` and `refused-paths`; the branch of
+ * the group `arch`, `x86-64` or `i686`, says whether `wide-time` ran. The
+ * first failure fails its assertion with the row and errno and leaves the
+ * rest not run.
  */
 
 #define _GNU_SOURCE
@@ -41,6 +45,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
@@ -211,6 +216,63 @@ static int regular_file(void)
 }
 
 /**
+ * Check the attributes of sockets as Linux's sockfs gives them: an AF_INET
+ * and an AF_UNIX socket are S_IFSOCK and 0777, the caller's, with times of
+ * 0, and take fchmod. Returns 0, or 1 after printing the failure.
+ */
+static int socket_attrs(void)
+{
+    struct stat st;
+    int pair[2], s;
+
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0 || fstat(s, &st) != 0 || st.st_mode != (S_IFSOCK | 0777) || st.st_mtime != 0 ||
+        st.st_uid != geteuid() || fchmod(s, 0700) != 0 || fstat(s, &st) != 0 ||
+        st.st_mode != (S_IFSOCK | 0700)) {
+        return fail("an AF_INET socket's mode, owner and time");
+    }
+    close(s);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0 || fstat(pair[0], &st) != 0 ||
+        st.st_mode != (S_IFSOCK | 0777) || fchmod(pair[0], 0700) != 0 || fstat(pair[0], &st) != 0 ||
+        st.st_mode != (S_IFSOCK | 0700)) {
+        return fail("an AF_UNIX socket's mode");
+    }
+    close(pair[0]);
+    close(pair[1]);
+    return 0;
+}
+
+/**
+ * Check the attributes of a pipe as Linux's pipefs gives them: a new pipe
+ * is S_IFIFO and 0600, owned by the caller's ids and stamped with the time
+ * it was made; fchmod of one end shows at the other, and for root fchown
+ * and futimens set what the other end's fstat gives; then the sockets'
+ * (`socket_attrs`). Returns 0, or 1 after printing the failure.
+ */
+static int pipe_attrs(void)
+{
+    struct timespec times[2] = {{5, 0}, {6, 0}};
+    struct stat st;
+    int fds[2];
+
+    if (pipe(fds) != 0 || fstat(fds[0], &st) != 0 || st.st_mode != (S_IFIFO | 0600) ||
+        st.st_uid != geteuid() || st.st_gid != getegid() || st.st_mtime == 0) {
+        return fail("a new pipe's mode, owner and time");
+    }
+    if (fchmod(fds[0], 0640) != 0 || fstat(fds[1], &st) != 0 || st.st_mode != (S_IFIFO | 0640)) {
+        return fail("fchmod of a pipe");
+    }
+    if (geteuid() == 0 && (fchown(fds[0], 1000, 1001) != 0 || futimens(fds[0], times) != 0 ||
+                           fstat(fds[1], &st) != 0 || st.st_uid != 1000 || st.st_gid != 1001 ||
+                           st.st_atime != 5 || st.st_mtime != 6)) {
+        return fail("fchown and futimens of a pipe");
+    }
+    close(fds[0]);
+    close(fds[1]);
+    return socket_attrs();
+}
+
+/**
  * Check each kind of file with both calls: a regular file, a directory, a
  * FIFO, a device, a symbolic link followed and not, a pipe and the working
  * directory by an empty path, and a relative path with a sync flag. Leaves
@@ -253,6 +315,10 @@ static int kinds(void)
     report_held();
     close(fds[0]);
     close(fds[1]);
+    if (pipe_attrs() != 0) {
+        return 1;
+    }
+    report_held();
     if (chdir("/tmp") != 0 || agree(AT_FDCWD, "", AT_EMPTY_PATH, &sx, "the working directory") ||
         sx.stx_ino != tmp.stx_ino) {
         return fail("the working directory by an empty path");
@@ -428,9 +494,10 @@ static int handles(void)
  * assertions. */
 static void plan(void)
 {
-    static const char *const ids[] = {
-        "file", "wide-time", "directory", "fifo",   "dev-null",      "proc-self",    "pipe",
-        "cwd",  "sync-flag", "mount-id",  "handle", "refused-flags", "refused-paths"};
+    static const char *const ids[] = {"file",          "wide-time",    "directory", "fifo",
+                                      "dev-null",      "proc-self",    "pipe",      "pipe-attrs",
+                                      "cwd",           "sync-flag",    "mount-id",  "handle",
+                                      "refused-flags", "refused-paths"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.statxmusl"));

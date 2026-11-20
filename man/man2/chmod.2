@@ -174,6 +174,10 @@ as any symbolic link does.
 .Fn fchmod
 of a named FIFO, or of a device opened through a device node of tmpfs or
 ext2, changes that node.
+.Fn fchmod
+of an anonymous pipe or a socket changes the mode the object keeps, which
+both ends of a pipe share, by the owner's or a privileged caller's
+request, as Linux changes its pipefs or sockfs inode.
 Other synthetic objects and descriptors have fixed metadata.
 For these, filesystem user ID 0 receives success without a change;
 other callers receive

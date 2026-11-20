@@ -3,6 +3,7 @@
  * user page is resolved.
  *
  * host-deps:
+ * host-deps: tests/host/compat/inode_attr_plain.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/spin_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *

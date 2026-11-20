@@ -6,6 +6,7 @@
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"
 #include "../../fs/sleeplock.h"
+#include "../../fs/inode_attr.h"
 
 /*
  * socket: the kernel object behind a descriptor of type FD_TYPE_SOCKET, for
@@ -288,6 +289,10 @@ typedef struct socket {
      */
     uint32_t inode;
     uint32_t uid;
+    /* The mode, owner and times of its inode, as Linux's sockfs gives them:
+     * S_IFSOCK and 0777, the file-system ids of the process whose socket(2)
+     * or accept(2) gave it its descriptor, and the epoch. */
+    struct inode_attr attr;
 
     /* The UDP receive queue (`sock_dgq`); a raw or packet socket keeps its
      * own beside its registration, under the same budget. `rcvbuf` is
