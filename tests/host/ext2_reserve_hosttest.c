@@ -13,7 +13,7 @@
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
  * host-deps: tests/host/compat/spin_none.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/bkl_held.c
- * host-deps: tests/host/compat/fsize_none.c
+ * host-deps: tests/host/compat/fsize_none.c tests/host/compat/ids_root.c
  *
  * The test includes the driver's files whole. The mount, a group of 64 blocks
  * and an inode are built in memory, over a cache model with one buffer for each
@@ -36,6 +36,7 @@ static unsigned int row_xchg(volatile unsigned int *p, unsigned int value);
 #include "fs/ext2_dir.c"
 #include "fs/ext2_file.c"
 #include "ext2_ids_first.h"
+#include "fs/ext2_acl.c"
 
 extern int memcmp(const void *a, const void *b, unsigned long size);
 extern int printf(const char *format, ...);

@@ -3266,7 +3266,7 @@ int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
             return proc_held_dir_permission(r->mnt, vfs_synth_vpath(r->mnt, r->node), own, want,
                                             use_real);
     }
-    return cred_access_bits(st.uid, st.gid, st.mode, want, use_real);
+    return vfs_may_access(r->mnt, r->node, &st, want, use_real);
 }
 
 /** Whether the inode flags of `node` on `mnt` forbid a change of its size,
@@ -4416,10 +4416,23 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
 }
 
 /**
+ * The permission bits of `mode` a creation in a directory of `mnt` hands its
+ * type: less the umask, unless the file system applies it itself, where the
+ * directory has no default ACL (`sb_posixacl`), as Linux's
+ * `mode_strip_umask` leaves it to `posix_acl_create`.
+ */
+static uint32_t mode_strip_umask(struct vfs_mount *mnt, uint32_t mode)
+{
+    return vfs_mount_base(mnt)->sb_posixacl ? mode & 07777u
+                                            : mode & 07777u & ~current_proc->fs->umask;
+}
+
+/**
  * Make `leaf` in the held directory `parent`, whose namespace lock the
  * caller holds: a regular file for a `mode` with no type bits or S_IFREG's,
  * and a FIFO, a socket or a device node with the number `rdev` for theirs.
- * The permission bits are masked by the umask and the owner is the caller;
+ * The permission bits are masked by the umask (`mode_strip_umask`) and the
+ * owner is the caller;
  * the KRFFS root takes both from the stamp after the node is made. Returns
  * 0 with the new node held in `*made`, or the type's errno.
  */
@@ -4428,7 +4441,7 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
 {
     uint32_t type = mode & S_IFMT;
     uint32_t perm =
-        mnt_is_root(parent->mnt) ? (mode & 07777u) : (mode & 07777u & ~current_proc->fs->umask);
+        mnt_is_root(parent->mnt) ? (mode & 07777u) : mode_strip_umask(parent->mnt, mode);
     int rc;
 
     if (type == 0 || type == S_IFREG) {
@@ -11237,8 +11250,8 @@ static int32_t open_tmpfile(const char *name, int flags, uint32_t mode, int end)
     }
     if (rc == 0) {
         vfs_node_lock(&dir);
-        rc = vfs_tmpfile(dir.mnt, dir.node, mode & 07777u & ~current_proc->fs->umask,
-                         !(flags & O_EXCL), &node);
+        rc = vfs_tmpfile(dir.mnt, dir.node, mode_strip_umask(dir.mnt, mode), !(flags & O_EXCL),
+                         &node);
         vfs_node_unlock(&dir);
     }
     if (rc == 0) {
@@ -13576,13 +13589,16 @@ static int32_t access_precheck(struct vfs_mount *mnt, const struct vfs_stat *st,
  * (fs/open.c:468-519, fs/namei.c:476-551): X_OK of a regular file through
  * a noexec mount is -EACCES; W_OK of anything but a device, FIFO or socket
  * on a read-only file system -EROFS (`vfs_sb_rdonly`, `sb_permission`); W_OK
- * of an immutable file -EPERM; then the nine-bit check, with X_OK of
- * anything but a directory needing an execute bit even for root, -EACCES;
+ * of an immutable file -EPERM; then the nine-bit check, or the POSIX ACL
+ * of the node `node` of `mnt` where its type keeps one (`vfs_may_access`),
+ * with X_OK of anything but a directory needing an execute bit even for
+ * root, -EACCES;
  * and last W_OK of anything but a device, FIFO or socket through a mount
  * made read-only alone -EROFS (`__mnt_is_readonly`). The halted KRFFS root
  * is a read-only file system.
  */
-static int32_t access_judge(struct vfs_mount *mnt, const struct vfs_stat *st, int mode, int real)
+static int32_t access_judge(struct vfs_mount *mnt, void *node, const struct vfs_stat *st, int mode,
+                            int real)
 {
     uint32_t fmode = st->mode;
     int write = (mode & W_OK) && !special_file(fmode);
@@ -13591,7 +13607,8 @@ static int32_t access_judge(struct vfs_mount *mnt, const struct vfs_stat *st, in
     rc = access_precheck(mnt, st, mode);
     if (rc != 0)
         return rc;
-    rc = cred_access_bits(st->uid, st->gid, fmode, mode, real);
+    rc = mnt && node ? vfs_may_access(mnt, node, st, mode, real)
+                     : cred_access_bits(st->uid, st->gid, fmode, mode, real);
     if (rc == 0 && (mode & X_OK) && (fmode & S_IFMT) != S_IFDIR && !(fmode & 0111u)) {
         rc = -EACCES;
     }
@@ -13612,7 +13629,7 @@ static int32_t access_ref(const struct vfs_ref *ref, int mode, int real)
     int32_t rc;
 
     rc = vfs_getattr(ref->mnt, ref->node, &st);
-    return rc != 0 ? rc : access_judge(ref->mnt, &st, mode, real);
+    return rc != 0 ? rc : access_judge(ref->mnt, ref->node, &st, mode, real);
 }
 
 static int32_t access_fd(fd_entry_t *entry, int mode, int flags, int dir);
@@ -13655,7 +13672,7 @@ static int32_t access_synth_ref(const struct vfs_ref *ref, const struct vpath *v
         st.mode = s.st_mode;
         st.uid = (uint32_t)s.st_uid;
         st.gid = (uint32_t)s.st_gid;
-        rc = access_judge(ref->mnt, &st, mode, real);
+        rc = access_judge(ref->mnt, NULL, &st, mode, real);
     }
     return rc;
 }
@@ -13969,6 +13986,16 @@ static int32_t access_proc_fd(fd_entry_t *entry, const struct vfs_stat *st, int 
     return rc != 0 ? rc : procfs_fdinfo_access(entry, real);
 }
 
+/** The node of `fd_mount`'s mount whose POSIX ACL `access_fd` consults: the
+ * open file's, else the device node `file` names, else NULL. */
+static void *access_fd_node(const struct open_file *ofd, const struct vfs_ref *file)
+{
+    if (ofd && ofd->vmnt) {
+        return ofd->vnode;
+    }
+    return file->mnt ? file->node : NULL;
+}
+
 /**
  * Whether the caller may use what the descriptor `entry` is open on as `mode`
  * asks, for faccessat2's AT_EMPTY_PATH and access(2) of a followed
@@ -14031,7 +14058,8 @@ static int32_t access_fd(fd_entry_t *entry, int mode, int flags, int dir)
     rc = access_proc_fd(entry, &vst, mode, !(flags & AT_EACCESS));
     if (rc != 0)
         return rc;
-    return access_judge(fd_mount(entry), &vst, mode, !(flags & AT_EACCESS));
+    return access_judge(fd_mount(entry), access_fd_node(ofd, &file), &vst, mode,
+                        !(flags & AT_EACCESS));
 }
 
 /**
@@ -19734,8 +19762,8 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
         if (rc == 0) {
             rc = dir_lock(parent, leaf, RECHECK_WRITE | RECHECK_NEW);
             if (rc == 0) {
-                rc = vfs_mkdir(parent->mnt, parent->node, leaf,
-                               mode & 07777u & ~current_proc->fs->umask);
+                rc =
+                    vfs_mkdir(parent->mnt, parent->node, leaf, mode_strip_umask(parent->mnt, mode));
             }
             vfs_node_unlock(parent);
         }

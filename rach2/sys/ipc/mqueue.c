@@ -1906,6 +1906,7 @@ static const struct vfs_ops mqfs_ops = {
     0, /* uncache */
     0, /* phase */
     0, /* data_at */
+    0, /* check_acl */
 };
 
 const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops,      0, 1, 0, 0, 0,

@@ -11,7 +11,7 @@
  * host-deps: rach2/sys/fs/ext2xattr.c
  * host-deps: rach2/sys/fs/ext2_alloc.c rach2/sys/fs/ext2_batch.c
  * host-deps: rach2/sys/fs/ext2_check.c rach2/sys/fs/ext2_dir.c
- * host-deps: rach2/sys/fs/ext2_file.c
+ * host-deps: rach2/sys/fs/ext2_file.c rach2/sys/fs/ext2_acl.c
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
  * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/park_host.c
@@ -23,6 +23,7 @@
  * host-deps: tests/host/compat/bkl_held.c tests/host/compat/rcu_none.c
  * host-deps: tests/host/compat/mutex_none.c tests/host/compat/kirq_on.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/fsize_none.c
+ * host-deps: tests/host/compat/ids_root.c
  * host-first: its interruption matrices run for minutes
  *
  * The volumes are made here from a staged tree by the host's mke2fs with the
@@ -9035,6 +9036,7 @@ static void attr_rows(void)
 
 #include "ext2_xattr_rows.h"
 #include "ext2_options_rows.h"
+#include "ext2_acl_rows.h"
 
 /**
  * Judge the stop of sequence `i` after write `k` of `n`, whose crash state
@@ -10837,6 +10839,7 @@ static const struct {
     {"--cache-partial-only", cache_partial_row},
     {"--xattr-only", xattr_rows},
     {"--options-only", option_rows},
+    {"--acl-only", acl_rows},
     {"--dirty-only", dirty_rows},
     {"--counts-only", count_rows},
     {"--stopped-only", stopped_rows},
@@ -10928,6 +10931,7 @@ int main(int argc, char **argv)
     attr_rows();
     xattr_rows();
     option_rows();
+    acl_rows();
     matrix_rows();
     batch_rows();
     node_rows();
