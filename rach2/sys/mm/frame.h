@@ -129,4 +129,16 @@ int frame_map_first(const struct frame_map *m, uint64_t bytes, uint64_t floor, u
 int frame_map_entry(const void *mmap_buf, uint32_t mmap_len, uint32_t index, uint64_t *addr,
                     uint64_t *len, uint32_t *type);
 
+/**
+ * Give `hold` each range of the address space the host holds, first to
+ * last byte, as Linux's e820__reserve_resources gives its resource tree:
+ * every entry of the map `mmap_buf` but the reserved ones above 1 MiB, and
+ * when `m`, built from that map, came from `mem_upper_kb`, the two ranges
+ * of RAM Linux's e820__memory_setup_default makes then, 640 KiB from 0 and
+ * `mem_upper_kb` from 1 MiB, whatever lies past the reach. Called before
+ * the kernel's own reservations, which leave the RAM held.
+ */
+void frame_map_host_ranges(const struct frame_map *m, const void *mmap_buf, uint32_t mmap_len,
+                           uint32_t mem_upper_kb, void (*hold)(uint64_t first, uint64_t last));
+
 #endif /* _FRAME_H_ */
