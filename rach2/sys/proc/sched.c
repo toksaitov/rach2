@@ -2818,6 +2818,26 @@ void sched_tick(void)
     proc_work_set(p, WORK_RESCHED);
 }
 
+/** Ask this processor's current thread to switch, unless it is the idle
+ * task, as Linux's resched_curr does for the stopper thread's wake. The
+ * request is the thread's `need_resched`, set under the run queues' lock as
+ * `sched_resched_cur` sets it; the thread takes it as any other, at the
+ * interrupt's end in user mode, at a call's exit or at its next sleep or
+ * service point. Interrupts are off, and the run queues' lock is not held
+ * on this processor. */
+void sched_resched_local(void)
+{
+    process_t *p = current_proc;
+    uint32_t flags;
+
+    if (!p || !_sched_enabled || p == this_cpu()->idle) {
+        return;
+    }
+    flags = spin_lock_irqsave(&sched_lock);
+    (void)sched_resched_cur(p, (int)arch_cpu_id());
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
 /** A request made by a wake or a priority change on another processor is
  * taken where the interrupt it sent returns, and one this processor's own
  * handler made, by a wake of a device's reader, here: Linux's return from

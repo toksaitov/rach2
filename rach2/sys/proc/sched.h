@@ -303,6 +303,11 @@ void sched_preempt(void);
  * out or a queued thread should run first (sched.c). */
 void sched_tick(void);
 
+/** From an interrupt, with interrupts off: ask this processor's current
+ * thread to switch (`need_resched`), unless it is the idle task, as the
+ * soft-lockup timer's queued function asks (watchdog.c). */
+void sched_resched_local(void);
+
 /** From the end of a device's interrupt, or of the timer's interrupt
  * between ticks, with interrupts off: switch this processor as
  * `sched_preempt` does when a wake or a priority change asked it to
