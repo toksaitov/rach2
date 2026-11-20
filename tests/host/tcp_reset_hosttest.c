@@ -292,6 +292,9 @@ int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload
 struct net_mib net_mib;
 struct net_mib6 net_mib6;
 
+/* The ephemeral range, which net_core.c defines. */
+uint32_t net_port_range = NET_PORT_RANGE_DEFAULT;
+
 /* ---- the cases ---- */
 
 static int fails;
