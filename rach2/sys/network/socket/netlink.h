@@ -181,13 +181,29 @@ struct nl_dgram *netlink_dgram_new(uint32_t len);
 /** The bytes of `d`, which its owner may write until it is sent. */
 uint8_t *netlink_dgram_data(struct nl_dgram *d);
 
+/** Charge `d`, not yet sent, to the room of the netlink socket `sock`, which
+ * the caller holds a reference to, as Linux's netlink_attachskb charges the
+ * skb to the socket's receive memory: what it charges, with what is queued,
+ * counts against the room notifications have (NL_NOTIFY_QUEUE_MAX), until
+ * `netlink_dgram_send` queues `d` or `netlink_dgram_detach` frees it. While
+ * the socket holds more than its room the call sleeps until a read makes
+ * some, as Linux's waits with no limit. 0; -EINTR for a signal, which the
+ * caller's call restarts or fails as Linux's -ERESTARTSYS; -EBADF for a
+ * socket whose state is gone. Takes net_lock, and may sleep. */
+int netlink_dgram_attach(struct socket *sock, struct nl_dgram *d);
+
 /** Queue `d` on the netlink socket `sock`, whatever its protocol and however
  * full its queue, as Linux's netlink_sendskb queues a message whose room was
- * charged before; `d` is the socket's after, or freed when the socket's
- * state is gone. Takes net_lock. */
+ * charged before; its charge, when it was attached, moves to the queue,
+ * which a read gives back. `d` is the socket's after, or freed when the
+ * socket's state is gone. Takes net_lock. */
 void netlink_dgram_send(struct socket *sock, struct nl_dgram *d);
 
-/** Free `d`, which was never sent. */
+/** Free `d`, attached to `sock` and never sent, and give back its charge,
+ * as Linux's netlink_detachskb; nothing for NULL. Takes net_lock. */
+void netlink_dgram_detach(struct socket *sock, struct nl_dgram *d);
+
+/** Free `d`, which was never attached or sent. */
 void netlink_dgram_free(struct nl_dgram *d);
 
 /** Bytes in the oldest queued datagram, or -1 when none is queued. */

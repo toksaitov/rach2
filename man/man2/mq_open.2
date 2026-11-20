@@ -102,6 +102,10 @@ that goes without a message sends its bytes with the last set to 2.
 The kernel makes the datagram that carries them when the process
 registers, as Linux does, so that a registration that succeeded is never
 lost for want of memory.
+The datagram counts against the socket's room for what it receives from
+then on, as Linux charges it to the socket's receive memory, so a
+registration waits while the socket holds more than that room, until a
+read makes some or a signal ends the wait.
 Registering and taking a registration away set the queue's access and
 change times.
 .Pp
@@ -237,7 +241,9 @@ and
 .Dv O_EXCL
 for a queue that exists.
 .It Bq Er EINTR
-A signal ended the wait, also one pending when the timeout ran out.
+A signal ended the wait, also one pending when the timeout ran out, or a
+.Dv SIGEV_THREAD
+registration's wait for room on its socket.
 .It Bq Er EINVAL
 An access mode of 3 on an existing queue, attributes outside the caller's limits, a priority
 past 32767, a malformed timeout, a notification of another kind, a

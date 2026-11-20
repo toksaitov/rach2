@@ -645,7 +645,6 @@ tests/musl/ip6optmusl.c:ancillary complexity 43 a test's rows, each a case, read
 tests/musl/ip6optmusl.c:filter complexity 28 a test's rows, each a case, read as one table
 tests/musl/ip6optmusl.c:group complexity 31 a test's rows, each a case, read as one table
 
-tests/musl/ipcmusl.c:mq_rows complexity 26 a probe, one sequence of steps in the order the log records them
 tests/musl/ipcmusl.c:shm_rows complexity 26 a probe, one sequence of steps in the order the log records them
 tests/musl/lchownmusl.c:link_rows complexity 32 a test's rows, each a case, read as one table
 

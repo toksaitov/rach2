@@ -224,6 +224,7 @@
 struct nl_dgram {
     struct nl_dgram *next;
     uint32_t len;
+    int attached; /* charged to a socket's `attached` (`netlink_dgram_attach`) */
     uint32_t group;
     uint32_t portid; /* the sender's port, 0 for the kernel */
     int32_t cred[3]; /* the sender's process, user and group ids */
@@ -258,6 +259,11 @@ struct netlink_state {
      * and the receive path queue notifications. */
     struct nl_dgram *head, *tail;
     uint32_t queued;
+    /* The bytes of datagrams made for this socket and not yet queued, an
+     * mq_notify registration's cookie, which count against its room as
+     * those queued do, as Linux's netlink_attachskb charges sk_rmem_alloc
+     * before the skb is sent (`netlink_dgram_attach`). */
+    uint32_t attached;
     uint32_t last_group; /* the `group` of the datagram read last */
     uint32_t last_portid;
     int32_t last_cred[3];
@@ -316,6 +322,13 @@ static uint32_t get32(const uint8_t *p)
 static struct netlink_state *state_of(struct socket *sock)
 {
     return (struct netlink_state *)sock->netlink;
+}
+
+/** The bytes `st` holds against its room: those queued and those attached
+ * for later. The caller holds net_lock. */
+static uint32_t nl_held(const struct netlink_state *st)
+{
+    return st->queued + st->attached;
 }
 
 int netlink_open(struct socket *sock, int protocol)
@@ -584,15 +597,78 @@ uint8_t *netlink_dgram_data(struct nl_dgram *d)
     return (uint8_t *)(d + 1);
 }
 
+/** Whether `sock` has room for a datagram to be attached, or has lost its
+ * state; the condition of `netlink_dgram_attach`'s wait, read without
+ * net_lock as the receive waits read theirs, and judged again under it.
+ * The caller's reference keeps the state. */
+static int attach_ready(void *arg)
+{
+    struct netlink_state *st = state_of((struct socket *)arg);
+
+    return !st || nl_held(st) <= NL_NOTIFY_QUEUE_MAX;
+}
+
+int netlink_dgram_attach(struct socket *sock, struct nl_dgram *d)
+{
+    struct netlink_state *st;
+    uint32_t flags;
+    int rc;
+
+    for (;;) {
+        flags = net_lock();
+        st = state_of(sock);
+        if (!st) {
+            net_unlock(flags);
+            return -EBADF;
+        }
+        if (nl_held(st) <= NL_NOTIFY_QUEUE_MAX) {
+            st->attached += d->len;
+            d->attached = 1;
+            net_unlock(flags);
+            return 0;
+        }
+        net_unlock(flags);
+        rc = wq_wait_event(&sock->waiters, attach_ready, sock);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+}
+
+/** Take the charge of `d`, attached to `st` when its flag says so, off
+ * `st`, and wake a thread waiting to attach. The caller holds net_lock. */
+static void dgram_uncharge(struct netlink_state *st, struct nl_dgram *d)
+{
+    if (d->attached && st) {
+        st->attached -= d->len;
+        wq_wake(&st->sock->waiters, WQ_ROOM);
+    }
+    d->attached = 0;
+}
+
 void netlink_dgram_send(struct socket *sock, struct nl_dgram *d)
 {
     uint32_t flags = net_lock();
     struct netlink_state *st = state_of(sock);
 
+    dgram_uncharge(st, d);
     if (st) {
         enqueue_dgram(st, d);
         d = NULL;
     }
+    net_unlock(flags);
+    kfree(d);
+}
+
+void netlink_dgram_detach(struct socket *sock, struct nl_dgram *d)
+{
+    uint32_t flags;
+
+    if (!d) {
+        return;
+    }
+    flags = net_lock();
+    dgram_uncharge(state_of(sock), d);
     net_unlock(flags);
     kfree(d);
 }
@@ -653,8 +729,9 @@ int netlink_genl_multicast(uint32_t group, const uint8_t *data, unsigned len)
         for (g = st->extra_groups; g && !joined; g = g->next) {
             joined = g->id == group;
         }
-        if (joined && (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
-                       enqueue_group(st, data, len, group) != 0)) {
+        if (joined &&
+            (nl_held(st) > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - nl_held(st) ||
+             enqueue_group(st, data, len, group) != 0)) {
             rc = -ENOBUFS;
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
@@ -684,7 +761,7 @@ int netlink_genl_unicast(uint32_t portid, const uint8_t *data, unsigned len)
         if (st->protocol != NETLINK_GENERIC || !portid || st->pid != portid) {
             continue;
         }
-        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+        if (nl_held(st) > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - nl_held(st) ||
             enqueue(st, data, len) != 0) {
             rc = -ENOBUFS;
             if (!st->no_enobufs) {
@@ -795,7 +872,7 @@ static void notify(uint32_t group, int del, uint8_t *msg)
         if (st->protocol != NETLINK_ROUTE || !st->seen || !(st->groups & GROUP_BIT(group))) {
             continue;
         }
-        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+        if (nl_held(st) > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - nl_held(st) ||
             enqueue_group(st, msg, len, group) != 0) {
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
@@ -3123,7 +3200,7 @@ static int32_t uevent_pass(struct netlink_state *from, const uint8_t *buf, uint3
             continue;
         }
         found |= unicast;
-        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+        if (nl_held(st) > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - nl_held(st) ||
             enqueue_group(st, buf, len, unicast ? 0 : dst->group) != 0) {
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
@@ -3281,7 +3358,7 @@ void netlink_uevent(const uint8_t *msg, uint32_t len)
             !(st->groups & GROUP_BIT(NL_UEVENT_GROUP_KERNEL))) {
             continue;
         }
-        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+        if (nl_held(st) > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - nl_held(st) ||
             enqueue_group(st, msg, len, NL_UEVENT_GROUP_KERNEL) != 0) {
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
@@ -3308,6 +3385,7 @@ void netlink_consume(struct socket *sock)
         st->tail = 0;
     }
     st->queued -= d->len;
+    wq_wake(&sock->waiters, WQ_ROOM);
     net_unlock(flags);
     kfree(d);
 }

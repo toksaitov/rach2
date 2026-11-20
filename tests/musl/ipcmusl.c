@@ -38,7 +38,12 @@
  * A POSIX queue of four messages of 64 bytes gives the higher priority
  * first; a full queue with O_NONBLOCK is EAGAIN; an empty one with a
  * timeout ETIMEDOUT; mq_notify's signal comes with SI_MESGQ and its value
- * when a message reaches the queue empty; poll reports a message; the
+ * when a message reaches the queue empty; a process that registers
+ * SIGEV_THREAD on a netlink socket and takes it away again and again, never
+ * reading the cookies the removals send, comes to sleep in mq_notify once
+ * the socket holds its room, as Linux's netlink_attachskb makes it wait,
+ * where an unbounded kernel would take its memory without end; poll
+ * reports a message; the
  * name goes with mq_unlink. /dev/mqueue lists the queue as a file with its
  * mode and an initial size of 80. Its status line gives the queued bytes.
  * Unlinking the file removes its name. An empty queue gives EFAULT for
@@ -76,6 +81,8 @@
 #include <fcntl.h>
 #include <mqueue.h>
 #include <sys/mount.h>
+#include <sys/socket.h>
+#include <linux/netlink.h>
 #include <poll.h>
 #include <sched.h>
 #include <signal.h>
@@ -905,15 +912,99 @@ static void on_mq(int sig, siginfo_t *si, void *ctx)
     mq_value = si->si_value.sival_int;
 }
 
+/* The registrations `notify_churn` makes at most: past what any socket's
+ * room holds of 32-byte cookies, 208 KiB on Linux. */
+#define CHURN 100000
+
+/**
+ * In a child: register SIGEV_THREAD on the queue `q` for a netlink socket,
+ * through the call itself, as musl's mq_notify does, and take the
+ * registration away, CHURN times, never reading the socket, where each
+ * removal queues the cookie with NOTIFY_REMOVED. Exits 0 when every call
+ * returns, which an unbounded kernel lets happen, and 1 on a failed call.
+ */
+static void notify_churn(mqd_t q)
+{
+    static char cookie[32];
+    struct sigevent ev;
+    int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE), i;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.sigev_notify = SIGEV_THREAD;
+    ev.sigev_signo = sock;
+    ev.sigev_value.sival_ptr = cookie;
+    for (i = 0; sock >= 0 && i < CHURN; i++) {
+        if (syscall(SYS_mq_notify, q, &ev) != 0 || syscall(SYS_mq_notify, q, NULL) != 0) {
+            _exit(1);
+        }
+    }
+    _exit(sock >= 0 ? 0 : 1);
+}
+
+/**
+ * Whether a child's churn of SIGEV_THREAD registrations whose cookies it
+ * never reads comes to sleep, as Linux's mq_notify waits in
+ * netlink_attachskb while the socket's receive memory is spent, before its
+ * CHURN calls end; the child is killed once the parent has seen it asleep.
+ */
+static int notify_charged(mqd_t q)
+{
+    pid_t pid;
+    int status, asleep;
+
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+        notify_churn(q);
+    }
+    if (pid < 0) {
+        return 0;
+    }
+    asleep = seen_asleep(pid);
+    kill(pid, SIGKILL);
+    return waitpid(pid, &status, 0) == pid && asleep && WIFSIGNALED(status);
+}
+
+/**
+ * Check the notifications of the blocking queue `q`, empty: mq_notify's
+ * signal comes with SI_MESGQ and its value, and SIGEV_THREAD cookies nobody
+ * reads make mq_notify wait for room (`notify_charged`); leaves one message
+ * in `q` for poll. Returns 0, or 1 once the failure is reported.
+ */
+static int mq_notify_rows(mqd_t q)
+{
+    struct sigevent ev;
+    struct sigaction sa;
+    char buf[64];
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = on_mq;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGUSR1, &sa, NULL);
+    memset(&ev, 0, sizeof(ev));
+    ev.sigev_notify = SIGEV_SIGNAL;
+    ev.sigev_signo = SIGUSR1;
+    ev.sigev_value.sival_int = 42;
+    if (mq_notify(q, &ev) != 0 || mq_send(q, "note", 4, 0) != 0 || mq_signo != SIGUSR1 ||
+        mq_code != SI_MESGQ || mq_value != 42) {
+        return fail("mq_notify's signal with SI_MESGQ and its value");
+    }
+    held();
+    if (mq_receive(q, buf, sizeof(buf), NULL) != 4 || !notify_charged(q)) {
+        return fail("SIGEV_THREAD cookies nobody reads make mq_notify wait for room");
+    }
+    held();
+    return mq_send(q, "note", 4, 0) != 0 ? fail("a message for poll") : 0;
+}
+
 /**
  * Check a POSIX queue: priorities, a full queue, a timeout, a notification,
- * poll and the name's removal. Returns 0, or 1 once the failure is reported.
+ * the charge of a SIGEV_THREAD cookie to its socket, poll and the name's
+ * removal. Returns 0, or 1 once the failure is reported.
  */
 static int mq_rows(void)
 {
     struct mq_attr attr = {0, 4, 64, 0, {0}};
-    struct sigevent ev;
-    struct sigaction sa;
     struct timespec ts;
     struct pollfd pfd;
     char buf[64];
@@ -949,19 +1040,9 @@ static int mq_rows(void)
         return fail("an empty queue with a timeout is ETIMEDOUT");
     }
     held();
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_sigaction = on_mq;
-    sa.sa_flags = SA_SIGINFO;
-    sigaction(SIGUSR1, &sa, NULL);
-    memset(&ev, 0, sizeof(ev));
-    ev.sigev_notify = SIGEV_SIGNAL;
-    ev.sigev_signo = SIGUSR1;
-    ev.sigev_value.sival_int = 42;
-    if (mq_notify(q, &ev) != 0 || mq_send(q, "note", 4, 0) != 0 || mq_signo != SIGUSR1 ||
-        mq_code != SI_MESGQ || mq_value != 42) {
-        return fail("mq_notify's signal with SI_MESGQ and its value");
+    if (mq_notify_rows(q) != 0) {
+        return 1;
     }
-    held();
     pfd.fd = q;
     pfd.events = POLLIN;
     if (poll(&pfd, 1, 0) != 1 || !(pfd.revents & POLLIN)) {
@@ -1001,12 +1082,12 @@ static void plan(void)
     static const char *const sem_msg[] = {
         "sem-timeout",       "sem-waiter-blocks", "sem-waiter-undo", "sem-removal-blocks",
         "sem-removal-eidrm", "msg-order",         "msg-e2big"};
-    static const char *const mq[] = {"mq-priority",      "mq-full-eagain", "mq-timeout",
-                                     "mq-notify",        "mq-poll",        "mq-unlink",
-                                     "mqueue-file",      "mqueue-status",  "mqueue-null-efault",
-                                     "mqueue-pread-end", "mqueue-listed",  "mqueue-unlink-file",
-                                     "mq-fstat",         "mq-fd-link",     "mq-deleted-link",
-                                     "mq-held-attrs"};
+    static const char *const mq[] = {"mq-priority",        "mq-full-eagain",   "mq-timeout",
+                                     "mq-notify",          "mq-notify-charge", "mq-poll",
+                                     "mq-unlink",          "mqueue-file",      "mqueue-status",
+                                     "mqueue-null-efault", "mqueue-pread-end", "mqueue-listed",
+                                     "mqueue-unlink-file", "mq-fstat",         "mq-fd-link",
+                                     "mq-deleted-link",    "mq-held-attrs"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.ipcmusl"));

@@ -507,8 +507,10 @@ struct nl_dgram {
 };
 
 /* Whether `netlink_dgram_new` fails, as with no memory, and the datagrams
- * made and not yet sent or freed. */
-static int nl_refuse, nl_live;
+ * made and not yet sent or freed; the error `netlink_dgram_attach` gives,
+ * as for a signal while the socket has no room, and the datagrams charged
+ * to the socket and not yet sent or detached. */
+static int nl_refuse, nl_live, nl_attach_err, nl_charged;
 
 /** A zeroed datagram of `len` bytes, or NULL while `nl_refuse` is set. */
 struct nl_dgram *netlink_dgram_new(uint32_t len)
@@ -528,9 +530,33 @@ uint8_t *netlink_dgram_data(struct nl_dgram *d)
     return d->data;
 }
 
+/** Charge `d` to the socket, or give `nl_attach_err` while it is set. */
+int netlink_dgram_attach(struct socket *sock, struct nl_dgram *d)
+{
+    (void)sock;
+    (void)d;
+    if (nl_attach_err) {
+        return nl_attach_err;
+    }
+    nl_charged++;
+    return 0;
+}
+
+/** Give back the charge of `d`, never sent, and free it. */
+void netlink_dgram_detach(struct socket *sock, struct nl_dgram *d)
+{
+    (void)sock;
+    if (d) {
+        nl_charged--;
+        kfree(d);
+        nl_live--;
+    }
+}
+
 /** Record `d` when it goes to the rows' netlink socket, and free it. */
 void netlink_dgram_send(struct socket *sock, struct nl_dgram *d)
 {
+    nl_charged--;
     if (sock == &nl_sock) {
         k_memcpy(nl_last, d->data, d->len);
         nl_len = d->len;
@@ -1128,7 +1154,9 @@ static void sigevent_at(int notify, int signo, uintptr_t value)
  * by mq_notify with NOTIFY_REMOVED. A descriptor that is no socket is
  * ENOTSOCK and a socket of another family EINVAL. The cookie's datagram is
  * made at the registration, which is ENOMEM without it, so that a message
- * sends it though memory has run out since.
+ * sends it though memory has run out since, and charged to the socket,
+ * whose wait for room a signal cuts with EINTR; a refused registration
+ * gives the charge back.
  */
 static void socket_notify_rows(int fd, struct isr_params *note, struct isr_params *send)
 {
@@ -1147,12 +1175,18 @@ static void socket_notify_rows(int fd, struct isr_params *note, struct isr_param
     CHECK(sys_mq_notify(note) == -ENOMEM && !q->notify_tgid && nl_sock.refcount == 0,
           "a registration whose cookie's datagram cannot be made is ENOMEM and registers nothing");
     nl_refuse = 0;
+    nl_attach_err = -EINTR;
+    CHECK(sys_mq_notify(note) == -EINTR && !q->notify_tgid && nl_sock.refcount == 0 &&
+              nl_live == 0 && nl_charged == 0,
+          "a registration whose cookie the socket has no room for is cut by a signal and "
+          "registers nothing");
+    nl_attach_err = 0;
     q->atime_s = q->ctime_s = -1;
     CHECK(sys_mq_notify(note) == 0 && nl_sock.refcount == 1 && q->atime_s != -1 &&
               q->ctime_s == q->atime_s,
           "SIGEV_THREAD registers the socket and moves the queue's times");
-    CHECK(sys_mq_notify(note) == -EBUSY && nl_live == 1,
-          "a second registration is EBUSY and keeps no datagram");
+    CHECK(sys_mq_notify(note) == -EBUSY && nl_live == 1 && nl_charged == 1 && nl_sock.refcount == 1,
+          "a second registration is EBUSY and keeps no datagram, charge or reference");
     nl_refuse = 1;
     CHECK(sys_mq_timedsend(send) == 0 && nl_sent == 1 && nl_len == 32 && nl_last[0] == 1 &&
               nl_last[30] == 31 && nl_last[31] == 1 && nl_sock.refcount == 0 && !q->notify_tgid,
@@ -1164,7 +1198,8 @@ static void socket_notify_rows(int fd, struct isr_params *note, struct isr_param
     note->ecx = 0;
     CHECK(sys_mq_notify(note) == 0 && nl_sent == 2 && nl_last[31] == 2 && nl_sock.refcount == 0,
           "taking the registration away sends NOTIFY_REMOVED");
-    CHECK(nl_live == 0, "every datagram is sent or freed");
+    CHECK(nl_live == 0 && nl_charged == 0,
+          "every datagram is sent or freed, and its charge given back");
     note->ecx = 100;
 }
 

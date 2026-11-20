@@ -6091,6 +6091,7 @@
         {"assertion_id": "mq-full-eagain", "checks": "A full queue with O_NONBLOCK is EAGAIN.", "source": "program"},
         {"assertion_id": "mq-timeout", "checks": "An empty queue with a timeout of 100 ms is ETIMEDOUT.", "source": "program"},
         {"assertion_id": "mq-notify", "checks": "mq_notify's signal comes with SI_MESGQ and its value.", "source": "program"},
+        {"assertion_id": "mq-notify-charge", "checks": "A child that registers SIGEV_THREAD on a netlink socket and takes the registration away 100000 times, never reading the cookies each removal queues, comes to sleep in mq_notify, as Linux charges each cookie to the socket's receive memory and waits for room, and is killed.", "source": "program"},
         {"assertion_id": "mq-poll", "checks": "poll reports a message.", "source": "program"},
         {"assertion_id": "mq-unlink", "checks": "The name goes with mq_unlink.", "source": "program"},
         {"assertion_id": "mqueue-file", "checks": "/dev/mqueue gives a queue's file its mode and size.", "source": "program"},

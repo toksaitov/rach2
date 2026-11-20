@@ -279,8 +279,9 @@ static int32_t mq_charge(struct mqueue *q, int32_t maxmsg, int32_t msgsize)
 }
 
 /** Let go of `q`'s SIGEV_THREAD socket, after sending its cookie, the
- * datagram made at the registration, with the last byte `how` unless `how`
- * is 0, as Linux's netlink_sendskb does; a cookie not sent is freed. */
+ * datagram made and charged to the socket at the registration, with the
+ * last byte `how` unless `how` is 0, as Linux's netlink_sendskb does; a
+ * cookie not sent is freed and its charge given back (netlink_detachskb). */
 static void mq_notify_sock_drop(struct mqueue *q, uint8_t how)
 {
     if (!q->notify_sock) {
@@ -290,7 +291,7 @@ static void mq_notify_sock_drop(struct mqueue *q, uint8_t how)
         netlink_dgram_data(q->notify_dgram)[NOTIFY_COOKIE_LEN - 1] = how;
         netlink_dgram_send(q->notify_sock, q->notify_dgram);
     } else {
-        netlink_dgram_free(q->notify_dgram);
+        netlink_dgram_detach(q->notify_sock, q->notify_dgram);
     }
     q->notify_dgram = NULL;
     socket_unref(q->notify_sock);
@@ -1281,8 +1282,13 @@ static struct socket *mq_notify_socket(int fd, int32_t *err)
  * address `value` into a datagram for the netlink socket whose descriptor
  * is `fd`, in Linux's order (do_mq_notify): the datagram first, so that the
  * notification cannot be lost for memory later, then the cookie, then the
- * socket. Sets `*sock` and returns the datagram, or NULL with `*err`
- * -ENOMEM, -EFAULT or an error of `mq_notify_socket`.
+ * socket, held, and the datagram charged to its room
+ * (`netlink_dgram_attach`), which waits while the socket holds more than
+ * that, so that registrations whose cookies nobody reads cannot take memory
+ * without bound. Sets `*sock`, with a reference the caller keeps or drops,
+ * and returns the datagram, attached, which `netlink_dgram_detach` frees;
+ * or NULL with `*err` -ENOMEM, -EFAULT, an error of `mq_notify_socket` or
+ * of the attach.
  */
 static struct nl_dgram *mq_notify_cookie(uintptr_t value, int fd, struct socket **sock,
                                          int32_t *err)
@@ -1298,7 +1304,13 @@ static struct nl_dgram *mq_notify_cookie(uintptr_t value, int fd, struct socket 
     } else {
         *sock = mq_notify_socket(fd, err);
         if (*sock) {
-            return d;
+            socket_ref(*sock);
+            *err = netlink_dgram_attach(*sock, d);
+            if (*err == 0) {
+                return d;
+            }
+            socket_unref(*sock);
+            *sock = NULL;
         }
     }
     netlink_dgram_free(d);
@@ -1313,8 +1325,10 @@ static struct nl_dgram *mq_notify_cookie(uintptr_t value, int fd, struct socket 
  * SIGEV_THREAD, the cookie of NOTIFY_COOKIE_LEN bytes at the sigevent's
  * value, sent on the netlink socket whose descriptor is its signal, as musl
  * and glibc ask for it. Either change sets the queue's access and change
- * times. EINVAL for another kind or a signal past 64, then for SIGEV_THREAD
- * the errors of `mq_notify_cookie`; then EBADF for
+ * times. A SIGEV_THREAD registration waits while its socket holds more
+ * than its room (`mq_notify_cookie`). EINVAL for another kind or a signal
+ * past 64, then for SIGEV_THREAD the errors of `mq_notify_cookie`; then
+ * EBADF for
  * a descriptor not open on a queue, and EBUSY when a process is registered
  * already. An i386 call on x86-64 passes Linux's compat_sigevent, whose
  * value is 32 bits.
@@ -1361,7 +1375,10 @@ long sys_mq_notify(struct isr_params *params)
     }
     q = mq_of((int)SC_ARG(params, 0), &e);
     if (!q || (SC_ARG(params, 1) && q->notify_tgid)) {
-        netlink_dgram_free(dgram);
+        if (sock) {
+            netlink_dgram_detach(sock, dgram);
+            socket_unref(sock);
+        }
         return q ? -EBUSY : -EBADF;
     }
     if (!SC_ARG(params, 1)) {
@@ -1372,7 +1389,6 @@ long sys_mq_notify(struct isr_params *params)
         return 0;
     }
     if (sock) {
-        socket_ref(sock);
         q->notify_sock = sock;
         q->notify_dgram = dgram;
     }
