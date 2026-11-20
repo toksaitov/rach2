@@ -70,13 +70,15 @@ does without timestamps; a reset at the next sequence number expected ends
 it too.
 Another SYN, or an older one, is acknowledged at most once in 500 ms,
 the rest counted in TCPACKSkippedTimeWait.
-That limit starts fresh when the connection enters
-.Dv TIME_WAIT
-or is already detached in
-.Dv FIN_WAIT_2 ,
-whichever comes first.
-A connection there gives back its send buffer on entering it, and its
-receive buffer then if nothing is unread or no socket holds it, and
+A connection in detached
+.Dv FIN_WAIT_2
+starts the limit there and carries it into
+.Dv TIME_WAIT .
+Other connections start a fresh limit on entering
+.Dv TIME_WAIT .
+A connection gives back its send buffer on entering
+.Dv TIME_WAIT ,
+and its receive buffer then if nothing is unread or no socket holds it, and
 otherwise when the socket is closed.
 The connections in
 .Dv TIME_WAIT
