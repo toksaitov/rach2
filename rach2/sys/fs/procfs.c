@@ -9951,6 +9951,15 @@ static int procfs_gen_idmap(struct procfs_text *t, int pid, int file)
     return t->len;
 }
 
+/** The kernel's id of the process or thread whose `comm`, `sched` or
+ * `autogroup` `f` opened, while that process lives: -1 once it has been
+ * reaped, even when its id has gone to another process since, as Linux's
+ * `get_proc_task` finds no task in the inode's struct pid. */
+static int procfs_file_pid(const struct procfs_file *f)
+{
+    return procfs_held_pid(&f->own);
+}
+
 /** Read a user namespace's file, a `comm`, a `sched` or an `autogroup`
  * opened for writing as well: its text at this read, from the description's
  * offset; -ESRCH once the process has been reaped. */
@@ -9960,14 +9969,19 @@ static int32_t procfs_idmap_read(fd_entry_t *e, char __user *buf, uint32_t count
     uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
+    int idmap = f->origin_file != SYNTH_PROC_COMM && f->origin_file != SYNTH_PROC_SCHED &&
+                f->origin_file != SYNTH_PROC_AUTOGROUP;
+    int pid = idmap ? f->origin_pid : procfs_file_pid(f);
     int rc;
 
+    if (pid < 0) {
+        return -ESRCH;
+    }
     procfs_text_init(&t);
-    rc = f->origin_file == SYNTH_PROC_COMM    ? procfs_gen_comm(&t, f->origin_pid)
-         : f->origin_file == SYNTH_PROC_SCHED ? procfs_gen_sched(&t, f->origin_pid)
-         : f->origin_file == SYNTH_PROC_AUTOGROUP
-             ? procfs_gen_autogroup(&t, f->origin_pid)
-             : procfs_gen_idmap(&t, f->origin_pid, f->origin_file);
+    rc = f->origin_file == SYNTH_PROC_COMM        ? procfs_gen_comm(&t, pid)
+         : f->origin_file == SYNTH_PROC_SCHED     ? procfs_gen_sched(&t, pid)
+         : f->origin_file == SYNTH_PROC_AUTOGROUP ? procfs_gen_autogroup(&t, pid)
+                                                  : procfs_gen_idmap(&t, pid, f->origin_file);
     if (rc < 0 || t.nomem) {
         kfree(t.buf);
         return t.nomem ? -ENOMEM : -ESRCH;
@@ -10038,7 +10052,7 @@ static int32_t procfs_comm_write(fd_entry_t *e, const char __user *buf, uint32_t
     if (copy_from_user(name, buf, n) != 0) {
         return -EFAULT;
     }
-    p = procfs_proc(f->origin_pid);
+    p = procfs_proc(procfs_file_pid(f));
     if (!p) {
         return -ESRCH;
     }
@@ -10059,7 +10073,7 @@ static const struct file_ops procfs_comm_ops = {
 static int32_t procfs_sched_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    int rc = procfs_sched_clear(f->origin_pid);
+    int rc = procfs_sched_clear(procfs_file_pid(f));
 
     (void)buf;
     return rc != 0 ? rc : (int32_t)count;
@@ -10110,7 +10124,7 @@ static int32_t procfs_autogroup_write(fd_entry_t *e, const char __user *buf, uin
     if (v < -0x7FFFFFFFLL - 1 || v > 0x7FFFFFFFLL) {
         return -ERANGE;
     }
-    p = procfs_proc(f->origin_pid);
+    p = procfs_proc(procfs_file_pid(f));
     if (!p) {
         return -ESRCH;
     }
