@@ -495,6 +495,7 @@ tests/host/netconf_hosttest.c:main lines 309 a test's rows, each a case, read as
 
 tests/host/netconsole_hosttest.c:main lines 125 a test's rows, each a case, read as one table
 
+tests/host/netdev_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/netdev_hosttest.c:main lines 131 a test's rows, each a case, read as one table
 
 tests/host/nl80211_hosttest.c:event params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once

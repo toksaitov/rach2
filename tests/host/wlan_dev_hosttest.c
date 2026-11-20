@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/network/wireless/wlan.c
  * host-deps: rach2/sys/network/wireless/reg.c
  * host-deps: rach2/sys/network/driver/netdev.c
+ * host-deps: rach2/sys/network/driver/netdev_room.c
  * host-deps: rach2/sys/network/ethernet/ethernet.c
  * host-deps: rach2/sys/network/socket/packet.c
  * host-deps: rach2/sys/network/socket/dgq.c
@@ -29,6 +30,7 @@
 #include "network/arp/arp.h"
 #include "network/ip/ip.h"
 #include "network/ip6/ip6.h"
+#include "network/ip6/mld6.h"
 #include "network/ip6/route6.h"
 #include "network/ip6/nd6.h"
 #include "network/socket/socket.h"
@@ -384,7 +386,13 @@ void route6_forget(struct netdev *nd, int proto)
 }
 
 /** The fixture has no IPv6 discovery work to stop. */
-void nd6_if_down(struct netdev *nd)
+void nd6_if_remove(struct netdev *nd)
+{
+    (void)nd;
+}
+
+/** The fixture has no multicast reports to free. */
+void mld6_if_remove(const struct netdev *nd)
 {
     (void)nd;
 }

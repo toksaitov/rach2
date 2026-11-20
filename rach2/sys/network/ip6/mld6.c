@@ -4,6 +4,7 @@
  */
 
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
 #include "../../timer.h"
 #include "mld6.h"
 #include "nd6.h"
@@ -28,7 +29,9 @@
 #define CHANGE_TO_INCLUDE 3
 #define CHANGE_TO_EXCLUDE 4
 
-#define MLD6_SLOTS (2 * NETDEV_GROUPS6)
+/* The records of one MLDv2 report: as many as an Ethernet MTU holds after
+ * the IPv6 header, the hop-by-hop router alert and the report's header. */
+#define MLD6_RECORDS ((NETDEV_ETH_MTU_MAX - 40 - 8 - 8) / 20)
 
 /* A group a card reported or is reporting; free when `used` is 0. A slot
  * whose group was left stays until its leave has been sent. */
@@ -41,8 +44,11 @@ struct mld6_slot {
     uint32_t answer; /* the tick an answer to a group query is due, 0 for none */
 };
 
+/* A card's groups in `slot`, an array of `nslot` that `reconcile` grows and
+ * `forget` frees. */
 struct mld6_if {
-    struct mld6_slot slot[MLD6_SLOTS];
+    struct mld6_slot *slot;
+    int nslot;
     uint8_t live;        /* whether the card could send, at the last tick */
     uint32_t general_at; /* an answer to a general query is due, 0 for none */
     uint32_t v1_until;   /* an MLDv1 querier is present until, 0 for none */
@@ -56,8 +62,8 @@ static const uint8_t all_mld_routers[IP6_ADDR_LEN] = {0xff, 2, 0, 0, 0, 0, 0, 0,
 static const uint8_t all_routers[IP6_ADDR_LEN] = {0xff, 2, 0, 0, 0, 0, 0, 0,
                                                   0,    0, 0, 0, 0, 0, 0, 2};
 
-/* The report being sent: a header and one record of 20 bytes per slot. */
-static uint8_t mld_msg[8 + 20 * MLD6_SLOTS];
+/* The report being sent: a header and one record of 20 bytes per group. */
+static uint8_t mld_msg[8 + 20 * MLD6_RECORDS];
 
 /** A tick that is never 0, which marks no timer. */
 static uint32_t at_tick(uint32_t t)
@@ -79,16 +85,62 @@ static int reportable(const uint8_t *group)
     return scope > 1 && !ip6_equal(group, ip6_all_nodes);
 }
 
+/** Clear `m`, freeing its slots. */
+static void forget(struct mld6_if *m)
+{
+    kfree(m->slot);
+    k_memset(m, 0, sizeof(*m));
+}
+
+/** A free slot of `m`, made by doubling its array when every slot is used;
+ * NULL when the heap has no room, which leaves the group unreported until
+ * the next tick tries again. */
+static struct mld6_slot *free_slot(struct mld6_if *m)
+{
+    struct mld6_slot *more;
+    int i, n;
+
+    for (i = 0; i < m->nslot; i++) {
+        if (!m->slot[i].used) {
+            return &m->slot[i];
+        }
+    }
+    n = m->nslot ? m->nslot * 2 : 8;
+    if (m->nslot > 0x7fffffff / 2 / (int)sizeof(*more))
+        return 0;
+    more = kzalloc((size_t)n * sizeof(*more));
+    if (!more)
+        return 0;
+    if (m->nslot)
+        k_memcpy(more, m->slot, (size_t)m->nslot * sizeof(*more));
+    kfree(m->slot);
+    m->slot = more;
+    i = m->nslot;
+    m->nslot = n;
+    return &m->slot[i];
+}
+
 static struct mld6_if *mld_of(const struct netdev *nd)
 {
     int slot = netdev_slot(nd) - 1;
     if (!nd || slot < 0 || slot > NETDEV_MAX)
         return 0;
     if (mld_index[slot] != nd->index) {
-        k_memset(&mlds[slot], 0, sizeof(mlds[slot]));
+        forget(&mlds[slot]);
         mld_index[slot] = nd->index;
     }
     return &mlds[slot];
+}
+
+/** Free only the reports belonging to the departing interface. */
+void mld6_if_remove(const struct netdev *nd)
+{
+    int slot = netdev_slot(nd) - 1;
+
+    if (slot >= 0 && slot <= NETDEV_MAX && mld_index[slot] == nd->index) {
+        forget(&mlds[slot]);
+        mld_index[slot] = 0;
+    }
 }
 
 static int v1(const struct mld6_if *m)
@@ -144,14 +196,27 @@ static void report_one(struct netdev *nd, const struct mld6_if *m, const uint8_t
     mld_send(nd, all_mld_routers, 28);
 }
 
-/** Answer a general query: one report of every group, or for MLDv1 one
- * report each. */
+/** Send the `n` records in `mld_msg` as one MLDv2 report. */
+static void send_records(struct netdev *nd, uint16_t n)
+{
+    k_memset(mld_msg, 0, 8);
+    mld_msg[0] = ICMP6_MLD_V2_REPORT;
+    write16be(mld_msg + 6, n);
+    mld_send(nd, all_mld_routers, (uint16_t)(8 + 20 * n));
+}
+
+/** Answer a general query: a record of every group, in as many reports as
+ * the card's MTU needs, as Linux's mld_send_report fills each to the MTU;
+ * or for MLDv1 one report each. */
 static void report_all(struct netdev *nd, struct mld6_if *m)
 {
-    uint16_t n = 0;
+    uint16_t n = 0, most = MLD6_RECORDS;
     int i;
 
-    for (i = 0; i < MLD6_SLOTS; i++) {
+    if (nd->mtu < NETDEV_ETH_MTU_MAX && nd->mtu > 56 + 20) {
+        most = (uint16_t)((nd->mtu - 56) / 20);
+    }
+    for (i = 0; i < m->nslot; i++) {
         struct mld6_slot *s = &m->slot[i];
 
         if (!s->used || !s->member) {
@@ -161,16 +226,16 @@ static void report_all(struct netdev *nd, struct mld6_if *m)
             report_one(nd, m, s->group, MODE_IS_EXCLUDE);
             continue;
         }
+        if (n == most) {
+            send_records(nd, n);
+            n = 0;
+        }
         put_record(mld_msg + 8 + 20 * n, MODE_IS_EXCLUDE, s->group);
         n++;
     }
-    if (v1(m) || n == 0) {
-        return;
+    if (n > 0) {
+        send_records(nd, n);
     }
-    k_memset(mld_msg, 0, 8);
-    mld_msg[0] = ICMP6_MLD_V2_REPORT;
-    write16be(mld_msg + 6, n);
-    mld_send(nd, all_mld_routers, (uint16_t)(8 + 20 * n));
 }
 
 /** The slot of `group` in `m`, or NULL. */
@@ -178,7 +243,7 @@ static struct mld6_slot *slot_of(struct mld6_if *m, const uint8_t *group)
 {
     int i;
 
-    for (i = 0; i < MLD6_SLOTS; i++) {
+    for (i = 0; i < m->nslot; i++) {
         if (m->slot[i].used && ip6_equal(m->slot[i].group, group)) {
             return &m->slot[i];
         }
@@ -194,31 +259,28 @@ static void reconcile(struct netdev *nd, struct mld6_if *m)
 
     for (i = 0; i < nd->ngroup6; i++) {
         struct mld6_slot *s;
-        int j;
 
-        if (!reportable(nd->group6[i])) {
+        if (!reportable(nd->group6[i].addr)) {
             continue;
         }
-        s = slot_of(m, nd->group6[i]);
+        s = slot_of(m, nd->group6[i].addr);
         if (s && s->member) {
             continue;
         }
-        for (j = 0; !s && j < MLD6_SLOTS; j++) {
-            if (!m->slot[j].used) {
-                s = &m->slot[j];
-            }
+        if (!s) {
+            s = free_slot(m);
         }
         if (!s) {
             continue;
         }
         k_memset(s, 0, sizeof(*s));
-        k_memcpy(s->group, nd->group6[i], IP6_ADDR_LEN);
+        k_memcpy(s->group, nd->group6[i].addr, IP6_ADDR_LEN);
         s->used = 1;
         s->member = 1;
         s->left = ROBUSTNESS;
         s->at = at_tick(NOW);
     }
-    for (i = 0; i < MLD6_SLOTS; i++) {
+    for (i = 0; i < m->nslot; i++) {
         struct mld6_slot *s = &m->slot[i];
 
         if (s->used && s->member && !netdev_member6(nd, s->group)) {
@@ -246,7 +308,7 @@ void mld6_tick(void)
         }
         if (!live) {
             if (m->live) {
-                k_memset(m, 0, sizeof(*m));
+                forget(m);
             }
             continue;
         }
@@ -256,7 +318,7 @@ void mld6_tick(void)
             m->general_at = 0;
             report_all(nd, m);
         }
-        for (j = 0; j < MLD6_SLOTS; j++) {
+        for (j = 0; j < m->nslot; j++) {
             struct mld6_slot *s = &m->slot[j];
 
             if (!s->used) {
@@ -355,7 +417,7 @@ void mld6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t 
         schedule(&m->general_at, limit);
         return;
     }
-    for (i = 0; i < MLD6_SLOTS; i++) {
+    for (i = 0; i < m->nslot; i++) {
         if (m->slot[i].used && m->slot[i].member) {
             schedule(&m->slot[i].answer, limit);
         }

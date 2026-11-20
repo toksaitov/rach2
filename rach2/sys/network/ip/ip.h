@@ -67,9 +67,9 @@ int ip_is_local(uint32_t ip);
  * interface's address (`net_ip_addr`) when no route reaches `dst`. */
 uint32_t ip_source(uint32_t dst);
 
-/** `ip_source` by the route `netdev_route_on` chooses for `ifindex`, the
- * card a socket is bound to, or any card for 0. */
-uint32_t ip_source_on(uint32_t dst, int ifindex);
+/** Choose `*src` by the transmit route to `dst`, using the card of index
+ * `ifindex`, or any card for 0. Return 0, or -ENETUNREACH for no route. */
+int ip_source_on(uint32_t dst, int ifindex, uint32_t *src);
 
 /**
  * Check the IPv4 datagram of `len` bytes at `data` and give it to its

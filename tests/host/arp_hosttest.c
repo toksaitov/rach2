@@ -81,9 +81,10 @@ int netdev_holds(const struct netdev *nd, uint32_t ip)
 }
 
 /** Return `nd`'s one address as the source for any next hop. */
-uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
+uint32_t netdev_source(const struct netdev *nd, uint32_t hop, int scope)
 {
     (void)hop;
+    (void)scope;
     return nd->ip;
 }
 
@@ -132,6 +133,7 @@ void ip_hold_forget(struct netdev *nd)
    release ever came without a lock. */
 static int lock_depth;
 static int lock_ever_negative;
+static int address_lock_depth;
 
 /** Take the network lock: count it and return 0 as the saved flags, since no
  * interrupt runs on the host. */
@@ -192,6 +194,7 @@ int netconf_address_is_impossible(uint32_t ip)
 {
     uint32_t top = ip >> 24;
 
+    address_lock_depth = lock_depth;
     return top == 0u || top == 127u || top >= 224u;
 }
 
@@ -378,6 +381,21 @@ static void test_interfaces(void)
           "primary interface mapping was overwritten");
 }
 
+/** Reject a mapping for an extra address's broadcast with interrupts off. */
+static void test_address_lock(void)
+{
+    static const uint8_t mac[6] = {0x02, 0, 0, 0, 0, 1};
+    uint32_t ip = 0xc6336401u, mask = 0xffffff00u;
+
+    the_iface.ip2 = &ip;
+    the_iface.mask2 = &mask;
+    the_iface.naddr2 = 1;
+    CHECK(arp_set(&the_iface, ip | ~mask, mac, 1) == -EINVAL && address_lock_depth > 0,
+          "a static neighbour checks the extra address under the network lock");
+    the_iface.naddr2 = 0;
+    the_iface.ip2 = the_iface.mask2 = 0;
+}
+
 /**
  * Run the rows of test_layout and test_interfaces, then: no address a
  * neighbour cannot have is cached or releases held datagrams, while an
@@ -399,6 +417,7 @@ int main(void)
     printf("arp_hosttest: the address cache\n");
     test_layout();
     test_interfaces();
+    test_address_lock();
 
     arp_flush();
     frame_count = 0;

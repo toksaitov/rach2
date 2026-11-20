@@ -162,7 +162,8 @@ A file of `/proc/sys` is read and written as Linux 6.12.115's handler of it read
 | `net/ipv4/tcp_keepalive_time`, `tcp_keepalive_intvl` | `proc_dointvec_jiffies` | -INT_MAX / HZ to INT_MAX / HZ seconds |
 | `net/ipv4/tcp_keepalive_probes`, `tcp_mtu_probing`, `tcp_retries2` | `proc_dou8vec_minmax` | 0 to 255 |
 | `net/ipv4/ip_local_port_range` | `ipv4_local_port_range`, of `proc_dointvec_minmax` over two ints | 1 to 65535 each, the high end not below the low end and the low end from 1024 |
-| `net/ipv6/conf/*/accept_ra`, `autoconf`, `use_tempaddr` | `proc_dointvec` | any int |
+| `net/ipv4/conf/*/promote_secondaries` | `devinet_conf_proc`, of `proc_dointvec` | any int |
+| `net/ipv6/conf/*/accept_ra`, `autoconf`, `keep_addr_on_down`, `use_tempaddr` | `proc_dointvec` | any int |
 | `net/ipv6/conf/*/forwarding`, `disable_ipv6` | `addrconf_sysctl_forward`, `addrconf_sysctl_disable`, of `proc_dointvec` | any int |
 | `net/ipv6/conf/*/ra_defrtr_metric` | `proc_douintvec_minmax` | 1 to UINT_MAX |
 | `kernel/msgmax`, `msgmnb`, `msgmni`, `sem`, `shmall`, `shmmax`, `shmmni`, `cap_last_cap`, `fs/mqueue/*`, `vm/overcommit_memory`, `swappiness`, `crypto/fips_enabled` | numeric handlers, read only | |

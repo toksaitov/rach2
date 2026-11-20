@@ -524,12 +524,138 @@ static void addr_erase_extra(struct netdev *nd, int i)
         nd->ip2[i] = nd->ip2[i + 1];
         nd->mask2[i] = nd->mask2[i + 1];
         nd->peer2[i] = nd->peer2[i + 1];
-        nd->addr4[i + 1] = nd->addr4[i + 2];
+        NETDEV_ADDR4(nd, i + 1) = NETDEV_ADDR4(nd, i + 2);
     }
     nd->naddr2--;
 }
 
-/** Delete the same-subnet secondaries of a departing primary. */
+/* The IPv4 settings of `all`, of `default` and of each slot's interface,
+ * whose index `conf4_index` keeps; `set` has a bit for each key written to
+ * the interface itself. */
+struct conf4 {
+    int32_t v[NETCONF4_CONF_KEYS];
+    uint32_t set;
+};
+
+static struct conf4 conf4_all, conf4_default, conf4_ifs[NETDEV_MAX + 1];
+static int conf4_index[NETDEV_MAX + 1];
+
+/** The settings of `nd`, `default`'s for an interface new to its slot;
+ * NULL for NULL or a slot past the table. */
+static struct conf4 *conf4_of(const struct netdev *nd)
+{
+    int slot = netdev_slot(nd) - 1;
+
+    if (!nd || slot < 0 || slot > NETDEV_MAX) {
+        return 0;
+    }
+    if (conf4_index[slot] != nd->index) {
+        conf4_ifs[slot] = conf4_default;
+        conf4_ifs[slot].set = 0;
+        conf4_index[slot] = nd->index;
+    }
+    return &conf4_ifs[slot];
+}
+
+/** The settings `which` names, or NULL for no interface of that index. */
+static struct conf4 *conf4_which(int which)
+{
+    if (which == NETCONF4_CONF_ALL) {
+        return &conf4_all;
+    }
+    if (which == NETCONF4_CONF_DEFAULT) {
+        return &conf4_default;
+    }
+    return which >= 1 ? conf4_of(netdev_by_index(which)) : 0;
+}
+
+int netconf4_conf_get(int which, int key, int32_t *value)
+{
+    struct conf4 *c;
+
+    if (key < 0 || key >= NETCONF4_CONF_KEYS) {
+        return -EINVAL;
+    }
+    c = conf4_which(which);
+    if (!c) {
+        return -ENODEV;
+    }
+    *value = c->v[key];
+    return 0;
+}
+
+int netconf4_conf_set(int which, int key, int32_t value)
+{
+    struct conf4 *c;
+    uint32_t lock;
+    int i;
+
+    if (key < 0 || key >= NETCONF4_CONF_KEYS) {
+        return -EINVAL;
+    }
+    lock = net_lock();
+    c = conf4_which(which);
+    if (!c) {
+        net_unlock(lock);
+        return -ENODEV;
+    }
+    c->v[key] = value;
+    c->set |= 1u << key;
+    if (which == NETCONF4_CONF_DEFAULT) {
+        for (i = 0; i < netdev_listed(); i++) {
+            struct conf4 *d = conf4_of(netdev_at(i));
+
+            if (d && !(d->set & (1u << key))) {
+                d->v[key] = value;
+            }
+        }
+    }
+    net_unlock(lock);
+    return 0;
+}
+
+/** Whether a primary of `nd` that goes promotes its first secondary:
+ * promote_secondaries not 0 on `nd` or in `all`. */
+static int promotes(const struct netdev *nd)
+{
+    const struct conf4 *c = conf4_of(nd);
+
+    return conf4_all.v[NETCONF4_PROMOTE_SECONDARIES] || (c && c->v[NETCONF4_PROMOTE_SECONDARIES]);
+}
+
+/**
+ * Move the secondary at extra slot `s`, the first of the departing primary
+ * `a`'s subnet, to where Linux's __inet_del_ifa puts the address it
+ * promotes: after the last primary between them whose scope is `a`'s or
+ * narrower, or right after `a`, which its caller then removes. The slots
+ * between move down one.
+ */
+static void addr_promote(struct netdev *nd, int a, int s)
+{
+    uint32_t ip = nd->ip2[s], mask = nd->mask2[s], peer = nd->peer2[s];
+    struct addr4_routes opts = NETDEV_ADDR4(nd, s + 1);
+    int k, t = a;
+
+    for (k = a + 1; k < s; k++) {
+        if (!netdev_secondary(nd, k) &&
+            NETDEV_ADDR4(nd, k + 1).scope >= NETDEV_ADDR4(nd, a + 1).scope) {
+            t = k;
+        }
+    }
+    for (k = s; k > t + 1; k--) {
+        nd->ip2[k] = nd->ip2[k - 1];
+        nd->mask2[k] = nd->mask2[k - 1];
+        nd->peer2[k] = nd->peer2[k - 1];
+        NETDEV_ADDR4(nd, k + 1) = NETDEV_ADDR4(nd, k);
+    }
+    nd->ip2[t + 1] = ip;
+    nd->mask2[t + 1] = mask;
+    nd->peer2[t + 1] = peer;
+    NETDEV_ADDR4(nd, t + 2) = opts;
+}
+
+/** Deal with the same-subnet secondaries of a departing primary: promote
+ * the first when `promotes` says so, else delete them all. */
 static void addr_remove_aliases(struct netdev *nd, int a)
 {
     uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
@@ -537,6 +663,15 @@ static void addr_remove_aliases(struct netdev *nd, int a)
     int i;
     if (netdev_secondary(nd, a))
         return;
+    if (promotes(nd)) {
+        for (i = a + 1; i < nd->naddr2; i++) {
+            if (nd->mask2[i] == mask && (netdev_addr_dst(nd, i) & mask) == prefix) {
+                addr_promote(nd, a, i);
+                return;
+            }
+        }
+        return;
+    }
     for (i = nd->naddr2 - 1; i > a; i--) {
         if (nd->mask2[i] == mask && (netdev_addr_dst(nd, i) & mask) == prefix) {
             uint32_t old = nd->ip2[i];
@@ -584,7 +719,7 @@ static void addr_shift_right(struct netdev *nd, int i)
     nd->ip2[i] = i ? nd->ip2[i - 1] : nd->ip;
     nd->mask2[i] = i ? nd->mask2[i - 1] : nd->mask;
     nd->peer2[i] = i ? nd->peer2[i - 1] : nd->peer;
-    nd->addr4[i + 1] = nd->addr4[i];
+    NETDEV_ADDR4(nd, i + 1) = NETDEV_ADDR4(nd, i);
 }
 
 /** Insert among primaries by scope, or append a same-scope secondary.
@@ -599,16 +734,17 @@ static int addr_insert(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t p
         i = nd->naddr2;
         if (netconf_addr_find(nd, ip, mask, &dst) < i)
             return -EEXIST;
-        if (primary < i && nd->addr4[primary + 1].scope != opts->scope)
+        if (primary < i && NETDEV_ADDR4(nd, primary + 1).scope != opts->scope)
             return -EINVAL;
-        if (i == NETDEV_ADDRS)
-            return -ENOSPC;
+        if (netdev_addr4_room(nd, nd->naddr2 + 1))
+            return -ENOBUFS;
         if (primary == i)
-            while (i >= 0 && (netdev_secondary(nd, i - 1) || nd->addr4[i].scope < opts->scope))
+            while (i >= 0 &&
+                   (netdev_secondary(nd, i - 1) || NETDEV_ADDR4(nd, i).scope < opts->scope))
                 addr_shift_right(nd, i--);
         nd->naddr2++;
     }
-    nd->addr4[i + 1] = *opts;
+    NETDEV_ADDR4(nd, i + 1) = *opts;
     if (i < 0)
         addr_install(nd, ip, mask, peer);
     else {
@@ -624,20 +760,26 @@ static int addr_insert(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t p
 static int addr_replace(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t peer,
                         struct addr4_routes opts)
 {
+    int rc = 0;
+
     opts.deleted = 0;
     if (nd->ip)
         addr_unlink(nd);
     if (!nd->naddr2) {
         if (!ip)
             k_memset(&opts, 0, sizeof(opts));
-        nd->addr4[0] = opts;
+        NETDEV_ADDR4(nd, 0) = opts;
         addr_install(nd, ip, mask, peer);
-        return 0;
+    } else {
+        NETDEV_ADDR4(nd, 0) = NETDEV_ADDR4(nd, 1);
+        addr_install(nd, nd->ip2[0], nd->mask2[0], nd->peer2[0]);
+        addr_erase_extra(nd, 0);
+        /* The removed primary made room for its replacement. */
+        if (ip)
+            rc = addr_insert(nd, ip, mask, peer, &opts);
     }
-    nd->addr4[0] = nd->addr4[1];
-    addr_install(nd, nd->ip2[0], nd->mask2[0], nd->peer2[0]);
-    addr_erase_extra(nd, 0);
-    return ip ? addr_insert(nd, ip, mask, peer, &opts) : 0;
+    (void)netdev_addr4_room(nd, 0);
+    return rc;
 }
 
 int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
@@ -671,12 +813,13 @@ int netconf_del_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uin
         return -EADDRNOTAVAIL;
     }
     if (i < 0) {
-        addr_replace(nd, 0, 0, 0, nd->addr4[0]);
+        addr_replace(nd, 0, 0, 0, NETDEV_ADDR4(nd, 0));
     } else {
         uint32_t old = nd->ip2[i];
         addr_remove_aliases(nd, i);
         addr_erase_extra(nd, i);
         netdev_route_lost_source(old);
+        (void)netdev_addr4_room(nd, 0);
     }
     net_unlock(flags);
     return 0;
@@ -688,7 +831,7 @@ void netconf_expire_addresses(uint64_t now)
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
         for (a = nd->naddr2 - 1; a >= -1; a--) {
-            struct addr4_routes *opts = &nd->addr4[a + 1];
+            struct addr4_routes *opts = &NETDEV_ADDR4(nd, a + 1);
             uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
             if (opts->valid_until && now >= opts->valid_until) {
                 uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
@@ -713,7 +856,7 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
     if ((ip >> 28) == 14 || !mask_ok(mask))
         return -EINVAL;
     lock = net_lock();
-    opts = nd->addr4[0];
+    opts = NETDEV_ADDR4(nd, 0);
     if (ip != nd->ip) {
         if (!ip || !nd->ip)
             k_memset(&opts, 0, sizeof(opts));
@@ -746,13 +889,13 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask)
     else if (!mask_ok(mask))
         rc = -EINVAL;
     else if (mask != nd->mask) {
-        struct addr4_routes opts = nd->addr4[0];
+        struct addr4_routes opts = NETDEV_ADDR4(nd, 0);
         brd = netdev_addr_brd(nd, -1);
         if (!nd->l3 && !nd->loopback && mask < 0xfffffffeu && brd == (nd->ip | ~nd->mask))
             brd = nd->ip | ~mask;
         opts.given_broadcast = 1;
         opts.broadcast = brd;
-        addr_replace(nd, nd->ip, mask, nd->peer, opts);
+        rc = addr_replace(nd, nd->ip, mask, nd->peer, opts);
     }
     net_unlock(lock);
     return rc;
@@ -768,9 +911,9 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer)
     } else if ((peer >> 28) == 14) {
         rc = -EINVAL;
     } else if (peer != netdev_addr_dst(nd, -1)) {
-        struct addr4_routes opts = nd->addr4[0];
+        struct addr4_routes opts = NETDEV_ADDR4(nd, 0);
         opts.zero_peer = !peer;
-        addr_replace(nd, nd->ip, nd->mask, peer == nd->ip ? 0 : peer, opts);
+        rc = addr_replace(nd, nd->ip, nd->mask, peer == nd->ip ? 0 : peer, opts);
     }
     net_unlock(flags);
     return rc;
@@ -779,18 +922,19 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer)
 int netconf_set_broadcast(struct netdev *nd, uint32_t addr)
 {
     uint32_t flags = net_lock();
+    int rc = 0;
     if (!nd->ip) {
         net_unlock(flags);
         return -EADDRNOTAVAIL;
     }
     if (addr != netdev_addr_brd(nd, -1)) {
-        struct addr4_routes opts = nd->addr4[0];
+        struct addr4_routes opts = NETDEV_ADDR4(nd, 0);
         opts.given_broadcast = 1;
         opts.broadcast = addr;
-        addr_replace(nd, nd->ip, nd->mask, nd->peer, opts);
+        rc = addr_replace(nd, nd->ip, nd->mask, nd->peer, opts);
     }
     net_unlock(flags);
-    return 0;
+    return rc;
 }
 
 /** Set `nd`'s default gateway after checking that the interface reaches it. */
@@ -848,8 +992,8 @@ int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, 
     lock = net_lock();
     if (netdev_addr6_of(nd, addr)) {
         rc = -EEXIST;
-    } else if (nd->naddr6 == NETDEV_ADDRS6) {
-        rc = -ENOSPC;
+    } else if (netdev_addr6_room(nd, nd->naddr6 + 1)) {
+        rc = -ENOBUFS;
     } else if (!nd->loopback) {
         ip6_solicited_node(addr, group);
         rc = netdev_join6(nd, group);
@@ -921,6 +1065,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
         nd->addr6[i] = nd->addr6[i + 1];
     }
     nd->naddr6--;
+    (void)netdev_addr6_room(nd, 0);
     net_unlock(lock);
     klog(KLOG_INFO, "net", "%s: IPv6 %s removed", nd->name, text);
     return 0;
@@ -960,17 +1105,13 @@ static void link_local_up(struct netdev *nd)
     if (!netdev_member6(nd, ip6_all_nodes)) {
         netdev_join6(nd, ip6_all_nodes);
     }
-    net_unlock(lock);
     if (!netdev_addr6_of(nd, ll) &&
         netconf_add_address6(nd, ll, 64, NETDEV_A6_PERMANENT, NETDEV_LIFETIME_FOREVER,
                              NETDEV_LIFETIME_FOREVER) == 0) {
-        lock = net_lock();
         a = netdev_addr6_of(nd, ll);
-        if (a) {
-            a->proto = NETDEV_PROTO_KERNEL_LL;
-        }
-        net_unlock(lock);
+        a->proto = NETDEV_PROTO_KERNEL_LL;
     }
+    net_unlock(lock);
 }
 
 /** The driver hears of the change first and may refuse it; neighbour
@@ -998,9 +1139,11 @@ int netconf_set_up(struct netdev *nd, int up)
     }
     if (nd->up && !nd->loopback) {
         if (!was) {
+            uint32_t flags = net_lock();
             int a;
             for (a = 0; a <= nd->naddr2; a++)
-                nd->addr4[a].deleted = 0;
+                NETDEV_ADDR4(nd, a).deleted = 0;
+            net_unlock(flags);
         }
         link_local_up(nd);
         nd6_if_up(nd);

@@ -385,7 +385,8 @@ The socket has joined the group on that interface already.
 .It Bq Er EADDRNOTAVAIL
 The socket is no member of the group it leaves.
 .It Bq Er ENOBUFS
-The socket holds eight memberships, or the interface its sixteen groups.
+The socket holds eight memberships, or the kernel has no memory for
+another group of the interface.
 .It Bq Er ENODEV
 A nonempty
 .Dv SO_BINDTODEVICE

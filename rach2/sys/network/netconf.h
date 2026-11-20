@@ -183,8 +183,8 @@ int netconf_set_peer(struct netdev *nd, uint32_t peer);
  * does, or make it the first. A supplied `peer` gives the destination
  * prefix. A null pointer uses the local address. A secondary must have its
  * primary's scope. Return -EINVAL for a scope conflict, zero local address
- * or noncontiguous mask, -EEXIST for a duplicate or -ENOSPC when full. Takes
- * `net_lock`.
+ * or noncontiguous mask, -EEXIST for a duplicate or -ENOBUFS when the heap
+ * has no room. Takes `net_lock`.
  */
 int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask, const uint32_t *peer,
                         uint8_t scope);
@@ -227,8 +227,8 @@ int netconf_insert_address6(struct netdev *nd, const uint8_t *addr, int prefix, 
  *         an interface with IPv6 disabled (`nd6_disabled`); EINVAL for
  *         a prefix past 128, a preferred lifetime past the valid one or a
  *         valid one of 0, ::, a group, an IPv4-mapped address, or ::1 on a
- *         card; EEXIST for an address `nd` holds; ENOSPC past
- *         NETDEV_ADDRS6 addresses or with no room for the group.
+ *         card; EEXIST for an address `nd` holds; ENOBUFS when the
+ *         heap has no room for the address or its group.
  */
 int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
                          uint32_t valid, uint32_t preferred);
@@ -256,6 +256,29 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr);
  * whose driver has no `set_up`.
  */
 int netconf_set_up(struct netdev *nd, int up);
+
+/*
+ * The settings of `net.ipv4.conf.NAME.*` this stack keeps, in Linux's
+ * meanings, which procfs reads and writes through `netconf4_conf_get` and
+ * `netconf4_conf_set`. NAME is `all`, `default` or an interface, as
+ * nd6.h's ND6_CONF_ALL and ND6_CONF_DEFAULT name them; an interface starts
+ * with `default`'s values, and a write of `default` reaches every
+ * interface whose own value was never written, as Linux's
+ * devinet_copy_dflt_conf does. A setting is in force on an interface when
+ * it is not 0 there or in `all` (IN_DEV_ORCONF).
+ */
+#define NETCONF4_CONF_ALL            (-1)
+#define NETCONF4_CONF_DEFAULT        0
+#define NETCONF4_PROMOTE_SECONDARIES 0 /* not 0: a primary's deletion promotes its secondary */
+#define NETCONF4_CONF_KEYS           1
+
+/** Read the setting `key` of `which` into `*value`: 0, -EINVAL for an
+ * unknown key, or -ENODEV for an interface that does not exist. */
+int netconf4_conf_get(int which, int key, int32_t *value);
+
+/** Write the setting `key` of `which`, any int, as Linux's proc_dointvec
+ * takes it: 0, -EINVAL or -ENODEV. Takes net_lock. */
+int netconf4_conf_set(int which, int key, int32_t value);
 
 /** Format `ip` as `A.B.C.D` into `out`, which needs 16 bytes. */
 void netconf_format(uint32_t ip, char *out);
