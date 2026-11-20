@@ -112,7 +112,7 @@ struct fs_struct {
 };
 
 /* Policy: the pages one process's system calls may copy paths into at once
- * (fs/pathbuf.c); the deepest call takes four. */
+ * (fs/pathbuf.c); the deepest call takes seven. */
 #define PATH_BUFS 8
 
 /* The deepest nesting of user and of PID namespaces (ns.h), the first
@@ -158,7 +158,8 @@ struct bbuf; /* the buffer cache's buffer, bcache.h */
  * later changes of blocks that carry orders reach the device only after
  * block `blk` of `dev` as it stood at the count of marks `k`. `t` is the
  * block's buffer then, kept from the heap by a count in its waiters until
- * the operation ends (bcache.h). */
+ * the operation ends, or NULL when the block was on the device already
+ * (bcache.h). */
 struct bcache_token {
     struct bbuf *t;
     void *dev;
@@ -732,6 +733,11 @@ struct process {
      * the replacing thread under the table's lock and taken off only by
      * the thread itself. NULL when there are none. */
     struct fd_gone_hold *fd_gone;
+    /* Set under its table's lock by a dup2 of another sharer that found
+     * the descriptor it replaces held by this thread's call when it counted
+     * the holds, and cleared there when it moves them (`gone_make`,
+     * fs/fd.c), so that it moves only the holds it counted. */
+    int fd_dup_counted;
     /* Set by a wake of a queue a `poll_wait` of the thread has a record
      * on, and cleared by the wait before each scan, as Linux's
      * `poll_wqueues.triggered` (fs/select.c:208-258): a wait whose scan

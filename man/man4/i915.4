@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt I915 4
 .Os
 .Sh NAME
@@ -824,6 +824,9 @@ A new value is a mode set.
 A pipe with audio enables the transcoder's audio output and clocks, and
 the HD Audio driver of the display's HDMI codec plays through it on
 .Pa /dev/dsp1 ,
+.Pa /dev/adsp1
+or
+.Pa /dev/dsp2 ,
 as
 .Xr dsp 4
 says.

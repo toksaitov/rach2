@@ -1466,8 +1466,14 @@ static int gone_alloc(fd_table_t *table, int k, int need, struct fd_spare **sp, 
  * before the holds are read, as a close marks it (`fd_close_claim`), so
  * that a lookup without the lock either holds it before the reading or
  * finds the mark at its second look (`hold_set`). Everything is taken from
- * the heap first, under the lock, which the heap allows. 0, or -ENOMEM
- * with nothing changed. The caller holds the lock.
+ * the heap first, under the lock, which the heap allows. The holds moved
+ * are those counted for it (`fd_dup_counted`): a lookup that sets its bit
+ * after the count has found the mark, and redoes its look under the lock,
+ * where it finds the copy, so its bit is left for the copy; a call that
+ * clears its bit after the count has ended and keeps nothing. Each hold
+ * taken from the heap then has its sharer, as Linux's do_dup2 allocates
+ * nothing from a count of the file's users. 0, or -ENOMEM with nothing
+ * changed. The caller holds the lock.
  */
 static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_t *nw)
 {
@@ -1485,11 +1491,13 @@ static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_
         (void)arch_atomic_xchg(&old->flags, old->flags | FD_FLAG_CLOSING);
     }
     for (t = table->sharers; t; t = t->fd_sharer_next) {
-        if (held_by(t, fd)) {
-            need++;
-        }
+        t->fd_dup_counted = held_by(t, fd);
+        need += t->fd_dup_counted;
     }
     if (gone_alloc(table, k, need, &sp, &g, &holds) != 0) {
+        for (t = table->sharers; t; t = t->fd_sharer_next) {
+            t->fd_dup_counted = 0;
+        }
         old->flags &= ~(uint32_t)(was_open ? FD_FLAG_CLOSING : 0);
         return -ENOMEM;
     }
@@ -1497,6 +1505,10 @@ static int gone_make(fd_table_t *table, int fd, fd_entry_t *old, const fd_entry_
     g->fd = fd;
     g->releasing = releasing;
     for (t = table->sharers; t; t = t->fd_sharer_next) {
+        if (!t->fd_dup_counted) {
+            continue;
+        }
+        t->fd_dup_counted = 0;
         if (!held_by(t, fd)) {
             continue;
         }

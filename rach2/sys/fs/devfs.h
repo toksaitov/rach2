@@ -53,7 +53,9 @@ int devfs_open(const char *name, int flags);
  * The mode, device number and inode of /dev, for an empty `name`, or of the
  * device `name` present now: its type, a block device for a disk node or a
  * loop device and a character device for the rest, with its permission
- * bits; its major and minor as major << 8 | minor; and the inode its place
+ * bits; its major and minor as Linux's new_encode_dev packs them, the
+ * minor's low byte, the major << 8 and the minor's other bits << 12; and
+ * the inode its place
  * in the table gives. Each pointer may be NULL. Returns 0, or -1 for no such
  * device.
  */
@@ -67,8 +69,9 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
  */
 const char *devfs_name_of(int block, uint32_t rdev);
 
-/** The device number, major << 8 | minor, of the device the descriptor `e`
- * is open on, for fstat; 0 for a descriptor that is not of a device. */
+/** The device number, packed as `devfs_stat` gives it, of the device the
+ * descriptor `e` is open on, for fstat; 0 for a descriptor that is not of a
+ * device. */
 uint32_t devfs_rdev(struct fd_entry *e);
 
 /** The inode of the device the descriptor `e` is open on, as `devfs_stat`
@@ -302,21 +305,37 @@ int devfs_subdir_present(int row);
  * `priv` NULL, and then calls `open`, unless NULL, which may set the
  * descriptor's `priv` and refuse with -errno. A node with NULL `ops` opens
  * the console terminal, as /dev/console does, for the node of a device
- * that carries the console. Its inode is its slot's,
- * the same for the life of the kernel unless the slots run out. A node
- * unregistered leaves /dev at once; a descriptor open on it keeps its
- * operations and its `priv`, and fstat gives its name and numbers until
- * its slot is taken again, first by a node of the same name.
+ * that carries the console. The registry holds as many nodes as the heap
+ * has room for, and a register refuses with -ENOMEM when it has none. A
+ * node's inode is its slot's, DEVFS_INO_SLOT_BASE and the slot's number,
+ * apart from every other inode of DEVFS_FSID. A node unregistered leaves
+ * /dev at once; a
+ * descriptor open on it keeps its operations and its `priv`, and fstat
+ * gives its name and numbers until its slot is taken again: first by a
+ * node of the same name, which keeps the inode across an unbind and a bind,
+ * and by any other only once DEVFS_SLOTS_SPARE slots are free.
  */
-/* The most nodes at once: one msr for each of the 64 processors
- * (proc/percpu.h's NR_CPUS) and the rest for the drivers, a virtio
- * console's ports among them. */
-#define DEVFS_NODES_MAX     512
+/* The free slots the registry keeps before it gives one to a node of
+ * another name, so that its slots number at most this many more than the
+ * most nodes it held at once. */
+#define DEVFS_SLOTS_SPARE   64
+/*
+ * The inode of the registry's first slot. The inodes of DEVFS_FSID below it
+ * are /dev's own: its directory, /dev/pts and /dev/log from 2, the
+ * directories of /dev from 5 (synthfs.c), the table's devices and the disk
+ * nodes from 16, /dev/cpu's directories from 0xF00 and the slaves of
+ * /dev/pts from 0x1000 (syscall_fs.c), which stay below 0x1000 +
+ * PTY_KERNEL_INDEX. Those above the last slot's are devtree's, from
+ * DEVTREE_INO_BASE, which bounds the slots' count (DEVFS_SLOTS_MAX).
+ */
+#define DEVFS_INO_SLOT_BASE 0x00200000u
 /* The devices that may have an owner, group or mode of their own at once. */
 #define DEVFS_OWNED_MAX     256
 /* A node's path below /dev, with its NUL, as a lookup carries it
- * (synthfs.h's `struct vpath`). */
-#define DEVFS_NODE_NAME_MAX 64
+ * (synthfs.h's `struct vpath`): the longest is a link of udev's
+ * /dev/virtio-ports, its directory's 13 bytes and a name of Linux's
+ * NAME_MAX, 255. */
+#define DEVFS_NODE_NAME_MAX 269
 struct devfs_node {
     const char *name;
     uint16_t major, minor;
@@ -333,7 +352,8 @@ struct devfs_node {
 /** Register `node`: 0, -EINVAL for a name no directory of /dev takes or
  * one too long, -EEXIST for a name the table, a disk
  * or a registered node has, or, unless `alias`, the numbers of a character
- * device present, or -ENOSPC when every slot is held. */
+ * device present, -ENOMEM when no slot is free and the heap has no room
+ * for one, or -ENOSPC when no slot is free and DEVFS_SLOTS_MAX are made. */
 int32_t devfs_node_register(struct devfs_node *node);
 
 /** Withdraw `node` from /dev; nothing for a node not registered. */

@@ -3,20 +3,19 @@
  *
  * host-deps: rach2/sys/kvm/kvm.c rach2/sys/kvm/vcpu.c rach2/sys/kvm/cpuid.c
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
- * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
+ * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c rach2/sys/kvm/xen.c
  * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
  * host-deps: rach2/sys/kvm/pmu.c
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
- * host-deps: tests/host/compat/kvm_xen_none.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
  * can point at the model; the run loop, the vCPU ioctls, the CPUID and MSR
- * tables, the instruction emulator, the decoder and Hyper-V's enlightenments
- * are linked as they are.
+ * tables, the instruction emulator, the decoder and Hyper-V and Xen
+ * emulation are linked as they are.
  * The model is the Lenovo's Haswell as its capability MSRs read, with
  * IA32_FEATURE_CONTROL locked with VMX on (0x5), and VMXON, VMXOFF,
  * VMCLEAR, VMPTRLD, VMREAD, VMWRITE, INVEPT, INVVPID, VMLAUNCH and VMRESUME
@@ -251,6 +250,18 @@ int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev
         *p = value;
     }
     return 0;
+}
+
+/** A nonwrapping span in the model's caller. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return len <= ~(uintptr_t)0 - addr;
+}
+
+/** The caller's memory is the host's, with address 0 unmapped. */
+int user_range_ok(uintptr_t addr, size_t len)
+{
+    return addr && user_span_ok(addr, len);
 }
 
 int fd_alloc(fd_table_t *t)
@@ -784,6 +795,35 @@ void kvm_dirty_publish(struct kvm_dirty_gfn *entry)
     (void)entry;
 }
 
+/** Take the MMU lock around writes made without a vCPU. */
+uint32_t kvm_mmu_lock(struct kvm_vm *vm)
+{
+    return spin_lock_irqsave(&vm->mmu_lock);
+}
+
+/** Give back the MMU lock and restore the interrupt flag. */
+void kvm_mmu_unlock(struct kvm_vm *vm, uint32_t flags)
+{
+    spin_unlock_irqrestore(&vm->mmu_lock, flags);
+}
+
+/** No dirty ring for a write made without a vCPU either. */
+int kvm_dirty_reserve_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn,
+                             struct kvm_dirty_gfn **entry)
+{
+    (void)vm;
+    (void)s;
+    (void)gfn;
+    *entry = NULL;
+    return 0;
+}
+
+/** Count a dirty mark made without a vCPU. */
+int kvm_dirty_mark_locked(struct kvm_vm *vm, const struct kvm_slot_view *s, uint64_t gfn)
+{
+    return kvm_dirty_mark(NULL, s, gfn);
+}
+
 int kvm_tdp_init(struct kvm_vm *vm)
 {
     (void)vm;
@@ -1116,15 +1156,24 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
     return 0;
 }
 
-/* What a KVM hypercall calls of vlapic.c: KVM_HC_KICK_CPU's wake, which
- * finds no APIC, and KVM_HC_SEND_IPI's, which the VM without the split
- * controller never reaches. */
+static unsigned int lapic_deliveries;
+static struct kvm_lapic_irq lapic_delivery;
 
+/** Wake a vCPU with its APIC in the kernel. There is no wait queue here. */
+void kvm_lapic_wake(struct kvm_vcpu *v, uint32_t request)
+{
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
+        kvm_vcpu_kick(v, request);
+    }
+}
+
+/** Record the interrupt sent to the model's APIC. */
 int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *irq)
 {
     (void)vm;
     (void)src;
-    (void)irq;
+    lapic_deliveries++;
+    lapic_delivery = *irq;
     return 0;
 }
 
@@ -5654,6 +5703,36 @@ static void fast_pit_row(int fd, struct kvm_run *rp)
     expire_due = 0;
 }
 
+/** APIC enable reads the live pending byte for a per-vCPU Xen vector. */
+static void xen_upcall_row(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_xen_vcpu_attr attr = {0};
+    unsigned int old = lapic_deliveries;
+    uint8_t *pending = &ram[0x1000];
+    uint8_t saved = *pending;
+
+    *pending = 0;
+    attr.type = KVM_XEN_VCPU_ATTR_TYPE_VCPU_INFO;
+    attr.u.gpa = 0x1000;
+    CHECK(fdio(fd, KVM_XEN_VCPU_SET_ATTR, (uintptr_t)&attr) == 0, "set Xen vcpu_info");
+    attr.type = KVM_XEN_VCPU_ATTR_TYPE_UPCALL_VECTOR;
+    attr.u.vector = 0xF1;
+    CHECK(fdio(fd, KVM_XEN_VCPU_SET_ATTR, (uintptr_t)&attr) == 0, "set the per-vCPU vector");
+
+    *pending = 1;
+    kvm_xen_sw_enable_lapic(v);
+    CHECK(lapic_deliveries == old + 1 && lapic_delivery.vector == 0xF1 &&
+              lapic_delivery.dest_id == v->id && lapic_delivery.delivery_mode == KVM_APIC_DM_FIXED,
+          "APIC enable delivers the pending upcall using only the per-vCPU vector");
+    CHECK(kvm_xen_upcall(v) == -1, "the VM has no external upcall vector");
+
+    *pending = 0;
+    kvm_xen_sw_enable_lapic(v);
+    CHECK(lapic_deliveries == old + 1, "APIC enable does not deliver a cleared upcall");
+    *pending = saved;
+}
+
 /**
  * The exit path's fast path, `vmx_fast`, on a VM with the local APIC in the
  * kernel: a WRMSR of the TSC deadline and the preemption timer's expiry
@@ -5713,6 +5792,7 @@ static void fast_rows(void)
           "a request the fast path finds ends it, and the WRMSR it took is not stepped again");
     expire_exit = 0;
     fast_pit_row(fd, rp);
+    xen_upcall_row(fd);
     exitstat_ops->store(exitstat_data, (const char __user *)"0", 1);
     fdclose(fd);
     fdclose(vm);

@@ -893,4 +893,5 @@ audio_driver_t sb16_driver = {"Sound Blaster 16",
                               NULL,
                               NULL,
                               NULL,
-                              NULL};
+                              NULL,
+                              0};

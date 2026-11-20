@@ -217,17 +217,18 @@ const char *synth_ns_name(int kind);
  */
 struct vpath {
     int kind;
-    char name[64]; /* VNODE_DEV: device name, "input/eventN" below /dev/input */
-    int devdir;    /* VNODE_DEV_SUBDIR: the row of /dev's directories (`synth_dev_dir_at`) */
-    int pid;       /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
-    int procfd;    /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
-    int procfile;  /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
-    int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
-    int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
-    int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
-    int syskey;    /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
-                    * VNODE_DEV_MADE: the entry's id (devtree.h) */
-    int sysreg;    /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
+    char name[269]; /* VNODE_DEV: device name, "input/eventN" below /dev/input,
+                     * of up to DEVFS_NODE_NAME_MAX bytes with its NUL */
+    int devdir;     /* VNODE_DEV_SUBDIR: the row of /dev's directories (`synth_dev_dir_at`) */
+    int pid;        /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
+    int procfd;     /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
+    int procfile;   /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
+    int pts_index;  /* VNODE_PTS: the pty slave number N in /dev/pts/N */
+    int tid;        /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
+    int sysent;     /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
+    int syskey;     /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
+                     * VNODE_DEV_MADE: the entry's id (devtree.h) */
+    int sysreg;     /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
 };
 
 /**

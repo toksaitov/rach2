@@ -968,19 +968,22 @@ int kvm_xen_upcall(struct kvm_vcpu *v)
     return vector && xv->info.active && xv->upcall ? (int)vector : -1;
 }
 
+/** Whether `xv`'s active vcpu_info has a readable, set pending byte. */
+static int upcall_pending(struct kvm_vcpu *v, struct xen_vcpu *xv)
+{
+    uint8_t pending = 0;
+
+    return area_rw(v->vm, v, &xv->info, 0, &pending, 1, 0) == 0 && pending != 0;
+}
+
 void kvm_xen_refresh(struct kvm_vcpu *v)
 {
     struct xen_vm *x = xvm(v->vm);
     struct xen_vcpu *xv = xvc(v);
-    uint8_t pending = 0;
 
-    if (!x || !xv || !x->upcall_vector || !xv->info.active) {
-        return;
+    if (x && xv && x->upcall_vector && xv->info.active) {
+        xv->upcall = upcall_pending(v, xv);
     }
-    if (area_rw(v->vm, v, &xv->info, 0, &pending, 1, 0) != 0) {
-        pending = 0;
-    }
-    xv->upcall = pending != 0;
 }
 
 /** End `v`'s poll: the vCPU runs again. */
@@ -1068,11 +1071,7 @@ void kvm_xen_sw_enable_lapic(struct kvm_vcpu *v)
 {
     struct xen_vcpu *xv = xvc(v);
 
-    if (!xv || !xv->upcall_vector || !xv->info.active) {
-        return;
-    }
-    kvm_xen_refresh(v);
-    if (xv->upcall) {
+    if (xv && xv->upcall_vector && xv->info.active && upcall_pending(v, xv)) {
         inject_vcpu_vector(v);
     }
 }

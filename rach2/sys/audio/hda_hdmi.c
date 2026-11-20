@@ -13,12 +13,17 @@
  * the pins, hdmi_init_pin (474) and snd_hda_set_dev_select (hda_codec.c:391);
  * the ELD, sync_eld_via_acomp (patch_hdmi.c:1827), update_eld (1509),
  * intel_pin_eld_notify (2878) and snd_hdmi_parse_eld (hda_eld.c:224); the
- * stream, hdmi_pcm_open (patch_hdmi.c:1249), hdmi_pcm_setup_pin (1438),
- * i915_pin_cvt_fixup (2974), intel_not_share_assigned_cvt (1097),
- * haswell_verify_D0 (892), generic_hdmi_playback_pcm_prepare (2096),
- * hdmi_setup_stream (956), hdmi_setup_audio_infoframe (747),
- * hdmi_infoframe_uptodate (661), hdmi_std_setup_channel_mapping and
- * hdmi_set_channel_count (sound/hda/hdmi_chmap.c:339, 204); and
+ * PCMs, generic_hdmi_build_pcms (patch_hdmi.c:2310), hdmi_attach_hda_pcm
+ * and hdmi_detach_hda_pcm (1385, 1409); the stream, hdmi_pcm_open (1249),
+ * hdmi_choose_cvt (1001), hdmi_pcm_setup_pin (1438), i915_pin_cvt_fixup
+ * (2974), intel_not_share_assigned_cvt (1097), haswell_verify_D0 (892),
+ * generic_hdmi_playback_pcm_prepare (2096), hdmi_setup_stream (956),
+ * hdmi_setup_audio_infoframe (747), hdmi_infoframe_uptodate (661) and the
+ * OSS layer's snd_pcm_hw_param_near and route_transfer
+ * (sound/core/oss/pcm_oss.c, route.c:47); the channels, channel_allocations,
+ * hdmi_channel_mapping, hdmi_channel_allocation_spk_alloc_blk,
+ * hdmi_std_setup_channel_mapping and hdmi_set_channel_count
+ * (sound/hda/hdmi_chmap.c:119, 92, 268, 339, 204); and
  * /proc/asound, snd_card_info_read (sound/core/init.c:935), snd_card_id_read
  * (sound/core/info.c:467), the eld#C.N entry (patch_hdmi.c:530) and
  * snd_hdmi_print_eld_info (hda_eld.c:442).
@@ -123,25 +128,34 @@
 #define ELD_MAX_SAD     16
 #define HH_ELD_MAX      128
 
-/* The stream: its tag on the link, the DMA buffer's periods at most and in
- * bytes, and the audio it holds at least, so that the tick, which refills
- * it, has time to come round. A period is a multiple of 128 bytes, the
- * alignment of a descriptor's buffer. */
-#define HH_TAG        1
+/* The streams: the PCMs at most, one for each converter, as Linux makes
+ * them; the channels the DMA plays at most, HDMI's eight; the channels a
+ * program's stream may have, which the refill routes to the DMA's, as
+ * Linux's OSS layer takes up to 128 (snd_pcm_oss_set_channels); and of each
+ * PCM's DMA buffer the periods at most and their bytes, the audio it holds,
+ * ten ticks' worth, so that the tick, which refills it, has time to come
+ * round, and its bytes at most: HH_BUFFER_MS of eight channels of 32 bits
+ * at 192 kHz, 240 KiB, and less than a period more (hh_ring). A period is a
+ * multiple of 128 bytes, the alignment of a descriptor's buffer. A PCM's
+ * stream tag on the link is its index plus 1. */
+#define HH_MAX_PCMS   HH_MAX_CVTS
+#define HH_MAX_CH     8
+#define HH_CLIENT_CH  128
 #define HH_BDL_MAX    256
 #define HH_PERIOD_MAX 16384u
-#define HH_DMA_MAX    (3u * HH_PERIOD_MAX)
 #define HH_BUFFER_MS  40u
+#define HH_DMA_MAX    (16u * HH_PERIOD_MAX)
 
 /* The stream's rates, as OSS's /dev/dsp takes them (dsp.c's DSP_RATE_MIN
- * and DSP_RATE_MAX); the most bytes of the stream the caller's buffer keeps
- * for the driver's, dsp.c's DSP_BUFFER_MAX; and the stream's frames a
- * conversion takes into hh_stage at once, for at most HH_STAGE_FRAMES of
- * the DMA's: six for each at the largest ratio, 192 kHz to the 32 kHz
- * every sink plays, and two more for the interpolation. */
+ * and DSP_RATE_MAX); and a PCM's stage, which holds
+ * the stream's frames a conversion takes at once for at most
+ * HH_STAGE_FRAMES of the DMA's: six for each at the largest ratio, 192 kHz
+ * to the 32 kHz every sink plays, and two more for the interpolation, of
+ * two channels of 32 bits; a conversion of wider frames takes fewer of the
+ * DMA's at once (hh_fill), one at the least, whose eight frames of 128
+ * channels of 32 bits the stage holds. */
 #define HH_RATE_MIN     1000u
 #define HH_RATE_MAX     192000u
-#define HH_STREAM_MAX   65536u
 #define HH_STAGE_FRAMES 256u
 #define HH_STAGE_BYTES  ((HH_STAGE_FRAMES * 6u + 2u) * 8u)
 
@@ -174,13 +188,15 @@ struct hh_eld_info {
 struct hh_cvt {
     uint8_t nid;
     uint32_t pcm; /* its PCM sizes and rates parameter */
-    int assigned;
+    int chmax;    /* the channels it plays, Linux's get_wcaps_channels */
+    int assigned; /* a PCM's stream holds it */
 };
 
 /**
  * A device entry of a pin, Linux's hdmi_spec_per_pin: the pin's `nid`, the
- * entry `dev`, the converters it can select, the one it selects for the
- * stream, and the sink's ELD the display driver last gave for it.
+ * entry `dev`, the converters it can select, the one it selects for its
+ * PCM's stream, the PCM attached to it while its ELD is valid, and the
+ * sink's ELD the display driver last gave for it.
  */
 struct hh_pin {
     uint8_t nid;
@@ -188,8 +204,10 @@ struct hh_pin {
     uint8_t mux[HH_MAX_MUX];
     int nmux;
     int mux_idx;
-    uint8_t cvt; /* the converter it plays, 0 while it plays none */
-    int setup;   /* the stream was prepared on it */
+    uint8_t cvt;  /* the converter it plays, 0 while it plays none */
+    int setup;    /* the stream was prepared on it */
+    int pcm;      /* the PCM attached, -1 for none */
+    int prev_pcm; /* the PCM it had last, which it takes again if free */
     int monitor_present;
     int eld_valid;
     int eld_size;
@@ -229,59 +247,70 @@ static int hh_verb_warned;
 
 static volatile uint32_t hh_corb[256] __attribute__((aligned(128)));
 static volatile uint64_t hh_rirb[256] __attribute__((aligned(128)));
-static volatile hda_bdl_entry_t hh_bdl[HH_BDL_MAX] __attribute__((aligned(128)));
-static uint8_t hh_dma[HH_DMA_MAX] __attribute__((aligned(128)));
-
-/* The stream: its owner from open to close, whether it holds the display's
- * power, which the display's going ends, the pin entry it plays on (-1 for
- * none), the converter, and the converter's rates and widths that the sink
- * allows. */
-static audio_stream_t *hh_stream;
-static int hh_held;
-static int hh_bound;
-static int hh_cvt_idx;
-static uint32_t hh_rates; /* bits of the PCM parameter's rates */
-static int hh_wide;       /* the sink and converter take 24 bits */
-
-/* What `stream_setup` granted: the DMA's format word and rate, its period
- * and frame in bytes and its periods, the bytes of a frame of the stream,
- * and whether the stream's frames are the DMA's, which then copies them. */
-static uint16_t hh_fmt;
-static uint32_t hh_rate;
-static uint32_t hh_pb;
-static uint32_t hh_n;
-static uint32_t hh_frame; /* 4, two 16-bit samples, or 8, two 24 in 32 */
-static uint32_t hh_sframe;
-static int hh_copy;
 
 /*
- * The conversion of the stream's frames to the DMA's, as Linux's OSS
- * layer converts with its plugins (sound/core/oss/): each sample widened to
- * 24 bits, a mono one to both channels, and the rate changed by linear
- * interpolation, as its rate plugin does. The next DMA frame lies `hh_acc`
- * / hh_rate of a stream frame past `hh_prev`, between it and `hh_cur`;
- * at hh_rate or more, the next stream frame is owed first.
+ * An HDMI PCM, Linux's hdmi_pcm with its substream: the stream, its owner's
+ * from open to close; whether it holds the display's power, which the
+ * display's going ends; the pin entry attached (-1 for none), the
+ * converter its open took (-1 for none) and the converter's rates, widths
+ * and channels that the sink allows; and its output stream descriptor and
+ * tag on the link.
+ *
+ * What `stream_setup` granted: the DMA's format word, rate and channels,
+ * its period and frame in bytes and its periods, the bytes of a frame of
+ * the stream, and whether the stream's frames are the DMA's, which then
+ * copies them.
+ *
+ * The conversion of the stream's frames to the DMA's, as Linux's OSS layer
+ * converts with its plugins (sound/core/oss/): each sample widened to 24
+ * bits, the channels routed, and the rate changed by linear interpolation,
+ * as its rate plugin does. The next DMA frame lies `acc` / `rate` of a
+ * stream frame past `prev`, between it and `cur`; at `rate` or more, the
+ * next stream frame is owed first.
+ *
+ * Under hh_slock, from `running` on: whether the DMA runs; the period the
+ * refill reaches next; the stream's frames taken to fill each period,
+ * those taken since the start, and those of the periods played; the
+ * position last given, which never goes back, and the one the last
+ * `period` call marked; and the tick and the DMA's place in bytes at the
+ * last refill.
  */
-static uint32_t hh_acc;
-static int32_t hh_prev[2], hh_cur[2];
-static uint8_t hh_stage[HH_STAGE_BYTES];
+struct hh_pcm {
+    audio_stream_t *stream;
+    int held;
+    int pin;
+    int cvt_idx;
+    uint32_t rates; /* bits of the PCM parameter's rates */
+    int wide;       /* the sink and converter take 24 bits */
+    int chmax;      /* the channels the converter and sink take */
+    int sd;
+    uint8_t tag;
+    uint16_t fmt;
+    uint32_t rate;
+    int ch; /* the DMA's channels, even, from 2 to chmax */
+    uint32_t pb;
+    uint32_t n;
+    uint32_t frame; /* ch samples of 16 bits, or of 24 in 32 */
+    uint32_t sframe;
+    int copy;
+    uint32_t acc;
+    int32_t prev[HH_MAX_CH], cur[HH_MAX_CH];
+    volatile int running;
+    uint32_t next;
+    uint32_t in[HH_BDL_MAX];
+    uint32_t taken;
+    uint32_t played;
+    uint32_t pos;
+    uint32_t mark;
+    uint64_t last_tick;
+    uint32_t last_lpib;
+};
 
-/*
- * Under hh_slock: whether the DMA runs; the period the refill reaches
- * next; the stream's frames taken to fill each period, those taken since
- * the start, and those of the periods played; the position last given,
- * which never goes back, and the one the last `period` call marked; and
- * the tick and the DMA's place in bytes at the last refill.
- */
-static volatile int hh_running;
-static uint32_t hh_next;
-static uint32_t hh_in[HH_BDL_MAX];
-static uint32_t hh_taken;
-static uint32_t hh_played;
-static uint32_t hh_pos;
-static uint32_t hh_mark;
-static uint64_t hh_last_tick;
-static uint32_t hh_last_lpib;
+static struct hh_pcm hh_pcms[HH_MAX_PCMS];
+static int hh_npcms;
+static volatile hda_bdl_entry_t hh_bdl[HH_MAX_PCMS][HH_BDL_MAX] __attribute__((aligned(128)));
+static uint8_t hh_dma[HH_MAX_PCMS][HH_DMA_MAX] __attribute__((aligned(128)));
+static uint8_t hh_stage[HH_MAX_PCMS][HH_STAGE_BYTES];
 
 /* The rates of the PCM parameter's bits 0 to 11, with their stream format
  * words, as hda.c's hda_rates. */
@@ -334,12 +363,6 @@ static void hh_write(uint32_t offset, uint32_t value, int bits)
         mmio_write32(hh_base + offset, value);
     }
 #endif
-}
-
-/** The offset of the output stream descriptor's register `reg`. */
-static uint32_t hh_sd(uint32_t reg)
-{
-    return 0x80u + 0x20u * (uint32_t)hh_out_sd + reg;
 }
 
 /** The high half of a physical address. */
@@ -585,6 +608,8 @@ static int hh_parse(void)
         if ((w & WCAP_DIGITAL) && WCAP_TYPE(w) == WID_AUD_OUT) {
             hh_cvts[hh_ncvts].nid = nid;
             hh_cvts[hh_ncvts].pcm = hh_param(nid, P_PCM);
+            /* Linux's get_wcaps_channels: the extended count's bits 13-15. */
+            hh_cvts[hh_ncvts].chmax = (int)((((w >> 13) & 7u) << 1 | 1u) + 1u);
             hh_cvts[hh_ncvts].assigned = 0;
             hh_ncvts++;
         }
@@ -608,6 +633,8 @@ static int hh_parse(void)
             k_memset(p, 0, sizeof(*p));
             p->nid = nid;
             p->dev = (uint8_t)d;
+            p->pcm = -1;
+            p->prev_pcm = -1;
             hh_dev_select(nid, d);
             /* hdmi_read_pin_conn: the short form's entries, four a word. */
             len = hh_param(nid, P_CONN_LEN) & 0x7f;
@@ -811,7 +838,71 @@ static int hh_sync_eld(struct hh_pin *p)
     return valid && !was;
 }
 
-/* ---- the stream's pin ---- */
+/* ---- the PCMs' pins ---- */
+
+/**
+ * Attach a PCM to entry `p`, whose ELD turned valid, Linux's
+ * hdmi_attach_hda_pcm: the one it had last, if no other entry has taken it
+ * since, else the first free, else none. Under hh_mutex.
+ */
+static void hh_attach_pcm(struct hh_pin *p)
+{
+    int k = p->prev_pcm;
+
+    if (p->pcm >= 0) {
+        return;
+    }
+    if (k < 0 || k >= hh_npcms || hh_pcms[k].pin >= 0) {
+        p->prev_pcm = -1;
+        for (k = 0; k < hh_npcms && hh_pcms[k].pin >= 0; k++) {
+        }
+        if (k == hh_npcms) {
+            return;
+        }
+    }
+    p->pcm = k;
+    hh_pcms[k].pin = (int)(p - hh_pins);
+}
+
+/** Detach entry `p`'s PCM, remembering it, Linux's hdmi_detach_hda_pcm.
+ * Under hh_mutex. */
+static void hh_detach_pcm(struct hh_pin *p)
+{
+    if (p->pcm < 0) {
+        return;
+    }
+    hh_pcms[p->pcm].pin = -1;
+    p->prev_pcm = p->pcm;
+    p->pcm = -1;
+}
+
+/** The index in entry `p`'s connection list of converter `nid`, or
+ * p->nmux when the list lacks it, Linux's hdmi_get_pin_cvt_mux. */
+static int hh_cvt_mux(const struct hh_pin *p, uint8_t nid)
+{
+    int m;
+
+    for (m = 0; m < p->nmux && p->mux[m] != nid; m++) {
+    }
+    return m;
+}
+
+/**
+ * Choose a converter for a stream on entry `p`, or on no pin when `p` is
+ * NULL, Linux's hdmi_choose_cvt: the first not assigned that `p` can
+ * select. Its index, or -EBUSY when there is none.
+ */
+static int hh_choose_cvt(const struct hh_pin *p)
+{
+    int c;
+
+    for (c = 0; c < hh_ncvts; c++) {
+        if (!hh_cvts[c].assigned && (!p || hh_cvt_mux(p, hh_cvts[c].nid) < p->nmux)) {
+            return c;
+        }
+    }
+    return -EBUSY;
+}
 
 /** Linux's haswell_verify_D0: converter `cvt` and pin `pin` in D0, the
  * pin given 40 ms to get there. */
@@ -867,25 +958,208 @@ static void hh_pin_cvt_fixup(struct hh_pin *p)
     hh_not_share(p, p->mux_idx);
 }
 
-/**
- * Send the stereo audio infoframe on entry `p`, as hdmi_setup_audio_infoframe
- * does for two channels: the pin's amplifier unmuted again, the converter
- * counting two channels, the slots of channel allocation 0, and the frame
- * HDMI or DisplayPort wants, written only when the pin is not already
- * sending it (hdmi_pin_setup_infoframe).
+/* ---- the channels ---- */
+
+/* CEA-861's speaker places, as Linux's hdmi_chmap.c numbers them. */
+#define SP_FL  (1L << 0)
+#define SP_FC  (1L << 1)
+#define SP_FR  (1L << 2)
+#define SP_FLC (1L << 3)
+#define SP_FRC (1L << 4)
+#define SP_RL  (1L << 5)
+#define SP_RC  (1L << 6)
+#define SP_RR  (1L << 7)
+#define SP_RLC (1L << 8)
+#define SP_RRC (1L << 9)
+#define SP_LFE (1L << 10)
+#define SP_FLW (1L << 11)
+#define SP_FRW (1L << 12)
+#define SP_FLH (1L << 13)
+#define SP_FCH (1L << 14)
+#define SP_FRH (1L << 15)
+#define SP_TC  (1L << 16)
+
+/* The places of an ELD's speaker allocation bits 0 to 10, Linux's
+ * eld_speaker_allocation_bits. */
+static const long hh_eld_speakers[11] = {
+    SP_FL | SP_FR,   SP_LFE,          SP_FC,           SP_RL | SP_RR, SP_RC, SP_FLC | SP_FRC,
+    SP_RLC | SP_RRC, SP_FLW | SP_FRW, SP_FLH | SP_FRH, SP_TC,         SP_FCH};
+
+/** A channel allocation of the audio infoframe, Linux's
+ * hdac_cea_channel_speaker_allocation: the speaker of slots 7 down to 0. */
+struct hh_ca {
+    uint8_t ca;
+    long speakers[8];
+};
+
+/* Linux's channel_allocations, in its order, which the choice follows. */
+static const struct hh_ca hh_cas[] = {
+    {0x00, {0, 0, 0, 0, 0, 0, SP_FR, SP_FL}},
+    {0x01, {0, 0, 0, 0, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x02, {0, 0, 0, 0, SP_FC, 0, SP_FR, SP_FL}},
+    {0x08, {0, 0, SP_RR, SP_RL, 0, 0, SP_FR, SP_FL}},
+    {0x09, {0, 0, SP_RR, SP_RL, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x0a, {0, 0, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x0b, {0, 0, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x0f, {0, SP_RC, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x13, {SP_RRC, SP_RLC, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x03, {0, 0, 0, 0, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x04, {0, 0, 0, SP_RC, 0, 0, SP_FR, SP_FL}},
+    {0x05, {0, 0, 0, SP_RC, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x06, {0, 0, 0, SP_RC, SP_FC, 0, SP_FR, SP_FL}},
+    {0x07, {0, 0, 0, SP_RC, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x0c, {0, SP_RC, SP_RR, SP_RL, 0, 0, SP_FR, SP_FL}},
+    {0x0d, {0, SP_RC, SP_RR, SP_RL, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x0e, {0, SP_RC, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x10, {SP_RRC, SP_RLC, SP_RR, SP_RL, 0, 0, SP_FR, SP_FL}},
+    {0x11, {SP_RRC, SP_RLC, SP_RR, SP_RL, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x12, {SP_RRC, SP_RLC, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x14, {SP_FRC, SP_FLC, 0, 0, 0, 0, SP_FR, SP_FL}},
+    {0x15, {SP_FRC, SP_FLC, 0, 0, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x16, {SP_FRC, SP_FLC, 0, 0, SP_FC, 0, SP_FR, SP_FL}},
+    {0x17, {SP_FRC, SP_FLC, 0, 0, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x18, {SP_FRC, SP_FLC, 0, SP_RC, 0, 0, SP_FR, SP_FL}},
+    {0x19, {SP_FRC, SP_FLC, 0, SP_RC, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x1a, {SP_FRC, SP_FLC, 0, SP_RC, SP_FC, 0, SP_FR, SP_FL}},
+    {0x1b, {SP_FRC, SP_FLC, 0, SP_RC, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x1c, {SP_FRC, SP_FLC, SP_RR, SP_RL, 0, 0, SP_FR, SP_FL}},
+    {0x1d, {SP_FRC, SP_FLC, SP_RR, SP_RL, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x1e, {SP_FRC, SP_FLC, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x1f, {SP_FRC, SP_FLC, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x20, {0, SP_FCH, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x21, {0, SP_FCH, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x22, {SP_TC, 0, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x23, {SP_TC, 0, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x24, {SP_FRH, SP_FLH, SP_RR, SP_RL, 0, 0, SP_FR, SP_FL}},
+    {0x25, {SP_FRH, SP_FLH, SP_RR, SP_RL, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x26, {SP_FRW, SP_FLW, SP_RR, SP_RL, 0, 0, SP_FR, SP_FL}},
+    {0x27, {SP_FRW, SP_FLW, SP_RR, SP_RL, 0, SP_LFE, SP_FR, SP_FL}},
+    {0x28, {SP_TC, SP_RC, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x29, {SP_TC, SP_RC, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x2a, {SP_FCH, SP_RC, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x2b, {SP_FCH, SP_RC, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x2c, {SP_TC, SP_FCH, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x2d, {SP_TC, SP_FCH, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x2e, {SP_FRH, SP_FLH, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x2f, {SP_FRH, SP_FLH, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}},
+    {0x30, {SP_FRW, SP_FLW, SP_RR, SP_RL, SP_FC, 0, SP_FR, SP_FL}},
+    {0x31, {SP_FRW, SP_FLW, SP_RR, SP_RL, SP_FC, SP_LFE, SP_FR, SP_FL}}};
+
+#define HH_NCAS ((int)(sizeof(hh_cas) / sizeof(hh_cas[0])))
+
+/*
+ * The slots of the allocations Linux's hdmi_channel_mapping gives in ALSA's
+ * channel order, which differs from the slots' own for these, each word a
+ * channel in its high nibble and the slot it plays in its low, 0xf for
+ * none; hh_slots makes the others' from their speakers.
  */
-static void hh_infoframe(struct hh_pin *p)
+static const uint8_t hh_alsa_slots[][9] = {{0x00, 0x00, 0x11, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7},
+                                           {0x01, 0x00, 0x11, 0x22, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7},
+                                           {0x02, 0x00, 0x11, 0x23, 0xf2, 0xf4, 0xf5, 0xf6, 0xf7},
+                                           {0x08, 0x00, 0x11, 0x24, 0x35, 0xf3, 0xf2, 0xf6, 0xf7},
+                                           {0x03, 0x00, 0x11, 0x23, 0x32, 0x44, 0xf5, 0xf6, 0xf7},
+                                           {0x09, 0x00, 0x11, 0x24, 0x35, 0x42, 0xf3, 0xf6, 0xf7},
+                                           {0x0a, 0x00, 0x11, 0x24, 0x35, 0x43, 0xf2, 0xf6, 0xf7},
+                                           {0x0b, 0x00, 0x11, 0x24, 0x35, 0x43, 0x52, 0xf6, 0xf7},
+                                           {0x13, 0x00, 0x11, 0x26, 0x37, 0x43, 0x52, 0x64, 0x75}};
+
+/** The speakers allocation `a` has a channel for. */
+static int hh_ca_channels(const struct hh_ca *a)
 {
-    static const uint8_t slots[8] = {0x00, 0x11, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7};
-    uint8_t ai[9];
+    int i, n = 0;
+
+    for (i = 0; i < 8; i++) {
+        n += a->speakers[i] != 0;
+    }
+    return n;
+}
+
+/**
+ * The allocation for `channels` on a sink of ELD speaker bits `spk_alloc`,
+ * Linux's hdmi_channel_allocation_spk_alloc_blk: the stereo one for two or
+ * fewer; else the first, in Linux's order, of that many channels whose
+ * speakers the sink has, or failing that the first of that many.
+ */
+static const struct hh_ca *hh_choose_ca(int spk_alloc, int channels)
+{
+    long mask = 0, need;
+    int i, j;
+
+    if (channels <= 2) {
+        return &hh_cas[0];
+    }
+    for (i = 0; i < 11; i++) {
+        if (spk_alloc & (1 << i)) {
+            mask |= hh_eld_speakers[i];
+        }
+    }
+    for (i = 0; i < HH_NCAS; i++) {
+        need = 0;
+        for (j = 0; j < 8; j++) {
+            need |= hh_cas[i].speakers[j];
+        }
+        if (hh_ca_channels(&hh_cas[i]) == channels && (mask & need) == need) {
+            return &hh_cas[i];
+        }
+    }
+    for (i = 0; i < HH_NCAS; i++) {
+        if (hh_ca_channels(&hh_cas[i]) == channels) {
+            return &hh_cas[i];
+        }
+    }
+    return &hh_cas[0];
+}
+
+/**
+ * Fill `slots` with the eight Set Channel Slot words of allocation `a`, as
+ * Linux's hdmi_std_setup_channel_mapping writes them: Linux's table where
+ * it has the allocation, else each channel in turn to the next slot with
+ * a speaker, and the slots without one given channel 0xf.
+ */
+static void hh_slots(const struct hh_ca *a, uint8_t *slots)
+{
+    int i, n = 0, slot;
+
+    for (i = 0; i < (int)(sizeof(hh_alsa_slots) / sizeof(hh_alsa_slots[0])); i++) {
+        if (hh_alsa_slots[i][0] == a->ca) {
+            k_memcpy(slots, &hh_alsa_slots[i][1], 8);
+            return;
+        }
+    }
+    for (slot = 0; slot < 8; slot++) {
+        if (a->speakers[7 - slot]) {
+            slots[n] = (uint8_t)(n << 4 | slot);
+            n++;
+        }
+    }
+    for (slot = 0; slot < 8; slot++) {
+        if (!a->speakers[7 - slot]) {
+            slots[n++] = (uint8_t)(0xf0 | slot);
+        }
+    }
+}
+
+/**
+ * Send the audio infoframe for `channels` on entry `p`, as Linux's
+ * hdmi_setup_audio_infoframe does for PCM: the pin's amplifier unmuted
+ * again, the channel allocation the sink's speakers allow, the converter
+ * counting its channels, the slots, and the frame HDMI or DisplayPort
+ * wants with its channel count and allocation, written only when the pin
+ * is not already sending it (hdmi_pin_setup_infoframe).
+ */
+static void hh_infoframe(struct hh_pin *p, int channels)
+{
+    const struct hh_ca *a = hh_choose_ca(p->info.spk_alloc, channels);
+    int active = hh_ca_channels(a), i, same = 1;
+    uint8_t slots[8], ai[9];
     uint8_t sum = 0;
-    int i, same = 1;
 
     hh_dev_select(p->nid, p->dev);
     if (hh_param(p->nid, P_WCAPS) & WCAP_OUT_AMP) {
         hh_verb(p->nid, V_SET_AMP, AMP_OUT_UNMUTE);
     }
-    hh_verb(p->cvt, V_SET_CHAN_CNT, 1);
+    hh_verb(p->cvt, V_SET_CHAN_CNT, (uint32_t)(active - 1));
+    hh_slots(a, slots);
     for (i = 0; i < 8; i++) {
         hh_verb(p->nid, V_SET_CHAN_SLOT, slots[i]);
     }
@@ -894,7 +1168,8 @@ static void hh_infoframe(struct hh_pin *p)
         ai[0] = 0x84;
         ai[1] = 0x01;
         ai[2] = 0x0a;
-        ai[4] = 1; /* CC: two channels */
+        ai[4] = (uint8_t)(active - 1); /* CC */
+        ai[7] = a->ca;
         for (i = 0; i < 9; i++) {
             sum = (uint8_t)(sum + ai[i]);
         }
@@ -903,7 +1178,8 @@ static void hh_infoframe(struct hh_pin *p)
         ai[0] = 0x84;
         ai[1] = 0x1b;
         ai[2] = 0x11 << 2;
-        ai[3] = 1;
+        ai[3] = (uint8_t)(active - 1);
+        ai[6] = a->ca;
     } else {
         return;
     }
@@ -929,68 +1205,114 @@ static void hh_infoframe(struct hh_pin *p)
     hh_verb(p->nid, V_SET_DIP_XMIT, DIPXMIT_BEST);
 }
 
+/* ---- the PCMs ---- */
+
+/** The PCM whose stream is `s`, or NULL. */
+static struct hh_pcm *hh_pcm_of(const audio_stream_t *s)
+{
+    int k;
+
+    for (k = 0; s && k < hh_npcms; k++) {
+        if (hh_pcms[k].stream == s) {
+            return &hh_pcms[k];
+        }
+    }
+    return NULL;
+}
+
+/** The offset of PCM `m`'s output stream descriptor register `reg`. */
+static uint32_t hh_sd(const struct hh_pcm *m, uint32_t reg)
+{
+    return 0x80u + 0x20u * (uint32_t)m->sd + reg;
+}
+
 /**
- * Prepare entry `p` for the stream, as generic_hdmi_playback_pcm_prepare
+ * Prepare entry `p` for PCM `m`'s stream, as generic_hdmi_playback_pcm_prepare
  * does: the converter selected and not shared, the display's audio clocks
- * set for the rate, and the infoframe sent. Under hh_mutex.
+ * set for the rate, and the infoframe sent for the DMA's channels. Under
+ * hh_mutex.
  */
-static void hh_pin_prepare(struct hh_pin *p)
+static void hh_pin_prepare(struct hh_pcm *m, struct hh_pin *p)
 {
     hh_pin_cvt_fixup(p);
-    hh_ops->sync_audio_rate(hh_dev, p->nid - 4, p->dev, (int)hh_rate);
+    hh_ops->sync_audio_rate(hh_dev, p->nid - 4, p->dev, (int)m->rate);
     p->setup = 1;
-    hh_infoframe(p);
+    hh_infoframe(p, m->ch);
 }
 
 /**
- * Give the stream entry `p`, Linux's hdmi_pcm_setup_pin and hdmi_pcm_open:
- * its connection selects the stream's converter. Under hh_mutex.
+ * Whether PCM `m` has a stream of this bind: one open since the display
+ * came, which holds its power and a converter. A stream opened before the
+ * display last went holds neither until its close, and is given no pin.
  */
-static void hh_pin_attach(struct hh_pin *p)
+static int hh_pcm_live(const struct hh_pcm *m)
 {
-    int m;
+    return m->stream && m->held && m->cvt_idx >= 0 && m->cvt_idx < hh_ncvts;
+}
 
-    for (m = 0; m < p->nmux && p->mux[m] != hh_cvts[hh_cvt_idx].nid; m++) {
-    }
-    p->mux_idx = m;
-    p->cvt = hh_cvts[hh_cvt_idx].nid;
-    hh_bound = (int)(p - hh_pins);
-    if (m < p->nmux) {
+/**
+ * Give PCM `m`'s open stream entry `p`, Linux's hdmi_pcm_setup_pin: its
+ * connection selects the stream's converter, and a running stream is
+ * prepared on it. `m` holds a converter: its open is taking one, or its
+ * stream is live (hh_pcm_live). Under hh_mutex.
+ */
+static void hh_pin_attach(struct hh_pcm *m, struct hh_pin *p)
+{
+    uint8_t nid = hh_cvts[m->cvt_idx].nid;
+
+    p->mux_idx = hh_cvt_mux(p, nid);
+    p->cvt = nid;
+    if (p->mux_idx < p->nmux) {
         hh_dev_select(p->nid, p->dev);
-        hh_verb(p->nid, V_SET_CONN_SEL, (uint32_t)m);
+        hh_verb(p->nid, V_SET_CONN_SEL, (uint32_t)p->mux_idx);
+    }
+    if (m->running) {
+        hh_pin_prepare(m, p);
     }
 }
 
-/** Set the converter's stream tag and format, Linux's
+/** Set PCM `m`'s converter's stream tag and format, Linux's
  * snd_hda_codec_setup_stream after hdmi_setup_stream's DIGI_CONVERT_3. */
-static void hh_cvt_setup(void)
+static void hh_cvt_setup(struct hh_pcm *m)
 {
-    uint8_t cvt = hh_cvts[hh_cvt_idx].nid;
+    uint8_t cvt = hh_cvts[m->cvt_idx].nid;
 
-    if (hh_bound >= 0) {
-        hh_verify_d0(cvt, hh_pins[hh_bound].nid);
+    if (m->pin >= 0) {
+        hh_verify_d0(cvt, hh_pins[m->pin].nid);
     }
     hh_verb(cvt, V_SET_DIGI3, 0);
-    hh_verb(cvt, V_SET_STREAMID, HH_TAG << 4);
+    hh_verb(cvt, V_SET_STREAMID, (uint32_t)m->tag << 4);
     hh_msleep(1);
-    hh_verb(cvt, V_SET_FORMAT, hh_fmt);
+    hh_verb(cvt, V_SET_FORMAT, m->fmt);
 }
 
-/* ---- the stream ---- */
+/**
+ * The descriptors of `e` there are to read: its count, which root's write
+ * to the ELD file may set to anything, held between 0 and ELD_MAX_SAD.
+ * Linux's snd_hdmi_eld_update_pcm_info and snd_hdmi_print_eld_info walk
+ * the count unbounded, past the array's end.
+ */
+static int hh_sads(const struct hh_eld_info *e)
+{
+    return e->sad_count < 0 ? 0 : e->sad_count > ELD_MAX_SAD ? ELD_MAX_SAD : e->sad_count;
+}
 
 /**
- * Limit the stream's rates and width by the sink's ELD `e`, Linux's
+ * Limit PCM `m`'s rates, width and channels by the sink's ELD `e`, Linux's
  * snd_hdmi_eld_update_pcm_info: the rates every sink plays, 32, 44.1 and
- * 48 kHz, with those its descriptors add, and 24 bits when an LPCM
- * descriptor has 20 or 24.
+ * 48 kHz, with those its descriptors add, 24 bits when an LPCM descriptor
+ * has 20 or 24, and the most channels a descriptor has, two at least.
  */
-static void hh_eld_limit(const struct hh_eld_info *e)
+static void hh_eld_limit(struct hh_pcm *m, const struct hh_eld_info *e)
 {
-    int alsa = (1 << 5) | (1 << 6) | (1 << 7), wide = 0, i, b;
+    int alsa = (1 << 5) | (1 << 6) | (1 << 7), wide = 0, chmax = 2, i, b;
     uint32_t ok = 0;
 
-    for (i = 0; i < e->sad_count; i++) {
+    for (i = 0; i < hh_sads(e); i++) {
         alsa |= e->sad[i].rates;
+        if (e->sad[i].channels > chmax) {
+            chmax = e->sad[i].channels;
+        }
         if (e->sad[i].format == 1 && (e->sad[i].bits & (3 << 18))) {
             wide = 1;
         }
@@ -1002,98 +1324,122 @@ static void hh_eld_limit(const struct hh_eld_info *e)
             }
         }
     }
-    hh_rates &= ok;
-    hh_wide = hh_wide && wide;
+    m->rates &= ok;
+    m->wide = m->wide && wide;
+    if (m->chmax > chmax) {
+        m->chmax = chmax;
+    }
 }
 
 /**
- * Take the stream, Linux's hdmi_pcm_open: the display's power held until
- * the close, the first converter, IEC958 on, the first entry with a valid
- * ELD given the stream, and the rates limited by its sink; with no such
- * entry the stream plays on no pin, as hdmi_pcm_open_no_pin lets it.
+ * Take PCM `m`'s stream for `s`, Linux's hdmi_pcm_open: the display's
+ * power held until the close, a free converter the PCM's entry can
+ * select, IEC958 on, the entry's connection selecting it and no other
+ * entry sharing it, and the rates, widths and channels limited by its
+ * sink; a PCM with no entry plays on no pin, as hdmi_pcm_open_no_pin lets
+ * it. 0; -ENODEV without the card or for capture or a sink it cannot
+ * play; -EBUSY while the PCM is open or no converter is free; -EIO when
+ * the power does not come.
  */
-static int hh_stream_open(audio_stream_t *s)
+static int hh_pcm_open(struct hh_pcm *m, audio_stream_t *s)
 {
-    int i, err;
+    struct hh_pin *p;
+    struct hh_cvt *c;
+    int ci;
 
     if (s->dir != AUDIO_PLAYBACK) {
         return -ENODEV;
     }
     mutex_lock(&hh_mutex);
-    if (!hh_present) {
+    if (!hh_present || m - hh_pcms >= hh_npcms) {
         mutex_unlock(&hh_mutex);
         return -ENODEV;
     }
-    if (hh_stream) {
+    if (m->stream) {
         mutex_unlock(&hh_mutex);
         return -EBUSY;
     }
-    err = hh_power_get();
-    if (err != 0) {
+    if (hh_power_get() != 0) {
         mutex_unlock(&hh_mutex);
         return -EIO;
     }
-    hh_cvt_idx = 0;
-    hh_cvts[0].assigned = 1;
-    hh_bound = -1;
-    hh_rates = hh_cvts[0].pcm & 0xfff;
-    hh_wide = (hh_cvts[0].pcm & (1u << 19)) != 0;
+    p = m->pin >= 0 ? &hh_pins[m->pin] : NULL;
+    ci = hh_choose_cvt(p);
+    if (ci < 0) {
+        hh_power_put();
+        mutex_unlock(&hh_mutex);
+        return -EBUSY;
+    }
+    c = &hh_cvts[ci];
+    c->assigned = 1;
+    m->cvt_idx = ci;
+    m->rates = c->pcm & 0xfff;
+    m->wide = (c->pcm & (1u << 19)) != 0;
+    m->chmax = c->chmax < HH_MAX_CH ? c->chmax : HH_MAX_CH;
     /* IEC958 on, with alsa-lib's HDMI.conf status: original, PCM coder. */
-    hh_verb(hh_cvts[0].nid, V_SET_DIGI1, DIG1_ENABLE | 0x80);
-    hh_verb(hh_cvts[0].nid, V_SET_DIGI2, 0x02);
-    for (i = 0; i < hh_npins && hh_bound < 0; i++) {
-        if (hh_pins[i].eld_valid) {
-            hh_pin_attach(&hh_pins[i]);
-        }
-    }
-    if (hh_bound >= 0) {
-        hh_eld_limit(&hh_pins[hh_bound].info);
-        hh_pin_cvt_fixup(&hh_pins[hh_bound]);
+    hh_verb(c->nid, V_SET_DIGI1, DIG1_ENABLE | 0x80);
+    hh_verb(c->nid, V_SET_DIGI2, 0x02);
+    if (p) {
+        hh_pin_attach(m, p);
+        hh_eld_limit(m, &p->info);
+        hh_pin_cvt_fixup(p);
     } else {
-        hh_not_share(NULL, 0);
+        hh_not_share(NULL, ci);
     }
-    if (!hh_rates) {
-        if (hh_bound >= 0) {
-            hh_pins[hh_bound].cvt = 0;
+    if (!m->rates || m->chmax < 2) {
+        if (p) {
+            p->cvt = 0;
         }
-        hh_cvts[0].assigned = 0;
+        c->assigned = 0;
+        m->cvt_idx = -1;
         hh_power_put();
         mutex_unlock(&hh_mutex);
         return -ENODEV;
     }
-    hh_stream = s;
-    hh_held = 1;
+    m->stream = s;
+    m->held = 1;
     mutex_unlock(&hh_mutex);
     return 0;
 }
 
 /** The stream's frames the DMA's next `n` frames, at least 1, take. */
-static uint32_t hh_need(const audio_stream_t *s, uint32_t n)
+static uint32_t hh_need(const struct hh_pcm *m, uint32_t n)
 {
-    return hh_copy ? n : (hh_acc + (n - 1u) * s->rate) / hh_rate;
+    return m->copy ? n : (m->acc + (n - 1u) * m->stream->rate) / m->rate;
 }
 
-/** The stream bytes the DMA's `n` periods take, in whole periods of `s`,
- * with a conversion's two frames of lookahead. The DMA's frames are at
- * most HH_DMA_MAX / 4, so their product with a rate fits in 32 bits. */
-static uint32_t hh_lead(const audio_stream_t *s, uint32_t n)
+/** `a` times `b` over `c`, rounded down, for `a` below 2^17 and `b` and
+ * `c` from 1 to 2^18, in 32-bit arithmetic: `a`'s top bits are divided
+ * first and their remainder carried into the low byte's share. */
+static uint32_t hh_scale(uint32_t a, uint32_t b, uint32_t c)
 {
-    uint32_t spf = s->period_bytes / hh_sframe;
-    uint32_t frames = n * (hh_pb / hh_frame) * s->rate / hh_rate + (hh_copy ? 0u : 2u);
+    uint32_t t = (a >> 8) * b;
+
+    return t / c * 256u + (t % c * 256u + (a & 255u) * b) / c;
+}
+
+/** The stream bytes the DMA's `n` periods take, in whole periods of the
+ * stream, with a conversion's two frames of lookahead. The DMA's frames
+ * are at most HH_DMA_MAX / 4, 2^16. */
+static uint32_t hh_lead(const struct hh_pcm *m, uint32_t n)
+{
+    const audio_stream_t *s = m->stream;
+    uint32_t spf = s->period_bytes / m->sframe;
+    uint32_t frames = hh_scale(n * (m->pb / m->frame), s->rate, m->rate) + (m->copy ? 0u : 2u);
 
     return (frames + spf - 1u) / spf * s->period_bytes;
 }
 
-/** The index in hh_rate_hz of the rate the sink allows nearest `rate`,
- * the higher on a tie, or -1 when it allows none; under hh_mutex. */
-static int hh_nearest_rate(uint32_t rate)
+/** The index in hh_rate_hz of the rate PCM `m` allows nearest `rate`, the
+ * higher on a tie, or -1 when it allows none; under hh_mutex. */
+static int hh_nearest_rate(const struct hh_pcm *m, uint32_t rate)
 {
     uint32_t d, bd = 0;
     int i, bi = -1;
 
     /* Up to 192 kHz, HDMI's highest, the 12th bit's 384 kHz left out. */
     for (i = 0; i < 11; i++) {
-        if (!(hh_rates & (1u << i))) {
+        if (!(m->rates & (1u << i))) {
             continue;
         }
         d = hh_rate_hz[i] > rate ? hh_rate_hz[i] - rate : rate - hh_rate_hz[i];
@@ -1106,78 +1452,104 @@ static int hh_nearest_rate(uint32_t rate)
 }
 
 /**
+ * Lay out PCM `m`'s DMA buffer for `s`, whose rate, channels, format and
+ * period are granted, at the DMA's rate, channels and frame that `m` has:
+ * a DMA period covering the stream period's time, a multiple of 128 bytes,
+ * or of 384 for the 12- and 24-byte frames of six channels, which hold
+ * whole frames, from the least that fits HH_BUFFER_MS in HH_BDL_MAX
+ * periods up to HH_PERIOD_MAX; and as many as HH_BUFFER_MS needs, two at
+ * least. The periods after the one playing, which the tick has refilled,
+ * then hold at least half of HH_BUFFER_MS, five ticks, whatever the stream.
+ * The buffer is HH_BUFFER_MS's bytes, at most 240 KiB, and less than a
+ * period more, or two periods of at most 16 KiB: within HH_DMA_MAX. Sets
+ * m->copy and m->pb, and returns the periods.
+ */
+static uint32_t hh_ring(struct hh_pcm *m, const audio_stream_t *s, int wide)
+{
+    uint32_t unit = m->frame % 3u ? 128u : 384u, frames, pb, least, need, n;
+
+    m->copy = s->rate == m->rate && s->channels == m->ch &&
+              s->format == (wide ? AUDIO_S32LE : AUDIO_S16LE);
+    /* At most 16384 frames times 192 kHz: 32 bits hold it. */
+    frames = s->period_bytes / m->sframe * m->rate / s->rate;
+    pb = (frames * m->frame + unit / 2u) / unit * unit;
+    pb = pb < unit ? unit : pb > HH_PERIOD_MAX ? HH_PERIOD_MAX / unit * unit : pb;
+    /* At most 192 kHz times 32 bytes times 40: 32 bits hold it. */
+    need = m->rate * m->frame * HH_BUFFER_MS / 1000u;
+    least = (need + HH_BDL_MAX * unit - 1u) / (HH_BDL_MAX * unit) * unit;
+    if (pb < least) {
+        pb = least;
+    }
+    n = (need + pb - 1) / pb;
+    m->pb = pb;
+    return n < 2 ? 2 : n;
+}
+
+/**
  * Grant `s` what it asks for, as Linux's OSS layer does through its
- * plugins: its format, one or two channels, and its rate, held between
- * HH_RATE_MIN and HH_RATE_MAX. The DMA plays two channels at the rate the
- * converter and sink allow nearest the stream's, the higher on a tie, in
- * 16 bits, or in 24 bits in 32 for a stream of more than 16 where the
- * converter and sink take them; the refill converts (hh_fill). The
- * stream's period is the one asked for, in whole frames; the DMA's covers
- * the same time, a multiple of 128 bytes up to HH_PERIOD_MAX, and the DMA
- * buffer holds enough of them for HH_BUFFER_MS, fewer when the stream
- * bytes they take would pass HH_STREAM_MAX, but two at least.
+ * plugins: its format, 1 to HH_CLIENT_CH channels, and its rate, held
+ * between HH_RATE_MIN and HH_RATE_MAX. The DMA plays, at the rate the
+ * converter and sink allow nearest the stream's, the higher on a tie, the
+ * even count of channels from 2 to what they allow nearest the stream's,
+ * the higher on a tie, as Linux's hardware constraint of a step of 2 and
+ * the OSS layer's snd_pcm_hw_param_near choose it, in 16 bits, or in 24
+ * bits in 32 for a stream of more than 16 where the converter and sink take
+ * them; the refill converts (hh_fill). The stream's period is the one asked
+ * for, in whole frames, one at least, and the DMA's buffer is laid out by
+ * hh_ring; `device_periods` covers the stream bytes it takes, which the
+ * caller's buffer holds, up to some 3.9 MiB for 128 channels of 32 bits at
+ * 192 kHz, as Linux's OSS layer sizes its buffer from the hardware's. The
+ * stream keeps its rate, as Linux's does. -EINVAL for a stream of no PCM, a
+ * period shorter than 128 bytes or a frame, or a PCM that allows no rate.
  */
 static int hh_stream_setup(audio_stream_t *s)
 {
-    uint32_t best, pb, need, n, frames;
-    int bi, wide;
+    struct hh_pcm *m;
+    uint32_t n;
+    int bi, wide, ch;
 
     mutex_lock(&hh_mutex);
-    if (s != hh_stream || s->period_bytes < 128) {
+    m = hh_pcm_of(s);
+    if (!m || s->period_bytes < 128) {
         mutex_unlock(&hh_mutex);
         return -EINVAL;
     }
     s->rate = s->rate < HH_RATE_MIN ? HH_RATE_MIN : s->rate > HH_RATE_MAX ? HH_RATE_MAX : s->rate;
-    s->channels = s->channels < 2 ? 1 : 2;
+    s->channels = s->channels < 1 ? 1 : s->channels > HH_CLIENT_CH ? HH_CLIENT_CH : s->channels;
     if (s->period_bytes > HH_PERIOD_MAX) {
         s->period_bytes = HH_PERIOD_MAX;
     }
-    bi = hh_nearest_rate(s->rate);
-    if (bi < 0) {
+    m->sframe = (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
+    bi = hh_nearest_rate(m, s->rate);
+    if (s->period_bytes < m->sframe || bi < 0) {
         mutex_unlock(&hh_mutex);
         return -EINVAL;
     }
-    best = hh_rate_hz[bi];
-    wide = hh_wide && AUDIO_SAMPLE_BYTES(s->format) > 2u;
-    hh_rate = best;
-    hh_frame = wide ? 8u : 4u;
-    hh_sframe = (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
-    hh_copy =
-        s->rate == best && s->channels == 2 && s->format == (wide ? AUDIO_S32LE : AUDIO_S16LE);
-    s->period_bytes -= s->period_bytes % hh_sframe;
-    /* At most 16384 frames times 192 kHz: 32 bits hold it. */
-    frames = s->period_bytes / hh_sframe * best / s->rate;
-    pb = (frames * hh_frame + 64u) / 128u * 128u;
-    pb = pb < 128u ? 128u : pb > HH_PERIOD_MAX ? HH_PERIOD_MAX : pb;
-    need = best / 1000u * hh_frame * HH_BUFFER_MS;
-    n = (need + pb - 1) / pb;
-    if (n > HH_BDL_MAX) {
-        n = HH_BDL_MAX;
+    s->period_bytes -= s->period_bytes % m->sframe;
+    ch = (s->channels + 1) & ~1;
+    if (ch > (m->chmax & ~1)) {
+        ch = m->chmax & ~1;
     }
-    if (n > HH_DMA_MAX / pb) {
-        n = HH_DMA_MAX / pb;
-    }
-    hh_pb = pb;
-    while (n > 2 && hh_lead(s, n) > HH_STREAM_MAX) {
-        n--;
-    }
-    if (n < 2) {
-        n = 2;
-    }
-    s->device_periods = hh_lead(s, n) / s->period_bytes;
-    hh_n = n;
-    hh_fmt = (uint16_t)(hh_rate_fmt[bi] | (wide ? HDA_FMT_BITS_24 : HDA_FMT_BITS_16) | 1u);
+    wide = m->wide && AUDIO_SAMPLE_BYTES(s->format) > 2u;
+    m->rate = hh_rate_hz[bi];
+    m->ch = ch;
+    m->frame = (uint32_t)ch * (wide ? 4u : 2u);
+    n = hh_ring(m, s, wide);
+    s->device_periods = hh_lead(m, n) / s->period_bytes;
+    m->n = n;
+    m->fmt = (uint16_t)(hh_rate_fmt[bi] | (wide ? HDA_FMT_BITS_24 : HDA_FMT_BITS_16) |
+                        (uint32_t)(ch - 1));
     mutex_unlock(&hh_mutex);
     return 0;
 }
 
-/** Sample `p` of the stream's format as 24 bits: unsigned 8-bit moved to
+/** Sample `p` of format `format` as 24 bits: unsigned 8-bit moved to
  * signed, and a wider one's top 24 bits. */
-static int32_t hh_sample(const audio_stream_t *s, const uint8_t *p)
+static int32_t hh_sample(audio_format_t format, const uint8_t *p)
 {
     uint32_t u;
 
-    switch (s->format) {
+    switch (format) {
     case AUDIO_U8:
         return ((int32_t)p[0] - 128) * 65536;
     case AUDIO_S16LE:
@@ -1194,12 +1566,23 @@ static int32_t hh_sample(const audio_stream_t *s, const uint8_t *p)
     return (int32_t)(u & 0x800000u ? u | 0xff000000u : u);
 }
 
-/** Read the stream's frame at `p` into `v` as two 24-bit samples; a mono
- * sample goes to both. */
-static void hh_frame_in(const audio_stream_t *s, const uint8_t *p, int32_t *v)
+/**
+ * Read PCM `m`'s stream frame at `p` into `v` as the DMA's m->ch samples of
+ * 24 bits, as Linux's route plugin moves them: a mono sample to every
+ * channel; else the stream's channels to the DMA's in order, those the DMA
+ * lacks dropped and those the stream lacks silent.
+ */
+static void hh_frame_in(const struct hh_pcm *m, const uint8_t *p, int32_t *v)
 {
-    v[0] = hh_sample(s, p);
-    v[1] = s->channels == 2 ? hh_sample(s, p + AUDIO_SAMPLE_BYTES(s->format)) : v[0];
+    const audio_stream_t *s = m->stream;
+    uint32_t bytes = AUDIO_SAMPLE_BYTES(s->format);
+    int c;
+
+    for (c = 0; c < m->ch; c++) {
+        v[c] = s->channels == 1  ? hh_sample(s->format, p)
+               : c < s->channels ? hh_sample(s->format, p + (uint32_t)c * bytes)
+                                 : 0;
+    }
 }
 
 /** `a` plus `w` / 8192 of the way to `b`, rounded down, both of 24 bits, in
@@ -1212,15 +1595,15 @@ static int32_t hh_lerp(int32_t a, int32_t b, uint32_t w)
     return b > a ? a + (int32_t)q : a - (int32_t)q;
 }
 
-/** Store the 24-bit sample `v` at `p` as the DMA plays it: in the top 24
- * bits of 32, or rounded to the nearest of 16, a half up, and held there.
- * The offset keeps the division's dividend positive, where C89 defines its
- * rounding. */
-static void hh_store(uint8_t *p, int32_t v)
+/** Store the 24-bit sample `v` at `p` as the DMA plays it, in `bytes`
+ * bytes: in the top 24 bits of 32, or rounded to the nearest of 16, a half
+ * up, and held there. The offset keeps the division's dividend positive,
+ * where C89 defines its rounding. */
+static void hh_store(uint8_t *p, int32_t v, uint32_t bytes)
 {
     uint32_t u;
 
-    if (hh_frame == 8u) {
+    if (bytes == 4u) {
         u = (uint32_t)v << 8;
         p[2] = (uint8_t)(u >> 16);
         p[3] = (uint8_t)(u >> 24);
@@ -1233,152 +1616,159 @@ static void hh_store(uint8_t *p, int32_t v)
 }
 
 /**
- * Fill period `slot` of the DMA buffer from the stream and write it back to
- * memory for the controller; the stream's frames taken for it. A stream in
- * the DMA's frames is copied; another is converted in chunks of at most
- * HH_STAGE_FRAMES of the DMA's, each `transfer` taking the frames the chunk
- * needs into hh_stage, as Linux's plugins pull them. Under hh_slock, or
- * before the DMA runs.
+ * Fill period `slot` of PCM `m`'s DMA buffer from its stream and write it
+ * back to memory for the controller; the stream's frames taken for it. A
+ * stream in the DMA's frames is copied; another is converted in chunks of
+ * at most HH_STAGE_FRAMES of the DMA's, each `transfer` taking the frames
+ * the chunk needs into the PCM's stage, as Linux's plugins pull them. Under
+ * hh_slock, or before the DMA runs.
  */
-static uint32_t hh_fill(uint32_t slot)
+static uint32_t hh_fill(struct hh_pcm *m, uint32_t slot)
 {
-    audio_stream_t *s = hh_stream;
-    uint8_t *dst = hh_dma + slot * hh_pb;
-    uint32_t frames = hh_pb / hh_frame, taken = 0, chunk, need, i, k, w;
-    int32_t v[2];
+    audio_stream_t *s = m->stream;
+    uint8_t *base = hh_dma[m - hh_pcms] + slot * m->pb, *dst = base;
+    uint8_t *stage = hh_stage[m - hh_pcms];
+    uint32_t frames = m->pb / m->frame, taken = 0, chunk, need, i, k, w;
+    uint32_t bytes = m->frame / (uint32_t)m->ch;
+    int32_t v;
+    int c;
 
-    if (hh_copy) {
-        s->transfer(s, dst, hh_pb);
+    if (m->copy) {
+        s->transfer(s, dst, m->pb);
         taken = frames;
     }
-    while (!hh_copy && frames > 0) {
+    while (!m->copy && frames > 0) {
         chunk = frames < HH_STAGE_FRAMES ? frames : HH_STAGE_FRAMES;
-        need = hh_need(s, chunk);
-        while (chunk > 1 && need * hh_sframe > sizeof(hh_stage)) {
+        need = hh_need(m, chunk);
+        while (chunk > 1 && need * m->sframe > HH_STAGE_BYTES) {
             chunk /= 2;
-            need = hh_need(s, chunk);
+            need = hh_need(m, chunk);
         }
         if (need > 0) {
-            s->transfer(s, hh_stage, need * hh_sframe);
+            s->transfer(s, stage, need * m->sframe);
         }
         k = 0;
         for (i = 0; i < chunk; i++) {
-            while (hh_acc >= hh_rate) {
-                hh_prev[0] = hh_cur[0];
-                hh_prev[1] = hh_cur[1];
-                hh_frame_in(s, hh_stage + k++ * hh_sframe, hh_cur);
-                hh_acc -= hh_rate;
+            while (m->acc >= m->rate) {
+                k_memcpy(m->prev, m->cur, sizeof(m->prev));
+                hh_frame_in(m, stage + k++ * m->sframe, m->cur);
+                m->acc -= m->rate;
             }
-            w = (hh_acc << 13) / hh_rate;
-            v[0] = hh_lerp(hh_prev[0], hh_cur[0], w);
-            v[1] = hh_lerp(hh_prev[1], hh_cur[1], w);
-            hh_store(dst + i * hh_frame, v[0]);
-            hh_store(dst + i * hh_frame + hh_frame / 2u, v[1]);
-            hh_acc += s->rate;
+            w = (m->acc << 13) / m->rate;
+            for (c = 0; c < m->ch; c++) {
+                v = hh_lerp(m->prev[c], m->cur[c], w);
+                hh_store(dst + i * m->frame + (uint32_t)c * bytes, v, bytes);
+            }
+            m->acc += s->rate;
         }
         taken += need;
         frames -= chunk;
-        dst += chunk * hh_frame;
+        dst += chunk * m->frame;
     }
-    arch_dma_flush(hh_dma + slot * hh_pb, hh_pb);
+    arch_dma_flush(base, m->pb);
     return taken;
 }
 
-/** Reset the output stream descriptor through its SRST handshake. */
-static void hh_sd_reset(void)
+/** Reset PCM `m`'s output stream descriptor through its SRST handshake. */
+static void hh_sd_reset(const struct hh_pcm *m)
 {
     int i;
 
-    hh_write(hh_sd(HDA_SD_CTL), 0, 8);
-    for (i = 0; i < 1000 && (hh_read(hh_sd(HDA_SD_CTL), 8) & HDA_SD_CTL_RUN); i++) {
+    hh_write(hh_sd(m, HDA_SD_CTL), 0, 8);
+    for (i = 0; i < 1000 && (hh_read(hh_sd(m, HDA_SD_CTL), 8) & HDA_SD_CTL_RUN); i++) {
         k_udelay(1);
     }
-    hh_write(hh_sd(HDA_SD_CTL), HDA_SD_CTL_SRST, 8);
-    for (i = 0; i < 1000 && !(hh_read(hh_sd(HDA_SD_CTL), 8) & HDA_SD_CTL_SRST); i++) {
+    hh_write(hh_sd(m, HDA_SD_CTL), HDA_SD_CTL_SRST, 8);
+    for (i = 0; i < 1000 && !(hh_read(hh_sd(m, HDA_SD_CTL), 8) & HDA_SD_CTL_SRST); i++) {
         k_udelay(1);
     }
-    hh_write(hh_sd(HDA_SD_CTL), 0, 8);
-    for (i = 0; i < 1000 && (hh_read(hh_sd(HDA_SD_CTL), 8) & HDA_SD_CTL_SRST); i++) {
+    hh_write(hh_sd(m, HDA_SD_CTL), 0, 8);
+    for (i = 0; i < 1000 && (hh_read(hh_sd(m, HDA_SD_CTL), 8) & HDA_SD_CTL_SRST); i++) {
         k_udelay(1);
     }
 }
 
 /**
- * Lay the descriptor list over the DMA buffer, fill every period from the
- * stream, program the descriptor, prepare the codec as Linux's prepare
- * does, and run the DMA. -EIO for a stream not set up, or one whose
- * display has gone since its open.
+ * Lay the PCM's descriptor list over its DMA buffer, fill every period
+ * from the stream, program the descriptor, prepare the codec as Linux's
+ * prepare does, and run the DMA. -EIO for a stream not set up, or one
+ * whose display has gone since its open.
  */
 static int hh_stream_start(audio_stream_t *s)
 {
-    uint64_t addr = (uint64_t)virt_to_phys(hh_dma);
-    uint64_t bdl = (uint64_t)virt_to_phys(hh_bdl);
+    struct hh_pcm *m;
+    volatile hda_bdl_entry_t *bdl;
+    uint64_t addr, list;
     uint32_t i, flags;
 
     mutex_lock(&hh_mutex);
-    if (s != hh_stream || !hh_present || !hh_held || !hh_pb) {
+    m = hh_pcm_of(s);
+    if (!m || !hh_present || !m->held || !m->pb) {
         mutex_unlock(&hh_mutex);
         return -EIO;
     }
-    hh_sd_reset();
+    bdl = hh_bdl[m - hh_pcms];
+    addr = (uint64_t)virt_to_phys(hh_dma[m - hh_pcms]);
+    list = (uint64_t)virt_to_phys(bdl);
+    hh_sd_reset(m);
     /* The first DMA frame takes two of the stream's: the first, exactly,
      * and the next, to interpolate towards. */
-    hh_acc = 2u * hh_rate;
-    k_memset(hh_cur, 0, sizeof(hh_cur));
-    hh_taken = 0;
-    for (i = 0; i < hh_n; i++) {
-        hh_bdl[i].addr_low = (uint32_t)(addr + i * hh_pb);
-        hh_bdl[i].addr_high = hh_hi(addr + i * hh_pb);
-        hh_bdl[i].length = hh_pb;
-        hh_bdl[i].ioc = 0;
-        hh_in[i] = hh_fill(i);
-        hh_taken += hh_in[i];
+    m->acc = 2u * m->rate;
+    k_memset(m->cur, 0, sizeof(m->cur));
+    m->taken = 0;
+    for (i = 0; i < m->n; i++) {
+        bdl[i].addr_low = (uint32_t)(addr + i * m->pb);
+        bdl[i].addr_high = hh_hi(addr + i * m->pb);
+        bdl[i].length = m->pb;
+        bdl[i].ioc = 0;
+        m->in[i] = hh_fill(m, i);
+        m->taken += m->in[i];
     }
-    arch_dma_flush(hh_bdl, hh_n * sizeof(hh_bdl[0]));
-    hh_write(hh_sd(HDA_SD_BDPL), (uint32_t)bdl, 32);
-    hh_write(hh_sd(HDA_SD_BDPU), hh_hi(bdl), 32);
-    hh_write(hh_sd(HDA_SD_CBL), hh_n * hh_pb, 32);
-    hh_write(hh_sd(HDA_SD_LVI), hh_n - 1, 16);
-    hh_write(hh_sd(HDA_SD_FORMAT), hh_fmt, 16);
-    hh_write(hh_sd(HDA_SD_CTL), (uint32_t)HH_TAG << 20, 32);
-    if (hh_bound >= 0) {
-        hh_pin_prepare(&hh_pins[hh_bound]);
+    arch_dma_flush(bdl, m->n * sizeof(bdl[0]));
+    hh_write(hh_sd(m, HDA_SD_BDPL), (uint32_t)list, 32);
+    hh_write(hh_sd(m, HDA_SD_BDPU), hh_hi(list), 32);
+    hh_write(hh_sd(m, HDA_SD_CBL), m->n * m->pb, 32);
+    hh_write(hh_sd(m, HDA_SD_LVI), m->n - 1, 16);
+    hh_write(hh_sd(m, HDA_SD_FORMAT), m->fmt, 16);
+    hh_write(hh_sd(m, HDA_SD_CTL), (uint32_t)m->tag << 20, 32);
+    if (m->pin >= 0) {
+        hh_pin_prepare(m, &hh_pins[m->pin]);
     } else {
-        hh_not_share(NULL, hh_cvt_idx);
+        hh_not_share(NULL, m->cvt_idx);
     }
-    hh_cvt_setup();
+    hh_cvt_setup(m);
     flags = spin_lock_irqsave(&hh_slock);
-    hh_next = 0;
-    hh_played = 0;
-    hh_pos = 0;
-    hh_mark = 0;
-    hh_last_tick = rtc_ticks_now();
-    hh_last_lpib = 0;
-    hh_running = 1;
-    hh_write(hh_sd(HDA_SD_CTL), ((uint32_t)HH_TAG << 20) | HDA_SD_CTL_RUN, 32);
+    m->next = 0;
+    m->played = 0;
+    m->pos = 0;
+    m->mark = 0;
+    m->last_tick = rtc_ticks_now();
+    m->last_lpib = 0;
+    m->running = 1;
+    hh_write(hh_sd(m, HDA_SD_CTL), ((uint32_t)m->tag << 20) | HDA_SD_CTL_RUN, 32);
     spin_unlock_irqrestore(&hh_slock, flags);
     mutex_unlock(&hh_mutex);
     return 0;
 }
 
-/** Stop the DMA and the converter's stream, under hh_mutex: after the
- * spinlock is let go, the tick makes no more calls into the stream. */
-static void hh_halt(void)
+/** Stop PCM `m`'s DMA and its converter's stream, under hh_mutex: after
+ * the spinlock is let go, the tick makes no more calls into the stream. */
+static void hh_halt(struct hh_pcm *m)
 {
     uint32_t flags = spin_lock_irqsave(&hh_slock);
-    int was = hh_running;
+    int was = m->running;
 
-    hh_running = 0;
+    m->running = 0;
     if (was) {
-        hh_write(hh_sd(HDA_SD_CTL), (uint32_t)HH_TAG << 20, 32);
+        hh_write(hh_sd(m, HDA_SD_CTL), (uint32_t)m->tag << 20, 32);
     }
     spin_unlock_irqrestore(&hh_slock, flags);
     if (was) {
-        hh_sd_reset();
+        hh_sd_reset(m);
         /* snd_hda_codec_cleanup_stream */
-        hh_verb(hh_cvts[hh_cvt_idx].nid, V_SET_STREAMID, 0);
-        if (hh_bound >= 0) {
-            hh_pins[hh_bound].setup = 0;
+        hh_verb(hh_cvts[m->cvt_idx].nid, V_SET_STREAMID, 0);
+        if (m->pin >= 0) {
+            hh_pins[m->pin].setup = 0;
         }
     }
 }
@@ -1386,93 +1776,103 @@ static void hh_halt(void)
 /** Stop the stream at once. */
 static void hh_stream_stop(audio_stream_t *s)
 {
+    struct hh_pcm *m;
+
     mutex_lock(&hh_mutex);
-    if (s == hh_stream && hh_present) {
-        hh_halt();
+    m = hh_pcm_of(s);
+    if (m && hh_present) {
+        hh_halt(m);
     }
     mutex_unlock(&hh_mutex);
 }
 
-/** Give the device back, and the display's power with it unless the
- * display's going took it. */
+/** Give the PCM back, its converter and the display's power with it
+ * unless the display's going took it. */
 static void hh_stream_close(audio_stream_t *s)
 {
+    struct hh_pcm *m;
+
     mutex_lock(&hh_mutex);
-    if (s == hh_stream) {
+    m = hh_pcm_of(s);
+    if (m) {
         if (hh_present) {
-            hh_halt();
+            hh_halt(m);
         }
-        if (hh_held) {
+        if (m->held) {
             hh_power_put();
-            hh_held = 0;
+            m->held = 0;
         }
-        if (hh_bound >= 0) {
-            hh_pins[hh_bound].cvt = 0;
+        if (m->pin >= 0) {
+            hh_pins[m->pin].cvt = 0;
         }
-        hh_cvts[hh_cvt_idx].assigned = 0;
-        hh_bound = -1;
-        hh_pb = 0;
-        hh_stream = NULL;
+        if (m->cvt_idx >= 0) {
+            hh_cvts[m->cvt_idx].assigned = 0;
+        }
+        m->cvt_idx = -1;
+        m->pb = 0;
+        m->stream = NULL;
     }
     mutex_unlock(&hh_mutex);
 }
 
 /**
- * The DMA periods played since the last refill, at the DMA's place `lpib`
- * in bytes and the tick `now`: those the place moved over, and a whole
- * ring for each lap the place cannot show. LPIB gives the place only within
- * the ring, so a refill late by a lap or more would find the period it
- * left and count none; as Linux's snd_pcm_update_hw_ptr0 counts the jiffies
- * since its last update, the laps are the frames the elapsed ticks played
- * at the DMA's rate less those the place moved over, in whole rings,
- * rounded to the nearest. Under hh_slock.
+ * The DMA periods PCM `m` played since the last refill, at the DMA's place
+ * `lpib` in bytes and the tick `now`: those the place moved over, and a
+ * whole ring for each lap the place cannot show. LPIB gives the place only
+ * within the ring, so a refill late by a lap or more would find the period
+ * it left and count none; as Linux's snd_pcm_update_hw_ptr0 counts the
+ * jiffies since its last update, the laps are the frames the elapsed ticks
+ * played at the DMA's rate less those the place moved over, in whole
+ * rings, rounded to the nearest. Under hh_slock.
  */
-static uint32_t hh_passed(uint32_t lpib, uint64_t now)
+static uint32_t hh_passed(const struct hh_pcm *m, uint32_t lpib, uint64_t now)
 {
-    uint32_t cbl = hh_n * hh_pb, ring = cbl / hh_frame, laps = 0, moved, played, ticks;
+    uint32_t cbl = m->n * m->pb, ring = cbl / m->frame, laps = 0, moved, played, ticks;
 
-    ticks = now - hh_last_tick > HH_LAP_TICKS ? HH_LAP_TICKS : (uint32_t)(now - hh_last_tick);
+    ticks = now - m->last_tick > HH_LAP_TICKS ? HH_LAP_TICKS : (uint32_t)(now - m->last_tick);
     /* At most 5 s at 192 kHz: 32 bits hold it. */
-    played = ticks * hh_rate / (uint32_t)TICK_HZ;
-    moved = (lpib + cbl - hh_last_lpib) % cbl / hh_frame;
+    played = ticks * m->rate / (uint32_t)TICK_HZ;
+    moved = (lpib + cbl - m->last_lpib) % cbl / m->frame;
     if (played > moved) {
         laps = (played - moved + ring / 2u) / ring;
     }
-    return (lpib / hh_pb + hh_n - hh_next) % hh_n + laps * hh_n;
+    return (lpib / m->pb + m->n - m->next) % m->n + laps * m->n;
 }
 
-/** The stream's frames played at `lpib` with `passed` periods played since
- * the last refill: those of the periods played, the share of the one
+/** PCM `m`'s stream frames played at `lpib` with `passed` periods played
+ * since the last refill: those of the periods played, the share of the one
  * playing that `lpib` has passed, and never less than the last given.
  * Under hh_slock. */
-static uint32_t hh_played_at(uint32_t lpib, uint32_t passed)
+static uint32_t hh_played_at(const struct hh_pcm *m, uint32_t lpib, uint32_t passed)
 {
-    uint32_t pos = hh_played, slot = hh_next, off = lpib % hh_pb;
+    uint32_t pos = m->played, slot = m->next, off = lpib % m->pb;
 
     while (passed-- > 0) {
-        pos += hh_in[slot];
-        slot = (slot + 1u) % hh_n;
+        pos += m->in[slot];
+        slot = (slot + 1u) % m->n;
     }
-    pos += hh_in[slot] * off / hh_pb;
-    return (int32_t)(pos - hh_pos) > 0 ? pos : hh_pos;
+    pos += m->in[slot] * off / m->pb;
+    return (int32_t)(pos - m->pos) > 0 ? pos : m->pos;
 }
 
-/** The DMA's place in the ring, in bytes. */
-static uint32_t hh_lpib(void)
+/** PCM `m`'s DMA's place in its ring, in bytes. */
+static uint32_t hh_lpib(const struct hh_pcm *m)
 {
-    return hh_read(hh_sd(HDA_SD_LPIB), 32) % (hh_n * hh_pb);
+    return hh_read(hh_sd(m, HDA_SD_LPIB), 32) % (m->n * m->pb);
 }
 
 /** The frames played since the start, from the link position and the
  * clock; it refills nothing, since a wait's condition may read it. */
 static uint32_t hh_stream_position(audio_stream_t *s)
 {
+    struct hh_pcm *m;
     uint32_t flags, pos = 0, lpib;
 
     flags = spin_lock_irqsave(&hh_slock);
-    if (s == hh_stream && hh_running) {
-        lpib = hh_lpib();
-        pos = hh_played_at(lpib, hh_passed(lpib, rtc_ticks_now()));
+    m = hh_pcm_of(s);
+    if (m && m->running) {
+        lpib = hh_lpib(m);
+        pos = hh_played_at(m, lpib, hh_passed(m, lpib, rtc_ticks_now()));
     }
     spin_unlock_irqrestore(&hh_slock, flags);
     return pos;
@@ -1482,46 +1882,70 @@ static uint32_t hh_stream_position(audio_stream_t *s)
  * those played. */
 static uint32_t hh_stream_delay(audio_stream_t *s)
 {
+    struct hh_pcm *m = hh_pcm_of(s);
     uint32_t pos, taken, flags;
 
-    if (!s || s != hh_stream || !hh_running) {
+    if (!m || !m->running) {
         return 0;
     }
     pos = hh_stream_position(s);
     flags = spin_lock_irqsave(&hh_slock);
-    taken = hh_taken;
+    taken = m->taken;
     spin_unlock_irqrestore(&hh_slock, flags);
     return (int32_t)(taken - pos) > 0 ? taken - pos : 0;
 }
 
+/** Serve PCM `m` from the tick: refill the periods played and tell the
+ * stream of each of its periods done. Under hh_slock. */
+static void hh_serve(struct hh_pcm *m)
+{
+    audio_stream_t *s = m->stream;
+    uint32_t lpib, passed, spf;
+    uint64_t now = rtc_ticks_now();
+
+    lpib = hh_lpib(m);
+    passed = hh_passed(m, lpib, now);
+    m->pos = hh_played_at(m, lpib, passed);
+    m->last_tick = now;
+    m->last_lpib = lpib;
+    while (passed-- > 0) {
+        m->played += m->in[m->next];
+        m->in[m->next] = hh_fill(m, m->next);
+        m->taken += m->in[m->next];
+        m->next = (m->next + 1) % m->n;
+    }
+    spf = s->period_bytes / m->sframe;
+    while (m->pos - m->mark >= spf) {
+        m->mark += spf;
+        s->period(s);
+    }
+}
+
+/** Whether a PCM's DMA runs. */
+static int hh_any_running(void)
+{
+    int k;
+
+    for (k = 0; k < hh_npcms; k++) {
+        if (hh_pcms[k].running) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void hdmi_audio_tick(void)
 {
-    audio_stream_t *s;
-    uint32_t flags, lpib, passed, spf;
-    uint64_t now;
+    uint32_t flags;
+    int k;
 
-    if (!hh_running) {
+    if (!hh_any_running()) {
         return;
     }
     flags = spin_lock_irqsave(&hh_slock);
-    s = hh_stream;
-    if (hh_running && s) {
-        now = rtc_ticks_now();
-        lpib = hh_lpib();
-        passed = hh_passed(lpib, now);
-        hh_pos = hh_played_at(lpib, passed);
-        hh_last_tick = now;
-        hh_last_lpib = lpib;
-        while (passed-- > 0) {
-            hh_played += hh_in[hh_next];
-            hh_in[hh_next] = hh_fill(hh_next);
-            hh_taken += hh_in[hh_next];
-            hh_next = (hh_next + 1) % hh_n;
-        }
-        spf = s->period_bytes / hh_sframe;
-        while (hh_pos - hh_mark >= spf) {
-            hh_mark += spf;
-            s->period(s);
+    for (k = 0; k < hh_npcms; k++) {
+        if (hh_pcms[k].running && hh_pcms[k].stream) {
+            hh_serve(&hh_pcms[k]);
         }
     }
     spin_unlock_irqrestore(&hh_slock, flags);
@@ -1529,7 +1953,31 @@ void hdmi_audio_tick(void)
 
 uint32_t hdmi_audio_idle_ticks(void)
 {
-    return hh_running ? 1u : TICK_HZ;
+    return hh_any_running() ? 1u : TICK_HZ;
+}
+
+/** Take PCM 0's stream, /dev/dsp1's. */
+static int hh_open0(audio_stream_t *s)
+{
+    return hh_pcm_open(&hh_pcms[0], s);
+}
+
+/** Take PCM 1's stream, /dev/adsp1's. */
+static int hh_open1(audio_stream_t *s)
+{
+    return hh_pcm_open(&hh_pcms[1], s);
+}
+
+/** Take PCM 2's stream, /dev/dsp2's. */
+static int hh_open2(audio_stream_t *s)
+{
+    return hh_pcm_open(&hh_pcms[2], s);
+}
+
+/** Take PCM 3's stream, /dev/dsp3's. */
+static int hh_open3(audio_stream_t *s)
+{
+    return hh_pcm_open(&hh_pcms[3], s);
 }
 
 /** The driver has only streams: no write path, volume or input. */
@@ -1538,102 +1986,145 @@ static int hh_none_init(void)
     return -1;
 }
 
-audio_driver_t hdmi_audio_driver = {"HDA Intel HDMI",
-                                    AUDIO_DRIVER_HDA,
-                                    hh_none_init,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    hh_stream_open,
-                                    hh_stream_setup,
-                                    hh_stream_start,
-                                    hh_stream_stop,
-                                    hh_stream_close,
-                                    hh_stream_position,
-                                    hh_stream_delay,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL,
-                                    NULL};
+/* The stream operations of each PCM, which differ only in their open; the
+ * template's `stream_open` is filled in for each by hdmi_audio_init. */
+static int (*const hh_opens[HH_MAX_PCMS])(audio_stream_t *s) = {hh_open0, hh_open1, hh_open2,
+                                                                hh_open3};
+static const audio_driver_t hh_driver_template = {"HDA Intel HDMI",
+                                                  AUDIO_DRIVER_HDA,
+                                                  hh_none_init,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  hh_stream_setup,
+                                                  hh_stream_start,
+                                                  hh_stream_stop,
+                                                  hh_stream_close,
+                                                  hh_stream_position,
+                                                  hh_stream_delay,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL,
+                                                  HH_CLIENT_CH};
+static audio_driver_t hh_drivers[HH_MAX_PCMS];
 
-/* ---- /dev/dsp1 ---- */
+/* ---- the PCMs' OSS devices ---- */
 
 static const struct file_ops hh_dsp_ops = {dspdev_read,  dspdev_write, dspdev_poll, dspdev_ioctl,
                                            dspdev_close, NULL,         NULL,        0};
 
-/** Open /dev/dsp1 on the HDMI codec's stream. */
+static int32_t hh_dsp_open(struct devfs_node *node, struct fd_entry *e, int flags);
+
+/* The PCMs' OSS devices: dsp1 and adsp1, minors 19 and 28, as Linux's OSS
+ * layer names a card's first two PCMs, then dsp2 and dsp3, minors 35 and
+ * 51, the names it gives the next cards' first, since it names no more of
+ * one card's and Rach2 has no ALSA PCM devices to reach them. */
+static struct devfs_node hh_dsp_nodes[HH_MAX_PCMS] = {
+    {"dsp1", DSP_MAJOR, HDMI_DSP_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0},
+    {"adsp1", DSP_MAJOR, HDMI_ADSP_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0},
+    {"dsp2", DSP_MAJOR, HDMI_DSP2_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0},
+    {"dsp3", DSP_MAJOR, HDMI_DSP3_MINOR, 0666, &hh_dsp_ops, hh_dsp_open, NULL, 0}};
+static int hh_dsp_registered[HH_MAX_PCMS];
+
+/** Open a PCM's OSS device on its PCM's stream. */
 static int32_t hh_dsp_open(struct devfs_node *node, struct fd_entry *e, int flags)
 {
-    (void)node;
-    return dspdev_open_driver(e, flags, &hdmi_audio_driver);
+    return dspdev_open_driver(e, flags, &hh_drivers[node - hh_dsp_nodes]);
 }
-
-static struct devfs_node hh_dsp_node = {"dsp1",      DSP_MAJOR,   HDMI_DSP_MINOR, 0666,
-                                        &hh_dsp_ops, hh_dsp_open, NULL,           0};
-static int hh_dsp_registered;
 
 /* ---- the component ---- */
 
 /**
  * The display is there: bring the controller and codec up once to find the
- * pins, read each entry's ELD, and offer /dev/dsp1, as azx_probe_continue
- * and patch_i915_hsw_hdmi do. Under the component's lock.
+ * pins, read each entry's ELD, attach a PCM to each valid one in turn, and
+ * offer each PCM's device, as azx_probe_continue, patch_i915_hsw_hdmi and
+ * generic_hdmi_build_pcms do: one PCM for each converter, no more than
+ * there are pin entries, as Linux makes them, nor than the controller has
+ * output streams, one of which each PCM plays on. Under the component's
+ * lock.
  */
 static void hh_bind(void *ptr, const struct acomp_ops *ops, void *dev)
 {
-    int i;
+    int i, k, outs;
 
     (void)ptr;
     mutex_lock(&hh_mutex);
     hh_ops = ops;
     hh_dev = dev;
     if (hh_power_get() == 0) {
+        outs = (int)((hh_read(HDA_GCAP, 16) >> 12) & 0xf);
+        hh_npcms = hh_ncvts < hh_npins ? hh_ncvts : hh_npins;
+        hh_npcms = outs < hh_npcms ? outs : hh_npcms;
+        for (k = 0; k < hh_npcms; k++) {
+            hh_pcms[k].pin = -1;
+            hh_pcms[k].sd = hh_out_sd + k;
+            hh_pcms[k].tag = (uint8_t)(k + 1);
+        }
         for (i = 0; i < hh_npins; i++) {
             (void)hh_sync_eld(&hh_pins[i]);
+            if (hh_pins[i].eld_valid) {
+                hh_attach_pcm(&hh_pins[i]);
+            }
         }
         hh_power_put();
         hh_present = 1;
-        klog(KLOG_INFO, "hdmi-audio", "ready: codec %x at %d, %d pins", hh_vendor, hh_caddr,
-             hh_npins / HH_DEV_NUM);
+        klog(KLOG_INFO, "hdmi-audio", "ready: codec %x at %d, %d pins, %d pcms", hh_vendor,
+             hh_caddr, hh_npins / HH_DEV_NUM, hh_npcms);
     } else {
         klog(KLOG_WARN, "hdmi-audio", "absent: the controller or codec did not come up");
     }
+    k = hh_present ? hh_npcms : 0;
     mutex_unlock(&hh_mutex);
-    if (hh_present && devfs_node_register(&hh_dsp_node) == 0) {
-        hh_dsp_registered = 1;
+    for (i = 0; i < k; i++) {
+        if (devfs_node_register(&hh_dsp_nodes[i]) == 0) {
+            hh_dsp_registered[i] = 1;
+        }
     }
 }
 
 /**
- * The display goes: stop the stream, let its power go, tell its owner, so
- * that a writer, a drain or a close waiting on it wakes and fails, as
- * Linux's snd_card_disconnect does, and withdraw the card. The stream
- * stays the owner's until it closes, and an open of /dev/dsp1 keeps
- * failing until then.
+ * The display goes: stop each PCM's stream, let its power go, tell its
+ * owner, so that a writer, a drain or a close waiting on it wakes and
+ * fails, as Linux's snd_card_disconnect does, and withdraw the devices. A
+ * stream stays its owner's until it closes, and an open of its device
+ * keeps failing until then.
  */
 static void hh_unbind(void *ptr)
 {
+    int k;
+
     (void)ptr;
-    if (hh_dsp_registered) {
-        devfs_node_unregister(&hh_dsp_node);
-        hh_dsp_registered = 0;
+    for (k = 0; k < HH_MAX_PCMS; k++) {
+        if (hh_dsp_registered[k]) {
+            devfs_node_unregister(&hh_dsp_nodes[k]);
+            hh_dsp_registered[k] = 0;
+        }
     }
     mutex_lock(&hh_mutex);
-    if (hh_stream && hh_present) {
-        hh_halt();
-    }
-    if (hh_held) {
-        hh_power_put();
-        hh_held = 0;
-    }
-    if (hh_stream && hh_stream->gone) {
-        hh_stream->gone(hh_stream);
+    for (k = 0; k < hh_npcms; k++) {
+        struct hh_pcm *m = &hh_pcms[k];
+
+        if (m->stream && hh_present) {
+            hh_halt(m);
+        }
+        if (m->held) {
+            hh_power_put();
+            m->held = 0;
+        }
+        if (m->stream && m->stream->gone) {
+            m->stream->gone(m->stream);
+        }
+        /* The codec's converters are parsed again at the next bind. */
+        m->cvt_idx = -1;
+        m->pin = -1;
     }
     hh_present = 0;
     hh_parsed = 0;
@@ -1645,10 +2136,11 @@ static void hh_unbind(void *ptr)
 
 /**
  * The display turned audio on or off on port `port`, Linux's
- * intel_pin_eld_notify: the BCLK set again while the controller is up, the
- * entry's ELD read, and, while a stream plays, a newly valid entry given
- * the stream when it has none, or the stream's entry prepared again, as
- * update_eld does.
+ * intel_pin_eld_notify and update_eld: the entry's ELD read; a valid one
+ * attached to a PCM, whose open stream it is given, and an invalid one's
+ * PCM detached, its stream playing on no pin; and a stream's entry whose
+ * ELD turned valid prepared again, since the transcoder may have reset its
+ * converter selection.
  */
 static void hh_notify(void *ptr, int port, int pipe)
 {
@@ -1658,24 +2150,23 @@ static void hh_notify(void *ptr, int port, int pipe)
     mutex_lock(&hh_mutex);
     for (i = 0; hh_present && i < hh_npins; i++) {
         struct hh_pin *p = &hh_pins[i];
+        struct hh_pcm *m;
         int turned;
 
         if (p->nid - 4 != port || p->dev != dev) {
             continue;
         }
         turned = hh_sync_eld(p);
-        if (!hh_stream) {
-            break;
-        }
-        if (hh_bound == i && !p->eld_valid) {
-            p->cvt = 0;
+        if (p->eld_valid) {
+            hh_attach_pcm(p);
+        } else {
             p->setup = 0;
-            hh_bound = -1;
-        } else if (turned && hh_bound < 0) {
-            hh_pin_attach(p);
+            p->cvt = 0;
+            hh_detach_pcm(p);
         }
-        if (turned && hh_bound == i && hh_running) {
-            hh_pin_prepare(p);
+        m = p->pcm >= 0 ? &hh_pcms[p->pcm] : NULL;
+        if (m && hh_pcm_live(m) && (turned || !p->cvt)) {
+            hh_pin_attach(m, p);
         }
         break;
     }
@@ -1711,9 +2202,15 @@ void hdmi_audio_init(void)
 {
     pci_device_t d, seen, *from = NULL;
     uint64_t bar;
+    int k;
 
     mutex_init(&hh_mutex, "hdmi_audio");
-    hh_bound = -1;
+    for (k = 0; k < HH_MAX_PCMS; k++) {
+        hh_pcms[k].pin = -1;
+        hh_pcms[k].cvt_idx = -1;
+        hh_drivers[k] = hh_driver_template;
+        hh_drivers[k].stream_open = hh_opens[k];
+    }
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &d)) {
         if (HDMI_AUDIO_DRIVES(d.vendor_id, d.device_id)) {
             hh_pci = d;
@@ -1956,7 +2453,7 @@ static void put_eld(struct hh_text *t, const struct hh_pin *p)
     put_s(t, "\nsad_count\t\t");
     put_d(t, e->sad_count);
     put_s(t, "\n");
-    for (i = 0; i < e->sad_count && i < ELD_MAX_SAD; i++) {
+    for (i = 0; i < hh_sads(e); i++) {
         put_sad(t, i, &e->sad[i]);
     }
 }
@@ -2080,7 +2577,7 @@ static void hh_eld_sad(struct hh_eld_info *e, int n, const char *name, int v)
         e->sad[n].rates = v;
     } else if (hh_streq(name, "_bits")) {
         e->sad[n].bits = v;
-    } else if (hh_streq(name, "_byte2")) {
+    } else if (hh_streq(name, "_max_bitrate")) {
         e->sad[n].max_bitrate = v;
     } else if (hh_streq(name, "_profile")) {
         e->sad[n].profile = v;

@@ -100,7 +100,7 @@ static int comp_uint(struct comp c)
     return v;
 }
 
-/** Copy the component `c` into `vp->name`, NUL-terminated and cut to 63
+/** Copy the component `c` into `vp->name`, NUL-terminated and cut to 268
  * bytes. */
 static void synth_copy_name(struct vpath *vp, struct comp c)
 {
@@ -122,12 +122,12 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
 #define CPU_ROW(n)    {"cpu/" #n, 0xF01u + (n), 0, SYNTH_ROW_CPU},
 
 /* The directories of /dev (synthfs.h). The inodes of those of /dev itself
- * follow /dev/log's, 4, below devfs's nodes from 16; those of /dev/cpu are
- * from 0xF00, above devfs's last and below the slaves of /dev/pts, from
- * 0x1000. One row for each of the NR_CPUS processors. /dev/net, which holds
- * the tap device, and /dev/virtio-ports, which holds the names of a virtio
- * console's ports, follow, so that the rows before them keep their
- * numbers. */
+ * follow /dev/log's, 4, below devfs's table from 16; those of /dev/cpu are
+ * from 0xF00, above the table's and the disk nodes' last and below the
+ * slaves of /dev/pts, from 0x1000 (devfs.h has the whole layout). One row
+ * for each of the NR_CPUS processors. /dev/net, which holds the tap device,
+ * and /dev/virtio-ports, which holds the names of a virtio console's ports,
+ * follow, so that the rows before them keep their numbers. */
 static const struct synth_dev_dir synth_dev_dirs[] = {
     {"input", 5u, 1, -1},
     {"dri", 6u, 0, -1},

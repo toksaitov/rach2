@@ -550,12 +550,6 @@ static uint32_t tree_seq;
 /* The lock over the sleeping locks' records, which sleeplock.c defines. */
 static struct spinlock records_lock = SPINLOCK_INIT;
 
-/* The table of the places killed takers left, which sleeplock.c defines;
- * no row leaves one. */
-static struct sleep_left left[SLEEP_LEFT_MAX];
-static volatile unsigned int left_count;
-static struct spinlock left_lock = SPINLOCK_INIT;
-
 /* The protection of /proc/sys/fs that a final link meets, at its default,
  * and the debugfs type, which no row opens. */
 int vfs_protected_symlinks = 1;

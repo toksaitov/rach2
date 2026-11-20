@@ -962,18 +962,24 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
 /**
  * Order a block of the volume after its write at the cache: the caller's
  * operation's later changes of inode tables and directories reach the
- * device only after block `blk` as it stands now (`bcache_order_after`).
- * The operation does not wait. When the cache keeps no more orders for the
- * caller, or has no memory for one, the block is written now, with what it
- * waits for before it and without the disk's flush
- * (`bcache_sync_block_ordered`), which gives the same order. 0, or the
- * write's -errno, with the block still dirty.
+ * device only after block `blk` as it stands now (`bcache_order_after`),
+ * and on a disk with a volatile cache the medium too. The operation does
+ * not wait. When the cache keeps no more orders for the caller, or has no
+ * memory for one, the block is written now, with what it waits for before
+ * it (`bcache_sync_block_ordered`), and the disk's cache flushed, since the
+ * later changes then keep no wait that would flush before them; that gives
+ * the same order. 0, or the write's -errno, with the block still dirty, or
+ * the flush's.
  */
 static int order_after(struct ext2_mount *em, uint64_t blk)
 {
     int rc = bcache_order_after(em->dev, blk);
 
-    return rc == 0 ? 0 : bcache_sync_block_ordered(em->dev, blk);
+    if (rc == 0) {
+        return 0;
+    }
+    rc = bcache_sync_block_ordered(em->dev, blk);
+    return rc != 0 ? rc : bcache_flush(em->dev);
 }
 
 /**
@@ -1019,6 +1025,34 @@ static int dir_commit(struct ext2_mount *em, uint64_t off, uint32_t len, int how
         rc = how == DIR_NOW ? bcache_sync_block_ordered(em->dev, blk) : order_after(em, blk);
     }
     return rc;
+}
+
+/**
+ * Keep the change of bytes [off, off + len) of the volume, an entry just
+ * written that names `n`, as `how` says (`dir_commit`), and on a mount that
+ * writes back list its block among those `n`'s next `fsync` writes
+ * (`ext2_node_share`), so that the `fsync` puts the name on the device, as
+ * Linux's ext2 does before the name's call returns (`ext2_handle_dirsync`
+ * from `ext2_add_link`, fs/ext2/dir.c:440-447 and 557 in Linux 6.12.115).
+ * The entry waits in the cache for `n`'s table block, and the `fsync`
+ * writes the blocks that wait for it (`bcache_sync_waiting`), but a table
+ * block written before the change, by the flusher or by an order the cache
+ * had no room for, leaves the entry no wait to be found by; the list finds
+ * it either way, and a list that overflows makes the `fsync` write the
+ * whole device. 0, or as `dir_commit`.
+ */
+static int name_commit(struct ext2_mount *em, struct ext2_node *n, uint64_t off, uint32_t len,
+                       int how)
+{
+    uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
+    uint64_t end = (off + len - 1) >> BCACHE_BLOCK_SHIFT;
+
+    if (!ext2_em_strict(em)) {
+        for (; blk <= end; blk++) {
+            ext2_node_share(em, n, (uint32_t)blk);
+        }
+    }
+    return dir_commit(em, off, len, how);
 }
 
 /**
@@ -1167,7 +1201,7 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
 }
 
 /**
- * Add `name` naming `ino` of file type `ftype` to directory `d` in a new
+ * Add `name` naming node `n` of file type `ftype` to directory `d` in a new
  * block at its end, for `dir_add`, which found no room:
  * the block allocated and written with one empty entry spanning it
  * (`shared_block_new`), chained with `i_blocks` and covered by the size in one
@@ -1192,8 +1226,8 @@ static int dir_settle(struct ext2_mount *em, struct ext2_node *d)
  * -ENOSPC, decided before any block is taken for the block and the pointer
  * blocks its index can need, or -errno.
  */
-static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t ino,
-                    uint32_t ftype, int how)
+static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name,
+                    struct ext2_node *n, uint32_t ftype, int how)
 {
     uint32_t name_len = (uint32_t)k_strlen(name);
     uint32_t index = (uint32_t)(d->size >> em->block_shift);
@@ -1230,16 +1264,16 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
         return rc;
     }
     d->add_from = index << em->block_shift;
-    rc = dirent_write(em, off, ino, em->block_size, name, name_len, ftype);
-    return rc == 0 ? dir_commit(em, off, dirent_len(name_len), how) : rc;
+    rc = dirent_write(em, off, n->ino, em->block_size, name, name_len, ftype);
+    return rc == 0 ? name_commit(em, n, off, dirent_len(name_len), how) : rc;
 }
 
 /**
- * Add `name` naming `ino`, of file type `ftype`, to directory `d`: in the
+ * Add `name` naming node `n`, of file type `ftype`, to directory `d`: in the
  * first empty record with room, whole, or the first entry with room behind
  * its name, split; else in a new block (`dir_grow`). The entry itself is
  * the last write, and on a mount that writes back is kept as `how` says
- * (`dir_commit`). 0,
+ * and listed for `n`'s `fsync` (`name_commit`). 0,
  * -ENOENT for a removed directory, -ENAMETOOLONG, -EFBIG for a directory
  * that would pass 4 GiB less a block, -ENOSPC, decided before any block is
  * taken for the block and the pointer blocks its index can need, or -errno.
@@ -1249,8 +1283,8 @@ static int dir_grow(struct ext2_mount *em, struct ext2_node *d, const char *name
  * whole for each name added to it; a block before that one still takes a
  * name before the directory grows.
  */
-static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t ino,
-                   uint32_t ftype, int how)
+static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
+                   struct ext2_node *n, uint32_t ftype, int how)
 {
     uint32_t name_len = (uint32_t)k_strlen(name);
     uint32_t need = dirent_len(name_len);
@@ -1304,16 +1338,16 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         }
         d->add_from = here & ~(em->block_size - 1u);
         if (used == 0) {
-            rc = dirent_write(em, off, ino, sc.rec_len, name, name_len, ftype);
+            rc = dirent_write(em, off, n->ino, sc.rec_len, name, name_len, ftype);
         } else {
-            used = dirent_encode(entry, ino, room, name, name_len,
+            used = dirent_encode(entry, n->ino, room, name, name_len,
                                  (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
             rc = dirent_split(em, off, &sc, entry, used);
         }
-        return rc == 0 ? dir_commit(em, off, sc.rec_len, how) : rc;
+        return rc == 0 ? name_commit(em, n, off, sc.rec_len, how) : rc;
     }
     window_close(&w);
-    return dir_grow(em, d, name, ino, ftype, how);
+    return dir_grow(em, d, name, n, ftype, how);
 }
 
 /** Remove the entry `sc` at byte `at` of `d`, whose predecessor in its block
@@ -1745,7 +1779,7 @@ int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mod
     sleep_lock_subclass(0);
     rc = inode_commit(em, n);
     if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, 1, DIR_BACK);
+        rc = dir_add(em, d, name, n, 1, DIR_BACK);
     }
     bcache_order_end();
     if (rc != 0) {
@@ -1871,7 +1905,7 @@ int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         rc = inode_commit(em, n);
     }
     if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode), DIR_BACK);
+        rc = dir_add(em, d, name, n, ext2_ftype_of(n->mode), DIR_BACK);
     }
     bcache_order_end();
     if (rc != 0) {
@@ -2023,7 +2057,7 @@ int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
             rc = inode_commit(em, n);
         }
         if (rc == 0) {
-            rc = dir_add(em, d, name, n->ino, 2, DIR_BACK);
+            rc = dir_add(em, d, name, n, 2, DIR_BACK);
         }
         if (rc != 0) {
             ext2_node_nlink_set(d, d->nlink - 1);
@@ -2137,7 +2171,7 @@ static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name
         n->unlinked = n->nlink == 0;
         return rc;
     }
-    rc = dir_add(em, d, name, n->ino, ext2_ftype_of(n->mode), DIR_BACK);
+    rc = dir_add(em, d, name, n, ext2_ftype_of(n->mode), DIR_BACK);
     bcache_order_end();
     if (rc != 0) {
         ext2_node_nlink_set(n, n->nlink - 1);
@@ -2266,7 +2300,7 @@ int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char 
         rc = inode_commit(em, n);
     }
     if (rc == 0) {
-        rc = dir_add(em, d, name, n->ino, 7, DIR_BACK);
+        rc = dir_add(em, d, name, n, 7, DIR_BACK);
     }
     bcache_order_end();
     if (rc != 0) {
@@ -2375,7 +2409,7 @@ static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
         dir_lose_parent(em, nd, 1);
         (void)child_unlinked(em, victim);
     }
-    rc = dir_add(em, nd, r->newname, n->ino, 2, DIR_ORDER);
+    rc = dir_add(em, nd, r->newname, n, 2, DIR_ORDER);
     if (rc != 0) {
         return rc;
     }
@@ -2469,7 +2503,7 @@ static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
         }
         child_drop_link(em, victim);
     } else {
-        rc = dir_add(em, nd, r->newname, n->ino, ext2_ftype_of(n->mode), DIR_ORDER);
+        rc = dir_add(em, nd, r->newname, n, ext2_ftype_of(n->mode), DIR_ORDER);
         if (rc != 0) {
             ext2_node_nlink_set(n, n->nlink - 1);
             return rc;

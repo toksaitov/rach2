@@ -191,6 +191,8 @@ struct evdev {
     struct evdev_slot *slots;
     struct evdev_slot small_slots[MT_INLINE];
     evdev_handler_t handler;
+    evdev_output_t output; /* the driver's hook for its LEDs, or NULL */
+    void *output_ctx;
     struct evdev_keymap keymap; /* EVIOCGKEYCODE's; `get` NULL for none */
     int64_t stamp_sec[CLKS];    /* the packet's time on each clock */
     int32_t stamp_nsec[CLKS];
@@ -541,6 +543,20 @@ int evdev_mt_get_slot_by_key(struct evdev *dev, int32_t key)
     return free_slot;
 }
 
+int evdev_mt_slot_active(struct evdev *dev, int slot)
+{
+    uint32_t flags;
+    int active;
+
+    if (!dev || slot < 0 || slot >= dev->num_slots) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    active = dev->slots[slot].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return active;
+}
+
 void evdev_mt_end_frame(struct evdev *dev)
 {
     uint32_t flags = spin_lock_irqsave(&evdev_lock);
@@ -791,6 +807,18 @@ void evdev_set_handler(struct evdev *dev, evdev_handler_t fn)
     }
 }
 
+void evdev_set_output(struct evdev *dev, evdev_output_t fn, void *ctx)
+{
+    uint32_t flags;
+
+    if (dev) {
+        flags = spin_lock_irqsave(&evdev_lock);
+        dev->output = fn;
+        dev->output_ctx = ctx;
+        spin_unlock_irqrestore(&evdev_lock, flags);
+    }
+}
+
 /** Release the record under the evdev lock and return its heap slots. */
 static struct evdev_slot *release_device(struct evdev *dev)
 {
@@ -813,6 +841,8 @@ void evdev_unregister(struct evdev *dev)
     flags = spin_lock_irqsave(&evdev_lock);
     dev->gone = 1;
     dev->grab = NULL;
+    dev->output = NULL;
+    dev->output_ctx = NULL;
     if (!dev->clients) {
         slots = release_device(dev);
     }
@@ -1227,6 +1257,7 @@ static void report_changes(struct evdev *dev, uint16_t type, int *old, const int
 void evdev_report_leds(struct evdev *dev, unsigned int mask)
 {
     int old[3], now[3], i;
+    unsigned int changed;
     uint32_t flags;
 
     if (!dev || !(dev->flags & EVDEV_KEYBOARD)) {
@@ -1238,7 +1269,13 @@ void evdev_report_leds(struct evdev *dev, unsigned int mask)
     }
     report_changes(dev, EV_LED, old, now, 3);
     flags = spin_lock_irqsave(&evdev_lock);
+    changed = (dev->leds ^ mask) & 7u;
     dev->leds = (dev->leds & ~7u) | (mask & 7u);
+    for (i = 0; i < 3; i++) {
+        if (dev->output && ((changed >> i) & 1u)) {
+            dev->output(dev->output_ctx, EV_LED, (uint16_t)i, (int32_t)((mask >> i) & 1u));
+        }
+    }
     spin_unlock_irqrestore(&evdev_lock, flags);
 }
 
@@ -1797,6 +1834,9 @@ static void led_written(struct evdev *dev, uint16_t code, int32_t value)
     changed = (dev->ledbits & bit) && ((dev->leds & bit) != 0) != (value != 0);
     if (changed) {
         dev->leds ^= bit;
+        if (dev->output) {
+            dev->output(dev->output_ctx, EV_LED, code, value != 0);
+        }
     }
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (changed) {

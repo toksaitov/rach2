@@ -4,8 +4,9 @@
  * packets, the input core's filters, an overflowed queue, revoke, the
  * clocks of EVIOCSCLOCKID against clock_gettime, the event masks, the
  * absolute axes, the 16-byte records of an i386 reader, the records a
- * program writes, and the keys of devices that are no keyboards that the
- * console takes. evdev64_hosttest.c runs the same rows with x86-64's.
+ * program writes, the keys of devices that are no keyboards that the
+ * console takes, and a driver's output hook, told of each LED that changes
+ * under a grab too. evdev64_hosttest.c runs the same rows with x86-64's.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -972,6 +973,70 @@ static void led_rows(void)
     evdev_unregister(kbd);
 }
 
+/* What the output hook of `output_rows` was told: the calls, the last
+ * LED and value, and the context it was given. */
+static int n_output, output_code, output_value;
+static void *output_ctx_seen;
+
+/** The output hook of `output_rows`, called with the evdev lock held. */
+static void output_hook(void *ctx, uint16_t type, uint16_t code, int32_t value)
+{
+    CHECK("the hook runs with the evdev lock held", evdev_lock.locked != 0);
+    CHECK("the hook hears of LEDs alone", type == EV_LED);
+    n_output++;
+    output_code = code;
+    output_value = value;
+    output_ctx_seen = ctx;
+}
+
+/** A driver's output hook hears of each LED of its device that changes,
+ * from the console's locks and from a program's write, while an open holds
+ * the grab as well, as Linux passes EV_LED to the device's `event`, and of
+ * nothing once the device is unregistered. */
+static void output_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES];
+    struct input_event ev[2];
+    struct opened a;
+    struct evdev *kbd;
+    int ctx;
+
+    k_memset(keys, 0, sizeof(keys));
+    keys[KEY_A >> 3] |= (uint8_t)(1u << (KEY_A & 7));
+    kbd = evdev_register("Keyboard", EVDEV_BUS_HOST, 1, 5, keys);
+    evdev_describe(kbd, "virtio0/input0", EVDEV_KEYBOARD);
+    evdev_set_capability(kbd, EV_LED, LED_MAIL);
+    evdev_set_output(kbd, output_hook, &ctx);
+    n_output = 0;
+    evdev_report_leds(kbd, 1u << LED_CAPSL);
+    CHECK("Caps Lock lit by the console is told the driver",
+          n_output == 1 && output_code == LED_CAPSL && output_value == 1 &&
+              output_ctx_seen == &ctx);
+    evdev_report_leds(kbd, 1u << LED_CAPSL);
+    CHECK("the same LEDs again are not", n_output == 1);
+    open_dev(&a, 0);
+    evdev_ioctl(&a.e, EVIOCGRAB, 1);
+    evdev_report_leds(kbd, 1u << LED_NUML);
+    CHECK("while an open holds the grab, Num lit and Caps out are told",
+          n_output == 3 && output_code == LED_CAPSL && output_value == 0);
+    event(&ev[0], EV_LED, LED_MAIL, 5);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("a program's Mail LED is told, its value 1",
+          n_output == 4 && output_code == LED_MAIL && output_value == 1);
+    put(&a, ev, 2);
+    CHECK("and not when it was lit already", n_output == 4);
+    evdev_ioctl(&a.e, EVIOCGRAB, 0);
+    evdev_set_output(kbd, NULL, NULL);
+    evdev_report_leds(kbd, 0);
+    CHECK("a hook taken away hears nothing", n_output == 4);
+    evdev_set_output(kbd, output_hook, &ctx);
+    evdev_unregister(kbd);
+    evdev_report_leds(kbd, 1u << LED_SCROLLL);
+    CHECK("nor one of a device unregistered", n_output == 4);
+    evdev_close(&a.e);
+}
+
 /* A model keymap of four scan codes, 0x10 to 0x13. */
 static uint16_t model_map[4] = {KEY_A, KEY_KP1, KEY_A, 0};
 
@@ -1256,6 +1321,7 @@ int main(void)
     write_rows();
     write_keyboard_rows();
     led_rows();
+    output_rows();
     keycode_rows();
     write_pointer_rows();
     console_key_rows();

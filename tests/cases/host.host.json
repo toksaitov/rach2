@@ -1036,6 +1036,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "mixercmd",
+          "checks": "tests/host/mixercmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "mm",
           "checks": "tests/host/mm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1703,6 +1708,11 @@
         {
           "assertion_id": "virtio_console",
           "checks": "tests/host/virtio_console_hosttest.c runs the virtio console driver with the serial console's line and the virtio core against a model of QEMU's virtio-serial device, with and without VIRTIO_F_EVENT_IDX: the handshake of the control queues, the console on hvc0 and on vport0p1, the console= words, output that loses no byte to a device that takes late or a host that stops reading, input held back by a full ring, a port and a device removed and bound again, the emergency write of a panic, and each allocation failing in turn, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "virtio_input",
+          "checks": "tests/host/virtio_input_hosttest.c runs the virtio input driver against a model of the configuration of QEMU's virtio keyboard, mouse and tablet: a keyboard and a mouse with no absolute axis bound, the keyboard's keys given to the input layer and its lock LEDs told the device on the status queue, the mouse's packets given to the mouse queue but under a grab, the tablet's axes, a device of no capability bound, and each removal leaving nothing allocated, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {

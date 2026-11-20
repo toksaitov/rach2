@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -74,11 +74,12 @@ and a write while the kernel runs no ACPI interpreter is
 Linux's ALSA files for the sound cards: card 0 the analog HD Audio
 controller's, while its driver runs, and the next the card of the Intel
 display's HDMI codec, which
-.Pa /dev/dsp1
-plays through, card 0 when there is no analog card; with both, card 1 is
-the one
-.Pa /dev/dsp1
-plays, as Linux's OSS emulation ties them.
+.Pa /dev/dsp1 ,
+.Pa /dev/adsp1
+and
+.Pa /dev/dsp2
+play through, card 0 when there is no analog card; with both, card 1 is
+the one they play, as Linux's OSS emulation ties them.
 .Pa cards
 lists each as Linux does, such as
 .Ql " 0 [PCH            ]: HDA-Intel - HDA Intel PCH" ,
@@ -128,13 +129,12 @@ and
 .Ql _channels ,
 .Ql _rates ,
 .Ql _bits ,
-.Ql _byte2
+.Ql _max_bitrate
 and
 .Ql _profile ;
 the monitor's name, IDs and versions are kept.
 What was written changes what the file reads and what the next open of
-.Pa /dev/dsp1
-allows, until the display sends the monitor's ELD again.
+the monitor's device allows, until the display sends the monitor's ELD again.
 A write past 16 KiB is
 .Er EIO .
 The Sound Blaster 16 is not listed.

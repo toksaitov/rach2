@@ -9,6 +9,7 @@
 #include "devfs.h"
 #include "procfs.h"
 #include "synthfs.h"
+#include "devtree.h"
 
 #include "../block/loop.h"
 #include "fd.h"
@@ -545,30 +546,29 @@ static int disk_node_count;
 #define DISK_NODES_CAP ((int)(sizeof(disk_nodes) / sizeof(disk_nodes[0])))
 
 /*
- * A slot of the registry of nodes made at run time (devfs.h). The slot
- * keeps its own copy of the node's name and numbers, since a descriptor
- * open on the node points at the slot's entry and outlives the
- * registration; `node` is the registrant's record while it is registered
- * and NULL after. A slot once used is taken again first by a node of the
- * same name, then only when every slot has been used.
+ * A slot of the registry of nodes made at run time (devfs.h), from the
+ * heap. The slot keeps its own copy of the node's name and numbers, since
+ * a descriptor open on the node points at the slot's entry and outlives
+ * the registration, so a slot is never freed; `node` is the registrant's
+ * record while it is registered and NULL after. The slots form one list in
+ * the order they were made, which is their index's; a new one is linked at
+ * the tail only once it is filled, so a walk of the list needs no lock.
  */
 struct reg_slot {
     struct devfs_entry entry; /* first, so an entry pointer is the slot */
     char name[DEVFS_NODE_NAME_MAX];
     struct devfs_node *node;
+    struct reg_slot *next; /* the slot made after this one, or NULL */
+    int index;             /* the slot's place in the list, from 0 */
 };
 
-static struct reg_slot reg_slots[DEVFS_NODES_MAX];
-static int reg_slot_count; /* slots ever used, from the first */
-
-/** The registry's slot `dev` is, or NULL for an entry of the table or a
- * disk node. A slot's operations are its driver's, so its address says. */
-static const struct reg_slot *reg_slot_of(const struct devfs_entry *dev)
-{
-    uintptr_t off = (uintptr_t)dev - (uintptr_t)reg_slots;
-
-    return off < sizeof(reg_slots) ? (const struct reg_slot *)dev : 0;
-}
+/* A lookup carries every name a slot may hold. */
+typedef char
+    vpath_holds_node_name[sizeof(((struct vpath *)0)->name) == DEVFS_NODE_NAME_MAX ? 1 : -1];
+static struct reg_slot *reg_head;              /* the first slot made, or NULL */
+static struct reg_slot **reg_tail = &reg_head; /* where the next one is linked */
+static int reg_slot_count;                     /* slots made */
+static int reg_slot_free;                      /* slots made whose node is gone */
 
 /*
  * The devices root gave an owner, group or mode (`devfs_setattr`), as udev
@@ -2067,6 +2067,16 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
+/** The registry's slot `dev` is, or NULL for an entry of the table or a
+ * disk node. Every entry is one of the three, and a slot's operations are
+ * its driver's, so its address says. */
+static const struct reg_slot *reg_slot_of(const struct devfs_entry *dev)
+{
+    uintptr_t off = (uintptr_t)dev - (uintptr_t)dev_table;
+
+    return off < sizeof(dev_table) || disk_node_of(dev) ? 0 : (const struct reg_slot *)dev;
+}
+
 /** The loop device an entry names, or -1 for an entry that is not one. */
 static int devfs_loop_index(const struct devfs_entry *dev)
 {
@@ -2120,10 +2130,16 @@ static uint32_t devfs_type_bits(const struct devfs_entry *dev)
 }
 
 /* Stable inode namespace for /dev: the directory itself, then one per
- * device. */
-#define DEVFS_INO_DIR  2u
-#define DEVFS_INO_BASE 16u
-#define DEVFS_INO(idx) (DEVFS_INO_BASE + (uint32_t)(idx))
+ * entry of the table and disk node, then the registry's slots apart from
+ * them (devfs.h). */
+#define DEVFS_INO_DIR   2u
+#define DEVFS_INO_BASE  16u
+#define DEVFS_INO(idx)  (DEVFS_INO_BASE + (uint32_t)(idx))
+/* The most slots the registry makes: their inodes end below devtree's. */
+#define DEVFS_SLOTS_MAX ((int)(DEVTREE_INO_BASE - DEVFS_INO_SLOT_BASE))
+
+/* The table's and the disk nodes' inodes end below /dev/cpu's, 0xF00. */
+typedef char devfs_ino_fixed_fits[DEVFS_INO(DEVFS_NDEV + DISK_NODES_CAP) <= 0xF00u ? 1 : -1];
 
 /** Whether the strings `a` and `b` are equal. */
 static int name_eq(const char *a, const char *b)
@@ -2256,29 +2272,31 @@ void devfs_window_alias(const struct block_device *view, const struct block_devi
     }
 }
 
-/** The index `stat` and the listing agree on: the table's entries first,
- * then the disk nodes in the order the disks were registered, then the
- * registry's slots after room for every disk node, so that a slot's
- * inode does not move as disks come. */
-static int entry_index(const struct devfs_entry *dev)
+/** The inode `stat` and the listing agree on: the table's entries first,
+ * then the disk nodes in the order the disks were registered, and the
+ * registry's slots from DEVFS_INO_SLOT_BASE, apart from /dev's other
+ * inodes however many slots there are. */
+static uint32_t entry_ino(const struct devfs_entry *dev)
 {
     const struct disk_node *node = disk_node_of(dev);
     const struct reg_slot *slot = reg_slot_of(dev);
 
     if (node) {
-        return DEVFS_NDEV + (int)(node - disk_nodes);
+        return DEVFS_INO(DEVFS_NDEV + (int)(node - disk_nodes));
     }
     if (slot) {
-        return DEVFS_NDEV + DISK_NODES_CAP + (int)(slot - reg_slots);
+        return DEVFS_INO_SLOT_BASE + (uint32_t)slot->index;
     }
-    return (int)(dev - dev_table);
+    return DEVFS_INO(dev - dev_table);
 }
 
 /** The device named `name` present now, a table entry or a disk node, or
  * NULL. */
 static const struct devfs_entry *devfs_find(const char *name)
 {
+    const struct reg_slot *slot;
     int i;
+
     for (i = 0; i < DEVFS_NDEV; i++) {
         if (name_eq(dev_table[i].name, name)) {
             return devfs_entry_present(&dev_table[i]) ? &dev_table[i] : NULL;
@@ -2289,9 +2307,9 @@ static const struct devfs_entry *devfs_find(const char *name)
             return disk_node_present(i) ? &disk_nodes[i].entry : NULL;
         }
     }
-    for (i = 0; i < reg_slot_count; i++) {
-        if (devfs_entry_present(&reg_slots[i].entry) && name_eq(reg_slots[i].name, name)) {
-            return &reg_slots[i].entry;
+    for (slot = reg_head; slot; slot = slot->next) {
+        if (devfs_entry_present(&slot->entry) && name_eq(slot->name, name)) {
+            return &slot->entry;
         }
     }
     return NULL;
@@ -2711,6 +2729,15 @@ int devfs_open(const char *name, int flags)
     return fd;
 }
 
+/** The device number of `major` and `minor` as Linux's new_encode_dev
+ * makes it, which stat gives and `open_device` reads: the minor's low
+ * byte, the major's 12 bits above it and the rest of the minor above
+ * those, so that a minor past 255 keeps its own number. */
+static uint32_t devno(uint32_t major, uint32_t minor)
+{
+    return (minor & 0xFFu) | (major << 8) | ((minor & 0xFFF00u) << 12);
+}
+
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
 {
     const struct devfs_entry *dev;
@@ -2736,38 +2763,39 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
         *mode = devfs_type_bits(dev) | dev_mode(dev);
     }
     if (rdev) {
-        *rdev = ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
+        *rdev = devno(dev->major, dev->minor);
     }
     if (ino) {
-        *ino = DEVFS_INO(entry_index(dev));
+        *ino = entry_ino(dev);
     }
     return 0;
 }
 
 const char *devfs_name_of(int block, uint32_t rdev)
 {
+    const struct reg_slot *slot;
     int i;
 
     for (i = 0; i < DEVFS_NDEV; i++) {
         const struct devfs_entry *dev = &dev_table[i];
 
-        if (devfs_entry_present(dev) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+        if (devfs_entry_present(dev) && devno(dev->major, dev->minor) == rdev &&
             (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
             return dev->name;
         }
     }
-    for (i = 0; i < reg_slot_count && !block; i++) {
-        const struct devfs_entry *dev = &reg_slots[i].entry;
+    for (slot = block ? NULL : reg_head; slot; slot = slot->next) {
+        const struct devfs_entry *dev = &slot->entry;
 
-        if (devfs_entry_present(dev) && !reg_slots[i].node->alias &&
-            (((uint32_t)dev->major << 8) | dev->minor) == rdev) {
-            return reg_slots[i].name;
+        if (devfs_entry_present(dev) && !slot->node->alias &&
+            devno(dev->major, dev->minor) == rdev) {
+            return slot->name;
         }
     }
     for (i = 0; i < disk_node_count; i++) {
         const struct devfs_entry *dev = &disk_nodes[i].entry;
 
-        if (disk_node_present(i) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+        if (disk_node_present(i) && devno(dev->major, dev->minor) == rdev &&
             (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
             return disk_nodes[i].name;
         }
@@ -2783,7 +2811,7 @@ uint32_t devfs_rdev(struct fd_entry *e)
         return 0;
     }
     dev = e->dev;
-    return ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
+    return devno(dev->major, dev->minor);
 }
 
 uint32_t devfs_fd_ino(struct fd_entry *e)
@@ -2794,7 +2822,7 @@ uint32_t devfs_fd_ino(struct fd_entry *e)
         return 0;
     }
     dev = e->dev;
-    return DEVFS_INO(entry_index(dev));
+    return entry_ino(dev);
 }
 
 int devfs_lseek_zero(struct fd_entry *e)
@@ -2835,12 +2863,11 @@ static int in_subdir(const char *name)
 static int reg_nth(int n, const char *dir, int (*in_dir)(const char *, const char *),
                    const struct reg_slot **out)
 {
-    int i;
+    const struct reg_slot *slot;
 
-    for (i = 0; i < reg_slot_count; i++) {
-        if (devfs_entry_present(&reg_slots[i].entry) && in_dir(reg_slots[i].name, dir) &&
-            n-- == 0) {
-            *out = &reg_slots[i];
+    for (slot = reg_head; slot; slot = slot->next) {
+        if (devfs_entry_present(&slot->entry) && in_dir(slot->name, dir) && n-- == 0) {
+            *out = slot;
             return 1;
         }
     }
@@ -2897,7 +2924,7 @@ int devfs_dirent(int n, const char **name, uint32_t *ino)
     }
     if (reg_nth(n, "", in_root, &slot)) {
         *name = slot->name;
-        *ino = DEVFS_INO(entry_index(&slot->entry));
+        *ino = entry_ino(&slot->entry);
         return 1;
     }
     return 0;
@@ -2922,7 +2949,7 @@ int devfs_subdir_dirent(const char *dir, int n, const char **name, uint32_t *ino
     }
     if (reg_nth(n, dir, in_named_dir, &slot)) {
         *name = slot->name + skip;
-        *ino = DEVFS_INO(entry_index(&slot->entry));
+        *ino = entry_ino(&slot->entry);
         return 1;
     }
     return 0;
@@ -2977,7 +3004,8 @@ static int reg_name_ok(const char *name)
  * `major` and `minor`. */
 static int reg_taken(const char *name, uint16_t major, uint16_t minor, int alias)
 {
-    uint32_t rdev = ((uint32_t)major << 8) | minor;
+    uint32_t rdev = devno(major, minor);
+    const struct reg_slot *slot;
     int i;
 
     for (i = 0; i < DEVFS_NDEV; i++) {
@@ -2990,18 +3018,51 @@ static int reg_taken(const char *name, uint16_t major, uint16_t minor, int alias
             return 1;
         }
     }
-    for (i = 0; i < reg_slot_count; i++) {
-        if (reg_slots[i].node && name_eq(reg_slots[i].name, name)) {
+    for (slot = reg_head; slot; slot = slot->next) {
+        if (slot->node && name_eq(slot->name, name)) {
             return 1;
         }
     }
     return !alias && devfs_name_of(0, rdev) != NULL;
 }
 
+/**
+ * The slot a node named `name` takes: a free one of that name, else, while
+ * fewer than DEVFS_SLOTS_SPARE are free, a new one, else the first free
+ * one; or NULL when none is free and the heap has no room or
+ * DEVFS_SLOTS_MAX slots are made. A new slot is
+ * linked at the list's tail, its index and mark set, before it is returned.
+ */
+static struct reg_slot *reg_slot_take(const char *name)
+{
+    struct reg_slot *slot, *spare = NULL;
+
+    for (slot = reg_head; slot; slot = slot->next) {
+        if (!slot->node && name_eq(slot->name, name)) {
+            return slot;
+        }
+        if (!slot->node && !spare) {
+            spare = slot;
+        }
+    }
+    if (spare && reg_slot_free >= DEVFS_SLOTS_SPARE) {
+        return spare;
+    }
+    slot = reg_slot_count < DEVFS_SLOTS_MAX ? kzalloc(sizeof(*slot)) : NULL;
+    if (!slot) {
+        return spare;
+    }
+    slot->entry.name = slot->name;
+    slot->index = reg_slot_count++;
+    reg_slot_free++;
+    *reg_tail = slot;
+    reg_tail = &slot->next;
+    return slot;
+}
+
 int32_t devfs_node_register(struct devfs_node *node)
 {
-    struct reg_slot *slot = NULL;
-    int i;
+    struct reg_slot *slot;
 
     if (!node->name || !reg_name_ok(node->name)) {
         return -EINVAL;
@@ -3009,21 +3070,9 @@ int32_t devfs_node_register(struct devfs_node *node)
     if (reg_taken(node->name, node->major, node->minor, node->alias)) {
         return -EEXIST;
     }
-    for (i = 0; i < reg_slot_count && !slot; i++) {
-        if (!reg_slots[i].node && name_eq(reg_slots[i].name, node->name)) {
-            slot = &reg_slots[i];
-        }
-    }
-    if (!slot && reg_slot_count < DEVFS_NODES_MAX) {
-        slot = &reg_slots[reg_slot_count++];
-    }
-    for (i = 0; i < reg_slot_count && !slot; i++) {
-        if (!reg_slots[i].node) {
-            slot = &reg_slots[i];
-        }
-    }
+    slot = reg_slot_take(node->name);
     if (!slot) {
-        return -ENOSPC;
+        return reg_slot_count < DEVFS_SLOTS_MAX ? -ENOMEM : -ENOSPC;
     }
     k_strncpy(slot->name, node->name, sizeof(slot->name) - 1);
     slot->name[sizeof(slot->name) - 1] = '\0';
@@ -3034,18 +3083,20 @@ int32_t devfs_node_register(struct devfs_node *node)
     slot->entry.mode = (uint16_t)(node->mode & 0777u);
     slot->entry.ops = node->ops;
     slot->node = node;
+    reg_slot_free--;
     owned_drop(&slot->entry);
     return 0;
 }
 
 void devfs_node_unregister(struct devfs_node *node)
 {
-    int i;
+    struct reg_slot *slot;
 
-    for (i = 0; i < reg_slot_count; i++) {
-        if (reg_slots[i].node == node) {
-            reg_slots[i].node = NULL;
-            owned_drop(&reg_slots[i].entry);
+    for (slot = reg_head; slot; slot = slot->next) {
+        if (slot->node == node) {
+            slot->node = NULL;
+            reg_slot_free++;
+            owned_drop(&slot->entry);
         }
     }
 }

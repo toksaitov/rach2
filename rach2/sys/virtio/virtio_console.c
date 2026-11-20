@@ -70,10 +70,8 @@
 /* The ports the boot line may name. */
 #define VCON_WANT_MAX 8
 
-/* The hvc numbers, Linux's MAX_NR_HVC_CONSOLES, and the minors of the
- * vport nodes, one byte of the device number. */
+/* The hvc numbers, Linux's MAX_NR_HVC_CONSOLES. */
 #define VCON_HVC_MAX 16
-#define VCON_MINORS  256
 
 /* The longest name of a port that /dev/virtio-ports takes: the rest of a
  * node's path. */
@@ -119,7 +117,7 @@ struct vcon_port {
                            * the device marked with CONSOLE_PORT */
     int hvc;              /* the N of the console port's name hvcN, given when it
                            * became a console port and kept until it goes; -1 */
-    int minor;            /* the minor of its vport node, or -1 */
+    int minor;            /* the minor of its vport node, its number, or -1 */
     int host_open;        /* the device's last PORT_OPEN */
     int guest_open;       /* a descriptor of its vport node is open */
     int sent_open;        /* the PORT_OPEN value the device was last told, -1 */
@@ -219,9 +217,34 @@ static struct vcon *vcon_early;
 
 static struct virtio_console_counters vcon_n;
 
-/* The console ports by hvc number, and the ports by vport minor. */
+/* The console ports by hvc number. */
 static struct vcon_port *vcon_hvc[VCON_HVC_MAX];
-static struct vcon_port *vcon_minor[VCON_MINORS];
+
+/* The majors of the vport nodes below Linux's second dynamic range: a
+ * device each, in the order of their numbers, as Linux's register_chrdev(0)
+ * gives each device a major of its own and each port the minor of its
+ * number. They are the majors of Linux's dynamic range, 234 to 254, from
+ * VIRTIO_CONSOLE_VPORT_MAJOR down and then from 253 down, less those other
+ * drivers here have: 254 and 240, the local block's, 242, VFIO's, and 239,
+ * i915's DP AUX. */
+static const uint16_t vcon_majors[] = {VIRTIO_CONSOLE_VPORT_MAJOR,
+                                       244,
+                                       243,
+                                       241,
+                                       238,
+                                       237,
+                                       236,
+                                       235,
+                                       234,
+                                       253,
+                                       252,
+                                       251,
+                                       250,
+                                       249,
+                                       248,
+                                       247,
+                                       246};
+#define VCON_LOW_MAJORS ((int)(sizeof(vcon_majors) / sizeof(vcon_majors[0])))
 
 /* The names of the hvc terminals, which a pair keeps for its life. */
 static const char *const vcon_hvc_names[VCON_HVC_MAX] = {
@@ -365,6 +388,20 @@ static void vcon_hvc_take(struct vcon_port *p)
     }
     klog(KLOG_WARN, "virtio_console", "port: %s: %s has no hvc terminal: hvc0 to hvc%d are taken",
          p->dev->vdev->name, p->vname, VCON_HVC_MAX - 1);
+}
+
+/** The major of the vport nodes of device `index`, `vportINDEXpM`: one of
+ * `vcon_majors`, then Linux's second dynamic range, 511 down to 384; -1 for
+ * a device past them, whose ports have no vport node. */
+static int vcon_major(int index)
+{
+    if (index < VCON_LOW_MAJORS) {
+        return vcon_majors[index];
+    }
+    if (index < VCON_LOW_MAJORS + 128) {
+        return 511 - (index - VCON_LOW_MAJORS);
+    }
+    return -1;
 }
 
 /** The number of cycles `ms` milliseconds take at most. */
@@ -1324,6 +1361,18 @@ static int vcon_readable(void *arg)
     return !vcon_live(h) || h->p->rx_n > 0 || !h->p->host_open;
 }
 
+/** Take back the pages of `p` the device has returned, as Linux's
+ * reclaim_consumed_buffers does before a port's writability is judged:
+ * those returned while its transmit queue asked for no interrupt have had
+ * no reap. Under the big lock; a reap needs no lock of the transmit side,
+ * as the queue's interrupt reaps without it. */
+static void vcon_tx_reclaim(struct vcon_port *p)
+{
+    if (p->txq) {
+        (void)virtqueue_reap(p->txq);
+    }
+}
+
 /** The wait condition of a vport's write: the host's end is open and a page
  * is free, or the port went. */
 static int vcon_writable(void *arg)
@@ -1404,6 +1453,7 @@ static int32_t vcon_vport_write(fd_entry_t *e, const char __user *buf, uint32_t 
         if (!vcon_live(h)) {
             return done ? (int32_t)done : -ENODEV;
         }
+        vcon_tx_reclaim(p);
         if (!vcon_writable(h)) {
             if (done) {
                 break;
@@ -1448,6 +1498,7 @@ static short vcon_vport_poll(fd_entry_t *e, short events, struct wait_queue **wq
     if (h->p->rx_n > 0 || !h->p->host_open) {
         ready |= POLLIN | POLLRDNORM;
     }
+    vcon_tx_reclaim(h->p);
     if (vcon_writable(h)) {
         ready |= POLLOUT | POLLWRNORM;
     }
@@ -1636,7 +1687,7 @@ static void vcon_settle_nodes(struct vcon_port *p, int live, int term)
 
     k_memset(&w, 0, sizeof(w));
     w.name = live && p->minor >= 0 ? p->vname : NULL;
-    w.major = VIRTIO_CONSOLE_VPORT_MAJOR;
+    w.major = (uint16_t)(p->minor < 0 ? 0 : vcon_major(p->dev->index));
     w.minor = (uint16_t)(p->minor < 0 ? 0 : p->minor);
     w.ops = term && !p->console ? NULL : &vcon_vport_ops;
     w.mode = w.ops ? 0600 : 0620;
@@ -1660,7 +1711,9 @@ static void vcon_settle_nodes(struct vcon_port *p, int live, int term)
  * is now (`vcon_settle_nodes`): a console port that is not the console's
  * input has an hvc terminal of its own, as Linux's init_port_console gives
  * it one, and the transmit queue asks for an interrupt while a writer may
- * wait for it. Under the big lock, in process context or the boot's wait.
+ * wait for it, the pages the device returned meanwhile taken back then, as
+ * Linux's port_fops_open reclaims them. Under the big lock, in process
+ * context or the boot's wait.
  */
 static void vcon_settle(struct vcon_port *p)
 {
@@ -1679,7 +1732,10 @@ static void vcon_settle(struct vcon_port *p)
     vcon_settle_nodes(p, live, term);
     irq = live && (p->tty != 0 || p->guest_open);
     if (p->txq && irq != p->tx_irq) {
-        (void)virtqueue_irq(p->txq, irq);
+        /* Pages returned while the queue was quiet raise no interrupt. */
+        if (virtqueue_irq(p->txq, irq)) {
+            (void)virtqueue_reap(p->txq);
+        }
         p->tx_irq = irq;
     }
 }
@@ -1772,13 +1828,12 @@ static int vcon_port_bufs(struct vcon_port *p)
     return 0;
 }
 
-/** The port the device announced, as Linux's add_port: its pages made, a
- * minor taken for its vport node, and the device answered with PORT_READY,
- * or PORT_READY 0 when the pages cannot be had. */
+/** The port the device announced, as Linux's add_port: its pages made, its
+ * vport node given its device's major and the minor of its number, and the
+ * device answered with PORT_READY, or PORT_READY 0 when the pages cannot be
+ * had. */
 static void vcon_port_add(struct vcon_port *p)
 {
-    int m;
-
     if (vcon_port_bufs(p) != 0) {
         klog(KLOG_WARN, "virtio_console", "port: %s: port %u refused: no memory for its buffers",
              p->dev->vdev->name, (unsigned)p->id);
@@ -1787,16 +1842,11 @@ static void vcon_port_add(struct vcon_port *p)
     }
     p->present = 1;
     p->sent_open = -1;
-    if (p->minor < 0) {
-        for (m = 0; m < VCON_MINORS && vcon_minor[m]; m++) {
-        }
-        if (m < VCON_MINORS) {
-            vcon_minor[m] = p;
-            p->minor = m;
-        } else {
-            klog(KLOG_WARN, "virtio_console", "port: %s: %s has no node: %d are taken",
-                 p->dev->vdev->name, p->vname, VCON_MINORS);
-        }
+    if (vcon_major(p->dev->index) >= 0) {
+        p->minor = (int)p->id;
+    } else {
+        klog(KLOG_WARN, "virtio_console", "port: %s: %s has no node: no major is left",
+             p->dev->vdev->name, p->vname);
     }
     klog(KLOG_INFO, "virtio_console", "port: %s: port %u added", p->dev->vdev->name,
          (unsigned)p->id);
@@ -1814,9 +1864,6 @@ static void vcon_port_remove(struct vcon_port *p, const char *why)
     vcon_settle(p);
     if (p->hvc >= 0) {
         vcon_hvc[p->hvc] = 0;
-    }
-    if (p->minor >= 0) {
-        vcon_minor[p->minor] = 0;
     }
     p->console = p->host_open = p->guest_open = 0;
     p->hvc = p->minor = -1;
@@ -2391,18 +2438,23 @@ static void vcon_early_start(struct vcon *d)
 }
 
 /** Start a device of one port: port 0, a console port with the size of the
- * configuration, is there from the start. */
+ * configuration, is there from the start. It takes an hvc number only once
+ * its pages are made, as Linux's add_port fills the receive queue before
+ * init_port_console, so that a port refused for want of them, which its
+ * device's removal does not take down, leaves no entry in `vcon_hvc`. */
 static void vcon_one_port_start(struct vcon *d)
 {
     struct vcon_port *p = &d->port[0];
 
     p->console = 1;
-    vcon_hvc_take(p);
     if (d->size) {
         virtio_config_read(d->vdev, VIRTIO_CONSOLE_CFG_COLS, &p->cols, 2);
         virtio_config_read(d->vdev, VIRTIO_CONSOLE_CFG_ROWS, &p->rows, 2);
     }
     vcon_port_add(p);
+    if (p->present) {
+        vcon_hvc_take(p);
+    }
     vcon_ports_try();
     vcon_settle(p);
 }

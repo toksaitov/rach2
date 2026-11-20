@@ -188,6 +188,161 @@ static void async_fsync_row(void)
     }
 }
 
+/* The table block whose first write ends `async_flusher`. */
+static uint64_t async_watch_table;
+
+/** Process B of `async_fsync_unordered_row`: the flusher's write-back of
+ * every dirty block, then the memory reclaim of every buffer nobody holds,
+ * at each turn, until a write-back has written `async_watch_table`. */
+static void async_flusher(void)
+{
+    uint32_t written = 0;
+
+    while (!reuse_done) {
+        (void)bcache_writeback(&dev, bcache_marks());
+        if (first_write_of(async_watch_table) >= 0) {
+            return;
+        }
+        (void)bcache_shrink(bcache_resident(), 1, &written);
+        pass_turn();
+    }
+}
+
+/**
+ * On a mount that writes back, a new file whose table block reaches the
+ * device before its entry changes, so that the entry keeps no wait for it,
+ * still keeps its name through an fsync of the file alone (`name_commit`).
+ * The cache is emptied first, and at each read the create makes a second
+ * process writes back what is dirty, as the flusher may at any sleep, and
+ * reclaims every buffer nobody holds (`async_flusher`): the reclaim drops
+ * the root's block after the create's look for the name, and at the read
+ * of that block again the write-back takes the new inode's table block,
+ * the neighbour's, between the store of the inode and the change of the
+ * entry, and the second process ends.
+ */
+static void async_fsync_unordered_row(void)
+{
+    static unsigned char data[4096];
+    uint64_t root = 0, table = 0;
+    uint32_t slot = 0, written = 0;
+    void *a = 0, *b, *h = 0;
+    int rc, at_table, at_root;
+
+    if (!fsync_mount(0)) {
+        return;
+    }
+    (void)debugfs_numbers("stat /", "(0):", &root, 1);
+    memset(data, 0x6b, sizeof(data));
+    b = make_file(mnt.root, "beside", &rc);
+    check(b && root != 0 && OPS->sync(&mnt) == 0, "a neighbour is on the medium");
+    if (!b || root == 0) {
+        return;
+    }
+    async_watch_table = node_table_lba(b, &slot) / 8;
+    (void)bcache_shrink(bcache_resident(), 1, &written);
+    wlog_reset();
+    reuse_done = 0;
+    read_pause = reuse_turn;
+    start_turns(async_flusher);
+    a = make_file(mnt.root, "kept", &rc);
+    read_pause = 0;
+    reuse_done = 1;
+    finish_turns();
+    if (a) {
+        table = node_table_lba(a, &slot) / 8;
+    }
+    at_table = a ? first_write_of(table) : -1;
+    at_root = first_write_of(root);
+    if (!a || at_table < 0 || at_root >= 0) {
+        printf("  rc %d: the table block written at %d, the root's block at %d\n", rc, at_table,
+               at_root);
+    }
+    check(a && table == async_watch_table && at_table >= 0 && at_root < 0,
+          "a create with write-back at its reads writes its table block and not the entry");
+    check(a && OPS->open(&mnt, a, 2, &h) == 0 &&
+              OPS->write(&mnt, h, data, sizeof(data), 0) == (int32_t)sizeof(data),
+          "and the new file takes a block in the cache");
+    if (!a || !h) {
+        return;
+    }
+    check(OPS->fsync(&mnt, h) == 0, "an fsync of the file alone");
+    if (fsync_stop_judge(h, a, b)) {
+        check(file_is("/kept", data, sizeof(data)), "and the file keeps its name and its bytes");
+        unmount_image();
+    }
+}
+
+/* The directories `async_fsync_links_row` links its file into, one more
+ * than a round of `bcache_sync_waiting` gathers. */
+#define ASYNC_LINK_DIRS (BCACHE_WAITING + 1)
+
+/**
+ * On a mount that writes back, with room in the cache for every block, a
+ * synced file given a hard link in each of ASYNC_LINK_DIRS synced
+ * directories, with no write of the device, keeps every name through an
+ * fsync of the file alone: each directory's block waits for the file's
+ * table block, more of them than a round of `bcache_sync_waiting`, and the
+ * file's list of them overflows, so the fsync writes the whole device. A
+ * stop right after it leaves the volume clean, the link count equal to the
+ * names.
+ */
+static void async_fsync_links_row(void)
+{
+    static unsigned char data[4096];
+    char name[16];
+    void *a, *b, *d, *h = 0;
+    int i, rc, made = 0, found = 0, before;
+
+    bcache_set_limit(8192);
+    if (!fsync_mount(0)) {
+        bcache_set_limit(0);
+        return;
+    }
+    memset(data, 0x3d, sizeof(data));
+    b = make_file(mnt.root, "beside", &rc);
+    a = b ? make_file(mnt.root, "kept", &rc) : 0;
+    for (i = 0; a && i < ASYNC_LINK_DIRS; i++) {
+        snprintf(name, sizeof name, "d%d", i);
+        made += OPS->mkdir(&mnt, mnt.root, name, 0755) == 0;
+    }
+    check(a && made == ASYNC_LINK_DIRS && write_at(a, data, sizeof(data), 0) == 0 &&
+              OPS->sync(&mnt) == 0,
+          "a file and 65 directories are on the medium");
+    if (!a || made != ASYNC_LINK_DIRS) {
+        bcache_set_limit(0);
+        return;
+    }
+    made = 0;
+    before = writes_made;
+    for (i = 0; i < ASYNC_LINK_DIRS; i++) {
+        snprintf(name, sizeof name, "/d%d", i);
+        d = walk(name, &rc);
+        if (d) {
+            made += OPS->link(&mnt, d, "l", a) == 0;
+            OPS->put(&mnt, d);
+        }
+    }
+    check(made == ASYNC_LINK_DIRS && writes_made == before && OPS->open(&mnt, a, 2, &h) == 0,
+          "the file takes a link in each directory, with no write of the device");
+    if (!h) {
+        bcache_set_limit(0);
+        return;
+    }
+    check(OPS->fsync(&mnt, h) == 0, "an fsync of the file alone");
+    if (fsync_stop_judge(h, a, b)) {
+        for (i = 0; i < ASYNC_LINK_DIRS; i++) {
+            snprintf(name, sizeof name, "/d%d/l", i);
+            found += file_is(name, data, sizeof(data));
+        }
+        if (found != ASYNC_LINK_DIRS) {
+            printf("  %d of %d links found\n", found, ASYNC_LINK_DIRS);
+        }
+        check(found == ASYNC_LINK_DIRS, "and every link names the file");
+        unmount_image();
+    }
+    bcache_set_limit(0);
+}
+
 /**
  * A rename within one directory block, on a mount that writes back, adds
  * the new name, ordered after the raised count, and removes the old one,
@@ -259,12 +414,20 @@ static void async_image_row(void)
     }
 }
 
+/** The rows of an fsync that keeps new names on a mount that writes back. */
+static void async_fsync_rows(void)
+{
+    async_fsync_row();
+    async_fsync_unordered_row();
+    async_fsync_links_row();
+}
+
 /** The rows of the operations on names of a mount that writes back. */
 static void async_rows(void)
 {
     async_create_row();
     async_image_row();
-    async_fsync_row();
+    async_fsync_rows();
     async_matrix_rows();
 }
 

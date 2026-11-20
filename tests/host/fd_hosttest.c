@@ -202,12 +202,21 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return old;
 }
 
+/* What a race row does as the other sharer at the next allocation, before
+ * it; it runs once. */
+static void (*alloc_before)(void);
+
 /** Zeroed host memory, counted in `allocations`, or NULL once `fail_after`
  *  has counted down to 0. */
 void *kzalloc(size_t size)
 {
+    void (*before)(void) = alloc_before;
     void *ptr;
 
+    alloc_before = 0;
+    if (before) {
+        before();
+    }
     if (fail_after == 0) {
         return 0;
     }
@@ -1211,6 +1220,51 @@ static void lookup_races_dup2(void)
     race_teardown("the lookup and the dup2 leave nothing allocated");
 }
 
+/** The second sharer's lookup sets its hold on the race's descriptor
+ * without the lock, as `hold_set` does, its first look made. */
+static void race_late_hold(void)
+{
+    race_second->fd_holding = race_fd / 32 + 1;
+    __atomic_fetch_or(&race_second->fd_held->bits[race_fd / 32], 1u << (race_fd % 32),
+                      __ATOMIC_SEQ_CST);
+}
+
+/**
+ * A lookup whose hold lands after a dup2 by the other sharer counted the
+ * holds, while the dup2 takes its records from the heap, has found the
+ * entry open at its first look and finds the dup2's mark at its second, so
+ * it redoes the look under the lock and finds the copy. The dup2 moves only
+ * the holds it counted: it leaves the late bit for the copy and keeps the
+ * old entry for its own call, which releases it. A dup2 that moved every
+ * hold it found at a second reading would give the late hold the record it
+ * took for its own and dereference NULL for that.
+ */
+static void lookup_holds_during_dup2(void)
+{
+    fd_entry_t *e, *home, *claimed = 0;
+    fd_table_t *table = 0;
+
+    check(race_setup() == 0, "two sharers for the late hold and the dup2");
+    home = fd_table_entry(race_first->fds, race_fd);
+    alloc_before = race_late_hold;
+    race_dup2();
+    check(!alloc_before && !race_second->fd_gone,
+          "a hold set after the dup2's count moves to no kept entry");
+    e = fd_get(race_second->fds, race_fd);
+    check(e && e != home && e == fd_table_entry(race_first->fds, race_fd),
+          "the late lookup, sent to the lock by the mark, finds the copy");
+    check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == -1,
+          "the late lookup's call releases nothing at its end");
+    current_proc = race_first;
+    check(fd_holds_claim(0, &claimed) == -1 && fd_gone_claim(&table, &claimed) == race_fd &&
+              claimed == home,
+          "the dup2's call releases the old entry");
+    fd_ofd_unref(home->ofd);
+    fd_free_after(table, race_fd, home);
+    check(!race_first->fds->lock.locked, "the table's lock is free after the late hold");
+    race_teardown("the late hold and the dup2 leave nothing allocated");
+}
+
 /**
  * A growth past the second sharer's hold map, by the first sharer between
  * the second's look and its hold, replaces the map: the hold lands in the
@@ -1576,6 +1630,7 @@ int main(void)
     shared_closes();
     lookup_races_close();
     lookup_races_dup2();
+    lookup_holds_during_dup2();
     lookup_races_growth();
     shared_dup2();
     shared_dup2_open();

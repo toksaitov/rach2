@@ -59,14 +59,19 @@ static uint64_t take_locked(struct eventfd *ev)
 }
 
 /** Tell the hooks of `ev`, whose lock the caller holds, that the counter
- * rose; the counter is taken when a hook asks. Returns 1 when one did. */
-static int signal_locked(struct eventfd *ev)
+ * rose, passing over `skip` when non-NULL. The counter is taken when a
+ * hook asks. Returns 1 when one did. */
+static int signal_locked(struct eventfd *ev, const struct eventfd_hook *skip)
 {
     struct eventfd_hook *h, *next;
     int took = 0;
 
     for (h = ev->hooks; h; h = next) {
         next = h->next;
+        /* Compared as addresses: cppcheck takes h == skip, skip NULL, as a
+         * null test of h. */
+        if ((uintptr_t)h == (uintptr_t)skip)
+            continue;
         if (h->signal(h) && ev->count != 0) {
             take_locked(ev);
             took = 1;
@@ -199,7 +204,7 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     }
     ev->count += a.value;
     if (a.value != 0) {
-        took = signal_locked(ev);
+        took = signal_locked(ev, NULL);
     }
     spin_unlock_irqrestore(&ev->lock, flags);
     if (a.value != 0) {
@@ -387,7 +392,7 @@ void eventfd_put(struct eventfd *ev)
     }
 }
 
-void eventfd_signal(struct eventfd *ev)
+void eventfd_signal_except(struct eventfd *ev, const struct eventfd_hook *skip)
 {
     uint32_t flags = spin_lock_irqsave(&ev->lock);
     int took = 0;
@@ -397,9 +402,14 @@ void eventfd_signal(struct eventfd *ev)
         return;
     }
     ev->count++;
-    took = signal_locked(ev);
+    took = signal_locked(ev, skip);
     spin_unlock_irqrestore(&ev->lock, flags);
     wq_wake(&ev->wq, took ? (WQ_DATA | WQ_ROOM) : WQ_DATA);
+}
+
+void eventfd_signal(struct eventfd *ev)
+{
+    eventfd_signal_except(ev, NULL);
 }
 
 int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h)

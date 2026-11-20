@@ -53,6 +53,11 @@ typedef void (*audio_callback_t)(void *buffer, size_t size);
 /* The direction of a stream. */
 typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
 
+/* The most bytes of a stream that a driver's `device_periods` cover: 40 ms
+ * of 128 channels of 32 bits at 192 kHz, the most `/dev/dsp` takes, which
+ * the HDMI driver's DMA buffer holds, is some 3.9 MiB. */
+#define AUDIO_DEVICE_MAX (8u << 20)
+
 /*
  * A stream: one direction of the device, owned by one caller, such as an open
  * of /dev/dsp, between `stream_open` and `stream_close`.
@@ -62,9 +67,12 @@ typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
  * hardware plays or records before it tells the caller, a whole number of
  * frames; the driver may make it smaller, never larger. `periods` is the
  * length of the caller's buffer, which the driver may raise. The driver
- * sets `device_periods`, the periods its DMA buffer holds, which
- * `stream_start` fills: a caller that starts the stream with fewer queued
- * plays silence after them.
+ * sets `device_periods`, the periods of the stream its DMA buffer holds,
+ * which `stream_start` fills: a caller that starts the stream with fewer
+ * queued plays silence after them. They cover at most AUDIO_DEVICE_MAX
+ * bytes of the stream, more than 64 KiB where the driver converts a stream
+ * of many channels at a high rate to its DMA's, and a playback caller's
+ * buffer holds them and a period more.
  *
  * The buffers are two. The caller's, `periods` times `period_bytes` in the
  * stream's format, belongs to the caller; the DMA buffer the device reads or
@@ -87,7 +95,7 @@ typedef struct audio_stream {
     audio_dir_t dir;
     uint32_t rate;           /* frames per second */
     audio_format_t format;   /* any; a device grants U8, S16LE or S32LE */
-    int channels;            /* 1 or 2 */
+    int channels;            /* 1 to the driver's channels_max, or 2 */
     uint32_t period_bytes;   /* bytes of one period, a whole number of frames */
     uint32_t periods;        /* periods in the caller's buffer, at least 2 */
     uint32_t device_periods; /* periods in the driver's buffer, at least 1 */
@@ -247,6 +255,10 @@ typedef struct audio_driver {
     /* Set the generator's level, 0 to 100, where 0 silences it; with
      * `level` negative only read it. The level after, or -ENODEV. */
     int (*beep_level)(int level);
+
+    /* The most channels `stream_setup` grants, as OSS's SNDCTL_DSP_CHANNELS
+     * asks for them; 0 for 2. */
+    int channels_max;
 } audio_driver_t;
 
 /*

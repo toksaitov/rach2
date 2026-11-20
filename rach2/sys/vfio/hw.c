@@ -1,15 +1,17 @@
 /*
  * hw.c: what VFIO takes from the rest of the kernel beyond the interfaces
- * it includes: sleeps, the caller's address space and descriptors, maps of
- * firmware memory and the boot line. A host test gives its own.
+ * it includes: sleeps, the interrupt worker, the caller's address space
+ * and descriptors, maps of firmware memory and the boot line.
  */
 
 #include "vfio.h"
 
+#include "../arch/arch.h"
 #include "../cmdline.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../mm/paging.h"
 #include "../mm/pressure.h"
 #include "../proc/percpu.h"
@@ -43,6 +45,57 @@ void vfio_hw_msleep(unsigned int ms)
     while (ms-- > 0) {
         k_udelay(1000);
     }
+}
+
+static wait_queue_t irq_wait;
+static process_t *irq_worker;
+
+/** Serve unmask requests after their eventfd hooks have queued them. */
+static void vfio_irq_thread(void)
+{
+    arch_irq_enable();
+    for (;;) {
+        (void)wq_wait_event_idle(&irq_wait, vfio_irq_pending, NULL);
+        vfio_irq_work();
+        sched_service_point();
+    }
+}
+
+int vfio_hw_irq_start(void)
+{
+    process_t *p;
+    uintptr_t base;
+    uint32_t flags;
+
+    if (irq_worker != NULL) {
+        return 0;
+    }
+    flags = kirq_save();
+    base = kstack_alloc();
+    p = base != 0 ? alloc_process() : NULL;
+    if (p == NULL) {
+        if (base != 0) {
+            kstack_free(base + KERNEL_STACK_SIZE);
+        }
+        kirq_restore(flags);
+        return -ENOMEM;
+    }
+    wait_queue_init(&irq_wait);
+    p->kernel_stack = base + KERNEL_STACK_SIZE;
+    p->space_root = 0;
+    p->page_dir = NULL;
+    p->parent_pid = 0;
+    proc_set_comm(p, "kvfio");
+    setup_process_stack(p, vfio_irq_thread);
+    irq_worker = p;
+    sched_make_ready(p);
+    kirq_restore(flags);
+    return 0;
+}
+
+void vfio_hw_irq_wake(void)
+{
+    wq_wake_all(&irq_wait);
 }
 
 struct mm *vfio_hw_mm(void)

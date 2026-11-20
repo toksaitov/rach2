@@ -18,18 +18,7 @@
 #include "../lib/spinlock.h"
 #include "../proc/wait_queue.h"
 
-/* The places in every lock's line that killed takers left and that no give
- * has passed yet (`sleep_lock_take_killable`). */
-#define SLEEP_LEFT_MAX 32
-
-struct sleep_lock;
-
-/* A place in the line of `lock` that a killed taker left, which the give
- * that would serve it passes; an entry of the table with no lock is free. */
-struct sleep_left {
-    struct sleep_lock *lock;
-    uint32_t place;
-};
+struct sleep_waiter;
 
 /*
  * The longest hold across a disk wait of one kind of lock, such as every
@@ -70,35 +59,46 @@ extern int sleep_lock_stat;
  * file system. */
 #define SLEEP_LOCK_FILE 1
 
+/* The states of a lock (`state` in `struct sleep_lock`): free, held with
+ * no waiter listed, and held with waiters that may be listed, which makes
+ * the last give take the list's lock and hand the lock on. */
+#define SLEEP_LOCK_FREE   0u
+#define SLEEP_LOCK_HELD   1u
+#define SLEEP_LOCK_QUEUED 2u
+
 /*
  * One lock. `holder` is the holder's thread ID, 0 for a holder before the
- * first process, and -1 when the lock is free; `depth` counts the holder's
- * takes. A caller takes a place in line (`next`) and waits until the lock
- * is free and its place is the one served (`serving`), so a process that
- * gives the lock back and asks again waits behind everyone who asked
- * meanwhile. A place a killed taker left is recorded in a table every lock
- * shares, and the give that would serve it serves the next place instead
- * (`sleep_lock_take_killable`). A hold lasts from the first take to the
- * last give. A hold taken while `sleep_lock_stat` is on is `timed`:
- * `taken_waits` and `taken_at` are its start, by the holder's `disk_waits`
- * and by `arch_cycles` where `timer_cycles_agree` says the processors'
- * counters can time it (`taken_by_cycles`), and by `timer_now_us`
- * elsewhere. Any other hold reads neither, as Linux's mutex_lock reads no
- * clock. `owner` and `owner_cpu` are the holder's record and the processor
- * it took the lock on, which a waiter compares with what that processor
- * runs, to spin while the holder runs (`sched_spin_on`). A taker draws its
- * place by compare-and-exchange of `next`; the holder alone writes every
- * other field but `wq` and `serving`, which the turn's owner moves by an
- * exchange: the holder at its last give, or a killed taker whose turn came
- * as it left.
+ * first process, and -1 when the lock is free or handed to a waiter that
+ * has not yet run; `depth` counts the holder's takes. A taker that finds
+ * `state` free makes it held by one compare-and-exchange and has the lock.
+ * Any other files a record (`struct sleep_waiter`, on its own stack) at the
+ * end of the list from `first` to `last`, under `wait_lock`, and the last
+ * give of a hold hands the lock to the first record on the list, so the
+ * waiters have it in the order they asked, and a process that gives the
+ * lock back and asks again waits behind everyone who asked meanwhile. A
+ * killed taker takes its record off the list (`sleep_lock_take_killable`),
+ * which needs no memory. A hold lasts from the first take to the last give.
+ * A hold taken while `sleep_lock_stat` is on is `timed`: `taken_waits` and
+ * `taken_at` are its start, by the holder's `disk_waits` and by
+ * `arch_cycles` where `timer_cycles_agree` says the processors' counters
+ * can time it (`taken_by_cycles`), and by `timer_now_us` elsewhere. Any
+ * other hold reads neither, as Linux's mutex_lock reads no clock. `owner`
+ * and `owner_cpu` are the holder's record and the processor it took the
+ * lock on, which a waiter compares with what that processor runs, to spin
+ * while the holder runs (`sched_spin_on`). The holder alone writes `holder`,
+ * `depth`, `owner`, `owner_cpu` and the stamps; `state` changes by atomic
+ * operations, from free to held without `wait_lock` and otherwise under it,
+ * but for the last give of a hold with no waiter, which makes held free.
  */
 struct sleep_lock {
     int holder;
     int depth;
     const struct process *volatile owner; /* the holder's record, NULL with none */
     volatile int owner_cpu;
-    volatile uint32_t next;
-    volatile uint32_t serving;
+    volatile unsigned int state; /* SLEEP_LOCK_FREE, _HELD or _QUEUED */
+    struct spinlock wait_lock;   /* the list's, taken with interrupts off */
+    struct sleep_waiter *first;  /* the waiter the next give hands to, or NULL */
+    struct sleep_waiter *last;   /* the waiter that asked last, or NULL */
     uint64_t taken_at;
     int taken_by_cycles;
     int timed; /* the hold is stamped, for its record */
@@ -133,26 +133,25 @@ struct sleep_lock {
 void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags);
 
 /**
- * Take `l`, waiting until it is free and the caller's place is served,
- * spinning while its holder runs on another processor and sleeping
- * otherwise; a signal does not end the wait, since a waiter that retried
- * without sleeping would never let the holder run. The holder takes it
- * again without a place. From a context that may sleep unless the caller holds
- * `l` already, with or without the big lock.
+ * Take `l`, waiting until the lock is handed to the caller, spinning while
+ * its holder runs on another processor and sleeping otherwise; a signal
+ * does not end the wait, since a waiter that retried without sleeping
+ * would never let the holder run. The holder takes it again without a wait.
+ * From a context that may sleep unless the caller holds `l` already, with
+ * or without the big lock.
  */
 void sleep_lock_take(struct sleep_lock *l);
 
 /**
  * `sleep_lock_take` whose wait SIGKILL ends, pending for the calling thread
  * or its process, as Linux's `mutex_lock_killable`: 0 with `l` held, or
- * -EINTR without it. A killed waiter leaves the line, and the give that
- * would serve its place serves the next instead, so the waiters behind it
- * keep their order; one whose turn comes as it leaves passes the turn on
- * and holds nothing. A killed waiter that finds no room in the table of
- * left places (SLEEP_LEFT_MAX, for every lock) waits for its turn as
- * `sleep_lock_take` does and returns 0 with `l` held. A take by the holder,
- * or with no process, never ends early. The caller tests SIGKILL itself
- * after a take that needed no wait.
+ * -EINTR without it. A killed waiter takes its record off the lock's list,
+ * so the waiters behind it keep their order, as Linux's killed waiter
+ * leaves its mutex's list (kernel/locking/mutex.c:630-699); one that the
+ * lock was handed to as it left hands it on and holds nothing. Leaving
+ * needs no memory, so every killed waiter leaves at once. A take by the
+ * holder, or with no process, never ends early. The caller tests SIGKILL
+ * itself after a take that needed no wait.
  */
 int sleep_lock_take_killable(struct sleep_lock *l);
 

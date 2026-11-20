@@ -37,8 +37,10 @@
  * queues, the log's ring replayed to the port on a machine without a UART
  * and not on one with it, and the nodes; `console=hvc0` on the same device
  * and on one of a single port, with the size of its configuration and a
- * change of it; the `console=` words, each in turn, with a line for output
- * alone beside the UART, whose port is hvc0's own terminal; output of
+ * change of it, and with no memory for its port's pages, which leaves no
+ * hvc number after the removal; the `console=` words, each in turn, with
+ * a line for output alone beside the UART, whose port is hvc0's own
+ * terminal; output of
  * 100,000 bytes to a device that takes late and to a host that stops
  * reading for a while, with no byte lost and no interrupt asked for on the
  * transmit queue; a host that stops for ever, which costs one wait of 30
@@ -54,7 +56,8 @@
  * QEMU does; two devices, both bound, the line on the second; each
  * allocation failing in turn, and every one from it on; a third port added
  * and removed through the control queue, with its nodes; a generic port's
- * vport node read, written and polled with the host's end open and closed;
+ * vport node read, written and polled with the host's end open and closed,
+ * and opened again after its pages came back with no interrupt;
  * a second console port's hvc terminal; a console port added late on a
  * machine without a UART, given the log's ring then; the emergency write
  * of early output and of a panic on the second device; a device that
@@ -334,12 +337,14 @@ static int term_node(const char *name)
     return n && n->ops == 0 && n->open == 0;
 }
 
-/** Whether `name` is registered with the vport's operations. */
+/** Whether `name` is registered with the vport's operations, at the
+ * major of one of the first two devices. */
 static int vport_node(const char *name)
 {
     struct devfs_node *n = node(name);
 
-    return n && n->ops == &vcon_vport_ops && n->major == VIRTIO_CONSOLE_VPORT_MAJOR;
+    return n && n->ops == &vcon_vport_ops &&
+           (n->major == vcon_major(0) || n->major == vcon_major(1));
 }
 
 /* A pair whose master the driver holds: what its slave's discipline took
@@ -1299,7 +1304,6 @@ static void fresh(const char *line, int kind)
     vcon_work = 0;
     k_memset(&vcon_n, 0, sizeof(vcon_n));
     k_memset(vcon_hvc, 0, sizeof(vcon_hvc));
-    k_memset(vcon_minor, 0, sizeof(vcon_minor));
     k_memset(nodes, 0, sizeof(nodes));
     k_memset(ptys, 0, sizeof(ptys));
     k_memset(waiters, 0, sizeof(waiters));
@@ -1567,6 +1571,37 @@ static void one_port(void)
     irq();
     check(serial_rx_pending() == 3 && serial_rx_take() == 'i',
           "a port without the control queues needs no open to give input");
+}
+
+/**
+ * A device of one port whose pages cannot be had: the port is refused
+ * before it takes hvc0, as Linux's add_port fills the receive queue before
+ * it makes the hvc console, so that the device's removal, which takes down
+ * only the ports present, leaves no hvc number naming the port's freed
+ * record, which the console's service reads.
+ */
+static void one_port_no_memory(void)
+{
+    int calls;
+
+    fresh("console=hvc0", UART);
+    check(virtio_console_start() == 1 && vcon_hvc[0] == P(0), "the boot binds the console");
+    calls = m.dma_calls;
+    m.dev.removed(&m.dev);
+    fresh("console=hvc0", UART);
+    /* Every page of the port fails: four to send, the panic's, eight to
+     * receive. */
+    m.dma_fail_from = calls - (VCON_TX_BUFS + 1 + VCON_RX_BUFS);
+    check(virtio_console_start() == 1 && P(0) && !P(0)->present,
+          "a port without its pages is refused");
+    check(vcon_hvc[0] == 0 && P(0)->hvc < 0, "and takes no hvc number");
+    m.dev.removed(&m.dev);
+    check(vcon_hvc[0] == 0 && m.dma_out == 0,
+          "the device's removal leaves no hvc number and no page");
+    vcon_service();
+    say("uart", 4);
+    serial_flush();
+    check(uart_sent("uart"), "and the console stays on the UART");
 }
 
 /** What `console=` words leave: the ports asked for, in order and each
@@ -2012,10 +2047,27 @@ static int sent(uint32_t id, uint16_t event, uint16_t value)
 }
 
 /**
+ * Checks the numbers of `second`'s ports: each device's at a major of its
+ * own, the first's at VIRTIO_CONSOLE_VPORT_MAJOR and the second's at 244,
+ * with the ports' numbers as minors.
+ */
+static void numbered(void)
+{
+    check(node("vport0p0")->major == VIRTIO_CONSOLE_VPORT_MAJOR && node("vport0p0")->minor == 0 &&
+              node("vport0p1")->major == VIRTIO_CONSOLE_VPORT_MAJOR &&
+              node("vport0p1")->minor == 1 && node("vport1p0")->major == 244 &&
+              node("vport1p0")->minor == 0 && node("virtio-ports/other")->major == 244 &&
+              node("virtio-ports/other")->minor == 1,
+          "each device's ports have a major of their own and the minors of their numbers, as "
+          "Linux's register_chrdev and MKDEV give them");
+}
+
+/**
  * Two devices, each bound with its ports and numbered in the order found,
  * as Linux binds every virtio console: `console=vport1p1` names the
  * second's port 1, which carries the console, while the first's ports and
- * console port have their nodes; the first removed, the second goes on;
+ * console port have their nodes, each device's at a major of its own with
+ * the ports' numbers as minors; the first removed, the second goes on;
  * and a bind the bus refuses.
  */
 static void second(void)
@@ -2034,6 +2086,7 @@ static void second(void)
               term_node("virtio-ports/other"),
           "the line is the second's port 1, by its number and its name, and every other port "
           "is a byte device");
+    numbered();
     check(node("hvc0") && node("hvc0")->ops == &slave_ops && node("hvc1") && tty_of("hvc0") &&
               tty_of("hvc1") && P(0)->hvc == 0,
           "each console port is an hvc terminal, numbered in the order the devices were found");
@@ -2284,6 +2337,53 @@ static void vport(void)
     check(m.port[1].guest_open == 1, "whose close leaves the new open alone");
     vcon_vport_ops.close(&e2);
     check(m.port[1].guest_open == 0, "and the new close tells the device");
+}
+
+/**
+ * A vport closed while the device holds every page, which the host's end
+ * returns while the closed port's transmit queue asks for no interrupt:
+ * the open again takes the pages back, as Linux's port_fops_open reclaims
+ * them, so that poll finds room and a write goes out, though no transmit
+ * interrupt comes. The row raises no interrupt after the host's taking,
+ * as a dedicated vector would give none.
+ */
+static void vport_reopen(void)
+{
+    struct devfs_node *n;
+    struct open_file ofd;
+    struct wait_queue *wq = 0;
+    fd_entry_t e;
+
+    fresh("console=hvc0", MULTI | UART);
+    check(virtio_console_start() == 1, "the boot binds the console");
+    irq();
+    n = node("vport0p1");
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&e, 0, sizeof(e));
+    e.ofd = &ofd;
+    ofd.status_flags = OFD_NONBLOCK;
+    check(n && n->open(n, &e, 0) == 0, "the generic port opens");
+    irq();
+    m.port[1].throttled = 1;
+    fill(0, 4096);
+    check(vcon_vport_ops.write(&e, (const char *)big, 4096) == 2048 &&
+              vcon_tx_busy(P(1)) == VCON_TX_BUFS && vcon_vport_ops.poll(&e, POLLOUT, &wq) == 0,
+          "a host's end that takes nothing leaves the device every page, and no room");
+    vcon_vport_ops.close(&e);
+    irq();
+    check(P(1)->tx_irq == 0, "the close asks the transmit queue for no interrupt");
+    m.port[1].throttled = 0;
+    model_tx();
+    check(m.port[1].nout == 2048 && vcon_tx_busy(P(1)) == VCON_TX_BUFS,
+          "the host's end takes the pages, and no interrupt tells the driver");
+    check(n->open(n, &e, 0) == 0 && vcon_tx_busy(P(1)) == 0,
+          "the open again takes back the pages the device returned");
+    check(vcon_vport_ops.poll(&e, POLLOUT, &wq) == POLLOUT,
+          "poll finds room on the port opened again");
+    m.port[1].nout = 0;
+    check(vcon_vport_ops.write(&e, "again", 5) == 5 && host_read(1, "again"),
+          "and a write goes out");
+    vcon_vport_ops.close(&e);
 }
 
 /**
@@ -2702,6 +2802,7 @@ int main(void)
         boot_port_line();
         boot_hvc();
         one_port();
+        one_port_no_memory();
         words();
         output();
         stuck();
@@ -2715,6 +2816,7 @@ int main(void)
         no_memory();
         third_port();
         vport();
+        vport_reopen();
         hvc_tty();
         late_console();
         emergency();

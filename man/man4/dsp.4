@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 20, 2026
 .Dt DSP 4
 .Os
 .Sh NAME
@@ -9,6 +9,9 @@
 .Pp
 .Pa /dev/dsp
 .Pa /dev/dsp1
+.Pa /dev/adsp1
+.Pa /dev/dsp2
+.Pa /dev/dsp3
 .Sh DESCRIPTION
 The device plays the samples a program writes to it and records the samples
 a program reads from it, through OSS's interface with Linux's numbers: major
@@ -143,8 +146,11 @@ The five formats
 .Dv SNDCTL_DSP_SETFMT
 takes.
 .It Dv SNDCTL_DSP_CHANNELS
-Set one channel, or two for any larger count, and give back the count in use;
-0 asks for it.
+Set the count asked for, held at two on
+.Pa /dev/dsp ,
+and give back the count in use; 0 asks for it.
+The HDMI devices grant up to 128, as Linux's OSS layer does, and more than
+128 fails.
 .It Dv SNDCTL_DSP_STEREO
 Set stereo for a nonzero value and mono for 0, and give back 1 or 0.
 .It Dv SNDCTL_DSP_SPEED
@@ -159,14 +165,17 @@ differ where the device's converter has other rates.
 .It Dv SNDCTL_DSP_SETFRAGMENT
 Ask for periods of 2 to the power of the low 16 bits bytes and for the
 number of them in the high 16 bits.
-A period is from 128 to 16384 bytes, and there are at least two and as many
-as 64 KiB hold, or one more for playback.
+A period is from 128 to 16384 bytes, and holds a frame at least: one asked
+smaller is the smallest power of two that does.
+There are at least two and as many as 64 KiB hold, or one more for playback.
 A playback period is at most the frames, at the rate set, that one period of
 the mix plays: 1024 frames of the mix on HD Audio, and 512 on the Sound
 Blaster 16.
 A playback buffer holds the periods the mix takes at its start and at least
 one more, so that a program that keeps a period free, as cmus does, can
 queue the start.
+On a device of its own whose buffer holds more of the stream than that,
+it grows to hold them and a period more, up to 8 MiB.
 A recording period may be made smaller by the driver.
 .It Dv SNDCTL_DSP_GETBLKSIZE
 The bytes of a period.
@@ -241,24 +250,55 @@ A silent playback channel supplies the clock while a reader runs, including
 on a Sound Blaster 16 without a hardware input.
 .Ss HDMI
 .Pa /dev/dsp1 ,
-minor 19, plays on the monitor of an HDMI or DisplayPort output of
+minor 19,
+.Pa /dev/adsp1 ,
+minor 28, and
+.Pa /dev/dsp2 ,
+minor 35, play on the monitors of the HDMI and DisplayPort outputs of
 Haswell's Intel display, through the display's HDMI codec, as Linux's
 second card's
 .Pa dsp
-does.
-It is there while the codec is bound to the display driver,
-.Xr i915 4 ,
-and plays on the first monitor whose ELD is valid; one that comes while
-the device plays is given the stream.
-It takes the requests and formats of
+and
+.Pa adsp
+do, each on its own PCM of the codec.
+The codec has a PCM for each of its converters, three on Haswell, and
+.Pa /dev/dsp3 ,
+minor 51, plays on a fourth, where a codec has one.
+Linux's OSS layer names only a card's first two PCMs; the others have
+the names it gives the next cards' first, since Rach2 has no ALSA PCM
+devices, through which Linux reaches them.
+They are there while the codec is bound to the display driver,
+.Xr i915 4 .
+Each monitor whose ELD turns valid is given a PCM, the one it had last if
+no other has taken it since, else the first free, as Linux gives them:
+the first monitor plays on
+.Pa /dev/dsp1 ,
+a second on
+.Pa /dev/adsp1
+and a third on
+.Pa /dev/dsp2 ,
+all at once.
+A device whose PCM has no monitor plays to none, and a monitor given its
+PCM while it plays is given the stream.
+Each takes the requests and formats of
 .Pa /dev/dsp ,
-but plays the device's one stream without the mix: one descriptor plays at
-a time, and nothing records.
-It grants each format, one or two channels and any rate from 1000 to
-192000 Hz, and converts them to what the monitor's ELD allows: stereo at
-the nearest of its rates from 32000 to 192000 Hz, in 16 bits, or 24 when
-the monitor takes them and the format is wider than 16, its rate changed
-by linear interpolation, as Linux's OSS plugins change it.
+but plays its PCM's one stream without the mix: one descriptor plays at a
+time on each, and nothing records.
+It grants each format, one to 128 channels and any rate from 1000 to
+192000 Hz, and converts them to what the converter and the monitor's ELD
+allow: the nearest of its rates from 32000 to 192000 Hz, in 16 bits, or
+24 when the monitor takes them and the format is wider than 16, and the
+even count of channels from two to the most a descriptor of the ELD has,
+eight at most, nearest the count asked for, the higher on a tie.
+It keeps the rate asked for, and its buffer holds 40 ms of the converted
+stream: for 128 channels of 32 bits at 192000 Hz, some 3.9 MiB, which the
+open's buffer grows to hold.
+A mono stream plays on every channel, and another's channels play in
+order, those the device lacks dropped and those the stream lacks silent;
+the rate is changed by linear interpolation, as Linux's OSS plugins change
+it.
+More than two channels are sent with the CEA-861 channel allocation the
+monitor's speakers allow, in Linux's order of preference.
 An open for both directions plays alone.
 When the display driver lets the codec go, a write or read in progress
 returns what it moved,
@@ -276,20 +316,16 @@ says.
 .Xr open 2 :
 another kernel caller has taken the hardware stream directly.
 The console's audio calls share the mix and do not prevent an open.
-On
-.Pa /dev/dsp1 ,
-another descriptor plays.
+On an HDMI device, another descriptor plays the device, or every converter
+of the codec is taken.
 .It Bq Er ENODEV
 .Xr open 2 :
 the driver has no streams, or none for the direction an open for reading or
 writing asks for, or neither direction for an open for both: the Sound
-Blaster 16's driver and
-.Pa /dev/dsp1
-record nothing.
+Blaster 16's driver and the HDMI devices record nothing.
 Any call but
 .Xr close 2 :
-the device has gone, as when the display driver lets
-.Pa /dev/dsp1 Ns 's
+the device has gone, as when the display driver lets the HDMI devices'
 codec go;
 .Xr poll 2
 reports
@@ -306,6 +342,16 @@ which leaves the device playing.
 A nonblocking write found no room, or a nonblocking read nothing recorded.
 .It Bq Er EIO
 The device failed to start.
+.It Bq Er ENOMEM
+.Xr open 2 :
+no memory for the buffers.
+.Dv SNDCTL_DSP_SETFMT ,
+.Dv SNDCTL_DSP_CHANNELS ,
+.Dv SNDCTL_DSP_SPEED
+or
+.Dv SNDCTL_DSP_SETFRAGMENT :
+no memory for the larger playback buffer an HDMI device needs for the
+settings; the old ones stay.
 .It Bq Er EINVAL
 .Xr open 2
 with an access mode of 3; a request for a direction the open does not have,
@@ -313,7 +359,9 @@ such as
 .Dv SNDCTL_DSP_GETISPACE
 in an open for writing alone, or
 .Dv SNDCTL_DSP_SETDUPLEX
-in an open of one direction; another of OSS's requests.
+in an open of one direction;
+.Dv SNDCTL_DSP_CHANNELS
+of more than 128; another of OSS's requests.
 .It Bq Er ENOTTY
 Another request.
 .El
