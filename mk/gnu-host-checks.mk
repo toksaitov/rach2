@@ -12,6 +12,7 @@ GNU_HOST_CHECKS_EXTRA = \
     vendor/e2fsprogs/$(GNU_HOST_CHECKS_E2FS)/lib \
     build/x86_64/vendor-work/e2fsprogs/$(GNU_HOST_CHECKS_E2FS)/lib \
     $(LIBTSM_HOST_TREE)/src $(LIBTSM_HOST_TREE)/external \
+    build/vendor/acpica/include \
     build/tests/host/exfat_writer build/tests/host-suite/tools/exfat_external
 GNU_HOST_CHECKS_INPUTS = $(foreach f,$(filter-out gnu-in-copy gnu-host-check-inputs,$^),$(if $(filter %.stamp,$f),-d,-i) $f)
 GNU_STEP_STAMPS += $(GNU_HOST_CHECKS_STAMP)
@@ -24,7 +25,8 @@ gnu-host-checks: $(GNU_HOST_CHECKS_STAMP)
 # and every independent exFAT fixture file, before taking a cached output.
 # This make builds the vendors of its own architecture first, so that
 # the sub-make of that architecture finds them built and does not race it.
-gnu-host-check-inputs: $(LIBC_STAMP) $(E2FSPROGS_STAMP) $(LIBTSM_HOST_STAMP)
+# The ACPI resource check includes ACPICA's headers from i686's extracted tree.
+gnu-host-check-inputs: $(LIBC_STAMP) $(E2FSPROGS_STAMP) $(LIBTSM_HOST_STAMP) $(HOST_ACPICA_STAMP)
 	+$(MAKE) --no-print-directory ARCH=i686 musl e2fsprogs
 	+$(MAKE) --no-print-directory ARCH=x86_64 musl e2fsprogs
 
