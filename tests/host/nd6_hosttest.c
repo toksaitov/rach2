@@ -371,7 +371,9 @@ static void route_lifetime(void)
     CHECK(count_prefix(a->addr, 128, 1, 0) == 1);
     k_memcpy(r.dst, dst, 16);
     r.proto = 99;
+    k_memcpy(r.prefsrc, a->addr, 16);
     CHECK(route6_change_row(&eth0, &r, 0, 0) == 0);
+    CHECK(route6_preferred_source(&eth0, dst, via) && ip6_equal(via, a->addr));
     r.gw[0] = 0xff;
     CHECK(route6_change_row(&eth0, &r, 0, 1) == -EINVAL);
     CHECK(route6_lookup(dst, eth0.index, via) == &eth0 && ip6_equal(dst, via));
@@ -380,6 +382,10 @@ static void route_lifetime(void)
     CHECK(route6_change_row(&wlan0, &r, 0, 0) == 0);
     CHECK(netconf_del_address6(&eth0, a->addr) == 0 && count_prefix(a->peer, 128, 0, 80) == 0);
     CHECK(route6_lookup(dst, eth0.index, via) == &eth0);
+    {
+        struct route6_row got;
+        CHECK(route6_resolve(dst, eth0.index, &got) == &eth0 && ip6_is_unspecified(got.prefsrc));
+    }
     eth0.naddr6 = 1;
     forget_if(&eth0, 0);
     CHECK(eth0.naddr6 == 1 && route6_lookup(dst, eth0.index, via) == &eth0);

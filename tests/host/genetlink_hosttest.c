@@ -392,6 +392,15 @@ int route6_change_row(struct netdev *nd, const struct route6_row *r, int del, in
     return -ESRCH;
 }
 
+/** This socket fixture has no IPv6 main-table routes. */
+struct netdev *route6_resolve(const uint8_t *dst, int ifindex, struct route6_row *row)
+{
+    (void)dst;
+    (void)ifindex;
+    (void)row;
+    return 0;
+}
+
 /** Model route6_at with no addresses, routes or sockets. */
 int route6_at(int n, struct route6_row *out)
 {

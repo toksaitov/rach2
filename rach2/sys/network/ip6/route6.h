@@ -41,7 +41,8 @@ struct route6_row {
     int ifindex;
     uint8_t dst[16];
     uint8_t plen;
-    uint8_t gw[16]; /* :: for a route on the link */
+    uint8_t prefsrc[16]; /* :: leaves source selection to the interface */
+    uint8_t gw[16];      /* :: for a route on the link */
     uint32_t metric;
     uint8_t proto;    /* ROUTE6_PROTO_* */
     uint8_t local;    /* a host route in the local table */
@@ -70,6 +71,14 @@ void route6_address_removed(struct netdev *nd, int slot);
 
 /** The device of an explicit local route covering dst, or NULL. */
 struct netdev *route6_added_local(const uint8_t *dst);
+
+/** Copy the route's specified source and return one, or return zero
+ * when ordinary source selection applies. Call under net_lock. */
+int route6_preferred_source(const struct netdev *nd, const uint8_t *dst, uint8_t *src);
+
+/** Select a main-table route, including its gateway and preferred source.
+ * An interface index of zero searches every card. Call under net_lock. */
+struct netdev *route6_resolve(const uint8_t *dst, int ifindex, struct route6_row *row);
 
 /** Apply a netlink or ioctl route under net_lock. A zero metric or
  * protocol in a deletion omits that selector. Replacement validates
