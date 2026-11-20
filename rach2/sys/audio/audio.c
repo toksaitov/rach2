@@ -107,7 +107,8 @@ audio_driver_t speaker_driver = {"PC Speaker",
                                  NULL,
                                  NULL,
                                  NULL,
-                                 NULL};
+                                 NULL,
+                                 0};
 
 /** Make `d` the device's driver, which programs reach directly, and give
  * the speaker its beep generator when its device has one. */

@@ -5967,7 +5967,7 @@ audio_driver_t hda_driver = {
     hda_m_write,        hda_m_set_volume,   hda_get_volume,    hda_m_stream_open,
     hda_m_stream_setup, hda_m_stream_start, hda_m_stream_stop, hda_m_stream_close,
     hda_stream_frames,  hda_stream_delay,   hda_input_caps,    hda_m_input_select,
-    hda_m_input_level,  hda_beep,           hda_m_beep_level};
+    hda_m_input_level,  hda_beep,           hda_m_beep_level,  0};
 
 /** Return the next service deadline for the stopped idle tick. */
 uint32_t hda_idle_ticks(void)

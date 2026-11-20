@@ -870,7 +870,7 @@ static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
     audio_format_t format = s->format;
     int channels = s->channels;
     uint32_t rate = s->rate;
-    int value, query = 0;
+    int value, max, query = 0;
     int32_t rc;
 
     rc = int_in(arg, &value);
@@ -887,7 +887,8 @@ static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
         break;
     case DSP_CHANNELS:
         query = value <= 0;
-        channels = query ? channels : value > 1 ? 2 : 1;
+        max = main_chan(d)->drv->channels_max > 2 ? main_chan(d)->drv->channels_max : 2;
+        channels = query ? channels : value > max ? max : value;
         break;
     default: /* DSP_SETFMT */
         /* One bit of DSP_FORMATS sets the format; anything else is a query. */

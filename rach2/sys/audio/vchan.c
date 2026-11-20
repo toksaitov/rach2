@@ -1238,7 +1238,8 @@ audio_driver_t vchan_driver = {"Virtual channels",
                                vchan_input_select,
                                vchan_input_level,
                                NULL,
-                               NULL};
+                               NULL,
+                               0};
 
 /** Install the mix over hardware that has streams, passing the beep
  * generator's operations through; the speaker stays directly accessible,

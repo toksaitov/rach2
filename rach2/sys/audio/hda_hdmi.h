@@ -9,11 +9,13 @@
 
 #include "audio.h"
 
-/* The OSS device the HDMI codec plays through, /dev/dsp1, at Linux's
- * numbers for the second card's dsp. */
-#define HDMI_DSP_MINOR 19
+/* The OSS devices of the HDMI codec's two PCMs, /dev/dsp1 and /dev/adsp1,
+ * at Linux's numbers for the second card's dsp and adsp. */
+#define HDMI_DSP_MINOR  19
+#define HDMI_ADSP_MINOR 28
 
-/* The stream operations of the HDMI codec, which /dev/dsp1 opens. */
+/* The stream operations of the HDMI codec's first PCM, which /dev/dsp1
+ * opens. */
 extern audio_driver_t hdmi_audio_driver;
 
 /**
@@ -31,12 +33,12 @@ void hdmi_audio_init(void);
 #define HDMI_AUDIO_DRIVES(vendor, device) \
     ((vendor) == 0x8086 && ((device) == 0x0a0c || (device) == 0x0c0c || (device) == 0x0d0c))
 
-/** Serve the running stream from the timer tick: refill the periods the
+/** Serve the running streams from the timer tick: refill the periods the
  * controller has played. No lock held, interrupts off. */
 void hdmi_audio_tick(void);
 
 /** The ticks the tick may sleep before `hdmi_audio_tick` must run: 1 while
- * the stream runs, TICK_HZ otherwise. */
+ * a stream runs, TICK_HZ otherwise. */
 uint32_t hdmi_audio_idle_ticks(void);
 
 /** Whether the card is there, for /proc/asound: 1 once the codec came up,
@@ -64,7 +66,7 @@ int hdmi_audio_proc_text(int file, int index, char *buf, int cap);
  * Apply `len` bytes written to eld#C.N, N being `n`, as Linux's
  * snd_hdmi_write_eld_info does at the file's close: each line of a field's
  * name and a hex value sets that field of the entry's ELD, which the next
- * read and the next open of /dev/dsp1 see; the monitor's name, IDs and
+ * read and the next open of the entry's PCM see; the monitor's name, IDs and
  * versions are not set. 0, or -ENOENT while the card or the entry is not
  * there. Process context; takes the driver's mutex.
  */

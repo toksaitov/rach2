@@ -17,8 +17,11 @@
  * infoframe and channel slots, IEC958 on and the stream's tag and format;
  * a wide format and a narrow one at a rate the sink lacks granted as asked,
  * the DMA playing 24 bits where the sink takes them and the sink's nearest
- * rate; a monitor that comes while a stream plays given the stream; and the
- * close, which gives the display's power back.
+ * rate; a monitor that comes while a stream plays given the stream; a
+ * second monitor's PCM, which plays beside the first; surround, its
+ * channels limited by the sink and given Linux's channel allocations,
+ * slots and infoframes; and the close, which gives the display's power
+ * back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -32,6 +35,10 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 extern char *strstr(const char *text, const char *needle);
 
 static int failures;
+
+/* The first PCM, /dev/dsp1's, and the second, /dev/adsp1's. */
+#define M0 (&hh_pcms[0])
+#define M1 (&hh_pcms[1])
 
 /** Count a failed row and name it. */
 static void check(int ok, const char *what)
@@ -124,7 +131,7 @@ static uint32_t model_param(int nid, uint32_t p)
         return p == P_FG_TYPE ? 1 : p == P_SUBNODES ? 0x00020007u : 0;
     }
     if (nid >= 2 && nid <= 4) {
-        return p == P_WCAPS ? 0x00000601u : p == P_PCM ? 0x000e07f0u : 0;
+        return p == P_WCAPS ? 0x00006601u : p == P_PCM ? 0x000e07f0u : 0;
     }
     if (nid >= 5 && nid <= 7) {
         return p == P_WCAPS ? 0x00400705u : p == P_PINCAP ? 0x01000090u : p == P_CONN_LEN ? 3u : 0;
@@ -221,6 +228,7 @@ static const uint8_t igt_eld[28] = {0x10, 0x00, 0x06, 0x00, 0x63, 0x10, 0x00, 0x
 
 static int display_power, display_powers;
 static int sink_on = 1; /* the display plays audio on port B */
+static int sink2_on;    /* and on port C */
 static int rate_port, rate_set;
 
 /** The display's get_power. */
@@ -256,12 +264,13 @@ static int32_t d_rate(void *dev, int port, int pipe, int rate)
     return 0;
 }
 
-/** The display's get_eld: IGT's on port B, entry 0, while it plays audio. */
+/** The display's get_eld: IGT's on port B, entry 0, and on port C, entry
+ * 0, while it plays audio there. */
 static int32_t d_eld(void *dev, int port, int pipe, int *enabled, uint8_t *buf, int max)
 {
     (void)dev;
     *enabled = 0;
-    if (port != 1 || pipe > 0 || !sink_on) {
+    if (pipe > 0 || !(port == 1 ? sink_on : port == 2 ? sink2_on : 0)) {
         return -EINVAL;
     }
     *enabled = 1;
@@ -398,28 +407,29 @@ static void row_stream(void)
     uint32_t ctl;
 
     stream_init(sp, 44100, AUDIO_S16LE, 4096);
-    check(hh_stream_open(sp) == 0 && display_power == 1 && hh_bound == 0 && hh_pins[0].cvt == 2 &&
+    check(hh_open0(sp) == 0 && display_power == 1 && M0->pin == 0 && hh_pins[0].cvt == 2 &&
               conn_sel[5] == 0,
           "stream: open holds the display's power and gives port B the first converter");
     check(digi1[2] == 0x81 && digi2[2] == 0x02, "stream: IEC958 on, original PCM");
     check(hh_stream_setup(sp) == 0 && sp->rate == 44100 && sp->format == AUDIO_S16LE &&
               sp->channels == 2 && sp->period_bytes == 4096 && sp->device_periods == 2 &&
-              hh_fmt == 0x4011,
+              M0->fmt == 0x4011,
           "stream: 44.1 kHz, 16 bits, stereo, two periods of 4096 bytes");
     transfers = 0;
     check(hh_stream_start(sp) == 0 && transfers == 2 && last_size == 4096,
           "stream: start fills both periods");
-    ctl = mm_get(hh_sd(HDA_SD_CTL), 32);
-    check((ctl & HDA_SD_CTL_RUN) && (ctl >> 20) == HH_TAG &&
-              mm_get(hh_sd(HDA_SD_FORMAT), 16) == 0x4011 && mm_get(hh_sd(HDA_SD_CBL), 32) == 8192 &&
-              mm_get(hh_sd(HDA_SD_LVI), 16) == 1 && hh_bdl[1].length == 4096,
+    ctl = mm_get(hh_sd(M0, HDA_SD_CTL), 32);
+    check((ctl & HDA_SD_CTL_RUN) && (ctl >> 20) == M0->tag &&
+              mm_get(hh_sd(M0, HDA_SD_FORMAT), 16) == 0x4011 &&
+              mm_get(hh_sd(M0, HDA_SD_CBL), 32) == 8192 && mm_get(hh_sd(M0, HDA_SD_LVI), 16) == 1 &&
+              hh_bdl[0][1].length == 4096,
           "stream: the descriptor runs with tag 1, the format and two periods");
     check(rate_port == 1 && rate_set == 44100, "stream: the display's clocks set for 44.1 kHz");
     check(chan_cnt[2] == 1 && nslots[5] == 8 && memcmp(slots[5], slot, 8) == 0,
           "stream: two channels counted, channel allocation 0's slots");
     check(memcmp(dip[5], ai, 9) == 0 && dip_xmit[5] == DIPXMIT_BEST,
           "stream: HDMI's stereo audio infoframe, sent at best effort");
-    check(streamid[2] == HH_TAG << 4 && format[2] == 0x4011,
+    check(streamid[2] == M0->tag << 4 && format[2] == 0x4011,
           "stream: the converter has the tag and the format");
     check(strstr(proc(2), "codec_cvt_nid\t\t0x2\n") != NULL,
           "stream: eld#0.0 names the converter while it plays");
@@ -433,21 +443,21 @@ static void row_play(void)
     uint32_t pf = 4096 / 4;
 
     periods = 0;
-    mm_put(hh_sd(HDA_SD_LPIB), 4096 + 2048, 32);
+    mm_put(hh_sd(M0, HDA_SD_LPIB), 4096 + 2048, 32);
     hdmi_audio_tick();
     check(periods == 1 && transfers == 3 && hh_stream_position(sp) == pf + pf / 2 &&
               hh_stream_delay(sp) == pf + pf / 2 && hdmi_audio_idle_ticks() == 1,
           "stream: the tick refills the period played and counts it");
-    mm_put(hh_sd(HDA_SD_LPIB), 1024, 32);
+    mm_put(hh_sd(M0, HDA_SD_LPIB), 1024, 32);
     hdmi_audio_tick();
     check(periods == 2 && hh_stream_position(sp) == 2 * pf + 256,
           "stream: the position goes on round the buffer");
     hh_stream_stop(sp);
-    check(!(mm_get(hh_sd(HDA_SD_CTL), 8) & HDA_SD_CTL_RUN) && streamid[2] == 0 &&
+    check(!(mm_get(hh_sd(M0, HDA_SD_CTL), 8) & HDA_SD_CTL_RUN) && streamid[2] == 0 &&
               hdmi_audio_idle_ticks() == TICK_HZ,
           "stream: stop halts the descriptor and clears the converter's tag");
     hh_stream_close(sp);
-    check(display_power == 0 && !hh_stream && !hh_cvts[0].assigned,
+    check(display_power == 0 && !M0->stream && !hh_cvts[0].assigned,
           "stream: close gives the converter and the display's power back");
 }
 
@@ -459,15 +469,15 @@ static void row_wide(void)
     audio_stream_t s;
 
     stream_init(&s, 48000, AUDIO_S24LE, 16384);
-    check(hh_stream_open(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_S24LE &&
-              s.rate == 48000 && hh_fmt == 0x0031 && s.period_bytes == 16384 && hh_pb == 16384 &&
-              hh_n == 2 && !hh_copy && s.device_periods == 3,
+    check(hh_open0(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_S24LE &&
+              s.rate == 48000 && M0->fmt == 0x0031 && s.period_bytes == 16384 && M0->pb == 16384 &&
+              M0->n == 2 && !M0->copy && s.device_periods == 3,
           "wide: S24LE granted, the DMA in 24 bits at 48 kHz, two periods of 16384 bytes");
     hh_stream_close(&s);
     stream_init(&s, 22050, AUDIO_U8, 128);
-    check(hh_stream_open(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_U8 &&
-              s.rate == 22050 && s.channels == 2 && s.period_bytes == 128 && hh_rate == 32000 &&
-              hh_fmt == 0x0a11 && hh_pb == 384 && hh_n == 14 && s.device_periods == 15,
+    check(hh_open0(&s) == 0 && hh_stream_setup(&s) == 0 && s.format == AUDIO_U8 &&
+              s.rate == 22050 && s.channels == 2 && s.period_bytes == 128 && M0->rate == 32000 &&
+              M0->fmt == 0x0a11 && M0->pb == 384 && M0->n == 14 && s.device_periods == 15,
           "wide: U8 at 22050 Hz granted, the DMA in 16 bits at the sink's nearest, 32 kHz");
     hh_stream_close(&s);
 }
@@ -483,19 +493,167 @@ static void row_notify(void)
     check(!hh_pins[0].eld_valid && strstr(proc(2), "eld_valid\t\t0\n") != NULL,
           "notify: the display's disable empties port B's ELD");
     stream_init(&s, 48000, AUDIO_S16LE, 4096);
-    check(hh_stream_open(&s) == 0 && hh_bound < 0 && hh_stream_setup(&s) == 0 &&
-              hh_stream_start(&s) == 0,
+    check(hh_open0(&s) == 0 && M0->pin < 0 && hh_stream_setup(&s) == 0 && hh_stream_start(&s) == 0,
           "notify: a stream plays on no pin");
     k_memset(dip[5], 0, sizeof(dip[5]));
     rate_set = 0;
     conn_sel[5] = 1;
     sink_on = 1;
     acomp_eld_notify(1, -1);
-    check(hh_bound == 0 && hh_pins[0].eld_valid && conn_sel[5] == 0 && rate_set == 48000 &&
+    check(M0->pin == 0 && hh_pins[0].eld_valid && conn_sel[5] == 0 && rate_set == 48000 &&
               dip[5][0] == 0x84 && hh_pins[0].setup,
           "notify: the monitor's coming gives it the stream");
     hh_stream_close(&s);
     check(display_power == 0 && hh_pins[0].cvt == 0, "notify: the close leaves nothing held");
+}
+
+/* The streams of row_two's monitors, port B's and port C's. */
+static audio_stream_t two_b, two_c;
+
+/** A second monitor, on port C, attached to the second PCM: both PCMs open
+ * at once, each on a converter of its own, which its pin selects. */
+static void row_two(void)
+{
+    sink2_on = 1;
+    acomp_eld_notify(2, -1);
+    check(hh_npcms == 2 && hh_pins[3].eld_valid && hh_pins[3].pcm == 1 && M1->pin == 3 &&
+              M0->pin == 0,
+          "two: port C's monitor attached to the second PCM");
+    stream_init(&two_b, 48000, AUDIO_S16LE, 4096);
+    stream_init(&two_c, 44100, AUDIO_S16LE, 4096);
+    check(hh_open0(&two_b) == 0 && hh_open1(&two_c) == 0 && display_power == 1,
+          "two: both PCMs open");
+    check(hh_pins[0].cvt == 2 && hh_pins[3].cvt == 3 && conn_sel[5] == 0 && conn_sel[6] == 1,
+          "two: each PCM takes a converter of its own, which its pin selects");
+    check(hh_open1(&two_b) == -EBUSY, "two: a PCM's second open is refused");
+}
+
+/** row_two's PCMs play at once, each on a stream descriptor and tag of its
+ * own, as Linux's HDMI 0 and HDMI 1 do. */
+static void row_two_play(void)
+{
+    uint32_t ctl0, ctl1;
+
+    check(hh_stream_setup(&two_b) == 0 && hh_stream_setup(&two_c) == 0 &&
+              hh_stream_start(&two_b) == 0 && hh_stream_start(&two_c) == 0,
+          "two: both start");
+    check(rate_port == 2 && rate_set == 44100, "two: port C's clocks set for 44.1 kHz");
+    ctl0 = mm_get(hh_sd(M0, HDA_SD_CTL), 32);
+    ctl1 = mm_get(hh_sd(M1, HDA_SD_CTL), 32);
+    check(M0->sd == 4 && M1->sd == 5 && (ctl0 & HDA_SD_CTL_RUN) && (ctl1 & HDA_SD_CTL_RUN) &&
+              ctl0 >> 20 == 1 && ctl1 >> 20 == 2,
+          "two: descriptors 4 and 5 run with tags 1 and 2");
+    check(streamid[2] == 0x10 && streamid[3] == 0x20 && format[2] == 0x0011 && format[3] == 0x4011,
+          "two: each converter has its PCM's tag and format");
+    periods = 0;
+    mm_put(hh_sd(M0, HDA_SD_LPIB), 4096 + 2048, 32);
+    mm_put(hh_sd(M1, HDA_SD_LPIB), 4096 + 2048, 32);
+    hdmi_audio_tick();
+    check(periods == 2 && hh_stream_position(&two_b) == 1536 && hh_stream_position(&two_c) == 1536,
+          "two: the tick serves both");
+}
+
+/** row_two's PCMs closed in turn, and port C's monitor going. */
+static void row_two_close(void)
+{
+    hh_stream_close(&two_b);
+    check(!M0->stream && hh_stream_position(&two_c) == 1536 && hdmi_audio_idle_ticks() == 1,
+          "two: one's close leaves the other playing");
+    check(!hh_cvts[0].assigned && hh_cvts[1].assigned && display_power == 1,
+          "two: one's close gives back its converter alone");
+    hh_stream_close(&two_c);
+    sink2_on = 0;
+    acomp_eld_notify(2, -1);
+    check(display_power == 0 && hh_pins[3].pcm < 0 && M1->pin < 0 &&
+              hdmi_audio_idle_ticks() == TICK_HZ,
+          "two: the monitor's going detaches its PCM");
+}
+
+/* The bytes fill_transfer gives. */
+static uint8_t fill_byte;
+
+/** A transfer of `fill_byte`. */
+static void fill_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    (void)s;
+    k_memset(buf, fill_byte, size);
+}
+
+/** The 16-bit sample `i` of the first PCM's DMA buffer. */
+static int dma0(uint32_t i)
+{
+    return (int16_t)((uint16_t)hh_dma[0][2 * i] | (uint16_t)hh_dma[0][2 * i + 1] << 8);
+}
+
+/** A stream of `channels` at 48 kHz in 16 bits, of periods of 256 frames,
+ * opened and granted on the first PCM: 1 when both succeed. */
+static int open_channels(audio_stream_t *s, int channels)
+{
+    stream_init(s, 48000, AUDIO_S16LE, (uint32_t)channels * 2u * 256u);
+    s->channels = channels;
+    return hh_open0(s) == 0 && hh_stream_setup(s) == 0;
+}
+
+/** Surround on a converter of eight channels and IGT's sink of two: six
+ * asked for are granted and played as two. */
+static void row_surround(void)
+{
+    audio_stream_t s;
+
+    check(open_channels(&s, 6) && M0->chmax == 2 && s.channels == 6 && M0->ch == 2,
+          "surround: six asked of a sink of two granted");
+    check(!M0->copy && M0->fmt == 0x0011, "surround: the DMA in two");
+    hh_stream_close(&s);
+}
+
+/** On a sink of 7.1 LPCM, as root's write to its ELD file makes it, six
+ * channels play as six with 5.1's allocation 0x0b, its slots and its
+ * infoframe, as Linux's hdmi_chmap.c gives them. */
+static void row_surround_six(void)
+{
+    static const uint8_t slot51[8] = {0x00, 0x11, 0x24, 0x35, 0x43, 0x52, 0xf6, 0xf7};
+    static const uint8_t ai51[9] = {0x84, 0x01, 0x0a, 0x61, 0x05, 0, 0, 0x0b, 0};
+    static const char text[] = "sad0_channels 8\nspeakers 4f\n";
+    audio_stream_t s;
+
+    check(asound_write(ASOUND_FILE(0, ASOUND_ELD), text, (int)sizeof(text) - 1) == 0 &&
+              hh_pins[0].info.sad[0].channels == 8,
+          "surround: port B's sink made one of 7.1 LPCM");
+    check(open_channels(&s, 6) && M0->chmax == 8 && s.channels == 6 && M0->ch == 6,
+          "surround: six channels played as six");
+    check(M0->copy && M0->fmt == 0x0015 && M0->pb == 3072, "surround: in periods of whole frames");
+    nslots[5] = 0;
+    check(hh_stream_start(&s) == 0 && chan_cnt[2] == 5 && memcmp(slots[5], slot51, 8) == 0,
+          "surround: six channels counted, 5.1's slots");
+    check(memcmp(dip[5], ai51, 9) == 0 && format[2] == 0x0015 &&
+              mm_get(hh_sd(M0, HDA_SD_FORMAT), 16) == 0x0015,
+          "surround: 5.1's infoframe and the format of six channels");
+    hh_stream_close(&s);
+}
+
+/** On row_surround_six's sink, three channels play as four, the fourth
+ * silent, as Linux's route plugin leaves it, and eight with 7.1's
+ * allocation 0x13 and its slots. */
+static void row_surround_odd(void)
+{
+    static const uint8_t slot71[8] = {0x00, 0x11, 0x26, 0x37, 0x43, 0x52, 0x64, 0x75};
+    audio_stream_t s;
+
+    fill_byte = 0x40;
+    check(open_channels(&s, 3) && s.channels == 3 && M0->ch == 4 && !M0->copy && M0->fmt == 0x0013,
+          "surround: three channels played as four");
+    s.transfer = fill_transfer;
+    check(hh_stream_start(&s) == 0 && dma0(0) == 0x4040 && dma0(2) == 0x4040 && dma0(3) == 0,
+          "surround: the three in order, the fourth silent");
+    hh_stream_close(&s);
+    nslots[5] = 0;
+    check(open_channels(&s, 8) && M0->ch == 8 && M0->copy && hh_stream_start(&s) == 0,
+          "surround: eight channels played as eight");
+    check(chan_cnt[2] == 7 && memcmp(slots[5], slot71, 8) == 0 && dip[5][4] == 7 &&
+              dip[5][7] == 0x13,
+          "surround: 7.1's allocation, slots and infoframe");
+    hh_stream_close(&s);
+    check(display_power == 0, "surround: the closes leave nothing held");
 }
 
 /** The display going unbinds the card. */
@@ -516,6 +674,12 @@ int main(void)
     row_play();
     row_wide();
     row_notify();
+    row_two();
+    row_two_play();
+    row_two_close();
+    row_surround();
+    row_surround_six();
+    row_surround_odd();
     row_unbind();
     if (failures == 0) {
         printf("hdmi-audio-test: ok\n");
