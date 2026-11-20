@@ -490,8 +490,10 @@ static int32_t tap_pick_name(const char *name, const char *dflt, char *out)
  * names, as Linux's tun_set_iff, and write its name back, with the flags as
  * the caller gave them. An interface of that name is attached when it is a
  * TUN asked for with IFF_TUN or a TAP asked for with IFF_TAP and the caller
- * is its owner, in its group or has the privilege to change the interfaces;
- * else a TUN, or a TAP for IFF_TAP alone, is made, named as
+ * is the owner and in the group it has, of those TUNSETOWNER and
+ * TUNSETGROUP gave it, or has the privilege to change the interfaces
+ * (`tap_not_capable`); else a TUN, or a TAP for IFF_TAP alone, is made,
+ * named as
  * `tap_pick_name` says. The attach keeps IFF_NO_PI and IFF_ONE_QUEUE of
  * the call for the interface. -EEXIST for an open that has an interface,
  * as Linux's; -EOPNOTSUPP in a network namespace other than the first,
