@@ -1,5 +1,6 @@
-/* tap.h: /dev/net/tun, Linux's TAP interface: an Ethernet interface whose
- * other end is a descriptor a program reads and writes frames on. */
+/* tap.h: /dev/net/tun, Linux's TUN and TAP interfaces: an interface of IP
+ * datagrams or of Ethernet frames whose other end is a descriptor a program
+ * reads and writes them on. */
 #ifndef _TAP_H_
 #define _TAP_H_
 
@@ -7,22 +8,22 @@
 
 /*
  * A program opens /dev/net/tun and names an interface with TUNSETIFF; the
- * kernel makes the Ethernet interface `tapN`, or the name asked for, and
- * from then on each frame the stack sends on the interface is one read of
- * the descriptor, and each write of the descriptor is a frame the
- * interface receives. QEMU's `-netdev tap` is the user this was written
- * for: it joins a guest's network card to an interface of the host, so
- * that the host routes through the guest or the guest through the host.
+ * kernel makes the Ethernet interface `tapN` for IFF_TAP, or the interface
+ * of IP datagrams `tunN` for IFF_TUN, or the name asked for, and from then
+ * on each frame or datagram the stack sends on the interface is one read
+ * of the descriptor, and each write of the descriptor is one the interface
+ * receives, each behind Linux's `struct tun_pi` unless IFF_NO_PI is given.
+ * QEMU's `-netdev tap` is the user the TAP was written for: it joins a
+ * guest's network card to an interface of the host, so that the host
+ * routes through the guest or the guest through the host; a VPN's daemon
+ * is the TUN's.
  *
- * Only the TAP form is offered, Ethernet frames with no packet information
- * header (IFF_TAP | IFF_NO_PI), and no virtio header (IFF_VNET_HDR), so a
- * frame is whole on each side: no checksum is left to the other side and no
- * frame is larger than the interface's MTU allows. QEMU then offers its
- * guest's virtio network device none of the offloads.
+ * No virtio header (IFF_VNET_HDR) is offered, so a frame is whole on each
+ * side: no checksum is left to the other side and no frame is larger than
+ * the interface's MTU allows. QEMU then offers its guest's virtio network
+ * device none of the offloads. The interfaces take slots of netdev.h's
+ * NETDEV_MAX, which bounds how many there are at once.
  */
-
-/* The interfaces at once. They take slots of netdev.h's NETDEV_MAX. */
-#define TAP_MAX 2
 
 /* The frames an interface holds for its reader; one more is dropped and
  * counted, as a card's full ring drops. Linux's tun queues 1000 by default
@@ -76,11 +77,9 @@ struct kernel_iovec;
 /**
  * writev(2) of the descriptor `e`: the `count` elements of `iov`, an
  * imported vector of `total` bytes, are one frame, gathered, which the
- * interface receives, since a frame is one write however many elements
- * carry it. `total`, with the frame received, or counted as dropped and
- * not read when it is longer than an interface carries, 1514 bytes, as a
- * write of it is; -EBADFD before TUNSETIFF; -EINVAL for less than an
- * Ethernet header; -EFAULT; -ENOMEM. Called under the big kernel lock.
+ * interface receives as a write of it does (`tap_inject`), since a frame
+ * is one write however many elements carry it. -EBADFD before TUNSETIFF;
+ * -EFAULT; -ENOMEM; else as `tap_inject`. Called under the big kernel lock.
  */
 int32_t tap_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count, uint32_t total);
 
@@ -88,7 +87,8 @@ int32_t tap_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count
  * readv(2) of the descriptor `e`: one frame, scattered across the `count`
  * elements of `iov` in order, as Linux's tun_chr_read_iter gives it; the
  * bytes past the vector are lost, as a short read loses them. The bytes
- * read; -EBADFD, -EAGAIN, -EINTR or -EFAULT as read(2) of the descriptor.
+ * read; -EBADFD, -EAGAIN, -EINTR, -EINVAL or -EFAULT as read(2) of the
+ * descriptor.
  * Called under the big kernel lock; it may sleep.
  */
 int32_t tap_readv(struct fd_entry *e, const struct kernel_iovec *iov, int count);
@@ -100,9 +100,10 @@ struct tap;
  * reader, as /dev/vhost-net does. Both calls are made under the big lock.
  */
 struct tap_backend {
-    /* Take the frame of `len` bytes: 1 when taken, 0 when there is no room,
-     * and the frame waits in the ring until `tap_backend_drain`. Called
-     * with the ring's lock held and interrupts off; it does not sleep. */
+    /* Take the frame of `len` bytes, as a read of the descriptor would give
+     * it: 1 when taken, 0 when there is no room, and the frame waits in the
+     * ring until `tap_backend_drain`. Called with the ring's lock held and
+     * interrupts off; it does not sleep. */
     int (*rx)(struct tap_backend *b, const uint8_t *frame, uint16_t len);
     /* The interface's descriptor closed; the backend has been let go. */
     void (*gone)(struct tap_backend *b);
@@ -123,10 +124,18 @@ int tap_backend_set(struct tap *t, struct tap_backend *b);
  * until it takes no more. */
 void tap_backend_drain(struct tap *t);
 
-/** Give the interface `t` the frame of `len` bytes at `frame`, in kernel
- * memory, as a write of its descriptor does: `len`, with one longer than
- * 1514 bytes counted as dropped and `frame` not read; -EINVAL for less
- * than an Ethernet header. */
+/**
+ * Give the interface `t` the `len` bytes at `frame`, in kernel memory, as a
+ * write of its descriptor does and as Linux's tun_get_user takes them:
+ * after the 4 bytes of a `struct tun_pi` without IFF_NO_PI, whose protocol
+ * a TUN's datagram is given as, an Ethernet frame for a TAP, or for a TUN
+ * an IP datagram, whose version gives its protocol with IFF_NO_PI. `len`,
+ * with a frame longer than the interface carries, 1514 bytes for a TAP and
+ * 1500 for a TUN, counted as dropped and `frame` not read, which a NULL
+ * `frame` asks for too; -EINVAL for less than the packet information or a
+ * TAP's Ethernet header, or for a TUN's datagram of no IP version without
+ * IFF_NO_PI, counted as dropped.
+ */
 int32_t tap_inject(struct tap *t, const uint8_t *frame, uint32_t len);
 
 #endif /* _TAP_H_ */
