@@ -2193,11 +2193,47 @@ int32_t drm_connector_force_write(struct drm_connector *connector, const char *b
     return (int32_t)len;
 }
 
+/**
+ * Take `connector`'s probed modes into a list of their own, Linux's
+ * __drm_helper_update_and_validate with drm_mode_prune_invalid: one mode
+ * of equal ones, with the type bits of all and the timings of the
+ * preferred one, as drm_connector_list_update keeps, and only the modes
+ * mode_ok allows. Return the list, unsorted, NULL when none is left.
+ */
+static struct drm_display_mode *update_and_validate(struct drm_connector *connector,
+                                                    uint32_t max_width, uint32_t max_height)
+{
+    struct drm_display_mode *kept = NULL, **tail = &kept, *m, *k;
+
+    while ((m = connector->probed_modes) != NULL) {
+        connector->probed_modes = m->next;
+        m->next = NULL;
+        for (k = kept; k && !drm_mode_equal(&k->info, &m->info); k = k->next) {
+        }
+        if (k) {
+            if (!(k->info.type & DRM_MODE_TYPE_PREFERRED) &&
+                (m->info.type & DRM_MODE_TYPE_PREFERRED)) {
+                m->info.type |= k->info.type;
+                k->info = m->info;
+            } else {
+                k->info.type |= m->info.type;
+            }
+            kfree(m);
+        } else if (!mode_ok(connector, &m->info, max_width, max_height)) {
+            kfree(m);
+        } else {
+            *tail = m;
+            tail = &m->next;
+        }
+    }
+    return kept;
+}
+
 /** drm_helper_probe_single_connector_modes's work, with the device held
  * awake. */
 static int probe_modes(struct drm_connector *connector, uint32_t max_width, uint32_t max_height)
 {
-    struct drm_display_mode *kept = NULL, **tail = &kept, *m, *k;
+    struct drm_display_mode *kept, *m;
     int count = 0;
 
     if (connector->force) {
@@ -2247,28 +2283,12 @@ static int probe_modes(struct drm_connector *connector, uint32_t max_width, uint
             }
         }
     }
-    /* Linux's drm_connector_list_update: one mode of equal ones, with the
-     * type bits of all, and the timings of the preferred one. */
-    while ((m = connector->probed_modes) != NULL) {
-        connector->probed_modes = m->next;
-        m->next = NULL;
-        for (k = kept; k && !drm_mode_equal(&k->info, &m->info); k = k->next) {
-        }
-        if (k) {
-            if (!(k->info.type & DRM_MODE_TYPE_PREFERRED) &&
-                (m->info.type & DRM_MODE_TYPE_PREFERRED)) {
-                m->info.type |= k->info.type;
-                k->info = m->info;
-            } else {
-                k->info.type |= m->info.type;
-            }
-            kfree(m);
-        } else if (!mode_ok(connector, &m->info, max_width, max_height)) {
-            kfree(m);
-        } else {
-            *tail = m;
-            tail = &m->next;
-        }
+    kept = update_and_validate(connector, max_width, max_height);
+    /* Every detachable DisplayPort sink takes 640x480 at 60 Hz (DP 1.4a
+     * 5.2.1.2), so Linux tries it when validation left no mode. */
+    if (!kept && connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort) {
+        drm_add_modes_noedid(connector, 640, 480);
+        kept = update_and_validate(connector, max_width, max_height);
     }
     modes_sort(&kept);
     modes_free(&connector->modes);
