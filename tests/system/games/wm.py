@@ -313,29 +313,33 @@ def png_rows(path, last):
     return width, height, bpp, rows
 
 
-def screen(name, points=POINTS):
+def screen(name, points=POINTS, tries=1):
     """
     Capture the output with weston-screenshooter and check, as NAME, that it
-    is SCREEN's size and that each of POINTS has its colour.
+    is SCREEN's size and that each of POINTS has its colour, capturing again
+    up to TRIES times in all while a point is off.
     """
-    shutil.rmtree(SHOTS, ignore_errors=True)
-    SHOTS.mkdir(mode=0o755)
-    os.chown(SHOTS, UID, UID)
-    run = subprocess.run(desktop("XDG_PICTURES_DIR=%s exec weston-screenshooter" % SHOTS),
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    shots = sorted(SHOTS.glob("wayland-screenshot-*.png"))
-    if run.returncode != 0 or not shots:
-        check(name, False, "weston-screenshooter: status %d %s" % (run.returncode,
-                                                                  run.stdout.strip()))
-        return
-    width, height, bpp, rows = png_rows(shots[-1], max(y for _, y, _ in points))
-    off = []
-    for x, y, colour in points if (width, height) == SCREEN else ():
-        r, g, b = rows[y][x * bpp:x * bpp + 3]
-        if not COLOURS[colour](r, g, b):
-            off.append("%d,%d is %d %d %d, not %s" % (x, y, r, g, b, colour))
-    check(name, (width, height) == SCREEN and not off, "%dx%d, %d points off %s" % (
-        width, height, len(off), off))
+    for attempt in range(1, tries + 1):
+        shutil.rmtree(SHOTS, ignore_errors=True)
+        SHOTS.mkdir(mode=0o755)
+        os.chown(SHOTS, UID, UID)
+        run = subprocess.run(desktop("XDG_PICTURES_DIR=%s exec weston-screenshooter" % SHOTS),
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        shots = sorted(SHOTS.glob("wayland-screenshot-*.png"))
+        if run.returncode != 0 or not shots:
+            check(name, False, "weston-screenshooter: status %d %s" % (run.returncode,
+                                                                      run.stdout.strip()))
+            return
+        width, height, bpp, rows = png_rows(shots[-1], max(y for _, y, _ in points))
+        off = []
+        for x, y, colour in points if (width, height) == SCREEN else ():
+            r, g, b = rows[y][x * bpp:x * bpp + 3]
+            if not COLOURS[colour](r, g, b):
+                off.append("%d,%d is %d %d %d, not %s" % (x, y, r, g, b, colour))
+        if (width, height) == SCREEN and not off:
+            break
+    check(name, (width, height) == SCREEN and not off, "%dx%d, %d points off %s, capture %d" % (
+        width, height, len(off), off, attempt))
 
 
 def xplace(width, height):
@@ -432,7 +436,9 @@ def full(width, height):
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         print(query.stdout, end="", flush=True)
         placed("full-%d" % width, query.stdout, 1366, 768)
-        screen("screen-full-%d" % width, POINTS if width == 1366 else BARRED)
+        # The probe is ready once its first Present returns, before Xwayland
+        # and Weston need have shown the frame, so the capture is repeated.
+        screen("screen-full-%d" % width, POINTS if width == 1366 else BARRED, tries=20)
         say("ready: full-%d" % width)
         wait_key(fd)
         go.touch()
