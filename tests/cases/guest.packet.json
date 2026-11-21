@@ -27,7 +27,7 @@
         {"assertion_id": "bind-missing", "checks": "a bind to an interface that does not exist is refused with ENODEV", "source": "program"},
         {"assertion_id": "bind", "checks": "a bind to the machine's interface is accepted", "source": "program"},
         {"assertion_id": "discover-sent", "checks": "a DHCP discover sent to the broadcast MAC address is sent whole", "source": "program"},
-        {"assertion_id": "not-mac-refused", "checks": "a destination of four bytes, which is not a MAC address, is refused with EINVAL", "source": "program"},
+        {"assertion_id": "overrun-refused", "checks": "a send whose sll_halen is longer than the address passed, or whose address is shorter than a sockaddr_ll, is refused with EINVAL and sends nothing", "source": "program"},
         {"assertion_id": "offer-polled", "checks": "poll reports the socket readable while the offer is awaited, and recvmsg then finds a frame", "source": "program"},
         {"assertion_id": "select-agrees", "checks": "select, given a whole fd_set, agrees with poll", "source": "program"},
         {"assertion_id": "offer-ipv4", "checks": "each frame received is at least an IP header long and IPv4", "source": "program"},

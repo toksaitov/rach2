@@ -252,7 +252,7 @@ static const struct {
     {"bind-missing", 0},
     {"bind", 0},
     {"discover-sent", 1},
-    {"not-mac-refused", 0},
+    {"overrun-refused", 0},
     {"offer-polled", 1},
     {"select-agrees", 1},
     {"offer-ipv4", 1},
@@ -636,15 +636,47 @@ static void check_close_releases(void)
     }
 }
 
+/**
+ * Check the row `overrun-refused` on the socket `fd`: a send of the DHCP
+ * frame to the broadcast destination `sll` is -EINVAL, and sends nothing,
+ * when sll_halen claims more address than the caller passed or the caller
+ * passes less than a whole sockaddr_ll, the two refusals of Linux's
+ * packet_snd. A sll_halen shorter than the device's address is not refused
+ * there, since the address read is the device's length from sll_addr.
+ * `sll` is left as it came.
+ */
+static void overrun_refused(int fd, struct sockaddr_ll_probe *sll)
+{
+    unsigned long args[6];
+    uint8_t halen;
+
+    halen = sll->sll_halen;
+    sll->sll_halen = sizeof(sll->sll_addr) + 1;
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)frame;
+    args[2] = DHCP_LEN;
+    args[3] = 0;
+    args[4] = (unsigned long)sll;
+    args[5] = sizeof(*sll);
+    if (socketcall(SC_SENDTO, args) != -EINVAL) {
+        fail("overrun-refused", "a sll_halen longer than the address passed was not refused");
+    }
+    sll->sll_halen = halen;
+    args[5] = sizeof(*sll) - 4;
+    if (socketcall(SC_SENDTO, args) != -EINVAL) {
+        fail("overrun-refused", "an address shorter than a sockaddr_ll was not refused");
+    }
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
 /**
  * The rows of a native run between the bind and the two protocols: the
- * refusal of a destination that is not a MAC address, which sends nothing,
- * and the refused bind that leaves the protocol as it was, on the socket
- * `fd`. The discovers and what is received of them are left out.
+ * refusal of a destination longer than the address passed, which sends
+ * nothing, and the refused bind that leaves the protocol as it was, on the
+ * socket `fd`. The discovers and what is received of them are left out.
  */
 static void native_rows(int fd)
 {
@@ -659,19 +691,11 @@ static void native_rows(int fd)
     sll.sll_protocol = ETH_P_IP_BE;
     sll.sll_ifindex = if_index;
     sll.sll_hatype = 1;
-    sll.sll_halen = 4;
+    sll.sll_halen = 6;
     for (i = 0; i < 6; i++) {
         sll.sll_addr[i] = 0xff;
     }
-    args[0] = (uint32_t)fd;
-    args[1] = (unsigned long)frame;
-    args[2] = DHCP_LEN;
-    args[3] = 0;
-    args[4] = (unsigned long)&sll;
-    args[5] = sizeof(sll);
-    if (socketcall(SC_SENDTO, args) != -EINVAL) {
-        fail("not-mac-refused", "a destination that is not a MAC address was not refused");
-    }
+    overrun_refused(fd, &sll);
 
     sll.sll_protocol = ETH_P_ARP_BE;
     sll.sll_ifindex = 99; /* no such interface */
@@ -850,8 +874,8 @@ static void ipv6_frame(void)
  * What it sends: a DHCP discover, an IP packet the caller built whole,
  * broadcast from a machine that has no address yet. That is the case this
  * socket exists for, and it is also the only way to make something answer,
- * which shows that the frame left well formed. A destination of four bytes
- * is not a MAC address and is -EINVAL.
+ * which shows that the frame left well formed. A sll_halen longer than the
+ * address passed, or an address shorter than a sockaddr_ll, is -EINVAL.
  *
  * What it receives: the offer, broadcast to 255.255.255.255, an address
  * this machine does not have, which `ip_rx` drops. It is waited for as a
@@ -1049,10 +1073,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
         fail("discover-sent", "the discover did not send");
     }
-    sll.sll_halen = 4;
-    if (socketcall(SC_SENDTO, args) != -EINVAL) {
-        fail("not-mac-refused", "a destination that is not a MAC address was not refused");
-    }
+    overrun_refused(fd, &sll);
 
     /* What it receives: the offer to 255.255.255.255, which `ip_rx` drops. */
     reach("offer-polled");
