@@ -1925,8 +1925,9 @@
         }
       },
       "resources": {
-        "cpu_millis": 1000,
+        "cpu_millis": 4000,
         "cpu_ceiling_millis": 16000,
+        "cpu_class": "bound",
         "memory_bytes": 6442450944,
         "disk_bytes": 15032385536,
         "locks": [],
@@ -2028,7 +2029,7 @@
               }
             ],
             "cpu": "max",
-            "processors": 1,
+            "processors": 4,
             "memory_bytes": 4294967296,
             "firmware": "direct",
             "devices": [
