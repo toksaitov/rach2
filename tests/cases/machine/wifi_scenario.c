@@ -209,12 +209,13 @@ static void unrouted(struct wifi *w)
     sta(w, NULL, "while route -n | grep -q '^0\\.0\\.0\\.0 .* wlan0$'; do sleep 1; done");
 }
 
-/** Wait in the station's shell until wlan0 has no IPv4 address. udhcpc's
- * deconfig removes the default route before the address, so a wait for the
- * route alone may end before the kernel records the address's loss. */
+/** Wait in the station's shell until wlan0 has no IPv4 address, which
+ * ifconfig shows as no `inet addr:` or as 0.0.0.0. udhcpc's deconfig removes
+ * the default route before the address, so a wait for the route alone may
+ * end before the kernel records the address's loss. */
 static void unaddressed(struct wifi *w)
 {
-    sta(w, NULL, "while ifconfig wlan0 | grep -q 'inet addr:'; do sleep 1; done");
+    sta(w, NULL, "while ifconfig wlan0 | grep -q 'inet addr:[1-9]'; do sleep 1; done");
 }
 
 /** Say whether the kernel has recorded on the station's console, since the
