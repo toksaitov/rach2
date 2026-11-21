@@ -211,7 +211,7 @@
         },
         {
           "assertion_id": "control-mounted",
-          "checks": "/proc/mounts has /dev/disk0p1 /mnt/s ext2 rw 0 0, a mount that writes back, which the scenario prints",
+          "checks": "/proc/mounts has /dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0, a mount that writes back, which the scenario prints",
           "source": "scenario"
         },
         {
@@ -271,7 +271,7 @@
         },
         {
           "assertion_id": "check-writable",
-          "checks": "the next boot mounts the stopped volume as /dev/disk0p1 /mnt/s ext2 rw 0 0",
+          "checks": "the next boot mounts the stopped volume as /dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0",
           "source": "scenario"
         },
         {
@@ -296,7 +296,7 @@
         },
         {
           "assertion_id": "again-writable",
-          "checks": "the control mounts as /dev/disk1p1 /mnt/s ext2 rw 0 0",
+          "checks": "the control mounts as /dev/disk1p1 /mnt/s ext2 rw,relatime,errors=continue 0 0",
           "source": "scenario"
         },
         {
@@ -590,7 +590,7 @@
         },
         {
           "assertion_id": "rmtree-mounted",
-          "checks": "/proc/mounts has /dev/disk0p1 /mnt/s ext2 rw 0 0, a mount that writes back",
+          "checks": "/proc/mounts has /dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0, a mount that writes back",
           "source": "scenario"
         },
         {
@@ -610,7 +610,7 @@
         },
         {
           "assertion_id": "rmtree-writable",
-          "checks": "the next boot mounts the stopped volume as /dev/disk0p1 /mnt/s ext2 rw 0 0",
+          "checks": "the next boot mounts the stopped volume as /dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0",
           "source": "scenario"
         },
         {
