@@ -26,12 +26,16 @@ void host_command_server(void);
  * standard output and error to out_path, truncated first, and return its
  * process ID, or -1 when it could not start or on Windows. Call it while the
  * test is small and before host_command_server, whose socket it would keep.
+ * A process not reaped when the test exits, by exit or a return from main,
+ * is stopped with SIGTERM and reaped then.
  */
 long host_command_spawn(const char *const argv[], const char *out_path);
 
 /*
  * Wait for the process `pid` of host_command_spawn, copy its out_path to
- * standard output, and return its exit status, 128 plus a signal, or -1.
+ * standard output, and return its exit status, 128 plus a signal, or -1,
+ * which a `pid` that host_command_spawn did not return, or did and that
+ * was reaped already, also gets.
  */
 int host_command_reap(long pid, const char *out_path);
 

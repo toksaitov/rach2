@@ -352,11 +352,43 @@ int host_command(const char *const argv[], const char *out_path, const char *err
 }
 
 #ifndef _WIN32
+#define SPAWN_MAX 16
+static pid_t spawned[SPAWN_MAX]; /* started and not yet reaped, or 0 */
+static pid_t spawn_owner;        /* the process that started them */
+
+/** Stop and reap each process still in `spawned`, at the test's exit. A
+ * forked copy of the test that exits leaves them to the test. */
+static void spawn_stop(void)
+{
+    int i, status;
+
+    if (getpid() != spawn_owner)
+        return;
+    for (i = 0; i < SPAWN_MAX; i++) {
+        if (spawned[i] == 0)
+            continue;
+        kill(spawned[i], SIGTERM);
+        while (waitpid(spawned[i], &status, 0) < 0 && errno == EINTR)
+            ;
+        spawned[i] = 0;
+    }
+}
+
 long host_command_spawn(const char *const argv[], const char *out_path)
 {
     pid_t pid;
-    int in, out;
+    int in, out, slot;
 
+    for (slot = 0; slot < SPAWN_MAX && spawned[slot] != 0; slot++)
+        ;
+    if (slot == SPAWN_MAX) {
+        fprintf(stderr, "host tool: %s: more than %d processes started\n", argv[0], SPAWN_MAX);
+        return -1;
+    }
+    if (spawn_owner == 0) {
+        spawn_owner = getpid();
+        atexit(spawn_stop);
+    }
     fflush(NULL);
     pid = fork();
     if (pid < 0) {
@@ -373,6 +405,7 @@ long host_command_spawn(const char *const argv[], const char *out_path)
         execv(argv[0], (char *const *)argv);
         _exit(127);
     }
+    spawned[slot] = pid;
     return (long)pid;
 }
 
@@ -380,14 +413,22 @@ int host_command_reap(long pid, const char *out_path)
 {
     char buf[8192];
     size_t n;
-    int status;
+    int i, status;
     FILE *f;
 
+    for (i = 0; i < SPAWN_MAX && spawned[i] != (pid_t)pid; i++)
+        ;
+    if (pid <= 0 || i == SPAWN_MAX) {
+        fprintf(stderr, "host tool: %ld was not started by host_command_spawn\n", pid);
+        return -1;
+    }
     while (waitpid((pid_t)pid, &status, 0) < 0)
         if (errno != EINTR) {
             fprintf(stderr, "host tool: wait for %ld: %s\n", pid, strerror(errno));
+            spawned[i] = 0;
             return -1;
         }
+    spawned[i] = 0;
     f = fopen(out_path, "rb");
     if (f == NULL) {
         fprintf(stderr, "host tool: %s: %s\n", out_path, strerror(errno));
