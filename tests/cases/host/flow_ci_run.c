@@ -678,7 +678,7 @@ static int ia32_rows(struct run_fixture *r)
 
 /** The suites of tools/ci/kvm-suites, run after the others as a run of
  * their own under `RACH2_QEMU_ACCEL=kvm`, which the runs after it do not
- * keep. */
+ * keep, on both architectures and under the ia32 profile. */
 static int kvm_rows(struct run_fixture *r)
 {
     struct run_case c = {"kvm: every suite", "none", "", 0, 0, NULL, NULL, NULL};
@@ -689,14 +689,16 @@ static int kvm_rows(struct run_fixture *r)
     ok = row(r, &c) && ok;
     ok = words(r, path("calls"),
                "tests/run style host default shutdown tests/run tcp fpu tests/run bigmem "
-               "tests/run default tcp") &&
-         words(r, path("calls.arch"), "i686 x86_64 i686 x86_64 on kvm x86_64 i686 under ia32") &&
+               "tests/run default tests/run tcp") &&
+         words(r, path("calls.arch"),
+               "i686 x86_64 i686 x86_64 on kvm x86_64 i686 under ia32 i686 under ia32 on kvm") &&
          ok;
     c.name = "kvm: failed suite";
-    c.set = "tcp";
+    c.set = "x86_64:tcp";
     c.err = "run: x86_64:fpu: FAIL in 3s\nrun: result: failed: x86_64:fpu\n";
     c.status = 1;
     c.failed = "x86_64:fpu";
+    r->suites = "i686:default x86_64:tcp x86_64:fpu";
     ok = row(r, &c) && ok;
     c.name = "kvm: chosen suites";
     c.set = "none";
@@ -707,6 +709,26 @@ static int kvm_rows(struct run_fixture *r)
     ok = row(r, &c) && ok;
     ok = words(r, path("calls"), "tests/run i686:default tests/run x86_64:tcp") &&
          words(r, path("calls.arch"), "i686 x86_64 i686 x86_64 on kvm") && ok;
+    c.name = "kvm: chosen suites of the profile";
+    r->suites = "ia32:tcp ia32:default";
+    ok = row(r, &c) && ok;
+    ok = words(r, path("calls"), "tests/run default tests/run tcp") &&
+         words(r, path("calls.arch"), "i686 under ia32 i686 under ia32 on kvm") && ok;
+    c.name = "kvm: the profile's suites on KVM alone";
+    r->suites = "ia32:tcp";
+    ok = row(r, &c) && ok;
+    ok = words(r, path("calls"), "tests/run tcp") &&
+         words(r, path("calls.arch"), "i686 under ia32 on kvm") && ok;
+    c.name = "kvm: failed suite of the profile";
+    c.set = "tcp";
+    c.err = "run: tcp: FAIL in 3s\nrun: result: failed: tcp\n";
+    c.status = 1;
+    c.failed = "ia32:tcp";
+    r->suites = "ia32:default ia32:tcp";
+    ok = row(r, &c) && words(r, output_path(r, "full-ia32/failed"), "tcp") && ok;
+    ok = fx_check(r->f, fx_has(output_path(r, "full-ia32/err"), "run: tcp: FAIL"),
+                  "the profile's KVM run keeps its stderr with the profile's") &&
+         ok;
     r->suites = "";
     return fx_remove(path("tree/tools/ci/kvm-suites")) && ok;
 }

@@ -148,6 +148,16 @@ run_set() { # run_set NAME ARGS...
     return 1
 }
 
+# Run run_set with ARGS under KVM, `RACH2_QEMU_ACCEL=kvm`, and give
+# RACH2_QEMU_ACCEL back the site's accelerator after it.
+kvm_set() { # kvm_set NAME ARGS...
+    site_accel=${RACH2_QEMU_ACCEL-}
+    RACH2_QEMU_ACCEL=kvm
+    export RACH2_QEMU_ACCEL
+    run_set "$@"
+    RACH2_QEMU_ACCEL=$site_accel
+}
+
 # Set RACH2_CASES to the identities of RACH2_RERUN_CASES that belong to the
 # suites of WORDS, SUITE or ARCH:SUITE, a case identity's second part being
 # its suite, when they name at least one case of each; otherwise unset it, so
@@ -237,9 +247,11 @@ share() { # share [finished]
 # accelerator, those tools/ci/kvm-suites names after it as one run under KVM,
 # `bigmem` after them as a run of its own, and last, once both architectures
 # have built, the ia32 profile's suites, as tools/ci/ia32-suites and
-# ia32-deferred give them, as a run of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`,
-# which boots the i686 build's cases on the x86-64 build's kernel
-# (tests/Readme.md, The ia32 profile); a failure is `ARCH:build`, and
+# ia32-deferred give them, as runs of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`,
+# which boot the i686 build's cases on the x86-64 build's kernel
+# (tests/Readme.md, The ia32 profile): one under the site's accelerator, and
+# those of them tools/ci/kvm-suites names after it as one under KVM, split
+# as the architectures' suites are; a failure is `ARCH:build`, and
 # `ia32:build` when the profile could not run for want of a build. With SUITES,
 # the run runs `ARCH:SUITE` for each word and the SUITE of each `ia32:SUITE`
 # word under the profile. An architecture that SUITES names nothing of is
@@ -357,18 +369,9 @@ if [ -n "$ARCH" ]; then
     fi
     # shellcheck disable=SC2086 # a suite name is one word by format
     [ -z "$rest" ] || run_set all $rest
-    if [ -n "$kvm" ]; then
-        accel=${RACH2_QEMU_ACCEL-}
-        RACH2_QEMU_ACCEL=kvm
-        export RACH2_QEMU_ACCEL
-        # shellcheck disable=SC2086 # a suite name is one word by format
-        run_set all $kvm
-        RACH2_QEMU_ACCEL=$accel
-    fi
+    # shellcheck disable=SC2086 # a suite name is one word by format
+    [ -z "$kvm" ] || kvm_set all $kvm
     if [ -n "$loaded" ]; then
-        accel=${RACH2_QEMU_ACCEL-}
-        RACH2_QEMU_ACCEL=kvm
-        export RACH2_QEMU_ACCEL
         # The launcher sizes loaded.py's claim from the guest pool, and a
         # claim of more than half the host's memory takes the host alone,
         # whose lock the claim of loaded.py's own guests would then wait for
@@ -376,9 +379,8 @@ if [ -n "$ARCH" ]; then
         # memory.
         set_runner="env RACH2_WORKERS=1 RACH2_MEMORY_MIB=16384 python3 tests/graphics/browser/loaded.py $out/load -- tests/run -j1 -C4"
         # shellcheck disable=SC2086 # a suite name is one word by format
-        run_set all $loaded
+        kvm_set all $loaded
         set_runner=""
-        RACH2_QEMU_ACCEL=$accel
     fi
     if [ -n "$bigmem" ]; then
         ARCH=x86_64
@@ -394,8 +396,23 @@ if [ -n "$ia32" ]; then
         export RACH2_KERNEL RACH2_FAILED
         mkdir -p "$RACH2_FAILED"
         errs=$out/err-ia32
+        # The profile's suites that tools/ci/kvm-suites names leave the
+        # site's run for one of their own under KVM, as above.
+        listed=""
+        [ ! -f tools/ci/kvm-suites ] || listed=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/kvm-suites)
+        kvm=""
+        others=""
+        for n in $ia32; do
+            if echo "$listed" | grep -qx "$n"; then
+                kvm="$kvm $n"
+            else
+                others="$others $n"
+            fi
+        done
         # shellcheck disable=SC2086 # a suite name is one word by format
-        run_set all $ia32
+        [ -z "$others" ] || run_set all $others
+        # shellcheck disable=SC2086 # a suite name is one word by format
+        [ -z "$kvm" ] || kvm_set all $kvm
     else
         echo ia32:build >> "$out/failed"
     fi
