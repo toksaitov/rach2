@@ -81,15 +81,16 @@ static unsigned char pattern(unsigned file, size_t off)
     return (unsigned char)((off * 31u + 7u) ^ (file * 131u) ^ (off >> 11));
 }
 
-/** Write all `n` bytes of `p` to `fd`: 0, or -1 when a write fails or
- * writes nothing. */
-static int write_all(int fd, const unsigned char *p, size_t n)
+/** Write all `n` bytes of `p` to `fd`: 0, or a negative errno, or 1 for a
+ * write that wrote nothing, with the offset of the failed write in `*at`. */
+static int write_all(int fd, const unsigned char *p, size_t n, size_t *at)
 {
     size_t off = 0;
     while (off < n) {
         int w = syscall3(SYS_WRITE, fd, (long)(p + off), (int)(n - off));
         if (w <= 0) {
-            return -1;
+            *at = off;
+            return w == 0 ? 1 : w;
         }
         off += (size_t)w;
     }
@@ -145,6 +146,29 @@ static const char *mismatch(char *out, unsigned file, size_t at)
     return out;
 }
 
+/** Write into `out`, of 64 bytes, "write of file N at byte B: E", where E is
+ * the write's result `w`, an errno as "errno E" or 0 for nothing written;
+ * return `out`. */
+static const char *write_failed(char *out, unsigned file, size_t at, int w)
+{
+    char num[3][12];
+    const char *part[7];
+    size_t n = 0, i, k;
+
+    part[0] = "write of file ";
+    part[1] = report_decimal(num[0], (int)file);
+    part[2] = " at byte ";
+    part[3] = report_decimal(num[1], (int)at);
+    part[4] = w < 0 ? ": errno " : ": wrote ";
+    part[5] = report_decimal(num[2], w < 0 ? -w : 0);
+    part[6] = 0;
+    for (k = 0; part[k] != 0; k++)
+        for (i = 0; part[k][i] != '\0' && n < 63; i++)
+            out[n++] = part[k][i];
+    out[n] = '\0';
+    return out;
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -156,8 +180,8 @@ void probe_main(unsigned long *sp)
     char **envp = (char **)(sp + 1) + sp[0] + 1;
     char path[8], why[64];
     unsigned f, bad = NFILES;
-    size_t i, bad_at = 0;
-    int fd;
+    size_t i, bad_at = 0, at = 0;
+    int fd, w;
 
     report_begin(report_case(envp, "guest.disk-q35.blockprobe"));
     report_plan("written");
@@ -172,8 +196,9 @@ void probe_main(unsigned long *sp)
         if (fd < 0) {
             fail("a file did not open for writing", "open for write");
         }
-        if (write_all(fd, buf, FILE_SIZE) != 0) {
-            fail("a write failed or wrote nothing", "write");
+        w = write_all(fd, buf, FILE_SIZE, &at);
+        if (w != 0) {
+            fail(write_failed(why, f, at, w > 0 ? 0 : w), "write");
         }
         if (syscall1(SYS_FSYNC, fd) != 0) {
             fail("fsync failed", "fsync");
