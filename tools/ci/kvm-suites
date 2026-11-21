@@ -27,6 +27,10 @@
 # an emulator does not give (tests/cases/guest.kvmclock.json).
 # The sched4 suite compares a sleeper's wait with Debian's in the same
 # four-processor profile, taken under KVM (tests/cases/guest.sched4.json).
+# The netguest suite boots its FreeBSD and Debian gateways under Rach2's KVM
+# inside a guest its Readme gives KVM; with Rach2 under TCG the FreeBSD
+# guest is emulated twice and its cases lost the guest in the release's run
+# (tests/netguest/Readme.md).
 browser
 video
 webgl
@@ -54,3 +58,4 @@ modetest
 piglit
 kvmclock
 sched4
+netguest
