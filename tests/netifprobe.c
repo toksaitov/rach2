@@ -1531,12 +1531,13 @@ static void network_address(int fd)
  * the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
  * another route goes into the table and out again. The default route in
  * force, added again, is EEXIST, as on Linux. A default route with no gateway
- * is EINVAL and does not remove the gateway the machine has. A route for an
- * interface the machine lacks is ENODEV. The route to the machine's own
- * subnet may be added, since it holds, but not removed (EOPNOTSUPP), since
- * the stack cannot isolate that traffic. The default route is removed
- * once, and a second removal is ESRCH, which ends the loop in which a DHCP
- * client's script removes old default routes.
+ * is EEXIST too, since the kernel gives a route that names no interface the
+ * first one and keeps one route for a destination, mask and metric, and it
+ * does not remove the gateway the machine has. A route for an interface the
+ * machine lacks is ENODEV. The route to the machine's own subnet, added
+ * again, is EEXIST, and it is removed, as on Linux. The default route is
+ * removed once, and a second removal is ESRCH, which ends the loop in which a
+ * DHCP client's script removes old default routes.
  *
  * An address that is the network address of its classful subnet,
  * 192.168.1.0, is put in force with that mask at once, and keeps it under a
@@ -1971,15 +1972,18 @@ static void netif_main(void)
         fail("a route to another network was not removed");
     }
     report_held();
-    /* The default route in force, added again, is EEXIST, as on Linux. A
-     * default route with no gateway is refused and removes nothing. */
+    /* The default route in force, added again, is EEXIST, as on Linux. So is
+     * a default route with no gateway, for the interface the kernel chooses,
+     * since the table keeps one route for a destination, mask and metric;
+     * the gateway stays. */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != -EEXIST) {
         fail("the default route in force was taken a second time");
     }
     set_route(0, 0, 0);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != -EINVAL) {
-        fail("a default route with no gateway was taken");
+    r = sys_ioctl(fd, SIOCADDRT, rt);
+    if (r != -EEXIST) {
+        fail_n("a default route with no gateway was not EEXIST", r);
     }
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
@@ -2004,14 +2008,16 @@ static void netif_main(void)
     }
     report_held();
 
-    /* The route to the machine's own subnet: added, and not removed. */
+    /* The route to the machine's own subnet: in force, and removed. */
     set_route(OTHER_IP & OTHER_MASK, 0, OTHER_MASK);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
-        fail("the route to this machine's own subnet was refused");
+    r = sys_ioctl(fd, SIOCADDRT, rt);
+    if (r != -EEXIST) {
+        fail_n("the route to this machine's own subnet, added again, was not EEXIST", r);
     }
     set_route(OTHER_IP & OTHER_MASK, 0, OTHER_MASK);
-    if (sys_ioctl(fd, SIOCDELRT, rt) != -EOPNOTSUPP) {
-        fail("removing the route this machine has by being on the subnet succeeded");
+    r = sys_ioctl(fd, SIOCDELRT, rt);
+    if (r != 0) {
+        fail_n("the route to this machine's own subnet was not removed", r);
     }
     report_held();
     set_route(0, 0, 0);
