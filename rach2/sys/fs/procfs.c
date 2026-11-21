@@ -62,6 +62,7 @@
 #include "../proc/seccomp.h"
 #include "../proc/ns.h"
 #include "../lib/lockdep.h"
+#include "../lib/rcu.h"
 #include "../proc/smp.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
@@ -4940,7 +4941,8 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
  * swapped. HeapPages and HeapUsed are the kernel heap's pages and the bytes in
  * use inside it, for a test that makes and frees objects and requires the heap
- * back where it started. LowTotal and LowFree are the window's frames, the
+ * back where it started. RcuPending counts queued callbacks that have yet
+ * to return. LowTotal and LowFree are the window's frames, the
  * memory below HARD_MEMORY_LIMIT that a device can be given and
  * `alloc_kernel_frame` takes from, under Linux's names for its low memory: a
  * test watches LowFree for the pool whose end makes a driver's allocation
@@ -4963,6 +4965,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     uint32_t cached = pc_resident() + filecache_pages();
     uint32_t kreclaim = kheap_reclaimable();
     uint32_t anon_huge = thp_mapped();
+    uint32_t rcu_pending = rcu_callbacks_pending();
     uint32_t heap_pages = 0;
     size_t heap_bytes = 0;
 
@@ -4984,6 +4987,9 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_str(t, "\n");
     ap_str(t, "HeapUsed:       ");
     ap_ulong(t, (unsigned long)heap_bytes);
+    ap_str(t, "\n");
+    ap_str(t, "RcuPending:     ");
+    ap_u32(t, rcu_pending);
     ap_str(t, "\n");
     ap_str(t, "LowTotal:       ");
     ap_frames_as_kb(t, low_total);

@@ -90,4 +90,7 @@ void rcu_gp_finish(void);
 /** The grace periods ended since the boot. */
 uint32_t rcu_gp_completed(void);
 
+/** Sample the system-wide count of queued callbacks that have yet to return. */
+uint32_t rcu_callbacks_pending(void);
+
 #endif /* _RCU_H_ */

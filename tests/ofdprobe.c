@@ -14,9 +14,8 @@
  *       hundred open and close cycles, and before an open held across a
  *       hundred forks and then closed, so no cycle and no fork leaves a
  *       description behind; each comparison is made up to five times, and
- *       holds when one run leaves the heap as it was. Each reading of
- *       HeapUsed follows a short sleep, since the kernel frees a reaped
- *       child's process record a grace period after the reap (`heap_used`);
+ *       holds when one run leaves the heap as it was. Before each heap
+ *       sample, wait for RcuPending to reach zero (`heap_used`);
  *   (d) FD_CLOEXEC is per-fd: it round-trips through fcntl, and dup2 leaves
  *       the new fd's flag clear.
  *
@@ -128,14 +127,6 @@ static void check(int part, int cond, const char *msg)
     }
 }
 
-/** Check `cond` for `part` as `check` does, unless given `machine=native`. */
-static void check_heap(int part, int cond, const char *msg)
-{
-    if (!probe_native()) {
-        check(part, cond, msg);
-    }
-}
-
 /** Read up to `n` bytes from `fd` into `buf`: the byte count, or a negated
  * errno. */
 static int rd(int fd, char *buf, int n)
@@ -200,56 +191,41 @@ static int forks(void)
 /* The runs of a heap comparison before it fails. */
 #define HEAP_TRIES 5
 
-/* The sleep before a reading of HeapUsed: 20 ms, five ticks at the
- * kernel's 250 Hz. */
-#define HEAP_SETTLE_NS 20000000L
-
 /**
- * HeapUsed in /proc/meminfo, read after a sleep of HEAP_SETTLE_NS.
- *
- * The kernel frees a reaped child's process record, its thread group and
- * its floating-point area a grace period after the reap, in its
- * grace-period thread `rcu_sched` (`proc_ref_put`), as Linux frees a
- * task_struct with `delayed_put_task_struct`. The reap wakes the thread,
- * but the scheduler need not run it before the reaper goes on, so a
- * reading just after the last reap of `forks` may count the last few
- * children's records, some 14 KB each on i686. The sleep gives the thread
- * its processor, and the grace period ends once each other processor has
- * passed a quiescent state: at once on one processor or for one that is
- * idle, and at its next tick for one in user mode. The reading then counts
- * only what is still in use.
+ * Read HeapUsed after observing RcuPending at zero, or return 0xFFFFFFFF
+ * if either field cannot be read. Reaping a child queues a callback that
+ * frees its process record, thread group and floating-point area after a
+ * grace period. The count includes the callback until it returns.
  */
 static unsigned heap_used(void)
 {
-    long ts[2];
+    long ts[2] = {0, 4000000L};
+    unsigned pending;
 
-    ts[0] = 0;
-    ts[1] = HEAP_SETTLE_NS;
-    /* interval: a nap of 20 ms lets rcu_sched free reaped records */
-    syscall2(SYS_NANOSLEEP, (long)ts, 0);
+    while ((pending = probe_meminfo("RcuPending:")) != 0) {
+        if (pending == 0xFFFFFFFFu) {
+            return pending;
+        }
+        /* interval: poll RcuPending every 4 ms */
+        syscall2(SYS_NANOSLEEP, (long)ts, 0);
+    }
     return probe_meminfo("HeapUsed:");
 }
 
 /** Whether HeapUsed is the same after `work` as before it, in one of
- * HEAP_TRIES runs of it, or after one run under `machine=native`, whose
- * result is not judged. Another process of the machine, such as the
- * runner a guest case starts the probe from, may hold heap for a moment
- * across one run, while a leak grows the heap in every run; the records
- * of reaped children, which the kernel frees later, are let go before
- * each reading (`heap_used`). Returns 1 as well when `work` fails, which
- * records its own failure. */
+ * HEAP_TRIES runs of it. The retries allow for heap use by other processes.
+ * Returns 1 as well when `work` fails, which records its own failure. */
 static int heap_kept(int (*work)(void))
 {
-    int tries = probe_native() ? 1 : HEAP_TRIES;
     int i;
 
-    for (i = 0; i < tries; i++) {
+    for (i = 0; i < HEAP_TRIES; i++) {
         unsigned used = heap_used();
 
         if (work() != 0) {
             return 1;
         }
-        if (heap_used() == used) {
+        if (used != 0xFFFFFFFFu && heap_used() == used) {
             return 1;
         }
     }
@@ -262,10 +238,16 @@ static int heap_kept(int (*work)(void))
 static void count_heap(void)
 {
     check(MEMINFO, probe_meminfo("HeapUsed:") != 0xFFFFFFFFu, "HeapUsed in /proc/meminfo");
-    check_heap(HEAP_CYCLES, heap_kept(cycles),
-               "300 open/close cycles left the heap as it was (no OFD leak)");
-    check_heap(HEAP_FORKS, heap_kept(forks),
-               "100 forks and the close left the heap as it was (no fork OFD leak)");
+    if (probe_native()) {
+        cycles();
+        forks();
+        return;
+    }
+    check(MEMINFO, probe_meminfo("RcuPending:") != 0xFFFFFFFFu, "RcuPending in /proc/meminfo");
+    check(HEAP_CYCLES, heap_kept(cycles),
+          "300 open/close cycles left the heap as it was (no OFD leak)");
+    check(HEAP_FORKS, heap_kept(forks),
+          "100 forks and the close left the heap as it was (no fork OFD leak)");
 }
 
 /** Report each assertion: failed with its first failed check, held, or not

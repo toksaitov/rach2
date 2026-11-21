@@ -802,6 +802,9 @@ and are in kibibytes.
 is the kernel heap's page count;
 .Li HeapUsed
 is the number of bytes in use within it.
+.Li RcuPending
+is the number of read-copy update callbacks queued or running across all
+processors, sampled before the heap counts and printed without a unit.
 .Li LowTotal
 and
 .Li LowFree

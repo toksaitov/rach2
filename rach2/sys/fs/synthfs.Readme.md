@@ -10,6 +10,8 @@ A dma-buf descriptor's `/proc/PID/fdinfo/N` includes its `name:` once `DMA_BUF_S
 
 On x86-64, `/proc/stat` also reports KVM's live VM, vCPU, slot, guest-physical table-page and run-page mapping-object counts, which [the KVM Readme](../kvm/Readme.md) gives.
 
+In `/proc/meminfo`, Rach2 reports `HeapPages` in pages, `HeapUsed` in bytes, and `RcuPending` as the number of read-copy update callbacks queued or running across all processors. A callback stops counting once it returns. The kernel samples `RcuPending` before the heap counts.
+
 `install_permanent` in [vfs.c](vfs.c) mounts the three at boot as permanent entries of the mount table; the table in [vfs.Readme.md](vfs.Readme.md) gives their slots and flags. Each has a device number of its own:
 
 | Path | Type | `st_dev` |

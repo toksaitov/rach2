@@ -54,6 +54,19 @@ static struct rcu_cpu rcu_cpus[NR_CPUS];
 /* The grace periods ended, which only the grace-period thread counts. */
 static volatile uint32_t gp_done;
 
+/* Callbacks queued or running on the grace-period thread. */
+static volatile unsigned int pending;
+
+/** Add `delta` to the callback count across all processors. */
+static void pending_add(int delta)
+{
+    unsigned int old;
+
+    do {
+        old = pending;
+    } while (arch_atomic_cmpxchg(&pending, old, old + (unsigned int)delta) != old);
+}
+
 /** A full barrier: a locked exchange, as `mb_here` in proc/membarrier.c. */
 static void rcu_mb(void)
 {
@@ -98,6 +111,11 @@ uint32_t rcu_gp_completed(void)
     return gp_done;
 }
 
+uint32_t rcu_callbacks_pending(void)
+{
+    return pending;
+}
+
 /** Append the list from `first` to `last` to the list `*head`..`*tail`. */
 static void list_join(struct rcu_head **head, struct rcu_head **tail, struct rcu_head *first,
                       struct rcu_head *last)
@@ -129,6 +147,7 @@ void call_rcu(struct rcu_head *head, void (*func)(struct rcu_head *head))
     head->func = func;
     head->next = NULL;
     flags = spin_lock_irqsave(&c->lock);
+    pending_add(1);
     list_join(&c->next, &c->next_last, head, head);
     spin_unlock_irqrestore(&c->lock, flags);
     gp_kick();
@@ -223,6 +242,7 @@ void rcu_gp_finish(void)
         for (; h; h = n) {
             n = h->next;
             h->func(h);
+            pending_add(-1);
         }
     }
 }
