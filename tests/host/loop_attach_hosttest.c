@@ -46,6 +46,9 @@ static uint32_t root_phase(struct vfs_mount *mnt, void *node, void *handle)
 
 static const struct vfs_ops root_ops = {.phase = root_phase};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops};
+/* A type that keeps its files in whole blocks, as ext2 does. */
+static const struct vfs_ops block_ops = {0};
+static const struct vfs_type block_type = {"ext2", 0, &block_ops};
 /* No processor runs a thread: the rows call no transfer, whose count of
  * loop transfers is the only reader of `current_proc` here. */
 struct percpu cpu_table[NR_CPUS];
@@ -451,7 +454,9 @@ static void phase_row(void)
  * first. With a phase under it the second is refused with ELOOP, since the
  * cache blocks of the volume between them do not begin on sectors of the
  * medium and the second device's phase could not place their edges; with
- * none, as over a file of tmpfs, it is attached, as on Linux.
+ * none it is refused while that volume is KRFFS, whose relocation could move
+ * the file off its phase, and attached on one that keeps files in whole
+ * blocks, as on Linux.
  */
 static void nested_row(void)
 {
@@ -468,10 +473,15 @@ static void nested_row(void)
     check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
           "nested: a loop device over a file on a device with a phase is refused");
     first->sector_phase = 0;
+    check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
+          "nested: a loop device over a KRFFS file on a loop device is refused");
+    mount.type = &block_type;
     check(loop_attach(1, "/blocker", 1) == 1 && loop_attached_at(1) &&
               loop_attached_at(1)->backing == first,
-          "nested: a loop device over a file on a device of phase 0 is attached");
+          "nested: a loop device over a block file system's file on a device of phase 0 "
+          "is attached");
     check(loop_detach(1) == 0, "nested: the second detaches");
+    mount.type = &vfs_krffs_type;
     mount.dev = NULL;
     check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
           "nested: the first detaches whole");
