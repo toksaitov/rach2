@@ -1896,6 +1896,9 @@ static void sanitize_pipe(struct drm_i915_private *i915, struct intel_crtc *c)
         i915_write(hw, PORT_CLK_SEL(r->port), PORT_CLK_SEL_NONE);
     }
     intel_dpll_disable(i915, c->pipe, &cfg);
+    /* The off pipe reports, its underrun latch cleared, as in
+     * intel_crtc_disable, so that no stale underrun of it masks DE_ERR_INT. */
+    intel_fifo_underrun_reporting(c, 1);
     klog(KLOG_INFO, "i915", "display: pipe %c on port %c, lit by the firmware, turned off",
          'A' + c->pipe, 'A' + r->port);
 }
