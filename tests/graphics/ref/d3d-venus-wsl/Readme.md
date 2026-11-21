@@ -29,6 +29,8 @@ The reference was folded from the five runs, each archive unpacked in one direct
 
 The fold gives Proton's `d3d9:visual` the stored runs' end, exit 245 before its summary after 384 test lines, where DXVK timed out in `stencil_cull_test`. That end follows the host's shader cache and load, and `venus.json` replaces it by hand with a stop at the unit's `visual.c:2412` record, the last before `z_range_test`, where the Debian guest's later runs timed out ([Direct3D on Venus](../../Readme.md#direct3d-on-venus)).
 
+The fold gives vkd3d-proton's `test_fence_signal_ordering_raced_signal` the one stored run's 13 skipped checks as its most, and `venus.json` raises that by hand to 16, the test's rounds. Each round signals a fence from a queue that copies 256 MiB, races a short submission on a second queue, and counts a skip when the first queue's signal is already visible once the second's is, which vkd3d-proton calls possible in a valid implementation (`tests/d3d12_sync.c`); the round's ordering check runs either way, and a round that times out loses that check, so the 137 checks still exclude a timeout. How often the copy has finished by then moves from run to run: 16 in Linux's run on lavapipe (`linux.json`), 15 in a run of Rach2's on Venus.
+
 The runs that took them, from the top of the tree, `ref-proton2` as `ref-proton` and `ref-wined3dvk1` as `ref-wined3dvk`:
 
     sh tests/graphics/d3d/reference.sh ref-proton \
