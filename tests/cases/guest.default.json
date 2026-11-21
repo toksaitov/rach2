@@ -2836,7 +2836,7 @@
         {"assertion_id": "smaps-text-no-anonymous", "checks": "the program's text has no anonymous memory in smaps", "source": "program"},
         {"assertion_id": "smaps-data-anonymous", "checks": "its written data has some", "source": "program"},
         {"assertion_id": "thread-dir-listing", "checks": "a thread's directory under /proc/self/task lists the files of /proc/PID, with children in place of task", "source": "program"},
-        {"assertion_id": "self-dir-listing", "checks": "/proc/self lists them all in order, task last", "source": "program"},
+        {"assertion_id": "self-dir-listing", "checks": "/proc/self lists them all in order, autogroup and task last", "source": "program"},
         {"assertion_id": "limits", "checks": "/proc/self/limits has Linux's header and its sixteen limits", "source": "program"},
         {"assertion_id": "proc-listing", "checks": "/proc lists interrupts and filesystems", "source": "program"},
         {"assertion_id": "cwd-link", "checks": "/proc/self/cwd names the working directory getcwd gives", "source": "program"},
