@@ -810,7 +810,10 @@ previous()
 # which SHA is an earlier commit, so that -r at SHA does not keep that run.
 newer()
 {
-    at=$(sed -n "s/^failure newer $1 $2 //p" "$state/record" | tail -n 1)
+    # Fields, not a sed pattern: a Lenovo run's ID may hold a slash.
+    at=$(awk -v m="$1" -v id="$2" \
+        '$1 == "failure" && $2 == "newer" && $3 == m && $4 == id { a = $5 }
+        END { print a }' "$state/record")
     [ -n "$at" ] && [ "$at" != "$sha" ] &&
         git -C "$repo" merge-base --is-ancestor "$sha" "$at" 2> /dev/null
 }
