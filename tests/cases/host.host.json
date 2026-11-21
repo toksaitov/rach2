@@ -2011,7 +2011,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "host-checks-disk",
@@ -2359,7 +2360,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "host-checks-disk",
@@ -2567,7 +2569,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "host-checks-disk",
@@ -2977,7 +2980,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "host-checks-disk",
@@ -3235,7 +3239,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "host-checks-disk",
@@ -3782,7 +3787,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "products-files-disk",
@@ -4183,7 +4189,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "products-files-disk",
@@ -4540,7 +4547,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "products-files-disk",
@@ -4813,7 +4821,8 @@
                 "name": "products-disk",
                 "base": "products-image",
                 "cluster_bytes": 65536,
-                "bus": "ahci"
+                "bus": "ahci",
+                "flush": false
               },
               {
                 "name": "products-files-disk",
