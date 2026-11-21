@@ -687,9 +687,9 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
  * enough, at least a header's worth, and otherwise moves the node to a new
  * allocation and frees the old one, so the answer may be another offset.
  * Shrinking returns the surplus to the free list, merged with a free node
- * after it. In either direction a surplus too small for a header, or whose
- * size would change bytes of two sectors, stays inside the node, where a
- * later shrink or a removal reclaims it. A grow changes the node's room and
+ * after it. Both operations allow padding to place the free header or to
+ * preserve the old low size byte. A remainder too small for a header stays
+ * in the node. A grow changes the node's room and
  * not its length: `data_size` stays, and the caller stores the new length
  * once the bytes are written. A shrink below `data_size` stores the shorter
  * length first, since the surplus's header is written inside bytes the old

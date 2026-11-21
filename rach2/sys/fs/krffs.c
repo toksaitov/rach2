@@ -1353,36 +1353,196 @@ static int krffs_fill_copy(krffs_mount_t *mount, uint64_t offset, const krffs_fi
 }
 
 /**
- * Take the free node at `offset`, of `free_size` bytes, for a node of
- * `size_with_header`. A barrier comes first, since a size an earlier operation
- * stored may still be only in the cache. The rest is split off as a free node
- * when it can hold a header: its header, a barrier, and the shortened size,
- * when that changes bytes of one sector; otherwise the whole node is taken.
- * Returns 0, or -1 when a write, a barrier or the size's store failed.
+ * Choose a split with room for the request and a whole free header.
+ * Moving the tail past a cut in its four size bytes takes at most six
+ * bytes: each of the sector and grain edges excludes three starts.
+ * Absorb a remainder too short for the header and its alignment.
+ */
+static uint64_t krffs_tail_size(krffs_mount_t *mount, uint64_t offset, uint64_t want,
+                                uint64_t whole)
+{
+    while (whole - want >= sizeof(krffs_node_t)) {
+        if (!krffs_field_split(mount, offset + want + KRFFS_FIELD_SIZE)) {
+            return want;
+        }
+        want++;
+    }
+    return whole;
+}
+
+/**
+ * Publish size at offset, leaving the rest of whole as a free node.
+ * The caller drains pending writes first, keeps any new free header clear
+ * of live headers and checks the change with krffs_size_fits. Flush the
+ * new header before the size that reveals it. Return 0 or -1 on I/O error.
+ */
+static int krffs_set_extent(krffs_mount_t *mount, uint64_t offset, uint64_t size, uint64_t whole)
+{
+    uint64_t last = offset;
+    uint64_t length = size;
+
+    if (size < whole) {
+        last += size;
+        length = whole - size;
+        if (krffs_write_free_header(mount, last, length, size) != 0 || krffs_barrier(mount) != 0) {
+            return -1;
+        }
+    }
+    if (krffs_publish_size(mount, offset, size) != 0) {
+        return -1;
+    }
+    (void)krffs_fix_backward_link(mount, last, length);
+    return 0;
+}
+
+/**
+ * Choose a new end for an existing node, at most 255 bytes above want,
+ * unless the remainder is too short for a free header. Try an aligned
+ * tail first, then keep the old low byte across a cut. Return 0 when
+ * neither size can be published in one store.
+ */
+static uint64_t krffs_room_size(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t want,
+                                uint64_t whole)
+{
+    uint64_t size = krffs_tail_size(mount, offset, want, whole);
+
+    if (krffs_size_fits(mount, offset, old, size)) {
+        return size;
+    }
+    if (whole - want >= sizeof(krffs_node_t) && krffs_size_fits(mount, offset, old, want)) {
+        return want;
+    }
+    size = want + ((old - want) & 255u);
+    if (size > whole || whole - size < sizeof(krffs_node_t)) {
+        size = whole;
+    }
+    return krffs_size_fits(mount, offset, old, size) ? size : 0;
+}
+
+/**
+ * Split the free node at offset for the requested room. Return 0 on
+ * success, 1 if its size crosses a cut and needs a different header,
+ * or -1 on I/O error. Drain any pending merge before overwriting its room.
  */
 static int krffs_take_free(krffs_mount_t *mount, uint64_t offset, uint64_t free_size,
                            uint64_t size_with_header)
 {
-    uint64_t rest = free_size - size_with_header;
-    uint64_t tail = krffs_wrap_offset(mount, offset + size_with_header);
+    uint64_t size = krffs_tail_size(mount, offset, size_with_header, free_size);
 
     if (krffs_barrier(mount) != 0) {
         return -1;
     }
-    if (rest < sizeof(krffs_node_t)) {
+    if (size == free_size) {
         return 0;
     }
-    if (krffs_write_free_header(mount, tail, rest, size_with_header) != 0 ||
-        krffs_barrier(mount) != 0) {
+    if (!krffs_size_fits(mount, offset, free_size, size)) {
+        return 1;
+    }
+    return krffs_set_extent(mount, offset, size, free_size);
+}
+
+/**
+ * Replace the free header at prev + old, through its predecessor at prev.
+ * Sizes are relative to prev. The first free extent ends at first and
+ * the run to be joined ends at whole. The replacement starts at size,
+ * at most six bytes past old. Hide the old header by extending its
+ * predecessor to a disjoint free header or to the end of the first
+ * extent. Flush that size before writing the replacement. Return 0 on
+ * success, 1 if either size would tear, or -1 on I/O error.
+ */
+static int krffs_rehead_free(krffs_mount_t *mount, uint64_t prev, uint64_t old, uint64_t size,
+                             uint64_t first, uint64_t whole)
+{
+    uint64_t via = krffs_room_size(mount, prev, old, size + sizeof(krffs_node_t), first);
+
+    if (via == 0 || !krffs_size_fits(mount, prev, via, size)) {
+        return 1;
+    }
+    if (krffs_barrier(mount) != 0 || krffs_set_extent(mount, prev, via, first) != 0 ||
+        krffs_barrier(mount) != 0 || krffs_set_extent(mount, prev, size, whole) != 0) {
         return -1;
     }
-    if (!krffs_size_fits(mount, offset, free_size, size_with_header)) {
-        return 0;
+    return 0;
+}
+
+/**
+ * Try the first free extent at *offset, whose predecessor is prev.
+ * Prefer a header that can also publish later merges. If its predecessor
+ * cannot move it, try a split that keeps the old low size byte.
+ * Return 0 with the chosen offset, 1 to try another extent, or -1 on I/O.
+ */
+static int krffs_reserve_free(krffs_mount_t *mount, uint64_t prev, uint64_t *offset,
+                              uint64_t extent, uint64_t want)
+{
+    uint64_t old = *offset - prev;
+    uint64_t whole = old + extent;
+    uint64_t aligned;
+    uint64_t room;
+    int rc = krffs_take_free(mount, *offset, extent, want);
+
+    if (rc <= 0) {
+        return rc;
     }
-    if (krffs_publish_size(mount, offset, size_with_header) != 0) {
+    aligned = krffs_tail_size(mount, prev, old, whole);
+    rc = krffs_rehead_free(mount, prev, old, aligned, whole, whole);
+    if (rc == 0) {
+        *offset = prev + aligned;
+        return krffs_take_free(mount, *offset, whole - aligned, want);
+    }
+    if (rc < 0) {
         return -1;
     }
-    (void)krffs_fix_backward_link(mount, tail, rest);
+    room = krffs_room_size(mount, *offset, extent, want, extent);
+    if (room == 0) {
+        return 1;
+    }
+    return room == extent ? 0 : krffs_set_extent(mount, *offset, room, extent);
+}
+
+/**
+ * Join successive free nodes if the first is too short for want and the
+ * run holds it. A barrier separates this merge from cached size stores.
+ * Return 0 with the usable size, 1 if the run is short or its size cannot
+ * be published, or -1 on I/O error. On a short run, pass over its nodes
+ * by leaving *offset and *extent at the last one.
+ */
+static int krffs_join_free(krffs_mount_t *mount, uint64_t prev, uint64_t *offset, uint64_t *extent,
+                           uint64_t want)
+{
+    uint64_t start = *offset;
+    uint64_t next = start + *extent;
+    krffs_brief_t head;
+
+    while (next - start < want && next < mount->size) {
+        if (krffs_brief(mount, next, &head) != 0 || head.size < sizeof(krffs_node_t) ||
+            head.size > mount->size - next) {
+            return -1;
+        }
+        if (head.type != KRFFS_FREE_NODE) {
+            break;
+        }
+        *offset = next;
+        next += head.size;
+    }
+    if (next - start < want) {
+        *extent = next - *offset;
+        return 1;
+    }
+    *offset = start;
+    if (krffs_size_fits(mount, start, *extent, next - start)) {
+        if (krffs_barrier(mount) != 0 ||
+            krffs_set_extent(mount, start, next - start, next - start) != 0) {
+            return -1;
+        }
+    } else {
+        uint64_t old = start - prev;
+        int rc = krffs_rehead_free(mount, prev, old, old, old + *extent, next - prev);
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    *extent = next - start;
     return 0;
 }
 
@@ -1478,23 +1638,56 @@ static void krffs_withdraw(krffs_mount_t *mount, uint64_t offset)
 }
 
 /**
+ * Find room for want bytes including the header. Walk each free run from
+ * the front, joining small extents when necessary. Return the offset of
+ * the free node ready for publication, or KRFFS_NO_NODE with *err set.
+ */
+static uint64_t krffs_find_room(krffs_mount_t *mount, uint64_t want, int *err)
+{
+    uint64_t offset = 0;
+    uint64_t previous = 0;
+    krffs_brief_t head;
+
+    *err = KRFFS_EIO;
+    while (offset < mount->size) {
+        uint64_t extent;
+        int rc;
+
+        if (krffs_brief(mount, offset, &head) != 0 || head.size < sizeof(krffs_node_t) ||
+            head.size > mount->size - offset) {
+            return KRFFS_NO_NODE;
+        }
+        extent = head.size;
+        if (head.type == KRFFS_FREE_NODE) {
+            rc = extent < want ? krffs_join_free(mount, previous, &offset, &extent, want) : 0;
+            if (rc == 0) {
+                rc = krffs_reserve_free(mount, previous, &offset, extent, want);
+            }
+            if (rc <= 0) {
+                return rc == 0 ? offset : KRFFS_NO_NODE;
+            }
+        }
+        previous = offset;
+        offset += extent;
+    }
+    *err = KRFFS_ENOSPACE;
+    return KRFFS_NO_NODE;
+}
+
+/**
  * Allocate a reserved node with room for `size` data bytes (K&R first-fit).
  *
- * Scans the ring for the first free node large enough for the header plus
- * `size`. A larger free node is split, leaving the remainder free, unless the
- * remainder is too small to hold a header or its size would change bytes of
- * two sectors (`krffs_size_fits`); then the whole node is taken. If
- * `original` is a node, copy its metadata and data up to `size`. A non-null
+ * Find room for the header and data with krffs_find_room. An allocation
+ * leaves the rest free when it can hold a header. If `original` is a
+ * node, copy its metadata and data up to `size`. A non-null
  * `fill` gives the copy new modification and change times and supplies the
  * data to add (`krffs_fill_copy`). Its length counts that too. Without an
  * original the node has an empty name and a data length of `size`.
  * Return its offset, or KRFFS_NO_NODE with `*err` set to KRFFS_ENOSPACE
- * for a `size` larger than the region or when the ring has no free node
- * large enough, and KRFFS_EIO when a read, a write or a barrier failed, a
- * write would have reached the medium in two pieces (`krffs_put`), or the
- * walk did not come back around. `size` is compared with the region before
- * the header is added to it, since a size near the top of the range would
- * otherwise wrap into a small one.
+ * for a `size` larger than the region or when no free extent can supply
+ * and publish the requested room. KRFFS_EIO means a failed read, write
+ * or barrier, a refused field store (krffs_put), or a malformed extent.
+ * Compare size with the region before adding the header to avoid wrap.
  *
  * The split writes the tail's header and puts a barrier before the size that
  * reveals it, and a header whose write fails ends the allocation, since a
@@ -1523,62 +1716,42 @@ static void krffs_withdraw(krffs_mount_t *mount, uint64_t offset)
 static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, uint64_t original,
                                    const krffs_fill_t *fill, int *err)
 {
-    uint64_t size_with_header = sizeof(krffs_node_t) + size;
-    uint64_t offset = 0;
-    uint64_t steps = 0;
-    uint64_t bound = krffs_max_steps(mount);
-    krffs_brief_t brief;
+    uint64_t data_size = size;
+    uint64_t offset;
+    uint8_t empty = '\0';
+    int nameless = 1;
+    int rc;
 
-    *err = KRFFS_ENOSPACE;
     if (size > mount->size) {
+        *err = KRFFS_ENOSPACE;
         return KRFFS_NO_NODE;
     }
-    *err = KRFFS_EIO;
-
-    do {
-        if (krffs_brief(mount, offset, &brief) != 0) {
-            return KRFFS_NO_NODE;
-        }
-        if (brief.type == KRFFS_FREE_NODE && brief.size >= size_with_header) {
-            uint64_t data_size = size;
-            uint8_t empty = '\0';
-            int nameless = 1;
-            int rc;
-
-            if (krffs_take_free(mount, offset, brief.size, size_with_header) != 0) {
-                return KRFFS_NO_NODE;
-            }
-            if (original != KRFFS_NO_NODE) {
-                rc = krffs_copy_original(mount, offset, original, &data_size, fill != NULL,
-                                         &nameless);
-                if (rc == 0 && fill) {
-                    rc = krffs_fill_copy(mount, offset, fill, &data_size);
-                }
-            } else {
-                rc = krffs_put_new(mount, offset, KRFFS_FIELD_NAME, &empty, 1);
-            }
-            if (rc != 0 || krffs_barrier(mount) != 0 ||
-                krffs_put_new_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, data_size) != 0 ||
-                krffs_barrier(mount) != 0 ||
-                krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_RESERVED_NODE) != 0) {
-                return KRFFS_NO_NODE;
-            }
-            if (nameless) {
-                mount->orphans++; /* a withdrawn one stays counted */
-            }
-            if (krffs_barrier(mount) != 0) {
-                krffs_withdraw(mount, offset);
-                return KRFFS_NO_NODE;
-            }
-            return offset;
-        }
-        offset = krffs_step(mount, offset, brief.size);
-    } while (offset != 0 && ++steps < bound);
-
-    if (offset == 0) {
-        *err = KRFFS_ENOSPACE;
+    offset = krffs_find_room(mount, sizeof(krffs_node_t) + size, err);
+    if (offset == KRFFS_NO_NODE) {
+        return offset;
     }
-    return KRFFS_NO_NODE;
+    if (original != KRFFS_NO_NODE) {
+        rc = krffs_copy_original(mount, offset, original, &data_size, fill != NULL, &nameless);
+        if (rc == 0 && fill) {
+            rc = krffs_fill_copy(mount, offset, fill, &data_size);
+        }
+    } else {
+        rc = krffs_put_new(mount, offset, KRFFS_FIELD_NAME, &empty, 1);
+    }
+    if (rc != 0 || krffs_barrier(mount) != 0 ||
+        krffs_put_new_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, data_size) != 0 ||
+        krffs_barrier(mount) != 0 ||
+        krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_RESERVED_NODE) != 0) {
+        return KRFFS_NO_NODE;
+    }
+    if (nameless) {
+        mount->orphans++; /* a withdrawn one stays counted */
+    }
+    if (krffs_barrier(mount) != 0) {
+        krffs_withdraw(mount, offset);
+        return KRFFS_NO_NODE;
+    }
+    return offset;
 }
 
 /** `krffs_allocate_err` for a caller that needs no reason. */
@@ -1897,30 +2070,34 @@ int krffs_reap_at(krffs_mount_t *mount, uint64_t offset)
  * The shorter length goes first (`krffs_store_length`), since the
  * surplus's header is written inside bytes the old length counts, and a
  * barrier puts it on the medium before the header is written; another puts
- * the header there before the size that publishes it. A surplus whose size
- * would change bytes of two sectors stays inside the file's node. A surplus
- * too small for a header stays there with no barrier, so the mount is left
+ * the header there before the size that publishes it. Choose a retained
+ * size with krffs_room_size before shortening the data. A remainder too
+ * small for a header stays there with no barrier, so the mount is left
  * unsettled: the shorter length may be only in the cache, and a write that
  * raises the length again into those bytes puts a barrier first
  * (`krffs_settled`), or its bytes could reach the medium under the old
  * length, which still counts them.
  *
- * Returns 0; 1 with nothing written when the length can be stored in no
- * safe order and the caller must move the file; or -1 on a failed read,
- * write or barrier. A failed size store leaves the links stale
+ * Return 0 on success, 1 before writing if the length or extent needs
+ * a move, or -1 on a failed read, write or barrier. A failed size store
+ * leaves the links stale
  * (`krffs_publish_size`).
  */
 static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t length,
                            const krffs_node_t *head)
 {
     uint64_t size = sizeof(krffs_node_t) + length;
-    uint64_t free_size = head->size - size;
-    uint64_t surplus = krffs_wrap_offset(mount, offset + size);
+    uint64_t old = head->size;
+    uint64_t whole = old;
     krffs_node_t next;
     int rc;
 
     if (krffs_head(mount, krffs_next_offset(mount, offset, head), &next) != 0) {
         return -1;
+    }
+    size = krffs_room_size(mount, offset, old, size, old);
+    if (size == 0) {
+        return 1;
     }
     if (length < head->data_size) {
         rc = krffs_store_length(mount, offset, head->data_size, length, NULL);
@@ -1928,7 +2105,7 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
             return rc;
         }
     }
-    if (free_size < sizeof(krffs_node_t)) {
+    if (size == old) {
         if (length < head->data_size) {
             mount->unsettled = 1;
         }
@@ -1937,18 +2114,10 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     if (krffs_barrier(mount) != 0) {
         return -1;
     }
-    if (!krffs_size_fits(mount, offset, head->size, size)) {
-        return 0;
-    }
     if (next.type == KRFFS_FREE_NODE) {
-        free_size += next.size;
+        whole += next.size;
     }
-    if (krffs_write_free_header(mount, surplus, free_size, size) != 0 ||
-        krffs_barrier(mount) != 0 || krffs_publish_size(mount, offset, size) != 0) {
-        return -1;
-    }
-    (void)krffs_fix_backward_link(mount, surplus, free_size);
-    return 0;
+    return krffs_set_extent(mount, offset, size, whole);
 }
 
 /**
@@ -1960,12 +2129,11 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
  * can give the room and still keep a header, its tail is split off: a free
  * header written inside the free node, a barrier, and the one size that takes
  * the bytes before it. The header goes at least a header past the free node's
- * own, so that writing it changes nothing the chain reaches yet; a smaller
- * growth takes a header's worth, and the node keeps the rest as room. Otherwise
- * the whole free node is taken by one size. A size that would change bytes of
- * two sectors is not stored. A barrier ends the grow, since the caller then
- * writes bytes over the free node's old header, which could otherwise reach the
- * medium before the size that took it.
+ * own, so that writing it changes nothing the chain reaches yet. A smaller
+ * growth takes a header's worth. Choose a size with krffs_room_size and
+ * ask the caller to move if none fits. A barrier ends the
+ * grow, since the caller then writes bytes over the free node's old header,
+ * which could otherwise reach the medium before the size that took it.
  *
  * Returns 0 with the node grown, 1 with the chain unchanged when no size
  * could be stored whole, or -1 when a write or a barrier failed.
@@ -1973,33 +2141,20 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
 static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_with_header,
                            const krffs_node_t *head, const krffs_node_t *next_head)
 {
-    uint64_t whole = head->size + next_head->size;
+    uint64_t old = head->size;
+    uint64_t whole = old + next_head->size;
     uint64_t grown = size_with_header;
 
-    if (grown - head->size < sizeof(krffs_node_t)) {
-        grown = head->size + sizeof(krffs_node_t);
+    if (grown - old < sizeof(krffs_node_t)) {
+        grown = old + sizeof(krffs_node_t);
     }
-    if (krffs_barrier(mount) != 0) {
-        return -1;
-    }
-    if (whole >= grown && whole - grown >= sizeof(krffs_node_t) &&
-        krffs_size_fits(mount, offset, head->size, grown)) {
-        uint64_t tail = krffs_wrap_offset(mount, offset + grown);
-
-        if (krffs_write_free_header(mount, tail, whole - grown, grown) != 0 ||
-            krffs_barrier(mount) != 0 || krffs_publish_size(mount, offset, grown) != 0) {
-            return -1;
-        }
-        (void)krffs_fix_backward_link(mount, tail, whole - grown);
-        return krffs_barrier(mount) == 0 ? 0 : -1;
-    }
-    if (!krffs_size_fits(mount, offset, head->size, whole)) {
+    grown = krffs_room_size(mount, offset, old, grown, whole);
+    if (grown == 0) {
         return 1;
     }
-    if (krffs_publish_size(mount, offset, whole) != 0) {
+    if (krffs_barrier(mount) != 0 || krffs_set_extent(mount, offset, grown, whole) != 0) {
         return -1;
     }
-    (void)krffs_fix_backward_link(mount, offset, whole);
     return krffs_barrier(mount) == 0 ? 0 : -1;
 }
 
@@ -2051,9 +2206,8 @@ static int krffs_move(krffs_mount_t *mount, uint64_t offset, uint64_t size,
 /**
  * Grow the node at `offset` to room for `size` data bytes from the free node
  * after it (`krffs_grow_into`), without moving it. Returns 0 with the node
- * grown; 1 with nothing changed when no free node follows, it is too small,
- * or no size could be stored whole, so the node must move; or -1 when a
- * read, a write or a barrier failed.
+ * grown, 1 when the node must move, or -1 on I/O error. Adjacent free
+ * nodes can be joined even if the grow itself needs a move.
  */
 static int krffs_grow_in_place(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
@@ -2075,8 +2229,17 @@ static int krffs_grow_in_place(krffs_mount_t *mount, uint64_t offset, uint64_t s
     if (krffs_head(mount, next, &next_head) != 0) {
         return -1;
     }
-    if (next_head.type != KRFFS_FREE_NODE || next_head.size < size_with_header - head.size) {
+    if (next_head.type != KRFFS_FREE_NODE) {
         return 1;
+    }
+    if (next_head.size < size_with_header - head.size) {
+        uint64_t extent = next_head.size;
+        int rc = krffs_join_free(mount, offset, &next, &extent, size_with_header - head.size);
+
+        if (rc != 0) {
+            return rc;
+        }
+        next_head.size = extent;
     }
     return krffs_grow_into(mount, offset, size_with_header, &head, &next_head);
 }
@@ -2119,9 +2282,8 @@ static int krffs_prepare_data(krffs_mount_t *mount, uint64_t offset, const krffs
  *
  * A grow takes room from the free node after this one (`krffs_grow_in_place`)
  * or moves the node. A shrink stores the shorter length and gives back the
- * surplus (`krffs_shrink_at`), or moves the node when the length can be
- * stored in no safe order. A surplus that cannot be written back as a free
- * node stays inside the node: space nobody can allocate, and a sound chain.
+ * surplus (krffs_shrink_at), or moves the node when the shorter length or
+ * extent has no safe store. A short remainder stays in the node.
  * A resize that raises the length inside the room a node already has stores
  * no length; the caller writes the bytes and the length after them, as after
  * a grow.
@@ -2433,6 +2595,12 @@ int krffs_resize_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
     if (rc < 0) {
         return KRFFS_EIO;
     }
+    if (rc == 0 && sizeof(head) + (uint64_t)new_size < head.size) {
+        rc = krffs_shrink_at(mount, node, new_size, &head);
+        if (rc < 0) {
+            return KRFFS_EIO;
+        }
+    }
     if (rc > 0) {
         krffs_fill_t zeroes;
 
@@ -2444,10 +2612,6 @@ int krffs_resize_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
             *node_out = live;
         }
         return rc;
-    }
-    if (sizeof(head) + (uint64_t)new_size < head.size &&
-        krffs_shrink_at(mount, node, new_size, &head) != 0) {
-        return KRFFS_EIO;
     }
     if ((uint64_t)new_size > old_data_size &&
         (krffs_data_fill(mount, node, old_data_size, 0, (uint64_t)new_size - old_data_size) != 0 ||
