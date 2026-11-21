@@ -185,7 +185,9 @@ not of whole sectors, or a transfer of a node opened with
 .Dv O_DIRECT
 is off the sector.
 .It Er ELOOP
-The file is on a loop-mounted volume.
+The file is on a volume whose device does not begin its sectors on
+sectors of the medium, as a loop device over a file in a KRFFS image may
+not, or the chain of devices under the file would be more than one deep.
 .It Er ENXIO
 Nothing is attached to the device, or it was detached while a detach
 wrote its buffers.

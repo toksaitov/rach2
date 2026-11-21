@@ -156,12 +156,12 @@ static int loop_begin(struct loop_device *loop, uint64_t lba, uint32_t count, st
  * The device's phase (block.h): where in a sector of the medium the file's
  * first byte lies. The caller holds the file's lock through publication.
  * A file system that keeps files in whole blocks uses its device's phase.
- * The device under the file system is a disk or a partition of one, whose
- * phase is 0, or none for the boot root, whose pages begin on sectors;
- * attachment refuses a file on a loop device, even one over the boot root,
- * whose `backing` is NULL. So the file system's own cache blocks begin on
- * sectors of the medium, and the file's phase places every edge a stop can
- * cut its image at.
+ * The device under the file system is none for the boot root, whose pages
+ * begin on sectors, or one whose phase is 0: a disk, a partition of one, or
+ * a loop device whose sectors are sectors of the medium. Attachment refuses
+ * a file on a device of any other phase. So the file system's own cache
+ * blocks begin on sectors of the medium, and the file's phase places every
+ * edge a stop can cut its image at.
  */
 static uint32_t loop_phase(const struct vfs_ref *ref, void *handle)
 {
@@ -821,12 +821,12 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EBUSY;
     }
-    if ((ref.mnt->dev && ref.mnt->dev->read == loop_read) ||
+    if ((ref.mnt->dev && ref.mnt->dev->sector_phase != 0) ||
         block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
-        return -ELOOP; /* on a loop device, or deeper than the buffer cache serves */
+        return -ELOOP; /* off the medium's sectors, or deeper than the cache serves */
     }
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
