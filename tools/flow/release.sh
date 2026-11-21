@@ -673,8 +673,10 @@ reboot_into()
         if [ -n "$now" ] && [ "$up" -lt $(($(date +%s) - asked)) ]; then
             case $now in
                 "$1"*)
-                    # HDA starts at 100, and the owner works beside the machine.
+                    # HDA and the panel start at 100; the owner works beside it.
                     lenovo 'mixer vol 1' > /dev/null 2>&1 || say "lenovo: its volume could not be set"
+                    lenovo 'echo 1 > /sys/class/backlight/intel_backlight/brightness' > /dev/null 2>&1 ||
+                        say "lenovo: its backlight could not be set"
                     return 0 ;;
                 *) fail "$step" "the machine came up running $now, not $1" ;;
             esac
