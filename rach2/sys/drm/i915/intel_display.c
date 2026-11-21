@@ -1356,6 +1356,11 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     k_memset(&c->cfg, 0, sizeof(c->cfg));
     c->cfg.pll = DPLL_ID_NONE;
     k_memset(&c->color, 0, sizeof(c->color));
+    /* An off pipe cannot underrun, so it reports again, as Linux's
+     * intel_sanitize_fifo_underrun_reporting leaves an inactive pipe:
+     * reporting left off by an underrun before the pipe went off would
+     * keep DE_ERR_INT masked, and with it every pipe's CRC done. */
+    intel_fifo_underrun_reporting(c, 1);
     /* A pipe that stays off gives its share of the FIFO back. */
     if (!state->crtcs_new[crtc->index]->active) {
         intel_wm_commit(c, state, 1);
