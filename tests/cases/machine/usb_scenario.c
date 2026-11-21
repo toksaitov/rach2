@@ -339,7 +339,7 @@ static void judge_latency(struct usb_case *u, struct usb_boot *b, int random)
 /**
  * Eight Enters pressed for keylatprobe under `rach2.usblatency`, each once
  * the kernel says the reader waits, and each read as one carriage return,
- * beside a spinning child or, with `random`, a child inside getrandom.
+ * beside a spinning SCHED_IDLE child or, with `random`, one inside getrandom.
  */
 static int latency(struct usb_case *u, int random)
 {
