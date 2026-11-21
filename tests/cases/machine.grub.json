@@ -9,7 +9,7 @@
       "units": ["grub"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"cores": "core-a.img and core-b.img of the root, the pinned cores that print GRUBCORE=A and GRUBCORE=B", "disk": "the GRUB disk on an MBR with an unmarked core, a recovery partition of 8 MiB and grub-test's ext2 root of 48 MiB"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"cores": "core-a.img and core-b.img of the root, the pinned cores that print GRUBCORE=A and GRUBCORE=B", "disk": "the GRUB disk on an MBR with an unmarked core, a recovery partition of 8 MiB and grub-test's ext2 root of 96 MiB"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "grub_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
