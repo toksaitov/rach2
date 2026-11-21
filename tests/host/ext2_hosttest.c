@@ -10897,6 +10897,7 @@ int main(int argc, char **argv)
 
     if (argc == 3 && streq(argv[1], "-fn") && streq(argv[2], "--capture-child"))
         return ext2_fixture_capture_child();
+    host_command_server();
     /* Time the sleeping locks' holds, so that a hold across a disk request
      * shows in its record (`alloc_crossings`). */
     sleep_lock_stat = 1;
