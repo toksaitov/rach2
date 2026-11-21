@@ -369,7 +369,12 @@ if [ -n "$ARCH" ]; then
         accel=${RACH2_QEMU_ACCEL-}
         RACH2_QEMU_ACCEL=kvm
         export RACH2_QEMU_ACCEL
-        set_runner="python3 tests/graphics/browser/loaded.py $out/load -- tests/run -j1 -C4"
+        # The launcher sizes loaded.py's claim from the guest pool, and a
+        # claim of more than half the host's memory takes the host alone,
+        # whose lock the claim of loaded.py's own guests would then wait for
+        # without end; one case at a time needs one worker and one suite's
+        # memory.
+        set_runner="env RACH2_WORKERS=1 RACH2_MEMORY_MIB=16384 python3 tests/graphics/browser/loaded.py $out/load -- tests/run -j1 -C4"
         # shellcheck disable=SC2086 # a suite name is one word by format
         run_set all $loaded
         set_runner=""
