@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -349,3 +350,69 @@ int host_command(const char *const argv[], const char *out_path, const char *err
 #endif
     return command_local(argv, out_path, err_path, out, capacity, &kept);
 }
+
+#ifndef _WIN32
+long host_command_spawn(const char *const argv[], const char *out_path)
+{
+    pid_t pid;
+    int in, out;
+
+    fflush(NULL);
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "host tool: %s: %s\n", argv[0], strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        in = open("/dev/null", O_RDONLY);
+        out = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (in < 0 || out < 0 || dup2(in, 0) < 0 || dup2(out, 1) < 0 || dup2(out, 2) < 0)
+            _exit(127);
+        close(in);
+        close(out);
+        execv(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    return (long)pid;
+}
+
+int host_command_reap(long pid, const char *out_path)
+{
+    char buf[8192];
+    size_t n;
+    int status;
+    FILE *f;
+
+    while (waitpid((pid_t)pid, &status, 0) < 0)
+        if (errno != EINTR) {
+            fprintf(stderr, "host tool: wait for %ld: %s\n", pid, strerror(errno));
+            return -1;
+        }
+    f = fopen(out_path, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "host tool: %s: %s\n", out_path, strerror(errno));
+        return -1;
+    }
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        fwrite(buf, 1, n, stdout);
+    fclose(f);
+    fflush(stdout);
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
+}
+#else
+long host_command_spawn(const char *const argv[], const char *out_path)
+{
+    (void)argv;
+    (void)out_path;
+    return -1;
+}
+
+int host_command_reap(long pid, const char *out_path)
+{
+    (void)pid;
+    (void)out_path;
+    return -1;
+}
+#endif
