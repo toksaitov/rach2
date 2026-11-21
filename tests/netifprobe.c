@@ -114,6 +114,7 @@ typedef unsigned char uint8_t;
 #define ENODEV          19
 #define EAGAIN          11
 #define ESRCH           3
+#define EEXIST          17
 #define EPROTONOSUPPORT 93
 #define EOPNOTSUPP      95
 #define EADDRNOTAVAIL   99
@@ -1526,13 +1527,14 @@ static void network_address(int fd)
  *
  * The address classes are judged as Linux's inet_abc_len judges them: an
  * address in 0/8 is taken with 255.0.0.0, one in 240/4 with a host mask, and
- * a multicast address is EINVAL and changes nothing. A default route
- * sets the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
- * another route goes into the table and out again. A default route with no
- * gateway is EINVAL and does not remove the gateway the machine has. A route
- * for an interface the machine lacks is ENODEV. The route to the machine's
- * own subnet may be added, since it holds, but not removed (EOPNOTSUPP),
- * since the stack cannot isolate that traffic. The default route is removed
+ * a multicast address is EINVAL and changes nothing. A default route sets
+ * the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
+ * another route goes into the table and out again. The default route in
+ * force, added again, is EEXIST, as on Linux. A default route with no gateway
+ * is EINVAL and does not remove the gateway the machine has. A route for an
+ * interface the machine lacks is ENODEV. The route to the machine's own
+ * subnet may be added, since it holds, but not removed (EOPNOTSUPP), since
+ * the stack cannot isolate that traffic. The default route is removed
  * once, and a second removal is ESRCH, which ends the loop in which a DHCP
  * client's script removes old default routes.
  *
@@ -1969,10 +1971,11 @@ static void netif_main(void)
         fail("a route to another network was not removed");
     }
     report_held();
-    /* A default route with no gateway is refused and removes nothing. */
+    /* The default route in force, added again, is EEXIST, as on Linux. A
+     * default route with no gateway is refused and removes nothing. */
     set_route(0, OTHER_GW, 0);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
-        fail("the default route did not go back for the next case");
+    if (sys_ioctl(fd, SIOCADDRT, rt) != -EEXIST) {
+        fail("the default route in force was taken a second time");
     }
     set_route(0, 0, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != -EINVAL) {
