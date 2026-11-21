@@ -85,7 +85,7 @@ int main(int argc, char **argv)
     }
 
     file_system.size = (off_t)region_size;
-    file_system.node = krffs_map_file_readonly(file_descriptor, region_offset, region_size);
+    file_system.node = krffs_map_ordinary(file_descriptor, region_offset, region_size, true);
     if (file_system.node == NULL || file_system.node == (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s'.\n", argv[1]);
         file_system.node = NULL;

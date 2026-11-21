@@ -5,6 +5,8 @@
 #ifndef KRFFS_FILE_SYSTEM_H
 #define KRFFS_FILE_SYSTEM_H
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -37,5 +39,13 @@ struct krffs_file_system {
  * Returns `file_system`.
  */
 struct krffs_file_system *krffs_initialize_file_system(struct krffs_file_system *file_system);
+
+/**
+ * Map an existing region for a host reader or editor. Refuse an unfinished
+ * resize before the caller follows its size or changes any node. Stop the
+ * scan at an invalid extent so edfs can still fix it by hand. Return the
+ * mapping, or (void *)-1 on failure.
+ */
+struct krffs_node *krffs_map_ordinary(int fd, off_t offset, size_t size, bool readonly);
 
 #endif

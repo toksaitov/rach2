@@ -6,9 +6,11 @@
 #include "krffs_file_system.h"
 
 #include "krffs_node.h"
+#include "krffs_platform.h"
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdio.h>
 
 struct krffs_file_system *krffs_initialize_file_system(struct krffs_file_system *file_system)
 {
@@ -26,4 +28,30 @@ struct krffs_file_system *krffs_initialize_file_system(struct krffs_file_system 
     krffs_initialize_free_node(free_node, free_node_size, root_node_size);
 
     return file_system;
+}
+
+struct krffs_node *krffs_map_ordinary(int fd, off_t offset, size_t size, bool readonly)
+{
+    void *base =
+        readonly ? krffs_map_file_readonly(fd, offset, size) : krffs_map_file(fd, offset, size);
+    size_t at = 0;
+
+    if (!base || base == (void *)-1) {
+        return (void *)-1;
+    }
+    while (size - at >= sizeof(struct krffs_node)) {
+        const struct krffs_node *node = (const void *)((const char *)base + at);
+
+        if (node->type == KRFFS_Resizing_Node) {
+            fprintf(stderr, "krffs: unfinished resize at %llu: run fsck.krffs\n",
+                    (unsigned long long)at);
+            krffs_unmap_file(base, size);
+            return (void *)-1;
+        }
+        if (node->size < sizeof(*node) || node->size > size - at) {
+            break;
+        }
+        at += (size_t)node->size;
+    }
+    return base;
 }

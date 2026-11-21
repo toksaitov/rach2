@@ -537,6 +537,8 @@ static int compiled_tool(struct hp_context *c, const char *name, const struct hp
     static const struct {
         const char *name, *sources;
     } recipes[] = {
+        {"fsck.krffs", "krffs/fsck.krffs.c krffs/krffs_node.c krffs/krffs_platform.c "
+                       "krffs/krffs_utilities.c"},
         {"mkfatfixture", "tests/host/mkfatfixture.c"},
         {"etude-workload",
          "tests/host/fixtures/etude_workload.c tests/host/fixtures/guest_workload.c"},

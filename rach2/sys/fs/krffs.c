@@ -102,12 +102,45 @@ static int krffs_root_in_reap;
  * memory; 0 on success. */
 static int (*krffs_root_flush)(void);
 
-int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
+/** Read the on-disk header, including any unfinished resize. */
+static int krffs_raw_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
 {
     if (!mount || !out || offset > mount->size || mount->size - offset < sizeof(krffs_node_t)) {
         return -1;
     }
     return mount->backend->read(mount->ctx, offset, out, (uint32_t)sizeof(krffs_node_t));
+}
+
+/** Return the ordinary type recorded with the target size, or -1. */
+static int krffs_resize_type(uint64_t shadow)
+{
+    uint32_t type = (uint32_t)(shadow >> 32);
+
+    return type == KRFFS_FREE_NODE || type == KRFFS_RESERVED_NODE ? (int)type : -1;
+}
+
+/** Resolve a resize in a header copy. Return zero for an invalid shadow. */
+static int krffs_decode_resize(krffs_node_t *head)
+{
+    int type = krffs_resize_type(head->previous_node_size);
+
+    if (type < 0) {
+        return 0;
+    }
+    head->type = (uint8_t)type;
+    head->size = (uint32_t)head->previous_node_size;
+    return 1;
+}
+
+int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
+{
+    if (krffs_raw_head(mount, offset, out) != 0) {
+        return -1;
+    }
+    if (out->type == KRFFS_RESIZING_NODE && !krffs_decode_resize(out)) {
+        return -1;
+    }
+    return 0;
 }
 
 /**
@@ -130,8 +163,20 @@ static int krffs_brief(krffs_mount_t *mount, uint64_t offset, krffs_brief_t *out
                              (uint32_t)(KRFFS_FIELD_NAME - KRFFS_FIELD_TYPE)) != 0) {
         return -1;
     }
-    return mount->backend->read(mount->ctx, offset + KRFFS_FIELD_MODE, &out->mode,
-                                (uint32_t)(sizeof(krffs_node_t) - KRFFS_FIELD_MODE));
+    if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_MODE, &out->mode,
+                             (uint32_t)(sizeof(krffs_node_t) - KRFFS_FIELD_MODE)) != 0) {
+        return -1;
+    }
+    if (out->type == KRFFS_RESIZING_NODE) {
+        int type = krffs_resize_type(out->previous_node_size);
+
+        if (type < 0) {
+            return -1;
+        }
+        out->type = (uint8_t)type;
+        out->size = (uint32_t)out->previous_node_size;
+    }
+    return 0;
 }
 
 /**
@@ -1301,6 +1346,23 @@ static int krffs_write_backward_link(krffs_mount_t *mount, uint64_t offset, uint
 }
 
 /**
+ * Halt the mount after a write that failed left the volume in a state only
+ * the repair undoes: every write fails until the next mount, which the
+ * owed check (`check_owed`) has repair the volume, since it keeps the
+ * dirty flag, and the owner turns the mounts read-only (`on_halt`).
+ */
+static void krffs_halt(krffs_mount_t *mount)
+{
+    mount->check_owed = 1;
+    if (!mount->halted) {
+        mount->halted = 1;
+        if (mount->on_halt) {
+            mount->on_halt(mount);
+        }
+    }
+}
+
+/**
  * Repair the backward link of the node following the one at `offset`.
  *
  * The forward chain is the truth and this link is derived from it, so every
@@ -1353,33 +1415,62 @@ static int krffs_fill_copy(krffs_mount_t *mount, uint64_t offset, const krffs_fi
 }
 
 /**
- * Choose a split with room for the request and a whole free header.
- * Moving the tail past a cut in its four size bytes takes at most six
- * bytes: each of the sector and grain edges excludes three starts.
- * Absorb a remainder too short for the header and its alignment.
+ * Finish a resize whose marker and shadow are durable. Flush the size
+ * before restoring the ordinary type, and the type before its shadow can
+ * be overwritten. Recovery can repeat either step. Return 0 or -1.
  */
-static uint64_t krffs_tail_size(krffs_mount_t *mount, uint64_t offset, uint64_t want,
-                                uint64_t whole)
+static int krffs_finish_resize(krffs_mount_t *mount, uint64_t offset, uint64_t size, uint8_t type)
 {
-    while (whole - want >= sizeof(krffs_node_t)) {
-        if (!krffs_field_split(mount, offset + want + KRFFS_FIELD_SIZE)) {
-            return want;
-        }
-        want++;
+    if (krffs_backend_write(mount, offset + KRFFS_FIELD_SIZE, &size, sizeof(size)) != 0 ||
+        krffs_barrier(mount) != 0 || krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, type) != 0 ||
+        krffs_barrier(mount) != 0) {
+        return -1;
     }
-    return whole;
+    return 0;
+}
+
+/**
+ * Publish a size across a cut. The backward link can be rebuilt after a
+ * stop, so it can hold the target size and ordinary type. While the marker
+ * is visible readers use that shadow, even if an I/O error halts a live
+ * mount. Return 0 or -1, leaving recovery owed on an interrupted store.
+ */
+static int krffs_mark_resize(krffs_mount_t *mount, uint64_t offset, uint64_t size)
+{
+    krffs_node_t head;
+    uint64_t shadow;
+    int owed = mount->check_owed;
+
+    if (krffs_head(mount, offset, &head) != 0 ||
+        (head.type != KRFFS_FREE_NODE && head.type != KRFFS_RESERVED_NODE)) {
+        return -1;
+    }
+    mount->check_owed = 1;
+    shadow = ((uint64_t)head.type << 32) | size;
+    if (krffs_write_backward_link(mount, offset, shadow) != 0 || krffs_barrier(mount) != 0 ||
+        krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_RESIZING_NODE) != 0 ||
+        krffs_barrier(mount) != 0 || krffs_finish_resize(mount, offset, size, head.type) != 0 ||
+        krffs_write_backward_link(mount, offset, head.previous_node_size) != 0) {
+        mount->stale_links = 1;
+        krffs_halt(mount);
+        return -1;
+    }
+    mount->check_owed = owed;
+    return 0;
 }
 
 /**
  * Publish size at offset, leaving the rest of whole as a free node.
- * The caller drains pending writes first, keeps any new free header clear
- * of live headers and checks the change with krffs_size_fits. Flush the
- * new header before the size that reveals it. Return 0 or -1 on I/O error.
+ * The caller drains pending stores and supplies the old extent size.
+ * Flush a disjoint tail header before revealing it. A field that can tear
+ * changes under a resize marker. Return 0 or -1 on I/O error.
  */
-static int krffs_set_extent(krffs_mount_t *mount, uint64_t offset, uint64_t size, uint64_t whole)
+static int krffs_set_extent(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t size,
+                            uint64_t whole)
 {
     uint64_t last = offset;
     uint64_t length = size;
+    int rc;
 
     if (size < whole) {
         last += size;
@@ -1388,126 +1479,73 @@ static int krffs_set_extent(krffs_mount_t *mount, uint64_t offset, uint64_t size
             return -1;
         }
     }
-    if (krffs_publish_size(mount, offset, size) != 0) {
-        return -1;
+    if (krffs_size_fits(mount, offset, old, size)) {
+        rc = krffs_publish_size(mount, offset, size);
+    } else {
+        rc = krffs_mark_resize(mount, offset, size);
     }
-    (void)krffs_fix_backward_link(mount, last, length);
-    return 0;
+    if (rc == 0) {
+        (void)krffs_fix_backward_link(mount, last, length);
+    }
+    return rc;
 }
 
 /**
- * Choose a new end for an existing node, at most 255 bytes above want,
- * unless the remainder is too short for a free header. Try an aligned
- * tail first, then keep the old low byte across a cut. Return 0 when
- * neither size can be published in one store.
+ * Choose an extent for want bytes. Absorb a tail shorter than a header.
+ * Prefer a tail whose size field has no cut. If preserving the old low
+ * byte avoids a marker, allow up to 255 bytes for it, provided a header
+ * still fits. Otherwise the shadow can publish the chosen end exactly.
  */
 static uint64_t krffs_room_size(krffs_mount_t *mount, uint64_t offset, uint64_t old, uint64_t want,
                                 uint64_t whole)
 {
-    uint64_t size = krffs_tail_size(mount, offset, want, whole);
+    uint64_t size = want;
+    uint64_t rounded;
 
+    if (whole - want < sizeof(krffs_node_t)) {
+        return whole;
+    }
+    while (krffs_field_split(mount, offset + size + KRFFS_FIELD_SIZE)) {
+        if (whole - size == sizeof(krffs_node_t)) {
+            size = want;
+            break;
+        }
+        size++;
+    }
     if (krffs_size_fits(mount, offset, old, size)) {
         return size;
     }
-    if (whole - want >= sizeof(krffs_node_t) && krffs_size_fits(mount, offset, old, want)) {
+    if (krffs_size_fits(mount, offset, old, want)) {
         return want;
     }
-    size = want + ((old - want) & 255u);
-    if (size > whole || whole - size < sizeof(krffs_node_t)) {
-        size = whole;
+    rounded = want + ((old - want) & 255u);
+    if (rounded <= whole - sizeof(krffs_node_t) && krffs_size_fits(mount, offset, old, rounded)) {
+        return rounded;
     }
-    return krffs_size_fits(mount, offset, old, size) ? size : 0;
+    return size;
 }
 
 /**
- * Split the free node at offset for the requested room. Return 0 on
- * success, 1 if its size crosses a cut and needs a different header,
- * or -1 on I/O error. Drain any pending merge before overwriting its room.
+ * Split a free extent for want bytes, header included. Drain any pending
+ * merge before writing into its room. Return 0 or -1 on I/O error.
  */
-static int krffs_take_free(krffs_mount_t *mount, uint64_t offset, uint64_t free_size,
-                           uint64_t size_with_header)
+static int krffs_take_free(krffs_mount_t *mount, uint64_t offset, uint64_t extent, uint64_t want)
 {
-    uint64_t size = krffs_tail_size(mount, offset, size_with_header, free_size);
+    uint64_t size = krffs_room_size(mount, offset, extent, want, extent);
 
     if (krffs_barrier(mount) != 0) {
         return -1;
     }
-    if (size == free_size) {
-        return 0;
-    }
-    if (!krffs_size_fits(mount, offset, free_size, size)) {
-        return 1;
-    }
-    return krffs_set_extent(mount, offset, size, free_size);
-}
-
-/**
- * Replace the free header at prev + old, through its predecessor at prev.
- * Sizes are relative to prev. The first free extent ends at first and
- * the run to be joined ends at whole. The replacement starts at size,
- * at most six bytes past old. Hide the old header by extending its
- * predecessor to a disjoint free header or to the end of the first
- * extent. Flush that size before writing the replacement. Return 0 on
- * success, 1 if either size would tear, or -1 on I/O error.
- */
-static int krffs_rehead_free(krffs_mount_t *mount, uint64_t prev, uint64_t old, uint64_t size,
-                             uint64_t first, uint64_t whole)
-{
-    uint64_t via = krffs_room_size(mount, prev, old, size + sizeof(krffs_node_t), first);
-
-    if (via == 0 || !krffs_size_fits(mount, prev, via, size)) {
-        return 1;
-    }
-    if (krffs_barrier(mount) != 0 || krffs_set_extent(mount, prev, via, first) != 0 ||
-        krffs_barrier(mount) != 0 || krffs_set_extent(mount, prev, size, whole) != 0) {
-        return -1;
-    }
-    return 0;
-}
-
-/**
- * Try the first free extent at *offset, whose predecessor is prev.
- * Prefer a header that can also publish later merges. If its predecessor
- * cannot move it, try a split that keeps the old low size byte.
- * Return 0 with the chosen offset, 1 to try another extent, or -1 on I/O.
- */
-static int krffs_reserve_free(krffs_mount_t *mount, uint64_t prev, uint64_t *offset,
-                              uint64_t extent, uint64_t want)
-{
-    uint64_t old = *offset - prev;
-    uint64_t whole = old + extent;
-    uint64_t aligned;
-    uint64_t room;
-    int rc = krffs_take_free(mount, *offset, extent, want);
-
-    if (rc <= 0) {
-        return rc;
-    }
-    aligned = krffs_tail_size(mount, prev, old, whole);
-    rc = krffs_rehead_free(mount, prev, old, aligned, whole, whole);
-    if (rc == 0) {
-        *offset = prev + aligned;
-        return krffs_take_free(mount, *offset, whole - aligned, want);
-    }
-    if (rc < 0) {
-        return -1;
-    }
-    room = krffs_room_size(mount, *offset, extent, want, extent);
-    if (room == 0) {
-        return 1;
-    }
-    return room == extent ? 0 : krffs_set_extent(mount, *offset, room, extent);
+    return size == extent ? 0 : krffs_set_extent(mount, offset, extent, size, extent);
 }
 
 /**
  * Join successive free nodes if the first is too short for want and the
  * run holds it. A barrier separates this merge from cached size stores.
- * Return 0 with the usable size, 1 if the run is short or its size cannot
- * be published, or -1 on I/O error. On a short run, pass over its nodes
- * by leaving *offset and *extent at the last one.
+ * Return 0 with the usable size, 1 if the run is short, or -1 on I/O
+ * error. For a short run, leave *offset and *extent at its last node.
  */
-static int krffs_join_free(krffs_mount_t *mount, uint64_t prev, uint64_t *offset, uint64_t *extent,
-                           uint64_t want)
+static int krffs_join_free(krffs_mount_t *mount, uint64_t *offset, uint64_t *extent, uint64_t want)
 {
     uint64_t start = *offset;
     uint64_t next = start + *extent;
@@ -1529,18 +1567,9 @@ static int krffs_join_free(krffs_mount_t *mount, uint64_t prev, uint64_t *offset
         return 1;
     }
     *offset = start;
-    if (krffs_size_fits(mount, start, *extent, next - start)) {
-        if (krffs_barrier(mount) != 0 ||
-            krffs_set_extent(mount, start, next - start, next - start) != 0) {
-            return -1;
-        }
-    } else {
-        uint64_t old = start - prev;
-        int rc = krffs_rehead_free(mount, prev, old, old, old + *extent, next - prev);
-
-        if (rc != 0) {
-            return rc;
-        }
+    if (krffs_barrier(mount) != 0 ||
+        krffs_set_extent(mount, start, *extent, next - start, next - start) != 0) {
+        return -1;
     }
     *extent = next - start;
     return 0;
@@ -1598,23 +1627,6 @@ static int krffs_copy_original(krffs_mount_t *mount, uint64_t offset, uint64_t o
 }
 
 /**
- * Halt the mount after a write that failed left the volume in a state only
- * the repair undoes: every write fails until the next mount, which the
- * owed check (`check_owed`) has repair the volume, since it keeps the
- * dirty flag, and the owner turns the mounts read-only (`on_halt`).
- */
-static void krffs_halt(krffs_mount_t *mount)
-{
-    mount->check_owed = 1;
-    if (!mount->halted) {
-        mount->halted = 1;
-        if (mount->on_halt) {
-            mount->on_halt(mount);
-        }
-    }
-}
-
-/**
  * Withdraw the reserved node at `offset`, a copy its caller was told does
  * not exist, by storing its type as free and nothing else, since a merge
  * could make it the larger of two nodes of one name. Either type may reach
@@ -1645,7 +1657,6 @@ static void krffs_withdraw(krffs_mount_t *mount, uint64_t offset)
 static uint64_t krffs_find_room(krffs_mount_t *mount, uint64_t want, int *err)
 {
     uint64_t offset = 0;
-    uint64_t previous = 0;
     krffs_brief_t head;
 
     *err = KRFFS_EIO;
@@ -1659,15 +1670,14 @@ static uint64_t krffs_find_room(krffs_mount_t *mount, uint64_t want, int *err)
         }
         extent = head.size;
         if (head.type == KRFFS_FREE_NODE) {
-            rc = extent < want ? krffs_join_free(mount, previous, &offset, &extent, want) : 0;
+            rc = extent < want ? krffs_join_free(mount, &offset, &extent, want) : 0;
             if (rc == 0) {
-                rc = krffs_reserve_free(mount, previous, &offset, extent, want);
+                rc = krffs_take_free(mount, offset, extent, want);
             }
             if (rc <= 0) {
                 return rc == 0 ? offset : KRFFS_NO_NODE;
             }
         }
-        previous = offset;
         offset += extent;
     }
     *err = KRFFS_ENOSPACE;
@@ -2078,7 +2088,7 @@ int krffs_reap_at(krffs_mount_t *mount, uint64_t offset)
  * (`krffs_settled`), or its bytes could reach the medium under the old
  * length, which still counts them.
  *
- * Return 0 on success, 1 before writing if the length or extent needs
+ * Return 0 on success, 1 before writing if the length needs
  * a move, or -1 on a failed read, write or barrier. A failed size store
  * leaves the links stale
  * (`krffs_publish_size`).
@@ -2096,9 +2106,6 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
         return -1;
     }
     size = krffs_room_size(mount, offset, old, size, old);
-    if (size == 0) {
-        return 1;
-    }
     if (length < head->data_size) {
         rc = krffs_store_length(mount, offset, head->data_size, length, NULL);
         if (rc != 0) {
@@ -2117,7 +2124,7 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
     if (next.type == KRFFS_FREE_NODE) {
         whole += next.size;
     }
-    return krffs_set_extent(mount, offset, size, whole);
+    return krffs_set_extent(mount, offset, old, size, whole);
 }
 
 /**
@@ -2130,13 +2137,11 @@ static int krffs_shrink_at(krffs_mount_t *mount, uint64_t offset, uint64_t lengt
  * header written inside the free node, a barrier, and the one size that takes
  * the bytes before it. The header goes at least a header past the free node's
  * own, so that writing it changes nothing the chain reaches yet. A smaller
- * growth takes a header's worth. Choose a size with krffs_room_size and
- * ask the caller to move if none fits. A barrier ends the
- * grow, since the caller then writes bytes over the free node's old header,
+ * growth takes a header's worth. A barrier ends the grow, since the
+ * caller then writes bytes over the free node's old header,
  * which could otherwise reach the medium before the size that took it.
  *
- * Returns 0 with the node grown, 1 with the chain unchanged when no size
- * could be stored whole, or -1 when a write or a barrier failed.
+ * Returns 0 with the node grown, or -1 on a failed read, write or barrier.
  */
 static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_with_header,
                            const krffs_node_t *head, const krffs_node_t *next_head)
@@ -2149,10 +2154,7 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
         grown = old + sizeof(krffs_node_t);
     }
     grown = krffs_room_size(mount, offset, old, grown, whole);
-    if (grown == 0) {
-        return 1;
-    }
-    if (krffs_barrier(mount) != 0 || krffs_set_extent(mount, offset, grown, whole) != 0) {
+    if (krffs_barrier(mount) != 0 || krffs_set_extent(mount, offset, old, grown, whole) != 0) {
         return -1;
     }
     return krffs_barrier(mount) == 0 ? 0 : -1;
@@ -2234,7 +2236,7 @@ static int krffs_grow_in_place(krffs_mount_t *mount, uint64_t offset, uint64_t s
     }
     if (next_head.size < size_with_header - head.size) {
         uint64_t extent = next_head.size;
-        int rc = krffs_join_free(mount, offset, &next, &extent, size_with_header - head.size);
+        int rc = krffs_join_free(mount, &next, &extent, size_with_header - head.size);
 
         if (rc != 0) {
             return rc;
@@ -2282,8 +2284,8 @@ static int krffs_prepare_data(krffs_mount_t *mount, uint64_t offset, const krffs
  *
  * A grow takes room from the free node after this one (`krffs_grow_in_place`)
  * or moves the node. A shrink stores the shorter length and gives back the
- * surplus (krffs_shrink_at), or moves the node when the shorter length or
- * extent has no safe store. A short remainder stays in the node.
+ * surplus (krffs_shrink_at), or moves the node when the shorter length
+ * has no safe store. A short remainder stays in the node.
  * A resize that raises the length inside the room a node already has stores
  * no length; the caller writes the bytes and the length after them, as after
  * a grow.
@@ -4203,11 +4205,16 @@ static int krffs_repair_links(krffs_mount_t *mount, uint32_t *fixed)
     uint64_t root_link;
 
     *fixed = 0;
-    if (krffs_head(mount, 0, &head) != 0) {
+    if (krffs_raw_head(mount, 0, &head) != 0) {
         return -1;
     }
     root_link = head.previous_node_size;
     do {
+        if (head.type == KRFFS_RESIZING_NODE &&
+            (!krffs_decode_resize(&head) ||
+             krffs_finish_resize(mount, offset, head.size, head.type) != 0)) {
+            return -1;
+        }
         if (offset != 0 && head.previous_node_size != previous_size) {
             if (krffs_write_backward_link(mount, offset, previous_size) != 0) {
                 return -1;
@@ -4216,7 +4223,7 @@ static int krffs_repair_links(krffs_mount_t *mount, uint32_t *fixed)
         }
         previous_size = head.size;
         offset = krffs_step(mount, offset, head.size);
-        if (offset != 0 && (++steps >= bound || krffs_head(mount, offset, &head) != 0)) {
+        if (offset != 0 && (++steps >= bound || krffs_raw_head(mount, offset, &head) != 0)) {
             return -1;
         }
     } while (offset != 0);
@@ -4283,9 +4290,22 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
     return 0;
 }
 
+/** Return 1 when a node's name ends within its field. */
+static int krffs_name_terminated(const uint8_t *name)
+{
+    uint32_t i;
+
+    for (i = 0; i < KRFFS_FILE_NAME_BUFFER_SIZE; i++) {
+        if (name[i] == '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * Walk the whole circular node chain once, bounding every step, and check
- * it, the backward links too when `with_links` is set.
+ * it. Recovery follows shadow sizes. The strict walk checks backward links.
  *
  * The walkers advance by each node's `size`, so a malformed or partially
  * written image (a node whose size overshoots the region, is below a header,
@@ -4307,31 +4327,29 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, ui
  * must end within its field, since every reader would read past one that
  * does not.
  */
-int krffs_chain_walk(krffs_mount_t *mount, int with_links)
+int krffs_chain_walk(krffs_mount_t *mount, int mode)
 {
     uint64_t position = 0;
     uint64_t previous_size = 0;
-    uint64_t total = 0;
-    uint64_t bound = krffs_max_steps(mount);
-    uint64_t count = 0;
     krffs_node_t head;
     krffs_node_t root;
 
-    if (krffs_head(mount, 0, &root) != 0) {
+    if (krffs_raw_head(mount, 0, &root) != 0) {
         return -EIO;
     }
 
-    for (;;) {
-        if (++count > bound) {
-            return 0;
-        }
+    while (position < mount->size) {
         if (mount->size - position < sizeof(krffs_node_t)) {
             return 0;
         }
-        if (krffs_head(mount, position, &head) != 0) {
+        if (krffs_raw_head(mount, position, &head) != 0) {
             return -EIO;
         }
         if (head.magic != KRFFS_FILE_SYSTEM_MAGIC) {
+            return 0;
+        }
+        if (head.type == KRFFS_RESIZING_NODE &&
+            (mode != KRFFS_WALK_RECOVERY || position == 0 || !krffs_decode_resize(&head))) {
             return 0;
         }
         if (head.type != KRFFS_ROOT_NODE && head.type != KRFFS_FREE_NODE &&
@@ -4344,32 +4362,16 @@ int krffs_chain_walk(krffs_mount_t *mount, int with_links)
         if (head.type != KRFFS_FREE_NODE && head.data_size > head.size - sizeof(krffs_node_t)) {
             return 0;
         }
-        if (with_links && count > 1 && head.previous_node_size != previous_size) {
+        if (mode == KRFFS_WALK_LINKS && position != 0 && head.previous_node_size != previous_size) {
             return 0;
         }
-        if (head.type == KRFFS_RESERVED_NODE) {
-            uint32_t i;
-
-            for (i = 0; i < KRFFS_FILE_NAME_BUFFER_SIZE; i++) {
-                if (head.name[i] == '\0') {
-                    break;
-                }
-            }
-            if (i == KRFFS_FILE_NAME_BUFFER_SIZE) {
-                return 0;
-            }
+        if (head.type == KRFFS_RESERVED_NODE && !krffs_name_terminated(head.name)) {
+            return 0;
         }
-        total += head.size;
         previous_size = head.size;
         position += head.size;
-        if (position == mount->size) {
-            break;
-        }
     }
-    if (total != mount->size) {
-        return 0;
-    }
-    if (with_links && root.previous_node_size != previous_size) {
+    if (mode == KRFFS_WALK_LINKS && root.previous_node_size != previous_size) {
         return 0;
     }
     return 1;
@@ -4377,12 +4379,12 @@ int krffs_chain_walk(krffs_mount_t *mount, int with_links)
 
 int krffs_chain_is_valid(krffs_mount_t *mount)
 {
-    return krffs_chain_walk(mount, 1) == 1;
+    return krffs_chain_walk(mount, KRFFS_WALK_LINKS) == 1;
 }
 
 int krffs_chain_is_walkable(krffs_mount_t *mount)
 {
-    return krffs_chain_walk(mount, 0) == 1;
+    return krffs_chain_walk(mount, KRFFS_WALK_FORWARD) == 1;
 }
 
 int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode)
@@ -5073,10 +5075,10 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
         return -1;
     }
 
-    valid = krffs_chain_walk(&krffs_root_mount, 1);
+    valid = krffs_chain_walk(&krffs_root_mount, KRFFS_WALK_LINKS);
     if (valid != 1) {
         if (valid < 0 || disk_grain == 0 || !(root.mode & KRFFS_MODE_DIRTY) ||
-            !krffs_chain_is_walkable(&krffs_root_mount) ||
+            krffs_chain_walk(&krffs_root_mount, KRFFS_WALK_RECOVERY) != 1 ||
             krffs_repair_links(&krffs_root_mount, &fixed) != 0) {
             klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
             krffs_unmount_root();

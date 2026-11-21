@@ -139,8 +139,8 @@ int main(int argc, char **argv)
     }
 
     file_system.size = file_info.st_size;
-
-    if ((file_system.node = krffs_map_file(file_descriptor, 0, file_system.size)) == (void *)-1) {
+    file_system.node = krffs_map_ordinary(file_descriptor, 0, file_system.size, false);
+    if (file_system.node == (void *)-1) {
         fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
 
         exit_status = EXIT_FAILURE;
