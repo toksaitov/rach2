@@ -969,7 +969,7 @@
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
-        {"assertion_id": "first-mounted", "checks": "/proc/mounts has /dev/disk0p1 / ext2 rw,relatime 0 0", "source": "scenario"},
+        {"assertion_id": "first-mounted", "checks": "/proc/mounts has /dev/disk0p1 / ext2 rw,relatime,errors=continue 0 0", "source": "scenario"},
         {"assertion_id": "first-write", "checks": "echo writes /root/first and sync succeeds", "source": "scenario"},
         {"assertion_id": "node-refused", "checks": "the ordinary kernel refuses dd's write to /dev/disk0p2 with Operation not permitted", "source": "scenario"},
         {"assertion_id": "root-before-usb", "checks": "the kernel's record ext2: root: /dev/disk0p1 comes before usb: started", "source": "scenario"},
@@ -996,7 +996,7 @@
         {"assertion_id": "lost-error-bit", "checks": "the poweroff left the superblock's state 2, the error bit", "source": "scenario"},
         {"assertion_id": "lost-e2fsck", "checks": "the host's e2fsck -fn exits 4 on the first partition", "source": "scenario"},
         {"assertion_id": "lost-bitmap", "checks": "e2fsck names the block bitmap's differences", "source": "scenario"},
-        {"assertion_id": "fault-readonly", "checks": "with a reached inode the bitmap calls free, /proc/mounts has /dev/disk0p1 / ext2 ro,relatime 0 0, the check having stopped", "source": "scenario"},
+        {"assertion_id": "fault-readonly", "checks": "with a reached inode the bitmap calls free, /proc/mounts has /dev/disk0p1 / ext2 ro,relatime,errors=continue 0 0, the check having stopped", "source": "scenario"},
         {"assertion_id": "fault-record", "checks": "the kernel says ext2: check: inode N: a reached inode the bitmap calls free", "source": "scenario"},
         {"assertion_id": "fault-reason", "checks": "the kernel says ext2: /dev/disk0p1: read-only with errors, run e2fsck", "source": "scenario"},
         {"assertion_id": "fault-error-bit", "checks": "the poweroff left the superblock's state 2, the error bit", "source": "scenario"},
