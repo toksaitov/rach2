@@ -35,6 +35,18 @@
 # each of the ext2 check's some 11,100 runs of the external checker costs
 # about five times as much under TCG as under KVM; under TCG the check ran
 # past the case's 90-minute bound in the release's run.
+# The suites below boot no guest of their own and judge counts, and each
+# passed under KVM at least half as fast again as under TCG on WSL, by the
+# sum of its case times on i686 and x86_64, one run each (issue 5657):
+# etudeexec, 405 and 392 s under TCG against 35 and 25 s;
+# ext2stop, 325 s against 99 s on i686;
+# grow, 1239 and 1155 s against 674 and 661 s, its host-side cases 923 s
+# against 435 s;
+# installer, 842 and 785 s against 518 and 513 s;
+# installer-repair, 883 and 805 s against 438 and 494 s;
+# man, 323 s against 7 s on i686;
+# agentsaccept, 1556 s against 955 s on x86_64;
+# save-update, 470 s against 84 s on x86_64.
 browser
 video
 webgl
@@ -64,3 +76,11 @@ kvmclock
 sched4
 netguest
 host
+etudeexec
+ext2stop
+grow
+installer
+installer-repair
+man
+agentsaccept
+save-update
