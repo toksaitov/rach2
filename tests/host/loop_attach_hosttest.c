@@ -448,20 +448,30 @@ static void phase_row(void)
 /**
  * A loop device over a file of the boot root, which has no device, so the
  * device has no `backing`, and a second one over a file of a volume on the
- * first: the second is refused with ELOOP, since the cache blocks of the
- * volume between them do not begin on sectors of the disk and the second
- * device's phase could not place their edges.
+ * first. With a phase under it the second is refused with ELOOP, since the
+ * cache blocks of the volume between them do not begin on sectors of the
+ * medium and the second device's phase could not place their edges; with
+ * none, as over a file of tmpfs, it is attached, as on Linux.
  */
 static void nested_row(void)
 {
+    block_device_t *first;
+
     reset();
     mount.dev = NULL;
     check(loop_attach(0, "/image", 1) == 0 && loop_attached_at(0) &&
               loop_attached_at(0)->backing == NULL,
           "nested: a loop device over the boot root has no backing");
-    mount.dev = loop_attached_at(0);
+    first = loop_attached_at(0);
+    mount.dev = first;
+    first->sector_phase = 16;
     check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
-          "nested: a loop device over a file on a loop device is refused");
+          "nested: a loop device over a file on a device with a phase is refused");
+    first->sector_phase = 0;
+    check(loop_attach(1, "/blocker", 1) == 1 && loop_attached_at(1) &&
+              loop_attached_at(1)->backing == first,
+          "nested: a loop device over a file on a device of phase 0 is attached");
+    check(loop_detach(1) == 0, "nested: the second detaches");
     mount.dev = NULL;
     check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
           "nested: the first detaches whole");

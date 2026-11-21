@@ -131,9 +131,12 @@ the path resolves on another volume after the lock wait;
 the device has a mount or a held buffer;
 or a detach was attempted while an attachment was in progress.
 .It Er ELOOP
-The chain of devices under the file is too deep: the kernel counts the
+The device under the file does not begin its sectors on sectors of the
+medium, as a loop device over a file in a KRFFS image may not;
+or the chain of devices under the file is too deep: the kernel counts the
 links to the backing device, so one loop device may stand on a disk,
-while an image on the RAM root allows two nested loop devices.
+while an image on a file system with no device, such as tmpfs,
+allows two nested loop devices.
 .It Er EINVAL
 The file length is not a whole number of sectors,
 the device number is outside 0 through 3,
