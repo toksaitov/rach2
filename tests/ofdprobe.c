@@ -199,7 +199,7 @@ static int forks(void)
  */
 static unsigned heap_used(void)
 {
-    long ts[2] = {0, 4000000L};
+    const long ts[2] = {0, 4000000L};
     unsigned pending;
 
     while ((pending = probe_meminfo("RcuPending:")) != 0) {
