@@ -444,8 +444,10 @@ uint32_t netconf_broadcast(void)
 
 /**
  * The classful mask an address implies, for the moment between being given an
- * address and being given a mask: 255.0.0.0 below 128, 255.255.0.0 below 192,
- * and 255.255.255.0 from 192 up.
+ * address and being given a mask: 255.0.0.0 below 128, 0/8 among them,
+ * 255.255.0.0 below 192, 255.255.255.0 below 224, a host mask from 240 up,
+ * and none for 0.0.0.0 and 255.255.255.255, as Linux's inet_abc_len gives
+ * them. The caller refuses multicast, 224/4, before asking.
  *
  * `ifconfig eth0 A.B.C.D` is one ioctl and `netmask M.M.M.M` is the next, so
  * there is a moment with an address and no mask, and a machine that refused to
@@ -457,7 +459,7 @@ static uint32_t classful_mask(uint32_t ip)
 {
     uint32_t top = ip >> 24;
 
-    if (!top || ip == 0xffffffffu)
+    if (!ip || ip == 0xffffffffu)
         return 0;
     if (top >= 240)
         return 0xffffffffu;
