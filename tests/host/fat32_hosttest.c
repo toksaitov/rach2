@@ -3560,6 +3560,7 @@ void sched_service_point(void)
  */
 int main(int argc, char **argv)
 {
+    host_command_server();
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
     if (argc > 1 && streq(argv[1], "--publish-only")) {
