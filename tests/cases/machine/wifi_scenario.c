@@ -209,6 +209,14 @@ static void unrouted(struct wifi *w)
     sta(w, NULL, "while route -n | grep -q '^0\\.0\\.0\\.0 .* wlan0$'; do sleep 1; done");
 }
 
+/** Wait in the station's shell until wlan0 has no IPv4 address. udhcpc's
+ * deconfig removes the default route before the address, so a wait for the
+ * route alone may end before the kernel records the address's loss. */
+static void unaddressed(struct wifi *w)
+{
+    sta(w, NULL, "while ifconfig wlan0 | grep -q 'inet addr:'; do sleep 1; done");
+}
+
 /** Say whether the kernel has recorded on the station's console, since the
  * offset `from`, that wlan0 lost its IPv4 address. */
 static int dropped(struct wifi *w, uint64_t from)
@@ -1072,6 +1080,7 @@ static void robust_silent(struct wifi *w)
     ap(w, NULL, "until [ " ACKS " -gt %ld ]; do sleep 1; done", acks);
     ap(w, NULL, "pkill -STOP dnsmasq");
     unrouted(w);
+    unaddressed(w);
     net_assert(&w->u, "expired", acks >= 0 && dropped(w, mark),
                "the station kept its address past the lease's end");
     ap(w, NULL, DNSMASQ_AGAIN, "/etc/wifiap/dnsmasq.conf");
@@ -1333,6 +1342,7 @@ static void rfkill_silent(struct wifi *w)
     ok = silent_rejoin(w, 14);
     sta(w, NULL, "rfkill block wifi");
     unrouted(w);
+    unaddressed(w);
     net_assert(&w->u, "silent-block", ok && dropped(w, mark),
                "a block after a rejoin with the server silent left the address");
     n = log_count(w, "CTRL-EVENT-CONNECTED");
