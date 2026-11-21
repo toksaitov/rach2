@@ -534,9 +534,10 @@ static int first_build(struct sb *s, struct etude_case_machine *m, uint64_t *at)
     char *w, size[32], why[96];
     long bytes;
 
-    if (!lc_step(&s->l, "build-one") ||
+    if (!lc_step(&s->l, "copy-one") ||
         !copy(s, m, at, copy_one, "build-one",
               "the copy of /src/rach2 into the workspace failed") ||
+        !lc_step(&s->l, "build-one") ||
         !build(s, m, at, build_one, "build-one",
                "the first build of the kernel failed; its last lines are on the console") ||
         (w = command(s, m, "build", at, hash_one, "HASH_END")) == NULL) {
@@ -565,8 +566,9 @@ static void second_build(struct sb *s, struct etude_case_machine *m, uint64_t *a
 {
     char *w;
 
-    if (!lc_step(&s->l, "build-two") ||
+    if (!lc_step(&s->l, "copy-two") ||
         !copy(s, m, at, copy_two, "build-two", "the second copy of /src/rach2 failed") ||
+        !lc_step(&s->l, "build-two") ||
         !build(s, m, at, build_two, "build-two",
                "the second build of the kernel failed; its last lines are on the console") ||
         (w = command(s, m, "build", at, hash_two, "SAME_END")) == NULL) {
