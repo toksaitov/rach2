@@ -98,6 +98,7 @@ tests/musl/threadscaling.c: the parent sleeps through 20 ms of ticks
 tests/limitprobe.c: the clone is given 100 ms to fall asleep in its read
 tests/drmprobe.c: the master holds the screen for the seconds asked
 tests/ldtprobe.c: a nap of 10 ms switches the probe out and back in
+tests/ofdprobe.c: a nap of 20 ms lets rcu_sched free reaped records
 tests/musl/wakelatmusl.c: the measured 5 ms deadline is the workload
 tests/musl/schedsmpmusl.c: a load runs for the span its share is measured over
 tests/musl/schedsmpmusl.c: the sleeper's 1 ms sleep is the workload
