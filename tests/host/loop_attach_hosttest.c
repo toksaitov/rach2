@@ -46,6 +46,8 @@ static uint32_t root_phase(struct vfs_mount *mnt, void *node, void *handle)
 
 static const struct vfs_ops root_ops = {.phase = root_phase};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops};
+/* Mounted KRFFS, `mount(2)`'s type, apart from the boot root's. */
+const struct vfs_type vfs_krffs_volume_type = {"krffs", 0, &root_ops};
 /* A type that keeps its files in whole blocks, as ext2 does. */
 static const struct vfs_ops block_ops = {0};
 static const struct vfs_type block_type = {"ext2", 0, &block_ops};
@@ -460,6 +462,7 @@ static void phase_row(void)
  */
 static void nested_row(void)
 {
+    static struct vfs_mount bound;
     block_device_t *first;
 
     reset();
@@ -475,7 +478,15 @@ static void nested_row(void)
     first->sector_phase = 0;
     check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
           "nested: a loop device over a KRFFS file on a loop device is refused");
+    mount.type = &vfs_krffs_volume_type;
+    check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
+          "nested: a loop device over a mounted KRFFS volume's file on a loop device is refused");
     mount.type = &block_type;
+    bound.type = &vfs_krffs_volume_type;
+    mount.bind_of = &bound;
+    check(loop_attach(1, "/blocker", 1) == -ELOOP && !loops[1].used,
+          "nested: a loop device over a file through a bind of KRFFS on a loop device is refused");
+    mount.bind_of = NULL;
     check(loop_attach(1, "/blocker", 1) == 1 && loop_attached_at(1) &&
               loop_attached_at(1)->backing == first,
           "nested: a loop device over a block file system's file on a device of phase 0 "

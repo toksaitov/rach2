@@ -44,6 +44,7 @@
 
 #include "../fs/bcache.h"
 #include "../fs/fd.h"
+#include "../fs/krffsmount.h"
 #include "../fs/vfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -740,7 +741,8 @@ static void loop_publish(struct loop_device *loop, void *node, block_device_t *b
 
 /**
  * Whether a file of `mnt` is one a loop device's phase cannot place: on a
- * device whose sectors are not the medium's, or on KRFFS on a loop device,
+ * device whose sectors are not the medium's, or on KRFFS, a mounted volume
+ * or the root's type, through `mnt` or the mount it binds, on a loop device,
  * where a relocation moves the file off the phase the device below it was
  * given while the volume above keeps the phase and copy it had.
  */
@@ -749,7 +751,8 @@ static int loop_unplaceable(const struct vfs_mount *mnt)
     const struct vfs_mount *base = mnt->bind_of ? mnt->bind_of : mnt;
 
     return mnt->dev && (mnt->dev->sector_phase != 0 ||
-                        (mnt->dev->read == loop_read && base->type == &vfs_krffs_type));
+                        (mnt->dev->read == loop_read &&
+                         (base->type == &vfs_krffs_volume_type || base->type == &vfs_krffs_type)));
 }
 
 /**
