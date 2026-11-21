@@ -2826,6 +2826,7 @@ void sched_service_point(void)
 /** Run every row. Returns 0 when every check passed, and 1 otherwise. */
 int main(int argc, char **argv)
 {
+    host_command_server();
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
     if (argc > 1 && strcmp(argv[1], "--publish-only") == 0) {
