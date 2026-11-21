@@ -24,9 +24,11 @@
  * partition's superblock: 1 when unmounted cleanly, 2 with an error. */
 #define STATE_AT (1048576L + 1024 + 58)
 
-/* The line /proc/mounts gives the ext2 root mounted writable. */
-static const char rw_line[] = "/dev/disk0p1 / ext2 rw,relatime 0 0";
-static const char ro_line[] = "/dev/disk0p1 / ext2 ro,relatime 0 0";
+/* The lines /proc/mounts gives the ext2 root mounted writable and read-only.
+ * The test disk's superblock says to continue on errors, which the options
+ * show, as Linux's ext2 shows them. */
+static const char rw_line[] = "/dev/disk0p1 / ext2 rw,relatime,errors=continue 0 0";
+static const char ro_line[] = "/dev/disk0p1 / ext2 ro,relatime,errors=continue 0 0";
 
 /* The probes of the `probe-NAME` cases, by NAME and their path on the root. */
 struct probe {
