@@ -13,6 +13,7 @@ import re
 import signal
 import socket
 import socketserver
+import struct
 import subprocess
 import sys
 import tempfile
@@ -257,18 +258,22 @@ def cmd_egl():
 
 
 # The page reports ready once it has the focus and two of its frames have
-# begun. Weston 14 gives the seat its pointer only at a mouse's first event
-# (ensure_pointer_capability), so the scenario's first move reaches Chromium
-# as wl_pointer.enter alone; sent at the first focus, in a session started a
-# few seconds after boot, that move never reached the page.
+# begun, and each new place of the pointer; wait_pointer sees that the seat
+# has a pointer before the browser starts.
 PAGE = b'''<!doctype html><title>Desktop input</title>
 <style>html, body { margin: 0; width: 100%; height: 100%; background: #204060; }</style>
 <body><script>
 const say = path => fetch(path, {cache: "no-store"});
 document.addEventListener("keydown", e => say("/key?k=" + encodeURIComponent(e.key)));
-let moved = false;
+let at = "";
 for (const kind of ["mouseover", "mousemove", "pointerover", "pointermove"])
- document.addEventListener(kind, e => { if (!moved) { moved = true; say("/move?e=" + kind); } });
+ document.addEventListener(kind, e => {
+  const here = e.clientX + "&y=" + e.clientY;
+  if (here !== at) {
+   at = here;
+   say("/move?e=" + kind + "&x=" + here + "&w=" + innerWidth + "&h=" + innerHeight);
+  }
+ });
 document.addEventListener("mousedown", e => say("/click?b=" + e.button));
 (function ready() {
  if (document.hasFocus())
@@ -291,7 +296,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.server.keys += query["k"][0]
             print("desktop: key: %s" % query["k"][0], flush=True)
         elif url.path == "/move":
-            print("desktop: pointer: on the page, %s" % query["e"][0], flush=True)
+            x, y, w, h = (int(float(query[k][0])) for k in "xywh")
+            print("desktop: pointer: on the page, %s at %d,%d" % (query["e"][0], x, y), flush=True)
+            if abs(x - w * self.server.target) <= 2 and abs(y - h * self.server.target) <= 2:
+                print("desktop: pointer: at the target", flush=True)
         elif url.path == "/click":
             self.server.clicks += 1
             print("desktop: click: button %s" % query["b"][0], flush=True)
@@ -309,6 +317,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Keep HTTP traffic out of the result stream."""
 
 
+def wayland_string(text):
+    """Encode `text` as a Wayland string argument: length, bytes, NUL, padding."""
+    data = text.encode() + b"\0"
+    return struct.pack("=I", len(data)) + data + b"\0" * (-len(data) % 4)
+
+
+def wait_pointer():
+    """Wait until Weston's seat has a pointer, given by the scenario's first move.
+
+    Weston 14 adds the seat's pointer only at a pointer device's first event
+    (ensure_pointer_capability). A browser started before it binds no
+    wl_pointer, and the page's move then reaches it only as the enter Weston
+    sends at the late bind, which Chromium did not always turn into a page
+    event. This client binds wl_seat, asks the scenario for the first move at
+    the seat's first capabilities event, and returns once one lists the
+    pointer, so that the browser binds a pointer that exists and the page's
+    move arrives as motion. When the seat has a pointer already, as for the
+    second browser, it returns at once and the first move's order is free.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect("/run/user/1001/wayland-0")
+    sock.sendall(struct.pack("=III", 1, 12 << 16 | 1, 2))  # wl_display.get_registry
+    buf, seat, asked = b"", None, False
+    try:
+        while True:
+            data = sock.recv(4096)
+            assert data, "weston closed the connection"
+            buf += data
+            while len(buf) >= 8:
+                obj, word = struct.unpack_from("=II", buf)
+                size, opcode = word >> 16, word & 0xffff
+                if len(buf) < size:
+                    break
+                body, buf = buf[8:size], buf[size:]
+                if obj == 2 and opcode == 0 and seat is None:  # wl_registry.global
+                    name, length = struct.unpack_from("=II", body)
+                    if body[8:8 + length - 1] == b"wl_seat":
+                        seat = 3
+                        bind = struct.pack("=I", name) + wayland_string("wl_seat") + \
+                            struct.pack("=II", 1, seat)
+                        sock.sendall(struct.pack("=II", 2, (8 + len(bind)) << 16 | 0) + bind)
+                elif obj == seat and opcode == 0:  # wl_seat.capabilities
+                    if not asked:
+                        print("desktop: waiting: pointer", flush=True)
+                        asked = True
+                    if struct.unpack_from("=I", body)[0] & 1:  # WL_SEAT_CAPABILITY_POINTER
+                        return
+    finally:
+        sock.close()
+
+
 def cmd_browser(name):
     """Show the input page in browser `name` and wait for the injected input."""
     with tempfile.TemporaryDirectory(prefix="desktop-browser-", dir="/tmp") as work, \
@@ -317,6 +376,9 @@ def cmd_browser(name):
         server.daemon_threads = True
         server.ready, server.done = threading.Event(), threading.Event()
         server.keys, server.clicks = "", 0
+        # The fraction of the page across and down that the scenario's
+        # absolute move gives each browser, a place no earlier move left.
+        server.target = 0.5 if name == "chromium" else 0.75
         url = "http://127.0.0.1:%d/" % server.server_address[1]
         if name == "chromium":
             # A child of Chromium's that the browser has not reached in 15 s
@@ -333,6 +395,7 @@ def cmd_browser(name):
                 os.chown(path, 1001, 1001)
             line = "MOZ_ENABLE_WAYLAND=1 exec firefox-esr --kiosk --no-remote --profile %s %s" % (
                 profile, url)
+        wait_pointer()
         worker = threading.Thread(target=server.serve_forever)
         worker.start()
         log = Path(work) / "browser.log"
