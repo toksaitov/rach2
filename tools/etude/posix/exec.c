@@ -361,9 +361,13 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
     return total;
 }
 
+/* The most a pipe holds when FIONREAD fails and F_GETPIPE_SZ is missing. */
+#define QUEUED_BOUND (1024 * 1024)
+
 /**
- * Give the bytes output stream `fd` holds now, or SIZE_MAX when it is open
- * and cannot say, which `read_output` lowers to 0 once a read would wait.
+ * Give the bytes output stream `fd` holds now. When FIONREAD fails, give the
+ * pipe's capacity instead, which the bytes queued cannot pass, so that the
+ * cleanup it bounds still comes after a finite read.
  */
 static size_t queued(int fd)
 {
@@ -371,9 +375,14 @@ static size_t queued(int fd)
 
     if (fd < 0)
         return 0;
-    if (ioctl(fd, FIONREAD, &n) != 0 || n < 0)
-        return SIZE_MAX;
-    return (size_t)n;
+    if (ioctl(fd, FIONREAD, &n) == 0 && n >= 0)
+        return (size_t)n;
+#ifdef F_GETPIPE_SZ
+    n = fcntl(fd, F_GETPIPE_SZ);
+    if (n > 0)
+        return (size_t)n;
+#endif
+    return QUEUED_BOUND;
 }
 
 /**
