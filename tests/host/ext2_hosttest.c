@@ -10932,6 +10932,28 @@ static void long_finish(const long pids[])
 }
 
 /**
+ * Say whether `argv` is a command line that main runs: no option, one option
+ * of `only_rows`, `--capture-only`, or the capture child's two.
+ */
+static int known_arguments(int argc, char **argv)
+{
+    unsigned i;
+
+    if (argc == 1)
+        return 1;
+    if (argc == 3)
+        return streq(argv[1], "-fn") && streq(argv[2], "--capture-child");
+    if (argc != 2)
+        return 0;
+    if (streq(argv[1], "--capture-only"))
+        return 1;
+    for (i = 0; i < sizeof(only_rows) / sizeof(only_rows[0]); i++)
+        if (streq(argv[1], only_rows[i].option))
+            return 1;
+    return 0;
+}
+
+/**
  * Make the native fixture tree using the prepared independent tools, and run
  * the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes and at 2
  * KiB, the 1 KiB levels, the failures, the write sequences, the types of
@@ -10945,7 +10967,8 @@ static void long_finish(const long pids[])
  * the big lock. An option of `only_rows` runs its rows alone; `--capture-only`
  * checks independent tool output capture alone. With no option, the groups of
  * `long_groups` run as processes of their own beside the other rows, as
- * `long_start` says. Returns 0, and calls `fix_passed`, when every row passed.
+ * `long_start` says. Returns 0, and calls `fix_passed`, when every row passed,
+ * 1 when one failed, and 2 for a command line it does not know.
  */
 int main(int argc, char **argv)
 {
@@ -10953,6 +10976,10 @@ int main(int argc, char **argv)
     uint64_t bytes;
     unsigned i;
 
+    if (!known_arguments(argc, argv)) {
+        printf("ext2_hosttest: usage: ext2_hosttest [--capture-only | --NAME-only]\n");
+        return 2;
+    }
     if (argc == 3 && streq(argv[1], "-fn") && streq(argv[2], "--capture-child"))
         return ext2_fixture_capture_child();
     if (argc == 1)
