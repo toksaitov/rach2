@@ -2327,15 +2327,16 @@ $(NETGUEST_DIR)/debian.qcow2: tests/netguest/prepare.sh tests/graphics/debian-re
 $(NETGUEST_DIR)/%.qcow2.record: $(NETGUEST_DIR)/%.qcow2
 	sh tests/netguest/prepare.sh $* $<
 # nettput for Rach2, a static musl program of x86-64, the suite's only
-# architecture, and for the host, the peer service of the cases.
+# architecture, and for the host, the peer service of the cases. A mixed
+# collection may request it from an i686 make, which hands it to x86-64's.
 ifeq ($(ARCH),x86_64)
 $(NETGUEST_DIR)/nettput: tests/netguest/nettput.c $(LIBC_STAMP)
 	@mkdir -p $(@D) build/tmp
 	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
 	    -static -Wl,-z,noexecstack $< -o $@
 else
-$(NETGUEST_DIR)/nettput:
-	@echo "make: $@ is built with ARCH=x86_64" >&2; exit 1
+$(NETGUEST_DIR)/nettput: ask-the-sub-make
+	+$(MAKE) --no-print-directory ARCH=x86_64 $@
 endif
 $(NETGUEST_DIR)/nettput-host: tests/netguest/nettput.c
 	@mkdir -p $(@D)
