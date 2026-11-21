@@ -22,8 +22,10 @@ the tools' own output, and writes:
 The 1,033 compiler tests skipped before execution by GL_EXT_gpu_shader4's
 fast-skip check, and two EGL tests skipped for absent displays, accept
 `skip-or-pass`. These are setup skips, not answers about the kernel's device.
-IGT's absent sw_sync device and the cursor, extended-mode and feature
-discovery tests that found no second connected output use the same rule.
+IGT's absent sw_sync device, the cursor, extended-mode and feature
+discovery tests that found no second connected output, and kms_hdmi_inject's
+inject-audio, which found no ELD on a boot that kept the HDA driver out, use
+the same rule.
 A requirement the owner defers uses `xfail`
 with a comment naming the deferral; a missing parent test still fails.
 
@@ -117,6 +119,10 @@ def igt_setup_skip(name, test):
     if name.startswith("igt@kms_cursor_legacy@"):
         return ("Test requirement not met in function find_connected_pipe," in out
                 and "Test requirement: found\nNo second valid output found\n" in out)
+    # The reference's boot kept the HDA driver out, so it had no ELD to read.
+    if name == "igt@kms_hdmi_inject@inject-audio":
+        return ("Test requirement: eld_is_supported()\n" in out
+                and "Last errno: 2, No such file or directory\n" in out)
     # The reference had only eDP-1; the native run also has HDMI-A-1.
     if name == "igt@kms_feature_discovery@display-2x":
         return "Test requirement: output_count >= 2\n" in out

@@ -1276,7 +1276,7 @@ igt@kms_getfb@getfb2-handle-protection pass
 igt@kms_getfb@getfb2-handle-zero pass
 igt@kms_getfb@getfb2-into-addfb2 pass
 igt@kms_hdmi_inject@inject-4k pass
-igt@kms_hdmi_inject@inject-audio skip
+igt@kms_hdmi_inject@inject-audio skip-or-pass
 igt@kms_hdr@bpc-switch skip
 igt@kms_hdr@bpc-switch-dpms skip
 igt@kms_hdr@brightness-with-hdr skip
