@@ -398,7 +398,7 @@ $(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
 $(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
-	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
+	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 96
 # The disk of the grub case, tests/cases/machine.grub.json: the GRUB disk
 # around the kernel, on an MBR, with the grub-test root. The recipe first
 # requires grub-test.manifest, less its comments and its two core lines, to
@@ -417,7 +417,7 @@ $(GRUB_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(GRUB_TES
 	      rm -f $@.manifest; exit 1; }
 	rm -f $@.manifest
 	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_EXT2_MB=48 \
+	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
 	RACH2_DISK_RECOVERY_MB=8 \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
@@ -468,7 +468,7 @@ $(BOOTORDER_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/gru
 	RACH2_DISK_TABLE=mbr \
 	RACH2_DISK_APPEND="rach2.disk=ahci" \
 	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_EXT2_MB=48 \
+	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
