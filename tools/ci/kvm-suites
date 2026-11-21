@@ -50,6 +50,18 @@
 # selfbuild, 4419 and 4097 s against 1966 and 2020 s; its i686 ofdprobe
 # failure under KVM was a heap reading taken before the grace-period
 # callbacks ran (issue 5658), which passed alone at the fix.
+# The suites below passed under KVM and took no longer there than under
+# TCG, by the sum of their case times on i686 and x86_64 (issue 5657), so
+# that the full run gives the TCG pool's processors to the suites that need
+# TCG; doom took 921 s against 904, within a run's spread:
+# default, 926 s against 1091; doom; punch, 2475 s against 2732;
+# wifi, 1024 s against 1166; fdlock, 492 s, which under TCG stopped at its
+# case bound on both; selfbuild-ext2, 828 s against 921;
+# installer-rehearse, 1839 s against 2153 on x86_64; uefi, 565 s against
+# 875; gnu, 2265 s against 3381; assign, 172 s against 2393 on x86_64, its
+# nested Debian guest booted through Rach2's VFIO.
+# sealed, diskrate and agents stay under TCG, slower under KVM: 2735 s
+# against 1256, 1009 against 781, and 1361 against 1070.
 browser
 video
 webgl
@@ -88,3 +100,13 @@ man
 agentsaccept
 save-update
 selfbuild
+default
+doom
+punch
+wifi
+fdlock
+selfbuild-ext2
+installer-rehearse
+uefi
+gnu
+assign
