@@ -2456,11 +2456,19 @@ static void rss_fork_rows(void)
     }
 }
 
-/** A /proc/<pid> directory lists its files in their order, `task` last, and a
- * thread's directory under `task` lists them with `children` in place of
- * `task`; /proc/self/limits has Linux's header and sixteen limits; /proc
- * lists interrupts and filesystems; and cwd and root are links to the
- * process's directories, which a walk follows. */
+/** Copy the string `tail` into `buf` at `at`, with its NUL. */
+static void put_tail(char *buf, int at, const char *tail)
+{
+    while ((buf[at++] = *tail++) != '\0') {
+    }
+}
+
+/** A /proc/<pid> directory lists its files in their order, `autogroup` and
+ * `task` last, and a thread's directory under `task` lists them without
+ * `autogroup` and with `children` in place of `task`; /proc/self/limits has
+ * Linux's header and sixteen limits; /proc lists interrupts and filesystems;
+ * and cwd and root are links to the process's directories, which a walk
+ * follows. */
 static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
@@ -2481,21 +2489,13 @@ static void pid_dir_rows(void)
     for (i = 0; files[i]; i++) {
         want[i] = files[i];
     }
-    for (v = 0; "children "[v]; v++) {
-        want[i + v] = "children "[v];
-    }
-    want[i + v] = '\0';
+    put_tail(want, i, "children ");
     check("thread-dir-listing", listing(dir, got, (int)sizeof(got)) == 0 && same_str(got, want),
           "a thread's directory lists the files of /proc/<pid>, children in place of task");
-    want[i++] = 't';
-    want[i++] = 'a';
-    want[i++] = 's';
-    want[i++] = 'k';
-    want[i++] = ' ';
-    want[i] = '\0';
+    put_tail(want, i, "autogroup task ");
     check("self-dir-listing",
           listing("/proc/self", got, (int)sizeof(got)) == 0 && same_str(got, want),
-          "and /proc/self lists them all in order, task last");
+          "and /proc/self lists them all in order, autogroup and task last");
     {
         int n = slurp("/proc/self/limits", buf, (int)sizeof(buf));
 

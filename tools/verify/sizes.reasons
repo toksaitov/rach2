@@ -718,7 +718,6 @@ tests/pingtest.c:probe_main complexity 28 a probe, one sequence of steps in the 
 tests/pingtest.c:probe_main lines 162 a probe, one sequence of steps in the order the log records them
 tests/pingtest.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
-tests/procprobe.c:pid_dir_rows complexity 26 a test's rows, each a case, read as one table
 
 tests/rawprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:probe_main lines 386 a probe, one sequence of steps in the order the log records them
