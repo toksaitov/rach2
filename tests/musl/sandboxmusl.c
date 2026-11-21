@@ -22,8 +22,9 @@
  * exist and no mount of the namespace shows in mountinfo, and /proc/sys
  * can be written. User 1000, in a user and a mount namespace of its own
  * that map its own ids, as bubblewrap makes them, binds /proc/sys
- * read-only over itself, and it reads and refuses an open for writing with
- * EROFS.
+ * read-only over itself, and it reads; an open for writing and access(2)
+ * for writing fail with EACCES, since the file's mode refuses the user
+ * before the read-only mount is judged, as on Linux.
  *
  * In the probe's own namespace a tmpfs at /tmp/sbxd with a file open for
  * writing is detached at once by MNT_DETACH: its file is gone from the path,
@@ -266,9 +267,10 @@ static int ro_bind(const char *src, const char *dst)
 }
 
 /** Whether the /proc/sys at `dir` is read-only: its kernel/overflowuid reads
- * 65534, an open of it for writing fails with EROFS, and access(2) of `dir`
- * for writing with `err`, EROFS for root and EACCES for a user, whose
- * permission is judged first, as on Linux. */
+ * 65534, and an open of it for writing and access(2) of `dir` for writing
+ * fail with `err`, EROFS for root and EACCES for a user, whose permission
+ * is judged before the mount, as Linux's may_open and do_faccessat judge
+ * it. */
 static int sys_read_only(const char *dir, int err)
 {
     char path[128], buf[16];
@@ -284,7 +286,7 @@ static int sys_read_only(const char *dir, int err)
     if (n != 6 || memcmp(buf, "65534\n", 6) != 0) {
         return 0;
     }
-    return refused(open(path, O_WRONLY), EROFS) && refused(access(dir, W_OK), err);
+    return refused(open(path, O_WRONLY), err) && refused(access(dir, W_OK), err);
 }
 
 /** Whether a mount of a tmpfs at /tmp fails with EPERM, as for a thread
