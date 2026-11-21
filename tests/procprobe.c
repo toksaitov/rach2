@@ -272,6 +272,7 @@ static const struct row {
             {"sysctl-uint-refuse", ROW_PLAIN},
             {"sysctl-ulong-sign", ROW_PLAIN},
             {"sysctl-ranges", ROW_PLAIN},
+            {"sysctl-port-range", ROW_PLAIN},
             {"sysctl-forwarding-kept", ROW_PLAIN},
             {"sysctl-secret-refuse", ROW_PLAIN},
             {"sysctl-perm-write", ROW_PLAIN},
