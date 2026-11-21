@@ -106,7 +106,7 @@ static void install(struct drive *d, const char *args, int status, const char *c
 
 /**
  * Update the installed machine from the stick, row 12. The disk has no data
- * partition, and its recovery partition of 16 MiB keeps under 2 MiB free, so
+ * partition, and its recovery partition of 20 MiB keeps under 6 MiB free, so
  * the update refuses before it writes anything for want of room for the copy
  * of the homes, the 8 MiB file among them; `rach2-install --data` then makes
  * the data partition after the root, which keeps its 64 MiB, and the update

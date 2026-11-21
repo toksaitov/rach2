@@ -397,7 +397,9 @@ $(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 	sh tools/image/mkgrubcore.sh B $@
 
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
-$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+# The image's size is in its recipe here, so the recipe's file is a
+# prerequisite.
+$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh tests/system/suites.mk $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 96
 # The disk of the grub case, tests/cases/machine.grub.json: the GRUB disk
 # around the kernel, on an MBR, with the grub-test root. The recipe first
@@ -1397,10 +1399,12 @@ $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-d
                    check-e2fsck kbd libtsm sox_ng hostap iw ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
+# The disk's layout is in its recipe here, so the recipe's file is a
+# prerequisite.
 $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
-                   tools/image/mkdisk_grub.sh $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
+                   tools/image/mkdisk_grub.sh tests/system/suites.mk $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_RECOVERY_MB=16 \
+	RACH2_DISK_RECOVERY_MB=20 \
 	RACH2_DISK_EXT2_MB=64 \
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
