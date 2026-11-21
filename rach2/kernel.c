@@ -4101,6 +4101,31 @@ static void shell_ping(uint32_t ip, bool want_reply)
 }
 
 /**
+ * The `netping` command: ping the gateway of the first interface's default
+ * route, the one the boot line or DHCP gives it or one a program adds with
+ * SIOCADDRT or RTM_NEWROUTE (`netdev_default_gateway`), or say there is none.
+ */
+static void shell_ping_gateway(void)
+{
+    struct netdev *nd;
+    uint32_t flags, gw = 0;
+
+    flags = net_lock();
+    nd = netdev_first();
+    if (nd) {
+        gw = netdev_default_gateway(nd);
+    }
+    net_unlock(flags);
+    if (gw == 0) {
+        set_fore_color(light_red);
+        console_puts("netping: no default route");
+        set_fore_color(light_grey);
+        return;
+    }
+    shell_ping(gw, true);
+}
+
+/**
  * The `mmio` command: map BAR 0 of the first display function whole, as one
  * window of the MMIO region (`pci_bar_map`), write and read back its first
  * and last words, print the window, the size of the pages at its ends and
@@ -4212,7 +4237,7 @@ static void process_command(const char *cmd)
         console_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
         console_puts("  ahci                - Probe the AHCI/SATA HBA, dump registers, read LBA 0");
         console_puts("  mmio                - Map the display's BAR 0 whole, then free it");
-        console_puts("  netping             - Ping the gateway");
+        console_puts("  netping             - Ping the default route's gateway");
         console_puts("  netbad              - Ping an unreachable host (timeout demo)");
         console_puts("  fault               - Trigger page fault (panic)");
         console_puts("  badop               - Run an invalid opcode (panic)");
@@ -4565,7 +4590,7 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "mmio")) {
         show_mmio_display();
     } else if (str_equal(cmd, "netping")) {
-        shell_ping(net_ip_gateway, true);
+        shell_ping_gateway();
     } else if (str_equal(cmd, "netbad")) {
         shell_ping(0x0A000263UL, false); /* 10.0.2.99 */
     } else if (str_equal(cmd, "fault")) {
