@@ -46,7 +46,10 @@
 # installer-repair, 883 and 805 s against 438 and 494 s;
 # man, 323 s against 7 s on i686;
 # agentsaccept, 1556 s against 955 s on x86_64;
-# save-update, 470 s against 84 s on x86_64.
+# save-update, 470 s against 84 s on x86_64;
+# selfbuild, 4419 and 4097 s against 1966 and 2020 s; its i686 ofdprobe
+# failure under KVM was a heap reading taken before the grace-period
+# callbacks ran (issue 5658), which passed alone at the fix.
 browser
 video
 webgl
@@ -84,3 +87,4 @@ installer-repair
 man
 agentsaccept
 save-update
+selfbuild
