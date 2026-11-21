@@ -115,6 +115,8 @@ struct driven {
     const char *ready;       /* the text it prints when it waits for input */
     const char *token;       /* the text of its success */
     void (*input)(struct net_case *u, struct net_boot *b); /* the input */
+    const char *before; /* the text it prints when it waits for first(), or NULL */
+    void (*first)(struct net_case *u, struct net_boot *b); /* the input before ready */
 };
 
 /** Start the command of `d`, wait for its ready text, run its input on the
@@ -132,6 +134,12 @@ static void driven(struct net_case *u, struct net_boot *b, const struct driven *
         if (!started)
             net_fail(u, "%s did not start", d->argv[1]);
     }
+    if (net_ok(u) && d->before != NULL) {
+        if (etude_guest_output_wait(b->m, d->before) != ETUDE_OK)
+            net_fail(u, "%s never printed \"%s\"", d->argv[1], d->before);
+        else
+            d->first(u, b);
+    }
     if (net_ok(u) && etude_guest_output_wait(b->m, d->ready) != ETUDE_OK)
         net_fail(u, "%s never printed \"%s\"", d->argv[1], d->ready);
     if (net_ok(u))
@@ -147,25 +155,32 @@ static void driven(struct net_case *u, struct net_boot *b, const struct driven *
     net_run_free(&r);
 }
 
-/** Move the pointer onto the page, which gives Weston the pointer's focus,
- * click the left button, and type the page's keys. Each input waits until
- * the page has reported the one before it: keys sent back to back, with the
- * pointer's move among them, reached the keyboard's event device whole and
- * in order, but the page missed some of them, a click sent just after the
- * move never reached it, and its reports, each a fetch of its own, came in
- * any order. */
-static void page_input(struct net_case *u, struct net_boot *b)
+/** Move the pointer onto the page, to `target` across and down in QMP's
+ * absolute units of 0 to 32767 under KVM, which gives Weston the pointer's
+ * focus, click the left button, and type the page's keys. Each input waits
+ * until the page has reported the one before it: keys sent back to back,
+ * with the pointer's move among them, reached the keyboard's event device
+ * whole and in order, but the page missed some of them, a click sent just
+ * after the move never reached it, and its reports, each a fetch of its own,
+ * came in any order. */
+static void page_input(struct net_case *u, struct net_boot *b, int target)
 {
-    char seen[64];
+    char seen[64], move[160];
     unsigned i;
     int vmmouse = strcmp(etude_case_accel(u->c), "kvm") == 0;
 
+    snprintf(move, sizeof(move),
+             "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": %d}}, "
+             "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": %d}}]",
+             target, target);
     events(u, b,
-           vmmouse ? "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 16384}}, "
-                     "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 16384}}]"
+           vmmouse ? move
                    : "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 20}}, "
                      "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 20}}]");
-    if (net_ok(u) && etude_guest_output_wait(b->m, "desktop: pointer: on the page") != ETUDE_OK)
+    /* Only VMMouse's absolute move has a known place, the browser's target. */
+    if (net_ok(u) &&
+        etude_guest_output_wait(b->m, vmmouse ? "desktop: pointer: at the target"
+                                              : "desktop: pointer: on the page") != ETUDE_OK)
         net_fail(u, "the page reported no pointer");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": true, \"button\": \"left\"}}]");
     events(u, b, "[{\"type\": \"btn\", \"data\": {\"down\": false, \"button\": \"left\"}}]");
@@ -177,6 +192,33 @@ static void page_input(struct net_case *u, struct net_boot *b)
         if (net_ok(u) && etude_guest_output_wait(b->m, seen) != ETUDE_OK)
             net_fail(u, "the page reported no key %s", page_keys[i]);
     }
+}
+
+/** Give Chromium's page its input, the pointer moved to the page's centre. */
+static void chromium_input(struct net_case *u, struct net_boot *b)
+{
+    page_input(u, b, 16384);
+}
+
+/** Give Firefox's page its input, the pointer moved three quarters across
+ * and down, a place neither Chromium's move nor the first move left it. */
+static void firefox_input(struct net_case *u, struct net_boot *b)
+{
+    page_input(u, b, 24576);
+}
+
+/** Move the pointer to a quarter of the screen, off each browser's target.
+ * Before the first browser it is the seat's first pointer event, which makes
+ * Weston add the seat's pointer, and the probe waits for that. */
+static void first_pointer(struct net_case *u, struct net_boot *b)
+{
+    int vmmouse = strcmp(etude_case_accel(u->c), "kvm") == 0;
+
+    events(u, b,
+           vmmouse ? "[{\"type\": \"abs\", \"data\": {\"axis\": \"x\", \"value\": 8192}}, "
+                     "{\"type\": \"abs\", \"data\": {\"axis\": \"y\", \"value\": 8192}}]"
+                   : "[{\"type\": \"rel\", \"data\": {\"axis\": \"x\", \"value\": 5}}, "
+                     "{\"type\": \"rel\", \"data\": {\"axis\": \"y\", \"value\": 5}}]");
 }
 
 /** Show the probe's input page in browser `name`, inject the page's input
@@ -191,9 +233,11 @@ static void browser(struct net_case *u, struct net_boot *b, const char *name)
     snprintf(token, sizeof(token), "desktop: result: %s: keys rach2, clicks 1", name);
     d.id = name;
     d.argv = argv;
+    d.before = "desktop: waiting: pointer";
+    d.first = first_pointer;
     d.ready = ready;
     d.token = token;
-    d.input = page_input;
+    d.input = strcmp(name, "chromium") == 0 ? chromium_input : firefox_input;
     driven(u, b, &d);
 }
 
@@ -301,8 +345,13 @@ static void console(struct net_case *u, struct net_boot *b)
                                        "until grep -q \"$w\" $l; do sleep 0.1; done; "
                                        "echo \"desktop: result: keyboard: $(grep -c \"$w\" $l)\"",
                                        NULL};
-    static const struct driven word = {"keyboard", seen, "desktop: console: waiting for the word",
-                                       "desktop: result: keyboard: 1", console_input};
+    static const struct driven word = {"keyboard",
+                                       seen,
+                                       "desktop: console: waiting for the word",
+                                       "desktop: result: keyboard: 1",
+                                       console_input,
+                                       NULL,
+                                       NULL};
 
     put(u, b, "drmcapture", DRMCAPTURE, "0755");
     if (net_step(u, "console") != ETUDE_OK)
@@ -353,10 +402,10 @@ static int i686(struct net_case *u)
     static const char *const ps2[] = {EVPROBE, "ps2", NULL};
     const char *const pointer[] = {
         EVPROBE, strcmp(etude_case_accel(u->c), "kvm") == 0 ? "vmmouse" : "mouse", NULL};
-    static const struct driven keyboard = {"keyboard", ps2, "EVPROBE: press the keys", "EVPROBE OK",
-                                           ev_keyboard};
-    const struct driven mouse = {"mouse", pointer, "EVPROBE: move the mouse", "EVPROBE OK",
-                                 ev_mouse};
+    static const struct driven keyboard = {
+        "keyboard", ps2, "EVPROBE: press the keys", "EVPROBE OK", ev_keyboard, NULL, NULL};
+    const struct driven mouse = {
+        "mouse", pointer, "EVPROBE: move the mouse", "EVPROBE OK", ev_mouse, NULL, NULL};
     const char *modetest[] = {"/bin/bash", "-c",
                               "set -e; python3 " PROBE " kill; m=bochs-drm; "
                               "modetest -M $m -c </dev/null; "
