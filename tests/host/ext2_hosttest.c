@@ -10875,6 +10875,62 @@ static const struct {
     {"--flushes-only", async_flush_row},
 };
 
+/* The rows that walk a stop after each write, which run the longest: about
+ * 18, 29, 29 and 40 minutes under TCG in the GNU helper, 116 in all. */
+static const char *const long_groups[] = {
+    "--regrowth-only",
+    "--matrix-only",
+    "--removal-only",
+    "--async-only",
+};
+#define LONG_GROUPS (sizeof(long_groups) / sizeof(long_groups[0]))
+
+/** The file in the fixture directory that takes the output of group `i`. */
+static const char *long_log(unsigned i)
+{
+    static char paths[LONG_GROUPS][1200];
+
+    if (paths[i][0] == '\0')
+        fix_format(paths[i], sizeof(paths[i]), "%s/%s.log", fix_dir(), long_groups[i] + 2);
+    return paths[i];
+}
+
+/**
+ * Start `self` once with each option of `long_groups`, each in a fixture
+ * directory of its own, so that on a machine of several processors they run
+ * at once beside this process's other rows; the GNU helper of host.host.tests
+ * has four. Each process ID goes to `pids`, -1 for one that did not start.
+ * Called first, while the test is small and before host_command_server.
+ */
+static void long_start(const char *self, long pids[])
+{
+    unsigned i;
+
+    for (i = 0; i < LONG_GROUPS; i++) {
+        const char *argv[3];
+
+        argv[0] = self;
+        argv[1] = long_groups[i];
+        argv[2] = NULL;
+        pids[i] = host_command_spawn(argv, long_log(i));
+    }
+}
+
+/** Wait for each process of `long_start`, print its output and judge it. */
+static void long_finish(const long pids[])
+{
+    char what[80];
+    unsigned i;
+
+    for (i = 0; i < LONG_GROUPS; i++) {
+        int status = pids[i] < 0 ? -1 : host_command_reap(pids[i], long_log(i));
+
+        snprintf(what, sizeof(what), "the rows of %s, run as a process of their own, pass",
+                 long_groups[i]);
+        check(status == 0, what);
+    }
+}
+
 /**
  * Make the native fixture tree using the prepared independent tools, and run
  * the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes and at 2
@@ -10887,16 +10943,20 @@ static const struct {
  * matrix and the batch rows, the node rows, the fsync rows, the group rows, the
  * rows of one file's writes and the rows of operations on names, both without
  * the big lock. An option of `only_rows` runs its rows alone; `--capture-only`
- * checks independent tool output capture alone. Returns 0, and calls
- * `fix_passed`, when every row passed.
+ * checks independent tool output capture alone. With no option, the groups of
+ * `long_groups` run as processes of their own beside the other rows, as
+ * `long_start` says. Returns 0, and calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
 {
+    long pids[LONG_GROUPS];
     uint64_t bytes;
     unsigned i;
 
     if (argc == 3 && streq(argv[1], "-fn") && streq(argv[2], "--capture-child"))
         return ext2_fixture_capture_child();
+    if (argc == 1)
+        long_start(argv[0], pids);
     host_command_server();
     /* Time the sleeping locks' holds, so that a hold across a disk request
      * shows in its record (`alloc_crossings`). */
@@ -10928,8 +10988,6 @@ int main(int argc, char **argv)
     executable_path_row();
     write_rows();
     ftype_rows();
-    removal_rows();
-    regrow_rows();
     held_count_rows();
     tmpfile_stop_rows();
     dir_commit_rows();
@@ -10944,18 +11002,17 @@ int main(int argc, char **argv)
     attr_rows();
     xattr_rows();
     acl_rows();
-    matrix_rows();
     batch_rows();
     node_rows();
     fsync_rows();
     writeback_order_rows();
-    async_rows();
     pair_rows();
     service_rows();
     group_rows();
     write_lock_rows();
     names_rows();
     fence_rows();
+    long_finish(pids);
 
 finish:
     if (image) {
