@@ -12,7 +12,8 @@
  * ignores it, and of one whose child is stopped by SIGSTOP and must be
  * resumed to run its handler), a descendant in a session of its own that the
  * program reports, one left in its group, a tree that uses processor time
- * and memory, output past the bound kept with a report after it, and a
+ * and memory, output past the bound kept with a report after it, still
+ * queued when the case ends so that the cleanup must wait for it, and a
  * program that checks its descriptors, signals and session. Each must keep
  * its own attempt, process, output and end, and leave no process behind.
  * Each case's process must be seen held before its exec when it is
@@ -188,18 +189,28 @@ static void many_descendants(const char *token)
     name_descendant(token, descendant(1), 1, 2);
 }
 
-/** Write `count` bytes of x and a newline to standard output. */
+/**
+ * Write `count` bytes of x and a newline to standard output, in one write
+ * into a pipe enlarged to hold them where the host allows, so that they are
+ * still queued when the case's process ends.
+ */
 static void flood(long count)
 {
-    char buf[4096];
-    long n;
+    char *buf = malloc((size_t)count), *at;
+    ssize_t n;
 
-    memset(buf, 'x', sizeof(buf));
-    for (; count > 0; count -= n) {
-        n = count < (long)sizeof(buf) ? count : (long)sizeof(buf);
-        if (write(1, buf, (size_t)n) != n)
+    if (buf == NULL)
+        _exit(125);
+#ifdef F_SETPIPE_SZ
+    fcntl(1, F_SETPIPE_SZ, 1 << 20);
+#endif
+    memset(buf, 'x', (size_t)count);
+    for (at = buf; count > 0; count -= (long)n, at += n) {
+        n = write(1, at, (size_t)count);
+        if (n <= 0)
             _exit(124);
     }
+    free(buf);
     say("\n");
 }
 
@@ -827,7 +838,7 @@ static void test_concurrent(struct etude_exec *ex)
         {"daemon", "g", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
         {"group", "h", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
         {"burn", "i", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
-        {"flood", "j", "100000", LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
+        {"flood", "j", "1000000", LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
         {"clean", "k", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
     };
     struct attempt a[sizeof(w) / sizeof(w[0])];
@@ -867,7 +878,7 @@ static void test_concurrent(struct etude_exec *ex)
     if (a[9].p != NULL) {
         r = etude_proc_result(a[9].p);
         CHECK(r->children == 1 && r->foreign == 0, "j");
-        CHECK(r->out.kept == 4096 && r->out.total > 100000, "j");
+        CHECK(r->out.kept == 4096 && r->out.total > 1000000, "j");
     }
     for (i = 0; i < n; i++)
         if (a[i].p != NULL)

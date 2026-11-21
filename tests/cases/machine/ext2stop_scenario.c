@@ -407,7 +407,7 @@ static int workload(struct lc *l, struct boot *b, const char *prefix, long held[
     snprintf(line, sizeof(line), "mkdir -p /mnt/s && mount -t ext2 /dev/disk0p1%s", mount_tail);
     snprintf(id, sizeof(id), "%s-mounted", prefix);
     w = run(l, b, line, "MOUNTEND");
-    seen(l, w, id, "/dev/disk0p1 /mnt/s ext2 rw 0 0");
+    seen(l, w, id, "/dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0");
     if (w != NULL && strstr(w, "/dev/disk0p1 /mnt/s ext2 ") != NULL)
         printf("ext2stop: %s: mode: %.*s\n", prefix,
                (int)strcspn(strstr(w, "/dev/disk0p1 /mnt/s ext2 "), "\r\n"),
@@ -581,7 +581,7 @@ static const char *check_counts(const char *w, struct counted *k, char *bad, siz
 static void mount_after(struct lc *l, struct boot *b, const char *dev, const char *prefix,
                         int checked, struct counted *k)
 {
-    char line[160], id[48], want[64], record[200], why[240];
+    char line[160], id[48], want[96], record[200], why[240];
     char *w;
     int have;
 
@@ -589,7 +589,7 @@ static void mount_after(struct lc *l, struct boot *b, const char *dev, const cha
     if ((w = run(l, b, line, "MOUNTEND")) == NULL)
         return;
     snprintf(id, sizeof(id), "%s-writable", prefix);
-    snprintf(want, sizeof(want), "%s /mnt/s ext2 rw 0 0", dev);
+    snprintf(want, sizeof(want), "%s /mnt/s ext2 rw,relatime,errors=continue 0 0", dev);
     seen(l, w, id, want);
     have = check_record(w, record, sizeof(record));
     snprintf(id, sizeof(id), "%s-check", prefix);
@@ -1022,7 +1022,7 @@ static void rmtree_check(struct lc *l, struct cut *k)
     snprintf(line, sizeof(line), "mkdir -p /mnt/s && mount -t ext2 /dev/disk0p1%s", mount_tail);
     if ((w = run(l, &b, line, "MOUNTEND")) == NULL)
         return;
-    seen(l, w, "rmtree-writable", "/dev/disk0p1 /mnt/s ext2 rw 0 0");
+    seen(l, w, "rmtree-writable", "/dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0");
     if (cut_counts(w, k, record, sizeof(record)) != NULL) {
         snprintf(why, sizeof(why), "the check said %s", record);
         lc_assert(l, "rmtree-check", 0, why);
@@ -1074,7 +1074,8 @@ static int rmtree(struct etude_case *c)
         lc_assert(&l, "rmtree-volume", make_volume(&l, "stop"), "mkmbr or mke2fs did not exit 0");
     if (lc_ok(&l) && lc_step(&l, "stop") && start(&l, "stop", disks, &b)) {
         snprintf(line, sizeof(line), "mkdir -p /mnt/s && mount -t ext2 /dev/disk0p1%s", mount_tail);
-        expect(&l, &b, line, "MOUNTEND", "rmtree-mounted", "/dev/disk0p1 /mnt/s ext2 rw 0 0");
+        expect(&l, &b, line, "MOUNTEND", "rmtree-mounted",
+               "/dev/disk0p1 /mnt/s ext2 rw,relatime,errors=continue 0 0");
         if ((w = run(&l, &b, tree_line, "TREEEND")) != NULL)
             lc_assert(&l, "rmtree-tree", strstr(w, "TREEOK") != NULL && parse_dirs(w, &k),
                       "the tree was not made, synced and listed whole");

@@ -10,12 +10,11 @@
  * their lengths alone and then into buffers. GETRESOURCES, whose 64-bit
  * pointers carry the probe's 32-bit addresses, counts the CRTCs and
  * connectors and then lists them. ADDFB2, whose modifiers i386 places at 68,
- * adds a framebuffer on a dumb buffer of 64 by 64 pixels and gives its id;
- * GETFB2 reads the framebuffer back, its modifiers at 68 too, before RMFB
- * removes it. WAIT_VBLANK, relative 0, gives the count and time of the last
- * vblank in its 16 bytes, or EOPNOTSUPP on a card with no vblank interrupt,
- * as bochs-drm on QEMU's std-vga is, with the request copied back. Each
- * structure lies before guard bytes that no call may touch.
+ * adds a framebuffer on a dumb buffer and gives its id; GETFB2 reads it
+ * back, its modifiers at 68 too. SETCRTC shows it on QEMU's std-vga before
+ * WAIT_VBLANK, relative 0, gives the count and time of the last vblank in
+ * its 16 bytes. RMFB then removes the framebuffer. The ABI checks put
+ * guard bytes after the structures to catch copies past their ends.
  *
  * Prints "DRMCOMPATPROBE OK" and exits 0 when every check passes, and
  * otherwise "DRMCOMPATPROBE FAIL: what" and exits 1 at the first failure.
@@ -31,8 +30,6 @@
 
 #define O_RDWR    2
 #define O_CLOEXEC 02000000
-
-#define EOPNOTSUPP 95
 
 /* Linux's ioctl numbers: the direction in the top two bits, the size of
  * the argument, the type 'd' and the number. */
@@ -72,6 +69,27 @@ struct drm_mode_card_res {
     u32 count_encoders;
     u32 min_width, max_width;
     u32 min_height, max_height;
+};
+
+struct drm_mode_modeinfo {
+    u32 clock;
+    unsigned short hdisplay, hsync_start, hsync_end, htotal, hskew;
+    unsigned short vdisplay, vsync_start, vsync_end, vtotal, vscan;
+    u32 vrefresh;
+    u32 flags;
+    u32 type;
+    char name[32];
+};
+
+struct drm_mode_crtc {
+    u64 set_connectors_ptr;
+    u32 count_connectors;
+    u32 crtc_id;
+    u32 fb_id;
+    u32 x, y;
+    u32 gamma_size;
+    u32 mode_valid;
+    struct drm_mode_modeinfo mode;
 };
 
 struct drm_mode_create_dumb {
@@ -124,6 +142,7 @@ union drm_wait_vblank {
 
 #if !defined __x86_64__
 I386_SIZE(drm_version, 36);
+I386_SIZE(drm_mode_crtc, 104);
 I386_SIZE(drm_mode_fb_cmd2, 100);
 I386_SIZE(drm_wait_vblank_reply, 16);
 #endif
@@ -132,6 +151,7 @@ I386_SIZE(drm_wait_vblank_reply, 16);
 #define DRM_IOCTL_GET_CAP           DRM_IOWR(0x0c, struct drm_get_cap)
 #define DRM_IOCTL_WAIT_VBLANK       DRM_IOWR(0x3a, union drm_wait_vblank)
 #define DRM_IOCTL_MODE_GETRESOURCES DRM_IOWR(0xA0, struct drm_mode_card_res)
+#define DRM_IOCTL_MODE_SETCRTC      DRM_IOWR(0xA2, struct drm_mode_crtc)
 #define DRM_IOCTL_MODE_RMFB         DRM_IOWR(0xAF, unsigned int)
 #define DRM_IOCTL_MODE_CREATE_DUMB  DRM_IOWR(0xB2, struct drm_mode_create_dumb)
 #define DRM_IOCTL_MODE_DESTROY_DUMB DRM_IOWR(0xB4, struct drm_mode_destroy_dumb)
@@ -141,6 +161,8 @@ I386_SIZE(drm_wait_vblank_reply, 16);
 #define DRM_CAP_DUMB_BUFFER  0x1
 #define DRM_FORMAT_XRGB8888  0x34325258 /* 'XR24' */
 #define _DRM_VBLANK_RELATIVE 0x1
+#define DRM_MODE_FLAG_NHSYNC (1u << 1)
+#define DRM_MODE_FLAG_NVSYNC (1u << 3)
 
 /* The bytes after each structure that no call may write, and their value. */
 #define GUARD      16
@@ -149,11 +171,24 @@ I386_SIZE(drm_wait_vblank_reply, 16);
 /* The most CRTCs and connectors GETRESOURCES lists. */
 #define MAX_IDS 16
 
-/* The dumb buffer's size in pixels and bits per pixel. */
-#define DUMB_SIDE 64
-#define DUMB_BPP  32
+/* VGA 640 by 480 at 60 Hz, VESA DMT 04h. */
+static const struct drm_mode_modeinfo vblank_mode = {25175,
+                                                     640,
+                                                     656,
+                                                     752,
+                                                     800,
+                                                     0,
+                                                     480,
+                                                     490,
+                                                     492,
+                                                     525,
+                                                     0,
+                                                     60,
+                                                     DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC,
+                                                     0,
+                                                     "640x480"};
 
-static u32 first_crtc;
+static u32 first_crtc, first_connector;
 
 /* A structure of up to 128 bytes and its guard. */
 union guarded {
@@ -320,8 +355,8 @@ static void resources_row(int fd)
     if (n_crtcs == 0 || n_crtcs > MAX_IDS || n_connectors == 0 || n_connectors > MAX_IDS) {
         fail("GETRESOURCES's counts");
     }
-    if (r->max_width < DUMB_SIDE || r->max_height < DUMB_SIDE || r->min_width > r->max_width ||
-        r->min_height > r->max_height) {
+    if (r->max_width < vblank_mode.hdisplay || r->max_height < vblank_mode.vdisplay ||
+        r->min_width > r->max_width || r->min_height > r->max_height) {
         fail("GETRESOURCES's limits");
     }
     r = (struct drm_mode_card_res *)guard_set(&g, sizeof(*r));
@@ -337,6 +372,7 @@ static void resources_row(int fd)
         fail("GETRESOURCES's counts differ with arrays");
     }
     first_crtc = crtcs[0];
+    first_connector = connectors[0];
     for (i = 0; i < n_crtcs; i++) {
         if (crtcs[i] == 0) {
             fail("GETRESOURCES lists a CRTC of id 0");
@@ -350,27 +386,26 @@ static void resources_row(int fd)
     report_held();
 }
 
-/** ADDFB2 on a dumb buffer, then GETFB2 of the framebuffer it adds, the
- * modifiers at 68 in both; RMFB and DESTROY_DUMB clean up. */
-static void fb2_rows(int fd)
+/** Add and read back a framebuffer with the modifiers at 68 in both calls.
+ * Return the framebuffer ID and give the caller its dumb buffer handle. */
+static u32 fb2_rows(int fd, u32 *handle)
 {
     struct drm_mode_create_dumb c;
-    struct drm_mode_destroy_dumb d;
     union guarded g;
     struct drm_mode_fb_cmd2 *f;
     u32 fb_id;
 
     fill(&c, 0, sizeof(c));
-    c.width = DUMB_SIDE;
-    c.height = DUMB_SIDE;
-    c.bpp = DUMB_BPP;
+    c.width = vblank_mode.hdisplay;
+    c.height = vblank_mode.vdisplay;
+    c.bpp = 32;
     if (drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &c) != 0 || c.handle == 0 ||
-        c.pitch < DUMB_SIDE * 4) {
+        c.pitch < vblank_mode.hdisplay * 4u) {
         fail("CREATE_DUMB of the framebuffer's buffer");
     }
     f = (struct drm_mode_fb_cmd2 *)guard_set(&g, sizeof(*f));
-    f->width = DUMB_SIDE;
-    f->height = DUMB_SIDE;
+    f->width = vblank_mode.hdisplay;
+    f->height = vblank_mode.vdisplay;
     f->pixel_format = DRM_FORMAT_XRGB8888;
     f->handles[0] = c.handle;
     f->pitches[0] = c.pitch;
@@ -382,7 +417,8 @@ static void fb2_rows(int fd)
     if (fb_id == 0) {
         fail("ADDFB2 gives a framebuffer of id 0");
     }
-    if (f->width != DUMB_SIDE || f->handles[0] != c.handle || f->pitches[0] != c.pitch) {
+    if (f->width != vblank_mode.hdisplay || f->height != vblank_mode.vdisplay ||
+        f->handles[0] != c.handle || f->pitches[0] != c.pitch) {
         fail("ADDFB2 changed its request");
     }
     report_held();
@@ -394,45 +430,60 @@ static void fb2_rows(int fd)
         fail("GETFB2 of the framebuffer ADDFB2 added");
     }
     guard_check(&g, sizeof(*f), "GETFB2 wrote past its 100 bytes");
-    if (f->fb_id != fb_id || f->width != DUMB_SIDE || f->height != DUMB_SIDE ||
-        f->pixel_format != DRM_FORMAT_XRGB8888 || f->pitches[0] != c.pitch || f->handles[0] == 0) {
+    if (f->fb_id != fb_id || f->width != vblank_mode.hdisplay ||
+        f->height != vblank_mode.vdisplay || f->pixel_format != DRM_FORMAT_XRGB8888 ||
+        f->pitches[0] != c.pitch || f->handles[0] == 0) {
         fail("GETFB2's framebuffer");
     }
     if (f->modifier[0] != 0 || f->modifier[1] != 0 || f->modifier[2] != 0 || f->modifier[3] != 0) {
         fail("GETFB2's modifiers at 68");
     }
-    if (drm_ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_id) != 0) {
-        fail("RMFB of the framebuffer");
-    }
-    d.handle = c.handle;
-    if (drm_ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d) != 0) {
-        fail("DESTROY_DUMB of the framebuffer's buffer");
-    }
     report_held();
+    *handle = c.handle;
+    return fb_id;
 }
 
-/** WAIT_VBLANK relative 0: the last vblank's count and time, or EOPNOTSUPP
- * with the request copied back on a card with no vblank interrupt. */
-static void vblank_row(int fd)
+/** Enable the CRTC, read its current vblank count and time, and release
+ * the framebuffer and its dumb buffer. */
+static void vblank_row(int fd, u32 fb_id, u32 handle)
 {
+    struct drm_mode_crtc set;
+    struct drm_mode_destroy_dumb d;
     union guarded g;
-    union drm_wait_vblank *w = (union drm_wait_vblank *)guard_set(&g, sizeof(*w));
+    union drm_wait_vblank *w;
     long rc;
 
+    fill(&set, 0, sizeof(set));
+    set.set_connectors_ptr = (u64)(unsigned long)&first_connector;
+    set.count_connectors = 1;
+    set.crtc_id = first_crtc;
+    set.fb_id = fb_id;
+    set.mode_valid = 1;
+    set.mode = vblank_mode;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set) != 0) {
+        fail("SETCRTC before WAIT_VBLANK");
+    }
+
+    w = (union drm_wait_vblank *)guard_set(&g, sizeof(*w));
     w->request.type = _DRM_VBLANK_RELATIVE;
     w->request.sequence = 0;
     rc = drm_ioctl(fd, DRM_IOCTL_WAIT_VBLANK, w);
     guard_check(&g, sizeof(*w), "WAIT_VBLANK wrote past its 16 bytes");
-    if (rc == -EOPNOTSUPP) {
-        if (w->reply.type != _DRM_VBLANK_RELATIVE || w->reply.sequence != 0 ||
-            w->reply.tval_sec != 0 || w->reply.tval_usec != 0) {
-            fail("WAIT_VBLANK's EOPNOTSUPP changed the request");
-        }
-        probe_line("DRMCOMPATPROBE VBLANK none", 0, 0);
-    } else if (rc != 0) {
+    if (rc != 0) {
         fail("WAIT_VBLANK relative 0");
-    } else if (w->reply.tval_sec < 0 || w->reply.tval_usec < 0 || w->reply.tval_usec >= 1000000) {
+    }
+    if (w->reply.sequence == 0) {
+        fail("WAIT_VBLANK's count after SETCRTC");
+    }
+    if (w->reply.tval_sec < 0 || w->reply.tval_usec < 0 || w->reply.tval_usec >= 1000000) {
         fail("WAIT_VBLANK's time");
+    }
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb_id) != 0) {
+        fail("RMFB of the framebuffer");
+    }
+    d.handle = handle;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d) != 0) {
+        fail("DESTROY_DUMB of the framebuffer's buffer");
     }
     report_held();
 }
@@ -528,6 +579,7 @@ void probe_main(unsigned long *sp)
     static const char *const ids[] = {"open",   "version", "resources",    "addfb2",     "getfb2",
                                       "vblank", "legacy",  "tail-padding", "descriptors"};
     char name[64];
+    u32 fb_id, handle;
     unsigned i;
     int fd;
 
@@ -538,8 +590,8 @@ void probe_main(unsigned long *sp)
     fd = open_card();
     version_row(fd, name, sizeof(name));
     resources_row(fd);
-    fb2_rows(fd);
-    vblank_row(fd);
+    fb_id = fb2_rows(fd, &handle);
+    vblank_row(fd, fb_id, handle);
     legacy_rows(fd);
     tail_padding_row(fd);
     descriptor_row();

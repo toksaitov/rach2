@@ -1507,14 +1507,16 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
              root.type);
         goto refused;
     }
-    rc = krffs_chain_walk(&vol->fs, 0);
+    vol->writable = !(flags & VFS_MS_RDONLY) && !(dev->flags & BLOCK_READ_ONLY);
+    rc = krffs_chain_walk(&vol->fs, vol->writable && (root.mode & KRFFS_MODE_DIRTY)
+                                        ? KRFFS_WALK_RECOVERY
+                                        : KRFFS_WALK_FORWARD);
     if (rc != 1) {
         klog(KLOG_ERR, "krffs", "mount: refused: %s",
              rc < 0 ? "the node chain cannot be read" : "the node chain is malformed");
         goto refused;
     }
 
-    vol->writable = !(flags & VFS_MS_RDONLY) && !(dev->flags & BLOCK_READ_ONLY);
     if (!vol->writable) {
         mnt->flags |= VFS_MS_RDONLY;
         if (root.mode & KRFFS_MODE_DIRTY) {
@@ -1525,7 +1527,7 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
         goto refused;
     }
 
-    rc = vol->writable ? krffs_chain_walk(&vol->fs, 1) : 1;
+    rc = vol->writable ? krffs_chain_walk(&vol->fs, KRFFS_WALK_LINKS) : 1;
     if (rc != 1) {
         klog(KLOG_ERR, "krffs", "mount: refused: %s",
              rc < 0 ? "the node chain cannot be read" : "the node chain is malformed");

@@ -187,7 +187,9 @@ is off the sector.
 .It Er ELOOP
 The file is on a volume whose device does not begin its sectors on
 sectors of the medium, as a loop device over a file in a KRFFS image may
-not, or the chain of devices under the file would be more than one deep.
+not; it is a file of KRFFS on a loop device, which a relocation can move
+off the phase the device below it was given;
+or the chain of devices under the file would be more than one deep.
 .It Er ENXIO
 Nothing is attached to the device, or it was detached while a detach
 wrote its buffers.

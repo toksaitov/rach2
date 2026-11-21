@@ -31,6 +31,10 @@
 # inside a guest its Readme gives KVM; with Rach2 under TCG the FreeBSD
 # guest is emulated twice and its cases lost the guest in the release's run
 # (tests/netguest/Readme.md).
+# The host suite's GNU fixture runs the host checks in a GNU guest, where
+# each of the ext2 check's some 11,100 runs of the external checker costs
+# about five times as much under TCG as under KVM; under TCG the check ran
+# past the case's 90-minute bound in the release's run.
 browser
 video
 webgl
@@ -59,3 +63,4 @@ piglit
 kvmclock
 sched4
 netguest
+host

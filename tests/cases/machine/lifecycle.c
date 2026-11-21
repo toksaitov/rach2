@@ -98,12 +98,15 @@ void lc_begin(struct lc *l, struct etude_case *c, const char *const ids[])
 
 /**
  * Mark assertion `id` reported, and say whether it may be: it is declared
- * and was not reported before. A fault is said on standard error.
+ * and was not reported before. A fault is said on standard error. A NULL
+ * `id`, a step that asserts nothing, such as lc_run's of a helper, may not.
  */
 static int lc_tell(struct lc *l, const char *id)
 {
     size_t i;
 
+    if (id == NULL)
+        return 0;
     for (i = 0; l->ids[i] != NULL; i++)
         if (strcmp(l->ids[i], id) == 0)
             break;

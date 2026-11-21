@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -46,6 +47,11 @@ struct etude_proc {
     uint64_t drain_until; /* after the keeper's end, when open output
                              proves a process of the case still runs */
     int noticed;          /* the keeper reported a change of the suspension */
+    int clean_due;        /* the keeper is to be told to clean up once the
+                             output below is read */
+    size_t clean_out;     /* bytes of stdout queued at the keeper's report of
+                             the end and not yet read; 0 once a read waits */
+    size_t clean_err;     /* and of stderr */
     size_t pass_out;      /* bytes read from stdout in this pass of the loop */
     size_t pass_err;      /* and from stderr; neither passes OUTPUT_PASS */
     int finished;
@@ -314,13 +320,16 @@ static void child_found(void *ctx, long pid)
  * in `pass_out` for stdout, which `scan` names, or `pass_err`, so that a
  * writer that never pauses does not hold the loop away from the other
  * attempts and the keeper's messages. The reads of one pass, at the keeper's
- * report of the end and in `proc_settle` too, share the bound.
+ * report of the end and in `proc_settle` too, share the bound. Each byte
+ * read, and a read that would wait, counts against what must be read before
+ * the keeper cleans up (`clean_out` or `clean_err`).
  *
  * @return the count of bytes read.
  */
 static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o, int scan)
 {
     size_t *used = scan ? &p->pass_out : &p->pass_err;
+    size_t *left = scan ? &p->clean_out : &p->clean_err;
     size_t total = 0;
     char buf[4096];
     ssize_t n;
@@ -329,8 +338,11 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
         n = read(*fd, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
-        if (n < 0)
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                *left = 0;
             return total;
+        }
         if (n == 0) {
             o->closed = 1;
             close_fd(fd);
@@ -338,6 +350,7 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
         }
         total += (size_t)n;
         *used += (size_t)n;
+        *left = *left > (size_t)n ? *left - (size_t)n : 0;
         if (p->r.output_error == 0)
             p->r.output_error =
                 capture_files_add(scan ? p->files.out : p->files.err, buf, (size_t)n);
@@ -346,6 +359,37 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
             capture_scan(&p->lines, buf, (size_t)n, child_found, p);
     }
     return total;
+}
+
+/**
+ * Give the bytes output stream `fd` holds now, or 0 when FIONREAD fails, so
+ * that the cleanup it bounds never waits on a count it cannot read; a
+ * descendant's report not yet read then shows as missing from the report.
+ */
+static size_t queued(int fd)
+{
+    int n;
+
+    if (fd < 0 || ioctl(fd, FIONREAD, &n) != 0 || n < 0)
+        return 0;
+    return (size_t)n;
+}
+
+/**
+ * Tell the keeper to clean up once the output queued at its report of the
+ * end has been read. That output holds all that the case's process wrote,
+ * the reports of its descendants among it; a descendant ended before its
+ * report is read could not be counted or registered. The bytes queued then
+ * are a bound, so a descendant that writes without a pause cannot delay the
+ * cleanup for ever.
+ */
+static void clean_when_read(struct etude_proc *p)
+{
+    if (!p->clean_due || (p->out >= 0 && p->clean_out > 0) || (p->err >= 0 && p->clean_err > 0))
+        return;
+    p->clean_due = 0;
+    if (p->ctl >= 0)
+        keeper_send(p->ctl, KEEP_CLEAN, 0, 0, 0);
 }
 
 /** Act on one message of the keeper's. */
@@ -359,9 +403,12 @@ static void keeper_message(struct etude_proc *p, const struct keeper_msg *m)
         p->r.end = p->cancelled ? ETUDE_END_STOPPED : p->r.exit_end;
         p->r.value = p->cancelled ? -1 : p->r.exit_value;
         p->r.suspension = ETUDE_SUSPEND_NONE;
+        p->clean_due = 1;
+        p->clean_out = queued(p->out);
+        p->clean_err = queued(p->err);
         read_output(p, &p->out, &p->r.out, 1);
         read_output(p, &p->err, &p->r.err, 0);
-        keeper_send(p->ctl, KEEP_CLEAN, 0, 0, 0);
+        clean_when_read(p);
     } else if (m->type == KEEP_USAGE) {
         p->r.cpu_us.quality = m->b ? ETUDE_QUALITY_EXACT : ETUDE_QUALITY_LOWER_BOUND;
         p->r.cpu_us.value = (uint64_t)m->a;
@@ -518,6 +565,7 @@ static size_t serve(struct etude_exec *ex)
         p->pass_out = p->pass_err = 0;
         n += read_output(p, &p->out, &p->r.out, 1);
         n += read_output(p, &p->err, &p->r.err, 0);
+        clean_when_read(p);
         if (!p->reaped)
             read_keeper(p);
         n += (size_t)p->noticed;

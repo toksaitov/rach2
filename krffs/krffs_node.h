@@ -19,12 +19,14 @@ struct krffs_file_system;
  * The types of node. The value is stored in each node's `type` byte, so the
  * order is fixed: `KRFFS_Root_Node` (0) is the root directory, the first node
  * of the region; `KRFFS_Free_Node` (1) is free space; and
- * `KRFFS_Reserved_Node` (2) is a file, a directory, a FIFO or a socket.
+ * `KRFFS_Reserved_Node` (2) is a file, directory, FIFO or socket.
+ * `KRFFS_Resizing_Node` (3) publishes a size held in the backward link.
  */
 enum krffs_node_type {
     KRFFS_Root_Node,
     KRFFS_Free_Node,
     KRFFS_Reserved_Node,
+    KRFFS_Resizing_Node,
 };
 
 /**
@@ -87,7 +89,8 @@ struct krffs_node {
     struct krffs_node_time attribute_change_time;
     /** Bytes of header and data space: the step to the next node. */
     uint64_t size;
-    /** The `size` of the node before; at the root, of the last node. */
+    /** Backward link, or while resizing, target size in bits 0..31 and
+     * ordinary node type in bits 32..63. */
     uint64_t previous_node_size;
     /** Bytes of data in use, at most `size` less the header. */
     uint64_t data_size;

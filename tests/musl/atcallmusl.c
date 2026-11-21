@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -44,6 +45,10 @@
 #define RENAME_WHITEOUT  4
 
 #define WORK "/atcall"
+
+/* The f_type statfs gives the KRFFS root and a mounted KRFFS volume. */
+#define STATFS_MAGIC_KRFFS        0x4B524646u
+#define STATFS_MAGIC_KRFFS_VOLUME 0x4B52u
 
 /* The checks, one assertion each, in the order the program makes them, and
  * the text it prints for each that fails. */
@@ -197,6 +202,12 @@ static int fail(int check)
 static int refused(long rc, int err)
 {
     return rc == -1 && errno == err;
+}
+
+/** Whether `fd` is a descriptor; it is closed. */
+static int opened_and_closed(int fd)
+{
+    return fd >= 0 && close(fd) == 0;
 }
 
 /** Create `name` in `dirfd` with `text` in it. Returns 1, or 0 on failure. */
@@ -485,8 +496,19 @@ static int shm_tmpfile_rows(void)
     return rc;
 }
 
+/** Whether WORK is on KRFFS, which has no O_TMPFILE; the guest's root is,
+ * and a native run's ext2 root, which has it as Linux's ext2 does, is not. */
+static int work_on_krffs(void)
+{
+    struct statfs st;
+
+    return statfs(WORK, &st) == 0 && ((unsigned)st.f_type == STATFS_MAGIC_KRFFS ||
+                                      (unsigned)st.f_type == STATFS_MAGIC_KRFFS_VOLUME);
+}
+
 /** Check O_TMPFILE's refusals: ENOENT from linkat for a file made with
- * O_EXCL, EINVAL without write access, and EOPNOTSUPP on the KRFFS root.
+ * O_EXCL, EINVAL without write access, and EOPNOTSUPP on KRFFS, where WORK
+ * is on KRFFS; elsewhere WORK takes the open.
  * Returns 0, or 1 once the failure is reported. */
 static int shm_tmpfile_refusals(void)
 {
@@ -497,7 +519,8 @@ static int shm_tmpfile_refusals(void)
         rc = fail(TMPFILE_EXCL);
     } else if (!refused(open(SHM, O_TMPFILE | O_RDONLY, 0600), EINVAL)) {
         rc = fail(TMPFILE_EINVAL);
-    } else if (!refused(open(WORK, O_TMPFILE | O_RDWR, 0600), EOPNOTSUPP)) {
+    } else if (work_on_krffs() ? !refused(open(WORK, O_TMPFILE | O_RDWR, 0600), EOPNOTSUPP)
+                               : !opened_and_closed(open(WORK, O_TMPFILE | O_RDWR, 0600))) {
         rc = fail(TMPFILE_EOPNOTSUPP);
     }
     if (fd >= 0) {

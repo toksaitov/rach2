@@ -59,7 +59,9 @@
  * (probe_args.h) has no volume of images: `images=DIR` names a directory,
  * such as a tmpfs, into which the probe copies the images the workspace has,
  * and the probe neither mounts nor unmounts it, so that a device on a file of
- * an image's volume has one device under it, not two, and is allowed;
+ * an image's volume has one device under it, not two, and is allowed, but
+ * for a file of a KRFFS image, which KRFFS may move off the device's sectors
+ * and the kernel so refuses with ELOOP;
  * `mount=DIR` and `ro=DIR` name the mount points; and `copy=DIR` a directory
  * on which the probe mounts a tmpfs of its own for the copy, which has no
  * device under it, as the root of the test image has none; the tmpfs allows
@@ -1008,9 +1010,10 @@ static void attach_rows(const char *type)
     expect_file(path, "hello from inside an image");
 }
 
-/** Everything the attachment of `image` refuses, as the file's opening
- * comment lists it, and the commands the control node does not take. */
-static void refusal_rows(void)
+/** Everything the attachment of `image`, an image of `type`, refuses, as
+ * the file's opening comment lists it, and the commands the control node
+ * does not take. */
+static void refusal_rows(const char *type)
 {
     char path[PATH_CAP];
     int fd, rc;
@@ -1049,12 +1052,13 @@ static void refusal_rows(void)
         fail("a file whose length is not whole sectors was attached");
     }
     /* A device on a file on a device on a disk is ELOOP; on a tmpfs, which
-     * has no device, the chain is one device long, which is allowed. */
+     * has no device, the chain is one device long, which is allowed, unless
+     * the file is on KRFFS, which may move it off the device's sectors. */
     rc = control_on(attach_b, join(path, mount_dir, "inner.bin"));
-    if (!native_images && rc != -ELOOP) {
+    if ((!native_images || streq(type, "krffs")) && rc != -ELOOP) {
         fail("a device was made to stand on another one");
     }
-    if (native_images && (rc != 0 || control(detach_b) != 0)) {
+    if (native_images && !streq(type, "krffs") && (rc != 0 || control(detach_b) != 0)) {
         fail_with("a device on a file of a device on a tmpfs", rc);
     }
 
@@ -1387,7 +1391,7 @@ static void type_mode(const char *type)
     shown[i] = '\0';
     mount_images("vfat", "mounting the volume that holds the images");
     attach_rows(type);
-    refusal_rows();
+    refusal_rows(type);
     read_only_rows();
     read_back_rows(type);
     copy_rows(type);

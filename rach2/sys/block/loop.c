@@ -44,6 +44,7 @@
 
 #include "../fs/bcache.h"
 #include "../fs/fd.h"
+#include "../fs/krffsmount.h"
 #include "../fs/vfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -159,9 +160,11 @@ static int loop_begin(struct loop_device *loop, uint64_t lba, uint32_t count, st
  * The device under the file system is none for the boot root, whose pages
  * begin on sectors, or one whose phase is 0: a disk, a partition of one, or
  * a loop device whose sectors are sectors of the medium. Attachment refuses
- * a file on a device of any other phase. So the file system's own cache
- * blocks begin on sectors of the medium, and the file's phase places every
- * edge a stop can cut its image at.
+ * a file on a device of any other phase, and a file of KRFFS on a loop
+ * device, since a relocation moves the file and the phase it gave the device
+ * below would no longer hold for the volume above. So the file system's own
+ * cache blocks begin on sectors of the medium, and the file's phase places
+ * every edge a stop can cut its image at.
  */
 static uint32_t loop_phase(const struct vfs_ref *ref, void *handle)
 {
@@ -737,6 +740,22 @@ static void loop_publish(struct loop_device *loop, void *node, block_device_t *b
 }
 
 /**
+ * Whether a file of `mnt` is one a loop device's phase cannot place: on a
+ * device whose sectors are not the medium's, or on KRFFS, a mounted volume
+ * or the root's type, through `mnt` or the mount it binds, on a loop device,
+ * where a relocation moves the file off the phase the device below it was
+ * given while the volume above keeps the phase and copy it had.
+ */
+static int loop_unplaceable(const struct vfs_mount *mnt)
+{
+    const struct vfs_mount *base = mnt->bind_of ? mnt->bind_of : mnt;
+
+    return mnt->dev && (mnt->dev->sector_phase != 0 ||
+                        (mnt->dev->read == loop_read &&
+                         (base->type == &vfs_krffs_volume_type || base->type == &vfs_krffs_type)));
+}
+
+/**
  * The slot is claimed before the steps that can sleep: a second attach that
  * found it free would publish over this one, and what the first had opened
  * would have nobody left to release it. The claim forgets the device the
@@ -821,12 +840,11 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return -EBUSY;
     }
-    if ((ref.mnt->dev && ref.mnt->dev->sector_phase != 0) ||
-        block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
+    if (loop_unplaceable(ref.mnt) || block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
-        return -ELOOP; /* off the medium's sectors, or deeper than the cache serves */
+        return -ELOOP; /* off the medium's sectors, movable, or deeper than the cache serves */
     }
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);

@@ -97,9 +97,9 @@
         {"assertion_id": "open", "checks": "one of /dev/dri/card0 to card15 opens and answers GET_CAP with DRM_CAP_DUMB_BUFFER set", "source": "program"},
         {"assertion_id": "version", "checks": "VERSION, with its lengths and pointers in 4 bytes, gives the driver's name, date and description, their lengths alone and then into buffers, touching no guard byte", "source": "program"},
         {"assertion_id": "resources", "checks": "GETRESOURCES, whose 64-bit pointers carry 32-bit addresses, counts the CRTCs and connectors and then lists them, each of a nonzero id", "source": "program"},
-        {"assertion_id": "addfb2", "checks": "ADDFB2, with its modifiers at 68, adds a framebuffer on a dumb buffer of 64 by 64 pixels and gives its id, leaving the request as it was", "source": "program"},
-        {"assertion_id": "getfb2", "checks": "GETFB2 reads the framebuffer back, its modifiers at 68, and RMFB and DESTROY_DUMB remove it and its buffer", "source": "program"},
-        {"assertion_id": "vblank", "checks": "WAIT_VBLANK, relative 0, gives the count and time of the last vblank in its 16 bytes, or EOPNOTSUPP with the request copied back on a card with no vblank interrupt", "source": "program"},
+        {"assertion_id": "addfb2", "checks": "ADDFB2, with its modifiers at 68, adds a 640 by 480 framebuffer on a dumb buffer and gives its id, leaving the request as it was", "source": "program"},
+        {"assertion_id": "getfb2", "checks": "GETFB2 reads the framebuffer back, its modifiers at 68", "source": "program"},
+        {"assertion_id": "vblank", "checks": "SETCRTC enables the display, WAIT_VBLANK with relative sequence 0 gives the current count and time in its 16 bytes, and RMFB and DESTROY_DUMB release the framebuffer and its buffer", "source": "program"},
         {"assertion_id": "legacy", "checks": "GET_UNIQUE, GET_CLIENT and GET_STATS use their 8, 24 and 124 byte i386 layouts, including the current pid and zero counters, without writing guard bytes", "source": "program"},
         {"assertion_id": "tail-padding", "checks": "GETPLANERESOURCES, OBJ_GETPROPERTIES and OBJ_SETPROPERTY use their 12, 28 and 20 byte i386 sizes without copying native tail padding", "source": "program"},
         {"assertion_id": "descriptors", "checks": "GET_STATS, SET_UNIQUE and UPDATE_DRAW on a non-DRM descriptor return ENOTTY and on a closed descriptor EBADF", "source": "program"}

@@ -9,7 +9,7 @@
 # the build and the test need into DIR, laid out as the repository is, and
 # runs this script there as root. Each result is a line `etudeexec: NAME: ok`
 # or `etudeexec: NAME: fail: WHY`, and the last line is `etudeexec: end`. The
-# version's cache and the test's scratch are under DIR.
+# version's cache and scratch and the test's scratch are under DIR.
 set -u
 
 dir=$1
@@ -27,10 +27,13 @@ bad()
 }
 
 # version NAME WORD: build or find the version of the source in DIR, and
-# require the result WORD, `built` or `reused`; print the version's key.
+# require the result WORD, `built` or `reused`; print the version's key. Its
+# scratch goes under DIR's tmpfs, since the root's /tmp is the KRFFS disk,
+# where each append of the version's script waits on the disk's flushes.
 version()
 {
-    out=$(sh tools/etude/provision_version.sh -l -C "$cache" 2>"$dir/$1.err")
+    out=$(TMPDIR=$dir/tmp sh tools/etude/provision_version.sh -l -C "$cache" \
+        2>"$dir/$1.err")
     case $out in
         "etude provision: result: $2 "*)
             out=${out#"etude provision: result: $2 "}
@@ -41,6 +44,7 @@ version()
     esac
 }
 
+mkdir -p "$dir/tmp"
 if key=$(version built built); then
     ok built
 else
@@ -100,7 +104,6 @@ else
     bad compile "$cc could not build $test"
 fi
 
-mkdir -p "$dir/tmp"
 TMPDIR=$dir/tmp "$dir/execcheck" >"$dir/execcheck.out" 2>&1
 status=$?
 sed 's/^/etudeexec: execcheck: /' "$dir/execcheck.out"

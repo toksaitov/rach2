@@ -1529,8 +1529,8 @@ int main(int argc, char **argv)
 
     file_system.size = region_size;
 
-    if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
-        (void *)-1) {
+    if ((file_system.node = krffs_map_ordinary(file_descriptor, region_offset, file_system.size,
+                                               false)) == (void *)-1) {
         fprintf(stderr, "stageimage: cannot map '%s'.\n", argv[2]);
 
         file_system.node = NULL;

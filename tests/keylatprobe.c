@@ -28,6 +28,24 @@
  * before the others start, and a reader woken on an idle processor would run
  * there without taking anything from the child.
  *
+ * The child runs under SCHED_IDLE, so that every wake of the reader asks for
+ * the switch the records count. Beside a child of the reader's own policy and
+ * weight, EEVDF decides: a reader whose last dequeue left it no lag is placed
+ * at the queue's average with a deadline a whole slice on, the child keeps the
+ * processor while its own deadline is earlier, and the reader waits up to a
+ * base slice, as Linux's check_preempt_wakeup_fair and pick_eevdf decide
+ * (kernel/sched/fair.c); whether its lag is zero depends on how long it ran
+ * for the key before, which varies with the host's speed. A thread of a
+ * normal policy always preempts a SCHED_IDLE one at its wake.
+ *
+ * Before `KEYLAT READING` the probe yields until /proc/stat counts at most
+ * three processes running or ready: itself, the child and process 0, which
+ * the debug shell leaves counted once it has started the probe. The kernel
+ * threads that the probe's start wakes run their first passes meanwhile; a
+ * key that came while one ran would wait for its next sleep or service point,
+ * since a kernel thread is not switched in the middle of its work, as in
+ * Linux without CONFIG_PREEMPTION.
+ *
  * Usage: keylatprobe [spin | random] [LINES]. With `random` the child is
  * inside a large `getrandom` instead of spinning, which is the loop inside
  * one system call that the scheduler's service point must break. LINES, 1
@@ -45,6 +63,14 @@
 #define GRND_INSECURE 0x0004u
 
 #define SIGKILL 9
+
+#define SCHED_IDLE 5
+
+#if defined __x86_64__
+#define SYS_SCHED_SETSCHEDULER 144
+#else
+#define SYS_SCHED_SETSCHEDULER 156
+#endif
 
 /* The terminal's requests and the flags the reads clear (<asm/termbits.h>). */
 #define TCGETS 0x5401
@@ -106,22 +132,130 @@ static int lines_wanted(const char *s)
    loop inside one system call that the service point must break. */
 static unsigned char random_buf[8u << 20];
 
+/* /proc/stat, read whole; its `procs_running` line is near its end. */
+static char stat_text[16384];
+
+/**
+ * The count `procs_running` of /proc/stat, the processes running or ready
+ * to run, or -1 when the file cannot be read or has no such line. A `\0`
+ * ends the text, so a file longer than the buffer is searched as far as it
+ * was read.
+ */
+static int procs_running(void)
+{
+    static const char key[] = "\nprocs_running ";
+    long fd = syscall3(SYS_OPEN, (long)"/proc/stat", 0, 0);
+    long got = 0, n;
+    int i, j, value = -1;
+
+    if (fd < 0) {
+        return -1;
+    }
+    while (got < (long)sizeof(stat_text) - 1 &&
+           (n = syscall3(SYS_READ, fd, (long)(stat_text + got),
+                         (long)sizeof(stat_text) - 1 - got)) > 0) {
+        got += n;
+    }
+    syscall1(SYS_CLOSE, fd);
+    stat_text[got] = '\0';
+    for (i = 0; stat_text[i]; i++) {
+        for (j = 0; key[j] && stat_text[i + j] == key[j]; j++) {
+        }
+        if (key[j] == '\0') {
+            for (i += j, value = 0; stat_text[i] >= '0' && stat_text[i] <= '9'; i++) {
+                value = value * 10 + (stat_text[i] - '0');
+            }
+            break;
+        }
+    }
+    return value;
+}
+
 PROBE_SP_ENTRY;
 
 /**
- * Bind to processor 0, fork the child that keeps the processor, put the
- * terminal in noncanonical mode, print KEYLAT READING and read the keys;
- * then put the terminal back, kill the child and report.
+ * The child's loop, which never returns: a spin in user mode or, when
+ * `random_mode` is set, a `getrandom` of eight mebibytes made again as soon
+ * as it returns, its buffer touched first so that no page fault falls
+ * inside the call's time. It writes a byte to `started`, a pipe's write end,
+ * once it is in its loop, after the first page faults of its pages after the
+ * fork, and in the `random` mode after it has printed KEYLAT HOG.
+ */
+static void child_loop(int random_mode, int started)
+{
+    unsigned off;
+    int n;
+
+    if (random_mode) {
+        for (off = 0; off < sizeof(random_buf); off += 4096) {
+            random_buf[off] = 1;
+        }
+        for (n = 0;; n++) {
+            if (syscall3(SYS_GETRANDOM, (long)random_buf, (int)sizeof(random_buf), GRND_INSECURE) !=
+                (int)sizeof(random_buf)) {
+                puts("KEYLAT FAIL: getrandom did not fill the buffer\n");
+                sys_exit(1);
+            }
+            if (n == 0) {
+                puts("KEYLAT HOG\n");
+                syscall3(SYS_WRITE, started, (long)"r", 1);
+            }
+        }
+    }
+    syscall3(SYS_WRITE, started, (long)"s", 1);
+    for (;;) {
+        __asm__ __volatile__("" ::: "memory");
+    }
+}
+
+/**
+ * Wait until `child` says on the pipe `ready` that it is in its loop, then
+ * yield until /proc/stat counts at most three processes running or ready:
+ * this one, the child and process 0. Returns 0, or -1 with the reason
+ * printed, the child killed.
+ */
+static int settle(int child, const int ready[2])
+{
+    char started;
+    int running;
+
+    syscall1(SYS_CLOSE, ready[1]);
+    if (syscall3(SYS_READ, ready[0], (long)&started, 1) != 1) {
+        syscall3(SYS_KILL, child, SIGKILL, 0);
+        puts("KEYLAT FAIL: the child did not say it had started\n");
+        return -1;
+    }
+    syscall1(SYS_CLOSE, ready[0]);
+    while ((running = procs_running()) > 3) {
+        syscall0(SYS_SCHED_YIELD);
+    }
+    if (running < 0) {
+        syscall3(SYS_KILL, child, SIGKILL, 0);
+        puts("KEYLAT FAIL: /proc/stat gives no count of running processes\n");
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Bind to processor 0, fork the child that keeps the processor and put it
+ * under SCHED_IDLE, wait for it to start and for the other work to settle,
+ * put the terminal in noncanonical mode, print KEYLAT READING and read the
+ * keys; then put the terminal back, kill the child and report.
  *
  * The child never sleeps, so the reader runs only if something takes the
  * processor from it. In the `random` mode the child is inside a system call
- * nearly all the time, a `getrandom` of eight mebibytes made again as soon as
- * it returns, its buffer touched first so that no page fault falls inside the
- * call's time; a reader woken then runs only if the call gives way. It
- * prints KEYLAT HOG once, so that the suite sends the key only once the
- * child is in its loop. A fork that fails fails the probe: without the child
- * nothing is on the processor to be taken off it, and a fast read would
- * prove nothing.
+ * nearly all the time; a reader woken then runs only if the call gives way.
+ * The child prints KEYLAT HOG once, so that the suite sends the key only
+ * once the child is in its loop.
+ *
+ * The parent waits for the child's byte on a pipe: a page fault takes a
+ * switch only at its end, and the child's first faults after the fork, the
+ * copies of the pages it writes, would otherwise come with the first key.
+ *
+ * A pipe, a fork or a change of policy that fails fails the probe: without
+ * the child nothing is on the processor to be taken off it, and a fast read
+ * would prove nothing; without SCHED_IDLE, a slow one would not show a fault.
  */
 void probe_main(unsigned long *sp)
 {
@@ -130,12 +264,13 @@ void probe_main(unsigned long *sp)
     int random_mode = argc > 1 && argv[1][0] == 'r';
     int lines = argc > 2 ? lines_wanted(argv[2]) : 1;
     static const unsigned long processor0 = 1;
+    static const int idle_param = 0; /* struct sched_param, priority 0 */
     struct kernel_termios saved, raw;
     int not_cr = 0;
+    int ready[2];
     int child;
     int n;
     int i;
-    unsigned off;
 
     if (lines == 0) {
         puts("KEYLAT FAIL: the count of lines is not a number from 1 to 99\n");
@@ -145,30 +280,25 @@ void probe_main(unsigned long *sp)
         puts("KEYLAT FAIL: the probe could not be bound to processor 0\n");
         sys_exit(1);
     }
+    if (syscall1(SYS_PIPE, (long)ready) != 0) {
+        puts("KEYLAT FAIL: no pipe could be made\n");
+        sys_exit(1);
+    }
     child = syscall3(SYS_FORK, 0, 0, 0);
     if (child < 0) {
         puts("KEYLAT FAIL: no child could be forked\n");
         sys_exit(1);
     }
     if (child == 0) {
-        if (random_mode) {
-            for (off = 0; off < sizeof(random_buf); off += 4096) {
-                random_buf[off] = 1;
-            }
-            for (n = 0;; n++) {
-                if (syscall3(SYS_GETRANDOM, (long)random_buf, (int)sizeof(random_buf),
-                             GRND_INSECURE) != (int)sizeof(random_buf)) {
-                    puts("KEYLAT FAIL: getrandom did not fill the buffer\n");
-                    sys_exit(1);
-                }
-                if (n == 0) {
-                    puts("KEYLAT HOG\n");
-                }
-            }
-        }
-        for (;;) {
-            __asm__ __volatile__("" ::: "memory");
-        }
+        child_loop(random_mode, ready[1]);
+    }
+    if (syscall3(SYS_SCHED_SETSCHEDULER, child, SCHED_IDLE, (long)&idle_param) != 0) {
+        syscall3(SYS_KILL, child, SIGKILL, 0);
+        puts("KEYLAT FAIL: the child could not be put under SCHED_IDLE\n");
+        sys_exit(1);
+    }
+    if (settle(child, ready) != 0) {
+        sys_exit(1);
     }
 
     if (syscall3(SYS_IOCTL, STDIN_FILENO, TCGETS, (long)&saved) != 0) {

@@ -123,6 +123,7 @@ size_t lc_past_prefix(const char *text, size_t len, size_t at);
  * program's death by a signal, and the first that begins with the record of
  * its exit gives status 0; each record is matched whole after its prefix,
  * so that a program that prints a record's text is not credited with it.
+ * A NULL `id` runs the program and asserts nothing.
  *
  * @return the window, NUL-ended, which the caller frees; or NULL when the
  *         scenario cannot go on, with `id` reported failed unless a stop

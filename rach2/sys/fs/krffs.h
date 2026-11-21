@@ -83,9 +83,10 @@ uint32_t krffs_mode_type(uint16_t mode);
 
 /* Node types in the file system. */
 typedef enum {
-    KRFFS_ROOT_NODE,    /* The first node, which is the root directory */
-    KRFFS_FREE_NODE,    /* Free space (available for allocation) */
-    KRFFS_RESERVED_NODE /* A file, a directory, a FIFO or a socket file */
+    KRFFS_ROOT_NODE,     /* The first node, which is the root directory */
+    KRFFS_FREE_NODE,     /* Free space (available for allocation) */
+    KRFFS_RESERVED_NODE, /* A file, a directory, a FIFO or a socket file */
+    KRFFS_RESIZING_NODE  /* Target size and ordinary type in previous_node_size */
 } krffs_node_type_t;
 
 /* Node timestamp, packed for on-disk compatibility. */
@@ -116,7 +117,7 @@ typedef struct krffs_node {
     krffs_node_time_t modification_time;       /* Last modification time */
     krffs_node_time_t attribute_change_time;   /* Last attribute change time */
     uint64_t size;                             /* Total node size (header + data space) */
-    uint64_t previous_node_size;               /* Size of previous node (for backward traversal) */
+    uint64_t previous_node_size;               /* Backward link, or resize shadow */
     uint64_t data_size;                        /* Actual data bytes used */
     uint64_t parent_id; /* id of the containing directory (KRFFS_ROOT_ID at the root) */
 } krffs_node_t;
@@ -269,7 +270,7 @@ typedef struct krffs_brief {
  */
 
 /**
- * Read the header of the node at `offset` into `out`.
+ * Read the header at `offset` into `out`, resolving a marked size.
  *
  * Returns 0, or -1 for a null argument, for a header that would not fit
  * inside the region, which is what a walk that has left the ring reaches,
@@ -302,9 +303,11 @@ uint64_t krffs_node_ino(const krffs_node_t *node);
  */
 int krffs_chain_is_valid(krffs_mount_t *mount);
 
-/** Validate the ring, including backward links when requested.
+enum { KRFFS_WALK_FORWARD, KRFFS_WALK_LINKS, KRFFS_WALK_RECOVERY };
+
+/** Validate the ring. Only a dirty mount preparing to repair accepts shadows.
  * Return 1 for a sound ring, 0 for bad format or -EIO for a failed read. */
-int krffs_chain_walk(krffs_mount_t *mount, int with_links);
+int krffs_chain_walk(krffs_mount_t *mount, int mode);
 
 /**
  * `krffs_chain_is_valid` without the backward links.
@@ -687,9 +690,9 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
  * enough, at least a header's worth, and otherwise moves the node to a new
  * allocation and frees the old one, so the answer may be another offset.
  * Shrinking returns the surplus to the free list, merged with a free node
- * after it. In either direction a surplus too small for a header, or whose
- * size would change bytes of two sectors, stays inside the node, where a
- * later shrink or a removal reclaims it. A grow changes the node's room and
+ * after it. Both operations allow padding to place the free header or to
+ * preserve the old low size byte. A remainder too small for a header stays
+ * in the node. A grow changes the node's room and
  * not its length: `data_size` stays, and the caller stores the new length
  * once the bytes are written. A shrink below `data_size` stores the shorter
  * length first, since the surplus's header is written inside bytes the old
@@ -780,9 +783,9 @@ int krffs_root_has_orphans(void);
 /**
  * Repair what a machine that stopped inside a change can leave.
  *
- * There are four faults, the ones the format's order of writes can
- * produce: a backward link the forward chain contradicts, rebuilt from the
- * walk; a file whose parent names no directory, a rename stopped between
+ * Finish marked sizes from their shadows first. Then repair the faults an
+ * interrupted update can leave: a stale backward link, rebuilt from the
+ * forward walk; a file whose parent names no directory, a rename between
  * the pieces of its parent field, which is put into the directory its id
  * names; one name on two nodes of a directory, an interrupted move or
  * rename, where the loser's name is cleared; and reserved nodes with no
@@ -794,7 +797,7 @@ int krffs_root_has_orphans(void);
  * The counts go to `links`, `orphans` and `doubles`, any of which may be
  * NULL.
  *
- * The forward chain must already pass `krffs_chain_is_walkable`. The
+ * The forward chain must already pass the KRFFS_WALK_RECOVERY check. The
  * search for one name on two nodes sorts an index of the named nodes, 16
  * bytes each and at most 262144 of them (KRFFS_REPAIR_NAMES in krffs.c), in
  * passes when there are more; with more nodes of one name hash than the

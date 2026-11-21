@@ -16,8 +16,10 @@
         {"step_id": "room", "stage": "execute", "does": "read the free space of the root of a copy of the os-real disk on the host, with setidcheck from its free-node chain"},
         {"step_id": "boot", "stage": "execute", "machine": "build", "does": "boot the copy and wait for the console's login prompt"},
         {"step_id": "login", "stage": "execute", "machine": "build", "does": "log in at the console as the test account with its password"},
-        {"step_id": "build-one", "stage": "execute", "machine": "build", "does": "copy /src/rach2 to a workspace, build the kernel with make -f guest.mk, and hash it and set it aside in /home/test"},
-        {"step_id": "build-two", "stage": "execute", "machine": "build", "does": "copy /src/rach2 again, build the kernel again and compare the two hashes in the guest"},
+        {"step_id": "copy-one", "stage": "execute", "machine": "build", "does": "copy /src/rach2 to a workspace, a step of its own so that the copy and the build each have the gap's bound"},
+        {"step_id": "build-one", "stage": "execute", "machine": "build", "does": "build the kernel with make -f guest.mk in the workspace, and hash it and set it aside in /home/test"},
+        {"step_id": "copy-two", "stage": "execute", "machine": "build", "does": "copy /src/rach2 again to a fresh workspace"},
+        {"step_id": "build-two", "stage": "execute", "machine": "build", "does": "build the kernel again and compare the two hashes in the guest"},
         {"step_id": "sync", "stage": "execute", "machine": "build", "does": "sync the root and end the machine with QMP's quit"},
         {"step_id": "extract", "stage": "execute", "does": "take the kernel set aside off the copy with readfile.krffs, hash it with sha256 and check it with elfcheck"},
         {"step_id": "slot", "stage": "execute", "does": "write the kernel in place of the placeholders in the candidate and recovery slots of a copy of the GRUB disk with mcopy, and read each back"},
@@ -48,7 +50,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10},
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 12},
         {"witness_id": "build", "kind": "quiet", "means": "a build of the machine's own sources has ended", "limit": null, "bound": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}},
         {"witness_id": "probe", "kind": "counter", "means": "a probe has handed the debug shell back", "limit": 256}
       ],

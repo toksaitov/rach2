@@ -2,6 +2,8 @@
  * krffs_hosttest.c: the KRFFS core, rach2/sys/fs/krffs.c, over backends of
  * the test's own.
  *
+ * host-tools: fsck.krffs
+ * host-cflags: -DKRFFS_PREPARED_FSCK
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  *
@@ -21,16 +23,34 @@
  * rebuilds it. That is the rule rach2/sys/fs/krffs.Readme.md states, and
  * these rows check that the code keeps it.
  *
- * The test includes no hosted header: the kernel headers define the
- * fixed-width types, and the C library calls it makes are declared below.
+ * The kernel headers supply the integer types. The checker reads a copy
+ * of each interrupted image from a private scratch file.
  */
 
 #include "../../rach2/sys/fs/krffs.c"
 
 #include "krffs_hash_vectors.h"
+#include <stdio.h>
 
-extern int printf(const char *fmt, ...);
-extern void *malloc(unsigned long size);
+extern char *getenv(const char *name);
+extern int atexit(void (*function)(void));
+
+#ifdef _WIN32
+#include <process.h>
+#define cut_pid _getpid
+#else
+#include <unistd.h>
+extern int waitpid(int pid, int *status, int options);
+#define cut_pid getpid
+#endif
+
+#ifdef KRFFS_PREPARED_FSCK
+#define CUT_FSCK "build/tests/host-suite/tools/fsck.krffs"
+#else
+#define CUT_FSCK "build/krffs/fsck.krffs"
+#endif
+
+extern void *malloc(size_t size);
 extern void free(void *p);
 
 /* Set to have `kmalloc` refuse, as a kernel short of memory does. */
@@ -398,15 +418,15 @@ static void build(uint8_t *image, const uint8_t *before, int count, uint32_t siz
     }
 }
 
-/** The distinct units of `grain` bytes the writes in [from, to) touched. */
-static int touched_blocks(int from, int to, uint32_t grain, uint64_t *seen, int cap)
+/** List the units touched by writes [from, to) at this image phase. */
+static int touched_units(int from, int to, uint32_t grain, uint32_t phase, uint64_t *seen, int cap)
 {
     int count = 0;
     int i;
 
     for (i = from; i < to; i++) {
-        uint64_t first = recorded[i].offset / grain;
-        uint64_t last = (recorded[i].offset + recorded[i].size - 1) / grain;
+        uint64_t first = (phase + recorded[i].offset) / grain;
+        uint64_t last = (phase + recorded[i].offset + recorded[i].size - 1) / grain;
         uint64_t blk;
 
         for (blk = first; blk <= last; blk++) {
@@ -425,6 +445,12 @@ static int touched_blocks(int from, int to, uint32_t grain, uint64_t *seen, int 
         }
     }
     return count;
+}
+
+/** List the blocks touched in an image starting on a block boundary. */
+static int touched_blocks(int from, int to, uint32_t grain, uint64_t *seen, int cap)
+{
+    return touched_units(from, to, grain, 0, seen, cap);
 }
 
 /**
@@ -1232,6 +1258,29 @@ static int place_after_spacer(krffs_mount_t *mount, uint64_t at, uint32_t gap)
                              (uint64_t *)0) == 0;
 }
 
+/** Allocate, grow and free files at a tail whose size crosses a block. */
+static void straddled_split_row(void)
+{
+    krffs_mount_t mount;
+    uint64_t at = 4096 - KRFFS_FIELD_SIZE - 1;
+
+    make_image(image, IMAGE_SIZE);
+    mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+    check(place_after_spacer(&mount, at, 0),
+          "a file placed so the free node's length falls across a block");
+    mount.grain = 4096;
+    check(krffs_create_at(&mount, "/made") == 0,
+          "a node is made at a free node whose length falls across a block");
+    check(krffs_create_at(&mount, "/next") == 0 &&
+              krffs_truncate_at(&mount, "/next", 32768, (uint64_t *)0) == 0,
+          "and the free space after it holds a file of 32 KiB");
+    check(krffs_unlink_at(&mount, "/next") == 0 && krffs_unlink_at(&mount, "/made") == 0 &&
+              krffs_allocate_at(&mount, IMAGE_SIZE - at - sizeof(krffs_node_t) - 6,
+                                KRFFS_NO_NODE) != KRFFS_NO_NODE,
+          "the freed files can be reused as one extent");
+    check(krffs_chain_is_valid(&mount) == 1, "the ring closes after reuse");
+}
+
 /**
  * Make and move nodes whose fields fall across a unit of the medium, with the
  * whole-unit rule on and a clock whose nanoseconds are not zero.
@@ -1456,6 +1505,49 @@ static void make_extent_image(uint8_t *buffer, uint32_t size, const struct unlin
     }
 }
 
+/** Take a small file and a 32 KiB file from a tail at the given phase. */
+static void split_tail_case(uint32_t bytes, uint32_t start, uint32_t phase)
+{
+    struct unlink_extent extents[] = {{0, NULL}, {start, NULL}};
+    uint8_t *buffer = malloc(bytes);
+    krffs_mount_t mount;
+    krffs_node_t head;
+    uint64_t node;
+
+    check(buffer != NULL, "allocated the split fixture");
+    if (!buffer) {
+        return;
+    }
+    make_extent_image(buffer, bytes, extents, 2);
+    mount = mount_over(&memory_backend, buffer, bytes);
+    mount.grain = 4096;
+    mount.sector = 512;
+    mount.sector_phase = phase;
+    node = krffs_allocate_at(&mount, 0, KRFFS_NO_NODE);
+    check(node != KRFFS_NO_NODE && krffs_head(&mount, node, &head) == 0 &&
+              head.size < 2 * sizeof(head),
+          "a small file takes less than two headers from the free tail");
+    check(krffs_allocate_at(&mount, 32768, KRFFS_NO_NODE) != KRFFS_NO_NODE &&
+              krffs_chain_is_valid(&mount),
+          "the tail still supplies a 32 KiB file");
+    free(buffer);
+}
+
+/** Reuse the space released by truncating the only file on a full disk. */
+static void split_shrink_row(void)
+{
+    static const struct unlink_extent extents[] = {{0, NULL}, {3770, "victim"}};
+    uint32_t bytes = 3770 + 65536;
+    krffs_mount_t mount = mount_over(&memory_backend, disk_image, bytes);
+
+    make_extent_image(disk_image, bytes, extents, 2);
+    mount.sector = 512;
+    check(krffs_truncate_at(&mount, "/victim", 0, NULL) == 0 &&
+              krffs_allocate_at(&mount, 64000, KRFFS_NO_NODE) != KRFFS_NO_NODE &&
+              krffs_chain_is_valid(&mount),
+          "truncating the straddled node returns room on a full disk");
+}
+
 /** `make_extent_image` of the disk fixture. */
 static void make_unlink_image(const struct unlink_extent *extents, unsigned count)
 {
@@ -1675,8 +1767,8 @@ static int volume_cut_is_sound(uint8_t *state, uint32_t size)
  * what the writes so far made of it, in every mixture. Returns 1 when
  * `judge` accepts them all.
  */
-static int every_unit_cut_is_sound(const uint8_t *before, uint32_t size, uint32_t unit,
-                                   int (*judge)(uint8_t *, uint32_t))
+static int phase_cuts_are_sound(const uint8_t *before, uint32_t size, uint32_t unit, uint32_t phase,
+                                int (*judge)(uint8_t *, uint32_t))
 {
     static uint8_t epoch[DISK_IMAGE_SIZE];
     static uint8_t after[DISK_IMAGE_SIZE];
@@ -1686,7 +1778,7 @@ static int every_unit_cut_is_sound(const uint8_t *before, uint32_t size, uint32_
     for (prefix = 0; prefix <= recorded_count; prefix++) {
         uint64_t units[10];
         int mark = epoch_of(prefix);
-        int count = touched_blocks(mark, prefix, unit, units, 10);
+        int count = touched_units(mark, prefix, unit, phase, units, 10);
         unsigned variant;
         int i;
 
@@ -1700,9 +1792,11 @@ static int every_unit_cut_is_sound(const uint8_t *before, uint32_t size, uint32_
             k_memcpy(state, after, size);
             for (i = 0; i < count; i++) {
                 if (variant & (1u << i)) {
-                    uint32_t at = (uint32_t)units[i] * unit;
+                    uint32_t base = (uint32_t)units[i] * unit;
+                    uint32_t at = base < phase ? 0 : base - phase;
+                    uint32_t end = base + unit - phase;
 
-                    k_memcpy(state + at, epoch + at, unit);
+                    k_memcpy(state + at, epoch + at, (end < size ? end : size) - at);
                 }
             }
             if (!judge(state, size)) {
@@ -1713,6 +1807,100 @@ static int every_unit_cut_is_sound(const uint8_t *before, uint32_t size, uint32_
         }
     }
     return 1;
+}
+
+/** Judge cuts in units starting at offset zero. */
+static int every_unit_cut_is_sound(const uint8_t *before, uint32_t size, uint32_t unit,
+                                   int (*judge)(uint8_t *, uint32_t))
+{
+    return phase_cuts_are_sound(before, size, unit, 0, judge);
+}
+
+/**
+ * Split a free extent whose size meets both cuts. Check every write prefix
+ * and every mixture of sectors and cache blocks since the last barrier.
+ * Exercise both a short extent and one with room for another file.
+ */
+static void split_order_row(uint32_t free_end)
+{
+    struct unlink_extent extents[] = {{0, NULL}, {1024, "kept"}, {3770, NULL}, {free_end, "last"}};
+    static uint8_t before[DISK_IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&recording_backend, disk_image, DISK_IMAGE_SIZE);
+
+    make_unlink_image(extents, 4);
+    k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
+    mount.grain = 4096;
+    mount.sector = 512;
+    mount.sector_phase = 510;
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    check(krffs_create_at(&mount, "/new") == 0 && krffs_chain_is_valid(&mount),
+          "splitting a free node across both cuts preserves the ring");
+    recording = 0;
+    check(phase_cuts_are_sound(before, DISK_IMAGE_SIZE, 512, 510, volume_cut_is_sound) &&
+              every_unit_cut_is_sound(before, DISK_IMAGE_SIZE, 4096, volume_cut_is_sound),
+          "every sector and grain cut during the split preserves the file and the ring");
+}
+
+/** Reuse a run of free nodes left by repeated splits at the same phase. */
+static void split_join_row(int grow)
+{
+    struct unlink_extent extents[67];
+    krffs_mount_t mount = mount_over(&recording_backend, image, IMAGE_SIZE);
+    static uint8_t before[IMAGE_SIZE];
+    unsigned i;
+
+    extents[0].start = 0;
+    extents[0].name = NULL;
+    for (i = 1; i < 67; i++) {
+        extents[i].start = 512 + i * 512;
+        extents[i].name = NULL;
+    }
+    extents[1].name = "kept";
+    extents[66].name = "last";
+    make_extent_image(image, IMAGE_SIZE, extents, 67);
+    k_memcpy(before, image, IMAGE_SIZE);
+    mount.grain = 4096;
+    mount.sector = 512;
+    mount.sector_phase = 186;
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    if (grow) {
+        check(krffs_resize_at(&mount, 1024, 32000) == 1024, "a grow joins consecutive free nodes");
+    } else {
+        check(krffs_allocate_at(&mount, 32000, KRFFS_NO_NODE) != KRFFS_NO_NODE,
+              "an allocation joins consecutive free nodes");
+    }
+    recording = 0;
+    check(krffs_chain_is_valid(&mount) &&
+              phase_cuts_are_sound(before, IMAGE_SIZE, 512, 186, volume_cut_is_sound) &&
+              every_unit_cut_is_sound(before, IMAGE_SIZE, 4096, volume_cut_is_sound),
+          "reusing a run preserves the file and the ring at every cut");
+}
+
+/** Join a free run whose combined size changes bytes across a sector. */
+static void split_join_cut_row(void)
+{
+    static const struct unlink_extent extents[] = {
+        {0, NULL}, {1024, "kept"}, {3770, NULL}, {4282, NULL}, {5059, "last"}};
+    krffs_mount_t mount = mount_over(&recording_backend, disk_image, DISK_IMAGE_SIZE);
+    static uint8_t before[DISK_IMAGE_SIZE];
+
+    make_unlink_image(extents, 5);
+    k_memcpy(before, disk_image, DISK_IMAGE_SIZE);
+    mount.grain = 4096;
+    mount.sector = 512;
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    check(krffs_allocate_at(&mount, 900, KRFFS_NO_NODE) == 3770 && krffs_chain_is_valid(&mount),
+          "the resize marker publishes a join whose new size would tear");
+    recording = 0;
+    check(every_unit_cut_is_sound(before, DISK_IMAGE_SIZE, 512, volume_cut_is_sound) &&
+              every_unit_cut_is_sound(before, DISK_IMAGE_SIZE, 4096, volume_cut_is_sound),
+          "every cut of a marked join keeps the neighbouring file");
 }
 
 /** Fill the file at `at` of the disk fixture with `length` bytes of `byte`. */
@@ -1833,7 +2021,7 @@ static int flushed_after(uint64_t offset)
  * A grow of a disk-root file writes the free header, flushes, and only then
  * stores the size that takes the bytes before it, for a growth shorter than
  * a header, a long one, one that takes the whole free node, and one whose
- * size would cross a sector and moves instead.
+ * size is rounded at a sector cut.
  */
 static void disk_grow_rows(void)
 {
@@ -1852,9 +2040,9 @@ static void disk_grow_rows(void)
     check(disk_truncate_case(whole, 5, 667, 668, 1024, 1576,
                              "a grow takes a free node too small to split whole") == 0,
           "a grow into a small free node succeeds");
-    check(disk_truncate_case(crossing, 5, 483, 484, KRFFS_NO_NODE, 0,
-                             "a grow whose size would cross a sector moves the file") == 0,
-          "a grow that must move succeeds");
+    check(disk_truncate_case(crossing, 5, 483, 484, 1210, 1352,
+                             "a grow at a sector cut keeps the old low size byte") == 0,
+          "the rounded grow succeeds");
     case_writes = 1;
     check(disk_truncate_case(split, 4, 667, 668, 1024, 1024 + sizeof(krffs_node_t),
                              "a one-byte write past the end takes a header's room") == 0,
@@ -1862,11 +2050,11 @@ static void disk_grow_rows(void)
     check(disk_truncate_case(split, 4, 667, 1100, 1024, 0,
                              "a write past the end splits the free node") == 0,
           "a write past the end succeeds");
-    check(disk_truncate_case(crossing, 5, 483, 484, KRFFS_NO_NODE, 0,
-                             "a write whose grow would cross a sector moves the file") == 0,
-          "a write that must move succeeds");
-    check(flushed_after(1210 + KRFFS_FIELD_TYPE),
-          "and the old node's free type is flushed before the move returns");
+    check(disk_truncate_case(crossing, 5, 483, 484, 1210, 1352,
+                             "a write at a sector cut takes the same room") == 0,
+          "the write into the rounded extent succeeds");
+    check(flushed_after(1210 + KRFFS_FIELD_SIZE),
+          "the larger size is flushed before the write returns");
     case_writes = 0;
 }
 
@@ -4517,6 +4705,369 @@ static int image_rows(void)
     return fails > 255 ? 255 : fails;
 }
 
+/* The path is owned only once exclusive creation succeeds. */
+static char cut_path[4096];
+static int cut_owned;
+
+/** Remove the checker image if this invocation created it. */
+static void remove_cut_image(void)
+{
+    if (cut_owned) {
+        remove(cut_path);
+    }
+}
+
+/** Run the independent checker on the cut, waiting for its exit status. */
+static int run_cut_fsck(void)
+{
+#ifdef _WIN32
+    char quoted[sizeof(cut_path) + 2];
+
+    snprintf(quoted, sizeof(quoted), "\"%s\"", cut_path);
+    return _spawnl(_P_WAIT, CUT_FSCK, CUT_FSCK, quoted, NULL) == 0;
+#else
+    int status;
+    int pid;
+
+    if (fflush(stdout) != 0) {
+        return 0;
+    }
+    pid = fork();
+    if (pid == 0) {
+        if (freopen("/dev/null", "w", stdout)) {
+            execl(CUT_FSCK, CUT_FSCK, cut_path, (char *)NULL);
+        }
+        _exit(127);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && status == 0;
+#endif
+}
+
+/** Repair an independent copy with fsck.krffs and read the whole image
+ * back. Return zero for any file or checker error. */
+static int fsck_cut(uint8_t *copy, uint32_t size)
+{
+    FILE *file = fopen(cut_path, cut_owned ? "wb" : "wbx");
+    int ok;
+
+    if (!file) {
+        return 0;
+    }
+    cut_owned = 1;
+    ok = fwrite(copy, 1, size, file) == size;
+    if (fclose(file) != 0 || !ok || !run_cut_fsck()) {
+        return 0;
+    }
+    file = fopen(cut_path, "rb");
+    if (!file) {
+        return 0;
+    }
+    ok = fread(copy, 1, size, file) == size && fgetc(file) == EOF;
+    return fclose(file) == 0 && ok;
+}
+
+/** Check the file through its path, including every byte its EOF counts.
+ * A stop during the full-disk truncate leaves its old or its new EOF. */
+static int terminal_file(krffs_mount_t *mount)
+{
+    krffs_node_t head;
+    uint64_t at = krffs_walk(mount, "/victim");
+    uint32_t kept = 0;
+    char data[1024];
+
+    if (!krffs_chain_is_valid(mount) || at != 3769 || krffs_head(mount, at, &head) ||
+        (head.data_size != 40000 && head.data_size != 65536 - sizeof(head))) {
+        return 0;
+    }
+    while (kept < head.data_size) {
+        uint32_t i, n = (uint32_t)head.data_size - kept;
+
+        if (n > sizeof(data)) {
+            n = sizeof(data);
+        }
+        if (krffs_read_at(mount, at, data, n, kept) != (int)n) {
+            return 0;
+        }
+        for (i = 0; i < n; i++) {
+            if (data[i] != 'v') {
+                return 0;
+            }
+        }
+        kept += n;
+    }
+    return 1;
+}
+
+/** Walk raw headers with the parent's type and forward-size checks. */
+static int legacy_walk(krffs_mount_t *fs)
+{
+    uint64_t at = 0;
+    krffs_node_t head;
+
+    while (at < fs->size) {
+        if (krffs_raw_head(fs, at, &head) != 0 || head.magic != KRFFS_FILE_SYSTEM_MAGIC ||
+            (head.type != KRFFS_ROOT_NODE && head.type != KRFFS_FREE_NODE &&
+             head.type != KRFFS_RESERVED_NODE) ||
+            head.size < sizeof(head) || head.size > fs->size - at) {
+            return 0;
+        }
+        at += head.size;
+    }
+    return at == fs->size;
+}
+
+/** The free-node fixture keeps its neighbour and any completed creation. */
+static int created_file(krffs_mount_t *mount)
+{
+    uint64_t at = krffs_walk(mount, "/fresh");
+    krffs_node_t head;
+
+    return krffs_chain_is_valid(mount) && holds_bytes(mount, 1024, "k", 1) &&
+           krffs_walk(mount, "/kept") == 1024 && krffs_walk(mount, "/victim") == KRFFS_NO_NODE &&
+           (at == KRFFS_NO_NODE ||
+            (at == 3769 && !krffs_head(mount, at, &head) && head.data_size == 0));
+}
+
+/** Judge the file whose extent changes, or the free node used for create. */
+static int (*cut_contents)(krffs_mount_t *);
+
+/** Recover three copies of the same cut using the disk root, the writable
+ * volume's check and the host checker. Compare the bytes each exposes. */
+static int resize_cut(uint8_t *state, uint32_t size)
+{
+    static uint8_t copy[DISK_IMAGE_SIZE];
+    krffs_mount_t fs = mount_over(&memory_backend, copy, size);
+    krffs_node_t *head = (krffs_node_t *)(state + 3769);
+    krffs_node_t *repaired = (krffs_node_t *)(copy + 3769);
+    int marked = head->type == KRFFS_RESIZING_NODE;
+    uint32_t target = (uint32_t)head->previous_node_size;
+
+    k_memcpy(copy, state, size);
+    if (legacy_walk(&fs) == marked || (marked && krffs_chain_is_walkable(&fs)) ||
+        krffs_chain_walk(&fs, KRFFS_WALK_RECOVERY) != 1 ||
+        krffs_repair_at(&fs, NULL, NULL, NULL) != 0 || !cut_contents(&fs) ||
+        (marked && repaired->size != target)) {
+        return 0;
+    }
+    k_memcpy(copy, state, size);
+    if (init_krffs_disk_root(state, size, 512, NULL, NULL) != 0 ||
+        !cut_contents(&krffs_root_mount) || !legacy_walk(&krffs_root_mount) ||
+        (marked && head->size != target)) {
+        return 0;
+    }
+    return fsck_cut(copy, size) && !krffs_is_dirty(&fs) && legacy_walk(&fs) && cut_contents(&fs) &&
+           (!marked || repaired->size == target);
+}
+
+/** Replay each prefix and all physical write orders within each epoch. */
+static void resize_cuts(const uint8_t *before, uint32_t size)
+{
+    int i, markers = 0;
+
+    for (i = 0; i < recorded_count; i++) {
+        if (recorded[i].offset == 3769 + KRFFS_FIELD_TYPE &&
+            recorded[i].bytes[0] == KRFFS_RESIZING_NODE) {
+            markers++;
+        }
+    }
+    check(markers == 1 && every_unit_cut_is_sound(before, size, 512, resize_cut) &&
+              every_unit_cut_is_sound(before, size, 4096, resize_cut),
+          "both mounts and fsck recover every cut of a marked resize");
+}
+
+/** Stop again in the first dirty-mount repair of a marked, torn size. */
+static void repair_resize_cuts(const uint8_t *before, uint32_t size, int prefix)
+{
+    static uint8_t torn[DISK_IMAGE_SIZE];
+    krffs_mount_t fs = mount_over(&recording_backend, disk_image, size);
+    krffs_node_t *head = (krffs_node_t *)(torn + 3769);
+
+    build(torn, before, prefix, size);
+    head->size = (head->size & ~0xffffu) | (head->previous_node_size & 0xffffu);
+    k_memcpy(disk_image, torn, size);
+    recorded_count = sync_count = 0;
+    recording = 1;
+    check(krffs_chain_walk(&fs, KRFFS_WALK_RECOVERY) == 1 &&
+              krffs_repair_at(&fs, NULL, NULL, NULL) == 0,
+          "the recorded repair completes the torn size");
+    recording = 0;
+    check(every_unit_cut_is_sound(torn, size, 512, resize_cut) &&
+              every_unit_cut_is_sound(torn, size, 4096, resize_cut),
+          "a second stop during repair keeps the file and the ring");
+}
+
+/** Truncate the only file on a full disk across its second size byte.
+ * Replay every write and every mixture of sectors or pages at each stop. */
+static void terminal_resize_row(void)
+{
+    static const struct unlink_extent layout[] = {{0, NULL}, {3769, "victim"}};
+    static uint8_t before[3769 + 65536];
+    krffs_mount_t fs = mount_over(&recording_backend, disk_image, sizeof(before));
+    krffs_node_t *head = (krffs_node_t *)(disk_image + 3769);
+    int i;
+
+    fs.sector = 512;
+    make_extent_image(disk_image, sizeof(before), layout, 2);
+    fill_fixture_file(3769, 65536 - sizeof(*head), 'v');
+    k_memcpy(before, disk_image, sizeof(before));
+    recorded_count = sync_count = 0;
+    recording = 1;
+    check(krffs_truncate_at(&fs, "/victim", 40000, NULL) == 0 && head->data_size == 40000 &&
+              head->size == sizeof(*head) + 40000 && terminal_file(&fs),
+          "a full-disk truncate to 40000 preserves the file in place");
+    recording = 0;
+    cut_contents = terminal_file;
+    resize_cuts(before, sizeof(before));
+    for (i = 0; i < recorded_count; i++) {
+        if (recorded[i].offset == 3769 + KRFFS_FIELD_TYPE &&
+            recorded[i].bytes[0] == KRFFS_RESIZING_NODE) {
+            repair_resize_cuts(before, sizeof(before), i + 1);
+            break;
+        }
+    }
+}
+
+/** Split a free node whose stale length exceeds the new extent. The
+ * marked node must recover as free until the allocation publishes it. */
+static void free_resize_row(void)
+{
+    static const struct unlink_extent layout[] = {{0, NULL}, {1024, "kept"}, {3769, NULL}};
+    static uint8_t before[3769 + 65536];
+    krffs_mount_t fs = mount_over(&recording_backend, disk_image, sizeof(before));
+    krffs_node_t *head = (krffs_node_t *)(disk_image + 3769);
+
+    fs.grain = 4096;
+    fs.sector = 512;
+    make_extent_image(disk_image, sizeof(before), layout, 3);
+    head->data_size = 65536 - sizeof(*head);
+    k_memcpy(head->name, "victim", 7);
+    k_memcpy(before, disk_image, sizeof(before));
+    recorded_count = sync_count = 0;
+    recording = 1;
+    check(krffs_create_at(&fs, "/fresh") == 0 && head->type == KRFFS_RESERVED_NODE &&
+              head->size < 2 * sizeof(*head) && created_file(&fs),
+          "splitting a free node with stale file fields keeps its neighbour");
+    recording = 0;
+    cut_contents = created_file;
+    resize_cuts(before, sizeof(before));
+}
+
+/** Arrange a private file for both sets of fsck replay rows. */
+static void resize_order_rows(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    int n = snprintf(cut_path, sizeof(cut_path), "%s/krffs-cut-%d.img",
+                     tmp && *tmp ? tmp : "build/tmp", (int)cut_pid());
+    if (n < 0 || n >= (int)sizeof(cut_path) || atexit(remove_cut_image) != 0) {
+        check(0, "registered the private checker image");
+        return;
+    }
+    terminal_resize_row();
+    free_resize_row();
+}
+
+/** Reach the largest spare extents for allocation, shrink and growth. */
+static void extent_bounds_row(void)
+{
+    const struct unlink_extent nodes[] = {{0, NULL}, {1024, "file"}, {2048, NULL}};
+    const uint32_t header = sizeof(krffs_node_t);
+    krffs_mount_t fs = mount_over(&memory_backend, disk_image, 2048 + 2 * header - 1);
+    krffs_node_t *head = (krffs_node_t *)(disk_image + 1024);
+    uint64_t requested = 1024 - header + 1;
+    krffs_node_t allocation;
+
+    make_extent_image(disk_image, fs.size, nodes, 3);
+    check(krffs_resize_at(&fs, 1024, requested) == 1024 && head->size - header - requested == 712 &&
+              krffs_chain_is_valid(&fs),
+          "one byte grown into 713 free bytes leaves exactly 712 spare");
+    requested = head->size - header - 356;
+    check(krffs_resize_at(&fs, 1024, requested) == 1024 && head->size - header - requested == 356 &&
+              krffs_chain_is_valid(&fs),
+          "a shrink leaving 356 bytes absorbs the short remainder");
+    make_extent_image(disk_image, fs.size, nodes, 3);
+    check(krffs_allocate_at(&fs, 0, KRFFS_NO_NODE) == 2048 &&
+              krffs_head(&fs, 2048, &allocation) == 0 && allocation.size - header == 356 &&
+              krffs_chain_is_valid(&fs),
+          "a header allocated from 713 free bytes leaves exactly 356 spare");
+}
+
+/** Fill each named extent to capacity, marking its last byte. */
+static void full_extent_image(uint8_t *buf, uint32_t size, const struct unlink_extent *nodes,
+                              unsigned count)
+{
+    unsigned i;
+
+    make_extent_image(buf, size, nodes, count);
+    for (i = 1; i < count; i++) {
+        krffs_node_t *head = (krffs_node_t *)(buf + nodes[i].start);
+
+        if (head->type == KRFFS_RESERVED_NODE) {
+            head->data_size = head->size - sizeof(*head);
+            buf[nodes[i].start + head->size - 1] = 0x71;
+        }
+    }
+}
+
+/** Allocate 32 KiB beside the full predecessor of each formerly unsplittable
+ * extent. Consume the entire remaining payload in a second allocation. */
+static void locked_extent_row(uint32_t previous, uint32_t extent, uint32_t phase, int guard)
+{
+    uint32_t start = 3768 + previous;
+    uint32_t end = start + extent;
+    uint32_t bytes = guard ? (end + 0x02000000u + 4095u) & ~4095u : end;
+    struct unlink_extent layout[] = {
+        {0, NULL}, {sizeof(krffs_node_t), "front"}, {3768, "kept"}, {start, NULL}, {end, "guard"}};
+    uint8_t *buf = malloc(bytes);
+    krffs_mount_t fs = mount_over(&memory_backend, buf, bytes);
+    krffs_node_t *h;
+    uint64_t first, tail;
+    const struct unlink_extent *nodes = layout;
+    unsigned count = guard ? 5 : 4;
+
+    check(buf != NULL, "allocated the locked-extent image");
+    if (!buf) {
+        return;
+    }
+    if (extent == 65536) {
+        layout[1] = layout[0];
+        nodes++;
+        count--;
+    }
+    full_extent_image(buf, bytes, nodes, count);
+    fs.grain = 4096;
+    fs.sector = 512;
+    fs.sector_phase = phase;
+    first = krffs_allocate_at(&fs, 32768, KRFFS_NO_NODE);
+    h = (krffs_node_t *)(buf + start);
+    check(first == start && h->size >= sizeof(*h) + 32768 && h->size <= sizeof(*h) + 32768 + 356,
+          "a 32 KiB allocation fits beside a full predecessor");
+    if (first == start && h->size + sizeof(*h) <= extent) {
+        tail = krffs_allocate_at(&fs, extent - h->size - sizeof(*h), KRFFS_NO_NODE);
+        check(tail == start + h->size && krffs_free_at(&fs) == 0 && krffs_chain_is_valid(&fs),
+              "the remaining free extent supplies its entire payload");
+    } else {
+        check(0, "the split left a usable tail");
+    }
+    h = (krffs_node_t *)(buf + 3768);
+    check(h->type == KRFFS_RESERVED_NODE && h->size == previous &&
+              h->data_size == previous - sizeof(*h) && buf[start - 1] == 0x71,
+          "the full predecessor keeps its size, length and last byte");
+    if (guard) {
+        layout[3].name = "victim";
+        full_extent_image(buf, bytes, nodes, count);
+        h = (krffs_node_t *)(buf + start);
+        check(krffs_truncate_at(&fs, "/victim", 0, NULL) == 0 && h->data_size == 0 &&
+                  h->size <= sizeof(*h) + 356 && krffs_chain_is_valid(&fs),
+              "a full 16 MiB plus 356 byte extent shrinks to an empty file");
+        layout[3].name = NULL;
+        full_extent_image(buf, bytes, nodes, count);
+        check(krffs_create_at(&fs, "/empty") == 0 && krffs_walk(&fs, "/empty") == start &&
+                  h->size <= sizeof(*h) + 356 && krffs_chain_is_valid(&fs),
+              "an empty file leaves the formerly locked extent free for reuse");
+    }
+    free(buf);
+}
+
 /** Run the full fixture or just the disk failure cases. */
 int main(int argc, char **argv)
 {
@@ -4533,5 +5084,19 @@ int main(int argc, char **argv)
         printf("krffs-hosttest: failure rows: %d failures\n", fails);
         return fails != 0;
     }
+    resize_order_rows();
+    extent_bounds_row();
+    locked_extent_row(0x00ffffffu, 65536, 2, 0);
+    locked_extent_row(0x02ffffffu, (1u << 24) + 329, 1, 0);
+    locked_extent_row(0x02ffffffu, (1u << 24) + 356, 1, 1);
+    straddled_split_row();
+    split_tail_case(112u << 20, 3770, 510);
+    split_tail_case(65536, 1024, 186);
+    split_shrink_row();
+    split_order_row(4484);
+    split_order_row(50000);
+    split_join_row(0);
+    split_join_row(1);
+    split_join_cut_row();
     return image_rows();
 }

@@ -21,16 +21,19 @@ static __inline__ int inode_owner_or_capable(uint32_t uid)
            (cap_holds(p, CAP_FOWNER) && (!p->userns || ns_uid_mapped(p->userns, uid)));
 }
 
-/** Read one capability word using the credentials that govern this walk. */
+/** Read one capability word using the credentials that govern this walk.
+ * For `real`, access(2)'s, a real uid of root holds the permitted set, as
+ * Linux's access_override_creds gives it: every capability the thread has
+ * not given up, which a root real uid keeps whatever the effective one. */
 static __inline__ uint32_t fs_access_caps(const process_t *p, uint32_t word, int real)
 {
     if (!real) {
         return cap_eff_word(p, word);
     }
-    if ((p->userns ? ns_uid_from_kernel(p->userns, p->ruid) : p->ruid) != 0) {
+    if (word > 1 || (p->userns ? ns_uid_from_kernel(p->userns, p->ruid) : p->ruid) != 0) {
         return 0;
     }
-    return cap_word(p, word);
+    return (word == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD) & ~p->cap_lost[word];
 }
 
 /** Whether Linux's two DAC capabilities grant the `want` bits of an inode

@@ -114,8 +114,10 @@ typedef unsigned char uint8_t;
 #define ENODEV          19
 #define EAGAIN          11
 #define ESRCH           3
+#define EEXIST          17
 #define EPROTONOSUPPORT 93
 #define EOPNOTSUPP      95
+#define EADDRNOTAVAIL   99
 #define ENETUNREACH     101
 
 #define POLLIN  0x001
@@ -304,9 +306,9 @@ static const char *const down_rows[] = {
     "down-no-ping",        "down-no-datagram", "up-again",
     "second-kept",         "up-datagram",      "second-resumes"};
 static const char *const route_rows[] = {
-    "invalid-addresses",   "default-route",        "gateway-off-subnet",  "other-route",
-    "gatewayless-default", "unknown-device-route", "own-subnet-route",    "default-removed",
-    "absent-removal",      "waiting-address",      "refused-mask-clears", "restored"};
+    "address-classes",     "default-route",        "gateway-off-subnet",   "other-route",
+    "gatewayless-default", "unknown-device-route", "own-subnet-route",     "default-removed",
+    "absent-removal",      "network-address",      "mask-without-address", "restored"};
 static const char *const second_rows[] = {
     "raw-descriptor",   "gateways",           "second-down",  "first-stays-up",
     "link-dump-down",   "second-back-up",     "proc-net-dev", "bind-device",
@@ -1391,6 +1393,99 @@ static int recv_now(int fd)
 }
 
 /**
+ * The address classes on eth0, through the query descriptor `fd`, as Linux's
+ * inet_abc_len judges them: 0.1.2.3 is taken with 255.0.0.0, 240.1.2.3 with a
+ * host mask, and 224.0.0.1, multicast, is EINVAL and changes nothing. Leaves
+ * eth0 at 192.168.90.20/24.
+ */
+static void address_classes(int fd)
+{
+    set_name("eth0");
+    set_ifr_addr(0x00010203UL); /* 0.1.2.3, class A since Linux 5.3 */
+    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
+        fail("an address in 0/8 was refused");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0xFF000000UL) {
+        fail("an address in 0/8 did not take the mask 255.0.0.0");
+    }
+    set_name("eth0");
+    set_ifr_addr(0xF0010203UL); /* 240.1.2.3, class E since Linux 5.1 */
+    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
+        fail("an address in 240/4 was refused");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0xFFFFFFFFUL) {
+        fail("an address in 240/4 did not take a host mask");
+    }
+    set_name("eth0");
+    set_ifr_addr(0xE0000001UL); /* 224.0.0.1, multicast */
+    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != -EINVAL) {
+        fail("a multicast address was taken");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0xF0010203UL) {
+        fail("a refused multicast address changed the address");
+    }
+    set_name("eth0");
+    set_ifr_addr(OTHER_IP);
+    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
+        fail("the address did not return after the class cases");
+    }
+    set_name("eth0");
+    set_ifr_addr(OTHER_MASK);
+    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
+        fail("the mask did not return after the class cases");
+    }
+}
+
+/**
+ * 192.168.1.0, the network address of its classful subnet, on eth0 through
+ * the query descriptor `fd`: put in force with 255.255.255.0 at once, kept
+ * through a wider mask and the classful one again, as on Linux, and a
+ * noncontiguous mask is EINVAL and changes nothing.
+ */
+static void network_address(int fd)
+{
+    set_name("eth0");
+    set_ifr_addr(0xC0A80100UL); /* 192.168.1.0 */
+    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
+        fail("the network address of a classful subnet was refused");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0xC0A80100UL) {
+        fail("the network address of a classful subnet was not put in force");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0xFFFFFF00UL) {
+        fail("192.168.1.0 did not take the mask 255.255.255.0");
+    }
+    set_name("eth0");
+    set_ifr_addr(0xFFFF0000UL);
+    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
+        fail("a wider mask for 192.168.1.0 was refused");
+    }
+    set_name("eth0");
+    set_ifr_addr(0xFFFFFF00UL);
+    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
+        fail("the classful mask again for 192.168.1.0 was refused");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0xC0A80100UL) {
+        fail("192.168.1.0 did not survive the changes of its mask");
+    }
+    set_name("eth0");
+    set_ifr_addr(0xFF00FF00UL);
+    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != -EINVAL) {
+        fail("a noncontiguous mask was taken");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0xFFFFFF00UL) {
+        fail("a refused noncontiguous mask changed the mask");
+    }
+}
+
+/**
  * The interface ioctls on a machine with one card, in order; exits with
  * NETIFPROBE OK, or fails the probe.
  *
@@ -1430,22 +1525,26 @@ static int recv_now(int fd)
  * reads nothing without blocking and has no error, and once 192.168.90.20
  * is back the byte written to it while that address was gone arrives.
  *
- * Addresses in 0/8, in 240/4 and of multicast are EINVAL. A default route
- * sets the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
- * another route goes into the table and out again. A default route with no
- * gateway is EINVAL and does not remove the gateway the machine has. A route
- * for an interface the machine lacks is ENODEV. The route to the machine's
- * own subnet may be added, since it holds, but not removed (EOPNOTSUPP),
- * since the stack cannot isolate that traffic. The default route is removed
- * once, and a second removal is ESRCH, which ends the loop in which a DHCP
- * client's script removes old default routes.
+ * The address classes are judged as Linux's inet_abc_len judges them: an
+ * address in 0/8 is taken with 255.0.0.0, one in 240/4 with a host mask, and
+ * a multicast address is EINVAL and changes nothing. A default route sets
+ * the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
+ * another route goes into the table and out again. The default route in
+ * force, added again, is EEXIST, as on Linux. A default route with no gateway
+ * is EEXIST too, since the kernel gives a route that names no interface the
+ * first one and keeps one route for a destination, mask and metric, and it
+ * does not remove the gateway the machine has. A route for an interface the
+ * machine lacks is ENODEV. The route to the machine's own subnet, added
+ * again, is EEXIST, and it is removed, as on Linux. The default route is
+ * removed once, and a second removal is ESRCH, which ends the loop in which a
+ * DHCP client's script removes old default routes.
  *
- * An address that is a network address under its classful mask and a host
- * under a wider one, 192.168.1.0, is accepted and not put in force until the
- * wider mask makes it a host; a mask under which it is a network address is
- * EINVAL, and one refused while the classful mask still stands leaves the
- * machine with no address. Last, the machine's address, mask and route are
- * put back, and the gateway answers once ARP has learned it again.
+ * An address that is the network address of its classful subnet,
+ * 192.168.1.0, is put in force with that mask at once, and keeps it under a
+ * wider mask and the classful one again, as on Linux; a noncontiguous mask is
+ * EINVAL and changes nothing. With no address, a mask is EADDRNOTAVAIL. Last,
+ * the machine's address, mask and route are put back, and the gateway
+ * answers once ARP has learned it again.
  */
 static void netif_main(void)
 {
@@ -1850,22 +1949,7 @@ static void netif_main(void)
     }
     report_held();
 
-    /* And the addresses no machine can have. */
-    set_name("eth0");
-    set_ifr_addr(0x00010203UL); /* 0.1.2.3, which names no host */
-    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != -EINVAL) {
-        fail("an address in 0/8 was taken");
-    }
-    set_name("eth0");
-    set_ifr_addr(0xF0010203UL); /* 240.1.2.3, reserved */
-    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != -EINVAL) {
-        fail("a reserved address was taken");
-    }
-    set_name("eth0");
-    set_ifr_addr(0xE0000001UL); /* 224.0.0.1, multicast */
-    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != -EINVAL) {
-        fail("a multicast address was taken");
-    }
+    address_classes(fd);
     report_held();
 
     /* Routes: the default, a gateway off the subnet, another network. */
@@ -1888,14 +1972,18 @@ static void netif_main(void)
         fail("a route to another network was not removed");
     }
     report_held();
-    /* A default route with no gateway is refused and removes nothing. */
+    /* The default route in force, added again, is EEXIST, as on Linux. So is
+     * a default route with no gateway, for the interface the kernel chooses,
+     * since the table keeps one route for a destination, mask and metric;
+     * the gateway stays. */
     set_route(0, OTHER_GW, 0);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
-        fail("the default route did not go back for the next case");
+    if (sys_ioctl(fd, SIOCADDRT, rt) != -EEXIST) {
+        fail("the default route in force was taken a second time");
     }
     set_route(0, 0, 0);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != -EINVAL) {
-        fail("a default route with no gateway was taken");
+    r = sys_ioctl(fd, SIOCADDRT, rt);
+    if (r != -EEXIST) {
+        fail_n("a default route with no gateway was not EEXIST", r);
     }
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
@@ -1920,14 +2008,16 @@ static void netif_main(void)
     }
     report_held();
 
-    /* The route to the machine's own subnet: added, and not removed. */
+    /* The route to the machine's own subnet: in force, and removed. */
     set_route(OTHER_IP & OTHER_MASK, 0, OTHER_MASK);
-    if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
-        fail("the route to this machine's own subnet was refused");
+    r = sys_ioctl(fd, SIOCADDRT, rt);
+    if (r != -EEXIST) {
+        fail_n("the route to this machine's own subnet, added again, was not EEXIST", r);
     }
     set_route(OTHER_IP & OTHER_MASK, 0, OTHER_MASK);
-    if (sys_ioctl(fd, SIOCDELRT, rt) != -EOPNOTSUPP) {
-        fail("removing the route this machine has by being on the subnet succeeded");
+    r = sys_ioctl(fd, SIOCDELRT, rt);
+    if (r != 0) {
+        fail_n("the route to this machine's own subnet was not removed", r);
     }
     report_held();
     set_route(0, 0, 0);
@@ -1941,51 +2031,19 @@ static void netif_main(void)
     }
     report_held();
 
-    /* 192.168.1.0: a network address until a wider mask makes it a host. */
-    set_name("eth0");
-    set_ifr_addr(0xC0A80100UL); /* 192.168.1.0 */
-    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
-        fail("an address that is a host only under a wider mask was refused");
-    }
-    set_name("eth0");
-    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0) {
-        fail("an address that is not yet a host was put in force");
-    }
-    set_name("eth0");
-    set_ifr_addr(0xFFFF0000UL);
-    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
-        fail("the wider mask that makes it a host was refused");
-    }
-    set_name("eth0");
-    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0xC0A80100UL) {
-        fail("the address did not survive the mask that justified it");
-    }
-    set_name("eth0");
-    set_ifr_addr(0xFFFFFF00UL);
-    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != -EINVAL) {
-        fail("a mask that would make this address a network address was taken");
-    }
+    network_address(fd);
     report_held();
 
-    /* A mask refused under the classful one leaves no address. */
+    /* With no address, a mask has nothing to apply to. */
     set_name("eth0");
     set_ifr_addr(0);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
         fail("the machine could not be unconfigured");
     }
     set_name("eth0");
-    set_ifr_addr(0xC0A80100UL); /* 192.168.1.0, waiting for a mask */
-    if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
-        fail("the waiting address was refused");
-    }
-    set_name("eth0");
     set_ifr_addr(0xFFFFFF00UL);
-    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != -EINVAL) {
-        fail("the mask that refuses that address was taken");
-    }
-    set_name("eth0");
-    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0) {
-        fail("a refused mask left the machine on a pair nobody judged");
+    if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != -EADDRNOTAVAIL) {
+        fail("a mask was taken by an interface with no address");
     }
     report_held();
 
