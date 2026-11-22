@@ -1610,6 +1610,15 @@ int vfs_mount_rdonly(const struct vfs_mount *m)
     return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
+/** vfs.c's: the type's unpin of `token`, nothing for NULL, which every
+ * description of the rows has. */
+void vfs_unpin(struct vfs_mount *mnt, void *token)
+{
+    if (token) {
+        mnt->type->ops->unpin(mnt, token);
+    }
+}
+
 /**
  * Run the rows of the functions above, then those of the description lock
  * and the namespace lock on one description:
