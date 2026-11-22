@@ -16,14 +16,11 @@
 #include "../mm/usercopy.h"
 #include "../virtio/vgpushm.h"
 
-/* The most bytes of MAP_BLOB's answer of a page list, in response pages,
- * and the runs it holds after its heads: 3836, so that a blob of 64 MiB
- * whose 16,384 pages the VM's allocator scattered is listed in 5 answers,
- * where the 124 runs of the 2 KiB after the command took 133 round trips
- * through the VM. Fifteen pages and the request fit the shared region's
- * chain of 16 descriptors (VGS_CHAIN_MAX) even when the pages are not one
- * block. The device writes as many runs as it has and the chain holds. */
-#define VGPU_MAP_ANSWER (15u * PAGE_SIZE)
+/* The runs MAP_BLOB's answer of a page list holds after its heads, in
+ * VGPU_MAP_ANSWER's response pages: 3836, so that a blob of 64 MiB whose
+ * 16,384 pages the VM's allocator scattered is listed in 5 answers, where
+ * the 124 runs of the 2 KiB after the command took 133 round trips through
+ * the VM. The device writes as many runs as it has and the chain holds. */
 #define VGPU_MAP_RUNS   ((VGPU_MAP_ANSWER - VGS_PAGES_OFF) / sizeof(struct vgs_run))
 /* The bytes of the answer the command's own page holds after the request,
  * room for 124 runs. */
