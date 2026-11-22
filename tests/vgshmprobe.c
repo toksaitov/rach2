@@ -105,14 +105,15 @@ static void fail(const char *what)
 /** Open the first render node whose driver is virtio_gpu with virgl. */
 static void find_gpu(void)
 {
-    char path[32] = "/dev/dri/renderD12x", name[32];
+    char path[32] = "/dev/dri/renderD1xx", name[32];
     struct drm_version v;
     struct drm_virtgpu_getparam p;
     int32_t value;
     int i;
 
     for (i = 0; i < 10; i++) {
-        path[18] = (char)('8' + i);
+        path[17] = (char)('0' + (28 + i) / 10);
+        path[18] = (char)('0' + (28 + i) % 10);
         gpu_fd = (int)syscall3(SYS_OPEN, (long)path, 2, 0);
         if (gpu_fd < 0) {
             continue;
@@ -382,19 +383,22 @@ static long now_us(void)
 #define PROBE_ENODEV 19
 
 /**
- * Make a render target, whose backing the VM gives, and print how long the
- * creation took and its error. With `held` 0 the VM's backend answers
- * nothing, stopped or killed while the creation waits, and the wait for the
- * backing's answer must end with ENODEV once the transport takes the device
- * for gone, by its heartbeat or by the VM's word that the backend has died.
- * With `held` 1 the backend holds the backing past the heartbeat's limit
- * while its process runs, and the creation must succeed, its answer waited
- * for; the probe's exit drops the resource's handle.
+ * Make a render target, whose backing the VM gives, and map it, and print
+ * how long the two took and the error of the creation, or else of the map.
+ * The creation asks for the backing without a wait, and the map takes the
+ * answer. With `held` 0 the VM's backend answers nothing, stopped or killed
+ * while the map waits, and that wait must end with ENODEV once the
+ * transport takes the device for gone, by its heartbeat or by the VM's word
+ * that the backend has died. With `held` 1 the backend holds the backing
+ * past the heartbeat's limit while its process runs, and the map must
+ * succeed, its answer waited for; the probe's exit drops the resource's
+ * handle.
  */
 static void wait_backing(int held)
 {
     struct drm_virtgpu_resource_create a;
     const char *tag = held ? "VGSHMPROBE HELD: " : "VGSHMPROBE LOST: ";
+    struct drm_virtgpu_map m;
     long r, t0;
     char text[12];
 
@@ -409,10 +413,16 @@ static void wait_backing(int held)
     probe_line(tag, "asking", 0);
     t0 = now_us();
     r = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a);
+    if (r == 0) {
+        zero(&m, sizeof(m));
+        m.handle = a.bo_handle;
+        r = call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m);
+    }
     probe_line(tag, "ms ", dec(text, (now_us() - t0) / 1000));
     probe_line(tag, "error ", dec(text, r));
     if (held ? r != 0 : r != -PROBE_ENODEV) {
-        fail(held ? "the creation did not succeed" : "the creation did not end with ENODEV");
+        fail(held ? "the creation and its map did not succeed"
+                  : "the creation and its map did not end with ENODEV");
     }
     probe_line("VGSHMPROBE OK", 0, 0);
 }
@@ -503,6 +513,172 @@ static void refuse(void)
     if (bad) {
         fail("a blob that cannot be mapped from the VM's pages was mapped");
     }
+    probe_line("VGSHMPROBE OK", 0, 0);
+}
+
+/** Make a resource of `target`, `format` and `width` by `height` texels of
+ * `bytes` with RESOURCE_CREATE: 0 with its handle in `*bo`, or the ioctl's
+ * error. */
+static long resource(uint32_t target, uint32_t format, uint32_t width, uint32_t height,
+                     uint32_t bytes, uint32_t *bo)
+{
+    struct drm_virtgpu_resource_create a;
+    long r;
+
+    zero(&a, sizeof(a));
+    a.target = target;
+    a.format = format;
+    a.bind = target == PIPE_BUFFER ? VIRGL_BIND_VERTEX_BUFFER : PIPE_BIND_RENDER_TARGET;
+    a.width = width;
+    a.height = height;
+    a.depth = a.array_size = 1;
+    a.size = bytes;
+    r = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a);
+    *bo = a.bo_handle;
+    return r;
+}
+
+/** Submit a virgl NOP naming the `n` buffers at `bos`: 0, or the error. */
+static long submit_nop(uint32_t *bos, uint32_t n)
+{
+    struct drm_virtgpu_execbuffer a;
+    uint32_t nop = 0;
+
+    zero(&a, sizeof(a));
+    a.command = (uint64_t)(uintptr_t)&nop;
+    a.size = 4;
+    a.bo_handles = (uint64_t)(uintptr_t)bos;
+    a.num_bo_handles = n;
+    a.fence_fd = -1;
+    return call(gpu_fd, DRM_IOCTL_VIRTGPU_EXECBUFFER, &a);
+}
+
+/** Wait for the device to be done with buffer `bo`: 0, or the error. */
+static long bo_wait(uint32_t bo)
+{
+    struct drm_virtgpu_3d_wait w;
+    long at;
+
+    w.handle = bo;
+    w.flags = 0;
+    while ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w)) == -PROBE_EBUSY) {
+    }
+    return at;
+}
+
+/** Copy the first `bytes` of buffer `bo` to the device, or with `from`
+ * back from it: 0, or the error. */
+static long bo_transfer(uint32_t bo, uint32_t bytes, int from)
+{
+    struct drm_virtgpu_3d_transfer t;
+
+    zero(&t, sizeof(t));
+    t.bo_handle = bo;
+    t.box.w = bytes;
+    t.box.h = 1;
+    t.box.d = 1;
+    return call(gpu_fd,
+                from ? DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST : DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST,
+                &t);
+}
+
+/* The buffers `defer` makes and holds before it names them all at once:
+ * more than the 128 DMA pages of backing asks the driver leaves untaken. */
+#define DEFER_HELD 300
+
+/**
+ * The resources whose backing of the VM's pages the driver asks for at the
+ * create and takes later: a buffer mapped at once after its create, whose
+ * bytes written through the map reach the device and come back; a buffer
+ * the VM cannot make, whose ask the device answers with an error, taken as
+ * a refusal, which the driver backs from the region's heap before the
+ * submission that names it; one of 1 GiB and a page, past the largest
+ * backing the VM gives and the heap's room, whose submission and map fail;
+ * DEFER_HELD buffers held untaken and then named by one submission; and
+ * buffers freed before any use.
+ */
+static void defer(void)
+{
+    struct drm_virtgpu_map m;
+    uint32_t bo, bos[DEFER_HELD], i, bytes = 65536;
+    uint8_t *p;
+    long r, at;
+    char text[12];
+
+    find_gpu();
+    if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, bytes, 1, bytes, &bo) != 0) {
+        fail("a buffer");
+    }
+    zero(&m, sizeof(m));
+    m.handle = bo;
+    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m) != 0 ||
+        sys_failed(at = probe_mmap(0, bytes, 3, 1, gpu_fd, (long)m.offset))) {
+        fail("map a buffer at once");
+    }
+    p = (uint8_t *)at;
+    for (i = 0; i < bytes; i++) {
+        p[i] = (uint8_t)(i * 7u + 3u);
+    }
+    if (bo_transfer(bo, bytes, 0) != 0 || bo_wait(bo) != 0) {
+        fail("send the buffer");
+    }
+    for (i = 0; i < bytes; i++) {
+        p[i] = 0;
+    }
+    if (bo_transfer(bo, bytes, 1) != 0 || bo_wait(bo) != 0) {
+        fail("read the buffer back");
+    }
+    for (i = 0; i < bytes && p[i] == (uint8_t)(i * 7u + 3u); i++) {
+    }
+    if (i != bytes) {
+        fail("the buffer read back is not what was written");
+    }
+    syscall2(SYS_MUNMAP, at, bytes);
+    bo_close(bo);
+    probe_line("VGSHMPROBE DEFER: mapped at once, written, sent and read back", 0, 0);
+    if (resource(PIPE_TEXTURE_2D, 0xffffu, 64, 64, bytes, &bo) != 0) {
+        fail("a resource of no format");
+    }
+    if ((r = submit_nop(&bo, 1)) != 0) {
+        probe_line("VGSHMPROBE DEFER: refused: submission error ", dec(text, r), 0);
+        fail("a refused backing was not backed from the heap");
+    }
+    bo_close(bo);
+    probe_line("VGSHMPROBE DEFER: refused, backed from the heap and submitted", 0, 0);
+    if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, (1u << 30) + 4096u, 1, (1u << 30) + 4096u,
+                 &bo) != 0) {
+        fail("a buffer of 1 GiB and a page");
+    }
+    r = submit_nop(&bo, 1);
+    zero(&m, sizeof(m));
+    m.handle = bo;
+    at = call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m);
+    probe_line("VGSHMPROBE DEFER: unbacked: submission error ", dec(text, r), 0);
+    probe_line("VGSHMPROBE DEFER: unbacked: map error ", dec(text, at), 0);
+    bo_close(bo);
+    if (r == 0 || at == 0) {
+        fail("a resource with no backing was used");
+    }
+    for (i = 0; i < DEFER_HELD; i++) {
+        if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, 4096, 1, 4096, &bos[i]) != 0) {
+            fail("a held buffer");
+        }
+    }
+    if ((r = submit_nop(bos, DEFER_HELD)) != 0) {
+        probe_line("VGSHMPROBE DEFER: held: submission error ", dec(text, r), 0);
+        fail("the held buffers were not submitted");
+    }
+    for (i = 0; i < DEFER_HELD; i++) {
+        bo_close(bos[i]);
+    }
+    probe_line("VGSHMPROBE DEFER: 300 held, then named by one submission", 0, 0);
+    for (i = 0; i < DEFER_HELD; i++) {
+        if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, 4096, 1, 4096, &bo) != 0) {
+            fail("a buffer freed unused");
+        }
+        bo_close(bo);
+    }
+    probe_line("VGSHMPROBE DEFER: 300 freed before any use", 0, 0);
     probe_line("VGSHMPROBE OK", 0, 0);
 }
 
@@ -631,8 +807,8 @@ static void measure(long bytes)
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
-/** `vgshmprobe draw [CRC]`, `pending N`, `lost`, `held`, `refuse` or
- * `measure BYTES`, entered with `sp` at argc. */
+/** `vgshmprobe draw [CRC]`, `pending N`, `lost`, `held`, `refuse`,
+ * `fdefer` or `measure BYTES`, entered with `sp` at argc. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -646,6 +822,10 @@ void probe_main(unsigned long *sp)
     }
     if (argc == 2 && argv[1][0] == 'r') {
         refuse();
+        syscall1(SYS_EXIT_GROUP, 0);
+    }
+    if (argc == 2 && argv[1][0] == 'f') {
+        defer();
         syscall1(SYS_EXIT_GROUP, 0);
     }
     if (argc == 2 && (argv[1][0] == 'l' || argv[1][0] == 'h')) {
@@ -663,7 +843,8 @@ void probe_main(unsigned long *sp)
         }
         syscall1(SYS_EXIT_GROUP, 0);
     }
-    probe_line("usage: vgshmprobe draw [CRC] | pending N | lost | held | refuse | measure BYTES", 0,
-               0);
+    probe_line("usage: vgshmprobe draw [CRC] | pending N | lost | held | refuse | fdefer | "
+               "measure BYTES",
+               0, 0);
     syscall1(SYS_EXIT_GROUP, 2);
 }
