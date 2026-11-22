@@ -1081,7 +1081,10 @@ static uint64_t vgpu_meas_n[VGPU_M_N];
 const char *const vgpu_meas_names[VGPU_M_N] = {
     "vgpu_m_objects",     "vgpu_m_pages",      "vgpu_m_peak_objects", "vgpu_m_peak_pages",
     "vgpu_m_creates_3d",  "vgpu_m_creates_2d", "vgpu_m_unrefs_sent",  "vgpu_m_unrefs_answered",
-    "vgpu_m_execbuffers", "vgpu_m_waits",      "vgpu_m_waits_nowait", "vgpu_m_waits_busy"};
+    "vgpu_m_execbuffers", "vgpu_m_waits",      "vgpu_m_waits_nowait", "vgpu_m_waits_busy",
+    "vgpu_m_room_sleeps", "vgpu_m_room_ns",    "vgpu_m_dma_sleeps",   "vgpu_m_dma_ns",
+    "vgpu_m_fill_sleeps", "vgpu_m_fill_ns",    "vgpu_m_reaps",        "vgpu_m_reap_ns",
+    "vgpu_m_reap_cmds",   "vgpu_m_held_peak"};
 
 void vgpu_meas_add(int which, int64_t delta)
 {
