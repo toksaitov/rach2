@@ -223,6 +223,11 @@ chown -R -h "$uid:$uid" "$base"
 say "private game: $(find "$base/game" -type l | wc -l) links, copies of$(
     echo "$copies" | sed "s|$owner/crysis/||g"), $need KiB reserved"
 
+# The umu container can write to the private /data. The test's output
+# directory on the host root is outside the container.
+CRYSIS_HUD_PARENT=$base/logs/hud
+export CRYSIS_HUD_PARENT
+
 if [ "$1" = shm ]; then
     # Let the VM runner own the handoff and its signal traps. The mounts
     # go away when the last process of this namespace ends.
