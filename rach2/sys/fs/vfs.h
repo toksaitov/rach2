@@ -669,6 +669,10 @@ struct vfs_mount {
      * the file after its name is removed, as a type's hold does for the
      * others (`bind_pin`); NULL otherwise. */
     void *bind_pin;
+    /* On a bind of the KRFFS root, nonzero once its unmount has drained its
+     * operations and let go of its root (`bind_let_go`); until then the
+     * bind counts among the root node's holders (`vfs_bind_holds`). */
+    int bind_released;
     /* The order the mounts were made in, which /proc/PID/mountinfo lists
      * them by, so that a mount over another's root comes after it. */
     uint32_t seq;
@@ -1600,8 +1604,9 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
 /*
  * The wrappers: each answers for an operation the type does not have, so
  * that each default is written once, and passes the base of a bind to the
- * type. Every wrapper but `vfs_release` answers -EIO once the mount's device
- * has gone, and each that writes answers -EROFS on a read-only mount, or a
+ * type. Every wrapper but `vfs_release`, `vfs_pin` and `vfs_unpin` answers
+ * -EIO once the mount's device has gone, and each that writes answers
+ * -EROFS on a read-only mount, or a
  * bind whose base is read-only, before it calls the type. `vfs_setattr`,
  * `vfs_fallocate` and the wrappers that remove, rename or link a name
  * enforce the immutable and append-only flags a type reports with
@@ -1689,6 +1694,11 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle);
 /** End an open `vfs_open_node` made, and count the release; it runs on a
  * mount whose device has gone too. */
 void vfs_release(struct vfs_mount *mnt, void *handle);
+/** The type's `pin` of `node`, into `*token`, which is NULL on a type
+ * without one: 0 or the type's error. */
+int vfs_pin(struct vfs_mount *mnt, void *node, void **token);
+/** The type's `unpin` of a `token` that `vfs_pin` gave; nothing for NULL. */
+void vfs_unpin(struct vfs_mount *mnt, void *token);
 /** The type's readdir into `ent`, zeroed first: 1, 0 at the end, -EINVAL
  * for a type without `readdir`, or the type's error. */
 int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent);

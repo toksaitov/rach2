@@ -561,8 +561,7 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
     if (!ofd) {
         return NULL;
     }
-    if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin &&
-        ref->mnt->type->ops->pin(ref->mnt, ref->node, &ofd->pin) != 0) {
+    if (!mnt_is_root(ref->mnt) && vfs_pin(ref->mnt, ref->node, &ofd->pin) != 0) {
         fd_ofd_unref(ofd);
         return NULL;
     }
@@ -9561,8 +9560,8 @@ static int32_t chdir_held(struct vfs_ref *ref, char *path, int via_fd)
     int32_t rc;
 
     rc = 0;
-    if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin) {
-        rc = ref->mnt->type->ops->pin(ref->mnt, ref->node, &pin);
+    if (!mnt_is_root(ref->mnt)) {
+        rc = vfs_pin(ref->mnt, ref->node, &pin);
     }
     vfs_walk_unlock(ref->mnt);
     if (rc != 0) {
@@ -9579,9 +9578,7 @@ static int32_t chdir_held(struct vfs_ref *ref, char *path, int via_fd)
     node = ref->node;
     if (!mnt_is_root(ref->mnt) || via_fd) {
         rc = chdir_mounted(ref, path, via_fd);
-        if (pin) {
-            ref->mnt->type->ops->unpin(ref->mnt, pin);
-        }
+        vfs_unpin(ref->mnt, pin);
         vfs_ref_release(ref);
         return rc;
     }
@@ -11348,8 +11345,8 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
         return fd;
     }
     entry = fd_slot(current_proc->fds, fd);
-    if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin) {
-        int rc = ref->mnt->type->ops->pin(ref->mnt, ref->node, &entry->ofd->pin);
+    if (!mnt_is_root(ref->mnt)) {
+        int rc = vfs_pin(ref->mnt, ref->node, &entry->ofd->pin);
 
         if (rc != 0) {
             fd_free(current_proc->fds, fd);

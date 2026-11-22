@@ -798,19 +798,49 @@ static int bind_rooted_at(struct vfs_mount *mnt, const void *node)
     return 0;
 }
 
+/* A bind's source from its lookup to the bind's publication or failure,
+ * taken under the lookup's namespace lock (`bind_hold_take`): on the KRFFS
+ * root a record on `bind_holds`, which counts among the node's holders
+ * (`vfs_bind_holds`) and which `vfs_repoint` moves with the node; on mounted
+ * KRFFS the type's pin, which follows the node itself; nothing on another
+ * type, whose walk reference holds the node. */
+struct bind_hold {
+    struct bind_hold *next;
+    void *node; /* the KRFFS root's node, where it is now; NULL off the list */
+    void *pin;  /* the pin of mounted KRFFS, or NULL */
+};
+
+/* What a bind knows of its source besides the place: the path the walk
+ * recorded (`vfs_resolve_real`) and the hold on it. */
+struct bind_source {
+    const char *real;
+    struct bind_hold hold;
+};
+
+/* The holds of the KRFFS root's bind sources, under `bind_holds_lock`. */
+static struct bind_hold *bind_holds;
+static struct spinlock bind_holds_lock = SPINLOCK_INIT;
+
 int vfs_bind_holds(const void *node)
 {
-    int i;
+    const struct bind_hold *h;
+    uint32_t flags;
+    int i, held = 0;
 
     for (i = 0; i < mount_slots; i++) {
         struct vfs_mount *m = mounts[i];
 
-        if (m && (m->state == VFS_ACTIVE || m->state == VFS_MOUNTING) && m->bind_of == mounts[0] &&
+        if (m && m->state != VFS_FREE && !m->bind_released && m->bind_of == mounts[0] &&
             m->type == &vfs_krffs_type && m->root == node) {
             return 1;
         }
     }
-    return 0;
+    flags = spin_lock_irqsave(&bind_holds_lock);
+    for (h = bind_holds; h && !held; h = h->next) {
+        held = h->node == node;
+    }
+    spin_unlock_irqrestore(&bind_holds_lock, flags);
+    return held;
 }
 
 int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
@@ -3140,6 +3170,17 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
             repoint_one(mounts[i], from, to);
         }
     }
+    if (mnt == mounts[0]) {
+        struct bind_hold *h;
+        uint32_t flags = spin_lock_irqsave(&bind_holds_lock);
+
+        for (h = bind_holds; h; h = h->next) {
+            if (h->node == from) {
+                h->node = to;
+            }
+        }
+        spin_unlock_irqrestore(&bind_holds_lock, flags);
+    }
 }
 
 /* The default-answer wrappers. */
@@ -3811,6 +3852,19 @@ void vfs_release(struct vfs_mount *mnt, void *handle)
         mnt->type->ops->release(mount_base(mnt), handle);
     }
     mount_count_add(&mnt->releases, 1);
+}
+
+int vfs_pin(struct vfs_mount *mnt, void *node, void **token)
+{
+    *token = NULL;
+    return mnt->type->ops->pin ? mnt->type->ops->pin(mount_base(mnt), node, token) : 0;
+}
+
+void vfs_unpin(struct vfs_mount *mnt, void *token)
+{
+    if (token) {
+        mnt->type->ops->unpin(mount_base(mnt), token);
+    }
 }
 
 int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
@@ -6891,49 +6945,136 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
 }
 
 /**
- * Pin the node `sref` holds for a bind's root, into `*pin`, on a type that
- * keeps a node only while it is open, mounted KRFFS, so that the file stays
- * while the bind shows it after its name is removed, as a type's hold keeps
- * it on the others; NULL on any other type. 0 or -ENOMEM.
+ * Take `h` on the bind source `ref` names, under the namespace lock of
+ * `ref->mnt` that the source's lookup returned with, so that no unlink or
+ * relocation comes between them: on the KRFFS root a record that counts
+ * among the node's holders, on mounted KRFFS a pin (`struct bind_hold`).
+ * The bind's publication takes it over (`bind_hold_publish`); otherwise
+ * `bind_hold_drop` gives it back. 0 or -ENOMEM.
  */
-static int bind_pin(const struct vfs_ref *sref, void **pin)
+static int bind_hold_take(struct bind_hold *h, const struct vfs_ref *ref)
 {
-    struct vfs_mount *base = mount_base(sref->mnt);
-    int rc;
+    struct vfs_mount *base = mount_base(ref->mnt);
+    uint32_t flags;
 
-    *pin = NULL;
-    if (base == mounts[0] || !sref->mnt->type->ops->pin) {
+    h->node = NULL;
+    h->pin = NULL;
+    if (base == mounts[0] && base->type == &vfs_krffs_type) {
+        flags = spin_lock_irqsave(&bind_holds_lock);
+        h->node = ref->node;
+        h->next = bind_holds;
+        bind_holds = h;
+        spin_unlock_irqrestore(&bind_holds_lock, flags);
         return 0;
     }
-    vfs_ns_lock(sref->mnt);
-    rc = sref->mnt->type->ops->pin(sref->mnt, sref->node, pin);
-    vfs_ns_unlock(sref->mnt);
-    return rc;
+    return base == mounts[0] ? 0 : vfs_pin(ref->mnt, ref->node, &h->pin);
 }
 
-/** Give back the pin `bind_pin` took, NULL being none. */
-static void bind_unpin(struct vfs_mount *mnt, void *pin)
+/** Take `h` off the list of the KRFFS root's bind sources, giving the node
+ * it held, or NULL for a hold that is not on it. */
+static void *bind_hold_unlist(struct bind_hold *h)
 {
-    if (pin) {
-        vfs_ns_lock(mnt);
-        mnt->type->ops->unpin(mnt, pin);
-        vfs_ns_unlock(mnt);
+    struct bind_hold **link;
+    uint32_t flags;
+    void *node;
+
+    flags = spin_lock_irqsave(&bind_holds_lock);
+    node = h->node;
+    if (node) {
+        for (link = &bind_holds; *link != h; link = &(*link)->next) {
+        }
+        *link = h->next;
+        h->node = NULL;
     }
+    spin_unlock_irqrestore(&bind_holds_lock, flags);
+    return node;
+}
+
+/**
+ * Give back a hold `bind_hold_take` took on a source of `mnt` that no bind
+ * took over, or nothing for one that a bind did: the pin, or the record, and
+ * then the node, when it lost its name meanwhile and nothing else holds it
+ * (`fs_bind_root_gone`), both under the namespace lock.
+ */
+static void bind_hold_drop(struct bind_hold *h, struct vfs_mount *mnt)
+{
+    void *node;
+
+    if (h->pin) {
+        vfs_ns_lock(mnt);
+        vfs_unpin(mnt, h->pin);
+        vfs_ns_unlock(mnt);
+        h->pin = NULL;
+    }
+    if (h->node) {
+        vfs_ns_lock(mounts[0]);
+        node = bind_hold_unlist(h);
+        fs_bind_root_gone(node);
+        vfs_ns_unlock(mounts[0]);
+    }
+}
+
+/** Release the source reference `sref` of a bind that failed, giving back
+ * first the hold `h` on it, NULL being none. */
+static void bind_fail(struct vfs_ref *sref, struct bind_hold *h)
+{
+    if (h) {
+        bind_hold_drop(h, sref->mnt);
+    }
+    vfs_ref_release(sref);
+}
+
+/**
+ * Make the bind `m`, placed and filled, active, with `h` on its source of
+ * `mnt` taken over under that namespace lock: its root is the node where it
+ * is now, which a relocation since the lookup moved, the pin becomes the
+ * bind's (`bind_pin`), and on the KRFFS root the bind counts among the
+ * node's holders as the record leaves the list, with no gap between them. A
+ * NULL `h`, or one that holds nothing, makes `m` active and nothing more.
+ * Until then `m` is VFS_MOUNTING, which no operation enters and no unmount
+ * takes.
+ */
+static void bind_hold_publish(struct bind_hold *h, struct vfs_mount *m, struct vfs_mount *mnt)
+{
+    void *node;
+
+    if (!h || (!h->node && !h->pin)) {
+        m->state = VFS_ACTIVE;
+        return;
+    }
+    vfs_ns_lock(mnt);
+    node = bind_hold_unlist(h);
+    if (node) {
+        m->root = node;
+    } else if (h->pin && mnt->type->ops->handle_node) {
+        m->root = mnt->type->ops->handle_node(h->pin);
+    }
+    m->bind_pin = h->pin;
+    h->pin = NULL;
+    m->state = VFS_ACTIVE;
+    vfs_ns_unlock(mnt);
 }
 
 /**
  * Let go of what the bind `m`, unmounted, kept its root by besides the
  * type's hold: its pin on mounted KRFFS, and on the KRFFS root, whose binds
- * count among a node's holders (`vfs_bind_holds`), the node itself when it
- * lost its name and nothing else holds it (`fs_bind_root_gone`).
+ * count among a node's holders (`vfs_bind_holds`) through their unmount's
+ * drain, that status, and then the node itself when it lost its name and
+ * nothing else holds it (`fs_bind_root_gone`), both under the root's
+ * namespace lock, as a release of a descriptor frees its orphan.
  */
 static void bind_let_go(struct vfs_mount *m)
 {
     if (m->bind_pin) {
-        bind_unpin(m, m->bind_pin);
+        vfs_ns_lock(m);
+        vfs_unpin(m, m->bind_pin);
+        vfs_ns_unlock(m);
         m->bind_pin = NULL;
     } else if (m->bind_of == mounts[0] && m->type == &vfs_krffs_type) {
+        vfs_ns_lock(mounts[0]);
+        m->bind_released = 1;
         fs_bind_root_gone(m->root);
+        vfs_ns_unlock(mounts[0]);
     }
 }
 
@@ -6941,19 +7082,23 @@ static void bind_let_go(struct vfs_mount *m)
  * Place a bind of the place `sref` holds over the one `tref` holds, `target`
  * naming it, both walks' references taken over: the mounts below the
  * source too with `rec`, but for `skip` and those below it (`bind_below`).
- * Once the bind is placed, the walks' counts of operations in progress are
- * given back; the hold on the covered node stays with the slot, or is put
- * back for a nameless bind, which covers no node (`target_check`), and the
- * hold on the source's node stays with the bind, as its root. On an error
- * both references are released. 0, or the errors `vfs_do_bind` lists.
+ * `src` has the source's real path and its hold on KRFFS (`bind_hold_take`),
+ * which the bind takes over once placed; NULL is neither. Once the bind is
+ * placed, the walks'
+ * counts of operations in progress are given back; the hold on the covered
+ * node stays with the slot, or is put back for a nameless bind, which covers
+ * no node (`target_check`), and the hold on the source's node stays with the
+ * bind, as its root. On an error both references are released and `h` is
+ * given back (`bind_fail`). 0, or the errors `vfs_do_bind` lists.
  */
 static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *target, int rec,
-                     const struct vfs_mount *skip, const char *sreal, const char *treal)
+                     const struct vfs_mount *skip, struct bind_source *src, const char *treal)
 {
+    struct bind_hold *h = src ? &src->hold : NULL;
+    const char *sreal = src ? src->real : NULL;
     struct vfs_mount *m;
     char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX], canon[VFS_COVERED_PATH_MAX];
     int dir = 1, nameless = 0, busy, gone;
-    void *pin = NULL;
     int rc;
 
     rc = bind_source(sref, full, inner, sreal, &dir);
@@ -6962,19 +7107,15 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     } else {
         vfs_ref_release(tref);
     }
-    if (rc == 0 && (rc = bind_pin(sref, &pin)) != 0) {
-        vfs_ref_release(tref);
-    }
     if (rc != 0) {
-        vfs_ref_release(sref);
+        bind_fail(sref, h);
         return rc;
     }
     gone = vfs_cover_lock(tref);
     if (!skip && (!vfs_mount_seen(sref->mnt) || !vfs_mount_seen(tref->mnt))) {
         vfs_node_unlock(tref);
         vfs_ref_release(tref);
-        bind_unpin(sref->mnt, pin);
-        vfs_ref_release(sref);
+        bind_fail(sref, h);
         return -EINVAL;
     }
     busy = nameless ? mount_named(tref->mnt, tref->mnt->root, path_last(canon)) != 0
@@ -6986,16 +7127,14 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     rc = m ? 0 : busy ? -EBUSY : gone ? gone : -ENOMEM;
     if (m) {
         bind_fill(m, sref->mnt, sref->node, inner);
-        m->bind_pin = pin;
-        m->state = VFS_ACTIVE;
     }
     vfs_node_unlock(tref);
     if (rc != 0) {
         vfs_ref_release(tref);
-        bind_unpin(sref->mnt, pin);
-        vfs_ref_release(sref);
+        bind_fail(sref, h);
         return rc;
     }
+    bind_hold_publish(h, m, sref->mnt);
     if (nameless) {
         node_put(tref->mnt, tref->node);
     }
@@ -7054,29 +7193,46 @@ static int table_path(char *path)
     return 0;
 }
 
-/** Resolve and hold a bind operand, with its path from the mount table.
+/**
+ * Resolve and hold a bind operand, with its path from the mount table.
  * A final proc descriptor link gives the held object (`procfs_fd_ref`).
- * 0 with `ref` to release, or an error with nothing held. */
+ * With `h`, for the source, the walk returns with its last mount's lock
+ * held, under which `h` is taken (`bind_hold_take`). 0 with `ref` to
+ * release and `h` to give back (`bind_fail`) or to a bind (`bind_refs`), or
+ * an error with nothing held.
+ */
 static int bind_resolve(const char *path, int flags, struct vfs_ref *ref, char *real,
-                        struct fd_kept **kept)
+                        struct fd_kept **kept, struct bind_hold *h)
 {
     struct walk_record record;
     struct fd_walk fw;
-    int rc;
+    int link, rc;
 
     record.real = real;
     record.entry = NULL;
     record.scope = NULL;
     record.dir = NULL;
     fw.path = real;
-    rc = resolve_fd_path(NULL, path, VFS_WALK_MOUNT | flags, ref, &record, &fw);
+    link = resolve_fd_path(NULL, path, VFS_WALK_MOUNT | (h ? VFS_WALK_LOCK : 0) | flags, ref,
+                           &record, &fw);
     *kept = fw.kept;
-    if (rc != 0) {
-        return rc < 0 ? rc : 0;
+    if (link < 0) {
+        return link;
+    }
+    if (h) {
+        rc = bind_hold_take(h, ref);
+        vfs_walk_unlock(ref->mnt);
+        if (rc != 0) {
+            vfs_ref_release(ref);
+            return rc;
+        }
+    }
+    if (link) {
+        return 0;
     }
     rc = table_path(real);
     if (rc != 0) {
-        vfs_ref_release(ref);
+        bind_fail(ref, h);
     }
     return rc;
 }
@@ -7085,20 +7241,23 @@ int vfs_do_bind(const char *source, const char *target, int rec)
 {
     struct vfs_ref sref, tref;
     struct fd_kept *skept = NULL, *tkept = NULL;
+    struct bind_source src;
     char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX];
     char *sreal = kmalloc(VFS_PATH_MAX), *treal = kmalloc(VFS_PATH_MAX);
     int dir, rc;
 
-    rc = sreal && treal ? bind_resolve(source, VFS_WALK_SOURCE, &sref, sreal, &skept) : -ENOMEM;
+    src.real = sreal;
+    rc = sreal && treal ? bind_resolve(source, VFS_WALK_SOURCE, &sref, sreal, &skept, &src.hold)
+                        : -ENOMEM;
     if (rc == 0) {
         rc = bind_source(&sref, full, inner, sreal, &dir);
         if (rc == 0) {
-            rc = bind_resolve(target, VFS_WALK_COVER, &tref, treal, &tkept);
+            rc = bind_resolve(target, VFS_WALK_COVER, &tref, treal, &tkept, NULL);
         }
         if (rc != 0) {
-            vfs_ref_release(&sref);
+            bind_fail(&sref, &src.hold);
         } else {
-            rc = bind_refs(&sref, &tref, target, rec, NULL, sreal, treal);
+            rc = bind_refs(&sref, &tref, target, rec, NULL, &src, treal);
         }
     }
     fd_unkeep(tkept);

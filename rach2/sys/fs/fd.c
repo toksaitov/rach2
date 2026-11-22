@@ -615,9 +615,7 @@ void fd_ofd_unref(struct open_file *ofd)
                 spin_unlock_irqrestore(&ofd_lock, flags);
                 ofd->fhandle = NULL;
                 ofd->pin = NULL;
-                if (pin) {
-                    mnt->type->ops->unpin(mnt, pin);
-                }
+                vfs_unpin(mnt, pin);
                 vfs_desc_close(mnt, node, handle);
             }
             if (ofd->dev_mnt) {
