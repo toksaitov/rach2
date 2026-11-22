@@ -8,7 +8,8 @@
  * reads its grid, and libtsm's default foreground, which is none of the
  * kernel console's colors, tells its screen from the console's. The login
  * and the lines after it are typed with QMP's input-send-event, since COM1's
- * bytes do not reach the console while term holds the keyboard in K_MEDIUMRAW;
+ * bytes do not reach the console while term holds the keyboard in K_MEDIUMRAW,
+ * each key once QEMU's trace of the PS/2 queue's reads shows room for it;
  * each line writes what it found to /dev/console, which COM1 shows, with
  * its own CR and LF, since term leaves the console in raw mode. Once term
  * is killed the kernel console is back, and its login is taken on COM1.
@@ -16,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "netcase.h"
 
@@ -97,16 +99,31 @@
 
 #define KILL_LINE "killall -KILL term"
 
-/* The characters typed at once. QEMU's PS/2 keyboard queues one byte for
- * each press or release, since the i8042 translates to set 1, and drops what
- * comes past 16 unread bytes; with Shift a character is four. */
+/* The bytes QEMU's PS/2 keyboard queues before it drops what comes after,
+ * without a word. It queues one byte for each press or release, since the
+ * i8042 translates to set 1, so a character is two bytes, four with Shift. */
+#define PS2_QUEUE 16
+
+/* The queue's bytes type leaves free, for bytes the guest asked for, such
+ * as a command's acknowledgement, whose reads the trace counts as typed
+ * bytes taken. */
+#define SLACK 4
+
+/* The characters type_line types before it waits for their echo. */
 #define CHUNK 3
+
+/* QEMU's trace event for each byte the i8042 takes off the PS/2 queue. */
+#define READ_EVENT "ps2_read_data"
 
 /* One attempt of a case. */
 struct tc {
     struct net_case u;
     char password[128];
     unsigned long width, height; /* the framebuffer the kernel named */
+    char trace[4096];            /* QEMU's log of READ_EVENT; "" until on */
+    long trace_at;               /* the log's bytes counted so far */
+    unsigned long sent;          /* the bytes typed since the trace began */
+    unsigned long taken;         /* the READ_EVENTs counted since then */
 };
 
 /* A screen dump: its size, its colors up to PICTURE_COLORS + 1, whether it
@@ -336,13 +353,95 @@ static void key_event(char *out, size_t size, const char *sep, const char *key, 
              sep, down ? "true" : "false", key);
 }
 
+/** Run the human monitor's `command` at boot `b`, which answers nothing
+ * when it succeeds; anything else fails the case. */
+static void hmp(struct tc *s, struct net_boot *b, const char *command)
+{
+    char args[4400];
+    char *reply = NULL;
+
+    if (!net_ok(&s->u))
+        return;
+    snprintf(args, sizeof(args), "{\"command-line\": \"%s\"}", command);
+    if (etude_qmp(b->m, "human-monitor-command", args, &reply) != ETUDE_OK || reply == NULL ||
+        (strstr(reply, "\"return\": \"\"") == NULL && strstr(reply, "\"return\":\"\"") == NULL))
+        net_fail(&s->u, "QMP's human-monitor-command %.40s: %.100s", command,
+                 reply != NULL ? reply : "");
+    free(reply);
+}
+
+/** Log QEMU's READ_EVENT at boot `b` into evidence `ps2-reads.trace`. Called
+ * before the first key is typed, while the PS/2 queue is empty. */
+static void trace_on(struct tc *s, struct net_boot *b)
+{
+    char command[4200];
+
+    if (net_path(&s->u, "ps2-reads.trace", s->trace, sizeof(s->trace)) == NULL)
+        return;
+    snprintf(command, sizeof(command), "logfile %s", s->trace);
+    hmp(s, b, command);
+    hmp(s, b, "trace-event " READ_EVENT " on");
+}
+
+/** Add to s->taken the READ_EVENTs of the trace's lines that QEMU has
+ * written whole since the last count, up to s->sent, since reads past the
+ * bytes typed took bytes the guest asked for. */
+static void count_reads(struct tc *s)
+{
+    char line[512];
+    size_t n;
+    FILE *f = fopen(s->trace, "r");
+
+    if (f == NULL)
+        return;
+    if (fseek(f, s->trace_at, SEEK_SET) == 0) {
+        while (fgets(line, sizeof(line), f) != NULL) {
+            n = strlen(line);
+            if (n == 0 || line[n - 1] != '\n')
+                break;
+            s->trace_at += (long)n;
+            if (strstr(line, READ_EVENT) != NULL)
+                s->taken++;
+        }
+    }
+    fclose(f);
+    if (s->taken > s->sent)
+        s->taken = s->sent;
+}
+
+/**
+ * Wait until the PS/2 queue of boot `b` has room for `need` more bytes and
+ * SLACK: of the s->sent bytes typed, the i8042 has taken all but
+ * PS2_QUEUE - SLACK - `need` off the queue, as QEMU's trace counts them.
+ */
+static void room(struct tc *s, struct net_boot *b, unsigned long need)
+{
+    struct timespec pause;
+    char *reply = NULL;
+
+    pause.tv_sec = 0;
+    pause.tv_nsec = 10000000;
+    count_reads(s);
+    while (net_ok(&s->u) && s->sent + need + SLACK > s->taken + PS2_QUEUE) {
+        if (etude_qmp(b->m, "query-status", NULL, &reply) != ETUDE_OK)
+            net_fail(&s->u, "QMP's query-status was not answered: %s", reply != NULL ? reply : "");
+        free(reply);
+        reply = NULL;
+        /* interval: poll QEMU's trace of the PS/2 queue's reads every 10 ms */
+        nanosleep(&pause, NULL);
+        count_reads(s);
+    }
+}
+
 /**
  * Type `text` at boot `b` with QMP's input-send-event, one command for each
  * character: the key's press and release, inside Shift's when the character
- * needs it. The command puts the events into the keyboard's queue at once.
- * send-key releases a key from a timer of QEMU's main loop instead, which a
- * stall of that loop under host load delays past the kernel's repeat delay
- * of 250 ms, and the kernel then repeats the key.
+ * needs it, once the PS/2 queue has room for their bytes. The command puts
+ * the events into the keyboard's queue at once. send-key releases a key from
+ * a timer of QEMU's main loop instead, which a stall of that loop under host
+ * load delays past the kernel's repeat delay of 250 ms, and the kernel then
+ * repeats the key. QEMU answers a command once its bytes are queued, not
+ * once the guest has read them, so only the trace tells when there is room.
  */
 static void type(struct tc *s, struct net_boot *b, const char *text)
 {
@@ -350,11 +449,16 @@ static void type(struct tc *s, struct net_boot *b, const char *text)
     char *reply = NULL;
     int shift;
 
+    if (s->trace[0] == '\0')
+        trace_on(s, b);
     for (; *text != '\0' && net_ok(&s->u); text++) {
         if (!qcode(*text, key, sizeof(key), &shift)) {
             net_fail(&s->u, "no key types the character %d", *text);
             return;
         }
+        room(s, b, shift ? 4 : 2);
+        if (!net_ok(&s->u))
+            return;
         key_event(ev[0], sizeof(ev[0]), "", "shift", 1);
         key_event(ev[1], sizeof(ev[1]), shift ? ", " : "", key, 1);
         key_event(ev[2], sizeof(ev[2]), ", ", key, 0);
@@ -366,6 +470,7 @@ static void type(struct tc *s, struct net_boot *b, const char *text)
                      reply != NULL ? reply : "");
         free(reply);
         reply = NULL;
+        s->sent += shift ? 4 : 2;
     }
 }
 
@@ -384,8 +489,9 @@ static void squeeze(const char *text, char *out, size_t size)
 /**
  * Type `line` and Enter at the shell on term's screen, CHUNK characters at a
  * time, each chunk once term's grid shows the prompt's `#` and the ones
- * before, so that the keyboard's queue has room for it. A failure names the
- * end of the grid's text, which shows a key typed twice or one lost.
+ * before. A failure names the end of the grid's text first, which shows a
+ * key typed twice or one lost, and then the end of what was typed, since
+ * the case keeps only the first 199 characters of its reason.
  */
 static void type_line(struct tc *s, struct net_boot *b, const char *line)
 {
@@ -420,8 +526,9 @@ static void type_line(struct tc *s, struct net_boot *b, const char *line)
         }
         n = strlen(seen);
         if (!echoed && net_ok(&s->u))
-            net_fail(&s->u, "term's grid never showed the typed %s; without spaces it ended %s",
-                     typed + 1, seen + (n > 60 ? n - 60 : 0));
+            net_fail(&s->u,
+                     "term's grid, without spaces, ended %s and never showed the typed ...%s",
+                     seen + (n > 60 ? n - 60 : 0), typed + (done > 40 ? done + 1 - 40 : 1));
     }
     type(s, b, "\r");
 }
