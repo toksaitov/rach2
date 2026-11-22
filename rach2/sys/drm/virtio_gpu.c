@@ -1321,27 +1321,29 @@ static int cmd_await(struct virtio_gpu_cmd *cmd, int64_t deadline)
 }
 
 /**
- * Start `cmd`, wait for its answer, copy up to `out_len` bytes of the
- * answer to `out` (NULL for none) and free it. The wait sleeps until an
- * answer comes (cmd_sleep), polling the queue every 10 ms in case the
- * device has no interrupt, or spins before the scheduler runs. Returns
- * the answer's error (`answer_error`), or -ETIMEDOUT when none came by
- * `deadline` of dma_fence_now's clock, or in five seconds before the
- * scheduler runs; the command is then left to the reaper, for the answer
- * that may yet come.
+ * Wait for the answer to `cmd`, started for a waiter (`cmd_start`), copy
+ * up to `out_len` bytes of the answer to `out` (NULL for none) and free it.
+ * The wait sleeps until an answer comes (cmd_sleep), polling the queue
+ * every 10 ms in case the device has no interrupt, or spins before the
+ * scheduler runs. Returns the answer's error (`answer_error`), or
+ * -ETIMEDOUT when none came by `deadline` of dma_fence_now's clock, or in
+ * five seconds before the scheduler runs; the command is then left to the
+ * reaper, for the answer that may yet come.
  * With VGPU_NEVER a sleeping wait ends with the answer, with the device's
  * death, which completes every command, or at SIGKILL, as Linux's waits
  * for the device's fences in an ioctl end at a signal, with -EINTR and the
- * command left to the reaper as on -ETIMEDOUT: a device that has stopped
- * answering would otherwise hold the caller in the state D for ever, which
- * no signal ends. A command without a fence is waited for as one with
- * one, once vgpu_wake is set up (`cmd_sleep`). A command with response
- * pages stays with the caller after completion. With `got`, an answer
- * shorter than `out_len` is copied as it is and its length put in `*got`;
- * without, it is -EIO. May sleep.
+ * command left to the reaper as on -ETIMEDOUT, or with `keep` still the
+ * caller's to take again: a device that has stopped answering would
+ * otherwise hold the caller in the state D for ever, which no signal ends.
+ * A command without a fence is waited for as one with one, once vgpu_wake
+ * is set up (`cmd_sleep`). A command with response pages stays with the
+ * caller after completion. With `got`, an answer shorter than `out_len` is
+ * copied as it is and its length put in `*got`; without, it is -EIO. The
+ * profiling build records the wait in the events as the command's `event`
+ * (`vgpu_cmd_event`), or as its type. May sleep.
  */
-static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len, uint32_t *got,
-                        int64_t deadline)
+static int32_t cmd_take(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len, uint32_t *got,
+                        int64_t deadline, int keep)
 {
     struct virtio_gpu_device *vg = cmd->vg;
     uint32_t flags, type = cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type;
@@ -1349,15 +1351,9 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
     int killed;
 #ifdef RACH2_VGPU_PROFILE
     struct vgpu_profile_row *row;
-    int64_t start;
+    int64_t start = rtc_monotonic_ns();
 #endif
 
-    cmd->waited = 1;
-    cmd->sleepable = 1;
-    cmd_submit(cmd);
-#ifdef RACH2_VGPU_PROFILE
-    start = rtc_monotonic_ns();
-#endif
     killed = cmd_await(cmd, deadline);
     flags = spin_lock_irqsave(&vg->lock);
 #ifdef RACH2_VGPU_PROFILE
@@ -1368,7 +1364,7 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
         row->waits++;
         row->wait_ns += end - start;
         event_put(
-            vg, type, start, end,
+            vg, cmd->event ? cmd->event : type, start, end,
             type == VGS_CMD_BACKING
                 ? (uint32_t)(((const struct vgs_backing
                                    *)(const void *)(cmd->page + sizeof(struct virtio_gpu_ctrl_hdr)))
@@ -1378,7 +1374,9 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
     }
 #endif
     if (!cmd->done) {
-        cmd->waited = 0;
+        if (!keep || !killed) {
+            cmd->waited = 0;
+        }
         spin_unlock_irqrestore(&vg->lock, flags);
         if (killed) {
             klog(KLOG_WARN, "virtio_gpu", "command 0x%x: no answer before SIGKILL", type);
@@ -1410,6 +1408,23 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
     return rc;
 }
 
+/** Start `cmd` for a waiter, who takes its answer and frees it
+ * (`cmd_take`); the reaper leaves it alone. */
+static void cmd_start(struct virtio_gpu_cmd *cmd)
+{
+    cmd->waited = 1;
+    cmd->sleepable = 1;
+    cmd_submit(cmd);
+}
+
+/** Start `cmd` and take its answer (`cmd_take`). May sleep. */
+static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len, uint32_t *got,
+                        int64_t deadline)
+{
+    cmd_start(cmd);
+    return cmd_take(cmd, out, out_len, got, deadline, 0);
+}
+
 int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len)
 {
     return cmd_wait(cmd, out, out_len, NULL, dma_fence_now() + VGPU_WAIT_NS);
@@ -1419,6 +1434,41 @@ int32_t vgpu_cmd_send_wait_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t o
                                uint32_t *got)
 {
     return cmd_wait(cmd, out, out_len, got, VGPU_NEVER);
+}
+
+void vgpu_cmd_send_waited(struct virtio_gpu_cmd *cmd)
+{
+    cmd_start(cmd);
+}
+
+int32_t vgpu_cmd_take_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len, uint32_t *got)
+{
+    return cmd_take(cmd, out, out_len, got, VGPU_NEVER, 1);
+}
+
+void vgpu_cmd_event(struct virtio_gpu_cmd *cmd, uint32_t event)
+{
+#ifdef RACH2_VGPU_PROFILE
+    cmd->event = event;
+#else
+    (void)cmd;
+    (void)event;
+#endif
+}
+
+void vgpu_cmd_give_up(struct virtio_gpu_cmd *cmd)
+{
+    struct virtio_gpu_device *vg = cmd->vg;
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int done = cmd->done;
+
+    if (!done) {
+        cmd->waited = 0;
+    }
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (done) {
+        vgpu_cmd_free(cmd);
+    }
 }
 
 /** Start `cmd` with nobody waiting; the reaper runs `complete`, if any, with
@@ -1824,18 +1874,32 @@ void vgpu_res_id_put(struct virtio_gpu_device *vg, uint32_t id)
  * Buffer objects
  */
 
+/** Whether `bo` has a deferred backing not yet taken (`back_ask`), whose
+ * pages it has not got: a fault or an importer finds none, since the
+ * mmap and the export take it first (`vgpu_backing_settle`). */
+static int obj_unbacked(struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_device *vg = to_vg(bo->shmem.base.dev);
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int pending = bo->back_ask != NULL;
+
+    spin_unlock_irqrestore(&vg->lock, flags);
+    return pending;
+}
+
 /** A mapping's page of an object: its frame, given on the first touch;
- * none past its end. An unplugged device's objects keep their frames until
- * each is freed, and a mapping that the unplug revoked takes its page again
- * here at the next touch, as Linux's shmem helper serves a fault without
- * asking for the device: a program that drew through a GPU that was reset
- * goes on, its ioctls failing with ENODEV, where SIGBUS would end it. */
+ * none past its end, or before a deferred backing is taken. An unplugged
+ * device's objects keep their frames until each is freed, and a mapping
+ * that the unplug revoked takes its page again here at the next touch, as
+ * Linux's shmem helper serves a fault without asking for the device: a
+ * program that drew through a GPU that was reset goes on, its ioctls
+ * failing with ENODEV, where SIGBUS would end it. */
 static int obj_vm_page(void *obj, uint32_t pgoff, uintptr_t *phys)
 {
     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)obj;
     uintptr_t p;
 
-    p = drm_gem_shmem_page(&bo->shmem, pgoff);
+    p = obj_unbacked(bo) ? 0 : drm_gem_shmem_page(&bo->shmem, pgoff);
     if (!p) {
         return -1;
     }
@@ -1852,17 +1916,33 @@ static void obj_vm_put(void *obj)
 static const struct vm_device_ops vgpu_vm_ops = {obj_vm_page, obj_vm_put, NULL, 0};
 
 /** The `mmap` of an object: a device region over its frames, cached, as
- * Linux maps virtio-gpu's shmem objects. */
+ * Linux maps virtio-gpu's shmem objects, once a deferred backing is taken
+ * (`vgpu_backing_settle`), which VIRTGPU_MAP has done before an mmap of
+ * its offset; that take's error refuses the mapping. */
 static int32_t obj_mmap(struct drm_gem_object *obj, vma_t *vma)
 {
-    return vm_device_map(vma, &vgpu_vm_ops, obj, 0u);
+    int32_t rc =
+        vgpu_backing_settle(to_vg(obj->dev), (struct virtio_gpu_object *)obj, VGPU_SETTLE_MAP);
+
+    return rc ? rc : vm_device_map(vma, &vgpu_vm_ops, obj, 0u);
 }
 
 /** An object's frame for a PRIME importer, served after an unplug too, as
- * `obj_vm_page` serves the object's own mappings. */
+ * `obj_vm_page` serves the object's own mappings; none before a deferred
+ * backing is taken, which the export does first (`obj_export`). */
 static uintptr_t obj_page(struct drm_gem_object *obj, uint32_t pgoff)
 {
-    return drm_gem_shmem_page(&((struct virtio_gpu_object *)obj)->shmem, pgoff);
+    struct virtio_gpu_object *bo = (struct virtio_gpu_object *)obj;
+
+    return obj_unbacked(bo) ? 0 : drm_gem_shmem_page(&bo->shmem, pgoff);
+}
+
+/** The `export` of an object: take a deferred backing (`vgpu_backing_settle`)
+ * before PRIME exports it, so that an importer reaches its final pages. */
+static int32_t obj_export(struct drm_gem_object *obj)
+{
+    return vgpu_backing_settle(to_vg(obj->dev), (struct virtio_gpu_object *)obj,
+                               VGPU_SETTLE_EXPORT);
 }
 
 /** Free an object's frames, after giving back to the transport what it
@@ -1920,6 +2000,26 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
     drm_dev_put(dev);
 }
 
+/** Let go of `bo`'s deferred backing not yet taken, at its free: the ask
+ * goes to the reaper, and the UNREF that follows it on the queue has the
+ * device let the backing go. No taker can be under way, since each holds
+ * a reference. Never sleeps. */
+static void backing_forget(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_cmd *ask;
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+
+    ask = bo->back_ask;
+    bo->back_ask = NULL;
+    if (ask) {
+        vg->back_held -= ask->held;
+    }
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (ask) {
+        vgpu_cmd_give_up(ask);
+    }
+}
+
 /**
  * The `free` of an object, after its last reference: UNMAP_BLOB for a blob
  * placed in host-visible memory, then RESOURCE_UNREF, which also detaches
@@ -1947,6 +2047,7 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_cmd *cmd;
 
     (void)vgpu_room(vg, 0);
+    backing_forget(vg, bo);
     vgpu_resource_forget(vg, bo);
     /* The device's pages go before the UNMAP_BLOB or UNREF that lets it
      * unpin them, since the VM may give a page it unpinned to the next
@@ -2016,8 +2117,8 @@ int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file)
 }
 
 static const struct drm_gem_object_funcs vgpu_obj_funcs = {
-    vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL, vgpu_obj_open, vgpu_obj_close,
-    NULL};
+    vgpu_obj_free, obj_mmap, NULL,          NULL,           obj_page,
+    NULL,          NULL,     vgpu_obj_open, vgpu_obj_close, obj_export};
 
 /**
  * Make `bo`, zeroed, an object of `vg` of `size` bytes, a whole number of
@@ -2093,18 +2194,25 @@ static int vm_backing(struct virtio_gpu_device *vg)
 /**
  * Queue `create`, the RESOURCE_CREATE of `bo`'s resource `id`, and back
  * the resource: with the device's own pages where the caller may have them
- * (`vm_backing`, `vgpu_backing_pages`), waited for, else, or when the
- * device refuses them, with an ATTACH_BACKING of the object's pages, queued
- * without a wait, its fence put in the object's reservation with `fenced`.
- * On an error `create` is freed if it was not sent; once it was,
- * `bo->res_id` is set, so that the object's free sends its UNREF. 0, or
- * the error. May sleep.
+ * (`vm_backing`, `vgpu_backing_pages`), else, or when the device refuses
+ * them, with an ATTACH_BACKING of the object's pages, queued without a
+ * wait, its fence put in the object's reservation with `fenced`. With
+ * `defer`, the ask for the device's pages is started and not waited for
+ * (`vgpu_backing_ask`), as Linux's virtio_gpu_object_create queues its
+ * create and attach and returns: the object takes the answer, or attaches
+ * pages on a refusal, before the first access to its pages or command that
+ * names it (`vgpu_backing_settle`). The asks deferred hold at most half of
+ * VGPU_HELD_MAX DMA pages, which no reap frees, so that `vgpu_room` always
+ * finds room; past that the create waits for its answer. On an error
+ * `create` is freed if it was not sent; once it was, `bo->res_id` is set,
+ * so that the object's free sends its UNREF. 0, or the error. May sleep.
  */
 static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint32_t id,
-                        struct virtio_gpu_cmd *create, int fenced)
+                        struct virtio_gpu_cmd *create, int fenced, int defer)
 {
     struct virtio_gpu_cmd *attach = NULL;
     int32_t err = 0;
+    uint32_t flags;
 
     if (!vm_backing(vg)) {
         attach = vgpu_attach_cmd(vg, bo, id, &err);
@@ -2117,8 +2225,17 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
      * the create, and any command on the object follows both. */
     vgpu_cmd_send(create, NULL, NULL);
     bo->res_id = id;
+    if (!attach && defer && vg->back_held < VGPU_HELD_MAX / 2) {
+        err = vgpu_backing_ask(vg, bo, &bo->back_ask);
+        if (err == 0) {
+            flags = spin_lock_irqsave(&vg->lock);
+            vg->back_held += bo->back_ask->held;
+            spin_unlock_irqrestore(&vg->lock, flags);
+        }
+        return err;
+    }
     if (!attach) {
-        err = vgpu_backing_pages(vg, bo);
+        err = vgpu_backing_pages(vg, bo, NULL, 0);
         if (err != -EREMOTEIO) {
             return err;
         }
@@ -2135,19 +2252,119 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     return err;
 }
 
+/** Whether `arg`, an object, has no take of its deferred backing under way;
+ * a wait's condition. */
+static int back_untaken(void *arg)
+{
+    struct virtio_gpu_object *bo = (struct virtio_gpu_object *)arg;
+    struct virtio_gpu_device *vg = to_vg(bo->shmem.base.dev);
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int free = !bo->back_taking;
+
+    spin_unlock_irqrestore(&vg->lock, flags);
+    return free;
+}
+
+/**
+ * Take `bo`'s deferred backing, as vgpu_backing_settle says, with the big
+ * lock held. The ask's answer may have come long since, and is then read
+ * without a sleep. The take is marked under the device's lock, so that a
+ * second taker, which a sleep of the first lets in, waits for it. A refusal
+ * attaches the transport's pages with no fence in the reservation: every
+ * command that names the resource is queued after the attach, and the
+ * processor reaches pages the attach only names to the device. May sleep.
+ */
+static int32_t backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                              uint32_t site)
+{
+    struct virtio_gpu_cmd *ask, *attach;
+    uint32_t flags, held;
+    int32_t rc;
+    int mine;
+
+    for (;;) {
+        flags = spin_lock_irqsave(&vg->lock);
+        ask = bo->back_ask;
+        rc = bo->back_err;
+        mine = ask && !bo->back_taking;
+        if (mine) {
+            bo->back_taking = 1;
+        }
+        spin_unlock_irqrestore(&vg->lock, flags);
+        if (!ask || mine) {
+            break;
+        }
+        if (vgpu_killed()) {
+            return -EINTR;
+        }
+        vgpu_sleep(back_untaken, bo, dma_fence_now() + VGPU_POLL_NS, "virtio_gpu_backing");
+    }
+    if (!ask) {
+        return rc;
+    }
+    held = ask->held;
+    rc = vgpu_backing_pages(vg, bo, &ask, VGPU_EVENT_SETTLE + site);
+    if (rc == -EREMOTEIO) {
+        attach = vgpu_attach_cmd(vg, bo, bo->res_id, &rc);
+        if (attach) {
+            vgpu_cmd_send(attach, NULL, NULL);
+        }
+    }
+    flags = spin_lock_irqsave(&vg->lock);
+    bo->back_ask = ask;
+    if (!ask) {
+        vg->back_held -= held;
+        if (rc != 0) {
+            bo->back_err = rc == -EINTR ? -EIO : rc;
+        }
+    }
+    bo->back_taking = 0;
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (vgpu_wake_ready) {
+        wq_wake_all(&vgpu_wake);
+    }
+    return rc;
+}
+
+int32_t vgpu_backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                            uint32_t site)
+{
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int pending = bo->back_ask != NULL;
+    int32_t rc = bo->back_err;
+    int big;
+
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (!pending) {
+        return rc;
+    }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    rc = backing_settle(vg, bo, site);
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
 /**
  * A new object of `size` bytes with a 2D resource of `format` and
  * `width` by `height` pixels over its pages, or with `virgl` the 3D
  * resource `params` describes. The RESOURCE_CREATE and the ATTACH_BACKING
  * of pages given now are queued without a wait, as Linux's
  * virtio_gpu_object_create; on a transport whose device backs resources
- * with its own pages the create is followed by the asks for them, waited
- * for, and the object's pages are the device's (`obj_back`). With
+ * with its own pages the create is followed by the asks for them, and the
+ * object's pages are the device's (`obj_back`): waited for, but for a 3D
+ * resource of RESOURCE_CREATE, whose first ask is taken later
+ * (`vgpu_backing_settle`). With
  * `fenced`, as RESOURCE_CREATE asks for 2D and 3D alike
  * (virtgpu_ioctl.c:172-175 and virtgpu_object.c:226-233 in Linux
  * 6.12.115), the attach's fence is put in the object's reservation, so
  * that a wait on the object waits for both, however slow the host; the
- * device's backing, answered before the call returns, needs none. A dumb
+ * device's backing needs none, being answered before the call returns or
+ * taken before any command that names the object is queued. A dumb
  * buffer's has none, as Linux's virtio_gpu_gem_create passes none
  * (virtgpu_gem.c:42), since a commit's implicit wait for it would rest on
  * a reap of the queue, which over the shared region the waiting thread may
@@ -2191,7 +2408,7 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
         return NULL;
     }
     create = create_cmd(vg, bo, id, virgl ? params : NULL);
-    *err = create ? obj_back(vg, bo, id, create, fenced) : -ENOMEM;
+    *err = create ? obj_back(vg, bo, id, create, fenced, virgl && fenced) : -ENOMEM;
     if (*err != 0) {
         if (!bo->res_id) {
             vgpu_res_id_put(vg, id);
@@ -2724,19 +2941,21 @@ static void vgpu_worker_start(void)
  * The driver's ioctls
  */
 
-/** MAP: the mmap offset of a handle's object, made the first time. ENOENT
- * for no such handle. */
+/** MAP: the mmap offset of a handle's object, made the first time, once a
+ * deferred backing is taken, since a program maps the offset next
+ * (`vgpu_backing_settle`). ENOENT for no such handle, or that take's
+ * error. */
 static int32_t vgpu_map_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_virtgpu_map *args = (struct drm_virtgpu_map *)data;
     struct drm_gem_object *obj = drm_gem_object_lookup(file, args->handle);
     int32_t rc;
 
-    (void)dev;
     if (!obj) {
         return -ENOENT;
     }
-    rc = drm_gem_create_mmap_offset(obj);
+    rc = vgpu_bo(obj) ? vgpu_backing_settle(to_vg(dev), vgpu_bo(obj), VGPU_SETTLE_MAP) : 0;
+    rc = rc ? rc : drm_gem_create_mmap_offset(obj);
     if (rc == 0) {
         args->offset = obj->mmap_offset;
     }

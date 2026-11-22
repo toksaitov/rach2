@@ -538,15 +538,16 @@ struct vgpu_profile_row {
 
 /* The events `virtio_gpu_events` lists in time order, the newest
  * VGPU_EVENTS kept: each SET_SCANOUT sent, which marks a displayed frame,
- * each synchronous command wait, and each VIRTGPU_WAIT that slept. */
+ * each synchronous command wait, each take of a deferred backing, waited
+ * or not, and each VIRTGPU_WAIT that slept. */
 #define VGPU_EVENTS     8192
 #define VGPU_EVENT_WAIT 0x10000u /* `type` of a VIRTGPU_WAIT ioctl */
 struct vgpu_event {
     int64_t ns;      /* monotonic, at the event's start */
     uint32_t dur_us; /* microseconds it took, 0 for a command sent */
-    uint32_t type;   /* the command's type, or VGPU_EVENT_WAIT */
+    uint32_t type;   /* the command's type, VGPU_EVENT_WAIT or _SETTLE */
     uint32_t tid;    /* the thread it ran on */
-    uint32_t kib;    /* a VGS_CMD_BACKING's size in KiB, else 0 */
+    uint32_t kib;    /* a backing's size in KiB, else 0 */
 };
 
 /** Record an event of `type` that began at monotonic `start` and ended now,
@@ -590,6 +591,7 @@ struct virtio_gpu_cmd {
     int64_t published_ns;   /* the command went on the virtqueue */
     uint64_t copy_ns;       /* copying the user payload, including faults */
     uint32_t payload_bytes; /* bytes copied from the user's command stream */
+    uint32_t event;         /* the events' type of its waits, 0 for its own */
 #endif
     int prepared;     /* the fence has its number and one reference */
     int queued;       /* started: its fence is live */
@@ -710,6 +712,9 @@ struct virtio_gpu_device {
     /* DMA pages of the commands started and not yet freed, answered or
      * not, which `vgpu_room` bounds. */
     uint32_t held;
+    /* Of `held`, those of the objects' backing asks not yet taken
+     * (`back_ask`), which no reap frees; under `lock`. */
+    uint32_t back_held;
     int reaping; /* frees of `vgpu_reap` under way, which never wait; the
                     big lock's, which a reap keeps */
     /* Objects whose last reference an answer let go of, which the worker
@@ -803,6 +808,17 @@ struct virtio_gpu_object {
     uintptr_t vmap;
     int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
     uint8_t uuid[16];
+    /* A backing of the device's pages asked for at the create and not yet
+     * taken (`vgpu_backing_settle`): its first VGS_CMD_BACKING, started for
+     * a waiter, whose answer is the object's to read; NULL once taken or
+     * for none. `back_taking` marks a take under way, which another taker
+     * waits for; `back_err` is the error of a take that failed other than
+     * by refusal, which every later take returns, since the device may hold
+     * a backing the object cannot reach. All three under the device's
+     * `lock`. */
+    struct virtio_gpu_cmd *back_ask;
+    int back_taking;
+    int32_t back_err;
 };
 
 /**
@@ -862,6 +878,23 @@ int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes
  */
 int32_t vgpu_cmd_send_wait_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes,
                                uint32_t *got);
+/** Start `cmd` for a waiter, who takes its answer with vgpu_cmd_take_map,
+ * or hands it to the reaper with vgpu_cmd_give_up; the reaper leaves it
+ * alone until then. */
+void vgpu_cmd_send_waited(struct virtio_gpu_cmd *cmd);
+/**
+ * Take the answer to `cmd`, started with vgpu_cmd_send_waited, as
+ * vgpu_cmd_send_wait_map does, but at SIGKILL before the answer return
+ * -EINTR with the command still the caller's, to take or give up later.
+ * May sleep.
+ */
+int32_t vgpu_cmd_take_map(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len, uint32_t *got);
+/** Have the profiling build record the waits for `cmd` in the events as
+ * `event` in place of its type; nothing in another build. */
+void vgpu_cmd_event(struct virtio_gpu_cmd *cmd, uint32_t event);
+/** Let go of `cmd`, started with vgpu_cmd_send_waited and not taken: freed
+ * now when answered, else by the reaper once it is. Never sleeps. */
+void vgpu_cmd_give_up(struct virtio_gpu_cmd *cmd);
 /*
  * * Append user command bytes, or allocate response pages when response is
  * nonzero.
@@ -900,9 +933,39 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
  * set the caller holds a reference to `bo`, which the sleep could free. */
 void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap);
 /** Back a resource just made with the device's own pages (VGS_TF_BACKING),
- * which become the object's; 0, -EREMOTEIO when the device refused, or
- * another error after which the object must be freed. May sleep. */
-int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+ * which become the object's; with `ask`, from the first ask that
+ * vgpu_backing_ask started, taken first and set to NULL once taken, its
+ * wait recorded as `event` (`vgpu_cmd_event`). 0, -EREMOTEIO when the
+ * device refused, -EINTR at SIGKILL with `*ask` still the caller's, or
+ * another error after which the object must be freed or kept from use.
+ * May sleep. */
+int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                           struct virtio_gpu_cmd **ask, uint32_t event);
+/** Start the first VGS_CMD_BACKING of `bo`'s resource, just made, without
+ * waiting, in `*ask`, whose answer vgpu_backing_pages takes. 0, or
+ * -ENOMEM. May sleep. */
+int32_t vgpu_backing_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                         struct virtio_gpu_cmd **ask);
+/* Where a deferred backing is taken (`vgpu_backing_settle`), which the
+ * profiling build's events record as VGPU_EVENT_SETTLE plus the place. */
+#define VGPU_EVENT_SETTLE    0x20000u
+#define VGPU_SETTLE_SUBMIT   1 /* an EXECBUFFER whose buffers name it */
+#define VGPU_SETTLE_TRANSFER 2 /* TRANSFER_TO_HOST or TRANSFER_FROM_HOST */
+#define VGPU_SETTLE_MAP      3 /* VIRTGPU_MAP, or an mmap of the object */
+#define VGPU_SETTLE_EXPORT   4 /* a PRIME export */
+/**
+ * Take `bo`'s deferred backing, if it has one not yet taken (`back_ask`),
+ * before the first access to its pages or the first command after the
+ * create that names it: the device's pages made the object's, or on a
+ * refusal an ATTACH_BACKING of the transport's pages queued, so that every
+ * later command finds the resource backed. One taker at a time; another
+ * waits for it. `site` says where, VGPU_SETTLE_*. Takes the big lock when
+ * the caller does not hold it. 0; -EINTR at SIGKILL before the answer,
+ * the backing still to take; or the error of a take that failed, which
+ * every later call returns and which keeps the object from use. May sleep.
+ */
+int32_t vgpu_backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                            uint32_t site);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
