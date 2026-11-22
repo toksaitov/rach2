@@ -2796,7 +2796,9 @@ full:
     return WALK_FULL;
 }
 
-/** Enter and hold the starting directory of a full walk. */
+/** Enter and hold the starting directory of a full walk, then take its
+ * namespace lock. The walk gate's WALK_GATE_FULL comes between, so that a
+ * thread stopped there holds no lock a mount by the test needs. */
 static int walk_begin(struct walk_rules *rules, struct vfs_ref *cur, struct vfs_ref root,
                       const struct vfs_ref *start, const char *p, int locked)
 {
@@ -2810,6 +2812,7 @@ static int walk_begin(struct walk_rules *rules, struct vfs_ref *cur, struct vfs_
         return -EBUSY;
     }
     vfs_ref_hold(cur);
+    walk_gate(WALK_GATE_FULL);
     walk_lock(cur->mnt, locked);
     return 0;
 }
@@ -3012,7 +3015,6 @@ begin:
         cur.mnt = NULL;
         goto out_bare;
     }
-    walk_gate(WALK_GATE_FULL);
 
     for (;;) {
         char comp[VFS_NAME_MAX + 1];
