@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.vgpu.virgl",
-      "behavior": "Virgl capability sets, contexts, 3D texture upload and readback, asynchronous submissions, sync files, waits and a reset that invalidates old handles",
+      "behavior": "Virgl capability sets, contexts, 3D texture upload and readback, asynchronous submissions, sync files, waits, the close of a buffer another file shares or a mapping or submission holds, a buffer freed with no further call, and a reset that invalidates old handles",
       "units": [
         "vgpuprobe"
       ],
@@ -83,6 +83,21 @@
         {
           "assertion_id": "wait",
           "checks": "Blocking WAIT completes the work and NOWAIT reports idle",
+          "source": "program"
+        },
+        {
+          "assertion_id": "shared",
+          "checks": "A second file imports the texture by PRIME, names it in a submission and closes its handle, and the first file still uploads, reads back and submits it",
+          "source": "program"
+        },
+        {
+          "assertion_id": "busy-close",
+          "checks": "A texture closed while a mapping and a submission hold it stays in virtio_gpu_objects until both have ended, in either order, and then leaves it with no further call",
+          "source": "program"
+        },
+        {
+          "assertion_id": "unref",
+          "checks": "A texture named in a submission and closed at once leaves virtio_gpu_objects with no further call of the program; the time it took is printed",
           "source": "program"
         },
         {
