@@ -739,13 +739,14 @@ static int op_pages(void *c, struct vd_pages *q)
  * what it frees, as llvmpipe's textures stay in the C library's heap, and
  * the counts would refuse the next resource that memory could hold. 1
  * also when the VM has no /proc/meminfo or it lacks either count; 0 when
- * it cannot be read for want of memory. MemAvailable reads 0, not less,
+ * it cannot be opened for want of memory or its read fails, as seq_file's
+ * does when it cannot allocate its buffer. MemAvailable reads 0, not less,
  * when the free pages are down to the watermarks, which is no room.
  */
 static int mem_room(uint64_t size)
 {
     unsigned long long total = 0, avail = 0, kib;
-    int has_total = 0, has_avail = 0;
+    int has_total = 0, has_avail = 0, failed;
     char line[128];
     FILE *f = fopen("/proc/meminfo", "r");
 
@@ -761,8 +762,9 @@ static int mem_room(uint64_t size)
             has_avail = 1;
         }
     }
+    failed = ferror(f);
     fclose(f);
-    return !has_total || !has_avail || size + total / 8u <= avail;
+    return !failed && (!has_total || !has_avail || size + total / 8u <= avail);
 }
 
 /**
@@ -770,29 +772,35 @@ static int mem_room(uint64_t size)
  * memfd, mapped shared, pinned whole through the module for the driver's
  * epoch, which brings in its pages zeroed, and attached to the resource as
  * its one iovec, as QEMU attaches a guest's pages. Returns 0 with the pin
- * in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has no memory for it
- * (`mem_room`), or VD_RESP_ERR_UNSPEC.
+ * in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has no memory for it, by
+ * its counts (`mem_room`) or by the pin's allocation, or
+ * VD_RESP_ERR_UNSPEC. The refusal's line names the step that refused.
  */
 static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
 {
     struct vgpushm_pin pin;
     struct iovec *iov = calloc(1, sizeof(*iov));
     int fd = -1, err = iov == 0 ? ENOMEM : 0;
+    const char *step = "the iovec";
     void *map = MAP_FAILED;
 
     if (err == 0 && (r->module < 0 || r->npins == PINS)) {
         err = ENOSPC;
+        step = "no pin";
     }
     if (err == 0 && !mem_room(q->size)) {
         err = ENOMEM;
+        step = "no room in the VM's counts";
     }
     if (err == 0 && ((fd = memfd_create("vgpu-backing", MFD_CLOEXEC)) < 0 ||
                      ftruncate(fd, (off_t)q->size) != 0)) {
         err = errno;
+        step = "the memfd";
     }
     if (err == 0 &&
         (map = mmap(0, q->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
         err = errno;
+        step = "the mapping";
     }
     memset(&pin, 0, sizeof(pin));
     pin.fd = fd;
@@ -800,6 +808,7 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
     pin.size = q->size;
     if (err == 0 && ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0) {
         err = errno;
+        step = "the pin";
     }
     if (fd >= 0) {
         close(fd); /* the mapping and the pin hold the file */
@@ -810,13 +819,14 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         /* virglrenderer answers EINVAL, of either sign by version. */
         err = virgl_renderer_resource_attach_iov((int)q->id, iov, 1);
         err = err < 0 ? -err : err;
+        step = "the attach";
         if (err != 0) {
             ioctl(r->module, VGPUSHM_IOC_UNPIN, &pin.handle);
         }
     }
     if (err != 0) {
-        fprintf(stderr, "backend: back: resource %u: refused: %llu bytes: %s\n", (unsigned)q->id,
-                (unsigned long long)q->size, strerror(err));
+        fprintf(stderr, "backend: back: resource %u: refused: %llu bytes: %s: %s\n",
+                (unsigned)q->id, (unsigned long long)q->size, step, strerror(err));
         if (map != MAP_FAILED) {
             munmap(map, q->size);
         }

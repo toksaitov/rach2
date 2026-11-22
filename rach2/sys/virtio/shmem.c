@@ -56,6 +56,9 @@
 /* A bind refused is tried again after a second. */
 #define VSHM_RETRY_TICKS MS_TO_TICKS(1000)
 
+/* A device whose heartbeat stands still this long has gone (VGS_TF_BEAT). */
+#define VSHM_LOST_TICKS MS_TO_TICKS(VGS_BEAT_LOST_MS)
+
 struct vshm;
 
 /* A doorbell the device rings: the hook on its eventfd and the vector. */
@@ -105,10 +108,12 @@ struct vshm {
     struct vgs_layout l;
     struct vgs_driver me;
     struct vgs_device dev;
-    uint32_t events; /* the device's events_seq last passed to the driver */
-    uint8_t status;  /* the virtio status byte the core sees */
-    int doorbells;   /* both sides accepted VGS_TF_DOORBELL */
-    int bells;       /* the four eventfds are held and none has closed */
+    uint32_t events;  /* the device's events_seq last passed to the driver */
+    uint32_t beat;    /* the device's heartbeat as last seen to move */
+    uint64_t beat_at; /* tick_count when it was, under VGS_TF_BEAT */
+    uint8_t status;   /* the virtio status byte the core sees */
+    int doorbells;    /* both sides accepted VGS_TF_DOORBELL */
+    int bells;        /* the four eventfds are held and none has closed */
     struct vshm_bell in[2];
     struct eventfd *out[2];
     uint32_t *heap_map; /* a bit for each page of the heap in use */
@@ -558,8 +563,12 @@ static void vs_set_status(struct virtio_dev *d, uint8_t status)
             return;
         }
         vs->doorbells = (vs->me.transport_features & VGS_TF_DOORBELL) != 0;
-        klog(KLOG_INFO, "vgpu-shm", "running: epoch %u, device peer %u, %s", (unsigned)vs->me.epoch,
-             (unsigned)vs->dev.peer, vs->doorbells ? "doorbells" : "polling");
+        vs->beat = vs->dev.heartbeat;
+        vs->beat_at = tick_count();
+        klog(KLOG_INFO, "vgpu-shm", "running: epoch %u, device peer %u, %s%s",
+             (unsigned)vs->me.epoch, (unsigned)vs->dev.peer,
+             vs->doorbells ? "doorbells" : "polling",
+             vs->me.transport_features & VGS_TF_BEAT ? ", heartbeat" : "");
     }
 }
 
@@ -588,14 +597,15 @@ static uint64_t vs_get_features(struct virtio_dev *d)
     return vs->dev.features;
 }
 
-/** The features the driver takes, and the doorbells, the page lists and
- * the VM's backing when both sides have them. */
+/** The features the driver takes, and the doorbells, the page lists, the
+ * VM's backing and the heartbeat when both sides have them. */
 static void vs_set_features(struct virtio_dev *d, uint64_t features)
 {
     struct vshm *vs = to_vs(d);
 
     vs->me.features = features;
     vs->me.transport_features = vs->bells ? vs->dev.transport_features & VGS_TF_DOORBELL : 0;
+    vs->me.transport_features |= vs->dev.transport_features & VGS_TF_BEAT;
     if (VSHM_PAGES && vs->bells) {
         vs->me.transport_features |= vs->dev.transport_features & VGS_TF_PAGES;
     }
@@ -1449,14 +1459,37 @@ static void vshm_finish(struct vshm *vs)
 }
 
 /**
+ * Whether the device's heartbeat has stood still for VSHM_LOST_TICKS under
+ * VGS_TF_BEAT, from `vs->dev` as just read: a device stopped, or caught in
+ * one step of its loop, which answers nothing and rings no doorbell. The
+ * count is judged only by whether it moved, so a pass of the thread that
+ * comes late judges a device that beat meanwhile alive.
+ */
+static int vshm_beat_lost(struct vshm *vs)
+{
+    uint64_t now = tick_count();
+
+    if (!(vs->me.transport_features & VGS_TF_BEAT)) {
+        return 0;
+    }
+    if (vs->dev.heartbeat != vs->beat) {
+        vs->beat = vs->dev.heartbeat;
+        vs->beat_at = now;
+        return 0;
+    }
+    return now - vs->beat_at >= VSHM_LOST_TICKS;
+}
+
+/**
  * Serve a bound device once: answer its completions, pass on a display
- * event, and on a device that has left the epoch, failed or reset, have
- * the driver drop it, so that the next pass binds a new one in a new
- * epoch, as the transport's rules ask.
+ * event, and on a device that has left the epoch, failed, reset or whose
+ * heartbeat has stopped, have the driver drop it, which fails every
+ * command and fence it holds with ENODEV, so that the next pass binds a
+ * new one in a new epoch, as the transport's rules ask.
  */
 static void vshm_serve(struct vshm *vs, uint32_t rang)
 {
-    int n = 0, i;
+    int n = 0, i, lost = 1;
 
     for (i = 0; i < VGS_QUEUES; i++) {
         if (vs->vdev.queues[i]) {
@@ -1467,9 +1500,17 @@ static void vshm_serve(struct vshm *vs, uint32_t rang)
         vs->polls++;
     }
     if (!vshm_snap(vs) || vs->dev.state != VGS_DEV_RUNNING) {
-        klog(KLOG_WARN, "vgpu-shm", "lost: epoch %u: the device is %s", (unsigned)vs->me.epoch,
+        klog(KLOG_WARN, "vgpu-shm", "lost: epoch %u: the device: %s", (unsigned)vs->me.epoch,
              vs->dev.state == VGS_DEV_NEEDS_RESET ? vgs_strerror((int)vs->dev.error)
                                                   : "no longer running the epoch");
+    } else if (vshm_beat_lost(vs)) {
+        klog(KLOG_WARN, "vgpu-shm",
+             "lost: epoch %u: the device: its heartbeat stood still for %u s",
+             (unsigned)vs->me.epoch, (unsigned)VGS_BEAT_LOST_MS / 1000u);
+    } else {
+        lost = 0;
+    }
+    if (lost) {
         if (vs->vdev.removed) {
             vs->vdev.removed(&vs->vdev);
         }

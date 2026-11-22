@@ -54,7 +54,20 @@
 #define VGS_TF_DOORBELL 0x1u /* both sides ring doorbells instead of polling */
 #define VGS_TF_PAGES    0x2u /* RESOURCE_MAP_BLOB is answered with the VM's pages */
 #define VGS_TF_BACKING  0x4u /* a resource's backing is the VM's pages; needs PAGES */
-#define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING)
+#define VGS_TF_BEAT     0x8u /* the device advances vgs_device.heartbeat */
+#define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING | VGS_TF_BEAT)
+
+/*
+ * With VGS_TF_BEAT accepted, the device adds 1 to its block's heartbeat from
+ * the loop that serves the queues, once VGS_BEAT_MS have passed since the
+ * last, and that loop turns at least once a second. A driver that sees the
+ * count stand still for VGS_BEAT_LOST_MS takes the device for gone, as it
+ * takes one that stores NEEDS_RESET: a device stopped or caught in one step
+ * answers nothing and rings no doorbell to say so. The limit is the
+ * backend's own for a stall (bed/vm/Readme.md).
+ */
+#define VGS_BEAT_MS      1000u
+#define VGS_BEAT_LOST_MS 30000u
 
 /*
  * Virtio feature bits the transport knows. Device-specific bits 0 to 23
@@ -108,6 +121,7 @@
 #define VGS_E_QUOTA    14 /* an object or a byte past the limits */
 #define VGS_E_RACE     15 /* a block changed under every read of it */
 #define VGS_E_PAGES    16 /* a map's page list malformed or not the blob's */
+#define VGS_E_LOST     17 /* the device's process ended running; the VM's module says so */
 
 /* The region's layout, at VGS_LAYOUT_OFF; written once by the driver. */
 struct vgs_layout {
@@ -230,7 +244,7 @@ struct vgs_device {
     uint32_t events_seq;   /* display events raised; a change is EVENT_DISPLAY */
     uint32_t num_scanouts; /* virtio_gpu_config's, 1 to 16 */
     uint32_t num_capsets;  /* virtio_gpu_config's */
-    uint32_t reserved;
+    uint32_t heartbeat;    /* a count the serving loop moves (VGS_TF_BEAT) */
 };
 
 /* A split virtqueue's descriptor; addr is an offset into the region. */
@@ -460,9 +474,10 @@ const char *vgs_strerror(int err)
         "over quota",
         "block changing under every read",
         "bad page list",
+        "the device's process ended",
     };
 
-    if (err < 0 || err > VGS_E_PAGES) {
+    if (err < 0 || err > VGS_E_LOST) {
         return "unknown error";
     }
     return msg[err];
