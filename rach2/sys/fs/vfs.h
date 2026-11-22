@@ -1601,6 +1601,14 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle);
  */
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
+/**
+ * Register /sys/kernel/debug/vfs/bind_trace, the record of the order in
+ * which binds take and judge their sources while KRFFS moves nodes, for the
+ * mount suite's `reloc` rows (debugfs(5)). Called once at boot, after
+ * debugfs is mounted; a failure is logged.
+ */
+void vfs_bind_trace_init(void);
+
 /*
  * The wrappers: each answers for an operation the type does not have, so
  * that each default is written once, and passes the base of a bind to the

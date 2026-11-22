@@ -4903,8 +4903,8 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
  * (`watchdog_init`), the grace-period thread (`rcu_init`), the flusher
  * (`writeback_init`) and khugepaged (`thp_init`), then register bkl/calls,
  * bkl/profile, bkl/long, bkl/tick, cputime_test, the scheduler's files
- * (`sched_debugfs_init`) and, with the checker, lockdep/inject in debugfs;
- * a failure there is logged. */
+ * (`sched_debugfs_init`), vfs/bind_trace and, with the checker,
+ * lockdep/inject in debugfs; a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4925,6 +4925,7 @@ static void start_processors(void)
         klog(KLOG_WARN, "cputime", "debugfs: cputime_test not registered");
     }
     sched_debugfs_init();
+    vfs_bind_trace_init();
 #ifdef RACH2_LOCKDEP
     if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
         klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");

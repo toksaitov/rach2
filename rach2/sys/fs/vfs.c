@@ -42,6 +42,7 @@
 #include "../pstore/pstore.h"
 #include "../mm/filecache.h"
 #include "../mm/filemap.h"
+#include "../mm/usercopy.h"
 #include "../io/inotify.h"
 
 #define VFS_S_IFMT       0170000u
@@ -3113,6 +3114,156 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     reap_if_detached(mnt, vfs_mount_put(mnt));
 }
 
+/*
+ * The bind trace, /sys/kernel/debug/vfs/bind_trace. Once armed, it records
+ * in order each bind's copy of a descriptor source's node, its hold on its
+ * source and each judgement of it, with the node each had, and each KRFFS
+ * move of a node, so that the mount suite's `reloc` rows read from the
+ * kernel which came first and which node the bind judged. Disarmed, a hook
+ * costs one load.
+ */
+
+#define BIND_TRACE_SLOTS 64
+
+enum { BIND_TRACE_COPY, BIND_TRACE_HOLD, BIND_TRACE_JUDGE, BIND_TRACE_MOVE };
+
+/* One event of the bind trace. */
+struct bind_trace_event {
+    uint32_t kind;  /* BIND_TRACE_* */
+    uint32_t pid;   /* the caller's thread group ID */
+    uintptr_t a, b; /* the node, or a move's from and to */
+};
+
+static struct bind_trace_event bind_trace_ring[BIND_TRACE_SLOTS];
+static uint32_t bind_trace_count; /* events since the arming, those past
+                                     the ring among them */
+static volatile int bind_trace_armed;
+static struct spinlock bind_trace_lock = SPINLOCK_INIT;
+
+/** Record an event of kind `kind` with `a` and `b` when the trace is armed.
+ * Any context; takes `bind_trace_lock`. */
+static void bind_trace(uint32_t kind, const void *a, const void *b)
+{
+    struct bind_trace_event *e;
+    uint32_t flags;
+
+    if (!bind_trace_armed) {
+        return;
+    }
+    flags = spin_lock_irqsave(&bind_trace_lock);
+    if (bind_trace_armed && bind_trace_count < BIND_TRACE_SLOTS) {
+        e = &bind_trace_ring[bind_trace_count];
+        e->kind = kind;
+        e->pid = current_proc ? current_proc->tgid : 0;
+        e->a = (uintptr_t)a;
+        e->b = (uintptr_t)b;
+    }
+    if (bind_trace_armed) {
+        bind_trace_count++;
+    }
+    spin_unlock_irqrestore(&bind_trace_lock, flags);
+}
+
+/** Append the decimal `v` and then `end` to the `cap` bytes at `buf`, at
+ * `*at`, counting what does not fit. */
+static void bind_trace_put(char *buf, uint32_t cap, uint32_t *at, uintptr_t v, char end)
+{
+    char digits[24];
+    int n = 0;
+
+    do {
+        digits[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v > 0);
+    while (n > 0) {
+        if (*at < cap) {
+            buf[*at] = digits[n - 1];
+        }
+        n--;
+        (*at)++;
+    }
+    if (*at < cap) {
+        buf[*at] = end;
+    }
+    (*at)++;
+}
+
+/**
+ * The trace's text: a line `SEQ KIND PID A B` for each event recorded, the
+ * first 0, where KIND is copy, hold or judge, with the node in A and 0 in B,
+ * or move, from A to B; then `lost N` for the events past the ring. A node
+ * is the pointer the type gives, a mounted KRFFS volume's its inode number.
+ * The show of `debugfs_create_text`.
+ */
+static int32_t bind_trace_show(void *data, char *buf, uint32_t cap)
+{
+    static const char *const kinds[] = {"copy ", "hold ", "judge ", "move "};
+    const char *k;
+    uint32_t flags, i, n, at = 0;
+
+    (void)data;
+    flags = spin_lock_irqsave(&bind_trace_lock);
+    n = bind_trace_count < BIND_TRACE_SLOTS ? bind_trace_count : BIND_TRACE_SLOTS;
+    for (i = 0; i < n; i++) {
+        bind_trace_put(buf, cap, &at, i, ' ');
+        for (k = kinds[bind_trace_ring[i].kind]; *k; k++, at++) {
+            if (at < cap) {
+                buf[at] = *k;
+            }
+        }
+        bind_trace_put(buf, cap, &at, bind_trace_ring[i].pid, ' ');
+        bind_trace_put(buf, cap, &at, bind_trace_ring[i].a, ' ');
+        bind_trace_put(buf, cap, &at, bind_trace_ring[i].b, '\n');
+    }
+    for (k = "lost "; *k; k++, at++) {
+        if (at < cap) {
+            buf[at] = *k;
+        }
+    }
+    bind_trace_put(buf, cap, &at, bind_trace_count - n, '\n');
+    spin_unlock_irqrestore(&bind_trace_lock, flags);
+    return (int32_t)at;
+}
+
+/** A write of `arm` empties the trace and arms it, and `off` empties and
+ * disarms it; each may end in a newline. Anything else is EINVAL. The store of
+ * `debugfs_create_text`. */
+static int32_t bind_trace_store(void *data, const char __user *buf, uint32_t len)
+{
+    char word[5];
+    uint32_t n = len, flags;
+    int arm;
+
+    (void)data;
+    if (len < 3 || len > 4) {
+        return -EINVAL;
+    }
+    if (copy_from_user(word, buf, len) != 0) {
+        return -EFAULT;
+    }
+    if (word[n - 1] == '\n') {
+        n--;
+    }
+    arm = n == 3 && word[0] == 'a' && word[1] == 'r' && word[2] == 'm';
+    if (!arm && !(n == 3 && word[0] == 'o' && word[1] == 'f' && word[2] == 'f')) {
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&bind_trace_lock);
+    bind_trace_count = 0;
+    bind_trace_armed = arm;
+    spin_unlock_irqrestore(&bind_trace_lock, flags);
+    return (int32_t)len;
+}
+
+static const struct debugfs_text_ops bind_trace_ops = {bind_trace_show, bind_trace_store};
+
+void vfs_bind_trace_init(void)
+{
+    if (debugfs_create_text("vfs/bind_trace", 0600u, &bind_trace_ops, NULL) != 0) {
+        klog(KLOG_WARN, "vfs", "debugfs: bind_trace not registered");
+    }
+}
+
 /* Repointing, for a KRFFS relocation. */
 
 /** `vfs_repoint` for one mount that shows the moving file system: the
@@ -3159,6 +3310,7 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
     process_t *pr;
     int i;
 
+    bind_trace(BIND_TRACE_MOVE, from, to);
     for (pr = proc_list; pr; pr = pr->next) {
         if (mnt == mounts[0] && pr->fds) {
             fd_table_repoint(pr->fds, from, to);
@@ -6477,6 +6629,9 @@ static int resolve_fd_path(const struct vfs_ref *start, const char *path, int fl
     if (rc != 0) {
         return rc;
     }
+    if (flags & VFS_WALK_SOURCE) {
+        bind_trace(BIND_TRACE_COPY, object.node, NULL);
+    }
     walk_lock(object.mnt, locked);
     object.node = fd_kept_node(fw->kept, object.mnt, object.node);
     if (flags & VFS_WALK_COVER) {
@@ -6739,8 +6894,10 @@ static int bind_source(const struct vfs_ref *sref, char *full, char *inner, cons
     const struct vpath *vp;
     const char *rest;
     struct vfs_stat st;
-    int rc = vfs_getattr(sref->mnt, sref->node, &st);
+    int rc;
 
+    bind_trace(BIND_TRACE_JUDGE, sref->node, NULL);
+    rc = vfs_getattr(sref->mnt, sref->node, &st);
     if (rc != 0) {
         return rc;
     }
@@ -6962,6 +7119,7 @@ static int bind_hold_take(struct bind_hold *h, const struct vfs_ref *ref)
 
     h->node = NULL;
     h->pin = NULL;
+    bind_trace(BIND_TRACE_HOLD, ref->node, NULL);
     if (base == mounts[0] && base->type == &vfs_krffs_type) {
         flags = spin_lock_irqsave(&bind_holds_lock);
         h->node = ref->node;
