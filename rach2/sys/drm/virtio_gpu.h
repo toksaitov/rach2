@@ -935,6 +935,13 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
  * fault maps from it meanwhile and no other drop frees it twice; with `zap`
  * set the caller holds a reference to `bo`, which the sleep could free. */
 void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int zap);
+/* The most bytes of the answer to an ask for a page list, MAP_BLOB or
+ * VGS_CMD_BACKING, in response pages: fifteen pages and the request fit the
+ * shared region's chain of 16 descriptors (VGS_CHAIN_MAX) even when the
+ * pages are not one block. So an ask holds at most VGPU_ASK_HELD DMA pages,
+ * its command's own page and these. */
+#define VGPU_MAP_ANSWER (15u * PAGE_SIZE)
+#define VGPU_ASK_HELD   (1u + VGPU_MAP_ANSWER / PAGE_SIZE)
 /** Back a resource just made with the device's own pages (VGS_TF_BACKING),
  * which become the object's; with `ask`, from the first ask that
  * vgpu_backing_ask started, taken first and set to NULL once taken, its
@@ -945,8 +952,8 @@ void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object
 int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                            struct virtio_gpu_cmd **ask, uint32_t event);
 /** Start the first VGS_CMD_BACKING of `bo`'s resource, just made, without
- * waiting, in `*ask`, whose answer vgpu_backing_pages takes. 0, or
- * -ENOMEM. May sleep. */
+ * waiting, in `*ask`, whose answer vgpu_backing_pages takes; the ask holds
+ * at most VGPU_ASK_HELD DMA pages. 0, or -ENOMEM. May sleep. */
 int32_t vgpu_backing_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                          struct virtio_gpu_cmd **ask);
 /* Where a deferred backing is taken (`vgpu_backing_settle`), which the

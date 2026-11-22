@@ -2244,16 +2244,20 @@ static int vm_backing(struct virtio_gpu_device *vg)
  * pages on a refusal, before the first access to its pages or command that
  * names it (`vgpu_backing_settle`). The asks deferred hold at most half of
  * VGPU_HELD_MAX DMA pages, which no reap frees, so that `vgpu_room` always
- * finds room; past that the create waits for its answer. On an error
+ * finds room: each reserves VGPU_ASK_HELD pages of that half under the
+ * device's lock before it allocates any, which may sleep, and gives back
+ * what its ask does not hold once it is made; when the half has no room,
+ * the create waits for its answer. On an error
  * `create` is freed if it was not sent; once it was, `bo->res_id` is set,
  * so that the object's free sends its UNREF. 0, or the error. May sleep.
  */
 static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint32_t id,
                         struct virtio_gpu_cmd *create, int fenced, int defer)
 {
-    struct virtio_gpu_cmd *attach = NULL;
+    struct virtio_gpu_cmd *attach = NULL, *ask = NULL;
     int32_t err = 0;
     uint32_t flags;
+    int room = 0;
 
     if (!vm_backing(vg)) {
         attach = vgpu_attach_cmd(vg, bo, id, &err);
@@ -2266,13 +2270,23 @@ static int32_t obj_back(struct virtio_gpu_device *vg, struct virtio_gpu_object *
      * the create, and any command on the object follows both. */
     vgpu_cmd_send(create, NULL, NULL);
     bo->res_id = id;
-    if (!attach && defer && vg->back_held < VGPU_HELD_MAX / 2) {
-        err = vgpu_backing_ask(vg, bo, &bo->back_ask);
-        if (err == 0) {
-            flags = spin_lock_irqsave(&vg->lock);
-            vg->back_held += bo->back_ask->held;
-            spin_unlock_irqrestore(&vg->lock, flags);
+    if (!attach && defer) {
+        flags = spin_lock_irqsave(&vg->lock);
+        room = vg->back_held + VGPU_ASK_HELD <= VGPU_HELD_MAX / 2;
+        if (room) {
+            vg->back_held += VGPU_ASK_HELD;
         }
+        spin_unlock_irqrestore(&vg->lock, flags);
+    }
+    if (room) {
+        err = vgpu_backing_ask(vg, bo, &ask);
+        flags = spin_lock_irqsave(&vg->lock);
+        vg->back_held -= VGPU_ASK_HELD;
+        if (err == 0) {
+            vg->back_held += ask->held;
+            bo->back_ask = ask;
+        }
+        spin_unlock_irqrestore(&vg->lock, flags);
         return err;
     }
     if (!attach) {
