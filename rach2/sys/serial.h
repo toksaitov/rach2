@@ -105,8 +105,10 @@ void serial_rx_counters(struct serial_rx_counters *out);
 /**
  * Write one byte to the port.
  *
- * The transmit waits for the UART up to 30 seconds, long enough for a slow
- * reader of a virtual port, and drops the byte past it. A port that missed
+ * The transmit reads the line status once for each load of the UART's
+ * transmit FIFO, 16 bytes on a 16550A, as Linux's 8250 driver does, and
+ * waits for the UART up to 30 seconds, long enough for a slow reader of a
+ * virtual port, and drops the byte past it. A port that missed
  * that bound is waited on for 2 ms until it takes a byte again, so a UART
  * that stopped draining costs a bounded delay and not the machine. A machine
  * with no UART discards the byte.

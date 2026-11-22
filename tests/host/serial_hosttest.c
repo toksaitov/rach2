@@ -1,13 +1,15 @@
 /**
- * Host test of the console serial port's receive ring, arch/x86/serial.c:
- * the look ahead's cursor at counters near the 32-bit wrap and at a cursor
- * the head has passed by far.
+ * Host test of the console serial port, arch/x86/serial.c: the receive
+ * ring's look ahead cursor at counters near the 32-bit wrap and at a cursor
+ * the head has passed by far, and the transmit's reads of the line status
+ * for each load of the FIFO.
  *
  * host-deps:
  *
- * The rows set the ring's counters and bytes directly, as the port's
- * interrupt leaves them, and read them back through serial.h's calls; no
- * UART is modelled, since the rows reach none of its registers.
+ * The ring's rows set its counters and bytes directly, as the port's
+ * interrupt leaves them, and read them back through serial.h's calls. The
+ * transmit's rows run against a model of the UART's registers that counts
+ * the reads of the line status and the bytes written.
  */
 extern int printf(const char *format, ...);
 
@@ -23,17 +25,47 @@ static int failures;
         }                                                \
     } while (0)
 
-/** Nothing: no row writes a port. */
+/* The model UART: whether its FIFOs are on, the line status reads that
+ * still find the transmitter busy, and the counts of status reads and of
+ * bytes written to the data port. */
+static int uart_fifo;
+static int uart_busy_reads;
+static int uart_status_reads;
+static int uart_bytes;
+static uint8_t uart_scratch;
+
+/** Count a byte written to the data port and keep one written to the
+ * scratch register; ignore the other registers. */
 void outb(uint16_t port, uint8_t val)
 {
-    (void)port;
-    (void)val;
+    if (port == SERIAL_COM1 + SERIAL_DATA) {
+        uart_bytes++;
+    }
+    if (port == SERIAL_COM1 + SERIAL_SCRATCH) {
+        uart_scratch = val;
+    }
 }
 
-/** 0, a line status with no byte ready: no row reads the UART. */
+/** The model's registers: the interrupt identification shows the FIFOs
+ * when they are on, the scratch register reads back what the probe wrote,
+ * and the line status shows the transmitter empty and no byte ready once
+ * `uart_busy_reads` reads have found it busy. */
 uint8_t inb(uint16_t port)
 {
-    (void)port;
+    if (port == SERIAL_COM1 + SERIAL_INTR_ID) {
+        return uart_fifo ? 0xC1 : 0x01;
+    }
+    if (port == SERIAL_COM1 + SERIAL_SCRATCH) {
+        return uart_scratch;
+    }
+    if (port == SERIAL_COM1 + SERIAL_LINE_STATUS) {
+        uart_status_reads++;
+        if (uart_busy_reads > 0) {
+            uart_busy_reads--;
+            return 0;
+        }
+        return SERIAL_LSR_THRE;
+    }
     return 0;
 }
 
@@ -127,14 +159,62 @@ static void wrap(void)
 }
 
 /**
+ * The transmit reads the line status once for each load of the FIFO: 40
+ * bytes to a 16550A take three reads, one before each load of 16, and to a
+ * UART without FIFOs one read a byte, as before. A transmitter found busy
+ * at the start of a load is read until it empties, and the load after is
+ * whole.
+ */
+static void transmit_load(void)
+{
+    int i;
+
+    _serial_port_exists = 0;
+    uart_fifo = 1;
+    serial_init();
+    CHECK(_serial_port_exists && _tx_load == SERIAL_TX_FIFO,
+          "a UART whose FIFOs are on takes 16 bytes a load");
+    uart_status_reads = uart_bytes = 0;
+    for (i = 0; i < 40; i++) {
+        serial_out('x');
+    }
+    CHECK(uart_bytes == 40 && uart_status_reads == 3,
+          "40 bytes to a 16550A read the line status three times");
+
+    _tx_room = 0;
+    uart_busy_reads = 2;
+    uart_status_reads = uart_bytes = 0;
+    for (i = 0; i < 16; i++) {
+        serial_out('y');
+    }
+    CHECK(uart_bytes == 16 && uart_status_reads == 3,
+          "a busy transmitter is read until it empties, and then takes a whole load");
+
+    _serial_port_exists = 0;
+    _tx_load = 1;
+    _tx_room = 0;
+    uart_fifo = 0;
+    serial_init();
+    CHECK(_serial_port_exists && _tx_load == 1, "a UART without FIFOs takes one byte a load");
+    uart_status_reads = uart_bytes = 0;
+    for (i = 0; i < 5; i++) {
+        serial_out('z');
+    }
+    CHECK(uart_bytes == 5 && uart_status_reads == 5,
+          "each byte to a UART without FIFOs reads the line status first");
+}
+
+/**
  * Run the rows of a look ahead's cursor far behind the head (`stale_cursor`)
- * and across the counters' 32-bit wrap (`wrap`), and print the count of
- * failed checks. Exits 0 when every check passes, and 1 otherwise.
+ * and across the counters' 32-bit wrap (`wrap`), and of the transmit's loads
+ * (`transmit_load`), and print the count of failed checks. Exits 0 when
+ * every check passes, and 1 otherwise.
  */
 int main(void)
 {
     stale_cursor();
     wrap();
+    transmit_load();
     printf("serial-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

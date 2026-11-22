@@ -16,7 +16,8 @@
 /* Serial port register offsets from base address */
 #define SERIAL_DATA        0 /* Data register (R/W) */
 #define SERIAL_INTR_ENABLE 1 /* Interrupt enable register */
-#define SERIAL_FIFO_CTRL   2 /* FIFO control register */
+#define SERIAL_FIFO_CTRL   2 /* FIFO control register (write) */
+#define SERIAL_INTR_ID     2 /* Interrupt identification register (read) */
 #define SERIAL_LINE_CTRL   3 /* Line control register */
 #define SERIAL_MODEM_CTRL  4 /* Modem control register */
 #define SERIAL_LINE_STATUS 5 /* Line status register */
@@ -26,6 +27,12 @@
 #define SERIAL_LSR_DR   0x01 /* Data ready (received data available) */
 #define SERIAL_LSR_OE   0x02 /* Overrun: a byte arrived on a full receiver */
 #define SERIAL_LSR_THRE 0x20 /* Transmit holding register empty */
+
+/* IIR bits 7:6, both set while a 16550A's FIFOs are on. */
+#define SERIAL_IIR_FIFO 0xC0
+
+/* A 16550A's transmit FIFO, in bytes. */
+#define SERIAL_TX_FIFO 16
 
 /* Interrupt enable register bits */
 #define SERIAL_IER_RDA 0x01 /* Received data available */
@@ -165,10 +172,25 @@ static int _serial_detect_port(void)
     return 1;
 }
 
+/*
+ * The bytes the transmitter takes once its line status has shown it empty,
+ * before the status is read again: a 16550A's 16 when `serial_init` finds
+ * its FIFOs on, and one, the holding register, on an older UART. Linux's
+ * 8250 driver loads as many at each empty transmitter (`tx_loadsz` in
+ * drivers/tty/serial/8250/8250_port.c, `serial8250_tx_chars`). Under a
+ * hypervisor every port access is an exit to the emulator, and a status
+ * read before every byte made each byte cost two. `_tx_room` is what may
+ * still be written before the next read; the console's callers write under
+ * klog's report lock, which keeps it with `_serial_stuck`.
+ */
+static int _tx_load = 1;
+static int _tx_room;
+
 /**
  * COM1 is set to 115200 baud, a divisor of 1 on the UART's 1.8432 MHz clock
  * over 16, with eight data bits, no parity and one stop bit, and the FIFO
- * on with a 14-byte receive threshold. OUT2 connects the UART's interrupt to
+ * on with a 14-byte receive threshold, whose taking the interrupt
+ * identification register then shows. OUT2 connects the UART's interrupt to
  * its ISA line. Without a UART nothing past the probe is written to the
  * port.
  */
@@ -189,6 +211,9 @@ void serial_init(void)
     outb(port + SERIAL_LINE_CTRL, 0x03);            /* 8N1, disable DLAB */
     outb(port + SERIAL_FIFO_CTRL, 0xC7);            /* Enable FIFO, 14-byte threshold */
     outb(port + SERIAL_MODEM_CTRL, 0x0B);           /* DTR, RTS, OUT2 */
+    if ((inb(port + SERIAL_INTR_ID) & SERIAL_IIR_FIFO) == SERIAL_IIR_FIFO) {
+        _tx_load = SERIAL_TX_FIFO;
+    }
 }
 
 /*
@@ -231,18 +256,22 @@ void serial_out(char c)
     if (!_serial_port_exists) {
         return;
     }
-    if (!_serial_is_transmit_empty()) {
-        limit = (uint64_t)(_serial_stuck ? SERIAL_TX_STUCK_MS : SERIAL_TX_WAIT_MS) *
-                SERIAL_TX_CYCLES_PER_MS;
-        start = arch_cycles();
-        while (!_serial_is_transmit_empty()) {
-            if (arch_cycles() - start >= limit) {
-                _serial_stuck = 1;
-                return;
+    if (_tx_room == 0) {
+        if (!_serial_is_transmit_empty()) {
+            limit = (uint64_t)(_serial_stuck ? SERIAL_TX_STUCK_MS : SERIAL_TX_WAIT_MS) *
+                    SERIAL_TX_CYCLES_PER_MS;
+            start = arch_cycles();
+            while (!_serial_is_transmit_empty()) {
+                if (arch_cycles() - start >= limit) {
+                    _serial_stuck = 1;
+                    return;
+                }
             }
         }
+        _tx_room = _tx_load;
     }
     _serial_stuck = 0;
+    _tx_room--;
     outb(SERIAL_COM1 + SERIAL_DATA, c);
 }
 
