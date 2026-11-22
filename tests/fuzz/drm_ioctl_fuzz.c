@@ -21,7 +21,7 @@
  * fuzz-deps: rach2/sys/lib/crc32.c
  * fuzz-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * fuzz-deps: tests/host/compat/fd_flat.c tests/host/compat/bkl_none.c
- * fuzz-deps: tests/host/compat/mutex_none.c
+ * fuzz-deps: tests/host/compat/mutex_none.c tests/host/compat/walkseq_host.c
  *
  * The kernel's own sources are linked whole, each its own unit, and vkms
  * is included here, so that the harness reaches its composer and clock.
