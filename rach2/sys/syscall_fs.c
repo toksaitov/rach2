@@ -5640,6 +5640,7 @@ static int open_found(struct vfs_ref *ref, const struct vfs_stat *dir, int flags
  */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
+    const void *keeps = vfs_walk_keeps_mark();
     struct vfs_ref ref;
     struct vfs_stat dir;
     struct vfs_stamp st, first;
@@ -5663,6 +5664,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return fd;
     }
 again:
+    vfs_walk_keeps_back(keeps);
     rc = vfs_resolve_entry(name,
                            VFS_WALK_LOCK |
                                (((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
@@ -7856,6 +7858,7 @@ static int xattr_access(const struct vfs_ref *ref, const struct vfs_xattr *arg)
  * changed meanwhile. */
 static int32_t xattr_call(isr_params_t *params, int how, int op)
 {
+    const void *keeps;
     struct vfs_ref ref;
     struct vfs_stamp stamp;
     struct xattr_args a;
@@ -7863,7 +7866,9 @@ static int32_t xattr_call(isr_params_t *params, int how, int op)
 
     if (!current_proc)
         return -ESRCH;
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = xattr_ref(params, how, &ref);
     if (rc)
         return rc == 1 ? (op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP) : rc;
@@ -11576,6 +11581,7 @@ static int32_t tmpfile_make(struct vfs_ref *dir, int flags, uint32_t mode,
  */
 static int32_t open_tmpfile(const char *name, int flags, uint32_t mode, int end)
 {
+    const void *keeps;
     struct vfs_name *entry = NULL;
     struct vfs_ref dir, file;
     struct vfs_stat st;
@@ -11591,7 +11597,9 @@ static int32_t open_tmpfile(const char *name, int flags, uint32_t mode, int end)
     if (fd < 0) {
         return fd;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = resolve_named(name, (flags & O_NOFOLLOW) && !end ? VFS_WALK_NOFOLLOW : 0, 0, &dir);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
@@ -14880,6 +14888,7 @@ static int32_t chmod_vfs(const struct vfs_ref *ref, uint32_t mode, int link_refu
  */
 static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
 {
+    const void *keeps;
     struct vpath vp;
     const struct vpath *svp;
     struct vfs_ref ref;
@@ -14887,7 +14896,9 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
     krffs_node_t *node;
     int32_t rc;
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = resolve_named(name, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), dir, &ref);
     if (rc != 0) {
         return rc;
@@ -15103,6 +15114,7 @@ static int32_t chown_proc_follow(const struct vpath *vp, uint32_t uid, uint32_t 
  */
 static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow, int dir)
 {
+    const void *keeps;
     struct vpath vp;
     const struct vpath *svp;
     struct vfs_ref ref;
@@ -15111,7 +15123,9 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
     int32_t rc;
     uint32_t events = 0;
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
         return rc;
@@ -15757,6 +15771,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
 {
+    const void *keeps;
     struct vfs_ref ref, file;
     struct vfs_mount *locked;
     struct open_file *desc = NULL;
@@ -15764,7 +15779,9 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     int32_t rc;
     int own, ns, kill = 0;
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     desc = NULL;
     rc = resolve_named(path_name(path), VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
@@ -16152,13 +16169,16 @@ static int32_t link_fd_file(int fd, struct vfs_ref *src)
  */
 static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
 {
+    const void *keeps;
     const struct vpath *vp;
     struct vfs_stamp first;
     struct vfs_ref src;
     struct vpath fdlink;
     int32_t rc;
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = resolve_named(oldname, follow ? 0 : VFS_WALK_NOFOLLOW, olddir, &src);
     if (rc != 0) {
         return rc;
@@ -16228,6 +16248,7 @@ static int32_t link_empty_check(int dirfd, const char __user *upath, int *empty)
  */
 static int32_t do_symlink(const char *target, const char *newname, int end)
 {
+    const void *keeps;
     struct vfs_ref parent;
     struct vfs_stamp st;
     char leaf[VFS_NAME_MAX + 1];
@@ -16236,7 +16257,9 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
     if (target[0] == '\0') {
         return -ENOENT;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
@@ -16362,6 +16385,7 @@ long sys_symlinkat(isr_params_t *params)
 static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirfd,
                               const char __user *unew, int flags)
 {
+    const void *keeps;
     struct vfs_ref src;
     char *oldpath = NULL;
     char *newpath = NULL;
@@ -16379,6 +16403,7 @@ static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirf
     if (rc == 0) {
         rc = path_from_user_dir(newdirfd, unew, &newpath, &newend);
     }
+    keeps = vfs_walk_keeps_mark();
     while (rc == 0 && !oldpath) {
         rc = olddirfd == AT_FDCWD ? resolve_cwd(0, &src) : link_fd_file(olddirfd, &src);
         if (rc == 0) {
@@ -16387,6 +16412,7 @@ static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirf
         if (rc != CALL_AGAIN) {
             break;
         }
+        vfs_walk_keeps_back(keeps);
         rc = 0;
     }
     if (rc == 0 && oldpath) {
@@ -19743,6 +19769,7 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
  */
 static int32_t unlink_named(const char *path, int end)
 {
+    const void *keeps;
     const char *name;
     struct vfs_stamp st;
     struct vfs_ref parent;
@@ -19761,7 +19788,9 @@ static int32_t unlink_named(const char *path, int end)
     if (name[0] == '\0') {
         return -EINVAL;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
@@ -20060,6 +20089,7 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
  */
 static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
 {
+    const void *keeps;
     struct vfs_ref parent;
     struct vfs_stamp st;
     char leaf[VFS_NAME_MAX + 1];
@@ -20071,7 +20101,9 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
         return -EEXIST;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc; /* a missing parent, or a denied ancestor */
@@ -20172,6 +20204,7 @@ static int32_t mknod_kind(uint32_t mode)
  */
 static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
 {
+    const void *keeps;
     uint32_t type = mode & S_IFMT;
     struct vfs_ref parent;
     struct vfs_stamp st;
@@ -20179,7 +20212,9 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     void *made = NULL;
     int32_t rc;
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
@@ -20383,6 +20418,7 @@ static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf,
  */
 static int32_t do_rmdir(const char *pathbuf)
 {
+    const void *keeps;
     struct vfs_ref parent;
     struct vfs_stamp st;
     char leaf[VFS_NAME_MAX + 1];
@@ -20394,7 +20430,9 @@ static int32_t do_rmdir(const char *pathbuf)
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
         return -EBUSY;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
@@ -20836,6 +20874,7 @@ static int32_t rename_dir_access(const struct vfs_ref *par)
  */
 static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, int slash)
 {
+    const void *keeps;
     char oleaf[VFS_NAME_MAX + 1];
     char nleaf[VFS_NAME_MAX + 1];
     const char *old_name;
@@ -20851,7 +20890,9 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         return (old_name[0] != '\0' && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
     }
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf, sizeof(oleaf));
     if (rc != 0) {
         return rc;
@@ -21266,12 +21307,15 @@ static int32_t utimes_fd(fd_entry_t *entry, const struct utime_spec *times, int 
  */
 static int32_t utimes_path(const char *path, int flags, int dir, const struct utime_spec *times)
 {
+    const void *keeps;
     const struct vpath *svp;
     struct vfs_ref ref;
     struct vfs_stamp st;
     int32_t rc;
 
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = resolve_named(
         path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);
     if (rc != 0) {
@@ -22875,6 +22919,7 @@ static int32_t bind_name_check(const char *path, int end)
  */
 int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino)
 {
+    const void *keeps;
     char *buf = path_buf_get();
     struct vfs_stat st;
     struct vfs_stamp first;
@@ -22884,7 +22929,9 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
     if (!buf) {
         return -ENOMEM;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = kernel_path_cwd(buf, path, &end);
     if (rc >= 0) {
         rc = bind_name_check(buf, end);

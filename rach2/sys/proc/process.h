@@ -351,6 +351,11 @@ struct process {
     /* The answers of this thread's walks on a KRFFS, kept until its system
      * call ends (`struct walk_keep` in vfs.c, `vfs_walk_keeps_end`). */
     struct walk_keep *walk_keeps;
+    /* The keep the thread's next walk takes its answer's keep from, which
+     * the walk allocates before it finds anything, so that no sleep comes
+     * between its last check and the hold (`walk_keep_take` in vfs.c);
+     * freed with the keeps. */
+    struct walk_keep *walk_spare;
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
