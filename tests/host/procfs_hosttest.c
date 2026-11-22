@@ -1009,6 +1009,13 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *mnt)
     return mnt->bind_of ? mnt->bind_of : mnt;
 }
 
+/** Every mount in the model is visible to the caller. */
+int vfs_mount_seen(const struct vfs_mount *m)
+{
+    (void)m;
+    return 1;
+}
+
 /** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
 uint32_t vfs_mount_flags(const struct vfs_mount *m)
 {
