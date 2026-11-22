@@ -1960,7 +1960,7 @@ static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt,
 static int walk_rest_follow_ok(const struct walk_rules *rules, const struct vpath *vp, int kind,
                                int flags, int *links)
 {
-    int rc = kind ? walk_link_ok(rules, walk_magic(vp)) : 0;
+    int rc = kind || (vp && vp->links) ? walk_link_ok(rules, walk_magic(vp)) : 0;
 
     if (rc == 0 && vp) {
         *links += vp->links;
@@ -5552,27 +5552,26 @@ static int synth_more(const char *p, const char *end)
 /**
  * Whether the part of a path classified so far, the `out` bytes of `full`,
  * names a link the walk follows: to its object (`synth_object_link`) or to
- * its text, a link made under /dev, when more of the rest
- * comes after it (`more`); or by its text, whether or not more comes, a link of
- * /sys a driver added whose directory lies outside the walk's root, the
- * first `plen` bytes of `full` (`synth_sys_link_dir`), since the directory
- * its text names is reached only through the mounts above the bind, as
- * Linux's walk reaches it. VFS_LINK with a new node of the link held in
- * `*node`, 0 when it names none, or -ENOMEM; the walk leaves a link of /sys
- * at the end of the path to a walk that does not follow it
- * (`walk_rest_kind`). A node of /proc passed on the way whose
- * inode keeps its owner, a process's fd, fdinfo or task directory or one of
- * its links among them, gets its current owner (`procfs_lookup_owner`), as
- * Linux's lookup_fast revalidates each component it reaches (Linux 6.12
- * fs/namei.c:1694-1706), with pid_revalidate (fs/proc/base.c:2053-2066) or
- * tid_fd_revalidate (fs/proc/fd.c:145-161), before it follows a link and
- * even when a later lookup fails.
+ * its text, a link made under /dev, when more of the rest comes after it
+ * (`more`); or by its text, whether or not more comes, a link of /sys a
+ * driver added (VNODE_SYS_LINK), so that the walk follows every such link
+ * itself, counts it toward VFS_LINK_MAX and judges it by the walk's rules
+ * (`walk_rest_follow_ok`), and a `..` after it climbs from the directory
+ * its text names, as Linux's walk climbs from a link's target. VFS_LINK
+ * with a new node of the link held in `*node`, 0 when it names none, or
+ * -ENOMEM; the walk leaves a link of /sys at the end of the path to a walk
+ * that does not follow it (`walk_rest_kind`). A node of /proc passed on the
+ * way whose inode keeps its owner, a process's fd, fdinfo or task directory
+ * or one of its links among them, gets its current owner
+ * (`procfs_lookup_owner`), as Linux's lookup_fast revalidates each
+ * component it reaches (Linux 6.12 fs/namei.c:1694-1706), with
+ * pid_revalidate (fs/proc/base.c:2053-2066) or tid_fd_revalidate
+ * (fs/proc/fd.c:145-161), before it follows a link and even when a later
+ * lookup fails.
  */
-static int synth_link_part(uint32_t pidns_ino, char *full, uint32_t out, uint32_t plen, int more,
-                           void **node)
+static int synth_link_part(uint32_t pidns_ino, char *full, uint32_t out, int more, void **node)
 {
     struct vpath vp;
-    char dir[256];
     int rc;
 
     full[out] = '\0';
@@ -5589,8 +5588,7 @@ static int synth_link_part(uint32_t pidns_ino, char *full, uint32_t out, uint32_
     if (more && vp.kind == VNODE_PROC_FDINFO) {
         return -ENOTDIR;
     }
-    if (vp.kind == VNODE_SYS_LINK &&
-        synth_sys_link_dir(full, (int)plen, dir, (int)sizeof(dir)) < 0) {
+    if (vp.kind == VNODE_SYS_LINK) {
         return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
     }
     if (!more || (!synth_object_link(&vp) && !synth_self_link(&vp) &&
@@ -5598,29 +5596,6 @@ static int synth_link_part(uint32_t pidns_ino, char *full, uint32_t out, uint32_
         return 0;
     }
     return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
-}
-
-/**
- * The length of the path `full`, `out` bytes, after a `..`: its text's
- * parent, or, when it ends on a link of /sys a driver added whose directory
- * lies below the first `plen` bytes, the root of the walk, the parent of
- * that directory (`synth_sys_link_dir`), written into `full`, as Linux's
- * walk climbs from a link's target. A link whose directory lies outside the
- * root never gets here, since `synth_link_part` hands it to the VFS.
- */
-static uint32_t synth_dotdot(char *full, uint32_t out, uint32_t plen)
-{
-    char dir[256];
-    uint32_t len;
-
-    full[out] = '\0';
-    if (!path_under(full, "sys", 3) ||
-        synth_sys_link_dir(full, (int)plen, dir, (int)sizeof(dir)) != 1) {
-        return text_parent(full, out);
-    }
-    len = (uint32_t)k_strlen(dir + 1);
-    k_memcpy(full, dir + 1, len);
-    return text_parent(full, len);
 }
 
 /** Search a proc descriptor directory before looking up any child. */
@@ -5716,10 +5691,10 @@ static int synth_final(char *full, uint32_t pidns_ino, void **node)
  * A part that names a link the walk follows to its object and has more of
  * the rest after it returns VFS_LINK (`synth_link_part`), with a new node of
  * the link held and `*left` after its name, so that a `..` after the link
- * climbs from the object; so does a link a driver added to /sys whose
- * directory lies outside the walk's root, which the VFS follows by its text;
- * a `..` after one whose directory lies inside climbs from that directory
- * (`synth_dotdot`). Otherwise the whole path,
+ * climbs from the object; so does every link a driver added to /sys, which
+ * the VFS follows by its text, so that the classification passes through
+ * no link and a `..` here is only the text's parent. Otherwise the whole
+ * path,
  * `prefix` and the rest without its `.` and `..`, is classified
  * (`synth_classify`): 0 with a new node held, -ENOENT, also for a
  * directory of /dev that is absent (`devfs_subdir_present`), -ENOTDIR for a
@@ -5783,7 +5758,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const struct sy
                 kind = VFS_CLIMB;
                 goto done;
             }
-            out = synth_dotdot(full, out, plen);
+            out = text_parent(full, out);
             continue;
         }
         if (out + 1 + len + 1 > VFS_PATH_MAX) {
@@ -5803,7 +5778,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const struct sy
         full[out] = '\0';
         kind = proc_child(mnt, tail->dir, full, synth_more(p, end), node);
         if (!kind)
-            kind = synth_link_part(pidns_ino, full, out, plen, synth_more(p, end), node);
+            kind = synth_link_part(pidns_ino, full, out, synth_more(p, end), node);
         if (kind != 0) {
             *left = p;
             goto done;
