@@ -905,8 +905,9 @@ uint64_t virtio_gpu_copied_bytes(void);
  * answered, the EXECBUFFERs, and the WAITs, those with NOWAIT and those
  * answered EBUSY; then the sleeps of `vgpu_room`, of the wait for the DMA
  * pool and of `backing_fill` and their nanoseconds, the reaps that freed a
- * command and their nanoseconds and commands, and the most DMA pages the
- * started commands held (`held`).
+ * command and their nanoseconds and commands, the most DMA pages the
+ * started commands held (`held`), and the notifies, their nanoseconds and
+ * the longest's.
  */
 enum {
     VGPU_M_OBJS,
@@ -931,6 +932,9 @@ enum {
     VGPU_M_REAP_NS,
     VGPU_M_REAP_CMDS,
     VGPU_M_HELD_PEAK,
+    VGPU_M_NOTIFY_N,
+    VGPU_M_NOTIFY_NS,
+    VGPU_M_NOTIFY_MAX_NS,
     VGPU_M_N
 };
 /** Add `delta` to counter `which`, raising the peaks. Any context. */

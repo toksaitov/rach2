@@ -307,19 +307,24 @@ static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int 
 {
     uint32_t flags;
     int depth;
+    int64_t t = dma_fence_now();
 
     if (!sleepable || !vg->vdev->notify_unlocked || !sched_is_enabled() || current_proc == NULL ||
         !kirq_enabled()) {
         virtqueue_kick(vq);
-        return;
+    } else {
+        vg->kicking++;
+        flags = kirq_save();
+        depth = bkl_drop();
+        virtqueue_kick(vq);
+        bkl_take(depth);
+        kirq_restore(flags);
+        vg->kicking--;
     }
-    vg->kicking++;
-    flags = kirq_save();
-    depth = bkl_drop();
-    virtqueue_kick(vq);
-    bkl_take(depth);
-    kirq_restore(flags);
-    vg->kicking--;
+    t = dma_fence_now() - t;
+    vgpu_meas_add(VGPU_M_NOTIFY_N, 1);
+    vgpu_meas_add(VGPU_M_NOTIFY_NS, t);
+    vgpu_meas_max(VGPU_M_NOTIFY_MAX_NS, (uint64_t)t);
 }
 
 /**
