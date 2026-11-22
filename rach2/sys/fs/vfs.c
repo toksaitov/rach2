@@ -798,6 +798,21 @@ static int bind_rooted_at(struct vfs_mount *mnt, const void *node)
     return 0;
 }
 
+int vfs_bind_holds(const void *node)
+{
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+
+        if (m && (m->state == VFS_ACTIVE || m->state == VFS_MOUNTING) && m->bind_of == mounts[0] &&
+            m->type == &vfs_krffs_type && m->root == node) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
 {
     void *found;
@@ -6876,6 +6891,53 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
 }
 
 /**
+ * Pin the node `sref` holds for a bind's root, into `*pin`, on a type that
+ * keeps a node only while it is open, mounted KRFFS, so that the file stays
+ * while the bind shows it after its name is removed, as a type's hold keeps
+ * it on the others; NULL on any other type. 0 or -ENOMEM.
+ */
+static int bind_pin(const struct vfs_ref *sref, void **pin)
+{
+    struct vfs_mount *base = mount_base(sref->mnt);
+    int rc;
+
+    *pin = NULL;
+    if (base == mounts[0] || !sref->mnt->type->ops->pin) {
+        return 0;
+    }
+    vfs_ns_lock(sref->mnt);
+    rc = sref->mnt->type->ops->pin(sref->mnt, sref->node, pin);
+    vfs_ns_unlock(sref->mnt);
+    return rc;
+}
+
+/** Give back the pin `bind_pin` took, NULL being none. */
+static void bind_unpin(struct vfs_mount *mnt, void *pin)
+{
+    if (pin) {
+        vfs_ns_lock(mnt);
+        mnt->type->ops->unpin(mnt, pin);
+        vfs_ns_unlock(mnt);
+    }
+}
+
+/**
+ * Let go of what the bind `m`, unmounted, kept its root by besides the
+ * type's hold: its pin on mounted KRFFS, and on the KRFFS root, whose binds
+ * count among a node's holders (`vfs_bind_holds`), the node itself when it
+ * lost its name and nothing else holds it (`fs_bind_root_gone`).
+ */
+static void bind_let_go(struct vfs_mount *m)
+{
+    if (m->bind_pin) {
+        bind_unpin(m, m->bind_pin);
+        m->bind_pin = NULL;
+    } else if (m->bind_of == mounts[0] && m->type == &vfs_krffs_type) {
+        fs_bind_root_gone(m->root);
+    }
+}
+
+/**
  * Place a bind of the place `sref` holds over the one `tref` holds, `target`
  * naming it, both walks' references taken over: the mounts below the
  * source too with `rec`, but for `skip` and those below it (`bind_below`).
@@ -6891,12 +6953,16 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     struct vfs_mount *m;
     char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX], canon[VFS_COVERED_PATH_MAX];
     int dir = 1, nameless = 0, busy, gone;
+    void *pin = NULL;
     int rc;
 
     rc = bind_source(sref, full, inner, sreal, &dir);
     if (rc == 0) {
         rc = target_check(tref, target, canon, dir, treal, &nameless);
     } else {
+        vfs_ref_release(tref);
+    }
+    if (rc == 0 && (rc = bind_pin(sref, &pin)) != 0) {
         vfs_ref_release(tref);
     }
     if (rc != 0) {
@@ -6907,6 +6973,7 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     if (!skip && (!vfs_mount_seen(sref->mnt) || !vfs_mount_seen(tref->mnt))) {
         vfs_node_unlock(tref);
         vfs_ref_release(tref);
+        bind_unpin(sref->mnt, pin);
         vfs_ref_release(sref);
         return -EINVAL;
     }
@@ -6919,11 +6986,13 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     rc = m ? 0 : busy ? -EBUSY : gone ? gone : -ENOMEM;
     if (m) {
         bind_fill(m, sref->mnt, sref->node, inner);
+        m->bind_pin = pin;
         m->state = VFS_ACTIVE;
     }
     vfs_node_unlock(tref);
     if (rc != 0) {
         vfs_ref_release(tref);
+        bind_unpin(sref->mnt, pin);
         vfs_ref_release(sref);
         return rc;
     }
@@ -7537,6 +7606,7 @@ static int unmount_bind(struct vfs_mount *m)
     }
     inotify_unmount(m);
     vfs_ns_unlock(m);
+    bind_let_go(m);
     klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases", m->covered_path, (int)m->opens,
          (int)m->releases);
     cov.mnt = m->parent;

@@ -93,6 +93,14 @@ int fs_node_is_held(const struct krffs_node *node);
  */
 void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
 
+/**
+ * Free `node` of the KRFFS root, the root of a bind just unmounted, when it
+ * has lost its name and nothing else holds it (`fd_node_holders`), as the
+ * release of a file's last descriptor frees one. Takes the root's namespace
+ * lock, which the caller may hold. May sleep.
+ */
+void fs_bind_root_gone(struct krffs_node *node);
+
 /** The mount id and the inode number fstat gives descriptor `fd` of the
  * process `pid`, for its /proc/PID/fdinfo/N: 0, -ENOENT for a descriptor
  * that is not open, or the error of a mounted type's getattr, which may

@@ -1318,6 +1318,13 @@ int unix_inflight_holds(const void *node)
     return 0;
 }
 
+/** No row binds a file of the KRFFS root. */
+int vfs_bind_holds(const void *node)
+{
+    (void)node;
+    return 0;
+}
+
 /** Map a page of the resident-read row, the address being the page's, or
  * none for `resident_fail`; no other row reads, shares or cuts the pages of
  * a mapping. */
