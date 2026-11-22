@@ -6922,9 +6922,10 @@ int pc_sync_wait(void)
  * cache writes its dirty buffers (`vfs_sync_all`), then every dirty page of
  * the disk-backed window goes back via `pc_sync_wait`, which waits for the
  * writes in flight (and does nothing when KRFFS is the RAM module). Like
- * Linux's sync(2), it returns 0 even if a write-back failed; what failed
- * stays dirty for a later call, and a mount whose device failed a write is
- * read-only from then on.
+ * Linux's sync(2), it returns 0 even if a write-back failed; a page whose
+ * write failed stays dirty for a later call, a failed flush of the disk's
+ * cache is made again by the next sync, and a mount whose device failed a
+ * write is read-only from then on.
  */
 long sys_sync(isr_params_t *params)
 {

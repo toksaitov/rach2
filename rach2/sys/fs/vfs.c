@@ -4222,11 +4222,14 @@ static int kfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
-/** Record `rc`, a failed write of a page of the KRFFS root, in the root's
- * write-back errors (`vfs_wb_err_set`) for each description's next fsync and
- * syncfs to report, as the buffer cache records a failed block write of a
- * mount's device (`vfs_device_failed`): the root is on no mount's device, and
- * the page cache keeps the page dirty for a later write that may succeed.
+/** Record `rc`, a failed write of a page of the KRFFS root or a failed flush
+ * of the disk's cache after its writes, in the root's write-back errors
+ * (`vfs_wb_err_set`) for each description's next fsync and syncfs to report,
+ * as the buffer cache records a failed block write of a mount's device
+ * (`vfs_device_failed`): the root is on no mount's device. The page cache
+ * keeps a page whose write failed dirty for a later write that may succeed;
+ * after a failed flush the pages are clean and the next sync flushes again
+ * without writing them.
  * The page cache calls it from any context (`pc_on_failure`), a page fault's
  * eviction among them, so entry zero is read under `mount_table_lock`. */
 static void kfs_page_failed(int rc)
@@ -4240,9 +4243,10 @@ static void kfs_page_failed(int rc)
 }
 
 /** The `sync` of the KRFFS root: write the dirty pages of the page cache and
- * wait for the writes in flight (`pc_sync_wait`), a failure of which is
- * recorded as it happens (`kfs_page_failed`); 0, or -EIO when a page's write
- * failed during the wait. */
+ * wait for the writes in flight and the flush of the disk's cache after them
+ * (`pc_sync_wait`), a failure of which is recorded as it happens
+ * (`kfs_page_failed`); 0, or -EIO when a page's write or a flush failed
+ * during the wait. */
 static int kfs_sync(struct vfs_mount *mnt)
 {
     (void)mnt;
