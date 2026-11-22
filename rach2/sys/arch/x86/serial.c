@@ -10,6 +10,8 @@
 /* COM1 port base address */
 #define SERIAL_COM1 0x3F8
 #include "../../kio.h"
+#include "../../lib/kirq.h"
+#include "../../panic.h"
 #include "isr.h"
 #include "pic.h"
 
@@ -180,11 +182,25 @@ static int _serial_detect_port(void)
  * drivers/tty/serial/8250/8250_port.c, `serial8250_tx_chars`). Under a
  * hypervisor every port access is an exit to the emulator, and a status
  * read before every byte made each byte cost two. `_tx_room` is what may
- * still be written before the next read; the console's callers write under
- * klog's report lock, which keeps it with `_serial_stuck`.
+ * still be written before the next read; `_tx_owner` keeps it.
  */
 static int _tx_load = 1;
 static int _tx_room;
+
+/*
+ * The transmitter's lock, over `_tx_room`, `_serial_stuck` and the writes
+ * to the data register: 0 when free, otherwise the holder's processor index
+ * plus one. Each writer takes it with interrupts off, so that no other
+ * writer, an interrupt's report on the same processor included, comes
+ * between a read of the line status and the room counted from it, as
+ * Linux's 8250 console writes under the port's lock with interrupts saved
+ * (`serial8250_console_write`). The console's callers do not serialize the
+ * port: klog's report lock covers its records, not every console write.
+ * The region holds one status read and one byte's write, never the wait for
+ * a busy UART, so a waiter spins for no longer than that. It is no checked
+ * spinlock, since the lock checker's reports write through it.
+ */
+static volatile unsigned int _tx_owner;
 
 /**
  * COM1 is set to 115200 baud, a divisor of 1 on the UART's 1.8432 MHz clock
@@ -242,10 +258,53 @@ void serial_init(void)
 
 static int _serial_stuck; /* the last byte timed out; reset by one sent */
 
+/**
+ * Turn interrupts off and take the transmitter's lock (`_tx_owner`); return
+ * the flags `_tx_unlock` puts back, and set `*held` when this call took the
+ * lock. A writer on the processor that holds it, which only an NMI's report
+ * or a fault inside the region can be, and a writer during a panic that
+ * finds another holder, go on without it, as Linux's console writer does
+ * when its try fails during an oops: the panic's output matters more than
+ * the rare overrun of the FIFO.
+ */
+static uint32_t _tx_lock(int *held)
+{
+    uint32_t flags = kirq_save();
+    unsigned int me = (unsigned int)arch_cpu_id() + 1u;
+    unsigned int owner;
+
+    for (;;) {
+        owner = _tx_owner;
+        if (owner == 0) {
+            owner = arch_atomic_cmpxchg(&_tx_owner, 0, me);
+            if (owner == 0) {
+                *held = 1;
+                return flags;
+            }
+        }
+        if (owner == me || k_panicking()) {
+            *held = 0;
+            return flags;
+        }
+        arch_relax();
+    }
+}
+
+/** Give back what `_tx_lock` took. */
+static void _tx_unlock(uint32_t flags, int held)
+{
+    if (held) {
+        arch_atomic_xchg(&_tx_owner, 0);
+    }
+    kirq_restore(flags);
+}
+
 void serial_out(char c)
 {
     const struct serial_line *line = _line;
-    uint64_t start, limit;
+    uint64_t start = 0, limit = 0;
+    uint32_t flags;
+    int held, waiting = 0;
 
     if (line) {
         line->out(c);
@@ -256,23 +315,37 @@ void serial_out(char c)
     if (!_serial_port_exists) {
         return;
     }
-    if (_tx_room == 0) {
-        if (!_serial_is_transmit_empty()) {
+    for (;;) {
+        flags = _tx_lock(&held);
+        if (_tx_room == 0 && _serial_is_transmit_empty()) {
+            _tx_room = _tx_load;
+        }
+        if (_tx_room > 0) {
+            _tx_room--;
+            _serial_stuck = 0;
+            outb(SERIAL_COM1 + SERIAL_DATA, c);
+            _tx_unlock(flags, held);
+            return;
+        }
+        if (!waiting) {
             limit = (uint64_t)(_serial_stuck ? SERIAL_TX_STUCK_MS : SERIAL_TX_WAIT_MS) *
                     SERIAL_TX_CYCLES_PER_MS;
             start = arch_cycles();
-            while (!_serial_is_transmit_empty()) {
-                if (arch_cycles() - start >= limit) {
-                    _serial_stuck = 1;
-                    return;
-                }
+            waiting = 1;
+        }
+        _tx_unlock(flags, held);
+        /* Wait with the lock given back and interrupts as they were; the
+         * room is counted again under the lock, since another writer may
+         * have filled the FIFO meanwhile. */
+        while (!_serial_is_transmit_empty()) {
+            if (arch_cycles() - start >= limit) {
+                flags = _tx_lock(&held);
+                _serial_stuck = 1;
+                _tx_unlock(flags, held);
+                return;
             }
         }
-        _tx_room = _tx_load;
     }
-    _serial_stuck = 0;
-    _tx_room--;
-    outb(SERIAL_COM1 + SERIAL_DATA, c);
 }
 
 int serial_rx_service(int budget)
