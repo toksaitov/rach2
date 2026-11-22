@@ -4898,6 +4898,21 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
+/** vfs.c's: the type's pin of `node`; a mount is its own base here. */
+int vfs_pin(struct vfs_mount *mnt, void *node, void **token)
+{
+    *token = NULL;
+    return mnt->type->ops->pin ? mnt->type->ops->pin(mnt, node, token) : 0;
+}
+
+/** vfs.c's: the type's unpin of `token`, nothing for NULL. */
+void vfs_unpin(struct vfs_mount *mnt, void *token)
+{
+    if (token) {
+        mnt->type->ops->unpin(mnt, token);
+    }
+}
+
 /** sysfs's type, which no row mounts: what `attr_read_only` compares. */
 const struct vfs_type vfs_sysfs_type = {"sysfs"};
 
