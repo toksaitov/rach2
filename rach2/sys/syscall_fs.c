@@ -15053,7 +15053,7 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
     struct vfs_stamp st;
     krffs_node_t *node;
     int32_t rc;
-    uint32_t events;
+    uint32_t events = 0;
 
 again:
     rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);
