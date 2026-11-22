@@ -862,6 +862,9 @@ struct exec_state {
     struct fs_struct *fs_held; /* holds off CLONE_FS (`exec_ids`) */
     int path_end;              /* how `path` named a directory by its end */
     char path[VFS_PATH_MAX];
+    /* `path` in a path page that keeps the directory a relative path starts
+     * at (`path_buf_set_dir`), for the program's walk; NULL once walked. */
+    char *walk;
     /* The base name of a `#!` script, which names the new image's comm in
      * place of its interpreter's, as Linux names it by bprm->filename; empty
      * for a program run directly. */
@@ -894,6 +897,7 @@ static void exec_release(void)
     if (s->files != NULL) {
         fd_table_delete(s->files);
     }
+    path_buf_put(s->walk);
     kfree(s);
     current_proc->exec_ws = NULL;
 }
@@ -2503,10 +2507,15 @@ static int32_t exec_name(struct exec_state *s, const struct exec_call *c, int *h
         k_memcpy(s->path, "/dev/fd/", 9);
         k_itoa(c->dirfd, s->path + 8, sizeof(s->path) - 8u, 10, false);
     } else {
-        rc = copy_path_exec_at(s->path, sizeof(s->path), c->dirfd, c->path, &s->path_end);
+        s->walk = path_buf_get();
+        if (s->walk == NULL) {
+            return -ENOMEM;
+        }
+        rc = copy_path_exec_at(s->walk, VFS_PATH_MAX, c->dirfd, c->path, &s->path_end);
         if (rc < 0) {
             return rc;
         }
+        k_memcpy(s->path, s->walk, (uint32_t)rc + 1u);
         if (c->flags & EXEC_AT_SYMLINK_NOFOLLOW) {
             *how = EXEC_WALK_NOFOLLOW;
         }
@@ -2565,8 +2574,10 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s, const struct
         s->mm->thp_disable = current_proc->mm->thp_disable;
     }
     if (rc == 0) {
-        rc = exec_open(&s->prog, s->path, s->path_end, how, &s->id, s->mm);
+        rc = exec_open(&s->prog, s->walk ? s->walk : s->path, s->path_end, how, &s->id, s->mm);
     }
+    path_buf_put(s->walk);
+    s->walk = NULL;
     if (rc == 0) {
         rc = exec_link_name(s);
     }
