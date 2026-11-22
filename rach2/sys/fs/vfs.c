@@ -3384,18 +3384,22 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return resolve_path(start, path, flags & ~VFS_WALK_CREATE, out, leaf, leafcap, 0);
 }
 
+/* `cwd_take`'s answer for a working directory with no pair, which must
+ * differ from WALK_FULL's. */
+#define CWD_NO_PAIR 2
+
 /** One attempt of `vfs_resolve_cwd` checked by `wc`: hold the pair in
  * `ref`, with the namespace lock of a serialised type, and make the last
- * check with the keep of a KRFFS answer (`walk_keep_take`). 0, 1 when the
- * pair is NULL, WALK_FULL when the pair or the sequence moved, which lets
- * go of all it took, or an error. */
+ * check with the keep of a KRFFS answer (`walk_keep_take`). 0, CWD_NO_PAIR
+ * when the pair is NULL, WALK_FULL when the pair or the sequence moved,
+ * which lets go of all it took, or an error. */
 static int cwd_take(int flags, struct vfs_ref *ref, const struct walk_check *wc)
 {
     struct fs_struct *fs = current_proc->fs;
     int rc;
 
     if ((ref->mnt = fs->cwd_mnt) == NULL) {
-        return 1;
+        return CWD_NO_PAIR;
     }
     rc = vfs_enter(ref->mnt);
     if (rc != 0) {
@@ -3434,7 +3438,7 @@ int vfs_resolve_cwd(int flags, struct vfs_ref *ref)
         }
         rc = cwd_take(flags, ref, &wc);
     } while (rc == WALK_FULL);
-    return rc;
+    return rc == CWD_NO_PAIR ? 1 : rc;
 }
 
 /**
