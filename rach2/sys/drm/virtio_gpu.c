@@ -138,6 +138,9 @@ struct virtio_gpu_cmd *vgpu_cmd_new(struct virtio_gpu_device *vg, struct virtque
     cmd->segments = cmd->sg;
     cmd->nin = 1;
     cmd->vg = vg;
+#ifdef RACH2_VGPU_PROFILE
+    cmd->tid = current_proc ? current_proc->pid : 0;
+#endif
     cmd->vq = vq;
     ((struct virtio_gpu_ctrl_hdr *)(void *)cmd->page)->type = type;
     cmd->sg[0].addr = cmd->addr;
@@ -262,10 +265,18 @@ static struct vgpu_profile_row *profile_row(struct virtio_gpu_device *vg, uint32
     return NULL;
 }
 
+/** The current thread's id, 0 outside one. */
+static uint32_t event_tid(void)
+{
+    return current_proc ? current_proc->pid : 0;
+}
+
 /** Record an event in `vg`'s ring, as `vgpu_profile_event` does, with
- * `end` the monotonic time it ended. The caller holds vg->lock. */
+ * `end` the monotonic time it ended and `tid` the thread it belongs to,
+ * which a command published from an interrupt's reap takes from the
+ * command. The caller holds vg->lock. */
 static void event_put(struct virtio_gpu_device *vg, uint32_t type, int64_t start, int64_t end,
-                      uint32_t kib)
+                      uint32_t tid, uint32_t kib)
 {
     struct vgpu_event *e;
     uint64_t us = end > start ? tick_div((uint64_t)(end - start), 1000u, NULL) : 0;
@@ -273,11 +284,11 @@ static void event_put(struct virtio_gpu_device *vg, uint32_t type, int64_t start
     if (!vg->events) {
         return;
     }
-    e = &vg->events[vg->events_total % VGPU_EVENTS];
+    e = &vg->events[(uint32_t)vg->events_total & (VGPU_EVENTS - 1)];
     e->ns = start;
     e->dur_us = us > 0xffffffffu ? 0xffffffffu : (uint32_t)us;
     e->type = type;
-    e->tid = current_proc ? current_proc->pid : 0;
+    e->tid = tid;
     e->kib = kib;
     vg->events_total++;
 }
@@ -287,7 +298,7 @@ void vgpu_profile_event(struct virtio_gpu_device *vg, uint32_t type, int64_t sta
     int64_t end = rtc_monotonic_ns();
     uint32_t flags = spin_lock_irqsave(&vg->lock);
 
-    event_put(vg, type, start, end, kib);
+    event_put(vg, type, start, end, event_tid(), kib);
     spin_unlock_irqrestore(&vg->lock, flags);
 }
 
@@ -302,7 +313,7 @@ static void profile_publish(struct virtio_gpu_cmd *cmd)
     if (row) {
         cmd->published_ns = rtc_monotonic_ns();
         if (type == VIRTIO_GPU_CMD_SET_SCANOUT) {
-            event_put(cmd->vg, type, cmd->published_ns, cmd->published_ns, 0);
+            event_put(cmd->vg, type, cmd->published_ns, cmd->published_ns, cmd->tid, 0);
         }
         row->sent++;
         row->fenced += cmd->fence != NULL;
@@ -396,9 +407,9 @@ static int32_t profile_show(void *data, char *buf, uint32_t cap)
 
 static const struct debugfs_text_ops profile_ops = {profile_show, NULL};
 
-/** Append `n` in decimal and then `end` at `*p`, when `*p` is not NULL, and
- * return the characters it takes. */
-static uint32_t event_number(char **p, uint64_t n, char end)
+/** Write `n` in decimal and then `end` at `p`, and return the characters
+ * written: at most 21. */
+static uint32_t event_number(char *p, uint64_t n, char end)
 {
     char digits[20];
     uint32_t len = 0, i;
@@ -408,58 +419,86 @@ static uint32_t event_number(char **p, uint64_t n, char end)
         n = tick_div(n, 10, &digit);
         digits[len++] = (char)('0' + digit);
     } while (n != 0);
-    if (*p) {
-        for (i = 0; i < len; i++) {
-            (*p)[i] = digits[len - 1 - i];
-        }
-        (*p)[len] = end;
-        *p += len + 1;
+    for (i = 0; i < len; i++) {
+        p[i] = digits[len - 1 - i];
     }
+    p[len] = end;
     return len + 1;
 }
 
+/** Put the `len` bytes at `text` at offset `*size` of the `cap` bytes at
+ * `buf`, as far as they go, and add `len` to `*size`. */
+static void event_text(char *buf, uint32_t cap, uint32_t *size, const char *text, uint32_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len && *size + i < cap; i++) {
+        buf[*size + i] = text[i];
+    }
+    *size += len;
+}
+
+/** Copy the events `vg`'s ring holds into vg->events_copy, oldest to end
+ * first, under vg->lock, and sort the copy by start, so that a wait, which
+ * enters the ring when it ends, comes before the events that began after
+ * it. Return how many it holds, with the count the ring no longer holds in
+ * `*lost`. */
+static uint32_t events_snapshot(struct virtio_gpu_device *vg, uint64_t *lost)
+{
+    struct vgpu_event *c = vg->events_copy, e;
+    uint32_t flags, n, at, i, j;
+    uint64_t total;
+
+    flags = spin_lock_irqsave(&vg->lock);
+    total = vg->events_total;
+    n = total > VGPU_EVENTS ? VGPU_EVENTS : (uint32_t)total;
+    at = (uint32_t)(total - n) & (VGPU_EVENTS - 1);
+    k_memcpy(c, vg->events + at, (VGPU_EVENTS - at < n ? VGPU_EVENTS - at : n) * sizeof(*c));
+    if (VGPU_EVENTS - at < n) {
+        k_memcpy(c + (VGPU_EVENTS - at), vg->events, (n - (VGPU_EVENTS - at)) * sizeof(*c));
+    }
+    spin_unlock_irqrestore(&vg->lock, flags);
+    *lost = total - n;
+    for (i = 1; i < n; i++) {
+        e = c[i];
+        for (j = i; j > 0 && c[j - 1].ns > e.ns; j--) {
+            c[j] = c[j - 1];
+        }
+        c[j] = e;
+    }
+    return n;
+}
+
 /** The text of `virtio_gpu_events`: a header, `lost` and the count of the
- * events the ring no longer holds, then one line for each it holds, oldest
- * first. Its size when `buf` is NULL or `cap` too small. The ring is read
- * a line at a time under vg->lock, so an event recorded meanwhile may
- * replace one not yet read, and the second call may give fewer bytes. */
+ * events the ring no longer holds, then one line for each it holds, in
+ * order of their start, as far as it goes in the `cap` bytes at `buf`; the
+ * whole text's length. The lines come from one copy of the ring, so that
+ * the text and its length agree. Runs under the big lock, which keeps a
+ * second reader off the copy, since it does not sleep. */
 static int32_t events_show(void *data, char *buf, uint32_t cap)
 {
-    static const char header[] = "ns dur_us type tid kib\n";
-    static const char lost[] = "lost ";
+    static const char header[] = "ns dur_us type tid kib\nlost ";
     struct virtio_gpu_device *vg = data;
-    struct vgpu_event e;
-    uint32_t flags, total, first, i, size;
-    char *p = NULL;
-    int pass;
+    struct vgpu_event *e;
+    uint64_t lost;
+    uint32_t n, i, size = 0, len;
+    char line[5 * 21];
 
-    for (pass = 0; pass < 2; pass++) {
-        flags = spin_lock_irqsave(&vg->lock);
-        total = vg->events_total;
-        spin_unlock_irqrestore(&vg->lock, flags);
-        first = total > VGPU_EVENTS ? total - VGPU_EVENTS : 0;
-        size = sizeof(header) - 1 + sizeof(lost) - 1;
-        if (p) {
-            k_memcpy(p, header, sizeof(header) - 1);
-            p += sizeof(header) - 1;
-            k_memcpy(p, lost, sizeof(lost) - 1);
-            p += sizeof(lost) - 1;
-        }
-        size += event_number(&p, first, '\n');
-        for (i = first; i < total; i++) {
-            flags = spin_lock_irqsave(&vg->lock);
-            e = vg->events[i % VGPU_EVENTS];
-            spin_unlock_irqrestore(&vg->lock, flags);
-            size += event_number(&p, (uint64_t)e.ns, ' ');
-            size += event_number(&p, e.dur_us, ' ');
-            size += event_number(&p, e.type, ' ');
-            size += event_number(&p, e.tid, ' ');
-            size += event_number(&p, e.kib, '\n');
-        }
-        if (pass == 1 || !buf || cap < size) {
-            return (int32_t)size;
-        }
-        p = buf;
+    if (!vg->events_copy) {
+        return -ENOMEM;
+    }
+    n = events_snapshot(vg, &lost);
+    event_text(buf, cap, &size, header, sizeof(header) - 1);
+    len = event_number(line, lost, '\n');
+    event_text(buf, cap, &size, line, len);
+    for (i = 0; i < n; i++) {
+        e = &vg->events_copy[i];
+        len = event_number(line, (uint64_t)e->ns, ' ');
+        len += event_number(line + len, e->dur_us, ' ');
+        len += event_number(line + len, e->type, ' ');
+        len += event_number(line + len, e->tid, ' ');
+        len += event_number(line + len, e->kib, '\n');
+        event_text(buf, cap, &size, line, len);
     }
     return (int32_t)size;
 }
@@ -490,8 +529,10 @@ static void profile_register(struct virtio_gpu_device *vg)
             klog(KLOG_WARN, "virtio_gpu", "could not register the profiling file");
         }
         vg->events = (struct vgpu_event *)kzalloc(VGPU_EVENTS * sizeof(struct vgpu_event));
+        vg->events_copy = (struct vgpu_event *)kzalloc(VGPU_EVENTS * sizeof(struct vgpu_event));
         drm_debugfs_path(&vg->drm, "virtio_gpu_events", path, sizeof(path));
-        if (!vg->events || debugfs_create_text(path, 0600, &events_ops, vg) != 0) {
+        if (!vg->events || !vg->events_copy ||
+            debugfs_create_text(path, 0600, &events_ops, vg) != 0) {
             klog(KLOG_WARN, "virtio_gpu", "could not register the events file");
         }
     }
@@ -1364,7 +1405,7 @@ static int32_t cmd_take(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
         row->waits++;
         row->wait_ns += end - start;
         event_put(
-            vg, cmd->event ? cmd->event : type, start, end,
+            vg, cmd->event ? cmd->event : type, start, end, event_tid(),
             type == VGS_CMD_BACKING
                 ? (uint32_t)(((const struct vgs_backing
                                    *)(const void *)(cmd->page + sizeof(struct virtio_gpu_ctrl_hdr)))
@@ -3328,6 +3369,7 @@ static void vgpu_release(struct drm_device *dev)
     vgpu_caps_cache_free(vg);
 #ifdef RACH2_VGPU_PROFILE
     kfree(vg->events);
+    kfree(vg->events_copy);
 #endif
     virtio_put(vg->vdev);
     kfree(vg);
