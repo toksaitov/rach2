@@ -45,9 +45,10 @@
 #            Mesa's shader cache and the saves' record
 #   logs     a new directory for Proton's logs
 #
-# The case fails before the game starts if a link in the tree resolves
-# outside the private /data and Proton's read-only /opt/proton, Wine's drive
-# links aside, since the game would write through it.
+# The case binds /opt/proton read-only over itself in the namespace, and
+# fails before the game starts if a link in the tree resolves outside the
+# private /data and that read-only /opt/proton, Wine's drive links aside,
+# since the game would write through it.
 #
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
 # every exit the script ends the game's mounts, puts back the session's
@@ -72,8 +73,8 @@ ini=/etc/xdg/weston/weston.ini
 session=/usr/libexec/rach2-session
 pidfile=/run/rach2-desktop.pid
 uid=1001
-bound=0 mounted=0 kept=0 failed='' found=0
-source_bound=0
+bound=0 mounted=0 kept=0 failed='' found=0 proton=''
+source_bound=0 proton_bound=0
 
 say() { echo "crysis-case: $*"; }
 
@@ -135,6 +136,8 @@ cleanup()
     [ "$mounted" = 0 ] || umount "$owner" 2> /dev/null || umount -l "$owner" ||
         failed="$failed umount-owner"
     [ "$bound" = 0 ] || umount /data 2> /dev/null || umount -l /data || failed="$failed umount"
+    [ "$proton_bound" = 0 ] || umount "$proton" 2> /dev/null || umount -l "$proton" ||
+        failed="$failed umount-proton"
     [ "$source_bound" = 0 ] || umount "$private/owner" 2> /dev/null ||
         umount -l "$private/owner" || failed="$failed umount-source"
     if [ -n "$failed" ]; then
@@ -246,18 +249,33 @@ need=$((need + 1048576))
 free=$(df -Pk "$private" | awk 'NR == 2 { print $4 }')
 [ "$free" -ge "$need" ] || fail "the copies need $need KiB, the workspace has $free"
 
+# Proton's tree, which Wine's prefix links into, is read-only within the
+# namespace, so that no link into it can carry a write out of the private
+# copy. The tree is named by the path /opt/proton resolves to, as the links
+# are below. Without the tree a link into it is refused.
+proton=''
+if [ -d /opt/proton ]; then
+    proton=$(realpath /opt/proton) || fail "cannot resolve /opt/proton"
+    mount --bind "$proton" "$proton" || fail "$proton would not bind"
+    proton_bound=1
+    mount -o remount,bind,ro "$proton" || fail "$proton would not turn read-only"
+    mounted_at "$proton" ro || fail "$proton is not read-only"
+fi
+
 mkdir "$base" "$base/logs"
 cp -rs "$owner/crysis/game" "$base/game" || fail "game-links"
 # shellcheck disable=SC2086 # paths without spaces
 [ -z "$copies" ] || cp -a $copies "$base/" || fail copies
 # Every link in the private tree must resolve inside the private /data,
-# whose only other mount is the owner's read-only one, or in Proton's
-# read-only /opt/proton: through a link to anywhere else, such as a saves
+# whose only other mount is the owner's read-only one, or in the read-only
+# /opt/proton: through a link to anywhere else, such as a saves
 # directory linked to the owner's home, the game or crysis.py would write
 # the owner's files. Wine's drive links, such as z: -> /, name the running
 # system and stay as they are.
 escapes=$(find "$base" -type l ! -path '*/dosdevices/[a-z]:' ! -path '*/dosdevices/[a-z]::' \
-    -exec realpath -m -- {} + | awk '!/^\/data(\/|$)/ && !/^\/opt\/proton(\/|$)/' | head -n 3)
+    -exec realpath -m -- {} + |
+    awk -v proton="$proton" 'function under(dir) { return $0 == dir || index($0, dir "/") == 1 }
+        !under("/data") && !(proton != "" && under(proton))' | head -n 3)
 [ -z "$escapes" ] ||
     fail "links in the private game resolve outside it, to $(echo "$escapes" | tr '\n' ' ')"
 chown -R -h "$uid:$uid" "$base"
