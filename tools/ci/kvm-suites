@@ -91,17 +91,26 @@
 # x86_64.
 # These stay under TCG, slower under KVM (issue 5661): mount, 262 s against
 # 258; stress-ahci, 71 s against 31; stress, 76 s against 33; loopdev, 100 s
-# against 96; tcc, 72 s against 63; esctest2, 78 s against 75 on the host;
-# noentropy, 46 s against 16; fatwrite, 338 s against 120; ext2, 394 s against
-# 286; authority, 44 s against 29; metal, 355 s against 316; style, 32 s
-# against 10; fpu, 18 s against 16; limits, 4 s against 3; vdso, 45 s against
-# 39; audio, 470 s against 167; diskfull, 4 s against 3; fault, 8 s against 6;
-# krffscheck, 2 s against 1 on the host; conload, 10 s against 8; fakeapi,
-# 129 s against 58 on x86_64.
+# against 96; esctest2, 78 s against 75 on the host; fatwrite, 338 s against
+# 120; ext2, 394 s against 286; metal, 355 s against 316; fpu, 18 s against
+# 16; limits, 4 s against 3; diskfull, 4 s against 3; fault, 8 s against 6;
+# krffscheck, 2 s against 1 on the host; conload, 10 s against 8.
+# vdso stays under TCG too, 14 s against 8, each suite run alone (issue
+# 5674): its syscall case asks for the HPET fallback, and the million
+# readings of its x86-64 check each make a KVM exit to QEMU's HPET.
 # raw, memory, smp, vblk, hvc, panic and input stay under TCG, since a case of
 # each failed under KVM (issue 5661).
 # bigmem passed under KVM in 5 s against 17 s on x86_64 (issue 5661); run.sh
 # runs it in a run of its own, under KVM since this file names it.
+# The suites below passed under KVM, under the ia32 profile too where it runs
+# them, and took no longer there than under TCG, by the sum of their case times
+# on i686 and x86_64, each suite run alone (issue 5674). audio, noentropy and
+# fakeapi qualify with milestone 84's changes to their cases: audio, 127 s
+# against 147, its six recording cases sending their samples over the virtio
+# console in place of COM1; noentropy, 10 s against 13, etude-guest finding
+# its programs staged under /musl; fakeapi, 4 s against 8 on x86_64, its GNU
+# machine on the virtio console. authority, 5 s against 15; tcc, 22 s against
+# 34; style, 23 s against 23, which boots no guest.
 browser
 video
 webgl
@@ -217,3 +226,9 @@ museapi
 textbusy
 i915fake
 bigmem
+audio
+noentropy
+fakeapi
+authority
+tcc
+style
