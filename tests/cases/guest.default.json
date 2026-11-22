@@ -1279,12 +1279,17 @@
         {"assertion_id": "relative-open", "checks": "A relative open in the working directory works, and chdir back to the root.", "source": "program"},
         {"assertion_id": "cwd-unlocked", "checks": "On ext2, fstatat of a name relative to the working directory takes no hold of the big lock by bkl/calls, before a tmpfs is mounted elsewhere and after.", "source": "program"},
         {"assertion_id": "unlocked-shared", "checks": "On ext2, a walk without the big lock that a chroot or a chdir of a thread sharing the record comes between, held there by the walk gate, goes again under the big lock from the new working directory, and the gate counts the one walk given up.", "source": "program"},
+        {"assertion_id": "walk-restart", "checks": "On ext2, a full walk that the walk gate stops where a lookup sleeps, while x and y are swapped, starts again and opens the new x's file, and one stopped where it waits for a tmpfs's namespace lock, while the tmpfs is detached, starts again and opens the file the tmpfs covered; the gate counts the restarts.", "source": "program"},
+        {"assertion_id": "walk-handoff", "checks": "On ext2, an unlink that the walk gate stops after its walk, while x and y are swapped, runs again from its walk and removes the new x's file, and the gate counts the retry.", "source": "program"},
+        {"assertion_id": "walk-width", "checks": "On ext2, a walk without the big lock of a cached name finishes there, and one stopped while the walk sequence moves by 2^32 misses once and goes again under the big lock.", "source": "program"},
+        {"assertion_id": "walk-overlap", "checks": "On ext2, a walk waits while the walk gate holds two overlapping changes open, still waits once one ends, and opens its file once both end.", "source": "program"},
+        {"assertion_id": "walk-fault", "checks": "A hand-back at the root of /proc that uses up nothing, which the walk gate's fault forces once, is EIO, and the next walk of the path succeeds; the probe removes the files of the gated rows.", "source": "program"},
         {"assertion_id": "sync", "checks": "sync succeeds.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The probe removes /vp and its contents.", "source": "program"}
       ],
       "branches": [
         {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["old-stat-root"]}, {"alternative_id": "x86-64", "when": null, "assertions": []}]},
-        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "krffs", "when": null, "assertions": ["link-krffs"]}, {"alternative_id": "ext2", "when": null, "assertions": ["link-ext2-names", "link-ext2-read", "link-ext2-unlink", "cwd-unlocked", "unlocked-shared"]}]}
+        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "krffs", "when": null, "assertions": ["link-krffs"]}, {"alternative_id": "ext2", "when": null, "assertions": ["link-ext2-names", "link-ext2-read", "link-ext2-unlink", "cwd-unlocked", "unlocked-shared", "walk-restart", "walk-handoff", "walk-width", "walk-overlap", "walk-fault"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],
