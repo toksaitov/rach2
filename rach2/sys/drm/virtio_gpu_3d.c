@@ -564,9 +564,11 @@ static int file_keeps_handle(struct drm_gem_object *obj, struct drm_file *file)
  * (`detach_done`), so that the UNREF follows it. A program's exit closes
  * every handle at once, so the close first waits for room (`vgpu_room`),
  * as the free does. The wait and the command's allocation may sleep, so
- * the context is held across them (`holds`) and the attachment looked up
- * again after: a context closed meanwhile has sent its CTX_DESTROY, and a
- * reset has forgotten every attachment, so neither sends the DETACH.
+ * the context is held across them (`holds`) and the file's handles and the
+ * attachment looked up again after: a context closed meanwhile has sent its
+ * CTX_DESTROY, a reset has forgotten every attachment, and a handle the
+ * file got meanwhile, by another thread's GEM_OPEN or PRIME import, found
+ * the attachment in its `open` hook and uses it, so none sends the DETACH.
  * Without memory for the command, the attachment stays until the UNREF or
  * the CTX_DESTROY drops it on the host. A close that sends nothing drops
  * the DETACH's reference at once, never the last, since the handle still
@@ -597,7 +599,7 @@ void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
     if (closed && ctx->holds == 0) {
         kfree(ctx);
     }
-    a = closed ? NULL : vgpu_context_attached(ctx, bo);
+    a = closed || file_keeps_handle(obj, file) ? NULL : vgpu_context_attached(ctx, bo);
     if (!cmd || !a || vg->dead) {
         if (!cmd && a && !vg->dead) {
             klog(KLOG_WARN, "virtio_gpu", "resource %u: no memory for CTX_DETACH_RESOURCE",
