@@ -517,7 +517,11 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * the wait; NULL does nothing. It may sleep. `open` sees each handle a file
  * gets to the object, by creation, GEM_OPEN or PRIME import, as Linux's
  * drm_gem_object_funcs.open: 0, or -errno, which takes the handle back;
- * NULL does nothing. It may sleep.
+ * NULL does nothing. It may sleep. `close` sees each handle a file lets go
+ * of, by GEM_CLOSE, DESTROY_DUMB or the file's own release, as Linux's
+ * drm_gem_object_funcs.close: after the handle has left the file's table
+ * and before it drops its hold and reference, so that the object lives
+ * through the call; NULL does nothing. It may sleep.
  */
 struct drm_gem_object_funcs {
     void (*free)(struct drm_gem_object *obj);
@@ -528,6 +532,7 @@ struct drm_gem_object_funcs {
     volatile uint8_t *(*vmap)(struct drm_gem_object *obj);
     int32_t (*cpu_access)(struct drm_gem_object *obj, uint64_t flags);
     int32_t (*open)(struct drm_gem_object *obj, struct drm_file *file);
+    void (*close)(struct drm_gem_object *obj, struct drm_file *file);
 };
 
 /*
@@ -589,6 +594,11 @@ int drm_gem_object_get_unless_zero(struct drm_gem_object *obj);
 /** Drop a reference; the last takes the object off its device's lists and
  * frees it through its `free`, and drops its device. NULL is allowed. */
 void drm_gem_object_put(struct drm_gem_object *obj);
+/** Drop a reference unless it is the last: 1 when dropped, 0 when the
+ * caller holds the last, which it keeps, so that it may free the object
+ * elsewhere, as a driver frees in its own thread what an answer lets go.
+ * Any context. */
+int drm_gem_object_put_unless_last(struct drm_gem_object *obj);
 /** The object of `dev` after `prev`, or its first when `prev` is NULL,
  * with a reference taken, or NULL past the last; drops the caller's
  * reference to `prev`. Objects whose last reference is going are passed
