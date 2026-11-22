@@ -736,6 +736,19 @@ int vgpu_may_wait(struct virtio_gpu_device *vg)
     return can_sleep() && kirq_enabled() && vgpu_wake_ready && !vg->reaping && !vg->dead;
 }
 
+/**
+ * Whether a sender that found the transport's memory full may wait for the
+ * UNREFs of a pass over the worker's frees under way (`vgpu_frees_run`),
+ * which has sent none yet. Not while it holds the mode lock, as the
+ * console's buffers are made: the pass unplugs the device when an UNREF
+ * finds no memory, and the unplug takes that lock, so each would wait for
+ * the other.
+ */
+static int frees_awaited(struct virtio_gpu_device *vg)
+{
+    return vg->freeing && !mutex_held(&vg->drm.mode_lock);
+}
+
 /** Whether the commands started and not yet freed hold fewer pages than
  * VGPU_HELD_MAX, an answer waits to be reaped, or the device has died; a
  * wait's condition. */
@@ -821,7 +834,7 @@ static int vgpu_dma_wait(struct virtio_gpu_device *vg, int64_t until)
         vgpu_frees_run(vg);
         return !vg->dead;
     }
-    if (!vgpu_may_wait(vg) || (vg->held == 0 && !vg->freeing) || dma_fence_now() >= until) {
+    if (!vgpu_may_wait(vg) || (vg->held == 0 && !frees_awaited(vg)) || dma_fence_now() >= until) {
         return 0;
     }
     w.vg = vg;
@@ -893,10 +906,11 @@ struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct vi
  * allocator waits for and does not refuse. The wait wakes at each answer
  * and polls the queues every 10 ms, for a device without interrupts, and
  * ends at SIGKILL, since a device that has stopped answering would hold the
- * caller for ever. 0; -ENOMEM once no UNREF is in flight; -EINTR at
- * SIGKILL; or -ENODEV when the device has died, which a reset during the
- * wait does, freeing its queues and the transport's heap, so that the
- * caller must not go on to use them. May sleep.
+ * caller for ever. 0; -ENOMEM once no UNREF is in flight or awaited
+ * (`frees_awaited`); -EINTR at SIGKILL; or -ENODEV when the device has
+ * died, which a reset during the wait does, freeing its queues and the
+ * transport's heap, so that the caller must not go on to use them. May
+ * sleep.
  */
 static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -915,7 +929,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             continue;
         }
         w.seen = vg->unrefs;
-        if ((w.seen == 0 && !vg->freeing) || !can_sleep() || !vgpu_wake_ready) {
+        if ((w.seen == 0 && !frees_awaited(vg)) || !can_sleep() || !vgpu_wake_ready) {
             return -ENOMEM;
         }
         vgpu_reap(vg);
