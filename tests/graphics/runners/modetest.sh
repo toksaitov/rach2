@@ -10,14 +10,16 @@
 # runs `modetest -s CONNECTOR:#INDEX`, which makes a dumb buffer at the mode's
 # size, draws its test pattern there, adds it as a framebuffer, sets it on a
 # CRTC of the connector and then waits for a line on its standard input.
-# While it waits, CAPTURE (drmcapture) reads the frame of CARD
-# (/dev/dri/card0) back through GETFB2 and a mapping of its buffer, until it
-# finds a framebuffer on the CRTC other than the one there before; the line
-# then ends modetest. A mode that modetest reports it cannot set, with a
-# line `failed ...` on its standard error, is `failed`. modetest.sh sets
-# no time limit of its own. modetest opens a card by its DRM driver's name,
-# never by its path; DRIVER is by default the first of virtio_gpu,
-# bochs-drm, simpledrm and vkms that modetest opens.
+# Once modetest has CARD (/dev/dri/card0) open, which makes it the card's
+# master, CAPTURE (drmcapture) reads the frame of CARD back through GETFB2
+# and a mapping of its buffer while modetest waits, until it finds a
+# framebuffer on the CRTC other than the one there before; the line then
+# ends modetest. A capture opened first would take the master itself. A
+# mode that modetest reports it cannot set, with a line `failed ...` on its
+# standard error, is `failed`. modetest.sh sets no time limit of its own.
+# modetest opens a card by its DRM driver's name, never by its path; DRIVER
+# is by default the first of virtio_gpu, bochs-drm, simpledrm and vkms that
+# modetest opens.
 #
 # OUT (.) gets the record, `connectors`, modetest's listing, and `modes`,
 # one line a mode: `CONNECTOR INDEX NAME REFRESH set WxH CRC` or
@@ -78,6 +80,19 @@ awk -F '\t' '
 [ -s "$RUNNER_WORK/modes" ] || runner_die "no connected connector of $driver has a mode"
 runner_record "modes $(wc -l < "$RUNNER_WORK/modes")"
 
+# holds PID: whether process PID has the card open. The first file of a card
+# opened while it has no master becomes its master, on Linux and Rach2 alike,
+# so a drmcapture opened before modetest opens the card takes the master,
+# and modetest's SETCRTC then fails with EACCES.
+cardpath=$(readlink -f "$card")
+holds()
+{
+    for f in /proc/"$1"/fd/*; do
+        [ "$(readlink "$f" 2> /dev/null)" != "$cardpath" ] || return 0
+    done
+    return 1
+}
+
 # fb: the framebuffer that the first CRTC scanning one out shows, or none.
 fb()
 {
@@ -93,6 +108,9 @@ while read -r id name index mode refresh; do
     modetest -M "$driver" -s "$id:#$index" < "$fifo" > "$RUNNER_WORK/log" 2>&1 &
     pid=$!
     exec 3> "$fifo"
+    while kill -0 "$pid" 2> /dev/null && ! holds "$pid"; do
+        sleep 0.05
+    done
     line=
     while kill -0 "$pid" 2> /dev/null && ! grep -q '^failed' "$RUNNER_WORK/log"; do
         line=$("$capture" "$card" < /dev/null 2> /dev/null || true)
