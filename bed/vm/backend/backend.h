@@ -36,6 +36,7 @@ struct vr_pin_counts {
 struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbose);
 extern const struct vd_ops vr_ops;
 int vr_poll_fd(struct vr *r);
+int vr_async_fence(struct vr *r);
 void vr_poll(struct vr *r);
 uint32_t vr_capsets(struct vr *r);
 int vr_read(struct vr *r, uint32_t id, const struct vd_rect *rect, void *dst, uint32_t stride);
