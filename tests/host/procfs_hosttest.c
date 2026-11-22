@@ -968,6 +968,34 @@ void fd_peek_drop(struct fd_entry *copy)
         fd_ofd_unref(copy->ofd);
     }
 }
+/* A kept copy, as syscall_fs.c's `fd_keep`: a peek with a hold, which
+ * `fd_unkeep` gives back. */
+struct fd_kept {
+    struct fd_entry e;
+};
+struct fd_kept *fd_keep(struct fd_table *table, int fd, struct fd_entry **entry, int *err)
+{
+    struct fd_kept *k = kmalloc(sizeof(*k));
+
+    if (!k) {
+        *err = -ENOMEM;
+        return NULL;
+    }
+    if (fd_peek_hold(table, fd, &k->e) != 0) {
+        kfree(k);
+        *err = -EBADF;
+        return NULL;
+    }
+    *entry = &k->e;
+    return k;
+}
+void fd_unkeep(struct fd_kept *k)
+{
+    if (k) {
+        fd_peek_drop(&k->e);
+        kfree(k);
+    }
+}
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     (void)mnt;

@@ -210,7 +210,9 @@ read-only over itself, but not
 through a descriptor opened on a proc descriptor link itself.
 When either operand ends in
 .Pa /proc/PID/fd/N ,
-the bind uses the file or directory the descriptor holds.
+the bind uses the file or directory the descriptor holds, a file whose
+name was removed among them as a source, and a target goes on to the
+last mount stacked over the descriptor's node, as a path to it would.
 Both mounts must be visible in the caller's mount namespace.
 Inside them a bind's target is the root of a mount or a name in the root
 directory of one, such as
@@ -383,7 +385,8 @@ Resolve and hold the target, returning any path-resolution error.
 A final
 .Pa /proc/PID/fd/N
 link supplies the directory held by the descriptor, whose mount must be
-visible in the caller's mount namespace.
+visible in the caller's mount namespace, or the root of the last mount
+stacked over it.
 .It
 For a mount of type
 .Ql proc ,
@@ -600,7 +603,8 @@ requires
 to resolve to the root of a mount.
 A final
 .Pa /proc/PID/fd/N
-link supplies the node and mount held by the descriptor.
+link supplies the node and mount held by the descriptor, or the root of
+the last mount stacked over it, as a path to it would reach.
 The mount must be visible in the caller's mount namespace.
 A target that ends in a slash, or whose last component is
 .Pa \&.

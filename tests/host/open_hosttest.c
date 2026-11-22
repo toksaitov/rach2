@@ -2382,10 +2382,13 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
 }
 
 /** Walk an ordinary path. The model has no proc descriptor links. */
-int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path)
+int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path,
+                   struct fd_kept **kept)
 {
     (void)fd_path;
-    return vfs_resolve(NULL, path, flags & ~VFS_WALK_MOUNT, out, NULL, 0);
+    *kept = NULL;
+    return vfs_resolve(NULL, path, flags & ~(VFS_WALK_MOUNT | VFS_WALK_COVER | VFS_WALK_SOURCE),
+                       out, NULL, 0);
 }
 
 static void fl_dir_attrs(const struct vfs_ref *ref, struct vfs_stat *dir);

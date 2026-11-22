@@ -23,7 +23,11 @@ before the call changes anything.
 A final
 .Pa /proc/PID/fd/N
 link supplies the directory and mount held by the descriptor.
-The mount must be visible in the caller's mount namespace.
+The mount must be visible in the caller's mount namespace, and
+.Fa new_root
+must be below the caller's root, as a descriptor opened before a
+.Xr chroot 2
+may name a mount beside it.
 .Pp
 The old root is shown at
 .Fa put_old
@@ -132,7 +136,10 @@ the caller's root is not the root of a mount, as after
 to a directory; or
 .Fa put_old
 is not at or below
-.Fa new_root .
+.Fa new_root ;
+or
+.Fa new_root
+is not below the caller's root.
 .It Bq Er ENAMETOOLONG
 A path is too long, or the path of
 .Fa put_old
