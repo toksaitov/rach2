@@ -4425,8 +4425,10 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     if (mount_rdonly(mnt) || !mnt->type->ops->create) {
         return -EROFS;
     }
+    vfs_name_change_begin();
     rc = mnt->type->ops->create(mount_base(mnt), dir, name, mode, node);
     dcache_forget(mount_base(mnt), dir, name);
+    vfs_name_change_end();
     if (rc == 0) {
         watch_made(mnt, dir, name, 0);
     }
@@ -4506,8 +4508,10 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
     if (mount_rdonly(mnt) || !mnt->type->ops->mkdir) {
         return -EROFS;
     }
+    vfs_name_change_begin();
     rc = mnt->type->ops->mkdir(mount_base(mnt), dir, name, mode);
     dcache_forget(mount_base(mnt), dir, name);
+    vfs_name_change_end();
     if (rc == 0) {
         watch_made(mnt, dir, name, IN_ISDIR);
     }
@@ -4684,8 +4688,10 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
     if (guard_node(mnt, node) || (guard_node(mnt, dir) & VFS_FL_IMMUTABLE)) {
         return -EPERM; /* vfs_link's rule */
     }
+    vfs_name_change_begin();
     rc = mnt->type->ops->link(mount_base(mnt), dir, name, node);
     dcache_forget(mount_base(mnt), dir, name);
+    vfs_name_change_end();
     if (rc == 0 && inotify_watches && watched_node(mnt, node, &st) == 0) {
         inotify_file(mnt, st.ino, IN_ATTRIB);
         watch_made(mnt, dir, name, 0);
@@ -4706,8 +4712,10 @@ int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *
     if (!mnt->type->ops->symlink) {
         return -EPERM;
     }
+    vfs_name_change_begin();
     rc = mnt->type->ops->symlink(mount_base(mnt), dir, name, target);
     dcache_forget(mount_base(mnt), dir, name);
+    vfs_name_change_end();
     if (rc == 0) {
         watch_made(mnt, dir, name, 0);
     }
@@ -4728,8 +4736,10 @@ int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
     if (!mnt->type->ops->mknod) {
         return -EPERM;
     }
+    vfs_name_change_begin();
     rc = mnt->type->ops->mknod(mount_base(mnt), dir, name, mode, rdev, node);
     dcache_forget(mount_base(mnt), dir, name);
+    vfs_name_change_end();
     if (rc == 0) {
         watch_made(mnt, dir, name, 0);
     }

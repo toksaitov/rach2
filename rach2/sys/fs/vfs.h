@@ -1808,6 +1808,17 @@ void vfs_unpin(struct vfs_mount *mnt, void *token);
 /** The type's readdir into `ent`, zeroed first: 1, 0 at the end, -EINVAL
  * for a type without `readdir`, or the type's error. */
 int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent);
+/*
+ * Each wrapper that makes or removes a name, `vfs_create`, `vfs_mkdir`,
+ * `vfs_link`, `vfs_symlink`, `vfs_mknod`, `vfs_unlink_name`, `vfs_rmdir`
+ * and the renames, is one change of what paths name
+ * (`vfs_name_change_begin`), with the name cache's entries for the name
+ * forgotten inside it, so that a walk that read the directory before, a
+ * negative answer among them, starts again. A caller that sets the new
+ * node's mode or owner after it is made holds a change of its own around
+ * both (`node_make` in syscall_fs.c).
+ */
+
 /** The type's create of the regular file `name` in `dir`, held in `*node`:
  * 0, -EROFS for a type without `create`, or the type's error. */
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node);
