@@ -1778,7 +1778,10 @@ static void vcon_settle(struct vcon_port *p)
  * khvcd polls an hvc: what the host wrote is fed to the slave's discipline
  * as far as it takes it, the rest waiting for the slave's reader; and the
  * slave's output and echo go to the port's pages as far as they take them,
- * the rest waiting for the device to return a page. The thread's.
+ * the rest waiting for the device to return a page. The bytes handed to the
+ * device leave the slave's output queue (`pty_kernel_sent`), on which
+ * tcdrain waits, as on Linux it waits for hvc's buffer to reach the
+ * hypervisor. The thread's.
  */
 static void vcon_hvc_pump(struct vcon_port *p)
 {
@@ -1815,6 +1818,7 @@ static void vcon_hvc_pump(struct vcon_port *p)
         }
         k_memmove(p->hold, p->hold + put, p->hold_n - put);
         p->hold_n -= put;
+        pty_kernel_sent(p->tty, put);
     }
 }
 

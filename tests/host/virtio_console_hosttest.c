@@ -423,6 +423,14 @@ uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n)
     return n;
 }
 
+/** The driver's report of the bytes it handed to the port, which the model
+ * does not count. */
+void pty_kernel_sent(struct pty *p, uint32_t n)
+{
+    (void)p;
+    (void)n;
+}
+
 /** Count an open of the slave. */
 int32_t pty_kernel_slave_open(struct pty *p, struct fd_entry *e, int flags)
 {

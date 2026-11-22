@@ -68,6 +68,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->sink_ctx = sink_ctx;
     t->room = NULL;
     t->pump = NULL;
+    t->outq = NULL;
     t->flush = NULL;
     t->flow = NULL;
     t->echo_kick = NULL;
@@ -599,6 +600,50 @@ int tty_wait_output(struct tty *t, int nonblock, const uint32_t *opened)
             return rc;
         }
     }
+}
+
+/** A drain's wait predicate: whether the device of `w`'s terminal has
+ * taken its output, or the drain's description has been hung up.
+ * Interrupts off. */
+static int tty_sent_cond(void *arg)
+{
+    struct tty_out_wait *w = (struct tty_out_wait *)arg;
+
+    return !w->t->outq || w->t->outq(w->t) == 0 || tty_out_hung(w);
+}
+
+int tty_wait_until_sent(struct tty *t, const uint32_t *opened)
+{
+    struct tty_out_wait w;
+    uint32_t flags;
+    int done, rc;
+
+    w.t = t;
+    w.opened = opened;
+    for (;;) {
+        flags = kirq_save();
+        done = tty_sent_cond(&w);
+        kirq_restore(flags);
+        if (tty_out_hung(&w)) {
+            return -EIO;
+        }
+        if (done) {
+            return 0;
+        }
+        rc = wq_wait_event(&t->input_wq, tty_sent_cond, &w);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+}
+
+unsigned int tty_outq(struct tty *t)
+{
+    uint32_t flags = kirq_save();
+    unsigned int n = t->outq ? t->outq(t) : 0u;
+
+    kirq_restore(flags);
+    return n;
 }
 
 /* A blocking read's wait: what it asks for, and its VTIME timer. */

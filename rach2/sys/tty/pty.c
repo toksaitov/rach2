@@ -1260,6 +1260,16 @@ int pty_open_slave(int index, int flags)
     return fd;
 }
 
+/** A kernel-held slave `t`'s `outq`: the bytes in `m_buf` and those its
+ * holder has taken and not handed to its device, or 0 once the holder has
+ * let go, as Linux's hvc_hangup drops its buffer. Interrupts off. */
+static unsigned int pty_kernel_outq(struct tty *t)
+{
+    const struct pty *p = (const struct pty *)t->sink_ctx;
+
+    return p->master_open ? pty_m_avail(p) + p->k_held : 0u;
+}
+
 struct pty *pty_kernel_make(uint32_t dev, const char *node)
 {
     struct pty *p = pty_alloc(PTY_KERNEL_INDEX);
@@ -1272,6 +1282,8 @@ struct pty *pty_kernel_make(uint32_t dev, const char *node)
     p->kdev = dev;
     p->knode = node;
     p->master_open = 1;
+    p->k_held = 0;
+    p->slave.outq = pty_kernel_outq;
     return p;
 }
 
@@ -1316,6 +1328,7 @@ uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n)
     if (n > have) {
         n = have;
     }
+    p->k_held += n;
     for (i = 0; i < n; i++) {
         out[i] = p->m_buf[p->m_head & (PTY_BUF_SIZE - 1)];
         p->m_head++;
@@ -1325,6 +1338,19 @@ uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n)
         wq_wake(&p->slave.input_wq, WQ_ROOM);
     }
     return n;
+}
+
+void pty_kernel_sent(struct pty *p, uint32_t n)
+{
+    uint32_t flags = kirq_save();
+    int empty;
+
+    p->k_held -= n < p->k_held ? n : p->k_held;
+    empty = p->k_held == 0 && pty_m_avail(p) == 0;
+    kirq_restore(flags);
+    if (n > 0 && empty) {
+        wq_wake(&p->slave.input_wq, WQ_ROOM);
+    }
 }
 
 int32_t pty_kernel_slave_open(struct pty *p, struct fd_entry *e, int flags)

@@ -43,6 +43,12 @@ struct tty {
      * output stop there and wait; NULL for a sink that takes every byte. */
     unsigned int (*room)(struct tty *t);
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
+    /* The bytes of output the terminal holds that its device has not taken
+     * yet, as Linux's chars_in_buffer, which TIOCOUTQ reports and a drain
+     * waits on (`tty_wait_until_sent`); its fall to 0 wakes `input_wq`.
+     * Called with interrupts off. NULL for a terminal whose write hands
+     * every byte to its device, as the console's and a pty's do. */
+    unsigned int (*outq)(struct tty *t);
     /* A pty slave's flush (`TTY_FLUSH_*`); NULL for a terminal with no
      * master. */
     void (*flush)(struct tty *t, int what);
@@ -238,7 +244,8 @@ int tty_is_background(struct tty *t, int sid, int pgid, uint64_t serial);
  * blocks or ignores SIGTTOU; -EIO when it blocks or ignores SIGTTIN, or its
  * group is orphaned; and otherwise sends `signo` to its group and returns
  * -EINTR. A read of `t` runs it for SIGTTIN; a write under TOSTOP, and
- * TCSETS and its kin, TCFLSH, TCXONC and TIOCSPGRP, for SIGTTOU.
+ * TCSETS and its kin, TCFLSH, TCXONC, TCSBRK, TCSBRKP and TIOCSPGRP, for
+ * SIGTTOU.
  */
 int tty_job_check(struct tty *t, int signo);
 
@@ -306,6 +313,21 @@ int tty_tcflow(struct tty *t, int action);
  * does, so a VSTART from COM1 restarts it. Thread context.
  */
 int tty_wait_output(struct tty *t, int nonblock, const uint32_t *opened);
+
+/**
+ * Wait until the device of `t` has taken the output the terminal holds
+ * (`outq`), as Linux's tty_wait_until_sent, for TCSBRK, TCSETSW and their
+ * kin, for a description opened at `*opened` vhangups, or one no hangup
+ * reaches when `opened` is NULL. Returns 0 at once for a terminal with no
+ * `outq`, 0 once the count is 0, -EIO when a vhangup has hung the
+ * description up, or -EINTR when a signal ends the wait. Thread context.
+ */
+int tty_wait_until_sent(struct tty *t, const uint32_t *opened);
+
+/** The bytes of output `t` holds that its device has not taken (`outq`),
+ * 0 for a terminal with none, which TIOCOUTQ reports. Takes interrupts off
+ * itself. */
+unsigned int tty_outq(struct tty *t);
 
 /**
  * Wait until `t` has input a read can take, then copy up to `count` bytes of

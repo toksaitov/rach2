@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 22, 2026
 .Dt HVC 4
 .Os
 .Sh NAME
@@ -130,6 +130,20 @@ as
 describes for a terminal, whose input is what the host writes and
 whose output goes to the host's end; the port's size is the terminal's
 window size.
+The driver's thread, khvcd, moves the terminal's output to the port's
+pages; until it has, the bytes count in
+.Dv TIOCOUTQ ,
+and
+.Xr tcdrain 3 ,
+.Dv TCSETSW
+and
+.Dv TCSETSF
+wait for them, as Linux's wait for its hvc buffer to reach the
+hypervisor.
+A program that writes a line and exits to the debug shell, which runs no
+thread, calls
+.Xr tcdrain 3
+first, or the line reaches the port only when the next program runs.
 It is also
 .Pa /dev/vport Ns Ar D Ns Cm p Ns Ar N ,
 whose open fails, and a name under
