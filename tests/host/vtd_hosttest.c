@@ -453,6 +453,19 @@ void vtd_hw_page_free(void *va)
     free(va);
 }
 
+/** A domain's table: a page as `vtd_hw_page` gives one, since the model's
+ * memory has no window. */
+void *vtd_hw_table(uint64_t *phys)
+{
+    return vtd_hw_page(phys);
+}
+
+/** Free a page `vtd_hw_table` gave. */
+void vtd_hw_table_free(void *va)
+{
+    vtd_hw_page_free(va);
+}
+
 /** Physical addresses are the host's own. */
 void *vtd_hw_virt(uint64_t phys)
 {

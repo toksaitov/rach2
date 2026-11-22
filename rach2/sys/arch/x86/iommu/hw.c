@@ -65,6 +65,29 @@ void vtd_hw_page_free(void *va)
     free_kernel_frame(va);
 }
 
+/** A domain's table takes its address in 64 bits, below the host address
+ * width that bounds the machine's memory, so on x86-64 its frame comes from
+ * above the window (`alloc_dma64_frame`), as Linux's
+ * `iommu_alloc_page_node` takes any page: the 64 MiB window would not hold
+ * the leaves of a large domain, 26 MiB for a VM of 13 GiB that VFIO maps in
+ * pages of 4 KiB. */
+void *vtd_hw_table(uint64_t *phys)
+{
+    void *p = alloc_dma64_frame();
+
+    if (p == NULL) {
+        return NULL;
+    }
+    k_memset(p, 0, 4096);
+    *phys = (uint64_t)virt_to_phys(p);
+    return p;
+}
+
+void vtd_hw_table_free(void *va)
+{
+    free_dma64_frame(va);
+}
+
 void *vtd_hw_virt(uint64_t phys)
 {
     return phys_to_virt((uintptr_t)phys);
