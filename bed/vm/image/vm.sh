@@ -45,9 +45,11 @@
 # tree's module and backend built in the VM and installed, and a service
 # that at each boot loads the module and runs the backend surfaceless on
 # the ivshmem device, `bed-vm: ` before each of its lines on the console,
-# and one that does to the backend the words Rach2's test writes to the
-# VM's second serial port. With -o it also writes the image whole as the
-# raw disk RAW, the form etude's overlays take as their base.
+# counting for bed/measure/profile.sh when QEMU gives the firmware entry
+# opt/rach2/vgpu-profile, and one that does to the backend the words
+# Rach2's test writes to the VM's second serial port; gfx takes the
+# development key, and perf is there. With -o it also writes the image
+# whole as the raw disk RAW, the form etude's overlays take as their base.
 #
 # The images and the account's key are in BED_VM_CACHE, by default
 # build/cache/bed-vm of the clone whose worktree this is, so that its
@@ -469,6 +471,8 @@ make -s -C bed/vm/module
 make -s -C bed/vm/backend
 sudo install -m 644 bed/vm/module/vgpushm.ko /usr/local/lib/vgpushm.ko
 sudo install -m 755 bed/vm/backend/vgpu-backend /usr/local/sbin/vgpu-backend
+# bed/measure/profile.sh reaches the VM as gfx with the development key.
+cat krffs/rach2_demo_ed25519.pub >> ~/.ssh/authorized_keys
 sudo tee /usr/local/sbin/bed-vm-backend > /dev/null <<'RUN'
 #!/bin/sh
 # bed-vm-backend: serve the ivshmem device to Rach2 until the VM stops.
@@ -501,11 +505,21 @@ for d in /sys/bus/pci/devices/*; do
     break
 done
 [ -z "$soft" ] || export LIBGL_ALWAYS_SOFTWARE=1
-# The second serial port, which only Rach2's test of the backend's loss
-# gives the VM, arms the hold that its row of a long command asks for.
-hold=''
-! stty -F /dev/ttyS1 > /dev/null 2>&1 || hold=-H
-/usr/local/sbin/vgpu-backend -v $hold 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
+# QEMU's firmware entry opt/rach2/vgpu-profile, which bed-shm.sh gives with
+# BED_VM_PROFILE_PORT, has the backend count into /run/vgpu-profile, and
+# read back each flush with its CRC when the entry is 1. The second serial
+# port, which only Rach2's test of the backend's loss gives the VM, arms the
+# hold that its row of a long command asks for.
+set --
+modprobe qemu_fw_cfg 2> /dev/null || :
+cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/rach2/vgpu-profile/raw
+if [ -r "$cfg" ]; then
+    set -- -T /run/vgpu-profile
+    [ "$(cat "$cfg")" != 1 ] || set -- "$@" -C
+    echo "bed-vm: profile: $*" > /dev/ttyS0
+fi
+! stty -F /dev/ttyS1 > /dev/null 2>&1 || set -- "$@" -H
+/usr/local/sbin/vgpu-backend -v "$@" 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
 RUN
 sudo chmod 755 /usr/local/sbin/bed-vm-backend
 sudo tee /etc/systemd/system/bed-vm-backend.service > /dev/null <<'UNIT'
@@ -590,8 +604,9 @@ rach2()
         [ "$tries" -lt 60 ] || die "SSH did not answer in 60 tries"
         sleep 1
     done
-    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
-        vm 'rm -rf bed && tar xf -'
+    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h \
+        krffs/rach2_demo_ed25519.pub) |
+        vm 'rm -rf bed krffs && tar xf -'
     baked > "$work/baked.sh"
     vm 'sh -s' < "$work/baked.sh" || die "result: the backend did not build"
     vm 'sudo systemctl poweroff' </dev/null >/dev/null 2>&1 || true
