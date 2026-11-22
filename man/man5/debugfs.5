@@ -565,9 +565,18 @@ where a call that changes what its walk found has taken the walk's stamp
 and not yet its locks;
 .Ql retry ,
 where such a call, its locks held, finds the tree changed and runs again
-from its walk; or
+from its walk;
 .Ql wait ,
-where a walk waits for a change under way to end.
+where a walk waits for a change under way to end;
+.Ql load ,
+where ext2 is about to load an inode no node in memory has, with the
+directory's lock let go;
+.Ql read ,
+where the block cache is about to read a block from its device, which a
+test only counts, since the reader may hold a directory's lock; or
+.Ql kept ,
+where a call has let go of its walk's namespace lock and still uses what
+the walk found, which the walk keeps until the call ends.
 .Ql release
 lets the stopped thread go on, as a signal does.
 .Ql begin
@@ -585,17 +594,26 @@ moves the walk sequence by 2^32, with no change under way.
 makes the next hand-back of a type that takes the rest of a path at its
 root, for the thread PID, use up nothing, which the walk answers with
 .Er EIO .
+.Ql ioerr PID
+makes the next read of the block cache from a device, for the thread PID,
+fail as an I/O error.
+.Ql cold
+writes every dirty block, forgets the names the root mount's cache holds
+and gives back every clean block no one holds, so that the next walk of
+the root reads the disk.
 .Ql off
-lets the stopped thread go, ends the counting, the fault and the changes
-the gate holds.
+lets the stopped thread go, ends the counting, the fault, the failed read
+and the changes the gate holds.
 Reads one line:
 .Ql pid P stop EVENT waiting W ,
 the count of each event by its name in the order above, then
-.Ql tokens T active A ,
+.Ql tokens T active A keep K ,
 EVENT being
 .Ql -
 once the stop is used or released, W 1 while the thread sleeps there, T
-the changes the gate holds open and A all those under way.
+the changes the gate holds open, A all those under way, and K where the
+newest walk keep of the thread P lies in the KRFFS boot root, its offset
+plus 1, or 0 for none.
 Another text fails with
 .Er EINVAL .
 .It Pa sched/base_slice_ns
