@@ -9747,13 +9747,22 @@ static int32_t synth_dev_remove(const struct vfs_ref *parent, const char *leaf, 
  * the walk sequence (`vfs_seq_begin`), so a walk without the big lock that
  * read either before the change goes again, and the old hold is let go after
  * both, so a thread that shares them (CLONE_FS) finds the path and the hold
- * of one directory. Returns 0, or -ENOMEM with nothing changed.
+ * of one directory. A chdir sets its walk's stamp as the one the thread
+ * consumes (`walk_consume`), and the change begins only while that stamp
+ * holds (`vfs_stamp_begin`), so that a rename since the walk, which the
+ * path made meanwhile may not show, sends the call round again. Returns 0,
+ * CALL_AGAIN or -ENOMEM, each but 0 with nothing changed.
  */
 static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
 {
+    const struct vfs_stamp *st = current_proc->walk_consume;
     int32_t rc;
 
-    vfs_seq_begin();
+    if (!st) {
+        vfs_seq_begin();
+    } else if (!vfs_stamp_begin(st)) {
+        return CALL_AGAIN;
+    }
     rc = proc_cwd_set(current_proc, path);
     if (rc == 0) {
         vfs_cwd_set(current_proc, mnt, node);
@@ -9951,13 +9960,19 @@ static int32_t chdir_held(struct vfs_ref *ref, char *path, int via_fd);
  * that comes after finds the working directory, and neither frees the
  * directory the record then names.
  *
+ * The working directory is stored only while the walk's stamp holds
+ * (`cwd_enter`); otherwise the call runs again from the start
+ * (`vfs_call_again`), having changed nothing.
+ *
  * Returns 0, or a negative errno: the walk's, -ENOTDIR, -EACCES, -ENOENT
  * for a /proc directory whose process has exited or a /sys directory whose
- * device is gone, -ENAMETOOLONG, or -ENOMEM.
+ * device is gone, -ENAMETOOLONG, -ENOMEM, or -EINTR with the call marked
+ * to run again.
  */
 static int32_t do_chdir(char *path)
 {
     struct vfs_ref ref;
+    struct vfs_stamp st;
     struct fd_kept *kept;
     int via_fd, rc;
 
@@ -9968,9 +9983,12 @@ static int32_t do_chdir(char *path)
     if (via_fd < 0) {
         return via_fd;
     }
+    vfs_stamp_get(&st);
+    current_proc->walk_consume = &st;
     rc = chdir_held(&ref, path, via_fd);
+    current_proc->walk_consume = NULL;
     fd_unkeep(kept);
-    return rc;
+    return rc == CALL_AGAIN ? vfs_call_again() : rc;
 }
 
 /**
@@ -10264,11 +10282,14 @@ static int32_t cwd_global(char *buf)
  * stored just before the root, with nothing between the two that sleeps: a
  * thread that shares both (CLONE_FS) never joins a path from one root to
  * the other. A working directory that moves takes its hold on the new root
- * last, after the old root is let go. Returns 0: a working directory whose
- * new path cannot be made, for want of a page or of room, moves to the new
- * root as well.
+ * last, after the old root is let go. The change begins only while the
+ * stamp `st` of chroot's walk holds (`vfs_stamp_begin`), so that a rename
+ * or a chdir since, which the paths made meanwhile may not show, sends the
+ * call round again. Returns 0, or CALL_AGAIN with nothing changed: a
+ * working directory whose new path cannot be made, for want of a page or of
+ * room, moves to the new root as well.
  */
-static int32_t root_enter(const struct vfs_ref *ref, char *buf)
+static int32_t root_enter(const struct vfs_ref *ref, char *buf, const struct vfs_stamp *st)
 {
     char *root = path_buf_get();
     int32_t rc = root ? cwd_global(buf) : -ENOMEM;
@@ -10280,7 +10301,9 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
         rc = path_strip(buf, root);
     }
     path_buf_put(root);
-    vfs_seq_begin();
+    if (!vfs_stamp_begin(st)) {
+        return CALL_AGAIN;
+    }
     if (rc == 0) {
         rc = proc_cwd_set(current_proc, buf);
     }
@@ -10317,6 +10340,7 @@ static int32_t root_enter(const struct vfs_ref *ref, char *buf)
 long sys_chroot(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)SC_ARG(params, 0);
+    struct vfs_stamp st;
     struct vfs_ref ref;
     char *path;
     int32_t rc;
@@ -10329,6 +10353,7 @@ long sys_chroot(isr_params_t *params)
         return rc;
     }
     rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+    vfs_stamp_get(&st);
     if (rc == 0) {
         rc = root_check(&ref);
         if (rc == 0 && vfs_synth_vpath(ref.mnt, ref.node)) {
@@ -10336,14 +10361,14 @@ long sys_chroot(isr_params_t *params)
 
             empty.mnt = vfs_memfd_mount();
             empty.node = empty.mnt->root;
-            rc = root_enter(&empty, path);
+            rc = root_enter(&empty, path, &st);
         } else if (rc == 0) {
-            rc = root_enter(&ref, path);
+            rc = root_enter(&ref, path, &st);
         }
         vfs_ref_release(&ref);
     }
     path_buf_put(path);
-    return rc;
+    return rc == CALL_AGAIN ? vfs_call_again() : rc;
 }
 
 /**

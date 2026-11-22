@@ -816,6 +816,13 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
  */
 int vfs_resolve_cwd(int flags, struct vfs_ref *ref);
 
+/** Ask for the calling thread's system call to run again from its start,
+ * for a call that found its walk's stamp moved before it changed anything
+ * and has let go of everything: -EINTR with RESTART_NOINTR, as Linux
+ * restarts a call with -ERESTARTNOINTR, or -EAGAIN for a kernel thread,
+ * which no call restarts. */
+int vfs_call_again(void);
+
 /**
  * Make `ref->node` the node a keep of the calling thread's walks has now,
  * when one keeps it: a KRFFS answer that a relocation moved since the walk
