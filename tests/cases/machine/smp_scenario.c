@@ -39,7 +39,7 @@ static const char g_line[] = "g() { awk '/^cpu[0-9]/ { if (FILENAME == \"before\
                              "4 && !stalled) }' before after; }; echo G_\"\"SET\r";
 static const char build_line[] =
     "cd && rm -rf smpbuild && mkdir smpbuild && cd smpbuild && cat /proc/stat > before && n=0 && "
-    "while [ $n -lt 5 ]; do n=$((n+1)); b; cat /proc/stat > after; g && break; done; ls *.o | wc "
+    "while [ $n -lt 30 ]; do n=$((n+1)); b; cat /proc/stat > after; g && break; done; ls *.o | wc "
     "-l | grep -qx 16 && echo BUILD_\"\"DONE; echo BUILD_\"\"END\r";
 static const char grew_line[] = "g && echo USER_TIME_\"\"GREW; echo GREW_\"\"END\r";
 
@@ -390,7 +390,10 @@ static int check(struct lc *l, char *w, const char *token, const char *id, const
  * compile the staged ish sources four times over, every compile at once,
  * between two readings of /proc/stat. A compile is a few milliseconds, so a
  * processor can end its share of a round between two ticks; the build runs
- * again, up to five rounds, until every processor has counted a user tick.
+ * again, up to thirty rounds, until every processor has counted a user tick.
+ * Under KVM a round of the sixteen compiles gives each processor about a
+ * tick of user time at 250 Hz, which /proc/stat shows only once two and a
+ * half have gathered; under TCG the first round gives each processor tens.
  * Each assertion is made in the guest, over the command's own output. The
  * build and its check are shell functions, since the console keeps 255 bytes
  * of a typed line. Assertions `online`, `login`, `nproc`, `sixteen` and
@@ -421,7 +424,7 @@ static void build(struct lc *l)
         return;
     if (lc_step(l, "grew") &&
         check(l, command(l, m, &at, grew_line, "GREW_END"), "USER_TIME_GREW", "grew",
-              "a processor's user ticks did not grow in five rounds of the parallel build"))
+              "a processor's user ticks did not grow in thirty rounds of the parallel build"))
         lc_quit(l, m, NULL);
 }
 
