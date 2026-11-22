@@ -1103,6 +1103,18 @@ static int walk_check_ok(const struct walk_check *wc)
     return !wc->on || vfs_seq_still(wc->seq);
 }
 
+/** Whether the walk `wc` may give its answer, a node or an error: nothing
+ * has changed what a path names since it began (`walk_check_ok`), and then
+ * its stamp is left with the thread (`vfs_stamp_set`); 0 sends it again. */
+static int walk_answer(const struct walk_check *wc)
+{
+    if (!walk_check_ok(wc)) {
+        return 0;
+    }
+    vfs_stamp_set(wc->seq, wc->on);
+    return 1;
+}
+
 static int walk_keep_take(const struct vfs_ref *ref, int locked);
 static int walk_keeps_hold(const struct vfs_mount *mnt, const void *node);
 
@@ -2865,14 +2877,16 @@ static int walk_component(const char **path, char *comp)
  * KRFFS relocation or a change of /dev or /sys. One that has lets go of
  * all the attempt holds and starts again from the start, the root read
  * again, as Linux's walk does when its sequences fail (fs/namei.c in 6.12);
- * the walk gate counts WALK_GATE_RESTART. The stamp of the attempt that
- * finishes is left with the thread (`vfs_stamp_set`) for the call that
- * consumes the answer. While the walk sleeps, its root and where it stands
- * are registered as the thread's walk holders, which a KRFFS relocation
- * moves and a removal finds in use (`vfs_walk_holds`). A walk whose check
- * is off (`walk_check_begin`) still sees a chroot of a thread that shares
- * the root at its next `..` or absolute link (`root_current`), and starts
- * over from the new root, so no walk mixes two.
+ * the walk gate counts WALK_GATE_RESTART. An error is an answer too, and
+ * is checked so before it is returned: a missing name that a rename came
+ * between is looked for again. The stamp of the attempt that finishes, with
+ * a node or an error, is left with the thread (`vfs_stamp_set`) for the
+ * call that consumes the answer, as a creation consumes a missing name.
+ * While the walk sleeps, its root and where it stands are registered as the
+ * thread's walk holders, which a KRFFS relocation moves and a removal finds
+ * in use (`vfs_walk_holds`). A walk also sees a chroot of a thread that
+ * shares the root at its next `..` or absolute link (`root_current`), and
+ * starts over from the new root, so no walk mixes two.
  * A path that begins with two slashes, which the system call layer makes
  * for a name relative to a descriptor's directory outside the caller's
  * root, starts at the root of the root mount, and keeps the caller's root
@@ -3219,10 +3233,9 @@ begin:
     if (rc != 0) {
         goto out_err;
     }
-    if (!walk_check_ok(&wc)) {
+    if (!walk_answer(&wc)) {
         goto restart;
     }
-    vfs_stamp_set(wc.seq, wc.on);
     path_buf_put(linkpath);
     path_buf_put(target);
     walk_name_end(&name);
@@ -3241,6 +3254,9 @@ restart:
     goto begin;
 
 out_err:
+    if (!walk_answer(&wc)) {
+        goto restart;
+    }
     walk_record_clear(record, 1);
     walk_release(&cur, locked);
     cur.mnt = NULL;
