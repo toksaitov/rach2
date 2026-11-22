@@ -29,7 +29,7 @@
 #define EXIT_TEXTURES 8192
 #define EXIT_BATCH    128 /* the textures made between two waits */
 
-static int gpu_fd = -1, other_fd = -1, fence_fd = -1, reset_fd = -1, ctx_fd = -1;
+static int gpu_fd = -1, other_fd = -1, fence_fd = -1, reset_fd = -1, ctx_fd = -1, hold_fd = -1;
 static void *mapping, *blob_map, *buf_map;
 static uint32_t bo_handle, blob_handle, buf_handle;
 static uint32_t capsets; /* SUPPORTED_CAPSET_IDs */
@@ -53,7 +53,7 @@ static long call(int fd, unsigned long op, void *arg)
 /** Release every descriptor, buffer and mapping, then exit. */
 static void finish(int rc)
 {
-    int fds[5], i;
+    int fds[6], i;
     void *maps[3];
     uint32_t handles[3];
     struct drm_gem_close c;
@@ -79,7 +79,8 @@ static void finish(int rc)
     fds[2] = fence_fd;
     fds[3] = reset_fd;
     fds[4] = ctx_fd;
-    for (i = 0; i < 5; i++) {
+    fds[5] = hold_fd;
+    for (i = 0; i < 6; i++) {
         if (fds[i] >= 0) {
             syscall1(SYS_CLOSE, fds[i]);
         }
@@ -381,9 +382,9 @@ static void nap(void)
     syscall2(SYS_NANOSLEEP, (long)&t, 0);
 }
 
-static char proc_text[32768]; /* a /proc file read whole */
+static char proc_text[32768]; /* a /proc or debugfs file read whole */
 
-/** Read /proc file `path` whole into proc_text: 0, or -1. */
+/** Read the /proc or debugfs file `path` whole into proc_text: 0, or -1. */
 static int proc_read(const char *path)
 {
     long fd = syscall3(SYS_OPEN, (long)path, 0, 0), n, got = 0;
@@ -485,44 +486,166 @@ static void close_handle(int fd, uint32_t handle, const char *what)
     require(call(fd, DRM_IOCTL_GEM_CLOSE, &c) == 0, what);
 }
 
-/** A second file imports the texture by PRIME and names it in a
- * submission, which attaches it to that file's context, then closes its
- * handle, which detaches it from that context alone: the first file still
- * uploads and reads back the texture and names it in a submission. */
-static void shared_row(void)
+/** Put "/sys/kernel/debug/dri/N/" and file `name` of the GPU's debugfs
+ * directory at `path`, of 80 bytes. */
+static void debug_path(char *path, const char *name)
 {
-    char path[64];
+    const char *prefix = "/sys/kernel/debug/dri/";
+    char *p = path;
+
+    while (*prefix) {
+        *p++ = *prefix++;
+    }
+    p = number(p, (uint32_t)card_index);
+    *p++ = '/';
+    while (*name) {
+        *p++ = *name++;
+    }
+    *p = 0;
+}
+
+/** Hold the driver's answers until hold_off: a descriptor of its debugfs
+ * file virtio_gpu_hold, while which the references of a submission and a
+ * DETACH on their buffers stay, whatever the host's speed. */
+static void hold_on(const char *what)
+{
+    char path[80];
+
+    debug_path(path, "virtio_gpu_hold");
+    hold_fd = (int)syscall3(SYS_OPEN, (long)path, 1, 0);
+    require(hold_fd >= 0, what);
+}
+
+/** Let the held answers go: the close runs their completions at once. */
+static void hold_off(void)
+{
+    syscall1(SYS_CLOSE, hold_fd);
+    hold_fd = -1;
+}
+
+/** The resource id of buffer `handle` of file `fd`, or a failed row named
+ * `what`. */
+static uint32_t res_of(int fd, uint32_t handle, const char *what)
+{
+    struct drm_virtgpu_resource_info info;
+
+    zero(&info, sizeof(info));
+    info.bo_handle = handle;
+    require(call(fd, DRM_IOCTL_VIRTGPU_RESOURCE_INFO, &info) == 0 && info.res_handle, what);
+    return info.res_handle;
+}
+
+/** Read decimal at `*p`, moving past it. */
+static uint32_t decimal(char **p)
+{
+    uint32_t n = 0;
+
+    for (; **p >= '0' && **p <= '9'; (*p)++) {
+        n = n * 10 + (uint32_t)(**p - '0');
+    }
+    return n;
+}
+
+/** Put in `ctx` the ids of the contexts resource `res` is attached to, by
+ * the driver's debugfs file virtio_gpu_attachments, at most 4: their count,
+ * or a failed row named `what`. */
+static uint32_t attached_to(uint32_t res, uint32_t *ctx, const char *what)
+{
+    char path[80], *p;
+    uint32_t c, n = 0;
+
+    debug_path(path, "virtio_gpu_attachments");
+    require(proc_read(path) == 0, what);
+    for (p = proc_text; *p;) {
+        c = decimal(&p);
+        require(*p++ == ' ', what);
+        if (decimal(&p) == res) {
+            require(n < 4, what);
+            ctx[n++] = c;
+        }
+        require(*p++ == '\n', what);
+    }
+    return n;
+}
+
+/** Give buffer `handle` of the GPU's file to the second file by PRIME: its
+ * handle there, or a failed row named `what`. */
+static uint32_t share(uint32_t handle, const char *what)
+{
     struct drm_prime_handle ph;
     long rc;
     int fd;
 
-    render_path(path, (uint32_t)(128 + card_index));
-    other_fd = (int)syscall3(SYS_OPEN, (long)path, 2, 0);
-    require(other_fd >= 0, "a second open of the render node");
     zero(&ph, sizeof(ph));
-    ph.handle = bo_handle;
+    ph.handle = handle;
     ph.flags = DRM_CLOEXEC | DRM_RDWR;
-    require(call(gpu_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) == 0 && ph.fd >= 0,
-            "export the texture");
+    require(call(gpu_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) == 0 && ph.fd >= 0, what);
     fd = ph.fd;
     zero(&ph, sizeof(ph));
     ph.fd = fd;
     rc = call(other_fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &ph);
     syscall1(SYS_CLOSE, fd);
-    require(rc == 0 && ph.handle != 0, "import the texture in the second file");
-    (void)submit_naming(other_fd, &ph.handle, 0, "the second file's submission naming it");
-    close_handle(other_fd, ph.handle, "the second file's close of the texture");
+    require(rc == 0 && ph.handle != 0, what);
+    return ph.handle;
+}
+
+/** A buffer that both files hold and have named in a submission is attached
+ * to both their contexts, read from virtio_gpu_attachments with no draw
+ * between, which would attach it again; the close of one file's handle
+ * detaches that file's context alone, the second file's first and then,
+ * with another texture, the first file's. The first file then still
+ * uploads, reads back and submits its texture, and the second file still
+ * submits the other. */
+static void shared_row(void)
+{
+    char path[64];
+    uint32_t oh, h, res, ctx[4], first, second;
+
+    render_path(path, (uint32_t)(128 + card_index));
+    other_fd = (int)syscall3(SYS_OPEN, (long)path, 2, 0);
+    require(other_fd >= 0, "a second open of the render node");
+    res = res_of(gpu_fd, bo_handle, "the texture's resource");
+    require(attached_to(res, ctx, "read the attachments") == 1,
+            "the texture attached to the first file's context alone");
+    first = ctx[0];
+    oh = share(bo_handle, "import the texture in the second file");
+    (void)submit_naming(other_fd, &oh, 0, "the second file's submission naming it");
+    require(attached_to(res, ctx, "read the attachments") == 2 &&
+                (ctx[0] == first) != (ctx[1] == first),
+            "the texture attached to both files' contexts");
+    second = ctx[0] == first ? ctx[1] : ctx[0];
+    close_handle(other_fd, oh, "the second file's close of the texture");
+    require(attached_to(res, ctx, "read the attachments") == 1 && ctx[0] == first,
+            "the second file's close detaches its context alone");
     roundtrip(7, 41, "the first file's texture after the second's close");
     (void)submit_naming(gpu_fd, &bo_handle, 0, "the first file's submission after it");
     wait_texture();
+    h = small_texture(gpu_fd);
+    require(h != 0, "a texture to share");
+    res = res_of(gpu_fd, h, "the shared texture's resource");
+    oh = share(h, "import the second texture in the second file");
+    (void)submit_naming(gpu_fd, &h, 0, "the first file's submission naming the second texture");
+    (void)submit_naming(other_fd, &oh, 0, "the second file's submission naming it");
+    require(attached_to(res, ctx, "read the attachments") == 2 &&
+                ((ctx[0] == first && ctx[1] == second) || (ctx[0] == second && ctx[1] == first)),
+            "the second texture attached to both files' contexts");
+    close_handle(gpu_fd, h, "the first file's close of the second texture");
+    require(attached_to(res, ctx, "read the attachments") == 1 && ctx[0] == second,
+            "the first file's close detaches its context alone");
+    (void)submit_naming(other_fd, &oh, 0, "the second file's submission after the first's close");
+    close_handle(other_fd, oh, "the second file's close of the second texture");
+    require(attached_to(res, ctx, "read the attachments") == 0,
+            "the last close detaches the last context");
     syscall1(SYS_CLOSE, other_fd);
     other_fd = -1;
     report_held();
 }
 
-/** Close a texture while a mapping and a submission hold it: it stays,
- * counted in virtio_gpu_objects, until both have ended, whichever ends
- * first, and then goes with no further call. */
+/** Close a texture while a mapping and a submission hold it, with the
+ * driver's answers held (`hold_on`), so that the submission is still
+ * pending, whatever the host's speed, until the row lets it end: the
+ * texture stays, counted in virtio_gpu_objects, until both have ended,
+ * whichever ends first, and then goes with no further call. */
 static void busy_close_row(void)
 {
     uint32_t h, n, i;
@@ -537,12 +660,16 @@ static void busy_close_row(void)
         m[i] = (uint8_t)(i + 99);
     }
     n = objects_now("read virtio_gpu_objects");
+    hold_on("hold the driver's answers");
     fence = submit_naming(gpu_fd, &h, 1, "a submission naming the texture");
     close_handle(gpu_fd, h, "close the busy texture");
     while (!fence_done(fence, "the submission's fence")) {
         nap();
     }
     syscall1(SYS_CLOSE, fence);
+    require(objects_now("read virtio_gpu_objects") == n,
+            "the held submission keeps the closed texture");
+    hold_off();
     require(objects_now("read virtio_gpu_objects") == n,
             "the mapping keeps the texture after its submission ends");
     for (i = 0; i < 64; i++) {
@@ -557,23 +684,26 @@ static void busy_close_row(void)
     require(h != 0, "a second texture to close while busy");
     m = map_bo(h, "map the second texture");
     n = objects_now("read virtio_gpu_objects");
+    hold_on("hold the driver's answers again");
     fence = submit_naming(gpu_fd, &h, 1, "a submission naming the second texture");
     close_handle(gpu_fd, h, "close the second busy texture");
     syscall2(SYS_MUNMAP, (long)m, 4096);
+    require(objects_now("read virtio_gpu_objects") == n,
+            "the held submission keeps the texture after its mapping ends");
+    hold_off();
     while (objects_now("read virtio_gpu_objects") != n - 1) {
         nap();
     }
-    require(fence_done(fence, "the second submission's fence"),
-            "the texture outlives its submission");
     syscall1(SYS_CLOSE, fence);
     report_held();
 }
 
-/** A texture named in a submission and closed at once is freed with no
- * further call of the program: the answers to its submission and its
- * DETACH drop their references in the kernel's worker, which sends its
- * UNREF, and its answer takes the texture out of virtio_gpu_objects. The
- * time from the close to that is printed, not judged. */
+/** A texture named in a submission and closed while the driver holds its
+ * answers is held by the submission and the DETACH alone, so that their
+ * answers drop its last reference, which goes to the kernel's worker: once
+ * the answers go, it is freed with no further call of the program, and the
+ * UNREF's answer takes it out of virtio_gpu_objects. The time from the
+ * answers' release to that is printed, not judged. */
 static void unref_row(void)
 {
     uint32_t h, n;
@@ -583,9 +713,13 @@ static void unref_row(void)
     h = small_texture(gpu_fd);
     require(h != 0, "a texture to free");
     n = objects_now("read virtio_gpu_objects");
+    hold_on("hold the driver's answers");
     (void)submit_naming(gpu_fd, &h, 0, "a submission naming the texture to free");
-    began = now_us();
     close_handle(gpu_fd, h, "close the texture to free");
+    require(objects_now("read virtio_gpu_objects") == n,
+            "the held answers keep the closed texture");
+    began = now_us();
+    hold_off();
     while (objects_now("read virtio_gpu_objects") != n - 1) {
         nap();
     }
@@ -596,8 +730,7 @@ static void unref_row(void)
 /** Reset with an exported fence; check pending work and old handles. */
 static void reset_row(void)
 {
-    char path[80], *p = path;
-    const char *prefix = "/sys/kernel/debug/dri/", *suffix = "/virtio_gpu_reset";
+    char path[80];
     struct drm_virtgpu_execbuffer a;
     struct drm_virtgpu_3d_wait w;
     struct sync_file_info before, after;
@@ -613,14 +746,7 @@ static void reset_row(void)
     fence_fd = a.fence_fd;
     zero(&before, sizeof(before));
     require(call(fence_fd, SYNC_IOC_FILE_INFO, &before) == 0, "fence before reset");
-    while (*prefix) {
-        *p++ = *prefix++;
-    }
-    p = number(p, (uint32_t)card_index);
-    while (*suffix) {
-        *p++ = *suffix++;
-    }
-    *p = 0;
+    debug_path(path, "virtio_gpu_reset");
     reset_fd = (int)syscall3(SYS_OPEN, (long)path, 1, 0);
     require(reset_fd >= 0, "open reset trigger");
     require(syscall3(SYS_WRITE, reset_fd, (long)"1\n", 2) == 2, "trigger reset");
