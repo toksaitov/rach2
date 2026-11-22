@@ -363,6 +363,8 @@ KERNEL = {"proc", "sysfs", "devfs", "devtmpfs", "devpts", "debugfs", "tracefs",
           "securityfs", "mqueue", "pstore", "cgroup", "cgroup2", "bpf",
           "binfmt_misc", "configfs", "fusectl"}
 KEPT = {"nosuid", "nodev", "noexec"}
+# The signals `keep` took while the seal's stage existed.
+KEPT_SIGNALS = []
 WRITABLE = (
     # The private copy in /data/crysis, the game's HOME in /data/home, the
     # HUD's dump and the load's new prefix; /data/owner stays read-only.
@@ -427,23 +429,30 @@ def rebase():
     makes, pivot_root to it with the old root put on the same directory as
     the bind shows it, a lazy unmount of that, and the directory taken
     back; the working directory is then the same path in the new root.
-    Each mount point must then show what it showed before."""
+    Each mount point must then show what it showed before. From before the
+    stage is made to after it is taken back, a signal is only kept
+    (`keep`), and it ends the seal once the stage is gone, so that none
+    comes between the stage's making and its removal."""
     here = os.getcwd()
     before = shown(mountinfo())
-    held = {n: signal.signal(n, ended) for n in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
-    stage = tempfile.mkdtemp(prefix=".crysis-root-", dir="/data")
+    held = {n: signal.signal(n, keep) for n in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
     try:
-        mount("--rbind", "/", stage)
-        for args in (("pivot_root", stage, stage + stage), ("umount", "-l", stage)):
-            run = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, check=False)
-            if run.returncode:
-                die("%s: %s" % (" ".join(args), run.stdout.strip()))
-            os.chdir("/")
+        stage = tempfile.mkdtemp(prefix=".crysis-root-", dir="/data")
+        try:
+            mount("--rbind", "/", stage)
+            for args in (("pivot_root", stage, stage + stage), ("umount", "-l", stage)):
+                run = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, check=False)
+                if run.returncode:
+                    die("%s: %s" % (" ".join(args), run.stdout.strip()))
+                os.chdir("/")
+        finally:
+            unstage(stage)
     finally:
-        unstage(stage)
         for number, handler in held.items():
             signal.signal(number, handler)
+    if KEPT_SIGNALS:
+        die("signal %d" % KEPT_SIGNALS[0])
     os.chdir(here)
     after = shown(mountinfo())
     if after != before:
@@ -455,10 +464,11 @@ def rebase():
     say("seal: root moved onto a bind of /; %d mount points as before" % len(after))
 
 
-def ended(number, frame):
-    """End the seal by a signal as by a failure, so that `rebase` takes its
-    stage back."""
-    die("signal %d" % number)
+def keep(number, frame):
+    """Keep a signal that comes while `rebase` has its stage, for the seal
+    to end by once the stage is taken back: a handler that raised could cut
+    the stage's making or its removal short."""
+    KEPT_SIGNALS.append(number)
 
 
 def unstage(stage):
