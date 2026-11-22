@@ -99,9 +99,9 @@
 # krffscheck, 2 s against 1 on the host; conload, 10 s against 8; fakeapi,
 # 129 s against 58 on x86_64.
 # raw, memory, smp, vblk, hvc, panic and input stay under TCG, since a case of
-# each failed under KVM (issue 5661). bigmem passed under KVM in 5 s against
-# 17, but run.sh runs it in a run of its own under the site's accelerator,
-# which this file does not change.
+# each failed under KVM (issue 5661).
+# bigmem passed under KVM in 5 s against 17 s on x86_64 (issue 5661); run.sh
+# runs it in a run of its own, under KVM since this file names it.
 browser
 video
 webgl
@@ -216,3 +216,4 @@ codexapi
 museapi
 textbusy
 i915fake
+bigmem
