@@ -66,7 +66,21 @@ Zero.
 Equal to
 .Va f_bsize .
 .It Va f_flags
-Zero, including on read-only mounts.
+For a mounted volume,
+.Dv ST_VALID
+and the mount's flags as the caller's mount namespace sees them, as Linux
+gives them:
+.Dv ST_RDONLY
+when the mount or its filesystem is read-only, and
+.Dv ST_NOSUID , ST_NODEV , ST_NOEXEC , ST_SYNCHRONOUS , ST_NOATIME ,
+.Dv ST_NODIRATIME
+and
+.Dv ST_RELATIME .
+Zero for the KRFFS boot root and the synthetic filesystems, for which a C
+library that finds no
+.Dv ST_VALID
+reads
+.Pa /proc/mounts .
 .El
 .Pp
 Reserved fields are zero.
