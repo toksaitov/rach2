@@ -64,6 +64,7 @@
 #include <sys/ioctl.h>
 #include <sys/klog.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -438,6 +439,16 @@ static int boot_rows(void)
     return 0;
 }
 
+/** Set the policy and priority of the calling thread through the system
+ * call, since musl's sched_setscheduler fails with ENOSYS. */
+static int set_policy(int policy, int priority)
+{
+    struct sched_param sp;
+
+    sp.sched_priority = priority;
+    return (int)syscall(SYS_sched_setscheduler, 0, policy, &sp);
+}
+
 /* The SIGUSR1s the interrupted drain took. */
 static volatile sig_atomic_t drain_signals;
 
@@ -455,7 +466,6 @@ static void drain_signal(int signo)
  * thread, off the processor until the parent kills it. */
 static void drain_child(int go)
 {
-    struct sched_param sp;
     volatile unsigned long spins = 0;
     char c;
 
@@ -463,8 +473,7 @@ static void drain_child(int go)
         _exit(1);
     }
     kill(getppid(), SIGUSR1);
-    sp.sched_priority = 1;
-    sched_setscheduler(0, SCHED_FIFO, &sp);
+    set_policy(SCHED_FIFO, 1);
     for (;;) {
         spins++;
     }
@@ -482,7 +491,6 @@ static void drain_child(int go)
  */
 static int drain_rows(int fd)
 {
-    struct sched_param sp;
     struct sigaction sa;
     char burst[1024];
     int go[2], queued = 0, rc, err, status;
@@ -492,9 +500,7 @@ static int drain_rows(int fd)
     sa.sa_handler = drain_signal;
     sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    sp.sched_priority = 99;
-    if (sigaction(SIGUSR1, &sa, NULL) != 0 || pipe(go) != 0 ||
-        sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
+    if (sigaction(SIGUSR1, &sa, NULL) != 0 || pipe(go) != 0 || set_policy(SCHED_FIFO, 99) != 0) {
         return fail("the interrupted drain cannot be set up");
     }
     child = fork();
@@ -524,8 +530,7 @@ static int drain_rows(int fd)
     kill(child, SIGKILL);
     waitpid(child, &status, 0);
     close(go[1]);
-    sp.sched_priority = 0;
-    sched_setscheduler(0, SCHED_OTHER, &sp);
+    set_policy(SCHED_OTHER, 0);
     errno = err;
     if (rc != -1 || err != EINTR || drain_signals != 1) {
         return fail("a drain that SIGUSR1 interrupts does not fail with EINTR");
