@@ -768,10 +768,6 @@ struct process {
     struct pid_held *pid_keep;
     struct nsset *nsset;
     uint32_t ns_granted;
-    /* The view whose mount flags the thread judges by, set for the length
-     * of a call through an open description to the description's (fs/vfs.h
-     * `vfs_view_enter`); 0 for its own mount namespace's. */
-    uint32_t mnt_view;
 
     /* The processor whose run queue the process is on, which is the one it
      * runs on while it runs (it is that processor's `current`) and the one

@@ -9204,20 +9204,6 @@ int vfs_mount_rdonly(const struct vfs_mount *m)
     return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
-/** vfs_ns.c's: the caller's view, the first namespace's, the only one here. */
-uint32_t vfs_mntns_view(void)
-{
-    return 0;
-}
-
-/** vfs_ns.c's: no view has flags of its own here. */
-struct vfs_mount_view *vfs_mount_view_of(const struct vfs_mount *m, uint32_t view)
-{
-    (void)m;
-    (void)view;
-    return NULL;
-}
-
 /** A held regular file's path follows both file and parent renames. */
 static void executable_path_row(void)
 {

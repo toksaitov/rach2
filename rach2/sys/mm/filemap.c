@@ -38,15 +38,8 @@ int filemap_noexec(const fd_entry_t *e)
                             : ofd->vmnt    ? ofd->vmnt
                             : ofd->dev_mnt ? ofd->dev_mnt
                                            : ofd->synth_mnt;
-    uint32_t view, own;
 
-    if (!mnt) {
-        return 0;
-    }
-    view = vfs_view_enter(ofd->view);
-    own = vfs_mount_flags(mnt);
-    vfs_view_leave(view);
-    return (own & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec;
+    return mnt && ((vfs_mount_flags(mnt) & VFS_MS_NOEXEC) || vfs_mount_base(mnt)->sb_noexec);
 }
 
 int32_t filemap_access(const fd_entry_t *e, int shared, uint32_t prot)
@@ -688,14 +681,13 @@ static void dshare_drop(struct dshare *ds)
  * as its holder may. A small stack buffer keeps no mapping of the frame
  * across a sleep, which `kmap_cpu` could not keep, needs no allocation at
  * unmap or exit, and takes no slot of `kmap_temp`'s pools, none of which
- * may be free. Only the file system's read-only state refuses the write
- * (VFS_VIEW_FS), whichever namespace syncs, as no mount's flags refuse
- * Linux's write-back. 0 or the first write error.
+ * may be free. 0 or
+ * the first write error.
  */
 static int dshare_write_bytes(struct dshare *ds, uintptr_t phys, uint32_t len, uint64_t at)
 {
     uint8_t buf[1024];
-    uint32_t done = 0, flags, view;
+    uint32_t done = 0, flags;
 
     while (done < len) {
         uint32_t take = len - done < sizeof(buf) ? len - done : (uint32_t)sizeof(buf);
@@ -704,9 +696,7 @@ static int dshare_write_bytes(struct dshare *ds, uintptr_t phys, uint32_t len, u
 
         k_memcpy(buf, page + done, take);
         kunmap_cpu(page, flags);
-        view = vfs_view_enter(VFS_VIEW_FS);
         n = vfs_write(ds->mnt, ds->wr_handle, buf, take, at + done);
-        vfs_view_leave(view);
         if (n != (int32_t)take) {
             return n < 0 ? n : -EIO;
         }

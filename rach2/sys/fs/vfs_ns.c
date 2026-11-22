@@ -9,22 +9,20 @@
  * the end of a namespace takes its id from every mount before the id can be
  * given again. A mount no id sees is let go of once nothing holds it
  * (`vfs_reap_detached` in vfs.c).
- *
- * A namespace may also hold flags of its own for a mount it shares with
- * others (`views` in vfs.h), keyed by its view, its inode number, which a
- * namespace made from it copies. They outlive an unmount in the namespace
- * and the namespace's end while a description opened through them is open,
- * since a call through a description judges by the view it was opened in
- * (`vfs_view_enter`).
  */
 
 #include "vfs.h"
-#include "fd.h"
-#include "../lib/kdef.h"
 #include "../lib/kerrno.h"
-#include "../mm/kheap.h"
 #include "../proc/ns.h"
 #include "../proc/process.h"
+#include "../proc/wait_queue.h"
+
+/* The remounts between their check that a mount is not shared and their
+ * store of its flags (`vfs_mntns_hold`), and where the making of a
+ * namespace waits for them to end. Under the big lock; a zeroed queue
+ * needs no init. */
+static uint32_t remounts;
+static wait_queue_t remounts_wq;
 
 /** The id of the caller's mount namespace. */
 static uint32_t caller_id(void)
@@ -69,140 +67,52 @@ int vfs_mount_view_new(struct vfs_mount *m)
 
 void vfs_mount_view_free(struct vfs_mount *m)
 {
-    struct vfs_mount_view *v = m->views, *next;
-
     idset_free(&m->ns_seen);
-    m->views = NULL;
-    for (; v; v = next) {
-        next = v->next;
-        kfree(v);
+}
+
+void vfs_mntns_hold(void)
+{
+    remounts++;
+}
+
+void vfs_mntns_release(void)
+{
+    if (--remounts == 0) {
+        wq_wake_all(&remounts_wq);
     }
 }
 
-uint32_t vfs_mntns_view(void)
+/** The wait condition of a namespace's making: no remount holds it off. */
+static int no_remounts(void *arg)
 {
-    if (current_proc && current_proc->mnt_view) {
-        return current_proc->mnt_view;
-    }
-    return proc_mntns(current_proc)->c.inum;
-}
-
-uint32_t vfs_view_enter(uint32_t view)
-{
-    uint32_t prev;
-
-    if (!current_proc) {
-        return 0;
-    }
-    prev = current_proc->mnt_view;
-    if (view) {
-        current_proc->mnt_view = view;
-    }
-    return prev;
-}
-
-void vfs_view_leave(uint32_t prev)
-{
-    if (current_proc) {
-        current_proc->mnt_view = prev;
-    }
-}
-
-int vfs_view_fs(void)
-{
-    return current_proc && current_proc->mnt_view == VFS_VIEW_FS;
-}
-
-struct vfs_mount_view *vfs_mount_view_of(const struct vfs_mount *m, uint32_t view)
-{
-    struct vfs_mount_view *v;
-
-    for (v = *(struct vfs_mount_view *const volatile *)&m->views; v; v = v->next) {
-        if (*(volatile const uint32_t *)&v->ns == view) {
-            return v;
-        }
-    }
-    return NULL;
-}
-
-struct vfs_mount_view *vfs_mount_view_find(const struct vfs_mount *m)
-{
-    return m->views ? vfs_mount_view_of(m, vfs_mntns_view()) : NULL;
-}
-
-/**
- * `vfs_mount_view_make` for the view `view`. An entry whose namespace ended
- * is taken again only when no description holds it, since a description
- * keeps looking its view up for its life (`fd_mount_view_held`), and no new
- * description can name the view of a namespace that has ended.
- */
-static struct vfs_mount_view *view_make(struct vfs_mount *m, uint32_t view, uint32_t flags)
-{
-    struct vfs_mount_view *v = vfs_mount_view_of(m, view);
-
-    if (v) {
-        return v;
-    }
-    for (v = m->views; v; v = v->next) {
-        if (v->gone && !fd_mount_view_held(m, v->ns)) {
-            v->flags = flags;
-            v->gone = 0;
-            k_barrier();
-            v->ns = view;
-            return v;
-        }
-    }
-    v = (struct vfs_mount_view *)kzalloc(sizeof(*v));
-    if (!v) {
-        return NULL;
-    }
-    v->ns = view;
-    v->flags = flags;
-    v->next = m->views;
-    k_barrier();
-    m->views = v;
-    return v;
-}
-
-struct vfs_mount_view *vfs_mount_view_make(struct vfs_mount *m, uint32_t flags)
-{
-    return view_make(m, vfs_mntns_view(), flags);
-}
-
-/** Mark the view `view`'s own flags for `m`, if it has any, as those of a
- * namespace that has ended. */
-static void view_gone(struct vfs_mount *m, uint32_t view)
-{
-    struct vfs_mount_view *v = vfs_mount_view_of(m, view);
-
-    if (v) {
-        v->gone = 1;
-    }
+    (void)arg;
+    return remounts == 0;
 }
 
 /**
  * The mounts are those of the table that are not free, the mounts being made
  * and unmounted among them, as a namespace made meanwhile must see what its
- * parent will see. `to` takes `from`'s own flags for each mount too, as
- * Linux's `copy_tree` copies each mount's flags. No call here sleeps, so the
+ * parent will see. It first waits out the remounts that hold the making of
+ * namespaces off (`vfs_mntns_hold`); after that no call here sleeps, so the
  * table does not change under the loop. A failure takes `to` from every
  * mount, which the caller then frees.
  */
-int vfs_mntns_copy(uint32_t from, uint32_t from_view, uint32_t to, uint32_t to_view)
+int vfs_mntns_copy(uint32_t from, uint32_t to)
 {
-    int i, n = vfs_mount_slots();
+    int i, n;
 
+    if (current_proc) {
+        wq_wait_event_nointr(&remounts_wq, no_remounts, NULL);
+    }
+    n = vfs_mount_slots();
     for (i = 0; i < n; i++) {
         struct vfs_mount *m = vfs_mount_at(i);
-        struct vfs_mount_view *v = m ? vfs_mount_view_of(m, from_view) : NULL;
 
-        if (m && idset_has(&m->ns_seen, from) &&
-            (idset_add(&m->ns_seen, to) != 0 || (v && !view_make(m, to_view, v->flags)))) {
+        if (m && idset_has(&m->ns_seen, from) && idset_add(&m->ns_seen, to) != 0) {
             for (i = 0; i < n; i++) {
                 m = vfs_mount_at(i);
                 if (m) {
                     idset_del(&m->ns_seen, to);
-                    view_gone(m, to_view);
                 }
             }
             return -ENOMEM;
@@ -220,7 +130,7 @@ int vfs_mntns_copy(uint32_t from, uint32_t from_view, uint32_t to, uint32_t to_v
  * namespace made meanwhile takes it, and each mount's view is read again as
  * the loop reaches it, since an unmount may sleep and the table change.
  */
-void vfs_mntns_gone(uint32_t id, uint32_t view)
+void vfs_mntns_gone(uint32_t id)
 {
     int i, progress = 1;
 
@@ -240,7 +150,6 @@ void vfs_mntns_gone(uint32_t id, uint32_t view)
 
         if (m) {
             idset_del(&m->ns_seen, id);
-            view_gone(m, view);
         }
     }
     vfs_reap_detached();

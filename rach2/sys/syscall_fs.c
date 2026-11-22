@@ -1232,8 +1232,7 @@ static int halted_root_mount(struct vfs_mount *mnt)
  * (`direct_misaligned`). The bytes written widen the range in `state`.
  * A caller without privilege clears the file's set-id bits before a byte
  * is written, as Linux's file_remove_privs does, and a clear that fails is
- * the write's error with nothing written (`write_kill_setid`). Both judge
- * the mount's flags by the description's view (`vfs_view_enter`).
+ * the write's error with nothing written (`write_kill_setid`).
  *
  * On a type that does not set `file_locked` the description's lock orders
  * only the writes through that description, so an append there, and a
@@ -1250,7 +1249,6 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
     int mapped = file_write_mapped(ofd, state);
     int held = !state->own && (append || mapped);
     uint64_t pos, start;
-    uint32_t view;
     int32_t written;
 
     if (held) {
@@ -1277,12 +1275,10 @@ static int32_t file_write_locked(fd_entry_t *entry, const char __user *buf, uint
         goto out;
     }
     start = pos;
-    view = vfs_view_enter(ofd->view);
     written = count != 0 ? write_kill_setid(ofd) : 0;
     if (written == 0) {
         written = file_write_pieces(entry, state, buf, count, &pos);
     }
-    vfs_view_leave(view);
     if (written > 0) {
         state->lo = start < state->lo ? start : state->lo;
         state->hi = start + (uint64_t)written > state->hi ? start + (uint64_t)written : state->hi;
@@ -1693,8 +1689,7 @@ static int rw_call_lock(const fd_entry_t *e, uint32_t free);
  * the caller lacks it, as is inotify's report. A length that grows the file
  * past the caller's RLIMIT_FSIZE is -EFBIG with SIGXFSZ, judged under the same
  * locks (`fsize_growth_refused`), and on FAT32 and exFAT under the namespace
- * lock (`size_ns_lock`); a shrink is never refused. The mount's flags are
- * judged by the description's view (`vfs_view_enter`). 0 or a negative errno.
+ * lock (`size_ns_lock`); a shrink is never refused. 0 or a negative errno.
  */
 static long ftruncate_fd(int fd, long long length)
 {
@@ -1702,7 +1697,6 @@ static long ftruncate_fd(int fd, long long length)
     struct vfs_ref file;
     int own, ns, big = 0;
     int rc, kill = 0;
-    uint32_t view;
 
     if (!current_proc) {
         return -ESRCH;
@@ -1735,7 +1729,6 @@ static long ftruncate_fd(int fd, long long length)
         return -EBUSY;
     }
     ns = size_ns_lock(entry->ofd);
-    view = vfs_view_enter(entry->ofd->view);
     rc = fsize_growth_refused(entry->ofd, (uint64_t)length);
     if (rc == 0) {
         rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, (uint64_t)length, 1);
@@ -1743,7 +1736,6 @@ static long ftruncate_fd(int fd, long long length)
     if (rc == 0) {
         kill = write_kill_setid(entry->ofd);
     }
-    vfs_view_leave(view);
     size_ns_unlock(entry->ofd, ns);
     if (rc == 0 && own && filemap_disk_mapped(entry->ofd->vmnt, entry->ofd->ino)) {
         big = big_take();
@@ -4689,8 +4681,7 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
     } else {
         rc = cred_access_ref(ref, want, 0);
     }
-    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) &&
-        (vfs_mount_flags(ref->mnt) & VFS_MS_NODEV)) {
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && (ref->mnt->flags & VFS_MS_NODEV)) {
         rc = -EACCES;
     }
     if (rc == 0 && (flags & O_DIRECT) && (type == S_IFIFO || type == S_IFCHR)) {
@@ -7148,7 +7139,7 @@ long sys_fadvise64(isr_params_t *params)
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled)
 {
     struct vfs_stat st;
-    uint32_t want, view;
+    uint32_t want;
     int rc;
 
     *handled = 0;
@@ -7177,10 +7168,7 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
         return -EPERM;
     }
     st.flags = want;
-    view = vfs_view_enter(entry->ofd->view);
-    rc = vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_FLAGS, &st);
-    vfs_view_leave(view);
-    return rc;
+    return vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_FLAGS, &st);
 }
 
 /* The requests of cp --reflink and of other programs that share a file's
@@ -7254,23 +7242,20 @@ struct xattr_args {
     void __user *user; /* the caller's value or list buffer */
 };
 
-/** Resolve an attribute path or hold its descriptor's node, with in
- * `*view` the descriptor's view (`vfs_view_enter`), 0 for a path.
+/** Resolve an attribute path or hold its descriptor's node.
  * Returns 0 with a held ref, 1 for a descriptor outside the VFS, or -errno. */
-static int xattr_ref(isr_params_t *params, int how, struct vfs_ref *ref, uint32_t *view)
+static int xattr_ref(isr_params_t *params, int how, struct vfs_ref *ref)
 {
     fd_entry_t *e;
     char *path;
     int dir, rc;
 
-    *view = 0;
     if (how == XATTR_FD) {
         e = fd_get(current_proc->fds, (int)SC_ARG(params, 0));
         if (!e || (e->flags & FD_FLAG_PATH))
             return -EBADF;
         if (!e->ofd || !e->ofd->vmnt)
             return 1;
-        *view = e->ofd->view;
         ref->mnt = e->ofd->vmnt;
         ref->node = e->ofd->vnode;
         rc = vfs_enter(ref->mnt);
@@ -7375,12 +7360,11 @@ static int32_t xattr_call(isr_params_t *params, int how, int op)
 {
     struct vfs_ref ref;
     struct xattr_args a;
-    uint32_t view;
     int rc;
 
     if (!current_proc)
         return -ESRCH;
-    rc = xattr_ref(params, how, &ref, &view);
+    rc = xattr_ref(params, how, &ref);
     if (rc)
         return rc == 1 ? (op == VFS_XATTR_LIST ? 0 : -EOPNOTSUPP) : rc;
     if (!ref.mnt->type->ops->xattr) {
@@ -7392,11 +7376,9 @@ static int32_t xattr_call(isr_params_t *params, int how, int op)
     rc = xattr_args(params, &a);
     if (!rc) {
         vfs_node_lock(&ref);
-        view = vfs_view_enter(view);
         rc = xattr_access(&ref, &a.attr);
         if (!rc)
             rc = vfs_xattr(ref.mnt, ref.node, &a.attr);
-        vfs_view_leave(view);
         vfs_node_unlock(&ref);
         if (rc > 0 && a.attr.size && op <= VFS_XATTR_LIST &&
             copy_to_user(a.user, a.attr.value, (uint32_t)rc))
@@ -14740,7 +14722,7 @@ static int fd_node_file(const fd_entry_t *entry, struct vfs_ref *file)
  * FIFO or a device opened through a device node on that node
  * (`fd_node_file`), and any other kind as `fchmod_synth` says.
  */
-static int32_t chmod_fd_in(fd_entry_t *entry, uint32_t mode)
+static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
 {
     struct vfs_ref file;
     int rc;
@@ -14775,16 +14757,6 @@ static int32_t chmod_fd_in(fd_entry_t *entry, uint32_t mode)
         return rc;
     }
     return fchmod_synth(entry, mode);
-}
-
-/** `chmod_fd_in` judged by the description's view (`vfs_view_enter`). */
-static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
-{
-    uint32_t view = vfs_view_enter(entry->ofd ? entry->ofd->view : 0);
-    int32_t rc = chmod_fd_in(entry, mode);
-
-    vfs_view_leave(view);
-    return rc;
 }
 
 /**
@@ -14981,7 +14953,7 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
  * the read, the plan and the store are one step under the file's lock, as
  * in `do_chown`, and for the same reason.
  */
-static int32_t chown_fd_in(fd_entry_t *entry, uint32_t uid, uint32_t gid)
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
     struct vfs_ref file;
     int what = 0;
@@ -15024,16 +14996,6 @@ static int32_t chown_fd_in(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         return rc;
     }
     return chown_fd_synth(entry, uid, gid);
-}
-
-/** `chown_fd_in` judged by the description's view (`vfs_view_enter`). */
-static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
-{
-    uint32_t view = vfs_view_enter(entry->ofd ? entry->ofd->view : 0);
-    int32_t rc = chown_fd_in(entry, uid, gid);
-
-    vfs_view_leave(view);
-    return rc;
 }
 
 /**
@@ -18156,14 +18118,13 @@ static uint32_t fallocate_type(fd_entry_t *entry)
  * before `vfs_fallocate` asks whether a loop device stands on the file to
  * the end of the change, since an attachment publishes itself under that
  * lock (`loop_attach`): a check made before it could pass a file attached
- * while the change waited for the lock. The mount's flags are judged by the
- * description's view (`vfs_view_enter`).
+ * while the change waited for the lock.
  */
 static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
 {
     fd_entry_t *entry;
     struct vfs_ref file;
-    uint32_t type, view;
+    uint32_t type;
     int32_t rc;
     int own;
 
@@ -18201,9 +18162,7 @@ static long fallocate_fd(int fd, uint32_t mode, uint64_t offset, uint64_t len)
     }
     fd_ofd_lock(entry->ofd);
     own = file_lock(entry->ofd, &file);
-    view = vfs_view_enter(entry->ofd->view);
     rc = vfs_fallocate(entry->ofd->vmnt, entry->ofd->fhandle, mode, offset, len);
-    vfs_view_leave(view);
     file_unlock(&file, own);
     fd_ofd_unlock(entry->ofd);
     return rc;
@@ -20399,7 +20358,7 @@ static uint32_t utimes_events(const struct utime_spec *times)
  * under that lock and repoints the description, so a node read before the
  * wait for the lock could be the storage the file left.
  */
-static int32_t utimes_fd_in(fd_entry_t *entry, const struct utime_spec *times, int empty)
+static int32_t utimes_fd(fd_entry_t *entry, const struct utime_spec *times, int empty)
 {
     struct vfs_ref file;
     struct vfs_mount *mnt;
@@ -20441,16 +20400,6 @@ static int32_t utimes_fd_in(fd_entry_t *entry, const struct utime_spec *times, i
     if (rc == 0) {
         attr_told_desc(entry->ofd, utimes_events(times), mnt_is_root(vfs_mount_base(mnt)));
     }
-    return rc;
-}
-
-/** `utimes_fd_in` judged by the description's view (`vfs_view_enter`). */
-static int32_t utimes_fd(fd_entry_t *entry, const struct utime_spec *times, int empty)
-{
-    uint32_t view = vfs_view_enter(entry && entry->ofd ? entry->ofd->view : 0);
-    int32_t rc = utimes_fd_in(entry, times, empty);
-
-    vfs_view_leave(view);
     return rc;
 }
 
@@ -22157,14 +22106,11 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
  * is not open on a file. It takes the mount's namespace lock, which a type
  * that moves a file's bytes needs, or the file's own on a type that sets
  * `file_locked`, and not the description's lock, as `fs_read_at` does.
- * Only the file system's read-only state refuses it (VFS_VIEW_FS), as no
- * mount's flags refuse Linux's write-back.
  */
 int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
 {
     struct open_file *ofd = e->ofd;
     struct vfs_ref file;
-    uint32_t view;
     int32_t n;
     int locked;
 
@@ -22177,9 +22123,7 @@ int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off
     if (locked) {
         vfs_node_lock(&file);
     }
-    view = vfs_view_enter(VFS_VIEW_FS);
     n = vfs_write(ofd->vmnt, ofd->fhandle, buf, count, off);
-    vfs_view_leave(view);
     if (locked) {
         vfs_node_unlock(&file);
     }

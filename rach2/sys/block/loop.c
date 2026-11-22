@@ -73,6 +73,11 @@ struct loop_device {
      * as Linux's loop syncs through its own open of the file. */
     uint32_t wb_seen;
     int writable;
+    /* A writable attachment's reservation of the file for writing through
+     * `mnt` (`fd_ofd_access`), as Linux's loop holds its file open for
+     * writing: it makes a remount of `mnt` read-only answer EBUSY until the
+     * release, and the file's execution ETXTBSY. NULL for a read-only one. */
+    struct open_file *wres;
     int in_flight; /* transfers inside the file system the file is on */
     /* The writes of the file and its syncs by the flush, which /proc/loop
      * reports so a test can see that a sync happened; the flush reads
@@ -339,9 +344,7 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 /**
  * Write whole sectors into the file and sync it, since the buffer cache
  * takes a written block to be on the device; `-EROFS` on a read-only
- * attachment, `-EIO` for a short write or a failed sync. The attachment
- * judged the mount writable, so only the file system's state refuses the
- * write (VFS_VIEW_FS), whichever namespace the block I/O comes from.
+ * attachment, `-EIO` for a short write or a failed sync.
  */
 static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -349,7 +352,6 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
     struct loop_file f;
     struct vfs_ref file;
-    uint32_t view;
     int32_t wrote;
     int big;
 
@@ -364,9 +366,7 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     file.mnt = f.mnt;
     file.node = f.node;
     vfs_node_lock(&file);
-    view = vfs_view_enter(VFS_VIEW_FS);
     wrote = vfs_write(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
-    vfs_view_leave(view);
     if (wrote > 0) {
         filemap_disk_written(f.mnt, f.ino, lba * BLOCK_SECTOR_SIZE, buffer, (uint32_t)wrote);
     }
@@ -490,6 +490,7 @@ static void loop_release(struct loop_device *loop)
     struct vfs_mount *mnt = loop->mnt;
     void *node = loop->node;
     void *handle = loop->handle;
+    struct open_file *wres = loop->wres;
     uint32_t flags = spin_lock_irqsave(&loop_lock);
 
     loop->attached = 0;
@@ -502,8 +503,10 @@ static void loop_release(struct loop_device *loop)
     loop->autoclear = 0;
     loop->mnt = 0;
     loop->handle = 0;
+    loop->wres = 0;
     loop->path[0] = '\0';
     bcache_invalidate(&loop->dev);
+    fd_ofd_unref(wres);
     if (mnt) {
         vfs_desc_close(mnt, node, handle);
     }
@@ -761,11 +764,45 @@ static int loop_unplaceable(const struct vfs_mount *mnt)
 }
 
 /**
+ * Whether the file `ref` names, resolved and locked by `loop_resolve`, may
+ * back a loop device, with its attributes in `*st`: 0, or `-EINVAL` for a
+ * file that is not regular or not whole sectors, `-EBUSY` for one attached
+ * or mapped shared already, `-ELOOP` for one off the medium's sectors,
+ * movable, or deeper than the cache serves (`loop_unplaceable`,
+ * `BLOCK_MAX_DEPTH`), or what the attribute read answered.
+ */
+static int loop_takeable(struct vfs_ref *ref, struct vfs_stat *st)
+{
+    int rc = vfs_getattr(ref->mnt, ref->node, st);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if ((st->mode & 0170000u) != 0100000u || st->size == 0 || st->size % BLOCK_SECTOR_SIZE != 0) {
+        return -EINVAL;
+    }
+    if (loop_backs(ref->mnt, ref->node) || filemap_disk_shared_mapped(ref->mnt, st->ino) ||
+        filemap_memory_shared_writable(ref->mnt, ref->node)) {
+        return -EBUSY;
+    }
+    if (loop_unplaceable(ref->mnt) || block_depth(ref->mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
+        return -ELOOP;
+    }
+    return 0;
+}
+
+/**
  * The slot is claimed before the steps that can sleep: a second attach that
  * found it free would publish over this one, and what the first had opened
  * would have nobody left to release it. The claim forgets the device the
  * slot last stood on, so a medium going while those steps sleep does not
  * match a claim that has published nothing.
+ *
+ * A writable attachment reserves the file for writing through the mount it
+ * was reached by, as an open for writing does (`fd_ofd_access`): `EROFS`
+ * through a read-only mount, or one a remount is making so, and `ETXTBSY`
+ * for a file being executed; the reservation holds a read-only remount of
+ * that mount off until the release.
  *
  * The description keeps the mount, so unmounting the volume the file is on
  * answers `EBUSY` while the device is attached. The resolution's count of an
@@ -777,6 +814,7 @@ int loop_attach(int index, const char *path, int writable)
     struct vfs_ref ref;
     struct vfs_stat st;
     struct loop_device *loop = 0;
+    struct open_file *wres = 0;
     void *handle = 0;
     uint32_t seen, seen_fs; /* the attachment's cursors; syncfs's is unused */
     int i;
@@ -812,57 +850,38 @@ int loop_attach(int index, const char *path, int writable)
     loop->autoclear = 0;
     loop->mnt = 0;
     loop->handle = 0;
+    loop->wres = 0;
     loop->dev.backing = 0;
+    if (writable) {
+        wres = fd_ofd_new();
+        if (!wres) {
+            loop_unclaim(loop);
+            return -ENOMEM;
+        }
+    }
 
     rc = loop_resolve(path, &ref);
     if (rc != 0) {
         loop_unclaim(loop);
+        fd_ofd_unref(wres);
         return rc;
     }
-    rc = vfs_getattr(ref.mnt, ref.node, &st);
+    rc = loop_takeable(&ref, &st);
+    if (rc == 0 && wres) {
+        rc = fd_ofd_access(wres, &ref, 1);
+    }
+    if (rc == 0) {
+        rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
+    }
+    if (rc == 0) {
+        vfs_wb_err_sample(ref.mnt, &seen, &seen_fs);
+        rc = loop_prepare(&ref, handle, &st, &seen);
+        if (rc != 0) {
+            vfs_release(ref.mnt, handle);
+        }
+    }
     if (rc != 0) {
-        vfs_node_unlock(&ref);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return rc;
-    }
-    if ((st.mode & 0170000u) != 0100000u) {
-        vfs_node_unlock(&ref);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return -EINVAL; /* only a regular file is an image */
-    }
-    if (st.size == 0 || st.size % BLOCK_SECTOR_SIZE != 0) {
-        vfs_node_unlock(&ref);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return -EINVAL; /* whole sectors only */
-    }
-    if (loop_backs(ref.mnt, ref.node) || filemap_disk_shared_mapped(ref.mnt, st.ino) ||
-        filemap_memory_shared_writable(ref.mnt, ref.node)) {
-        vfs_node_unlock(&ref);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return -EBUSY;
-    }
-    if (loop_unplaceable(ref.mnt) || block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
-        vfs_node_unlock(&ref);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return -ELOOP; /* off the medium's sectors, movable, or deeper than the cache serves */
-    }
-
-    rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
-    if (rc != 0) {
-        vfs_node_unlock(&ref);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return rc;
-    }
-    vfs_wb_err_sample(ref.mnt, &seen, &seen_fs);
-    rc = loop_prepare(&ref, handle, &st, &seen);
-    if (rc != 0) {
-        vfs_release(ref.mnt, handle);
+        fd_ofd_unref(wres);
         vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
@@ -876,6 +895,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->handle = handle;
     loop->wb_seen = seen;
     loop->writable = writable ? 1 : 0;
+    loop->wres = wres;
     loop->ino = (uint32_t)st.ino;
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
