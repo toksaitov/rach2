@@ -1869,7 +1869,8 @@ static int logged(uint32_t i, uint32_t type)
 
 /** The fence ids of the log are 1, 2, 3 ... for the control queue, 0 for
  * the cursor queue and for the commands that go unfenced: SET_SCANOUT,
- * SET_SCANOUT_BLOB, RESOURCE_FLUSH, MAP_BLOB and UNMAP_BLOB. */
+ * SET_SCANOUT_BLOB, RESOURCE_FLUSH, MAP_BLOB, UNMAP_BLOB, RESOURCE_UNREF
+ * and CTX_DETACH_RESOURCE. */
 static int fences_in_order(void)
 {
     uint32_t i, next = 1;
@@ -1881,7 +1882,9 @@ static int fences_in_order(void)
             gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB ||
             gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_FLUSH ||
             gpu.log[i] == VIRTIO_GPU_CMD_SET_SCANOUT ||
-            gpu.log[i] == VIRTIO_GPU_CMD_SET_SCANOUT_BLOB) {
+            gpu.log[i] == VIRTIO_GPU_CMD_SET_SCANOUT_BLOB ||
+            gpu.log[i] == VIRTIO_GPU_CMD_RESOURCE_UNREF ||
+            gpu.log[i] == VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE) {
             if (gpu.fence[i]) {
                 return 0;
             }

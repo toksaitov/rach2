@@ -84,6 +84,10 @@ Each control command carries a fence whose id is the next of the device's
 timeline, in the order the commands reach the queue; the device's answer
 signals it, and an error answer fails it with
 .Er EIO .
+SET_SCANOUT, SET_SCANOUT_BLOB, RESOURCE_FLUSH, RESOURCE_MAP_BLOB,
+RESOURCE_UNMAP_BLOB, CTX_DETACH_RESOURCE, RESOURCE_UNREF and a submission
+whose fence nobody reads go without a fence, as on Linux, so that QEMU
+answers them as soon as it has run them.
 When the queue is full, commands wait in order for answers to make room.
 A command the driver waits for that has no answer in five seconds fails
 with
