@@ -1,7 +1,7 @@
-/* bedkeep.c: the keeper of a load or a figure of bed-shm.sh, a child
- * subreaper that runs COMMAND and, once it ends or the keeper is told to
- * stop through its standard input, ends and reaps every process it left
- * (tests/kvm/Readme.md). */
+/* bedkeep.c: the keeper of each background child of bed-shm.sh, a child
+ * subreaper that runs COMMAND, signals it as the script asks through its
+ * standard input and, once it ends or the keeper is told to stop, ends and
+ * reaps every process it left (tests/kvm/Readme.md). */
 
 #define _XOPEN_SOURCE 700
 
@@ -38,8 +38,12 @@
 #define KILL_MS 30000L
 #endif
 #define MAX_KIDS 4096
+/* How long a child of the command is held still, its parent stopped, while
+ * the keeper checks it and signals it (signal_grandchild). */
+#define HOLD_MS  5000L
 
 static volatile sig_atomic_t stop_asked;
+static int kill_now; /* the stop asked was `kill`: KILL from the first turn */
 
 static const char *status_path; /* BASE.status, the lines bed-shm.sh reads */
 static int end_noted;           /* whether the `ended` line is written */
@@ -324,7 +328,8 @@ static int shell_status(int status)
 /**
  * End every process the command left: each child, and the group each one
  * leads, TERM and CONT once when first seen, until TERM_MS from the start
- * of the end, then KILL at each turn; orphans of the command come to the
+ * of the end, then KILL at each turn, or KILL from the first turn when the
+ * stop asked was `kill`; orphans of the command come to the
  * keeper as their parents end and are signalled at the next turn. Return
  * once waitpid gives ECHILD, with MAIN's status as a shell gives it; past
  * KILL_MS, report each child left once and go on, so that none of them is
@@ -341,7 +346,7 @@ static int end_all(pid_t main_pid)
 
     for (;;) {
         long t = now_ms() - start;
-        int sig = t < TERM_MS ? SIGTERM : SIGKILL;
+        int sig = t < TERM_MS && !kill_now ? SIGTERM : SIGKILL;
 
         reap_others(main_pid);
         main_ended(main_pid);
@@ -387,24 +392,172 @@ static int end_all(pid_t main_pid)
 }
 
 /**
- * Give whether the script has asked the keeper to stop: a word or the end
- * of file on standard input, the control FIFO, which the keeper waits on
- * with every stop signal and SIGCHLD let through only inside pselect, so
- * that none is lost between a look and the wait.
+ * Give the number of the signal NAME, written without its SIG, of those
+ * the script sends; 0 for any other.
  */
-static void wait_stop(const sigset_t *waitmask)
+static int signal_number(const char *name)
 {
+    static const struct {
+        const char *name;
+        int sig;
+    } names[] = {{"TERM", SIGTERM}, {"KILL", SIGKILL}, {"STOP", SIGSTOP}, {"CONT", SIGCONT},
+                 {"USR1", SIGUSR1}, {"USR2", SIGUSR2}, {"HUP", SIGHUP},   {"INT", SIGINT}};
+    size_t i;
+
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (strcmp(name, names[i].name) == 0)
+            return names[i].sig;
+    return 0;
+}
+
+/**
+ * Read the state, the parent and the start time, in clock ticks since the
+ * boot, of process PID from its stat line; give 0, or -1 when it has gone
+ * or the line does not parse.
+ */
+static int read_proc(pid_t pid, char *state, long *ppid, unsigned long long *start)
+{
+    char buf[1024];
+    char *p;
+
+    if (read_stat(pid, buf, sizeof(buf)) != 0)
+        return -1;
+    p = strrchr(buf, ')');
+    if (p == NULL || sscanf(p + 1,
+                            " %c %ld %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s"
+                            " %*s %*s %*s %*s %llu",
+                            state, ppid, start) != 3)
+        return -1;
+    return 0;
+}
+
+/**
+ * Send SIG to PID, a child of the command, or of the keeper once the
+ * command has ended, whose start time is START, as the script read it from
+ * the process's stat line while the process ran. The command is stopped
+ * first, unless it is stopped already, and continued after, so that it
+ * cannot reap PID between the check and the signal; the keeper reaps
+ * nothing meanwhile. So PID can be no other process's when it is signalled.
+ * Give NULL once the signal is sent, or why it was not.
+ */
+static const char *signal_grandchild(pid_t main_pid, pid_t pid, unsigned long long start, int sig)
+{
+    const char *why = NULL;
+    char state = '?';
+    long ppid = 0, t0;
+    unsigned long long st = 0;
+    int stopped_here = 0;
+
+    if (read_proc(main_pid, &state, &ppid, &st) != 0)
+        return "the command is gone";
+    if (state != 'T' && state != 'Z') {
+        if (kill(main_pid, SIGSTOP) != 0)
+            return "the command could not be stopped";
+        stopped_here = 1;
+        t0 = now_ms();
+        for (;;) {
+            if (read_proc(main_pid, &state, &ppid, &st) != 0 || state == 'T' || state == 'Z')
+                break;
+            if (now_ms() - t0 >= HOLD_MS) {
+                why = "the command did not stop within 5 s";
+                break;
+            }
+            nap(1L);
+        }
+    }
+    if (why == NULL) {
+        if (read_proc(pid, &state, &ppid, &st) != 0)
+            why = "no such process";
+        else if ((pid_t)ppid != main_pid && (pid_t)ppid != getpid())
+            why = "not a child of the command";
+        else if (st != start)
+            why = "another process since";
+        else if (state == 'Z')
+            why = "ended";
+        else if (kill(pid, sig) != 0)
+            why = "kill failed";
+    }
+    if (stopped_here)
+        kill(main_pid, SIGCONT);
+    return why;
+}
+
+/**
+ * Do one word of the script, LINE: `signal SEQ NAME` sends the signal NAME
+ * to the command, which the keeper has not reaped, and `signal SEQ NAME
+ * PID START` to a child of it (signal_grandchild); either answers in the
+ * status file with `signalled SEQ`, or `unsignalled SEQ WHY`. `kill` asks
+ * the keeper to stop and to KILL at once; any other word asks it to stop.
+ */
+static void do_word(pid_t main_pid, const char *line)
+{
+    char name[16];
+    unsigned long seq;
+    unsigned long long start;
+    long pid;
+    const char *why;
+    int sig, n;
+
+    n = sscanf(line, "signal %lu %15s %ld %llu", &seq, name, &pid, &start);
+    if (n == 2 || n == 4) {
+        sig = signal_number(name);
+        if (sig == 0)
+            why = "no such signal";
+        else if (n == 2)
+            why = kill(main_pid, sig) == 0 ? NULL : "kill failed";
+        else if (pid <= 1 || (pid_t)pid == main_pid || (pid_t)pid == getpid())
+            why = "not a child of the command";
+        else
+            why = signal_grandchild(main_pid, (pid_t)pid, start, sig);
+        if (why == NULL)
+            note("signalled %lu", seq);
+        else
+            note("unsignalled %lu %s", seq, why);
+        return;
+    }
+    if (strcmp(line, "kill") == 0)
+        kill_now = 1;
+    stop_asked = 1;
+}
+
+/**
+ * Wait for the script's words on standard input, the control FIFO, with
+ * every stop signal and SIGCHLD let through only inside pselect, so that
+ * none is lost between a look and the wait, and do each whole line read
+ * (do_word); the end of file asks the keeper to stop.
+ */
+static void wait_word(pid_t main_pid, const sigset_t *waitmask)
+{
+    static char buf[512];
+    static size_t used;
     fd_set rfds;
-    char buf[64];
     ssize_t n;
+    char *nl;
 
     FD_ZERO(&rfds);
     FD_SET(0, &rfds);
     if (pselect(1, &rfds, NULL, NULL, NULL, waitmask) <= 0 || !FD_ISSET(0, &rfds))
         return;
-    n = read(0, buf, sizeof(buf));
-    if (n >= 0 || (errno != EINTR && errno != EAGAIN))
+    n = read(0, buf + used, sizeof(buf) - 1 - used);
+    if (n < 0) {
+        if (errno != EINTR && errno != EAGAIN)
+            stop_asked = 1;
+        return;
+    }
+    if (n == 0) {
         stop_asked = 1;
+        return;
+    }
+    used += (size_t)n;
+    buf[used] = '\0';
+    while (!stop_asked && (nl = strchr(buf, '\n')) != NULL) {
+        *nl = '\0';
+        do_word(main_pid, buf);
+        used -= (size_t)(nl + 1 - buf);
+        memmove(buf, nl + 1, used + 1);
+    }
+    if (used == sizeof(buf) - 1)
+        stop_asked = 1; /* a line too long for any word */
 }
 
 /**
@@ -430,6 +583,37 @@ static void run_command(char **argv)
     _exit(127);
 }
 
+/**
+ * Read the keeper's arguments, PARENT BASE COMMAND..., into PARENT, the
+ * path of BASE.stop into STOP_PATH, of STOP_SIZE bytes, and the status
+ * file's path into status_path; give 0, or 2, a usage's status, with a line
+ * on stderr.
+ */
+static int read_args(int argc, char **argv, pid_t *parent, char *stop_path, size_t stop_size)
+{
+    static char status_buf[4096];
+    char *end;
+    long arg;
+
+    if (argc < 4) {
+        fprintf(stderr, "usage: bedkeep PARENT BASE COMMAND [ARGUMENT...] <> FIFO\n");
+        return 2;
+    }
+    arg = strtol(argv[1], &end, 10);
+    if (*argv[1] == '\0' || *end != '\0' || arg <= 1) {
+        fprintf(stderr, "bedkeep: failed: %s: not a parent's pid\n", argv[1]);
+        return 2;
+    }
+    *parent = (pid_t)arg;
+    if (snprintf(stop_path, stop_size, "%s.stop", argv[2]) >= (int)stop_size ||
+        snprintf(status_buf, sizeof(status_buf), "%s.status", argv[2]) >= (int)sizeof(status_buf)) {
+        fprintf(stderr, "bedkeep: failed: %s: name too long\n", argv[2]);
+        return 2;
+    }
+    status_path = status_buf;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     static const int stops[] = {SIGTERM, SIGINT, SIGHUP};
@@ -440,26 +624,13 @@ int main(int argc, char **argv)
     char stop_path[4096];
     int i;
 
-    if (argc < 3) {
-        fprintf(stderr, "usage: bedkeep BASE COMMAND [ARGUMENT...] <> FIFO\n");
+    if (read_args(argc, argv, &parent, stop_path, sizeof(stop_path)) != 0)
         return 2;
-    }
-    if (snprintf(stop_path, sizeof(stop_path), "%s.stop", argv[1]) >= (int)sizeof(stop_path)) {
-        fprintf(stderr, "bedkeep: failed: %s: name too long\n", argv[1]);
-        return 2;
-    }
-    {
-        static char status_buf[4096];
-
-        snprintf(status_buf, sizeof(status_buf), "%s.status", argv[1]);
-        status_path = status_buf;
-    }
     if (fstat(0, &st) != 0 || !S_ISFIFO(st.st_mode)) {
         fprintf(stderr, "bedkeep: failed: standard input is not a pipe\n");
         note("done 125");
         return 125;
     }
-    parent = getppid();
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
         fprintf(stderr, "bedkeep: failed: subreaper: %s\n", strerror(errno));
         note("done 125");
@@ -478,9 +649,16 @@ int main(int argc, char **argv)
         sigaction(stops[i], &sa, &old[i]);
     sa.sa_handler = on_child;
     sigaction(SIGCHLD, &sa, &oldchld);
-    /* The script's death stops the load as its word does. Set after the
-     * handler, and checked once, for a parent that died before it. */
-    prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
+    /* The script's death stops the keeper as its word does. The signal is
+     * asked for after its handler is set and before the parent is checked,
+     * so that a script that dies at any point is seen: before the check, as
+     * a parent other than PARENT, the script's pid, and after it, as the
+     * signal. */
+    if (prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0) != 0) {
+        fprintf(stderr, "bedkeep: failed: death signal: %s\n", strerror(errno));
+        note("done 125");
+        return 125;
+    }
     if (getppid() != parent)
         stop_asked = 1;
     /* The script makes BASE.stop before it writes its word, which is lost
@@ -504,7 +682,7 @@ int main(int argc, char **argv)
             sigaction(stops[i], &old[i], NULL);
         sigaction(SIGCHLD, &oldchld, NULL);
         sigprocmask(SIG_SETMASK, &saved, NULL);
-        run_command(argv + 2);
+        run_command(argv + 3);
     }
     note("started %ld %ld", (long)getpid(), (long)main_pid);
 
@@ -516,7 +694,7 @@ int main(int argc, char **argv)
         reap_others(main_pid);
         if (getppid() != parent)
             break;
-        wait_stop(&waitmask);
+        wait_word(main_pid, &waitmask);
     }
     i = end_all(main_pid);
     note("done %d", i);
