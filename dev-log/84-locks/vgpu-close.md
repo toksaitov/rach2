@@ -214,3 +214,12 @@ The counters' runs that ended at 16:22, and the run of 16:24 without them, all p
 | The test's time | 10.9 s | 10.5 to 10.9 s | 10.8 s | 12.6, 12.8 s |
 
 Over the whole run, the closes' notifies fell from 1,662 to 87 to 181, and the worker's from 1,017 to 402 to 654, in 266 to 392 passes of 16 to 24 buffers each against 3,528 passes of 1.8. A run of UNREFs stops at 64 since the worker's free waits for room once the commands started hold 256 pages (`vgpu_room`). The first close after each flush still waits for the submission in its notify, and a submission's first UNREF came 0.93 to 0.97 s after it in the run of 16:24, so the creates stay at Linux's count.
+
+## Codex's second review
+
+Subtask 5709 fixed the two faults of Codex's review of the fixes, from 50f95acfa to a4c3a4418.
+
+* A console allocation under the mode lock still waited while UNREFs were in flight, whatever another thread's reap was doing. A reap that completes an errored UNREF unplugs the device, and the unplug takes the mode lock; the UNREF count drops only after it returns, and the reap's answers are on its own list, which the allocator's reap cannot reach. `backing_fill` and `vgpu_dma_wait` now ask `unrefs_awaited` before each wait and again after each reap: under the mode lock it allows a wait only for UNREFs in flight while no reap is under way, and never for a pass over the worker's frees alone. The sleep lasts at most 10 ms, so a reap that begins during it is seen at the next turn, and the allocation fails with ENOMEM. The allocator's own reaps still complete the answers that come, and an unplug there retakes the recursive lock it holds.
+* The shared row closed the second texture's last handle and went on, so its UNREF could be answered during `busy_close_row` and change the object count that row reads. The row now takes `virtio_gpu_objects` before it makes the texture and waits until the count is back there before it ends.
+
+Under KVM, `tests/run vgpu` passed on i686, virgl with the shared, busy-close and unref rows and exit, the UNREF seen in 2 ms, and `ARCH=x86_64 tests/run vgpu` passed blob, virgl, 1 ms, and exit.
