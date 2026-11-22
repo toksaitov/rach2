@@ -63,6 +63,11 @@ struct tty {
      * interrupt as well, while echo is held and output runs. NULL for a
      * terminal whose receipt gives its echo to the sink, a pty slave's. */
     void (*echo_kick)(struct tty *t);
+    /* A write holds the terminal for its whole length (`tty_write_lock`), as
+     * Linux's atomic_write_lock does, so that two writes do not mix and a
+     * termios change that waits for output (TCSETSW and its kin) installs
+     * between writes, never inside one. */
+    int writing;
     int sid;     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid; /* foreground process group (ISIG target); 0 = none */
     /* The `pgrp_serial` (process.h) of the foreground group, which tells it
@@ -328,6 +333,30 @@ int tty_wait_until_sent(struct tty *t, const uint32_t *opened);
  * 0 for a terminal with none, which TIOCOUTQ reports. Takes interrupts off
  * itself. */
 unsigned int tty_outq(struct tty *t);
+
+/**
+ * TCSBRK and TCSBRKP on `t`, as Linux's tty_ioctl answers them: wait for the
+ * output (`tty_wait_until_sent`), then send the break, which no terminal
+ * here can, so that a request for one is done. Returns 0; -EIO when a
+ * vhangup has hung up the description opened at `*opened`; or -EINTR when a
+ * signal ended the wait or is pending once it ends, an EINTR no SA_RESTART
+ * restarts, as Linux's is plain EINTR. A NULL `t` has no output to wait for,
+ * as a pty master's. Thread context.
+ */
+int tty_tcsbrk(struct tty *t, const uint32_t *opened);
+
+/**
+ * Take the write lock of `t` (`writing`) for a write, or for a termios
+ * change that waits for output, as Linux's tty_write_lock. Returns 0 with
+ * the lock held; -EAGAIN for a nonblocking caller while another write holds
+ * it; -EIO when a vhangup has hung up the description opened at `*opened`,
+ * or NULL for one no hangup reaches; or -EINTR when a signal ends the wait.
+ * Thread context, with the big lock held.
+ */
+int tty_write_lock(struct tty *t, int nonblock, const uint32_t *opened);
+
+/** Release the write lock of `t` and wake the next writer. */
+void tty_write_unlock(struct tty *t);
 
 /**
  * Wait until `t` has input a read can take, then copy up to `count` bytes of

@@ -106,6 +106,14 @@
 
 #define TCSETSF 0x5404 /* Set after output drains, flush input */
 
+#define TCGETA 0x5405 /* Get terminal attributes as the SVR4 struct termio */
+
+#define TCSETA 0x5406 /* Set them from a struct termio now */
+
+#define TCSETAW 0x5407 /* Set them after the output drains */
+
+#define TCSETAF 0x5408 /* Set them after output drains, flush input */
+
 #define TCGETS2 0x802C542A /* Get the termios2 attributes: termios and speeds */
 
 #define TCSETS2 0x402C542B /* Set the termios2 attributes now */
@@ -2301,6 +2309,20 @@ struct ktermios2 {
 
 typedef char ktermios2_is_44_bytes[sizeof(struct ktermios2) == 44 ? 1 : -1];
 
+/* The SVR4 termio of TCGETA and the TCSETA family, Linux's struct termio:
+ * the low 16 bits of each mode and the first KNCC control characters. */
+#define KNCC 8
+struct ktermio {
+    uint16_t c_iflag;
+    uint16_t c_oflag;
+    uint16_t c_cflag;
+    uint16_t c_lflag;
+    uint8_t c_line;
+    uint8_t c_cc[KNCC];
+};
+
+typedef char ktermio_is_18_bytes[sizeof(struct ktermio) == 18 ? 1 : -1];
+
 /**
  * The line speed that the baud code `code` names, as TCGETS2 reports it:
  * the sixteen codes from B0 to B38400 in the low four bits, and with CBAUDEX
@@ -2344,38 +2366,103 @@ static int32_t tty_get_termios_at(const struct tty *t, uint32_t request, uintptr
 }
 
 /**
- * The TCSETS and TCSETS2 families: install the termios at `arg`, which for
- * the second is the start of a termios2 whose speeds are not kept. The
- * install runs with interrupts off, so an input interrupt never reads a
- * half-written termios; TCSETSF and TCSETSF2 also discard pending input.
- * TCSETSW, TCSETSF and their termios2 forms first wait until the device
- * has taken the output (`tty_wait_until_sent`), for the description opened
- * at `*opened` vhangups, or NULL, as Linux's set_termios does: a signal
- * ends the wait with -EINTR and installs nothing.
+ * TCGETA: copy the low 16 bits of each of the terminal's modes, its line
+ * discipline and its first KNCC control characters to the struct termio at
+ * `arg`, as Linux's kernel_termios_to_user_termio.
+ */
+static int32_t tty_get_termio_at(const struct tty *t, uintptr_t arg)
+{
+    struct ktermio v;
+
+    k_memset(&v, 0, sizeof(v));
+    v.c_iflag = (uint16_t)t->ldisc.tio.c_iflag;
+    v.c_oflag = (uint16_t)t->ldisc.tio.c_oflag;
+    v.c_cflag = (uint16_t)t->ldisc.tio.c_cflag;
+    v.c_lflag = (uint16_t)t->ldisc.tio.c_lflag;
+    v.c_line = t->ldisc.tio.c_line;
+    k_memcpy(v.c_cc, t->ldisc.tio.c_cc, KNCC);
+    if (!arg || copy_to_user((void __user *)arg, &v, sizeof(v)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * Install `kt` on `t`, with interrupts off, so that an input interrupt never
+ * reads a half-written termios; with `flush`, discard pending input too.
+ * With `wait`, as Linux's set_termios: wait until the device has taken the
+ * output (`tty_wait_until_sent`), take the write lock (`tty_write_lock`),
+ * and wait again while a writer that came between left output queued, so
+ * that the change lands between two writes and after their output, never
+ * inside a write. The description is the one opened at `*opened` vhangups,
+ * or NULL for one no hangup reaches. A signal ends a wait with -EINTR, which
+ * SA_RESTART restarts, and installs nothing; a hangup gives -EIO.
+ */
+static int32_t tty_install(struct tty *t, const struct ktermios *kt, int wait, int flush,
+                           const uint32_t *opened)
+{
+    int32_t rc;
+
+    if (!wait) {
+        tty_set_termios(t, kt, flush);
+        return 0;
+    }
+    for (;;) {
+        rc = tty_wait_until_sent(t, opened);
+        if (rc == 0) {
+            rc = tty_write_lock(t, 0, opened);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        if (tty_outq(t) == 0) {
+            break;
+        }
+        tty_write_unlock(t);
+    }
+    tty_set_termios(t, kt, flush);
+    tty_write_unlock(t);
+    return 0;
+}
+
+/**
+ * The TCSETS, TCSETS2 and TCSETA families: install the termios at `arg`
+ * (`tty_install`). A termios2 is a termios whose speeds after it are not
+ * kept. A struct termio sets the low 16 bits of each mode, keeping the high
+ * ones, the line discipline and the first KNCC control characters, as
+ * Linux's user_termio_to_kernel_termios. TCSETSW, TCSETSF and their kin
+ * wait for the output first, and TCSETSF and its kin also discard pending
+ * input.
  */
 static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uintptr_t arg,
                                   const uint32_t *opened)
 {
     struct ktermios2 kt2;
     int two = request == TCSETS2 || request == TCSETSW2 || request == TCSETSF2;
-    int flush = request == TCSETSF || request == TCSETSF2;
+    int flush = request == TCSETSF || request == TCSETSF2 || request == TCSETAF;
+    int wait = flush || request == TCSETSW || request == TCSETSW2 || request == TCSETAW;
     uint32_t size = two ? sizeof(struct ktermios2) : sizeof(struct ktermios);
-    int32_t rc;
 
     if (!arg) {
         return -EFAULT;
     }
-    if (copy_from_user(&kt2, (const void __user *)arg, size) != 0) {
+    if (request == TCSETA || request == TCSETAW || request == TCSETAF) {
+        struct ktermio v;
+
+        if (copy_from_user(&v, (const void __user *)arg, sizeof(v)) != 0) {
+            return -EFAULT;
+        }
+        kt2.tio = t->ldisc.tio;
+        kt2.tio.c_iflag = (kt2.tio.c_iflag & 0xFFFF0000u) | v.c_iflag;
+        kt2.tio.c_oflag = (kt2.tio.c_oflag & 0xFFFF0000u) | v.c_oflag;
+        kt2.tio.c_cflag = (kt2.tio.c_cflag & 0xFFFF0000u) | v.c_cflag;
+        kt2.tio.c_lflag = (kt2.tio.c_lflag & 0xFFFF0000u) | v.c_lflag;
+        kt2.tio.c_line = v.c_line;
+        k_memcpy(kt2.tio.c_cc, v.c_cc, KNCC);
+    } else if (copy_from_user(&kt2, (const void __user *)arg, size) != 0) {
         return -EFAULT;
     }
-    if (flush || request == TCSETSW || request == TCSETSW2) {
-        rc = tty_wait_until_sent(t, opened);
-        if (rc != 0) {
-            return rc;
-        }
-    }
-    tty_set_termios(t, &kt2.tio, flush);
-    return 0;
+    return tty_install(t, &kt2.tio, wait, flush, opened);
 }
 
 /**
@@ -2389,6 +2476,10 @@ static int tty_request(uint32_t request)
     case TCSETS:
     case TCSETSW:
     case TCSETSF:
+    case TCGETA:
+    case TCSETA:
+    case TCSETAW:
+    case TCSETAF:
     case TCGETS2:
     case TCSETS2:
     case TCSETSW2:
@@ -2471,8 +2562,9 @@ static int32_t tty_flush_at(struct tty *t, uintptr_t which)
 
 /**
  * The job-control check (`tty_job_check`, SIGTTOU) of a terminal request that
- * changes `t`, as Linux's tty_check_change: TCSETS and its kin, TCFLSH,
- * TCXONC, TCSBRK, TCSBRKP and TIOCSPGRP, whose EIO for an orphaned group
+ * changes `t`, as Linux's tty_check_change: TCSETS and its kin, the TCSETA
+ * family, TCFLSH, TCXONC, TCSBRK, TCSBRKP and TIOCSPGRP, whose EIO for an
+ * orphaned group
  * Linux's tiocspgrp turns into ENOTTY. Returns 0 for any other request.
  */
 static int32_t tty_job_gate(struct tty *t, uint32_t request)
@@ -2486,6 +2578,9 @@ static int32_t tty_job_gate(struct tty *t, uint32_t request)
     case TCSETS2:
     case TCSETSW2:
     case TCSETSF2:
+    case TCSETA:
+    case TCSETAW:
+    case TCSETAF:
     case TCFLSH:
     case TCXONC:
     case TCSBRK:
@@ -2630,32 +2725,36 @@ static int32_t tty_session_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
  * console and a pty slave share. Sets *handled = 1 and returns the result for
  * a recognized terminal request; sets *handled = 0 (return value unused)
  * otherwise, so the caller falls through to its own handling. TCGETS/TCSETS
- * exchange the 36-byte kernel termios (n_tty.h), and TCGETS2 and the TCSETS2
+ * exchange the 36-byte kernel termios (n_tty.h), TCGETS2 and the TCSETS2
  * family the 44-byte termios2, whose speeds TCGETS2 takes from the baud codes
- * of c_cflag and a set does not keep; TCSETSF, TCSETSF2 and TCFLSH flush the
- * unread input. FIONREAD gives the bytes a read would return at once, a
+ * of c_cflag and a set does not keep, and TCGETA and the TCSETA family the
+ * 18-byte SVR4 termio (`struct ktermio`); TCSETSF, its kin and TCFLSH flush
+ * the unread input. FIONREAD gives the bytes a read would return at once, a
  * complete cooked line or the queued count in raw mode, with a pending EOF
  * counted as 0; `tty_inq` drains the input source first, so input that has
  * just arrived is counted. TIOCOUTQ gives the bytes of output the device has
  * not taken (`tty_outq`), as Linux's n_tty_ioctl gives tty_chars_in_buffer.
- * TCSBRK and TCSBRKP wait for that output (`tty_wait_until_sent`), as
- * TCSETSW, TCSETSF and their termios2 forms do before the install, for the
+ * TCSBRK and TCSBRKP wait for that output (`tty_tcsbrk`), as TCSETSW,
+ * TCSETSF and their kin do before the install (`tty_install`), for the
  * description opened at `*opened` vhangups, or NULL for one no hangup
  * reaches, as Linux's tty_ioctl does; TCSBRK with a nonzero `arg` is musl's
  * tcdrain. TCSBRK with 0 and TCSBRKP then send a break, which no terminal
  * here can, so they return 0, as Linux's send_break does for a driver
- * without break_ctl. A signal ends their wait with EINTR, which
- * `ioctl_restartable` keeps from a restart. TCFLSH discards the queues
+ * without break_ctl. A signal during or at the end of their wait gives
+ * EINTR, which no SA_RESTART restarts; a signal in the wait of a termios
+ * change gives an EINTR that SA_RESTART restarts. TCFLSH discards the queues
  * (`tty_flush_at`), and TCXONC stops and restarts output or sends VSTOP and
  * VSTART (`tty_tcflow`).
  * TIOCSWINSZ sends the foreground group SIGWINCH when the size changes
  * (`tty_resize`). The session requests are `tty_session_ioctl`'s.
  *
  * A process of a background group of the session the terminal controls is
- * stopped with SIGTTOU before TCSETS and its kin, TCFLSH, TCXONC, TCSBRK,
- * TCSBRKP and TIOCSPGRP, unless it blocks or ignores the signal
- * (`tty_job_check`), as Linux's tty_check_change; an orphaned group's call
- * is EIO, and its TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
+ * stopped with SIGTTOU before TCSETS and its kin, the TCSETA family,
+ * TCFLSH, TCXONC, TCSBRK, TCSBRKP and TIOCSPGRP, unless it blocks or ignores
+ * the signal (`tty_job_check`), as Linux's tty_check_change, and its call
+ * is an EINTR that is restarted once the group is continued; an orphaned
+ * group's call is EIO, and its TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns
+ * that EIO.
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
                                 const uint32_t *opened, int *handled)
@@ -2670,6 +2769,9 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
     case TCGETS:
     case TCGETS2:
         return tty_get_termios_at(t, request, arg);
+
+    case TCGETA:
+        return tty_get_termio_at(t, arg);
 
     case FIONREAD: {
         int navail;
@@ -2694,7 +2796,7 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
 
     case TCSBRK:
     case TCSBRKP:
-        return tty_wait_until_sent(t, opened);
+        return tty_tcsbrk(t, opened);
 
     case TCSETS:
     case TCSETSW:
@@ -2702,6 +2804,9 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
     case TCSETS2:
     case TCSETSW2:
     case TCSETSF2:
+    case TCSETA:
+    case TCSETAW:
+    case TCSETAF:
         return tty_set_termios_at(t, request, arg, opened);
 
     case TCFLSH:
@@ -3499,13 +3604,10 @@ static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 /** Whether an ioctl, with the arguments in `params`, that failed with
  * EINTR may be restarted: not one of KVM's (type 0xAE), whose EINTR Linux
  * gives the caller as it is, as KVM_RUN's after a signal or immediate_exit,
- * which QEMU waits for, nor a terminal's TCSBRK or TCSBRKP, whose drain
- * Linux's tty_ioctl ends with EINTR. */
+ * which QEMU waits for. */
 static int ioctl_restartable(const isr_params_t *params)
 {
-    uint32_t request = (uint32_t)SC_ARG(params, 1);
-
-    return ((request >> 8) & 0xFFu) != 0xAEu && request != TCSBRK && request != TCSBRKP;
+    return (((uint32_t)SC_ARG(params, 1) >> 8) & 0xFFu) != 0xAEu;
 }
 
 /**

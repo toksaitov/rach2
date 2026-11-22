@@ -26,6 +26,9 @@
 
 /* Linux ioctls. The pty-number requests have the exact values musl uses. */
 #define FIONREAD           0x541B
+#define TCSBRK             0x5409 /* drain output, then a break unless arg: tcdrain(3) */
+#define TCSBRKP            0x5425 /* drain output, then a break of arg tenths */
+#define TIOCOUTQ           0x5411 /* bytes of output the device has not taken */
 #define TIOCGWINSZ         0x5413
 #define TIOCSWINSZ         0x5414
 #define TIOCGPGRP          0x540F     /* the slave's foreground group (arg int*) */
@@ -767,8 +770,11 @@ static int32_t ptm_packet(struct pty *p, uint32_t request, uintptr_t arg)
  * the ring not yet read, and the slave's foreground group and session,
  * TIOCGPGRP and TIOCGSID, which Linux answers on the master without the
  * caller's controlling terminal: the group's number, which stays once the
- * group has ended, or 0 for none, and the session's, or -ENOTTY for none. A
- * bad user pointer is -EFAULT, and any other request -ENOTTY.
+ * group has ended, or 0 for none, and the session's, or -ENOTTY for none.
+ * The master's writes go into the slave's input at once, so TIOCOUTQ gives
+ * 0 and TCSBRK and TCSBRKP wait for nothing (`tty_tcsbrk`), as Linux's pty
+ * has no chars_in_buffer. A bad user pointer is -EFAULT, and any other
+ * request -ENOTTY.
  */
 static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -832,6 +838,14 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         }
         return 0;
     }
+    case TIOCOUTQ: {
+        int n = 0;
+
+        return copy_to_user((void __user *)arg, &n, sizeof(n)) != 0 ? -EFAULT : 0;
+    }
+    case TCSBRK:
+    case TCSBRKP:
+        return tty_tcsbrk(NULL, NULL);
     default:
         return -ENOTTY;
     }
@@ -969,15 +983,6 @@ static int pts_has_room(void *arg)
     return !w->p->master_open || pts_waiter_hung(w) || pts_fit(w->p) > 0;
 }
 
-/** A slave writer `arg`, a struct pts_waiter, may begin: no other write is
- * in progress, the master has closed, or its description has been hung up. */
-static int pts_write_free(void *arg)
-{
-    const struct pts_waiter *w = (const struct pts_waiter *)arg;
-
-    return !w->p->writing || !w->p->master_open || pts_waiter_hung(w);
-}
-
 /**
  * Copy `count` bytes of slave output into m_buf, through OPOST processing by
  * way of the slave's sink, a piece at a time that fits the ring at its
@@ -1048,9 +1053,10 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
 
 /**
  * Queue slave output for the master (`pts_write_out`), the whole of one
- * write before any other writer's, as Linux's `atomic_write_lock` keeps two
- * processes' lines apart: a writer that finds another write in progress
- * waits for it, or takes -EAGAIN when non-blocking. Once the master has
+ * write before any other writer's, under the slave's write lock
+ * (`tty_write_lock`), as Linux's `atomic_write_lock` keeps two processes'
+ * lines apart: a writer that finds another write in progress waits for it,
+ * or takes -EAGAIN when non-blocking. Once the master has
  * closed, or a vhangup(2) has hung up the description, the write fails with
  * EIO. With TOSTOP set, a background writer takes SIGTTOU, or EIO when its
  * group is orphaned, and writes when it blocks or ignores SIGTTOU
@@ -1080,21 +1086,12 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if ((p->slave.ldisc.tio.c_lflag & TOSTOP) && (rc = tty_job_check(&p->slave, SIGTTOU)) != 0) {
         return rc;
     }
-    while (p->writing) {
-        if (!p->master_open || pts_waiter_hung(&w)) {
-            return -EIO;
-        }
-        if (fd_is_nonblock(e)) {
-            return -EAGAIN;
-        }
-        if (wq_wait_event(&p->slave.input_wq, pts_write_free, &w) < 0) {
-            return -EINTR;
-        }
+    rc = tty_write_lock(&p->slave, fd_is_nonblock(e), e->ofd ? &e->ofd->tty_hangups : NULL);
+    if (rc != 0) {
+        return rc;
     }
-    p->writing = 1;
-    rc = pts_write_out(e, &w, buf, count);
-    p->writing = 0;
-    wq_wake(&p->slave.input_wq, WQ_ROOM);
+    rc = p->master_open ? pts_write_out(e, &w, buf, count) : -EIO;
+    tty_write_unlock(&p->slave);
     return rc;
 }
 

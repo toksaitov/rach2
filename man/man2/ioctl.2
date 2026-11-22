@@ -102,12 +102,40 @@ and
 .Dv TCSETSF
 first wait, as
 .Dv TCSBRK
-does, until the device has taken the terminal's output; a signal ends
-the wait with
-.Er EINTR
-and installs nothing.
+does, until the device has taken the terminal's output, then take the
+terminal's write lock, which each
+.Xr write 2
+holds for its whole length, and install between two writes, as Linux's
+.Fn set_termios
+does; a write still waiting for room, as one to a pseudo-terminal slave
+whose master does not read, keeps the change waiting.
+A signal ends the wait with
+.Er EINTR ,
+which
+.Dv SA_RESTART
+restarts, and installs nothing.
 .Dv TCSETSF
 also discards unread input.
+.It Dv TCGETA
+Copy the 18-byte SVR4
+.Vt struct termio
+to
+.Fa arg :
+the low 16 bits of each of the four mode fields, the line discipline and
+the first 8 control characters, as Linux does.
+.It Dv TCSETA , TCSETAW , TCSETAF
+Read a
+.Vt struct termio
+from
+.Fa arg ,
+set the low 16 bits of each mode field from it, keeping the high bits,
+with the line discipline and the first 8 control characters, and install
+the result as
+.Dv TCSETS ,
+.Dv TCSETSW
+and
+.Dv TCSETSF
+do, as Linux does.
 .It Dv TCGETS2
 Copy the 44-byte termios2 to
 .Fa arg :
@@ -206,18 +234,21 @@ An hvc terminal's output is taken once the driver has handed it to the
 port, as
 .Xr hvc 4
 says.
-The console hands each byte to the screen and to COM1 in the write, and a
-pseudo-terminal slave's output is the master's to read, so on them the
-request returns at once, as on Linux.
+The console hands each byte to the screen and to COM1 in the write, a
+pseudo-terminal slave's output is the master's to read, and a master's
+output is the slave's input at once, so on them the request returns at
+once, as on Linux.
 With
 .Fa arg
 0 Linux then sends a break, which no terminal here can send, so the
 request returns 0, as Linux's does for a driver without one.
-A signal ends the wait with
+A signal that ends the wait, or is pending when it ends, gives
 .Er EINTR ,
 which no
 .Dv SA_RESTART
-restarts, as on Linux.
+restarts, as on Linux; the
+.Er EINTR
+of the job-control stop below is restarted.
 .It Dv TCSBRKP
 Wait as
 .Dv TCSBRK
@@ -232,7 +263,8 @@ count through
 of the bytes of output the terminal holds that its device has not taken,
 the bytes
 .Dv TCSBRK
-waits for: 0 on the console and on a pseudo-terminal slave, as on Linux.
+waits for: 0 on the console and on either end of a pseudo-terminal, as on
+Linux.
 .It Dv FIONREAD
 Write an
 .Vt int
@@ -338,7 +370,9 @@ termios; bytes of the serial port that no session has read stay.
 A process of a background group of the session a terminal controls that
 calls
 .Dv TCSETS
-or its kin,
+or its kin, the
+.Dv TCSETA
+family,
 .Dv TCFLSH ,
 .Dv TCXONC ,
 .Dv TCSBRK ,
@@ -484,6 +518,19 @@ and
 .Dv TCION
 feed ^S and ^Q to the slave as input, unless the master's writes are
 stopped.
+.It Dv TCSBRK , TCSBRKP , TIOCOUTQ
+A master's writes go into the slave's input at once, so
+.Dv TIOCOUTQ
+writes 0 through an
+.Vt int
+pointer, and
+.Dv TCSBRK
+and
+.Dv TCSBRKP
+return 0 at once, or
+.Er EINTR
+when a signal is pending, as on Linux, whose pseudo-terminal counts no
+output.
 .El
 .Pp
 A master's write goes on after every slave description has closed, as

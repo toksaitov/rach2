@@ -188,6 +188,10 @@ restarts it, and neither reaches a reader; with
 any key restarts it.
 A write waits while output is stopped, Scroll Lock and its LED are on,
 and the Hold key, Scroll Lock, stops and restarts output, as on Linux.
+One write to the console ends before another writer's begins, as Linux's
+terminal write lock keeps it; a non-blocking writer that finds another
+write in progress fails with
+.Er EAGAIN .
 .Dv TCXONC
 does the same from a program, as
 .Xr ioctl 2
@@ -470,9 +474,14 @@ and
 .Dv TCSETSF
 first wait for the output, as
 .Dv TCSBRK
-does.
+does, and then for the write in progress to end, so that the change
+falls between two writes.
 .Dv TCSETSF
 also discards unread input.
+.It Dv TCGETA , TCSETA , TCSETAW , TCSETAF
+Read or set the terminal settings as the SVR4
+.Vt struct termio ,
+the low 16 bits of each mode field, as Linux does.
 .It Dv TCGETS2
 Read the terminal settings with the speeds their baud codes name.
 .It Dv TCSETS2 , TCSETSW2 , TCSETSF2

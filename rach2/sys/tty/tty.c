@@ -72,6 +72,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->flush = NULL;
     t->flow = NULL;
     t->echo_kick = NULL;
+    t->writing = 0;
     t->sid = 0;
     t->fg_pgid = 0;
     t->fg_serial = 0;
@@ -644,6 +645,55 @@ unsigned int tty_outq(struct tty *t)
 
     kirq_restore(flags);
     return n;
+}
+
+int tty_tcsbrk(struct tty *t, const uint32_t *opened)
+{
+    int rc = t ? tty_wait_until_sent(t, opened) : 0;
+
+    if (rc == -EINTR || (rc == 0 && signal_pending())) {
+        current_proc->restart_kind = RESTART_NONE;
+        return -EINTR;
+    }
+    return rc;
+}
+
+/** A writer's wait for the write lock: no write holds `w`'s terminal, or
+ * the writer's description has been hung up. */
+static int tty_unlocked_cond(void *arg)
+{
+    struct tty_out_wait *w = (struct tty_out_wait *)arg;
+
+    return !w->t->writing || tty_out_hung(w);
+}
+
+int tty_write_lock(struct tty *t, int nonblock, const uint32_t *opened)
+{
+    struct tty_out_wait w;
+
+    w.t = t;
+    w.opened = opened;
+    for (;;) {
+        if (tty_out_hung(&w)) {
+            return -EIO;
+        }
+        if (!t->writing) {
+            t->writing = 1;
+            return 0;
+        }
+        if (nonblock) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&t->input_wq, tty_unlocked_cond, &w) != 0) {
+            return -EINTR;
+        }
+    }
+}
+
+void tty_write_unlock(struct tty *t)
+{
+    t->writing = 0;
+    wq_wake(&t->input_wq, WQ_ROOM);
 }
 
 /* A blocking read's wait: what it asks for, and its VTIME timer. */

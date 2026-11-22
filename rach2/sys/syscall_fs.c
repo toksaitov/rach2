@@ -1437,13 +1437,17 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * set; with it set, SIGTTOU goes to the process group and the call is
  * -EINTR, unless the process blocks or ignores SIGTTOU, when it writes, or
  * its group is orphaned, when the call is -EIO (`tty_job_check`), as
- * Linux's n_tty_write.
+ * Linux's n_tty_write. The write holds the console's write lock
+ * (`tty_write_lock`) for its whole length, as Linux's tty_write holds
+ * atomic_write_lock: another writer waits for it, or takes -EAGAIN when
+ * nonblocking.
  */
 static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
     int nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     const uint32_t *opened =
         entry->ofd && !entry->ofd->tty_console ? &entry->ofd->tty_hangups : NULL;
+    int32_t rc;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -1452,13 +1456,18 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
         return -EIO;
     }
     if (console_tty.ldisc.tio.c_lflag & TOSTOP) {
-        int rc = tty_job_check(&console_tty, SIGTTOU);
-
+        rc = tty_job_check(&console_tty, SIGTTOU);
         if (rc != 0) {
             return rc;
         }
     }
-    return tty_write_user(&console_tty, buf, count, nonblock, opened);
+    rc = tty_write_lock(&console_tty, nonblock, opened);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = tty_write_user(&console_tty, buf, count, nonblock, opened);
+    tty_write_unlock(&console_tty);
+    return rc;
 }
 
 /** Check a scalar I/O request before its count is cut at USER_RW_MAX.
