@@ -7,7 +7,7 @@ The test bed's transport carries virtio-gpu between Rach2's driver and a device 
     cc -std=c99 -O2 -o build/bed/peer bed/shm/peer.c
     build/bed/peer -l [-r STREAM] [-d DIR] [-s SIZE]
     build/bed/peer -f PATH [-r STREAM [-o] [-v]] [-d DIR] [-t SECONDS]
-    build/bed/peer -S SOCKET [-s SIZE] [-r STREAM [-o] [-v]] [-t SECONDS]
+    build/bed/peer -S SOCKET [-s SIZE] [-r STREAM [-o] [-v]] [-b BYTES [-g FILE]] [-t SECONDS]
     build/bed/peer -c IMAGE...
     build/bed/peer -w STREAM | -W STREAM
 
@@ -17,6 +17,7 @@ The test bed's transport carries virtio-gpu between Rach2's driver and a device 
 * `-r STREAM` replays a recorded virgl stream in a context of its own; it needs the device to offer `VIRTIO_GPU_F_VIRGL`. Against a real device, each B8G8R8X8 resource the stream made is then read back with `TRANSFER_FROM_HOST_3D`.
 * `-o`, with `-r`, puts the first resource read back on scanout 0 and flushes it, whole and then its top-left quarter, for the device's display to show.
 * `-v`, with `-r`, accepts `VIRTIO_GPU_F_CONTEXT_INIT`, makes a Venus context and attaches every resource the stream made to it, then detaches them, so that the device hands each to its Venus renderer.
+* `-b BYTES`, against the backend in the VM, accepts `VGS_TF_PAGES` and `VGS_TF_BACKING` when it offers them and, after the teardown, makes eight 2D resources in turn, asks for a backing of `BYTES` of the VM's memory for each with `VGS_CMD_BACKING` and sends its UNREF. Each answer must be `RESP_OK_MAP_INFO` or `ERR_OUT_OF_MEMORY`. With `-g FILE` the first ask waits until `FILE` exists, so that a check can first bring the VM to the state it means to test.
 * `-d DIR` writes a copy of the region before each step the driver takes, as a seed.
 * `-c` checks region images with the header's checks, as both sides would read them.
 * `-w STREAM` writes the built-in stream, `streams/clear.rec`: a 32 by 32 render target made, a surface on it bound as the framebuffer and cleared to one colour.
@@ -24,7 +25,7 @@ The test bed's transport carries virtio-gpu between Rach2's driver and a device 
 
 ## Results
 
-The peer prints `peer: STEP: ok` for each command whose response is the one expected, `peer: flush: crc X matches` when the loopback device's scanout holds the bytes the driver wrote, or `peer: flush: sent crc X` without the loopback, and `peer: result: ok` at the end, and exits 0. CRCs are zlib's CRC-32 of the pixels, rows top first and the X byte of each pixel set to 0xff. A resource read back prints `peer: readback: resource ID, WxH, crc X`, the CRC of its rows as stored, then `shown crc Y` for a resource whose first row is the bottom one, as GL draws, which a display shows last row first, and the colour when every pixel has one. `-o` prints `peer: show: resource ID, WxH, crc X` for each rectangle it shows, the CRC the display should hold in its top-left corner; `-S` prints `peer: doorbells: rang N, woken M` at the end. The loopback device prints `responder: ...` lines for each epoch's offer, each submit's command count and any refusal. A wrong response, a fault in what the device wrote, the device's death or no answer within `-t` seconds (10 unless given) ends the peer with a message on stderr and status 1; usage errors exit 2. `-c` prints the rule each failing image breaks and `peer: check: N of M image(s) pass`, and exits 1 when one fails.
+The peer prints `peer: STEP: ok` for each command whose response is the one expected, `peer: flush: crc X matches` when the loopback device's scanout holds the bytes the driver wrote, or `peer: flush: sent crc X` without the loopback, and `peer: result: ok` at the end, and exits 0. CRCs are zlib's CRC-32 of the pixels, rows top first and the X byte of each pixel set to 0xff. A resource read back prints `peer: readback: resource ID, WxH, crc X`, the CRC of its rows as stored, then `shown crc Y` for a resource whose first row is the bottom one, as GL draws, which a display shows last row first, and the colour when every pixel has one. `-o` prints `peer: show: resource ID, WxH, crc X` for each rectangle it shows, the CRC the display should hold in its top-left corner; `-S` prints `peer: doorbells: rang N, woken M` at the end. `-b` prints `peer: backing: waiting for FILE` while `-g`'s file is missing, then for each ask `peer: backing: resource ID, BYTES bytes: given, P pages in R runs from 0` or `peer: backing: resource ID, BYTES bytes: refused: out of memory`. The loopback device prints `responder: ...` lines for each epoch's offer, each submit's command count and any refusal. A wrong response, a fault in what the device wrote, the device's death or no answer within `-t` seconds (10 unless given) ends the peer with a message on stderr and status 1; usage errors exit 2. `-c` prints the rule each failing image breaks and `peer: check: N of M image(s) pass`, and exits 1 when one fails.
 
 ## Interfaces
 

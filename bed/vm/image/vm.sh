@@ -4,7 +4,7 @@
 # QEMU's ivshmem-doorbell.
 #
 #   vm.sh prepare [-n]
-#   vm.sh check [-V] [-c CPUS] [-m MIB]
+#   vm.sh check [-V | -b] [-c CPUS] [-m MIB]
 #   vm.sh rach2 [-o RAW]
 #
 # `prepare` makes the prepared image, an overlay of the cloud image that
@@ -29,7 +29,12 @@
 # has the CRC the peer expects of it, the import's CRC is the frame's, the
 # frame was scanned out directly once, and the doorbells woke both sides.
 # With -V the backend takes the device through vfio-pci under QEMU's
-# intel-iommu in place of the module.
+# intel-iommu in place of the module. With -b, once the peer has drawn,
+# the VM's memory is taken until MemAvailable reads 0 and held there for
+# 30 s, and the peer then asks for eight backings of 64 MiB of it in turn:
+# the backend must refuse each with ERR_OUT_OF_MEMORY, where a pin of
+# memory the VM has not got would wake its OOM killer, and answer the
+# commands after.
 #
 # `rach2` makes rach2.qcow2 beside the prepared image, an overlay of it that
 # Rach2 boots under its own KVM (tests/cases/machine.bed-shm.json): the
@@ -198,6 +203,69 @@ sudo LIBGL_ALWAYS_SOFTWARE=1 bed/vm/backend/vgpu-backend -1 -k "\$card" -w -d -I
 GUEST
 }
 
+# fill: the VM's part of -b, as a script for its sh: a service that takes
+# anonymous memory until MemAvailable reads 0 and keeps it there, each
+# piece as large as MemAvailable less 64 MiB, the last ones 1 MiB past it,
+# and is killed 30 s on by timeout(1), so that the kernel gives the memory
+# back without the VM's programs, which a VM held so cannot run; its
+# oom_score_adj of 1000 makes it the OOM killer's first victim. The script
+# returns once MemAvailable has first read 0 and prints how many pieces
+# that took.
+fill()
+{
+    cat <<'FILL'
+set -eu
+command -v python3 > /dev/null || { echo "bed-vm: fill: no python3" >&2; exit 1; }
+sudo rm -f /run/bed-fill.zero
+sudo tee /run/bed-fill.py > /dev/null <<'HOG'
+import mmap, time
+def avail():
+    with open("/proc/meminfo") as f:
+        for line in f:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1])
+with open("/proc/self/oom_score_adj", "w") as f:
+    f.write("1000")
+held, chunk = [], b"\1" * (1 << 20)
+while True:
+    a = avail()
+    if a <= 0:
+        try:
+            open("/run/bed-fill.zero", "x").write(str(len(held)))
+        except FileExistsError:
+            pass
+        time.sleep(0.1)
+        continue
+    n = (a - 65536) // 1024 if a > 131072 else a // 1024 + 1
+    m = mmap.mmap(-1, n << 20)
+    for i in range(n):
+        m[i << 20:(i + 1) << 20] = chunk
+    held.append(m)
+HOG
+sudo systemd-run --quiet --unit=bed-fill /usr/bin/timeout -s KILL 30 python3 /run/bed-fill.py
+n=600
+until [ -e /run/bed-fill.zero ] || [ "$n" -eq 0 ]; do
+    sleep 0.1
+    n=$((n - 1))
+done
+echo "bed-vm: fill: MemAvailable read 0 after $(cat /run/bed-fill.zero 2>/dev/null || echo none) pieces"
+FILL
+}
+
+# filler: the host's part of -b: once the peer waits for $work/go, fill the
+# VM's memory and start the peer's ask by making the file.
+filler()
+{
+    n=600
+    until grep -q '^peer: backing: waiting' "$work/peer.out" 2>/dev/null; do
+        n=$((n - 1))
+        [ "$n" -gt 0 ] || return 1
+        sleep 1
+    done
+    fill | vm 'sh -s' > "$work/fill.out" 2>&1 || true
+    : > "$work/go"
+}
+
 # expect WHAT GOT WANT: say whether GOT equals WANT, and count a difference.
 expect()
 {
@@ -225,21 +293,29 @@ judge()
     expect "backend woken by the queue's doorbell" "$([ "${wakes:-0}" -gt 0 ] && echo yes)" yes
     woken=$(sed -n 's/^peer: doorbells: rang [0-9]*, woken //p' "$p")
     expect "peer woken by the VM's doorbell" "$([ "${woken:-0}" -gt 0 ] && echo yes)" yes
+    if [ "$backing" = 1 ]; then
+        expect "MemAvailable read 0 before the backings were asked for" \
+            "$(sed -n 's/^bed-vm: fill: MemAvailable read 0 after [0-9]* pieces$/yes/p' "$work/fill.out")" yes
+        expect "backings of 64 MiB refused" \
+            "$(grep -c '^peer: backing: resource [0-9]*, 67108864 bytes: refused: out of memory$' "$p")" 8
+    fi
     expect "the peer's end" "$(tail -n 1 "$p")" "peer: result: ok"
     [ "$bad" -eq 0 ]
 }
 
 check()
 {
-    vfio=0 cpus=4 mib=4096
-    while getopts Vc:m: o; do
+    vfio=0 cpus=4 mib=4096 backing=0
+    while getopts Vbc:m: o; do
         case $o in
             V) vfio=1 ;;
+            b) backing=1 ;;
             c) cpus=$OPTARG ;;
             m) mib=$OPTARG ;;
             *) exit 2 ;;
         esac
     done
+    [ "$vfio$backing" != 11 ] || die "-b needs the module's pins, which -V does without"
     [ -f "$prepared" ] || die "no prepared image; run vm.sh prepare"
     [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ] ||
         die "the prepared image is not the one this tree's seed makes; run vm.sh prepare"
@@ -248,9 +324,12 @@ check()
     ${CC:-cc} -std=c99 -O2 -o "$out/peer" "$tree/bed/shm/peer.c"
     "$out/peer" -W "$out/frame.rec"
     work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/bed-vm.XXXXXX")
-    qemu='' peer=''
-    trap 'kill "$qemu" "$peer" 2>/dev/null || true; rm -rf "$work"' EXIT
-    "$out/peer" -S "$work/ivs.sock" -s "$region" -t 600 -r "$out/frame.rec" -o -v \
+    qemu='' peer='' filling=''
+    trap 'kill "$qemu" "$peer" "$filling" 2>/dev/null || true; rm -rf "$work"' EXIT
+    asks=''
+    [ "$backing" = 0 ] || asks="-b 67108864 -g $work/go"
+    # shellcheck disable=SC2086 # asks are words
+    "$out/peer" -S "$work/ivs.sock" -s "$region" -t 600 -r "$out/frame.rec" -o -v $asks \
         > "$work/peer.out" 2>&1 &
     peer=$!
     tries=0
@@ -292,17 +371,24 @@ check()
     (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
         vm 'rm -rf bed && tar xf -'
     guest "$vfio" > "$work/guest.sh"
+    if [ "$backing" = 1 ]; then
+        filler &
+        filling=$!
+    fi
     status=0
     vm 'sh -s' < "$work/guest.sh" > "$work/backend.out" 2>&1 || status=$?
     # A backend that ran to its end has seen the peer leave.
     [ "$status" -eq 0 ] || kill "$peer" 2>/dev/null || true
     wait "$peer" || true
     peer=
+    [ -z "$filling" ] || wait "$filling" || true
+    filling=
     vm 'sudo systemctl poweroff' </dev/null >/dev/null 2>&1 || true
     watch "$qemu" "$work/console.log" 'reboot: Power down' 120 || kill "$qemu" 2>/dev/null || true
     wait "$qemu" 2>/dev/null || true
     qemu=
     grep -v '^backend: virgl: \|kmsro: driver missing' "$work/backend.out" | sed 's/^/bed-vm: /' >&2
+    [ "$backing" = 0 ] || cat "$work/fill.out" >&2
     sed 's/^/bed-vm: /' "$work/peer.out" >&2
     [ "$status" -eq 0 ] || die "result: the backend exited $status"
     judge || die "result: the VM's frames differ from the peer's"
@@ -434,7 +520,7 @@ case ${1:-} in
     check) shift; check "$@" ;;
     rach2) shift; rach2 "$@" ;;
     *)
-        echo "usage: vm.sh prepare [-n] | check [-V] [-c CPUS] [-m MIB] | rach2 [-o RAW]" >&2
+        echo "usage: vm.sh prepare [-n] | check [-V | -b] [-c CPUS] [-m MIB] | rach2 [-o RAW]" >&2
         exit 2
         ;;
 esac
