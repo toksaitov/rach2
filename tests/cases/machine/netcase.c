@@ -170,6 +170,47 @@ const char *net_path(struct net_case *u, const char *name, char *buf, size_t siz
     return buf;
 }
 
+/** Write `in` into `buf` of `size` bytes from `buf[n]` on, a backslash
+ * before each backslash and quote, and close it with `end`; give NULL
+ * after failing the attempt when it does not fit or has a control
+ * character, which neither JSON nor the monitor takes raw. */
+static const char *escaped(struct net_case *u, const char *in, char *buf, size_t size, size_t n,
+                           const char *end)
+{
+    const char *p;
+
+    for (p = in; *p != '\0'; p++) {
+        if (n + 2 + strlen(end) >= size || (unsigned char)*p < 0x20) {
+            net_fail(u, "%.60s cannot be quoted for QEMU", in);
+            return NULL;
+        }
+        if (*p == '\\' || *p == '"')
+            buf[n++] = '\\';
+        buf[n++] = *p;
+    }
+    strcpy(buf + n, end);
+    return buf;
+}
+
+const char *net_hmp_arg(struct net_case *u, const char *in, char *buf, size_t size)
+{
+    if (strlen(in) >= NET_HMP_ARG || size < 3) {
+        net_fail(u, "%.60s is too long for QEMU's monitor", in);
+        return NULL;
+    }
+    buf[0] = '"';
+    return escaped(u, in, buf, size, 1, "\"");
+}
+
+const char *net_json_text(struct net_case *u, const char *in, char *buf, size_t size)
+{
+    if (size < 1) {
+        net_fail(u, "%.60s is too long for QMP", in);
+        return NULL;
+    }
+    return escaped(u, in, buf, size, 0, "");
+}
+
 enum etude_status net_boot(struct net_boot *b, struct net_case *u, const char *machine, unsigned n,
                            const char *const disks[])
 {

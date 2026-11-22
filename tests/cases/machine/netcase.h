@@ -30,6 +30,11 @@
  * alone. */
 #define NET_SSH_KEY(key) "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-i", key
 
+/* The bytes of one argument QEMU's human monitor keeps, its terminating
+ * NUL among them: monitor_parse_arguments reads each into a buffer of 1024
+ * and drops the rest. */
+#define NET_HMP_ARG 1024
+
 /* A file the scenario wrote in the attempt's evidence itself. */
 struct net_made {
     struct net_made *next;
@@ -108,6 +113,22 @@ int net_end(struct net_case *u);
  * path does not fit.
  */
 const char *net_path(struct net_case *u, const char *name, char *buf, size_t size);
+
+/**
+ * Write `in` into `buf` of `size` bytes as one argument of QEMU's human
+ * monitor: in double quotes, with its backslashes and quotes escaped, so
+ * that a path with spaces or Windows' backslashes stays one argument. Give
+ * NULL after failing the attempt when it does not fit, or when `in` has
+ * NET_HMP_ARG bytes or more, which the monitor would cut without a word.
+ */
+const char *net_hmp_arg(struct net_case *u, const char *in, char *buf, size_t size);
+
+/**
+ * Write `in` into `buf` of `size` bytes as the inside of a JSON string,
+ * with its backslashes and quotes escaped; give NULL after failing the
+ * attempt when it does not fit.
+ */
+const char *net_json_text(struct net_case *u, const char *in, char *buf, size_t size);
 
 /**
  * Boot `machine` of the case with `disks`, as etude_boot takes them, as

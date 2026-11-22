@@ -70,28 +70,6 @@ static int has(const char *text, const char *what)
 }
 
 /**
- * Write `in` into `buf` of `size` bytes as a JSON string without its quotes,
- * a path that may hold Windows' backslashes; fail the attempt when it does
- * not fit.
- */
-static const char *json_text(struct kb_case *s, const char *in, char *buf, size_t size)
-{
-    size_t n = 0;
-
-    for (; *in != '\0'; in++) {
-        if (n + 3 > size) {
-            net_fail(&s->u, "the path is too long for QMP: %.60s", in);
-            return NULL;
-        }
-        if (*in == '\\' || *in == '"')
-            buf[n++] = '\\';
-        buf[n++] = *in;
-    }
-    buf[n] = '\0';
-    return buf;
-}
-
-/**
  * Send QMP command `execute` with `arguments`, and require `return`; when
  * `quiet` is set, require it to be empty, as the answer of a human monitor
  * command that succeeded is.
@@ -115,7 +93,7 @@ static void hmp(struct kb_case *s, const char *command)
 {
     char args[4200], text[4150];
 
-    if (json_text(s, command, text, sizeof(text)) == NULL)
+    if (net_json_text(&s->u, command, text, sizeof(text)) == NULL)
         return;
     snprintf(args, sizeof(args), "{\"command-line\":\"%s\"}", text);
     qmp(s, "human-monitor-command", args, 1);
@@ -193,20 +171,20 @@ static size_t bytes_of(const char *text, unsigned char *out, size_t size)
  * give PS/2's LEDs to the trace in the PS/2 case. */
 static void boot(struct kb_case *s)
 {
-    char args[4400], path[4150];
+    char args[4400], path[4150], file[2 * NET_HMP_ARG + 2];
 
     net_step(&s->u, "boot");
     net_boot(&s->b, &s->u, MACHINE, 1, NULL);
     if (net_path(&s->u, s->usb ? "usb-keyboard.pcap" : "ps2-leds.trace", s->seen,
                  sizeof(s->seen)) == NULL)
         return;
-    if (!s->usb) {
-        snprintf(args, sizeof(args), "logfile %s", s->seen);
+    if (!s->usb && net_hmp_arg(&s->u, s->seen, file, sizeof(file)) != NULL) {
+        snprintf(args, sizeof(args), "logfile %s", file);
         hmp(s, args);
         hmp(s, "trace-event ps2_set_ledstate on");
     }
     net_login(&s->b, "root", s->password, PROMPT);
-    if (s->usb && json_text(s, s->seen, path, sizeof(path)) != NULL) {
+    if (s->usb && net_json_text(&s->u, s->seen, path, sizeof(path)) != NULL) {
         snprintf(args, sizeof(args),
                  "{\"driver\":\"usb-kbd\",\"bus\":\"xhci.0\",\"id\":\"keyboard\",\"pcap\":\"%s\"}",
                  path);
