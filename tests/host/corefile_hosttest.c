@@ -547,6 +547,12 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     return NULL;
 }
 
+/** The node a walk's keep has now: no walk keeps one here. */
+void vfs_ref_now(struct vfs_ref *ref)
+{
+    (void)ref;
+}
+
 /** The attributes of the working directory, anyone's to write, and of the
  * file, root's, with the length written so far. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)

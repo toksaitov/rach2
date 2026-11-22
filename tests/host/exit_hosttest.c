@@ -141,6 +141,10 @@ void proc_files_put(process_t *p)
     closed = 1;
 }
 
+/** The keeps of the thread's walks: the child's walks keep none. */
+void vfs_walk_keeps_end(void)
+{}
+
 /** The working directory and the root go together, with the record they
  * are kept in. */
 void proc_fs_put(process_t *p)
