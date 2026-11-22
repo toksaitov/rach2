@@ -13835,6 +13835,37 @@ static int32_t handle_path(struct vfs_mount *m, uint64_t ino, char *path)
 }
 
 /**
+ * Check that the descriptor `fd` open_by_handle_at opened by the path it
+ * found is open on the handle's file, inode `ino` of the file system of `m`,
+ * since a rename and a new file at that path may have come between the
+ * search and the open; then apply the O_TRUNC of `flags`, which the open
+ * was made without so that no other file is cut, to a regular file the
+ * descriptor writes. `fd`, or -ESTALE with the descriptor closed, as for a
+ * handle whose file is gone, or the truncation's error.
+ */
+static int32_t handle_opened(int fd, const struct vfs_mount *m, uint64_t ino, int flags)
+{
+    const fd_entry_t *e = fd_get(current_proc->fds, fd);
+    const struct vfs_mount *at;
+    struct kstat kst;
+    int32_t rc = stat_at(fd, NULL, AT_EMPTY_PATH, &kst);
+
+    at = rc == 0 && kst.st_mnt_id ? vfs_mount_at((int)kst.st_mnt_id - 1) : NULL;
+    if (!at || vfs_mount_base(at) != vfs_mount_base(m) || kst.st_ino != ino) {
+        close_fd(fd);
+        return -ESTALE;
+    }
+    if ((flags & O_TRUNC) && e && e->type == FD_TYPE_FILE && (e->flags & FD_FLAG_WRITE)) {
+        rc = (int32_t)ksys_ftruncate(fd, 0);
+        if (rc != 0) {
+            close_fd(fd);
+            return rc;
+        }
+    }
+    return fd;
+}
+
+/**
  * open_by_handle_at takes the descriptor of any file of the mount, the
  * struct file_handle name_to_handle_at gave, and open flags.
  *
@@ -13842,8 +13873,10 @@ static int32_t handle_path(struct vfs_mount *m, uint64_t ino, char *path)
  * directory's for AT_FDCWD. The file with the handle's inode is found on it
  * (`handle_find`) and opened by its path from the caller's root as open(2)
  * opens it, with `flags` less O_CREAT and O_EXCL, and O_NOFOLLOW, so that a
- * symbolic link opens only with O_PATH, as Linux opens the inode itself. The
- * caller must be privileged, as Linux asks CAP_DAC_READ_SEARCH.
+ * symbolic link opens only with O_PATH, as Linux opens the inode itself;
+ * the file opened must be the handle's, and O_TRUNC is applied only then
+ * (`handle_opened`). The caller must be privileged, as Linux asks
+ * CAP_DAC_READ_SEARCH.
  *
  * The descriptor, or -EBADF for a descriptor that is not open, -EPERM for an
  * unprivileged caller, -EFAULT, -EINVAL for a handle_bytes of 0 or above
@@ -13883,10 +13916,13 @@ long sys_open_by_handle_at(isr_params_t *params)
     }
     rc = handle_path(m, ino, path);
     if (rc == 0) {
-        rc = open_named(path_name(path), flags | O_NOFOLLOW, 0, 0);
-        if (rc >= 0) {
-            open_done(rc, path_name(path), flags);
-        }
+        rc = open_named(path_name(path), (flags & ~O_TRUNC) | O_NOFOLLOW, 0, 0);
+    }
+    if (rc >= 0) {
+        rc = handle_opened(rc, m, ino, flags);
+    }
+    if (rc >= 0) {
+        open_done(rc, path_name(path), flags & ~O_TRUNC);
     }
     path_buf_put(path);
     return rc;
