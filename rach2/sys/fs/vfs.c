@@ -1066,6 +1066,11 @@ static int walk_call_again(void)
     return -EINTR;
 }
 
+int vfs_call_again(void)
+{
+    return walk_call_again();
+}
+
 /** The part of `walk_check_begin` when another thread's change is under
  * way: sleep until none is, or ask for the call to run again. */
 static int walk_check_wait(struct walk_check *wc)
