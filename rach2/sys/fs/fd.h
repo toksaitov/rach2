@@ -194,6 +194,11 @@ struct open_file {
      * all three through `vfs_desc_close`, so the file system sees one release
      * for each open. `vmnt` is NULL for every other kind of description. */
     struct vfs_mount *vmnt;
+    /* The view of the mounts the description was opened in, its mount
+     * namespace's inode number (`vfs_mntns_view`), by which a call through
+     * it judges the flags of `vmnt`, whichever namespace makes the call,
+     * as Linux judges a file by the mount of its path (`vfs_view_enter`). */
+    uint32_t view;
     /* With `vmnt`, the description's cursors into the write-back errors of
      * its file system, which fsync and fdatasync report from (`wb_seen`)
      * and syncfs from (`sb_seen`), Linux's `f_wb_err` and `f_sb_err`:
@@ -251,9 +256,11 @@ struct open_file {
     struct vfs_mount *access_mnt;
     void *access_node;
     int access; /* 0: none, 1: writer, 2: executable */
-    /* The id of the mount namespace the reservation was taken in, whose
-     * view of `access_mnt` it writes through, as Linux's writer counts on
-     * that namespace's copy of the mount (`fd_mount_readonly_begin`). */
+    /* The view (`vfs_mntns_view`) the reservation was taken in, whose
+     * flags for `access_mnt` it writes through, as Linux's writer counts on
+     * that namespace's copy of the mount (`fd_mount_readonly_begin`). A
+     * view is never given again, so it names that namespace even after the
+     * namespace ends. */
     uint32_t access_ns;
     /* The token of the type's `pin` for an O_PATH description on a type
      * that keeps a node only while it is open, which the last unref gives
@@ -765,11 +772,13 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
  * through it and refuse writers through it alone; a base without counts
  * those opened through it or any bind of it and refuses writers through
  * them all, as Linux counts a mount's writers or every mount of the
- * superblock's. With `own`, for a remount of the caller's mount namespace's
- * view of `mnt` alone (`views` in vfs.h), only the reservations taken in
- * that namespace count and are refused, as Linux counts the writers of
- * that namespace's copy of the mount. Takes the lock of the descriptions;
- * nothing here sleeps. */
+ * superblock's. With `own`, for a remount of the caller's view's own
+ * flags for `mnt` (`views` in vfs.h), only the reservations taken in that
+ * view count and are refused, as Linux counts the writers of that
+ * namespace's copy of the mount; without it, a remount of the mount's own
+ * flags counts none taken in a view with flags of its own for `mnt`, which
+ * it leaves alone. Takes the lock of the descriptions; nothing here
+ * sleeps. */
 int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone, int own);
 
 /** End the refusal `fd_mount_readonly_begin` began on `mnt`, once its
@@ -804,6 +813,12 @@ int fd_node_busy(struct vfs_mount *mnt, void *node);
  * of a KRFFS root node that no descriptor's `node` names, a FIFO's ends
  * among them, wherever their descriptors are. */
 int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going);
+
+/** Whether a description opened on `mnt` through the view `view`, or a
+ * reservation taken on `mnt` there, is open: what keeps that view's own
+ * flags for `mnt` (`views` in vfs.h) from being taken again. Takes the
+ * lock of the descriptions. */
+int fd_mount_view_held(const struct vfs_mount *mnt, uint32_t view);
 
 /** 1 if `fd` is open and not closing, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);
