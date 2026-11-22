@@ -167,7 +167,9 @@ end_group()
     wait "$1" 2>/dev/null
 }
 # crysis_restore_ini: put back the compositor's settings before the GPU
-# returns and the native session starts.
+# returns and the native session starts. A session that started on the
+# changed file first, as when QEMU ended early, crysis-shm.sh starts again
+# at its end.
 crysis_restore_ini()
 {
     [ -z "$crysis_ini_saved" ] || cp -p "$crysis_ini_saved" "$crysis_ini" || return 1

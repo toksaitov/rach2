@@ -2,10 +2,11 @@
 # Measure the Crysis flyby on the Lenovo through the shared-memory GPU.
 # Run as root from a new workspace on the installed system's ext2 root,
 # with crysis.sh (the native case), crysis.py, wm.py, bed-shm.sh and gpu.sh.
-# The workspace retains out/ and the before and after manifests.
+# The workspace keeps out/ and the manifests data.before and data.after.
 set -eu
 
 child='' before=0 weston=0
+games='Crysis.exe|wineserver|pressure-vessel|pv-adverb|srt-bwrap'
 
 # manifest FILE: record the real Crysis tree's names, metadata and links
 # without reading file contents or changing access times of regular files.
@@ -16,8 +17,9 @@ manifest()
         rm "$1.unsorted"
 }
 
-# cleanup: finish the child before comparing the real data and clearing
-# the game fixture. Leave only the run's evidence in the workspace.
+# cleanup: finish the child and the game, leave the session as it was
+# found, compare the real data and clear the game fixture. Leave only the
+# run's evidence in the workspace.
 # shellcheck disable=SC2329 # the exit trap runs it
 cleanup()
 {
@@ -29,8 +31,25 @@ cleanup()
         wait "$child" 2>/dev/null || :
     fi
     if [ "$before" = 1 ]; then
-        if [ "$weston" = 0 ] && pgrep -x weston >/dev/null; then
-            kill -USR2 "$(cat /run/rach2-desktop.pid)" || status=1
+        # No game ran when the launcher began, so any left is the run's,
+        # and may hold the private tree that the end removes.
+        tries=0
+        while pkill -9 -u desktop -f "$games"; do
+            tries=$((tries + 1))
+            if [ "$tries" = 100 ]; then
+                echo 'crysis-shm: the game would not end' >&2
+                status=1
+                break
+            fi
+            sleep 0.1
+        done
+        # bed-shm.sh put weston.ini back, but a session may have started
+        # on the changed file, as when QEMU ended early and the GPU came
+        # back before that; start it again, or end it if none ran before.
+        if [ "$weston" = 1 ]; then
+            sh ./crysis.sh session ran || status=1
+        else
+            sh ./crysis.sh session none || status=1
         fi
         if manifest data.after && cmp -s data.before data.after; then
             echo "crysis-shm: data: unchanged: $(tr -cd '\000' < data.after | wc -c) entries"
@@ -54,7 +73,7 @@ trap 'exit 143' TERM
     { echo 'crysis-shm: use a workspace on the root as root' >&2; exit 2; }
 [ ! -e data.before ] && [ ! -e private ] ||
     { echo 'crysis-shm: use a new workspace for each run' >&2; exit 2; }
-if pgrep -u desktop -f 'Crysis.exe|wineserver|pressure-vessel|pv-adverb|srt-bwrap' >/dev/null; then
+if pgrep -u desktop -f "$games" >/dev/null; then
     echo 'crysis-shm: the desktop account is already running a game or container' >&2
     exit 1
 fi
