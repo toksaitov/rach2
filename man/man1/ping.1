@@ -122,7 +122,8 @@ An interval of 0 sends the next request as soon as a reply comes, as
 does, and after 10 ms when none comes.
 .It Fl A
 Send the next request as soon as a reply comes, as well as at each
-interval, until the requested count has been sent.
+interval from the start of the last send, until the requested count has
+been sent.
 .It Fl p Ar byte
 Fill the data with
 .Ar byte ,
@@ -141,6 +142,7 @@ Wait
 .Ar timeout
 seconds after the last request when no reply has come at all, instead of
 ten.
+In adaptive mode a reply read after this wait is not counted.
 .It Fl w Ar deadline
 Stop when
 .Ar deadline
