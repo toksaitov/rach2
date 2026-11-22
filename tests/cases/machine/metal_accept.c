@@ -451,7 +451,7 @@ static unsigned long long interrupt_total(const char *line)
     for (;;) {
         char *end;
 
-        while (*q == ' ' || *q == '\t') {
+        while (*q == ' ') {
             q++;
         }
         if (*q < '0' || *q > '9') {
@@ -505,8 +505,9 @@ static void inventory(struct acceptance *a)
         message(a, 1, "/proc/interrupts is not available");
     else {
         lines(a, interrupts, "", "interrupts: ");
+        /* The vector is right-aligned in three places, as Linux writes it. */
         snprintf(count, sizeof(count), "%llu",
-                 interrupt_total(record_line(interrupts, "32:", line)));
+                 interrupt_total(record_line(interrupts, " 32:", line)));
         if (count[0] == '0' || count[0] == '\0' || strspn(count, "0123456789") != strlen(count))
             message(a, 1, "the timer's vector has no interrupt count");
         else

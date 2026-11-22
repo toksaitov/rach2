@@ -367,10 +367,13 @@ static void interrupt_rows(void)
     for (p = text; p != NULL && *p != '\0'; p = strchr(p, '\n'), p = p == NULL ? NULL : p + 1) {
         char *q, *end;
 
-        if (*p < '0' || *p > '9') {
+        /* The vector is right-aligned after spaces, as Linux writes it. */
+        for (q = p; *q == ' '; q++) {
+        }
+        if (*q < '0' || *q > '9') {
             continue;
         }
-        a = strtoul(p, &q, 10);
+        a = strtoul(q, &q, 10);
         if (*q++ != ':') {
             continue;
         }
@@ -378,7 +381,7 @@ static void interrupt_rows(void)
         for (;;) {
             unsigned long count;
 
-            while (*q == ' ' || *q == '\t') {
+            while (*q == ' ') {
                 q++;
             }
             if (*q < '0' || *q > '9') {

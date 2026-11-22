@@ -127,7 +127,7 @@ static int line_names(const char *line, const char *name)
         end++;
     }
     p = end - m;
-    if (p <= line || (p[-1] != ' ' && p[-1] != '\t')) {
+    if (p <= line || p[-1] != ' ') {
         return 0;
     }
     for (k = 0; k < m && p[k] == name[k]; k++) {
@@ -136,7 +136,9 @@ static int line_names(const char *line, const char *name)
 }
 
 /** The sum of the counts on every line of /proc/interrupts, `file`, that
- * ends with `name`, and the number of such lines in `*lines`. */
+ * ends with `name`, and the number of such lines in `*lines`. A line is the
+ * vector, right-aligned and with a colon, the counts and the names, each
+ * after spaces, as Linux writes it. */
 static long count_named(const char *file, const char *name, int *lines)
 {
     const char *p = file;
@@ -144,8 +146,12 @@ static long count_named(const char *file, const char *name, int *lines)
 
     *lines = 0;
     while (*p) {
-        const char *line = p;
+        const char *line;
 
+        while (*p == ' ') {
+            p++;
+        }
+        line = p;
         while (*p >= '0' && *p <= '9') {
             p++;
         }
@@ -154,7 +160,7 @@ static long count_named(const char *file, const char *name, int *lines)
             for (p++;;) {
                 long value = 0;
 
-                while (*p == ' ' || *p == '\t') {
+                while (*p == ' ') {
                     p++;
                 }
                 if (*p < '0' || *p > '9') {

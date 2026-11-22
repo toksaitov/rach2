@@ -130,19 +130,28 @@ static int slurp(const char *path, char *buf, int cap)
 }
 
 /** The count on the `/proc/interrupts` line whose names include `name`, or
- * -1 when no line does. */
+ * -1 when no line does. A line is the vector, right-aligned and with a
+ * colon, the counts, the source and the names, each after spaces, as Linux
+ * writes it. */
 static int count_for_named(const char *name, const char *file)
 {
     const char *p;
     int m = (int)strlen(name);
 
     for (p = file; *p; p++) {
-        const char *line = p, *q;
+        const char *line, *q;
         int count = 0;
 
         if (p != file && p[-1] != '\n') {
             continue;
         }
+        while (*p == ' ') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        line = p;
         while (*p >= '0' && *p <= '9') {
             p++;
         }
@@ -153,7 +162,7 @@ static int count_for_named(const char *name, const char *file)
         for (;;) {
             int value = 0;
 
-            while (*p == ' ' || *p == '\t') {
+            while (*p == ' ') {
                 p++;
             }
             if (*p < '0' || *p > '9') {

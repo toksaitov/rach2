@@ -181,7 +181,7 @@ int family_metal_ssh(const char *c)
         return 0;
     }
     if (starts(c, "cat /proc/interrupts"))
-        return reply("32:\t10\t0\tpit\n");
+        return reply(" 32:         10          0      LAPIC  timer\n");
     if (starts(c, "ls /dev"))
         return reply("disk0\n");
     if (!strcmp(c, "bootctl status 2>/dev/null || :"))

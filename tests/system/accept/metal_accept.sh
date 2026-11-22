@@ -515,18 +515,21 @@ if [ -z "$INTR" ]; then
     bad "/proc/interrupts is not there; this kernel does not provide it"
 else
     echo "$INTR" | while read -r line; do note "interrupts: $line"; done
-    timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
+    # The fields are separated by spaces, as Linux writes them: the vector
+    # and a colon, a count for each processor, the source and the names.
+    timer="$(echo "$INTR" | awk '$1 == "32:" { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
     # By the device's name and not by a number: a vector is given to a device
     # when it enables its messages, so the number is the next one free.
-    usb_vector="$(echo "$INTR" | awk -F'\t' '$NF ~ /xhci/ { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
-    audio_vector="$(echo "$INTR" | awk -F'\t' '$NF ~ /hda/ { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
-    fallback="$(echo "$INTR" | awk -F'\t' '$1 == "FBK:" { print $2 }')"
-    spurious="$(echo "$INTR" | awk -F'\t' '$1 == "SPU:" { print $2 }')"
+    usb_vector="$(echo "$INTR" | awk '$1 ~ /^[0-9]+:$/ && /xhci/ { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
+    audio_vector="$(echo "$INTR" | awk '$1 ~ /^[0-9]+:$/ && /hda/ { n=0; for(i=2;$i ~ /^[0-9]+$/;i++) n+=$i; print n }')"
+    fallback="$(echo "$INTR" | awk '$1 == "FBK:" { print $2 }')"
+    spurious="$(echo "$INTR" | awk '$1 == "SPU:" { print $2 }')"
 
-    # A vector that has taken nothing has no line at all, so an empty answer
-    # here is the failure and there is no zero to test for.
+    # Each vector that has a handler has a line, with a count of 0 until
+    # it takes an interrupt, so the timer's line must count above 0.
     case "$timer" in
-        ''|*[!0-9]*) bad "the timer's vector has no line, so no timer interrupt has arrived" ;;
+        ''|*[!0-9]*) bad "the timer's vector has no line, so the timer has no handler" ;;
+        0) bad "the timer's vector has taken no interrupt" ;;
         *) note "interrupts: the timer has taken $timer, so its interrupts arrive" ;;
     esac
     note "interrupts: usb vector ${usb_vector:-none}, audio vector ${audio_vector:-none}"
