@@ -90,11 +90,10 @@
 # x86_64; textbusy, 12 s against 14 on x86_64; i915fake, 33 s against 47 on
 # x86_64.
 # These stay under TCG, slower under KVM (issue 5661): mount, 262 s against
-# 258; stress-ahci, 71 s against 31; stress, 76 s against 33; loopdev, 100 s
-# against 96; esctest2, 78 s against 75 on the host; fatwrite, 338 s against
-# 120; ext2, 394 s against 286; metal, 355 s against 316; fpu, 18 s against
-# 16; limits, 4 s against 3; diskfull, 4 s against 3; fault, 8 s against 6;
-# krffscheck, 2 s against 1 on the host; conload, 10 s against 8.
+# 258; loopdev, 100 s against 96; esctest2, 78 s against 75 on the host;
+# metal, 355 s against 316; fpu, 18 s against 16; limits, 4 s against 3;
+# diskfull, 4 s against 3; fault, 8 s against 6; krffscheck, 2 s against 1
+# on the host; conload, 10 s against 8.
 # vdso stays under TCG too, 14 s against 8, each suite run alone (issue
 # 5674): its syscall case asks for the HPET fallback, and the million
 # readings of its x86-64 check each make a KVM exit to QEMU's HPET.
@@ -118,6 +117,16 @@
 # under KVM against 848. agentsaccept, codexapi and museapi have the virtio
 # console too, and took 587 s against 1232, 33 s against 78 and 58 s against
 # 87.
+# stress, stress-ahci, fatwrite and ext2 passed under KVM, under the ia32
+# profile too, and took no longer there than under TCG, by the sum of their
+# case times on i686 and x86_64, each suite run alone (issue 5673), with
+# milestone 84's changes: the 16550's FIFO loaded with 16 bytes for each
+# read of the line status, the ATA and AHCI waits reading fewer registers,
+# and the image helper's files sent through its transfer disk in place of
+# COM1. stress, 21 s against 20, within a run's spread; stress-ahci, 16 s
+# against 20; fatwrite, 72 s against 77; ext2, 240 s against 271. Before
+# them, each exit to QEMU of nested KVM under Hyper-V cost some 14 us, and
+# fatwrite took 338 s against 120 (dev-log/84-locks/kvmslow-disk.md).
 browser
 video
 webgl
@@ -240,3 +249,7 @@ authority
 tcc
 style
 agents
+stress
+stress-ahci
+fatwrite
+ext2
