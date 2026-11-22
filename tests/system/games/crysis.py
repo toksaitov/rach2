@@ -14,13 +14,17 @@ copy of the owner's, since every command but `key` writes there:
 ROUTE is direct, umu or 32: crysis.sh run, run --umu or run --32. The
 desktop account, which runs the game, must be able to write /data/crysis.
 `prepare` starts the desktop session, by SIGHUP when none runs, sets its
-output to 1366x768 with Weston's screenshots on, and writes the settings of
-Linux's runs on the Lenovo (dev-log/80-games/80-2.md): Low, 1366x768,
-fullscreen, no vsync, sound on. A file the script writes or removes under
-/data/crysis is replaced or removed as a name, so that a symbolic link to a
-file of the owner's goes, never the file. Each later command writes under
-OUT/NAME and prints one result line, `crysis: result: NAME: ok` or
-`crysis: result: NAME: FAILED` with what failed.
+output to 1366x768 with Weston's screenshots on, and writes nothing under
+/data/crysis. Each later command first writes the settings of Linux's runs
+on the Lenovo (dev-log/80-games/80-2.md): Low, 1366x768, fullscreen, no
+vsync, sound on. A file the script writes or removes under /data/crysis is
+replaced or removed as a name, so that a symbolic link to a file of the
+owner's goes, never the file. Each later command writes under OUT/NAME and
+prints one result line, `crysis: result: NAME: ok` or
+`crysis: result: NAME: FAILED` with what failed. With CRYSIS_HOME set, the
+desktop account's commands run with HOME and the XDG data, configuration
+and cache directories there, reading X's and PulseAudio's keys from its
+home, as the native case runs them, in which the home is read-only.
 
 `flyby` runs Linux's island flyby, `-devmode +map island +exec benchmark_gpu`,
 and ends the game after LOOPS of its four loops; each loop's rate is judged
@@ -59,11 +63,15 @@ RECORD = BASE / "accept.json"
 STATE = Path(os.environ.get("CRYSIS_STATE", "/run/crysis-accept"))
 HUD_PARENT = os.environ.get("CRYSIS_HUD_PARENT")
 UID = 1001
+HOME = os.environ.get("CRYSIS_HOME")
 ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 DISPLAY=:0 "
        "PULSE_SERVER=unix:/run/user/1001/pulse/native PROTON_USE_XALIA=0 "
        "MESA_SHADER_CACHE_SHOW_STATS=true "
        "WINEDEBUG=+timestamp,+pid,+loaddll,+d3d_caps,fixme-all; "
-       "unset DBUS_SESSION_BUS_ADDRESS; ")
+       + ("export HOME={0} XDG_DATA_HOME={0}/.local/share XDG_CONFIG_HOME={0}/.config "
+          "XDG_CACHE_HOME={0}/.cache XAUTHORITY=/home/desktop/.Xauthority "
+          "PULSE_COOKIE=/home/desktop/.config/pulse/cookie; ".format(HOME) if HOME else "")
+       + "unset DBUS_SESSION_BUS_ADDRESS; ")
 ROUTES = {"direct": [], "umu": ["--umu"], "32": ["--32"]}
 # Linux's flyby on the same Lenovo, frames a second per loop, under cage at
 # Low 1366x768 with sound on (dev-log/80-games/80-2.md, Crysis).
@@ -192,8 +200,7 @@ def settings():
 
 
 def prepare(out, shm=False):
-    """Set the session's output to 1366x768 and write the game's settings;
-    record OUT for later commands. With SHM, check that the restarted
+    """Set the session's output to 1366x768; record OUT for later commands. With SHM, check that the restarted
     session serves virgl to X clients and leave Weston's flags alone."""
     if not (GAME / "Bin64/Crysis.exe").exists():
         raise SystemExit("crysis: no game in %s" % GAME)
@@ -213,7 +220,6 @@ def prepare(out, shm=False):
     text = wm.log_from(0)
     renderer = re.findall(r"GL renderer: (.*)", text)
     say("session: output %s, renderer %s" % (output, renderer[-1] if renderer else None))
-    settings()
     set_volume()
     say("volume: %s" % volume())
     print("CRYSIS PREPARED", flush=True)
