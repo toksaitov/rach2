@@ -1,5 +1,6 @@
-/* vgpuprobe.c: virgl capability sets, transfers, submissions and device loss
- * on the virgl QEMU profile, as root, where the reset row unplugs its GPU;
+/* vgpuprobe.c: virgl capability sets, transfers, submissions, the closes
+ * and frees of shared and busy buffers, and device loss on the virgl QEMU
+ * profile, as root, where the reset row unplugs its GPU;
  * a program's exit that frees thousands of textures at once, on the same
  * profile; and blobs, host-visible memory and CONTEXT_INIT on the Venus
  * profile. */
@@ -339,6 +340,259 @@ static void wait_row(void)
     report_held();
 }
 
+/** Make a 4 by 4 BGRA texture over one page of backing in file `fd`: its
+ * handle, or 0. */
+static uint32_t small_texture(int fd)
+{
+    struct drm_virtgpu_resource_create a;
+
+    zero(&a, sizeof(a));
+    a.target = 2;
+    a.format = 1;
+    a.bind = 2;
+    a.width = a.height = 4;
+    a.depth = a.array_size = 1;
+    a.size = 4096;
+    return call(fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a) == 0 ? a.bo_handle : 0;
+}
+
+/* A timespec, two of the machine's longs on both architectures. */
+struct probe_timespec {
+    long tv_sec, tv_nsec;
+};
+
+/** CLOCK_MONOTONIC in microseconds. */
+static long long now_us(void)
+{
+    struct probe_timespec t;
+
+    syscall2(SYS_CLOCK_GETTIME, 1, (long)&t);
+    return (long long)t.tv_sec * 1000000 + t.tv_nsec / 1000;
+}
+
+/** Sleep a millisecond, with no GPU call. */
+static void nap(void)
+{
+    struct probe_timespec t;
+
+    t.tv_sec = 0;
+    t.tv_nsec = 1000000;
+    /* interval: a polled count or fence is read again every millisecond */
+    syscall2(SYS_NANOSLEEP, (long)&t, 0);
+}
+
+static char proc_text[32768]; /* a /proc file read whole */
+
+/** Read /proc file `path` whole into proc_text: 0, or -1. */
+static int proc_read(const char *path)
+{
+    long fd = syscall3(SYS_OPEN, (long)path, 0, 0), n, got = 0;
+
+    if (fd < 0) {
+        return -1;
+    }
+    while ((n = syscall3(SYS_READ, fd, (long)(proc_text + got),
+                         (long)(sizeof(proc_text) - 1 - got))) > 0) {
+        got += n;
+    }
+    syscall1(SYS_CLOSE, fd);
+    proc_text[got] = 0;
+    return 0;
+}
+
+/** The kernel's count of virtio-gpu objects, /proc/stat's
+ * virtio_gpu_objects, or a failed row named `what`. */
+static uint32_t objects_now(const char *what)
+{
+    const char *key = "\nvirtio_gpu_objects ", *k;
+    char *p;
+    uint32_t n = 0;
+
+    require(proc_read("/proc/stat") == 0, what);
+    for (p = proc_text; *p; p++) {
+        for (k = key; *k && *k == p[k - key]; k++) {
+        }
+        if (!*k) {
+            for (p += k - key; *p >= '0' && *p <= '9'; p++) {
+                n = n * 10 + (uint32_t)(*p - '0');
+            }
+            return n;
+        }
+    }
+    require(0, what);
+    return 0;
+}
+
+/** Whether sync file `fd` has signalled, or a failed row named `what`. */
+static int fence_done(int fd, const char *what)
+{
+    struct sync_file_info info;
+
+    zero(&info, sizeof(info));
+    require(call(fd, SYNC_IOC_FILE_INFO, &info) == 0 && info.status >= 0, what);
+    return info.status == 1;
+}
+
+/** Write the texture's 64 bytes as `i * mul + add`, upload them, clear the
+ * mapping and read them back through the GPU's file, or a failed row named
+ * `what`. */
+static void roundtrip(uint8_t mul, uint8_t add, const char *what)
+{
+    struct drm_virtgpu_3d_transfer a;
+    uint8_t *bytes = mapping;
+    uint32_t i;
+
+    zero(&a, sizeof(a));
+    a.bo_handle = bo_handle;
+    a.box.w = a.box.h = 4;
+    a.box.d = 1;
+    for (i = 0; i < 64; i++) {
+        bytes[i] = (uint8_t)(i * mul + add);
+    }
+    require(call(gpu_fd, DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST, &a) == 0, what);
+    wait_texture();
+    for (i = 0; i < 64; i++) {
+        bytes[i] = 0;
+    }
+    require(call(gpu_fd, DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST, &a) == 0, what);
+    wait_texture();
+    for (i = 0; i < 64; i++) {
+        require(bytes[i] == (uint8_t)(i * mul + add), what);
+    }
+}
+
+/** Submit an empty batch on file `fd` naming its buffer `handle`, with an
+ * out-fence when `fence` is set: the fence's descriptor, or 0. */
+static int submit_naming(int fd, uint32_t *handle, int fence, const char *what)
+{
+    struct drm_virtgpu_execbuffer a;
+
+    zero(&a, sizeof(a));
+    a.bo_handles = (uint64_t)(uintptr_t)handle;
+    a.num_bo_handles = 1;
+    a.flags = fence ? VIRTGPU_EXECBUF_FENCE_FD_OUT : 0;
+    require(call(fd, DRM_IOCTL_VIRTGPU_EXECBUFFER, &a) == 0 && (!fence || a.fence_fd >= 0), what);
+    return fence ? a.fence_fd : 0;
+}
+
+/** Close buffer `handle` of file `fd`, or a failed row named `what`. */
+static void close_handle(int fd, uint32_t handle, const char *what)
+{
+    struct drm_gem_close c;
+
+    zero(&c, sizeof(c));
+    c.handle = handle;
+    require(call(fd, DRM_IOCTL_GEM_CLOSE, &c) == 0, what);
+}
+
+/** A second file imports the texture by PRIME and names it in a
+ * submission, which attaches it to that file's context, then closes its
+ * handle, which detaches it from that context alone: the first file still
+ * uploads and reads back the texture and names it in a submission. */
+static void shared_row(void)
+{
+    char path[64];
+    struct drm_prime_handle ph;
+    long rc;
+    int fd;
+
+    render_path(path, (uint32_t)(128 + card_index));
+    other_fd = (int)syscall3(SYS_OPEN, (long)path, 2, 0);
+    require(other_fd >= 0, "a second open of the render node");
+    zero(&ph, sizeof(ph));
+    ph.handle = bo_handle;
+    ph.flags = DRM_CLOEXEC | DRM_RDWR;
+    require(call(gpu_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &ph) == 0 && ph.fd >= 0,
+            "export the texture");
+    fd = ph.fd;
+    zero(&ph, sizeof(ph));
+    ph.fd = fd;
+    rc = call(other_fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &ph);
+    syscall1(SYS_CLOSE, fd);
+    require(rc == 0 && ph.handle != 0, "import the texture in the second file");
+    (void)submit_naming(other_fd, &ph.handle, 0, "the second file's submission naming it");
+    close_handle(other_fd, ph.handle, "the second file's close of the texture");
+    roundtrip(7, 41, "the first file's texture after the second's close");
+    (void)submit_naming(gpu_fd, &bo_handle, 0, "the first file's submission after it");
+    wait_texture();
+    syscall1(SYS_CLOSE, other_fd);
+    other_fd = -1;
+    report_held();
+}
+
+/** Close a texture while a mapping and a submission hold it: it stays,
+ * counted in virtio_gpu_objects, until both have ended, whichever ends
+ * first, and then goes with no further call. */
+static void busy_close_row(void)
+{
+    uint32_t h, n, i;
+    uint8_t *m;
+    int fence;
+
+    /* The submission ends first, then the mapping. */
+    h = small_texture(gpu_fd);
+    require(h != 0, "a texture to close while busy");
+    m = map_bo(h, "map the texture to close");
+    for (i = 0; i < 64; i++) {
+        m[i] = (uint8_t)(i + 99);
+    }
+    n = objects_now("read virtio_gpu_objects");
+    fence = submit_naming(gpu_fd, &h, 1, "a submission naming the texture");
+    close_handle(gpu_fd, h, "close the busy texture");
+    while (!fence_done(fence, "the submission's fence")) {
+        nap();
+    }
+    syscall1(SYS_CLOSE, fence);
+    require(objects_now("read virtio_gpu_objects") == n,
+            "the mapping keeps the texture after its submission ends");
+    for (i = 0; i < 64; i++) {
+        require(m[i] == (uint8_t)(i + 99), "the mapping's bytes after the close");
+    }
+    syscall2(SYS_MUNMAP, (long)m, 4096);
+    while (objects_now("read virtio_gpu_objects") != n - 1) {
+        nap();
+    }
+    /* The mapping ends first, then the submission. */
+    h = small_texture(gpu_fd);
+    require(h != 0, "a second texture to close while busy");
+    m = map_bo(h, "map the second texture");
+    n = objects_now("read virtio_gpu_objects");
+    fence = submit_naming(gpu_fd, &h, 1, "a submission naming the second texture");
+    close_handle(gpu_fd, h, "close the second busy texture");
+    syscall2(SYS_MUNMAP, (long)m, 4096);
+    while (objects_now("read virtio_gpu_objects") != n - 1) {
+        nap();
+    }
+    require(fence_done(fence, "the second submission's fence"),
+            "the texture outlives its submission");
+    syscall1(SYS_CLOSE, fence);
+    report_held();
+}
+
+/** A texture named in a submission and closed at once is freed with no
+ * further call of the program: the answers to its submission and its
+ * DETACH drop their references in the kernel's worker, which sends its
+ * UNREF, and its answer takes the texture out of virtio_gpu_objects. The
+ * time from the close to that is printed, not judged. */
+static void unref_row(void)
+{
+    uint32_t h, n;
+    long long began;
+    char ms[12];
+
+    h = small_texture(gpu_fd);
+    require(h != 0, "a texture to free");
+    n = objects_now("read virtio_gpu_objects");
+    (void)submit_naming(gpu_fd, &h, 0, "a submission naming the texture to free");
+    began = now_us();
+    close_handle(gpu_fd, h, "close the texture to free");
+    while (objects_now("read virtio_gpu_objects") != n - 1) {
+        nap();
+    }
+    probe_line("VGPUPROBE UNREF ms ", report_decimal(ms, (int)(now_us() - began) / 1000), 0);
+    report_held();
+}
+
 /** Reset with an exported fence; check pending work and old handles. */
 static void reset_row(void)
 {
@@ -572,25 +826,16 @@ static void blob_row(void)
     report_held();
 }
 
-static char proc_text[32768]; /* a /proc file read whole */
-
 /** Print the line of /proc file `path` that begins with `key`, as
  * "VGPUPROBE EXIT `when` line", or nothing when either is missing. */
 static void proc_line(const char *path, const char *key, const char *when)
 {
-    long fd = syscall3(SYS_OPEN, (long)path, 0, 0), n, got = 0;
     char *line, *end;
     const char *k;
 
-    if (fd < 0) {
+    if (proc_read(path) != 0) {
         return;
     }
-    while ((n = syscall3(SYS_READ, fd, (long)(proc_text + got),
-                         (long)(sizeof(proc_text) - 1 - got))) > 0) {
-        got += n;
-    }
-    syscall1(SYS_CLOSE, fd);
-    proc_text[got] = 0;
     for (line = proc_text; *line; line = *end ? end + 1 : end) {
         for (end = line; *end && *end != '\n'; end++) {
         }
@@ -610,22 +855,6 @@ static void window_trace(const char *when)
 {
     proc_line("/proc/meminfo", "LowFree:", when);
     proc_line("/proc/stat", "window_free_min ", when);
-}
-
-/** Make a 4 by 4 BGRA texture over one page of backing in file `fd`: its
- * handle, or 0. */
-static uint32_t small_texture(int fd)
-{
-    struct drm_virtgpu_resource_create a;
-
-    zero(&a, sizeof(a));
-    a.target = 2;
-    a.format = 1;
-    a.bind = 2;
-    a.width = a.height = 4;
-    a.depth = a.array_size = 1;
-    a.size = 4096;
-    return call(fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a) == 0 ? a.bo_handle : 0;
 }
 
 /** The exit case's child: open the render node, make a context and
@@ -730,12 +959,12 @@ static void blob_case(void)
     finish(0);
 }
 
-/** Run the case's rows, the virgl case's eight, the exit case's two or the
+/** Run the case's rows, the virgl case's eleven, the exit case's two or the
  * blob case's three, and close every resource on exit. */
 void probe_main(unsigned long *sp)
 {
-    const char *rows[] = {"params", "context",   "resource", "transfer",
-                          "submit", "out-fence", "wait",     "reset"};
+    const char *rows[] = {"params", "context", "resource",   "transfer", "submit", "out-fence",
+                          "wait",   "shared",  "busy-close", "unref",    "reset"};
     const char *name = report_case((char **)(sp + 1) + sp[0] + 1, "machine.vgpu.virgl");
     uint32_t i;
 
@@ -746,7 +975,7 @@ void probe_main(unsigned long *sp)
     if (same(name, "machine.vgpu.exit")) {
         exit_case();
     }
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < 11; i++) {
         report_plan(rows[i]);
     }
     params_row();
@@ -756,6 +985,9 @@ void probe_main(unsigned long *sp)
     submit_row();
     fence_row();
     wait_row();
+    shared_row();
+    busy_close_row();
+    unref_row();
     reset_row();
     report_end();
     probe_line("VGPUPROBE OK", 0, 0);
