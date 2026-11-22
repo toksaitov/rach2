@@ -177,8 +177,10 @@ struct etude_case_machine {
     char line[ETUDE_REPORT_LINE_MAX + 1]; /* the guest's output line being read */
     size_t line_len;
     int line_long;
-    long capture[CAPTURES]; /* the ids of the diagnostics' QMP commands, or -1 */
-    int ended;              /* a machine record has given this boot's end */
+    long capture[CAPTURES];      /* the ids of the diagnostics' QMP commands, or -1 */
+    int capture_error[CAPTURES]; /* why a command was not sent: errno, or 0 */
+    int captured;                /* the diagnostics are to be kept */
+    int ended;                   /* a machine record has given this boot's end */
 };
 
 struct etude_case_service {
@@ -4514,17 +4516,62 @@ static int captured(void *arg)
     return 1;
 }
 
+/** Give why a diagnostic's command was not sent, from the errno that
+ * etude_machine_qmp left, or 0 when the machine was not running. */
+static const char *unsent(int error)
+{
+    switch (error) {
+    case 0:
+        return "not sent: the machine was not running";
+    case EPIPE:
+        return "not sent: QMP had closed, as it does when QEMU ends";
+    case EAGAIN:
+        return "not sent: QMP had not started the machine, or QEMU was asked to quit";
+    default:
+        return "not sent";
+    }
+}
+
+/**
+ * Write into `buf` how boot `m` ended, once it has: the end and, when QMP
+ * reported a SHUTDOWN, its reason, who asked for it and the console bytes
+ * read before it. A reset by the guest that the scenario did not expect is
+ * a triple fault or a reset the kernel asked for, which `-no-reboot` turns
+ * into QEMU's end with its state gone.
+ */
+static void end_text(const struct etude_case_machine *m, char *buf, size_t size)
+{
+    const struct etude_machine_result *r = mres(m);
+    const char *name = end_name(r->end);
+
+    if (r->state != ETUDE_MACHINE_ENDED) {
+        snprintf(buf, size, "end: not seen");
+        return;
+    }
+    if (!r->reason[0]) {
+        snprintf(buf, size, "end: %s", name != NULL ? name : "unknown");
+        return;
+    }
+    snprintf(buf, size, "end: %s: SHUTDOWN, reason %s, by the %s, after console byte %llu",
+             name != NULL ? name : "unknown", r->reason, r->by_guest ? "guest" : "host",
+             (unsigned long long)r->end_console);
+}
+
 /** Keep the diagnostics of machine `m` as evidence `MACHINE.N.capture`, a
- * line for each command: its reply, `no reply` or `not sent`. */
+ * line for each command, its reply, `no reply` or `not sent` with why, and
+ * a last line with the machine's end (`end_text`). Called once the machine
+ * has ended, so that its end is known. */
 static void keep_capture(struct etude_case_machine *m)
 {
     const char *reply[CAPTURES];
-    char name[200], *text;
-    size_t size = 1, n = 0;
+    char name[200], end[200], *text;
+    size_t size, n = 0;
     int i;
 
+    end_text(m, end, sizeof(end));
+    size = strlen(end) + 2;
     for (i = 0; i < CAPTURES; i++) {
-        reply[i] = m->capture[i] < 0 ? "not sent" : "no reply";
+        reply[i] = m->capture[i] < 0 ? unsent(m->capture_error[i]) : "no reply";
         if (m->capture[i] >= 0 && etude_machine_reply(m->m, m->capture[i], &reply[i]) != 1)
             reply[i] = "no reply";
         size += strlen(capture_command[i]) + strlen(reply[i]) + 3;
@@ -4534,6 +4581,7 @@ static void keep_capture(struct etude_case_machine *m)
         return;
     for (i = 0; i < CAPTURES; i++)
         n += (size_t)snprintf(text + n, size - n, "%s: %s\n", capture_command[i], reply[i]);
+    n += (size_t)snprintf(text + n, size - n, "%s\n", end);
     snprintf(name, sizeof(name), "%s.%u.capture", m->decl->id, m->boot);
     keep_evidence(m->c, name, text, n);
     free(text);
@@ -4542,7 +4590,11 @@ static void keep_capture(struct etude_case_machine *m)
 /**
  * Collect the diagnostics of every machine that runs with QMP, its status,
  * its processors and its registers, waiting for the replies until `until`,
- * and keep them.
+ * and mark each machine that was running for `keep_capture`, which end_all
+ * calls once the machines have ended. A machine whose QEMU has just ended,
+ * as one does at a guest's reset under `-no-reboot`, counts as running
+ * until the launcher has seen its process end, and its commands are not
+ * sent, since QMP has closed; its capture then says so and gives its end.
  */
 static void capture(struct etude_case *c, uint64_t until)
 {
@@ -4552,17 +4604,16 @@ static void capture(struct etude_case *c, uint64_t until)
     for (m = c->machines; m != NULL; m = m->next) {
         int running = m->decl->qmp && mres(m)->state == ETUDE_MACHINE_RUNNING;
 
-        for (i = 0; i < CAPTURES; i++)
+        for (i = 0; i < CAPTURES; i++) {
             m->capture[i] =
                 running ? etude_machine_qmp(m->m, capture_command[i], capture_args[i]) : -1;
-        any |= running;
+            m->capture_error[i] = m->capture[i] < 0 && running ? errno : 0;
+        }
+        m->captured = running;
+        any |= m->capture[0] >= 0;
     }
-    if (!any)
-        return;
-    serve_until(c, captured, c, NULL, until, 0);
-    for (m = c->machines; m != NULL; m = m->next)
-        if (m->decl->qmp && (m->capture[0] >= 0 || mres(m)->state == ETUDE_MACHINE_RUNNING))
-            keep_capture(m);
+    if (any)
+        serve_until(c, captured, c, NULL, until, 0);
 }
 
 /** Say whether service `s` ended by the signal of a stop, SIGTERM or
@@ -4678,6 +4729,8 @@ static void end_all(struct etude_case *c, int failing)
         host_space(c, m);
         if (failing)
             keep_qemu_error(m);
+        if (m->captured)
+            keep_capture(m);
     }
     for (s = c->services; s != NULL; s = s->next) {
         if (s->finished && !s->seen && !stopped_by_signal(s)) {
