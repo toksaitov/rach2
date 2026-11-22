@@ -29,10 +29,12 @@
  * the host's end is closed, and refuses a second open; /dev/hvc0 is absent
  * and the log says console=hvc0 names no port. `tty`: /dev/hvc0 is the
  * terminal 229:0, which takes `hvc-tty` and a newline, and /dev/vport0p0,
- * the console port's vport node, refuses an open with ENXIO; the mode then
- * sleeps 100 ms, in which khvcd moves the line to the port, since under KVM
- * it would otherwise exit within a tick, before khvcd ran, to the debug
- * shell, which runs no thread. `late`:
+ * whose tcdrain returns 0 once khvcd has handed the line to the port, after
+ * which TIOCOUTQ reads 0, so that the line is out before the mode exits to
+ * the debug shell, which runs no thread; a drain that a signal interrupts
+ * fails with EINTR, though the handler has SA_RESTART, with the output
+ * still counted (`drain_rows`); and /dev/vport0p0, the console port's vport
+ * node, refuses an open with ENXIO. `late`:
  * /dev/vport0p3 and /dev/virtio-ports/org.rach2.late are one device, which
  * takes `ping` and a newline and gives `pong` and a newline, the bytes the
  * host's end has, and polls writable. `gone`: the late port's nodes are
@@ -54,6 +56,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sched.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +65,7 @@
 #include <sys/klog.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -433,11 +438,116 @@ static int boot_rows(void)
     return 0;
 }
 
+/* The SIGUSR1s the interrupted drain took. */
+static volatile sig_atomic_t drain_signals;
+
+/** The interrupted drain's handler: count the signal. */
+static void drain_signal(int signo)
+{
+    (void)signo;
+    drain_signals++;
+}
+
+/** The interrupted drain's child: wait for the parent's byte on `go`, then,
+ * running only once the parent's drain blocks, since both are SCHED_FIFO 99
+ * on the one processor, send it SIGUSR1, drop to SCHED_FIFO 1, which hands
+ * the processor back to it, and spin, which keeps khvcd, an ordinary
+ * thread, off the processor until the parent kills it. */
+static void drain_child(int go)
+{
+    struct sched_param sp;
+    volatile unsigned long spins = 0;
+    char c;
+
+    if (read(go, &c, 1) != 1) {
+        _exit(1);
+    }
+    kill(getppid(), SIGUSR1);
+    sp.sched_priority = 1;
+    sched_setscheduler(0, SCHED_FIFO, &sp);
+    for (;;) {
+        spins++;
+    }
+}
+
+/**
+ * The interrupted drain on the terminal `fd`, on the case's machine of one
+ * processor: with this process and a child at SCHED_FIFO 99 (`drain_child`),
+ * 1024 bytes written and a drain begun, the child's SIGUSR1 ends the drain
+ * with EINTR, though the handler has SA_RESTART, as Linux's TCSBRK is never
+ * restarted, while TIOCOUTQ still counts the bytes khvcd, kept off the
+ * processor, has not handed to the port. Once the child is killed and this
+ * process is SCHED_OTHER again, a drain returns 0 and TIOCOUTQ reads 0.
+ * Returns 0 when each row held.
+ */
+static int drain_rows(int fd)
+{
+    struct sched_param sp;
+    struct sigaction sa;
+    char burst[1024];
+    int go[2], queued = 0, rc, err, status;
+    pid_t child;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = drain_signal;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sp.sched_priority = 99;
+    if (sigaction(SIGUSR1, &sa, NULL) != 0 || pipe(go) != 0 ||
+        sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
+        return fail("the interrupted drain cannot be set up");
+    }
+    child = fork();
+    if (child == 0) {
+        close(go[1]);
+        drain_child(go[0]);
+    }
+    close(go[0]);
+    if (child < 0) {
+        return fail("the interrupted drain's child does not start");
+    }
+    memset(burst, 'd', sizeof(burst) - 1);
+    burst[sizeof(burst) - 1] = '\n';
+    if (write(go[1], "g", 1) != 1 || write(fd, burst, sizeof(burst)) != (ssize_t)sizeof(burst)) {
+        err = errno;
+        kill(child, SIGKILL);
+        waitpid(child, &status, 0);
+        errno = err;
+        return fail("the terminal does not take the drain's bytes");
+    }
+    errno = 0;
+    rc = drain_signals == 0 ? tcdrain(fd) : 0;
+    err = errno;
+    if (rc == -1 && err == EINTR && ioctl(fd, TIOCOUTQ, &queued) != 0) {
+        queued = -1;
+    }
+    kill(child, SIGKILL);
+    waitpid(child, &status, 0);
+    close(go[1]);
+    sp.sched_priority = 0;
+    sched_setscheduler(0, SCHED_OTHER, &sp);
+    errno = err;
+    if (rc != -1 || err != EINTR || drain_signals != 1) {
+        return fail("a drain that SIGUSR1 interrupts does not fail with EINTR");
+    }
+    if (queued <= 0) {
+        errno = 0;
+        return fail("TIOCOUTQ does not count the bytes of an interrupted drain");
+    }
+    if (tcdrain(fd) != 0) {
+        return fail("tcdrain fails after the interrupted drain");
+    }
+    if (ioctl(fd, TIOCOUTQ, &queued) != 0 || queued != 0) {
+        return fail("TIOCOUTQ does not read 0 after tcdrain");
+    }
+    return 0;
+}
+
 /** The rows of `tty`; 0 when each held. */
 static int tty_rows(void)
 {
     struct termios modes;
-    int fd;
+    int fd, queued;
 
     settle(CONSOLE_NODE, 1);
     if (char_dev(CONSOLE_NODE, 229u) != makedev(229u, 0u)) {
@@ -450,8 +560,16 @@ static int tty_rows(void)
     if (write(fd, "hvc-tty\n", 8) != 8) {
         return fail("the terminal does not take a line");
     }
+    if (tcdrain(fd) != 0) {
+        return fail("tcdrain of the terminal fails");
+    }
+    if (ioctl(fd, TIOCOUTQ, &queued) != 0 || queued != 0) {
+        return fail("TIOCOUTQ does not read 0 after tcdrain");
+    }
+    if (drain_rows(fd) != 0) {
+        return 1;
+    }
     close(fd);
-    usleep(100000); /* interval: khvcd, which the write woke, moves the line meanwhile */
     fd = open("/dev/vport0p0", O_RDWR);
     if (fd >= 0 || errno != ENXIO) {
         return fail("the console port's vport node does not refuse an open with ENXIO");

@@ -684,12 +684,12 @@
     },
     {
      "assertion_id": "terminal",
-     "checks": "hvcmusl tty exits 0: /dev/hvc0 comes while hvcmusl sleeps and so lets the driver's thread run, which the debug shell does not; it is the terminal 229:0, which takes a line, and /dev/vport0p0, the console port's vport node, refuses an open with ENXIO",
+     "checks": "hvcmusl tty exits 0: /dev/hvc0 comes while hvcmusl sleeps and so lets the driver's thread run, which the debug shell does not; it is the terminal 229:0, which takes a line, whose tcdrain returns 0 and after which TIOCOUTQ reads 0; with hvcmusl and a child at SCHED_FIFO 99 on the one processor, a drain of 1024 bytes that the child's SIGUSR1 interrupts fails with EINTR though the handler has SA_RESTART, while TIOCOUTQ counts bytes the driver's thread, kept off the processor by the child, has not handed to the port, and once the child is killed a drain returns 0 and TIOCOUTQ reads 0; and /dev/vport0p0, the console port's vport node, refuses an open with ENXIO",
      "source": "scenario"
     },
     {
      "assertion_id": "tty-out",
-     "checks": "the line written to /dev/hvc0 reaches the virtconsole's host's end as hvc-tty and a carriage return and newline, through the terminal's discipline",
+     "checks": "the line written to /dev/hvc0 reaches the virtconsole's host's end as hvc-tty and a carriage return and newline, through the terminal's discipline, before hvcmusl exits, since its tcdrain waits for it",
      "source": "scenario"
     },
     {
