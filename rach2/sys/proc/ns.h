@@ -540,8 +540,14 @@ struct ns_common *nsfs_ns(const struct fd_entry *e);
 
 /* What the other subsystems do for their namespaces, defined with them. */
 
+/** Wait until no remount holds off the making of a mount namespace
+ * (`vfs_mntns_hold` in fs/vfs.h), as a namespace's making does before it
+ * checks its limits; under the big lock, and a caller with no process does
+ * not wait (fs/vfs_ns.c). */
+void vfs_mntns_wait(void);
+
 /** Make the mount namespace of id `to` see every mount that of id `from`
- * sees, once no remount holds it off (`vfs_mntns_hold`), which may sleep:
+ * sees, after `vfs_mntns_wait` with no sleep since; it does not sleep:
  * 0, or -ENOMEM, after which `to` sees none (fs/vfs_ns.c). */
 int vfs_mntns_copy(uint32_t from, uint32_t to);
 

@@ -1148,13 +1148,20 @@ static int mntns_charge_ok(struct userns *owner, uint32_t uid)
 
 /** A mount namespace with the lowest free id, owned by `owner` and made by
  * the kernel's uid `uid`, whose mounts are those `from` has; NULL with
- * `*err` -ENOSPC past a limit of `mntns_charge_ok`, or -ENOMEM. */
+ * `*err` -ENOSPC past a limit of `mntns_charge_ok`, or -ENOMEM. It waits
+ * out a remount under way first (`vfs_mntns_wait`), and from the check of
+ * the limits to its joining `mnt_list`, which the next check counts,
+ * nothing sleeps, so that two makings cannot both pass the last free
+ * place, as Linux charges the namespace before it waits for the namespace
+ * lock (`alloc_mnt_ns`, fs/namespace.c). */
 static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, uint32_t uid,
                                int32_t *err)
 {
     struct mntns *ns;
-    uint32_t id = idset_first_free(&mnt_ids);
+    uint32_t id;
 
+    vfs_mntns_wait();
+    id = idset_first_free(&mnt_ids);
     if (!mntns_charge_ok(owner, uid)) {
         *err = -ENOSPC;
         return NULL;
