@@ -151,7 +151,7 @@ rach2/sys/fs/vfs.c:resolve_full nesting 5 one file system operation over the on-
 rach2/sys/fs/vfs.c:resolve_full params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are resolve_full's, which it passes on when the cached walk cannot finish
 rach2/sys/fs/vfs.c:walk_rest_link params 7 the parameters are walk_link's six and the start of the part of the path handed over
-rach2/sys/fs/vfs.c:bind_refs params 7 the parameters are one bind's source and target, each a place and its real path, and the mount a recursive bind skips
+rach2/sys/fs/vfs.c:bind_refs params 7 the parameters are one bind's source and target, each a place and what the walk recorded of it, and the mount a recursive bind skips
 
 
 rach2/sys/ipc/unix.c:build params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
