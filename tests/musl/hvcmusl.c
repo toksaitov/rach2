@@ -29,7 +29,10 @@
  * the host's end is closed, and refuses a second open; /dev/hvc0 is absent
  * and the log says console=hvc0 names no port. `tty`: /dev/hvc0 is the
  * terminal 229:0, which takes `hvc-tty` and a newline, and /dev/vport0p0,
- * the console port's vport node, refuses an open with ENXIO. `late`:
+ * the console port's vport node, refuses an open with ENXIO; the mode then
+ * sleeps 100 ms, in which khvcd moves the line to the port, since under KVM
+ * it would otherwise exit within a tick, before khvcd ran, to the debug
+ * shell, which runs no thread. `late`:
  * /dev/vport0p3 and /dev/virtio-ports/org.rach2.late are one device, which
  * takes `ping` and a newline and gives `pong` and a newline, the bytes the
  * host's end has, and polls writable. `gone`: the late port's nodes are
@@ -448,6 +451,7 @@ static int tty_rows(void)
         return fail("the terminal does not take a line");
     }
     close(fd);
+    usleep(100000); /* interval: khvcd, which the write woke, moves the line meanwhile */
     fd = open("/dev/vport0p0", O_RDWR);
     if (fd >= 0 || errno != ENXIO) {
         return fail("the console port's vport node does not refuse an open with ENXIO");
