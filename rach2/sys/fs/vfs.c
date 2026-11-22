@@ -2177,7 +2177,6 @@ static int walk_done(const struct walk_rules *rules, const struct vfs_ref *cur, 
     return rc == 0 ? walk_keep_take(cur, (flags & VFS_WALK_LOCK) != 0, wc) : rc;
 }
 
-
 /** Whether the cached walk may stand on `mnt`: a type whose names the name
  * cache keeps, which a walk needs no namespace lock for and which looks
  * names up one at a time, and whose `getattr`, `hold` and `put` run without
@@ -3812,6 +3811,7 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_t
     struct filecache_was was;
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4377,6 +4377,7 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
     struct vfs_stat now;
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4459,6 +4460,7 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
 {
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4513,6 +4515,7 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     int watched;
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4542,6 +4545,7 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4565,6 +4569,7 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     int watched;
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4631,6 +4636,7 @@ static int rename_names(struct vfs_mount *mnt, void *olddir, const char *oldname
     void *victim;
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4716,6 +4722,7 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
     struct vfs_stat st;
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4743,6 +4750,7 @@ int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *
 {
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -4767,6 +4775,7 @@ int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
 {
     int rc;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -7290,7 +7299,7 @@ static void mount_gate(const struct vfs_mount *mnt)
 static int mount_new(const char *source, const char *target, const char *type, uint32_t flags,
                      const char *options, struct fd_kept **kept)
 {
-    const void *keeps;
+    const void *keeps = vfs_walk_keeps_mark();
     int pts = streq(type, "devpts");
     const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type
                                : pts               ? &vfs_devfs_type
@@ -7309,7 +7318,6 @@ static int mount_new(const char *source, const char *target, const char *type, u
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
-    keeps = vfs_walk_keeps_mark();
 again:
     vfs_walk_keeps_back(keeps);
     rc = vfs_resolve_fd(target, VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL, kept);
@@ -7386,6 +7394,7 @@ again:
         return rc;
     }
     m->mnt_rdonly = (m->flags & VFS_MS_RDONLY) != 0; /* a mount its type made read-only */
+    walk_gate(WALK_GATE_EFFECT);
     mount_state_set(m, VFS_ACTIVE);
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path, t->name,
          (flags & VFS_MS_RDONLY) ? ", read-only" : "");
@@ -8076,6 +8085,7 @@ static void bind_hold_publish(struct bind_hold *h, struct vfs_mount *m, struct v
 {
     void *node;
 
+    walk_gate(WALK_GATE_EFFECT);
     if (!h || (!h->node && !h->pin)) {
         mount_state_set(m, VFS_ACTIVE);
         return;

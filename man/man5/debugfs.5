@@ -573,10 +573,17 @@ where ext2 is about to load an inode no node in memory has, with the
 directory's lock let go;
 .Ql read ,
 where the block cache is about to read a block from its device, which a
-test only counts, since the reader may hold a directory's lock; or
+test only counts, since the reader may hold a directory's lock;
 .Ql kept ,
 where a call has let go of its walk's namespace lock and still uses what
-the walk found, which the walk keeps until the call ends.
+the walk found, which the walk keeps until the call ends;
+.Ql link ,
+where an open that creates has found its name missing and is about to
+look for a link there to create through; or
+.Ql effect ,
+where a change reaches the file system, which a test only counts: a
+creation, a removal, a rename, a truncation, a change of attributes, or
+the publication of a mount or a bind.
 .Ql release
 lets the stopped thread go on, as a signal does.
 .Ql begin

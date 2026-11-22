@@ -4672,6 +4672,7 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
     int tlen;
     int is_link;
 
+    walk_gate(WALK_GATE_LINK);
     tlen = vfs_resolve(0, name, VFS_WALK_PARENT | VFS_WALK_NOFOLLOW, &dir, leaf, sizeof(leaf));
     if (tlen != 0) {
         return tlen;

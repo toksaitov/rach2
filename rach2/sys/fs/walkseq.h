@@ -129,8 +129,12 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
  * memory has, with no node's lock held and its record not yet published
  * (`node_for`); the block cache is about to read a block from its device
  * (`fill_victim`), which a test only counts, since the reader may hold a
- * directory's lock; and a call has let go of its walk's namespace lock and
- * still uses the answer its walk keeps (`vfs_walk_unlock`). */
+ * directory's lock; a call has let go of its walk's namespace lock and
+ * still uses the answer its walk keeps (`vfs_walk_unlock`); an open that
+ * creates has found its name missing and is about to look for a link there
+ * to create through (`open_link_target`); and a change reaches the type,
+ * which a test only counts: a creation, a removal, a rename, a truncation,
+ * a change of attributes, or the publication of a mount or a bind. */
 #define WALK_GATE_FULL     0
 #define WALK_GATE_UNLOCKED 1
 #define WALK_GATE_MISS     2
@@ -143,7 +147,9 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
 #define WALK_GATE_LOAD     9
 #define WALK_GATE_READ     10
 #define WALK_GATE_KEPT     11
-#define WALK_GATE_EVENTS   12
+#define WALK_GATE_LINK     12
+#define WALK_GATE_EFFECT   13
+#define WALK_GATE_EVENTS   14
 
 /**
  * Count `event` for the thread the walk gate is armed for, and stop it at
