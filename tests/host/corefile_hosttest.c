@@ -2578,6 +2578,19 @@ struct vfs_mount_view *vfs_mount_view_of(const struct vfs_mount *m, uint32_t vie
     return NULL;
 }
 
+/** vfs_ns.c's: a call through a description judges by the only view here. */
+uint32_t vfs_view_enter(uint32_t view)
+{
+    (void)view;
+    return 0;
+}
+
+/** vfs_ns.c's: the end of `vfs_view_enter`, which changed nothing here. */
+void vfs_view_leave(uint32_t prev)
+{
+    (void)prev;
+}
+
 /** The SIGXFSZ of a row past RLIMIT_FSIZE, which no row reads. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
