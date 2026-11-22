@@ -1,0 +1,39 @@
+run-0 anchor spread 176 us
+late 109 1865.3 33.3 1904.4 5.8
+task 892.4 21.7  memory_instrumentation.mojom.ClientProcess
+task 914.1 0.1  memory_instrumentation.mojom.ClientProcess
+task 1864.8 3.1 chrome/browser/after_startup_task_utils.cc MaybeSignalStartupComplete
+task 1867.9 37.6  memory_instrumentation.mojom.ClientProcess
+task 1872.4 21.6 components/metrics/file_metrics_provider.cc RegisterSource
+task 1872.4 9.6 components/metrics/file_metrics_provider.cc RegisterSource
+task 1882.0 0.1 components/metrics/file_metrics_provider.cc RegisterSource
+task 1882.1 18.2 components/system_cpu/cpu_probe_linux.cc Update
+task 1895.4 4.9 components/system_cpu/cpu_probe_linux.cc Update
+task 1904.4 1.0 components/system_cpu/cpu_probe_linux.cc Update
+task 1905.5 0.2  memory_instrumentation.mojom.ClientProcess
+task 1905.6 0.0 components/system_cpu/cpu_probe_linux.cc Update
+task 1905.9 135.7 components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc LoadBlockList
+task 2107.0 1.2  memory_instrumentation.mojom.ClientProcess
+task 2200.2 0.0  memory_instrumentation.mojom.ClientProcess
+before {'timer_passes_late': '0', 'bkl_wait_us': '812432'}
+after {'timer_passes_late': '0', 'bkl_wait_us': '2970982'}
+run-1 anchor spread 108 us
+task -4155.6 23.4  memory_instrumentation.mojom.ClientProcess
+task -4132.2 0.1  memory_instrumentation.mojom.ClientProcess
+task -3766.1 2.0 chrome/browser/after_startup_task_utils.cc MaybeSignalStartupComplete
+task -3764.2 29.1  memory_instrumentation.mojom.ClientProcess
+task -3760.7 29.1 components/metrics/file_metrics_provider.cc RegisterSource
+task -3756.7 0.2 components/metrics/file_metrics_provider.cc RegisterSource
+task -3756.4 14.3 components/metrics/file_metrics_provider.cc RegisterSource
+task -3735.0 0.1  memory_instrumentation.mojom.ClientProcess
+task -3734.7 3.2 components/system_cpu/cpu_probe_linux.cc Update
+task -3731.5 2.9 components/system_cpu/cpu_probe_linux.cc Update
+task -3728.8 0.0 components/system_cpu/cpu_probe_linux.cc Update
+task -3728.5 0.0 components/system_cpu/cpu_probe_linux.cc Update
+task -3728.3 199.5 components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc LoadBlockList
+task -3481.4 0.0  memory_instrumentation.mojom.ClientProcess
+task -3419.5 0.0  memory_instrumentation.mojom.ClientProcess
+task 1559.1 29.0  memory_instrumentation.mojom.ClientProcess
+task 1588.1 0.1  memory_instrumentation.mojom.ClientProcess
+before {'timer_passes_late': '0', 'bkl_wait_us': '2970982'}
+after {'timer_passes_late': '1', 'bkl_wait_us': '5369546'}

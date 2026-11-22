@@ -8,6 +8,9 @@
 'use strict';
 (async () => {
  const result = {ok: false};
+ const query = new URLSearchParams(location.search);
+ const swiftshader = query.has('swiftshader');
+ const traceAll = swiftshader || query.has('trace-all');
  // Each setup step's time in ms after the document's time origin, and that
  // origin in ms of the Unix epoch, to place the frames on a sampler's clock.
  result.timeOrigin = performance.timeOrigin;
@@ -15,13 +18,15 @@
  const phase = name => { phases[name] = Math.round(performance.now() * 10) / 10; };
  try {
   phase('begin');
-  const adapter = await navigator.gpu.requestAdapter();
+  const adapter = await navigator.gpu.requestAdapter(swiftshader ? {forceFallbackAdapter: true} : undefined);
   phase('adapter');
   if (!adapter) throw Error('no WebGPU adapter');
   const info = adapter.info;
   result.adapter = {vendor: info.vendor, architecture: info.architecture,
    device: info.device, description: info.description, isFallbackAdapter: info.isFallbackAdapter};
-  if (info.vendor !== 'intel' || info.architecture !== 'gen-7' || info.isFallbackAdapter)
+  if (swiftshader) {
+   if (info.architecture !== 'swiftshader') throw Error('no SwiftShader adapter');
+  } else if (info.vendor !== 'intel' || info.architecture !== 'gen-7' || info.isFallbackAdapter)
    throw Error('no native Intel gen-7 adapter');
   const device = await adapter.requestDevice();
   phase('device');
@@ -57,9 +62,8 @@
     try {
      times.push(Math.round((now - start) * 10) / 10);
      starts.push(Math.round((performance.now() - start) * 10) / 10);
-     // A trace's user timing marks give, on its own clock, the first 16
-     // frames, which stall.py searches for the slowest gap.
-     if (frames < 16) performance.mark('hasvk-frame-' + frames);
+     // stall.py searches the first 16 frames. The startup trace marks every frame.
+     if (traceAll || frames < 16) performance.mark('hasvk-frame-' + frames);
      if (result.error) throw Error(result.error);
      const encoder = device.createCommandEncoder();
      const pass = encoder.beginRenderPass({colorAttachments: [{

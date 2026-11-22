@@ -1,0 +1,193 @@
+run 0 (bare): {"after_frame": 1, "callback_end_ms": 26.9, "callback_start_ms": 26.2, "first_gaps_ms": [16.7, 50.0, 16.6, 16.6, 16.7, 16.7, 16.7, 16.6, 16.7, 16.7, 16.6, 16.7, 16.6, 16.7, 16.6], "frames": 480, "gap_ms": 50.0, "kind": "bare", "late_after_steady": 1, "next_start_ms": 82.5, "next_time_ms": 75.4, "phases": {"adapter": 57.4, "begin": 29.2, "configured": 66.7, "device": 65.1, "pipeline": 67}, "run": 0, "seconds": 8.041, "steady_fps": 59.89}
+
+run 1 (watched): {"after_frame": 1, "callback_end_ms": 26.2, "callback_start_ms": 25.9, "first_gaps_ms": [16.6, 66.7, 16.7, 16.6, 16.7, 16.6, 16.7, 16.7, 16.7, 16.6, 16.6, 16.8, 16.6, 16.6, 16.7], "frames": 480, "gap_ms": 66.7, "kind": "watched", "late_after_steady": 1, "next_start_ms": 105.4, "next_time_ms": 90, "phases": {"adapter": 89.9, "begin": 41.8, "configured": 97.3, "device": 95.5, "pipeline": 97.5}, "run": 1, "seconds": 8.055100000000007, "steady_fps": 59.89}
+callback 1 returned 0.3 ms after its entry; callback 2 entered 79.2 ms after that return
+# threadwatch: monotonic 75.333748056 realtime 1795089373.333748154 interval 1000 us
+# threadwatch: 1710 passes in 13060 ms, mean pass 6515 us, longest 61639 us at 80.760121387, widest gap between passes 62721 us at 80.760121387, 3 threads
+threads at 79.198299806, 20 ms before the gap:
+T 75.333770428 452 453 weston:disk$0 S 0/0/82 futex_wait_queue | 202 0x56126c890f20 0x189 0x8 0x0 0x0 0xffffffff 0x7eb67d246a88 0x7eb68ab8d46e
+T 75.333770428 452 454 weston:gdrv0 S 0/0/2 futex_wait_queue | 202 0x7eb67ee8a5f8 0x189 0x0 0x0 0x0 0xffffffff 0x7eb67c98ca88 0x7eb68ab8d46e
+T 76.301009246 774 774 chromium S 0/0/68 do_wait | 61 0xffffffffffffffff 0x7ffed3edd338 0x0 0x0 0x0 0x0 0x7ffed3edd2b0 0x7e439b6d0d12
+T 76.305370351 762 762 chromium R 0/1/529 0 | running
+T 76.451943227 789 789 chromium S 0/0/71 do_wait | 61 0xffffffffffffffff 0x7fff385e55c8 0x0 0x0 0x0 0x0 0x7fff385e5540 0x7e4cd7705d12
+T 76.737965384 777 799 sandbox_ipc_thr S 0/0/10 do_sys_poll | 7 0x7e308c6461f0 0x2 0xffffffffffffffff 0x0 0x0 0x0 0x7e308c645fe8 0x7e309b18e46e
+T 76.891505685 801 801 chromium S 4/10/4909 do_sys_poll | 271 0x7ffdb1e378f0 0x1 0x0 0x7ffdb1e37a30 0x8 0x0 0x7ffdb1e377f0 0x7ec09d8aed12
+T 76.904746912 802 802 chromium S 2/12/4918 do_wait | 247 0x0 0x0 0x7fffce728260 0x4 0x0 0x0 0x7fffce728200 0x7ee22b0dfd12
+T 76.913416366 777 805 chromium S 0/0/6 do_wait | 61 0x322 0x7e30973fe1c8 0x0 0x0 0x0 0x0 0x7e30973fe128 0x7e309b18e46e
+T 76.913416366 777 806 HangWatcher S 0/0/2 futex_wait_queue | 202 0x7e3096bfcfe0 0x89 0x0 0x7e3096bfce58 0x0 0xffffffff 0x7e3096bfcd48 0x7e309b18e46e
+T 76.913416366 777 807 PerfettoTrace S 0/0/14 ep_poll | 232 0x15 0x7e308be44e90 0x10 0x216c9 0x0 0x0 0x7e308be44d38 0x7e309b18e46e
+T 76.913416366 777 811 ThreadPoolPrese S 0/0/3 futex_wait_queue | 202 0x7e3089e40fa0 0x89 0x0 0x7e3089e40e18 0x0 0xffffffff 0x7e3089e40d08 0x7e309b18e46e
+T 76.913416366 777 812 ThreadPoolAudio S 0/0/3 futex_wait_queue | 202 0x7e308963ffa0 0x89 0x0 0x7e308963fe18 0x0 0xffffffff 0x7e308963fd08 0x7e309b18e46e
+T 76.913416366 777 815 inotify_reader S 0/0/2 do_sys_poll | 7 0x7e3087e3d1f8 0x1 0xffffffffffffffff 0x0 0x0 0x0 0x7e3087e3d0d8 0x7e309b18e46e
+T 77.026744436 777 819 pool-spawner S 0/0/5 futex_wait_queue | 202 0x24040023a590 0x80 0x1 0x0 0x1 0x24040023a580 0x7e30839fe148 0x7e309b203d09
+T 77.026744436 777 820 gmain S 0/0/1 do_sys_poll | 271 0x24040018d600 0x1 0x0 0x0 0x8 0x0 0x7e3085dfe0c8 0x7e309b18e46e
+T 77.186978961 777 814 ThreadPoolSingl S 0/0/25 futex_wait_queue | 202 0x7e308863dfa0 0x89 0x0 0x7e308863de18 0x0 0xffffffff 0x7e308863dd08 0x7e309b18e46e
+T 77.186978961 777 817 MemoryInfra S 0/0/49 futex_wait_queue | 202 0x7e3086e3ae40 0x89 0x0 0x7e3086e3acb8 0x0 0xffffffff 0x7e3086e3aba8 0x7e309b18e46e
+T 77.186978961 777 822 CrShutdownDetec S 0/0/3 pipe_read | 0 0x23 0x7e3084dfc0d4 0x4 0x0 0x0 0x0 0x7e3084dfc058 0x7e309b18e46e
+T 77.207121939 777 829 VideoCaptureThr S 0/0/7 futex_wait_queue | 202 0x7e30811f8e40 0x189 0x0 0x0 0x0 0xffffffff 0x7e30811f8c58 0x7e309b18e46e
+T 77.207121939 828 830 PerfettoTrace S 0/0/26 ep_poll | 232 0x3 0x7ec099ffde90 0x10 0x217f3 0x0 0x0 0x7ec099ffdd38 0x7ec09d8ba46e
+T 77.397992131 831 844 chromium S 0/0/6 futex_wait_queue | 202 0x7e0b09bfdfe0 0x89 0x0 0x7e0b09bfde58 0x0 0xffffffff 0x7e0b09bfdd48 0x7e0b0d4ba46e
+T 77.397992131 833 833 chromium S 0/1/369 futex_wait_queue | 202 0x7fffce727f80 0x89 0x0 0x7fffce727df8 0x0 0xffffffff 0x7fffce727ce8 0x7ee22b0eb46e
+T 77.397992131 833 835 PerfettoTrace S 0/0/23 ep_poll | 232 0x3 0x7ee2277fde90 0x10 0x218b5 0x0 0x0 0x7ee2277fdd38 0x7ee22b0eb46e
+T 77.397992131 833 836 HangWatcher S 0/0/8 futex_wait_queue | 202 0x7ee226ffcfe0 0x89 0x0 0x7ee226ffce58 0x0 0xffffffff 0x7ee226ffcd48 0x7ee22b0eb46e
+T 77.397992131 833 837 ThreadPoolServi S 0/0/6 ep_poll | 232 0xd 0x7ee2267fbe90 0x10 0x218b7 0x0 0x0 0x7ee2267fbd38 0x7ee22b0eb46e
+T 77.397992131 833 840 ThreadPoolPrese S 0/0/3 futex_wait_queue | 202 0x7ee2257f9fa0 0x89 0x0 0x7ee2257f9e18 0x0 0xffffffff 0x7ee2257f9d08 0x7ee22b0eb46e
+T 77.397992131 833 841 ThreadPoolAudio S 0/0/6 futex_wait_queue | 202 0x7ee224ff8fa0 0x89 0x0 0x7ee224ff8e18 0x0 0xffffffff 0x7ee224ff8d08 0x7ee22b0eb46e
+T 77.419067816 831 849 PerfettoTrace S 0/0/28 ep_poll | 232 0x6 0x7e0b093fce90 0x10 0x218c0 0x0 0x0 0x7e0b093fcd38 0x7e0b0d4ba46e
+T 77.419067816 831 854 ThreadPoolPrese S 0/0/5 futex_wait_queue | 202 0x7e0b07bf9fa0 0x89 0x0 0x7e0b07bf9e18 0x0 0xffffffff 0x7e0b07bf9d08 0x7e0b0d4ba46e
+T 77.419067816 831 855 ThreadPoolAudio S 0/0/4 futex_wait_queue | 202 0x7e0b073f8fa0 0x89 0x0 0x7e0b073f8e18 0x0 0xffffffff 0x7e0b073f8d08 0x7e0b0d4ba46e
+T 77.419067816 831 860 inotify_reader S 0/0/3 do_sys_poll | 7 0x7e0b05bf61f8 0x1 0xffffffffffffffff 0x0 0x0 0x0 0x7e0b05bf60d8 0x7e0b0d4ba46e
+T 77.419067816 833 846 ThreadPoolForeg S 0/0/6 futex_wait_queue | 202 0x7ee223ff6fa0 0x89 0x0 0x7ee223ff6e18 0x0 0xffffffff 0x7ee223ff6d08 0x7ee22b0eb46e
+T 77.442265428 777 838 chromium S 0/0/15 futex_wait_queue | 202 0x7e30801f6fa0 0x89 0x0 0x7e30801f6e18 0x0 0xffffffff 0x7e30801f6d08 0x7e309b18e46e
+T 77.442265428 828 863 chromium:gdrv0 S 0/0/1 futex_wait_queue | 202 0x25ac002045e8 0x189 0x0 0x0 0x0 0xffffffff 0x7ec08c045048 0x7ec09d8ba46e
+T 77.510834876 777 821 pool-0 S 0/0/6 futex_wait_queue | 202 0x24040023a540 0x80 0x0 0x7e30855fd150 0x4d 0xe 0x7e30855fd128 0x7e309b203d09
+T 77.528679513 777 866 [pango] fontcon S 0/0/3 futex_wait_queue | 202 0x2404007a0f10 0x80 0x1 0x0 0x240400d2c540 0x2404007a0f00 0x7e307a9ec148 0x7e309b203d09
+T 77.528679513 828 832 GpuWatchdog S 0/0/11 futex_wait_queue | running
+T 77.528679513 828 867 chromiu:disk$0 S 0/0/7 futex_wait_queue | 202 0x25ac000506a0 0x189 0x0 0x0 0x0 0xffffffff 0x7ec08a4bd048 0x7ec09d8ba46e
+T 77.553866857 828 868 GpuWatchdog S 0/0/1 futex_wait_queue | 202 0x7ec099ffde40 0x89 0x0 0x7ec099ffdcb8 0x0 0xffffffff 0x7ec099ffdba8 0x7ec09d8ba46e
+T 77.553866857 828 869 PerfettoTrace S 0/0/1 ep_poll | 232 0x3 0x7ec0997fce90 0x10 0x2193e 0x0 0x0 0x7ec0997fcd38 0x7ec09d8ba46e
+T 77.553866857 828 870 HangWatcher S 0/0/2 futex_wait_queue | 202 0x7ec089cbbfe0 0x89 0x0 0x7ec089cbbe58 0x0 0xffffffff 0x7ec089cbbd48 0x7ec09d8ba46e
+T 77.553866857 828 872 ThreadPoolForeg S 0/0/21 futex_wait_queue | 202 0x7ec088cb9fa0 0x89 0x0 0x7ec088cb9e18 0x0 0xffffffff 0x7ec088cb9d08 0x7ec09d8ba46e
+T 77.553866857 828 873 ThreadPoolPrese S 0/0/3 futex_wait_queue | 202 0x7ec0884b8fa0 0x89 0x0 0x7ec0884b8e18 0x0 0xffffffff 0x7ec0884b8d08 0x7ec09d8ba46e
+T 77.553866857 828 874 ThreadPoolAudio S 0/0/4 futex_wait_queue | 202 0x7ec087cb7fa0 0x89 0x0 0x7ec087cb7e18 0x0 0xffffffff 0x7ec087cb7d08 0x7ec09d8ba46e
+T 77.553866857 828 877 chromi:traceq0 S 0/0/1 futex_wait_queue | 202 0x25ac0013f710 0x189 0x0 0x0 0x0 0xffffffff 0x7ec086475048 0x7ec09d8ba46e
+T 77.570014889 777 858 ThreadPoolForeg S 0/0/22 futex_wait_queue | 202 0x7e307c9effa0 0x89 0x0 0x7e307c9efe18 0x0 0xffffffff 0x7e307c9efd08 0x7e309b18e46e
+T 77.581487444 777 843 ThreadPoolForeg S 0/0/39 futex_wait_queue | 202 0x7e307f1f4fa0 0x89 0x0 0x7e307f1f4e18 0x0 0xffffffff 0x7e307f1f4d08 0x7e309b18e46e
+T 77.581487444 777 848 ThreadPoolForeg S 0/1/57 futex_wait_queue | 202 0x7e307e1f2fa0 0x89 0x0 0x7e307e1f2e18 0x0 0xffffffff 0x7e307e1f2d08 0x7e309b18e46e
+T 77.581487444 777 857 ThreadPoolForeg S 0/0/24 futex_wait_queue | 202 0x7e307d1f0fa0 0x89 0x0 0x7e307d1f0e18 0x0 0xffffffff 0x7e307d1f0d08 0x7e309b18e46e
+T 77.581487444 777 862 ThreadPoolForeg S 0/0/19 futex_wait_queue | 202 0x7e307c1eefa0 0x89 0x0 0x7e307c1eee18 0x0 0xffffffff 0x7e307c1eed08 0x7e309b18e46e
+T 77.581487444 777 864 ThreadPoolForeg S 0/0/30 futex_wait_queue | 202 0x7e307b9edfa0 0x89 0x0 0x7e307b9ede18 0x0 0xffffffff 0x7e307b9edd08 0x7e309b18e46e
+T 77.595991396 777 823 ThreadPoolForeg S 0/5/73 futex_wait_queue | 202 0x7e30845fafa0 0x89 0x0 0x7e30845fae18 0x0 0xffffffff 0x7e30845fad08 0x7e309b18e46e
+T 77.595991396 777 847 ThreadPoolForeg S 0/0/64 futex_wait_queue | 202 0x7e307e9f3fa0 0x89 0x0 0x7e307e9f3e18 0x0 0xffffffff 0x7e307e9f3d08 0x7e309b18e46e
+T 77.595991396 777 850 ThreadPoolForeg S 0/0/23 futex_wait_queue | 202 0x7e307d9f1fa0 0x89 0x0 0x7e307d9f1e18 0x0 0xffffffff 0x7e307d9f1d08 0x7e309b18e46e
+T 77.603770428 833 878 ThreadPoolForeg S 0/0/6 futex_wait_queue | 202 0x7ee2237f5fa0 0x89 0x0 0x7ee2237f5e18 0x0 0xffffffff 0x7ee2237f5d08 0x7ee22b0eb46e
+T 77.643271106 777 813 ThreadPoolForeg S 1/3/147 futex_wait_queue | 202 0x7e3088e3efa0 0x89 0x0 0x7e3088e3ee18 0x0 0xffffffff 0x7e3088e3ed08 0x7e309b18e46e
+T 77.657668566 777 825 ThreadPoolForeg S 0/5/63 futex_wait_queue | 202 0x7e30829fbfa0 0x89 0x0 0x7e30829fbe18 0x0 0xffffffff 0x7e30829fbd08 0x7e309b18e46e
+T 77.657668566 881 882 PerfettoTrace S 0/0/23 ep_poll | 232 0x3 0x7ee22767de90 0x10 0x219a1 0x0 0x0 0x7ee22767dd38 0x7ee22b0eb46e
+T 77.657668566 881 885 ThreadPoolPrese S 0/0/6 futex_wait_queue | 202 0x7ee225e7afa0 0x89 0x0 0x7ee225e7ae18 0x0 0xffffffff 0x7ee225e7ad08 0x7ee22b0eb46e
+T 77.657668566 881 886 ThreadPoolAudio S 0/0/2 futex_wait_queue | 202 0x7ee225679fa0 0x89 0x0 0x7ee225679e18 0x0 0xffffffff 0x7ee225679d08 0x7ee22b0eb46e
+T 77.687298270 777 834 ThreadPoolForeg S 0/1/47 futex_wait_queue | 202 0x7e30809f7fa0 0x89 0x0 0x7e30809f7e18 0x0 0xffffffff 0x7e30809f7d08 0x7e309b18e46e
+T 77.687298270 881 889 Compositor S 0/0/21 ep_poll | 232 0x18 0x7ee1a3e6deb0 0x10 0x219d8 0x0 0x0 0x7ee1a3e6dd58 0x7ee22b0eb46e
+T 77.687298270 881 890 ThreadPoolSingl S 0/0/4 futex_wait_queue | 202 0x7ee1a366cfa0 0x89 0x0 0x7ee1a366ce18 0x0 0xffffffff 0x7ee1a366cd08 0x7ee22b0eb46e
+T 77.687298270 881 891 HangWatcher S 0/0/5 futex_wait_queue | 202 0x7ee1a2e6bfe0 0x89 0x0 0x7ee1a2e6be58 0x0 0xffffffff 0x7ee1a2e6bd48 0x7ee22b0eb46e
+T 77.714823924 777 824 ThreadPoolForeg S 1/5/127 futex_wait_queue | 202 0x7e30831fcfa0 0x89 0x0 0x7e30831fce18 0x0 0xffffffff 0x7e30831fcd08 0x7e309b18e46e
+T 77.714823924 777 842 ThreadPoolForeg S 0/3/42 futex_wait_queue | 202 0x7e307f9f5fa0 0x89 0x0 0x7e307f9f5e18 0x0 0xffffffff 0x7e307f9f5d08 0x7e309b18e46e
+T 77.763094604 804 804 chromium S 0/2/278 do_sys_poll | 271 0x7fffce7180e0 0x1 0x0 0x7fffce718220 0x8 0x0 0x7fffce717fe0 0x7ee22b0dfd12
+T 77.763094604 892 894 PerfettoTrace S 0/0/22 ep_poll | 232 0x3 0x7ee22767de90 0x10 0x21a1f 0x0 0x0 0x7ee22767dd38 0x7ee22b0eb46e
+T 77.763094604 892 897 ThreadPoolPrese S 0/0/6 futex_wait_queue | 202 0x7ee225e7afa0 0x89 0x0 0x7ee225e7ae18 0x0 0xffffffff 0x7ee225e7ad08 0x7ee22b0eb46e
+T 77.763094604 892 898 ThreadPoolAudio S 0/0/2 futex_wait_queue | 202 0x7ee225679fa0 0x89 0x0 0x7ee225679e18 0x0 0xffffffff 0x7ee225679d08 0x7ee22b0eb46e
+T 77.763094604 893 900 chromium S 0/0/23 ep_poll | 232 0x3 0x7ee22767de90 0x10 0x21a27 0x0 0x0 0x7ee22767dd38 0x7ee22b0eb46e
+T 77.792674901 893 901 ThreadPoolServi S 0/0/9 ep_poll | 232 0xd 0x7ee226e7ce90 0x10 0x21a28 0x0 0x0 0x7ee226e7cd38 0x7ee22b0eb46e
+T 77.792674901 893 902 ThreadPoolForeg S 0/0/24 futex_wait_queue | 202 0x7ee22667bfa0 0x89 0x0 0x7ee22667be18 0x0 0xffffffff 0x7ee22667bd08 0x7ee22b0eb46e
+T 77.792674901 893 903 ThreadPoolPrese S 0/0/6 futex_wait_queue | 202 0x7ee225e7afa0 0x89 0x0 0x7ee225e7ae18 0x0 0xffffffff 0x7ee225e7ad08 0x7ee22b0eb46e
+T 77.792674901 893 904 ThreadPoolAudio S 0/0/2 futex_wait_queue | 202 0x7ee225679fa0 0x89 0x0 0x7ee225679e18 0x0 0xffffffff 0x7ee225679d08 0x7ee22b0eb46e
+T 77.792674901 893 907 ThreadPoolForeg S 0/0/17 futex_wait_queue | 202 0x7ee224677fa0 0x89 0x0 0x7ee224677e18 0x0 0xffffffff 0x7ee224677d08 0x7ee22b0eb46e
+T 77.826803053 892 909 ThreadPoolSingl S 0/0/7 futex_wait_queue | 202 0x7ee1a366cfa0 0x89 0x0 0x7ee1a366ce18 0x0 0xffffffff 0x7ee1a366cd08 0x7ee22b0eb46e
+T 77.826803053 892 910 HangWatcher S 0/0/5 futex_wait_queue | 202 0x7ee1a2e6bfe0 0x89 0x0 0x7ee1a2e6be58 0x0 0xffffffff 0x7ee1a2e6bd48 0x7ee22b0eb46e
+T 77.826803053 893 911 Compositor S 0/0/56 ep_poll | 232 0x18 0x7ee1a3e6deb0 0x10 0x21a57 0x0 0x0 0x7ee1a3e6dd58 0x7ee22b0eb46e
+T 77.826803053 893 912 ThreadPoolSingl S 0/0/5 futex_wait_queue | 202 0x7ee1a366cfa0 0x89 0x0 0x7ee1a366ce18 0x0 0xffffffff 0x7ee1a366cd08 0x7ee22b0eb46e
+T 77.826803053 893 913 HangWatcher S 0/0/7 futex_wait_queue | 202 0x7ee1a2e6bfe0 0x89 0x0 0x7ee1a2e6be58 0x0 0xffffffff 0x7ee1a2e6bd48 0x7ee22b0eb46e
+T 77.885426451 831 831 chromium S 2/10/5114 futex_wait_queue | 202 0x7ffdf1858790 0x89 0x0 0x7ffdf1858608 0x0 0xffffffff 0x7ffdf18584f8 0x7e0b0d4ba46e
+T 77.885426451 833 839 ThreadPoolForeg S 0/1/52 futex_wait_queue | 202 0x7ee225ffafa0 0x89 0x0 0x7ee225ffae18 0x0 0xffffffff 0x7ee225ffad08 0x7ee22b0eb46e
+T 77.885426451 833 845 Chrome_ChildIOT S 1/3/46 ep_poll | 232 0x12 0x7ee2247f7e70 0x10 0x218b8 0x0 0x0 0x7ee2247f7d18 0x7ee22b0eb46e
+T 77.963801066 831 861 ThreadPoolForeg S 0/2/30 futex_wait_queue | 202 0x7e0b053f4fa0 0x89 0x0 0x7e0b053f4e18 0x0 0xffffffff 0x7e0b053f4d08 0x7e0b0d4ba46e
+T 78.056829441 881 881 chromium R 5/6/3099 0 | running
+T 78.133607464 828 914 ThreadPoolSingl S 0/0/27 futex_wait_queue | 202 0x7ec085a73fa0 0x89 0x0 0x7ec085a73e18 0x0 0xffffffff 0x7ec085a73d08 0x7ec09d8ba46e
+T 78.133607464 831 859 ThreadPoolForeg S 0/4/46 futex_wait_queue | 202 0x7e0b063f6fa0 0x89 0x0 0x7e0b063f6e18 0x0 0xffffffff 0x7e0b063f6d08 0x7e0b0d4ba46e
+T 78.174185970 828 916 ThreadPoolForeg S 0/0/18 futex_wait_queue | 202 0x7ec0851f2fa0 0x89 0x0 0x7ec0851f2e18 0x0 0xffffffff 0x7ec0851f2d08 0x7ec09d8ba46e
+T 78.223205515 917 918 PerfettoTrace S 0/0/24 ep_poll | 232 0x3 0x7ee22767de90 0x10 0x21bc3 0x0 0x0 0x7ee22767dd38 0x7ee22b0eb46e
+T 78.223205515 917 919 ThreadPoolServi S 0/0/9 ep_poll | 232 0xd 0x7ee226e7ce90 0x10 0x21bc4 0x0 0x0 0x7ee226e7cd38 0x7ee22b0eb46e
+T 78.223205515 917 920 ThreadPoolForeg S 0/0/24 futex_wait_queue | 202 0x7ee22667bfa0 0x89 0x0 0x7ee22667be18 0x0 0xffffffff 0x7ee22667bd08 0x7ee22b0eb46e
+T 78.223205515 917 921 ThreadPoolPrese S 0/0/6 futex_wait_queue | 202 0x7ee225e7afa0 0x89 0x0 0x7ee225e7ae18 0x0 0xffffffff 0x7ee225e7ad08 0x7ee22b0eb46e
+T 78.223205515 917 922 ThreadPoolAudio S 0/0/2 futex_wait_queue | 202 0x7ee225679fa0 0x89 0x0 0x7ee225679e18 0x0 0xffffffff 0x7ee225679d08 0x7ee22b0eb46e
+T 78.223205515 917 923 Chrome_ChildIOT S 0/0/46 ep_poll | 232 0x12 0x7ee224e78e70 0x10 0x21bc6 0x0 0x0 0x7ee224e78d18 0x7ee22b0eb46e
+T 78.223205515 917 924 ThreadPoolForeg S 0/0/16 futex_wait_queue | 202 0x7ee224677fa0 0x89 0x0 0x7ee224677e18 0x0 0xffffffff 0x7ee224677d08 0x7ee22b0eb46e
+T 78.261303147 893 893 chromium S 6/6/3133 futex_wait_queue | 202 0x7fffce728280 0x89 0x0 0x7fffce7280f8 0x0 0xffffffff 0x7fffce727fe8 0x7ee22b0eb46e
+T 78.261303147 893 905 Chrome_ChildIOT S 1/3/139 ep_poll | 232 0x12 0x7ee224e78e70 0x10 0x21a2a 0x0 0x0 0x7ee224e78d18 0x7ee22b0eb46e
+T 78.261303147 917 925 Compositor S 0/0/21 ep_poll | 232 0x18 0x7ee1a3e6deb0 0x10 0x21c17 0x0 0x0 0x7ee1a3e6dd58 0x7ee22b0eb46e
+T 78.261303147 917 926 ThreadPoolSingl S 0/0/6 futex_wait_queue | 202 0x7ee1a366cfa0 0x89 0x0 0x7ee1a366ce18 0x0 0xffffffff 0x7ee1a366cd08 0x7ee22b0eb46e
+T 78.308105343 917 927 HangWatcher S 0/0/6 futex_wait_queue | 202 0x7ee1a2e6bfe0 0x89 0x0 0x7ee1a2e6be58 0x0 0xffffffff 0x7ee1a2e6bd48 0x7ee22b0eb46e
+T 78.335682462 777 827 CompositorTileW S 0/0/30 futex_wait_queue | 202 0x240400045d84 0x189 0x0 0x0 0x0 0xffffffff 0x7e30819fa088 0x7e309b18e46e
+T 78.385751062 917 917 chromium S 4/2/2414 futex_wait_queue | 202 0x7fffce728280 0x89 0x0 0x7fffce7280f8 0x0 0xffffffff 0x7fffce727fe8 0x7ee22b0eb46e
+T 78.508160191 828 871 ThreadPoolServi S 0/0/7 ep_poll | 232 0x16 0x7ec0894bae90 0x10 0x3e8 0x0 0x0 0x7ec0894bad38 0x7ec09d8ba46e
+T 78.508160191 831 853 ThreadPoolForeg S 0/4/77 futex_wait_queue | 202 0x7e0b083fafa0 0x89 0x0 0x7e0b083fae18 0x0 0xffffffff 0x7e0b083fad08 0x7e0b0d4ba46e
+T 78.631488316 831 852 ThreadPoolServi S 0/0/8 ep_poll | 232 0xa 0x7e0b08bfbe90 0x10 0x218c2 0x0 0x0 0x7e0b08bfbd38 0x7e0b0d4ba46e
+T 78.631488316 881 883 ThreadPoolServi S 0/0/5 ep_poll | 232 0xd 0x7ee226e7ce90 0x10 0x4b0 0x0 0x0 0x7ee226e7cd38 0x7ee22b0eb46e
+T 78.661118933 892 935 ThreadPoolForeg S 0/0/17 futex_wait_queue | 202 0x7ee1a21fafa0 0x89 0x0 0x7ee1a21fae18 0x0 0xffffffff 0x7ee1a21fad08 0x7ee22b0eb46e
+T 78.694314678 452 452 weston S 32/29/9265 ep_poll | 232 0x4 0x7fff968bfdf0 0x20 0xffffffffffffffff 0x0 0x0 0x7fff968bfd18 0x7eb68ab8d46e
+T 78.694314678 777 808 ThreadPoolServi S 0/0/12 ep_poll | 232 0x17 0x7e308b643e90 0x10 0x212c 0x0 0x0 0x7e308b643d38 0x7e309b18e46e
+T 78.694314678 892 906 ThreadPoolForeg S 0/0/860 futex_wait_queue | 202 0x7ee224677fa0 0x89 0x0 0x7ee224677e18 0x0 0xffffffff 0x7ee224677d08 0x7ee22b0eb46e
+T 78.738670984 777 826 ThreadPoolSingl S 0/23/313 futex_wait_queue | 202 0x7e30821fafa0 0x89 0x0 0x7e30821fae18 0x0 0xffffffff 0x7e30821fad08 0x7e309b18e46e
+T 78.738670984 777 865 Chrome_DevTools S 0/0/13 ep_poll | 232 0x58 0x7e307b1ece90 0x10 0x21913 0x0 0x0 0x7e307b1ecd38 0x7e309b18e46e
+T 78.738670984 881 934 ThreadPoolForeg S 0/0/151 futex_wait_queue | 202 0x7ee1a1629fa0 0x89 0x0 0x7ee1a1629e18 0x0 0xffffffff 0x7ee1a1629d08 0x7ee22b0eb46e
+T 78.762642484 777 810 ThreadPoolForeg S 1/6/159 futex_wait_queue | 202 0x7e308a641fa0 0x89 0x0 0x7e308a641e18 0x0 0xffffffff 0x7e308a641d08 0x7e309b18e46e
+T 78.799744647 828 930 chromiu:disk$1 S 0/0/99 futex_wait_queue | 202 0x25ac0004e120 0x189 0x1b 0x0 0x0 0xffffffff 0x7ec084266048 0x7ec09d8ba46e
+T 78.835264014 828 932 chromiu:disk$3 S 0/0/39 futex_wait_queue | 202 0x25ac0004e124 0x189 0x1f 0x0 0x0 0xffffffff 0x7ec083264048 0x7ec09d8ba46e
+T 78.857389830 828 851 chromiu:disk$0 S 0/0/324 futex_wait_queue | 202 0x25ac0004e124 0x189 0x1f 0x0 0x0 0xffffffff 0x7ec08c846048 0x7ec09d8ba46e
+T 78.857389830 828 931 chromiu:disk$2 S 0/0/74 futex_wait_queue | 202 0x25ac0004e124 0x189 0x1f 0x0 0x0 0xffffffff 0x7ec083a65048 0x7ec09d8ba46e
+T 78.954378502 828 938 chromi:traceq0 S 0/0/1 futex_wait_queue | 202 0x25ac00546f10 0x189 0x0 0x0 0x0 0xffffffff 0x7ec0810ac048 0x7ec09d8ba46e
+T 79.055511681 777 880 CacheThread_Blo S 0/4/145 ep_poll | 232 0x64 0x7e307a1eae90 0x10 0x6fbc 0x0 0x0 0x7e307a1ead38 0x7e309b18e46e
+T 79.055511681 892 896 ThreadPoolForeg S 1/0/456 futex_wait_queue | 202 0x7ee22667bfa0 0x89 0x0 0x7ee22667be18 0x0 0xffffffff 0x7ee22667bd08 0x7ee22b0eb46e
+T 79.078328822 777 777 chromium R 88/72/18466 0 | running
+T 79.078328822 828 937 chromiu:disk$0 S 0/1/63 futex_wait_queue | 202 0x25ac011433a0 0x189 0x4 0x0 0x0 0xffffffff 0x7ec0818bd048 0x7ec09d8ba46e
+T 79.108781853 881 888 ThreadPoolForeg S 12/11/1841 futex_wait_queue | 202 0x7ee224677fa0 0x89 0x0 0x7ee224677e18 0x0 0xffffffff 0x7ee224677d08 0x7ee22b0eb46e
+T 79.131807200 828 828 chromium R 33/38/11504 0 | running
+T 79.131807200 831 856 Chrome_ChildIOT S 2/3/793 ep_poll | 232 0xe 0x7e0b06bf7e70 0x10 0xf1 0x0 0x0 0x7e0b06bf7d18 0x7e0b0d4ba46e
+T 79.131807200 892 895 ThreadPoolServi S 0/0/11 ep_poll | 232 0xd 0x7ee226e7ce90 0x10 0x3e8 0x0 0x0 0x7ee226e7cd38 0x7ee22b0eb46e
+T 79.153501037 777 809 ThreadPoolForeg S 4/12/655 futex_wait_queue | 202 0x7e308ae42fa0 0x89 0x0 0x7e308ae42e18 0x0 0xffffffff 0x7e308ae42d08 0x7e309b18e46e
+T 79.153501037 777 816 Chrome_IOThread R 8/18/932 0 | running
+T 79.153501037 892 899 Chrome_ChildIOT S 0/8/196 ep_poll | 232 0x12 0x7ee224e78e70 0x10 0x21a25 0x0 0x0 0x7ee224e78d18 0x7ee22b0eb46e
+T 79.178683906 828 875 Chrome_ChildIOT S 0/6/180 ep_poll | 232 0x18 0x7ec0874b6e70 0x10 0x2193f 0x0 0x0 0x7ec0874b6d18 0x7ec09d8ba46e
+T 79.178683906 828 876 VizCompositorTh S 2/2/182 futex_wait_queue | 202 0x7ec086cb5e40 0x89 0x0 0x7ec086cb5cb8 0x0 0xffffffff 0x7ec086cb5ba8 0x7ec09d8ba46e
+T 79.178683906 828 942 chromiu:disk$0 S 0/0/0 futex_wait_queue | 202 0x25ac011456a0 0x189 0x0 0x0 0x0 0xffffffff 0x7ec0810ac048 0x7ec09d8ba46e
+T 79.178683906 881 884 ThreadPoolForeg R 18/16/2512 0 | running
+T 79.178683906 881 887 Chrome_ChildIOT S 4/8/296 ep_poll | 232 0x12 0x7ee224e78e70 0x10 0x219a4 0x0 0x0 0x7ee224e78d18 0x7ee22b0eb46e
+T 79.178683906 881 915 ThreadPoolForeg R 10/8/1451 0 | running
+T 79.178683906 892 892 chromium S 14/10/4276 futex_wait_queue | 202 0x7fffce728280 0x89 0x0 0x7fffce7280f8 0x0 0xffffffff 0x7fffce727fe8 0x7ee22b0eb46e
+T 79.178683906 892 908 Compositor S 1/2/181 ep_poll | 232 0x15 0x7ee1a3e6deb0 0x10 0x8 0x0 0x0 0x7ee1a3e6dd58 0x7ee22b0eb46e
+changes from 20 ms before to 20 ms after the gap, which ends at 79.297799838:
+N 79.205933237 828 943 chromi:traceq0
+T 79.205933237 452 452 weston R 32/29/9265 0 | running
+T 79.205933237 777 777 chromium S 94/74/18591 do_sys_poll | 271 0x240401486760 0x4 0x7ffd8c294dd0 0x0 0x8 0x0 0x7ffd8c294d68 0x7e309b18e46e
+T 79.205933237 777 880 CacheThread_Blo S 0/4/152 ep_poll | 232 0x64 0x7e307a1eae90 0x10 0x6f15 0x0 0x0 0x7e307a1ead38 0x7e309b18e46e
+T 79.205933237 881 888 ThreadPoolForeg R 12/12/1907 0 | running
+T 79.205933237 892 908 Compositor S 1/2/182 ep_poll | 232 0x15 0x7ee1a3e6deb0 0x10 0x99 0x0 0x0 0x7ee1a3e6dd58 0x7ee22b0eb46e
+T 79.205933237 881 915 ThreadPoolForeg S 10/8/1492 futex_wait_queue | 202 0x7ee1a264afa0 0x89 0x0 0x7ee1a264ae18 0x0 0xffffffff 0x7ee1a264ad08 0x7ee22b0eb46e
+T 79.205933237 828 943 chromi:traceq0 S 0/0/1 futex_wait_queue | 202 0x25ac01c46f10 0x189 0x0 0x0 0x0 0xffffffff 0x7ec080263048 0x7ec09d8ba46e
+F 79.205933237 /proc/interrupts 53:	0	11061	0	0	MSI	i915
+F 79.205933237 /proc/stat timer_passes_late 3 ; bkl_wait_us 7917158 ; bkl_wait_max_us 51014 ; bkl_wait_max_holds 1 ; bkl_wait_max_hold take 0 337850 ; bkl_hold_max_us 337850 ; bkl_hold_max_entry take 0 ; bkl_hold_max_mark 1 0 ; bkl_hold_max_mark 2 0 ; bkl_hold_max_mark 4 0 ; bkl_hold_max_mark 8 0 ; bkl_hold_max_mark 16 0 ; latency_timer_us 1554450
+P 79.205933237 37125 us
+T 79.244165024 452 452 weston S 32/29/9265 ep_poll | 232 0x4 0x7fff968bfdf0 0x20 0xffffffffffffffff 0x0 0x0 0x7fff968bfd18 0x7eb68ab8d46e
+T 79.244165024 777 816 Chrome_IOThread S 8/18/932 ep_poll | 232 0x1b 0x7e308763be90 0x10 0xe13a 0x0 0x0 0x7e308763bd38 0x7e309b18e46e
+T 79.244165024 777 880 CacheThread_Blo S 0/4/159 ep_poll | running
+T 79.244165024 881 888 ThreadPoolForeg R 13/12/1953 0 | 202 0x7ee224677fa0 0x89 0x0 0x7ee224677e18 0x0 0xffffffff 0x7ee224677d08 0x7ee22b0eb46e
+F 79.244165024 /proc/interrupts 53:	0	11063	0	0	MSI	i915
+F 79.244165024 /proc/stat timer_passes_late 3 ; bkl_wait_us 7953099 ; bkl_wait_max_us 51014 ; bkl_wait_max_holds 1 ; bkl_wait_max_hold take 0 337850 ; bkl_hold_max_us 337850 ; bkl_hold_max_entry take 0 ; bkl_hold_max_mark 1 0 ; bkl_hold_max_mark 2 0 ; bkl_hold_max_mark 4 0 ; bkl_hold_max_mark 8 0 ; bkl_hold_max_mark 16 0 ; latency_timer_us 1554450
+G 79.205933237 38231 us
+P 79.244165024 28623 us
+T 79.273887480 777 777 chromium S 96/74/18592 0 | running
+T 79.273887480 777 816 Chrome_IOThread S 9/18/937 ep_poll | 232 0x1b 0x7e308763be90 0x10 0xe11e 0x0 0x0 0x7e308763bd38 0x7e309b18e46e
+T 79.273887480 777 880 CacheThread_Blo S 0/4/159 ep_poll | 232 0x64 0x7e307a1eae90 0x10 0x6ee3 0x0 0x0 0x7e307a1ead38 0x7e309b18e46e
+T 79.273887480 881 884 ThreadPoolForeg S 20/18/2649 0 | running
+T 79.273887480 881 887 Chrome_ChildIOT R 4/9/296 ep_poll | 232 0x12 0x7ee224e78e70 0x10 0x219a4 0x0 0x0 0x7ee224e78d18 0x7ee22b0eb46e
+T 79.273887480 881 888 ThreadPoolForeg S 13/12/1959 futex_wait_queue | 202 0x7ee224677fa0 0x89 0x0 0x7ee224677e18 0x0 0xffffffff 0x7ee224677d08 0x7ee22b0eb46e
+T 79.273887480 828 942 chromiu:disk$0 S 0/0/58 futex_wait_queue | 202 0x25ac011456a0 0x189 0x4 0x0 0x0 0xffffffff 0x7ec0810ac048 0x7ec09d8ba46e
+F 79.273887480 /proc/interrupts 53:	0	11064	0	0	MSI	i915
+F 79.273887480 /proc/stat timer_passes_late 3 ; bkl_wait_us 7984296 ; bkl_wait_max_us 51014 ; bkl_wait_max_holds 1 ; bkl_wait_max_hold take 0 337850 ; bkl_hold_max_us 337850 ; bkl_hold_max_entry take 0 ; bkl_hold_max_mark 1 0 ; bkl_hold_max_mark 2 0 ; bkl_hold_max_mark 4 0 ; bkl_hold_max_mark 8 0 ; bkl_hold_max_mark 16 0 ; latency_timer_us 1554450
+G 79.244165024 29722 us
+P 79.273887480 23299 us
+T 79.298303551 777 777 chromium R 96/74/18592 0 | running
+T 79.298303551 777 816 Chrome_IOThread S 9/19/937 ep_poll | 232 0x1b 0x7e308763be90 0x10 0xe105 0x0 0x0 0x7e308763bd38 0x7e309b18e46e
+T 79.298303551 777 880 CacheThread_Blo S 0/4/160 ep_poll | 232 0x64 0x7e307a1eae90 0x10 0x6eb6 0x0 0x0 0x7e307a1ead38 0x7e309b18e46e
+T 79.298303551 881 884 ThreadPoolForeg S 20/19/2669 futex_wait_queue | 202 0x7ee22667bfa0 0x89 0x0 0x7ee22667be18 0x0 0xffffffff 0x7ee22667bd08 0x7ee22b0eb46e
+T 79.298303551 881 887 Chrome_ChildIOT S 4/9/296 ep_poll | 232 0x12 0x7ee224e78e70 0x10 0x219a4 0x0 0x0 0x7ee224e78d18 0x7ee22b0eb46e
+T 79.298303551 892 892 chromium R 15/12/4306 0 | running
+T 79.298303551 892 899 Chrome_ChildIOT R 1/9/197 0 | running
+T 79.298303551 892 908 Compositor R 2/2/184 0 | running
+F 79.298303551 /sys/class/drm/card0/gt_act_freq_mhz 950
+F 79.298303551 /proc/interrupts 53:	0	11083	0	0	MSI	i915
+F 79.298303551 /proc/stat timer_passes_late 3 ; bkl_wait_us 8013159 ; bkl_wait_max_us 51014 ; bkl_wait_max_holds 1 ; bkl_wait_max_hold take 0 337850 ; bkl_hold_max_us 337850 ; bkl_hold_max_entry take 0 ; bkl_hold_max_mark 1 0 ; bkl_hold_max_mark 2 0 ; bkl_hold_max_mark 4 0 ; bkl_hold_max_mark 8 0 ; bkl_hold_max_mark 16 0 ; latency_timer_us 1554450
+G 79.273887480 24416 us
+P 79.298303551 26569 us
+G 79.298303551 28037 us
+
