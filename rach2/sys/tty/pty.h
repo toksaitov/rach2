@@ -52,6 +52,7 @@ struct pty {
 
     int master_open;   /* the master descriptor is open */
     int slave_opens;   /* count of open slave descriptions (distinct OFDs) */
+    int opening;       /* slave opens between choosing the pair and binding it */
     int hung_up;       /* every slave description has closed since one opened */
     int locked;        /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
     int packet;        /* TIOCPKT: each master read begins with a status byte */
@@ -106,7 +107,12 @@ int pty_open_master(int flags);
  * Returns the slave fd (>= 0), or -errno (-ESRCH with no current process,
  * -ENXIO if no pty N has its master open, -EIO if the pair is still locked,
  * -EMFILE if the fd table is full, -ENOMEM if the heap has no room for the
- * descriptor). The descriptor has only the access of its open mode, also
+ * descriptor, VFS_AGAIN when what the open's walk found changed while the
+ * descriptor was allocated). The pair is chosen before the allocation, which
+ * may sleep, and counted in `opening` until it is bound, so that its
+ * master's close cannot free it meanwhile; the master's state and the walk's
+ * stamp (`vfs_consume_still`) are checked again after the allocation. The
+ * descriptor has only the access of its open mode, also
  * when /dev/tty resolves to the slave. As on Linux, a session leader
  * without a controlling terminal that opens a slave no session has, without
  * O_NOCTTY, makes it its controlling terminal, with its own group in the

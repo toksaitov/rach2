@@ -12,6 +12,7 @@
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../fs/krffs.h"
+#include "../fs/walkseq.h"
 #include "../proc/process.h"
 #include "../proc/ns.h"
 #include "../mm/usercopy.h"
@@ -863,7 +864,7 @@ static void pty_master_gone(struct pty *p)
         tty_signal_group(p->slave.fg_pgid, p->slave.fg_serial, SIGHUP);
     }
     tty_hangup(&p->slave);
-    if (p->slave_opens == 0) {
+    if (p->slave_opens == 0 && p->opening == 0) {
         pty_free(p);
     }
 }
@@ -1188,7 +1189,7 @@ static void pts_close(fd_entry_t *e)
     if (p->slave_opens == 0) {
         p->hung_up = 1;
         wq_wake_all(&p->m_read_wq);
-        if (!p->master_open) {
+        if (!p->master_open && p->opening == 0) {
             pty_free(p);
         }
     }
@@ -1279,7 +1280,16 @@ int pty_open_slave(int index, int flags)
     if (p->locked) {
         return -EIO;
     }
+    p->opening++;
     fd = fd_alloc(current_proc->fds);
+    p->opening--;
+    if (fd >= 0 && (!p->master_open || p->locked || !vfs_consume_still())) {
+        fd_free(current_proc->fds, fd);
+        fd = !p->master_open ? -ENXIO : p->locked ? -EIO : VFS_AGAIN;
+    }
+    if (!p->master_open && p->slave_opens == 0 && p->opening == 0) {
+        pty_free(p);
+    }
     if (fd < 0) {
         return fd;
     }
