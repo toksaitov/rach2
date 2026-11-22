@@ -5,6 +5,9 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
+#ifdef RACH2_VGPU_PROFILE
+#include "../rtc.h"
+#endif
 
 /** A fence's Linux driver name. */
 static const char *fence_driver(struct dma_fence *f)
@@ -104,10 +107,19 @@ int32_t vgpu_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
     if (a->flags & VIRTGPU_WAIT_NOWAIT) {
         rc = dma_fence_is_signaled(f) ? 0 : -EBUSY;
     } else {
+#ifdef RACH2_VGPU_PROFILE
+        int64_t start = rtc_monotonic_ns();
+        int busy = !dma_fence_is_signaled(f);
+#endif
         rc = dma_fence_wait_until(f, 1, dma_fence_now() + 15000000000ll);
         if (rc == -ETIME) {
             rc = -EBUSY;
         }
+#ifdef RACH2_VGPU_PROFILE
+        if (busy) {
+            vgpu_profile_event(vg, VGPU_EVENT_WAIT, start, 0);
+        }
+#endif
     }
     dma_fence_put(f);
     return rc;
