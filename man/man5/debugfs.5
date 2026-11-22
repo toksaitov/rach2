@@ -546,23 +546,56 @@ rows on path lookup change the tree at a known point of a walk.
 A write of
 .Ql arm PID EVENT
 counts from zero the walk events the thread PID reaches, and stops it in
-the kernel the first time it reaches EVENT:
+the kernel the first time it reaches EVENT, or nowhere for
+.Ql count :
 .Ql full ,
 where a walk under the big lock begins, its start and root taken;
 .Ql unlocked ,
 where a walk without the big lock has taken its start and the walk sequence;
-or
 .Ql miss ,
-where such a walk gives up for the walk under the big lock.
+where such a walk gives up for the walk under the big lock;
+.Ql lookup ,
+after a walk's lookup of a name, where a lookup that reads the disk sleeps;
+.Ql nslock ,
+where a walk that has entered a mount waits for its namespace lock;
+.Ql restart ,
+where a walk that found the tree changed since it began starts again;
+.Ql handoff ,
+where a call that changes what its walk found has taken the walk's stamp
+and not yet its locks;
+.Ql retry ,
+where such a call, its locks held, finds the tree changed and runs again
+from its walk; or
+.Ql wait ,
+where a walk waits for a change under way to end.
 .Ql release
-lets the stopped thread go on, as a signal does, and
+lets the stopped thread go on, as a signal does.
+.Ql begin
+begins a change the gate holds open, at most two, which every walk then
+waits for, and
+.Ql end
+ends the last;
+.Er EBUSY
+past two and
+.Er ENOENT
+with none.
+.Ql advance
+moves the walk sequence by 2^32, with no change under way.
+.Ql fault PID
+makes the next hand-back of a type that takes the rest of a path at its
+root, for the thread PID, use up nothing, which the walk answers with
+.Er EIO .
 .Ql off
-does too and ends the counting.
+lets the stopped thread go, ends the counting, the fault and the changes
+the gate holds.
 Reads one line:
-.Ql pid P stop EVENT waiting W full N unlocked N miss N ,
+.Ql pid P stop EVENT waiting W ,
+the count of each event by its name in the order above, then
+.Ql tokens T active A ,
 EVENT being
 .Ql -
-once the stop is used or released, and W 1 while the thread sleeps there.
+once the stop is used or released, W 1 while the thread sleeps there, T
+the changes the gate holds open and A all those under way.
 Another text fails with
 .Er EINVAL .
 .It Pa sched/base_slice_ns

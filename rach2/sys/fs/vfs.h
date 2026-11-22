@@ -783,6 +783,12 @@ void vfs_init(void);
  * registered or its change made; `vfs_ref_release` does not. An error
  * returns with no lock held.
  *
+ * A walk that finds, after a step that slept, that what a path names has
+ * changed since it began starts again (walkseq.h). The stamp of the walk
+ * that finishes is left with the calling thread, for a call that changes
+ * what the walk found to take (`vfs_stamp_get`) and check again under the
+ * locks of its change (`vfs_stamp_still`).
+ *
  * Returns 0 or a negative errno: the type's, from `lookup`, `getattr` or
  * `readlink`; EACCES or ENOTDIR from the search check; EACCES for a link of
  * /proc to another process's file or directory that the caller may not
