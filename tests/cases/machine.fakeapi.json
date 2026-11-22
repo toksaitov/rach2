@@ -50,7 +50,7 @@
             ],
             "boot_options": ["rach2.root=ext2"]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": false
         }
