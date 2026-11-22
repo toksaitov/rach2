@@ -94,10 +94,14 @@ void debugfs_remove(const char *path);
  * Bind the registered file `node` of a debugfs mount to the descriptor `e`
  * just opened on it with open(2)'s `flags`, for the open of a regular file
  * of the system call layer: `ops`, `priv`, then the file's `open`, or a
- * text file's operations. 0, or the `open`'s -errno or -ENOMEM, after which
- * the caller frees the descriptor's slot, which clears `ops` and `priv`. It
- * may sleep; the slot, a reservation until the caller publishes it, stays
- * where it is.
+ * text file's operations. 0; VFS_AGAIN when the stamp the call consumes no
+ * longer holds (`vfs_consume_still`), so that a file taken out and its
+ * name given to another since the walk is not opened; -ENOENT for a file
+ * taken out (`debugfs_remove`), whose registrant may have freed its data,
+ * as Linux's proxy open answers; or the `open`'s -errno or -ENOMEM. After
+ * any error the caller frees the descriptor's slot, which clears `ops` and
+ * `priv`. It may sleep; the slot, a reservation until the caller publishes
+ * it, stays where it is.
  */
 int32_t debugfs_bind(void *node, fd_entry_t *e, int flags);
 

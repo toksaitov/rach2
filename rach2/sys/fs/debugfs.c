@@ -345,6 +345,12 @@ int32_t debugfs_bind(void *node, fd_entry_t *e, int flags)
 {
     struct debugfs_node *n = node;
 
+    if (!vfs_consume_still()) {
+        return VFS_AGAIN;
+    }
+    if (n->removed) {
+        return -ENOENT;
+    }
     if (n->text) {
         return text_bind(n, e);
     }
