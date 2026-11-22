@@ -175,8 +175,8 @@ static uint32_t kstack_descend(uint32_t depth)
  * not return, and the kernel panics if the descent comes back. */
 static void kstack_overrun_run(void)
 {
-    klog(KLOG_INFO, "kstack", "overrun: pid %d descends its stack at 0x%x", (int)current_proc->pid,
-         current_proc->kernel_stack - KERNEL_STACK_SIZE);
+    klog(KLOG_INFO, "kstack", "overrun: pid %d descends its stack at 0x%lx", (int)current_proc->pid,
+         (unsigned long)(current_proc->kernel_stack - KERNEL_STACK_SIZE));
     kstack_descend(0);
     k_panic("kstack: overrun: the descent came back");
 }
