@@ -189,6 +189,8 @@ fi
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0
+# Children that outlived a row's bounded wait for them after KILL.
+stuck=''
 # 1 once this run, with -g on a machine that ran no session, has asked for
 # one, which must end once the GPU is back, at the end or on a signal.
 session_owed=0
@@ -196,6 +198,9 @@ crysis_ini=/etc/xdg/weston/weston.ini crysis_ini_saved=''
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
 [ -z "$bdf" ] || intel=1
+
+pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
+fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
 
 # end_group PID: end the process group that PID leads, which setsid made,
 # with TERM and, once 20 seconds have passed, KILL, and reap its leader
@@ -211,16 +216,17 @@ end_group()
         n=$((n - 1))
     done
     kill -KILL "-$1" 2>/dev/null
-    reap "$1" || echo "bed-shm: process $1 still running after kill" >&2
+    reap 100 "$1" || fail cleanup "the load's leader $1 is still running after kill: $(held "$1")"
 }
 
-# reap PID...: give the children PID... 100 tries of 0.1 s to exit, and
-# reap those that did. A task stuck in the kernel may outlive KILL, so the
-# wait is bounded. Returns 1, with the pids still running in reap_live,
-# when any is left.
-reap()
+# gone TRIES PID...: wait, TRIES tries of 0.1 s at most, until none of the
+# children PID... runs, without reaping them, so that a later wait still
+# gives each one's status. Returns 1, with the pids still running in
+# reap_live, when any is left.
+gone()
 {
-    reap_left=100
+    reap_left=$1
+    shift
     while :; do
         reap_live=''
         for reap_pid in "$@"; do
@@ -230,11 +236,90 @@ reap()
         sleep 0.1
         reap_left=$((reap_left - 1))
     done
+    [ -z "$reap_live" ]
+}
+
+# reap TRIES PID...: give the children PID... TRIES tries of 0.1 s to exit,
+# as gone does, and reap those that did. A task stuck in the kernel may
+# outlive KILL, so the wait is bounded. Returns 1, with the pids still
+# running in reap_live, when any is left.
+reap()
+{
+    gone "$@"
+    reap_status=$?
+    shift
     for reap_pid in "$@"; do
         kill -0 "$reap_pid" 2>/dev/null || wait "$reap_pid" 2>/dev/null
     done
-    [ -z "$reap_live" ]
+    return "$reap_status"
 }
+
+# held PID: what process PID is and what it holds, for the line about a
+# child that outlived its wait: its state, wait channel and command, the
+# devices it has open and, for ivshmemd, the region as the kernel reports
+# it, or for QEMU, KVM's machines and VFIO's devices and pins.
+held()
+{
+    # shellcheck disable=SC2009 # pgrep gives no state or wait channel
+    held_ps=$(ps -e -o pid,stat,wchan,args | awk -v p="$1" '$1 == p { $1 = ""; sub(/^ +/, ""); print; exit }')
+    held_dev=$(for f in /proc/"$1"/fd/*; do readlink "$f"; done 2>/dev/null | grep '^/dev/' | sort -u | tr '\n' ' ' | sed 's/ $//')
+    held_more=''
+    [ "$1" != "$daemon" ] || held_more="; $(ivshmemd -i 2>&1 | head -n 1)"
+    [ "$1" != "$qemu" ] ||
+        held_more="; $(awk '$1 ~ /^(kvm_vms|vfio_devices|vfio_dma_pages)$/ { printf "%s %s ", $1, $2 }' /proc/stat)"
+    echo "${held_ps:-not in ps}; devices: ${held_dev:-none}$held_more"
+}
+
+# child PID: the name of the child PID, for a line about it.
+child()
+{
+    case $1 in
+        "$qemu") echo "QEMU $1" ;;
+        "$daemon") echo "ivshmemd $1" ;;
+        "$waiter") echo "the fence probe $1" ;;
+        "$holder") echo "the mapping's holder $1" ;;
+        "$pid") echo "the probe $1" ;;
+        "$umon") echo "the udev monitor $1" ;;
+        *) echo "process $1" ;;
+    esac
+}
+
+# release_children: end every child still running, gpu.sh last, with a
+# bounded wait for each, and fail the check `cleanup` for each one left,
+# with what it holds: ivshmemd in its detach wait keeps the region, so
+# that the next attach is refused as busy, and gpu.sh waiting for a QEMU
+# stuck in the kernel keeps the GPU from i915. gpu.sh, sent SIGTERM, kills
+# its QEMU and gives the function back; it has 600 tries of 0.1 s, since
+# i915's bind resets the GPU. A child left is not waited for again.
+release_children()
+{
+    end_group "$load"
+    end_group "$figpid"
+    load='' figpid=''
+    # shellcheck disable=SC2086 # the pids of children that were started
+    kill -9 $qemu $waiter $holder $pid $stuck 2>/dev/null
+    # shellcheck disable=SC2086 # the pids of children that were started
+    kill $daemon $gpu $umon 2>/dev/null
+    # With -g, QEMU is gpu.sh's child, which gpu.sh reaps.
+    vm=$qemu
+    [ -z "$gpu" ] || vm=''
+    # shellcheck disable=SC2086 # the pids of children that were started
+    if ! reap 100 $vm $waiter $holder $pid $daemon $umon $stuck; then
+        # shellcheck disable=SC2086 # the pids reap found running
+        kill -9 $reap_live 2>/dev/null
+        # shellcheck disable=SC2086 # the pids reap found running
+        if ! reap 100 $reap_live; then
+            for left in $reap_live; do
+                fail cleanup "$(child "$left") is still running after kill: $(held "$left")"
+            done
+        fi
+    fi
+    if [ -n "$gpu" ] && ! reap 600 "$gpu"; then
+        fail cleanup "gpu.sh $gpu is still running 60 s after TERM, so $bdf's return to i915 has not finished: QEMU ${qemu:-unknown}${qemu:+: $(held "$qemu")}"
+    fi
+    waiter='' holder='' pid='' daemon='' umon='' gpu='' qemu='' stuck=''
+}
+
 # crysis_restore_ini: put back the compositor's settings before the GPU
 # returns and the native session starts. A session that started on the
 # changed file first, as when QEMU ended early, crysis-shm.sh starts again
@@ -270,42 +355,29 @@ session_end()
 }
 
 # cleanup: end what the run started, on its normal end or a signal's, and
-# leave the GPU and the session as they were found. gpu.sh, sent SIGTERM,
-# kills its QEMU and gives the function back. Every other child has a
-# bounded wait, so that one stuck in the kernel cannot hold back the GPU's
-# return or the session's end, and HUP, INT and TERM are ignored from the
-# start, so that a second signal cannot cut either short.
+# leave the GPU and the session as they were found. Every child has a
+# bounded wait, so that one stuck in the kernel cannot hold back the
+# session's end, and HUP, INT and TERM are ignored from the start, so that
+# a second signal cannot cut either short. A child left, or a session not
+# ended, turns an exit status of 0 into 1.
 cleanup()
 {
+    cleanup_status=$?
     trap '' HUP INT TERM
-    end_group "$load"
-    end_group "$figpid"
+    cleanup_bad=$bad
     crysis_restore_ini || echo 'bed-shm: failed to restore weston.ini' >&2
-    # shellcheck disable=SC2086 # the pids of children that were started
-    kill -9 $qemu $waiter $holder $pid 2>/dev/null
-    # shellcheck disable=SC2086 # the pids of children that were started
-    kill $daemon $gpu $umon 2>/dev/null
-    # With -g, QEMU is gpu.sh's child, which gpu.sh reaps.
-    vm=$qemu
-    [ -z "$gpu" ] || vm=''
-    # shellcheck disable=SC2086 # the pids of children that were started
-    if ! reap $vm $waiter $holder $pid $daemon $umon; then
-        # shellcheck disable=SC2086 # the pids reap found running
-        kill -9 $reap_live 2>/dev/null
-        # shellcheck disable=SC2086 # the pids reap found running
-        reap $reap_live || echo "bed-shm: still running after kill:$reap_live" >&2
-    fi
-    [ -z "$gpu" ] || wait "$gpu" 2>/dev/null
+    release_children
     # A run ended by a signal leaves the session as it found it too. A
     # USR2 that finds no session starts none.
     if [ "$session_owed" = 1 ]; then
         if session_end; then
-            echo 'bed-shm: end: pass: the session this run started has ended, as none ran before'
+            pass end 'the session this run started has ended, as none ran before'
         else
-            echo "bed-shm: end: fail: the session this run started is still running: weston [$(pgrep -x weston | tr '\n' ' ')]"
+            fail end "the session this run started is still running: weston [$(pgrep -x weston | tr '\n' ' ')]"
         fi
         session_owed=0
     fi
+    [ "$bad" = "$cleanup_bad" ] || [ "$cleanup_status" != 0 ] || exit 1
 }
 trap cleanup EXIT
 trap "trap '' HUP INT TERM; exit 129" HUP
@@ -321,9 +393,6 @@ weston_found=0
 ! pgrep -x weston > /dev/null || weston_found=1
 console=$out/console.log qemu_err=$out/qemu.out
 [ -z "$bdf" ] || console=$out/gpu/console qemu_err=$out/gpu/qemu.err
-
-pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
-fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
 
 # stat NAME: a count of /proc/stat.
 stat() { awk -v n="$1" '$1 == n { print $2 }' /proc/stat; }
@@ -526,13 +595,21 @@ stop_vm()
     fi
 }
 
-# wait_vm: reap QEMU or gpu.sh, which also gives the function back.
+# wait_vm: reap QEMU or gpu.sh, which also gives the function back. gpu.sh
+# waits for its QEMU first, so the wait for it is bounded at 600 tries of
+# 0.1 s, and one still running then is left, with QEMU, to cleanup, which
+# names what QEMU holds.
 wait_vm()
 {
     if [ -n "$gpu" ]; then
-        gpu_status=0
-        wait "$gpu" 2>/dev/null || gpu_status=$?
-        gpu=''
+        if gone 600 "$gpu"; then
+            gpu_status=0
+            wait "$gpu" 2>/dev/null || gpu_status=$?
+            gpu=''
+        else
+            gpu_status="still running 60 s after QEMU's kill"
+            return 0
+        fi
     else
         wait "$qemu" 2>/dev/null
     fi
@@ -548,7 +625,9 @@ kill_vm()
 
 # death_children: give the fence probe and ivshmemd 60 tries to exit after
 # QEMU is killed. Reap only children that exited. A task stuck in the kernel
-# may still be there after KILL, so the failure must not wait for its exit.
+# may still be there after KILL, so the failure must not wait for its exit;
+# ivshmemd left stays in daemon, and the probe left goes to stuck, since a
+# later draw takes waiter, for release_children.
 death_children()
 {
     left=60 death_error=''
@@ -558,19 +637,20 @@ death_children()
         left=$((left - 1))
     done
     if kill -0 "$waiter" 2>/dev/null; then
+        death_error="fence probe still running: $(held "$waiter")"
         kill -KILL "$waiter" 2>/dev/null
-        death_error='fence probe still running'
+        stuck="$stuck $waiter"
     else
         wait "$waiter" 2>/dev/null || death_error="fence probe status $?"
     fi
     waiter=''
     if kill -0 "$daemon" 2>/dev/null; then
+        death_error="${death_error:+$death_error, }ivshmemd still running: $(held "$daemon")"
         kill -KILL "$daemon" 2>/dev/null
-        death_error="${death_error:+$death_error, }ivshmemd still running"
     else
         wait "$daemon" 2>/dev/null || death_error="${death_error:+$death_error, }ivshmemd status $?"
+        daemon=''
     fi
-    daemon=''
 }
 
 # handoff: with -g, gpu.sh's verdict on the function's return to the driver.
@@ -747,10 +827,9 @@ nocopy_rows()
     kill_vm
     until_line "$out/hold.out" 'NOCOPY SIGBUS\|NOCOPY FAIL' 60 "$holder" || true
     kill -9 "$holder" 2>/dev/null
-    wait "$holder" 2>/dev/null
-    holder=''
-    wait "$daemon" 2>/dev/null
-    daemon=''
+    ! reap 100 "$holder" || holder=''
+    # ivshmemd detaches once QEMU has gone; one left is release_children's.
+    ! reap 600 "$daemon" || daemon=''
     if grep -q '^NOCOPY SIGBUS' "$out/hold.out" && grep -q '^NOCOPY HELD' "$out/hold.out"; then
         pass revoke "$(sed -n 's/^NOCOPY SIGBUS: //p' "$out/hold.out")"
     else
@@ -1409,6 +1488,9 @@ else
     virgl_rows
 fi
 handoff
+# Every child is gone by now; one left fails the run here, before its
+# result, with what it holds.
+release_children
 # The session stays owed until its end has run, so that a signal before
 # then has cleanup end it.
 if [ "$session_owed" = 1 ]; then
