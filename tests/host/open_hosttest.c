@@ -4230,7 +4230,7 @@ static void open_last_slot(void)
     installing = 3;
     other_slot = -2;
     waiting = other_takes_slot;
-    fd = do_open("f", 2 | O_TRUNC, 0);
+    fd = do_open("f", 2 | O_TRUNC, 0, NULL);
     check(other_slot == -EMFILE && fd == 3 && truncates == 1,
           "an open that truncates keeps the slot it reserved before its walk");
     check(ns_depth == 0 && !waiting, "the open gives the mount's lock back");
@@ -4392,11 +4392,11 @@ static void descriptor_errors(void)
     row_begin();
     proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     fail_after = 0;
-    rc = do_open("target", 2, 0);
+    rc = do_open("target", 2, 0, NULL);
     fail_after = -1;
     check(rc == -ENOMEM && opens == 0, "an open the heap has no room for is ENOMEM");
     proc.rlim[RLIM_NOFILE].cur = 0;
-    rc = do_open("target", 2, 0);
+    rc = do_open("target", 2, 0, NULL);
     proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     check(rc == -EMFILE && opens == 0, "an open at the descriptor limit is EMFILE");
     fd = model_open();
@@ -6019,7 +6019,7 @@ static int32_t pr_create(uint32_t dmode, uint32_t duid, uint32_t mode, uint32_t 
     fl_uid[FL_B] = duid;
     fl_mode[FL_W] = mode;
     fl_uid[FL_W] = uid;
-    rc = do_open("/fl/b/w", O_CREAT | O_DIRECTORY | extra, 0644);
+    rc = do_open("/fl/b/w", O_CREAT | O_DIRECTORY | extra, 0644, NULL);
     pr_row_end("an O_CREAT open gives back every lock");
     return rc;
 }

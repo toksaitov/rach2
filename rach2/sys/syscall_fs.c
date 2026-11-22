@@ -3357,7 +3357,16 @@ static void synth_dir_record(int fd, int permanent, const char *name)
     e->ofd->dirpath = full;
 }
 
-static int32_t open_path(const char *name, int flags);
+/* The file open_by_handle_at must open: the file system's base mount, which
+ * the call holds, and the inode's number and generation. */
+struct handle_want {
+    const struct vfs_mount *base;
+    uint64_t ino;
+    uint32_t gen;
+};
+
+static int32_t handle_check(struct vfs_ref *ref, const struct handle_want *want);
+static int32_t open_path(const char *name, int flags, const struct handle_want *want);
 static int32_t proc_fd_open_path(const struct vpath *vp, int flags);
 
 static int32_t open_named(const char *name, int flags, uint32_t mode, int end);
@@ -5614,21 +5623,20 @@ static int open_found(struct vfs_ref *ref, const struct vfs_stat *dir, int flags
 }
 
 /**
- * Open core shared by open and openat.
+ * The open of a path, `do_open`'s for any open but O_PATH's and a legacy
+ * device name's.
  *
  * `name` is a kernel-space path with any leading '/' already stripped; `flags`
  * are the Linux open flags and `mode` the permission bits to stamp on a file
- * created by O_CREAT (ignored otherwise). Opens a legacy device ("fb" or
- * "mouse", `open_device_name`) or resolves a path on any mounted type and
- * installs a descriptor. Returns the fd or -errno. Opening "/" opens the
- * root directory for getdents64. A symbolic link at the end is followed,
- * and one whose target is missing is what O_CREAT creates, as on Linux, the
- * target's path built in a path page of its own; O_NOFOLLOW answers ELOOP
- * for the link, and O_CREAT|O_EXCL EEXIST. On a type that sets
+ * created by O_CREAT (ignored otherwise). Resolves the path on any mounted
+ * type and installs a descriptor. Returns the fd or -errno. Opening "/"
+ * opens the root directory for getdents64. A symbolic link at the end is
+ * followed, and one whose target is missing is what O_CREAT creates, as on
+ * Linux, the target's path built in a path page of its own; O_NOFOLLOW
+ * answers ELOOP for the link, and O_CREAT|O_EXCL EEXIST. On a type that sets
  * `ns_serialised`, resolution through open-handle registration holds the
  * final mount's namespace lock, which is what keeps a writer from moving the
- * file between the lookup and the registration. O_PATH goes to `open_path`,
- * which names the file and opens nothing.
+ * file between the lookup and the registration.
  *
  * A file the open creates is empty, so O_TRUNC does nothing to it, and
  * its description is marked OFD_WATCH_MADE, so that inotify reports no
@@ -5652,8 +5660,12 @@ static int open_found(struct vfs_ref *ref, const struct vfs_stat *dir, int flags
  * longer names. The stamp of the walk of the path as given is `first`,
  * which `walk_consume` points at from that walk until the open ends or runs
  * again; the walks of the links it follows keep it.
+ *
+ * `want`, NULL but for open_by_handle_at, is the file the open must reach:
+ * the node its walk holds is checked against it under the walk's lock
+ * (`handle_check`), before any open, truncation or wait of its kind.
  */
-static int32_t do_open(const char *name, int flags, uint32_t mode)
+static int32_t open_file(const char *name, int flags, uint32_t mode, const struct handle_want *want)
 {
     const void *keeps = vfs_walk_keeps_mark();
     struct vfs_ref ref;
@@ -5668,12 +5680,6 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     int fd;
     int rc;
 
-    if (flags & O_PATH) {
-        return open_path(name, flags);
-    }
-    if (open_device_name(name, flags, &rc)) {
-        return rc;
-    }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return fd;
@@ -5725,7 +5731,8 @@ again:
         }
         flags &= ~O_TRUNC;
         fd_slot(current_proc->fds, fd)->ofd->watch_flags = OFD_WATCH_MADE;
-    } else if (rc != 0 || (rc = open_found(&ref, &dir, flags, entry, &fd, name)) != OPEN_GO) {
+    } else if (rc != 0 || (rc = handle_check(&ref, want)) != 0 ||
+               (rc = open_found(&ref, &dir, flags, entry, &fd, name)) != OPEN_GO) {
         goto checked;
     }
     locked = ref.mnt;
@@ -5755,6 +5762,25 @@ out:
     }
     path_buf_put(through);
     return rc;
+}
+
+/**
+ * Open core shared by open and openat: O_PATH goes to `open_path`, which
+ * names the file and opens nothing, a legacy device name, "fb" or "mouse",
+ * to `open_device_name`, except for open_by_handle_at's `want`, and any
+ * other path to `open_file`. Returns the fd or -errno.
+ */
+static int32_t do_open(const char *name, int flags, uint32_t mode, const struct handle_want *want)
+{
+    int rc;
+
+    if (flags & O_PATH) {
+        return open_path(name, flags, want);
+    }
+    if (!want && open_device_name(name, flags, &rc)) {
+        return rc;
+    }
+    return open_file(name, flags, mode, want);
 }
 
 #define MS_REMOUNT     32
@@ -10447,6 +10473,9 @@ struct kstat {
     /* The id of the mount the file is on, as /proc/PID/mountinfo gives it,
      * which statx reports; 0 for an object on no mount of the table. */
     uint32_t st_mnt_id;
+    /* The inode's generation, which a file handle carries; 0 on a type that
+     * keeps none. stat64 and statx do not report it. */
+    uint32_t st_gen;
 };
 
 /**
@@ -10652,6 +10681,7 @@ static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
     kst->st_mtime_nsec = (uint32_t)st.mtime_nsec;
     kst->st_ctime = st.ctime_sec;
     kst->st_ctime_nsec = (uint32_t)st.ctime_nsec;
+    kst->st_gen = st.generation_known ? st.generation : 0;
     return 0;
 }
 
@@ -11665,7 +11695,7 @@ static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
     if (end) {
         flags = (flags | O_DIRECTORY) & ~O_NOFOLLOW;
     }
-    return do_open(name, flags, mode);
+    return do_open(name, flags, mode, NULL);
 }
 
 /**
@@ -11874,7 +11904,7 @@ static int32_t proc_fd_open_path_from(const struct vpath *vp, process_t *p, fd_e
  * and with AT_EMPTY_PATH, the two duplications, F_GETFD, F_SETFD, F_GETFL
  * and close; read, write and the other calls on a descriptor are -EBADF.
  */
-static int32_t open_path(const char *name, int flags)
+static int32_t open_path(const char *name, int flags, const struct handle_want *want)
 {
     struct vfs_ref ref;
     struct vfs_name *entry = NULL;
@@ -11891,7 +11921,9 @@ static int32_t open_path(const char *name, int flags)
         return -EMFILE;
     }
     rc = vfs_resolve_entry(name, walk, &ref, NULL, &entry, NULL);
+    rc = rc == 0 ? handle_check(&ref, want) : rc;
     if (rc != 0) {
+        vfs_name_put(entry);
         return rc;
     }
     locked = ref.mnt;
@@ -13547,8 +13579,10 @@ long sys_statx(isr_params_t *params)
 
 /*
  * File handles, name_to_handle_at(2) and open_by_handle_at(2). A handle is
- * Linux's FILEID_INO64_GEN: the file's inode number in 64 bits and a
- * generation of 0, twelve bytes, which identify the file within its mount.
+ * Linux's FILEID_INO64_GEN: the file's inode number in 64 bits and its
+ * generation in 32, twelve bytes, which identify the file within its mount;
+ * the generation is ext2's, which a reused inode number changes, and 0 on
+ * the types that keep none.
  * The types whose files a handle reopens are those Linux gives export
  * operations, ext2, tmpfs and vfat, and KRFFS; a handle of a file of any
  * other mount is a FID, which AT_HANDLE_FID asks for, and which identifies
@@ -13632,7 +13666,9 @@ long sys_name_to_handle_at(isr_params_t *params)
     for (i = 0; i < 8; i++) {
         bytes[i] = (unsigned char)(kst.st_ino >> (8 * i));
     }
-    bytes[8] = bytes[9] = bytes[10] = bytes[11] = 0;
+    for (i = 0; i < 4; i++) {
+        bytes[8 + i] = (unsigned char)(kst.st_gen >> (8 * i));
+    }
     mnt_id = (int32_t)kst.st_mnt_id;
     if (copy_to_user(umnt, &mnt_id, sizeof(mnt_id)) != 0 || copy_to_user(uh, &h, sizeof(h)) != 0 ||
         (rc == 0 && copy_to_user((char __user *)uh + sizeof(h), bytes, sizeof(bytes)) != 0)) {
@@ -13758,12 +13794,13 @@ static int32_t handle_find(const struct vfs_ref *root, uint64_t ino, char *out)
 
 /**
  * Read the user's handle `uh` for open_by_handle_at, of a file of the mount
- * `m`, into `*ino`: 0, or -EFAULT, -EINVAL for a handle_bytes of 0 or above
- * MAX_HANDLE_SZ or a negative handle_type, or -ESTALE for a handle of
- * another kind or size or a mount whose files do not reopen.
+ * `m`, into `want`'s inode and generation: 0, or -EFAULT, -EINVAL for a
+ * handle_bytes of 0 or above MAX_HANDLE_SZ or a negative handle_type, or
+ * -ESTALE for a handle of another kind or size or a mount whose files do
+ * not reopen.
  */
 static int32_t handle_read(const struct linux_file_handle __user *uh, const struct vfs_mount *m,
-                           uint64_t *ino)
+                           struct handle_want *want)
 {
     struct linux_file_handle h;
     unsigned char bytes[HANDLE_BYTES];
@@ -13782,9 +13819,13 @@ static int32_t handle_read(const struct linux_file_handle __user *uh, const stru
     if (copy_from_user(bytes, (const char __user *)uh + sizeof(h), sizeof(bytes)) != 0) {
         return -EFAULT;
     }
-    *ino = 0;
+    want->ino = 0;
+    want->gen = 0;
     for (i = 0; i < 8; i++) {
-        *ino |= (uint64_t)bytes[i] << (8 * i);
+        want->ino |= (uint64_t)bytes[i] << (8 * i);
+    }
+    for (i = 0; i < 4; i++) {
+        want->gen |= (uint32_t)bytes[8 + i] << (8 * i);
     }
     return 0;
 }
@@ -13835,34 +13876,38 @@ static int32_t handle_path(struct vfs_mount *m, uint64_t ino, char *path)
 }
 
 /**
- * Check that the descriptor `fd` open_by_handle_at opened by the path it
- * found is open on the handle's file, inode `ino` of the file system of `m`,
- * since a rename and a new file at that path may have come between the
- * search and the open; then apply the O_TRUNC of `flags`, which the open
- * was made without so that no other file is cut, to a regular file the
- * descriptor writes. `fd`, or -ESTALE with the descriptor closed, as for a
- * handle whose file is gone, or the truncation's error.
+ * Check that the node `ref` an open's walk found, held with its mount's walk
+ * lock, is the file `want` names, as open_by_handle_at asks, since a rename
+ * and a new file at the path `handle_find` gave may have come between the
+ * search and the walk: the same file system, and the inode's number and
+ * generation that `stat` and name_to_handle_at give, where the KRFFS boot
+ * root's top is inode 1 as `fstatat_path` has it. 0, at once for a NULL
+ * `want`; otherwise -ESTALE, or the error of the attributes' read, with the
+ * lock let go and `ref` released.
  */
-static int32_t handle_opened(int fd, const struct vfs_mount *m, uint64_t ino, int flags)
+static int32_t handle_check(struct vfs_ref *ref, const struct handle_want *want)
 {
-    const fd_entry_t *e = fd_get(current_proc->fds, fd);
-    const struct vfs_mount *at;
     struct kstat kst;
-    int32_t rc = stat_at(fd, NULL, AT_EMPTY_PATH, &kst);
+    int32_t rc = -ESTALE;
 
-    at = rc == 0 && kst.st_mnt_id ? vfs_mount_at((int)kst.st_mnt_id - 1) : NULL;
-    if (!at || vfs_mount_base(at) != vfs_mount_base(m) || kst.st_ino != ino) {
-        close_fd(fd);
-        return -ESTALE;
+    if (!want) {
+        return 0;
     }
-    if ((flags & O_TRUNC) && e && e->type == FD_TYPE_FILE && (e->flags & FD_FLAG_WRITE)) {
-        rc = (int32_t)ksys_ftruncate(fd, 0);
-        if (rc != 0) {
-            close_fd(fd);
-            return rc;
+    if (!vfs_synth_vpath(ref->mnt, ref->node) && vfs_mount_base(ref->mnt) == want->base) {
+        rc =
+            mnt_is_root(ref->mnt) ? krffs_fill_stat64(&kst, ref->node) : vfs_fill_stat64(&kst, ref);
+        if (rc == 0 && mnt_is_root(vfs_mount_base(ref->mnt)) && ref->node == krffs_fs->node) {
+            kst.st_ino = 1;
+        }
+        if (rc == 0 && (kst.st_ino != want->ino || kst.st_gen != want->gen)) {
+            rc = -ESTALE;
         }
     }
-    return fd;
+    if (rc != 0) {
+        vfs_walk_unlock(ref->mnt);
+        vfs_ref_release(ref);
+    }
+    return rc;
 }
 
 /**
@@ -13870,28 +13915,35 @@ static int32_t handle_opened(int fd, const struct vfs_mount *m, uint64_t ino, in
  * struct file_handle name_to_handle_at gave, and open flags.
  *
  * The mount is that of what the descriptor refers to, the working
- * directory's for AT_FDCWD. The file with the handle's inode is found on it
+ * directory's for AT_FDCWD, and the call holds it to its end, as Linux holds
+ * the descriptor's path. The file with the handle's inode is found on it
  * (`handle_find`) and opened by its path from the caller's root as open(2)
- * opens it, with `flags` less O_CREAT and O_EXCL, and O_NOFOLLOW, so that a
- * symbolic link opens only with O_PATH, as Linux opens the inode itself;
- * the file opened must be the handle's, and O_TRUNC is applied only then
- * (`handle_opened`). The caller must be privileged, as Linux asks
- * CAP_DAC_READ_SEARCH.
+ * opens it (`do_open`), with `flags` less O_CREAT and O_EXCL, and
+ * O_NOFOLLOW, so that a symbolic link opens only with O_PATH, as Linux
+ * opens the inode itself. The node the open's walk holds must be the
+ * handle's file, of the same inode and generation, which is checked under
+ * the walk's lock before the open goes on (`handle_check`): a FIFO, a
+ * device or a truncation is never reached through another file, and
+ * O_TRUNC is applied by the open itself, with open(2)'s checks of write
+ * permission and of a read-only mount. O_TMPFILE, which would make a file
+ * in the handle's directory, is refused. The caller must be privileged, as
+ * Linux asks CAP_DAC_READ_SEARCH.
  *
  * The descriptor, or -EBADF for a descriptor that is not open, -EPERM for an
  * unprivileged caller, -EFAULT, -EINVAL for a handle_bytes of 0 or above
- * MAX_HANDLE_SZ or a negative handle_type, -ESTALE for a handle of another
- * kind or size, of a mount whose files do not reopen, or of a file that is
- * gone or outside the caller's root, -ENOMEM, or open(2)'s error.
+ * MAX_HANDLE_SZ or a negative handle_type, -EOPNOTSUPP for O_TMPFILE,
+ * -ESTALE for a handle of another kind or size, of a mount whose files do
+ * not reopen or that is going, or of a file that is gone or outside the
+ * caller's root, -ENOMEM, or open(2)'s error.
  */
 long sys_open_by_handle_at(isr_params_t *params)
 {
     const struct linux_file_handle __user *uh =
         (const struct linux_file_handle __user *)SC_ARG(params, 1);
     int flags = (int)SC_ARG(params, 2) & ~(O_CREAT | O_EXCL);
+    struct handle_want want;
     struct kstat kst;
     struct vfs_mount *m;
-    uint64_t ino = 0;
     char *path;
     int32_t rc;
 
@@ -13906,25 +13958,33 @@ long sys_open_by_handle_at(isr_params_t *params)
         return -EPERM;
     }
     m = kst.st_mnt_id ? vfs_mount_at((int)kst.st_mnt_id - 1) : NULL;
-    rc = handle_read(uh, m, &ino);
+    if (m && m->state != VFS_ACTIVE) {
+        m = NULL;
+    }
+    if (m) {
+        vfs_mount_get(m);
+    }
+    rc = handle_read(uh, m, &want);
+    if (rc == 0 && open_is_tmpfile(flags)) {
+        rc = -EOPNOTSUPP;
+    }
     if (rc != 0) {
-        return rc;
+        goto out;
     }
+    want.base = vfs_mount_base(m);
     path = path_buf_get();
-    if (!path) {
-        return -ENOMEM;
-    }
-    rc = handle_path(m, ino, path);
+    rc = path ? handle_path(m, want.ino, path) : -ENOMEM;
     if (rc == 0) {
-        rc = open_named(path_name(path), (flags & ~O_TRUNC) | O_NOFOLLOW, 0, 0);
+        rc = do_open(path_name(path), flags | O_NOFOLLOW, 0, &want);
     }
     if (rc >= 0) {
-        rc = handle_opened(rc, m, ino, flags);
-    }
-    if (rc >= 0) {
-        open_done(rc, path_name(path), flags & ~O_TRUNC);
+        open_done(rc, path_name(path), flags);
     }
     path_buf_put(path);
+out:
+    if (m && vfs_mount_put(m) == 0) {
+        vfs_reap_detached();
+    }
     return rc;
 }
 
@@ -20033,7 +20093,7 @@ int32_t fs_core_file(int signo, unsigned long limit)
         goto out;
     }
     (void)do_unlink(path);
-    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600, NULL);
 out:
     path_buf_put(path);
     if (fd < 0) {
