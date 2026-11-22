@@ -1,0 +1,161 @@
+diff --git a/rach2/sys/drm/virtio_gpu.c b/rach2/sys/drm/virtio_gpu.c
+index d421fbb4a..a4021dd86 100644
+--- a/rach2/sys/drm/virtio_gpu.c
++++ b/rach2/sys/drm/virtio_gpu.c
+@@ -322,6 +322,10 @@ static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int
+         vg->kicking--;
+     }
+     t = dma_fence_now() - t;
++    if (vg->reaping) {
++        vgpu_meas_add(VGPU_M_REAP_NOTIFY_N, 1);
++        vgpu_meas_add(VGPU_M_REAP_NOTIFY_NS, t);
++    }
+     vgpu_meas_add(VGPU_M_NOTIFY_N, 1);
+     vgpu_meas_add(VGPU_M_NOTIFY_NS, t);
+     vgpu_meas_max(VGPU_M_NOTIFY_MAX_NS, (uint64_t)t);
+@@ -438,6 +442,7 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
+         type = VIRTIO_GPU_RESP_ERR_UNSPEC;
+     }
+     cmd->response_len = len;
++    cmd->answered_ns = dma_fence_now();
+     flags = spin_lock_irqsave(&vg->lock);
+     if (cmd->fence) {
+         if (!ok) {
+@@ -1435,6 +1440,7 @@ static void obj_release(struct virtio_gpu_object *bo)
+ {
+     struct virtio_gpu_object **p;
+     struct virtio_gpu_device *vg = to_vg(bo->shmem.base.dev);
++    int64_t t = dma_fence_now();
+ 
+     vgpu_blob_release(vg, bo);
+     for (p = &vg->resources; *p && *p != bo; p = &(*p)->next) {
+@@ -1451,6 +1457,7 @@ static void obj_release(struct virtio_gpu_object *bo)
+     }
+     vgpu_obj_pages_free(vg, bo);
+     kfree(bo);
++    vgpu_meas_add(VGPU_M_RELEASE_NS, dma_fence_now() - t);
+ }
+ 
+ /**
+@@ -1490,7 +1497,16 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
+  * earlier commands hold it. Without memory for the commands even so, they
+  * are freed only after an unplug resets the device and revokes mappings.
+  */
++static void vgpu_obj_free_(struct drm_gem_object *obj);
+ void vgpu_obj_free(struct drm_gem_object *obj)
++{
++    int64_t t = dma_fence_now();
++
++    vgpu_meas_add(vgpu_in_worker() ? VGPU_M_FREE_WORKER : VGPU_M_FREE_OTHER, 1);
++    vgpu_obj_free_(obj);
++    vgpu_meas_add(VGPU_M_FREE_NS, dma_fence_now() - t);
++}
++static void vgpu_obj_free_(struct drm_gem_object *obj)
+ {
+     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)obj;
+     struct virtio_gpu_device *vg = to_vg(obj->dev);
+@@ -2230,6 +2246,11 @@ static void vgpu_worker(void)
+     }
+ }
+ 
++int vgpu_in_worker(void)
++{
++    return current_proc != NULL && current_proc == vgpu_thread;
++}
++
+ /** Make the worker, `virtio_gpu`, once. A failure is logged, and an open
+  * then serves a pending display change itself. */
+ static void vgpu_worker_start(void)
+diff --git a/rach2/sys/drm/virtio_gpu.h b/rach2/sys/drm/virtio_gpu.h
+index a50cbe0eb..e09f1974d 100644
+--- a/rach2/sys/drm/virtio_gpu.h
++++ b/rach2/sys/drm/virtio_gpu.h
+@@ -570,6 +570,7 @@ struct virtio_gpu_cmd {
+     int quiet;     /* published with no notify; a later command's carries it */
+     void (*complete)(struct virtio_gpu_cmd *cmd);
+     void *arg; /* for `complete` */
++    int64_t answered_ns;
+ };
+ 
+ /*
+@@ -935,12 +936,26 @@ enum {
+     VGPU_M_NOTIFY_N,
+     VGPU_M_NOTIFY_NS,
+     VGPU_M_NOTIFY_MAX_NS,
++    VGPU_M_SUB_WORKER,
++    VGPU_M_SUB_OTHER,
++    VGPU_M_SUB_LAG_NS,
++    VGPU_M_SUB_LAG_MAX_NS,
++    VGPU_M_SUB_DONE_NS,
++    VGPU_M_FREE_WORKER,
++    VGPU_M_FREE_OTHER,
++    VGPU_M_FREE_NS,
++    VGPU_M_DETACH_NS,
++    VGPU_M_RELEASE_NS,
++    VGPU_M_REAP_NOTIFY_N,
++    VGPU_M_REAP_NOTIFY_NS,
+     VGPU_M_N
+ };
+ /** Add `delta` to counter `which`, raising the peaks. Any context. */
+ void vgpu_meas_add(int which, int64_t delta);
+ /** Raise counter `which` to `value` if it is less. Any context. */
+ void vgpu_meas_max(int which, uint64_t value);
++/** Whether the caller is the driver's worker. */
++int vgpu_in_worker(void);
+ /** Counter `which`. */
+ uint64_t vgpu_meas_get(int which);
+ /** The counters' names in /proc/stat, by index. */
+diff --git a/rach2/sys/drm/virtio_gpu_3d.c b/rach2/sys/drm/virtio_gpu_3d.c
+index 6b1f14b81..aca24515e 100644
+--- a/rach2/sys/drm/virtio_gpu_3d.c
++++ b/rach2/sys/drm/virtio_gpu_3d.c
+@@ -516,7 +516,15 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
+  * which drops its attachments on the host, so its detach is not sent and
+  * the walk begins again from the device's first context. May sleep.
+  */
++static void vgpu_resource_detach_(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+ void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
++{
++    int64_t t = dma_fence_now();
++
++    vgpu_resource_detach_(vg, bo);
++    vgpu_meas_add(VGPU_M_DETACH_NS, dma_fence_now() - t);
++}
++static void vgpu_resource_detach_(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+ {
+     struct vgpu_context *ctx;
+     struct vgpu_attachment **p, *a;
+@@ -1085,7 +1093,10 @@ const char *const vgpu_meas_names[VGPU_M_N] = {
+     "vgpu_m_room_sleeps",  "vgpu_m_room_ns",    "vgpu_m_dma_sleeps",   "vgpu_m_dma_ns",
+     "vgpu_m_fill_sleeps",  "vgpu_m_fill_ns",    "vgpu_m_reaps",        "vgpu_m_reap_ns",
+     "vgpu_m_reap_cmds",    "vgpu_m_held_peak",  "vgpu_m_notifies",     "vgpu_m_notify_ns",
+-    "vgpu_m_notify_max_ns"};
++    "vgpu_m_notify_max_ns", "vgpu_m_sub_worker", "vgpu_m_sub_other", "vgpu_m_sub_lag_ns",
++    "vgpu_m_sub_lag_max_ns", "vgpu_m_sub_done_ns", "vgpu_m_free_worker", "vgpu_m_free_other",
++    "vgpu_m_free_ns", "vgpu_m_detach_ns", "vgpu_m_release_ns", "vgpu_m_reap_notifies",
++    "vgpu_m_reap_notify_ns"};
+ 
+ void vgpu_meas_add(int which, int64_t delta)
+ {
+diff --git a/rach2/sys/drm/virtio_gpu_submit.c b/rach2/sys/drm/virtio_gpu_submit.c
+index f17ecbc62..9a01400bf 100644
+--- a/rach2/sys/drm/virtio_gpu_submit.c
++++ b/rach2/sys/drm/virtio_gpu_submit.c
+@@ -46,12 +46,17 @@ static void submit_free(struct vgpu_submit *s)
+ static void submit_done(struct virtio_gpu_cmd *cmd)
+ {
+     struct vgpu_submit *s = cmd->arg;
++    int64_t t = dma_fence_now();
+ 
++    vgpu_meas_add(vgpu_in_worker() ? VGPU_M_SUB_WORKER : VGPU_M_SUB_OTHER, 1);
++    vgpu_meas_add(VGPU_M_SUB_LAG_NS, t - cmd->answered_ns);
++    vgpu_meas_max(VGPU_M_SUB_LAG_MAX_NS, (uint64_t)(t - cmd->answered_ns));
+     if (s->event && cmd->resp_type) {
+         drm_send_event(s->event);
+         s->event = NULL;
+     }
+     submit_free(s);
++    vgpu_meas_add(VGPU_M_SUB_DONE_NS, dma_fence_now() - t);
+ }
+ 
+ /* The virgl commands that copy a box between a resource and memory, whose
