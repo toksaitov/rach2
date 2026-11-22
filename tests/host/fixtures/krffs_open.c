@@ -1077,11 +1077,13 @@ void lock_ofd_gone(const struct open_file *ofd)
 }
 
 /** No node of the fixture is a FIFO, a socket file or a device node. */
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
+static int open_special(struct vfs_ref *ref, int fd, int flags, struct vfs_name *name,
+                        int32_t *result)
 {
     (void)ref;
     (void)fd;
     (void)flags;
+    (void)name;
     (void)result;
     return 0;
 }
