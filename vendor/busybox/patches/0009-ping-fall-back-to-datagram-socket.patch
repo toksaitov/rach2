@@ -19,7 +19,10 @@ runs back to back and no reply is read.
 
 Adaptive sends and retries run in the receive loop, which waits with ppoll.
 Both paths check the send count before sending, so a late reply cannot
-send a request past -c or restart the final wait.
+send a request past -c or restart the final wait. The loop polls even when a
+retry is due, so that queued replies are read however short the interval, and
+checks -w again after each poll, so that a reply readable only after the
+deadline is not counted.
 
 diff -ruN a/networking/ping.c b/networking/ping.c
 --- a/networking/ping.c
@@ -63,8 +66,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +		af = AF_INET6;
 +		proto = IPPROTO_ICMPV6;
 +	}
- #endif
--		sock = socket(AF_INET, SOCK_RAW, 1); /* 1 == ICMP */
++#endif
 +	sock = socket(af, SOCK_RAW, proto);
 +#if ENABLE_FEATURE_FANCY_PING
 +	/* A raw socket is root's; any account may open a datagram one. */
@@ -72,7 +74,8 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +		sock = socket(af, SOCK_DGRAM, proto);
 +		icmp_dgram = 1;
 +	}
-+#endif
+ #endif
+-		sock = socket(AF_INET, SOCK_RAW, 1); /* 1 == ICMP */
  	if (sock < 0) {
  		if (errno == EPERM)
  			bb_simple_error_msg_and_die(bb_msg_perm_denied_are_you_root);
@@ -84,12 +87,10 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	unsigned timeout;
  	unsigned sizeof_rcv_packet;
  	char *rcv_packet; /* [datalen + MAXIPLEN + MAXICMPLEN] */
-@@ -507,6 +517,23 @@
- 	}
- 	/* if condition is true, exit with 1 -- 'failure' */
+@@ -509,6 +519,23 @@
  	exit(nrecv == 0 || (G.deadline_us && nrecv < pingcount));
-+}
-+
+ }
+ 
 +/** Return whether another request is allowed by -c. */
 +static int more_requests(void)
 +{
@@ -105,9 +106,11 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +		return timeout;
 +	expire = tmax / (512*1024); /* approximately twice the longest RTT */
 +	return expire ? expire : 1;
- }
- 
++}
++
  static void sendping_tail(void (*sp)(int), int size_pkt)
+ {
+ 	int sz;
 @@ -529,7 +556,13 @@
  	if (sz != size_pkt)
  		bb_simple_error_msg_and_die(bb_msg_write_error);
@@ -123,7 +126,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		/* Didn't send all pings yet - schedule next in -i SEC interval */
  		struct itimerval i;
  		signal(SIGALRM, sp);
-@@ -544,16 +577,54 @@
+@@ -544,16 +577,68 @@
  		 * -W timeout: wait for a response in seconds.
  		 * Affects only timeout in absence of any responses,
  		 * otherwise ping waits for two RTTs. */
@@ -132,6 +135,12 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +		alarm(final_wait());
 +	}
 +}
++
++/** Return whether -w is set and its deadline has passed at NOW. */
++static int deadline_passed(unsigned long long now)
++{
++	return G.deadline_us && (int)(G.deadline_us - (unsigned)now) <= 0;
++}
  
 -		if (G.nreceived) {
 -			/* approx. 2*tmax, in seconds (2 RTT) */
@@ -139,7 +148,11 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 -			if (expire == 0)
 -				expire = 1;
 +/** Wait for an adaptive reply, sending retries and checking the deadline.
-+ * The receive loop owns the send buffer and counters in this mode.
++ * The receive loop owns the send buffer and counters in this mode. Every
++ * pass polls, with no wait when a retry is due, so that queued replies are
++ * read before the next retry however short the interval; and the deadline is
++ * checked again after the poll, since a reply can become readable only after
++ * it, as when the process was stopped in ppoll.
 + */
 +static void wait_for_reply(void (*send_request)(int))
 +{
@@ -154,39 +167,43 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +		struct timespec *wait = NULL;
 +		int ready;
 +
++		if (deadline_passed(now))
++			print_stats_and_exit(0);
 +		if (G.deadline_us) {
-+			int left = (int)(G.deadline_us - (unsigned)now);
++			unsigned left = G.deadline_us - (unsigned)now;
 +
-+			if (left <= 0)
-+				print_stats_and_exit(0);
 +			if (!until || until > now + left)
 +				until = now + left;
- 		}
--		signal(SIGALRM, print_stats_and_exit);
--		alarm(expire);
++		}
 +		if (until) {
-+			unsigned long long left;
++			unsigned long long left = until > now ? until - now : 0;
 +
-+			if (until <= now) {
-+				if (!more_requests())
-+					print_stats_and_exit(0);
-+				send_request(0);
-+				continue;
-+			}
-+			left = until - now;
 +			ts.tv_sec = left / 1000000;
 +			ts.tv_nsec = (left % 1000000) * 1000;
 +			wait = &ts;
 +		}
 +		ready = ppoll(&pfd, 1, wait, NULL);
++		if (ready < 0) {
++			if (errno != EINTR)
++				bb_simple_perror_msg_and_die("ppoll");
++			continue;
++		}
++		now = monotonic_us();
++		if (deadline_passed(now))
++			print_stats_and_exit(0);
 +		if (ready > 0)
 +			return;
-+		if (ready < 0 && errno != EINTR)
-+			bb_simple_perror_msg_and_die("ppoll");
++		if (G.next_event_us && G.next_event_us <= now) {
++			if (!more_requests())
++				print_stats_and_exit(0);
++			send_request(0);
+ 		}
+-		signal(SIGALRM, print_stats_and_exit);
+-		alarm(expire);
  	}
  }
  
-@@ -689,22 +760,25 @@
+@@ -689,22 +774,25 @@
  	puts(dupmsg);
  	fflush_all();
  }
@@ -218,7 +235,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		return 0;				/* not our ping */
  
  	if (icmppkt->icmp_type == ICMP_ECHOREPLY) {
-@@ -715,7 +789,7 @@
+@@ -715,7 +803,7 @@
  			tp = (uint32_t *) icmppkt->icmp_data;
  		unpack_tail(sz, tp,
  			inet_ntoa(*(struct in_addr *) &from->sin_addr.s_addr),
@@ -227,7 +244,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		return 1;
  	}
  	if (icmppkt->icmp_type != ICMP_ECHO) {
-@@ -736,7 +810,7 @@
+@@ -736,7 +824,7 @@
  		return 0;
  
  	icmppkt = (struct icmp6_hdr *) packet;
@@ -236,7 +253,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		return 0;				/* not our ping */
  
  	if (icmppkt->icmp6_type == ICMP6_ECHO_REPLY) {
-@@ -763,6 +837,10 @@
+@@ -763,6 +851,10 @@
  static void ping4(len_and_sockaddr *lsa)
  {
  	int sockopt;
@@ -247,7 +264,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  
  	pingaddr.sin = lsa->u.sin;
  	if (source_lsa) {
-@@ -786,31 +864,45 @@
+@@ -786,31 +878,45 @@
  		setsockopt_int(pingsock, IPPROTO_IP, IP_MULTICAST_TTL, opt_ttl);
  	}
  
@@ -303,7 +320,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	}
  }
  #if ENABLE_PING6
-@@ -827,7 +919,7 @@
+@@ -827,7 +933,7 @@
  		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
  
  #ifdef ICMP6_FILTER
@@ -312,7 +329,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		struct icmp6_filter filt;
  		if (!(option_mask32 & OPT_VERBOSE)) {
  			ICMP6_FILTER_SETBLOCKALL(&filt);
-@@ -851,10 +943,11 @@
+@@ -851,10 +957,11 @@
  
  	sockopt = offsetof(struct icmp6_hdr, icmp6_cksum);
  	BUILD_BUG_ON(offsetof(struct icmp6_hdr, icmp6_cksum) != 2);
@@ -326,7 +343,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  
  	if (if_index)
  		pingaddr.sin6.sin6_scope_id = if_index;
-@@ -869,8 +962,6 @@
+@@ -869,8 +976,6 @@
  	iov.iov_base = G.rcv_packet;
  	iov.iov_len = G.sizeof_rcv_packet;
  
@@ -335,7 +352,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	sendping6(0);
  
  	/* listen for replies */
-@@ -879,6 +970,7 @@
+@@ -879,6 +984,7 @@
  		struct cmsghdr *mp;
  		int hoplimit = -1;
  
@@ -343,7 +360,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		msg.msg_controllen = sizeof(control_buf);
  		c = recvmsg(pingsock, &msg, 0);
  		if (c < 0) {
-@@ -899,9 +991,8 @@
+@@ -899,9 +1005,8 @@
  		c = unpack6(G.rcv_packet, c, &from, hoplimit);
  		if (pingcount && G.nreceived >= pingcount)
  			break;
@@ -355,7 +372,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	}
  }
  #endif
-@@ -971,6 +1062,15 @@
+@@ -971,6 +1076,15 @@
  	if (interval > INT_MAX/1000000)
  		interval = INT_MAX/1000000;
  	G.interval_us = interval * 1000000;

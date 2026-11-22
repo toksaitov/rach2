@@ -145,7 +145,8 @@ ten.
 Stop when
 .Ar deadline
 seconds have passed, at most 2147, whatever has been sent or received.
-In adaptive mode the deadline limits the wait for replies.
+In adaptive mode the deadline limits the wait for replies, and a reply
+read after it is not counted.
 With periodic sends the time is checked as each request is sent, so a
 long interval can overrun it.
 .It Fl q
