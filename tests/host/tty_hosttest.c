@@ -298,6 +298,21 @@ int fd_alloc(fd_table_t *table)
     return -1;
 }
 
+/** A failure: no row allocates, so none frees, a descriptor. */
+int fd_free(fd_table_t *table, int fd)
+{
+    (void)table;
+    (void)fd;
+    CHECK(0, "file operations do not free a descriptor");
+    return -1;
+}
+
+/** 1: no walk runs here, so its stamp always holds. */
+int vfs_consume_still(void)
+{
+    return 1;
+}
+
 /** 1: every host address is user memory. A copy fails only as
  * `copy_failure` chooses. */
 int user_range_ok(uintptr_t addr, size_t len)

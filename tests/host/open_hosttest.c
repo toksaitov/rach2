@@ -1008,6 +1008,18 @@ void vfs_ref_now(struct vfs_ref *ref)
     (void)ref;
 }
 
+/** The newest walk keep, for a call that runs an attempt again: none here. */
+const void *vfs_walk_keeps_mark(void)
+{
+    return NULL;
+}
+
+/** Give back the keeps since `mark`: no walk keeps one here. */
+void vfs_walk_keeps_back(const void *mark)
+{
+    (void)mark;
+}
+
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
  * may sleep for the disk, and the call queued for the row, a write that

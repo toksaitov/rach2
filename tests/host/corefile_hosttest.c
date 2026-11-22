@@ -553,6 +553,18 @@ void vfs_ref_now(struct vfs_ref *ref)
     (void)ref;
 }
 
+/** The newest walk keep, for a call that runs an attempt again: none here. */
+const void *vfs_walk_keeps_mark(void)
+{
+    return NULL;
+}
+
+/** Give back the keeps since `mark`: no walk keeps one here. */
+void vfs_walk_keeps_back(const void *mark)
+{
+    (void)mark;
+}
+
 /** The attributes of the working directory, anyone's to write, and of the
  * file, root's, with the length written so far. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
