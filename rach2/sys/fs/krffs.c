@@ -2172,7 +2172,8 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
  * that fails fails the move.
  *
  * Returns 0, KRFFS_ENOSPACE or KRFFS_EIO. `*live` is the node that holds the
- * file afterwards, where the caller points its holders whatever the answer:
+ * file afterwards, where the owner points its holders whatever the answer
+ * (`krffs_move`):
  * the copy once the old node's type is stored as free, even when the
  * removal's merge or sync then failed, and the old node otherwise, in which
  * case the copy is withdrawn (`krffs_withdraw`), so that the running kernel
@@ -2181,8 +2182,8 @@ static int krffs_grow_into(krffs_mount_t *mount, uint64_t offset, uint64_t size_
  * the medium, or the mount unsettled, before a rename can give the copy
  * another name, which would leave the file under two names.
  */
-static int krffs_move(krffs_mount_t *mount, uint64_t offset, uint64_t size,
-                      const krffs_fill_t *fill, uint64_t *live)
+static int krffs_move_node(krffs_mount_t *mount, uint64_t offset, uint64_t size,
+                           const krffs_fill_t *fill, uint64_t *live)
 {
     int err;
     int typed;
@@ -2203,6 +2204,27 @@ static int krffs_move(krffs_mount_t *mount, uint64_t offset, uint64_t size,
         krffs_withdraw(mount, moved);
     }
     return KRFFS_EIO;
+}
+
+/**
+ * `krffs_move_node`, told to the mount's owner (`on_move`) as it begins and
+ * as it ends, on every answer, with the node's place then, so that the owner
+ * brackets the move, and the holders it moves to the new place, as one
+ * change of what paths name.
+ */
+static int krffs_move(krffs_mount_t *mount, uint64_t offset, uint64_t size,
+                      const krffs_fill_t *fill, uint64_t *live)
+{
+    int rc;
+
+    if (mount->on_move) {
+        mount->on_move(mount, offset, KRFFS_NO_NODE);
+    }
+    rc = krffs_move_node(mount, offset, size, fill, live);
+    if (mount->on_move) {
+        mount->on_move(mount, offset, *live);
+    }
+    return rc;
 }
 
 /**
@@ -5056,6 +5078,7 @@ static int krffs_mount_root(void *base, uint32_t size, uint32_t disk_grain, int 
     krffs_root_mount.withdrawn = 0;
     krffs_root_mount.orphans = 0;
     krffs_root_mount.on_halt = NULL; /* the VFS mount sets it (`krffs_root_on_halt`) */
+    krffs_root_mount.on_move = NULL; /* and this (`krffs_root_on_move`) */
     krffs_root_flush = flush;
 
     if (krffs_head(&krffs_root_mount, 0, &root) != 0) {
@@ -5142,6 +5165,25 @@ int krffs_root_halted(void)
 void krffs_root_on_halt(void (*fn)(krffs_mount_t *mount))
 {
     krffs_root_mount.on_halt = fn;
+}
+
+/* The boot root's owner's `on_move`, by nodes (`krffs_root_on_move`). */
+static void (*krffs_root_move_fn)(krffs_node_t *from, krffs_node_t *to);
+
+/** The boot root's `on_move`: the owner's, by nodes, NULL for a move that
+ * begins. */
+static void krffs_root_moved(krffs_mount_t *mount, uint64_t from, uint64_t to)
+{
+    (void)mount;
+    if (krffs_root_move_fn) {
+        krffs_root_move_fn(krffs_node_of(from), to == KRFFS_NO_NODE ? NULL : krffs_node_of(to));
+    }
+}
+
+void krffs_root_on_move(void (*fn)(krffs_node_t *from, krffs_node_t *to))
+{
+    krffs_root_move_fn = fn;
+    krffs_root_mount.on_move = fn ? krffs_root_moved : NULL;
 }
 
 int krffs_root_has_orphans(void)

@@ -19,6 +19,7 @@
 #include "bcache.h"
 #include "krffs.h"
 #include "vfs.h"
+#include "walkseq.h"
 
 /* The files a volume has open, one record per open node, allocated at the
  * first open and freed at the last close. A name removed while a file is
@@ -217,6 +218,31 @@ static void kv_halted(krffs_mount_t *fs)
 
     bcache_halt_writes(vol->dev);
     vfs_mount_halted(vol->mnt);
+}
+
+static void open_moved(struct krffs_volume *vol, uint64_t from, uint64_t to);
+
+/**
+ * The volume's `on_move`: a move of the node at `from` is a change of what
+ * paths name, begun before it moves, with `to` KRFFS_NO_NODE, and ended once
+ * its open record and every holder of the volume's mounts, binds and copies
+ * among them, have its new place `to` (`open_moved`, `vfs_repoint`), even
+ * when the write that moved it then failed, so that a walk that may have
+ * held the old place starts again.
+ */
+static void kv_moved(krffs_mount_t *fs, uint64_t from, uint64_t to)
+{
+    struct krffs_volume *vol = fs->ctx;
+
+    if (to == KRFFS_NO_NODE) {
+        vfs_seq_begin();
+        return;
+    }
+    if (to != from) {
+        open_moved(vol, from, to);
+        vfs_repoint(vol->mnt, handle_of(from), handle_of(to));
+    }
+    vfs_seq_end();
 }
 
 /** Reap a last holder's node under the mount lock. A failed writeback
@@ -635,9 +661,9 @@ static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
 /**
  * Write an open file under the mount lock.
  *
- * Resolve the handle after taking the mount lock. If the node moves,
- * repoint its references from the resolved offset to the new offset,
- * including when the operation fails after relocation. Returns the bytes
+ * Resolve the handle after taking the mount lock. A move of the node
+ * repoints its references to the new offset inside the move's change of
+ * what paths name, a failure after it included (`kv_moved`). Returns the bytes
  * written; -EROFS on a read-only mount; -EFBIG for a write that would reach
  * past 4 GiB; -ENOSPC when the file could not grow; or -EIO.
  */
@@ -646,7 +672,6 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
 {
     struct krffs_volume *vol = vol_of(mnt);
     uint64_t at;
-    uint64_t was;
     int written;
     int rc = begin_write(mnt);
 
@@ -654,7 +679,6 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         return rc;
     }
     at = follow_moves(handle);
-    was = at;
     if (offset > 0xFFFFFFFFull || offset + count > 0xFFFFFFFFull) {
         vfs_ns_unlock(mnt);
         return -EFBIG;
@@ -662,10 +686,6 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     vol->writer = handle;
     written = krffs_write_at(&vol->fs, &at, buf, count, (uint32_t)offset);
     vol->writer = NULL;
-    if (at != KRFFS_NO_NODE && at != was) {
-        open_moved(vol, was, at);
-        vfs_repoint(mnt, handle_of(was), handle_of(at));
-    }
     vfs_ns_unlock(mnt);
     if (written == KRFFS_ENOSPACE) {
         return -ENOSPC;
@@ -679,11 +699,11 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
 /**
  * Truncate an open file under the mount lock.
  *
- * Resolve the handle after taking the mount lock. If the node moves,
- * repoint its references from the resolved offset to the new offset,
- * including when the operation fails after relocation. Returns 0; -EROFS on
- * a read-only mount; -EFBIG for a size of 4 GiB or more; -ENOSPC when the
- * file could not grow; or -EIO.
+ * Resolve the handle after taking the mount lock. A move of the node repoints
+ * its references to the new offset inside the move's change of what paths
+ * name, a failure after it included (`kv_moved`). Returns 0; -EROFS on a
+ * read-only mount; -EFBIG for a size of 4 GiB or more; -ENOSPC when the file
+ * could not grow; or -EIO.
  */
 static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
@@ -698,16 +718,11 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size, int s
         return -EFBIG;
     }
     {
-        uint64_t was = follow_moves(handle);
-        uint64_t now = was;
+        uint64_t now = follow_moves(handle);
 
         vol->writer = handle;
         rc = krffs_resize_node_at(&vol->fs, now, (uint32_t)size, &now, stamp_times);
         vol->writer = NULL;
-        if (now != KRFFS_NO_NODE && now != was) {
-            open_moved(vol, was, now);
-            vfs_repoint(mnt, handle_of(was), handle_of(now));
-        }
     }
     vfs_ns_unlock(mnt);
     if (rc == KRFFS_ENOSPACE) {
@@ -1047,31 +1062,24 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
 
 /**
  * Whether the node at `at` is some process's working directory, which the
- * process record keeps as the mount and the node's handle (`vfs_cwd_set`),
- * or the start a path page of the process keeps for a walk from another
- * namespace's mount (`path_buf_set_dir`), through any mount of the volume,
- * a bind or a mount namespace's copy among them. This type counts no
- * handles, so neither takes a hold on the node, and a removal looks for it
- * in the records themselves.
+ * process record keeps as the mount and the node's handle (`vfs_cwd_set`), or
+ * held by a walk, as the start a path page keeps or a reference a full walk
+ * registers while it sleeps (`vfs_walk_holds`), through any mount of the
+ * volume, a bind or a mount namespace's copy among them. This type counts no
+ * handles, so neither takes a hold on the node, and a removal looks for it in
+ * the records themselves.
  */
 static int cwd_at(struct vfs_mount *mnt, uint64_t at)
 {
     const process_t *pr;
-    int i;
 
     for (pr = proc_list; pr; pr = pr->next) {
         if (pr->fs && pr->fs->cwd_mnt && vfs_mount_base(pr->fs->cwd_mnt) == vfs_mount_base(mnt) &&
             pr->fs->cwd_node == handle_of(at)) {
             return 1;
         }
-        for (i = 0; pr->paths_on_mounts && i < PATH_BUFS; i++) {
-            if (pr->path_mount[i] && pr->path_node[i] == handle_of(at) &&
-                vfs_mount_base(pr->path_mount[i]) == vfs_mount_base(mnt)) {
-                return 1;
-            }
-        }
     }
-    return 0;
+    return vfs_walk_holds(mnt, handle_of(at));
 }
 
 /**
@@ -1502,6 +1510,7 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
     vol->fs.sector = dev->sector_size;
     vol->fs.sector_phase = dev->sector_phase;
     vol->fs.on_halt = kv_halted;
+    vol->fs.on_move = kv_moved;
     mnt->priv = vol;
 
     if (krffs_head(&vol->fs, 0, &root) != 0) {

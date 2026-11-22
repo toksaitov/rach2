@@ -1178,6 +1178,14 @@ uint32_t vfs_mount_put(struct vfs_mount *mnt);
  * could wait for that lock while its holder waits for the caller's.
  */
 int vfs_ns_held_by_caller(void);
+
+/** Whether a walk holds the node `node` of the file system of `mnt`, through
+ * any mount of it: as the start a path page keeps (`path_bufs_hold`), or as
+ * a reference a full walk registers while it may sleep, its root or where it
+ * stands (`walk_holds` in process.h). A type that counts no holds on its
+ * nodes, KRFFS, refuses to remove a directory so held. Under the big
+ * lock. */
+int vfs_walk_holds(const struct vfs_mount *mnt, const void *node);
 /** Whether the calling process holds a file lock, or the namespace lock of
  * a mount whose base is not that of `mnt`; the name cache puts a node of
  * `mnt` only when it holds neither (dcache.h). */

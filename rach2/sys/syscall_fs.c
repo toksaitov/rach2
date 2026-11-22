@@ -19831,19 +19831,19 @@ long sys_mknodat(isr_params_t *params)
 /**
  * Whether the directory `dir` of the KRFFS root on `mnt` is in use: a
  * description has it, an O_PATH descriptor's or one in flight on a socket
- * among them, it is a process's working directory, or a path page keeps it
- * as a walk's start (`path_bufs_hold`), through any mount of the root, a
- * bind or a mount namespace's copy among them. A descriptor of the root
- * finds its directory by the node's place, which the allocator gives the
- * next node it makes once the directory is freed, so `rmdir` answers
- * -EBUSY for a directory in use, as a KRFFS volume does (`kv_rmdir`); ext2
- * removes one and keeps its inode for the holders.
+ * among them, it is a process's working directory, or a walk holds it, as its
+ * start or while it sleeps (`vfs_walk_holds`), through any mount of the root,
+ * a bind or a mount namespace's copy among them. A descriptor of the root
+ * finds its directory by the node's place, which the allocator gives the next
+ * node it makes once the directory is freed, so `rmdir` answers -EBUSY for a
+ * directory in use, as a KRFFS volume does (`kv_rmdir`); ext2 removes one and
+ * keeps its inode for the holders.
  */
 static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
 {
     process_t *pr;
 
-    if (fd_ofd_holders(mnt, dir, NULL) > 0 || path_bufs_hold(mnt, dir)) {
+    if (fd_ofd_holders(mnt, dir, NULL) > 0 || vfs_walk_holds(mnt, dir)) {
         return 1;
     }
     for (pr = proc_list; pr; pr = pr->next) {

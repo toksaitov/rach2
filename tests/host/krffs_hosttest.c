@@ -303,6 +303,7 @@ static krffs_mount_t mount_over(const krffs_backend_t *backend, void *ctx, uint3
     mount.withdrawn = 0;
     mount.orphans = 0;
     mount.on_halt = NULL;
+    mount.on_move = NULL;
     return mount;
 }
 
