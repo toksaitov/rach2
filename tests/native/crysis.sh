@@ -251,11 +251,12 @@ PYTHON
 # in the desktop account's home and through links in the copy to that home
 # and to Proton's tree, a create, rename, unlink, mkdir and symlink of a new
 # name and a write, truncate and chown of an existing file, each to its own
-# size and owner, must each fail with EROFS; in /data/crysis and each
-# writable path the same writes of a new file must succeed. A write that went
-# through is taken back at once. Prints a line for each place and exits 1 on
-# a failure, before COMMAND runs. The process is the caller's: unshare and
-# python3 exec in turn, so that a signal to it reaches COMMAND.
+# size and owner, must each fail with EROFS, the truncate and the chown
+# tried only where statvfs gives the mount as read-only; in /data/crysis and
+# each writable path the same writes of a new file must succeed. A write that
+# went through is taken back at once. Prints a line for each place and exits
+# 1 on a failure, before COMMAND runs. The process is the caller's: unshare
+# and python3 exec in turn, so that a signal to it reaches COMMAND.
 seal_py=$(cat << 'PYTHON'
 import errno, os, pwd, re, subprocess, sys
 
@@ -362,12 +363,26 @@ def remove(names):
             attempt(lambda: os.unlink(path))
 
 
+def read_only(path):
+    """Return whether statvfs gives the mount PATH is on as read-only."""
+    try:
+        return bool(os.statvfs(path).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+
 def refused(label, folder, existing):
     """Return the writes in FOLDER and on EXISTING that did not fail with
-    EROFS, taking back each that went through."""
+    EROFS, taking back each that went through. The truncate and chown of
+    EXISTING, which would change its times even at its own size and owner,
+    are tried only where statvfs gives the mount as read-only, and count as
+    failed otherwise."""
     rows, names = tries(folder, existing)
     bad = []
     for op, call in rows:
+        if op in ("truncate", "chown") and not read_only(existing):
+            bad.append("%s %s: not read-only by statvfs, not tried" % (label, op))
+            continue
         code = attempt(call)
         remove(names)
         if code != errno.EROFS:
