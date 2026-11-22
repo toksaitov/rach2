@@ -161,6 +161,12 @@ int vfs_stamp_still(const struct vfs_stamp *st)
     return 0;
 }
 
+int vfs_consume_still(void)
+{
+    return !current_proc || !current_proc->walk_consume ||
+           vfs_stamp_still(current_proc->walk_consume);
+}
+
 int vfs_stamp_begin(const struct vfs_stamp *st)
 {
     if (!st->on) {

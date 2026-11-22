@@ -2955,7 +2955,7 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
  * while it slept (`walk_handoff`): the call lets go of all it took and runs
  * again from its walk, both walks of a call of two paths. Below every errno
  * and CALL_LOCKED, and never a call's answer. */
-#define CALL_AGAIN (-4095 - 2)
+#define CALL_AGAIN VFS_AGAIN
 
 /**
  * Check, for a call that holds the locks of its change and has not yet made
@@ -4644,11 +4644,17 @@ static int link_through(const char *name, const struct vfs_ref *dir, const char 
  * O_CREAT to create: as on Linux, the target is what is created. `name` is
  * a path as `do_open` takes it, without its first slash. Returns 1 with the
  * target's absolute path in `through`, the link's directory in front of a
- * relative one, for the retry to take from `through + 1`; 0 when `name` is
- * not a link, the open's own answer standing; or a negative errno: ELOOP
- * once `followed` passes the resolver's bound of forty links, ENOENT for an
- * empty target, which names nothing, as the resolver answers, ENOMEM or
- * ENAMETOOLONG. `name` may be `through + 1`, from the link before.
+ * relative one, for the retry to take from `through + 1`; 0 when `name`
+ * names nothing, for the open to create it, or "." or "..", or a name that
+ * is not a link, the open's own answer standing; or a negative errno: the
+ * error of the walk to the link's directory or of its lookup there, which
+ * the open returns as it is, ELOOP once `followed` passes the resolver's
+ * bound of forty links, ENOENT for an empty target, which names nothing,
+ * as the resolver answers, ENOMEM or ENAMETOOLONG. `name` may be
+ * `through + 1`, from the link before. The open checks the stamp of its
+ * first walk before it makes the file (`do_open`), so a change of what a
+ * path names between the walks here and the creation sends the whole open
+ * round again.
  *
  * One walk finds the link's directory and the link is looked up in it,
  * and a relative target is walked from that directory, which `through`
@@ -4666,12 +4672,14 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
     int tlen;
     int is_link;
 
-    if (vfs_resolve(0, name, VFS_WALK_PARENT | VFS_WALK_NOFOLLOW, &dir, leaf, sizeof(leaf)) != 0) {
-        return 0;
+    tlen = vfs_resolve(0, name, VFS_WALK_PARENT | VFS_WALK_NOFOLLOW, &dir, leaf, sizeof(leaf));
+    if (tlen != 0) {
+        return tlen;
     }
-    if (leaf_is_dot(leaf) || vfs_resolve(&dir, leaf, VFS_WALK_NOFOLLOW, &linkref, 0, 0) != 0) {
+    tlen = leaf_is_dot(leaf) ? -ENOENT : vfs_resolve(&dir, leaf, VFS_WALK_NOFOLLOW, &linkref, 0, 0);
+    if (tlen != 0) {
         vfs_ref_release(&dir);
-        return 0;
+        return tlen == -ENOENT ? 0 : tlen;
     }
     is_link = !vfs_synth_vpath(linkref.mnt, linkref.node) && linkref.mnt->type->ops->readlink &&
               vfs_getattr(linkref.mnt, linkref.node, &lst) == 0 &&
@@ -5542,11 +5550,17 @@ static int32_t may_create_in_sticky(const struct vfs_ref *ref, const struct vfs_
  * still held, or the open's answer, with the lock let go and `ref` released
  * or opened as a synthetic node, a device node or a socket file opens,
  * which take their own descriptors, `*fd` -1 then for a reservation used or
- * given back.
+ * given back. A synthetic node's open checks the stamp of the open's walk,
+ * which the caller leaves in `walk_consume` (process.h), first, and its
+ * backend checks it again after its own preparation and before its effects
+ * (`vfs_consume_still`, `devfs_open`), as a device node's does: CALL_AGAIN
+ * when what a path names changed meanwhile, for the open to run again from
+ * its walk.
  */
 static int open_found(struct vfs_ref *ref, const struct vfs_stat *dir, int flags,
                       struct vfs_name *entry, int *fd, const char *name)
 {
+    const struct vfs_stamp *st = current_proc->walk_consume;
     const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
     struct vfs_mount *locked = ref->mnt;
     int32_t rc;
@@ -5559,7 +5573,8 @@ static int open_found(struct vfs_ref *ref, const struct vfs_stat *dir, int flags
         vfs_walk_unlock(ref->mnt);
         fd_free(current_proc->fds, *fd);
         *fd = -1;
-        rc = ro ? ro : open_synth_node(ref, &vpc, flags);
+        rc = ro ? ro : walk_handoff(st);
+        rc = rc == 0 ? open_synth_node(ref, &vpc, flags) : rc;
         synth_mount_record(rc, ref, &vpc, flags);
         vfs_ref_release(ref);
         synth_dir_record(rc, permanent, name);
@@ -5625,7 +5640,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     struct vfs_ref ref;
     struct vfs_stat dir;
-    struct vfs_stamp st;
+    struct vfs_stamp st, first;
     struct vfs_name *entry = NULL;
     struct vfs_mount *locked;
     const char *named = name;
@@ -5653,6 +5668,10 @@ again:
                                     : 0),
                            &ref, NULL, &entry, &dir);
     vfs_stamp_get(&st);
+    if (name == named) {
+        first = st;
+    }
+    current_proc->walk_consume = &first;
     if (rc == 0 && (flags & O_TRUNC) && !ref.mnt->type->ns_serialised) {
         walk_gate(WALK_GATE_HANDOFF);
     }
@@ -5672,7 +5691,7 @@ again:
             name = through + 1;
             goto again;
         }
-        rc = open_create(name, flags, mode & 07777u, &ref, &entry, NULL);
+        rc = open_create(name, flags, mode & 07777u, &ref, &entry, &first);
         if (rc == CALL_AGAIN) {
             name = named;
             followed = 0;
@@ -5687,14 +5706,15 @@ again:
         flags &= ~O_TRUNC;
         fd_slot(current_proc->fds, fd)->ofd->watch_flags = OFD_WATCH_MADE;
     } else if (rc != 0 || (rc = open_found(&ref, &dir, flags, entry, &fd, name)) != OPEN_GO) {
-        goto out;
+        goto checked;
     }
     locked = ref.mnt;
     fd_slot(current_proc->fds, fd)->ofd->name = entry;
     entry = NULL;
-    rc = open_install(&ref, fd, name, flags, &st);
+    rc = open_install(&ref, fd, name, flags, &first);
     fd = -1;
     vfs_walk_unlock(locked);
+checked:
     if (rc == CALL_AGAIN) {
         fd = fd_alloc(current_proc->fds);
         if (fd < 0) {
@@ -5707,6 +5727,7 @@ again:
         goto again;
     }
 out:
+    current_proc->walk_consume = NULL;
     vfs_name_put(entry);
     if (fd >= 0) {
         fd_free(current_proc->fds, fd);

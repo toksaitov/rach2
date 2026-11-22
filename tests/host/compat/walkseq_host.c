@@ -81,6 +81,13 @@ int vfs_stamp_still(const struct vfs_stamp *st)
     return !st->on || vfs_seq_still(st->seq);
 }
 
+/** Whether the stamp a call consumes still holds: always, with no other
+ * thread. */
+int vfs_consume_still(void)
+{
+    return 1;
+}
+
 /** `vfs_stamp_still` and the beginning of a change as one step. */
 int vfs_stamp_begin(const struct vfs_stamp *st)
 {
