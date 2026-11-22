@@ -604,8 +604,11 @@ static int set_policy_of(pid_t pid, int policy, int priority)
  * hands them to the port and wakes the drain, whose wait is then over; the
  * child, which runs next, sees TIOCOUTQ at 0 and sends SIGUSR1 before the
  * drain runs again. The drain must fail with EINTR, as Linux's TCSBRK
- * tests for a signal after its wait, though its output is out. khvcd and
- * this process are SCHED_OTHER again after. Returns 0 when the row held.
+ * tests for a signal after its wait, though its output is out. A child
+ * whose TIOCOUTQ fails sends no signal and fails the row, and a failed
+ * write kills the child, so neither leaves the drain or the wait for the
+ * child hanging. khvcd and this process are SCHED_OTHER again after.
+ * Returns 0 when the row held.
  */
 static int late_signal_row(int fd)
 {
@@ -636,21 +639,37 @@ static int late_signal_row(int fd)
         while (ioctl(fd, TIOCOUTQ, &queued) == 0 && queued != 0) {
             sched_yield();
         }
+        if (queued != 0) {
+            _exit(1);
+        }
         kill(getppid(), SIGUSR1);
-        _exit(queued == 0 ? 0 : 1);
+        _exit(0);
     }
     close(go[0]);
-    rc = child < 0 || write(fd, "late\n", 5) != 5 || write(go[1], "g", 1) != 1 ? -2 : tcdrain(fd);
-    err = errno;
+    status = 0;
+    if (child < 0 || write(fd, "late\n", 5) != 5 || write(go[1], "g", 1) != 1) {
+        rc = -2;
+        err = errno;
+        if (child > 0) {
+            kill(child, SIGKILL);
+        }
+    } else {
+        rc = tcdrain(fd);
+        err = errno;
+    }
+    close(go[1]);
     if (child > 0) {
         waitpid(child, &status, 0);
     }
-    close(go[1]);
     set_policy(SCHED_OTHER, 0);
     set_policy_of(khvcd, SCHED_OTHER, 0);
     errno = err;
     if (rc == -2) {
         return fail("the late signal's drain does not start");
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        errno = 0;
+        return fail("the late signal's child does not see TIOCOUTQ read 0");
     }
     if (rc != -1 || err != EINTR || drain_signals != 1) {
         return fail("a drain whose output went out as SIGUSR1 came does not fail with EINTR");
@@ -851,9 +870,10 @@ struct termio_v {
 
 /**
  * The termio forms on the pty `slave` fed by `master`: TCGETA gives the low
- * 16 bits of each mode; TCSETAW with ECHO cleared installs it and keeps a
- * high bit of c_cflag, CRTSCTS, that tcsetattr set; TCSETAF also discards
- * the input the master fed. The modes are restored. Returns 0 when the row
+ * 16 bits of each of the four modes, the line discipline and VINTR; TCSETAW
+ * with ECHO and ONLCR cleared installs both and keeps a high bit of
+ * c_cflag, CRTSCTS, that tcsetattr set; TCSETAF also discards the input
+ * the master fed. The modes are restored. Returns 0 when the row
  * held.
  */
 static int termio_row(int master, int slave)
@@ -870,17 +890,22 @@ static int termio_row(int master, int slave)
     if (tcsetattr(slave, TCSANOW, &modes) != 0 || ioctl(slave, TCGETA, &v) != 0) {
         return fail("TCGETA fails");
     }
-    if (v.c_iflag != (unsigned short)modes.c_iflag || v.c_lflag != (unsigned short)modes.c_lflag ||
-        v.c_cflag != (unsigned short)modes.c_cflag || v.c_line != modes.c_line ||
-        v.c_cc[VINTR] != modes.c_cc[VINTR]) {
+    if (v.c_iflag != (unsigned short)modes.c_iflag || v.c_oflag != (unsigned short)modes.c_oflag ||
+        v.c_cflag != (unsigned short)modes.c_cflag || v.c_lflag != (unsigned short)modes.c_lflag ||
+        v.c_line != modes.c_line || v.c_cc[VINTR] != modes.c_cc[VINTR]) {
         errno = 0;
         return fail("TCGETA does not give the low bits of the modes");
     }
+    if (!(v.c_oflag & ONLCR)) {
+        errno = 0;
+        return fail("the slave's modes have no ONLCR for TCSETAW to clear");
+    }
     v.c_lflag &= (unsigned short)~ECHO;
+    v.c_oflag &= (unsigned short)~ONLCR;
     if (ioctl(slave, TCSETAW, &v) != 0 || tcgetattr(slave, &modes) != 0) {
         return fail("TCSETAW fails");
     }
-    if ((modes.c_lflag & ECHO) || !(modes.c_cflag & CRTSCTS)) {
+    if ((modes.c_lflag & ECHO) || (modes.c_oflag & ONLCR) || !(modes.c_cflag & CRTSCTS)) {
         errno = 0;
         return fail("TCSETAW does not set the low bits and keep the high ones");
     }
