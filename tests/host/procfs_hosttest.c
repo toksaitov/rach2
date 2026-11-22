@@ -3036,10 +3036,10 @@ uint32_t seccomp_filter_count(const process_t *p)
 }
 
 /** The status rows' address space has no page present. */
-void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty, unsigned long *anon)
 {
-    (void)dir;
+    (void)mm;
     (void)start;
     (void)end;
     *present = *dirty = *anon = 0;
@@ -3119,6 +3119,24 @@ static void end_reading(void)
     proc_ref_put(reading);
     reading = NULL;
     reaps++;
+}
+
+/* Another thread may reap the target as soon as the reader drops the lock. */
+static void (*host_drop)(void);
+
+/** Drop the model reader's one hold, running `host_drop` if set. */
+int bkl_drop(void)
+{
+    if (host_drop) {
+        host_drop();
+    }
+    return 1;
+}
+
+/** Restore the model reader's one hold. */
+void bkl_take(int depth)
+{
+    check(depth == 1, "the status reader restores its big-lock depth");
 }
 
 /* The walk from outside an address space, counted from 1, during whose
@@ -3265,12 +3283,11 @@ static void status_reaped_during_wait(void)
     if (!reading) {
         return;
     }
-    host_read_begin = reap_at_walk;
-    host_read_end = put_at_walk;
+    reading->refs = 1;
+    host_drop = end_reading;
     procfs_text_init(&text);
     len = procfs_gen_status(&text, 13);
-    host_read_begin = NULL;
-    host_read_end = NULL;
+    host_drop = NULL;
     check(len > 0 && !text.nomem && reaps == before + 1 && !reading,
           "a status read of a process reaped while it waits for the regions' lock ends");
     check(len > 0 && !text.nomem && text.buf[len - 1] == '\n' &&

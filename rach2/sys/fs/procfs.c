@@ -61,6 +61,7 @@
 #include "../proc/tgroup.h"
 #include "../proc/seccomp.h"
 #include "../proc/ns.h"
+#include "../lib/kirq.h"
 #include "../lib/lockdep.h"
 #include "../lib/rcu.h"
 #include "../proc/smp.h"
@@ -2814,7 +2815,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
-        paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &anon);
+        paging_user_count(mm, r->start, r->end, &present, &dirty, &anon);
         clean = present - dirty;
         ap_maps_line(t, mm, r, &names);
         ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
@@ -3220,7 +3221,7 @@ static void procfs_waketime(struct procfs_text *t, const process_t *p)
  * tables and each frame's anonymous mark, which fork and copy-on-write
  * preserve independently of the dirty bit; the three sum to VmRSS.
  */
-static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long *file,
+static void rss_by_kind(struct mm *mm, unsigned long *anon, unsigned long *file,
                         unsigned long *shmem)
 {
     const vma_t *r;
@@ -3232,7 +3233,7 @@ static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long 
         unsigned long present, dirty, own, copies;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
-        paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &copies);
+        paging_user_count(mm, r->start, r->end, &present, &dirty, &copies);
         own = r->type == VM_SHARED ? 0 : of_file ? copies : present;
         *anon += own;
         if (filemap_in_memory(r->file)) {
@@ -3243,18 +3244,28 @@ static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long 
     }
 }
 
-/** Append the memory sizes of an address space to its status record. */
-static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
+/** Append the memory sizes to the status record. Hold a reference to `mm`
+ * across the walk. Give up the big lock before taking the regions' lock,
+ * and give back the regions' lock before taking the big lock again. */
+static void procfs_status_memory(struct procfs_text *t, struct mm *mm)
 {
-    unsigned long size = vm_total(&mm->vm);
-    unsigned long rss = mm_resident(mm) * PAGE_SIZE;
-    unsigned long anon, file, shmem;
+    unsigned long size, rss, anon, file, shmem;
+    unsigned long pinned = mm->pinned;
+    uint32_t flags;
+    int depth;
 
+    mm_get(mm);
+    flags = kirq_save();
+    depth = bkl_drop();
+    kirq_restore(flags);
+    mmap_read_lock(mm);
+    size = vm_total(&mm->vm);
+    rss = mm_resident(mm) * PAGE_SIZE;
     rss_by_kind(mm, &anon, &file, &shmem);
     ap_kb(t, "VmPeak", size);
     ap_kb(t, "VmSize", size);
     ap_kb(t, "VmLck", vm_locked(&mm->vm));
-    ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
+    ap_kb(t, "VmPin", pinned * PAGE_SIZE);
     ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
     ap_kb(t, "VmRSS", rss);
     ap_kb(t, "RssAnon", anon * PAGE_SIZE);
@@ -3265,6 +3276,11 @@ static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
     ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
     ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
     ap_kb(t, "VmSwap", 0);
+    mmap_unlock(mm);
+    flags = kirq_save();
+    bkl_take(depth);
+    kirq_restore(flags);
+    procfs_mm_put(mm);
 }
 
 /** Append the lines of `p`'s status record that follow its memory sizes,
@@ -3376,9 +3392,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     procfs_text_init(&rest);
     procfs_status_rest(&rest, p);
     if (mm) {
-        mm_read_begin(mm);
         procfs_status_memory(t, mm);
-        mm_read_end(mm);
     }
     ap_text(t, &rest);
     return t->len;
