@@ -2625,7 +2625,8 @@ struct cached_links {
  * the spliced path begins with: a target of "/" splices to "//rest", which
  * `cached_start` would leave to the full walk. That root must be the one
  * the walk took first (`lk->root`), as `nd_jump_root` jumps to the
- * `nd->root` the walk began with. A relative target goes on from `cur`. 0,
+ * `nd->root` the walk began with. A relative target goes on from `cur`.
+ * The walk gate's WALK_GATE_CACHED comes once the link is followed. 0,
  * with the walk to go on at `lk->linkpath`, and after an absolute target
  * with the directories `dd` kept let go, since a `..` climbs from the root
  * now; or WALK_FULL, with `cur` and `dd` as they were, past VFS_LINK_MAX
@@ -2654,6 +2655,7 @@ static int cached_link(struct vfs_ref *cur, void *found, const char *rest, struc
         cached_dots_drop(dd);
         *cur = root;
     }
+    walk_gate(WALK_GATE_CACHED);
     return 0;
 }
 

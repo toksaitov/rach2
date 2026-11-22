@@ -136,8 +136,10 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
  * which a test only counts: a creation, a removal, a rename, a truncation,
  * a change of attributes, or the publication of a mount or a bind; the
  * full walk is about to take a `..`; the full walk has read a symbolic
- * link's target and not yet moved to it; and the full walk has reached
- * its end and not yet made its last check (`walk_done`). */
+ * link's target and not yet moved to it; the full walk has reached its end
+ * and not yet made its last check (`walk_done`); and a walk without the big
+ * lock has followed a symbolic link and not yet taken the next name
+ * (`cached_link`). */
 #define WALK_GATE_FULL     0
 #define WALK_GATE_UNLOCKED 1
 #define WALK_GATE_MISS     2
@@ -155,7 +157,8 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
 #define WALK_GATE_DOTDOT   14
 #define WALK_GATE_FOLLOW   15
 #define WALK_GATE_DONE     16
-#define WALK_GATE_EVENTS   17
+#define WALK_GATE_CACHED   17
+#define WALK_GATE_EVENTS   18
 
 /**
  * Count `event` for the thread the walk gate is armed for, and stop it at
