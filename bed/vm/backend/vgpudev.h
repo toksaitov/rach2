@@ -233,6 +233,8 @@ struct vd {
     void (*ring)(void *cookie, uint32_t peer, uint32_t vector);
     void *ring_cookie;
     int verbose;
+    uint32_t beat;    /* the heartbeat last stored (vd_beat) */
+    uint64_t beat_ns; /* vd_profile_now at that store */
     struct vd_counts n;
     struct vd_profile *profile; /* set by the caller after vd_init, or NULL */
 };
@@ -243,6 +245,7 @@ void vd_fini(struct vd *d);
 int vd_step(struct vd *d);
 void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id);
 void vd_kick(struct vd *d);
+void vd_beat(struct vd *d);
 uint64_t vd_profile_now(void);
 
 /* vd_step's results. */

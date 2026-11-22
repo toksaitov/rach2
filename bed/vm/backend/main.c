@@ -350,7 +350,7 @@ static void make_offer(struct vd_offer *f, const struct src *s, const struct opt
     if (edid) {
         f->features |= 1ULL << VD_F_EDID;
     }
-    f->transport_features = s->efd[0] >= 0 ? VGS_TF_DOORBELL : 0;
+    f->transport_features = VGS_TF_BEAT | (s->efd[0] >= 0 ? VGS_TF_DOORBELL : 0);
     /* Page lists need the module, which pins blobs and backings, and Rach2
        finds the VM by its doorbell. */
     if (s->dev >= 0 && s->efd[0] >= 0 && !o->nopages) {
@@ -503,7 +503,8 @@ static void write_profile(const struct vd_profile *p, const char *path)
  * until idle, then wait on the doorbells and virglrenderer's fences. A
  * transport with doorbells sleeps until one rings; without, it polls each
  * millisecond. A step that finds work after a wait no doorbell ended
- * counts as polled. Each turn beats for the stall report's watch, and a
+ * counts as polled. Each turn beats for the stall report's watch and moves
+ * the region's heartbeat, which the driver watches (`vd_beat`), and a
  * fenced command that waits too long is reported (`fence_watch`).
  */
 static void serve(struct vd *d, struct src *s, struct vr *r, int once, const char *profile)
@@ -527,6 +528,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
             write_profile(d->profile, profile);
         }
         stall_beat("step");
+        vd_beat(d);
         while ((ret = vd_step(d)) == VD_WORKED && steps++ < 64) {
             if (!rung && d->me.state == VGS_DEV_RUNNING) {
                 s->polled++;
@@ -620,7 +622,7 @@ int main(int argc, char **argv)
     dev.profile = o.profile ? &profile : NULL;
     fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s%s, %u capsets, %s\n",
             (unsigned long long)s.size, (unsigned)off.peer,
-            off.transport_features ? "doorbells" : "polling",
+            off.transport_features & VGS_TF_DOORBELL ? "doorbells" : "polling",
             off.transport_features & VGS_TF_PAGES ? ", page lists" : "",
             off.transport_features & VGS_TF_BACKING ? ", backings" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");

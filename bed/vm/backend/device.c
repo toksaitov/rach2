@@ -189,6 +189,7 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     d->npend = 0;
     d->kick = 0;
     memset(&d->me, 0, sizeof(d->me));
+    d->me.heartbeat = d->beat;
     d->me.epoch = drv->epoch;
     d->me.state = VGS_DEV_READY;
     d->me.peer = d->offer.peer;
@@ -1249,6 +1250,26 @@ uint64_t vd_profile_now(void)
 
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000000000 + (uint64_t)t.tv_nsec;
+}
+
+/**
+ * Add 1 to the device block's heartbeat when VGS_BEAT_MS have passed since
+ * the last, under VGS_TF_BEAT offered (vgpushm.h). Called from each turn of
+ * the loop that serves the queues, so that a loop stopped or caught in one
+ * step stops the count, which the driver watches.
+ */
+void vd_beat(struct vd *d)
+{
+    uint64_t now = vd_profile_now();
+
+    if ((d->offer.transport_features & VGS_TF_BEAT) == 0 ||
+        now - d->beat_ns < (uint64_t)VGS_BEAT_MS * 1000000) {
+        return;
+    }
+    d->beat_ns = now;
+    d->beat++;
+    d->me.heartbeat = d->beat;
+    VGS_DEVICE(d->base)->heartbeat = d->beat;
 }
 
 /** Return the profiling row for a control command's type. */

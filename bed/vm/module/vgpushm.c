@@ -41,10 +41,27 @@
 #define BAR_SHM  2
 
 /* The driver's block in the region, as rach2/sys/virtio/vgpushm.h lays it
- * out: its epoch and state, and the state of a driver that has detached. */
+ * out: its epoch, state and peer id, and the state of a driver that has
+ * detached. */
 #define REGION_DRIVER_EPOCH 256
 #define REGION_DRIVER_STATE 260
+#define REGION_DRIVER_PEER  264
 #define DRIVER_GONE         3
+
+/* The device's block, the backend's, and the states and error the module
+ * stores in it when the backend's node closes in an epoch it serves:
+ * VGS_DEV_READY, RUNNING, FAILED and NEEDS_RESET, and VGS_E_LOST. */
+#define REGION_DEVICE_EPOCH 1024
+#define REGION_DEVICE_STATE 1028
+#define REGION_DEVICE_ERROR 1036
+#define DEVICE_READY        1
+#define DEVICE_RUNNING      2
+#define DEVICE_FAILED       3
+#define DEVICE_NEEDS_RESET  4
+#define ERROR_LOST          17
+
+/* The control vector of the driver's doorbell, VGS_VEC_CONTROL. */
+#define VECTOR_CONTROL 1
 
 /* How often pins kept after their file closed are looked at again. */
 #define KEPT_POLL_MS 100
@@ -363,9 +380,11 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
         dev->refused++;
         return -EINVAL;
     }
-    rec = kzalloc(sizeof(*rec), GFP_KERNEL);
-    if (!rec)
+    rec = kzalloc(sizeof(*rec), GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+    if (!rec) {
+        dev->refused++;
         return -ENOMEM;
+    }
     rec->npages = req.size >> PAGE_SHIFT;
     rec->epoch = req.epoch;
     rec->phys = kvcalloc(rec->npages, sizeof(*rec->phys), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
@@ -478,7 +497,44 @@ static int vgpushm_open(struct inode *inode, struct file *file)
 }
 
 /**
- * vgpushm_release() - Close the node, unbinding every eventfd it bound.
+ * vgpushm_lost() - Tell the driver that the backend has left the epoch it
+ * serves without detaching, as when it dies or is killed: the device's
+ * block, which only the backend writes while it holds the node, is given
+ * NEEDS_RESET, or FAILED for an offer not yet taken, with VGS_E_LOST, and
+ * the driver's control vector is rung, so that the driver fails what waits
+ * on the device and starts a new epoch at once, where nothing else would
+ * tell it. A backend that detached in order, or never answered the
+ * driver's epoch, leaves nothing to say.
+ * @dev: the device, bound, its node closing
+ *
+ * Context: holds dev->ops.
+ */
+static void vgpushm_lost(struct vgpushm *dev)
+{
+    u32 epoch = ioread32(dev->shm + REGION_DRIVER_EPOCH);
+    u32 state = ioread32(dev->shm + REGION_DEVICE_STATE);
+    u32 peer = ioread32(dev->shm + REGION_DRIVER_PEER);
+
+    if (ioread32(dev->shm + REGION_DEVICE_EPOCH) != epoch ||
+        (state != DEVICE_READY && state != DEVICE_RUNNING) ||
+        ioread32(dev->shm + REGION_DRIVER_STATE) == DRIVER_GONE)
+        return;
+    iowrite32(ERROR_LOST, dev->shm + REGION_DEVICE_ERROR);
+    wmb();
+    iowrite32(state == DEVICE_READY ? DEVICE_FAILED : DEVICE_NEEDS_RESET,
+              dev->shm + REGION_DEVICE_STATE);
+    wmb();
+    if (dev->vectors && peer <= 0xffff) {
+        iowrite32(peer << 16 | VECTOR_CONTROL, dev->regs + REG_DOORBELL);
+        atomic64_inc(&dev->rings);
+    }
+    dev_info(&dev->pdev->dev, "the backend left epoch %u running; told the driver\n", epoch);
+}
+
+/**
+ * vgpushm_release() - Close the node, unbinding every eventfd it bound, and
+ * tell the driver of a backend that left its epoch without detaching
+ * (vgpushm_lost).
  * @inode: the node
  * @file: the file
  *
@@ -505,6 +561,8 @@ static int vgpushm_release(struct inode *inode, struct file *file)
     }
     if (!list_empty(&dev->kept) && !dev->gone)
         schedule_delayed_work(&dev->kept_work, msecs_to_jiffies(KEPT_POLL_MS));
+    if (!dev->gone)
+        vgpushm_lost(dev);
     mutex_unlock(&dev->ops);
     atomic_set(&dev->opened, 0);
     kref_put(&dev->ref, vgpushm_free);
