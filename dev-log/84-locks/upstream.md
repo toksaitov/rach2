@@ -512,3 +512,25 @@ QEMU 10.2.1 on WSL Linux 6.18.58.1 accounted for about 1.4 million I/O exits whi
 * Rach2: no fault found in the kernel, whose double fault follows Linux's i386 one (`arch/x86/kernel/doublefault_32.c`). The release's full run keeps `memory` and `panic` under TCG (f84e3c0d65, `tools/ci/kvm-suites` on master). Etude names the machine's end in its capture (09b83f3193) and retains it even when the launcher already saw QEMU exit (42573b50a9).
 * Status: unreported, draft: the cause is not proved.
 * Next: run the rows again with the present reproducer; trace the double fault task's first instruction, before any push, and raise a double fault by an exception within an exception without the guard page; run the same boots with Linux's i386 kernel and a stack overflow, on an AMD host without Hyper-V and on an Intel one under WSL; trace `kvm:kvm_exit` and `kvm:kvm_inj_exception` as root around a failed boot.
+
+## BusyBox adaptive ping sends past its request count
+
+* Project: BusyBox 1.36.1, `busybox-1.36.1.tar.bz2`, SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
+* Fails: `networking/ping.c:809-812` and `:900-903` test the reply count before sending on a reply. If the timer has already sent all the requested packets, an earlier reply sends another. The send count check at `:532` only decides which timer to arm after that send.
+* Found: 2026-11-22, in the review of the zero-interval ping fix for the KVM raw case, issue #5666.
+* Reproduction: on Linux, run `ping -q -A -i 0.01 -c 2 -w 5` to a loopback address with a 100 ms netem delay in each direction. The old Rach2 BusyBox on the testing host reported three requests and two replies, for 33% loss, on both IPv4 and IPv6. The explicit `-A` path is the same as in the pinned source.
+* Evidence: `tests/system/fixtures/ping-delay.sh` and [the review](https://github.com/toksaitov/rach2/issues/5666#issuecomment-7071713471).
+* Rach2: commit `29ec7aeea4` checks how many requests have been sent before either kind of adaptive send in `vendor/busybox/patches/0009-ping-fall-back-to-datagram-socket.patch`.
+* Status: unreported.
+* Next: check the explicit `-A` path in current BusyBox before reporting it.
+
+## BusyBox adaptive ping can interrupt a send with another send
+
+* Project: BusyBox 1.36.1, `busybox-1.36.1.tar.bz2`, SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
+* Fails: `networking/ping.c:535` installs the send routine as the SIGALRM handler, and `:811-812` and `:902-903` call it on a reply. One send can interrupt the other while it is writing the shared packet. In IPv4, an interrupt between the timestamp store at `:576` and the checksum at `:578` makes the resumed send replace the already checksummed packet's checksum with zero.
+* Found: 2026-11-22, in the review of the zero-interval ping fix for the KVM raw case, issue #5666.
+* Reproduction: a wire capture with the alarm forced between the timestamp and the checksum is still needed. `tests/system/fixtures/ping-delay.sh` checks that adaptive ping arms no signal timer.
+* Evidence: `networking/ping.c` in the pinned source and [the review](https://github.com/toksaitov/rach2/issues/5666#issuecomment-7071713471).
+* Rach2: commit `29ec7aeea4` sends adaptive requests only in the receive loop. `ppoll` waits for either a reply or the next send in `vendor/busybox/patches/0009-ping-fall-back-to-datagram-socket.patch`.
+* Status: unreported.
+* Next: check current BusyBox for the shared send buffer and reproduce the interrupt before reporting it.
