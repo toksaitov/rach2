@@ -85,6 +85,10 @@
 #define VFS_MS_NODIRATIME  0x0800u
 #define VFS_MS_SILENT      0x8000u
 #define VFS_MS_RELATIME    0x200000u
+/* The flags a remount by a caller without privilege may set but not clear,
+ * as Linux locks them on the mounts of a less privileged namespace
+ * (MNT_LOCK_READONLY and the others, fs/namespace.c). */
+#define VFS_MS_LOCKED      (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC)
 
 /* What `lookup_rest` returns when `..` would climb above the mount root;
  * when the remainder reaches, at the mount's root directory, the name of a
@@ -928,11 +932,23 @@ int vfs_mount_shared(const struct vfs_mount *m);
  * release. A remount that checks that a mount is not shared
  * (`vfs_mount_shared`) and sleeps before it stores the mount's flags thus
  * finds the flags, and the namespaces that may see the mount, as it left
- * them, as Linux serialises remounts under the namespace lock. Under the
- * big lock; the hold may sleep, before it takes anything, and the release
+ * them. Rach2's own lock: Linux 6.12 serialises a remount on the
+ * superblock's s_umount and the mount hash lock instead. Under the big
+ * lock; the hold may sleep, before it takes anything, and the release
  * does not. */
 void vfs_mntns_hold(void);
 void vfs_mntns_release(void);
+
+/**
+ * Begin a remount of `m` to `flags` by a caller without privilege over the
+ * mount: as `vfs_mntns_hold`, then, under the hold, -EPERM, with the hold
+ * let go, when another live mount namespace sees `m` (`vfs_mount_shared`)
+ * or the remount would clear a flag of VFS_MS_LOCKED that `m` has; 0,
+ * holding, otherwise. The checks follow the wait, so that a remount that
+ * waited behind another cannot clear a restriction the other set. Under
+ * the big lock; may sleep before it takes anything.
+ */
+int vfs_mntns_hold_unprivileged(const struct vfs_mount *m, uint32_t flags);
 
 /** Whether no live mount namespace sees the mount `m`. */
 int vfs_mount_unseen(const struct vfs_mount *m);
@@ -1348,7 +1364,12 @@ int vfs_do_bind(const char *source, const char *target, int rec);
 /**
  * mount(2) with MS_REMOUNT and MS_BIND: the flags of the mount `m` alone
  * become `flags`, as Linux changes a bind mount's; its file system is not
- * remounted. 0, -EINVAL for a flag not listed above, -EBUSY for a mount
+ * remounted. Without `privileged`, for a caller without privilege over the
+ * mount, the remount is -EPERM for a mount another live namespace sees or
+ * a clear of a flag of VFS_MS_LOCKED that `m` has, judged after the wait
+ * for another remount (`vfs_mntns_hold_unprivileged`). The caller holds
+ * `m` across the call, which may sleep. 0, -EINVAL for a flag not listed
+ * above, -EBUSY for a mount
  * that is not active, for a change of the flags of a mount that another
  * live mount namespace sees too (`vfs_mount_shared`), which Linux would
  * make on the caller's namespace's copy of the mount alone, or, made
@@ -1357,7 +1378,7 @@ int vfs_do_bind(const char *source, const char *target, int rec);
  * (fs/namespace.c). A read-only file system
  * still refuses writes if the mount flag is cleared.
  */
-int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
+int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged);
 
 /**
  * mount(2) with MS_REMOUNT: apply the file-system flags to the base and
@@ -1379,7 +1400,9 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags);
  * (fs/namespace.c:665); then the dirty pages of its files' shared mappings
  * are written (`filemap_sync_mount`), whose failure is the answer, with the
  * mount still writable, as Linux syncs the file system before the change
- * (fs/ext2/super.c:1334).
+ * (fs/ext2/super.c:1334). The caller holds `m`, by a reference or an
+ * operation (`vfs_enter`), across the call, whose wait for another remount
+ * (`vfs_mntns_hold`) may outlast every other hold on it.
  */
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options);
 

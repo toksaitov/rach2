@@ -91,6 +91,16 @@ void vfs_mntns_hold(void)
     remounts++;
 }
 
+int vfs_mntns_hold_unprivileged(const struct vfs_mount *m, uint32_t flags)
+{
+    vfs_mntns_hold();
+    if (vfs_mount_shared(m) || (vfs_mount_flags(m) & VFS_MS_LOCKED & ~flags)) {
+        vfs_mntns_release();
+        return -EPERM;
+    }
+    return 0;
+}
+
 void vfs_mntns_release(void)
 {
     if (--remounts == 0) {
