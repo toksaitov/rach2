@@ -819,6 +819,9 @@ static uint32_t nvme_lba_shift(const volatile uint8_t *id, uint32_t *ms)
 
 static int nvme_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
 static int nvme_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer);
+static int nvme_write_cached(block_device_t *device, uint64_t lba, uint32_t count,
+                             const void *buffer);
+static int nvme_flush_now(block_device_t *device);
 
 /**
  * Identify namespace `nsid` and take it as a disk when the block layer can
@@ -879,6 +882,8 @@ static void nvme_take_namespace(struct nvme_ctrl *c, uint32_t nsid)
     ns->dev.unflushed = 0;
     ns->dev.read = nvme_read;
     ns->dev.write = nvme_write;
+    ns->dev.write_cached = nvme_write_cached;
+    ns->dev.flush_now = nvme_flush_now;
     ns->dev.submit = 0;
     ns->dev.flush = 0;
     ns->dev.backing = 0;
@@ -1767,6 +1772,45 @@ static int nvme_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 static int nvme_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
     return nvme_rw(device, lba, count, buffer, 0);
+}
+
+/**
+ * The device's `write_cached`: a polled write without FUA and without the
+ * flush, so that it may wait in the disk's cache until `nvme_flush_now`.
+ * The disk is marked unflushed once the controller has answered, or failed,
+ * the write, as a queued write without `BLOCK_REQ_NOFLUSH` is
+ * (`nvme_unflushed`): a flush issued before the answer may not cover it,
+ * and one that ends after the mark leaves it set. Returns 0 or `-EIO`.
+ */
+static int nvme_write_cached(block_device_t *device, uint64_t lba, uint32_t count,
+                             const void *buffer)
+{
+    struct nvme_xfer xf;
+    uint32_t flags;
+    int rc;
+
+    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
+        return -EIO;
+    }
+    xf.ns = (struct nvme_ns *)device->drvdata;
+    xf.opcode = NVME_CMD_WRITE;
+    xf.lba = lba;
+    xf.count = count;
+    xf.buf = (const uint8_t *)buffer;
+    xf.out = 0;
+    xf.frames = NULL;
+    xf.control = 0;
+    rc = nvme_polled_rw(&xf);
+    flags = spin_lock_irqsave(&xf.ns->ctrl->sq_lock);
+    nvme_unflushed(xf.ns);
+    spin_unlock_irqrestore(&xf.ns->ctrl->sq_lock, flags);
+    return rc;
+}
+
+/** The device's `flush_now`: a Flush by polling (`nvme_flush_polled`). */
+static int nvme_flush_now(block_device_t *device)
+{
+    return nvme_flush_polled((struct nvme_ns *)device->drvdata);
 }
 
 /** Flush the disk's cache by polling, clearing the unflushed mark as a
