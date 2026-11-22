@@ -165,8 +165,19 @@ adjacent pages; resource ids are the lowest free from 1.
 Dumb buffers take 32 bits a pixel alone, have rows of the width's bytes,
 unpadded, and a whole number of pages, and their resources are XRGB8888.
 Mappings are cached.
+On a device with virgl, a file's context is attached to each buffer the
+file has a handle to, and is detached from it when the file closes its
+last handle to it, as on Linux; another file's attachment stays.
 When the last reference to a buffer goes, its resource is unreferenced on
 the device and its pages are freed once the device answers.
+A buffer whose last reference a command held, such as a submission naming
+it, is freed by the driver's worker thread,
+.Li virtio_gpu ,
+once the device answers the command.
+.Pa /proc/stat Ns 's
+.Li virtio_gpu_objects
+counts the buffers the kernel holds, until the device has answered their
+unreference.
 .Ss Blobs
 A blob is a resource of guest memory, of host memory, or of both, as
 .Dv VIRTGPU_BLOB_MEM_GUEST ,
@@ -364,6 +375,7 @@ The device did not answer in five seconds.
 .Sh SEE ALSO
 .Xr drm 4 ,
 .Xr fbdrm 4 ,
+.Xr proc 5 ,
 .Xr drm-kms 7
 .Sh HISTORY
 The driver follows Linux 6.12's virtio_gpu.
