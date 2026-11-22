@@ -67,6 +67,19 @@
  * still writes there, and the tmpfs and its directory can be removed, by
  * an atexit handler when a step fails.
  *
+ * On a fresh tmpfs there, a child that remounts it read-only in its own
+ * namespace, opens a file of it for reading and detaches the mount there
+ * still finds fchmod and futimens through the descriptor refused with
+ * EROFS. In another such child, a descriptor the probe opened for writing
+ * before the fork still writes and changes the file's mode, and a file the
+ * child opens for reading, sent to the probe over a socket, has fchmod and
+ * futimens refused with EROFS in the probe once the child is gone, while
+ * the probe's own writes there go through: a call through a descriptor
+ * follows the view it was opened in, as Linux's follows the file's mount.
+ * A child in a namespace of its own sends the probe a file it opened for
+ * writing there and ends; a namespace made after it remounts the tmpfs
+ * read-only, which that writer does not hold off.
+ *
  * The program runs itself in the modes `bset` and `regain`, named by its
  * first argument, as the image an exec row runs. With none it runs the
  * rows, prints "SANDBOXMUSL OK" and exits 0 on success, or prints
@@ -88,6 +101,7 @@
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
@@ -131,13 +145,14 @@ struct cap_data {
 
 /* The assertions, in the order the rows check them. */
 static const char *const rows[] = {
-    "pivot-setup",     "pivot-put-old",       "proc-anywhere", "proc-sys-cover",
-    "proc-sys-rebind", "detach-put-old",      "pivot-stacked", "pivot-new-root",
-    "write-outside",   "namespace-unseen",    "proc-sys-user", "detach-refusals",
-    "detach-busy",     "detach-every-view",   "detach-reaped", "bset-read",
-    "bset-drop-eperm", "bset-drop",           "bset-fork",     "bset-exec",
-    "capset-single",   "capset-chown",        "ambient",       "mask-removed",
-    "readonly-view",   "readonly-own-writer",
+    "pivot-setup",          "pivot-put-old",       "proc-anywhere",     "proc-sys-cover",
+    "proc-sys-rebind",      "detach-put-old",      "pivot-stacked",     "pivot-new-root",
+    "write-outside",        "namespace-unseen",    "proc-sys-user",     "detach-refusals",
+    "detach-busy",          "detach-every-view",   "detach-reaped",     "bset-read",
+    "bset-drop-eperm",      "bset-drop",           "bset-fork",         "bset-exec",
+    "capset-single",        "capset-chown",        "ambient",           "mask-removed",
+    "readonly-view",        "readonly-own-writer", "readonly-detached", "readonly-desc-view",
+    "readonly-reused-view",
 };
 
 #define NROWS ((int)(sizeof(rows) / sizeof(rows[0])))
@@ -791,9 +806,9 @@ static void view_cleanup(void)
 }
 
 /** Run the rows of a read-only view of a mount another namespace writes
- * through, the last two. SIGPIPE is ignored, so that a child that failed
- * and closed its pipe leaves the failure to be reported. Returns 0, or 1
- * after the failure is reported. */
+ * through, readonly-view and readonly-own-writer. SIGPIPE is ignored, so
+ * that a child that failed and closed its pipe leaves the failure to be
+ * reported. Returns 0, or 1 after the failure is reported. */
 static int view_row(void)
 {
     int go[2], said[2], held, st, during;
@@ -852,6 +867,211 @@ static int view_row(void)
     return 0;
 }
 
+/** Send the descriptor `fd` over the socket `sock` with SCM_RIGHTS; 0 or
+ * -1. */
+static int send_fd(int sock, int fd)
+{
+    char byte = 'f';
+    struct iovec iov;
+    struct msghdr msg;
+    union {
+        struct cmsghdr h;
+        char buf[CMSG_SPACE(sizeof(int))];
+    } u;
+    struct cmsghdr *c;
+
+    memset(&msg, 0, sizeof(msg));
+    memset(&u, 0, sizeof(u));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = u.buf;
+    msg.msg_controllen = sizeof(u.buf);
+    c = CMSG_FIRSTHDR(&msg);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(c), &fd, sizeof(int));
+    return sendmsg(sock, &msg, 0) == 1 ? 0 : -1;
+}
+
+/** The descriptor `send_fd` sent over the socket `sock`, or -1. */
+static int recv_fd(int sock)
+{
+    char byte;
+    struct iovec iov;
+    struct msghdr msg;
+    union {
+        struct cmsghdr h;
+        char buf[CMSG_SPACE(sizeof(int))];
+    } u;
+    struct cmsghdr *c;
+    int fd;
+
+    memset(&msg, 0, sizeof(msg));
+    memset(&u, 0, sizeof(u));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = u.buf;
+    msg.msg_controllen = sizeof(u.buf);
+    if (recvmsg(sock, &msg, 0) != 1) {
+        return -1;
+    }
+    c = CMSG_FIRSTHDR(&msg);
+    if (!c || c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) {
+        return -1;
+    }
+    memcpy(&fd, CMSG_DATA(c), sizeof(int));
+    return fd;
+}
+
+/** Enter a mount namespace of one's own whose mounts receive no
+ * propagation, and remount VIEWED read-only there alone; 1 or 0. */
+static int viewed_ns_read_only(void)
+{
+    return unshare(CLONE_NEWNS) == 0 && mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) == 0 &&
+           mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) == 0;
+}
+
+/** The child of the detached row: with VIEWED read-only in its namespace,
+ * a file of it opened for reading and the mount then detached there, a
+ * change of the file's mode or times through the descriptor still fails
+ * with EROFS. 0, or 1. */
+static int detached_child(void)
+{
+    int fd;
+
+    if (!viewed_ns_read_only()) {
+        return 1;
+    }
+    fd = open(VIEWED_HELD, O_RDONLY);
+    if (fd < 0 || umount2(VIEWED, MNT_DETACH) != 0) {
+        return 1;
+    }
+    return refused(fchmod(fd, 0600), EROFS) && refused(futimens(fd, NULL), EROFS) ? 0 : 1;
+}
+
+/** The child of the descriptor row: with VIEWED read-only in its
+ * namespace, `held`, which the parent opened for writing in its own,
+ * still writes and changes its mode; then a file opened for reading in the
+ * read-only view goes to the parent over `sock`. 0, 1 for a failure of the
+ * inherited descriptor, 2 for one of the sent. */
+static int desc_child(int held, int sock)
+{
+    int fd;
+
+    if (!viewed_ns_read_only() || write(held, "c", 1) != 1 || fchmod(held, 0644) != 0) {
+        return 1;
+    }
+    fd = open(VIEWED_HELD, O_RDONLY);
+    return fd >= 0 && send_fd(sock, fd) == 0 ? 0 : 2;
+}
+
+/** The first child of the reused-view row: in a mount namespace of its
+ * own, which takes no flags of its own for VIEWED, it opens a file there
+ * for writing and sends it to the parent over `sock`. 0, or 1. */
+static int writer_child(int unused, int sock)
+{
+    int fd;
+
+    (void)unused;
+    if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) != 0) {
+        return 1;
+    }
+    fd = open(VIEWED "/a", O_WRONLY | O_CREAT, 0644);
+    return fd >= 0 && send_fd(sock, fd) == 0 ? 0 : 1;
+}
+
+/** The second child of the reused-view row, in a mount namespace made
+ * after the first child's ended: VIEWED's read-only remount there, which
+ * no writer of that namespace holds off, succeeds. 0, or 1. */
+static int remount_child(void)
+{
+    return viewed_ns_read_only() && viewed_read_only() ? 0 : 1;
+}
+
+/** Fork a child that runs `fn` with `a` and its end of a socket pair, and
+ * take the descriptor it sends over the pair (`send_fd`) into `*fd`, -1
+ * when it sends none; the child's status (`child_status`), or -1. The
+ * parent closes its copy of the child's end before it reads, so a child
+ * that ends without sending ends the read. */
+static int fd_from_child(int (*fn)(int, int), int a, int *fd)
+{
+    int sv[2];
+    pid_t pid;
+
+    *fd = -1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(sv[0]);
+        _exit(fn(a, sv[1]));
+    }
+    close(sv[1]);
+    *fd = recv_fd(sv[0]);
+    close(sv[0]);
+    return child_status(pid);
+}
+
+/** Run the rows of descriptors that outlive their view or cross views, and
+ * of a view taken after another namespace's end. VIEWED is mounted again,
+ * with a file the probe holds open for writing; it and its tmpfs are
+ * removed at the end, by `view_cleanup` when a step fails. Returns 0, or 1
+ * after the failure is reported. */
+static int view_more_rows(void)
+{
+    int held, fd, st;
+
+    if (mkdir(VIEWED, 0755) == 0) {
+        view_made = 1;
+    } else if (errno != EEXIST) {
+        return fail("mount " VIEWED);
+    }
+    if (mount("tmpfs", VIEWED, "tmpfs", 0, NULL) != 0) {
+        return fail("mount " VIEWED);
+    }
+    view_mounted = 1;
+    held = open(VIEWED_HELD, O_WRONLY | O_CREAT, 0644);
+    if (held < 0) {
+        return fail("open " VIEWED_HELD);
+    }
+    if (in_child(detached_child) != 0) {
+        return fail("a descriptor of a read-only view lost it once its mount was detached");
+    }
+    report_held();
+    st = fd_from_child(desc_child, held, &fd);
+    if (st != 0 || fd < 0 || !refused(fchmod(fd, 0600), EROFS) ||
+        !refused(futimens(fd, NULL), EROFS) || close(fd) != 0 || !viewed_writable()) {
+        return fail("a call through a descriptor did not follow the view it was opened in");
+    }
+    report_held();
+    st = fd_from_child(writer_child, -1, &fd);
+    if (st != 0 || fd < 0) {
+        return fail("a writer of a namespace could not be sent out");
+    }
+    st = in_child(remount_child);
+    if (close(fd) != 0 || st != 0) {
+        return fail("a writer of an ended namespace held off a later namespace's read-only "
+                    "remount");
+    }
+    report_held();
+    if (close(held) != 0 || unlink(VIEWED_HELD) != 0 || unlink(VIEWED "/a") != 0 ||
+        umount(VIEWED) != 0) {
+        return fail("the tmpfs of the read-only view could not be removed");
+    }
+    view_mounted = 0;
+    if (rmdir(VIEWED) != 0) {
+        return fail("the tmpfs of the read-only view could not be removed");
+    }
+    view_made = 0;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     ssize_t n;
@@ -875,7 +1095,7 @@ int main(int argc, char **argv)
         report_plan(rows[i]);
     }
     if (sandbox_rows() != 0 || detach_rows() != 0 || cap_rows() != 0 || mask_row() != 0 ||
-        view_row() != 0) {
+        view_row() != 0 || view_more_rows() != 0) {
         return 1;
     }
     report_end();
