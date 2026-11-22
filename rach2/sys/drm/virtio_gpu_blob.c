@@ -728,7 +728,7 @@ static volatile uint8_t *host_vmap(struct drm_gem_object *obj)
 
 const struct drm_gem_object_funcs vgpu_host_funcs = {vgpu_obj_free, host_mmap,     NULL,
                                                      NULL,          host_page,     host_vmap,
-                                                     NULL,          vgpu_obj_open, vgpu_obj_close};
+                                                     NULL,          vgpu_obj_open, vgpu_obj_close, NULL};
 
 /* ------------------------------------------------------------------------
  * RESOURCE_CREATE_BLOB
