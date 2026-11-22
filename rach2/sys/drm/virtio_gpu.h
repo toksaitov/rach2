@@ -535,6 +535,24 @@ struct vgpu_profile_row {
     uint64_t sent, answered, fenced, request, response, transfer;
     uint64_t payload, copy_ns, answer_ns, waits, wait_ns;
 };
+
+/* The events `virtio_gpu_events` lists in time order, the newest
+ * VGPU_EVENTS kept: each SET_SCANOUT sent, which marks a displayed frame,
+ * each synchronous command wait, and each VIRTGPU_WAIT that slept. */
+#define VGPU_EVENTS     8192
+#define VGPU_EVENT_WAIT 0x10000u /* `type` of a VIRTGPU_WAIT ioctl */
+struct vgpu_event {
+    int64_t ns;      /* monotonic, at the event's start */
+    uint32_t dur_us; /* microseconds it took, 0 for a command sent */
+    uint32_t type;   /* the command's type, or VGPU_EVENT_WAIT */
+    uint32_t tid;    /* the thread it ran on */
+    uint32_t kib;    /* a VGS_CMD_BACKING's size in KiB, else 0 */
+};
+
+/** Record an event of `type` that began at monotonic `start` and ended now,
+ * on the current thread, with `kib`; for a command sent, `start` is now.
+ * Takes vg->lock; does not sleep. */
+void vgpu_profile_event(struct virtio_gpu_device *vg, uint32_t type, int64_t start, uint32_t kib);
 #endif
 
 struct vgpu_dma_page {
@@ -737,6 +755,8 @@ struct virtio_gpu_device {
 #ifdef RACH2_VGPU_PROFILE
     struct vgpu_profile_row profile[VGPU_PROFILE_ROWS];
     uint64_t notifies, notify_ns; /* calls and wall time in virtqueue_kick */
+    struct vgpu_event *events;    /* VGPU_EVENTS of them, or NULL */
+    uint32_t events_total;        /* recorded since the last clear */
 #endif
 };
 
