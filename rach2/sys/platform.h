@@ -230,9 +230,9 @@ void platform_pmu_handled(void);
 /**
  * In the NMI handler, for an NMI no source claimed: 1 while this
  * processor's counter may still raise one late, for 100 ms of TSC after it
- * was armed or stopped and, on AMD, after the handler finished with an
- * overflow (`platform_pmu_handled`), which the handler then claims; 0
- * otherwise, and always without a counter.
+ * was stopped or armed again while it ran and, on AMD, after the handler
+ * finished with an overflow (`platform_pmu_handled`), which the handler
+ * then claims; 0 otherwise, and always without a counter.
  */
 int platform_pmu_late(void);
 

@@ -26,9 +26,10 @@
  * raises as watchdog_nmi takes it, through platform_pmu_overflow, and
  * checks that the due NMIs come at 10 and 20 seconds, that the APIC's
  * performance-counter entry is unmasked again after each and after a late
- * one that finds no overflow, that AMD's window for a late NMI opens after
- * the overflow's callback, and that a disabled counter stops and keeps its
- * entry masked.
+ * one that finds no overflow, that the window for a late NMI stays shut at
+ * the first arming and opens at an arming of the running counter and, on
+ * AMD, after the overflow's callback, and that a disabled counter stops and
+ * keeps its entry masked.
  *
  * The SMM rows start a processor (`platform_pmu_cpu_setup`): IA32_DEBUGCTL
  * gets FREEZE_WHILE_SMM, its LBR kept, on the Haswell and the hypervisor's
@@ -609,6 +610,9 @@ static void counter_row(const struct chip *c, const char *line, int want_fixed, 
     check(lvtpc == LAPIC_LVT_NMI, "the counter's entry is an unmasked NMI");
     check(chip_amd() || chip_version() < 2 || global_ctrl == want_global,
           "the global control enables the detector's counter alone");
+    check(!platform_pmu_late(), "the first arming claims no NMI as the counter's");
+    platform_pmu_enable(period);
+    check(platform_pmu_late(), "an arming while the counter runs opens the window");
 
     n = drive(25, due_ms, 4, &others, &masked);
     check(n == 2, "two NMIs are due in 25 seconds");
