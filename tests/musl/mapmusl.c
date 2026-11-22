@@ -8,11 +8,13 @@
  * mapping and a shared mapping of a file in /dev/shm the parent sees a child's
  * store, a store through the mapping of the file reaches read(2), and after a
  * truncation and a growth a write to the file is seen through the mapping. On
- * ext2 a cache-warmed private page and a shared writable alias both raise
- * SIGBUS after truncation, and regrowth preserves the prefix and has a zero
- * tail; private mappings of 4 MiB of an ext2 file without a hint read the
- * file, and in a 64-bit program on x86-64 one from offset 0 starts on a
- * 2 MiB boundary and one from offset 4096 at 4096 past one, as Linux's
+ * ext2 a store in a shared mapping is written back by a sync(2) from a mount
+ * namespace whose root is read-only, a cache-warmed private page and a shared
+ * writable alias both raise SIGBUS after truncation, and regrowth preserves
+ * the prefix and has a zero tail; private mappings of 4 MiB of an ext2 file
+ * without a hint read the file, and in a 64-bit program on x86-64 one from
+ * offset 0 starts on a 2 MiB boundary and one from offset 4096 at 4096 past
+ * one, as Linux's
  * thp_get_unmapped_area places them. On x86-64, truncating a file
  * of 4 GiB and a page to 4 GiB cuts only its last page from the mapping. A
  * file or shared-memory mapping of 16 TiB is EOVERFLOW and one of a page
@@ -74,6 +76,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <stdint.h>
@@ -81,6 +84,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/resource.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
@@ -155,6 +159,7 @@ static const char *const assertion_id[] = {"private-file",
                                            "ext2-write",
                                            "ext2-readv",
                                            "ext2-msync",
+                                           "ext2-sync-view",
                                            "ext2-reach-file",
                                            "ext2-cached-truncate",
                                            "ext2-thp",
@@ -1165,10 +1170,47 @@ static int ext2_aligned(int fd)
 }
 
 /**
+ * Check that msync of `m`, a shared mapping of two pages of `fd`, a file on
+ * ext2, succeeds, and then that a store in it is written back by a sync(2)
+ * from a child whose mount namespace sees the root read-only, as Linux's
+ * write-back looks at no mount's flags: msync and fsync then succeed and
+ * pread finds the byte. Returns 0 with the first row reported, or 1 once the
+ * failure is reported.
+ */
+static int ext2_synced(int fd, char *m)
+{
+    char c = 0;
+    pid_t pid;
+
+    if (msync(m, 2 * PAGE, MS_SYNC) != 0) {
+        return fail("msync of a shared mapping of a file on the root");
+    }
+    row_held();
+    m[300] = 'V';
+    pid = fork();
+    if (pid == 0) {
+        if (unshare(CLONE_NEWNS) != 0 ||
+            mount(NULL, "/", NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0) {
+            _exit(1);
+        }
+        sync();
+        _exit(0);
+    }
+    if (!wait_ok(pid) || msync(m, 2 * PAGE, MS_SYNC) != 0 || fsync(fd) != 0 ||
+        pread(fd, &c, 1, 300) != 1 || c != 'V') {
+        return fail("a sync in a mount namespace whose root is read-only did not write back "
+                    "another namespace's store in a shared mapping of a file on the root");
+    }
+    return 0;
+}
+
+/**
  * Check that `m`, a shared mapping of two pages of `fd`, a file on ext2, maps
  * the file's pages: a child's store is seen, read and write see the mapping's
  * stores and it sees theirs, a readv's later buffer sees what its first
- * stored into the mapping, and every store reaches the file. Unmaps `m`.
+ * stored into the mapping, a sync(2) from a mount namespace whose root is
+ * read-only writes back a store made here, as Linux's write-back looks at
+ * no mount's flags, and every store reaches the file. Unmaps `m`.
  * Returns 0, or 1 once the failure is reported.
  */
 static int ext2_shared(int fd, char *m)
@@ -1212,8 +1254,8 @@ static int ext2_shared(int fd, char *m)
                     "mapping of a file on the root, stored there");
     }
     row_held();
-    if (msync(m, 2 * PAGE, MS_SYNC) != 0) {
-        return fail("msync of a shared mapping of a file on the root");
+    if (ext2_synced(fd, m) != 0) {
+        return 1;
     }
     row_held();
     munmap(m, 2 * PAGE);
