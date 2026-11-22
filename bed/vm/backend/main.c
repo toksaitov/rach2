@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,11 +43,14 @@ struct src {
 static volatile sig_atomic_t stop;
 static volatile sig_atomic_t snapshot;
 
-/** Defer a stop or a statistics snapshot to the serving loop. */
+/** Defer a stop or a statistics snapshot to the serving loop, or have it
+ * hold the next new backing (vr_hold). */
 static void on_signal(int sig)
 {
     if (sig == SIGUSR1) {
         snapshot = 1;
+    } else if (sig == SIGUSR2) {
+        vr_hold = 1;
     } else {
         stop = 1;
     }
@@ -498,13 +502,46 @@ static void write_profile(const struct vd_profile *p, const char *path)
     free(tmp);
 }
 
+/** Move d's heartbeat every VGS_BEAT_MS, for as long as the process runs. */
+static void *beat(void *arg)
+{
+    struct timespec t = {VGS_BEAT_MS / 1000, (long)(VGS_BEAT_MS % 1000) * 1000000};
+
+    for (;;) {
+        nanosleep(&t, 0);
+        vd_beat(arg);
+    }
+    return 0;
+}
+
+/**
+ * Start the thread that moves the region's heartbeat, which the driver
+ * watches (`vd_beat`). It is a thread of its own, with every signal
+ * blocked, so that the count stops only when the whole process stops,
+ * as SIGSTOP stops every thread, or dies, which the module reports at
+ * once; a serving thread busy in one long command, a pin or a renderer's
+ * call, leaves it beating, and its answer still comes.
+ */
+static void beat_start(struct vd *d)
+{
+    pthread_t t;
+    sigset_t all, old;
+
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &old);
+    if (pthread_create(&t, 0, beat, d) != 0) {
+        die("cannot start the heartbeat's thread", 0);
+    }
+    pthread_detach(t);
+    pthread_sigmask(SIG_SETMASK, &old, 0);
+}
+
 /**
  * Serve the device until the driver detaches with -1, or a signal: step
  * until idle, then wait on the doorbells and virglrenderer's fences. A
  * transport with doorbells sleeps until one rings; without, it polls each
  * millisecond. A step that finds work after a wait no doorbell ended
- * counts as polled. Each turn beats for the stall report's watch and moves
- * the region's heartbeat, which the driver watches (`vd_beat`), and a
+ * counts as polled. Each turn beats for the stall report's watch, and a
  * fenced command that waits too long is reported (`fence_watch`).
  */
 static void serve(struct vd *d, struct src *s, struct vr *r, int once, const char *profile)
@@ -528,7 +565,6 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
             write_profile(d->profile, profile);
         }
         stall_beat("step");
-        vd_beat(d);
         while ((ret = vd_step(d)) == VD_WORKED && steps++ < 64) {
             if (!rung && d->me.state == VGS_DEV_RUNNING) {
                 s->polled++;
@@ -582,6 +618,7 @@ int main(int argc, char **argv)
     options(argc, argv, &o);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGUSR2, on_signal);
     if (o.profile) {
         signal(SIGUSR1, on_signal);
     }
@@ -627,6 +664,7 @@ int main(int argc, char **argv)
             off.transport_features & VGS_TF_BACKING ? ", backings" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
     stall_start(&dev);
+    beat_start(&dev);
     serve(&dev, &s, r, o.once, o.profile);
     report(&dev, &s, r, k);
     kms_close(k);

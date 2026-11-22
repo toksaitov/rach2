@@ -233,8 +233,7 @@ struct vd {
     void (*ring)(void *cookie, uint32_t peer, uint32_t vector);
     void *ring_cookie;
     int verbose;
-    uint32_t beat;    /* the heartbeat last stored (vd_beat) */
-    uint64_t beat_ns; /* vd_profile_now at that store */
+    uint32_t beat; /* the heartbeat last stored, which vd_beat moves atomically */
     struct vd_counts n;
     struct vd_profile *profile; /* set by the caller after vd_init, or NULL */
 };

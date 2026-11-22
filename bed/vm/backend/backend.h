@@ -9,6 +9,7 @@
 #ifndef BACKEND_H
 #define BACKEND_H
 
+#include <signal.h>
 #include <stdint.h>
 
 #include "vgpudev.h"
@@ -44,6 +45,13 @@ void vr_set_flush_crc(struct vr *r, int enabled);
 void vr_set_probe(struct vr *r, int probe);
 void vr_set_module(struct vr *r, int fd);
 const struct vr_pin_counts *vr_pin_counts(struct vr *r);
+
+/* Set by SIGUSR2: the serving thread holds the next new backing VR_HOLD_S
+ * seconds before it makes it, past the driver's VGS_BEAT_LOST_MS, so that
+ * Rach2's test can see a long command answered and not taken for a lost
+ * device (tests/kvm/bed-shm.sh). */
+#define VR_HOLD_S 45
+extern volatile sig_atomic_t vr_hold;
 
 /* The Venus import probe: a dma-buf imported into Vulkan and read. */
 int vk_probe(const struct vr_export *e, uint32_t *crc);

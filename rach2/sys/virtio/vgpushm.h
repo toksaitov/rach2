@@ -58,13 +58,13 @@
 #define VGS_TF_ALL      (VGS_TF_DOORBELL | VGS_TF_PAGES | VGS_TF_BACKING | VGS_TF_BEAT)
 
 /*
- * With VGS_TF_BEAT accepted, the device adds 1 to its block's heartbeat from
- * the loop that serves the queues, once VGS_BEAT_MS have passed since the
- * last, and that loop turns at least once a second. A driver that sees the
- * count stand still for VGS_BEAT_LOST_MS takes the device for gone, as it
- * takes one that stores NEEDS_RESET: a device stopped or caught in one step
- * answers nothing and rings no doorbell to say so. The limit is the
- * backend's own for a stall (bed/vm/Readme.md).
+ * With VGS_TF_BEAT accepted, the device adds 1 to its block's heartbeat
+ * every VGS_BEAT_MS, from a thread apart from the one that serves the
+ * queues, so that the count stops only when the device's process stops or
+ * dies, and a command that takes long, however long, is still waited for.
+ * A driver that sees the count stand still for VGS_BEAT_LOST_MS takes the
+ * device for gone, as it takes one that stores NEEDS_RESET: a device whose
+ * process has stopped answers nothing and rings no doorbell to say so.
  */
 #define VGS_BEAT_MS      1000u
 #define VGS_BEAT_LOST_MS 30000u
@@ -244,7 +244,7 @@ struct vgs_device {
     uint32_t events_seq;   /* display events raised; a change is EVENT_DISPLAY */
     uint32_t num_scanouts; /* virtio_gpu_config's, 1 to 16 */
     uint32_t num_capsets;  /* virtio_gpu_config's */
-    uint32_t heartbeat;    /* a count the serving loop moves (VGS_TF_BEAT) */
+    uint32_t heartbeat;    /* a count the device moves each second (VGS_TF_BEAT) */
 };
 
 /* A split virtqueue's descriptor; addr is an offset into the region. */
