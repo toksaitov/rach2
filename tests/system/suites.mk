@@ -1317,8 +1317,8 @@ $(BED_FORWARD_DIR)/forward.ext2: bed/forward/forward.sh $(BED_FORWARD_DIR)/guest
 # the test bed's VM, on the x86-64 GNU root under host-svm, as the case of
 # tests/cases/machine.bed-shm.json, which bed_shm_scenario runs
 # (tests/kvm/Readme.md). The machine has bed-shm.ext2, the runner, the
-# probe, nocopy.c, and piglit.sh with its common.sh and readback.txt, as a
-# read-only data disk, and vm.disk, the VM that
+# probe, bedkeep.c, nocopy.c, and piglit.sh with its common.sh and
+# readback.txt, as a read-only data disk, and vm.disk, the VM that
 # `bed/vm/image/vm.sh rach2` makes over the prepared image, raw for etude's
 # overlay. The prepared image is the clone's build/cache/bed-vm, which
 # `vm.sh prepare` makes when it is missing or stale: a download of the
@@ -1330,7 +1330,7 @@ ifneq ($(ARCH),x86_64)
 $(BED_SHM_PROBE): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C tests ARCH=x86_64 ../$(BED_SHM_PROBE)
 endif
-BED_SHM_FILES = tests/kvm/bed-shm.sh tests/kvm/nocopy.c tests/kvm/readback.txt \
+BED_SHM_FILES = tests/kvm/bed-shm.sh tests/kvm/bedkeep.c tests/kvm/nocopy.c tests/kvm/readback.txt \
                 tests/graphics/runners/piglit.sh tests/graphics/runners/common.sh
 build/tests/cases/bed-shm/bed-shm.ext2: $(BED_SHM_FILES) $(BED_SHM_PROBE)
 	@set -e; work=; \

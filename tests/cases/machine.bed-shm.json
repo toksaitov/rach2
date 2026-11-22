@@ -519,6 +519,7 @@
         "bed/vm/image/vm.sh",
         "tests/vgshmprobe.c",
         "tests/kvm/bed-shm.sh",
+        "tests/kvm/bedkeep.c",
         "tests/cases/machine/bed_shm_scenario.c",
         "vendor/gnu/desktop/rach2-desktop",
         "vendor/gnu/desktop/rach2-session"

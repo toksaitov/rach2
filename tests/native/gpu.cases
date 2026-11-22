@@ -293,7 +293,7 @@ case video/hang alone log mountns \
 # data partition, under native/bed, which tests/kvm/ref/lenovo-bed.sha256
 # pins.
 case bed/shm alone log mountns stage:vgshmprobe \
-    file:tests/kvm/bed-shm.sh file:tests/assign/gpu.sh file:bed/forward/forward.sh \
+    file:tests/kvm/bed-shm.sh file:tests/kvm/bedkeep.c file:tests/assign/gpu.sh file:bed/forward/forward.sh \
     file:dev-log/82-assign/82-4/check.sh file:dev-log/78-intel/78-10d/crcmodes.c \
     file:bed/measure/measure.sh file:bed/measure/piglit.txt file:bed/measure/latency.c file:bed/measure/webgl.html \
     file:tests/graphics/runners/common.sh file:tests/graphics/runners/games.sh file:tests/graphics/runners/piglit.sh \

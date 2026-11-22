@@ -7,8 +7,9 @@
 #
 # Run as root by etude-guest in the case's workspace, in a mount namespace of
 # the case's own, on the GNU root with its KVM layer and the Intel driver
-# bound. The workspace holds the runners (tests/kvm/bed-shm.sh,
-# tests/assign/gpu.sh, bed/forward/forward.sh), vgshmprobe, the harness
+# bound. The workspace holds the runners (tests/kvm/bed-shm.sh with the
+# keeper's source, bedkeep.c, which it builds, tests/assign/gpu.sh,
+# bed/forward/forward.sh), vgshmprobe, the harness
 # (bed/measure) with the graphics runners it uses, and 82-4b's check.sh with
 # the source of 78-10d's crcmodes, which the root's cc, TinyCC, builds here
 # with -static, as it requires of every program (tcc(1)). The VMs'
@@ -119,7 +120,7 @@ sums=$(cd "$(dirname "$sums")" && pwd)/$(basename "$sums")
 # The kit: the runners, the harness and its runners apart, crcmodes built.
 rm -rf kit out
 mkdir -p kit/measure/runners out
-for f in bed-shm.sh gpu.sh forward.sh check.sh; do
+for f in bed-shm.sh bedkeep.c gpu.sh forward.sh check.sh; do
     cp "$f" kit/
 done
 for f in measure.sh piglit.txt latency.c webgl.html; do

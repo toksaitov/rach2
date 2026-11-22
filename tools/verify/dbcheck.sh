@@ -154,7 +154,7 @@ guest() {
             grep -qE "\`$base\` built with \`[^\`]* gcc [^\`]* lenovo/$base " tests/graphics/Readme.md ;;
         tests/graphics/lenovo/*.c)
             grep -qF "$base" tests/graphics/lenovo/*.sh tests/graphics/lenovo/*.py ;;
-        tests/kvm/nocopy.c)
+        tests/kvm/nocopy.c|tests/kvm/bedkeep.c)
             grep -qF "$base" tests/kvm/bed-shm.sh ;;
         tools/lenovo/debian-ref/*.c)
             grep -qF "\`$base\` built with" tools/lenovo/debian-ref/Readme.md ;;
