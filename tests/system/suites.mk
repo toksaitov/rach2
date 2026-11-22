@@ -1330,7 +1330,7 @@ build/tests/cases/bed-shm/vm.disk: $(BED_VM_FILES)
 # exchange and an unexpected request that fails the API server's verdict,
 # on a restricted GNU machine, as tests/cases/machine.fakeapi.json.
 
-# The agent and fake API cases boot private copies of these GNU disks.
+# The agent cases copy their GNU disk, and the fake API case boots an overlay.
 $(IMAGES_DIR)/etude-agents.disk: $(OS_REAL_GNU_AGENTS_EXT2) $(MKMBR) tests/cases/machine/agent_disk.sh
 	@mkdir -p $(@D)
 	sh tests/cases/machine/agent_disk.sh $< $@ $(MKMBR)
