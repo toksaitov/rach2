@@ -1816,9 +1816,11 @@ static int walk_xdev(struct walk_rules *rules, struct vfs_mount *mnt)
 
 /** Whether the walk under `rules` must start again for a jump to its root
  * or a `..`, since the caller's root has moved; a scoped walk's root is its
- * anchor, which the caller holds. */
-static int walk_root_moved(const struct walk_rules *rules, const struct vfs_ref *root)
+ * anchor, which the caller holds. The walk gate's `event` comes first,
+ * WALK_GATE_FOLLOW for a jump and WALK_GATE_DOTDOT for a `..`. */
+static int walk_root_moved(const struct walk_rules *rules, const struct vfs_ref *root, int event)
 {
+    walk_gate(event);
     return !walk_anchor_root(rules) && !root_current(root);
 }
 
@@ -2171,13 +2173,16 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
 /** The end of a full walk under `rules` of `flags` at `cur`, checked by
  * `wc`: `walk_finish`, `walk_end_ok`, then the last check and the keep of a
  * KRFFS answer for the rest of the call, with nothing between them that
- * sleeps (`walk_keep_take`). 0, WALK_FULL when the check fails and the walk
- * goes again, or an error of theirs. */
+ * sleeps (`walk_keep_take`), the walk gate's WALK_GATE_DONE before them. 0,
+ * WALK_FULL when the check fails and the walk goes again, or an error of
+ * theirs. */
 static int walk_done(const struct walk_rules *rules, const struct vfs_ref *cur, int flags,
                      const struct walk_check *wc)
 {
-    int rc = walk_finish(cur, flags);
+    int rc;
 
+    walk_gate(WALK_GATE_DONE);
+    rc = walk_finish(cur, flags);
     rc = rc == 0 ? walk_end_ok(rules, cur->mnt) : rc;
     return rc == 0 ? walk_keep_take(cur, (flags & VFS_WALK_LOCK) != 0, wc) : rc;
 }
@@ -3111,7 +3116,7 @@ begin:
                 last_comp = walk_last_comp(linkpath);
             }
             if (kind == 1) {
-                if (walk_root_moved(&rules, &root)) {
+                if (walk_root_moved(&rules, &root, WALK_GATE_FOLLOW)) {
                     goto restart;
                 }
                 rc = walk_move(&cur, root.mnt, root.node, locked);
@@ -3135,7 +3140,7 @@ begin:
             continue;
         }
         if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
-            if (walk_root_moved(&rules, &root)) {
+            if (walk_root_moved(&rules, &root, WALK_GATE_DOTDOT)) {
                 goto restart;
             }
             rc = walk_dotdot_ok(&rules, &cur, &root);
@@ -3232,7 +3237,7 @@ begin:
                 }
                 p = linkpath;
                 if (absolute) {
-                    if (walk_root_moved(&rules, &root)) {
+                    if (walk_root_moved(&rules, &root, WALK_GATE_FOLLOW)) {
                         goto restart;
                     }
                     rc = walk_move(&cur, root.mnt, root.node, locked);

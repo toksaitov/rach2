@@ -132,9 +132,12 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
  * directory's lock; a call has let go of its walk's namespace lock and
  * still uses the answer its walk keeps (`vfs_walk_unlock`); an open that
  * creates has found its name missing and is about to look for a link there
- * to create through (`open_link_target`); and a change reaches the type,
+ * to create through (`open_link_target`); a change reaches the type,
  * which a test only counts: a creation, a removal, a rename, a truncation,
- * a change of attributes, or the publication of a mount or a bind. */
+ * a change of attributes, or the publication of a mount or a bind; the
+ * full walk is about to take a `..`; the full walk has read a symbolic
+ * link's target and not yet moved to it; and the full walk has reached
+ * its end and not yet made its last check (`walk_done`). */
 #define WALK_GATE_FULL     0
 #define WALK_GATE_UNLOCKED 1
 #define WALK_GATE_MISS     2
@@ -149,7 +152,10 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
 #define WALK_GATE_KEPT     11
 #define WALK_GATE_LINK     12
 #define WALK_GATE_EFFECT   13
-#define WALK_GATE_EVENTS   14
+#define WALK_GATE_DOTDOT   14
+#define WALK_GATE_FOLLOW   15
+#define WALK_GATE_DONE     16
+#define WALK_GATE_EVENTS   17
 
 /**
  * Count `event` for the thread the walk gate is armed for, and stop it at

@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 23, 2026
 .Dt DEBUGFS 5
 .Os
 .Sh NAME
@@ -579,11 +579,19 @@ where a call has let go of its walk's namespace lock and still uses what
 the walk found, which the walk keeps until the call ends;
 .Ql link ,
 where an open that creates has found its name missing and is about to
-look for a link there to create through; or
+look for a link there to create through;
 .Ql effect ,
 where a change reaches the file system, which a test only counts: a
 creation, a removal, a rename, a truncation, a change of attributes, or
-the publication of a mount or a bind.
+the publication of a mount or a bind;
+.Ql dotdot ,
+where a walk under the big lock is about to take a
+.Ql .. ;
+.Ql follow ,
+where such a walk has read a symbolic link's target and not yet moved to
+it; or
+.Ql done ,
+where such a walk has reached its end and not yet made its last check.
 .Ql release
 lets the stopped thread go on, as a signal does.
 .Ql begin
