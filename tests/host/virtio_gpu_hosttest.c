@@ -531,6 +531,27 @@ void bkl_take(int depth)
 void bkl_yield(void)
 {}
 
+/** Say whether the thread holds the big lock: always, but between a drop
+ * and a take. */
+int bkl_held(void)
+{
+    return !bkl_out;
+}
+
+/** Take the big lock, which must have been given up. */
+void bkl_enter(void)
+{
+    CHECK(bkl_out, "the big lock is taken while it is held");
+    bkl_out = 0;
+}
+
+/** Give up the big lock that bkl_enter took. */
+void bkl_exit(void)
+{
+    CHECK(!bkl_out, "the big lock is given up while it is not held");
+    bkl_out = 1;
+}
+
 /** One thread: interrupts need no masking. */
 uint32_t kirq_save(void)
 {
