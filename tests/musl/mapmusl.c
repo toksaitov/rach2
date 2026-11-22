@@ -9,7 +9,8 @@
  * store, a store through the mapping of the file reaches read(2), and after a
  * truncation and a growth a write to the file is seen through the mapping. On
  * ext2 a store in a shared mapping is written back by a sync(2) from a mount
- * namespace whose root is read-only, a cache-warmed private page and a shared
+ * namespace that sealed a private bind of the file's directory read-only, a
+ * cache-warmed private page and a shared
  * writable alias both raise SIGBUS after truncation, and regrowth preserves
  * the prefix and has a zero tail; private mappings of 4 MiB of an ext2 file
  * without a hint read the file, and in a 64-bit program on x86-64 one from
@@ -1172,10 +1173,12 @@ static int ext2_aligned(int fd)
 /**
  * Check that msync of `m`, a shared mapping of two pages of `fd`, a file on
  * ext2, succeeds, and then that a store in it is written back by a sync(2)
- * from a child whose mount namespace sees the root read-only, as Linux's
- * write-back looks at no mount's flags: msync and fsync then succeed and
- * pread finds the byte. Returns 0 with the first row reported, or 1 once the
- * failure is reported.
+ * from a child in a mount namespace of its own that binds the file's
+ * directory over itself and remounts the bind read-only, as a sandbox seals
+ * what it sees: the seal is the bind's alone, and the write-back judges the
+ * file system, so msync and fsync then succeed here and pread finds the
+ * byte. Returns 0 with the first row reported, or 1 once the failure is
+ * reported.
  */
 static int ext2_synced(int fd, char *m)
 {
@@ -1189,8 +1192,8 @@ static int ext2_synced(int fd, char *m)
     m[300] = 'V';
     pid = fork();
     if (pid == 0) {
-        if (unshare(CLONE_NEWNS) != 0 ||
-            mount(NULL, "/", NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0) {
+        if (unshare(CLONE_NEWNS) != 0 || mount("/tmp", "/tmp", NULL, MS_BIND, NULL) != 0 ||
+            mount(NULL, "/tmp", NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0) {
             _exit(1);
         }
         sync();
@@ -1198,8 +1201,9 @@ static int ext2_synced(int fd, char *m)
     }
     if (!wait_ok(pid) || msync(m, 2 * PAGE, MS_SYNC) != 0 || fsync(fd) != 0 ||
         pread(fd, &c, 1, 300) != 1 || c != 'V') {
-        return fail("a sync in a mount namespace whose root is read-only did not write back "
-                    "another namespace's store in a shared mapping of a file on the root");
+        return fail("a sync in a mount namespace that sealed a private bind read-only did not "
+                    "write back another namespace's store in a shared mapping of a file on the "
+                    "root");
     }
     return 0;
 }
@@ -1208,9 +1212,9 @@ static int ext2_synced(int fd, char *m)
  * Check that `m`, a shared mapping of two pages of `fd`, a file on ext2, maps
  * the file's pages: a child's store is seen, read and write see the mapping's
  * stores and it sees theirs, a readv's later buffer sees what its first
- * stored into the mapping, a sync(2) from a mount namespace whose root is
- * read-only writes back a store made here, as Linux's write-back looks at
- * no mount's flags, and every store reaches the file. Unmaps `m`.
+ * stored into the mapping, a sync(2) from a mount namespace that sealed a
+ * private bind of the file's directory read-only writes back a store made
+ * here (`ext2_synced`), and every store reaches the file. Unmaps `m`.
  * Returns 0, or 1 once the failure is reported.
  */
 static int ext2_shared(int fd, char *m)
