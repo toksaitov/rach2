@@ -17,12 +17,14 @@
 # draw and read back, on the region's card as the desktop user, as the bed's
 # piglit scene runs them: each must pass on virgl, with no refusal of a
 # blob's export on the VM's console and no refused page list in the kernel's
-# log (`readback`). Then the backend is stopped in the VM, through the VM's
-# second serial port, and a render target's wait for its backing must end
-# with ENODEV once the backend's heartbeat has stood still for 30 s
-# (`stopped`); stopped again and killed while the wait sleeps, the wait
-# must end with ENODEV at once, by the module's word that the backend has
-# gone (`killed`); after each, virtio-gpu must bind again over the region.
+# log (`readback`). Then, through the VM's second serial port, the backend
+# holds a render target's backing 45 s while it runs, and the creation must
+# succeed with no loss of the device (`held`); the backend is stopped in
+# the VM, and a render target's wait for its backing must end with ENODEV
+# once the backend's heartbeat has stood still for 30 s (`stopped`);
+# stopped again and killed while the wait sleeps, the wait must end with
+# ENODEV at once, by the module's word that the backend has gone
+# (`killed`); after each, virtio-gpu must bind again over the region.
 # Then QEMU is stopped with fenced submissions pending and killed: ivshmemd
 # must detach with the VM's death, every fence must fail and a wait after
 # the death must too.
@@ -840,9 +842,50 @@ loss()
     fi
 }
 
-# virgl_rows: the frame drawn, the doorbells, without -u the readbacks and
-# the backend's loss, stopped and then killed, and the VM's death with
-# fences pending.
+# held: row `held`. The backend, told through the VM's second serial
+# port, holds the next new backing 45 s, past the heartbeat's limit of
+# 30 s, while its process runs, and `vgshmprobe held` makes a render target
+# and waits for that backing. The creation must succeed more than 35 s on,
+# the VM's console must say the backend held one backing, the kernel must
+# log no loss and virtio-gpu must not have bound again: the heartbeat moves
+# from a thread apart from the serving one, so a long command is waited
+# for, as Linux's guest waits out its host's.
+held()
+{
+    binds=$(info binds) lost0=$(klog_count 'lost: epoch [0-9]*: the device: ')
+    holds0=$(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: holding ')
+    herr=''
+    vm_ctl hold || herr="the VM did not have the backend hold"
+    "$probe" held > "$out/held.out" 2>&1 &
+    waiter=$!
+    n=120
+    while kill -0 "$waiter" 2>/dev/null && [ "$n" -gt 0 ]; do
+        sleep 1
+        n=$((n - 1))
+    done
+    if kill -0 "$waiter" 2>/dev/null; then
+        herr="${herr:+$herr, }the probe still waits in $(cat "/proc/$waiter/wchan" 2>/dev/null) after 120 s"
+        kill -9 "$waiter" 2>/dev/null
+    fi
+    wait "$waiter" 2>/dev/null
+    waiter=''
+    ms=$(sed -n 's/^VGSHMPROBE HELD: ms //p' "$out/held.out")
+    logged=$(($(klog_count 'lost: epoch [0-9]*: the device: ') - lost0))
+    holds=$(($(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: holding ') - holds0))
+    what="$(sed -n 's/^VGSHMPROBE HELD: error /error /p' "$out/held.out") after ${ms:-?} ms"
+    what="$what, $holds held, $logged loss(es) logged, binds $binds then $(info binds)"
+    if [ -z "$herr" ] && grep -q 'VGSHMPROBE OK' "$out/held.out" && [ "$holds" = 1 ] &&
+        [ "$logged" = 0 ] && [ "$(info bound)" = 1 ] && [ "$(info binds)" = "$binds" ] &&
+        [ "${ms:-0}" -ge 35000 ]; then
+        pass held "$what"
+    else
+        fail held "${herr:+$herr: }$what: $(grep VGSHMPROBE "$out/held.out" | tr '\n' ' ')"
+    fi
+}
+
+# virgl_rows: the frame drawn, the doorbells, without -u the readbacks, a
+# backing held past the heartbeat's limit, the backend's loss, stopped and
+# then killed, and the VM's death with fences pending.
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
@@ -850,6 +893,7 @@ virgl_rows()
         fail doorbell "no device"
         if [ "$unplug" = 0 ]; then
             fail readback "no device"
+            fail held "no device"
             fail stopped "no device"
             fail killed "no device"
         fi
@@ -889,6 +933,7 @@ virgl_rows()
         fi
         if [ "$unplug" = 0 ]; then
             readback
+            held
             # The heartbeat stands still from the stop, so the wait ends
             # 30 s on, less what the stop's word and the probe's start
             # took; the kill ends it at once, by the module's word.
