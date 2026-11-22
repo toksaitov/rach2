@@ -694,7 +694,14 @@ struct vfs_ref {
  * the end to the name its target ends with, unless VFS_WALK_NOFOLLOW. */
 #define VFS_WALK_CREATE   0x10
 #define VFS_MISSING       1
-#define VFS_WALK_MOUNT    0x20 /* Require a descriptor target's mount in this namespace. */
+/* Flags of `vfs_resolve_fd` for a final /proc/PID/fd/N link: MOUNT requires
+ * the descriptor's mount in the caller's namespace, for a mount operation;
+ * COVER moves on to the root of the last mount stacked over the descriptor's
+ * node, as Linux's lock_mount and an unmount's final lookup do; SOURCE takes
+ * a file whose name was removed, for a bind's source. */
+#define VFS_WALK_MOUNT    0x20
+#define VFS_WALK_COVER    0x40
+#define VFS_WALK_SOURCE   0x80
 
 /* openat2(2)'s RESOLVE_ restrictions, with Linux's values, which
  * `vfs_resolve_scoped` applies to its walk. BENEATH and IN_ROOT scope the
@@ -767,14 +774,20 @@ void vfs_init(void);
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
 
+struct fd_kept;
+
 /**
  * Resolve `path` as vfs_resolve and follow a final proc descriptor link to
- * its held node. Return 1 for that link and, if `fd_path` is given, write
- * its mount-table path in VFS_PATH_MAX bytes. Return 0 for other paths or
- * a negative errno with no reference or lock held. Flags are VFS_WALK_LOCK
- * and VFS_WALK_MOUNT. The caller holds the big lock.
+ * its held node. Return 1 for that link, with the descriptor's copy kept in
+ * `*kept` until the caller has released the node and every lock and gives
+ * it to `fd_unkeep` (`procfs_fd_ref`), and, if `fd_path` is given, its
+ * mount-table path in VFS_PATH_MAX bytes. Return 0 for other paths, with
+ * `*kept` NULL, or a negative errno with no reference, copy or lock held.
+ * Flags are VFS_WALK_LOCK and the VFS_WALK_ ones for descriptor links
+ * above. The caller holds the big lock.
  */
-int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path);
+int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path,
+                   struct fd_kept **kept);
 
 /* `vfs_resolve_cached`'s answer for a path the name cache cannot finish. */
 #define VFS_CACHED_MISS 1

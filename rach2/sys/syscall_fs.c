@@ -165,6 +165,30 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  * descriptor besides it keeps it, since the FIFO's pipe is found by the
  * node's address, which a new node must not take while an end is open.
  */
+/* A copy of a descriptor that a mount operation keeps (`fd_keep`), on the
+ * list `fd_kept_list`, under `fd_kept_lock`, which `fd_node_holders` reads. */
+struct fd_kept {
+    struct fd_kept *next;
+    fd_entry_t e;
+};
+
+static struct fd_kept *fd_kept_list;
+static struct spinlock fd_kept_lock = SPINLOCK_INIT;
+
+/** Whether a copy `fd_keep` kept holds `node` of the KRFFS root. */
+static int fd_kept_holds(const krffs_node_t *node)
+{
+    uint32_t flags = spin_lock_irqsave(&fd_kept_lock);
+    const struct fd_kept *k;
+    int held = 0;
+
+    for (k = fd_kept_list; k && !held; k = k->next) {
+        held = fd_root_node(&k->e) == node;
+    }
+    spin_unlock_irqrestore(&fd_kept_lock, flags);
+    return held;
+}
+
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
     krffs_node_t head;
@@ -197,7 +221,8 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         }
         fd_table_unlock(pr->fds, flags);
     }
-    if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node)) {
+    if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node) ||
+        fd_kept_holds(node)) {
         held++;
     }
     if (krffs_node_head(node, &head) != 0) {
@@ -3412,7 +3437,8 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
     return -EPERM;
 }
 
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result);
+static int open_special(struct vfs_ref *ref, int fd, int flags, struct vfs_name *name,
+                        int32_t *result);
 static int open_mounted_node(struct vfs_ref *ref, int flags);
 static int open_root_node(struct vfs_ref *ref, int flags);
 static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags);
@@ -3450,7 +3476,7 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
     ref.mnt = mnt;
     ref.node = src->vnode;
     vfs_ref_hold(&ref);
-    if (open_special(&ref, fd, flags, &rc)) {
+    if (open_special(&ref, fd, flags, src->name, &rc)) {
         return rc;
     }
     rc = mnt_is_root(mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
@@ -3586,6 +3612,57 @@ void fd_peek_drop(struct fd_entry *copy)
     fd_release_objects(copy);
 }
 
+struct fd_kept *fd_keep(struct fd_table *table, int fd, struct fd_entry **entry, int *err)
+{
+    struct fd_kept *k = kmalloc(sizeof(*k));
+    uint32_t flags;
+
+    if (!k) {
+        *err = -ENOMEM;
+        return NULL;
+    }
+    if (fd_peek_hold(table, fd, &k->e) != 0) {
+        kfree(k);
+        *err = -EBADF;
+        return NULL;
+    }
+    flags = spin_lock_irqsave(&fd_kept_lock);
+    k->next = fd_kept_list;
+    fd_kept_list = k;
+    spin_unlock_irqrestore(&fd_kept_lock, flags);
+    *entry = &k->e;
+    return k;
+}
+
+/**
+ * The copy leaves the list under the root's namespace lock, as every holder
+ * that `fd_node_holders` finds in a list of its own does, and the orphan's
+ * check runs under the same hold; the rest of the release, which may close
+ * the description, runs after it.
+ */
+void fd_unkeep(struct fd_kept *kept)
+{
+    struct vfs_mount *locked;
+    struct fd_kept **link;
+    uint32_t flags;
+
+    if (!kept) {
+        return;
+    }
+    locked = fd_release_lock(&kept->e);
+    flags = spin_lock_irqsave(&fd_kept_lock);
+    for (link = &fd_kept_list; *link != kept; link = &(*link)->next) {
+    }
+    *link = kept->next;
+    spin_unlock_irqrestore(&fd_kept_lock, flags);
+    fd_release_orphan(&kept->e);
+    if (locked) {
+        vfs_ns_unlock(locked);
+    }
+    fd_peek_drop(&kept->e);
+    kfree(kept);
+}
+
 /** Check a descriptor target against NO_XDEV's mount, or allow no rule.
  * The description's mount is stable while nothing sleeps; anonymous
  * objects have no file-system mount and cannot stay on the link's. */
@@ -3643,7 +3720,7 @@ static int open_want(int flags);
  * Returns the new descriptor, -ENOENT for a mount being unmounted, or the
  * check's or the open's negative errno.
  */
-static int32_t proc_fd_reopen_node(const struct vfs_ref *keep, int flags)
+static int32_t proc_fd_reopen_node(const struct vfs_ref *keep, struct vfs_name *name, int flags)
 {
     struct vfs_mount *mnt = keep->mnt;
     struct vfs_ref ref;
@@ -3662,7 +3739,7 @@ static int32_t proc_fd_reopen_node(const struct vfs_ref *keep, int flags)
     }
     ref = *keep;
     vfs_ref_hold(&ref);
-    if (open_special(&ref, fd, flags, &rc)) {
+    if (open_special(&ref, fd, flags, name, &rc)) {
         return rc;
     }
     vfs_walk_unlock(mnt);
@@ -3700,7 +3777,7 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
         keep.node = ofd->dev_node;
         vfs_ref_hold(&keep);
         vfs_desc_open(keep.mnt);
-        rc = proc_fd_reopen_node(&keep, flags);
+        rc = proc_fd_reopen_node(&keep, ofd->name, flags);
         vfs_desc_close(keep.mnt, keep.node, NULL);
         return rc;
     }
@@ -4564,7 +4641,8 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
  * finds until it is published. Returns the descriptor or a negative errno,
  * with `ref` released and the reservation installed or freed either way.
  */
-static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
+static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags,
+                         struct vfs_name *name)
 {
     struct vfs_mount *mnt = ref->mnt;
     fd_entry_t *e = fd_slot(current_proc->fds, fd);
@@ -4582,6 +4660,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     e->ofd->vnode = ref->node;
     e->ofd->ino = ino;
     e->ofd->ino_seen = vfs_ino_err_sample(mnt, ino);
+    e->ofd->name = vfs_name_ref(name);
     vfs_desc_open(mnt);
     vfs_walk_unlock(mnt);
     vfs_leave(mnt);
@@ -4625,7 +4704,8 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
  * until its last put. Returns the descriptor or a negative errno, with `ref`
  * and the walk's lock released either way.
  */
-static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t rdev, int flags)
+static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t rdev, int flags,
+                                struct vfs_name *name)
 {
     struct vfs_mount *mnt = ref->mnt;
     struct open_file *keep = fd_ofd_new(), *to;
@@ -4650,6 +4730,9 @@ static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t
         to->dev_node = keep->dev_node;
         keep->dev_mnt = NULL;
         keep->dev_node = NULL;
+        if (!to->name) {
+            to->name = vfs_name_ref(name);
+        }
     }
     fd_ofd_unref(keep);
     return rc;
@@ -4697,7 +4780,10 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
  * taken, by a FIFO, or freed, since a device's open takes a descriptor of
  * its own; 0, with all three as they were, for any other node, which the
  * ordinary open takes, and for a node of a mounted type whose attributes
- * cannot be read, so that the ordinary open reports the error.
+ * cannot be read, so that the ordinary open reports the error. `name`, the
+ * node's entry or NULL, is held again by the description of a FIFO or of a
+ * device opened through a node of tmpfs or ext2, so that a bind through
+ * /proc/PID/fd/N can name the node (`procfs_fd_ref`).
  *
  * The checks are open's, in its order: O_CREAT|O_EXCL is EEXIST,
  * O_DIRECTORY is ENOTDIR, then the permission the access mode asks for; a
@@ -4716,7 +4802,8 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
  * keeps its place, nameless after an unlink, while an end holds it
  * (`fd_node_holders`).
  */
-static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
+static int open_special(struct vfs_ref *ref, int fd, int flags, struct vfs_name *name,
+                        int32_t *result)
 {
     struct vfs_mount *mnt = ref->mnt;
     uint32_t type, rdev = 0;
@@ -4748,11 +4835,11 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
     }
     rc = open_special_refused(ref, type, flags);
     if (rc == 0 && type == S_IFIFO) {
-        *result = open_fifo(ref, fd, ino, flags);
+        *result = open_fifo(ref, fd, ino, flags, name);
         return 1;
     }
     if (rc == 0 && type != S_IFSOCK) {
-        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags);
+        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags, name);
         return 1;
     }
     vfs_walk_unlock(mnt);
@@ -5272,7 +5359,7 @@ again:
             vfs_ref_release(&ref);
             goto out;
         }
-        if (open_special(&ref, fd, flags, &rc)) {
+        if (open_special(&ref, fd, flags, entry, &rc)) {
             fd = -1;
             goto out;
         }
@@ -5370,15 +5457,12 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
 {
     struct vfs_ref ref;
     struct vfs_mount *m;
+    struct fd_kept *kept;
     int privileged = cred_privileged();
-    int rc = vfs_resolve_fd(path, VFS_WALK_MOUNT, &ref, NULL);
+    int rc = vfs_resolve_fd(path, VFS_WALK_MOUNT, &ref, NULL, &kept);
 
     if (rc < 0) {
         return rc;
-    }
-    if (ref.node != ref.mnt->root || !vfs_mount_seen(ref.mnt)) {
-        vfs_ref_release(&ref);
-        return -EINVAL;
     }
     m = ref.mnt;
     if (keep_atime) {
@@ -5386,13 +5470,16 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
 
         flags = (flags & ~atime) | (vfs_mount_flags(m) & atime);
     }
-    if (!privileged &&
-        (!bind || vfs_mount_shared(m) || (vfs_mount_flags(m) & VFS_MS_LOCKED & ~flags))) {
-        vfs_ref_release(&ref);
-        return -EPERM;
+    if (ref.node != m->root || !vfs_mount_seen(m)) {
+        rc = -EINVAL;
+    } else if (!privileged &&
+               (!bind || vfs_mount_shared(m) || (vfs_mount_flags(m) & VFS_MS_LOCKED & ~flags))) {
+        rc = -EPERM;
+    } else {
+        rc = bind ? vfs_remount_bind(m, flags, privileged) : vfs_remount(m, flags, data);
     }
-    rc = bind ? vfs_remount_bind(m, flags, privileged) : vfs_remount(m, flags, data);
     vfs_ref_release(&ref);
+    fd_unkeep(kept);
     return rc;
 }
 
@@ -9373,6 +9460,33 @@ static int chdir_synth(const struct vfs_ref *ref, const struct vpath *vp, char *
 }
 
 /**
+ * Enter the synthetic directory `ref` holds, reached through a descriptor
+ * link on a mount other than the system's /dev, /proc and /sys, a bind of
+ * one of them as in a sandbox: by `path`, its mount-table path, with its
+ * mount and node, so the working directory stays on that mount and keeps
+ * its flags, as Linux's chdir keeps the descriptor's path. The checks are
+ * `chdir_synth`'s.
+ */
+static int chdir_synth_fd(const struct vfs_ref *ref, const struct vpath *vp, char *path)
+{
+    const struct synth_owner *own = vfs_proc_dir_owner(ref);
+    char *scratch;
+    int rc;
+
+    if (own) {
+        rc = proc_held_dir_permission(vp, own, CRED_X, 0);
+    } else if ((scratch = path_buf_get()) == NULL) {
+        rc = -ENOMEM;
+    } else {
+        rc = synth_chdir_path(vp, scratch);
+        path_buf_put(scratch);
+    }
+    return rc != 0 ? rc : cwd_enter_fd(ref, path);
+}
+
+static int32_t chdir_held(struct vfs_ref *ref, char *path, int via_fd);
+
+/**
  * Change the working directory to `path`, an absolute canonical path in a
  * path page, which this may write over.
  *
@@ -9402,45 +9516,61 @@ static int chdir_synth(const struct vfs_ref *ref, const struct vpath *vp, char *
 static int32_t do_chdir(char *path)
 {
     struct vfs_ref ref;
-    const struct vpath *svp;
-    krffs_node_t *node;
-    void *pin = NULL;
+    struct fd_kept *kept;
     int via_fd, rc;
 
     if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         return cwd_enter("/", NULL, NULL);
     }
-    via_fd = vfs_resolve_fd(path, VFS_WALK_LOCK, &ref, path);
+    via_fd = vfs_resolve_fd(path, VFS_WALK_LOCK, &ref, path, &kept);
     if (via_fd < 0) {
         return via_fd;
     }
+    rc = chdir_held(&ref, path, via_fd);
+    fd_unkeep(kept);
+    return rc;
+}
+
+/**
+ * The rest of `do_chdir` once the walk holds `ref` under its lock, `path`
+ * and `via_fd` being as `chdir_mounted` takes them: the reference and the
+ * lock are released either way.
+ */
+static int32_t chdir_held(struct vfs_ref *ref, char *path, int via_fd)
+{
+    const struct vpath *svp;
+    krffs_node_t *node;
+    void *pin = NULL;
+    int32_t rc;
+
     rc = 0;
-    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {
-        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);
+    if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin) {
+        rc = ref->mnt->type->ops->pin(ref->mnt, ref->node, &pin);
     }
-    vfs_walk_unlock(ref.mnt);
+    vfs_walk_unlock(ref->mnt);
     if (rc != 0) {
-        vfs_ref_release(&ref);
+        vfs_ref_release(ref);
         return rc;
     }
-    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    svp = vfs_synth_vpath(ref->mnt, ref->node);
     if (svp) {
-        rc = chdir_synth(&ref, svp, path);
-        vfs_ref_release(&ref);
+        rc = via_fd && !mount_permanent_at(ref->mnt) ? chdir_synth_fd(ref, svp, path)
+                                                     : chdir_synth(ref, svp, path);
+        vfs_ref_release(ref);
         return rc;
     }
-    node = ref.node;
-    if (!mnt_is_root(ref.mnt) || via_fd) {
-        rc = chdir_mounted(&ref, path, via_fd);
+    node = ref->node;
+    if (!mnt_is_root(ref->mnt) || via_fd) {
+        rc = chdir_mounted(ref, path, via_fd);
         if (pin) {
-            ref.mnt->type->ops->unpin(ref.mnt, pin);
+            ref->mnt->type->ops->unpin(ref->mnt, pin);
         }
-        vfs_ref_release(&ref);
+        vfs_ref_release(ref);
         return rc;
     }
     rc = krffs_node_is_dir(node);
     if (rc <= 0) {
-        vfs_ref_release(&ref);
+        vfs_ref_release(ref);
         return rc < 0 ? -EIO : -ENOTDIR;
     }
     rc = cred_access_node(node, CRED_X, 0);
@@ -9451,9 +9581,9 @@ static int32_t do_chdir(char *path)
         rc = path_in_root(path);
     }
     if (rc == 0) {
-        rc = cwd_enter(path, ref.mnt, node);
+        rc = cwd_enter(path, ref->mnt, node);
     }
-    vfs_ref_release(&ref);
+    vfs_ref_release(ref);
     return rc;
 }
 

@@ -224,15 +224,27 @@ struct vfs_name *procfs_exe_entry(int pid, int use_real);
 int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap,
                        int use_real);
 
+/* What a descriptor link is followed for (`procfs_fd_ref`). */
+#define PROCFS_FD_DIR    0 /* chdir: a directory */
+#define PROCFS_FD_MOUNT  1 /* a mount's target or unmount: any node in the namespace */
+#define PROCFS_FD_SOURCE 2 /* a bind's source, which may have lost its name */
+
+struct fd_kept;
+
 /**
- * Follow a descriptor link, subject to the proc ptrace check. Return 0
- * with the node held and its mount entered. If `path` is given, write its
- * mount-table path there, within `cap` bytes. Release with vfs_ref_release.
- * For a mount operation, return -EINVAL if the descriptor has no node or
- * its mount is outside the caller's namespace. For chdir, return -ENOTDIR
- * if the descriptor holds no directory node. The caller holds the big lock.
+ * Follow a descriptor link, subject to the proc ptrace check, for `how`.
+ * Return 0 with the node held and its mount entered, and the descriptor's
+ * copy kept in `*kept` (`fd_keep`), which the caller releases with
+ * `fd_unkeep` once it has released the node and every lock. If `path` is
+ * given, write the node's mount-table path there, within `cap` bytes. For a
+ * mount operation, return -EINVAL if the descriptor has no node or its
+ * mount is outside the caller's namespace, and -ENOENT for a file whose
+ * name was removed unless `how` is PROCFS_FD_SOURCE. For chdir, return
+ * -ENOTDIR if the descriptor holds no directory node. On an error nothing
+ * is held. The caller holds the big lock.
  */
-int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap, int mount);
+int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap, int how,
+                  struct fd_kept **kept);
 
 /** PID-directory enumeration: the pid in the caller's PID namespace of the
  * `n`th process it sees, counting from 0, one for each thread group, or -1

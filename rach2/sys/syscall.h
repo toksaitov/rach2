@@ -120,6 +120,25 @@ int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out);
  * its objects and ends it, as Linux's `fput` does. May sleep. */
 void fd_peek_drop(struct fd_entry *copy);
 
+struct fd_kept;
+
+/**
+ * Keep a copy of descriptor `fd` of `table`, as `fd_peek_hold` takes one,
+ * for a mount operation that follows /proc/PID/fd/N to what the descriptor
+ * names, until the operation ends: the copy holds the description, so a
+ * mounted KRFFS volume keeps the node's open record or pin, and the KRFFS
+ * root counts the copy among the node's holders (`fd_node_holders`), so
+ * neither frees a node that loses its name meanwhile, as Linux's
+ * `proc_fd_link` keeps the file's path. Return the record and its copy in
+ * `*entry`, or NULL with `*err` -ENOMEM or -EBADF. Release with `fd_unkeep`.
+ */
+struct fd_kept *fd_keep(struct fd_table *table, int fd, struct fd_entry **entry, int *err);
+
+/** Let go of what `fd_keep` kept, and free the node of the KRFFS root it
+ * held if it was the last holder of a node with no name. NULL is nothing.
+ * May sleep; the caller holds no namespace lock. */
+void fd_unkeep(struct fd_kept *kept);
+
 /** The host and domain names of the caller's UTS namespace, which uname
  * gives as its node name and domain name, for /proc/sys/kernel/hostname and
  * domainname. */

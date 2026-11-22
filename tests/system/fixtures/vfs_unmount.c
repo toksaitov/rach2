@@ -42,6 +42,7 @@
 /* The flags of an unmount's walk, as vfs.c and vfs.h define them. */
 #define WALK_UNMOUNT         0x100
 #define VFS_WALK_MOUNT       0x20
+#define VFS_WALK_COVER       0x40
 
 /* The parts of the kernel's structures that the unmount path reads. */
 struct block_device {
@@ -50,6 +51,7 @@ struct block_device {
 typedef struct block_device block_device_t;
 struct vfs_mount;
 struct walk_record;
+struct fd_kept;
 struct vfs_ops {
     int (*sync)(struct vfs_mount *);
     int (*prepare_unmount)(struct vfs_mount *);
@@ -156,18 +158,28 @@ static struct vfs_type type = {&ops};
  * counted, so that a case can check that no second walk follows an EIO.
  * The model has no proc descriptor links.
  */
+/* What the walk gives of a descriptor link, as vfs.c's. */
+struct fd_walk {
+    char *path;
+    struct fd_kept *kept;
+};
 static int resolve_fd_path(const struct vfs_ref *start, const char *path, int flags,
-                           struct vfs_ref *ref, struct walk_record *record, char *fd_path)
+                           struct vfs_ref *ref, struct walk_record *record, struct fd_walk *fw)
 {
+    fw->kept = NULL;
     (void)start;
     (void)path;
     (void)flags;
     (void)record;
-    (void)fd_path;
     resolve_calls++;
     ref->mnt = &records[3];
     ref->node = walk_node ? walk_node : records[3].root;
     return lookup_error;
+}
+/** The model keeps no descriptor copy. */
+static void fd_unkeep(struct fd_kept *kept)
+{
+    (void)kept;
 }
 /** Every mount in the model is visible to the caller. */
 static int vfs_mount_seen(const struct vfs_mount *m)

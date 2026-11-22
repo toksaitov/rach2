@@ -1629,8 +1629,15 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
     return rc;
 }
 
-/** Reconstruct the mount-table path of the held descriptor's node. */
-static int mount_fd_path(const fd_entry_t *fd, const struct vfs_ref *ref, char *path, uint32_t cap)
+/**
+ * Write the mount-table path of the node `ref` that the descriptor `fd`
+ * names into `path`, within `cap` bytes. A file is named by its entry, and
+ * one whose entry was removed by the name it had, which only `source`, a
+ * bind's source, accepts, as Linux binds a file it reaches through a
+ * descriptor whatever became of its name; otherwise -ENOENT.
+ */
+static int mount_fd_path(const fd_entry_t *fd, const struct vfs_ref *ref, char *path, uint32_t cap,
+                         int source)
 {
     const struct open_file *file = fd->ofd;
     struct vfs_mount *mnt = ref->mnt;
@@ -1655,7 +1662,7 @@ static int mount_fd_path(const fd_entry_t *fd, const struct vfs_ref *ref, char *
         if (!mnt->type->file_locked) {
             vfs_ns_unlock(mnt);
         }
-        return rc == 0 && deleted ? -ENOENT : rc;
+        return rc == 0 && deleted && !source ? -ENOENT : rc;
     } else {
         return vfs_node_path(mnt, ref->node, path, cap);
     }
@@ -1669,33 +1676,58 @@ static int mount_fd_path(const fd_entry_t *fd, const struct vfs_ref *ref, char *
     return 0;
 }
 
-int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap, int mount)
+/**
+ * The node a description names, into `out`: a file's or directory's of a
+ * mounted type or the KRFFS root, the device node of tmpfs or ext2 a device
+ * was opened through, or a synthetic node opened by path; `out->mnt` NULL
+ * for none.
+ */
+static void fd_object(const struct open_file *file, struct vfs_ref *out)
+{
+    if (file->vmnt) {
+        out->mnt = file->vmnt;
+        out->node = file->vnode;
+    } else if (file->dev_mnt) {
+        out->mnt = file->dev_mnt;
+        out->node = file->dev_node;
+    } else {
+        out->mnt = file->synth_mnt;
+        out->node = file->synth_node;
+    }
+}
+
+int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap, int how,
+                  struct fd_kept **kept)
 {
     int pid = procfs_resolve_id(vp);
     process_t *p = pid < 0 ? NULL : procfs_proc(pid);
+    int mount = how != PROCFS_FD_DIR;
     struct open_file *file;
-    fd_entry_t fd;
-    int rc = mount ? -EINVAL : -ENOTDIR;
+    struct fd_kept *k;
+    fd_entry_t *fd;
+    int rc;
 
+    *kept = NULL;
     if (!p || !p->fds || vp->procfd < 0) {
         return -ENOENT;
     }
     if (!procfs_may_trace(p, 0)) {
         return -EACCES;
     }
-    if (fd_peek_hold(p->fds, vp->procfd, &fd) != 0) {
-        return -ENOENT;
+    k = fd_keep(p->fds, vp->procfd, &fd, &rc);
+    if (!k) {
+        return rc == -EBADF ? -ENOENT : rc;
     }
-    file = fd.ofd;
-    if (file && (mount || fd.type == FD_TYPE_DIR || fd.type == FD_TYPE_SYNTH_DIR)) {
-        out->mnt = file->vmnt ? file->vmnt : file->synth_mnt;
-        out->node = file->vmnt ? file->vnode : file->synth_node;
+    rc = mount ? -EINVAL : -ENOTDIR;
+    file = fd->ofd;
+    if (file && (mount || fd->type == FD_TYPE_DIR || fd->type == FD_TYPE_SYNTH_DIR)) {
+        fd_object(file, out);
         if (out->mnt && out->node && (!mount || vfs_mount_seen(out->mnt))) {
             rc = vfs_enter(out->mnt);
             if (rc == 0) {
                 vfs_ref_hold(out);
                 if (path) {
-                    rc = mount_fd_path(&fd, out, path, cap);
+                    rc = mount_fd_path(fd, out, path, cap, how == PROCFS_FD_SOURCE);
                 }
                 if (rc != 0) {
                     vfs_ref_release(out);
@@ -1703,8 +1735,12 @@ int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint3
             }
         }
     }
-    fd_peek_drop(&fd);
-    return rc;
+    if (rc != 0) {
+        fd_unkeep(k);
+        return rc;
+    }
+    *kept = k;
+    return 0;
 }
 
 /**

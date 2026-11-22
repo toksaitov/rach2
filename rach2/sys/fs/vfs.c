@@ -6363,19 +6363,33 @@ static int covered_already(const struct vfs_ref *tref)
     return 0;
 }
 
+/* The flags `resolve_fd_path` takes for a descriptor link alone. */
+#define WALK_FD_FLAGS (VFS_WALK_MOUNT | VFS_WALK_COVER | VFS_WALK_SOURCE)
+
+/* What `resolve_fd_path` gives of a descriptor link: its node's mount-table
+ * path, into `path` of VFS_PATH_MAX bytes when it is not NULL, and the
+ * descriptor's copy, which the caller gives to `fd_unkeep`. */
+struct fd_walk {
+    char *path;
+    struct fd_kept *kept;
+};
+
 /**
  * Walk `path`, following a final proc descriptor link as vfs_resolve_fd
- * does. The bind walk also records the path it took in `record`, and lazy
- * unmount may start at a working directory outside the process root.
+ * does, into `fw`. The bind walk also records the path it took in `record`,
+ * and lazy unmount may start at a working directory outside the process
+ * root.
  */
 static int resolve_fd_path(const struct vfs_ref *start, const char *path, int flags,
-                           struct vfs_ref *ref, struct walk_record *record, char *fd_path)
+                           struct vfs_ref *ref, struct walk_record *record, struct fd_walk *fw)
 {
     int locked = (flags & VFS_WALK_LOCK) != 0;
-    int rc = resolve_path(start, path, flags & ~VFS_WALK_MOUNT, ref, 0, 0, record);
+    int rc = resolve_path(start, path, flags & ~WALK_FD_FLAGS, ref, 0, 0, record);
     const struct vpath *vp;
     struct vfs_ref object;
+    int how;
 
+    fw->kept = NULL;
     if (rc != 0) {
         return rc;
     }
@@ -6384,19 +6398,42 @@ static int resolve_fd_path(const struct vfs_ref *start, const char *path, int fl
         return 0;
     }
     walk_unlock(ref->mnt, locked);
-    rc = procfs_fd_ref(vp, &object, fd_path, VFS_PATH_MAX, (flags & VFS_WALK_MOUNT) != 0);
+    how = (flags & VFS_WALK_SOURCE)  ? PROCFS_FD_SOURCE
+          : (flags & VFS_WALK_MOUNT) ? PROCFS_FD_MOUNT
+                                     : PROCFS_FD_DIR;
+    rc = procfs_fd_ref(vp, &object, fw->path, VFS_PATH_MAX, how, &fw->kept);
     vfs_ref_release(ref);
     if (rc != 0) {
         return rc;
     }
     walk_lock(object.mnt, locked);
+    if (flags & VFS_WALK_COVER) {
+        rc = walk_cross(&object, locked);
+    }
+    if (rc == 0 && (flags & VFS_WALK_MOUNT) && !vfs_mount_seen(object.mnt)) {
+        rc = -EINVAL;
+    }
+    if (rc != 0) {
+        walk_unlock(object.mnt, locked);
+        vfs_ref_release(&object);
+        fd_unkeep(fw->kept);
+        fw->kept = NULL;
+        return rc;
+    }
     *ref = object;
     return 1;
 }
 
-int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path)
+int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path,
+                   struct fd_kept **kept)
 {
-    return resolve_fd_path(NULL, path, flags, out, NULL, fd_path);
+    struct fd_walk fw;
+    int rc;
+
+    fw.path = fd_path;
+    rc = resolve_fd_path(NULL, path, flags, out, NULL, &fw);
+    *kept = fw.kept;
+    return rc;
 }
 
 /**
@@ -6464,8 +6501,9 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
  * shows the system's terminals and ptmx, whatever its options ask, since
  * this kernel keeps one set of terminals.
  */
-int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
-                 const char *options)
+/** vfs_do_mount, with the copy a descriptor target keeps in `*kept`. */
+static int mount_new(const char *source, const char *target, const char *type, uint32_t flags,
+                     const char *options, struct fd_kept **kept)
 {
     int pts = streq(type, "devpts");
     const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type
@@ -6484,7 +6522,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
-    rc = vfs_resolve_fd(target, VFS_WALK_MOUNT, &tref, NULL);
+    rc = vfs_resolve_fd(target, VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL, kept);
     if (rc < 0) {
         return rc;
     }
@@ -6553,6 +6591,16 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path, t->name,
          (flags & VFS_MS_RDONLY) ? ", read-only" : "");
     return 0;
+}
+
+int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
+                 const char *options)
+{
+    struct fd_kept *kept = NULL;
+    int rc = mount_new(source, target, type, flags, options, &kept);
+
+    fd_unkeep(kept);
+    return rc;
 }
 
 int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source, uint32_t flags)
@@ -6940,16 +6988,20 @@ static int table_path(char *path)
 /** Resolve and hold a bind operand, with its path from the mount table.
  * A final proc descriptor link gives the held object (`procfs_fd_ref`).
  * 0 with `ref` to release, or an error with nothing held. */
-static int bind_resolve(const char *path, struct vfs_ref *ref, char *real)
+static int bind_resolve(const char *path, int flags, struct vfs_ref *ref, char *real,
+                        struct fd_kept **kept)
 {
     struct walk_record record;
+    struct fd_walk fw;
     int rc;
 
     record.real = real;
     record.entry = NULL;
     record.scope = NULL;
     record.dir = NULL;
-    rc = resolve_fd_path(NULL, path, VFS_WALK_MOUNT, ref, &record, real);
+    fw.path = real;
+    rc = resolve_fd_path(NULL, path, VFS_WALK_MOUNT | flags, ref, &record, &fw);
+    *kept = fw.kept;
     if (rc != 0) {
         return rc < 0 ? rc : 0;
     }
@@ -6963,15 +7015,16 @@ static int bind_resolve(const char *path, struct vfs_ref *ref, char *real)
 int vfs_do_bind(const char *source, const char *target, int rec)
 {
     struct vfs_ref sref, tref;
+    struct fd_kept *skept = NULL, *tkept = NULL;
     char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX];
     char *sreal = kmalloc(VFS_PATH_MAX), *treal = kmalloc(VFS_PATH_MAX);
     int dir, rc;
 
-    rc = sreal && treal ? bind_resolve(source, &sref, sreal) : -ENOMEM;
+    rc = sreal && treal ? bind_resolve(source, VFS_WALK_SOURCE, &sref, sreal, &skept) : -ENOMEM;
     if (rc == 0) {
         rc = bind_source(&sref, full, inner, sreal, &dir);
         if (rc == 0) {
-            rc = bind_resolve(target, &tref, treal);
+            rc = bind_resolve(target, VFS_WALK_COVER, &tref, treal, &tkept);
         }
         if (rc != 0) {
             vfs_ref_release(&sref);
@@ -6979,6 +7032,8 @@ int vfs_do_bind(const char *source, const char *target, int rec)
             rc = bind_refs(&sref, &tref, target, rec, NULL, sreal, treal);
         }
     }
+    fd_unkeep(tkept);
+    fd_unkeep(skept);
     kfree(sreal);
     kfree(treal);
     return rc;
@@ -7152,19 +7207,24 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
 static int unmount_mount(struct vfs_mount *m);
 
 /**
- * A target that named a directory by its end is checked by the walk that
+ * vfs_do_umount, with the copy a descriptor target keeps in `*kept`. A
+ * target that named a directory by its end is checked by the walk that
  * finds the mount, before the EINVAL of a name that is no mount point, as
  * on Linux. The node checked is the node unmounted, so a symbolic link
  * replaced between two walks cannot change the answer. A target found by
  * its recorded path below a removed device is a mount's root, a directory.
  */
-int vfs_do_umount(const char *target, int dir)
+static int umount_target(const char *target, int dir, struct fd_kept **kept)
 {
     struct vfs_ref tref;
     struct vfs_mount *m;
+    struct fd_walk fw;
     int rc;
 
-    rc = resolve_fd_path(NULL, target, WALK_UNMOUNT | VFS_WALK_MOUNT, &tref, NULL, NULL);
+    fw.path = NULL;
+    rc = resolve_fd_path(NULL, target, WALK_UNMOUNT | VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL,
+                         &fw);
+    *kept = fw.kept;
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
     if (rc < 0 && !m) {
         return rc;
@@ -7186,6 +7246,15 @@ int vfs_do_umount(const char *target, int dir)
     if (rc == 0) {
         vfs_reap_detached();
     }
+    return rc;
+}
+
+int vfs_do_umount(const char *target, int dir)
+{
+    struct fd_kept *kept = NULL;
+    int rc = umount_target(target, dir, &kept);
+
+    fd_unkeep(kept);
     return rc;
 }
 
@@ -7217,12 +7286,13 @@ static int detached_by(const struct vfs_mount *c, const struct vfs_mount *m,
     return 0;
 }
 
-/** Resolve a lazy unmount's target and detach its mount tree. See vfs.h. */
-int vfs_do_detach(const char *target, int dir)
+/** vfs_do_detach, with the copy a descriptor target keeps in `*kept`. */
+static int detach_target(const char *target, int dir, struct fd_kept **kept)
 {
     struct vfs_ref tref, cwd;
     const struct vfs_ref *start = NULL;
     struct vfs_mount *m, *root = root_mount_of_caller();
+    struct fd_walk fw;
     int i, rc;
 
     if (target[0] == '/' && target[1] == '/' && current_proc && current_proc->fs->cwd_mnt &&
@@ -7235,7 +7305,10 @@ int vfs_do_detach(const char *target, int dir)
         start = &cwd;
         target = ".";
     }
-    rc = resolve_fd_path(start, target, WALK_UNMOUNT | VFS_WALK_MOUNT, &tref, NULL, NULL);
+    fw.path = NULL;
+    rc = resolve_fd_path(start, target, WALK_UNMOUNT | VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL,
+                         &fw);
+    *kept = fw.kept;
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
     if (rc < 0 && !m) {
         return rc;
@@ -7265,6 +7338,16 @@ int vfs_do_detach(const char *target, int dir)
     klog(KLOG_INFO, "vfs", "detached: %s", m->covered_path);
     vfs_reap_detached();
     return 0;
+}
+
+/** Resolve a lazy unmount's target and detach its mount tree. See vfs.h. */
+int vfs_do_detach(const char *target, int dir)
+{
+    struct fd_kept *kept = NULL;
+    int rc = detach_target(target, dir, &kept);
+
+    fd_unkeep(kept);
+    return rc;
 }
 
 /**
@@ -7327,8 +7410,12 @@ static void reap_if_detached(const struct vfs_mount *mnt, uint32_t left)
 /**
  * The checks of pivot_root on the new root `nref`, the place `oref` the old
  * root goes to, and the caller's root, the root of `rmnt` at `rnode`, in
- * Linux's order; `*same` says whether `oref` is the new root itself. 0,
- * -EINVAL, -ENOTDIR, -EBUSY or the error of `vfs_node_path`.
+ * Linux's order; `*same` says whether `oref` is the new root itself. The
+ * old root's place must be below the new root, and the new root below the
+ * caller's root, by the chain of mounts, as Linux's `is_path_reachable`
+ * asks; a walk reaches nothing else, but a descriptor opened before a
+ * chroot may name a mount beside it. 0, -EINVAL, -ENOTDIR, -EBUSY or the
+ * error of `vfs_node_path`.
  */
 static int pivot_check(const struct vfs_ref *nref, const struct vfs_ref *oref,
                        const struct vfs_mount *rmnt, const void *rnode, int *same)
@@ -7351,6 +7438,9 @@ static int pivot_check(const struct vfs_ref *nref, const struct vfs_ref *oref,
     if (nref->mnt == rmnt || oref->mnt == rmnt) {
         return -EBUSY;
     }
+    if (!mount_within(oref->mnt, nref->mnt) || !mount_within(nref->mnt, rmnt)) {
+        return -EINVAL;
+    }
     *same = oref->mnt == nref->mnt && oref->node == nref->node;
     if (*same) {
         return 0;
@@ -7364,7 +7454,10 @@ static int pivot_check(const struct vfs_ref *nref, const struct vfs_ref *oref,
                : -EINVAL;
 }
 
-int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out)
+/** vfs_pivot_mounts, with the copies descriptor operands keep in `nkept`
+ * and `okept`. */
+static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out,
+                        struct fd_kept **nkept, struct fd_kept **okept)
 {
     struct vfs_ref nref, oref, sref;
     struct vfs_mount *rmnt = root_mount_of_caller();
@@ -7373,11 +7466,11 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
     int i, rc, same = 0;
 
     tree_seq++;
-    rc = vfs_resolve_fd(new_root, VFS_WALK_MOUNT, &nref, NULL);
+    rc = vfs_resolve_fd(new_root, VFS_WALK_MOUNT, &nref, NULL, nkept);
     if (rc < 0) {
         return rc;
     }
-    rc = vfs_resolve_fd(put_old, VFS_WALK_MOUNT, &oref, NULL);
+    rc = vfs_resolve_fd(put_old, VFS_WALK_MOUNT, &oref, NULL, okept);
     if (rc < 0) {
         vfs_ref_release(&nref);
         return rc;
@@ -7416,6 +7509,16 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
     *out = nref;
     vfs_reap_detached();
     return 0;
+}
+
+int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out)
+{
+    struct fd_kept *nkept = NULL, *okept = NULL;
+    int rc = pivot_mounts(new_root, put_old, out, &nkept, &okept);
+
+    fd_unkeep(okept);
+    fd_unkeep(nkept);
+    return rc;
 }
 
 /**
