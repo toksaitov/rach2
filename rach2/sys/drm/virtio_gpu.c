@@ -370,12 +370,14 @@ static int32_t profile_show(void *data, char *buf, uint32_t cap)
     static const char header[] = "type sent answered fenced request response transfer payload "
                                  "copy_ns answer_ns waits wait_ns\n";
     static const char notify[] = "notify count ns\n";
+    static const char exec[] = "execbuffer count reap_ns room_ns context_ns alloc_ns copy_ns "
+                               "buffers_ns dependencies_ns fences_ns send_ns\n";
     struct virtio_gpu_device *vg = data;
     uint32_t i, flags;
     char *p = buf;
-    uint64_t notifies, notify_ns;
-    const uint32_t size =
-        sizeof(header) - 1 + (VGPU_PROFILE_ROWS - 1) * 12 * 21 + sizeof(notify) - 1 + 2 * 21;
+    uint64_t notifies, notify_ns, execs, exec_ns[VGPU_EXEC_PARTS];
+    const uint32_t size = sizeof(header) - 1 + (VGPU_PROFILE_ROWS - 1) * 12 * 21 + sizeof(notify) -
+                          1 + 2 * 21 + sizeof(exec) - 1 + (1 + VGPU_EXEC_PARTS) * 21;
 
     if (cap < size) {
         return (int32_t)size;
@@ -411,7 +413,29 @@ static int32_t profile_show(void *data, char *buf, uint32_t cap)
     p = profile_number(p, notifies);
     p = profile_number(p, notify_ns);
     p[-1] = '\n';
+    flags = spin_lock_irqsave(&vg->lock);
+    execs = vg->execs;
+    k_memcpy(exec_ns, vg->exec_ns, sizeof(exec_ns));
+    spin_unlock_irqrestore(&vg->lock, flags);
+    k_memcpy(p, exec, sizeof(exec) - 1);
+    p += sizeof(exec) - 1;
+    p = profile_number(p, execs);
+    for (i = 0; i < VGPU_EXEC_PARTS; i++) {
+        p = profile_number(p, exec_ns[i]);
+    }
+    p[-1] = '\n';
     return (int32_t)size;
+}
+
+void vgpu_profile_exec(struct virtio_gpu_device *vg, const int64_t *marks)
+{
+    uint32_t flags = spin_lock_irqsave(&vg->lock), i;
+
+    vg->execs++;
+    for (i = 0; i < VGPU_EXEC_PARTS; i++) {
+        vg->exec_ns[i] += marks[i + 1] > marks[i] ? (uint64_t)(marks[i + 1] - marks[i]) : 0;
+    }
+    spin_unlock_irqrestore(&vg->lock, flags);
 }
 
 static const struct debugfs_text_ops profile_ops = {profile_show, NULL};
