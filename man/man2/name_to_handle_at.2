@@ -70,9 +70,14 @@ after writing
 .Fa mount_id ,
 so that a caller can ask again with room, as on Linux.
 .Pp
-A handle of a file on ext2, tmpfs, vfat or KRFFS, the types Linux gives
-export operations, and Rach2's own, reopens the file.
-On any other mount,
+A handle reopens a file only on ext2 and tmpfs, where no other file
+takes its identity while the handle lives: ext2 by the generation, and
+tmpfs because its inode numbers are never given again within a mount.
+KRFFS derives a file's inode number from its name and FAT from its
+directory entry, and neither keeps a generation, so a file made again
+under the name would take the old one's handle.
+Linux's vfat, which keeps a generation in memory, reopens its files.
+On those and on any other mount,
 .Pa /proc ,
 .Pa /sys ,
 .Pa /dev ,
