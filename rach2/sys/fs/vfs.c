@@ -1053,16 +1053,25 @@ struct walk_check {
     int on;
 };
 
+/** Ask for the calling thread's call to run again from its start once it
+ * has let go of everything: -EINTR with RESTART_NOINTR, as Linux restarts
+ * a call with -ERESTARTNOINTR, or -EAGAIN for a kernel thread, which no
+ * call restarts. */
+static int walk_call_again(void)
+{
+    if (proc_is_kthread(current_proc)) {
+        return -EAGAIN;
+    }
+    current_proc->restart_kind = RESTART_NOINTR;
+    return -EINTR;
+}
+
 /** The part of `walk_check_begin` when another thread's change is under
  * way: sleep until none is, or ask for the call to run again. */
 static int walk_check_wait(struct walk_check *wc)
 {
     if (vfs_seq_mine() || vfs_ns_held_by_caller()) {
-        if (proc_is_kthread(current_proc)) {
-            return -EAGAIN;
-        }
-        current_proc->restart_kind = RESTART_NOINTR;
-        return -EINTR;
+        return walk_call_again();
     }
     vfs_seq_wait(&wc->seq);
     return 0;
@@ -1082,7 +1091,9 @@ static int walk_keep_spare(void);
  * page the walk takes its start from, whose working directory is taken
  * again here when it moved (`path_buf_cwd_retake`), once the sequence is
  * read, so that the attempt takes the root and the working directory
- * together.
+ * together; a move from or to a working directory with no pair, whose walk
+ * is the text the call joined, asks for the call to run again, which joins
+ * its path to the new one.
  */
 static int walk_check_begin(struct walk_check *wc, const char *page)
 {
@@ -1099,8 +1110,7 @@ static int walk_check_begin(struct walk_check *wc, const char *page)
             return rc;
         }
     }
-    path_buf_cwd_retake(page);
-    return 0;
+    return path_buf_cwd_retake(page) == 0 ? 0 : walk_call_again();
 }
 
 /** Whether nothing has changed what a path names since `wc` began. */
@@ -3301,7 +3311,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     if (path && out && !record && kept >= 0 && vfs_root_mounted() &&
         !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
         !(current_proc && current_proc->walk_replay) && vfs_seq_read(&seq) &&
-        !(kept && path_buf_cwd_moved(path))) {
+        !path_buf_cwd_moved(path)) {
         rc = resolve_cached(kept ? &held : start, seq, kept ? rest : path, flags, out, NULL);
         if (rc != WALK_FULL) {
             vfs_stamp_set(seq, 1);
