@@ -68,6 +68,14 @@ const char *sysfs_net_slot_name(int slot)
     return slot >= 0 && slot <= 5 ? names[slot] : "";
 }
 
+/** Every keyed device of /sys is there in these rows. */
+int sysfs_device_exists(int node, int key)
+{
+    (void)node;
+    (void)key;
+    return 1;
+}
+
 /** The PCI key of eth0's card, 0x18 (bus 0, device 3, function 0), and -1
  *  for any other index. */
 int sysfs_net_pci_key(int index)

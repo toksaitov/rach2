@@ -458,6 +458,15 @@ void vfs_ns_unlock(struct vfs_mount *m)
     (void)m;
 }
 
+/** No walk runs beside the rows, so a change of what a path names is
+ * nothing to count. */
+void vfs_seq_begin(void)
+{}
+
+/** The end of the change `vfs_seq_begin` began: nothing here. */
+void vfs_seq_end(void)
+{}
+
 /** No row has a descriptor whose flags mq_getsetattr sets. */
 void fd_ofd_status_set(struct open_file *ofd, uint32_t clear, uint32_t set)
 {

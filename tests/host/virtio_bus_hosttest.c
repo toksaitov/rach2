@@ -1,3 +1,11 @@
+/** Every keyed device of /sys is there in these rows. */
+int sysfs_device_exists(int node, int key)
+{
+    (void)node;
+    (void)key;
+    return 1;
+}
+
 /**
  * virtio_bus_hosttest.c: the virtio bus of rach2/sys/virtio/virtio_bus.c in
  * the /sys registry of rach2/sys/fs/sysfs.c, read back as synthfs.c

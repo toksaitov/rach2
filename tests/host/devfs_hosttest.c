@@ -242,6 +242,21 @@ block_device_t *loop_node_device(int index, int write, int32_t *err)
     return 0;
 }
 
+/** No row passes a descriptor to a loop ioctl: -EBADF. */
+int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out)
+{
+    (void)table;
+    (void)fd;
+    (void)out;
+    return -EBADF;
+}
+
+/** Nothing to give back: `fd_peek_hold` takes nothing here. */
+void fd_peek_drop(struct fd_entry *copy)
+{
+    (void)copy;
+}
+
 /** No file can be attached to a loop device: -ENXIO. */
 int loop_attach_file(int index, const struct open_file *ofd, const char *path, int writable,
                      uint32_t flags)
