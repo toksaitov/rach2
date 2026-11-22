@@ -343,8 +343,8 @@ int etude_scenario(struct etude_case *c)
     static const char *const framefail_ids[] = {"exit", "said-ok", "failed-on-purpose", NULL};
     static const char *const strings_ids[] = {"swept", "never-wrong", NULL};
     static const char *const refused_ids[] = {"refused", "no-fault", NULL};
-    static const char *const overrun_ids[] = {"descended", "panicked", "named",
-                                              "halted",    "no-shell", NULL};
+    static const char *const overrun_ids[] = {"descended", "panicked", "said-wait",
+                                              "named",     "no-shell", NULL};
     const char *id = etude_case_id(c), *name = case_name(c);
     struct lc l;
 
