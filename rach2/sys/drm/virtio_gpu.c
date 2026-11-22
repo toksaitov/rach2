@@ -9,6 +9,10 @@
 
 #include "virtio_gpu.h"
 #include "../dmabuf/dmabuf.h"
+#ifdef RACH2_VGPU_PROFILE
+#include "../fs/debugfs.h"
+#include "../virtio/vgpushm.h"
+#endif
 
 #include "../arch/arch.h"
 #include "../cmdline.h"
@@ -238,6 +242,152 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
 /** The request of `cmd`, at the start of its page. */
 #define cmd_req(cmd, type) ((type *)(void *)(cmd)->page)
 
+#ifdef RACH2_VGPU_PROFILE
+/* One row per command, followed by the total for queue notifications. */
+static const uint32_t profile_types[VGPU_PROFILE_ROWS] = {
+    0x0100, 0x0101, 0x0102, 0x0103, 0x0104, 0x0105, 0x0106,          0x0107, 0x0108, 0x0109,
+    0x010a, 0x010b, 0x010c, 0x010d, 0x0200, 0x0201, 0x0202,          0x0203, 0x0204, 0x0205,
+    0x0206, 0x0207, 0x0208, 0x0209, 0x0300, 0x0301, VGS_CMD_BACKING, 0};
+
+/** Return a known command's row, or NULL. The caller holds vg->lock. */
+static struct vgpu_profile_row *profile_row(struct virtio_gpu_device *vg, uint32_t type)
+{
+    unsigned i;
+
+    for (i = 0; i < VGPU_PROFILE_ROWS - 1; i++) {
+        if (profile_types[i] == type) {
+            return &vg->profile[i];
+        }
+    }
+    return NULL;
+}
+
+/** Count an outgoing chain under vg->lock. Count its answer at completion. */
+static void profile_publish(struct virtio_gpu_cmd *cmd)
+{
+    struct vgpu_profile_row *row =
+        profile_row(cmd->vg, cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type);
+    uint32_t i;
+
+    if (row) {
+        cmd->published_ns = rtc_monotonic_ns();
+        row->sent++;
+        row->fenced += cmd->fence != NULL;
+        row->payload += cmd->payload_bytes;
+        row->copy_ns += cmd->copy_ns;
+        for (i = 0; i < cmd->nout; i++) {
+            row->request += cmd->segments[i].len;
+        }
+    }
+}
+
+/** Count an answer and its time since publication under vg->lock. */
+static void profile_answer(struct virtio_gpu_cmd *cmd, uint32_t len, int ok)
+{
+    struct vgpu_profile_row *row =
+        profile_row(cmd->vg, cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type);
+
+    if (row) {
+        row->answered++;
+        row->response += len;
+        row->answer_ns += rtc_monotonic_ns() - cmd->published_ns;
+        if (ok) {
+            row->transfer += cmd->copied;
+        }
+    }
+}
+
+/** Write a number at fixed width, so updates leave the file size fixed. */
+static char *profile_number(char *out, uint64_t n)
+{
+    unsigned i;
+    uint32_t digit;
+
+    for (i = 20; i != 0; i--) {
+        n = tick_div(n, 10, &digit);
+        out[i - 1] = n || digit || i == 20 ? (char)('0' + digit) : ' ';
+    }
+    out[20] = ' ';
+    return out + 21;
+}
+
+/** Write fixed-size rows, each read under vg->lock. */
+static int32_t profile_show(void *data, char *buf, uint32_t cap)
+{
+    static const char header[] = "type sent answered fenced request response transfer payload "
+                                 "copy_ns answer_ns waits wait_ns\n";
+    static const char notify[] = "notify count ns\n";
+    struct virtio_gpu_device *vg = data;
+    uint32_t i, flags;
+    char *p = buf;
+    uint64_t notifies, notify_ns;
+    const uint32_t size =
+        sizeof(header) - 1 + (VGPU_PROFILE_ROWS - 1) * 12 * 21 + sizeof(notify) - 1 + 2 * 21;
+
+    if (cap < size) {
+        return (int32_t)size;
+    }
+    k_memcpy(p, header, sizeof(header) - 1);
+    p += sizeof(header) - 1;
+    for (i = 0; i < VGPU_PROFILE_ROWS - 1; i++) {
+        struct vgpu_profile_row row;
+
+        flags = spin_lock_irqsave(&vg->lock);
+        row = vg->profile[i];
+        spin_unlock_irqrestore(&vg->lock, flags);
+        p = profile_number(p, profile_types[i]);
+        p = profile_number(p, row.sent);
+        p = profile_number(p, row.answered);
+        p = profile_number(p, row.fenced);
+        p = profile_number(p, row.request);
+        p = profile_number(p, row.response);
+        p = profile_number(p, row.transfer);
+        p = profile_number(p, row.payload);
+        p = profile_number(p, row.copy_ns);
+        p = profile_number(p, row.answer_ns);
+        p = profile_number(p, row.waits);
+        p = profile_number(p, row.wait_ns);
+        p[-1] = '\n';
+    }
+    flags = spin_lock_irqsave(&vg->lock);
+    notifies = vg->notifies;
+    notify_ns = vg->notify_ns;
+    spin_unlock_irqrestore(&vg->lock, flags);
+    k_memcpy(p, notify, sizeof(notify) - 1);
+    p += sizeof(notify) - 1;
+    p = profile_number(p, notifies);
+    p = profile_number(p, notify_ns);
+    p[-1] = '\n';
+    return (int32_t)size;
+}
+
+static const struct debugfs_text_ops profile_ops = {profile_show, NULL};
+
+/** Publish the profiling file in the registered device's directory. */
+static void profile_register(struct virtio_gpu_device *vg)
+{
+    char path[64];
+
+    if (vg->drm.debugfs) {
+        drm_debugfs_path(&vg->drm, "virtio_gpu_profile", path, sizeof(path));
+        if (debugfs_create_text(path, 0400, &profile_ops, vg) != 0) {
+            klog(KLOG_WARN, "virtio_gpu", "could not register the profiling file");
+        }
+    }
+}
+
+/** Charge a queue notification once the caller has retaken its locks. */
+static void profile_notify(struct virtio_gpu_device *vg, int64_t start)
+{
+    uint64_t ns = rtc_monotonic_ns() - start;
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+
+    vg->notifies++;
+    vg->notify_ns += ns;
+    spin_unlock_irqrestore(&vg->lock, flags);
+}
+#endif
+
 /** Put `cmd` on the done list for the reaper. Under the lock. */
 static void done_add(struct virtio_gpu_device *vg, struct virtio_gpu_cmd *cmd)
 {
@@ -287,6 +437,9 @@ static int pending_push(struct virtio_gpu_device *vg, int q)
         if (virtqueue_add(vq, cmd->segments, cmd->nout, cmd->nin, cmd) != 0) {
             break;
         }
+#ifdef RACH2_VGPU_PROFILE
+        profile_publish(cmd);
+#endif
         vg->pending[q] = cmd->next;
         cmd->next = NULL;
         if (cmd->fence) {
@@ -326,10 +479,16 @@ static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int 
 {
     uint32_t flags;
     int depth;
+#ifdef RACH2_VGPU_PROFILE
+    int64_t start = rtc_monotonic_ns();
+#endif
 
     if (!sleepable || !vg->vdev->notify_unlocked || !sched_is_enabled() || current_proc == NULL ||
         !kirq_enabled()) {
         virtqueue_kick(vq);
+#ifdef RACH2_VGPU_PROFILE
+        profile_notify(vg, start);
+#endif
         return;
     }
     vg->kicking++;
@@ -339,6 +498,9 @@ static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int 
     bkl_take(depth);
     kirq_restore(flags);
     vg->kicking--;
+#ifdef RACH2_VGPU_PROFILE
+    profile_notify(vg, start);
+#endif
 }
 
 /**
@@ -452,6 +614,9 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
     }
     cmd->response_len = len;
     flags = spin_lock_irqsave(&vg->lock);
+#ifdef RACH2_VGPU_PROFILE
+    profile_answer(cmd, len, ok);
+#endif
     if (cmd->fence) {
         if (!ok) {
             dma_fence_set_error(cmd->fence, -EIO);
@@ -1061,12 +1226,26 @@ static int32_t cmd_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t out_len,
     uint32_t flags, type = cmd_req(cmd, struct virtio_gpu_ctrl_hdr)->type;
     int32_t rc;
     int killed;
+#ifdef RACH2_VGPU_PROFILE
+    struct vgpu_profile_row *row;
+    int64_t start;
+#endif
 
     cmd->waited = 1;
     cmd->sleepable = 1;
     cmd_submit(cmd);
+#ifdef RACH2_VGPU_PROFILE
+    start = rtc_monotonic_ns();
+#endif
     killed = cmd_await(cmd, deadline);
     flags = spin_lock_irqsave(&vg->lock);
+#ifdef RACH2_VGPU_PROFILE
+    row = profile_row(vg, type);
+    if (row) {
+        row->waits++;
+        row->wait_ns += rtc_monotonic_ns() - start;
+    }
+#endif
     if (!cmd->done) {
         cmd->waited = 0;
         spin_unlock_irqrestore(&vg->lock, flags);
@@ -3081,6 +3260,9 @@ int32_t virtio_gpu_bind(struct virtio_dev *vdev)
     if (rc != 0) {
         goto fail;
     }
+#ifdef RACH2_VGPU_PROFILE
+    profile_register(vg);
+#endif
     rc = vgpu_reset_register(vg);
     if (rc != 0) {
         drm_dev_unplug(&vg->drm);
