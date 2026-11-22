@@ -146,10 +146,10 @@ def settings():
                                    r"\g<1>1", attributes.read_text(errors="replace")))
 
 
-def prepare(out, current=False):
+def prepare(out, shm=False):
     """Set the session's output to 1366x768 and write the game's settings;
-    record OUT for later commands. With CURRENT, require the running
-    shared-memory session to have that mode and serve virgl to X clients."""
+    record OUT for later commands. With SHM, check that the restarted
+    session serves virgl to X clients and leave Weston's flags alone."""
     if not (GAME / "Bin64/Crysis.exe").exists():
         raise SystemExit("crysis: no game in %s" % GAME)
     STATE.mkdir(exist_ok=True)
@@ -157,21 +157,14 @@ def prepare(out, current=False):
     out.mkdir(parents=True, exist_ok=True)
     os.chown(out, UID, UID)
     (STATE / "out").write_text(str(out) + "\n")
-    if current:
+    output = wm.session("1366x768", debug=not shm)
+    if shm:
         probe = subprocess.run(desktop("exec glxinfo -B"), stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, timeout=30)
         print(probe.stdout, end="", flush=True)
         if probe.returncode or not re.search(r"^OpenGL renderer string: virgl .*Intel",
                                              probe.stdout, re.M):
             raise SystemExit("crysis: Xwayland did not give the game virgl on Intel")
-        text = wm.log_from(0).rsplit("rach2-desktop: session: started as ", 1)[-1]
-        output = re.search(r"Output (\S+) \(crtc \d+\) video modes:\n((?:\s+\d+x\d+@.*\n)+)",
-                           text)
-        if not output or not re.search(r"^\s+1366x768@.*\bcurrent\b", output[2], re.M):
-            raise SystemExit("crysis: the running session has no 1366x768 output")
-        output = output[1]
-    else:
-        output = wm.session("1366x768")
     text = wm.log_from(0)
     renderer = re.findall(r"GL renderer: (.*)", text)
     say("session: output %s, renderer %s" % (output, renderer[-1] if renderer else None))
@@ -656,12 +649,12 @@ def main():
         return 0
     if os.geteuid() != 0:
         raise SystemExit("crysis: run as root")
-    usage = "usage: crysis.py prepare OUT [--current] | flyby ROUTE NAME [LOOPS] | hud NAME SAVE [ROUTE] | " \
+    usage = "usage: crysis.py prepare OUT [--shm] | flyby ROUTE NAME [LOOPS] | hud NAME SAVE [ROUTE] | " \
             "save NAME [ROUTE] | load NAME SAVE [ROUTE [PREFIX]]"
     if not argv:
         raise SystemExit(usage)
     command, rest = argv[0], argv[1:]
-    if command == "prepare" and (len(rest) == 1 or (len(rest) == 2 and rest[1] == "--current")):
+    if command == "prepare" and (len(rest) == 1 or (len(rest) == 2 and rest[1] == "--shm")):
         prepare(rest[0], len(rest) == 2)
         return 0
     if command == "flyby" and len(rest) in (2, 3) and rest[0] in ROUTES:

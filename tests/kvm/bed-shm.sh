@@ -145,6 +145,7 @@ esac
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0 stalled=0
+crysis_ini=/etc/xdg/weston/weston.ini crysis_ini_saved=''
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
 [ -z "$bdf" ] || intel=1
@@ -165,12 +166,21 @@ end_group()
     kill -KILL "-$1" 2>/dev/null
     wait "$1" 2>/dev/null
 }
+# crysis_restore_ini: put back the compositor's settings before the GPU
+# returns and the native session starts.
+crysis_restore_ini()
+{
+    [ -z "$crysis_ini_saved" ] || cp -p "$crysis_ini_saved" "$crysis_ini" || return 1
+    crysis_ini_saved=''
+}
+
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back. A
 # child that stalled in death_children has already been sent KILL.
 cleanup()
 {
     end_group "$load"
     end_group "$figpid"
+    crysis_restore_ini || echo 'bed-shm: failed to restore weston.ini' >&2
     # shellcheck disable=SC2086 # the pids of children that were started
     kill -9 $qemu $waiter $holder $pid 2>/dev/null
     # shellcheck disable=SC2086 # the pids of children that were started
@@ -861,11 +871,16 @@ crysis_counts()
 # crysis_figure: measure the umu flyby with no minimum frame rate.
 crysis_figure()
 {
+    if ! cp -p "$crysis_ini" "$out/weston.ini"; then
+        fail load 'could not save weston.ini'
+        return
+    fi
+    crysis_ini_saved=$out/weston.ini
     crysis_counts > "$out/crysis-counts.before"
     # shellcheck disable=SC2016 # the child shell reads its output directory
     setsid sh -c '
         export CRYSIS_STATE=$1/crysis-state CRYSIS_GATE=0
-        python3 ./crysis.py prepare "$1/crysis" --current &&
+        timeout --foreground 60 python3 ./crysis.py prepare "$1/crysis" --shm &&
             exec python3 ./crysis.py flyby umu flyby-umu 2
     ' sh "$out" &
     figpid=$!
@@ -893,6 +908,7 @@ crysis_figure()
 # crysis_return: stop the VM after the flyby and check the restored session.
 crysis_return()
 {
+    crysis_restore_ini || fail return 'could not restore weston.ini'
     dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
     tail -c 16384 "$services" > "$out/services-death.txt"
     kill_vm
