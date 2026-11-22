@@ -146,10 +146,16 @@ With
 .Dv MS_BIND
 as well, the change is to the named mount's flags, including on an
 original mount.
+When another live mount namespace sees the mount too, the change is to
+the caller's namespace's flags for it alone, as Linux changes only that
+namespace's copy of the mount, and a namespace made from it later takes
+them.
 Its filesystem keeps its read-only and write-ordering
 flags.
 Only descriptions opened through that mount make it
-.Er EBUSY .
+.Er EBUSY ,
+and of those, for a change made for the caller's namespace alone, only
+the ones opened in that namespace.
 Clearing the mount's read-only flag still leaves a read-only filesystem
 read-only.
 Without

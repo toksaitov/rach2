@@ -54,6 +54,19 @@
  * file and the tmpfs can be removed. When a step of this row fails, an
  * atexit handler unmounts the tmpfs and removes the directory instead.
  *
+ * A child in a mount namespace of its own remounts /tmp/sbxr, a tmpfs the
+ * probe holds a file of open for writing, read-only by MS_REMOUNT|MS_BIND,
+ * which succeeds, since the remount changes only the child's namespace and
+ * the probe's writer is in another, as on Linux, where it changes the
+ * child's copy of the mount. There a create, a mkdir and an open for
+ * writing fail with EROFS, statvfs gives ST_RDONLY and mountinfo "ro";
+ * meanwhile the probe still makes a file there, writes through its
+ * descriptor, and statvfs gives it no ST_RDONLY. The child then makes the
+ * mount writable again, opens a file for writing, and a read-only remount
+ * fails with EBUSY until it closes it. Once the child is gone the probe
+ * still writes there, and the tmpfs and its directory can be removed, by
+ * an atexit handler when a step fails.
+ *
  * The program runs itself in the modes `bset` and `regain`, named by its
  * first argument, as the image an exec row runs. With none it runs the
  * rows, prints "SANDBOXMUSL OK" and exits 0 on success, or prints
@@ -69,12 +82,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -94,6 +109,11 @@
 #define MASKED_WS MASKED "/ws"
 #define MASKED_RC MASKED_WS "/.bashrc"
 
+/* The tmpfs of the read-only view's row and the file the probe holds open
+ * for writing in it. */
+#define VIEWED      "/tmp/sbxr"
+#define VIEWED_HELD VIEWED "/held"
+
 /* _LINUX_CAPABILITY_VERSION_3, whose data is two cap_data, and the
  * capabilities the rows name. */
 #define VERSION_3     0x20080522u
@@ -111,11 +131,13 @@ struct cap_data {
 
 /* The assertions, in the order the rows check them. */
 static const char *const rows[] = {
-    "pivot-setup",    "pivot-put-old",   "proc-anywhere",  "proc-sys-cover",    "proc-sys-rebind",
-    "detach-put-old", "pivot-stacked",   "pivot-new-root", "write-outside",     "namespace-unseen",
-    "proc-sys-user",  "detach-refusals", "detach-busy",    "detach-every-view", "detach-reaped",
-    "bset-read",      "bset-drop-eperm", "bset-drop",      "bset-fork",         "bset-exec",
-    "capset-single",  "capset-chown",    "ambient",        "mask-removed",
+    "pivot-setup",     "pivot-put-old",       "proc-anywhere", "proc-sys-cover",
+    "proc-sys-rebind", "detach-put-old",      "pivot-stacked", "pivot-new-root",
+    "write-outside",   "namespace-unseen",    "proc-sys-user", "detach-refusals",
+    "detach-busy",     "detach-every-view",   "detach-reaped", "bset-read",
+    "bset-drop-eperm", "bset-drop",           "bset-fork",     "bset-exec",
+    "capset-single",   "capset-chown",        "ambient",       "mask-removed",
+    "readonly-view",   "readonly-own-writer",
 };
 
 #define NROWS ((int)(sizeof(rows) / sizeof(rows[0])))
@@ -702,6 +724,134 @@ static int mask_row(void)
     return 0;
 }
 
+/** Whether a create, a mkdir and an open for writing in VIEWED all fail
+ * with EROFS, statvfs gives ST_RDONLY and mountinfo names it "ro". */
+static int viewed_read_only(void)
+{
+    struct statvfs sv;
+
+    return refused(open(VIEWED "/child", O_WRONLY | O_CREAT, 0644), EROFS) &&
+           refused(mkdir(VIEWED "/dir", 0755), EROFS) &&
+           refused(open(VIEWED_HELD, O_WRONLY), EROFS) && statvfs(VIEWED, &sv) == 0 &&
+           (sv.f_flag & ST_RDONLY) && has_line("/proc/self/mountinfo", VIEWED " ro");
+}
+
+/** Whether the caller can make, write and remove a file in VIEWED, and
+ * statvfs gives it no ST_RDONLY. */
+static int viewed_writable(void)
+{
+    struct statvfs sv;
+    int fd = open(VIEWED "/parent", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    return fd >= 0 && write(fd, "p", 1) == 1 && close(fd) == 0 && unlink(VIEWED "/parent") == 0 &&
+           statvfs(VIEWED, &sv) == 0 && !(sv.f_flag & ST_RDONLY);
+}
+
+/** The child of `view_row`, which reads its go from `in` and says on `out`
+ * that VIEWED is read-only in its namespace: 0, 1 for a failure of the
+ * read-only view, 2 for one of its own writer. */
+static int view_child(int in, int out)
+{
+    char c;
+    int fd;
+
+    if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) != 0 ||
+        mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0 ||
+        !viewed_read_only() || write(out, "r", 1) != 1 || read(in, &c, 1) != 1 || c != 'c' ||
+        !viewed_read_only()) {
+        return 1;
+    }
+    if (mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND, NULL) != 0) {
+        return 2;
+    }
+    fd = open(VIEWED "/child", O_WRONLY | O_CREAT, 0644);
+    if (fd < 0 ||
+        !refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL), EBUSY) ||
+        close(fd) != 0 || unlink(VIEWED "/child") != 0 ||
+        mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0) {
+        return 2;
+    }
+    return 0;
+}
+
+/* What view_row has made and not yet removed, for view_cleanup. */
+static int view_made;    /* VIEWED was made by this run */
+static int view_mounted; /* VIEWED holds the tmpfs view_row mounted */
+
+/** Remove the tmpfs on VIEWED and the directory, as far as view_row made
+ * them; atexit runs it. */
+static void view_cleanup(void)
+{
+    if (view_mounted && umount2(VIEWED, MNT_DETACH) == 0) {
+        view_mounted = 0;
+    }
+    if (view_made && !view_mounted && rmdir(VIEWED) == 0) {
+        view_made = 0;
+    }
+}
+
+/** Run the rows of a read-only view of a mount another namespace writes
+ * through, the last two. SIGPIPE is ignored, so that a child that failed
+ * and closed its pipe leaves the failure to be reported. Returns 0, or 1
+ * after the failure is reported. */
+static int view_row(void)
+{
+    int go[2], said[2], held, st, during;
+    pid_t pid;
+    char c = 0;
+
+    if (atexit(view_cleanup) != 0 || signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        return fail("atexit");
+    }
+    if (mkdir(VIEWED, 0755) == 0) {
+        view_made = 1;
+    } else if (errno != EEXIST) {
+        return fail("mount " VIEWED);
+    }
+    if (mount("tmpfs", VIEWED, "tmpfs", 0, NULL) != 0) {
+        return fail("mount " VIEWED);
+    }
+    view_mounted = 1;
+    held = open(VIEWED_HELD, O_WRONLY | O_CREAT, 0644);
+    if (held < 0 || pipe(go) != 0 || pipe(said) != 0) {
+        return fail("open " VIEWED_HELD);
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(go[1]);
+        close(said[0]);
+        _exit(view_child(go[0], said[1]));
+    }
+    close(go[0]);
+    close(said[1]);
+    during = read(said[0], &c, 1) == 1 && c == 'r' && write(held, "h", 1) == 1 && viewed_writable();
+    if (write(go[1], "c", 1) != 1) {
+        during = 0;
+    }
+    close(go[1]);
+    close(said[0]);
+    st = child_status(pid);
+    if (st == 1 || !during) {
+        return fail("a read-only remount in a new mount namespace did not hold there alone while "
+                    "another namespace wrote through the mount");
+    }
+    report_held();
+    if (st != 0 || write(held, "h", 1) != 1 || close(held) != 0 || !viewed_writable()) {
+        return fail("a writer of the namespace's own did not hold off its read-only remount, or "
+                    "the mount was left read-only outside");
+    }
+    if (unlink(VIEWED_HELD) != 0 || umount(VIEWED) != 0) {
+        return fail("the tmpfs of the read-only view could not be removed");
+    }
+    view_mounted = 0;
+    if (rmdir(VIEWED) != 0) {
+        return fail("the tmpfs of the read-only view could not be removed");
+    }
+    view_made = 0;
+    report_held();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     ssize_t n;
@@ -724,7 +874,8 @@ int main(int argc, char **argv)
     for (i = 0; i < NROWS; i++) {
         report_plan(rows[i]);
     }
-    if (sandbox_rows() != 0 || detach_rows() != 0 || cap_rows() != 0 || mask_row() != 0) {
+    if (sandbox_rows() != 0 || detach_rows() != 0 || cap_rows() != 0 || mask_row() != 0 ||
+        view_row() != 0) {
         return 1;
     }
     report_end();

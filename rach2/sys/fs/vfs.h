@@ -624,6 +624,11 @@ struct vfs_mount {
      * flag alone changes (MS_BIND), through the base alone. Under fd.c's
      * lock of the descriptions. */
     int readonly_pending;
+    /* Which mount namespace the remount above changes the mount for: its
+     * id plus one when the remount changes only that namespace's view
+     * (`views`), whose writers alone it then refuses; 0 for all. Under
+     * fd.c's lock of the descriptions. */
+    uint32_t readonly_pending_ns;
     /* The write-back errors of the file system, on the base mount, as
      * Linux's errseq_t (lib/errseq.c): the last error's errno in the low
      * twelve bits, a bit set once a sync has reported it, and above them a
@@ -650,6 +655,16 @@ struct vfs_mount {
      * afterwards, and a mount of the boot by the first and those made from
      * it. Its words are freed with the record (vfs_ns.c). */
     struct idset ns_seen;
+    /* The mount namespaces that have flags of their own for the mount,
+     * as Linux's copy of a mount in each namespace has its own mnt_flags:
+     * a remount of the mount's own flags (`vfs_remount_bind`) made in one
+     * namespace while another sees the mount too changes only the
+     * remounting namespace's entry here, which `vfs_mount_flags` answers
+     * in that namespace in place of the mount's own. An entry is let go
+     * of only with the record, so that a reader without the big lock may
+     * walk the list; a namespace's end marks its entries free for reuse
+     * (vfs_ns.c). */
+    struct vfs_mount_view *views;
     /* The inotify watches on the file system, counted on its base mount
      * (`inotify_mount_watched`); changes under the big lock and is read
      * without it as one word. */
@@ -664,6 +679,14 @@ struct vfs_mount {
      * them by, so that a mount over another's root comes after it. */
     uint32_t seq;
 };
+
+/* One mount namespace's own flags for a mount (`views` above). */
+struct vfs_mount_view {
+    uint32_t ns;    /* the namespace's id, or VFS_VIEW_FREE */
+    uint32_t flags; /* the mount's own VFS_MS_ flags in that namespace */
+    struct vfs_mount_view *next;
+};
+#define VFS_VIEW_FREE 0xffffffffu
 
 /* A held place: one node on one mount. Whoever receives one from the
  * resolver ends it with `vfs_ref_release`. */
@@ -933,8 +956,23 @@ void vfs_mount_hide(struct vfs_mount *m);
  * process runs, as at boot. 0, or -ENOMEM. */
 int vfs_mount_view_new(struct vfs_mount *m);
 
-/** Free the words of the view of `m`, whose record is let go of. */
+/** Free the words of the view of `m`, whose record is let go of, and its
+ * namespaces' own flags (`views`). */
 void vfs_mount_view_free(struct vfs_mount *m);
+
+/** The id of the caller's mount namespace, the first's when no process
+ * runs. */
+uint32_t vfs_mntns_id(void);
+
+/** The caller's mount namespace's own flags for `m` (`views`), or NULL
+ * when it has none. Needs no lock. */
+struct vfs_mount_view *vfs_mount_view_find(const struct vfs_mount *m);
+
+/** The caller's mount namespace's own flags for `m`, made with the flags
+ * `flags` when it has none: NULL for -ENOMEM. A new entry reuses one a
+ * namespace that ended left, and is placed whole before it is linked, for
+ * readers without the lock. Under the big lock. */
+struct vfs_mount_view *vfs_mount_view_make(struct vfs_mount *m, uint32_t flags);
 
 /** Unmount the active mount `m` as umount2(2) without flags does, with
  * nothing left to check, for the end of a mount namespace: 0, or -EBUSY

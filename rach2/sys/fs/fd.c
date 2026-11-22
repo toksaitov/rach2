@@ -352,14 +352,25 @@ void fd_ofd_access_drop(struct open_file *ofd)
     spin_unlock_irqrestore(&ofd_lock, flags);
 }
 
+/** Whether a remount making `m` read-only refuses writers through it in
+ * the mount namespace `ns` (`readonly_pending`): any such remount, or with
+ * `all` only one that refuses them through every bind of a base too. With
+ * `ofd_lock` held. */
+static int readonly_pending(const struct vfs_mount *m, uint32_t ns, int all)
+{
+    return m->readonly_pending && (!all || m->readonly_pending == 1) &&
+           (!m->readonly_pending_ns || m->readonly_pending_ns == ns + 1u);
+}
+
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
 {
     uint32_t flags = spin_lock_irqsave(&ofd_lock);
     struct access_count *a = access_find(ref->mnt, ref->node);
+    uint32_t ns = vfs_mntns_id();
     int rc = 0;
 
     if (access == 1 &&
-        (ref->mnt->readonly_pending || vfs_mount_base(ref->mnt)->readonly_pending == 1 ||
+        (readonly_pending(ref->mnt, ns, 0) || readonly_pending(vfs_mount_base(ref->mnt), ns, 1) ||
          vfs_mount_rdonly(ref->mnt))) {
         rc = -EROFS;
     } else if (a && a->count[2 - access] > 0) {
@@ -367,6 +378,7 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
     } else if (a && ofd->access == access && ofd->access_node == ref->node &&
                vfs_mount_base(ofd->access_mnt) == vfs_mount_base(ref->mnt)) {
         ofd->access_mnt = ref->mnt;
+        ofd->access_ns = ns;
     } else {
         access_drop_locked(ofd);
         if (access_join(ofd_rec_of(ofd), ref->mnt, ref->node, access) != 0) {
@@ -375,28 +387,31 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
             ofd->access_mnt = ref->mnt;
             ofd->access_node = ref->node;
             ofd->access = access;
+            ofd->access_ns = ns;
         }
     }
     spin_unlock_irqrestore(&ofd_lock, flags);
     return rc;
 }
 
-int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone)
+int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone, int own)
 {
     struct ofd_rec *rec;
     uint32_t flags = spin_lock_irqsave(&ofd_lock);
+    uint32_t ns = vfs_mntns_id();
     int rc = mnt->readonly_pending ? -EBUSY : 0;
 
     for (rec = ofds; rec && rc == 0; rec = rec->next) {
         struct open_file *f = &rec->ofd;
 
-        if (f->access == 1 &&
+        if (f->access == 1 && (!own || f->access_ns == ns) &&
             (mnt->bind_of || alone ? f->access_mnt == mnt : vfs_mount_base(f->access_mnt) == mnt)) {
             rc = -EBUSY;
         }
     }
     if (rc == 0) {
         mnt->readonly_pending = alone && !mnt->bind_of ? 2 : 1;
+        mnt->readonly_pending_ns = own ? ns + 1u : 0;
     }
     spin_unlock_irqrestore(&ofd_lock, flags);
     return rc;
@@ -407,6 +422,7 @@ void fd_mount_readonly_end(struct vfs_mount *mnt)
     uint32_t flags = spin_lock_irqsave(&ofd_lock);
 
     mnt->readonly_pending = 0;
+    mnt->readonly_pending_ns = 0;
     spin_unlock_irqrestore(&ofd_lock, flags);
 }
 

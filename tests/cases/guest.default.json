@@ -6270,7 +6270,9 @@
         {"assertion_id": "capset-single", "checks": "with CAP_SYS_ADMIN alone a thread unshares a mount namespace and cannot widen its set, and after giving it up cannot mount", "source": "program"},
         {"assertion_id": "capset-chown", "checks": "with CAP_CHOWN alone a thread cannot mount, and an exec gives every capability back", "source": "program"},
         {"assertion_id": "ambient", "checks": "PR_CAP_AMBIENT_IS_SET answers 0, PR_CAP_AMBIENT_RAISE of CAP_CHOWN, which is not inheritable, fails with EPERM and PR_CAP_AMBIENT_CLEAR_ALL succeeds", "source": "program"},
-        {"assertion_id": "mask-removed", "checks": "a child in a mount namespace of its own binds a tmpfs directory over itself, binds /dev/null over a file in it and opens that with O_PATH; once the child is gone the directory, the file and the tmpfs can be removed", "source": "program"}
+        {"assertion_id": "mask-removed", "checks": "a child in a mount namespace of its own binds a tmpfs directory over itself, binds /dev/null over a file in it and opens that with O_PATH; once the child is gone the directory, the file and the tmpfs can be removed", "source": "program"},
+        {"assertion_id": "readonly-view", "checks": "a child in a mount namespace of its own remounts a tmpfs read-only by MS_REMOUNT|MS_BIND while the probe holds a file of it open for writing; there a create, a mkdir and an open for writing fail with EROFS, statvfs gives ST_RDONLY and mountinfo ro, while the probe still makes a file there, writes through its descriptor and statvfs gives it no ST_RDONLY", "source": "program"},
+        {"assertion_id": "readonly-own-writer", "checks": "in the child, made writable again, a file open for writing makes a read-only remount fail with EBUSY until it is closed; once the child is gone the probe still writes there and the tmpfs and its directory can be removed", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

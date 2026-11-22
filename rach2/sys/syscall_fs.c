@@ -4681,7 +4681,8 @@ static int32_t open_special_refused(struct vfs_ref *ref, uint32_t type, int flag
     } else {
         rc = cred_access_ref(ref, want, 0);
     }
-    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && (ref->mnt->flags & VFS_MS_NODEV)) {
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) &&
+        (vfs_mount_flags(ref->mnt) & VFS_MS_NODEV)) {
         rc = -EACCES;
     }
     if (rc == 0 && (flags & O_DIRECT) && (type == S_IFIFO || type == S_IFCHR)) {

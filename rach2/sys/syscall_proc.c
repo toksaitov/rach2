@@ -1497,7 +1497,7 @@ static int32_t exec_check(struct exec_file *f, const struct vfs_ref *ref, const 
 {
     int32_t rc;
 
-    if (vfs_synth_vpath(ref->mnt, ref->node) || (ref->mnt->flags & VFS_MS_NOEXEC) ||
+    if (vfs_synth_vpath(ref->mnt, ref->node) || (vfs_mount_flags(ref->mnt) & VFS_MS_NOEXEC) ||
         vfs_mount_base(ref->mnt)->sb_noexec) {
         return -EACCES;
     }
@@ -1623,7 +1623,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, int how
         path_buf_put(real);
         return rc;
     }
-    nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
+    nosuid = (vfs_mount_flags(ref.mnt) & VFS_MS_NOSUID) != 0;
     rc = exec_check(f, &ref, keep, &vst);
     if (rc == 0) {
         rc = exec_map_file(&ref, &vst, &f->map);
