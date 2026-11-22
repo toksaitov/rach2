@@ -354,7 +354,7 @@ PYTHON
 # on a failure, before COMMAND runs. The process is the caller's: unshare and
 # python3 exec in turn, so that a signal to it reaches COMMAND.
 seal_py=$(cat << 'PYTHON'
-import errno, os, pwd, re, subprocess, sys, tempfile
+import errno, os, pwd, re, signal, subprocess, sys, tempfile
 
 UID = 1001
 BASE = "/data/crysis"
@@ -430,15 +430,20 @@ def rebase():
     Each mount point must then show what it showed before."""
     here = os.getcwd()
     before = shown(mountinfo())
+    held = {n: signal.signal(n, ended) for n in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
     stage = tempfile.mkdtemp(prefix=".crysis-root-", dir="/data")
-    mount("--rbind", "/", stage)
-    for args in (("pivot_root", stage, stage + stage), ("umount", "-l", stage)):
-        run = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, check=False)
-        if run.returncode:
-            die("%s: %s" % (" ".join(args), run.stdout.strip()))
-        os.chdir("/")
-    attempt(lambda: os.rmdir(stage))
+    try:
+        mount("--rbind", "/", stage)
+        for args in (("pivot_root", stage, stage + stage), ("umount", "-l", stage)):
+            run = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, check=False)
+            if run.returncode:
+                die("%s: %s" % (" ".join(args), run.stdout.strip()))
+            os.chdir("/")
+    finally:
+        unstage(stage)
+        for number, handler in held.items():
+            signal.signal(number, handler)
     os.chdir(here)
     after = shown(mountinfo())
     if after != before:
@@ -448,6 +453,27 @@ def rebase():
         die("the bind of / does not show the mounts: lost %s, new %s, changed %s"
             % (lost, new, moved))
     say("seal: root moved onto a bind of /; %d mount points as before" % len(after))
+
+
+def ended(number, frame):
+    """End the seal by a signal as by a failure, so that `rebase` takes its
+    stage back."""
+    die("signal %d" % number)
+
+
+def unstage(stage):
+    """Take back the stage of `rebase` on every path: unmount, lazily, what
+    is still on it, the bind of / before pivot_root or the old root after,
+    which shows at the same path in either root, and remove it. A failure
+    ends the seal with the stage named."""
+    if stage in mountinfo():
+        run = subprocess.run(("umount", "-l", stage), stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, check=False)
+        if run.returncode:
+            die("stage %s is left: umount -l: %s" % (stage, run.stdout.strip()))
+    error = attempt(lambda: os.rmdir(stage))
+    if error:
+        die("stage %s is left: rmdir: %s" % (stage, errno.errorcode.get(error, error)))
 
 
 def mount(*args):
