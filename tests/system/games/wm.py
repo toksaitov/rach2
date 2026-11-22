@@ -117,13 +117,13 @@ def supervisor():
         time.sleep(0.1)
 
 
-def session(mode):
+def session(mode, debug=True):
     """
     Have the desktop's supervisor start its session by SIGHUP unless a
     compositor runs, wait for Weston to light its DRM output, give the
     output MODE through weston.ini, start the session again and wait until
     Weston lights the output in that mode and its Xwayland listens. Returns
-    the output's name.
+    the output's name. DEBUG enables the screenshooter and X window log.
     """
     if not westons():
         os.kill(supervisor(), signal.SIGHUP)
@@ -141,11 +141,12 @@ def session(mode):
     # --debug lets weston-screenshooter capture the output, since QEMU's
     # screendump has no surface while virgl scans out a GL resource; the
     # window manager's scope logs what it does with each X window.
-    text = SESSION.read_text()
-    if "weston --debug " not in text:
-        assert text.count("weston --backend=") == 1, "rach2-session starts no weston"
-        SESSION.write_text(text.replace("weston --backend=", "weston --debug "
-                                        "--logger-scopes=log,xwm-wm-x11 --backend="))
+    if debug:
+        text = SESSION.read_text()
+        if "weston --debug " not in text:
+            assert text.count("weston --backend=") == 1, "rach2-session starts no weston"
+            SESSION.write_text(text.replace("weston --backend=", "weston --debug "
+                                            "--logger-scopes=log,xwm-wm-x11 --backend="))
     core = INI.read_text().split("\n[output]")[0].rstrip("\n")
     INI.write_text(core + "\n[output]\nname=%s\nmode=%s\n" % (output[-1], wanted))
     offset = SERVICES.stat().st_size
@@ -158,6 +159,8 @@ def session(mode):
             break
         assert not re.search(r"fatal: |Segmentation fault", text), text[-3000:]
         time.sleep(0.2)
+    if not debug:
+        return output[-1]
     # Xwayland starts on the first client, and the session's restart can
     # leave the display refusing clients for a moment.
     for _ in range(100):
