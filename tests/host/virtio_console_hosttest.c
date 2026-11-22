@@ -8,6 +8,7 @@
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The model is the device as QEMU's hw/char/virtio-serial-bus.c makes it,
  * twice over for a machine of two: port 0, a console (`virtconsole`), port
