@@ -5,6 +5,7 @@
 #
 #   crysis.sh flyby ROUTE
 #   crysis.sh load SAVE
+#   crysis.sh shm
 #
 # Run as root by etude-guest in the case's workspace, which holds crysis.py,
 # wm.py and the empty directory `private` of the private fixture, in a mount
@@ -20,6 +21,8 @@
 #          and through a new prefix of the case's own, directly: the load
 #          after a restart and an update, through the existing prefix and a
 #          new one
+#   shm    the umu flyby on the bed's shared-memory card. The launcher
+#          supplies a private mount namespace and an already mounted /data.
 #
 # The data partition, /dev/disk0p6, and all it holds are the owner's; the
 # case never writes it. It mounts the partition read-only on /data/owner
@@ -61,7 +64,7 @@ session=/usr/libexec/rach2-session
 pidfile=/run/rach2-desktop.pid
 uid=1001
 bound=0 mounted=0 kept=0 failed='' found=0
-! pgrep -x weston > /dev/null || found=1
+source_bound=0
 
 say() { echo "crysis-case: $*"; }
 
@@ -117,6 +120,8 @@ cleanup()
     [ "$mounted" = 0 ] || umount "$owner" 2> /dev/null || umount -l "$owner" ||
         failed="$failed umount-owner"
     [ "$bound" = 0 ] || umount /data 2> /dev/null || umount -l /data || failed="$failed umount"
+    [ "$source_bound" = 0 ] || umount "$private/owner" 2> /dev/null ||
+        umount -l "$private/owner" || failed="$failed umount-source"
     if [ -n "$failed" ]; then
         say "result: fail:$failed"
         exit 1
@@ -138,27 +143,53 @@ fail()
     exit 1
 }
 
-[ $# -eq 2 ] || {
-    echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE" >&2
-    exit 2
-}
-case $1 in flyby | load) ;; *) fail "no check $1" ;; esac
+case ${1:-}:$# in
+    flyby:2 | load:2 | shm:1) ;;
+    *) echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE | crysis.sh shm" >&2; exit 2 ;;
+esac
 [ -f crysis.py ] && [ -f wm.py ] || fail "no crysis.py and wm.py in the workspace"
 command -v crysis.sh > /dev/null || fail "no crysis.sh on this root"
 [ -d /data ] && [ -b "$data" ] || fail "no /data or no $data"
-awk '$2 == "/data" { found = 1 } END { exit found }' /proc/mounts || fail "/data is mounted already"
 [ -d "$private" ] && [ -z "$(ls -A "$private")" ] ||
     fail "no empty $private; the case runs with the private fixture"
 
+if [ "$1" = shm ]; then
+    current_mountns=$(readlink /proc/self/ns/mnt) || fail "cannot read the mount namespace"
+    [ -n "${CRYSIS_PARENT_MNTNS:-}" ] &&
+        [ "$current_mountns" != "$CRYSIS_PARENT_MNTNS" ] ||
+        fail "no private mount namespace"
+    awk -v dev="$data" '$1 == dev && $2 == "/data" && $3 == "ext2" && $4 ~ /(^|,)rw(,|$)/ {
+        ok = 1
+    } END { exit !ok }' /proc/mounts || fail "$data is not mounted on /data"
+    [ "$(stat -c %d "$private")" != "$(stat -c %d /data)" ] ||
+        fail "the workspace is on the owner's partition"
+else
+    awk '$2 == "/data" { found = 1 } END { exit found }' /proc/mounts ||
+        fail "/data is mounted already"
+    ! pgrep -x weston > /dev/null || found=1
+fi
+
 mkdir "$private/owner"
-mount --bind "$private" /data || fail "the workspace would not bind on /data"
+if [ "$1" = shm ]; then
+    # The mounted device already has a claim. Make a read-only view of it.
+    mount --bind /data "$private/owner" || fail "$data would not bind"
+    source_bound=1
+    mount -o remount,bind,ro "$private/owner" || fail "$data bind would not turn read-only"
+    mount --rbind "$private" /data || fail "the workspace would not bind on /data"
+    mounted=1
+else
+    mount --bind "$private" /data || fail "the workspace would not bind on /data"
+fi
 bound=1
+[ "$private" -ef /data ] || fail "/data does not name the workspace's bind"
 # The workspace is root's and closed; the desktop account, which runs the
 # game, must pass through /data to reach /data/crysis.
 chmod 0755 /data || fail "/data would not open to the desktop account"
 mounted_at /data rw || fail "the workspace is not a writable ext2 file system"
-mount -t ext2 -o ro "$data" "$owner" || fail "$data would not mount read-only on $owner"
-mounted=1
+if [ "$1" != shm ]; then
+    mount -t ext2 -o ro "$data" "$owner" || fail "$data would not mount read-only on $owner"
+    mounted=1
+fi
 mounted_at "$owner" ro || fail "$owner is not read-only"
 [ -f "$owner/crysis/game/Bin64/Crysis.exe" ] || fail "no game in $owner/crysis/game"
 say "$data read-only on $owner"
@@ -191,6 +222,13 @@ cp -rs "$owner/crysis/game" "$base/game" || fail "game-links"
 chown -R -h "$uid:$uid" "$base"
 say "private game: $(find "$base/game" -type l | wc -l) links, copies of$(
     echo "$copies" | sed "s|$owner/crysis/||g"), $need KiB reserved"
+
+if [ "$1" = shm ]; then
+    # Let the VM runner own the handoff and its signal traps. The mounts
+    # go away when the last process of this namespace ends.
+    exec sh ./bed-shm.sh -d "$owner/native/bed/vm.disk" -w -l crysis \
+        -g 0000:00:02.0 -m 8192 -o "$here/out"
+fi
 
 cp -p "$ini" weston.ini
 cp -p "$session" rach2-session

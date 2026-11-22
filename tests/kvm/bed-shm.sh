@@ -92,6 +92,10 @@
 # Any exit, by its end or by SIGTERM, SIGINT or SIGHUP, kills QEMU, has
 # gpu.sh give the function back, and ends the load's and the figure's
 # groups, TERM and then KILL.
+#
+# With -w -g -l crysis, run the two-loop Crysis flyby once the region's
+# session is ready, in native/crysis.sh's private data fixture. The VM
+# stops after the figure, and the same return and handoff checks apply.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
 desk=0 unplug=0 measure='' loadscene=glmark2 scenes=glmark2
@@ -122,7 +126,15 @@ done
 case $loadscene in
     glmark2) ;;
     piglit | webgl | game) [ -n "$measure" ] || { echo "bed-shm: -l $loadscene needs -x" >&2; exit 2; } ;;
-    *) echo "bed-shm: no load $loadscene; glmark2, piglit, webgl or game" >&2; exit 2 ;;
+    crysis)
+        if [ "$desk" != 1 ] || [ -z "$bdf" ] || [ ! -f ./crysis.py ] || [ ! -f ./wm.py ] ||
+            [ ! ./private -ef /data ] ||
+            ! awk '$2 == "/data/owner" && $4 ~ /^ro(,|$)/ { ok = 1 } END { exit !ok }' /proc/mounts; then
+            echo 'bed-shm: -l crysis needs -w, -g and the private Crysis mount' >&2
+            exit 2
+        fi
+        ;;
+    *) echo "bed-shm: no load $loadscene; glmark2, piglit, webgl, game or crysis" >&2; exit 2 ;;
 esac
 # The GPU's MSIs reach the VM through irqfds and would count as doorbells
 # Rach2 rang, so -g runs only the nocopy or the desktop rows, which count
@@ -807,6 +819,86 @@ drawn()
     return "$drawn_status"
 }
 
+# desk_return: check the native session and its pipe CRC after the handoff.
+desk_return()
+{
+    # With -g, Rach2's driver has the GPU again once gpu.sh has ended.
+    [ -n "$bdf" ] || return 0
+    which=last
+    back=''
+    for c in /sys/class/drm/card[0-9]*; do
+        case $(readlink -f "$c/device" 2>/dev/null) in */"$bdf") back=${c##*/} ;; esac
+    done
+    # The last start is on the card given back, whether it came there from
+    # the headless session (`appeared`) or at once.
+    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 60; then
+        how="at once"
+        ! grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt" ||
+            how="from the headless session"
+        dir=/sys/kernel/debug/dri/${back#card}/crtc-0/crc
+        echo auto > "$dir/control" 2>/dev/null
+        # Six frames, the first two of which the new pipe may still change.
+        timeout 10 head -n 6 "$dir/data" > "$out/crc.txt" 2>/dev/null
+        frames=$(grep -c . "$out/crc.txt")
+        crcs=$(tail -n 4 "$out/crc.txt" | awk '{ print $NF }' | sort -u)
+        if [ "$frames" -eq 6 ] && [ "$(echo "$crcs" | grep -c .)" = 1 ]; then
+            pass return "Weston on $back $how, $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //'), pipe A crc $crcs over 4 frames, $took s after the death"
+        else
+            fail return "pipe A's crc: $frames of 6 frames read, the last 4 giving $(echo "$crcs" | tr '\n' ' ')"
+        fi
+    else
+        fail return "card '$back': $(grep 'rach2-desktop: \|GL renderer\|fatal' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
+    fi
+}
+
+# crysis_counts: the same counters as the bed's shm-virgl figures.
+crysis_counts()
+{
+    printf 'copied_bytes %s\nexits %s\nround_trips %s\n' \
+        "$(stat virtio_gpu_copied_bytes)" "$(stat kvm_exits)" "$(info rung | cut -d/ -f1)"
+}
+
+# crysis_figure: measure the umu flyby with no minimum frame rate.
+crysis_figure()
+{
+    crysis_counts > "$out/crysis-counts.before"
+    # shellcheck disable=SC2016 # the child shell reads its output directory
+    setsid sh -c '
+        export CRYSIS_STATE=$1/crysis-state CRYSIS_GATE=0
+        python3 ./crysis.py prepare "$1/crysis" --current &&
+            exec python3 ./crysis.py flyby umu flyby-umu 2
+    ' sh "$out" &
+    figpid=$!
+    if wait "$figpid"; then
+        pass load 'crysis completed two umu flyby loops'
+    else
+        fail load "crysis flyby status $?"
+    fi
+    end_group "$figpid"
+    figpid=''
+    crysis_counts > "$out/crysis-counts.after"
+    if counts=$(awk '
+        NR == FNR { if ($2 ~ /^[0-9]+$/) base[$1] = $2; next }
+        $1 in base && $2 ~ /^[0-9]+$/ && $2 >= base[$1] {
+            printf " %s %.0f", $1, $2 - base[$1]
+            valid++
+        }
+        END { exit valid != 3 }' "$out/crysis-counts.before" "$out/crysis-counts.after"); then
+        echo "bed-shm: figure: crysis shm-virgl$counts"
+    else
+        fail figure 'missing or reset crysis counters'
+    fi
+}
+
+# crysis_return: stop the VM after the flyby and check the restored session.
+crysis_return()
+{
+    dead=$(command stat -c %s "$services" 2>/dev/null || echo 0)
+    tail -c 16384 "$services" > "$out/services-death.txt"
+    kill_vm
+    desk_return
+}
+
 # desk_rows: the desktop session on the VM's GPU, the VM killed under
 # glmark2, the session back on llvmpipe and, with -g, on Rach2's driver.
 desk_rows()
@@ -819,12 +911,13 @@ desk_rows()
         for c in session load death fallback; do
             fail "$c" "virtio-gpu did not bind over the region: card '$card', $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
         done
+        [ "$loadscene" != crysis ] || crysis_return
         return
     fi
     # After a GPU handoff the supervisor moves the session itself. On the
     # QEMU boot, which starts no session, have it start one, which chooses
     # the card now bound.
-    if [ -z "$bdf" ]; then
+    if [ -z "$bdf" ] || { [ "$loadscene" = crysis ] && ! pgrep -x weston > /dev/null; }; then
         sup=$(cat /run/rach2-desktop.pid 2>/dev/null)
         [ -z "$sup" ] || kill -HUP "$sup" 2>/dev/null || :
     fi
@@ -838,7 +931,16 @@ desk_rows()
         for c in load death fallback; do
             fail "$c" 'the session did not start on the VM card'
         done
-        [ -z "$bdf" ] || fail return 'the session did not start on the VM card'
+        if [ "$loadscene" = crysis ]; then
+            crysis_return
+        elif [ -n "$bdf" ]; then
+            fail return 'the session did not start on the VM card'
+        fi
+        return
+    fi
+    if [ "$loadscene" = crysis ]; then
+        crysis_figure
+        crysis_return
         return
     fi
     for scene in ${measure:+$scenes}; do
@@ -1003,33 +1105,7 @@ desk_rows()
     fi
     cp "$out/services.txt" "$out/services-fallback.txt"
 
-    # With -g, Rach2's driver has the GPU again once gpu.sh has ended.
-    [ -n "$bdf" ] || return 0
-    which=last
-    back=''
-    for c in /sys/class/drm/card[0-9]*; do
-        case $(readlink -f "$c/device" 2>/dev/null) in */"$bdf") back=${c##*/} ;; esac
-    done
-    # The last start is on the card given back, whether it came there from
-    # the headless session (`appeared`) or at once.
-    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 60; then
-        how="at once"
-        ! grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt" ||
-            how="from the headless session"
-        dir=/sys/kernel/debug/dri/${back#card}/crtc-0/crc
-        echo auto > "$dir/control" 2>/dev/null
-        # Six frames, the first two of which the new pipe may still change.
-        timeout 10 head -n 6 "$dir/data" > "$out/crc.txt" 2>/dev/null
-        frames=$(grep -c . "$out/crc.txt")
-        crcs=$(tail -n 4 "$out/crc.txt" | awk '{ print $NF }' | sort -u)
-        if [ "$frames" -eq 6 ] && [ "$(echo "$crcs" | grep -c .)" = 1 ]; then
-            pass return "Weston on $back $how, $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //'), pipe A crc $crcs over 4 frames, $took s after the death"
-        else
-            fail return "pipe A's crc: $frames of 6 frames read, the last 4 giving $(echo "$crcs" | tr '\n' ' ')"
-        fi
-    else
-        fail return "card '$back': $(grep 'rach2-desktop: \|GL renderer\|fatal' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
-    fi
+    desk_return
 }
 
 if [ -n "$nocopy" ]; then
