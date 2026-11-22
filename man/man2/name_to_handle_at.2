@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 23, 2026
 .Dt NAME_TO_HANDLE_AT 2
 .Os
 .Sh NAME
@@ -57,8 +57,11 @@ to the room after the two fields, at most
 128.
 Rach2's handles are Linux's
 .Dv FILEID_INO64_GEN ,
-type 0x51: twelve bytes, the file's inode number in 64 bits, least
-significant byte first, and a generation of 0.
+type 0x51: twelve bytes, the file's inode number in 64 bits and its
+generation in 32, each least significant byte first.
+The generation is ext2's, which changes when the inode number is used
+again, so that a handle of a deleted file does not open its successor;
+the other types keep none and give 0.
 A
 .Va handle_bytes
 below 12 gets 12, and no handle, and the call fails with
@@ -92,7 +95,8 @@ opens the file
 names on the mount of
 .Fa mount_fd ,
 any descriptor of a file of that mount, or the working directory for
-.Dv AT_FDCWD .
+.Dv AT_FDCWD ,
+which the call holds until it returns.
 .Fa flags
 are those of
 .Xr open 2 ,
@@ -109,12 +113,19 @@ and opened by its present path, from the caller's root, with
 .Xr open 2 Ns 's
 checks; a file renamed since the handle was made is found under its new
 name.
-The file opened must have the handle's inode, or the call fails with
+The file the open's walk reaches must be on the same file system and
+have the handle's inode and generation, or the call fails with
 .Er ESTALE ,
-as when another file took the path between the search and the open, and
+as when another file took the path between the search and the open.
+That is checked before the file is opened: a FIFO, a device or a
+truncation is never reached through another file.
 .Dv O_TRUNC
-cuts the file only once that is checked, and only through a descriptor
-that writes.
+cuts the file as
+.Xr open 2
+does, with its checks of write permission and of a read-only mount.
+.Dv O_TMPFILE
+fails with
+.Er EOPNOTSUPP .
 The caller must be privileged, as Linux asks
 .Dv CAP_DAC_READ_SEARCH .
 .Ss System call interface
@@ -179,7 +190,10 @@ The kernel could not allocate a path page.
 The file's type reopens nothing and
 .Dv AT_HANDLE_FID
 was not given, or the object is on no mount of the table: a pipe, a
-socket or an anonymous descriptor.
+socket or an anonymous descriptor; or
+.Fn open_by_handle_at
+was given
+.Dv O_TMPFILE .
 .It Bq Er EOVERFLOW
 .Va handle_bytes
 is below 12.
@@ -189,8 +203,9 @@ The caller of
 is not privileged.
 .It Bq Er ESTALE
 The handle is of another type or size, the mount's files do not reopen,
-or no file of the mount has the handle's inode, the path found opens
-another file, or the file is outside the caller's root.
+the mount is being unmounted, no file of the mount has the handle's
+inode, the path found reaches another file or one of another generation,
+or the file is outside the caller's root.
 .El
 .Pp
 .Fn open_by_handle_at
