@@ -2073,6 +2073,41 @@ static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count, cons
 }
 
 /**
+ * The device's `write_cached`: `ahci_write` without the flush, from any
+ * context. The disk is marked `unflushed` under the claim, which keeps a
+ * flush of the queue off the port until the mark is set, so that no flush
+ * that began before the write ends by clearing it. Returns as
+ * `ahci_run_command` does.
+ */
+static int ahci_write_cached(block_device_t *device, uint64_t lba, uint32_t count,
+                             const void *buffer)
+{
+    struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
+    uint32_t steps = ahci_cmd_steps();
+    int rc;
+
+    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba ||
+        count > AHCI_MAX_SECTORS_PER_CMD) {
+        return -EIO;
+    }
+    if (ahci_claim(d, ATA_WRITE_DMA_EXT, &steps) != 0) {
+        return -EIO;
+    }
+    rc = ahci_command_claimed(d, ATA_WRITE_DMA_EXT, lba, count,
+                              (volatile uint8_t *)(uintptr_t)buffer, count * BLOCK_SECTOR_SIZE, 1,
+                              steps);
+    d->dev.unflushed = 1;
+    ahci_release(d);
+    return rc;
+}
+
+/** The device's `flush_now`: a polled `FLUSH CACHE EXT` (`ahci_flush`). */
+static int ahci_flush_now(block_device_t *device)
+{
+    return ahci_flush((struct ahci_disk *)device->drvdata);
+}
+
+/**
  * Bring the controller up and publish every disk on it.
  *
  * Each port the scan kept is started and identified in port order; one that
@@ -2139,6 +2174,8 @@ int ahci_init(void)
         d->dev.unflushed = 0;
         d->dev.read = ahci_read;
         d->dev.write = ahci_write;
+        d->dev.write_cached = ahci_write_cached;
+        d->dev.flush_now = ahci_flush_now;
         d->dev.submit = 0;
         d->dev.flush = 0;
         d->dev.backing = 0;

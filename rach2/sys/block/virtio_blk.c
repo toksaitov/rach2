@@ -913,13 +913,15 @@ static void vblk_config_work(struct vblk *vb);
  * into `dst` for a read, in commands of at most the disk's `max_sectors`,
  * halved down to a sector when a buffer's pages need more pieces than a
  * chain carries. A write on a disk with a cache is followed by a flush, so
- * it is on the medium when it returns. When the flush fails, or a command
- * of the write the device was given fails, the first among them, since a
- * part of it may be in the cache, the write fails with EIO and the disk is
- * marked unflushed. A device whose transport gives it no interrupt has its
- * capacity read first (`config_poll`).
+ * it is on the medium when it returns, unless `flush` is 0, which leaves it
+ * in the cache and the disk marked unflushed. When the flush fails, or a
+ * command of the write the device was given fails, the first among them,
+ * since a part of it may be in the cache, the write fails with EIO and the
+ * disk is marked unflushed. A device whose transport gives it no interrupt
+ * has its capacity read first (`config_poll`).
  */
-static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const void *src, void *dst)
+static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const void *src, void *dst,
+                   int flush)
 {
     struct vblk *vb = (struct vblk *)device->drvdata;
     const uint8_t *at = dst ? (const uint8_t *)dst : (const uint8_t *)src;
@@ -959,7 +961,9 @@ static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
         at += c.count * BLOCK_SECTOR_SIZE;
         count -= c.count;
     }
-    if (src && vb->cache && vblk_flush_polled(vb, 0) != 0) {
+    if (src && vb->cache && !flush) {
+        vblk_unflushed(vb);
+    } else if (src && vb->cache && vblk_flush_polled(vb, 0) != 0) {
         vblk_unflushed(vb);
         return -EIO;
     }
@@ -969,13 +973,27 @@ static int vblk_rw(block_device_t *device, uint64_t lba, uint32_t count, const v
 /** The device's read, polled. */
 static int vblk_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
-    return vblk_rw(device, lba, count, 0, buffer);
+    return vblk_rw(device, lba, count, 0, buffer, 1);
 }
 
 /** The device's write, polled and on the medium when it returns. */
 static int vblk_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
-    return vblk_rw(device, lba, count, buffer, 0);
+    return vblk_rw(device, lba, count, buffer, 0, 1);
+}
+
+/** The device's `write_cached`, on a disk with a cache: polled, and left in
+ * the cache until `vblk_flush_now`. */
+static int vblk_write_cached(block_device_t *device, uint64_t lba, uint32_t count,
+                             const void *buffer)
+{
+    return vblk_rw(device, lba, count, buffer, 0, 0);
+}
+
+/** The device's `flush_now`, on a disk with a cache: a FLUSH by polling. */
+static int vblk_flush_now(block_device_t *device)
+{
+    return vblk_flush_polled((struct vblk *)device->drvdata, 0);
 }
 
 /*
@@ -1595,6 +1613,8 @@ static void vblk_disk_init(struct vblk *vb, const uint8_t *cfg)
     vb->bdev.read = vblk_read;
     vb->bdev.write = vblk_write;
     vb->bdev.flush = vb->cache ? vblk_flush_submit : 0;
+    vb->bdev.write_cached = vb->cache ? vblk_write_cached : 0;
+    vb->bdev.flush_now = vb->cache ? vblk_flush_now : 0;
     vb->bdev.drvdata = vb;
     vb->wseq = 0;
 }

@@ -52,6 +52,29 @@ static int block_partition_write(block_device_t *device, uint64_t lba, uint32_t 
     return partition->backing->write(partition->backing, partition->start_lba + lba, count, buffer);
 }
 
+/** The view's `write_cached`: the range checked and the view's offset added,
+ * as `block_partition_write` does. */
+static int block_partition_write_cached(block_device_t *device, uint64_t lba, uint32_t count,
+                                        const void *buffer)
+{
+    block_partition_t *partition = (block_partition_t *)device;
+    uint64_t size = block_sectors(device);
+
+    if (count == 0 || lba > size || count > size - lba) {
+        return -EIO;
+    }
+    return partition->backing->write_cached(partition->backing, partition->start_lba + lba, count,
+                                            buffer);
+}
+
+/** The view's `flush_now`: the backing device's. */
+static int block_partition_flush_now(block_device_t *device)
+{
+    block_partition_t *partition = (block_partition_t *)device;
+
+    return partition->backing->flush_now(partition->backing);
+}
+
 /** Pass a sleeping request to the backing device with the view's offset
  * added. The backing device completes the same request, so nothing needs
  * mapping back. */
@@ -122,6 +145,8 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
     block_set_sectors(&partition->device, sector_count);
     partition->device.read = block_partition_read;
     partition->device.write = block_partition_write;
+    partition->device.write_cached = backing->write_cached ? block_partition_write_cached : 0;
+    partition->device.flush_now = backing->flush_now ? block_partition_flush_now : 0;
     partition->device.drvdata = partition;
 }
 

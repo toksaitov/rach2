@@ -1044,10 +1044,10 @@ static int ata_flush_on(struct ata_drive *d, int owned)
 
 /**
  * Write `count` sectors at `lba` from `buffer` as `ata_read_on` reads them,
- * and then flush the drive's cache once, after the last command. Returns 0,
- * `-EIO`, or `-EPERM` when the disk policy does not allow the write or the
- * flush. A write that fails part way has had no flush, and promises nothing
- * of the sectors it did move.
+ * and then, with `flush`, flush the drive's cache once, after the last
+ * command. Returns 0, `-EIO`, or `-EPERM` when the disk policy does not
+ * allow the write or the flush. A write that fails part way has had no
+ * flush, and promises nothing of the sectors it did move.
  *
  * The flush waits for the drive to be idle first, so a caller without the
  * channel flushes behind the owner's command and not into it; and it selects
@@ -1057,7 +1057,7 @@ static int ata_flush_on(struct ata_drive *d, int owned)
  * flush's end, as it does for the data port.
  */
 static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const void *buffer,
-                        int owned)
+                        int owned, int flush)
 {
     struct ata_channel *ch = d->channel;
     const uint8_t *in = (const uint8_t *)buffer;
@@ -1100,7 +1100,7 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
         lba += chunk;
         count -= chunk;
     }
-    return ata_flush_on(d, owned);
+    return flush ? ata_flush_on(d, owned) : 0;
 }
 
 /**
@@ -1118,7 +1118,46 @@ static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const
         return -EIO;
     }
     owned = ata_acquire(d->channel);
-    rc = ata_write_on(d, lba, count, buffer, owned);
+    rc = ata_write_on(d, lba, count, buffer, owned, 1);
+    if (owned) {
+        ata_release(d->channel);
+    }
+    return rc;
+}
+
+/**
+ * The device's `write_cached`: `ata_write` without the flush, so that the
+ * sectors may wait in the drive's cache until `ata_flush_now`. Returns as
+ * `ata_write` does.
+ */
+static int ata_write_cached(block_device_t *device, uint64_t lba, uint32_t count,
+                            const void *buffer)
+{
+    struct ata_drive *d = (struct ata_drive *)device->drvdata;
+    int owned, rc;
+
+    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
+        return -EIO;
+    }
+    owned = ata_acquire(d->channel);
+    rc = ata_write_on(d, lba, count, buffer, owned, 0);
+    if (owned) {
+        ata_release(d->channel);
+    }
+    return rc;
+}
+
+/**
+ * The device's `flush_now`: flush the drive's cache in the call, behind any
+ * command on its channel, as `ata_write` ends. Returns as `ata_flush_on`
+ * does.
+ */
+static int ata_flush_now(block_device_t *device)
+{
+    struct ata_drive *d = (struct ata_drive *)device->drvdata;
+    int owned = ata_acquire(d->channel);
+    int rc = ata_flush_on(d, owned);
+
     if (owned) {
         ata_release(d->channel);
     }
@@ -1304,6 +1343,8 @@ int ata_init(void)
             d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
             d->dev.read = ata_read;
             d->dev.write = ata_write;
+            d->dev.write_cached = ata_write_cached;
+            d->dev.flush_now = ata_flush_now;
             d->dev.drvdata = d;
             if (!block0) {
                 block0 = &d->dev;

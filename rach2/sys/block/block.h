@@ -119,6 +119,18 @@ struct block_device {
      * sleeps its caller, and by polling on a `BLOCK_POLLABLE` disk, for a
      * caller that cannot sleep. */
     int (*flush)(block_device_t *device, struct block_request *request);
+    /* `write` without the flush of the disk's cache that ends it, from the
+     * same contexts: the sectors may wait in that cache until `flush_now`,
+     * and a `BLOCK_WRITE_THROUGH` disk is marked `unflushed`, whether the
+     * write succeeded or not, since a part of it may be there. `flush_now`
+     * puts every write the disk answered before it on the medium, in the
+     * call and from the contexts `write` is called from. They let a caller
+     * that orders its own writes flush once after many, as the page cache
+     * ends each sync of a KRFFS root (`pc_sync`). Both are NULL on a device
+     * whose `write` sends no flush; a fault-safe disk with a cache has
+     * both. */
+    int (*write_cached)(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer);
+    int (*flush_now)(block_device_t *device);
     /* The device this one's bytes are on, or NULL for a device that is its
      * own medium. A loop device's is the device of the mount its file is on,
      * and the buffer cache reads the chain to decide whether a caller holding
