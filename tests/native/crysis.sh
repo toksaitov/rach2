@@ -40,6 +40,10 @@
 #            Mesa's shader cache and the saves' record
 #   logs     a new directory for Proton's logs
 #
+# The case fails before the game starts if a link in the tree resolves
+# outside the private /data and Proton's read-only /opt/proton, Wine's drive
+# links aside, since the game would write through it.
+#
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
 # every exit the script ends the game's mounts, puts back the session's
 # weston.ini and rach2-session, which crysis.py's `prepare` writes, and leaves
@@ -219,6 +223,16 @@ mkdir "$base" "$base/logs"
 cp -rs "$owner/crysis/game" "$base/game" || fail "game-links"
 # shellcheck disable=SC2086 # paths without spaces
 [ -z "$copies" ] || cp -a $copies "$base/" || fail copies
+# Every link in the private tree must resolve inside the private /data,
+# whose only other mount is the owner's read-only one, or in Proton's
+# read-only /opt/proton: through a link to anywhere else, such as a saves
+# directory linked to the owner's home, the game or crysis.py would write
+# the owner's files. Wine's drive links, such as z: -> /, name the running
+# system and stay as they are.
+escapes=$(find "$base" -type l ! -path '*/dosdevices/[a-z]:' ! -path '*/dosdevices/[a-z]::' \
+    -exec realpath -m -- {} + | awk '!/^\/data(\/|$)/ && !/^\/opt\/proton(\/|$)/' | head -n 3)
+[ -z "$escapes" ] ||
+    fail "links in the private game resolve outside it, to $(echo "$escapes" | tr '\n' ' ')"
 chown -R -h "$uid:$uid" "$base"
 say "private game: $(find "$base/game" -type l | wc -l) links, copies of$(
     echo "$copies" | sed "s|$owner/crysis/||g"), $need KiB reserved"
