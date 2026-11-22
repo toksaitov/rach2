@@ -100,6 +100,8 @@
 # CRYSIS_LOOPS=1 selects one loop for a profile.
 # BED_VM_PROFILE_PORT forwards a loopback port to a profiling VM's SSH
 # server. BED_VM_PROFILE_CRC=1 asks that VM to enable the flush readback.
+# BED_PROFILE_ONLY=1 returns the GPU after the figures, before the VM's
+# death-under-load check.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
 desk=0 unplug=0 measure='' loadscene=glmark2 scenes=glmark2
@@ -163,6 +165,11 @@ case ${BED_VM_PROFILE_CRC:-0} in
     0|1) ;;
     *) echo 'bed-shm: profiling CRC must be 0 or 1' >&2; exit 2 ;;
 esac
+profile_only=${BED_PROFILE_ONLY:-0}
+if [ "$profile_only" = 1 ] && { [ "$desk" != 1 ] || [ -z "$measure" ]; }; then
+    echo 'bed-shm: figure-only profiling needs -w and -x' >&2
+    exit 2
+fi
 # The GPU's MSIs reach the VM through irqfds and would count as doorbells
 # Rach2 rang, so -g runs only the nocopy or the desktop rows, which count
 # no irqfd.
@@ -1004,10 +1011,18 @@ desk_rows()
         setsid env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" -u desktop -d \
             -o "$out/measure/$rung-$scene" "$scene" > "$out/measure-$rung-$scene.out" 2>&1 &
         figpid=$!
-        wait "$figpid"
+        figure_status=0
+        wait "$figpid" || figure_status=$?
         figpid=''
         sed 's/^/bed-shm: figure: /' "$out/measure-$rung-$scene.out"
+        if [ "$profile_only" = 1 ] && [ "$figure_status" != 0 ]; then
+            fail figure "$scene exited with status $figure_status"
+        fi
     done
+    if [ "$profile_only" = 1 ]; then
+        crysis_return
+        return
+    fi
 
     # The load, in a group of its own, until the driver has rung the VM's
     # queue 32 times since it began to draw: glmark2 once it has named its
