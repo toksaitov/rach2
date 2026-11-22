@@ -574,6 +574,16 @@ int drm_gem_object_get_unless_zero(struct drm_gem_object *obj)
     return 1;
 }
 
+/** Drop one unless it is the last: 1 when dropped. */
+int drm_gem_object_put_unless_last(struct drm_gem_object *obj)
+{
+    if (obj->refs == 1) {
+        return 0;
+    }
+    obj->refs--;
+    return 1;
+}
+
 static void resv_drop(struct dma_resv *resv);
 
 /** Drop one; the last frees it through its hooks and drops its device. */
