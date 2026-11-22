@@ -497,3 +497,7 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: the comparison keeps completed plays and resumes the remaining ones with a fresh Weston session for each. The kernel and the browser runner need no change for this workaround.
 * Status: unreported, draft.
 * Next: reproduce on a current Weston with symbols and find which caller passes the null view.
+
+## Timing of the emulated UART and HPET under nested KVM
+
+QEMU 10.2.1 on WSL Linux 6.18.58.1 accounted for about 1.4 million I/O exits while a guest sent 676,000 bytes through COM1. A read of fine time through the emulated HPET under `rach2.notsc` incurred a KVM MMIO exit for each call. [Task 5674's record](kvmslow-other.md) gives the paired timings and counters. The audio cases that return PCM data use the virtio console. The vDSO case keeps the HPET fallback it exercises.
