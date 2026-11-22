@@ -117,11 +117,12 @@ int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *b
     how = path_start(mnt, node, base, &ref);
     keep = (how & START_KEEP) != 0;
     task = (how & START_TASK) != 0;
-    if (!p->paths_on_mounts && !keep)
-        return 0;
     for (i = 0; i < PATH_BUFS; i++) {
         if (p->path_bufs[i] != buf)
             continue;
+        p->path_cwd &= ~(1u << i);
+        if (!p->path_mount[i] && !keep)
+            return 0;
         if (keep) {
             vfs_ref_hold(&ref);
             vfs_desc_open(mnt);
@@ -148,7 +149,10 @@ int path_buf_set_cwd(char *buf)
     int task = path_buf_set_dir(buf, fs->cwd_mnt, fs->cwd_node, proc_cwd(current_proc));
     int i;
 
-    for (i = 0; task && i < PATH_BUFS; i++) {
+    if (!task && fs->cwd_mnt) {
+        return 0;
+    }
+    for (i = 0; i < PATH_BUFS; i++) {
         if (current_proc->path_bufs[i] == buf) {
             current_proc->path_cwd |= 1u << i;
         }
@@ -186,17 +190,23 @@ int path_buf_cwd_moved(const char *path)
     return moved;
 }
 
-void path_buf_cwd_retake(const char *path)
+int path_buf_cwd_retake(const char *path)
 {
     process_t *p = current_proc;
     struct vfs_ref now, was;
     int i = cwd_page(p, path);
+    uint32_t flags;
 
-    if (i < 0 || !path_buf_cwd_moved(path) || !p->fs->cwd_mnt || !p->fs->cwd_node) {
-        return;
+    if (i < 0 || !path_buf_cwd_moved(path)) {
+        return 0;
     }
+    flags = spin_lock_irqsave(&p->fs->lock);
     now.mnt = p->fs->cwd_mnt;
     now.node = p->fs->cwd_node;
+    spin_unlock_irqrestore(&p->fs->lock, flags);
+    if (!now.mnt || !now.node || !p->path_mount[i]) {
+        return -1;
+    }
     vfs_ref_hold(&now);
     vfs_desc_open(now.mnt);
     was.mnt = p->path_mount[i];
@@ -204,6 +214,7 @@ void path_buf_cwd_retake(const char *path)
     p->path_mount[i] = now.mnt;
     p->path_node[i] = now.node;
     vfs_desc_close(was.mnt, was.node, NULL);
+    return 0;
 }
 
 int path_bufs_hold(const struct vfs_mount *mnt, const void *node)
@@ -367,6 +378,7 @@ void path_buf_put(char *buf)
         for (i = 0; i < PATH_BUFS; i++) {
             if (p->path_bufs[i] == buf) {
                 path_mount_put(p, i);
+                p->path_cwd &= ~(1u << i);
                 p->path_bufs_busy &= ~(1u << i);
                 return;
             }

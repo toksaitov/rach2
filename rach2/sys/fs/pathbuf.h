@@ -47,12 +47,15 @@ int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *b
 
 /** `path_buf_set_dir` for the caller's working directory, its pair and its
  * path, with the page marked as one whose start is the working directory,
- * as a name relative to AT_FDCWD is. Under the big lock, under which they
- * change. */
+ * as a name relative to AT_FDCWD is: also when the record has no pair, as
+ * after a chdir to the KRFFS root's top, where the page keeps nothing and
+ * its joined path is walked, so that a move to a pair is seen
+ * (`path_buf_cwd_moved`). Under the big lock, under which they change. */
 int path_buf_set_cwd(char *buf);
 
 /** Whether `path` is a page whose start is the working directory and the
- * working directory is no longer that pair, as a chdir of a thread that
+ * working directory is no longer that pair, or no pair where the page
+ * kept one, or one where the page kept none, as a chdir of a thread that
  * shares it (CLONE_FS) makes it. Takes the `fs_struct`'s lock and nothing
  * else; no sleep. */
 int path_buf_cwd_moved(const char *path);
@@ -65,9 +68,12 @@ int path_buf_cwd_moved(const char *path);
  * as Linux's `path_init` does, so that it never pairs one thread's old
  * working directory with a root a shared chroot set since. The page's text
  * keeps the old directory's path, which is only the name the call reports.
- * Under the big lock; may sleep, in the old start's release.
+ * Return 0, or -1 when the old or the new working directory is no pair,
+ * whose walk is the joined path's: the text then names the old directory,
+ * and the call must copy and join its path again, from its start. Under the
+ * big lock; may sleep, in the old start's release.
  */
-void path_buf_cwd_retake(const char *path);
+int path_buf_cwd_retake(const char *path);
 
 /**
  * Whether a path page of any process keeps the directory `node`, on a mount
