@@ -699,6 +699,38 @@ quiet()
     fi
 }
 
+# load_wait SILENCE PID: one second of the load step's wait, which
+# `last=-1 still=0` starts, with binds0 and lost0 the transport's binds and
+# the kernel's `vgpu-shm: lost:` lines at the step's start. It fails once
+# the load, process PID, has ended; at once once the device is gone, a
+# loss logged, the transport unbound or bound again, since no doorbell can
+# come after that, with load_gone saying why; or once for SILENCE seconds
+# the VM's doorbells have not been rung, whatever processor time the load
+# uses, since a load on another renderer may be busy and ring nothing.
+load_wait()
+{
+    load_gone=''
+    kill -0 "$2" 2>/dev/null || return 1
+    sample
+    sleep 1
+    if [ "$(klog_count 'vgpu-shm: lost: ')" -gt "$lost0" ]; then
+        load_gone="the device is gone: $(dmesg | grep 'vgpu-shm: lost: ' | tail -n 1)"
+        return 1
+    fi
+    load_bound=$(info bound) load_binds=$(info binds)
+    if [ "$load_bound" != 1 ] || [ "$load_binds" != "$binds0" ]; then
+        load_gone="the device is gone: bound $load_bound, binds $binds0 then $load_binds"
+        return 1
+    fi
+    size=$(info rung | cut -d/ -f1)
+    if [ "$size" = "$last" ]; then
+        still=$((still + 1))
+        [ "$still" -lt "$1" ] || return 1
+    else
+        last=$size still=0
+    fi
+}
+
 # until_line FILE PATTERN SILENCE [PID]: wait until FILE has a line
 # matching PATTERN, while quiet FILE SILENCE PID holds.
 until_line()
@@ -1647,25 +1679,28 @@ desk_rows()
     # queue 32 times since it began to draw: glmark2 once it has named its
     # renderer, a scene of the harness once the harness says it has
     # started, after its latency's own round trips, for longer than the
-    # step will take.
+    # step will take. The step ends after 600 s without a doorbell, and at
+    # once when the device is gone (load_wait).
+    binds0=$(info binds) lost0=$(klog_count 'vgpu-shm: lost: ')
+    last=-1 still=0 load_gone=''
     if [ "$loadscene" = glmark2 ]; then
-        loadout=$out/glmark2.out
+        loadout=$out/glmark2.out loadline=$loadout loadpat='GL_RENDERER'
         setsid env BED_SHM_LOAD="$mark" su -s /bin/sh desktop \
             -c "export $desktop_env; exec glmark2-wayland --run-forever -b build" > "$loadout" 2>&1 &
         load=$!
-        until_line "$loadout" 'GL_RENDERER' 600 "$load" || true
     else
-        loadout=$out/load.out
+        loadout=$out/load.out loadline=$out/load/scene.log loadpat="measure: scene: $loadscene: started"
         # shellcheck disable=SC2086 # two assignments
         setsid env BED_SHM_LOAD="$mark" $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
             -o "$out/load" "$loadscene" > "$loadout" 2>&1 &
         load=$!
-        until_line "$out/load/scene.log" "measure: scene: $loadscene: started" 600 "$load" || true
     fi
+    until grep -q "$loadpat" "$loadline" 2>/dev/null; do
+        load_wait 600 "$load" || break
+    done
     rung0=$(info rung | cut -d/ -f1)
-    last=-1 still=0
-    until [ "$(($(info rung | cut -d/ -f1) - ${rung0:-0}))" -ge 32 ]; do
-        quiet "$console" 600 "$load" || break
+    until [ -n "$load_gone" ] || [ "$(($(info rung | cut -d/ -f1) - ${rung0:-0}))" -ge 32 ]; do
+        load_wait 600 "$load" || break
     done
     drew=$(($(info rung | cut -d/ -f1) - ${rung0:-0}))
     if [ "$loadscene" = glmark2 ]; then
@@ -1673,11 +1708,11 @@ desk_rows()
     else
         named="the session's virgl"
     fi
-    if kill -0 "$load" 2>/dev/null && [ "$drew" -ge 32 ] &&
+    if [ -z "$load_gone" ] && kill -0 "$load" 2>/dev/null && [ "$drew" -ge 32 ] &&
         { [ "$loadscene" != glmark2 ] || grep -q 'GL_RENDERER: *virgl' "$loadout"; }; then
         pass load "$loadscene on $named, $drew doorbells"
     else
-        fail load "$loadscene, $drew doorbells: $(tail -n 3 "$loadout" | tr '\n' ' ')"
+        fail load "$loadscene, $drew doorbells${load_gone:+, $load_gone}: $(tail -n 3 "$loadout" | tr '\n' ' ')"
     fi
 
     # The VM's death under the load, with fences pending; the load must
