@@ -10518,43 +10518,6 @@ static int synth_is_sys(const struct vpath *vp)
            (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK || vp->kind == VNODE_SYS_FILE);
 }
 
-/** The target of the device link `vp`, relative as Linux writes it, into
- * `out` of `cap` bytes; returns its length. */
-static int synth_sys_link(const struct vpath *vp, char *out, int cap)
-{
-    char path[128];
-    const char *up = SYSFS_IS_BLOCK(vp->sysent) ? "../.." : "../../..";
-    int n = 0, i;
-
-    synth_sys_path(vp->sysent, vp->syskey, path, (int)sizeof(path));
-    if (vp->sysent == SYSFS_WLAN_PHY || vp->sysent == SYSFS_WLAN_DRIVER) {
-        for (i = 0; path[i] && n < cap; ++i)
-            out[n++] = path[i];
-        return n;
-    }
-    for (i = 0; up[i] != '\0' && n < cap; i++) {
-        out[n++] = up[i];
-    }
-    for (i = 4; path[i] != '\0' && n < cap; i++) {
-        out[n++] = path[i];
-    }
-    return n;
-}
-
-/** The text of the /sys link `vp` into `out` of `cap` bytes: a registered
- * link's (`sysfs_link_text`), or a device's (`synth_sys_link`); its length,
- * or -ENOENT for a device or a target that is gone. */
-static int synth_sys_readlink(const struct vpath *vp, char *out, int cap)
-{
-    if (vp->sysreg) {
-        return sysfs_link_text(vp->sysreg, out, cap);
-    }
-    if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
-        return -ENOENT;
-    }
-    return synth_sys_link(vp, out, cap);
-}
-
 /**
  * Copy `kst` out to the user's stat64 `st`: with the owner and group the
  * caller's user namespace maps them to (`uid_seen`), which every stat gives

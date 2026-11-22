@@ -6156,8 +6156,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 /** The `readlink` of the synthetic types, the target of a link as text:
  * /proc/self's and /proc/thread-self's (`procfs_readlink_self`); /dev/log's,
  * fixed; a link's made
- * under /dev, as it was written; a link's a driver added to /sys, as
- * kernfs writes it (`sysfs_link_text`);
+ * under /dev, as it was written; a /sys link's, a driver's as kernfs writes
+ * it or a device's fixed one (`synth_sys_readlink`);
  * /proc/<pid>/exe's, the path of the program the process
  * runs (`procfs_readlink_exe`); and /proc/<pid>/cwd's and root's, the paths
  * of its directories (`procfs_readlink_dir`). -ENOENT for a process that is
@@ -6176,8 +6176,8 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
 
         return n > (int)cap ? (int)cap : n;
     }
-    if (sn->vp.kind == VNODE_SYS_LINK && sn->vp.sysreg > 0) {
-        return sysfs_link_text(sn->vp.sysreg, buf, (int)cap);
+    if (sn->vp.kind == VNODE_SYS_LINK) {
+        return synth_sys_readlink(&sn->vp, buf, (int)cap);
     }
     if (sn->vp.kind == VNODE_DEV_LINK) {
         uint32_t n = (uint32_t)k_strlen(SYNTH_DEV_LOG_TARGET);

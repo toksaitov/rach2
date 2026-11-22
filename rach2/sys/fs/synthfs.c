@@ -9,6 +9,8 @@
 #include "../display/backlight.h"
 #include "../rfkill.h"
 #include "sysfs.h"
+#include "procfs.h"
+#include "../lib/kerrno.h"
 #include "devtree.h"
 #include "../dmi.h"
 #include "../watchdog.h"
@@ -1492,6 +1494,43 @@ void synth_sys_path(int node, int key, char *out, int cap)
     }
     synth_put(out, cap, &pos, node >= 0 && node <= SYSFS_USB_ROOT ? paths[node] : "/sys");
     out[pos] = '\0';
+}
+
+/** The target of the device link `vp`, relative as Linux writes it, into
+ * `out` of `cap` bytes; returns its length. */
+static int synth_sys_link(const struct vpath *vp, char *out, int cap)
+{
+    char path[128];
+    const char *up = SYSFS_IS_BLOCK(vp->sysent) ? "../.." : "../../..";
+    int n = 0, i;
+
+    synth_sys_path(vp->sysent, vp->syskey, path, (int)sizeof(path));
+    if (vp->sysent == SYSFS_WLAN_PHY || vp->sysent == SYSFS_WLAN_DRIVER) {
+        for (i = 0; path[i] && n < cap; ++i)
+            out[n++] = path[i];
+        return n;
+    }
+    for (i = 0; up[i] != '\0' && n < cap; i++) {
+        out[n++] = up[i];
+    }
+    for (i = 4; path[i] != '\0' && n < cap; i++) {
+        out[n++] = path[i];
+    }
+    return n;
+}
+
+/** The text of the /sys link `vp` into `out` of `cap` bytes: a registered
+ * link's (`sysfs_link_text`), or a device's (`synth_sys_link`); its length,
+ * or -ENOENT for a device or a target that is gone. */
+int synth_sys_readlink(const struct vpath *vp, char *out, int cap)
+{
+    if (vp->sysreg) {
+        return sysfs_link_text(vp->sysreg, out, cap);
+    }
+    if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    return synth_sys_link(vp, out, cap);
 }
 
 static int synth_classify_sysfs_fixed(const struct comp *c, int n, struct vpath *vp);

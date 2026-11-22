@@ -820,6 +820,12 @@ void synth_sys_device_name(int node, int key, char *out, int cap);
  * of `cap` bytes, NUL-terminated. */
 void synth_sys_path(int node, int key, char *out, int cap);
 
+/** The text of the /sys link `vp` into `out` of `cap` bytes: a registered
+ * link's (`sysfs_link_text`), or a fixed device link's, relative as Linux
+ * writes it. Its length, or -ENOENT for a device or a target that is gone.
+ * Both readlink(2) and the path walk read a /sys link through it. */
+int synth_sys_readlink(const struct vpath *vp, char *out, int cap);
+
 /* The target of /dev/log, where a syslog daemon binds its socket: a
  * directory every system image has writable, as systemd's /dev/log leads
  * under /run. BusyBox's syslogd follows the link before it binds, and a
