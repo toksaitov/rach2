@@ -6088,7 +6088,10 @@ static process_t *pivot_next(const struct mntns *ns, const struct vfs_mount *omn
  * caller's root, and the old root is shown at put_old, a directory at or
  * below new_root (`vfs_pivot_mounts`). Every process of the caller's mount
  * namespace whose root was the old root has the new one after, the caller
- * among them, and its working directory keeps its place (`pivot_one`). The
+ * among them, and its working directory keeps its place (`pivot_one`),
+ * inside the one change of what paths name that the mounts' part began,
+ * which is checked against a stamp taken before the old root was read and
+ * runs again from there when anything changed meanwhile. The
  * caller needs privilege over its mount namespace (`mount_privileged`), or
  * the call is -EPERM.
  *
@@ -6104,6 +6107,8 @@ long sys_pivot_root(isr_params_t *params)
     struct vfs_mount *omnt;
     void *onode;
     struct vfs_ref nref;
+    struct vfs_stamp since;
+    struct pivot_old old;
     char *npath, *opath, *oldroot, *buf;
     process_t *q;
     int32_t rc;
@@ -6129,21 +6134,25 @@ long sys_pivot_root(isr_params_t *params)
     }
     oldroot = path_buf_get();
     buf = path_buf_get();
-    omnt = current_proc->fs->root_mnt;
-    onode = current_proc->fs->root_node;
-    rc = oldroot && buf ? 0 : -ENOMEM;
-    if (rc == 0 && omnt) {
-        rc = vfs_node_path(omnt, onode, oldroot, VFS_PATH_MAX);
-    } else if (rc == 0) {
-        k_strncpy(oldroot, "/", VFS_PATH_MAX);
+    rc = oldroot && buf ? 1 : -ENOMEM;
+    while (rc == 1) {
+        vfs_seq_wait(&since.seq);
+        since.on = 1;
+        omnt = current_proc->fs->root_mnt;
+        onode = current_proc->fs->root_node;
+        rc = omnt ? vfs_node_path(omnt, onode, oldroot, VFS_PATH_MAX) : 0;
+        if (rc == 0 && !omnt) {
+            k_strncpy(oldroot, "/", VFS_PATH_MAX);
+        }
+        if (rc == 0) {
+            rc = vfs_pivot_mounts(npath, opath, &since, &nref, &old);
+        }
     }
-    if (rc == 0) {
-        rc = vfs_pivot_mounts(npath, opath, &nref);
-    }
-    while (rc == 0 && (q = pivot_next(ns, omnt, onode)) != NULL) {
+    while (rc == 0 && (q = pivot_next(ns, old.mnt, old.node)) != NULL) {
         pivot_one(q, &nref, oldroot, buf);
     }
     if (rc == 0) {
+        vfs_pivot_done();
         vfs_ref_release(&nref);
     }
     path_buf_put(buf);
