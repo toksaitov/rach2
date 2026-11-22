@@ -172,6 +172,15 @@ void block_count_batch(uint32_t sectors)
     (void)sectors;
 }
 
+/** Count the microseconds of a pause in `delayed_us`; the model's drive
+ * needs no time. */
+static uint32_t delayed_us;
+
+void k_udelay(uint32_t usec)
+{
+    delayed_us += usec;
+}
+
 #include "../../rach2/sys/pci.h"
 
 /** No PCI IDE controller is found. */
@@ -1083,8 +1092,9 @@ static void write_rate_rows(struct ata_drive *d)
                   "a returned write is durable, its last command's sectors among them");
             CHECK(sleeps == (int)(chunks + 1),
                   "each command of a delayed write and its flush sleep");
-            CHECK(status_reads <= 32 * chunks,
-                  "a delayed write and flush use at most 32 status reads per 32 KiB");
+            CHECK(status_reads <= 4 * (chunks + 1),
+                  "a delayed write and flush read the status at most four times a command, "
+                  "none before the sleep");
             CHECK(refused == 0 && garbage_writes == 0 && channels[0].owner == 0,
                   "the write completes without a conflicting command and releases its channel");
             printf("ata-test: write: LBA%u, %u sectors, %u DMA, %u flushes, "
@@ -1301,9 +1311,8 @@ int main(void)
     CHECK(sleeps == 1, "the owner slept once for its DMA");
     CHECK(sector_is(owner_buf, 100) && sector_is(owner_buf + 7 * SECTOR, 107),
           "the owner's DMA read brought its sectors");
-    CHECK(
-        reads_at_sleep - reads_at_start == 8,
-        "the sleeping wait reads the status eight times after the engine's start before it sleeps");
+    CHECK(reads_at_sleep == reads_at_start,
+          "the wait for the DMA's end sleeps with no read of the status after the engine's start");
     CHECK(masked_at_dma_cmd == 1 && masked_at_start == 1 && !unmasked_between,
           "the DMA command and its engine's start are written with interrupts off");
     CHECK(refused == 0 && garbage_reads == 0, "the owner's read met no other command");
@@ -1341,8 +1350,9 @@ int main(void)
     before = status_reads;
     rc = ata_read(&d->dev, 5, 1, polled_buf);
     CHECK(rc == -EIO, "a polled read of a drive that never answers is -EIO");
-    CHECK(status_reads - before == ATA_SPIN_BEFORE_SLEEP + ATA_POLL_PLAIN + ATA_POLL_LIMIT + 2,
-          "the polled wait reads the status its plain reads, its rounds, and the record's");
+    CHECK(status_reads - before == ATA_POLL_PLAIN + ATA_POLL_LIMIT + 2,
+          "the polled wait for the DMA's end reads the status its plain reads, its rounds, "
+          "and the record's, with no spin before them");
     CHECK(records == 1 && contains(last_record, "no answer to a polled wait"),
           "a polled wait that gives up records it");
 

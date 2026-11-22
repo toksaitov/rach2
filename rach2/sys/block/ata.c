@@ -60,17 +60,19 @@
  *
  * A wait for the drive sleeps when it can and polls when it must. From a
  * system call, with interrupts on, the caller reads the status register a
- * few times and then sleeps on the channel's queue, woken by the channel's
- * interrupt, which the drive raises when a sector is ready or a command is
- * done, and by the tick, which bounds a lost interrupt and ends a wait
- * that has lasted `ATA_WAIT_TICKS`. From a page fault, with interrupts off
- * and no timer to bound by, the wait polls and counts its reads. Under a
+ * few times, or for a bus master command's or a flush's end not at all, and
+ * then sleeps on the channel's queue, woken by the channel's interrupt,
+ * which the drive raises when a sector is ready or a command is done, and
+ * by the tick, which bounds a lost interrupt and ends a wait that has
+ * lasted `ATA_WAIT_TICKS`. From a page fault, with interrupts off and no
+ * timer to bound by, the wait polls and counts its reads. Under a
  * hypervisor every port read is an exit, which is why a wait that may sleep
  * reads the status only a few times first; the status reads and the ticks
  * waited are counted for `/proc/disk`.
  */
 
 #include "../idle_timer.h"
+#include "../udelay.h"
 #include "../arch/x86/portio.h"
 #include "../cmdline.h"
 #include "../klog.h"
@@ -200,7 +202,8 @@ void ata_set_io(const struct ata_io *ops)
 /* How many times a wait that may sleep reads the status first: the
    first sector of a write is ready within these without an interrupt,
    and a DMA command is not, on the emulator or the hardware, so the rest
-   of the wait is the sleep. Each read is an exit under a hypervisor. */
+   of the wait is the sleep, and the wait for a DMA command's or a flush's
+   end reads none (`ata_wait_irq`). Each read is an exit under a hypervisor. */
 #define ATA_SPIN_BEFORE_SLEEP 8
 
 /* How many times a data port sequence finds the drive idle without the
@@ -323,13 +326,15 @@ static int ata_command(const struct ata_channel *ch, uint8_t command)
 }
 
 /** The 400 ns a drive needs after a select or a command before its status
- * means anything: four reads of the alternate status register. */
+ * means anything: one read of the alternate status register, which pushes
+ * the writes before it to the drive, and a microsecond's wait, as libata's
+ * `ata_sff_pause` reads it once and waits 400 ns (drivers/ata/
+ * libata-sff.c). Four reads were the classic pause; under a hypervisor each
+ * is an exit to the emulator, where the wait is none. */
 static void ata_settle(const struct ata_channel *ch)
 {
     ata_io->in8(ch->ctrl);
-    ata_io->in8(ch->ctrl);
-    ata_io->in8(ch->ctrl);
-    ata_io->in8(ch->ctrl);
+    k_udelay(1);
 }
 
 /**
@@ -581,7 +586,7 @@ static void ata_pause(void)
 
 /**
  * Wait until the drive's status shows `want`; an error, or a drive that
- * never answers, is `-EIO`. A few polls first, then a sleep on the
+ * never answers, is `-EIO`. `spins` polls first, then a sleep on the
  * channel's queue where sleeping is allowed, which counts in the caller's
  * `disk_waits` (proc/process.h), and a polled wait where it is not, whose
  * reads past the first few hundred are each preceded by a pause off the
@@ -592,14 +597,14 @@ static void ata_pause(void)
  * drive when `ata_lock_idle` has run out of tries; any other reads the
  * status under the lock, taken for each read, and sleeps without it.
  */
-static int ata_wait_for(struct ata_channel *ch, int want, int held)
+static int ata_wait_spun(struct ata_channel *ch, int want, int held, int spins)
 {
     struct ata_wait w;
     uint32_t flags = 0;
     unsigned status, bm;
     int spin, rc;
 
-    for (spin = 0; spin < ATA_SPIN_BEFORE_SLEEP; spin++) {
+    for (spin = 0; spin < spins; spin++) {
         if (ata_status_poll(ch, want, &rc, held)) {
             return rc;
         }
@@ -646,6 +651,25 @@ static int ata_wait_for(struct ata_channel *ch, int want, int held)
     spin_unlock_irqrestore(&ch->lock, flags);
     ata_count_wait();
     return w.rc;
+}
+
+/** Wait as `ata_wait_spun` does, after `ATA_SPIN_BEFORE_SLEEP` polls. */
+static int ata_wait_for(struct ata_channel *ch, int want, int held)
+{
+    return ata_wait_spun(ch, want, held, ATA_SPIN_BEFORE_SLEEP);
+}
+
+/** Wait for the end of the owner's command that moves nothing through the
+ * data port, a bus master transfer or a cache flush, with no poll before
+ * the sleep: neither is over within a few reads of the status, and libata
+ * reads the status for a DMA or a non-data command only in its interrupt
+ * (`ata_bmdma_port_intr`, `__ata_sff_port_intr`, drivers/ata/
+ * libata-sff.c). Under a hypervisor each read is an exit that holds the
+ * emulator's lock against the completion it waits for. An error is
+ * `-EIO`. */
+static int ata_wait_irq(struct ata_channel *ch)
+{
+    return ata_wait_spun(ch, ATA_WANT_READY, 0, 0);
 }
 
 /** Wait until the drive is not busy; only a drive that never answers is
@@ -894,7 +918,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     ata_settle(ch);
     ata_io->out8(ch->bm + ATA_BM_CMD, (uint8_t)((write ? 0 : ATA_BM_READ) | ATA_BM_START));
     spin_unlock_irqrestore(&ch->lock, flags);
-    rc = ata_wait_ready(ch, 0);
+    rc = ata_wait_irq(ch);
     flags = spin_lock_irqsave(&ch->lock);
     status = ata_io->in8(ch->bm + ATA_BM_STATUS);
     ata_io->out8(ch->bm + ATA_BM_CMD, 0);
@@ -1029,7 +1053,7 @@ static int ata_flush_on(struct ata_drive *d, int owned)
         if (rc != 0) {
             return rc;
         }
-        return ata_wait_ready(ch, 0) != 0 ? -EIO : 0;
+        return ata_wait_irq(ch) != 0 ? -EIO : 0;
     }
     if (ata_lock_idle(ch, &flags) != 0) {
         return -EIO;
