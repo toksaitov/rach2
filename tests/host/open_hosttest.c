@@ -1002,6 +1002,12 @@ static uint8_t mapped_disk[2 * PAGE_SIZE];
 static int mapped_reads, mapped_read_fails;
 static char *mapped_caller;
 
+/** The node a walk's keep has now: no walk keeps one here. */
+void vfs_ref_now(struct vfs_ref *ref)
+{
+    (void)ref;
+}
+
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
  * may sleep for the disk, and the call queued for the row, a write that

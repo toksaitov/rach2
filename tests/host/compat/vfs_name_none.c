@@ -13,6 +13,14 @@ void vfs_name_unlock_changes(struct vfs_mount *mnt)
     (void)mnt;
 }
 
+/** Begin a change of names; the model has no walk sequence to move. */
+void vfs_name_change_begin(void)
+{}
+
+/** End the change of names that vfs_name_change_begin began. */
+void vfs_name_change_end(void)
+{}
+
 void vfs_name_put(struct vfs_name *name)
 {
     if (name) {
