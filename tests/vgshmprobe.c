@@ -1,8 +1,8 @@
 /* vgshmprobe.c: virtio-gpu over the region Rach2 shares with a VM's device:
  * a frame drawn by virgl in the VM and read back, the fences that the VM's
- * death must fail, the wait that the backend's loss must end, the blobs
- * whose page lists the VM must refuse, and the timings of buffers copied
- * and of buffers in the region. */
+ * death must fail, the wait that the backend's loss must end and the one
+ * that a long command must not, the blobs whose page lists the VM must
+ * refuse, and the timings of buffers copied and of buffers in the region. */
 #include "probe.h"
 #include "../rach2/sys/drm/uapi.h"
 #include "../rach2/sys/drm/virtio_gpu.h"
@@ -382,15 +382,19 @@ static long now_us(void)
 #define PROBE_ENODEV 19
 
 /**
- * Make a render target, whose backing the VM gives, while the VM's backend
- * answers nothing: stopped, or killed while the creation waits. The wait
- * for the backing's answer must end with ENODEV once the transport takes
- * the device for gone, by its heartbeat or by the VM's word that the
- * backend has died. Prints the creation's error and how long it took.
+ * Make a render target, whose backing the VM gives, and print how long the
+ * creation took and its error. With `held` 0 the VM's backend answers
+ * nothing, stopped or killed while the creation waits, and the wait for the
+ * backing's answer must end with ENODEV once the transport takes the device
+ * for gone, by its heartbeat or by the VM's word that the backend has died.
+ * With `held` 1 the backend holds the backing past the heartbeat's limit
+ * while its process runs, and the creation must succeed, its answer waited
+ * for; the probe's exit drops the resource's handle.
  */
-static void lost(void)
+static void wait_backing(int held)
 {
     struct drm_virtgpu_resource_create a;
+    const char *tag = held ? "VGSHMPROBE HELD: " : "VGSHMPROBE LOST: ";
     long r, t0;
     char text[12];
 
@@ -402,13 +406,13 @@ static void lost(void)
     a.width = a.height = 64;
     a.depth = a.array_size = 1;
     a.size = 64u * 64u * 4u;
-    probe_line("VGSHMPROBE LOST: asking", 0, 0);
+    probe_line(tag, "asking", 0);
     t0 = now_us();
     r = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a);
-    probe_line("VGSHMPROBE LOST: ms ", dec(text, (now_us() - t0) / 1000), 0);
-    probe_line("VGSHMPROBE LOST: error ", dec(text, r), 0);
-    if (r != -PROBE_ENODEV) {
-        fail("the creation did not end with ENODEV");
+    probe_line(tag, "ms ", dec(text, (now_us() - t0) / 1000));
+    probe_line(tag, "error ", dec(text, r));
+    if (held ? r != 0 : r != -PROBE_ENODEV) {
+        fail(held ? "the creation did not succeed" : "the creation did not end with ENODEV");
     }
     probe_line("VGSHMPROBE OK", 0, 0);
 }
@@ -627,7 +631,7 @@ static void measure(long bytes)
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
-/** `vgshmprobe draw [CRC]`, `pending N`, `lost`, `refuse` or
+/** `vgshmprobe draw [CRC]`, `pending N`, `lost`, `held`, `refuse` or
  * `measure BYTES`, entered with `sp` at argc. */
 void probe_main(unsigned long *sp)
 {
@@ -644,8 +648,8 @@ void probe_main(unsigned long *sp)
         refuse();
         syscall1(SYS_EXIT_GROUP, 0);
     }
-    if (argc == 2 && argv[1][0] == 'l') {
-        lost();
+    if (argc == 2 && (argv[1][0] == 'l' || argv[1][0] == 'h')) {
+        wait_backing(argv[1][0] == 'h');
         syscall1(SYS_EXIT_GROUP, 0);
     }
     if (argc == 3 && (argv[1][0] == 'p' || argv[1][0] == 'm')) {
@@ -659,6 +663,7 @@ void probe_main(unsigned long *sp)
         }
         syscall1(SYS_EXIT_GROUP, 0);
     }
-    probe_line("usage: vgshmprobe draw [CRC] | pending N | lost | refuse | measure BYTES", 0, 0);
+    probe_line("usage: vgshmprobe draw [CRC] | pending N | lost | held | refuse | measure BYTES", 0,
+               0);
     syscall1(SYS_EXIT_GROUP, 2);
 }

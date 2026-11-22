@@ -3,7 +3,8 @@
  * It boots an overlay of the GNU root with the suite's data disk and the test
  * bed's VM disk and runs tests/kvm/bed-shm.sh on it, which attaches a region
  * to /dev/vgpu-shm, boots the VM under Rach2's KVM on it, draws through
- * virtio-gpu over the region, runs piglit's readbacks there, has a wait
+ * virtio-gpu over the region, runs piglit's readbacks there, has a backing
+ * the VM's backend holds past its heartbeat's limit answered, has a wait
  * for the VM end when its backend stops and when it dies, and kills the
  * VM, or, for the case `nocopy`,
  * maps the VM's Vulkan buffers into a program of Rach2's and kills the VM
@@ -88,13 +89,13 @@ enum bed_run { RUN_VIRGL, RUN_NOCOPY, RUN_DESKTOP, RUN_CONSOLE };
 /**
  * Run bed-shm.sh and assert each of its checks from the line it printed,
  * `bed-shm: NAME: pass` or `fail`, then print what it printed for the run's
- * log: the checks of the virgl draw, its readbacks and the backend's loss,
- * with `nocopy` those of -k, with `vm-death` those of -w, or with `console`
- * those of -u.
+ * log: the checks of the virgl draw, its readbacks, the backing held and
+ * the backend's loss, with `nocopy` those of -k, with `vm-death` those of
+ * -w, or with `console` those of -u.
  */
 static void run(struct bed_case *s, enum bed_run which)
 {
-    static const char *const virgl[] = {"attach",  "draw",   "doorbell", "readback",
+    static const char *const virgl[] = {"attach",  "draw",   "doorbell", "readback", "held",
                                         "stopped", "killed", "death",    NULL};
     static const char *const mapped[] = {"attach", "build",   "pages",  "coherent", "release",
                                          "refuse", "measure", "revoke", "leak",     NULL};

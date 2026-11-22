@@ -520,7 +520,8 @@ sudo tee /usr/local/sbin/bed-vm-control > /dev/null <<'RUN'
 #!/bin/sh
 # bed-vm-control: do to the backend each word a line of the VM's second
 # serial port, ttyS1, brings, as Rach2's test of the backend's loss writes
-# them: `stop`, `cont` and `kill` send it SIGSTOP, SIGCONT and SIGKILL, and
+# them: `stop`, `cont` and `kill` send it SIGSTOP, SIGCONT and SIGKILL,
+# `hold` sends it SIGUSR2, which has it hold the next new backing 45 s, and
 # `start` starts its service again. Each done is said on the console as
 # `bed-vm: control: WORD: done`. A VM without the port has nothing to do.
 stty -F /dev/ttyS1 raw -echo 2> /dev/null || exit 0
@@ -531,6 +532,7 @@ while read -r word; do
         stop) pkill -STOP -x vgpu-backend ;;
         cont) pkill -CONT -x vgpu-backend ;;
         kill) pkill -KILL -x vgpu-backend ;;
+        hold) pkill -USR2 -x vgpu-backend ;;
         start) systemctl restart bed-vm-backend.service ;;
         *) echo "bed-vm: control: $word: unknown" > /dev/ttyS0; continue ;;
     esac
