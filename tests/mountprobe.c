@@ -1315,7 +1315,7 @@ static long fat_reads(void)
  * or '?' when it cannot be read. */
 static char proc_state(int pid)
 {
-    char path[32] = "/proc/", digits[12], line[256];
+    char path[32] = "/proc/", digits[12], line[256] = "";
     int i = 0, j = 6, fd, n;
 
     do {
@@ -1429,10 +1429,12 @@ static void reloc_reap(int pid, const char *what)
 /** Microseconds of CLOCK_MONOTONIC, for the record of a bind's wait. */
 static long now_us(void)
 {
-    long ts[2];
+    struct {
+        long sec, nsec;
+    } ts;
 
-    syscall2(SYS_CLOCK_GETTIME, 1, (long)ts);
-    return ts[0] * 1000000 + ts[1] / 1000;
+    syscall2(SYS_CLOCK_GETTIME, 1, (long)&ts);
+    return ts.sec * 1000000 + ts.nsec / 1000;
 }
 
 /** Append `s` to `line`, of 256 bytes, at `*len`. */
@@ -1476,7 +1478,7 @@ static void append(char *line, int *len, const char *s, long v)
  */
 static void reloc_start(int by_fd, int pids[3])
 {
-    long wr = syscall3(SYS_OPEN, (long)"/rk/f", O_WRONLY, 0), src, big;
+    long wr = syscall3(SYS_OPEN, (long)"/rk/f", O_WRONLY, 0), opath, big;
 
     if (wr < 0) {
         fail("open the file to grow");
@@ -1487,8 +1489,8 @@ static void reloc_start(int by_fd, int pids[3])
         pids[2] = reloc_child('m', 0, 80);
         return;
     }
-    src = syscall3(SYS_OPEN, (long)"/rk/f", O_PATH, 0);
-    if (src < 0 || syscall2(SYS_DUP2, src, 9) != 9) {
+    opath = syscall3(SYS_OPEN, (long)"/rk/f", O_PATH, 0);
+    if (opath < 0 || syscall2(SYS_DUP2, opath, 9) != 9) {
         fail("open the bind's source O_PATH as descriptor 9");
     }
     fill_file("/rk/big", 'Z', 4096);
