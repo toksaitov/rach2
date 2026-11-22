@@ -1157,13 +1157,15 @@ static void handle_undo(void)
     syscall1(SYS_RMDIR, (long)"/vp/h");
 }
 
-/** The handle of `path` into `h`, or fail `why`. */
+/** The handle of `path` into `h`, of Linux's FILEID_INO64_GEN, or fail
+ * `why`. */
 static void handle_of(const char *path, struct fhandle *h, const char *why)
 {
     int mnt;
 
     h->bytes = sizeof(h->f);
-    if (syscall5(SYS_NAME_TO_HANDLE_AT, AT_FDCWD, (long)path, (long)h, (long)&mnt, 0) != 0) {
+    if (syscall5(SYS_NAME_TO_HANDLE_AT, AT_FDCWD, (long)path, (long)h, (long)&mnt, 0) != 0 ||
+        h->type != 0x51) {
         fail(why);
     }
 }
