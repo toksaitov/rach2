@@ -489,16 +489,28 @@ static int venus_slot(struct vr *r, uint32_t ctx)
     return -1;
 }
 
-/** Create a context, of a capset when context_init chose one. */
+/**
+ * Create a context, of a capset when context_init chose one, and make
+ * vrend's context 0 current after it. vrend_create_context leaves the new
+ * context's GL context current without recording it, so the next switch
+ * to the context vrend last ran finds that context current and skips
+ * eglMakeCurrent: its commands would then run in the new GL context, which
+ * has none of the vertex arrays it made, so its draw fails with
+ * GL_INVALID_OPERATION. QEMU makes context 0 current before every command;
+ * once after each create is enough, and spares a context switch, which
+ * flushes, for each submission.
+ */
 static int op_ctx_create(void *c, uint32_t ctx, uint32_t capset, uint32_t nlen, const char *name)
 {
     struct vr *r = c;
     int err, i;
 
     if (capset == 0) {
-        return resp(virgl_renderer_context_create(ctx, nlen, name));
+        err = resp(virgl_renderer_context_create(ctx, nlen, name));
+    } else {
+        err = resp(virgl_renderer_context_create_with_flags(ctx, capset, nlen, name));
     }
-    err = resp(virgl_renderer_context_create_with_flags(ctx, capset, nlen, name));
+    virgl_renderer_force_ctx_0();
     if (err == 0 && capset == CAPSET_VENUS && (i = venus_slot(r, 0)) >= 0) {
         r->venus[i] = ctx;
     }
