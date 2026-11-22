@@ -3379,6 +3379,59 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return resolve_path(start, path, flags & ~VFS_WALK_CREATE, out, leaf, leafcap, 0);
 }
 
+/** One attempt of `vfs_resolve_cwd` checked by `wc`: hold the pair in
+ * `ref`, with the namespace lock of a serialised type, and make the last
+ * check with the keep of a KRFFS answer (`walk_keep_take`). 0, 1 when the
+ * pair is NULL, WALK_FULL when the pair or the sequence moved, which lets
+ * go of all it took, or an error. */
+static int cwd_take(int flags, struct vfs_ref *ref, const struct walk_check *wc)
+{
+    struct fs_struct *fs = current_proc->fs;
+    int rc;
+
+    if ((ref->mnt = fs->cwd_mnt) == NULL) {
+        return 1;
+    }
+    rc = vfs_enter(ref->mnt);
+    if (rc != 0) {
+        return rc;
+    }
+    walk_lock(ref->mnt, 1);
+    rc = WALK_FULL;
+    if (ref->mnt == fs->cwd_mnt) {
+        ref->node = fs->cwd_node;
+        vfs_ref_hold(ref);
+        rc = walk_keep_take(ref, 1, wc);
+        if (rc == 0) {
+            if (!(flags & VFS_WALK_LOCK)) {
+                vfs_walk_unlock(ref->mnt);
+            }
+            return 0;
+        }
+        walk_unlock(ref->mnt, 1);
+        vfs_ref_release(ref);
+        return rc;
+    }
+    walk_unlock(ref->mnt, 1);
+    vfs_leave(ref->mnt);
+    return rc;
+}
+
+int vfs_resolve_cwd(int flags, struct vfs_ref *ref)
+{
+    struct walk_check wc;
+    int rc;
+
+    do {
+        rc = walk_check_begin(&wc, NULL);
+        if (rc != 0) {
+            return rc;
+        }
+        rc = cwd_take(flags, ref, &wc);
+    } while (rc == WALK_FULL);
+    return rc;
+}
+
 /**
  * Put in the path page `out` the anchor's real path joined to `path`, for a
  * walk through an anchor of a type that takes the rest of a path: under

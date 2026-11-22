@@ -804,6 +804,19 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
                 char *leaf, uint32_t leafcap);
 
 /**
+ * Hold the calling thread's working directory by its pair, for a call on
+ * an empty pathname, as a walk of "." would: `flags` takes VFS_WALK_LOCK
+ * only, and the pair is held, its sequence checked, its stamp left with the
+ * thread (`vfs_stamp_set`) and a KRFFS answer kept as `vfs_resolve` does,
+ * so that the call checks its change against it as against a walk's. The
+ * caller releases `ref` with `vfs_ref_release`. 0; 1, with nothing held,
+ * when the pair is NULL and the caller walks the working directory's path;
+ * or the errors of `vfs_resolve`'s start, -EINTR with the call marked to
+ * run again among them. May sleep.
+ */
+int vfs_resolve_cwd(int flags, struct vfs_ref *ref);
+
+/**
  * Make `ref->node` the node a keep of the calling thread's walks has now,
  * when one keeps it: a KRFFS answer that a relocation moved since the walk
  * (`struct walk_keep` in vfs.c), for a caller that let go of the namespace

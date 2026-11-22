@@ -11371,31 +11371,16 @@ static int32_t leaf_dir_check(const struct vfs_ref *parent, const char *leaf)
     return rc;
 }
 
-/** Hold the working directory for an empty pathname. Take a serialised
- * mount's lock before reading a movable node. A shared cwd may have
- * changed mounts during that wait. The caller releases the walk as usual. */
+/** Hold the working directory for an empty pathname by its pair
+ * (`vfs_resolve_cwd`), or walk its path when the pair is NULL. The caller
+ * releases the walk as usual. */
 static int32_t resolve_cwd(int walk, struct vfs_ref *ref)
 {
-    struct fs_struct *fs = current_proc->fs;
     char *path;
-    int rc;
+    int rc = vfs_resolve_cwd(walk, ref);
 
-    while ((ref->mnt = fs->cwd_mnt) != NULL) {
-        rc = vfs_enter(ref->mnt);
-        if (rc != 0)
-            return rc;
-        if (ref->mnt->type->ns_serialised)
-            vfs_ns_lock(ref->mnt);
-        if (ref->mnt == fs->cwd_mnt) {
-            ref->node = fs->cwd_node;
-            vfs_ref_hold(ref);
-            if (!(walk & VFS_WALK_LOCK))
-                vfs_walk_unlock(ref->mnt);
-            return 0;
-        }
-        vfs_walk_unlock(ref->mnt);
-        vfs_leave(ref->mnt);
-    }
+    if (rc != 1)
+        return rc;
     path = path_buf_get();
     if (!path)
         return -ENOMEM;
