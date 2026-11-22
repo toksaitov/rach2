@@ -1686,8 +1686,9 @@ static int names_resource(uint32_t type)
 }
 
 /** Read the header and first body word of the control queue's chain at
- * `head` into `a`; 0, or -1 for a chain the in-order pass must judge. */
-static int ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
+ * `head` into `a`, which keeps the head; a chain that breaks the rules is
+ * marked `bad`, for the in-order pass to judge. */
+static void ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
 {
     const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
     uint8_t buf[sizeof(struct vd_hdr) + 4];
@@ -1695,17 +1696,19 @@ static int ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
     struct vd_hdr h;
     struct vgs_chain c;
 
+    memset(a, 0, sizeof(*a));
+    a->head = head;
     if (vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c) != VGS_OK) {
-        return -1;
+        a->bad = 1;
+        return;
     }
     for (i = 0; i < c.nread && off < sizeof(buf); i++) {
         k = c.seg[i].len < sizeof(buf) - off ? c.seg[i].len : (uint32_t)sizeof(buf) - off;
         region_get(d, c.seg[i].addr, buf + off, k);
         off += k;
     }
-    memset(a, 0, sizeof(*a));
     if (off < sizeof(h)) {
-        return 0;
+        return;
     }
     memcpy(&h, buf, sizeof(h));
     a->type = h.type;
@@ -1713,7 +1716,6 @@ static int ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
     if (off == sizeof(buf) && names_resource(h.type)) {
         memcpy(&a->id, buf + sizeof(h), sizeof(a->id));
     }
-    return 0;
 }
 
 /**
@@ -1726,8 +1728,11 @@ static int ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
  * before them and the ask's answer goes out at once, as Linux's guest has
  * its pages at the create; a fenced create's answer would signal every
  * earlier fence of its timeline. An id still in the table, as through an
- * UNREF not yet served, keeps its order. Returns VGS_OK or a transport
- * fault.
+ * UNREF not yet served, keeps its order. The create goes ahead only while
+ * the table has room for it without the UNREFs queued before it, so that
+ * it fails ahead only where it would fail in order; and nothing goes ahead
+ * of a chain that breaks the rules, which faults the queue. Returns VGS_OK
+ * or a transport fault.
  */
 static int ahead_backing(struct vd *d, uint16_t pos)
 {
@@ -1736,12 +1741,16 @@ static int ahead_backing(struct vd *d, uint16_t pos)
     uint16_t at, create = 0;
     int found = 0, err;
 
-    if (id == 0 || (d->ahead[pos & mask].flags & VD_FLAG_FENCE) != 0 || find_res(d, id, 0)) {
+    if (id == 0 || (d->ahead[pos & mask].flags & VD_FLAG_FENCE) != 0 || find_res(d, id, 0) ||
+        d->t.count[VGS_OBJ_RESOURCE] >= d->t.limits.max_resources) {
         return VGS_OK;
     }
     for (at = d->last[VGS_QUEUE_CONTROL]; at != pos; at++) {
         const struct vd_ahead *a = &d->ahead[at & mask];
 
+        if (a->bad) {
+            return VGS_OK;
+        }
         if (a->done || a->id != id || !names_resource(a->type)) {
             continue;
         }
@@ -1755,11 +1764,11 @@ static int ahead_backing(struct vd *d, uint16_t pos)
     if (!found) {
         return VGS_OK;
     }
-    if ((err = serve_chain(d, VGS_QUEUE_CONTROL, vgs_avail_head(d->base, q, create))) != VGS_OK) {
+    if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[create & mask].head)) != VGS_OK) {
         return err;
     }
     d->ahead[create & mask].done = 1;
-    if ((err = serve_chain(d, VGS_QUEUE_CONTROL, vgs_avail_head(d->base, q, pos))) != VGS_OK) {
+    if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[pos & mask].head)) != VGS_OK) {
         return err;
     }
     d->ahead[pos & mask].done = 1;
@@ -1767,10 +1776,15 @@ static int ahead_backing(struct vd *d, uint16_t pos)
 }
 
 /**
- * Look at the control queue's entries up to `idx` that no look has read,
- * and serve each first backing ask ahead of the entries before it where
- * `ahead_backing` allows, so that its answer does not wait for the
- * submissions queued before it. Returns VGS_OK or a transport fault.
+ * Consume the control queue's avail entries up to `idx`, in order, as far
+ * as a queue's length past the in-order pass, and serve each first backing
+ * ask ahead of the entries before it where `ahead_backing` allows, so that
+ * its answer does not wait for the submissions queued before it. An entry
+ * is consumed, its head kept in `ahead`, before any later one is served,
+ * so that the avail entries not consumed are those of chains the guest has
+ * no answer for: a guest that reuses the descriptors and ring places of
+ * the entries served ahead cannot pass the ring's length
+ * (`vgs_avail_read`). Returns VGS_OK or a transport fault.
  */
 static int ahead(struct vd *d, uint16_t idx)
 {
@@ -1779,14 +1793,9 @@ static int ahead(struct vd *d, uint16_t idx)
     struct vd_ahead *a;
     int err;
 
-    if ((uint16_t)(d->seen - last) > (uint16_t)(idx - last)) {
-        d->seen = last;
-    }
-    for (; d->seen != idx; d->seen++) {
+    for (; d->seen != idx && (uint16_t)(d->seen - last) < q->size; d->seen++) {
         a = &d->ahead[d->seen & (q->size - 1)];
-        if (ahead_read(d, vgs_avail_head(d->base, q, d->seen), a) != 0) {
-            break;
-        }
+        ahead_read(d, vgs_avail_head(d->base, q, d->seen), a);
         if (a->type == VGS_CMD_BACKING && d->seen != last &&
             (err = ahead_backing(d, d->seen)) != VGS_OK) {
             return err;
@@ -1796,50 +1805,70 @@ static int ahead(struct vd *d, uint16_t idx)
 }
 
 /**
- * Serve one queue's chains available at the start, the control queue's
- * backing asks looked ahead at first and after each command, those that
- * came meanwhile among them (`ahead`), and let the renderer poll between
- * two control commands (`poll`). Returns VGS_OK, or the transport fault that
- * puts the device in NEEDS_RESET.
+ * Serve the control queue's chains consumed at the start (`ahead`), in
+ * order but for those served ahead, with the backing asks that come
+ * meanwhile looked ahead at after each command, and let the renderer poll
+ * between two commands (`poll`). Returns VGS_OK, or the transport fault
+ * that puts the device in NEEDS_RESET.
  */
-static int serve(struct vd *d, uint32_t qi)
+static int serve_control(struct vd *d)
 {
-    const struct vgs_queue *q = &d->drv.queue[qi];
-    uint16_t idx, more, pos;
-    int err;
+    const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
+    uint16_t idx, end, pos;
+    struct vd_ahead *a;
+    uint32_t head;
+    int err, done;
 
-    if (q->size == 0) {
-        return VGS_OK;
-    }
-    if ((err = vgs_avail_read(d->base, q, d->last[qi], &idx)) != VGS_OK) {
+    if ((err = vgs_avail_read(d->base, q, d->seen, &idx)) != VGS_OK ||
+        (err = ahead(d, idx)) != VGS_OK) {
         return err;
     }
-    if (qi == VGS_QUEUE_CONTROL && (err = ahead(d, idx)) != VGS_OK) {
-        return err;
-    }
-    while (d->last[qi] != idx) {
-        pos = d->last[qi]++;
-        if (qi == VGS_QUEUE_CONTROL) {
-            struct vd_ahead *a = &d->ahead[pos & (q->size - 1)];
-            int done = a->done;
-
-            memset(a, 0, sizeof(*a));
-            if (done) {
-                continue;
-            }
-        }
-        if ((err = serve_chain(d, qi, vgs_avail_head(d->base, q, pos))) != VGS_OK) {
-            return err;
-        }
-        if (qi != VGS_QUEUE_CONTROL) {
+    for (end = d->seen; d->last[VGS_QUEUE_CONTROL] != end;) {
+        pos = d->last[VGS_QUEUE_CONTROL]++;
+        a = &d->ahead[pos & (q->size - 1)];
+        done = a->done;
+        head = a->head;
+        memset(a, 0, sizeof(*a));
+        if (done) {
             continue;
+        }
+        if ((err = serve_chain(d, VGS_QUEUE_CONTROL, head)) != VGS_OK) {
+            return err;
         }
         if (d->ops->poll) {
             d->ops->poll(d->cookie);
         }
         /* Asks that came during the pass go before its remaining entries. */
-        if ((err = vgs_avail_read(d->base, q, d->last[qi], &more)) != VGS_OK ||
-            (err = ahead(d, more)) != VGS_OK) {
+        if ((err = vgs_avail_read(d->base, q, d->seen, &idx)) != VGS_OK ||
+            (err = ahead(d, idx)) != VGS_OK) {
+            return err;
+        }
+    }
+    return VGS_OK;
+}
+
+/**
+ * Serve one queue's chains available at the start: the control queue's as
+ * `serve_control` says, the cursor queue's in order. Returns VGS_OK, or the
+ * transport fault that puts the device in NEEDS_RESET.
+ */
+static int serve(struct vd *d, uint32_t qi)
+{
+    const struct vgs_queue *q = &d->drv.queue[qi];
+    uint16_t idx;
+    int err;
+
+    if (q->size == 0) {
+        return VGS_OK;
+    }
+    if (qi == VGS_QUEUE_CONTROL) {
+        return serve_control(d);
+    }
+    if ((err = vgs_avail_read(d->base, q, d->last[qi], &idx)) != VGS_OK) {
+        return err;
+    }
+    while (d->last[qi] != idx) {
+        if ((err = serve_chain(d, qi, vgs_avail_head(d->base, q, d->last[qi]++))) != VGS_OK) {
             return err;
         }
     }

@@ -214,13 +214,17 @@ struct vd_pending {
 };
 
 /*
- * A control queue entry that the look-ahead has read (`ahead` in device.c),
- * by its place in the avail ring, until the in-order pass reaches it.
+ * A control queue entry that the look-ahead has consumed (`ahead` in
+ * device.c), by its place in the avail ring, until the in-order pass
+ * reaches it. Its head is kept here, since a guest that has its answers
+ * for entries served ahead may reuse their descriptors and ring places.
  */
 struct vd_ahead {
+    uint32_t head;  /* the chain's head, as the avail ring gave it */
     uint32_t type;  /* the command's type, 0 for a chain too short */
     uint32_t flags; /* its header's flags */
     uint32_t id;    /* the resource its body names first, 0 for none */
+    uint32_t bad;   /* 1 for a chain that breaks the rules: the in-order pass judges it */
     uint32_t done;  /* 1 once it was served ahead of its turn */
 };
 
@@ -241,9 +245,9 @@ struct vd {
     struct vgs_table t;
     struct vgs_obj obj[VD_OBJS];
     struct vd_res res[VD_OBJS];
-    uint16_t last[VGS_QUEUES]; /* avail entries consumed */
+    uint16_t last[VGS_QUEUES]; /* avail entries served in order */
     uint16_t used[VGS_QUEUES]; /* used entries published */
-    uint16_t seen;             /* control queue avail entries looked ahead at */
+    uint16_t seen;             /* control queue avail entries consumed, at most a queue past last */
     struct vd_ahead ahead[VGS_QUEUE_MAX];
     pthread_mutex_t lock;
     uint32_t scanout[VD_SCANOUTS]; /* each scanout's resource, or 0 */
