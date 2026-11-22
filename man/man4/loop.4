@@ -70,12 +70,15 @@ and
 .Er EBUSY ,
 since the four are made at boot.
 .It Dv LOOP_SET_FD , Dv LOOP_CONFIGURE
-Attach the file open on the descriptor given, by the path
+Attach the file open on the descriptor given, the description's own
+file whatever its path names now, an unlinked one included, as Linux
+attaches it; the path
 .Pa /proc/self/fd
-gives it, read-only unless both that descriptor and the node's are open
-for writing.
+gives it is only what the device reports.
+The attachment is read-only unless both that descriptor and the node's
+are open for writing.
 A writable attachment holds the file open for writing through the mount
-the path reaches it by, as Linux's loop does: it is
+the descriptor was opened through, as Linux's loop does: it is
 .Er EROFS
 through a read-only mount,
 .Er ETXTBSY

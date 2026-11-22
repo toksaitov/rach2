@@ -243,9 +243,11 @@ block_device_t *loop_node_device(int index, int write, int32_t *err)
 }
 
 /** No file can be attached to a loop device: -ENXIO. */
-int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
+int loop_attach_file(int index, const struct open_file *ofd, const char *path, int writable,
+                     uint32_t flags)
 {
     (void)index;
+    (void)ofd;
     (void)path;
     (void)writable;
     (void)flags;

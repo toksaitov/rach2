@@ -148,13 +148,21 @@ int loop_control_write(const char *buffer, uint32_t count);
 int loop_info_flags(const uint8_t *info, uint32_t *flags);
 
 /**
- * Attach `path`, the file a descriptor of the caller has open, to device
- * `index`, as LOOP_SET_FD and LOOP_CONFIGURE do: `writable` when both the
- * descriptor and the device's node are open for writing and `flags` does not
- * ask for LO_FLAGS_READ_ONLY, and cleared at the last close and unmount with
- * LO_FLAGS_AUTOCLEAR. 0, or what `loop_attach` answers.
+ * Attach the file the description `ofd` of a descriptor of the caller is
+ * open on to device `index`, as LOOP_SET_FD and LOOP_CONFIGURE do: by the
+ * description's mount and node, as Linux attaches the descriptor's file,
+ * so that a file renamed, replaced or unlinked since its open is still the
+ * one attached; `path`, its name as /proc/self/fd gives it, is only what
+ * the attachment reports. `writable` when both the descriptor and the
+ * device's node are open for writing and `flags` does not ask for
+ * LO_FLAGS_READ_ONLY, and cleared at the last close and unmount with
+ * LO_FLAGS_AUTOCLEAR. The caller holds a reference to `ofd` throughout.
+ * 0, -EBADF for a description of no file of a mounted type, or what
+ * `loop_attach` answers.
  */
-int loop_attach_file(int index, const char *path, int writable, uint32_t flags);
+struct open_file;
+int loop_attach_file(int index, const struct open_file *ofd, const char *path, int writable,
+                     uint32_t flags);
 
 /**
  * A loop ioctl `request` on device `index`'s node other than the two that

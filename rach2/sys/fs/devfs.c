@@ -6,6 +6,7 @@
  */
 
 #include "../klog.h"
+#include "../syscall.h"
 #include "devfs.h"
 #include "procfs.h"
 #include "synthfs.h"
@@ -1105,21 +1106,21 @@ static int32_t loop_node_write(fd_entry_t *e, const char __user *out, uint32_t c
 
 /**
  * Linux's loop ioctls on a device's node. LOOP_SET_FD and LOOP_CONFIGURE
- * attach the file a descriptor of the caller has open, named by the path
- * `/proc/self/fd` gives it, writable when both descriptors are open for
+ * attach the file a descriptor of the caller has open, by its description
+ * (`loop_attach_file`), reported under the path `/proc/self/fd` gives it,
+ * cut to LOOP_PATH_MAX, writable when both descriptors are open for
  * writing; the rest are `loop_ioctl`'s, and a request that is not a loop
  * one is the disk ioctls' of every device node. The two are -EPERM for a
  * caller that is not privileged, -EFAULT, -EINVAL for a block size or a
- * flag they do not take, -EBADF for a descriptor not open on a file,
- * -ENAMETOOLONG for a path too long to attach, or `loop_attach_file`'s
- * error.
+ * flag they do not take, -EBADF for a descriptor not open on a file, or
+ * `loop_attach_file`'s error.
  */
 static int32_t loop_node_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint8_t config[LOOP_CONFIG_SIZE];
-    char path[256];
+    char path[LOOP_PATH_MAX];
     uint32_t fd = (uint32_t)arg, flags = 0, block_size = 0;
-    fd_entry_t *file;
+    fd_entry_t file;
     int32_t rc;
     int len;
 
@@ -1141,19 +1142,22 @@ static int32_t loop_node_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
             return -EINVAL;
         }
     }
-    file = fd_get(current_proc->fds, (int)fd);
-    if (!file || file->type != FD_TYPE_FILE) {
+    if (fd_peek_hold(current_proc->fds, (int)fd, &file) != 0) {
         return -EBADF;
     }
-    len = procfs_readlink_fd((int)current_proc->pid, (int)fd, path, (int)sizeof(path));
+    rc = file.type == FD_TYPE_FILE && file.ofd ? 0 : -EBADF;
+    len =
+        rc == 0 ? procfs_readlink_fd((int)current_proc->pid, (int)fd, path, (int)sizeof(path)) : 0;
     if (len < 0) {
-        return len;
+        len = 0; /* the name is only reported; the file is the description's */
     }
-    if (len >= LOOP_PATH_MAX) {
-        return -ENAMETOOLONG;
+    path[len < (int)sizeof(path) ? len : (int)sizeof(path) - 1] = '\0';
+    if (rc == 0) {
+        rc = loop_attach_file(devfs_loop_index(e->dev), file.ofd, path,
+                              (file.flags & FD_FLAG_WRITE) && (e->flags & FD_FLAG_WRITE), flags);
     }
-    return loop_attach_file(devfs_loop_index(e->dev), path,
-                            (file->flags & FD_FLAG_WRITE) && (e->flags & FD_FLAG_WRITE), flags);
+    fd_peek_drop(&file);
+    return rc;
 }
 
 /** The last reference of a description of a loop device's node closed. */

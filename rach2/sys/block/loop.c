@@ -677,6 +677,35 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
 }
 
 /**
+ * Take the file the description `ofd` is open on, for an attach by
+ * descriptor, as `loop_resolve` takes a path's: its mount entered, its node
+ * held and locked (`vfs_node_lock`). The node is read again under the lock,
+ * since a KRFFS relocation moves it and the description with it under that
+ * lock (`fd_ofd_repoint`), so that the node attached is the one the
+ * descriptor has, whatever its path names now or whether any does. 0,
+ * -EBADF for a description of no file of a mounted type, or `vfs_enter`'s
+ * error.
+ */
+static int loop_take_desc(const struct open_file *ofd, struct vfs_ref *ref)
+{
+    int rc;
+
+    if (!ofd->vmnt || !ofd->vnode) {
+        return -EBADF;
+    }
+    ref->mnt = ofd->vmnt;
+    rc = vfs_enter(ref->mnt);
+    if (rc != 0) {
+        return rc;
+    }
+    ref->node = ofd->vnode;
+    vfs_node_lock(ref);
+    ref->node = ofd->vnode;
+    vfs_ref_hold(ref);
+    return 0;
+}
+
+/**
  * Sync the file just opened as `handle`, through the attachment's cursor
  * `seen` into its file system's write-back errors, then check again, under
  * the mount's namespace lock, that its length is whole sectors and that it
@@ -802,7 +831,10 @@ static int loop_takeable(struct vfs_ref *ref, struct vfs_stat *st)
  * operation in progress is given back, as an open gives it back: what the
  * attachment keeps is the hold and the description, released at the detach.
  */
-int loop_attach(int index, const char *path, int writable)
+/** `loop_attach`, of the file the description `ofd` is open on when it is
+ * not NULL (`loop_take_desc`), `path` then only the name the attachment
+ * reports, and of the file `path` names otherwise (`loop_resolve`). */
+static int loop_attach_from(int index, const char *path, const struct open_file *ofd, int writable)
 {
     struct vfs_ref ref;
     struct vfs_stat st;
@@ -853,7 +885,7 @@ int loop_attach(int index, const char *path, int writable)
         }
     }
 
-    rc = loop_resolve(path, &ref);
+    rc = ofd ? loop_take_desc(ofd, &ref) : loop_resolve(path, &ref);
     if (rc != 0) {
         loop_unclaim(loop);
         fd_ofd_unref(wres);
@@ -900,6 +932,11 @@ int loop_attach(int index, const char *path, int writable)
     klog(KLOG_INFO, "loop", "loop%d: %s, %u sectors, %s", index, loop->path,
          (uint32_t)(st.size / BLOCK_SECTOR_SIZE), loop->writable ? "read-write" : "read-only");
     return index;
+}
+
+int loop_attach(int index, const char *path, int writable)
+{
+    return loop_attach_from(index, path, NULL, writable);
 }
 
 void loop_rename(int index, const char *path)
@@ -1120,9 +1157,10 @@ int loop_info_flags(const uint8_t *info, uint32_t *flags)
     return encrypt != 0 ? -EINVAL : 0;
 }
 
-int loop_attach_file(int index, const char *path, int writable, uint32_t flags)
+int loop_attach_file(int index, const struct open_file *ofd, const char *path, int writable,
+                     uint32_t flags)
 {
-    int rc = loop_attach(index, path, writable && !(flags & LO_FLAGS_READ_ONLY));
+    int rc = loop_attach_from(index, path, ofd, writable && !(flags & LO_FLAGS_READ_ONLY));
 
     if (rc < 0) {
         return rc;
