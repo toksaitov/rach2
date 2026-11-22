@@ -245,23 +245,30 @@ static void vgpushm_kept_work(struct work_struct *work)
  * @file: the file
  * @offset: the first byte, page-aligned
  *
- * Return: 0, -EINVAL past the page that holds the file's end, or the error
- * of reading a page.
+ * The pages are allocated as i915 allocates its objects' pages, with
+ * __GFP_RETRY_MAYFAIL: an allocation that reclaim cannot meet fails with
+ * -ENOMEM, which the backend answers as a refusal, where the file's own
+ * mask would wake the OOM killer and stall the VM, and with it every
+ * answer the driver waits for, until a victim's exit frees memory.
+ *
+ * Return: 0, -EINVAL past the page that holds the file's end, -ENOMEM, or
+ * the error of reading a page.
  */
 static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 offset)
 {
     struct address_space *mapping = file->f_mapping;
+    gfp_t gfp = mapping_gfp_mask(mapping) | __GFP_RETRY_MAYFAIL | __GFP_NOWARN;
     struct page *page;
     unsigned long i;
 
     if (offset + ((u64)rec->npages << PAGE_SHIFT) >
         round_up((u64)i_size_read(file_inode(file)), PAGE_SIZE))
         return -EINVAL;
-    rec->pages = kvcalloc(rec->npages, sizeof(*rec->pages), GFP_KERNEL);
+    rec->pages = kvcalloc(rec->npages, sizeof(*rec->pages), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
     if (!rec->pages)
         return -ENOMEM;
     for (i = 0; i < rec->npages; i++) {
-        page = shmem_read_mapping_page(mapping, (pgoff_t)(offset >> PAGE_SHIFT) + i);
+        page = shmem_read_mapping_page_gfp(mapping, (pgoff_t)(offset >> PAGE_SHIFT) + i, gfp);
         if (IS_ERR(page))
             return PTR_ERR(page);
         rec->pages[i] = page;
@@ -361,7 +368,7 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
         return -ENOMEM;
     rec->npages = req.size >> PAGE_SHIFT;
     rec->epoch = req.epoch;
-    rec->phys = kvcalloc(rec->npages, sizeof(*rec->phys), GFP_KERNEL);
+    rec->phys = kvcalloc(rec->npages, sizeof(*rec->phys), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
     if (!rec->phys) {
         err = -ENOMEM;
         goto fail;

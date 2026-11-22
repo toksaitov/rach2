@@ -738,26 +738,31 @@ static int op_pages(void *c, struct vd_pages *q)
  * resource's own storage is not judged so: the renderer's process may keep
  * what it frees, as llvmpipe's textures stay in the C library's heap, and
  * the counts would refuse the next resource that memory could hold. 1
- * also when the counts cannot be read.
+ * also when the VM has no /proc/meminfo or it lacks either count; 0 when
+ * it cannot be read for want of memory. MemAvailable reads 0, not less,
+ * when the free pages are down to the watermarks, which is no room.
  */
 static int mem_room(uint64_t size)
 {
     unsigned long long total = 0, avail = 0, kib;
+    int has_total = 0, has_avail = 0;
     char line[128];
     FILE *f = fopen("/proc/meminfo", "r");
 
     if (f == 0) {
-        return 1;
+        return errno != ENOMEM && errno != ENFILE && errno != EMFILE;
     }
     while (fgets(line, sizeof(line), f)) {
         if (sscanf(line, "MemTotal: %llu kB", &kib) == 1) {
             total = kib * 1024u;
+            has_total = 1;
         } else if (sscanf(line, "MemAvailable: %llu kB", &kib) == 1) {
             avail = kib * 1024u;
+            has_avail = 1;
         }
     }
     fclose(f);
-    return total == 0 || avail == 0 || size + total / 8u <= avail;
+    return !has_total || !has_avail || size + total / 8u <= avail;
 }
 
 /**
