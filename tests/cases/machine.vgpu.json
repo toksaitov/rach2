@@ -44,7 +44,7 @@
         "program": "vgpuprobe",
         "stdin": null,
         "role": "ordinary",
-        "privileges": "root, for the debugfs reset trigger",
+        "privileges": "root, for the debugfs files virtio_gpu_reset, virtio_gpu_hold and virtio_gpu_attachments",
         "isolation": [],
         "children": "reaped",
         "cleanup": "the probe removes what it made"
@@ -87,17 +87,17 @@
         },
         {
           "assertion_id": "shared",
-          "checks": "A second file imports the texture by PRIME, names it in a submission and closes its handle, and the first file still uploads, reads back and submits it",
+          "checks": "A texture both files hold and have named in a submission is attached to both their contexts in virtio_gpu_attachments, read with no draw between; the second file's close of its handle detaches its context alone, and with a second texture the first file's close detaches the first's alone; the first file still uploads, reads back and submits its texture, and the second still submits the other",
           "source": "program"
         },
         {
           "assertion_id": "busy-close",
-          "checks": "A texture closed while a mapping and a submission hold it stays in virtio_gpu_objects until both have ended, in either order, and then leaves it with no further call",
+          "checks": "A texture closed while a mapping and a submission hold it, the submission kept pending by virtio_gpu_hold, stays in virtio_gpu_objects until both have ended, the submission first and the mapping first, and then leaves it with no further call",
           "source": "program"
         },
         {
           "assertion_id": "unref",
-          "checks": "A texture named in a submission and closed at once leaves virtio_gpu_objects with no further call of the program; the time it took is printed",
+          "checks": "A texture named in a submission and closed while virtio_gpu_hold holds the answers stays in virtio_gpu_objects, and once the hold ends the answers' last reference frees it in the kernel's worker, with no further call of the program; the time it took is printed",
           "source": "program"
         },
         {
