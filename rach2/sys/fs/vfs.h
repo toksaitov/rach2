@@ -1306,7 +1306,9 @@ int vfs_do_umount(const char *target, int dir);
  * every mount below it, from the caller's mount namespace at once, however
  * busy they are; `dir` is as `vfs_do_umount` takes it. The caller's root and
  * the mounts below it stay, so that after pivot_root the old root can be
- * let go of while the new one, which was below it, is in use. A mount no
+ * let go of while the new one, which was below it, is in use. Resolve a
+ * target naming an outside working directory from its held reference,
+ * since a pivot can leave its recorded path unreachable. A mount no
  * live namespace sees any more is unmounted once nothing holds it
  * (`vfs_reap_detached`). A permanent mount may be taken from the view, and
  * stays mounted. Returns 0 or a negative errno: the resolver's errors;
