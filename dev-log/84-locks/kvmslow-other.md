@@ -89,17 +89,19 @@ The set driver now includes `/musl` in the helper's staging directories and keep
 
 The `syscall` case passes `rach2.notsc`. That switches off kvm-clock with the TSC and uses HPET. A small guest program made 40,000 explicit `clock_gettime` system calls for each of the fine and coarse monotonic clocks on two processors. The kernel's `clock_calls` count advanced by 40,000 for each group. On i686 the fine group took 0.207 s under TCG and 0.317 s under KVM with HPET. QMP reported 41,587 MMIO exits for the fine group and 214 for the coarse group on KVM. The fine interval counted 91 kernel interrupts and four context switches between the program's snapshots. With kvm-clock, the fine group took 0.021 s with zero MMIO exits, six interrupts and four context switches. On ia32 the HPET comparison was 0.095 s under TCG and 0.345 s and 41,576 MMIO exits under KVM, versus 0.015 s and zero MMIO exits with kvm-clock. The fine reading takes an emulated HPET access when the test asks for the fallback. The coarse group reads a value already held by the kernel. The test still exercises that fallback.
 
+On x86-64 the case also runs vdsomusl's `ordered` check, a million monotonic readings, which under `rach2.notsc` are system calls that each read the HPET. A hand boot of the case under KVM with QMP's vCPU statistics took 8.27 s for that check alone, and the run from the debug prompt to its end counted 1,085,889 MMIO exits and 2,766 port I/O exits in 8.66 s. The i686 kernel has no vDSO, so its case skips the check and took 1.71 s under KVM against 1.61 s under TCG. The cost is that of QEMU's emulated HPET under KVM, as a Linux guest on the HPET clock source has it; the case keeps the fallback it tests, and the suite stays under TCG.
+
 ## Fake API
 
-The case used to make a private copy of its 17,181,966,336-byte GNU disk before QEMU ran. Using the same sparse copy loop as the store, with a trusted source and no digest reread, the copy took 7.37 to 11.08 s and wrote 12.9 GB on the testing host. The store's qcow2 overlay took 0.001 to 0.004 s and allocated 196,608 bytes. From QEMU's start to init's sshd record took 1.19 s under KVM with the full copy and 0.74 s with the overlay, against 1.48 and 1.18 s under TCG. The overlay keeps the same backing image and gives the guest a private writable disk. The old pooled attempts do not give the preparation, SSH or application stage times, so the entire 70.34 s difference is open.
+The case used to make a private copy of its 17,181,966,336-byte GNU disk before QEMU ran. Using the same sparse copy loop as the store, with a trusted source and no digest reread, the copy took 7.37 to 11.08 s and wrote 12.9 GB on the testing host. The store's qcow2 overlay took 0.001 to 0.004 s and allocated 196,608 bytes. From QEMU's start to init's sshd record took 1.19 s under KVM with the full copy and 0.74 s with the overlay, against 1.48 and 1.18 s under TCG. The overlay keeps the same backing image and gives the guest a private writable disk. The overlay saved the copy, but run alone the case still took 83.40 and 81.58 s under KVM against 17.06 and 17.92 s under TCG, with 110.60 and 109.78 CPU s in its tree, nearly all of it QEMU's. A run with each output line timed put 78.44 s of it in the `setup` step, from the boot's end to the SSH assertion, against 11.10 s under TCG. That step logs in as root on the console, starts `etude-guest` there and sends it the 665,600-byte asset archive and two small files. The machine had the UART. A run through a QEMU wrapper that added the `kvm_run_exit` trace counted 2,721,406 port I/O exits for the whole case, about four for each byte sent, 2,654 MMIO exits and one other exit. With the machine on the virtio console the same trace counted 17,798 port I/O exits and 3,533 MMIO exits, and the case took 3.62 and 3.67 s under KVM against 8.22 s under TCG, its setup step 1.66 s against 2.73 s. The machine now declares the virtio console. The agent, acceptance and agent API cases boot the same GNU disk with the UART and send the same archive through the same setup.
 
 ## Style
 
-The `abi` case's compiler, linker and readelf run on WSL. They do not start QEMU. Its tree used 0.841 and 0.825 CPU s in the two i686 attempts despite a wall time difference of 13.360 s. The history does not record where the host spent the wait. A comparison of the two runs' style results therefore measures host conditions.
+The `abi` case's compiler, linker and readelf run on WSL. They do not start QEMU. Its tree used 0.841 and 0.825 CPU s in the two i686 attempts despite a wall time difference of 13.360 s. The history does not record where the host spent the wait. A comparison of the two runs' style results therefore measures host conditions. Run alone, `abi` took 0.49 s under both accelerators on i686 and 0.50 and 0.95 s on x86-64, and the suite 11.47 s under TCG against 11.28 s under KVM on i686 and 11.56 s against 11.57 s on x86-64.
 
 ## Authority and TinyCC
 
-With the authority case's ordinary AHCI disk and boot line, QEMU reached the debug prompt in 1.30, 1.35 and 1.33 s under TCG on i686, x86-64 and ia32. Under KVM it reached the prompt in 0.80 s on each. KVM counted 15,567 to 15,746 exits per boot, including 6,916 to 6,956 I/O exits and 5,613 to 5,681 MMIO exits. This bounds the isolated boot cost. The old ordinary authority cases that took 11.76 to 12.51 s each used less than 0.86 child-tree CPU s, and they overlapped machine scenarios for their whole attempts. The ordinary ia32 case on KVM took 1.65 s. The old records give no stage times to trace the excess wait.
+With the authority case's ordinary AHCI disk and boot line, QEMU reached the debug prompt in 1.30, 1.35 and 1.33 s under TCG on i686, x86-64 and ia32. Under KVM it reached the prompt in 0.80 s on each. KVM counted 15,567 to 15,746 exits per boot, including 6,916 to 6,956 I/O exits and 5,613 to 5,681 MMIO exits. This bounds the isolated boot cost. The old ordinary authority cases that took 11.76 to 12.51 s each used less than 0.86 child-tree CPU s, and they overlapped machine scenarios for their whole attempts. The ordinary ia32 case on KVM took 1.65 s. Run alone, each authority case took 1.28 to 1.38 s under KVM against 3.70 to 3.82 s under TCG on both architectures, so the old excess was the wait beside other cases.
 
 On TinyCC's IDE fixture, a separate boot timed the login prompt, the test account's login, one short C file written to `/tmp`, its static compile and execution, and `sync`. The figures are wall seconds.
 
@@ -112,8 +114,34 @@ On TinyCC's IDE fixture, a separate boot timed the login prompt, the test accoun
 | ia32 | TCG | 1.505 | 0.187 | 0.084 | 0.126 | 0.026 |
 | ia32 | KVM | 1.012 | 0.043 | 0.028 | 0.056 | 0.006 |
 
-The x86-64 KVM compile and execution had 5,005 port I/O exits and zero MMIO exits. The old x86-64 attempt took 11.49 s longer under KVM while using 6.60 fewer child-tree CPU seconds. The small compile and sync measurements do not reproduce that difference. The elapsed times of the original compile steps and their console waits are open.
+The x86-64 KVM compile and execution had 5,005 port I/O exits and zero MMIO exits. The old x86-64 attempt took 11.49 s longer under KVM while using 6.60 fewer child-tree CPU seconds. The small compile and sync measurements do not reproduce that difference, nor does the case run alone: 12.39 s under KVM against 21.21 s under TCG on i686, and 10.11 s against 13.14 s on x86-64. The old difference was the wait beside other cases.
 
-## Checks still due
+## Each suite alone
 
-The hand boots and historical records account for the main audio and noentropy costs and isolate the effect of HPET in the vDSO syscall case. They measure a disk preparation cost in fakeapi and leave the rest of its old excess time, the style ABI wait, the old authority wait and the full TinyCC case open. The seven isolated suite runs on both accelerators, followed by the changed suites on the ia32 profile, are required to close the task and decide which suites qualify for `tools/ci/kvm-suites`. The worker's instruction left those runs for a separate session.
+Each suite then ran alone at `task/5674`'s head, as `RACH2_QEMU_ACCEL=tcg` and then `kvm` with `ARCH=i686` and `ARCH=x86_64`, and audio, noentropy and vdso again as `RACH2_KERNEL=ia32 ARCH=i686`, with eight workers on the testing host. Every run passed. The figures are the sums of the case times, in seconds, from the runs' history; fakeapi's are at the console change, and its earlier figures are above.
+
+| Suite | Kernel | TCG | KVM |
+|---|---|---:|---:|
+| audio | i686 | 71.79 | 62.57 |
+| audio | x86-64 | 75.15 | 64.11 |
+| audio | ia32 | 72.16 | 64.69 |
+| noentropy | i686 | 6.18 | 5.22 |
+| noentropy | x86-64 | 6.49 | 5.16 |
+| noentropy | ia32 | 6.21 | 5.31 |
+| fakeapi | x86-64 | 8.22 | 3.62 |
+| vdso | i686 | 1.61 | 1.71 |
+| vdso | x86-64 | 6.18 | 11.82 |
+| vdso | ia32 | 2.87 | 9.51 |
+| authority | i686 | 7.50 | 2.65 |
+| authority | x86-64 | 7.56 | 2.66 |
+| style | i686 | 11.47 | 11.28 |
+| style | x86-64 | 11.56 | 11.57 |
+| tcc | i686 | 21.21 | 12.39 |
+| tcc | x86-64 | 13.14 | 10.11 |
+
+Each noentropy case took 1.24 to 1.42 s under KVM, and every audio case but `signal` took less time under KVM than under TCG. The ia32 vdso case runs the `ordered` check against the x86-64 kernel's 32-bit vDSO and has the x86-64 case's cost. audio, noentropy, fakeapi, authority, tcc and style are in `tools/ci/kvm-suites` on master, with these sums; vdso stays under TCG.
+
+## Audio's signal case
+
+`signal` took 5.51 and 5.54 s under KVM against 4.64 and 4.78 s under TCG. A hand boot with timestamps in `audioclientsmusl` put the difference in each of its three stops. Under KVM play printed the warning for the unbound key 0.51 s after it, and 0.72 s passed from Ctrl+C or SIGTERM to the next trial's start; under TCG these took 0.005 s and 0.21 s. Play reads keys and its abort flag in sox's flow callback, between writes to `/dev/dsp`, and each write carries sox's 8,192-byte buffer, 4,096 samples or 0.512 s of the trial's 8000 Hz mono file. Under KVM, sampling `/proc/PID/wchan` every 10 ms found play asleep in the write for 0.56 s at a time; under TCG it slept 12 to 215 ms at a time. The device side was alike under both accelerators: before each stop `/proc/audio` gave a delay of 54 to 66 ms and no underrun, and the HDA's interrupts came at 37 to 43 a second. A blocking write that waits until all its bytes fit, and a close that plays what is queued, are what OSS does on Linux. The case judges the stops by the kernel's ticks and passes under both.
+
