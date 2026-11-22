@@ -54,7 +54,7 @@ sample()
 } > "$out/samples"
 start=$(now_ms)
 sample
-LD_PRELOAD=$out/ioctlcount.so IOCTLCOUNT_FILE=$counts "$bin" -auto -fbo > "$out/log" 2>&1 &
+LD_PRELOAD=$out/ioctlcount.so IOCTLCOUNT_FILE=$counts IOCTLCOUNT_LOG=$out/calls "$bin" -auto -fbo > "$out/log" 2>&1 &
 pid=$!
 least=999999999
 while kill -0 "$pid" 2>/dev/null; do
@@ -71,6 +71,9 @@ done
 wait "$pid"
 status=$?
 end=$(now_ms)
+# The log's records end at the first that was never written.
+n=$(od -An -t u8 -w32 -v "$out/calls" | awk '$1 == 0 { exit } { n++ } END { print n + 0 }')
+truncate -s $((n * 32)) "$out/calls"
 sleep 2
 sample
 {

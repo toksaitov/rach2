@@ -7,7 +7,11 @@
  *   IOCTLCOUNT_FILE=/tmp/counts LD_PRELOAD=./ioctlcount.so PROGRAM
  *
  * The file holds IC_N unsigned 64-bit counters in the host's order, which a
- * sampler reads while the program runs (`od -An -t u8`). Mesa's virgl
+ * sampler reads while the program runs (`od -An -t u8`). With IOCTLCOUNT_LOG
+ * set, each counted call is also recorded in that file, as four unsigned
+ * 64-bit words: CLOCK_MONOTONIC's nanoseconds at its start, its duration in
+ * nanoseconds, its number and its result, the calls in the order they
+ * ended, up to IC_LOG_MAX of them; ioctllog.py reads it. Mesa's virgl
  * winsys reaches the kernel through libdrm's drmIoctl, which calls the C
  * library's ioctl, so wrapping that symbol sees every call.
  */
@@ -19,6 +23,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The counters, in the file's order. */
@@ -47,7 +52,12 @@ enum {
 #define NR_CREATE_BLOB      0x4a
 #define VIRTGPU_WAIT_NOWAIT 1u
 
+/* The most calls the log records, 64 MiB of records. */
+#define IC_LOG_MAX (2u << 20)
+
 static uint64_t ic_local[IC_N];
+static uint64_t (*ic_log)[4];
+static uint64_t ic_logged;
 static uint64_t *ic = ic_local;
 static int (*real_ioctl)(int, unsigned long, ...);
 
@@ -59,6 +69,15 @@ __attribute__((constructor)) static void ic_init(void)
     int fd;
 
     real_ioctl = (int (*)(int, unsigned long, ...))dlsym(RTLD_NEXT, "ioctl");
+    if ((path = getenv("IOCTLCOUNT_LOG")) != NULL && (fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644)) >= 0) {
+        if (ftruncate(fd, (off_t)IC_LOG_MAX * sizeof(*ic_log)) == 0) {
+            p = mmap(NULL, (size_t)IC_LOG_MAX * sizeof(*ic_log), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (p != MAP_FAILED)
+                ic_log = (uint64_t (*)[4])p;
+        }
+        close(fd);
+    }
+    path = getenv("IOCTLCOUNT_FILE");
     if (path == NULL || (fd = open(path, O_RDWR | O_CREAT, 0644)) < 0)
         return;
     if (ftruncate(fd, sizeof(ic_local)) == 0) {
@@ -74,6 +93,30 @@ static void ic_add(int which)
     __atomic_add_fetch(&ic[which], 1, __ATOMIC_RELAXED);
 }
 
+static uint64_t ic_now(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
+
+/** Record a counted call that began at `t0` in the log, if there is one. */
+static void ic_record(uint64_t t0, unsigned nr, int rc, int err)
+{
+    uint64_t i;
+
+    if (ic_log == NULL)
+        return;
+    i = __atomic_fetch_add(&ic_logged, 1, __ATOMIC_RELAXED);
+    if (i >= IC_LOG_MAX)
+        return;
+    ic_log[i][1] = ic_now() - t0;
+    ic_log[i][2] = nr;
+    ic_log[i][3] = (uint64_t)(int64_t)(rc < 0 ? -err : rc);
+    __atomic_store_n(&ic_log[i][0], t0, __ATOMIC_RELEASE);
+}
+
 /** The C library's ioctl, counting the calls of the kinds above. */
 int ioctl(int fd, unsigned long req, ...)
 {
@@ -81,12 +124,14 @@ int ioctl(int fd, unsigned long req, ...)
     void *arg;
     int rc, err;
     unsigned nr = (unsigned)(req & 0xff);
+    uint64_t t0;
 
     va_start(ap, req);
     arg = va_arg(ap, void *);
     va_end(ap);
     if (real_ioctl == NULL)
         real_ioctl = (int (*)(int, unsigned long, ...))dlsym(RTLD_NEXT, "ioctl");
+    t0 = ic_log != NULL ? ic_now() : 0;
     rc = real_ioctl(fd, req, arg);
     err = errno;
     if (((req >> 8) & 0xff) == DRM_TYPE) {
@@ -116,7 +161,11 @@ int ioctl(int fd, unsigned long req, ...)
         case NR_CREATE_BLOB:
             ic_add(IC_CREATE_BLOB);
             break;
+        default:
+            nr = 0;
         }
+        if (nr != 0)
+            ic_record(t0, nr, rc, err);
     }
     errno = err;
     return rc;

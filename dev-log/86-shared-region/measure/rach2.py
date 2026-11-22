@@ -9,12 +9,14 @@ Boots an overlay of build/x86_64/images/gnu-test.disk with
 build/x86_64/rach2/kernel, as the virgl suite's machine `gnu` boots it
 (tests/cases/machine.virgl.json): the disk on virtio, rach2.root=ext2, the
 virgl display of rach2/qemu_devices.sh, and a read-only ext2 data disk with
-stl.sh, ioctlcount.c and tests/graphics/guest-env.sh. It logs in as root
+stl.sh, ioctlcount.c and tests/graphics/guest-env.sh, and an empty ext2
+output disk of 64 MiB. It logs in as root
 at the serial console with the demo password, as graphics_scenario.c does,
 copies the data disk to /tmp/stl, runs stl.sh as the test account with the
-conformance class and GRAPHICS_DONE=1, prints its files, and powers the
-guest off. OUT gets `console`, the whole serial log, `samples`, `result`
-and `fdinfo`, stl.sh's files cut from it, and QEMU's `trace`. The run
+conformance class and GRAPHICS_DONE=1, copies its output directory to the
+output disk, which the host reads with debugfs, and powers the guest off. OUT gets
+`console`, the whole serial log, `stl-out`, stl.sh's files, and QEMU's
+`trace`. The run
 holds a claim of the site's ledger, as debian-ref.sh's does.
 """
 import os
@@ -118,6 +120,8 @@ def main():
             text=True).strip()
         subprocess.check_call([mke2fs, "-q", "-t", "ext2", "-F", "-b", "4096", "-d", data,
                                os.path.join(work, "data.ext2"), "8m"])
+        subprocess.check_call([mke2fs, "-q", "-t", "ext2", "-F", "-b", "4096",
+                               os.path.join(work, "out.raw"), "64m"])
         subprocess.check_call(["qemu-img", "create", "-q", "-f", "qcow2", "-F", "raw", "-b", DISK,
                                "-o", "cluster_size=65536", os.path.join(work, "gnu.qcow2")])
         trace = os.path.join(out, "trace")
@@ -131,6 +135,7 @@ def main():
                 "-kernel", KERNEL, "-append", "rach2.root=ext2",
                 "-drive", "file=%s,if=virtio,format=qcow2" % os.path.join(work, "gnu.qcow2"),
                 "-drive", "file=%s,if=virtio,format=raw,readonly=on" % os.path.join(work, "data.ext2"),
+                "-drive", "file=%s,if=virtio,format=raw" % os.path.join(work, "out.raw"),
                 "-serial", "stdio", "-monitor", "none",
                 "-trace", "events=" + os.path.join(HERE, "events"), "-D", trace,
                 "-msg", "timestamp=on"]
@@ -146,7 +151,7 @@ def main():
         c.send(open(PASSWORD).read().strip() + "\n")
         c.wait(r"# ", 120)
         _, st = c.run("mkdir -p /tmp/stl-data /tmp/stl && mount -t ext2 -o ro /dev/disk1 /tmp/stl-data"
-                      " && cp /tmp/stl-data/* /tmp/stl/ && umount /tmp/stl-data && chown -R test /tmp/stl",
+                      " && cp /tmp/stl-data/*.sh /tmp/stl-data/*.c /tmp/stl/ && umount /tmp/stl-data && chown -R test /tmp/stl",
                       120)
         if st:
             raise RuntimeError("the data disk could not be copied")
@@ -157,17 +162,23 @@ def main():
                       " . /tmp/stl/guest-env.sh && graphics_env > /tmp/stl/graphics.env &&"
                       " sh /tmp/stl/stl.sh /tmp/stl /tmp/stl/out'", 4 * 3600, quiet=600)
         print("rach2: stl.sh: status %d after %.0f s" % (st, time.time() - start))
-        for name in ("samples", "result", "fdinfo", "log"):
-            got, _ = c.run("echo '==== %s'; cat /tmp/stl/out/%s; echo '==== end'" % (name, name), 120)
-            m = re.search(r"\n==== %s\r?\n(.*?)==== end" % name, got, re.S)
-            with open(os.path.join(out, name), "w") as f:
-                f.write(m.group(1).replace("\r", "") if m else "")
+        _, st = c.run("cat /tmp/stl/out/result; mkdir -p /tmp/stl-o && mount -t ext2 /dev/disk2 /tmp/stl-o"
+                      " && cp -R /tmp/stl/out /tmp/stl-o/out && umount /tmp/stl-o && sync", 300)
+        if st:
+            raise RuntimeError("the output could not be written to its disk")
         c.run("cat /tmp/stl/graphics.env; dmesg | tail -n 60", 120)
         c.send("poweroff -f\n")
         try:
             proc.wait(60)
         except subprocess.TimeoutExpired:
-            pass
+            proc.terminate()
+            proc.wait(30)
+        # rdump puts the volume's /out in OUT/out, renamed to stl-out.
+        shutil.rmtree(os.path.join(out, "stl-out"), ignore_errors=True)
+        shutil.rmtree(os.path.join(out, "out"), ignore_errors=True)
+        debugfs = os.path.join(os.path.dirname(mke2fs), "debugfs")
+        subprocess.check_call([debugfs, "-R", "rdump /out " + out, os.path.join(work, "out.raw")])
+        os.rename(os.path.join(out, "out"), os.path.join(out, "stl-out"))
         return 0
     finally:
         if proc is not None and proc.poll() is None:
