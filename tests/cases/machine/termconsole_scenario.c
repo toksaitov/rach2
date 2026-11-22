@@ -9,7 +9,7 @@
  * kernel console's colors, tells its screen from the console's. The login
  * and the lines after it are typed with QMP's input-send-event, since COM1's
  * bytes do not reach the console while term holds the keyboard in K_MEDIUMRAW,
- * each key once QEMU's trace of the PS/2 queue's reads shows room for it;
+ * each key once QEMU's trace shows the keys before it taken off the queue;
  * each line writes what it found to /dev/console, which COM1 shows, with
  * its own CR and LF, since term leaves the console in raw mode. Once term
  * is killed the kernel console is back, and its login is taken on COM1.
@@ -99,20 +99,14 @@
 
 #define KILL_LINE "killall -KILL term"
 
-/* The bytes QEMU's PS/2 keyboard queues before it drops what comes after,
- * without a word. It queues one byte for each press or release, since the
- * i8042 translates to set 1, so a character is two bytes, four with Shift. */
-#define PS2_QUEUE 16
-
-/* The queue's bytes type leaves free, for bytes the guest asked for, such
- * as a command's acknowledgement, whose reads the trace counts as typed
- * bytes taken. */
-#define SLACK 4
-
 /* The characters type_line types before it waits for their echo. */
 #define CHUNK 3
 
-/* QEMU's trace event for each byte the i8042 takes off the PS/2 queue. */
+/* QEMU's trace events, each with its PS/2 device's address after it: one
+ * for each byte typed into the keyboard's queue, which only the keyboard
+ * logs, and one for each byte the i8042 takes off the keyboard's or the
+ * mouse's queue. */
+#define PUT_EVENT  "ps2_put_keycode"
 #define READ_EVENT "ps2_read_data"
 
 /* One attempt of a case. */
@@ -120,10 +114,13 @@ struct tc {
     struct net_case u;
     char password[128];
     unsigned long width, height; /* the framebuffer the kernel named */
-    char trace[4096];            /* QEMU's log of READ_EVENT; "" until on */
+    char trace[4096];            /* QEMU's log of the events; "" until on */
     long trace_at;               /* the log's bytes counted so far */
+    char keyboard[40];           /* the keyboard's address in the log, from
+                                    its first PUT_EVENT; "" before it */
     unsigned long sent;          /* the bytes typed since the trace began */
-    unsigned long taken;         /* the READ_EVENTs counted since then */
+    unsigned long taken;         /* the keyboard's READ_EVENTs since then,
+                                    at most `sent` */
 };
 
 /* A screen dump: its size, its colors up to PICTURE_COLORS + 1, whether it
@@ -357,12 +354,12 @@ static void key_event(char *out, size_t size, const char *sep, const char *key, 
  * when it succeeds; anything else fails the case. */
 static void hmp(struct tc *s, struct net_boot *b, const char *command)
 {
-    char args[4400];
+    char args[4400], text[4300];
     char *reply = NULL;
 
-    if (!net_ok(&s->u))
+    if (!net_ok(&s->u) || net_json_text(&s->u, command, text, sizeof(text)) == NULL)
         return;
-    snprintf(args, sizeof(args), "{\"command-line\": \"%s\"}", command);
+    snprintf(args, sizeof(args), "{\"command-line\": \"%s\"}", text);
     if (etude_qmp(b->m, "human-monitor-command", args, &reply) != ETUDE_OK || reply == NULL ||
         (strstr(reply, "\"return\": \"\"") == NULL && strstr(reply, "\"return\":\"\"") == NULL))
         net_fail(&s->u, "QMP's human-monitor-command %.40s: %.100s", command,
@@ -370,25 +367,49 @@ static void hmp(struct tc *s, struct net_boot *b, const char *command)
     free(reply);
 }
 
-/** Log QEMU's READ_EVENT at boot `b` into evidence `ps2-reads.trace`. Called
- * before the first key is typed, while the PS/2 queue is empty. */
+/** Log QEMU's PUT_EVENT and READ_EVENT at boot `b` into evidence
+ * `ps2-reads.trace`. Called before the first key is typed, while the
+ * keyboard's queue holds none of the bytes type counts. */
 static void trace_on(struct tc *s, struct net_boot *b)
 {
-    char command[4200];
+    char command[4200], file[2 * NET_HMP_ARG + 2];
 
-    if (net_path(&s->u, "ps2-reads.trace", s->trace, sizeof(s->trace)) == NULL)
+    if (net_path(&s->u, "ps2-reads.trace", s->trace, sizeof(s->trace)) == NULL ||
+        net_hmp_arg(&s->u, s->trace, file, sizeof(file)) == NULL)
         return;
-    snprintf(command, sizeof(command), "logfile %s", s->trace);
+    snprintf(command, sizeof(command), "logfile %s", file);
     hmp(s, b, command);
+    hmp(s, b, "trace-event " PUT_EVENT " on");
     hmp(s, b, "trace-event " READ_EVENT " on");
 }
 
-/** Add to s->taken the READ_EVENTs of the trace's lines that QEMU has
- * written whole since the last count, up to s->sent, since reads past the
- * bytes typed took bytes the guest asked for. */
+/** The address after `event` and a space in trace line `line`, into `out`
+ * of `size` bytes; 0 when the line is not that event's. */
+static int address(const char *line, const char *event, char *out, size_t size)
+{
+    const char *p = strstr(line, event);
+    size_t n = 0;
+
+    if (p == NULL || p[strlen(event)] != ' ')
+        return 0;
+    for (p += strlen(event) + 1; *p != '\0' && *p != ' ' && *p != '\n' && n + 1 < size; p++)
+        out[n++] = *p;
+    out[n] = '\0';
+    return n > 0;
+}
+
+/**
+ * Add to s->taken the keyboard's READ_EVENTs among the trace's lines that
+ * QEMU has written whole since the last count. The keyboard's address is
+ * its first PUT_EVENT's, which QEMU logs before it queues the byte, so no
+ * read of a typed byte comes before it; reads of the mouse's queue are not
+ * counted. A read of a byte the guest asked for, a command's acknowledgement,
+ * still counts as a typed byte taken, so `taken` stops at s->sent, and a
+ * read of a typed byte past that point takes such a count back.
+ */
 static void count_reads(struct tc *s)
 {
-    char line[512];
+    char line[512], at[sizeof(s->keyboard)];
     size_t n;
     FILE *f = fopen(s->trace, "r");
 
@@ -400,7 +421,10 @@ static void count_reads(struct tc *s)
             if (n == 0 || line[n - 1] != '\n')
                 break;
             s->trace_at += (long)n;
-            if (strstr(line, READ_EVENT) != NULL)
+            if (s->keyboard[0] == '\0' && address(line, PUT_EVENT, at, sizeof(at)))
+                strcpy(s->keyboard, at);
+            else if (s->keyboard[0] != '\0' && address(line, READ_EVENT, at, sizeof(at)) &&
+                     strcmp(at, s->keyboard) == 0)
                 s->taken++;
         }
     }
@@ -410,38 +434,46 @@ static void count_reads(struct tc *s)
 }
 
 /**
- * Wait until the PS/2 queue of boot `b` has room for `need` more bytes and
- * SLACK: of the s->sent bytes typed, the i8042 has taken all but
- * PS2_QUEUE - SLACK - `need` off the queue, as QEMU's trace counts them.
+ * Wait until the i8042 of boot `b` has taken off the keyboard's queue every
+ * byte typed, as QEMU's trace counts them. QEMU's PS/2 queue holds 16
+ * bytes and drops what comes after without a word. When the wait ends it
+ * holds the acknowledgements of keyboard commands the guest sent, and a
+ * typed byte for each read of one counted while typed bytes waited, until
+ * the guest empties the queue and count_reads takes those counts back. The
+ * guest sends commands only to set the LEDs, two bytes each, and to probe
+ * a keyboard that reconnects, so with the next character's four bytes the
+ * queue stays far short of full.
  */
-static void room(struct tc *s, struct net_boot *b, unsigned long need)
+static void drain(struct tc *s, struct net_boot *b)
 {
     struct timespec pause;
     char *reply = NULL;
+    int looked = 0;
 
     pause.tv_sec = 0;
     pause.tv_nsec = 10000000;
-    count_reads(s);
-    while (net_ok(&s->u) && s->sent + need + SLACK > s->taken + PS2_QUEUE) {
+    for (count_reads(s); net_ok(&s->u) && s->taken < s->sent; count_reads(s)) {
+        if (looked++) {
+            /* interval: poll QEMU's trace of the PS/2 reads every 10 ms */
+            nanosleep(&pause, NULL);
+        }
         if (etude_qmp(b->m, "query-status", NULL, &reply) != ETUDE_OK)
             net_fail(&s->u, "QMP's query-status was not answered: %s", reply != NULL ? reply : "");
         free(reply);
         reply = NULL;
-        /* interval: poll QEMU's trace of the PS/2 queue's reads every 10 ms */
-        nanosleep(&pause, NULL);
-        count_reads(s);
     }
 }
 
 /**
  * Type `text` at boot `b` with QMP's input-send-event, one command for each
  * character: the key's press and release, inside Shift's when the character
- * needs it, once the PS/2 queue has room for their bytes. The command puts
- * the events into the keyboard's queue at once. send-key releases a key from
- * a timer of QEMU's main loop instead, which a stall of that loop under host
- * load delays past the kernel's repeat delay of 250 ms, and the kernel then
- * repeats the key. QEMU answers a command once its bytes are queued, not
- * once the guest has read them, so only the trace tells when there is room.
+ * needs it, once the guest has taken every byte typed before. The command
+ * puts the events into the keyboard's queue at once. send-key releases a
+ * key from a timer of QEMU's main loop instead, which a stall of that loop
+ * under host load delays past the kernel's repeat delay of 250 ms, and the
+ * kernel then repeats the key. QEMU answers a command once its bytes are
+ * queued, not once the guest has read them, so only the trace tells when
+ * it has.
  */
 static void type(struct tc *s, struct net_boot *b, const char *text)
 {
@@ -456,7 +488,7 @@ static void type(struct tc *s, struct net_boot *b, const char *text)
             net_fail(&s->u, "no key types the character %d", *text);
             return;
         }
-        room(s, b, shift ? 4 : 2);
+        drain(s, b);
         if (!net_ok(&s->u))
             return;
         key_event(ev[0], sizeof(ev[0]), "", "shift", 1);
