@@ -1970,28 +1970,32 @@ static void keep_rows(unsigned magic)
 static void cwd_empty_undo(void)
 {
     syscall1(SYS_CHDIR, (long)"/");
-    syscall1(SYS_RMDIR, (long)"/vp/e/a");
-    syscall1(SYS_RMDIR, (long)"/vp/e/b");
+    syscall1(SYS_UNLINK, (long)"/vp/e/a");
+    syscall1(SYS_UNLINK, (long)"/vp/e/b");
     syscall1(SYS_RMDIR, (long)"/vp/e");
 }
 
 /**
  * A call on the working directory by an empty path ends when what a path
  * names has changed since the thread's last walk: fchownat of "" with
- * AT_EMPTY_PATH, after a walk and then a rename in /vp/e, takes the working
- * directory by its pair with a stamp of its own, which its change checks,
- * and does not go round on the stamp the walk before the rename left.
+ * AT_EMPTY_PATH, after a walk and then a file's rename in /vp/e, takes the
+ * working directory by its pair with a stamp of its own, which its change
+ * checks, and does not go round on the stamp the walk before the rename
+ * left.
  */
 static void cwd_empty_row(void)
 {
     const char *why = "fchownat of the working directory by an empty path, after a rename, ends";
     long uid = syscall0(SYS_GETUID);
+    long fd;
 
     fail_undo = cwd_empty_undo;
-    if (syscall2(SYS_MKDIR, (long)"/vp/e", 0755) != 0 ||
-        syscall2(SYS_MKDIR, (long)"/vp/e/a", 0755) != 0 ||
-        syscall1(SYS_CHDIR, (long)"/vp/e") != 0 || xstat("/vp/e/a") != 0 ||
-        syscall2(SYS_RENAME, (long)"/vp/e/a", (long)"/vp/e/b") != 0 ||
+    if (syscall2(SYS_MKDIR, (long)"/vp/e", 0755) != 0) {
+        fail(why);
+    }
+    fd = syscall3(SYS_OPEN, (long)"/vp/e/a", O_CREAT | O_WRONLY, 0644);
+    if (fd < 0 || syscall1(SYS_CLOSE, fd) != 0 || syscall1(SYS_CHDIR, (long)"/vp/e") != 0 ||
+        xstat("/vp/e/a") != 0 || syscall2(SYS_RENAME, (long)"/vp/e/a", (long)"/vp/e/b") != 0 ||
         syscall5(SYS_FCHOWNAT, AT_FDCWD, (long)"", uid, -1, AT_EMPTY_PATH) != 0) {
         fail(why);
     }
