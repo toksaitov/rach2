@@ -5634,7 +5634,9 @@ static int open_found(struct vfs_ref *ref, const struct vfs_stat *dir, int flags
  * took, a reserved descriptor and an opened description among them, and
  * runs again from the walk of the path as given, with a fresh count of
  * links, so that it never makes or cuts a file in a place its path no
- * longer names.
+ * longer names. The stamp of the walk of the path as given is `first`,
+ * which `walk_consume` points at from that walk until the open ends or runs
+ * again; the walks of the links it follows keep it.
  */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
@@ -5668,10 +5670,10 @@ again:
                                     : 0),
                            &ref, NULL, &entry, &dir);
     vfs_stamp_get(&st);
-    if (followed == 0) {
+    if (!current_proc->walk_consume) {
         first = st;
+        current_proc->walk_consume = &first;
     }
-    current_proc->walk_consume = &first;
     if (rc == 0 && (flags & O_TRUNC) && !ref.mnt->type->ns_serialised) {
         walk_gate(WALK_GATE_HANDOFF);
     }
@@ -5695,6 +5697,7 @@ again:
         if (rc == CALL_AGAIN) {
             name = named;
             followed = 0;
+            current_proc->walk_consume = NULL;
             goto again;
         }
         if (rc > 0) {
@@ -5724,6 +5727,7 @@ checked:
         name = named;
         flags = flags_in;
         followed = 0;
+        current_proc->walk_consume = NULL;
         goto again;
     }
 out:
