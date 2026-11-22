@@ -180,6 +180,14 @@ static uint32_t pc_fs_size;             /* backed size; 0 means no backing */
 
 static pc_read_fn pc_read;
 static pc_write_fn pc_write;
+static pc_flush_fn pc_flush; /* NULL: each write is on the medium */
+/* The backing's writes that have ended, which wraps, and the count when the
+ * last flush that succeeded began: while the two differ, a write may wait
+ * in the disk's cache, and `pc_sync` flushes. A write is counted only once
+ * it has ended, so that a flush begun while it is in flight, which need not
+ * cover it, is not taken for its flush. */
+static uint32_t pc_writes_sent;
+static uint32_t pc_writes_flushed;
 static void (*pc_failed)(int rc); /* told of each failed write, or NULL */
 /* The last failed write's answer while `pc_failed` is NULL, 0 for none,
  * given to the hook when it is installed: the boot writes the root before
@@ -503,13 +511,11 @@ static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run, uint32_t pa
  *
  * The dirty pages beside it on the backing go in the same write, up to
  * PC_RUN_PAGES (`pc_gather`), as Linux's writeback puts a file's contiguous
- * dirty pages in one bio (mm/page-writeback.c, `write_cache_pages`): the
- * ATA disk flushes its cache after each write, a synchronous write of the
- * disk's image file under an emulator, and a copy of a 6 MB file whose
- * walks of the ring evicted dirty pages one at a time, in faults with
- * interrupts off, flushed the disk 2610 times. A run of more than one page
- * is copied into `pc_run_buf` while no other writeback has it, and a page
- * alone is written from its frame.
+ * dirty pages in one bio (mm/page-writeback.c, `write_cache_pages`), so
+ * that the run costs the disk one command. The write leaves the run in the
+ * disk's cache, and the next `pc_sync` flushes it. A run of more than one
+ * page is copied into `pc_run_buf` while no other writeback has it, and a
+ * page alone is written from its frame.
  *
  * The pins are tested before the dirty marks, since a write in flight
  * clears the mark for its length. A system call switches processes only
@@ -562,6 +568,7 @@ static int pc_writeback(struct pc_entry *e, uint32_t pass)
         from = pc_run_buf;
     }
     rc = pc_write(run[0]->disk_off, from, n);
+    ++pc_writes_sent; /* once it has ended, failed too: a part may be cached */
     if (copied) {
         pc_run_busy = 0;
     }
@@ -633,7 +640,7 @@ static int pc_evict(uint32_t slot, uint32_t pass)
  * marks of use, so that a clean page not used since is taken before any
  * dirty one, and a dirty one only when the sweeps found none: a fault runs
  * with interrupts off, and a writeback there holds the processor for the
- * disk's write and flush, as Linux's direct reclaim leaves dirty file pages
+ * disk's write, as Linux's direct reclaim leaves dirty file pages
  * to the flusher (mm/vmscan.c, `shrink_folio_list`). The flusher keeps the
  * dirty pages near the background threshold (`pc_write_background`), and a
  * writer keeps them under the dirty limit (`pc_balance_dirty`).
@@ -954,6 +961,36 @@ uint32_t pc_balance_dirty(void)
 }
 
 /**
+ * Flush the backing when a write may wait in the disk's cache: one that
+ * ended since the last flush that succeeded began. The count is read before the
+ * flush, so a write that ends during it is left for the next. 0, or -1 when
+ * the flush failed, which is told to the failure hook as a failed write is;
+ * the pages it covered stay clean, as Linux's are after a failed flush,
+ * whose error the next fsync reports.
+ */
+static int pc_flush_sent(void)
+{
+    uint32_t sent = pc_writes_sent;
+    int rc;
+
+    if (!pc_flush || sent == pc_writes_flushed) {
+        return 0;
+    }
+    rc = pc_flush();
+    if (rc != 0) {
+        klog(KLOG_ERR, "pagecache", "flush failed (%d); the writes before it may be lost", rc);
+        if (pc_failed) {
+            pc_failed(rc);
+        } else {
+            pc_unclaimed = rc;
+        }
+        return -1;
+    }
+    pc_writes_flushed = sent;
+    return 0;
+}
+
+/**
  * Busy slots and failed writes are reported apart, so that a competing sync
  * can wait for the writes in flight without trying a failed write again for
  * ever. A failure does not stop the walk over the other slots. A busy slot
@@ -981,7 +1018,9 @@ int pc_sync(void)
             result |= PC_SYNC_FAILED;
         }
     }
-
+    if (pc_flush_sent() != 0) {
+        result |= PC_SYNC_FAILED;
+    }
     return result;
 }
 
@@ -998,7 +1037,7 @@ void pc_on_failure(void (*failed)(int rc))
  * that the rounding cannot overflow; the window's span is page-aligned, so
  * the rounded size never passes it. The window maps whole pages, so the
  * file system's last partial page is a full page there. */
-void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
+void pc_set_backing(pc_read_fn read, pc_write_fn write, pc_flush_fn flush, uint32_t fs_size)
 {
     uint32_t i;
 
@@ -1017,6 +1056,8 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
 
     pc_read = read;
     pc_write = write;
+    pc_flush = flush;
+    pc_writes_flushed = pc_writes_sent;
     pc_unclaimed = 0;
     if (fs_size > pc_window_span) {
         fs_size = pc_window_span;

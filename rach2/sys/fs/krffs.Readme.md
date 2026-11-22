@@ -90,7 +90,7 @@ The operations in those terms:
 
 A surplus too small for a header of its own stays inside its node, where a later shrink or a removal reclaims it.
 
-The boot root's memory backend has no sync point of its own; its pages reach the disk as the page cache writes them back ([../mm/Readme.md](../mm/Readme.md)). On the disk root a barrier is the root's flush (`pc_sync_wait`), which writes every dirty page of the window, so a creation, a grow, a shrink and a move each write the page cache back several times, and a write that raises a file's length writes it back once. An unlink flushes nothing: for an unlink on a sound ring, each merged size ends at an existing node boundary even if the other merge's size or the change of type is still in the cache, and the link repair handles either order of writeback. The attributes a change of mode, owner or times stores are not flushed.
+The boot root's memory backend has no sync point of its own; its pages reach the disk as the page cache writes them back ([../mm/Readme.md](../mm/Readme.md)). On the disk root a barrier is the root's flush (`pc_sync_wait`), which writes every dirty page of the window and then flushes the disk's cache once, so that what it wrote is on the medium before any write after it is sent, so a creation, a grow, a shrink and a move each write the page cache back several times, and a write that raises a file's length writes it back once. An unlink flushes nothing: for an unlink on a sound ring, each merged size ends at an existing node boundary even if the other merge's size or the change of type is still in the cache, and the link repair handles either order of writeback. The attributes a change of mode, owner or times stores are not flushed.
 
 ### The repair
 

@@ -2443,9 +2443,9 @@ static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
     }
     _krffs_stub_base = disk_base;
     _krffs_stub_size = disk_size;
-    pc_set_backing(krffs_stub_read, krffs_stub_write, disk_size);
+    pc_set_backing(krffs_stub_read, krffs_stub_write, 0, disk_size);
     if (init_krffs((void *)PCWIN_BASE, disk_size) != 0) {
-        pc_set_backing(0, 0, 0);
+        pc_set_backing(0, 0, 0, 0);
         _krffs_stub_base = 0;
         _krffs_stub_size = 0;
         return -1;
@@ -2799,9 +2799,11 @@ static int krffs_disk_read(uint32_t off, void *page)
 
 /**
  * Write the `count` pages at `pages` to byte `off` of the KRFFS partition,
- * in as few writes of the device as its limit allows, each of which is on
- * the medium when it returns. Returns 0, or the device's error, after which
- * the pages are in no known state.
+ * in as few writes of the device as its limit allows, without the flush of
+ * the disk's cache where the device can leave it out (`write_cached`): the
+ * page cache's next sync flushes once (`krffs_disk_flush`), so that a sync
+ * that wrote many runs waits for the medium once. Returns 0, or the
+ * device's error, after which the pages are in no known state.
  *
  * A halted root (`krffs_root_halted`) takes no write, from the flusher, an
  * eviction or a sync alike: -EIO, and the pages stay dirty in the cache, as
@@ -2814,6 +2816,8 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
     const uint8_t *from = (const uint8_t *)pages;
     uint32_t most = block_max_sectors(dev) / (PAGE_SIZE / BLOCK_SECTOR_SIZE);
     uint32_t chunk;
+    int (*write)(block_device_t *, uint64_t, uint32_t, const void *) =
+        dev->write_cached ? dev->write_cached : dev->write;
     int rc;
 
     if (most == 0) {
@@ -2824,8 +2828,7 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
             return -EIO;
         }
         chunk = count < most ? count : most;
-        rc =
-            dev->write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
+        rc = write(dev, off / BLOCK_SECTOR_SIZE, chunk * (PAGE_SIZE / BLOCK_SECTOR_SIZE), from);
         if (rc != 0) {
             if (!_krffs_on_disk || krffs_root_reaping()) {
                 krffs_root_halt();
@@ -2837,6 +2840,29 @@ static int krffs_disk_write(uint32_t off, const void *pages, uint32_t count)
         count -= chunk;
     }
     return 0;
+}
+
+/**
+ * The page cache's flush of the KRFFS partition: put the writes
+ * `krffs_disk_write` left in the disk's cache on the medium, in the call,
+ * from any context the write is called from. Returns 0, at once for a
+ * device whose writes each reach the medium, or the device's error, which
+ * halts the root where a failed write would. A halted root still flushes:
+ * the flush adds nothing to what the disk was given before the halt.
+ */
+static int krffs_disk_flush(void)
+{
+    block_device_t *dev = &_krffs_disk_part.device;
+    int rc;
+
+    if (!dev->flush_now) {
+        return 0;
+    }
+    rc = dev->flush_now(dev);
+    if (rc != 0 && (!_krffs_on_disk || krffs_root_reaping())) {
+        krffs_root_halt();
+    }
+    return rc;
 }
 
 /*
@@ -3300,16 +3326,16 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
     }
 
     block_partition_init(&_krffs_disk_part, disk, start_lba, sector_count);
-    pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
+    pc_set_backing(krffs_disk_read, krffs_disk_write, krffs_disk_flush, part_bytes);
     if (init_krffs_disk_root((void *)PCWIN_BASE, part_bytes, BLOCK_SECTOR_SIZE, pc_sync_wait,
                              &krffs_window_backend) != 0) {
-        pc_set_backing(0, 0, 0);
+        pc_set_backing(0, 0, 0, 0);
         return -1;
     }
 
     if (krffs_root_mark_and_reap() != 0) {
         krffs_fs = 0;
-        pc_set_backing(0, 0, 0);
+        pc_set_backing(0, 0, 0, 0);
         return -1;
     }
     _krffs_on_disk = 1;

@@ -187,7 +187,7 @@ static void test_copies(void)
     const uint8_t two[2] = {0xA1u, 0xA2u};
 
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
     fake_disk[50][PC_PAGE_SIZE - 2] = 0x11u;
     fake_disk[50][PC_PAGE_SIZE - 1] = 0x22u;
     fake_disk[51][0] = 0x33u;
@@ -224,7 +224,7 @@ static void test_copies(void)
     CHECK(pc_copy_in(FAKE_PAGES * PC_PAGE_SIZE, &mark, 1) == -1);
 
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
     pc_slots[1].pinned = pc_slots[2].pinned = pc_slots[3].pinned = 1;
     fake_disk[60][PC_PAGE_SIZE - 1] = 0x66u;
     fake_disk[61][0] = 0x77u;
@@ -252,7 +252,7 @@ static void test_failure_hook(void)
 {
     pc_on_failure(0);
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
     hook_calls = 0;
     touch(25, 1, 0xC5u);
     fake_write_fail = 25;
@@ -273,7 +273,7 @@ static void test_failure_hook(void)
     fake_write_fail = 26;
     CHECK(pc_sync() == PC_SYNC_FAILED);
     fake_write_fail = FAKE_NO_FAIL;
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
     pc_on_failure(failure_hook);
     CHECK(hook_calls == 2);
     pc_on_failure(0);
@@ -351,7 +351,7 @@ static void test_sleeping_writeback(void)
                 uint8_t marker = dirty ? 0xD2u : 0xD1u;
 
                 init_pagecache();
-                pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+                pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
                 CHECK(pc_set_capacity(1) == 0);
                 fake_disk[0][0] = 0;
                 fake_attempts[0] = 0;
@@ -520,7 +520,7 @@ static void test_sync_wait(void)
         int failed = row == 1 || row == 2 || row == 3;
 
         init_pagecache();
-        pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+        pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
         fake_disk[0][0] = 0;
         fake_disk[2][0] = 2;
         fake_attempts[0] = fake_attempts[2] = 0;
@@ -676,7 +676,7 @@ static void recovery_write_rows(void)
 
     init_pagecache();
     dev->write = fail_first_write;
-    pc_set_backing(fake_read, krffs_disk_write, sizeof(fake_disk));
+    pc_set_backing(fake_read, krffs_disk_write, 0, sizeof(fake_disk));
     root_stopped = device_calls = _krffs_on_disk = 0;
     touch(0, 1, 77);
     touch(2, 1, 88);
@@ -691,7 +691,7 @@ static void recovery_write_rows(void)
     CHECK(pc_sync() == PC_SYNC_FAILED && device_calls == 1 && root_stopped);
     last_holder = 0;
     _krffs_on_disk = 0;
-    pc_set_backing(NULL, NULL, 0);
+    pc_set_backing(NULL, NULL, NULL, 0);
 
     dev->flags = 0;
 #ifdef BLOCK_RECOVERING
@@ -721,13 +721,13 @@ static void halted_field_row(void)
     before[0] = fake_disk[0][PC_PAGE_SIZE - 1];
     before[1] = fake_disk[1][0];
     init_pagecache();
-    pc_set_backing(halt_during_fetch, fake_write, sizeof(fake_disk));
+    pc_set_backing(halt_during_fetch, fake_write, 0, sizeof(fake_disk));
     root_stopped = 0;
     CHECK(krffs_window_write(NULL, PC_PAGE_SIZE - 1, bytes, sizeof(bytes)) < 0 && root_stopped &&
           !pc_dirty_count());
     CHECK(pc_copy_out(PC_PAGE_SIZE - 1, after, sizeof(after)) == 0 && after[0] == before[0] &&
           after[1] == before[1]);
-    pc_set_backing(NULL, NULL, 0);
+    pc_set_backing(NULL, NULL, NULL, 0);
 }
 
 /** Check device submissions, the boot dirty mark and final repair sync. */
@@ -749,7 +749,7 @@ static void disk_recovery_rows(void)
     CHECK(flush_firsts(dev) == 0 && device_calls == 1);
 
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, sizeof(fake_disk));
+    pc_set_backing(fake_read, fake_write, 0, sizeof(fake_disk));
     device_calls = reap_calls = 0;
     root_stopped = 1;
     CHECK(krffs_root_mark_and_reap() == 0 && !reap_calls && !pc_stat_reads());
@@ -758,11 +758,11 @@ static void disk_recovery_rows(void)
     CHECK(krffs_root_mark_and_reap() == 0 && root_stopped && pc_dirty_count() == 1);
     fake_write_fail = 0;
     root_stopped = 0;
-    pc_set_backing(fake_read, fake_write, sizeof(fake_disk));
+    pc_set_backing(fake_read, fake_write, 0, sizeof(fake_disk));
     CHECK(krffs_root_mark_and_reap() < 0 && root_stopped);
     fake_write_fail = FAKE_NO_FAIL;
     root_stopped = 0;
-    pc_set_backing(NULL, NULL, 0);
+    pc_set_backing(NULL, NULL, NULL, 0);
 }
 
 #endif
@@ -806,7 +806,7 @@ static int page_rows(void)
     }
 
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
 
     touch(0, 0, 0);
     CHECK(fake_reads[0] == 1);
@@ -859,7 +859,7 @@ static int page_rows(void)
     }
 
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
     touch(20, 1, 0xC0u);
     fake_write_fail = 20;
     CHECK(pc_sync() == PC_SYNC_FAILED);
@@ -869,7 +869,7 @@ static int page_rows(void)
     CHECK(fake_disk[20][0] == 0xC0u);
 
     init_pagecache();
-    pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+    pc_set_backing(fake_read, fake_write, 0, FAKE_PAGES * PC_PAGE_SIZE);
     touch(21, 1, 0xC1u);
     touch(22, 1, 0xC2u);
     touch(23, 1, 0xC3u);

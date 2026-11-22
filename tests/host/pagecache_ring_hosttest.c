@@ -113,7 +113,7 @@ static uint32_t fills_once_warm(uint32_t ring, uint32_t slots)
     uint32_t round, before;
 
     init_pagecache();
-    pc_set_backing(backing_read, backing_write, (ring + HOT_PAGES) * PC_PAGE_SIZE);
+    pc_set_backing(backing_read, backing_write, 0, (ring + HOT_PAGES) * PC_PAGE_SIZE);
     if (slots < PC_SLOTS) {
         pc_set_capacity(slots);
     }
