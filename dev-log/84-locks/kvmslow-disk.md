@@ -9,7 +9,7 @@ Rach2 made more register accesses than it needs in four places, which this task 
 * The AHCI driver read a port's interrupt status at every poll of a polled command.
 * fatwrite's `volume` case and ext2's seven probe cases fetched files from the image helper over COM1, since they did not declare the helper's `image-transfer` disk.
 
-With the changes, fatwrite and ext2 take less time under KVM than under TCG on i686, x86_64 and the ia32 profile, and stress-ahci about the same. stress on i686 and metal still take longer under KVM; what is left of their cost is below.
+With the changes, merged with 5672's change of the flush, fatwrite, ext2 and stress-ahci take less time under KVM than under TCG on i686, x86_64 and the ia32 profile, and stress the same to within a second. metal still takes longer under KVM; what is left of its cost and of the others' is below.
 
 ## How it was measured
 
@@ -17,7 +17,7 @@ Each suite ran alone, in this account's clone on the testing host, at origin/mil
 
 QEMU 10.2.1 counted the exits itself. `tests/run` found a wrapper of `qemu-system-i386` first on its path, which added `-trace memory_region_ops_*` (every guest access of an emulated region, with its address and value) or `-trace kvm_run_exit` (every exit to QEMU, by reason) and wrote the trace beside the run. `perf kvm stat` and KVM's debugfs need root, which the account does not have. The vCPU thread's time in the guest and out of it comes from `/proc/PID/task/TID/stat`, fields 14, 15 and 43 (utime, stime, guest_time), sampled each second. strace of QEMU's flushes was tried and dropped: under KVM it slowed stress from 20 s to 87 s even with `--seccomp-bpf`, so its times mean nothing there. Its counts agreed with TCG's: 2,866 and 2,821 flushes of 2 ms each.
 
-The other accounts' work kept the host's load between 2 and 68 during the runs, and the load moves a suite's time by as much as the change does. The times below therefore come in pairs: the old drivers and then the new, for each profile and accelerator, run one after the other. Each time is followed by the load average at its end.
+The other accounts' work kept the host's load between 1 and 68 during the runs, and a load above 8 moves a suite's time by as much as the change does. The times below therefore come in pairs run one after the other, and each pair started only once the load average was under 8: the old drivers and then the new, for each profile and accelerator; and at the task's head, KVM and then TCG. The counts of register accesses do not move with the load, and the conclusions rest on them; the times check them.
 
 ## fatwrite: the serial console
 
@@ -36,13 +36,13 @@ QEMU counted 5,847,784 exits in that boot, 5,845,315 of them port I/O (reason 2)
 
 What was left is what Linux makes too: a write for each byte sent, and a status read and a data read for each byte received. On that boot, with the change, the vCPU thread spent 22.7 s in the guest and 55.6 s out of it, 10.3 s in QEMU and 45.3 s in the host's kernel. It never blocked, since the guest always had a byte to send. 55.6 s over the boot's 3.9 million exits is 14 us an exit. Under TCG the case's five boots take 31 s together.
 
-The helper already had a second way to move files, which the ext2 repair case uses (tools/etude/Readme.md): a 64 MiB IDE disk, `image-transfer`, on which the files travel as a tar archive, with only their digests on COM1. fatwrite's `volume` case now declares it. The suite then took 39 s under KVM against 42 s under TCG on i686, and 38 and 37 s against 39 and 38 s on x86_64 and the ia32 profile.
+The helper already had a second way to move files, which the ext2 repair case uses (tools/etude/Readme.md): a 64 MiB IDE disk, `image-transfer`, on which the files travel as a tar archive, with only their digests on COM1. fatwrite's `volume` case now declares it. At the task's head the suite took 36 s under KVM against 38 s under TCG on i686, 36 s against 39 s on x86_64 and 37 s against 38 s on the ia32 profile.
 
 ## ext2 and metal
 
-They pay the same cost in smaller amounts. In ext2, alone on i686, the probe cases took 2 to 3.6 times as long under KVM: mapmusl 18.6 s against 5.1 s, tmpfilemusl 14.9 against 4.8, inodechurnmusl 25.7 against 15.0. Each probe case reads its probe back out of the volume through the image helper's debugfs, and the file came back over COM1. The mapmusl boot made 572,512 accesses, 557,130 of them COM1's; with the serial change it made 384,817. The seven probe cases now declare the `image-transfer` disk. ext2 then took 120 s under KVM against 160 s under TCG on i686, 120 s against 139 s on x86_64, and 123 s against 140 s on the ia32 profile.
+They pay the same cost in smaller amounts. In ext2, alone on i686, the probe cases took 2 to 3.6 times as long under KVM: mapmusl 18.6 s against 5.1 s, tmpfilemusl 14.9 against 4.8, inodechurnmusl 25.7 against 15.0. Each probe case reads its probe back out of the volume through the image helper's debugfs, and the file came back over COM1. The mapmusl boot made 572,512 accesses, 557,130 of them COM1's; with the serial change it made 384,817. The seven probe cases now declare the `image-transfer` disk. At the task's head ext2 took 118 s under KVM against 133 s under TCG on i686, 122 s against 138 s on x86_64, and 118 s against 135 s on the ia32 profile.
 
-metal's machine made 105,000 accesses in its 209 s. Its three helper boots check the sticks and send what they find over COM1; they made 1,051,752, 932,234 and 1,057,294 accesses, COM1's and the AHCI polls below. Their output goes through etude-guest's command channel, not through the image adapter, so the transfer disk does not apply. With the new drivers, metal took 189 s under KVM against 156 s under TCG on i686, 145 s against 203 s on x86_64 (the TCG run at a load of 14), and 109 s against 114 s on the ia32 profile.
+metal's machine made 105,000 accesses in its 209 s. Its three helper boots check the sticks and send what they find over COM1; they made 1,051,752, 932,234 and 1,057,294 accesses, COM1's and the AHCI polls below. Their output goes through etude-guest's command channel, not through the image adapter, so the transfer disk does not apply. At the task's head metal took 149 s under KVM against 145 s under TCG on i686, 157 s against 136 s on x86_64, and 114 s against 105 s on the ia32 profile.
 
 ## stress and stress-ahci: register accesses per disk command
 
@@ -60,31 +60,102 @@ About half of the status reads that are left come from the page cache, which can
 
 stress-ahci runs the same probe on an AHCI disk, whose writes and reads go through the polled path (`ahci_command_claimed`). Each step of that wait read PxCI and PxIS and waited 10 us. Its boot made 819,524 accesses for 21,789 commands, 307,000 of them PxCI's and 329,000 PxIS's. Linux's polled AHCI command reads PxCI alone (`ahci_exec_polled_cmd`, drivers/ata/libahci.c). The wait now reads PxIS at every 16th step, for a fatal error that leaves the slot set, and the boot made 585,491 accesses.
 
-Alone, neither suite took longer under KVM than under TCG in the first set of runs: 13 s and 11 s against 13 s and 13 s on i686, and 20 s and 17 s against 20 s and 20 s on x86_64. In 5661's full run they took 38 s and 35 s, beside the install, account, drill, ext2 and exfat cases, which under KVM were exit-bound as fatwrite was. In the TCG full run of 5657 their neighbours were selfbuild, doom and save-update, which are not exit-bound. Beside ext2 and fatwrite, stress took 28 s under KVM against 20 s alone, and 18 to 19 s under TCG either way. With the new drivers, stress on i686 took 21, 12 and 26 s under KVM against 16, 18 and 19 s under TCG, and stress-ahci 22, 14 and 15 s against 13, 16 and 15 s, the last two pairs at loads of 30 to 42.
+Alone, neither suite took longer under KVM than under TCG in the first set of runs: 13 s and 11 s against 13 s and 13 s on i686, and 20 s and 17 s against 20 s and 20 s on x86_64. In 5661's full run they took 38 s and 35 s, beside the install, account, drill, ext2 and exfat cases, which under KVM were exit-bound as fatwrite was. In the TCG full run of 5657 their neighbours were selfbuild, doom and save-update, which are not exit-bound. Beside ext2 and fatwrite, stress took 28 s under KVM against 20 s alone, and 18 to 19 s under TCG either way. At the task's head, stress took 11, 10 and 10 s under KVM against 10, 10 and 10 s under TCG on i686, x86_64 and the ia32 profile, and stress-ahci 8 s against 10 s on each.
 
 ## Times
 
-Each suite's sum of case times in seconds, with the host's load average at the run's end in parentheses. Old is fade2fd53, new is the task's three driver commits, and the transfer disk is new with the manifests' change. metal's two host-side cases, which no accelerator runs, are left out; on the ia32 profile metal runs one case.
+Each suite's sum of case times in seconds, with the host's load average in parentheses: at the run's end, or at its start and its end. Every case passed in every run. metal's two host-side cases, which no accelerator runs, are left out; on the ia32 profile metal runs one case.
 
-| Suite | Profile | Old, KVM | Old, TCG | New, KVM | New, TCG | Transfer disk, KVM | Transfer disk, TCG |
-|---|---|---|---|---|---|---|---|
-| stress | i686 | 43 (6) | 20 (7) | 21 (9) | 16 (6) | | |
-| stress | x86_64 | 13 (5) | 12 (4) | 12 (5) | 14 (6) | | |
-| stress | ia32 | 20 (10) | 12 (2) | 12 (4) | 12 (2) | | |
-| stress-ahci | i686 | 39 (7) | 18 (7) | 22 (10) | 13 (6) | | |
-| stress-ahci | x86_64 | 11 (5) | 12 (3) | 10 (5) | 13 (6) | | |
-| stress-ahci | ia32 | 18 (8) | 12 (2) | 10 (3) | 12 (1) | | |
-| fatwrite | i686 | 184 (15) | 53 (6) | 143 (9) | 53 (6) | 39 (13) | 42 (23) |
-| fatwrite | x86_64 | 172 (12) | 52 (4) | 132 (4) | 66 (29) | 38 (31) | 39 (54) |
-| fatwrite | ia32 | 152 (4) | 51 (2) | 122 (2) | 50 (2) | 37 (65) | 38 (67) |
-| ext2 | i686 | 183 (14) | 143 (7) | 164 (10) | 155 (6) | 120 (7) | 160 (32) |
-| ext2 | x86_64 | 159 (9) | 138 (4) | 146 (5) | 184 (39) | 120 (43) | 139 (63) |
-| ext2 | ia32 | 160 (11) | 139 (2) | 143 (2) | 138 (2) | 123 (68) | 140 (39) |
-| metal | i686 | 253 (9) | 159 (7) | 189 (7) | 156 (6) | | |
-| metal | x86_64 | 175 (5) | 146 (5) | 145 (4) | 203 (14) | | |
-| metal | ia32 | 127 (3) | 110 (1) | 109 (1) | 114 (5) | | |
+The old drivers against the new, at fade2fd53 and at the task's driver commits, with fade2fd53's manifests. Thirteen pairs that first ran under the load of other accounts' proofs ran again later; the table gives the later pair, and the first is in the last table. In the new x86_64 KVM fatwrite run the load rose from 2.5 to 15.0.
 
-Every case passed in every run.
+| Suite | Profile | Old, KVM | New, KVM | Old, TCG | New, TCG |
+|---|---|---|---|---|---|
+| stress | i686 | 12 (7.7 to 6.1) | 12 (6.1 to 4.6) | 20 (7.1) | 16 (6.5) |
+| stress | x86_64 | 13 (5.4) | 12 (5.0) | 12 (3.6) | 14 (5.9) |
+| stress | ia32 | 12 (2.0 to 1.8) | 12 (1.8 to 1.6) | 12 (1.8) | 12 (1.5) |
+| stress-ahci | i686 | 11 (4.6 to 3.9) | 11 (3.7 to 3.2) | 18 (7.2) | 13 (6.4) |
+| stress-ahci | x86_64 | 11 (5.2) | 10 (5.0) | 12 (3.3) | 13 (6.5) |
+| stress-ahci | ia32 | 11 (1.5 to 1.6) | 10 (1.6 to 1.6) | 12 (1.5) | 12 (1.4) |
+| fatwrite | i686 | 142 (3.0 to 2.4) | 122 (2.3 to 1.9) | 53 (6.5) | 53 (6.0) |
+| fatwrite | x86_64 | 148 (5.3 to 2.5) | 132 (2.5 to 15.0) | 51 (3.4 to 1.8) | 51 (1.7 to 1.8) |
+| fatwrite | ia32 | 152 (4.4) | 122 (1.7) | 51 (1.9) | 50 (1.7) |
+| ext2 | i686 | 153 (1.8 to 2.5) | 142 (2.3 to 2.9) | 143 (7.3) | 155 (5.6) |
+| ext2 | x86_64 | 155 (5.7 to 4.1) | 144 (3.9 to 3.4) | 137 (1.8 to 2.1) | 136 (1.9 to 1.7) |
+| ext2 | ia32 | 158 (1.6 to 6.8) | 148 (7.0 to 6.3) | 139 (2.3) | 138 (2.5) |
+| metal | i686 | 152 (2.8 to 1.8) | 150 (1.7 to 5.7) | 159 (6.5) | 156 (5.5) |
+| metal | x86_64 | 175 (4.9) | 145 (3.9) | 138 (1.7 to 1.7) | 138 (1.6 to 2.1) |
+| metal | ia32 | 127 (2.8) | 109 (1.1) | 110 (1.4) | 114 (4.9) |
+
+The task's head, 85d9b25c8: the new drivers, the transfer disk and the milestone branch with 5672's flush, under KVM and then TCG.
+
+| Suite | Profile | KVM | TCG |
+|---|---|---|---|
+| stress | i686 | 11 (1.8 to 3.6) | 10 (3.6 to 3.2) |
+| stress | x86_64 | 10 (2.2 to 2.0) | 10 (2.0 to 2.1) |
+| stress | ia32 | 10 (1.9 to 1.8) | 10 (1.8 to 1.6) |
+| stress-ahci | i686 | 8 (3.2 to 3.0) | 10 (3.0 to 2.8) |
+| stress-ahci | x86_64 | 8 (2.1 to 2.0) | 10 (2.0 to 1.8) |
+| stress-ahci | ia32 | 8 (1.6 to 1.6) | 10 (1.6 to 1.8) |
+| fatwrite | i686 | 36 (2.8 to 1.4) | 38 (1.4 to 1.2) |
+| fatwrite | x86_64 | 36 (1.8 to 1.4) | 39 (1.4 to 5.9) |
+| fatwrite | ia32 | 37 (1.8 to 13.9) | 38 (13.9 to 9.1) |
+| ext2 | i686 | 118 (1.2 to 1.9) | 133 (1.9 to 1.8) |
+| ext2 | x86_64 | 122 (5.9 to 9.6) | 138 (9.6 to 15.7) |
+| ext2 | ia32 | 118 (3.7 to 3.1) | 135 (3.1 to 2.6) |
+| metal | i686 | 149 (1.8 to 1.9) | 145 (1.9 to 2.2) |
+| metal | x86_64 | 157 (3.7 to 1.3) | 136 (1.3 to 1.9) |
+| metal | ia32 | 114 (2.6 to 1.3) | 105 (1.3 to 1.5) |
+
+The runs kept apart, since a load above 8 makes them useless for comparison: the first runs of the thirteen pairs, the transfer disk's first runs at the task's commits before the merge, and two more runs of stress and stress-ahci on i686.
+
+| Run | Suite | Profile | Accelerator | Time | Load at the end |
+|---|---|---|---|---|---|
+| old drivers | stress | i686 | KVM | 43 | 5.7 |
+| new drivers | stress | i686 | KVM | 21 | 9.3 |
+| old drivers | stress | ia32 | KVM | 20 | 9.9 |
+| new drivers | stress | ia32 | KVM | 12 | 3.5 |
+| old drivers | stress-ahci | i686 | KVM | 39 | 6.8 |
+| new drivers | stress-ahci | i686 | KVM | 22 | 9.5 |
+| old drivers | stress-ahci | ia32 | KVM | 18 | 8.1 |
+| new drivers | stress-ahci | ia32 | KVM | 10 | 3.1 |
+| old drivers | fatwrite | i686 | KVM | 184 | 15.1 |
+| new drivers | fatwrite | i686 | KVM | 143 | 8.6 |
+| old drivers | fatwrite | x86_64 | KVM | 172 | 11.8 |
+| new drivers | fatwrite | x86_64 | KVM | 132 | 4.5 |
+| old drivers | fatwrite | x86_64 | TCG | 52 | 4.0 |
+| new drivers | fatwrite | x86_64 | TCG | 66 | 28.7 |
+| old drivers | ext2 | i686 | KVM | 183 | 13.8 |
+| new drivers | ext2 | i686 | KVM | 164 | 9.9 |
+| old drivers | ext2 | x86_64 | KVM | 159 | 8.8 |
+| new drivers | ext2 | x86_64 | KVM | 146 | 5.0 |
+| old drivers | ext2 | x86_64 | TCG | 138 | 4.2 |
+| new drivers | ext2 | x86_64 | TCG | 184 | 38.6 |
+| old drivers | ext2 | ia32 | KVM | 160 | 10.7 |
+| new drivers | ext2 | ia32 | KVM | 143 | 2.3 |
+| old drivers | metal | i686 | KVM | 253 | 9.0 |
+| new drivers | metal | i686 | KVM | 189 | 7.5 |
+| old drivers | metal | x86_64 | TCG | 146 | 4.5 |
+| new drivers | metal | x86_64 | TCG | 203 | 14.4 |
+| transfer disk | fatwrite | i686 | KVM | 39 | 12.7 |
+| transfer disk | fatwrite | i686 | TCG | 42 | 22.6 |
+| transfer disk | fatwrite | x86_64 | KVM | 38 | 31.1 |
+| transfer disk | fatwrite | x86_64 | TCG | 39 | 54.5 |
+| transfer disk | fatwrite | ia32 | KVM | 37 | 65.1 |
+| transfer disk | fatwrite | ia32 | TCG | 38 | 67.1 |
+| transfer disk | ext2 | i686 | KVM | 120 | 7.0 |
+| transfer disk | ext2 | i686 | TCG | 160 | 31.7 |
+| transfer disk | ext2 | x86_64 | KVM | 120 | 42.9 |
+| transfer disk | ext2 | x86_64 | TCG | 139 | 62.8 |
+| transfer disk | ext2 | ia32 | KVM | 123 | 67.5 |
+| transfer disk | ext2 | ia32 | TCG | 140 | 39.0 |
+| new drivers, again | stress | i686 | KVM | 12 | 29.9 |
+| new drivers, again | stress-ahci | i686 | KVM | 14 | 32.9 |
+| new drivers, again | stress | i686 | TCG | 18 | 35.6 |
+| new drivers, again | stress-ahci | i686 | TCG | 16 | 42.4 |
+| new drivers, again | stress | i686 | KVM | 26 | 42.6 |
+| new drivers, again | stress-ahci | i686 | KVM | 15 | 42.3 |
+| new drivers, again | stress | i686 | TCG | 19 | 41.9 |
+| new drivers, again | stress-ahci | i686 | TCG | 15 | 42.1 |
 
 ## What is left, and whose
 
