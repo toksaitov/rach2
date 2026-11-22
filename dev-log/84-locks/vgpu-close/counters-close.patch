@@ -1,0 +1,218 @@
+diff --git a/rach2/sys/drm/virtio_gpu.c b/rach2/sys/drm/virtio_gpu.c
+index 8bc515f8e..f9b3c686f 100644
+--- a/rach2/sys/drm/virtio_gpu.c
++++ b/rach2/sys/drm/virtio_gpu.c
+@@ -306,20 +306,42 @@ static int pending_push(struct virtio_gpu_device *vg, int q)
+ static void vgpu_notify(struct virtio_gpu_device *vg, struct virtqueue *vq, int sleepable)
+ {
+     uint32_t flags;
+-    int depth;
++    int depth, n;
++    int64_t t = dma_fence_now();
++    int closer = vgpu_meas_closer != NULL && vgpu_meas_closer == (void *)current_proc;
+ 
+     if (!sleepable || !vg->vdev->notify_unlocked || !sched_is_enabled() || current_proc == NULL ||
+         !kirq_enabled()) {
+-        virtqueue_kick(vq);
+-        return;
++        n = virtqueue_kick_n(vq);
++    } else {
++        int64_t tk, tb;
++
++        vg->kicking++;
++        flags = kirq_save();
++        depth = bkl_drop();
++        tk = dma_fence_now();
++        n = virtqueue_kick_n(vq);
++        tb = dma_fence_now();
++        bkl_take(depth);
++        if (closer && n) {
++            vgpu_meas_add(VGPU_M_CLOSE_KICK_NS, tb - tk);
++            vgpu_meas_add(VGPU_M_CLOSE_BKL_NS, dma_fence_now() - tb);
++        }
++        kirq_restore(flags);
++        vg->kicking--;
++    }
++    t = dma_fence_now() - t;
++    vgpu_meas_add(VGPU_M_KICKS, 1);
++    vgpu_meas_add(VGPU_M_NOTIFIES, n);
++    if (n) {
++        vgpu_meas_add(VGPU_M_NOTIFY_NS, t);
++        vgpu_meas_max(VGPU_M_NOTIFY_MAX_NS, (uint64_t)t);
++    }
++    if (closer) {
++        vgpu_meas_add(VGPU_M_CLOSE_KICKS, 1);
++        vgpu_meas_add(VGPU_M_CLOSE_NOTIFIES, n);
++        vgpu_meas_add(VGPU_M_CLOSE_NOTIFY_NS, n ? t : 0);
+     }
+-    vg->kicking++;
+-    flags = kirq_save();
+-    depth = bkl_drop();
+-    virtqueue_kick(vq);
+-    bkl_take(depth);
+-    kirq_restore(flags);
+-    vg->kicking--;
+ }
+ 
+ /**
+diff --git a/rach2/sys/drm/virtio_gpu.h b/rach2/sys/drm/virtio_gpu.h
+index a5fc99aa1..171b2ace1 100644
+--- a/rach2/sys/drm/virtio_gpu.h
++++ b/rach2/sys/drm/virtio_gpu.h
+@@ -940,6 +940,28 @@ void vgpu_count_objects(int delta);
+ /** The devices' objects made and not yet released: those alive and those
+  * whose UNREF the host has not yet answered. */
+ uint64_t virtio_gpu_objects(void);
++/* Task 5701's measuring counters, /proc/stat's vgpu_m_*. */
++enum {
++    VGPU_M_CLOSE_N,
++    VGPU_M_CLOSE_NS,
++    VGPU_M_CLOSE_WAIT_NS,
++    VGPU_M_CLOSE_SEND_NS,
++    VGPU_M_KICKS,
++    VGPU_M_NOTIFIES,
++    VGPU_M_NOTIFY_NS,
++    VGPU_M_NOTIFY_MAX_NS,
++    VGPU_M_CLOSE_KICKS,
++    VGPU_M_CLOSE_NOTIFIES,
++    VGPU_M_CLOSE_NOTIFY_NS,
++    VGPU_M_CLOSE_KICK_NS,
++    VGPU_M_CLOSE_BKL_NS,
++    VGPU_M_N
++};
++void vgpu_meas_add(int which, int64_t delta);
++void vgpu_meas_max(int which, uint64_t value);
++uint64_t vgpu_meas_get(int which);
++extern const char *const vgpu_meas_names[VGPU_M_N];
++extern void *vgpu_meas_closer;
+ /**
+  * Wait for the leaves of a dependency on any fence context but `context`,
+  * the waiter's own, whose order the queue keeps; 0 or -errno,
+diff --git a/rach2/sys/drm/virtio_gpu_3d.c b/rach2/sys/drm/virtio_gpu_3d.c
+index 13cfda590..3770ce4b6 100644
+--- a/rach2/sys/drm/virtio_gpu_3d.c
++++ b/rach2/sys/drm/virtio_gpu_3d.c
+@@ -581,11 +581,13 @@ void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
+     struct vgpu_attachment *a;
+     struct virtio_gpu_cmd *cmd;
+     int closed;
++    int64_t t0, t1;
+ 
+     if (!vg->has_virgl || !ctx || vg->dead || !vgpu_context_attached(ctx, bo) ||
+         file_keeps_handle(obj, file)) {
+         return;
+     }
++    t0 = dma_fence_now();
+     drm_gem_object_get(obj);
+     ctx->holds++;
+     (void)vgpu_room(vg, 0);
+@@ -611,11 +613,50 @@ void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
+     req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
+     req->hdr.ctx_id = ctx->id;
+     req->resource_id = bo->res_id;
++    t1 = dma_fence_now();
++    vgpu_meas_closer = current_proc;
+     if (vgpu_may_wait(vg)) {
+         vgpu_cmd_send_sleepable(cmd, detach_done, obj);
+     } else {
+         vgpu_cmd_send(cmd, detach_done, obj);
+     }
++    vgpu_meas_closer = NULL;
++    vgpu_meas_add(VGPU_M_CLOSE_N, 1);
++    vgpu_meas_add(VGPU_M_CLOSE_WAIT_NS, t1 - t0);
++    vgpu_meas_add(VGPU_M_CLOSE_SEND_NS, dma_fence_now() - t1);
++    vgpu_meas_add(VGPU_M_CLOSE_NS, dma_fence_now() - t0);
++}
++
++void *vgpu_meas_closer;
++static uint64_t vgpu_meas_n[VGPU_M_N];
++const char *const vgpu_meas_names[VGPU_M_N] = {
++    "vgpu_m_close_n", "vgpu_m_close_ns", "vgpu_m_close_wait_ns", "vgpu_m_close_send_ns",
++    "vgpu_m_kicks", "vgpu_m_notifies", "vgpu_m_notify_ns", "vgpu_m_notify_max_ns",
++    "vgpu_m_close_kicks", "vgpu_m_close_notifies", "vgpu_m_close_notify_ns",
++    "vgpu_m_close_kick_ns", "vgpu_m_close_bkl_ns"};
++static struct spinlock vgpu_meas_lock = SPINLOCK_INIT;
++
++void vgpu_meas_add(int which, int64_t delta)
++{
++    uint32_t flags = spin_lock_irqsave(&vgpu_meas_lock);
++
++    vgpu_meas_n[which] += (uint64_t)delta;
++    spin_unlock_irqrestore(&vgpu_meas_lock, flags);
++}
++
++void vgpu_meas_max(int which, uint64_t value)
++{
++    uint32_t flags = spin_lock_irqsave(&vgpu_meas_lock);
++
++    if (vgpu_meas_n[which] < value) {
++        vgpu_meas_n[which] = value;
++    }
++    spin_unlock_irqrestore(&vgpu_meas_lock, flags);
++}
++
++uint64_t vgpu_meas_get(int which)
++{
++    return vgpu_meas_n[which];
+ }
+ 
+ void vgpu_resource_forget(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+diff --git a/rach2/sys/fs/procfs.c b/rach2/sys/fs/procfs.c
+index c949c4410..015b73630 100644
+--- a/rach2/sys/fs/procfs.c
++++ b/rach2/sys/fs/procfs.c
+@@ -4870,6 +4870,16 @@ static int procfs_gen_statsys(struct procfs_text *t)
+     ap_u64(t, virtio_gpu_copied_bytes());
+     ap_str(t, "\nvirtio_gpu_objects ");
+     ap_u64(t, virtio_gpu_objects());
++    {
++        int m;
++
++        for (m = 0; m < VGPU_M_N; m++) {
++            ap_ch(t, '\n');
++            ap_str(t, vgpu_meas_names[m]);
++            ap_ch(t, ' ');
++            ap_u64(t, vgpu_meas_get(m));
++        }
++    }
+     ap_str(t, "\nwindow_free_min ");
+     ap_ulong(t, (unsigned long)frame_window_free_min());
+     ap_ch(t, '\n');
+diff --git a/rach2/sys/virtio/virtio.h b/rach2/sys/virtio/virtio.h
+index 70633ecbe..b9bdfb8fa 100644
+--- a/rach2/sys/virtio/virtio.h
++++ b/rach2/sys/virtio/virtio.h
+@@ -559,6 +559,7 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
+  * has asked not to be told: by VIRTQ_USED_F_NO_NOTIFY, or with
+  * VIRTIO_F_EVENT_IDX by an `avail_event` past them. A handler may call it. */
+ void virtqueue_kick(struct virtqueue *vq);
++int virtqueue_kick_n(struct virtqueue *vq);
+ 
+ /**
+  * Take every buffer the device had returned when the call began, free its
+diff --git a/rach2/sys/virtio/virtqueue.c b/rach2/sys/virtio/virtqueue.c
+index 08a2e1968..53675f8ef 100644
+--- a/rach2/sys/virtio/virtqueue.c
++++ b/rach2/sys/virtio/virtqueue.c
+@@ -637,7 +637,13 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
+  * (drivers/virtio/virtio_ring.c:734-763 in 6.12.115). The index is read
+  * after the ring's, in the queue's lock, which keeps the last kick's index.
+  */
++
+ void virtqueue_kick(struct virtqueue *vq)
++{
++    (void)virtqueue_kick_n(vq);
++}
++
++int virtqueue_kick_n(struct virtqueue *vq)
+ {
+     uint32_t flags = spin_lock_irqsave(&vq->lock);
+     uint16_t old = vq->kicked_idx, now = vq->avail_idx, event;
+@@ -655,6 +661,7 @@ void virtqueue_kick(struct virtqueue *vq)
+     if (notify) {
+         vq->dev->ops->notify(vq->dev, vq);
+     }
++    return notify;
+ }
+ 
+ /** Put the chain at `head` back on the free list, with its indirect table;
