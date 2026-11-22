@@ -11,6 +11,7 @@
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/bkl_none.c tests/host/compat/rcu_none.c
  * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/walkseq_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `vfs_ns_lock` runs the operation queued in `waiting` before it gives the
@@ -149,6 +150,14 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     check(depth > 0 || mnt->ns.depth > 0, "relocation holds mount lock");
     fd_ofd_repoint(mnt, from, to);
+}
+
+/** No walk of the single-threaded test holds a directory. */
+int vfs_walk_holds(const struct vfs_mount *mnt, const void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
 }
 
 /* How many times the volume reported a halt. */

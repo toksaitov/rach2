@@ -369,14 +369,42 @@ static unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int valu
     return old;
 }
 
-/* The tree's sequence, which an unmount moves. */
+/* The walk sequence, which an unmount moves, and the changes under way. */
 static uint32_t tree_seq;
+static uint32_t tree_changes;
 
-/** Move the tree's sequence, as vfs.c's change of the mounts does; the
- * fixture keeps no generation of the mounts. */
-static void mounts_moved(void)
+/** Begin a change of what a path names, as walkseq.c's does. */
+static void vfs_seq_begin(void)
 {
+    tree_changes++;
     tree_seq++;
+}
+
+/** End the change `vfs_seq_begin` began. */
+static void vfs_seq_end(void)
+{
+    tree_changes--;
+    tree_seq++;
+}
+
+/* A walk's stamp, as walkseq.h has it. */
+struct vfs_stamp {
+    uint64_t seq;
+    int on;
+};
+
+/** The last walk's stamp, which the fixture's walks leave unchecked. */
+static void vfs_stamp_get(struct vfs_stamp *st)
+{
+    st->seq = tree_seq;
+    st->on = 0;
+}
+
+/** Whether nothing has changed since `st`; a stamp that is not checked
+ * holds. */
+static int vfs_stamp_still(const struct vfs_stamp *st)
+{
+    return !st->on || (tree_changes == 0 && st->seq == tree_seq);
 }
 
 /* The count of unmounts draining, and the queue a namespace's making waits

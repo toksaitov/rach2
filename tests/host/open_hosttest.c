@@ -616,6 +616,14 @@ int path_bufs_hold(const struct vfs_mount *mnt, const void *node)
     return 0;
 }
 
+/** No walk of the model holds a directory. */
+int vfs_walk_holds(const struct vfs_mount *mnt, const void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
 /** The working directory's start, which the model's mounts never cover. */
 int path_buf_set_cwd(char *buf)
 {
@@ -1271,6 +1279,20 @@ void vfs_seq_wait(uint64_t *seq)
 void walk_gate(int event)
 {
     (void)event;
+}
+
+/** A walk's stamp, which always holds. */
+void vfs_stamp_get(struct vfs_stamp *st)
+{
+    st->seq = 1;
+    st->on = 0;
+}
+
+/** Whether a stamp still holds, which it always does. */
+int vfs_stamp_still(const struct vfs_stamp *st)
+{
+    (void)st;
+    return 1;
 }
 
 /** Release a successfully opened handle, never more than were opened. */
@@ -3203,7 +3225,7 @@ static void truncation(void)
         check(open_mounted_node(&ref, 2 | O_TRUNC) == 0 && truncates == 0,
               "mounted node checks do not truncate before open");
         installing = fd_alloc(proc.fds);
-        rc = open_install(&ref, installing, "target", 2 | (mode == 3 ? 0 : O_TRUNC));
+        rc = open_install(&ref, installing, "target", 2 | (mode == 3 ? 0 : O_TRUNC), NULL);
         check(rc < 0 || (rc == installing && fd_get(proc.fds, rc) == fd_slot(proc.fds, rc)),
               "a finished open publishes the descriptor it reserved");
         installing = -1;
@@ -3845,7 +3867,7 @@ static int model_open(void)
     ref.node = &node;
     int fd = fd_alloc(proc.fds);
 
-    fd = fd < 0 ? fd : open_install(&ref, fd, "target", 2);
+    fd = fd < 0 ? fd : open_install(&ref, fd, "target", 2, NULL);
     fd_holds_release();
     return fd;
 }

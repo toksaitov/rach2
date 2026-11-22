@@ -8,6 +8,7 @@
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/lib/crc32.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * The test includes the source whole. A stub of a call that no row should
  * reach fails the test through `unexpected`.
