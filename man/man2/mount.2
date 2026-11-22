@@ -158,6 +158,16 @@ the filesystem changes through every mount that shows it.
 Only the
 named mount takes the per-mount flags.
 A remount that supplies no atime flag keeps the named mount's atime flags.
+A remount, with
+.Dv MS_BIND
+or without, that would change the per-mount flags of a mount another live
+mount namespace sees too is
+.Er EBUSY
+and changes nothing, since the namespaces share the mount where Linux
+gives each namespace a copy of its own; to seal a namespace's view, bind
+the mounts within it first, since a bind is seen by its maker's namespace
+alone, and remount the binds.
+A remount that leaves the per-mount flags as they are is not refused.
 Other bits, including
 .Dv MS_MOVE ,
 are refused.
@@ -693,8 +703,10 @@ An ancestor directory denies search permission.
 The target is covered, reserved, or in a mount undergoing a transition;
 the source overlaps a claimed range or an open raw writer;
 the source device is already mounted; an unmount is prevented by
-references; or a remount read-only finds a description open for writing
-or another such remount of the mount under way.
+references; a remount read-only finds a description or a writable loop
+attachment open for writing, or another such remount of the mount under
+way; or a remount would change the per-mount flags of a mount another live
+mount namespace sees.
 Unmounting a permanent mount without
 .Dv MNT_DETACH
 also returns this error.
