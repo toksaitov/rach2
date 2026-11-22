@@ -250,6 +250,11 @@ void vtd_hw_write64(uintptr_t regs, unsigned int off, uint64_t v);
 void *vtd_hw_page(uint64_t *phys);
 void vtd_hw_page_free(void *va);
 
+/** A zeroed page for a domain's tables, which may lie anywhere the units
+ * reach, as `vtd_hw_page` gives one; NULL when memory is short. */
+void *vtd_hw_table(uint64_t *phys);
+void vtd_hw_table_free(void *va);
+
 /** The kernel's address of a page `vtd_hw_page` gave, by its physical
  * address. */
 void *vtd_hw_virt(uint64_t phys);

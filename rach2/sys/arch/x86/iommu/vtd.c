@@ -368,7 +368,7 @@ static uint64_t *dom_slot(struct iommu_domain *d, uint64_t iova, int level, int 
             if (!create) {
                 return NULL;
             }
-            next = (uint64_t *)vtd_hw_page(&phys);
+            next = (uint64_t *)vtd_hw_table(&phys);
             if (next == NULL) {
                 return NULL;
             }
@@ -402,7 +402,7 @@ static void dom_free_tables(uint64_t *table, int level)
             }
         }
     }
-    vtd_hw_page_free(table);
+    vtd_hw_table_free(table);
 }
 
 /** Write every table of `d` back from the cache, when a unit that walks
@@ -433,13 +433,13 @@ static struct iommu_domain *dom_new(int levels)
     }
     d->levels = levels;
     d->limit = (uint64_t)1 << (12 + 9 * levels);
-    d->top = (uint64_t *)vtd_hw_page(&d->top_phys);
+    d->top = (uint64_t *)vtd_hw_table(&d->top_phys);
     if (d->top == NULL) {
         kfree(d);
         return NULL;
     }
     if (levels == 4 && dom_slot(d, 0, 3, 1, NULL) == NULL) {
-        vtd_hw_page_free(d->top);
+        vtd_hw_table_free(d->top);
         kfree(d);
         return NULL;
     }
