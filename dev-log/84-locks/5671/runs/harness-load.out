@@ -1,0 +1,7 @@
+run: starting: architecture i686, workers 24, accelerator kvm, a selection of 1 case
+@etude 1 assert panicked fail the wait for 'panic: stopped: double fault: a kernel stack ran out': lost
+etude-case: kept: /home/toksaitov-m/rach2/build/tests/failed/tests.i686.20261122T013337Z.2204488.machine.panic.kbd.r523
+run: panic: machine.panic.kbd r523: evidence: /home/toksaitov-m/rach2/build/tests/failed/tests.i686.20261122T013337Z.2204488.machine.panic.kbd.r523
+etude run: result: ran: 1 suites, 0 passed
+run: result: failed: panic
+run: result: failed

@@ -1,0 +1,3 @@
+run: starting: architecture i686, workers 24, accelerator kvm, a selection of 1 case
+etude run: result: ran: 1 suites, 1 passed
+run: result: all 1 suites passed
