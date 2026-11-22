@@ -117,6 +117,7 @@ struct vfs_xattr {
 };
 
 struct vfs_mount;
+struct vfs_stamp;
 struct fc_inode;
 struct vfs_ino_err;
 struct vfs_name;
@@ -1453,9 +1454,13 @@ int vfs_do_bind(const char *source, const char *target, int rec);
  * mount that is not active or, made read-only, through which a description
  * is open for writing (`fd_mount_readonly_begin`), as Linux's
  * mnt_make_readonly answers (fs/namespace.c). A read-only file system
- * still refuses writes if the mount flag is cleared.
+ * still refuses writes if the mount flag is cleared. With `st`, the stamp
+ * of the walk that found `m`, the call answers 1 and changes nothing when
+ * what a path names changed by the end of that wait (`vfs_stamp_still`),
+ * for the caller to walk again.
  */
-int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged);
+int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged,
+                     const struct vfs_stamp *st);
 
 /**
  * mount(2) with MS_REMOUNT: apply the file-system flags to the base and
@@ -1483,6 +1488,12 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged);
  * (`vfs_mntns_hold`) may outlast every other hold on it.
  */
 int vfs_remount(struct vfs_mount *m, uint32_t flags, const char *options);
+
+/** `vfs_remount` for a mount a walk found, whose stamp is `st`: 1, with
+ * nothing changed, when what a path names changed by the end of the wait
+ * for another remount (`vfs_stamp_still`), for the caller to walk again. */
+int vfs_remount_walked(struct vfs_mount *m, uint32_t flags, const char *options,
+                       const struct vfs_stamp *st);
 
 /**
  * A write to `dev` failed at `lba` with `rc`: every mount on the device goes

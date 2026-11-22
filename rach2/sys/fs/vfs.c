@@ -164,6 +164,7 @@ static void mount_release(struct vfs_mount *m)
     uint32_t flags;
     int i;
 
+    vfs_seq_begin();
     vfs_mount_view_free(m);
     ino_errs_free(m);
     for (i = VFS_PERMANENT; i < mount_slots; i++) {
@@ -171,11 +172,13 @@ static void mount_release(struct vfs_mount *m)
             flags = spin_lock_irqsave(&mount_table_lock);
             mounts[i] = NULL;
             spin_unlock_irqrestore(&mount_table_lock, flags);
+            vfs_seq_end();
             kfree(m);
             return;
         }
     }
     m->state = VFS_FREE;
+    vfs_seq_end();
 }
 
 struct vfs_mount *vfs_mount_at(int idx)
@@ -307,6 +310,15 @@ void vfs_mounts_changed(void)
 static void mounts_moved(void)
 {
     vfs_mounts_changed();
+}
+
+/** Set the state of the mount `m` as one change of what paths name, so that
+ * a walk that read the old state starts again (`vfs_seq_begin`). */
+static void mount_state_set(struct vfs_mount *m, int state)
+{
+    vfs_seq_begin();
+    m->state = state;
+    vfs_seq_end();
 }
 
 void vfs_replay(int magic, uint64_t seq, struct vfs_mount *xdev)
@@ -587,17 +599,21 @@ static int mount_in_view(const struct vfs_mount *m)
 /**
  * The mount whose root replaces `node` when the walk arrives at it: a child
  * of `mnt` covering that node in the walk's view (`mount_in_view`). A
- * mount being made or unmounted is returned too, and the walk's
- * `vfs_enter` answers EBUSY for it. A nameless mount covers no node; it is
- * entered by name instead (`mount_named`).
+ * mount being made is not, so that a walk finds the covered directory until
+ * the mount is made whole and becomes active, in one change of what paths
+ * name (`mount_state_set`), as a Linux mount is attached only once its
+ * super block is filled. A mount being unmounted is returned, and the
+ * walk's `vfs_enter` answers EBUSY for it. A nameless mount covers no node;
+ * it is entered by name instead (`mount_named`).
  */
 static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
 {
     int i;
 
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered && mounts[i]->covered == node && mount_in_view(mounts[i])) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->state != VFS_MOUNTING &&
+            mounts[i]->parent == mnt && mounts[i]->covered && mounts[i]->covered == node &&
+            mount_in_view(mounts[i])) {
             return mounts[i];
         }
     }
@@ -740,8 +756,8 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
         return 0;
     }
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
-            mounts[i]->covered == found && mount_in_view(mounts[i])) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->state != VFS_MOUNTING &&
+            mounts[i]->parent == mnt && mounts[i]->covered == found && mount_in_view(mounts[i])) {
             m = mounts[i];
         }
     }
@@ -791,6 +807,7 @@ struct bind_hold {
 struct bind_source {
     const char *real;
     struct bind_hold hold;
+    struct vfs_stamp stamp; /* the source walk's, checked under the cover lock */
 };
 
 /* The holds of the KRFFS root's bind sources, under `bind_holds_lock`. */
@@ -1901,22 +1918,61 @@ static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt,
 }
 
 /**
- * Whether the walk under `rules` may go on as `walk_rest_kind` said, `kind`,
- * from the node of `vp`: 0, `walk_link_ok`'s refusal of a link, or -ELOOP
- * when a jump to the object or the program of a link of /proc is past
- * VFS_LINK_MAX for the attempt, counted in `*links` as a link `walk_link`
- * follows is, so that one allowance covers every link a walk follows.
+ * Whether the walk of `flags` under `rules` may go on as `walk_rest_kind`
+ * said, `kind`, from the node of `vp`: 0, `walk_link_ok`'s refusal of a
+ * link, or -ELOOP when the links are past VFS_LINK_MAX for the attempt,
+ * counted in `*links` as a link `walk_link` follows is, so that one
+ * allowance covers every link a walk follows: a jump to the object or the
+ * program of a link of /proc, the links of /sys the type went through
+ * (`links` of the vpath), and a /proc/PID/fd/N at the end that the system
+ * call layer follows, as Linux counts its jump (`nd_jump_link`).
  */
 static int walk_rest_follow_ok(const struct walk_rules *rules, const struct vpath *vp, int kind,
-                               int *links)
+                               int flags, int *links)
 {
     int rc = kind ? walk_link_ok(rules, walk_magic(vp)) : 0;
 
-    if (rc == 0 &&
-        (kind == WALK_REST_OBJECT || (kind == WALK_REST_LINK && vp->kind == VNODE_PROC_EXE))) {
-        rc = ++*links > VFS_LINK_MAX ? -ELOOP : 0;
+    if (rc == 0 && vp) {
+        *links += vp->links;
+        *links += kind == WALK_REST_OBJECT ||
+                  (kind == WALK_REST_LINK && vp->kind == VNODE_PROC_EXE) ||
+                  (!kind && vp->kind == VNODE_PROC_FD_LINK && !(flags & VFS_WALK_NOFOLLOW));
+        rc = *links > VFS_LINK_MAX ? -ELOOP : 0;
     }
     return rc;
+}
+
+/**
+ * Judge the answer `*rc` a type that takes the rest of a path gave for the
+ * rest `p` below `cur`, with the node `found` held for 0, VFS_STEP and
+ * VFS_LINK: 1, with `found` put, when the walk's check `wc` finds that what
+ * a path names changed while the type slept, as it may in its page
+ * allocation, for the walk to start again; else 0, with `*rc` VFS_CLIMB,
+ * `*left` at `p` and `found` put when the walk gate's fault is armed for
+ * the caller at its mount's root (`walk_gate_fault`), which
+ * `walk_rest_back` then answers with -EIO.
+ */
+static int walk_rest_judge(const struct vfs_ref *cur, const struct walk_check *wc, int *rc,
+                           void *found, const char **left, const char *p)
+{
+    int stale;
+
+    if (*rc < 0) {
+        return 0;
+    }
+    stale = !walk_check_ok(wc);
+    if (!stale && (cur->node != cur->mnt->root || !walk_gate_fault())) {
+        return 0;
+    }
+    if (*rc == 0 || *rc == VFS_STEP || *rc == VFS_LINK) {
+        node_put(cur->mnt, found);
+    }
+    if (stale) {
+        return 1;
+    }
+    *rc = VFS_CLIMB;
+    *left = p;
+    return 0;
 }
 
 /**
@@ -2902,6 +2958,9 @@ begin:
                 break;
             }
             rc = proc_walk_rest(&cur, p, rlen, &found, &left, use_real);
+            if (walk_rest_judge(&cur, &wc, &rc, found, &left, p)) {
+                goto restart;
+            }
             if (rc == VFS_CLIMB || rc == VFS_ROOT) {
                 rc = walk_rest_back(&cur, &p, left);
                 if (rc != 0) {
@@ -2927,7 +2986,7 @@ begin:
             kind = walk_sys_link_kept(vp, rc, flags, p)
                        ? 0
                        : walk_rest_kind(vp, rc, cur.mnt, found, last_comp != 0, flags);
-            rc = walk_rest_follow_ok(&rules, vp, kind, &links);
+            rc = walk_rest_follow_ok(&rules, vp, kind, flags, &links);
             if (rc != 0) {
                 node_put(cur.mnt, found);
                 goto out_err;
@@ -3993,6 +4052,7 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     int i;
 
+    vfs_seq_begin();
     for (i = 0; i < mount_slots; i++) {
         if (!mounts[i] || mounts[i]->state == VFS_FREE || mounts[i]->dev != dev) {
             continue;
@@ -4007,12 +4067,14 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
         klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %d failed (%d)",
              mounts[i]->covered_path, (int)lba, rc);
     }
+    vfs_seq_end();
 }
 
 void vfs_mount_halted(struct vfs_mount *base)
 {
     int i;
 
+    vfs_seq_begin();
     for (i = 0; i < mount_slots; i++) {
         if (!mounts[i] || mounts[i]->state == VFS_FREE || mount_base(mounts[i]) != base) {
             continue;
@@ -4020,6 +4082,7 @@ void vfs_mount_halted(struct vfs_mount *base)
         base->flags |= VFS_MS_RDONLY; /* the file system's, as SB_RDONLY */
         klog(KLOG_WARN, "vfs", "read-only: %s: the file system halted", mounts[i]->covered_path);
     }
+    vfs_seq_end();
 }
 
 int vfs_device_holds(block_device_t *dev)
@@ -6591,6 +6654,7 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     }
     m->mnt_rdonly = (m->flags & VFS_MS_RDONLY) != 0; /* a root its type made read-only */
     m->flags |= VFS_MS_RELATIME;                     /* as Linux mounts by default */
+    vfs_seq_begin();
     m->state = VFS_ACTIVE;
     old = mounts[0];
     flags = spin_lock_irqsave(&mount_table_lock);
@@ -6605,8 +6669,8 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     old->parent = m;
     old->covered = 0;
     old->seq = ++mount_seq;
-    mounts_moved();
     k_strncpy(old->covered_path, place, sizeof(old->covered_path));
+    vfs_seq_end();
     vfs_mount_get(m);
     *host = old;
     return 0;
@@ -6648,15 +6712,18 @@ const struct vfs_type *vfs_type_at(int idx)
     return mount_types[idx];
 }
 
-/** Set only the attributes of the named mount. */
+/** Set only the attributes of the named mount, as one change of what paths
+ * name (`vfs_seq_begin`), since the walk reads them. */
 static void set_mount_attrs(struct vfs_mount *m, uint32_t flags)
 {
+    vfs_seq_begin();
     if (m->bind_of) {
         m->flags = flags & (VFS_MS_MOUNT | VFS_MS_RDONLY);
     } else {
         m->flags = (m->flags & ~VFS_MS_MOUNT) | (flags & VFS_MS_MOUNT);
         m->mnt_rdonly = (flags & VFS_MS_RDONLY) != 0;
     }
+    vfs_seq_end();
 }
 
 /**
@@ -6702,8 +6769,10 @@ static int remount_held(struct vfs_mount *named, uint32_t flags, const char *opt
     if (rc != 0) {
         return rc;
     }
+    vfs_seq_begin();
     m->flags = (m->flags & ~VFS_MS_SUPER) | (flags & VFS_MS_SUPER);
     set_mount_attrs(named, flags);
+    vfs_seq_end();
     if (closing) {
         fd_mount_readonly_end(m);
     }
@@ -6712,13 +6781,19 @@ static int remount_held(struct vfs_mount *named, uint32_t flags, const char *opt
 
 int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
 {
+    return vfs_remount_walked(named, flags, options, NULL);
+}
+
+int vfs_remount_walked(struct vfs_mount *named, uint32_t flags, const char *options,
+                       const struct vfs_stamp *st)
+{
     int rc;
 
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
     vfs_mntns_hold();
-    rc = remount_held(named, flags, options);
+    rc = st && !vfs_stamp_still(st) ? 1 : remount_held(named, flags, options);
     vfs_mntns_release();
     if (rc == 0) {
         klog(KLOG_INFO, "vfs", "remounted: %s (%s)", named->covered_path,
@@ -7080,6 +7155,7 @@ static int mount_new(const char *source, const char *target, const char *type, u
                                                    : type_named(type);
     struct vfs_ref tref;
     struct vfs_mount *m = 0;
+    struct vfs_stamp st;
     block_device_t *dev;
     char canon[VFS_COVERED_PATH_MAX];
     int claim, nameless;
@@ -7091,10 +7167,12 @@ static int mount_new(const char *source, const char *target, const char *type, u
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
+again:
     rc = vfs_resolve_fd(target, VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL, kept);
     if (rc < 0) {
         return rc;
     }
+    vfs_stamp_get(&st);
     if (t == &vfs_procfs_type && tref.mnt->type == t && tref.node == tref.mnt->root &&
         mount_permanent(tref.mnt)) {
         k_strncpy(canon, tref.mnt->covered_path, sizeof(canon));
@@ -7106,6 +7184,13 @@ static int mount_new(const char *source, const char *target, const char *type, u
         return rc;
     }
     rc = vfs_cover_lock(&tref);
+    if (rc == 0 && !vfs_stamp_still(&st)) {
+        vfs_node_unlock(&tref);
+        vfs_ref_release(&tref);
+        fd_unkeep(*kept);
+        *kept = NULL;
+        goto again;
+    }
     if (rc == 0 && !vfs_mount_seen(tref.mnt)) {
         rc = -EINVAL;
     }
@@ -7156,7 +7241,7 @@ static int mount_new(const char *source, const char *target, const char *type, u
         return rc;
     }
     m->mnt_rdonly = (m->flags & VFS_MS_RDONLY) != 0; /* a mount its type made read-only */
-    m->state = VFS_ACTIVE;
+    mount_state_set(m, VFS_ACTIVE);
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path, t->name,
          (flags & VFS_MS_RDONLY) ? ", read-only" : "");
     return 0;
@@ -7192,7 +7277,7 @@ int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *sou
         mount_release(m);
         return rc;
     }
-    m->state = VFS_ACTIVE;
+    mount_state_set(m, VFS_ACTIVE);
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s)", source, m->covered_path, t->name);
     return 0;
 }
@@ -7324,7 +7409,7 @@ static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *paren
             c->type->ops->hold(mount_base(c), c->root);
         }
         bind_fill(b, c, c->root, c->bind_of ? c->bind_root : "/");
-        b->state = VFS_ACTIVE;
+        mount_state_set(b, VFS_ACTIVE);
     }
     vfs_node_unlock(&cov);
     return b;
@@ -7634,7 +7719,7 @@ static void bind_hold_publish(struct bind_hold *h, struct vfs_mount *m, struct v
     void *node;
 
     if (!h || (!h->node && !h->pin)) {
-        m->state = VFS_ACTIVE;
+        mount_state_set(m, VFS_ACTIVE);
         return;
     }
     vfs_ns_lock(mnt);
@@ -7646,7 +7731,7 @@ static void bind_hold_publish(struct bind_hold *h, struct vfs_mount *m, struct v
     }
     m->bind_pin = h->pin;
     h->pin = NULL;
-    m->state = VFS_ACTIVE;
+    mount_state_set(m, VFS_ACTIVE);
     vfs_ns_unlock(mnt);
 }
 
@@ -7678,13 +7763,16 @@ static void bind_let_go(struct vfs_mount *m)
  * naming it, both walks' references taken over: the mounts below the
  * source too with `rec`, but for `skip` and those below it (`bind_below`).
  * `src` has the source's real path and its hold on KRFFS (`bind_hold_take`),
- * which the bind takes over once placed; NULL is neither. Once the bind is
- * placed, the walks'
- * counts of operations in progress are given back; the hold on the covered
+ * which the bind takes over once placed, and the stamp of the source's walk,
+ * checked once the target's cover lock is held (`vfs_stamp_still`); NULL is
+ * none of these. Once the bind is placed, the walks' counts of operations
+ * in progress are given back; the hold on the covered
  * node stays with the slot, or is put back for a nameless bind, which covers
  * no node (`target_check`), and the hold on the source's node stays with the
  * bind, as its root. On an error both references are released and `h` is
- * given back (`bind_fail`). 0, or the errors `vfs_do_bind` lists.
+ * given back (`bind_fail`). 0, 1 when what a path names changed since the
+ * walks, with everything given back for the call to walk again, or the
+ * errors `vfs_do_bind` lists.
  */
 static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *target, int rec,
                      const struct vfs_mount *skip, struct bind_source *src, const char *treal)
@@ -7707,6 +7795,12 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
         return rc;
     }
     gone = vfs_cover_lock(tref);
+    if (src && !vfs_stamp_still(&src->stamp)) {
+        vfs_node_unlock(tref);
+        vfs_ref_release(tref);
+        bind_fail(sref, h);
+        return 1;
+    }
     if (!skip && (!vfs_mount_seen(sref->mnt) || !vfs_mount_seen(tref->mnt))) {
         vfs_node_unlock(tref);
         vfs_ref_release(tref);
@@ -7842,9 +7936,11 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     int dir, rc;
 
     src.real = sreal;
+again:
     rc = sreal && treal ? bind_resolve(source, VFS_WALK_SOURCE, &sref, sreal, &skept, &src.hold)
                         : -ENOMEM;
     if (rc == 0) {
+        vfs_stamp_get(&src.stamp);
         rc = bind_source_held(&sref, &src.hold, full, inner, sreal, &dir);
         if (rc == 0) {
             rc = bind_resolve(target, VFS_WALK_COVER, &tref, treal, &tkept, NULL);
@@ -7857,12 +7953,18 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     }
     fd_unkeep(tkept);
     fd_unkeep(skept);
+    if (rc == 1) {
+        tkept = NULL;
+        skept = NULL;
+        goto again;
+    }
     kfree(sreal);
     kfree(treal);
     return rc;
 }
 
-int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged)
+int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged,
+                     const struct vfs_stamp *st)
 {
     int closing, rc;
 
@@ -7873,6 +7975,10 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged)
         vfs_mntns_hold();
     } else if ((rc = vfs_mntns_hold_unprivileged(m, flags)) != 0) {
         return rc;
+    }
+    if (st && !vfs_stamp_still(st)) {
+        vfs_mntns_release();
+        return 1;
     }
     closing = (flags & VFS_MS_RDONLY) && !vfs_mount_rdonly(m);
     rc = m->state != VFS_ACTIVE ? -EBUSY : 0;
@@ -8061,18 +8167,27 @@ static int held_unseen(const struct vfs_mount *m)
  * on Linux. The node checked is the node unmounted, so a symbolic link
  * replaced between two walks cannot change the answer. A target found by
  * its recorded path below a removed device is a mount's root, a directory.
+ * When what a path names changed while the checks slept, the walk runs
+ * again (`vfs_stamp_still`).
  */
 static int umount_target(const char *target, int dir, struct fd_kept **kept)
 {
     struct vfs_ref tref;
     struct vfs_mount *m;
+    struct vfs_stamp st;
     struct fd_walk fw;
     int rc;
 
+again:
     fw.path = NULL;
     rc = resolve_fd_path(NULL, target, WALK_UNMOUNT | VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL,
                          &fw);
     *kept = fw.kept;
+    st.seq = 0;
+    st.on = 0;
+    if (rc >= 0) {
+        vfs_stamp_get(&st);
+    }
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
     if (rc < 0 && !m) {
         return rc;
@@ -8082,6 +8197,11 @@ static int umount_target(const char *target, int dir, struct fd_kept **kept)
         if (rc != 0) {
             return rc;
         }
+    }
+    if (!vfs_stamp_still(&st)) {
+        fd_unkeep(*kept);
+        *kept = NULL;
+        goto again;
     }
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
@@ -8134,15 +8254,24 @@ static int detached_by(const struct vfs_mount *c, const struct vfs_mount *m,
     return 0;
 }
 
-/** vfs_do_detach, with the copy a descriptor target keeps in `*kept`. */
-static int detach_target(const char *target, int dir, struct fd_kept **kept)
+/** vfs_do_detach, with the copy a descriptor target keeps in `*kept`. The
+ * mounts leave the caller's view in one change of what paths name, and the
+ * walk runs again when one came while the checks slept
+ * (`vfs_stamp_still`). */
+static int detach_target(const char *path, int dir, struct fd_kept **kept)
 {
     struct vfs_ref tref, cwd;
-    const struct vfs_ref *start = NULL;
-    struct vfs_mount *m, *root = root_mount_of_caller();
+    const struct vfs_ref *start;
+    struct vfs_mount *m, *root;
+    struct vfs_stamp st;
     struct fd_walk fw;
+    const char *target;
     int i, rc;
 
+again:
+    target = path;
+    start = NULL;
+    root = root_mount_of_caller();
     if (target[0] == '/' && target[1] == '/' && current_proc && current_proc->fs->cwd_mnt &&
         streq(target + (target[2] == '/'), proc_cwd(current_proc))) {
         cwd.mnt = current_proc->fs->cwd_mnt;
@@ -8157,6 +8286,11 @@ static int detach_target(const char *target, int dir, struct fd_kept **kept)
     rc = resolve_fd_path(start, target, WALK_UNMOUNT | VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL,
                          &fw);
     *kept = fw.kept;
+    st.seq = 0;
+    st.on = 0;
+    if (rc >= 0) {
+        vfs_stamp_get(&st);
+    }
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
     if (rc < 0 && !m) {
         return rc;
@@ -8170,12 +8304,18 @@ static int detach_target(const char *target, int dir, struct fd_kept **kept)
             return rc;
         }
     }
+    if (!vfs_stamp_still(&st)) {
+        fd_unkeep(*kept);
+        *kept = NULL;
+        goto again;
+    }
     if (!m->parent) {
         return -EINVAL;
     }
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
     }
+    vfs_seq_begin();
     for (i = 0; i < mount_slots; i++) {
         struct vfs_mount *c = mounts[i];
 
@@ -8183,6 +8323,7 @@ static int detach_target(const char *target, int dir, struct fd_kept **kept)
             vfs_mount_hide(c);
         }
     }
+    vfs_seq_end();
     klog(KLOG_INFO, "vfs", "detached: %s", m->covered_path);
     vfs_reap_detached();
     return 0;
@@ -8315,7 +8456,6 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
         current_proc && current_proc->fs->root_mnt ? current_proc->fs->root_node : mounts[0]->root;
     int i, rc, same = 0;
 
-    mounts_moved();
     rc = vfs_resolve_fd(new_root, VFS_WALK_MOUNT, &nref, NULL, nkept);
     if (rc < 0) {
         return rc;
@@ -8326,6 +8466,7 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
         return rc;
     }
     rc = pivot_check(&nref, &oref, rmnt, rnode, &same);
+    vfs_seq_begin();
     if (rc == 0 && !same) {
         sref.mnt = rmnt;
         sref.node = rnode;
@@ -8337,6 +8478,7 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
             vfs_ref_release(&oref);
         }
         if (rc != 0) {
+            vfs_seq_end();
             vfs_ref_release(&nref);
             return rc;
         }
@@ -8352,6 +8494,7 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
         vfs_ref_release(&oref);
     }
     if (rc != 0) {
+        vfs_seq_end();
         vfs_ref_release(&nref);
         return rc;
     }
@@ -8360,6 +8503,7 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
             mounts[i]->ns_root = mounts[i] == nref.mnt;
         }
     }
+    vfs_seq_end();
     klog(KLOG_INFO, "vfs", "pivoted: %s", nref.mnt->covered_path);
     *out = nref;
     vfs_reap_detached();
@@ -8483,15 +8627,16 @@ static int unmount_mount(struct vfs_mount *m)
     struct vfs_ref cov;
     block_device_t *dev = m->dev;
 
+    vfs_seq_begin();
     arch_atomic_xchg((volatile unsigned int *)(void *)&m->state, (unsigned int)VFS_UNMOUNTING);
-    mounts_moved();
+    vfs_seq_end();
     unmounts_draining++;
     while (*(volatile uint32_t *)&m->inprogress > 0) {
         wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
     busy = m->refs > 0;
     if (busy) {
-        m->state = VFS_ACTIVE;
+        mount_state_set(m, VFS_ACTIVE);
     }
     if (--unmounts_draining == 0) {
         wq_wake_all(&unmounts_wq);

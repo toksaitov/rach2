@@ -10,6 +10,7 @@
 #include "procfs.h"
 #include "synthfs.h"
 #include "devtree.h"
+#include "walkseq.h"
 
 #include "../block/loop.h"
 #include "fd.h"
@@ -2425,6 +2426,7 @@ void devfs_disk_nodes(struct disk *d)
         klog(KLOG_WARN, "devfs", "disk%d: no nodes: the table is full", d->number);
         return;
     }
+    vfs_seq_begin();
     for (k = 0; k < DISK_NODE_WINDOWS; k++) {
         struct disk_node *node = &disk_nodes[disk_node_count++];
 
@@ -2437,12 +2439,14 @@ void devfs_disk_nodes(struct disk *d)
         node->entry.mode = 0400;
         node->entry.ops = &diskwin_ops;
     }
+    vfs_seq_end();
 }
 
 void devfs_disk_part_nodes(struct disk *d)
 {
     int j, k;
 
+    vfs_seq_begin();
     for (j = 0; j < disk_node_count; j++) {
         struct disk_node *node = &disk_nodes[j];
 
@@ -2452,6 +2456,7 @@ void devfs_disk_part_nodes(struct disk *d)
         k = node->part - 1;
         disk_node_name(node, d->number, k < d->table.count ? d->table.parts[k].number : node->part);
     }
+    vfs_seq_end();
 }
 
 /*
@@ -3137,6 +3142,7 @@ int32_t devfs_node_register(struct devfs_node *node)
     if (!slot) {
         return reg_slot_count < DEVFS_SLOTS_MAX ? -ENOMEM : -ENOSPC;
     }
+    vfs_seq_begin();
     k_strncpy(slot->name, node->name, sizeof(slot->name) - 1);
     slot->name[sizeof(slot->name) - 1] = '\0';
     slot->entry.name = slot->name;
@@ -3148,6 +3154,7 @@ int32_t devfs_node_register(struct devfs_node *node)
     slot->node = node;
     reg_slot_free--;
     owned_drop(&slot->entry);
+    vfs_seq_end();
     return 0;
 }
 
@@ -3155,6 +3162,7 @@ void devfs_node_unregister(struct devfs_node *node)
 {
     struct reg_slot *slot;
 
+    vfs_seq_begin();
     for (slot = reg_head; slot; slot = slot->next) {
         if (slot->node == node) {
             slot->node = NULL;
@@ -3162,6 +3170,7 @@ void devfs_node_unregister(struct devfs_node *node)
             owned_drop(&slot->entry);
         }
     }
+    vfs_seq_end();
 }
 
 uint32_t devfs_fd_mode(struct fd_entry *e)

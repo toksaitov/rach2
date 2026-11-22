@@ -8,6 +8,7 @@
 
 #include "vfs.h"
 #include "krffs.h"
+#include "walkseq.h"
 #include "../drm/drm.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
@@ -163,7 +164,9 @@ static const char *next_name(const char *path, int *len)
 /**
  * Make the node `path` of `mode`, its type bits among them, and the
  * directories on the way: the node in `*out`, or -EINVAL, -EEXIST,
- * -ENOTDIR or -ENOMEM as `debugfs_create_file` gives them.
+ * -ENOTDIR or -ENOMEM as `debugfs_create_file` gives them. The caller
+ * brackets this and the filling of the node as one change of what paths
+ * name (`vfs_seq_begin`), so that no walk takes a half-made node.
  */
 static int32_t create(const char *path, uint32_t mode, struct debugfs_node **out)
 {
@@ -218,12 +221,14 @@ int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_o
     if (!ops) {
         return -EINVAL;
     }
+    vfs_seq_begin();
     rc = create(path, DFS_IFREG | (mode & 07777u), &n);
     if (rc == 0) {
         n->ops = ops;
         n->open = open;
         n->data = data;
     }
+    vfs_seq_end();
     return rc;
 }
 
@@ -238,20 +243,24 @@ int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugf
     if (!ops || !ops->show) {
         return -EINVAL;
     }
+    vfs_seq_begin();
     rc = create(path, DFS_IFREG | (mode & 07777u), &n);
     if (rc == 0) {
         n->ops = &text_ops;
         n->text = ops;
         n->data = data;
     }
+    vfs_seq_end();
     return rc;
 }
 
 int32_t debugfs_create_dir(const char *path, const struct debugfs_owner *ops, void *owner)
 {
     struct debugfs_node *n;
-    int32_t rc = create(path, DFS_IFDIR | 0755u, &n);
+    int32_t rc;
 
+    vfs_seq_begin();
+    rc = create(path, DFS_IFDIR | 0755u, &n);
     if (rc == 0 && ops) {
         if (n->owner_ops) {
             n->owner_ops->put(n->owner);
@@ -260,6 +269,7 @@ int32_t debugfs_create_dir(const char *path, const struct debugfs_owner *ops, vo
         n->owner = owner;
         ops->get(owner);
     }
+    vfs_seq_end();
     return rc;
 }
 
@@ -279,13 +289,16 @@ int32_t debugfs_create_symlink(const char *path, const char *target)
         return -ENOMEM;
     }
     k_memcpy(copy, target, len + 1u);
+    vfs_seq_begin();
     rc = create(path, DFS_IFLNK | 0777u, &n);
+    if (rc == 0) {
+        n->target = copy;
+    }
+    vfs_seq_end();
     if (rc != 0) {
         kfree(copy);
-        return rc;
     }
-    n->target = copy;
-    return 0;
+    return rc;
 }
 
 /** Take `n` and every node below it out of the tree; each is freed when
@@ -320,7 +333,9 @@ void debugfs_remove(const char *path)
         path = name + len;
     }
     if (n != &root) {
+        vfs_seq_begin();
         take_out(n);
+        vfs_seq_end();
     }
 }
 

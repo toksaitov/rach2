@@ -2079,7 +2079,8 @@ static int synth_sys_reg_enter(int target, const struct comp *c, int n, struct v
  * the path reached by name: an attribute is a file, with `h` its key, and a
  * path past it VNODE_ENOTDIR; a directory is a directory, and the path goes
  * on among its entries; a link is classified as what it leads to, and a
- * path that ends on it as VNODE_SYS_LINK with the link in `sysreg`.
+ * path that ends on it as VNODE_SYS_LINK with the link in `sysreg`. Each
+ * link the path goes through is counted in `links`.
  */
 static int synth_sys_reg_walk(int h, const struct comp *c, int n, struct vpath *vp, int hops)
 {
@@ -2095,6 +2096,7 @@ static int synth_sys_reg_walk(int h, const struct comp *c, int n, struct vpath *
             return vp->kind;
         }
         if (kind == SYSFS_NODE_LINK) {
+            vp->links += n > 0;
             synth_sys_reg_enter(sysfs_node_target(h), c, n, vp, hops);
             if (n == 0 && vp->kind == VNODE_SYS_DIR) {
                 vp->kind = VNODE_SYS_LINK;
@@ -2483,6 +2485,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->sysent = 0;
     vp->syskey = 0;
     vp->sysreg = 0;
+    vp->links = 0;
 
     n = synth_split(path, c, SYNTH_MAXC + 1);
 
