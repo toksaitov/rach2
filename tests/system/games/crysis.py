@@ -454,16 +454,30 @@ def frame_stats(values):
         at(0.5), at(0.99), s[-1], sum(1 for v in s if v > 50), sum(1 for v in s if v > 100))
 
 
-def flyby_profile(game, phase):
-    """Read counters at a flyby boundary when BED_PROFILE names the reader."""
-    reader = os.environ.get("BED_PROFILE")
-    if not reader:
-        return
-    counts = game.out / "profile"
-    counts.mkdir(exist_ok=True)
-    mark = counts / ("mark-" + phase)
-    mark.write_text("%d %d\n" % (time.monotonic_ns(), game.frames()))
-    subprocess.run(["sh", reader, counts, phase], check=True)
+def profile_dir(name):
+    """Return STATE/NAME-profile, made new, when BED_PROFILE names the reader,
+    or None. STATE is root's, and its parent is too where the profile is
+    taken, so the snapshots root writes there go through no name the desktop
+    account chose, as one in OUT, which that account owns, could."""
+    if not os.environ.get("BED_PROFILE"):
+        return None
+    counts = STATE / (name + "-profile")
+    if counts.is_dir() and not counts.is_symlink():
+        shutil.rmtree(counts)
+    elif counts.exists() or counts.is_symlink():
+        counts.unlink()
+    counts.mkdir(mode=0o755)
+    return counts
+
+
+def flyby_profile(game, counts, phase):
+    """Read counters into COUNTS at a flyby boundary: PHASE is before or
+    after, or stop, which ends the VM's profiler that before started."""
+    reader = os.environ["BED_PROFILE"]
+    if phase != "stop":
+        mark = counts / ("mark-" + phase)
+        mark.write_text("%d %d\n" % (time.monotonic_ns(), game.frames()))
+    subprocess.run(["sh", reader, counts, phase], check=phase != "stop")
 
 
 def flyby(route, name, loops):
@@ -472,23 +486,30 @@ def flyby(route, name, loops):
     if BENCH.is_symlink() or BENCH.exists():
         BENCH.unlink()
     settings()
+    counts = profile_dir(name)
     game = Game(out, route, ["+map", "island", "+exec", "benchmark_gpu"])
     ends = []
+    profiling = False
     try:
         game.wait(lambda: game.loaded() is not None, "load")
         say("loaded in %s s" % game.loaded())
-        flyby_profile(game, "before")
+        if counts:
+            profiling = True
+            flyby_profile(game, counts, "before")
         while len(ends) < loops:
             done = len(finished())
             if done > len(ends):
                 ends.append(game.frames())
-                if len(ends) == loops:
-                    flyby_profile(game, "after")
+                if len(ends) == loops and counts:
+                    flyby_profile(game, counts, "after")
+                    profiling = False
                 say("loop %d finished at frame %d" % (done - 1, ends[-1]))
                 continue
             if not game.wait(lambda: len(finished()) > len(ends), "loop %d" % len(ends)):
                 break
     finally:
+        if profiling:
+            flyby_profile(game, counts, "stop")
         game.end()
     runs = finished()[:loops]
     dump = []

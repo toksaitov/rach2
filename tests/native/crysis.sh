@@ -874,11 +874,16 @@ kept=1
 
 # prepare writes the session's files, which the namespace keeps read-only;
 # every write of the game's commands is made in it.
+# For native, out stays root's: the game's output is in out/crysis, which
+# prepare gives the desktop account, and the state and profile in
+# out/crysis-state, root's.
+prepared=$here/out
 if [ "$1" = native ]; then
     CRYSIS_STATE=$here/out/crysis-state
     export CRYSIS_STATE
+    prepared=$here/out/crysis
 fi
-python3 ./crysis.py prepare "$here/out" || fail prepare
+python3 ./crysis.py prepare "$prepared" || fail prepare
 sealed()
 {
     unshare --mount --propagation private python3 -c "$seal_py" "$here/out" "$@"

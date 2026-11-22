@@ -127,7 +127,7 @@ out=$(cd "$out" && pwd)
 # in OUT stays, untouched.
 written='counts line scene.log latency latency.build latency.out taken harness
     frametimes cpuframes passes tmp shader-cache scene glmark2.log piglit
-    browser.log game game.log'
+    browser.log game game.log profile'
 if [ "$inner" = 0 ]; then
     if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
         chown 0:0 "$out"
@@ -441,13 +441,26 @@ stop_scene()
     kill -KILL "-$scene_pid" 2>/dev/null || true
     scene_pid=''
 }
-trap 'stop_copy; stop_scene' EXIT
+# stop_profile: end the VM's profiler that profile.sh's `before` started
+# when the scene ends before `after` has stopped it.
+# shellcheck disable=SC2317 # the EXIT trap calls it
+stop_profile()
+{
+    [ "$profiling" = 1 ] || return 0
+    profiling=0
+    sh "$BED_PROFILE" "$out/profile" stop > /dev/null 2>&1 || true
+}
+profiling=0
+trap 'stop_copy; stop_scene; stop_profile' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# OUT/taken gets root's copies of the scene's files, below.
+# OUT/taken gets root's copies of the scene's files, below. OUT/profile,
+# made here before USER may write OUT, is root's, so that the snapshots
+# profile.sh writes as root go through no name USER chose.
 mkdir -m 700 "$out/taken"
+[ -z "${BED_PROFILE:-}" ] || mkdir -m 755 "$out/profile"
 
 flags=''
 [ "$own" = 1 ] || flags=-d
@@ -485,7 +498,10 @@ fi
 
 [ "$marks" = 0 ] || echo "measure: counts: before"
 { echo before; counts; } > "$out/counts"
-[ -z "${BED_PROFILE:-}" ] || sh "$BED_PROFILE" "$out/profile" before
+if [ -n "${BED_PROFILE:-}" ]; then
+    profiling=1
+    sh "$BED_PROFILE" "$out/profile" before
+fi
 start=$(date +%s.%N)
 status=0
 if [ "$harness" != "$here" ]; then
@@ -503,7 +519,10 @@ scene_pid=$!
 wait "$scene_pid" || status=$?
 scene_pid=''
 end=$(date +%s.%N)
-[ -z "${BED_PROFILE:-}" ] || sh "$BED_PROFILE" "$out/profile" after
+if [ -n "${BED_PROFILE:-}" ]; then
+    sh "$BED_PROFILE" "$out/profile" after
+    profiling=0
+fi
 { echo after; counts; } >> "$out/counts"
 [ "$marks" = 0 ] || echo "measure: counts: after"
 # The scene's files, USER's under -u, are read once, by USER, and only as

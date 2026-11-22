@@ -1,9 +1,26 @@
 #!/bin/sh
 # Read the host's graphics and KVM counts at the boundary of a measured scene.
+# `stop` ends the VM's profiler that `before` started, for a caller's cleanup
+# when the scene ends before its `after`.
 set -eu
 
-[ "$#" = 2 ] || { echo 'usage: profile.sh DIRECTORY before|after' >&2; exit 2; }
-case $2 in before|after) ;; *) exit 2 ;; esac
+[ "$#" = 2 ] || { echo 'usage: profile.sh DIRECTORY before|after|stop' >&2; exit 2; }
+case $2 in before|after|stop) ;; *) exit 2 ;; esac
+
+# vm ARGS: run sh with ARGS as root in the profiling VM, script on stdin.
+vm()
+{
+    ssh -F /dev/null -p "$BED_VM_PROFILE_PORT" -i "${BED_VM_PROFILE_KEY:?}" \
+        -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes \
+        -o "UserKnownHostsFile=${BED_VM_PROFILE_HOSTS:?}" gfx@127.0.0.1 \
+        sudo sh -s -- "$@"
+}
+
+if [ "$2" = stop ]; then
+    [ -z "${BED_VM_PROFILE_PORT:-}" ] ||
+        echo 'systemctl stop vgpu-profile-perf 2> /dev/null || :' | vm
+    exit 0
+fi
 out=$1/$2
 mkdir -p "$out"
 date +%s.%N > "$out/start"
@@ -20,10 +37,7 @@ if command -v ivshmemd > /dev/null; then
     ivshmemd -i > "$out/region" 2> "$out/region.err" || :
 fi
 if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
-    ssh -F /dev/null -p "$BED_VM_PROFILE_PORT" -i "${BED_VM_PROFILE_KEY:?}" \
-        -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes \
-        -o "UserKnownHostsFile=${BED_VM_PROFILE_HOSTS:?}" gfx@127.0.0.1 \
-        sudo sh -s -- "$2" > "$out/vm" <<'VM'
+    vm "$2" > "$out/vm" <<'VM'
 set -eu
 pid=$(pidof -s vgpu-backend)
 file=/run/vgpu-profile
