@@ -42,6 +42,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -56,6 +57,7 @@ SAVEGAMES = SAVES / "SaveGames"
 BENCH = GAME / "Game/Levels/island/benchmark_gpu.log"
 RECORD = BASE / "accept.json"
 STATE = Path(os.environ.get("CRYSIS_STATE", "/run/crysis-accept"))
+HUD_PARENT = os.environ.get("CRYSIS_HUD_PARENT")
 UID = 1001
 ENV = ("export XDG_RUNTIME_DIR=/run/user/1001 DISPLAY=:0 "
        "PULSE_SERVER=unix:/run/user/1001/pulse/native PROTON_USE_XALIA=0 "
@@ -185,8 +187,8 @@ class Game:
     def __init__(self, out, route, args, prefix=None):
         self.out = out
         self.prefix = prefix or str(BASE / "compat")
-        self.hud = out / "hud"
-        self.hud.mkdir()
+        self.hud = Path(HUD_PARENT) / out.name if HUD_PARENT else out / "hud"
+        self.hud.mkdir(parents=True)
         os.chown(self.hud, UID, UID)
         command = ["crysis.sh", "run"] + ROUTES[route]
         if prefix:
@@ -358,6 +360,8 @@ class Game:
             os.killpg(self.proc.pid, signal.SIGKILL)
         self.proc.wait()
         self.log.close()
+        if HUD_PARENT:
+            shutil.copytree(self.hud, self.out / "hud")
         for path in (BENCH, GAME / "Game.log", BASE / "logs/steam-17300.log"):
             if path.exists():
                 (self.out / path.name).write_bytes(path.read_bytes())
@@ -438,6 +442,8 @@ def flyby(route, name, loops):
         beside = (" linux %.2f" % linux[i]) if i < len(linux) else ""
         check("loop%d" % i, fps >= gate, "%.2f fps (gate %.0f)%s, play %.2f s%s" % (
             fps, gate, beside, play, (", " + frame_stats(segment)) if segment else ""))
+        if HUD_PARENT:
+            check("loop%d-frames" % i, bool(segment), "%d frame times" % len(segment))
     check("loops", len(runs) == loops, "%d of %d loops finished" % (len(runs), loops))
     game.renderer()
 
