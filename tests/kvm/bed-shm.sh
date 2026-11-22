@@ -262,6 +262,28 @@ group_kill()
     done
 }
 
+# descendants PGID...: `PID PGID` for every process descended from a
+# member of the groups PGID..., members excluded, read once from ps. A
+# load's harness starts groups of its own, which ending the load's group
+# does not reach, and an orphan's parent becomes init, so they are read
+# before any group ends.
+descendants()
+{
+    # shellcheck disable=SC2009 # pgrep gives no parent and group together
+    ps -e -o pid,ppid,pgid | awk -v groups=" $* " '
+        NR > 1 { kids[$2] = kids[$2] " " $1; pgid[$1] = $3
+                 if (index(groups, " " $3 " ")) { q[++n] = $1; seen[$1] = 1 } }
+        END {
+            for (i = 1; i <= n; i++) {
+                m = split(kids[q[i]], k, " ")
+                for (j = 1; j <= m; j++)
+                    if (!(k[j] in seen)) {
+                        seen[k[j]] = 1; q[++n] = k[j]; print k[j], pgid[k[j]]
+                    }
+            }
+        }'
+}
+
 # gone TRIES PID...: wait, TRIES tries of 0.1 s at most, until none of the
 # children PID... runs, without reaping them, so that a later wait still
 # gives each one's status. Returns 1, with the pids still running in
@@ -379,16 +401,40 @@ cleanup()
     cleanup_bad=$bad
     crysis_restore_ini || fail settings 'failed to restore weston.ini'
 
-    # Step 2, load: each load's and figure's process group, TERM and after
-    # 20 s KILL, then 10 s to empty (end_group); then every child the run
+    # Step 2, load: each load's and figure's process group, and each group
+    # of a process descended from them, TERM and after 20 s KILL, then 10 s
+    # to empty (end_group), and each such descendant left, KILL and 10 s;
+    # then every child the run
     # started but gpu.sh, QEMU among them unless gpu.sh runs it: TERM,
     # 10 s, KILL, 10 s more. The survivors are named with what they hold,
     # left unreaped, so that no other process takes their pids. QEMU under
     # gpu.sh is gpu.sh's to kill, in step 3, before its give-back.
     survivors=''
     # shellcheck disable=SC2086 # the load's, the figure's and those left
-    for g in $(pids $load $figpid $groups); do
+    owned=$(pids $load $figpid $groups)
+    # shellcheck disable=SC2086 # a list of groups
+    desc=$(descendants $owned)
+    self=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+    for g in $(echo "$desc" | awk '{ print $2 }' | sort -u); do
+        case " $owned $self " in *" $g "*) ;; *) owned="$owned $(pids "$g")" ;; esac
+    done
+    for g in $owned; do
         end_group "$g" || survivors="${survivors:+$survivors; }$group_left"
+    done
+    # A descendant that left every group above, by a setsid of its own
+    # into a group led by a process already gone, is killed by its pid.
+    for d in $(echo "$desc" | awk '{ print $1 }'); do
+        if [ -z "$(pids "$d")" ] || ! kill -0 "$d" 2>/dev/null; then
+            continue
+        fi
+        kill -KILL "$d" 2>/dev/null
+        n=100
+        while kill -0 "$d" 2>/dev/null && [ "$n" -gt 0 ]; do
+            sleep 0.1
+            n=$((n - 1))
+        done
+        ! kill -0 "$d" 2>/dev/null ||
+            survivors="${survivors:+$survivors; }descendant $d of the load after KILL: $(holding "$d")"
     done
     load='' figpid='' groups=''
     vm=$qemu
