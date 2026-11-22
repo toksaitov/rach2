@@ -16,9 +16,9 @@
         "stdin": null,
         "role": "ordinary",
         "privileges": "the ordinary test account in the guest; root installs private fixtures",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["gnu-disk"]}],
+        "isolation": [{"fixture": "scratch"}],
         "children": "reaped",
-        "cleanup": "libetude-case ends its machines and API services; workload actions reap host children and retain private evidence only after a failure"
+        "cleanup": "libetude-case ends its machines and API services and removes the GNU disk overlay after a pass; workload actions reap host children and retain private evidence only after a failure"
       },
       "steps": [
         {"step_id": "prepare", "stage": "execute", "does": "make the private CA and API scripts"},
@@ -35,7 +35,7 @@
           "qemu": {
             "kernel": "kernel",
             "initrd": null,
-            "disks": [{"name": "gnu-disk", "bus": "virtio"}],
+            "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "virtio"}],
             "cpu": "max",
             "processors": 1,
             "memory_bytes": 1073741824,
@@ -86,7 +86,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1610612736, "disk_bytes": 6442450944, "locks": [], "ports": 2, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "gnu-disk", "node": "images/etude-fakeapi.disk", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/etude-fakeapi.disk", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
         {"name": "test-key", "node": "tests/cases/credentials/rach2_test_ed25519", "per_architecture": false},
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
