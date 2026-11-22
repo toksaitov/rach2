@@ -34,8 +34,8 @@
 #   error       the boot could not be launched or observed, for example
 #               because a capture file could not be read. An error makes
 #               the script exit with status 1.
-# An interruption stops new boots and exits with status 128 plus the signal
-# number after reaping each started QEMU.
+# SIGHUP, SIGINT or SIGTERM stops new boots, kills and reaps each started
+# QEMU, and exits with status 128 plus the signal's number.
 #
 # QEMU pauses at the guest's reset (`-action shutdown=pause`), so that `info
 # registers` reads the machine before it quits; on AMD, KVM resets the
@@ -285,8 +285,8 @@ def worker():
         one(n)
 
 
-signal.signal(signal.SIGTERM, stop)
-signal.signal(signal.SIGINT, stop)
+for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(sig, stop)
 ts = [threading.Thread(target=worker) for _ in range(par)]
 for t in ts:
     t.start()
