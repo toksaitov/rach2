@@ -58,6 +58,7 @@
 
 #define GPU_RESP_OK_NODATA               0x1100
 #define GPU_RESP_OK_DISPLAY_INFO         0x1101
+#define GPU_RESP_OK_MAP_INFO             0x1106
 #define GPU_RESP_ERR_UNSPEC              0x1200
 #define GPU_RESP_ERR_OUT_OF_MEMORY       0x1201
 #define GPU_RESP_ERR_INVALID_SCANOUT_ID  0x1202
@@ -69,6 +70,8 @@
 #define GPU_RESOURCE_Y_0_TOP      1u /* create_3d's flags: row 0 is the top */
 #define GPU_FORMAT_B8G8R8X8_UNORM 2u
 #define GPU_MAX_SCANOUTS          16
+
+#define PEER_BACKINGS 8 /* the backings -b asks for, one after another */
 
 struct gpu_hdr {
     uint32_t type;
@@ -913,6 +916,8 @@ struct drv {
     struct bells *bells; /* the ivshmem server's doorbells, or 0 */
     int show;            /* -o: put the replay's first image on scanout 0 */
     int venus;           /* -v: attach the replay's resources to Venus too */
+    uint64_t backing;    /* -b: the bytes of the VM's memory to ask for, or 0 */
+    const char *go;      /* -g: the file whose existence starts -b's ask */
 };
 
 /*
@@ -1116,6 +1121,10 @@ static void handshake(struct drv *dr, int fresh, uint64_t want)
     }
     dr->me.features = dr->dev.features & (VGS_F_VERSION_1 | want);
     dr->me.transport_features = dr->bells ? dr->dev.transport_features & VGS_TF_DOORBELL : 0;
+    if (dr->backing && (dr->dev.transport_features & (VGS_TF_PAGES | VGS_TF_BACKING)) ==
+                           (VGS_TF_PAGES | VGS_TF_BACKING)) {
+        dr->me.transport_features |= VGS_TF_PAGES | VGS_TF_BACKING;
+    }
     off = vgs_queue_place(&dr->me.queue[VGS_QUEUE_CONTROL], dr->l.ring_off,
                           dr->dev.limits.max_queue < 64 ? dr->dev.limits.max_queue : 64);
     vgs_queue_place(&dr->me.queue[VGS_QUEUE_CURSOR], off,
@@ -1821,6 +1830,72 @@ static void run_teardown(struct drv *dr, uint32_t id)
            GPU_RESP_OK_NODATA, "unref");
 }
 
+/**
+ * Ask for backings of dr->backing bytes of the VM's memory with
+ * VGS_CMD_BACKING for PEER_BACKINGS new 2D resources from `id` on, one at a
+ * time, once dr->go exists when -g names it; print each answer, which must
+ * be RESP_OK_MAP_INFO or ERR_OUT_OF_MEMORY, and free each resource, which
+ * the device must still answer. Exits when the device took no backings,
+ * or on a wrong answer or none.
+ */
+static void run_backing(struct drv *dr, uint32_t id)
+{
+    union {
+        struct gpu_create_2d c2;
+        struct gpu_resource rs;
+        uint8_t raw[VGS_PAGES_OFF];
+    } u;
+    struct vgs_backing *b = (struct vgs_backing *)(void *)(u.raw + sizeof(struct gpu_hdr));
+    uint8_t resp[VGS_PAGES_OFF + 16 * sizeof(struct vgs_run)];
+    struct vgs_pages pg;
+    uint32_t type, i;
+
+    if ((dr->me.transport_features & VGS_TF_BACKING) == 0) {
+        die("%s", "the device offers no backings of the VM's memory");
+    }
+    for (i = 0; i < PEER_BACKINGS; i++, id++) {
+        hdr(&u, sizeof(u.c2), GPU_CMD_RESOURCE_CREATE_2D, 0, 0);
+        u.c2.resource_id = id;
+        u.c2.format = GPU_FORMAT_B8G8R8X8_UNORM;
+        u.c2.width = IMG_W;
+        u.c2.height = IMG_H;
+        expect(send_cmd(dr, "backing-create", &(struct gpu_message){&u, sizeof(u.c2), 0, 0}, resp,
+                        sizeof(struct gpu_hdr)),
+               GPU_RESP_OK_NODATA, "backing-create");
+        if (dr->go && i == 0) {
+            printf("peer: backing: waiting for %s\n", dr->go);
+            while (access(dr->go, F_OK) != 0) {
+                wait_bell(dr);
+            }
+        }
+        hdr(&u, sizeof(struct gpu_hdr) + sizeof(*b), VGS_CMD_BACKING, 0, 0);
+        b->resource_id = id;
+        b->size = dr->backing;
+        b->first = 0;
+        type = send_cmd(
+            dr, "backing",
+            &(struct gpu_message){&u, (uint32_t)(sizeof(struct gpu_hdr) + sizeof(*b)), 0, 0}, resp,
+            sizeof(resp));
+        if (type == GPU_RESP_OK_MAP_INFO) {
+            memcpy(&pg, resp + sizeof(struct gpu_hdr), sizeof(pg));
+            printf("peer: backing: resource %u, %llu bytes: given, %llu pages in %u runs from 0\n",
+                   (unsigned)id, (unsigned long long)dr->backing, (unsigned long long)pg.total,
+                   (unsigned)pg.count);
+        } else if (type == GPU_RESP_ERR_OUT_OF_MEMORY) {
+            printf("peer: backing: resource %u, %llu bytes: refused: out of memory\n", (unsigned)id,
+                   (unsigned long long)dr->backing);
+        } else {
+            fprintf(stderr, "%s: backing: response 0x%x\n", prog, (unsigned)type);
+            exit(1);
+        }
+        hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
+        u.rs.resource_id = id;
+        expect(send_cmd(dr, "backing-unref", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, resp,
+                        sizeof(struct gpu_hdr)),
+               GPU_RESP_OK_NODATA, "backing-unref");
+    }
+}
+
 /* ---- The seed check. ---- */
 
 /**
@@ -1917,7 +1992,8 @@ static void usage(void)
 {
     fprintf(
         stderr,
-        "usage: %s [-l | -f PATH | -S SOCKET] [-s SIZE] [-r STREAM [-ov]] [-d DIR] [-t SECONDS]\n"
+        "usage: %s [-l | -f PATH | -S SOCKET] [-s SIZE] [-r STREAM [-ov]] [-b BYTES [-g FILE]]\n"
+        "       [-d DIR] [-t SECONDS]\n"
         "       %s -c IMAGE...\n"
         "       %s -w STREAM | -W STREAM\n",
         prog, prog, prog);
@@ -2068,6 +2144,25 @@ static void serve_ivshmem(struct drv *dr, const char *path, uint64_t size)
 
 /** Parse the transport options, run the driver and reap its loopback device;
  * return 0 on success, or exit 1 for a failure and 2 for invalid options. */
+/** Leave the epoch, print the doorbells' counts, and reap the loopback
+ * device, which must have exited well; exit if it did not. */
+static void detach(struct drv *dr)
+{
+    int st;
+
+    dr->me.state = VGS_DRV_GONE;
+    drv_store(dr->base, &dr->me);
+    ring(dr, VGS_VEC_CONTROL);
+    if (dr->bells) {
+        printf("peer: doorbells: rang %llu, woken %llu\n", (unsigned long long)dr->bells->rung,
+               (unsigned long long)dr->bells->woken);
+    }
+    if (dr->child &&
+        (waitpid(dr->child, &st, 0) != dr->child || !WIFEXITED(st) || WEXITSTATUS(st) != 0)) {
+        die("%s", "the responder failed");
+    }
+}
+
 int main(int argc, char **argv)
 {
     struct drv dr;
@@ -2081,8 +2176,11 @@ int main(int argc, char **argv)
     }
     memset(&dr, 0, sizeof(dr));
     dr.report = -1;
-    while ((opt = getopt(argc, argv, "cd:f:lor:s:S:t:vw:W:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:cd:f:g:lor:s:S:t:vw:W:")) != -1) {
         switch (opt) {
+        case 'b':
+            dr.backing = strtoull(optarg, 0, 0);
+            break;
         case 'c':
             return check_files(argc - optind, argv + optind);
         case 'd':
@@ -2090,6 +2188,9 @@ int main(int argc, char **argv)
             break;
         case 'f':
             file = optarg;
+            break;
+        case 'g':
+            dr.go = optarg;
             break;
         case 'l':
             loop = 1;
@@ -2138,6 +2239,9 @@ int main(int argc, char **argv)
     if ((dr.show || dr.venus) && (stream == 0 || dr.child)) {
         usage();
     }
+    if ((dr.go && !dr.backing) || (dr.backing && (dr.child || dr.backing % VGS_PAGE != 0))) {
+        usage();
+    }
     handshake(&dr, fresh,
               (stream ? 1ULL << GPU_F_VIRGL : 0) | (dr.venus ? 1ULL << GPU_F_CONTEXT_INIT : 0));
     run_2d(&dr, id, &backing);
@@ -2145,23 +2249,13 @@ int main(int argc, char **argv)
         replay(&dr, stream);
     }
     run_teardown(&dr, id);
+    if (dr.backing) {
+        run_backing(&dr, VGS_ID_MAKE(100, 1)); /* past the replay's slots */
+    }
     if (loop) {
         run_reset(&dr, VGS_ID_MAKE(VGS_ID_SLOT(id), VGS_ID_GEN(id) + 1));
     }
-    dr.me.state = VGS_DRV_GONE;
-    drv_store(dr.base, &dr.me);
-    ring(&dr, VGS_VEC_CONTROL);
-    if (dr.bells) {
-        printf("peer: doorbells: rang %llu, woken %llu\n", (unsigned long long)dr.bells->rung,
-               (unsigned long long)dr.bells->woken);
-    }
-    if (dr.child) {
-        int st;
-
-        if (waitpid(dr.child, &st, 0) != dr.child || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-            die("%s", "the responder failed");
-        }
-    }
+    detach(&dr);
     printf("peer: result: ok\n");
     return 0;
 }
