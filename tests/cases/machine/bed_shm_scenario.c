@@ -95,8 +95,8 @@ enum bed_run { RUN_VIRGL, RUN_NOCOPY, RUN_DESKTOP, RUN_CONSOLE };
  */
 static void run(struct bed_case *s, enum bed_run which)
 {
-    static const char *const virgl[] = {"attach",  "draw",   "doorbell", "readback", "held",
-                                        "stopped", "killed", "death",    NULL};
+    static const char *const virgl[] = {"attach", "draw",    "doorbell", "readback", "defer",
+                                        "held",   "stopped", "killed",   "death",    NULL};
     static const char *const mapped[] = {"attach", "build",   "pages",  "coherent", "release",
                                          "refuse", "measure", "revoke", "leak",     NULL};
     static const char *const desktop[] = {"attach", "session", "load", "death", "fallback", NULL};

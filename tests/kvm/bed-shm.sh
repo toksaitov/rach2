@@ -17,17 +17,20 @@
 # draw and read back, on the region's card as the desktop user, as the bed's
 # piglit scene runs them: each must pass on virgl, with no refusal of a
 # blob's export on the VM's console and no refused page list in the kernel's
-# log (`readback`). Then, through the VM's second serial port, the backend
-# holds a render target's backing 45 s while it runs, and the creation must
-# succeed with no loss of the device (`held`); the backend is stopped in
-# the VM, and a render target's wait for its backing must end with ENODEV
-# once the backend's heartbeat has stood still for 30 s (`stopped`);
-# stopped again and killed while the wait sleeps, the wait must end with
-# ENODEV at once, by the module's word that the backend has gone
-# (`killed`); after each, virtio-gpu must bind again over the region.
-# Then QEMU is stopped with fenced submissions pending and killed: ivshmemd
-# must detach with the VM's death, every fence must fail and a wait after
-# the death must too.
+# log (`readback`); and vgshmprobe fdefer's resources, backed from the
+# VM's pages at their first use, must be mapped, refused and backed from the
+# region's heap, refused unusable, held past the driver's cap and freed
+# unused as it says (`defer`). Then, through the VM's second serial port,
+# the backend holds a render target's backing 45 s while it runs, and the
+# map that waits for it must succeed with no loss of the device (`held`);
+# the backend is stopped in the VM, and a new render target's map, which
+# waits for its backing, must end with ENODEV once the backend's heartbeat
+# has stood still for 30 s (`stopped`); stopped again and killed while the
+# wait sleeps, the wait must end with ENODEV at once, by the module's word
+# that the backend has gone (`killed`); after each, virtio-gpu must bind
+# again over the region. Then QEMU is stopped with fenced submissions
+# pending and killed: ivshmemd must detach with the VM's death, every fence
+# must fail and a wait after the death must too.
 #
 # With -k the draw, the doorbells and the death with fences pending give
 # way to the buffers mapped from the VM's own pages: NOCOPY, nocopy.c, is
@@ -250,7 +253,7 @@ group_kill()
             case " $groups " in *" $1 "*) ;; *) groups="$groups $1" ;; esac
             # shellcheck disable=SC2009 # pgrep gives no group of a pid
             for m in $(ps -e -o pid,pgid | awk -v g="$1" 'NR > 1 && $2 == g { print $1 }'); do
-                group_left="${group_left:+$group_left; }process $m of group $1: $(held "$m")"
+                group_left="${group_left:+$group_left; }process $m of group $1: $(holding "$m")"
             done
             return 1
         fi
@@ -294,11 +297,11 @@ reap()
     return "$reap_status"
 }
 
-# held PID: what process PID is and what it holds, for the line about a
+# holding PID: what process PID is and what it holds, for the line about a
 # child that outlived its wait: its state, wait channel and command, the
 # devices it has open and, for ivshmemd, the region as the kernel reports
 # it, or for QEMU, KVM's machines and VFIO's devices and pins.
-held()
+holding()
 {
     # shellcheck disable=SC2009 # pgrep gives no state or wait channel
     held_ps=$(ps -e -o pid,stat,wchan,args | awk -v p="$1" '$1 == p { $1 = ""; sub(/^ +/, ""); print; exit }')
@@ -403,7 +406,7 @@ cleanup()
             # shellcheck disable=SC2086 # a list of pids
             reap 100 $kids ||
                 for l in $reap_live; do
-                    survivors="${survivors:+$survivors; }$(child "$l") after KILL: $(held "$l")"
+                    survivors="${survivors:+$survivors; }$(child "$l") after KILL: $(holding "$l")"
                 done
         fi
     fi
@@ -425,7 +428,7 @@ cleanup()
             if reap 600 "$gpu"; then
                 gpu='' qemu=''
             else
-                gpu_why="gpu.sh $gpu still running 60 s after its TERM: QEMU ${qemu:-unknown}${qemu:+: $(held "$qemu")}"
+                gpu_why="gpu.sh $gpu still running 60 s after its TERM: QEMU ${qemu:-unknown}${qemu:+: $(holding "$qemu")}"
             fi
         fi
         drv=$(readlink "/sys/bus/pci/devices/$bdf/driver" 2>/dev/null)
@@ -721,7 +724,7 @@ death_children()
         left=$((left - 1))
     done
     if kill -0 "$waiter" 2>/dev/null; then
-        death_error="fence probe still running: $(held "$waiter")"
+        death_error="fence probe still running: $(holding "$waiter")"
         kill -KILL "$waiter" 2>/dev/null
         stuck="$stuck $waiter"
     else
@@ -729,7 +732,7 @@ death_children()
     fi
     waiter=''
     if kill -0 "$daemon" 2>/dev/null; then
-        death_error="${death_error:+$death_error, }ivshmemd still running: $(held "$daemon")"
+        death_error="${death_error:+$death_error, }ivshmemd still running: $(holding "$daemon")"
         kill -KILL "$daemon" 2>/dev/null
     else
         wait "$daemon" 2>/dev/null || death_error="${death_error:+$death_error, }ivshmemd status $?"
@@ -950,6 +953,22 @@ still_counts()
 # refusals: the VM console's refusals of a blob's export for its page list.
 refusals() { tr -d '\r' < "$console" 2>/dev/null | grep -c 'backend: map: resource .*: refused: not exported'; }
 
+# defer: `vgshmprobe fdefer` on the region's card: resources whose backing
+# from the VM's pages is asked for at their create and taken at their first
+# use, a map at once among them, one the VM refuses, which the region's heap
+# backs, one too large for either, and more held untaken than the driver's
+# cap on pending asks.
+defer()
+{
+    "$probe" fdefer > "$out/defer.out" 2>&1
+    if grep -q 'VGSHMPROBE OK' "$out/defer.out"; then
+        pass defer "$(sed -n 's/^VGSHMPROBE DEFER: //p' "$out/defer.out" | tr '\n' ';' |
+            sed 's/;$//; s/;/; /g')"
+    else
+        fail defer "$(grep VGSHMPROBE "$out/defer.out" | tr '\n' ' ')"
+    fi
+}
+
 # readback: readback.txt's piglit tests on the region's card, one at a time
 # on EGL's surfaceless platform as the desktop user, as the bed's piglit
 # scene runs them (bed/measure/measure.sh), and the refusals they met: of a
@@ -1024,11 +1043,11 @@ rebound()
 }
 
 # loss NAME WORD MIN MAX REASON: row NAME. With the backend stopped,
-# `vgshmprobe lost` makes a render target, whose backing's answer it then
-# waits for; WORD, if any, is done to the backend once the probe sleeps in
-# that wait. The wait must end with ENODEV in MIN to MAX seconds, the
-# kernel must have logged the loss once as `lost: epoch N: the device:
-# REASON`, and the backend, sent SIGCONT, or started again after a kill,
+# `vgshmprobe lost` makes a render target and maps it, and the map waits
+# for the backing's answer; WORD, if any, is done to the backend once the
+# probe sleeps in that wait. The wait must end with ENODEV in MIN to MAX
+# seconds, the kernel must have logged the loss once as `lost: epoch N: the
+# device: REASON`, and the backend, sent SIGCONT, or started again after a kill,
 # must be bound again for the rows after.
 loss()
 {
@@ -1081,7 +1100,8 @@ loss()
 # held: row `held`. The backend, told through the VM's second serial
 # port, holds the next new backing 45 s, past the heartbeat's limit of
 # 30 s, while its process runs, and `vgshmprobe held` makes a render target
-# and waits for that backing. The creation must succeed more than 35 s on,
+# and maps it, and the map waits for that backing. The map must succeed
+# more than 35 s on,
 # the VM's console must say the backend held one backing, the kernel must
 # log no loss and virtio-gpu must not have bound again: the heartbeat moves
 # from a thread apart from the serving one, so a long command is waited
@@ -1119,9 +1139,10 @@ held()
     fi
 }
 
-# virgl_rows: the frame drawn, the doorbells, without -u the readbacks, a
-# backing held past the heartbeat's limit, the backend's loss, stopped and
-# then killed, and the VM's death with fences pending.
+# virgl_rows: the frame drawn, the doorbells, without -u the readbacks, the
+# backings taken at first use, a backing held past the heartbeat's limit,
+# the backend's loss, stopped and then killed, and the VM's death with
+# fences pending.
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
@@ -1129,6 +1150,7 @@ virgl_rows()
         fail doorbell "no device"
         if [ "$unplug" = 0 ]; then
             fail readback "no device"
+            fail defer "no device"
             fail held "no device"
             fail stopped "no device"
             fail killed "no device"
@@ -1169,6 +1191,7 @@ virgl_rows()
         fi
         if [ "$unplug" = 0 ]; then
             readback
+            defer
             held
             # The heartbeat stands still from the stop, so the wait ends
             # 30 s on, less what the stop's word and the probe's start
@@ -1507,8 +1530,8 @@ desk_rows()
     else
         ustatus=running
         case $monitor in
-            listening) monitor="still running 10 s after TERM: $(held "$umon")" ;;
-            *) monitor="$monitor; still running 10 s after TERM: $(held "$umon")" ;;
+            listening) monitor="still running 10 s after TERM: $(holding "$umon")" ;;
+            *) monitor="$monitor; still running 10 s after TERM: $(holding "$umon")" ;;
         esac
     fi
     [ "$monitor" != listening ] ||
