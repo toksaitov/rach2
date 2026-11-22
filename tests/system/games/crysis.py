@@ -472,12 +472,15 @@ def profile_dir(name):
 
 def flyby_profile(game, counts, phase):
     """Read counters into COUNTS at a flyby boundary: PHASE is before or
-    after, or stop, which ends the VM's profiler that before started."""
+    after, or stop, which ends the VM's profiler that before started. The
+    stop runs in a session of its own, so that a signal to the terminal's
+    process group does not end it."""
     reader = os.environ["BED_PROFILE"]
-    if phase != "stop":
+    stop = phase == "stop"
+    if not stop:
         mark = counts / ("mark-" + phase)
         mark.write_text("%d %d\n" % (time.monotonic_ns(), game.frames()))
-    subprocess.run(["sh", reader, counts, phase], check=phase != "stop")
+    subprocess.run(["sh", reader, counts, phase], check=not stop, start_new_session=stop)
 
 
 def flyby(route, name, loops):
@@ -508,9 +511,11 @@ def flyby(route, name, loops):
             if not game.wait(lambda: len(finished()) > len(ends), "loop %d" % len(ends)):
                 break
     finally:
-        if profiling:
-            flyby_profile(game, counts, "stop")
-        game.end()
+        # A signal here waits for the profiler's stop and the game's end.
+        with HELD:
+            if profiling:
+                flyby_profile(game, counts, "stop")
+            game.end()
     runs = finished()[:loops]
     dump = []
     try:
