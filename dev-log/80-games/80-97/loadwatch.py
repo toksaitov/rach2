@@ -34,7 +34,7 @@ try:
             total = 0
             found = False
             for row in interrupts.splitlines():
-                if row.lstrip().startswith('LOC:') or (row.startswith('32:') and row.split()[-1] == 'timer'):
+                if row.lstrip().startswith('LOC:') or (row.lstrip().startswith('32:') and row.split()[-1] == 'timer'):
                     found = True
                     for field in row.split(':', 1)[1].split():
                         if not field.isdigit():
