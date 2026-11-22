@@ -1688,7 +1688,9 @@ int procfs_mount_fd(const struct vpath *vp, struct vfs_ref *out, char *path, uin
             rc = vfs_enter(out->mnt);
             if (rc == 0) {
                 vfs_ref_hold(out);
-                rc = mount_fd_path(file, out, path, cap);
+                if (path) {
+                    rc = mount_fd_path(file, out, path, cap);
+                }
                 if (rc != 0) {
                     vfs_ref_release(out);
                 }

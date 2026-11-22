@@ -225,9 +225,9 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
                        int use_real);
 
 /**
- * Follow a descriptor link for a bind mount, subject to the proc ptrace
- * check. Return 0 with the node held, its mount entered and its path from
- * the mount table in `path` of `cap` bytes. The caller releases `out` with
+ * Follow a descriptor link for a mount, subject to the proc ptrace check.
+ * Return 0 with the node held and its mount entered. If `path` is given,
+ * write the node's mount-table path there, within `cap` bytes. Release with
  * vfs_ref_release. Return -EINVAL for a descriptor without a mountable
  * node or whose mount the caller's namespace cannot see, or the lookup's
  * error, with nothing held on failure. The big lock is held by the caller.

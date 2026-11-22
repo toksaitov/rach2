@@ -6357,6 +6357,30 @@ static int covered_already(const struct vfs_ref *tref)
 }
 
 /**
+ * Replace a resolved proc descriptor link with the node and mount it holds.
+ * If `real` is given, record the object's mount-table path in VFS_PATH_MAX
+ * bytes. Return 1 after following a link, 0 with `ref` unchanged, or a
+ * negative errno with nothing held.
+ */
+static int mount_follow_fd(struct vfs_ref *ref, char *real)
+{
+    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    struct vfs_ref object;
+    int rc;
+
+    if (!vp || vp->kind != VNODE_PROC_FD_LINK) {
+        return 0;
+    }
+    rc = procfs_mount_fd(vp, &object, real, VFS_PATH_MAX);
+    vfs_ref_release(ref);
+    if (rc != 0) {
+        return rc;
+    }
+    *ref = object;
+    return 1;
+}
+
+/**
  * A record in a free slot for a mount of `t` over the node `covered` of
  * `parent`, recorded at `canon` and from `source`, with `flags`, mounting
  * and seen in the caller's mount namespace: the parts every mount has.
@@ -6442,12 +6466,16 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         return -EINVAL;
     }
     rc = vfs_resolve(0, target, 0, &tref, 0, 0);
-    if (rc != 0) {
+    if (rc == 0) {
+        rc = mount_follow_fd(&tref, NULL);
+    }
+    if (rc < 0) {
         return rc;
     }
     if (t == &vfs_procfs_type && tref.mnt->type == t && tref.node == tref.mnt->root &&
         mount_permanent(tref.mnt)) {
         k_strncpy(canon, tref.mnt->covered_path, sizeof(canon));
+        rc = 0;
     } else {
         rc = target_check(&tref, target, canon, 1, NULL, &nameless);
     }
@@ -6455,6 +6483,9 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         return rc;
     }
     rc = vfs_cover_lock(&tref);
+    if (rc == 0 && !vfs_mount_seen(tref.mnt)) {
+        rc = -EINVAL;
+    }
     if (rc == 0 && covered_already(&tref)) {
         rc = -EBUSY;
     }
@@ -6895,21 +6926,14 @@ static int table_path(char *path)
  * 0 with `ref` to release, or an error with nothing held. */
 static int bind_resolve(const char *path, struct vfs_ref *ref, char *real)
 {
-    struct vfs_ref object;
-    const struct vpath *vp;
     int rc = vfs_resolve_real(path, 0, ref, real);
 
     if (rc != 0) {
         return rc;
     }
-    vp = vfs_synth_vpath(ref->mnt, ref->node);
-    if (vp && vp->kind == VNODE_PROC_FD_LINK) {
-        rc = procfs_mount_fd(vp, &object, real, VFS_PATH_MAX);
-        vfs_ref_release(ref);
-        if (rc == 0) {
-            *ref = object;
-        }
-        return rc;
+    rc = mount_follow_fd(ref, real);
+    if (rc != 0) {
+        return rc < 0 ? rc : 0;
     }
     rc = table_path(real);
     if (rc != 0) {
