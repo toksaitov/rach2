@@ -93,13 +93,14 @@ An epoll set is readable while a wait on it would report an event, and a
 poll of it is woken by a change in any descriptor it watches, as
 .Xr epoll 2
 describes.
-Terminals report input when the line discipline has data ready, and are
-writable while output is not stopped and no other write holds the terminal,
-as Linux's are;
-pseudoterminals also report peer hangup.
-The console reports input only on a descriptor open for reading, and is
-writable whatever the descriptor's mode, as a terminal is on Linux;
-a write through a read-only descriptor fails with
+Terminals report input when the line discipline has data ready.
+The console and a pseudoterminal slave report writable readiness while
+output runs and the write lock is free, as on Linux.
+A slave with its master open also needs room in the master's buffer.
+Pseudoterminals report peer hangup.
+The console reports input only on a descriptor open for reading, and
+its writable readiness is independent of the descriptor's access mode.
+A write through a read-only descriptor fails with
 .Er EBADF .
 .Pp
 Datagram and protocol-bearing raw sockets are readable when a packet is

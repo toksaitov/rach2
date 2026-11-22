@@ -1059,10 +1059,11 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
  * for it, or takes -EAGAIN when non-blocking, and a termios change that
  * waits for output lands before or after the vector, never between its
  * elements. Once the master has closed, or a vhangup(2) has hung up the
- * description, the write fails with EIO. With TOSTOP set, a background
- * writer takes SIGTTOU, or EIO when its group is orphaned, and writes when
- * it blocks or ignores SIGTTOU (`tty_job_check`), as on the console and on
- * Linux, whose n_tty_write checks under the lock.
+ * description, the write fails with EIO. Before each 2 KiB chunk of the
+ * vector, the write checks TOSTOP under the lock, as Linux's n_tty_write
+ * does. With TOSTOP set, a background writer takes SIGTTOU, or EIO when
+ * its group is orphaned, and writes when it blocks or ignores SIGTTOU
+ * (`tty_job_check`). If a later chunk fails, return the bytes written.
  */
 int32_t pty_slave_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count)
 {
@@ -1100,20 +1101,35 @@ int32_t pty_slave_writev(fd_entry_t *e, const struct kernel_iovec *iov, int coun
         }
     }
     for (; i < count; i++) {
-        if (iov[i].iov_len == 0) {
-            continue;
-        }
-        rc = p->master_open ? pts_write_out(e, &w, (const char __user *)iov[i].iov_base,
-                                            (uint32_t)iov[i].iov_len)
-                            : -EIO;
-        if (rc < 0) {
-            break;
-        }
-        total += rc;
-        if ((unsigned long)rc < iov[i].iov_len) {
-            break;
+        uint32_t offset = 0;
+
+        while (offset < iov[i].iov_len) {
+            uint32_t used = (uint32_t)total % TTY_WRITE_CHUNK;
+            uint32_t chunk = TTY_WRITE_CHUNK - used;
+            uint32_t left = (uint32_t)iov[i].iov_len - offset;
+
+            if (total > 0 && used == 0 && (p->slave.ldisc.tio.c_lflag & TOSTOP)) {
+                rc = tty_job_check(&p->slave, SIGTTOU);
+                if (rc != 0) {
+                    goto out;
+                }
+            }
+            if (chunk > left) {
+                chunk = left;
+            }
+            rc = p->master_open
+                     ? pts_write_out(e, &w, (const char __user *)(iov[i].iov_base + offset), chunk)
+                     : -EIO;
+            if (rc > 0) {
+                total += rc;
+            }
+            if (rc < (int32_t)chunk) {
+                goto out;
+            }
+            offset += chunk;
         }
     }
+out:
     tty_write_unlock(&p->slave);
     return total > 0 ? total : rc;
 }
@@ -1129,9 +1145,9 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 }
 
 /**
- * Report the slave's readiness, POLLOUT only while output runs and the
- * master ring has room for a byte of it, and POLLHUP once the master has
- * closed.
+ * Report the slave's readiness. While the master is open, POLLOUT
+ * requires running output, a free write lock and room for a byte in the
+ * master ring. A closed master gives POLLHUP.
  *
  * tty_poll parks every poller on the slave's input queue, which a master
  * close (tty_hangup) and a master read with room wake too, so a poller
