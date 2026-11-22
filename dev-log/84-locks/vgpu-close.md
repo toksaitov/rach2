@@ -100,3 +100,57 @@ The task's mark of a submission's UNREFs within 0.1 s is missed: they spread ove
 ## The probe
 
 `vgpuprobe` adds three rows to `machine.vgpu.virgl`: a buffer shared by two files, whose close in one detaches that file's context alone; a close while a mapping and a submission hold the buffer, which is freed after the last of them; and a buffer closed with no GPU ioctl after, which `virtio_gpu_objects` in `/proc/stat` shows freed. The last row prints its time and does not judge it. Under KVM, `tests/run vgpu` passed on i686 (virgl with the rows, the UNREF seen in 12 ms, and exit), and `ARCH=x86_64 tests/run vgpu` passed blob, virgl (2 ms) and exit. `machine.virgl.piglit-sample` waits for the review.
+
+## The rest of the UNREFs' gap
+
+Subtask 5701 measured the 0.25 to 0.30 s against Linux's 0.03 to 0.04 s call by call, on both guests under the same QEMU 10.2.1, and closed it at its cause.
+
+### Setup
+
+The same machine and tools, with the counters of [`vgpu-close/counters-close.patch`](vgpu-close/counters-close.patch) on `task/5697` at 5d957c939, which `/proc/stat` shows as `vgpu_m_*`: the close hooks that sent a DETACH and their time, split into the wait for room and the send; each notify asked for and each the device was given, with their time; and, for a close's notify, the device's write and the retake of the big lock after it. QEMU traced the events of [`vgpu-close/events`](vgpu-close/events), which add to task 5676's the context's attach and detach and the notifies QEMU takes itself (`virtio_pci_notify_write`, since virtio-gpu has no ioeventfd); copied over `dev-log/86-shared-region/measure/events`, it is what `rach2.py` and `debian.sh` pass to QEMU. [`vgpu-close/events-queue`](vgpu-close/events-queue) adds every queue's pops, answers and interrupts and QEMU's fences, and slows QEMU enough to change how many notifies it is given, so its runs are compared only with each other. [`vgpu-close/hostcost.py`](vgpu-close/hostcost.py) reads a trace: QEMU traces each command as it begins to run it and runs a popped batch one command after the other, so the time from one command to the next is the first one's cost; and, for the second to fourth submissions, the burst of closes after each, from its second DETACH to its last UNREF, with its notifies.
+
+    python3 dev-log/86-shared-region/measure/rach2.py build/runs/t5701/rach2-1
+    sh dev-log/86-shared-region/measure/debian.sh build/runs/t5701/debian-1
+    python3 dev-log/84-locks/vgpu-close/hostcost.py build/runs/t5701/rach2-1/trace
+
+### Before the fix
+
+The runs that ended at 15:34 (Rach2) and 15:35 (Debian 6.12) on 2026-11-22 (UTC+6), both passing:
+
+| | Rach2 | Linux 6.12 |
+|---|---|---|
+| QEMU's time for a CTX_DETACH_RESOURCE, median | 86 us | 3.1 us |
+| QEMU's time for a RESOURCE_UNREF, median | 98 us | 8.1 us |
+| A burst of 1,260 closes, second to fourth submission | 279 to 333 ms | 50 to 55 ms |
+| Notifies in it, a DETACH | 0.55 to 0.77 | 0.28 to 0.35 |
+| GEM_CLOSEs, their time | 6,281, 5.416 s | 6,269, 4.576 s |
+
+The queue run of 15:37 gave 77 and 99 us; Debian's of 15:38, 4.1 and 9.1 us.
+
+Rach2 made about twice Linux's notifies, but its bursts were five to six times as long, so the notifies were not the main cost. QEMU took 20 to 30 times as long over each of Rach2's DETACHes and UNREFs as over Linux's. Rach2 sent every control command with VIRTIO_GPU_FLAG_FENCE but the few `vgpu_cmd_unfence` named. Linux sends a DETACH and an UNREF without one. For a fenced command QEMU makes a virgl fence on its main thread, and it answers the command only at its next poll of virgl's fences: in the queue run QEMU wrote the answers to a popped batch of DETACHes together after the whole batch had run, while Linux's batch ran 4 us a command.
+
+### The fix
+
+`vgpu_obj_close` and `vgpu_obj_free` send the DETACH and the UNREF unfenced (`vgpu_cmd_unfence`), as Linux's `virtio_gpu_gem_object_close` and `virtio_gpu_cmd_unref_resource` queue them. Nothing waits on either command's fence. The first DETACH after a flush still waits for the submission in its notify, which keeps Mesa's cache as it was.
+
+### After the fix
+
+The runs that ended at 15:40 and 15:41, both passing, and the queue run of 15:39:
+
+| | Rach2 before | Rach2 after | Linux 6.12 |
+|---|---|---|---|
+| QEMU's time for a DETACH, median | 86 us | 9.1 us | 3.1 us |
+| QEMU's time for an UNREF, median | 98 us | 11.0 to 11.9 us | 8.1 us |
+| The same in the queue runs | 77, 99 us | 4.1, 9.1 us | 4.1, 9.1 us |
+| A submission's UNREFs, first to last (`bursts.py`) | 272 to 368 ms | 68 to 90 ms | 39 to 68 ms |
+| A burst of closes, second to fourth submission | 279 to 333 ms | 74 to 86 ms | 46 to 69 ms |
+| Notifies in it, a DETACH | 0.55 to 0.77 | 0.48 to 0.52 | 0.23 to 0.45 |
+| RESOURCE_CREATEs | 6,281 | 6,270, 6,264 | 6,269, 6,274 |
+| Peak resources (`trace.py`) | 2,524 | 2,524 | 2,525 |
+| RESOURCE_CREATE time a call | 0.618 ms | 0.589, 0.612 ms | 0.612, 0.621 ms |
+
+The Linux figures are from the runs of 15:35 and 15:44. The queue runs, whose tracing slows QEMU, gave a submission's UNREFs over 56 to 78 ms on Rach2 after the fix against 36 to 88 ms on Linux.
+
+A submission's UNREFs now reach the host over 68 to 90 ms. Linux's took 39 to 68 ms in these runs, and 30 to 40 ms in task 5676's. The rest of the gap is the notifies. A close's own time is its notify: of the 4.43 s in the close hooks of the run of 15:41, 4.42 s went in the device's write and 0.058 s in retaking the big lock after it, and the four first closes after a flush waited 0.91 to 1.01 s each for the submission, as Linux's waited 0.89 to 1.08 s. In a burst a notify takes 0.12 to 0.16 ms on either guest, an exit of the closing processor under WSL's nested KVM, and Rach2 made 0.48 to 0.52 a DETACH against Linux's 0.23 to 0.45. Each DETACH's answer wakes Rach2's worker at once, and its pass sends its few UNREFs with a notify of its own. Linux's UNREFs came in runs of up to some 20 within one popped batch, 10 us apart, as its free work sends at once what its dequeue work has gathered. Making Rach2's worker wait to gather more would delay every free, so it is left as it is.
+
+QEMU's fence trace of the after queue run shows fences on RESOURCE_CREATE_3D (0x204), ATTACH_BACKING (0x106), CTX_ATTACH_RESOURCE (0x202) and the submissions (0x207); Debian's run of 15:44 shows fences on RESOURCE_CREATE_3D and the submissions alone. The two further fences cost QEMU its time on each create, outside the bursts of closes, and RESOURCE_CREATE takes as long as Linux's; `VIRTGPU_RESOURCE_CREATE` puts the attach's fence in the buffer's reservation, so taking it off would change what a WAIT waits on. They stay, as a known difference from Linux.

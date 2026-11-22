@@ -1,0 +1,9 @@
+virtio_gpu_cmd_res_create_2d
+virtio_gpu_cmd_res_create_3d
+virtio_gpu_cmd_res_create_blob
+virtio_gpu_cmd_res_unref
+virtio_gpu_cmd_ctx_submit
+virtio_gpu_cmd_ctx_res_attach
+virtio_gpu_cmd_ctx_res_detach
+virtio_queue_notify
+virtio_pci_notify_write
