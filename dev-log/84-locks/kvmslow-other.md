@@ -93,7 +93,7 @@ On x86-64 the case also runs vdsomusl's `ordered` check, a million monotonic rea
 
 ## Fake API
 
-The case used to make a private copy of its 17,181,966,336-byte GNU disk before QEMU ran. Using the same sparse copy loop as the store, with a trusted source and no digest reread, the copy took 7.37 to 11.08 s and wrote 12.9 GB on the testing host. The store's qcow2 overlay took 0.001 to 0.004 s and allocated 196,608 bytes. From QEMU's start to init's sshd record took 1.19 s under KVM with the full copy and 0.74 s with the overlay, against 1.48 and 1.18 s under TCG. The overlay keeps the same backing image and gives the guest a private writable disk. The raw `build/x86_64/images/etude-fakeapi.disk`, 17 GB apparent and 13 GB used, is that prepared backing image, which the build makes before any case runs; at this change the case's QEMU booted `copies/gnu-disk` in the case's workspace with `format=qcow2`, as the QEMU wrapper of the console measurement below recorded. The overlay saved the copy, but run alone the case still took 83.40 and 81.58 s under KVM against 17.06 and 17.92 s under TCG, with 110.60 and 109.78 CPU s in its tree, nearly all of it QEMU's. A run with each output line timed put 78.44 s of it in the `setup` step, from the boot's end to the SSH assertion, against 11.10 s under TCG. That step logs in as root on the console, starts `etude-guest` there and sends it the 665,600-byte asset archive and two small files. The machine had the UART. A run through a QEMU wrapper that added the `kvm_run_exit` trace counted 2,721,406 port I/O exits for the whole case, about four for each byte sent, 2,654 MMIO exits and one other exit. With the machine on the virtio console the same trace counted 17,798 port I/O exits and 3,533 MMIO exits, and the case took 3.62 and 3.67 s under KVM against 8.22 s under TCG, its setup step 1.66 s against 2.73 s. The machine now declares the virtio console. The agent, acceptance and agent API cases boot the same GNU disk with the UART and send the same archive through the same setup.
+The case used to make a private copy of its 17,181,966,336-byte GNU disk before QEMU ran. Using the same sparse copy loop as the store, with a trusted source and no digest reread, the copy took 7.37 to 11.08 s and wrote 12.9 GB on the testing host. The store's qcow2 overlay took 0.001 to 0.004 s and allocated 196,608 bytes. From QEMU's start to init's sshd record took 1.19 s under KVM with the full copy and 0.74 s with the overlay, against 1.48 and 1.18 s under TCG. The overlay keeps the same backing image and gives the guest a private writable disk. The raw `build/x86_64/images/etude-fakeapi.disk`, 17 GB apparent and 13 GB used, is that prepared backing image, which the build makes before any case runs; at this change the case's QEMU booted `copies/gnu-disk` in the case's workspace with `format=qcow2`, as the QEMU wrapper of the console measurement below recorded. The overlay saved the copy, but run alone the case still took 83.40 and 81.58 s under KVM against 17.06 and 17.92 s under TCG, with 110.60 and 109.78 CPU s in its tree, nearly all of it QEMU's. A run with each output line timed put 78.44 s of it in the `setup` step, from the boot's end to the SSH assertion, against 11.10 s under TCG. That step logs in as root on the console, starts `etude-guest` there and sends it the 665,600-byte asset archive and two small files. The machine had the UART. A run through a QEMU wrapper that added the `kvm_run_exit` trace counted 2,721,406 port I/O exits for the whole case, about four for each byte sent, 2,654 MMIO exits and one other exit. With the machine on the virtio console the same trace counted 17,798 port I/O exits and 3,533 MMIO exits, and the case took 3.62 and 3.67 s under KVM against 8.22 s under TCG, its setup step 1.66 s against 2.73 s. The machine now declares the virtio console. The agent, acceptance and agent API cases boot a GNU disk too; [The agent suites](#the-agent-suites) has their figures.
 
 ## Style
 
@@ -145,3 +145,33 @@ Each noentropy case took 1.24 to 1.42 s under KVM, and every audio case but `sig
 
 `signal` took 5.51 and 5.54 s under KVM against 4.64 and 4.78 s under TCG. A hand boot with timestamps in `audioclientsmusl` put the difference in each of its three stops. Under KVM play printed the warning for the unbound key 0.51 s after it, and 0.72 s passed from Ctrl+C or SIGTERM to the next trial's start; under TCG these took 0.005 s and 0.21 s. Play reads keys and its abort flag in sox's flow callback, between writes to `/dev/dsp`, and each write carries sox's 8,192-byte buffer, 4,096 samples or 0.512 s of the trial's 8000 Hz mono file. Under KVM, sampling `/proc/PID/wchan` every 10 ms found play asleep in the write for 0.56 s at a time; under TCG it slept 12 to 215 ms at a time. The device side was alike under both accelerators: before each stop `/proc/audio` gave a delay of 54 to 66 ms and no underrun, and the HDA's interrupts came at 37 to 43 a second. A blocking write that waits until all its bytes fit, and a close that plays what is queued, are what OSS does on Linux. The case judges the stops by the kernel's ticks and passes under both.
 
+
+## The agent suites
+
+Task 5681, 2026-11-22. Of the four other suites that boot the GNU agents disk, only `agents` sends the asset archive through `etude-guest`: each row's setup logs in on the console and puts the 665,600-byte `agent-assets` archive there, as fakeapi's did. The API cases of `codexapi` and `museapi` put three fixture files and the CA. The acceptance cases unpack the archive on the host and send their files by SSH from a second Rach2 machine, the channel client, whose console carries the frames of every SSH invocation and its output.
+
+A QEMU wrapper that added `-trace enable=kvm_run_exit` counted the exits of one case's boots under KVM, port I/O being reason 2 and MMIO reason 6. The acceptance case boots its GNU machine twice.
+
+| Case | Machine | COM1 port I/O | COM1 MMIO | virtio port I/O | virtio MMIO |
+|---|---|---:|---:|---:|---:|
+| agents gh | gnu | 2,679,146 | 2,111 | 16,943 | 3,703 |
+| agentsaccept opencode | channel client | 1,343,406 | 1,737 | 27,372 | 2,093 |
+| agentsaccept opencode | gnu, first boot | 23,068 | 1,801 | 6,665 | 3,519 |
+| agentsaccept opencode | gnu, second boot | 22,749 | 2,510 | 6,655 | 3,509 |
+
+The exchange case of `codexapi` made 153,949 port I/O exits and 2,516 MMIO exits on COM1. Under KVM the gh row took 103.90 s on COM1 and 12.62 s on the virtio console, some 34 us for each of the 2,662,203 port I/O exits saved. Every machine of the four suites now has the virtio console.
+
+Each suite ran alone on x86-64, its only architecture, as `RACH2_QEMU_ACCEL=tcg` and then `kvm`, on COM1 at `task/5681`'s first head and on the virtio console after. Every run in the table passed. The figures are the sums of the case times, in seconds, from the runs' history. The acceptance suite ran its five cases with eight workers on COM1 and two on the virtio console, since five copies of its 13 GB GNU disk at once no longer fitted in the host's free space.
+
+| Suite | Console | TCG | KVM |
+|---|---|---:|---:|
+| agents | COM1 | 848.07 | 1440.31 |
+| agents | virtio | 734.27 | 375.05 |
+| agentsaccept | COM1 | 1429.85 | 792.44 |
+| agentsaccept | virtio | 1231.53 | 587.34 |
+| codexapi | COM1 | 61.50 | 38.22 |
+| codexapi | virtio | 78.39 | 33.13 |
+| museapi | COM1 | 94.31 | 63.73 |
+| museapi | virtio | 87.39 | 57.96 |
+
+agents is in `tools/ci/kvm-suites` on master with these sums; agentsaccept, codexapi and museapi were there already. The first runs of the second set ended otherwise. The host's free space fell to between 24 and 35 GB, and a SIGTERM from outside the run, whose sender was not found, stopped the KVM runs of `codexapi` and `agentsaccept`; the TCG cases of `agentsaccept` that followed failed at boot, since QEMU found no copy of the GNU disk. Before its run was stopped, the acceptance case `agy` failed one `etude_guest_put` to the channel client, and its evidence went with the stopped runs' disk copies, freed to make room, so that failure was not traced. The agy row then passed three times under KVM on the virtio console, once in the table and twice alone.
