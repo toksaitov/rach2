@@ -2593,8 +2593,8 @@ int32_t vgpu_backing_settle_answered(struct virtio_gpu_device *vg, struct virtio
     int32_t rc = bo->back_err;
 
     /* A page list on the worker's list is one a submission left already. */
-    if (ready && ask->resp_type == VIRTIO_GPU_RESP_OK_MAP_INFO &&
-        (bo->refused_listed || !vgpu_backing_whole(bo, ask))) {
+    if (ready && (ask->resp_type != VIRTIO_GPU_RESP_OK_MAP_INFO || bo->refused_listed ||
+                  !vgpu_backing_whole(bo, ask))) {
         ready = 0;
         listed = back_list_locked(vg, bo);
     }

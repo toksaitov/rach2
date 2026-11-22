@@ -1044,14 +1044,15 @@ int32_t vgpu_backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_obje
 /**
  * As vgpu_backing_settle, for a command that names `bo` and is queued after
  * its ask, which the device serves first: take the deferred backing only
- * when its answer has come, no other take is under way and the take sends
- * no further ask and waits for nothing, a refusal or a page list whole in
- * the one answer (`vgpu_backing_whole`), and otherwise leave it and return
- * 0, as Linux's execbuffer waits on no ATTACH_BACKING. A longer page list
- * goes to the worker, and so does a refusal that comes later
- * (`vgpu_backing_refused_run`), whose ATTACH_BACKING follows the commands
- * queued meanwhile, which find the resource without a backing, as a host's
- * failed attach leaves it on Linux. May sleep.
+ * when its answer has come, no other take is under way and the answer is
+ * a page list whole in itself (`vgpu_backing_whole`), whose take sends no
+ * further ask and waits for nothing, and otherwise leave it and return 0,
+ * as Linux's execbuffer waits on no ATTACH_BACKING. A longer page list
+ * goes to the worker (`vgpu_backing_refused_run`), and so does every other
+ * answer, a refusal among them, whose heap ATTACH_BACKING may wait for
+ * memory; that attach follows the commands queued meanwhile, which find
+ * the resource without a backing, as a host's failed attach leaves it on
+ * Linux. May sleep.
  */
 int32_t vgpu_backing_settle_answered(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                                      uint32_t site);
