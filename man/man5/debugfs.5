@@ -514,6 +514,32 @@ millisecond later, which no reading of the clock may see; it fails with
 for a thread of another process.
 Another text fails with
 .Er EINVAL .
+.It Pa vfs/bind_trace
+Mode 0600; a Rach2 file with no Linux counterpart, for the mount suite's
+rows on a bind whose source moves while it waits.
+A write of
+.Ql arm
+empties the trace and starts it, and
+.Ql off
+empties and stops it; another text fails with
+.Er EINVAL .
+While it runs, the kernel records each bind's copy of the node of a
+descriptor that names its source, its hold on the source, each check of
+the source's type and path, and each move of a KRFFS node by a write that
+grows its file, 64 events at most.
+Reads a line
+.Ql SEQ KIND PID A B
+for each event in order, SEQ counting from 0, where KIND is
+.Ql copy ,
+.Ql hold
+or
+.Ql judge
+with the node in A and 0 in B, or
+.Ql move
+from the node A to B, and PID is the process that made the call; then
+.Ql lost N ,
+the events past the 64.
+A node of a mounted KRFFS volume is its inode number.
 .It Pa sched/base_slice_ns
 Mode 0644, as on Linux: the base slice in nanoseconds, the time ahead of
 its eligible time at which an ordinary thread without a slice of its own
