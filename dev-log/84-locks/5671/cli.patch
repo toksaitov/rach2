@@ -1,0 +1,12 @@
+diff --git a/rach2/sys/syscall_proc.c b/rach2/sys/syscall_proc.c
+index da1d5a9ca..65f0e967c 100644
+--- a/rach2/sys/syscall_proc.c
++++ b/rach2/sys/syscall_proc.c
+@@ -190,6 +190,7 @@ static void kstack_overrun_run(void)
+         dbg5671_x(paging_virt_to_phys(current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE));
+         dbg5671_c('\n');
+         dbg5671_on = 1;
++        __asm__ __volatile__("cli");
+     }
+     kstack_descend(0);
+     k_panic("kstack: overrun: the descent came back");

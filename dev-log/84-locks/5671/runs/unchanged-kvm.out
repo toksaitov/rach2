@@ -1,0 +1,8 @@
+boot 520: fail
+boot 1726: fail
+boot 1903: fail
+boot 2438: fail
+boot 2801: fail
+boot 2871: fail
+boot 3109: fail
+result: {"pass": 3993, "fail": 7, "hang": 0, "other": 0}

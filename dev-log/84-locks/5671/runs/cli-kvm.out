@@ -1,0 +1,17 @@
+boot 1053: fail
+boot 1965: fail
+boot 2786: fail
+boot 3282: fail
+result: {"pass": 3996, "fail": 4, "hang": 0, "other": 0}
+== build/tmp/t5671/r4/b01053
+Rc0024fc4 00000286 00000000
+<6>[0.128000] kstack: overrun: pid 1 descends its stack at 0xc0021000
+== build/tmp/t5671/r4/b01965
+Rc0024fc4 00000286 00000000
+<6>[0.092000] kstack: overrun: pid 1 descends its stack at 0xc0021000
+== build/tmp/t5671/r4/b02786
+Rc0024fc4 00000286 00000000
+<6>[0.092000] kstack: overrun: pid 1 descends its stack at 0xc0021000
+== build/tmp/t5671/r4/b03282
+Rc0024fc4 00000286 00000000
+<6>[0.064000] kstack: overrun: pid 1 descends its stack at 0xc0021000

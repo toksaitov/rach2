@@ -1,0 +1,4 @@
+query-status: not sent: QMP had closed, as it does when QEMU ends
+query-cpus-fast: not sent: QMP had closed, as it does when QEMU ends
+human-monitor-command: not sent: QMP had closed, as it does when QEMU ends
+end: reset: SHUTDOWN, reason guest-reset, by the guest, after console byte 4785

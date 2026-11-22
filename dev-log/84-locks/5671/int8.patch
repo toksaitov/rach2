@@ -1,0 +1,43 @@
+diff --git a/rach2/sys/arch/i686/tss.c b/rach2/sys/arch/i686/tss.c
+index e0567dac7..2214f39b0 100644
+--- a/rach2/sys/arch/i686/tss.c
++++ b/rach2/sys/arch/i686/tss.c
+@@ -86,6 +86,18 @@ void tss_set_kernel_stack(uint32_t stack)
+     kernel_tss[arch_cpu_id()].esp0 = stack;
+ }
+ 
++void dbg5671_touch(void);
++void dbg5671_touch(void)
++{
++    volatile uint32_t *w = double_fault_stack[0];
++    int i;
++
++    for (i = 0; i < DOUBLE_FAULT_STACK_WORDS; i += 1024) {
++        w[i] = 0;
++    }
++    w[DOUBLE_FAULT_STACK_WORDS - 1] = 0;
++}
++
+ void tss_set_double_fault_dir(uint32_t dir)
+ {
+     int i;
+diff --git a/rach2/sys/syscall_proc.c b/rach2/sys/syscall_proc.c
+index da1d5a9ca..474c4ceb9 100644
+--- a/rach2/sys/syscall_proc.c
++++ b/rach2/sys/syscall_proc.c
+@@ -86,6 +86,7 @@
+ #include "cmdline.h" /* kcmdline_has, for the rach2.stackoverrun test switch */
+ #include "dbg5671.h"
+ volatile int dbg5671_on;
++void dbg5671_touch(void);
+ #include "mm/filemap.h"
+ #include "mm/mm.h"
+ #include "fs/tmpfs.h"
+@@ -191,6 +192,7 @@ static void kstack_overrun_run(void)
+         dbg5671_c('\n');
+         dbg5671_on = 1;
+     }
++    __asm__ __volatile__("int $8");
+     kstack_descend(0);
+     k_panic("kstack: overrun: the descent came back");
+ }
