@@ -66,6 +66,7 @@ static void path_mount_put(process_t *p, int i)
 
     if (mnt) {
         p->path_mount[i] = NULL;
+        p->path_cwd &= ~(1u << i);
         p->paths_on_mounts--;
         vfs_desc_close(mnt, p->path_node[i], NULL);
         p->path_node[i] = NULL;
@@ -144,8 +145,65 @@ int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *b
 int path_buf_set_cwd(char *buf)
 {
     struct fs_struct *fs = current_proc->fs;
+    int task = path_buf_set_dir(buf, fs->cwd_mnt, fs->cwd_node, proc_cwd(current_proc));
+    int i;
 
-    return path_buf_set_dir(buf, fs->cwd_mnt, fs->cwd_node, proc_cwd(current_proc));
+    for (i = 0; task && i < PATH_BUFS; i++) {
+        if (current_proc->path_bufs[i] == buf) {
+            current_proc->path_cwd |= 1u << i;
+        }
+    }
+    return task;
+}
+
+/** The slot of the caller's path page that `path` is, when the page keeps
+ * the working directory as its start (`path_buf_set_cwd`); -1 otherwise. */
+static int cwd_page(const process_t *p, const char *path)
+{
+    int i;
+
+    for (i = 0; p && p->path_cwd && path && i < PATH_BUFS; i++) {
+        if ((p->path_cwd & (1u << i)) && (path == p->path_bufs[i] || path == p->path_bufs[i] + 1)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int path_buf_cwd_moved(const char *path)
+{
+    process_t *p = current_proc;
+    int i = cwd_page(p, path);
+    uint32_t flags;
+    int moved;
+
+    if (i < 0) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&p->fs->lock);
+    moved = p->fs->cwd_mnt != p->path_mount[i] || p->fs->cwd_node != p->path_node[i];
+    spin_unlock_irqrestore(&p->fs->lock, flags);
+    return moved;
+}
+
+void path_buf_cwd_retake(const char *path)
+{
+    process_t *p = current_proc;
+    struct vfs_ref now, was;
+    int i = cwd_page(p, path);
+
+    if (i < 0 || !path_buf_cwd_moved(path) || !p->fs->cwd_mnt || !p->fs->cwd_node) {
+        return;
+    }
+    now.mnt = p->fs->cwd_mnt;
+    now.node = p->fs->cwd_node;
+    vfs_ref_hold(&now);
+    vfs_desc_open(now.mnt);
+    was.mnt = p->path_mount[i];
+    was.node = p->path_node[i];
+    p->path_mount[i] = now.mnt;
+    p->path_node[i] = now.node;
+    vfs_desc_close(was.mnt, was.node, NULL);
 }
 
 int path_bufs_hold(const struct vfs_mount *mnt, const void *node)

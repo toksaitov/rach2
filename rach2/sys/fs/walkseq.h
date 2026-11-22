@@ -22,6 +22,13 @@
  * The count is 64 bits, read and moved under one spinlock, which is held
  * only for that and is the last in the lock order, so that i686 never reads
  * half of it and no value comes round again in a machine's life.
+ *
+ * A thread's own changes are taken out of what it reads: it counts the
+ * changes it has under way and the moves they made (`walk_tokens` and
+ * `walk_moves` in process.h), its reads see no change under way while the
+ * only ones are its own, and the sequence they give leaves out its own
+ * moves. A walk of a thread inside its own change, as a creation that
+ * stamps its node, is so still checked against every other change.
  */
 
 /** Begin a change of what a path names. Any context but an interrupt
@@ -32,32 +39,37 @@ void vfs_seq_begin(void);
  * wake the waiters of `vfs_seq_wait` when it was the last under way. */
 void vfs_seq_end(void);
 
-/** The sequence into `*seq`: 1 when no change is under way, 0 when one is,
- * whose reader may not take the sequence as a snapshot. */
+/** The sequence into `*seq`, less the calling thread's own moves: 1 when
+ * no change but the caller's own is under way, 0 when another is, whose
+ * reader may not take the sequence as a snapshot. */
 int vfs_seq_read(uint64_t *seq);
 
-/** Whether no change is under way and none has begun since `seq` was read
- * with `vfs_seq_read`. */
+/** Whether no change but the caller's own is under way and no other has
+ * begun since `seq` was read with `vfs_seq_read` by the same thread. */
 int vfs_seq_still(uint64_t seq);
 
-/** Sleep until no change is under way and read the sequence into `*seq`,
- * for a walk that may sleep, which holds no spinlock, no namespace lock and
- * no count of a mount's operations. May sleep. */
+/** `vfs_seq_still` and, when it holds, `vfs_seq_begin`, as one step under
+ * the sequence's lock, so that no other change comes between the check and
+ * the beginning: 1 with the change begun, or 0 with nothing begun. */
+int vfs_seq_begin_if(uint64_t seq);
+
+/** Sleep until no change but the caller's own is under way and read the
+ * sequence into `*seq`, for a walk that may sleep, which holds no spinlock,
+ * no namespace lock, no file lock, no change of its own and no count of a
+ * mount's operations, any of which a change under way may wait for. May
+ * sleep. */
 void vfs_seq_wait(uint64_t *seq);
 
-/** Whether the calling thread has begun a change it has not ended, whose
- * own walks neither wait for it nor are judged by the sequence, which it
- * holds open. */
+/** Whether the calling thread has begun a change it has not ended. */
 int vfs_seq_mine(void);
 
 /*
  * A walk's stamp: the sequence a walk's answer was checked at, and whether
- * it was, since a walk by a thread inside its own change, or one that holds
- * a namespace lock and so may not wait for a change under way, is not.
- * Every walk leaves its stamp with the calling thread (`vfs_stamp_set`); a
- * call that makes, removes, renames or changes what the walk found takes the
- * stamp after the walk (`vfs_stamp_get`), and once it holds the locks of
- * its change, before the change, checks it (`vfs_stamp_still`): a change of
+ * it was, since a walk with no thread, at boot, is not. Every walk leaves
+ * its stamp with the calling thread (`vfs_stamp_set`); a call that makes,
+ * removes, renames or changes what the walk found takes the stamp after the
+ * walk (`vfs_stamp_get`), and once it holds the locks of its change, before
+ * the change, checks it (`vfs_stamp_still`, `vfs_stamp_begin`): a change of
  * what a path names that came while it slept, in the walk's locks or its
  * own, sends the whole call round again, both walks of a call of two
  * paths, the stamp being the first walk's. Linux's open checks its walk so
@@ -80,6 +92,12 @@ void vfs_stamp_get(struct vfs_stamp *st);
  * 1 for a stamp that is not checked. The walk gate's WALK_GATE_RETRY
  * counts each 0. */
 int vfs_stamp_still(const struct vfs_stamp *st);
+
+/** `vfs_stamp_still` and the beginning of a change as one step
+ * (`vfs_seq_begin_if`): 1 with the change begun, which the caller ends
+ * with `vfs_seq_end`, or 0, counted as WALK_GATE_RETRY, with nothing
+ * begun. The hand-off of a walk to the change it makes. */
+int vfs_stamp_begin(const struct vfs_stamp *st);
 
 /* The events of the walk gate (`walk_gate`): the full walk under the big
  * lock begins, with its start and root taken; a walk without the big lock

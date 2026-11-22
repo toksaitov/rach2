@@ -84,6 +84,7 @@ int proc_exit_cleanup(int32_t status)
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
     }
     kirq_restore(flags);
+    vfs_walk_keeps_end();
     proc_fs_put(self);
     proc_vfork_release(self);
     self->exit_code = tg->exiting ? tg->exit_code : status;

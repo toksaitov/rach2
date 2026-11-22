@@ -27,34 +27,32 @@ static void seq_begin(void)
     spin_unlock_irqrestore(&seq_lock, flags);
 }
 
-/** End a change `seq_begin` began, and wake the waiters when it was the
- * last. */
+/** End a change `seq_begin` began, and wake the waiters, each of which
+ * tests whether the changes left under way are its own (`seq_calm`). */
 static void seq_end(void)
 {
     uint32_t flags = spin_lock_irqsave(&seq_lock);
-    int idle;
 
     seq_active--;
     seq_now++;
-    idle = seq_active == 0;
     spin_unlock_irqrestore(&seq_lock, flags);
-    if (idle) {
-        wq_wake(&seq_wq, 0);
-    }
+    wq_wake(&seq_wq, 0);
 }
 
 void vfs_seq_begin(void)
 {
+    seq_begin();
     if (current_proc) {
         current_proc->walk_tokens++;
+        current_proc->walk_moves++;
     }
-    seq_begin();
 }
 
 void vfs_seq_end(void)
 {
     if (current_proc && current_proc->walk_tokens > 0) {
         current_proc->walk_tokens--;
+        current_proc->walk_moves++;
     }
     seq_end();
 }
@@ -64,39 +62,79 @@ int vfs_seq_mine(void)
     return current_proc && current_proc->walk_tokens > 0;
 }
 
+/** The changes under way the thread `p` has begun itself; 0 for none. */
+static uint32_t own_tokens(const process_t *p)
+{
+    return p ? p->walk_tokens : 0;
+}
+
+/** The moves of the sequence the thread `p`'s own changes made; 0 for
+ * none. */
+static uint64_t own_moves(const process_t *p)
+{
+    return p ? p->walk_moves : 0;
+}
+
 int vfs_seq_read(uint64_t *seq)
 {
+    uint32_t mine = own_tokens(current_proc);
+    uint64_t moves = own_moves(current_proc);
     uint32_t flags = spin_lock_irqsave(&seq_lock);
-    int calm = seq_active == 0;
+    int calm = seq_active == mine;
 
-    *seq = seq_now;
+    *seq = seq_now - moves;
     spin_unlock_irqrestore(&seq_lock, flags);
     return calm;
 }
 
 int vfs_seq_still(uint64_t seq)
 {
+    uint32_t mine = own_tokens(current_proc);
+    uint64_t moves = own_moves(current_proc);
     uint32_t flags = spin_lock_irqsave(&seq_lock);
-    int still = seq_active == 0 && seq_now == seq;
+    int still = seq_active == mine && seq_now - moves == seq;
 
     spin_unlock_irqrestore(&seq_lock, flags);
     return still;
 }
 
-/** The wait condition of `vfs_seq_wait`: no change is under way. */
+int vfs_seq_begin_if(uint64_t seq)
+{
+    uint32_t mine = own_tokens(current_proc);
+    uint64_t moves = own_moves(current_proc);
+    uint32_t flags = spin_lock_irqsave(&seq_lock);
+    int still = seq_active == mine && seq_now - moves == seq;
+
+    if (still) {
+        seq_active++;
+        seq_now++;
+    }
+    spin_unlock_irqrestore(&seq_lock, flags);
+    if (still && current_proc) {
+        current_proc->walk_tokens++;
+        current_proc->walk_moves++;
+    }
+    return still;
+}
+
+/** The wait condition of `vfs_seq_wait`: no change is under way but those
+ * the waiting thread `arg` has begun itself, whose tokens are counted
+ * there, since the condition may be tested by the thread that wakes it. */
 static int seq_calm(void *arg)
 {
-    uint64_t seq;
+    const process_t *p = (const process_t *)arg;
+    uint32_t flags = spin_lock_irqsave(&seq_lock);
+    int calm = seq_active == own_tokens(p);
 
-    (void)arg;
-    return vfs_seq_read(&seq);
+    spin_unlock_irqrestore(&seq_lock, flags);
+    return calm;
 }
 
 void vfs_seq_wait(uint64_t *seq)
 {
     while (!vfs_seq_read(seq) && current_proc) {
         walk_gate(WALK_GATE_WAIT);
-        wq_wait_event_nointr(&seq_wq, seq_calm, NULL);
+        wq_wait_event_nointr(&seq_wq, seq_calm, current_proc);
     }
 }
 
@@ -117,6 +155,19 @@ void vfs_stamp_get(struct vfs_stamp *st)
 int vfs_stamp_still(const struct vfs_stamp *st)
 {
     if (!st->on || vfs_seq_still(st->seq)) {
+        return 1;
+    }
+    walk_gate(WALK_GATE_RETRY);
+    return 0;
+}
+
+int vfs_stamp_begin(const struct vfs_stamp *st)
+{
+    if (!st->on) {
+        vfs_seq_begin();
+        return 1;
+    }
+    if (vfs_seq_begin_if(st->seq)) {
         return 1;
     }
     walk_gate(WALK_GATE_RETRY);

@@ -328,8 +328,12 @@ struct process {
     /* NO_XDEV's mount during the replay, held by the open, or NULL. */
     struct vfs_mount *walk_replay_mnt;
     /* The changes of what a path names this thread has begun and not ended
-     * (`vfs_seq_begin`), which no walk of its own waits for. */
+     * (`vfs_seq_begin`), and the moves of the walk sequence its own
+     * beginnings and endings made, which its own walks and stamps take out
+     * of the sequence, so that a thread inside its own change still checks
+     * every walk against everyone else's (walkseq.h). */
     uint32_t walk_tokens;
+    uint64_t walk_moves;
     /* The walk sequence the thread's last walk was checked at, and whether
      * it was (`vfs_stamp_get`): an operation that consumes the walk's answer
      * once it has slept checks it again (`vfs_stamp_still`). */
@@ -340,6 +344,9 @@ struct process {
      * the walk's frame, which a KRFFS relocation moves (`vfs_repoint`) and
      * whose directories a removal finds in use (`vfs_walk_holds`). */
     struct vfs_ref *walk_holds[WALK_HOLDS];
+    /* The answers of this thread's walks on a KRFFS, kept until its system
+     * call ends (`struct walk_keep` in vfs.c, `vfs_walk_keeps_end`). */
+    struct walk_keep *walk_keeps;
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
@@ -549,6 +556,7 @@ struct process {
     void *path_node[PATH_BUFS];              /* starting proc inode, held with its mount */
     uint32_t path_prefix[PATH_BUFS];         /* prefix length plus one, or zero for a mount */
     uint32_t paths_on_mounts;                /* number of non-NULL path_mount entries */
+    uint32_t path_cwd; /* bit i: page i's start is the working directory (`path_buf_set_cwd`) */
     uint32_t path_bufs_busy;
     /* A kernel buffer the user-copy checks take as user memory while a
      * descriptor-to-descriptor copy runs it through the read and write

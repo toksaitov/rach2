@@ -803,7 +803,29 @@ void vfs_init(void);
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
 
+/**
+ * Make `ref->node` the node a keep of the calling thread's walks has now,
+ * when one keeps it: a KRFFS answer that a relocation moved since the walk
+ * (`struct walk_keep` in vfs.c), for a caller that let go of the namespace
+ * lock of `ref->mnt` after the walk and holds it again. Leaves `ref` alone
+ * otherwise. No sleep.
+ */
+void vfs_ref_now(struct vfs_ref *ref);
+
+/** Give back the keeps of the calling thread's walks, at the end of its
+ * system call or of the thread: a node one kept that lost its name and
+ * that nothing else holds is freed. Takes the big lock when the caller has
+ * not; the caller holds no namespace lock. May sleep. */
+void vfs_walk_keeps_end(void);
+
 struct fd_kept;
+
+/* The caller's root as pivot_root found it (`vfs_pivot_mounts`): NULL
+ * `mnt` for a process with none set, which has the root mount's. */
+struct pivot_old {
+    struct vfs_mount *mnt;
+    void *node;
+};
 
 /**
  * Resolve `path` as vfs_resolve and follow a final proc descriptor link to
@@ -1421,16 +1443,31 @@ void vfs_reap_detached(void);
  * stacks the old root over the new, where it stays until a lazy unmount
  * through a descriptor or a working directory on it. The new root's mount
  * becomes the namespace's own root (`ns_root`), where setns puts a process
- * that joins it. On success `*out` has the new root, held, for the system
- * call layer to move the processes' roots to and release. 0, or the
- * resolver's errors; ENOTDIR for a
+ * that joins it.
+ *
+ * The whole is one change of what paths name, the processes' roots too:
+ * once both paths are walked and checked, the change begins if nothing has
+ * changed what a path names since `since`, which the caller took before it
+ * read anything it relies on, and stays under way on success until the
+ * system call layer has moved the processes' roots and calls
+ * `vfs_pivot_done`, so that no walk sees the new mounts with an old root.
+ * On success `*out` has the new root, held, for the system call layer to
+ * move the processes' roots to and release, and `*old` the caller's root
+ * as the change found it, NULL for none set. 0; 1 when the change could
+ * not begin, with nothing held, for the caller to take a new stamp and
+ * run again; or the resolver's errors; ENOTDIR for a
  * `put_old` that is no directory; EINVAL for a `new_root` that is no
  * mount's root, is in a synthetic type or is a permanent mount, for a
  * caller whose root is no mount's root, or for a `put_old` not at or below
  * `new_root`; EBUSY for a `new_root` or a `put_old` on the caller's root
  * mount; or the errors of a bind (`vfs_do_bind`).
  */
-int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out);
+int vfs_pivot_mounts(const char *new_root, const char *put_old, const struct vfs_stamp *since,
+                     struct vfs_ref *out, struct pivot_old *old);
+
+/** End the change `vfs_pivot_mounts` left under way, and reap what it
+ * detached. May sleep. */
+void vfs_pivot_done(void);
 
 /**
  * mount(2) with MS_BIND: the file or directory `source` names is shown at

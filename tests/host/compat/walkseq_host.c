@@ -3,7 +3,7 @@
 #include "fs/walkseq.h"
 
 /* The sequence, which moves at each beginning and end of a change, and the
- * count of the changes under way. */
+ * count of the changes under way, all the single thread's own. */
 static uint64_t seq_now;
 static uint32_t seq_active;
 
@@ -21,26 +21,36 @@ void vfs_seq_end(void)
     seq_now++;
 }
 
-/** The sequence into `*seq`; 1 when no change is under way. */
+/** The sequence into `*seq`, less the thread's own moves, which here are
+ * all of them, as fs/walkseq.c takes a thread's own changes out; 1, since
+ * every change under way is the single thread's own. */
 int vfs_seq_read(uint64_t *seq)
 {
-    *seq = seq_now;
-    return seq_active == 0;
+    *seq = 0;
+    return 1;
 }
 
-/** Whether no change is under way and none has begun since `seq`. */
+/** Whether no other thread's change has come since `seq`: always, with no
+ * other thread. */
 int vfs_seq_still(uint64_t seq)
 {
-    return seq_active == 0 && seq_now == seq;
+    return seq == 0;
 }
 
-/** The sequence into `*seq`; no other thread can end a change, so a wait
- * with one under way is a fault of the test. */
+/** `vfs_seq_still` and `vfs_seq_begin` as one step. */
+int vfs_seq_begin_if(uint64_t seq)
+{
+    if (!vfs_seq_still(seq)) {
+        return 0;
+    }
+    vfs_seq_begin();
+    return 1;
+}
+
+/** The sequence into `*seq`, with no other thread's change to wait for. */
 void vfs_seq_wait(uint64_t *seq)
 {
-    if (!vfs_seq_read(seq)) {
-        __builtin_trap();
-    }
+    (void)vfs_seq_read(seq);
 }
 
 /** Whether the thread began a change it has not ended. */
@@ -69,6 +79,16 @@ void vfs_stamp_get(struct vfs_stamp *st)
 int vfs_stamp_still(const struct vfs_stamp *st)
 {
     return !st->on || vfs_seq_still(st->seq);
+}
+
+/** `vfs_stamp_still` and the beginning of a change as one step. */
+int vfs_stamp_begin(const struct vfs_stamp *st)
+{
+    if (!vfs_stamp_still(st)) {
+        return 0;
+    }
+    vfs_seq_begin();
+    return 1;
 }
 
 /** The walk gate, which no host test arms. */

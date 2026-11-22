@@ -4070,6 +4070,9 @@ static void _syscall_handler(isr_params_t *params)
     }
 
     syscall_holds_release(p);
+    if (p->walk_keeps) {
+        vfs_walk_keeps_end();
+    }
     if (ret == -EINTR) {
         ret = restart_result(params, fn, ret);
     }

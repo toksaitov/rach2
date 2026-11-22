@@ -46,8 +46,28 @@ void path_buf_set_mount(char *buf, struct vfs_mount *mnt);
 int path_buf_set_dir(char *buf, struct vfs_mount *mnt, void *node, const char *base);
 
 /** `path_buf_set_dir` for the caller's working directory, its pair and its
- * path. Under the big lock, under which they change. */
+ * path, with the page marked as one whose start is the working directory,
+ * as a name relative to AT_FDCWD is. Under the big lock, under which they
+ * change. */
 int path_buf_set_cwd(char *buf);
+
+/** Whether `path` is a page whose start is the working directory and the
+ * working directory is no longer that pair, as a chdir of a thread that
+ * shares it (CLONE_FS) makes it. Takes the `fs_struct`'s lock and nothing
+ * else; no sleep. */
+int path_buf_cwd_moved(const char *path);
+
+/**
+ * Make the start of the page `path`, when it is the working directory
+ * and that has moved (`path_buf_cwd_moved`), the working directory as it
+ * is now, held as `path_buf_set_dir` holds it: a walk of a name relative
+ * to AT_FDCWD takes the working directory with the root at each attempt,
+ * as Linux's `path_init` does, so that it never pairs one thread's old
+ * working directory with a root a shared chroot set since. The page's text
+ * keeps the old directory's path, which is only the name the call reports.
+ * Under the big lock; may sleep, in the old start's release.
+ */
+void path_buf_cwd_retake(const char *path);
 
 /**
  * Whether a path page of any process keeps the directory `node`, on a mount
