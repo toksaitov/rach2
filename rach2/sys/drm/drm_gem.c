@@ -52,6 +52,20 @@ static int refs_put(volatile uint32_t *refs)
     return old == 1u;
 }
 
+/** Decrement `*refs` unless it is 1; whether it was decremented. */
+static int refs_put_unless_last(volatile uint32_t *refs)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+        if (old == 1u) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old - 1u) != old);
+    return 1;
+}
+
 /* ------------------------------------------------------------------------
  * Handle tables
  *
@@ -460,6 +474,11 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     drm_dev_put(dev);
 }
 
+int drm_gem_object_put_unless_last(struct drm_gem_object *obj)
+{
+    return refs_put_unless_last(&obj->refs);
+}
+
 struct drm_gem_object *drm_gem_object_next(struct drm_device *dev, struct drm_gem_object *prev)
 {
     struct drm_gem_object *o;
@@ -552,14 +571,22 @@ struct drm_gem_object *drm_gem_object_lookup(struct drm_file *file, uint32_t han
     return obj;
 }
 
+/** As Linux's drm_gem_object_release_handle (drm_gem.c:249-266): the
+ * object's `close` hook sees the handle go once it has left the file's
+ * table, before its hold and reference are dropped. */
 int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 {
     struct drm_handle *h = handle_take(&file->objects, handle, 0);
+    struct drm_gem_object *obj;
 
     if (!h) {
         return -EINVAL;
     }
-    handle_put((struct drm_gem_object *)h->object, h);
+    obj = (struct drm_gem_object *)h->object;
+    if (obj->funcs && obj->funcs->close) {
+        obj->funcs->close(obj, file);
+    }
+    handle_put(obj, h);
     handle_free(h);
     return 0;
 }
@@ -828,8 +855,8 @@ static uintptr_t shmem_obj_page(struct drm_gem_object *obj, uint32_t pgoff)
     return drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, pgoff);
 }
 
-static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL, NULL,
-                                                        shmem_obj_page, NULL,           NULL, NULL};
+static const struct drm_gem_object_funcs shmem_funcs = {
+    shmem_obj_free, shmem_obj_mmap, NULL, NULL, shmem_obj_page, NULL, NULL, NULL, NULL};
 
 struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64_t size, int map_wc)
 {

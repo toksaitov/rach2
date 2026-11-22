@@ -778,7 +778,7 @@ static void unmappable_free(struct drm_gem_object *obj)
 }
 
 static const struct drm_gem_object_funcs unmappable_funcs = {
-    unmappable_free, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    unmappable_free, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 /** MAP_DUMB of an object without `mmap`, as i915's adopted firmware
  * framebuffer is: ENODEV, as Linux's i915 refuses a stolen object. */
