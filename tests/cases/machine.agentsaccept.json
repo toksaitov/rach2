@@ -134,7 +134,7 @@
               "rach2.gateway=10.0.2.2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": true
         },
@@ -180,7 +180,7 @@
               "rach2.root=ext2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": false
         }
@@ -496,7 +496,7 @@
               "rach2.gateway=10.0.2.2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": true
         },
@@ -542,7 +542,7 @@
               "rach2.root=ext2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": false
         }
@@ -858,7 +858,7 @@
               "rach2.gateway=10.0.2.2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": true
         },
@@ -904,7 +904,7 @@
               "rach2.root=ext2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": false
         }
@@ -1220,7 +1220,7 @@
               "rach2.gateway=10.0.2.2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": true
         },
@@ -1266,7 +1266,7 @@
               "rach2.root=ext2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": false
         }
@@ -1582,7 +1582,7 @@
               "rach2.gateway=10.0.2.2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": true
         },
@@ -1628,7 +1628,7 @@
               "rach2.root=ext2"
             ]
           },
-          "console": "serial",
+          "console": "virtio",
           "qmp": true,
           "helper": false
         }
