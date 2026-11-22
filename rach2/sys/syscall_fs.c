@@ -11824,10 +11824,53 @@ static int32_t statfs_fill(struct user_statfs __user *out, uint32_t magic)
     return 0;
 }
 
-/** Copy out to `out` the statfs a file system type gave in `vs`, with the
- * free blocks only a privileged writer takes left out of `f_bavail`; 0, or
- * -EFAULT. */
-static int32_t statfs_put(struct user_statfs __user *out, const struct vfs_statfs *vs)
+/* statfs's f_flags, Linux's ST_ values, which statvfs(3) gives as f_flag:
+ * ST_VALID says the others are given. */
+#define ST_RDONLY      0x0001u
+#define ST_NOSUID      0x0002u
+#define ST_NODEV       0x0004u
+#define ST_NOEXEC      0x0008u
+#define ST_SYNCHRONOUS 0x0010u
+#define ST_VALID       0x0020u
+#define ST_NOATIME     0x0400u
+#define ST_NODIRATIME  0x0800u
+#define ST_RELATIME    0x1000u
+
+/** The f_flags of a statfs through the mount `m` as the caller's mount
+ * namespace sees it, Linux's `calculate_f_flags`: ST_VALID, the mount's own
+ * flags and its file system's read-only and synchronous state; 0, which
+ * leaves the C library to read /proc/mounts, for no mount. */
+static uint32_t statfs_flags(const struct vfs_mount *m)
+{
+    static const uint32_t map[][2] = {
+        {VFS_MS_NOSUID, ST_NOSUID},         {VFS_MS_NODEV, ST_NODEV},
+        {VFS_MS_NOEXEC, ST_NOEXEC},         {VFS_MS_NOATIME, ST_NOATIME},
+        {VFS_MS_NODIRATIME, ST_NODIRATIME}, {VFS_MS_RELATIME, ST_RELATIME}};
+    uint32_t own, f = ST_VALID, i;
+
+    if (!m) {
+        return 0;
+    }
+    own = vfs_mount_flags(m);
+    for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (own & map[i][0]) {
+            f |= map[i][1];
+        }
+    }
+    if (vfs_mount_rdonly(m)) {
+        f |= ST_RDONLY;
+    }
+    if (vfs_mount_base(m)->flags & VFS_MS_SYNCHRONOUS) {
+        f |= ST_SYNCHRONOUS;
+    }
+    return f;
+}
+
+/** Copy out to `out` the statfs a file system type gave in `vs`, through the
+ * mount `m`, NULL for none (`statfs_flags`), with the free blocks only a
+ * privileged writer takes left out of `f_bavail`; 0, or -EFAULT. */
+static int32_t statfs_put(struct user_statfs __user *out, const struct vfs_statfs *vs,
+                          const struct vfs_mount *m)
 {
     struct user_statfs st;
 
@@ -11841,6 +11884,7 @@ static int32_t statfs_put(struct user_statfs __user *out, const struct vfs_statf
     st.f_files = vs->files;
     st.f_ffree = vs->ffree;
     st.f_namelen = vs->namelen;
+    st.f_flags = statfs_flags(m);
     if (copy_to_user(out, &st, sizeof(st)) != 0) {
         return -EFAULT;
     }
@@ -11857,7 +11901,7 @@ static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_moun
     if (rc != 0) {
         return rc;
     }
-    return statfs_put(out, &vs);
+    return statfs_put(out, &vs, m);
 }
 
 /** The magic of the mount a synthetic node of `kind` belongs to: /dev's,
@@ -11950,7 +11994,7 @@ long ksys_fstatfs(int fd, struct user_statfs __user *out)
         return statfs_fill(out, STATFS_MAGIC_SOCKFS);
     case FD_TYPE_ANON:
         if (mq_fd_statfs(e, &vs)) {
-            return statfs_put(out, &vs);
+            return statfs_put(out, &vs, NULL);
         }
         return statfs_fill(out, nsfs_ns(e) ? STATFS_MAGIC_NSFS : STATFS_MAGIC_ANON);
     case FD_TYPE_CONSOLE:
