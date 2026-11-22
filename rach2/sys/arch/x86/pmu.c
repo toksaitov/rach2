@@ -436,7 +436,9 @@ void platform_pmu_enable(uint64_t cycles)
     if (kind == PMU_NONE || cycles == 0) {
         return;
     }
-    open_window(me);
+    if (pmc[me].on) {
+        open_window(me);
+    }
     stop();
     pmc[me].period = cycles;
     pmc[me].left = cycles;
@@ -540,9 +542,11 @@ void platform_pmu_handled(void)
  * overflow, and on AMD the overflow is seen late, which Linux allows for by
  * claiming every NMI of no known source for 100 ms after a handled overflow
  * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`), which
- * `platform_pmu_handled` opens. The same window here follows each arming
- * and stop of the counter, on Intel too, whose global status the arming
- * clears.
+ * `platform_pmu_handled` opens. The same window here follows each stop of
+ * the counter and each arming of one that runs, on Intel too, whose global
+ * status the arming clears. The first arming opens none: the counter has
+ * raised nothing, and an NMI then is another source's, which Linux does not
+ * claim either.
  */
 int platform_pmu_late(void)
 {
