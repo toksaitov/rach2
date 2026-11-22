@@ -48,6 +48,12 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
+/** Write `s` to standard output. */
+static void puts_part(const char *s)
+{
+    syscall3(SYS_WRITE, 1, (long)s, (int)strlen(s));
+}
+
 /** Report the failure `why` of the planned assertion now checked, print
  * "VBLKPROBE FAIL: " and `why`, kill and reap each reader still running, and
  * exit 1. */
@@ -258,9 +264,19 @@ static void read_row(void)
         fail("/proc/interrupts does not read");
     }
     after = count_named(text, "virtio1", &i) + count_named(text, "virtio0", &lines);
-    if (lines < 2 || after - before < 16) {
-        fail("the first device has fewer than two vectors, or the two devices counted fewer "
-             "than 16 completions");
+    {
+        char a[12], b[12];
+
+        syscall3(SYS_WRITE, 1, (long)"VBLKPROBE: vectors ", 19);
+        puts_part(report_decimal(a, lines));
+        syscall3(SYS_WRITE, 1, (long)", completions ", 14);
+        puts(report_decimal(b, (int)(after - before)));
+    }
+    if (lines < 2) {
+        fail("the first device has fewer than two vectors");
+    }
+    if (after - before < 16) {
+        fail("the two devices counted fewer than 16 completions");
     }
     report_held();
     if (!file_is("/sys/block/disk1/device/serial", "rach2vblk")) {
