@@ -8,6 +8,7 @@
 #ifndef VGPUDEV_H
 #define VGPUDEV_H
 
+#include <pthread.h>
 #include <stdint.h>
 #include <sys/uio.h>
 
@@ -150,6 +151,10 @@ struct vd_ops {
      * attached and pinned at its first ask, and give its pages' runs, as
      * `pages` does; under VGS_TF_BACKING. */
     int (*back)(void *c, struct vd_pages *q);
+    /* Between two commands of the control queue: let the renderer do what
+     * it waits for the serving thread to do, as virglrenderer's sync
+     * thread waits for a poll that reads its queries; NULL for nothing. */
+    void (*poll)(void *c);
 };
 
 /* What the backend offers, fixed before the first epoch. */
@@ -208,7 +213,24 @@ struct vd_pending {
     struct vgs_chain chain;
 };
 
-/* The device: its region, its copy of each block and its tables. */
+/*
+ * A control queue entry that the look-ahead has read (`ahead` in device.c),
+ * by its place in the avail ring, until the in-order pass reaches it.
+ */
+struct vd_ahead {
+    uint32_t type;  /* the command's type, 0 for a chain too short */
+    uint32_t flags; /* its header's flags */
+    uint32_t id;    /* the resource its body names first, 0 for none */
+    uint32_t done;  /* 1 once it was served ahead of its turn */
+};
+
+/*
+ * The device: its region, its copy of each block and its tables. `lock`
+ * is over `pend`, `npend`, `used`, `kick`, the queues' used rings and the
+ * driver's block in `drv`, which the renderer's fence threads reach through
+ * vd_fence_retired and vd_kick; the serving thread holds it only between
+ * calls to the renderer, never across one.
+ */
 struct vd {
     volatile uint8_t *base;
     uint64_t size;
@@ -219,8 +241,11 @@ struct vd {
     struct vgs_table t;
     struct vgs_obj obj[VD_OBJS];
     struct vd_res res[VD_OBJS];
-    uint16_t last[VGS_QUEUES];     /* avail entries consumed */
-    uint16_t used[VGS_QUEUES];     /* used entries published */
+    uint16_t last[VGS_QUEUES]; /* avail entries consumed */
+    uint16_t used[VGS_QUEUES]; /* used entries published */
+    uint16_t seen;             /* control queue avail entries looked ahead at */
+    struct vd_ahead ahead[VGS_QUEUE_MAX];
+    pthread_mutex_t lock;
     uint32_t scanout[VD_SCANOUTS]; /* each scanout's resource, or 0 */
     struct vd_pending pend[VD_PENDING];
     uint32_t npend;
@@ -255,6 +280,7 @@ void vd_fini(struct vd *d);
 int vd_step(struct vd *d);
 void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id);
 void vd_kick(struct vd *d);
+uint32_t vd_pending(struct vd *d, struct vd_pending *oldest, uint32_t *unfenced);
 void vd_beat(struct vd *d);
 uint64_t vd_profile_now(void);
 

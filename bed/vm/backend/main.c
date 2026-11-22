@@ -438,17 +438,14 @@ static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
 static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *seen, time_t *since,
                         time_t *next)
 {
+    struct vd_pending oldest;
     const struct vd_pending *old = 0;
     time_t t = time(0);
     char why[192];
-    uint32_t i;
+    uint32_t unfenced, n = vd_pending(d, &oldest, &unfenced);
 
-    for (i = 0; i < VD_PENDING && d->npend; i++) {
-        const struct vd_pending *p = &d->pend[i];
-
-        if (p->used && (!old || p->fence_id < old->fence_id)) {
-            old = p;
-        }
+    if (n) {
+        old = &oldest;
     }
     if (!old || old->fence_id + 1 != *seen) {
         *seen = old ? old->fence_id + 1 : 0;
@@ -462,8 +459,8 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
     snprintf(why, sizeof(why),
              "%u fenced commands wait, %u with no renderer fence; the oldest, fence %llu of "
              "context %u, ring %u, for %ld s",
-             (unsigned)d->npend, (unsigned)d->nunfenced, (unsigned long long)old->fence_id,
-             (unsigned)old->ctx, (unsigned)old->ring, (long)(t - *since));
+             (unsigned)n, (unsigned)unfenced, (unsigned long long)old->fence_id, (unsigned)old->ctx,
+             (unsigned)old->ring, (long)(t - *since));
     report(d, s, r, 0);
     stall_report(why);
     *next = t + STALL_AGAIN_S;
@@ -588,11 +585,13 @@ static void beat_stop(struct beater *b)
 
 /**
  * Serve the device until the driver detaches with -1, or a signal: step
- * until idle, then wait on the doorbells and virglrenderer's fences. A
- * transport with doorbells sleeps until one rings; without, it polls each
- * millisecond. A step that finds work after a wait no doorbell ended
- * counts as polled. Each turn beats for the stall report's watch, and a
- * fenced command that waits too long is reported (`fence_watch`).
+ * until idle, then wait on the doorbells and virglrenderer's poll
+ * descriptor. Fences complete on virglrenderer's threads as they signal
+ * (`retire` in virgl.c); only when they are polled instead does a fence
+ * pending cut the wait to a millisecond. A transport with doorbells sleeps
+ * until one rings; without, it polls each millisecond. A step that finds
+ * work after a wait no doorbell ended counts as polled. Each turn beats for the stall report's
+ * watch, and a fenced command that waits too long is reported (`fence_watch`).
  */
 static void serve(struct vd *d, struct src *s, struct vr *r, int once, const char *profile)
 {
@@ -628,7 +627,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
         vr_poll(r);
         vd_kick(d);
         fence_watch(d, s, r, &seen, &since, &next);
-        timeout = d->npend ? 1 : 1000;
+        timeout = !vr_async_fence(r) && vd_pending(d, 0, 0) ? 1 : 1000;
         if (s->efd[0] < 0 || !(d->drv.transport_features & VGS_TF_DOORBELL) ||
             d->me.state != VGS_DEV_RUNNING) {
             timeout = 1;
