@@ -20,6 +20,8 @@ The runners are `tests/graphics/runners` of the tree, or this directory when `co
 
 Set `BED_PROFILE` to the absolute path of `profile.sh` to save host snapshots in `OUT/profile/before` and `after` around a scene. They hold raw `/proc/stat`, KVM exits, kernel calls, each virtio GPU's command profile and the region counters which the machine provides. With `BED_VM_PROFILE_PORT`, `BED_VM_PROFILE_KEY` and `BED_VM_PROFILE_HOSTS`, the script also reads the profiling VM at that loopback SSH port. Its backend must use `-T /run/vgpu-profile`. The VM snapshots include the backend's processor and GPU counters, and the final snapshot includes a perf report if perf is installed. The files named `start` and `end` bracket each snapshot.
 
+`BED_PROFILE_ONLY=1 sh bed-shm.sh -w -g BDF -x MEASURE -S game ...` captures the SuperTuxKart figure and returns the GPU after it. `BED_VM_PROFILE_CRC=1` supplies the diagnostic readback setting through QEMU's firmware configuration to a profiling VM that reads it.
+
 The last line, kept in `OUT/line`:
 
     measure: result: SCENE RUNG frames N frame_ms MEAN p50 P50 p99 P99 cpu_ms_per_frame C latency_ms L copied_bytes B exits E round_trips T seconds S passed P
