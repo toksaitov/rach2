@@ -34,10 +34,11 @@
 # 30 s, and the peer then asks for eight backings of 64 MiB of it in turn:
 # the backend must refuse each with ERR_OUT_OF_MEMORY, where a pin of
 # memory the VM has not got would wake its OOM killer, and answer the
-# commands after. Once the fill has ended, the peer asks for one of 1 GiB,
-# which the VM's counts allow but the memory cgroup of 1 GiB the backend
-# runs in cannot hold: the backend must refuse it when its pin's allocation
-# fails, where the cgroup's OOM killer would end the backend.
+# commands after. Once the fill has ended, the backend is moved into a
+# memory cgroup of 64 MiB and the peer asks for a backing of 1 GiB, which
+# the VM's counts allow and the cgroup cannot hold: the backend must refuse
+# it when its pin's allocation fails, where the cgroup's OOM killer would
+# end the backend.
 #
 # `rach2` makes rach2.qcow2 beside the prepared image, an overlay of it that
 # Rach2 boots under its own KVM (tests/cases/machine.bed-shm.json): the
@@ -174,12 +175,10 @@ vm()
     ssh $opts -p "$port" gfx@127.0.0.1 "$@"
 }
 
-# guest VFIO BACKING: the VM's part of the check, as a script for its sh:
-# build the module and the backend from the tree's copy in ~/bed, take the
-# device by the module, or by vfio-pci when VFIO is 1, and run the backend
-# on vkms until the driver detaches; when BACKING is 1, in a scope whose
-# memory cgroup holds 1 GiB, so that a pin of a backing of 1 GiB fails in
-# the cgroup however much memory the VM has.
+# guest VFIO: the VM's part of the check, as a script for its sh: build the
+# module and the backend from the tree's copy in ~/bed, take the device by
+# the module, or by vfio-pci when VFIO is 1, and run the backend on vkms
+# until the driver detaches.
 guest()
 {
     cat <<GUEST
@@ -205,9 +204,7 @@ if [ $1 = 1 ]; then
 else
     sudo insmod bed/vm/module/vgpushm.ko
 fi
-scope=
-[ $2 = 0 ] || scope="systemd-run --quiet --scope -p MemoryMax=1G -p MemorySwapMax=0"
-sudo \$scope env LIBGL_ALWAYS_SOFTWARE=1 bed/vm/backend/vgpu-backend -1 -k "\$card" -w -d -I \$from
+sudo LIBGL_ALWAYS_SOFTWARE=1 bed/vm/backend/vgpu-backend -1 -k "\$card" -w -d -I \$from
 GUEST
 }
 
@@ -271,18 +268,37 @@ peer_waits()
     done
 }
 
+# pen: the VM's part of the last ask, as a script for its sh: once the
+# fill has ended, which gives its memory back, move the backend into a new
+# memory cgroup that holds 64 MiB, where what it allocates from then on is
+# charged, and print MemAvailable.
+pen()
+{
+    cat <<'PEN'
+set -eu
+while systemctl -q is-active bed-fill; do
+    sleep 1
+done
+cg=/sys/fs/cgroup/bed-pin
+sudo mkdir -p "$cg"
+echo 64M | sudo tee "$cg/memory.max" > /dev/null
+echo 0 | sudo tee "$cg/memory.swap.max" > /dev/null 2>&1 || true
+pgrep -x vgpu-backend | sudo tee "$cg/cgroup.procs" > /dev/null
+echo "bed-vm: fill: the backend in $cg, $(grep MemAvailable /proc/meminfo)"
+PEN
+}
+
 # filler: the host's part of -b: once the peer waits for $work/go, fill the
 # VM's memory and start the peer's eight asks by making the file; once it
-# waits for $work/last, wait for the fill's end, which gives its memory
-# back, and start the last ask, which the backend's cgroup cannot hold.
+# waits for $work/last, wait for the fill's end, pen the backend in its
+# cgroup and start the last ask, which that cgroup cannot hold.
 filler()
 {
     peer_waits "$work/go" || return 1
     fill | vm 'sh -s' > "$work/fill.out" 2>&1 || true
     : > "$work/go"
     peer_waits "$work/last" || return 1
-    vm 'while systemctl -q is-active bed-fill; do sleep 1; done; grep MemAvailable /proc/meminfo' \
-        < /dev/null >> "$work/fill.out" 2>&1 || true
+    pen | vm 'sh -s' >> "$work/fill.out" 2>&1 || true
     : > "$work/last"
 }
 
@@ -322,6 +338,8 @@ judge()
             "$(grep -c "^backend: back: resource [0-9]*: refused: 67108864 bytes: no room in the VM's counts: " "$b")" 8
         expect "the backing of 1 GiB refused" \
             "$(grep -c '^peer: backing: resource [0-9]*, 1073741824 bytes: refused: out of memory$' "$p")" 1
+        expect "the backend moved into a cgroup of 64 MiB" \
+            "$(grep -c '^bed-vm: fill: the backend in /sys/fs/cgroup/bed-pin, MemAvailable:' "$work/fill.out")" 1
         expect "the backing of 1 GiB refused by its pin" \
             "$(grep -c '^backend: back: resource [0-9]*: refused: 1073741824 bytes: the pin: Cannot allocate memory$' "$b")" 1
         expect "kills by the backend's memory cgroup" \
@@ -398,7 +416,7 @@ check()
     } | sed 's/^/bed-vm: record: /' >&2
     (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
         vm 'rm -rf bed && tar xf -'
-    guest "$vfio" "$backing" > "$work/guest.sh"
+    guest "$vfio" > "$work/guest.sh"
     if [ "$backing" = 1 ]; then
         filler &
         filling=$!
@@ -418,6 +436,9 @@ check()
     qemu=
     grep -v '^backend: virgl: \|kmsro: driver missing' "$work/backend.out" | sed 's/^/bed-vm: /' >&2
     [ "$backing" = 0 ] || cat "$work/fill.out" >&2
+    # The OOM killer's lines and the call trace of the allocation that woke it.
+    grep -i -A 40 'invoked oom-killer' "$work/dmesg.out" | grep -v '^\[ *[0-9.]*\] *\[ *[0-9]*\] ' |
+        sed -n '1,/Killed process/p' | sed 's/^/bed-vm: kernel: /' >&2
     sed 's/^/bed-vm: /' "$work/peer.out" >&2
     [ "$status" -eq 0 ] || die "result: the backend exited $status"
     judge || die "result: the VM's frames differ from the peer's"
@@ -504,6 +525,7 @@ sudo tee /usr/local/sbin/bed-vm-control > /dev/null <<'RUN'
 # `bed-vm: control: WORD: done`. A VM without the port has nothing to do.
 stty -F /dev/ttyS1 raw -echo 2> /dev/null || exit 0
 exec < /dev/ttyS1
+stty raw -echo
 while read -r word; do
     case $word in
         stop) pkill -STOP -x vgpu-backend ;;
