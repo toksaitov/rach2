@@ -816,7 +816,7 @@ int loop_attach(int index, const char *path, int writable)
     struct loop_device *loop = 0;
     struct open_file *wres = 0;
     void *handle = 0;
-    uint32_t seen, seen_fs; /* the attachment's cursors; syncfs's is unused */
+    uint32_t seen = 0, seen_fs = 0; /* the attachment's cursors; syncfs's is unused */
     int i;
     int rc;
 
