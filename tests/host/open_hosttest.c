@@ -1313,6 +1313,30 @@ int vfs_stamp_still(const struct vfs_stamp *st)
     return 1;
 }
 
+/** Begin the change a stamp hands off to, which always holds: nothing is
+ * counted here. */
+int vfs_stamp_begin(const struct vfs_stamp *st)
+{
+    (void)st;
+    return 1;
+}
+
+/** The working directory by its pair: none here, so the caller walks its
+ * path. */
+int vfs_resolve_cwd(int flags, struct vfs_ref *ref)
+{
+    (void)flags;
+    (void)ref;
+    return 1;
+}
+
+/** A call run again: no row's stamp moves, so none is. */
+int vfs_call_again(void)
+{
+    check(0, "no row's stamp moves");
+    return -EAGAIN;
+}
+
 /** Release a successfully opened handle, never more than were opened. */
 void vfs_release(struct vfs_mount *mnt, void *at)
 {

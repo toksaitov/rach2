@@ -156,6 +156,21 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return 0;
 }
 
+/** No row attaches by descriptor: entering a mount for one fails. */
+int vfs_enter(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    check(0, "no row attaches a loop device by descriptor");
+    return -EBUSY;
+}
+
+/** No row attaches by descriptor, so nothing holds a node here. */
+void vfs_ref_hold(const struct vfs_ref *ref)
+{
+    (void)ref;
+    check(0, "no row attaches a loop device by descriptor");
+}
+
 /** The newest walk keep, for a call that runs an attempt again: none here. */
 const void *vfs_walk_keeps_mark(void)
 {

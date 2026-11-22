@@ -553,6 +553,15 @@ void vfs_ref_now(struct vfs_ref *ref)
     (void)ref;
 }
 
+/** The working directory by its pair: none here, so the caller walks its
+ * path. */
+int vfs_resolve_cwd(int flags, struct vfs_ref *ref)
+{
+    (void)flags;
+    (void)ref;
+    return 1;
+}
+
 /** The newest walk keep, for a call that runs an attempt again: none here. */
 const void *vfs_walk_keeps_mark(void)
 {
