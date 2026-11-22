@@ -614,9 +614,21 @@ struct vgpu_caps_cache {
     unsigned char *data; /* follows the record in its allocation */
 };
 
+/*
+ * A resource attached to a context, on both the context's list and the
+ * object's, so that an object's close or free finds its own few records
+ * without walking every buffer a context holds. A record lives from
+ * CTX_ATTACH_RESOURCE to the DETACH that a file's close of its last handle
+ * sends, the object's free, which forgets it since RESOURCE_UNREF detaches
+ * the resource from every context, or the context's close, whose
+ * CTX_DESTROY drops its attachments on the host.
+ */
 struct vgpu_attachment {
-    struct vgpu_attachment *next;
-    struct virtio_gpu_object *bo; /* borrowed; its free detaches every context */
+    struct vgpu_attachment *ctx_next;   /* the context's list */
+    struct vgpu_attachment **ctx_pprev; /* the link that points here */
+    struct vgpu_attachment *bo_next;    /* the object's list */
+    struct vgpu_context *ctx;
+    struct virtio_gpu_object *bo;
 };
 
 /* The most rings CONTEXT_INIT gives a context, and the longest debug
@@ -639,7 +651,7 @@ struct vgpu_context {
     struct vgpu_attachment *attached;
     int created;
     struct mutex lock;                    /* over `created` and the parameters, `vgpu_context` */
-    uint32_t holds;                       /* detaches asleep in an allocation that will use it */
+    uint32_t holds;                       /* closes asleep in a DETACH's allocation for it */
     int closed;                           /* the file has closed and the record is off the list;
                                            * the last hold frees it */
     uint32_t context_init;                /* the capability set id, 0 for the default */
@@ -666,8 +678,13 @@ struct virtio_gpu_device {
     /* DMA pages of the commands started and not yet freed, answered or
      * not, which `vgpu_room` bounds. */
     uint32_t held;
-    int reaping;      /* frees of `vgpu_reap` under way, which never wait; the
-                         big lock's, which a reap keeps */
+    int reaping; /* frees of `vgpu_reap` under way, which never wait; the
+                    big lock's, which a reap keeps */
+    /* Objects whose last reference an answer let go of, which the worker
+     * frees (`vgpu_obj_put_answered`), oldest first through `free_next`;
+     * under `lock`. `freeing` counts the passes over them under way. */
+    struct virtio_gpu_object *frees, *frees_tail;
+    int freeing;
     uint32_t kicking; /* notifies made without the big lock */
     char reset_path[48];
     int has_edid;
@@ -712,6 +729,8 @@ struct virtio_gpu_object {
     uint32_t format; /* VIRTIO_GPU_FORMAT_* */
     uint32_t width, height;
     struct virtio_gpu_object *next;
+    struct vgpu_attachment *attached;    /* the contexts it is attached to */
+    struct virtio_gpu_object *free_next; /* on the device's `frees` */
     int dumb;
     /* A blob: its VIRTGPU_BLOB_MEM_*, 0 for a resource that is none, and
      * its VIRTGPU_BLOB_FLAG_*. A blob of host memory alone, HOST3D, has no
@@ -771,6 +790,10 @@ void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd);
  */
 void vgpu_cmd_send(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
                    void *arg);
+/** As vgpu_cmd_send, without notifying the device, as vgpu_cmd_queue: for a
+ * reap's frees, whose reap notifies once at its end (`vgpu_kick`). */
+void vgpu_cmd_send_quiet(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
+                         void *arg);
 /** Start `cmd`, unwaited and with no completion, without notifying the
  * device, as Linux's virtio_gpu_queue_ctrl_sgs before its
  * virtio_gpu_notify: the next command sent on its queue, which the caller
@@ -818,7 +841,7 @@ void vgpu_obj_pages_free(struct virtio_gpu_device *vg, struct virtio_gpu_object 
 /** The lowest free resource id, now taken, or 0; and its return. */
 uint32_t vgpu_res_id_get(struct virtio_gpu_device *vg);
 void vgpu_res_id_put(struct virtio_gpu_device *vg, uint32_t id);
-/** The `free` of every object of the driver: its detaches, UNMAP_BLOB and
+/** The `free` of every object of the driver: its UNMAP_BLOB and
  * RESOURCE_UNREF, and its storage once the host has answered. */
 void vgpu_obj_free(struct drm_gem_object *obj);
 /** What a blob holds beyond an object: its piece of host-visible memory
@@ -846,6 +869,18 @@ void vgpu_hostmem_init(struct virtio_gpu_device *vg);
 extern const struct drm_gem_object_funcs vgpu_host_funcs;
 /** Free completed commands; process context. */
 void vgpu_reap(struct virtio_gpu_device *vg);
+/** Drop a reference a command held until its answer, from the command's
+ * completion; the last goes to the worker, which frees the object. */
+void vgpu_obj_put_answered(struct drm_gem_object *obj);
+/** Free the objects the worker has been given (`vgpu_obj_put_answered`);
+ * process context, may sleep. */
+void vgpu_frees_run(struct virtio_gpu_device *vg);
+/** Notify the device of the commands queued on its control queue without a
+ * notify (`vgpu_cmd_queue`), if any; process context. */
+void vgpu_kick(struct virtio_gpu_device *vg);
+/** Whether the caller may sleep for the device's answers: a process with
+ * interrupts on, outside a reap, on a device still alive. */
+int vgpu_may_wait(struct virtio_gpu_device *vg);
 /** Wait, in a caller that may sleep, while the commands started and not yet
  * freed hold VGPU_HELD_MAX DMA pages or more; nothing in one that may not.
  * With `killable`, for an ioctl, SIGKILL ends the wait with -EINTR; a free
@@ -879,8 +914,12 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
 /** The objects' `open` hook: attach the resource to the context of a file
  * that has just got a handle to it. */
 int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file);
-/** Detach a resource before its UNREF, or after reset, without sleeping. */
-void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+/** The objects' `close` hook: detach the resource from the context of a
+ * file that lets go of its last handle to it. */
+void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file);
+/** Forget every context's attachment of `bo`, sending nothing: before its
+ * UNREF, which detaches it on the host, or after a reset. Never sleeps. */
+void vgpu_resource_forget(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
 /** The driver's 3D, fence and blob ioctl handlers; core copies arguments. */
 int32_t vgpu_execbuffer_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_get_caps_ioctl(struct drm_device *, void *, struct drm_file *);

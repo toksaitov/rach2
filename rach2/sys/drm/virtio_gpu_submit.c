@@ -23,8 +23,9 @@ struct vgpu_submit_sync {
 };
 
 /** Drop all held buffers, including a partially built list, and an event
- * not sent. */
-static void submit_free(struct vgpu_submit *s)
+ * not sent; with `answered`, from the submission's completion, whose last
+ * references go to the worker (`vgpu_obj_put_answered`). */
+static void submit_release(struct vgpu_submit *s, int answered)
 {
     uint32_t i;
 
@@ -35,7 +36,11 @@ static void submit_free(struct vgpu_submit *s)
         drm_event_cancel_free(s->event);
     }
     for (i = 0; i < s->nbos; i++) {
-        drm_gem_object_put(s->bos[i]);
+        if (answered) {
+            vgpu_obj_put_answered(s->bos[i]);
+        } else {
+            drm_gem_object_put(s->bos[i]);
+        }
     }
     kfree(s->bos);
     kfree(s);
@@ -51,7 +56,7 @@ static void submit_done(struct virtio_gpu_cmd *cmd)
         drm_send_event(s->event);
         s->event = NULL;
     }
-    submit_free(s);
+    submit_release(s, 1);
 }
 
 /* The virgl commands that copy a box between a resource and memory, whose
@@ -305,7 +310,7 @@ static int32_t sync_parse(struct virtio_gpu_device *vg, struct drm_file *file,
 
 /** Resolve and hold all submitted buffer handles before any dependency wait,
  * then count the copies of the commands in `cmd`'s payload with
- * submit_copied. Return 0 or -errno; submit_free releases a partial
+ * submit_copied. Return 0 or -errno; submit_release releases a partial
  * result. */
 static int32_t submit_buffers(struct drm_file *file, struct drm_virtgpu_execbuffer *a,
                               struct virtio_gpu_cmd *cmd, struct vgpu_submit *s)
@@ -569,7 +574,7 @@ out:
         }
         vgpu_cmd_free(cmd);
     }
-    submit_free(s);
+    submit_release(s, 0);
     sync_free(ins, a->num_in_syncobjs);
     sync_free(outs, a->num_out_syncobjs);
     return rc;

@@ -404,9 +404,27 @@ int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
     return rc;
 }
 
+/** Take attachment `a` off its context's list and its object's, and free
+ * it. */
+static void attachment_free(struct vgpu_attachment *a)
+{
+    struct vgpu_attachment **p;
+
+    *a->ctx_pprev = a->ctx_next;
+    if (a->ctx_next) {
+        a->ctx_next->ctx_pprev = a->ctx_pprev;
+    }
+    for (p = &a->bo->attached; *p && *p != a; p = &(*p)->bo_next) {
+    }
+    if (*p) {
+        *p = a->bo_next;
+    }
+    kfree(a);
+}
+
 /**
  * Destroy a closing file's context in queue order and free its attachment
- * records, once the commands in flight leave room (`vgpu_room`). A detach
+ * records, once the commands in flight leave room (`vgpu_room`). A close
  * asleep with the record held (`holds`) frees it when it wakes. May sleep.
  */
 void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
@@ -438,8 +456,7 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
         *p = ctx->next;
     }
     while ((a = ctx->attached) != NULL) {
-        ctx->attached = a->next;
-        kfree(a);
+        attachment_free(a);
     }
     file->driver_priv = NULL;
     if (ctx->holds) {
@@ -450,17 +467,18 @@ void vgpu_context_close(struct drm_device *dev, struct drm_file *file)
     vgpu_reap(vg);
 }
 
-/** Whether `bo` is attached to `ctx`. */
-static int vgpu_context_attached(const struct vgpu_context *ctx, const struct virtio_gpu_object *bo)
+/** `bo`'s attachment to `ctx`, or NULL. */
+static struct vgpu_attachment *vgpu_context_attached(const struct vgpu_context *ctx,
+                                                     const struct virtio_gpu_object *bo)
 {
-    const struct vgpu_attachment *a;
+    struct vgpu_attachment *a;
 
-    for (a = ctx->attached; a; a = a->next) {
-        if (a->bo == bo) {
-            return 1;
+    for (a = bo->attached; a; a = a->bo_next) {
+        if (a->ctx == ctx) {
+            return a;
         }
     }
-    return 0;
+    return NULL;
 }
 
 /**
@@ -497,9 +515,16 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
         vgpu_cmd_free(cmd);
         return 0;
     }
+    a->ctx = ctx;
     a->bo = bo;
-    a->next = ctx->attached;
+    a->ctx_next = ctx->attached;
+    if (a->ctx_next) {
+        a->ctx_next->ctx_pprev = &a->ctx_next;
+    }
+    a->ctx_pprev = &ctx->attached;
     ctx->attached = a;
+    a->bo_next = bo->attached;
+    bo->attached = a;
     req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
     req->hdr.ctx_id = ctx->id;
     req->resource_id = bo->res_id;
@@ -507,63 +532,97 @@ int32_t vgpu_context_attach(struct virtio_gpu_device *vg, struct drm_file *file,
     return 0;
 }
 
-/**
- * Queue every context's detach before UNREF, or forget attachments after
- * reset. Each command's allocation may sleep, and meanwhile another thread
- * may close a context's file or change its list of attachments, so the
- * context is held across the sleep (`holds`) and its list walked again
- * from the start; a context closed meanwhile has sent its CTX_DESTROY,
- * which drops its attachments on the host, so its detach is not sent and
- * the walk begins again from the device's first context. May sleep.
- */
-void vgpu_resource_detach(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+/** The host has detached the resource, or a reset has answered the DETACH
+ * with none: drop the reference it held on the object, whose last goes to
+ * the worker, which sends its UNREF (`vgpu_obj_put_answered`). */
+static void detach_done(struct virtio_gpu_cmd *cmd)
 {
-    struct vgpu_context *ctx;
-    struct vgpu_attachment **p, *a;
-    struct virtio_gpu_cmd *cmd;
+    vgpu_obj_put_answered((struct drm_gem_object *)cmd->arg);
+}
+
+/** Whether `file` holds a handle to `obj` other than the one it is letting
+ * go of, which is still on the object's list while its `close` hook runs. */
+static int file_keeps_handle(struct drm_gem_object *obj, struct drm_file *file)
+{
+    struct drm_handle *h;
+    uint32_t flags = spin_lock_irqsave(&obj->dev->object_lock);
+    int n = 0;
+
+    for (h = obj->handles; h && n < 2; h = h->obj_next) {
+        n += h->file == file;
+    }
+    spin_unlock_irqrestore(&obj->dev->object_lock, flags);
+    return n > 1;
+}
+
+/**
+ * Detach the object's resource from the context of `file`, which lets go of
+ * its last handle to it, as Linux's virtio_gpu_gem_object_close: so that
+ * the host's work after a submission waits on this DETACH, as on Linux,
+ * and the resource leaves the context as soon as the file is done with it.
+ * The queued DETACH holds a reference on the object until its answer
+ * (`detach_done`), so that the UNREF follows it. A program's exit closes
+ * every handle at once, so the close first waits for room (`vgpu_room`),
+ * as the free does. The wait and the command's allocation may sleep, so
+ * the context is held across them (`holds`) and the attachment looked up
+ * again after: a context closed meanwhile has sent its CTX_DESTROY, and a
+ * reset has forgotten every attachment, so neither sends the DETACH.
+ * Without memory for the command, the attachment stays until the UNREF or
+ * the CTX_DESTROY drops it on the host. A close that sends nothing drops
+ * the DETACH's reference at once, never the last, since the handle still
+ * holds one. May sleep.
+ */
+void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
+{
+    struct virtio_gpu_device *vg = vgpu_device(obj->dev);
+    struct virtio_gpu_object *bo = vgpu_bo(obj);
+    struct vgpu_context *ctx = file->driver_priv;
     struct virtio_gpu_resource_unref *req;
+    struct vgpu_attachment *a;
+    struct virtio_gpu_cmd *cmd;
     int closed;
 
-again:
-    for (ctx = vg->contexts; ctx; ctx = ctx->next) {
-        for (p = &ctx->attached; *p;) {
-            a = *p;
-            if (a->bo != bo) {
-                p = &a->next;
-                continue;
-            }
-            *p = a->next;
-            kfree(a);
-            if (vg->dead) {
-                continue;
-            }
-            ctx->holds++;
-            cmd =
-                vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE, sizeof(*req));
-            ctx->holds--;
-            closed = ctx->closed;
-            if (closed && ctx->holds == 0) {
-                kfree(ctx);
-            }
-            if (!cmd) {
-                if (!vg->dead) {
-                    klog(KLOG_WARN, "virtio_gpu",
-                         "resource %u: no memory for CTX_DETACH_RESOURCE; reset",
-                         (unsigned)bo->res_id);
-                    drm_dev_unplug(&vg->drm);
-                }
-                return;
-            }
-            if (closed) {
-                vgpu_cmd_free(cmd);
-                goto again;
-            }
-            req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
-            req->hdr.ctx_id = ctx->id;
-            req->resource_id = bo->res_id;
-            vgpu_cmd_send(cmd, NULL, NULL);
-            p = &ctx->attached;
+    if (!vg->has_virgl || !ctx || vg->dead || !vgpu_context_attached(ctx, bo) ||
+        file_keeps_handle(obj, file)) {
+        return;
+    }
+    drm_gem_object_get(obj);
+    ctx->holds++;
+    (void)vgpu_room(vg, 0);
+    cmd = vgpu_cmd_new_wait(vg, vg->ctrlq, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE, sizeof(*req));
+    ctx->holds--;
+    closed = ctx->closed;
+    if (closed && ctx->holds == 0) {
+        kfree(ctx);
+    }
+    a = closed ? NULL : vgpu_context_attached(ctx, bo);
+    if (!cmd || !a || vg->dead) {
+        if (!cmd && a && !vg->dead) {
+            klog(KLOG_WARN, "virtio_gpu", "resource %u: no memory for CTX_DETACH_RESOURCE",
+                 (unsigned)bo->res_id);
         }
+        if (cmd) {
+            vgpu_cmd_free(cmd);
+        }
+        drm_gem_object_put(obj);
+        return;
+    }
+    attachment_free(a);
+    req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
+    req->hdr.ctx_id = ctx->id;
+    req->resource_id = bo->res_id;
+    if (vgpu_may_wait(vg)) {
+        vgpu_cmd_send_sleepable(cmd, detach_done, obj);
+    } else {
+        vgpu_cmd_send(cmd, detach_done, obj);
+    }
+}
+
+void vgpu_resource_forget(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    (void)vg;
+    while (bo->attached) {
+        attachment_free(bo->attached);
     }
 }
 
@@ -573,7 +632,7 @@ again:
  */
 static void transfer_done(struct virtio_gpu_cmd *cmd)
 {
-    drm_gem_object_put(cmd->arg);
+    vgpu_obj_put_answered(cmd->arg);
 }
 
 /* Bytes the devices' answered transfers have copied since boot, both

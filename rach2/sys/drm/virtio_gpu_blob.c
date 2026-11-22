@@ -726,8 +726,9 @@ static volatile uint8_t *host_vmap(struct drm_gem_object *obj)
     return (volatile uint8_t *)bo->vmap;
 }
 
-const struct drm_gem_object_funcs vgpu_host_funcs = {vgpu_obj_free, host_mmap, NULL, NULL,
-                                                     host_page,     host_vmap, NULL, vgpu_obj_open};
+const struct drm_gem_object_funcs vgpu_host_funcs = {vgpu_obj_free, host_mmap,     NULL,
+                                                     NULL,          host_page,     host_vmap,
+                                                     NULL,          vgpu_obj_open, vgpu_obj_close};
 
 /* ------------------------------------------------------------------------
  * RESOURCE_CREATE_BLOB
@@ -844,7 +845,7 @@ static void uuid_done(struct virtio_gpu_cmd *cmd)
         k_memcpy(bo->uuid, resp->uuid, sizeof(bo->uuid));
         bo->uuid_ok = 1;
     }
-    drm_gem_object_put(&bo->shmem.base);
+    vgpu_obj_put_answered(&bo->shmem.base);
 }
 
 /**
