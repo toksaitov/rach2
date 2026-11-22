@@ -2564,6 +2564,12 @@ int vfs_mount_rdonly(const struct vfs_mount *m)
     return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
+/** vfs_ns.c's: the caller's mount namespace, the first, the only one here. */
+uint32_t vfs_mntns_id(void)
+{
+    return 0;
+}
+
 /** The SIGXFSZ of a row past RLIMIT_FSIZE, which no row reads. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
