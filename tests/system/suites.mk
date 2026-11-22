@@ -344,9 +344,8 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach
 # satisfied by an implementation that kept 33 bits, and it is attached over
 # AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
 # `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and
-# concurrent raw offsets. The raw boot is under the lag, so its disk keeps
-# the guest's flushes from the host (cache=unsafe), as tests/system/Readme.md
-# says.
+# concurrent raw offsets. Both boots keep the guest's flushes from the host
+# (cache=unsafe), for the reasons tests/system/Readme.md gives.
 # Its cases are tests/cases/guest.fdlock.json, with no target here.
 # The disks of the bootpart cases, tests/cases/machine.bootpart.json, made for
 # each architecture, since their root holds tests/bootprobe: the disk that
