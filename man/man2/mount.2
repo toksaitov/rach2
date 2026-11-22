@@ -113,6 +113,10 @@ and
 .Ql nr_inodes= ,
 and ext2
 .Ql errors= .
+A final
+.Pa /proc/PID/fd/N
+link supplies the node and mount held by the descriptor.
+The mount must be visible in the caller's mount namespace.
 On ext2 it makes the mount read-only, synced and marked clean as an
 unmount leaves it, or writable, checked as a writable mount is; tmpfs
 changes between the two at once; every other type refuses a change
@@ -594,6 +598,10 @@ keeps the policy in force.
 requires
 .Fa target
 to resolve to the root of a mount.
+A final
+.Pa /proc/PID/fd/N
+link supplies the node and mount held by the descriptor.
+The mount must be visible in the caller's mount namespace.
 A target that ends in a slash, or whose last component is
 .Pa \&.
 or

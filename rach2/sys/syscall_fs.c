@@ -5371,12 +5371,12 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
     struct vfs_ref ref;
     struct vfs_mount *m;
     int privileged = cred_privileged();
-    int rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+    int rc = vfs_resolve_fd(path, VFS_WALK_MOUNT, &ref, NULL);
 
-    if (rc != 0) {
+    if (rc < 0) {
         return rc;
     }
-    if (ref.node != ref.mnt->root) {
+    if (ref.node != ref.mnt->root || !vfs_mount_seen(ref.mnt)) {
         vfs_ref_release(&ref);
         return -EINVAL;
     }
@@ -9231,15 +9231,41 @@ static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** Mark the spelling of a working directory outside the process root. */
+static int cwd_mark_outside(char *path, int outside)
+{
+    size_t len;
+
+    if (!outside)
+        return 0;
+    len = k_strlen(path);
+    if (len + 2 > VFS_PATH_MAX)
+        return -ENAMETOOLONG;
+    k_memmove(path + 1, path, len + 1);
+    return 0;
+}
+
+/** Enter a held directory from its path in the mount table. */
+static int cwd_enter_fd(const struct vfs_ref *ref, char *path)
+{
+    int outside = 0;
+    int rc = path_in_root_at(path, &outside);
+
+    if (rc == 0)
+        rc = cwd_mark_outside(path, outside);
+    return rc != 0 ? rc : cwd_enter(path, ref->mnt, ref->node);
+}
+
 /**
  * Enter the directory `ref` holds, a node of a mounted type, for `do_chdir`,
- * `path` being the request as the walk took it. The node must be a directory
+ * `path` being its mount-table path if `via_fd`, or the request as the walk
+ * took it. The node must be a directory
  * the caller may search (-ENOTDIR, -EACCES). The working directory is named
  * by the type when it can name it, so a walk through a link records where it
  * arrived and not what was typed, and otherwise by the request with its dots
  * collapsed, which the physical walk that found the node makes exact.
  */
-static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
+static int32_t chdir_mounted(const struct vfs_ref *ref, char *path, int via_fd)
 {
     struct vfs_stat vst;
     char *named;
@@ -9253,6 +9279,9 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
     }
     if (rc != 0) {
         return rc;
+    }
+    if (via_fd) {
+        return cwd_enter_fd(ref, path);
     }
     path_expand_links(path);
     collapse_dots(path);
@@ -9318,20 +9347,6 @@ static int32_t synth_chdir_path(const struct vpath *vp, char *path)
     return 0;
 }
 
-/** Mark the spelling of a working directory outside the process root. */
-static int cwd_mark_outside(char *path, int outside)
-{
-    size_t len;
-
-    if (!outside)
-        return 0;
-    len = k_strlen(path);
-    if (len + 2 > VFS_PATH_MAX)
-        return -ENAMETOOLONG;
-    k_memmove(path + 1, path, len + 1);
-    return 0;
-}
-
 /** Enter a synthetic directory by its mount's name in the caller's root. */
 static int chdir_synth(const struct vfs_ref *ref, const struct vpath *vp, char *path)
 {
@@ -9390,15 +9405,16 @@ static int32_t do_chdir(char *path)
     const struct vpath *svp;
     krffs_node_t *node;
     void *pin = NULL;
-    int32_t rc;
+    int via_fd, rc;
 
     if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         return cwd_enter("/", NULL, NULL);
     }
-    rc = vfs_resolve(0, path, VFS_WALK_LOCK, &ref, 0, 0);
-    if (rc != 0) {
-        return rc;
+    via_fd = vfs_resolve_fd(path, VFS_WALK_LOCK, &ref, path);
+    if (via_fd < 0) {
+        return via_fd;
     }
+    rc = 0;
     if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {
         rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);
     }
@@ -9414,8 +9430,8 @@ static int32_t do_chdir(char *path)
         return rc;
     }
     node = ref.node;
-    if (!mnt_is_root(ref.mnt)) {
-        rc = chdir_mounted(&ref, path);
+    if (!mnt_is_root(ref.mnt) || via_fd) {
+        rc = chdir_mounted(&ref, path, via_fd);
         if (pin) {
             ref.mnt->type->ops->unpin(ref.mnt, pin);
         }

@@ -1630,9 +1630,9 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
 }
 
 /** Reconstruct the mount-table path of the held descriptor's node. */
-static int mount_fd_path(const struct open_file *file, const struct vfs_ref *ref, char *path,
-                         uint32_t cap)
+static int mount_fd_path(const fd_entry_t *fd, const struct vfs_ref *ref, char *path, uint32_t cap)
 {
+    const struct open_file *file = fd->ofd;
     struct vfs_mount *mnt = ref->mnt;
     const char *name;
     int deleted, rc;
@@ -1641,6 +1641,12 @@ static int mount_fd_path(const struct open_file *file, const struct vfs_ref *ref
         name = mnt->covered_path;
     } else if (file->synth_mnt) {
         name = file->dirpath;
+        if (!name && fd->type == FD_TYPE_SYNTH_DIR && fd->priv) {
+            const struct synth_dir *sd = fd->priv;
+
+            synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)cap);
+            return 0;
+        }
     } else if (file->name) {
         if (!mnt->type->file_locked) {
             vfs_ns_lock(mnt);
@@ -1663,13 +1669,13 @@ static int mount_fd_path(const struct open_file *file, const struct vfs_ref *ref
     return 0;
 }
 
-int procfs_mount_fd(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap)
+int procfs_fd_ref(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap, int mount)
 {
     int pid = procfs_resolve_id(vp);
     process_t *p = pid < 0 ? NULL : procfs_proc(pid);
     struct open_file *file;
     fd_entry_t fd;
-    int rc = -EINVAL;
+    int rc = mount ? -EINVAL : -ENOTDIR;
 
     if (!p || !p->fds || vp->procfd < 0) {
         return -ENOENT;
@@ -1681,15 +1687,15 @@ int procfs_mount_fd(const struct vpath *vp, struct vfs_ref *out, char *path, uin
         return -ENOENT;
     }
     file = fd.ofd;
-    if (file) {
+    if (file && (mount || fd.type == FD_TYPE_DIR || fd.type == FD_TYPE_SYNTH_DIR)) {
         out->mnt = file->vmnt ? file->vmnt : file->synth_mnt;
         out->node = file->vmnt ? file->vnode : file->synth_node;
-        if (out->mnt && out->node && vfs_mount_seen(out->mnt)) {
+        if (out->mnt && out->node && (!mount || vfs_mount_seen(out->mnt))) {
             rc = vfs_enter(out->mnt);
             if (rc == 0) {
                 vfs_ref_hold(out);
                 if (path) {
-                    rc = mount_fd_path(file, out, path, cap);
+                    rc = mount_fd_path(&fd, out, path, cap);
                 }
                 if (rc != 0) {
                     vfs_ref_release(out);
