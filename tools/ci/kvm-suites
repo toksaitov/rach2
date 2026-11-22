@@ -35,6 +35,89 @@
 # each of the ext2 check's some 11,100 runs of the external checker costs
 # about five times as much under TCG as under KVM; under TCG the check ran
 # past the case's 90-minute bound in the release's run.
+# The suites below boot no guest of their own and judge counts, and each
+# passed under KVM at least half as fast again as under TCG on WSL, by the
+# sum of its case times on i686 and x86_64, one run each (issue 5657):
+# etudeexec, 405 and 392 s under TCG against 35 and 25 s;
+# ext2stop, 325 s against 99 s on i686;
+# grow, 1239 and 1155 s against 674 and 661 s, its host-side cases 923 s
+# against 435 s;
+# installer, 842 and 785 s against 518 and 513 s;
+# installer-repair, 883 and 805 s against 438 and 494 s;
+# man, 323 s against 7 s on i686;
+# agentsaccept, 1556 s against 955 s on x86_64;
+# save-update, 470 s against 84 s on x86_64;
+# selfbuild, 4419 and 4097 s against 1966 and 2020 s; its i686 ofdprobe
+# failure under KVM was a heap reading taken before the grace-period
+# callbacks ran (issue 5658), which passed alone at the fix.
+# The suites below passed under KVM and took no longer there than under
+# TCG, by the sum of their case times on i686 and x86_64 (issue 5657), so
+# that the full run gives the TCG pool's processors to the suites that need
+# TCG; doom took 921 s against 904, within a run's spread:
+# default, 926 s against 1091; doom; punch, 2475 s against 2732;
+# wifi, 1024 s against 1166; fdlock, 492 s, which under TCG stopped at its
+# case bound on both; selfbuild-ext2, 828 s against 921;
+# installer-rehearse, 1839 s against 2153 on x86_64; uefi, 565 s against
+# 875; gnu, 2265 s against 3381; assign, 172 s against 2393 on x86_64, its
+# nested Debian guest booted through Rach2's VFIO.
+# sealed and diskrate stay under TCG, slower under KVM: 2735 s against 1256
+# and 1009 against 781.
+# The suites below passed under KVM, under the ia32 profile too where it runs
+# them, and took no longer there than under TCG, by the sum of their case times
+# on i686 and x86_64, one run each (issue 5661): install, 218 s against 280;
+# datapart, 247 s against 274; menu, 121 s against 126; seabios, 26 s against
+# 26; termconsole, 77 s against 82; dhcp, 130 s against 152; netif, 72 s
+# against 76; wifi-gnu, 96 s against 110; drill, 277 s against 344; account,
+# 44 s against 46; large, 165 s against 238; usb, 84 s against 168; keyboard,
+# 17 s against 23; krffsmount, 42 s against 91; usbdisk, 57 s against 62;
+# procfiles, 16 s against 27; parts, 35 s against 44; bootpart, 6 s against 9;
+# make, 67 s against 81; shutdown, 20 s against 39; ssh, 28 s against 41;
+# exfat, 78 s against 140; cred-persist, 6 s against 6; addressed, 18 s against
+# 18; ping, 20 s against 20; packet, 4 s against 4; frag6, 4 s against 4; load,
+# 4 s against 6; queue, 12 s against 18; subset, 21 s against 22; bus, 46 s
+# against 67; exitline, 6 s against 10; acpi, 6 s against 10; login, 16 s
+# against 20; bootline, 6 s against 14; servicelog, 26 s against 28; acpid,
+# 34 s against 41; persist, 2 s against 4; dgram, 2 s against 4; diskdiag, 16 s
+# against 17; e1000, 4 s against 6; virtionet, 68 s against 74; grub, 64 s
+# against 83; disk-q35, 8 s against 12; diskpolicy, 23 s against 45; console,
+# 2 s against 5; screen, 200 s against 218; ia32, 36 s against 50; dmabuf, 15 s
+# against 45; socket, 2 s against 4; bootorder, 10 s against 10; reset, 6 s
+# against 9; netconsole-e1000, 2 s against 2; netconsole, 8 s against 10;
+# crash, 2 s against 5; pools, 8 s against 8; imagerace, 152 s against 295;
+# watchdog, 66 s against 68; gpucompat, 4 s against 4 on i686; wakelat, 103 s
+# against 108; clock, 31 s against 31 on x86_64; pure64, 3 s against 4 on
+# x86_64; codexapi, 71 s against 90 on x86_64; museapi, 54 s against 82 on
+# x86_64; textbusy, 12 s against 14 on x86_64; i915fake, 33 s against 47 on
+# x86_64.
+# These stay under TCG, slower under KVM (issue 5661): mount, 262 s against
+# 258; stress-ahci, 71 s against 31; stress, 76 s against 33; loopdev, 100 s
+# against 96; esctest2, 78 s against 75 on the host; fatwrite, 338 s against
+# 120; ext2, 394 s against 286; metal, 355 s against 316; fpu, 18 s against
+# 16; limits, 4 s against 3; diskfull, 4 s against 3; fault, 8 s against 6;
+# krffscheck, 2 s against 1 on the host; conload, 10 s against 8.
+# vdso stays under TCG too, 14 s against 8, each suite run alone (issue
+# 5674): its syscall case asks for the HPET fallback, and the million
+# readings of its x86-64 check each make a KVM exit to QEMU's HPET.
+# raw, memory, smp, vblk, hvc, panic and input stay under TCG, since a case of
+# each failed under KVM (issue 5661).
+# bigmem passed under KVM in 5 s against 17 s on x86_64 (issue 5661); run.sh
+# runs it in a run of its own, under KVM since this file names it.
+# The suites below passed under KVM, under the ia32 profile too where it runs
+# them, and took no longer there than under TCG, by the sum of their case times
+# on i686 and x86_64, each suite run alone (issue 5674). audio, noentropy and
+# fakeapi qualify with milestone 84's changes to their cases: audio, 127 s
+# against 147, its six recording cases sending their samples over the virtio
+# console in place of COM1; noentropy, 10 s against 13, etude-guest finding
+# its programs staged under /musl; fakeapi, 4 s against 8 on x86_64, its GNU
+# machine on the virtio console. authority, 5 s against 15; tcc, 22 s against
+# 34; style, 23 s against 23, which boots no guest.
+# agents passed under KVM in 375 s against 734 under TCG on x86_64, each run
+# alone (issue 5681), with milestone 84's change to its cases: its GNU
+# machines on the virtio console. Over COM1 the 665,600-byte archive that its
+# setup sends made 2.7 million port I/O exits a row, and the suite took 1440 s
+# under KVM against 848. agentsaccept, codexapi and museapi have the virtio
+# console too, and took 587 s against 1232, 33 s against 78 and 58 s against
+# 87.
 browser
 video
 webgl
@@ -64,3 +147,96 @@ kvmclock
 sched4
 netguest
 host
+etudeexec
+ext2stop
+grow
+installer
+installer-repair
+man
+agentsaccept
+save-update
+selfbuild
+default
+doom
+punch
+wifi
+fdlock
+selfbuild-ext2
+installer-rehearse
+uefi
+gnu
+assign
+install
+datapart
+menu
+seabios
+termconsole
+dhcp
+netif
+wifi-gnu
+drill
+account
+large
+usb
+keyboard
+krffsmount
+usbdisk
+procfiles
+parts
+bootpart
+make
+shutdown
+ssh
+exfat
+cred-persist
+addressed
+ping
+packet
+frag6
+load
+queue
+subset
+bus
+exitline
+acpi
+login
+bootline
+servicelog
+acpid
+persist
+dgram
+diskdiag
+e1000
+virtionet
+grub
+disk-q35
+diskpolicy
+console
+screen
+ia32
+dmabuf
+socket
+bootorder
+reset
+netconsole-e1000
+netconsole
+crash
+pools
+imagerace
+watchdog
+gpucompat
+wakelat
+clock
+pure64
+codexapi
+museapi
+textbusy
+i915fake
+bigmem
+audio
+noentropy
+fakeapi
+authority
+tcc
+style
+agents
