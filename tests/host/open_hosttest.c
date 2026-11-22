@@ -2381,6 +2381,13 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
     return vfs_resolve(0, path, flags, out, 0, 0);
 }
 
+/** Walk an ordinary path. The model has no proc descriptor links. */
+int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path)
+{
+    (void)fd_path;
+    return vfs_resolve(NULL, path, flags & ~VFS_WALK_MOUNT, out, NULL, 0);
+}
+
 static void fl_dir_attrs(const struct vfs_ref *ref, struct vfs_stat *dir);
 
 /** This resolver model has no captured entry; its original walk is
