@@ -548,7 +548,8 @@
                 "bus": "xhci.0"
               }
             ],
-            "boot_options": []
+            "boot_options": [],
+            "i8042": false
           },
           "console": "serial",
           "qmp": true,
@@ -714,7 +715,8 @@
                 "bus": "xhci.0"
               }
             ],
-            "boot_options": []
+            "boot_options": [],
+            "i8042": false
           },
           "console": "serial",
           "qmp": true,
