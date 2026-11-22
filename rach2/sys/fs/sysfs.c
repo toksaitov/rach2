@@ -10,6 +10,7 @@
 #include "../mm/kheap.h"
 #include "../network/socket/netlink.h"
 #include "synthfs.h"
+#include "walkseq.h"
 
 #define SLOT_BITS   16
 #define SLOT_MASK   ((1 << SLOT_BITS) - 1)
@@ -186,7 +187,10 @@ int sysfs_anchor_find(int node, int key)
 }
 
 /** Make an entry of `kind` named `name` below `parent`, for the caller to
- * fill: 0 with the entry in `*out` and its handle in `*handle`, or -errno. */
+ * fill: 0 with the entry in `*out` and its handle in `*handle`, or -errno.
+ * On 0 the entry is in the table inside a change of what paths name
+ * (`vfs_seq_begin`), which the caller ends once the entry is filled, so
+ * that no walk takes a half-made entry. */
 static int add_node(int parent, const char *name, int kind, struct sysfs_node **out, int *handle)
 {
     struct sysfs_node *p = node_of(parent), *n;
@@ -209,8 +213,10 @@ static int add_node(int parent, const char *name, int kind, struct sysfs_node **
     n->kind = kind;
     n->parent = parent & SLOT_MASK;
     k_memcpy(n->name, name, len + 1);
+    vfs_seq_begin();
     h = take_slot(n);
     if (h < 0) {
+        vfs_seq_end();
         kfree(n);
         return h;
     }
@@ -224,7 +230,11 @@ int sysfs_add_dir(int parent, const char *name)
     struct sysfs_node *n;
     int h, rc = add_node(parent, name, SYSFS_NODE_DIR, &n, &h);
 
-    return rc < 0 ? rc : h;
+    if (rc < 0) {
+        return rc;
+    }
+    vfs_seq_end();
+    return h;
 }
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
@@ -240,6 +250,7 @@ int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg
     n->store = attr->store;
     n->obj = obj;
     n->arg = arg;
+    vfs_seq_end();
     return h;
 }
 
@@ -273,10 +284,12 @@ int sysfs_add_link(int parent, const char *name, int target)
         return rc;
     }
     n->target = target;
+    vfs_seq_end();
     return h;
 }
 
-void sysfs_remove(int handle)
+/** Take the entry `handle` and everything below it from the table. */
+static void remove_tree(int handle)
 {
     struct sysfs_node *n = node_of(handle);
     int slot = handle & SLOT_MASK, i;
@@ -286,12 +299,19 @@ void sysfs_remove(int handle)
     }
     for (i = 0; i < slots; i++) {
         if (nodes[i] && nodes[i]->parent == slot) {
-            sysfs_remove(handle_of(i));
+            remove_tree(handle_of(i));
         }
     }
     nodes[slot] = NULL;
     gens[slot]++;
     kfree(n);
+}
+
+void sysfs_remove(int handle)
+{
+    vfs_seq_begin();
+    remove_tree(handle);
+    vfs_seq_end();
 }
 
 int sysfs_node_kind(int handle)

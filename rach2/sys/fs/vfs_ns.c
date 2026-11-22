@@ -56,14 +56,19 @@ int vfs_mount_unseen(const struct vfs_mount *m)
 
 void vfs_mount_hide(struct vfs_mount *m)
 {
+    vfs_seq_begin();
     idset_del(&m->ns_seen, caller_id());
-    vfs_mounts_changed();
+    vfs_seq_end();
 }
 
 int vfs_mount_view_new(struct vfs_mount *m)
 {
-    vfs_mounts_changed();
-    return idset_add(&m->ns_seen, caller_id());
+    int rc;
+
+    vfs_seq_begin();
+    rc = idset_add(&m->ns_seen, caller_id());
+    vfs_seq_end();
+    return rc;
 }
 
 void vfs_mount_view_free(struct vfs_mount *m)
@@ -311,6 +316,7 @@ void vfs_mntns_gone(uint32_t id)
             }
         }
     }
+    vfs_seq_begin();
     for (i = 0; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
@@ -318,5 +324,6 @@ void vfs_mntns_gone(uint32_t id)
             idset_del(&m->ns_seen, id);
         }
     }
+    vfs_seq_end();
     vfs_reap_detached();
 }

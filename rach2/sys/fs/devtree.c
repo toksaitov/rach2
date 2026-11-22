@@ -6,6 +6,7 @@
 #include "fd.h"
 #include "krffs.h"
 #include "synthfs.h"
+#include "walkseq.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../proc/process.h"
@@ -364,9 +365,11 @@ int devtree_make(int parent, const char *name, uint32_t mode, const char *target
     n->uid = uid;
     n->gid = gid;
     stamp(n, 7);
+    vfs_seq_begin();
     *tail = n;
     tail = &n->next;
     count++;
+    vfs_seq_end();
     stamp_dir(parent);
     return n->id;
 }
@@ -387,7 +390,9 @@ int devtree_remove(int parent, const char *name, int dir)
     if (dir && has_children(n->id)) {
         return -ENOTEMPTY;
     }
+    vfs_seq_begin();
     drop(n);
+    vfs_seq_end();
     stamp_dir(parent);
     return 0;
 }
@@ -460,12 +465,14 @@ int devtree_rename(int from, const char *oname, int to, const char *nname, int n
         kfree(copy);
         return rc;
     }
+    vfs_seq_begin();
     if (dst) {
         drop(dst);
     }
     kfree(src->name);
     src->name = copy;
     src->parent = to;
+    vfs_seq_end();
     stamp(src, 4);
     stamp_dir(from);
     stamp_dir(to);

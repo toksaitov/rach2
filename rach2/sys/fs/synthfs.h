@@ -240,6 +240,8 @@ struct vpath {
     int syskey;     /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`);
                      * VNODE_DEV_MADE: the entry's id (devtree.h) */
     int sysreg;     /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
+    int links;      /* VNODE_SYS_*: the registered links the path went through, which
+                     * count among a walk's links (VFS_LINK_MAX) */
     uint32_t pidns_ino; /* PID namespace number of the proc mount */
 };
 
