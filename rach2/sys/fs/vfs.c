@@ -6447,7 +6447,9 @@ struct fd_walk {
  * Walk `path`, following a final proc descriptor link as vfs_resolve_fd
  * does, into `fw`. The bind walk also records the path it took in `record`,
  * and lazy unmount may start at a working directory outside the process
- * root.
+ * root. A descriptor's node is read again from its kept description once
+ * the object's lock is held (`fd_kept_node`), since a KRFFS relocation
+ * while the lock was awaited moves the description and not the copy.
  */
 static int resolve_fd_path(const struct vfs_ref *start, const char *path, int flags,
                            struct vfs_ref *ref, struct walk_record *record, struct fd_walk *fw)
@@ -6476,6 +6478,7 @@ static int resolve_fd_path(const struct vfs_ref *start, const char *path, int fl
         return rc;
     }
     walk_lock(object.mnt, locked);
+    object.node = fd_kept_node(fw->kept, object.mnt, object.node);
     if (flags & VFS_WALK_COVER) {
         rc = walk_cross(&object, locked);
     }
@@ -7025,6 +7028,34 @@ static void bind_fail(struct vfs_ref *sref, struct bind_hold *h)
 }
 
 /**
+ * Check the bind source `sref` as `bind_source` does, at the node where the
+ * hold `h` has it now, under the namespace lock of `sref->mnt`, so that a
+ * KRFFS relocation since the lookup, which moves the hold and not
+ * `sref->node`, is followed and none comes during the check: a file whose
+ * old offset another node took would otherwise be judged as that node. A
+ * NULL `h`, or one that holds nothing, checks `sref->node` unlocked.
+ * `bind_source`'s answers.
+ */
+static int bind_source_held(struct vfs_ref *sref, const struct bind_hold *h, char *full,
+                            char *inner, const char *real, int *dir)
+{
+    int rc;
+
+    if (!h || (!h->node && !h->pin)) {
+        return bind_source(sref, full, inner, real, dir);
+    }
+    vfs_ns_lock(sref->mnt);
+    if (h->node) {
+        sref->node = h->node;
+    } else if (sref->mnt->type->ops->handle_node) {
+        sref->node = sref->mnt->type->ops->handle_node(h->pin);
+    }
+    rc = bind_source(sref, full, inner, real, dir);
+    vfs_ns_unlock(sref->mnt);
+    return rc;
+}
+
+/**
  * Make the bind `m`, placed and filled, active, with `h` on its source of
  * `mnt` taken over under that namespace lock: its root is the node where it
  * is now, which a relocation since the lookup moved, the pin becomes the
@@ -7101,7 +7132,7 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     int dir = 1, nameless = 0, busy, gone;
     int rc;
 
-    rc = bind_source(sref, full, inner, sreal, &dir);
+    rc = bind_source_held(sref, h, full, inner, sreal, &dir);
     if (rc == 0) {
         rc = target_check(tref, target, canon, dir, treal, &nameless);
     } else {
@@ -7250,7 +7281,7 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     rc = sreal && treal ? bind_resolve(source, VFS_WALK_SOURCE, &sref, sreal, &skept, &src.hold)
                         : -ENOMEM;
     if (rc == 0) {
-        rc = bind_source(&sref, full, inner, sreal, &dir);
+        rc = bind_source_held(&sref, &src.hold, full, inner, sreal, &dir);
         if (rc == 0) {
             rc = bind_resolve(target, VFS_WALK_COVER, &tref, treal, &tkept, NULL);
         }

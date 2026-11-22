@@ -3650,6 +3650,13 @@ struct fd_kept *fd_keep(struct fd_table *table, int fd, struct fd_entry **entry,
     return k;
 }
 
+void *fd_kept_node(const struct fd_kept *kept, const struct vfs_mount *mnt, void *node)
+{
+    const struct open_file *ofd = kept ? kept->e.ofd : NULL;
+
+    return ofd && ofd->vmnt == mnt && ofd->vnode ? ofd->vnode : node;
+}
+
 /**
  * The copy leaves the list under the root's namespace lock, as every holder
  * that `fd_node_holders` finds in a list of its own does, and the orphan's
