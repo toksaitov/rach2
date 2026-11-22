@@ -2491,7 +2491,7 @@ static void gate_arm(int pid, const char *event)
  */
 static void gate_wait(int pid, const char *why)
 {
-    char line[160];
+    char line[256];
     int st;
 
     for (;;) {
