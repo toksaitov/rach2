@@ -800,12 +800,13 @@ uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va);
  */
 uint64_t paging_user_ram_frames(struct mm *mm, uintptr_t va, uint64_t n, uintptr_t *frames);
 
-/** Count the present pages of the user range [start, end) of `dir` into
+/** Count the present pages of the user range [start, end) of `mm` into
  * `*present`, those the processor marked dirty into `*dirty`, and those
  * whose frames are marked anonymous into `*anon`,
  * passing a span of absent tables in one step (`mmu_user_skip`), so that a
- * large region with few pages costs few steps. */
-void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+ * large region with few pages costs few steps. The caller holds the
+ * regions' lock. Each span is read under the page-table lock. */
+void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty, unsigned long *anon);
 
 struct mm;

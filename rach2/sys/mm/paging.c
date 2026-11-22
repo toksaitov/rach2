@@ -3547,13 +3547,15 @@ static void frame_make_anon(uintptr_t phys)
     spin_unlock_irqrestore(&frame_lock, flags);
 }
 
-/** Whether a mapped frame is anonymous, under the big lock. Its mark lasts
- * until reuse, independent of each mapping's hardware dirty bit. */
+/** Whether a mapped frame is anonymous. The caller keeps the frame mapped
+ * or holds a reference to it. Its bit lasts until reuse. Other frames in
+ * the same byte can change, so read the byte once. */
 static int frame_is_anon(uintptr_t phys)
 {
     uintptr_t frame = phys / PAGE_SIZE;
+    const volatile uint8_t *marks = _frame_anon;
 
-    return frame < _frames_number && (_frame_anon[frame / 8u] & (1u << (frame % 8u))) != 0;
+    return frame < _frames_number && (marks[frame / 8u] & (1u << (frame % 8u))) != 0;
 }
 
 /**
@@ -3912,14 +3914,15 @@ void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
     }
 }
 
-void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty, unsigned long *anon)
 {
     uintptr_t va, next;
 
     *present = *dirty = *anon = 0;
     for (va = start; va < end; va = next) {
-        pte_t *table = user_span(dir, va, end, &next);
+        uint32_t flags = mm_ptl_lock(mm);
+        pte_t *table = user_span(mm->dir, va, end, &next);
 
         for (; table && va < next; va += PAGE_SIZE) {
             pte_t e = table[MMU_INDEX(va)];
@@ -3930,6 +3933,7 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
                 *anon += frame_is_anon(PTE_ADDR(e));
             }
         }
+        mm_ptl_unlock(mm, flags);
     }
 }
 

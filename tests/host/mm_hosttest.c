@@ -63,10 +63,10 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 
 /** The resident count of the page tables, which this model has none of: 0
  * pages present, dirty or anonymous. */
-void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+void paging_user_count(struct mm *mm, uintptr_t start, uintptr_t end, unsigned long *present,
                        unsigned long *dirty, unsigned long *anon)
 {
-    (void)dir;
+    (void)mm;
     (void)start;
     (void)end;
     *present = *dirty = *anon = 0;
