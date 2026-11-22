@@ -346,8 +346,9 @@ A read snapshots the ring once, before rendering it.
 A write empties it; a hold already under way can be sampled again.
 .It Pa bkl/trace
 Mode 0600.
-The scheduler's wakes, selections and resumptions, and the big lock's
-completed outer holds and their waits, on the guest's time-stamp counter.
+The scheduler's wakes of threads off the processor, selections and
+resumptions, and the big lock's completed outer holds and their waits,
+on the guest's time-stamp counter.
 A write of
 .Ql start
 allocates and empties a buffer of 524288 records and starts recording.

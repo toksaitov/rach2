@@ -100,7 +100,7 @@ debugfs's `bkl/calls`, `bkl/profile` and `bkl/tick` split the lock's time by wha
 
 `bkl/long` keeps the latest interrupt sample of each of the last 32 holds sampled at 16 ms or older. A record has the sample's TSC timestamp, the hold's age, CPU, thread, command, entry and eight stack PCs. Later interrupts in the same hold replace its sample. The ring is written under the big lock with local interrupts off; a read copies it with interrupts off before sizing and rendering the same bounded snapshot. The read path does not sleep between these calls. A write empties it. A hold entirely spent with interrupts off can leave no sample. `kernel.c` registers this file beside `bkl/calls` and `bkl/profile`; [debugfs(5)](../../../man/man5/debugfs.5) gives the columns.
 
-`bkl/trace` records scheduler wakes, selections and switch-tail resumptions on the same time-stamp counter as the big lock's waits and holds. The resume is after the switch tail's big-lock take when there is one. A wake that finds the thread still current records the wake and immediate resume on that processor. The stopped trace can be read without sampling running threads. [debugfs(5)](../../../man/man5/debugfs.5) gives the controls and record format.
+`bkl/trace` records wakes of threads off the processor, selections and switch-tail resumptions on the same time-stamp counter as the big lock's waits and holds. The resume is after the switch tail's big-lock take when there is one. The stopped trace can be read without sampling running threads. [debugfs(5)](../../../man/man5/debugfs.5) gives the controls and record format.
 
 ### The records
 

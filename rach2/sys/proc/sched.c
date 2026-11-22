@@ -1561,7 +1561,7 @@ static int sched_ready_locked(process_t *p, int wf)
     int target, why = wf & FAIR_WF_FORK ? FAIR_ENQ_NEW : FAIR_ENQ_WAKE;
     int waking = p->state != PROC_READY && p->state != PROC_RUNNING;
 
-    if (waking) {
+    if (waking && cpu_table[p->cpu].current != p) {
         bkl_trace_sched(BKL_TRACE_WAKE, p->pid, 0);
     }
     sched_remove(p);
@@ -1570,9 +1570,6 @@ static int sched_ready_locked(process_t *p, int wf)
     if (cpu_table[p->cpu].current == p) {
         sched_ttwu_stat(p, p->cpu, wf);
         waketime_state(p, 2, p->cpu);
-        if (waking) {
-            bkl_trace_sched(BKL_TRACE_RUN, p->pid, 0);
-        }
         return cpu_table[p->cpu].idle && _sched_enabled ? -1 : p->cpu;
     }
     (void)sched_clock_task(p->cpu);
@@ -2381,7 +2378,6 @@ void schedule(void)
     if (next == old) {
         next->state = PROC_RUNNING;
         next->slice_ns = sched_clock_ns();
-        bkl_trace_sched(BKL_TRACE_RUN, next->pid, 0);
         spin_unlock_irqrestore(&sched_lock, saved_flags);
         return;
     }
