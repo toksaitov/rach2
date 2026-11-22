@@ -9183,6 +9183,14 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
+/** vfs.c's: the type's unpin of `token`, nothing for NULL. */
+void vfs_unpin(struct vfs_mount *mnt, void *token)
+{
+    if (token) {
+        mnt->type->ops->unpin(mnt, token);
+    }
+}
+
 /** vfs.c's: a bind's own flags, or a base's with its own read-only flag. */
 uint32_t vfs_mount_flags(const struct vfs_mount *m)
 {
