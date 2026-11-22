@@ -1224,17 +1224,20 @@ static void rows_record(void)
  * lock, lets the lock go and sleeps reading the uncached directories of its
  * target on the FAT volume while the writer and the mkdir run.
  *
- * A row judges the order it got from what the kernel says, and fails when it
- * did not get it. In both the file has not moved when the bind is called,
- * and has moved, with the directory at its old offset, once it returns. By
- * descriptor the writer and the mkdir are asleep in their calls
- * (/proc/PID/stat) when the bind is called, and the bind sleeps (a voluntary
- * switch in /proc/self/status) and so waits on the lock behind them. By path
- * the bind reads disk2 (/proc/diskstats), and the reads of it that have
- * ended when the write and the mkdir return are fewer than when the bind
- * returns: the bind was still looking its target up once the file had moved,
- * and it took its hold before its first read. The yields only make the order
- * likely; the bind's wait is printed for the record.
+ * A row judges the order it got from what the kernel says. In both the file
+ * has not moved when the bind is called, and has moved, with the directory
+ * at its old offset, once it returns. By descriptor the writer and the mkdir
+ * are inside their calls when the bind is called, which each marks in a page
+ * the processes share as it makes the call, and neither has returned; and
+ * the bind sleeps (a voluntary switch in /proc/self/status) and so waits on
+ * the lock behind them. By path the bind reads disk2 (/proc/diskstats), and
+ * the reads of it that have ended when the write and the mkdir return are
+ * fewer than when the bind returns: the bind was still looking its target up
+ * once the file had moved, and it took its hold before its first read. A try
+ * that did not get its order says so and runs again, and the row fails when
+ * three tries did not get it. The yields only make the order likely; the
+ * bind's wait and the waiters' states in /proc/PID/stat are printed for the
+ * record.
  */
 
 #define O_RDWR        2
@@ -1242,12 +1245,14 @@ static void rows_record(void)
 #define PROT_WRITE    2
 #define MAP_ANONYMOUS 0x20
 
-/* What the writer and the mkdir saw when their calls returned, in a page the
- * row's processes share: the reads of disk2 that had ended, or -1 before
- * the call returned. */
+/* Where the writer and the mkdir are in their calls, in a page the row's
+ * processes share. */
 struct reloc_seen {
-    long grown; /* the writer's write, which moves /rk/f */
-    long made;  /* the mkdir of /rk/d */
+    int writing; /* 1 once the writer is about to make its write */
+    int making;  /* 1 once the mkdir is about to be made */
+    long grown;  /* the reads of disk2 that had ended when the write, which
+                    moves /rk/f, returned, or -1 before */
+    long made;   /* the same when the mkdir of /rk/d returned */
 };
 
 static struct reloc_seen *seen;
@@ -1311,8 +1316,8 @@ static long fat_reads(void)
     return proc_number("/proc/diskstats", " disk2 ");
 }
 
-/** The state of process `pid` in its /proc/PID/stat, S or D for a sleep,
- * or '?' when it cannot be read. */
+/** The state of process `pid` in its /proc/PID/stat, or '?' when it cannot
+ * be read. */
 static char proc_state(int pid)
 {
     char path[32] = "/proc/", digits[12], line[256] = "";
@@ -1338,12 +1343,6 @@ static char proc_state(int pid)
     for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
     }
     return i >= 0 && i + 2 < n ? line[i + 2] : '?';
-}
-
-/** Whether state `c` is a sleep. */
-static int asleep(char c)
-{
-    return c == 'S' || c == 'D';
 }
 
 /** The inode number of descriptor `fd`, from fstat(2), which reads a KRFFS
@@ -1407,9 +1406,11 @@ static int reloc_child(char what, long fd, int wait)
         for (i = 0; i < (long)sizeof(chunk); i++) {
             chunk[i] = 'B';
         }
+        seen->writing = 1;
         rc = syscall3(SYS_WRITE, fd, (long)chunk, sizeof(chunk)) == (long)sizeof(chunk) ? 0 : -1;
         seen->grown = fat_reads();
     } else if (what == 'm') {
+        seen->making = 1;
         rc = syscall2(SYS_MKDIR, (long)"/rk/d", 0755);
         seen->made = fat_reads();
     } else {
@@ -1505,26 +1506,40 @@ static void reloc_start(int by_fd, int pids[3])
     yield(100);
 }
 
+/** Print that the row did not get its order, for `why`, and exit 2, which
+ * runs the row again. */
+static void reloc_missed(const char *why)
+{
+    char line[256];
+    int len = 0;
+
+    append_text(line, &len, "reloc: order not got: ");
+    append_text(line, &len, why);
+    puts(line);
+    sys_exit(2);
+}
+
 /**
- * Fail unless the row got its order. `before` is nonzero when, as the bind
- * was called, the file had not moved and, by descriptor, the writer and the
- * mkdir slept in their calls; `slept` counts the bind's voluntary switches by
- * descriptor and its reads of disk2 by path; `reads` is disk2's ended reads
- * when the bind returned.
+ * Exit through `reloc_missed` unless the row got its order. `before` is
+ * nonzero when, as the bind was called, the file had not moved and, by
+ * descriptor, the writer and the mkdir were inside their calls; `slept`
+ * counts the bind's voluntary switches by descriptor and its reads of disk2
+ * by path; `reads` is disk2's ended reads when the bind returned.
  */
 static void reloc_order_held(int by_fd, int before, long slept, long reads)
 {
     if (!before) {
-        fail(by_fd ? "the file moved, or the writer or the mkdir was not asleep, before the bind"
-                   : "the file moved before the bind");
+        reloc_missed(by_fd ? "the file moved, or the writer or the mkdir was not inside its call, "
+                             "before the bind"
+                           : "the file moved before the bind");
     }
     if (slept < 1) {
-        fail(by_fd ? "the bind did not wait for the volume's lock"
-                   : "the bind did not read the FAT volume");
+        reloc_missed(by_fd ? "the bind did not wait for the volume's lock"
+                           : "the bind did not read the FAT volume");
     }
     if (!by_fd &&
         (seen->grown < 0 || seen->grown >= reads || seen->made < 0 || seen->made >= reads)) {
-        fail("the file moved after the bind's last read of the FAT volume");
+        reloc_missed("the file moved after the bind's last read of the FAT volume");
     }
 }
 
@@ -1578,8 +1593,9 @@ static void reloc_bind(int by_fd, int dir)
         states[2] = proc_state(pids[2]);
         held = fd_ino(9);
     }
-    before = by_fd ? held == was && asleep(states[1]) && asleep(states[2])
-                   : stat_field("/rk/f", KSTAT_INO) == was;
+    before = by_fd
+                 ? held == was && seen->writing && seen->making && seen->grown < 0 && seen->made < 0
+                 : stat_field("/rk/f", KSTAT_INO) == was;
     slept = by_fd ? voluntary_switches() : fat_reads();
     waited = now_us();
     rc = syscall5(SYS_MOUNT, (long)source, (long)target, 0, MS_BIND, 0);
@@ -1616,28 +1632,36 @@ static void reloc_bind(int by_fd, int dir)
 
 /** Run `reloc_bind` in a child, so that a failed row still lets the next
  * run, then remove what it left: a bind on its target, its files and the
- * directory made at the file's old offset. Returns 1 for a failed row. */
+ * directory made at the file's old offset. A try that did not get the
+ * row's order runs again, three tries in all. Returns 1 for a failed row. */
 static int reloc_round(int by_fd, int dir)
 {
     static const char *const targets[] = {"/fat/d1/a/b/c/t", "/fat/d2/a/b/c/td", "/rk-t", "/rk-d"};
-    int pid, status;
+    int pid, status = 0, tries;
 
-    seen->grown = seen->made = -1;
-    pid = syscall0(SYS_FORK);
-    if (pid < 0) {
-        fail("fork for a relocation row");
+    for (tries = 0; tries < 3; tries++) {
+        seen->writing = seen->making = 0;
+        seen->grown = seen->made = -1;
+        pid = syscall0(SYS_FORK);
+        if (pid < 0) {
+            fail("fork for a relocation row");
+        }
+        if (pid == 0) {
+            reloc_bind(by_fd, dir);
+            sys_exit(0);
+        }
+        status = wait_status(pid);
+        syscall2(SYS_UMOUNT2, (long)targets[by_fd * 2 + dir], MNT_DETACH);
+        syscall1(SYS_UNLINK, (long)"/rk/f");
+        syscall1(SYS_UNLINK, (long)"/rk/g");
+        syscall1(SYS_UNLINK, (long)"/rk/big");
+        syscall1(SYS_RMDIR, (long)"/rk/d");
+        if (status != 2 << 8) {
+            return status != 0;
+        }
     }
-    if (pid == 0) {
-        reloc_bind(by_fd, dir);
-        sys_exit(0);
-    }
-    status = wait_status(pid);
-    syscall2(SYS_UMOUNT2, (long)targets[by_fd * 2 + dir], MNT_DETACH);
-    syscall1(SYS_UNLINK, (long)"/rk/f");
-    syscall1(SYS_UNLINK, (long)"/rk/g");
-    syscall1(SYS_UNLINK, (long)"/rk/big");
-    syscall1(SYS_RMDIR, (long)"/rk/d");
-    return status != 0;
+    puts("MOUNTPROBE FAIL: no try of a relocation row got its order");
+    return 1;
 }
 
 /** `mountprobe reloc`: mount the two volumes, run the four rows, by
