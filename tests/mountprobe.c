@@ -1637,7 +1637,7 @@ static void reloc_bind(int by_fd, int dir)
 static int reloc_round(int by_fd, int dir)
 {
     static const char *const targets[] = {"/fat/d1/a/b/c/t", "/fat/d2/a/b/c/td", "/rk-t", "/rk-d"};
-    int pid, status = 0, tries;
+    int pid, status, tries;
 
     for (tries = 0; tries < 3; tries++) {
         seen->writing = seen->making = 0;
