@@ -528,6 +528,15 @@ struct drm_virtgpu_context_init {
 
 struct virtio_gpu_device;
 
+#ifdef RACH2_VGPU_PROFILE
+/* Command counters under the device lock. Times are monotonic nanoseconds. */
+#define VGPU_PROFILE_ROWS 28
+struct vgpu_profile_row {
+    uint64_t sent, answered, fenced, request, response, transfer;
+    uint64_t payload, copy_ns, answer_ns, waits, wait_ns;
+};
+#endif
+
 struct vgpu_dma_page {
     void *page;
     uint64_t addr;
@@ -559,11 +568,16 @@ struct virtio_gpu_cmd {
     uint32_t resp_type;      /* the answer's type, once `done` */
     uint64_t copied;         /* bytes its transfers have the device copy,
                                 counted when it is freed answered OK */
-    int prepared;            /* the fence has its number and one reference */
-    int queued;              /* started: its fence is live */
-    uint32_t held;           /* DMA pages it counts in the device's `held`,
-                                from its start to its free */
-    int fence_listed;        /* on the device's list of unsignalled fences */
+#ifdef RACH2_VGPU_PROFILE
+    int64_t published_ns;   /* the command went on the virtqueue */
+    uint64_t copy_ns;       /* copying the user payload, including faults */
+    uint32_t payload_bytes; /* bytes copied from the user's command stream */
+#endif
+    int prepared;     /* the fence has its number and one reference */
+    int queued;       /* started: its fence is live */
+    uint32_t held;    /* DMA pages it counts in the device's `held`,
+                         from its start to its free */
+    int fence_listed; /* on the device's list of unsignalled fences */
     int done;
     int waited;
     int sleepable; /* its sender may sleep: the notify lets the big lock go */
@@ -720,6 +734,10 @@ struct virtio_gpu_device {
     int dead;          /* reset or unplugged: no more commands */
     uint32_t errors;   /* answers that were errors */
     uint32_t commands; /* commands sent */
+#ifdef RACH2_VGPU_PROFILE
+    struct vgpu_profile_row profile[VGPU_PROFILE_ROWS];
+    uint64_t notifies, notify_ns; /* calls and wall time in virtqueue_kick */
+#endif
 };
 
 /*

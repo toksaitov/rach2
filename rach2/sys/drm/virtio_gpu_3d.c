@@ -7,6 +7,28 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
+#ifdef RACH2_VGPU_PROFILE
+#include "../rtc.h"
+#endif
+
+/** Copy one page of a submission into DMA memory. May fault and sleep. */
+static int32_t payload_copy(struct virtio_gpu_cmd *cmd, void *page, uint64_t user, uint32_t bytes)
+{
+#ifdef RACH2_VGPU_PROFILE
+    int64_t start = rtc_monotonic_ns();
+#endif
+    int32_t rc = copy_from_user(page, (const void __user *)(uintptr_t)user, bytes);
+
+#ifdef RACH2_VGPU_PROFILE
+    cmd->copy_ns += rtc_monotonic_ns() - start;
+    if (!rc) {
+        cmd->payload_bytes += bytes;
+    }
+#else
+    (void)cmd;
+#endif
+    return rc;
+}
 
 /** The `n` pages of a command's payload as one block of the DMA pool, its
  * address at *addr, or NULL where the transport gives no run of `n` pages
@@ -83,8 +105,7 @@ int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t byt
             cmd->npayload++;
         }
         here = left < PAGE_SIZE ? left : PAGE_SIZE;
-        if (!response && copy_from_user(cmd->payload[i].page,
-                                        (const void __user *)(uintptr_t)(user + off), here)) {
+        if (!response && payload_copy(cmd, cmd->payload[i].page, user + off, here)) {
             return -EFAULT;
         }
         sg[i + 1].addr = cmd->payload[i].addr;
