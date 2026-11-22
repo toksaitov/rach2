@@ -524,9 +524,12 @@ static void refuse(void)
     probe_line("VGSHMPROBE OK", 0, 0);
 }
 
+/* The id of the resource `resource` made last. */
+static uint32_t resource_made;
+
 /** Make a resource of `target`, `format` and `width` by `height` texels of
- * `bytes` with RESOURCE_CREATE: 0 with its handle in `*bo`, or the ioctl's
- * error. */
+ * `bytes` with RESOURCE_CREATE: 0 with its handle in `*bo` and its
+ * resource's id in `resource_made`, or the ioctl's error. */
 static long resource(uint32_t target, uint32_t format, uint32_t width, uint32_t height,
                      uint32_t bytes, uint32_t *bo)
 {
@@ -543,6 +546,7 @@ static long resource(uint32_t target, uint32_t format, uint32_t width, uint32_t 
     a.size = bytes;
     r = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a);
     *bo = a.bo_handle;
+    resource_made = a.res_handle;
     return r;
 }
 
@@ -595,32 +599,26 @@ static long bo_transfer(uint32_t bo, uint32_t bytes, int from)
 #define DEFER_HELD 300
 
 /**
- * The resources whose backing of the VM's pages the driver asks for at the
- * create and takes later: a buffer mapped at once after its create, whose
- * bytes written through the map reach the device and come back; a buffer
- * the VM cannot make, whose ask the device answers with an error, taken as
- * a refusal, which the driver backs from the region's heap before the
- * submission that names it; one of 1 GiB and a page, past the largest
- * backing the VM gives and the heap's room, whose submission and map fail;
- * DEFER_HELD buffers held untaken and then named by one submission; and
- * buffers freed before any use.
+ * Map buffer `bo` of `bytes` at once after its create, which takes its
+ * deferred backing, write a pattern through the map, send it with
+ * TRANSFER_TO_HOST, clear the map, read the buffer back with
+ * TRANSFER_FROM_HOST and compare, each transfer waited for, and close the
+ * buffer: the device reads and writes the pages the map reaches only when
+ * they are the resource's backing. Fails the probe, naming `what`, on any
+ * step.
  */
-static void defer(void)
+static void round_trip(uint32_t bo, uint32_t bytes, const char *what)
 {
     struct drm_virtgpu_map m;
-    uint32_t bo, bos[DEFER_HELD], i, bytes = 65536;
+    uint32_t i;
     uint8_t *p;
-    long r, at;
-    char text[12];
+    long at;
 
-    find_gpu();
-    if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, bytes, 1, bytes, &bo) != 0) {
-        fail("a buffer");
-    }
     zero(&m, sizeof(m));
     m.handle = bo;
     if (call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m) != 0 ||
         sys_failed(at = probe_mmap(0, bytes, 3, 1, gpu_fd, (long)m.offset))) {
+        probe_line("VGSHMPROBE DEFER: could not map ", what, 0);
         fail("map a buffer at once");
     }
     p = (uint8_t *)at;
@@ -628,31 +626,58 @@ static void defer(void)
         p[i] = (uint8_t)(i * 7u + 3u);
     }
     if (bo_transfer(bo, bytes, 0) != 0 || bo_wait(bo) != 0) {
+        probe_line("VGSHMPROBE DEFER: could not send ", what, 0);
         fail("send the buffer");
     }
     for (i = 0; i < bytes; i++) {
         p[i] = 0;
     }
     if (bo_transfer(bo, bytes, 1) != 0 || bo_wait(bo) != 0) {
+        probe_line("VGSHMPROBE DEFER: could not read back ", what, 0);
         fail("read the buffer back");
     }
     for (i = 0; i < bytes && p[i] == (uint8_t)(i * 7u + 3u); i++) {
     }
     if (i != bytes) {
+        probe_line("VGSHMPROBE DEFER: read back other bytes: ", what, 0);
         fail("the buffer read back is not what was written");
     }
     syscall2(SYS_MUNMAP, at, bytes);
     bo_close(bo);
+}
+
+/**
+ * The resources whose backing of the VM's pages the driver asks for at the
+ * create and takes later. First a buffer whose backing the VM refuses, as
+ * the caller has the backend do to the next new backing (bed-vm-control's
+ * `refuse`), which the driver backs from the region's heap when the map
+ * takes it: its round trip (`round_trip`) proves that backing, and its
+ * resource's id, printed, lets the caller match the backend's refusal to
+ * it. Then a buffer of the VM's backing, the same round trip; one of 1 GiB
+ * and a page, past the largest backing the VM gives and the heap's room,
+ * whose submission and map fail; DEFER_HELD buffers held untaken and then
+ * named by one submission; and buffers freed before any use.
+ */
+static void defer(void)
+{
+    struct drm_virtgpu_map m;
+    uint32_t bo, bos[DEFER_HELD], i, bytes = 65536;
+    long r, at;
+    char text[12];
+
+    find_gpu();
+    if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, bytes, 1, bytes, &bo) != 0) {
+        fail("a buffer to refuse");
+    }
+    probe_line("VGSHMPROBE DEFER: refused: resource ", dec(text, resource_made), 0);
+    round_trip(bo, bytes, "the refused buffer");
+    probe_line("VGSHMPROBE DEFER: refused, backed from the heap, written, sent and read back", 0,
+               0);
+    if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, bytes, 1, bytes, &bo) != 0) {
+        fail("a buffer");
+    }
+    round_trip(bo, bytes, "the buffer of the VM's pages");
     probe_line("VGSHMPROBE DEFER: mapped at once, written, sent and read back", 0, 0);
-    if (resource(PIPE_TEXTURE_2D, 0xffffu, 64, 64, bytes, &bo) != 0) {
-        fail("a resource of no format");
-    }
-    if ((r = submit_nop(&bo, 1)) != 0) {
-        probe_line("VGSHMPROBE DEFER: refused: submission error ", dec(text, r), 0);
-        fail("a refused backing was not backed from the heap");
-    }
-    bo_close(bo);
-    probe_line("VGSHMPROBE DEFER: refused, backed from the heap and submitted", 0, 0);
     if (resource(PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, (1u << 30) + 4096u, 1, (1u << 30) + 4096u,
                  &bo) != 0) {
         fail("a buffer of 1 GiB and a page");

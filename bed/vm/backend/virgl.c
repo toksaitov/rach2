@@ -770,6 +770,7 @@ static int mem_room(uint64_t size)
 }
 
 volatile sig_atomic_t vr_hold;
+volatile sig_atomic_t vr_refuse;
 
 /**
  * Hold the serving thread VR_HOLD_S seconds by the monotonic clock, through
@@ -799,7 +800,8 @@ static void hold_backing(uint32_t id)
  * module frees the file and what its pin brought in when the pin fails.
  * Returns 0 with the pin in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has
  * no memory for it, by its counts (`mem_room`) or by the pin's allocation,
- * or VD_RESP_ERR_UNSPEC. The refusal's line names the step that refused.
+ * or as SIGWINCH asked (`vr_refuse`), or VD_RESP_ERR_UNSPEC. The refusal's
+ * line names the step that refused.
  */
 static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
 {
@@ -811,6 +813,11 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
 
     if (vr_hold) {
         hold_backing(q->id);
+    }
+    if (err == 0 && vr_refuse) {
+        vr_refuse = 0;
+        err = ENOMEM;
+        step = "as asked";
     }
     if (err == 0 && (r->module < 0 || r->npins == PINS)) {
         err = ENOSPC;
