@@ -19,7 +19,10 @@ fi
 # and ping. When it exits, the kernel kills what is left in the namespace;
 # when unshare is killed, --kill-child kills the inner shell. unshare ignores
 # INT and TERM and forwards neither, so this shell stays to take HUP, INT and
-# TERM and cancels the run by killing unshare. The scratch is a private tmpfs
+# TERM and cancels the run by killing unshare. unshare runs with a parent-death
+# signal of KILL, so this shell's death by any signal, KILL among them, kills
+# it too; a shell that died before that signal was set leaves a different
+# parent, and the run stops there. The scratch is a private tmpfs
 # mounted over the existing scratch root, which goes with the namespace
 # however it ends. BusyBox is open on descriptor 3 before the mount, which
 # may hide its path.
@@ -28,8 +31,10 @@ inner=
 cancelled=
 trap 'cancelled=1; [ -z "$inner" ] || kill -s KILL "$inner" 2>/dev/null || :' \
     HUP INT TERM
-unshare --user --map-root-user --net --pid --fork --kill-child=KILL \
-    --mount-proc sh -eu -s -- "$scratch" <<'EOF' &
+# shellcheck disable=SC2016 # the inner sh expands its own $PPID and $1
+setpriv --pdeathsig KILL sh -c '[ "$PPID" = "$1" ] || exit 1; shift; exec "$@"' \
+    sh "$$" unshare --user --map-root-user --net --pid --fork \
+    --kill-child=KILL --mount-proc sh -eu -s -- "$scratch" <<'EOF' &
 scratch=$1
 work=
 trap 'kill -9 -1 2>/dev/null || :; wait || :; [ -z "$work" ] || rm -rf "$work"' EXIT
