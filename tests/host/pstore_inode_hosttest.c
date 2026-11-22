@@ -17,6 +17,7 @@ struct vfs_mount *vfs_kernel_mount(const struct vfs_type *t, void *node, uint32_
     shared.root = node;
     shared.flags = flags;
     shared.refs = 1;
+    shared.state = VFS_ACTIVE;
     return &shared;
 }
 
@@ -25,6 +26,16 @@ void vfs_mount_get(struct vfs_mount *mnt)
 {
     mnt->refs++;
 }
+
+/** Drop a view the failed remount of a second mount took. */
+uint32_t vfs_mount_put(struct vfs_mount *mnt)
+{
+    return --mnt->refs;
+}
+
+/** No row lets the shared superblock go. */
+void vfs_reap_detached(void)
+{}
 
 /** Apply the superblock flags after a successful reconfiguration. */
 int vfs_remount(struct vfs_mount *mnt, uint32_t flags, const char *options)
