@@ -67,6 +67,7 @@
 #define EISDIR    21
 #define EBUSY     16
 #define ENOTEMPTY 39
+#define ELOOP     40
 
 #define SEEK_SET 0
 #define SEEK_END 2
@@ -247,7 +248,22 @@ static const struct row rows[] = {
      "new directory",
      "full-shared", STATFS_MAGIC_EXT2},
     {"the walk gate counts the full walk's restart", "full-shared", STATFS_MAGIC_EXT2},
-    {"remove the files of the shared-record rows", "full-shared", STATFS_MAGIC_EXT2},
+    {"a full walk that a chroot of a thread sharing the record came between at a .. starts again "
+     "in the new root",
+     "shared-points", STATFS_MAGIC_EXT2},
+    {"a full walk that a chroot of a thread sharing the record came between at an absolute link "
+     "starts again in the new root",
+     "shared-points", STATFS_MAGIC_EXT2},
+    {"a full walk that a chroot of a thread sharing the record came between at its end starts "
+     "again in the new root",
+     "shared-points", STATFS_MAGIC_EXT2},
+    {"a change elsewhere while the child's walk is stopped", "shared-links", STATFS_MAGIC_EXT2},
+    {"a walk of 40 links that the walk without the big lock gives to the full walk reaches its "
+     "file",
+     "shared-links", STATFS_MAGIC_EXT2},
+    {"a walk of 41 links that the walk without the big lock gives to the full walk is ELOOP",
+     "shared-links", STATFS_MAGIC_EXT2},
+    {"remove the files of the shared-record rows", "shared-links", STATFS_MAGIC_EXT2},
     {"the files of the gated rows", "walk-restart", STATFS_MAGIC_EXT2},
     {"a walk that a rename came between at a lookup's sleep starts again and opens the new name",
      "walk-restart", STATFS_MAGIC_EXT2},
@@ -702,6 +718,48 @@ static int shared_root = -1; /* a descriptor of the root the rows began in, or -
 static int shared_child;     /* the child of a shared-record row, or 0 */
 static int shared_pipe[2] = {-1, -1};
 
+#define SHARED_LINKS 41 /* the links of `shared_links_row`, k1 to k41 */
+
+/** Put in `buf` the path /vp/s/a/kN of link `n`, 1 to 99, of
+ * `shared_links_row`. */
+static void shared_link_name(char *buf, int n)
+{
+    const char *dir = "/vp/s/a/k";
+    int i;
+
+    for (i = 0; dir[i]; i++) {
+        buf[i] = dir[i];
+    }
+    if (n >= 10) {
+        buf[i++] = (char)('0' + n / 10);
+    }
+    buf[i++] = (char)('0' + n % 10);
+    buf[i] = '\0';
+}
+
+/** Remove the files and directories of `shared_rows`, those a failure may
+ * not have made among them. */
+static void shared_unlink(void)
+{
+    char name[16];
+    int i;
+
+    for (i = 1; i <= SHARED_LINKS; i++) {
+        shared_link_name(name, i);
+        syscall1(SYS_UNLINK, (long)name);
+    }
+    syscall1(SYS_RMDIR, (long)"/vp/s/z");
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/l");
+    syscall1(SYS_UNLINK, (long)"/vp/s/b/l");
+    syscall1(SYS_UNLINK, (long)"/vp/s/b/b/f");
+    syscall1(SYS_RMDIR, (long)"/vp/s/b/b");
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/f");
+    syscall1(SYS_UNLINK, (long)"/vp/s/b/f");
+    syscall1(SYS_RMDIR, (long)"/vp/s/a");
+    syscall1(SYS_RMDIR, (long)"/vp/s/b");
+    syscall1(SYS_RMDIR, (long)"/vp/s");
+}
+
 /** Undo what `shared_rows` made, for `fail`: the gate, the child, the root
  * and working directory, the descriptors and the files. */
 static void shared_undo(void)
@@ -727,11 +785,7 @@ static void shared_undo(void)
     syscall1(SYS_CLOSE, shared_pipe[0]);
     syscall1(SYS_CLOSE, shared_pipe[1]);
     shared_pipe[0] = shared_pipe[1] = -1;
-    syscall1(SYS_UNLINK, (long)"/vp/s/a/f");
-    syscall1(SYS_UNLINK, (long)"/vp/s/b/f");
-    syscall1(SYS_RMDIR, (long)"/vp/s/a");
-    syscall1(SYS_RMDIR, (long)"/vp/s/b");
-    syscall1(SYS_RMDIR, (long)"/vp/s");
+    shared_unlink();
 }
 
 /** Make the file `path` holding the `n` bytes of `text`, or fail `what`. */
@@ -745,11 +799,13 @@ static void shared_file(const char *path, const char *text, int n, const char *w
     syscall1(SYS_CLOSE, fd);
 }
 
-static unsigned shared_ino; /* the inode of /vp/s/b/f, which the child must open */
+static unsigned shared_ino;     /* the inode the child must open */
+static const char *shared_path; /* the path the child opens */
 
-/** The child of a shared-record row: on its go from `in`, open f relative
- * to the working directory, with O_CREAT when `full`, and exit with the
- * count it reads, 98 for a file other than `shared_ino`, or 100 and more. */
+/** The child of a shared-record row: on its go from `in`, open
+ * `shared_path` relative to the working directory, with O_CREAT when
+ * `full`, and exit with the count it reads, 97 for ELOOP, 98 for a file
+ * other than `shared_ino`, or 100 and more. */
 static void shared_child_run(int in, int full)
 {
     char byte, got[8];
@@ -758,7 +814,10 @@ static void shared_child_run(int in, int full)
     if (syscall3(SYS_READ, in, (long)&byte, 1) != 1) {
         sys_exit(100);
     }
-    fd = syscall3(SYS_OPEN, (long)"f", full ? O_RDONLY | O_CREAT : O_RDONLY, 0644);
+    fd = syscall3(SYS_OPEN, (long)shared_path, full ? O_RDONLY | O_CREAT : O_RDONLY, 0644);
+    if (fd == -ELOOP) {
+        sys_exit(97);
+    }
     if (fd < 0) {
         sys_exit(101);
     }
@@ -768,35 +827,45 @@ static void shared_child_run(int in, int full)
     sys_exit(syscall3(SYS_READ, fd, (long)got, (int)sizeof(got)));
 }
 
-/**
- * One shared-record row: a child that shares the working directory and the
- * root (CLONE_FS) opens f relative to the working directory /vp/s/a, whose f
- * holds 2 bytes, and exits with the count it reads. The walk gate stops the
- * child's walk where it has taken its start and the walk sequence, the walk
- * without the big lock (`unlocked`), or with `full` the full walk under it
- * (`full`), which an open with O_CREAT takes; the parent, from the gate's
- * own count, chroots to /vp/s/b, which moves the shared working directory
- * there too, or with `cd` changes to it, and lets the walk go on. The walk
- * goes again from the new directory, whose f holds 3 bytes and is the file
- * the child must open, by its inode: under the big lock, and the gate
- * counts that one walk given up, or for the full walk from its start, and
- * the gate counts the restart. Read past the change, the old directory's
- * pair would give 2. Returns with the working directory /vp/s/a again.
- */
-static void shared_row(int cd, int full)
+/* What the parent of a shared-record row does while the child's walk is
+ * stopped (`shared_run`). */
+#define SHARED_CHROOT 0 /* chroots to /vp/s/b, which moves the shared cwd */
+#define SHARED_CHDIR  1 /* changes the shared cwd to /vp/s/b */
+#define SHARED_TOUCH  2 /* makes and removes /vp/s/z, elsewhere */
+
+/** Make the change `change` of a shared-record row: 0, or -1. */
+static int shared_change(int change)
 {
-    static const char *const whys[4] = {
-        "a walk without the big lock that a chroot of a thread sharing the record came between "
-        "goes again in the new root",
-        "a walk without the big lock that a chdir of a thread sharing the record came between "
-        "goes again from the new directory",
-        "a full walk that a chroot of a thread sharing the record came between starts again in "
-        "the new root",
-        "a full walk that a chdir of a thread sharing the record came between starts again from "
-        "the new directory"};
-    const char *why = whys[full * 2 + cd];
+    if (change == SHARED_CHROOT) {
+        return syscall1(SYS_CHROOT, (long)"/vp/s/b") == 0 ? 0 : -1;
+    }
+    if (change == SHARED_CHDIR) {
+        return syscall1(SYS_CHDIR, (long)"/vp/s/b") == 0 ? 0 : -1;
+    }
+    return syscall2(SYS_MKDIR, (long)"/vp/s/z", 0755) == 0 &&
+                   syscall1(SYS_RMDIR, (long)"/vp/s/z") == 0
+               ? 0
+               : -1;
+}
+
+/**
+ * Run one shared-record row: a child that shares the working directory and
+ * the root (CLONE_FS) opens `shared_path` from the working directory
+ * /vp/s/a, with O_CREAT when `full`, which takes the full walk; the walk
+ * gate stops the child at `event`; the parent makes the change `change`
+ * (`shared_change`) and lets the walk go on. The child must exit with
+ * `want`, a count of bytes it read from `shared_ino` or 97 for ELOOP, and
+ * the gate must count the full walk's restart, for `count` "restart", or
+ * the one walk without the big lock given up, for "miss"; else the row
+ * fails `why`. Returns with the root and the working directory /vp/s/a as
+ * before.
+ */
+static void shared_run(const char *event, int full, int change, int want, const char *count,
+                       const char *why)
+{
     char byte = 0;
     int pid, st;
+    unsigned n;
 
     if (syscall1(SYS_PIPE, (long)shared_pipe) != 0) {
         fail("the child of the shared-record rows");
@@ -809,7 +878,7 @@ static void shared_row(int cd, int full)
         fail("the child of the shared-record rows");
     }
     shared_child = pid;
-    gate_arm(pid, full ? "full" : "unlocked", "arm the walk gate");
+    gate_arm(pid, event, "arm the walk gate");
     if (syscall3(SYS_WRITE, shared_pipe[1], (long)&byte, 1) != 1) {
         fail("the child of the shared-record rows");
     }
@@ -820,34 +889,141 @@ static void shared_row(int cd, int full)
         }
         syscall0(SYS_SCHED_YIELD);
     }
-    if (cd ? syscall1(SYS_CHDIR, (long)"/vp/s/b") != 0
-           : syscall1(SYS_CHROOT, (long)"/vp/s/b") != 0) {
-        fail(cd ? "chdir while the child's walk is stopped"
-                : "chroot while the child's walk is stopped");
+    if (shared_change(change) != 0) {
+        fail(change == SHARED_CHDIR    ? "chdir while the child's walk is stopped"
+             : change == SHARED_CHROOT ? "chroot while the child's walk is stopped"
+                                       : "a change elsewhere while the child's walk is stopped");
     }
     gate_write("release", "release the walk gate");
     if (syscall4(SYS_WAIT4, pid, (long)&st, 0, 0) != pid) {
         fail(why);
     }
     shared_child = 0;
-    if ((st & 0x7f) != 0 || ((st >> 8) & 0xff) != 3) {
+    if ((st & 0x7f) != 0 || ((st >> 8) & 0xff) != want) {
         fail(why);
     }
-    if (full ? gate_count("restart") == 0 : gate_count("miss") != 1) {
-        fail(full ? "the walk gate counts the full walk's restart"
-                  : "the walk gate counts the one walk given up");
+    n = gate_count(count);
+    if (count[0] == 'r' ? n == 0 : n != 1) {
+        fail(count[0] == 'r' ? "the walk gate counts the full walk's restart"
+                             : "the walk gate counts the one walk given up");
     }
     gate_write("off", "stop the walk gate");
     syscall1(SYS_CLOSE, shared_pipe[0]);
     syscall1(SYS_CLOSE, shared_pipe[1]);
     shared_pipe[0] = shared_pipe[1] = -1;
-    if (!cd && (syscall1(SYS_FCHDIR, shared_root) != 0 || syscall1(SYS_CHROOT, (long)".") != 0)) {
+    if (change == SHARED_CHROOT &&
+        (syscall1(SYS_FCHDIR, shared_root) != 0 || syscall1(SYS_CHROOT, (long)".") != 0)) {
         fail("back to the old root after the shared-record chroot");
     }
     if (syscall1(SYS_CHDIR, (long)"/vp/s/a") != 0) {
-        fail(cd ? "chdir while the child's walk is stopped"
-                : "back to the old root after the shared-record chroot");
+        fail("back to the old root after the shared-record chroot");
     }
+}
+
+/**
+ * One shared-record row of f: the walk gate stops the child's walk where it
+ * has taken its start and the walk sequence, the walk without the big lock
+ * (`unlocked`), or with `full` the full walk under it (`full`); the parent
+ * chroots to /vp/s/b, which moves the shared working directory there too,
+ * or with `cd` changes to it. The walk goes again from the new directory,
+ * whose f holds 3 bytes and is the file the child must open, by its inode:
+ * under the big lock, and the gate counts that one walk given up, or for
+ * the full walk from its start, and the gate counts the restart. Read past
+ * the change, the old directory's pair would give 2.
+ */
+static void shared_row(int cd, int full)
+{
+    static const char *const whys[4] = {
+        "a walk without the big lock that a chroot of a thread sharing the record came between "
+        "goes again in the new root",
+        "a walk without the big lock that a chdir of a thread sharing the record came between "
+        "goes again from the new directory",
+        "a full walk that a chroot of a thread sharing the record came between starts again in "
+        "the new root",
+        "a full walk that a chdir of a thread sharing the record came between starts again from "
+        "the new directory"};
+
+    shared_path = "f";
+    shared_run(full ? "full" : "unlocked", full, cd ? SHARED_CHDIR : SHARED_CHROOT, 3,
+               full ? "restart" : "miss", whys[full * 2 + cd]);
+}
+
+/**
+ * The shared-record rows at the later points of the full walk: a chroot to
+ * /vp/s/b by the thread sharing the record, while the walk gate holds the
+ * child's O_CREAT walk at a `..` (`dotdot`), of ../b/f, after it has read
+ * the absolute link l (`follow`), and at its end before its last check
+ * (`done`), of f, sends the walk round from its start, in the new root and
+ * from the new working directory, its root: ../b/f and l, which is
+ * /vp/s/b/l there, a link to /b/f, then reach /vp/s/b/b/f, 4 bytes, and f
+ * reaches /vp/s/b/f, 3 bytes. Read on from the old root and directory, the
+ * first two would reach /vp/s/b/f and the last /vp/s/a/f, 2 bytes.
+ */
+static void shared_point_rows(void)
+{
+    unsigned bb;
+
+    if (syscall2(SYS_MKDIR, (long)"/vp/s/b/b", 0755) != 0 ||
+        syscall2(SYS_SYMLINK, (long)"/vp/s/b/f", (long)"/vp/s/a/l") != 0 ||
+        syscall2(SYS_SYMLINK, (long)"/b/f", (long)"/vp/s/b/l") != 0) {
+        fail("the files of the shared-record rows");
+    }
+    shared_file("/vp/s/b/b/f", "bbbb", 4, "the files of the shared-record rows");
+    if (xstat("/vp/s/b/b/f") != 0) {
+        fail("the files of the shared-record rows");
+    }
+    bb = st_field(KSTAT_INO);
+    shared_ino = bb;
+    shared_path = "../b/f";
+    shared_run("dotdot", 1, SHARED_CHROOT, 4, "restart",
+               "a full walk that a chroot of a thread sharing the record came between at a .. "
+               "starts again in the new root");
+    shared_path = "l";
+    shared_run("follow", 1, SHARED_CHROOT, 4, "restart",
+               "a full walk that a chroot of a thread sharing the record came between at an "
+               "absolute link starts again in the new root");
+    if (xstat("/vp/s/b/f") != 0) {
+        fail("the files of the shared-record rows");
+    }
+    shared_ino = st_field(KSTAT_INO);
+    shared_path = "f";
+    shared_run("done", 1, SHARED_CHROOT, 3, "restart",
+               "a full walk that a chroot of a thread sharing the record came between at its end "
+               "starts again in the new root");
+}
+
+/**
+ * A walk of a chain of links that the walk without the big lock begins and
+ * the full walk ends has 40 links in all, not 40 in each: k1 to k41 in
+ * /vp/s/a, each a link to the next and k41 to f. The walk gate stops the
+ * child's walk of k2, then of k1, without the big lock (`unlocked`), while
+ * the parent makes and removes /vp/s/z elsewhere, which sends the walk to
+ * the full walk; k2, 40 links, reaches f's 2 bytes, and k1, 41, is ELOOP.
+ */
+static void shared_links_row(void)
+{
+    char name[16], target[16];
+    int i;
+
+    for (i = 1; i <= SHARED_LINKS; i++) {
+        shared_link_name(name, i);
+        shared_link_name(target, i + 1);
+        if (syscall2(SYS_SYMLINK, (long)(i < SHARED_LINKS ? target + 8 : "f"), (long)name) != 0) {
+            fail("the files of the shared-record rows");
+        }
+    }
+    if (xstat("/vp/s/a/f") != 0) {
+        fail("the files of the shared-record rows");
+    }
+    shared_ino = st_field(KSTAT_INO);
+    shared_path = "k2";
+    shared_run("unlocked", 0, SHARED_TOUCH, 2, "miss",
+               "a walk of 40 links that the walk without the big lock gives to the full walk "
+               "reaches its file");
+    shared_path = "k1";
+    shared_run("unlocked", 0, SHARED_TOUCH, 97, "miss",
+               "a walk of 41 links that the walk without the big lock gives to the full walk is "
+               "ELOOP");
 }
 
 /**
@@ -891,13 +1067,17 @@ static void shared_rows(unsigned magic)
     shared_row(1, 0);
     shared_row(0, 1);
     shared_row(1, 1);
+    shared_point_rows();
+    shared_links_row();
     syscall1(SYS_CLOSE, shared_root);
     syscall1(SYS_CLOSE, gate_wfd);
     syscall1(SYS_CLOSE, gate_rfd);
     shared_root = gate_wfd = gate_rfd = -1;
-    if (syscall1(SYS_CHDIR, (long)"/") != 0 || syscall1(SYS_UNLINK, (long)"/vp/s/a/f") != 0 ||
-        syscall1(SYS_UNLINK, (long)"/vp/s/b/f") != 0 || syscall1(SYS_RMDIR, (long)"/vp/s/a") != 0 ||
-        syscall1(SYS_RMDIR, (long)"/vp/s/b") != 0 || syscall1(SYS_RMDIR, (long)"/vp/s") != 0) {
+    if (syscall1(SYS_CHDIR, (long)"/") != 0) {
+        fail("remove the files of the shared-record rows");
+    }
+    shared_unlink();
+    if (xstat("/vp/s") != -ENOENT) {
         fail("remove the files of the shared-record rows");
     }
     fail_undo = 0;
@@ -1981,7 +2161,8 @@ static void cwd_empty_undo(void)
  * AT_EMPTY_PATH, after a walk and then a file's rename in /vp/e, takes the
  * working directory by its pair with a stamp of its own, which its change
  * checks, and does not go round on the stamp the walk before the rename
- * left.
+ * left. The same call after a chdir to /, which on a KRFFS root leaves the
+ * working directory no pair, walks its path and ends too.
  */
 static void cwd_empty_row(void)
 {
@@ -1996,6 +2177,8 @@ static void cwd_empty_row(void)
     fd = syscall3(SYS_OPEN, (long)"/vp/e/a", O_CREAT | O_WRONLY, 0644);
     if (fd < 0 || syscall1(SYS_CLOSE, fd) != 0 || syscall1(SYS_CHDIR, (long)"/vp/e") != 0 ||
         xstat("/vp/e/a") != 0 || syscall2(SYS_RENAME, (long)"/vp/e/a", (long)"/vp/e/b") != 0 ||
+        syscall5(SYS_FCHOWNAT, AT_FDCWD, (long)"", uid, -1, AT_EMPTY_PATH) != 0 ||
+        syscall1(SYS_CHDIR, (long)"/") != 0 ||
         syscall5(SYS_FCHOWNAT, AT_FDCWD, (long)"", uid, -1, AT_EMPTY_PATH) != 0) {
         fail(why);
     }

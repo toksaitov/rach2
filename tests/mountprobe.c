@@ -2715,12 +2715,44 @@ static void gated_walk_row(int above)
 }
 
 /**
+ * With f removed, which the chain of `links_row` ends at, an O_CREAT open
+ * of `ok`, 40 links, must make f, and one of `over`, 41, must be ELOOP and
+ * leave f missing; else fail `why`. Leaves f made again.
+ */
+static void links_create(const char *ok, const char *over, const char *why)
+{
+    long fd;
+
+    if (syscall1(SYS_UNLINK, (long)"f") != 0) {
+        fail(why);
+    }
+    fd = syscall3(SYS_OPEN, (long)over, O_WRONLY | O_CREAT, 0644);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    if (fd != -ELOOP || syscall3(SYS_OPEN, (long)"f", O_RDONLY, 0) != -ENOENT) {
+        fail(why);
+    }
+    fd = syscall3(SYS_OPEN, (long)ok, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0 || syscall1(SYS_CLOSE, fd) != 0) {
+        fail(why);
+    }
+    fd = syscall3(SYS_OPEN, (long)"f", O_RDONLY, 0);
+    if (fd < 0 || syscall1(SYS_CLOSE, fd) != 0) {
+        fail(why);
+    }
+}
+
+/**
  * The bound of links, Linux's 40 (fs/namei.c MAXSYMLINKS in 6.12): in the
  * tmpfs at the mount point, kN links to kN+1 for N from 1 to 40 and k41 to
  * f. k2 reaches f through 40 links and k1 is ELOOP; m40, a link to
  * /proc/self/cwd/k5, reaches f through m40, /proc/self, the jump through
  * cwd and 37 more, and m41, to /proc/self/cwd/k4, is ELOOP, since a jump
- * through a link of /proc counts as any link does.
+ * through a link of /proc counts as any link does. With f removed, an
+ * O_CREAT open creates through the dangling chain on the same allowance
+ * and gets none afresh: through k2 and through m40 it makes f, and
+ * through k1 and m41 it is ELOOP and makes nothing.
  */
 static void links_row(void)
 {
@@ -2750,6 +2782,12 @@ static void links_row(void)
     if (syscall3(SYS_OPEN, (long)"m41", O_RDONLY, 0) != -ELOOP) {
         fail("a jump through a link of /proc counts toward the 40 links");
     }
+    links_create("k2", "k1",
+                 "an O_CREAT open through 40 dangling links makes the target, and "
+                 "through 41 is ELOOP and makes nothing");
+    links_create("m40", "m41",
+                 "an O_CREAT open through 40 dangling links, a jump through /proc "
+                 "among them, makes the target, and through 41 is ELOOP");
     walks_unlink();
     walks_leave();
 }
