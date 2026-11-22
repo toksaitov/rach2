@@ -165,32 +165,36 @@ session_restore()
     done
 }
 
-# sentinel_make DIR: make DIR, a directory of the check's own, holding the
-# file `file` and the link `link` to it.
-sentinel_make()
+# sentinel_fill DIR: put in DIR, a directory of the check's own, the file
+# `file` and the link `link` to it.
+sentinel_fill()
 {
-    mkdir -m 0700 "$1" && echo crysis-check > "$1/file" && ln -s file "$1/link"
+    echo crysis-check > "$1/file" && ln -s file "$1/link"
 }
 
 # sentinels_make: make the seal check's sentinels, in the desktop account's
 # home and, when the partition is mounted read-write on /data, as on the
 # installed system, in its directory `native`, or its root, through the
 # partition's writable bind $rw, outside /data/crysis, whose metadata
-# crysis-shm.sh compares. Each variable is set once its directory is made,
-# so that the removal touches nothing the check did not make. A partition
-# mounted read-only, as when the case mounts it, has no sentinel: its mount
-# refuses every write, and the check takes statvfs's word for it.
+# crysis-shm.sh compares. Each variable is set as soon as its `mkdir`
+# succeeds, before the directory is filled, so that the removal takes a
+# directory whose filling failed and touches nothing the check did not
+# make; a `mkdir` that fails, as on a name already there, sets nothing. A
+# partition mounted read-only, as when the case mounts it, has no sentinel:
+# its mount refuses every write, and the check takes statvfs's word for it.
 sentinels_make()
 {
     desk=$(awk -F: -v uid="$uid" '$3 == uid { print $6; exit }' /etc/passwd)
     [ -n "$desk" ] && [ -d "$desk" ] || return 1
-    sentinel_make "$desk/.crysis-check-$$" || return 1
+    mkdir -m 0700 "$desk/.crysis-check-$$" || return 1
     probe_home=$desk/.crysis-check-$$
+    sentinel_fill "$probe_home" || return 1
     [ "$rw_bound" = 1 ] || return 0
     part_rel=.crysis-check-$$
     [ ! -d "$rw/native" ] || [ -L "$rw/native" ] || part_rel=native/$part_rel
-    sentinel_make "$rw/$part_rel" || return 1
+    mkdir -m 0700 "$rw/$part_rel" || return 1
     probe_part=$rw/$part_rel
+    sentinel_fill "$probe_part" || return 1
 }
 
 # sentinels_remove: remove the sentinels made, once no process of the check
@@ -334,12 +338,15 @@ PYTHON
 # at a file the check did not make. A sentinel is a directory .crysis-check-*
 # that the caller made, holding the file `file` and the link `link` to it,
 # and removes once this process has ended, since no write can remove it here.
-# Last, in /data/crysis and each writable path the same writes of a new name
-# must succeed, and are taken back. Prints a line for each place and exits 1
+# Last, in /data/crysis and each writable path a mkdir of a directory of the
+# check's own, by mkdtemp, and in it the same writes of new names must
+# succeed; no name already there is touched, a write whose file was not made
+# is not tried, and the directory is taken back. Prints a line for each
+# place and exits 1
 # on a failure, before COMMAND runs. The process is the caller's: unshare and
 # python3 exec in turn, so that a signal to it reaches COMMAND.
 seal_py=$(cat << 'PYTHON'
-import errno, os, pwd, re, subprocess, sys
+import errno, os, pwd, re, subprocess, sys, tempfile
 
 UID = 1001
 BASE = "/data/crysis"
@@ -476,26 +483,42 @@ def refused(label, folder):
 
 
 def allowed(folder):
-    """Return the writes of a new name in FOLDER that failed."""
-    name = os.path.join(folder, ".crysis-check-%d" % os.getpid())
-    other = name + "-renamed"
-    rows = [("create", lambda: os.close(os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                                                0o600))),
-            ("rename", lambda: os.rename(name, other)),
-            ("write", lambda: os.close(os.open(other, os.O_WRONLY))),
-            ("truncate", lambda: os.truncate(other, 0)),
-            ("chown", lambda: os.chown(other, UID, UID)),
-            ("unlink", lambda: os.unlink(other)),
-            ("mkdir", lambda: os.mkdir(name)),
-            ("symlink", lambda: os.symlink("crysis-check", name + "-link"))]
+    """Return the writes of new names in FOLDER that failed. They run in a
+    directory of their own that mkdtemp makes there, with a name no one
+    else has, so that nothing in FOLDER but that directory is touched; a
+    write of a file whose making failed is not tried, and the directory is
+    removed with what it holds."""
+    rows = 8
+    try:
+        own = tempfile.mkdtemp(prefix=".crysis-check-", dir=folder)
+    except OSError as error:
+        say("check: writable: %s: 0 of %d writes went through" % (folder, rows))
+        return ["%s mkdir: %s" % (folder, errno.errorcode.get(error.errno, error.errno))] + \
+            ["%s: no write tried in a directory not made" % folder]
+    name, other, link = (os.path.join(own, leaf) for leaf in ("new", "renamed", "link"))
+    steps = [("create", None, lambda: os.close(os.open(
+                 name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600))),
+             ("rename", "create", lambda: os.rename(name, other)),
+             ("write", "rename", lambda: os.close(os.open(other, os.O_WRONLY | os.O_NOFOLLOW))),
+             ("truncate", "rename", lambda: os.truncate(other, 0)),
+             ("chown", "rename", lambda: os.chown(other, UID, UID, follow_symlinks=False)),
+             ("unlink", "rename", lambda: os.unlink(other)),
+             ("symlink", None, lambda: os.symlink("crysis-check", link))]
+    done = set()
     bad = []
-    for op, call in rows:
+    for op, needs, call in steps:
+        if needs and needs not in done:
+            bad.append("%s %s: not tried, since %s failed" % (folder, op, needs))
+            continue
         code = attempt(call)
         if code:
             bad.append("%s %s: %s" % (folder, op, errno.errorcode.get(code, code)))
-    remove((name, other, name + "-link"))
-    say("check: writable: %s: %d of %d writes went through" % (folder, len(rows) - len(bad),
-                                                                 len(rows)))
+        else:
+            done.add(op)
+    remove((link, other, name, own))
+    if os.path.lexists(own):
+        bad.append("%s: %s is left" % (folder, own))
+    say("check: writable: %s: %d of %d writes went through" % (folder, 1 + len(done), rows))
     return bad
 
 
