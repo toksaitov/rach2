@@ -92,28 +92,35 @@ mounted_at()
 # at most, for a Weston other than the one that ran, or for none, so that
 # the next case does not draw in a session about to end. The end is sent
 # even with no Weston, since a start the supervisor has taken may not have
-# reached Weston yet; it is done once neither Weston nor the session's
-# script has run for 15 tries, longer than the supervisor's turn of a second
-# in which it may still begin a start.
+# reached Weston yet. rach2-desktop reads a signal's flags at the start of
+# a turn of its loop and ends each turn with `sleep 1`; a turn may take ten
+# seconds to end a session and then begin a start it had already chosen.
+# The end is done once a turn begun after the signal has run whole, which
+# the second `sleep 1` seen since the signal shows, and neither Weston nor
+# the session's script is left.
 session_restore()
 {
     old=$(pgrep -x weston | tr '\n' ' ')
     [ -f "$pidfile" ] || return 1
+    supervisor=$(cat "$pidfile")
     if [ "$found" = 1 ]; then
-        kill -HUP "$(cat "$pidfile")" 2> /dev/null || return 1
+        kill -HUP "$supervisor" 2> /dev/null || return 1
     else
-        kill -USR2 "$(cat "$pidfile")" 2> /dev/null || return 1
+        kill -USR2 "$supervisor" 2> /dev/null || return 1
     fi
-    tries=0 clear=0
+    tries=0 turn='' turns=0
     while :; do
         now=$(pgrep -x weston | tr '\n' ' ')
         if [ "$found" = 1 ]; then
             [ -z "$now" ] || [ "$now" = "$old" ] || [ ! -S "/run/user/$uid/wayland-0" ] || return 0
-        elif [ -z "$now" ] && ! pgrep -f "$session" > /dev/null; then
-            clear=$((clear + 1))
-            [ "$clear" -lt 15 ] || return 0
         else
-            clear=0
+            pause=$(pgrep -P "$supervisor" -fx 'sleep 1' | head -n 1)
+            if [ -n "$pause" ] && [ "$pause" != "$turn" ]; then
+                turn=$pause turns=$((turns + 1))
+            fi
+            # A supervisor that has exited ended the session in its trap.
+            { [ "$turns" -ge 2 ] || ! kill -0 "$supervisor" 2> /dev/null; } &&
+                [ -z "$now" ] && ! pgrep -f "$session" > /dev/null && return 0
         fi
         tries=$((tries + 1))
         [ "$tries" -lt 600 ] || return 1
