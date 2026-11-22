@@ -188,7 +188,7 @@ fi
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
-daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0 stalled=0
+daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0
 # 1 once this run, with -g on a machine that ran no session, has asked for
 # one, which must end once the GPU is back, at the end or on a signal.
 session_owed=0
@@ -198,9 +198,9 @@ intel=''
 [ -z "$bdf" ] || intel=1
 
 # end_group PID: end the process group that PID leads, which setsid made,
-# with TERM and, once 20 seconds have passed, KILL, and reap its leader,
-# so that a load's scene, its browser and its compositor end with it. The
-# harness's own stop takes up to 15 seconds.
+# with TERM and, once 20 seconds have passed, KILL, and reap its leader
+# as reap does, so that a load's scene, its browser and its compositor end
+# with it. The harness's own stop takes up to 15 seconds.
 end_group()
 {
     [ -n "$1" ] || return 0
@@ -211,7 +211,29 @@ end_group()
         n=$((n - 1))
     done
     kill -KILL "-$1" 2>/dev/null
-    wait "$1" 2>/dev/null
+    reap "$1" || echo "bed-shm: process $1 still running after kill" >&2
+}
+
+# reap PID...: give the children PID... 100 tries of 0.1 s to exit, and
+# reap those that did. A task stuck in the kernel may outlive KILL, so the
+# wait is bounded. Returns 1, with the pids still running in reap_live,
+# when any is left.
+reap()
+{
+    reap_left=100
+    while :; do
+        reap_live=''
+        for reap_pid in "$@"; do
+            ! kill -0 "$reap_pid" 2>/dev/null || reap_live="$reap_live $reap_pid"
+        done
+        [ -n "$reap_live" ] && [ "$reap_left" -gt 0 ] || break
+        sleep 0.1
+        reap_left=$((reap_left - 1))
+    done
+    for reap_pid in "$@"; do
+        kill -0 "$reap_pid" 2>/dev/null || wait "$reap_pid" 2>/dev/null
+    done
+    [ -z "$reap_live" ]
 }
 # crysis_restore_ini: put back the compositor's settings before the GPU
 # returns and the native session starts. A session that started on the
@@ -247,10 +269,15 @@ session_end()
     done
 }
 
-# gpu.sh, sent SIGTERM, kills its QEMU and gives the function back. A
-# child that stalled in death_children has already been sent KILL.
+# cleanup: end what the run started, on its normal end or a signal's, and
+# leave the GPU and the session as they were found. gpu.sh, sent SIGTERM,
+# kills its QEMU and gives the function back. Every other child has a
+# bounded wait, so that one stuck in the kernel cannot hold back the GPU's
+# return or the session's end, and HUP, INT and TERM are ignored from the
+# start, so that a second signal cannot cut either short.
 cleanup()
 {
+    trap '' HUP INT TERM
     end_group "$load"
     end_group "$figpid"
     crysis_restore_ini || echo 'bed-shm: failed to restore weston.ini' >&2
@@ -258,26 +285,32 @@ cleanup()
     kill -9 $qemu $waiter $holder $pid 2>/dev/null
     # shellcheck disable=SC2086 # the pids of children that were started
     kill $daemon $gpu $umon 2>/dev/null
-    if [ "$stalled" = 0 ]; then
-        wait 2>/dev/null
-    elif [ -n "$gpu" ]; then
-        wait "$gpu" 2>/dev/null
+    # With -g, QEMU is gpu.sh's child, which gpu.sh reaps.
+    vm=$qemu
+    [ -z "$gpu" ] || vm=''
+    # shellcheck disable=SC2086 # the pids of children that were started
+    if ! reap $vm $waiter $holder $pid $daemon $umon; then
+        # shellcheck disable=SC2086 # the pids reap found running
+        kill -9 $reap_live 2>/dev/null
+        # shellcheck disable=SC2086 # the pids reap found running
+        reap $reap_live || echo "bed-shm: still running after kill:$reap_live" >&2
     fi
+    [ -z "$gpu" ] || wait "$gpu" 2>/dev/null
     # A run ended by a signal leaves the session as it found it too. A
     # USR2 that finds no session starts none.
     if [ "$session_owed" = 1 ]; then
-        session_owed=0
         if session_end; then
             echo 'bed-shm: end: pass: the session this run started has ended, as none ran before'
         else
             echo "bed-shm: end: fail: the session this run started is still running: weston [$(pgrep -x weston | tr '\n' ' ')]"
         fi
+        session_owed=0
     fi
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap "trap '' HUP INT TERM; exit 129" HUP
+trap "trap '' HUP INT TERM; exit 130" INT
+trap "trap '' HUP INT TERM; exit 143" TERM
 rm -rf "$out"
 mkdir -p "$out"
 # Where the desktop's log stood before anything here ran.
@@ -526,7 +559,6 @@ death_children()
     done
     if kill -0 "$waiter" 2>/dev/null; then
         kill -KILL "$waiter" 2>/dev/null
-        stalled=1
         death_error='fence probe still running'
     else
         wait "$waiter" 2>/dev/null || death_error="fence probe status $?"
@@ -534,7 +566,6 @@ death_children()
     waiter=''
     if kill -0 "$daemon" 2>/dev/null; then
         kill -KILL "$daemon" 2>/dev/null
-        stalled=1
         death_error="${death_error:+$death_error, }ivshmemd still running"
     else
         wait "$daemon" 2>/dev/null || death_error="${death_error:+$death_error, }ivshmemd status $?"
@@ -1378,13 +1409,15 @@ else
     virgl_rows
 fi
 handoff
+# The session stays owed until its end has run, so that a signal before
+# then has cleanup end it.
 if [ "$session_owed" = 1 ]; then
-    session_owed=0
     if session_end; then
         pass end 'the session this run started has ended, as none ran before'
     else
         fail end "the session this run started is still running: weston [$(pgrep -x weston | tr '\n' ' ')]"
     fi
+    session_owed=0
 fi
 
 if [ "$bad" -eq 0 ]; then
