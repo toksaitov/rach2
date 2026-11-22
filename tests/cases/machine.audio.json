@@ -196,7 +196,7 @@
         {"step_id": "judge", "stage": "execute", "does": "rebuild the samples printed as a WAVE file and run wavcheck on it"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"], "audio": "hda", "audio_backend": "sdl", "audio_input": "tones"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"], "audio": "hda", "audio_backend": "sdl", "audio_input": "tones"}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "counted", "checks": "audiotest -R says audiotest: result: complete; the frames read match the kernel's count before the shell's prompt comes back", "source": "scenario"},
@@ -465,7 +465,7 @@
         {"step_id": "judge", "stage": "execute", "does": "judge the recorded samples with wavcheck"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "hda", "audio_backend": "none"}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "clients", "checks": "the client reaps every player successfully and reports complete; the two readers agree over their common captured frames", "source": "scenario"},
@@ -503,7 +503,7 @@
         {"step_id": "judge", "stage": "execute", "does": "judge the two records read through loopback with wavcheck"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "hda", "audio_backend": "none"}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "clients", "checks": "the client reaps both players successfully and reports complete", "source": "scenario"},
@@ -542,7 +542,7 @@
         {"step_id": "judge", "stage": "execute", "does": "judge the recorded samples with wavcheck"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "sb16", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "sb16", "audio_backend": "none"}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "clients", "checks": "the client reaps every player successfully and reports complete; the two readers agree over their common captured frames", "source": "scenario"},
@@ -580,7 +580,7 @@
         {"step_id": "judge", "stage": "execute", "does": "judge the recorded samples with wavcheck"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "hda", "audio_backend": "none"}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "clients", "checks": "the client reaps every player successfully and reports complete", "source": "scenario"},
@@ -654,7 +654,7 @@
         {"step_id": "judge", "stage": "execute", "does": "judge the recorded samples with wavcheck"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "sb16", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.audio.loopback"], "audio": "sb16", "audio_backend": "none"}, "console": "virtio", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "clients", "checks": "the client reaps every player successfully and reports complete", "source": "scenario"},
