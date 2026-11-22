@@ -87,7 +87,7 @@
         },
         {
           "assertion_id": "shared",
-          "checks": "A texture both files hold and have named in a submission is attached to both their contexts in virtio_gpu_attachments, read with no draw between; the second file's close of its handle detaches its context alone, and with a second texture the first file's close detaches the first's alone; the first file still uploads, reads back and submits its texture, and the second still submits the other",
+          "checks": "A texture both files hold and have named in a submission is attached to both their contexts in virtio_gpu_attachments, read with no draw between; the second file's close of its handle detaches its context alone, and with a second texture the first file's close detaches the first's alone; the first file still uploads, reads back and submits its texture, and the second still submits the other, and the row ends once the other texture's UNREF is answered",
           "source": "program"
         },
         {

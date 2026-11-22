@@ -595,11 +595,12 @@ static uint32_t share(uint32_t handle, const char *what)
  * detaches that file's context alone, the second file's first and then,
  * with another texture, the first file's. The first file then still
  * uploads, reads back and submits its texture, and the second file still
- * submits the other. */
+ * submits the other. The row ends once the other texture's UNREF is
+ * answered, so that virtio_gpu_objects counts only what the next rows make. */
 static void shared_row(void)
 {
     char path[64];
-    uint32_t oh, h, res, ctx[4], first, second;
+    uint32_t oh, h, res, ctx[4], first, second, n;
 
     render_path(path, (uint32_t)(128 + card_index));
     other_fd = (int)syscall3(SYS_OPEN, (long)path, 2, 0);
@@ -620,6 +621,7 @@ static void shared_row(void)
     roundtrip(7, 41, "the first file's texture after the second's close");
     (void)submit_naming(gpu_fd, &bo_handle, 0, "the first file's submission after it");
     wait_texture();
+    n = objects_now("read virtio_gpu_objects");
     h = small_texture(gpu_fd);
     require(h != 0, "a texture to share");
     res = res_of(gpu_fd, h, "the shared texture's resource");
@@ -638,6 +640,9 @@ static void shared_row(void)
             "the last close detaches the last context");
     syscall1(SYS_CLOSE, other_fd);
     other_fd = -1;
+    while (objects_now("read virtio_gpu_objects") != n) {
+        nap();
+    }
     report_held();
 }
 
