@@ -12,6 +12,8 @@ The first case, `lenovoacpi`, accepts the Lenovo G50-70's ACPI initialization, e
 
 NAME is the program's unit in the inventory, such as `credprobe` or `musl/ctrlcmusl`, with `.VARIANT` added when the unit has more than one native case, as `dirprobe.krffs` and `dirprobe.ext2`. PROGRAM is the program's path under the build's `tests` directory, or, when it begins with `native/`, `system/` or `graphics/`, a script of `tests/` itself, and the ARGUMENTs are given to it as they stand. A `#` begins a comment, and a line may be continued with a final `\`.
 
+For the Lenovo's Crysis flyby through the driver VM, run `sh ./crysis-shm.sh` as root in a new workspace on the installed ext2 root. Put `crysis-shm.sh`, `crysis.sh`, `crysis.py`, `wm.py`, `bed-shm.sh` and `gpu.sh` in it. The host must have its data partition mounted at `/data` and the bed's `native/bed/vm.disk` on it. The launcher compares metadata manifests of the real Crysis tree before and after the run. Inside its own mount namespace it binds the partition read-only on `/data/owner` under the private `/data` and reuses the native case's private game setup. It retains the manifests and the logs under `out` and removes the private game. Follow the machine procedure for taking the screen and GPU.
+
 Each case has a workspace: a directory of its own, its working directory, removed after a pass. A FIXTURE adds to it:
 
 * `stage:PATH[,PATH]...`: each program of the build's `tests` directory, such as `hello` or `musl/statushelper`, or each file of this directory, such as `native/hello.txt`, copied into the workspace under its last component, or to the root's `/` in a case with a private root.
