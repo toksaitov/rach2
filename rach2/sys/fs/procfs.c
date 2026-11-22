@@ -1629,6 +1629,76 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
     return rc;
 }
 
+/** Reconstruct the mount-table path of the held descriptor's node. */
+static int mount_fd_path(const struct open_file *file, const struct vfs_ref *ref, char *path,
+                         uint32_t cap)
+{
+    struct vfs_mount *mnt = ref->mnt;
+    const char *name;
+    int deleted, rc;
+
+    if (ref->node == mnt->root) {
+        name = mnt->covered_path;
+    } else if (file->synth_mnt) {
+        name = file->dirpath;
+    } else if (file->name) {
+        if (!mnt->type->file_locked) {
+            vfs_ns_lock(mnt);
+        }
+        rc = vfs_name_path(file->name, ref->node, path, cap, &deleted);
+        if (!mnt->type->file_locked) {
+            vfs_ns_unlock(mnt);
+        }
+        return rc == 0 && deleted ? -ENOENT : rc;
+    } else {
+        return vfs_node_path(mnt, ref->node, path, cap);
+    }
+    if (!name) {
+        return -EINVAL;
+    }
+    if (k_strlen(name) >= cap) {
+        return -ENAMETOOLONG;
+    }
+    k_strncpy(path, name, cap);
+    return 0;
+}
+
+int procfs_mount_fd(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap)
+{
+    int pid = procfs_resolve_id(vp);
+    process_t *p = pid < 0 ? NULL : procfs_proc(pid);
+    struct open_file *file;
+    fd_entry_t fd;
+    int rc = -EINVAL;
+
+    if (!p || !p->fds || vp->procfd < 0) {
+        return -ENOENT;
+    }
+    if (!procfs_may_trace(p, 0)) {
+        return -EACCES;
+    }
+    if (fd_peek_hold(p->fds, vp->procfd, &fd) != 0) {
+        return -ENOENT;
+    }
+    file = fd.ofd;
+    if (file) {
+        out->mnt = file->vmnt ? file->vmnt : file->synth_mnt;
+        out->node = file->vmnt ? file->vnode : file->synth_node;
+        if (out->mnt && out->node && vfs_mount_seen(out->mnt)) {
+            rc = vfs_enter(out->mnt);
+            if (rc == 0) {
+                vfs_ref_hold(out);
+                rc = mount_fd_path(file, out, path, cap);
+                if (rc != 0) {
+                    vfs_ref_release(out);
+                }
+            }
+        }
+    }
+    fd_peek_drop(&fd);
+    return rc;
+}
+
 /**
  * Append to `t` the bytes of `mm` from `start` to `end`, at most 128 KiB, or,
  * when `to_nul` is set, through the first NUL among them, that NUL included:
