@@ -7,6 +7,8 @@ cd "$tree"
 step=dev-log/78-intel/78-11d/qemu-trace
 disk=${RACH2_TRACE_DISK:-"$tree/build/runs/t3504t/qemu.disk"}
 port=${RACH2_TRACE_PORT:-26516}
+browser_trace=${RACH2_BROWSER_TRACE:-1}
+case $browser_trace in 0|1) ;; *) exit 2 ;; esac
 out="$tree/build/runs/t3504-wake-trace-$(date '+%Y%m%dT%H%M%S')"
 root=/data/trial/t3504t
 stage=$root/qemu-trace
@@ -60,14 +62,14 @@ guest "mkdir '$stage' && tar -xzf - -C '$stage' && mkdir '$stage/out' && chown d
     < "$out/payload.tar.gz"
 
 status=0
-guest "cd '$stage' && sh -s '$step/picture.py'" <<'GUEST' || status=$?
+guest "cd '$stage' && sh -s '$step/picture.py' '$browser_trace'" <<'GUEST' || status=$?
 set -eu
 trace=/sys/kernel/debug/bkl/trace
 test -e "$trace" || mount -t debugfs debugfs /sys/kernel/debug
 printf 'start\n' > "$trace"
 trap 'printf "stop\n" > "$trace"' EXIT
 status=0
-timeout -k 10 240 su -s /bin/sh desktop -c "PYTHONDONTWRITEBYTECODE=1 python3 -u '$1'" || status=$?
+timeout -k 10 240 su -s /bin/sh desktop -c "RACH2_BROWSER_TRACE='$2' PYTHONDONTWRITEBYTECODE=1 python3 -u '$1'" || status=$?
 printf 'stop\n' > "$trace"
 cat "$trace" > kernel.bin
 printf 'clear\n' > "$trace"
