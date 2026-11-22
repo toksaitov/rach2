@@ -165,7 +165,7 @@ Subtask 5705 fixed the four faults of Codex's review of `task/5697` at 50f95acfa
 * A close slept in its wait for room and its DETACH's allocation, and another thread could meanwhile import the buffer into the same file, whose `open` hook found the attachment and kept it. The close now looks up the file's handles again after the sleep, as it does the attachment.
 * The shared row read the buffer back through a transfer, which attaches it again, so a close that detached the wrong context passed. Two root files in the device's debugfs directory serve the probe now: `virtio_gpu_attachments` lists each attachment, `CTX RES`, and while `virtio_gpu_hold` is open, reaps leave the answers on the done list. The shared row checks the attachments after each close, the second file's and then, with a second texture, the first file's, with no draw between. The busy-close and unref rows hold the answers, so that the submission is pending when the row closes the texture and unmaps it, and the answers drop the last reference in the worker.
 
-Under KVM, `tests/run vgpu` passed on i686, virgl with its eleven rows and exit, and `ARCH=x86_64 tests/run vgpu` passed blob, virgl and exit, the UNREF seen in 2 ms after the hold's release on both.
+Under KVM, `tests/run vgpu` passed on i686, virgl with its eleven rows and exit, and `ARCH=x86_64 tests/run vgpu` passed blob, virgl and exit, the UNREF seen in 2 ms after the hold's release on both; at the head with the fix below they passed again, the UNREF seen in 2 ms on i686 and 1 ms on x86_64.
 
 ### Setup
 
