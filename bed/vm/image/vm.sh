@@ -534,6 +534,14 @@ if [ -r "$cfg" ]; then
     echo "bed-vm: profile: $*" > /dev/ttyS0
 fi
 ! stty -F /dev/ttyS1 > /dev/null 2>&1 || set -- "$@" -H
+# The entry opt/rach2/vrend-debug, which bed-shm.sh gives with
+# BED_VM_VREND_DEBUG, is virglrenderer's VREND_DEBUG: `khr` logs each GL
+# error with the driver's own message, as `backend: virgl: error: ERROR:`.
+cfg=/sys/firmware/qemu_fw_cfg/by_name/opt/rach2/vrend-debug/raw
+if [ -r "$cfg" ]; then
+    export VREND_DEBUG="$(cat "$cfg")"
+    echo "bed-vm: vrend-debug: $VREND_DEBUG" > /dev/ttyS0
+fi
 # The backend's lines reach the console through sed, over a FIFO that the
 # backend and what it starts, the render server and its workers, hold open.
 # The backend's end alone ends the service: once it has ended, every other

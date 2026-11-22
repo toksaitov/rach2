@@ -138,6 +138,8 @@
 # CRYSIS_LOOPS=1 selects one loop for a profile.
 # BED_VM_PROFILE_PORT forwards a loopback port to a profiling VM's SSH
 # server. BED_VM_PROFILE_CRC=1 asks that VM to enable the flush readback.
+# BED_VM_VREND_DEBUG gives the VM's virglrenderer its VREND_DEBUG flags,
+# lowercase words joined by commas: `khr` logs each GL error's message.
 # BED_PROFILE_ONLY=1 returns the GPU after the figures, before the VM's
 # death-under-load check.
 set -u
@@ -202,6 +204,9 @@ esac
 case ${BED_VM_PROFILE_CRC:-0} in
     0|1) ;;
     *) echo 'bed-shm: profiling CRC must be 0 or 1' >&2; exit 2 ;;
+esac
+case ${BED_VM_VREND_DEBUG:-} in
+    *[!a-z,]*) echo 'bed-shm: renderer debug flags must be lowercase words and commas' >&2; exit 2 ;;
 esac
 profile_only=${BED_PROFILE_ONLY:-0}
 if [ "$profile_only" = 1 ] && { [ "$desk" != 1 ] || [ -z "$measure" ]; }; then
@@ -854,6 +859,8 @@ if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
         -device virtio-net-pci,netdev=bedprof \
         -fw_cfg "name=opt/rach2/vgpu-profile,string=${BED_VM_PROFILE_CRC:-0}"
 fi
+[ -z "${BED_VM_VREND_DEBUG:-}" ] ||
+    set -- "$@" -fw_cfg "name=opt/rach2/vrend-debug,string=$BED_VM_VREND_DEBUG"
 # The VM's second serial port, ttyS1, a pipe whose input this script
 # keeps open, read and written, so that a word sent never waits, even with
 # QEMU gone: bed-vm-control in the VM does each word to the backend
