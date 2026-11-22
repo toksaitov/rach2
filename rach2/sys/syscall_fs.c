@@ -6282,16 +6282,34 @@ static void open_record_parent(struct open_file *ofd, const char *name)
  * with `self` the file's own watches as well, for a change that did not
  * pass through `vfs_setattr`, which tells those. Nothing while there is no
  * watch, or for a mask of no event. The caller holds a reference to the
- * node and none of the walk's locks.
+ * node and none of the walk's locks; on a type that moves its files
+ * (`ns_serialised`) the attributes are read under the namespace lock from
+ * the node the walk's keep has now (`vfs_ref_now`), since a relocation
+ * meanwhile may have given the walk's place to another file.
  */
 static void attr_told(const char *name, struct vfs_mount *mnt, void *node, uint32_t mask, int self)
 {
     char leaf[VFS_NAME_MAX + 1];
     struct vfs_stat st;
+    struct vfs_ref now;
     uint64_t dir_ino;
     char *cwd = NULL;
+    int rc;
 
-    if (!inotify_watches || mask == 0 || vfs_getattr(mnt, node, &st) != 0) {
+    if (!inotify_watches || mask == 0) {
+        return;
+    }
+    now.mnt = mnt;
+    now.node = node;
+    if (mnt->type->ns_serialised) {
+        vfs_ns_lock(mnt);
+        vfs_ref_now(&now);
+    }
+    rc = vfs_getattr(mnt, now.node, &st);
+    if (mnt->type->ns_serialised) {
+        vfs_ns_unlock(mnt);
+    }
+    if (rc != 0) {
         return;
     }
     if (self) {
