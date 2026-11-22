@@ -2709,6 +2709,12 @@ static int32_t devfs_open_state(const struct devfs_entry *dev, fd_entry_t *e, in
  * given the console instead it would never see itself in the foreground and
  * would stop on SIGTTIN. O_CREAT|O_EXCL is refused before a descriptor or a
  * pty pair is made.
+ *
+ * The entry is found by name before the descriptor is reserved, which may
+ * sleep, and an open that consumes a walk's classification checks the
+ * walk's stamp after the reservation (`vfs_consume_still`): VFS_AGAIN when
+ * a registration or another change of what paths name came meanwhile, so
+ * that the device's own open never runs on an entry the walk did not find.
  */
 int devfs_open(const char *name, int flags)
 {
@@ -2753,6 +2759,10 @@ int devfs_open(const char *name, int flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return fd;
+    }
+    if (!vfs_consume_still()) {
+        fd_free(current_proc->fds, fd);
+        return VFS_AGAIN;
     }
 
     e = fd_slot(current_proc->fds, fd);

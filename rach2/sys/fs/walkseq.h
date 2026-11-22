@@ -93,6 +93,23 @@ void vfs_stamp_get(struct vfs_stamp *st);
  * counts each 0. */
 int vfs_stamp_still(const struct vfs_stamp *st);
 
+/* The answer of a step that consumes a walk's answer when the walk's stamp
+ * no longer holds, for the system call to let go of all it took and run
+ * again from its walk (`CALL_AGAIN` in syscall_fs.c): below every errno and
+ * never a call's answer. */
+#define VFS_AGAIN (-4095 - 2)
+
+/**
+ * Whether the stamp the calling thread consumes, which a call sets in
+ * `walk_consume` (process.h) around a backend's open, still holds: 1 with
+ * none set. A backend whose open selects its object again, by a name a
+ * walk classified, and may sleep before its effects, as a device open
+ * reserves a descriptor, checks it after that sleep and before the effects,
+ * and answers VFS_AGAIN when it fails, so that no effect lands on a
+ * replacement registered meanwhile (`devfs_open`).
+ */
+int vfs_consume_still(void);
+
 /** `vfs_stamp_still` and the beginning of a change as one step
  * (`vfs_seq_begin_if`): 1 with the change begun, which the caller ends
  * with `vfs_seq_end`, or 0, counted as WALK_GATE_RETRY, with nothing

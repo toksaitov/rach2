@@ -127,6 +127,7 @@ struct fs_struct {
 
 struct vfs_mount;
 struct vfs_ref;
+struct vfs_stamp;
 struct mm;
 struct tgroup;
 struct fd_gone_hold;
@@ -339,6 +340,9 @@ struct process {
      * once it has slept checks it again (`vfs_stamp_still`). */
     uint64_t walk_stamp;
     int walk_stamp_on;
+    /* The stamp a backend's open checks before its effects, set by the
+     * call around the open and NULL otherwise (`vfs_consume_still`). */
+    const struct vfs_stamp *walk_consume;
     /* The references a full walk of this thread holds while it may sleep:
      * its start, its root and where it stands, each NULL or a pointer into
      * the walk's frame, which a KRFFS relocation moves (`vfs_repoint`) and
