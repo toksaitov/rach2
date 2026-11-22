@@ -733,6 +733,49 @@ static int kvm_rows(struct run_fixture *r)
     return fx_remove(path("tree/tools/ci/kvm-suites")) && ok;
 }
 
+/** bigmem, a run of its own after the others, under KVM when
+ * tools/ci/kvm-suites names it and under the site's accelerator otherwise,
+ * which the ia32 profile's run after it keeps. */
+static int bigmem_rows(struct run_fixture *r)
+{
+    struct run_case c = {"bigmem: listed", "none", "", 0, 0, NULL, NULL, NULL};
+    int ok = 1;
+    if (!flow_put(r->f, "tree/tools/ci/kvm-suites", "# the suites\ntcp\nbigmem\n"))
+        return 0;
+    r->suites = "";
+    ok = row(r, &c) && ok;
+    ok = words(r, path("calls"),
+               "tests/run style host default shutdown fpu tests/run tcp tests/run bigmem "
+               "tests/run default tests/run tcp") &&
+         words(r, path("calls.arch"),
+               "i686 x86_64 i686 x86_64 on kvm x86_64 on kvm i686 under ia32 i686 under ia32 on "
+               "kvm") &&
+         ok;
+    c.name = "bigmem: listed, chosen alone";
+    r->suites = "x86_64:bigmem";
+    ok = row(r, &c) && ok;
+    ok = words(r, path("calls"), "tests/run bigmem") &&
+         words(r, path("calls.arch"), "x86_64 on kvm") && ok;
+    c.name = "bigmem: listed, failed";
+    c.set = "bigmem";
+    c.err = "run: result: failed: bigmem\n";
+    c.status = 1;
+    c.failed = "x86_64:bigmem";
+    ok = row(r, &c) && words(r, output_path(r, "full-x86_64/failed"), "bigmem") && ok;
+    c.name = "bigmem: not listed, chosen alone";
+    c.set = "none";
+    c.err = NULL;
+    c.status = 0;
+    c.failed = "";
+    if (!flow_put(r->f, "tree/tools/ci/kvm-suites", "# the suites\ntcp\n"))
+        return 0;
+    ok = row(r, &c) && ok;
+    ok =
+        words(r, path("calls"), "tests/run bigmem") && words(r, path("calls.arch"), "x86_64") && ok;
+    r->suites = "";
+    return fx_remove(path("tree/tools/ci/kvm-suites")) && ok;
+}
+
 static int prepare(struct fixture *f)
 {
     fx_env("FLOW_CI_RUN", "1");
@@ -768,5 +811,6 @@ int flow_ci_run(struct fixture *f)
     ok = both_chosen_rows(&r) && ok;
     ok = ia32_rows(&r) && ok;
     ok = kvm_rows(&r) && ok;
+    ok = bigmem_rows(&r) && ok;
     return ok;
 }

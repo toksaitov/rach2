@@ -245,7 +245,8 @@ share() { # share [finished]
 # Each architecture is cleaned, then each is built, and the suites of every
 # architecture that built run as one run of tests/run under the site's
 # accelerator, those tools/ci/kvm-suites names after it as one run under KVM,
-# `bigmem` after them as a run of its own, and last, once both architectures
+# `bigmem` after them as a run of its own, under KVM when kvm-suites names it
+# and under the site's accelerator otherwise, and last, once both architectures
 # have built, the ia32 profile's suites, as tools/ci/ia32-suites and
 # ia32-deferred give them, as runs of `RACH2_KERNEL=ia32 ARCH=i686 tests/run`,
 # which boot the i686 build's cases on the x86-64 build's kernel
@@ -349,6 +350,7 @@ if [ -n "$ARCH" ]; then
     # beside loaded.py's fixed load on Linux.
     kvm=""
     loaded=""
+    listed=""
     if [ -f tools/ci/kvm-suites ]; then
         listed=$(sed -e 's/#.*//' -e '/^ *$/d' tools/ci/kvm-suites)
         heavy=""
@@ -384,7 +386,11 @@ if [ -n "$ARCH" ]; then
     fi
     if [ -n "$bigmem" ]; then
         ARCH=x86_64
-        run_set bigmem bigmem
+        if echo "$listed" | grep -qx bigmem; then
+            kvm_set bigmem bigmem
+        else
+            run_set bigmem bigmem
+        fi
     fi
 fi
 if [ -n "$ia32" ]; then
