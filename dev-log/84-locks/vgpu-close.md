@@ -12,13 +12,13 @@ The testing PC under WSL, one guest, KVM, 8 CPUs and 8 GiB, the `virgl` display 
 
 [`vgpu-close/bursts.py`](vgpu-close/bursts.py) reads QEMU's trace and gives, for each submission, the UNREFs up to the next one, grouped into bursts whose UNREFs come less than 50 ms apart.
 
-    sh: make ARCH=x86_64 rach2 build/x86_64/images/gnu-test.disk
-    sh: python3 dev-log/86-shared-region/measure/rach2.py build/runs/task-5697/before-1
-    sh: python3 dev-log/84-locks/vgpu-close/bursts.py build/runs/task-5697/before-1/trace
+    make ARCH=x86_64 rach2 build/x86_64/images/gnu-test.disk
+    python3 dev-log/86-shared-region/measure/rach2.py build/runs/task-5697/before-1
+    python3 dev-log/84-locks/vgpu-close/bursts.py build/runs/task-5697/before-1/trace
 
 ## Before the change
 
-The run at 15:02 on 2026-11-22 (UTC+6): pass, in 17.1 s, with 10,001 creates, 10,001 UNREFs, a peak of 2,525 resources and 1,291,760 pages, as task 5676 found.
+The run that ended at 14:55 on 2026-11-22 (UTC+6): pass, in 17.1 s, with 10,001 creates, 10,001 UNREFs, a peak of 2,525 resources and 1,291,760 pages, as task 5676 found.
 
 | Counter | Value |
 |---|---|
@@ -54,3 +54,49 @@ The worker reaps every submission's answer, within 9 ms of its interrupt. The te
 A free took 0.244 ms on average, 0.175 ms of it in the detach. A submission's 2,500 frees, done one after the other in the worker, spread its UNREFs over 0.66 to 0.78 s, at 0.26 to 0.31 ms each.
 
 The other 5,004 frees ran in the test's own GEM_CLOSEs: objects no submission still held, whose handle was their last reference. They cost the test the same two notifies each, 2.07 s of GEM_CLOSE in all.
+
+## The change
+
+* A file's GEM_CLOSE of its last handle to a buffer sends CTX_DETACH_RESOURCE for the file's context at once, as Linux's `virtio_gpu_gem_object_close` does, through a new `close` hook of `struct drm_gem_object_funcs`. The DETACH holds a reference to the buffer until its answer. Each buffer keeps the list of its attachments, so the free no longer walks every context's list.
+* An answer that drops a buffer's last reference (a submission's, a transfer's, a DETACH's) hands the buffer to the GPU worker, which frees the answered buffers together and sends their UNREFs with one notify at the end of the pass. Mesa's first GEM_CLOSE after a flush waits for the host in its DETACH, so that the buffers Mesa's cache keeps are idle while they are still young enough to reuse; the cache drops a buffer older than 1 s.
+
+## After the change
+
+The run that ended at 15:04 on 2026-11-22 (UTC+6), the same setup with the change and the counters of [`vgpu-close/counters-after.patch`](vgpu-close/counters-after.patch), in which `vgpu_m_detach_ns` is the time in the new close hook: pass, in 11.9 s against 17.1 s.
+
+    python3 dev-log/86-shared-region/measure/rach2.py build/runs/task-5697/after-1
+    python3 dev-log/84-locks/vgpu-close/bursts.py build/runs/task-5697/after-1/trace
+    python3 dev-log/86-shared-region/measure/ioctllog.py build/runs/task-5697/after-1/stl-out/calls
+
+| Counter | Before | After | Linux 6.12, task 5676's |
+|---|---|---|---|
+| RESOURCE_CREATEs and UNREFs | 10,001 | 6,269 | 6,266 |
+| WAITs, of them NOWAIT, of them busy | 4, 3, 0 | 3,736, 3,735, 0 | NOWAIT 3,736 to 3,737 |
+| Peak resources, pages | 2,525, 1,291,760 | 2,524, 1,291,759 | |
+| Objects freed in the worker, elsewhere | 4,997, 5,004 | 6,140, 129 | |
+| Time in the frees | 2.437 s | 0.036 s | |
+| Sleeps for queue room | 13, 0.239 s | 0 | |
+| Notifies, their time | 50,018, 8.79 s | 28,303, 7.77 s | |
+| Notifies inside a reap | 4,487 | 0 | |
+| GEM_CLOSE time in all | 2.068 s | 5.367 s | |
+| RESOURCE_CREATE time in all | 8.797 s | 3.881 s | |
+
+The creates now match Linux's: Mesa's cache reuses 3,732 buffers it made again before, after 3,735 NOWAIT WAITs that each found the buffer idle. The time moved from RESOURCE_CREATE, whose sleeps for room in the queue are gone, to GEM_CLOSE, whose first DETACH after each flush waits 0.90 to 1.04 s for the host to finish the submission (the longest notify, 1.04 s).
+
+The UNREFs after each submission:
+
+| Submission | At s | UNREFs | First, after the submission | Burst's length |
+|---|---|---|---|---|
+| 1 | 0.000 | 1,252 | 906.7 ms | 292.4 ms |
+| 2 | 2.147 | 1,266 | 986.6 ms | 251.1 ms |
+| 3 | 4.342 | 1,270 | 1,039.2 ms | 279.3 ms |
+| 4 | 6.648 | 1,251 | 980.0 ms | 304.3 ms |
+| 6 | 8.279 | 1,230 | 4.5 ms | 303.3 ms |
+
+The task's mark of a submission's UNREFs within 0.1 s is missed: they spread over 0.25 to 0.30 s against Linux's 0.03 to 0.04 s. The worker no longer sets the pace, since it frees an answered batch with one notify; the UNREFs follow the test's own GEM_CLOSEs, each of which sends its DETACH with a notify, about 0.24 ms a close after the first (1,251 closes in 0.295 s after the first close's 0.903 s). Rach2 already leaves out a notify the device suppresses. What Linux's close costs under the same QEMU was not measured here.
+
+1,227 of the after run's GEM_CLOSEs fail with EBADF, against 2 before. All come after the last submission, from Mesa's teardown: `virgl_drm_screen_destroy` in Mesa 26.1.6 closes the winsys's descriptor and then destroys the screen, whose `virgl_drm_winsys_destroy` flushes the buffer cache with a GEM_CLOSE for each buffer on the closed descriptor. The file's release then frees them; `vgpu_m_objects` reads 0 at the end. More buffers sit in the cache at exit in the after run; before, 1,229 of the last 1,231 closes came ahead of the descriptor's close.
+
+## The probe
+
+`vgpuprobe` adds three rows to `machine.vgpu.virgl`: a buffer shared by two files, whose close in one detaches that file's context alone; a close while a mapping and a submission hold the buffer, which is freed after the last of them; and a buffer closed with no GPU ioctl after, which `virtio_gpu_objects` in `/proc/stat` shows freed. The last row prints its time and does not judge it. Under KVM, `tests/run vgpu` passed on i686 (virgl with the rows, the UNREF seen in 12 ms, and exit), and `ARCH=x86_64 tests/run vgpu` passed blob, virgl (2 ms) and exit. `machine.virgl.piglit-sample` waits for the review.
