@@ -19654,7 +19654,10 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
         return rc;
     }
     if (fd_node_holders(node, NULL) > 0) {
-        if (krffs_unlink_held(node) != 0) {
+        vfs_name_change_begin();
+        rc = krffs_unlink_held(node);
+        vfs_name_change_end();
+        if (rc != 0) {
             return krffs_root_halted() ? -EROFS : -EIO;
         }
         return 0;
