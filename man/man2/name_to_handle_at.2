@@ -109,6 +109,12 @@ and opened by its present path, from the caller's root, with
 .Xr open 2 Ns 's
 checks; a file renamed since the handle was made is found under its new
 name.
+The file opened must have the handle's inode, or the call fails with
+.Er ESTALE ,
+as when another file took the path between the search and the open, and
+.Dv O_TRUNC
+cuts the file only once that is checked, and only through a descriptor
+that writes.
 The caller must be privileged, as Linux asks
 .Dv CAP_DAC_READ_SEARCH .
 .Ss System call interface
@@ -183,8 +189,8 @@ The caller of
 is not privileged.
 .It Bq Er ESTALE
 The handle is of another type or size, the mount's files do not reopen,
-or no file of the mount has the handle's inode, or the file is outside
-the caller's root.
+or no file of the mount has the handle's inode, the path found opens
+another file, or the file is outside the caller's root.
 .El
 .Pp
 .Fn open_by_handle_at
