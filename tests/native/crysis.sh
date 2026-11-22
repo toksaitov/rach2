@@ -6,8 +6,10 @@
 #   crysis.sh flyby ROUTE
 #   crysis.sh load SAVE
 #   crysis.sh shm
+#   crysis.sh check
 #   crysis.sh session ran|none
 #   crysis.sh links ROOT [PROTON]
+#   crysis.sh seal OUT [COMMAND...]
 #
 # Run as root by etude-guest in the case's workspace, which holds crysis.py,
 # wm.py and the empty directory `private` of the private fixture, in a mount
@@ -25,6 +27,10 @@
 #          new one
 #   shm    the umu flyby on the bed's shared-memory card. The launcher
 #          supplies a private mount namespace and an already mounted /data.
+#   check  no game: the private game built as for the others, and the check
+#          of `seal`'s namespace alone, with no session and no crysis.py;
+#          with /data mounted from the partition, as on the installed
+#          system, it needs a private namespace as `shm` does
 #   session
 #          no check: crysis-shm.sh's end, which starts the session again on
 #          the files put back when it ran before the launcher, and otherwise
@@ -33,6 +39,9 @@
 #          any user and read-only, with PROTON, /opt/proton by default, as
 #          Proton's tree; prints the count of links of each kind it accepts
 #          and the links it refuses, and exits 1 when it refuses one
+#   seal   no check of the game: COMMAND, as bed-shm.sh runs crysis.py's
+#          flyby, in the namespace that `seal` below makes, with OUT, the
+#          case's output, writable there
 #
 # The data partition, /dev/disk0p6, and all it holds are the owner's; the
 # case never writes it. It mounts the partition read-only on /data/owner
@@ -50,13 +59,23 @@
 #            Mesa's shader cache and the saves' record
 #   logs     a new directory for Proton's logs
 #
-# The case binds /opt/proton read-only over itself in the namespace, and
-# fails before the game or crysis.py touches the tree if a link in it could
-# carry a write out of it, by the rule links_check gives: a link to a regular
-# file in that read-only tree or on the owner's read-only partition, one of
-# Wine's drive links, or a link that resolves inside the tree through links
-# that do. `crysis.sh links` runs that check alone, read-only, on a tree such
-# as the owner's /data/crysis.
+# and /data/home, the desktop account's HOME and XDG directories while the
+# game runs, in which umu unpacks the root's Steam Linux Runtime afresh.
+#
+# What keeps the owner's files safe is the namespace in which crysis.py's
+# commands after `prepare`, and so the game, Wine and umu, run (`seal`):
+# every mount there is read-only but /data, /tmp, /var/tmp, /dev/shm, the
+# session's runtime directory and the case's output, so that no link in the
+# copy, present or made later by Proton or Wine, can carry a write to a file
+# of the owner's, in /home/desktop or on the partition. `seal` checks that
+# each kind of write fails there with EROFS through a link out of the copy,
+# in /home/desktop and on the partition, and succeeds in the writable paths,
+# before it starts the command. Before that, links_check refuses a link in
+# the copy that names a file outside it and the read-only trees, as an early
+# and readable error; `crysis.sh links` runs it alone, read-only, on a tree
+# such as the owner's /data/crysis. The script's own writes as root before
+# the namespace, the copies and `chown -R -h`, which follows no link, touch
+# only the private /data.
 #
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
 # every exit the script ends the game's mounts, puts back the session's
@@ -82,7 +101,8 @@ session=/usr/libexec/rach2-session
 pidfile=/run/rach2-desktop.pid
 uid=1001
 bound=0 mounted=0 kept=0 failed='' found=0 proton=''
-source_bound=0 proton_bound=0
+source_bound=0
+home=/data/home
 
 say() { echo "crysis-case: $*"; }
 
@@ -151,8 +171,6 @@ cleanup()
     [ "$mounted" = 0 ] || umount "$owner" 2> /dev/null || umount -l "$owner" ||
         failed="$failed umount-owner"
     [ "$bound" = 0 ] || umount /data 2> /dev/null || umount -l /data || failed="$failed umount"
-    [ "$proton_bound" = 0 ] || umount "$proton" 2> /dev/null || umount -l "$proton" ||
-        failed="$failed umount-proton"
     [ "$source_bound" = 0 ] || umount "$private/owner" 2> /dev/null ||
         umount -l "$private/owner" || failed="$failed umount-source"
     if [ -n "$failed" ]; then
@@ -166,77 +184,25 @@ cleanup()
     say "result: pass"
 }
 # links_check ROOT PROTON OWNER: refuse a link under ROOT, the private copy,
-# through which the game or crysis.py, run as root, could write outside it.
-# PROTON and OWNER, each empty or a read-only tree named by its resolved
-# path, are Proton's tree and the owner's partition. A link passes
-#
-#   (a) when its whole resolved path is a regular file in PROTON or OWNER,
-#       where a write fails with EROFS; Wine's prefix links Proton's DLLs
-#       so, and the game's tree links the owner's files so
-#   (b) when it is one of Wine's drive links, compat/pfx/dosdevices/[a-z]:,
-#       which name the running system, as z: -> / does
-#   (c) when its target, resolved a component at a time, ends inside ROOT,
-#       and every link the resolution meets lies inside ROOT and itself
-#       passes (c), so that no link that leaves ROOT is followed
-#
-# A directory link into PROTON passes none, since a link within that tree
-# could lead out of it. Prints the count of each kind and the first links
-# refused, and returns 1 when one is.
+# whose resolved path lies outside ROOT and outside PROTON and OWNER, the
+# read-only trees of Proton and of the owner's partition, each empty or named
+# by its resolved path, unless it is one of Wine's drive links,
+# compat/pfx/dosdevices/[a-z]:, which name the running system, as z: -> /
+# does. It gives an early and readable error for a copy that names files
+# outside it; what keeps the owner's files safe is `seal`'s namespace. Prints
+# the count of each kind, (a) in a read-only tree, (b) drive links and (c)
+# inside ROOT, and the first links refused, and returns 1 when one is.
 links_check()
 {
     python3 - "$@" << 'PYTHON'
-import os, re, stat, sys
+import os, re, sys
 
 root, trees = sys.argv[1], [tree for tree in sys.argv[2:4] if tree]
 drive = re.compile(r"compat/pfx/dosdevices/[a-z]:\Z")
-known = {}
 
 
 def inside(path, top):
     return path == top or path.startswith(top + "/")
-
-
-def regular(path):
-    try:
-        return stat.S_ISREG(os.lstat(path).st_mode)
-    except OSError:
-        return False
-
-
-def walk(start, target, seen):
-    """Resolve TARGET from the real directory START; return the end or None."""
-    current = "/" if target.startswith("/") else start
-    parts = [part for part in target.split("/") if part not in ("", ".")]
-    for i, name in enumerate(parts):
-        if name == "..":
-            current = os.path.dirname(current)
-            continue
-        step = os.path.join(current, name)
-        try:
-            mode = os.lstat(step).st_mode
-        except FileNotFoundError:
-            # No link lies further on; a file made there lands as written.
-            return os.path.normpath(os.path.join(step, *parts[i + 1:]))
-        except OSError:
-            return None
-        if stat.S_ISLNK(mode):
-            if not inside(step, root):
-                return None
-            step = within(step, seen)
-            if step is None:
-                return None
-        current = step
-    return current
-
-
-def within(link, seen):
-    """Return the path inside ROOT that LINK resolves to by (c), or None."""
-    if link not in known:
-        if link in seen:
-            return None
-        end = walk(os.path.dirname(link), os.readlink(link), seen | {link})
-        known[link] = end if end is not None and inside(end, root) else None
-    return known[link]
 
 
 def failed(error):
@@ -256,9 +222,9 @@ for top, dirs, files in os.walk(root, onerror=failed):
         end = os.path.realpath(path)
         if drive.match(rel):
             counts["b"] += 1
-        elif any(inside(end, tree) for tree in trees) and regular(end):
+        elif any(inside(end, tree) for tree in trees):
             counts["a"] += 1
-        elif within(path, frozenset()) is not None:
+        elif inside(end, root):
             counts["c"] += 1
         else:
             refused.append("%s -> %s" % (rel, os.readlink(path)))
@@ -270,6 +236,242 @@ sys.exit(1 if refused else 0)
 PYTHON
 }
 
+# seal OUT [COMMAND...]: run COMMAND, as root, in a mount namespace of its
+# own in which every mount is read-only but the paths WRITABLE names, OUT
+# among them, once the check below has passed; with no COMMAND, run only the
+# check. Each mount of a type that holds files is remounted read-only, with
+# its nosuid, nodev and noexec kept; proc, sysfs and the device file systems
+# are left as they are, since their writes are the kernel's controls, such as
+# a user namespace's uid_map, and a read-only mount opens a device node for
+# writing all the same, as Linux's does. Each writable path then has its own
+# mount made writable again, or a recursive bind of itself over itself made
+# writable, which leaves a mount below it, /data/owner under /data, read-only.
+#
+# The check, as root, so that only the mount refuses: in /data/owner/crysis,
+# in the desktop account's home and through links in the copy to that home
+# and to Proton's tree, a create, rename, unlink, mkdir and symlink of a new
+# name and a write, truncate and chown of an existing file, each to its own
+# size and owner, must each fail with EROFS; in /data/crysis and each
+# writable path the same writes of a new file must succeed. A write that went
+# through is taken back at once. Prints a line for each place and exits 1 on
+# a failure, before COMMAND runs. The process is the caller's: unshare and
+# python3 exec in turn, so that a signal to it reaches COMMAND.
+seal_py=$(cat << 'PYTHON'
+import errno, os, pwd, re, subprocess, sys
+
+UID = 1001
+BASE = "/data/crysis"
+OWNER = "/data/owner/crysis"
+KERNEL = {"proc", "sysfs", "devfs", "devtmpfs", "devpts", "debugfs", "tracefs",
+          "securityfs", "mqueue", "pstore", "cgroup", "cgroup2", "bpf",
+          "binfmt_misc", "configfs", "fusectl"}
+KEPT = {"nosuid", "nodev", "noexec"}
+WRITABLE = (
+    # The private copy in /data/crysis, the game's HOME in /data/home, the
+    # HUD's dump and the load's new prefix; /data/owner stays read-only.
+    "/data",
+    # Wine's server directory /tmp/.wine-UID and the runtime's temporaries.
+    "/tmp",
+    # The other temporary directory, which GLib and the runtime may use.
+    "/var/tmp",
+    # Wine's fsync and the runtime's shared memory.
+    "/dev/shm",
+    # XDG_RUNTIME_DIR: the sockets of Wayland and PulseAudio, and
+    # pressure-vessel's own files.
+    "/run/user/%d" % UID,
+)
+
+
+def say(text):
+    print("crysis-case: " + text, flush=True)
+
+
+def die(text):
+    say("seal: failed: " + text)
+    sys.exit(1)
+
+
+def under(path, top):
+    return path == top or path.startswith(top.rstrip("/") + "/")
+
+
+def mounts():
+    """Return each mount point, the last listed, which is on top, with its
+    type and the options of KEPT it has."""
+    table = {}
+    with open("/proc/self/mountinfo") as f:
+        for line in f:
+            fields = line.split()
+            dash = fields.index("-")
+            point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4])
+            table[point] = (fields[dash + 1], [o for o in fields[5].split(",") if o in KEPT])
+    return table
+
+
+def mount(*args):
+    run = subprocess.run(("mount",) + args, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, text=True, check=False)
+    if run.returncode:
+        die("mount %s: %s" % (" ".join(args), run.stdout.strip()))
+
+
+def writable(path):
+    """Make PATH, named by its resolved path, writable again."""
+    table = mounts()
+    point = max((p for p in table if under(path, p)), key=len)
+    if table[point][0] in KERNEL:
+        return
+    if point != path:
+        mount("--rbind", path, path)
+    mount("-o", ",".join(["remount", "bind", "rw"] + mounts()[path][1]), path)
+
+
+def attempt(call):
+    try:
+        call()
+    except OSError as error:
+        return error.errno
+    return 0
+
+
+def tries(folder, existing):
+    """Return the writes to try in FOLDER and on EXISTING, if given, and the
+    names they may leave."""
+    name = os.path.join(folder, ".crysis-check-%d" % os.getpid())
+    other = name + "-renamed"
+    rows = [("create", lambda: os.close(os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                                0o600))),
+            ("rename", lambda: os.rename(name, other)),
+            ("unlink", lambda: os.unlink(other if os.path.lexists(other) else name)),
+            ("mkdir", lambda: os.mkdir(name)),
+            ("symlink", lambda: os.symlink("crysis-check", name + "-link"))]
+    if existing:
+        st = os.lstat(existing)
+        rows += [("write", lambda: os.close(os.open(existing, os.O_WRONLY))),
+                 ("truncate", lambda: os.truncate(existing, st.st_size)),
+                 ("chown", lambda: os.chown(existing, st.st_uid, st.st_gid,
+                                            follow_symlinks=False))]
+    return rows, (name, other, name + "-link")
+
+
+def remove(names):
+    for path in names:
+        if os.path.isdir(path) and not os.path.islink(path):
+            attempt(lambda: os.rmdir(path))
+        elif os.path.lexists(path):
+            attempt(lambda: os.unlink(path))
+
+
+def refused(label, folder, existing):
+    """Return the writes in FOLDER and on EXISTING that did not fail with
+    EROFS, taking back each that went through."""
+    rows, names = tries(folder, existing)
+    bad = []
+    for op, call in rows:
+        code = attempt(call)
+        remove(names)
+        if code != errno.EROFS:
+            bad.append("%s %s: %s" % (label, op, errno.errorcode.get(code, "allowed")))
+    say("check: read-only: %s %s: %d of %d writes failed with EROFS"
+        % (label, folder, len(rows) - len(bad), len(rows)))
+    return bad
+
+
+def allowed(folder):
+    """Return the writes of a new file in FOLDER that failed."""
+    rows, names = tries(folder, None)
+    name = names[0]
+    rows[2:2] = [("write", lambda: os.close(os.open(name + "-renamed", os.O_WRONLY))),
+                 ("truncate", lambda: os.truncate(name + "-renamed", 0)),
+                 ("chown", lambda: os.chown(name + "-renamed", UID, UID))]
+    bad = []
+    for op, call in rows:
+        code = attempt(call)
+        if code:
+            bad.append("%s %s: %s" % (folder, op, errno.errorcode.get(code, code)))
+    remove(names)
+    say("check: writable: %s: %d of %d writes went through" % (folder, len(rows) - len(bad),
+                                                                 len(rows)))
+    return bad
+
+
+def first_file(top):
+    """Return a regular file in TOP, at most three levels down, or None."""
+    for folder, dirs, files in os.walk(top):
+        dirs.sort()
+        if folder.count("/") - top.count("/") >= 3:
+            dirs[:] = []
+        for name in sorted(files):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path) and not os.path.islink(path):
+                return path
+    return None
+
+
+out, command = os.path.realpath(sys.argv[1]), sys.argv[2:]
+if os.geteuid() != 0:
+    die("run as root")
+try:
+    home = pwd.getpwuid(UID).pw_dir
+except KeyError:
+    die("no account of uid %d" % UID)
+if not os.path.isdir(out) or under(out, home) or under(out, "/data/owner"):
+    die("%s is no directory of the case's own" % out)
+table = mounts()
+if "/data" not in table or table.get("/data/owner", ("", []))[0] == "" or \
+        os.stat("/data").st_dev == os.stat("/data/owner").st_dev or not os.path.isdir(BASE):
+    die("no private /data with the partition on /data/owner and the game in %s" % BASE)
+
+count = 0
+for point, (kind, kept) in sorted(table.items()):
+    if kind not in KERNEL:
+        mount("-o", ",".join(["remount", "bind", "ro"] + kept), point)
+        count += 1
+made = []
+for path in WRITABLE + (out,):
+    real = os.path.realpath(path)
+    if os.path.isdir(real):
+        writable(real)
+        made.append(real)
+    elif path in ("/data", out):
+        die("no %s" % path)
+say("seal: %d mounts read-only; writable: %s" % (count, " ".join(made)))
+
+proton = os.path.realpath("/opt/proton") if os.path.isdir("/opt/proton") else None
+desk = first_file(home)
+links = []
+bad = []
+try:
+    places = [("owner", OWNER, os.path.join(OWNER, "game/Bin64/Crysis.exe")),
+              ("home", home, desk)]
+    for label, target, existing in (("link-home", home, desk),
+                                    ("link-proton", proton, proton and proton + "/proton")):
+        if target:
+            link = os.path.join(BASE, ".crysis-check-%s-%d" % (label, os.getpid()))
+            os.symlink(target, link)
+            links.append(link)
+            places.append((label, link, existing and link + existing[len(target):]))
+    for label, folder, existing in places:
+        if existing and not os.path.isfile(existing):
+            existing = None
+        if not existing:
+            say("check: read-only: %s %s: no existing file; its write, truncate and chown not tried"
+                % (label, folder))
+        bad += refused(label, folder, existing)
+    for folder in [BASE] + made:
+        bad += allowed(folder)
+finally:
+    remove(links)
+for line in bad:
+    say("check: failed: " + line)
+if bad:
+    die("%d writes not as required" % len(bad))
+say("check: ok")
+if command:
+    os.execvp(command[0], command)
+PYTHON
+)
+
 # `crysis.sh links ROOT [PROTON]`: the check alone, read-only, on a tree
 # such as the owner's /data/crysis, with PROTON, /opt/proton by default,
 # taken as read-only.
@@ -279,6 +481,13 @@ if [ "${1:-}" = links ] && { [ $# = 2 ] || [ $# = 3 ]; }; then
     [ ! -d "${3:-/opt/proton}" ] || links_proton=$(realpath "${3:-/opt/proton}") || exit 1
     links_check "$links_root" "$links_proton" ''
     exit
+fi
+
+# `crysis.sh seal OUT [COMMAND...]`, for bed-shm.sh: COMMAND in the read-only
+# namespace, in this process.
+if [ "${1:-}" = seal ] && [ $# -ge 2 ]; then
+    shift
+    exec unshare --mount --propagation private python3 -c "$seal_py" "$@"
 fi
 
 # `crysis.sh session ran|none`, for crysis-shm.sh: leave the session
@@ -305,20 +514,29 @@ fail()
 }
 
 case ${1:-}:$# in
-    flyby:2 | load:2 | shm:1) ;;
+    flyby:2 | load:2 | shm:1 | check:1) ;;
     *)
         echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE | crysis.sh shm |" \
-            "crysis.sh session ran|none | crysis.sh links ROOT [PROTON]" >&2
+            "crysis.sh check | crysis.sh session ran|none | crysis.sh links ROOT [PROTON] |" \
+            "crysis.sh seal OUT [COMMAND...]" >&2
         exit 2
         ;;
 esac
-[ -f crysis.py ] && [ -f wm.py ] || fail "no crysis.py and wm.py in the workspace"
-command -v crysis.sh > /dev/null || fail "no crysis.sh on this root"
+[ "$1" = check ] || { [ -f crysis.py ] && [ -f wm.py ]; } ||
+    fail "no crysis.py and wm.py in the workspace"
+[ "$1" = check ] || command -v crysis.sh > /dev/null || fail "no crysis.sh on this root"
 [ -d /data ] && [ -b "$data" ] || fail "no /data or no $data"
 [ -d "$private" ] && [ -z "$(ls -A "$private")" ] ||
     fail "no empty $private; the case runs with the private fixture"
 
-if [ "$1" = shm ]; then
+# ondata: the partition is mounted on /data already, as on the installed
+# system, which `shm` needs and `check` takes when it finds.
+ondata=0
+if [ "$1" = shm ] || { [ "$1" = check ] && awk -v dev="$data" \
+    '$1 == dev && $2 == "/data" { ok = 1 } END { exit !ok }' /proc/mounts; }; then
+    ondata=1
+fi
+if [ "$ondata" = 1 ]; then
     current_mountns=$(readlink /proc/self/ns/mnt) || fail "cannot read the mount namespace"
     [ -n "${CRYSIS_PARENT_MNTNS:-}" ] &&
         [ "$current_mountns" != "$CRYSIS_PARENT_MNTNS" ] ||
@@ -335,7 +553,7 @@ else
 fi
 
 mkdir "$private/owner"
-if [ "$1" = shm ]; then
+if [ "$ondata" = 1 ]; then
     # The mounted device already has a claim. Make a read-only view of it.
     mount --bind /data "$private/owner" || fail "$data would not bind"
     source_bound=1
@@ -351,7 +569,7 @@ bound=1
 # game, must pass through /data to reach /data/crysis.
 chmod 0755 /data || fail "/data would not open to the desktop account"
 mounted_at /data rw || fail "the workspace is not a writable ext2 file system"
-if [ "$1" != shm ]; then
+if [ "$ondata" = 0 ]; then
     mount -t ext2 -o ro "$data" "$owner" || fail "$data would not mount read-only on $owner"
     mounted=1
 fi
@@ -377,37 +595,44 @@ need=$( { [ -z "$copies" ] || du -sk $copies; } | awk '{ n += $1 } END { print n
 [ "$1" != load ] || [ ! -d "$owner/crysis/compat" ] ||
     need=$((need + $(du -sk "$owner/crysis/compat" | cut -f 1)))
 need=$((need + 1048576))
+# umu unpacks the root's Steam Linux Runtime into the game's HOME.
+if [ "$1:${2:-}" = flyby:umu ] || [ "$1" = load ] || [ "$1" = shm ]; then
+    runtime=$(xz --robot --list /opt/umu/SteamLinuxRuntime_4.tar.xz 2> /dev/null |
+        awk '$1 == "totals" { print int($5 / 1024) }')
+    need=$((need + ${runtime:-4194304}))
+fi
 free=$(df -Pk "$private" | awk 'NR == 2 { print $4 }')
 [ "$free" -ge "$need" ] || fail "the copies need $need KiB, the workspace has $free"
 
-# Proton's tree, which Wine's prefix links into, is read-only within the
-# namespace, so that no link into it can carry a write out of the private
-# copy. The tree is named by the path /opt/proton resolves to, as the links
-# are below. Without the tree a link into it is refused.
 proton=''
-if [ -d /opt/proton ]; then
-    proton=$(realpath /opt/proton) || fail "cannot resolve /opt/proton"
-    mount --bind "$proton" "$proton" || fail "$proton would not bind"
-    proton_bound=1
-    mount -o remount,bind,ro "$proton" || fail "$proton would not turn read-only"
-    mounted_at "$proton" ro || fail "$proton is not read-only"
-fi
+[ ! -d /opt/proton ] || proton=$(realpath /opt/proton) || fail "cannot resolve /opt/proton"
 
 mkdir "$base" "$base/logs"
 cp -rs "$owner/crysis/game" "$base/game" || fail "game-links"
 # shellcheck disable=SC2086 # paths without spaces
 [ -z "$copies" ] || cp -a $copies "$base/" || fail copies
-# A link the game or crysis.py could write through out of the private copy
-# fails the case here, before either touches the tree.
+# A link that names a file outside the copy and the read-only trees fails
+# the case here, before the game or crysis.py touches the tree.
 links_check "$base" "$proton" "$owner" || fail "links in the private game lead out of it"
+# -R follows no link, and -h changes the links themselves.
 chown -R -h "$uid:$uid" "$base"
+install -d -o "$uid" -g "$uid" -m 0755 "$home"
 say "private game: $(find "$base/game" -type l | wc -l) links, copies of$(
     echo "$copies" | sed "s|$owner/crysis/||g"), $need KiB reserved"
 
 # The umu container can write to the private /data. The test's output
 # directory on the host root is outside the container.
 CRYSIS_HUD_PARENT=$base/logs/hud
-export CRYSIS_HUD_PARENT
+# crysis.py runs the game with HOME and the XDG directories in the private
+# /data, since /home/desktop is read-only in `seal`'s namespace.
+CRYSIS_HOME=$home
+export CRYSIS_HUD_PARENT CRYSIS_HOME
+
+if [ "$1" = check ]; then
+    mkdir -p "$here/out"
+    unshare --mount --propagation private python3 -c "$seal_py" "$here/out" || fail check
+    exit 0
+fi
 
 if [ "$1" = shm ]; then
     # Let the VM runner own the handoff and its signal traps. The mounts
@@ -420,15 +645,21 @@ cp -p "$ini" weston.ini
 cp -p "$session" rach2-session
 kept=1
 
+# prepare writes the session's files, which the namespace keeps read-only;
+# every write of the game's commands is made in it.
 python3 ./crysis.py prepare "$here/out" || fail prepare
+sealed()
+{
+    unshare --mount --propagation private python3 -c "$seal_py" "$here/out" "$@"
+}
 case $1 in
     flyby)
-        python3 ./crysis.py flyby "$2" "flyby-$2" 2 || fail "flyby-$2"
+        sealed python3 ./crysis.py flyby "$2" "flyby-$2" 2 || fail "flyby-$2"
         ;;
     load)
-        python3 ./crysis.py load load-update "$2" umu || fail load-update
+        sealed python3 ./crysis.py load load-update "$2" umu || fail load-update
         mkdir -p "${fresh%/*}"
         install -d -o "$uid" -g "$uid" -m 0755 "$fresh"
-        python3 ./crysis.py load load-new "$2" direct "$fresh" || fail load-new
+        sealed python3 ./crysis.py load load-new "$2" direct "$fresh" || fail load-new
         ;;
 esac
