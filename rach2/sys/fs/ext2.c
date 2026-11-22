@@ -5,6 +5,7 @@
  */
 
 #include "ext2_internal.h"
+#include "walkseq.h"
 #include "../lib/kirq.h"
 #include "../mm/filemap.h"
 
@@ -1439,7 +1440,11 @@ static struct ext2_node *node_join(struct ext2_mount *em, struct ext2_node *n, i
     return n;
 }
 
-/** `ext2_node_for` under the big lock, which keeps the node table. */
+/** `ext2_node_for` under the big lock, which keeps the node table. The walk
+ * gate's WALK_GATE_LOAD comes once the record for a cold inode is made and
+ * before it is published, where a test may stop a lookup in the window its
+ * directory's lock is let go without making a second lookup wait for it;
+ * the search then runs again, since the stop sleeps. */
 static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 {
     struct ext2_node *n, *fresh = 0;
@@ -1467,6 +1472,7 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
             *rc = -ENOMEM;
             break;
         }
+        walk_gate(WALK_GATE_LOAD);
     }
     if (n || *rc != 0) {
         kfree(fresh);

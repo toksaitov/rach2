@@ -124,8 +124,13 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
  * lock of a mount it moves onto; the full walk found the sequence moved and
  * starts again; a call that changes what its walk found has its walk's
  * answer and has not yet taken the locks of its change; such a call found
- * the sequence moved once it had them and starts again; and a walk sleeps
- * until no change is under way. */
+ * the sequence moved once it had them and starts again; a walk sleeps until
+ * no change is under way; ext2 is about to load an inode that no node in
+ * memory has, with no node's lock held and its record not yet published
+ * (`node_for`); the block cache is about to read a block from its device
+ * (`fill_victim`), which a test only counts, since the reader may hold a
+ * directory's lock; and a call has let go of its walk's namespace lock and
+ * still uses the answer its walk keeps (`vfs_walk_unlock`). */
 #define WALK_GATE_FULL     0
 #define WALK_GATE_UNLOCKED 1
 #define WALK_GATE_MISS     2
@@ -135,7 +140,10 @@ int vfs_stamp_begin(const struct vfs_stamp *st);
 #define WALK_GATE_HANDOFF  6
 #define WALK_GATE_RETRY    7
 #define WALK_GATE_WAIT     8
-#define WALK_GATE_EVENTS   9
+#define WALK_GATE_LOAD     9
+#define WALK_GATE_READ     10
+#define WALK_GATE_KEPT     11
+#define WALK_GATE_EVENTS   12
 
 /**
  * Count `event` for the thread the walk gate is armed for, and stop it at
@@ -152,6 +160,12 @@ void walk_gate(int event);
  * at its mount's root, is then taken as one that used up nothing, the fault
  * of a type that `resolve_full` answers with -EIO. */
 int walk_gate_fault(void);
+
+/** Whether the walk gate's `ioerr` is armed for the calling thread, which
+ * this disarms: the block cache then takes its next read from the device
+ * as one that failed (`fill_victim`), so that a test sees a walk whose
+ * lookup's read fails. */
+int walk_gate_ioerr(void);
 
 /** Register /sys/kernel/debug/vfs/walk_gate, once debugfs is up. */
 void walk_gate_init(void);

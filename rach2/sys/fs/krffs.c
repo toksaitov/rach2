@@ -4578,6 +4578,11 @@ int krffs_node_head(const krffs_node_t *node, krffs_node_t *out)
     return krffs_head(&krffs_root_mount, offset, out);
 }
 
+uint64_t krffs_node_place(const krffs_node_t *node)
+{
+    return krffs_offset_of(node);
+}
+
 uint64_t krffs_ino_of(const krffs_node_t *node)
 {
     krffs_node_t head;

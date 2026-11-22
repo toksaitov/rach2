@@ -155,6 +155,9 @@ static uint32_t limit_set; /* a limit given by `bcache_set_limit`, or 0 */
  * the dirty buffers pass the background threshold (`bcache_set_flusher`),
  * or NULL. */
 static void (*flusher_kick)(void);
+/* The check before a read from a device (`bcache_set_read_check`), or
+ * NULL. */
+static int (*read_check)(void);
 
 /* Linux's names and defaults (mm/page-writeback.c:70-95): the share of the
  * cache's limit, or the bytes, past which the flusher writes back, and past
@@ -248,6 +251,11 @@ uint32_t bcache_dirty_count(void)
 void bcache_set_flusher(void (*kick)(void))
 {
     flusher_kick = kick;
+}
+
+void bcache_set_read_check(int (*check)(void))
+{
+    read_check = check;
 }
 
 uint64_t bcache_marks(void)
@@ -2654,7 +2662,8 @@ static void key_held(struct bbuf *b, block_device_t *dev, uint64_t blk)
 /**
  * Fill the victim `b`, which the caller holds and has just keyed to block
  * `blk` of `dev`, with zeros when `blank` is set and otherwise from the
- * device. The caller holds no lock of the cache's, since the read sleeps.
+ * device, unless the read check fails it (`bcache_set_read_check`). The
+ * caller holds no lock of the cache's, since the read sleeps.
  * Returns `b`, or NULL when the read failed, with `b` let go and emptied.
  */
 static struct bbuf *fill_victim(block_device_t *dev, uint64_t blk, struct bbuf *b, int blank)
@@ -2666,7 +2675,8 @@ static struct bbuf *fill_victim(block_device_t *dev, uint64_t blk, struct bbuf *
         k_memset(b->data, 0, b->bytes);
         return b;
     }
-    if (device_read(dev, blk * BCACHE_BLOCK_SECTORS, b->bytes / BLOCK_SECTOR_SIZE, b->data) != 0) {
+    if ((read_check && read_check() != 0) ||
+        device_read(dev, blk * BCACHE_BLOCK_SECTORS, b->bytes / BLOCK_SECTOR_SIZE, b->data) != 0) {
         flags = cache_lock();
         unhold_wake(b, &cpus);
         make_empty(b);

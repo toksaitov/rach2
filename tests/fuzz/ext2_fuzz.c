@@ -7,7 +7,7 @@
  * fuzz-deps: rach2/sys/fs/ext2_alloc.c rach2/sys/fs/ext2_batch.c
  * fuzz-deps: rach2/sys/fs/ext2_check.c rach2/sys/fs/ext2_dir.c
  * fuzz-deps: rach2/sys/fs/ext2_file.c rach2/sys/fs/ext2_acl.c
- * fuzz-deps: tests/host/compat/ids_root.c
+ * fuzz-deps: tests/host/compat/ids_root.c tests/host/compat/walkseq_host.c
  * fuzz-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * fuzz-deps: rach2/sys/block/chain.c rach2/sys/fs/sleeplock.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
