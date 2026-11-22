@@ -93,10 +93,12 @@ An epoll set is readable while a wait on it would report an event, and a
 poll of it is woken by a change in any descriptor it watches, as
 .Xr epoll 2
 describes.
-Terminals report input when the line discipline has data ready;
+Terminals report input when the line discipline has data ready, and are
+writable while output is not stopped and no other write holds the terminal,
+as Linux's are;
 pseudoterminals also report peer hangup.
 The console reports input only on a descriptor open for reading, and is
-always writable, as a terminal is on Linux whatever the descriptor's mode;
+writable whatever the descriptor's mode, as a terminal is on Linux;
 a write through a read-only descriptor fails with
 .Er EBADF .
 .Pp
