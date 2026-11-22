@@ -156,3 +156,61 @@ A submission's UNREFs now reach the host over 68 to 90 ms. Linux's took 39 to 68
 QEMU's fence trace of the after queue run shows fences on RESOURCE_CREATE_3D (0x204), ATTACH_BACKING (0x106), CTX_ATTACH_RESOURCE (0x202) and the submissions (0x207); Debian's run of 15:44 shows fences on RESOURCE_CREATE_3D and the submissions alone. The two further fences cost QEMU its time on each create, outside the bursts of closes, and RESOURCE_CREATE takes as long as Linux's; `VIRTGPU_RESOURCE_CREATE` puts the attach's fence in the buffer's reservation, so taking it off would change what a WAIT waits on. They stay, as a known difference from Linux.
 
 Under KVM with the fix, `tests/run vgpu` passed on i686, virgl with the three rows and exit, the UNREF seen in 2 ms against 12 ms before, and `ARCH=x86_64 tests/run vgpu` passed blob, virgl, 1 ms against 2 ms, and exit.
+
+## Codex's review and the rest of the notify gap
+
+Subtask 5705 fixed the four faults of Codex's review of `task/5697` at 50f95acfa and closed the rest of the gap in notifies.
+
+* An allocation that found the transport's memory full waited for the worker's frees under way even with no UNREF in flight. Under the mode lock, as the console makes its buffers, that wait could hold the lock that the frees' unplug takes when an UNREF finds no memory. `backing_fill` and `vgpu_dma_wait` now count on those frees only outside the mode lock (`frees_awaited`).
+* A close slept in its wait for room and its DETACH's allocation, and another thread could meanwhile import the buffer into the same file, whose `open` hook found the attachment and kept it. The close now looks up the file's handles again after the sleep, as it does the attachment.
+* The shared row read the buffer back through a transfer, which attaches it again, so a close that detached the wrong context passed. Two root files in the device's debugfs directory serve the probe now: `virtio_gpu_attachments` lists each attachment, `CTX RES`, and while `virtio_gpu_hold` is open, reaps leave the answers on the done list. The shared row checks the attachments after each close, the second file's and then, with a second texture, the first file's, with no draw between. The busy-close and unref rows hold the answers, so that the submission is pending when the row closes the texture and unmaps it, and the answers drop the last reference in the worker.
+
+Under KVM, `tests/run vgpu` passed on i686, virgl with its eleven rows and exit, and `ARCH=x86_64 tests/run vgpu` passed blob, virgl and exit, the UNREF seen in 2 ms after the hold's release on both.
+
+### Setup
+
+The setup of the rest of the UNREFs' gap above, at `task/5697`'s head with the fixes, 5260971af. [`vgpu-close/notifies.py`](vgpu-close/notifies.py) reads a trace: in the second to fourth bursts of closes, as `hostcost.py` takes them, the commands each notify carried, from one `virtio_pci_notify_write` to the next, and the longest run of UNREFs one carried. [`vgpu-close/counters-notify.patch`](vgpu-close/counters-notify.patch) counts in `/proc/stat` the notifies asked for and those the device was given, from a close's DETACH, from the worker and from elsewhere, and the worker's passes over its frees with the buffers they freed; `stl.sh` samples them.
+
+    python3 dev-log/86-shared-region/measure/rach2.py build/runs/t5705/rach2-1
+    python3 dev-log/84-locks/vgpu-close/notifies.py build/runs/t5705/rach2-1/trace
+
+### Before the fix
+
+The runs that ended at 16:13 (Rach2) and 16:15 and 16:25 (Debian 6.12) on 2026-11-22 (UTC+6), all passing:
+
+| | Rach2 | Linux 6.12 |
+|---|---|---|
+| Notifies a DETACH in a burst, second to fourth submission | 0.40, 0.36, 0.35 | 0.47, 0.13, 0.09; 0.37, 0.40, 0.29 |
+| A burst of closes | 58.0 to 63.6 ms | 36.9 to 61.3 ms; 54.9 to 63.6 ms |
+| Commands a notify carried | 5.0 to 5.8 | 4.3 to 19.3; 5.0 to 6.8 |
+| The longest run of UNREFs on one notify | 11 to 47 | 194 to 255; 35 to 248 |
+| QEMU's time for a DETACH, an UNREF, median | 7.9, 10.0 us | 2.9, 7.9 us; 3.1, 8.1 us |
+| A submission's UNREFs, first to last, second to fourth | 58.3 to 60.5 ms | 37.2 to 60.8 ms; 54.5 to 63.4 ms |
+| RESOURCE_CREATEs | 6,264 | 6,279; 6,265 |
+
+The counters' run of 16:16 split Rach2's notifies. Over the first four submissions, 3,784 closes made 1,164 notifies with their DETACHes, 0.31 a close, and the worker made 353 in 2,124 passes, which freed 3,752 buffers, 1.8 a pass.
+
+Both guests send a run of DETACHes while QEMU has not yet taken the last notify, then a notify that carries one DETACH and the UNREFs of the run before it. On Linux the runs grow: a run that keeps QEMU's main thread busy longer leaves it longer before it takes the next notify, and the closes meanwhile need none. Rach2's stayed at 2 to 8 DETACHes. Its worker made the notify at the end of each pass with the big lock held (`vgpu_kick`). The write of a notify waits while QEMU's main thread runs earlier commands, as the first close after a flush waits there for the submission, so each pass held the big lock, and with it the program's next GEM_CLOSE, for as long as QEMU's batch took. The program's closes then came only after QEMU had taken the queue, so QEMU was idle and took a notify at about every third close.
+
+Turning the queue's interrupt off from the first answer until the worker's reap, as Linux's `virtio_gpu_ctrl_ack` leaves the interrupt to its dequeue work, changed nothing: 0.39 to 0.44 notifies a DETACH and 8.1 us a DETACH in the run of 16:20. It was not kept.
+
+### The fix
+
+The worker's pass makes its notify without the big lock (`kick_ctrl`), as a close's DETACH and every sender that may sleep already did (`vgpu_notify`). The pass is about to sleep or end, and `vgpu_kill` waits for a notify made without the lock.
+
+### After the fix
+
+The counters' runs that ended at 16:22, and the run of 16:24 without them, all passing:
+
+| | Rach2 before | Rach2 after, with counters | Rach2 after | Linux 6.12 |
+|---|---|---|---|---|
+| Notifies a DETACH, second to fourth submission | 0.35 to 0.40 | 0.10 to 0.21 | 0.06 to 0.09 | 0.09 to 0.47 |
+| A burst of closes | 58.0 to 73.7 ms | 35.5 to 86.3 ms | 31.7 to 32.9 ms | 36.9 to 63.6 ms |
+| Commands a notify carried | 4.9 to 5.8 | 9.5 to 20.7 | 23.5 to 32.6 | 4.3 to 19.3 |
+| The longest run of UNREFs on one notify | 11 to 64 | 64 | 64 | 35 to 255 |
+| QEMU's time for a DETACH, an UNREF, median | 7.9, 10.0 us | 2.1, 6.9 us | 2.1, 6.9 us | 2.9 to 3.1, 7.9 to 8.1 us |
+| A submission's UNREFs, first to last, second to fourth | 58.3 to 60.5 ms | 30.7 to 81.0 ms | 28.6 to 29.5 ms | 37.2 to 63.4 ms |
+| RESOURCE_CREATEs | 6,264 | 6,284, 6,268, 6,264 | 6,264 | 6,279, 6,265 |
+| The test's time | 10.9 s | 10.5 to 10.9 s | 10.8 s | 12.6, 12.8 s |
+
+Over the whole run, the closes' notifies fell from 1,662 to 87 to 181, and the worker's from 1,017 to 402 to 654, in 266 to 392 passes of 16 to 24 buffers each against 3,528 passes of 1.8. A run of UNREFs stops at 64 since the worker's free waits for room once the commands started hold 256 pages (`vgpu_room`). The first close after each flush still waits for the submission in its notify, and a submission's first UNREF came 0.93 to 0.97 s after it in the run of 16:24, so the creates stay at Linux's count.
