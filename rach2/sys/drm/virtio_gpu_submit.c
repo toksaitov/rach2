@@ -352,8 +352,10 @@ static int32_t submit_buffers(struct drm_file *file, struct drm_virtgpu_execbuff
     return 0;
 }
 
-/** Wait only for foreign producers, then attach each buffer in queue order.
- * Held buffer references survive every wait. Return 0 or -errno. */
+/** Wait only for foreign producers, then take each buffer's deferred
+ * backing (`vgpu_backing_settle`), so that the device finds every resource
+ * the submission names backed, and attach it, in queue order. Held buffer
+ * references survive every wait. Return 0 or -errno. */
 static int32_t submit_dependencies(struct virtio_gpu_device *vg, struct drm_file *file,
                                    struct vgpu_submit *s, uint64_t context)
 {
@@ -365,6 +367,10 @@ static int32_t submit_dependencies(struct virtio_gpu_device *vg, struct drm_file
         f = dma_resv_snapshot(s->bos[i]->resv, 1);
         rc = f ? vgpu_wait_dependency(vg, f, context) : -ENOMEM;
         dma_fence_put(f);
+        if (rc) {
+            return rc;
+        }
+        rc = vgpu_backing_settle(vg, vgpu_bo(s->bos[i]), VGPU_SETTLE_SUBMIT);
         if (rc) {
             return rc;
         }

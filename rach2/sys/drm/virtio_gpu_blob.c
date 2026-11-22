@@ -313,24 +313,19 @@ static int32_t ask_error(int32_t rc)
 }
 
 /**
- * Ask for the page list of `bo` from its page `first` with one command of
- * `map_cmd`, waited for, and copy the answer to `answer`, which holds
- * `map_answer_bytes` of the pages left, with its length in `*got`. The
- * answer is written to that many bytes of response pages when that is more
- * than the command's own page holds, or, when it is not, when the
- * transport's memory has not got the pages now or its chain cannot carry
- * them, to the rest of the command's page. 0; -ENOMEM; -EREMOTEIO for an
- * error answer; or the wait's error, after which nothing is in `answer`.
- * May sleep.
+ * A command of `map_cmd` that asks for the page list of `bo` from its page
+ * `first`, not yet started, in `*out`: with response pages of
+ * `map_answer_bytes` of the pages left when that is more than the
+ * command's own page holds and the transport's memory has them and its
+ * chain can carry them, else answered in the rest of the command's page.
+ * 0, or -ENOMEM. May sleep.
  */
-static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
-                       int backing, uint8_t *answer, uint32_t *got)
+static int32_t map_ask_cmd(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                           uint64_t first, int backing, struct virtio_gpu_cmd **out)
 {
     uint32_t bytes = map_answer_bytes((bo->shmem.base.size >> PAGE_SHIFT) - first);
     struct virtio_gpu_cmd *cmd = NULL;
-    uint32_t page, here, left;
-    int big = 0, i;
-    int32_t rc;
+    int big, i;
 
     for (i = 0; i < 2; i++) {
         cmd = map_cmd(vg, bo, first, backing);
@@ -344,12 +339,31 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
         }
         vgpu_cmd_free(cmd); /* the payload's pages, part of them had */
     }
-    if (!big) {
-        return ask_error(vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_INLINE, got));
+    *out = cmd;
+    return 0;
+}
+
+/**
+ * Take the answer to `cmd`, an ask of `map_ask_cmd` for `bo`'s page list
+ * from its page `first` started with vgpu_cmd_send_waited, and copy it to
+ * `answer`, which holds `map_answer_bytes` of the pages left, with its
+ * length in `*got`. 0; -EREMOTEIO for an error answer; or the wait's
+ * error, after which nothing is in `answer`: -EINTR at SIGKILL, with the
+ * command still the caller's, as vgpu_cmd_take_map leaves it. May sleep.
+ */
+static int32_t map_ask_take(struct virtio_gpu_object *bo, struct virtio_gpu_cmd *cmd,
+                            uint64_t first, uint8_t *answer, uint32_t *got)
+{
+    uint32_t bytes = map_answer_bytes((bo->shmem.base.size >> PAGE_SHIFT) - first);
+    uint32_t page, here, left;
+    int32_t rc;
+
+    if (!cmd->response_size) {
+        return ask_error(vgpu_cmd_take_map(cmd, answer, VGPU_MAP_INLINE, got));
     }
-    rc = ask_error(vgpu_cmd_send_wait_map(cmd, NULL, 0, NULL));
-    if (rc == -ETIMEDOUT || rc == -EINTR) {
-        return rc; /* the reaper frees the command once the device answers */
+    rc = ask_error(vgpu_cmd_take_map(cmd, NULL, 0, NULL));
+    if (rc == -EINTR || rc == -ETIMEDOUT) {
+        return rc; /* the caller's still, or the reaper's (`cmd_take`) */
     }
     *got = rc != 0 ? 0 : cmd->response_len < bytes ? cmd->response_len : bytes;
     left = *got;
@@ -362,17 +376,43 @@ static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
 }
 
 /**
- * Gather the page list of `bo` into `g`: asked for from the first page on,
- * and from the page after its last run again until it covers the object,
- * by MAP_BLOB or with `backing` by VGS_CMD_BACKING (`map_cmd`). With
- * `held`, set once the device may hold the pages, an answer having come or
- * a wait having ended without one. 0; -EREMOTEIO when the device answered
- * with an error; -EIO for a list that breaks the transport's rules;
- * -ENOMEM, -ETIMEDOUT, or -EINTR at SIGKILL. The caller frees `g->runs`.
- * May sleep.
+ * Ask for the page list of `bo` from its page `first` with one command of
+ * `map_cmd` (`map_ask_cmd`), waited for, and copy the answer to `answer`,
+ * as `map_ask_take` does. 0; -ENOMEM; -EREMOTEIO for an error answer; or
+ * -EINTR at SIGKILL, after which the reaper frees the command once the
+ * device answers. May sleep.
+ */
+static int32_t map_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t first,
+                       int backing, uint8_t *answer, uint32_t *got)
+{
+    struct virtio_gpu_cmd *cmd;
+    int32_t rc = map_ask_cmd(vg, bo, first, backing, &cmd);
+
+    if (rc != 0) {
+        return rc;
+    }
+    vgpu_cmd_send_waited(cmd);
+    rc = map_ask_take(bo, cmd, first, answer, got);
+    if (rc == -EINTR) {
+        vgpu_cmd_give_up(cmd);
+    }
+    return rc;
+}
+
+/**
+ * Gather the page list of `bo` into `g`: asked for from the first page on, and
+ * from the page after its last run again until it covers the object, by
+ * MAP_BLOB or with `backing` by VGS_CMD_BACKING (`map_cmd`). With `ask`, `*ask`
+ * is the first ask, already started (`vgpu_backing_ask`), whose answer is taken
+ * first, and which is set to NULL once taken; a SIGKILL before its answer
+ * leaves it there, still the caller's, with -EINTR. With `held`, set once the
+ * device may hold the pages, an answer having come or a wait having ended
+ * without one. 0; -EREMOTEIO when the device answered with an error; -EIO for a
+ * list that breaks the transport's rules; -ENOMEM, -ETIMEDOUT, -ENODEV, or
+ * -EINTR at SIGKILL. The caller frees `g->runs`. May sleep.
  */
 static int32_t pages_gather(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, int backing,
-                            struct pages_gather *g, int *held)
+                            struct pages_gather *g, int *held, struct virtio_gpu_cmd **ask)
 {
     uint64_t total = bo->shmem.base.size >> PAGE_SHIFT;
     uint32_t got, type;
@@ -382,7 +422,14 @@ static int32_t pages_gather(struct virtio_gpu_device *vg, struct virtio_gpu_obje
     k_memset(g, 0, sizeof(*g));
     g->total = total;
     while (rc == 0 && g->first < g->total) {
-        rc = map_ask(vg, bo, g->first, backing, answer, &got);
+        if (ask && *ask) {
+            rc = map_ask_take(bo, *ask, 0, answer, &got);
+            if (rc != -EINTR) {
+                *ask = NULL;
+            }
+        } else {
+            rc = map_ask(vg, bo, g->first, backing, answer, &got);
+        }
         if (rc == 0 || rc == -ETIMEDOUT || rc == -EINTR) {
             *held = 1;
         }
@@ -410,7 +457,7 @@ static int32_t pages_gather(struct virtio_gpu_device *vg, struct virtio_gpu_obje
 static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
     struct pages_gather g;
-    int32_t rc = pages_gather(vg, bo, 0, &g, &bo->host_visible);
+    int32_t rc = pages_gather(vg, bo, 0, &g, &bo->host_visible, NULL);
 
     if (rc == -EREMOTEIO) {
         rc = -EIO;
@@ -514,18 +561,31 @@ static int32_t backing_adopt(struct virtio_gpu_device *vg, struct virtio_gpu_obj
  * transport gives: the page list of VGS_CMD_BACKING gathered, its frames
  * held through the transport, which tells `backing_revoked` when it takes
  * them back, and made the object's pages. The device makes and pins the
- * backing at the first ask and lets it go at the UNREF. 0; -EREMOTEIO when
- * the device refused, which leaves the resource without backing, so that
- * the caller may attach pages of its own; or the gather's or the map's
- * error, after which the object must be freed, since the device may hold a
- * backing for it. May sleep.
+ * backing at the first ask and lets it go at the UNREF. With `ask`, `*ask`
+ * is the first ask, started at the create (`vgpu_backing_ask`), taken as
+ * `pages_gather` says, its wait recorded as `event` (`vgpu_cmd_event`).
+ * 0; -EREMOTEIO when the device refused, which leaves the resource without
+ * backing, so that the caller may attach pages of its own; -EINTR at
+ * SIGKILL with `*ask` still unanswered and the caller's, the object
+ * unchanged; or the gather's or the map's error, after which the object
+ * must be freed or kept from use, since the device may hold a backing for
+ * it. May sleep.
  */
-int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                           struct virtio_gpu_cmd **ask, uint32_t event)
 {
     struct pages_gather g;
     int held = 0;
-    int32_t rc = pages_gather(vg, bo, 1, &g, &held);
+    int32_t rc;
 
+    if (ask) {
+        vgpu_cmd_event(*ask, event);
+    }
+    rc = pages_gather(vg, bo, 1, &g, &held, ask);
+    if (ask && *ask) {
+        kfree(g.runs);
+        return rc;
+    }
     if (rc == 0) {
         rc = virtio_map_pages(vg->vdev, g.runs, g.n, backing_revoked, bo, &bo->pages_map);
     }
@@ -541,6 +601,17 @@ int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_objec
         }
     }
     kfree(g.runs);
+    return rc;
+}
+
+int32_t vgpu_backing_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                         struct virtio_gpu_cmd **ask)
+{
+    int32_t rc = map_ask_cmd(vg, bo, 0, 1, ask);
+
+    if (rc == 0) {
+        vgpu_cmd_send_waited(*ask);
+    }
     return rc;
 }
 
@@ -726,9 +797,9 @@ static volatile uint8_t *host_vmap(struct drm_gem_object *obj)
     return (volatile uint8_t *)bo->vmap;
 }
 
-const struct drm_gem_object_funcs vgpu_host_funcs = {vgpu_obj_free, host_mmap,     NULL,
-                                                     NULL,          host_page,     host_vmap,
-                                                     NULL,          vgpu_obj_open, vgpu_obj_close, NULL};
+const struct drm_gem_object_funcs vgpu_host_funcs = {vgpu_obj_free,  host_mmap, NULL, NULL,
+                                                     host_page,      host_vmap, NULL, vgpu_obj_open,
+                                                     vgpu_obj_close, NULL};
 
 /* ------------------------------------------------------------------------
  * RESOURCE_CREATE_BLOB

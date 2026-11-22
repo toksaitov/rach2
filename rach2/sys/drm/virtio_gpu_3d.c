@@ -1194,8 +1194,9 @@ uint64_t virtio_gpu_copied_bytes(void)
 /**
  * Queue an upload or readback, keeping its buffer until completion, as
  * Linux: a blob of guest memory alone has no host copy and is refused, and
- * only a blob with host memory takes a stride or a layer stride. Return 0
- * or -errno.
+ * only a blob with host memory takes a stride or a layer stride. The
+ * buffer's deferred backing is taken first (`vgpu_backing_settle`), since
+ * the device copies to or from it. Return 0 or -errno.
  */
 int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_file *file, int from)
 {
@@ -1230,6 +1231,7 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_fi
     dependency = dma_resv_snapshot(obj->resv, 1);
     rc = dependency ? vgpu_wait_dependency(vg, dependency, vg->fence_context) : -ENOMEM;
     dma_fence_put(dependency);
+    rc = rc ? rc : vgpu_backing_settle(vg, bo, VGPU_SETTLE_TRANSFER);
     if (rc || vg->dead) {
         if (!rc) {
             rc = -ENODEV;
