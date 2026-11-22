@@ -4774,20 +4774,32 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
 /**
  * Check again, under the lock of the directory `parent` (`vfs_node_lock`),
  * what a caller checked of it and of its name `leaf` before it took the
- * lock, the checks `what` names, on a type that sets `file_locked`, whose
- * walk held nothing, so that a chmod, a mount or a chroot that ran while
- * the caller slept is seen. 0 on any other type, whose walk or namespace
- * lock kept them, or the first refusal.
+ * lock, the checks `what` names, so that a chmod, a mount or a chroot that
+ * ran while the caller slept is seen. A type that sets `file_locked`, whose
+ * walk held nothing, has them all checked; on another, whose namespace lock
+ * this is, the write permission, which a chmod changes without moving the
+ * walk sequence, and the mounts only on the first, since a mount moves the
+ * sequence the caller's hand-off checks. `st` is the stamp of the call's
+ * first walk: when it no longer holds, a KRFFS relocation may have moved
+ * `parent`'s node since, and nothing is judged, for the caller's
+ * `walk_handoff` to send the call round again. 0 or the first refusal.
  */
-static int32_t dir_recheck(const struct vfs_ref *parent, const char *leaf, int what)
+static int32_t dir_recheck(const struct vfs_ref *parent, const char *leaf, int what,
+                           const struct vfs_stamp *st)
 {
+    int locked = vfs_file_locked(parent->mnt);
     int32_t rc = 0;
 
-    if (!vfs_file_locked(parent->mnt)) {
+    if (st && st->on && !vfs_seq_still(st->seq)) {
         return 0;
     }
-    if (what & RECHECK_WRITE) {
+    if ((what & RECHECK_WRITE) && mnt_is_root(vfs_mount_base(parent->mnt))) {
+        rc = cred_access_node((krffs_node_t *)parent->node, CRED_W | CRED_X, 0);
+    } else if (what & RECHECK_WRITE) {
         rc = cred_access_ref(parent, CRED_W | CRED_X, 0);
+    }
+    if (!locked) {
+        return rc;
     }
     if (rc == 0 && (what & (RECHECK_MOUNT | RECHECK_NEW)) &&
         vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
@@ -4802,13 +4814,15 @@ static int32_t dir_recheck(const struct vfs_ref *parent, const char *leaf, int w
 /**
  * Take the lock of the directory `parent` for a change to its name `leaf`
  * (`vfs_node_lock`) and check again under it what `what` names
- * (`dir_recheck`). Returns 0 or the refusal; the lock is held either way,
- * and the caller gives it back with `vfs_node_unlock`.
+ * (`dir_recheck`), against the call's first stamp `st`. Returns 0 or the
+ * refusal; the lock is held either way, and the caller gives it back with
+ * `vfs_node_unlock`.
  */
-static int32_t dir_lock(const struct vfs_ref *parent, const char *leaf, int what)
+static int32_t dir_lock(const struct vfs_ref *parent, const char *leaf, int what,
+                        const struct vfs_stamp *st)
 {
     vfs_node_lock(parent);
-    return dir_recheck(parent, leaf, what);
+    return dir_recheck(parent, leaf, what, st);
 }
 
 /**
@@ -4871,7 +4885,7 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         return rc;
     }
     if (!held) {
-        rc = dir_lock(&parent, leafname, RECHECK_WRITE);
+        rc = dir_lock(&parent, leafname, RECHECK_WRITE, &st);
     }
     if (rc == 0) {
         rc = walk_handoff(&st);
@@ -16075,7 +16089,7 @@ static int32_t link_ref(struct vfs_ref *src, const char *newname, int newend,
     if (rc == 0) {
         int own = vfs_file_locked(parent.mnt);
 
-        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW, &stamp);
         if (own) {
             sleep_lock_subclass(2);
             vfs_node_lock(src);
@@ -16275,7 +16289,7 @@ again:
         rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
     }
     if (rc == 0) {
-        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW, &st);
         if (rc == 0) {
             rc = walk_handoff(&st);
         }
@@ -19797,7 +19811,7 @@ again:
         vfs_node_lock(&parent);
         rc = vfs_child_lock(&parent, leaf, &victim);
         if (rc == 0) {
-            rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT);
+            rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT, &st);
         }
         if (rc == 0 && end == PATH_END_SLASH) {
             rc = leaf_dir_check(&parent, leaf);
@@ -20027,7 +20041,7 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
     if (!mnt_is_root(vfs_mount_base(parent->mnt))) {
         rc = cred_access_ref(parent, CRED_W, 0);
         if (rc == 0) {
-            rc = dir_lock(parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+            rc = dir_lock(parent, leaf, RECHECK_WRITE | RECHECK_NEW, st);
             if (rc == 0) {
                 rc = walk_handoff(st);
             }
@@ -20228,7 +20242,7 @@ again:
         rc = -EPERM;
     }
     if (rc == 0) {
-        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW, &st);
         if (rc == 0) {
             rc = walk_handoff(&st);
         }
@@ -20440,7 +20454,7 @@ again:
         vfs_node_lock(&parent);
         rc = vfs_child_lock(&parent, leaf, &victim);
         if (rc == 0) {
-            rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT | RECHECK_ROOT);
+            rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT | RECHECK_ROOT, &st);
         }
         if (rc == 0) {
             rc = cred_remove_ref(&parent, leaf);
@@ -20730,9 +20744,9 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
     if (rc != 0) {
         return rc;
     }
-    rc = dir_recheck(opar, oleaf, RECHECK_WRITE | RECHECK_MOUNT);
+    rc = dir_recheck(opar, oleaf, RECHECK_WRITE | RECHECK_MOUNT, st);
     if (rc == 0) {
-        rc = dir_recheck(npar, nleaf, RECHECK_WRITE | RECHECK_MOUNT);
+        rc = dir_recheck(npar, nleaf, RECHECK_WRITE | RECHECK_MOUNT, st);
     }
     if (rc == 0 && (flags & (RENAME_NOREPLACE | RENAME_EXCHANGE))) {
         rc = rename_presence(opar, oleaf, npar, nleaf, flags);
