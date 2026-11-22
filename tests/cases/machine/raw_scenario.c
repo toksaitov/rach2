@@ -190,15 +190,17 @@ static int userping(struct etude_case *c)
 /**
  * Log in as the test user and ping the loopback address fifty times, 10 ms
  * apart, then with no interval for a second, then adaptively with a retry
- * every microsecond for a second. Each ping exits 0 only with its replies
- * counted: the first with all fifty, which -w makes it require, and the others
- * with at least one. The second reaches it only when an interval of 0 keeps
- * sending the requests and checking -w, and leaves it time between sends to
- * read the replies, which a send timer shorter than its handler's own run does
- * not; the third only when the replies are read while a retry is due, since a
- * pass of the loop can take longer than the interval. The line the shell
- * prints when all three exit 0 is computed, so that the echo of the command
- * typed cannot match it.
+ * every 2 us for a second. Each ping exits 0 only with its replies counted:
+ * the first with all fifty, which -w makes it require, and the others with at
+ * least one. The second reaches it only when an interval of 0 keeps sending
+ * the requests and checking -w, and leaves it time between sends to read the
+ * replies, which a send timer shorter than its handler's own run does not. The
+ * third runs the receive loop's retries with replies queued; whether a retry
+ * is due at each pass depends on how long a send takes here, so
+ * tests/system/fixtures/ping-delay.sh, which holds each send longer than the
+ * interval, is the check that one is. The line the shell prints when all
+ * three exit 0 is computed, so that the echo of the command typed cannot
+ * match it.
  */
 static int fastping(struct etude_case *c)
 {
