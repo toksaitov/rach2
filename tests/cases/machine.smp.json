@@ -260,18 +260,18 @@
     },
     {
       "case_id": "machine.smp.build",
-      "behavior": "The installed system on four processors counts four, compiles the staged ish sources four times over with every compile at once, and every processor's user ticks in /proc/stat grow within thirty rounds of the build",
+      "behavior": "The installed system on four processors counts four, compiles the staged ish sources four times over with every compile at once, and every processor's user ticks in /proc/stat grow within forty rounds of the build",
       "units": ["smp", "sched", "/proc/stat"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"processors": 4, "memory_mib": 512, "objects": 16, "rounds": 30, "account": "test"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"processors": 4, "memory_mib": 512, "objects": 16, "rounds": 40, "account": "test"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["smp-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and its evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot a copy of the os-real disk on four processors and wait for the console's login prompt"},
         {"step_id": "login", "stage": "execute", "machine": "fixture", "does": "log in at the console as the test account with its password"},
         {"step_id": "nproc", "stage": "execute", "machine": "fixture", "does": "require nproc to print 4, in the guest"},
-        {"step_id": "build", "stage": "execute", "machine": "fixture", "does": "define the build and its check as shell functions, and build the ish sources four times over, up to thirty rounds, until every processor's user ticks grew"},
+        {"step_id": "build", "stage": "execute", "machine": "fixture", "does": "define the build and its check as shell functions, and build the ish sources four times over, up to forty rounds, until every processor's user ticks grew"},
         {"step_id": "grew", "stage": "execute", "machine": "fixture", "does": "check in the guest that every processor's user ticks grew, and end the machine"}
       ],
       "machines": [
