@@ -39,8 +39,9 @@
 /* This model's permanent entries, the root and two others; the kernel has
  * more, and the rows need the three slots after them for mounts. */
 #define VFS_PERMANENT        3
-/* The flag of an unmount's walk, as vfs.c defines it. */
+/* The flags of an unmount's walk, as vfs.c and vfs.h define them. */
 #define WALK_UNMOUNT         0x100
+#define VFS_WALK_MOUNT       0x20
 
 /* The parts of the kernel's structures that the unmount path reads. */
 struct block_device {
@@ -48,6 +49,7 @@ struct block_device {
 };
 typedef struct block_device block_device_t;
 struct vfs_mount;
+struct walk_record;
 struct vfs_ops {
     int (*sync)(struct vfs_mount *);
     int (*prepare_unmount)(struct vfs_mount *);
@@ -152,20 +154,26 @@ static struct vfs_type type = {&ops};
  * The walk to `path`, which always reaches the mount at /mnt/a, at the node
  * in `walk_node` or at its root, and returns `lookup_error`. Each call is
  * counted, so that a case can check that no second walk follows an EIO.
+ * The model has no proc descriptor links.
  */
-static int resolve_path(int a, const char *path, int flags, struct vfs_ref *ref, int c, int d,
-                        int real)
+static int resolve_fd_path(const struct vfs_ref *start, const char *path, int flags,
+                           struct vfs_ref *ref, struct walk_record *record, char *fd_path)
 {
-    (void)a;
+    (void)start;
     (void)path;
     (void)flags;
-    (void)c;
-    (void)d;
-    (void)real;
+    (void)record;
+    (void)fd_path;
     resolve_calls++;
     ref->mnt = &records[3];
     ref->node = walk_node ? walk_node : records[3].root;
     return lookup_error;
+}
+/** Every mount in the model is visible to the caller. */
+static int vfs_mount_seen(const struct vfs_mount *m)
+{
+    (void)m;
+    return 1;
 }
 /** Count a reference released. */
 static void vfs_ref_release(struct vfs_ref *r)
