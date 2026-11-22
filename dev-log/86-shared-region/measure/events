@@ -1,0 +1,5 @@
+virtio_gpu_cmd_res_create_2d
+virtio_gpu_cmd_res_create_3d
+virtio_gpu_cmd_res_create_blob
+virtio_gpu_cmd_res_unref
+virtio_gpu_cmd_ctx_submit
