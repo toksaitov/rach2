@@ -200,9 +200,10 @@ stuck='' groups=''
 # The mark each load and each figure carries in its environment as
 # BED_SHM_LOAD, which every process it starts inherits, so that one that
 # left the load's groups and whose parent has gone is still found
-# (`marked`); and `PID:START` of each marked process that outlived its KILL,
-# START its start time, for cleanup to find again by its pid.
-mark=$$.$(date +%s) strays=''
+# (`marked`); `PID:START` of each marked process that outlived its KILL,
+# START its start time, for cleanup to find again by its pid; and the
+# script's own start time, after which `exiting` looks.
+mark=$$.$(date +%s) strays='' born=''
 # Whether gpu.sh was started, so that cleanup checks the GPU's driver; and
 # 1 once cleanup has begun, so that it runs once.
 gpu_started=0 cleaned=0
@@ -315,19 +316,54 @@ started_at()
     [ $# -ge 20 ] && echo "${20}"
 }
 
+# live PID START: whether process PID, started at START, still runs. A
+# zombie does not count, since it holds nothing, and a pid used again for
+# a newer process fails by its start time.
+live()
+{
+    live_st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    # shellcheck disable=SC2086 # the fields after the command are words
+    set -- "$2" ${live_st##*) }
+    [ $# -ge 21 ] && [ "$2" != Z ] && [ "${21}" = "$1" ]
+}
+
+# exiting: the pids of the user processes in their exit that started after
+# this script, never its own: no address space left (field 23, vsize, 0),
+# not yet a zombie and no kernel thread (PF_KTHREAD in field 9). A helper
+# its harness killed drops its memory, and with it the environment that
+# `marked` reads, before it closes its files (proc_exit_cleanup), so one
+# that blocks closing a device is found here instead. Each start time is
+# read in the same stat as the rest; `born` must be set.
+exiting()
+{
+    for exiting_d in /proc/[0-9]*; do
+        exiting_p=${exiting_d#/proc/}
+        [ "$exiting_p" != "$$" ] || continue
+        exiting_st=$(cat "$exiting_d/stat" 2>/dev/null) || continue
+        # shellcheck disable=SC2086 # the fields after the command are words
+        set -- ${exiting_st##*) }
+        [ $# -ge 21 ] && [ "$1" != Z ] && [ "${21}" = 0 ] && [ $(($7 & 2097152)) = 0 ] &&
+            [ "${20}" -ge "$born" ] && printf '%s ' "$exiting_p"
+    done
+}
+
 # end_marked: end what is left of every load and figure, wherever its
 # harness put it: each process group of a process with this run's mark,
 # but the script's own, as end_group does, then each marked process left,
-# KILL and 10 s, and each one of `strays` that still runs. Called once a
-# load's or a figure's own group has ended, when no other runs, and by
-# cleanup. Returns 1 when any is left, named with what each holds in
-# marked_left, and kept in `strays`.
+# KILL and 10 s, and each one of `strays` that still runs; and give each
+# process in its exit that `exiting` finds 10 s to end, without a signal,
+# since it can no longer show the mark. Called once a load's or a figure's
+# own group has ended, when no other runs, and by cleanup. Returns 1 when
+# any is left, named with what each holds in marked_left, and kept in
+# `strays`.
 end_marked()
 {
     marked_left=''
     marked_self=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
     marked_now=$(marked)
-    [ -n "$marked_now" ] || [ -n "$strays" ] || return 0
+    [ -n "$born" ] || born=$(started_at $$)
+    marked_dying=$(exiting)
+    [ -n "$marked_now" ] || [ -n "$marked_dying" ] || [ -n "$strays" ] || return 0
     # shellcheck disable=SC2009 # pgrep gives no group of a pid
     for marked_g in $(ps -e -o pid,pgid | awk -v p=" $marked_now " 'NR > 1 && index(p, " " $1 " ") { print $2 }' | sort -u); do
         [ "$marked_g" = "$marked_self" ] || [ -z "$(pids "$marked_g")" ] || end_group "$marked_g" ||
@@ -339,18 +375,22 @@ end_marked()
     done
     strays=''
     # shellcheck disable=SC2086 # a list of pids
-    for marked_p in $(pids $marked_now); do
-        kill -0 "$marked_p" 2>/dev/null || continue
+    for marked_p in $(pids $marked_now $marked_dying); do
         marked_at=$(started_at "$marked_p")
-        kill -KILL "$marked_p" 2>/dev/null
+        live "$marked_p" "$marked_at" || continue
+        marked_how='in its exit'
+        case " $marked_dying " in
+            *" $marked_p "*) ;;
+            *) kill -KILL "$marked_p" 2>/dev/null && marked_how='of a load after KILL' ;;
+        esac
         n=100
-        while kill -0 "$marked_p" 2>/dev/null && [ "$n" -gt 0 ]; do
+        while live "$marked_p" "$marked_at" && [ "$n" -gt 0 ]; do
             sleep 0.1
             n=$((n - 1))
         done
-        if kill -0 "$marked_p" 2>/dev/null && [ "$(started_at "$marked_p")" = "$marked_at" ]; then
+        if live "$marked_p" "$marked_at"; then
             case " $strays " in *" $marked_p:$marked_at "*) ;; *) strays="$strays $marked_p:$marked_at" ;; esac
-            marked_left="${marked_left:+$marked_left; }process $marked_p of a load after KILL: $(holding "$marked_p")"
+            marked_left="${marked_left:+$marked_left; }process $marked_p $marked_how: $(holding "$marked_p")"
         fi
     done
     [ -z "$marked_left" ]
