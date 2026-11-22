@@ -502,6 +502,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     uint32_t i;
     int32_t rc, fd = -1;
 
+    vgpu_meas_add(VGPU_M_EXEC, 1);
     rc = submit_begin(vg, file, a, &context);
     if (rc) {
         return rc;

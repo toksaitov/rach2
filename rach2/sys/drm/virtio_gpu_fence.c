@@ -101,13 +101,18 @@ int32_t vgpu_wait_ioctl(struct drm_device *dev, void *data, struct drm_file *fil
     if (!f) {
         return -ENOMEM;
     }
+    vgpu_meas_add(VGPU_M_WAIT, 1);
     if (a->flags & VIRTGPU_WAIT_NOWAIT) {
+        vgpu_meas_add(VGPU_M_WAIT_NOWAIT, 1);
         rc = dma_fence_is_signaled(f) ? 0 : -EBUSY;
     } else {
         rc = dma_fence_wait_until(f, 1, dma_fence_now() + 15000000000ll);
         if (rc == -ETIME) {
             rc = -EBUSY;
         }
+    }
+    if (rc == -EBUSY) {
+        vgpu_meas_add(VGPU_M_WAIT_BUSY, 1);
     }
     dma_fence_put(f);
     return rc;

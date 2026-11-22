@@ -1076,6 +1076,36 @@ void vgpu_count_copied(uint64_t bytes)
     spin_unlock_irqrestore(&vgpu_copied_lock, flags);
 }
 
+static uint64_t vgpu_meas_n[VGPU_M_N];
+
+const char *const vgpu_meas_names[VGPU_M_N] = {
+    "vgpu_m_objects",     "vgpu_m_pages",      "vgpu_m_peak_objects", "vgpu_m_peak_pages",
+    "vgpu_m_creates_3d",  "vgpu_m_creates_2d", "vgpu_m_unrefs_sent",  "vgpu_m_unrefs_answered",
+    "vgpu_m_execbuffers", "vgpu_m_waits",      "vgpu_m_waits_nowait", "vgpu_m_waits_busy"};
+
+void vgpu_meas_add(int which, int64_t delta)
+{
+    uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);
+
+    vgpu_meas_n[which] += (uint64_t)delta;
+    if (vgpu_meas_n[VGPU_M_OBJS] > vgpu_meas_n[VGPU_M_PEAK_OBJS]) {
+        vgpu_meas_n[VGPU_M_PEAK_OBJS] = vgpu_meas_n[VGPU_M_OBJS];
+    }
+    if (vgpu_meas_n[VGPU_M_PAGES] > vgpu_meas_n[VGPU_M_PEAK_PAGES]) {
+        vgpu_meas_n[VGPU_M_PEAK_PAGES] = vgpu_meas_n[VGPU_M_PAGES];
+    }
+    spin_unlock_irqrestore(&vgpu_copied_lock, flags);
+}
+
+uint64_t vgpu_meas_get(int which)
+{
+    uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);
+    uint64_t n = vgpu_meas_n[which];
+
+    spin_unlock_irqrestore(&vgpu_copied_lock, flags);
+    return n;
+}
+
 uint64_t virtio_gpu_copied_bytes(void)
 {
     uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);

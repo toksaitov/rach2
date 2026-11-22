@@ -1418,6 +1418,10 @@ static void obj_release(struct virtio_gpu_object *bo)
     if (bo->res_id) {
         vgpu_res_id_put(to_vg(bo->shmem.base.dev), bo->res_id);
     }
+    if (bo->meas_pages) {
+        vgpu_meas_add(VGPU_M_OBJS, -1);
+        vgpu_meas_add(VGPU_M_PAGES, -(int64_t)bo->meas_pages);
+    }
     vgpu_obj_pages_free(vg, bo);
     kfree(bo);
 }
@@ -1442,6 +1446,7 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
         drm_dev_unplug(dev);
     }
     cmd->vg->unrefs--;
+    vgpu_meas_add(VGPU_M_UNREF_DONE, 1);
     obj_release(bo);
     drm_dev_put(dev);
 }
@@ -1486,6 +1491,7 @@ void vgpu_obj_free(struct drm_gem_object *obj)
             cmd_req(cmd, struct virtio_gpu_resource_unref)->resource_id = bo->res_id;
             drm_dev_get(obj->dev);
             vg->unrefs++;
+            vgpu_meas_add(VGPU_M_UNREF_SENT, 1);
             vgpu_cmd_send(cmd, unref_done, bo);
             return;
         }
@@ -1543,6 +1549,11 @@ void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, u
     vg->resources = bo;
     if (!host) {
         bo->shmem.pages.size = size;
+        bo->meas_pages = (uint32_t)(size / PAGE_SIZE);
+        if (bo->meas_pages) {
+            vgpu_meas_add(VGPU_M_OBJS, 1);
+            vgpu_meas_add(VGPU_M_PAGES, (int64_t)bo->meas_pages);
+        }
     }
 }
 
@@ -1564,6 +1575,7 @@ static struct virtio_gpu_cmd *create_cmd(struct virtio_gpu_device *vg,
     if (!create) {
         return NULL;
     }
+    vgpu_meas_add(r3d ? VGPU_M_CREATE_3D : VGPU_M_CREATE_2D, 1);
     if (r3d) {
         r = cmd_req(create, struct virtio_gpu_resource_create_3d);
         r->resource_id = id;

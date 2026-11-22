@@ -741,6 +741,7 @@ struct virtio_gpu_object {
     uintptr_t vmap;
     int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
     uint8_t uuid[16];
+    uint32_t meas_pages; /* pages counted in VGPU_M_PAGES, 0 for none */
 };
 
 /**
@@ -896,6 +897,35 @@ uint64_t vgpu_box_bytes(uint32_t format, uint32_t w, uint32_t h, uint32_t d);
 void vgpu_count_copied(uint64_t bytes);
 /** The bytes the devices' transfers have copied since boot, both ways. */
 uint64_t virtio_gpu_copied_bytes(void);
+
+/*
+ * Task 5676's measuring counters, on its measuring branch alone, which
+ * /proc/stat reports as vgpu_m_*: the objects with pages alive and their
+ * pages, the peaks of both, the RESOURCE_CREATEs, the UNREFs sent and
+ * answered, the EXECBUFFERs, and the WAITs, those with NOWAIT and those
+ * answered EBUSY.
+ */
+enum {
+    VGPU_M_OBJS,
+    VGPU_M_PAGES,
+    VGPU_M_PEAK_OBJS,
+    VGPU_M_PEAK_PAGES,
+    VGPU_M_CREATE_3D,
+    VGPU_M_CREATE_2D,
+    VGPU_M_UNREF_SENT,
+    VGPU_M_UNREF_DONE,
+    VGPU_M_EXEC,
+    VGPU_M_WAIT,
+    VGPU_M_WAIT_NOWAIT,
+    VGPU_M_WAIT_BUSY,
+    VGPU_M_N
+};
+/** Add `delta` to counter `which`, raising the peaks. Any context. */
+void vgpu_meas_add(int which, int64_t delta);
+/** Counter `which`. */
+uint64_t vgpu_meas_get(int which);
+/** The counters' names in /proc/stat, by index. */
+extern const char *const vgpu_meas_names[VGPU_M_N];
 /**
  * Wait for the leaves of a dependency on any fence context but `context`,
  * the waiter's own, whose order the queue keeps; 0 or -errno,

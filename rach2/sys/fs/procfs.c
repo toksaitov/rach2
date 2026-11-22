@@ -4868,6 +4868,12 @@ static int procfs_gen_statsys(struct procfs_text *t)
 #ifndef RACH2_HOSTTEST
     ap_str(t, "virtio_gpu_copied_bytes ");
     ap_u64(t, virtio_gpu_copied_bytes());
+    for (c = 0; c < VGPU_M_N; c++) {
+        ap_ch(t, '\n');
+        ap_str(t, vgpu_meas_names[c]);
+        ap_ch(t, ' ');
+        ap_u64(t, vgpu_meas_get(c));
+    }
     ap_str(t, "\nwindow_free_min ");
     ap_ulong(t, (unsigned long)frame_window_free_min());
     ap_ch(t, '\n');
