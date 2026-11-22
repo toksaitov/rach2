@@ -199,11 +199,11 @@ daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' ba
 stuck='' groups=''
 # The mark each load and each figure carries in its environment as
 # BED_SHM_LOAD, which every process it starts inherits, so that one that
-# left the load's groups and whose parent has gone is still found
-# (`marked`); `PID:START` of each marked process that outlived its KILL,
-# START its start time, for cleanup to find again by its pid; and the
-# script's own start time, after which `exiting` looks.
-mark=$$.$(date +%s) strays='' born=''
+# left the load's groups and whose parent has gone is still found; the
+# `PID:START` of each process `sample` has seen with the mark, START its
+# start time, and of each it has read without it; and the script's own
+# start time, before which no process can carry the mark.
+mark=$$.$(date +%s) ours='' unmarked='' born=''
 # Whether gpu.sh was started, so that cleanup checks the GPU's driver; and
 # 1 once cleanup has begun, so that it runs once.
 gpu_started=0 cleaned=0
@@ -292,28 +292,17 @@ descendants()
         }'
 }
 
-# marked: the pids of the processes whose environment carries this run's
-# mark, read from /proc, never this script's own. A process whose memory
-# is gone in its exit shows no environment, so `strays` keeps by its pid
-# each one that outlived a KILL.
-marked()
+# start_of PID: set start_at to the start time of process PID, field 22
+# of its stat, and state_at to its state, from one read by the shell
+# itself, with no fork; both are empty for none.
+start_of()
 {
-    for marked_d in /proc/[0-9]*; do
-        marked_p=${marked_d#/proc/}
-        [ "$marked_p" != "$$" ] || continue
-        tr '\0' '\n' < "$marked_d/environ" 2>/dev/null | grep -qxF "BED_SHM_LOAD=$mark" &&
-            printf '%s ' "$marked_p"
-    done
-}
-
-# started_at PID: the start time of process PID, field 22 of its stat, or
-# nothing for none.
-started_at()
-{
-    started_st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0
+    start_at='' state_at='' start_st=''
+    { read -r start_st < "/proc/$1/stat"; } 2>/dev/null
     # shellcheck disable=SC2086 # the fields after the command are words
-    set -- ${started_st##*) }
-    [ $# -ge 20 ] && echo "${20}"
+    set -- ${start_st##*) }
+    [ $# -ge 20 ] || return 0
+    start_at=${20} state_at=$1
 }
 
 # live PID START: whether process PID, started at START, still runs. A
@@ -321,78 +310,113 @@ started_at()
 # a newer process fails by its start time.
 live()
 {
-    live_st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-    # shellcheck disable=SC2086 # the fields after the command are words
-    set -- "$2" ${live_st##*) }
-    [ $# -ge 21 ] && [ "$2" != Z ] && [ "${21}" = "$1" ]
+    start_of "$1"
+    [ -n "$start_at" ] && [ "$state_at" != Z ] && [ "$start_at" = "$2" ]
 }
 
-# exiting: the pids of the user processes in their exit that started after
-# this script, never its own: no address space left (field 23, vsize, 0),
-# not yet a zombie and no kernel thread (PF_KTHREAD in field 9). A helper
-# its harness killed drops its memory, and with it the environment that
-# `marked` reads, before it closes its files (proc_exit_cleanup), so one
-# that blocks closing a device is found here instead. Each start time is
-# read in the same stat as the rest; `born` must be set.
-exiting()
+# sample: record in `ours`, as PID:START, each process started since the
+# script whose environment carries this run's mark, START its start time,
+# read before and after the environment, so that a pid used again between
+# the reads is not taken; and set marked_now to the pids of the recorded
+# processes present now, whether or not they still show the mark, since a
+# helper its harness killed shows no environment once its memory is
+# released, while it closes its files. A process read without the mark is
+# kept in `unmarked` by the same pair, so that each environment is read
+# once and a sample costs a fork only for a process not seen before; one
+# whose environment reads empty, in its exit or its exec, is read again at
+# the next sample. Both
+# lists keep only the pairs present, since a start time is never used
+# again for a pid. Called each second while a load or a figure runs
+# (quiet, await) and before each end (end_marked).
+sample()
 {
-    for exiting_d in /proc/[0-9]*; do
-        exiting_p=${exiting_d#/proc/}
-        [ "$exiting_p" != "$$" ] || continue
-        exiting_st=$(cat "$exiting_d/stat" 2>/dev/null) || continue
-        # shellcheck disable=SC2086 # the fields after the command are words
-        set -- ${exiting_st##*) }
-        [ $# -ge 21 ] && [ "$1" != Z ] && [ "${21}" = 0 ] && [ $(($7 & 2097152)) = 0 ] &&
-            [ "${20}" -ge "$born" ] && printf '%s ' "$exiting_p"
+    [ -n "$born" ] || { start_of $$; born=$start_at; }
+    marked_now='' sample_ours='' sample_not=''
+    for sample_d in /proc/[0-9]*; do
+        sample_p=${sample_d#/proc/}
+        [ "$sample_p" != "$$" ] || continue
+        start_of "$sample_p"
+        [ -n "$start_at" ] && [ "$start_at" -ge "$born" ] || continue
+        sample_id=$sample_p:$start_at
+        case " $ours " in
+            *" $sample_id "*)
+                sample_ours="$sample_ours $sample_id" marked_now="$marked_now $sample_p"
+                continue
+                ;;
+        esac
+        case " $unmarked " in
+            *" $sample_id "*)
+                sample_not="$sample_not $sample_id"
+                continue
+                ;;
+        esac
+        sample_env=$(tr '\0' '\n' 2>/dev/null < "$sample_d/environ")
+        start_of "$sample_p"
+        [ "$sample_p:$start_at" = "$sample_id" ] && [ -n "$sample_env" ] || continue
+        case "
+$sample_env
+" in
+            *"
+BED_SHM_LOAD=$mark
+"*) sample_ours="$sample_ours $sample_id" marked_now="$marked_now $sample_p" ;;
+            *) sample_not="$sample_not $sample_id" ;;
+        esac
     done
+    ours=$sample_ours unmarked=$sample_not
+}
+
+# await PID: wait for the child PID and give its status, as wait does,
+# sampling the run's marked processes each second meanwhile, so that each
+# helper of a figure is recorded while it still shows the mark.
+await()
+{
+    start_of "$1"
+    await_at=$start_at
+    while [ -n "$await_at" ] && live "$1" "$await_at"; do
+        sample
+        sleep 1
+    done
+    wait "$1"
 }
 
 # end_marked: end what is left of every load and figure, wherever its
-# harness put it: each process group of a process with this run's mark,
-# but the script's own, as end_group does, then each marked process left,
-# KILL and 10 s, and each one of `strays` that still runs; and give each
-# process in its exit that `exiting` finds 10 s to end, without a signal,
-# since it can no longer show the mark. Called once a load's or a figure's
-# own group has ended, when no other runs, and by cleanup. Returns 1 when
-# any is left, named with what each holds in marked_left, and kept in
-# `strays`.
+# harness put it, by what `sample` recorded as this run's: each process
+# group of a recorded process, but the script's own, as end_group does;
+# then each recorded process that still runs, KILL and 10 s, its start time
+# compared on every read, so that no process the run did not start, and
+# none given a recorded pid again, is waited for or killed. Called once a
+# load's or a figure's own group has ended, when no other runs, and by
+# cleanup. Returns 1 when any is left, named with what each holds in
+# marked_left; those left stay in `ours`.
 end_marked()
 {
     marked_left=''
+    sample
+    [ -n "$ours" ] || return 0
     marked_self=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
-    marked_now=$(marked)
-    [ -n "$born" ] || born=$(started_at $$)
-    marked_dying=$(exiting)
-    [ -n "$marked_now" ] || [ -n "$marked_dying" ] || [ -n "$strays" ] || return 0
     # shellcheck disable=SC2009 # pgrep gives no group of a pid
     for marked_g in $(ps -e -o pid,pgid | awk -v p=" $marked_now " 'NR > 1 && index(p, " " $1 " ") { print $2 }' | sort -u); do
         [ "$marked_g" = "$marked_self" ] || [ -z "$(pids "$marked_g")" ] || end_group "$marked_g" ||
             marked_left="${marked_left:+$marked_left; }$group_left"
     done
-    for marked_s in $strays; do
-        [ "$(started_at "${marked_s%%:*}")" != "${marked_s#*:}" ] ||
-            marked_now="$marked_now ${marked_s%%:*}"
-    done
-    strays=''
-    # shellcheck disable=SC2086 # a list of pids
-    for marked_p in $(pids $marked_now $marked_dying); do
-        marked_at=$(started_at "$marked_p")
-        live "$marked_p" "$marked_at" || continue
-        marked_how='in its exit'
-        case " $marked_dying " in
-            *" $marked_p "*) ;;
-            *) kill -KILL "$marked_p" 2>/dev/null && marked_how='of a load after KILL' ;;
-        esac
+    marked_kept=''
+    for marked_s in $ours; do
+        marked_p=${marked_s%%:*} marked_at=${marked_s#*:}
+        if [ -z "$(pids "$marked_p")" ] || ! live "$marked_p" "$marked_at"; then
+            continue
+        fi
+        kill -KILL "$marked_p" 2>/dev/null
         n=100
         while live "$marked_p" "$marked_at" && [ "$n" -gt 0 ]; do
             sleep 0.1
             n=$((n - 1))
         done
         if live "$marked_p" "$marked_at"; then
-            case " $strays " in *" $marked_p:$marked_at "*) ;; *) strays="$strays $marked_p:$marked_at" ;; esac
-            marked_left="${marked_left:+$marked_left; }process $marked_p $marked_how: $(holding "$marked_p")"
+            marked_kept="$marked_kept $marked_s"
+            marked_left="${marked_left:+$marked_left; }process $marked_p of the run after KILL: $(holding "$marked_p")"
         fi
     done
+    ours=$marked_kept
     [ -z "$marked_left" ]
 }
 
@@ -550,8 +574,8 @@ cleanup()
             survivors="${survivors:+$survivors; }descendant $d of the load after KILL: $(holding "$d")"
     done
     # Then whatever of a load an earlier end, or a harness that exited
-    # after its KILL without waiting, left outside the groups above, found
-    # by the run's mark and among `strays`.
+    # after its KILL without waiting, left outside the groups above, as
+    # recorded by the run's mark.
     end_marked || survivors="${survivors:+$survivors; }$marked_left"
     load='' figpid='' groups=''
     vm=$qemu
@@ -659,10 +683,12 @@ busy() { awk '{ print $14 + $15 }' "/proc/$1/stat" 2>/dev/null || echo 0; }
 
 # quiet FILE SILENCE [PID]: one second of a wait, which `last=-1 still=0`
 # starts; it fails once process PID has ended, or once for SILENCE seconds
-# FILE has not grown and PID has used no processor time.
+# FILE has not grown and PID has used no processor time. While a load or a
+# figure runs, each second samples the run's marked processes (sample).
 quiet()
 {
     [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
+    [ -z "$load$figpid" ] || sample
     sleep 1
     size=$(command stat -c %s "$1" 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
     if [ "$size" = "$last" ]; then
@@ -1518,7 +1544,7 @@ crysis_figure()
             exec sh ./crysis.sh seal "$1" python3 ./crysis.py flyby umu flyby-umu "$2"
     ' sh "$out" "$loops" &
     figpid=$!
-    if wait "$figpid"; then
+    if await "$figpid"; then
         pass load "crysis completed $loops umu flyby loop(s)"
     else
         fail load "crysis flyby status $?"
@@ -1603,7 +1629,7 @@ desk_rows()
             -u desktop -d -o "$out/measure/$rung-$scene" "$scene" > "$out/measure-$rung-$scene.out" 2>&1 &
         figpid=$!
         figure_status=0
-        wait "$figpid" || figure_status=$?
+        await "$figpid" || figure_status=$?
         end_group "$figpid"
         figpid=''
         end_marked || echo "bed-shm: figure: left after $scene: $marked_left" >&2
