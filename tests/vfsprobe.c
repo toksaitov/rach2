@@ -49,7 +49,8 @@
 #define S_IFIFO 0010000
 #define MS_BIND 4096
 
-#define AT_FDCWD (-100)
+#define AT_FDCWD      (-100)
+#define AT_EMPTY_PATH 0x1000
 
 #define MNT_DETACH 2 /* umount2: detach now, free when unused */
 #define WNOHANG    1
@@ -314,6 +315,8 @@ static const struct row rows[] = {
      "file alone",
      "krffs-relocate", STATFS_MAGIC_KRFFS},
     {"remove the files of the keep rows", "krffs-relocate", STATFS_MAGIC_KRFFS},
+    {"fchownat of the working directory by an empty path, after a rename, ends", "cwd-empty", 0},
+    {"a walk follows the fixed /sys link of the PCI host bridge to its uevent", "walk-sys-link", 0},
     {"a walk climbs 1024 mounts stacked on /vp/c, 700 times over, and ends on the top one",
      "walk-climb", 0},
     {"sync", "sync", 0},
@@ -1963,6 +1966,63 @@ static void keep_rows(unsigned magic)
     fail_undo = 0;
 }
 
+/** Undo `cwd_empty_row`, for `fail` and its own end. */
+static void cwd_empty_undo(void)
+{
+    syscall1(SYS_CHDIR, (long)"/");
+    syscall1(SYS_RMDIR, (long)"/vp/e/a");
+    syscall1(SYS_RMDIR, (long)"/vp/e/b");
+    syscall1(SYS_RMDIR, (long)"/vp/e");
+}
+
+/**
+ * A call on the working directory by an empty path ends when what a path
+ * names has changed since the thread's last walk: fchownat of "" with
+ * AT_EMPTY_PATH, after a walk and then a rename in /vp/e, takes the working
+ * directory by its pair with a stamp of its own, which its change checks,
+ * and does not go round on the stamp the walk before the rename left.
+ */
+static void cwd_empty_row(void)
+{
+    const char *why = "fchownat of the working directory by an empty path, after a rename, ends";
+    long uid = syscall0(SYS_GETUID);
+
+    fail_undo = cwd_empty_undo;
+    if (syscall2(SYS_MKDIR, (long)"/vp/e", 0755) != 0 ||
+        syscall2(SYS_MKDIR, (long)"/vp/e/a", 0755) != 0 ||
+        syscall1(SYS_CHDIR, (long)"/vp/e") != 0 || xstat("/vp/e/a") != 0 ||
+        syscall2(SYS_RENAME, (long)"/vp/e/a", (long)"/vp/e/b") != 0 ||
+        syscall5(SYS_FCHOWNAT, AT_FDCWD, (long)"", uid, -1, AT_EMPTY_PATH) != 0) {
+        fail(why);
+    }
+    cwd_empty_undo();
+    fail_undo = 0;
+}
+
+/**
+ * A walk follows a fixed link of /sys, one no driver registered: the PCI
+ * host bridge's /sys/bus/pci/devices/0000:00:00.0, which reads as Linux's
+ * ../../../devices/pci0000:00/0000:00:00.0, leads to the device's uevent.
+ */
+static void sys_link_row(void)
+{
+    const char *why = "a walk follows the fixed /sys link of the PCI host bridge to its uevent";
+    const char *want = "../../../devices/";
+    char text[64];
+    long n =
+        syscall3(SYS_READLINK, (long)"/sys/bus/pci/devices/0000:00:00.0", (long)text, sizeof(text));
+    int i;
+
+    for (i = 0; want[i]; i++) {
+        if (i >= n || text[i] != want[i]) {
+            fail(why);
+        }
+    }
+    if (xstat("/sys/bus/pci/devices/0000:00:00.0/uevent") != 0) {
+        fail(why);
+    }
+}
+
 #define CLIMB_MOUNTS 1024 /* the tmpfs mounts `climb_row` stacks */
 #define CLIMB_TIMES  700  /* the times its path climbs them */
 
@@ -2044,6 +2104,8 @@ static void unlocked_rows(unsigned magic)
     shared_rows(magic);
     gated_rows(magic);
     keep_rows(magic);
+    cwd_empty_row();
+    sys_link_row();
     climb_row();
 }
 
