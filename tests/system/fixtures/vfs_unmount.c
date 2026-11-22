@@ -176,6 +176,11 @@ static int resolve_fd_path(const struct vfs_ref *start, const char *path, int fl
     ref->node = walk_node ? walk_node : records[3].root;
     return lookup_error;
 }
+/** The model's binds hold their roots by the type's hold alone. */
+static void bind_let_go(struct vfs_mount *m)
+{
+    (void)m;
+}
 /** The model keeps no descriptor copy. */
 static void fd_unkeep(struct fd_kept *kept)
 {

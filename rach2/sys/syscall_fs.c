@@ -143,28 +143,6 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
     }
 }
 
-/**
- * How many descriptors other than `except` hold `node` as their backing file.
- *
- * A scan of every process's descriptor table, and deliberately not a counter on
- * the node. A counter would have to be incremented in `fork`'s table copy, in
- * `dup`, in `dup2`, and in every future path that copies an `fd_entry_t`, and
- * one missed increment is a use-after-free that no test would show. The tables
- * are the count, so there is nothing to keep in step.
- *
- * The tables are a few pointer compares per live process, of kernel memory;
- * the scan never touches the page-cache window, and the node's own mode is
- * the one read of it (`krffs_node_head`); a mode that cannot be read counts
- * as one holder more, so that a read the disk fails frees nothing. A
- * descriptor in flight on an AF_UNIX socket, a file
- * mapping and an address space that runs the file as its program hold the
- * node as a descriptor does; any number of them counts as one holder more,
- * since every caller asks only whether there is a holder. The ends of a FIFO
- * hold it too, by their descriptions, whose descriptors name a pipe and no
- * node: every description of the FIFO counts, `except`'s only when a
- * descriptor besides it keeps it, since the FIFO's pipe is found by the
- * node's address, which a new node must not take while an end is open.
- */
 /* A copy of a descriptor that a mount operation keeps (`fd_keep`), on the
  * list `fd_kept_list`, under `fd_kept_lock`, which `fd_node_holders` reads. */
 struct fd_kept {
@@ -189,6 +167,29 @@ static int fd_kept_holds(const krffs_node_t *node)
     return held;
 }
 
+/**
+ * How many descriptors other than `except` hold `node` as their backing file.
+ *
+ * A scan of every process's descriptor table, and deliberately not a counter on
+ * the node. A counter would have to be incremented in `fork`'s table copy, in
+ * `dup`, in `dup2`, and in every future path that copies an `fd_entry_t`, and
+ * one missed increment is a use-after-free that no test would show. The tables
+ * are the count, so there is nothing to keep in step.
+ *
+ * The tables are a few pointer compares per live process, of kernel memory;
+ * the scan never touches the page-cache window, and the node's own mode is
+ * the one read of it (`krffs_node_head`); a mode that cannot be read counts
+ * as one holder more, so that a read the disk fails frees nothing. A
+ * descriptor in flight on an AF_UNIX socket, a file
+ * mapping, an address space that runs the file as its program, a copy a mount
+ * operation keeps (`fd_keep`) and a bind whose root it is hold the
+ * node as a descriptor does; any number of them counts as one holder more,
+ * since every caller asks only whether there is a holder. The ends of a FIFO
+ * hold it too, by their descriptions, whose descriptors name a pipe and no
+ * node: every description of the FIFO counts, `except`'s only when a
+ * descriptor besides it keeps it, since the FIFO's pipe is found by the
+ * node's address, which a new node must not take while an end is open.
+ */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
     krffs_node_t head;
@@ -222,7 +223,7 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         fd_table_unlock(pr->fds, flags);
     }
     if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node) ||
-        fd_kept_holds(node)) {
+        fd_kept_holds(node) || vfs_bind_holds(node)) {
         held++;
     }
     if (krffs_node_head(node, &head) != 0) {
@@ -342,6 +343,22 @@ static void fd_release_orphan(fd_entry_t *e)
 int fs_node_is_held(const krffs_node_t *node)
 {
     return fd_node_holders(node, NULL) > 0;
+}
+
+void fs_bind_root_gone(krffs_node_t *node)
+{
+    struct vfs_mount *root = vfs_root_mount();
+    krffs_node_t head;
+
+    if (!krffs_fs || !node || node == krffs_fs->node) {
+        return;
+    }
+    vfs_ns_lock(root);
+    if (krffs_node_head(node, &head) == 0 && head.type == KRFFS_RESERVED_NODE &&
+        head.name[0] == '\0' && fd_node_holders(node, NULL) == 0) {
+        krffs_remove_reserved_node(krffs_fs, node);
+    }
+    vfs_ns_unlock(root);
 }
 
 void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)

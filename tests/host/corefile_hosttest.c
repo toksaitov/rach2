@@ -914,6 +914,13 @@ int filemap_holds(const void *node)
     return 0;
 }
 
+/** No row binds a file of the KRFFS root. */
+int vfs_bind_holds(const void *node)
+{
+    (void)node;
+    return 0;
+}
+
 krffs_file_system_t *krffs_fs;
 /* The protections of /proc/sys/fs, at the values rach2/sys/fs/vfs.c gives
  * them, which the open of the core file meets. */

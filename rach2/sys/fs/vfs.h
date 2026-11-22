@@ -664,6 +664,11 @@ struct vfs_mount {
      * private state and lock, and its own root, flags and place. */
     struct vfs_mount *bind_of;
     char bind_root[VFS_COVERED_PATH_MAX];
+    /* On a bind of a type that keeps a node only while it is open, mounted
+     * KRFFS, the token of the type's `pin` on the bind's root, which keeps
+     * the file after its name is removed, as a type's hold does for the
+     * others (`bind_pin`); NULL otherwise. */
+    void *bind_pin;
     /* The order the mounts were made in, which /proc/PID/mountinfo lists
      * them by, so that a mount over another's root comes after it. */
     uint32_t seq;
@@ -1776,6 +1781,13 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
  * it may not be freed from under the process.
  */
 int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name);
+
+/**
+ * Whether a bind of the KRFFS root, made or in use, shows the root's file
+ * system from `node`: a holder of the node, which an unlink leaves to it
+ * without a name (`fd_node_holders`), since the root counts no holds.
+ */
+int vfs_bind_holds(const void *node);
 
 /**
  * The path of `node` of `mnt` from the root of the mount table,
