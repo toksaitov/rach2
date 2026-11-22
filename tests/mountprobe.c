@@ -1407,9 +1407,6 @@ static const char *reloc_order_missed(int by_fd, const struct reloc_try *o)
 {
     unsigned long was = o->was;
 
-    if (trace_lost != 0) {
-        return "the kernel's bind trace lost events";
-    }
     if (o->move < 0 || o->moved != o->now || o->now == was) {
         return "the kernel recorded no move of the file to where it is";
     }
@@ -1560,20 +1557,26 @@ static const char *reloc_start(int by_fd, int pids[3])
  * 'B', and take the bind away. */
 static void reloc_bound_file(const char *target)
 {
-    long fd, i;
+    long fd, n, i, got = 0;
 
     if (stat_field(target, KSTAT_SIZE_AT) != sizeof(chunk)) {
         fail("the bind does not show the moved file's length");
     }
     fd = syscall3(SYS_OPEN, (long)target, O_RDONLY, 0);
-    if (fd < 0 || syscall3(SYS_READ, fd, (long)buf, 8) != 8) {
-        fail("read the moved file through its bind");
+    if (fd < 0) {
+        fail("open the moved file through its bind");
+    }
+    while ((n = syscall3(SYS_READ, fd, (long)buf, sizeof(buf))) > 0) {
+        for (i = 0; i < n; i++) {
+            if (buf[i] != 'B') {
+                fail("the bind shows bytes other than the moved file's");
+            }
+        }
+        got += n;
     }
     syscall1(SYS_CLOSE, fd);
-    for (i = 0; i < 8; i++) {
-        if (buf[i] != 'B') {
-            fail("the bind shows the file's old bytes");
-        }
+    if (n < 0 || got != (long)sizeof(chunk)) {
+        fail("read the moved file's 64 KiB through its bind");
     }
     if (syscall2(SYS_UMOUNT2, (long)target, 0) != 0) {
         fail("unmount the bind of the moved file");
@@ -1677,8 +1680,10 @@ static void reloc_record(int by_fd, int dir, const struct reloc_try *o)
  * One try of a row, in a child of its own: bind /rk/f, by descriptor or by
  * path, onto a file or, with `dir`, a directory, while the file moves, and
  * judge the bind's answer, then the order the trace shows, then the nodes
- * the bind judged and held. Exits 2 through `reloc_missed` when the order
- * was not got. Every child it starts is reaped before it fails.
+ * the bind judged and held. A trace that lost events fails the row, since
+ * the order it lacks cannot be judged. Exits 2 through `reloc_missed` only
+ * when a whole trace shows that the order was not got. Every child it
+ * starts is reaped before it fails.
  */
 static void reloc_bind(int by_fd, int dir, int try)
 {
@@ -1713,6 +1718,9 @@ static void reloc_bind(int by_fd, int dir, int try)
     }
     if (read != 0) {
         fail("read the kernel's bind trace");
+    }
+    if (trace_lost != 0) {
+        fail("the kernel's bind trace lost events");
     }
     o.now = stat_field("/rk/f", KSTAT_INO);
     o.made = stat_field("/rk/d", KSTAT_INO);
