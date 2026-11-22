@@ -660,14 +660,15 @@ quiet()
     fi
 }
 
-# load_wait SILENCE N: one second of the load step's wait, which
+# load_wait SILENCE N [FILE]: one second of the load step's wait, which
 # `last=-1 still=0` starts, with binds0 and lost0 the transport's binds and
 # the kernel's `vgpu-shm: lost:` lines at the step's start. It fails once
 # the command of keeper N has ended; at once once the device is gone, a
 # loss logged, the transport unbound or bound again, since no doorbell can
 # come after that, with load_gone saying why; or once for SILENCE seconds
 # the VM's doorbells have not been rung, whatever processor time the load
-# uses, since a load on another renderer may be busy and ring nothing.
+# uses, since a load on another renderer may be busy and ring nothing; with
+# FILE, nor a line added to FILE.
 load_wait()
 {
     load_gone=''
@@ -683,6 +684,7 @@ load_wait()
         return 1
     fi
     size=$(info rung | cut -d/ -f1)
+    [ -z "${3:-}" ] || size=$size:$(wc -l < "$3" 2>/dev/null || echo 0)
     if [ "$size" = "$last" ]; then
         still=$((still + 1))
         [ "$still" -lt "$1" ] || return 1
@@ -1015,30 +1017,42 @@ fi
 # figure COMMAND...: one measurement, its lines added to DIR/measure.txt
 # and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
 # COMMAND`; Venus is selected for nocopy; ok=0 when it fails, with
-# ivshmemd's counts. Every 30 s while
-# it runs, ivshmemd's counts and the VM's last lines show how far it has
-# got.
+# ivshmemd's counts. It is waited for as the load step waits (load_wait),
+# with its output as progress too: the wait ends at once when the device is
+# gone, or once for 600 s the VM's doorbells have not been rung and the
+# figure has printed no line, and its keeper is then ended. Every 30 s
+# while it runs, ivshmemd's counts and the VM's last lines show how far it
+# has got.
 figure()
 {
     echo "bed-shm: measuring: $*"
     keep_new figure
     VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$keep" "$$" "$kb" "$@" <> "$kb.ctl" > "$out/figure.out" 2>&1 &
-    pid=$keepn s=0
-    while keep_running "$pid"; do
-        sleep 1
+    pid=$keepn s=0 figure_why=''
+    binds0=$(info binds) lost0=$(klog_count 'vgpu-shm: lost: ') last=-1 still=0
+    while load_wait 600 "$pid" "$out/figure.out"; do
         s=$((s + 1))
         [ $((s % 30)) -ne 0 ] && continue
         echo "bed-shm: running: $s s: $(ivshmemd -i 2>&1 | tr '\n' ' ')"
         tr -d '\r' < "$console" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
     done
+    if [ -n "$load_gone" ]; then
+        figure_why=$load_gone
+    elif keep_running "$pid"; then
+        figure_why='no doorbell and no line of output for 600 s'
+    fi
     if keep_end "$pid"; then
         figure_status=$keep_status
     else
         figure_status="ended, its keeper not done: $keep_left"
     fi
     pid=''
-    [ "$figure_status" = 0 ] || { ok=0; echo "bed-shm: failed: status $figure_status: $(ivshmemd -i 2>&1 | tr '\n' ' ')"; }
+    if [ "$figure_status" != 0 ] || [ -n "$figure_why" ]; then
+        ok=0
+        echo "bed-shm: failed: status $figure_status${figure_why:+: $figure_why}: $(ivshmemd -i 2>&1 | tr '\n' ' ')"
+    fi
     cat "$out/figure.out" >> "$out/measure.txt"
+    [ -z "$figure_why" ] || echo "FIGURE FAIL: $*: $figure_why" >> "$out/measure.txt"
     sed 's/^/bed-shm: figure: /' "$out/figure.out"
 }
 
