@@ -79,17 +79,21 @@ RUNNING = []
 class Held:
     """Defer SIGTERM, SIGINT and SIGHUP to the end of the outermost `with
     HELD` block, so that the game's start is recorded and its end runs whole
-    before such a signal ends the script."""
+    before such a signal ends the script. Once the script has begun to end,
+    by the first such signal or by the end of main, every later one is only
+    kept, for the exit status, so that no signal cuts the cleanup short."""
     depth = 0
     signum = None
+    ending = False
 
     def __enter__(self):
         Held.depth += 1
 
     def __exit__(self, *_):
         Held.depth -= 1
-        if Held.depth == 0 and Held.signum is not None:
+        if Held.depth == 0 and Held.signum is not None and not Held.ending:
             signum, Held.signum = Held.signum, None
+            Held.ending = True
             sys.exit(128 + signum)
         return False
 
@@ -99,11 +103,20 @@ HELD = Held()
 
 def terminate(signum, _frame):
     """Exit with 128 + SIGNUM through the script's cleanup, or, inside a
-    `with HELD` block, at its end."""
-    if Held.depth:
-        Held.signum = signum
+    `with HELD` block, at its end; once the script is ending, keep SIGNUM."""
+    if Held.depth or Held.ending:
+        Held.signum = Held.signum or signum
         return
+    Held.ending = True
     sys.exit(128 + signum)
+
+
+def end_all():
+    """End every game still in RUNNING; no signal interrupts it once it has
+    set Held.ending."""
+    Held.ending = True
+    while RUNNING:
+        RUNNING[-1].end()
 
 
 def say(text):
@@ -722,8 +735,15 @@ def main():
 if __name__ == "__main__":
     for each in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(each, terminate)
+    # A signal that comes as the inner cleanup begins, before end_all has
+    # set Held.ending, raises out of it after setting Held.ending itself, so
+    # the outer cleanup runs whole.
     try:
-        sys.exit(main())
+        try:
+            sys.exit(main())
+        finally:
+            end_all()
     finally:
-        while RUNNING:
-            RUNNING[-1].end()
+        end_all()
+        if Held.signum is not None:
+            sys.exit(128 + Held.signum)
