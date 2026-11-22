@@ -7,6 +7,7 @@
 #   crysis.sh load SAVE
 #   crysis.sh shm
 #   crysis.sh session ran|none
+#   crysis.sh links ROOT [PROTON]
 #
 # Run as root by etude-guest in the case's workspace, which holds crysis.py,
 # wm.py and the empty directory `private` of the private fixture, in a mount
@@ -28,6 +29,10 @@
 #          no check: crysis-shm.sh's end, which starts the session again on
 #          the files put back when it ran before the launcher, and otherwise
 #          ends it, and waits as the case's own end does
+#   links  no check of the game: the check of the links in ROOT alone, as
+#          any user and read-only, with PROTON, /opt/proton by default, as
+#          Proton's tree; prints the count of links of each kind it accepts
+#          and the links it refuses, and exits 1 when it refuses one
 #
 # The data partition, /dev/disk0p6, and all it holds are the owner's; the
 # case never writes it. It mounts the partition read-only on /data/owner
@@ -46,9 +51,12 @@
 #   logs     a new directory for Proton's logs
 #
 # The case binds /opt/proton read-only over itself in the namespace, and
-# fails before the game starts if a link in the tree resolves outside the
-# private /data and that read-only /opt/proton, Wine's drive links aside,
-# since the game would write through it.
+# fails before the game or crysis.py touches the tree if a link in it could
+# carry a write out of it, by the rule links_check gives: a link to a regular
+# file in that read-only tree or on the owner's read-only partition, one of
+# Wine's drive links, or a link that resolves inside the tree through links
+# that do. `crysis.sh links` runs that check alone, read-only, on a tree such
+# as the owner's /data/crysis.
 #
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
 # every exit the script ends the game's mounts, puts back the session's
@@ -157,6 +165,122 @@ cleanup()
     fi
     say "result: pass"
 }
+# links_check ROOT PROTON OWNER: refuse a link under ROOT, the private copy,
+# through which the game or crysis.py, run as root, could write outside it.
+# PROTON and OWNER, each empty or a read-only tree named by its resolved
+# path, are Proton's tree and the owner's partition. A link passes
+#
+#   (a) when its whole resolved path is a regular file in PROTON or OWNER,
+#       where a write fails with EROFS; Wine's prefix links Proton's DLLs
+#       so, and the game's tree links the owner's files so
+#   (b) when it is one of Wine's drive links, compat/pfx/dosdevices/[a-z]:,
+#       which name the running system, as z: -> / does
+#   (c) when its target, resolved a component at a time, ends inside ROOT,
+#       and every link the resolution meets lies inside ROOT and itself
+#       passes (c), so that no link that leaves ROOT is followed
+#
+# A directory link into PROTON passes none, since a link within that tree
+# could lead out of it. Prints the count of each kind and the first links
+# refused, and returns 1 when one is.
+links_check()
+{
+    python3 - "$@" << 'PYTHON'
+import os, re, stat, sys
+
+root, trees = sys.argv[1], [tree for tree in sys.argv[2:4] if tree]
+drive = re.compile(r"compat/pfx/dosdevices/[a-z]:\Z")
+known = {}
+
+
+def inside(path, top):
+    return path == top or path.startswith(top + "/")
+
+
+def regular(path):
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def walk(start, target, seen):
+    """Resolve TARGET from the real directory START; return the end or None."""
+    current = "/" if target.startswith("/") else start
+    parts = [part for part in target.split("/") if part not in ("", ".")]
+    for i, name in enumerate(parts):
+        if name == "..":
+            current = os.path.dirname(current)
+            continue
+        step = os.path.join(current, name)
+        try:
+            mode = os.lstat(step).st_mode
+        except FileNotFoundError:
+            # No link lies further on; a file made there lands as written.
+            return os.path.normpath(os.path.join(step, *parts[i + 1:]))
+        except OSError:
+            return None
+        if stat.S_ISLNK(mode):
+            if not inside(step, root):
+                return None
+            step = within(step, seen)
+            if step is None:
+                return None
+        current = step
+    return current
+
+
+def within(link, seen):
+    """Return the path inside ROOT that LINK resolves to by (c), or None."""
+    if link not in known:
+        if link in seen:
+            return None
+        end = walk(os.path.dirname(link), os.readlink(link), seen | {link})
+        known[link] = end if end is not None and inside(end, root) else None
+    return known[link]
+
+
+def failed(error):
+    raise error
+
+
+if not os.path.isdir(root) or os.path.realpath(root) != root:
+    sys.exit("crysis-case: links: %s is not a directory named by its resolved path" % root)
+counts = {"a": 0, "b": 0, "c": 0}
+refused = []
+for top, dirs, files in os.walk(root, onerror=failed):
+    for name in dirs + files:
+        path = os.path.join(top, name)
+        if not os.path.islink(path):
+            continue
+        rel = path[len(root) + 1:]
+        end = os.path.realpath(path)
+        if drive.match(rel):
+            counts["b"] += 1
+        elif any(inside(end, tree) for tree in trees) and regular(end):
+            counts["a"] += 1
+        elif within(path, frozenset()) is not None:
+            counts["c"] += 1
+        else:
+            refused.append("%s -> %s" % (rel, os.readlink(path)))
+print("crysis-case: links: %d accepted, (a) %d, (b) %d, (c) %d; %d refused"
+      % (sum(counts.values()), counts["a"], counts["b"], counts["c"], len(refused)))
+for line in refused[:20]:
+    print("crysis-case: links: refused: " + line)
+sys.exit(1 if refused else 0)
+PYTHON
+}
+
+# `crysis.sh links ROOT [PROTON]`: the check alone, read-only, on a tree
+# such as the owner's /data/crysis, with PROTON, /opt/proton by default,
+# taken as read-only.
+if [ "${1:-}" = links ] && { [ $# = 2 ] || [ $# = 3 ]; }; then
+    links_root=$(realpath "$2") || exit 1
+    links_proton=''
+    [ ! -d "${3:-/opt/proton}" ] || links_proton=$(realpath "${3:-/opt/proton}") || exit 1
+    links_check "$links_root" "$links_proton" ''
+    exit
+fi
+
 # `crysis.sh session ran|none`, for crysis-shm.sh: leave the session
 # running on the files put back, or ended, and wait for it.
 if [ "${1:-}:$#" = session:2 ]; then
@@ -184,7 +308,7 @@ case ${1:-}:$# in
     flyby:2 | load:2 | shm:1) ;;
     *)
         echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE | crysis.sh shm |" \
-            "crysis.sh session ran|none" >&2
+            "crysis.sh session ran|none | crysis.sh links ROOT [PROTON]" >&2
         exit 2
         ;;
 esac
@@ -273,18 +397,9 @@ mkdir "$base" "$base/logs"
 cp -rs "$owner/crysis/game" "$base/game" || fail "game-links"
 # shellcheck disable=SC2086 # paths without spaces
 [ -z "$copies" ] || cp -a $copies "$base/" || fail copies
-# Every link in the private tree must resolve inside the private /data,
-# whose only other mount is the owner's read-only one, or in the read-only
-# /opt/proton: through a link to anywhere else, such as a saves
-# directory linked to the owner's home, the game or crysis.py would write
-# the owner's files. Wine's drive links, such as z: -> /, name the running
-# system and stay as they are.
-escapes=$(find "$base" -type l ! -path '*/dosdevices/[a-z]:' ! -path '*/dosdevices/[a-z]::' \
-    -exec realpath -m -- {} + |
-    awk -v proton="$proton" 'function under(dir) { return $0 == dir || index($0, dir "/") == 1 }
-        !under("/data") && !(proton != "" && under(proton))' | head -n 3)
-[ -z "$escapes" ] ||
-    fail "links in the private game resolve outside it, to $(echo "$escapes" | tr '\n' ' ')"
+# A link the game or crysis.py could write through out of the private copy
+# fails the case here, before either touches the tree.
+links_check "$base" "$proton" "$owner" || fail "links in the private game lead out of it"
 chown -R -h "$uid:$uid" "$base"
 say "private game: $(find "$base/game" -type l | wc -l) links, copies of$(
     echo "$copies" | sed "s|$owner/crysis/||g"), $need KiB reserved"
