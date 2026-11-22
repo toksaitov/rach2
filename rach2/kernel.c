@@ -2463,9 +2463,8 @@ static int _krffs_on_disk;
 
 /**
  * Flush the cache and then clear the dirty-mount flag, for a clean shutdown.
- * Returns 0 when the flag is cleared and -1 when it is not, so that a caller
- * does not report a clean unmount the data did not reach. Returns -1 at once
- * unless KRFFS is mounted from a disk.
+ * Returns 0 when the clear reached the medium and -1 otherwise. Returns
+ * -1 at once unless KRFFS is mounted from a disk.
  *
  * The kernel sets the root node's dirty bit on a disk mount, writing it
  * through, and only this clears it. The cache is flushed before the clear
@@ -2475,9 +2474,9 @@ static int _krffs_on_disk;
  * the disk would read clean with data missing while the caller reported a
  * failure. With a flush first, the flag depends on the data: when that flush
  * fails the bit is not touched, the disk keeps the bit the mount wrote
- * through, and the next boot asks for `fsck.krffs`. A failure of the second
- * flush leaves the cleared byte in a dirty frame and the disk still marked,
- * which errs the same way.
+ * through, and the next boot asks for `fsck.krffs`. If the second sync
+ * fails, the flag's state on the medium is unknown. The cache page can be
+ * clean if the write succeeded and the flush failed.
  *
  * A check owed or a node this mount left without a name keeps the flag
  * set; both are asked of memory before anything reads the root, so that a
@@ -2528,7 +2527,8 @@ static int krffs_disk_mark_clean(void)
         return -1;
     }
     if (pc_sync() != 0) {
-        klog(KLOG_WARN, "krffs", "flush failed after the clear; image stays dirty");
+        klog(KLOG_WARN, "krffs",
+             "sync failed after the clear (dirty-mount flag on disk is unknown)");
         return -1;
     }
 
@@ -2801,9 +2801,9 @@ static int krffs_disk_read(uint32_t off, void *page)
  * Write the `count` pages at `pages` to byte `off` of the KRFFS partition,
  * in as few writes of the device as its limit allows, without the flush of
  * the disk's cache where the device can leave it out (`write_cached`): the
- * page cache's next sync flushes once (`krffs_disk_flush`), so that a sync
- * that wrote many runs waits for the medium once. Returns 0, or the
- * device's error, after which the pages are in no known state.
+ * page cache flushes at most once per sync pass (`krffs_disk_flush`),
+ * however many runs it wrote. Returns 0, or the device's error, after
+ * which the pages are in no known state.
  *
  * A halted root (`krffs_root_halted`) takes no write, from the flusher, an
  * eviction or a sync alike: -EIO, and the pages stay dirty in the cache, as

@@ -4,13 +4,9 @@
  *
  * host-deps:
  *
- * A writeback puts the dirty pages beside its page on the backing in the
- * same write, so that the walk of a lookup that evicts a page at a time
- * behind a large copy costs the disk a command for each run and not one for
- * each page, and a sync flushes the disk's cache once, after its last
- * write, so that a barrier of the root waits for the medium once. The rows
- * check that
- * every dirty page is written once with its own bytes at its own place; that
+ * A writeback puts the dirty pages beside its page in the same backing
+ * call. Each sync pass flushes at most once, after its writes. The rows
+ * check that every dirty page is written once with its own bytes; that
  * a run takes the dirty pages before its page and after it, and stops at a
  * clean page, a page not resident, a pinned page and PC_RUN_PAGES pages; that
  * a run whose write fails leaves each of its pages dirty, tells the failure
@@ -24,10 +20,9 @@
  * the threshold and the limit; that a byte count too large for the
  * rounding is taken as the whole capacity; that a sync whose page
  * another pass failed meanwhile writes the page itself; and that a sync
- * flushes the backing once after its last write, and again only once a
- * write has ended since, a failed flush telling the hook and leaving the
- * next sync to flush, and a flush made while a write is in flight leaving
- * that write to the next.
+ * flushes the backing after its writes; that failed flushes and writes
+ * finishing during a flush leave work for a later pass; and that two
+ * overlapping callers each flush and report their own result.
  *
  * Built with PAGECACHE_HOSTTEST and 128 slots, it includes pagecache.c
  * whole, over a model disk of 128 pages that logs each write.
@@ -71,6 +66,7 @@ static uint32_t log_first[LOG_MAX], log_count[LOG_MAX], log_n;
 static const void *log_from[LOG_MAX];
 static int fail_next;              /* fail the next write */
 static void (*during_write)(void); /* run once inside the next write */
+static void (*during_flush)(void); /* run once inside the next flush */
 static int hook_calls;
 static int kicks;         /* wakes of the flusher */
 static int flushes;       /* flushes of the backing, failed ones included */
@@ -127,15 +123,20 @@ static int disk_write(uint32_t disk_off, const void *pages, uint32_t count)
     return failed ? -1 : 0;
 }
 
-/** The backing's flush: count it and note the writes before it. Returns 0,
- *  or -1 when `fail_flush` fails it. */
+/** Count the flush, note the writes before it and run `during_flush` once.
+ * Returns 0, or -1 when `fail_flush` was set on entry. */
 static int disk_flush(void)
 {
+    void (*during)(void) = during_flush;
     int failed = fail_flush;
 
+    during_flush = 0;
     fail_flush = 0;
     flushes++;
     flush_at = log_n;
+    if (during) {
+        during();
+    }
     return failed ? -1 : 0;
 }
 
@@ -167,6 +168,7 @@ static void fresh(void)
     log_n = 0;
     fail_next = 0;
     during_write = 0;
+    during_flush = 0;
     hook_calls = 0;
     kicks = 0;
     flushes = 0;
@@ -544,10 +546,9 @@ static void test_other_pass_failure(void)
     }
 }
 
-/** Run the rows. Returns 0 when every check passed and 1 otherwise. */
 static int nested_rc, nested_flushes;
 
-/** Inside a write: a sync by another caller, which meets the write's pin. */
+/** Run a second sync and record its result and flush count. */
 static void nested_sync(void)
 {
     nested_rc = pc_sync();
@@ -603,6 +604,55 @@ static void test_sync_flush(void)
     check(pc_sync() == 0 && flushes == 6, "and then nothing is left to flush");
 }
 
+/** Complete an eviction after the backing has begun flushing. */
+static void write_during_flush(void)
+{
+    touch(20, 1, 0x20u);
+    check(pc_evict((uint32_t)(slot_of(20) - pc_slots), pc_new_pass()) == 0,
+          "the eviction finishes during the flush");
+}
+
+/** A write completed during a flush needs a subsequent flush. */
+static void test_write_during_flush(void)
+{
+    fresh();
+    touch(10, 1, 0x10u);
+    during_flush = write_during_flush;
+    check(pc_sync() == 0 && log_n == 2 && flushes == 1 && flush_at == 1,
+          "the first flush began before the eviction's write");
+    check(pc_sync() == 0 && log_n == 2 && flushes == 2 && flush_at == 2,
+          "the next sync flushes the eviction's write");
+    check(pc_sync() == 0 && flushes == 2, "the clean cache needs no further flush");
+}
+
+/** Run a second sync whose flush fails while the first flush is in flight. */
+static void failing_nested_sync(void)
+{
+    fail_flush = 1;
+    nested_sync();
+}
+
+/** Overlapping syncs issue separate flushes, and either can fail. */
+static void test_overlapping_flushes(void)
+{
+    int outer_fails;
+
+    for (outer_fails = 0; outer_fails < 2; ++outer_fails) {
+        fresh();
+        touch(10, 1, 0x10u);
+        fail_flush = outer_fails;
+        during_flush = outer_fails ? nested_sync : failing_nested_sync;
+        check(pc_sync() == (outer_fails ? PC_SYNC_FAILED : 0),
+              "the first sync reports its own flush result");
+        check(nested_rc == (outer_fails ? 0 : PC_SYNC_FAILED) && nested_flushes == 2,
+              "the second sync issued its own flush and reports its result");
+        check(hook_calls == 1 && log_n == 1, "the failure was reported and the page written once");
+        check(pc_sync() == 0 && flushes == 3 && log_n == 1, "the failed flush is retried");
+        check(pc_sync() == 0 && flushes == 3, "the retry leaves nothing to flush");
+    }
+}
+
+/** Run the rows. Returns 0 when every check passed and 1 otherwise. */
 int main(void)
 {
     test_sync_runs();
@@ -616,6 +666,8 @@ int main(void)
     test_huge_bytes();
     test_other_pass_failure();
     test_sync_flush();
+    test_write_during_flush();
+    test_overlapping_flushes();
     if (fails == 0) {
         printf("pagecache_run_hosttest: ok\n");
     }

@@ -1778,7 +1778,7 @@ static int nvme_write(block_device_t *device, uint64_t lba, uint32_t count, cons
  * The device's `write_cached`: a polled write without FUA and without the
  * flush, so that it may wait in the disk's cache until `nvme_flush_now`.
  * The disk is marked unflushed once the controller has answered, or failed,
- * the write, as a queued write without `BLOCK_REQ_NOFLUSH` is
+ * the write, as a queued write with `BLOCK_REQ_NOFLUSH` is
  * (`nvme_unflushed`): a flush issued before the answer may not cover it,
  * and one that ends after the mark leaves it set. Returns 0 or `-EIO`.
  */
