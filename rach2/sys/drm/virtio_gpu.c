@@ -472,8 +472,10 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
 
 /**
  * Free every command answered that nobody waits on, after its `complete`,
- * logging an error answer. Both queues are reaped first, which answers the
- * commands of a device without interrupts. Process context.
+ * logging an error answer, and notify the device once of what the
+ * completions queued without a notify (`vgpu_kick`). Both queues are
+ * reaped first, which answers the commands of a device without
+ * interrupts. Process context.
  */
 void vgpu_reap(struct virtio_gpu_device *vg)
 {
@@ -502,7 +504,89 @@ void vgpu_reap(struct virtio_gpu_device *vg)
         vgpu_cmd_free(cmd);
     }
     vg->reaping--;
+    vgpu_kick(vg);
     drm_dev_put(&vg->drm);
+}
+
+/**
+ * Drop a reference that a command held on `obj` until the device answered
+ * it, from the command's completion in a reap. The last reference is not
+ * dropped there: the object goes on the device's list for the worker,
+ * whose free may wait for room (`vgpu_room`), which a reap's may not, and
+ * keeps the frees of a submission's buffers off the thread that reaped its
+ * answer, as Linux's dequeue work hands them to its obj_free_work
+ * (virtgpu_vq.c:211-228, virtgpu_gem.c:276-298 in 6.12.115). A device
+ * that has died, or one with no worker yet, and an object of another
+ * driver free at once.
+ */
+void vgpu_obj_put_answered(struct drm_gem_object *obj)
+{
+    struct virtio_gpu_object *bo = vgpu_bo(obj);
+    struct virtio_gpu_device *vg = bo ? to_vg(obj->dev) : NULL;
+    uint32_t flags;
+
+    if (drm_gem_object_put_unless_last(obj)) {
+        return;
+    }
+    if (!bo || vg->dead || !vgpu_thread || !vgpu_wake_ready) {
+        drm_gem_object_put(obj);
+        return;
+    }
+    flags = spin_lock_irqsave(&vg->lock);
+    bo->free_next = NULL;
+    if (vg->frees) {
+        vg->frees_tail->free_next = bo;
+    } else {
+        vg->frees = bo;
+    }
+    vg->frees_tail = bo;
+    spin_unlock_irqrestore(&vg->lock, flags);
+    wq_wake_all(&vgpu_wake);
+}
+
+/**
+ * Free each object on the device's list, oldest first, until it is empty;
+ * objects that the frees' own waits hand on meanwhile are freed too. The
+ * UNREFs go without a notify, and one notify at the end, or before any wait
+ * on the device, sends them all (`vgpu_kick`). Process context, may sleep.
+ */
+void vgpu_frees_run(struct virtio_gpu_device *vg)
+{
+    struct virtio_gpu_object *bo;
+    uint32_t flags;
+
+    drm_dev_get(&vg->drm);
+    vg->freeing++;
+    for (;;) {
+        flags = spin_lock_irqsave(&vg->lock);
+        bo = vg->frees;
+        if (bo) {
+            vg->frees = bo->free_next;
+            if (!vg->frees) {
+                vg->frees_tail = NULL;
+            }
+        }
+        spin_unlock_irqrestore(&vg->lock, flags);
+        if (!bo) {
+            break;
+        }
+        drm_gem_object_put(&bo->shmem.base);
+    }
+    vg->freeing--;
+    vgpu_kick(vg);
+    drm_dev_put(&vg->drm);
+}
+
+void vgpu_kick(struct virtio_gpu_device *vg)
+{
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int kick = !vg->dead && vg->unkicked[VIRTIO_GPU_QUEUE_CONTROL];
+
+    vg->unkicked[VIRTIO_GPU_QUEUE_CONTROL] = 0;
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (kick) {
+        vgpu_notify(vg, vg->ctrlq, 0);
+    }
 }
 
 /** Whether the caller may sleep: a process runs it and the scheduler is
@@ -647,7 +731,7 @@ static int unref_moved(void *arg)
  * holds, as drm_dev_unplug takes the mode lock that a file's release holds
  * while it frees framebuffers.
  */
-static int vgpu_may_wait(struct virtio_gpu_device *vg)
+int vgpu_may_wait(struct virtio_gpu_device *vg)
 {
     return can_sleep() && kirq_enabled() && vgpu_wake_ready && !vg->reaping && !vg->dead;
 }
@@ -692,6 +776,7 @@ int32_t vgpu_room(struct virtio_gpu_device *vg, int killable)
             rc = -EINTR;
             break;
         }
+        vgpu_kick(vg);
         vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS,
                    killable ? "virtio_gpu_queue_ctrl_sgs" : NULL);
     }
@@ -732,13 +817,18 @@ static int vgpu_dma_wait(struct virtio_gpu_device *vg, int64_t until)
 {
     struct held_wait w;
 
-    if (!vgpu_may_wait(vg) || vg->held == 0 || dma_fence_now() >= until) {
+    if (vg->frees && !vg->freeing && vgpu_may_wait(vg)) {
+        vgpu_frees_run(vg);
+        return !vg->dead;
+    }
+    if (!vgpu_may_wait(vg) || (vg->held == 0 && !vg->freeing) || dma_fence_now() >= until) {
         return 0;
     }
     w.vg = vg;
     w.seen = vg->held;
     vgpu_reap(vg);
     if (!vg->dead && vg->held == w.seen) {
+        vgpu_kick(vg);
         vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS, NULL);
         vgpu_reap(vg);
     }
@@ -820,8 +910,12 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
         if (virtio_backing_fill(vg->vdev, &bo->shmem.pages, bo->shmem.base.size) == 0) {
             return 0;
         }
+        if (vg->frees && !vg->freeing && vgpu_may_wait(vg)) {
+            vgpu_frees_run(vg);
+            continue;
+        }
         w.seen = vg->unrefs;
-        if (w.seen == 0 || !can_sleep() || !vgpu_wake_ready) {
+        if ((w.seen == 0 && !vg->freeing) || !can_sleep() || !vgpu_wake_ready) {
             return -ENOMEM;
         }
         vgpu_reap(vg);
@@ -832,6 +926,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             return -EINTR;
         }
         if (vg->unrefs == w.seen) {
+            vgpu_kick(vg);
             vgpu_sleep(unref_moved, &w, dma_fence_now() + VGPU_POLL_NS, "backing_fill");
             vgpu_reap(vg);
         }
@@ -968,6 +1063,13 @@ void vgpu_cmd_queue(struct virtio_gpu_cmd *cmd)
 {
     cmd->quiet = 1;
     vgpu_cmd_send(cmd, NULL, NULL);
+}
+
+void vgpu_cmd_send_quiet(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
+                         void *arg)
+{
+    cmd->quiet = 1;
+    vgpu_cmd_send(cmd, complete, arg);
 }
 
 void vgpu_cmd_send_sleepable(struct virtio_gpu_cmd *cmd, void (*complete)(struct virtio_gpu_cmd *),
@@ -1449,14 +1551,20 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
 /**
  * The `free` of an object, after its last reference: UNMAP_BLOB for a blob
  * placed in host-visible memory, then RESOURCE_UNREF, which also detaches
- * the backing, and the frames and the piece freed once the host has
- * answered, since until then it may use them, as Linux's
- * virtio_gpu_free_object and virtio_gpu_vram_free do; frames that are the
- * VM's own are let go before, since the VM keeps them. A caller that may
+ * the backing and the resource from every context, and the frames and the
+ * piece freed once the host has answered, since until then it may use
+ * them, as Linux's virtio_gpu_free_object and virtio_gpu_vram_free do;
+ * frames that are the VM's own are let go before, since the VM keeps them.
+ * The contexts' records of the resource are forgotten: each file's close
+ * of its last handle has detached it (`vgpu_obj_close`). A caller that may
  * sleep first waits for room (`vgpu_room`), since an exit frees every
  * buffer of the program at once, and waits for the UNREF's memory while
- * earlier commands hold it. Without memory for the commands even so, they
- * are freed only after an unplug resets the device and revokes mappings.
+ * earlier commands hold it. The UNREF of a free that the worker's pass
+ * over its list makes (`vgpu_frees_run`), or a reap, goes without a
+ * notify, which the pass's or the reap's end makes for all of them, since
+ * QEMU stops the processor for each notify while it runs the queue.
+ * Without memory for the commands even so, they are freed only after an
+ * unplug resets the device and revokes mappings.
  */
 void vgpu_obj_free(struct drm_gem_object *obj)
 {
@@ -1465,7 +1573,7 @@ void vgpu_obj_free(struct drm_gem_object *obj)
     struct virtio_gpu_cmd *cmd;
 
     (void)vgpu_room(vg, 0);
-    vgpu_resource_detach(vg, bo);
+    vgpu_resource_forget(vg, bo);
     /* The device's pages go before the UNMAP_BLOB or UNREF that lets it
      * unpin them, since the VM may give a page it unpinned to the next
      * backing or page list at once, and a frame this kernel still holds a
@@ -1486,7 +1594,13 @@ void vgpu_obj_free(struct drm_gem_object *obj)
             cmd_req(cmd, struct virtio_gpu_resource_unref)->resource_id = bo->res_id;
             drm_dev_get(obj->dev);
             vg->unrefs++;
-            vgpu_cmd_send(cmd, unref_done, bo);
+            if (vg->reaping || vg->freeing) {
+                vgpu_cmd_send_quiet(cmd, unref_done, bo);
+            } else if (vgpu_may_wait(vg)) {
+                vgpu_cmd_send_sleepable(cmd, unref_done, bo);
+            } else {
+                vgpu_cmd_send(cmd, unref_done, bo);
+            }
             return;
         }
         /* A device that died during the wait has detached the backing. */
@@ -1527,7 +1641,7 @@ int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file)
 }
 
 static const struct drm_gem_object_funcs vgpu_obj_funcs = {
-    vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL, vgpu_obj_open};
+    vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL, vgpu_obj_open, vgpu_obj_close};
 
 /**
  * Make `bo`, zeroed, an object of `vg` of `size` bytes, a whole number of
@@ -2149,7 +2263,8 @@ static int work_pending(void *arg)
 
     (void)arg;
     for (i = 0; i < VGPU_DEVICES; i++) {
-        if (vgpu_devices[i] && (vgpu_devices[i]->display_pending || vgpu_devices[i]->done_list)) {
+        if (vgpu_devices[i] && (vgpu_devices[i]->display_pending || vgpu_devices[i]->done_list ||
+                                vgpu_devices[i]->frees)) {
             return 1;
         }
     }
@@ -2158,8 +2273,9 @@ static int work_pending(void *arg)
 
 #ifndef RACH2_HOSTTEST
 /** The worker: serve each device's display change, then free what its queues
- * answered, and sleep in an idle wait until the next change. Like every kernel
- * thread, it is not switched by the tick (`no_tick_switch`, which
+ * answered and the objects whose last reference an answer let go of
+ * (`vgpu_frees_run`), and sleep in an idle wait until the next change. Like
+ * every kernel thread, it is not switched by the tick (`no_tick_switch`, which
  * `setup_process_stack` sets), so the driver's and its transport's state, which
  * the big lock guards, holds through each pass, as in a system call; it gives
  * way where it sleeps and between passes. A display query sleeps, and an unplug
@@ -2185,6 +2301,7 @@ static void vgpu_worker(void)
                     vgpu_display_changed(vg);
                 }
                 vgpu_reap(vg);
+                vgpu_frees_run(vg);
                 drm_dev_put(&vg->drm);
             }
         }
@@ -2558,8 +2675,9 @@ void vgpu_kill(struct virtio_gpu_device *vg)
         }
     }
     vgpu_reap(vg);
+    vgpu_frees_run(vg);
     for (bo = vg->resources; bo; bo = bo->next) {
-        vgpu_resource_detach(vg, bo);
+        vgpu_resource_forget(vg, bo);
         bo->res_id = 0;
     }
     for (ctx = vg->contexts; ctx; ctx = ctx->next) {
