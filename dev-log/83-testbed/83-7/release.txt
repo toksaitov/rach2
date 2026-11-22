@@ -1,4 +1,4 @@
-Lenovo test bed case output, selected lines from the release and lit trial.
+Lenovo test bed case output, selected lines from the releases and the lit trial.
 
 milestone21-287ca34847e7-lenovo-1118-153031, testbed/glmark2
 testbed: rach2: measure: result: glmark2 native-rach2 frames 93850 frame_ms 0.426 p50 0.401 p99 0.876 cpu_ms_per_frame 0.206 latency_ms - copied_bytes 0 exits 0 round_trips - seconds 40.7 passed -
@@ -80,3 +80,17 @@ crcwatch: frames 300 distinct 1
 crc: 30 s later
 crcwatch: frames 300 distinct 1
     300 0xf2d626e5
+
+milestone21-7eccb9667585-lenovo-1121-143319, bed/shm, 2026-11-21
+bed-shm: attach: pass: attached once, refused twice
+bed-shm: session: pass: Weston on card0 through virgl after 1 s: virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+bed-shm: figure: measure: result: glmark2 shm-virgl frames 1366 frame_ms 29.392 p50 1.979 p99 67.740 cpu_ms_per_frame 30.644 latency_ms - copied_bytes 421959528 exits 173040 round_trips 3372 seconds 40.9 passed -
+bed-shm: figure: measure: result: piglit shm-virgl frames 9 frame_ms 1092.086 p50 700.138 p99 2302.011 cpu_ms_per_frame 2574.444 latency_ms - copied_bytes 441082288 exits 134285 round_trips 21041 seconds 21.0 passed 9/9
+bed-shm: figure: measure: result: game shm-virgl frames 1805 frame_ms 79.581 p50 79.060 p99 85.180 cpu_ms_per_frame 103.016 latency_ms - copied_bytes 864285376 exits 676979 round_trips 22620 seconds 168.5 passed -
+bed-shm: figure: measure: result: glmark2 shm-venus frames 607 frame_ms 66.000 p50 66.430 p99 68.630 cpu_ms_per_frame 71.021 latency_ms - copied_bytes 24400 exits 228156 round_trips 3218 seconds 41.5 passed -
+bed-shm: load: pass: glmark2 on virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2)), 100 doorbells
+bed-shm: death: pass: error -19; glmark2 ended with status 0
+bed-shm: fallback: pass: Weston headless on llvmpipe 1 s after the death
+bed-shm: return: pass: Weston on card0 from the headless session, Mesa Intel(R) HD Graphics 4400 (HSW GT2), pipe A crc 0x00000000 over 4 frames, 0 s after the death
+bed-shm: handoff: pass: 0000:00:02.0 to the guest and back to i915 after 289 s, QEMU killed
+bed-shm: result: pass
