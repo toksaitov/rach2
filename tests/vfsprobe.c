@@ -60,6 +60,7 @@
 #define ENOENT    2
 #define EBADF     9
 #define EIO       5
+#define EACCES    13
 #define EEXIST    17
 #define ENOTDIR   20
 #define EISDIR    21
@@ -68,6 +69,19 @@
 
 #define SEEK_SET 0
 #define SEEK_END 2
+
+/* inotify(7): the calls, which probe.h lacks, IN_NONBLOCK, the event of a
+ * change of attributes, and the size of an event's fixed part. */
+#if defined __x86_64__
+#define SYS_INOTIFY_ADD_WATCH 254
+#define SYS_INOTIFY_INIT1     294
+#else
+#define SYS_INOTIFY_ADD_WATCH 292
+#define SYS_INOTIFY_INIT1     332
+#endif
+#define IN_NONBLOCK    04000
+#define IN_ATTRIB      0x00000004
+#define IN_EVENT_FIXED 16
 
 /* The f_type statfs(2) reports for /proc, the KRFFS boot root, a KRFFS
  * volume mounted by mount(2), and ext2. */
@@ -259,6 +273,12 @@ static const struct row rows[] = {
     {"a lookup whose read of the disk fails is EIO and makes nothing, and the next walk reads the "
      "directory",
      "walk-cold-fail", STATFS_MAGIC_EXT2},
+    {"an O_CREAT open through a dangling link whose read of the link fails after its first walk is "
+     "EIO and makes nothing",
+     "walk-link-fail", STATFS_MAGIC_EXT2},
+    {"an O_CREAT open through a dangling link whose directory turns unsearchable after its first "
+     "walk is EACCES and makes nothing",
+     "walk-link-fail", STATFS_MAGIC_EXT2},
     {"an O_TRUNC open that a rename came between after its walk runs again and empties the new "
      "name's file alone",
      "walk-trunc", STATFS_MAGIC_EXT2},
@@ -294,6 +314,8 @@ static const struct row rows[] = {
      "file alone",
      "krffs-relocate", STATFS_MAGIC_KRFFS},
     {"remove the files of the keep rows", "krffs-relocate", STATFS_MAGIC_KRFFS},
+    {"a walk climbs 1024 mounts stacked on /vp/c, 700 times over, and ends on the top one",
+     "walk-climb", 0},
     {"sync", "sync", 0},
     {"cleanup", "cleanup", 0},
 };
@@ -601,7 +623,7 @@ static const char *gate_why = "read the walk gate";
  * start, or fail `gate_why`. */
 static unsigned gate_count(const char *name)
 {
-    char line[256];
+    char line[512];
     int n = syscall3(SYS_LSEEK, gate_rfd, 0, SEEK_SET) != 0
                 ? -1
                 : syscall3(SYS_READ, gate_rfd, (long)line, (int)sizeof(line) - 1);
@@ -902,6 +924,7 @@ static int gated_mounted; /* whether the tmpfs on /vp/g/m is mounted */
 #define GATED_CHMOD   10 /* sets its mode to 0600 */
 #define GATED_MOUNT   11 /* mounts a tmpfs over it */
 #define GATED_BIND    12 /* binds the second path over it */
+#define GATED_USER    13 /* opens it with O_CREAT as uid 65534 */
 
 static const char *gated_path2; /* the second path of a gated child */
 static unsigned gated_ino;      /* the inode a child's open must reach, or 0 */
@@ -956,6 +979,9 @@ static void gated_undo(void)
     syscall1(SYS_UNLINK, (long)"/vp/g/y/f");
     syscall1(SYS_UNLINK, (long)"/vp/g/m/f");
     syscall1(SYS_UNLINK, (long)"/vp/g/t/f");
+    syscall1(SYS_UNLINK, (long)"/vp/g/l");
+    syscall1(SYS_UNLINK, (long)"/vp/g/q/l");
+    syscall1(SYS_RMDIR, (long)"/vp/g/q");
     gated_undo_made("/vp/g/x/");
     gated_undo_made("/vp/g/y/");
     gated_undo_made("/vp/g/t/");
@@ -997,8 +1023,8 @@ static int gated_change(const char *path, int how)
  * The child of a gated row: on its go from `in`, use `path` as `how` says.
  * An open checks that it reached the inode `gated_ino` and read the bytes
  * of `gated_text`, when they are set. The bytes it reads, 0 for a change or
- * an O_TRUNC open, 98 for another inode, 99 for other bytes, or 100 and
- * the errno.
+ * an O_TRUNC open or one as uid 65534, 97 when it cannot become that uid,
+ * 98 for another inode, 99 for other bytes, or 100 and the errno.
  */
 static int gated_child(int in, const char *path, int how)
 {
@@ -1009,6 +1035,13 @@ static int gated_child(int in, const char *path, int how)
 
     if (syscall3(SYS_READ, in, (long)&byte, 1) != 1) {
         return 100;
+    }
+    if (how == GATED_USER) {
+        if (syscall3(SYS_SETRESUID, 65534, 65534, 65534) != 0) {
+            return 97;
+        }
+        fd = syscall3(SYS_OPEN, (long)path, O_RDONLY | O_CREAT, 0644);
+        return fd < 0 ? 100 - fd : 0;
     }
     if (how == GATED_UNLINK || how > GATED_EXCL) {
         fd = gated_change(path, how);
@@ -1152,7 +1185,8 @@ static void gated_restart_rows(void)
  * locks, runs again from its walk. The gate stops a child's unlink of x/f
  * where the walk has given it x, and the parent swaps x and y again: the
  * unlink runs again (the gate's `retry`) and removes the f of the new x,
- * where going on would remove the f of the old x, which is y now.
+ * where going on would remove the f of the old x, which is y now; the
+ * attempt that was sent round made no change (one `effect` in all).
  */
 static void gated_handoff_row(void)
 {
@@ -1161,8 +1195,8 @@ static void gated_handoff_row(void)
                           "x/f", GATED_UNLINK, "handoff", 0);
 
     gated_swap();
-    if (gated_end(pid) != 0 || gate_count("retry") == 0 || xstat("/vp/g/x/f") != -ENOENT ||
-        xstat("/vp/g/y/f") != 0) {
+    if (gated_end(pid) != 0 || gate_count("retry") == 0 || gate_count("effect") != 1 ||
+        xstat("/vp/g/x/f") != -ENOENT || xstat("/vp/g/y/f") != 0) {
         fail(gated_why);
     }
     gate_write("off", gated_why);
@@ -1331,9 +1365,55 @@ static void gated_cold_rows(void)
 }
 
 /**
+ * The preparation of an open that creates through a dangling link, after
+ * its first walk found the name missing, where the gate stops it (`link`):
+ * a failure there is the open's answer, and nothing is made. With the
+ * caches dropped and the child's next read of the disk failed (`ioerr`),
+ * the read of /vp/g/l, a link to x/n, is EIO; with q made unsearchable to
+ * the child, uid 65534, the walk to q/l, a link to ../x/n, is EACCES. A
+ * swallowed failure would go on to create x/n, which the first row's next
+ * walk could read. Neither row reaches a change (`effect` 0).
+ */
+static void gated_link_rows(void)
+{
+    int pid;
+
+    gated_why = gate_why = "an O_CREAT open through a dangling link whose read of the link fails "
+                           "after its first walk is EIO and makes nothing";
+    if (syscall2(SYS_SYMLINK, (long)"x/n", (long)"/vp/g/l") != 0) {
+        gated_fail("make the link l");
+    }
+    pid = gated_start(gated_why, "l", GATED_CREATE, "link", 0);
+    gate_write("cold", gated_why);
+    gate_pid_write("ioerr ", pid, gated_why);
+    if (gated_end(pid) != 100 + EIO || gate_count("read") == 0 || gate_count("effect") != 0 ||
+        xstat("/vp/g/x/n") != -ENOENT || syscall1(SYS_UNLINK, (long)"/vp/g/l") != 0) {
+        fail(gated_why);
+    }
+    gate_write("off", gated_why);
+    gated_why = gate_why = "an O_CREAT open through a dangling link whose directory turns "
+                           "unsearchable after its first walk is EACCES and makes nothing";
+    if (syscall2(SYS_MKDIR, (long)"/vp/g/q", 0755) != 0 ||
+        syscall2(SYS_SYMLINK, (long)"../x/n", (long)"/vp/g/q/l") != 0) {
+        gated_fail("make q and the link q/l");
+    }
+    pid = gated_start(gated_why, "q/l", GATED_USER, "link", 0);
+    if (syscall2(SYS_CHMOD, (long)"/vp/g/q", 0700) != 0) {
+        gated_fail("make q unsearchable");
+    }
+    if (gated_end(pid) != 100 + EACCES || gate_count("effect") != 0 ||
+        xstat("/vp/g/x/n") != -ENOENT || syscall1(SYS_UNLINK, (long)"/vp/g/q/l") != 0 ||
+        syscall1(SYS_RMDIR, (long)"/vp/g/q") != 0) {
+        fail(gated_why);
+    }
+    gate_write("off", gated_why);
+}
+
+/**
  * An open with O_TRUNC that a rename comes between after its walk runs
  * again from its walk (`retry`) and empties the new x's f, by its inode,
- * and leaves the bytes of the old x's f, which is y's now. x/f holds "xx"
+ * and leaves the bytes of the old x's f, which is y's now; the attempt
+ * that was sent round truncated nothing (one `effect` in all). x/f holds "xx"
  * and y/f "yyy" before; the row leaves x/f "yyy" and y/f "xx".
  */
 static void gated_trunc_row(void)
@@ -1345,8 +1425,8 @@ static void gated_trunc_row(void)
     gated_ino = gated_ino_of("/vp/g/y/f", "the inode of y/f");
     pid = gated_start(gated_why, "x/f", GATED_TRUNC, "handoff", 0);
     gated_swap();
-    if (gated_end(pid) != 0 || gate_count("retry") == 0 || !file_holds("/vp/g/x/f", "", 0) ||
-        !file_holds("/vp/g/y/f", "xx", 2)) {
+    if (gated_end(pid) != 0 || gate_count("retry") == 0 || gate_count("effect") != 1 ||
+        !file_holds("/vp/g/x/f", "", 0) || !file_holds("/vp/g/y/f", "xx", 2)) {
         fail(gated_why);
     }
     gated_ino = 0;
@@ -1484,7 +1564,9 @@ static void gated_op_undo(const struct gated_op *op)
  * again from its walk (`retry`) and lands in the new x: a creation, a
  * mkdir, a link to the new x's f, a symlink, a FIFO, a rename of the new
  * x's f, a chmod of it, and a mount of a tmpfs and a bind of m over the new
- * x's d; each is undone after its row. The mount rows begin with d in both.
+ * x's d; each is undone after its row. The attempt that was sent round
+ * reached no change of the file system: one `effect` in all. The mount
+ * rows begin with d in both.
  */
 static void gated_op_rows(void)
 {
@@ -1507,7 +1589,8 @@ static void gated_op_rows(void)
         gated_path2 = op->path2;
         pid = gated_start(op->why, op->path, op->how, "handoff", 0);
         gated_swap();
-        if (gated_end(pid) != 0 || gate_count("retry") == 0 || !gated_op_landed(op, d, f)) {
+        if (gated_end(pid) != 0 || gate_count("retry") == 0 || gate_count("effect") != 1 ||
+            !gated_op_landed(op, d, f)) {
             fail(op->why);
         }
         gated_op_undo(op);
@@ -1527,7 +1610,9 @@ static void gated_op_rows(void)
  * change's retry after its walk (`gated_handoff_row`), the sequence's width
  * (`gated_width_row`), overlapping changes (`gated_overlap_row`), the
  * fault of a hand-back (`gated_fault_row`), cold lookups and a failed read
- * (`gated_cold_rows`), O_TRUNC (`gated_trunc_row`), and the other changes'
+ * (`gated_cold_rows`), failures in an open's preparation of a link to
+ * create through (`gated_link_rows`), O_TRUNC (`gated_trunc_row`), and the
+ * other changes'
  * retries (`gated_op_rows`). A root of another type, `magic`, has no such
  * rows. A failure undoes them (`gated_undo`).
  */
@@ -1559,6 +1644,7 @@ static void gated_rows(unsigned magic)
     gated_overlap_row();
     gated_fault_row();
     gated_cold_rows();
+    gated_link_rows();
     gated_trunc_row();
     gated_op_rows();
     syscall1(SYS_CLOSE, shared_root);
@@ -1705,17 +1791,84 @@ static unsigned root_bfree(const char *why)
     return *(unsigned *)(buf + KSTATFS_BFREE);
 }
 
+/** The little-endian 32-bit word at `p`. */
+static unsigned word_at(const char *p)
+{
+    const unsigned char *b = (const unsigned char *)p;
+
+    return (unsigned)b[0] | (unsigned)b[1] << 8 | (unsigned)b[2] << 16 | (unsigned)b[3] << 24;
+}
+
+/** Count into `*g` and `*h` the IN_ATTRIB events the inotify descriptor
+ * `fd`, which does not block, has for the names g and h, reading every
+ * event it has. */
+static void attrib_counts(int fd, int *g, int *h)
+{
+    static char buf[1024];
+    int n, i;
+
+    *g = *h = 0;
+    while ((n = syscall3(SYS_READ, fd, (long)buf, (int)sizeof(buf))) > 0) {
+        for (i = 0; i + IN_EVENT_FIXED <= n; i += IN_EVENT_FIXED + (int)word_at(buf + i + 12)) {
+            const char *name = buf + i + IN_EVENT_FIXED;
+
+            if ((word_at(buf + i + 4) & IN_ATTRIB) && word_at(buf + i + 12) > 0 &&
+                name[1] == '\0') {
+                *g += name[0] == 'g';
+                *h += name[0] == 'h';
+            }
+        }
+    }
+}
+
+/** An inotify descriptor, which does not block, that watches /vp/k for
+ * changes of attributes; fail `why` when there is none. */
+static int keep_watch(const char *why)
+{
+    int fd = syscall1(SYS_INOTIFY_INIT1, IN_NONBLOCK);
+
+    if (fd < 0 || syscall3(SYS_INOTIFY_ADD_WATCH, fd, (long)"/vp/k", IN_ATTRIB) < 0) {
+        fail(why);
+    }
+    return fd;
+}
+
+/** Close `watch`, which `keep_watch` made, once it has heard one change
+ * of attributes for g and one for h, and remove g, which has mode 0600; or
+ * fail `why`. */
+static void keep_watched(int watch, const char *why)
+{
+    int g, h;
+
+    attrib_counts(watch, &g, &h);
+    syscall1(SYS_CLOSE, watch);
+    if (g != 1 || h != 1 || xstat("/vp/k/g") != 0 || (st_field(KSTAT_MODE) & 0777) != 0600 ||
+        syscall1(SYS_UNLINK, (long)"/vp/k/g") != 0) {
+        fail(why);
+    }
+}
+
 /**
  * A file of the KRFFS root that a stopped call's walk keeps, by `how`, a
  * chmod that succeeds or an open that fails: the probe grows the file past
  * its neighbour, made right after it and larger, so that no earlier room
  * takes it and the file cannot grow in place, which moves the file, and
- * the gate's `keep` follows it; unlinks
- * it, which the keep holds; and makes a file of the old size, which takes
- * the old place, as a second stopped call's keep shows. Once the calls end,
- * the new file holds its bytes and the mode its call set, and once the
- * files are removed the root has the room it had: the keep freed the moved
- * file and nothing at its old place.
+ * the gate's `keep` follows it; and makes a file of the old size, which
+ * takes the old place, as a second stopped call's keep shows. Once the
+ * calls end, the new file holds its bytes and the mode its call set, and
+ * once the files are removed the root has the room it had: the keep freed
+ * the moved file and nothing at its old place.
+ *
+ * The chmod is stopped where it has let go of its walk's lock and still
+ * uses its answer, to tell inotify (`attr_told`), which reads the
+ * attributes of the file it kept: a watch of the directory hears one change
+ * of attributes for g, which it hears only when that read reaches the moved
+ * g and not the new file at g's old place, and one for h, from h's own
+ * chmod; g has the mode the chmod set. A change of a file on the KRFFS root
+ * comes under the namespace lock its walk returns with, which a relocation
+ * takes too, so the use after the lock is let go is the part of a call that
+ * a relocation can come before. The failing open's file is unlinked while
+ * it is kept, which leaves it nameless until the keep ends and frees it.
  */
 static void keep_relocate_row(int how)
 {
@@ -1725,7 +1878,7 @@ static void keep_relocate_row(int how)
                                           "after a failed call frees the moved file alone";
     static char bytes[1536];
     unsigned room, was, moved, reused;
-    int fd, i;
+    int fd, i, watch = -1;
 
     gate_why = why;
     for (i = 0; i < (int)sizeof(bytes); i++) {
@@ -1734,6 +1887,9 @@ static void keep_relocate_row(int how)
     room = root_bfree(why);
     shared_file("/vp/k/g", bytes, 512, why);
     shared_file("/vp/k/n", bytes, 1024, why);
+    if (how == KEEP_CHMOD) {
+        watch = keep_watch(why);
+    }
     keep_start(0, how, why);
     was = gate_count("keep");
     fd = syscall3(SYS_OPEN, (long)"/vp/k/g", O_WRONLY | O_APPEND, 0);
@@ -1743,13 +1899,17 @@ static void keep_relocate_row(int how)
     }
     syscall1(SYS_CLOSE, fd);
     moved = gate_count("keep");
-    if (moved == 0 || moved == was || syscall1(SYS_UNLINK, (long)"/vp/k/g") != 0) {
+    if (moved == 0 || moved == was ||
+        (how == KEEP_NOTDIR && syscall1(SYS_UNLINK, (long)"/vp/k/g") != 0)) {
         fail(why);
     }
     shared_file("/vp/k/h", bytes + 7, 512, why);
     keep_start(1, KEEP_CHMOD_H, why);
     reused = gate_count("keep");
     keep_end(why);
+    if (how == KEEP_CHMOD) {
+        keep_watched(watch, why);
+    }
     if (reused != was || !file_holds("/vp/k/h", bytes + 7, 512) || xstat("/vp/k/h") != 0 ||
         (st_field(KSTAT_MODE) & 0777) != 0640 || xstat("/vp/k/g") != -ENOENT ||
         syscall1(SYS_UNLINK, (long)"/vp/k/h") != 0 || syscall1(SYS_UNLINK, (long)"/vp/k/n") != 0 ||
@@ -1803,17 +1963,88 @@ static void keep_rows(unsigned magic)
     fail_undo = 0;
 }
 
+#define CLIMB_MOUNTS 1024 /* the tmpfs mounts `climb_row` stacks */
+#define CLIMB_TIMES  700  /* the times its path climbs them */
+
+static int climb_made; /* the mounts `climb_row` has stacked on /vp/c */
+
+/** Undo `climb_row`, for `fail` and its own end: every mount it stacked on
+ * /vp/c, then /vp/c. */
+static void climb_undo(void)
+{
+    while (climb_made > 0) {
+        syscall2(SYS_UMOUNT2, (long)"/vp/c", MNT_DETACH);
+        climb_made--;
+    }
+    syscall1(SYS_RMDIR, (long)"/vp/c");
+}
+
+/**
+ * A walk is bounded by the links it follows alone, so a path with no link
+ * that climbs a stack of mounts many times is walked whole: with
+ * CLIMB_MOUNTS tmpfs mounts stacked on /vp/c, "/vp/c" and CLIMB_TIMES
+ * "/../c" after it, 3,505 bytes, each ".." climbing every mount of the
+ * stack to /vp and each "c" entering its top, ends on the top mount's root,
+ * by its device and inode.
+ */
+static void climb_row(void)
+{
+    const char *why = "a walk climbs 1024 mounts stacked on /vp/c, 700 times over, and ends on "
+                      "the top one";
+    static char path[4096];
+    unsigned dev, ino;
+    int i, n;
+
+    fail_undo = climb_undo;
+    if (syscall2(SYS_MKDIR, (long)"/vp/c", 0755) != 0) {
+        fail(why);
+    }
+    for (i = 0; i < CLIMB_MOUNTS; i++) {
+        if (syscall5(SYS_MOUNT, (long)"none", (long)"/vp/c", (long)"tmpfs", 0, 0) != 0) {
+            fail(why);
+        }
+        climb_made++;
+    }
+    if (xstat("/vp/c") != 0) {
+        fail(why);
+    }
+    dev = st_field(KSTAT_DEV);
+    ino = st_field(KSTAT_INO);
+    n = 0;
+    for (i = 0; "/vp/c"[i]; i++) {
+        path[n++] = "/vp/c"[i];
+    }
+    for (i = 0; i < CLIMB_TIMES; i++) {
+        path[n++] = '/';
+        path[n++] = '.';
+        path[n++] = '.';
+        path[n++] = '/';
+        path[n++] = 'c';
+    }
+    path[n] = '\0';
+    if (xstat(path) != 0 || st_field(KSTAT_DEV) != dev || st_field(KSTAT_INO) != ino) {
+        fail(why);
+    }
+    climb_undo();
+    fail_undo = 0;
+    if (xstat("/vp/c") != -ENOENT) {
+        fail(why);
+    }
+}
+
 /** The rows of walks, by the root `magic` names: on ext2 the holds of a
  * walk without the big lock (`cwd_unlocked_rows`), the changes that send
  * it again (`shared_rows`), and the changes that send a walk or a call again
  * while the walk gate stops it (`gated_rows`); on KRFFS the keeps of a
- * call's walk (`keep_rows`). */
+ * call's walk (`keep_rows`); on either a climb of stacked mounts
+ * (`climb_row`). */
 static void unlocked_rows(unsigned magic)
 {
     cwd_unlocked_rows(magic);
     shared_rows(magic);
     gated_rows(magic);
     keep_rows(magic);
+    climb_row();
 }
 
 #if !defined __x86_64__

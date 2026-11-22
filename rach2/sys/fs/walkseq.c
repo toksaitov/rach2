@@ -207,9 +207,9 @@ static uint32_t gate_count[WALK_GATE_EVENTS];
 static wait_queue_t gate_wq;
 
 /* The events' names, in the order of their numbers. */
-static const char *const gate_names[WALK_GATE_EVENTS] = {"full",   "unlocked", "miss",    "lookup",
-                                                         "nslock", "restart",  "handoff", "retry",
-                                                         "wait",   "load",     "read",    "kept"};
+static const char *const gate_names[WALK_GATE_EVENTS] = {
+    "full",  "unlocked", "miss", "lookup", "nslock", "restart", "handoff",
+    "retry", "wait",     "load", "read",   "kept",   "link",    "effect"};
 
 /** The wait condition of `walk_gate`: the stop is released. */
 static int gate_open(void *arg)
