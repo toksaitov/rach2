@@ -80,7 +80,11 @@ no echo and no reply is reported on the standard error.
 Each request has 56 bytes of data, or the size of
 .Fl s ,
 and the first four hold the send time on the monotonic clock.
-The requests are sent from the handler of a timer, one interval apart.
+Normally a timer handler sends the requests one interval apart.
+With
+.Fl A
+or a zero interval, the receive loop sends them as replies arrive or
+as its wait expires.
 .Pp
 Once the last request is sent,
 .Nm
@@ -118,7 +122,7 @@ An interval of 0 sends the next request as soon as a reply comes, as
 does, and after 10 ms when none comes.
 .It Fl A
 Send the next request as soon as a reply comes, as well as at each
-interval.
+interval, until the requested count has been sent.
 .It Fl p Ar byte
 Fill the data with
 .Ar byte ,
@@ -141,8 +145,9 @@ ten.
 Stop when
 .Ar deadline
 seconds have passed, at most 2147, whatever has been sent or received.
-The time is checked as each request is sent, so a long interval overruns
-it.
+In adaptive mode the deadline limits the wait for replies.
+With periodic sends the time is checked as each request is sent, so a
+long interval can overrun it.
 .It Fl q
 Print only the first line and the statistics.
 .It Fl v
