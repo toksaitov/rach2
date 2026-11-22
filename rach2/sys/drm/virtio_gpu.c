@@ -2640,7 +2640,10 @@ static int damage_merged(const struct drm_plane_state *old, const struct drm_pla
  * damaged rectangle of a dumb buffer goes to the host, the scanout is set
  * again, with SET_SCANOUT_BLOB for a blob, when the framebuffer, the source
  * or the mode changed, and the
- * rectangle is flushed to the screen, unwaited (vgpu_flush). May sleep.
+ * rectangle is flushed to the screen, unwaited (vgpu_flush). A framebuffer
+ * whose object's deferred backing failed after the check (`obj_failed`),
+ * while a nonblocking commit waited for its fences, shows nothing too, and
+ * goes in no command. May sleep.
  */
 static void primary_update(struct drm_plane *plane, struct drm_atomic_state *state)
 {
@@ -2659,14 +2662,14 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
         return;
     }
     vg = o->vg;
-    if (!fb || !o->crtc.state->active) {
+    bo = fb ? vgpu_bo(fb->obj[0]) : NULL;
+    if (!fb || !o->crtc.state->active || (bo && obj_failed(bo))) {
         vgpu_set_scanout(vg, o->index, 0, rect_of(0, 0, ps->src_w >> 16, ps->src_h >> 16), 1);
         return;
     }
     if (!damage_merged(old, ps, &r)) {
         return;
     }
-    bo = vgpu_bo(fb->obj[0]);
     res = bo ? bo->res_id : 0;
     if (bo && bo->dumb) {
         cmd = vgpu_transfer_cmd(vg, res,
@@ -2696,7 +2699,9 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
  * The cursor plane's update, Linux's virtio_gpu_cursor_plane_update: a new
  * framebuffer's pixels go to the host, waited for, and UPDATE_CURSOR names
  * its resource and hotspot; an unchanged one only moves, with MOVE_CURSOR.
- * Both go on the cursor queue. May sleep.
+ * Both go on the cursor queue. A framebuffer whose object's deferred
+ * backing failed after the check (`obj_failed`) goes as none, with
+ * UPDATE_CURSOR at each update, which hides the cursor. May sleep.
  */
 static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *state)
 {
@@ -2707,30 +2712,35 @@ static void cursor_update(struct drm_plane *plane, struct drm_atomic_state *stat
     struct virtio_gpu_update_cursor *req;
     struct virtio_gpu_device *vg;
     struct virtio_gpu_cmd *cmd;
+    int update;
 
     if (!o) {
         return;
     }
     vg = o->vg;
-    if (bo && bo->dumb && ps->fb != old->fb) {
+    update = ps->fb != old->fb;
+    if (bo && obj_failed(bo)) {
+        bo = NULL;
+        update = 1;
+    }
+    if (bo && bo->dumb && update) {
         cmd = vgpu_transfer_cmd(vg, bo->res_id, 0, rect_of(0, 0, ps->crtc_w, ps->crtc_h));
         if (cmd) {
             (void)vgpu_cmd_send_wait(cmd, NULL, 0);
         }
     }
-    cmd =
-        vgpu_cmd_new(vg, vg->cursorq,
-                     ps->fb != old->fb ? VIRTIO_GPU_CMD_UPDATE_CURSOR : VIRTIO_GPU_CMD_MOVE_CURSOR,
-                     sizeof(struct virtio_gpu_update_cursor));
+    cmd = vgpu_cmd_new(vg, vg->cursorq,
+                       update ? VIRTIO_GPU_CMD_UPDATE_CURSOR : VIRTIO_GPU_CMD_MOVE_CURSOR,
+                       sizeof(struct virtio_gpu_update_cursor));
     if (!cmd) {
         klog(KLOG_WARN, "virtio_gpu", "scanout %u: no memory for the cursor", o->index);
         return;
     }
     req = cmd_req(cmd, struct virtio_gpu_update_cursor);
-    if (ps->fb != old->fb) {
+    if (update) {
         req->resource_id = bo ? bo->res_id : 0;
-        req->hot_x = ps->fb ? (uint32_t)ps->hotspot_x : 0;
-        req->hot_y = ps->fb ? (uint32_t)ps->hotspot_y : 0;
+        req->hot_x = bo ? (uint32_t)ps->hotspot_x : 0;
+        req->hot_y = bo ? (uint32_t)ps->hotspot_y : 0;
     }
     req->pos.scanout_id = o->index;
     req->pos.x = (uint32_t)ps->crtc_x;
