@@ -152,6 +152,15 @@
 #define AHCI_CMD_STEPS        3000000u
 #define AHCI_CMD_STEPS_MASKED 500000u
 
+/* The steps of a polled command's wait from one read of the port's
+   interrupt status to the next, for a fatal error that leaves the slot's
+   PxCI bit set; PxCI alone is read at the others, as libahci's polled
+   command reads PORT_CMD_ISSUE alone (`ahci_exec_polled_cmd`, drivers/ata/
+   libahci.c) and judges the status after it. Under a hypervisor each read
+   is an exit that holds the emulator's lock against the completion it
+   waits for; a fatal error is still seen within 160 us. */
+#define AHCI_FATAL_EVERY 16u
+
 /* What follows a COMRESET is measured, not counted, since what it waits for
    happens on the wire and in the device, not at the processor's speed. The
    link is debounced as Linux 6.12.115 does it with `sata_deb_timing_normal`
@@ -1527,13 +1536,13 @@ static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *
  *
  * Builds the command through ahci_build_command, waits for the task file to
  * go idle, sets the slot's `PxCI` bit, and busy-polls it clear, watching the
- * fatal `PxIS` bits for failure, then judges the task file's ERR and DF and
- * the byte count the HBA reports (`ahci_judge`), so a short transfer fails
- * instead of passing. The HBA performs the DMA; the processor only spins on
- * memory-mapped status, in bounded steps. It never sleeps, and allocates
- * only a page of the DMA pool for an entry that needs one (`ahci_piece`), so
- * it may be called with interrupts off, which the page-cache window's fault
- * needs.
+ * fatal `PxIS` bits for failure every `AHCI_FATAL_EVERY` steps, then
+ * judges the task file's ERR and DF and the byte count the HBA reports
+ * (`ahci_judge`), so a short transfer fails instead of passing. The HBA
+ * performs the DMA; the processor only spins on memory-mapped status, in
+ * bounded steps. It never sleeps, and allocates only a page of the DMA pool
+ * for an entry that needs one (`ahci_piece`), so it may be called with
+ * interrupts off, which the page-cache window's fault needs.
  *
  * Returns 0 on success, `-EIO` on an error or an expiry, and -1 when the
  * command could not be built: a command the disk policy does not allow, or a
@@ -1545,7 +1554,7 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
     uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
     uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
     uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
-    uint32_t spin;
+    uint32_t spin, polls = 0;
     int rc;
 
     if (ahci_build_command(d, command, lba, count, buf, bytes, write) != 0) {
@@ -1570,13 +1579,12 @@ static int ahci_command_claimed(struct ahci_disk *d, uint8_t command, uint64_t l
     ahci_write32(ci_off, 1u << AHCI_SLOT);
 
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
-        uint32_t is;
-
         block_count_poll();
-        is = ahci_read32(is_off);
-        block_count_poll();
-        if (is & AHCI_PxIS_FATAL) {
-            return ahci_polled_failed(d, command, "the controller reported an error");
+        if (++polls % AHCI_FATAL_EVERY == 0) {
+            block_count_poll();
+            if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
+                return ahci_polled_failed(d, command, "the controller reported an error");
+            }
         }
         if (--spin == 0) {
             return ahci_polled_failed(d, command,
