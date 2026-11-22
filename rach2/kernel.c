@@ -2675,9 +2675,9 @@ static int shutdown_never(void *arg)
  * other machine the page cache is flushed. A failed flush does not keep the
  * machine from stopping, since an unwritable disk would otherwise make a
  * machine that cannot be stopped; it leaves the flag's state on the medium
- * unknown: a failed write keeps it set, so the next boot asks for
- * `fsck.krffs`, but when the write clearing it succeeded and only the flush
- * after it failed, the cleared flag may already be on the medium.
+ * unknown, since a write that failed on a later sector, or a flush that failed
+ * after the write, may still have put the cleared flag on the medium, so the
+ * next boot may or may not ask for `fsck.krffs`.
  *
  * The goodbye line is a log record and not a console line, so that it reaches
  * the serial port, the ring and netconsole, and the screen too on a boot that
