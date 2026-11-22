@@ -376,6 +376,10 @@ Reject unsupported flag bits with
 .Er EINVAL .
 .It
 Resolve and hold the target, returning any path-resolution error.
+A final
+.Pa /proc/PID/fd/N
+link supplies the directory held by the descriptor, whose mount must be
+visible in the caller's mount namespace.
 .It
 For a mount of type
 .Ql proc ,
@@ -721,8 +725,8 @@ A KRFFS source device exceeds the size the file system can address.
 .It Bq Er EINVAL
 A flag is unsupported, the mount target is the root or in a synthetic
 namespace, but for the root of a mount and, for a bind, a name in the
-root directory of one, a bind operand's mount is outside the caller's
-mount namespace or its descriptor holds no mountable node,
+root directory of one, a mount operand names a descriptor without a
+mountable node or on a mount outside the caller's mount namespace,
 the source of a type with a device is not a supported block
 device, the unmount target is not a mount root, or a lazy unmount names
 the root of the mount table.
