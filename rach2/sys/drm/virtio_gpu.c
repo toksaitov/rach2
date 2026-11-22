@@ -567,10 +567,31 @@ void vgpu_obj_put_answered(struct drm_gem_object *obj)
 }
 
 /**
+ * Notify the device of the commands queued on its control queue without a
+ * notify, if any (`vgpu_kick`). With `sleepable`, for a caller that may
+ * sleep, the write is made without the big lock (`vgpu_notify`): while
+ * QEMU's main thread runs earlier commands, the write waits for it, and the
+ * other processors' system calls, a program's GEM_CLOSEs among them, would
+ * wait as long for the big lock.
+ */
+static void kick_ctrl(struct virtio_gpu_device *vg, int sleepable)
+{
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int kick = !vg->dead && vg->unkicked[VIRTIO_GPU_QUEUE_CONTROL];
+
+    vg->unkicked[VIRTIO_GPU_QUEUE_CONTROL] = 0;
+    spin_unlock_irqrestore(&vg->lock, flags);
+    if (kick) {
+        vgpu_notify(vg, vg->ctrlq, sleepable);
+    }
+}
+
+/**
  * Free each object on the device's list, oldest first, until it is empty;
  * objects that the frees' own waits hand on meanwhile are freed too. The
- * UNREFs go without a notify, and one notify at the end, or before any wait
- * on the device, sends them all (`vgpu_kick`). Process context, may sleep.
+ * UNREFs go without a notify, and one notify at the end, made without the
+ * big lock (`kick_ctrl`), or one before any wait on the device, sends them
+ * all. Process context, may sleep.
  */
 void vgpu_frees_run(struct virtio_gpu_device *vg)
 {
@@ -595,20 +616,13 @@ void vgpu_frees_run(struct virtio_gpu_device *vg)
         drm_gem_object_put(&bo->shmem.base);
     }
     vg->freeing--;
-    vgpu_kick(vg);
+    kick_ctrl(vg, 1);
     drm_dev_put(&vg->drm);
 }
 
 void vgpu_kick(struct virtio_gpu_device *vg)
 {
-    uint32_t flags = spin_lock_irqsave(&vg->lock);
-    int kick = !vg->dead && vg->unkicked[VIRTIO_GPU_QUEUE_CONTROL];
-
-    vg->unkicked[VIRTIO_GPU_QUEUE_CONTROL] = 0;
-    spin_unlock_irqrestore(&vg->lock, flags);
-    if (kick) {
-        vgpu_notify(vg, vg->ctrlq, 0);
-    }
+    kick_ctrl(vg, 0);
 }
 
 /** Whether the caller may sleep: a process runs it and the scheduler is
