@@ -470,22 +470,35 @@ static const struct vfs_ops pstore_vops = {
     0,                       /* check_acl */
 };
 
-/** The constructor: every mount shows the one directory, as Linux's
- * single superblock does. Its dump threshold is shared across mounts. */
+/**
+ * The constructor: every mount shows the one directory, as Linux's single
+ * superblock does. Its dump threshold is shared across mounts. A second
+ * mount remounts the base with its flags and options, and takes the
+ * reference it keeps on the base before that remount, which may wait for
+ * another: the last other mount's unmount meanwhile would otherwise let the
+ * reaper free the base under the wait. A base being unmounted is -EBUSY.
+ */
 static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                         const char *options)
 {
     struct pstore_file *f;
+    struct vfs_mount *base = pstore_base;
 
     int rc;
 
     (void)dev;
-    if (pstore_base) {
-        rc = vfs_remount(pstore_base, flags, options);
+    if (base) {
+        if (base->state != VFS_ACTIVE) {
+            return -EBUSY;
+        }
+        vfs_mount_get(base);
+        rc = vfs_remount(base, flags, options);
         if (rc != 0) {
+            if (vfs_mount_put(base) == 0) {
+                vfs_reap_detached();
+            }
             return rc;
         }
-        vfs_mount_get(pstore_base);
     } else {
         pstore_base = vfs_kernel_mount(&vfs_pstore_type, &root, flags);
         if (!pstore_base) {
@@ -493,8 +506,9 @@ static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
         }
         pstore_base->show_options = ps_options;
         ps_remount(pstore_base, flags, options);
+        base = pstore_base;
     }
-    mnt->bind_of = pstore_base;
+    mnt->bind_of = base;
     k_strncpy(mnt->bind_root, "/", sizeof(mnt->bind_root));
     if (root.ino == 0) {
         root.ino = 1;
