@@ -74,6 +74,14 @@ Attach the file open on the descriptor given, by the path
 .Pa /proc/self/fd
 gives it, read-only unless both that descriptor and the node's are open
 for writing.
+A writable attachment holds the file open for writing through the mount
+the path reaches it by, as Linux's loop does: it is
+.Er EROFS
+through a read-only mount,
+.Er ETXTBSY
+for a file being executed, and until the detach a remount of that mount
+read-only is
+.Er EBUSY .
 A
 .Vt struct loop_config
 with a block size other than 0 or 512, and a
