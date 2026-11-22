@@ -2176,6 +2176,7 @@ static uint32_t block_bytes(block_device_t *dev, uint64_t blk)
 
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh);
 static int fill_run(block_device_t *dev, uint64_t blk);
+static int fill_run_checked(block_device_t *dev, uint64_t blk);
 static int firsts_pending(const block_device_t *dev);
 
 /* The answer of `firsts_pending` for the device last asked about, kept for
@@ -2766,7 +2767,10 @@ again:
             wb_give();
             wb = 0;
         }
-        (void)fill_run(dev, blk);
+        if (fill_run_checked(dev, blk) < 0) {
+            b = 0;
+            goto done;
+        }
         goto again;
     }
     if (!wb && !search.clean) {
@@ -2929,6 +2933,17 @@ static int fill_run(block_device_t *dev, uint64_t blk)
     ahead_next = blk + n;
     cache_unlock(flags);
     return kept != 0;
+}
+
+/** `fill_run` once the read check (`bcache_set_read_check`) passes, and
+ * -EIO when it fails the read, which fails the caller's get as a failed
+ * read of its block does. */
+static int fill_run_checked(block_device_t *dev, uint64_t blk)
+{
+    if (read_check && read_check() != 0) {
+        return -EIO;
+    }
+    return fill_run(dev, blk);
 }
 
 /* The stamp orders the buffers for the shrink; the release order is the
