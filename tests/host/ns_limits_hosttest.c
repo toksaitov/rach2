@@ -22,7 +22,9 @@
  * ENOSPC, and the limit of a user namespace below it counted per user, as
  * Linux's ucounts are; and two namespaces made for one place left while a
  * remount holds the making off, the second while the first waits, of which
- * only one is made.
+ * only one is made; and a writable remount without privilege of a private
+ * bind that another remount seals read-only while it waits, refused with
+ * EPERM once the wait ends.
  *
  * Id maps: 340 extents written in descending order, read back sorted by the
  * first id as Linux 4.15 lists a map past five extents, every id mapped both
@@ -99,6 +101,12 @@ int vfs_unmount_record(struct vfs_mount *m)
         }
     }
     return -EBUSY;
+}
+
+/** vfs.c's: a bind's own flags, the only mounts the rows remount. */
+uint32_t vfs_mount_flags(const struct vfs_mount *m)
+{
+    return m->flags;
 }
 
 void vfs_reap_detached(void)
@@ -453,6 +461,53 @@ static void remount_wait(void)
     CHECK(mnt_ids.count == 1 && mnt_list == NULL, "every id but the first is free after the wait");
 }
 
+/* The bind `remount_locked` remounts, which its other remount seals, and
+ * the process without privilege that remounts it. */
+static struct vfs_mount *sealed;
+static process_t unprivileged;
+
+/** The other remount of `remount_locked`, which seals the bind read-only
+ * while the first waits, and ends. */
+static void seal_bind(void)
+{
+    sealed->flags |= VFS_MS_RDONLY;
+    vfs_mntns_release();
+}
+
+/**
+ * A writable remount without privilege of a private bind, which waits for
+ * another remount that seals the bind read-only meanwhile: under the hold
+ * it must find the seal and answer EPERM, holding nothing, where a check
+ * made only before the wait would clear the read-only flag. Without the
+ * seal the same remount is held, and a remount that keeps the flag is held
+ * after the seal.
+ */
+static void remount_locked(void)
+{
+    as_user(&unprivileged, 1000);
+    current_proc = &unprivileged;
+    CHECK(table[SLOTS - 1] == NULL, "a free slot for the bind");
+    sealed = table[SLOTS - 1] ? NULL : mount_in(SLOTS - 1);
+    if (!sealed) {
+        return;
+    }
+    CHECK(vfs_mntns_hold_unprivileged(sealed, 0) == 0 && remounts == 1,
+          "a writable remount of an unsealed private bind is held");
+    vfs_mntns_release();
+    vfs_mntns_hold();
+    while_waiting = seal_bind;
+    CHECK(vfs_mntns_hold_unprivileged(sealed, 0) == -EPERM,
+          "a writable remount that waited while the bind was sealed is EPERM");
+    CHECK(while_waiting == NULL && remounts == 0 && (sealed->flags & VFS_MS_RDONLY),
+          "the refused remount holds nothing and the seal stays");
+    CHECK(vfs_mntns_hold_unprivileged(sealed, VFS_MS_RDONLY) == 0 && remounts == 1,
+          "a remount that keeps the seal is held");
+    vfs_mntns_release();
+    vfs_unmount_record(sealed);
+    sealed = NULL;
+    current_proc = NULL;
+}
+
 /** The map text of `n` extents, `2k 3k 1` for k from n - 1 down to 0, into
  * `out` of `cap` bytes; its length. */
 static uint32_t descending(char *out, int cap, int n)
@@ -569,6 +624,7 @@ int main(void)
     thousand();
     limits();
     remount_wait();
+    remount_locked();
     maps();
     if (failures) {
         printf("ns-limits-test: %d failures\n", failures);

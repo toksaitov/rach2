@@ -5350,9 +5350,6 @@ static int mount_privileged(const char *type)
            type_is(type, "mqueue") || type_is(type, "devpts");
 }
 
-/* The flags a remount without privilege may set but not clear. */
-#define REMOUNT_LOCKED (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC)
-
 /**
  * mount(2) with MS_REMOUNT: the mount whose root `path` names takes the
  * flags `flags`; -EINVAL for a path that is no mount's root. With `bind`,
@@ -5362,7 +5359,8 @@ static int mount_privileged(const char *type)
  * open for writing through what the change makes read-only, -EBUSY, as on
  * Linux. A caller without privilege, which `sys_mount` let through as
  * privileged over its mount namespace, may change only a bind that no other
- * live namespace sees, and may not clear REMOUNT_LOCKED there, -EPERM.
+ * live namespace sees, and may not clear VFS_MS_LOCKED there, -EPERM,
+ * which `vfs_remount_bind` judges again after its wait for another remount.
  * With `keep_atime`, for a call that named no atime flag, the mount keeps
  * its noatime, nodiratime and relatime, as Linux's `path_mount` keeps them
  * for a remount.
@@ -5372,6 +5370,7 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
 {
     struct vfs_ref ref;
     struct vfs_mount *m;
+    int privileged = cred_privileged();
     int rc = vfs_resolve(0, path, 0, &ref, 0, 0);
 
     if (rc != 0) {
@@ -5387,12 +5386,12 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
 
         flags = (flags & ~atime) | (vfs_mount_flags(m) & atime);
     }
-    if (!cred_privileged() &&
-        (!bind || vfs_mount_shared(m) || (vfs_mount_flags(m) & REMOUNT_LOCKED & ~flags))) {
+    if (!privileged &&
+        (!bind || vfs_mount_shared(m) || (vfs_mount_flags(m) & VFS_MS_LOCKED & ~flags))) {
         vfs_ref_release(&ref);
         return -EPERM;
     }
-    rc = bind ? vfs_remount_bind(m, flags) : vfs_remount(m, flags, data);
+    rc = bind ? vfs_remount_bind(m, flags, privileged) : vfs_remount(m, flags, data);
     vfs_ref_release(&ref);
     return rc;
 }

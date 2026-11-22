@@ -6913,14 +6913,18 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     return rc;
 }
 
-int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
+int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged)
 {
     int closing, rc;
 
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
-    vfs_mntns_hold();
+    if (privileged) {
+        vfs_mntns_hold();
+    } else if ((rc = vfs_mntns_hold_unprivileged(m, flags)) != 0) {
+        return rc;
+    }
     closing = (flags & VFS_MS_RDONLY) && !vfs_mount_rdonly(m);
     rc = m->state != VFS_ACTIVE ? -EBUSY : remount_shared(m, flags);
     if (rc == 0 && closing) {
