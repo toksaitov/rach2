@@ -20,7 +20,10 @@
  * a /proc file has a handle only with AT_HANDLE_FID; an unknown flag is
  * EINVAL; and open_by_handle_at, for root, opens the file again by its
  * handle and answers ESTALE for a handle of another type, and for any
- * other user EPERM. Then the errors: a
+ * other user EPERM. When /tmp is on a type whose files do not reopen, the
+ * KRFFS root of the default guest, the file's handle is EOPNOTSUPP without
+ * AT_HANDLE_FID, the rows take the handle that flag gives, and
+ * open_by_handle_at answers root ESTALE for it. Then the errors: a
  * flag statx does not take, both sync flags at once, the reserved mask bit,
  * a missing file, and an empty path without AT_EMPTY_PATH.
  *
@@ -42,6 +45,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
@@ -358,20 +362,36 @@ static long to_handle(const char *path, int flags, unsigned room, struct handle 
     return syscall(SYS_name_to_handle_at, AT_FDCWD, path, h, mnt, flags);
 }
 
+/* The statfs magic of the types whose files a handle reopens. */
+#define EXT2_MAGIC  0xEF53
+#define TMPFS_MAGIC 0x01021994
+
+/** Whether a handle reopens the files of the file system of FILE_PATH. */
+static int handle_reopens(void)
+{
+    struct statfs sf;
+
+    return statfs(FILE_PATH, &sf) == 0 && (sf.f_type == EXT2_MAGIC || sf.f_type == TMPFS_MAGIC);
+}
+
 /** Check name_to_handle_at on FILE_PATH, whose stat is `st`, leaving its
- * handle in `h`, and on a /proc file. Returns 0, or 1 once the failure is
- * reported. */
-static int handle_names(const struct stat *st, struct handle *h)
+ * handle in `h`, with AT_HANDLE_FID unless `reopens`, and on a /proc file.
+ * Returns 0, or 1 once the failure is reported. */
+static int handle_names(const struct stat *st, struct handle *h, int reopens)
 {
     unsigned long long want = mountinfo_id(FILE_PATH);
+    int fid = reopens ? 0 : AT_HANDLE_FID_BIT;
     struct handle other;
     int mnt;
 
-    if (to_handle(FILE_PATH, 0, 0, h, &mnt) != -1 || errno != EOVERFLOW || h->handle_bytes != 12 ||
-        (unsigned long long)mnt != want) {
+    if (!reopens && (to_handle(FILE_PATH, 0, 128, h, &mnt) != -1 || errno != EOPNOTSUPP)) {
+        return fail("a handle of a file whose type reopens nothing");
+    }
+    if (to_handle(FILE_PATH, fid, 0, h, &mnt) != -1 || errno != EOVERFLOW ||
+        h->handle_bytes != 12 || (unsigned long long)mnt != want) {
         return fail("a handle with no room");
     }
-    if (to_handle(FILE_PATH, 0, 128, h, &mnt) != 0 || h->handle_bytes != 12 ||
+    if (to_handle(FILE_PATH, fid, 128, h, &mnt) != 0 || h->handle_bytes != 12 ||
         h->handle_type != 0x51 || (unsigned long long)mnt != want ||
         memcmp(h->f_handle, &st->st_ino, sizeof(st->st_ino)) != 0) {
         return fail("a file's handle");
@@ -394,12 +414,12 @@ static int handles(void)
     struct handle h, other;
     struct stat st, again;
     char text[8];
-    int fd;
+    int fd, reopens = handle_reopens();
 
     if (stat(FILE_PATH, &st) != 0) {
         return fail("the file's stat");
     }
-    if (handle_names(&st, &h) != 0) {
+    if (handle_names(&st, &h, reopens) != 0) {
         return 1;
     }
     fd = (int)syscall(SYS_open_by_handle_at, AT_FDCWD, &h, O_RDONLY);
@@ -410,11 +430,16 @@ static int handles(void)
         report_held();
         return 0;
     }
-    if (fd < 0 || fstat(fd, &again) != 0 || again.st_ino != st.st_ino ||
-        read(fd, text, sizeof(text)) != 5 || memcmp(text, "stats", 5) != 0) {
+    if (!reopens && (fd != -1 || errno != ESTALE)) {
+        return fail("open_by_handle_at of a file whose type reopens nothing");
+    }
+    if (reopens && (fd < 0 || fstat(fd, &again) != 0 || again.st_ino != st.st_ino ||
+                    read(fd, text, sizeof(text)) != 5 || memcmp(text, "stats", 5) != 0)) {
         return fail("a file opened by its handle");
     }
-    close(fd);
+    if (reopens) {
+        close(fd);
+    }
     other = h;
     other.handle_type = 1;
     if (syscall(SYS_open_by_handle_at, AT_FDCWD, &other, O_RDONLY) != -1 || errno != ESTALE) {
