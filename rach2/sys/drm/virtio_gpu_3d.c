@@ -1097,6 +1097,16 @@ void vgpu_meas_add(int which, int64_t delta)
     spin_unlock_irqrestore(&vgpu_copied_lock, flags);
 }
 
+void vgpu_meas_max(int which, uint64_t value)
+{
+    uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);
+
+    if (vgpu_meas_n[which] < value) {
+        vgpu_meas_n[which] = value;
+    }
+    spin_unlock_irqrestore(&vgpu_copied_lock, flags);
+}
+
 uint64_t vgpu_meas_get(int which)
 {
     uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);

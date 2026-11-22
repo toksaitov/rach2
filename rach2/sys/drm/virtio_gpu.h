@@ -903,7 +903,10 @@ uint64_t virtio_gpu_copied_bytes(void);
  * /proc/stat reports as vgpu_m_*: the objects with pages alive and their
  * pages, the peaks of both, the RESOURCE_CREATEs, the UNREFs sent and
  * answered, the EXECBUFFERs, and the WAITs, those with NOWAIT and those
- * answered EBUSY.
+ * answered EBUSY; then the sleeps of `vgpu_room`, of the wait for the DMA
+ * pool and of `backing_fill` and their nanoseconds, the reaps that freed a
+ * command and their nanoseconds and commands, and the most DMA pages the
+ * started commands held (`held`).
  */
 enum {
     VGPU_M_OBJS,
@@ -918,10 +921,22 @@ enum {
     VGPU_M_WAIT,
     VGPU_M_WAIT_NOWAIT,
     VGPU_M_WAIT_BUSY,
+    VGPU_M_ROOM_N,
+    VGPU_M_ROOM_NS,
+    VGPU_M_DMA_N,
+    VGPU_M_DMA_NS,
+    VGPU_M_FILL_N,
+    VGPU_M_FILL_NS,
+    VGPU_M_REAP_N,
+    VGPU_M_REAP_NS,
+    VGPU_M_REAP_CMDS,
+    VGPU_M_HELD_PEAK,
     VGPU_M_N
 };
 /** Add `delta` to counter `which`, raising the peaks. Any context. */
 void vgpu_meas_add(int which, int64_t delta);
+/** Raise counter `which` to `value` if it is less. Any context. */
+void vgpu_meas_max(int which, uint64_t value);
 /** Counter `which`. */
 uint64_t vgpu_meas_get(int which);
 /** The counters' names in /proc/stat, by index. */

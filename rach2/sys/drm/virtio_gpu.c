@@ -351,6 +351,7 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
     cmd->queued = 1;
     cmd->held = 1u + cmd->nextra + cmd->npayload;
     vg->held += cmd->held;
+    vgpu_meas_max(VGPU_M_HELD_PEAK, vg->held);
     vg->commands++;
     dead = vg->dead;
     if (dead || big) {
@@ -478,7 +479,8 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
 void vgpu_reap(struct virtio_gpu_device *vg)
 {
     struct virtio_gpu_cmd *list, *cmd;
-    uint32_t flags;
+    uint32_t flags, freed = 0;
+    int64_t began = dma_fence_now();
 
     drm_dev_get(&vg->drm);
     if (!vg->dead) {
@@ -500,6 +502,12 @@ void vgpu_reap(struct virtio_gpu_device *vg)
             cmd->complete(cmd);
         }
         vgpu_cmd_free(cmd);
+        freed++;
+    }
+    if (freed) {
+        vgpu_meas_add(VGPU_M_REAP_N, 1);
+        vgpu_meas_add(VGPU_M_REAP_CMDS, freed);
+        vgpu_meas_add(VGPU_M_REAP_NS, dma_fence_now() - began);
     }
     vg->reaping--;
     drm_dev_put(&vg->drm);
@@ -692,8 +700,14 @@ int32_t vgpu_room(struct virtio_gpu_device *vg, int killable)
             rc = -EINTR;
             break;
         }
-        vgpu_sleep(held_low, vg, dma_fence_now() + VGPU_POLL_NS,
-                   killable ? "virtio_gpu_queue_ctrl_sgs" : NULL);
+        {
+            int64_t t = dma_fence_now();
+
+            vgpu_sleep(held_low, vg, t + VGPU_POLL_NS,
+                       killable ? "virtio_gpu_queue_ctrl_sgs" : NULL);
+            vgpu_meas_add(VGPU_M_ROOM_N, 1);
+            vgpu_meas_add(VGPU_M_ROOM_NS, dma_fence_now() - t);
+        }
     }
     drm_dev_put(&vg->drm);
     return rc;
@@ -739,7 +753,11 @@ static int vgpu_dma_wait(struct virtio_gpu_device *vg, int64_t until)
     w.seen = vg->held;
     vgpu_reap(vg);
     if (!vg->dead && vg->held == w.seen) {
-        vgpu_sleep(held_moved, &w, dma_fence_now() + VGPU_POLL_NS, NULL);
+        int64_t t = dma_fence_now();
+
+        vgpu_sleep(held_moved, &w, t + VGPU_POLL_NS, NULL);
+        vgpu_meas_add(VGPU_M_DMA_N, 1);
+        vgpu_meas_add(VGPU_M_DMA_NS, dma_fence_now() - t);
         vgpu_reap(vg);
     }
     return !vg->dead;
@@ -832,7 +850,11 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             return -EINTR;
         }
         if (vg->unrefs == w.seen) {
-            vgpu_sleep(unref_moved, &w, dma_fence_now() + VGPU_POLL_NS, "backing_fill");
+            int64_t t = dma_fence_now();
+
+            vgpu_sleep(unref_moved, &w, t + VGPU_POLL_NS, "backing_fill");
+            vgpu_meas_add(VGPU_M_FILL_N, 1);
+            vgpu_meas_add(VGPU_M_FILL_NS, dma_fence_now() - t);
             vgpu_reap(vg);
         }
     }
