@@ -43,9 +43,10 @@
 #define MAP_CACHE_CACHED 1u
 
 /* A blob or a backing pinned through the module: its resource and the
- * pin's handle. A backing is a memfd of the VM's memory, mapped here and
- * attached to the resource as its one iovec, which virglrenderer keeps a
- * pointer to until the detach, so the iovec has storage of its own. */
+ * pin's handle. A backing is a shmem file of the VM's memory that the
+ * module makes, mapped here and attached to the resource as its one iovec,
+ * which virglrenderer keeps a pointer to until the detach, so the iovec has
+ * storage of its own. */
 struct vr_pin {
     uint32_t id, handle;
     uint32_t map_info;  /* the cache type virglrenderer gave at the pin */
@@ -792,21 +793,19 @@ static void hold_backing(uint32_t id)
 
 /**
  * Make resource q->id's backing of q->size bytes of the VM's memory: a
- * memfd, pinned whole through the module for the driver's epoch as a fresh
- * file, which brings in its pages zeroed, then mapped shared and attached
+ * shmem file that the module makes and pins whole for the driver's epoch
+ * (VGPUSHM_IOC_BACKING), its pages zeroed, then mapped shared and attached
  * to the resource as its one iovec, as QEMU attaches a guest's pages. The
- * pin comes before the mapping, so that the module finds the file its own,
- * empty and mapped nowhere, and truncates what a pin that fails brought in
- * before it returns, with no fault of the backend's between. Returns 0
- * with the pin in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has no
- * memory for it, by its counts (`mem_room`) or by the pin's allocation, or
- * VD_RESP_ERR_UNSPEC. The refusal's line names the step that refused.
+ * module frees the file and what its pin brought in when the pin fails.
+ * Returns 0 with the pin in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has
+ * no memory for it, by its counts (`mem_room`) or by the pin's allocation,
+ * or VD_RESP_ERR_UNSPEC. The refusal's line names the step that refused.
  */
 static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
 {
-    struct vgpushm_pin pin;
+    struct vgpushm_backing bk;
     struct iovec *iov = calloc(1, sizeof(*iov));
-    int fd = -1, err = iov == 0 ? ENOMEM : 0, pinned = 0;
+    int err = iov == 0 ? ENOMEM : 0, pinned = 0;
     const char *step = "the iovec";
     void *map = MAP_FAILED;
 
@@ -821,18 +820,12 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         err = ENOMEM;
         step = "no room in the VM's counts";
     }
-    if (err == 0 && ((fd = memfd_create("vgpu-backing", MFD_CLOEXEC)) < 0 ||
-                     ftruncate(fd, (off_t)q->size) != 0)) {
-        err = errno;
-        step = "the memfd";
-    }
-    memset(&pin, 0, sizeof(pin));
-    pin.fd = fd;
-    pin.epoch = q->epoch;
-    pin.size = q->size;
-    pin.flags = VGPUSHM_PIN_FRESH;
+    memset(&bk, 0, sizeof(bk));
+    bk.size = q->size;
+    bk.epoch = q->epoch;
+    bk.fd = -1;
     if (err == 0) {
-        if (ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0) {
+        if (ioctl(r->module, VGPUSHM_IOC_BACKING, &bk) != 0) {
             err = errno;
             step = "the pin";
         } else {
@@ -840,12 +833,12 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         }
     }
     if (err == 0 &&
-        (map = mmap(0, q->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+        (map = mmap(0, q->size, PROT_READ | PROT_WRITE, MAP_SHARED, bk.fd, 0)) == MAP_FAILED) {
         err = errno;
         step = "the mapping";
     }
-    if (fd >= 0) {
-        close(fd); /* the mapping and the pin hold the file */
+    if (pinned) {
+        close(bk.fd); /* the mapping and the pin hold the file */
     }
     if (err == 0) {
         iov->iov_base = map;
@@ -857,7 +850,7 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
     }
     if (err != 0) {
         if (pinned) {
-            ioctl(r->module, VGPUSHM_IOC_UNPIN, &pin.handle);
+            ioctl(r->module, VGPUSHM_IOC_UNPIN, &bk.handle);
         }
         if (map != MAP_FAILED) {
             munmap(map, q->size);
@@ -870,7 +863,7 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
     }
     *out = &r->pins[r->npins++];
     (*out)->id = q->id;
-    (*out)->handle = pin.handle;
+    (*out)->handle = bk.handle;
     (*out)->map_info = MAP_CACHE_CACHED;
     (*out)->back = iov;
     r->pc.pinned++;

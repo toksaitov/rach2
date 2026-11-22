@@ -45,16 +45,12 @@ struct vgpushm_counts {
  * descriptor `fd`, a memfd or another file of shmem, or a dma-buf whose
  * pages are RAM, for the epoch `epoch` of the driver's (vgpushm.h), and get
  * a handle to it and its pages' count. Both are whole pages, and `size` is
- * at most VGPUSHM_PIN_MAX_SIZE. With VGPUSHM_PIN_FRESH in `flags`, the
- * caller vouches that the file is its own, made for this pin, which nothing
- * else writes; the module checks that it is shmem, holds no page, resident
- * or swapped, and is mapped nowhere, and a pin that fails removes the range
- * from the file. Without it, a pin that fails leaves in the file what it
- * brought in. Errors: EINVAL for a range not page-aligned, too large or past
- * the buffer, a descriptor that is neither shmem nor a dma-buf, a file that
- * VGPUSHM_PIN_FRESH does not fit, or an unknown flag; EBADF for a descriptor
- * not open; EFAULT for a dma-buf with no pages of RAM; EOPNOTSUPP for a
- * dma-buf on a kernel with CONFIG_DMABUF_DEBUG; ENOMEM.
+ * at most VGPUSHM_PIN_MAX_SIZE. A pin that fails leaves in a file what it
+ * brought in. Errors: EINVAL for a range not page-aligned, too large or
+ * past the buffer, or a descriptor that is neither shmem nor a dma-buf;
+ * EBADF for a descriptor not open; EFAULT for a dma-buf with no pages of
+ * RAM; EOPNOTSUPP for a dma-buf on a kernel with CONFIG_DMABUF_DEBUG;
+ * ENOMEM.
  */
 struct vgpushm_pin {
     __s32 fd;
@@ -64,14 +60,32 @@ struct vgpushm_pin {
     __u32 handle; /* out */
     __u32 kind;   /* out: VGPUSHM_PIN_SHMEM or VGPUSHM_PIN_DMABUF */
     __u64 pages;  /* out */
-    __u32 flags;  /* 0 or VGPUSHM_PIN_FRESH */
+};
+
+/*
+ * VGPUSHM_IOC_BACKING: make a shmem file of `size` bytes, whole pages and
+ * at most VGPUSHM_PIN_MAX_SIZE, pin it whole for the driver's epoch
+ * `epoch`, its pages zeroed, and get a new descriptor of it in `fd`, open
+ * for reading and writing with O_CLOEXEC, with the pin's handle and its
+ * pages' count. The pin is of kind VGPUSHM_PIN_SHMEM, let go of with
+ * VGPUSHM_IOC_UNPIN; the file lasts while a descriptor or a mapping holds
+ * it. The module makes the file and pins it before any process can reach
+ * it, so a backing that fails leaves nothing: the file and every page the
+ * pin brought in are freed before the call returns. Errors: EINVAL for a
+ * size of 0, not whole pages or too large, or a `reserved` word not 0;
+ * EMFILE; ENOMEM, a page that reclaim cannot meet among them.
+ */
+struct vgpushm_backing {
+    __u64 size;
+    __u32 epoch;
+    __s32 fd;     /* out */
+    __u32 handle; /* out */
     __u32 reserved;
+    __u64 pages; /* out */
 };
 
 #define VGPUSHM_PIN_SHMEM  1
 #define VGPUSHM_PIN_DMABUF 2
-
-#define VGPUSHM_PIN_FRESH 1u
 
 /* The most bytes one pin holds, 1 GiB. */
 #define VGPUSHM_PIN_MAX_SIZE (1ull << 30)
@@ -112,5 +126,6 @@ struct vgpushm_pages {
 #define VGPUSHM_IOC_PAGES   _IOWR(VGPUSHM_IOC_MAGIC, 5, struct vgpushm_pages)
 /* The argument is a pin's handle. */
 #define VGPUSHM_IOC_UNPIN   _IOW(VGPUSHM_IOC_MAGIC, 6, __u32)
+#define VGPUSHM_IOC_BACKING _IOWR(VGPUSHM_IOC_MAGIC, 7, struct vgpushm_backing)
 
 #endif /* VGPUSHM_UAPI_H */
