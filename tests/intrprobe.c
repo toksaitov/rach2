@@ -16,8 +16,8 @@
  *   count is zero. A controller may take several reports on one interrupt,
  *   so the reports are counted where they arrive and the interrupts are not
  *   required to match them.
- * * With `rach2.nomsi`: the message vector has no line at all, since a
- *   vector that has taken nothing is not listed; the controller's PCI line,
+ * * With `rach2.nomsi`: the message vector has no line at all, since no
+ *   handler takes it and it has taken nothing; the controller's PCI line,
  *   listed as `IO-APIC`, or `PIC` on a machine without one, with the
  *   controller's name, has taken at least two for the reports; and the
  *   fallback count is zero because the line brought the work.
@@ -25,7 +25,8 @@
  *   the vector's count is exactly N and the timer's pump has been finding
  *   the work since, which is what the fallback count is for.
  * * With no USB device on the machine: nothing sends a message, so the
- *   vector has no line and the fallback count is zero. The timer's own
+ *   vector's count is zero, or it has no line where no controller took a
+ *   vector, and the fallback count is zero. The timer's own
  *   vector is required to have counted in every one of them.
  *
  * Given `machine=native` (probe_args.h), on a machine that is already up
@@ -418,7 +419,7 @@ static void judge(int native, int vector, int fallback, int line, int devices)
             fail("the timer's pump found nothing after the messages stopped");
         }
     } else if (devices == 0) {
-        if (vector >= 0) {
+        if (vector > 0) {
             fail("a machine with no USB device took a message anyway");
         }
         if (fallback != 0) {
