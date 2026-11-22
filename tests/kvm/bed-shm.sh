@@ -189,8 +189,14 @@ fi
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0
-# Children that outlived a row's bounded wait for them after KILL.
-stuck=''
+# Children that outlived a row's bounded wait for them after KILL, and the
+# process groups of loads with a member left after the group's KILL; each
+# release_children kills them again.
+stuck='' groups=''
+# The pids and groups whose survival the check `cleanup` has reported, so
+# that a retry at the exit does not report them twice; and whether gpu.sh
+# was started, so that the GPU's driver is checked at the end.
+told=' ' gpu_started=0
 # 1 once this run, with -g on a machine that ran no session, has asked for
 # one, which must end once the GPU is back, at the end or on a signal.
 session_owed=0
@@ -202,21 +208,63 @@ intel=''
 pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
 fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
 
+# pids WORD...: the words that are process IDs above 1 and not this
+# script's, so that a kill never names 0, -1 or the script's own group.
+pids()
+{
+    for pids_w in "$@"; do
+        case $pids_w in '' | *[!0-9]*) continue ;; esac
+        [ "$pids_w" -gt 1 ] && [ "$pids_w" != "$$" ] && printf '%s ' "$pids_w"
+    done
+}
+
+# tell KEY REASON: fail the check `cleanup` with REASON, once for KEY, a
+# pid or a group that a retry at the exit may find still running.
+tell()
+{
+    case $told in *" $1 "*) return 0 ;; esac
+    told="$told$1 "
+    fail cleanup "$2"
+}
+
 # end_group PID: end the process group that PID leads, which setsid made,
-# with TERM and, once 20 seconds have passed, KILL, and reap its leader
-# as reap does, so that a load's scene, its browser and its compositor end
-# with it. The harness's own stop takes up to 15 seconds.
+# with TERM and, once 20 seconds have passed, KILL, as group_kill does, so
+# that a load's scene, its browser and its compositor end with it. The
+# harness's own stop takes up to 15 seconds.
 end_group()
 {
-    [ -n "$1" ] || return 0
+    [ -n "$(pids "$1")" ] || return 0
     kill -TERM "-$1" 2>/dev/null
     n=200
     while kill -0 "-$1" 2>/dev/null && [ "$n" -gt 0 ]; do
         sleep 0.1
         n=$((n - 1))
     done
+    group_kill "$1"
+}
+
+# group_kill PGID: KILL the process group PGID, reap its leader as reap
+# does, and give the group 100 tries of 0.1 s to empty. A descendant that
+# outlives its leader may still hold the GPU, so each member left fails the
+# check `cleanup` with what it holds, and the group stays in groups for
+# release_children to kill again.
+group_kill()
+{
     kill -KILL "-$1" 2>/dev/null
-    reap 100 "$1" || fail cleanup "the load's leader $1 is still running after kill: $(held "$1")"
+    reap 100 "$1"
+    n=100
+    while kill -0 "-$1" 2>/dev/null; do
+        if [ "$n" -eq 0 ]; then
+            case " $groups " in *" $1 "*) ;; *) groups="$groups $1" ;; esac
+            # shellcheck disable=SC2009 # pgrep gives no group of a pid
+            for m in $(ps -e -o pid,pgid | awk -v g="$1" 'NR > 1 && $2 == g { print $1 }'); do
+                tell "$m" "process $m of the process group $1 is still running after its KILL: $(held "$m")"
+            done
+            return 1
+        fi
+        sleep 0.1
+        n=$((n - 1))
+    done
 }
 
 # gone TRIES PID...: wait, TRIES tries of 0.1 s at most, until none of the
@@ -290,34 +338,75 @@ child()
 # that the next attach is refused as busy, and gpu.sh waiting for a QEMU
 # stuck in the kernel keeps the GPU from i915. gpu.sh, sent SIGTERM, kills
 # its QEMU and gives the function back; it has 600 tries of 0.1 s, since
-# i915's bind resets the GPU. A child left is not waited for again.
+# i915's bind resets the GPU. Then, with -g, the function must be back on
+# i915. A child or group left stays tracked, unreaped so that its pid
+# cannot be taken by another process, and is killed again by the next
+# call, which the exit's cleanup makes; the session's end comes after this,
+# once the GPU is back or the run has failed with why it is not.
 release_children()
 {
     end_group "$load"
     end_group "$figpid"
     load='' figpid=''
-    # shellcheck disable=SC2086 # the pids of children that were started
-    kill -9 $qemu $waiter $holder $pid $stuck 2>/dev/null
-    # shellcheck disable=SC2086 # the pids of children that were started
-    kill $daemon $gpu $umon 2>/dev/null
+    # shellcheck disable=SC2086 # the groups left by an earlier call
+    set -- $groups
+    groups=''
+    for g; do
+        group_kill "$g"
+    done
     # With -g, QEMU is gpu.sh's child, which gpu.sh reaps.
     vm=$qemu
     [ -z "$gpu" ] || vm=''
+    # shellcheck disable=SC2086 # stuck is a list of pids
+    kids=$(pids $vm $waiter $holder $pid $daemon $umon $stuck)
+    # shellcheck disable=SC2046,SC2086 # lists of pids
+    kill -9 $(pids $qemu $waiter $holder $pid $stuck) 2>/dev/null
+    # shellcheck disable=SC2046,SC2086 # lists of pids
+    kill $(pids $daemon $gpu $umon) 2>/dev/null
+    left=''
     # shellcheck disable=SC2086 # the pids of children that were started
-    if ! reap 100 $vm $waiter $holder $pid $daemon $umon $stuck; then
-        # shellcheck disable=SC2086 # the pids reap found running
-        kill -9 $reap_live 2>/dev/null
-        # shellcheck disable=SC2086 # the pids reap found running
-        if ! reap 100 $reap_live; then
-            for left in $reap_live; do
-                fail cleanup "$(child "$left") is still running after kill: $(held "$left")"
-            done
+    if ! reap 100 $kids; then
+        # Three more KILLs, each with its bounded wait.
+        for _ in 1 2 3; do
+            left=$reap_live
+            # shellcheck disable=SC2086 # the pids reap found running
+            kill -9 $left 2>/dev/null
+            # shellcheck disable=SC2086 # the pids reap found running
+            ! reap 100 $left || { left=''; break; }
+            left=$reap_live
+        done
+        for l in $left; do
+            tell "$l" "$(child "$l") is still running after kill: $(held "$l")"
+        done
+    fi
+    # Each child left keeps its name; the rest are reaped.
+    waiter=$(kept "$waiter") holder=$(kept "$holder") pid=$(kept "$pid")
+    daemon=$(kept "$daemon") umon=$(kept "$umon") stuck=$(kept "$stuck")
+    [ -n "$gpu" ] || qemu=$(kept "$qemu")
+    if [ -n "$(pids "$gpu")" ]; then
+        if reap 600 "$gpu"; then
+            gpu='' qemu=''
+        else
+            tell "$gpu" "gpu.sh $gpu is still running 60 s after TERM, so $bdf's return to i915 has not finished: QEMU ${qemu:-unknown}${qemu:+: $(held "$qemu")}"
         fi
     fi
-    if [ -n "$gpu" ] && ! reap 600 "$gpu"; then
-        fail cleanup "gpu.sh $gpu is still running 60 s after TERM, so $bdf's return to i915 has not finished: QEMU ${qemu:-unknown}${qemu:+: $(held "$qemu")}"
+    if [ "$gpu_started" = 1 ] && [ -z "$gpu" ]; then
+        drv=$(readlink "/sys/bus/pci/devices/$bdf/driver" 2>/dev/null)
+        drv=${drv##*/}
+        [ "$drv" = i915 ] ||
+            tell "$bdf" "$bdf is on ${drv:-no driver}, not i915, after gpu.sh's end: $(grep '^gpu: ' "$out/gpu.log" | tail -n 2 | tr '\n' ' ')"
     fi
-    waiter='' holder='' pid='' daemon='' umon='' gpu='' qemu='' stuck=''
+}
+
+# kept LIST: the pids of LIST that release_children's last wait left
+# running, in left.
+kept()
+{
+    kept_r=''
+    for kept_p in $1; do
+        case " $left " in *" $kept_p "*) kept_r="$kept_r $kept_p" ;; esac
+    done
+    echo "${kept_r# }"
 }
 
 # crysis_restore_ini: put back the compositor's settings before the GPU
@@ -577,7 +666,7 @@ else
         -pidfile "$out/qemu.pid" \
         -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
         "$@" > "$out/gpu.log" 2>&1 &
-    gpu=$!
+    gpu=$! gpu_started=1
     last=-1 still=0
     until [ -s "$out/qemu.pid" ]; do
         quiet "$out/gpu.log" 120 "$gpu" || break
@@ -596,9 +685,9 @@ stop_vm()
 }
 
 # wait_vm: reap QEMU or gpu.sh, which also gives the function back. gpu.sh
-# waits for its QEMU first, so the wait for it is bounded at 600 tries of
-# 0.1 s, and one still running then is left, with QEMU, to cleanup, which
-# names what QEMU holds.
+# waits for its QEMU first, so the wait for either is bounded at 600 tries
+# of 0.1 s, and one still running then is left, with QEMU, to cleanup,
+# which names what QEMU holds.
 wait_vm()
 {
     if [ -n "$gpu" ]; then
@@ -610,7 +699,9 @@ wait_vm()
             gpu_status="still running 60 s after QEMU's kill"
             return 0
         fi
-    else
+    elif [ -n "$(pids "$qemu")" ]; then
+        # A QEMU stuck in the kernel after KILL is left to release_children.
+        gone 600 "$qemu" || return 0
         wait "$qemu" 2>/dev/null
     fi
     qemu=''
@@ -683,13 +774,13 @@ ivshmemd -i > "$out/info-bound.txt" 2>&1
 if [ "$unplug" = 1 ]; then
     dmesg | tail -n "+$((klog_from + 1))" > "$out/dmesg-bind.txt"
     card=$(sed -n 's/^.*drm: virtio_gpu: \(card[0-9]*\)$/\1/p' "$out/dmesg-bind.txt" | tail -n 1)
-    stuck=''
+    unbound=''
     if [ "$(info bound)" != 1 ] && [ -n "$card" ]; then
         # The bind has not returned: where the transport's thread sleeps,
         # then whether an open of the card, which reaps the device's
         # queues, lets it go on.
         t=$(pgrep -x vgpu-shm | head -n 1)
-        stuck="vgpu-shm sleeps in $(cat "/proc/$t/wchan" 2>/dev/null || echo '?')"
+        unbound="vgpu-shm sleeps in $(cat "/proc/$t/wchan" 2>/dev/null || echo '?')"
         : <> "/dev/dri/$card"
         n=60
         until [ "$(info bound)" = 1 ] || [ "$n" -eq 0 ]; do
@@ -697,18 +788,18 @@ if [ "$unplug" = 1 ]; then
             n=$((n - 1))
         done
         if [ "$(info bound)" = 1 ]; then
-            stuck="$stuck, and the bind returned once $card was opened, whose open reaps the queues"
+            unbound="$unbound, and the bind returned once $card was opened, whose open reaps the queues"
         else
-            stuck="$stuck, and an open of $card did not end the bind"
+            unbound="$unbound, and an open of $card did not end the bind"
         fi
         dmesg | tail -n "+$((klog_from + 1))" > "$out/dmesg-bind.txt"
     fi
-    if [ -z "$stuck" ] && [ "$(info bound)" = 1 ] && [ -n "$card" ] &&
+    if [ -z "$unbound" ] && [ "$(info bound)" = 1 ] && [ -n "$card" ] &&
         grep -q "console: $card: a native display" "$out/dmesg-bind.txt" &&
         ! grep -q "console: $card: screen not set" "$out/dmesg-bind.txt"; then
         pass console "virtio-gpu bound over the region as $card with the console placed on it"
     else
-        fail console "${stuck:+$stuck; }bound $(info bound), card '$card': $(grep 'console: \|virtio_gpu: command' "$out/dmesg-bind.txt" | tail -n 3 | tr '\n' ' ')"
+        fail console "${unbound:+$unbound; }bound $(info bound), card '$card': $(grep 'console: \|virtio_gpu: command' "$out/dmesg-bind.txt" | tail -n 3 | tr '\n' ' ')"
     fi
 fi
 
@@ -1412,16 +1503,26 @@ desk_rows()
         left=$((left - 1))
     done
     # udevadm ends on SIGTERM with 0, or 143 when the signal comes first.
+    # A monitor still running 100 tries after TERM is left to
+    # release_children, which kills it.
     stopped=no
     ! kill "$umon" 2>/dev/null || stopped=yes
     ustatus=0
-    wait "$umon" 2>/dev/null || ustatus=$?
+    if gone 100 "$umon"; then
+        wait "$umon" 2>/dev/null || ustatus=$?
+        umon=''
+    else
+        ustatus=running
+        case $monitor in
+            listening) monitor="still running 10 s after TERM: $(held "$umon")" ;;
+            *) monitor="$monitor; still running 10 s after TERM: $(held "$umon")" ;;
+        esac
+    fi
     [ "$monitor" != listening ] ||
         { [ "$stopped" = yes ] && { [ "$ustatus" = 0 ] || [ "$ustatus" = 143 ]; }; } ||
         monitor="ended with status $ustatus before the row's end: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
     [ "$monitor:$ustatus" != listening:143 ] ||
         echo 'bed-shm: death: udev monitor stopped by sigterm' >&2
-    umon=''
     if kill -0 "$load" 2>/dev/null; then
         ended="still running"
     elif [ "$alive" = no ]; then
