@@ -49,6 +49,7 @@
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
+extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 
 static int fails;
@@ -272,6 +273,18 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 void *kzalloc(size_t size)
 {
     return calloc(1, size);
+}
+
+/** The host's malloc. */
+void *kmalloc(size_t size)
+{
+    return malloc(size);
+}
+
+/** The fixture never enables the trace. */
+int64_t rtc_monotonic_ns(void)
+{
+    return 0;
 }
 
 /** The host's free. */
