@@ -64,8 +64,9 @@
 #
 # What keeps the owner's files safe is the namespace in which crysis.py's
 # commands after `prepare`, and so the game, Wine and umu, run (`seal`):
-# every mount there is read-only but /data, /tmp, /var/tmp, /dev/shm, the
-# session's runtime directory and the case's output, so that no link in the
+# every mount there, a bind of the namespace's own under a root moved onto
+# a recursive bind of /, is read-only but /data, /tmp, /var/tmp, /dev/shm,
+# the session's runtime directory and the case's output, so that no link in the
 # copy, present or made later by Proton or Wine, can carry a write to a file
 # of the owner's, in /home/desktop or on the partition. Before the game,
 # `seal`'s checks run alone in such a namespace: statvfs must give the
@@ -319,11 +320,18 @@ PYTHON
 # seal OUT [COMMAND...]: run COMMAND, as root, in a mount namespace of its
 # own in which every mount is read-only but the paths WRITABLE names, OUT
 # among them, once the checks below have passed; with no COMMAND, run only
-# the checks. Each mount of a type that holds files is remounted read-only,
-# with its nosuid, nodev and noexec kept; proc, sysfs and the device file
-# systems are left as they are, since their writes are the kernel's controls,
-# such as a user namespace's uid_map, and a read-only mount opens a device
-# node for writing all the same, as Linux's does. Each writable path then has
+# the checks. The mounts the namespace starts with are the parent's own
+# records, whose flags a remount may not change while the parent sees them
+# (EBUSY, mount(2)), so the namespace first moves its root onto a recursive
+# bind of / made in a directory of the private /data, whose mounts are
+# binds of its own, with pivot_root, and lets the old root go; it then
+# checks that each mount point shows what it showed before, by the device,
+# the root within it, the type and the source of its top mount. Each of
+# those mounts of a type that holds files is remounted read-only, with its
+# nosuid, nodev and noexec kept; proc, sysfs and the device file systems
+# are left as they are, since their writes are the kernel's controls, such
+# as a user namespace's uid_map, and a read-only mount opens a device node
+# for writing all the same, as Linux's does. Each writable path then has
 # its own mount made writable again, or a recursive bind of itself over
 # itself made writable, which leaves a mount below it, /data/owner under
 # /data, read-only.
@@ -384,17 +392,62 @@ def under(path, top):
     return path == top or path.startswith(top.rstrip("/") + "/")
 
 
-def mounts():
-    """Return each mount point, the last listed, which is on top, with its
-    type and the options of KEPT it has."""
+def mountinfo():
+    """Return each mount point, the last listed, which is on top, with the
+    fields of its line: the device, the root within it, the options, the
+    type and the source."""
     table = {}
     with open("/proc/self/mountinfo") as f:
         for line in f:
             fields = line.split()
             dash = fields.index("-")
             point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4])
-            table[point] = (fields[dash + 1], [o for o in fields[5].split(",") if o in KEPT])
+            table[point] = (fields[2], fields[3], fields[5], fields[dash + 1], fields[dash + 2])
     return table
+
+
+def mounts():
+    """Return each mount point, the one on top, with its type and the
+    options of KEPT it has."""
+    return {point: (kind, [o for o in options.split(",") if o in KEPT])
+            for point, (_, _, options, kind, _) in mountinfo().items()}
+
+
+def shown(table):
+    """Return what each mount point of TABLE, from `mountinfo`, shows: its
+    device, its root within it, its type and its source."""
+    return {point: (dev, root, kind, source)
+            for point, (dev, root, _, kind, source) in table.items()}
+
+
+def rebase():
+    """Move the namespace's root onto a recursive bind of /, every mount of
+    which is a bind this namespace made and alone sees, and let the old
+    root go: the bind in a directory of the private /data that mkdtemp
+    makes, pivot_root to it with the old root put on the same directory as
+    the bind shows it, a lazy unmount of that, and the directory taken
+    back; the working directory is then the same path in the new root.
+    Each mount point must then show what it showed before."""
+    here = os.getcwd()
+    before = shown(mountinfo())
+    stage = tempfile.mkdtemp(prefix=".crysis-root-", dir="/data")
+    mount("--rbind", "/", stage)
+    for args in (("pivot_root", stage, stage + stage), ("umount", "-l", stage)):
+        run = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, check=False)
+        if run.returncode:
+            die("%s: %s" % (" ".join(args), run.stdout.strip()))
+        os.chdir("/")
+    attempt(lambda: os.rmdir(stage))
+    os.chdir(here)
+    after = shown(mountinfo())
+    if after != before:
+        lost = sorted(set(before) - set(after))
+        new = sorted(set(after) - set(before))
+        moved = sorted(p for p in set(before) & set(after) if before[p] != after[p])
+        die("the bind of / does not show the mounts: lost %s, new %s, changed %s"
+            % (lost, new, moved))
+    say("seal: root moved onto a bind of /; %d mount points as before" % len(after))
 
 
 def mount(*args):
@@ -539,8 +592,9 @@ probes = sentinels(home)
 if probes and command:
     die("no command runs with the sentinels, which only the caller removes")
 
+rebase()
 count = 0
-for point, (kind, kept) in sorted(table.items()):
+for point, (kind, kept) in sorted(mounts().items()):
     if kind not in KERNEL:
         mount("-o", ",".join(["remount", "bind", "ro"] + kept), point)
         count += 1
