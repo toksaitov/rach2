@@ -301,6 +301,8 @@
         {"assertion_id": "descended", "checks": "the kernel says kstack: overrun: pid N descends its stack", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying a kernel stack ran out, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "said-wait", "checks": "the complete panic: rebooting in 30 seconds.. line arrives before the machine is ended", "source": "scenario"},
+        {"assertion_id": "one-panic", "checks": "the console through the countdown has exactly one panic: stopped: record", "source": "scenario"},
+        {"assertion_id": "panic-report", "checks": "the panic gives the trace heading and the report's build, processor and pid, instruction pointer, fault address and double fault lines in order before the countdown", "source": "scenario"},
         {"assertion_id": "named", "checks": "a record says that pid N, the pid the descent gave, ran past the end of its kernel stack", "source": "scenario"},
         {"assertion_id": "no-shell", "checks": "the debug shell never starts", "source": "scenario"}
       ],
@@ -338,6 +340,8 @@
         {"assertion_id": "descended", "checks": "the kernel says kstack: overrun: pid N descends its stack", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying a kernel stack ran out, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "said-wait", "checks": "the complete panic: rebooting in 30 seconds.. line arrives before the machine is ended", "source": "scenario"},
+        {"assertion_id": "one-panic", "checks": "the console through the countdown has exactly one panic: stopped: record", "source": "scenario"},
+        {"assertion_id": "panic-report", "checks": "the panic gives the trace heading and the report's build, processor and pid, instruction pointer, fault address and double fault lines in order before the countdown", "source": "scenario"},
         {"assertion_id": "named", "checks": "a record says that pid N, the pid the descent gave, ran past the end of its kernel stack", "source": "scenario"},
         {"assertion_id": "no-shell", "checks": "the debug shell never starts", "source": "scenario"}
       ],
