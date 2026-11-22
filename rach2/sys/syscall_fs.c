@@ -13583,10 +13583,14 @@ long sys_statx(isr_params_t *params)
  * generation in 32, twelve bytes, which identify the file within its mount;
  * the generation is ext2's, which a reused inode number changes, and 0 on
  * the types that keep none.
- * The types whose files a handle reopens are those Linux gives export
- * operations, ext2, tmpfs and vfat, and KRFFS; a handle of a file of any
- * other mount is a FID, which AT_HANDLE_FID asks for, and which identifies
- * the file and reopens nothing, as Linux's of a type without them.
+ * A handle reopens a file only where no other file can take its identity
+ * while the handle lives: on ext2, by the generation, and on tmpfs, whose
+ * inode numbers count up and are never given again within a mount. KRFFS
+ * derives a file's inode from its name's hash and FAT from its directory
+ * entry, so a file made again under the name has the old one's identity,
+ * and neither keeps a generation; a handle of a file there, as of any other
+ * mount, is a FID, which AT_HANDLE_FID asks for, and which identifies the
+ * file and reopens nothing, as Linux's of a type without export operations.
  */
 #define MAX_HANDLE_SZ     128
 #define FILEID_INO64_GEN  0x51
@@ -13605,8 +13609,7 @@ static int handle_decodable(const struct vfs_mount *m)
 {
     const struct vfs_type *t = m ? vfs_mount_base(m)->type : NULL;
 
-    return t == &vfs_ext2_type || t == &vfs_tmpfs_type || t == &vfs_vfat_type ||
-           t == &vfs_krffs_type || t == &vfs_krffs_volume_type;
+    return t == &vfs_ext2_type || t == &vfs_tmpfs_type;
 }
 
 /**
@@ -13766,9 +13769,7 @@ static int32_t handle_find(const struct vfs_ref *root, uint64_t ino, char *out)
     out[0] = '\0';
     if (!lv || !de) {
         rc = -ENOMEM;
-    } else if ((vfs_getattr(root->mnt, root->node, &st) == 0 && st.ino == ino) ||
-               (ino == 1 && mnt_is_root(root->mnt) && root->node == krffs_fs->node)) {
-        /* The KRFFS root directory's stat reports inode 1 (`do_stat64`). */
+    } else if (vfs_getattr(root->mnt, root->node, &st) == 0 && st.ino == ino) {
         rc = 0;
     } else if (vfs_enter(root->mnt) == 0) {
         dir = *root;
@@ -13880,8 +13881,7 @@ static int32_t handle_path(struct vfs_mount *m, uint64_t ino, char *path)
  * lock, is the file `want` names, as open_by_handle_at asks, since a rename
  * and a new file at the path `handle_find` gave may have come between the
  * search and the walk: the same file system, and the inode's number and
- * generation that `stat` and name_to_handle_at give, where the KRFFS boot
- * root's top is inode 1 as `fstatat_path` has it. 0, at once for a NULL
+ * generation that `stat` and name_to_handle_at give. 0, at once for a NULL
  * `want`; otherwise -ESTALE, or the error of the attributes' read, with the
  * lock let go and `ref` released.
  */
@@ -13894,11 +13894,7 @@ static int32_t handle_check(struct vfs_ref *ref, const struct handle_want *want)
         return 0;
     }
     if (!vfs_synth_vpath(ref->mnt, ref->node) && vfs_mount_base(ref->mnt) == want->base) {
-        rc =
-            mnt_is_root(ref->mnt) ? krffs_fill_stat64(&kst, ref->node) : vfs_fill_stat64(&kst, ref);
-        if (rc == 0 && mnt_is_root(vfs_mount_base(ref->mnt)) && ref->node == krffs_fs->node) {
-            kst.st_ino = 1;
-        }
+        rc = vfs_fill_stat64(&kst, ref);
         if (rc == 0 && (kst.st_ino != want->ino || kst.st_gen != want->gen)) {
             rc = -ESTALE;
         }
