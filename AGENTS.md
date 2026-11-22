@@ -137,5 +137,6 @@ The rules are kept short on purpose; their history is in commit messages and `de
 ## Git
 
 * Commit in scoped units with no attribution of any kind. The message is one line, with no trailing period, that begins with a verb in the imperative and says what the commit does.
+* The repository is public. No commit, issue or comment carries a machine's MAC or network address, the owner's email or a credential; write the Lenovo as LENOVO and the Mac as MAC.
 * Workers push their task branches, and the milestone branch by fast-forward; master moves only as the Milestones section says. Never force-push, with one exception: at a milestone's or a stack's end, once its tasks are closed and nobody writes its branch, the manager rebases that branch onto a master that moved and pushes it with `--force-with-lease`, since master takes only linear history. Never pass `--no-verify`.
 * The hooks in `tools/git-hooks` run on every commit and push: `commit-msg` refuses an attribution line or a message outside this rule, `pre-commit` formats the staged C files and refuses what the fast style checks find, and `pre-push` judges what a push gives a milestone branch, rebased work above all. `.claude/settings.json` turns them on for Claude Code; `git config core.hooksPath tools/git-hooks` does in any other clone.
