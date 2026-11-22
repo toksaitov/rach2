@@ -536,17 +536,18 @@ struct vgpu_profile_row {
     uint64_t payload, copy_ns, answer_ns, waits, wait_ns;
 };
 
-/* The events `virtio_gpu_events` lists in time order, the newest
- * VGPU_EVENTS kept: each SET_SCANOUT sent, which marks a displayed frame,
- * each synchronous command wait, each take of a deferred backing, waited
- * or not, and each VIRTGPU_WAIT that slept. */
+/* The events `virtio_gpu_events` lists in order of their start, the newest
+ * VGPU_EVENTS to end kept: each SET_SCANOUT sent, which marks a displayed
+ * frame, each synchronous command wait, each take of a deferred backing,
+ * waited or not, and each VIRTGPU_WAIT that slept. VGPU_EVENTS is a power
+ * of two, so that a 64-bit count indexes the ring without a division. */
 #define VGPU_EVENTS     8192
 #define VGPU_EVENT_WAIT 0x10000u /* `type` of a VIRTGPU_WAIT ioctl */
 struct vgpu_event {
     int64_t ns;      /* monotonic, at the event's start */
     uint32_t dur_us; /* microseconds it took, 0 for a command sent */
     uint32_t type;   /* the command's type, VGPU_EVENT_WAIT or _SETTLE */
-    uint32_t tid;    /* the thread it ran on */
+    uint32_t tid;    /* the thread that waited or sent the command */
     uint32_t kib;    /* a backing's size in KiB, else 0 */
 };
 
@@ -592,6 +593,7 @@ struct virtio_gpu_cmd {
     uint64_t copy_ns;       /* copying the user payload, including faults */
     uint32_t payload_bytes; /* bytes copied from the user's command stream */
     uint32_t event;         /* the events' type of its waits, 0 for its own */
+    uint32_t tid;           /* the thread that made it, its sender */
 #endif
     int prepared;     /* the fence has its number and one reference */
     int queued;       /* started: its fence is live */
@@ -759,9 +761,10 @@ struct virtio_gpu_device {
     uint32_t commands; /* commands sent */
 #ifdef RACH2_VGPU_PROFILE
     struct vgpu_profile_row profile[VGPU_PROFILE_ROWS];
-    uint64_t notifies, notify_ns; /* calls and wall time in virtqueue_kick */
-    struct vgpu_event *events;    /* VGPU_EVENTS of them, or NULL */
-    uint32_t events_total;        /* recorded since the last clear */
+    uint64_t notifies, notify_ns;   /* calls and wall time in virtqueue_kick */
+    struct vgpu_event *events;      /* VGPU_EVENTS of them, or NULL */
+    struct vgpu_event *events_copy; /* as many, the listing's copy, or NULL */
+    uint64_t events_total;          /* recorded since the last clear */
 #endif
 };
 
