@@ -287,9 +287,14 @@ static void refused(struct lc *l)
 /**
  * Run case `stackoverrun-WHERE`: the descent announces its pid, a record of
  * the fault names the same pid, the kernel panics because a kernel stack ran
- * out, and the debug shell never starts. The panic is recorded as the boot's
- * end, which `etude.fault` judges against the machine's declared fault.
- * Assertions `descended`, `named`, `panicked` and `no-shell`.
+ * out, the processor halts, and the debug shell never starts. The panic is
+ * recorded as the boot's end, which `etude.fault` judges against the
+ * machine's declared fault. The panic's call trace and report follow its
+ * first line, and the processor halts only after the last of them, so the
+ * machine is ended only then: a quit sent on the first line can cut the
+ * next one part way, which `etude.kernel` reads as a critical record it does
+ * not know. Assertions `descended`, `named`, `panicked`, `halted` and
+ * `no-shell`.
  */
 static void stackoverrun(struct lc *l)
 {
@@ -319,6 +324,7 @@ static void stackoverrun(struct lc *l)
         lc_halt(l, st, "the record of the kernel's panic");
         return;
     }
+    lc_halted(l, m, 1, "halted");
     if (lc_quit(l, m, NULL)) {
         lc_find(l, m, "named", named, 0, 1);
         lc_find(l, m, "no-shell", "Type 'help'", 0, 0);
@@ -336,7 +342,8 @@ int etude_scenario(struct etude_case *c)
     static const char *const framefail_ids[] = {"exit", "said-ok", "failed-on-purpose", NULL};
     static const char *const strings_ids[] = {"swept", "never-wrong", NULL};
     static const char *const refused_ids[] = {"refused", "no-fault", NULL};
-    static const char *const overrun_ids[] = {"descended", "panicked", "named", "no-shell", NULL};
+    static const char *const overrun_ids[] = {"descended", "panicked", "named",
+                                              "halted",    "no-shell", NULL};
     const char *id = etude_case_id(c), *name = case_name(c);
     struct lc l;
 
