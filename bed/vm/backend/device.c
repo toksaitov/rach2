@@ -1685,6 +1685,13 @@ static int names_resource(uint32_t type)
     }
 }
 
+/** Whether a control command of `type` adds a resource to the table. */
+static int is_create(uint32_t type)
+{
+    return type == CMD_RESOURCE_CREATE_2D || type == CMD_RESOURCE_CREATE_3D ||
+           type == CMD_RESOURCE_CREATE_BLOB;
+}
+
 /** Read the header and first body word of the control queue's chain at
  * `head` into `a`, which keeps the head; a chain that breaks the rules is
  * marked `bad`, for the in-order pass to judge. */
@@ -1729,8 +1736,9 @@ static void ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
  * its pages at the create; a fenced create's answer would signal every
  * earlier fence of its timeline. An id still in the table, as through an
  * UNREF not yet served, keeps its order. The create goes ahead only while
- * the table has room for it without the UNREFs queued before it, so that
- * it fails ahead only where it would fail in order; and nothing goes ahead
+ * the table has room for it after every earlier create not yet served, and
+ * without the UNREFs queued before it, so that neither it nor an earlier
+ * create fails where both would succeed in order; and nothing goes ahead
  * of a chain that breaks the rules, which faults the queue. Returns VGS_OK
  * or a transport fault.
  */
@@ -1738,11 +1746,11 @@ static int ahead_backing(struct vd *d, uint16_t pos)
 {
     const struct vgs_queue *q = &d->drv.queue[VGS_QUEUE_CONTROL];
     uint32_t mask = q->size - 1, id = d->ahead[pos & mask].id;
+    uint32_t used = d->t.count[VGS_OBJ_RESOURCE];
     uint16_t at, create = 0;
     int found = 0, err;
 
-    if (id == 0 || (d->ahead[pos & mask].flags & VD_FLAG_FENCE) != 0 || find_res(d, id, 0) ||
-        d->t.count[VGS_OBJ_RESOURCE] >= d->t.limits.max_resources) {
+    if (id == 0 || (d->ahead[pos & mask].flags & VD_FLAG_FENCE) != 0 || find_res(d, id, 0)) {
         return VGS_OK;
     }
     for (at = d->last[VGS_QUEUE_CONTROL]; at != pos; at++) {
@@ -1751,7 +1759,13 @@ static int ahead_backing(struct vd *d, uint16_t pos)
         if (a->bad) {
             return VGS_OK;
         }
-        if (a->done || a->id != id || !names_resource(a->type)) {
+        if (a->done) {
+            continue;
+        }
+        if (a->id != id && is_create(a->type)) {
+            used++;
+        }
+        if (a->id != id || !names_resource(a->type)) {
             continue;
         }
         if (found || (a->type != CMD_RESOURCE_CREATE_2D && a->type != CMD_RESOURCE_CREATE_3D) ||
@@ -1761,7 +1775,7 @@ static int ahead_backing(struct vd *d, uint16_t pos)
         found = 1;
         create = at;
     }
-    if (!found) {
+    if (!found || used >= d->t.limits.max_resources) {
         return VGS_OK;
     }
     if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[create & mask].head)) != VGS_OK) {
