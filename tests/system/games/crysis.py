@@ -72,6 +72,38 @@ GATE = float(os.environ.get("CRYSIS_GATE", "24"))
 # A run that writes nothing to its logs for this long has stopped.
 SILENCE = 600
 FAILED = []
+# The games started and not yet ended, which the script's exit ends.
+RUNNING = []
+
+
+class Held:
+    """Defer SIGTERM, SIGINT and SIGHUP to the end of the outermost `with
+    HELD` block, so that the game's start is recorded and its end runs whole
+    before such a signal ends the script."""
+    depth = 0
+    signum = None
+
+    def __enter__(self):
+        Held.depth += 1
+
+    def __exit__(self, *_):
+        Held.depth -= 1
+        if Held.depth == 0 and Held.signum is not None:
+            signum, Held.signum = Held.signum, None
+            sys.exit(128 + signum)
+        return False
+
+
+HELD = Held()
+
+
+def terminate(signum, _frame):
+    """Exit with 128 + SIGNUM through the script's cleanup, or, inside a
+    `with HELD` block, at its end."""
+    if Held.depth:
+        Held.signum = signum
+        return
+    sys.exit(128 + signum)
 
 
 def say(text):
@@ -197,8 +229,13 @@ class Game:
             (GAME / "Game.log").unlink()
         self.log = open(out / "game.out", "w")
         self.started = time.monotonic()
-        self.proc = subprocess.Popen(desktop(line), stdout=self.log, stderr=subprocess.STDOUT,
-                                     stdin=subprocess.DEVNULL, start_new_session=True)
+        # The game leads a session of its own, which no signal to the
+        # script reaches; it must be in RUNNING before the script can exit.
+        with HELD:
+            self.proc = subprocess.Popen(desktop(line), stdout=self.log,
+                                         stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, start_new_session=True)
+            RUNNING.append(self)
         self.volume = volume()
         self.reset = False
         self.sizes = None
@@ -339,32 +376,35 @@ class Game:
     def end(self):
         """End the game, its Wine server and, on umu, its container, then
         keep its logs and the kernel's lines of missing calls."""
-        if self.proc.poll() is None:
-            subprocess.run(desktop("WINEPREFIX=%s/pfx /opt/proton/files/bin/wineserver -k" %
-                                   self.prefix),
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            for _ in range(16):
-                if self.proc.poll() is not None:
-                    break
-                time.sleep(0.5)
-        for pattern in ("Crysis.exe", "wineserver|pressure-vessel|pv-adverb|srt-bwrap"):
-            subprocess.run(["pkill", "-9", "-u", "desktop", "-f", pattern], check=False)
-        if self.proc.poll() is None:
-            os.killpg(self.proc.pid, signal.SIGKILL)
-        self.proc.wait()
-        self.log.close()
-        if HUD_PARENT:
-            shutil.copytree(self.hud, self.out / "hud")
-        for path in (BENCH, GAME / "Game.log", BASE / "logs/steam-17300.log"):
-            if path.exists():
-                (self.out / path.name).write_bytes(path.read_bytes())
-        dmesg = subprocess.run(["dmesg"], stdout=subprocess.PIPE, text=True, check=False).stdout
-        missing = sorted(set(re.findall(r"syscall: .*not implemented.*", dmesg)))
-        (self.out / "missing.txt").write_text("".join(line + "\n" for line in missing))
-        for line in missing:
-            say("enosys: %s" % line)
-        say("ended after %.0f s, status %s" % (time.monotonic() - self.started,
-                                               self.proc.returncode))
+        with HELD:
+            if self.proc.poll() is None:
+                subprocess.run(desktop("WINEPREFIX=%s/pfx /opt/proton/files/bin/wineserver -k" %
+                                       self.prefix),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                for _ in range(16):
+                    if self.proc.poll() is not None:
+                        break
+                    time.sleep(0.5)
+            for pattern in ("Crysis.exe", "wineserver|pressure-vessel|pv-adverb|srt-bwrap"):
+                subprocess.run(["pkill", "-9", "-u", "desktop", "-f", pattern], check=False)
+            if self.proc.poll() is None:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            self.proc.wait()
+            if self in RUNNING:
+                RUNNING.remove(self)
+            self.log.close()
+            if HUD_PARENT:
+                shutil.copytree(self.hud, self.out / "hud")
+            for path in (BENCH, GAME / "Game.log", BASE / "logs/steam-17300.log"):
+                if path.exists():
+                    (self.out / path.name).write_bytes(path.read_bytes())
+            dmesg = subprocess.run(["dmesg"], stdout=subprocess.PIPE, text=True, check=False).stdout
+            missing = sorted(set(re.findall(r"syscall: .*not implemented.*", dmesg)))
+            (self.out / "missing.txt").write_text("".join(line + "\n" for line in missing))
+            for line in missing:
+                say("enosys: %s" % line)
+            say("ended after %.0f s, status %s" % (time.monotonic() - self.started,
+                                                   self.proc.returncode))
 
     def renderer(self):
         """Check WineD3D's GL renderer and fsync in the launch's output."""
@@ -680,5 +720,10 @@ def main():
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
-    sys.exit(main())
+    for each in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(each, terminate)
+    try:
+        sys.exit(main())
+    finally:
+        while RUNNING:
+            RUNNING[-1].end()
