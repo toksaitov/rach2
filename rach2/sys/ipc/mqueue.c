@@ -36,6 +36,7 @@
 #include "../fs/pathbuf.h"
 #include "../fs/permission.h"
 #include "../fs/vfs.h"
+#include "../fs/walkseq.h"
 #include "../io/poll.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
@@ -538,7 +539,9 @@ static int32_t mq_install(int fd, struct mqueue *q, uint32_t oflag)
     return fd;
 }
 
-/** Reserve a descriptor before lookup and release it if the open fails. */
+/** Reserve a descriptor before lookup and release it if the open fails; a
+ * queue made makes its name inside a change of the walk sequence, as the
+ * VFS's create does. */
 static int mq_open_named(const char *name, uint32_t oflag, uint32_t mode,
                          const struct mq_attr *attr)
 {
@@ -567,7 +570,9 @@ static int mq_open_named(const char *name, uint32_t oflag, uint32_t mode,
     } else if (!q && !inode_may_access(r->uid, r->gid, 0040000u | r->mode, 3, 0)) {
         rc = -EACCES;
     } else if (!q) {
+        vfs_seq_begin();
         rc = mq_create(mnt, name, mode, attr, &q);
+        vfs_seq_end();
     } else if ((oflag & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
         rc = -EEXIST;
     } else if (acc == 3) {
@@ -617,7 +622,8 @@ long sys_mq_open(struct isr_params *params)
 
 static int mqfs_unlink(struct vfs_mount *mnt, void *dir, const char *name);
 
-/** Remove a name through the caller's private mount, under its root lock. */
+/** Remove a name through the caller's private mount, under its root lock and
+ * inside a change of the walk sequence, as the VFS's unlink makes it. */
 long sys_mq_unlink(struct isr_params *params)
 {
     char *name;
@@ -626,7 +632,9 @@ long sys_mq_unlink(struct isr_params *params)
 
     if (rc == 0) {
         vfs_ns_lock(mnt);
+        vfs_seq_begin();
         rc = vfs_mount_rdonly(mnt) ? -EROFS : mqfs_unlink(mnt, mnt->root, name);
+        vfs_seq_end();
         vfs_ns_unlock(mnt);
         path_buf_put(name);
     }
