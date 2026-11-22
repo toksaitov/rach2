@@ -870,7 +870,8 @@ static int termio_row(int master, int slave)
     if (tcsetattr(slave, TCSANOW, &modes) != 0 || ioctl(slave, TCGETA, &v) != 0) {
         return fail("TCGETA fails");
     }
-    if (v.c_lflag != (unsigned short)modes.c_lflag || v.c_cflag != (unsigned short)modes.c_cflag ||
+    if (v.c_iflag != (unsigned short)modes.c_iflag || v.c_lflag != (unsigned short)modes.c_lflag ||
+        v.c_cflag != (unsigned short)modes.c_cflag || v.c_line != modes.c_line ||
         v.c_cc[VINTR] != modes.c_cc[VINTR]) {
         errno = 0;
         return fail("TCGETA does not give the low bits of the modes");
