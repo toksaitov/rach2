@@ -44,13 +44,16 @@ static volatile sig_atomic_t stop;
 static volatile sig_atomic_t snapshot;
 
 /** Defer a stop or a statistics snapshot to the serving loop, or, under
- * -H, have it hold the next new backing (vr_hold). */
+ * -H, have it hold the next new backing (vr_hold), or refuse it
+ * (vr_refuse). */
 static void on_signal(int sig)
 {
     if (sig == SIGUSR1) {
         snapshot = 1;
     } else if (sig == SIGUSR2) {
         vr_hold = 1;
+    } else if (sig == SIGWINCH) {
+        vr_refuse = 1;
     } else {
         stop = 1;
     }
@@ -663,6 +666,7 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_signal);
     if (o.hold) {
         signal(SIGUSR2, on_signal);
+        signal(SIGWINCH, on_signal);
     }
     if (o.profile) {
         signal(SIGUSR1, on_signal);

@@ -52,6 +52,11 @@ const struct vr_pin_counts *vr_pin_counts(struct vr *r);
  * device (tests/kvm/bed-shm.sh). */
 #define VR_HOLD_S 45
 extern volatile sig_atomic_t vr_hold;
+/* Set by SIGWINCH: the serving thread refuses the next new backing for want
+ * of memory, as the VM's counts refuse one, so that Rach2's test can see
+ * the driver back a resource from the region's heap instead
+ * (tests/kvm/bed-shm.sh). */
+extern volatile sig_atomic_t vr_refuse;
 
 /* The Venus import probe: a dma-buf imported into Vulkan and read. */
 int vk_probe(const struct vr_export *e, uint32_t *crc);

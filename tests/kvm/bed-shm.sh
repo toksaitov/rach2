@@ -18,9 +18,10 @@
 # piglit scene runs them: each must pass on virgl, with no refusal of a
 # blob's export on the VM's console and no refused page list in the kernel's
 # log (`readback`); and vgshmprobe fdefer's resources, backed from the
-# VM's pages at their first use, must be mapped, refused and backed from the
-# region's heap, refused unusable, held past the driver's cap and freed
-# unused as it says (`defer`). Then, through the VM's second serial port,
+# VM's pages at their first use, must be refused, as the backend is told
+# through the VM's second serial port, and backed from the region's heap,
+# mapped, refused unusable, held past the driver's cap and freed unused as
+# it says (`defer`). Then, through the VM's second serial port,
 # the backend holds a render target's backing 45 s while it runs, and the
 # map that waits for it must succeed with no loss of the device (`held`);
 # the backend is stopped in the VM, and a new render target's map, which
@@ -1082,17 +1083,29 @@ refusals() { tr -d '\r' < "$console" 2>/dev/null | grep -c 'backend: map: resour
 
 # defer: `vgshmprobe fdefer` on the region's card: resources whose backing
 # from the VM's pages is asked for at their create and taken at their first
-# use, a map at once among them, one the VM refuses, which the region's heap
-# backs, one too large for either, and more held untaken than the driver's
-# cap on pending asks.
+# use. First one whose backing the backend, told through the VM's second
+# serial port, refuses, which the region's heap must back: its bytes must
+# go to the device and come back through its map, and the backend's one
+# refusal as asked must name its resource. Then one of the VM's pages the
+# same way, one too large for either, and more held untaken than the
+# driver's cap on pending asks.
 defer()
 {
+    asked0=$(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: refused: [0-9]* bytes: as asked')
+    derr=''
+    vm_ctl refuse || derr="the VM did not have the backend refuse"
     "$probe" fdefer > "$out/defer.out" 2>&1
-    if grep -q 'VGSHMPROBE OK' "$out/defer.out"; then
+    id=$(sed -n 's/^VGSHMPROBE DEFER: refused: resource //p' "$out/defer.out")
+    asked=$(($(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: refused: [0-9]* bytes: as asked') - asked0))
+    named=$(tr -d '\r' < "$console" | grep -c "backend: back: resource ${id:-none}: refused: [0-9]* bytes: as asked")
+    if [ -z "$derr" ] && { [ "$asked" != 1 ] || [ "$named" != 1 ]; }; then
+        derr="the backend refused $asked backing(s) as asked, $named of them resource ${id:-none}'s"
+    fi
+    if [ -z "$derr" ] && grep -q 'VGSHMPROBE OK' "$out/defer.out"; then
         pass defer "$(sed -n 's/^VGSHMPROBE DEFER: //p' "$out/defer.out" | tr '\n' ';' |
             sed 's/;$//; s/;/; /g')"
     else
-        fail defer "$(grep VGSHMPROBE "$out/defer.out" | tr '\n' ' ')"
+        fail defer "${derr:+$derr: }$(grep VGSHMPROBE "$out/defer.out" | tr '\n' ' ')"
     fi
 }
 
