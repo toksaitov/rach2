@@ -589,9 +589,12 @@ where a walk under the big lock is about to take a
 .Ql .. ;
 .Ql follow ,
 where such a walk has read a symbolic link's target and not yet moved to
-it; or
+it;
 .Ql done ,
-where such a walk has reached its end and not yet made its last check.
+where such a walk has reached its end and not yet made its last check; or
+.Ql cached ,
+where a walk without the big lock has followed a symbolic link and not
+yet taken the next name.
 .Ql release
 lets the stopped thread go on, as a signal does.
 .Ql begin
