@@ -67,15 +67,21 @@
 # every mount there is read-only but /data, /tmp, /var/tmp, /dev/shm, the
 # session's runtime directory and the case's output, so that no link in the
 # copy, present or made later by Proton or Wine, can carry a write to a file
-# of the owner's, in /home/desktop or on the partition. `seal` checks that
-# each kind of write fails there with EROFS through a link out of the copy,
-# in /home/desktop and on the partition, and succeeds in the writable paths,
-# before it starts the command. Before that, links_check refuses a link in
-# the copy that names a file outside it and the read-only trees, as an early
-# and readable error; `crysis.sh links` runs it alone, read-only, on a tree
-# such as the owner's /data/crysis. The script's own writes as root before
-# the namespace, the copies and `chown -R -h`, which follows no link, touch
-# only the private /data.
+# of the owner's, in /home/desktop or on the partition. Before the game,
+# `seal`'s checks run alone in such a namespace: statvfs must give the
+# partition, /home/desktop and Proton's tree as read-only, and each kind of
+# write must fail there with EROFS on sentinels the script makes just before
+# and removes once the check has ended, in /home/desktop and, when the
+# partition is mounted read-write on /data, on the partition, outside
+# /data/crysis, directly and through links in the copy, and succeed in the
+# writable paths. No write of the check aims at a file it did not make. Each
+# namespace a game's command runs in checks statvfs and the writable paths
+# again. Before that, links_check refuses a link in the copy that names a
+# file outside it and the read-only trees, as an early and readable error;
+# `crysis.sh links` runs it alone, read-only, on a tree such as the owner's
+# /data/crysis. The script's own writes as root before the namespace, the
+# copies, `chown -R -h`, which follows no link, and the sentinels, touch only
+# the private /data and the sentinels.
 #
 # The load's new prefix is /data/native/crysis-compat, in the same /data. On
 # every exit the script ends the game's mounts, puts back the session's
@@ -103,6 +109,9 @@ uid=1001
 bound=0 mounted=0 kept=0 failed='' found=0 proton=''
 source_bound=0
 home=/data/home
+# The check's sentinels (sentinels_make) and the partition's writable bind
+# on which the one on the partition is made and removed.
+rw=$here/partition rw_made=0 rw_bound=0 probe_home='' probe_part='' part_rel=''
 
 say() { echo "crysis-case: $*"; }
 
@@ -156,11 +165,78 @@ session_restore()
     done
 }
 
+# sentinel_make DIR: make DIR, a directory of the check's own, holding the
+# file `file` and the link `link` to it.
+sentinel_make()
+{
+    mkdir -m 0700 "$1" && echo crysis-check > "$1/file" && ln -s file "$1/link"
+}
+
+# sentinels_make: make the seal check's sentinels, in the desktop account's
+# home and, when the partition is mounted read-write on /data, as on the
+# installed system, in its directory `native`, or its root, through the
+# partition's writable bind $rw, outside /data/crysis, whose metadata
+# crysis-shm.sh compares. Each variable is set once its directory is made,
+# so that the removal touches nothing the check did not make. A partition
+# mounted read-only, as when the case mounts it, has no sentinel: its mount
+# refuses every write, and the check takes statvfs's word for it.
+sentinels_make()
+{
+    desk=$(awk -F: -v uid="$uid" '$3 == uid { print $6; exit }' /etc/passwd)
+    [ -n "$desk" ] && [ -d "$desk" ] || return 1
+    sentinel_make "$desk/.crysis-check-$$" || return 1
+    probe_home=$desk/.crysis-check-$$
+    [ "$rw_bound" = 1 ] || return 0
+    part_rel=.crysis-check-$$
+    [ ! -d "$rw/native" ] || [ -L "$rw/native" ] || part_rel=native/$part_rel
+    sentinel_make "$rw/$part_rel" || return 1
+    probe_part=$rw/$part_rel
+}
+
+# sentinels_remove: remove the sentinels made, once no process of the check
+# runs, check that they are gone, and unmount the partition's writable bind;
+# returns 1 if anything is left.
+sentinels_remove()
+{
+    for probe in $probe_home $probe_part; do
+        rm -rf "$probe"
+        if [ -e "$probe" ] || [ -L "$probe" ]; then
+            say "check: sentinel $probe is left" >&2
+            return 1
+        fi
+    done
+    probe_home='' probe_part=''
+    if [ "$rw_bound" = 1 ]; then
+        umount "$rw" || return 1
+        rw_bound=0
+    fi
+    if [ "$rw_made" = 1 ]; then
+        rmdir "$rw" || return 1
+        rw_made=0
+    fi
+}
+
+# seal_check: run `seal`'s checks alone, in a namespace of their own made as
+# the game's is, with the sentinels made just before and removed once the
+# check's process has ended, whether it passed or not.
+seal_check()
+{
+    sentinels_make || { sentinels_remove || :; fail "the check's sentinels"; }
+    sealed_ok=0
+    CRYSIS_SENTINELS="home=$probe_home${probe_part:+ owner=$owner/$part_rel}" \
+        unshare --mount --propagation private python3 -c "$seal_py" "$here/out" ||
+        sealed_ok=1
+    sentinels_remove || fail "the check's sentinels are left"
+    [ "$sealed_ok" = 0 ] || fail check
+    say "check: sentinels removed"
+}
+
 # shellcheck disable=SC2329 # the exit trap runs it
 cleanup()
 {
     status=$?
     trap - EXIT
+    sentinels_remove || failed="$failed sentinels"
     if [ "$kept" = 1 ]; then
         cp -p "$here/weston.ini" "$ini" && cp -p "$here/rach2-session" "$session" ||
             failed="$failed session-files"
@@ -238,31 +314,36 @@ PYTHON
 
 # seal OUT [COMMAND...]: run COMMAND, as root, in a mount namespace of its
 # own in which every mount is read-only but the paths WRITABLE names, OUT
-# among them, once the check below has passed; with no COMMAND, run only the
-# check. Each mount of a type that holds files is remounted read-only, with
-# its nosuid, nodev and noexec kept; proc, sysfs and the device file systems
-# are left as they are, since their writes are the kernel's controls, such as
-# a user namespace's uid_map, and a read-only mount opens a device node for
-# writing all the same, as Linux's does. Each writable path then has its own
-# mount made writable again, or a recursive bind of itself over itself made
-# writable, which leaves a mount below it, /data/owner under /data, read-only.
+# among them, once the checks below have passed; with no COMMAND, run only
+# the checks. Each mount of a type that holds files is remounted read-only,
+# with its nosuid, nodev and noexec kept; proc, sysfs and the device file
+# systems are left as they are, since their writes are the kernel's controls,
+# such as a user namespace's uid_map, and a read-only mount opens a device
+# node for writing all the same, as Linux's does. Each writable path then has
+# its own mount made writable again, or a recursive bind of itself over
+# itself made writable, which leaves a mount below it, /data/owner under
+# /data, read-only.
 #
-# The check, as root, so that only the mount refuses: in /data/owner/crysis,
-# in the desktop account's home and through links in the copy to that home
-# and to Proton's tree, a create, rename, unlink, mkdir and symlink of a new
-# name and a write, truncate and chown of an existing file, each to its own
-# size and owner, must each fail with EROFS, the truncate and the chown
-# tried only where statvfs gives the mount as read-only; in /data/crysis and
-# each writable path the same writes of a new file must succeed. A write that
-# went through is taken back at once. Prints a line for each place and exits
-# 1 on a failure, before COMMAND runs. The process is the caller's: unshare
-# and python3 exec in turn, so that a signal to it reaches COMMAND.
+# The checks, as root, so that only the mount refuses. First, before any
+# write, statvfs must give /data/owner, the desktop account's home and
+# Proton's tree as read-only. Then, when CRYSIS_SENTINELS names the check's
+# sentinels, as `home=DIR owner=DIR`, a write, a write through the link,
+# a truncate and a chown of the sentinel file and a create, mkdir, symlink,
+# rename and unlink in each sentinel directory, and the same through a link
+# in /data/crysis to each directory, must each fail with EROFS; no write aims
+# at a file the check did not make. A sentinel is a directory .crysis-check-*
+# that the caller made, holding the file `file` and the link `link` to it,
+# and removes once this process has ended, since no write can remove it here.
+# Last, in /data/crysis and each writable path the same writes of a new name
+# must succeed, and are taken back. Prints a line for each place and exits 1
+# on a failure, before COMMAND runs. The process is the caller's: unshare and
+# python3 exec in turn, so that a signal to it reaches COMMAND.
 seal_py=$(cat << 'PYTHON'
 import errno, os, pwd, re, subprocess, sys
 
 UID = 1001
 BASE = "/data/crysis"
-OWNER = "/data/owner/crysis"
+OWNER = "/data/owner"
 KERNEL = {"proc", "sysfs", "devfs", "devtmpfs", "devpts", "debugfs", "tracefs",
           "securityfs", "mqueue", "pstore", "cgroup", "cgroup2", "bpf",
           "binfmt_misc", "configfs", "fusectl"}
@@ -335,26 +416,6 @@ def attempt(call):
     return 0
 
 
-def tries(folder, existing):
-    """Return the writes to try in FOLDER and on EXISTING, if given, and the
-    names they may leave."""
-    name = os.path.join(folder, ".crysis-check-%d" % os.getpid())
-    other = name + "-renamed"
-    rows = [("create", lambda: os.close(os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                                                0o600))),
-            ("rename", lambda: os.rename(name, other)),
-            ("unlink", lambda: os.unlink(other if os.path.lexists(other) else name)),
-            ("mkdir", lambda: os.mkdir(name)),
-            ("symlink", lambda: os.symlink("crysis-check", name + "-link"))]
-    if existing:
-        st = os.lstat(existing)
-        rows += [("write", lambda: os.close(os.open(existing, os.O_WRONLY))),
-                 ("truncate", lambda: os.truncate(existing, st.st_size)),
-                 ("chown", lambda: os.chown(existing, st.st_uid, st.st_gid,
-                                            follow_symlinks=False))]
-    return rows, (name, other, name + "-link")
-
-
 def remove(names):
     for path in names:
         if os.path.isdir(path) and not os.path.islink(path):
@@ -363,28 +424,50 @@ def remove(names):
             attempt(lambda: os.unlink(path))
 
 
-def read_only(path):
-    """Return whether statvfs gives the mount PATH is on as read-only."""
-    try:
-        return bool(os.statvfs(path).f_flag & os.ST_RDONLY)
-    except OSError:
-        return False
+def sentinels(home):
+    """Return the sentinel directories CRYSIS_SENTINELS names, by label, each
+    checked to be the check's own: a directory .crysis-check-* in the home
+    or on the partition holding the regular file `file` and the link `link`
+    to it."""
+    tops = {"home": home, "owner": OWNER}
+    found = {}
+    for word in os.environ.get("CRYSIS_SENTINELS", "").split():
+        label, _, folder = word.partition("=")
+        if label not in tops or label in found or \
+                not os.path.basename(folder).startswith(".crysis-check-") or \
+                os.path.realpath(folder) != folder or not under(folder, tops[label]) or \
+                folder == tops[label]:
+            die("%s is no sentinel of the check's" % word)
+        sentinel, link = os.path.join(folder, "file"), os.path.join(folder, "link")
+        if not os.path.isfile(sentinel) or os.path.islink(sentinel) or \
+                not os.path.islink(link) or os.readlink(link) != "file":
+            die("%s holds no sentinel file and link" % folder)
+        found[label] = folder
+    return found
 
 
-def refused(label, folder, existing):
-    """Return the writes in FOLDER and on EXISTING that did not fail with
-    EROFS, taking back each that went through. The truncate and chown of
-    EXISTING, which would change its times even at its own size and owner,
-    are tried only where statvfs gives the mount as read-only, and count as
-    failed otherwise."""
-    rows, names = tries(folder, existing)
+def refused(label, folder):
+    """Return the writes in FOLDER, a sentinel directory or a link to one,
+    that did not fail with EROFS. Each aims at the sentinel file, its link
+    or a new name in the directory; a new name made is taken back, and the
+    caller removes the rest."""
+    sentinel = os.path.join(folder, "file")
+    link = os.path.join(folder, "link")
+    new = os.path.join(folder, "new")
+    rows = [("write", lambda: os.close(os.open(sentinel, os.O_WRONLY))),
+            ("write-link", lambda: os.close(os.open(link, os.O_WRONLY))),
+            ("truncate", lambda: os.truncate(sentinel, 0)),
+            ("chown", lambda: os.chown(sentinel, UID, UID, follow_symlinks=False)),
+            ("create", lambda: os.close(os.open(new, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                                0o600))),
+            ("mkdir", lambda: os.mkdir(new)),
+            ("symlink", lambda: os.symlink("file", new)),
+            ("rename", lambda: os.rename(sentinel, new)),
+            ("unlink", lambda: os.unlink(sentinel))]
     bad = []
     for op, call in rows:
-        if op in ("truncate", "chown") and not read_only(existing):
-            bad.append("%s %s: not read-only by statvfs, not tried" % (label, op))
-            continue
         code = attempt(call)
-        remove(names)
+        remove([new])
         if code != errno.EROFS:
             bad.append("%s %s: %s" % (label, op, errno.errorcode.get(code, "allowed")))
     say("check: read-only: %s %s: %d of %d writes failed with EROFS"
@@ -393,34 +476,27 @@ def refused(label, folder, existing):
 
 
 def allowed(folder):
-    """Return the writes of a new file in FOLDER that failed."""
-    rows, names = tries(folder, None)
-    name = names[0]
-    rows[2:2] = [("write", lambda: os.close(os.open(name + "-renamed", os.O_WRONLY))),
-                 ("truncate", lambda: os.truncate(name + "-renamed", 0)),
-                 ("chown", lambda: os.chown(name + "-renamed", UID, UID))]
+    """Return the writes of a new name in FOLDER that failed."""
+    name = os.path.join(folder, ".crysis-check-%d" % os.getpid())
+    other = name + "-renamed"
+    rows = [("create", lambda: os.close(os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                                0o600))),
+            ("rename", lambda: os.rename(name, other)),
+            ("write", lambda: os.close(os.open(other, os.O_WRONLY))),
+            ("truncate", lambda: os.truncate(other, 0)),
+            ("chown", lambda: os.chown(other, UID, UID)),
+            ("unlink", lambda: os.unlink(other)),
+            ("mkdir", lambda: os.mkdir(name)),
+            ("symlink", lambda: os.symlink("crysis-check", name + "-link"))]
     bad = []
     for op, call in rows:
         code = attempt(call)
         if code:
             bad.append("%s %s: %s" % (folder, op, errno.errorcode.get(code, code)))
-    remove(names)
+    remove((name, other, name + "-link"))
     say("check: writable: %s: %d of %d writes went through" % (folder, len(rows) - len(bad),
                                                                  len(rows)))
     return bad
-
-
-def first_file(top):
-    """Return a regular file in TOP, at most three levels down, or None."""
-    for folder, dirs, files in os.walk(top):
-        dirs.sort()
-        if folder.count("/") - top.count("/") >= 3:
-            dirs[:] = []
-        for name in sorted(files):
-            path = os.path.join(folder, name)
-            if os.path.isfile(path) and not os.path.islink(path):
-                return path
-    return None
 
 
 out, command = os.path.realpath(sys.argv[1]), sys.argv[2:]
@@ -430,12 +506,15 @@ try:
     home = pwd.getpwuid(UID).pw_dir
 except KeyError:
     die("no account of uid %d" % UID)
-if not os.path.isdir(out) or under(out, home) or under(out, "/data/owner"):
+if not os.path.isdir(out) or under(out, home) or under(out, OWNER):
     die("%s is no directory of the case's own" % out)
 table = mounts()
-if "/data" not in table or table.get("/data/owner", ("", []))[0] == "" or \
-        os.stat("/data").st_dev == os.stat("/data/owner").st_dev or not os.path.isdir(BASE):
-    die("no private /data with the partition on /data/owner and the game in %s" % BASE)
+if "/data" not in table or table.get(OWNER, ("", []))[0] == "" or \
+        os.stat("/data").st_dev == os.stat(OWNER).st_dev or not os.path.isdir(BASE):
+    die("no private /data with the partition on %s and the game in %s" % (OWNER, BASE))
+probes = sentinels(home)
+if probes and command:
+    die("no command runs with the sentinels, which only the caller removes")
 
 count = 0
 for point, (kind, kept) in sorted(table.items()):
@@ -452,27 +531,30 @@ for path in WRITABLE + (out,):
         die("no %s" % path)
 say("seal: %d mounts read-only; writable: %s" % (count, " ".join(made)))
 
-proton = os.path.realpath("/opt/proton") if os.path.isdir("/opt/proton") else None
-desk = first_file(home)
+# The owner's places must read as read-only before any write is tried.
+for place in [OWNER, home] + (["/opt/proton"] if os.path.isdir("/opt/proton") else []):
+    try:
+        flags = os.statvfs(place).f_flag
+    except OSError as error:
+        die("statvfs %s: %s" % (place, errno.errorcode.get(error.errno, error.errno)))
+    if not flags & os.ST_RDONLY:
+        die("%s is not read-only by statvfs; no write tried" % place)
+    say("check: read-only by statvfs: %s" % place)
+
 links = []
 bad = []
 try:
-    places = [("owner", OWNER, os.path.join(OWNER, "game/Bin64/Crysis.exe")),
-              ("home", home, desk)]
-    for label, target, existing in (("link-home", home, desk),
-                                    ("link-proton", proton, proton and proton + "/proton")):
-        if target:
-            link = os.path.join(BASE, ".crysis-check-%s-%d" % (label, os.getpid()))
-            os.symlink(target, link)
-            links.append(link)
-            places.append((label, link, existing and link + existing[len(target):]))
-    for label, folder, existing in places:
-        if existing and not os.path.isfile(existing):
-            existing = None
-        if not existing:
-            say("check: read-only: %s %s: no existing file; its write, truncate and chown not tried"
-                % (label, folder))
-        bad += refused(label, folder, existing)
+    places = []
+    for label in ("home", "owner") if probes else ():
+        if label not in probes:
+            say("check: read-only: %s: no sentinel; statvfs alone" % label)
+            continue
+        link = os.path.join(BASE, ".crysis-check-link-%s-%d" % (label, os.getpid()))
+        os.symlink(probes[label], link)
+        links.append(link)
+        places += [(label, probes[label]), ("link-" + label, link)]
+    for label, folder in places:
+        bad += refused(label, folder)
     for folder in [BASE] + made:
         bad += allowed(folder)
 finally:
@@ -569,6 +651,12 @@ fi
 
 mkdir "$private/owner"
 if [ "$ondata" = 1 ]; then
+    # A writable view of the partition, outside /data, for the check's
+    # sentinel alone, which sentinels_remove unmounts after the check.
+    mkdir "$rw" || fail "no new $rw"
+    rw_made=1
+    mount --bind /data "$rw" || fail "$data would not bind on $rw"
+    rw_bound=1
     # The mounted device already has a claim. Make a read-only view of it.
     mount --bind /data "$private/owner" || fail "$data would not bind"
     source_bound=1
@@ -643,11 +731,12 @@ CRYSIS_HUD_PARENT=$base/logs/hud
 CRYSIS_HOME=$home
 export CRYSIS_HUD_PARENT CRYSIS_HOME
 
-if [ "$1" = check ]; then
-    mkdir -p "$here/out"
-    unshare --mount --propagation private python3 -c "$seal_py" "$here/out" || fail check
-    exit 0
-fi
+# The read-only namespace's checks, with the sentinels, once before the game;
+# each namespace the game's commands run in checks statvfs and the writable
+# paths again.
+mkdir -p "$here/out"
+seal_check
+[ "$1" != check ] || exit 0
 
 if [ "$1" = shm ]; then
     # Let the VM runner own the handoff and its signal traps. The mounts
