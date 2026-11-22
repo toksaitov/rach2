@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
@@ -767,6 +768,28 @@ static int mem_room(uint64_t size)
     return !failed && (!has_total || !has_avail || size + total / 8u <= avail);
 }
 
+volatile sig_atomic_t vr_hold;
+
+/**
+ * Hold the serving thread VR_HOLD_S seconds by the monotonic clock, through
+ * signals, for resource id's backing, as SIGUSR2 asked (vr_hold).
+ */
+static void hold_backing(uint32_t id)
+{
+    struct timespec end, now;
+
+    vr_hold = 0;
+    fprintf(stderr, "backend: back: resource %u: holding %d s, as asked\n", (unsigned)id,
+            VR_HOLD_S);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    end.tv_sec += VR_HOLD_S;
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &end, 0) == EINTR) {
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    fprintf(stderr, "backend: back: resource %u: held %ld s\n", (unsigned)id,
+            (long)(now.tv_sec - end.tv_sec + VR_HOLD_S));
+}
+
 /**
  * Make resource q->id's backing of q->size bytes of the VM's memory: a
  * memfd, mapped shared, pinned whole through the module for the driver's
@@ -784,6 +807,9 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
     const char *step = "the iovec";
     void *map = MAP_FAILED;
 
+    if (vr_hold) {
+        hold_backing(q->id);
+    }
     if (err == 0 && (r->module < 0 || r->npins == PINS)) {
         err = ENOSPC;
         step = "no pin";

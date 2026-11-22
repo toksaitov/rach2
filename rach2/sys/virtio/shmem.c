@@ -1460,8 +1460,8 @@ static void vshm_finish(struct vshm *vs)
 
 /**
  * Whether the device's heartbeat has stood still for VSHM_LOST_TICKS under
- * VGS_TF_BEAT, from `vs->dev` as just read: a device stopped, or caught in
- * one step of its loop, which answers nothing and rings no doorbell. The
+ * VGS_TF_BEAT, from `vs->dev` as just read: a device whose process has
+ * stopped, which answers nothing and rings no doorbell. The
  * count is judged only by whether it moved, so a pass of the thread that
  * comes late judges a device that beat meanwhile alive.
  */
