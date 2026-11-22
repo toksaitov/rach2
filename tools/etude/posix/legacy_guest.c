@@ -26,9 +26,9 @@
 #include "sha256.h"
 
 /* The debug shell's greeting, and the command that starts etude-guest
- * there with the image's root as the directory of staged files. */
+ * there with both directories where the test image stages probes. */
 #define SHELL_READY "Type 'help' for available commands."
-#define GUEST_EXEC  "exec /etude-guest --stage / --resend-ms "
+#define GUEST_EXEC  "exec /etude-guest -t / -t /musl -r "
 
 /* The most devices, kernel options and strings of the devices' properties
  * (each name, each value, and the end of each device's list) of a profile
