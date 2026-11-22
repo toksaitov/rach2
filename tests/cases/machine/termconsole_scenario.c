@@ -7,8 +7,8 @@
  * the scenario reads term through QMP's screen dumps: screentext --term
  * reads its grid, and libtsm's default foreground, which is none of the
  * kernel console's colors, tells its screen from the console's. The login
- * and the lines after it are typed with QMP's send-key, since COM1's bytes
- * do not reach the console while term holds the keyboard in K_MEDIUMRAW;
+ * and the lines after it are typed with QMP's input-send-event, since COM1's
+ * bytes do not reach the console while term holds the keyboard in K_MEDIUMRAW;
  * each line writes what it found to /dev/console, which COM1 shows, with
  * its own CR and LF, since term leaves the console in raw mode. Once term
  * is killed the kernel console is back, and its login is taken on COM1.
@@ -97,9 +97,10 @@
 
 #define KILL_LINE "killall -KILL term"
 
-/* The characters typed at once: with Shift a character is some ten events
- * of QEMU's queue of fifty. */
-#define CHUNK 4
+/* The characters typed at once. QEMU's PS/2 keyboard queues one byte for
+ * each press or release, since the i8042 translates to set 1, and drops what
+ * comes past 16 unread bytes; with Shift a character is four. */
+#define CHUNK 3
 
 /* One attempt of a case. */
 struct tc {
@@ -325,11 +326,27 @@ static int qcode(char c, char *key, size_t size, int *shift)
     return 1;
 }
 
-/** Type `text` at boot `b` with QMP's send-key, a key, or Shift and a key,
- * for each character; QEMU queues the presses in turn. */
+/** The event of input-send-event that presses or releases the key of qcode
+ * `key`, into `out` of `size` bytes, with `sep` before it. */
+static void key_event(char *out, size_t size, const char *sep, const char *key, int down)
+{
+    snprintf(out, size,
+             "%s{\"type\": \"key\", \"data\": {\"down\": %s, \"key\": {\"type\": \"qcode\","
+             " \"data\": \"%s\"}}}",
+             sep, down ? "true" : "false", key);
+}
+
+/**
+ * Type `text` at boot `b` with QMP's input-send-event, one command for each
+ * character: the key's press and release, inside Shift's when the character
+ * needs it. The command puts the events into the keyboard's queue at once.
+ * send-key releases a key from a timer of QEMU's main loop instead, which a
+ * stall of that loop under host load delays past the kernel's repeat delay
+ * of 250 ms, and the kernel then repeats the key.
+ */
 static void type(struct tc *s, struct net_boot *b, const char *text)
 {
-    char args[256], key[32];
+    char args[1024], ev[4][160], key[32];
     char *reply = NULL;
     int shift;
 
@@ -338,10 +355,15 @@ static void type(struct tc *s, struct net_boot *b, const char *text)
             net_fail(&s->u, "no key types the character %d", *text);
             return;
         }
-        snprintf(args, sizeof(args), "{\"keys\": [%s{\"type\": \"qcode\", \"data\": \"%s\"}]}",
-                 shift ? "{\"type\": \"qcode\", \"data\": \"shift\"}, " : "", key);
-        if (etude_qmp(b->m, "send-key", args, &reply) != ETUDE_OK)
-            net_fail(&s->u, "QMP's send-key %s was not taken: %s", key, reply != NULL ? reply : "");
+        key_event(ev[0], sizeof(ev[0]), "", "shift", 1);
+        key_event(ev[1], sizeof(ev[1]), shift ? ", " : "", key, 1);
+        key_event(ev[2], sizeof(ev[2]), ", ", key, 0);
+        key_event(ev[3], sizeof(ev[3]), ", ", "shift", 0);
+        snprintf(args, sizeof(args), "{\"events\": [%s%s%s%s]}", shift ? ev[0] : "", ev[1], ev[2],
+                 shift ? ev[3] : "");
+        if (etude_qmp(b->m, "input-send-event", args, &reply) != ETUDE_OK)
+            net_fail(&s->u, "QMP's input-send-event %s was not taken: %s", key,
+                     reply != NULL ? reply : "");
         free(reply);
         reply = NULL;
     }
@@ -362,8 +384,8 @@ static void squeeze(const char *text, char *out, size_t size)
 /**
  * Type `line` and Enter at the shell on term's screen, CHUNK characters at a
  * time, each chunk once term's grid shows the prompt's `#` and the ones
- * before: QEMU's queue of keys holds some fifty events, each a key's press,
- * release or delay, and drops what comes past it.
+ * before, so that the keyboard's queue has room for it. A failure names the
+ * end of the grid's text, which shows a key typed twice or one lost.
  */
 static void type_line(struct tc *s, struct net_boot *b, const char *line)
 {
@@ -374,6 +396,7 @@ static void type_line(struct tc *s, struct net_boot *b, const char *line)
     unsigned i;
     int echoed;
 
+    seen[0] = '\0';
     if (len + 1 >= sizeof(typed) || net_path(&s->u, "typed.ppm", path, sizeof(path)) == NULL) {
         net_fail(&s->u, "the line %.20s is too long to type", line);
         return;
@@ -395,8 +418,10 @@ static void type_line(struct tc *s, struct net_boot *b, const char *line)
             echoed = strstr(seen, want) != NULL;
             net_run_free(&text);
         }
+        n = strlen(seen);
         if (!echoed && net_ok(&s->u))
-            net_fail(&s->u, "term's grid never showed the typed %s", typed + 1);
+            net_fail(&s->u, "term's grid never showed the typed %s; without spaces it ended %s",
+                     typed + 1, seen + (n > 60 ? n - 60 : 0));
     }
     type(s, b, "\r");
 }
