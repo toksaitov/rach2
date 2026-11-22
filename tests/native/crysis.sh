@@ -6,6 +6,7 @@
 #   crysis.sh flyby ROUTE
 #   crysis.sh load SAVE
 #   crysis.sh shm
+#   crysis.sh session ran|none
 #
 # Run as root by etude-guest in the case's workspace, which holds crysis.py,
 # wm.py and the empty directory `private` of the private fixture, in a mount
@@ -23,6 +24,10 @@
 #          new one
 #   shm    the umu flyby on the bed's shared-memory card. The launcher
 #          supplies a private mount namespace and an already mounted /data.
+#   session
+#          no check: crysis-shm.sh's end, which starts the session again on
+#          the files put back when it ran before the launcher, and otherwise
+#          ends it, and waits as the case's own end does
 #
 # The data partition, /dev/disk0p6, and all it holds are the owner's; the
 # case never writes it. It mounts the partition read-only on /data/owner
@@ -84,7 +89,11 @@ mounted_at()
 # session_restore: have the supervisor start the session again, on the files
 # put back, when it ran, and otherwise end it, and wait, 600 tries of 0.1 s
 # at most, for a Weston other than the one that ran, or for none, so that
-# the next case does not draw in a session about to end.
+# the next case does not draw in a session about to end. The end is sent
+# even with no Weston, since a start the supervisor has taken may not have
+# reached Weston yet; it is done once neither Weston nor the session's
+# script has run for 15 tries, longer than the supervisor's turn of a second
+# in which it may still begin a start.
 session_restore()
 {
     old=$(pgrep -x weston | tr '\n' ' ')
@@ -92,16 +101,18 @@ session_restore()
     if [ "$found" = 1 ]; then
         kill -HUP "$(cat "$pidfile")" 2> /dev/null || return 1
     else
-        [ -n "$old" ] || return 0
         kill -USR2 "$(cat "$pidfile")" 2> /dev/null || return 1
     fi
-    tries=0
+    tries=0 clear=0
     while :; do
         now=$(pgrep -x weston | tr '\n' ' ')
         if [ "$found" = 1 ]; then
             [ -z "$now" ] || [ "$now" = "$old" ] || [ ! -S "/run/user/$uid/wayland-0" ] || return 0
+        elif [ -z "$now" ] && ! pgrep -f "$session" > /dev/null; then
+            clear=$((clear + 1))
+            [ "$clear" -lt 15 ] || return 0
         else
-            [ -n "$now" ] || return 0
+            clear=0
         fi
         tries=$((tries + 1))
         [ "$tries" -lt 600 ] || return 1
@@ -136,6 +147,18 @@ cleanup()
     fi
     say "result: pass"
 }
+# `crysis.sh session ran|none`, for crysis-shm.sh: leave the session
+# running on the files put back, or ended, and wait for it.
+if [ "${1:-}:$#" = session:2 ]; then
+    case $2 in
+        ran) found=1 ;;
+        none) found=0 ;;
+        *) echo "usage: crysis.sh session ran|none" >&2; exit 2 ;;
+    esac
+    session_restore || { say "session: not left as it was found" >&2; exit 1; }
+    exit 0
+fi
+
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -149,7 +172,11 @@ fail()
 
 case ${1:-}:$# in
     flyby:2 | load:2 | shm:1) ;;
-    *) echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE | crysis.sh shm" >&2; exit 2 ;;
+    *)
+        echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE | crysis.sh shm |" \
+            "crysis.sh session ran|none" >&2
+        exit 2
+        ;;
 esac
 [ -f crysis.py ] && [ -f wm.py ] || fail "no crysis.py and wm.py in the workspace"
 command -v crysis.sh > /dev/null || fail "no crysis.sh on this root"
