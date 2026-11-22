@@ -5817,51 +5817,69 @@ static int procfs_gen_console(struct procfs_text *t)
     return t->len;
 }
 
+/** Append `s` right-aligned in `width` places. */
+static void ap_str_width(struct procfs_text *t, const char *s, int width)
+{
+    int n = (int)k_strlen(s);
+
+    while (n++ < width) {
+        ap_ch(t, ' ');
+    }
+    ap_str(t, s);
+}
+
 /**
- * Render /proc/interrupts: a line for each vector that has a handler or has
- * taken an interrupt, as Linux's show_interrupts lists each interrupt with an
- * action or a count (kernel/irq/proc.c), with the vector, its counts by
- * processor, its source and the names of the devices on it, separated by
- * commas, or "none"; then the count of the APIC's spurious vector, SPU, and
- * FBK, the times the timer's drain of the USB controllers found work with no
- * USB interrupt pending (`usb_fallback_count`): work an interrupt should have
- * announced, or one still in transit.
+ * Render /proc/interrupts in Linux's form (show_interrupts in
+ * kernel/irq/proc.c): a heading of the online processors, then a line for
+ * each device vector that has a handler and a source, which the system
+ * call's gate has not (`isr_vector_source`), with the
+ * vector in 3 places and a colon, each processor's count in 10 places and a
+ * space, the source in 8 places after a space, and two spaces and the names
+ * of the handlers, separated by commas. Linux lists an interrupt with an
+ * action or a count; a vector given back (`isr_free_vector`) is a
+ * descriptor Linux frees, so a vector with no handler has no line. Then
+ * SPU, the count of the APIC's spurious vector, and FBK, the times the
+ * timer's drain of the USB controllers found work with no USB interrupt
+ * pending (`usb_fallback_count`): work an interrupt should have announced,
+ * or one still in transit. Fields are separated by spaces, as BusyBox's
+ * powertop reads them.
  */
 static int procfs_gen_interrupts(struct procfs_text *t)
 {
     int v, c;
 
-    ap_str(t, "        ");
+    ap_str(t, "           ");
     for (c = 0; c < NR_CPUS; c++) {
         if (!cpu_table[c].online) {
             continue;
         }
         ap_str(t, "CPU");
         ap_u32(t, (uint32_t)c);
-        ap_ch(t, '\t');
+        ap_str_width(t, "", 7 - (c >= 10 ? 1 : 0) - (c >= 100 ? 1 : 0));
     }
     ap_ch(t, '\n');
     for (v = ISR_DEVICE_FIRST; v <= ISR_DEVICE_LAST; v++) {
-        uint32_t n = isr_vector_count(v);
+        const char *source = isr_vector_source(v);
         int slot, named = 0, handlers = 0;
 
         for (slot = 0; slot < ISR_MAX_VECTOR_HANDLERS; slot++) {
             handlers += isr_vector_name(v, slot) != 0;
         }
-        if (n == 0 && handlers == 0) {
+        if (source == NULL || handlers == 0) {
             continue;
         }
-        ap_u32(t, (uint32_t)v);
-        ap_str(t, ":\t");
+        ap_u32_width(t, (uint32_t)v, 3);
+        ap_str(t, ": ");
         for (c = 0; c < NR_CPUS; c++) {
             if (!cpu_table[c].online) {
                 continue;
             }
-            ap_u32(t, isr_vector_cpu_count(v, c));
-            ap_ch(t, '\t');
+            ap_u32_width(t, isr_vector_cpu_count(v, c), 10);
+            ap_ch(t, ' ');
         }
-        ap_str(t, isr_vector_source(v));
-        ap_str(t, "\t");
+        ap_ch(t, ' ');
+        ap_str_width(t, source, 8);
+        ap_str(t, "  ");
         for (slot = 0; slot < ISR_MAX_VECTOR_HANDLERS; slot++) {
             const char *name = isr_vector_name(v, slot);
 
@@ -5873,17 +5891,14 @@ static int procfs_gen_interrupts(struct procfs_text *t)
             }
             ap_str(t, name);
         }
-        if (!named) {
-            ap_str(t, "none");
-        }
         ap_ch(t, '\n');
     }
-    ap_str(t, "SPU:\t");
-    ap_u32(t, isr_spurious_count());
-    ap_str(t, "\tspurious\n");
-    ap_str(t, "FBK:\t");
-    ap_u32(t, usb_fallback_count());
-    ap_str(t, "\tusb fallback\n");
+    ap_str(t, "SPU: ");
+    ap_u32_width(t, isr_spurious_count(), 10);
+    ap_str(t, "   spurious\n");
+    ap_str(t, "FBK: ");
+    ap_u32_width(t, usb_fallback_count(), 10);
+    ap_str(t, "   usb fallback\n");
     return t->nomem ? -1 : t->len;
 }
 

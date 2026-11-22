@@ -709,8 +709,10 @@ A test that slows the disk reads it to see that no lock was held across
 another file's request.
 .It Pa /proc/interrupts
 A heading names each online processor, followed by one line per device
-vector, numbered 32 through 239 except 128, that has a handler or a nonzero
-interrupt count, as Linux lists each interrupt with a handler:
+vector, numbered 32 through 239 except 128, the system call's, that has a
+handler, with a count of 0 until it takes an interrupt.
+Linux lists each interrupt that has a handler or has counted one; a vector
+a driver gives back is an interrupt Linux frees, so it has no line.
 .Dl VECTOR: CPU0_COUNT CPU1_COUNT ... SOURCE NAMES
 Each count belongs to the processor named in its heading column.
 The source is
@@ -722,9 +724,12 @@ for a line the I/O APIC delivers,
 for the tick of the local APIC's timer, and
 .Ql MSI
 for a device's message vector.
-Fields are separated by tabs.
-Shared handlers have comma-separated names; an unnamed vector has
-.Ql none .
+The fields are in Linux's form, separated by spaces: the vector
+right-aligned in three places, each count in ten, the source in eight
+after a space, and the names after two spaces, as BusyBox's
+.Xr powertop 1
+reads them.
+Shared handlers have comma-separated names.
 The final lines are
 .Ql SPU: COUNT spurious
 and

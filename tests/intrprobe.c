@@ -181,11 +181,13 @@ static int interrupt_sum(const char *p, const char **after)
 }
 
 /**
- * The count on the line that begins with `label`, or -1 when there is none.
+ * The count on the line whose label, after the spaces that right-align it,
+ * is `label`, or -1 when there is none.
  *
- * A line is `label`, a tab, the count, a tab, and the rest; the label is
- * matched at the start of a line so that a count of 48 elsewhere in the file
- * cannot be read as the line for vector 48.
+ * A line is the label, as ` 32:` or `FBK:`, the counts, each after spaces,
+ * and the rest, as Linux writes it; the label is matched at the start of a
+ * line so that a count of 48 elsewhere in the file cannot be read as the
+ * line for vector 48.
  */
 static int count_for(const char *label, const char *file)
 {
@@ -196,6 +198,9 @@ static int count_for(const char *label, const char *file)
         int j;
         int start = i;
 
+        while (file[start] == ' ') {
+            start++;
+        }
         for (j = 0; j < n && file[start + j] == label[j]; j++) {
             /* compare */
         }
@@ -342,9 +347,11 @@ static int option_value(const char *key)
  * vector, or -1 when no line has both. A driver's message vector is found by
  * the name its handler registered under, since a vector is given to a device
  * when it enables its messages and the number is whatever came next; a PCI
- * line's vector differs from machine to machine, as in `39:\t57\tPIC\txhci`.
- * The names on a line are one per device, `rtl8139, xhci` where the emulator
- * puts both on IRQ 11, and the name asked for must be one of them whole.
+ * line's vector differs from machine to machine, as in
+ * ` 39:         57          0       PIC  xhci`, whose fields Linux separates
+ * with spaces. The names on a line are one per device, `rtl8139, xhci`
+ * where the emulator puts both on IRQ 11, and the name asked for must be
+ * one of them whole.
  */
 static int count_for_named(const char *kind, const char *name, const char *file)
 {
@@ -352,16 +359,23 @@ static int count_for_named(const char *kind, const char *name, const char *file)
     int m = (int)strlen(name), source_len = (int)strlen(kind);
 
     while (*p) {
-        const char *line = p, *source, *names;
+        const char *line, *source, *names;
         int value;
 
+        while (*p == ' ') {
+            p++;
+        }
+        line = p;
         while (*p >= '0' && *p <= '9') {
             p++;
         }
         if (p > line && *p == ':') {
             value = interrupt_sum(p + 1, &source);
-            if (find(source, kind) == 0 && source[source_len] == '\t') {
-                names = source + source_len + 1;
+            if (find(source, kind) == 0 && source[source_len] == ' ') {
+                names = source + source_len;
+                while (*names == ' ') {
+                    names++;
+                }
                 while (*names && *names != '\n') {
                     if (find(names, name) == 0 &&
                         (names[m] == ',' || names[m] == '\n' || names[m] == '\0')) {

@@ -1495,6 +1495,9 @@ uint32_t isr_interrupt_total(void)
 
 const char *isr_vector_source(int vector)
 {
+    if (vector == ISR_SYSCALL_VECTOR) {
+        return NULL;
+    }
     if (vector >= ISR_MSI_FIRST && vector <= ISR_MSI_LAST) {
         return "MSI";
     }
