@@ -12,7 +12,10 @@ struct sync_file {
     char name[32]; /* the user's, from MERGE; empty for one made from the fence */
 };
 
-/** Poll a sync file through its fence's own completion wait queue. */
+/** Poll a sync file through its fence's own completion wait queue. It runs
+ * without the big lock (FILE_OPS_POLL_UNLOCKED), as Linux's sync_file_poll
+ * does: a fence's mark, its enabling and its wait queue are kept by the
+ * fence's own lock and atomics, safe on any processor (dmabuf/Readme.md). */
 static short sync_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct sync_file *s = e->priv;
@@ -196,7 +199,7 @@ static int32_t sync_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops sync_ops = {NULL,       NULL, sync_poll, sync_ioctl,
-                                         sync_close, NULL, NULL,      0};
+                                         sync_close, NULL, NULL,      FILE_OPS_POLL_UNLOCKED};
 
 /** Find a caller's sync file and take a reference to its fence. */
 struct dma_fence *sync_file_get_fence(int32_t fd)
