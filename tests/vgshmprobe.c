@@ -306,9 +306,11 @@ static void draw(const char *want)
 #define PROBE_SIGSTOP 19
 
 /**
- * Make a render target, say so and stop until SIGCONT, so that the caller
- * can stop the VM once the target's backing, which the device gives, is
- * made; then leave `count` fenced submissions pending, say so, and wait for
+ * Make a render target and map it, say so and stop until SIGCONT, so that
+ * the caller can stop the VM once the target's backing, which the device
+ * gives, is made: the creation asks for it and the map takes the answer,
+ * which a submission would otherwise wait for with the VM stopped; then
+ * leave `count` fenced submissions pending, say so, and wait for
  * the buffer and for each fence: each fence must end with an error, which
  * the VM's death gives it, and the buffer's wait must return, with 0 once
  * its fences have ended, as Linux's VIRTGPU_WAIT does; a wait after the
@@ -323,6 +325,7 @@ static void pending(long count)
         int fd;
         short events, revents;
     } p[PENDING_MAX];
+    struct drm_virtgpu_map m;
     uint32_t res, bo;
     long i, failed = 0, r, waited, after;
     char text[12];
@@ -332,6 +335,11 @@ static void pending(long count)
     }
     find_gpu();
     bo = target(64, 64, &res);
+    zero(&m, sizeof(m));
+    m.handle = bo;
+    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_MAP, &m) != 0) {
+        fail("map the render target");
+    }
     probe_line("VGSHMPROBE READY", 0, 0);
     syscall2(SYS_KILL, syscall0(SYS_GETPID), PROBE_SIGSTOP);
     for (i = 0; i < count; i++) {
