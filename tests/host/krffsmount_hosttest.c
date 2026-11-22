@@ -1679,6 +1679,12 @@ int vfs_mount_rdonly(const struct vfs_mount *m)
     return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
+/** vfs_ns.c's: the caller's mount namespace, the first, the only one here. */
+uint32_t vfs_mntns_id(void)
+{
+    return 0;
+}
+
 /**
  * Refuse one fetch of the header block for mtime or ctime. The overwrite
  * starts in the next block, so its payload never fetches the header.
