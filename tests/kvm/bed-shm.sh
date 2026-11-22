@@ -456,6 +456,11 @@ cleanup()
                 done
         fi
     fi
+    # The control port: the script's end of the VM's second serial port
+    # closed and its two pipes removed, QEMU, the other end, having gone,
+    # and bed-vm-control with its VM.
+    exec 7<&- 2>/dev/null
+    rm -f "$out/ctl.in" "$out/ctl.out"
     if [ -z "$survivors" ]; then
         pass stop "the load's groups and every child have ended (bounds: 20 s to TERM and 10 s to KILL a group, 10 s each to TERM and to KILL a child)"
     else
