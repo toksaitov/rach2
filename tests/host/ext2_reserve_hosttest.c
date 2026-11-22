@@ -14,6 +14,7 @@
  * host-deps: tests/host/compat/spin_none.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/bkl_held.c
  * host-deps: tests/host/compat/fsize_none.c tests/host/compat/ids_root.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * The test includes the driver's files whole. The mount, a group of 64 blocks
  * and an inode are built in memory, over a cache model with one buffer for each

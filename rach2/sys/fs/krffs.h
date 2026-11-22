@@ -888,6 +888,10 @@ int krffs_node_is_dir(const krffs_node_t *node);
  * header cannot be read. */
 uint64_t krffs_ino_of(const krffs_node_t *node);
 
+/** The offset of `node` in the boot root's image, or KRFFS_NO_NODE for
+ * NULL, before the mount, or for a pointer outside the image. */
+uint64_t krffs_node_place(const krffs_node_t *node);
+
 /**
  * The node after `node`, whose header is `head`, in the boot root's ring:
  * the root after the last, and for a size smaller than a header, so a walk

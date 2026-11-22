@@ -23,7 +23,7 @@
  * host-deps: tests/host/compat/bkl_held.c tests/host/compat/rcu_none.c
  * host-deps: tests/host/compat/mutex_none.c tests/host/compat/kirq_on.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/fsize_none.c
- * host-deps: tests/host/compat/ids_root.c
+ * host-deps: tests/host/compat/ids_root.c tests/host/compat/walkseq_host.c
  * host-first: its interruption matrices run for minutes
  *
  * The volumes are made here from a staged tree by the host's mke2fs with the

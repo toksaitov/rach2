@@ -1,7 +1,10 @@
 /* The walk sequence; the contract is in walkseq.h. */
 #include "walkseq.h"
 
+#include "bcache.h"
+#include "dcache.h"
 #include "debugfs.h"
+#include "vfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/spinlock.h"
@@ -187,7 +190,8 @@ int vfs_stamp_begin(const struct vfs_stamp *st)
  * change the tree at a known point of a walk and then let it go on; all
  * under `gate_lock`. `gate_stop` is -1 once that stop is used. The gate
  * also holds up to GATE_TOKENS changes open for a test (`gate_tokens`),
- * and arms one fault of a type's hand-back for a thread (`gate_fault`).
+ * arms one fault of a type's hand-back for a thread (`gate_fault`), and
+ * one failed read of the block cache for a thread (`gate_ioerr`).
  */
 #define GATE_TOKENS 2
 
@@ -198,12 +202,14 @@ static int gate_released;
 static int gate_waiting;
 static int gate_tokens;
 static int gate_fault;
+static int gate_ioerr;
 static uint32_t gate_count[WALK_GATE_EVENTS];
 static wait_queue_t gate_wq;
 
 /* The events' names, in the order of their numbers. */
-static const char *const gate_names[WALK_GATE_EVENTS] = {
-    "full", "unlocked", "miss", "lookup", "nslock", "restart", "handoff", "retry", "wait"};
+static const char *const gate_names[WALK_GATE_EVENTS] = {"full",   "unlocked", "miss",    "lookup",
+                                                         "nslock", "restart",  "handoff", "retry",
+                                                         "wait",   "load",     "read",    "kept"};
 
 /** The wait condition of `walk_gate`: the stop is released. */
 static int gate_open(void *arg)
@@ -239,21 +245,41 @@ void walk_gate(int event)
     }
 }
 
-int walk_gate_fault(void)
+/** Whether the thread number `*armed` is the calling thread's, which this
+ * disarms: the step of `walk_gate_fault` and `walk_gate_ioerr`. */
+static int gate_once(int *armed)
 {
     uint32_t flags;
     int hit;
 
-    if (!gate_fault || !current_proc) {
+    if (!*armed || !current_proc) {
         return 0;
     }
     flags = spin_lock_irqsave(&gate_lock);
-    hit = gate_fault == (int)current_proc->pid;
+    hit = *armed == (int)current_proc->pid;
     if (hit) {
-        gate_fault = 0;
+        *armed = 0;
     }
     spin_unlock_irqrestore(&gate_lock, flags);
     return hit;
+}
+
+int walk_gate_fault(void)
+{
+    return gate_once(&gate_fault);
+}
+
+int walk_gate_ioerr(void)
+{
+    return gate_once(&gate_ioerr);
+}
+
+/** The block cache's check before a read from a device: the walk gate's
+ * WALK_GATE_READ, and the failure `ioerr` arms (`walk_gate_ioerr`). */
+static int gate_read_check(void)
+{
+    walk_gate(WALK_GATE_READ);
+    return walk_gate_ioerr();
 }
 
 /* A line of the gate's text being made: `len` counts every byte, and those
@@ -295,8 +321,9 @@ static void gate_num(struct gate_text *t, const char *name, uint32_t n)
 
 /** The gate's state as one line: `pid P stop E waiting W`, the count of
  * each event by its name, E being `-` once the stop is used or released,
- * and `tokens T active A`, the changes the gate holds open and all those
- * under way. */
+ * `tokens T active A`, the changes the gate holds open and all those under
+ * way, and `keep K`, where the armed thread's newest walk keep lies in the
+ * KRFFS boot root (`vfs_walk_keep_place`). May sleep. */
 static int32_t gate_show(void *data, char *buf, uint32_t cap)
 {
     struct gate_text t;
@@ -326,6 +353,7 @@ static int32_t gate_show(void *data, char *buf, uint32_t cap)
     }
     gate_num(&t, "tokens", (uint32_t)tokens);
     gate_num(&t, "active", active);
+    gate_num(&t, "keep", pid > 0 ? vfs_walk_keep_place((uint32_t)pid) : 0u);
     gate_str(&t, "\n");
     return (int32_t)t.len;
 }
@@ -381,6 +409,7 @@ static void gate_let_go(int off)
     if (off) {
         gate_pid = 0;
         gate_fault = 0;
+        gate_ioerr = 0;
     }
     spin_unlock_irqrestore(&gate_lock, flags);
     wq_wake(&gate_wq, 0);
@@ -420,8 +449,9 @@ static int gate_verb(const char *line, const char *w)
     return *w == '\0' && *line == ' ';
 }
 
-/** `fault PID` of `line`, `n` bytes: 0, or -EINVAL. */
-static int gate_fault_text(const char *line, uint32_t n)
+/** `fault PID` or `ioerr PID` of `line`, `n` bytes, into `*armed`: 0, or
+ * -EINVAL. */
+static int gate_once_text(const char *line, uint32_t n, int *armed)
 {
     uint32_t i = 6, pid = gate_pid_at(line, &i);
     uint32_t flags;
@@ -430,9 +460,28 @@ static int gate_fault_text(const char *line, uint32_t n)
         return -EINVAL;
     }
     flags = spin_lock_irqsave(&gate_lock);
-    gate_fault = (int)pid;
+    *armed = (int)pid;
     spin_unlock_irqrestore(&gate_lock, flags);
     return 0;
+}
+
+/**
+ * Leave the next walk of the root mount to read the disk: the dirty blocks
+ * of every mount written (`vfs_sync_all`), the root mount's names forgotten,
+ * which puts back the nodes only they held, and every clean block the cache
+ * holds for no one given back. A test's way to make a lookup cold, as
+ * Linux's `echo 3 > /proc/sys/vm/drop_caches` does. May sleep.
+ */
+static void gate_cold(void)
+{
+    struct vfs_mount *root = vfs_root_mount();
+    uint32_t written = 0;
+
+    (void)vfs_sync_all();
+    if (root) {
+        dcache_forget_mount(root);
+    }
+    (void)bcache_shrink(0xFFFFFFFFu, 0, &written);
 }
 
 /** `arm PID EVENT` of `line`, `n` bytes: 0, or -EINVAL. */
@@ -471,8 +520,10 @@ static int gate_arm_text(const char *line, uint32_t n)
  * lets it go, stops counting and ends the changes the gate holds; `begin`
  * and `end` begin and end a change the gate holds (`gate_token`);
  * `advance` moves the sequence by 2^32 (`gate_advance`); `fault PID` arms
- * one fault of a hand-back for the thread PID (`walk_gate_fault`). `len`,
- * or -EINVAL for another text, `gate_token`'s error, or -EFAULT.
+ * one fault of a hand-back for the thread PID (`walk_gate_fault`); `ioerr
+ * PID` one failed read of the block cache for it (`walk_gate_ioerr`); and
+ * `cold` leaves the next walk to read the disk (`gate_cold`). `len`, or
+ * -EINVAL for another text, `gate_token`'s error, or -EFAULT.
  */
 static int32_t gate_store(void *data, const char __user *ubuf, uint32_t len)
 {
@@ -499,8 +550,13 @@ static int32_t gate_store(void *data, const char __user *ubuf, uint32_t len)
     } else if (gate_word(line, "advance")) {
         gate_advance();
         rc = 0;
+    } else if (gate_word(line, "cold")) {
+        gate_cold();
+        rc = 0;
     } else if (gate_verb(line, "fault")) {
-        rc = gate_fault_text(line, n);
+        rc = gate_once_text(line, n, &gate_fault);
+    } else if (gate_verb(line, "ioerr")) {
+        rc = gate_once_text(line, n, &gate_ioerr);
     } else if (gate_verb(line, "arm")) {
         rc = gate_arm_text(line, n);
     }
@@ -513,5 +569,7 @@ void walk_gate_init(void)
 {
     if (debugfs_create_text("vfs/walk_gate", 0600u, &gate_ops, NULL) != 0) {
         klog(KLOG_WARN, "vfs", "debugfs: walk_gate not registered");
+        return;
     }
+    bcache_set_read_check(gate_read_check);
 }

@@ -812,6 +812,13 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
  */
 void vfs_ref_now(struct vfs_ref *ref);
 
+/** Where the node of the newest keep of the walks of thread `pid` lies in
+ * the KRFFS boot root, as its offset plus 1, or 0 when that thread keeps no
+ * node of the boot root: the walk gate's `keep`, for a test that sees a
+ * keep follow a relocation. Takes the big lock when the caller has not.
+ * May sleep. */
+uint32_t vfs_walk_keep_place(uint32_t pid);
+
 /** Give back the keeps of the calling thread's walks, at the end of its
  * system call or of the thread: a node one kept that lost its name and
  * that nothing else holds is freed. Takes the big lock when the caller has
@@ -1332,7 +1339,10 @@ int vfs_cover_lock(const struct vfs_ref *tref);
  *
  * The walk locks only a type that sets `ns_serialised`, so a caller that
  * unlocked unconditionally would release a lock it never held. Every exit
- * from a walk made with that flag goes through here.
+ * from a walk made with that flag goes through here. A thread whose walks
+ * keep their answers then reaches the walk gate's WALK_GATE_KEPT, where a
+ * test may change the tree while the call still uses what its walk found.
+ * May sleep.
  */
 void vfs_walk_unlock(struct vfs_mount *mnt);
 

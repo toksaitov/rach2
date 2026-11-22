@@ -626,6 +626,12 @@ extern unsigned long vm_dirty_bytes;
  * write lock and must not sleep. */
 void bcache_set_flusher(void (*kick)(void));
 
+/** Name the check the cache makes before it reads a block from its device,
+ * in the thread that waits for the read: a nonzero answer takes the read as
+ * one that failed, for a test's injected error (`walk_gate_ioerr`); NULL
+ * names none. The check may sleep and must take no lock of the cache's. */
+void bcache_set_read_check(int (*check)(void));
+
 /** The count of dirty marks so far, which grows by one at each; a buffer
  * gone dirty after a reading of it was marked later than it. */
 uint64_t bcache_marks(void);

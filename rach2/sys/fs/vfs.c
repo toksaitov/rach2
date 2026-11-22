@@ -944,6 +944,9 @@ static void walk_unlock(struct vfs_mount *mnt, int locked)
 void vfs_walk_unlock(struct vfs_mount *mnt)
 {
     walk_unlock(mnt, 1);
+    if (mnt->type->ns_serialised && current_proc && current_proc->walk_keeps) {
+        walk_gate(WALK_GATE_KEPT);
+    }
 }
 
 /**
@@ -7175,6 +7178,17 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
  * shows the system's terminals and ptmx, whatever its options ask, since
  * this kernel keeps one set of terminals.
  */
+/** Stop at the walk gate's WALK_GATE_HANDOFF, for a mount or a bind that
+ * has the walks of its target on `mnt` and has not yet taken its cover
+ * lock, unless the walk keeps the mount's namespace lock, as `walk_taken`
+ * in syscall_fs.c does for the other changes. */
+static void mount_gate(const struct vfs_mount *mnt)
+{
+    if (!mnt->type->ns_serialised) {
+        walk_gate(WALK_GATE_HANDOFF);
+    }
+}
+
 /** vfs_do_mount, with the copy a descriptor target keeps in `*kept`. */
 static int mount_new(const char *source, const char *target, const char *type, uint32_t flags,
                      const char *options, struct fd_kept **kept)
@@ -7203,6 +7217,7 @@ again:
         return rc;
     }
     vfs_stamp_get(&st);
+    mount_gate(tref.mnt);
     if (t == &vfs_procfs_type && tref.mnt->type == t && tref.node == tref.mnt->root &&
         mount_permanent(tref.mnt)) {
         k_strncpy(canon, tref.mnt->covered_path, sizeof(canon));
@@ -7817,6 +7832,32 @@ static int walk_keeps_hold(const struct vfs_mount *mnt, const void *node)
     return 0;
 }
 
+uint32_t vfs_walk_keep_place(uint32_t pid)
+{
+    const process_t *pr;
+    const struct walk_keep *k = NULL;
+    uint32_t place = 0;
+    int big = !bkl_held();
+
+    if (big) {
+        bkl_enter();
+    }
+    for (pr = proc_list; pr && pr->pid != pid; pr = pr->next) {
+    }
+    if (pr) {
+        k = pr->walk_keeps;
+    }
+    if (k && vfs_mount_base(k->mnt) == mounts[0] && k->mnt->type == &vfs_krffs_type) {
+        uint64_t at = krffs_node_place((const krffs_node_t *)walk_keep_node(k));
+
+        place = at == KRFFS_NO_NODE || at >= 0xFFFFFFFFu ? 0 : (uint32_t)at + 1u;
+    }
+    if (big) {
+        bkl_exit();
+    }
+    return place;
+}
+
 void vfs_walk_keeps_end(void)
 {
     struct walk_keep *k;
@@ -7967,6 +8008,9 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
     if (rc != 0) {
         bind_fail(sref, h);
         return rc;
+    }
+    if (src) {
+        mount_gate(tref->mnt);
     }
     gone = vfs_cover_lock(tref);
     if (src && !vfs_stamp_still(&src->stamp)) {
