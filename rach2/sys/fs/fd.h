@@ -251,6 +251,10 @@ struct open_file {
     struct vfs_mount *access_mnt;
     void *access_node;
     int access; /* 0: none, 1: writer, 2: executable */
+    /* The id of the mount namespace the reservation was taken in, whose
+     * view of `access_mnt` it writes through, as Linux's writer counts on
+     * that namespace's copy of the mount (`fd_mount_readonly_begin`). */
+    uint32_t access_ns;
     /* The token of the type's `pin` for an O_PATH description on a type
      * that keeps a node only while it is open, which the last unref gives
      * to `unpin`; NULL for every other description. */
@@ -761,8 +765,12 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
  * through it and refuse writers through it alone; a base without counts
  * those opened through it or any bind of it and refuses writers through
  * them all, as Linux counts a mount's writers or every mount of the
- * superblock's. Takes the lock of the descriptions; nothing here sleeps. */
-int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone);
+ * superblock's. With `own`, for a remount of the caller's mount namespace's
+ * view of `mnt` alone (`views` in vfs.h), only the reservations taken in
+ * that namespace count and are refused, as Linux counts the writers of
+ * that namespace's copy of the mount. Takes the lock of the descriptions;
+ * nothing here sleeps. */
+int fd_mount_readonly_begin(struct vfs_mount *mnt, int alone, int own);
 
 /** End the refusal `fd_mount_readonly_begin` began on `mnt`, once its
  * flags say whether it is read-only. */
