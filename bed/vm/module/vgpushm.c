@@ -14,6 +14,7 @@
 #include <linux/fs.h>
 #include <linux/idr.h>
 #include <linux/interrupt.h>
+#include <linux/io.h>
 #include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
@@ -115,7 +116,7 @@ struct vgpushm {
     atomic64_t irqs[VGPUSHM_VECTORS];
     atomic64_t signals[VGPUSHM_VECTORS];
     atomic64_t rings;
-    void __iomem *shm; /* the region, for the driver's epoch */
+    void *shm; /* the region, mapped write-back; read for the driver's epoch */
     /* The pins, under ops: the open file's, and those kept after it closed
      * while the driver may still map them, which kept_work looks at. */
     struct list_head pins;
@@ -228,8 +229,9 @@ static void vgpushm_unpin(struct vgpushm *dev, struct vgpushm_pinrec *rec)
  */
 static bool vgpushm_driver_holds(struct vgpushm *dev, u32 epoch)
 {
-    return !dev->gone && ioread32(dev->shm + REGION_DRIVER_EPOCH) == epoch &&
-           ioread32(dev->shm + REGION_DRIVER_STATE) != DRIVER_GONE;
+    return !dev->gone &&
+           le32_to_cpu(READ_ONCE(*(__le32 *)(dev->shm + REGION_DRIVER_EPOCH))) == epoch &&
+           le32_to_cpu(READ_ONCE(*(__le32 *)(dev->shm + REGION_DRIVER_STATE))) != DRIVER_GONE;
 }
 
 /**
@@ -709,8 +711,12 @@ static int vgpushm_release(struct inode *inode, struct file *file)
  * @file: the file
  * @vma: the mapping, no larger than the region
  *
- * The mapping is write-back: the region is the host's RAM, which QEMU's
- * other peer maps cached, and under KVM the guest's attribute is ignored.
+ * The mapping is write-back, as the probe's own mapping of BAR 2 is: the
+ * region is the host's RAM, which QEMU's other peer maps cached. The guest's
+ * memory type counts, since KVM ignores it only while no assigned device
+ * skips the processor's caches; the Lenovo's GPU does, and there an uncached
+ * mapping would make each byte the backend reads a bus cycle of its own.
+ * x86's PAT gives this mapping the type the probe reserved for the range.
  *
  * Context: holds mmap_lock for write, so it reads dev->gone without dev->ops,
  * under which the ioctls copy to and from user memory and so take mmap_lock.
@@ -915,10 +921,14 @@ static void vgpushm_free_irqs(struct vgpushm *dev)
 }
 
 /**
- * vgpushm_probe() - Bind an ivshmem device: map its registers, enable its
- * vectors and register its node.
+ * vgpushm_probe() - Bind an ivshmem device: map its registers and its region,
+ * enable its vectors and register its node.
  * @pdev: the device
  * @id: its entry of the table
+ *
+ * BAR 2 is mapped write-back with memremap, not with pcim_iomap, whose
+ * uncached type x86's PAT would then give every mapping of the range,
+ * vgpushm_mmap's too.
  *
  * Return: 0, or the first error met.
  */
@@ -930,9 +940,12 @@ static int vgpushm_probe(struct pci_dev *pdev, const struct pci_device_id *id)
     err = pcim_enable_device(pdev);
     if (err)
         return err;
-    err = pcim_iomap_regions(pdev, BIT(BAR_REGS) | BIT(BAR_SHM), "vgpushm");
+    err = pcim_iomap_regions(pdev, BIT(BAR_REGS), "vgpushm");
     if (err)
         return err;
+    if (!devm_request_mem_region(&pdev->dev, pci_resource_start(pdev, BAR_SHM),
+                                 pci_resource_len(pdev, BAR_SHM), "vgpushm"))
+        return -EBUSY;
     dev = kzalloc(sizeof(*dev), GFP_KERNEL);
     if (!dev)
         return -ENOMEM;
@@ -952,9 +965,13 @@ static int vgpushm_probe(struct pci_dev *pdev, const struct pci_device_id *id)
     /* A pin's dma-buf is mapped for the device; its pages may lie anywhere. */
     (void)dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
     dev->regs = pcim_iomap_table(pdev)[BAR_REGS];
-    dev->shm = pcim_iomap_table(pdev)[BAR_SHM];
     dev->shm_start = pci_resource_start(pdev, BAR_SHM);
     dev->shm_len = pci_resource_len(pdev, BAR_SHM);
+    dev->shm = devm_memremap(&pdev->dev, dev->shm_start, dev->shm_len, MEMREMAP_WB);
+    if (IS_ERR(dev->shm)) {
+        err = PTR_ERR(dev->shm);
+        goto fail_ida;
+    }
     pci_set_master(pdev);
     snprintf(dev->name, sizeof(dev->name), "vgpushm%d", dev->index);
     err = vgpushm_irqs(dev);

@@ -106,28 +106,21 @@ struct c_map_blob {
     uint64_t offset;
 };
 
-/* Copy n bytes at offset off of the region, checked before, to private dst. */
+/*
+ * Copy n bytes at offset off of the region, checked before, to private dst.
+ * The module maps the region write-back, so memcpy reads it at the speed of
+ * RAM; only dst is parsed after, so bytes the driver changes meanwhile
+ * change nothing that was checked.
+ */
 static void region_get(struct vd *d, uint64_t off, void *dst, uint64_t n)
 {
-    volatile const uint8_t *s = d->base + off;
-    uint8_t *p = dst;
-    uint64_t i;
-
-    for (i = 0; i < n; i++) {
-        p[i] = s[i];
-    }
+    memcpy(dst, (const void *)(d->base + off), (size_t)n);
 }
 
 /* Copy n private bytes to offset off of the region, checked before. */
 static void region_put(struct vd *d, uint64_t off, const void *src, uint64_t n)
 {
-    volatile uint8_t *s = d->base + off;
-    const uint8_t *p = src;
-    uint64_t i;
-
-    for (i = 0; i < n; i++) {
-        s[i] = p[i];
-    }
+    memcpy((void *)(d->base + off), src, (size_t)n);
 }
 
 /** Ring the driver's vector when the transport has doorbells. */
