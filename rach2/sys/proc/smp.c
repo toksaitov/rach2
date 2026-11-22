@@ -51,7 +51,8 @@ struct bkl_trace_stamp {
 };
 
 struct bkl_trace_header {
-    uint32_t version, count, lost, reserved;
+    uint32_t version, count, lost;
+    uint32_t reserved; /* Zero on the wire, including on i686. */
     struct bkl_trace_stamp first, last;
 };
 
@@ -66,7 +67,7 @@ struct bkl_trace_row {
     uint8_t cpu, kind;
 };
 
-/* The leaf spinlock serializes appends from scheduler and big-lock paths.
+/* The spinlock serializes appends from scheduler and big-lock paths.
  * The big lock serializes control and reads. A stopped buffer is immutable. */
 static struct spinlock bkl_trace_lock = SPINLOCK_INIT_NAMED("bkl_trace");
 static volatile int bkl_tracing;
@@ -1667,8 +1668,12 @@ int32_t smp_trace_store(void *data, const char __user *buf, uint32_t len)
         }
     } else {
         bkl_tracing = 0;
-        k_memset(&bkl_trace, 0, sizeof(bkl_trace));
         bkl_trace.version = 1;
+        bkl_trace.count = 0;
+        bkl_trace.lost = 0;
+        bkl_trace.reserved = 0;
+        k_memset(&bkl_trace.first, 0, sizeof(bkl_trace.first));
+        k_memset(&bkl_trace.last, 0, sizeof(bkl_trace.last));
         if (start) {
             trace_stamp(&bkl_trace.first);
             bkl_tracing = 1;
