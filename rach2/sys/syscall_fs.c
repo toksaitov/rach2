@@ -5668,7 +5668,7 @@ again:
                                     : 0),
                            &ref, NULL, &entry, &dir);
     vfs_stamp_get(&st);
-    if (name == named) {
+    if (followed == 0) {
         first = st;
     }
     current_proc->walk_consume = &first;
@@ -6153,6 +6153,10 @@ long sys_pivot_root(isr_params_t *params)
         path_buf_put(npath);
         return rc;
     }
+    nref.mnt = NULL;
+    nref.node = NULL;
+    old.mnt = NULL;
+    old.node = NULL;
     oldroot = path_buf_get();
     buf = path_buf_get();
     rc = oldroot && buf ? 1 : -ENOMEM;
