@@ -57,6 +57,8 @@ with
 .Dv MNT_DETACH ,
 which here takes the mounts below the old root but the caller's new root
 and those below it.
+The detach uses the working directory's held mount even if the path
+from the original mount table can no longer reach it.
 .Pp
 Every process of the caller's mount namespace whose root was the old root
 has the new root after the call, the caller among them.

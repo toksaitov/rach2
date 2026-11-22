@@ -7146,13 +7146,25 @@ static int detached_by(const struct vfs_mount *c, const struct vfs_mount *m,
     return 0;
 }
 
+/** Resolve a lazy unmount's target and detach its mount tree. See vfs.h. */
 int vfs_do_detach(const char *target, int dir)
 {
-    struct vfs_ref tref;
+    struct vfs_ref tref, cwd;
+    const struct vfs_ref *start = NULL;
     struct vfs_mount *m, *root = root_mount_of_caller();
     int i, rc;
 
-    rc = resolve_path(0, target, WALK_UNMOUNT, &tref, 0, 0, 0);
+    if (target[0] == '/' && target[1] == '/' && current_proc->fs->cwd_mnt &&
+        streq(target, proc_cwd(current_proc))) {
+        cwd.mnt = current_proc->fs->cwd_mnt;
+        cwd.node = current_proc->fs->cwd_node;
+        if (!vfs_mount_seen(cwd.mnt)) {
+            return -EINVAL;
+        }
+        start = &cwd;
+        target = ".";
+    }
+    rc = resolve_path(start, target, WALK_UNMOUNT, &tref, 0, 0, 0);
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
     if (rc != 0 && !m) {
         return rc;
