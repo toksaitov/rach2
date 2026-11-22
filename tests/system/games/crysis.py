@@ -454,6 +454,18 @@ def frame_stats(values):
         at(0.5), at(0.99), s[-1], sum(1 for v in s if v > 50), sum(1 for v in s if v > 100))
 
 
+def flyby_profile(game, phase):
+    """Read counters at a flyby boundary when BED_PROFILE names the reader."""
+    reader = os.environ.get("BED_PROFILE")
+    if not reader:
+        return
+    counts = game.out / "profile"
+    counts.mkdir(exist_ok=True)
+    mark = counts / ("mark-" + phase)
+    mark.write_text("%d %d\n" % (time.monotonic_ns(), game.frames()))
+    subprocess.run(["sh", reader, counts, phase], check=True)
+
+
 def flyby(route, name, loops):
     """Run the flyby for LOOPS loops and judge each against GATE."""
     out = out_dir(name)
@@ -465,10 +477,13 @@ def flyby(route, name, loops):
     try:
         game.wait(lambda: game.loaded() is not None, "load")
         say("loaded in %s s" % game.loaded())
+        flyby_profile(game, "before")
         while len(ends) < loops:
             done = len(finished())
             if done > len(ends):
                 ends.append(game.frames())
+                if len(ends) == loops:
+                    flyby_profile(game, "after")
                 say("loop %d finished at frame %d" % (done - 1, ends[-1]))
                 continue
             if not game.wait(lambda: len(finished()) > len(ends), "loop %d" % len(ends)):

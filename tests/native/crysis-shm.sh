@@ -1,5 +1,5 @@
 #!/bin/sh
-# Measure the Crysis flyby on the Lenovo through the shared-memory GPU.
+# Measure the Crysis flyby on the Lenovo. With native, use i915 instead.
 # Run as root from a new workspace on the installed system's ext2 root,
 # with crysis.sh (the native case), crysis.py, wm.py, bed-shm.sh and gpu.sh.
 # The workspace keeps out/ and the manifests data.before and data.after.
@@ -68,7 +68,12 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-[ "$(id -u)" = 0 ] && [ "$#" = 0 ] && [ -d /data/crysis ] &&
+case ${1:-shm}:$# in
+    shm:0) route=shm ;;
+    native:1) route=native ;;
+    *) echo 'usage: crysis-shm.sh [native]' >&2; exit 2 ;;
+esac
+[ "$(id -u)" = 0 ] && [ -d /data/crysis ] &&
     [ "$(stat -c %d .)" != "$(stat -c %d /data)" ] ||
     { echo 'crysis-shm: use a workspace on the root as root' >&2; exit 2; }
 [ ! -e data.before ] && [ ! -e private ] ||
@@ -84,7 +89,7 @@ mkdir -m 0755 private
 mixer vol 1
 CRYSIS_PARENT_MNTNS=$(readlink /proc/self/ns/mnt)
 export CRYSIS_PARENT_MNTNS
-unshare --mount --propagation private sh ./crysis.sh shm &
+unshare --mount --propagation private sh ./crysis.sh "$route" &
 child=$!
 status=0
 wait "$child" || status=$?
