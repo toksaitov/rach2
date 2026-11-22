@@ -129,6 +129,7 @@ int fd_peek_hold(struct fd_table *table, int fd, struct fd_entry *out);
 void fd_peek_drop(struct fd_entry *copy);
 
 struct fd_kept;
+struct vfs_mount;
 
 /**
  * Keep a copy of descriptor `fd` of `table`, as `fd_peek_hold` takes one,
@@ -141,6 +142,14 @@ struct fd_kept;
  * `*entry`, or NULL with `*err` -ENOMEM or -EBADF. Release with `fd_unkeep`.
  */
 struct fd_kept *fd_keep(struct fd_table *table, int fd, struct fd_entry **entry, int *err);
+
+/**
+ * The node of `mnt` that the description `kept` holds names now, or `node`
+ * when it names none there: a KRFFS relocation moves the description's node
+ * (`vfs_repoint`) but not a copy taken from it before. Under the namespace
+ * lock of `mnt`, which a relocation holds.
+ */
+void *fd_kept_node(const struct fd_kept *kept, const struct vfs_mount *mnt, void *node);
 
 /** Let go of what `fd_keep` kept, and free the node of the KRFFS root it
  * held if it was the last holder of a node with no name. NULL is nothing.
