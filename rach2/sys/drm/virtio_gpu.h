@@ -687,6 +687,11 @@ struct virtio_gpu_device {
     int freeing;
     uint32_t kicking; /* notifies made without the big lock */
     char reset_path[48];
+    char hold_path[48];   /* virtio_gpu_hold's, empty until registered */
+    char attach_path[48]; /* virtio_gpu_attachments' */
+    /* Open descriptors of virtio_gpu_hold, while which a live device's
+     * reaps leave the answers on `done_list` (`vgpu_answers_held`). */
+    uint32_t answer_holds;
     int has_edid;
     int has_indirect;
     int has_blob;                         /* VIRTIO_GPU_F_RESOURCE_BLOB */
@@ -947,7 +952,9 @@ uint64_t virtio_gpu_objects(void);
  */
 int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence,
                              uint64_t context);
-/** Register or remove the reset trigger; registration returns 0 or -errno. */
+/** Register or remove the device's debugfs files: the reset trigger, the
+ * answers' hold and the list of attachments; registration returns 0 or
+ * -errno. */
 int32_t vgpu_reset_register(struct virtio_gpu_device *vg);
 void vgpu_reset_remove(struct virtio_gpu_device *vg);
 

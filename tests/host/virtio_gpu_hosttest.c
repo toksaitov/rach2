@@ -920,6 +920,17 @@ void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path
     path[cap - 1u] = '\0';
 }
 
+/** Register a text file, the list of attachments, which no row reads. */
+int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
+                            void *data)
+{
+    (void)path;
+    (void)mode;
+    (void)ops;
+    (void)data;
+    return 0;
+}
+
 /** Register the reset trigger, keeping its operations in the 3D model. */
 #ifndef VGPU_3D_TEST
 int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,

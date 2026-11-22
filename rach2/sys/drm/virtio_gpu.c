@@ -250,6 +250,25 @@ static void done_add(struct virtio_gpu_device *vg, struct virtio_gpu_cmd *cmd)
     vg->done_tail = cmd;
 }
 
+/**
+ * Whether a reap leaves the device's answers on its done list: while a
+ * descriptor of the debugfs file virtio_gpu_hold is open on a live device,
+ * so that a test holds a submission's or a DETACH's references for as long
+ * as it needs, whatever the host's speed. The fences still signal at the
+ * answer; the completions, and the frees they lead to, wait for the last
+ * close of the hold.
+ */
+static int vgpu_answers_held(const struct virtio_gpu_device *vg)
+{
+    return vg->answer_holds && !vg->dead;
+}
+
+/** Whether an answer waits to be reaped and a reap would take it. */
+static int answers_waiting(const struct virtio_gpu_device *vg)
+{
+    return vg->done_list && !vgpu_answers_held(vg);
+}
+
 /** Publish the commands held for queue `q` while it has room, in order,
  * each fenced one going on the list of fences its answer may signal, as
  * Linux's virtio_gpu_queue_ctrl_sgs emits a fence only once the queue has
@@ -475,7 +494,8 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
  * logging an error answer, and notify the device once of what the
  * completions queued without a notify (`vgpu_kick`). Both queues are
  * reaped first, which answers the commands of a device without
- * interrupts. Process context.
+ * interrupts; their answers stay on the done list while a test holds them
+ * (`vgpu_answers_held`). Process context.
  */
 void vgpu_reap(struct virtio_gpu_device *vg)
 {
@@ -488,8 +508,10 @@ void vgpu_reap(struct virtio_gpu_device *vg)
         (void)virtqueue_reap(vg->cursorq);
     }
     flags = spin_lock_irqsave(&vg->lock);
-    list = vg->done_list;
-    vg->done_list = vg->done_tail = NULL;
+    list = vgpu_answers_held(vg) ? NULL : vg->done_list;
+    if (list) {
+        vg->done_list = vg->done_tail = NULL;
+    }
     spin_unlock_irqrestore(&vg->lock, flags);
     vg->reaping++;
     while ((cmd = list) != NULL) {
@@ -717,7 +739,7 @@ static int unref_moved(void *arg)
 {
     struct unref_wait *w = (struct unref_wait *)arg;
 
-    return w->vg->dead || w->vg->done_list || w->vg->unrefs != w->seen;
+    return w->vg->dead || answers_waiting(w->vg) || w->vg->unrefs != w->seen;
 }
 
 /**
@@ -756,7 +778,7 @@ static int held_low(void *arg)
 {
     struct virtio_gpu_device *vg = (struct virtio_gpu_device *)arg;
 
-    return vg->dead || vg->done_list || vg->held < VGPU_HELD_MAX;
+    return vg->dead || answers_waiting(vg) || vg->held < VGPU_HELD_MAX;
 }
 
 /**
@@ -810,7 +832,7 @@ static int held_moved(void *arg)
 {
     struct held_wait *w = (struct held_wait *)arg;
 
-    return w->vg->dead || w->vg->done_list || w->vg->held != w->seen;
+    return w->vg->dead || answers_waiting(w->vg) || w->vg->held != w->seen;
 }
 
 /**
@@ -2282,8 +2304,8 @@ static int work_pending(void *arg)
 
     (void)arg;
     for (i = 0; i < VGPU_DEVICES; i++) {
-        if (vgpu_devices[i] && (vgpu_devices[i]->display_pending || vgpu_devices[i]->done_list ||
-                                vgpu_devices[i]->frees)) {
+        if (vgpu_devices[i] && (vgpu_devices[i]->display_pending ||
+                                answers_waiting(vgpu_devices[i]) || vgpu_devices[i]->frees)) {
             return 1;
         }
     }
