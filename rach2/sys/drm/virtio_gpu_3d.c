@@ -570,7 +570,9 @@ static int file_keeps_handle(struct drm_gem_object *obj, struct drm_file *file)
  * Without memory for the command, the attachment stays until the UNREF or
  * the CTX_DESTROY drops it on the host. A close that sends nothing drops
  * the DETACH's reference at once, never the last, since the handle still
- * holds one. May sleep.
+ * holds one. The DETACH goes without a fence, as Linux's: QEMU makes a GL
+ * fence for each fenced command, some 70 us under WSL's d3d12, and answers
+ * it only at its next poll of virgl's fences. May sleep.
  */
 void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
 {
@@ -608,6 +610,7 @@ void vgpu_obj_close(struct drm_gem_object *obj, struct drm_file *file)
         return;
     }
     attachment_free(a);
+    vgpu_cmd_unfence(cmd);
     req = (struct virtio_gpu_resource_unref *)(void *)cmd->page;
     req->hdr.ctx_id = ctx->id;
     req->resource_id = bo->res_id;

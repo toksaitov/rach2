@@ -1563,9 +1563,11 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
  * earlier commands hold it. The UNREF of a free that the worker's pass
  * over its list makes (`vgpu_frees_run`), or a reap, goes without a
  * notify, which the pass's or the reap's end makes for all of them, since
- * QEMU stops the processor for each notify while it runs the queue.
- * Without memory for the commands even so, they are freed only after an
- * unplug resets the device and revokes mappings.
+ * QEMU stops the processor for each notify while it runs the queue. The
+ * UNREF goes without a fence, as Linux's, so that QEMU answers it as soon
+ * as it has run it (`vgpu_cmd_unfence`). Without memory for the commands
+ * even so, they are freed only after an unplug resets the device and
+ * revokes mappings.
  */
 void vgpu_obj_free(struct drm_gem_object *obj)
 {
@@ -1592,6 +1594,7 @@ void vgpu_obj_free(struct drm_gem_object *obj)
             cmd = NULL;
         }
         if (cmd) {
+            vgpu_cmd_unfence(cmd);
             cmd_req(cmd, struct virtio_gpu_resource_unref)->resource_id = bo->res_id;
             drm_dev_get(obj->dev);
             vg->unrefs++;
