@@ -504,7 +504,7 @@ static unsigned gate_count(const char *name)
                 : syscall3(SYS_READ, gate_rfd, (long)line, (int)sizeof(line) - 1);
     const char *p;
     unsigned value = 0;
-    int i;
+    int i = 0;
 
     if (n <= 0) {
         fail("read the walk gate");
