@@ -19,6 +19,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/pagemap.h>
 #include <linux/pci.h>
 #include <linux/scatterlist.h>
 #include <linux/shmem_fs.h>
@@ -27,6 +28,7 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <linux/xarray.h>
 
 #include "vgpushm_uapi.h"
 
@@ -266,13 +268,22 @@ static void vgpushm_kept_work(struct work_struct *work)
  * __GFP_RETRY_MAYFAIL: an allocation that reclaim cannot meet fails with
  * -ENOMEM, which the backend answers as a refusal, where the file's own
  * mask would wake the OOM killer and stall the VM, and with it every
- * answer the driver waits for, until a victim's exit frees memory. A pin
- * that fails lets go of the pages it took, and when the file had no pages
- * at its start, as a backing's new memfd has none, it punches out the
- * range, so that the pages it brought in, which would stay charged to the
- * VM and to the backend's memory cgroup until the file closes, go back
- * before the backend runs again: its next fault would find no memory, and
- * wake the OOM killer the pin was to spare.
+ * answer the driver waits for, until a victim's exit frees memory.
+ *
+ * A pin that fails lets go of the pages it took and drops from the file
+ * the pages it brought in itself, which would stay charged to the VM and
+ * to the backend's memory cgroup until the file closes: the backend's next
+ * fault would find no memory and wake the OOM killer the pin was to spare.
+ * While the pages are read, phys[i] is 1 for a page this pin brought in,
+ * one whose index held no entry, page or swap, before its read; once all
+ * are held it takes the page's address. A page brought in is dropped by
+ * invalidate_mapping_pages, which removes only a folio that is clean,
+ * unmapped, unlocked and held by no one else, as the mm drops a hole's
+ * clean pages behind shmem's back (shmem_recalc_inode): a page written or
+ * mapped meanwhile, or swapped in, which shmem marks dirty, is left alone.
+ * A large folio is dropped whole, since shmem allocates one only over
+ * indices that are all holes. The few folios still in a processor's LRU
+ * batch, which holds a reference, stay until the file closes.
  *
  * Return: 0, -EINVAL past the page that holds the file's end, -ENOMEM, or
  * the error of reading a page.
@@ -281,7 +292,7 @@ static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 
 {
     struct address_space *mapping = file->f_mapping;
     gfp_t gfp = mapping_gfp_mask(mapping) | __GFP_RETRY_MAYFAIL | __GFP_NOWARN;
-    bool empty = mapping->nrpages == 0;
+    pgoff_t first = (pgoff_t)(offset >> PAGE_SHIFT);
     struct page *page;
     unsigned long i;
 
@@ -292,23 +303,29 @@ static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 
     if (!rec->pages)
         return -ENOMEM;
     for (i = 0; i < rec->npages; i++) {
-        page = shmem_read_mapping_page_gfp(mapping, (pgoff_t)(offset >> PAGE_SHIFT) + i, gfp);
+        rec->phys[i] = xa_load(&mapping->i_pages, first + i) == NULL;
+        page = shmem_read_mapping_page_gfp(mapping, first + i, gfp);
         if (IS_ERR(page))
             goto fail;
         rec->pages[i] = page;
-        rec->phys[i] = page_to_phys(page);
     }
+    for (i = 0; i < rec->npages; i++)
+        rec->phys[i] = page_to_phys(rec->pages[i]);
     rec->kind = VGPUSHM_PIN_SHMEM;
     return 0;
 
 fail:
+    /* Backwards, so that the folio a fresh index began holds no more of
+       this pin's references when it is dropped. */
     while (i-- > 0) {
+        struct folio *folio = page_folio(rec->pages[i]);
+        pgoff_t at = folio->index, last = at + folio_nr_pages(folio) - 1;
+
         put_page(rec->pages[i]);
         rec->pages[i] = NULL;
+        if (rec->phys[i])
+            invalidate_mapping_pages(mapping, at, last);
     }
-    if (empty)
-        shmem_truncate_range(file_inode(file), offset,
-                             offset + ((u64)rec->npages << PAGE_SHIFT) - 1);
     return PTR_ERR(page);
 }
 
