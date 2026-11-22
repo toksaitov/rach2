@@ -54,31 +54,32 @@
  * file and the tmpfs can be removed. When a step of this row fails, an
  * atexit handler unmounts the tmpfs and removes the directory instead.
  *
- * A child in a mount namespace of its own remounts /tmp/sbxr, a tmpfs the
- * probe holds a file of open for writing, read-only by MS_REMOUNT|MS_BIND,
- * which succeeds, since the remount changes only the child's namespace and
- * the probe's writer is in another, as on Linux, where it changes the
- * child's copy of the mount. There a create, a mkdir and an open for
- * writing fail with EROFS, statvfs gives ST_RDONLY and mountinfo "ro";
- * meanwhile the probe still makes a file there, writes through its
- * descriptor, and statvfs gives it no ST_RDONLY. The child then makes the
- * mount writable again, opens a file for writing, and a read-only remount
- * fails with EBUSY until it closes it. Once the child is gone the probe
- * still writes there, and the tmpfs and its directory can be removed, by
- * an atexit handler when a step fails.
- *
- * On a fresh tmpfs there, a child that remounts it read-only in its own
- * namespace, opens a file of it for reading and detaches the mount there
- * still finds fchmod and futimens through the descriptor refused with
- * EROFS. In another such child, a descriptor the probe opened for writing
- * before the fork still writes and changes the file's mode, and a file the
- * child opens for reading, sent to the probe over a socket, has fchmod and
- * futimens refused with EROFS in the probe once the child is gone, while
- * the probe's own writes there go through: a call through a descriptor
- * follows the view it was opened in, as Linux's follows the file's mount.
- * A child in a namespace of its own sends the probe a file it opened for
- * writing there and ends; a namespace made after it remounts the tmpfs
- * read-only, which that writer does not hold off.
+ * The private binds' rows use /tmp/sbxr, a tmpfs holding a file the probe
+ * keeps open for writing. A child in a mount namespace of its own, which
+ * shares the tmpfs's mount record with the probe's, finds every remount
+ * that would change its flags, read-only or noexec with MS_BIND, read-only
+ * or nosuid without, refused with EBUSY, and one with the flags it has
+ * accepted; the mount stays writable on both sides. A child that binds the
+ * tmpfs over itself and remounts the bind read-only finds a create, a
+ * mkdir and an open for writing refused with EROFS, statvfs ST_RDONLY and
+ * mountinfo "ro", while the probe still writes there; made writable again,
+ * a file it opens for writing holds the bind's read-only remount off with
+ * EBUSY until closed. A file opened through such a sealed bind, whose bind
+ * is then detached and which is sent to the probe, keeps the bind's flags
+ * once the child is gone: fchmod, futimens and an open for writing of its
+ * /proc/self/fd link fail with EROFS and fstatvfs gives ST_RDONLY; one
+ * opened through a bind sealed read-only and noexec has access(2) of its
+ * link refuse W_OK with EROFS and X_OK with EACCES, and an exec of it by
+ * execveat fail with EACCES. A child binds / with the mounts below it on a
+ * directory of the tmpfs, moves its root there with pivot_root and detaches
+ * the old root; its mountinfo lists the same points, /proc and /dev/shm
+ * work, and the new root and its bind of the tmpfs, records of its own,
+ * take a read-only remount, while the probe's mountinfo does not change.
+ * Through a sealed bind a writable loop attachment of a file of the tmpfs
+ * fails with EROFS and a read-only one is made; through a writable bind a
+ * writable attachment holds the bind's read-only remount off with EBUSY
+ * until it is detached. The tmpfs and its directory are removed at the end,
+ * by an atexit handler when a step fails.
  *
  * The program runs itself in the modes `bset` and `regain`, named by its
  * first argument, as the image an exec row runs. With none it runs the
@@ -99,6 +100,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -123,10 +125,14 @@
 #define MASKED_WS MASKED "/ws"
 #define MASKED_RC MASKED_WS "/.bashrc"
 
-/* The tmpfs of the read-only view's row and the file the probe holds open
- * for writing in it. */
-#define VIEWED      "/tmp/sbxr"
-#define VIEWED_HELD VIEWED "/held"
+/* The tmpfs of the private binds' rows; the file the probe holds open for
+ * writing in it, the file with execute bits the noexec row opens, the image
+ * of the loop rows and the directory the root row binds / on. */
+#define VIEWED       "/tmp/sbxr"
+#define VIEWED_HELD  VIEWED "/held"
+#define VIEWED_EXE   VIEWED "/exe"
+#define VIEWED_IMAGE VIEWED "/image"
+#define VIEWED_STAGE VIEWED "/stage"
 
 /* _LINUX_CAPABILITY_VERSION_3, whose data is two cap_data, and the
  * capabilities the rows name. */
@@ -145,14 +151,14 @@ struct cap_data {
 
 /* The assertions, in the order the rows check them. */
 static const char *const rows[] = {
-    "pivot-setup",          "pivot-put-old",       "proc-anywhere",     "proc-sys-cover",
-    "proc-sys-rebind",      "detach-put-old",      "pivot-stacked",     "pivot-new-root",
-    "write-outside",        "namespace-unseen",    "proc-sys-user",     "detach-refusals",
-    "detach-busy",          "detach-every-view",   "detach-reaped",     "bset-read",
-    "bset-drop-eperm",      "bset-drop",           "bset-fork",         "bset-exec",
-    "capset-single",        "capset-chown",        "ambient",           "mask-removed",
-    "readonly-view",        "readonly-own-writer", "readonly-detached", "readonly-desc-view",
-    "readonly-reused-view",
+    "pivot-setup",      "pivot-put-old",     "proc-anywhere",    "proc-sys-cover",
+    "proc-sys-rebind",  "detach-put-old",    "pivot-stacked",    "pivot-new-root",
+    "write-outside",    "namespace-unseen",  "proc-sys-user",    "detach-refusals",
+    "detach-busy",      "detach-every-view", "detach-reaped",    "bset-read",
+    "bset-drop-eperm",  "bset-drop",         "bset-fork",        "bset-exec",
+    "capset-single",    "capset-chown",      "ambient",          "mask-removed",
+    "remount-shared",   "private-bind",      "writer-exclusion", "descriptor-lifetime",
+    "descriptor-flags", "root-topology",     "loop-readonly",    "loop-writer",
 };
 
 #define NROWS ((int)(sizeof(rows) / sizeof(rows[0])))
@@ -752,28 +758,61 @@ static int viewed_read_only(void)
 }
 
 /** Whether the caller can make, write and remove a file in VIEWED, and
- * statvfs gives it no ST_RDONLY. */
+ * statvfs gives it none of ST_RDONLY, ST_NOSUID and ST_NOEXEC. */
 static int viewed_writable(void)
 {
     struct statvfs sv;
     int fd = open(VIEWED "/parent", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
     return fd >= 0 && write(fd, "p", 1) == 1 && close(fd) == 0 && unlink(VIEWED "/parent") == 0 &&
-           statvfs(VIEWED, &sv) == 0 && !(sv.f_flag & ST_RDONLY);
+           statvfs(VIEWED, &sv) == 0 && !(sv.f_flag & (ST_RDONLY | ST_NOSUID | ST_NOEXEC));
 }
 
-/** The child of `view_row`, which reads its go from `in` and says on `out`
- * that VIEWED is read-only in its namespace: 0, 1 for a failure of the
- * read-only view, 2 for one of its own writer. */
-static int view_child(int in, int out)
+/** Enter a mount namespace of one's own whose mounts receive no
+ * propagation; 1 or 0. */
+static int own_ns(void)
+{
+    return unshare(CLONE_NEWNS) == 0 && mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) == 0;
+}
+
+/** Enter a mount namespace of one's own and bind VIEWED over itself there,
+ * a mount record that namespace alone sees, with the flags `flags` besides
+ * MS_BIND for its remount, none for no remount; 1 or 0. */
+static int private_bind(unsigned long flags)
+{
+    return own_ns() && mount(VIEWED, VIEWED, NULL, MS_BIND, NULL) == 0 &&
+           (!flags || mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | flags, NULL) == 0);
+}
+
+/** The child of the shared row: in a mount namespace of its own, whose
+ * VIEWED is the record the probe's namespace sees too, each remount that
+ * would change the mount's flags fails with EBUSY, with MS_BIND and
+ * without, and one with the flags it has succeeds; VIEWED is then as
+ * writable as before. 0, or 1. */
+static int shared_child(void)
+{
+    return own_ns() &&
+                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL),
+                           EBUSY) &&
+                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_NOEXEC, NULL),
+                           EBUSY) &&
+                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_RDONLY, NULL), EBUSY) &&
+                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_NOSUID, NULL), EBUSY) &&
+                   mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND, NULL) == 0 && viewed_writable()
+               ? 0
+               : 1;
+}
+
+/** The child of the private row, which reads its go from `in` and says on
+ * `out` that its private bind of VIEWED is read-only: 0, 1 for a failure of
+ * the seal, 2 for one of its own writer's exclusion. */
+static int private_child(int in, int out)
 {
     char c;
     int fd;
 
-    if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) != 0 ||
-        mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0 ||
-        !viewed_read_only() || write(out, "r", 1) != 1 || read(in, &c, 1) != 1 || c != 'c' ||
-        !viewed_read_only()) {
+    if (!private_bind(MS_RDONLY) || !viewed_read_only() || write(out, "r", 1) != 1 ||
+        read(in, &c, 1) != 1 || c != 'c' || !viewed_read_only()) {
         return 1;
     }
     if (mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND, NULL) != 0) {
@@ -789,11 +828,11 @@ static int view_child(int in, int out)
     return 0;
 }
 
-/* What view_row has made and not yet removed, for view_cleanup. */
+/* What view_rows has made and not yet removed, for view_cleanup. */
 static int view_made;    /* VIEWED was made by this run */
-static int view_mounted; /* VIEWED holds the tmpfs view_row mounted */
+static int view_mounted; /* VIEWED holds the tmpfs view_rows mounted */
 
-/** Remove the tmpfs on VIEWED and the directory, as far as view_row made
+/** Remove the tmpfs on VIEWED and the directory, as far as view_rows made
  * them; atexit runs it. */
 static void view_cleanup(void)
 {
@@ -805,37 +844,29 @@ static void view_cleanup(void)
     }
 }
 
-/** Run the rows of a read-only view of a mount another namespace writes
- * through, readonly-view and readonly-own-writer. SIGPIPE is ignored, so
- * that a child that failed and closed its pipe leaves the failure to be
- * reported. Returns 0, or 1 after the failure is reported. */
-static int view_row(void)
+/** Run the rows of a remount of a mount another namespace sees, of a
+ * private bind sealed read-only while the probe writes through the mount
+ * it shows, and of that bind's own writer: remount-shared, private-bind and
+ * writer-exclusion. Returns 0, or 1 after the failure is reported. */
+static int seal_rows(int held)
 {
-    int go[2], said[2], held, st, during;
+    int go[2], said[2], st, during;
     pid_t pid;
     char c = 0;
 
-    if (atexit(view_cleanup) != 0 || signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
-        return fail("atexit");
+    if (in_child(shared_child) != 0 || !viewed_writable()) {
+        return fail("a remount of a mount another namespace sees did not fail with EBUSY, or "
+                    "changed its flags");
     }
-    if (mkdir(VIEWED, 0755) == 0) {
-        view_made = 1;
-    } else if (errno != EEXIST) {
-        return fail("mount " VIEWED);
-    }
-    if (mount("tmpfs", VIEWED, "tmpfs", 0, NULL) != 0) {
-        return fail("mount " VIEWED);
-    }
-    view_mounted = 1;
-    held = open(VIEWED_HELD, O_WRONLY | O_CREAT, 0644);
-    if (held < 0 || pipe(go) != 0 || pipe(said) != 0) {
-        return fail("open " VIEWED_HELD);
+    report_held();
+    if (pipe(go) != 0 || pipe(said) != 0) {
+        return fail("pipe");
     }
     pid = fork();
     if (pid == 0) {
         close(go[1]);
         close(said[0]);
-        _exit(view_child(go[0], said[1]));
+        _exit(private_child(go[0], said[1]));
     }
     close(go[0]);
     close(said[1]);
@@ -847,22 +878,14 @@ static int view_row(void)
     close(said[0]);
     st = child_status(pid);
     if (st == 1 || !during) {
-        return fail("a read-only remount in a new mount namespace did not hold there alone while "
-                    "another namespace wrote through the mount");
+        return fail("a private bind sealed read-only in a new mount namespace did not hold "
+                    "there alone while another namespace wrote through the mount it shows");
     }
     report_held();
-    if (st != 0 || write(held, "h", 1) != 1 || close(held) != 0 || !viewed_writable()) {
-        return fail("a writer of the namespace's own did not hold off its read-only remount, or "
+    if (st != 0 || write(held, "h", 1) != 1 || !viewed_writable()) {
+        return fail("a writer through a private bind did not hold off its read-only remount, or "
                     "the mount was left read-only outside");
     }
-    if (unlink(VIEWED_HELD) != 0 || umount(VIEWED) != 0) {
-        return fail("the tmpfs of the read-only view could not be removed");
-    }
-    view_mounted = 0;
-    if (rmdir(VIEWED) != 0) {
-        return fail("the tmpfs of the read-only view could not be removed");
-    }
-    view_made = 0;
     report_held();
     return 0;
 }
@@ -928,77 +951,12 @@ static int recv_fd(int sock)
     return fd;
 }
 
-/** Enter a mount namespace of one's own whose mounts receive no
- * propagation, and remount VIEWED read-only there alone; 1 or 0. */
-static int viewed_ns_read_only(void)
-{
-    return unshare(CLONE_NEWNS) == 0 && mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) == 0 &&
-           mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) == 0;
-}
-
-/** The child of the detached row: with VIEWED read-only in its namespace,
- * a file of it opened for reading and the mount then detached there, a
- * change of the file's mode or times through the descriptor still fails
- * with EROFS. 0, or 1. */
-static int detached_child(void)
-{
-    int fd;
-
-    if (!viewed_ns_read_only()) {
-        return 1;
-    }
-    fd = open(VIEWED_HELD, O_RDONLY);
-    if (fd < 0 || umount2(VIEWED, MNT_DETACH) != 0) {
-        return 1;
-    }
-    return refused(fchmod(fd, 0600), EROFS) && refused(futimens(fd, NULL), EROFS) ? 0 : 1;
-}
-
-/** The child of the descriptor row: with VIEWED read-only in its
- * namespace, `held`, which the parent opened for writing in its own,
- * still writes and changes its mode; then a file opened for reading in the
- * read-only view goes to the parent over `sock`. 0, 1 for a failure of the
- * inherited descriptor, 2 for one of the sent. */
-static int desc_child(int held, int sock)
-{
-    int fd;
-
-    if (!viewed_ns_read_only() || write(held, "c", 1) != 1 || fchmod(held, 0644) != 0) {
-        return 1;
-    }
-    fd = open(VIEWED_HELD, O_RDONLY);
-    return fd >= 0 && send_fd(sock, fd) == 0 ? 0 : 2;
-}
-
-/** The first child of the reused-view row: in a mount namespace of its
- * own, which takes no flags of its own for VIEWED, it opens a file there
- * for writing and sends it to the parent over `sock`. 0, or 1. */
-static int writer_child(int unused, int sock)
-{
-    int fd;
-
-    (void)unused;
-    if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) != 0) {
-        return 1;
-    }
-    fd = open(VIEWED "/a", O_WRONLY | O_CREAT, 0644);
-    return fd >= 0 && send_fd(sock, fd) == 0 ? 0 : 1;
-}
-
-/** The second child of the reused-view row, in a mount namespace made
- * after the first child's ended: VIEWED's read-only remount there, which
- * no writer of that namespace holds off, succeeds. 0, or 1. */
-static int remount_child(void)
-{
-    return viewed_ns_read_only() && viewed_read_only() ? 0 : 1;
-}
-
-/** Fork a child that runs `fn` with `a` and its end of a socket pair, and
- * take the descriptor it sends over the pair (`send_fd`) into `*fd`, -1
- * when it sends none; the child's status (`child_status`), or -1. The
- * parent closes its copy of the child's end before it reads, so a child
- * that ends without sending ends the read. */
-static int fd_from_child(int (*fn)(int, int), int a, int *fd)
+/** Fork a child that runs `fn` with its end of a socket pair, and take the
+ * descriptor it sends over the pair (`send_fd`) into `*fd`, -1 when it
+ * sends none; the child's status (`child_status`), or -1. The parent
+ * closes its copy of the child's end before it reads, so a child that ends
+ * without sending ends the read. */
+static int fd_from_child(int (*fn)(int), int *fd)
 {
     int sv[2];
     pid_t pid;
@@ -1010,7 +968,7 @@ static int fd_from_child(int (*fn)(int, int), int a, int *fd)
     pid = fork();
     if (pid == 0) {
         close(sv[0]);
-        _exit(fn(a, sv[1]));
+        _exit(fn(sv[1]));
     }
     close(sv[1]);
     *fd = recv_fd(sv[0]);
@@ -1018,15 +976,329 @@ static int fd_from_child(int (*fn)(int, int), int a, int *fd)
     return child_status(pid);
 }
 
-/** Run the rows of descriptors that outlive their view or cross views, and
- * of a view taken after another namespace's end. VIEWED is mounted again,
- * with a file the probe holds open for writing; it and its tmpfs are
- * removed at the end, by `view_cleanup` when a step fails. Returns 0, or 1
- * after the failure is reported. */
-static int view_more_rows(void)
+/** The child of the lifetime row: through its private bind of VIEWED,
+ * sealed read-only, it opens a file for reading, detaches the bind, finds
+ * fchmod and futimens through the descriptor refused with EROFS, and sends
+ * the descriptor over `sock`. 0, or 1. */
+static int lifetime_child(int sock)
 {
-    int held, fd, st;
+    int fd;
 
+    if (!private_bind(MS_RDONLY)) {
+        return 1;
+    }
+    fd = open(VIEWED_HELD, O_RDONLY);
+    if (fd < 0 || umount2(VIEWED, MNT_DETACH) != 0 || !refused(fchmod(fd, 0600), EROFS) ||
+        !refused(futimens(fd, NULL), EROFS)) {
+        return 1;
+    }
+    return send_fd(sock, fd) == 0 ? 0 : 1;
+}
+
+/** The child of the flags row: through its private bind of VIEWED, sealed
+ * read-only and noexec, it opens VIEWED_EXE for reading and sends the
+ * descriptor over `sock`. 0, or 1. */
+static int flags_child(int sock)
+{
+    int fd;
+
+    if (!private_bind(MS_RDONLY | MS_NOEXEC)) {
+        return 1;
+    }
+    fd = open(VIEWED_EXE, O_RDONLY);
+    return fd >= 0 && send_fd(sock, fd) == 0 ? 0 : 1;
+}
+
+/** Whether an exec of the file open on `fd`, by execveat with AT_EMPTY_PATH
+ * as fexecve makes it, fails with EACCES, in a child. */
+static int exec_refused(int fd)
+{
+    char *argv[] = {"sbxexe", NULL};
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        syscall(SYS_execveat, fd, "", argv, environ, AT_EMPTY_PATH);
+        _exit(errno == EACCES ? 0 : 1);
+    }
+    return child_status(pid) == 0;
+}
+
+/** Run the rows of descriptors that keep the private bind they were opened
+ * through after their namespace ends: descriptor-lifetime, whose
+ * descriptor's bind was detached too, and descriptor-flags. Returns 0, or 1
+ * after the failure is reported. */
+static int desc_rows(void)
+{
+    char path[64];
+    struct statvfs sv;
+    int fd, st;
+
+    st = fd_from_child(lifetime_child, &fd);
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    if (st != 0 || fd < 0 || !refused(fchmod(fd, 0600), EROFS) ||
+        !refused(futimens(fd, NULL), EROFS) || !refused(open(path, O_WRONLY), EROFS) ||
+        fstatvfs(fd, &sv) != 0 || !(sv.f_flag & ST_RDONLY) || close(fd) != 0 ||
+        !viewed_writable()) {
+        return fail("a descriptor of a private bind sealed read-only, sent out and detached, "
+                    "did not keep the bind's flags");
+    }
+    report_held();
+    st = fd_from_child(flags_child, &fd);
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    if (st != 0 || fd < 0 || !refused(access(path, W_OK), EROFS) ||
+        !refused(access(path, X_OK), EACCES) || !exec_refused(fd) || close(fd) != 0) {
+        return fail("access(2) or an exec through a descriptor did not honour its private "
+                    "bind's read-only and noexec");
+    }
+    report_held();
+    return 0;
+}
+
+/** The mount points of the caller's /proc/self/mountinfo, each followed by
+ * a newline, in the order listed, into `buf` of `cap` bytes; 0, or -1 when
+ * the file cannot be read or the points do not fit. */
+static int mount_points(char *buf, size_t cap)
+{
+    char line[512], point[256];
+    size_t used = 0, n;
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+
+    if (!f) {
+        return -1;
+    }
+    buf[0] = '\0';
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "%*s %*s %*s %*s %255s", point) != 1) {
+            fclose(f);
+            return -1;
+        }
+        n = strlen(point);
+        if (used + n + 2 > cap) {
+            fclose(f);
+            return -1;
+        }
+        memcpy(buf + used, point, n);
+        buf[used + n] = '\n';
+        used += n + 1;
+        buf[used] = '\0';
+    }
+    fclose(f);
+    return 0;
+}
+
+/** The whole of the caller's /proc/self/mountinfo into `buf` of `cap`
+ * bytes, NUL-terminated; 0, or -1 when it cannot be read or does not fit. */
+static int mountinfo_text(char *buf, size_t cap)
+{
+    int fd = open("/proc/self/mountinfo", O_RDONLY);
+    size_t used = 0;
+    ssize_t n = 1;
+
+    if (fd < 0) {
+        return -1;
+    }
+    while (n > 0 && used + 1 < cap) {
+        n = read(fd, buf + used, cap - used - 1);
+        used += n > 0 ? (size_t)n : 0;
+    }
+    close(fd);
+    buf[used] = '\0';
+    return n == 0 ? 0 : -1;
+}
+
+/** Compare two of the pointers `points_sorted` sorts, by the strings. */
+static int point_cmp(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/** Split `buf`, lines from `mount_points`, into at most `cap` strings in
+ * `v`, sorted; their number, or -1 for more than `cap`. */
+static int points_sorted(char *buf, char **v, int cap)
+{
+    int n = 0;
+    char *line = strtok(buf, "\n");
+
+    while (line) {
+        if (n == cap) {
+            return -1;
+        }
+        v[n++] = line;
+        line = strtok(NULL, "\n");
+    }
+    qsort(v, (size_t)n, sizeof(v[0]), point_cmp);
+    return n;
+}
+
+/** Whether `a` and `b`, lines from `mount_points`, name the same points as
+ * many times each, in whatever order; splits both. */
+static int same_points(char *a, char *b)
+{
+    static char *va[256], *vb[256];
+    int na = points_sorted(a, va, 256), nb = points_sorted(b, vb, 256), i;
+
+    if (na < 0 || na != nb) {
+        return 0;
+    }
+    for (i = 0; i < na; i++) {
+        if (strcmp(va[i], vb[i]) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The mount points as each row of the root's topology reads them. */
+static char points_before[4096], points_after[4096];
+
+/** The child of the root row: in a mount namespace of its own it binds /,
+ * with the mounts below it, on VIEWED_STAGE, moves its root there with
+ * pivot_root, the old root put on the stage as the bind shows it, and
+ * detaches the old root; its mountinfo then lists the same points, /proc
+ * and /dev/shm work, and the new root and the bind of VIEWED, records of
+ * its own, take a read-only remount. 0, 1 for a failure of the move, 2 for
+ * one of the points, 3 for one of the seal. */
+static int root_child(void)
+{
+    struct statvfs sv;
+
+    if (!own_ns() || mount_points(points_before, sizeof(points_before)) != 0 ||
+        mount("/", VIEWED_STAGE, NULL, MS_BIND | MS_REC, NULL) != 0 ||
+        syscall(SYS_pivot_root, VIEWED_STAGE, VIEWED_STAGE VIEWED_STAGE) != 0 || chdir("/") != 0 ||
+        umount2(VIEWED_STAGE, MNT_DETACH) != 0) {
+        return 1;
+    }
+    if (mount_points(points_after, sizeof(points_after)) != 0 ||
+        !same_points(points_before, points_after) || !status_is_mine("/proc/self/status") ||
+        access("/dev/shm", W_OK) != 0) {
+        return 2;
+    }
+    if (mount(NULL, "/", NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0 ||
+        statvfs("/", &sv) != 0 || !(sv.f_flag & ST_RDONLY) ||
+        mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0 ||
+        !viewed_read_only()) {
+        return 3;
+    }
+    return 0;
+}
+
+/** Run the row of a recursive bind of the root, root-topology: the child's
+ * construction, and the probe's own mountinfo the same before and after.
+ * Returns 0, or 1 after the failure is reported. */
+static int root_row(void)
+{
+    static char before[16384], after[16384];
+    int st;
+
+    if (mkdir(VIEWED_STAGE, 0755) != 0 || mountinfo_text(before, sizeof(before)) != 0) {
+        return fail("mkdir " VIEWED_STAGE);
+    }
+    st = in_child(root_child);
+    if (st != 0 || mountinfo_text(after, sizeof(after)) != 0 || strcmp(before, after) != 0 ||
+        rmdir(VIEWED_STAGE) != 0 || !viewed_writable()) {
+        printf("sandboxmusl: root: child %d\n", st);
+        return fail("a recursive bind of the root, entered by pivot_root, did not show the "
+                    "mounts below it as records of its own, or changed the probe's");
+    }
+    report_held();
+    return 0;
+}
+
+/* /dev/loop-control's request for the first free device's number. */
+#define LOOP_CTL_GET_FREE 0x4C82
+
+/** Write the command `verb N VIEWED_IMAGE`, or `verb N` with no image, to
+ * /dev/loop-control, N the free device's number `dev`; the write's result,
+ * -1 with errno set on a failure. */
+static int loop_command(const char *verb, int dev, int image)
+{
+    char line[128];
+    int ctl = open("/dev/loop-control", O_WRONLY), rc, saved;
+
+    if (ctl < 0) {
+        return -1;
+    }
+    snprintf(line, sizeof(line), "%s %d%s", verb, dev, image ? " " VIEWED_IMAGE : "");
+    rc = (int)write(ctl, line, strlen(line));
+    saved = errno;
+    close(ctl);
+    errno = saved;
+    return rc < 0 ? -1 : 0;
+}
+
+/** The free loop device's number, or -1. */
+static int loop_free(void)
+{
+    int ctl = open("/dev/loop-control", O_RDONLY), dev;
+
+    if (ctl < 0) {
+        return -1;
+    }
+    dev = ioctl(ctl, LOOP_CTL_GET_FREE);
+    close(ctl);
+    return dev;
+}
+
+/** The child of the first loop row: through its private bind of VIEWED,
+ * sealed read-only, a writable attachment of VIEWED_IMAGE fails with EROFS
+ * and a read-only one is made and taken back. 0, or 1. */
+static int loop_ro_child(void)
+{
+    int dev = loop_free();
+
+    return dev >= 0 && private_bind(MS_RDONLY) && refused(loop_command("attach", dev, 1), EROFS) &&
+                   loop_command("attach ro", dev, 1) == 0 && loop_command("detach", dev, 0) == 0
+               ? 0
+               : 1;
+}
+
+/** The child of the second loop row: a writable attachment of
+ * VIEWED_IMAGE through its private bind of VIEWED makes the bind's
+ * read-only remount fail with EBUSY until it is detached. 0, or 1. */
+static int loop_rw_child(void)
+{
+    int dev = loop_free();
+
+    return dev >= 0 && private_bind(0) && loop_command("attach", dev, 1) == 0 &&
+                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL),
+                           EBUSY) &&
+                   loop_command("detach", dev, 0) == 0 &&
+                   mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) == 0
+               ? 0
+               : 1;
+}
+
+/** Run the rows of a loop device over a file of a private bind,
+ * loop-readonly and loop-writer. Returns 0, or 1 after the failure is
+ * reported. */
+static int loop_rows(void)
+{
+    if (in_child(loop_ro_child) != 0) {
+        return fail("a writable loop attachment through a read-only private bind was not "
+                    "refused with EROFS, or a read-only one was");
+    }
+    report_held();
+    if (in_child(loop_rw_child) != 0 || !viewed_writable()) {
+        return fail("a writable loop attachment did not hold off its mount's read-only remount "
+                    "until it was detached");
+    }
+    report_held();
+    return 0;
+}
+
+/** Run the rows of private binds on VIEWED, a tmpfs mounted for them that
+ * holds VIEWED_HELD, open for writing by the probe, VIEWED_EXE and
+ * VIEWED_IMAGE; it and its directory are removed at the end, by
+ * `view_cleanup` when a step fails. SIGPIPE is ignored, so that a child
+ * that failed and closed its pipe leaves the failure to be reported.
+ * Returns 0, or 1 after the failure is reported. */
+static int view_rows(void)
+{
+    int held, fd;
+
+    if (atexit(view_cleanup) != 0 || signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        return fail("atexit");
+    }
     if (mkdir(VIEWED, 0755) == 0) {
         view_made = 1;
     } else if (errno != EEXIST) {
@@ -1037,36 +1309,24 @@ static int view_more_rows(void)
     }
     view_mounted = 1;
     held = open(VIEWED_HELD, O_WRONLY | O_CREAT, 0644);
-    if (held < 0) {
+    fd = open(VIEWED_EXE, O_WRONLY | O_CREAT, 0755);
+    if (held < 0 || fd < 0 || write(fd, "#!/bin/true\n", 12) != 12 || close(fd) != 0) {
         return fail("open " VIEWED_HELD);
     }
-    if (in_child(detached_child) != 0) {
-        return fail("a descriptor of a read-only view lost it once its mount was detached");
+    fd = open(VIEWED_IMAGE, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0 || ftruncate(fd, 65536) != 0 || close(fd) != 0) {
+        return fail("open " VIEWED_IMAGE);
     }
-    report_held();
-    st = fd_from_child(desc_child, held, &fd);
-    if (st != 0 || fd < 0 || !refused(fchmod(fd, 0600), EROFS) ||
-        !refused(futimens(fd, NULL), EROFS) || close(fd) != 0 || !viewed_writable()) {
-        return fail("a call through a descriptor did not follow the view it was opened in");
+    if (seal_rows(held) != 0 || desc_rows() != 0 || root_row() != 0 || loop_rows() != 0) {
+        return 1;
     }
-    report_held();
-    st = fd_from_child(writer_child, -1, &fd);
-    if (st != 0 || fd < 0) {
-        return fail("a writer of a namespace could not be sent out");
-    }
-    st = in_child(remount_child);
-    if (close(fd) != 0 || st != 0) {
-        return fail("a writer of an ended namespace held off a later namespace's read-only "
-                    "remount");
-    }
-    report_held();
-    if (close(held) != 0 || unlink(VIEWED_HELD) != 0 || unlink(VIEWED "/a") != 0 ||
-        umount(VIEWED) != 0) {
-        return fail("the tmpfs of the read-only view could not be removed");
+    if (close(held) != 0 || unlink(VIEWED_HELD) != 0 || unlink(VIEWED_EXE) != 0 ||
+        unlink(VIEWED_IMAGE) != 0 || umount(VIEWED) != 0) {
+        return fail("the tmpfs of the private binds could not be removed");
     }
     view_mounted = 0;
     if (rmdir(VIEWED) != 0) {
-        return fail("the tmpfs of the read-only view could not be removed");
+        return fail("the tmpfs of the private binds could not be removed");
     }
     view_made = 0;
     return 0;
@@ -1095,7 +1355,7 @@ int main(int argc, char **argv)
         report_plan(rows[i]);
     }
     if (sandbox_rows() != 0 || detach_rows() != 0 || cap_rows() != 0 || mask_row() != 0 ||
-        view_row() != 0 || view_more_rows() != 0) {
+        view_rows() != 0) {
         return 1;
     }
     report_end();
