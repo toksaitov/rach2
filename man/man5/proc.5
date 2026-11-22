@@ -709,7 +709,8 @@ A test that slows the disk reads it to see that no lock was held across
 another file's request.
 .It Pa /proc/interrupts
 A heading names each online processor, followed by one line per device
-vector, numbered 32 through 239 except 128, with a nonzero interrupt count:
+vector, numbered 32 through 239 except 128, that has a handler or a nonzero
+interrupt count, as Linux lists each interrupt with a handler:
 .Dl VECTOR: CPU0_COUNT CPU1_COUNT ... SOURCE NAMES
 Each count belongs to the processor named in its heading column.
 The source is

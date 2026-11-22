@@ -5818,13 +5818,14 @@ static int procfs_gen_console(struct procfs_text *t)
 }
 
 /**
- * Render /proc/interrupts: a line for each vector that has taken an
- * interrupt, with the vector, its counts by processor, its source and the names
- * of the devices on it, separated by commas, or "none"; then the count of
- * the APIC's spurious vector, SPU, and FBK, the times the timer's drain of
- * the USB controllers found work with no USB interrupt pending
- * (`usb_fallback_count`): work an interrupt should have announced, or one
- * still in transit.
+ * Render /proc/interrupts: a line for each vector that has a handler or has
+ * taken an interrupt, as Linux's show_interrupts lists each interrupt with an
+ * action or a count (kernel/irq/proc.c), with the vector, its counts by
+ * processor, its source and the names of the devices on it, separated by
+ * commas, or "none"; then the count of the APIC's spurious vector, SPU, and
+ * FBK, the times the timer's drain of the USB controllers found work with no
+ * USB interrupt pending (`usb_fallback_count`): work an interrupt should have
+ * announced, or one still in transit.
  */
 static int procfs_gen_interrupts(struct procfs_text *t)
 {
@@ -5842,10 +5843,12 @@ static int procfs_gen_interrupts(struct procfs_text *t)
     ap_ch(t, '\n');
     for (v = ISR_DEVICE_FIRST; v <= ISR_DEVICE_LAST; v++) {
         uint32_t n = isr_vector_count(v);
-        int slot;
-        int named = 0;
+        int slot, named = 0, handlers = 0;
 
-        if (n == 0) {
+        for (slot = 0; slot < ISR_MAX_VECTOR_HANDLERS; slot++) {
+            handlers += isr_vector_name(v, slot) != 0;
+        }
+        if (n == 0 && handlers == 0) {
             continue;
         }
         ap_u32(t, (uint32_t)v);
