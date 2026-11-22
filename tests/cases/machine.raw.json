@@ -275,7 +275,7 @@
          "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "all-replies", "checks": "the ordinary user's ping -q -i 0.01 -c 50 -w 10 127.0.0.1 exits 0, which it does only with all 50 replies, and ping -q -i 0 -w 1 127.0.0.1 exits 0 at its deadline, which it reaches only if an interval of 0 keeps the timer running, and only with a reply counted", "source": "scenario"}
+        {"assertion_id": "all-replies", "checks": "the ordinary user's ping -q -i 0.01 -c 50 -w 10 127.0.0.1 exits 0, which it does only with all 50 replies, and ping -q -i 0 -w 1 127.0.0.1 exits 0 at its deadline, which it reaches only if an interval of 0 keeps sending the requests and checking -w, and only with a reply counted, which it counts only if the sends leave it time to read the replies", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
