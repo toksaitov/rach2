@@ -68,6 +68,10 @@
 #define EBUSY     16
 #define ENOTEMPTY 39
 #define ELOOP     40
+#define ENXIO     6
+#define ESTALE    116
+
+#define O_NONBLOCK 04000
 
 #define SEEK_SET 0
 #define SEEK_END 2
@@ -264,6 +268,12 @@ static const struct row rows[] = {
     {"a walk of 41 links that the walk without the big lock gives to the full walk is ELOOP",
      "shared-links", STATFS_MAGIC_EXT2},
     {"remove the files of the shared-record rows", "shared-links", STATFS_MAGIC_EXT2},
+    {"a handle of an unlinked ext2 file whose inode a new file took is ESTALE", "handle-ext2",
+     STATFS_MAGIC_EXT2},
+    {"open_by_handle_at with O_RDONLY|O_TRUNC empties the file", "handle-ext2", STATFS_MAGIC_EXT2},
+    {"open_by_handle_at of a file a FIFO replaced after its walk is ESTALE and opens no FIFO",
+     "handle-ext2", STATFS_MAGIC_EXT2},
+    {"remove the files of the handle rows", "handle-ext2", STATFS_MAGIC_EXT2},
     {"the files of the gated rows", "walk-restart", STATFS_MAGIC_EXT2},
     {"a walk that a rename came between at a lookup's sleep starts again and opens the new name",
      "walk-restart", STATFS_MAGIC_EXT2},
@@ -1079,6 +1089,234 @@ static void shared_rows(unsigned magic)
     shared_unlink();
     if (xstat("/vp/s") != -ENOENT) {
         fail("remove the files of the shared-record rows");
+    }
+    fail_undo = 0;
+}
+
+/* name_to_handle_at(2) and open_by_handle_at(2), which probe.h lacks. */
+#if defined __x86_64__
+#define SYS_NAME_TO_HANDLE_AT 303
+#define SYS_OPEN_BY_HANDLE_AT 304
+#else
+#define SYS_NAME_TO_HANDLE_AT 341
+#define SYS_OPEN_BY_HANDLE_AT 342
+#endif
+
+#define HANDLE_FILES 200 /* the files `handle_reuse` may make to reach an inode */
+
+/* A file handle as Rach2 gives one: the size, the type, and twelve bytes. */
+struct fhandle {
+    unsigned bytes;
+    int type;
+    unsigned char f[12];
+};
+
+static int handle_child; /* the child of `handle_fifo_row`, or 0 */
+static int handle_made;  /* the files /vp/h/nN `handle_reuse` made */
+
+/** Put in `buf` the path /vp/h/nN of file `n`, 0 to 999. */
+static void handle_name(char *buf, int n)
+{
+    const char *dir = "/vp/h/n";
+    int i;
+
+    for (i = 0; dir[i]; i++) {
+        buf[i] = dir[i];
+    }
+    buf[i++] = (char)('0' + n / 100);
+    buf[i++] = (char)('0' + n / 10 % 10);
+    buf[i++] = (char)('0' + n % 10);
+    buf[i] = '\0';
+}
+
+/** Undo what `handle_rows` made, for `fail` and their own end: the gate,
+ * the child, the files and /vp/h. */
+static void handle_undo(void)
+{
+    char name[16];
+    int st;
+
+    if (gate_wfd >= 0) {
+        syscall3(SYS_WRITE, gate_wfd, (long)"off", 3);
+    }
+    if (handle_child > 0) {
+        syscall2(SYS_KILL, handle_child, 9);
+        syscall4(SYS_WAIT4, handle_child, (long)&st, 0, 0);
+        handle_child = 0;
+    }
+    syscall1(SYS_CLOSE, gate_wfd);
+    syscall1(SYS_CLOSE, gate_rfd);
+    gate_wfd = gate_rfd = -1;
+    while (handle_made > 0) {
+        handle_name(name, --handle_made);
+        syscall1(SYS_UNLINK, (long)name);
+    }
+    syscall1(SYS_UNLINK, (long)"/vp/h/f");
+    syscall1(SYS_UNLINK, (long)"/vp/h/g");
+    syscall1(SYS_UNLINK, (long)"/vp/h/p");
+    syscall1(SYS_RMDIR, (long)"/vp/h");
+}
+
+/** The handle of `path` into `h`, or fail `why`. */
+static void handle_of(const char *path, struct fhandle *h, const char *why)
+{
+    int mnt;
+
+    h->bytes = sizeof(h->f);
+    if (syscall5(SYS_NAME_TO_HANDLE_AT, AT_FDCWD, (long)path, (long)h, (long)&mnt, 0) != 0) {
+        fail(why);
+    }
+}
+
+/**
+ * Make files in /vp/h until one takes the inode `ino`, which an unlink has
+ * freed, and rename that one to /vp/h/g holding "ggg": ext2 gives a new
+ * file the lowest free inode, so one of the first HANDLE_FILES does. Fail
+ * `why` when none does.
+ */
+static void handle_reuse(unsigned ino, const char *why)
+{
+    char name[16];
+
+    while (handle_made < HANDLE_FILES) {
+        handle_name(name, handle_made);
+        shared_file(name, "ggg", 3, why);
+        handle_made++;
+        if (xstat(name) != 0) {
+            fail(why);
+        }
+        if (st_field(KSTAT_INO) == ino) {
+            if (syscall2(SYS_RENAME, (long)name, (long)"/vp/h/g") != 0) {
+                fail(why);
+            }
+            return;
+        }
+    }
+    fail(why);
+}
+
+/**
+ * A FIFO renamed over a handle's file after open_by_handle_at's walk found
+ * the file is never opened: the walk gate stops the child's O_RDONLY|O_TRUNC
+ * open of /vp/h/g by the handle `hg` where the open has its walk's answer
+ * (`handoff`), the parent renames the FIFO /vp/h/p over /vp/h/g and lets it
+ * go, and the open, whose truncation finds the tree changed and walks
+ * again, answers ESTALE for the FIFO before it opens it. A child that
+ * opened the FIFO would wait there for a writer, which the parent's
+ * nonblocking open for writing would then find, where it otherwise gets
+ * ENXIO.
+ */
+static void handle_fifo_row(struct fhandle *hg)
+{
+    const char *why = "open_by_handle_at of a file a FIFO replaced after its walk is ESTALE "
+                      "and opens no FIFO";
+    char byte = 0;
+    long fd;
+    int pid, st;
+
+    if (syscall3(SYS_MKNOD, (long)"/vp/h/p", S_IFIFO | 0644, 0) != 0 ||
+        syscall1(SYS_PIPE, (long)shared_pipe) != 0) {
+        fail(why);
+    }
+    pid = syscall5(SYS_CLONE, SIGCHLD, 0, 0, 0, 0);
+    if (pid == 0) {
+        if (syscall3(SYS_READ, shared_pipe[0], (long)&byte, 1) != 1) {
+            sys_exit(100);
+        }
+        fd = syscall3(SYS_OPEN_BY_HANDLE_AT, AT_FDCWD, (long)hg, O_RDONLY | O_TRUNC);
+        sys_exit(fd == -ESTALE ? 0 : fd >= 0 ? 1 : 2);
+    }
+    if (pid < 0) {
+        fail(why);
+    }
+    handle_child = pid;
+    gate_arm(pid, "handoff", why);
+    if (syscall3(SYS_WRITE, shared_pipe[1], (long)&byte, 1) != 1) {
+        fail(why);
+    }
+    while (gate_count("waiting") != 1) {
+        if (syscall4(SYS_WAIT4, pid, (long)&st, WNOHANG, 0) == pid) {
+            handle_child = 0;
+            fail(why);
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+    if (syscall2(SYS_RENAME, (long)"/vp/h/p", (long)"/vp/h/g") != 0) {
+        fail(why);
+    }
+    gate_write("release", why);
+    while (syscall4(SYS_WAIT4, pid, (long)&st, WNOHANG, 0) != pid) {
+        fd = syscall3(SYS_OPEN, (long)"/vp/h/g", O_WRONLY | O_NONBLOCK, 0);
+        if (fd >= 0) {
+            syscall1(SYS_CLOSE, fd);
+            fail(why);
+        }
+        if (fd != -ENXIO) {
+            fail(why);
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+    handle_child = 0;
+    if ((st & 0x7f) != 0 || ((st >> 8) & 0xff) != 0) {
+        fail(why);
+    }
+    gate_write("off", why);
+    syscall1(SYS_CLOSE, shared_pipe[0]);
+    syscall1(SYS_CLOSE, shared_pipe[1]);
+    shared_pipe[0] = shared_pipe[1] = -1;
+}
+
+/**
+ * On an ext2 root, whose inodes carry a generation, a handle names one file
+ * and no other: the handle of /vp/h/f, once f is unlinked and a new file
+ * takes its inode (`handle_reuse`), is ESTALE, while the new file's own
+ * handle opens it; an O_RDONLY|O_TRUNC open by that handle empties it, as
+ * open(2) would; and a FIFO renamed over it during the open is never opened
+ * (`handle_fifo_row`). A root of another type, `magic`, has no such rows.
+ */
+static void handle_rows(unsigned magic)
+{
+    const char *gen = "a handle of an unlinked ext2 file whose inode a new file took is ESTALE";
+    const char *trunc = "open_by_handle_at with O_RDONLY|O_TRUNC empties the file";
+    struct fhandle hf, hg;
+    unsigned ino;
+    long fd;
+
+    if (magic != STATFS_MAGIC_EXT2) {
+        return;
+    }
+    fail_undo = handle_undo;
+    if (syscall2(SYS_MKDIR, (long)"/vp/h", 0755) != 0) {
+        fail(gen);
+    }
+    shared_file("/vp/h/f", "ff", 2, gen);
+    if (xstat("/vp/h/f") != 0) {
+        fail(gen);
+    }
+    ino = st_field(KSTAT_INO);
+    handle_of("/vp/h/f", &hf, gen);
+    if (syscall1(SYS_UNLINK, (long)"/vp/h/f") != 0) {
+        fail(gen);
+    }
+    handle_reuse(ino, gen);
+    handle_of("/vp/h/g", &hg, gen);
+    if (syscall3(SYS_OPEN_BY_HANDLE_AT, AT_FDCWD, (long)&hf, O_RDONLY) != -ESTALE) {
+        fail(gen);
+    }
+    fd = syscall3(SYS_OPEN_BY_HANDLE_AT, AT_FDCWD, (long)&hg, O_RDONLY | O_TRUNC);
+    if (fd < 0 || syscall2(SYS_FSTAT, fd, (long)stbuf) != 0 || st_field(KSTAT_INO) != ino ||
+        st_field(KSTAT_SIZE_AT) != 0 || syscall1(SYS_CLOSE, fd) != 0) {
+        fail(trunc);
+    }
+    gate_wfd = syscall3(SYS_OPEN, (long)WALK_GATE, O_WRONLY, 0);
+    gate_rfd = syscall3(SYS_OPEN, (long)WALK_GATE, O_RDONLY, 0);
+    if (gate_wfd < 0 || gate_rfd < 0) {
+        fail("read the walk gate");
+    }
+    handle_fifo_row(&hg);
+    handle_undo();
+    if (xstat("/vp/h") != -ENOENT) {
+        fail("remove the files of the handle rows");
     }
     fail_undo = 0;
 }
@@ -2293,6 +2531,7 @@ static void unlocked_rows(unsigned magic)
 {
     cwd_unlocked_rows(magic);
     shared_rows(magic);
+    handle_rows(magic);
     gated_rows(magic);
     keep_rows(magic);
     cwd_empty_row();
