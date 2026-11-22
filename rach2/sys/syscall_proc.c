@@ -2426,6 +2426,7 @@ int32_t proc_fs_unshare(void)
     if (!own) {
         return -ENOMEM;
     }
+    spin_lock_init(&own->lock, "fs->lock");
     if (was->cwd_long) {
         own->cwd_long = kmalloc(k_strlen(was->cwd_long) + 1);
         if (!own->cwd_long) {
