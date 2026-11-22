@@ -6551,8 +6551,8 @@ static int mount_within(const struct vfs_mount *c, const struct vfs_mount *top)
  * `real`, as `target_check` takes it, and so is the path of a place inside
  * a type that takes the rest of a path in one call, which gives no path of
  * a node; a node with none, NULL, is ENOTDIR or EINVAL. 0, or the error of
- * `getattr`, ENOTDIR, EINVAL for /proc/PID/fd/N, a link the walk stops at,
- * or ENAMETOOLONG.
+ * `getattr`, ENOTDIR, EINVAL for a descriptor held on a proc descriptor
+ * link itself, or ENAMETOOLONG.
  *
  * A place inside a synthetic type, such as /proc/sys, which bubblewrap
  * binds read-only over itself, may be one as on Linux: its nodes are
@@ -6595,7 +6595,8 @@ static int bind_source(const struct vfs_ref *sref, char *full, char *inner, cons
     } else if ((rc = vfs_node_path(sref->mnt, sref->node, full, VFS_COVERED_PATH_MAX)) != 0) {
         return rc;
     }
-    if (path_below(sref->mnt) > k_strlen(full)) {
+    if (path_below(sref->mnt) && !streq(full, sref->mnt->covered_path) &&
+        !path_under(full, sref->mnt->covered_path, path_below(sref->mnt))) {
         return -EINVAL;
     }
     rest = full + path_below(sref->mnt);
@@ -6808,6 +6809,12 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
         return rc;
     }
     gone = vfs_cover_lock(tref);
+    if (!skip && (!vfs_mount_seen(sref->mnt) || !vfs_mount_seen(tref->mnt))) {
+        vfs_node_unlock(tref);
+        vfs_ref_release(tref);
+        vfs_ref_release(sref);
+        return -EINVAL;
+    }
     busy = nameless ? mount_named(tref->mnt, tref->mnt->root, path_last(canon)) != 0
                     : covered_already(tref);
     gone = nameless ? 0 : gone;
@@ -6883,6 +6890,34 @@ static int table_path(char *path)
     return 0;
 }
 
+/** Resolve and hold a bind operand, with its path from the mount table.
+ * A final proc descriptor link gives the held object (`procfs_mount_fd`).
+ * 0 with `ref` to release, or an error with nothing held. */
+static int bind_resolve(const char *path, struct vfs_ref *ref, char *real)
+{
+    struct vfs_ref object;
+    const struct vpath *vp;
+    int rc = vfs_resolve_real(path, 0, ref, real);
+
+    if (rc != 0) {
+        return rc;
+    }
+    vp = vfs_synth_vpath(ref->mnt, ref->node);
+    if (vp && vp->kind == VNODE_PROC_FD_LINK) {
+        rc = procfs_mount_fd(vp, &object, real, VFS_PATH_MAX);
+        vfs_ref_release(ref);
+        if (rc == 0) {
+            *ref = object;
+        }
+        return rc;
+    }
+    rc = table_path(real);
+    if (rc != 0) {
+        vfs_ref_release(ref);
+    }
+    return rc;
+}
+
 int vfs_do_bind(const char *source, const char *target, int rec)
 {
     struct vfs_ref sref, tref;
@@ -6890,17 +6925,11 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     char *sreal = kmalloc(VFS_PATH_MAX), *treal = kmalloc(VFS_PATH_MAX);
     int dir, rc;
 
-    rc = sreal && treal ? vfs_resolve_real(source, 0, &sref, sreal) : -ENOMEM;
+    rc = sreal && treal ? bind_resolve(source, &sref, sreal) : -ENOMEM;
     if (rc == 0) {
-        rc = table_path(sreal);
+        rc = bind_source(&sref, full, inner, sreal, &dir);
         if (rc == 0) {
-            rc = bind_source(&sref, full, inner, sreal, &dir);
-        }
-        if (rc == 0) {
-            rc = vfs_resolve_real(target, 0, &tref, treal);
-        }
-        if (rc == 0 && (rc = table_path(treal)) != 0) {
-            vfs_ref_release(&tref);
+            rc = bind_resolve(target, &tref, treal);
         }
         if (rc != 0) {
             vfs_ref_release(&sref);
@@ -7154,8 +7183,8 @@ int vfs_do_detach(const char *target, int dir)
     struct vfs_mount *m, *root = root_mount_of_caller();
     int i, rc;
 
-    if (target[0] == '/' && target[1] == '/' && current_proc->fs->cwd_mnt &&
-        streq(target, proc_cwd(current_proc))) {
+    if (target[0] == '/' && target[1] == '/' && current_proc && current_proc->fs->cwd_mnt &&
+        streq(target + (target[2] == '/'), proc_cwd(current_proc))) {
         cwd.mnt = current_proc->fs->cwd_mnt;
         cwd.node = current_proc->fs->cwd_node;
         if (!vfs_mount_seen(cwd.mnt)) {

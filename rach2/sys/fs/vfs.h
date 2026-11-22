@@ -1348,15 +1348,15 @@ void vfs_reap_detached(void);
 int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out);
 
 /**
- * mount(2) with MS_BIND: the directory `source` names is shown at the
- * directory `target` names, with the flags of the mount it is on, as
+ * mount(2) with MS_BIND: the file or directory `source` names is shown at
+ * the matching kind of node `target` names, with the mount's flags, as
  * `vfs_do_mount` places a mount; with `rec`, the mounts below it are shown
  * below the new one too, as MS_REC asks. The mount whose file system the
  * bind shows cannot be unmounted while the bind exists. Returns 0 or a
- * negative errno: the resolver's errors; ENOTDIR for a source or target
- * that is not a directory; EINVAL for a source that is /proc/PID/fd/N, or
- * whose path names some other place of its synthetic type, and for a target
- * in a synthetic type deeper than a name in a mount's root directory;
+ * negative errno: the resolver's errors; ENOTDIR for unlike kinds;
+ * EINVAL for an operand outside the caller's mount namespace, a source
+ * whose path names some other place of its synthetic type, or a target in
+ * a synthetic type deeper than a name in a mount's root directory;
  * ENAMETOOLONG for a source whose path within its file system would not
  * fit; the errors `vfs_do_mount` gives for its target; EBUSY for a target
  * covered already; and ENOMEM.

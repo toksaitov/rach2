@@ -203,8 +203,11 @@ or
 may be the source, as bubblewrap binds
 .Pa /proc/sys
 read-only over itself, but not
+through a descriptor opened on a proc descriptor link itself.
+When either operand ends in
 .Pa /proc/PID/fd/N ,
-.Er EINVAL .
+the bind uses the file or directory the descriptor holds.
+Both mounts must be visible in the caller's mount namespace.
 Inside them a bind's target is the root of a mount or a name in the root
 directory of one, such as
 .Pa /proc/sys ,
@@ -718,8 +721,8 @@ A KRFFS source device exceeds the size the file system can address.
 .It Bq Er EINVAL
 A flag is unsupported, the mount target is the root or in a synthetic
 namespace, but for the root of a mount and, for a bind, a name in the
-root directory of one, a bind's source is
-.Pa /proc/PID/fd/N ,
+root directory of one, a bind operand's mount is outside the caller's
+mount namespace or its descriptor holds no mountable node,
 the source of a type with a device is not a supported block
 device, the unmount target is not a mount root, or a lazy unmount names
 the root of the mount table.

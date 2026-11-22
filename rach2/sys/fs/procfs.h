@@ -224,6 +224,16 @@ struct vfs_name *procfs_exe_entry(int pid, int use_real);
 int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap,
                        int use_real);
 
+/**
+ * Follow a descriptor link for a bind mount, subject to the proc ptrace
+ * check. Return 0 with the node held, its mount entered and its path from
+ * the mount table in `path` of `cap` bytes. The caller releases `out` with
+ * vfs_ref_release. Return -EINVAL for a descriptor without a mountable
+ * node or whose mount the caller's namespace cannot see, or the lookup's
+ * error, with nothing held on failure. The big lock is held by the caller.
+ */
+int procfs_mount_fd(const struct vpath *vp, struct vfs_ref *out, char *path, uint32_t cap);
+
 /** PID-directory enumeration: the pid in the caller's PID namespace of the
  * `n`th process it sees, counting from 0, one for each thread group, or -1
  * past the end. */
