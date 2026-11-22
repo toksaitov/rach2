@@ -756,9 +756,10 @@ struct virtio_gpu_device {
     struct virtio_gpu_object *frees, *frees_tail;
     int freeing;
     /* Objects whose deferred backing ask the device answered with other
-     * than its page list, a refusal among them, before anyone took it,
-     * which the worker takes (`vgpu_backing_refused_run`), through
-     * `refused_next`; under `lock`. */
+     * than its page list, a refusal among them, before anyone took it, or
+     * with a page list longer than one answer that a submission left, which
+     * the worker takes (`vgpu_backing_refused_run`), through `refused_next`;
+     * under `lock`. */
     struct virtio_gpu_object *refused;
     uint32_t kicking; /* notifies made without the big lock */
     char reset_path[48];
@@ -1008,6 +1009,12 @@ void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object
  * May sleep. */
 int32_t vgpu_backing_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                            struct virtio_gpu_cmd **ask, uint32_t event);
+/** Whether `ask`, a VGS_CMD_BACKING of `bo` answered with its page list,
+ * lists every page of the object, so that its take sends no further ask;
+ * a list that breaks the transport's rules counts, since its take fails at
+ * once. Reads the answer in place, under the device's lock, which keeps
+ * the ask from a taker. */
+int vgpu_backing_whole(const struct virtio_gpu_object *bo, const struct virtio_gpu_cmd *ask);
 /** Start the first VGS_CMD_BACKING of `bo`'s resource, just made, without
  * waiting, in `*ask`, whose answer vgpu_backing_pages takes; the ask holds
  * at most VGPU_ASK_HELD DMA pages. 0, or -ENOMEM. May sleep. */
@@ -1037,9 +1044,11 @@ int32_t vgpu_backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_obje
 /**
  * As vgpu_backing_settle, for a command that names `bo` and is queued after
  * its ask, which the device serves first: take the deferred backing only
- * when its answer has come and no other take is under way, and otherwise
- * leave it and return 0 without a wait, as Linux's execbuffer waits on no
- * ATTACH_BACKING. A refusal that comes later is taken by the worker
+ * when its answer has come, no other take is under way and the take sends
+ * no further ask and waits for nothing, a refusal or a page list whole in
+ * the one answer (`vgpu_backing_whole`), and otherwise leave it and return
+ * 0, as Linux's execbuffer waits on no ATTACH_BACKING. A longer page list
+ * goes to the worker, and so does a refusal that comes later
  * (`vgpu_backing_refused_run`), whose ATTACH_BACKING follows the commands
  * queued meanwhile, which find the resource without a backing, as a host's
  * failed attach leaves it on Linux. May sleep.
