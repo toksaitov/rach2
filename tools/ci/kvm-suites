@@ -60,8 +60,8 @@
 # installer-rehearse, 1839 s against 2153 on x86_64; uefi, 565 s against
 # 875; gnu, 2265 s against 3381; assign, 172 s against 2393 on x86_64, its
 # nested Debian guest booted through Rach2's VFIO.
-# sealed, diskrate and agents stay under TCG, slower under KVM: 2735 s
-# against 1256, 1009 against 781, and 1361 against 1070.
+# sealed and diskrate stay under TCG, slower under KVM: 2735 s against 1256
+# and 1009 against 781.
 # The suites below passed under KVM, under the ia32 profile too where it runs
 # them, and took no longer there than under TCG, by the sum of their case times
 # on i686 and x86_64, one run each (issue 5661): install, 218 s against 280;
@@ -111,6 +111,13 @@
 # its programs staged under /musl; fakeapi, 4 s against 8 on x86_64, its GNU
 # machine on the virtio console. authority, 5 s against 15; tcc, 22 s against
 # 34; style, 23 s against 23, which boots no guest.
+# agents passed under KVM in 375 s against 734 under TCG on x86_64, each run
+# alone (issue 5681), with milestone 84's change to its cases: its GNU
+# machines on the virtio console. Over COM1 the 665,600-byte archive that its
+# setup sends made 2.7 million port I/O exits a row, and the suite took 1440 s
+# under KVM against 848. agentsaccept, codexapi and museapi have the virtio
+# console too, and took 587 s against 1232, 33 s against 78 and 58 s against
+# 87.
 browser
 video
 webgl
@@ -232,3 +239,4 @@ fakeapi
 authority
 tcc
 style
+agents
