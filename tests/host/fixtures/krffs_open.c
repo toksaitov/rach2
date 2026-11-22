@@ -621,6 +621,48 @@ void walk_gate(int event)
     (void)event;
 }
 
+/** The walk gate's fault, which no row arms. */
+int walk_gate_fault(void)
+{
+    return 0;
+}
+
+/** Whether the thread began a change it has not ended, which no row's walk
+ * does. */
+int vfs_seq_mine(void)
+{
+    return 0;
+}
+
+/** Whether the caller holds a namespace or file lock; no row's walk sees a
+ * change under way, so the walk never asks whether it may wait. */
+int vfs_ns_held_by_caller(void)
+{
+    return 0;
+}
+
+/* Each thread's last walk's stamp. */
+static __thread struct vfs_stamp stamp_last;
+
+/** Leave `seq` as the thread's last walk's stamp, checked when `on`. */
+void vfs_stamp_set(uint64_t seq, int on)
+{
+    stamp_last.seq = seq;
+    stamp_last.on = on;
+}
+
+/** The thread's last walk's stamp, into `*st`. */
+void vfs_stamp_get(struct vfs_stamp *st)
+{
+    *st = stamp_last;
+}
+
+/** Whether nothing has changed what a path names since `st`. */
+int vfs_stamp_still(const struct vfs_stamp *st)
+{
+    return !st->on || vfs_seq_still(st->seq);
+}
+
 /** Start a description's cursor into its file's write-back error sequence at
  * none, since no row records a write-back error. */
 uint32_t vfs_ino_err_sample(struct vfs_mount *mnt, uint64_t ino)

@@ -4,6 +4,7 @@
  *
  * host-deps: rach2/sys/fs/synthfs.c rach2/sys/fs/sysfs.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * Every path call classifies its path, and the split into components and
  * the parsing of process ids and descriptor numbers are where an error of

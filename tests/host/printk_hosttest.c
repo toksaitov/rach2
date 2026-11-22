@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/cmdline.c rach2/sys/fs/sysfs.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/lib/kstd.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * The test includes printk.c whole, to read and reset its parameters. Its
  * allocator fails the allocation a row names, so that a row reaches each

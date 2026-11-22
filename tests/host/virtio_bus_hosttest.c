@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/virtio/virtio_bus.c
  * host-deps: rach2/sys/fs/synthfs.c rach2/sys/fs/sysfs.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * A model virtio-gpu device at 00:02.0 is added to the bus, which names it
  * virtio0, and checked against Linux 6.12's shape: its directory below the

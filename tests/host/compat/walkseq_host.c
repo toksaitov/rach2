@@ -43,8 +43,42 @@ void vfs_seq_wait(uint64_t *seq)
     }
 }
 
+/** Whether the thread began a change it has not ended. */
+int vfs_seq_mine(void)
+{
+    return seq_active != 0;
+}
+
+/* The last walk's stamp, the single thread's. */
+static struct vfs_stamp stamp_last;
+
+/** Leave `seq` as the last walk's stamp, checked when `on`. */
+void vfs_stamp_set(uint64_t seq, int on)
+{
+    stamp_last.seq = seq;
+    stamp_last.on = on;
+}
+
+/** The last walk's stamp, into `*st`. */
+void vfs_stamp_get(struct vfs_stamp *st)
+{
+    *st = stamp_last;
+}
+
+/** Whether nothing has changed what a path names since `st`. */
+int vfs_stamp_still(const struct vfs_stamp *st)
+{
+    return !st->on || vfs_seq_still(st->seq);
+}
+
 /** The walk gate, which no host test arms. */
 void walk_gate(int event)
 {
     (void)event;
+}
+
+/** The walk gate's fault, which no host test arms. */
+int walk_gate_fault(void)
+{
+    return 0;
 }

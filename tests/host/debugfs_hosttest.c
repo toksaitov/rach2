@@ -6,6 +6,7 @@
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/walkseq_host.c
  */
 #include "fs/debugfs.c"
 #include "dmabuf/fence.c"
