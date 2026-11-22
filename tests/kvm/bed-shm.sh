@@ -70,12 +70,17 @@
 # driver on the GPU gpu.sh gave back, with the pipe's CRC the same over four
 # frames after the first two (`return`); when gpu.sh gave the GPU back
 # before the old session had gone, the session starts on it at once, which
-# is both its fallback and its return. Each load and each figure runs
-# under a keeper of its own, bedkeep, beside this script, built at the
-# start: a child subreaper that runs it in a session of its own and, once
-# it ends or the script writes a word on the keeper's FIFO, ends and reaps
-# all it left. The script reads each load's end and the keeper's from the
-# keeper's status file, and signals no keeper by its pid.
+# is both its fallback and its return.
+#
+# Every child the script starts in the background, ivshmemd, QEMU or
+# gpu.sh, each probe, load and figure and the udev monitor, runs under a
+# keeper of its own, bedkeep, beside this script, built at the start: a
+# child subreaper that runs it in a session of its own, signals it as the
+# script asks through the keeper's FIFO and, once it ends or the script asks
+# the keeper to stop, ends and reaps all it left. The script reads each
+# command's end and the keeper's from the keeper's status file, signals no
+# child by its pid and waits for none but through that file, each wait with
+# a bound.
 #
 # With -u the console first loses a card of the host's own, as it does on
 # the Lenovo when gpu.sh takes the GPU from the Intel driver: Weston is
@@ -107,9 +112,8 @@
 # VM's last 80 lines of console, `bed-shm: vm: LINE`, on a failure. The
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
 # With -w, so are the services log's tails at and just after the VM's death.
-# Any exit, by its end or by SIGTERM, SIGINT or SIGHUP, stops the load's
-# and the figure's keepers, kills QEMU and has gpu.sh give the function
-# back.
+# Any exit, by its end or by SIGTERM, SIGINT or SIGHUP, stops every
+# keeper, which kills QEMU, and has gpu.sh give the function back.
 #
 # With -w -g -l crysis, run the two-loop Crysis flyby once the region's
 # session is ready, in native/crysis.sh's private data fixture and, through
@@ -193,18 +197,22 @@ fi
 # no irqfd.
 [ -z "$bdf" ] || [ -n "$nocopy" ] || [ "$desk" = 1 ] || { echo "bed-shm: -g needs -k or -w" >&2; exit 2; }
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
-[ "$desk" = 0 ] || [ -f "$keepc" ] || { echo "bed-shm: no $keepc for -w" >&2; exit 2; }
+[ -f "$keepc" ] || { echo "bed-shm: no $keepc" >&2; exit 2; }
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
-# load and fig are the numbers of the load's and the figure's keepers
-# (keep_new), not pids.
-daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' fig='' umon='' bad=0
-# Children that outlived a row's bounded wait for them after KILL, and the
-# numbers of the keepers that outlived keep_end's, for cleanup to end
-# again; the keeper, bedkeep.c built into DIR with -w; and the number of
-# the last keeper made.
-stuck='' keepers='' keep='' keepn=0
+# The numbers of the keepers (keep_new), not pids, of ivshmemd, of QEMU or
+# of gpu.sh, which runs it, of a probe, of the mapping's holder, of a
+# nocopy figure, of the load, of a figure and of the udev monitor; vmk is
+# QEMU's or gpu.sh's. qemu is QEMU's pid, which is only read, never
+# signalled, and with -g qemu_start its start time, by which gpu.sh's
+# keeper knows it.
+daemon='' vmk='' gpu='' waiter='' holder='' pid='' load='' fig='' umon='' bad=0
+qemu='' qemu_start=''
+# The keepers not yet ended, for cleanup; the keeper, bedkeep.c built into
+# DIR; the number of the last keeper made; and of the last signal asked of
+# a keeper.
+keepers='' keep='' keepn=0 keep_seq=0
 # Whether gpu.sh was started, so that cleanup checks the GPU's driver; and
 # 1 once cleanup has begun, so that it runs once.
 gpu_started=0 cleaned=0
@@ -219,30 +227,26 @@ intel=''
 pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
 fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
 
-# pids WORD...: the words that are process IDs above 1 and not this
-# script's, so that a kill never names 0, -1 or the script's own group.
-pids()
-{
-    for pids_w in "$@"; do
-        case $pids_w in '' | *[!0-9]*) continue ;; esac
-        [ "$pids_w" -gt 1 ] && [ "$pids_w" != "$$" ] && printf '%s ' "$pids_w"
-    done
-}
-
-# keep_new: make the files of a new keeper, numbered keepn, and set kb
-# to their base, DIR/keep-N, for `"$keep" "$kb" COMMAND... <> "$kb.ctl" &`.
-# BASE.ctl is the keeper's control FIFO, its standard input, opened for
-# reading and writing so that the keeper never sees its end of file while
-# the script, which holds no end of it, runs; BASE.status is where the
-# keeper writes `started KEEPER COMMAND`, `ended STATUS` once its command
-# has ended, `left PROCESS` for each process that outlived KILL, and `done
-# STATUS` once it has reaped all, just before it exits; BASE.stop, once
-# made, stops a keeper that opens its FIFO after the word was written.
+# keep_new NAME: make the files of a new keeper, numbered keepn, of the
+# command NAME names in the lines about it, add it to keepers, and set kb
+# to their base, DIR/keep-N, for `"$keep" "$$" "$kb" COMMAND... <> "$kb.ctl"
+# &`, where $$, the script's pid, is the keeper's parent's, so that the
+# keeper sees the script's death however soon it comes. BASE.ctl is the
+# keeper's control FIFO, its standard input, opened for reading and writing
+# so that the keeper never sees its end of file while the script, which
+# holds no end of it, runs; BASE.status is where the keeper writes `started
+# KEEPER COMMAND`, `ended STATUS` once its command has ended, `signalled
+# SEQ` or `unsignalled SEQ WHY` for each signal asked, `left PROCESS` for
+# each process that outlived KILL, and `done STATUS` once it has reaped
+# all, just before it exits; BASE.stop, once made, stops a keeper that opens
+# its FIFO after the word was written; BASE.name holds NAME.
 keep_new()
 {
     keepn=$((keepn + 1))
     kb=$out/keep-$keepn
     rm -f "$kb.ctl" "$kb.status" "$kb.stop"
+    echo "$1" > "$kb.name"
+    keepers="$keepers $keepn"
     mkfifo "$kb.ctl" || echo "bed-shm: keeper $keepn: no FIFO; the keeper refuses to start" >&2
 }
 
@@ -251,53 +255,153 @@ keep_new()
 # line, and no `done` of a keeper that refused to start.
 keep_running()
 {
-    ! grep -qE '^(ended|done) ' "$out/keep-$1.status" 2>/dev/null
+    [ -n "$1" ] && ! grep -qE '^(ended|done) ' "$out/keep-$1.status" 2>/dev/null
 }
 
-# keep_stop N: ask keeper N to end its command and all it left: make
-# BASE.stop, then write a word on its FIFO, opened for reading and writing,
-# which never waits; a keeper that has its FIFO open reads the word, and
-# one that opens it later finds BASE.stop. Nothing is written once the
-# keeper is done and its FIFO removed.
-keep_stop()
+# keep_started N: wait, 100 tries of 0.1 s at most, for keeper N's
+# `started` line, or its `done` line when it refused to start.
+keep_started()
 {
-    : > "$out/keep-$1.stop"
-    [ ! -p "$out/keep-$1.ctl" ] || printf 'stop\n' 1<> "$out/keep-$1.ctl"
+    n=100
+    until grep -qE '^(started|done) ' "$out/keep-$1.status" 2>/dev/null; do
+        [ "$n" -gt 0 ] || return 1
+        sleep 0.1
+        n=$((n - 1))
+    done
 }
 
-# keep_end N: end keeper N of a load or a figure, which gives its command
-# and every process the command left TERM, and KILL 20 s later, and reaps
-# them all (keep_stop); then 400 tries of 0.1 s, past the keeper's own
-# 30 s, for its `done` line, and its status, the command's, in keep_status.
-# A keeper not done by then holds a process that outlived KILL, or never
-# started: it stays in keepers, and the return is 1, with what it reported
-# in keep_left.
-keep_end()
+# keep_pid N: the pid of keeper N's command, from its `started` line, only
+# to be read: its state, processor time, wait channel and what it holds.
+keep_pid() { sed -n 's/^started [0-9]* \([0-9]*\)$/\1/p' "$out/keep-$1.status" 2>/dev/null | head -n 1; }
+
+# keep_ended N: the status of keeper N's command, from its `ended` line.
+keep_ended() { sed -n 's/^ended //p' "$out/keep-$1.status" 2>/dev/null | head -n 1; }
+
+# keep_wait N TRIES: wait, TRIES tries of 0.1 s at most, until the command
+# of keeper N has ended; 1 when it still runs.
+keep_wait()
 {
-    keep_left='' keep_status=''
-    [ -n "$1" ] || return 0
-    keep_st=$out/keep-$1.status
-    keep_stop "$1"
-    n=400
-    until grep -q '^done ' "$keep_st" 2>/dev/null; do
+    n=$2
+    while keep_running "$1"; do
+        [ "$n" -gt 0 ] || return 1
+        sleep 0.1
+        n=$((n - 1))
+    done
+}
+
+# proc_of PID: `STATE START` of process PID, its state and its start time
+# in clock ticks since the boot, from its stat line, whose command name may
+# hold spaces and parentheses; nothing once it has gone.
+proc_of() { awk '{ sub(/^.*\) /, ""); print $1, $20 }' "/proc/$1/stat" 2>/dev/null; }
+
+# keep_signal N SIG [PID START]: have keeper N send SIG, a name such as
+# STOP, to its command, which it has not reaped, so that its pid is no
+# other process's; or to PID, a child of the command whose start time is
+# START, which the keeper holds still by stopping the command meanwhile.
+# Waits, 100 tries of 0.1 s, for the keeper's answer; 1, with keep_why,
+# when the signal was not sent, or the command has ended.
+keep_signal()
+{
+    keep_why=''
+    keep_started "$1" || { keep_why='the keeper never started'; return 1; }
+    keep_running "$1" || { keep_why='the command has ended'; return 1; }
+    keep_seq=$((keep_seq + 1))
+    ks=$out/keep-$1.status
+    printf 'signal %s %s%s\n' "$keep_seq" "$2" "${3:+ $3 ${4:-0}}" 1<> "$out/keep-$1.ctl"
+    n=100
+    while :; do
+        ! grep -q "^signalled $keep_seq\$" "$ks" || return 0
+        keep_why=$(sed -n "s/^unsignalled $keep_seq //p" "$ks")
+        [ -z "$keep_why" ] || return 1
+        if grep -q '^ended ' "$ks"; then
+            keep_why='the command has ended'
+            return 1
+        fi
         if [ "$n" -le 0 ]; then
-            case " $keepers " in *" $1 "*) ;; *) keepers="$keepers $1" ;; esac
-            keep_said=$(sed -n 's/^left //p' "$keep_st" 2>/dev/null | tr '\n' ';')
-            keep_who=$(sed -n 's/^started \([0-9]*\) .*/process \1/p' "$keep_st" 2>/dev/null | head -n 1)
-            if [ -n "$keep_who" ]; then
-                keep_left="keeper $1 ($keep_who) not done 40 s after its stop: ${keep_said:-it named nothing left}"
-            else
-                keep_left="keeper $1 never started"
-            fi
+            keep_why='the keeper did not answer in 10 s'
             return 1
         fi
         sleep 0.1
         n=$((n - 1))
     done
-    keep_status=$(sed -n 's/^done //p' "$keep_st" | head -n 1)
-    keepers=$(for k in $keepers; do [ "$k" = "$1" ] || printf '%s ' "$k"; done)
-    rm -f "$out/keep-$1.ctl"
-    return 0
+}
+
+# keep_stop N [WORD]: ask keeper N to end its command and all it left,
+# with WORD `kill` by KILL at once: make BASE.stop, then write WORD, `stop`
+# by default, on its FIFO, opened for reading and writing, which never
+# waits; a keeper that has its FIFO open reads the word, and one that opens
+# it later finds BASE.stop. Nothing is written once the keeper is done and
+# its FIFO removed.
+keep_stop()
+{
+    : > "$out/keep-$1.stop"
+    [ ! -p "$out/keep-$1.ctl" ] || printf '%s\n' "${2:-stop}" 1<> "$out/keep-$1.ctl"
+}
+
+# keep_said N: the line about keeper N not done after its stop: its
+# command's name, the two pids and what the keeper named left, with, for
+# ivshmemd, the region's state as the kernel reports it, since one stuck in
+# its detach keeps the region, and for QEMU or gpu.sh, KVM's machines and
+# VFIO's devices and pins.
+keep_said()
+{
+    ks_name=$(cat "$out/keep-$1.name" 2>/dev/null)
+    ks_left=$(sed -n 's/^left //p' "$out/keep-$1.status" 2>/dev/null | tr '\n' ';')
+    ks_who=$(sed -n 's/^started \([0-9]*\) \([0-9]*\)$/keeper \1, process \2/p' "$out/keep-$1.status" 2>/dev/null | head -n 1)
+    ks_more=''
+    case $ks_name in
+        ivshmemd) ks_more="; $(ivshmemd -i 2>&1 | head -n 1)" ;;
+        QEMU | gpu.sh)
+            ks_more="; $(awk '$1 ~ /^(kvm_vms|vfio_devices|vfio_dma_pages)$/ { printf "%s %s ", $1, $2 }' /proc/stat)"
+            ;;
+    esac
+    if [ -n "$ks_who" ]; then
+        echo "$ks_name ($ks_who) not done 40 s after its stop: ${ks_left:-it named nothing left}$ks_more"
+    else
+        echo "$ks_name (keeper $1) never started$ks_more"
+    fi
+}
+
+# keep_end [-k] N...: end keepers N..., each of which gives its command and
+# every process the command left TERM, and KILL 20 s later, or with -k KILL
+# at once, and reaps them all (keep_stop); then 400 tries of 0.1 s in all,
+# past a keeper's own 30 s, for their `done` lines. A keeper done leaves
+# keepers, and its status, the command's, is in keep_status, the last one's
+# given. A keeper not done by then holds a process that outlived KILL, or
+# never started: it stays in keepers for cleanup, and the return is 1, with
+# keep_said's line for each in keep_left.
+keep_end()
+{
+    keep_word='stop'
+    [ "${1:-}" != -k ] || { keep_word='kill'; shift; }
+    keep_left='' keep_status='' keep_undone=''
+    for k in "$@"; do
+        [ -z "$k" ] || keep_stop "$k" "$keep_word"
+    done
+    n=400
+    while :; do
+        keep_undone=''
+        for k in "$@"; do
+            [ -z "$k" ] || grep -q '^done ' "$out/keep-$k.status" 2>/dev/null || keep_undone="$keep_undone $k"
+        done
+        [ -n "$keep_undone" ] && [ "$n" -gt 0 ] || break
+        sleep 0.1
+        n=$((n - 1))
+    done
+    for k in "$@"; do
+        [ -n "$k" ] || continue
+        case " $keep_undone " in
+            *" $k "*)
+                keep_left="${keep_left:+$keep_left; }$(keep_said "$k")"
+                ;;
+            *)
+                keep_status=$(sed -n 's/^done //p' "$out/keep-$k.status" | head -n 1)
+                keepers=$(for j in $keepers; do [ "$j" = "$k" ] || printf '%s ' "$j"; done)
+                rm -f "$out/keep-$k.ctl"
+                ;;
+        esac
+    done
+    [ -z "$keep_undone" ]
 }
 
 # await N: wait for the command of keeper N, a figure or the flyby, and
@@ -324,69 +428,21 @@ await()
     [ -z "$await_why" ] && [ "$await_status" = 0 ]
 }
 
-# gone TRIES PID...: wait, TRIES tries of 0.1 s at most, until none of the
-# children PID... runs, without reaping them, so that a later wait still
-# gives each one's status. Returns 1, with the pids still running in
-# reap_live, when any is left.
-gone()
-{
-    reap_left=$1
-    shift
-    while :; do
-        reap_live=''
-        for reap_pid in "$@"; do
-            ! kill -0 "$reap_pid" 2>/dev/null || reap_live="$reap_live $reap_pid"
-        done
-        [ -n "$reap_live" ] && [ "$reap_left" -gt 0 ] || break
-        sleep 0.1
-        reap_left=$((reap_left - 1))
-    done
-    [ -z "$reap_live" ]
-}
-
-# reap TRIES PID...: give the children PID... TRIES tries of 0.1 s to exit,
-# as gone does, and reap those that did. A task stuck in the kernel may
-# outlive KILL, so the wait is bounded. Returns 1, with the pids still
-# running in reap_live, when any is left.
-reap()
-{
-    gone "$@"
-    reap_status=$?
-    shift
-    for reap_pid in "$@"; do
-        kill -0 "$reap_pid" 2>/dev/null || wait "$reap_pid" 2>/dev/null
-    done
-    return "$reap_status"
-}
-
-# holding PID: what process PID is and what it holds, for the line about a
-# child that outlived its wait: its state, wait channel and command, the
-# devices it has open and, for ivshmemd, the region as the kernel reports
-# it, or for QEMU, KVM's machines and VFIO's devices and pins.
+# holding PID [KIND]: what process PID is and what it holds, for the line
+# about a child that outlived its wait: its state, wait channel and command,
+# the devices it has open and, with KIND ivshmemd, the region as the kernel
+# reports it, or with KIND qemu, KVM's machines and VFIO's devices and pins.
 holding()
 {
     # shellcheck disable=SC2009 # pgrep gives no state or wait channel
     held_ps=$(ps -e -o pid,stat,wchan,args | awk -v p="$1" '$1 == p { $1 = ""; sub(/^ +/, ""); print; exit }')
     held_dev=$(for f in /proc/"$1"/fd/*; do readlink "$f"; done 2>/dev/null | grep '^/dev/' | sort -u | tr '\n' ' ' | sed 's/ $//')
     held_more=''
-    [ "$1" != "$daemon" ] || held_more="; $(ivshmemd -i 2>&1 | head -n 1)"
-    [ "$1" != "$qemu" ] ||
-        held_more="; $(awk '$1 ~ /^(kvm_vms|vfio_devices|vfio_dma_pages)$/ { printf "%s %s ", $1, $2 }' /proc/stat)"
-    echo "${held_ps:-not in ps}; devices: ${held_dev:-none}$held_more"
-}
-
-# child PID: the name of the child PID, for a line about it.
-child()
-{
-    case $1 in
-        "$qemu") echo "QEMU $1" ;;
-        "$daemon") echo "ivshmemd $1" ;;
-        "$waiter") echo "the fence probe $1" ;;
-        "$holder") echo "the mapping's holder $1" ;;
-        "$pid") echo "the probe $1" ;;
-        "$umon") echo "the udev monitor $1" ;;
-        *) echo "process $1" ;;
+    case ${2:-} in
+        ivshmemd) held_more="; $(ivshmemd -i 2>&1 | head -n 1)" ;;
+        qemu) held_more="; $(awk '$1 ~ /^(kvm_vms|vfio_devices|vfio_dma_pages)$/ { printf "%s %s ", $1, $2 }' /proc/stat)" ;;
     esac
+    echo "${held_ps:-not in ps}; devices: ${held_dev:-none}$held_more"
 }
 
 # crysis_restore_ini: put back the compositor's settings before the GPU
@@ -441,62 +497,54 @@ cleanup()
     cleanup_bad=$bad
     crysis_restore_ini || fail settings 'failed to restore weston.ini'
 
-    # Step 2, load: each load's and figure's keeper, and each an earlier
-    # end left, ends all of the load or the figure, once each: TERM, KILL
-    # 20 s later, and reaps all, within 40 s (keep_end); then every child
-    # the run started but gpu.sh, QEMU among them unless gpu.sh runs it: TERM,
-    # 10 s, KILL, 10 s more. The survivors are named with what they hold,
-    # left unreaped, so that no other process takes their pids. QEMU under
+    # Step 2, children: every keeper but gpu.sh's ends all of its command,
+    # TERM, KILL 20 s later, and reaps all, within 40 s (keep_end): first
+    # those of the loads, figures, probes and the udev monitor, together,
+    # then QEMU's, unless gpu.sh runs it, and ivshmemd's. A keeper not done
+    # is named with what it reported left, which it goes on killing and
+    # never reaps, so that no other process takes their pids. QEMU under
     # gpu.sh is gpu.sh's to kill, in step 3, before its give-back.
     survivors=''
+    first=$(for k in $keepers; do
+        case $k in "$gpu" | "$vmk" | "$daemon") ;; *) printf '%s ' "$k" ;; esac
+    done)
     # shellcheck disable=SC2086 # a list of keepers' numbers
-    for k in $(printf '%s\n' $load $fig $keepers | sort -un); do
-        keep_end "$k" || survivors="${survivors:+$survivors; }$keep_left"
-    done
-    load='' fig=''
-    vm=$qemu
-    [ -z "$(pids "$gpu")" ] || vm=''
-    # shellcheck disable=SC2086 # stuck is a list of pids
-    kids=$(pids $vm $waiter $holder $pid $daemon $umon $stuck)
-    if [ -n "$kids" ]; then
-        # shellcheck disable=SC2086 # a list of pids
-        kill -TERM $kids 2>/dev/null
-        # shellcheck disable=SC2086 # a list of pids
-        if ! reap 100 $kids; then
-            kids=$reap_live
-            # shellcheck disable=SC2086 # a list of pids
-            kill -KILL $kids 2>/dev/null
-            # shellcheck disable=SC2086 # a list of pids
-            reap 100 $kids ||
-                for l in $reap_live; do
-                    survivors="${survivors:+$survivors; }$(child "$l") after KILL: $(holding "$l")"
-                done
-        fi
-    fi
+    keep_end $first || survivors=$keep_left
+    load='' fig='' waiter='' holder='' pid='' umon=''
+    vm=$vmk
+    [ -z "$gpu" ] || vm=''
+    # shellcheck disable=SC2086 # two keepers' numbers
+    keep_end $vm $daemon || survivors="${survivors:+$survivors; }$keep_left"
+    daemon=''
+    [ -n "$gpu" ] || vmk=''
     # The control port: the script's end of the VM's second serial port
     # closed and its two pipes removed, QEMU, the other end, having gone,
     # and bed-vm-control with its VM.
     exec 7<&- 2>/dev/null
     rm -f "$out/ctl.in" "$out/ctl.out"
     if [ -z "$survivors" ]; then
-        pass stop "the load's keepers and every child have ended (bounds: 40 s for a keeper, 20 s to TERM and 10 s to KILL its processes, 10 s each to TERM and to KILL a child)"
+        pass stop "every keeper but gpu.sh's has ended all its command left (bounds: 40 s for the keepers, 20 s to TERM and 10 s to KILL their processes)"
     else
         fail stop "still running: $survivors"
     fi
 
-    # Step 3, GPU: with -g, one TERM to gpu.sh, never a second, which kills
-    # QEMU and gives the function back with every signal ignored; 60 s for
-    # it, since i915's bind resets the GPU, and then the function must be
-    # on i915.
+    # Step 3, GPU: with -g, one TERM to gpu.sh, from its keeper, never a
+    # second, which kills QEMU and gives the function back with every signal
+    # ignored; 60 s for it, since i915's bind resets the GPU, and then its
+    # keeper must be done and the function on i915. A gpu.sh still running
+    # is left to its keeper, which on the script's exit sends it TERM, which
+    # it ignores, and KILL 20 s later.
     gpu_back=1 gpu_why=''
     if [ "$gpu_started" = 1 ]; then
         gpu_back=0
-        if [ -n "$(pids "$gpu")" ]; then
-            kill -TERM "$gpu" 2>/dev/null
-            if reap 600 "$gpu"; then
-                gpu='' qemu=''
+        if [ -n "$gpu" ]; then
+            keep_signal "$gpu" TERM || :
+            if keep_wait "$gpu" 600 && keep_end "$gpu"; then
+                gpu='' vmk='' qemu=''
+            elif keep_running "$gpu"; then
+                gpu_why="gpu.sh $(keep_pid "$gpu") still running 60 s after its TERM: QEMU ${qemu:-unknown}${qemu:+: $(holding "$qemu" qemu)}"
             else
-                gpu_why="gpu.sh $gpu still running 60 s after its TERM: QEMU ${qemu:-unknown}${qemu:+: $(holding "$qemu")}"
+                gpu_why="gpu.sh ended, but its keeper is not done: $keep_left"
             fi
         fi
         drv=$(readlink "/sys/bus/pci/devices/$bdf/driver" 2>/dev/null)
@@ -538,17 +586,15 @@ trap 'trap "" HUP INT TERM; exit 130' INT
 trap 'trap "" HUP INT TERM; exit 143' TERM
 rm -rf "$out"
 mkdir -p "$out"
-# The keeper of each load and figure, built with the root's cc, as
-# native/bed.sh builds crcmodes; a run that cannot keep its loads runs
+# The keeper of each background child, built with the root's cc, as
+# native/bed.sh builds crcmodes; a run that cannot keep its children runs
 # none.
-if [ "$desk" = 1 ]; then
-    keep=$out/bedkeep
-    if ! cc -std=c99 -static -O2 -o "$keep" "$keepc" > "$out/bedkeep.build" 2>&1; then
-        fail keeper "bedkeep did not build: $(tail -n 3 "$out/bedkeep.build" | tr '\n' ' ')"
-        cleanup end
-        echo "bed-shm: result: fail: $bad check(s)"
-        exit 1
-    fi
+keep=$out/bedkeep
+if ! cc -std=c99 -static -O2 -o "$keep" "$keepc" > "$out/bedkeep.build" 2>&1; then
+    fail keeper "bedkeep did not build: $(tail -n 3 "$out/bedkeep.build" | tr '\n' ' ')"
+    cleanup end
+    echo "bed-shm: result: fail: $bad check(s)"
+    exit 1
 fi
 # Where the desktop's log stood before anything here ran.
 services=/var/log/services
@@ -569,14 +615,43 @@ info() { ivshmemd -i | tr ',' '\n' | sed -n "s/^.* $1 \([0-9/]*\).*$/\1/p" | hea
 # a guest of it runs and stays while the guest waits halted.
 busy() { awk '{ print $14 + $15 }' "/proc/$1/stat" 2>/dev/null || echo 0; }
 
-# quiet FILE SILENCE [PID]: one second of a wait, which `last=-1 still=0`
-# starts; it fails once process PID has ended, or once for SILENCE seconds
-# FILE has not grown and PID has used no processor time.
+# vm_alive: whether QEMU runs: the command of its keeper, or with -g,
+# gpu.sh's child, by its pid and start time, which are only read.
+vm_alive()
+{
+    if [ -n "$gpu" ]; then
+        vm_proc=$(proc_of "$qemu")
+        [ -n "$qemu" ] && [ "${vm_proc#* }" = "$qemu_start" ] && [ "${vm_proc%% *}" != Z ]
+    else
+        [ -n "$vmk" ] && keep_running "$vmk"
+    fi
+}
+
+# alive N: whether the command of keeper N runs, or with N `vm`, QEMU.
+alive()
+{
+    if [ "$1" = vm ]; then
+        vm_alive
+    else
+        keep_running "$1"
+    fi
+}
+
+# quiet FILE SILENCE [N]: one second of a wait, which `last=-1 still=0`
+# starts; it fails once the command of keeper N, or with N `vm` QEMU, has
+# ended, or once for SILENCE seconds FILE has not grown and that command
+# has used no processor time.
 quiet()
 {
-    [ -z "${3:-}" ] || kill -0 "$3" 2>/dev/null || return 1
+    [ -z "${3:-}" ] || alive "$3" || return 1
     sleep 1
-    size=$(command stat -c %s "$1" 2>/dev/null || echo 0):$([ -z "${3:-}" ] || busy "$3")
+    quiet_pid=''
+    case ${3:-} in
+        '') ;;
+        vm) quiet_pid=$qemu ;;
+        *) quiet_pid=$(keep_pid "$3") ;;
+    esac
+    size=$(command stat -c %s "$1" 2>/dev/null || echo 0):$([ -z "$quiet_pid" ] || busy "$quiet_pid")
     if [ "$size" = "$last" ]; then
         still=$((still + 1))
         [ "$still" -lt "$2" ] || return 1
@@ -616,8 +691,8 @@ load_wait()
     fi
 }
 
-# until_line FILE PATTERN SILENCE [PID]: wait until FILE has a line
-# matching PATTERN, while quiet FILE SILENCE PID holds.
+# until_line FILE PATTERN SILENCE [N]: wait until FILE has a line
+# matching PATTERN, while quiet FILE SILENCE N holds.
 until_line()
 {
     last=-1 still=0
@@ -632,22 +707,23 @@ fences_pending()
 {
     pending_left=30
     until grep -qx 'VGSHMPROBE PENDING 4' "$out/pending.out"; do
-        [ "$pending_left" -gt 0 ] && kill -0 "$waiter" 2>/dev/null &&
+        [ "$pending_left" -gt 0 ] && keep_running "$waiter" &&
             ! grep -q '^VGSHMPROBE FAIL' "$out/pending.out" || return 1
         sleep 1
         pending_left=$((pending_left - 1))
     done
 }
 
-# probe_ready PID: wait until `vgshmprobe pending`, process PID, has said
-# its render target is made and has stopped itself, as quiet pending.out 30
-# PID allows; the target's backing is the VM's, which a stopped VM cannot
-# give.
+# probe_ready N: wait until `vgshmprobe pending`, the command of keeper N,
+# has said its render target is made and has stopped itself, as quiet
+# pending.out 30 N allows; the target's backing is the VM's, which a
+# stopped VM cannot give.
 probe_ready()
 {
     until_line "$out/pending.out" 'VGSHMPROBE READY\|VGSHMPROBE FAIL' 30 "$1" || return 0
     last=-1 still=0
-    until [ "$(sed -n 's/^State:[[:space:]]*\(.\).*/\1/p' "/proc/$1/status" 2>/dev/null)" = T ]; do
+    ready_pid=$(keep_pid "$1")
+    until [ "$(sed -n 's/^State:[[:space:]]*\(.\).*/\1/p' "/proc/$ready_pid/status" 2>/dev/null)" = T ]; do
         quiet "$out/pending.out" 30 "$1" || return 0
     done
 }
@@ -725,8 +801,9 @@ if [ "$unplug" = 1 ]; then
 fi
 
 # The attach, once, and two refused.
-ivshmemd -s 32M "$out/ivs.sock" > "$out/ivshmemd.out" 2>&1 &
-daemon=$!
+keep_new ivshmemd
+"$keep" "$$" "$kb" ivshmemd -s 32M "$out/ivs.sock" <> "$kb.ctl" > "$out/ivshmemd.out" 2>&1 &
+daemon=$keepn
 until_line "$out/ivshmemd.out" 'listening on' 30 || true
 refused=0
 for i in 1 2; do
@@ -745,8 +822,8 @@ fi
 # The VM, under Rach2's KVM, with the region on its doorbell device. Its
 # disk takes no ioeventfd, and QEMU raises a disk's interrupts without an
 # irqfd, so that both counts are the doorbells'. With -g, gpu.sh starts it
-# with the function, and $qemu is QEMU's own process, from its pid file;
-# QEMU's messages are then in gpu.sh's DIR/gpu/qemu.err.
+# with the function, and $qemu is QEMU's own process, from its pid file,
+# with its start time; QEMU's messages are then in gpu.sh's DIR/gpu/qemu.err.
 set --
 if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
     set -- -netdev "user,id=bedprof,restrict=on,hostfwd=tcp:127.0.0.1:$BED_VM_PROFILE_PORT-:22" \
@@ -761,57 +838,79 @@ mkfifo "$out/ctl.in" "$out/ctl.out"
 exec 7<> "$out/ctl.in"
 if [ -z "$bdf" ]; then
     set -- "$@" -chardev pipe,path="$out/ctl",id=ctl -device isa-serial,chardev=ctl,index=1
-    TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
+    keep_new QEMU
+    TMPDIR=$out "$keep" "$$" "$kb" qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
         -drive file="$disk",if=none,id=vm,format=raw,snapshot=on \
         -device virtio-blk-pci,drive=vm,ioeventfd=off \
         -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
-        -serial file:"$console" "$@" > "$out/qemu.out" 2>&1 &
-    qemu=$!
+        -serial file:"$console" "$@" <> "$kb.ctl" > "$out/qemu.out" 2>&1 &
+    vmk=$keepn
+    keep_started "$vmk" || :
+    qemu=$(keep_pid "$vmk")
 else
-    TMPDIR=$out bash "$gpush" -d "$bdf" -m "$mib" -s "$cpus" -w 0 -o "$out/gpu" -D "$disk" -- \
+    keep_new gpu.sh
+    TMPDIR=$out "$keep" "$$" "$kb" bash "$gpush" -d "$bdf" -m "$mib" -s "$cpus" -w 0 -o "$out/gpu" -D "$disk" -- \
         -pidfile "$out/qemu.pid" \
         -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
-        "$@" > "$out/gpu.log" 2>&1 &
-    gpu=$! gpu_started=1
+        "$@" <> "$kb.ctl" > "$out/gpu.log" 2>&1 &
+    gpu=$keepn vmk=$keepn gpu_started=1
     last=-1 still=0
     until [ -s "$out/qemu.pid" ]; do
         quiet "$out/gpu.log" 120 "$gpu" || break
     done
     qemu=$(cat "$out/qemu.pid" 2>/dev/null)
+    case $qemu in '' | *[!0-9]*) qemu='' ;; esac
+    [ -z "$qemu" ] || qemu_start=$(proc_of "$qemu" | cut -d' ' -f2)
 fi
 
-# stop_vm: kill QEMU, through gpu.sh when it owns the VM.
-stop_vm()
+# vm_signal SIG: have QEMU's keeper send SIG to QEMU or, with -g, gpu.sh's
+# keeper send it to gpu.sh's QEMU, the process of the pid file that started
+# at qemu_start (keep_signal).
+vm_signal()
 {
     if [ -n "$gpu" ]; then
-        kill -USR1 "$gpu" 2>/dev/null
+        [ -n "$qemu" ] || { keep_why='no pid of QEMU'; return 1; }
+        keep_signal "$gpu" "$1" "$qemu" "$qemu_start"
     else
-        kill -9 "$qemu" 2>/dev/null
+        [ -n "$vmk" ] || { keep_why='no QEMU'; return 1; }
+        keep_signal "$vmk" "$1"
     fi
 }
 
-# wait_vm: reap QEMU or gpu.sh, which also gives the function back. gpu.sh
-# waits for its QEMU first, so the wait for either is bounded at 600 tries
-# of 0.1 s, and one still running then is left, with QEMU, to cleanup,
-# which names what QEMU holds.
+# stop_vm: kill QEMU, through gpu.sh when it owns the VM, with SIGUSR1.
+stop_vm()
+{
+    if [ -n "$gpu" ]; then
+        keep_signal "$gpu" USR1
+    else
+        vm_signal KILL
+    fi
+}
+
+# wait_vm: wait for QEMU's end or gpu.sh's, which also gives the function
+# back, and end its keeper. gpu.sh waits for its QEMU first, so the wait for
+# either is bounded at 600 tries of 0.1 s, and one still running then is
+# left, with QEMU, to cleanup, which names what QEMU holds. gpu.sh's status
+# is in gpu_status.
 wait_vm()
 {
     if [ -n "$gpu" ]; then
-        if gone 600 "$gpu"; then
-            gpu_status=0
-            wait "$gpu" 2>/dev/null || gpu_status=$?
+        if keep_wait "$gpu" 600; then
+            gpu_status=$(keep_ended "$gpu")
+            # A QEMU that outlived gpu.sh is its keeper's, and cleanup's.
+            keep_end "$gpu" || echo "bed-shm: vm: left after gpu.sh's end: $keep_left" >&2
             gpu=''
         else
             gpu_status="still running 60 s after QEMU's kill"
             return 0
         fi
-    elif [ -n "$(pids "$qemu")" ]; then
+    elif [ -n "$vmk" ]; then
         # A QEMU stuck in the kernel after KILL is left to cleanup.
-        gone 600 "$qemu" || return 0
-        wait "$qemu" 2>/dev/null
+        keep_wait "$vmk" 600 || return 0
+        keep_end "$vmk" || echo "bed-shm: vm: left after QEMU's end: $keep_left" >&2
     fi
-    qemu=''
+    qemu='' vmk=''
 }
 
 # kill_vm: kill and reap the VM, and wait for any GPU handoff.
@@ -822,31 +921,34 @@ kill_vm()
 }
 
 # death_children: give the fence probe and ivshmemd 60 tries to exit after
-# QEMU is killed. Reap only children that exited. A task stuck in the kernel
-# may still be there after KILL, so the failure must not wait for its exit;
-# ivshmemd left stays in daemon, and the probe left goes to stuck, since a
-# later draw takes waiter, for cleanup.
+# QEMU is killed, and end their keepers once they have. A task stuck in the
+# kernel may still be there after KILL, so the failure must not wait for
+# its exit: the keeper of one still running is asked to KILL it, and is
+# left to cleanup, which waits for it.
 death_children()
 {
     left=60 death_error=''
-    while kill -0 "$waiter" 2>/dev/null || kill -0 "$daemon" 2>/dev/null; do
+    while keep_running "$waiter" || keep_running "$daemon"; do
         [ "$left" -gt 0 ] || break
         sleep 1
         left=$((left - 1))
     done
-    if kill -0 "$waiter" 2>/dev/null; then
-        death_error="fence probe still running: $(holding "$waiter")"
-        kill -KILL "$waiter" 2>/dev/null
-        stuck="$stuck $waiter"
+    if keep_running "$waiter"; then
+        death_error="fence probe still running: $(holding "$(keep_pid "$waiter")")"
+        keep_stop "$waiter" kill
     else
-        wait "$waiter" 2>/dev/null || death_error="fence probe status $?"
+        st=$(keep_ended "$waiter")
+        [ "$st" = 0 ] || death_error="fence probe status ${st:-unknown}"
+        keep_end "$waiter" || death_error="${death_error:+$death_error, }$keep_left"
     fi
     waiter=''
-    if kill -0 "$daemon" 2>/dev/null; then
-        death_error="${death_error:+$death_error, }ivshmemd still running: $(holding "$daemon")"
-        kill -KILL "$daemon" 2>/dev/null
+    if keep_running "$daemon"; then
+        death_error="${death_error:+$death_error, }ivshmemd still running: $(holding "$(keep_pid "$daemon")" ivshmemd)"
+        keep_stop "$daemon" kill
     else
-        wait "$daemon" 2>/dev/null || death_error="${death_error:+$death_error, }ivshmemd status $?"
+        st=$(keep_ended "$daemon")
+        [ "$st" = 0 ] || death_error="${death_error:+$death_error, }ivshmemd status ${st:-unknown}"
+        keep_end "$daemon" || death_error="${death_error:+$death_error, }$keep_left"
         daemon=''
     fi
 }
@@ -866,10 +968,10 @@ handoff()
 # VM's boot has ended.
 # With -u the bind must return within 60 s of the region's card's
 # registration, since the VM keeps QEMU busy whether or not it does.
-if until_line "$out/ivshmemd.out" 'QEMU connected' 60 "$qemu"; then
+if until_line "$out/ivshmemd.out" 'QEMU connected' 60 vm; then
     last=-1 still=0 registered=0
     until [ "$(info bound)" = 1 ]; do
-        quiet "$console" 600 "$qemu" || break
+        quiet "$console" 600 vm || break
         [ "$unplug" = 1 ] || continue
         dmesg | tail -n "+$((klog_from + 1))" | grep -q 'drm: virtio_gpu: card' || continue
         registered=$((registered + 1))
@@ -919,19 +1021,23 @@ fi
 figure()
 {
     echo "bed-shm: measuring: $*"
-    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$@" > "$out/figure.out" 2>&1 &
-    pid=$! s=0
-    while kill -0 "$pid" 2>/dev/null; do
+    keep_new figure
+    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$keep" "$$" "$kb" "$@" <> "$kb.ctl" > "$out/figure.out" 2>&1 &
+    pid=$keepn s=0
+    while keep_running "$pid"; do
         sleep 1
         s=$((s + 1))
         [ $((s % 30)) -ne 0 ] && continue
         echo "bed-shm: running: $s s: $(ivshmemd -i 2>&1 | tr '\n' ' ')"
         tr -d '\r' < "$console" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
     done
-    figure_status=0
-    wait "$pid" || figure_status=$?
+    if keep_end "$pid"; then
+        figure_status=$keep_status
+    else
+        figure_status="ended, its keeper not done: $keep_left"
+    fi
     pid=''
-    [ "$figure_status" -eq 0 ] || { ok=0; echo "bed-shm: failed: $(ivshmemd -i 2>&1 | tr '\n' ' ')"; }
+    [ "$figure_status" = 0 ] || { ok=0; echo "bed-shm: failed: status $figure_status: $(ivshmemd -i 2>&1 | tr '\n' ' ')"; }
     cat "$out/figure.out" >> "$out/measure.txt"
     sed 's/^/bed-shm: figure: /' "$out/figure.out"
 }
@@ -982,7 +1088,7 @@ nocopy_rows()
     fi
     # The VM's console comes behind its work, at the serial port's pace.
     "$probe" refuse > "$out/refuse.out" 2>&1
-    until_line "$console" 'backend: map: resource .*: refused: not exported' 60 "$qemu" ||
+    until_line "$console" 'backend: map: resource .*: refused: not exported' 60 vm ||
         true
     if grep -q 'VGSHMPROBE OK' "$out/refuse.out" &&
         grep -q 'backend: map: resource .*: refused: not exported' "$console"; then
@@ -1017,17 +1123,19 @@ nocopy_rows()
     fi
 
     # The VM's death with a mapping live and touched.
-    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$out/nocopy" hold 1048576 > "$out/hold.out" 2>&1 &
-    holder=$!
+    keep_new "the mapping's holder"
+    VK_DRIVER_FILES=$icd NOCOPY_INTEL=$intel "$keep" "$$" "$kb" "$out/nocopy" hold 1048576 \
+        <> "$kb.ctl" > "$out/hold.out" 2>&1 &
+    holder=$keepn
     until_line "$out/hold.out" 'NOCOPY HELD\|NOCOPY FAIL' 120 "$holder" || true
     ivshmemd -i > "$out/info-held.txt" 2>&1
     held=$(stat kvm_gpa_map_pages)
     kill_vm
     until_line "$out/hold.out" 'NOCOPY SIGBUS\|NOCOPY FAIL' 60 "$holder" || true
-    kill -9 "$holder" 2>/dev/null
-    ! reap 100 "$holder" || holder=''
+    # A holder left after KILL is cleanup's.
+    ! keep_end -k "$holder" || holder=''
     # ivshmemd detaches once QEMU has gone; one left is cleanup's.
-    ! reap 600 "$daemon" || daemon=''
+    ! keep_wait "$daemon" 600 || ! keep_end "$daemon" || daemon=''
     if grep -q '^NOCOPY SIGBUS' "$out/hold.out" && grep -q '^NOCOPY HELD' "$out/hold.out"; then
         pass revoke "$(sed -n 's/^NOCOPY SIGBUS: //p' "$out/hold.out")"
     else
@@ -1112,7 +1220,7 @@ readback()
     # The VM's console comes behind its work, at the serial port's pace:
     # wait until it has been silent for 5 s, 120 s at most.
     last=-1 still=0 n=120
-    while [ "$n" -gt 0 ] && quiet "$console" 5 "$qemu"; do
+    while [ "$n" -gt 0 ] && quiet "$console" 5 vm; do
         n=$((n - 1))
     done
     exports=$(($(refusals) - exports0)) klog=$(($(klog_count 'refused: its page list') - klog0))
@@ -1161,7 +1269,7 @@ rebound()
 {
     last=-1 still=0
     until [ "$(info bound)" = 1 ] && [ "$(info binds)" -gt "$1" ]; do
-        quiet "$console" 600 "$qemu" || return 1
+        quiet "$console" 600 vm || return 1
     done
 }
 
@@ -1178,13 +1286,16 @@ loss()
     binds=$(info binds) lost0=$(klog_count "lost: epoch [0-9]*: the device: $reason")
     lerr=''
     vm_ctl stop || lerr="the VM did not stop the backend"
-    "$probe" lost > "$out/$lname.out" 2>&1 &
-    waiter=$!
+    keep_new "vgshmprobe lost"
+    "$keep" "$$" "$kb" "$probe" lost <> "$kb.ctl" > "$out/$lname.out" 2>&1 &
+    waiter=$keepn
+    keep_started "$waiter" || :
+    wpid=$(keep_pid "$waiter")
     if [ -z "$lerr" ] && [ -n "$word" ]; then
         n=60
-        until [ "$(cat "/proc/$waiter/wchan" 2>/dev/null)" = virtio_gpu_wait_answer ]; do
+        until [ "$(cat "/proc/$wpid/wchan" 2>/dev/null)" = virtio_gpu_wait_answer ]; do
             n=$((n - 1))
-            if [ "$n" -le 0 ] || ! kill -0 "$waiter" 2>/dev/null; then
+            if [ "$n" -le 0 ] || ! keep_running "$waiter"; then
                 lerr="the probe never slept in virtio_gpu_wait_answer"
                 break
             fi
@@ -1193,15 +1304,16 @@ loss()
         [ -n "$lerr" ] || vm_ctl "$word" || lerr="the VM did not $word the backend"
     fi
     n=$((max + 30))
-    while kill -0 "$waiter" 2>/dev/null && [ "$n" -gt 0 ]; do
+    while keep_running "$waiter" && [ "$n" -gt 0 ]; do
         sleep 1
         n=$((n - 1))
     done
-    if kill -0 "$waiter" 2>/dev/null; then
-        lerr="${lerr:+$lerr, }the probe still waits in $(cat "/proc/$waiter/wchan" 2>/dev/null) after $((max + 30)) s"
-        kill -9 "$waiter" 2>/dev/null
+    if keep_running "$waiter"; then
+        lerr="${lerr:+$lerr, }the probe still waits in $(cat "/proc/$wpid/wchan" 2>/dev/null) after $((max + 30)) s"
     fi
-    wait "$waiter" 2>/dev/null
+    # KILL to a probe still waiting, and 40 s for its keeper; one left is
+    # cleanup's.
+    keep_end -k "$waiter" || lerr="${lerr:+$lerr, }$keep_left"
     waiter=''
     ms=$(sed -n 's/^VGSHMPROBE LOST: ms //p' "$out/$lname.out")
     logged=$(($(klog_count "lost: epoch [0-9]*: the device: $reason") - lost0))
@@ -1235,18 +1347,20 @@ held()
     holds0=$(tr -d '\r' < "$console" | grep -c 'backend: back: resource [0-9]*: holding ')
     herr=''
     vm_ctl hold || herr="the VM did not have the backend hold"
-    "$probe" held > "$out/held.out" 2>&1 &
-    waiter=$!
+    keep_new "vgshmprobe held"
+    "$keep" "$$" "$kb" "$probe" held <> "$kb.ctl" > "$out/held.out" 2>&1 &
+    waiter=$keepn
     n=120
-    while kill -0 "$waiter" 2>/dev/null && [ "$n" -gt 0 ]; do
+    while keep_running "$waiter" && [ "$n" -gt 0 ]; do
         sleep 1
         n=$((n - 1))
     done
-    if kill -0 "$waiter" 2>/dev/null; then
-        herr="${herr:+$herr, }the probe still waits in $(cat "/proc/$waiter/wchan" 2>/dev/null) after 120 s"
-        kill -9 "$waiter" 2>/dev/null
+    if keep_running "$waiter"; then
+        herr="${herr:+$herr, }the probe still waits in $(cat "/proc/$(keep_pid "$waiter")/wchan" 2>/dev/null) after 120 s"
     fi
-    wait "$waiter" 2>/dev/null
+    # KILL to a probe still waiting, and 40 s for its keeper; one left is
+    # cleanup's.
+    keep_end -k "$waiter" || herr="${herr:+$herr, }$keep_left"
     waiter=''
     ms=$(sed -n 's/^VGSHMPROBE HELD: ms //p' "$out/held.out")
     logged=$(($(klog_count 'lost: epoch [0-9]*: the device: ') - lost0))
@@ -1325,12 +1439,13 @@ virgl_rows()
     fi
 
     # The VM's death with fences pending, the probe's target made first.
-    "$probe" pending 4 > "$out/pending.out" 2>&1 &
-    waiter=$!
+    keep_new 'the fence probe'
+    "$keep" "$$" "$kb" "$probe" pending 4 <> "$kb.ctl" > "$out/pending.out" 2>&1 &
+    waiter=$keepn
     probe_ready "$waiter"
-    kill -STOP "$qemu" 2>/dev/null
-    kill -CONT "$waiter" 2>/dev/null
     pending=yes
+    vm_signal STOP || { pending=no; echo "bed-shm: death: QEMU not stopped: $keep_why" >&2; }
+    keep_signal "$waiter" CONT || echo "bed-shm: death: the probe not continued: $keep_why" >&2
     fences_pending || pending=no
     kill_vm
     death_children
@@ -1358,11 +1473,12 @@ since()
     cat "$out/services.txt"
 }
 
-# started OFFSET DISPLAY RENDERER TRIES [PID]: wait until the
+# started OFFSET DISPLAY RENDERER TRIES [N]: wait until the
 # session's last start since OFFSET is on DISPLAY, `BACKEND CARD RENDERER`
 # as rach2-desktop logs it, its Weston has logged a GL renderer matching
-# RENDERER and the user's socket exists. Give up after TRIES sleeps, or if
-# PID has exited when given. Set `took` to the number of seconds slept.
+# RENDERER and the user's socket exists. Give up after TRIES sleeps, or
+# once the command of keeper N, or with N `vm` QEMU, has ended, when given.
+# Set `took` to the number of seconds slept.
 # With which=any, any start since OFFSET will do, not only the last.
 which=last
 started()
@@ -1373,32 +1489,34 @@ started()
             on && /GL renderer: / && $0 ~ ("GL renderer: " gl) { seen = ever = 1 }
             END { exit !(which == "any" ? ever : on && seen) }' && [ -S /run/user/1001/wayland-0 ]; do
         [ "$took" -lt "$4" ] || return 1
-        [ -z "${5:-}" ] || kill -0 "$5" 2>/dev/null || return 1
+        [ -z "${5:-}" ] || alive "$5" || return 1
         sleep 1
         took=$((took + 1))
     done
 }
 
-# glmark ARGS...: glmark2-wayland as the desktop user on the session.
-glmark()
-{
-    su -s /bin/sh desktop -c "export $desktop_env; exec glmark2-wayland $*"
-}
-
-# drawn FILE ARGS...: glmark ARGS into FILE, killed once FILE has stayed the
-# same for 120 s, as a client of a compositor that no longer answers does.
+# drawn FILE ARGS...: glmark2-wayland ARGS as the desktop user on the
+# session, into FILE, under a keeper, which kills it and all it left once
+# FILE has stayed the same for 120 s, as a client of a compositor that no
+# longer answers does.
 drawn()
 {
     out_file=$1
     shift
-    glmark "$@" > "$out_file" 2>&1 &
-    waiter=$!
+    keep_new glmark2
+    "$keep" "$$" "$kb" su -s /bin/sh desktop -c "export $desktop_env; exec glmark2-wayland $*" \
+        <> "$kb.ctl" > "$out_file" 2>&1 &
+    waiter=$keepn
     last=-1 still=0
-    while kill -0 "$waiter" 2>/dev/null; do
-        quiet "$out_file" 120 || pkill -9 -x glmark2-wayland || kill -9 "$waiter" 2>/dev/null
+    while keep_running "$waiter"; do
+        quiet "$out_file" 120 || break
     done
-    drawn_status=0
-    wait "$waiter" || drawn_status=$?
+    if keep_end -k "$waiter"; then
+        drawn_status=$keep_status
+    else
+        drawn_status=1
+        echo "bed-shm: fallback: glmark2 left: $keep_left" >&2
+    fi
     waiter=''
     return "$drawn_status"
 }
@@ -1454,9 +1572,9 @@ crysis_figure()
     fi
     crysis_ini_saved=$out/weston.ini
     crysis_counts > "$out/crysis-counts.before"
-    keep_new
+    keep_new 'the flyby'
     # shellcheck disable=SC2016 # the child shell reads its output directory
-    "$keep" "$kb" sh -c '
+    "$keep" "$$" "$kb" sh -c '
         export CRYSIS_STATE=$1/crysis-state CRYSIS_GATE=0
         timeout --foreground 60 python3 ./crysis.py prepare "$1/crysis" --shm &&
             exec sh ./crysis.sh seal "$1" python3 ./crysis.py flyby umu flyby-umu "$2"
@@ -1518,7 +1636,7 @@ desk_rows()
     # With the GPU, the VM's virgl draws on its i915, which virgl names.
     gl=virgl
     [ -z "$bdf" ] || gl='virgl .*Intel'
-    if started "$offset" "drm $card gl" "$gl" 120 "$qemu"; then
+    if started "$offset" "drm $card gl" "$gl" 120 vm; then
         pass session "Weston on $card through virgl after $took s: $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //')"
     else
         fail session "$(grep 'rach2-desktop: \|GL renderer\|fatal\|error' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
@@ -1541,9 +1659,9 @@ desk_rows()
         rung=shm-virgl zink=''
         case $scene in venus:*) rung=shm-venus scene=${scene#venus:} zink="MESA_LOADER_DRIVER_OVERRIDE=zink VK_DRIVER_FILES=$icd" ;; esac
         figout=$out/measure-$rung-$scene.out
-        keep_new
+        keep_new "the figure $scene"
         # shellcheck disable=SC2086 # assignments
-        "$keep" "$kb" env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" \
+        "$keep" "$$" "$kb" env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" \
             -u desktop -d -o "$out/measure/$rung-$scene" "$scene" <> "$kb.ctl" > "$figout" 2>&1 &
         fig=$keepn
         await "$fig" ||
@@ -1569,15 +1687,15 @@ desk_rows()
     last=-1 still=0 load_gone=''
     if [ "$loadscene" = glmark2 ]; then
         loadout=$out/glmark2.out loadline=$loadout loadpat='GL_RENDERER'
-        keep_new
-        "$keep" "$kb" su -s /bin/sh desktop \
+        keep_new 'the load'
+        "$keep" "$$" "$kb" su -s /bin/sh desktop \
             -c "export $desktop_env; exec glmark2-wayland --run-forever -b build" <> "$kb.ctl" > "$loadout" 2>&1 &
         load=$keepn
     else
         loadout=$out/load.out loadline=$out/load/scene.log loadpat="measure: scene: $loadscene: started"
-        keep_new
+        keep_new 'the load'
         # shellcheck disable=SC2086 # two assignments
-        "$keep" "$kb" env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
+        "$keep" "$$" "$kb" env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
             -o "$out/load" "$loadscene" <> "$kb.ctl" > "$loadout" 2>&1 &
         load=$keepn
     fi
@@ -1608,20 +1726,23 @@ desk_rows()
     # the death, for a death after which the session stays on the gone
     # card; udevadm names its kernel source last, once it has subscribed to
     # both.
-    udevadm monitor --kernel --udev --subsystem-match=drm > "$out/udev-death.txt" 2>&1 &
-    umon=$!
+    keep_new 'the udev monitor'
+    "$keep" "$$" "$kb" udevadm monitor --kernel --udev --subsystem-match=drm \
+        <> "$kb.ctl" > "$out/udev-death.txt" 2>&1 &
+    umon=$keepn
     until_line "$out/udev-death.txt" '^KERNEL - ' 30 "$umon" || true
     monitor=listening
     { grep -q '^UDEV - ' "$out/udev-death.txt" && grep -q '^KERNEL - ' "$out/udev-death.txt" &&
-        kill -0 "$umon" 2>/dev/null; } ||
+        keep_running "$umon"; } ||
         monitor="not listening: $(tail -n 2 "$out/udev-death.txt" | tr '\n' ' ')"
-    "$probe" pending 4 > "$out/pending.out" 2>&1 &
-    waiter=$!
+    keep_new 'the fence probe'
+    "$keep" "$$" "$kb" "$probe" pending 4 <> "$kb.ctl" > "$out/pending.out" 2>&1 &
+    waiter=$keepn
     probe_ready "$waiter"
     at=$(command stat -c %s "$loadout")
-    kill -STOP "$qemu" 2>/dev/null
-    kill -CONT "$waiter" 2>/dev/null
     pending=yes
+    vm_signal STOP || { pending=no; echo "bed-shm: death: QEMU not stopped: $keep_why" >&2; }
+    keep_signal "$waiter" CONT || echo "bed-shm: death: the probe not continued: $keep_why" >&2
     fences_pending || pending=no
     alive=no
     ! keep_running "$load" || alive=yes
@@ -1631,7 +1752,7 @@ desk_rows()
     # Take a second copy at QEMU's exit, before gpu.sh finishes the handoff
     # or the surviving compositor fills the log and init truncates it.
     left=10
-    while [ "$left" -gt 0 ] && kill -0 "$qemu" 2>/dev/null; do
+    while [ "$left" -gt 0 ] && vm_alive; do
         sleep 1
         left=$((left - 1))
     done
@@ -1648,20 +1769,19 @@ desk_rows()
         sleep 1
         left=$((left - 1))
     done
-    # udevadm ends on SIGTERM with 0, or 143 when the signal comes first.
-    # A monitor still running 100 tries after TERM is left to cleanup,
-    # which kills it.
+    # udevadm ends on SIGTERM, which its keeper sends, with 0, or 143 when
+    # the signal comes first. A keeper not done 40 s after its stop is left
+    # to cleanup.
     stopped=no
-    ! kill "$umon" 2>/dev/null || stopped=yes
-    ustatus=0
-    if gone 100 "$umon"; then
-        wait "$umon" 2>/dev/null || ustatus=$?
+    ! keep_running "$umon" || stopped=yes
+    if keep_end "$umon"; then
+        ustatus=$keep_status
         umon=''
     else
         ustatus=running
         case $monitor in
-            listening) monitor="still running 10 s after TERM: $(holding "$umon")" ;;
-            *) monitor="$monitor; still running 10 s after TERM: $(holding "$umon")" ;;
+            listening) monitor="still running: $keep_left" ;;
+            *) monitor="$monitor; still running: $keep_left" ;;
         esac
     fi
     [ "$monitor" != listening ] ||
@@ -1674,7 +1794,7 @@ desk_rows()
     elif [ "$alive" = no ]; then
         ended="ended before the death"
     else
-        ended="ended with status $(sed -n 's/^ended //p' "$out/keep-$load.status" | head -n 1)"
+        ended="ended with status $(keep_ended "$load")"
     fi
     # Counted once the load has ended, or once it went silent.
     spun=$(refused)
