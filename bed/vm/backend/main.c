@@ -496,6 +496,11 @@ static void write_profile(const struct vd_profile *p, const char *path)
         fprintf(fp, "%llu %llu %llu %llu\n", (unsigned long long)p->crc_bytes,
                 (unsigned long long)p->read_ns, (unsigned long long)p->crc_ns,
                 (unsigned long long)p->log_ns);
+        fputs("ahead served turn known named room bad\n", fp);
+        for (i = 0; i < VD_AHEAD_N; i++) {
+            fprintf(fp, "%s%llu", i ? " " : "", (unsigned long long)p->ahead[i]);
+        }
+        fputc('\n', fp);
         if (fclose(fp) == 0 && rename(tmp, path) == 0) {
             free(tmp);
             return;

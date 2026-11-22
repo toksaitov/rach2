@@ -181,9 +181,25 @@ struct vd_profile_row {
     uint64_t count, bytes, copy_ns, execute_ns, answer_ns;
 };
 
+/* What the look-ahead did with each backing ask it consumed: served ahead,
+   found at its turn, or kept in order because it is fenced or its id is 0
+   or in the table, an earlier entry other than its unfenced create names
+   the id or there is no such create, the table lacks room, or an earlier
+   chain breaks the rules. */
+enum {
+    VD_AHEAD_SERVED,
+    VD_AHEAD_TURN,
+    VD_AHEAD_KNOWN,
+    VD_AHEAD_NAMED,
+    VD_AHEAD_ROOM,
+    VD_AHEAD_BAD,
+    VD_AHEAD_N
+};
+
 struct vd_profile {
     struct vd_profile_row row[VD_PROFILE_OTHER + 1];
     uint64_t crc_bytes, read_ns, crc_ns, log_ns;
+    uint64_t ahead[VD_AHEAD_N];
 };
 
 /* A device resource beside its table entry. */

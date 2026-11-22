@@ -1725,6 +1725,14 @@ static void ahead_read(struct vd *d, uint32_t head, struct vd_ahead *a)
     }
 }
 
+/** Count what the look-ahead did with a backing ask, under -T. */
+static void ahead_count(struct vd *d, unsigned what)
+{
+    if (d->profile) {
+        d->profile->ahead[what]++;
+    }
+}
+
 /**
  * Serve the backing ask at avail place `pos` ahead of its turn, with the
  * create it follows, when that cannot change what an earlier command sees:
@@ -1751,12 +1759,14 @@ static int ahead_backing(struct vd *d, uint16_t pos)
     int found = 0, err;
 
     if (id == 0 || (d->ahead[pos & mask].flags & VD_FLAG_FENCE) != 0 || find_res(d, id, 0)) {
+        ahead_count(d, VD_AHEAD_KNOWN);
         return VGS_OK;
     }
     for (at = d->last[VGS_QUEUE_CONTROL]; at != pos; at++) {
         const struct vd_ahead *a = &d->ahead[at & mask];
 
         if (a->bad) {
+            ahead_count(d, VD_AHEAD_BAD);
             return VGS_OK;
         }
         if (a->done) {
@@ -1770,14 +1780,17 @@ static int ahead_backing(struct vd *d, uint16_t pos)
         }
         if (found || (a->type != CMD_RESOURCE_CREATE_2D && a->type != CMD_RESOURCE_CREATE_3D) ||
             (a->flags & VD_FLAG_FENCE) != 0) {
+            ahead_count(d, VD_AHEAD_NAMED);
             return VGS_OK;
         }
         found = 1;
         create = at;
     }
     if (!found || used >= d->t.limits.max_resources) {
+        ahead_count(d, found ? VD_AHEAD_ROOM : VD_AHEAD_NAMED);
         return VGS_OK;
     }
+    ahead_count(d, VD_AHEAD_SERVED);
     if ((err = serve_chain(d, VGS_QUEUE_CONTROL, d->ahead[create & mask].head)) != VGS_OK) {
         return err;
     }
@@ -1810,8 +1823,9 @@ static int ahead(struct vd *d, uint16_t idx)
     for (; d->seen != idx && (uint16_t)(d->seen - last) < q->size; d->seen++) {
         a = &d->ahead[d->seen & (q->size - 1)];
         ahead_read(d, vgs_avail_head(d->base, q, d->seen), a);
-        if (a->type == VGS_CMD_BACKING && d->seen != last &&
-            (err = ahead_backing(d, d->seen)) != VGS_OK) {
+        if (a->type == VGS_CMD_BACKING && d->seen == last) {
+            ahead_count(d, VD_AHEAD_TURN);
+        } else if (a->type == VGS_CMD_BACKING && (err = ahead_backing(d, d->seen)) != VGS_OK) {
             return err;
         }
     }
