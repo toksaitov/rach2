@@ -17,10 +17,11 @@
 In the VM the backend runs as root, so that it can be the KMS device's master:
 
     LIBGL_ALWAYS_SOFTWARE=1 vgpu-backend [-m NODE | -V BDF | -f FILE] [-k CARD] [-g DEV]
-                                         [-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v]
+                                         [-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v] [-C] [-T FILE]
 
 * `-m NODE` takes the region and vectors from the module's node, `/dev/vgpushm0` by default; `-V BDF` from the ivshmem device at PCI address `BDF` bound to vfio-pci; `-f FILE` maps a file shared another way and polls.
-* `-k CARD` shows the scanout on the KMS device `CARD`; `-g DEV` names the DRM device virglrenderer allocates on through GBM, `CARD` by default. Without either, virglrenderer runs surfaceless and each flush prints its CRC.
+* `-k CARD` shows the scanout on the KMS device `CARD`; `-g DEV` names the DRM device virglrenderer allocates on through GBM, `CARD` by default. Without a KMS device the backend acknowledges each flush without reading pixels. `-C` enables diagnostic readback and a software CRC for each surfaceless flush.
+* `-T FILE` counts each control command's bytes and wall time in the region read, execution and answer. It also counts diagnostic flush bytes and time in the readback, CRC and log. SIGUSR1 writes a complete snapshot to `FILE` at the next turn of the serving loop. Execution time includes the diagnostic's time. The answer column measures immediate answer handling or the deferral to a fence, and the driver's counters measure the wait for a deferred answer.
 * `-d` scans a resource's own buffer out when it can; `-w` checks each frame through the device's writeback connector.
 * `-x` starts virglrenderer without Venus; `-I` imports each resource a Venus context takes into Vulkan and reports its CRC.
 * `-N` enables the DRM native-context renderer and its capset, using the matched library of [`../nctx/`](../nctx/Readme.md). It needs that library built with an i915 renderer and an i915 render node in the VM; without `-N` the backend offers no DRM capset, even when linked to that library.

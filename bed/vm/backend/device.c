@@ -5,11 +5,13 @@
  * It calls no library but libc, so that the fuzzer links it alone.
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
+#define _POSIX_C_SOURCE 200809L
 #define VGS_IMPLEMENTATION
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "vgpudev.h"
 
@@ -1240,6 +1242,34 @@ void vd_kick(struct vd *d)
     }
 }
 
+/** Read the VM's monotonic clock in nanoseconds. */
+uint64_t vd_profile_now(void)
+{
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000 + (uint64_t)t.tv_nsec;
+}
+
+/** Return the profiling row for a control command's type. */
+static struct vd_profile_row *profile_row(struct vd *d)
+{
+    uint32_t type, i = VD_PROFILE_OTHER;
+
+    memcpy(&type, d->cmd, sizeof(type));
+    if (type >= 0x100 && type < 0x110) {
+        i = type - 0x100;
+    } else if (type >= 0x200 && type < 0x210) {
+        i = 16 + type - 0x200;
+    } else if (type >= 0x300 && type < 0x310) {
+        i = 32 + type - 0x300;
+    } else if (type == VGS_CMD_BACKING) {
+        i = 48;
+    }
+    d->profile->row[i].type = i == VD_PROFILE_OTHER ? 0 : type;
+    return &d->profile->row[i];
+}
+
 /**
  * Serve one queue's available chains. Returns VGS_OK, or the transport
  * fault that puts the device in NEEDS_RESET.
@@ -1259,9 +1289,14 @@ static int serve(struct vd *d, uint32_t qi)
     while (d->last[qi] != idx) {
         uint32_t head = vgs_avail_head(d->base, q, d->last[qi]), i, off = 0, type, len;
         struct vgs_chain c;
+        struct vd_profile_row *row = NULL;
+        uint64_t start = 0, copied = 0, executed = 0;
 
         if ((err = vgs_chain_read(d->base, &d->l, q, &d->me.limits, head, &c)) != VGS_OK) {
             return err;
+        }
+        if (d->profile) {
+            start = vd_profile_now();
         }
         for (i = 0; i < c.nread; i++) {
             region_get(d, c.seg[i].addr, d->cmd + off, c.seg[i].len);
@@ -1285,8 +1320,22 @@ static int serve(struct vd *d, uint32_t qi)
             d->n.errors++;
             continue;
         }
+        if (d->profile) {
+            copied = vd_profile_now();
+            row = profile_row(d);
+        }
         len = execute(d, off, &type);
+        if (row) {
+            executed = vd_profile_now();
+        }
         answer(d, qi, head, &c, type, len);
+        if (row) {
+            row->count++;
+            row->bytes += off;
+            row->copy_ns += copied - start;
+            row->execute_ns += executed - copied;
+            row->answer_ns += vd_profile_now() - executed;
+        }
     }
     return VGS_OK;
 }

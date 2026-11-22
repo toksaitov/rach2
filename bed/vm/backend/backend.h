@@ -40,6 +40,7 @@ uint32_t vr_capsets(struct vr *r);
 int vr_read(struct vr *r, uint32_t id, const struct vd_rect *rect, void *dst, uint32_t stride);
 int vr_export(struct vr *r, uint32_t id, struct vr_export *e);
 void vr_set_kms(struct vr *r, struct kms *k);
+void vr_set_flush_crc(struct vr *r, int enabled);
 void vr_set_probe(struct vr *r, int probe);
 void vr_set_module(struct vr *r, int fd);
 const struct vr_pin_counts *vr_pin_counts(struct vr *r);

@@ -61,7 +61,8 @@ struct vr_fence {
 struct vr {
     struct vd *dev;
     struct kms *kms;
-    int gbm_fd; /* the DRM device virglrenderer's GBM allocates on, or -1 */
+    int flush_crc; /* read pixels at each surfaceless flush for diagnosis */
+    int gbm_fd;    /* the DRM device virglrenderer's GBM allocates on, or -1 */
     uint32_t capset[4];
     uint32_t ncapsets;
     uint32_t venus[VENUS_CTXS]; /* live Venus contexts' ids, 0 when free */
@@ -267,6 +268,12 @@ void vr_set_probe(struct vr *r, int probe)
 void vr_set_kms(struct vr *r, struct kms *k)
 {
     r->kms = k;
+}
+
+/** Enable the surfaceless flush's diagnostic readback. */
+void vr_set_flush_crc(struct vr *r, int enabled)
+{
+    r->flush_crc = enabled;
 }
 
 /** Map virglrenderer's errno results to virtio-gpu's responses. */
@@ -545,31 +552,54 @@ static int op_scanout(void *c, uint32_t scanout, uint32_t id, const struct vd_re
 }
 
 /**
- * Show a flushed resource: on the display, or, without one, report the
- * CRC-32 of its pixels in the flushed rectangle, read back, one line each.
+ * Update the display, or, in surfaceless mode, acknowledge the flush.
+ * The optional CRC diagnosis reads back the rectangle before answering.
  */
 static int op_flush(void *c, uint32_t scanout, uint32_t id, const struct vd_rect *rect)
 {
     struct vr *r = c;
+    struct vd_profile *profile = r->dev->profile;
     uint8_t *px;
+    uint64_t bytes, start = 0, read = 0, hashed = 0;
+    uint32_t crc;
     int err;
 
     (void)scanout;
     if (r->kms) {
         return kms_flush(r->kms, id, rect);
     }
+    if (!r->flush_crc) {
+        return 0;
+    }
     if (rect->width == 0 || rect->height == 0 || rect->width > 16384 || rect->height > 16384) {
         return VD_RESP_ERR_PARAMETER;
     }
-    px = malloc((size_t)rect->width * rect->height * 4);
+    bytes = (uint64_t)rect->width * rect->height * 4;
+    px = malloc((size_t)bytes);
     if (px == 0) {
         return VD_RESP_ERR_OUT_OF_MEMORY;
     }
+    if (profile) {
+        start = vd_profile_now();
+    }
     err = vr_read(r, id, rect, px, rect->width * 4);
+    if (profile) {
+        read = vd_profile_now();
+        profile->read_ns += read - start;
+    }
     if (err == 0) {
+        crc = crc32_bytes(px, bytes);
+        if (profile) {
+            hashed = vd_profile_now();
+            profile->crc_bytes += bytes;
+            profile->crc_ns += hashed - read;
+        }
         fprintf(stderr, "backend: flush: resource %u, %ux%u at %u,%u, crc %08x\n", (unsigned)id,
                 (unsigned)rect->width, (unsigned)rect->height, (unsigned)rect->x, (unsigned)rect->y,
-                (unsigned)crc32_bytes(px, (uint64_t)rect->width * rect->height * 4));
+                (unsigned)crc);
+        if (profile) {
+            profile->log_ns += vd_profile_now() - hashed;
+        }
     }
     free(px);
     return err;

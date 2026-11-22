@@ -40,12 +40,16 @@ struct src {
 };
 
 static volatile sig_atomic_t stop;
+static volatile sig_atomic_t snapshot;
 
-/** Note SIGINT or SIGTERM; the loop ends at its next turn. */
+/** Defer a stop or a statistics snapshot to the serving loop. */
 static void on_signal(int sig)
 {
-    (void)sig;
-    stop = 1;
+    if (sig == SIGUSR1) {
+        snapshot = 1;
+    } else {
+        stop = 1;
+    }
 }
 
 /** Print a message and exit with status 1. */
@@ -251,7 +255,8 @@ static void ring(void *cookie, uint32_t peer, uint32_t vector)
 /* The options. */
 struct opts {
     const char *module, *vfio, *file, *card, *gbm;
-    int direct, writeback, venus, probe, once, verbose, nopages, native;
+    const char *profile;
+    int direct, writeback, venus, probe, once, verbose, nopages, native, flush_crc;
     long peer;
 };
 
@@ -259,7 +264,7 @@ struct opts {
 static void usage(void)
 {
     fprintf(stderr, "usage: vgpu-backend [-m NODE | -V BDF | -f FILE] [-k CARD] [-g DEV] "
-                    "[-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v]\n");
+                    "[-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v] [-C] [-T FILE]\n");
     exit(2);
 }
 
@@ -272,7 +277,7 @@ static void options(int argc, char **argv, struct opts *o)
     o->module = "/dev/vgpushm0";
     o->venus = 1;
     o->peer = -1;
-    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxINPp:1v")) != -1) {
+    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxINPp:1vCT:")) != -1) {
         switch (c) {
         case 'm':
             o->module = optarg;
@@ -315,6 +320,12 @@ static void options(int argc, char **argv, struct opts *o)
             break;
         case 'v':
             o->verbose = 1;
+            break;
+        case 'C':
+            o->flush_crc = 1;
+            break;
+        case 'T':
+            o->profile = optarg;
             break;
         default:
             usage();
@@ -443,6 +454,50 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
     *next = t + STALL_AGAIN_S;
 }
 
+/** Replace path with a complete snapshot from the serving thread. */
+static void write_profile(const struct vd_profile *p, const char *path)
+{
+    char *tmp;
+    unsigned i;
+    int fd;
+    FILE *fp;
+
+    if (asprintf(&tmp, "%s.XXXXXX", path) < 0) {
+        return;
+    }
+    fd = mkstemp(tmp);
+    fp = fd < 0 ? NULL : fdopen(fd, "w");
+    if (fp) {
+        fprintf(fp, "monotonic_ns %llu\n", (unsigned long long)vd_profile_now());
+        fputs("type count bytes copy_ns execute_ns answer_ns\n", fp);
+        for (i = 0; i <= VD_PROFILE_OTHER; i++) {
+            const struct vd_profile_row *row = &p->row[i];
+
+            if (row->count) {
+                fprintf(fp, "%u %llu %llu %llu %llu %llu\n", row->type,
+                        (unsigned long long)row->count, (unsigned long long)row->bytes,
+                        (unsigned long long)row->copy_ns, (unsigned long long)row->execute_ns,
+                        (unsigned long long)row->answer_ns);
+            }
+        }
+        fputs("crc bytes read_ns crc_ns log_ns\n", fp);
+        fprintf(fp, "%llu %llu %llu %llu\n", (unsigned long long)p->crc_bytes,
+                (unsigned long long)p->read_ns, (unsigned long long)p->crc_ns,
+                (unsigned long long)p->log_ns);
+        if (fclose(fp) == 0 && rename(tmp, path) == 0) {
+            free(tmp);
+            return;
+        }
+    } else if (fd >= 0) {
+        close(fd);
+    }
+    fprintf(stderr, "backend: profile: %s: %s\n", path, strerror(errno));
+    if (fd >= 0) {
+        unlink(tmp);
+    }
+    free(tmp);
+}
+
 /**
  * Serve the device until the driver detaches with -1, or a signal: step
  * until idle, then wait on the doorbells and virglrenderer's fences. A
@@ -451,7 +506,7 @@ static void fence_watch(struct vd *d, struct src *s, struct vr *r, uint64_t *see
  * counts as polled. Each turn beats for the stall report's watch, and a
  * fenced command that waits too long is reported (`fence_watch`).
  */
-static void serve(struct vd *d, struct src *s, struct vr *r, int once)
+static void serve(struct vd *d, struct src *s, struct vr *r, int once, const char *profile)
 {
     struct pollfd p[VECTORS + 1];
     int i, ret = VD_IDLE, rung = 1, timeout;
@@ -467,6 +522,10 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once)
     while (!stop) {
         int steps = 0;
 
+        if (snapshot) {
+            snapshot = 0;
+            write_profile(d->profile, profile);
+        }
         stall_beat("step");
         while ((ret = vd_step(d)) == VD_WORKED && steps++ < 64) {
             if (!rung && d->me.state == VGS_DEV_RUNNING) {
@@ -510,6 +569,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once)
 int main(int argc, char **argv)
 {
     static struct vd dev;
+    static struct vd_profile profile;
     struct src s = {0, 0, ~0u, {-1, -1}, -1, -1, 0, {0, 0}, 0};
     struct vd_offer off;
     struct opts o;
@@ -520,6 +580,9 @@ int main(int argc, char **argv)
     options(argc, argv, &o);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    if (o.profile) {
+        signal(SIGUSR1, on_signal);
+    }
     if (o.vfio) {
         open_vfio(&s, o.vfio);
     } else if (o.file) {
@@ -544,6 +607,7 @@ int main(int argc, char **argv)
         return 1;
     }
     vr_set_kms(r, k);
+    vr_set_flush_crc(r, o.flush_crc);
     vr_set_probe(r, o.probe);
     vr_set_module(r, s.dev);
     make_offer(&off, &s, &o, r, k && kms_edid(k, dev.resp, &(uint32_t){0}) == 0);
@@ -553,6 +617,7 @@ int main(int argc, char **argv)
     dev.ring = ring;
     dev.ring_cookie = &s;
     dev.verbose = o.verbose;
+    dev.profile = o.profile ? &profile : NULL;
     fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s%s, %u capsets, %s\n",
             (unsigned long long)s.size, (unsigned)off.peer,
             off.transport_features ? "doorbells" : "polling",
@@ -560,7 +625,7 @@ int main(int argc, char **argv)
             off.transport_features & VGS_TF_BACKING ? ", backings" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
     stall_start(&dev);
-    serve(&dev, &s, r, o.once);
+    serve(&dev, &s, r, o.once, o.profile);
     report(&dev, &s, r, k);
     kms_close(k);
     vd_fini(&dev);

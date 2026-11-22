@@ -169,6 +169,18 @@ struct vd_counts {
     uint64_t backs;        /* page lists of backings answered */
 };
 
+/* Command totals in the serving thread. Times are monotonic nanoseconds. */
+#define VD_PROFILE_OTHER 49u
+struct vd_profile_row {
+    uint32_t type;
+    uint64_t count, bytes, copy_ns, execute_ns, answer_ns;
+};
+
+struct vd_profile {
+    struct vd_profile_row row[VD_PROFILE_OTHER + 1];
+    uint64_t crc_bytes, read_ns, crc_ns, log_ns;
+};
+
 /* A device resource beside its table entry. */
 struct vd_res {
     struct iovec *iov; /* its backing in the region, or 0 */
@@ -222,6 +234,7 @@ struct vd {
     void *ring_cookie;
     int verbose;
     struct vd_counts n;
+    struct vd_profile *profile; /* set by the caller after vd_init, or NULL */
 };
 
 int vd_init(struct vd *d, volatile void *base, uint64_t size, const struct vd_offer *offer,
@@ -230,6 +243,7 @@ void vd_fini(struct vd *d);
 int vd_step(struct vd *d);
 void vd_fence_retired(struct vd *d, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id);
 void vd_kick(struct vd *d);
+uint64_t vd_profile_now(void);
 
 /* vd_step's results. */
 #define VD_IDLE   0 /* nothing changed */
