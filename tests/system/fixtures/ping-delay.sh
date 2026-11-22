@@ -10,19 +10,26 @@ if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then
 fi
 
 scratch=${TMPDIR:-build/tmp}
-mkdir -p "$scratch"
+if [ ! -d "$scratch" ]; then
+    echo "ping-delay: $scratch: no such directory" >&2
+    exit 2
+fi
 # The inner shell is PID 1 of a PID namespace whose /proc is its own, in user,
 # network and mount namespaces of its own, and runs every responder, tracer
 # and ping. When it exits, the kernel kills what is left in the namespace;
 # when unshare is killed, --kill-child kills the inner shell. unshare ignores
-# INT and TERM, so a stalled row is cancelled with KILL, or with the
-# terminal's INT, which reaches the inner shell's trap. The scratch is a
-# private tmpfs mounted over the scratch root, which goes with the namespace
+# INT and TERM and forwards neither, so this shell stays to take HUP, INT and
+# TERM and cancels the run by killing unshare. The scratch is a private tmpfs
+# mounted over the existing scratch root, which goes with the namespace
 # however it ends. BusyBox is open on descriptor 3 before the mount, which
 # may hide its path.
 exec 3< "$1"
-exec unshare --user --map-root-user --net --pid --fork --kill-child=KILL \
-    --mount-proc sh -eu -s -- "$scratch" <<'EOF'
+inner=
+cancelled=
+trap 'cancelled=1; [ -z "$inner" ] || kill -s KILL "$inner" 2>/dev/null || :' \
+    HUP INT TERM
+unshare --user --map-root-user --net --pid --fork --kill-child=KILL \
+    --mount-proc sh -eu -s -- "$scratch" <<'EOF' &
 scratch=$1
 work=
 trap 'kill -9 -1 2>/dev/null || :; wait || :; [ -z "$work" ] || rm -rf "$work"' EXIT
@@ -174,9 +181,9 @@ for address in 127.0.0.1 ::1; do
             }
             inject=
             trace_ping 2 "$socket" -q "$@" -c 2 -W 0 "$address"
-            if [ "$status" -eq 125 ]; then
-                kill -s KILL "$answer" 2>/dev/null || :
-            fi
+            # A ping that ended before two distinct requests leaves the
+            # responder in recvfrom.
+            kill -s KILL "$answer" 2>/dev/null || :
             wait "$answer" 2>/dev/null || :
             verdict "$address $socket $mode" 0 2 \
                 '2 packets transmitted, 2 packets received, 0% packet loss'
@@ -208,3 +215,16 @@ for address in 127.0.0.1 ::1; do
 done
 exit "$failed"
 EOF
+inner=$!
+exec 3<&-
+# A signal that came before $! was read finds inner empty; kill unshare now.
+[ -z "$cancelled" ] || kill -s KILL "$inner" 2>/dev/null || :
+# wait returns early when a trapped signal arrives; wait again to reap.
+status=0
+wait "$inner" || status=$?
+[ -z "$cancelled" ] || { wait "$inner" 2>/dev/null || :; }
+if [ -n "$cancelled" ]; then
+    echo 'ping-delay: cancelled' >&2
+    exit 1
+fi
+exit "$status"
