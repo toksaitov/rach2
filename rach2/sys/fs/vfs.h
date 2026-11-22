@@ -661,8 +661,8 @@ struct vfs_mount {
      * namespace while another sees the mount too changes only the
      * remounting namespace's entry here, which `vfs_mount_flags` answers
      * through that namespace's view in place of the mount's own. An entry
-     * is keyed by the view, the namespace's inode number, which is never
-     * given again, and outlives an unmount in its namespace and the
+     * is keyed by the view, the namespace's inode number (`vfs_mntns_view`),
+     * and outlives an unmount in its namespace and the
      * namespace itself while a description opened through it is open, as
      * Linux's file keeps its copy of the mount. An entry is let go of only
      * with the record, so that a reader without the big lock may walk the
@@ -971,8 +971,9 @@ void vfs_mount_view_free(struct vfs_mount *m);
 
 /** The caller's view of the mounts: the inode number of its mount
  * namespace, the first's when no process runs, or what `vfs_view_enter`
- * set. A namespace's inode number is never given again, so a view names
- * one namespace for the kernel's life. */
+ * set. Inode numbers come from a counter that only grows (proc/ns.c), so a
+ * view names one namespace until the counter wraps, after some 268 million
+ * namespaces. */
 uint32_t vfs_mntns_view(void);
 
 /** Judge the calling thread's mount flags by the view `view` until
