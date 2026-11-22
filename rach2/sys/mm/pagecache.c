@@ -181,15 +181,11 @@ static uint32_t pc_fs_size;             /* backed size; 0 means no backing */
 static pc_read_fn pc_read;
 static pc_write_fn pc_write;
 static pc_flush_fn pc_flush; /* NULL: each write is on the medium */
-/* The backing's writes that have ended, which wraps, and the count when the
- * last flush that succeeded began: while the two differ, a write may wait
- * in the disk's cache, and `pc_sync` flushes. A write is counted only once
- * it has ended, so that a flush begun while it is in flight, which need not
- * cover it, is not taken for its flush. */
-static uint32_t pc_writes_sent;
-static uint32_t pc_writes_flushed;
-static void (*pc_failed)(int rc); /* told of each failed write, or NULL */
-/* The last failed write's answer while `pc_failed` is NULL, 0 for none,
+/* A completed write or failed flush needs a flush. */
+static int pc_flush_pending;
+static uint32_t pc_flushing;      /* backing flush calls in flight */
+static void (*pc_failed)(int rc); /* told of each failed write or flush, or NULL */
+/* The last write or flush error while `pc_failed` is NULL, 0 for none,
  * given to the hook when it is installed: the boot writes the root before
  * the file system that records it exists (`pc_on_failure`). */
 static int pc_unclaimed;
@@ -511,9 +507,9 @@ static uint32_t pc_gather(struct pc_entry *e, struct pc_entry **run, uint32_t pa
  *
  * The dirty pages beside it on the backing go in the same write, up to
  * PC_RUN_PAGES (`pc_gather`), as Linux's writeback puts a file's contiguous
- * dirty pages in one bio (mm/page-writeback.c, `write_cache_pages`), so
- * that the run costs the disk one command. The write leaves the run in the
- * disk's cache, and the next `pc_sync` flushes it. A run of more than one
+ * dirty pages in one bio (mm/page-writeback.c, `write_cache_pages`). The
+ * backing may split the run into several commands. The write can leave
+ * the run in the disk's cache for `pc_sync` to flush. A run of more than one
  * page is copied into `pc_run_buf` while no other writeback has it, and a
  * page alone is written from its frame.
  *
@@ -568,7 +564,7 @@ static int pc_writeback(struct pc_entry *e, uint32_t pass)
         from = pc_run_buf;
     }
     rc = pc_write(run[0]->disk_off, from, n);
-    ++pc_writes_sent; /* once it has ended, failed too: a part may be cached */
+    pc_flush_pending = 1; /* a failed write may also have cached some sectors */
     if (copied) {
         pc_run_busy = 0;
     }
@@ -961,23 +957,27 @@ uint32_t pc_balance_dirty(void)
 }
 
 /**
- * Flush the backing when a write may wait in the disk's cache: one that
- * ended since the last flush that succeeded began. The count is read before the
- * flush, so a write that ends during it is left for the next. 0, or -1 when
- * the flush failed, which is told to the failure hook as a failed write is;
- * the pages it covered stay clean, as Linux's are after a failed flush,
- * whose error the next fsync reports.
+ * Flush the backing if a write may still be in its cache. Clear the pending
+ * mark at the start, so a write that ends during the flush sets it for a
+ * later pass. Each overlapping caller issues its own flush, since the one
+ * in flight may fail. The big lock protects the bookkeeping and may be let
+ * go inside the backing call. Returns 0, or -1 on failure, which restores
+ * the mark and tells the failure hook without changing the pages' dirty
+ * marks.
  */
-static int pc_flush_sent(void)
+static int pc_flush_backing(void)
 {
-    uint32_t sent = pc_writes_sent;
     int rc;
 
-    if (!pc_flush || sent == pc_writes_flushed) {
+    if (!pc_flush || (!pc_flush_pending && !pc_flushing)) {
         return 0;
     }
+    pc_flush_pending = 0;
+    ++pc_flushing;
     rc = pc_flush();
+    --pc_flushing;
     if (rc != 0) {
+        pc_flush_pending = 1;
         klog(KLOG_ERR, "pagecache", "flush failed (%d); the writes before it may be lost", rc);
         if (pc_failed) {
             pc_failed(rc);
@@ -986,7 +986,6 @@ static int pc_flush_sent(void)
         }
         return -1;
     }
-    pc_writes_flushed = sent;
     return 0;
 }
 
@@ -1018,7 +1017,7 @@ int pc_sync(void)
             result |= PC_SYNC_FAILED;
         }
     }
-    if (pc_flush_sent() != 0) {
+    if (pc_flush_backing() != 0) {
         result |= PC_SYNC_FAILED;
     }
     return result;
@@ -1057,7 +1056,7 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, pc_flush_fn flush, uint3
     pc_read = read;
     pc_write = write;
     pc_flush = flush;
-    pc_writes_flushed = pc_writes_sent;
+    pc_flush_pending = 0;
     pc_unclaimed = 0;
     if (fs_size > pc_window_span) {
         fs_size = pc_window_span;

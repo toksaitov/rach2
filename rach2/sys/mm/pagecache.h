@@ -29,10 +29,9 @@
 #define PC_SLOTS 4096u
 #endif
 
-/* The most pages one writeback puts in one write of the backing: the page
- * and the dirty pages beside it on the backing, so that a disk moves the run
- * in one command. 32 pages are 128 KiB, a quarter of the most one ATA or
- * AHCI write takes. */
+/* The most pages that one backing write takes: the page being written and
+ * the dirty pages beside it on the backing. A driver may split the 128 KiB
+ * run into several commands. */
 #define PC_RUN_PAGES 32u
 
 /*
@@ -78,7 +77,8 @@ uint32_t pc_resident(void);
  * Point the cache at a backing store of `fs_size` bytes and start it again
  * empty. This is a remount: every page a previous backing had is dropped
  * without a writeback, its frame kept by its slot, so a caller whose
- * previous backing had dirty pages calls `pc_sync` first. `flush` may be
+ * previous backing has dirty pages or unflushed writes calls `pc_sync`
+ * first. The cache must have no I/O in flight. `flush` may be
  * NULL, for a backing whose writes need none. NULL functions and a size of
  * 0 take the backing away. `fs_size` is clamped to `pc_window_size()` and
  * rounded up to a whole page; a window fault at or past that bound is a
@@ -88,15 +88,11 @@ uint32_t pc_resident(void);
 void pc_set_backing(pc_read_fn read, pc_write_fn write, pc_flush_fn flush, uint32_t fs_size);
 
 /**
- * Have `failed` called with what the backing's write answered for each
- * write of a page that fails, whoever wrote it, a sync, the flusher or an
- * eviction, so that the file system the window holds records the failure
- * for its syncs to report: the page stays dirty, and a later write of it
- * that succeeds would otherwise hide the failure. `failed` may be called
- * with interrupts off, from a page fault; NULL calls nothing. A write that
- * fails before a hook is installed, such as the boot's write of the root's
- * orphan repair before the root is mounted, is held, the last one's answer,
- * and `failed` is called with it here, so that the root's syncs report it.
+ * Have `failed` called with each backing write or flush error so that the
+ * file system can report it on sync. A failed write leaves its pages dirty
+ * and a failed flush leaves another flush due. `failed` may be called with
+ * interrupts off, from a page fault. NULL calls nothing. The last error
+ * before a hook is installed is held and passed to `failed` here.
  */
 void pc_on_failure(void (*failed)(int rc));
 
@@ -146,10 +142,10 @@ int pc_copy_in_checked(uint32_t off, const void *buf, uint32_t size, int (*halte
 
 /**
  * Write the dirty resident pages to the backing store, for sync and fsync,
- * and then flush the backing once, when any write since the last flush that
- * succeeded, this pass's, the flusher's or an eviction's, may be in the
- * disk's cache: so a sync that returns 0 leaves every write that ended
- * before it on the medium, with one flush however many runs it wrote.
+ * then flush the backing at most once. Flush when a completed write may
+ * still be in the device's cache or another flush is in flight. A flush
+ * covers writes completed before it began. Writes completed during it
+ * are left pending for another pass.
  *
  * Each page is pinned and mapped read-only before its write, so a store
  * meanwhile marks it dirty again for a later write. Returns 0, or the OR of
@@ -159,7 +155,8 @@ int pc_copy_in_checked(uint32_t off, const void *buf, uint32_t size, int (*halte
  * Both bits can be set, so a failure cannot hide a busy slot from a caller
  * that waits for the writes in flight. A pinned slot passed is marked, so
  * that its release is counted (`pc_releases`) and wakes the syncs that wait
- * for it. The backing's writes and its flush may sleep.
+ * for it. The caller holds the big lock. The backing's writes and its flush
+ * may sleep.
  */
 int pc_sync(void);
 
