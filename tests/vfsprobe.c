@@ -1615,7 +1615,7 @@ static void keep_undo(void)
  * row expects, or 100 and the errno, 99 for another answer. */
 static int keep_call(int how)
 {
-    char cwd[16];
+    char cwd[16] = {0};
     int rc;
 
     switch (how) {
