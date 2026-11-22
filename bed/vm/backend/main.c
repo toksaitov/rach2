@@ -43,8 +43,8 @@ struct src {
 static volatile sig_atomic_t stop;
 static volatile sig_atomic_t snapshot;
 
-/** Defer a stop or a statistics snapshot to the serving loop, or have it
- * hold the next new backing (vr_hold). */
+/** Defer a stop or a statistics snapshot to the serving loop, or, under
+ * -H, have it hold the next new backing (vr_hold). */
 static void on_signal(int sig)
 {
     if (sig == SIGUSR1) {
@@ -260,7 +260,7 @@ static void ring(void *cookie, uint32_t peer, uint32_t vector)
 struct opts {
     const char *module, *vfio, *file, *card, *gbm;
     const char *profile;
-    int direct, writeback, venus, probe, once, verbose, nopages, native, flush_crc;
+    int direct, writeback, venus, probe, once, verbose, nopages, native, flush_crc, hold;
     long peer;
 };
 
@@ -268,7 +268,7 @@ struct opts {
 static void usage(void)
 {
     fprintf(stderr, "usage: vgpu-backend [-m NODE | -V BDF | -f FILE] [-k CARD] [-g DEV] "
-                    "[-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v] [-C] [-T FILE]\n");
+                    "[-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v] [-C] [-H] [-T FILE]\n");
     exit(2);
 }
 
@@ -281,7 +281,7 @@ static void options(int argc, char **argv, struct opts *o)
     o->module = "/dev/vgpushm0";
     o->venus = 1;
     o->peer = -1;
-    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxINPp:1vCT:")) != -1) {
+    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxINPp:1vCHT:")) != -1) {
         switch (c) {
         case 'm':
             o->module = optarg;
@@ -327,6 +327,9 @@ static void options(int argc, char **argv, struct opts *o)
             break;
         case 'C':
             o->flush_crc = 1;
+            break;
+        case 'H':
+            o->hold = 1;
             break;
         case 'T':
             o->profile = optarg;
@@ -502,15 +505,35 @@ static void write_profile(const struct vd_profile *p, const char *path)
     free(tmp);
 }
 
-/** Move d's heartbeat every VGS_BEAT_MS, for as long as the process runs. */
+/* The heartbeat's thread, which beat_stop ends under the lock. */
+struct beater {
+    struct vd *d;
+    pthread_t t;
+    pthread_mutex_t lock;
+    pthread_cond_t wake;
+    int stop;
+};
+
+/** Move the heartbeat every VGS_BEAT_MS by the monotonic clock, until
+ * beat_stop. */
 static void *beat(void *arg)
 {
-    struct timespec t = {VGS_BEAT_MS / 1000, (long)(VGS_BEAT_MS % 1000) * 1000000};
+    struct beater *b = arg;
+    struct timespec at;
 
-    for (;;) {
-        nanosleep(&t, 0);
-        vd_beat(arg);
+    clock_gettime(CLOCK_MONOTONIC, &at);
+    pthread_mutex_lock(&b->lock);
+    while (!b->stop) {
+        at.tv_nsec += (long)(VGS_BEAT_MS % 1000) * 1000000;
+        at.tv_sec += VGS_BEAT_MS / 1000 + at.tv_nsec / 1000000000;
+        at.tv_nsec %= 1000000000;
+        while (!b->stop && pthread_cond_timedwait(&b->wake, &b->lock, &at) != ETIMEDOUT) {
+        }
+        if (!b->stop) {
+            vd_beat(b->d);
+        }
     }
+    pthread_mutex_unlock(&b->lock);
     return 0;
 }
 
@@ -519,21 +542,40 @@ static void *beat(void *arg)
  * watches (`vd_beat`). It is a thread of its own, with every signal
  * blocked, so that the count stops only when the whole process stops,
  * as SIGSTOP stops every thread, or dies, which the module reports at
- * once; a serving thread busy in one long command, a pin or a renderer's
- * call, leaves it beating, and its answer still comes.
+ * once, or when serving ends (beat_stop); a serving thread busy in one
+ * long command, a pin or a renderer's call, leaves it beating, and its
+ * answer still comes.
  */
-static void beat_start(struct vd *d)
+static void beat_start(struct beater *b, struct vd *d)
 {
-    pthread_t t;
+    pthread_condattr_t ca;
     sigset_t all, old;
 
+    b->d = d;
+    b->stop = 0;
+    pthread_mutex_init(&b->lock, 0);
+    pthread_condattr_init(&ca);
+    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+    pthread_cond_init(&b->wake, &ca);
+    pthread_condattr_destroy(&ca);
     sigfillset(&all);
     pthread_sigmask(SIG_SETMASK, &all, &old);
-    if (pthread_create(&t, 0, beat, d) != 0) {
+    if (pthread_create(&b->t, 0, beat, b) != 0) {
         die("cannot start the heartbeat's thread", 0);
     }
-    pthread_detach(t);
     pthread_sigmask(SIG_SETMASK, &old, 0);
+}
+
+/** Stop the heartbeat and wait for its thread, so that no beat follows the
+ * serving loop's end and the driver, waiting on no one, sees the count
+ * stand still while the backend reports and cleans up. */
+static void beat_stop(struct beater *b)
+{
+    pthread_mutex_lock(&b->lock);
+    b->stop = 1;
+    pthread_cond_signal(&b->wake);
+    pthread_mutex_unlock(&b->lock);
+    pthread_join(b->t, 0);
 }
 
 /**
@@ -608,6 +650,7 @@ int main(int argc, char **argv)
 {
     static struct vd dev;
     static struct vd_profile profile;
+    static struct beater beater;
     struct src s = {0, 0, ~0u, {-1, -1}, -1, -1, 0, {0, 0}, 0};
     struct vd_offer off;
     struct opts o;
@@ -618,7 +661,9 @@ int main(int argc, char **argv)
     options(argc, argv, &o);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
-    signal(SIGUSR2, on_signal);
+    if (o.hold) {
+        signal(SIGUSR2, on_signal);
+    }
     if (o.profile) {
         signal(SIGUSR1, on_signal);
     }
@@ -664,8 +709,9 @@ int main(int argc, char **argv)
             off.transport_features & VGS_TF_BACKING ? ", backings" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
     stall_start(&dev);
-    beat_start(&dev);
+    beat_start(&beater, &dev);
     serve(&dev, &s, r, o.once, o.profile);
+    beat_stop(&beater);
     report(&dev, &s, r, k);
     kms_close(k);
     vd_fini(&dev);

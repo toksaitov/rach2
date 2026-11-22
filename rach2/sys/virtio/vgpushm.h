@@ -61,7 +61,9 @@
  * With VGS_TF_BEAT accepted, the device adds 1 to its block's heartbeat
  * every VGS_BEAT_MS, from a thread apart from the one that serves the
  * queues, so that the count stops only when the device's process stops or
- * dies, and a command that takes long, however long, is still waited for.
+ * dies, or when it stops serving, and a command that takes long, however
+ * long, is still waited for. That thread is the word's only writer: the
+ * write of an epoch's offer leaves it out.
  * A driver that sees the count stand still for VGS_BEAT_LOST_MS takes the
  * device for gone, as it takes one that stores NEEDS_RESET: a device whose
  * process has stopped answers nothing and rings no doorbell to say so.

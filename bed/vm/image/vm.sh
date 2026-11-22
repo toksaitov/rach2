@@ -501,7 +501,11 @@ for d in /sys/bus/pci/devices/*; do
     break
 done
 [ -z "$soft" ] || export LIBGL_ALWAYS_SOFTWARE=1
-/usr/local/sbin/vgpu-backend -v 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
+# The second serial port, which only Rach2's test of the backend's loss
+# gives the VM, arms the hold that its row of a long command asks for.
+hold=''
+! stty -F /dev/ttyS1 > /dev/null 2>&1 || hold=-H
+/usr/local/sbin/vgpu-backend -v $hold 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
 RUN
 sudo chmod 755 /usr/local/sbin/bed-vm-backend
 sudo tee /etc/systemd/system/bed-vm-backend.service > /dev/null <<'UNIT'
@@ -521,7 +525,8 @@ sudo tee /usr/local/sbin/bed-vm-control > /dev/null <<'RUN'
 # bed-vm-control: do to the backend each word a line of the VM's second
 # serial port, ttyS1, brings, as Rach2's test of the backend's loss writes
 # them: `stop`, `cont` and `kill` send it SIGSTOP, SIGCONT and SIGKILL,
-# `hold` sends it SIGUSR2, which has it hold the next new backing 45 s, and
+# `hold` sends it SIGUSR2, which has it hold the next new backing 45 s
+# under the -H that bed-vm-backend gives it when this port is there, and
 # `start` starts its service again. Each done is said on the console as
 # `bed-vm: control: WORD: done`. A VM without the port has nothing to do.
 stty -F /dev/ttyS1 raw -echo 2> /dev/null || exit 0
