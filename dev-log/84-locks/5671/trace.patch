@@ -1,0 +1,131 @@
+diff --git a/rach2/sys/arch/x86/isr.c b/rach2/sys/arch/x86/isr.c
+index fcc3e844a..f1529f82c 100644
+--- a/rach2/sys/arch/x86/isr.c
++++ b/rach2/sys/arch/x86/isr.c
+@@ -13,6 +13,7 @@
+ #include "lapic.h"
+ #include "../../klog.h"
+ #include "isr.h"
++#include "../../dbg5671.h"
+ #include "../../panic.h"
+ #include "../../serial.h"
+ #include "../../syscall.h"
+@@ -465,7 +466,14 @@ void isr_double_fault(void)
+     uint32_t cr2;
+     int pid;
+ 
++    dbg5671_c('D');
+     __asm__ __volatile__("mov %%cr2, %0" : "=r"(cr2));
++    dbg5671_x(cr2);
++    dbg5671_c(' ');
++    dbg5671_x(kernel_tss[0].eip);
++    dbg5671_c(' ');
++    dbg5671_x(kernel_tss[0].esp);
++    dbg5671_c('\n');
+     k_panic_begin();
+     klog_deliver_directly();
+     k_panic_note_fault("double fault", (uintptr_t)kernel_tss[arch_cpu_id()].eip, PANIC_NO_ERROR);
+@@ -988,6 +996,13 @@ void isr_syscall_at(isr_params_t *params, uint64_t start)
+  */
+ void _isr_router(isr_params_t *params)
+ {
++    if (dbg5671_on) {
++        dbg5671_c('E');
++        dbg5671_x(params->vector);
++        dbg5671_c(' ');
++        dbg5671_x(FRAME_PC(params));
++        dbg5671_c('\n');
++    }
+     if (params->vector == SYSCALL_ENTRY) {
+         isr_syscall(params);
+         return;
+@@ -1043,6 +1058,11 @@ int isr_call_entry(const process_t *p, uint32_t *cmd)
+  */
+ void isr_paranoid_router(isr_params_t *params)
+ {
++    if (dbg5671_on) {
++        dbg5671_c('N');
++        dbg5671_x(params->vector);
++        dbg5671_c('\n');
++    }
+     _dispatch(params);
+ }
+ 
+@@ -1348,9 +1368,22 @@ static void irq_leave_chain(struct percpu *cpu)
+     sched_irq_exit();
+ }
+ 
++static int dbg5671_irq(isr_params_t *params)
++{
++    if (dbg5671_on) {
++        dbg5671_c('I');
++        dbg5671_x(params->vector);
++        dbg5671_c(' ');
++        dbg5671_x(FRAME_PC(params));
++        dbg5671_c('\n');
++    }
++    return 0;
++}
++
+ void _irq_router(isr_params_t *params)
+ {
+-    int eoi_word_set = lapic_eoi_enter();
++    int dbg5671_dummy = dbg5671_irq(params);
++    int eoi_word_set = lapic_eoi_enter() + dbg5671_dummy;
+     struct percpu *cpu = this_cpu();
+     int timer = timer_vector(params->vector);
+     uint32_t wake_irq = timer ? waketime_clock() : 0;
+diff --git a/rach2/sys/dbg5671.h b/rach2/sys/dbg5671.h
+new file mode 100644
+index 000000000..91e7e4a3f
+--- /dev/null
++++ b/rach2/sys/dbg5671.h
+@@ -0,0 +1,16 @@
++/* dbg5671.h: a trace to QEMU's debug port, port 0xe9, for task 5671. */
++#ifndef DBG5671_H
++#define DBG5671_H
++extern volatile int dbg5671_on;
++static __inline__ void dbg5671_c(char c)
++{
++    __asm__ __volatile__("outb %0, %1" : : "a"(c), "Nd"((unsigned short)0xe9));
++}
++static __inline__ void dbg5671_x(unsigned long v)
++{
++    int i;
++    for (i = 28; i >= 0; i -= 4) {
++        dbg5671_c("0123456789abcdef"[(v >> i) & 15]);
++    }
++}
++#endif
+diff --git a/rach2/sys/syscall_proc.c b/rach2/sys/syscall_proc.c
+index c86bb5ad4..da1d5a9ca 100644
+--- a/rach2/sys/syscall_proc.c
++++ b/rach2/sys/syscall_proc.c
+@@ -84,6 +84,8 @@
+ #include "network/ip/icmp.h"
+ #include "network/net.h"
+ #include "cmdline.h" /* kcmdline_has, for the rach2.stackoverrun test switch */
++#include "dbg5671.h"
++volatile int dbg5671_on;
+ #include "mm/filemap.h"
+ #include "mm/mm.h"
+ #include "fs/tmpfs.h"
+@@ -177,6 +179,18 @@ static void kstack_overrun_run(void)
+ {
+     klog(KLOG_INFO, "kstack", "overrun: pid %d descends its stack at 0x%x", (int)current_proc->pid,
+          current_proc->kernel_stack - KERNEL_STACK_SIZE);
++    {
++        uint32_t esp, fl;
++        __asm__ __volatile__("mov %%esp, %0; pushf; pop %1" : "=r"(esp), "=r"(fl));
++        dbg5671_c('R');
++        dbg5671_x(esp);
++        dbg5671_c(' ');
++        dbg5671_x(fl);
++        dbg5671_c(' ');
++        dbg5671_x(paging_virt_to_phys(current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE));
++        dbg5671_c('\n');
++        dbg5671_on = 1;
++    }
+     kstack_descend(0);
+     k_panic("kstack: overrun: the descent came back");
+ }
