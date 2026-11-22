@@ -541,12 +541,16 @@ struct ns_common *nsfs_ns(const struct fd_entry *e);
 /* What the other subsystems do for their namespaces, defined with them. */
 
 /** Make the mount namespace of id `to` see every mount that of id `from`
- * sees: 0, or -ENOMEM, after which `to` sees none (fs/vfs_ns.c). */
-int vfs_mntns_copy(uint32_t from, uint32_t to);
+ * sees, with `from`'s own flags for each, which the views, the namespaces'
+ * inode numbers `from_view` and `to_view`, name: 0, or -ENOMEM, after which
+ * `to` sees none (fs/vfs_ns.c). */
+int vfs_mntns_copy(uint32_t from, uint32_t from_view, uint32_t to, uint32_t to_view);
 
-/** The end of the mount namespace of id `id`: unmount what it alone saw,
- * and take the id from every mount's view (fs/vfs_ns.c). */
-void vfs_mntns_gone(uint32_t id);
+/** The end of the mount namespace of id `id` and view, inode number,
+ * `view`: unmount what it alone saw, take the id from every mount's view,
+ * and mark its own flags for each as those of an ended namespace
+ * (fs/vfs_ns.c). */
+void vfs_mntns_gone(uint32_t id, uint32_t view);
 
 /** The user.max_mnt_namespaces of `ns`, as /proc/sys/user shows it to a
  * process of `ns`. */

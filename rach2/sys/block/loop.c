@@ -339,7 +339,9 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
 /**
  * Write whole sectors into the file and sync it, since the buffer cache
  * takes a written block to be on the device; `-EROFS` on a read-only
- * attachment, `-EIO` for a short write or a failed sync.
+ * attachment, `-EIO` for a short write or a failed sync. The attachment
+ * judged the mount writable, so only the file system's state refuses the
+ * write (VFS_VIEW_FS), whichever namespace the block I/O comes from.
  */
 static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -347,6 +349,7 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
     struct loop_file f;
     struct vfs_ref file;
+    uint32_t view;
     int32_t wrote;
     int big;
 
@@ -361,7 +364,9 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     file.mnt = f.mnt;
     file.node = f.node;
     vfs_node_lock(&file);
+    view = vfs_view_enter(VFS_VIEW_FS);
     wrote = vfs_write(f.mnt, f.handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    vfs_view_leave(view);
     if (wrote > 0) {
         filemap_disk_written(f.mnt, f.ino, lba * BLOCK_SECTOR_SIZE, buffer, (uint32_t)wrote);
     }

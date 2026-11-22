@@ -116,7 +116,7 @@ static void idmap_free(struct ns_idmap *m)
  * namespace made meanwhile cannot take, and its place in the list. */
 static void mntns_gone(struct mntns *m)
 {
-    vfs_mntns_gone(m->id);
+    vfs_mntns_gone(m->id, m->c.inum);
     idset_del(&mnt_ids, m->id);
     if (m->prev) {
         m->prev->next = m->next;
@@ -1164,7 +1164,8 @@ static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, u
         *err = -ENOMEM;
         return NULL;
     }
-    if (idset_add(&mnt_ids, id) != 0 || vfs_mntns_copy(from->id, id) != 0) {
+    if (idset_add(&mnt_ids, id) != 0 ||
+        vfs_mntns_copy(from->id, from->c.inum, id, ns->c.inum) != 0) {
         idset_del(&mnt_ids, id);
         ns_put(&owner->c);
         kfree(ns);

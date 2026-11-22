@@ -268,6 +268,9 @@ int vfs_sb_rdonly(const struct vfs_mount *m)
 
 int vfs_mount_rdonly(const struct vfs_mount *m)
 {
+    if (vfs_view_fs()) {
+        return vfs_sb_rdonly(m);
+    }
     return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
