@@ -551,6 +551,18 @@ struct vgpu_event {
     uint32_t kib;    /* a backing's size in KiB, else 0 */
 };
 
+/* The parts of a VIRTGPU_EXECBUFFER that succeeded, timed in order from
+ * its start: the reap, `vgpu_room`, the file's context, the command's
+ * allocation, the copy of the commands, the buffers' lookups and
+ * submit_copied, the dependencies (the in-fence, the syncobjs and the
+ * buffers' fences and backings), the out-fences (reservations, sync file
+ * and syncobjs) and the send. */
+#define VGPU_EXEC_PARTS 9
+
+/** Add the times between the VGPU_EXEC_PARTS + 1 monotonic `marks` of one
+ * VIRTGPU_EXECBUFFER to the device's. Takes vg->lock. */
+void vgpu_profile_exec(struct virtio_gpu_device *vg, const int64_t *marks);
+
 /** Record an event of `type` that began at monotonic `start` and ended now,
  * on the current thread, with `kib`; for a command sent, `start` is now.
  * Takes vg->lock; does not sleep. */
@@ -785,10 +797,12 @@ struct virtio_gpu_device {
     uint32_t commands; /* commands sent */
 #ifdef RACH2_VGPU_PROFILE
     struct vgpu_profile_row profile[VGPU_PROFILE_ROWS];
-    uint64_t notifies, notify_ns;   /* calls and wall time in virtqueue_kick */
-    struct vgpu_event *events;      /* VGPU_EVENTS of them, or NULL */
-    struct vgpu_event *events_copy; /* as many, the listing's copy, or NULL */
-    uint64_t events_total;          /* recorded since the last clear */
+    uint64_t notifies, notify_ns;      /* calls and wall time in virtqueue_kick */
+    uint64_t execs;                    /* VIRTGPU_EXECBUFFERs that succeeded */
+    uint64_t exec_ns[VGPU_EXEC_PARTS]; /* their parts' times, `vgpu_profile_exec` */
+    struct vgpu_event *events;         /* VGPU_EVENTS of them, or NULL */
+    struct vgpu_event *events_copy;    /* as many, the listing's copy, or NULL */
+    uint64_t events_total;             /* recorded since the last clear */
 #endif
 };
 
