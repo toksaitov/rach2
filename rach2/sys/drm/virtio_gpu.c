@@ -1928,6 +1928,20 @@ static int obj_unbacked(struct virtio_gpu_object *bo)
     return pending;
 }
 
+/** The error of `bo`'s deferred backing whose take failed (`back_err`),
+ * which keeps it from use; 0 for any other object, its backing not yet
+ * taken among them. Never sleeps, so that the display's checks may ask
+ * under the mode lock. */
+static int32_t obj_failed(struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_device *vg = to_vg(bo->shmem.base.dev);
+    uint32_t flags = spin_lock_irqsave(&vg->lock);
+    int32_t err = bo->back_err;
+
+    spin_unlock_irqrestore(&vg->lock, flags);
+    return err;
+}
+
 /** A mapping's page of an object: its frame, given on the first touch;
  * none past its end, or before a deferred backing is taken. An unplugged
  * device's objects keep their frames until each is freed, and a mapping
@@ -2526,17 +2540,40 @@ static struct virtio_gpu_output *crtc_output(struct drm_crtc *crtc)
 }
 
 /**
+ * ADDFB and ADDFB2's check of a framebuffer: EINVAL for an object whose
+ * deferred backing failed (`obj_failed`), whose resource the device may
+ * hold without the pages the object reaches; any other object, its backing
+ * not yet taken among them, may be shown, since the device answers its
+ * create and ask before the SET_SCANOUT that names it. Takes no backing,
+ * and so never waits.
+ */
+static int32_t vgpu_fb_create(struct drm_device *dev, struct drm_framebuffer *fb)
+{
+    struct virtio_gpu_object *bo = vgpu_bo(fb->obj[0]);
+
+    (void)dev;
+    return bo && obj_failed(bo) ? -EINVAL : 0;
+}
+
+/**
  * A plane's check, Linux's virtio_gpu_plane_atomic_check: a plane that
  * shows a framebuffer brings its CRTC into the commit and lies within it
- * unscaled, the primary plane covering it, the cursor anywhere.
+ * unscaled, the primary plane covering it, the cursor anywhere. EINVAL for
+ * a framebuffer whose object's deferred backing failed after it was made
+ * (`obj_failed`).
  */
 static int32_t vgpu_plane_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
     struct drm_plane_state *ps = drm_atomic_get_new_plane_state(state, plane);
     struct drm_crtc_state *cs;
+    struct virtio_gpu_object *bo;
 
     if (!ps->fb || !ps->crtc) {
         return 0;
+    }
+    bo = vgpu_bo(ps->fb->obj[0]);
+    if (bo && obj_failed(bo)) {
+        return -EINVAL;
     }
     cs = drm_atomic_get_crtc_state(state, ps->crtc);
     if (!cs) {
@@ -2836,8 +2873,9 @@ static int32_t output_init(struct virtio_gpu_device *vg, uint32_t i)
 
 /**
  * Give the device its display, Linux's virtio_gpu_modeset_init: sizes from
- * 32x32 to 8192x8192, DIRTYFB as damage, no modifiers, and an output for
- * each scanout. 0 or the core's error.
+ * 32x32 to 8192x8192, DIRTYFB as damage, no modifiers, framebuffers checked
+ * by `vgpu_fb_create`, and an output for each scanout. 0 or the core's
+ * error.
  */
 static int32_t modeset_init(struct virtio_gpu_device *vg)
 {
@@ -2854,6 +2892,7 @@ static int32_t modeset_init(struct virtio_gpu_device *vg)
     mc->max_height = YRES_MAX;
     mc->fb_dirty = 1;
     mc->fb_modifiers_not_supported = 1;
+    mc->fb_create = vgpu_fb_create;
     rc = drm_mode_config_init(&vg->drm);
     for (i = 0; rc == 0 && i < vg->num_scanouts; i++) {
         rc = output_init(vg, i);
