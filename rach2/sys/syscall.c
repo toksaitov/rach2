@@ -116,6 +116,12 @@
 
 #define TCFLSH 0x540B /* Flush input and/or output queues */
 
+#define TCSBRK 0x5409 /* Drain output; with 0, then send a break: tcdrain(3) */
+
+#define TCSBRKP 0x5425 /* Drain output, then send a break of arg tenths of a second */
+
+#define TIOCOUTQ 0x5411 /* Bytes of output the device has not taken */
+
 #define TCXONC 0x540A /* Stop or restart output or input: tcflow(3) */
 
 #define FIONREAD 0x541B /* Bytes available to read */
@@ -2342,12 +2348,19 @@ static int32_t tty_get_termios_at(const struct tty *t, uint32_t request, uintptr
  * the second is the start of a termios2 whose speeds are not kept. The
  * install runs with interrupts off, so an input interrupt never reads a
  * half-written termios; TCSETSF and TCSETSF2 also discard pending input.
+ * TCSETSW, TCSETSF and their termios2 forms first wait until the device
+ * has taken the output (`tty_wait_until_sent`), for the description opened
+ * at `*opened` vhangups, or NULL, as Linux's set_termios does: a signal
+ * ends the wait with -EINTR and installs nothing.
  */
-static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uintptr_t arg)
+static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uintptr_t arg,
+                                  const uint32_t *opened)
 {
     struct ktermios2 kt2;
     int two = request == TCSETS2 || request == TCSETSW2 || request == TCSETSF2;
+    int flush = request == TCSETSF || request == TCSETSF2;
     uint32_t size = two ? sizeof(struct ktermios2) : sizeof(struct ktermios);
+    int32_t rc;
 
     if (!arg) {
         return -EFAULT;
@@ -2355,7 +2368,13 @@ static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uintptr_t arg
     if (copy_from_user(&kt2, (const void __user *)arg, size) != 0) {
         return -EFAULT;
     }
-    tty_set_termios(t, &kt2.tio, request == TCSETSF || request == TCSETSF2);
+    if (flush || request == TCSETSW || request == TCSETSW2) {
+        rc = tty_wait_until_sent(t, opened);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    tty_set_termios(t, &kt2.tio, flush);
     return 0;
 }
 
@@ -2376,6 +2395,8 @@ static int tty_request(uint32_t request)
     case TCSETSF2:
     case TCFLSH:
     case TCXONC:
+    case TCSBRK:
+    case TCSBRKP:
     case TIOCGWINSZ:
     case TIOCSWINSZ:
     case TIOCGPGRP:
@@ -2451,8 +2472,8 @@ static int32_t tty_flush_at(struct tty *t, uintptr_t which)
 /**
  * The job-control check (`tty_job_check`, SIGTTOU) of a terminal request that
  * changes `t`, as Linux's tty_check_change: TCSETS and its kin, TCFLSH,
- * TCXONC and TIOCSPGRP, whose EIO for an orphaned group Linux's tiocspgrp
- * turns into ENOTTY. Returns 0 for any other request.
+ * TCXONC, TCSBRK, TCSBRKP and TIOCSPGRP, whose EIO for an orphaned group
+ * Linux's tiocspgrp turns into ENOTTY. Returns 0 for any other request.
  */
 static int32_t tty_job_gate(struct tty *t, uint32_t request)
 {
@@ -2467,6 +2488,8 @@ static int32_t tty_job_gate(struct tty *t, uint32_t request)
     case TCSETSF2:
     case TCFLSH:
     case TCXONC:
+    case TCSBRK:
+    case TCSBRKP:
     case TIOCSPGRP:
         rc = tty_job_check(t, SIGTTOU);
         return request == TIOCSPGRP && rc == -EIO ? -ENOTTY : rc;
@@ -2613,18 +2636,29 @@ static int32_t tty_session_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
  * unread input. FIONREAD gives the bytes a read would return at once, a
  * complete cooked line or the queued count in raw mode, with a pending EOF
  * counted as 0; `tty_inq` drains the input source first, so input that has
- * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`), and
- * TCXONC stops and restarts output or sends VSTOP and VSTART (`tty_tcflow`).
+ * just arrived is counted. TIOCOUTQ gives the bytes of output the device has
+ * not taken (`tty_outq`), as Linux's n_tty_ioctl gives tty_chars_in_buffer.
+ * TCSBRK and TCSBRKP wait for that output (`tty_wait_until_sent`), as
+ * TCSETSW, TCSETSF and their termios2 forms do before the install, for the
+ * description opened at `*opened` vhangups, or NULL for one no hangup
+ * reaches, as Linux's tty_ioctl does; TCSBRK with a nonzero `arg` is musl's
+ * tcdrain. TCSBRK with 0 and TCSBRKP then send a break, which no terminal
+ * here can, so they return 0, as Linux's send_break does for a driver
+ * without break_ctl. A signal ends their wait with EINTR, which
+ * `ioctl_restartable` keeps from a restart. TCFLSH discards the queues
+ * (`tty_flush_at`), and TCXONC stops and restarts output or sends VSTOP and
+ * VSTART (`tty_tcflow`).
  * TIOCSWINSZ sends the foreground group SIGWINCH when the size changes
  * (`tty_resize`). The session requests are `tty_session_ioctl`'s.
  *
  * A process of a background group of the session the terminal controls is
- * stopped with SIGTTOU before TCSETS and its kin, TCFLSH, TCXONC and
- * TIOCSPGRP, unless it blocks or ignores the signal (`tty_job_check`), as
- * Linux's tty_check_change; an orphaned group's call is EIO, and its
- * TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
+ * stopped with SIGTTOU before TCSETS and its kin, TCFLSH, TCXONC, TCSBRK,
+ * TCSBRKP and TIOCSPGRP, unless it blocks or ignores the signal
+ * (`tty_job_check`), as Linux's tty_check_change; an orphaned group's call
+ * is EIO, and its TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
  */
-static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
+static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg,
+                                const uint32_t *opened, int *handled)
 {
     int32_t rc = tty_job_gate(t, request);
 
@@ -2649,13 +2683,26 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return 0;
     }
 
+    case TIOCOUTQ: {
+        int nout = (int)tty_outq(t);
+
+        if (!arg || copy_to_user((void __user *)arg, &nout, sizeof(nout)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
+    case TCSBRK:
+    case TCSBRKP:
+        return tty_wait_until_sent(t, opened);
+
     case TCSETS:
     case TCSETSW:
     case TCSETSF:
     case TCSETS2:
     case TCSETSW2:
     case TCSETSF2:
-        return tty_set_termios_at(t, request, arg);
+        return tty_set_termios_at(t, request, arg, opened);
 
     case TCFLSH:
         return tty_flush_at(t, arg);
@@ -2919,7 +2966,9 @@ static long ioctl_locked(fd_entry_t *entry, uint32_t request, uintptr_t arg)
         struct tty *t = fd_tty(entry);
         if (t) {
             int handled;
-            int32_t r = tty_common_ioctl(t, request, arg, &handled);
+            const uint32_t *opened =
+                entry->ofd && !entry->ofd->tty_console ? &entry->ofd->tty_hangups : NULL;
+            int32_t r = tty_common_ioctl(t, request, arg, opened, &handled);
             if (handled) {
                 return r;
             }
@@ -3450,10 +3499,13 @@ static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 /** Whether an ioctl, with the arguments in `params`, that failed with
  * EINTR may be restarted: not one of KVM's (type 0xAE), whose EINTR Linux
  * gives the caller as it is, as KVM_RUN's after a signal or immediate_exit,
- * which QEMU waits for. */
+ * which QEMU waits for, nor a terminal's TCSBRK or TCSBRKP, whose drain
+ * Linux's tty_ioctl ends with EINTR. */
 static int ioctl_restartable(const isr_params_t *params)
 {
-    return (((uint32_t)SC_ARG(params, 1) >> 8) & 0xFFu) != 0xAEu;
+    uint32_t request = (uint32_t)SC_ARG(params, 1);
+
+    return ((request >> 8) & 0xFFu) != 0xAEu && request != TCSBRK && request != TCSBRKP;
 }
 
 /**

@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 22, 2026
 .Dt CONSOLE 4
 .Os
 .Sh NAME
@@ -465,6 +465,12 @@ requests:
 Read the terminal settings.
 .It Dv TCSETS , TCSETSW , TCSETSF
 Set the terminal settings.
+.Dv TCSETSW
+and
+.Dv TCSETSF
+first wait for the output, as
+.Dv TCSBRK
+does.
 .Dv TCSETSF
 also discards unread input.
 .It Dv TCGETS2
@@ -476,6 +482,18 @@ Set the terminal settings as
 and
 .Dv TCSETSF
 do; the speeds are not kept.
+.It Dv TCSBRK , TCSBRKP
+Wait until the device has taken the terminal's output,
+.Xr tcdrain 3 .
+The console hands each byte to the screen and COM1 in the write, and a
+pseudoterminal slave's output is its master's to read, so they return at
+once; an hvc terminal waits for its driver, as
+.Xr hvc 4
+says.
+No terminal sends a break.
+.It Dv TIOCOUTQ
+Read the count of output bytes the device has not taken: 0 on the
+console and a pseudoterminal slave.
 .It Dv TCFLSH
 Discard unread input for selectors 0 and 2.
 Selector 1 does nothing, and selector 2 discards unread input only;

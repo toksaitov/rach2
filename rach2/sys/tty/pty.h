@@ -77,6 +77,11 @@ struct pty {
      * minor. NULL and 0 for a pair of /dev/ptmx. */
     const char *knode;
     uint32_t kdev;
+    /* The bytes the holder of a kernel-held pair has taken from `m_buf`
+     * (`pty_kernel_take`) and not yet handed to its device
+     * (`pty_kernel_sent`); with the bytes in `m_buf` they are the slave's
+     * output queue (`outq` in tty.h). 0 for a pair of /dev/ptmx. */
+    uint32_t k_held;
 };
 
 /* The first index of the pairs whose master the kernel holds, past any
@@ -146,8 +151,15 @@ void pty_kernel_close(struct pty *p);
 uint32_t pty_kernel_feed(struct pty *p, const unsigned char *bytes, uint32_t n);
 
 /** Take up to `n` bytes of the slave's output and echo into `out`, and wake
- * a slave writer that waits for room. Returns the bytes taken. */
+ * a slave writer that waits for room. Returns the bytes taken, which count
+ * in the slave's output queue until the holder reports them handed to its
+ * device (`pty_kernel_sent`). */
 uint32_t pty_kernel_take(struct pty *p, unsigned char *out, uint32_t n);
+
+/** The holder has handed `n` of the bytes it took to its device: they leave
+ * the slave's output queue, and a drain waiting on the slave
+ * (`tty_wait_until_sent`) is woken once the queue is empty. */
+void pty_kernel_sent(struct pty *p, uint32_t n);
 
 /** The open of the slave's node: bind the slave of `p` to the descriptor
  * `e`, being opened with the flags `flags`, as `pty_open_slave` binds one.

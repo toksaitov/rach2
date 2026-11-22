@@ -1,4 +1,4 @@
-.Dd November 19, 2026
+.Dd November 22, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -98,8 +98,14 @@ Read a 36-byte kernel termios from
 .Fa arg
 and install it.
 .Dv TCSETSW
-acts immediately, like
-.Dv TCSETS .
+and
+.Dv TCSETSF
+first wait, as
+.Dv TCSBRK
+does, until the device has taken the terminal's output; a signal ends
+the wait with
+.Er EINTR
+and installs nothing.
 .Dv TCSETSF
 also discards unread input.
 .It Dv TCGETS2
@@ -188,6 +194,45 @@ gives no
 .Dv POLLOUT .
 On the console a stop lights Scroll Lock, and the Hold key, Scroll Lock,
 stops and restarts output, as on Linux.
+.It Dv TCSBRK
+Wait until the device has taken the output written to the terminal, as
+Linux's
+.Fn tty_wait_until_sent
+does; with a nonzero
+.Fa arg
+this is
+.Xr tcdrain 3 .
+An hvc terminal's output is taken once the driver has handed it to the
+port, as
+.Xr hvc 4
+says.
+The console hands each byte to the screen and to COM1 in the write, and a
+pseudo-terminal slave's output is the master's to read, so on them the
+request returns at once, as on Linux.
+With
+.Fa arg
+0 Linux then sends a break, which no terminal here can send, so the
+request returns 0, as Linux's does for a driver without one.
+A signal ends the wait with
+.Er EINTR ,
+which no
+.Dv SA_RESTART
+restarts, as on Linux.
+.It Dv TCSBRKP
+Wait as
+.Dv TCSBRK
+does, and return 0 for the break of
+.Fa arg
+tenths of a second.
+.It Dv TIOCOUTQ
+Write an
+.Vt int
+count through
+.Fa arg
+of the bytes of output the terminal holds that its device has not taken,
+the bytes
+.Dv TCSBRK
+waits for: 0 on the console and on a pseudo-terminal slave, as on Linux.
 .It Dv FIONREAD
 Write an
 .Vt int
@@ -295,7 +340,9 @@ calls
 .Dv TCSETS
 or its kin,
 .Dv TCFLSH ,
-.Dv TCXONC
+.Dv TCXONC ,
+.Dv TCSBRK ,
+.Dv TCSBRKP
 or
 .Dv TIOCSPGRP
 on it is stopped first, as on Linux: the request posts
