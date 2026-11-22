@@ -156,6 +156,18 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return 0;
 }
 
+/** The newest walk keep, for a call that runs an attempt again: none here. */
+const void *vfs_walk_keeps_mark(void)
+{
+    return NULL;
+}
+
+/** Give back the keeps since `mark`: no walk keeps one here. */
+void vfs_walk_keeps_back(const void *mark)
+{
+    (void)mark;
+}
+
 /** Release a resolver's active operation. */
 void vfs_ref_release(struct vfs_ref *ref)
 {
