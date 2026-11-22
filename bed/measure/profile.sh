@@ -26,13 +26,31 @@ mkdir -p "$out"
 date +%s.%N > "$out/start"
 cat /proc/stat > "$out/proc-stat"
 debug=/sys/kernel/debug
+# BED_PROFILE_THREAD names the one thread bkl/calls counts from before on.
+if [ "$2" = before ] && [ -n "${BED_PROFILE_THREAD:-}" ]; then
+    echo "thread $BED_PROFILE_THREAD" > "$debug/bkl/calls"
+fi
 for path in kvm/exit_stats bkl/calls; do
     [ ! -r "$debug/$path" ] || cat "$debug/$path" > "$out/${path##*/}"
 done
 for card in "$debug"/dri/[0-9]*; do
     path=$card/virtio_gpu_profile
     [ ! -r "$path" ] || cat "$path" > "$out/drm-${card##*/}"
+    path=$card/virtio_gpu_events
+    if [ -w "$path" ]; then
+        case $2 in
+            before) echo clear > "$path" ;;
+            after) cat "$path" > "$out/events-${card##*/}" ;;
+        esac
+    fi
 done
+if [ "$2" = after ]; then
+    # One line a thread: its ID, its process's and its name.
+    for task in /proc/[0-9]*/task/[0-9]*; do
+        pid=${task%/task/*}
+        read -r comm 2> /dev/null < "$task/comm" && echo "${task##*/} ${pid#/proc/} $comm"
+    done > "$out/threads" || :
+fi
 if command -v ivshmemd > /dev/null; then
     ivshmemd -i > "$out/region" 2> "$out/region.err" || :
 fi
