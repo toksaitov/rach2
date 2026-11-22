@@ -46,6 +46,7 @@
 #include "../fs/fd.h"
 #include "../fs/krffsmount.h"
 #include "../fs/vfs.h"
+#include "../fs/walkseq.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -644,43 +645,33 @@ const char *loop_backing(int index, int *autoclear)
 }
 
 /**
- * Resolve the backing path again after acquiring its mount's namespace lock.
- *
- * The first reference keeps the mount active while the lock waits. Its node
- * may move during that wait, so only the second resolution supplies the node
- * to open. A path moved to another mount answers EBUSY. Success keeps the
- * lock through open and publication. On a type that sets `file_locked`,
- * whose nodes do not move, the lock is the file's own (`vfs_node_lock`),
- * taken on the first resolution's node. The caller gives the lock back with
- * `vfs_node_unlock`.
+ * Resolve the backing path and take the lock of its node (`vfs_node_lock`):
+ * the mount's namespace lock, or on a type that sets `file_locked`, whose
+ * nodes do not move, the file's own. The walk's stamp is checked once the
+ * lock is held (`vfs_stamp_still`): a rename, a mount or a KRFFS relocation
+ * while the lock was waited for, which may have moved the node or given the
+ * path to another file, sends the walk again, so that the node opened is
+ * the one the path names under the lock. Success keeps the lock through
+ * open and publication; the caller gives it back with `vfs_node_unlock`.
  */
 static int loop_resolve(const char *path, struct vfs_ref *ref)
 {
-    struct vfs_ref first;
-    struct vfs_mount *mnt;
+    struct vfs_stamp st;
     int rc;
 
-    rc = vfs_resolve(0, path, 0, &first, 0, 0);
-    if (rc != 0) {
-        return rc;
-    }
-    if (vfs_file_locked(first.mnt)) {
-        *ref = first;
+    for (;;) {
+        rc = vfs_resolve(0, path, 0, ref, 0, 0);
+        if (rc != 0) {
+            return rc;
+        }
+        vfs_stamp_get(&st);
         vfs_node_lock(ref);
-        return 0;
-    }
-    mnt = first.mnt;
-    vfs_ns_lock(mnt);
-    rc = vfs_resolve(0, path, 0, ref, 0, 0);
-    if (rc == 0 && ref->mnt != mnt) {
+        if (vfs_stamp_still(&st)) {
+            return 0;
+        }
+        vfs_node_unlock(ref);
         vfs_ref_release(ref);
-        rc = -EBUSY;
     }
-    if (rc != 0) {
-        vfs_ns_unlock(mnt);
-    }
-    vfs_ref_release(&first);
-    return rc;
 }
 
 /**

@@ -9,7 +9,8 @@
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The test includes the kernel's krffs.c and loop.c. The KRFFS core moves
- * the file while the attachment waits for a modelled namespace lock; VFS
+ * the file while the attachment waits for a modelled namespace lock, which
+ * moves a modelled walk sequence, so that the attachment walks again; VFS
  * dispatch, description counts and cache I/O are stubs.
  */
 #include "fs/krffs.c"
@@ -66,6 +67,8 @@ static int failures, depth, opened, refs, active, busy, resolves;
    shared mapping made during the sync. */
 static int open_error, sync_error, switch_mount, missing, mapped, map_in_sync;
 static char payload[4096], replacement[512], output[512];
+/* The walk sequence, which each modelled change of what a path names moves. */
+static uint64_t seq_now;
 
 /** Count a failed check and print `what`. */
 static void check(int ok, const char *what)
@@ -97,12 +100,25 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
+/** The stamp of the last walk: the modelled sequence, checked. */
+void vfs_stamp_get(struct vfs_stamp *st)
+{
+    st->seq = seq_now;
+    st->on = 1;
+}
+
+/** Whether no modelled change came since the stamp `st`. */
+int vfs_stamp_still(const struct vfs_stamp *st)
+{
+    return st->seq == seq_now;
+}
+
 /** Finish the waiting writer before granting the attachment's lock. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     void (*run)(void) = waiting;
 
-    check(mnt == &mount, "attachment locks the resolved mount");
+    check(mnt == (switch_mount ? &other_mount : &mount), "attachment locks the resolved mount");
     waiting = NULL;
     if (run) {
         check(depth == 1 && busy, "writer holds the lock before attachment waits");
@@ -115,7 +131,7 @@ void vfs_ns_lock(struct vfs_mount *mnt)
 /** Check lock balance. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    check(mnt == &mount && depth > 0, "namespace lock is balanced");
+    check((mnt == &mount || mnt == &other_mount) && depth > 0, "namespace lock is balanced");
     depth--;
 }
 
@@ -397,6 +413,7 @@ static void reset(void)
 static void move_file(void)
 {
     relocated = original;
+    seq_now++;
     check(krffs_write_node(&relocated, payload, sizeof(payload), 0) == sizeof(payload) &&
               relocated != original && original->type == KRFFS_FREE_NODE,
           "writer relocates and frees the old extent during lock wait");
@@ -520,38 +537,57 @@ static void nested_row(void)
           "nested: the first detaches whole");
 }
 
-/** Model a path that now resolves on another mount. */
+/** Model a path that now resolves on another mount, a change of what it
+ * names. */
 static void change_mount(void)
 {
-    switch_mount = 1;
+    seq_now++;
     busy = 0;
     vfs_ns_unlock(&mount);
+    switch_mount = 1;
 }
 
 /** Model a path removed while attachment waits. */
 static void remove_path(void)
 {
+    seq_now++;
     missing = 1;
     busy = 0;
     vfs_ns_unlock(&mount);
 }
 
+/** A path that resolves on another mount once the attachment holds the
+ * first mount's lock is walked again, and the file it names now is attached
+ * under the other mount's lock. */
+static void moved_row(void)
+{
+    reset();
+    other_mount.type = &vfs_krffs_type;
+    other_mount.dev = &disk;
+    depth = busy = 1;
+    waiting = change_mount;
+    check(loop_attach(0, "/image", 1) == 0 && resolves == 2 && loops[0].mnt == &other_mount,
+          "a path that moved to another mount is walked again and attached there");
+    check(loop_detach(0) == 0 && !depth && !opened && !refs && !active,
+          "detach releases the attachment on the other mount");
+}
+
 /** Check cleanup after each failing step under the namespace lock: a path
- * that moved or went, an open or a sync that failed, a writer in flight, and
- * a shared mapping of the file made before the attach or while its sync
+ * that went, an open or a sync that failed, a writer in flight, and a
+ * shared mapping of the file made before the attach or while its sync
  * slept. */
 static void error_rows(void)
 {
     int row;
 
-    for (row = 0; row < 7; row++) {
+    for (row = 1; row < 7; row++) {
         int expected = -EBUSY;
 
         reset();
-        if (row < 2) {
+        if (row == 1) {
             depth = busy = 1;
-            waiting = row == 0 ? change_mount : remove_path;
-            expected = row == 0 ? -EBUSY : -ENOENT;
+            waiting = remove_path;
+            expected = -ENOENT;
         } else if (row == 2) {
             open_error = expected = -EACCES;
         } else if (row == 3) {
@@ -588,13 +624,14 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return -1;
 }
 
-/** Run the relocation row and the error rows, and return 1 when any check
- *  failed. */
+/** Run the relocation row, the phase and nested rows, the moved path's
+ *  row and the error rows, and return 1 when any check failed. */
 int main(void)
 {
     relocation_row();
     phase_row();
     nested_row();
+    moved_row();
     error_rows();
     if (!failures) {
         printf("loop-attach-hosttest: result: pass: relocation, reuse and cleanup\n");
