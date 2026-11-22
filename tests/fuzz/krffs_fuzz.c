@@ -112,6 +112,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     mount.halted = 0;
     mount.withdrawn = 0;
     mount.on_halt = 0;
+    mount.on_move = 0;
     for (i = 0; i < 64; i++) {
         uint64_t node;
         unsigned j;

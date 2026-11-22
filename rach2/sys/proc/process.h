@@ -111,6 +111,9 @@ struct fs_struct {
     int in_exec;
 };
 
+/* The references one full walk registers (`walk_holds` below). */
+#define WALK_HOLDS 8
+
 /* Policy: the pages one process's system calls may copy paths into at once
  * (fs/pathbuf.c); the deepest call takes seven. */
 #define PATH_BUFS 8
@@ -123,6 +126,7 @@ struct fs_struct {
 #define NGROUPS_MAX 8
 
 struct vfs_mount;
+struct vfs_ref;
 struct mm;
 struct tgroup;
 struct fd_gone_hold;
@@ -323,6 +327,19 @@ struct process {
     uint64_t walk_replay_seq;
     /* NO_XDEV's mount during the replay, held by the open, or NULL. */
     struct vfs_mount *walk_replay_mnt;
+    /* The changes of what a path names this thread has begun and not ended
+     * (`vfs_seq_begin`), which no walk of its own waits for. */
+    uint32_t walk_tokens;
+    /* The walk sequence the thread's last walk was checked at, and whether
+     * it was (`vfs_stamp_get`): an operation that consumes the walk's answer
+     * once it has slept checks it again (`vfs_stamp_still`). */
+    uint64_t walk_stamp;
+    int walk_stamp_on;
+    /* The references a full walk of this thread holds while it may sleep:
+     * its start, its root and where it stands, each NULL or a pointer into
+     * the walk's frame, which a KRFFS relocation moves (`vfs_repoint`) and
+     * whose directories a removal finds in use (`vfs_walk_holds`). */
+    struct vfs_ref *walk_holds[WALK_HOLDS];
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so

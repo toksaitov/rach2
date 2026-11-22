@@ -934,8 +934,10 @@ void vfs_walk_unlock(struct vfs_mount *mnt)
  * mount's root: hold the node, put the old one, and when the mount changes,
  * enter the new mount before the old one is left. The put, which may sleep,
  * comes before the old mount is left, and a locked walk releases the old
- * mount's lock before it waits for the new one. 0, or -EBUSY for a mount
- * that is not active, with `cur` as it was.
+ * mount's lock before it waits for the new one, where the walk gate's
+ * WALK_GATE_NSLOCK comes. 0, or -EBUSY for a mount that is not active, with
+ * `cur` as it was. The full walk checks its sequence after it
+ * (`walk_check_ok`) before it uses what it reached.
  */
 static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int locked)
 {
@@ -956,6 +958,7 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
         if (mnt != was) {
             walk_unlock(was, locked);
             vfs_leave(was);
+            walk_gate(WALK_GATE_NSLOCK);
             walk_lock(mnt, locked);
         }
     }
@@ -991,6 +994,114 @@ static void walk_root(struct vfs_ref *r)
         r->mnt = mounts[0];
         r->node = mounts[0]->root;
     }
+}
+
+/** Take the root `walk_root` gives into `r`, held as a descriptor holds
+ * its file (`vfs_desc_open` and the node's hold), so that a chroot or an
+ * unmount while the walk sleeps cannot free what it compares and returns
+ * to. `walk_root_drop` gives it back. */
+static void walk_root_take(struct vfs_ref *r)
+{
+    walk_root(r);
+    vfs_desc_open(r->mnt);
+    vfs_ref_hold(r);
+}
+
+/** Give back the root `walk_root_take` took, if any. May sleep. */
+static void walk_root_drop(struct vfs_ref *r)
+{
+    struct vfs_mount *mnt = r->mnt;
+
+    if (mnt) {
+        r->mnt = NULL;
+        vfs_desc_close(mnt, r->node, NULL);
+        r->node = NULL;
+    }
+}
+
+/*
+ * The check of one attempt of the full walk: the walk sequence it began at,
+ * read with no change under way, and whether it is checked at all, which a
+ * walk inside the thread's own change (`vfs_seq_mine`) and one whose caller
+ * holds a namespace or file lock, which a change under way may wait for,
+ * are not, as a walk with no thread is not. Every step that may sleep is
+ * followed by the check before its answer is used (`walk_check_ok`), and
+ * so is the end, and a walk that fails it lets go of all it holds and
+ * starts again from its start, as Linux's walk does when `legitimize_path`
+ * or `try_to_unlazy` fails (fs/namei.c in 6.12).
+ */
+struct walk_check {
+    uint64_t seq;
+    int on;
+};
+
+/** Begin the check `wc` of an attempt, which may sleep until no change is
+ * under way (`vfs_seq_wait`). */
+static void walk_check_begin(struct walk_check *wc)
+{
+    wc->seq = 0;
+    wc->on = current_proc && !vfs_seq_mine();
+    if (wc->on && !vfs_seq_read(&wc->seq)) {
+        if (vfs_ns_held_by_caller()) {
+            wc->on = 0;
+        } else {
+            vfs_seq_wait(&wc->seq);
+        }
+    }
+}
+
+/** Whether nothing has changed what a path names since `wc` began. */
+static int walk_check_ok(const struct walk_check *wc)
+{
+    return !wc->on || vfs_seq_still(wc->seq);
+}
+
+/** Register `r`, a reference in the calling thread's walk, among its walk's
+ * holders (`walk_holds` in process.h); a thread whose slots are all taken,
+ * which nesting deeper than WALK_HOLDS references would make, registers
+ * none, and the walk relies on its check alone. */
+static void walk_hold_add(struct vfs_ref *r)
+{
+    int i;
+
+    for (i = 0; current_proc && i < WALK_HOLDS; i++) {
+        if (!current_proc->walk_holds[i]) {
+            current_proc->walk_holds[i] = r;
+            return;
+        }
+    }
+}
+
+/** Take `r` off the calling thread's walk holders. */
+static void walk_hold_drop(struct vfs_ref *r)
+{
+    int i;
+
+    for (i = 0; current_proc && i < WALK_HOLDS; i++) {
+        if (current_proc->walk_holds[i] == r) {
+            current_proc->walk_holds[i] = NULL;
+        }
+    }
+}
+
+int vfs_walk_holds(const struct vfs_mount *mnt, const void *node)
+{
+    const process_t *pr;
+    int i;
+
+    if (path_bufs_hold(mnt, node)) {
+        return 1;
+    }
+    for (pr = proc_list; pr; pr = pr->next) {
+        for (i = 0; i < WALK_HOLDS; i++) {
+            const struct vfs_ref *r = pr->walk_holds[i];
+
+            if (r && r->mnt && r->node == node && vfs_mount_base(r->mnt) == vfs_mount_base(mnt)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
 }
 
 /**
@@ -2642,11 +2753,26 @@ static int walk_component(const char **path, char *comp)
  * (fs/namei.c:2040-2056), unless the mount is entered by more than one
  * name, whose names before its last the parent's type takes from there.
  *
- * The walk keeps the root it starts from: `..` stops there, and at the root
- * of the root mount whatever the root, and an absolute link's target starts
- * there. A thread that shares the root may chroot while the walk sleeps; at
- * its next `..` or absolute link the walk sees that (`root_current`), lets
- * go of where it is and starts over from the new root, so no walk mixes two.
+ * The walk keeps the root it starts from, held (`walk_root_take`): `..`
+ * stops there, and at the root of the root mount whatever the root, and an
+ * absolute link's target starts there.
+ *
+ * Each attempt begins at a walk sequence read with no change under way
+ * (`walk_check_begin`), and after each step that may sleep, a lookup, a
+ * namespace lock, a link read or a type's lookup of the rest, and at the
+ * end, the walk checks that nothing has changed what a path names since
+ * (`walk_check_ok`): a mount, a rename or removal, a chroot or chdir, a
+ * KRFFS relocation or a change of /dev or /sys. One that has lets go of
+ * all the attempt holds and starts again from the start, the root read
+ * again, as Linux's walk does when its sequences fail (fs/namei.c in 6.12);
+ * the walk gate counts WALK_GATE_RESTART. The stamp of the attempt that
+ * finishes is left with the thread (`vfs_stamp_set`) for the call that
+ * consumes the answer. While the walk sleeps, its root and where it stands
+ * are registered as the thread's walk holders, which a KRFFS relocation
+ * moves and a removal finds in use (`vfs_walk_holds`). A walk whose check
+ * is off (`walk_check_begin`) still sees a chroot of a thread that shares
+ * the root at its next `..` or absolute link (`root_current`), and starts
+ * over from the new root, so no walk mixes two.
  * A path that begins with two slashes, which the system call layer makes
  * for a name relative to a descriptor's directory outside the caller's
  * root, starts at the root of the root mount, and keeps the caller's root
@@ -2683,9 +2809,12 @@ static int resolve_full(const struct vfs_ref *start, const char *path, int flags
     struct walk_name name;
     struct vfs_ref held_root;
     const char *spelling = path;
+    const struct vfs_ref *given = start;
     struct walk_rules rules;
-    struct vfs_ref cur;
+    struct walk_check wc;
+    struct vfs_ref cur = {NULL, NULL};
     struct vfs_ref root;
+    struct vfs_ref taken = {NULL, NULL};
     const char *p;
     const char *leaf_comp = 0;
     const char *last_comp;
@@ -2693,7 +2822,7 @@ static int resolve_full(const struct vfs_ref *start, const char *path, int flags
     int links;
     int kind;
     int locked = (flags & VFS_WALK_LOCK) != 0;
-    int missing = 0;
+    int missing;
     char *linkpath = 0;
     char *target = 0;
     int rc;
@@ -2705,33 +2834,38 @@ static int resolve_full(const struct vfs_ref *start, const char *path, int flags
     if (mounts[0]->state != VFS_ACTIVE) {
         return -ENOENT;
     }
-    start = walk_proc_start(start, &path, &held_root);
-    start = walk_rules_init(&rules, record, flags, start);
+    walk_hold_add(&taken);
+    walk_hold_add(&cur);
 
+begin:
+    walk_check_begin(&wc);
+    path = spelling;
+    start = walk_proc_start(given, &path, &held_root);
+    start = walk_rules_init(&rules, record, flags, start);
+    leaf_comp = 0;
     if (flags & VFS_WALK_PARENT) {
         rc = walk_leaf(path, leaf, leafcap, &leaf_comp);
         if (rc != 0) {
-            return rc;
+            goto out_bare;
         }
     }
-
-begin:
     p = path;
     last_comp = leaf_comp;
     links = 0;
+    missing = 0;
     walk_name_root(&name, record ? record->real : NULL);
-    walk_root(&root);
+    walk_root_take(&taken);
+    root = taken;
     walk_scope_begin(&rules, &root, &name, p);
     if (held_root.mnt) {
         walk_name_text(&name, spelling, path);
     }
-    walk_gate(WALK_GATE_FULL);
     rc = walk_begin(&rules, &cur, root, start, p, locked);
     if (rc != 0) {
-        path_buf_put(linkpath);
-        path_buf_put(target);
-        return rc;
+        cur.mnt = NULL;
+        goto out_bare;
     }
+    walk_gate(WALK_GATE_FULL);
 
     for (;;) {
         char comp[VFS_NAME_MAX + 1];
@@ -2739,6 +2873,9 @@ begin:
         void *found;
         struct vfs_mount *m;
 
+        if (!walk_check_ok(&wc)) {
+            goto restart;
+        }
         while (*p == '/') {
             p++;
         }
@@ -2896,6 +3033,13 @@ begin:
         }
 
         rc = walk_lookup(&rules, mount_base(cur.mnt), cur.node, comp, &found);
+        walk_gate(WALK_GATE_LOOKUP);
+        if (!walk_check_ok(&wc)) {
+            if (rc == 0) {
+                node_put(cur.mnt, found);
+            }
+            goto restart;
+        }
         if (walk_creates(rc, flags, p)) {
             k_memcpy(leaf, comp, len + 1); /* VFS_NAME_MAX + 1 bytes */
             missing = 1;
@@ -2970,21 +3114,37 @@ begin:
     if (rc != 0) {
         goto out_err;
     }
+    if (!walk_check_ok(&wc)) {
+        goto restart;
+    }
+    vfs_stamp_set(wc.seq, wc.on);
     path_buf_put(linkpath);
     path_buf_put(target);
     walk_name_end(&name);
     *out = cur;
+    walk_hold_drop(&cur);
+    walk_hold_drop(&taken);
+    walk_root_drop(&taken);
     return missing ? VFS_MISSING : 0;
 
 restart:
+    walk_record_clear(record, 1);
     walk_release(&cur, locked);
+    cur.mnt = NULL;
+    walk_root_drop(&taken);
+    walk_gate(WALK_GATE_RESTART);
     goto begin;
 
 out_err:
     walk_record_clear(record, 1);
+    walk_release(&cur, locked);
+    cur.mnt = NULL;
+out_bare:
     path_buf_put(linkpath);
     path_buf_put(target);
-    walk_release(&cur, locked);
+    walk_hold_drop(&cur);
+    walk_hold_drop(&taken);
+    walk_root_drop(&taken);
     return rc;
 }
 
@@ -3011,6 +3171,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
         !(current_proc && current_proc->walk_replay) && vfs_seq_read(&seq)) {
         rc = resolve_cached(kept ? &held : start, seq, kept ? rest : path, flags, out, NULL);
         if (rc != WALK_FULL) {
+            vfs_stamp_set(seq, 1);
             return rc;
         }
     }
@@ -3064,6 +3225,9 @@ int vfs_resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *pa
         return VFS_CACHED_MISS;
     }
     rc = resolve_cached(start, seq, path, flags, out, entry);
+    if (rc != WALK_FULL) {
+        vfs_stamp_set(seq, 1);
+    }
     return rc == WALK_FULL ? VFS_CACHED_MISS : rc;
 }
 
@@ -3376,6 +3540,18 @@ static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
     int i;
 
     for (pr = proc_list; pr; pr = pr->next) {
+        for (i = 0; i < WALK_HOLDS; i++) {
+            struct vfs_ref *r = pr->walk_holds[i];
+
+            if (r && r->mnt == mnt && r->node == from) {
+                r->node = to;
+            }
+        }
+        for (i = 0; pr->paths_on_mounts && i < PATH_BUFS; i++) {
+            if (pr->path_mount[i] == mnt && pr->path_node[i] == from) {
+                pr->path_node[i] = to;
+            }
+        }
         if (!pr->fs) {
             continue;
         }
@@ -4600,20 +4776,18 @@ static int32_t kfs_read_locked(struct vfs_mount *mnt, void *handle, void *buf, u
  * the mount's lock held: the bytes written, -EFBIG past 4 GiB, -ENOSPC, or
  * -EIO. A grow can relocate the node; every holder, this writer's
  * description included, is repointed before the answer returns, a failure
- * included. */
+ * included, inside the move's change of what paths name (`kfs_moved`). */
 static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void *buf,
                                 uint32_t count, uint64_t offset)
 {
     krffs_node_t *n = handle;
     int written;
 
+    (void)mnt;
     if (offset > 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
         return -EFBIG;
     }
     written = krffs_write_node(&n, buf, count, (uint32_t)offset);
-    if (n && n != (krffs_node_t *)handle) {
-        vfs_repoint(mnt, handle, n);
-    }
     if (written == KRFFS_ENOSPACE) {
         return -ENOSPC;
     }
@@ -4624,20 +4798,18 @@ static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void 
 }
 
 /** Truncate the file whose node is `handle` to `size`, with the mount's lock
- * held, and repoint its holders if the node moves, even when the truncation
- * then fails: 0, -EFBIG past 4 GiB, -ENOSPC, or -EIO. */
+ * held; a move of the node repoints its holders, even when the truncation
+ * then fails (`kfs_moved`): 0, -EFBIG past 4 GiB, -ENOSPC, or -EIO. */
 static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t size, int stamp_times)
 {
     krffs_node_t *n = handle;
     int rc;
 
+    (void)mnt;
     if (size > 0xFFFFFFFFu) {
         return -EFBIG;
     }
     rc = krffs_truncate_node(&n, (uint32_t)size, stamp_times);
-    if (n && n != (krffs_node_t *)handle) {
-        vfs_repoint(mnt, handle, n);
-    }
     if (rc == KRFFS_ENOSPACE) {
         return -ENOSPC;
     }
@@ -5052,6 +5224,25 @@ static void kfs_halted(krffs_mount_t *fs)
     }
 }
 
+/**
+ * The `on_move` of the KRFFS root: a move of the node `from` is a change of
+ * what paths name, begun before it moves, with `to` NULL, and ended once its
+ * holders, those of the root's mount and its binds and copies, have its new
+ * place `to` (`vfs_repoint`), so that a walk that may have held the old
+ * place starts again.
+ */
+static void kfs_moved(krffs_node_t *from, krffs_node_t *to)
+{
+    if (!to) {
+        vfs_seq_begin();
+        return;
+    }
+    if (to != from && kfs_root_mnt) {
+        vfs_repoint(kfs_root_mnt, from, to);
+    }
+    vfs_seq_end();
+}
+
 int vfs_krffs_root_busy(void)
 {
     const struct process *owner;
@@ -5077,6 +5268,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     mnt->root = krffs_fs->node;
     kfs_root_mnt = mnt;
     krffs_root_on_halt(kfs_halted);
+    krffs_root_on_move(kfs_moved);
     if (krffs_root_halted()) {
         mnt->flags |= VFS_MS_RDONLY;
     }

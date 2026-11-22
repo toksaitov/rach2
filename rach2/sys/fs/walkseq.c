@@ -16,7 +16,9 @@ static uint64_t seq_now;
 static uint32_t seq_active;
 static wait_queue_t seq_wq;
 
-void vfs_seq_begin(void)
+/** Begin a change, for a thread or for the walk gate, which holds one for
+ * a test (`gate_store`). */
+static void seq_begin(void)
 {
     uint32_t flags = spin_lock_irqsave(&seq_lock);
 
@@ -25,7 +27,9 @@ void vfs_seq_begin(void)
     spin_unlock_irqrestore(&seq_lock, flags);
 }
 
-void vfs_seq_end(void)
+/** End a change `seq_begin` began, and wake the waiters when it was the
+ * last. */
+static void seq_end(void)
 {
     uint32_t flags = spin_lock_irqsave(&seq_lock);
     int idle;
@@ -37,6 +41,27 @@ void vfs_seq_end(void)
     if (idle) {
         wq_wake(&seq_wq, 0);
     }
+}
+
+void vfs_seq_begin(void)
+{
+    if (current_proc) {
+        current_proc->walk_tokens++;
+    }
+    seq_begin();
+}
+
+void vfs_seq_end(void)
+{
+    if (current_proc && current_proc->walk_tokens > 0) {
+        current_proc->walk_tokens--;
+    }
+    seq_end();
+}
+
+int vfs_seq_mine(void)
+{
+    return current_proc && current_proc->walk_tokens > 0;
 }
 
 int vfs_seq_read(uint64_t *seq)
@@ -70,8 +95,32 @@ static int seq_calm(void *arg)
 void vfs_seq_wait(uint64_t *seq)
 {
     while (!vfs_seq_read(seq) && current_proc) {
+        walk_gate(WALK_GATE_WAIT);
         wq_wait_event_nointr(&seq_wq, seq_calm, NULL);
     }
+}
+
+void vfs_stamp_set(uint64_t seq, int on)
+{
+    if (current_proc) {
+        current_proc->walk_stamp = seq;
+        current_proc->walk_stamp_on = on;
+    }
+}
+
+void vfs_stamp_get(struct vfs_stamp *st)
+{
+    st->seq = current_proc ? current_proc->walk_stamp : 0;
+    st->on = current_proc ? current_proc->walk_stamp_on : 0;
+}
+
+int vfs_stamp_still(const struct vfs_stamp *st)
+{
+    if (!st->on || vfs_seq_still(st->seq)) {
+        return 1;
+    }
+    walk_gate(WALK_GATE_RETRY);
+    return 0;
 }
 
 /*
@@ -79,18 +128,25 @@ void vfs_seq_wait(uint64_t *seq)
  * counts each WALK_GATE_ event it reaches, and the first time it reaches
  * `gate_stop` sleeps there until a write of `release`, so that a test can
  * change the tree at a known point of a walk and then let it go on; all
- * under `gate_lock`. `gate_stop` is -1 once that stop is used.
+ * under `gate_lock`. `gate_stop` is -1 once that stop is used. The gate
+ * also holds up to GATE_TOKENS changes open for a test (`gate_tokens`),
+ * and arms one fault of a type's hand-back for a thread (`gate_fault`).
  */
+#define GATE_TOKENS 2
+
 static struct spinlock gate_lock = SPINLOCK_INIT_NAMED("walkgate");
 static int gate_pid;
 static int gate_stop = -1;
 static int gate_released;
 static int gate_waiting;
+static int gate_tokens;
+static int gate_fault;
 static uint32_t gate_count[WALK_GATE_EVENTS];
 static wait_queue_t gate_wq;
 
 /* The events' names, in the order of their numbers. */
-static const char *const gate_names[WALK_GATE_EVENTS] = {"full", "unlocked", "miss"};
+static const char *const gate_names[WALK_GATE_EVENTS] = {
+    "full", "unlocked", "miss", "lookup", "nslock", "restart", "handoff", "retry", "wait"};
 
 /** The wait condition of `walk_gate`: the stop is released. */
 static int gate_open(void *arg)
@@ -124,6 +180,23 @@ void walk_gate(int event)
         gate_waiting = 0;
         spin_unlock_irqrestore(&gate_lock, flags);
     }
+}
+
+int walk_gate_fault(void)
+{
+    uint32_t flags;
+    int hit;
+
+    if (!gate_fault || !current_proc) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&gate_lock);
+    hit = gate_fault == (int)current_proc->pid;
+    if (hit) {
+        gate_fault = 0;
+    }
+    spin_unlock_irqrestore(&gate_lock, flags);
+    return hit;
 }
 
 /* A line of the gate's text being made: `len` counts every byte, and those
@@ -163,20 +236,26 @@ static void gate_num(struct gate_text *t, const char *name, uint32_t n)
     gate_str(t, digits + i);
 }
 
-/** The gate's state as one line: `pid P stop E waiting W` and the count of
- * each event by its name, E being `-` once the stop is used or released. */
+/** The gate's state as one line: `pid P stop E waiting W`, the count of
+ * each event by its name, E being `-` once the stop is used or released,
+ * and `tokens T active A`, the changes the gate holds open and all those
+ * under way. */
 static int32_t gate_show(void *data, char *buf, uint32_t cap)
 {
     struct gate_text t;
     uint32_t flags = spin_lock_irqsave(&gate_lock);
     uint32_t count[WALK_GATE_EVENTS];
-    int pid = gate_pid, stop = gate_stop, waiting = gate_waiting;
+    int pid = gate_pid, stop = gate_stop, waiting = gate_waiting, tokens = gate_tokens;
+    uint32_t active;
     int i;
 
     for (i = 0; i < WALK_GATE_EVENTS; i++) {
         count[i] = gate_count[i];
     }
     spin_unlock_irqrestore(&gate_lock, flags);
+    flags = spin_lock_irqsave(&seq_lock);
+    active = seq_active;
+    spin_unlock_irqrestore(&seq_lock, flags);
     (void)data;
     t.buf = buf;
     t.cap = cap;
@@ -188,12 +267,54 @@ static int32_t gate_show(void *data, char *buf, uint32_t cap)
     for (i = 0; i < WALK_GATE_EVENTS; i++) {
         gate_num(&t, gate_names[i], count[i]);
     }
+    gate_num(&t, "tokens", (uint32_t)tokens);
+    gate_num(&t, "active", active);
     gate_str(&t, "\n");
     return (int32_t)t.len;
 }
 
+/**
+ * Begin a change the gate holds open, with `open` set, or end the last it
+ * holds: 0, or -EBUSY past GATE_TOKENS and -ENOENT with none to end. A
+ * test holds changes open so to show that a walk takes no snapshot while
+ * one is under way, nor while one of two overlapping is.
+ */
+static int gate_token(int open)
+{
+    uint32_t flags = spin_lock_irqsave(&gate_lock);
+    int ok = open ? gate_tokens < GATE_TOKENS : gate_tokens > 0;
+
+    if (ok) {
+        gate_tokens += open ? 1 : -1;
+    }
+    spin_unlock_irqrestore(&gate_lock, flags);
+    if (!ok) {
+        return open ? -EBUSY : -ENOENT;
+    }
+    if (open) {
+        seq_begin();
+    } else {
+        seq_end();
+    }
+    return 0;
+}
+
+/**
+ * Move the sequence by 2^32 with no change under way, for a test that a
+ * stamp read before compares unequal, as it would not in 32 bits: the
+ * sequence only grows, so this takes no value back.
+ */
+static void gate_advance(void)
+{
+    uint32_t flags = spin_lock_irqsave(&seq_lock);
+
+    seq_now += (uint64_t)0x10000u * 0x10000u;
+    spin_unlock_irqrestore(&seq_lock, flags);
+}
+
 /** Let a thread stopped at the gate go on, and stop no more: `off` clears
- * the gate as well, `release` keeps its counts. */
+ * the gate as well, its fault and the changes it holds open, `release`
+ * keeps its counts. */
 static void gate_let_go(int off)
 {
     uint32_t flags = spin_lock_irqsave(&gate_lock);
@@ -202,9 +323,24 @@ static void gate_let_go(int off)
     gate_stop = -1;
     if (off) {
         gate_pid = 0;
+        gate_fault = 0;
     }
     spin_unlock_irqrestore(&gate_lock, flags);
     wq_wake(&gate_wq, 0);
+    while (off && gate_token(0) == 0) {
+    }
+}
+
+/** The thread number in `line` from `*i` on, and `*i` past it; 0 for
+ * none. */
+static uint32_t gate_pid_at(const char *line, uint32_t *i)
+{
+    uint32_t pid = 0;
+
+    while (line[*i] >= '0' && line[*i] <= '9' && pid < 100000000u) {
+        pid = pid * 10u + (uint32_t)(line[(*i)++] - '0');
+    }
+    return pid;
 }
 
 /** Whether the string `s` is the word `w`. */
@@ -217,18 +353,75 @@ static int gate_word(const char *s, const char *w)
     return *s == '\0' && *w == '\0';
 }
 
+/** Whether `line` begins with the word `w` and a space. */
+static int gate_verb(const char *line, const char *w)
+{
+    while (*w && *line == *w) {
+        line++;
+        w++;
+    }
+    return *w == '\0' && *line == ' ';
+}
+
+/** `fault PID` of `line`, `n` bytes: 0, or -EINVAL. */
+static int gate_fault_text(const char *line, uint32_t n)
+{
+    uint32_t i = 6, pid = gate_pid_at(line, &i);
+    uint32_t flags;
+
+    if (pid == 0 || i != n) {
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&gate_lock);
+    gate_fault = (int)pid;
+    spin_unlock_irqrestore(&gate_lock, flags);
+    return 0;
+}
+
+/** `arm PID EVENT` of `line`, `n` bytes: 0, or -EINVAL. */
+static int gate_arm_text(const char *line, uint32_t n)
+{
+    uint32_t i = 4, pid = gate_pid_at(line, &i);
+    uint32_t flags;
+    int ev = 0;
+
+    if (pid == 0 || i >= n || line[i] != ' ') {
+        return -EINVAL;
+    }
+    while (ev < WALK_GATE_EVENTS && !gate_word(line + i + 1, gate_names[ev])) {
+        ev++;
+    }
+    if (ev == WALK_GATE_EVENTS && gate_word(line + i + 1, "count")) {
+        ev = -1;
+    } else if (ev == WALK_GATE_EVENTS) {
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&gate_lock);
+    for (i = 0; i < WALK_GATE_EVENTS; i++) {
+        gate_count[i] = 0;
+    }
+    gate_pid = (int)pid;
+    gate_stop = ev;
+    gate_released = 0;
+    spin_unlock_irqrestore(&gate_lock, flags);
+    return 0;
+}
+
 /**
  * A write to the gate: `arm PID EVENT` counts the events of the thread PID
- * from zero and stops it the first time it reaches EVENT, one of "full",
- * "unlocked" and "miss"; `release` lets it go on; `off` lets it go and stops
- * counting. `len`, or -EINVAL for another text, or -EFAULT.
+ * from zero and stops it the first time it reaches EVENT, one of the names
+ * of `gate_names`, or nowhere for "count"; `release` lets it go on; `off`
+ * lets it go, stops counting and ends the changes the gate holds; `begin`
+ * and `end` begin and end a change the gate holds (`gate_token`);
+ * `advance` moves the sequence by 2^32 (`gate_advance`); `fault PID` arms
+ * one fault of a hand-back for the thread PID (`walk_gate_fault`). `len`,
+ * or -EINVAL for another text, `gate_token`'s error, or -EFAULT.
  */
 static int32_t gate_store(void *data, const char __user *ubuf, uint32_t len)
 {
     char line[40];
-    uint32_t n = len, i = 4, pid = 0;
-    uint32_t flags;
-    int ev;
+    uint32_t n = len;
+    int rc = -EINVAL;
 
     (void)data;
     if (len == 0 || len >= sizeof(line)) {
@@ -241,39 +434,20 @@ static int32_t gate_store(void *data, const char __user *ubuf, uint32_t len)
         n--;
     }
     line[n] = '\0';
-    if (gate_word(line, "release")) {
-        gate_let_go(0);
-        return (int32_t)len;
+    if (gate_word(line, "release") || gate_word(line, "off")) {
+        gate_let_go(line[0] == 'o');
+        rc = 0;
+    } else if (gate_word(line, "begin") || gate_word(line, "end")) {
+        rc = gate_token(line[0] == 'b');
+    } else if (gate_word(line, "advance")) {
+        gate_advance();
+        rc = 0;
+    } else if (gate_verb(line, "fault")) {
+        rc = gate_fault_text(line, n);
+    } else if (gate_verb(line, "arm")) {
+        rc = gate_arm_text(line, n);
     }
-    if (gate_word(line, "off")) {
-        gate_let_go(1);
-        return (int32_t)len;
-    }
-    if (n < 4 || line[0] != 'a' || line[1] != 'r' || line[2] != 'm' || line[3] != ' ') {
-        return -EINVAL;
-    }
-    while (i < n && line[i] >= '0' && line[i] <= '9' && pid < 100000000u) {
-        pid = pid * 10u + (uint32_t)(line[i++] - '0');
-    }
-    if (pid == 0 || i >= n || line[i] != ' ') {
-        return -EINVAL;
-    }
-    ev = 0;
-    while (ev < WALK_GATE_EVENTS && !gate_word(line + i + 1, gate_names[ev])) {
-        ev++;
-    }
-    if (ev == WALK_GATE_EVENTS) {
-        return -EINVAL;
-    }
-    flags = spin_lock_irqsave(&gate_lock);
-    for (i = 0; i < WALK_GATE_EVENTS; i++) {
-        gate_count[i] = 0;
-    }
-    gate_pid = (int)pid;
-    gate_stop = ev;
-    gate_released = 0;
-    spin_unlock_irqrestore(&gate_lock, flags);
-    return (int32_t)len;
+    return rc != 0 ? rc : (int32_t)len;
 }
 
 static const struct debugfs_text_ops gate_ops = {gate_show, gate_store};

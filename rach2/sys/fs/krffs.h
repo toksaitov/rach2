@@ -208,6 +208,12 @@ typedef struct krffs_mount {
     /* Called once when the mount halts, for its owner to turn the mounts
      * that show it read-only; NULL for none. */
     void (*on_halt)(struct krffs_mount *mount);
+    /* Called as a node's move begins, with `to` KRFFS_NO_NODE, and as it
+     * ends, whatever the answer, with `to` the node's place then, `from`
+     * itself when it stayed: for the owner to begin a change of what paths
+     * name before the node moves and end it once every holder has the new
+     * place. NULL for none. */
+    void (*on_move)(struct krffs_mount *mount, uint64_t from, uint64_t to);
 } krffs_mount_t;
 
 /** The sector phase of the first data byte of the file at `offset`. */
@@ -768,6 +774,11 @@ int krffs_root_reaping(void);
 /** Set the boot root's `on_halt`, which its VFS mount gives to turn the
  * mounts that show it read-only. */
 void krffs_root_on_halt(void (*fn)(krffs_mount_t *mount));
+
+/** Set the boot root's `on_move` to call `fn` by nodes, `to` NULL as the
+ * move begins, which its VFS mount gives to bracket a move and point the
+ * node's holders at its new place; NULL for none. */
+void krffs_root_on_move(void (*fn)(krffs_node_t *from, krffs_node_t *to));
 
 /**
  * 1 when the boot root has made a node without a name and not freed or
