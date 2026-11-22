@@ -154,6 +154,14 @@ int fd_alloc(fd_table_t *t)
     return -EMFILE;
 }
 
+/** fd.c's: no description holds a view here. */
+int fd_mount_view_held(const struct vfs_mount *mnt, uint32_t view)
+{
+    (void)mnt;
+    (void)view;
+    return 0;
+}
+
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
     (void)t;

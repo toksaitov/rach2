@@ -181,6 +181,19 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
     return 0;
 }
 
+/** vfs_ns.c's: a call through a description judges by the only view here. */
+uint32_t vfs_view_enter(uint32_t view)
+{
+    (void)view;
+    return 0;
+}
+
+/** vfs_ns.c's: the end of `vfs_view_enter`, which changed nothing here. */
+void vfs_view_leave(uint32_t prev)
+{
+    (void)prev;
+}
+
 /** Release an opened handle. */
 void vfs_release(struct vfs_mount *mnt, void *handle)
 {
