@@ -1047,18 +1047,15 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
 
 /** Every poller waits on `input_wq`, which a hangup wakes, as Linux's
  * n_tty_poll waits on its queues whatever was asked: one that asks for no
- * events is still told of the hangup of its description. Every poller that
- * may sleep drains the pump at each scan: one for POLLIN, one for POLLOUT
- * on stopped output, so that a VSTART from COM1 reaches the discipline, and
- * one for neither, which waits for the hangup alone, since the console's
- * tick and interrupt drain only a budget of the ring (`console_deliver`).
- * A poller for POLLOUT alone on running output is answered at once and
- * drains nothing. The poll core calls with interrupts on, and the console's
- * tick and interrupt fill the discipline, so the pump and the reads run
- * with interrupts off, as in tty_inq. A terminal whose write lock a write
- * holds (`writing`) is not writable, as Linux's n_tty_poll tests
- * tty_is_writelocked, since a nonblocking write would take -EAGAIN; the
- * lock's release wakes `input_wq`. */
+ * events is still told of the hangup of its description. Drain the pump
+ * for POLLIN, for POLLOUT on stopped output so that a VSTART from COM1
+ * reaches the discipline, and for neither so that a poller waiting for
+ * hangup alone also drains the ring after the interrupt's budget runs out
+ * (`console_deliver`). A poller for POLLOUT alone skips the pump while
+ * output runs. The poll core calls with interrupts on, so the pump and
+ * readiness checks run with interrupts off, as in tty_inq. Report POLLOUT
+ * while output runs and the write lock is free, as Linux's n_tty_poll
+ * tests tty_is_writelocked. Releasing the lock wakes `input_wq`. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;

@@ -1437,12 +1437,13 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * the console's write lock (`tty_write_lock`) across the whole vector, as
  * Linux's tty_write holds atomic_write_lock over its iterator: another
  * writer waits for it, or takes -EAGAIN when nonblocking, and a termios
- * change that waits for output lands between writes. Under the lock, as
- * Linux's n_tty_write checks, a process of a background group of the
- * console's session writes freely unless TOSTOP is set; with it set,
- * SIGTTOU goes to the process group and the call is -EINTR, unless the
- * process blocks or ignores SIGTTOU, when it writes, or its group is
- * orphaned, when the call is -EIO (`tty_job_check`).
+ * change that waits for output lands between writes. Before each 2 KiB
+ * chunk of the vector, under the lock, the write checks TOSTOP as Linux's
+ * n_tty_write does. If set for a background group of the console's
+ * session, SIGTTOU goes to the group, and the write returns any bytes
+ * already written or -EINTR. A process blocking or ignoring SIGTTOU
+ * writes freely, and an orphaned group gets -EIO when no bytes were
+ * written (`tty_job_check`).
  */
 static int32_t console_writev(fd_entry_t *entry, const struct kernel_iovec *iov, int count)
 {
@@ -1470,19 +1471,34 @@ static int32_t console_writev(fd_entry_t *entry, const struct kernel_iovec *iov,
         }
     }
     for (i = 0; i < count; i++) {
-        if (iov[i].iov_len == 0) {
-            continue;
-        }
-        rc = tty_write_user(&console_tty, (const char __user *)iov[i].iov_base,
-                            (uint32_t)iov[i].iov_len, nonblock, opened);
-        if (rc < 0) {
-            break;
-        }
-        total += rc;
-        if ((unsigned long)rc < iov[i].iov_len) {
-            break;
+        uint32_t offset = 0;
+
+        while (offset < iov[i].iov_len) {
+            uint32_t used = (uint32_t)total % TTY_WRITE_CHUNK;
+            uint32_t chunk = TTY_WRITE_CHUNK - used;
+            uint32_t left = (uint32_t)iov[i].iov_len - offset;
+
+            if (total > 0 && used == 0 && (console_tty.ldisc.tio.c_lflag & TOSTOP)) {
+                rc = tty_job_check(&console_tty, SIGTTOU);
+                if (rc != 0) {
+                    goto out;
+                }
+            }
+            if (chunk > left) {
+                chunk = left;
+            }
+            rc = tty_write_user(&console_tty, (const char __user *)(iov[i].iov_base + offset),
+                                chunk, nonblock, opened);
+            if (rc > 0) {
+                total += rc;
+            }
+            if (rc < (int32_t)chunk) {
+                goto out;
+            }
+            offset += chunk;
         }
     }
+out:
     tty_write_unlock(&console_tty);
     return total > 0 ? total : rc;
 }

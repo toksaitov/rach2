@@ -258,9 +258,9 @@ For a mounted file, the kernel copies the whole vector, then
 brings in its buffers before taking the file lock.
 A bad data page ends the accessible prefix; bytes before it are written
 and returned as a short count.
-A pseudo-terminal master also copies the whole vector, and holds its
-write lock across every element, including waits and user copies, so
-another writer cannot insert bytes between them.
+The console and both ends of a pseudo-terminal also copy the whole vector.
+They hold their write lock across every element, including waits and user
+copies, so another writer cannot insert bytes between them.
 A pipe copies the whole vector and writes it as one write, as the
 section on pipes above says.
 Other writes read each vector again as they reach it.

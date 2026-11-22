@@ -22,6 +22,10 @@
  * interrupt is off still delivers its bytes at each timer wake.
  */
 
+/* N_TTY checks write job control at each 2 KiB boundary of the whole
+ * write, as Linux's iterate_tty_write calls n_tty_write. */
+#define TTY_WRITE_CHUNK 2048u
+
 /* The TIOCGWINSZ/TIOCSWINSZ window size (Linux `struct winsize`). */
 struct tty_winsize {
     uint16_t ws_row;
