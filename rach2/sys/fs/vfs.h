@@ -694,6 +694,7 @@ struct vfs_ref {
  * the end to the name its target ends with, unless VFS_WALK_NOFOLLOW. */
 #define VFS_WALK_CREATE   0x10
 #define VFS_MISSING       1
+#define VFS_WALK_MOUNT    0x20 /* Require a descriptor target's mount in this namespace. */
 
 /* openat2(2)'s RESOLVE_ restrictions, with Linux's values, which
  * `vfs_resolve_scoped` applies to its walk. BENEATH and IN_ROOT scope the
@@ -765,6 +766,15 @@ void vfs_init(void);
  */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
+
+/**
+ * Resolve `path` as vfs_resolve and follow a final proc descriptor link to
+ * its held node. Return 1 for that link and, if `fd_path` is given, write
+ * its mount-table path in VFS_PATH_MAX bytes. Return 0 for other paths or
+ * a negative errno with no reference or lock held. Flags are VFS_WALK_LOCK
+ * and VFS_WALK_MOUNT. The caller holds the big lock.
+ */
+int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path);
 
 /* `vfs_resolve_cached`'s answer for a path the name cache cannot finish. */
 #define VFS_CACHED_MISS 1

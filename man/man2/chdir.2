@@ -21,6 +21,10 @@ share, to
 .Fa path .
 A relative path is resolved from the current working directory.
 The target must be a directory.
+A final
+.Pa /proc/PID/fd/N
+link supplies the directory held by the descriptor, including a
+directory outside the caller's root.
 Directory search uses the caller's effective user and group IDs and
 supplementary groups; the target also requires search permission.
 The KRFFS root is treated as a directory with mode 0755.

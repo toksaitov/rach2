@@ -6357,27 +6357,39 @@ static int covered_already(const struct vfs_ref *tref)
 }
 
 /**
- * Replace a resolved proc descriptor link with the node and mount it holds.
- * If `real` is given, record the object's mount-table path in VFS_PATH_MAX
- * bytes. Return 1 after following a link, 0 with `ref` unchanged, or a
- * negative errno with nothing held.
+ * Walk `path`, following a final proc descriptor link as vfs_resolve_fd
+ * does. The bind walk also records the path it took in `record`, and lazy
+ * unmount may start at a working directory outside the process root.
  */
-static int mount_follow_fd(struct vfs_ref *ref, char *real)
+static int resolve_fd_path(const struct vfs_ref *start, const char *path, int flags,
+                           struct vfs_ref *ref, struct walk_record *record, char *fd_path)
 {
-    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    int locked = (flags & VFS_WALK_LOCK) != 0;
+    int rc = resolve_path(start, path, flags & ~VFS_WALK_MOUNT, ref, 0, 0, record);
+    const struct vpath *vp;
     struct vfs_ref object;
-    int rc;
 
+    if (rc != 0) {
+        return rc;
+    }
+    vp = vfs_synth_vpath(ref->mnt, ref->node);
     if (!vp || vp->kind != VNODE_PROC_FD_LINK) {
         return 0;
     }
-    rc = procfs_mount_fd(vp, &object, real, VFS_PATH_MAX);
+    walk_unlock(ref->mnt, locked);
+    rc = procfs_fd_ref(vp, &object, fd_path, VFS_PATH_MAX, (flags & VFS_WALK_MOUNT) != 0);
     vfs_ref_release(ref);
     if (rc != 0) {
         return rc;
     }
+    walk_lock(object.mnt, locked);
     *ref = object;
     return 1;
+}
+
+int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_path)
+{
+    return resolve_fd_path(NULL, path, flags, out, NULL, fd_path);
 }
 
 /**
@@ -6465,10 +6477,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
-    rc = vfs_resolve(0, target, 0, &tref, 0, 0);
-    if (rc == 0) {
-        rc = mount_follow_fd(&tref, NULL);
-    }
+    rc = vfs_resolve_fd(target, VFS_WALK_MOUNT, &tref, NULL);
     if (rc < 0) {
         return rc;
     }
@@ -6922,16 +6931,18 @@ static int table_path(char *path)
 }
 
 /** Resolve and hold a bind operand, with its path from the mount table.
- * A final proc descriptor link gives the held object (`procfs_mount_fd`).
+ * A final proc descriptor link gives the held object (`procfs_fd_ref`).
  * 0 with `ref` to release, or an error with nothing held. */
 static int bind_resolve(const char *path, struct vfs_ref *ref, char *real)
 {
-    int rc = vfs_resolve_real(path, 0, ref, real);
+    struct walk_record record;
+    int rc;
 
-    if (rc != 0) {
-        return rc;
-    }
-    rc = mount_follow_fd(ref, real);
+    record.real = real;
+    record.entry = NULL;
+    record.scope = NULL;
+    record.dir = NULL;
+    rc = resolve_fd_path(NULL, path, VFS_WALK_MOUNT, ref, &record, real);
     if (rc != 0) {
         return rc < 0 ? rc : 0;
     }
@@ -7121,7 +7132,7 @@ static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
             rc = -ENOTDIR;
         }
     }
-    if (rc == 0 && tref->node != tref->mnt->root) {
+    if (rc == 0 && (tref->node != tref->mnt->root || !vfs_mount_seen(tref->mnt))) {
         rc = -EINVAL;
     } else if (rc == 0 && mount_permanent(tref->mnt)) {
         rc = -EBUSY;
@@ -7146,12 +7157,12 @@ int vfs_do_umount(const char *target, int dir)
     struct vfs_mount *m;
     int rc;
 
-    rc = resolve_path(0, target, WALK_UNMOUNT, &tref, 0, 0, 0);
+    rc = resolve_fd_path(NULL, target, WALK_UNMOUNT | VFS_WALK_MOUNT, &tref, NULL, NULL);
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
-    if (rc != 0 && !m) {
+    if (rc < 0 && !m) {
         return rc;
     }
-    if (rc == 0) {
+    if (rc >= 0) {
         rc = unmount_found(&tref, dir, &m);
         if (rc != 0) {
             return rc;
@@ -7217,12 +7228,12 @@ int vfs_do_detach(const char *target, int dir)
         start = &cwd;
         target = ".";
     }
-    rc = resolve_path(start, target, WALK_UNMOUNT, &tref, 0, 0, 0);
+    rc = resolve_fd_path(start, target, WALK_UNMOUNT | VFS_WALK_MOUNT, &tref, NULL, NULL);
     m = rc == -EIO ? unmount_below_gone(target) : NULL;
-    if (rc != 0 && !m) {
+    if (rc < 0 && !m) {
         return rc;
     }
-    if (rc == 0) {
+    if (rc >= 0) {
         rc = unmount_found(&tref, dir, &m);
         if (rc == -EBUSY && m != mounts[0]) {
             rc = 0;
@@ -7326,7 +7337,8 @@ static int pivot_check(const struct vfs_ref *nref, const struct vfs_ref *oref,
         return -ENOTDIR;
     }
     if (nref->node != nref->mnt->root || nref->mnt->type->ops->lookup_rest ||
-        mount_permanent(nref->mnt) || rnode != rmnt->root) {
+        mount_permanent(nref->mnt) || rnode != rmnt->root || !vfs_mount_seen(nref->mnt) ||
+        !vfs_mount_seen(oref->mnt)) {
         return -EINVAL;
     }
     if (nref->mnt == rmnt || oref->mnt == rmnt) {
@@ -7354,12 +7366,12 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
     int i, rc, same = 0;
 
     tree_seq++;
-    rc = vfs_resolve(0, new_root, 0, &nref, 0, 0);
-    if (rc != 0) {
+    rc = vfs_resolve_fd(new_root, VFS_WALK_MOUNT, &nref, NULL);
+    if (rc < 0) {
         return rc;
     }
-    rc = vfs_resolve(0, put_old, 0, &oref, 0, 0);
-    if (rc != 0) {
+    rc = vfs_resolve_fd(put_old, VFS_WALK_MOUNT, &oref, NULL);
+    if (rc < 0) {
         vfs_ref_release(&nref);
         return rc;
     }

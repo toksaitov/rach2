@@ -20,6 +20,10 @@ a directory at or below
 .Fa new_root .
 Both paths are resolved from the caller's root and working directory
 before the call changes anything.
+A final
+.Pa /proc/PID/fd/N
+link supplies the directory and mount held by the descriptor.
+The mount must be visible in the caller's mount namespace.
 .Pp
 The old root is shown at
 .Fa put_old
