@@ -301,6 +301,49 @@
       "native": {"plan": "none", "class": "layout", "reason": "the boot partition must be the FAT32 volume, which only a disk whose MBR entries the case swapped gives; tests/native/probes.cases runs mountprobe's other rows natively"}
     },
     {
+      "case_id": "machine.mount.reloc",
+      "behavior": "a file of a mounted KRFFS volume moves while a bind of it waits, the source named by a descriptor and by its path, and the bind judges and attaches the file where it is now: a file target shows the moved file and a directory target is ENOTDIR, in the order each row checks it got",
+      "units": ["mount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /mountprobe reloc"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "mount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["reloc-disk", "reloc-fat"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "shell", "does": "boot the copies to the kernel's debug shell, throttle the KRFFS volume's writes and the FAT volume's reads through QMP, run mountprobe reloc until the shell is back, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "shell", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["reloc-disk", {"name": "blank", "size_bytes": 1048576}, "reloc-fat"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "the probe's line says MOUNTPROBE OK, and no line says MOUNTPROBE FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "reloc-disk", "node": "images/mount-reloc.disk", "per_architecture": true},
+        {"name": "reloc-fat", "node": "images/mount-reloc-fat.disk", "per_architecture": true},
+        {"name": "mount_scenario", "node": "tests/cases/machine/mount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the rows force their order with QEMU's throttles on the KRFFS volume's writes and the FAT volume's reads, which a native machine's disks do not have"}
+    },
+    {
       "case_id": "machine.mount.busybox",
       "behavior": "BusyBox on os-real mounts the FAT32 partition read-only, lists and reads it, finds it busy while a forked holder keeps a file of it open, unmounts it once the holder lets go, and prints the names and checksums mtools reads off the volume",
       "units": ["mount"],

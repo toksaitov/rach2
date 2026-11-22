@@ -50,6 +50,7 @@ static const struct probe_case probe_cases[] = {
     {"mountprobe", "exec /mountprobe\r", "MOUNTPROBE", {{NULL, NULL}}},
     {"mounted", "exec /lagprobe mounted\r", "LAGPROBE", {{NULL, NULL}}},
     {"claim", "exec /mountprobe claim\r", "CLAIMPROBE", {{NULL, NULL}}},
+    {"reloc", "exec /mountprobe reloc\r", "MOUNTPROBE", {{NULL, NULL}}},
     {"blockfail", "exec /lagprobe blockfail\r", "LAGPROBE", {{NULL, NULL}}},
     {"pool",
      "exec /lagprobe pool\r",
@@ -264,9 +265,41 @@ static void dirty_flag(struct lc *l, const char *disk)
 }
 
 /**
- * Run probe case `p`: boot the machine to the kernel's debug shell, run the
- * probe and wait for it to end, end the machine with QMP's quit, and judge
- * the console.
+ * Throttle the reloc case's disks once the machine is up, which a profile's
+ * disk cannot be: the writes of the KRFFS volume, the first IDE disk, to 50
+ * a second, and the reads of the FAT volume, the first disk of the second
+ * channel, to one a second. QEMU names an IDE drive by its channel and unit.
+ *
+ * @return 1 when QEMU took both, or 0 with the case halted.
+ */
+static int throttled(struct lc *l, struct etude_case_machine *m)
+{
+    static const char *const limits[][2] = {
+        {"ide0-hd0", "\"iops_rd\": 0, \"iops_wr\": 50"},
+        {"ide1-hd0", "\"iops_rd\": 1, \"iops_wr\": 0"},
+    };
+    enum etude_status st;
+    char arguments[200], *reply;
+    size_t i;
+
+    for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        snprintf(arguments, sizeof(arguments),
+                 "{\"device\": \"%s\", \"bps\": 0, \"bps_rd\": 0, \"bps_wr\": 0, \"iops\": 0, %s}",
+                 limits[i][0], limits[i][1]);
+        st = etude_qmp(m, "block_set_io_throttle", arguments, &reply);
+        free(reply);
+        if (st != ETUDE_OK) {
+            lc_halt(l, st, "QMP's block_set_io_throttle");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Run probe case `p`: boot the machine to the kernel's debug shell, throttle
+ * the reloc case's disks, run the probe and wait for it to end, end the
+ * machine with QMP's quit, and judge the console.
  */
 static void probe(struct lc *l, const struct probe_case *p)
 {
@@ -276,7 +309,7 @@ static void probe(struct lc *l, const struct probe_case *p)
 
     if (!lc_step(l, "probe") || (m = lc_boot(l, "shell")) == NULL ||
         !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, "\n> ", &at, NULL) ||
-        !lc_type(l, m, p->command))
+        (strcmp(p->name, "reloc") == 0 && !throttled(l, m)) || !lc_type(l, m, p->command))
         return;
     from = at;
     if (!lc_wait(l, m, "returning to kernel shell", &at, NULL) || !lc_quit(l, m, NULL)) {
