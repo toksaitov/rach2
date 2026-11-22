@@ -1135,6 +1135,27 @@ void vgpu_count_copied(uint64_t bytes)
     spin_unlock_irqrestore(&vgpu_copied_lock, flags);
 }
 
+/* The devices' objects on their lists (`vgpu_obj_init` to `obj_release`),
+ * which /proc/stat reports as virtio_gpu_objects; under vgpu_copied_lock. */
+static uint64_t vgpu_objects;
+
+void vgpu_count_objects(int delta)
+{
+    uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);
+
+    vgpu_objects += (uint64_t)(int64_t)delta;
+    spin_unlock_irqrestore(&vgpu_copied_lock, flags);
+}
+
+uint64_t virtio_gpu_objects(void)
+{
+    uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);
+    uint64_t n = vgpu_objects;
+
+    spin_unlock_irqrestore(&vgpu_copied_lock, flags);
+    return n;
+}
+
 uint64_t virtio_gpu_copied_bytes(void)
 {
     uint32_t flags = spin_lock_irqsave(&vgpu_copied_lock);
