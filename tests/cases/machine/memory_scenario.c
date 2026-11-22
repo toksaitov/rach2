@@ -290,11 +290,10 @@ static void refused(struct lc *l)
  * out and says when it resets, and the debug shell never starts. The panic
  * is recorded as the boot's end, which `etude.fault` judges against the
  * machine's declared fault. The panic's call trace and report follow its
- * first line, and `panic: rebooting in N seconds..` follows the last of
- * them, by the default `panic=` of 30, before a wait in which the kernel
- * writes nothing; the machine is ended only then, since a quit sent on the
- * first line can cut the next one part way, which `etude.kernel` reads as a
- * critical record it does not know. Assertions `descended`, `named`,
+ * first line. The machine ends after the newline of the countdown record
+ * that follows them, while the kernel waits to reset. A quit before that
+ * newline can leave a partial critical record for `etude.kernel` to read.
+ * Assertions `descended`, `named`,
  * `panicked`, `said-wait` and `no-shell`.
  */
 static void stackoverrun(struct lc *l)
@@ -319,7 +318,7 @@ static void stackoverrun(struct lc *l)
     free(w);
     snprintf(named, sizeof(named), "pid %d ran past the end of its kernel stack", pid);
     if (!lc_wait(l, m, "a kernel stack ran out", &at, "panicked") ||
-        !lc_wait(l, m, "] panic: rebooting in ", &at, "said-wait"))
+        !lc_wait(l, m, "] panic: rebooting in 30 seconds..\r\n", &at, "said-wait"))
         return;
     st = etude_fault(m, ETUDE_END_PANIC);
     if (st != ETUDE_OK) {
