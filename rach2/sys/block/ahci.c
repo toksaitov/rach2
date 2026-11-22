@@ -2015,10 +2015,9 @@ static int ahci_identify(struct ahci_disk *d)
 /**
  * Flush the device's write cache by polling, so a completed write is on the
  * medium, as the buffer cache's dirty flags and `pc_sync` expect. Returns as
- * `ahci_run_command` does. The `unflushed` mark is cleared under the claim,
- * which keeps the queue and the interrupt off the port, and so every write
- * answered before it is under this flush; a failed flush sets it again,
- * and a write answered once the claim is released sets it after.
+ * `ahci_run_command` does. The claim keeps the queue and the interrupt off
+ * the port. Clear the `unflushed` mark only after the command succeeds, so
+ * a concurrent `block_flush` still sees pending writes while it runs.
  */
 static int ahci_flush(struct ahci_disk *d)
 {
@@ -2028,11 +2027,8 @@ static int ahci_flush(struct ahci_disk *d)
     if (ahci_claim(d, ATA_FLUSH_EXT, &steps) != 0) {
         return -EIO; /* `unflushed` stays as it was */
     }
-    d->dev.unflushed = 0;
     rc = ahci_command_claimed(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0, steps);
-    if (rc != 0) {
-        d->dev.unflushed = 1;
-    }
+    d->dev.unflushed = rc != 0;
     ahci_release(d);
     return rc;
 }
