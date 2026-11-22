@@ -47,6 +47,7 @@
 #define VFS_S_IFMT       0170000u
 #define VFS_S_IFDIR      0040000u
 #define VFS_S_IFREG      0100000u
+#define VFS_S_IFLNK      0120000u
 #define VFS_IS_DIR(mode) (((mode) & VFS_S_IFMT) == VFS_S_IFDIR)
 
 /*
@@ -1210,7 +1211,7 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
 
     return mnt->type->ops->readlink && mnt->type->ops->getattr &&
            mnt->type->ops->getattr(mount_base(mnt), node, &st) == 0 &&
-           (st.mode & 0170000u) == 0120000u;
+           (st.mode & VFS_S_IFMT) == VFS_S_IFLNK;
 }
 
 /** Whether a type taking the rest of a path answered `rc`, VFS_LINK, with
@@ -1720,7 +1721,13 @@ static int walk_rest_kind(const struct vpath *vp, int rc, struct vfs_mount *mnt,
     return 0;
 }
 
-/** Capture a regular file's final entry before its parent hold is released. */
+/**
+ * Capture the final entry of a file that is neither a directory nor a link
+ * before its parent hold is released: a regular file, FIFO, socket or device
+ * node, whose descriptor rebuilds its path from the entry, as an O_PATH one
+ * that a bind names through /proc/self/fd does. A directory has its own path
+ * (`vfs_node_path`), and a link is followed past or names no file.
+ */
 static int walk_record_entry(struct walk_record *record, const struct vfs_ref *parent, void *found,
                              const char *leaf, const char *rest)
 {
@@ -1737,7 +1744,7 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
         return 0;
     }
     rc = vfs_getattr(parent->mnt, found, &st);
-    if (rc != 0 || (st.mode & 0170000u) != 0100000u) {
+    if (rc != 0 || VFS_IS_DIR(st.mode) || (st.mode & VFS_S_IFMT) == VFS_S_IFLNK) {
         return rc;
     }
     return vfs_name_capture(parent, leaf, record->entry);
@@ -1893,7 +1900,7 @@ static int cached_found(const struct vfs_ref *cur, void *found, const char *leaf
             cached_put(cur->mnt, found);
             return WALK_FULL;
         }
-        if ((st.mode & 0170000u) == 0120000u && (*rest || !(flags & VFS_WALK_NOFOLLOW))) {
+        if ((st.mode & VFS_S_IFMT) == VFS_S_IFLNK && (*rest || !(flags & VFS_WALK_NOFOLLOW))) {
             if (*rest ||
                 may_follow_link(cur->mnt, cur->node, &st, (flags & VFS_WALK_REAL_IDS) != 0) == 0) {
                 return WALK_LINK;
