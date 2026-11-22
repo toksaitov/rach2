@@ -2016,7 +2016,8 @@ int32_t vgpu_obj_open(struct drm_gem_object *obj, struct drm_file *file)
 }
 
 static const struct drm_gem_object_funcs vgpu_obj_funcs = {
-    vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL, vgpu_obj_open, vgpu_obj_close};
+    vgpu_obj_free, obj_mmap, NULL, NULL, obj_page, NULL, NULL, vgpu_obj_open, vgpu_obj_close,
+    NULL};
 
 /**
  * Make `bo`, zeroed, an object of `vg` of `size` bytes, a whole number of

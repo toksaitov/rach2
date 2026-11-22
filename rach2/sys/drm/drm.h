@@ -533,6 +533,9 @@ struct drm_gem_object_funcs {
     int32_t (*cpu_access)(struct drm_gem_object *obj, uint64_t flags);
     int32_t (*open)(struct drm_gem_object *obj, struct drm_file *file);
     void (*close)(struct drm_gem_object *obj, struct drm_file *file);
+    /* Called before PRIME makes a dma-buf of the object, under the big
+     * lock: 0, or an error that refuses the export. NULL for none. */
+    int32_t (*export)(struct drm_gem_object *obj);
 };
 
 /*

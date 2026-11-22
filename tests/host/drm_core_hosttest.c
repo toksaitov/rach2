@@ -1592,7 +1592,7 @@ static void hook_free(struct drm_gem_object *obj)
 }
 
 static const struct drm_gem_object_funcs hook_funcs = {hook_free, NULL, NULL,      NULL, NULL,
-                                                       NULL,      NULL, hook_open, NULL};
+                                                       NULL,      NULL, hook_open, NULL, NULL};
 
 /** A handle's id is reserved while the object's `open` hook runs and
  * published after it, as Linux's drm_gem_handle_create_tail; a failed hook

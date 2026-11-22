@@ -98,12 +98,13 @@ static uint32_t prime_cached(struct drm_file *file, const struct dma_buf *buf)
 /**
  * The dma-buf of `obj` with a reference for the caller: the one it was
  * imported from, the one exported of it already, or a new export with
- * `flags`' access, or NULL with no memory. The weak `dma_buf` is read and
+ * `flags`' access, once the driver's `export` has let it; or NULL with
+ * *err set to that refusal or -ENOMEM. The weak `dma_buf` is read and
  * set under the device's `object_lock`, as Linux's export under
  * `object_name_lock` (drm_prime.c:455-470), so that two exports at once
  * keep one buffer; the loser's put finds the pointer not its own.
  */
-static struct dma_buf *prime_export(struct drm_gem_object *obj, uint32_t flags)
+static struct dma_buf *prime_export(struct drm_gem_object *obj, uint32_t flags, int32_t *err)
 {
     struct drm_device *dev = obj->dev;
     struct dma_buf *buf, *won;
@@ -114,8 +115,12 @@ static struct dma_buf *prime_export(struct drm_gem_object *obj, uint32_t flags)
     if (buf) {
         return buf;
     }
+    if (obj->funcs && obj->funcs->export && (*err = obj->funcs->export(obj)) != 0) {
+        return NULL;
+    }
     buf = dma_buf_export(obj->size, &prime_ops, obj, obj->resv);
     if (!buf) {
+        *err = -ENOMEM;
         return NULL;
     }
     drm_gem_object_get(obj);
@@ -160,10 +165,10 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
             drm_gem_object_put(obj);
             return -EINVAL;
         }
-        buf = prime_export(obj, args->flags);
+        buf = prime_export(obj, args->flags, &rc);
         if (!buf) {
             drm_gem_object_put(obj);
-            return -ENOMEM;
+            return rc;
         }
         rc = drm_handle_set_prime(&file->objects, args->handle, obj, dma_buf_ref(buf));
         if (rc == 0) {

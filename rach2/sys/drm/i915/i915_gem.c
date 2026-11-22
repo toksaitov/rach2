@@ -455,6 +455,7 @@ const struct drm_gem_object_funcs i915_gem_object_funcs = {i915_gem_object_free,
                                                            0,
                                                            i915_gem_object_cpu_access,
                                                            0,
+                                                           0,
                                                            0};
 
 struct drm_i915_gem_object *i915_gem_object_alloc(struct drm_i915_private *i915, uint64_t size)
