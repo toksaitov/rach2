@@ -292,7 +292,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork, wait for the panic and end the machine"}
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork, wait for the panic and the processor's halt and end the machine"}
       ],
       "machines": [
         {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out"]}}
@@ -301,6 +301,7 @@
         {"assertion_id": "descended", "checks": "the kernel says kstack: overrun: pid N descends its stack", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying a kernel stack ran out, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "named", "checks": "a record says that pid N, the pid the descent gave, ran past the end of its kernel stack", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and its processor has halted with interrupts off, after the panic's whole record", "source": "scenario"},
         {"assertion_id": "no-shell", "checks": "the debug shell never starts", "source": "scenario"}
       ],
       "branches": [],
@@ -328,7 +329,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
-        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=boot, wait for the panic and end the machine"}
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=boot, wait for the panic and the processor's halt and end the machine"}
       ],
       "machines": [
         {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=boot"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out"]}}
@@ -337,6 +338,7 @@
         {"assertion_id": "descended", "checks": "the kernel says kstack: overrun: pid N descends its stack", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying a kernel stack ran out, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "named", "checks": "a record says that pid N, the pid the descent gave, ran past the end of its kernel stack", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and its processor has halted with interrupts off, after the panic's whole record", "source": "scenario"},
         {"assertion_id": "no-shell", "checks": "the debug shell never starts", "source": "scenario"}
       ],
       "branches": [],
