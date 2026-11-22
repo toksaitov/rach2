@@ -1209,58 +1209,72 @@ static void rows_record(void)
  * must judge and attach the file where it is now. The suite gives the rows
  * an empty KRFFS volume on /dev/disk0p1, whose writes QEMU throttles to 50
  * a second, and on /dev/disk2p1, on the other IDE channel, a FAT32 volume
- * whose reads it throttles to one a second, with the targets /d1/a/b/c/t and
- * /d2/a/b/c/td three directories deep, each directory in a cluster of its
- * own that 64 KiB of padding keeps apart from the next.
+ * whose reads it throttles to one a second, with a target three
+ * directories deep for each try of the two path rows, /dN/a/b/c/t for the
+ * file target's tries (N 1 to 3) and /dN/a/b/c/td for the directory
+ * target's (N 4 to 6), each directory in a cluster of its own that 64 KiB
+ * of padding keeps apart from the next, so that no try finds its target's
+ * directories in the cache.
  *
  * In each row a writer grows /rk/f from 4 KiB of 'A' to 64 KiB of 'B', which
  * moves it past /rk/g after it, and a mkdir of /rk/d then takes its old
- * offset first fit, so that a bind holding the file's old node would find a
+ * offset first fit, so that a bind judging the file's old node finds a
  * directory there. By descriptor, a syncer's fsync of a dirty file takes the
  * volume's namespace lock across a throttled write, so that the writer and
  * the mkdir queue on the lock; the binder copies the descriptor's node while
- * they still sleep there and queues behind them, and the lock serves its
- * waiters in order. By path, the binder takes its hold on the file under the
- * lock, lets the lock go and sleeps reading the uncached directories of its
- * target on the FAT volume while the writer and the mkdir run.
+ * they still sleep there and queues behind them. By path, the binder takes
+ * its hold on the file under the lock, lets the lock go and sleeps reading
+ * the uncached directories of its target on the FAT volume while the writer
+ * and the mkdir run.
  *
- * A row judges the order it got from what the kernel says. In both the file
- * has not moved when the bind is called, and has moved, with the directory
- * at its old offset, once it returns. By descriptor the writer and the mkdir
- * are inside their calls when the bind is called, which each marks in a page
- * the processes share as it makes the call, and neither has returned; and
- * the bind sleeps (a voluntary switch in /proc/self/status) and so waits on
- * the lock behind them. By path the bind reads disk2 (/proc/diskstats), and
- * the reads of it that have ended when the write and the mkdir return are
- * fewer than when the bind returns: the bind was still looking its target up
- * once the file had moved, and it took its hold before its first read. A try
- * that did not get its order says so and runs again, and the row fails when
- * three tries did not get it. The yields only make the order likely; the
- * bind's wait and the waiters' states in /proc/PID/stat are printed for the
- * record.
+ * The answer is judged first, since a correct kernel gives it in any order:
+ * a file target shows the moved file, and a directory target is refused
+ * with ENOTDIR. The order is then read from the kernel's bind trace
+ * (/sys/kernel/debug/vfs/bind_trace), armed for the try: by descriptor the
+ * bind copied the descriptor's node at the file's old place before the
+ * move, and took its hold after it, under the lock the move held; by path
+ * it took its hold on the old node before the move; and in both its last
+ * judgement of its source came after the move. A try whose trace shows
+ * another order says so and runs again, and the row fails when three tries
+ * did not get it. Once the order is got, the bind must have judged, and by
+ * descriptor held, the node the file moved to. The yields only make the
+ * order likely, and the bind's wait is printed for the record.
  */
 
-#define O_RDWR        2
-#define O_PATH        010000000
-#define PROT_WRITE    2
-#define MAP_ANONYMOUS 0x20
+#define O_RDWR       2
+#define O_PATH       010000000
+#define SIGKILL      9
+#define TRACE_EVENTS 64
+#define TRACE_PATH   "/sys/kernel/debug/vfs/bind_trace"
 
-/* Where the writer and the mkdir are in their calls, in a page the row's
- * processes share. */
-struct reloc_seen {
-    int writing; /* 1 once the writer is about to make its write */
-    int making;  /* 1 once the mkdir is about to be made */
-    long grown;  /* the reads of disk2 that had ended when the write, which
-                    moves /rk/f, returned, or -1 before */
-    long made;   /* the same when the mkdir of /rk/d returned */
+/* One event of the kernel's bind trace, as its line gives it. */
+struct trace_event {
+    long seq;
+    char kind;          /* 'c' copy, 'h' hold, 'j' judge or 'm' move */
+    unsigned long pid;  /* the process that recorded it */
+    unsigned long a, b; /* the node, or a move's from and to */
 };
 
-static struct reloc_seen *seen;
+static struct trace_event events[TRACE_EVENTS];
+static int nevents;
+static unsigned long trace_lost; /* events past the kernel's ring */
 static char chunk[65536];
+
+/* One try of a row: the file's node before the move (`was`), after it
+ * (`now`) and the directory's (`made`); the bind's wait in microseconds and
+ * its answer; and what the trace says, the sequence numbers of the bind's
+ * first copy of its descriptor's node, its first hold, its last judgement
+ * and the file's move, -1 for none, and the nodes each had. */
+struct reloc_try {
+    unsigned long was, now, made;
+    long waited, rc;
+    long copy, hold, judge, move;
+    unsigned long copied, held, judged, moved;
+};
 
 /** The inode number or the size of `path` from stat(2), as `at`, KSTAT_INO
  * or KSTAT_SIZE_AT, says; a KRFFS node's inode number is its offset plus
- * one. Fails the row when stat does. */
+ * one, the node the bind trace gives. Fails the row when stat does. */
 static unsigned long stat_field(const char *path, int at)
 {
     static char st[KSTAT_SIZE];
@@ -1271,90 +1285,153 @@ static unsigned long stat_field(const char *path, int at)
     return *(unsigned long *)(st + at);
 }
 
-/** The number after `key` in the text of `path`, or -1 when the file cannot
- * be read or has no such key. */
-static long proc_number(const char *path, const char *key)
+/** Write `word` to the kernel's bind trace: 0, or the negative errno. */
+static long trace_write(const char *word)
+{
+    long fd = syscall3(SYS_OPEN, (long)TRACE_PATH, O_WRONLY, 0), rc;
+
+    if (fd < 0) {
+        return fd;
+    }
+    rc = syscall3(SYS_WRITE, fd, (long)word, (long)strlen(word));
+    syscall1(SYS_CLOSE, fd);
+    return rc < 0 ? rc : 0;
+}
+
+/** Read the decimal at `p` into `*v`; the character after it, or 0 when
+ * `p` holds no digit. */
+static const char *trace_number(const char *p, unsigned long *v)
+{
+    const char *start = p;
+
+    for (*v = 0; *p >= '0' && *p <= '9'; p++) {
+        *v = *v * 10 + (unsigned long)(*p - '0');
+    }
+    return p == start ? 0 : p;
+}
+
+/** Read one line `SEQ KIND PID A B` of the trace at `p` into `e`; the next
+ * line, or 0 when the line is not one. */
+static const char *trace_line(const char *p, struct trace_event *e)
+{
+    unsigned long seq;
+
+    p = trace_number(p, &seq);
+    if (!p || *p++ != ' ') {
+        return 0;
+    }
+    e->seq = (long)seq;
+    e->kind = p[0] == 'm' && p[1] == 'o' ? 'm' : p[0];
+    while (*p >= 'a' && *p <= 'z') {
+        p++;
+    }
+    if (*p++ != ' ' || !(p = trace_number(p, &e->pid)) || *p++ != ' ' ||
+        !(p = trace_number(p, &e->a)) || *p++ != ' ' || !(p = trace_number(p, &e->b)) ||
+        *p++ != '\n') {
+        return 0;
+    }
+    return p;
+}
+
+/** Read the kernel's bind trace into `events` and `trace_lost`: 0, or -1
+ * when it cannot be read or a line of it is not the trace's. */
+static int trace_read(void)
 {
     static char text[8192];
-    long fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0), n, v;
-    const char *p;
-    int i = 0;
+    long fd = syscall3(SYS_OPEN, (long)TRACE_PATH, O_RDONLY, 0), n, got = 0;
+    const char *p = text;
 
     if (fd < 0) {
         return -1;
     }
-    n = syscall3(SYS_READ, fd, (long)text, (int)sizeof(text) - 1);
-    syscall1(SYS_CLOSE, fd);
-    text[n > 0 ? n : 0] = 0;
-    for (p = text; *p; p++) {
-        for (i = 0; key[i] && p[i] == key[i]; i++) {
-        }
-        if (!key[i]) {
-            break;
-        }
-    }
-    if (!*p) {
-        return -1;
-    }
-    for (p += i; *p == ' ' || *p == '\t'; p++) {
-    }
-    for (v = 0; *p >= '0' && *p <= '9'; p++) {
-        v = v * 10 + (*p - '0');
-    }
-    return v;
-}
-
-/** The voluntary context switches of this process. */
-static long voluntary_switches(void)
-{
-    return proc_number("/proc/self/status", "\nvoluntary_ctxt_switches:");
-}
-
-/** The reads of disk2, the FAT volume's disk, that have ended. */
-static long fat_reads(void)
-{
-    return proc_number("/proc/diskstats", " disk2 ");
-}
-
-/** The state of process `pid` in its /proc/PID/stat, or '?' when it cannot
- * be read. */
-static char proc_state(int pid)
-{
-    char path[32] = "/proc/", digits[12], line[256] = "";
-    int i = 0, j = 6, fd, n;
-
     do {
-        digits[i++] = (char)('0' + pid % 10);
-        pid /= 10;
-    } while (pid > 0);
-    while (i > 0) {
-        path[j++] = digits[--i];
-    }
-    for (i = 0; "/stat"[i] != '\0'; i++) {
-        path[j++] = "/stat"[i];
-    }
-    path[j] = '\0';
-    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
-    if (fd < 0) {
-        return '?';
-    }
-    n = syscall3(SYS_READ, fd, (long)line, (int)sizeof(line) - 1);
+        n = syscall3(SYS_READ, fd, (long)text + got, (long)sizeof(text) - 1 - got);
+        got += n > 0 ? n : 0;
+    } while (n > 0 && got < (long)sizeof(text) - 1);
     syscall1(SYS_CLOSE, fd);
-    for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
+    text[got] = 0;
+    if (n < 0) {
+        return -1;
     }
-    return i >= 0 && i + 2 < n ? line[i + 2] : '?';
+    for (nevents = 0; nevents < TRACE_EVENTS && *p >= '0' && *p <= '9'; nevents++) {
+        p = trace_line(p, &events[nevents]);
+        if (!p) {
+            return -1;
+        }
+    }
+    if (p[0] != 'l' || p[1] != 'o' || p[2] != 's' || p[3] != 't' || p[4] != ' ' ||
+        !(p = trace_number(p + 5, &trace_lost)) || *p != '\n') {
+        return -1;
+    }
+    return 0;
 }
 
-/** The inode number of descriptor `fd`, from fstat(2), which reads a KRFFS
- * node without its namespace lock. */
-static unsigned long fd_ino(int fd)
+/** Fill the trace's part of `o` for the bind of process `binder` of the
+ * file whose node was `o->was`. */
+static void reloc_order_read(struct reloc_try *o, unsigned long binder)
 {
-    static char st[KSTAT_SIZE];
+    unsigned long was = o->was;
+    const struct trace_event *e;
+    int i;
 
-    if (syscall2(SYS_FSTAT, fd, (long)st) != 0) {
-        fail("fstat of the bind's source descriptor");
+    o->copy = o->hold = o->judge = o->move = -1;
+    o->copied = o->held = o->judged = o->moved = 0;
+    for (i = 0; i < nevents; i++) {
+        e = &events[i];
+        if (e->kind == 'm' && e->a == was && o->move < 0) {
+            o->move = e->seq;
+            o->moved = e->b;
+        } else if (e->pid != binder) {
+            continue;
+        } else if (e->kind == 'c' && o->copy < 0) {
+            o->copy = e->seq;
+            o->copied = e->a;
+        } else if (e->kind == 'h' && o->hold < 0) {
+            o->hold = e->seq;
+            o->held = e->a;
+        } else if (e->kind == 'j') {
+            o->judge = e->seq;
+            o->judged = e->a;
+        }
     }
-    return *(unsigned long *)(st + KSTAT_INO);
+}
+
+/**
+ * Why the try `o` did not get its row's order, or 0 when it did: the file
+ * moved and the directory took its old node, and the trace shows, by
+ * descriptor (`by_fd`), the copy before the move and the hold after it, by
+ * path, the hold on the old node before the move, and in both the last
+ * judgement after the move.
+ */
+static const char *reloc_order_missed(int by_fd, const struct reloc_try *o)
+{
+    unsigned long was = o->was;
+
+    if (trace_lost != 0) {
+        return "the kernel's bind trace lost events";
+    }
+    if (o->move < 0 || o->moved != o->now || o->now == was) {
+        return "the kernel recorded no move of the file to where it is";
+    }
+    if (o->made != was) {
+        return "the directory did not take the file's old node";
+    }
+    if (o->hold < 0 || o->judge < 0) {
+        return "the kernel recorded no hold or no judgement by the bind";
+    }
+    if (by_fd && (o->copy < 0 || o->copied != was || o->copy > o->move)) {
+        return "the bind copied the descriptor's node after the move";
+    }
+    if (by_fd && o->hold < o->move) {
+        return "the bind took its hold before the move";
+    }
+    if (!by_fd && (o->held != was || o->hold > o->move)) {
+        return "the bind took its hold after the move";
+    }
+    if (o->judge < o->move) {
+        return "the bind's last judgement of its source came before the move";
+    }
+    return 0;
 }
 
 /** Make `path` hold `length` bytes of `c`. */
@@ -1386,45 +1463,135 @@ static void yield(int times)
 /**
  * Fork a child for one of the row's calls: after `wait` yields it grows the
  * file open on `fd` to 64 KiB of 'B' (`what` 'g'), makes /rk/d ('m'), or
- * fsyncs `fd` ('s'), records in `seen` the reads of disk2 that have ended
- * once the write or the mkdir has returned, and exits 0 when the call did
- * what it should. Returns the child's PID.
+ * fsyncs `fd` ('s'), and exits 0 when the call did what it should. Returns
+ * the child's PID, or -1 when the fork failed.
  */
 static int reloc_child(char what, long fd, int wait)
 {
     int pid = syscall0(SYS_FORK);
     long i, rc;
 
-    if (pid < 0) {
-        fail("fork for a relocation row");
-    }
-    if (pid > 0) {
-        return pid;
+    if (pid != 0) {
+        return pid < 0 ? -1 : pid;
     }
     yield(wait);
     if (what == 'g') {
         for (i = 0; i < (long)sizeof(chunk); i++) {
             chunk[i] = 'B';
         }
-        seen->writing = 1;
         rc = syscall3(SYS_WRITE, fd, (long)chunk, sizeof(chunk)) == (long)sizeof(chunk) ? 0 : -1;
-        seen->grown = fat_reads();
     } else if (what == 'm') {
-        seen->making = 1;
         rc = syscall2(SYS_MKDIR, (long)"/rk/d", 0755);
-        seen->made = fat_reads();
     } else {
         rc = syscall1(SYS_FSYNC, fd);
     }
     sys_exit(rc != 0);
 }
 
-/** Reap `pid`, when there is one, and fail with `what` unless it exited 0. */
-static void reloc_reap(int pid, const char *what)
+/** Wait for the child `pid`: its status, or -1 when waitpid fails. */
+static int reloc_wait(int pid)
 {
-    if (pid > 0 && wait_status(pid) != 0) {
-        fail(what);
+    int status = 0;
+
+    return syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid ? status : -1;
+}
+
+/** Kill and reap each child of `pids`, 0 for none, so that none outlives a
+ * failed start. */
+static void reloc_stop(const int pids[3])
+{
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (pids[i] > 0) {
+            syscall2(SYS_KILL, pids[i], SIGKILL);
+            reloc_wait(pids[i]);
+        }
     }
+}
+
+/**
+ * Start the children of one row and leave the binder ready: by descriptor
+ * (`by_fd`) the source is /proc/self/fd/9, an O_PATH descriptor of /rk/f,
+ * and the syncer, the writer and the mkdir are started in that order, the
+ * last two to queue on the volume's lock; by path the writer and the mkdir
+ * wait in yields for the binder to sleep on the FAT volume. `pids` gets the
+ * three children, 0 for none. Returns 0, or what failed, with every child
+ * it started stopped and reaped.
+ */
+static const char *reloc_start(int by_fd, int pids[3])
+{
+    long wr = syscall3(SYS_OPEN, (long)"/rk/f", O_WRONLY, 0), opath, big;
+
+    pids[0] = pids[1] = pids[2] = 0;
+    if (wr < 0) {
+        return "open the file to grow";
+    }
+    if (by_fd) {
+        opath = syscall3(SYS_OPEN, (long)"/rk/f", O_PATH, 0);
+        if (opath < 0 || syscall2(SYS_DUP2, opath, 9) != 9) {
+            return "open the bind's source O_PATH as descriptor 9";
+        }
+        fill_file("/rk/big", 'Z', 4096);
+        big = syscall3(SYS_OPEN, (long)"/rk/big", O_RDWR, 0);
+        if (big < 0 || syscall3(SYS_WRITE, big, (long)chunk, 4096) != 4096) {
+            return "dirty the file the syncer writes back";
+        }
+        pids[0] = reloc_child('s', big, 0);
+        yield(4);
+    }
+    if (pids[0] >= 0) {
+        pids[1] = reloc_child('g', wr, by_fd ? 0 : 40);
+    }
+    if (pids[0] >= 0 && pids[1] >= 0) {
+        pids[2] = reloc_child('m', 0, by_fd ? 10 : 80);
+    }
+    if (pids[0] < 0 || pids[1] < 0 || pids[2] < 0) {
+        reloc_stop(pids);
+        return "fork for a relocation row";
+    }
+    if (by_fd) {
+        yield(100);
+    }
+    return 0;
+}
+
+/** Fail unless the bind of the moved file on `target` shows its 64 KiB of
+ * 'B', and take the bind away. */
+static void reloc_bound_file(const char *target)
+{
+    long fd, i;
+
+    if (stat_field(target, KSTAT_SIZE_AT) != sizeof(chunk)) {
+        fail("the bind does not show the moved file's length");
+    }
+    fd = syscall3(SYS_OPEN, (long)target, O_RDONLY, 0);
+    if (fd < 0 || syscall3(SYS_READ, fd, (long)buf, 8) != 8) {
+        fail("read the moved file through its bind");
+    }
+    syscall1(SYS_CLOSE, fd);
+    for (i = 0; i < 8; i++) {
+        if (buf[i] != 'B') {
+            fail("the bind shows the file's old bytes");
+        }
+    }
+    if (syscall2(SYS_UMOUNT2, (long)target, 0) != 0) {
+        fail("unmount the bind of the moved file");
+    }
+}
+
+/** The target of try `try` of the row by descriptor (`by_fd`) or by path,
+ * onto a file or, with `dir`, a directory, into `out` of 32 bytes. */
+static void reloc_target(int by_fd, int dir, int try, char *out)
+{
+    const char *t =
+        by_fd ? (dir ? "/rk-d" : "/rk-t") : (dir ? "/fat/dN/a/b/c/td" : "/fat/dN/a/b/c/t");
+    int i;
+
+    for (i = 0; t[i]; i++) {
+        out[i] = t[i] == 'N' ? (char)('1' + dir * 3 + try) : t[i];
+    }
+    out[i] = 0;
 }
 
 /** Microseconds of CLOCK_MONOTONIC, for the record of a bind's wait. */
@@ -1469,44 +1636,7 @@ static void append(char *line, int *len, const char *s, long v)
     line[*len] = 0;
 }
 
-/**
- * Start the waiters of one row and leave the binder ready: by descriptor
- * (`by_fd`) the source is /proc/self/fd/9, an O_PATH descriptor of /rk/f,
- * and the syncer, the writer and the mkdir are started in that order, the
- * last two to queue on the volume's lock; by path the writer and the mkdir
- * wait in yields for the binder to sleep on the FAT volume. `pids` gets the
- * three children, 0 for none.
- */
-static void reloc_start(int by_fd, int pids[3])
-{
-    long wr = syscall3(SYS_OPEN, (long)"/rk/f", O_WRONLY, 0), opath, big;
-
-    if (wr < 0) {
-        fail("open the file to grow");
-    }
-    pids[0] = 0;
-    if (!by_fd) {
-        pids[1] = reloc_child('g', wr, 40);
-        pids[2] = reloc_child('m', 0, 80);
-        return;
-    }
-    opath = syscall3(SYS_OPEN, (long)"/rk/f", O_PATH, 0);
-    if (opath < 0 || syscall2(SYS_DUP2, opath, 9) != 9) {
-        fail("open the bind's source O_PATH as descriptor 9");
-    }
-    fill_file("/rk/big", 'Z', 4096);
-    big = syscall3(SYS_OPEN, (long)"/rk/big", O_RDWR, 0);
-    if (big < 0 || syscall3(SYS_WRITE, big, (long)chunk, 4096) != 4096) {
-        fail("dirty the file the syncer writes back");
-    }
-    pids[0] = reloc_child('s', big, 0);
-    yield(4);
-    pids[1] = reloc_child('g', wr, 0);
-    pids[2] = reloc_child('m', 0, 10);
-    yield(100);
-}
-
-/** Print that the row did not get its order, for `why`, and exit 2, which
+/** Print that the try did not get its order, for `why`, and exit 2, which
  * runs the row again. */
 static void reloc_missed(const char *why)
 {
@@ -1519,182 +1649,207 @@ static void reloc_missed(const char *why)
     sys_exit(2);
 }
 
-/**
- * Exit through `reloc_missed` unless the row got its order. `before` is
- * nonzero when, as the bind was called, the file had not moved and, by
- * descriptor, the writer and the mkdir were inside their calls; `slept`
- * counts the bind's voluntary switches by descriptor and its reads of disk2
- * by path; `reads` is disk2's ended reads when the bind returned.
- */
-static void reloc_order_held(int by_fd, int before, long slept, long reads)
+/** Print the record of the try `o` of the row by descriptor (`by_fd`) or
+ * by path onto a file or, with `dir`, a directory. */
+static void reloc_record(int by_fd, int dir, const struct reloc_try *o)
 {
-    if (!before) {
-        reloc_missed(by_fd ? "the file moved, or the writer or the mkdir was not inside its call, "
-                             "before the bind"
-                           : "the file moved before the bind");
-    }
-    if (slept < 1) {
-        reloc_missed(by_fd ? "the bind did not wait for the volume's lock"
-                           : "the bind did not read the FAT volume");
-    }
-    if (!by_fd &&
-        (seen->grown < 0 || seen->grown >= reads || seen->made < 0 || seen->made >= reads)) {
-        reloc_missed("the file moved after the bind's last read of the FAT volume");
-    }
-}
+    char line[256];
+    int len = 0;
 
-/** Fail unless the bind of the moved file on `target` shows its 64 KiB of
- * 'B', and take the bind away. */
-static void reloc_bound_file(const char *target)
-{
-    long fd, i;
-
-    if (stat_field(target, KSTAT_SIZE_AT) != sizeof(chunk)) {
-        fail("the bind does not show the moved file's length");
+    append(line, &len, by_fd ? "reloc: fd source: " : "reloc: path source: ", (long)o->was);
+    append(line, &len, " moved to ", (long)o->now);
+    append(line, &len, ", directory at ", (long)o->made);
+    if (by_fd) {
+        append(line, &len, "; copy ", o->copy);
+        append(line, &len, " at ", (long)o->copied);
     }
-    fd = syscall3(SYS_OPEN, (long)target, O_RDONLY, 0);
-    if (fd < 0 || syscall3(SYS_READ, fd, (long)buf, 8) != 8) {
-        fail("read the moved file through its bind");
-    }
-    syscall1(SYS_CLOSE, fd);
-    for (i = 0; i < 8; i++) {
-        if (buf[i] != 'B') {
-            fail("the bind shows the file's old bytes");
-        }
-    }
-    if (syscall2(SYS_UMOUNT2, (long)target, 0) != 0) {
-        fail("unmount the bind of the moved file");
-    }
+    append(line, &len, by_fd ? ", hold " : "; hold ", o->hold);
+    append(line, &len, " at ", (long)o->held);
+    append(line, &len, ", move ", o->move);
+    append(line, &len, ", judge ", o->judge);
+    append(line, &len, " at ", (long)o->judged);
+    append(line, &len, "; waited ", o->waited / 1000);
+    append(line, &len, dir ? " ms, directory target: " : " ms, file target: ", o->rc);
+    puts(line);
 }
 
 /**
- * One row, in a child of its own: bind /rk/f, by descriptor or by path,
- * onto a file or, with `dir`, a directory, while the file moves, and judge
- * the order and the bind. A file target must show the moved file; a
- * directory target must be refused with ENOTDIR.
+ * One try of a row, in a child of its own: bind /rk/f, by descriptor or by
+ * path, onto a file or, with `dir`, a directory, while the file moves, and
+ * judge the bind's answer, then the order the trace shows, then the nodes
+ * the bind judged and held. Exits 2 through `reloc_missed` when the order
+ * was not got. Every child it starts is reaped before it fails.
  */
-static void reloc_bind(int by_fd, int dir)
+static void reloc_bind(int by_fd, int dir, int try)
 {
-    static const char *const targets[] = {"/fat/d1/a/b/c/t", "/fat/d2/a/b/c/td", "/rk-t", "/rk-d"};
-    const char *target = targets[by_fd * 2 + dir];
-    const char *source = by_fd ? "/proc/self/fd/9" : "/rk/f";
-    unsigned long was, held = 0;
-    long slept, waited, reads, rc;
-    int pids[3], before, len = 0;
-    char line[256], states[4] = "---";
+    const char *source = by_fd ? "/proc/self/fd/9" : "/rk/f", *why;
+    unsigned long binder;
+    int pids[3], bad = 0, read, i;
+    struct reloc_try o;
+    char target[32];
 
+    reloc_target(by_fd, dir, try, target);
     fill_file("/rk/f", 'A', 4096);
     fill_file("/rk/g", 'G', 4096);
-    was = stat_field("/rk/f", KSTAT_INO);
-    reloc_start(by_fd, pids);
-    if (by_fd) {
-        states[0] = proc_state(pids[0]);
-        states[1] = proc_state(pids[1]);
-        states[2] = proc_state(pids[2]);
-        held = fd_ino(9);
+    o.was = stat_field("/rk/f", KSTAT_INO);
+    binder = (unsigned long)syscall0(SYS_GETPID);
+    if (trace_write("arm") != 0) {
+        fail("arm the kernel's bind trace");
     }
-    before = by_fd
-                 ? held == was && seen->writing && seen->making && seen->grown < 0 && seen->made < 0
-                 : stat_field("/rk/f", KSTAT_INO) == was;
-    slept = by_fd ? voluntary_switches() : fat_reads();
-    waited = now_us();
-    rc = syscall5(SYS_MOUNT, (long)source, (long)target, 0, MS_BIND, 0);
-    waited = now_us() - waited;
-    reads = fat_reads();
-    slept = (by_fd ? voluntary_switches() : reads) - slept;
-    reloc_reap(pids[0], "the syncer's fsync");
-    reloc_reap(pids[1], "the writer that moves the file");
-    reloc_reap(pids[2], "the mkdir at the old offset");
-    append(line, &len, by_fd ? "reloc: fd source: " : "reloc: path source: ", (long)was - 1);
-    if (by_fd) {
-        append(line, &len, ", descriptor at ", (long)held - 1);
-        append_text(line, &len, ", waiters ");
-        append_text(line, &len, states);
+    why = reloc_start(by_fd, pids);
+    if (why) {
+        fail(why);
     }
-    append(line, &len, " moved to ", (long)stat_field("/rk/f", KSTAT_INO) - 1);
-    append(line, &len, ", directory made at ", (long)stat_field("/rk/d", KSTAT_INO) - 1);
-    append(line, &len, by_fd ? ", switches " : ", fat reads ", slept);
-    append(line, &len, ", bind waited ", waited / 1000);
-    append(line, &len, dir ? " ms, directory target: " : " ms, file target: ", rc);
-    puts(line);
-    reloc_order_held(by_fd, before, slept, reads);
-    if (stat_field("/rk/f", KSTAT_INO) == was || stat_field("/rk/d", KSTAT_INO) != was) {
-        fail("the file did not move, or the directory did not take its old offset");
+    o.waited = now_us();
+    o.rc = syscall5(SYS_MOUNT, (long)source, (long)target, 0, MS_BIND, 0);
+    o.waited = now_us() - o.waited;
+    for (i = 0; i < 3; i++) {
+        bad |= pids[i] > 0 && reloc_wait(pids[i]) != 0;
     }
-    if (dir ? rc != -ENOTDIR : rc != 0) {
+    read = trace_read();
+    trace_write("off");
+    if (bad) {
+        fail("the syncer, the writer or the mkdir of a relocation row failed");
+    }
+    if (read != 0) {
+        fail("read the kernel's bind trace");
+    }
+    o.now = stat_field("/rk/f", KSTAT_INO);
+    o.made = stat_field("/rk/d", KSTAT_INO);
+    reloc_order_read(&o, binder);
+    reloc_record(by_fd, dir, &o);
+    if (dir ? o.rc != -ENOTDIR : o.rc != 0) {
         fail(dir ? "a bind of the moved file onto a directory is not ENOTDIR"
                  : "a bind of the moved file onto a file failed");
     }
     if (!dir) {
         reloc_bound_file(target);
     }
+    why = reloc_order_missed(by_fd, &o);
+    if (why) {
+        reloc_missed(why);
+    }
+    if (o.judged != o.now || (by_fd && o.held != o.now)) {
+        fail("the bind judged or held its source at the node the file had left");
+    }
+}
+
+/** Count the removal answer `rc` as a failure, printed with `what`, unless
+ * it is 0 or `none`, the answer when there was nothing to remove. */
+static int reloc_gone(const char *what, long rc, long none)
+{
+    char line[256];
+    int len = 0;
+
+    if (rc == 0 || rc == none) {
+        return 0;
+    }
+    append_text(line, &len, "MOUNTPROBE FAIL: ");
+    append(line, &len, what, rc);
+    puts(line);
+    return 1;
+}
+
+/** Remove what a try left: the bind on `target`, the row's files and the
+ * directory made at the file's old node. Returns the removals that
+ * failed. */
+static int reloc_tidy(const char *target)
+{
+    int bad = 0;
+
+    bad += reloc_gone("detach the bind of a relocation row: ",
+                      syscall2(SYS_UMOUNT2, (long)target, MNT_DETACH), -EINVAL);
+    bad += reloc_gone("remove /rk/f: ", syscall1(SYS_UNLINK, (long)"/rk/f"), -ENOENT);
+    bad += reloc_gone("remove /rk/g: ", syscall1(SYS_UNLINK, (long)"/rk/g"), -ENOENT);
+    bad += reloc_gone("remove /rk/big: ", syscall1(SYS_UNLINK, (long)"/rk/big"), -ENOENT);
+    bad += reloc_gone("remove /rk/d: ", syscall1(SYS_RMDIR, (long)"/rk/d"), -ENOENT);
+    return bad;
 }
 
 /** Run `reloc_bind` in a child, so that a failed row still lets the next
- * run, then remove what it left: a bind on its target, its files and the
- * directory made at the file's old offset. A try that did not get the
- * row's order runs again, three tries in all. Returns 1 for a failed row. */
+ * run, then remove what it left. A try that did not get the row's order
+ * runs again, on a target of its own, three tries in all. Returns 1 for a
+ * failed row. */
 static int reloc_round(int by_fd, int dir)
 {
-    static const char *const targets[] = {"/fat/d1/a/b/c/t", "/fat/d2/a/b/c/td", "/rk-t", "/rk-d"};
-    int pid, status, tries;
+    char target[32];
+    int pid, status, tries, bad;
 
     for (tries = 0; tries < 3; tries++) {
-        seen->writing = seen->making = 0;
-        seen->grown = seen->made = -1;
         pid = syscall0(SYS_FORK);
         if (pid < 0) {
-            fail("fork for a relocation row");
+            puts("MOUNTPROBE FAIL: fork for a relocation row");
+            return 1;
         }
         if (pid == 0) {
-            reloc_bind(by_fd, dir);
+            reloc_bind(by_fd, dir, tries);
             sys_exit(0);
         }
-        status = wait_status(pid);
-        syscall2(SYS_UMOUNT2, (long)targets[by_fd * 2 + dir], MNT_DETACH);
-        syscall1(SYS_UNLINK, (long)"/rk/f");
-        syscall1(SYS_UNLINK, (long)"/rk/g");
-        syscall1(SYS_UNLINK, (long)"/rk/big");
-        syscall1(SYS_RMDIR, (long)"/rk/d");
-        if (status != 2 << 8) {
-            return status != 0;
+        status = reloc_wait(pid);
+        reloc_target(by_fd, dir, tries, target);
+        bad = reloc_tidy(target);
+        if (bad || status != 2 << 8) {
+            return status != 0 || bad;
         }
     }
     puts("MOUNTPROBE FAIL: no try of a relocation row got its order");
     return 1;
 }
 
-/** `mountprobe reloc`: mount the two volumes, run the four rows, by
- * descriptor and by path onto a file and onto a directory, take the mounts
- * and the mount points away, and print MOUNTPROBE OK when every row passed.
- * Does not return. */
+/** Take away every mount and mount point of the `reloc` rows, and disarm
+ * the bind trace, each tried whatever the others answer. Returns the
+ * removals that failed, each printed. */
+static int reloc_cleanup(void)
+{
+    int bad = 0;
+
+    bad += reloc_gone("disarm the kernel's bind trace: ", trace_write("off"), -ENOENT);
+    bad += reloc_gone("unmount /fat: ", syscall2(SYS_UMOUNT2, (long)"/fat", 0), -EINVAL);
+    bad += reloc_gone("unmount /rk: ", syscall2(SYS_UMOUNT2, (long)"/rk", 0), -EINVAL);
+    bad += reloc_gone("remove /rk-t: ", syscall1(SYS_UNLINK, (long)"/rk-t"), -ENOENT);
+    bad += reloc_gone("remove /rk-d: ", syscall1(SYS_RMDIR, (long)"/rk-d"), -ENOENT);
+    bad += reloc_gone("remove /fat: ", syscall1(SYS_RMDIR, (long)"/fat"), -ENOENT);
+    bad += reloc_gone("remove /rk: ", syscall1(SYS_RMDIR, (long)"/rk"), -ENOENT);
+    return bad;
+}
+
+/** `mountprobe reloc`: make the mount points, mount the two volumes, run
+ * the four rows, by descriptor and by path onto a file and onto a
+ * directory, take every mount and mount point away whatever failed, and
+ * print MOUNTPROBE OK when every step and row passed. Does not return. */
 static void rows_reloc(void)
 {
-    long at = probe_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    int failed;
+    const char *why = 0;
+    long fd;
+    int failed = 0;
 
-    if (at < 0 && at > -4096) {
-        fail("map the page the rows share");
-    }
-    seen = (struct reloc_seen *)at;
     if (syscall2(SYS_MKDIR, (long)"/rk", 0755) != 0 ||
         syscall2(SYS_MKDIR, (long)"/fat", 0755) != 0 ||
         syscall2(SYS_MKDIR, (long)"/rk-d", 0755) != 0) {
-        fail("make the relocation rows' mount points");
+        why = "make the relocation rows' mount points";
     }
-    fill_file("/rk-t", 'T', 1);
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/rk", (long)"krffs", 0, 0) != 0 ||
-        do_mount("/dev/disk2p1", "/fat", 0, 0) != 0) {
-        fail("mount the relocation volume and the FAT volume");
+    fd = why ? -1 : syscall3(SYS_OPEN, (long)"/rk-t", O_CREAT | O_WRONLY, 0600);
+    if (!why && fd < 0) {
+        why = "make the relocation rows' file target";
     }
-    failed = reloc_round(1, 0) + reloc_round(1, 1) + reloc_round(0, 0) + reloc_round(0, 1);
-    if (syscall2(SYS_UMOUNT2, (long)"/fat", 0) != 0 || syscall2(SYS_UMOUNT2, (long)"/rk", 0) != 0) {
-        fail("unmount the relocation volume and the FAT volume");
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
     }
-    syscall1(SYS_UNLINK, (long)"/rk-t");
-    syscall1(SYS_RMDIR, (long)"/rk-d");
-    syscall1(SYS_RMDIR, (long)"/fat");
-    syscall1(SYS_RMDIR, (long)"/rk");
+    if (!why && syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/rk", (long)"krffs", 0, 0) != 0) {
+        why = "mount the relocation volume";
+    }
+    if (!why && do_mount("/dev/disk2p1", "/fat", 0, 0) != 0) {
+        why = "mount the FAT volume";
+    }
+    if (!why) {
+        failed = reloc_round(1, 0) + reloc_round(1, 1) + reloc_round(0, 0) + reloc_round(0, 1);
+    }
+    if (reloc_cleanup() != 0 && !why) {
+        why = "take the relocation rows' mounts and mount points away";
+    }
+    if (why) {
+        fail(why);
+    }
     if (failed) {
         fail("a bind of a KRFFS file that moved while the bind waited");
     }

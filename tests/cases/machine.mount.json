@@ -302,7 +302,7 @@
     },
     {
       "case_id": "machine.mount.reloc",
-      "behavior": "a file of a mounted KRFFS volume moves while a bind of it waits, the source named by a descriptor and by its path, and the bind judges and attaches the file where it is now: a file target shows the moved file and a directory target is ENOTDIR, in the order each row checks it got",
+      "behavior": "a file of a mounted KRFFS volume moves while a bind of it waits, the source named by a descriptor and by its path, and the bind judges and attaches the file where it is now: a file target shows the moved file and a directory target is ENOTDIR, in the order the kernel's bind trace shows: the move after the bind took its source and before it judged it",
       "units": ["mount"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
