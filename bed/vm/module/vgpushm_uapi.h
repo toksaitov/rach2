@@ -45,11 +45,16 @@ struct vgpushm_counts {
  * descriptor `fd`, a memfd or another file of shmem, or a dma-buf whose
  * pages are RAM, for the epoch `epoch` of the driver's (vgpushm.h), and get
  * a handle to it and its pages' count. Both are whole pages, and `size` is
- * at most VGPUSHM_PIN_MAX_SIZE. Errors: EINVAL for a range not page-aligned,
- * too large or past the buffer, or a descriptor that is neither shmem nor a
- * dma-buf; EBADF for a descriptor not open; EFAULT for a dma-buf with no
- * pages of RAM; EOPNOTSUPP for a dma-buf on a kernel with
- * CONFIG_DMABUF_DEBUG.
+ * at most VGPUSHM_PIN_MAX_SIZE. With VGPUSHM_PIN_FRESH in `flags`, the
+ * caller vouches that the file is its own, made for this pin, which nothing
+ * else writes; the module checks that it is shmem, holds no page, resident
+ * or swapped, and is mapped nowhere, and a pin that fails removes the range
+ * from the file. Without it, a pin that fails leaves in the file what it
+ * brought in. Errors: EINVAL for a range not page-aligned, too large or past
+ * the buffer, a descriptor that is neither shmem nor a dma-buf, a file that
+ * VGPUSHM_PIN_FRESH does not fit, or an unknown flag; EBADF for a descriptor
+ * not open; EFAULT for a dma-buf with no pages of RAM; EOPNOTSUPP for a
+ * dma-buf on a kernel with CONFIG_DMABUF_DEBUG; ENOMEM.
  */
 struct vgpushm_pin {
     __s32 fd;
@@ -59,10 +64,14 @@ struct vgpushm_pin {
     __u32 handle; /* out */
     __u32 kind;   /* out: VGPUSHM_PIN_SHMEM or VGPUSHM_PIN_DMABUF */
     __u64 pages;  /* out */
+    __u32 flags;  /* 0 or VGPUSHM_PIN_FRESH */
+    __u32 reserved;
 };
 
 #define VGPUSHM_PIN_SHMEM  1
 #define VGPUSHM_PIN_DMABUF 2
+
+#define VGPUSHM_PIN_FRESH 1u
 
 /* The most bytes one pin holds, 1 GiB. */
 #define VGPUSHM_PIN_MAX_SIZE (1ull << 30)
