@@ -26,9 +26,47 @@ mkdir -p "$out"
 date +%s.%N > "$out/start"
 cat /proc/stat > "$out/proc-stat"
 debug=/sys/kernel/debug
-# BED_PROFILE_THREAD names the one thread bkl/calls counts from before on.
+# cpu: one line a thread: its ID, its process's, its user and system ticks
+# and its name, which /proc/PID/task/TID/stat gives.
+cpu()
+{
+    for task in /proc/[0-9]*/task/[0-9]*; do
+        pid=${task%/task/*}
+        stat=$(cat "$task/stat" 2> /dev/null) || continue
+        comm=${stat#*\(}
+        comm=${comm%\)*}
+        # shellcheck disable=SC2086 # the fields after the name are words
+        set -- ${stat##*\) }
+        echo "${task##*/} ${pid#/proc/} ${12} ${13} $comm"
+    done
+}
+# BED_PROFILE_THREAD names the one thread bkl/calls counts from before on:
+# a name, an ID, or `busiest NAME`, the thread of that name, other than its
+# process's first, that used the most processor time over the two seconds
+# before samples, which before/chosen records.
 if [ "$2" = before ] && [ -n "${BED_PROFILE_THREAD:-}" ]; then
-    echo "thread $BED_PROFILE_THREAD" > "$debug/bkl/calls"
+    thread=$BED_PROFILE_THREAD
+    case $thread in
+        'busiest '*)
+            cpu > "$out/cpu-0"
+            sleep 2
+            cpu > "$out/cpu-1"
+            thread=$(awk -v name="${thread#busiest }" '
+                NR == FNR { t[$1] = $3 + $4; next }
+                {
+                    comm = $0
+                    sub(/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ /, "", comm)
+                }
+                $1 != $2 && ($1 in t) && comm == name {
+                    d = $3 + $4 - t[$1]
+                    if (best == "" || d > most) { best = $1; most = d }
+                }
+                END { print best }' "$out/cpu-0" "$out/cpu-1")
+            [ -n "$thread" ] || { echo "profile: no thread ${BED_PROFILE_THREAD#busiest }" >&2; exit 1; }
+            echo "$thread" > "$out/chosen"
+            ;;
+    esac
+    echo "thread $thread" > "$debug/bkl/calls"
 fi
 for path in kvm/exit_stats bkl/calls; do
     [ ! -r "$debug/$path" ] || cat "$debug/$path" > "$out/${path##*/}"
@@ -50,6 +88,7 @@ if [ "$2" = after ]; then
         pid=${task%/task/*}
         read -r comm 2> /dev/null < "$task/comm" && echo "${task##*/} ${pid#/proc/} $comm"
     done > "$out/threads" || :
+    cpu > "$out/cpu" || :
 fi
 if command -v ivshmemd > /dev/null; then
     ivshmemd -i > "$out/region" 2> "$out/region.err" || :
