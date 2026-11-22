@@ -189,25 +189,29 @@ static int userping(struct etude_case *c)
 
 /**
  * Log in as the test user and ping the loopback address fifty times, 10 ms
- * apart, and then with no interval for a second. Each ping exits 0 only with
- * its replies counted: the first with all fifty, which -w makes it require,
- * and the second with one, which it reaches only when an interval of 0 keeps
+ * apart, then with no interval for a second, then adaptively with a retry
+ * every microsecond for a second. Each ping exits 0 only with its replies
+ * counted: the first with all fifty, which -w makes it require, and the others
+ * with at least one. The second reaches it only when an interval of 0 keeps
  * sending the requests and checking -w, and leaves it time between sends to
- * read the replies, which a send timer shorter than its handler's own run
- * does not. The line the shell prints when both exit 0 is computed, so that
- * the echo of the command typed cannot match it.
+ * read the replies, which a send timer shorter than its handler's own run does
+ * not; the third only when the replies are read while a retry is due, since a
+ * pass of the loop can take longer than the interval. The line the shell
+ * prints when all three exit 0 is computed, so that the echo of the command
+ * typed cannot match it.
  */
 static int fastping(struct etude_case *c)
 {
-    static const struct session s = {
-        "test",
-        "test-password",
-        "$ ",
-        "ping",
-        "ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && "
-        "ping -q -i 0 -w 1 127.0.0.1 > /dev/null && echo fastping: $((6*7))\r",
-        "fastping: 42",
-        "all-replies"};
+    static const struct session s = {"test",
+                                     "test-password",
+                                     "$ ",
+                                     "ping",
+                                     "ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && "
+                                     "ping -q -i 0 -w 1 127.0.0.1 > /dev/null && "
+                                     "ping -q -A -i 0.000002 -w 1 127.0.0.1 > /dev/null && "
+                                     "echo fastping: $((6*7))\r",
+                                     "fastping: 42",
+                                     "all-replies"};
 
     return session(c, &s);
 }

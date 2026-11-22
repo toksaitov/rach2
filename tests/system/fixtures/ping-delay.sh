@@ -1,5 +1,6 @@
 #!/bin/sh
-# Check BusyBox adaptive ping with replies delayed on a private Linux loopback.
+# Check BusyBox adaptive ping with replies delayed on a private Linux loopback:
+# the send count, the retries and the deadline.
 set -eu
 
 if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then
@@ -45,5 +46,49 @@ for address in 127.0.0.1 ::1; do
         fi
         echo "ping-delay: $address $mode: passed"
     done
+done
+
+# A retry interval shorter than one pass of the loop, with replies queued:
+# the replies are read between retries, so some are counted. The short delay
+# and the long queue keep netem from dropping the flood's requests, which a
+# raw IPv6 socket reports as ENOBUFS.
+tc qdisc change dev lo root netem delay 10ms limit 100000
+for address in 127.0.0.1 ::1; do
+    status=0
+    "$busybox" ping -q -A -i 0.000002 -w 1 "$address" > "$work/output" ||
+        status=$?
+    if [ "$status" -ne 0 ] ||
+        ! grep -E ' packets transmitted, [1-9][0-9]* packets received' "$work/output"; then
+        echo "ping-delay: $address retry: expected replies read between retries, status $status" >&2
+        cat "$work/output" >&2
+        exit 1
+    fi
+    echo "ping-delay: $address retry: passed"
+done
+
+# A reply readable only after -w: ping is stopped in its wait across the
+# deadline and continued once the reply, 1.5 s out, has arrived. It must not
+# count the reply. Without CAP_NET_RAW it opens a datagram socket, as an
+# ordinary account does, which holds only the reply, where a raw IPv4 socket
+# would first read the ping's own request and check -w again before the reply.
+tc qdisc change dev lo root netem delay 750ms
+echo '0 0' > /proc/sys/net/ipv4/ping_group_range
+for address in 127.0.0.1 ::1; do
+    status=0
+    setpriv --bounding-set=-net_raw \
+        "$busybox" ping -q -A -c 1 -w 1 "$address" > "$work/output" &
+    pid=$!
+    sleep 0.3
+    kill -STOP "$pid"
+    sleep 2.2
+    kill -CONT "$pid"
+    wait "$pid" || status=$?
+    if [ "$status" -ne 1 ] ||
+        ! grep -Fx '1 packets transmitted, 0 packets received, 100% packet loss' "$work/output"; then
+        echo "ping-delay: $address late: expected the reply after -w not counted, status $status" >&2
+        cat "$work/output" >&2
+        exit 1
+    fi
+    echo "ping-delay: $address late: passed"
 done
 EOF
