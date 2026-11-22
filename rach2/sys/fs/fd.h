@@ -259,8 +259,8 @@ struct open_file {
     /* The view (`vfs_mntns_view`) the reservation was taken in, whose
      * flags for `access_mnt` it writes through, as Linux's writer counts on
      * that namespace's copy of the mount (`fd_mount_readonly_begin`). A
-     * view is never given again, so it names that namespace even after the
-     * namespace ends. */
+     * view is not given to another namespace (`vfs_mntns_view`), so it
+     * names that namespace even after the namespace ends. */
     uint32_t access_ns;
     /* The token of the type's `pin` for an O_PATH description on a type
      * that keeps a node only while it is open, which the last unref gives
