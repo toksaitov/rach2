@@ -97,6 +97,7 @@ static uint32_t moved_bytes;
 /* Set after `ahci.c` is included, because what it does reaches into the
    driver's own command list, which is defined there. */
 static void (*on_command_issued)(void);
+static void (*on_command_pending)(void); /* called once with PxCI still set */
 
 #define R_CAP  0x00
 #define R_GHC  0x04
@@ -313,6 +314,12 @@ static void model_w32(uint32_t off, uint32_t v)
     }
     if (off == base + P_CI) {
         model_issue(base, v);
+        if (reg[off] && on_command_pending) {
+            void (*pending)(void) = on_command_pending;
+
+            on_command_pending = 0;
+            pending();
+        }
         return;
     }
     reg[off] = v;
@@ -866,6 +873,7 @@ static void model_reset(void)
     ahci_warnings = 0;
     moved_bytes = 512;
     on_command_issued = complete_command;
+    on_command_pending = 0;
     reset_completes = 1;
     handoff_answers = 1;
     link_comes_up = 1;
@@ -1581,6 +1589,43 @@ static void claim_deadline_rows(void)
     cpu_table[0].current = 0;
 }
 
+/** A concurrent block_flush samples its skip condition while PxCI is set. */
+static void check_flush_pending(void)
+{
+    CHECK("a concurrent flush sees pending writes while the command runs",
+          !block_flush_skips(&ahci_disks[0].dev));
+}
+
+/** A failed polled flush keeps pending writes until a successful retry. */
+static void polled_flush_pending(void)
+{
+    struct ahci_disk *d = &ahci_disks[0];
+    block_device_t *dev = &d->dev;
+
+    model_reset();
+    CHECK("the pending flush row starts a port",
+          ahci_select_port() == 0 && ahci_port_start(d) == 0);
+    dev->flags = BLOCK_WRITE_THROUGH;
+    dev->flush = ahci_flush_submit;
+    dev->drvdata = d;
+    dev->unflushed = 1;
+    fatal_status = 2;
+    command_completes = 0;
+    on_command_pending = check_flush_pending;
+    CHECK("the failed polled flush leaves the write pending",
+          ahci_flush_now(dev) == -EIO && !block_flush_skips(dev));
+    CHECK("the skip condition was sampled during the failed command", !on_command_pending);
+
+    fatal_status = 0;
+    command_completes = 1;
+    reg[P0 + P_TFD] = 0;
+    complete_after = 2;
+    on_command_pending = check_flush_pending;
+    CHECK("a successful polled flush leaves no write pending",
+          ahci_flush_now(dev) == 0 && block_flush_skips(dev));
+    CHECK("the skip condition was sampled during the successful command", !on_command_pending);
+}
+
 /** Check queued completions, independent ports and restart after polling. */
 static void interrupt_rows(void)
 {
@@ -1592,6 +1637,7 @@ static void interrupt_rows(void)
     polled_queue_restart(1);
     polled_queue_restart(2);
     polled_drain_counted();
+    polled_flush_pending();
     port_lock_rows();
     claim_bound_rows();
     claim_wait_rows();
