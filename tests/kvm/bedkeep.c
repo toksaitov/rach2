@@ -1,16 +1,21 @@
 /* bedkeep.c: the keeper of a load or a figure of bed-shm.sh, a child
  * subreaper that runs COMMAND and, once it ends or the keeper is told to
- * stop, ends and reaps every process it left (tests/kvm/Readme.md). */
+ * stop through its standard input, ends and reaps every process it left
+ * (tests/kvm/Readme.md). */
 
 #define _XOPEN_SOURCE 700
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -35,6 +40,9 @@
 #define MAX_KIDS 4096
 
 static volatile sig_atomic_t stop_asked;
+
+static const char *status_path; /* BASE.status, the lines bed-shm.sh reads */
+static int end_noted;           /* whether the `ended` line is written */
 
 static pid_t kids[MAX_KIDS]; /* this keeper's children, from /proc */
 static int nkids;
@@ -82,6 +90,34 @@ static void nap(long ms)
     ts.tv_nsec = (ms % 1000L) * 1000000L;
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
     }
+}
+
+/**
+ * Append one line, of FMT and its arguments, to the status file, opened
+ * for each line and never inherited, so that the command holds nothing of
+ * it.
+ */
+static void note(const char *fmt, ...)
+{
+    char line[512];
+    va_list ap;
+    int fd, n;
+
+    va_start(ap, fmt);
+    n = vsnprintf(line, sizeof(line) - 1, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    if (n > (int)sizeof(line) - 2)
+        n = (int)sizeof(line) - 2;
+    line[n++] = '\n';
+    fd = open(status_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (fd < 0)
+        return;
+    if (write(fd, line, (size_t)n) != n) {
+        /* nothing more to do: the script then waits out its bound */
+    }
+    close(fd);
 }
 
 /**
@@ -180,7 +216,8 @@ static int reap_others(pid_t main_pid)
 }
 
 /**
- * Give whether MAIN has ended, leaving it unreaped.
+ * Give whether MAIN has ended, leaving it unreaped, and write the status
+ * file's `ended STATUS` line, a shell's status, the first time it has.
  */
 static int main_ended(pid_t main_pid)
 {
@@ -189,7 +226,13 @@ static int main_ended(pid_t main_pid)
     memset(&si, 0, sizeof(si));
     if (waitid(P_PID, (id_t)main_pid, &si, WEXITED | WNOHANG | WNOWAIT) != 0)
         return errno == ECHILD;
-    return si.si_pid == main_pid;
+    if (si.si_pid != main_pid)
+        return 0;
+    if (!end_noted) {
+        note("ended %d", si.si_code == CLD_EXITED ? si.si_status : 128 + si.si_status);
+        end_noted = 1;
+    }
+    return 1;
 }
 
 /**
@@ -206,13 +249,14 @@ static void signal_kid(pid_t pid, int sig)
 }
 
 /**
- * Print on stderr what child PID is and holds: its state, wait channel,
- * command and the devices it has open, for bed-shm.sh's line on a load
- * that outlived its end; nothing for a zombie.
+ * Print on stderr, and as a `left` line of the status file, what child PID
+ * is and holds: its state, wait channel, command and the devices it has
+ * open, for bed-shm.sh's line on a load that outlived its end; nothing for
+ * a zombie.
  */
 static void report(pid_t pid)
 {
-    char buf[512], path[320], link[256], wchan[64];
+    char buf[512], path[320], link[256], wchan[64], line[1024];
     const char *name = "gone";
     char state = '?';
     char *p, *q;
@@ -220,6 +264,7 @@ static void report(pid_t pid)
     DIR *d;
     struct dirent *e;
     ssize_t n;
+    int used;
 
     wchan[0] = '\0';
     if (read_stat(pid, buf, sizeof(buf)) == 0) {
@@ -241,8 +286,8 @@ static void report(pid_t pid)
             wchan[0] = '\0';
         fclose(f);
     }
-    fprintf(stderr, "bedkeep: left: process %ld: %c %s %s; devices:", (long)pid, state,
-            wchan[0] != '\0' ? wchan : "-", name);
+    used = snprintf(line, sizeof(line), "process %ld: %c %s %s; devices:", (long)pid, state,
+                    wchan[0] != '\0' ? wchan : "-", name);
     snprintf(path, sizeof(path), "/proc/%ld/fd", (long)pid);
     d = opendir(path);
     if (d != NULL) {
@@ -254,12 +299,26 @@ static void report(pid_t pid)
             if (n <= 0)
                 continue;
             link[n] = '\0';
-            if (strncmp(link, "/dev/", 5) == 0)
-                fprintf(stderr, " %s", link);
+            if (strncmp(link, "/dev/", 5) == 0 && used >= 0 && (size_t)used < sizeof(line))
+                used += snprintf(line + used, sizeof(line) - (size_t)used, " %s", link);
         }
         closedir(d);
     }
-    fputc('\n', stderr);
+    fprintf(stderr, "bedkeep: left: %s\n", line);
+    note("left %s", line);
+}
+
+/**
+ * Give a shell's status for a wait status: the exit code, or 128 and the
+ * signal's number.
+ */
+static int shell_status(int status)
+{
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+    return 1;
 }
 
 /**
@@ -267,9 +326,10 @@ static void report(pid_t pid)
  * leads, TERM and CONT once when first seen, until TERM_MS from the start
  * of the end, then KILL at each turn; orphans of the command come to the
  * keeper as their parents end and are signalled at the next turn. Return
- * once waitpid gives ECHILD, with MAIN's status; past KILL_MS, report each
- * child left once and go on, so that none of them is reaped elsewhere and
- * no pid of them is given again while it holds anything.
+ * once waitpid gives ECHILD, with MAIN's status as a shell gives it; past
+ * KILL_MS, report each child left once and go on, so that none of them is
+ * reaped elsewhere and no pid of them is given again while it holds
+ * anything.
  */
 static int end_all(pid_t main_pid)
 {
@@ -284,6 +344,7 @@ static int end_all(pid_t main_pid)
         int sig = t < TERM_MS ? SIGTERM : SIGKILL;
 
         reap_others(main_pid);
+        main_ended(main_pid);
         list_kids();
         /* The main child, a zombie and alone, leads no group with a live
          * member that is not the keeper's child: a live descendant whose
@@ -291,8 +352,12 @@ static int end_all(pid_t main_pid)
         alone = nkids == 1 && kids[0] == main_pid && main_ended(main_pid);
         if (nkids == 0 || alone) {
             pid = waitpid(main_pid, &status, WNOHANG);
-            if (pid == main_pid)
-                main_status = status;
+            if (pid == main_pid) {
+                main_status = shell_status(status);
+                if (!end_noted)
+                    note("ended %d", main_status);
+                end_noted = 1;
+            }
             if (waitpid(-1, &status, WNOHANG) < 0 && errno == ECHILD)
                 return main_status;
             nap(100L);
@@ -322,16 +387,47 @@ static int end_all(pid_t main_pid)
 }
 
 /**
- * Give a shell's status for a wait status: the exit code, or 128 and the
- * signal's number.
+ * Give whether the script has asked the keeper to stop: a word or the end
+ * of file on standard input, the control FIFO, which the keeper waits on
+ * with every stop signal and SIGCHLD let through only inside pselect, so
+ * that none is lost between a look and the wait.
  */
-static int shell_status(int status)
+static void wait_stop(const sigset_t *waitmask)
 {
-    if (WIFEXITED(status))
-        return WEXITSTATUS(status);
-    if (WIFSIGNALED(status))
-        return 128 + WTERMSIG(status);
-    return 1;
+    fd_set rfds;
+    char buf[64];
+    ssize_t n;
+
+    FD_ZERO(&rfds);
+    FD_SET(0, &rfds);
+    if (pselect(1, &rfds, NULL, NULL, NULL, waitmask) <= 0 || !FD_ISSET(0, &rfds))
+        return;
+    n = read(0, buf, sizeof(buf));
+    if (n >= 0 || (errno != EINTR && errno != EAGAIN))
+        stop_asked = 1;
+}
+
+/**
+ * Run the command ARGV in the forked child, in a session and a group of
+ * its own, with /dev/null as its standard input, as a shell gives a
+ * command it runs in the background, in place of the FIFO, whose word is
+ * the keeper's alone. Never returns.
+ */
+static void run_command(char **argv)
+{
+    int nul;
+
+    nul = open("/dev/null", O_RDONLY);
+    if (nul < 0 || dup2(nul, 0) < 0) {
+        fprintf(stderr, "bedkeep: failed: /dev/null: %s\n", strerror(errno));
+        _exit(127);
+    }
+    if (nul != 0)
+        close(nul);
+    setsid();
+    execvp(argv[0], argv);
+    fprintf(stderr, "bedkeep: failed: exec %s: %s\n", argv[0], strerror(errno));
+    _exit(127);
 }
 
 int main(int argc, char **argv)
@@ -339,16 +435,34 @@ int main(int argc, char **argv)
     static const int stops[] = {SIGTERM, SIGINT, SIGHUP};
     struct sigaction sa, old[3], oldchld;
     sigset_t block, saved, waitmask;
+    struct stat st;
     pid_t parent, main_pid;
-    int i, status;
+    char stop_path[4096];
+    int i;
 
-    if (argc < 2) {
-        fprintf(stderr, "usage: bedkeep COMMAND [ARGUMENT...]\n");
+    if (argc < 3) {
+        fprintf(stderr, "usage: bedkeep BASE COMMAND [ARGUMENT...] <> FIFO\n");
         return 2;
+    }
+    if (snprintf(stop_path, sizeof(stop_path), "%s.stop", argv[1]) >= (int)sizeof(stop_path)) {
+        fprintf(stderr, "bedkeep: failed: %s: name too long\n", argv[1]);
+        return 2;
+    }
+    {
+        static char status_buf[4096];
+
+        snprintf(status_buf, sizeof(status_buf), "%s.status", argv[1]);
+        status_path = status_buf;
+    }
+    if (fstat(0, &st) != 0 || !S_ISFIFO(st.st_mode)) {
+        fprintf(stderr, "bedkeep: failed: standard input is not a pipe\n");
+        note("done 125");
+        return 125;
     }
     parent = getppid();
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
         fprintf(stderr, "bedkeep: failed: subreaper: %s\n", strerror(errno));
+        note("done 125");
         return 125;
     }
 
@@ -364,29 +478,35 @@ int main(int argc, char **argv)
         sigaction(stops[i], &sa, &old[i]);
     sa.sa_handler = on_child;
     sigaction(SIGCHLD, &sa, &oldchld);
-    /* The script's death stops the load as its TERM does. Set after the
+    /* The script's death stops the load as its word does. Set after the
      * handler, and checked once, for a parent that died before it. */
     prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
     if (getppid() != parent)
         stop_asked = 1;
+    /* The script makes BASE.stop before it writes its word, which is lost
+     * when the FIFO was not yet open here; the FIFO is open by now. */
+    if (access(stop_path, F_OK) == 0)
+        stop_asked = 1;
+    if (stop_asked) {
+        note("ended 143");
+        note("done 143");
+        return 143;
+    }
 
     main_pid = fork();
     if (main_pid < 0) {
         fprintf(stderr, "bedkeep: failed: fork: %s\n", strerror(errno));
+        note("done 125");
         return 125;
     }
     if (main_pid == 0) {
-        /* The command, in a session and a group of its own, with the
-         * signal state the keeper was given. */
         for (i = 0; i < 3; i++)
             sigaction(stops[i], &old[i], NULL);
         sigaction(SIGCHLD, &oldchld, NULL);
         sigprocmask(SIG_SETMASK, &saved, NULL);
-        setsid();
-        execvp(argv[1], argv + 1);
-        fprintf(stderr, "bedkeep: failed: exec %s: %s\n", argv[1], strerror(errno));
-        _exit(127);
+        run_command(argv + 2);
     }
+    note("started %ld %ld", (long)getpid(), (long)main_pid);
 
     waitmask = saved;
     for (i = 0; i < 3; i++)
@@ -396,8 +516,9 @@ int main(int argc, char **argv)
         reap_others(main_pid);
         if (getppid() != parent)
             break;
-        sigsuspend(&waitmask);
+        wait_stop(&waitmask);
     }
-    status = end_all(main_pid);
-    return shell_status(status);
+    i = end_all(main_pid);
+    note("done %d", i);
+    return i;
 }
