@@ -1,7 +1,8 @@
 #!/bin/sh
 # Measure the Crysis flyby on the Lenovo. With native, use i915 instead.
 # Run as root from a new workspace on the installed system's ext2 root,
-# with crysis.sh (the native case), crysis.py, wm.py, bed-shm.sh and gpu.sh.
+# with crysis.sh (the native case), crysis.py, wm.py, bed-shm.sh, bedkeep.c
+# and gpu.sh.
 # The workspace keeps out/ and the manifests data.before and data.after.
 set -eu
 
