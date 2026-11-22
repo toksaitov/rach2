@@ -1,7 +1,8 @@
 /* vgshmprobe.c: virtio-gpu over the region Rach2 shares with a VM's device:
  * a frame drawn by virgl in the VM and read back, the fences that the VM's
- * death must fail, the blobs whose page lists the VM must refuse, and the
- * timings of buffers copied and of buffers in the region. */
+ * death must fail, the wait that the backend's loss must end, the blobs
+ * whose page lists the VM must refuse, and the timings of buffers copied
+ * and of buffers in the region. */
 #include "probe.h"
 #include "../rach2/sys/drm/uapi.h"
 #include "../rach2/sys/drm/virtio_gpu.h"
@@ -377,6 +378,41 @@ static long now_us(void)
     return t.sec * 1000000L + t.nsec / 1000L;
 }
 
+/** ENODEV, the same on x86-64 and i686. */
+#define PROBE_ENODEV 19
+
+/**
+ * Make a render target, whose backing the VM gives, while the VM's backend
+ * answers nothing: stopped, or killed while the creation waits. The wait
+ * for the backing's answer must end with ENODEV once the transport takes
+ * the device for gone, by its heartbeat or by the VM's word that the
+ * backend has died. Prints the creation's error and how long it took.
+ */
+static void lost(void)
+{
+    struct drm_virtgpu_resource_create a;
+    long r, t0;
+    char text[12];
+
+    find_gpu();
+    zero(&a, sizeof(a));
+    a.target = PIPE_TEXTURE_2D;
+    a.format = VIRGL_FORMAT_B8G8R8X8_UNORM;
+    a.bind = PIPE_BIND_RENDER_TARGET;
+    a.width = a.height = 64;
+    a.depth = a.array_size = 1;
+    a.size = 64u * 64u * 4u;
+    probe_line("VGSHMPROBE LOST: asking", 0, 0);
+    t0 = now_us();
+    r = call(gpu_fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE, &a);
+    probe_line("VGSHMPROBE LOST: ms ", dec(text, (now_us() - t0) / 1000), 0);
+    probe_line("VGSHMPROBE LOST: error ", dec(text, r), 0);
+    if (r != -PROBE_ENODEV) {
+        fail("the creation did not end with ENODEV");
+    }
+    probe_line("VGSHMPROBE OK", 0, 0);
+}
+
 /** Make a blob of virgl's: a GL buffer of `bytes` that the commands made
  * with the blob create as blob `id`, mappable when `mappable` is set: 0
  * with its handle in `*bo`, or the ioctl's error. */
@@ -591,8 +627,8 @@ static void measure(long bytes)
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
-/** `vgshmprobe draw [CRC]`, `pending N`, `refuse` or `measure BYTES`,
- * entered with `sp` at argc. */
+/** `vgshmprobe draw [CRC]`, `pending N`, `lost`, `refuse` or
+ * `measure BYTES`, entered with `sp` at argc. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -608,6 +644,10 @@ void probe_main(unsigned long *sp)
         refuse();
         syscall1(SYS_EXIT_GROUP, 0);
     }
+    if (argc == 2 && argv[1][0] == 'l') {
+        lost();
+        syscall1(SYS_EXIT_GROUP, 0);
+    }
     if (argc == 3 && (argv[1][0] == 'p' || argv[1][0] == 'm')) {
         for (c = argv[2]; *c >= '0' && *c <= '9'; c++) {
             n = n * 10 + (*c - '0');
@@ -619,6 +659,6 @@ void probe_main(unsigned long *sp)
         }
         syscall1(SYS_EXIT_GROUP, 0);
     }
-    probe_line("usage: vgshmprobe draw [CRC] | pending N | refuse | measure BYTES", 0, 0);
+    probe_line("usage: vgshmprobe draw [CRC] | pending N | lost | refuse | measure BYTES", 0, 0);
     syscall1(SYS_EXIT_GROUP, 2);
 }

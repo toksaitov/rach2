@@ -17,9 +17,15 @@
 # draw and read back, on the region's card as the desktop user, as the bed's
 # piglit scene runs them: each must pass on virgl, with no refusal of a
 # blob's export on the VM's console and no refused page list in the kernel's
-# log (`readback`). Then QEMU is stopped with fenced submissions pending and
-# killed: ivshmemd must detach with the VM's death, every fence must fail
-# and a wait after the death must too.
+# log (`readback`). Then the backend is stopped in the VM, through the VM's
+# second serial port, and a render target's wait for its backing must end
+# with ENODEV once the backend's heartbeat has stood still for 30 s
+# (`stopped`); stopped again and killed while the wait sleeps, the wait
+# must end with ENODEV at once, by the module's word that the backend has
+# gone (`killed`); after each, virtio-gpu must bind again over the region.
+# Then QEMU is stopped with fenced submissions pending and killed: ivshmemd
+# must detach with the VM's death, every fence must fail and a wait after
+# the death must too.
 #
 # With -k the draw, the doorbells and the death with fences pending give
 # way to the buffers mapped from the VM's own pages: NOCOPY, nocopy.c, is
@@ -405,7 +411,14 @@ if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
         -device virtio-net-pci,netdev=bedprof \
         -fw_cfg "name=opt/rach2/vgpu-profile,string=${BED_VM_PROFILE_CRC:-0}"
 fi
+# The VM's second serial port, ttyS1, a pipe whose input this script
+# keeps open, read and written, so that a word sent never waits, even with
+# QEMU gone: bed-vm-control in the VM does each word to the backend
+# (vm_ctl).
+mkfifo "$out/ctl.in" "$out/ctl.out"
+exec 7<> "$out/ctl.in"
 if [ -z "$bdf" ]; then
+    set -- "$@" -chardev pipe,path="$out/ctl",id=ctl -device isa-serial,chardev=ctl,index=1
     TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
         -drive file="$disk",if=none,id=vm,format=raw,snapshot=on \
@@ -747,14 +760,99 @@ readback()
     fi
 }
 
-# virgl_rows: the frame drawn, the doorbells, without -u the readbacks, and
-# the VM's death with fences pending.
+# vm_ctl WORD: have bed-vm-control in the VM do WORD to the backend, stop,
+# cont, kill or start, and wait, 120 s at most, for its word on the console
+# that it has.
+vm_ctl()
+{
+    had=$(tr -d '\r' < "$console" | grep -c "bed-vm: control: $1: done")
+    echo "$1" >&7
+    n=120
+    while [ "$(tr -d '\r' < "$console" | grep -c "bed-vm: control: $1: done")" -le "$had" ]; do
+        n=$((n - 1))
+        [ "$n" -gt 0 ] || return 1
+        sleep 1
+    done
+}
+
+# rebound BINDS: wait until virtio-gpu is bound over the region again, more
+# than BINDS times in all, while quiet console 600 qemu holds.
+rebound()
+{
+    last=-1 still=0
+    until [ "$(info bound)" = 1 ] && [ "$(info binds)" -gt "$1" ]; do
+        quiet "$console" 600 "$qemu" || return 1
+    done
+}
+
+# loss NAME WORD MIN MAX REASON: row NAME. With the backend stopped,
+# `vgshmprobe lost` makes a render target, whose backing's answer it then
+# waits for; WORD, if any, is done to the backend once the probe sleeps in
+# that wait. The wait must end with ENODEV in MIN to MAX seconds, the
+# kernel must have logged the loss once as `lost: epoch N: the device:
+# REASON`, and the backend, sent SIGCONT, or started again after a kill,
+# must be bound again for the rows after.
+loss()
+{
+    lname=$1 word=$2 min=$3 max=$4 reason=$5
+    binds=$(info binds) lost0=$(klog_count "lost: epoch [0-9]*: the device: $reason")
+    lerr=''
+    vm_ctl stop || lerr="the VM did not stop the backend"
+    "$probe" lost > "$out/$lname.out" 2>&1 &
+    waiter=$!
+    if [ -z "$lerr" ] && [ -n "$word" ]; then
+        n=60
+        until [ "$(cat "/proc/$waiter/wchan" 2>/dev/null)" = virtio_gpu_wait_answer ]; do
+            n=$((n - 1))
+            if [ "$n" -le 0 ] || ! kill -0 "$waiter" 2>/dev/null; then
+                lerr="the probe never slept in virtio_gpu_wait_answer"
+                break
+            fi
+            sleep 0.5
+        done
+        [ -n "$lerr" ] || vm_ctl "$word" || lerr="the VM did not $word the backend"
+    fi
+    n=$((max + 30))
+    while kill -0 "$waiter" 2>/dev/null && [ "$n" -gt 0 ]; do
+        sleep 1
+        n=$((n - 1))
+    done
+    if kill -0 "$waiter" 2>/dev/null; then
+        lerr="${lerr:+$lerr, }the probe still waits in $(cat "/proc/$waiter/wchan" 2>/dev/null) after $((max + 30)) s"
+        kill -9 "$waiter" 2>/dev/null
+    fi
+    wait "$waiter" 2>/dev/null
+    waiter=''
+    ms=$(sed -n 's/^VGSHMPROBE LOST: ms //p' "$out/$lname.out")
+    logged=$(($(klog_count "lost: epoch [0-9]*: the device: $reason") - lost0))
+    if [ "$word" = kill ]; then
+        vm_ctl start || lerr="${lerr:+$lerr, }the VM did not start the backend again"
+    else
+        vm_ctl cont || lerr="${lerr:+$lerr, }the VM did not continue the backend"
+    fi
+    rebound "$binds" || lerr="${lerr:+$lerr, }virtio-gpu was not bound again"
+    what="$(sed -n 's/^VGSHMPROBE LOST: error /error /p' "$out/$lname.out") after ${ms:-?} ms, $logged loss(es) logged"
+    if [ -z "$lerr" ] && grep -q 'VGSHMPROBE OK' "$out/$lname.out" && [ "$logged" = 1 ] &&
+        [ "${ms:-0}" -ge $((min * 1000)) ] && [ "${ms:-0}" -le $((max * 1000)) ]; then
+        pass "$lname" "$what, bound again"
+    else
+        fail "$lname" "${lerr:+$lerr: }$what: $(grep VGSHMPROBE "$out/$lname.out" | tr '\n' ' ')"
+    fi
+}
+
+# virgl_rows: the frame drawn, the doorbells, without -u the readbacks and
+# the backend's loss, stopped and then killed, and the VM's death with
+# fences pending.
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
         fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
         fail doorbell "no device"
-        [ "$unplug" = 1 ] || fail readback "no device"
+        if [ "$unplug" = 0 ]; then
+            fail readback "no device"
+            fail stopped "no device"
+            fail killed "no device"
+        fi
     else
         # A doorbell is counted twice, by KVM and by the transport, one
         # after the other, so each pair of counts is read with the doorbells
@@ -789,7 +887,14 @@ virgl_rows()
                 fail doorbell "$(cat "$out/counts.txt"), doorbells $(info doorbells)"
             fi
         fi
-        [ "$unplug" = 1 ] || readback
+        if [ "$unplug" = 0 ]; then
+            readback
+            # The heartbeat stands still from the stop, so the wait ends
+            # 30 s on, less what the stop's word and the probe's start
+            # took; the kill ends it at once, by the module's word.
+            loss stopped '' 10 60 'its heartbeat stood still'
+            loss killed kill 0 20 "the device's process ended"
+        fi
     fi
 
     # The VM's death with fences pending, the probe's target made first.

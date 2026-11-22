@@ -918,6 +918,8 @@ struct drv {
     int venus;           /* -v: attach the replay's resources to Venus too */
     uint64_t backing;    /* -b: the bytes of the VM's memory to ask for, or 0 */
     const char *go;      /* -g: the file whose existence starts -b's ask */
+    uint64_t last;       /* -B: the bytes of the ask after -b's, or 0 */
+    const char *lastgo;  /* -G: the file whose existence starts it */
 };
 
 /*
@@ -1831,14 +1833,13 @@ static void run_teardown(struct drv *dr, uint32_t id)
 }
 
 /**
- * Ask for backings of dr->backing bytes of the VM's memory with
- * VGS_CMD_BACKING for PEER_BACKINGS new 2D resources from `id` on, one at a
- * time, once dr->go exists when -g names it; print each answer, which must
- * be RESP_OK_MAP_INFO or ERR_OUT_OF_MEMORY, and free each resource, which
- * the device must still answer. Exits when the device took no backings,
- * or on a wrong answer or none.
+ * Make 2D resource `id`, once `go` exists when it is not 0, ask for a
+ * backing of `bytes` of the VM's memory for it with VGS_CMD_BACKING, print
+ * the answer, which must be RESP_OK_MAP_INFO or ERR_OUT_OF_MEMORY, and free
+ * the resource, which the device must still answer. Exits on a wrong
+ * answer or none.
  */
-static void run_backing(struct drv *dr, uint32_t id)
+static void ask_backing(struct drv *dr, uint32_t id, uint64_t bytes, const char *go)
 {
     union {
         struct gpu_create_2d c2;
@@ -1848,51 +1849,68 @@ static void run_backing(struct drv *dr, uint32_t id)
     struct vgs_backing *b = (struct vgs_backing *)(void *)(u.raw + sizeof(struct gpu_hdr));
     uint8_t resp[VGS_PAGES_OFF + 16 * sizeof(struct vgs_run)];
     struct vgs_pages pg;
-    uint32_t type, i;
+    uint32_t type;
+
+    hdr(&u, sizeof(u.c2), GPU_CMD_RESOURCE_CREATE_2D, 0, 0);
+    u.c2.resource_id = id;
+    u.c2.format = GPU_FORMAT_B8G8R8X8_UNORM;
+    u.c2.width = IMG_W;
+    u.c2.height = IMG_H;
+    expect(send_cmd(dr, "backing-create", &(struct gpu_message){&u, sizeof(u.c2), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "backing-create");
+    if (go) {
+        printf("peer: backing: waiting for %s\n", go);
+        while (access(go, F_OK) != 0) {
+            wait_bell(dr);
+        }
+    }
+    hdr(&u, sizeof(struct gpu_hdr) + sizeof(*b), VGS_CMD_BACKING, 0, 0);
+    b->resource_id = id;
+    b->size = bytes;
+    b->first = 0;
+    type =
+        send_cmd(dr, "backing",
+                 &(struct gpu_message){&u, (uint32_t)(sizeof(struct gpu_hdr) + sizeof(*b)), 0, 0},
+                 resp, sizeof(resp));
+    if (type == GPU_RESP_OK_MAP_INFO) {
+        memcpy(&pg, resp + sizeof(struct gpu_hdr), sizeof(pg));
+        printf("peer: backing: resource %u, %llu bytes: given, %llu pages in %u runs from 0\n",
+               (unsigned)id, (unsigned long long)bytes, (unsigned long long)pg.total,
+               (unsigned)pg.count);
+    } else if (type == GPU_RESP_ERR_OUT_OF_MEMORY) {
+        printf("peer: backing: resource %u, %llu bytes: refused: out of memory\n", (unsigned)id,
+               (unsigned long long)bytes);
+    } else {
+        fprintf(stderr, "%s: backing: response 0x%x\n", prog, (unsigned)type);
+        exit(1);
+    }
+    hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
+    u.rs.resource_id = id;
+    expect(send_cmd(dr, "backing-unref", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, resp,
+                    sizeof(struct gpu_hdr)),
+           GPU_RESP_OK_NODATA, "backing-unref");
+}
+
+/**
+ * Ask for backings of dr->backing bytes of the VM's memory for
+ * PEER_BACKINGS new 2D resources from `id` on, one at a time, the first
+ * once dr->go exists when -g names it, then with -B one of dr->last bytes,
+ * once dr->lastgo exists when -G names it (`ask_backing`). Exits when the
+ * device took no backings, or on a wrong answer or none.
+ */
+static void run_backing(struct drv *dr, uint32_t id)
+{
+    uint32_t i;
 
     if ((dr->me.transport_features & VGS_TF_BACKING) == 0) {
         die("%s", "the device offers no backings of the VM's memory");
     }
     for (i = 0; i < PEER_BACKINGS; i++, id++) {
-        hdr(&u, sizeof(u.c2), GPU_CMD_RESOURCE_CREATE_2D, 0, 0);
-        u.c2.resource_id = id;
-        u.c2.format = GPU_FORMAT_B8G8R8X8_UNORM;
-        u.c2.width = IMG_W;
-        u.c2.height = IMG_H;
-        expect(send_cmd(dr, "backing-create", &(struct gpu_message){&u, sizeof(u.c2), 0, 0}, resp,
-                        sizeof(struct gpu_hdr)),
-               GPU_RESP_OK_NODATA, "backing-create");
-        if (dr->go && i == 0) {
-            printf("peer: backing: waiting for %s\n", dr->go);
-            while (access(dr->go, F_OK) != 0) {
-                wait_bell(dr);
-            }
-        }
-        hdr(&u, sizeof(struct gpu_hdr) + sizeof(*b), VGS_CMD_BACKING, 0, 0);
-        b->resource_id = id;
-        b->size = dr->backing;
-        b->first = 0;
-        type = send_cmd(
-            dr, "backing",
-            &(struct gpu_message){&u, (uint32_t)(sizeof(struct gpu_hdr) + sizeof(*b)), 0, 0}, resp,
-            sizeof(resp));
-        if (type == GPU_RESP_OK_MAP_INFO) {
-            memcpy(&pg, resp + sizeof(struct gpu_hdr), sizeof(pg));
-            printf("peer: backing: resource %u, %llu bytes: given, %llu pages in %u runs from 0\n",
-                   (unsigned)id, (unsigned long long)dr->backing, (unsigned long long)pg.total,
-                   (unsigned)pg.count);
-        } else if (type == GPU_RESP_ERR_OUT_OF_MEMORY) {
-            printf("peer: backing: resource %u, %llu bytes: refused: out of memory\n", (unsigned)id,
-                   (unsigned long long)dr->backing);
-        } else {
-            fprintf(stderr, "%s: backing: response 0x%x\n", prog, (unsigned)type);
-            exit(1);
-        }
-        hdr(&u, sizeof(u.rs), GPU_CMD_RESOURCE_UNREF, 0, 0);
-        u.rs.resource_id = id;
-        expect(send_cmd(dr, "backing-unref", &(struct gpu_message){&u, sizeof(u.rs), 0, 0}, resp,
-                        sizeof(struct gpu_hdr)),
-               GPU_RESP_OK_NODATA, "backing-unref");
+        ask_backing(dr, id, dr->backing, i == 0 ? dr->go : 0);
+    }
+    if (dr->last) {
+        ask_backing(dr, id, dr->last, dr->lastgo);
     }
 }
 
@@ -1993,11 +2011,27 @@ static void usage(void)
     fprintf(
         stderr,
         "usage: %s [-l | -f PATH | -S SOCKET] [-s SIZE] [-r STREAM [-ov]] [-b BYTES [-g FILE]]\n"
-        "       [-d DIR] [-t SECONDS]\n"
+        "       [-B BYTES [-G FILE]] [-d DIR] [-t SECONDS]\n"
         "       %s -c IMAGE...\n"
         "       %s -w STREAM | -W STREAM\n",
         prog, prog, prog);
     exit(2);
+}
+
+/** Whether -b, -g, -B and -G go together: -g and -B with -b, -G with -B,
+ * whole pages each, and none against the loopback device. */
+static int backing_args(const struct drv *dr)
+{
+    if (dr->go && !dr->backing) {
+        return 0;
+    }
+    if (dr->backing && (dr->child || dr->backing % VGS_PAGE != 0)) {
+        return 0;
+    }
+    if (dr->last && (!dr->backing || dr->last % VGS_PAGE != 0)) {
+        return 0;
+    }
+    return !dr->lastgo || dr->last;
 }
 
 /** Map file or an anonymous loopback region of size bytes into dr, starting
@@ -2176,10 +2210,13 @@ int main(int argc, char **argv)
     }
     memset(&dr, 0, sizeof(dr));
     dr.report = -1;
-    while ((opt = getopt(argc, argv, "b:cd:f:g:lor:s:S:t:vw:W:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:B:cd:f:g:G:lor:s:S:t:vw:W:")) != -1) {
         switch (opt) {
         case 'b':
             dr.backing = strtoull(optarg, 0, 0);
+            break;
+        case 'B':
+            dr.last = strtoull(optarg, 0, 0);
             break;
         case 'c':
             return check_files(argc - optind, argv + optind);
@@ -2191,6 +2228,9 @@ int main(int argc, char **argv)
             break;
         case 'g':
             dr.go = optarg;
+            break;
+        case 'G':
+            dr.lastgo = optarg;
             break;
         case 'l':
             loop = 1;
@@ -2239,7 +2279,7 @@ int main(int argc, char **argv)
     if ((dr.show || dr.venus) && (stream == 0 || dr.child)) {
         usage();
     }
-    if ((dr.go && !dr.backing) || (dr.backing && (dr.child || dr.backing % VGS_PAGE != 0))) {
+    if (!backing_args(&dr)) {
         usage();
     }
     handshake(&dr, fresh,
