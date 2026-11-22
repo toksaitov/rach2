@@ -28,7 +28,6 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
-#include <linux/xarray.h>
 
 #include "vgpushm_uapi.h"
 
@@ -263,7 +262,6 @@ static void vgpushm_kept_work(struct work_struct *work)
  * @rec: the pin, with npages and phys sized
  * @file: the file
  * @offset: the first byte, page-aligned
- * @fresh: the caller's file, made for this pin (VGPUSHM_PIN_FRESH)
  *
  * The pages are allocated as i915 allocates its objects' pages, with
  * __GFP_RETRY_MAYFAIL: an allocation that reclaim cannot meet fails with
@@ -271,35 +269,26 @@ static void vgpushm_kept_work(struct work_struct *work)
  * mask would wake the OOM killer and stall the VM, and with it every
  * answer the driver waits for, until a victim's exit frees memory.
  *
- * A pin that fails lets go of the pages it took. Of a fresh file it then
- * truncates the range, which frees what the pin brought in at once: left
- * in the file, those pages would stay charged to the VM and to the
- * backend's memory cgroup until the file closes, and the backend's next
- * fault would find no memory and wake the OOM killer the pin was to spare.
- * A fresh file is one the module finds empty, with no page resident or
- * swapped, and mapped nowhere, and that the caller vouches nothing else
- * writes, so every page in the range is the pin's own. Shmem gives no way to
- * know which pages of a shared file a pin brought in, since a fault through
- * another mapping takes no lock the pin could hold, so the pages a failed
- * pin brought into another file stay there as that file's, as a guest's
- * touch of a blob leaves them, until the file is truncated or freed.
+ * A pin that fails lets go of the pages it took and removes nothing from
+ * the file: shmem gives no way to know which pages of a shared file the
+ * pin brought in, since a fault through another mapping takes no lock the
+ * pin could hold, so they stay as the file's, as a guest's touch of a blob
+ * leaves them, until the file is truncated or freed. A backing's file is
+ * the module's own, which vgpushm_backing frees when its pin fails.
  *
- * Return: 0, -EINVAL past the page that holds the file's end or for a file
- * that is not fresh as @fresh says, -ENOMEM, or the error of reading a page.
+ * Return: 0, -EINVAL past the page that holds the file's end, -ENOMEM, or
+ * the error of reading a page.
  */
-static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 offset, bool fresh)
+static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 offset)
 {
     struct address_space *mapping = file->f_mapping;
-    struct inode *inode = file_inode(file);
     gfp_t gfp = mapping_gfp_mask(mapping) | __GFP_RETRY_MAYFAIL | __GFP_NOWARN;
     pgoff_t first = (pgoff_t)(offset >> PAGE_SHIFT);
     struct page *page;
     unsigned long i;
 
-    if (offset + ((u64)rec->npages << PAGE_SHIFT) > round_up((u64)i_size_read(inode), PAGE_SIZE))
-        return -EINVAL;
-    if (fresh && (mapping->nrpages != 0 || READ_ONCE(SHMEM_I(inode)->swapped) != 0 ||
-                  mapping_mapped(mapping)))
+    if (offset + ((u64)rec->npages << PAGE_SHIFT) >
+        round_up((u64)i_size_read(file_inode(file)), PAGE_SIZE))
         return -EINVAL;
     rec->pages = kvcalloc(rec->npages, sizeof(*rec->pages), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
     if (!rec->pages)
@@ -319,9 +308,6 @@ fail:
         put_page(rec->pages[i]);
         rec->pages[i] = NULL;
     }
-    if (fresh)
-        shmem_truncate_range(inode, (loff_t)offset,
-                             (loff_t)(offset + ((u64)rec->npages << PAGE_SHIFT)) - 1);
     return PTR_ERR(page);
 }
 
@@ -386,15 +372,64 @@ static int vgpushm_pin_dmabuf(struct vgpushm *dev, struct vgpushm_pinrec *rec, u
 }
 
 /**
+ * vgpushm_rec_new() - Allocate a pin's record and its table of addresses.
+ * @size: the pin's bytes, whole pages, at most VGPUSHM_PIN_MAX_SIZE
+ * @epoch: the driver's epoch it is made for
+ *
+ * Return: the record, or NULL for want of memory.
+ */
+static struct vgpushm_pinrec *vgpushm_rec_new(u64 size, u32 epoch)
+{
+    struct vgpushm_pinrec *rec;
+
+    rec = kzalloc(sizeof(*rec), GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+    if (!rec)
+        return NULL;
+    rec->npages = size >> PAGE_SHIFT;
+    rec->epoch = epoch;
+    rec->phys = kvcalloc(rec->npages, sizeof(*rec->phys), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+    if (!rec->phys) {
+        kfree(rec);
+        return NULL;
+    }
+    return rec;
+}
+
+/**
+ * vgpushm_handle() - A new pin's handle, never 0.
+ * @dev: the device
+ *
+ * Context: holds dev->ops.
+ */
+static u32 vgpushm_handle(struct vgpushm *dev)
+{
+    return ++dev->next_handle ? dev->next_handle : ++dev->next_handle;
+}
+
+/**
+ * vgpushm_hold() - Put a pin that is made on the open file's list.
+ * @dev: the device
+ * @rec: the pin, with its handle
+ *
+ * Context: holds dev->ops.
+ */
+static void vgpushm_hold(struct vgpushm *dev, struct vgpushm_pinrec *rec)
+{
+    list_add_tail(&rec->node, &dev->pins);
+    dev->npins++;
+    dev->npinned += rec->npages;
+    dev->made++;
+}
+
+/**
  * vgpushm_pin() - Serve VGPUSHM_IOC_PIN.
  * @dev: the device, bound
  * @arg: the user's struct vgpushm_pin
  *
  * Context: holds dev->ops.
  * Return: 0; -EFAULT; -EINVAL for an empty or unaligned range, one larger
- * than VGPUSHM_PIN_MAX_SIZE, a descriptor that is neither a shmem file
- * nor a dma-buf, an unknown flag, or VGPUSHM_PIN_FRESH of a dma-buf or a
- * file that is not fresh; -EBADF for a descriptor not open; the error of pinning;
+ * than VGPUSHM_PIN_MAX_SIZE, or a descriptor that is neither a shmem file
+ * nor a dma-buf; -EBADF for a descriptor not open; the error of pinning;
  * -ENOMEM.
  */
 static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
@@ -407,39 +442,30 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
     if (copy_from_user(&req, arg, sizeof(req)))
         return -EFAULT;
     if (req.size == 0 || ((req.offset | req.size) & ~PAGE_MASK) ||
-        req.size > VGPUSHM_PIN_MAX_SIZE || req.offset + req.size < req.offset ||
-        (req.flags & ~VGPUSHM_PIN_FRESH) != 0 || req.reserved != 0) {
+        req.size > VGPUSHM_PIN_MAX_SIZE || req.offset + req.size < req.offset) {
         dev->refused++;
         return -EINVAL;
     }
-    rec = kzalloc(sizeof(*rec), GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+    rec = vgpushm_rec_new(req.size, req.epoch);
     if (!rec) {
         dev->refused++;
         return -ENOMEM;
     }
-    rec->npages = req.size >> PAGE_SHIFT;
-    rec->epoch = req.epoch;
-    rec->phys = kvcalloc(rec->npages, sizeof(*rec->phys), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
-    if (!rec->phys) {
-        err = -ENOMEM;
-        goto fail;
-    }
     rec->dmabuf = dma_buf_get(req.fd);
     if (!IS_ERR(rec->dmabuf)) {
-        err = req.flags & VGPUSHM_PIN_FRESH ? -EINVAL : vgpushm_pin_dmabuf(dev, rec, req.offset);
+        err = vgpushm_pin_dmabuf(dev, rec, req.offset);
     } else {
         rec->dmabuf = NULL;
         file = fget(req.fd);
-        err = !file ? -EBADF
-              : !shmem_file(file)
-                  ? -EINVAL
-                  : vgpushm_pin_shmem(rec, file, req.offset, req.flags & VGPUSHM_PIN_FRESH);
+        err = !file               ? -EBADF
+              : !shmem_file(file) ? -EINVAL
+                                  : vgpushm_pin_shmem(rec, file, req.offset);
         if (file)
             fput(file);
     }
     if (err)
         goto fail;
-    rec->handle = ++dev->next_handle ? dev->next_handle : ++dev->next_handle;
+    rec->handle = vgpushm_handle(dev);
     req.handle = rec->handle;
     req.kind = rec->kind;
     req.pages = rec->npages;
@@ -447,15 +473,91 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
         err = -EFAULT;
         goto fail;
     }
-    list_add_tail(&rec->node, &dev->pins);
-    dev->npins++;
-    dev->npinned += rec->npages;
-    dev->made++;
+    vgpushm_hold(dev, rec);
     return 0;
 
 fail:
     dev->refused++;
     vgpushm_unpin(NULL, rec);
+    return err;
+}
+
+/**
+ * vgpushm_backing() - Serve VGPUSHM_IOC_BACKING: make a shmem file, pin it
+ * whole and give the caller a descriptor of it.
+ * @dev: the device, bound
+ * @arg: the user's struct vgpushm_backing
+ *
+ * The file is the module's until the descriptor is installed, the last
+ * step, after the answer has been copied out: no process can reach it
+ * before, so every page in it is the pin's own. A backing that fails at any
+ * step lets the pages go, truncates the file and puts it, which frees what
+ * the pin brought in before the call returns: left in the file, those pages
+ * would stay charged to the VM and to the backend's memory cgroup, and the
+ * backend's next fault would find no memory and wake the OOM killer the pin
+ * was to spare. The pages are charged to the caller's memory cgroup, as a
+ * memfd's are to the process that faults them in.
+ *
+ * Context: holds dev->ops.
+ * Return: 0; -EFAULT; -EINVAL for a size of 0, not whole pages or over
+ * VGPUSHM_PIN_MAX_SIZE, or a reserved word not 0; -EMFILE; -ENOMEM; the
+ * error of making the file or of reading a page.
+ */
+static long vgpushm_backing(struct vgpushm *dev, void __user *arg)
+{
+    struct vgpushm_backing req;
+    struct vgpushm_pinrec *rec;
+    struct file *file = NULL;
+    long err;
+    int fd;
+
+    if (copy_from_user(&req, arg, sizeof(req)))
+        return -EFAULT;
+    if (req.size == 0 || (req.size & ~PAGE_MASK) || req.size > VGPUSHM_PIN_MAX_SIZE ||
+        req.reserved != 0) {
+        dev->refused++;
+        return -EINVAL;
+    }
+    rec = vgpushm_rec_new(req.size, req.epoch);
+    if (!rec) {
+        dev->refused++;
+        return -ENOMEM;
+    }
+    /* VM_NORESERVE charges each page as it comes, as memfd_create does. */
+    file = shmem_file_setup("vgpu-backing", (loff_t)req.size, VM_NORESERVE);
+    if (IS_ERR(file)) {
+        err = PTR_ERR(file);
+        file = NULL;
+        goto fail;
+    }
+    err = vgpushm_pin_shmem(rec, file, 0);
+    if (err)
+        goto fail;
+    fd = get_unused_fd_flags(O_CLOEXEC);
+    if (fd < 0) {
+        err = fd;
+        goto fail;
+    }
+    rec->handle = vgpushm_handle(dev);
+    req.fd = fd;
+    req.handle = rec->handle;
+    req.pages = rec->npages;
+    if (copy_to_user(arg, &req, sizeof(req))) {
+        put_unused_fd(fd);
+        err = -EFAULT;
+        goto fail;
+    }
+    fd_install(fd, file);
+    vgpushm_hold(dev, rec);
+    return 0;
+
+fail:
+    dev->refused++;
+    vgpushm_unpin(NULL, rec);
+    if (file) {
+        shmem_truncate_range(file_inode(file), 0, (loff_t)req.size - 1);
+        fput(file);
+    }
     return err;
 }
 
@@ -715,6 +817,8 @@ static long vgpushm_request(struct vgpushm *dev, unsigned int cmd, void __user *
         return vgpushm_counts(dev, arg);
     case VGPUSHM_IOC_PIN:
         return vgpushm_pin(dev, arg);
+    case VGPUSHM_IOC_BACKING:
+        return vgpushm_backing(dev, arg);
     case VGPUSHM_IOC_PAGES:
         return vgpushm_pages(dev, arg);
     case VGPUSHM_IOC_UNPIN:
