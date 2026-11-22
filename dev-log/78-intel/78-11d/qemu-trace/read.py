@@ -29,16 +29,12 @@ def kernel(path):
     return rows, lambda us: lo + round((us - lo_ns / 1000) / us_per_cycle), us_per_cycle, lo, end, error
 
 
-def chromium(out):
+def chromium(out, identities, names):
     """Read callback marks and resolve Chromium's namespace TIDs to kernel TIDs."""
     with gzip.open(out / "trace.json.gz", "rt") as trace:
         events = json.load(trace)["traceEvents"]
     marks = {int(e["name"].rsplit("-", 1)[1]): e for e in events
              if e.get("ph") == "I" and e["name"].startswith("hasvk-frame-")}
-    identities = json.loads((out / "tids.json").read_text())
-    weston = int((out / "weston.pid").read_text())
-    names = {weston: "weston"}
-    holders = {r["tid"]: r["name"] for r in identities}
     found = set()
     for e in events:
         if e.get("ph") != "M" or e.get("name") != "thread_name":
@@ -55,8 +51,7 @@ def chromium(out):
         raise ValueError("could not map Chromium's renderer and Viz compositor TIDs")
     startup = [e["ts"] for e in events if e.get("ph") == "X" and
                e.get("args", {}).get("src_func") == "MaybeSignalStartupComplete"]
-    holders.update(names)
-    return marks, names, holders, startup
+    return {index: event["ts"] for index, event in marks.items()}, startup
 
 
 def wake_delays(rows, names):
@@ -117,18 +112,30 @@ def main(run):
     """Read an extracted run directory and show the longest late-frame windows."""
     out = run / "out"
     rows, cycles, rate, start, end, error = kernel(run / "kernel.bin")
-    marks, names, holders, startup = chromium(out)
     clock = json.loads((out / "clock.json").read_text())
     picture = json.loads((out / "result.json").read_text())["picture"]
     times, starts = picture["frameTimes"], picture["frameStarts"]
+    identities = json.loads((out / "tids.json").read_text())
+    names = {int((out / "weston.pid").read_text()): "weston"}
+    holders = {r["tid"]: r["name"] for r in identities}
+    clock_width = (clock["after"] - clock["before"]) / 2000
+    epoch_offset = (clock["epoch"] - (clock["before"] + clock["after"]) / 2) / 1000
+    first = (picture["timeOrigin"] + picture["start"]) * 1000 - epoch_offset
+    if (out / "trace.json.gz").exists():
+        marks, startup = chromium(out, identities, names)
+        skew = marks[0] - (first + starts[0] * 1000)
+        print("chromium: first mark differs from the guest clock pair by %.1f us" % skew)
+        if abs(skew) > 2000 + error + clock_width:
+            raise ValueError("Chromium and the kernel could not be placed on the same clock")
+    else:
+        aliases = {name[:15]: name for name in THREADS}
+        names.update({tid: aliases[name] for tid, name in holders.items() if name in aliases})
+        marks = {index: first + entry * 1000 for index, entry in enumerate(starts)}
+        startup = []
+        print("chromium: callback times from the page, guest clock bracket %.1f us" % clock_width)
     if set(marks) != set(range(len(times))):
         raise ValueError("Chromium's trace lacks frame marks")
-    epoch_offset = (clock["epoch"] - (clock["before"] + clock["after"]) / 2) / 1000
-    expected = (picture["timeOrigin"] + picture["start"] + starts[0]) * 1000 - epoch_offset
-    skew = marks[0]["ts"] - expected
-    print("chromium: first mark differs from the guest clock pair by %.1f us" % skew)
-    if abs(skew) > 2000 + error + (clock["after"] - clock["before"]) / 2000:
-        raise ValueError("Chromium and the kernel could not be placed on the same clock")
+    holders.update(names)
     gaps = [b - a for a, b in zip(times, times[1:])]
     early = max(range(15), key=gaps.__getitem__)
     late = [i for i in range(10, len(gaps)) if gaps[i] > 25]
@@ -141,14 +148,14 @@ def main(run):
     if startup:
         stamp = min(startup)
         print("chromium: deferred startup begins %+.3f ms from the first callback" %
-              ((stamp - marks[0]["ts"]) / 1000))
+              ((stamp - marks[0]) / 1000))
         for i in range(len(gaps)):
-            if marks[i]["ts"] <= stamp < marks[i + 1]["ts"]:
+            if marks[i] <= stamp < marks[i + 1]:
                 selected.append(i)
                 break
     for i in dict.fromkeys(selected):
-        lo = cycles(marks[i]["ts"] - max(0, starts[i] - times[i]) * 1000)
-        hi = cycles(marks[i + 1]["ts"])
+        lo = cycles(marks[i] - max(0, starts[i] - times[i]) * 1000)
+        hi = cycles(marks[i + 1])
         if lo < start or hi > end:
             print("frame %d: outside recorded kernel coverage" % i)
             continue

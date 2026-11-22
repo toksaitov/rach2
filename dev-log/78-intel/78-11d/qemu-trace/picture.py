@@ -47,12 +47,13 @@ def trace_command(command):
 def measure(out, work, swiftshader, settle=0, capture=None):
     """Use a fresh profile and retain all callbacks, their clock and thread IDs."""
     mode = "webgpu" if swiftshader else "webgpu-hasvk"
+    trace = out / "trace.json.gz" if os.environ.get("RACH2_BROWSER_TRACE", "1") == "1" else None
     with server(work, out) as url, Browser("chromium", mode, out, work) as browser:
         print("webgpu: chromium ready")
         if capture:
             capture("start")
-        result = hasvk_picture(browser, url, out / "trace.json.gz", swiftshader=swiftshader,
-                               picture_done=lambda: picture_done(out, capture), trace_startup=True,
+        result = hasvk_picture(browser, url, trace, swiftshader=swiftshader,
+                               picture_done=lambda: picture_done(out, capture), trace_startup=trace is not None,
                                settle=settle)
         save(out / "result.json", result)
         picture = result["picture"]
