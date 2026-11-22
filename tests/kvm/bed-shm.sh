@@ -46,7 +46,7 @@
 # starting it there when no Weston runs, as on the QEMU boot or on the Lenovo
 # before a step, and with -g virgl must name the Intel GPU the VM draws on
 # (`session`). With -g, a session started on a machine that ran none is ended
-# once the GPU is back (`end`).
+# once the GPU is back (`end`), on HUP, INT or TERM as well.
 # The load draws as the desktop user while Rach2's driver rings the VM
 # (`load`): LOAD is glmark2-wayland on the session, the default, or the
 # harness's scene `piglit`, surfaceless on the card's render node, `webgl`
@@ -189,6 +189,9 @@ fi
 [ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
     { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' umon='' bad=0 stalled=0
+# 1 once this run, with -g on a machine that ran no session, has asked for
+# one, which must end once the GPU is back, at the end or on a signal.
+session_owed=0
 crysis_ini=/etc/xdg/weston/weston.ini crysis_ini_saved=''
 # NOCOPY_INTEL, for nocopy: with -g, the GPU's Venus device or a failure.
 intel=''
@@ -220,6 +223,30 @@ crysis_restore_ini()
     crysis_ini_saved=''
 }
 
+# session_end: end the session this run started, as crysis.sh's
+# session_restore does when none ran before: USR2 to rach2-desktop, then
+# wait, 600 tries of 0.1 s at most, until a turn of its loop begun after the
+# signal has run whole, which the second `sleep 1` seen since shows, and
+# neither Weston nor the session's script is left.
+session_end()
+{
+    sup=$(cat /run/rach2-desktop.pid 2>/dev/null) && [ -n "$sup" ] || return 1
+    kill -USR2 "$sup" 2>/dev/null || return 1
+    tries=0 turn='' turns=0
+    while :; do
+        pause=$(pgrep -P "$sup" -fx 'sleep 1' | head -n 1)
+        if [ -n "$pause" ] && [ "$pause" != "$turn" ]; then
+            turn=$pause turns=$((turns + 1))
+        fi
+        { [ "$turns" -ge 2 ] || ! kill -0 "$sup" 2>/dev/null; } &&
+            ! pgrep -x weston > /dev/null && ! pgrep -f /usr/libexec/rach2-session > /dev/null &&
+            return 0
+        tries=$((tries + 1))
+        [ "$tries" -lt 600 ] || return 1
+        sleep 0.1
+    done
+}
+
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back. A
 # child that stalled in death_children has already been sent KILL.
 cleanup()
@@ -235,6 +262,16 @@ cleanup()
         wait 2>/dev/null
     elif [ -n "$gpu" ]; then
         wait "$gpu" 2>/dev/null
+    fi
+    # A run ended by a signal leaves the session as it found it too. A
+    # USR2 that finds no session starts none.
+    if [ "$session_owed" = 1 ]; then
+        session_owed=0
+        if session_end; then
+            echo 'bed-shm: end: pass: the session this run started has ended, as none ran before'
+        else
+            echo "bed-shm: end: fail: the session this run started is still running: weston [$(pgrep -x weston | tr '\n' ' ')]"
+        fi
     fi
 }
 trap cleanup EXIT
@@ -1133,6 +1170,7 @@ desk_rows()
     # After a GPU handoff the supervisor moves a running session itself.
     # With none, as on the QEMU boot or on the Lenovo before a step, have it
     # start one, which chooses the card now bound.
+    [ -z "$bdf" ] || [ "$weston_found" = 1 ] || session_owed=1
     if [ -z "$bdf" ] || ! pgrep -x weston > /dev/null; then
         sup=$(cat /run/rach2-desktop.pid 2>/dev/null)
         [ -z "$sup" ] || kill -HUP "$sup" 2>/dev/null || :
@@ -1332,30 +1370,6 @@ desk_rows()
     desk_return
 }
 
-# session_end: end the session this run started, as crysis.sh's
-# session_restore does when none ran before: USR2 to rach2-desktop, then
-# wait, 600 tries of 0.1 s at most, until a turn of its loop begun after the
-# signal has run whole, which the second `sleep 1` seen since shows, and
-# neither Weston nor the session's script is left.
-session_end()
-{
-    sup=$(cat /run/rach2-desktop.pid 2>/dev/null) && [ -n "$sup" ] || return 1
-    kill -USR2 "$sup" 2>/dev/null || return 1
-    tries=0 turn='' turns=0
-    while :; do
-        pause=$(pgrep -P "$sup" -fx 'sleep 1' | head -n 1)
-        if [ -n "$pause" ] && [ "$pause" != "$turn" ]; then
-            turn=$pause turns=$((turns + 1))
-        fi
-        { [ "$turns" -ge 2 ] || ! kill -0 "$sup" 2>/dev/null; } &&
-            ! pgrep -x weston > /dev/null && ! pgrep -f /usr/libexec/rach2-session > /dev/null &&
-            return 0
-        tries=$((tries + 1))
-        [ "$tries" -lt 600 ] || return 1
-        sleep 0.1
-    done
-}
-
 if [ -n "$nocopy" ]; then
     nocopy_rows
 elif [ "$desk" = 1 ]; then
@@ -1364,7 +1378,8 @@ else
     virgl_rows
 fi
 handoff
-if [ "$desk" = 1 ] && [ -n "$bdf" ] && [ "$weston_found" = 0 ]; then
+if [ "$session_owed" = 1 ]; then
+    session_owed=0
     if session_end; then
         pass end 'the session this run started has ended, as none ran before'
     else
