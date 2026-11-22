@@ -178,7 +178,7 @@ struct etude_case_machine {
     size_t line_len;
     int line_long;
     long capture[CAPTURES];      /* the ids of the diagnostics' QMP commands, or -1 */
-    int capture_error[CAPTURES]; /* why a command was not sent: errno, or 0 */
+    int capture_error[CAPTURES]; /* why a command was not sent: errno, or 0 when not running */
     int captured;                /* the diagnostics are to be kept */
     int ended;                   /* a machine record has given this boot's end */
 };
@@ -4516,19 +4516,27 @@ static int captured(void *arg)
     return 1;
 }
 
-/** Give why a diagnostic's command was not sent, from the errno that
- * etude_machine_qmp left, or 0 when the machine was not running. */
-static const char *unsent(int error)
+/**
+ * Write into `buf` why a diagnostic's command was not sent, from the errno
+ * that etude_machine_qmp left, or 0 when the machine was not running. An
+ * errno the harness does not expect, ENOMEM among them, is given by its
+ * description, so that it reads apart from QMP's close.
+ */
+static void unsent(int error, char *buf, size_t size)
 {
     switch (error) {
     case 0:
-        return "not sent: the machine was not running";
+        snprintf(buf, size, "not sent: the machine was not running");
+        break;
     case EPIPE:
-        return "not sent: QMP had closed, as it does when QEMU ends";
+        snprintf(buf, size, "not sent: QMP had closed, as it does when QEMU ends");
+        break;
     case EAGAIN:
-        return "not sent: QMP had not started the machine, or QEMU was asked to quit";
+        snprintf(buf, size, "not sent: QMP had not started the machine, or QEMU was asked to quit");
+        break;
     default:
-        return "not sent";
+        snprintf(buf, size, "not sent: %s", strerror(error));
+        break;
     }
 }
 
@@ -4564,14 +4572,15 @@ static void end_text(const struct etude_case_machine *m, char *buf, size_t size)
 static void keep_capture(struct etude_case_machine *m)
 {
     const char *reply[CAPTURES];
-    char name[200], end[200], *text;
+    char name[200], end[200], why[CAPTURES][120], *text;
     size_t size, n = 0;
     int i;
 
     end_text(m, end, sizeof(end));
     size = strlen(end) + 2;
     for (i = 0; i < CAPTURES; i++) {
-        reply[i] = m->capture[i] < 0 ? unsent(m->capture_error[i]) : "no reply";
+        unsent(m->capture_error[i], why[i], sizeof(why[i]));
+        reply[i] = m->capture[i] < 0 ? why[i] : "no reply";
         if (m->capture[i] >= 0 && etude_machine_reply(m->m, m->capture[i], &reply[i]) != 1)
             reply[i] = "no reply";
         size += strlen(capture_command[i]) + strlen(reply[i]) + 3;
@@ -4590,11 +4599,12 @@ static void keep_capture(struct etude_case_machine *m)
 /**
  * Collect the diagnostics of every machine that runs with QMP, its status,
  * its processors and its registers, waiting for the replies until `until`,
- * and mark each machine that was running for `keep_capture`, which end_all
- * calls once the machines have ended. A machine whose QEMU has just ended,
- * as one does at a guest's reset under `-no-reboot`, counts as running
- * until the launcher has seen its process end, and its commands are not
- * sent, since QMP has closed; its capture then says so and gives its end.
+ * and mark the latest boot of each machine with QMP for `keep_capture`,
+ * which end_all calls once the machines have ended. The commands go only to
+ * a machine still running. One whose QEMU has ended, as it does at a
+ * guest's reset under `-no-reboot`, keeps a capture all the same, whether
+ * or not the launcher has seen its process end by now: its commands are
+ * `not sent`, with why, and its last line gives its end.
  */
 static void capture(struct etude_case *c, uint64_t until)
 {
@@ -4602,14 +4612,20 @@ static void capture(struct etude_case *c, uint64_t until)
     int i, any = 0;
 
     for (m = c->machines; m != NULL; m = m->next) {
-        int running = m->decl->qmp && mres(m)->state == ETUDE_MACHINE_RUNNING;
+        enum etude_machine_state state = mres(m)->state;
+        int running = m->decl->qmp && state == ETUDE_MACHINE_RUNNING;
 
         for (i = 0; i < CAPTURES; i++) {
             m->capture[i] =
                 running ? etude_machine_qmp(m->m, capture_command[i], capture_args[i]) : -1;
-            m->capture_error[i] = m->capture[i] < 0 && running ? errno : 0;
+            if (m->capture[i] >= 0)
+                m->capture_error[i] = 0;
+            else if (running)
+                m->capture_error[i] = errno;
+            else
+                m->capture_error[i] = state == ETUDE_MACHINE_ENDED ? EPIPE : 0;
         }
-        m->captured = running;
+        m->captured = m->decl->qmp && m->decl->now == m;
         any |= m->capture[0] >= 0;
     }
     if (any)
