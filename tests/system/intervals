@@ -33,6 +33,7 @@ tests/cases/host/host_products_drive.c: poll the process group every 100 ms
 tests/cases/machine/agent_accept.c: poll the agent pane every two seconds
 tests/cases/machine/sshpeer.c: poll SSH identification without unbounded connection retries
 tests/cases/machine/acpid_scenario.c: poll mixer's reading every second
+tests/cases/machine/termconsole_scenario.c: poll QEMU's trace of the PS/2 queue's reads every 10 ms
 tests/lenovoacpi.c: poll the event device and the backlight every 10 ms
 tests/lenovoacpi.c: poll the backlight every 10 ms
 tests/vnetprobe.c: poll the interface's directory every 10 ms
