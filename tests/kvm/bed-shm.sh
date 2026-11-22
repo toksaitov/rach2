@@ -859,8 +859,10 @@ if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
         -device virtio-net-pci,netdev=bedprof \
         -fw_cfg "name=opt/rach2/vgpu-profile,string=${BED_VM_PROFILE_CRC:-0}"
 fi
+# QEMU's option parser reads a doubled comma as one comma.
 [ -z "${BED_VM_VREND_DEBUG:-}" ] ||
-    set -- "$@" -fw_cfg "name=opt/rach2/vrend-debug,string=$BED_VM_VREND_DEBUG"
+    set -- "$@" -fw_cfg \
+        "name=opt/rach2/vrend-debug,string=$(printf '%s' "$BED_VM_VREND_DEBUG" | sed 's/,/,,/g')"
 # The VM's second serial port, ttyS1, a pipe whose input this script
 # keeps open, read and written, so that a word sent never waits, even with
 # QEMU gone: bed-vm-control in the VM does each word to the backend
