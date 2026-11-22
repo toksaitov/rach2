@@ -2252,10 +2252,10 @@ static void rows_copies(void)
     ns_openat_row();
     row_undo = mnt_detach_undo;
     ns_setns_row();
-    row_undo = 0;
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("the tmpfs of the openat and setns rows unmounts");
     }
+    row_undo = 0;
 }
 
 /** The mount point's absolute path followed by `rest`, in the next of four
@@ -2418,10 +2418,10 @@ static void rows_covered(void)
             covered_row(cwd, above);
         }
     }
-    row_undo = 0;
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("the tmpfs of the covered rows unmounts");
     }
+    row_undo = 0;
 }
 
 /**
@@ -2772,10 +2772,10 @@ static void rows_walks(void)
     gated_walk_row(0);
     gated_walk_row(1);
     links_row();
-    row_undo = 0;
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("the tmpfs of the walk rows unmounts");
     }
+    row_undo = 0;
 }
 
 /*
