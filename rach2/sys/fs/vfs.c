@@ -250,11 +250,6 @@ void vfs_mount_watches(const struct vfs_mount *m, int delta)
 
 uint32_t vfs_mount_flags(const struct vfs_mount *m)
 {
-    const struct vfs_mount_view *v = m->views ? vfs_mount_view_find(m) : NULL;
-
-    if (v) {
-        return v->flags;
-    }
     if (m->bind_of) {
         return m->flags & (VFS_MS_MOUNT | VFS_MS_RDONLY);
     }
@@ -268,9 +263,6 @@ int vfs_sb_rdonly(const struct vfs_mount *m)
 
 int vfs_mount_rdonly(const struct vfs_mount *m)
 {
-    if (vfs_view_fs()) {
-        return vfs_sb_rdonly(m);
-    }
     return (vfs_mount_flags(m) & VFS_MS_RDONLY) || vfs_sb_rdonly(m);
 }
 
@@ -6097,31 +6089,28 @@ const struct vfs_type *vfs_type_at(int idx)
 }
 
 /**
- * The caller's mount namespace's own flags for `m`, which a change of the
- * mount's own flags then makes in place of the mount's, when it has them or
- * another namespace sees `m` too, as Linux changes only the remounting
- * namespace's copy of a mount; NULL when the change is the mount's, and in
- * `*rc` 0 or -ENOMEM. Under the big lock.
+ * Whether a remount to `flags` changes the own flags of `m` while another
+ * live mount namespace sees `m` too: -EBUSY then, 0 otherwise. The
+ * namespaces share the record, so a change made in one would show in the
+ * other, where Linux changes only the remounting namespace's copy of the
+ * mount (`copy_mnt_ns`, fs/namespace.c); a namespace that is to seal what
+ * it sees makes private binds and remounts those. A remount that leaves
+ * the mount's own flags as they are passes. Under the big lock, with
+ * nothing between this and the store of the flags that sleeps, or with
+ * the namespaces' copies held off (`vfs_mntns_hold`).
  */
-static struct vfs_mount_view *own_view(struct vfs_mount *m, int *rc)
+static int remount_shared(const struct vfs_mount *m, uint32_t flags)
 {
-    struct vfs_mount_view *v = vfs_mount_view_find(m);
-
-    *rc = 0;
-    if (!v && vfs_mount_shared(m)) {
-        v = vfs_mount_view_make(m, vfs_mount_flags(m));
-        *rc = v ? 0 : -ENOMEM;
+    if ((flags & (VFS_MS_MOUNT | VFS_MS_RDONLY)) != vfs_mount_flags(m) && vfs_mount_shared(m)) {
+        return -EBUSY;
     }
-    return v;
+    return 0;
 }
 
-/** Set only the attributes of the named mount, or of its view `v` when
- * `own_view` gave one. */
-static void set_mount_attrs(struct vfs_mount *m, struct vfs_mount_view *v, uint32_t flags)
+/** Set only the attributes of the named mount. */
+static void set_mount_attrs(struct vfs_mount *m, uint32_t flags)
 {
-    if (v) {
-        v->flags = flags & (VFS_MS_MOUNT | VFS_MS_RDONLY);
-    } else if (m->bind_of) {
+    if (m->bind_of) {
         m->flags = flags & (VFS_MS_MOUNT | VFS_MS_RDONLY);
     } else {
         m->flags = (m->flags & ~VFS_MS_MOUNT) | (flags & VFS_MS_MOUNT);
@@ -6132,7 +6121,6 @@ static void set_mount_attrs(struct vfs_mount *m, struct vfs_mount_view *v, uint3
 int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
 {
     struct vfs_mount *m = mount_base(named);
-    struct vfs_mount_view *view;
     uint32_t changed = (flags ^ m->flags) & VFS_MS_SUPER;
     int rc, closing = (changed & flags & VFS_MS_RDONLY) != 0;
 
@@ -6141,10 +6129,6 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
     }
     if (named->state != VFS_ACTIVE || m->state != VFS_ACTIVE) {
         return -EBUSY;
-    }
-    view = own_view(named, &rc);
-    if (rc != 0) {
-        return rc;
     }
     if (vfs_mount_gone(m)) {
         return -EIO;
@@ -6156,28 +6140,30 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
         ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
         return -EROFS;
     }
-    if (closing) {
-        rc = fd_mount_readonly_begin(m, 0, 0);
-        if (rc != 0) {
-            return rc;
-        }
-        rc = filemap_sync_mount(m);
-        if (rc != 0) {
-            fd_mount_readonly_end(m);
-            return rc;
-        }
-    }
-    if (m->type->ops->remount) {
-        rc = m->type->ops->remount(m, flags, options);
-        if (rc != 0) {
-            if (closing) {
+    vfs_mntns_hold();
+    rc = remount_shared(named, flags);
+    if (rc == 0 && closing) {
+        rc = fd_mount_readonly_begin(m, 0);
+        if (rc == 0) {
+            rc = filemap_sync_mount(m);
+            if (rc != 0) {
                 fd_mount_readonly_end(m);
             }
-            return rc;
         }
     }
+    if (rc == 0 && m->type->ops->remount) {
+        rc = m->type->ops->remount(m, flags, options);
+        if (rc != 0 && closing) {
+            fd_mount_readonly_end(m);
+        }
+    }
+    if (rc != 0) {
+        vfs_mntns_release();
+        return rc;
+    }
     m->flags = (m->flags & ~VFS_MS_SUPER) | (flags & VFS_MS_SUPER);
-    set_mount_attrs(named, view, flags);
+    set_mount_attrs(named, flags);
+    vfs_mntns_release();
     if (closing) {
         fd_mount_readonly_end(m);
     }
@@ -6872,7 +6858,6 @@ int vfs_do_bind(const char *source, const char *target, int rec)
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
 {
     int closing = (flags & VFS_MS_RDONLY) && !vfs_mount_rdonly(m);
-    struct vfs_mount_view *view;
     int rc;
 
     if (flags & ~VFS_MS_KNOWN) {
@@ -6881,17 +6866,17 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
     }
-    view = own_view(m, &rc);
+    rc = remount_shared(m, flags);
     if (rc != 0) {
         return rc;
     }
     if (closing) {
-        rc = fd_mount_readonly_begin(m, 1, view != NULL);
+        rc = fd_mount_readonly_begin(m, 1);
         if (rc != 0) {
             return rc;
         }
     }
-    set_mount_attrs(m, view, flags);
+    set_mount_attrs(m, flags);
     if (closing) {
         fd_mount_readonly_end(m);
     }

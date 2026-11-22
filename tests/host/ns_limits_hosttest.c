@@ -138,6 +138,19 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
+/* The making of a namespace waits for no remount, since no row remounts. */
+
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINVAL;
+}
+
 /* The calls of the descriptor, signal and setns paths, which no row takes. */
 
 int copy_to_user(void __user *dst, const void *src, size_t n)
@@ -152,14 +165,6 @@ int fd_alloc(fd_table_t *t)
 {
     (void)t;
     return -EMFILE;
-}
-
-/** fd.c's: no description holds a view here. */
-int fd_mount_view_held(const struct vfs_mount *mnt, uint32_t view)
-{
-    (void)mnt;
-    (void)view;
-    return 0;
 }
 
 fd_entry_t *fd_get(fd_table_t *t, int fd)

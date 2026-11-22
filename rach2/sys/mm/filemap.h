@@ -35,8 +35,7 @@ int32_t filemap_check(const fd_entry_t *e, int shared, uint32_t prot);
  * never execute, as Linux's path_noexec: 1 or 0. The mount is the file's
  * (`vmnt`), that of the device node a device was opened through
  * (`dev_mnt`), or that of a synthetic node such as /dev/zero opened by
- * its path (`synth_mnt`), with its flags in the description's view
- * (`vfs_view_enter`), as Linux judges the open's f_path. */
+ * its path (`synth_mnt`), as Linux judges the open's f_path. */
 int filemap_noexec(const fd_entry_t *e);
 
 /**

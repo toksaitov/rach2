@@ -181,19 +181,6 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
     return 0;
 }
 
-/** vfs_ns.c's: a call through a description judges by the only view here. */
-uint32_t vfs_view_enter(uint32_t view)
-{
-    (void)view;
-    return 0;
-}
-
-/** vfs_ns.c's: the end of `vfs_view_enter`, which changed nothing here. */
-void vfs_view_leave(uint32_t prev)
-{
-    (void)prev;
-}
-
 /** Release an opened handle. */
 void vfs_release(struct vfs_mount *mnt, void *handle)
 {
@@ -293,6 +280,28 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     (void)mnt;
     (void)node;
     return busy;
+}
+
+/* A writable attachment's reservation of its file (`wres`), which no row
+ * judges: one description stands for every attachment's. */
+static struct open_file reservation;
+
+struct open_file *fd_ofd_new(void)
+{
+    return &reservation;
+}
+
+int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
+{
+    (void)ofd;
+    (void)ref;
+    (void)access;
+    return 0;
+}
+
+void fd_ofd_unref(struct open_file *ofd)
+{
+    (void)ofd;
 }
 
 /* The big lock of `compat/bkl_held.c`: a row that sets `bkl_host_free`
