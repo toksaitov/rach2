@@ -266,7 +266,13 @@ static void vgpushm_kept_work(struct work_struct *work)
  * __GFP_RETRY_MAYFAIL: an allocation that reclaim cannot meet fails with
  * -ENOMEM, which the backend answers as a refusal, where the file's own
  * mask would wake the OOM killer and stall the VM, and with it every
- * answer the driver waits for, until a victim's exit frees memory.
+ * answer the driver waits for, until a victim's exit frees memory. A pin
+ * that fails lets go of the pages it took, and when the file had no pages
+ * at its start, as a backing's new memfd has none, it punches out the
+ * range, so that the pages it brought in, which would stay charged to the
+ * VM and to the backend's memory cgroup until the file closes, go back
+ * before the backend runs again: its next fault would find no memory, and
+ * wake the OOM killer the pin was to spare.
  *
  * Return: 0, -EINVAL past the page that holds the file's end, -ENOMEM, or
  * the error of reading a page.
@@ -275,6 +281,7 @@ static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 
 {
     struct address_space *mapping = file->f_mapping;
     gfp_t gfp = mapping_gfp_mask(mapping) | __GFP_RETRY_MAYFAIL | __GFP_NOWARN;
+    bool empty = mapping->nrpages == 0;
     struct page *page;
     unsigned long i;
 
@@ -287,12 +294,22 @@ static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 
     for (i = 0; i < rec->npages; i++) {
         page = shmem_read_mapping_page_gfp(mapping, (pgoff_t)(offset >> PAGE_SHIFT) + i, gfp);
         if (IS_ERR(page))
-            return PTR_ERR(page);
+            goto fail;
         rec->pages[i] = page;
         rec->phys[i] = page_to_phys(page);
     }
     rec->kind = VGPUSHM_PIN_SHMEM;
     return 0;
+
+fail:
+    while (i-- > 0) {
+        put_page(rec->pages[i]);
+        rec->pages[i] = NULL;
+    }
+    if (empty)
+        shmem_truncate_range(file_inode(file), offset,
+                             offset + ((u64)rec->npages << PAGE_SHIFT) - 1);
+    return PTR_ERR(page);
 }
 
 /**
