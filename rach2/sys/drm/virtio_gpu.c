@@ -774,15 +774,22 @@ int vgpu_may_wait(struct virtio_gpu_device *vg)
 
 /**
  * Whether a sender that found the transport's memory full may wait for the
- * UNREFs of a pass over the worker's frees under way (`vgpu_frees_run`),
- * which has sent none yet. Not while it holds the mode lock, as the
- * console's buffers are made: the pass unplugs the device when an UNREF
- * finds no memory, and the unplug takes that lock, so each would wait for
- * the other.
+ * answers of UNREFs in flight, or for the UNREFs of a pass over the
+ * worker's frees under way (`vgpu_frees_run`), which has sent none yet.
+ * Asked before each wait, after each reap too. A caller that holds the
+ * mode lock, as the console's buffers are made, waits for neither while a
+ * reap is under way, and never for a pass alone: a reap's completions, and
+ * a pass whose UNREF finds no memory, unplug the device on an error, the
+ * unplug takes that lock, and the UNREF count drops only after it returns,
+ * so each would wait for the other. Its own reaps complete the answers that
+ * come meanwhile, and an unplug there retakes the lock it holds.
  */
-static int frees_awaited(struct virtio_gpu_device *vg)
+static int unrefs_awaited(struct virtio_gpu_device *vg)
 {
-    return vg->freeing && !mutex_held(&vg->drm.mode_lock);
+    if (!mutex_held(&vg->drm.mode_lock)) {
+        return vg->unrefs || vg->freeing;
+    }
+    return vg->unrefs && !vg->reaping;
 }
 
 /** Whether the commands started and not yet freed hold fewer pages than
@@ -870,7 +877,8 @@ static int vgpu_dma_wait(struct virtio_gpu_device *vg, int64_t until)
         vgpu_frees_run(vg);
         return !vg->dead;
     }
-    if (!vgpu_may_wait(vg) || (vg->held == 0 && !frees_awaited(vg)) || dma_fence_now() >= until) {
+    if (!vgpu_may_wait(vg) || (vg->held == 0 && !(vg->freeing && unrefs_awaited(vg))) ||
+        dma_fence_now() >= until) {
         return 0;
     }
     w.vg = vg;
@@ -942,11 +950,11 @@ struct virtio_gpu_cmd *vgpu_cmd_new_wait(struct virtio_gpu_device *vg, struct vi
  * allocator waits for and does not refuse. The wait wakes at each answer
  * and polls the queues every 10 ms, for a device without interrupts, and
  * ends at SIGKILL, since a device that has stopped answering would hold the
- * caller for ever. 0; -ENOMEM once no UNREF is in flight or awaited
- * (`frees_awaited`); -EINTR at SIGKILL; or -ENODEV when the device has
- * died, which a reset during the wait does, freeing its queues and the
- * transport's heap, so that the caller must not go on to use them. May
- * sleep.
+ * caller for ever. 0; -ENOMEM once no UNREF is in flight or awaited, or
+ * the caller may no longer wait for one (`unrefs_awaited`); -EINTR at
+ * SIGKILL; or -ENODEV when the device has died, which a reset during the
+ * wait does, freeing its queues and the transport's heap, so that the
+ * caller must not go on to use them. May sleep.
  */
 static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
@@ -965,7 +973,7 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             continue;
         }
         w.seen = vg->unrefs;
-        if ((w.seen == 0 && !frees_awaited(vg)) || !can_sleep() || !vgpu_wake_ready) {
+        if (!unrefs_awaited(vg) || !can_sleep() || !vgpu_wake_ready) {
             return -ENOMEM;
         }
         vgpu_reap(vg);
@@ -976,6 +984,9 @@ static int32_t backing_fill(struct virtio_gpu_device *vg, struct virtio_gpu_obje
             return -EINTR;
         }
         if (vg->unrefs == w.seen) {
+            if (!unrefs_awaited(vg)) {
+                return -ENOMEM;
+            }
             vgpu_kick(vg);
             vgpu_sleep(unref_moved, &w, dma_fence_now() + VGPU_POLL_NS, "backing_fill");
             vgpu_reap(vg);
