@@ -332,6 +332,19 @@ may hold them in its translations.
 An old mapping of a blob of host memory faults with
 .Dv SIGBUS .
 A new boot is needed to use the device again.
+.Ss Test files
+Two more root files in the same directory serve the driver's tests.
+While a descriptor of
+.Pa virtio_gpu_hold ,
+mode 0200, is open, the driver leaves the device's answers unprocessed:
+fences still signal, but the references that submissions, transfers and
+detaches hold on their buffers, and the frees those lead to, wait for its
+last close, which processes them at once.
+.Pa virtio_gpu_attachments ,
+mode 0400, has a line
+.Ql CTX RES
+for each resource the driver has attached to a 3D context and not yet
+detached, by the context's and the resource's ids.
 .Sh FILES
 .Bl -tag -width /dev/dri/renderD128+N
 .It Pa /dev/dri/cardN

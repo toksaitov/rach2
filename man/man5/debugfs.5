@@ -889,6 +889,14 @@ The bridges of the encoder's chain, which no driver has; empty.
 .It Pa dri/DEVICE/virtio_gpu_reset
 Mode 0200, for a virtio GPU with virgl; see
 .Xr virtio-gpu 4 .
+.It Pa dri/DEVICE/virtio_gpu_hold
+Mode 0200, for the same; while it is open the driver holds the device's
+answers; see
+.Xr virtio-gpu 4 .
+.It Pa dri/DEVICE/virtio_gpu_attachments
+Mode 0400, for the same; a line for each resource attached to a 3D context;
+see
+.Xr virtio-gpu 4 .
 .It Pa dri/DEVICE/CONNECTOR/force
 Mode 0644, for each connector, by its name, such as
 .Pa Virtual-1 .

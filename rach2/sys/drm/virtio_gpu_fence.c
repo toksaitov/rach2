@@ -160,22 +160,125 @@ static int32_t reset_write(fd_entry_t *e, const char __user *buf, uint32_t count
 static const struct file_ops reset_ops = {NULL,        reset_write, NULL, NULL,
                                           reset_close, NULL,        NULL, 0};
 
-/** Register the root-only reset trigger in the device's debugfs directory,
- * which `dri/N` links to; return 0 or the debugfs error. */
+/** Hold the device's answers while the descriptor is open, as
+ * `vgpu_answers_held` says; refused once the device has died. */
+static int32_t hold_open(fd_entry_t *e, int flags)
+{
+    struct virtio_gpu_device *vg = e->priv;
+
+    (void)flags;
+    if (vg->dead) {
+        return -ENODEV;
+    }
+    drm_dev_get(&vg->drm);
+    vg->answer_holds++;
+    return 0;
+}
+
+/** Let the answers go at the last close of the hold, and run their
+ * completions at once: the commands' references drop, and an object whose
+ * last reference an answer held goes to the worker. */
+static void hold_close(fd_entry_t *e)
+{
+    struct virtio_gpu_device *vg = e->priv;
+
+    vg->answer_holds--;
+    vgpu_reap(vg);
+    drm_dev_put(&vg->drm);
+}
+
+static const struct file_ops hold_ops = {NULL, NULL, NULL, NULL, hold_close, NULL, NULL, 0};
+
+/** Append the decimal `n` and then `end` to the text at `buf`, of `cap`
+ * bytes, whose length is `len`, as far as they go; the new length. */
+static uint32_t put_number(char *buf, uint32_t cap, uint32_t len, uint32_t n, char end)
+{
+    char digits[11];
+    uint32_t i = 0;
+
+    do {
+        digits[i++] = (char)('0' + n % 10u);
+        n /= 10u;
+    } while (n);
+    while (i) {
+        if (len < cap) {
+            buf[len] = digits[i - 1u];
+        }
+        len++;
+        i--;
+    }
+    if (len < cap) {
+        buf[len] = end;
+    }
+    return len + 1u;
+}
+
+/** The text of virtio_gpu_attachments: a line "CTX RES" for each resource
+ * attached to a context, from CTX_ATTACH_RESOURCE to the DETACH, UNREF or
+ * CTX_DESTROY that drops it (`struct vgpu_attachment`), each context's
+ * newest first. */
+static int32_t attachments_show(void *data, char *buf, uint32_t cap)
+{
+    const struct virtio_gpu_device *vg = data;
+    const struct vgpu_context *ctx;
+    const struct vgpu_attachment *a;
+    uint32_t len = 0;
+
+    for (ctx = vg->contexts; ctx; ctx = ctx->next) {
+        for (a = ctx->attached; a; a = a->ctx_next) {
+            len = put_number(buf, cap, len, ctx->id, ' ');
+            len = put_number(buf, cap, len, a->bo->res_id, '\n');
+        }
+    }
+    return (int32_t)len;
+}
+
+static const struct debugfs_text_ops attachments_ops = {attachments_show, NULL};
+
+/** Register the root-only reset trigger, the answers' hold and the list of
+ * attachments in the device's debugfs directory, which `dri/N` links to;
+ * return 0 or the debugfs error. */
 int32_t vgpu_reset_register(struct virtio_gpu_device *vg)
 {
+    int32_t rc;
+
     if (!vg->has_virgl) {
         return 0;
     }
     drm_debugfs_path(&vg->drm, "virtio_gpu_reset", vg->reset_path, sizeof(vg->reset_path));
-    return debugfs_create_file(vg->reset_path, 0200u, &reset_ops, reset_open, vg);
+    rc = debugfs_create_file(vg->reset_path, 0200u, &reset_ops, reset_open, vg);
+    if (rc) {
+        vg->reset_path[0] = 0;
+        return rc;
+    }
+    drm_debugfs_path(&vg->drm, "virtio_gpu_hold", vg->hold_path, sizeof(vg->hold_path));
+    rc = debugfs_create_file(vg->hold_path, 0200u, &hold_ops, hold_open, vg);
+    if (rc) {
+        vg->hold_path[0] = 0;
+        return rc;
+    }
+    drm_debugfs_path(&vg->drm, "virtio_gpu_attachments", vg->attach_path, sizeof(vg->attach_path));
+    rc = debugfs_create_text(vg->attach_path, 0400u, &attachments_ops, vg);
+    if (rc) {
+        vg->attach_path[0] = 0;
+    }
+    return rc;
 }
 
-/** Remove the reset trigger; open descriptors retain their device reference. */
+/** Remove the device's debugfs files; open descriptors retain their device
+ * reference. */
 void vgpu_reset_remove(struct virtio_gpu_device *vg)
 {
-    if (vg->reset_path[0]) {
-        debugfs_remove(vg->reset_path);
-        vg->reset_path[0] = 0;
+    char *paths[3];
+    int i;
+
+    paths[0] = vg->reset_path;
+    paths[1] = vg->hold_path;
+    paths[2] = vg->attach_path;
+    for (i = 0; i < 3; i++) {
+        if (paths[i][0]) {
+            debugfs_remove(paths[i]);
+            paths[i][0] = 0;
+        }
     }
 }

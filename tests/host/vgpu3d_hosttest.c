@@ -107,10 +107,22 @@ int32_t drm_syncobj_find_fence(struct drm_file *f, uint32_t h, uint64_t p, uint3
     return 0;
 }
 
-/** Capture the driver's reset registration and its lifetime hooks. */
+/** Whether `path` names the reset trigger, which ends in virtio_gpu_reset. */
+static int is_reset_path(const char *path)
+{
+    size_t n = k_strlen(path), m = k_strlen("virtio_gpu_reset");
+
+    return n >= m && !strcmp(path + n - m, "virtio_gpu_reset");
+}
+
+/** Capture the driver's reset registration and its lifetime hooks; its
+ * other files, the answers' hold, no row opens. */
 int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,
                             debugfs_open_fn open, void *data)
 {
+    if (!is_reset_path(path)) {
+        return 0;
+    }
     CHECK(mode == 0200, "reset is writable by root alone");
     k_strncpy(registered_path, path, sizeof(registered_path));
     reset_file_ops = ops;
@@ -122,6 +134,9 @@ int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_o
 /** Remove the reset entry, preserving operations held by an open. */
 void debugfs_remove(const char *path)
 {
+    if (!is_reset_path(path)) {
+        return;
+    }
     CHECK(!strcmp(path, registered_path), "unplug removes its own reset entry");
     registered_path[0] = 0;
 }
