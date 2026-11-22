@@ -263,6 +263,7 @@ static void vgpushm_kept_work(struct work_struct *work)
  * @rec: the pin, with npages and phys sized
  * @file: the file
  * @offset: the first byte, page-aligned
+ * @fresh: the caller's file, made for this pin (VGPUSHM_PIN_FRESH)
  *
  * The pages are allocated as i915 allocates its objects' pages, with
  * __GFP_RETRY_MAYFAIL: an allocation that reclaim cannot meet fails with
@@ -270,62 +271,57 @@ static void vgpushm_kept_work(struct work_struct *work)
  * mask would wake the OOM killer and stall the VM, and with it every
  * answer the driver waits for, until a victim's exit frees memory.
  *
- * A pin that fails lets go of the pages it took and drops from the file
- * the pages it brought in itself, which would stay charged to the VM and
- * to the backend's memory cgroup until the file closes: the backend's next
+ * A pin that fails lets go of the pages it took. Of a fresh file it then
+ * truncates the range, which frees what the pin brought in at once: left
+ * in the file, those pages would stay charged to the VM and to the
+ * backend's memory cgroup until the file closes, and the backend's next
  * fault would find no memory and wake the OOM killer the pin was to spare.
- * While the pages are read, phys[i] is 1 for a page this pin brought in,
- * one whose index held no entry, page or swap, before its read; once all
- * are held it takes the page's address. A page brought in is dropped by
- * invalidate_mapping_pages, which removes only a folio that is clean,
- * unmapped, unlocked and held by no one else, as the mm drops a hole's
- * clean pages behind shmem's back (shmem_recalc_inode): a page written or
- * mapped meanwhile, or swapped in, which shmem marks dirty, is left alone.
- * A large folio is dropped whole, since shmem allocates one only over
- * indices that are all holes. The few folios still in a processor's LRU
- * batch, which holds a reference, stay until the file closes.
+ * A fresh file is one the module finds empty, with no page resident or
+ * swapped, and mapped nowhere, and that the caller vouches nothing else
+ * writes, so every page in the range is the pin's own. Shmem gives no way to
+ * know which pages of a shared file a pin brought in, since a fault through
+ * another mapping takes no lock the pin could hold, so the pages a failed
+ * pin brought into another file stay there as that file's, as a guest's
+ * touch of a blob leaves them, until the file is truncated or freed.
  *
- * Return: 0, -EINVAL past the page that holds the file's end, -ENOMEM, or
- * the error of reading a page.
+ * Return: 0, -EINVAL past the page that holds the file's end or for a file
+ * that is not fresh as @fresh says, -ENOMEM, or the error of reading a page.
  */
-static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 offset)
+static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 offset, bool fresh)
 {
     struct address_space *mapping = file->f_mapping;
+    struct inode *inode = file_inode(file);
     gfp_t gfp = mapping_gfp_mask(mapping) | __GFP_RETRY_MAYFAIL | __GFP_NOWARN;
     pgoff_t first = (pgoff_t)(offset >> PAGE_SHIFT);
     struct page *page;
     unsigned long i;
 
-    if (offset + ((u64)rec->npages << PAGE_SHIFT) >
-        round_up((u64)i_size_read(file_inode(file)), PAGE_SIZE))
+    if (offset + ((u64)rec->npages << PAGE_SHIFT) > round_up((u64)i_size_read(inode), PAGE_SIZE))
+        return -EINVAL;
+    if (fresh && (mapping->nrpages != 0 || READ_ONCE(SHMEM_I(inode)->swapped) != 0 ||
+                  mapping_mapped(mapping)))
         return -EINVAL;
     rec->pages = kvcalloc(rec->npages, sizeof(*rec->pages), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
     if (!rec->pages)
         return -ENOMEM;
     for (i = 0; i < rec->npages; i++) {
-        rec->phys[i] = xa_load(&mapping->i_pages, first + i) == NULL;
         page = shmem_read_mapping_page_gfp(mapping, first + i, gfp);
         if (IS_ERR(page))
             goto fail;
         rec->pages[i] = page;
+        rec->phys[i] = page_to_phys(page);
     }
-    for (i = 0; i < rec->npages; i++)
-        rec->phys[i] = page_to_phys(rec->pages[i]);
     rec->kind = VGPUSHM_PIN_SHMEM;
     return 0;
 
 fail:
-    /* Backwards, so that the folio a fresh index began holds no more of
-       this pin's references when it is dropped. */
     while (i-- > 0) {
-        struct folio *folio = page_folio(rec->pages[i]);
-        pgoff_t at = folio->index, last = at + folio_nr_pages(folio) - 1;
-
         put_page(rec->pages[i]);
         rec->pages[i] = NULL;
-        if (rec->phys[i])
-            invalidate_mapping_pages(mapping, at, last);
     }
+    if (fresh)
+        shmem_truncate_range(inode, (loff_t)offset,
+                             (loff_t)(offset + ((u64)rec->npages << PAGE_SHIFT)) - 1);
     return PTR_ERR(page);
 }
 
@@ -396,8 +392,9 @@ static int vgpushm_pin_dmabuf(struct vgpushm *dev, struct vgpushm_pinrec *rec, u
  *
  * Context: holds dev->ops.
  * Return: 0; -EFAULT; -EINVAL for an empty or unaligned range, one larger
- * than VGPUSHM_PIN_MAX_SIZE, or a descriptor that is neither a shmem file
- * nor a dma-buf; -EBADF for a descriptor not open; the error of pinning;
+ * than VGPUSHM_PIN_MAX_SIZE, a descriptor that is neither a shmem file
+ * nor a dma-buf, an unknown flag, or VGPUSHM_PIN_FRESH of a dma-buf or a
+ * file that is not fresh; -EBADF for a descriptor not open; the error of pinning;
  * -ENOMEM.
  */
 static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
@@ -410,7 +407,8 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
     if (copy_from_user(&req, arg, sizeof(req)))
         return -EFAULT;
     if (req.size == 0 || ((req.offset | req.size) & ~PAGE_MASK) ||
-        req.size > VGPUSHM_PIN_MAX_SIZE || req.offset + req.size < req.offset) {
+        req.size > VGPUSHM_PIN_MAX_SIZE || req.offset + req.size < req.offset ||
+        (req.flags & ~VGPUSHM_PIN_FRESH) != 0 || req.reserved != 0) {
         dev->refused++;
         return -EINVAL;
     }
@@ -428,13 +426,14 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
     }
     rec->dmabuf = dma_buf_get(req.fd);
     if (!IS_ERR(rec->dmabuf)) {
-        err = vgpushm_pin_dmabuf(dev, rec, req.offset);
+        err = req.flags & VGPUSHM_PIN_FRESH ? -EINVAL : vgpushm_pin_dmabuf(dev, rec, req.offset);
     } else {
         rec->dmabuf = NULL;
         file = fget(req.fd);
-        err = !file               ? -EBADF
-              : !shmem_file(file) ? -EINVAL
-                                  : vgpushm_pin_shmem(rec, file, req.offset);
+        err = !file ? -EBADF
+              : !shmem_file(file)
+                  ? -EINVAL
+                  : vgpushm_pin_shmem(rec, file, req.offset, req.flags & VGPUSHM_PIN_FRESH);
         if (file)
             fput(file);
     }

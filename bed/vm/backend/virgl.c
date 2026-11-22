@@ -792,18 +792,21 @@ static void hold_backing(uint32_t id)
 
 /**
  * Make resource q->id's backing of q->size bytes of the VM's memory: a
- * memfd, mapped shared, pinned whole through the module for the driver's
- * epoch, which brings in its pages zeroed, and attached to the resource as
- * its one iovec, as QEMU attaches a guest's pages. Returns 0 with the pin
- * in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has no memory for it, by
- * its counts (`mem_room`) or by the pin's allocation, or
+ * memfd, pinned whole through the module for the driver's epoch as a fresh
+ * file, which brings in its pages zeroed, then mapped shared and attached
+ * to the resource as its one iovec, as QEMU attaches a guest's pages. The
+ * pin comes before the mapping, so that the module finds the file its own,
+ * empty and mapped nowhere, and truncates what a pin that fails brought in
+ * before it returns, with no fault of the backend's between. Returns 0
+ * with the pin in *out, VD_RESP_ERR_OUT_OF_MEMORY when the VM has no
+ * memory for it, by its counts (`mem_room`) or by the pin's allocation, or
  * VD_RESP_ERR_UNSPEC. The refusal's line names the step that refused.
  */
 static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
 {
     struct vgpushm_pin pin;
     struct iovec *iov = calloc(1, sizeof(*iov));
-    int fd = -1, err = iov == 0 ? ENOMEM : 0;
+    int fd = -1, err = iov == 0 ? ENOMEM : 0, pinned = 0;
     const char *step = "the iovec";
     void *map = MAP_FAILED;
 
@@ -823,18 +826,23 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         err = errno;
         step = "the memfd";
     }
-    if (err == 0 &&
-        (map = mmap(0, q->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
-        err = errno;
-        step = "the mapping";
-    }
     memset(&pin, 0, sizeof(pin));
     pin.fd = fd;
     pin.epoch = q->epoch;
     pin.size = q->size;
-    if (err == 0 && ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0) {
+    pin.flags = VGPUSHM_PIN_FRESH;
+    if (err == 0) {
+        if (ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0) {
+            err = errno;
+            step = "the pin";
+        } else {
+            pinned = 1;
+        }
+    }
+    if (err == 0 &&
+        (map = mmap(0, q->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
         err = errno;
-        step = "the pin";
+        step = "the mapping";
     }
     if (fd >= 0) {
         close(fd); /* the mapping and the pin hold the file */
@@ -846,16 +854,16 @@ static int back_new(struct vr *r, const struct vd_pages *q, struct vr_pin **out)
         err = virgl_renderer_resource_attach_iov((int)q->id, iov, 1);
         err = err < 0 ? -err : err;
         step = "the attach";
-        if (err != 0) {
-            ioctl(r->module, VGPUSHM_IOC_UNPIN, &pin.handle);
-        }
     }
     if (err != 0) {
-        fprintf(stderr, "backend: back: resource %u: refused: %llu bytes: %s: %s\n",
-                (unsigned)q->id, (unsigned long long)q->size, step, strerror(err));
+        if (pinned) {
+            ioctl(r->module, VGPUSHM_IOC_UNPIN, &pin.handle);
+        }
         if (map != MAP_FAILED) {
             munmap(map, q->size);
         }
+        fprintf(stderr, "backend: back: resource %u: refused: %llu bytes: %s: %s\n",
+                (unsigned)q->id, (unsigned long long)q->size, step, strerror(err));
         free(iov);
         r->pc.refused++;
         return err == ENOMEM ? VD_RESP_ERR_OUT_OF_MEMORY : VD_RESP_ERR_UNSPEC;
