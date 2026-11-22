@@ -604,7 +604,6 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
         p[i].fd = s->efd[i];
         p[i].events = POLLIN;
     }
-    p[VECTORS].fd = vr_poll_fd(r);
     p[VECTORS].events = POLLIN;
     while (!stop) {
         int steps = 0;
@@ -633,6 +632,7 @@ static void serve(struct vd *d, struct src *s, struct vr *r, int once, const cha
             timeout = 1;
         }
         rung = 0;
+        p[VECTORS].fd = vr_poll_fd(r); /* a new epoch starts virglrenderer again */
         stall_beat("poll");
         if (poll(p, VECTORS + 1, timeout) <= 0) {
             continue;
@@ -728,6 +728,7 @@ int main(int argc, char **argv)
     beat_stop(&beater);
     report(&dev, &s, r, k);
     kms_close(k);
+    vr_fini(r);
     vd_fini(&dev);
     return 0;
 }

@@ -72,6 +72,8 @@ struct vr {
     struct vr_pin_counts pc;
     int poll_fd;     /* virglrenderer's, readable when it asks for a poll, or -1 */
     int async_fence; /* fences retire on virglrenderer's threads */
+    int flags;       /* VIRGL_RENDERER_* given to each start, but the fences' */
+    int native;      /* the DRM renderer runs native contexts */
 };
 
 /* virglrenderer calls back with the cookie vr_init passed. */
@@ -126,6 +128,39 @@ static void log_line(enum virgl_log_level_flags level, const char *message, void
 }
 
 /**
+ * Start virglrenderer with the flags vr_init chose, under
+ * VIRGL_RENDERER_ASYNC_FENCE_CB, and read its poll descriptor. vrend's
+ * poll descriptor is its sync thread's eventfd; with none, the thread did
+ * not start, and an asynchronous fence of vrend's would never retire
+ * (vrend_renderer_use_threaded_sync), so the renderer starts again without
+ * the thread and its fences are polled. A native context has no way but
+ * the asynchronous one. Returns 0, or virglrenderer's error.
+ */
+static int start(struct vr *r)
+{
+    int err;
+
+    if ((err = virgl_renderer_init(r, r->flags | VIRGL_RENDERER_ASYNC_FENCE_CB, &callbacks)) != 0) {
+        return err;
+    }
+    r->async_fence = 1;
+    r->poll_fd = virgl_renderer_get_poll_fd();
+    if (r->poll_fd < 0 && !r->native) {
+        fprintf(stderr, "backend: fences: no sync thread; polled\n");
+        virgl_renderer_cleanup(r);
+        if ((err = virgl_renderer_init(r, r->flags & ~VIRGL_RENDERER_THREAD_SYNC, &callbacks)) !=
+            0) {
+            return err;
+        }
+        r->async_fence = 0;
+        r->poll_fd = virgl_renderer_get_poll_fd();
+    } else if (r->poll_fd < 0) {
+        fprintf(stderr, "backend: fences: no sync thread; vrend's fences will not retire\n");
+    }
+    return 0;
+}
+
+/**
  * Start virglrenderer with EGL: on GBM over gbm_fd when it is a DRM
  * device, so that resources it allocates there export as dma-bufs, or
  * surfaceless when gbm_fd is -1; with Venus through the render server
@@ -139,9 +174,7 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
 {
     static const uint32_t ids[] = {CAPSET_VIRGL, CAPSET_VIRGL2, CAPSET_VENUS, CAPSET_DRM};
     struct vr *r = calloc(1, sizeof(*r));
-    int flags =
-            VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_THREAD_SYNC | VIRGL_RENDERER_USE_EXTERNAL_BLOB,
-        err;
+    int err;
     uint32_t i, ver, size;
 
     if (r == 0) {
@@ -150,16 +183,19 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
     r->dev = dev;
     r->gbm_fd = gbm_fd;
     r->verbose = verbose;
+    r->native = native;
     r->module = -1;
+    r->flags =
+        VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_THREAD_SYNC | VIRGL_RENDERER_USE_EXTERNAL_BLOB;
     if (gbm_fd < 0) {
-        flags |= VIRGL_RENDERER_USE_SURFACELESS;
+        r->flags |= VIRGL_RENDERER_USE_SURFACELESS;
     }
     if (venus) {
-        flags |= VIRGL_RENDERER_VENUS | VIRGL_RENDERER_RENDER_SERVER;
+        r->flags |= VIRGL_RENDERER_VENUS | VIRGL_RENDERER_RENDER_SERVER;
     }
     if (native) {
 #ifdef VIRGL_RENDERER_DRM
-        flags |= VIRGL_RENDERER_DRM;
+        r->flags |= VIRGL_RENDERER_DRM;
 #else
         fprintf(stderr, "backend: native context needs virglrenderer with DRM support\n");
         free(r);
@@ -171,29 +207,10 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
     callbacks.write_fence = write_fence;
     callbacks.get_drm_fd = get_drm_fd;
     callbacks.write_context_fence = write_context_fence;
-    if ((err = virgl_renderer_init(r, flags | VIRGL_RENDERER_ASYNC_FENCE_CB, &callbacks)) != 0) {
+    if ((err = start(r)) != 0) {
         fprintf(stderr, "backend: virglrenderer failed to start: %d\n", err);
         free(r);
         return 0;
-    }
-    r->async_fence = 1;
-    r->poll_fd = virgl_renderer_get_poll_fd();
-    /* vrend's poll descriptor is its sync thread's eventfd; with none, the
-       thread did not start, and an asynchronous fence of vrend's would never
-       retire (vrend_renderer_use_threaded_sync), so it is polled instead.
-       A native context has no way but the asynchronous one. */
-    if (r->poll_fd < 0 && !native) {
-        fprintf(stderr, "backend: fences: no sync thread; polled\n");
-        virgl_renderer_cleanup(r);
-        if ((err = virgl_renderer_init(r, flags & ~VIRGL_RENDERER_THREAD_SYNC, &callbacks)) != 0) {
-            fprintf(stderr, "backend: virglrenderer failed to start: %d\n", err);
-            free(r);
-            return 0;
-        }
-        r->async_fence = 0;
-        r->poll_fd = virgl_renderer_get_poll_fd();
-    } else if (r->poll_fd < 0) {
-        fprintf(stderr, "backend: fences: no sync thread; vrend's fences will not retire\n");
     }
     for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         virgl_renderer_get_cap_set(ids[i], &ver, &size);
@@ -209,8 +226,18 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
     return r;
 }
 
+/**
+ * Stop virglrenderer and free the renderer: its threads, which call back
+ * into the device (`retire`), are joined, so the device may be freed after.
+ */
+void vr_fini(struct vr *r)
+{
+    virgl_renderer_cleanup(r);
+    free(r);
+}
+
 /** Return virglrenderer's descriptor, readable when it asks for a poll,
- * or -1 for none. */
+ * or -1 for none; a reset may change it. */
 int vr_poll_fd(struct vr *r)
 {
     return r->poll_fd;
@@ -1197,10 +1224,17 @@ static void op_unpin(void *c, uint32_t id)
     }
 }
 
-/** End every context, resource and pin for a new epoch. */
+/**
+ * End every context, resource and pin for a new epoch: virglrenderer stops
+ * and starts again (`start`), since virgl_renderer_reset in 1.1.0 joins
+ * vrend's sync thread and starts none, after which no asynchronous fence of
+ * vrend's retires (vrend_renderer_prepare_reset and vrend_renderer_reset).
+ * A renderer that fails to start ends the backend.
+ */
 static void op_reset(void *c)
 {
     struct vr *r = c;
+    int err;
 
     while (r->npins) {
         pin_drop(r, &r->pins[0]);
@@ -1209,7 +1243,11 @@ static void op_reset(void *c)
         kms_reset(r->kms);
     }
     memset(r->venus, 0, sizeof(r->venus));
-    virgl_renderer_reset();
+    virgl_renderer_cleanup(r);
+    if ((err = start(r)) != 0) {
+        fprintf(stderr, "backend: virglrenderer failed to start again: %d\n", err);
+        exit(1);
+    }
 }
 
 const struct vd_ops vr_ops = {
