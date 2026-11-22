@@ -852,9 +852,19 @@ seal_check
 [ "$1" != check ] || exit 0
 
 if [ "$1" = shm ]; then
+    vm_disk=${CRYSIS_VM_DISK:-$owner/native/bed/vm.disk}
+    case "$vm_disk" in
+        /data/trial/*) vm_disk=$owner/${vm_disk#/data/} ;;
+    esac
+    case ${BED_VM_PROFILE_HOSTS:-} in
+        /data/trial/*)
+            BED_VM_PROFILE_HOSTS=$owner/${BED_VM_PROFILE_HOSTS#/data/}
+            export BED_VM_PROFILE_HOSTS
+            ;;
+    esac
     # Let the VM runner own the handoff and its signal traps. The mounts
     # go away when the last process of this namespace ends.
-    exec sh ./bed-shm.sh -d "${CRYSIS_VM_DISK:-$owner/native/bed/vm.disk}" -w -l crysis \
+    exec sh ./bed-shm.sh -d "$vm_disk" -w -l crysis \
         -g 0000:00:02.0 -m 8192 -o "$here/out"
 fi
 
