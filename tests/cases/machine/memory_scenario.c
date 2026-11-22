@@ -287,14 +287,15 @@ static void refused(struct lc *l)
 /**
  * Run case `stackoverrun-WHERE`: the descent announces its pid, a record of
  * the fault names the same pid, the kernel panics because a kernel stack ran
- * out, the processor halts, and the debug shell never starts. The panic is
- * recorded as the boot's end, which `etude.fault` judges against the
+ * out and says when it resets, and the debug shell never starts. The panic
+ * is recorded as the boot's end, which `etude.fault` judges against the
  * machine's declared fault. The panic's call trace and report follow its
- * first line, and the processor halts only after the last of them, so the
- * machine is ended only then: a quit sent on the first line can cut the
- * next one part way, which `etude.kernel` reads as a critical record it does
- * not know. Assertions `descended`, `named`, `panicked`, `halted` and
- * `no-shell`.
+ * first line, and `panic: rebooting in N seconds..` follows the last of
+ * them, by the default `panic=` of 30, before a wait in which the kernel
+ * writes nothing; the machine is ended only then, since a quit sent on the
+ * first line can cut the next one part way, which `etude.kernel` reads as a
+ * critical record it does not know. Assertions `descended`, `named`,
+ * `panicked`, `said-wait` and `no-shell`.
  */
 static void stackoverrun(struct lc *l)
 {
@@ -317,14 +318,14 @@ static void stackoverrun(struct lc *l)
         pid = atoi(p + strlen("kstack: overrun: pid "));
     free(w);
     snprintf(named, sizeof(named), "pid %d ran past the end of its kernel stack", pid);
-    if (!lc_wait(l, m, "a kernel stack ran out", &at, "panicked"))
+    if (!lc_wait(l, m, "a kernel stack ran out", &at, "panicked") ||
+        !lc_wait(l, m, "] panic: rebooting in ", &at, "said-wait"))
         return;
     st = etude_fault(m, ETUDE_END_PANIC);
     if (st != ETUDE_OK) {
         lc_halt(l, st, "the record of the kernel's panic");
         return;
     }
-    lc_halted(l, m, 1, "halted");
     if (lc_quit(l, m, NULL)) {
         lc_find(l, m, "named", named, 0, 1);
         lc_find(l, m, "no-shell", "Type 'help'", 0, 0);
