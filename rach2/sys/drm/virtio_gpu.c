@@ -780,22 +780,35 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
 
 /**
  * Put `bo` on the device's `refused` list for the worker when its deferred
- * backing ask has an answer other than its page list and no take is under
- * way, which would read the answer itself. Under the lock; returns whether
- * it was put there, after which the caller wakes the worker.
+ * backing ask has an answer, no take is under way, which would read the
+ * answer itself, and it is not there already. Under the lock; returns
+ * whether it was put there, after which the caller wakes the worker.
  */
-static int back_refused_locked(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+static int back_list_locked(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
     struct virtio_gpu_cmd *ask = bo->back_ask;
 
-    if (!ask || !ask->done || ask->resp_type == VIRTIO_GPU_RESP_OK_MAP_INFO || bo->back_taking ||
-        bo->refused_listed) {
+    if (!ask || !ask->done || bo->back_taking || bo->refused_listed) {
         return 0;
     }
     bo->refused_listed = 1;
     bo->refused_next = vg->refused;
     vg->refused = bo;
     return 1;
+}
+
+/**
+ * As back_list_locked, for an answer other than the page list alone, a
+ * refusal among them. Under the lock.
+ */
+static int back_refused_locked(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct virtio_gpu_cmd *ask = bo->back_ask;
+
+    if (!ask || ask->resp_type == VIRTIO_GPU_RESP_OK_MAP_INFO) {
+        return 0;
+    }
+    return back_list_locked(vg, bo);
 }
 
 /** Take `bo` off the device's `refused` list, if it is on it. Under the
@@ -2576,10 +2589,19 @@ int32_t vgpu_backing_settle_answered(struct virtio_gpu_device *vg, struct virtio
 {
     uint32_t flags = spin_lock_irqsave(&vg->lock);
     struct virtio_gpu_cmd *ask = bo->back_ask;
-    int ready = ask && ask->done && !bo->back_taking;
+    int ready = ask && ask->done && !bo->back_taking, listed = 0;
     int32_t rc = bo->back_err;
 
+    /* A page list on the worker's list is one a submission left already. */
+    if (ready && ask->resp_type == VIRTIO_GPU_RESP_OK_MAP_INFO &&
+        (bo->refused_listed || !vgpu_backing_whole(bo, ask))) {
+        ready = 0;
+        listed = back_list_locked(vg, bo);
+    }
     spin_unlock_irqrestore(&vg->lock, flags);
+    if (listed && vgpu_wake_ready) {
+        wq_wake_all(&vgpu_wake);
+    }
     if (ready) {
         return vgpu_backing_settle(vg, bo, site);
     }

@@ -372,6 +372,51 @@ static int32_t map_ask_take(struct virtio_gpu_object *bo, struct virtio_gpu_cmd 
     return rc;
 }
 
+/** Copy `n` bytes of `cmd`'s answer from its byte `off` to `out`: from the
+ * command's own page, or across the response pages. */
+static void answer_get(const struct virtio_gpu_cmd *cmd, uint32_t off, void *out, uint32_t n)
+{
+    uint8_t *o = (uint8_t *)out;
+    uint32_t here;
+
+    if (!cmd->response_size) {
+        k_memcpy(out, cmd->page + VIRTIO_GPU_RESP_OFF + off, n);
+        return;
+    }
+    for (; n > 0; o += here, off += here, n -= here) {
+        here = PAGE_SIZE - off % PAGE_SIZE;
+        here = here < n ? here : n;
+        k_memcpy(o, (const uint8_t *)cmd->payload[off / PAGE_SIZE].page + off % PAGE_SIZE, here);
+    }
+}
+
+int vgpu_backing_whole(const struct virtio_gpu_object *bo, const struct virtio_gpu_cmd *ask)
+{
+    uint64_t total = bo->shmem.base.size >> PAGE_SHIFT, left;
+    uint32_t len = ask->response_len,
+             room = ask->response_size ? map_answer_bytes(total) : VGPU_MAP_INLINE;
+    struct vgs_pages head;
+    struct vgs_run run;
+    uint32_t i;
+
+    len = len < room ? len : room;
+    if (len < VGS_PAGES_OFF) {
+        return 1;
+    }
+    answer_get(ask, 24, &head, sizeof(head));
+    if (vgs_check_pages(&head, len, total, 0, &left) != VGS_OK || head.count > VGPU_MAP_RUNS) {
+        return 1;
+    }
+    for (i = 0; i < head.count && left > 0; i++) {
+        answer_get(ask, VGS_PAGES_OFF + i * (uint32_t)sizeof(run), &run, sizeof(run));
+        if (vgs_check_run(&run, left) != VGS_OK) {
+            return 1;
+        }
+        left -= run.pages;
+    }
+    return left == 0 || i < head.count;
+}
+
 /**
  * Ask for the page list of `bo` from its page `first` with one command of
  * `map_cmd` (`map_ask_cmd`), waited for, and copy the answer to `answer`,
