@@ -922,11 +922,15 @@ int vfs_mount_seen_word(const struct vfs_mount *m);
  * `m`, which a change made only for the caller's must then leave alone. */
 int vfs_mount_shared(const struct vfs_mount *m);
 
-/** Hold off the making of mount namespaces (`vfs_mntns_copy`) until the
- * matching `vfs_mntns_release`, for a remount that checks that a mount is
- * not shared (`vfs_mount_shared`) and then sleeps before it stores the
- * mount's flags, so that no namespace takes the mount between the two.
- * Under the big lock; neither sleeps. */
+/** Begin a remount, which ends at the matching `vfs_mntns_release`: wait
+ * for the remount under way to end, then hold off other remounts and the
+ * making of mount namespaces (`vfs_mntns_wait` in proc/ns.h) until the
+ * release. A remount that checks that a mount is not shared
+ * (`vfs_mount_shared`) and sleeps before it stores the mount's flags thus
+ * finds the flags, and the namespaces that may see the mount, as it left
+ * them, as Linux serialises remounts under the namespace lock. Under the
+ * big lock; the hold may sleep, before it takes anything, and the release
+ * does not. */
 void vfs_mntns_hold(void);
 void vfs_mntns_release(void);
 

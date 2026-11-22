@@ -17,10 +17,10 @@
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 
-/* The remounts between their check that a mount is not shared and their
- * store of its flags (`vfs_mntns_hold`), and where the making of a
- * namespace waits for them to end. Under the big lock; a zeroed queue
- * needs no init. */
+/* The remount under way, 1 from its first check to its store of the
+ * flags (`vfs_mntns_hold`), 0 when none is; where another remount and the
+ * making of a namespace wait for it to end. Under the big lock; a zeroed
+ * queue needs no init. */
 static uint32_t remounts;
 static wait_queue_t remounts_wq;
 
@@ -70,8 +70,24 @@ void vfs_mount_view_free(struct vfs_mount *m)
     idset_free(&m->ns_seen);
 }
 
+/** The wait condition of a remount and of a namespace's making: no
+ * remount is under way. */
+static int no_remounts(void *arg)
+{
+    (void)arg;
+    return remounts == 0;
+}
+
+void vfs_mntns_wait(void)
+{
+    if (current_proc) {
+        wq_wait_event_nointr(&remounts_wq, no_remounts, NULL);
+    }
+}
+
 void vfs_mntns_hold(void)
 {
+    vfs_mntns_wait();
     remounts++;
 }
 
@@ -82,29 +98,19 @@ void vfs_mntns_release(void)
     }
 }
 
-/** The wait condition of a namespace's making: no remount holds it off. */
-static int no_remounts(void *arg)
-{
-    (void)arg;
-    return remounts == 0;
-}
-
 /**
  * The mounts are those of the table that are not free, the mounts being made
  * and unmounted among them, as a namespace made meanwhile must see what its
- * parent will see. It first waits out the remounts that hold the making of
- * namespaces off (`vfs_mntns_hold`); after that no call here sleeps, so the
- * table does not change under the loop. A failure takes `to` from every
- * mount, which the caller then frees.
+ * parent will see. The caller has waited out the remount under way
+ * (`vfs_mntns_wait`) and slept nowhere since, and no call here sleeps, so no
+ * remount sits between its check and its store and the table does not
+ * change under the loop. A failure takes `to` from every mount, which the
+ * caller then frees.
  */
 int vfs_mntns_copy(uint32_t from, uint32_t to)
 {
-    int i, n;
+    int i, n = vfs_mount_slots();
 
-    if (current_proc) {
-        wq_wait_event_nointr(&remounts_wq, no_remounts, NULL);
-    }
-    n = vfs_mount_slots();
     for (i = 0; i < n; i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 

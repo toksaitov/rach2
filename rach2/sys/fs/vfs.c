@@ -6095,9 +6095,10 @@ const struct vfs_type *vfs_type_at(int idx)
  * other, where Linux changes only the remounting namespace's copy of the
  * mount (`copy_mnt_ns`, fs/namespace.c); a namespace that is to seal what
  * it sees makes private binds and remounts those. A remount that leaves
- * the mount's own flags as they are passes. Under the big lock, with
- * nothing between this and the store of the flags that sleeps, or with
- * the namespaces' copies held off (`vfs_mntns_hold`).
+ * the mount's own flags as they are passes. Under the big lock, with the
+ * remount held (`vfs_mntns_hold`) from before this to the store of the
+ * flags, so that neither another remount nor a new namespace comes
+ * between them.
  */
 static int remount_shared(const struct vfs_mount *m, uint32_t flags)
 {
@@ -6118,15 +6119,17 @@ static void set_mount_attrs(struct vfs_mount *m, uint32_t flags)
     }
 }
 
-int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
+/**
+ * The body of `vfs_remount`, with the remount held (`vfs_mntns_hold`), so
+ * that what its checks read, the flags and the namespaces that see the
+ * mount, stays as they found it through the sleeps before the store.
+ */
+static int remount_held(struct vfs_mount *named, uint32_t flags, const char *options)
 {
     struct vfs_mount *m = mount_base(named);
     uint32_t changed = (flags ^ m->flags) & VFS_MS_SUPER;
     int rc, closing = (changed & flags & VFS_MS_RDONLY) != 0;
 
-    if (flags & ~VFS_MS_KNOWN) {
-        return -EINVAL;
-    }
     if (named->state != VFS_ACTIVE || m->state != VFS_ACTIVE) {
         return -EBUSY;
     }
@@ -6140,7 +6143,6 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
         ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
         return -EROFS;
     }
-    vfs_mntns_hold();
     rc = remount_shared(named, flags);
     if (rc == 0 && closing) {
         rc = fd_mount_readonly_begin(m, 0);
@@ -6158,18 +6160,31 @@ int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
         }
     }
     if (rc != 0) {
-        vfs_mntns_release();
         return rc;
     }
     m->flags = (m->flags & ~VFS_MS_SUPER) | (flags & VFS_MS_SUPER);
     set_mount_attrs(named, flags);
-    vfs_mntns_release();
     if (closing) {
         fd_mount_readonly_end(m);
     }
-    klog(KLOG_INFO, "vfs", "remounted: %s (%s)", named->covered_path,
-         (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
     return 0;
+}
+
+int vfs_remount(struct vfs_mount *named, uint32_t flags, const char *options)
+{
+    int rc;
+
+    if (flags & ~VFS_MS_KNOWN) {
+        return -EINVAL;
+    }
+    vfs_mntns_hold();
+    rc = remount_held(named, flags, options);
+    vfs_mntns_release();
+    if (rc == 0) {
+        klog(KLOG_INFO, "vfs", "remounted: %s (%s)", named->covered_path,
+             (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
+    }
+    return rc;
 }
 
 /** The wait condition of an unmount: no operation is in progress on the
@@ -6900,32 +6915,29 @@ int vfs_do_bind(const char *source, const char *target, int rec)
 
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
 {
-    int closing = (flags & VFS_MS_RDONLY) && !vfs_mount_rdonly(m);
-    int rc;
+    int closing, rc;
 
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
-    if (m->state != VFS_ACTIVE) {
-        return -EBUSY;
-    }
-    rc = remount_shared(m, flags);
-    if (rc != 0) {
-        return rc;
-    }
-    if (closing) {
+    vfs_mntns_hold();
+    closing = (flags & VFS_MS_RDONLY) && !vfs_mount_rdonly(m);
+    rc = m->state != VFS_ACTIVE ? -EBUSY : remount_shared(m, flags);
+    if (rc == 0 && closing) {
         rc = fd_mount_readonly_begin(m, 1);
-        if (rc != 0) {
-            return rc;
+    }
+    if (rc == 0) {
+        set_mount_attrs(m, flags);
+        if (closing) {
+            fd_mount_readonly_end(m);
         }
     }
-    set_mount_attrs(m, flags);
-    if (closing) {
-        fd_mount_readonly_end(m);
+    vfs_mntns_release();
+    if (rc == 0) {
+        klog(KLOG_INFO, "vfs", "remounted: %s (%s)", m->covered_path,
+             (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
     }
-    klog(KLOG_INFO, "vfs", "remounted: %s (%s)", m->covered_path,
-         (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
-    return 0;
+    return rc;
 }
 
 /**

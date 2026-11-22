@@ -20,7 +20,9 @@
  * with the namespaces; user.max_mnt_namespaces of the first user namespace
  * as Linux derives it from memory, refusing the namespace past it with
  * ENOSPC, and the limit of a user namespace below it counted per user, as
- * Linux's ucounts are.
+ * Linux's ucounts are; and two namespaces made for one place left while a
+ * remount holds the making off, the second while the first waits, of which
+ * only one is made.
  *
  * Id maps: 340 extents written in descending order, read back sorted by the
  * first id as Linux 4.15 lists a map past five extents, every id mapped both
@@ -138,16 +140,30 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
-/* The making of a namespace waits for no remount, since no row remounts. */
+/* What runs while a making of a namespace waits for a remount: another
+ * process's call, set by a row, else the remount's end. */
+static void (*while_waiting)(void);
 
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
 
+/** The wait for a remount (`vfs_mntns_wait`): a wait that would sleep runs
+ * the row's other process, or ends the remount, as the wake would. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    void (*other)(void) = while_waiting;
+
     (void)wq;
+    if (!cond(arg)) {
+        while_waiting = NULL;
+        if (other) {
+            other();
+        } else {
+            vfs_mntns_release();
+        }
+    }
     return cond(arg) ? 0 : -EINVAL;
 }
 
@@ -402,6 +418,41 @@ static void limits(void)
     CHECK(mnt_ids.count == 1 && mnt_list == NULL, "every id but the first is free again");
 }
 
+static process_t waiter_parent, waiters[2];
+static int32_t waiter_rc[2];
+
+/** The second process of `remount_wait`, which makes its namespace while
+ * the first waits for the remount. */
+static void second_waiter(void)
+{
+    waiter_rc[1] = ns_fork(&waiters[1], &waiter_parent, CLONE_NEWNS);
+}
+
+/**
+ * Two processes make a namespace each, with one place left under the limit,
+ * while a remount holds the making off, the second while the first waits:
+ * only one may be made, which fails when a making checks the limit before
+ * it waits and joins the count after.
+ */
+static void remount_wait(void)
+{
+    as_user(&waiter_parent, 0);
+    as_user(&waiters[0], 0);
+    as_user(&waiters[1], 0);
+    current_proc = &waiter_parent;
+    ns_set_max_mnt(&init_userns, 1);
+    vfs_mntns_hold();
+    while_waiting = second_waiter;
+    waiter_rc[0] = ns_fork(&waiters[0], &waiter_parent, CLONE_NEWNS);
+    CHECK(while_waiting == NULL && remounts == 0, "the second made its namespace during the wait");
+    CHECK(waiter_rc[1] == 0, "the second, which the remount's end let go first, is made");
+    CHECK(waiter_rc[0] == -ENOSPC, "the first, which waited before its check, is ENOSPC");
+    ns_release(&waiters[0]);
+    ns_release(&waiters[1]);
+    ns_set_max_mnt(&init_userns, NS_LIMIT_MAX);
+    CHECK(mnt_ids.count == 1 && mnt_list == NULL, "every id but the first is free after the wait");
+}
+
 /** The map text of `n` extents, `2k 3k 1` for k from n - 1 down to 0, into
  * `out` of `cap` bytes; its length. */
 static uint32_t descending(char *out, int cap, int n)
@@ -517,6 +568,7 @@ int main(void)
     boot();
     thousand();
     limits();
+    remount_wait();
     maps();
     if (failures) {
         printf("ns-limits-test: %d failures\n", failures);
