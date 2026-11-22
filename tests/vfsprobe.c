@@ -318,7 +318,7 @@ static const struct row rows[] = {
     {"fchownat of the working directory by an empty path, after a rename, ends", "cwd-empty", 0},
     {"a walk follows the fixed /sys link of the PCI host bridge to its uevent", "walk-sys-link", 0},
     {"a walk climbs 1024 mounts stacked on /vp/c, 700 times over, and ends on the top one",
-     "walk-climb", 0},
+     "walk-climb", STATFS_MAGIC_KRFFS},
     {"sync", "sync", 0},
     {"cleanup", "cleanup", 0},
 };
@@ -2049,9 +2049,11 @@ static void climb_undo(void)
  * CLIMB_MOUNTS tmpfs mounts stacked on /vp/c, "/vp/c" and CLIMB_TIMES
  * "/../c" after it, 3,505 bytes, each ".." climbing every mount of the
  * stack to /vp and each "c" entering its top, ends on the top mount's root,
- * by its device and inode.
+ * by its device and inode. It runs on a KRFFS root alone: the kernel logs
+ * each mount on the console, and the ext2 machine's serial console takes
+ * the 1024 lines past its case's gap bound.
  */
-static void climb_row(void)
+static void climb_row(unsigned magic)
 {
     const char *why = "a walk climbs 1024 mounts stacked on /vp/c, 700 times over, and ends on "
                       "the top one";
@@ -2059,6 +2061,9 @@ static void climb_row(void)
     unsigned dev, ino;
     int i, n;
 
+    if (magic != STATFS_MAGIC_KRFFS) {
+        return;
+    }
     fail_undo = climb_undo;
     if (syscall2(SYS_MKDIR, (long)"/vp/c", 0755) != 0) {
         fail(why);
@@ -2100,8 +2105,7 @@ static void climb_row(void)
  * walk without the big lock (`cwd_unlocked_rows`), the changes that send
  * it again (`shared_rows`), and the changes that send a walk or a call again
  * while the walk gate stops it (`gated_rows`); on KRFFS the keeps of a
- * call's walk (`keep_rows`); on either a climb of stacked mounts
- * (`climb_row`). */
+ * call's walk (`keep_rows`) and a climb of stacked mounts (`climb_row`). */
 static void unlocked_rows(unsigned magic)
 {
     cwd_unlocked_rows(magic);
@@ -2110,7 +2114,7 @@ static void unlocked_rows(unsigned magic)
     keep_rows(magic);
     cwd_empty_row();
     sys_link_row();
-    climb_row();
+    climb_row(magic);
 }
 
 #if !defined __x86_64__
