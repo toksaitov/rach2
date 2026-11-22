@@ -15346,6 +15346,52 @@ static int fd_node_file(const fd_entry_t *entry, struct vfs_ref *file)
 }
 
 /**
+ * The boot root's KRFFS node the descriptor `entry` refers to, its
+ * description's, its own or that of the node a FIFO or a device was opened
+ * through (`fd_node_file`), or NULL for one on no KRFFS root. A relocation
+ * moves a file and repoints its descriptions and descriptors under the
+ * root's namespace lock (`fd_ofd_repoint`, `fd_table_repoint`), so a caller
+ * that changes the node reads it under that lock and changes it before
+ * letting go (`krffs_fd_lock`); the description comes first, since a caller
+ * may hold a copy of another process's entry (`proc_fd_follow`), which no
+ * relocation repoints.
+ */
+static krffs_node_t *krffs_fd_node(fd_entry_t *entry)
+{
+    struct vfs_ref file;
+    int open = entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR;
+
+    if (open && entry->ofd && entry->ofd->vmnt && entry->ofd->vnode) {
+        file.mnt = entry->ofd->vmnt;
+        file.node = entry->ofd->vnode;
+    } else if (open && entry->node) {
+        return entry->node;
+    } else if (!fd_node_file(entry, &file)) {
+        return NULL;
+    }
+    return mnt_is_root(vfs_mount_base(file.mnt)) ? file.node : NULL;
+}
+
+/** Take the boot root's namespace lock when `entry` refers to a node of
+ * the KRFFS root and return that node as it is under the lock, or NULL,
+ * with nothing taken, for any other descriptor. The caller gives the lock
+ * back with `vfs_ns_unlock(vfs_root_mount())`. */
+static krffs_node_t *krffs_fd_lock(fd_entry_t *entry)
+{
+    krffs_node_t *node;
+
+    if (!krffs_fd_node(entry)) {
+        return NULL;
+    }
+    vfs_ns_lock(vfs_root_mount());
+    node = krffs_fd_node(entry);
+    if (!node) {
+        vfs_ns_unlock(vfs_root_mount());
+    }
+    return node;
+}
+
+/**
  * chmod of the file descriptor `entry` refers to, for fchmod(2), and for
  * fchmodat2(2) with AT_EMPTY_PATH and chmod(2) of /proc/PID/fd/N, which
  * take an O_PATH descriptor too: -EROFS first through a read-only mount the
@@ -15359,11 +15405,14 @@ static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
     struct vfs_ref file;
     int rc;
 
+    krffs_node_t *node;
+
     if (attr_read_only(fd_mount(entry))) {
         return -EROFS;
     }
-    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
-        rc = krffs_chmod_node(entry->node, mode);
+    if ((node = krffs_fd_lock(entry)) != NULL) {
+        rc = krffs_chmod_node(node, mode);
+        vfs_ns_unlock(vfs_root_mount());
         if (rc == 0) {
             attr_told_desc(entry->ofd, IN_ATTRIB, 1);
         }
@@ -15373,22 +15422,14 @@ static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
         entry->ofd->vmnt && entry->ofd->vnode) {
         file.mnt = entry->ofd->vmnt;
         file.node = entry->ofd->vnode;
-        rc = mnt_is_root(vfs_mount_base(file.mnt)) ? krffs_chmod_node(file.node, mode)
-                                                   : chmod_vfs(&file, mode, 0, NULL);
-        if (rc == 0) {
-            attr_told_desc(entry->ofd, IN_ATTRIB, mnt_is_root(vfs_mount_base(file.mnt)));
-        }
-        return rc;
+    } else if (!fd_node_file(entry, &file)) {
+        return fchmod_synth(entry, mode);
     }
-    if (fd_node_file(entry, &file)) {
-        rc = mnt_is_root(vfs_mount_base(file.mnt)) ? krffs_chmod_node(file.node, mode)
-                                                   : chmod_vfs(&file, mode, 0, NULL);
-        if (rc == 0) {
-            attr_told_desc(entry->ofd, IN_ATTRIB, mnt_is_root(vfs_mount_base(file.mnt)));
-        }
-        return rc;
+    rc = chmod_vfs(&file, mode, 0, NULL);
+    if (rc == 0) {
+        attr_told_desc(entry->ofd, IN_ATTRIB, 0);
     }
-    return fchmod_synth(entry, mode);
+    return rc;
 }
 
 /**
@@ -15588,6 +15629,7 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
 {
     struct vfs_ref file;
+    krffs_node_t *node;
     int what = 0;
     int rc;
     uint32_t events;
@@ -15598,8 +15640,9 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
     if (chown_ids_named(&uid, &gid) != 0) {
         return -EINVAL;
     }
-    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
-        rc = krffs_chown_node(entry->node, uid, gid, &events);
+    if ((node = krffs_fd_lock(entry)) != NULL) {
+        rc = krffs_chown_node(node, uid, gid, &events);
+        vfs_ns_unlock(vfs_root_mount());
         if (rc == 0) {
             attr_told_desc(entry->ofd, events, 1);
         }
@@ -15612,13 +15655,6 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         file.node = entry->ofd->vnode;
     } else {
         (void)fd_node_file(entry, &file);
-    }
-    if (file.mnt && mnt_is_root(vfs_mount_base(file.mnt))) {
-        rc = krffs_chown_node(file.node, uid, gid, &events);
-        if (rc == 0) {
-            attr_told_desc(entry->ofd, events, 1);
-        }
-        return rc;
     }
     if (file.mnt) {
         rc = chown_vfs(&file, uid, gid, &what, NULL);
