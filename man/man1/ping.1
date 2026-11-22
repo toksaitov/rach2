@@ -121,9 +121,8 @@ An interval of 0 sends the next request as soon as a reply comes, as
 .Fl A
 does, and after 10 ms when none comes.
 .It Fl A
-Send the next request as soon as a reply comes, as well as at each
-interval from the start of the last send, until the requested count has
-been sent.
+Send the next request as soon as a reply comes, or one interval after the
+last send ended when none has, until the requested count has been sent.
 .It Fl p Ar byte
 Fill the data with
 .Ar byte ,
