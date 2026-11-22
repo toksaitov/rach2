@@ -7524,7 +7524,9 @@ static int pivot_check(const struct vfs_ref *nref, const struct vfs_ref *oref,
 }
 
 /** vfs_pivot_mounts, with the copies descriptor operands keep in `nkept`
- * and `okept`. */
+ * and `okept`. A descriptor naming `put_old` moves on to the last mount
+ * stacked over it, as Linux's `lock_mount` does; one naming the new root
+ * stays on its own mount. */
 static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out,
                         struct fd_kept **nkept, struct fd_kept **okept)
 {
@@ -7539,7 +7541,7 @@ static int pivot_mounts(const char *new_root, const char *put_old, struct vfs_re
     if (rc < 0) {
         return rc;
     }
-    rc = vfs_resolve_fd(put_old, VFS_WALK_MOUNT, &oref, NULL, okept);
+    rc = vfs_resolve_fd(put_old, VFS_WALK_MOUNT | VFS_WALK_COVER, &oref, NULL, okept);
     if (rc < 0) {
         vfs_ref_release(&nref);
         return rc;
