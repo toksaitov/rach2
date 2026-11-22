@@ -5835,9 +5835,9 @@ static void ap_str_width(struct procfs_text *t, const char *s, int width)
  * call's gate has not (`isr_vector_source`), with the
  * vector in 3 places and a colon, each processor's count in 10 places and a
  * space, the source in 8 places after a space, and two spaces and the names
- * of the handlers, separated by commas. Linux lists an interrupt with an
- * action or a count; a vector given back (`isr_free_vector`) is a
- * descriptor Linux frees, so a vector with no handler has no line. Then
+ * of the handlers, separated by commas. A vector given back
+ * (`isr_free_vector`) has no handler and no line, whatever it counted, as
+ * Linux 6.12 skips a descriptor with no action. Then
  * SPU, the count of the APIC's spurious vector, and FBK, the times the
  * timer's drain of the USB controllers found work with no USB interrupt
  * pending (`usb_fallback_count`): work an interrupt should have announced,

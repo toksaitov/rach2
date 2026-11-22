@@ -711,8 +711,8 @@ another file's request.
 A heading names each online processor, followed by one line per device
 vector, numbered 32 through 239 except 128, the system call's, that has a
 handler, with a count of 0 until it takes an interrupt.
-Linux lists each interrupt that has a handler or has counted one; a vector
-a driver gives back is an interrupt Linux frees, so it has no line.
+A vector a driver gives back has no handler and no line, whatever it
+counted before, as Linux 6.12 lists only an interrupt that has an action.
 .Dl VECTOR: CPU0_COUNT CPU1_COUNT ... SOURCE NAMES
 Each count belongs to the processor named in its heading column.
 The source is
