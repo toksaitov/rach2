@@ -935,6 +935,11 @@ uint64_t vgpu_box_bytes(uint32_t format, uint32_t w, uint32_t h, uint32_t d);
 void vgpu_count_copied(uint64_t bytes);
 /** The bytes the devices' transfers have copied since boot, both ways. */
 uint64_t virtio_gpu_copied_bytes(void);
+/** Add `delta`, 1 or -1, to virtio_gpu_objects. Any context. */
+void vgpu_count_objects(int delta);
+/** The devices' objects made and not yet released: those alive and those
+ * whose UNREF the host has not yet answered. */
+uint64_t virtio_gpu_objects(void);
 /**
  * Wait for the leaves of a dependency on any fence context but `context`,
  * the waiter's own, whose order the queue keeps; 0 or -errno,

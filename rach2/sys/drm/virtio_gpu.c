@@ -1517,6 +1517,7 @@ static void obj_release(struct virtio_gpu_object *bo)
     if (*p) {
         *p = bo->next;
     }
+    vgpu_count_objects(-1);
     if (bo->res_id) {
         vgpu_res_id_put(to_vg(bo->shmem.base.dev), bo->res_id);
     }
@@ -1655,6 +1656,7 @@ void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, u
     drm_gem_object_init(&vg->drm, &bo->shmem.base, size, host ? &vgpu_host_funcs : &vgpu_obj_funcs);
     bo->next = vg->resources;
     vg->resources = bo;
+    vgpu_count_objects(1);
     if (!host) {
         bo->shmem.pages.size = size;
     }

@@ -1870,6 +1870,12 @@ submission on a context of another capability set, Venus or a native
 context.
 A virgl submission whose list of resources the kernel cannot copy for
 want of memory is still sent, and its commands count nothing.
+.It Li virtio_gpu_objects
+Buffer objects of
+.Xr virtio-gpu 4
+that the kernel holds now: each from its creation until the device has
+answered the RESOURCE_UNREF that its last reference sent, or until its
+free on a device that is gone.
 .It Li window_free_min
 The fewest pages the low window, the first 64 MiB, has had free at once
 since boot: how near the kernel's allocations for device buffers came to
