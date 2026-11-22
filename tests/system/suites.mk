@@ -822,38 +822,45 @@ $(MOUNT_CLAIM_DISK): $(MOUNT_TEST_DISK) $(MKMBR)
 # MOUNT_RELOC_DISK and MOUNT_RELOC_FAT are the disks of the reloc case, whose
 # scenario throttles them once the machine is up. MOUNT_RELOC_DISK is 66 MiB
 # with an empty 64 MiB KRFFS volume at LBA 2048. MOUNT_RELOC_FAT is 72 MiB
-# with a FAT32 volume of one-sector clusters at LBA 2048, holding
-# /d1/a/b/c/t, an empty file, and the directory /d2/a/b/c/td, the bind
-# targets three directories deep; a 64 KiB file written after each
-# directory keeps the next one's cluster away from it, so that no read of
-# one brings the next into the cache.
+# with a FAT32 volume of one-sector clusters at LBA 2048, holding the path
+# rows' bind targets three directories deep, one for each try: the empty
+# files /d1/a/b/c/t to /d3/a/b/c/t and the directories /d4/a/b/c/td to
+# /d6/a/b/c/td. A 64 KiB file written after each directory keeps the next
+# one's cluster away from it, so that no read of one brings the next into
+# the cache. Each image is made in a temporary file that the build removes
+# when it fails or is interrupted.
 MOUNT_RELOC_DISK = $(IMAGES_DIR)/mount-reloc.disk
 MOUNT_RELOC_FAT  = $(IMAGES_DIR)/mount-reloc-fat.disk
 $(MOUNT_RELOC_DISK): build/krffs/mkfs.krffs $(MKMBR) | preflight krffs
 	@mkdir -p $(@D)
 	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp"' EXIT; \
+	    trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	    dd if=/dev/zero of="$$temp" bs=1048576 count=66 2>/dev/null; \
 	    $(MKMBR) --lba "$$temp" 2048:131072:7f >/dev/null; \
 	    build/krffs/mkfs.krffs "$$temp" --offset 1048576 --size 67108864 >/dev/null; \
 	    mv "$$temp" $@
-$(MOUNT_RELOC_FAT): $(MKMBR)
+$(MOUNT_RELOC_FAT): $(MKMBR) tests/system/suites.mk
 	@mkdir -p $(@D)
 	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp" "$$temp.pad" "$$temp.empty"' EXIT; \
+	    trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	    dd if=/dev/zero of="$$temp" bs=1048576 count=72 2>/dev/null; \
 	    $(MKMBR) --lba "$$temp" 2048:145408:0c >/dev/null; \
 	    mformat -i "$$temp@@1048576" -F -c 1 -T 145408 -v RELOC ::; \
 	    dd if=/dev/zero of="$$temp.pad" bs=65536 count=1 2>/dev/null; : > "$$temp.empty"; \
 	    mcopy -i "$$temp@@1048576" "$$temp.pad" ::/pad0; \
-	    for d in 1 2; do \
+	    for d in 1 2 3 4 5 6; do \
 	        dir=::/d$$d; mmd -i "$$temp@@1048576" $$dir; \
 	        mcopy -i "$$temp@@1048576" "$$temp.pad" ::/pad$${d}0; \
 	        for l in a b c; do \
 	            dir=$$dir/$$l; mmd -i "$$temp@@1048576" $$dir; \
 	            mcopy -i "$$temp@@1048576" "$$temp.pad" ::/pad$$d$$l; \
 	        done; \
+	        if [ $$d -le 3 ]; then \
+	            mcopy -i "$$temp@@1048576" "$$temp.empty" $$dir/t; \
+	        else \
+	            mmd -i "$$temp@@1048576" $$dir/td; \
+	        fi; \
 	    done; \
-	    mcopy -i "$$temp@@1048576" "$$temp.empty" ::/d1/a/b/c/t; \
-	    mmd -i "$$temp@@1048576" ::/d2/a/b/c/td; \
 	    mv "$$temp" $@
 
 # `tests/run load`: the machine under load while six lines are typed at its
