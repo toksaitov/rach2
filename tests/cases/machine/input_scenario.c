@@ -60,7 +60,11 @@ static int keys(struct usb_case *u, const char *record, const char *command)
     return usb_end(u);
 }
 
-/** Send QMP's input-send-event with the events `events`, a JSON array. */
+/** Send QMP's input-send-event with the events `events`, a JSON array.
+ * QEMU gives each event to the pointer last made current of those that take
+ * its kind. Under KVM the kernel turns VMMouse on, as Linux does, and QEMU
+ * makes it current for buttons and absolute motion, so the manifest gives
+ * the USB mouse's and tablet's machines no i8042, and with it no VMMouse. */
 static void send(struct usb_boot *b, const char *events)
 {
     usb_qmp(b, "input-send-event", "{\"events\": %s}", events);
