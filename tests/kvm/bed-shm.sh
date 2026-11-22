@@ -97,6 +97,9 @@
 # session is ready, in native/crysis.sh's private data fixture and, through
 # `crysis.sh seal`, in its read-only namespace. The VM stops after the
 # figure, and the same return and handoff checks apply.
+# CRYSIS_LOOPS=1 selects one loop for a profile.
+# BED_VM_PROFILE_PORT forwards a loopback port to a profiling VM's SSH
+# server. BED_VM_PROFILE_CRC=1 asks that VM to enable the flush readback.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
 desk=0 unplug=0 measure='' loadscene=glmark2 scenes=glmark2
@@ -128,6 +131,10 @@ case $loadscene in
     glmark2) ;;
     piglit | webgl | game) [ -n "$measure" ] || { echo "bed-shm: -l $loadscene needs -x" >&2; exit 2; } ;;
     crysis)
+        case ${CRYSIS_LOOPS:-2} in
+            1|2) ;;
+            *) echo 'bed-shm: CRYSIS_LOOPS must be 1 or 2' >&2; exit 2 ;;
+        esac
         if [ "$desk" != 1 ] || [ -z "$bdf" ] || [ ! -f ./crysis.py ] || [ ! -f ./wm.py ] ||
             [ ! -f ./crysis.sh ] ||
             [ ! ./private -ef /data ] ||
@@ -137,6 +144,24 @@ case $loadscene in
         fi
         ;;
     *) echo "bed-shm: no load $loadscene; glmark2, piglit, webgl, game or crysis" >&2; exit 2 ;;
+esac
+case ${BED_VM_PROFILE_PORT:-} in
+    '') ;;
+    *[!0-9]*)
+        echo 'bed-shm: profiling ssh port must be decimal' >&2
+        exit 2
+        ;;
+    *)
+        if [ "${#BED_VM_PROFILE_PORT}" -gt 5 ] ||
+            [ "$BED_VM_PROFILE_PORT" -lt 1 ] || [ "$BED_VM_PROFILE_PORT" -gt 65535 ]; then
+            echo 'bed-shm: profiling ssh port must be between 1 and 65535' >&2
+            exit 2
+        fi
+        ;;
+esac
+case ${BED_VM_PROFILE_CRC:-0} in
+    0|1) ;;
+    *) echo 'bed-shm: profiling CRC must be 0 or 1' >&2; exit 2 ;;
 esac
 # The GPU's MSIs reach the VM through irqfds and would count as doorbells
 # Rach2 rang, so -g runs only the nocopy or the desktop rows, which count
@@ -367,19 +392,25 @@ fi
 # irqfd, so that both counts are the doorbells'. With -g, gpu.sh starts it
 # with the function, and $qemu is QEMU's own process, from its pid file;
 # QEMU's messages are then in gpu.sh's DIR/gpu/qemu.err.
+set --
+if [ -n "${BED_VM_PROFILE_PORT:-}" ]; then
+    set -- -netdev "user,id=bedprof,restrict=on,hostfwd=tcp:127.0.0.1:$BED_VM_PROFILE_PORT-:22" \
+        -device virtio-net-pci,netdev=bedprof \
+        -fw_cfg "name=opt/rach2/vgpu-profile,string=${BED_VM_PROFILE_CRC:-0}"
+fi
 if [ -z "$bdf" ]; then
     TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
         -drive file="$disk",if=none,id=vm,format=raw,snapshot=on \
         -device virtio-blk-pci,drive=vm,ioeventfd=off \
         -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
-        -serial file:"$console" > "$out/qemu.out" 2>&1 &
+        -serial file:"$console" "$@" > "$out/qemu.out" 2>&1 &
     qemu=$!
 else
     TMPDIR=$out bash "$gpush" -d "$bdf" -m "$mib" -s "$cpus" -w 0 -o "$out/gpu" -D "$disk" -- \
         -pidfile "$out/qemu.pid" \
         -chardev socket,path="$out/ivs.sock",id=ivs -device ivshmem-doorbell,chardev=ivs,vectors=2 \
-        > "$out/gpu.log" 2>&1 &
+        "$@" > "$out/gpu.log" 2>&1 &
     gpu=$!
     last=-1 still=0
     until [ -s "$out/qemu.pid" ]; do
@@ -877,6 +908,7 @@ crysis_counts()
 # namespace, with the output directory writable.
 crysis_figure()
 {
+    loops=${CRYSIS_LOOPS:-2}
     if ! cp -p "$crysis_ini" "$out/weston.ini"; then
         fail load 'could not save weston.ini'
         return
@@ -887,11 +919,11 @@ crysis_figure()
     setsid sh -c '
         export CRYSIS_STATE=$1/crysis-state CRYSIS_GATE=0
         timeout --foreground 60 python3 ./crysis.py prepare "$1/crysis" --shm &&
-            exec sh ./crysis.sh seal "$1" python3 ./crysis.py flyby umu flyby-umu 2
-    ' sh "$out" &
+            exec sh ./crysis.sh seal "$1" python3 ./crysis.py flyby umu flyby-umu "$2"
+    ' sh "$out" "$loops" &
     figpid=$!
     if wait "$figpid"; then
-        pass load 'crysis completed two umu flyby loops'
+        pass load "crysis completed $loops umu flyby loop(s)"
     else
         fail load "crysis flyby status $?"
     fi

@@ -485,6 +485,7 @@ fi
 
 [ "$marks" = 0 ] || echo "measure: counts: before"
 { echo before; counts; } > "$out/counts"
+[ -z "${BED_PROFILE:-}" ] || sh "$BED_PROFILE" "$out/profile" before
 start=$(date +%s.%N)
 status=0
 if [ "$harness" != "$here" ]; then
@@ -502,6 +503,7 @@ scene_pid=$!
 wait "$scene_pid" || status=$?
 scene_pid=''
 end=$(date +%s.%N)
+[ -z "${BED_PROFILE:-}" ] || sh "$BED_PROFILE" "$out/profile" after
 { echo after; counts; } >> "$out/counts"
 [ "$marks" = 0 ] || echo "measure: counts: after"
 # The scene's files, USER's under -u, are read once, by USER, and only as

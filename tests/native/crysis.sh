@@ -724,10 +724,10 @@ fail()
 }
 
 case ${1:-}:$# in
-    flyby:2 | load:2 | shm:1 | check:1) ;;
+    flyby:2 | load:2 | shm:1 | native:1 | check:1) ;;
     *)
         echo "usage: crysis.sh flyby umu|direct | crysis.sh load SAVE | crysis.sh shm |" \
-            "crysis.sh check | crysis.sh session ran|none | crysis.sh links ROOT [PROTON] |" \
+            "crysis.sh native | crysis.sh check | crysis.sh session ran|none | crysis.sh links ROOT [PROTON] |" \
             "crysis.sh seal OUT [COMMAND...]" >&2
         exit 2
         ;;
@@ -740,9 +740,9 @@ esac
     fail "no empty $private; the case runs with the private fixture"
 
 # ondata: the partition is mounted on /data already, as on the installed
-# system, which `shm` needs and `check` takes when it finds.
+# system, which `shm` and `native` need and `check` takes when it finds.
 ondata=0
-if [ "$1" = shm ] || { [ "$1" = check ] && awk -v dev="$data" \
+if [ "$1" = shm ] || [ "$1" = native ] || { [ "$1" = check ] && awk -v dev="$data" \
     '$1 == dev && $2 == "/data" { ok = 1 } END { exit !ok }' /proc/mounts; }; then
     ondata=1
 fi
@@ -759,8 +759,8 @@ if [ "$ondata" = 1 ]; then
 else
     awk '$2 == "/data" { found = 1 } END { exit found }' /proc/mounts ||
         fail "/data is mounted already"
-    ! pgrep -x weston > /dev/null || found=1
 fi
+! pgrep -x weston > /dev/null || found=1
 
 mkdir "$private/owner"
 if [ "$ondata" = 1 ]; then
@@ -812,7 +812,7 @@ need=$( { [ -z "$copies" ] || du -sk $copies; } | awk '{ n += $1 } END { print n
     need=$((need + $(du -sk "$owner/crysis/compat" | cut -f 1)))
 need=$((need + 1048576))
 # umu unpacks the root's Steam Linux Runtime into the game's HOME.
-if [ "$1:${2:-}" = flyby:umu ] || [ "$1" = load ] || [ "$1" = shm ]; then
+if [ "$1:${2:-}" = flyby:umu ] || [ "$1" = load ] || [ "$1" = shm ] || [ "$1" = native ]; then
     runtime=$(xz --robot --list /opt/umu/SteamLinuxRuntime_4.tar.xz 2> /dev/null |
         awk '$1 == "totals" { print int($5 / 1024) }')
     need=$((need + ${runtime:-4194304}))
@@ -854,7 +854,7 @@ seal_check
 if [ "$1" = shm ]; then
     # Let the VM runner own the handoff and its signal traps. The mounts
     # go away when the last process of this namespace ends.
-    exec sh ./bed-shm.sh -d "$owner/native/bed/vm.disk" -w -l crysis \
+    exec sh ./bed-shm.sh -d "${CRYSIS_VM_DISK:-$owner/native/bed/vm.disk}" -w -l crysis \
         -g 0000:00:02.0 -m 8192 -o "$here/out"
 fi
 
@@ -864,12 +864,19 @@ kept=1
 
 # prepare writes the session's files, which the namespace keeps read-only;
 # every write of the game's commands is made in it.
+if [ "$1" = native ]; then
+    CRYSIS_STATE=$here/out/crysis-state
+    export CRYSIS_STATE
+fi
 python3 ./crysis.py prepare "$here/out" || fail prepare
 sealed()
 {
     unshare --mount --propagation private python3 -c "$seal_py" "$here/out" "$@"
 }
 case $1 in
+    native)
+        sealed python3 ./crysis.py flyby umu flyby-umu 1 || fail flyby-umu
+        ;;
     flyby)
         sealed python3 ./crysis.py flyby "$2" "flyby-$2" 2 || fail "flyby-$2"
         ;;
