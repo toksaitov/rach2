@@ -7,6 +7,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 #define VGS_IMPLEMENTATION
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -189,7 +190,6 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     d->npend = 0;
     d->kick = 0;
     memset(&d->me, 0, sizeof(d->me));
-    d->me.heartbeat = __atomic_load_n(&d->beat, __ATOMIC_RELAXED);
     d->me.epoch = drv->epoch;
     d->me.state = VGS_DEV_READY;
     d->me.peer = d->offer.peer;
@@ -200,7 +200,9 @@ static void offer(struct vd *d, const struct vgs_driver *drv)
     d->me.num_capsets = d->offer.num_capsets;
     v->state = VGS_DEV_NONE;
     VGS_MB();
-    region_put(d, VGS_DEVICE_OFF + 8, (const uint8_t *)&d->me + 8, sizeof(d->me) - 8);
+    /* The heartbeat, the block's last word, is vd_beat's alone. */
+    region_put(d, VGS_DEVICE_OFF + 8, (const uint8_t *)&d->me + 8,
+               offsetof(struct vgs_device, heartbeat) - 8);
     VGS_MB();
     v->epoch = drv->epoch;
     VGS_MB();
@@ -1256,13 +1258,14 @@ uint64_t vd_profile_now(void)
  * Add 1 to the device block's heartbeat, under VGS_TF_BEAT offered
  * (vgpushm.h). The backend calls it every VGS_BEAT_MS from a thread of its
  * own, so that the count stops only when the whole process stops or dies,
- * however long the serving thread spends in one command; any thread may
- * call it.
+ * however long the serving thread spends in one command. That thread is
+ * the word's only writer, by one atomic store, since an epoch's offer
+ * leaves the word out of what it writes.
  */
 void vd_beat(struct vd *d)
 {
     if ((d->offer.transport_features & VGS_TF_BEAT) != 0) {
-        VGS_DEVICE(d->base)->heartbeat = __atomic_add_fetch(&d->beat, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&VGS_DEVICE(d->base)->heartbeat, ++d->beat, __ATOMIC_RELAXED);
     }
 }
 
