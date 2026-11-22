@@ -1,0 +1,25 @@
+Run 2, times in ms from the picture's start, aligned by the first 16 frame marks.
+ 2147.5 818/863   0.5 ThreadControllerImpl::RunTask {'src_file': 'components/viz/service/display/display_scheduler.cc', 'src_func': 'ScheduleBeginFrameDeadline', 'src_line': 803}
+ 2153.7 818/863   3.0 DelayBasedBeginFrameSource::OnTimerTick {'frame_time': 51553429, 'interval': 16662}
+ 2156.8 878/1   0.7 ProxyMain::BeginMainFrame {'begin_frame_id': 232, 'main_frame_pipeline': {'main_frame_id': 10483446856117501281, 'step': 'BEGIN_MAIN_FRAME'}}
+ 2162.6 764/764   8.4 ThreadControllerImpl::RunTask {'src_file': 'chrome/browser/after_startup_task_utils.cc', 'src_func': 'MaybeSignalStartupComplete', 'src_line': 167}
+ 2166.1 764/803  40.4 SimpleWatcher::OnHandleReady {'chrome_mojo_event_info': {'watcher_notify_interface_tag': 'memory_instrumentation.mojom.ClientProcess'}}
+ 2170.8 818/863   0.0 ThreadControllerImpl::RunTask {'chrome_task_annotator': {'delay_policy': 'PRECISE', 'task_delay_us': 13615}, 'src_file': 'components/viz/service/display/display_scheduler.cc', 'src_func': 'ScheduleBeginFrameDeadline', 'src_line': 803}
+ 2177.7 818/863   0.1 DelayBasedBeginFrameSource::OnTimerTick {'frame_time': 51569970, 'interval': 16662}
+ 2188.5 764/795  22.5 ThreadPool_RunTask {'src_file': 'components/system_cpu/cpu_probe_linux.cc', 'src_func': 'Update', 'src_line': 133}
+ 2195.8 764/800  15.2 ThreadPool_RunTask {'src_file': 'components/system_cpu/cpu_probe_linux.cc', 'src_func': 'Update', 'src_line': 133}
+ 2199.1 818/863  11.9 ThreadControllerImpl::RunTask {'src_file': 'components/viz/service/display/display_scheduler.cc', 'src_func': 'ScheduleBeginFrameDeadline', 'src_line': 803}
+ 2206.6 764/803   4.2 SimpleWatcher::OnHandleReady {'chrome_mojo_event_info': {'watcher_notify_interface_tag': 'memory_instrumentation.mojom.ClientProcess'}}
+ 2211.2 818/863   0.2 DelayBasedBeginFrameSource::OnTimerTick {'frame_time': 51603172, 'interval': 16662}
+ 2211.6 764/795 173.0 ThreadPool_RunTask {'src_file': 'components/blocklist/opt_out_blocklist/sql/opt_out_store_sql.cc', 'src_func': 'LoadBlockList', 'src_line': 403}
+ 2213.7 764/764   0.0 ThreadControllerImpl::RunTask {'src_file': 'components/system_cpu/cpu_probe_linux.cc', 'src_func': 'Update', 'src_line': 133}
+ 2213.7 764/764   0.0 ThreadControllerImpl::RunTask {'src_file': 'components/system_cpu/cpu_probe_linux.cc', 'src_func': 'Update', 'src_line': 133}
+ 2213.7 878/1   1.9 ProxyMain::BeginMainFrame {'begin_frame_id': 235, 'main_frame_pipeline': {'main_frame_id': 10483446856117501330, 'step': 'BEGIN_MAIN_FRAME'}}
+ 2216.3 818/863   0.5 ThreadControllerImpl::RunTask {'src_file': 'components/viz/service/display/display_scheduler.cc', 'src_func': 'ScheduleBeginFrameDeadline', 'src_line': 803}
+
+threadwatch snapshots bracketing the gap:
+F 51.545175993 /proc/interrupts 53:	0	10460	0	0	MSI	i915
+F 51.545175993 /proc/stat timer_passes_late 12 ; bkl_wait_us 15547184 ; bkl_wait_max_us 51153 ; bkl_wait_max_holds 1 ; bkl_wait_max_hold take 0 337807 ; bkl_hold_max_us 337807 ; bkl_hold_max_entry take 0 ; bkl_hold_max_mark 1 0 ; bkl_hold_max_mark 2 0 ; bkl_hold_max_mark 4 0 ; bkl_hold_max_mark 8 0 ; bkl_hold_max_mark 16 0 ; latency_timer_us 1546659
+T 51.612203612 764 795 ThreadPoolForeg D 11/22/801 wq_wait_event_nointr | 75 0x9a 0x0 0x0 0x0 0x0 0x0 0x7e62d4a42368 0x7e62e4e0246e
+F 51.612203612 /proc/interrupts 53:	0	10481	0	0	MSI	i915
+F 51.612203612 /proc/stat timer_passes_late 12 ; bkl_wait_us 15719033 ; bkl_wait_max_us 51153 ; bkl_wait_max_holds 1 ; bkl_wait_max_hold take 0 337807 ; bkl_hold_max_us 337807 ; bkl_hold_max_entry take 0 ; bkl_hold_max_mark 1 0 ; bkl_hold_max_mark 2 0 ; bkl_hold_max_mark 4 0 ; bkl_hold_max_mark 8 0 ; bkl_hold_max_mark 16 0 ; latency_timer_us 1546659
