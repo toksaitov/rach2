@@ -1,6 +1,6 @@
 """Time the hasvk WebGPU picture's first frames on the Lenovo, with each thread's waits.
 
-Run as root: python3 stall.py USER OUT RUNS, on Rach2 or on the Lenovo's
+Run as root: python3 stall.py USER OUT RUNS [--bare], on Rach2 or on the Lenovo's
 Debian alike. Like hasvk.py it owns the screen: it ends the desktop session's
 Weston, starts a private DRM Weston through seatd, presents vkcube's 300
 frames once, as hasvk.py does before its picture, and then runs Chromium's
@@ -11,9 +11,11 @@ interrupt's count and, on Rach2, the big lock's and the timer's counters.
 On Rach2 each bare run also keeps the kernel's profile of the GPU
 process's main thread, taken every 50 ms beside that thread's times, and
 the big lock's counts.
+Use --bare to skip the GPU profile, thread sampler and browser trace.
 OUT must not exist; it keeps every run and, in summary.json and stall.txt,
 the slowest gap of each run's first frames and what each thread did in it.
 """
+import argparse
 import gzip
 import json
 import os
@@ -186,12 +188,18 @@ def traced(path, k):
 
 
 def main():
-    """Run the picture beside the sampler RUNS times, keeping each run's evidence."""
-    user, name, count = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    """Run the picture RUNS times and keep each run's evidence."""
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser.add_argument("user")
+    parser.add_argument("output")
+    parser.add_argument("runs", type=int)
+    parser.add_argument("--bare", action="store_true", help="run without sampling or tracing")
+    args = parser.parse_args()
+    user = args.user
     assert os.getuid() == 0, "run as root to read every thread's syscall file"
     account = pwd.getpwnam(user)
     assert account.pw_uid != 0, "the programs need an ordinary user"
-    out = Path(name).resolve()
+    out = Path(args.output).resolve()
     assert not out.exists(), "use a fresh output directory"
     card, icd = machine()
     work = weston = watch = None
@@ -203,7 +211,9 @@ def main():
         work = Path(tempfile.mkdtemp(prefix="rach2-stall.", dir=os.environ.get("TMPDIR", "/tmp")))
         os.chown(work, account.pw_uid, account.pw_gid)
         sampler = work / "threadwatch"
-        subprocess.run(["gcc", "-std=c99", "-O2", "-o", str(sampler), str(HERE / "threadwatch.c")], check=True)
+        if not args.bare:
+            subprocess.run(["gcc", "-std=c99", "-O2", "-o", str(sampler),
+                            str(HERE / "threadwatch.c")], check=True)
         runtime = work / "run"
         runtime.mkdir(mode=0o700)
         os.chown(runtime, account.pw_uid, account.pw_gid)
@@ -223,14 +233,14 @@ def main():
             out / "cube.log", env)
         summary = []
         report = []
-        for index in range(count):
-            kind = KINDS[index % len(KINDS)]
+        for index in range(args.runs):
+            kind = "bare" if args.bare else KINDS[index % len(KINDS)]
             mode = "webgpu-trace" if kind == "traced" else "webgpu-frames"
             here = out / ("run-%d" % index)
             here.mkdir()
             os.chown(here, account.pw_uid, account.pw_gid)
             snapshot(card, here / "before")
-            profiled = kind == "bare" and RACH2
+            profiled = kind == "bare" and RACH2 and not args.bare
             done = threading.Event()
             if profiled:
                 profile_start()
@@ -304,7 +314,7 @@ def main():
             report.append("")
             (out / "stall.txt").write_text("\n".join(report) + "\n")
         (out / "dmesg.txt").write_text(subprocess.run(["dmesg"], capture_output=True, text=True).stdout)
-        print("stall: result: %d runs, gaps %s ms" % (count, [row["gap_ms"] for row in summary]), flush=True)
+        print("stall: result: %d runs, gaps %s ms" % (args.runs, [row["gap_ms"] for row in summary]), flush=True)
     finally:
         if watch is not None:
             stop(watch)

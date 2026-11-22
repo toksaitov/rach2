@@ -1,4 +1,6 @@
 """Trace the immediate and settled Chromium pictures on the Lenovo's panel."""
+import argparse
+import json
 import os
 from pathlib import Path
 import pwd
@@ -7,10 +9,12 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(Path("tests/graphics/lenovo").resolve()))
 from hasvk import end_desktop, machine, private_weston, run, stop, user_command
+from stall import frames, gpu_profile, profile_start
 
 TRACE = Path("/sys/kernel/debug/bkl/trace")
 
@@ -85,14 +89,41 @@ def collect(case, work, settle, weston, account, env):
                     TRACE.write_text("clear\n")
 
 
+def profiled_pictures(out, work, weston, account, env):
+    """Trace fresh immediate pictures beside the GPU sampler until a late frame."""
+    env = dict(env, RACH2_BROWSER_TRACE="0")
+    for index in range(1, 5):
+        name = "immediate-%d" % index
+        print("webgpu: measure " + name + " with GPU sampling", flush=True)
+        profile_start()
+        done = threading.Event()
+        sampler = threading.Thread(target=gpu_profile, args=(out / (name + ".profile"), done))
+        sampler.start()
+        try:
+            collect(out / name, work / name, 0, weston, account, env)
+        finally:
+            done.set()
+            sampler.join()
+        result = json.loads((out / name / "out/result.json").read_text())
+        late = frames(result["picture"])["late_after_steady"]
+        print("webgpu: %s: %d late frames" % (name, late), flush=True)
+        if late:
+            break
+
+
 def main():
-    """Use one private DRM Weston and two fresh browser profiles."""
-    user, output = sys.argv[1:]
+    """Use one private DRM Weston and fresh browser profiles."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("user")
+    parser.add_argument("output")
+    parser.add_argument("--profiled", action="store_true", help="trace the GPU sampler's workload")
+    args = parser.parse_args()
+    user = args.user
     account = pwd.getpwnam(user)
     if os.getuid() != 0 or account.pw_uid == 0 or not TRACE.is_file():
         raise RuntimeError("need root, a display user and the kernel trace file")
     _, icd = machine()
-    out = Path(output).resolve()
+    out = Path(args.output).resolve()
     out.mkdir()
     display = out / "display"
     desktop_dir(display, account)
@@ -113,9 +144,12 @@ def main():
             pid = weston_pid()
             run(client_command(user, ["vkcube", "--wsi", "wayland", "--c", "300"]),
                 display / "cube.log", env)
-            for name, delay in (("immediate", 0), ("settled", 5)):
-                print("webgpu: measure " + name, flush=True)
-                collect(out / name, work / name, delay, pid, account, env)
+            if args.profiled:
+                profiled_pictures(out, work, pid, account, env)
+            else:
+                for name, delay in (("immediate", 0), ("settled", 5)):
+                    print("webgpu: measure " + name, flush=True)
+                    collect(out / name, work / name, delay, pid, account, env)
         finally:
             stop(weston)
 
