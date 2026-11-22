@@ -656,6 +656,7 @@ const char *loop_backing(int index, int *autoclear)
  */
 static int loop_resolve(const char *path, struct vfs_ref *ref)
 {
+    const void *keeps = vfs_walk_keeps_mark();
     struct vfs_stamp st;
     int rc;
 
@@ -671,6 +672,7 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
         }
         vfs_node_unlock(ref);
         vfs_ref_release(ref);
+        vfs_walk_keeps_back(keeps);
     }
 }
 

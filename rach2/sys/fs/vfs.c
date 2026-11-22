@@ -1068,9 +1068,12 @@ static int walk_check_wait(struct walk_check *wc)
     return 0;
 }
 
+static int walk_keep_spare(void);
+
 /**
- * Begin the check `wc` of an attempt, which may sleep until no other
- * thread's change is under way (`vfs_seq_wait`): 0, or, for a caller that
+ * Begin the check `wc` of an attempt, once the thread has a spare keep for
+ * the answer (`walk_keep_spare`), which may sleep until no other thread's
+ * change is under way (`vfs_seq_wait`): 0, -ENOMEM, or, for a caller that
  * may not wait since it holds what such a change may wait for, a namespace
  * or file lock or a change of its own, -EINTR with the call marked to run
  * again from the start once it has let go of everything (RESTART_NOINTR),
@@ -1083,8 +1086,11 @@ static int walk_check_wait(struct walk_check *wc)
  */
 static int walk_check_begin(struct walk_check *wc, const char *page)
 {
-    int rc;
+    int rc = walk_keep_spare();
 
+    if (rc != 0) {
+        return rc;
+    }
     wc->seq = 0;
     wc->on = current_proc != NULL;
     if (wc->on && !vfs_seq_read(&wc->seq)) {
@@ -1115,7 +1121,7 @@ static int walk_answer(const struct walk_check *wc)
     return 1;
 }
 
-static int walk_keep_take(const struct vfs_ref *ref, int locked);
+static int walk_keep_take(const struct vfs_ref *ref, int locked, const struct walk_check *wc);
 static int walk_keeps_hold(const struct vfs_mount *mnt, const void *node);
 
 /** Register `r`, a reference in the calling thread's walk, among its walk's
@@ -2143,19 +2149,24 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
                : 0;
 }
 
-/** The end of a full walk under `rules` of `flags` at `cur`, before its
- * last check: `walk_finish`, `walk_end_ok`, and the keep of a KRFFS answer
- * for the rest of the call (`walk_keep_take`). 0 or an error of theirs. */
-static int walk_done(const struct walk_rules *rules, const struct vfs_ref *cur, int flags)
+/* The cached walk's answer when the full walk must take the path, and the
+ * full walk's end's when the walk goes again (`walk_done`). */
+#define WALK_FULL 1
+
+/** The end of a full walk under `rules` of `flags` at `cur`, checked by
+ * `wc`: `walk_finish`, `walk_end_ok`, then the last check and the keep of a
+ * KRFFS answer for the rest of the call, with nothing between them that
+ * sleeps (`walk_keep_take`). 0, WALK_FULL when the check fails and the walk
+ * goes again, or an error of theirs. */
+static int walk_done(const struct walk_rules *rules, const struct vfs_ref *cur, int flags,
+                     const struct walk_check *wc)
 {
     int rc = walk_finish(cur, flags);
 
     rc = rc == 0 ? walk_end_ok(rules, cur->mnt) : rc;
-    return rc == 0 ? walk_keep_take(cur, (flags & VFS_WALK_LOCK) != 0) : rc;
+    return rc == 0 ? walk_keep_take(cur, (flags & VFS_WALK_LOCK) != 0, wc) : rc;
 }
 
-/* The cached walk's answer when the full walk must take the path. */
-#define WALK_FULL 1
 
 /** Whether the cached walk may stand on `mnt`: a type whose names the name
  * cache keeps, which a walk needs no namespace lock for and which looks
@@ -3229,12 +3240,12 @@ begin:
         }
     }
 
-    rc = walk_done(&rules, &cur, missing ? flags | VFS_WALK_PARENT : flags);
+    rc = walk_done(&rules, &cur, missing ? flags | VFS_WALK_PARENT : flags, &wc);
+    if (rc == WALK_FULL) {
+        goto restart;
+    }
     if (rc != 0) {
         goto out_err;
-    }
-    if (!walk_answer(&wc)) {
-        goto restart;
     }
     path_buf_put(linkpath);
     path_buf_put(target);
@@ -7209,6 +7220,7 @@ static void mount_gate(const struct vfs_mount *mnt)
 static int mount_new(const char *source, const char *target, const char *type, uint32_t flags,
                      const char *options, struct fd_kept **kept)
 {
+    const void *keeps;
     int pts = streq(type, "devpts");
     const struct vfs_type *t = streq(type, "proc") ? &vfs_procfs_type
                                : pts               ? &vfs_devfs_type
@@ -7227,7 +7239,9 @@ static int mount_new(const char *source, const char *target, const char *type, u
     if (flags & ~VFS_MS_KNOWN) {
         return -EINVAL;
     }
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = vfs_resolve_fd(target, VFS_WALK_MOUNT | VFS_WALK_COVER, &tref, NULL, kept);
     if (rc < 0) {
         return rc;
@@ -7767,37 +7781,56 @@ static int walk_keeps_needed(const struct vfs_mount *mnt)
 }
 
 /**
- * Keep `ref`, the answer of a walk of the calling thread, for the rest of
- * its call (`struct walk_keep`). `locked` says whether the walk holds the
- * namespace lock of `ref->mnt`, which a pin needs and which this takes
- * otherwise. The caller checks its walk after this, since the allocation
- * may sleep: a removal or a relocation before the keep moves the walk
- * sequence. 0, or -ENOMEM.
+ * Make sure the calling thread has a spare keep (`walk_spare` in
+ * process.h), allocated before its walk finds anything, so that the keep of
+ * the answer is taken without a sleep after the walk's last check
+ * (`walk_keep_take`). A kernel thread keeps nothing. 0, or -ENOMEM. May
+ * sleep.
  */
-static int walk_keep_take(const struct vfs_ref *ref, int locked)
+static int walk_keep_spare(void)
 {
-    struct walk_keep *k;
-    int own = !(locked && ref->mnt->type->ns_serialised);
+    if (!current_proc || proc_is_kthread(current_proc) || current_proc->walk_spare) {
+        return 0;
+    }
+    current_proc->walk_spare = kzalloc(sizeof(struct walk_keep));
+    return current_proc->walk_spare ? 0 : -ENOMEM;
+}
+
+/**
+ * Make the last check `wc` of a walk of the calling thread, whose answer is
+ * `ref`, and keep that answer for the rest of the call (`struct walk_keep`)
+ * in the thread's spare (`walk_keep_spare`). Nothing between the check and
+ * the hold sleeps: a node the check finds in place cannot be removed, and
+ * its place reused, before the keep counts among its holders, so no
+ * removal has to count the walk's own registration of it. A pin of mounted
+ * KRFFS is taken under the namespace lock of `ref->mnt`, which `locked`
+ * says the walk holds and which this takes otherwise, with the check made
+ * under it. 0, WALK_FULL when the check fails, or -ENOMEM.
+ */
+static int walk_keep_take(const struct vfs_ref *ref, int locked, const struct walk_check *wc)
+{
+    struct walk_keep *k = current_proc ? current_proc->walk_spare : NULL;
+    int lock;
     int rc;
 
     if (!ref->mnt || !walk_keeps_needed(ref->mnt) || ref->node == ref->mnt->root) {
-        return 0;
+        return walk_answer(wc) ? 0 : WALK_FULL;
     }
-    k = kzalloc(sizeof(*k));
     if (!k) {
         return -ENOMEM;
     }
-    if (own && ref->mnt->type->ops->pin) {
+    lock = !(locked && ref->mnt->type->ns_serialised) && ref->mnt->type->ops->pin;
+    if (lock) {
         vfs_ns_lock(ref->mnt);
     }
-    rc = hold_take(&k->hold, ref);
-    if (own && ref->mnt->type->ops->pin) {
+    rc = walk_answer(wc) ? hold_take(&k->hold, ref) : WALK_FULL;
+    if (lock) {
         vfs_ns_unlock(ref->mnt);
     }
     if (rc != 0) {
-        kfree(k);
         return rc;
     }
+    current_proc->walk_spare = NULL;
     k->mnt = ref->mnt;
     k->given = ref->node;
     vfs_desc_open(ref->mnt);
@@ -7874,19 +7907,17 @@ uint32_t vfs_walk_keep_place(uint32_t pid)
     return place;
 }
 
-void vfs_walk_keeps_end(void)
+/** Give back the keeps of the calling thread newer than `mark`, newest
+ * first, as `vfs_walk_keeps_back` says. */
+static void walk_keeps_drop(const struct walk_keep *mark)
 {
     struct walk_keep *k;
-    int big;
+    int big = !bkl_held();
 
-    if (!current_proc || !current_proc->walk_keeps) {
-        return;
-    }
-    big = !bkl_held();
     if (big) {
         bkl_enter();
     }
-    while ((k = current_proc->walk_keeps) != NULL) {
+    while ((k = current_proc->walk_keeps) != NULL && k != mark) {
         current_proc->walk_keeps = k->next;
         bind_hold_drop(&k->hold, k->mnt);
         reap_if_detached(k->mnt, vfs_mount_put(k->mnt));
@@ -7894,6 +7925,32 @@ void vfs_walk_keeps_end(void)
     }
     if (big) {
         bkl_exit();
+    }
+}
+
+const void *vfs_walk_keeps_mark(void)
+{
+    return current_proc ? current_proc->walk_keeps : NULL;
+}
+
+void vfs_walk_keeps_back(const void *mark)
+{
+    if (current_proc && current_proc->walk_keeps != mark) {
+        walk_keeps_drop((const struct walk_keep *)mark);
+    }
+}
+
+void vfs_walk_keeps_end(void)
+{
+    if (!current_proc) {
+        return;
+    }
+    if (current_proc->walk_spare) {
+        kfree(current_proc->walk_spare);
+        current_proc->walk_spare = NULL;
+    }
+    if (current_proc->walk_keeps) {
+        walk_keeps_drop(NULL);
     }
 }
 
@@ -8162,6 +8219,7 @@ static int bind_resolve(const char *path, int flags, struct vfs_ref *ref, char *
 
 int vfs_do_bind(const char *source, const char *target, int rec)
 {
+    const void *keeps;
     struct vfs_ref sref, tref;
     struct fd_kept *skept = NULL, *tkept = NULL;
     struct bind_source src;
@@ -8170,7 +8228,9 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     int dir, rc;
 
     src.real = sreal;
+    keeps = vfs_walk_keeps_mark();
 again:
+    vfs_walk_keeps_back(keeps);
     rc = sreal && treal ? bind_resolve(source, VFS_WALK_SOURCE, &sref, sreal, &skept, &src.hold)
                         : -ENOMEM;
     if (rc == 0) {

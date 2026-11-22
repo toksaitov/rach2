@@ -819,9 +819,22 @@ void vfs_ref_now(struct vfs_ref *ref);
  * May sleep. */
 uint32_t vfs_walk_keep_place(uint32_t pid);
 
-/** Give back the keeps of the calling thread's walks, at the end of its
- * system call or of the thread: a node one kept that lost its name and
- * that nothing else holds is freed. Takes the big lock when the caller has
+/** The calling thread's newest walk keep, a mark for
+ * `vfs_walk_keeps_back`, or NULL. A call that runs an attempt again takes
+ * the mark before its first attempt. */
+const void *vfs_walk_keeps_mark(void);
+
+/** Give back the keeps the calling thread's walks took since `mark`
+ * (`vfs_walk_keeps_mark`), as `vfs_walk_keeps_end` gives back all of them:
+ * the keeps of an attempt a call abandons, once it has let go of what the
+ * attempt found, so that a call that runs again many times does not pile
+ * them up. The caller holds no namespace lock. May sleep. */
+void vfs_walk_keeps_back(const void *mark);
+
+/** Give back the keeps of the calling thread's walks, and the spare its
+ * next walk would keep its answer in, at the end of its system call or of
+ * the thread: a node one kept that lost its name and that nothing else
+ * holds is freed. Takes the big lock when the caller has
  * not; the caller holds no namespace lock. May sleep. */
 void vfs_walk_keeps_end(void);
 
