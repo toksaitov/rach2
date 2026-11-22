@@ -33,8 +33,12 @@
  * which TIOCOUTQ reads 0, so that the line is out before the mode exits to
  * the debug shell, which runs no thread; a drain that a signal interrupts
  * fails with EINTR, though the handler has SA_RESTART, with the output
- * still counted (`drain_rows`); and /dev/vport0p0, the console port's vport
- * node, refuses an open with ENXIO. `late`:
+ * still counted (`drain_rows`), and so does one whose output went out as
+ * the signal came (`late_signal_row`); on a pty pair, the drain and
+ * TIOCOUTQ of either end, the termio forms, a termios change that waits
+ * for a blocked write to end, and a drain stopped by SIGTTOU that is
+ * restarted once continued (`pty_rows`); and /dev/vport0p0, the console
+ * port's vport node, refuses an open with ENXIO. `late`:
  * /dev/vport0p3 and /dev/virtio-ports/org.rach2.late are one device, which
  * takes `ping` and a newline and gives `pong` and a newline, the bytes the
  * host's end has, and polls writable. `gone`: the late port's nodes are
@@ -56,6 +60,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pty.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -548,6 +553,375 @@ static int drain_rows(int fd)
     return 0;
 }
 
+/** The pid of the thread whose comm is `name`, or -1: a kernel thread
+ * such as khvcd, which /proc lists as any process. */
+static pid_t pid_named(const char *name)
+{
+    DIR *d = opendir("/proc");
+    struct dirent *e;
+    char path[300], comm[32];
+    pid_t found = -1;
+
+    while (d && found < 0 && (e = readdir(d)) != NULL) {
+        size_t n;
+
+        if (e->d_name[0] < '1' || e->d_name[0] > '9') {
+            continue;
+        }
+        snprintf(path, sizeof(path), "/proc/%s/comm", e->d_name);
+        if (slurp(path, comm, sizeof(comm)) <= 0) {
+            continue;
+        }
+        n = strlen(comm);
+        if (n > 0 && comm[n - 1] == '\n') {
+            comm[n - 1] = '\0';
+        }
+        if (strcmp(comm, name) == 0) {
+            found = (pid_t)atoi(e->d_name);
+        }
+    }
+    if (d) {
+        closedir(d);
+    }
+    return found;
+}
+
+/** Set the policy and priority of the thread `pid` through the system
+ * call; 0 or -1. */
+static int set_policy_of(pid_t pid, int policy, int priority)
+{
+    struct sched_param sp;
+
+    sp.sched_priority = priority;
+    return (int)syscall(SYS_sched_setscheduler, pid, policy, &sp);
+}
+
+/**
+ * The drain whose output reaches the port as its signal comes, on the
+ * terminal `fd` of the case's machine of one processor: this process, a
+ * child and khvcd all at SCHED_FIFO 99, so that each runs in the order it
+ * became ready. Five bytes written and a drain begun, khvcd runs first,
+ * hands them to the port and wakes the drain, whose wait is then over; the
+ * child, which runs next, sees TIOCOUTQ at 0 and sends SIGUSR1 before the
+ * drain runs again. The drain must fail with EINTR, as Linux's TCSBRK
+ * tests for a signal after its wait, though its output is out. khvcd and
+ * this process are SCHED_OTHER again after. Returns 0 when the row held.
+ */
+static int late_signal_row(int fd)
+{
+    pid_t khvcd = pid_named("khvcd"), child;
+    int go[2], rc, err, status;
+
+    if (khvcd < 0) {
+        errno = 0;
+        return fail("khvcd is not in /proc");
+    }
+    if (pipe(go) != 0 || set_policy_of(khvcd, SCHED_FIFO, 99) != 0 ||
+        set_policy(SCHED_FIFO, 99) != 0) {
+        err = errno;
+        set_policy_of(khvcd, SCHED_OTHER, 0);
+        errno = err;
+        return fail("the late signal's drain cannot be set up");
+    }
+    drain_signals = 0;
+    child = fork();
+    if (child == 0) {
+        int queued = 1;
+        char c;
+
+        close(go[1]);
+        if (read(go[0], &c, 1) != 1) {
+            _exit(1);
+        }
+        while (ioctl(fd, TIOCOUTQ, &queued) == 0 && queued != 0) {
+            sched_yield();
+        }
+        kill(getppid(), SIGUSR1);
+        _exit(queued == 0 ? 0 : 1);
+    }
+    close(go[0]);
+    rc = child < 0 || write(fd, "late\n", 5) != 5 || write(go[1], "g", 1) != 1 ? -2 : tcdrain(fd);
+    err = errno;
+    if (child > 0) {
+        waitpid(child, &status, 0);
+    }
+    close(go[1]);
+    set_policy(SCHED_OTHER, 0);
+    set_policy_of(khvcd, SCHED_OTHER, 0);
+    errno = err;
+    if (rc == -2) {
+        return fail("the late signal's drain does not start");
+    }
+    if (rc != -1 || err != EINTR || drain_signals != 1) {
+        return fail("a drain whose output went out as SIGUSR1 came does not fail with EINTR");
+    }
+    return 0;
+}
+
+/** The state letter of process `pid` in /proc/PID/stat, or 0 once it is
+ * gone. */
+static char proc_state(pid_t pid)
+{
+    char path[48], text[512];
+    const char *p;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    if (slurp(path, text, sizeof(text)) <= 0 || (p = strrchr(text, ')')) == NULL) {
+        return 0;
+    }
+    return p[1] == ' ' ? p[2] : 0;
+}
+
+/** Wait until process `pid` sleeps (state S) or has exited, which a reap
+ * with WNOHANG tells; 1 when it sleeps, 0 when it exited, with its status
+ * in `*status`. */
+static int sleeps(pid_t pid, int *status)
+{
+    for (;;) {
+        if (waitpid(pid, status, WNOHANG) == pid) {
+            return 0;
+        }
+        if (proc_state(pid) == 'S') {
+            return 1;
+        }
+        sched_yield();
+    }
+}
+
+/* The lines of the blocked write: three ring's worth of output with ONLCR. */
+#define LOCK_LINES 4096
+
+/** Read `lines` newlines of the master `master`; the count of them a
+ * carriage return came before. */
+static int crs_before(int master, int lines)
+{
+    int newlines = 0, crs = 0, n, i;
+    char in[512], prev = 0;
+
+    while (newlines < lines && (n = (int)read(master, in, sizeof(in))) > 0) {
+        for (i = 0; i < n; i++) {
+            if (in[i] == '\n') {
+                newlines++;
+                crs += prev == '\r';
+            }
+            prev = in[i];
+        }
+    }
+    return newlines == lines ? crs : -1;
+}
+
+/** Reap the child `pid`; 1 when it exited with 0. */
+static int exited_well(pid_t pid)
+{
+    int status;
+
+    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/**
+ * A termios change against a blocked write, on the pty pair `master` and
+ * `slave`: a child's write of LOCK_LINES lines of `a` and a newline, which
+ * fills the master's 4096-byte ring and waits for room, holds the slave's
+ * write lock; a second child's tcsetattr(TCSADRAIN) that clears ONLCR then
+ * waits for the write to end, as Linux's set_termios takes the write lock,
+ * so every newline of the write reaches the master as CR LF; and the next
+ * write is under the new modes, a bare newline. Returns 0 when the row
+ * held.
+ */
+static int write_lock_row(int master, int slave)
+{
+    static char lines[LOCK_LINES * 2];
+    struct termios modes;
+    pid_t writer, changer;
+    int status, i, crs;
+    char in[4];
+
+    for (i = 0; i < LOCK_LINES; i++) {
+        lines[2 * i] = 'a';
+        lines[2 * i + 1] = '\n';
+    }
+    if (tcgetattr(slave, &modes) != 0 || !(modes.c_oflag & OPOST) || !(modes.c_oflag & ONLCR)) {
+        return fail("the slave has no OPOST and ONLCR to begin with");
+    }
+    writer = fork();
+    if (writer == 0) {
+        _exit(write(slave, lines, sizeof(lines)) == (ssize_t)sizeof(lines) ? 0 : 1);
+    }
+    if (writer < 0 || !sleeps(writer, &status)) {
+        return fail("the slave's writer does not wait for the master to read");
+    }
+    changer = fork();
+    if (changer == 0) {
+        modes.c_oflag &= ~(tcflag_t)ONLCR;
+        _exit(tcsetattr(slave, TCSADRAIN, &modes) == 0 ? 0 : 1);
+    }
+    if (changer < 0 || !sleeps(changer, &status)) {
+        kill(writer, SIGKILL);
+        waitpid(writer, &status, 0);
+        errno = 0;
+        return fail("tcsetattr(TCSADRAIN) did not wait for the write in progress");
+    }
+    crs = crs_before(master, LOCK_LINES);
+    if (!exited_well(writer) || !exited_well(changer)) {
+        return fail("the writer or the termios change failed");
+    }
+    if (crs != LOCK_LINES) {
+        errno = 0;
+        return fail("the termios change landed inside the write");
+    }
+    if (write(slave, "b\n", 2) != 2 || read(master, in, sizeof(in)) != 2 ||
+        memcmp(in, "b\n", 2) != 0) {
+        return fail("the write after the change is not under the new modes");
+    }
+    modes.c_oflag |= ONLCR;
+    return tcsetattr(slave, TCSANOW, &modes) == 0 ? 0 : fail("ONLCR does not come back");
+}
+
+/**
+ * The job-control stop of a drain, on the pty `slave`: a child that makes
+ * the slave its session's terminal starts a grandchild in a group of its
+ * own, in the background, whose tcdrain takes SIGTTOU and stops; the child
+ * gives the grandchild's group the foreground and continues it, and the
+ * drain, restarted as Linux restarts tty_check_change's ERESTARTSYS,
+ * returns 0. The child's exit status is the row's: 0, or the step that
+ * failed. Returns 0 when the row held.
+ */
+static int ttou_restart_row(int slave)
+{
+    pid_t child = fork(), drainer;
+    int status;
+    sigset_t ttou;
+
+    if (child == 0) {
+        sigemptyset(&ttou);
+        sigaddset(&ttou, SIGTTOU);
+        if (setsid() < 0 || ioctl(slave, TIOCSCTTY, 0) != 0) {
+            _exit(2);
+        }
+        drainer = fork();
+        if (drainer == 0) {
+            signal(SIGTTOU, SIG_DFL);
+            sigprocmask(SIG_UNBLOCK, &ttou, NULL);
+            setpgid(0, 0);
+            _exit(tcdrain(slave) == 0 ? 0 : errno == EINTR ? 3 : 4);
+        }
+        if (drainer < 0) {
+            _exit(5);
+        }
+        setpgid(drainer, drainer);
+        if (waitpid(drainer, &status, WUNTRACED) != drainer || !WIFSTOPPED(status) ||
+            WSTOPSIG(status) != SIGTTOU) {
+            _exit(6);
+        }
+        sigprocmask(SIG_BLOCK, &ttou, NULL);
+        if (tcsetpgrp(slave, drainer) != 0 || kill(drainer, SIGCONT) != 0) {
+            _exit(7);
+        }
+        if (waitpid(drainer, &status, 0) != drainer || !WIFEXITED(status)) {
+            _exit(8);
+        }
+        _exit(WEXITSTATUS(status));
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
+        return fail("the job-control drain's child does not end");
+    }
+    if (WEXITSTATUS(status) != 0) {
+        char why[96];
+
+        snprintf(why, sizeof(why),
+                 "a drain stopped by SIGTTOU and continued does not return 0: "
+                 "step %d",
+                 WEXITSTATUS(status));
+        errno = 0;
+        return fail(why);
+    }
+    return 0;
+}
+
+/* Linux's struct termio, of TCGETA and the TCSETA family, which musl does
+ * not declare. */
+struct termio_v {
+    unsigned short c_iflag;
+    unsigned short c_oflag;
+    unsigned short c_cflag;
+    unsigned short c_lflag;
+    unsigned char c_line;
+    unsigned char c_cc[8];
+};
+
+/**
+ * The termio forms on the pty `slave` fed by `master`: TCGETA gives the low
+ * 16 bits of each mode; TCSETAW with ECHO cleared installs it and keeps a
+ * high bit of c_cflag, CRTSCTS, that tcsetattr set; TCSETAF also discards
+ * the input the master fed. The modes are restored. Returns 0 when the row
+ * held.
+ */
+static int termio_row(int master, int slave)
+{
+    struct termios orig, modes;
+    struct termio_v v;
+    int avail = -1;
+
+    if (tcgetattr(slave, &orig) != 0) {
+        return fail("tcgetattr of the slave fails");
+    }
+    modes = orig;
+    modes.c_cflag |= CRTSCTS;
+    if (tcsetattr(slave, TCSANOW, &modes) != 0 || ioctl(slave, TCGETA, &v) != 0) {
+        return fail("TCGETA fails");
+    }
+    if (v.c_lflag != (unsigned short)modes.c_lflag || v.c_cflag != (unsigned short)modes.c_cflag ||
+        v.c_cc[VINTR] != modes.c_cc[VINTR]) {
+        errno = 0;
+        return fail("TCGETA does not give the low bits of the modes");
+    }
+    v.c_lflag &= (unsigned short)~ECHO;
+    if (ioctl(slave, TCSETAW, &v) != 0 || tcgetattr(slave, &modes) != 0) {
+        return fail("TCSETAW fails");
+    }
+    if ((modes.c_lflag & ECHO) || !(modes.c_cflag & CRTSCTS)) {
+        errno = 0;
+        return fail("TCSETAW does not set the low bits and keep the high ones");
+    }
+    if (write(master, "flush\n", 6) != 6 || ioctl(slave, FIONREAD, &avail) != 0 || avail <= 0) {
+        return fail("the slave does not have the master's line");
+    }
+    if (ioctl(slave, TCSETAF, &v) != 0 || ioctl(slave, FIONREAD, &avail) != 0 || avail != 0) {
+        errno = 0;
+        return fail("TCSETAF does not discard the input");
+    }
+    return tcsetattr(slave, TCSANOW, &orig) == 0 ? 0 : fail("the slave's modes do not come back");
+}
+
+/**
+ * The drain's requests on a pty pair: the master and the slave count no
+ * output in TIOCOUTQ and drain at once (`tcdrain`), as Linux's pty has no
+ * chars_in_buffer; then `termio_row`, `write_lock_row` and
+ * `ttou_restart_row`. Returns 0 when each row held.
+ */
+static int pty_rows(void)
+{
+    int master, slave, queued = -1;
+
+    if (openpty(&master, &slave, NULL, NULL, NULL) != 0) {
+        return fail("openpty fails");
+    }
+    if (tcdrain(master) != 0 || tcdrain(slave) != 0) {
+        return fail("tcdrain of a pty pair fails");
+    }
+    if (ioctl(master, TIOCOUTQ, &queued) != 0 || queued != 0 ||
+        ioctl(slave, TIOCOUTQ, &queued) != 0 || queued != 0) {
+        return fail("TIOCOUTQ of a pty pair does not read 0");
+    }
+    if (termio_row(master, slave) != 0 || write_lock_row(master, slave) != 0 ||
+        ttou_restart_row(slave) != 0) {
+        return 1;
+    }
+    close(slave);
+    close(master);
+    return 0;
+}
+
 /** The rows of `tty`; 0 when each held. */
 static int tty_rows(void)
 {
@@ -571,7 +945,7 @@ static int tty_rows(void)
     if (ioctl(fd, TIOCOUTQ, &queued) != 0 || queued != 0) {
         return fail("TIOCOUTQ does not read 0 after tcdrain");
     }
-    if (drain_rows(fd) != 0) {
+    if (drain_rows(fd) != 0 || late_signal_row(fd) != 0 || pty_rows() != 0) {
         return 1;
     }
     close(fd);
