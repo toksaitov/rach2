@@ -616,6 +616,11 @@ struct virtio_gpu_cmd {
     uint32_t stream_bytes; /* that stream's bytes, 0 for a payload of pages */
     void (*complete)(struct virtio_gpu_cmd *cmd);
     void *arg; /* for `complete` */
+    /* A deferred backing ask's object, whose `back_ask` it is, until the
+     * object takes it or lets it go; under the device's lock. An answer
+     * other than the page list puts the object on the device's `refused`
+     * list (`vgpu_backing_refused_run`). */
+    struct virtio_gpu_object *back_bo;
 };
 
 /*
@@ -738,6 +743,11 @@ struct virtio_gpu_device {
      * under `lock`. `freeing` counts the passes over them under way. */
     struct virtio_gpu_object *frees, *frees_tail;
     int freeing;
+    /* Objects whose deferred backing ask the device answered with other
+     * than its page list, a refusal among them, before anyone took it,
+     * which the worker takes (`vgpu_backing_refused_run`), through
+     * `refused_next`; under `lock`. */
+    struct virtio_gpu_object *refused;
     uint32_t kicking; /* notifies made without the big lock */
     char reset_path[48];
     char hold_path[48];   /* virtio_gpu_hold's, empty until registered */
@@ -836,6 +846,10 @@ struct virtio_gpu_object {
     struct virtio_gpu_cmd *back_ask;
     int back_taking;
     int32_t back_err;
+    /* On the device's `refused` list, through `refused_next`; under the
+     * device's `lock`. */
+    int refused_listed;
+    struct virtio_gpu_object *refused_next;
 };
 
 /**
@@ -992,6 +1006,7 @@ int32_t vgpu_backing_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object 
 #define VGPU_SETTLE_TRANSFER 2 /* TRANSFER_TO_HOST or TRANSFER_FROM_HOST */
 #define VGPU_SETTLE_MAP      3 /* VIRTGPU_MAP, or an mmap of the object */
 #define VGPU_SETTLE_EXPORT   4 /* a PRIME export */
+#define VGPU_SETTLE_WORKER   5 /* the worker, after an answer not taken (`refused`) */
 /**
  * Take `bo`'s deferred backing, if it has one not yet taken (`back_ask`),
  * before the first access to its pages or the first command after the
@@ -1005,6 +1020,21 @@ int32_t vgpu_backing_ask(struct virtio_gpu_device *vg, struct virtio_gpu_object 
  */
 int32_t vgpu_backing_settle(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                             uint32_t site);
+/**
+ * As vgpu_backing_settle, for a command that names `bo` and is queued after
+ * its ask, which the device serves first: take the deferred backing only
+ * when its answer has come and no other take is under way, and otherwise
+ * leave it and return 0 without a wait, as Linux's execbuffer waits on no
+ * ATTACH_BACKING. A refusal that comes later is taken by the worker
+ * (`vgpu_backing_refused_run`), whose ATTACH_BACKING follows the commands
+ * queued meanwhile, which find the resource without a backing, as a host's
+ * failed attach leaves it on Linux. May sleep.
+ */
+int32_t vgpu_backing_settle_answered(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
+                                     uint32_t site);
+/** Take, from the worker, the deferred backing of each object on the
+ * device's `refused` list. Process context, may sleep. */
+void vgpu_backing_refused_run(struct virtio_gpu_device *vg);
 /** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
  * -ENOMEM. */
 int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
