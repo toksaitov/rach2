@@ -1241,28 +1241,40 @@ static int loop_free(void)
 
 /** The child of the first loop row: through its private bind of VIEWED,
  * sealed read-only, a writable attachment of VIEWED_IMAGE fails with EROFS
- * and a read-only one is made and taken back. 0, or 1. */
+ * and a read-only one is made and taken back. An attachment made is
+ * detached on every path. 0, or 1. */
 static int loop_ro_child(void)
 {
-    int dev = loop_free();
+    int dev = loop_free(), rc, ok;
 
-    return dev >= 0 && private_bind(MS_RDONLY) && refused(loop_command("attach", dev, 1), EROFS) &&
-                   loop_command("attach ro", dev, 1) == 0 && loop_command("detach", dev, 0) == 0
-               ? 0
-               : 1;
+    if (dev < 0 || !private_bind(MS_RDONLY)) {
+        return 1;
+    }
+    rc = loop_command("attach", dev, 1);
+    ok = refused(rc, EROFS);
+    if (rc == 0) {
+        loop_command("detach", dev, 0);
+    }
+    if (!ok || loop_command("attach ro", dev, 1) != 0) {
+        return 1;
+    }
+    return loop_command("detach", dev, 0) == 0 ? 0 : 1;
 }
 
 /** The child of the second loop row: a writable attachment of
  * VIEWED_IMAGE through its private bind of VIEWED makes the bind's
- * read-only remount fail with EBUSY until it is detached. 0, or 1. */
+ * read-only remount fail with EBUSY until it is detached, which it is
+ * whatever the remount answers. 0, or 1. */
 static int loop_rw_child(void)
 {
-    int dev = loop_free();
+    int dev = loop_free(), busy, detached;
 
-    return dev >= 0 && private_bind(0) && loop_command("attach", dev, 1) == 0 &&
-                   refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL),
-                           EBUSY) &&
-                   loop_command("detach", dev, 0) == 0 &&
+    if (dev < 0 || !private_bind(0) || loop_command("attach", dev, 1) != 0) {
+        return 1;
+    }
+    busy = refused(mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL), EBUSY);
+    detached = loop_command("detach", dev, 0) == 0;
+    return busy && detached &&
                    mount(NULL, VIEWED, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) == 0
                ? 0
                : 1;
