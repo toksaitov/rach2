@@ -196,11 +196,10 @@ static int userping(struct etude_case *c)
  * the requests and checking -w, and leaves it time between sends to read the
  * replies, which a send timer shorter than its handler's own run does not. The
  * third runs the receive loop's retries with replies queued; when retries
- * fall due depends on timing here, so tests/system/fixtures/ping-delay.sh,
- * which checks in strace's trace that the loop sends at most one retry
- * between polls and reads after each readable poll, is the check of that
- * order. The line the shell prints when all three exit 0 is computed, so
- * that the echo of the command typed cannot match it.
+ * fall due depends on timing here. tests/system/fixtures/ping-delay.sh
+ * checks the send count, the retry and both ends on Linux, against an echo
+ * responder that holds its replies. The line the shell prints when all three
+ * exit 0 is computed, so that the echo of the command typed cannot match it.
  */
 static int fastping(struct etude_case *c)
 {

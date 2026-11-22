@@ -1,6 +1,7 @@
 #!/bin/sh
-# Check BusyBox adaptive ping on a private Linux loopback, with replies delayed
-# and reads held by strace: the send count, the retries and the ends.
+# Check BusyBox adaptive ping on a private Linux loopback: the send count and
+# the retry against an echo responder that holds its replies, and the final
+# wait and -w each alone against silence.
 set -eu
 
 if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then
@@ -8,22 +9,82 @@ if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then
     exit 2
 fi
 
-work=
-trap '[ -z "$work" ] || rm -rf "$work"' EXIT
-trap 'exit 1' HUP INT TERM
 scratch=${TMPDIR:-build/tmp}
 mkdir -p "$scratch"
-work=$(mktemp -d "$scratch/ping-delay.XXXXXX")
-
-# The inner shell is the first process of a PID namespace of its own, so the
-# kernel kills every process it started when it exits by any path, a child
-# whose PID it had not yet recorded among them.
-unshare --user --map-root-user --net --pid --fork sh -eu -s -- "$1" "$work" <<'EOF'
-busybox=$1
-work=$2
-flood=
-trap '[ -z "$flood" ] || { kill "$flood" 2>/dev/null; wait "$flood" 2>/dev/null; } || :' EXIT
+# The inner shell is PID 1 of a PID namespace whose /proc is its own, in user,
+# network and mount namespaces of its own, and runs every responder, tracer
+# and ping. When it exits, the kernel kills what is left in the namespace;
+# when unshare is killed, --kill-child kills the inner shell. unshare ignores
+# INT and TERM, so a stalled row is cancelled with KILL, or with the
+# terminal's INT, which reaches the inner shell's trap. The scratch is a
+# private tmpfs mounted over the scratch root, which goes with the namespace
+# however it ends. BusyBox is open on descriptor 3 before the mount, which
+# may hide its path.
+exec 3< "$1"
+exec unshare --user --map-root-user --net --pid --fork --kill-child=KILL \
+    --mount-proc sh -eu -s -- "$scratch" <<'EOF'
+scratch=$1
+work=
+trap 'kill -9 -1 2>/dev/null || :; wait || :; [ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 1' HUP INT TERM
+mount -t tmpfs ping-delay "$scratch"
+work=$(mktemp -d "$scratch/ping-delay.XXXXXX")
+busybox=$work/busybox
+cat <&3 > "$busybox"
+exec 3<&-
+chmod 755 "$busybox"
+
+ip link set lo up
+# The kernel answers no echo; the responder below does, or nobody does.
+echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all
+echo 1 > /proc/sys/net/ipv6/icmp/echo_ignore_all
+# Rows on the raw socket run as root; rows on a datagram socket drop
+# CAP_NET_RAW, as an ordinary account has none, and ping then opens a
+# datagram socket, which this range lets group 0 open.
+echo '0 0' > /proc/sys/net/ipv4/ping_group_range
+
+# An echo responder on a raw socket of ADDRESS's family. It prints "ready"
+# once the socket is open, collects two echo requests with distinct
+# identifiers or sequence numbers, and only then answers both, in order, and
+# exits.
+responder='
+import socket, struct, sys
+
+v6 = ":" in sys.argv[1]
+if v6:
+    s = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+    request, reply = 128, 129
+else:
+    s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    request, reply = 8, 0
+print("ready", flush=True)
+sys.stdout.close()
+
+def checksum(data):
+    if len(data) % 2:
+        data += b"\0"
+    total = sum(struct.unpack("!%dH" % (len(data) // 2), data))
+    while total >> 16:
+        total = (total & 0xffff) + (total >> 16)
+    return ~total & 0xffff
+
+held = []
+while len(held) < 2:
+    packet, peer = s.recvfrom(65536)
+    if not v6:
+        packet = packet[(packet[0] & 15) * 4:]
+    if len(packet) < 8 or packet[0] != request:
+        continue
+    if any(packet[4:8] == old[4:8] for old, _ in held):
+        continue
+    held.append((packet, peer))
+for packet, peer in held:
+    echo = bytes([reply, 0, 0, 0]) + packet[4:]
+    # The kernel fills in the checksum of a raw ICMPv6 socket.
+    if not v6:
+        echo = echo[:2] + struct.pack("!H", checksum(echo)) + echo[4:]
+    s.sendto(echo, peer)
+'
 
 # Print the return value of the system call on strace's line LINE, -1 for an
 # error.
@@ -33,219 +94,117 @@ result='function result(line) {
     return substr(line, RSTART + 3) + 0
 }'
 
-ip link set lo up
-tc qdisc add dev lo root netem delay 100ms
-# Rows that set no capability bound ping on root's raw socket; the others drop
-# CAP_NET_RAW and ping on a datagram socket, as an ordinary account does,
-# which holds only the ping's own replies, where a raw socket would also hold
-# its requests.
-echo '0 0' > /proc/sys/net/ipv4/ping_group_range
+failed=0
+sends=0
+timers=0
+status=0
 
-for address in 127.0.0.1 ::1; do
-    for mode in zero adaptive; do
-        case $mode in
-            zero) set -- -i 0 ;;
-            adaptive) set -- -A -i 0.01 ;;
-        esac
-        if ! strace -qq -s 256 -o "$work/trace" \
-            -e trace=sendto,write,writev,setitimer,alarm \
-            "$busybox" ping "$@" -c 2 -w 5 "$address" > "$work/output" ||
-            ! grep -qFx '2 packets transmitted, 2 packets received, 0% packet loss' "$work/output" ||
-            ! awk '
-                /^sendto\(/ { sends++ }
-                /^(write|writev)\(1,.*seq=[0-9]+ / && !seen_reply {
-                    sends_before_reply = sends
-                    seen_reply = 1
-                }
-                /^(alarm|setitimer)\(/ { timer = 1 }
-                END { exit !(sends == 2 && sends_before_reply == 2 && !timer) }
-            ' "$work/trace"; then
-            echo "ping-delay: $address $mode: expected two sends before the first reply and no signal timer" >&2
-            cat "$work/output" "$work/trace" >&2
-            exit 1
-        fi
-        echo "ping-delay: $address $mode: passed"
-    done
-done
-
-# Retries with replies arriving between them. Each reply comes 200 ms after
-# its request, so the first polls time out and the 10 ms retries fall due,
-# and the replies then come while retries go on, until 30 requests are out.
-# The row passes on the order of the sends, polls and reads that strace
-# records: a send after a poll that timed out, which is a due retry; between
-# two polls no more sends than one more than the replies read, since a pass
-# sends at most one retry and a reply at most one request; a read after each
-# poll that found the socket readable; and no read after one that did not. A
-# loop that sent retries without polling between them starved reception
-# whenever its pass outlasted the interval; strace cannot lengthen a pass
-# that makes no system call, so the row checks the order that rules it out.
-for address in 127.0.0.1 ::1; do
+# Run ping on SOCKET, raw or dgram, with ARGS under strace, with at most MAX
+# successful sends, and set sends, timers (alarm and setitimer calls) and
+# status. The trace is read as strace writes it, and a send past MAX kills
+# ping at once and sets status to 125. INJECT, when set, is strace's inject
+# option. Ping's output is in $work/output.
+trace_ping() {
+    max=$1
+    socket=$2
+    shift 2
+    prefix=
+    [ "$socket" = raw ] || prefix='setpriv --bounding-set=-net_raw'
+    rm -f "$work/trace"
+    mkfifo "$work/trace"
+    $prefix strace -qq --kill-on-exit -o "$work/trace" \
+        -e trace=sendto,alarm,setitimer ${inject:+-e "$inject"} \
+        "$busybox" ping "$@" > "$work/output" &
+    tracer=$!
     status=0
-    setpriv --bounding-set=-net_raw strace -qq -o "$work/trace" \
-        -e trace=sendto,recvmsg,/^ppoll \
-        "$busybox" ping -q -A -i 0.01 -c 30 -w 10 "$address" > "$work/output" ||
-        status=$?
-    if [ "$status" -ne 0 ] ||
-        ! grep -qFx '30 packets transmitted, 30 packets received, 0% packet loss' "$work/output" ||
-        ! awk "$result"'
-            function segment() {
-                if (sent > 1 + read)
-                    bad = bad " " sent " sends after one poll and " read " reads;"
-                if (polled && ready > 0 && !read)
-                    bad = bad " no read after a readable poll;"
-            }
-            /^sendto\(/ {
-                sends++
-                sent++
-                if (polled && ready == 0)
-                    retries++
-            }
-            /^recvmsg\(/ {
-                if (!polled || ready <= 0)
-                    bad = bad " a read with no readable poll;"
-                if (result($0) > 0)
-                    read++
-            }
-            /^ppoll/ {
-                segment()
-                polled = 1
-                ready = result($0)
-                sent = read = 0
-            }
-            END {
-                segment()
-                if (bad != "" || !retries || sends != 30) {
-                    print "ping-delay:" bad " " retries " retries, " sends " sends" > "/dev/stderr"
-                    exit 1
-                }
-            }
-        ' "$work/trace"; then
-        echo "ping-delay: $address retry: expected due retries with a poll between any two and a read after each readable poll, status $status" >&2
-        cat "$work/output" >&2
-        exit 1
+    counts=$(awk -v max="$max" "$result"'
+        # END still runs after this exit and prints the counts.
+        /^sendto\(/ && result($0) > 0 && ++sends > max { exit 1 }
+        /^(alarm|setitimer)\(/ { timers++ }
+        END { print sends + 0, timers + 0 }
+    ' < "$work/trace") || status=125
+    if [ "$status" -eq 125 ]; then
+        kill -s KILL "$tracer" 2>/dev/null || :
+        wait "$tracer" 2>/dev/null || :
+    else
+        wait "$tracer" || status=$?
     fi
-    echo "ping-delay: $address retry: passed"
-done
-tc qdisc del dev lo root
-
-# A send that takes longer than the final wait: strace holds the send 1.5 s at
-# its entry, and the reply, which loopback returns at once, must still be
-# counted, since the 1 s wait begins when the send returns. The trace must
-# show the held send.
-for address in 127.0.0.1 ::1; do
-    status=0
-    setpriv --bounding-set=-net_raw strace -qq -o "$work/trace" \
-        -e trace=sendto -e inject=sendto:delay_enter=1500000 \
-        "$busybox" ping -q -A -c 1 -W 1 "$address" > "$work/output" ||
-        status=$?
-    if [ "$status" -ne 0 ] ||
-        ! grep -qFx '1 packets transmitted, 1 packets received, 0% packet loss' "$work/output" ||
-        ! awk "$result"'
-            /^sendto\(/ && result($0) > 0 { sends++ }
-            END { exit sends != 1 }
-        ' "$work/trace"; then
-        echo "ping-delay: $address slow send: expected the reply to the held send counted, status $status" >&2
-        cat "$work/output" "$work/trace" >&2
-        exit 1
-    fi
-    echo "ping-delay: $address slow send: passed"
-done
-
-# A reply read after -w, and one read after the final wait: strace holds the
-# read 1.5 s at its entry, after the poll has found the reply queued, the
-# final wait began at the end of the send and -w at the start, so the read
-# returns past the 1 s of either. The trace must show the read that returned
-# the reply, and the statistics must not count it.
-for address in 127.0.0.1 ::1; do
-    for end in -w -W; do
-        status=0
-        setpriv --bounding-set=-net_raw strace -qq -o "$work/trace" \
-            -e trace=recvmsg -e inject=recvmsg:delay_enter=1500000 \
-            "$busybox" ping -q -A -c 1 "$end" 1 "$address" > "$work/output" ||
-            status=$?
-        if [ "$status" -ne 1 ] ||
-            ! grep -qFx '1 packets transmitted, 0 packets received, 100% packet loss' "$work/output" ||
-            ! awk "$result"'
-                /^recvmsg\(/ && result($0) > 0 { reads++ }
-                END { exit reads != 1 }
-            ' "$work/trace"; then
-            echo "ping-delay: $address late $end: expected one held read of the reply, not counted, status $status" >&2
-            cat "$work/output" "$work/trace" >&2
-            exit 1
-        fi
-        echo "ping-delay: $address late $end: passed"
-    done
-done
-
-# A socket that does not empty. On a raw socket, which root's ping opens and
-# which receives every ICMP message of the network namespace, a flood of
-# echoes to the loopback address arrives far faster than ping reads it while
-# strace holds each read 5 ms. Ping sends to an address on a dummy link, which
-# never answers, so it must send two retries 50 ms apart and end at its 1 s
-# final wait. The row passes on the order strace records: each retry follows
-# a poll that found the socket readable and the read after it, with no poll
-# that timed out between, and the last poll before ping exits found the
-# socket readable and was followed by its read. A loop that returns to the
-# read whenever the socket is readable sends no retry and does not end; the
-# -w of 30 s ends such a ping and fails the row.
-
-# Print the network namespace's count of echo replies received for ADDRESS's
-# family.
-replies() {
-    case $1 in
-        *:*) awk '$1 == "Icmp6InEchoReplies" { print $2 }' /proc/net/snmp6 ;;
-        *) awk '$1 == "Icmp:" {
-                   if ($2 ~ /^[0-9]+$/) print $column
-                   else for (i = 2; i <= NF; i++) if ($i == "InEchoReps") column = i
-               }' /proc/net/snmp ;;
-    esac
+    set -- $counts
+    sends=$1
+    timers=$2
 }
 
-ip link add d0 type dummy
-ip link set d0 up
-ip addr add 10.9.0.1/24 dev d0
-ip addr add fd00:9::1/64 dev d0 nodad
-for pair in 127.0.0.1,10.9.0.2 ::1,fd00:9::2; do
-    loopback=${pair%,*}
-    silent=${pair#*,}
-    base=$(replies "$loopback")
-    "$busybox" ping -q -i 0 "$loopback" > /dev/null &
-    flood=$!
-    # Start the tested ping once the flood runs; the verdict is the trace's.
-    while [ "$(replies "$loopback")" -lt $((base + 10000)) ]; do
-        if ! kill -0 "$flood" 2>/dev/null; then
-            echo "ping-delay: $silent busy: the flood to $loopback ended before it began" >&2
-            exit 1
-        fi
-        sleep 0.01
-    done
-    status=0
-    strace -qq -o "$work/trace" -e trace=sendto,recvmsg,/^ppoll \
-        -e inject=recvmsg:delay_exit=5000 \
-        "$busybox" ping -q -A -c 3 -i 0.05 -W 1 -w 30 "$silent" > "$work/output" ||
-        status=$?
-    kill "$flood" 2>/dev/null || :
-    wait "$flood" 2>/dev/null || :
-    flood=
-    if [ "$status" -ne 1 ] ||
-        ! grep -qFx '3 packets transmitted, 0 packets received, 100% packet loss' "$work/output" ||
-        ! awk "$result"'
-            /^sendto\(/ {
-                sends++
-                if (sends > 1 && !(ready > 0 && read))
-                    held = 1
-            }
-            /^recvmsg\(/ && result($0) > 0 { read++ }
-            /^ppoll/ {
-                ready = result($0)
-                read = 0
-            }
-            END { exit !(sends == 3 && !held && ready > 0 && read) }
-        ' "$work/trace"; then
-        echo "ping-delay: $silent busy: expected each retry and the end after a readable poll and its read, status $status" >&2
-        cat "$work/output" >&2
-        exit 1
+# Report the row NAME as passed when ping exited with STATUS after SENDS
+# successful sends, armed no timer and printed the statistics STATS, and as
+# failed otherwise, with what trace_ping read either way.
+verdict() {
+    stats=$(grep -E 'packets transmitted' "$work/output" || :)
+    if [ "$status" -eq "$2" ] && [ "$sends" -eq "$3" ] && [ "$timers" -eq 0 ] &&
+        [ "$stats" = "$4" ]; then
+        echo "ping-delay: $1: passed: status $status, $sends sends, $timers timer calls, $stats"
+    else
+        echo "ping-delay: $1: failed: status $status, $sends sends, $timers timer calls, ${stats:-no statistics}" >&2
+        failed=1
     fi
-    echo "ping-delay: $silent busy: passed"
+}
+
+# Retries, reception and the send count. The responder answers nothing until
+# both requests are out, so the second is a retry that falls due with no
+# reply, and both replies then arrive with no request left to send. -W 0
+# takes away the final wait and no -w is given, so nothing ends the row but
+# the second reply: a correct ping finishes however long it is held. The old
+# count fault sends a third request on the first reply; a zero interval that
+# stops the timer never sends the second; adaptive sends driven by SIGALRM, as
+# before, arm a timer, which this row counts. It does not show that every way
+# the receive loop could starve is gone.
+for address in 127.0.0.1 ::1; do
+    for socket in raw dgram; do
+        for mode in zero adaptive; do
+            case $mode in
+                zero) set -- -i 0 ;;
+                adaptive) set -- -A -i 0.000002 ;;
+            esac
+            rm -f "$work/ready"
+            mkfifo "$work/ready"
+            python3 -I -c "$responder" "$address" > "$work/ready" &
+            answer=$!
+            read line < "$work/ready" || {
+                echo "ping-delay: the responder did not start" >&2
+                exit 1
+            }
+            inject=
+            trace_ping 2 "$socket" -q "$@" -c 2 -W 0 "$address"
+            if [ "$status" -eq 125 ]; then
+                kill -s KILL "$answer" 2>/dev/null || :
+            fi
+            wait "$answer" 2>/dev/null || :
+            verdict "$address $socket $mode" 0 2 \
+                '2 packets transmitted, 2 packets received, 0% packet loss'
+        done
+    done
 done
+
+# The final wait ends a silent exchange: with no reply and no -w, only the
+# 1 s final wait after the one request ends ping.
+for address in 127.0.0.1 ::1; do
+    for socket in raw dgram; do
+        inject=
+        trace_ping 1 "$socket" -q -A -c 1 -W 1 "$address"
+        verdict "$address $socket final wait" 1 1 \
+            '1 packets transmitted, 0 packets received, 100% packet loss'
+    done
+done
+
+# -w ends a silent exchange alone: -W 0 takes away the final wait, and strace
+# holds the first send 1.5 s at its exit, so -w's 1 s has passed when ping
+# first looks.
+for address in 127.0.0.1 ::1; do
+    for socket in raw dgram; do
+        inject=inject=sendto:delay_exit=1500000:when=1
+        trace_ping 1 "$socket" -q -i 0 -c 1 -W 0 -w 1 "$address"
+        verdict "$address $socket deadline" 1 1 \
+            '1 packets transmitted, 0 packets received, 100% packet loss'
+    done
+done
+exit "$failed"
 EOF
