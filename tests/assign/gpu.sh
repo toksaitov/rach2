@@ -172,15 +172,39 @@ give_back()
     fi
     [ "$(driver)" = i915 ]
 }
+# reaped: wait up to 30 s for QEMU, process $pid, sent SIGKILL, to end,
+# and reap it, its status in $status; 1, and a line on stderr with its wait
+# channel, when it is still there, as a QEMU stuck in the kernel is. A
+# child that has ended stays until it is reaped, so its state is read, Z.
+reaped()
+{
+    n=30
+    while :; do
+        st=$(sed -n 's/^[0-9]* (.*) \(.\).*/\1/p' "/proc/$pid/stat" 2>/dev/null)
+        if [ -z "$st" ] || [ "$st" = Z ]; then
+            status=0
+            wait "$pid" 2>/dev/null || status=$?
+            return 0
+        fi
+        n=$((n - 1))
+        if [ "$n" -le 0 ]; then
+            echo "gpu: kill: QEMU $pid still in $(cat "/proc/$pid/wchan" 2>/dev/null) 30 s after SIGKILL" >&2
+            return 1
+        fi
+        sleep 1
+    done
+}
 # cleanup: kill QEMU and give the function back, whatever ended the script.
 # Every signal is ignored from here on, so that a second TERM cannot cut the
-# give-back short.
+# give-back short. A QEMU that does not end is left, and the give-back,
+# which vfio-pci refuses while QEMU holds the function, is tried all the
+# same.
 cleanup()
 {
     trap '' HUP INT TERM QUIT USR1 USR2 PIPE ALRM
     if [ -n "$pid" ]; then
         kill -KILL "$pid" 2>/dev/null || :
-        wait "$pid" 2>/dev/null || :
+        reaped || :
     fi
     if [ "$taken" = 1 ]; then
         if ! give_back; then
@@ -302,16 +326,26 @@ while kill -0 "$pid" 2>/dev/null; do
     waited=$((waited + 1))
 done
 status=0
-wait "$pid" || status=$?
+if [ "$killed" = 1 ] || [ -n "$reason" ]; then
+    reaped || fail "QEMU did not end 30 s after SIGKILL"
+else
+    wait "$pid" || status=$?
+fi
 pid=
 cat "$out/console"
 cat "$out/qemu.err" >&2
 [ -z "$token" ] || ! grep -q -F -e "$token" "$out/console" || seen=1
 
 # The function goes back whatever the guest did; the verdict comes after.
+# HUP, INT and TERM wait until it is back, so that cleanup cannot give it
+# back a second time while `taken` is still set.
+trap '' HUP INT TERM
 back=1
 give_back || back=0
 taken=0
+trap 'trap "" HUP INT TERM; failed=1; exit 129' HUP
+trap 'trap "" HUP INT TERM; failed=1; exit 130' INT
+trap 'trap "" HUP INT TERM; failed=1; exit 143' TERM
 [ -z "$reason" ] || fail "$reason"
 if [ "$killed" = 1 ]; then
     [ "$status" = 137 ] || fail "QEMU exited with $status after SIGKILL"
