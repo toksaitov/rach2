@@ -267,6 +267,7 @@ constVariable:*tests/exitprobe.c
 constVariable:*tests/limitprobe.c
 constVariable:*tests/lockwaitprobe.c
 constVariable:*tests/mixprobe.c
+constVariable:*tests/mountprobe.c
 constVariable:*tests/loopdevprobe.c
 constVariable:*tests/sigprobe.c
 constVariable:*tests/wow64probe.c

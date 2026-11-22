@@ -1,6 +1,7 @@
 /* A held name identifies one directory entry, not every link to an inode. */
 #include "name.h"
 #include "vfs.h"
+#include "walkseq.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../lib/spinlock.h"
@@ -26,11 +27,6 @@ struct vfs_name {
 static struct vfs_name *names;
 static struct spinlock names_lock = SPINLOCK_INIT_NAMED("names");
 
-/* The changes of names under way (`vfs_name_change_begin`), and a count
- * that moves at each one's beginning and end, both under `names_lock`. */
-static uint32_t names_changing;
-static uint32_t names_seq;
-
 /** The mutable base whose operations implement this mount's file system. */
 static struct vfs_mount *name_base(struct vfs_mount *mnt)
 {
@@ -40,11 +36,12 @@ static struct vfs_mount *name_base(struct vfs_mount *mnt)
 /**
  * A record of `leaf` in `parent`, held once, on the list, and `deleted`
  * from the start when that is set: 0 with it in `*out`; -ENOMEM; or, with
- * `checked`, -EAGAIN when a change of names began since `seq` was read
- * (`vfs_name_seq`), with nothing kept. The check and the insert are one
- * step under the lock, so a change that begins later finds the record.
+ * `checked`, -EAGAIN when a change began since `seq` was read
+ * (`vfs_seq_read`), with nothing kept. The check and the insert are one
+ * step under `names_lock`, which a change takes after its beginning to
+ * update the records, so a change that begins later finds the record.
  */
-static int name_new(const struct vfs_ref *parent, const char *leaf, int checked, uint32_t seq,
+static int name_new(const struct vfs_ref *parent, const char *leaf, int checked, uint64_t seq,
                     int deleted, struct vfs_name **out)
 {
     struct vfs_name *name = kzalloc(sizeof(*name));
@@ -63,7 +60,7 @@ static int name_new(const struct vfs_ref *parent, const char *leaf, int checked,
     k_strncpy(name->leaf, leaf, sizeof(name->leaf));
     name->leaf[sizeof(name->leaf) - 1] = '\0';
     flags = spin_lock_irqsave(&names_lock);
-    moved = checked && (names_changing != 0 || names_seq != seq);
+    moved = checked && !vfs_seq_still(seq);
     if (!moved) {
         name->next = names;
         names = name;
@@ -87,7 +84,7 @@ int vfs_name_capture(const struct vfs_ref *parent, const char *leaf, struct vfs_
     return name_new(parent, leaf, 0, 0, 0, out);
 }
 
-int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
+int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint64_t seq,
                         struct vfs_name **out)
 {
     *out = NULL;
@@ -106,48 +103,14 @@ int vfs_name_capture_deleted(const struct vfs_ref *parent, const char *leaf, str
     return name_new(parent, leaf, 0, 0, 1, out);
 }
 
-int vfs_name_seq(uint32_t *seq)
-{
-    uint32_t flags = spin_lock_irqsave(&names_lock);
-    int calm = names_changing == 0;
-
-    *seq = names_seq;
-    spin_unlock_irqrestore(&names_lock, flags);
-    return calm;
-}
-
-int vfs_name_seq_peek(uint32_t *seq)
-{
-    *seq = *(volatile const uint32_t *)&names_seq;
-    k_barrier();
-    return *(volatile const uint32_t *)&names_changing == 0;
-}
-
-int vfs_name_seq_still(uint32_t seq)
-{
-    uint32_t flags = spin_lock_irqsave(&names_lock);
-    int still = names_changing == 0 && names_seq == seq;
-
-    spin_unlock_irqrestore(&names_lock, flags);
-    return still;
-}
-
 void vfs_name_change_begin(void)
 {
-    uint32_t flags = spin_lock_irqsave(&names_lock);
-
-    names_changing++;
-    names_seq++;
-    spin_unlock_irqrestore(&names_lock, flags);
+    vfs_seq_begin();
 }
 
 void vfs_name_change_end(void)
 {
-    uint32_t flags = spin_lock_irqsave(&names_lock);
-
-    names_changing--;
-    names_seq++;
-    spin_unlock_irqrestore(&names_lock, flags);
+    vfs_seq_end();
 }
 
 struct vfs_name *vfs_name_ref(struct vfs_name *name)
@@ -280,21 +243,21 @@ void vfs_name_unlock_changes(struct vfs_mount *mnt)
     }
 }
 
-/** Read the whole path at one rename sequence. The caller's namespace lock
+/** Read the whole path at one walk sequence. The caller's namespace lock
  * excludes changes on other types. On a file-locked type, a racing change
  * sends even a failed walk to one retry with the base mount's lock held. */
 int vfs_name_path(struct vfs_name *name, void *node, char *out, uint32_t cap, int *deleted)
 {
     struct vfs_mount *base = name_base(name->parent.mnt);
-    uint32_t seq;
+    uint64_t seq;
     int rc;
 
     if (!base->type->file_locked) {
         return name_path_once(name, node, out, cap, deleted);
     }
-    if (vfs_name_seq(&seq)) {
+    if (vfs_seq_read(&seq)) {
         rc = name_path_once(name, node, out, cap, deleted);
-        if (vfs_name_seq_still(seq)) {
+        if (vfs_seq_still(seq)) {
             return rc;
         }
     }

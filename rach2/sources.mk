@@ -62,6 +62,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/sleeplock.c \
     sys/fs/nodelock.c \
     sys/fs/name.c \
+    sys/fs/walkseq.c \
     sys/fs/dcache.c \
     sys/fs/fat32.c \
     sys/fs/fat32name.c \

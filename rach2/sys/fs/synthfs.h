@@ -356,6 +356,17 @@ struct synth_dir {
  */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 
+/**
+ * Write into `out`, of `cap` bytes, the path of the synthetic directory `vp`
+ * classifies, as `synth_dir_path` writes it, with the coordinates taken from
+ * the fields of `vp` its kind uses: the process and thread numbers as the
+ * path spelled them, the number of a vector, card or bus directory, the
+ * entry of /proc/sys, the node and key of /sys, the row of /dev's table, or
+ * the id of a directory made under /dev. Whether the directory still exists
+ * is for the caller to ask.
+ */
+void synth_vpath_dir(const struct vpath *vp, char *out, int cap);
+
 /*
  * The directories of /dev, apart from pts, which devpts owns: a row each,
  * in the order /dev lists them. A row's devices are devfs's nodes named

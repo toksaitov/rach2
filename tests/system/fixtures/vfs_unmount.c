@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define VFS_FREE             0
 #define VFS_ACTIVE           2
 #define VFS_UNMOUNTING       3
 #define VFS_COVERED_PATH_MAX 256
@@ -68,7 +69,8 @@ struct vfs_mount {
     struct vfs_mount *parent;
     void *root, *covered;
     const char *covered_path;
-    int state, refs, inprogress, drain_wq, claim, opens, releases;
+    int state, inprogress, drain_wq, claim, opens, releases;
+    uint32_t refs;
     struct vfs_mount *bind_of;
 };
 struct vfs_ref {
@@ -185,12 +187,6 @@ static void bind_let_go(struct vfs_mount *m)
 static void fd_unkeep(struct fd_kept *kept)
 {
     (void)kept;
-}
-/** Every mount in the model is visible to the caller. */
-static int vfs_mount_seen(const struct vfs_mount *m)
-{
-    (void)m;
-    return 1;
 }
 /** Count a reference released. */
 static void vfs_ref_release(struct vfs_ref *r)
@@ -338,14 +334,18 @@ static void loop_unmounted(struct block_device *d)
     (void)d;
 }
 
-/** Whether another mount namespace sees `m`: none, as the caller's is the
- * only one, so that an unmount never only hides the mount from the caller. */
-static int vfs_mount_shared(const struct vfs_mount *m)
+/* The record another mount namespace has as its copy of a mount, which the
+ * caller's does not see, or NULL. */
+static struct vfs_mount *unseen;
+
+/** Whether the caller's mount namespace sees `m`: every record but
+ * `unseen`, so that an unmount never only hides the mount from the caller
+ * (`held_unseen`) unless a case says so. */
+static int vfs_mount_seen(const struct vfs_mount *m)
 {
-    (void)m;
-    return 0;
+    return m != unseen;
 }
-/** Take `m` from the caller's view; never reached, as no mount is shared. */
+/** Take `m` from the caller's view; never reached, as every mount is seen. */
 static void vfs_mount_hide(struct vfs_mount *m)
 {
     (void)m;
@@ -371,6 +371,24 @@ static unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int valu
 
 /* The tree's sequence, which an unmount moves. */
 static uint32_t tree_seq;
+
+/** Move the tree's sequence, as vfs.c's change of the mounts does; the
+ * fixture keeps no generation of the mounts. */
+static void mounts_moved(void)
+{
+    tree_seq++;
+}
+
+/* The count of unmounts draining, and the queue a namespace's making waits
+ * on for it, which the fixture never waits on. */
+static uint32_t unmounts_draining;
+static int unmounts_wq;
+
+/** Wake the waiters on `q`; the fixture has none. */
+static void wq_wake_all(int *q)
+{
+    (void)q;
+}
 
 static int unmount_mount(struct vfs_mount *m);
 
@@ -415,6 +433,7 @@ static void setup(void)
     walk_node = NULL;
     fm_unmounts = fm_misplaced = 0;
     fm_last = NULL;
+    unseen = NULL;
 }
 
 /** Count a failed case, `name`, and report it. */
@@ -550,6 +569,18 @@ int main(void)
     check(vfs_do_umount("/a/b", 0) == -EIO && records[4].state == VFS_ACTIVE,
           "a target outside the caller's root matches nothing");
     setup();
+    caller_fs.root_mnt = &records[0];
+    caller_fs.root_node = &caller_fs;
+    root_path = "/";
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !records[4].state && !unmounts_draining,
+          "a target named from a root of path / is found by its recorded name");
+    setup();
+    records[5].parent = &records[3];
+    records[5].covered_path = records[4].covered_path;
+    unseen = &records[5];
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !records[4].state && records[5].state == VFS_ACTIVE,
+          "another namespace's copy of the same name is not a second candidate");
+    setup();
     lookup_error = 0;
     disks[3].flags = 0;
     walk_node = &file_node;
@@ -569,6 +600,6 @@ int main(void)
     bind_cases();
     if (failures)
         return 1;
-    puts("vfs-unmount: result: 26 checks passed");
+    puts("vfs-unmount: result: 28 checks passed");
     return 0;
 }

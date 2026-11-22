@@ -649,11 +649,24 @@ struct vfs_mount {
     uint64_t aged;
     int claim;       /* the devfs claim on the source's sectors, or -1 */
     char source[32]; /* the source string mount(2) was given, for /proc/mounts */
-    /* The ids of the live mount namespaces that see it (proc/ns.h): a
-     * mount made in one is seen there and in the namespaces made from it
-     * afterwards, and a mount of the boot by the first and those made from
-     * it. Its words are freed with the record (vfs_ns.c). */
+    /* The ids of the live mount namespaces that see it (proc/ns.h): the
+     * one it was made or copied in, or none once it is hidden. The memfd
+     * mount, which no walk reaches, is the one record every namespace
+     * sees. Its words are freed with the record (vfs_ns.c). */
     struct idset ns_seen;
+    /* For the copy a new mount namespace made of a mount
+     * (`vfs_mntns_copy`), the record it was copied from, and the record
+     * that one was first copied from, the mount of the boot or of mount(2)
+     * at the start of the chain; NULL for every other mount. Compared, never
+     * followed, since the record copied may be gone. */
+    const struct vfs_mount *copy_of;
+    const struct vfs_mount *origin;
+    /* 1 for the mount that pivot_root made the root of the mount namespace
+     * that sees it, and for the copies made of that mount, where setns puts
+     * a process that joins the namespace (`vfs_mntns_joined`); 0 for every
+     * other mount, and in a namespace with none the root is the mount it
+     * sees that has no parent. */
+    int ns_root;
     /* The inotify watches on the file system, counted on its base mount
      * (`inotify_mount_watched`); changes under the big lock and is read
      * without it as one word. */
@@ -802,18 +815,37 @@ int vfs_resolve_fd(const char *path, int flags, struct vfs_ref *out, char *fd_pa
 #define VFS_CACHED_MISS 1
 
 /**
- * Resolve the absolute path `path` as `vfs_resolve` does, from the name
- * cache alone and without the big lock: 0 with `out` held and its mount
- * entered, on a type that sets `name_cache`; -ENOENT for a name the cache
- * holds as absent; or VFS_CACHED_MISS with nothing taken, for a path the
- * caller resolves again under the big lock. `flags` takes VFS_WALK_NOFOLLOW,
- * VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a miss. With `entry` not
- * NULL a regular file at the last name has its directory entry recorded
- * there, as `vfs_resolve_entry` records it, and a change of names that the
- * walk may have raced makes it a miss (`vfs_name_capture_at`); `*entry` is
- * NULL on every other answer.
+ * Resolve `path` as `vfs_resolve` does, from the name cache alone and
+ * without the big lock: an absolute path from the caller's root, and a
+ * relative one from `start`, a directory the caller holds. 0 with `out`
+ * held and its mount entered, on a type that sets `name_cache`; -ENOENT for
+ * a name the cache holds as absent; or VFS_CACHED_MISS with nothing taken,
+ * for a path the caller resolves again under the big lock. `seq` is the
+ * walk sequence the caller read with no change under way, before it took
+ * `start` (`vfs_seq_read`, walkseq.h): an answer stands only if nothing has
+ * changed what a path names since, and is a miss otherwise. `flags` takes
+ * VFS_WALK_NOFOLLOW, VFS_WALK_REAL_IDS and VFS_WALK_LOCK; any other is a
+ * miss. With `entry` not NULL a regular file at the last name has its
+ * directory entry recorded there, as `vfs_resolve_entry` records it;
+ * `*entry` is NULL on every other answer.
  */
-int vfs_resolve_cached(const char *path, int flags, struct vfs_ref *out, struct vfs_name **entry);
+int vfs_resolve_cached(const struct vfs_ref *start, uint64_t seq, const char *path, int flags,
+                       struct vfs_ref *out, struct vfs_name **entry);
+
+/**
+ * The caller's working directory for a walk without the big lock
+ * (`vfs_resolve_cached`): its path into `text`, a path page, and, on a type
+ * the cached walk may stand on, its pair, entered and held, into `start`,
+ * both read at once under the lock of the caller's `fs_struct`. 0 with
+ * `start` taken, which `vfs_cached_release` gives back; -1 with `start`
+ * NULL for a directory the cached walk does not start from. Nothing here
+ * sleeps.
+ */
+int vfs_cwd_take(char *text, struct vfs_ref *start);
+
+/** Give back what `vfs_cwd_take` took, if anything; may sleep, for a last
+ * put, which takes the big lock. */
+void vfs_cached_release(struct vfs_ref *ref);
 
 /**
  * Resolve `path` from the caller's root, as `vfs_resolve` does with no
@@ -834,14 +866,14 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
  * held by the caller, where a relative path starts and, for BENEATH and
  * IN_ROOT, the root of the walk; `anchor_real` is its path from the
  * caller's root, `anchor_len` bytes, as `vfs_resolve_real` gives it, and
- * `seq` the tree's sequence (`vfs_tree_seq`) when the call began.
+ * `seq` the walk sequence (`vfs_seq_read`, walkseq.h) when the call began.
  */
 struct vfs_scope {
     uint32_t resolve; /* VFS_RESOLVE_* */
     struct vfs_ref anchor;
     const char *anchor_real;
     uint32_t anchor_len;
-    uint32_t seq;
+    uint64_t seq;
 };
 
 /**
@@ -874,27 +906,22 @@ struct vfs_scope {
 int vfs_resolve_scoped(const struct vfs_scope *scope, const char *path, int flags,
                        struct vfs_ref *out, char *leaf, char *real);
 
-/**
- * A count that moves at every rename and every change of what is mounted
- * where: Linux's rename and mount sequences in one, which a scoped walk's
- * `..` and an openat2's replay compare.
- */
-uint32_t vfs_tree_seq(void);
-
-/** Move the tree's sequence (`vfs_tree_seq`), before and after a rename. */
-void vfs_tree_changed(void);
+/** Move the walk sequence (`vfs_seq_begin`, walkseq.h) for a change of
+ * what a mount namespace sees mounted where: a mount, an unmount, a copy, a
+ * hide, a `pivot_root`, or a process joining or leaving a namespace. */
+void vfs_mounts_changed(void);
 
 /**
  * Make every walk of the calling thread a replay of the walk an openat2
  * checked, until `vfs_replay_end`: the path it is given is the real path
  * that walk took, with no `..` and no link but those of /proc to an object,
  * which `magic` allows, so a replay that meets another link, or finds the
- * tree's sequence moved from `seq`, answers -EAGAIN instead of going where
+ * walk sequence moved from `seq`, answers -EAGAIN instead of going where
  * the checked walk did not. A non-NULL `xdev`, which the caller keeps held,
  * is the mount NO_XDEV preserves, including when a descriptor link changes
  * its target before the replay follows it.
  */
-void vfs_replay(int magic, uint32_t seq, struct vfs_mount *xdev);
+void vfs_replay(int magic, uint64_t seq, struct vfs_mount *xdev);
 
 /**
  * End the calling thread's replay (`vfs_replay`). Returns 1 when a walk of
@@ -954,31 +981,23 @@ int vfs_mount_seen(const struct vfs_mount *m);
  * or -1 when the caller's namespace id lies past that word. */
 int vfs_mount_seen_word(const struct vfs_mount *m);
 
-/** Whether a live mount namespace other than the caller's sees the mount
- * `m`, which a change made only for the caller's must then leave alone. */
-int vfs_mount_shared(const struct vfs_mount *m);
-
 /** Begin a remount, which ends at the matching `vfs_mntns_release`: wait
- * for the remount under way to end, then hold off other remounts and the
- * making of mount namespaces (`vfs_mntns_wait` in proc/ns.h) until the
- * release. A remount that checks that a mount is not shared
- * (`vfs_mount_shared`) and sleeps before it stores the mount's flags thus
- * finds the flags, and the namespaces that may see the mount, as it left
- * them. Rach2's own lock: Linux 6.12 serialises a remount on the
- * superblock's s_umount and the mount hash lock instead. Under the big
- * lock; the hold may sleep, before it takes anything, and the release
- * does not. */
+ * for the remount under way to end, then hold off other remounts until the
+ * release, so that a remount that sleeps between its checks and its store
+ * of the flags finds the flags as it left them. Rach2's own lock: Linux
+ * 6.12 serialises a remount on the superblock's s_umount and the mount
+ * hash lock instead. Under the big lock; the hold may sleep, before it
+ * takes anything, and the release does not. */
 void vfs_mntns_hold(void);
 void vfs_mntns_release(void);
 
 /**
  * Begin a remount of `m` to `flags` by a caller without privilege over the
  * mount: as `vfs_mntns_hold`, then, under the hold, -EPERM, with the hold
- * let go, when another live mount namespace sees `m` (`vfs_mount_shared`)
- * or the remount would clear a flag of VFS_MS_LOCKED that `m` has; 0,
- * holding, otherwise. The checks follow the wait, so that a remount that
- * waited behind another cannot clear a restriction the other set. Under
- * the big lock; may sleep before it takes anything.
+ * let go, when the remount would clear a flag of VFS_MS_LOCKED that `m`
+ * has; 0, holding, otherwise. The check follows the wait, so that a
+ * remount that waited behind another cannot clear a restriction the other
+ * set. Under the big lock; may sleep before it takes anything.
  */
 int vfs_mntns_hold_unprivileged(const struct vfs_mount *m, uint32_t flags);
 
@@ -995,6 +1014,23 @@ int vfs_mount_view_new(struct vfs_mount *m);
 
 /** Free the words of the view of `m`, whose record is let go of. */
 void vfs_mount_view_free(struct vfs_mount *m);
+
+/**
+ * The copy of the mount `c` for the mount namespace of id `id`, under
+ * `parent`, the copy of the mount `c` is on or, when the namespace copies
+ * none of it, that mount itself; NULL for the root of the copied tree. It
+ * is a bind of the file system `c` shows, from the root `c` shows, with the
+ * flags of `c` alone, its place and its source, active and seen by `id`
+ * alone; it holds the root and the covered node again and counts on its
+ * parent and its base. NULL when the heap has no room. Under the big lock;
+ * it does not sleep (vfs.c).
+ */
+struct vfs_mount *vfs_mount_copy(struct vfs_mount *c, struct vfs_mount *parent, uint32_t id);
+
+/** The mount the caller's mount namespace sees as `m`: `m` itself, or the
+ * copy the namespace has of it, by `copy_of` with `immediate` and by
+ * `origin` otherwise; NULL when it has none. */
+const struct vfs_mount *vfs_mount_seen_as(const struct vfs_mount *m, int immediate);
 
 /** Unmount the active mount `m` as umount2(2) without flags does, with
  * nothing left to check, for the end of a mount namespace: 0, or -EBUSY
@@ -1368,9 +1404,11 @@ void vfs_reap_detached(void);
  * before still reaches it.
  * When `put_old` names the new root itself nothing is shown or taken: Linux
  * stacks the old root over the new, where it stays until a lazy unmount
- * through a descriptor or a working directory on it. On success `*out` has
- * the new root, held, for the system call layer to move the processes'
- * roots to and release. 0, or the resolver's errors; ENOTDIR for a
+ * through a descriptor or a working directory on it. The new root's mount
+ * becomes the namespace's own root (`ns_root`), where setns puts a process
+ * that joins it. On success `*out` has the new root, held, for the system
+ * call layer to move the processes' roots to and release. 0, or the
+ * resolver's errors; ENOTDIR for a
  * `put_old` that is no directory; EINVAL for a `new_root` that is no
  * mount's root, is in a synthetic type or is a permanent mount, for a
  * caller whose root is no mount's root, or for a `put_old` not at or below
@@ -1398,18 +1436,15 @@ int vfs_do_bind(const char *source, const char *target, int rec);
 /**
  * mount(2) with MS_REMOUNT and MS_BIND: the flags of the mount `m` alone
  * become `flags`, as Linux changes a bind mount's; its file system is not
- * remounted. Without `privileged`, for a caller without privilege over the
- * mount, the remount is -EPERM for a mount another live namespace sees or
- * a clear of a flag of VFS_MS_LOCKED that `m` has, judged after the wait
- * for another remount (`vfs_mntns_hold_unprivileged`). The caller holds
- * `m` across the call, which may sleep. 0, -EINVAL for a flag not listed
- * above, -EBUSY for a mount
- * that is not active, for a change of the flags of a mount that another
- * live mount namespace sees too (`vfs_mount_shared`), which Linux would
- * make on the caller's namespace's copy of the mount alone, or, made
- * read-only, through which a description is open for writing
- * (`fd_mount_readonly_begin`), as Linux's mnt_make_readonly answers
- * (fs/namespace.c). A read-only file system
+ * remounted, and the copies other mount namespaces have of `m` keep their
+ * own. Without `privileged`, for a caller without privilege over the
+ * mount, the remount is -EPERM for a clear of a flag of VFS_MS_LOCKED that
+ * `m` has, judged after the wait for another remount
+ * (`vfs_mntns_hold_unprivileged`). The caller holds `m` across the call,
+ * which may sleep. 0, -EINVAL for a flag not listed above, -EBUSY for a
+ * mount that is not active or, made read-only, through which a description
+ * is open for writing (`fd_mount_readonly_begin`), as Linux's
+ * mnt_make_readonly answers (fs/namespace.c). A read-only file system
  * still refuses writes if the mount flag is cleared.
  */
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged);
@@ -1424,12 +1459,13 @@ int vfs_remount_bind(struct vfs_mount *m, uint32_t flags, int privileged);
  * (BLOCK_READ_ONLY), or a mount that has failed a write, stays read-only,
  * EROFS. The options of `options`, mount(2)'s data or NULL, go to the
  * type's `remount` too, and a type without one ignores them. EINVAL for a
- * flag not listed above, EBUSY for a mount that is not active or for a
- * change of the per-mount flags of `m` while another live mount namespace
- * sees it (`vfs_mount_shared`), checked before anything changes, EIO for
- * one whose device has gone, or the type's error. A change to read-only first
- * refuses new writers and is EBUSY while a description open for writing on
- * the file system lives, a writable shared mapping's among them
+ * flag not listed above, EBUSY for a mount that is not active, EIO for
+ * one whose device has gone, or the type's error. The per-mount flags
+ * change on `m` alone, and the file system's through every mount that
+ * shows it, the copies other mount namespaces have among them. A change
+ * to read-only first refuses new writers and is EBUSY while a description
+ * open for writing on the file system lives, a writable shared mapping's
+ * among them
  * (`fd_mount_readonly_begin`), as Linux's sb_prepare_remount_readonly
  * (fs/namespace.c:665); then the dirty pages of its files' shared mappings
  * are written (`filemap_sync_mount`), whose failure is the answer, with the

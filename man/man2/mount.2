@@ -162,16 +162,9 @@ the filesystem changes through every mount that shows it.
 Only the
 named mount takes the per-mount flags.
 A remount that supplies no atime flag keeps the named mount's atime flags.
-A remount, with
-.Dv MS_BIND
-or without, that would change the per-mount flags of a mount another live
-mount namespace sees too is
-.Er EBUSY
-and changes nothing, since the namespaces share the mount where Linux
-gives each namespace a copy of its own; to seal a namespace's view, bind
-the mounts within it first, since a bind is seen by its maker's namespace
-alone, and remount the binds.
-A remount that leaves the per-mount flags as they are is not refused.
+Each mount namespace has a copy of its own of every mount it inherited, as
+on Linux, so the per-mount flags change in the caller's namespace alone,
+and a file system's flags through every namespace's mount of it.
 Other bits, including
 .Dv MS_MOVE ,
 are refused.
@@ -248,12 +241,14 @@ or
 .Dv MS_UNBINDABLE ,
 with
 .Dv MS_REC
-or without, succeeds and changes nothing, since a mount is seen in the
-namespaces that had it when it was made and in none it is made in later.
+or without, succeeds and changes nothing, since a mount is made in the
+caller's namespace alone and a namespace made later has a copy of it,
+with no propagation between them.
 .Pp
-A mount is made in the caller's mount namespace alone, and an unmount
-removes it from that namespace, and from the system when no other
-namespace has it; see
+A mount is made in the caller's mount namespace alone.
+An unmount removes it from that namespace; when the only references left
+on it are the copies other namespaces made of it, it stays, seen by none,
+and its file system is unmounted once the last of them goes; see
 .Xr unshare 2 .
 See
 .Xr mount 8
@@ -638,8 +633,9 @@ the old root can be let go of while the new one, which was below it, is
 in use.
 A mount no live mount namespace sees any more is unmounted, as below,
 once nothing holds it.
-A permanent mount may be taken from the view and stays mounted; the root
-of the mount table returns
+A permanent mount may be taken from the view and stays mounted; a mount
+with no parent, the root of the mount table or a namespace's copy of it,
+returns
 .Er EINVAL .
 .Pp
 The mount stops accepting new operations and waits for operations
@@ -724,8 +720,7 @@ the source overlaps a claimed range or an open raw writer;
 the source device is already mounted; an unmount is prevented by
 references; a remount read-only finds a description or a writable loop
 attachment open for writing, or another such remount of the mount under
-way; or a remount would change the per-mount flags of a mount another live
-mount namespace sees.
+way.
 Unmounting a permanent mount without
 .Dv MNT_DETACH
 also returns this error.
@@ -794,7 +789,8 @@ passes this check and fails with
 .Er ENODEV .
 Such a caller may remount with
 .Dv MS_BIND
-only a mount that no other live mount namespace sees, and only to add
+only a mount of its own namespace, which another namespace's copy of it
+does not share, and only to add
 .Dv MS_RDONLY ,
 .Dv MS_NOSUID ,
 .Dv MS_NODEV

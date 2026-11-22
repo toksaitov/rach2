@@ -500,28 +500,33 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
 
 /* The members in order: the sector size, the count, the flags, the deadline's
    period and its periods, the most sectors a request moves (0 for a page),
-   the read and write calls, `submit` and `flush`, the device this one's
-   bytes live on, and the driver's own pointer. */
+   the read and write calls, `submit` and `flush`, `write_cached` and
+   `flush_now`, the device this one's bytes live on, and the driver's own
+   pointer. */
 static block_device_t fake = {
-    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
+    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, 0,
+    0,   image_small};
 static block_device_t other = {
-    512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_big};
+    512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, 0, 0, image_big};
 /* A device whose bytes live on `fake` once a row sets its `backing`: what a
    loop device is to the volume holding its file. Its own reads and writes
    go through `fake`, so taking one of its blocks and then one of `fake`'s is
    the order the rules must allow, and the other way round is the one they
    must refuse. */
 static block_device_t nested = {
-    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
+    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, 0,
+    0,   image_small};
 /* A device that takes 64 sectors a request, as the ATA disk does, for the
    run fill and the runs of a sync. */
 static block_device_t wide = {
-    512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 64, fake_read, fake_write, 0, 0, 0, image_wide};
+    512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 64, fake_read, fake_write, 0, 0, 0, 0,
+    0,   image_wide};
 /* A device that takes 2048 sectors a request, as the AHCI disk does: a
    fill's run is the cache's most, 256 blocks. */
 static unsigned char image_vast[WIDE_SECTORS * 512];
 static block_device_t vast = {
-    512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 2048, fake_read, fake_write, 0, 0, 0, image_vast};
+    512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 2048, fake_read, fake_write, 0, 0, 0, 0,
+    0,   image_vast};
 
 /** The block layer's request, done by the device's own read or write. */
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)

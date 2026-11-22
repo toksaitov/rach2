@@ -14,26 +14,14 @@ struct vfs_ref;
  * those types have no hard links. Return 0, or -ENOMEM. */
 int vfs_name_capture(const struct vfs_ref *parent, const char *leaf, struct vfs_name **out);
 /* `vfs_name_capture` for a walk without the big lock that read `seq` with
- * `vfs_name_seq` before it began: -EAGAIN, with nothing kept, when a change
- * of names has begun since, which the walk may have raced. */
-int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint32_t seq,
+ * `vfs_seq_read` (walkseq.h) before it began: -EAGAIN, with nothing kept,
+ * when a change has begun since, which the walk may have raced. */
+int vfs_name_capture_at(const struct vfs_ref *parent, const char *leaf, uint64_t seq,
                         struct vfs_name **out);
-/* The count of changes of names into `*seq`; 1 when none is under way, 0
- * when one is, which a walk without the big lock leaves to the full walk. */
-int vfs_name_seq(uint32_t *seq);
-/* `vfs_name_seq` without the lock, for a walk that compares the count
- * again only if it climbs a `..` (`vfs_name_seq_still`): a change begun
- * after the read moves the count, and one under way before it is the 0
- * returned. */
-int vfs_name_seq_peek(uint32_t *seq);
-/* Whether no change of names is under way and none has begun since `seq`
- * was read (`vfs_name_seq`, `vfs_name_seq_peek`), as Linux's walk under RCU
- * checks the sequence of the directory it climbs from before it trusts the
- * parent (fs/namei.c:1990-1995). */
-int vfs_name_seq_still(uint32_t seq);
-/* Bracket an unlink, rmdir or rename, from the name cache's first forget to the
- * records' update, so that a record captured without the big lock across
- * it is refused (`vfs_name_capture_at`). Under the big lock; may nest. */
+/* Bracket an unlink, rmdir or rename, from the name cache's first forget to
+ * the records' update, with the walk sequence (`vfs_seq_begin`), so that a
+ * record captured without the big lock across it is refused
+ * (`vfs_name_capture_at`). Under the big lock; may nest. */
 void vfs_name_change_begin(void);
 void vfs_name_change_end(void);
 /** Admit an unlink, rmdir or rename before it takes its inode locks. On a

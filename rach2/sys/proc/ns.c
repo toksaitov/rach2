@@ -1147,20 +1147,21 @@ static int mntns_charge_ok(struct userns *owner, uint32_t uid)
 }
 
 /** A mount namespace with the lowest free id, owned by `owner` and made by
- * the kernel's uid `uid`, whose mounts are those `from` has; NULL with
- * `*err` -ENOSPC past a limit of `mntns_charge_ok`, or -ENOMEM. It waits
- * out a remount under way first (`vfs_mntns_wait`), and from the check of
- * the limits to its joining `mnt_list`, which the next check counts,
- * nothing sleeps, so that two makings cannot both pass the last free
- * place, as Linux charges the namespace before it waits for the namespace
- * lock (`alloc_mnt_ns`, fs/namespace.c). */
+ * the kernel's uid `uid`, with a copy of each mount `from` has
+ * (`vfs_mntns_copy`); NULL with `*err` -ENOSPC past a limit of
+ * `mntns_charge_ok`, or -ENOMEM. It waits out the unmounts that are
+ * draining first (`vfs_mntns_settle`), and from the check of the limits to
+ * its joining `mnt_list`, which the next check counts, nothing sleeps, so
+ * that two makings cannot both pass the last free place, as Linux charges
+ * the namespace before it waits for the namespace lock (`alloc_mnt_ns`,
+ * fs/namespace.c), and no unmount begins to drain before the copy. */
 static struct mntns *mntns_new(const struct mntns *from, struct userns *owner, uint32_t uid,
                                int32_t *err)
 {
     struct mntns *ns;
     uint32_t id;
 
-    vfs_mntns_wait();
+    vfs_mntns_settle();
     id = idset_first_free(&mnt_ids);
     if (!mntns_charge_ok(owner, uid)) {
         *err = -ENOSPC;
@@ -1360,7 +1361,7 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
     if ((flags & CLONE_THREAD) && (flags & (CLONE_NEWUSER | CLONE_NEWPID))) {
         return -EINVAL;
     }
-    if ((flags & CLONE_NEWUSER) && (flags & CLONE_FS)) {
+    if ((flags & (CLONE_NEWUSER | CLONE_NEWNS)) && (flags & CLONE_FS)) {
         return -EINVAL;
     }
     if ((flags & CLONE_THREAD) && set->pid_children != proc_pidns(parent)) {
@@ -1390,6 +1391,9 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
         set->refs++;
     }
     child->nsset = set == &init_nsset ? NULL : set;
+    if (flags & CLONE_NEWNS) {
+        vfs_mntns_moved(child);
+    }
     pns = set->pid_children;
     ns_get(&pns->c);
     child->pidns = pns == &init_pidns ? NULL : pns;
@@ -1556,6 +1560,9 @@ long sys_unshare(isr_params_t *params)
     if (set) {
         nsset_put(self->nsset);
         self->nsset = set;
+    }
+    if (flags & CLONE_NEWNS) {
+        vfs_mntns_moved(self);
     }
     return 0;
 }
@@ -1848,6 +1855,9 @@ static int32_t setns_commit(process_t *self, struct ns_common *const ns[NS_KINDS
     }
     nsset_put(self->nsset);
     self->nsset = set;
+    if (ns[NS_MNT]) {
+        vfs_mntns_joined(self);
+    }
     return 0;
 }
 

@@ -39,6 +39,9 @@ An absolute path ignores
 .Fa dirfd .
 A directory descriptor is converted to a path; it does not bypass
 search permission on ancestors.
+A directory on a mount the caller's mount namespace does not see, as
+another namespace's, is walked from instead, with the mounts of that
+namespace's tree, as Linux walks from the descriptor itself.
 .Pp
 The access mode in
 .Fa flags

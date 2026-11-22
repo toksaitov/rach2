@@ -7,9 +7,10 @@
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/kirq_none.c
  * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/walkseq_host.c
  *
  * The open that the name cache finishes reads the count of changes of names
- * before its walk (`vfs_name_seq`) and captures the record of the entry it
+ * before its walk (`vfs_seq_read`) and captures the record of the entry it
  * found after (`vfs_name_capture_at`); an unlink or a rename brackets its
  * change (`vfs_name_change_begin`, `vfs_name_change_end`). Rows check that a
  * capture with no change since the count succeeds and holds the parent and
@@ -25,6 +26,7 @@
  */
 #include "fs/name.h"
 #include "fs/vfs.h"
+#include "fs/walkseq.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 
@@ -186,7 +188,7 @@ int main(int argc, char **argv)
 {
     struct vfs_ref parent;
     struct vfs_name *name, *other;
-    uint32_t seq, now;
+    uint64_t seq, now;
 
     held_ops.hold = model_hold;
     held_ops.put = model_put;
@@ -204,7 +206,7 @@ int main(int argc, char **argv)
     parent.node = &dir_node;
 
     /* No change since the count: the record is kept, with its holds. */
-    CHECK(vfs_name_seq(&seq) == 1);
+    CHECK(vfs_seq_read(&seq) == 1);
     CHECK(vfs_name_capture_at(&parent, "file", seq, &name) == 0 && name != 0);
     CHECK(holds == 1 && opens == 1);
     vfs_name_put(name);
@@ -212,9 +214,9 @@ int main(int argc, char **argv)
 
     /* A change under way: the count says so, and the capture is refused
      * with nothing kept. */
-    CHECK(vfs_name_seq(&seq) == 1);
+    CHECK(vfs_seq_read(&seq) == 1);
     vfs_name_change_begin();
-    CHECK(vfs_name_seq(&now) == 0);
+    CHECK(vfs_seq_read(&now) == 0);
     name = (struct vfs_name *)&dir_node;
     CHECK(vfs_name_capture_at(&parent, "file", seq, &name) == -EAGAIN && name == 0);
     CHECK(holds == 0 && opens == 0);
@@ -231,18 +233,18 @@ int main(int argc, char **argv)
     CHECK(holds == 1 && opens == 1);
 
     /* Nested changes: refused until the last ends. */
-    CHECK(vfs_name_seq(&seq) == 1);
+    CHECK(vfs_seq_read(&seq) == 1);
     vfs_name_change_begin();
     vfs_name_change_begin();
     vfs_name_change_end();
-    CHECK(vfs_name_seq(&now) == 0);
+    CHECK(vfs_seq_read(&now) == 0);
     CHECK(vfs_name_capture_at(&parent, "file", now, &name) == -EAGAIN && name == 0);
     vfs_name_change_end();
     CHECK(vfs_name_capture_at(&parent, "file", seq, &name) == -EAGAIN && name == 0);
     CHECK(holds == 1 && opens == 1);
 
     /* A count read after the change ends: the record is kept. */
-    CHECK(vfs_name_seq(&seq) == 1);
+    CHECK(vfs_seq_read(&seq) == 1);
     CHECK(vfs_name_capture_at(&parent, "file", seq, &name) == 0 && name != 0);
     CHECK(holds == 2 && opens == 2);
     vfs_name_put(name);

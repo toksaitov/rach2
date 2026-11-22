@@ -1277,12 +1277,14 @@
         {"assertion_id": "statfs-inodes", "checks": "statfs64 of the root counts its inodes.", "source": "program"},
         {"assertion_id": "getcwd", "checks": "chdir to /vp/d works and getcwd reports it.", "source": "program"},
         {"assertion_id": "relative-open", "checks": "A relative open in the working directory works, and chdir back to the root.", "source": "program"},
+        {"assertion_id": "cwd-unlocked", "checks": "On ext2, fstatat of a name relative to the working directory takes no hold of the big lock by bkl/calls, before a tmpfs is mounted elsewhere and after.", "source": "program"},
+        {"assertion_id": "unlocked-shared", "checks": "On ext2, a walk without the big lock that a chroot or a chdir of a thread sharing the record comes between, held there by the walk gate, goes again under the big lock from the new working directory, and the gate counts the one walk given up.", "source": "program"},
         {"assertion_id": "sync", "checks": "sync succeeds.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "The probe removes /vp and its contents.", "source": "program"}
       ],
       "branches": [
         {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["old-stat-root"]}, {"alternative_id": "x86-64", "when": null, "assertions": []}]},
-        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "krffs", "when": null, "assertions": ["link-krffs"]}, {"alternative_id": "ext2", "when": null, "assertions": ["link-ext2-names", "link-ext2-read", "link-ext2-unlink"]}]}
+        {"group_id": "root", "decided_by": "report", "alternatives": [{"alternative_id": "krffs", "when": null, "assertions": ["link-krffs"]}, {"alternative_id": "ext2", "when": null, "assertions": ["link-ext2-names", "link-ext2-read", "link-ext2-unlink", "cwd-unlocked", "unlocked-shared"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],
@@ -6272,7 +6274,7 @@
         {"assertion_id": "capset-chown", "checks": "with CAP_CHOWN alone a thread cannot mount, and an exec gives every capability back", "source": "program"},
         {"assertion_id": "ambient", "checks": "PR_CAP_AMBIENT_IS_SET answers 0, PR_CAP_AMBIENT_RAISE of CAP_CHOWN, which is not inheritable, fails with EPERM and PR_CAP_AMBIENT_CLEAR_ALL succeeds", "source": "program"},
         {"assertion_id": "mask-removed", "checks": "a child in a mount namespace of its own binds a tmpfs directory over itself, binds /dev/null over a file in it and opens that with O_PATH; once the child is gone the directory, the file and the tmpfs can be removed", "source": "program"},
-        {"assertion_id": "remount-shared", "checks": "a child in a mount namespace of its own, which shares the tmpfs's mount record with the probe's, finds MS_REMOUNT with MS_BIND and MS_RDONLY or MS_NOEXEC, and without MS_BIND with MS_RDONLY or MS_NOSUID, refused with EBUSY, and MS_REMOUNT with MS_BIND and the flags the mount has accepted; the tmpfs stays writable there and in the probe", "source": "program"},
+        {"assertion_id": "remount-shared", "checks": "a child in a mount namespace of its own, whose tmpfs is its namespace's copy of the probe's mount, remounts the copy with MS_BIND and MS_RDONLY while the probe holds a file of the tmpfs open for writing; there a create, a mkdir and an open for writing fail with EROFS, statvfs gives ST_RDONLY and mountinfo ro; MS_REMOUNT with MS_BIND alone makes it writable again, and the tmpfs stays writable in the probe", "source": "program"},
         {"assertion_id": "private-bind", "checks": "a child binds the tmpfs over itself in its own mount namespace and remounts the bind read-only while the probe holds a file of the tmpfs open for writing; there a create, a mkdir and an open for writing fail with EROFS, statvfs gives ST_RDONLY and mountinfo ro, while the probe still writes through its descriptor, makes a file there and statvfs gives it no ST_RDONLY", "source": "program"},
         {"assertion_id": "writer-exclusion", "checks": "in the child, its bind made writable again, a file open for writing through it makes the bind's read-only remount fail with EBUSY until it is closed; once the child is gone the probe still writes there", "source": "program"},
         {"assertion_id": "descriptor-lifetime", "checks": "a file a child opens for reading through its bind of the tmpfs sealed read-only, whose bind it then detaches and which it sends to the probe, has fchmod, futimens and an open for writing of its /proc/self/fd link fail with EROFS and fstatvfs give ST_RDONLY in the probe once the child is gone", "source": "program"},
@@ -7385,7 +7387,7 @@
         {"assertion_id": "denied-access-missing-name", "checks": "with /sp_denied at 0666, access of a missing name fails with EACCES", "source": "program"},
         {"assertion_id": "denied-faccessat-two-level-leaf", "checks": "with /sp_denied at 0666, faccessat of the two-level leaf fails with EACCES", "source": "program"},
         {"assertion_id": "denied-openat-through-denied-dirfd", "checks": "with /sp_denied at 0666, openat through the denied dirfd fails with EACCES", "source": "program"},
-        {"assertion_id": "denied-openat-through-shared-dirfd", "checks": "with /sp_denied at 0666, openat through the shared dirfd fails with EACCES", "source": "program"},
+        {"assertion_id": "denied-openat-through-shared-dirfd", "checks": "with /sp_denied at 0666, openat through the dirfd of /sp_denied/shared, which stays 0777, succeeds, as on Linux", "source": "program"},
         {"assertion_id": "denied-chdir-one-level", "checks": "with /sp_denied at 0666, chdir one level fails with EACCES", "source": "program"},
         {"assertion_id": "denied-chdir-two-levels", "checks": "with /sp_denied at 0666, chdir two levels fails with EACCES", "source": "program"},
         {"assertion_id": "denied-chdir-into-0777-directory", "checks": "with /sp_denied at 0666, chdir into the 0777 directory fails with EACCES", "source": "program"},

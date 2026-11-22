@@ -45,11 +45,17 @@ before init starts; see
 A process sees the processes of its namespace and of those below it, by
 their numbers there, and sees the parent of a namespace's init as 0.
 .It Dv CLONE_NEWNS
-A mount namespace begins with the mounts of its parent's;
+A mount namespace begins with a copy of each mount of its parent's,
+showing the same file systems, as Linux's
+.Fn copy_mnt_ns
+makes them, and the caller's root and working directory move to the
+copies of the mounts they were on;
 .Xr mount 2
 and
 .Xr umount2 2
-then change its own table.
+then change its own mounts and leave the parent's as they are.
+A descriptor keeps the mount it was opened through, after the namespace
+ends too.
 .It Dv CLONE_NEWNET
 A network namespace has one interface, its own
 .Ql lo
@@ -132,7 +138,12 @@ The caller must be privileged in its own user namespace and in the one
 that owns the target.
 A PID namespace becomes the one the caller's next children are made in,
 and must be the caller's own or below it.
-A mount namespace keeps the caller's root and working directories.
+A mount namespace gives the caller its own root, with the mounts
+stacked on it crossed, as its root and working directory: the mount
+.Xr pivot_root 2
+made its root, or else the top of its tree, whatever roots its
+processes have taken with
+.Xr chroot 2 .
 .Pp
 .Fa fd
 may instead be a descriptor of a process or of a thread, as
