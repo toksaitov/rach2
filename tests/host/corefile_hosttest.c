@@ -1290,6 +1290,21 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
     return (int32_t)count;
 }
 
+/** The console's write lock is always free: 0. */
+int tty_write_lock(struct tty *t, int nonblock, const uint32_t *opened)
+{
+    (void)t;
+    (void)nonblock;
+    (void)opened;
+    return 0;
+}
+
+/** Release the console's write lock: nothing to do. */
+void tty_write_unlock(struct tty *t)
+{
+    (void)t;
+}
+
 /** No row opens a /proc file: -ENOENT. */
 int procfs_open(const struct vpath *vp, int flags)
 {
