@@ -59,19 +59,22 @@
 /*
  * The line that runs Doom inside term: the game in the background, with no
  * terminal as its input, so that it takes the screen and leaves the keyboard;
- * a mark on COM1 at its first frame; then /dev/console's key codes read up
+ * a mark on COM1 at its first frame or early exit, with the game's log
+ * in the latter case. After a frame, /dev/console's key codes are read up
  * to 57 pressed, the byte '9', from the space the scenario presses once it
- * has dumped the screen, since term, suspended, reads no key; then the game
- * killed and waited for. The release of the Enter that ran the line can come
+ * has dumped the screen, since term, suspended, reads no key. The shell
+ * then kills and waits for the game. The release of Enter can come
  * after term let the keyboard go, as it does under WHPX, and wait there first.
  */
-#define DOOM_LINE                                                                         \
-    "doom < /dev/null > /tmp/game.txt 2>&1 & until grep -q '1 frames in' /tmp/game.txt; " \
-    "do sleep 1; done; printf 'DOOM''FRAME\\r\\n' > /dev/console; "                       \
-    "until dd if=/dev/console bs=1 count=1 2> /dev/null | grep -q 9; do :; done; "        \
-    "kill $!; wait; "                                                                     \
-    "printf 'DOOM''GONE\\r\\n' > /dev/console"
-#define DOOM_FRAME "DOOMFRAME"
+#define DOOM_LINE                                                                     \
+    "doom < /dev/null > /tmp/game.txt 2>&1 & "                                        \
+    "while kill -0 $! 2>/dev/null && ! grep -q '^doom: 1 frames in ' /tmp/game.txt; " \
+    "do sleep 1; done; if kill -0 $! 2>/dev/null; then "                              \
+    "printf 'DOOM''FRAME 1\\r\\n' > /dev/console; "                                   \
+    "until dd if=/dev/console bs=1 count=1 2> /dev/null | grep -q 9; do :; done; "    \
+    "kill $!; wait $!; printf 'DOOM''GONE\\r\\n' > /dev/console; "                    \
+    "else wait $!; { cat /tmp/game.txt; printf 'DOOM''FRAME 0\\r\\n'; } > /dev/console; fi"
+#define DOOM_FRAME "DOOMFRAME "
 #define DOOM_GONE  "DOOMGONE"
 
 /*
@@ -485,22 +488,33 @@ static void doom(struct tc *s, struct net_boot *b)
 {
     struct dump game, back;
     char path[4096];
+    char *result;
+    uint64_t from;
     int frame = 0, again = 0;
 
     memset(&game, 0, sizeof(game));
     memset(&back, 0, sizeof(back));
     if (net_step(&s->u, "doom") == ETUDE_OK) {
         type_line(s, b, DOOM_LINE);
-        frame = net_wait(b, DOOM_FRAME) == ETUDE_OK;
-        if (frame && net_path(&s->u, "doom.ppm", path, sizeof(path)) != NULL)
-            screen(s, b, path, "doom.ppm", &game);
-        type(s, b, " ");
-        if (net_wait(b, DOOM_GONE) == ETUDE_OK)
-            again = await(s, b, "back.ppm", TERM_BACK, &back);
+        if (net_wait(b, DOOM_FRAME) == ETUDE_OK) {
+            from = b->at;
+            if (net_wait(b, "\r\n") == ETUDE_OK) {
+                result = net_text(b, from, b->at);
+                frame = result != NULL && strcmp(result, "1\r\n") == 0;
+                free(result);
+            }
+        }
+        if (frame) {
+            if (net_path(&s->u, "doom.ppm", path, sizeof(path)) != NULL)
+                screen(s, b, path, "doom.ppm", &game);
+            type(s, b, " ");
+            if (net_wait(b, DOOM_GONE) == ETUDE_OK)
+                again = await(s, b, "back.ppm", TERM_BACK, &back);
+        }
     }
     net_assert(&s->u, "wad", frame,
-               "the game reported no first frame; the disk needs /demo/doom1.wad, which its root"
-               " stages from ports/doom/doom1.wad (sh ports/doom/fetch_wad.sh)");
+               "the game exited before its first frame; see its console log. The disk needs"
+               " /demo/doom1.wad from ports/doom/doom1.wad (sh ports/doom/fetch_wad.sh)");
     net_assert(&s->u, "doom",
                game.width == s->width && game.height == s->height && game.colors > PICTURE_COLORS,
                "the screen was %lux%lu with %u colors while the game ran, not the framebuffer's"
