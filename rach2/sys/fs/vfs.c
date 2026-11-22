@@ -7595,8 +7595,9 @@ static void bind_fill(struct vfs_mount *m, struct vfs_mount *from, void *root, c
 /**
  * A bind of the mount `c` under `parent`, a bind already, at `canon`: its
  * covered node and root held again for the new record, which shows what `c`
- * shows. NULL when no slot can be had. The caller holds no lock; this takes
- * the covered node's (`vfs_node_lock`) around the placing.
+ * shows. NULL when no slot can be had, or when `c` stopped being active
+ * while the lock was waited for. The caller holds no lock and counts `c`;
+ * this takes the covered node's lock (`vfs_node_lock`) around the placing.
  */
 static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *parent,
                                     const char *canon)
@@ -7607,7 +7608,9 @@ static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *paren
     cov.mnt = parent;
     cov.node = c->covered;
     vfs_node_lock(&cov);
-    b = mount_place(parent, c->covered, c->type, canon, mount_base(c)->source, vfs_mount_flags(c));
+    b = c->state != VFS_ACTIVE ? NULL
+                               : mount_place(parent, c->covered, c->type, canon,
+                                             mount_base(c)->source, vfs_mount_flags(c));
     if (b) {
         if (c->covered && c->parent->type->ops->hold) {
             c->parent->type->ops->hold(mount_base(c->parent), c->covered);
@@ -7765,7 +7768,10 @@ static int bind_level(struct bind_tree *t, uint32_t depth, int last)
  * record in the kernel log, and when the heap has no room for the arrays
  * nothing is shown below `top`. The mount `skip` and those below it, NULL
  * for none, are left out without a record, as pivot_root leaves out the
- * new root (`vfs_pivot_mounts`).
+ * new root (`vfs_pivot_mounts`). Each mount to show is counted for the
+ * whole copy (`vfs_mount_get`), since `bind_child` may sleep on a
+ * directory's lock, during which an unmount may detach it; one detached
+ * meanwhile is left out. May sleep.
  */
 static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char *full,
                        const struct vfs_mount *skip)
@@ -7791,6 +7797,7 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
         if (c && c != top && c->state == VFS_ACTIVE && c->parent && vfs_mount_seen(c) &&
             (t.flen == 1 || path_under(c->covered_path, full, t.flen)) &&
             !(skip && mount_within(c, skip))) {
+            vfs_mount_get(c);
             t.orig[i] = c;
         }
     }
@@ -7798,6 +7805,11 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
         while (bind_level(&t, depth, 0) > 0) {
         }
         bind_level(&t, depth, 1);
+    }
+    for (i = 0; i < t.n; i++) {
+        if (t.orig[i]) {
+            reap_if_detached(t.orig[i], vfs_mount_put(t.orig[i]));
+        }
     }
     kfree(t.orig);
 }
