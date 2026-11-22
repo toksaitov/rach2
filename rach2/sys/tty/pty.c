@@ -1054,19 +1054,22 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
 /**
  * Queue slave output for the master (`pts_write_out`), the whole of one
  * write before any other writer's, under the slave's write lock
- * (`tty_write_lock`), as Linux's `atomic_write_lock` keeps two processes'
- * lines apart: a writer that finds another write in progress waits for it,
- * or takes -EAGAIN when non-blocking. Once the master has
- * closed, or a vhangup(2) has hung up the description, the write fails with
- * EIO. With TOSTOP set, a background writer takes SIGTTOU, or EIO when its
- * group is orphaned, and writes when it blocks or ignores SIGTTOU
- * (`tty_job_check`), as on the console and on Linux.
+ * (`tty_write_lock`), as Linux's tty_write holds `atomic_write_lock` over
+ * its whole iterator: a writer that finds another write in progress waits
+ * for it, or takes -EAGAIN when non-blocking, and a termios change that
+ * waits for output lands before or after the vector, never between its
+ * elements. Once the master has closed, or a vhangup(2) has hung up the
+ * description, the write fails with EIO. With TOSTOP set, a background
+ * writer takes SIGTTOU, or EIO when its group is orphaned, and writes when
+ * it blocks or ignores SIGTTOU (`tty_job_check`), as on the console and on
+ * Linux, whose n_tty_write checks under the lock.
  */
-static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+int32_t pty_slave_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count)
 {
     struct pty *p = (struct pty *)e->priv;
     struct pts_waiter w;
-    int32_t rc;
+    int32_t rc, total = 0;
+    int i;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -1074,7 +1077,9 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (pts_hung(e, p)) {
         return -EIO;
     }
-    if (count == 0) {
+    for (i = 0; i < count && iov[i].iov_len == 0; i++) {
+    }
+    if (i == count) {
         return 0;
     }
     w.p = p;
@@ -1083,16 +1088,44 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (!p->master_open) {
         return -EIO;
     }
-    if ((p->slave.ldisc.tio.c_lflag & TOSTOP) && (rc = tty_job_check(&p->slave, SIGTTOU)) != 0) {
-        return rc;
-    }
     rc = tty_write_lock(&p->slave, fd_is_nonblock(e), e->ofd ? &e->ofd->tty_hangups : NULL);
     if (rc != 0) {
         return rc;
     }
-    rc = p->master_open ? pts_write_out(e, &w, buf, count) : -EIO;
+    if (p->slave.ldisc.tio.c_lflag & TOSTOP) {
+        rc = tty_job_check(&p->slave, SIGTTOU);
+        if (rc != 0) {
+            tty_write_unlock(&p->slave);
+            return rc;
+        }
+    }
+    for (; i < count; i++) {
+        if (iov[i].iov_len == 0) {
+            continue;
+        }
+        rc = p->master_open ? pts_write_out(e, &w, (const char __user *)iov[i].iov_base,
+                                            (uint32_t)iov[i].iov_len)
+                            : -EIO;
+        if (rc < 0) {
+            break;
+        }
+        total += rc;
+        if ((unsigned long)rc < iov[i].iov_len) {
+            break;
+        }
+    }
     tty_write_unlock(&p->slave);
-    return rc;
+    return total > 0 ? total : rc;
+}
+
+/** write(2) on a slave: a vector of one element (`pty_slave_writev`). */
+static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct kernel_iovec one;
+
+    one.iov_base = (__force uintptr_t)buf;
+    one.iov_len = count;
+    return pty_slave_writev(e, &one, 1);
 }
 
 /**

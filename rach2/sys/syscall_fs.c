@@ -1420,34 +1420,37 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
 }
 
 /**
- * Write `count` bytes of `buf` to the console through the console
- * descriptor `entry`, for `write_fd`.
+ * Write the `count` elements of the imported vector `iov` to the console
+ * through the console descriptor `entry`, for writev(2), and a vector of
+ * one for `write_fd`.
  *
  * The bytes go through the terminal's output processing (OPOST and ONLCR,
  * so a bare newline becomes CR LF on the screen and on the serial line), a
- * piece at a time (`tty_write_user`). A fault on the user buffer returns the
- * bytes already written, or -EFAULT when there are none. While output is
- * stopped, by VSTOP under IXON or by TCOOFF, the write waits for it to
- * restart, or returns the bytes written, or -EAGAIN when none, on a
- * nonblocking description, as Linux's n_tty_write. A hangup of the
- * description, at the end of the session's leader or by vhangup(2), before
- * the call or during it, ends it with the bytes written or -EIO, but on a
- * description of the console's own (`tty_console`). A process of a
- * background group of the console's session writes freely unless TOSTOP is
- * set; with it set, SIGTTOU goes to the process group and the call is
- * -EINTR, unless the process blocks or ignores SIGTTOU, when it writes, or
- * its group is orphaned, when the call is -EIO (`tty_job_check`), as
- * Linux's n_tty_write. The write holds the console's write lock
- * (`tty_write_lock`) for its whole length, as Linux's tty_write holds
- * atomic_write_lock: another writer waits for it, or takes -EAGAIN when
- * nonblocking.
+ * piece at a time (`tty_write_user`). A fault on the user buffer ends the
+ * write with the bytes already written, or -EFAULT when there are none.
+ * While output is stopped, by VSTOP under IXON or by TCOOFF, the write
+ * waits for it to restart, or returns the bytes written, or -EAGAIN when
+ * none, on a nonblocking description, as Linux's n_tty_write. A hangup of
+ * the description, at the end of the session's leader or by vhangup(2),
+ * before the call or during it, ends it with the bytes written or -EIO, but
+ * on a description of the console's own (`tty_console`). The write holds
+ * the console's write lock (`tty_write_lock`) across the whole vector, as
+ * Linux's tty_write holds atomic_write_lock over its iterator: another
+ * writer waits for it, or takes -EAGAIN when nonblocking, and a termios
+ * change that waits for output lands between writes. Under the lock, as
+ * Linux's n_tty_write checks, a process of a background group of the
+ * console's session writes freely unless TOSTOP is set; with it set,
+ * SIGTTOU goes to the process group and the call is -EINTR, unless the
+ * process blocks or ignores SIGTTOU, when it writes, or its group is
+ * orphaned, when the call is -EIO (`tty_job_check`).
  */
-static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t count)
+static int32_t console_writev(fd_entry_t *entry, const struct kernel_iovec *iov, int count)
 {
     int nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     const uint32_t *opened =
         entry->ofd && !entry->ofd->tty_console ? &entry->ofd->tty_hangups : NULL;
-    int32_t rc;
+    int32_t rc, total = 0;
+    int i;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -1455,19 +1458,44 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
     if (fd_tty_hung(entry)) {
         return -EIO;
     }
-    if (console_tty.ldisc.tio.c_lflag & TOSTOP) {
-        rc = tty_job_check(&console_tty, SIGTTOU);
-        if (rc != 0) {
-            return rc;
-        }
-    }
     rc = tty_write_lock(&console_tty, nonblock, opened);
     if (rc != 0) {
         return rc;
     }
-    rc = tty_write_user(&console_tty, buf, count, nonblock, opened);
+    if (console_tty.ldisc.tio.c_lflag & TOSTOP) {
+        rc = tty_job_check(&console_tty, SIGTTOU);
+        if (rc != 0) {
+            tty_write_unlock(&console_tty);
+            return rc;
+        }
+    }
+    for (i = 0; i < count; i++) {
+        if (iov[i].iov_len == 0) {
+            continue;
+        }
+        rc = tty_write_user(&console_tty, (const char __user *)iov[i].iov_base,
+                            (uint32_t)iov[i].iov_len, nonblock, opened);
+        if (rc < 0) {
+            break;
+        }
+        total += rc;
+        if ((unsigned long)rc < iov[i].iov_len) {
+            break;
+        }
+    }
     tty_write_unlock(&console_tty);
-    return rc;
+    return total > 0 ? total : rc;
+}
+
+/** Write `count` bytes of `buf` to the console through `entry`: a vector of
+ * one element (`console_writev`). */
+static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t count)
+{
+    struct kernel_iovec one;
+
+    one.iov_base = (__force uintptr_t)buf;
+    one.iov_len = count;
+    return console_writev(entry, &one, 1);
 }
 
 /** Check a scalar I/O request before its count is cut at USER_RW_MAX.
@@ -1972,8 +2000,10 @@ static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long lon
  * below. */
 static uint32_t iov_prefix(struct kernel_iovec *iov, int count, int into);
 
-/** Import the vector once and write it whole to a pty master, under the
- * pair's lock (`pty_master_writev`), or to a pipe end as one write
+/** Import the vector once and write it whole to a terminal, the console
+ * (`console_writev`) or a pty slave (`pty_slave_writev`), under its write
+ * lock, to a pty master, under the pair's lock (`pty_master_writev`), or
+ * to a pipe end as one write
  * (`pipe_writev`), a Unix socket as one send (`unix_writev`), or a tap as
  * one frame (`tap_writev`).
  * `entry` is held and open for writing, and `count` is in
@@ -1993,7 +2023,11 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
     if (rc > 0 && tap_is(entry)) {
         rc = tap_writev(entry, iov, count, (uint32_t)rc);
     } else if (rc > 0) {
-        if (entry->type == FD_TYPE_PTM) {
+        if (entry->type == FD_TYPE_CONSOLE) {
+            rc = console_writev(entry, iov, count);
+        } else if (pty_slave_tty(entry)) {
+            rc = pty_slave_writev(entry, iov, count);
+        } else if (entry->type == FD_TYPE_PTM) {
             rc = pty_master_writev(entry, iov, count);
         } else if (entry->type == FD_TYPE_UNIX) {
             rc = unix_writev(entry, iov, count, (uint32_t)rc);
@@ -2012,8 +2046,10 @@ static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
  * under its description's lock, held across the vector and the check of the
  * vector's end at the offset, as Linux holds f_pos_lock, and a vector that
  * would grow a sealed tmpfs file is cut to the whole 2 MiB chunks before its
- * end (`iov_file_write`). A pty master imports the vector once and holds its
- * write lock across it, and a pipe end takes it as one write, as Linux's
+ * end (`iov_file_write`). A terminal, the console or a pty slave, and a
+ * pty master import the vector once and hold their write lock across it,
+ * as Linux's tty_write holds atomic_write_lock over its iterator, and a
+ * pipe end takes it as one write, as Linux's
  * `pipe_write` takes it; a Unix socket sends the vector as one send, as
  * Linux's sock_write_iter does (`writev_whole`). Otherwise elements are
  * written in order (`writev_elements`). The vector is checked whole first
@@ -2044,7 +2080,7 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     }
     entry = fd_get(current_proc->fds, fd);
     if (entry && (entry->type == FD_TYPE_PTM || entry->type == FD_TYPE_UNIX || pipe_is(entry) ||
-                  tap_is(entry))) {
+                  tap_is(entry) || entry->type == FD_TYPE_CONSOLE || pty_slave_tty(entry))) {
         return writev_whole(entry, iov_user, iovcnt);
     }
     if (iov_mount_file(entry)) {

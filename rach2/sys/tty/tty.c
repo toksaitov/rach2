@@ -1055,7 +1055,10 @@ int32_t tty_write_user(struct tty *t, const char __user *buf, uint32_t count, in
  * A poller for POLLOUT alone on running output is answered at once and
  * drains nothing. The poll core calls with interrupts on, and the console's
  * tick and interrupt fill the discipline, so the pump and the reads run
- * with interrupts off, as in tty_inq. */
+ * with interrupts off, as in tty_inq. A terminal whose write lock a write
+ * holds (`writing`) is not writable, as Linux's n_tty_poll tests
+ * tty_is_writelocked, since a nonblocking write would take -EAGAIN; the
+ * lock's release wakes `input_wq`. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq)
 {
     short revents = 0;
@@ -1070,7 +1073,7 @@ short tty_poll(struct tty *t, short events, wait_queue_t **wq)
     if ((events & POLLIN) && n_tty_readable(&t->ldisc)) {
         revents = POLLIN;
     }
-    if ((events & POLLOUT) && !t->ldisc.stopped) {
+    if ((events & POLLOUT) && !t->ldisc.stopped && !t->writing) {
         revents = (short)(revents | POLLOUT);
     }
     kirq_restore(flags);

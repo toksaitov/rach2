@@ -444,10 +444,11 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 
 /**
  * poll(2) readiness: POLLIN when a read would not block, and POLLOUT while
- * output is not stopped. Every query sets *wq to input_wq for the poll core
- * to re-check on, one with no events among them, since a hangup wakes that
- * queue; one with POLLIN, or with POLLOUT on stopped output, drains the
- * polled source. Takes interrupts off itself.
+ * output is not stopped and no write holds the write lock. Every query
+ * sets *wq to input_wq for the poll core to re-check on, one with no events
+ * among them, since a hangup wakes that queue; one with POLLIN, or with
+ * POLLOUT on stopped output, drains the polled source. Takes interrupts off
+ * itself.
  */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
 

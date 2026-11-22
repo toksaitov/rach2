@@ -182,6 +182,14 @@ struct kernel_iovec;
  * does. No bytes returns 0 without taking the lock. May sleep. */
 int32_t pty_master_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
 
+/** Write an imported vector to the held slave descriptor `e` (FD_TYPE_PTS,
+ * or a device's of a kernel-held slave), with the slave's write lock held
+ * across every element, as for a write(2) of one element. `iov` is as for
+ * `pty_master_writev`. Returns the bytes queued before a short write or
+ * fault, or a negative errno when none were. No bytes returns 0 without
+ * taking the lock. May sleep. */
+int32_t pty_slave_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
+
 /** Index of the pty whose slave is session `sid`'s controlling terminal, or
  * -1 (always for `sid` 0). /dev/tty opens the caller's controlling pty
  * through this. */
