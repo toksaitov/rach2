@@ -267,6 +267,12 @@ static const struct row rows[] = {
      "shared-links", STATFS_MAGIC_EXT2},
     {"a walk of 41 links that the walk without the big lock gives to the full walk is ELOOP",
      "shared-links", STATFS_MAGIC_EXT2},
+    {"a walk of 40 links, a jump through /proc among them, that the walk without the big lock "
+     "gives to the full walk reaches its file",
+     "shared-links", STATFS_MAGIC_EXT2},
+    {"a walk of 41 links, a jump through /proc among them, that the walk without the big lock "
+     "gives to the full walk is ELOOP",
+     "shared-links", STATFS_MAGIC_EXT2},
     {"remove the files of the shared-record rows", "shared-links", STATFS_MAGIC_EXT2},
     {"a handle of an unlinked ext2 file whose inode a new file took is ESTALE", "handle-ext2",
      STATFS_MAGIC_EXT2},
@@ -274,6 +280,8 @@ static const struct row rows[] = {
     {"open_by_handle_at of a file a FIFO replaced after its walk is ESTALE and opens no FIFO",
      "handle-ext2", STATFS_MAGIC_EXT2},
     {"remove the files of the handle rows", "handle-ext2", STATFS_MAGIC_EXT2},
+    {"a file of a KRFFS root has a handle only with AT_HANDLE_FID, which opens nothing",
+     "handle-krffs", STATFS_MAGIC_KRFFS},
     {"the files of the gated rows", "walk-restart", STATFS_MAGIC_EXT2},
     {"a walk that a rename came between at a lookup's sleep starts again and opens the new name",
      "walk-restart", STATFS_MAGIC_EXT2},
@@ -758,6 +766,10 @@ static void shared_unlink(void)
         shared_link_name(name, i);
         syscall1(SYS_UNLINK, (long)name);
     }
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/m39");
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/m40");
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/p40");
+    syscall1(SYS_UNLINK, (long)"/vp/s/a/p41");
     syscall1(SYS_RMDIR, (long)"/vp/s/z");
     syscall1(SYS_UNLINK, (long)"/vp/s/a/l");
     syscall1(SYS_UNLINK, (long)"/vp/s/b/l");
@@ -811,6 +823,8 @@ static void shared_file(const char *path, const char *text, int n, const char *w
 
 static unsigned shared_ino;     /* the inode the child must open */
 static const char *shared_path; /* the path the child opens */
+static int shared_cached = -1;  /* the links the walk without the big lock
+                                   must follow, or -1 for any */
 
 /** The child of a shared-record row: on its go from `in`, open
  * `shared_path` relative to the working directory, with O_CREAT when
@@ -866,9 +880,9 @@ static int shared_change(int change)
  * (`shared_change`) and lets the walk go on. The child must exit with
  * `want`, a count of bytes it read from `shared_ino` or 97 for ELOOP, and
  * the gate must count the full walk's restart, for `count` "restart", or
- * the one walk without the big lock given up, for "miss"; else the row
- * fails `why`. Returns with the root and the working directory /vp/s/a as
- * before.
+ * the one walk without the big lock given up, for "miss", and the links
+ * that walk followed, when `shared_cached` is not -1; else the row fails
+ * `why`. Returns with the root and the working directory /vp/s/a as before.
  */
 static void shared_run(const char *event, int full, int change, int want, const char *count,
                        const char *why)
@@ -916,6 +930,9 @@ static void shared_run(const char *event, int full, int change, int want, const 
     if (count[0] == 'r' ? n == 0 : n != 1) {
         fail(count[0] == 'r' ? "the walk gate counts the full walk's restart"
                              : "the walk gate counts the one walk given up");
+    }
+    if (shared_cached >= 0 && gate_count("cached") != (unsigned)shared_cached) {
+        fail(why);
     }
     gate_write("off", "stop the walk gate");
     syscall1(SYS_CLOSE, shared_pipe[0]);
@@ -1002,13 +1019,51 @@ static void shared_point_rows(void)
                "starts again in the new root");
 }
 
+/** Make the link `path` to `target`, in the working directory /vp/s/a, and
+ * walk it once, so that the names and targets of its chain are in memory
+ * for the walk without the big lock, or fail. */
+static void shared_link_warm(const char *target, const char *path)
+{
+    long fd;
+
+    if (target && syscall2(SYS_SYMLINK, (long)target, (long)path) != 0) {
+        fail("the files of the shared-record rows");
+    }
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    } else if (fd != -ELOOP) {
+        fail("the files of the shared-record rows");
+    }
+}
+
+/** One row of `shared_links_row`: the child opens `path`, the walk gate
+ * stops it once the walk without the big lock has followed the chain's
+ * first link, and the parent makes and removes /vp/s/z; the walk must end
+ * with `want` (`shared_run`) once it has followed `cached` links there. */
+static void shared_links_run(const char *path, int cached, int want, const char *why)
+{
+    shared_path = path;
+    shared_cached = cached;
+    shared_run("cached", 0, SHARED_TOUCH, want, "miss", why);
+    shared_cached = -1;
+}
+
 /**
  * A walk of a chain of links that the walk without the big lock begins and
- * the full walk ends has 40 links in all, not 40 in each: k1 to k41 in
- * /vp/s/a, each a link to the next and k41 to f. The walk gate stops the
- * child's walk of k2, then of k1, without the big lock (`unlocked`), while
- * the parent makes and removes /vp/s/z elsewhere, which sends the walk to
- * the full walk; k2, 40 links, reaches f's 2 bytes, and k1, 41, is ELOOP.
+ * the full walk ends has 40 links in all, not 40 in each nor 40 after the
+ * hand-over: k1 to k41 in /vp/s/a, each a link to the next and k41 to f; m39
+ * to /proc/self/cwd/k6 and m40 to /proc/self/cwd/k5, jumps through /proc,
+ * whose links only the full walk takes; and p40 to m39, p41 to m40. Each
+ * chain is walked once first, so that its names and targets are in memory.
+ * The walk gate stops the child's walk of k2, k1, p40 and p41 once the walk
+ * without the big lock has followed the first link (`cached`), while the
+ * parent makes and removes /vp/s/z elsewhere; that walk goes on, follows
+ * the links it can, and gives the path to the full walk: at its end, since
+ * the sequence moved, after 40 links for k2; at the 41st for k1; and at
+ * /proc after p40 or p41 and the m link for the p chains. k2 reaches f's 2
+ * bytes through 40 links, and p40 through p40, m39, /proc/self, the jump
+ * through cwd and 36 more; k1 and p41, a link more each, are ELOOP.
  */
 static void shared_links_row(void)
 {
@@ -1026,14 +1081,24 @@ static void shared_links_row(void)
         fail("the files of the shared-record rows");
     }
     shared_ino = st_field(KSTAT_INO);
-    shared_path = "k2";
-    shared_run("unlocked", 0, SHARED_TOUCH, 2, "miss",
-               "a walk of 40 links that the walk without the big lock gives to the full walk "
-               "reaches its file");
-    shared_path = "k1";
-    shared_run("unlocked", 0, SHARED_TOUCH, 97, "miss",
-               "a walk of 41 links that the walk without the big lock gives to the full walk is "
-               "ELOOP");
+    shared_link_warm(0, "k2");
+    shared_link_warm(0, "k1");
+    shared_link_warm("/proc/self/cwd/k6", "m39");
+    shared_link_warm("/proc/self/cwd/k5", "m40");
+    shared_link_warm("m39", "p40");
+    shared_link_warm("m40", "p41");
+    shared_links_run("k2", 40, 2,
+                     "a walk of 40 links that the walk without the big lock gives to the full walk "
+                     "reaches its file");
+    shared_links_run("k1", 40, 97,
+                     "a walk of 41 links that the walk without the big lock gives to the full walk "
+                     "is ELOOP");
+    shared_links_run("p40", 2, 2,
+                     "a walk of 40 links, a jump through /proc among them, that the walk without "
+                     "the big lock gives to the full walk reaches its file");
+    shared_links_run("p41", 2, 97,
+                     "a walk of 41 links, a jump through /proc among them, that the walk without "
+                     "the big lock gives to the full walk is ELOOP");
 }
 
 /**
@@ -1102,7 +1167,9 @@ static void shared_rows(unsigned magic)
 #define SYS_OPEN_BY_HANDLE_AT 342
 #endif
 
-#define HANDLE_FILES 200 /* the files `handle_reuse` may make to reach an inode */
+#define AT_HANDLE_FID 0x200 /* name_to_handle_at: a handle that opens nothing */
+#define EOPNOTSUPP    95
+#define HANDLE_FILES  200 /* the files `handle_reuse` may make to reach an inode */
 
 /* A file handle as Rach2 gives one: the size, the type, and twelve bytes. */
 struct fhandle {
@@ -1269,12 +1336,37 @@ static void handle_fifo_row(struct fhandle *hg)
 }
 
 /**
+ * On a KRFFS root, whose inode numbers a file made again under a name takes
+ * over, a file's handle is EOPNOTSUPP without AT_HANDLE_FID, and the handle
+ * AT_HANDLE_FID gives is ESTALE to open_by_handle_at.
+ */
+static void handle_krffs_row(void)
+{
+    const char *why = "a file of a KRFFS root has a handle only with AT_HANDLE_FID, which opens "
+                      "nothing";
+    struct fhandle h;
+    int mnt;
+
+    h.bytes = sizeof(h.f);
+    if (syscall5(SYS_NAME_TO_HANDLE_AT, AT_FDCWD, (long)"/vp", (long)&h, (long)&mnt, 0) !=
+        -EOPNOTSUPP) {
+        fail(why);
+    }
+    h.bytes = sizeof(h.f);
+    if (syscall5(SYS_NAME_TO_HANDLE_AT, AT_FDCWD, (long)"/vp", (long)&h, (long)&mnt,
+                 AT_HANDLE_FID) != 0 ||
+        syscall3(SYS_OPEN_BY_HANDLE_AT, AT_FDCWD, (long)&h, O_RDONLY) != -ESTALE) {
+        fail(why);
+    }
+}
+
+/**
  * On an ext2 root, whose inodes carry a generation, a handle names one file
  * and no other: the handle of /vp/h/f, once f is unlinked and a new file
  * takes its inode (`handle_reuse`), is ESTALE, while the new file's own
  * handle opens it; an O_RDONLY|O_TRUNC open by that handle empties it, as
  * open(2) would; and a FIFO renamed over it during the open is never opened
- * (`handle_fifo_row`). A root of another type, `magic`, has no such rows.
+ * (`handle_fifo_row`). A KRFFS root has `handle_krffs_row` instead.
  */
 static void handle_rows(unsigned magic)
 {
@@ -1284,6 +1376,9 @@ static void handle_rows(unsigned magic)
     unsigned ino;
     long fd;
 
+    if (magic == STATFS_MAGIC_KRFFS) {
+        handle_krffs_row();
+    }
     if (magic != STATFS_MAGIC_EXT2) {
         return;
     }
