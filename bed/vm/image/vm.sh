@@ -34,15 +34,19 @@
 # 30 s, and the peer then asks for eight backings of 64 MiB of it in turn:
 # the backend must refuse each with ERR_OUT_OF_MEMORY, where a pin of
 # memory the VM has not got would wake its OOM killer, and answer the
-# commands after.
+# commands after. Once the fill has ended, the peer asks for one of 1 GiB,
+# which the VM's counts allow but the memory cgroup of 1 GiB the backend
+# runs in cannot hold: the backend must refuse it when its pin's allocation
+# fails, where the cgroup's OOM killer would end the backend.
 #
 # `rach2` makes rach2.qcow2 beside the prepared image, an overlay of it that
 # Rach2 boots under its own KVM (tests/cases/machine.bed-shm.json): the
 # tree's module and backend built in the VM and installed, and a service
 # that at each boot loads the module and runs the backend surfaceless on
-# the ivshmem device, `bed-vm: ` before each of its lines on the console.
-# With -o it also writes the image whole as the raw disk RAW, the form
-# etude's overlays take as their base.
+# the ivshmem device, `bed-vm: ` before each of its lines on the console,
+# and one that does to the backend the words Rach2's test writes to the
+# VM's second serial port. With -o it also writes the image whole as the
+# raw disk RAW, the form etude's overlays take as their base.
 #
 # The images and the account's key are in BED_VM_CACHE, by default
 # build/cache/bed-vm of the clone whose worktree this is, so that its
@@ -170,10 +174,12 @@ vm()
     ssh $opts -p "$port" gfx@127.0.0.1 "$@"
 }
 
-# guest VFIO: the VM's part of the check, as a script for its sh: build the
-# module and the backend from the tree's copy in ~/bed, take the device by
-# the module, or by vfio-pci when VFIO is 1, and run the backend on vkms
-# until the driver detaches.
+# guest VFIO BACKING: the VM's part of the check, as a script for its sh:
+# build the module and the backend from the tree's copy in ~/bed, take the
+# device by the module, or by vfio-pci when VFIO is 1, and run the backend
+# on vkms until the driver detaches; when BACKING is 1, in a scope whose
+# memory cgroup holds 1 GiB, so that a pin of a backing of 1 GiB fails in
+# the cgroup however much memory the VM has.
 guest()
 {
     cat <<GUEST
@@ -199,7 +205,9 @@ if [ $1 = 1 ]; then
 else
     sudo insmod bed/vm/module/vgpushm.ko
 fi
-sudo LIBGL_ALWAYS_SOFTWARE=1 bed/vm/backend/vgpu-backend -1 -k "\$card" -w -d -I \$from
+scope=
+[ $2 = 0 ] || scope="systemd-run --quiet --scope -p MemoryMax=1G -p MemorySwapMax=0"
+sudo \$scope env LIBGL_ALWAYS_SOFTWARE=1 bed/vm/backend/vgpu-backend -1 -k "\$card" -w -d -I \$from
 GUEST
 }
 
@@ -252,18 +260,30 @@ echo "bed-vm: fill: MemAvailable read 0 after $(cat /run/bed-fill.zero 2>/dev/nu
 FILL
 }
 
-# filler: the host's part of -b: once the peer waits for $work/go, fill the
-# VM's memory and start the peer's ask by making the file.
-filler()
+# peer_waits FILE: wait, 600 s at most, until the peer waits for FILE.
+peer_waits()
 {
     n=600
-    until grep -q '^peer: backing: waiting' "$work/peer.out" 2>/dev/null; do
+    until grep -q "^peer: backing: waiting for $1\$" "$work/peer.out" 2>/dev/null; do
         n=$((n - 1))
         [ "$n" -gt 0 ] || return 1
         sleep 1
     done
+}
+
+# filler: the host's part of -b: once the peer waits for $work/go, fill the
+# VM's memory and start the peer's eight asks by making the file; once it
+# waits for $work/last, wait for the fill's end, which gives its memory
+# back, and start the last ask, which the backend's cgroup cannot hold.
+filler()
+{
+    peer_waits "$work/go" || return 1
     fill | vm 'sh -s' > "$work/fill.out" 2>&1 || true
     : > "$work/go"
+    peer_waits "$work/last" || return 1
+    vm 'while systemctl -q is-active bed-fill; do sleep 1; done; grep MemAvailable /proc/meminfo' \
+        < /dev/null >> "$work/fill.out" 2>&1 || true
+    : > "$work/last"
 }
 
 # expect WHAT GOT WANT: say whether GOT equals WANT, and count a difference.
@@ -298,6 +318,14 @@ judge()
             "$(sed -n 's/^bed-vm: fill: MemAvailable read 0 after [0-9]* pieces$/yes/p' "$work/fill.out")" yes
         expect "backings of 64 MiB refused" \
             "$(grep -c '^peer: backing: resource [0-9]*, 67108864 bytes: refused: out of memory$' "$p")" 8
+        expect "backings of 64 MiB refused by the VM's counts" \
+            "$(grep -c "^backend: back: resource [0-9]*: refused: 67108864 bytes: no room in the VM's counts: " "$b")" 8
+        expect "the backing of 1 GiB refused" \
+            "$(grep -c '^peer: backing: resource [0-9]*, 1073741824 bytes: refused: out of memory$' "$p")" 1
+        expect "the backing of 1 GiB refused by its pin" \
+            "$(grep -c '^backend: back: resource [0-9]*: refused: 1073741824 bytes: the pin: Cannot allocate memory$' "$b")" 1
+        expect "kills by the backend's memory cgroup" \
+            "$(grep -c 'Memory cgroup out of memory' "$work/dmesg.out")" 0
     fi
     expect "the peer's end" "$(tail -n 1 "$p")" "peer: result: ok"
     [ "$bad" -eq 0 ]
@@ -327,7 +355,7 @@ check()
     qemu='' peer='' filling=''
     trap 'kill "$qemu" "$peer" "$filling" 2>/dev/null || true; rm -rf "$work"' EXIT
     asks=''
-    [ "$backing" = 0 ] || asks="-b 67108864 -g $work/go"
+    [ "$backing" = 0 ] || asks="-b 67108864 -g $work/go -B 1073741824 -G $work/last"
     # shellcheck disable=SC2086 # asks are words
     "$out/peer" -S "$work/ivs.sock" -s "$region" -t 600 -r "$out/frame.rec" -o -v $asks \
         > "$work/peer.out" 2>&1 &
@@ -370,7 +398,7 @@ check()
     } | sed 's/^/bed-vm: record: /' >&2
     (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
         vm 'rm -rf bed && tar xf -'
-    guest "$vfio" > "$work/guest.sh"
+    guest "$vfio" "$backing" > "$work/guest.sh"
     if [ "$backing" = 1 ]; then
         filler &
         filling=$!
@@ -383,6 +411,7 @@ check()
     peer=
     [ -z "$filling" ] || wait "$filling" || true
     filling=
+    vm 'sudo dmesg' </dev/null > "$work/dmesg.out" 2>&1 || true
     vm 'sudo systemctl poweroff' </dev/null >/dev/null 2>&1 || true
     watch "$qemu" "$work/console.log" 'reboot: Power down' 120 || kill "$qemu" 2>/dev/null || true
     wait "$qemu" 2>/dev/null || true
@@ -426,7 +455,8 @@ sudo tee /usr/local/sbin/bed-vm-backend > /dev/null <<'RUN'
 # its render node: GL on the node, which Mesa's surfaceless EGL finds
 # first, and Venus through Mesa's Intel Vulkan drivers alone. Without one,
 # GL renders on llvmpipe and Venus on lavapipe.
-insmod /usr/local/lib/vgpushm.ko || exit 1
+# A restart through bed-vm-control finds the module loaded.
+grep -q '^vgpushm ' /proc/modules || insmod /usr/local/lib/vgpushm.ko || exit 1
 soft=1
 for d in /sys/bus/pci/devices/*; do
     [ "$(cat "$d/vendor")" = 0x8086 ] || continue
@@ -465,6 +495,38 @@ ExecStart=/usr/local/sbin/bed-vm-backend
 WantedBy=multi-user.target
 UNIT
 sudo systemctl enable bed-vm-backend.service
+sudo tee /usr/local/sbin/bed-vm-control > /dev/null <<'RUN'
+#!/bin/sh
+# bed-vm-control: do to the backend each word a line of the VM's second
+# serial port, ttyS1, brings, as Rach2's test of the backend's loss writes
+# them: `stop`, `cont` and `kill` send it SIGSTOP, SIGCONT and SIGKILL, and
+# `start` starts its service again. Each done is said on the console as
+# `bed-vm: control: WORD: done`. A VM without the port has nothing to do.
+stty -F /dev/ttyS1 raw -echo 2> /dev/null || exit 0
+exec < /dev/ttyS1
+while read -r word; do
+    case $word in
+        stop) pkill -STOP -x vgpu-backend ;;
+        cont) pkill -CONT -x vgpu-backend ;;
+        kill) pkill -KILL -x vgpu-backend ;;
+        start) systemctl restart bed-vm-backend.service ;;
+        *) echo "bed-vm: control: $word: unknown" > /dev/ttyS0; continue ;;
+    esac
+    echo "bed-vm: control: $word: done" > /dev/ttyS0
+done
+RUN
+sudo chmod 755 /usr/local/sbin/bed-vm-control
+sudo tee /etc/systemd/system/bed-vm-control.service > /dev/null <<'UNIT'
+[Unit]
+Description=Do to the backend what Rach2's test asks on ttyS1
+After=bed-vm-ready.service
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/bed-vm-control
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl enable bed-vm-control.service
 GUEST
 }
 
