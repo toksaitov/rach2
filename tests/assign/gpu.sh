@@ -45,7 +45,10 @@
 # When QEMU has ended, however it ended, and on every failure after the
 # unbind, the script takes the function back from vfio-pci, restores its
 # driver_override and writes its name to /sys/bus/pci/drivers/i915/bind,
-# which resets the function and binds the driver again. It then requires the
+# which resets the function and binds the driver again; SIGHUP, SIGINT and
+# SIGTERM end the script the same way, and from then on every signal is
+# ignored, so that a second one cannot cut the give-back short. It then
+# requires the
 # driver on the function with a DRM card, its log of the release and the bind,
 # no IOMMU fault counted since the start, and the counts of VFIO's groups,
 # devices, mappings and pins, of KVM's machines and of the free interrupt
@@ -169,8 +172,12 @@ give_back()
     fi
     [ "$(driver)" = i915 ]
 }
+# cleanup: kill QEMU and give the function back, whatever ended the script.
+# Every signal is ignored from here on, so that a second TERM cannot cut the
+# give-back short.
 cleanup()
 {
+    trap '' HUP INT TERM QUIT USR1 USR2 PIPE ALRM
     if [ -n "$pid" ]; then
         kill -KILL "$pid" 2>/dev/null || :
         wait "$pid" 2>/dev/null || :
@@ -183,9 +190,9 @@ cleanup()
     [ -z "$work" ] || [ "$failed" = 1 ] || rm -rf "$work"
 }
 trap cleanup EXIT
-trap 'failed=1; exit 129' HUP
-trap 'failed=1; exit 130' INT
-trap 'failed=1; exit 143' TERM
+trap 'trap "" HUP INT TERM; failed=1; exit 129' HUP
+trap 'trap "" HUP INT TERM; failed=1; exit 130' INT
+trap 'trap "" HUP INT TERM; failed=1; exit 143' TERM
 stop=0
 trap 'stop=1' USR1
 fail()
