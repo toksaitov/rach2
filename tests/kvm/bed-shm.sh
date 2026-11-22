@@ -94,8 +94,9 @@
 # groups, TERM and then KILL.
 #
 # With -w -g -l crysis, run the two-loop Crysis flyby once the region's
-# session is ready, in native/crysis.sh's private data fixture. The VM
-# stops after the figure, and the same return and handoff checks apply.
+# session is ready, in native/crysis.sh's private data fixture and, through
+# `crysis.sh seal`, in its read-only namespace. The VM stops after the
+# figure, and the same return and handoff checks apply.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
 desk=0 unplug=0 measure='' loadscene=glmark2 scenes=glmark2
@@ -128,6 +129,7 @@ case $loadscene in
     piglit | webgl | game) [ -n "$measure" ] || { echo "bed-shm: -l $loadscene needs -x" >&2; exit 2; } ;;
     crysis)
         if [ "$desk" != 1 ] || [ -z "$bdf" ] || [ ! -f ./crysis.py ] || [ ! -f ./wm.py ] ||
+            [ ! -f ./crysis.sh ] ||
             [ ! ./private -ef /data ] ||
             ! awk '$2 == "/data/owner" && $4 ~ /^ro(,|$)/ { ok = 1 } END { exit !ok }' /proc/mounts; then
             echo 'bed-shm: -l crysis needs -w, -g and the private Crysis mount' >&2
@@ -870,7 +872,9 @@ crysis_counts()
         "$(stat virtio_gpu_copied_bytes)" "$(stat kvm_exits)" "$(info rung | cut -d/ -f1)"
 }
 
-# crysis_figure: measure the umu flyby with no minimum frame rate.
+# crysis_figure: measure the umu flyby with no minimum frame rate. prepare
+# writes the session's files; the flyby runs in crysis.sh's read-only
+# namespace, with the output directory writable.
 crysis_figure()
 {
     if ! cp -p "$crysis_ini" "$out/weston.ini"; then
@@ -883,7 +887,7 @@ crysis_figure()
     setsid sh -c '
         export CRYSIS_STATE=$1/crysis-state CRYSIS_GATE=0
         timeout --foreground 60 python3 ./crysis.py prepare "$1/crysis" --shm &&
-            exec python3 ./crysis.py flyby umu flyby-umu 2
+            exec sh ./crysis.sh seal "$1" python3 ./crysis.py flyby umu flyby-umu 2
     ' sh "$out" &
     figpid=$!
     if wait "$figpid"; then
