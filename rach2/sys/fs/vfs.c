@@ -3589,9 +3589,10 @@ void vfs_bind_trace_init(void)
 
 /* Repointing, for a KRFFS relocation. */
 
-/** `vfs_repoint` for one mount that shows the moving file system: the
- * working directories and roots on it, the mounts over its directories, its
- * own root, and its descriptions, loop devices and locks. */
+/** `vfs_repoint` for one mount that shows the moving file system: each
+ * thread's walk holders and path pages' starts, the working directories and
+ * roots on it, the mounts over its directories, its own root, and its
+ * descriptions, loop devices and locks. */
 static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
 {
     process_t *pr;
