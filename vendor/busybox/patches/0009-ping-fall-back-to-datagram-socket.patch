@@ -11,7 +11,11 @@ offset are left unset.
 ping6 asks for RFC 3542's IPV6_RECVHOPLIMIT in place of RFC 2292's option,
 which the kernel does not keep, so that a reply's hop limit is printed. An
 interval of 0, which stopped the interval timer and with it the requests and
-the check of -w, becomes the shortest the timer takes.
+the check of -w, sends each request when the reply to the last arrives, as -A
+does, and after 10 ms when none does, as iputils' flood mode does. A shorter
+timer can expire again before the handler that armed it returns, as one of a
+microsecond does under KVM, where arming it takes longer, and the handler then
+runs back to back and no reply is read.
 
 diff -ruN a/networking/ping.c b/networking/ping.c
 --- a/networking/ping.c
@@ -200,13 +204,19 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  
  	if (if_index)
  		pingaddr.sin6.sin6_scope_id = if_index;
-@@ -971,6 +1004,9 @@
+@@ -971,6 +1004,15 @@
  	if (interval > INT_MAX/1000000)
  		interval = INT_MAX/1000000;
  	G.interval_us = interval * 1000000;
-+	/* a timer of zero would never send the next request or check -w */
-+	if (G.interval_us == 0)
-+		G.interval_us = 1;
++	/* A timer of zero would never send the next request or check -w, and
++	 * one shorter than the handler's own run expires again before the
++	 * handler returns, so that the handler runs back to back and no reply
++	 * is read. Send each request when the last one's reply arrives, as -A
++	 * does, and after 10 ms when none does, as iputils' flood mode does. */
++	if (G.interval_us == 0) {
++		G.interval_us = 10000;
++		option_mask32 |= OPT_A;
++	}
  
  	myid = (uint16_t) getpid();
  	/* we can use native-endian ident, but other Unix ping/traceroute

@@ -113,7 +113,9 @@ names it:
 Send a request every
 .Ar interval
 seconds, which may have a fraction, instead of every second.
-An interval of 0 is as short as the timer goes.
+An interval of 0 sends the next request as soon as a reply comes, as
+.Fl A
+does, and after 10 ms when none comes.
 .It Fl A
 Send the next request as soon as a reply comes, as well as at each
 interval.

@@ -192,9 +192,10 @@ static int userping(struct etude_case *c)
  * apart, and then with no interval for a second. Each ping exits 0 only with
  * its replies counted: the first with all fifty, which -w makes it require,
  * and the second with one, which it reaches only when an interval of 0 keeps
- * the timer that sends the requests and checks -w running. The line the shell
- * prints when both exit 0 is computed, so that the echo of the command typed
- * cannot match it.
+ * sending the requests and checking -w, and leaves it time between sends to
+ * read the replies, which a send timer shorter than its handler's own run
+ * does not. The line the shell prints when both exit 0 is computed, so that
+ * the echo of the command typed cannot match it.
  */
 static int fastping(struct etude_case *c)
 {
