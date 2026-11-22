@@ -285,16 +285,44 @@ static void refused(struct lc *l)
 }
 
 /**
+ * Check the console through the countdown: one stop record and the trace
+ * and report that follow it. The double fault runs on its own stack, so
+ * the trace can have a heading with no frames. The single processor's
+ * report must identify the thread `pid` and the double fault.
+ */
+static void overrun_report(struct lc *l, const char *w, int pid)
+{
+    static const char stop[] = "] panic: stopped: ";
+    char process[64];
+    const char *const records[] = {
+        "] panic: Call Trace:\r\n", "] panic: report: build ",  process,
+        "] panic: report: ip 0x",   "] panic: report: addr 0x", "] panic: report: double fault\r\n",
+    };
+    const char *p = strstr(w, stop);
+    size_t i;
+
+    lc_assert(l, "one-panic", p != NULL && strstr(p + sizeof(stop) - 1, stop) == NULL,
+              "the console must contain one panic stop record");
+    snprintf(process, sizeof(process), "] panic: report: cpu 0  pid %d\r\n", pid);
+    for (i = 0; i < sizeof(records) / sizeof(records[0]); i++) {
+        if (p == NULL || (p = strstr(p, records[i])) == NULL) {
+            lc_assert(l, "panic-report", 0, records[i]);
+            return;
+        }
+        p += strlen(records[i]);
+    }
+    lc_assert(l, "panic-report", 1, NULL);
+}
+
+/**
  * Run case `stackoverrun-WHERE`: the descent announces its pid, a record of
  * the fault names the same pid, the kernel panics because a kernel stack ran
- * out and says when it resets, and the debug shell never starts. The panic
- * is recorded as the boot's end, which `etude.fault` judges against the
- * machine's declared fault. The panic's call trace and report follow its
- * first line. The machine ends after the newline of the countdown record
- * that follows them, while the kernel waits to reset. A quit before that
- * newline can leave a partial critical record for `etude.kernel` to read.
- * Assertions `descended`, `named`,
- * `panicked`, `said-wait` and `no-shell`.
+ * out, gives its trace and report without a second panic, and says when it
+ * resets. The debug shell never starts. The panic is recorded as the boot's
+ * end, which `etude.fault` judges against the declared fault. Wait for the
+ * countdown's newline before quitting, so `etude.kernel` reads the whole
+ * record. Assertions `descended`, `named`, `panicked`, `one-panic`,
+ * `panic-report`, `said-wait` and `no-shell`.
  */
 static void stackoverrun(struct lc *l)
 {
@@ -317,9 +345,13 @@ static void stackoverrun(struct lc *l)
         pid = atoi(p + strlen("kstack: overrun: pid "));
     free(w);
     snprintf(named, sizeof(named), "pid %d ran past the end of its kernel stack", pid);
-    if (!lc_wait(l, m, "a kernel stack ran out", &at, "panicked") ||
-        !lc_wait(l, m, "] panic: rebooting in 30 seconds..\r\n", &at, "said-wait"))
+    if (!lc_wait(l, m, "] panic: stopped: double fault: a kernel stack ran out\r\n", &at,
+                 "panicked") ||
+        !lc_wait(l, m, "] panic: rebooting in 30 seconds..\r\n", &at, "said-wait") ||
+        (w = lc_console(l, "fixture", start, at)) == NULL)
         return;
+    overrun_report(l, w, pid);
+    free(w);
     st = etude_fault(m, ETUDE_END_PANIC);
     if (st != ETUDE_OK) {
         lc_halt(l, st, "the record of the kernel's panic");
@@ -342,8 +374,8 @@ int etude_scenario(struct etude_case *c)
     static const char *const framefail_ids[] = {"exit", "said-ok", "failed-on-purpose", NULL};
     static const char *const strings_ids[] = {"swept", "never-wrong", NULL};
     static const char *const refused_ids[] = {"refused", "no-fault", NULL};
-    static const char *const overrun_ids[] = {"descended", "panicked", "said-wait",
-                                              "named",     "no-shell", NULL};
+    static const char *const overrun_ids[] = {"descended",    "panicked", "said-wait", "one-panic",
+                                              "panic-report", "named",    "no-shell",  NULL};
     const char *id = etude_case_id(c), *name = case_name(c);
     struct lc l;
 
