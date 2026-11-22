@@ -6665,60 +6665,103 @@ static struct vfs_mount *bind_parent(struct vfs_mount *c, struct vfs_mount **ori
     return c->parent == from ? top : NULL;
 }
 
+/** The mounts below a recursive bind's source and their binds
+ * (`bind_below`). */
+struct bind_tree {
+    struct vfs_mount *top;   /* the bind made of the source */
+    struct vfs_mount *from;  /* the source's own mount */
+    struct vfs_mount **orig; /* the mounts to show, by slot, or NULL */
+    struct vfs_mount **made; /* the bind made of each, or NULL */
+    unsigned char *done;     /* whether each is made or left out */
+    int n;                   /* the slots of the three arrays */
+    uint32_t flen;           /* the length of the source's place */
+};
+
+/**
+ * Show the mounts of `t` at the depth `depth`, the length of their paths,
+ * that are not done, each as a bind under the bind of its parent
+ * (`bind_child`): the number made. A mount whose parent has no bind yet
+ * waits for a later pass, since a mount stacked on another's root has the
+ * same depth as that parent and may lie in an earlier slot; on the `last`
+ * pass it is left out with a record in the kernel log, as is at once a
+ * KRFFS volume or a mount whose new path would not fit.
+ */
+static int bind_level(struct bind_tree *t, uint32_t depth, int last)
+{
+    int i, placed = 0;
+
+    for (i = 0; i < t->n; i++) {
+        struct vfs_mount *c = t->orig[i], *parent;
+        char canon[VFS_COVERED_PATH_MAX];
+        const char *tail;
+
+        if (!c || t->done[i] || (uint32_t)k_strlen(c->covered_path) != depth) {
+            continue;
+        }
+        parent = bind_parent(c, t->orig, t->made, t->n, t->top, t->from);
+        if (!parent && !last) {
+            continue;
+        }
+        t->done[i] = 1;
+        tail = c->covered_path + (t->flen == 1 ? 0 : t->flen);
+        if (!parent || mount_base(c)->type == &vfs_krffs_volume_type ||
+            path_below(t->top) + k_strlen(tail) + 1 > VFS_COVERED_PATH_MAX) {
+            klog(KLOG_WARN, "vfs", "bind: %s is not shown below %s", c->covered_path,
+                 t->top->covered_path);
+            continue;
+        }
+        k_strncpy(canon, t->top->covered_path, sizeof(canon));
+        k_strncpy(canon + path_below(t->top), tail, sizeof(canon) - path_below(t->top));
+        t->made[i] = bind_child(c, parent, canon);
+        placed++;
+    }
+    return placed;
+}
+
 /**
  * For MS_REC: show below the bind `top`, made of the place `full`, each
- * mount the caller sees below that place, in the order of their depth, each
- * as a bind under the bind of its parent (`bind_child`). A mount whose new
- * path would not fit, a KRFFS volume, and a mount whose parent is not shown
- * are left out, with a record in the kernel log, and when the heap has no
- * room for the two arrays nothing is shown below `top`. The mount `skip`
- * and those below it, NULL for none, are left out without a record, as
- * pivot_root leaves out the new root (`vfs_pivot_mounts`).
+ * mount the caller sees below that place, in the order of their depth, a
+ * parent before a mount stacked on its root, each as a bind under the bind
+ * of its parent (`bind_level`). A mount whose new path would not fit, a
+ * KRFFS volume, and a mount whose parent is not shown are left out, with a
+ * record in the kernel log, and when the heap has no room for the arrays
+ * nothing is shown below `top`. The mount `skip` and those below it, NULL
+ * for none, are left out without a record, as pivot_root leaves out the
+ * new root (`vfs_pivot_mounts`).
  */
 static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char *full,
                        const struct vfs_mount *skip)
 {
-    uint32_t flen = (uint32_t)k_strlen(full), depth;
-    int n = mount_slots, i;
-    struct vfs_mount **orig = kzalloc(sizeof(*orig) * (uint32_t)n * 2u);
-    struct vfs_mount **made = orig ? orig + n : NULL;
+    struct bind_tree t;
+    uint32_t depth;
+    int i;
 
-    if (!orig) {
+    t.top = top;
+    t.from = from;
+    t.n = mount_slots;
+    t.flen = (uint32_t)k_strlen(full);
+    t.orig = kzalloc((sizeof(*t.orig) * 2u + 1u) * (uint32_t)t.n);
+    if (!t.orig) {
         klog(KLOG_WARN, "vfs", "bind: no memory for the mounts below %s", top->covered_path);
         return;
     }
-    for (i = 0; i < n; i++) {
+    t.made = t.orig + t.n;
+    t.done = (unsigned char *)(t.made + t.n);
+    for (i = 0; i < t.n; i++) {
         struct vfs_mount *c = mounts[i];
 
         if (c && c != top && c->state == VFS_ACTIVE && c->parent && vfs_mount_seen(c) &&
-            (flen == 1 || path_under(c->covered_path, full, flen)) &&
+            (t.flen == 1 || path_under(c->covered_path, full, t.flen)) &&
             !(skip && mount_within(c, skip))) {
-            orig[i] = c;
+            t.orig[i] = c;
         }
     }
-    for (depth = flen + 1; depth < VFS_COVERED_PATH_MAX; depth++) {
-        for (i = 0; i < n; i++) {
-            struct vfs_mount *c = orig[i], *parent;
-            char canon[VFS_COVERED_PATH_MAX];
-            const char *tail;
-
-            if (!c || (uint32_t)k_strlen(c->covered_path) != depth) {
-                continue;
-            }
-            parent = bind_parent(c, orig, made, n, top, from);
-            tail = c->covered_path + (flen == 1 ? 0 : flen);
-            if (!parent || mount_base(c)->type == &vfs_krffs_volume_type ||
-                path_below(top) + k_strlen(tail) + 1 > VFS_COVERED_PATH_MAX) {
-                klog(KLOG_WARN, "vfs", "bind: %s is not shown below %s", c->covered_path,
-                     top->covered_path);
-                continue;
-            }
-            k_strncpy(canon, top->covered_path, sizeof(canon));
-            k_strncpy(canon + path_below(top), tail, sizeof(canon) - path_below(top));
-            made[i] = bind_child(c, parent, canon);
+    for (depth = t.flen + 1; depth < VFS_COVERED_PATH_MAX; depth++) {
+        while (bind_level(&t, depth, 0) > 0) {
         }
+        bind_level(&t, depth, 1);
     }
-    kfree(orig);
+    kfree(t.orig);
 }
 
 /**
