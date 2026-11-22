@@ -20,11 +20,13 @@ runs back to back and no reply is read.
 Adaptive sends and retries run in the receive loop, which waits with ppoll.
 Both paths check the send count before sending, so a late reply cannot
 send a request past -c or restart the final wait. Each pass of the loop checks
--w and the final wait, sends at most one due retry and then polls, with no
-wait when a retry is due, so that queued replies are read however short the
-interval, and a busy socket cannot hold off a retry or the end. The interval
-runs from the start of each send. The loop checks both ends again after each
-read, so that a reply read after either is not counted.
+-w and the final wait, sends at most one due retry and then polls until the
+next retry or the nearer end, so that queued replies are read however short
+the interval, and a busy socket cannot hold off a retry or the end. The
+interval and the final wait run from the end of each send, as upstream's
+timers do. The loop keeps -w's end as a 64-bit monotonic time and checks both
+ends again after each read, so that a reply read after either is not counted
+however long the process was stopped.
 
 diff -ruN a/networking/ping.c b/networking/ping.c
 --- a/networking/ping.c
@@ -81,15 +83,16 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	if (sock < 0) {
  		if (errno == EPERM)
  			bb_simple_error_msg_and_die(bb_msg_perm_denied_are_you_root);
-@@ -432,6 +441,7 @@
+@@ -432,6 +441,8 @@
  	unsigned cur_us; /* low word only, we don't need more */
  	unsigned deadline_us;
  	unsigned interval_us;
++	unsigned long long deadline_end_us; /* -w's end in monotonic us, or 0 */
 +	unsigned long long next_event_us; /* adaptive send or final wait */
  	unsigned timeout;
  	unsigned sizeof_rcv_packet;
  	char *rcv_packet; /* [datalen + MAXIPLEN + MAXICMPLEN] */
-@@ -509,9 +519,27 @@
+@@ -509,6 +520,23 @@
  	exit(nrecv == 0 || (G.deadline_us && nrecv < pingcount));
  }
  
@@ -113,16 +116,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  static void sendping_tail(void (*sp)(int), int size_pkt)
  {
  	int sz;
-+	unsigned long long start;
- 
- 	if (G.deadline_us) {
- 		unsigned n = G.cur_us - G.deadline_us;
-@@ -525,11 +553,18 @@
- 
- 	/* sizeof(pingaddr) can be larger than real sa size, but I think
- 	 * it doesn't matter */
-+	start = monotonic_us();
- 	sz = xsendto(pingsock, G.snd_packet, size_pkt, &pingaddr.sa, sizeof(pingaddr));
+@@ -529,7 +557,14 @@
  	if (sz != size_pkt)
  		bb_simple_error_msg_and_die(bb_msg_write_error);
  
@@ -130,14 +124,15 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +	if (option_mask32 & OPT_A) {
 +		unsigned long long delay = G.interval_us;
 +
++		/* Both timers run from the end of the send, as upstream's do. */
 +		if (!more_requests())
 +			delay = (unsigned long long)final_wait() * 1000000;
-+		G.next_event_us = delay ? start + delay : 0;
++		G.next_event_us = delay ? monotonic_us() + delay : 0;
 +	} else if (more_requests()) {
  		/* Didn't send all pings yet - schedule next in -i SEC interval */
  		struct itimerval i;
  		signal(SIGALRM, sp);
-@@ -544,16 +579,72 @@
+@@ -544,16 +579,66 @@
  		 * -W timeout: wait for a response in seconds.
  		 * Affects only timeout in absence of any responses,
  		 * otherwise ping waits for two RTTs. */
@@ -163,7 +158,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 + */
 +static void check_end(unsigned long long now)
 +{
-+	if (G.deadline_us && (int)(G.deadline_us - (unsigned)now) <= 0)
++	if (G.deadline_end_us && G.deadline_end_us <= now)
 +		print_stats_and_exit(0);
 +	if (!more_requests() && G.next_event_us && G.next_event_us <= now)
 +		print_stats_and_exit(0);
@@ -171,10 +166,10 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +
 +/** Wait until the socket is readable in adaptive mode, sending due retries.
 + * The receive loop owns the send buffer and counters in this mode. Each pass
-+ * checks -w and the final wait, sends at most one due retry, and then polls,
-+ * with no wait when the next retry is due already. So a reply queued at any
-+ * pass is read before the next retry however short the interval, and a retry
-+ * or an end that is due is acted on at the next pass however much traffic the
++ * checks -w and the final wait, sends at most one due retry, and then polls
++ * until the next retry or the nearer end. So a reply queued at any pass is
++ * read before the next retry however short the interval, and a retry or an
++ * end that is due is acted on at the next pass however much traffic the
 + * socket holds.
 + */
 +static void wait_for_reply(void (*send_request)(int))
@@ -196,14 +191,8 @@ diff -ruN a/networking/ping.c b/networking/ping.c
 +			now = monotonic_us();
 +		}
 +		until = G.next_event_us;
-+		if (G.deadline_us) {
-+			int left = (int)(G.deadline_us - (unsigned)now);
-+
-+			if (left < 0)
-+				left = 0;
-+			if (!until || until > now + left)
-+				until = now + left;
-+		}
++		if (G.deadline_end_us && (!until || until > G.deadline_end_us))
++			until = G.deadline_end_us;
 +		if (until) {
 +			unsigned long long left = until > now ? until - now : 0;
 +
@@ -219,7 +208,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	}
  }
  
-@@ -689,22 +780,25 @@
+@@ -689,22 +774,25 @@
  	puts(dupmsg);
  	fflush_all();
  }
@@ -251,7 +240,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		return 0;				/* not our ping */
  
  	if (icmppkt->icmp_type == ICMP_ECHOREPLY) {
-@@ -715,7 +809,7 @@
+@@ -715,7 +803,7 @@
  			tp = (uint32_t *) icmppkt->icmp_data;
  		unpack_tail(sz, tp,
  			inet_ntoa(*(struct in_addr *) &from->sin_addr.s_addr),
@@ -260,7 +249,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		return 1;
  	}
  	if (icmppkt->icmp_type != ICMP_ECHO) {
-@@ -736,7 +830,7 @@
+@@ -736,7 +824,7 @@
  		return 0;
  
  	icmppkt = (struct icmp6_hdr *) packet;
@@ -269,7 +258,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		return 0;				/* not our ping */
  
  	if (icmppkt->icmp6_type == ICMP6_ECHO_REPLY) {
-@@ -763,6 +857,10 @@
+@@ -763,6 +851,10 @@
  static void ping4(len_and_sockaddr *lsa)
  {
  	int sockopt;
@@ -280,7 +269,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  
  	pingaddr.sin = lsa->u.sin;
  	if (source_lsa) {
-@@ -786,31 +884,47 @@
+@@ -786,31 +878,47 @@
  		setsockopt_int(pingsock, IPPROTO_IP, IP_MULTICAST_TTL, opt_ttl);
  	}
  
@@ -338,7 +327,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	}
  }
  #if ENABLE_PING6
-@@ -827,7 +941,7 @@
+@@ -827,7 +935,7 @@
  		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
  
  #ifdef ICMP6_FILTER
@@ -347,7 +336,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		struct icmp6_filter filt;
  		if (!(option_mask32 & OPT_VERBOSE)) {
  			ICMP6_FILTER_SETBLOCKALL(&filt);
-@@ -851,10 +965,11 @@
+@@ -851,10 +959,11 @@
  
  	sockopt = offsetof(struct icmp6_hdr, icmp6_cksum);
  	BUILD_BUG_ON(offsetof(struct icmp6_hdr, icmp6_cksum) != 2);
@@ -361,7 +350,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  
  	if (if_index)
  		pingaddr.sin6.sin6_scope_id = if_index;
-@@ -869,8 +984,6 @@
+@@ -869,8 +978,6 @@
  	iov.iov_base = G.rcv_packet;
  	iov.iov_len = G.sizeof_rcv_packet;
  
@@ -370,7 +359,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	sendping6(0);
  
  	/* listen for replies */
-@@ -879,6 +992,7 @@
+@@ -879,6 +986,7 @@
  		struct cmsghdr *mp;
  		int hoplimit = -1;
  
@@ -378,7 +367,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		msg.msg_controllen = sizeof(control_buf);
  		c = recvmsg(pingsock, &msg, 0);
  		if (c < 0) {
-@@ -886,6 +1000,8 @@
+@@ -886,6 +994,8 @@
  				bb_simple_perror_msg("recvfrom");
  			continue;
  		}
@@ -387,7 +376,7 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  		for (mp = CMSG_FIRSTHDR(&msg); mp; mp = CMSG_NXTHDR(&msg, mp)) {
  			if (mp->cmsg_level == SOL_IPV6
  			 && mp->cmsg_type == IPV6_HOPLIMIT
-@@ -899,9 +1015,8 @@
+@@ -899,9 +1009,8 @@
  		c = unpack6(G.rcv_packet, c, &from, hoplimit);
  		if (pingcount && G.nreceived >= pingcount)
  			break;
@@ -399,7 +388,15 @@ diff -ruN a/networking/ping.c b/networking/ping.c
  	}
  }
  #endif
-@@ -971,6 +1086,15 @@
+@@ -965,12 +1074,22 @@
+ 		G.pattern = xstrtou_range(str_p, 16, 0, 255);
+ 	if (G.deadline_us) {
+ 		unsigned d = G.deadline_us < INT_MAX/1000000 ? G.deadline_us : INT_MAX/1000000;
+-		G.deadline_us = 1 | ((d * 1000000) + monotonic_us());
++		G.deadline_end_us = (unsigned long long)d * 1000000 + monotonic_us();
++		G.deadline_us = 1 | (unsigned)G.deadline_end_us;
+ 	}
+ 	interval = parse_duration_str(str_i);
  	if (interval > INT_MAX/1000000)
  		interval = INT_MAX/1000000;
  	G.interval_us = interval * 1000000;
